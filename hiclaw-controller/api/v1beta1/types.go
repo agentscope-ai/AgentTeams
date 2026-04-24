@@ -20,7 +20,7 @@ const (
 const LabelController = "hiclaw.io/controller"
 
 // AccessEntry declares one cloud-permission grant under a logical
-// service. v1 supported services: "object-storage", "ai-gateway".
+// service. v1 supported services: "object-storage", "ai-gateway", "ai-registry".
 //
 // Scope is a schema-less JSON blob in the CR layer: it may reference
 // logical names (bucketRef: workspace, gatewayRef: default) and

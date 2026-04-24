@@ -208,6 +208,12 @@ func (r *Resolver) resolveEntries(in []v1beta1.AccessEntry, tmpl templateCtx) ([
 				return nil, fmt.Errorf("entry[%d]: %w", i, err)
 			}
 			out = append(out, entry)
+		case credprovider.ServiceAIRegistry:
+			entry, err := r.resolveAIRegistry(e, tmpl)
+			if err != nil {
+				return nil, fmt.Errorf("entry[%d]: %w", i, err)
+			}
+			out = append(out, entry)
 		case "":
 			return nil, fmt.Errorf("entry[%d]: missing service", i)
 		default:
@@ -302,6 +308,40 @@ func (r *Resolver) resolveAIGateway(e v1beta1.AccessEntry, tmpl templateCtx) (cr
 		Scope: credprovider.AccessScope{
 			GatewayID: gatewayID,
 			Resources: resources,
+		},
+	}, nil
+}
+
+type aiRegistryScope struct {
+	NamespaceID string   `json:"namespaceId,omitempty"`
+	Resources   []string `json:"resources,omitempty"`
+}
+
+func (r *Resolver) resolveAIRegistry(e v1beta1.AccessEntry, tmpl templateCtx) (credprovider.AccessEntry, error) {
+	var s aiRegistryScope
+	if err := unmarshalScope(e.Scope, &s); err != nil {
+		return credprovider.AccessEntry{}, fmt.Errorf("ai-registry: %w", err)
+	}
+
+	namespaceID := strings.TrimSpace(tmpl.expand(s.NamespaceID))
+	if namespaceID == "" {
+		return credprovider.AccessEntry{}, errors.New("ai-registry: namespaceId is required")
+	}
+
+	resources := make([]string, 0, len(s.Resources))
+	for _, res := range s.Resources {
+		resources = append(resources, tmpl.expand(res))
+	}
+	if len(resources) == 0 {
+		resources = []string{"agentSpec/*", "skill/*"}
+	}
+
+	return credprovider.AccessEntry{
+		Service:     credprovider.ServiceAIRegistry,
+		Permissions: copyPermissions(e.Permissions),
+		Scope: credprovider.AccessScope{
+			NamespaceID: namespaceID,
+			Resources:   resources,
 		},
 	}, nil
 }

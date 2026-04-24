@@ -172,7 +172,10 @@ func newNacosSTSCredential(namespace string, client credprovider.Client) *nacosS
 		Entries: []credprovider.AccessEntry{
 			{
 				Service: credprovider.ServiceAIRegistry,
-				Scope:   credprovider.AccessScope{NamespaceID: namespace},
+				Scope: credprovider.AccessScope{
+					NamespaceID: namespace,
+					Resources:   []string{"agentSpec/*", "skill/*"},
+				},
 			},
 		},
 	})

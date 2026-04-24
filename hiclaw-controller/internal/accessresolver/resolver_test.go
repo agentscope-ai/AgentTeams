@@ -241,6 +241,72 @@ func TestResolve_AIGatewayHappyPath(t *testing.T) {
 	}
 }
 
+func TestResolve_AIRegistryDefaultResources(t *testing.T) {
+	worker := &v1beta1.Worker{}
+	worker.Name = "nacos-w"
+	worker.Namespace = testNS
+	worker.Spec.AccessEntries = []v1beta1.AccessEntry{
+		{
+			Service:     credprovider.ServiceAIRegistry,
+			Permissions: []string{"read", "write"},
+			Scope:       rawJSON(t, map[string]any{"namespaceId": "gw-abc123"}),
+		},
+	}
+	c := newFakeClient(t, worker)
+
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role: auth.RoleWorker, Username: "nacos-w", WorkerName: "nacos-w",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries", len(entries))
+	}
+	got := entries[0]
+	if got.Service != credprovider.ServiceAIRegistry {
+		t.Fatalf("service = %q", got.Service)
+	}
+	if got.Scope.NamespaceID != "gw-abc123" {
+		t.Fatalf("namespaceId = %q", got.Scope.NamespaceID)
+	}
+	if len(got.Scope.Resources) != 2 || got.Scope.Resources[0] != "agentSpec/*" || got.Scope.Resources[1] != "skill/*" {
+		t.Fatalf("resources = %+v", got.Scope.Resources)
+	}
+}
+
+func TestResolve_AIRegistryCustomResources(t *testing.T) {
+	worker := &v1beta1.Worker{}
+	worker.Name = "nacos-w2"
+	worker.Namespace = testNS
+	worker.Spec.AccessEntries = []v1beta1.AccessEntry{
+		{
+			Service: credprovider.ServiceAIRegistry,
+			Scope: rawJSON(t, map[string]any{
+				"namespaceId": "ns1",
+				"resources":   []string{"agentspec/*", "mcp/*"},
+			}),
+		},
+	}
+	c := newFakeClient(t, worker)
+
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role: auth.RoleWorker, Username: "nacos-w2", WorkerName: "nacos-w2",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	got := entries[0]
+	if got.Scope.NamespaceID != "ns1" {
+		t.Fatalf("namespaceId = %q", got.Scope.NamespaceID)
+	}
+	if len(got.Scope.Resources) != 2 || got.Scope.Resources[0] != "agentspec/*" {
+		t.Fatalf("resources = %+v", got.Scope.Resources)
+	}
+}
+
 func TestResolve_AIGatewayNoDefault(t *testing.T) {
 	worker := &v1beta1.Worker{}
 	worker.Name = "gw-bot2"

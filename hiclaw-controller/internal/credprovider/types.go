@@ -48,7 +48,8 @@ type AccessScope struct {
 	Bucket   string   `json:"bucket,omitempty"`
 	Prefixes []string `json:"prefixes,omitempty"`
 	// ai-gateway
-	GatewayID string   `json:"gatewayId,omitempty"`
+	GatewayID string `json:"gatewayId,omitempty"`
+	// Resources: ai-gateway API paths; for ai-registry, agentSpec/skill patterns (e.g. agentSpec/*, skill/*).
 	Resources []string `json:"resources,omitempty"`
 	// ai-registry
 	NamespaceID string `json:"namespaceId,omitempty"`

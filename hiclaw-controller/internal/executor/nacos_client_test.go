@@ -125,4 +125,9 @@ func TestNewNacosAIClient_STS_IssueUsesAIRegistryForNamespace(t *testing.T) {
 	if rec.last.Entries[0].Scope.NamespaceID != "my-nacos-ns" {
 		t.Errorf("Scope.NamespaceID = %q", rec.last.Entries[0].Scope.NamespaceID)
 	}
+	if len(rec.last.Entries[0].Scope.Resources) != 2 ||
+		rec.last.Entries[0].Scope.Resources[0] != "agentSpec/*" ||
+		rec.last.Entries[0].Scope.Resources[1] != "skill/*" {
+		t.Errorf("Scope.Resources = %+v, want [agentSpec/* skill/*]", rec.last.Entries[0].Scope.Resources)
+	}
 }

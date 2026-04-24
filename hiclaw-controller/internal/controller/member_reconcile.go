@@ -234,7 +234,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 
 	if err := d.Deployer.PushOnDemandSkills(ctx, m.Name, m.Spec.Skills); err != nil {
-		logger.Error(err, "skill push failed (non-fatal)")
+		logger.Info("skill push failed", "error", err)
 	}
 	return nil
 }

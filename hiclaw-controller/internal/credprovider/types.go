@@ -50,6 +50,8 @@ type AccessScope struct {
 	// ai-gateway
 	GatewayID string   `json:"gatewayId,omitempty"`
 	Resources []string `json:"resources,omitempty"`
+	// ai-registry
+	NamespaceID string `json:"namespaceId,omitempty"`
 }
 
 // IssueResponse is the sidecar's reply to POST /issue.
@@ -71,4 +73,5 @@ type IssueResponse struct {
 const (
 	ServiceObjectStorage = "object-storage"
 	ServiceAIGateway     = "ai-gateway"
+	ServiceAIRegistry    = "ai-registry"
 )

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hiclaw/hiclaw-controller/internal/credprovider"
 )
 
 func TestWriteInlineConfigs_AllFields_OpenClaw(t *testing.T) {
@@ -265,7 +267,7 @@ func TestValidateNacosURI_FormatErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateNacosURI(context.Background(), tt.uri)
+			err := ValidateNacosURI(context.Background(), tt.uri, ValidateNacosURIOptions{})
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -301,7 +303,7 @@ func TestValidateNacosURI_ValidFormat_UnreachableServer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateNacosURI(context.Background(), tt.uri)
+			err := ValidateNacosURI(context.Background(), tt.uri, ValidateNacosURIOptions{})
 			if err == nil {
 				t.Fatal("expected connection error for unreachable server, got nil")
 			}
@@ -428,7 +430,7 @@ func TestValidateNacosURI_UsesEnvCredentialsWhenURIHasNoAuth(t *testing.T) {
 	t.Setenv("HICLAW_NACOS_USERNAME", "env-user")
 	t.Setenv("HICLAW_NACOS_PASSWORD", "env-pass")
 
-	err := ValidateNacosURI(context.Background(), "nacos://127.0.0.1:19999/ns/my-spec")
+	err := ValidateNacosURI(context.Background(), "nacos://127.0.0.1:19999/ns/my-spec", ValidateNacosURIOptions{})
 	if err == nil {
 		t.Fatal("expected connection error for unreachable server, got nil")
 	}
@@ -446,7 +448,7 @@ func TestValidateNacosURI_PartialEnvCredentialsFail(t *testing.T) {
 	t.Setenv("HICLAW_NACOS_USERNAME", "env-user")
 	t.Setenv("HICLAW_NACOS_PASSWORD", "")
 
-	err := ValidateNacosURI(context.Background(), "nacos://127.0.0.1:19999/ns/my-spec")
+	err := ValidateNacosURI(context.Background(), "nacos://127.0.0.1:19999/ns/my-spec", ValidateNacosURIOptions{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -464,7 +466,7 @@ func TestValidateNacosURI_ChecksAgentSpecExists(t *testing.T) {
 	)
 	defer server.Close()
 
-	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/missing-spec")
+	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/missing-spec", ValidateNacosURIOptions{})
 	if err == nil {
 		t.Fatal("expected missing agentspec error, got nil")
 	}
@@ -485,7 +487,7 @@ func TestValidateNacosURI_SucceedsWhenAgentSpecExists(t *testing.T) {
 	)
 	defer server.Close()
 
-	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/existing-spec")
+	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/existing-spec", ValidateNacosURIOptions{})
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
@@ -500,7 +502,7 @@ func TestValidateNacosURI_FailsWhenAgentSpecHasNoOnlineVersion(t *testing.T) {
 	)
 	defer server.Close()
 
-	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/offline-spec")
+	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/offline-spec", ValidateNacosURIOptions{})
 	if err == nil {
 		t.Fatal("expected offline agentspec error, got nil")
 	}
@@ -518,7 +520,7 @@ func TestValidateNacosURI_FailsWhenRequestedVersionIsNotOnline(t *testing.T) {
 	)
 	defer server.Close()
 
-	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/mixed-spec/v1")
+	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/mixed-spec/v1", ValidateNacosURIOptions{})
 	if err == nil {
 		t.Fatal("expected offline version error, got nil")
 	}
@@ -594,7 +596,49 @@ func TestResolveAndExtract_ZipWithoutSoulmd_Succeeds(t *testing.T) {
 	}
 }
 
+func TestValidateNacosURI_STSHiclaw_RequiresCredClient(t *testing.T) {
+	uri := "nacos://127.0.0.1:19999/public/my-spec"
+	err := ValidateNacosURI(context.Background(), uri, ValidateNacosURIOptions{AuthType: "sts-hiclaw"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sts-hiclaw auth requires a credprovider.Client") {
+		t.Fatalf("expected credprovider requirement error, got: %v", err)
+	}
+}
+
+func TestValidateNacosURI_STSHiclaw_SucceedsWithCredClient(t *testing.T) {
+	server := newNacosAgentSpecCheckTestServer(t,
+		http.StatusOK,
+		`{"code":0,"message":"success","data":{"totalCount":1,"pageItems":[{"namespaceId":"public","name":"sts-spec","description":"demo","enable":true,"onlineCnt":1,"labels":{"latest":"v1"}}]}}`,
+		0,
+		"",
+	)
+	defer server.Close()
+
+	stub := stubCredClient{}
+	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/sts-spec", ValidateNacosURIOptions{
+		AuthType:   "sts-hiclaw",
+		CredClient: stub,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+}
+
 // --- helpers ---
+
+// stubCredClient returns a static STS-like triple for Nacos Spas signing tests.
+type stubCredClient struct{}
+
+func (stubCredClient) Issue(ctx context.Context, req credprovider.IssueRequest) (*credprovider.IssueResponse, error) {
+	return &credprovider.IssueResponse{
+		AccessKeyID:     "test-access-key-id",
+		AccessKeySecret: "test-access-key-secret",
+		SecurityToken:   "test-security-token",
+		Expiration:      "2099-01-01T00:00:00Z",
+	}, nil
+}
 func newNacosAgentSpecCheckTestServer(t *testing.T, listStatus int, listBody string, getStatus int, getBody string) *httptest.Server {
 	t.Helper()
 

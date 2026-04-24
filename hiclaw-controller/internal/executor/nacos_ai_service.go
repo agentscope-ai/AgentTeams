@@ -7,32 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
-
-const (
-	nacosAuthTypeNone     = "none"
-	nacosAuthTypeNacos    = "nacos"
-	nacosPreflightTimeout = 5 * time.Second
-)
-
-type nacosAgentSpecClient struct {
-	serverAddr       string
-	namespace        string
-	authType         string
-	username         string
-	password         string
-	accessToken      string
-	tokenExpireAt    time.Time
-	authLoginVersion string
-	httpClient       *http.Client
-}
 
 type nacosV3Response struct {
 	Code    int             `json:"code"`
@@ -84,62 +65,68 @@ type nacosAgentSpecListResponse struct {
 	PageItems  []nacosAgentSpecSummary `json:"pageItems"`
 }
 
-func newNacosAgentSpecClient(ctx context.Context, rawAddr, namespace string) (*nacosAgentSpecClient, error) {
-	host, port, username, password, err := parseNacosAddr(rawAddr)
+// GetSkill fetches a Skill ZIP from Nacos and extracts it into outputDir/{name}/.
+// version may be empty (latest) or a specific version string.
+// label may be used instead of version; both may not be set simultaneously.
+func (c *NacosAIClient) GetSkill(ctx context.Context, name, outputDir, version, label string) error {
+	params := url.Values{}
+	params.Set("namespaceId", c.namespace)
+	params.Set("name", name)
+	if version != "" {
+		params.Set("version", version)
+	}
+	if label != "" {
+		params.Set("label", label)
+	}
+
+	apiURL := fmt.Sprintf("http://%s/nacos/v3/client/ai/skills?%s", c.serverAddr, params.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("invalid nacos address %q: %w", rawAddr, err)
+		return fmt.Errorf("failed to build request: %w", err)
+	}
+	if err := c.prepareRequest(ctx, req); err != nil {
+		return err
 	}
 
-	authType := nacosAuthTypeNone
-	if username != "" && password != "" {
-		authType = nacosAuthTypeNacos
-	} else if username != "" || password != "" {
-		return nil, fmt.Errorf("both username and password are required in nacos URL or env (use nacos://user:pass@host:port or set HICLAW_NACOS_USERNAME/HICLAW_NACOS_PASSWORD)")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to get skill: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return parseNacosHTTPError(resp.StatusCode, body, "get skill")
 	}
 
-	client := &nacosAgentSpecClient{
-		serverAddr: net.JoinHostPort(host, port),
-		namespace:  namespace,
-		authType:   authType,
-		username:   username,
-		password:   password,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+	// Write the ZIP response to a temp file.
+	tmp, err := os.CreateTemp("", "nacos-skill-*.zip")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to download skill ZIP: %w", err)
+	}
+	tmp.Close()
+
+	// Extract into outputDir/{name}/.
+	destDir := filepath.Join(outputDir, name)
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create skill directory: %w", err)
 	}
 
-	if client.namespace == "" {
-		client.namespace = "public"
+	cmd := exec.CommandContext(ctx, "unzip", "-q", "-o", tmpPath, "-d", destDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to extract skill ZIP for %s: %s: %w", name, string(out), err)
 	}
-
-	if err := client.preflightConnect(ctx); err != nil {
-		return nil, err
-	}
-
-	if client.authType == nacosAuthTypeNacos {
-		if err := client.login(ctx); err != nil {
-			return nil, fmt.Errorf("login failed: %w", err)
-		}
-	}
-
-	return client, nil
+	return nil
 }
 
-func (c *nacosAgentSpecClient) preflightConnect(ctx context.Context) error {
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, nacosPreflightTimeout)
-		defer cancel()
-	}
-
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", c.serverAddr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to %s: %w", c.serverAddr, err)
-	}
-	return conn.Close()
-}
-
-func (c *nacosAgentSpecClient) GetAgentSpec(ctx context.Context, name, outputDir string, version, label string) error {
+func (c *NacosAIClient) GetAgentSpec(ctx context.Context, name, outputDir string, version, label string) error {
 	spec, err := c.fetchAgentSpec(ctx, name, version, label)
 	if err != nil {
 		return err
@@ -182,7 +169,7 @@ func (c *nacosAgentSpecClient) GetAgentSpec(ctx context.Context, name, outputDir
 	return writeAgentSpecManifest(specDir, spec.Content)
 }
 
-func (c *nacosAgentSpecClient) CheckAgentSpecExists(ctx context.Context, name, version, label string) error {
+func (c *NacosAIClient) CheckAgentSpecExists(ctx context.Context, name, version, label string) error {
 	summary, err := c.fetchAgentSpecSummary(ctx, name)
 	if err != nil {
 		return err
@@ -219,11 +206,7 @@ func isNacosHTTPStatus(err error, statusCode int) bool {
 	return strings.Contains(err.Error(), fmt.Sprintf("(HTTP %d)", statusCode))
 }
 
-func (c *nacosAgentSpecClient) fetchAgentSpecSummary(ctx context.Context, name string) (*nacosAgentSpecSummary, error) {
-	if err := c.ensureTokenValid(ctx); err != nil {
-		return nil, err
-	}
-
+func (c *NacosAIClient) fetchAgentSpecSummary(ctx context.Context, name string) (*nacosAgentSpecSummary, error) {
 	params := url.Values{}
 	params.Set("namespaceId", c.namespace)
 	params.Set("agentSpecName", name)
@@ -236,7 +219,9 @@ func (c *nacosAgentSpecClient) fetchAgentSpecSummary(ctx context.Context, name s
 	if err != nil {
 		return nil, fmt.Errorf("failed to build request: %w", err)
 	}
-	c.setAuthHeaders(req)
+	if err := c.prepareRequest(ctx, req); err != nil {
+		return nil, err
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -273,11 +258,7 @@ func (c *nacosAgentSpecClient) fetchAgentSpecSummary(ctx context.Context, name s
 	return nil, formatNacosHTTPError("check agentspec", http.StatusNotFound, "", fmt.Sprintf("agentspec %q not found", name))
 }
 
-func (c *nacosAgentSpecClient) fetchAgentSpec(ctx context.Context, name, version, label string) (*nacosAgentSpec, error) {
-	if err := c.ensureTokenValid(ctx); err != nil {
-		return nil, err
-	}
-
+func (c *NacosAIClient) fetchAgentSpec(ctx context.Context, name, version, label string) (*nacosAgentSpec, error) {
 	params := url.Values{}
 	params.Set("namespaceId", c.namespace)
 	params.Set("name", name)
@@ -293,7 +274,9 @@ func (c *nacosAgentSpecClient) fetchAgentSpec(ctx context.Context, name, version
 	if err != nil {
 		return nil, fmt.Errorf("failed to build request: %w", err)
 	}
-	c.setAuthHeaders(req)
+	if err := c.prepareRequest(ctx, req); err != nil {
+		return nil, err
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -323,109 +306,6 @@ func (c *nacosAgentSpecClient) fetchAgentSpec(ctx context.Context, name, version
 		return nil, fmt.Errorf("failed to parse agentspec: %w", err)
 	}
 	return &spec, nil
-}
-
-func (c *nacosAgentSpecClient) ensureTokenValid(ctx context.Context) error {
-	if c.authType != nacosAuthTypeNacos {
-		return nil
-	}
-	if c.accessToken == "" {
-		return c.login(ctx)
-	}
-	if !c.tokenExpireAt.IsZero() && time.Now().Add(5*time.Second).After(c.tokenExpireAt) {
-		return c.login(ctx)
-	}
-	return nil
-}
-
-func (c *nacosAgentSpecClient) login(ctx context.Context) error {
-	form := url.Values{}
-	form.Set("username", c.username)
-	form.Set("password", c.password)
-
-	tryV3 := c.authLoginVersion == "" || c.authLoginVersion == "v3"
-	if tryV3 {
-		ok, err := c.tryLogin(ctx, fmt.Sprintf("http://%s/nacos/v3/auth/user/login", c.serverAddr), form)
-		if err == nil && ok {
-			c.authLoginVersion = "v3"
-			return nil
-		}
-	}
-
-	ok, err := c.tryLogin(ctx, fmt.Sprintf("http://%s/nacos/v1/auth/login", c.serverAddr), form)
-	if err != nil {
-		return err
-	}
-	if ok {
-		c.authLoginVersion = "v1"
-		return nil
-	}
-
-	return fmt.Errorf("login failed with both v3 and v1 auth endpoints")
-}
-
-func (c *nacosAgentSpecClient) tryLogin(ctx context.Context, loginURL string, form url.Values) (bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return false, nil
-	}
-	return c.applyLoginResponse(body), nil
-}
-
-func (c *nacosAgentSpecClient) applyLoginResponse(body []byte) bool {
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return false
-	}
-	if data, ok := result["data"].(map[string]interface{}); ok {
-		return c.applyLoginMap(data)
-	}
-	return c.applyLoginMap(result)
-}
-
-func (c *nacosAgentSpecClient) applyLoginMap(data map[string]interface{}) bool {
-	token, ok := data["accessToken"].(string)
-	if !ok || token == "" {
-		return false
-	}
-	c.accessToken = token
-
-	var ttlSeconds int64
-	switch value := data["tokenTtl"].(type) {
-	case float64:
-		ttlSeconds = int64(value)
-	case int64:
-		ttlSeconds = value
-	case int:
-		ttlSeconds = int64(value)
-	}
-	if ttlSeconds > 0 {
-		c.tokenExpireAt = time.Now().Add(time.Duration(ttlSeconds) * time.Second)
-	} else {
-		c.tokenExpireAt = time.Time{}
-	}
-	return true
-}
-
-func (c *nacosAgentSpecClient) setAuthHeaders(req *http.Request) {
-	if c.accessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.accessToken)
-	}
 }
 
 func buildAgentSpecResourcePath(res *nacosAgentSpecResource) string {
@@ -496,35 +376,4 @@ func formatNacosHTTPError(operation string, statusCode int, serverMessage string
 		return fmt.Errorf("%s failed (HTTP %d): %s; hint: %s", operation, statusCode, serverMessage, hint)
 	}
 	return fmt.Errorf("%s failed (HTTP %d): %s", operation, statusCode, hint)
-}
-
-func parseNacosAddr(raw string) (host, port, username, password string, err error) {
-	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
-	}
-
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", "", "", "", err
-	}
-	if parsed.Hostname() == "" {
-		return "", "", "", "", fmt.Errorf("missing host")
-	}
-
-	port = parsed.Port()
-	if port == "" {
-		port = "8848"
-	}
-
-	if parsed.User != nil {
-		username = parsed.User.Username()
-		password, _ = parsed.User.Password()
-	}
-
-	if username == "" && password == "" {
-		username = os.Getenv("HICLAW_NACOS_USERNAME")
-		password = os.Getenv("HICLAW_NACOS_PASSWORD")
-	}
-
-	return parsed.Hostname(), port, username, password, nil
 }

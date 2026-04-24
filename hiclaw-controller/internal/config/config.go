@@ -72,6 +72,11 @@ type Config struct {
 	// sidecar is not deployed (e.g. self-hosted higress+minio stack).
 	CredentialProviderURL string
 
+	// NacosAuthType selects the authentication method for Nacos AI client
+	// connections: "nacos" (username/password), "sts-hiclaw" (STS via
+	// hiclaw-credential-provider), "none", or "" (auto-detect from URL).
+	NacosAuthType string
+
 	// Kubernetes Backend
 	K8sNamespace    string
 	K8sWorkerCPU    string
@@ -237,6 +242,7 @@ func LoadConfig() *Config {
 		StorageProvider: envOrDefault("HICLAW_STORAGE_PROVIDER", "minio"),
 
 		CredentialProviderURL: os.Getenv("HICLAW_CREDENTIAL_PROVIDER_URL"),
+		NacosAuthType:         os.Getenv("HICLAW_NACOS_AUTH_TYPE"),
 
 		HigressBaseURL:    envOrDefault("HICLAW_AI_GATEWAY_ADMIN_URL", "http://127.0.0.1:8001"),
 		HigressCookieFile: os.Getenv("HIGRESS_COOKIE_FILE"),

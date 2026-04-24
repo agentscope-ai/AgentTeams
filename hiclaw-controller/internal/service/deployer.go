@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
+	"github.com/hiclaw/hiclaw-controller/internal/credprovider"
 	"github.com/hiclaw/hiclaw-controller/internal/executor"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -67,32 +69,41 @@ type DeployerConfig struct {
 	AgentFSDir     string // embedded: /root/hiclaw-fs/agents
 	WorkerAgentDir string // source for builtin agent files
 	MatrixDomain   string
+
+	// NacosAuthType and NacosCredClient mirror the same fields on PackageResolver
+	// but are used when PushOnDemandSkills encounters nacos:// skill URIs.
+	NacosAuthType   string
+	NacosCredClient credprovider.Client
 }
 
 // Deployer orchestrates configuration deployment for workers: package resolution,
 // inline config writes, openclaw.json generation, AGENTS.md merging, skill pushing,
 // and OSS synchronization.
 type Deployer struct {
-	agentConfig    *agentconfig.Generator
-	oss            oss.StorageClient
-	executor       *executor.Shell
-	packages       *executor.PackageResolver
-	legacy         *LegacyCompat
-	agentFSDir     string
-	workerAgentDir string
-	matrixDomain   string
+	agentConfig     *agentconfig.Generator
+	oss             oss.StorageClient
+	executor        *executor.Shell
+	packages        *executor.PackageResolver
+	legacy          *LegacyCompat
+	agentFSDir      string
+	workerAgentDir  string
+	matrixDomain    string
+	nacosAuthType   string
+	nacosCredClient credprovider.Client
 }
 
 func NewDeployer(cfg DeployerConfig) *Deployer {
 	return &Deployer{
-		agentConfig:    cfg.AgentConfig,
-		oss:            cfg.OSS,
-		executor:       cfg.Executor,
-		packages:       cfg.Packages,
-		legacy:         cfg.Legacy,
-		agentFSDir:     cfg.AgentFSDir,
-		workerAgentDir: cfg.WorkerAgentDir,
-		matrixDomain:   cfg.MatrixDomain,
+		agentConfig:     cfg.AgentConfig,
+		oss:             cfg.OSS,
+		executor:        cfg.Executor,
+		packages:        cfg.Packages,
+		legacy:          cfg.Legacy,
+		agentFSDir:      cfg.AgentFSDir,
+		workerAgentDir:  cfg.WorkerAgentDir,
+		matrixDomain:    cfg.MatrixDomain,
+		nacosAuthType:   cfg.NacosAuthType,
+		nacosCredClient: cfg.NacosCredClient,
 	}
 }
 
@@ -322,24 +333,109 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	return d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(result))
 }
 
-// PushOnDemandSkills runs the push-worker-skills.sh script for on-demand skills.
-// No-op if no skills or executor is nil.
-// NOTE: In incluster mode, the script may not exist in the controller container.
-// On-demand skills are then expected to be pushed by the Manager agent via its
-// worker-management skill at runtime.
+// PushOnDemandSkills pushes on-demand skills to a worker.
+// Skills named with the "nacos://" scheme are fetched from Nacos and mirrored
+// to OSS. All other skills fall back to the legacy push-worker-skills.sh script.
+// No-op if no skills are provided.
 func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, skills []string) error {
 	logger := log.FromContext(ctx)
-	if len(skills) == 0 || d.executor == nil {
+	if len(skills) == 0 {
+		return nil
+	}
+
+	agentPrefix := fmt.Sprintf("agents/%s", workerName)
+	var builtinSkills []string
+
+	for _, skill := range skills {
+		if !strings.HasPrefix(skill, "nacos://") {
+			builtinSkills = append(builtinSkills, skill)
+			continue
+		}
+
+		// ── nacos:// skill ──────────────────────────────────────────────────
+		u, err := parseNacosSkillURI(skill)
+		if err != nil {
+			return fmt.Errorf("invalid nacos skill URI %q: %w", skill, err)
+		}
+
+		client, err := executor.NewNacosAIClient(ctx, u.nacosAddr, u.namespace, d.nacosAuthType, d.nacosCredClient)
+		if err != nil {
+			return fmt.Errorf("connect to nacos for skill %q: %w", skill, err)
+		}
+
+		// Download and extract ZIP into a temp directory.
+		tmpDir, err := os.MkdirTemp("", "nacos-skill-")
+		if err != nil {
+			return fmt.Errorf("create temp dir for skill %q: %w", skill, err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		if err := client.GetSkill(ctx, u.skillName, tmpDir, u.version, u.label); err != nil {
+			return fmt.Errorf("fetch skill %q from nacos: %w", skill, err)
+		}
+
+		// Mirror extracted skill directory to OSS.
+		src := filepath.Join(tmpDir, u.skillName) + "/"
+		dst := agentPrefix + "/skills/" + u.skillName + "/"
+		if err := d.oss.Mirror(ctx, src, dst, oss.MirrorOptions{Overwrite: true}); err != nil {
+			return fmt.Errorf("mirror skill %q to OSS: %w", skill, err)
+		}
+		logger.Info("nacos skill pushed", "worker", workerName, "skill", u.skillName, "version", u.version)
+	}
+
+	// ── legacy builtin skills via push-worker-skills.sh ──────────────────
+	if len(builtinSkills) == 0 || d.executor == nil {
 		return nil
 	}
 	scriptPath := "/opt/hiclaw/agent/skills/worker-management/scripts/push-worker-skills.sh"
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		logger.Info("push-worker-skills.sh not found (incluster mode), skipping on-demand skill push",
-			"worker", workerName, "skills", skills)
+			"worker", workerName, "skills", builtinSkills)
 		return nil
 	}
 	_, err := d.executor.RunSimple(ctx, scriptPath, "--worker", workerName, "--no-notify")
 	return err
+}
+
+type nacosSkillURIParts struct {
+	nacosAddr string
+	namespace string
+	skillName string
+	version   string
+	label     string
+}
+
+// parseNacosSkillURI parses nacos://[user:pass@]host:port/{namespace}/{skill-name}[/{version}]
+func parseNacosSkillURI(raw string) (*nacosSkillURIParts, error) {
+	// Replace the nacos:// scheme with http:// so url.Parse handles user-info correctly.
+	parsed, err := url.Parse("http://" + strings.TrimPrefix(raw, "nacos://"))
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("expected nacos://[user:pass@]host:port/{namespace}/{skill-name}[/{version}]")
+	}
+
+	nacosAddr := parsed.Host
+	if parsed.User != nil {
+		nacosAddr = parsed.User.String() + "@" + parsed.Host
+	}
+
+	u := &nacosSkillURIParts{
+		nacosAddr: nacosAddr,
+		namespace: parts[0],
+		skillName: parts[1],
+	}
+	if len(parts) >= 3 {
+		v := parts[2]
+		if strings.HasPrefix(v, "label:") {
+			u.label = strings.TrimPrefix(v, "label:")
+		} else {
+			u.version = v
+		}
+	}
+	return u, nil
 }
 
 // CleanupOSSData removes all agent data from OSS for a deleted worker.

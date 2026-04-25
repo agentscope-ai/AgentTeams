@@ -175,7 +175,9 @@ class Worker:
         """Start CoPaw via FastAPI app (includes runner + channels + web console)."""
         import uvicorn
         from copaw.app.channels.registry import clear_builtin_channel_cache
+        from copaw_worker.hooks import install_tool_hooks
 
+        install_tool_hooks()
         clear_builtin_channel_cache()
 
         uv_config = uvicorn.Config(

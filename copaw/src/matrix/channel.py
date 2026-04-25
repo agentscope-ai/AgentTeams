@@ -2030,7 +2030,8 @@ class MatrixChannel(BaseChannel):
 
     # ------------------------------------------------------------------
     # Outgoing send — text
-    # Markdown→HTML (formatted_body); m.mentions when meta has sender_id.
+    # Markdown→HTML (formatted_body); m.mentions only for explicit targets or
+    # visible Matrix IDs in the body. Do not auto-mention the original sender.
     # ------------------------------------------------------------------
 
     async def send(
@@ -2072,13 +2073,12 @@ class MatrixChannel(BaseChannel):
 
         meta_dict = meta or {}
         explicit_ids = meta_dict.get("mention_user_ids") or None
-        sender_id = meta_dict.get("sender_id") or meta_dict.get("user_id")
-        if explicit_ids or sender_id:
+        body_mentions = self._extract_mentions_from_text(text)
+        if explicit_ids or body_mentions:
             self._apply_mention(
                 content,
                 room_id,
                 explicit_user_ids=explicit_ids,
-                fallback_user_id=sender_id if not explicit_ids else None,
             )
 
         try:
@@ -2168,15 +2168,11 @@ class MatrixChannel(BaseChannel):
             }
             meta_dict = meta or {}
             explicit_ids = meta_dict.get("mention_user_ids") or None
-            sender_id = meta_dict.get("sender_id") or meta_dict.get("user_id")
-            if explicit_ids or sender_id:
+            if explicit_ids:
                 self._apply_mention(
                     event_content,
                     room_id,
                     explicit_user_ids=explicit_ids,
-                    fallback_user_id=(
-                        sender_id if not explicit_ids else None
-                    ),
                 )
 
             await self._client.room_send(

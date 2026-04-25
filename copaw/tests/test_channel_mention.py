@@ -1,4 +1,4 @@
-"""Tests for MatrixChannel._apply_mention: outgoing visible mentions.
+"""Tests for MatrixChannel outgoing visible mentions.
 
 openclaw >= 2026.4.x's mention monitor requires BOTH ``m.mentions.user_ids``
 metadata AND a *visible* mention (a ``matrix.to`` link in ``formatted_body``
@@ -7,6 +7,8 @@ silently dropped with ``reason: "no-mention"``. These tests pin down the
 three-layer invariant that ``_apply_mention`` must uphold so CoPaw-issued
 messages actually wake up receiving OpenClaw agents.
 """
+
+import asyncio
 
 from matrix.channel import MatrixChannel
 
@@ -24,6 +26,19 @@ def _make_channel(user_id: str = "@bot:hs.local") -> MatrixChannel:
     ch._user_id = user_id
     ch._client = None
     return ch
+
+
+class _FakeClient:
+    def __init__(self):
+        self.rooms = {}
+        self.sent = []
+
+    async def room_send(self, room_id, message_type, content, **kwargs):
+        self.sent.append((room_id, message_type, content, kwargs))
+
+
+async def _noop_typing(_room_id, _typing):
+    return None
 
 
 def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
@@ -199,3 +214,41 @@ def test_apply_mention_multiple_targets_all_get_visible_anchors():
             f'href="https://matrix.to/#/{uid_enc}"'
             in content["formatted_body"]
         )
+
+
+def test_send_does_not_auto_mention_sender_id():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!room:hs.local",
+            "Got it, thanks!",
+            {"sender_id": "@alice:hs.local"},
+        ),
+    )
+
+    content = client.sent[0][2]
+    assert "m.mentions" not in content
+    assert "@alice:hs.local" not in content["body"]
+
+
+def test_send_enriches_visible_body_mentions():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!room:hs.local",
+            "@alice:hs.local please review this.",
+            {"sender_id": "@bob:hs.local"},
+        ),
+    )
+
+    content = client.sent[0][2]
+    assert content["m.mentions"] == {"user_ids": ["@alice:hs.local"]}
+    assert "@bob:hs.local" not in content["body"]

@@ -3,7 +3,7 @@
 ## Creating a Sub-Task
 
 1. Generate sub-task ID: `sub-YYYYMMDD-HHMMSS` or `sub-01`, `sub-02`, etc.
-2. Create directory: `shared/tasks/{parent-task-id}/sub-tasks/{sub-id}/`
+2. Create directory: `shared/tasks/{sub-id}/`
 3. Write `meta.json`:
    ```json
    {
@@ -17,14 +17,14 @@
    }
    ```
 4. Write `spec.md` with requirements and acceptance criteria
-5. Push to MinIO
-6. @mention worker in Team Room
+5. Publish the task directory using the skill's storage publishing step; do not put remote storage paths in chat or specs
+6. @mention worker in the Team Room, telling them to file-sync and read `shared/tasks/{sub-id}/spec.md`
 7. Add to team-state.json via `manage-team-state.sh --action add-finite`
 
 ## Completion
 
 When worker @mentions you with completion:
-1. Pull sub-task directory from MinIO
-2. Read result.md
+1. Refresh or pull the task directory through the skill's storage sync step
+2. Read `shared/tasks/{sub-id}/result.md`
 3. Update team-state.json: `manage-team-state.sh --action complete --task-id sub-01`
 4. If all sub-tasks done → aggregate into parent task result.md → report to Manager

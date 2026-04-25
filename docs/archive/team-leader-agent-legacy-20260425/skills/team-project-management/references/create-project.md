@@ -38,8 +38,8 @@ bash ./skills/team-project-management/scripts/create-team-project.sh \
 ```
 
 The script will:
-1. Create `teams/{team}/shared/projects/{project-id}/meta.json` + `plan.md`
-2. Sync to MinIO
+1. Create `shared/projects/{project-id}/meta.json` + `plan.md`
+2. Publish the project files to team shared storage
 3. Register in `team-state.json`
 
 ### 4. Fill in plan.md
@@ -50,7 +50,7 @@ Edit the generated `plan.md` to add the DAG task plan. See `references/plan-form
 
 ```bash
 bash ./skills/team-project-management/scripts/resolve-dag.sh \
-  --plan /root/hiclaw-fs/shared/projects/{project-id}/plan.md \
+  --plan shared/projects/{project-id}/plan.md \
   --action validate
 ```
 
@@ -61,7 +61,7 @@ bash ./skills/team-project-management/scripts/resolve-dag.sh \
 
 ### 7. Activate
 
-Update `plan.md` Status from `planning` to `active`. Update `meta.json` status. Sync to MinIO.
+Update `shared/projects/{project-id}/plan.md` Status from `planning` to `active`. Update `meta.json` status. Publish the updated project files.
 
 ### 8. Start Execution
 

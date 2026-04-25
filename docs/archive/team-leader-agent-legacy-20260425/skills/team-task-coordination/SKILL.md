@@ -5,11 +5,11 @@ description: Coordinate access to team task directories using .processing marker
 
 # Team Task Coordination
 
-Prevents conflicts when Leader and Workers access the same task directory under `teams/{team-name}/tasks/`.
+Prevents conflicts when Leader and Workers access the same task directory under `shared/tasks/`.
 
 ## The `.processing` Marker
 
-Location: `teams/{team-name}/tasks/{task-id}/.processing`
+Location: `shared/tasks/{task-id}/.processing`
 
 ```json
 {
@@ -23,14 +23,14 @@ Auto-expires after 15 minutes (default).
 
 ## Protocol
 
-1. Sync from MinIO first
+1. Refresh the task directory first
 2. Check marker: `check-processing-marker.sh <task-id>`
    - Exit 0: safe to proceed
    - Exit 1: processing in progress, wait
 3. Create marker: `create-processing-marker.sh <task-id> <your-name>`
 4. Perform modifications
 5. Remove marker: `remove-processing-marker.sh <task-id>`
-6. Sync to MinIO
+6. Publish the task directory if you changed files
 
 ## Scripts
 

@@ -1,24 +1,25 @@
 # Team Leader Heartbeat
 
-Use heartbeat turns to keep your team moving. Be concise and action-oriented.
+Use heartbeat to keep active team work moving. Do not do domain work.
 
 ## Checklist
 
-1. Read `./AGENTS.md` to refresh Team Room, Leader DM, worker list, heartbeat interval, and worker idle timeout.
-2. Read `./team-state.json` to see all active tasks and projects.
-3. For each active finite task or project step with no progress for too long:
-   - Follow up with the assigned worker in the Team Room.
-   - Escalate to Manager or Team Admin only if the worker is blocked or repeatedly unresponsive.
-4. Run `hiclaw worker status --team <your-team>` to inspect runtime state for all team workers.
-5. Compare runtime state with `team-state.json`:
-   - If a worker has active work but is sleeping, run `hiclaw worker ensure-ready --name <worker> --team <your-team>`.
-   - If a worker has no active work in `team-state.json`, you may leave it alone or run `hiclaw worker sleep --name <worker> --team <your-team>` after the configured idle timeout.
-6. Report only meaningful changes:
-   - To Manager in the Leader Room for blockers, escalations, and completed manager-sourced work.
-   - To Team Admin in the Leader DM for admin-sourced work and team-local decisions.
+1. Read `AGENTS.md`.
+2. Read `team-state.json`.
+3. Refresh current topology:
+   ```bash
+   hiclaw get teams <team-name> -o json
+   hiclaw get workers --team <team-name> -o json
+   hiclaw worker status --team <team-name>
+   ```
+4. For each active task:
+   - If Worker is sleeping but has active work, run `hiclaw worker ensure-ready --name <worker> --team <team-name>`.
+   - If task has no progress for too long, follow up in the right room.
+   - If Worker reports blocked, escalate to Manager or Team Admin.
+5. Report only meaningful changes.
 
-## Rules
+## Quiet Rules
 
-- Treat `team-state.json` as the source of truth for idle decisions.
-- You decide when to wake or sleep workers. The controller only executes the lifecycle action.
-- Do not do domain work yourself during heartbeat. Coordinate and unblock your workers.
+- Do not send "thanks", "got it", or encouragement-only @mentions.
+- If no action is needed, stay quiet.
+- If two rounds produce no new task/question/decision, stop replying.

@@ -30,10 +30,12 @@ bash ./skills/team-project-management/scripts/resolve-dag.sh \
 
 ## Gotchas
 
-- **plan.md is the single source of truth** — always sync to MinIO after changes
+- **Project plan is Leader-owned** — keep project state in `shared/projects/{project-id}/plan.md`; Workers should not edit project-level `plan.md` or `meta.json`
+- **Worker task directories are isolated** — Workers receive and update only `shared/tasks/{task-id}/`
 - **Always validate before activating** — `resolve-dag.sh --action validate` catches cycles
 - **Always resolve after completion** — `resolve-dag.sh --action ready` finds newly unblocked tasks
-- **Route completion by source** — Manager tasks → result.md in `shared/tasks/`, Team Admin tasks → stay in `teams/{team}/`
+- **Route completion by source** — Manager-sourced parent tasks are read from `global-shared/tasks/`; team-internal work stays in `shared/`
+- **Do not expose storage internals** — tell Workers local paths like `shared/tasks/{task-id}/spec.md`, not remote storage paths or container absolute paths
 
 ## References
 

@@ -4,7 +4,7 @@
 
 All team project tasks live under:
 ```
-teams/{team-name}/tasks/{task-id}/
+shared/tasks/{task-id}/
 ├── meta.json      # Task metadata (Leader-owned)
 ├── spec.md        # Requirements (Leader-owned, read-only to workers)
 ├── result.md      # Outcome (Worker-written)
@@ -19,7 +19,7 @@ teams/{team-name}/tasks/{task-id}/
 
 ```bash
 TASK_ID="st-01"
-TASK_DIR="/root/hiclaw-fs/shared/tasks/${TASK_ID}"
+TASK_DIR="shared/tasks/${TASK_ID}"
 mkdir -p "${TASK_DIR}"
 ```
 
@@ -41,21 +41,25 @@ Write `spec.md` with:
 - Deliverables and acceptance criteria
 - Constraints and references
 - Task Directory Convention reminder:
+  - Run file-sync before reading the task
+  - Read `shared/tasks/{task-id}/spec.md`
   - Create `plan.md` before starting
-  - All artifacts stay in the task directory
-  - Write `result.md` when done
-  - Push with: `mc mirror ... --overwrite --exclude "spec.md" --exclude "base/"`
+  - Keep all artifacts inside `shared/tasks/{task-id}/`
+  - Write `result.md` when done and push the task directory with the file-sync helper
 
-### 2. Sync to MinIO
+### 2. Publish task files
 
 ```bash
 mc cp ${TASK_DIR}/meta.json ${HICLAW_STORAGE_PREFIX}/teams/${TEAM_NAME}/shared/tasks/${TASK_ID}/meta.json
 mc cp ${TASK_DIR}/spec.md ${HICLAW_STORAGE_PREFIX}/teams/${TEAM_NAME}/shared/tasks/${TASK_ID}/spec.md
+mc stat ${HICLAW_STORAGE_PREFIX}/teams/${TEAM_NAME}/shared/tasks/${TASK_ID}/spec.md
 ```
 
-### 3. Update plan.md
+Do not send the remote storage path to Workers. They only need `shared/tasks/${TASK_ID}/spec.md`.
 
-Change `[ ]` to `[~]` for this task. Sync plan.md to MinIO.
+### 3. Update project plan
+
+Change `[ ]` to `[~]` for this task in `shared/projects/{project-id}/plan.md`. The project plan is Leader-owned; do not ask Workers to edit it.
 
 ### 4. Register in state
 
@@ -68,16 +72,16 @@ bash ./skills/team-task-management/scripts/manage-team-state.sh \
 
 ### 5. @mention Worker
 
-In Team Room:
+In Team Room, or with `copaw channels send` only if you are currently in a different room:
 ```
 @alice:{domain} New task [st-01]: Design database schema
-Pull spec: shared/tasks/st-01/spec.md
-Please file-sync, read the spec, create plan.md before starting. @mention me when complete.
+Please file-sync and read shared/tasks/st-01/spec.md
+Create plan.md inside the task directory before starting. @mention me when complete.
 ```
 
 ## Handle Completion
 
-### 1. Pull results
+### 1. Refresh results
 
 ```bash
 mc mirror ${HICLAW_STORAGE_PREFIX}/teams/${TEAM_NAME}/shared/tasks/${TASK_ID}/ ${TASK_DIR}/ --overwrite
@@ -89,10 +93,10 @@ Check the `Outcome` → `Status` field.
 
 ### 3. SUCCESS / SUCCESS_WITH_NOTES
 
-1. Update `meta.json`: `status → completed`, fill `completed_at`
-2. Update plan.md: `[~]` → `[x]`, add Change Log entry
+1. Update `shared/tasks/${TASK_ID}/meta.json`: `status → completed`, fill `completed_at`
+2. Update `shared/projects/{project-id}/plan.md`: `[~]` → `[x]`, add Change Log entry
 3. Complete in state: `manage-team-state.sh --action complete --task-id st-01`
-4. Sync to MinIO
+4. Publish updated Leader-owned files
 5. Run `resolve-dag.sh --action ready` to find next tasks
 
 ### 4. REVISION_NEEDED

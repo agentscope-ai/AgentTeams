@@ -9,19 +9,19 @@ After creating a project and filling in plan.md with the DAG task plan, follow t
 ```
 1. resolve-dag.sh --action ready → get unblocked pending tasks
 2. For each ready task:
-   a. Create task directory: teams/{team}/shared/tasks/{task-id}/
+   a. Create task directory: shared/tasks/{task-id}/
    b. Write meta.json + spec.md
-   c. Push to MinIO
-   d. Update plan.md: [ ] → [~]
+   c. Publish task files and verify spec.md exists in shared storage
+   d. Update project plan: [ ] → [~]
    e. Register in team-state.json: manage-team-state.sh --action add-finite
    f. @mention worker in Team Room
 3. Wait for worker completion
 4. On completion:
-   a. Pull task directory from MinIO
+   a. Refresh task directory from shared storage
    b. Read result.md
-   c. Update plan.md: [~] → [x] (or [!] if blocked, [→] if revision)
+   c. Update project plan: [~] → [x] (or [!] if blocked, [→] if revision)
    d. Update team-state.json: manage-team-state.sh --action complete
-   e. Sync plan.md to MinIO
+   e. Publish updated Leader-owned files
    f. Go to step 1 (resolve next wave)
 5. When all tasks [x] → aggregate results → complete project
 ```
@@ -33,12 +33,12 @@ After creating a project and filling in plan.md with the DAG task plan, follow t
 ```bash
 # Get ready tasks
 READY=$(bash ./skills/team-project-management/scripts/resolve-dag.sh \
-  --plan /root/hiclaw-fs/shared/projects/{project-id}/plan.md \
+  --plan shared/projects/{project-id}/plan.md \
   --action ready)
 
 # For each ready task, create task files
 TASK_ID="st-01"
-TASK_DIR="/root/hiclaw-fs/shared/tasks/${TASK_ID}"
+TASK_DIR="shared/tasks/${TASK_ID}"
 mkdir -p "${TASK_DIR}"
 ```
 
@@ -55,20 +55,21 @@ Write `meta.json`:
 }
 ```
 
-Write `spec.md` with: task title, project context, deliverables, constraints, and the Task Directory Convention (worker creates plan.md, writes result.md when done).
+Write `spec.md` with: task title, project context, deliverables, constraints, and the Task Directory Convention (worker runs file-sync, reads `shared/tasks/${TASK_ID}/spec.md`, keeps artifacts inside the task directory, and writes `result.md` when done).
 
-Push to MinIO:
+Publish task files and verify `spec.md` before notifying the Worker:
 ```bash
 mc cp ${TASK_DIR}/meta.json ${HICLAW_STORAGE_PREFIX}/teams/{team}/shared/tasks/${TASK_ID}/meta.json
 mc cp ${TASK_DIR}/spec.md ${HICLAW_STORAGE_PREFIX}/teams/{team}/shared/tasks/${TASK_ID}/spec.md
+mc stat ${HICLAW_STORAGE_PREFIX}/teams/{team}/shared/tasks/${TASK_ID}/spec.md
 ```
 
-Update plan.md marker from `[ ]` to `[~]`. Sync plan.md to MinIO.
+Update `shared/projects/{project-id}/plan.md` marker from `[ ]` to `[~]`. The project plan is Leader-owned; do not ask Workers to edit it.
 
 @mention worker in Team Room:
 ```
 @alice:{domain} New task [st-01]: Design database schema
-Pull spec: shared/tasks/st-01/spec.md
+Please file-sync and read shared/tasks/st-01/spec.md
 @mention me when complete.
 ```
 
@@ -76,7 +77,7 @@ Pull spec: shared/tasks/st-01/spec.md
 
 When worker @mentions you with completion:
 
-1. Pull from MinIO:
+1. Refresh from shared storage:
 ```bash
 mc mirror ${HICLAW_STORAGE_PREFIX}/teams/{team}/shared/tasks/${TASK_ID}/ ${TASK_DIR}/ --overwrite
 ```
@@ -95,7 +96,7 @@ mc mirror ${HICLAW_STORAGE_PREFIX}/teams/{team}/shared/tasks/${TASK_ID}/ ${TASK_
 4. After marking `[x]`, immediately run:
 ```bash
 bash ./skills/team-project-management/scripts/resolve-dag.sh \
-  --plan /root/hiclaw-fs/shared/projects/{project-id}/plan.md \
+  --plan shared/projects/{project-id}/plan.md \
   --action ready
 ```
 
@@ -114,16 +115,16 @@ When all tasks in plan.md are `[x]`:
 
 1. Aggregate results from all task `result.md` files
 2. Check `source` in project meta.json:
-   - **source=manager**: Write aggregated `result.md` to `shared/tasks/{parent-task-id}/result.md`, push to MinIO, @mention Manager in Leader Room
-   - **source=team-admin**: Write summary in project directory, @mention Team Admin in Leader DM
+   - **source=manager**: Use the Manager parent task from `global-shared/tasks/{parent-task-id}/` and publish the aggregated result through the appropriate skill/helper, then @mention Manager in Leader Room
+   - **source=team-admin**: Write summary in `shared/projects/{project-id}/result.md`, then @mention Team Admin in Leader DM
 3. Update project meta.json: `status → completed`
 4. Update team-state.json: `manage-team-state.sh --action complete-project --project-id P`
-5. Sync to MinIO
+5. Publish updated Leader-owned files
 
 ## Heartbeat Integration
 
 During heartbeat, for each active project:
-1. Pull plan.md from MinIO
+1. Refresh `shared/projects/{project-id}/plan.md` if needed
 2. Run `resolve-dag.sh --action ready`
 3. If ready tasks exist but are not assigned → assign them (may have been missed)
 4. If `[~]` tasks have been in-progress too long → follow up with worker

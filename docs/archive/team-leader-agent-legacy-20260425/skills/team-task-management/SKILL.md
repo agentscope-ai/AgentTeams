@@ -1,6 +1,6 @@
 ---
 name: team-task-management
-description: Use when you need to assign tasks to team workers, track team task progress, or manage team-state.json. Use `copaw channels send` CLI via shell to communicate with workers. Never do worker tasks yourself.
+description: Use when you need to assign finite tasks to team workers, track task progress, or manage team-state.json. Never do worker tasks yourself.
 ---
 
 # Team Task Management
@@ -16,41 +16,52 @@ If you catch yourself doing a worker's job — STOP and delegate instead.
 
 Follow these steps IN ORDER. Do NOT skip any step.
 
-### Step 1: Write spec.md to MinIO
+### Step 1: Create and publish spec.md
 
-Write the task spec and push to MinIO. Workers pull from MinIO via file-sync.
+Resolve current team and worker metadata first:
+
+```bash
+hiclaw get teams <your-team-name> -o json
+hiclaw get workers --team <your-team-name> -o json
+```
+
+Use the CLI output for the Team Room, Worker Room, worker name, and full worker Matrix ID. Do not use stale room IDs or worker IDs from memory, old chat history, or hand-written guesses.
+
+Write the task spec under local team shared storage, then publish it. Workers read the synced local path `shared/tasks/<task-id>/spec.md`.
 
 ```bash
 # Create spec locally in shared/tasks/
-mkdir -p /root/hiclaw-fs/shared/tasks/st-01
-cat > /root/hiclaw-fs/shared/tasks/st-01/spec.md << 'EOF'
+mkdir -p shared/tasks/st-01
+cat > shared/tasks/st-01/spec.md << 'EOF'
 # Task: Design API endpoints
 (your task description here)
 EOF
 
-# Push to MinIO team shared
-mc cp /root/hiclaw-fs/shared/tasks/st-01/spec.md \
-  hiclaw/hiclaw-storage/teams/<TEAM_NAME>/shared/tasks/st-01/spec.md
+# Publish to team shared storage
+mc cp shared/tasks/st-01/spec.md \
+  ${HICLAW_STORAGE_PREFIX}/teams/<TEAM_NAME>/shared/tasks/st-01/spec.md
+
+# Verify the Worker can pull it before you notify them
+mc stat ${HICLAW_STORAGE_PREFIX}/teams/<TEAM_NAME>/shared/tasks/st-01/spec.md
 ```
 
-The MinIO path MUST be `hiclaw/hiclaw-storage/teams/<your team name>/shared/tasks/<task-id>/spec.md`.
+Do not put remote storage paths in chat messages or task specs. Tell Workers only the local path: `shared/tasks/<task-id>/spec.md`.
 
-### Step 2: Send @mention to worker in Team Room
+### Step 2: Notify the worker
 
-Your Coordination section (in AGENTS.md, already in your system prompt) has:
-- **Team Room** ID
-- **Team Workers** — each worker's Matrix ID
+After the remote `spec.md` is verified, notify the worker.
 
-```bash
-copaw channels send \
-  --agent-id default \
-  --channel matrix \
-  --target-user '<worker Matrix ID from Coordination section>' \
-  --target-session '<Team Room from Coordination section>' \
-  --text '@worker-name:domain New task [st-01]: Design API endpoints. Please file-sync and read teams/<team>/tasks/st-01/spec.md. @mention me when complete.'
+- If you are already in the Team Room, reply directly in the current session.
+- If you are in Leader DM or another room, use the `copaw channels send` template in `AGENTS.md` to send into the Team Room or the worker's room.
+- In both cases, use the full worker Matrix ID from `hiclaw get workers --team <team> -o json` as the visible @mention.
+
+Message template:
+
+```text
+@worker:domain New task [st-01]: Design API endpoints.
+Please file-sync and read shared/tasks/st-01/spec.md.
+@mention me when complete.
 ```
-
-The message MUST tell the worker to file-sync and give the `shared/tasks/<id>/spec.md` path (workers see it locally after sync).
 
 ### Step 3: Track in team-state.json
 
@@ -71,14 +82,6 @@ bash ./skills/team-task-management/scripts/manage-team-state.sh \
 ## Key Scripts
 
 ```bash
-# Send @mention to a worker (REQUIRED for task assignment)
-copaw channels send \
-  --agent-id default \
-  --channel matrix \
-  --target-user '@worker:domain' \
-  --target-session '!room' \
-  --text '@worker:domain message'
-
 # Track task state
 bash ./skills/team-task-management/scripts/manage-team-state.sh \
   --action add-finite --task-id ID --title TITLE \

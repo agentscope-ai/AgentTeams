@@ -75,6 +75,8 @@ class Worker:
         self._ensure_mc()
 
         # 2. Init file sync
+        self._copaw_working_dir = self.config.install_dir / self.worker_name / ".copaw"
+        workspace_dir = self._copaw_working_dir / "workspaces" / "default"
         self.sync = FileSync(
             endpoint=self.config.minio_endpoint,
             access_key=self.config.minio_access_key,
@@ -83,6 +85,8 @@ class Worker:
             worker_name=self.worker_name,
             secure=self.config.minio_secure,
             local_dir=self.config.install_dir / self.worker_name,
+            shared_dir=workspace_dir / "shared",
+            global_shared_dir=workspace_dir / "global-shared",
         )
 
         # 2. Full mirror from MinIO (restore all state: config, sessions, sync token, etc.)
@@ -110,12 +114,10 @@ class Worker:
         openclaw_cfg = self._matrix_relogin(openclaw_cfg)
 
         # 4. Set up CoPaw working directory
-        self._copaw_working_dir = self.config.install_dir / self.worker_name / ".copaw"
         self._copaw_working_dir.mkdir(parents=True, exist_ok=True)
 
         # Write SOUL.md / AGENTS.md into CoPaw workspace dir (workspaces/default/)
         # CoPaw reads system_prompt_files from workspace dir, not .copaw root.
-        workspace_dir = self._copaw_working_dir / "workspaces" / "default"
         workspace_dir.mkdir(parents=True, exist_ok=True)
         for name in ("SOUL.md", "AGENTS.md"):
             src = self.sync.local_dir / name

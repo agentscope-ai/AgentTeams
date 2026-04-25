@@ -112,6 +112,8 @@ class FileSync:
         worker_name: str,
         secure: bool = False,
         local_dir: Optional[Path] = None,
+        shared_dir: Optional[Path] = None,
+        global_shared_dir: Optional[Path] = None,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.access_key = access_key
@@ -121,6 +123,8 @@ class FileSync:
         self._secure = secure
         self.local_dir = local_dir or Path.home() / ".copaw-worker" / worker_name
         self.local_dir.mkdir(parents=True, exist_ok=True)
+        self.shared_dir = shared_dir or self.local_dir / "shared"
+        self.global_shared_dir = global_shared_dir or self.local_dir / "global-shared"
         self._prefix = f"agents/{worker_name}"
         self._alias_set = False
         self._cloud_mode = os.environ.get("HICLAW_RUNTIME") == "aliyun"
@@ -232,7 +236,8 @@ class FileSync:
 
         # Mirror shared/ — team members use teams/{team}/shared/, others use global shared/
         shared_remote = self._get_shared_remote()
-        shared_local = str(self.local_dir / "shared") + "/"
+        shared_local = str(self.shared_dir) + "/"
+        self.shared_dir.mkdir(parents=True, exist_ok=True)
         try:
             _mc("mirror", shared_remote, shared_local, "--overwrite", check=True)
             logger.info("mirror_all: shared/ mirror completed from %s", shared_remote)
@@ -242,8 +247,8 @@ class FileSync:
         # Team Leader also gets global shared/ as global-shared/ (read-only, for Manager tasks)
         if self._is_team_leader():
             global_shared_remote = f"{_MC_ALIAS}/{self.bucket}/shared/"
-            global_shared_local = str(self.local_dir / "global-shared") + "/"
-            os.makedirs(global_shared_local, exist_ok=True)
+            global_shared_local = str(self.global_shared_dir) + "/"
+            self.global_shared_dir.mkdir(parents=True, exist_ok=True)
             try:
                 _mc("mirror", global_shared_remote, global_shared_local, "--overwrite", check=True)
                 logger.info("mirror_all: global-shared/ mirror completed")
@@ -404,7 +409,7 @@ class FileSync:
 
         # Mirror shared/ — team members use teams/{team}/shared/, others use global shared/
         shared_remote = self._get_shared_remote()
-        shared_local = self.local_dir / "shared"
+        shared_local = self.shared_dir
         shared_local.mkdir(parents=True, exist_ok=True)
         try:
             result = _mc(
@@ -424,7 +429,7 @@ class FileSync:
         # Team Leader also syncs global shared/ to global-shared/
         if self._is_team_leader():
             global_shared_remote = f"{_MC_ALIAS}/{self.bucket}/shared/"
-            global_shared_local = self.local_dir / "global-shared"
+            global_shared_local = self.global_shared_dir
             global_shared_local.mkdir(parents=True, exist_ok=True)
             try:
                 result = _mc(

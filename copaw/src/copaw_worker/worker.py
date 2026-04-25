@@ -397,7 +397,7 @@ class Worker:
         except (ImportError, AttributeError):
             builtin_names = set()
 
-        keep_names = builtin_names | set(skill_names) | {"file-sync"}
+        keep_names = builtin_names | set(skill_names)
         for child in list(active_skills_dir.iterdir()):
             if child.is_dir() and child.name not in keep_names:
                 shutil.rmtree(child)

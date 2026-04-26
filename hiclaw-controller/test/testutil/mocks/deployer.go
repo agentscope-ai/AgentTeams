@@ -15,7 +15,7 @@ type MockDeployer struct {
 	DeployPackageFn             func(ctx context.Context, workerName string, pkg string, isUpdate bool) error
 	WriteInlineConfigsFn        func(workerName string, spec v1beta1.WorkerSpec) error
 	DeployWorkerConfigFn        func(ctx context.Context, req service.WorkerDeployRequest) error
-	PushOnDemandSkillsFn        func(ctx context.Context, workerName string, skills []string) error
+	PushOnDemandSkillsFn        func(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSDataFn            func(ctx context.Context, workerName string) error
 	InjectCoordinationContextFn func(ctx context.Context, req service.CoordinationDeployRequest) error
 	EnsureTeamStorageFn         func(ctx context.Context, teamName string) error
@@ -101,13 +101,13 @@ func (m *MockDeployer) DeployWorkerConfig(ctx context.Context, req service.Worke
 	return nil
 }
 
-func (m *MockDeployer) PushOnDemandSkills(ctx context.Context, workerName string, skills []string) error {
+func (m *MockDeployer) PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error {
 	m.mu.Lock()
 	m.Calls.PushOnDemandSkills = append(m.Calls.PushOnDemandSkills, workerName)
 	fn := m.PushOnDemandSkillsFn
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, workerName, skills)
+		return fn(ctx, workerName, skills, remoteSkills)
 	}
 	return nil
 }

@@ -38,7 +38,7 @@ type WorkerDeployer interface {
 	DeployPackage(ctx context.Context, name, uri string, isUpdate bool) error
 	WriteInlineConfigs(name string, spec v1beta1.WorkerSpec) error
 	DeployWorkerConfig(ctx context.Context, req WorkerDeployRequest) error
-	PushOnDemandSkills(ctx context.Context, workerName string, skills []string) error
+	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSData(ctx context.Context, workerName string) error
 	InjectCoordinationContext(ctx context.Context, req CoordinationDeployRequest) error
 	EnsureTeamStorage(ctx context.Context, teamName string) error
@@ -107,7 +107,7 @@ type ManagerProvisioner interface {
 type ManagerDeployer interface {
 	DeployPackage(ctx context.Context, name, uri string, isUpdate bool) error
 	DeployManagerConfig(ctx context.Context, req ManagerDeployRequest) error
-	PushOnDemandSkills(ctx context.Context, name string, skills []string) error
+	PushOnDemandSkills(ctx context.Context, name string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSData(ctx context.Context, name string) error
 }
 

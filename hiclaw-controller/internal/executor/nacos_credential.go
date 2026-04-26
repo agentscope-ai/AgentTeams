@@ -48,7 +48,7 @@ type nacosUserPassCredential struct {
 	username         string
 	password         string
 	httpClient       *http.Client
-	mu               sync.Mutex
+	mu               sync.RWMutex
 	accessToken      string
 	tokenExpireAt    time.Time
 	authLoginVersion string
@@ -66,9 +66,9 @@ func (c *nacosUserPassCredential) Refresh(ctx context.Context) error {
 }
 
 func (c *nacosUserPassCredential) Apply(req *http.Request) {
-	c.mu.Lock()
+	c.mu.RLock()
 	tok := c.accessToken
-	c.mu.Unlock()
+	c.mu.RUnlock()
 	if tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}

@@ -233,7 +233,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
 
-	if err := d.Deployer.PushOnDemandSkills(ctx, m.Name, m.Spec.Skills); err != nil {
+	if err := d.Deployer.PushOnDemandSkills(ctx, m.Name, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
 		logger.Info("skill push failed", "error", err)
 	}
 	return nil

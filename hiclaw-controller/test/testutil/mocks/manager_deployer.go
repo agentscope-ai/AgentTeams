@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 )
 
@@ -13,7 +14,7 @@ type MockManagerDeployer struct {
 
 	DeployPackageFn       func(ctx context.Context, name, uri string, isUpdate bool) error
 	DeployManagerConfigFn func(ctx context.Context, req service.ManagerDeployRequest) error
-	PushOnDemandSkillsFn  func(ctx context.Context, name string, skills []string) error
+	PushOnDemandSkillsFn  func(ctx context.Context, name string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSDataFn      func(ctx context.Context, name string) error
 
 	Calls struct {
@@ -75,13 +76,13 @@ func (m *MockManagerDeployer) DeployManagerConfig(ctx context.Context, req servi
 	return nil
 }
 
-func (m *MockManagerDeployer) PushOnDemandSkills(ctx context.Context, name string, skills []string) error {
+func (m *MockManagerDeployer) PushOnDemandSkills(ctx context.Context, name string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error {
 	m.mu.Lock()
 	m.Calls.PushOnDemandSkills = append(m.Calls.PushOnDemandSkills, name)
 	fn := m.PushOnDemandSkillsFn
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, name, skills)
+		return fn(ctx, name, skills, remoteSkills)
 	}
 	return nil
 }

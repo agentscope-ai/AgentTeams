@@ -334,108 +334,151 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 }
 
 // PushOnDemandSkills pushes on-demand skills to a worker.
-// Skills named with the "nacos://" scheme are fetched from Nacos and mirrored
-// to OSS. All other skills fall back to the legacy push-worker-skills.sh script.
-// No-op if no skills are provided.
-func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, skills []string) error {
+// Built-in skills are pushed via push-worker-skills.sh. Remote skills are
+// fetched from source registries (currently nacos://) and mirrored to OSS.
+func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error {
 	logger := log.FromContext(ctx)
-	if len(skills) == 0 {
+	if len(skills) == 0 && len(remoteSkills) == 0 {
 		return nil
 	}
 
 	agentPrefix := fmt.Sprintf("agents/%s", workerName)
-	var builtinSkills []string
-
-	for _, skill := range skills {
-		if !strings.HasPrefix(skill, "nacos://") {
-			builtinSkills = append(builtinSkills, skill)
-			continue
-		}
-
-		// ── nacos:// skill ──────────────────────────────────────────────────
-		u, err := parseNacosSkillURI(skill)
-		if err != nil {
-			return fmt.Errorf("invalid nacos skill URI %q: %w", skill, err)
-		}
-
-		client, err := executor.NewNacosAIClient(ctx, u.nacosAddr, u.namespace, d.nacosAuthType, d.nacosCredClient)
-		if err != nil {
-			return fmt.Errorf("connect to nacos for skill %q: %w", skill, err)
-		}
-
-		// Download and extract ZIP into a temp directory.
-		tmpDir, err := os.MkdirTemp("", "nacos-skill-")
-		if err != nil {
-			return fmt.Errorf("create temp dir for skill %q: %w", skill, err)
-		}
-		defer os.RemoveAll(tmpDir)
-
-		if err := client.GetSkill(ctx, u.skillName, tmpDir, u.version, u.label); err != nil {
-			return fmt.Errorf("fetch skill %q from nacos: %w", skill, err)
-		}
-
-		// Mirror extracted skill directory to OSS.
-		src := filepath.Join(tmpDir, u.skillName) + "/"
-		dst := agentPrefix + "/skills/" + u.skillName + "/"
-		if err := d.oss.Mirror(ctx, src, dst, oss.MirrorOptions{Overwrite: true}); err != nil {
-			return fmt.Errorf("mirror skill %q to OSS: %w", skill, err)
-		}
-		logger.Info("nacos skill pushed", "worker", workerName, "skill", u.skillName, "version", u.version)
+	if err := d.pushRemoteSkills(ctx, workerName, agentPrefix, remoteSkills); err != nil {
+		return err
 	}
 
-	// ── legacy builtin skills via push-worker-skills.sh ──────────────────
-	if len(builtinSkills) == 0 || d.executor == nil {
+	if len(skills) == 0 || d.executor == nil {
 		return nil
 	}
 	scriptPath := "/opt/hiclaw/agent/skills/worker-management/scripts/push-worker-skills.sh"
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		logger.Info("push-worker-skills.sh not found (incluster mode), skipping on-demand skill push",
-			"worker", workerName, "skills", builtinSkills)
+			"worker", workerName, "skills", skills)
 		return nil
 	}
 	_, err := d.executor.RunSimple(ctx, scriptPath, "--worker", workerName, "--no-notify")
 	return err
 }
 
-type nacosSkillURIParts struct {
+type nacosClientKey struct {
 	nacosAddr string
 	namespace string
-	skillName string
-	version   string
-	label     string
+	authType  string
 }
 
-// parseNacosSkillURI parses nacos://[user:pass@]host:port/{namespace}/{skill-name}[/{version}]
-func parseNacosSkillURI(raw string) (*nacosSkillURIParts, error) {
-	// Replace the nacos:// scheme with http:// so url.Parse handles user-info correctly.
-	parsed, err := url.Parse("http://" + strings.TrimPrefix(raw, "nacos://"))
-	if err != nil {
-		return nil, err
-	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("expected nacos://[user:pass@]host:port/{namespace}/{skill-name}[/{version}]")
+func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix string, remoteSkills []v1beta1.RemoteSkillSource) error {
+	if len(remoteSkills) == 0 {
+		return nil
 	}
 
-	nacosAddr := parsed.Host
+	logger := log.FromContext(ctx)
+	logger.Info("pushing remote skills", "worker", workerName, "sources", len(remoteSkills))
+	clients := map[nacosClientKey]*executor.NacosAIClient{}
+
+	for _, source := range remoteSkills {
+		if len(source.Skills) == 0 {
+			return fmt.Errorf("remoteSkills source %q has empty skills list", source.Source)
+		}
+
+		nacosAddr, namespace, err := parseNacosRemoteSource(source.Source)
+		if err != nil {
+			return fmt.Errorf("invalid remoteSkills.source %q: %w", source.Source, err)
+		}
+
+		authType, err := mapRemoteSkillAuthType(source.AuthType)
+		if err != nil {
+			return fmt.Errorf("invalid remoteSkills.authType for source %q: %w", source.Source, err)
+		}
+
+		key := nacosClientKey{nacosAddr: nacosAddr, namespace: namespace, authType: authType}
+		client, ok := clients[key]
+		if !ok {
+			logger.Info("connecting to nacos", "worker", workerName, "source", source.Source, "authType", authType)
+			client, err = executor.NewNacosAIClient(ctx, nacosAddr, namespace, authType, d.nacosCredClient)
+			if err != nil {
+				return fmt.Errorf("connect to nacos source %q: %w", source.Source, err)
+			}
+			clients[key] = client
+		}
+
+		for _, skill := range source.Skills {
+			if skill.Name == "" {
+				return fmt.Errorf("remoteSkills source %q has an entry with empty name", source.Source)
+			}
+			if skill.Version != "" && skill.Label != "" {
+				return fmt.Errorf("remote skill %q in source %q cannot set both version and label", skill.Name, source.Source)
+			}
+
+			tmpDir, err := os.MkdirTemp("", "nacos-skill-")
+			if err != nil {
+				return fmt.Errorf("create temp dir for skill %q: %w", skill.Name, err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			if err := client.GetSkill(ctx, skill.Name, tmpDir, skill.Version, skill.Label); err != nil {
+				return fmt.Errorf("fetch remote skill %q from %q: %w", skill.Name, source.Source, err)
+			}
+			logger.Info("remote skill fetched, mirroring to OSS",
+				"worker", workerName,
+				"source", source.Source,
+				"skill", skill.Name,
+				"version", skill.Version,
+				"label", skill.Label)
+
+			src := filepath.Join(tmpDir, skill.Name) + "/"
+			dst := agentPrefix + "/skills/" + skill.Name + "/"
+			if err := d.oss.Mirror(ctx, src, dst, oss.MirrorOptions{Overwrite: true}); err != nil {
+				return fmt.Errorf("mirror remote skill %q from %q to OSS: %w", skill.Name, source.Source, err)
+			}
+			logger.Info("remote skill pushed",
+				"worker", workerName,
+				"source", source.Source,
+				"skill", skill.Name,
+				"version", skill.Version,
+				"label", skill.Label)
+		}
+	}
+
+	return nil
+}
+
+func mapRemoteSkillAuthType(raw string) (string, error) {
+	authType := strings.TrimSpace(raw)
+	if authType == "" {
+		authType = "nacos"
+	}
+
+	switch authType {
+	case "sts-hiclaw", "nacos", "none":
+		return authType, nil
+	default:
+		return "", fmt.Errorf("unsupported authType %q", raw)
+	}
+}
+
+func parseNacosRemoteSource(raw string) (nacosAddr, namespace string, err error) {
+	if !strings.HasPrefix(raw, "nacos://") {
+		return "", "", fmt.Errorf("source must use nacos:// scheme")
+	}
+
+	parsed, err := url.Parse("http://" + strings.TrimPrefix(raw, "nacos://"))
+	if err != nil {
+		return "", "", err
+	}
+	if parsed.Host == "" {
+		return "", "", fmt.Errorf("missing host")
+	}
+
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 1 || parts[0] == "" {
+		return "", "", fmt.Errorf("expected nacos://host:port/{namespace-id}")
+	}
+
+	nacosAddr = parsed.Host
 	if parsed.User != nil {
 		nacosAddr = parsed.User.String() + "@" + parsed.Host
 	}
-
-	u := &nacosSkillURIParts{
-		nacosAddr: nacosAddr,
-		namespace: parts[0],
-		skillName: parts[1],
-	}
-	if len(parts) >= 3 {
-		v := parts[2]
-		if strings.HasPrefix(v, "label:") {
-			u.label = strings.TrimPrefix(v, "label:")
-		} else {
-			u.version = v
-		}
-	}
-	return u, nil
+	return nacosAddr, parts[0], nil
 }
 
 // CleanupOSSData removes all agent data from OSS for a deleted worker.

@@ -21,6 +21,7 @@ File Sync Design Principle:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -34,6 +35,16 @@ logger = logging.getLogger(__name__)
 
 # mc alias name used for this worker session
 _MC_ALIAS = "hiclaw"
+
+
+@dataclass(frozen=True)
+class SharedPath:
+    """Resolved local and remote paths for a shared file operation."""
+
+    kind: str
+    subpath: str
+    local: Path
+    remote: str
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -128,6 +139,7 @@ class FileSync:
         self._prefix = f"agents/{worker_name}"
         self._alias_set = False
         self._cloud_mode = os.environ.get("HICLAW_RUNTIME") == "aliyun"
+        self._worker_info: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # mc alias management
@@ -260,37 +272,46 @@ class FileSync:
     # Public API
     # ------------------------------------------------------------------
 
+    def _get_worker_info(self) -> dict[str, Any]:
+        """Return authoritative worker metadata from the HiClaw controller."""
+        if self._worker_info is not None:
+            return self._worker_info
+
+        hiclaw_bin = shutil.which("hiclaw")
+        if not hiclaw_bin:
+            raise RuntimeError("hiclaw CLI not found; cannot resolve worker storage scope")
+
+        try:
+            result = subprocess.run(
+                [hiclaw_bin, "get", "workers", self.worker_name, "-o", "json"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            worker = json.loads(result.stdout)
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to query worker metadata for {self.worker_name}: {exc}",
+            ) from exc
+
+        if not isinstance(worker, dict):
+            raise RuntimeError(f"invalid worker metadata for {self.worker_name}")
+        self._worker_info = worker
+        return worker
+
     def _get_team_id(self) -> Optional[str]:
-        """Read team name from AGENTS.md team-context section."""
-        agents_path = self.local_dir / "AGENTS.md"
-        if agents_path.exists():
-            try:
-                content = agents_path.read_text()
-                import re
-                m = re.search(r'\*\*Team\*\*:\s*(\S+)', content)
-                if m:
-                    return m.group(1)
-            except Exception:
-                pass
-        config_path = self.local_dir / "openclaw.json"
-        if config_path.exists():
-            try:
-                config = json.loads(config_path.read_text())
-                return config.get("team_id") or None
-            except Exception:
-                pass
+        """Resolve team name from the HiClaw controller."""
+        worker = self._get_worker_info()
+        team_id = worker.get("team")
+        if isinstance(team_id, str) and team_id.strip():
+            return team_id.strip()
         return None
 
     def _is_team_leader(self) -> bool:
-        """Check if this worker is a team leader (has 'Upstream coordinator' in team-context)."""
-        agents_path = self.local_dir / "AGENTS.md"
-        if agents_path.exists():
-            try:
-                content = agents_path.read_text()
-                return "Upstream coordinator" in content
-            except Exception:
-                pass
-        return False
+        """Check if this worker is a team leader according to the controller."""
+        worker = self._get_worker_info()
+        return worker.get("role") == "team_leader"
 
     def _get_shared_remote(self) -> str:
         """Return the MinIO remote path for shared/ directory.
@@ -302,6 +323,101 @@ class FileSync:
         if team_id:
             return f"{_MC_ALIAS}/{self.bucket}/teams/{team_id}/shared/"
         return f"{_MC_ALIAS}/{self.bucket}/shared/"
+
+    def _get_global_shared_remote(self) -> str:
+        """Return the MinIO remote path for global-shared/ directory."""
+        return f"{_MC_ALIAS}/{self.bucket}/shared/"
+
+    def resolve_shared_path(self, path: str) -> SharedPath:
+        """Resolve a user-facing shared path to local and remote paths."""
+        raw = (path or "").strip()
+        if not raw:
+            raise ValueError("path is required")
+        if raw.startswith("/") or "\\" in raw:
+            raise ValueError("path must be a relative shared path")
+
+        normalized = raw.strip("/")
+        parts = Path(normalized).parts
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            raise ValueError("path must not contain empty, '.', or '..' segments")
+
+        if parts[0] == "shared":
+            subpath = "/".join(parts[1:])
+            local = self.shared_dir.joinpath(*parts[1:]) if len(parts) > 1 else self.shared_dir
+            remote = self._get_shared_remote()
+            if subpath:
+                remote = f"{remote}{subpath}"
+                if raw.endswith("/"):
+                    remote += "/"
+            return SharedPath("shared", subpath, local, remote)
+
+        if parts[0] == "global-shared":
+            subpath = "/".join(parts[1:])
+            local = (
+                self.global_shared_dir.joinpath(*parts[1:])
+                if len(parts) > 1
+                else self.global_shared_dir
+            )
+            remote = self._get_global_shared_remote()
+            if subpath:
+                remote = f"{remote}{subpath}"
+                if raw.endswith("/"):
+                    remote += "/"
+            return SharedPath("global-shared", subpath, local, remote)
+
+        raise ValueError("path must start with shared/ or global-shared/")
+
+    def pull_shared_path(self, path: str) -> SharedPath:
+        """Pull a shared path from MinIO into the local workspace."""
+        resolved = self.resolve_shared_path(path)
+        self._ensure_alias()
+        if (path or "").strip().endswith("/"):
+            resolved.local.mkdir(parents=True, exist_ok=True)
+            _mc("mirror", resolved.remote, str(resolved.local) + "/", "--overwrite", check=True)
+            return resolved
+
+        resolved.local.parent.mkdir(parents=True, exist_ok=True)
+        _mc("cp", resolved.remote, str(resolved.local), check=True)
+        return resolved
+
+    def push_shared_path(
+        self,
+        path: str,
+        *,
+        exclude: Optional[list[str]] = None,
+    ) -> SharedPath:
+        """Push a local shared path to MinIO."""
+        resolved = self.resolve_shared_path(path)
+        if resolved.kind == "global-shared":
+            raise ValueError("global-shared/ is read-only")
+        if not resolved.local.exists():
+            raise FileNotFoundError(f"local path does not exist: {resolved.local}")
+
+        self._ensure_alias()
+        if resolved.local.is_dir():
+            remote = resolved.remote if resolved.remote.endswith("/") else f"{resolved.remote}/"
+            args = ["mirror", str(resolved.local) + "/", remote, "--overwrite"]
+            for item in exclude or []:
+                args.extend(["--exclude", item])
+            _mc(*args, check=True)
+        else:
+            _mc("cp", str(resolved.local), resolved.remote, check=True)
+        return resolved
+
+    def stat_shared_path(self, path: str) -> SharedPath:
+        """Check that a shared path exists in MinIO."""
+        resolved = self.resolve_shared_path(path)
+        self._ensure_alias()
+        _mc("stat", resolved.remote, check=True)
+        return resolved
+
+    def list_shared_path(self, path: str) -> tuple[SharedPath, list[str]]:
+        """List a shared path in MinIO."""
+        resolved = self.resolve_shared_path(path)
+        self._ensure_alias()
+        result = _mc("ls", "--recursive", resolved.remote, check=True)
+        entries = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return resolved, entries
 
     def get_config(self) -> dict[str, Any]:
         """Pull openclaw.json and return parsed dict."""

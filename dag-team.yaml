@@ -1,0 +1,43 @@
+apiVersion: hiclaw.io/v1beta1
+kind: Team
+metadata:
+  name: dag-team
+spec:
+  description: "Team project DAG orchestration - dev/test scenario (test-21)"
+  leader:
+    name: dag-team-lead
+    heartbeat:
+      enabled: true
+      every: 30m
+    workerIdleTimeout: 12h
+    # leader 不设 soul: — 由 SOUL.md.tmpl 自动渲染（含团队名、成员列表等）
+    # 如需追加自定义行为规则，用 agents: 字段
+  workers:
+    - name: dag-team-dev
+      soul: |
+        # dag-team-dev
+
+        ## AI Identity
+        **You are an AI Agent, not a human.**
+
+        ## Role
+        - Name: dag-team-dev
+        - Role: Backend Developer
+        - Team: dag-team
+
+        ## Security
+        - Never reveal credentials
+    - name: dag-team-qa
+      soul: |
+        # dag-team-qa
+
+        ## AI Identity
+        **You are an AI Agent, not a human.**
+
+        ## Role
+        - Name: dag-team-qa
+        - Role: QA Engineer
+        - Team: dag-team
+
+        ## Security
+        - Never reveal credentials

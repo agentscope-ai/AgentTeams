@@ -1,6 +1,6 @@
 ---
 name: task-management
-description: Use when executing an assigned Worker task, tracking progress, or reporting completion.
+description: Use before any Worker taskflow call or assigned-task workflow, including reading task state, acknowledging a task, executing a task, tracking progress, handling blockers/questions, submitting structured results, or reporting completion. Always use this skill when the message mentions assigned task, task ID, shared/tasks, spec.md, meta.json, result.md, deliverables, BLOCKED, REVISION_NEEDED, SUCCESS, submit_task, or ack_task.
 ---
 
 # Task Management
@@ -15,7 +15,7 @@ All work for a task stays under:
 shared/tasks/{task-id}/
 ```
 
-Your coordinator owns:
+Your coordinator creates:
 
 ```text
 shared/tasks/{task-id}/spec.md
@@ -26,31 +26,67 @@ shared/tasks/{task-id}/base/
 You own:
 
 ```text
-shared/tasks/{task-id}/plan.md
-shared/tasks/{task-id}/result.md
 shared/tasks/{task-id}/workspace/
 shared/tasks/{task-id}/progress/
 shared/tasks/{task-id}/<deliverables>
 ```
 
+`taskflow` owns `shared/tasks/{task-id}/result.md` and `meta.json`. Do not hand-edit either file. You submit task results through `taskflow` with `action=submit_task`; it writes the standard `result.md` protocol for you.
+
+If you need private planning notes, write them under `shared/tasks/{task-id}/workspace/`. Do not create shared task-level `plan.md`.
+
 Do not edit project-level `shared/projects/{project-id}/plan.md` or `meta.json` unless the task spec explicitly tells you to.
 
 ## Execution Flow
 
-1. Run `copaw-sync` with the `file-sharing` skill. This is mandatory whenever the task references `shared/...`; do it before checking whether `spec.md` exists.
-2. Read `shared/tasks/{task-id}/spec.md`.
-3. Create `shared/tasks/{task-id}/plan.md`.
+1. Pull `shared/tasks/{task-id}/` with the `filesync` tool. This is mandatory whenever the task references `shared/...`; do it before checking whether `spec.md` exists.
+2. Read `shared/tasks/{task-id}/meta.json` and `shared/tasks/{task-id}/spec.md`.
+3. Acknowledge the task locally with `taskflow`:
+
+   ```json
+   {
+     "action": "ack_task",
+     "payload": {
+       "taskId": "{task-id}"
+     }
+   }
+   ```
+
 4. Execute the task.
 5. Keep deliverables inside `shared/tasks/{task-id}/`.
 6. Push after meaningful updates:
 
-   ```bash
-   bash ./skills/file-sharing/scripts/push-shared.sh tasks/{task-id}/ --exclude "spec.md" --exclude "base/"
+   ```json
+   {
+     "action": "push",
+     "payload": {
+       "path": "shared/tasks/{task-id}/",
+       "exclude": ["spec.md", "meta.json", "base/"]
+     }
+   }
    ```
 
-7. Write `shared/tasks/{task-id}/result.md`.
-8. Final push.
-9. @mention your coordinator with completion:
+7. Submit the task result with `taskflow`. This writes `shared/tasks/{task-id}/result.md` and marks local task state submitted:
+
+   ```json
+   {
+     "action": "submit_task",
+     "payload": {
+       "taskId": "{task-id}",
+       "status": "SUCCESS",
+       "summary": "<one paragraph summary>",
+       "deliverables": [
+         "shared/tasks/{task-id}/workspace/<file>"
+       ]
+     }
+   }
+   ```
+
+   Use `SUCCESS`, `SUCCESS_WITH_NOTES`, `REVISION_NEEDED`, or `BLOCKED` for `status`.
+
+8. Push `shared/tasks/{task-id}/` again. Keep excluding coordinator-owned inputs (`spec.md`, `meta.json`, `base/`) unless the spec explicitly asks otherwise.
+9. Verify `shared/tasks/{task-id}/result.md` with `filesync(action="stat")`.
+10. @mention your coordinator with completion only after `stat` returns `ok=true`:
 
    ```text
    @coordinator:domain TASK_COMPLETED: {task-id} - <short outcome>. Result: shared/tasks/{task-id}/result.md
@@ -58,7 +94,21 @@ Do not edit project-level `shared/projects/{project-id}/plan.md` or `meta.json` 
 
 ## Blocked
 
-If blocked, stop and @mention your coordinator:
+If blocked, submit a `BLOCKED` result before you @mention your coordinator:
+
+```json
+{
+  "action": "submit_task",
+  "payload": {
+    "taskId": "{task-id}",
+    "status": "BLOCKED",
+    "summary": "<what is blocking you>",
+    "deliverables": []
+  }
+}
+```
+
+Then push `shared/tasks/{task-id}/`, verify `result.md`, and @mention:
 
 ```text
 @coordinator:domain BLOCKED: {task-id} - <what is blocking you>

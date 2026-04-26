@@ -1,6 +1,6 @@
 ---
 name: file-sharing
-description: Use immediately when a task mentions shared files, shared/tasks paths, file-sync, missing specs, or pushing task results.
+description: Use before any filesync call or Worker operation involving shared task files, shared project context, task specs, task metadata, workspace files, deliverables, result verification, missing files, or publishing outputs. Always use this skill when the message mentions shared/, shared/tasks, shared/projects, spec.md, meta.json, result.md, workspace/, deliverables, pull, push, stat, list, missing spec, or file visibility between Worker and Leader.
 ---
 
 # File Sharing
@@ -23,10 +23,15 @@ Do not use in chat, task outputs, or normal reasoning:
 
 ## Pull Latest Files
 
-When your coordinator assigns a task or mentions any `shared/...` path, run this before reading files:
+When your coordinator assigns a task or mentions any `shared/...` path, call the `filesync` tool before reading files:
 
-```bash
-copaw-sync
+```json
+{
+  "action": "pull",
+  "payload": {
+    "path": "shared/tasks/{task-id}/"
+  }
+}
 ```
 
 Then read local paths. For a task, the first file to read is always:
@@ -35,21 +40,38 @@ Then read local paths. For a task, the first file to read is always:
 cat shared/tasks/{task-id}/spec.md
 ```
 
-Do not decide that `shared/` or `spec.md` is missing until after `copaw-sync` finishes.
+Do not decide that `shared/` or `spec.md` is missing until after `filesync(action="pull")` finishes.
 
 ## Push Task Results
 
 After meaningful updates, push only your task directory:
 
-```bash
-bash ./skills/file-sharing/scripts/push-shared.sh tasks/{task-id}/ --exclude "spec.md" --exclude "base/"
+```json
+{
+  "action": "push",
+  "payload": {
+    "path": "shared/tasks/{task-id}/",
+    "exclude": ["spec.md", "meta.json", "base/"]
+  }
+}
 ```
 
-The helper detects team vs standalone storage and publishes to the correct remote path.
+After `taskflow(action=submit_task)` writes `result.md`, push the task directory and verify it exists remotely before reporting completion:
+
+```json
+{
+  "action": "stat",
+  "payload": {
+    "path": "shared/tasks/{task-id}/result.md"
+  }
+}
+```
+
+Do not report `TASK_COMPLETED` until `stat` returns `ok=true`.
 
 ## If You Cannot Find Files
 
-1. Run `copaw-sync`.
+1. Call `filesync` with `action="pull"` for `shared/tasks/{task-id}/`.
 2. Check `pwd`, then check the local relative path from the task message:
 
    ```bash
@@ -58,10 +80,10 @@ The helper detects team vs standalone storage and publishes to the correct remot
    ls -la shared/tasks/{task-id}/
    ```
 
-3. If still missing, @mention your coordinator with the sync command outcome and the exact local path you checked:
+3. If still missing, @mention your coordinator with the `filesync` outcome and the exact local path you checked:
 
 ```text
-@coordinator:domain BLOCKED: I ran file-sync but cannot find shared/tasks/{task-id}/spec.md.
+@coordinator:domain BLOCKED: I pulled shared/tasks/{task-id}/ but cannot find shared/tasks/{task-id}/spec.md.
 ```
 
 Do not search random container absolute paths or create the missing task directory yourself.

@@ -31,10 +31,13 @@ When your coordinator @mentions you saying a new MCP server has been configured,
 
 ### Step 1: Pull the updated config
 
-Run your `file-sharing` skill to pull the latest files:
+Use the `filesync` tool to pull the latest config files:
 
-```bash
-copaw-sync
+```json
+{
+  "action": "pull",
+  "path": "shared/"
+}
 ```
 
 ### Step 2: Discover the new server and its tools

@@ -8,7 +8,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _TOOL_HOOK_INSTALLED = False
-_PINGPONG_HOOK_INSTALLED = False
+_MESSAGE_FILTER_HOOK_INSTALLED = False
 
 
 def _message_text(msg: Any) -> str:
@@ -37,21 +37,24 @@ def _replace_message_text(msg: Any, text: str) -> None:
         msg.content = [TextBlock(type="text", text=text)]
 
 
-def install_pingpong_guard_hooks() -> None:
-    """Install a final-response guard for low-information Matrix replies."""
-    global _PINGPONG_HOOK_INSTALLED
-    if _PINGPONG_HOOK_INSTALLED:
+def install_message_filter_hooks() -> None:
+    """Install final-response filtering for outgoing Matrix replies."""
+    global _MESSAGE_FILTER_HOOK_INSTALLED
+    if _MESSAGE_FILTER_HOOK_INSTALLED:
         return
 
     from copaw.app.runner.runner import AgentRunner
-    from copaw_worker.hooks.pingpong_guard import get_pingpong_block_reason
+    from copaw_worker.hooks.message_filter import (
+        NO_REPLY_TOKEN,
+        filter_outgoing_matrix_message,
+    )
 
     original_query_handler = AgentRunner.query_handler
-    if getattr(original_query_handler, "_hiclaw_pingpong_guard_hook", False):
-        _PINGPONG_HOOK_INSTALLED = True
+    if getattr(original_query_handler, "_hiclaw_message_filter_hook", False):
+        _MESSAGE_FILTER_HOOK_INSTALLED = True
         return
 
-    async def query_handler_with_pingpong_guard(
+    async def query_handler_with_message_filter(
         self: Any,
         msgs: Any,
         request: Any = None,
@@ -64,23 +67,29 @@ def install_pingpong_guard_hooks() -> None:
 
             msg = item[0]
             text = _message_text(msg)
-            reason = get_pingpong_block_reason(text)
-            if reason:
+            result = filter_outgoing_matrix_message(text)
+            if result.suppressed:
                 session_id = (
                     getattr(request, "session_id", "") if request is not None else ""
                 )
                 logger.info(
-                    "Ping-pong guard suppressed final reply for session=%s: %s",
+                    "Message filter suppressed final reply for session=%s: %s",
                     session_id,
-                    reason,
+                    result.suppress_reason,
                 )
-                _replace_message_text(msg, "NO_REPLY")
+                _replace_message_text(msg, NO_REPLY_TOKEN)
+            elif result.rewritten:
+                logger.info(
+                    "Message filter rewrote final reply: %s",
+                    result.rewrite_reason,
+                )
+                _replace_message_text(msg, result.text)
             yield item
 
-    query_handler_with_pingpong_guard._hiclaw_pingpong_guard_hook = True  # type: ignore[attr-defined]
-    AgentRunner.query_handler = query_handler_with_pingpong_guard
-    _PINGPONG_HOOK_INSTALLED = True
-    logger.info("Installed HiClaw CoPaw ping-pong guard hooks")
+    query_handler_with_message_filter._hiclaw_message_filter_hook = True  # type: ignore[attr-defined]
+    AgentRunner.query_handler = query_handler_with_message_filter
+    _MESSAGE_FILTER_HOOK_INSTALLED = True
+    logger.info("Installed HiClaw CoPaw message filter hooks")
 
 
 def install_tool_hooks() -> None:
@@ -91,13 +100,15 @@ def install_tool_hooks() -> None:
     without modifying upstream CoPaw files.
     """
     global _TOOL_HOOK_INSTALLED
-    install_pingpong_guard_hooks()
+    install_message_filter_hooks()
 
     if _TOOL_HOOK_INSTALLED:
         return
 
     from copaw.agents.react_agent import CoPawAgent
+    from copaw_worker.hooks.tools.filesync import filesync
     from copaw_worker.hooks.tools.message import message
+    from copaw_worker.hooks.tools.taskflow import taskflow
 
     original_create_toolkit = CoPawAgent._create_toolkit
     if getattr(original_create_toolkit, "_hiclaw_message_hook", False):
@@ -112,6 +123,16 @@ def install_tool_hooks() -> None:
                 namesake_strategy="override",
             )
             logger.debug("Registered HiClaw CoPaw message tool")
+            toolkit.register_tool_function(
+                filesync,
+                namesake_strategy="override",
+            )
+            logger.debug("Registered HiClaw CoPaw filesync tool")
+            toolkit.register_tool_function(
+                taskflow,
+                namesake_strategy="override",
+            )
+            logger.debug("Registered HiClaw CoPaw taskflow tool")
         except Exception:
             logger.exception("Failed to register HiClaw CoPaw message tool")
         return toolkit

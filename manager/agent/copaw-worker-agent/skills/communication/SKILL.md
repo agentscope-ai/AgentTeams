@@ -1,6 +1,6 @@
 ---
 name: communication
-description: Use when replying to your coordinator, human admin, or another Worker.
+description: Use before sending or suppressing any Worker reply to a coordinator, human admin, Team Leader, Manager, or another Worker. Always use this skill for @mention decisions, TASK_COMPLETED, BLOCKED, QUESTION, direct answers, cross-room updates, NO_REPLY decisions, loop prevention, or deciding whether a short acknowledgement should be suppressed.
 ---
 
 # Communication

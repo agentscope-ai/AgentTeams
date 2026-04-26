@@ -68,13 +68,13 @@ def test_build_matrix_text_content_rewrites_existing_mentions_once():
 
 def test_build_matrix_text_content_renders_minimal_markdown():
     content = build_matrix_text_content(
-        "**Issue**: run `copaw-sync`\n```\ntasks/st-01/spec.md\n```",
+        "**Issue**: call `filesync`\n```\ntasks/st-01/spec.md\n```",
         [],
     )
 
     formatted_body = content["formatted_body"]
     assert "<strong>Issue</strong>" in formatted_body
-    assert "<code>copaw-sync</code>" in formatted_body
+    assert "<code>filesync</code>" in formatted_body
     assert "<pre><code>tasks/st-01/spec.md</code></pre>" in formatted_body
     assert "**Issue**" not in formatted_body
     assert "```" not in formatted_body
@@ -89,10 +89,20 @@ def test_validate_matrix_message_policy_blocks_status_ping():
 
 
 def test_validate_matrix_message_policy_allows_substantive_ping():
-    validate_matrix_message_policy(
+    filtered = validate_matrix_message_policy(
         "@alice:matrix.local Please investigate file-sync for task st-01.",
         ["@alice:matrix.local"],
     )
+    assert filtered == "@alice:matrix.local Please investigate file-sync for task st-01."
+
+
+def test_validate_matrix_message_policy_strips_embedded_no_reply():
+    filtered = validate_matrix_message_policy(
+        "@leadNO_REPLY@alice:matrix.local Please investigate file-sync.",
+        ["@alice:matrix.local"],
+    )
+    assert filtered == "@alice:matrix.local Please investigate file-sync."
+    assert "NO_REPLY" not in filtered
 
 
 @pytest.mark.asyncio
@@ -149,7 +159,7 @@ def test_install_tool_hooks_registers_message(monkeypatch):
     import copaw_worker.hooks as hooks
 
     hooks._TOOL_HOOK_INSTALLED = False
-    hooks._PINGPONG_HOOK_INSTALLED = False
+    hooks._MESSAGE_FILTER_HOOK_INSTALLED = False
 
     class FakeToolkit:
         def __init__(self):
@@ -183,3 +193,5 @@ def test_install_tool_hooks_registers_message(monkeypatch):
     toolkit = FakeAgent()._create_toolkit()
 
     assert ("message", "override") in toolkit.registered
+    assert ("filesync", "override") in toolkit.registered
+    assert ("taskflow", "override") in toolkit.registered

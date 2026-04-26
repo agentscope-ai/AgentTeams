@@ -11,9 +11,9 @@ from typing import Any, Literal
 
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
-from copaw_worker.hooks.pingpong_guard import (
+from copaw_worker.hooks.message_filter import (
     extract_matrix_mentions,
-    get_pingpong_block_reason,
+    filter_outgoing_matrix_message,
 )
 
 _MATRIX_ROOM_ID_RE = re.compile(r"^![^:\s]+:[^\s]+$")
@@ -84,11 +84,12 @@ def parse_matrix_target(target: str) -> MatrixTarget:
     )
 
 
-def validate_matrix_message_policy(text: str, mentions: list[str]) -> None:
-    """Block low-information mention pings that can wake agents in loops."""
-    reason = get_pingpong_block_reason(text, mentions)
-    if reason:
-        raise MessageToolError(reason)
+def validate_matrix_message_policy(text: str, mentions: list[str]) -> str:
+    """Filter outgoing messages and return the sanitized text."""
+    result = filter_outgoing_matrix_message(text, mentions)
+    if result.suppressed:
+        raise MessageToolError(result.suppress_reason or "message suppressed")
+    return result.text
 
 
 def _render_inline_matrix_html(text: str) -> str:
@@ -256,9 +257,12 @@ async def message(
             raise MessageToolError("message is required")
 
         parsed_target = parse_matrix_target(target or "")
-        mentions = extract_matrix_mentions(message)
-        validate_matrix_message_policy(message, mentions)
-        content = build_matrix_text_content(message, mentions)
+        filtered_message = validate_matrix_message_policy(
+            message,
+            extract_matrix_mentions(message),
+        )
+        mentions = extract_matrix_mentions(filtered_message)
+        content = build_matrix_text_content(filtered_message, mentions)
 
         if parsed_target.kind != "room":
             raise MessageToolError(

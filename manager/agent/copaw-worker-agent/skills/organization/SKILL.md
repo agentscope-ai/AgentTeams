@@ -1,6 +1,6 @@
 ---
 name: organization
-description: Use when you need current coordinator, team, room, human, or runtime state.
+description: Use before any Worker action that depends on current identity, coordinator, team, room, Matrix ID, human admin, worker phase, runtime state, or lifecycle status. Always use this skill when acknowledging assignments, reporting results, resolving who to notify, checking whether you are active/sleeping, handling heartbeat/recovery, or when any coordinator/room/team value might be stale.
 ---
 
 # Organization

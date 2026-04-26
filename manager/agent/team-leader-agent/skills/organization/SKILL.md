@@ -1,6 +1,6 @@
 ---
 name: organization
-description: Use when you need current team, worker, human, room, Matrix ID, phase, or runtime state.
+description: Use before any Leader action that depends on current team topology, worker list, worker phase, runtime, room ID, Matrix ID, Team Admin, human identity, or lifecycle state. Always use this skill when assigning tasks, sending cross-room messages, recovering projects, handling heartbeat, waking/sleeping workers, or when any worker/room/identity value might be stale.
 ---
 
 # Organization
@@ -25,6 +25,8 @@ hiclaw worker status --team <team-name>
 - Worker full Matrix IDs
 - Worker room IDs
 - Worker phase and runtime state
+
+Use the Team Room ID for normal task assignment notifications. Worker room IDs are for exceptional direct follow-up, not routine assignment.
 
 ## Lifecycle
 

@@ -107,8 +107,7 @@ RUN SITE=/opt/venv/copaw/lib/python3.11/site-packages \
     && rm -rf /tmp/copaw-worker/
 
 # CoPaw runtime CLIs (make them available in PATH for agents)
-RUN ln -sf /opt/venv/copaw/bin/copaw /usr/local/bin/copaw && \
-    ln -sf /opt/venv/copaw/bin/copaw-sync /usr/local/bin/copaw-sync
+RUN ln -sf /opt/venv/copaw/bin/copaw /usr/local/bin/copaw
 
 # Entrypoint script
 COPY --chmod=755 scripts/copaw-worker-entrypoint.sh /opt/hiclaw/scripts/copaw-worker-entrypoint.sh

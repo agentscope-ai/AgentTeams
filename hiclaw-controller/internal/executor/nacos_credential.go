@@ -171,7 +171,8 @@ func newNacosSTSCredential(namespace string, client credprovider.Client) *nacosS
 		SessionName: "hiclaw-nacos-" + namespace,
 		Entries: []credprovider.AccessEntry{
 			{
-				Service: credprovider.ServiceAIRegistry,
+				Service:     credprovider.ServiceAIRegistry,
+				Permissions: []string{"read", "write"},
 				Scope: credprovider.AccessScope{
 					NamespaceID: namespace,
 					Resources:   []string{"agentSpec/*", "skill/*"},

@@ -113,13 +113,15 @@ func (c *NacosAIClient) GetSkill(ctx context.Context, name, outputDir, version, 
 	}
 	tmp.Close()
 
-	// Extract into outputDir/{name}/.
-	destDir := filepath.Join(outputDir, name)
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	// Extract the ZIP directly into outputDir/. The ZIP is expected to contain
+	// a top-level directory named after the skill (e.g. baidu-search/SKILL.md),
+	// so the result will be outputDir/{name}/SKILL.md — matching what the caller
+	// reads back via filepath.Join(outputDir, name).
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create skill directory: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "unzip", "-q", "-o", tmpPath, "-d", destDir)
+	cmd := exec.CommandContext(ctx, "unzip", "-q", "-o", tmpPath, "-d", outputDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to extract skill ZIP for %s: %s: %w", name, string(out), err)
 	}

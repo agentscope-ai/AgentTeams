@@ -16,6 +16,7 @@ Manages communication channels, admin identity recognition, trusted contacts, an
 - **When calling `message` tool from a Matrix session, you MUST explicitly set `channel` and `target`** — otherwise the message goes to the current Matrix room instead of the primary channel
 - **`to` field in primary-channel.json maps to `target` parameter in `message` tool** — pass the value directly, no transformation needed
 - **First-contact protocol: always ask in admin's language** — match the language they used in their message
+- **Task dispatch must go to Worker Room, not admin DM** — when assigning tasks to Workers, use the task-management skill's send protocol (runtime-aware: `hiclaw get managers -o json` for runtime, then message tool or `copaw channels send` per finite/infinite references). Never embed @worker task assignments in admin DM replies.
 
 ## Operation Reference
 

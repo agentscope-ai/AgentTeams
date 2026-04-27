@@ -1,6 +1,10 @@
 ## Manager Heartbeat Checklist (CoPaw Runtime)
 
-This HEARTBEAT.md is for CoPaw runtime Manager. Use `copaw channels send` CLI via shell tool instead of `message` tool.
+This checklist is for the CoPaw Manager runtime. Every send into a Matrix **group** room (Worker room, Leader room, project room) or admin notification **must** go through **`copaw channels send`** via the shell tool (see **CoPaw Message CLI Reference** at the end).
+
+**Hard rules (heartbeat sends — same intent as AGENTS.md Gotchas):**
+- **Workers do not see admin DMs.** Status pings, overdue triggers, and task follow-ups belong in the correct Matrix room via `copaw channels send`, using the room id from the task entry, project `meta.json`, or `hiclaw get workers -o json`. Do not rely on admin-facing text alone.
+- **`--target-session`** is the literal Matrix room id (no `room:` prefix). **`--target-user`** is the full Matrix id of the Worker or Team Leader you @mention in `--text`. Use single-quoted `--text '...'` so `@` mentions survive the shell.
 
 ### 1. Read state.json
 
@@ -62,6 +66,32 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   ```bash
   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
   ```
+
+---
+
+### 2b. Check Team-Delegated Tasks
+
+Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
+
+- These tasks are managed by Team Leaders, NOT individual workers
+- Read `assigned_to` (the Team Leader name) and `room_id` (the Leader Room)
+- **Ensure the Team Leader's container is running**:
+  ```bash
+  bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+    --action ensure-ready --worker {leader}
+  ```
+- **Use `copaw channels send` via shell** to send a follow-up to the Leader room:
+  ```bash
+  copaw channels send \
+    --agent-id default \
+    --channel matrix \
+    --target-user "@{leader}:${HICLAW_MATRIX_DOMAIN}" \
+    --target-session "{room_id}" \
+    --text "@{leader}:${HICLAW_MATRIX_DOMAIN} How is task {task-id} progressing? Any blockers from your team?"
+  ```
+- **Do NOT contact team workers directly** — the Team Leader handles internal coordination
+- If the Team Leader reports completion, process it the same as a regular worker completion
+- If the Team Leader reports a blocker, escalate to admin (Step 7)
 
 ---
 
@@ -212,9 +242,20 @@ If the output is `available`, proceed with the following steps:
   ```bash
   bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
   ```
-  The script outputs JSON with `channel`, `target`, and `via` fields. Use `copaw channels send` with those values:
-  - If `channel` is not `"none"`: send `[Heartbeat Report] <summarize findings and recommended actions, in SOUL.md persona and language>` to the resolved `target` via `copaw channels send`.
-  - If `channel` is `"none"`: admin DM room has not been discovered yet — attempt discovery now (see Step 1), then retry.
+  The script outputs JSON with `channel`, `target`, and `via` fields.
+
+  - When `channel` is **`matrix`**: set `--target-session` to the room id from `target` after stripping a leading `room:` prefix if present. Set `--target-user` to the admin's full Matrix id `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`. Run:
+    ```bash
+    copaw channels send \
+      --agent-id default \
+      --channel matrix \
+      --target-user "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}" \
+      --target-session "<room_id_without_room_prefix>" \
+      --text "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN} [Heartbeat Report] <summarize findings and recommended actions, in SOUL.md persona and language>"
+    ```
+    If the summary contains characters that break double-quoted `--text`, switch to single-quoted `--text` and type the admin Matrix id literally inside the string.
+  - When `channel` is **not** `matrix` and not `"none"`: use **`copaw channels send`** with the resolved `channel` and `target` per **channel-management** / **primary-channel** skill references for that channel.
+  - If `channel` is **`"none"`**: admin DM room has not been discovered yet — attempt discovery now (see Step 1), then retry.
 
 ---
 

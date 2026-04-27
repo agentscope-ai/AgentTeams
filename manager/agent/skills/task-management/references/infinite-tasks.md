@@ -22,7 +22,14 @@ For recurring/scheduled tasks that repeat on a cron schedule with no natural end
 
 Infinite tasks are triggered **exclusively by heartbeat** when `now > next_scheduled_at + 30min` and `last_executed_at < next_scheduled_at`. See HEARTBEAT.md Step 3.
 
-Trigger message: `@{worker}:{domain} Execute recurring task {task-id}: {title}. Report back with "executed" when done.`
+**HARD RULE:** Never paste the trigger text only in an admin DM reply. Workers cannot see the admin DM. Heartbeat (or any dispatch) must send the trigger into the Worker's room using the runtime protocol in HEARTBEAT.md Step 3.
+
+Before sending, use `hiclaw get workers -o json` for `room_id` and `hiclaw get managers -o json | jq -r '.managers[0].runtime'` for runtime:
+
+- **`openclaw`:** **message** tool with `channel=matrix`, `target=room:<ROOM_ID>`, and body:
+  `@{worker}:{domain} Execute recurring task {task-id}: {title}. Report back with "executed" when done.`
+
+- **`copaw`:** `copaw channels send --agent-id default --channel matrix --target-session "<ROOM_ID>" --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}"` with `--text` set to that same body (quoted for the shell).
 
 ## Recording execution completion
 

@@ -627,6 +627,13 @@ func (in *TeamWorkerSpec) DeepCopyInto(out *TeamWorkerSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.RemoteSkills != nil {
+		in, out := &in.RemoteSkills, &out.RemoteSkills
+		*out = make([]RemoteSkillSource, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.McpServers != nil {
 		in, out := &in.McpServers, &out.McpServers
 		*out = make([]MCPServer, len(*in))

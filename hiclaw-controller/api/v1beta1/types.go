@@ -255,19 +255,20 @@ type TeamLeaderHeartbeatSpec struct {
 }
 
 type TeamWorkerSpec struct {
-	Name          string             `json:"name"`
-	Model         string             `json:"model,omitempty"`
-	Runtime       string             `json:"runtime,omitempty"`
-	Image         string             `json:"image,omitempty"`
-	Identity      string             `json:"identity,omitempty"`
-	Soul          string             `json:"soul,omitempty"`
-	Agents        string             `json:"agents,omitempty"`
-	Skills        []string           `json:"skills,omitempty"`
-	McpServers    []MCPServer        `json:"mcpServers,omitempty"`
-	Package       string             `json:"package,omitempty"`
-	Expose        []ExposePort       `json:"expose,omitempty"`
-	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"`
-	State         *string            `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+	Name          string              `json:"name"`
+	Model         string              `json:"model,omitempty"`
+	Runtime       string              `json:"runtime,omitempty"`
+	Image         string              `json:"image,omitempty"`
+	Identity      string              `json:"identity,omitempty"`
+	Soul          string              `json:"soul,omitempty"`
+	Agents        string              `json:"agents,omitempty"`
+	Skills        []string            `json:"skills,omitempty"`
+	RemoteSkills  []RemoteSkillSource `json:"remoteSkills,omitempty"` // remote skills from source registries
+	McpServers    []MCPServer         `json:"mcpServers,omitempty"`
+	Package       string              `json:"package,omitempty"`
+	Expose        []ExposePort        `json:"expose,omitempty"`
+	ChannelPolicy *ChannelPolicySpec  `json:"channelPolicy,omitempty"`
+	State         *string             `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 
 	// AccessEntries declares the cloud permissions this team worker should be
 	// granted via hiclaw-credential-provider. See AccessEntry for semantics.

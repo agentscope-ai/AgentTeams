@@ -893,6 +893,7 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 		Soul:          w.Soul,
 		Agents:        w.Agents,
 		Skills:        w.Skills,
+		RemoteSkills:  w.RemoteSkills,
 		McpServers:    w.McpServers,
 		Package:       w.Package,
 		Expose:        w.Expose,

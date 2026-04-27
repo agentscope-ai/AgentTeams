@@ -149,7 +149,7 @@ spec:
                         properties:
                           service:
                             type: string
-                            enum: [object-storage, ai-gateway]
+                            enum: [object-storage, ai-gateway, ai-registry]
                             description: Logical cloud service identifier
                           permissions:
                             type: array

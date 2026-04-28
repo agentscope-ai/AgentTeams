@@ -245,6 +245,12 @@ $script:Messages = @{
     "install.existing.stopping_workers" = @{ zh = "停止并移除现有 worker 容器..."; en = "Stopping and removing existing worker containers..." }
     "install.existing.removed" = @{ zh = "  已移除: {0}"; en = "  Removed: {0}" }
 
+    # --- Upgrade mode sub-menu ---
+    "upgrade.mode.prompt" = @{ zh = "请选择升级方式："; en = "Select upgrade mode:" }
+    "upgrade.mode.keep_all" = @{ zh = "  1) 保留所有参数，一键升级（推荐）"; en = "  1) Keep all parameters, quick upgrade (recommended)" }
+    "upgrade.mode.confirm_each" = @{ zh = "  2) 逐个确认参数（可修改）"; en = "  2) Confirm each parameter (can modify)" }
+    "upgrade.mode.back" = @{ zh = "  3) 返回"; en = "  3) Back" }
+
     # --- Clean reinstall messages ---
     "install.reinstall.performing" = @{ zh = "执行全新重装..."; en = "Performing clean reinstall..." }
     "install.reinstall.warn_stop" = @{ zh = "警告: 以下运行中的容器将被停止:"; en = "WARNING: The following running containers will be stopped:" }
@@ -322,9 +328,9 @@ $script:Messages = @{
     "llm.provider.selected_qwen" = @{ zh = "  提供商: 阿里云百炼"; en = "  Provider: Alibaba Cloud Bailian" }
     "llm.provider.selected_openai" = @{ zh = "  提供商: {0}（OpenAI 兼容）"; en = "  Provider: {0} (OpenAI-compatible)" }
     "llm.provider.invalid" = @{ zh = "无效选择: {0}（请输入 1 或 2）"; en = "Invalid choice: {0} (please enter 1 or 2)" }
-    "llm.qwen.model_prompt" = @{ zh = "默认模型 ID [qwen3.6-plus]"; en = "Default Model ID [qwen3.6-plus]" }
-    "llm.openai.base_url_prompt" = @{ zh = "Base URL（例如 https://api.openai.com/v1）"; en = "Base URL (e.g., https://api.openai.com/v1)" }
-    "llm.openai.model_prompt" = @{ zh = "默认模型 ID [gpt-5.4]"; en = "Default Model ID [gpt-5.4]" }
+    "llm.qwen.model_prompt" = @{ zh = "默认模型 ID"; en = "Default Model ID" }
+    "llm.openai.base_url_prompt" = @{ zh = "Base URL"; en = "Base URL" }
+    "llm.openai.model_prompt" = @{ zh = "默认模型 ID"; en = "Default Model ID" }
     "llm.openai.base_url_label" = @{ zh = "  Base URL: {0}"; en = "  Base URL: {0}" }
 
     # --- Custom model parameters ---
@@ -1196,6 +1202,34 @@ function Read-Prompt {
     return $value
 }
 
+# Load current parameter values from env file for upgrade mode display
+function Load-CurrentParamsFromEnv {
+    $envFile = $script:HICLAW_ENV_FILE
+    if (Test-Path $envFile) {
+        $content = Get-Content $envFile
+        $content | ForEach-Object {
+            if ($_ -match "^HICLAW_LLM_PROVIDER=(.*)$") {
+                $script:config.LLM_PROVIDER = $Matches[1].Trim()
+            }
+            if ($_ -match "^HICLAW_OPENAI_BASE_URL=(.*)$") {
+                $script:config.OPENAI_BASE_URL = $Matches[1].Trim()
+            }
+            if ($_ -match "^HICLAW_DEFAULT_MODEL=(.*)$") {
+                $script:config.DEFAULT_MODEL = $Matches[1].Trim()
+            }
+            if ($_ -match "^HICLAW_EMBEDDING_MODEL=(.*)$") {
+                $script:config.EMBEDDING_MODEL = $Matches[1].Trim()
+            }
+            if ($_ -match "^HICLAW_WORKSPACE_DIR=(.*)$") {
+                $script:config.WORKSPACE_DIR = $Matches[1].Trim()
+            }
+            if ($_ -match "^HICLAW_HOST_SHARE_DIR=(.*)$") {
+                $script:config.HOST_SHARE_DIR = $Matches[1].Trim()
+            }
+        }
+    }
+}
+
 # ============================================================
 # OpenAI-Compatible Provider
 # ============================================================
@@ -1377,6 +1411,14 @@ function Test-ShouldSkipStep {
         "Step-Existing" {
             return (-not (Test-Path $script:HICLAW_ENV_FILE))
         }
+        # Keep-All upgrade mode: skip all config steps, values are already loaded
+        { $_ -in @("Step-Llm", "Step-Admin", "Step-Network", "Step-Ports", "Step-Domains",
+                    "Step-Github", "Step-Skills", "Step-Volume", "Step-Workspace",
+                    "Step-Runtime", "Step-ManagerRuntime", "Step-E2ee", "Step-DockerProxy",
+                    "Step-Idle", "Step-Hostshare") } {
+            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") { return $true }
+            return $false
+        }
         { $_ -in @("Step-Volume", "Step-Workspace") } {
             if ($script:HICLAW_NON_INTERACTIVE) { return $true }
             if ($script:HICLAW_QUICKSTART) { return $true }
@@ -1551,6 +1593,35 @@ function Step-Existing {
             $script:HICLAW_UPGRADE = $true
             Write-Log (Get-Msg "install.existing.upgrading")
 
+            # Show upgrade mode sub-menu (unless already set via env var)
+            if ($env:HICLAW_UPGRADE_KEEP_ALL -ne "1") {
+                Write-Host ""
+                Write-Host (Get-Msg "upgrade.mode.prompt")
+                Write-Host (Get-Msg "upgrade.mode.keep_all")
+                Write-Host (Get-Msg "upgrade.mode.confirm_each")
+                Write-Host (Get-Msg "upgrade.mode.back")
+                Write-Host ""
+                $upgradeModeChoice = Read-Host (Get-Msg "install.existing.prompt")
+                $upgradeModeChoice = if ($upgradeModeChoice) { $upgradeModeChoice } else { "1" }
+                switch -Regex ($upgradeModeChoice) {
+                    "^(1|keep)$" {
+                        $env:HICLAW_UPGRADE_KEEP_ALL = "1"
+                    }
+                    "^(2|confirm)$" {
+                        $env:HICLAW_UPGRADE_KEEP_ALL = "0"
+                    }
+                    "^(3|b)$" {
+                        $script:StepResult = "back"
+                        return
+                    }
+                    default {
+                        $env:HICLAW_UPGRADE_KEEP_ALL = "0"
+                    }
+                }
+            }
+            # Load current parameters for both Keep-All and confirm-each modes
+            Load-CurrentParamsFromEnv
+
             if ($runningManager -or $runningWorkers) {
                 Write-Host ""
                 Write-Host "$($script:ESC)[33m$(Get-Msg 'install.existing.warn_manager_stop')$($script:ESC)[0m"
@@ -1681,12 +1752,17 @@ function Step-Llm {
     Write-Host (Get-Msg "llm.provider.openai_compat")
     Write-Host ""
 
-    if ($script:HICLAW_QUICKSTART) {
+    # If upgrade mode with loaded provider, show current as default
+    if ($script:HICLAW_UPGRADE -and $script:config.LLM_PROVIDER) {
+        $defaultProvider = if ($script:config.LLM_PROVIDER -eq "openai-compat") { "2" } else { "1" }
+        $providerChoice = Read-Host "$(Get-Msg 'llm.provider.select') [${defaultProvider}]"
+        $providerChoice = if ($providerChoice) { $providerChoice } else { $defaultProvider }
+    } elseif ($script:HICLAW_QUICKSTART) {
         $providerChoice = Read-Host "$(Get-Msg 'llm.provider.select') [1]"
     } else {
         $providerChoice = Read-Host (Get-Msg "llm.provider.select")
+        $providerChoice = if ($providerChoice) { $providerChoice } else { "1" }
     }
-    $providerChoice = if ($providerChoice) { $providerChoice } else { "1" }
     if ($providerChoice -eq "b") { $script:StepResult = "back"; return }
 
     switch -Regex ($providerChoice) {
@@ -1703,7 +1779,18 @@ function Step-Llm {
                 Write-Host (Get-Msg "llm.codingplan.model.kimi")
                 Write-Host (Get-Msg "llm.codingplan.model.minimax")
                 Write-Host ""
-                if ($script:HICLAW_QUICKSTART) {
+                # If upgrade with loaded model, show current as default
+                if ($script:HICLAW_UPGRADE -and $script:config.DEFAULT_MODEL) {
+                    $defaultModel = switch ($script:config.DEFAULT_MODEL) {
+                        "qwen3.6-plus" { "1" }
+                        "glm-5"         { "2" }
+                        "kimi-k2.5"     { "3" }
+                        "MiniMax-M2.5"  { "4" }
+                        default         { "1" }
+                    }
+                    $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [${defaultModel}]"
+                    $codingPlanModelChoice = if ($codingPlanModelChoice) { $codingPlanModelChoice } else { $defaultModel }
+                } elseif ($script:HICLAW_QUICKSTART) {
                     $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [1]"
                 } else {
                     $codingPlanModelChoice = Read-Host (Get-Msg "llm.codingplan.model.select")
@@ -1744,7 +1831,18 @@ function Step-Llm {
                     Write-Host (Get-Msg "llm.codingplan.model.kimi")
                     Write-Host (Get-Msg "llm.codingplan.model.minimax")
                     Write-Host ""
-                    if ($script:HICLAW_QUICKSTART) {
+                    # If upgrade with loaded model, show current as default
+                    if ($script:HICLAW_UPGRADE -and $script:config.DEFAULT_MODEL) {
+                        $defaultModel = switch ($script:config.DEFAULT_MODEL) {
+                            "qwen3.6-plus" { "1" }
+                            "glm-5"         { "2" }
+                            "kimi-k2.5"     { "3" }
+                            "MiniMax-M2.5"  { "4" }
+                            default         { "1" }
+                        }
+                        $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [${defaultModel}]"
+                        $codingPlanModelChoice = if ($codingPlanModelChoice) { $codingPlanModelChoice } else { $defaultModel }
+                    } elseif ($script:HICLAW_QUICKSTART) {
                         $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [1]"
                     } else {
                         $codingPlanModelChoice = Read-Host (Get-Msg "llm.codingplan.model.select")
@@ -1764,9 +1862,13 @@ function Step-Llm {
                     $script:config.LLM_PROVIDER = "qwen"
                     $script:config.OPENAI_BASE_URL = ""
                     Write-Host ""
-                    $qwenModelInput = Read-Host (Get-Msg "llm.qwen.model_prompt")
+                    if ($script:HICLAW_UPGRADE -and $script:config.DEFAULT_MODEL) {
+                        $qwenModelInput = Read-Host "$(Get-Msg 'llm.qwen.model_prompt') [${script:config.DEFAULT_MODEL}]"
+                    } else {
+                        $qwenModelInput = Read-Host (Get-Msg "llm.qwen.model_prompt")
+                    }
                     if ($qwenModelInput -eq "b") { $script:StepResult = "back"; return }
-                    $script:config.DEFAULT_MODEL = if ($qwenModelInput) { $qwenModelInput } elseif ($env:HICLAW_DEFAULT_MODEL) { $env:HICLAW_DEFAULT_MODEL } else { "qwen3.6-plus" }
+                    $script:config.DEFAULT_MODEL = if ($qwenModelInput) { $qwenModelInput } elseif ($script:config.DEFAULT_MODEL) { $script:config.DEFAULT_MODEL } else { "qwen3.6-plus" }
                     Write-Log (Get-Msg "llm.provider.selected_qwen")
                     Request-CustomModelParams $script:config.DEFAULT_MODEL
                     if ($script:StepResult -eq "back") { return }
@@ -1775,9 +1877,13 @@ function Step-Llm {
                     $script:config.LLM_PROVIDER = "openai-compat"
                     $script:config.OPENAI_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1"
                     Write-Host ""
-                    $codingModelInput = Read-Host (Get-Msg "llm.qwen.model_prompt")
+                    if ($script:HICLAW_UPGRADE -and $script:config.DEFAULT_MODEL) {
+                        $codingModelInput = Read-Host "$(Get-Msg 'llm.qwen.model_prompt') [${script:config.DEFAULT_MODEL}]"
+                    } else {
+                        $codingModelInput = Read-Host (Get-Msg "llm.qwen.model_prompt")
+                    }
                     if ($codingModelInput -eq "b") { $script:StepResult = "back"; return }
-                    $script:config.DEFAULT_MODEL = if ($codingModelInput) { $codingModelInput } elseif ($env:HICLAW_DEFAULT_MODEL) { $env:HICLAW_DEFAULT_MODEL } else { "qwen3.6-plus" }
+                    $script:config.DEFAULT_MODEL = if ($codingModelInput) { $codingModelInput } elseif ($script:config.DEFAULT_MODEL) { $script:config.DEFAULT_MODEL } else { "qwen3.6-plus" }
                     Write-Log (Get-Msg "llm.provider.selected_codingplan_legacy")
                     Request-CustomModelParams $script:config.DEFAULT_MODEL
                     if ($script:StepResult -eq "back") { return }
@@ -1819,12 +1925,44 @@ function Step-Llm {
             $script:config.LLM_PROVIDER = "openai-compat"
             Write-Log (Get-Msg "llm.provider.selected_openai" -f $script:config.LLM_PROVIDER)
             Write-Host ""
-            $urlInput = Read-Host (Get-Msg "llm.openai.base_url_prompt")
-            if ($urlInput -eq "b") { $script:StepResult = "back"; return }
-            $script:config.OPENAI_BASE_URL = $urlInput
-            $modelInput = Read-Host (Get-Msg "llm.openai.model_prompt")
-            if ($modelInput -eq "b") { $script:StepResult = "back"; return }
-            $script:config.DEFAULT_MODEL = if ($modelInput) { $modelInput } else { "gpt-5.4" }
+            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") {
+                Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "llm.openai.base_url_prompt"), $script:config.OPENAI_BASE_URL)
+            } else {
+                $currentUrl = $script:config.OPENAI_BASE_URL
+                # Use base prompt without embedded default when showing current value
+                if ($currentUrl) {
+                    $urlInput = Read-Host "$(Get-Msg 'llm.openai.base_url_prompt') [$currentUrl]"
+                } else {
+                    $urlInput = Read-Host "$(Get-Msg 'llm.openai.base_url_prompt') [https://api.openai.com/v1]"
+                }
+                if ($urlInput -eq "b") { $script:StepResult = "back"; return }
+                if ($urlInput) {
+                    $script:config.OPENAI_BASE_URL = $urlInput
+                } elseif ($currentUrl) {
+                    $script:config.OPENAI_BASE_URL = $currentUrl
+                } else {
+                    $script:config.OPENAI_BASE_URL = "https://api.openai.com/v1"
+                }
+            }
+            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") {
+                Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "llm.openai.model_prompt"), $script:config.DEFAULT_MODEL)
+            } else {
+                $currentModel = $script:config.DEFAULT_MODEL
+                # Use base prompt without embedded default when showing current value
+                if ($currentModel) {
+                    $modelInput = Read-Host "Default Model ID [${currentModel}]"
+                } else {
+                    $modelInput = Read-Host (Get-Msg 'llm.openai.model_prompt')
+                }
+                if ($modelInput -eq "b") { $script:StepResult = "back"; return }
+                if ($modelInput) {
+                    $script:config.DEFAULT_MODEL = $modelInput
+                } elseif ($currentModel) {
+                    $script:config.DEFAULT_MODEL = $currentModel
+                } else {
+                    $script:config.DEFAULT_MODEL = "gpt-5.4"
+                }
+            }
             Write-Log (Get-Msg "llm.openai.base_url_label" -f $script:config.OPENAI_BASE_URL)
             Write-Log (Get-Msg "llm.model.label" -f $script:config.DEFAULT_MODEL)
             Request-CustomModelParams $script:config.DEFAULT_MODEL
@@ -1838,6 +1976,17 @@ function Step-Llm {
         default {
             Write-Error (Get-Msg "llm.provider.invalid" -f $providerChoice)
         }
+    }
+
+    # Skip to embedding if Keep-All mode handled LLM params
+    if ($skipToEmbedding) {
+        # Skip embedding selection, use loaded value (already in $script:config.EMBEDDING_MODEL)
+        if ($script:config.EMBEDDING_MODEL) {
+            Write-Log (Get-Msg "llm.embedding.title")
+            Write-Log (Get-Msg "llm.model.label" -f $script:config.EMBEDDING_MODEL)
+            Write-Log ""
+        }
+        return
     }
 
     # --- Embedding model (optional, auto-tested) ---
@@ -1858,13 +2007,20 @@ function Step-Llm {
             $script:config.EMBEDDING_MODEL = "text-embedding-v4"
         }
         "2" {
-            $embCustom = Read-Host (Get-Msg "llm.embedding.custom_prompt")
-            if ($embCustom -eq "b") { $script:StepResult = "back"; return }
-            if ($embCustom) {
-                $script:config.EMBEDDING_MODEL = $embCustom
+            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") {
+                Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "llm.embedding.custom_prompt"), $script:config.EMBEDDING_MODEL)
             } else {
-                $script:config.EMBEDDING_MODEL = ""
-                Write-Log (Get-Msg "llm.embedding.disabled")
+                $currentEmb = $script:config.EMBEDDING_MODEL
+                $embCustom = Read-Host (Get-Msg "llm.embedding.custom_prompt")
+                if ($embCustom -eq "b") { $script:StepResult = "back"; return }
+                if ($embCustom) {
+                    $script:config.EMBEDDING_MODEL = $embCustom
+                } else {
+                    $script:config.EMBEDDING_MODEL = $currentEmb
+                    if (-not $script:config.EMBEDDING_MODEL) {
+                        Write-Log (Get-Msg "llm.embedding.disabled")
+                    }
+                }
             }
         }
         "3" {
@@ -2016,9 +2172,16 @@ function Step-Workspace {
     }
     # ─────────────────────────────────────────────────────────────────
     $defaultWorkspace = "$env:USERPROFILE\hiclaw-manager"
-    $wsInput = Read-Host (Get-Msg "workspace.dir_prompt" -f $defaultWorkspace)
-    if ($wsInput -eq "b") { $script:StepResult = "back"; return }
-    $script:config.WORKSPACE_DIR = if ($wsInput) { $wsInput } else { $defaultWorkspace }
+    if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") {
+        Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "workspace.dir_prompt" -f $defaultWorkspace), $script:config.WORKSPACE_DIR)
+        $wsInput = if ($script:config.WORKSPACE_DIR) { $script:config.WORKSPACE_DIR } else { $defaultWorkspace }
+    } else {
+        $currentWs = $script:config.WORKSPACE_DIR
+        $wsInput = Read-Host (Get-Msg "workspace.dir_prompt" -f $defaultWorkspace)
+        if ($wsInput -eq "b") { $script:StepResult = "back"; return }
+        $wsInput = if ($wsInput) { $wsInput } else { if ($currentWs) { $currentWs } else { $defaultWorkspace } }
+    }
+    $script:config.WORKSPACE_DIR = $wsInput
     if (-not (Test-Path $script:config.WORKSPACE_DIR)) {
         New-Item -ItemType Directory -Path $script:config.WORKSPACE_DIR -Force | Out-Null
     }
@@ -2233,9 +2396,14 @@ function Step-Hostshare {
         return
     }
     # ─────────────────────────────────────────────────────────────────
-    $shareInput = Read-Host (Get-Msg "host_share.prompt" -f $env:USERPROFILE)
+    $currentShare = $script:config.HOST_SHARE_DIR
+    if ($currentShare) {
+        $shareInput = Read-Host "$(Get-Msg 'host_share.prompt' -f $env:USERPROFILE) [${currentShare}]"
+    } else {
+        $shareInput = Read-Host (Get-Msg 'host_share.prompt' -f $env:USERPROFILE)
+    }
     if ($shareInput -eq "b") { $script:StepResult = "back"; return }
-    $script:config.HOST_SHARE_DIR = if ($shareInput) { $shareInput } else { $env:USERPROFILE }
+    $script:config.HOST_SHARE_DIR = if ($shareInput) { $shareInput } else { if ($currentShare) { $currentShare } else { $env:USERPROFILE } }
 }
 
 # ============================================================

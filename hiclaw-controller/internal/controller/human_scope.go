@@ -77,3 +77,18 @@ func buildDesiredHumanRooms(ctx context.Context, c client.Client, h *v1beta1.Hum
 	}
 	return desired
 }
+
+// findTeamNameByRoomID looks up a Team by its TeamRoomID and returns the team name.
+// Returns empty string if no matching team is found.
+func findTeamNameByRoomID(ctx context.Context, c client.Client, ns, roomID string) string {
+	var teamList v1beta1.TeamList
+	if err := c.List(ctx, &teamList, client.InNamespace(ns)); err != nil {
+		return ""
+	}
+	for _, t := range teamList.Items {
+		if t.Status.TeamRoomID == roomID {
+			return t.Name
+		}
+	}
+	return ""
+}

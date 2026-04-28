@@ -57,15 +57,23 @@ func computeHumanPhase(h *v1beta1.Human, reconcileErr error) string {
 // Status.Rooms set.
 func buildDesiredHumanRooms(ctx context.Context, c client.Client, h *v1beta1.Human) map[string]struct{} {
 	desired := make(map[string]struct{})
+
+	// Handle workers (standalone + team)
 	for _, workerName := range h.Spec.AccessibleWorkers {
+		// Check standalone worker first
 		var worker v1beta1.Worker
-		if err := c.Get(ctx, client.ObjectKey{Name: workerName, Namespace: h.Namespace}, &worker); err != nil {
-			continue
+		if err := c.Get(ctx, client.ObjectKey{Name: workerName, Namespace: h.Namespace}, &worker); err == nil {
+			if worker.Status.RoomID != "" {
+				desired[worker.Status.RoomID] = struct{}{}
+			}
 		}
-		if worker.Status.RoomID != "" {
-			desired[worker.Status.RoomID] = struct{}{}
+		// Also check if this is a team worker
+		if roomID := findTeamWorkerRoomID(ctx, c, h.Namespace, workerName); roomID != "" {
+			desired[roomID] = struct{}{}
 		}
 	}
+
+	// Handle teams
 	for _, teamName := range h.Spec.AccessibleTeams {
 		var team v1beta1.Team
 		if err := c.Get(ctx, client.ObjectKey{Name: teamName, Namespace: h.Namespace}, &team); err != nil {
@@ -76,4 +84,20 @@ func buildDesiredHumanRooms(ctx context.Context, c client.Client, h *v1beta1.Hum
 		}
 	}
 	return desired
+}
+
+// findTeamWorkerRoomID looks up a team worker's room ID from Team.Status.Members
+func findTeamWorkerRoomID(ctx context.Context, c client.Client, ns, workerName string) string {
+	var teamList v1beta1.TeamList
+	if err := c.List(ctx, &teamList, client.InNamespace(ns)); err != nil {
+		return ""
+	}
+	for _, t := range teamList.Items {
+		for _, member := range t.Status.Members {
+			if member.Name == workerName {
+				return member.RoomID
+			}
+		}
+	}
+	return ""
 }

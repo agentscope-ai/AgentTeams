@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 
+	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -77,6 +79,30 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 			kept = append(kept, rid)
 			continue
 		}
+
+		// Check if this room belongs to a worker that is still in AccessibleWorkers
+		// If so, don't kick - the worker might not be provisioned yet
+		found := false
+		for _, accessibleWorker := range h.Spec.AccessibleWorkers {
+			var worker v1beta1.Worker
+			if err := r.Get(ctx, client.ObjectKey{Name: accessibleWorker, Namespace: h.Namespace}, &worker); err == nil {
+				if worker.Status.RoomID == rid {
+					kept = append(kept, rid)
+					found = true
+					break
+				}
+			}
+			// Also check team workers
+			if teamRoomID := findTeamWorkerRoomID(ctx, r.Client, h.Namespace, accessibleWorker); teamRoomID == rid {
+				kept = append(kept, rid)
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+
 		if err := r.Provisioner.KickFromRoom(ctx, rid, matrixUserID, "access revoked"); err != nil {
 			logger.Error(err, "failed to kick human from room", "room", rid)
 			kept = append(kept, rid)

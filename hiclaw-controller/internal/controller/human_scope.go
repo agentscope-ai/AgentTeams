@@ -80,6 +80,7 @@ func buildDesiredHumanRooms(ctx context.Context, c client.Client, h *v1beta1.Hum
 
 // isRoomFromAccessibleTeam checks if roomID belongs to a team still in accessibleTeams.
 // Returns (true, nil) if team is in spec AND roomID matches.
+// Returns (true, nil) if team is in spec AND TeamRoomID is empty (team not provisioned yet).
 // Returns (false, err) if API fails - caller should skip kick for safety.
 // Returns (false, nil) if roomID definitely doesn't match any accessible team (safe to kick).
 func isRoomFromAccessibleTeam(ctx context.Context, c client.Client, ns, roomID string, accessibleTeams []string) (bool, error) {
@@ -88,7 +89,13 @@ func isRoomFromAccessibleTeam(ctx context.Context, c client.Client, ns, roomID s
 		if err := c.Get(ctx, client.ObjectKey{Name: teamName, Namespace: ns}, &team); err != nil {
 			return false, err
 		}
+		// If TeamRoomID matches, room is protected
 		if team.Status.TeamRoomID == roomID {
+			return true, nil
+		}
+		// If TeamRoomID is empty, team might not be provisioned yet
+		// Don't kick - we'll re-check on next reconcile
+		if team.Status.TeamRoomID == "" {
 			return true, nil
 		}
 	}

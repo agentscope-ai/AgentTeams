@@ -626,27 +626,11 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	adminMatrixID := p.matrix.UserID(p.adminUser)
 	leaderMatrixID := p.matrix.UserID(req.LeaderName)
 
-	// Team Room: Leader + Admin + all Workers + Humans with this team in accessibleTeams
+	// Team Room: Leader + Admin + all Workers
 	teamInvites := []string{adminMatrixID, leaderMatrixID}
 	for _, wn := range req.WorkerNames {
 		teamInvites = append(teamInvites, p.matrix.UserID(wn))
 	}
-
-	// Add Humans that have this team in their accessibleTeams
-	var humanList v1beta1.HumanList
-	if err := p.k8sClient.CoreV1().RESTClient().Get().
-		Resource("humans").
-		Namespace(p.namespace).
-		Do(ctx).Into(&humanList); err == nil {
-		for _, human := range humanList.Items {
-			for _, accessibleTeam := range human.Spec.AccessibleTeams {
-				if accessibleTeam == req.TeamName && human.Status.MatrixUserID != "" {
-					teamInvites = append(teamInvites, human.Status.MatrixUserID)
-				}
-			}
-		}
-	}
-
 	teamPowerLevels := map[string]int{
 		managerMatrixID: 100,
 		adminMatrixID:   100,

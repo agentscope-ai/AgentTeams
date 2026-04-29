@@ -79,24 +79,19 @@ func buildDesiredHumanRooms(ctx context.Context, c client.Client, h *v1beta1.Hum
 }
 
 // isRoomFromAccessibleTeam checks if roomID belongs to a team still in accessibleTeams.
-// Returns true if team is in spec AND roomID matches, OR team hasn't provisioned yet
-// (TeamRoomID empty). Returns false only if roomID definitely doesn't match any
-// accessible team (safe to kick).
-//
-// This avoids the findTeamNameByRoomID paradox: that function used Status.TeamRoomID
-// to find the team, but protection is needed precisely when TeamRoomID is empty.
-func isRoomFromAccessibleTeam(ctx context.Context, c client.Client, ns, roomID string, accessibleTeams []string) bool {
+// Returns (true, nil) if team is in spec AND roomID matches.
+// Returns (false, err) if API fails - caller should skip kick for safety.
+// Returns (false, nil) if roomID definitely doesn't match any accessible team (safe to kick).
+func isRoomFromAccessibleTeam(ctx context.Context, c client.Client, ns, roomID string, accessibleTeams []string) (bool, error) {
 	for _, teamName := range accessibleTeams {
 		var team v1beta1.Team
 		if err := c.Get(ctx, client.ObjectKey{Name: teamName, Namespace: ns}, &team); err != nil {
-			// If error fetching team, we can't determine - don't kick to be safe
-			return true
+			return false, err
 		}
-		// If roomID matches this team's room, or if team hasn't provisioned yet (empty), don't kick
-		if team.Status.TeamRoomID == roomID || team.Status.TeamRoomID == "" {
-			return true
+		if team.Status.TeamRoomID == roomID {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 

@@ -85,9 +85,14 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 		}
 
 		// Check if this room belongs to a team still in accessibleTeams.
-		// If so, don't kick - the team just hasn't been provisioned yet.
-		// Uses isRoomFromAccessibleTeam to avoid the findTeamNameByRoomID paradox.
-		if isRoomFromAccessibleTeam(ctx, r.Client, h.Namespace, rid, h.Spec.AccessibleTeams) {
+		// If API error, skip kick for safety (transient error).
+		inTeam, err := isRoomFromAccessibleTeam(ctx, r.Client, h.Namespace, rid, h.Spec.AccessibleTeams)
+		if err != nil {
+			logger.Error(err, "transient error checking accessible teams; skipping kick for safety", "room", rid)
+			kept = append(kept, rid)
+			continue
+		}
+		if inTeam {
 			kept = append(kept, rid)
 			continue
 		}

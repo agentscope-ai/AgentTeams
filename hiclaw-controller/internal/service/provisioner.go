@@ -637,10 +637,13 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	if err := p.k8sClient.CoreV1().RESTClient().Get().
 		Resource("humans").
 		Namespace(p.namespace).
-		Do(ctx).Into(&humanList); err == nil {
+		Do(ctx).Into(&humanList); err != nil {
+		logger.Error(err, "failed to list humans for team invites", "team", req.TeamName, "namespace", p.namespace)
+	} else {
 		for _, human := range humanList.Items {
 			for _, accessibleTeam := range human.Spec.AccessibleTeams {
 				if accessibleTeam == req.TeamName && human.Status.MatrixUserID != "" {
+					logger.Info("adding human to team invites", "human", human.Name, "team", req.TeamName)
 					teamInvites = append(teamInvites, human.Status.MatrixUserID)
 				}
 			}

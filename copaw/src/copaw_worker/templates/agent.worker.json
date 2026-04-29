@@ -7,6 +7,10 @@
     "SOUL.md",
     "PROFILE.md"
   ],
+  "heartbeat": {
+    "enabled": true,
+    "every": "10m"
+  },
   "channels": {
     "console": {
       "enabled": true

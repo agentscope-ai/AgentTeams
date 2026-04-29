@@ -8,7 +8,7 @@
     "PROFILE.md"
   ],
   "heartbeat": {
-    "enabled": false,
+    "enabled": true,
     "every": "10m"
   },
   "channels": {

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"os"
 	"testing"
 )
 
@@ -9,12 +10,12 @@ func newTestValidator() *SecurityValidator {
 		AllowedRegistries: []string{},
 		ContainerPrefix:   "hiclaw-worker-",
 		DangerousCaps: map[string]bool{
-			"SYS_ADMIN":   true,
-			"SYS_PTRACE":  true,
+			"SYS_ADMIN":    true,
+			"SYS_PTRACE":   true,
 			"DAC_OVERRIDE": true,
-			"NET_ADMIN":   true,
-			"SYS_RAWIO":   true,
-			"SYS_MODULE":  true,
+			"NET_ADMIN":    true,
+			"SYS_RAWIO":    true,
+			"SYS_MODULE":   true,
 		},
 	}
 }
@@ -48,6 +49,43 @@ func TestNoHostConfig(t *testing.T) {
 	}
 	if err := v.ValidateContainerCreate(req, "hiclaw-worker-alice"); err != nil {
 		t.Errorf("expected nil HostConfig to pass, got: %v", err)
+	}
+}
+
+func TestNewSecurityValidatorRespectsAutoPrefixDisabled(t *testing.T) {
+	oldAuto := os.Getenv("HICLAW_RESOURCE_AUTOPREFIX")
+	oldContainerPrefix := os.Getenv("HICLAW_PROXY_CONTAINER_PREFIX")
+	oldResourcePrefix := os.Getenv("HICLAW_RESOURCE_PREFIX")
+	t.Cleanup(func() {
+		if oldAuto == "" {
+			os.Unsetenv("HICLAW_RESOURCE_AUTOPREFIX")
+		} else {
+			os.Setenv("HICLAW_RESOURCE_AUTOPREFIX", oldAuto)
+		}
+		if oldContainerPrefix == "" {
+			os.Unsetenv("HICLAW_PROXY_CONTAINER_PREFIX")
+		} else {
+			os.Setenv("HICLAW_PROXY_CONTAINER_PREFIX", oldContainerPrefix)
+		}
+		if oldResourcePrefix == "" {
+			os.Unsetenv("HICLAW_RESOURCE_PREFIX")
+		} else {
+			os.Setenv("HICLAW_RESOURCE_PREFIX", oldResourcePrefix)
+		}
+	})
+
+	os.Setenv("HICLAW_RESOURCE_AUTOPREFIX", "false")
+	os.Unsetenv("HICLAW_PROXY_CONTAINER_PREFIX")
+	os.Setenv("HICLAW_RESOURCE_PREFIX", "hiclaw-")
+
+	v := NewSecurityValidator()
+	if v.ContainerPrefix != "" {
+		t.Fatalf("ContainerPrefix = %q, want empty", v.ContainerPrefix)
+	}
+
+	req := ContainerCreateRequest{Image: "hiclaw/worker-agent:latest", HostConfig: &HostConfig{}}
+	if err := v.ValidateContainerCreate(req, "custom-name"); err != nil {
+		t.Fatalf("expected custom name to pass when prefix is disabled, got: %v", err)
 	}
 }
 

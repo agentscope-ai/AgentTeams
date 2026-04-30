@@ -29,6 +29,9 @@ spec:
                 image:
                   type: string
                   description: Custom Docker image for this worker
+                workerName:
+                  type: string
+                  description: Business/runtime identity for Matrix localpart and OSS path key (fallback to metadata.name)
                 identity:
                   type: string
                   description: Worker public identity (generates IDENTITY.md; merged into SOUL.md for copaw and hermes)

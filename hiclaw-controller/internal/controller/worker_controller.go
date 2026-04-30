@@ -180,7 +180,7 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 				logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
 			}
 		}
-		if err := r.Legacy.RemoveFromWorkersRegistry(w.Name); err != nil {
+		if err := r.Legacy.RemoveFromWorkersRegistry(mctx.RuntimeName); err != nil {
 			logger.Error(err, "failed to remove from workers registry (non-fatal)")
 		}
 	}
@@ -217,9 +217,10 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 		}
 	}
 
+	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
 	if err := r.Legacy.UpdateWorkersRegistry(service.WorkerRegistryEntry{
-		Name:         w.Name,
-		MatrixUserID: r.Provisioner.MatrixUserID(w.Name),
+		Name:         runtimeName,
+		MatrixUserID: r.Provisioner.MatrixUserID(runtimeName),
 		RoomID:       w.Status.RoomID,
 		Runtime:      w.Spec.Runtime,
 		Deployment:   "local",
@@ -242,8 +243,10 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 // is silently overridden rather than rejected.
 func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
 	role := roleForAnnotations(w.Annotations["hiclaw.io/role"], w.Annotations["hiclaw.io/team-leader"])
+	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
 	return MemberContext{
 		Name:               w.Name,
+		RuntimeName:        runtimeName,
 		Namespace:          w.Namespace,
 		Role:               role,
 		Spec:               w.Spec,

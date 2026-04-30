@@ -184,6 +184,7 @@ controller:
       memory: 512Mi
   workerBackend: "k8s"        # k8s | sae
   resourcePrefix: "hiclaw-"
+  resourceAutoPrefix: true
   serviceAccount:
     create: true
     name: ""

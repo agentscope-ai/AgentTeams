@@ -22,10 +22,12 @@ type MockHumanProvisioner struct {
 	JoinRoomAsFn      func(ctx context.Context, roomID, userToken string) error
 	KickFromRoomFn    func(ctx context.Context, roomID, userID, reason string) error
 	ForceLeaveRoomFn  func(ctx context.Context, userID, roomID string) error
+	SetDisplayNameFn  func(ctx context.Context, userID, accessToken, displayName string) error
 
 	Calls struct {
 		EnsureHumanUser []string
 		LoginAsHuman    []LoginAsHumanCall
+		SetDisplayName  []SetDisplayNameCall
 		InviteToRoom    []RoomMembershipCall
 		JoinRoomAs      []JoinRoomAsCall
 		KickFromRoom    []KickFromRoomCall
@@ -37,6 +39,13 @@ type MockHumanProvisioner struct {
 type LoginAsHumanCall struct {
 	Name     string
 	Password string
+}
+
+// SetDisplayNameCall records SetDisplayName input arguments.
+type SetDisplayNameCall struct {
+	UserID      string
+	AccessToken string
+	DisplayName string
 }
 
 // RoomMembershipCall records the (RoomID, UserID) pair passed to
@@ -90,6 +99,7 @@ func (m *MockHumanProvisioner) Reset() {
 	m.JoinRoomAsFn = nil
 	m.KickFromRoomFn = nil
 	m.ForceLeaveRoomFn = nil
+	m.SetDisplayNameFn = nil
 }
 
 // ClearCalls resets call records only, preserving Fn overrides.
@@ -103,6 +113,7 @@ func (m *MockHumanProvisioner) clearCallsLocked() {
 	m.Calls = struct {
 		EnsureHumanUser []string
 		LoginAsHuman    []LoginAsHumanCall
+		SetDisplayName  []SetDisplayNameCall
 		InviteToRoom    []RoomMembershipCall
 		JoinRoomAs      []JoinRoomAsCall
 		KickFromRoom    []KickFromRoomCall
@@ -144,6 +155,17 @@ func (m *MockHumanProvisioner) MatrixUserID(name string) string {
 		return fn(name)
 	}
 	return "@" + name + ":localhost"
+}
+
+func (m *MockHumanProvisioner) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
+	m.mu.Lock()
+	m.Calls.SetDisplayName = append(m.Calls.SetDisplayName, SetDisplayNameCall{UserID: userID, AccessToken: accessToken, DisplayName: displayName})
+	fn := m.SetDisplayNameFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, userID, accessToken, displayName)
+	}
+	return nil
 }
 
 func (m *MockHumanProvisioner) InviteToRoom(ctx context.Context, roomID, userID string) error {

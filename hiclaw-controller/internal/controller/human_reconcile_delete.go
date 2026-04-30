@@ -26,7 +26,7 @@ func (r *HumanReconciler) reconcileHumanDelete(ctx context.Context, s *humanScop
 
 	humanUserID := h.Status.MatrixUserID
 	if humanUserID == "" {
-		humanUserID = r.Provisioner.MatrixUserID(h.Name)
+		humanUserID = r.Provisioner.MatrixUserID(s.username)
 	}
 	for _, roomID := range h.Status.Rooms {
 		if err := r.Provisioner.ForceLeaveRoom(ctx, humanUserID, roomID); err != nil {

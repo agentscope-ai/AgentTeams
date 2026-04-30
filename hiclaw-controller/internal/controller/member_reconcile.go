@@ -33,10 +33,11 @@ func (r MemberRole) String() string { return string(r) }
 // per Team member directly from the Team CR without ever materializing a
 // Worker CR.
 type MemberContext struct {
-	Name      string
-	Namespace string
-	Role      MemberRole
-	Spec      v1beta1.WorkerSpec
+	Name        string // Kubernetes resource identity (CR/Pod/SA key)
+	RuntimeName string // business/runtime identity (Matrix/OSS/room alias key)
+	Namespace   string
+	Role        MemberRole
+	Spec        v1beta1.WorkerSpec
 
 	// Generation / ObservedGeneration are metadata included in logs to aid
 	// debugging. They are NOT used for spec-change detection — callers must
@@ -144,7 +145,7 @@ type MemberDeps struct {
 // RoomID, and ProvResult into state.
 func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) (reconcile.Result, error) {
 	if m.ExistingMatrixUserID != "" {
-		refreshResult, err := d.Provisioner.RefreshCredentials(ctx, m.Name)
+		refreshResult, err := d.Provisioner.RefreshCredentials(ctx, m.RuntimeName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials: %w", err)
 		}
@@ -173,10 +174,10 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 		return reconcile.Result{}, nil
 	}
 
-	log.FromContext(ctx).Info("provisioning member infrastructure", "name", m.Name, "role", m.Role)
+	log.FromContext(ctx).Info("provisioning member infrastructure", "name", m.Name, "runtimeName", m.RuntimeName, "role", m.Role)
 
 	provResult, err := d.Provisioner.ProvisionWorker(ctx, service.WorkerProvisionRequest{
-		Name:           m.Name,
+		Name:           m.RuntimeName,
 		Role:           m.Role.String(),
 		TeamName:       m.TeamName,
 		TeamLeaderName: m.TeamLeaderName,
@@ -209,15 +210,15 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 	logger := log.FromContext(ctx)
 
-	if err := d.Deployer.DeployPackage(ctx, m.Name, m.Spec.Package, m.IsUpdate); err != nil {
+	if err := d.Deployer.DeployPackage(ctx, m.RuntimeName, m.Spec.Package, m.IsUpdate); err != nil {
 		return fmt.Errorf("deploy package: %w", err)
 	}
-	if err := d.Deployer.WriteInlineConfigs(m.Name, m.Spec); err != nil {
+	if err := d.Deployer.WriteInlineConfigs(m.RuntimeName, m.Spec); err != nil {
 		return fmt.Errorf("write inline configs: %w", err)
 	}
 
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
-		Name:              m.Name,
+		Name:              m.RuntimeName,
 		Spec:              m.Spec,
 		Role:              m.Role.String(),
 		TeamName:          m.TeamName,
@@ -233,7 +234,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
 
-	if err := d.Deployer.PushOnDemandSkills(ctx, m.Name, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
+	if err := d.Deployer.PushOnDemandSkills(ctx, m.RuntimeName, m.Spec.Skills, m.Spec.RemoteSkills); err != nil {
 		logger.Info("skill push failed", "error", err)
 	}
 	return nil
@@ -368,7 +369,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		state.ProvResult = prov
 	}
 
-	workerEnv := d.EnvBuilder.Build(m.Name, prov)
+	workerEnv := d.EnvBuilder.Build(m.RuntimeName, prov)
 	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
 	saName := d.ResourcePrefix.SAName(authpkg.RoleWorker, m.Name)
 
@@ -434,19 +435,19 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	logger := log.FromContext(ctx)
 	logger.Info("deleting member", "name", m.Name, "role", m.Role)
 
-	if err := d.Provisioner.LeaveAllWorkerRooms(ctx, m.Name); err != nil {
-		logger.Error(err, "member leave-all-rooms failed (non-fatal)", "name", m.Name)
+	if err := d.Provisioner.LeaveAllWorkerRooms(ctx, m.RuntimeName); err != nil {
+		logger.Error(err, "member leave-all-rooms failed (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
 	}
 	if m.ExistingRoomID != "" {
 		if err := d.Provisioner.DeleteWorkerRoom(ctx, m.ExistingRoomID); err != nil {
 			logger.Error(err, "member room delete command failed (non-fatal)",
-				"name", m.Name, "roomID", m.ExistingRoomID)
+				"name", m.Name, "runtimeName", m.RuntimeName, "roomID", m.ExistingRoomID)
 		}
 	}
 
 	isTeamWorker := m.Role == RoleTeamWorker || m.Role == RoleTeamLeader
 	if err := d.Provisioner.DeprovisionWorker(ctx, service.WorkerDeprovisionRequest{
-		Name:         m.Name,
+		Name:         m.RuntimeName,
 		IsTeamWorker: isTeamWorker,
 		ExposedPorts: m.CurrentExposedPorts,
 		ExposeSpec:   m.Spec.Expose,
@@ -474,21 +475,21 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		}
 	}
 
-	if err := d.Deployer.CleanupOSSData(ctx, m.Name); err != nil {
-		logger.Error(err, "failed to clean up OSS agent data (non-fatal)", "name", m.Name)
+	if err := d.Deployer.CleanupOSSData(ctx, m.RuntimeName); err != nil {
+		logger.Error(err, "failed to clean up OSS agent data (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
 	}
-	if err := d.Provisioner.DeleteCredentials(ctx, m.Name); err != nil {
-		logger.Error(err, "failed to delete credentials (non-fatal)", "name", m.Name)
+	if err := d.Provisioner.DeleteCredentials(ctx, m.RuntimeName); err != nil {
+		logger.Error(err, "failed to delete credentials (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
 	}
 	if err := d.Provisioner.DeleteServiceAccount(ctx, m.Name); err != nil {
 		logger.Error(err, "failed to delete ServiceAccount (non-fatal)", "name", m.Name)
 	}
 	// Every worker (standalone, team leader, team worker) owns a per-worker
 	// comm room created by ProvisionWorker. Release its alias here so a
-	// future Worker/Team CR with the same name can reclaim it cleanly —
-	// the underlying room is left intact to preserve history.
-	if err := d.Provisioner.DeleteWorkerRoomAlias(ctx, m.Name); err != nil {
-		logger.Error(err, "failed to delete worker room alias (non-fatal)", "name", m.Name)
+	// future Worker/Team CR with the same runtime identity can reclaim it
+	// cleanly — the underlying room is left intact to preserve history.
+	if err := d.Provisioner.DeleteWorkerRoomAlias(ctx, m.RuntimeName); err != nil {
+		logger.Error(err, "failed to delete worker room alias (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
 	}
 	return nil
 }

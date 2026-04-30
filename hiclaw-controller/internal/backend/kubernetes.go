@@ -110,9 +110,6 @@ func NewK8sBackend(config K8sConfig, containerPrefix string, scheme *runtime.Sch
 // NewK8sBackendWithClient creates a Kubernetes backend with a custom client.
 // scheme may be nil in tests that don't set CreateRequest.Owner.
 func NewK8sBackendWithClient(client K8sCoreClient, config K8sConfig, containerPrefix string, scheme *runtime.Scheme) *K8sBackend {
-	if containerPrefix == "" {
-		containerPrefix = DefaultContainerPrefix
-	}
 	if config.Namespace == "" {
 		config.Namespace = detectK8sNamespace()
 	}

@@ -34,20 +34,45 @@ import (
 // the user may have rotated via Element.
 func (r *HumanReconciler) reconcileHumanInfra(ctx context.Context, s *humanScope) error {
 	h := s.human
+	username := s.username
+	expectedUserID := r.Provisioner.MatrixUserID(username)
 
-	if h.Status.MatrixUserID != "" {
-		return nil
+	needsProvision := h.Status.MatrixUserID == "" || h.Status.MatrixUserID != expectedUserID
+	if needsProvision {
+		creds, err := r.Provisioner.EnsureHumanUser(ctx, username)
+		if err != nil {
+			return fmt.Errorf("matrix registration failed: %w", err)
+		}
+		h.Status.MatrixUserID = creds.UserID
+		h.Status.InitialPassword = creds.Password
+		s.userToken = creds.AccessToken
+
+		log.FromContext(ctx).Info("human created",
+			"name", h.Name, "username", username, "matrixUserID", creds.UserID)
 	}
 
-	creds, err := r.Provisioner.EnsureHumanUser(ctx, h.Name)
-	if err != nil {
-		return fmt.Errorf("matrix registration failed: %w", err)
+	// Sync Matrix profile displayName on first provisioning and when spec changes.
+	shouldSyncDisplayName := needsProvision || h.Status.DisplayNameSyncedGeneration != h.Generation
+	if shouldSyncDisplayName {
+		token := s.userToken
+		if token == "" && h.Status.InitialPassword != "" {
+			if t, err := r.Provisioner.LoginAsHuman(ctx, username, h.Status.InitialPassword); err == nil {
+				token = t
+				s.userToken = t
+			} else {
+				log.FromContext(ctx).Info("human login failed before displayName sync; skipping this cycle",
+					"name", h.Name, "username", username, "err", err.Error())
+			}
+		}
+		if token != "" {
+			if err := r.Provisioner.SetDisplayName(ctx, h.Status.MatrixUserID, token, h.Spec.DisplayName); err != nil {
+				log.FromContext(ctx).Error(err, "failed to sync human displayName (non-fatal)",
+					"name", h.Name, "username", username)
+			} else {
+				h.Status.DisplayNameSyncedGeneration = h.Generation
+			}
+		}
 	}
-	h.Status.MatrixUserID = creds.UserID
-	h.Status.InitialPassword = creds.Password
-	s.userToken = creds.AccessToken
 
-	log.FromContext(ctx).Info("human created",
-		"name", h.Name, "matrixUserID", creds.UserID)
 	return nil
 }

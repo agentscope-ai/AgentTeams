@@ -34,6 +34,11 @@ type Config struct {
 	// session names). Intentionally does NOT cover OPENCLAW_MDNS_HOSTNAME,
 	// CMS service name, or install-script hardcoded names.
 	ResourcePrefix string
+	// ResourceAutoPrefix controls whether controller should auto-derive
+	// resource/container prefixes. When false, default hiclaw-* prefixes are
+	// disabled unless explicit HICLAW_PROXY_CONTAINER_PREFIX is provided.
+	// Set via HICLAW_RESOURCE_AUTOPREFIX. Default true.
+	ResourceAutoPrefix bool
 
 	// Docker proxy (embedded mode only)
 	SocketPath      string
@@ -212,11 +217,17 @@ func LoadConfig() *Config {
 		}
 	}
 
-	resourcePrefix := envOrDefault("HICLAW_RESOURCE_PREFIX", "hiclaw-")
-	// ContainerPrefix defaults to "${resourcePrefix}worker-". HICLAW_PROXY_CONTAINER_PREFIX
-	// remains as an explicit override for callers that want to diverge the
-	// Docker-proxy container-name whitelist from the tenant prefix (rare).
-	containerPrefix := envOrDefault("HICLAW_PROXY_CONTAINER_PREFIX", resourcePrefix+"worker-")
+	resourceAutoPrefix := envBoolDefault("HICLAW_RESOURCE_AUTOPREFIX", true)
+	resourcePrefix := ""
+	if resourceAutoPrefix {
+		resourcePrefix = envOrDefault("HICLAW_RESOURCE_PREFIX", "hiclaw-")
+	}
+	// ContainerPrefix defaults to "${resourcePrefix}worker-" when auto-prefix
+	// is enabled. HICLAW_PROXY_CONTAINER_PREFIX remains an explicit override.
+	containerPrefix := os.Getenv("HICLAW_PROXY_CONTAINER_PREFIX")
+	if containerPrefix == "" && resourceAutoPrefix {
+		containerPrefix = resourcePrefix + "worker-"
+	}
 
 	cfg := &Config{
 		KubeMode:  envOrDefault("HICLAW_KUBE_MODE", "embedded"),
@@ -226,7 +237,8 @@ func LoadConfig() *Config {
 		CRDDir:    envOrDefault("HICLAW_CRD_DIR", "/opt/hiclaw/config/crd"),
 		SkillsDir: envOrDefault("HICLAW_SKILLS_DIR", "/opt/hiclaw/agent/skills"),
 
-		ResourcePrefix: resourcePrefix,
+		ResourcePrefix:     resourcePrefix,
+		ResourceAutoPrefix: resourceAutoPrefix,
 
 		SocketPath:      envOrDefault("HICLAW_PROXY_SOCKET", "/var/run/docker.sock"),
 		ContainerPrefix: containerPrefix,
@@ -474,6 +486,14 @@ func envOrDefaultInt(key string, defaultVal int) int {
 
 func envBool(key string) bool {
 	v := os.Getenv(key)
+	return v == "1" || v == "true" || v == "True" || v == "TRUE"
+}
+
+func envBoolDefault(key string, defaultVal bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultVal
+	}
 	return v == "1" || v == "true" || v == "True" || v == "TRUE"
 }
 

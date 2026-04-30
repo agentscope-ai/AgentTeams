@@ -43,6 +43,7 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 
 	s := &humanScope{
 		human:     &human,
+		username:  human.Spec.EffectiveUsername(human.Name),
 		patchBase: patchBase,
 	}
 

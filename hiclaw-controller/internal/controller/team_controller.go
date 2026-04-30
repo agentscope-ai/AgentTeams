@@ -181,6 +181,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		}
 		staleCtx := MemberContext{
 			Name:                ms.Name,
+			RuntimeName:         ms.Name,
 			Namespace:           t.Namespace,
 			Role:                RoleTeamWorker,
 			TeamName:            t.Name,
@@ -455,6 +456,7 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 		}
 		mctx := MemberContext{
 			Name:                name,
+			RuntimeName:         name,
 			Namespace:           t.Namespace,
 			Role:                role,
 			TeamName:            t.Name,
@@ -698,6 +700,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 	}
 	members = append(members, MemberContext{
 		Name:              t.Spec.Leader.Name,
+		RuntimeName:       t.Spec.Leader.Name,
 		Namespace:         t.Namespace,
 		Role:              RoleTeamLeader,
 		Spec:              leaderSpec,
@@ -717,6 +720,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 		spec := teamWorkerSpecToWorkerSpec(t, w)
 		members = append(members, MemberContext{
 			Name:              w.Name,
+			RuntimeName:       w.Name,
 			Namespace:         t.Namespace,
 			Role:              RoleTeamWorker,
 			Spec:              spec,

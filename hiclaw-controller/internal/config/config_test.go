@@ -195,3 +195,31 @@ func TestManagerAgentEnvForwardsAbstractInfraEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfigDisablesAutoPrefix(t *testing.T) {
+	t.Setenv("HICLAW_RESOURCE_AUTOPREFIX", "false")
+	t.Setenv("HICLAW_RESOURCE_PREFIX", "hiclaw-")
+
+	cfg := LoadConfig()
+
+	if cfg.ResourceAutoPrefix {
+		t.Fatal("ResourceAutoPrefix = true, want false")
+	}
+	if cfg.ResourcePrefix != "" {
+		t.Fatalf("ResourcePrefix = %q, want empty", cfg.ResourcePrefix)
+	}
+	if cfg.ContainerPrefix != "" {
+		t.Fatalf("ContainerPrefix = %q, want empty", cfg.ContainerPrefix)
+	}
+}
+
+func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) {
+	t.Setenv("HICLAW_RESOURCE_AUTOPREFIX", "false")
+	t.Setenv("HICLAW_PROXY_CONTAINER_PREFIX", "custom-worker-")
+
+	cfg := LoadConfig()
+
+	if cfg.ContainerPrefix != "custom-worker-" {
+		t.Fatalf("ContainerPrefix = %q, want %q", cfg.ContainerPrefix, "custom-worker-")
+	}
+}

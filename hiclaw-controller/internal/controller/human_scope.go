@@ -13,6 +13,7 @@ import (
 // function and mirrors the scope pattern used by managerScope.
 type humanScope struct {
 	human     *v1beta1.Human
+	username  string
 	patchBase client.Patch
 
 	// userToken is the Human's own Matrix access token for this reconcile

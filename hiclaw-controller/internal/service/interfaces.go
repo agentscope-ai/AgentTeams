@@ -133,14 +133,18 @@ type HumanProvisioner interface {
 	// LoginAsHuman with the stored password instead to avoid triggering
 	// the orphan-recovery password reset inside matrix.EnsureUser, which
 	// would clobber any user-initiated password change made in Element.
-	EnsureHumanUser(ctx context.Context, name string) (*HumanCredentials, error)
+	EnsureHumanUser(ctx context.Context, username string) (*HumanCredentials, error)
 
 	// LoginAsHuman obtains a fresh access token for an already-provisioned
 	// human using the caller-supplied password. Returns an error when the
 	// password no longer matches (e.g. the user changed it in Element);
 	// callers treat that as a soft failure and fall back to admin-only
 	// room management on this reconcile pass.
-	LoginAsHuman(ctx context.Context, name, password string) (string, error)
+	LoginAsHuman(ctx context.Context, username, password string) (string, error)
+
+	// SetDisplayName updates the Matrix profile displayname for the user.
+	// Requires a user-scoped access token.
+	SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error
 
 	// MatrixUserID builds the full "@<name>:<domain>" form.
 	MatrixUserID(name string) string

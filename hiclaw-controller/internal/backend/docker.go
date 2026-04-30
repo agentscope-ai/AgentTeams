@@ -35,9 +35,6 @@ type DockerBackend struct {
 
 // NewDockerBackend creates a DockerBackend that talks to the given Docker socket.
 func NewDockerBackend(config DockerConfig, containerPrefix string) *DockerBackend {
-	if containerPrefix == "" {
-		containerPrefix = DefaultContainerPrefix
-	}
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 			return net.Dial("unix", config.SocketPath)

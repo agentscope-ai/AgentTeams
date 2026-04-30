@@ -37,7 +37,7 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 
 	matrixUserID := h.Status.MatrixUserID
 	if matrixUserID == "" {
-		matrixUserID = r.Provisioner.MatrixUserID(h.Name)
+		matrixUserID = r.Provisioner.MatrixUserID(s.username)
 	}
 
 	// Start with currently-observed rooms; we'll prune removals below.
@@ -59,7 +59,7 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 		token := r.ensureUserToken(ctx, s)
 		if token == "" {
 			logger.V(1).Info("user token unavailable; invite-only this cycle",
-				"room", rid, "human", h.Name)
+				"room", rid, "human", h.Name, "username", s.username)
 			continue
 		}
 		if err := r.Provisioner.JoinRoomAs(ctx, rid, token); err != nil {
@@ -111,7 +111,7 @@ func (r *HumanReconciler) ensureUserToken(ctx context.Context, s *humanScope) st
 		return ""
 	}
 
-	token, err := r.Provisioner.LoginAsHuman(ctx, s.human.Name, s.human.Status.InitialPassword)
+	token, err := r.Provisioner.LoginAsHuman(ctx, s.username, s.human.Status.InitialPassword)
 	if err != nil {
 		log.FromContext(ctx).Info("human login with stored password failed; continuing with admin-only room management",
 			"name", s.human.Name, "err", err.Error())

@@ -13,10 +13,10 @@ import (
 // matrix.Client.EnsureUser — Humans have no persisted WorkerCredentials
 // envelope (unlike Workers/Managers), so the caller is responsible for
 // recording the returned password in the CR status if needed.
-func (p *Provisioner) EnsureHumanUser(ctx context.Context, name string) (*HumanCredentials, error) {
-	uc, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{Username: name})
+func (p *Provisioner) EnsureHumanUser(ctx context.Context, username string) (*HumanCredentials, error) {
+	uc, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{Username: username})
 	if err != nil {
-		return nil, fmt.Errorf("ensure human matrix user %s: %w", name, err)
+		return nil, fmt.Errorf("ensure human matrix user %s: %w", username, err)
 	}
 	return &HumanCredentials{
 		UserID:      uc.UserID,
@@ -31,8 +31,13 @@ func (p *Provisioner) EnsureHumanUser(ctx context.Context, name string) (*HumanC
 // fall back to EnsureUser on failure because EnsureUser's orphan-recovery
 // branch issues "!admin users reset-password", which would silently
 // overwrite any password the user changed via Element.
-func (p *Provisioner) LoginAsHuman(ctx context.Context, name, password string) (string, error) {
-	return p.matrix.Login(ctx, name, password)
+func (p *Provisioner) LoginAsHuman(ctx context.Context, username, password string) (string, error) {
+	return p.matrix.Login(ctx, username, password)
+}
+
+// SetDisplayName updates the Matrix profile displayname for a human user.
+func (p *Provisioner) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
+	return p.matrix.SetDisplayName(ctx, userID, accessToken, displayName)
 }
 
 // InviteToRoom invites the given Matrix user into roomID using the admin

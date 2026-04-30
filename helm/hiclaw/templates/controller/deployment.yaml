@@ -61,6 +61,8 @@ spec:
             */}}
             - name: HICLAW_RESOURCE_PREFIX
               value: {{ .Values.controller.resourcePrefix | default "hiclaw-" | quote }}
+            - name: HICLAW_RESOURCE_AUTOPREFIX
+              value: {{ .Values.controller.resourceAutoPrefix | default true | quote }}
             - name: HICLAW_WORKER_BACKEND
               value: {{ .Values.controller.workerBackend | quote }}
             - name: HICLAW_K8S_NAMESPACE

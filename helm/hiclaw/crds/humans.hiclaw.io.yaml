@@ -18,6 +18,9 @@ spec:
               properties:
                 displayName:
                   type: string
+                username:
+                  type: string
+                  description: Matrix localpart for this human (fallback to metadata.name)
                 email:
                   type: string
                   format: email
@@ -49,6 +52,9 @@ spec:
                 initialPassword:
                   type: string
                   description: "Generated password, shown once on creation"
+                displayNameSyncedGeneration:
+                  type: integer
+                  format: int64
                 rooms:
                   type: array
                   items:

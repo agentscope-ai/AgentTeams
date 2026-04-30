@@ -60,6 +60,9 @@ type Client interface {
 	// Login obtains an access token for an existing user.
 	Login(ctx context.Context, username, password string) (string, error)
 
+	// SetDisplayName updates a user's profile displayname.
+	SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error
+
 	// AdminCommand sends a `!admin ...` text message to the tuwunel admin
 	// bot room (#admins:<domain>). Fire-and-forget: delivery of the
 	// message is confirmed but execution of the admin action is not.
@@ -249,6 +252,19 @@ func (c *TuwunelClient) Login(ctx context.Context, username, password string) (s
 		return "", fmt.Errorf("login %s: empty access token", username)
 	}
 	return resp.AccessToken, nil
+}
+
+func (c *TuwunelClient) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
+	path := fmt.Sprintf("/_matrix/client/v3/profile/%s/displayname", url.PathEscape(userID))
+	body := map[string]string{"displayname": displayName}
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodPut, path, accessToken, body, nil)
+	if err != nil {
+		return fmt.Errorf("set displayName for %s: %w", userID, err)
+	}
+	if statusCode != http.StatusOK {
+		return fmt.Errorf("set displayName for %s: HTTP %d: %s", userID, statusCode, truncate(respBody, 500))
+	}
+	return nil
 }
 
 func (c *TuwunelClient) CreateRoom(ctx context.Context, req CreateRoomRequest) (*RoomInfo, error) {

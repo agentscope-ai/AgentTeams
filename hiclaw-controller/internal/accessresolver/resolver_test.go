@@ -307,6 +307,48 @@ func TestResolve_AIRegistryCustomResources(t *testing.T) {
 	}
 }
 
+func TestResolve_DefaultObjectStorageUsesRuntimeWorkerName(t *testing.T) {
+	worker := &v1beta1.Worker{}
+	worker.Name = "worker-cr-name"
+	worker.Namespace = testNS
+	worker.Spec.WorkerName = "worker-runtime-name"
+	// No accessEntries -> resolver applies default object-storage scope.
+	worker.Spec.AccessEntries = nil
+	c := newFakeClient(t, worker)
+
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role: auth.RoleWorker, Username: "worker-cr-name", WorkerName: "worker-runtime-name",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("expected at least one entry, got %d", len(entries))
+	}
+	var got *credprovider.AccessEntry
+	for i := range entries {
+		if entries[i].Service == credprovider.ServiceObjectStorage {
+			got = &entries[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("missing object-storage entry in %+v", entries)
+	}
+	want := "agents/worker-runtime-name/*"
+	found := false
+	for _, p := range got.Scope.Prefixes {
+		if p == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("runtime workerName prefix not found, want %q in %+v", want, got.Scope.Prefixes)
+	}
+}
+
 func TestResolve_AIGatewayNoDefault(t *testing.T) {
 	worker := &v1beta1.Worker{}
 	worker.Name = "gw-bot2"

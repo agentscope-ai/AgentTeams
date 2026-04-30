@@ -91,7 +91,11 @@ func (r *Resolver) resolveWorker(ctx context.Context, name string) (string, []cr
 	if len(crEntries) == 0 {
 		crEntries = DefaultEntriesForWorker()
 	}
-	tmpl := templateCtx{kind: "Worker", name: name, namespace: r.namespace}
+	runtimeName := name
+	if w.Name != "" {
+		runtimeName = w.Spec.EffectiveWorkerName(w.Name)
+	}
+	tmpl := templateCtx{kind: "Worker", name: runtimeName, namespace: r.namespace}
 	resolved, err := r.resolveEntries(crEntries, tmpl)
 	if err != nil {
 		return "", nil, fmt.Errorf("worker %q: %w", name, err)
@@ -126,14 +130,17 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 
 	var crEntries []v1beta1.AccessEntry
 	kind := "TeamWorker"
+	runtimeName := name
 	switch {
 	case team.Spec.Leader.Name == name && team.Spec.Leader.Name != "":
 		crEntries = team.Spec.Leader.AccessEntries
 		kind = "TeamLeader"
+		runtimeName = team.Spec.Leader.EffectiveWorkerName()
 	default:
 		for _, w := range team.Spec.Workers {
 			if w.Name == name {
 				crEntries = w.AccessEntries
+				runtimeName = w.EffectiveWorkerName()
 				break
 			}
 		}
@@ -142,7 +149,7 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 		crEntries = DefaultEntriesForTeamMember()
 	}
 
-	tmpl := templateCtx{kind: kind, name: name, namespace: r.namespace, team: teamName}
+	tmpl := templateCtx{kind: kind, name: runtimeName, namespace: r.namespace, team: teamName}
 	resolved, err := r.resolveEntries(crEntries, tmpl)
 	if err != nil {
 		return "", nil, fmt.Errorf("team member %q (team %q): %w", name, teamName, err)

@@ -471,6 +471,36 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	}
 }
 
+func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
+	team := newAlphaTeam()
+	team.Spec.Leader.WorkerName = "runtime-lead"
+	c := newFakeClient(t, team)
+
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role:       auth.RoleTeamLeader,
+		Username:   "runtime-lead",
+		WorkerName: "runtime-lead",
+		Team:       "alpha",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if session != "hiclaw-worker-runtime-lead" {
+		t.Fatalf("session = %q, want hiclaw-worker-runtime-lead", session)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	}
+	got := entries[0].Scope.Prefixes
+	if !hasPrefix(got, "agents/runtime-lead/*") {
+		t.Fatalf("runtime workerName prefix not found in %+v", got)
+	}
+	if hasPrefix(got, "agents/lead/*") {
+		t.Fatalf("CR leader name leaked into OSS prefixes: %+v", got)
+	}
+}
+
 func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 	team := newAlphaTeam()
 	c := newFakeClient(t, team)
@@ -502,6 +532,36 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 	}
 	if !hasAllPerms(e.Permissions, "read", "write", "list", "delete") {
 		t.Fatalf("expected RW permissions, got %+v", e.Permissions)
+	}
+}
+
+func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
+	team := newAlphaTeam()
+	team.Spec.Workers[0].WorkerName = "runtime-w1"
+	c := newFakeClient(t, team)
+
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role:       auth.RoleWorker,
+		Username:   "runtime-w1",
+		WorkerName: "runtime-w1",
+		Team:       "alpha",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if session != "hiclaw-worker-runtime-w1" {
+		t.Fatalf("session = %q, want hiclaw-worker-runtime-w1", session)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	}
+	got := entries[0].Scope.Prefixes
+	if !hasPrefix(got, "agents/runtime-w1/*") {
+		t.Fatalf("runtime workerName prefix not found in %+v", got)
+	}
+	if hasPrefix(got, "agents/w1/*") {
+		t.Fatalf("CR worker name leaked into OSS prefixes: %+v", got)
 	}
 }
 

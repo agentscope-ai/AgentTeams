@@ -6,6 +6,7 @@ import v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 
 type CreateWorkerRequest struct {
 	Name          string                     `json:"name"`
+	WorkerName    string                     `json:"workerName,omitempty"`
 	Model         string                     `json:"model,omitempty"`
 	Runtime       string                     `json:"runtime,omitempty"`
 	Image         string                     `json:"image,omitempty"`
@@ -32,6 +33,7 @@ type CreateWorkerRequest struct {
 }
 
 type UpdateWorkerRequest struct {
+	WorkerName    string                     `json:"workerName,omitempty"`
 	Model         string                     `json:"model,omitempty"`
 	Runtime       string                     `json:"runtime,omitempty"`
 	Image         string                     `json:"image,omitempty"`
@@ -93,6 +95,7 @@ type CreateTeamRequest struct {
 
 type TeamLeaderRequest struct {
 	Name              string                      `json:"name"`
+	WorkerName        string                      `json:"workerName,omitempty"`
 	Model             string                      `json:"model,omitempty"`
 	Identity          string                      `json:"identity,omitempty"`
 	Soul              string                      `json:"soul,omitempty"`
@@ -112,6 +115,7 @@ type TeamLeaderHeartbeatRequest struct {
 
 type TeamWorkerRequest struct {
 	Name          string                     `json:"name"`
+	WorkerName    string                     `json:"workerName,omitempty"`
 	Model         string                     `json:"model,omitempty"`
 	Runtime       string                     `json:"runtime,omitempty"`
 	Image         string                     `json:"image,omitempty"`

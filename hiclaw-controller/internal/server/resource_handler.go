@@ -104,6 +104,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		},
 		Spec: v1beta1.WorkerSpec{
 			Model:            req.Model,
+			WorkerName:       req.WorkerName,
 			Runtime:          req.Runtime,
 			Image:            req.Image,
 			Identity:         req.Identity,
@@ -263,6 +264,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.Model != "" {
 			worker.Spec.Model = req.Model
 		}
+		if req.WorkerName != "" {
+			worker.Spec.WorkerName = req.WorkerName
+		}
 		if req.Runtime != "" {
 			worker.Spec.Runtime = req.Runtime
 		}
@@ -370,6 +374,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			ChannelPolicy: req.ChannelPolicy,
 			Leader: v1beta1.LeaderSpec{
 				Name:              req.Leader.Name,
+				WorkerName:        req.Leader.WorkerName,
 				Model:             req.Leader.Model,
 				Identity:          req.Leader.Identity,
 				Soul:              req.Leader.Soul,
@@ -387,6 +392,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 	for _, tw := range req.Workers {
 		team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
 			Name:          tw.Name,
+			WorkerName:    tw.WorkerName,
 			Model:         tw.Model,
 			Runtime:       tw.Runtime,
 			Image:         tw.Image,
@@ -477,6 +483,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 			team.Spec.ChannelPolicy = req.ChannelPolicy
 		}
 		if req.Leader != nil {
+			if req.Leader.WorkerName != "" {
+				team.Spec.Leader.WorkerName = req.Leader.WorkerName
+			}
 			if req.Leader.Model != "" {
 				team.Spec.Leader.Model = req.Leader.Model
 			}
@@ -513,6 +522,7 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 			for _, tw := range req.Workers {
 				team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
 					Name:          tw.Name,
+					WorkerName:    tw.WorkerName,
 					Model:         tw.Model,
 					Runtime:       tw.Runtime,
 					Image:         tw.Image,
@@ -948,16 +958,24 @@ func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1b
 	}
 	for i := range list.Items {
 		t := &list.Items[i]
-		if t.Spec.Leader.Name == name {
-			return t, name, true, nil
+		if teamLeaderMatches(t.Spec.Leader, name) {
+			return t, t.Spec.Leader.Name, true, nil
 		}
 		for _, w := range t.Spec.Workers {
-			if w.Name == name {
-				return t, name, true, nil
+			if teamWorkerMatches(w, name) {
+				return t, w.Name, true, nil
 			}
 		}
 	}
 	return nil, "", false, nil
+}
+
+func teamLeaderMatches(leader v1beta1.LeaderSpec, name string) bool {
+	return leader.Name == name || (leader.WorkerName != "" && leader.WorkerName == name)
+}
+
+func teamWorkerMatches(worker v1beta1.TeamWorkerSpec, name string) bool {
+	return worker.Name == name || (worker.WorkerName != "" && worker.WorkerName == name)
 }
 
 // teamMemberToResponse synthesizes a WorkerResponse for a Team member without

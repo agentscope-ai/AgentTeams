@@ -325,8 +325,8 @@ func (a *App) initControllerManager(ctx context.Context) error {
 // initFieldIndexers registers cache field indexers used for efficient reverse
 // lookups by auth enrichment and, in the future, admission/validation.
 //
-//   - teams.spec.leader.name  -> list Team by leader name
-//   - teams.spec.workerNames  -> list Team by any worker name (custom virtual field)
+//   - teams.spec.leader.name  -> list Team by leader name or runtime workerName
+//   - teams.spec.workerNames  -> list Team by any worker name or runtime workerName
 func (a *App) initFieldIndexers(ctx context.Context) error {
 	if a.mgr == nil {
 		return nil
@@ -337,10 +337,11 @@ func (a *App) initFieldIndexers(ctx context.Context) error {
 		if !ok {
 			return nil
 		}
-		if team.Spec.Leader.Name == "" {
+		names := uniqueNonEmpty(team.Spec.Leader.Name, team.Spec.Leader.WorkerName)
+		if len(names) == 0 {
 			return nil
 		}
-		return []string{team.Spec.Leader.Name}
+		return names
 	}); err != nil {
 		return fmt.Errorf("index team leader name: %w", err)
 	}
@@ -349,17 +350,31 @@ func (a *App) initFieldIndexers(ctx context.Context) error {
 		if !ok {
 			return nil
 		}
-		names := make([]string, 0, len(team.Spec.Workers))
+		names := make([]string, 0, len(team.Spec.Workers)*2)
 		for _, w := range team.Spec.Workers {
-			if w.Name != "" {
-				names = append(names, w.Name)
-			}
+			names = append(names, uniqueNonEmpty(w.Name, w.WorkerName)...)
 		}
 		return names
 	}); err != nil {
 		return fmt.Errorf("index team worker names: %w", err)
 	}
 	return nil
+}
+
+func uniqueNonEmpty(values ...string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func (a *App) initAuth(ctx context.Context) error {

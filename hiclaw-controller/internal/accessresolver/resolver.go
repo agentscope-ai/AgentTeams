@@ -132,13 +132,13 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	kind := "TeamWorker"
 	runtimeName := name
 	switch {
-	case team.Spec.Leader.Name == name && team.Spec.Leader.Name != "":
+	case leaderMatches(team.Spec.Leader, name):
 		crEntries = team.Spec.Leader.AccessEntries
 		kind = "TeamLeader"
 		runtimeName = team.Spec.Leader.EffectiveWorkerName()
 	default:
 		for _, w := range team.Spec.Workers {
-			if w.Name == name {
+			if teamWorkerMatches(w, name) {
 				crEntries = w.AccessEntries
 				runtimeName = w.EffectiveWorkerName()
 				break
@@ -158,6 +158,14 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	// session-name shape because their ServiceAccount name on the
 	// pod is still hiclaw-worker-<name> (see auth.ResourcePrefix.SAName).
 	return r.prefix.WorkerSessionName(name), resolved, nil
+}
+
+func leaderMatches(leader v1beta1.LeaderSpec, name string) bool {
+	return leader.Name == name || (leader.WorkerName != "" && leader.WorkerName == name)
+}
+
+func teamWorkerMatches(worker v1beta1.TeamWorkerSpec, name string) bool {
+	return worker.Name == name || (worker.WorkerName != "" && worker.WorkerName == name)
 }
 
 func (r *Resolver) resolveManager(ctx context.Context, name string) (string, []credprovider.AccessEntry, error) {

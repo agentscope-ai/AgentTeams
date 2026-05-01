@@ -270,6 +270,44 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestCreateTeamPersistsRuntimeWorkerNames(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{
+		"name":"alpha-team",
+		"leader":{"name":"lead-cr","workerName":"lead-runtime"},
+		"workers":[{"name":"dev-cr","workerName":"dev-runtime"}]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateTeam(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var stored v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-team", Namespace: "default"}, &stored); err != nil {
+		t.Fatalf("get created team: %v", err)
+	}
+	if got := stored.Spec.Leader.WorkerName; got != "lead-runtime" {
+		t.Fatalf("leader.workerName = %q, want lead-runtime", got)
+	}
+	if got := stored.Spec.Workers[0].WorkerName; got != "dev-runtime" {
+		t.Fatalf("workers[0].workerName = %q, want dev-runtime", got)
+	}
+
+	team, member, ok, err := handler.findTeamMember(context.Background(), "lead-runtime")
+	if err != nil || !ok || team.Name != "alpha-team" || member != "lead-cr" {
+		t.Fatalf("find leader by workerName = team:%v member:%q ok:%v err:%v", team, member, ok, err)
+	}
+	team, member, ok, err = handler.findTeamMember(context.Background(), "dev-runtime")
+	if err != nil || !ok || team.Name != "alpha-team" || member != "dev-cr" {
+		t.Fatalf("find worker by workerName = team:%v member:%q ok:%v err:%v", team, member, ok, err)
+	}
+}
+
 // CreateTeam must accept a payload that omits `workers` entirely (leader-only
 // team). The CRD no longer lists `workers` in its required-properties set and
 // both TeamSpec.Workers / CreateTeamRequest.Workers carry `omitempty`, so a
@@ -342,6 +380,28 @@ func TestCreateWorker_StampsControllerLabel(t *testing.T) {
 	}
 	if got := worker.Labels[v1beta1.LabelController]; got != "ctrl-a" {
 		t.Fatalf("expected controller label ctrl-a, got %q", got)
+	}
+}
+
+func TestCreateWorkerPersistsRuntimeWorkerName(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"name":"worker-cr","workerName":"worker-runtime"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var stored v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-cr", Namespace: "default"}, &stored); err != nil {
+		t.Fatalf("get created worker: %v", err)
+	}
+	if got := stored.Spec.WorkerName; got != "worker-runtime" {
+		t.Fatalf("worker.spec.workerName = %q, want worker-runtime", got)
 	}
 }
 

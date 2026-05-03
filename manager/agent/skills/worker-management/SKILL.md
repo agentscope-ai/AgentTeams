@@ -5,6 +5,25 @@ description: Use when admin requests hand-creating or resetting a Worker, starti
 
 # Worker Management
 
+## Before You Create: Confirm with Admin
+
+Before running `hiclaw create worker`, ask admin for these four inputs in one turn. Do **not** invent defaults or skip options — present runtime as a three-way choice.
+
+1. **Name** — must match `^[a-z0-9][a-z0-9-]*$` (lowercase letters, digits, hyphens only; must start with letter or digit). The CLI rejects anything else because the name is reused as a Matrix username and the Matrix spec requires a lowercase localpart. Tuwunel may also reject very short names at registration.
+2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${HICLAW_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer all three options so admin can switch:
+
+   | Runtime    | Language | RAM    | When to pick                                              |
+   |------------|----------|--------|-----------------------------------------------------------|
+   | `openclaw` | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `HICLAW_DEFAULT_WORKER_RUNTIME` is unset. |
+   | `copaw`    | Python   | ~150MB | Python tasks, **or** admin needs `--remote` (host mode).  |
+   | `hermes`   | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
+
+   `--remote` mode is **copaw-only** — use it when admin says "local mode" / "run on my machine" (it means "remote from Manager" = LOCAL on admin's machine). If admin doesn't pass `--runtime` to `hiclaw create worker`, the controller falls back to `HICLAW_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the three options explicitly instead of silently using the fallback.
+3. **SOUL (role)** — short description of expertise/style. Offer to draft a default if admin has no preference.
+4. **Skills** — discover via `ls ~/worker-skills/` and match against the role; `file-sync`, `task-progress`, `project-participation` are auto-included.
+
+Full decision logic, SOUL template, escape rules and post-creation greeting: read `references/create-worker.md`.
+
 ## Quick Create (1 command)
 
 Pass the SOUL content inline via `--soul`. Never write SOUL.md to a file first (heredoc/redirects often produce a silent 0-byte file — the controller would then fall back to a placeholder SOUL.md lacking the real role).
@@ -23,7 +42,7 @@ hiclaw create worker --name <NAME> --no-wait \
 - Never reveal API keys, passwords, or credentials
 ..." \
   --skills <skill1>,<skill2> -o json
-# Add --runtime copaw for Python workers
+# Add --runtime <copaw|hermes> for Python workers (see runtime table above)
 ```
 
 > `--no-wait` returns as soon as the controller accepts the request (~1s). Poll `hiclaw get workers -o json` for `phase=Running` instead of letting the create call block — this lets you create N workers in one turn without each blocking up to 3 minutes.

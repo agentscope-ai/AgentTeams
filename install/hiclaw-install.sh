@@ -51,6 +51,14 @@ set -e
 
 HICLAW_VERSION="${HICLAW_VERSION:-}"
 HICLAW_KNOWN_STABLE_VERSION="v1.1.0"   # fallback if GitHub API is unreachable
+
+# Returns 0 (true) if $1 < $2 using semver order; "latest" is treated as greatest
+_ver_lt() {
+    [ "$1" = "latest" ] && return 1
+    [ "$2" = "latest" ] && return 0
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n%s' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
 HICLAW_NON_INTERACTIVE="${HICLAW_NON_INTERACTIVE:-0}"
 HICLAW_MOUNT_SOCKET="${HICLAW_MOUNT_SOCKET:-1}"
 HICLAW_DOCKER_PROXY="${HICLAW_DOCKER_PROXY:-1}"
@@ -968,6 +976,13 @@ resolve_image_tags() {
     COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-copaw-worker:${HICLAW_VERSION}}"
     HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-hermes-worker:${HICLAW_VERSION}}"
     EMBEDDED_IMAGE="${HICLAW_INSTALL_EMBEDDED_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-embedded:${HICLAW_VERSION}}"
+    # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
+    if [ -z "${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${HICLAW_VERSION}" "v1.0.4"; then
+        COPAW_WORKER_IMAGE=""
+    fi
+    if [ -z "${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+        HERMES_WORKER_IMAGE=""
+    fi
 }
 
 # Resolve the embedded controller image. Embedded mode is the only supported
@@ -1000,14 +1015,26 @@ resolve_embedded_image() {
         EMBEDDED_IMAGE="${_versioned}"
         return 0
     fi
+
+    # Versions before v1.1.0 predate hiclaw-embedded entirely — their manager image
+    # bundled all infrastructure.  Falling back to hiclaw-embedded:latest would
+    # silently swap in the v1.1.0 architecture (embedded kube-apiserver) which
+    # crashes under QEMU on Apple Silicon.  Auto-activate legacy mode instead.
+    if _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+        log "INFO: ${HICLAW_VERSION} predates hiclaw-embedded; switching to legacy all-in-one manager architecture."
+        log "WARNING: Legacy all-in-one mode requires HICLAW_VERSION <= v1.0.9 (older bundled manager image)."
+        log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
+        HICLAW_USE_EMBEDDED=0
+        return 0
+    fi
+
     if ${DOCKER_CMD} pull "${_latest}" >/dev/null 2>&1; then
         log "embedded ${HICLAW_VERSION} not found, using latest"
         EMBEDDED_IMAGE="${_latest}"
         return 0
     fi
 
-    # Escape hatch for older versions (HICLAW_VERSION <= v1.0.9) whose manager image
-    # still bundled the infrastructure — opt-in only, never silent.
+    # Explicit escape hatch — still honoured for edge cases.
     if [ "${HICLAW_FORCE_LEGACY:-0}" = "1" ]; then
         log "WARNING: HICLAW_FORCE_LEGACY=1 — using legacy all-in-one manager architecture."
         log "WARNING: This requires HICLAW_VERSION <= v1.0.9 (older bundled manager image)."
@@ -2079,7 +2106,9 @@ step_runtime() {
     echo ""
     echo "  1) $(msg worker_runtime.openclaw)"
     echo "  2) $(msg worker_runtime.copaw)"
-    echo "  3) $(msg worker_runtime.hermes)"
+    if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+        echo "  3) $(msg worker_runtime.hermes)"
+    fi
     echo ""
     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
         HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
@@ -2091,7 +2120,11 @@ step_runtime() {
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
                 2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
-                3) HICLAW_DEFAULT_WORKER_RUNTIME="hermes" ;;
+                3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+                       HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+                   else
+                       HICLAW_DEFAULT_WORKER_RUNTIME="openclaw"
+                   fi ;;
                 *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
             esac
         fi
@@ -2102,7 +2135,11 @@ step_runtime() {
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
             2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
-            3) HICLAW_DEFAULT_WORKER_RUNTIME="hermes" ;;
+            3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+                   HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+               else
+                   HICLAW_DEFAULT_WORKER_RUNTIME="openclaw"
+               fi ;;
             *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
         esac
     fi
@@ -2602,6 +2639,7 @@ EOF
     # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
     _pull_image() {
         local _img="$1" _exists_key="$2" _pull_key="$3"
+        [ -z "${_img}" ] && return 0
         if echo "${_img}" | grep -q "^${LOCAL_IMAGE_PREFIX}"; then
             if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
                 log "$(msg "${_exists_key}" "${_img}")"

@@ -2609,7 +2609,19 @@ EOF
             fi
         fi
         log "$(msg "${_pull_key}" "${_img}")"
-        ${DOCKER_CMD} pull "${_img}"
+        local _attempt=1
+        while [ $_attempt -le 3 ]; do
+            if ${DOCKER_CMD} pull "${_img}"; then
+                return 0
+            fi
+            if [ $_attempt -lt 3 ]; then
+                log "Pull failed (attempt ${_attempt}/3), retrying in 5s..."
+                sleep 5
+            fi
+            _attempt=$((_attempt + 1))
+        done
+        error "Failed to pull ${_img} after 3 attempts"
+        return 1
     }
 
     # Embedded controller image (resolve versioned tag, fallback to latest)

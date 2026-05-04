@@ -112,15 +112,17 @@ detect_timezone() {
         tz=$(timedatectl show --value -p Timezone 2>/dev/null)
     fi
 
-    # If still not detected, warn and prompt user
+    # If still not detected, warn and prompt user. Diagnostics go to stderr —
+    # this function returns its value via stdout to `$(detect_timezone)`, so
+    # any echo here would leak into HICLAW_TIMEZONE and downstream image tags.
     if [ -z "${tz}" ]; then
-        echo ""
-        echo -e "\033[33m[HiClaw WARNING]\033[0m Could not detect timezone automatically."
-        echo -e "\033[33m[HiClaw]\033[0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York)."
-        echo ""
+        echo "" >&2
+        echo -e "\033[33m[HiClaw WARNING]\033[0m Could not detect timezone automatically." >&2
+        echo -e "\033[33m[HiClaw]\033[0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York)." >&2
+        echo "" >&2
         if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
             tz="Asia/Shanghai"
-            log "Using default timezone: ${tz}"
+            log "Using default timezone: ${tz}" >&2
         else
             read -e -p "Timezone [Asia/Shanghai]: " tz
             tz="${tz:-Asia/Shanghai}"

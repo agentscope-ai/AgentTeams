@@ -53,6 +53,9 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 	err := e.client.Get(ctx, key, &worker)
 	switch {
 	case err == nil:
+		runtimeName := worker.Spec.EffectiveWorkerName(worker.Name)
+		identity.Username = runtimeName
+		identity.WorkerName = runtimeName
 		if role := worker.Annotations["hiclaw.io/role"]; role == "team_leader" {
 			identity.Role = RoleTeamLeader
 		}
@@ -67,18 +70,29 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 	// 2. Worker CR missing — fall back to Team CR reverse lookup. A worker
 	//    name can only belong to one team at a time; the same is true for
 	//    leaders (a leader is not referenced as a worker in its own Team).
-	if leaderTeam, ok, lerr := e.lookupTeamByField(ctx, teamLeaderNameField, identity.Username); lerr != nil {
+	if team, ok, lerr := e.lookupTeamByField(ctx, teamLeaderNameField, identity.Username); lerr != nil {
 		return fmt.Errorf("enrich identity: lookup team leader %q: %w", identity.Username, lerr)
 	} else if ok {
 		identity.Role = RoleTeamLeader
-		identity.Team = leaderTeam
+		identity.Team = team.Name
+		runtimeName := team.Spec.Leader.EffectiveWorkerName()
+		identity.Username = runtimeName
+		identity.WorkerName = runtimeName
 		return nil
 	}
 
-	if workerTeam, ok, werr := e.lookupTeamByField(ctx, teamWorkerNameField, identity.Username); werr != nil {
+	if team, ok, werr := e.lookupTeamByField(ctx, teamWorkerNameField, identity.Username); werr != nil {
 		return fmt.Errorf("enrich identity: lookup team worker %q: %w", identity.Username, werr)
 	} else if ok {
-		identity.Team = workerTeam
+		identity.Team = team.Name
+		for _, w := range team.Spec.Workers {
+			if w.Name == identity.Username {
+				runtimeName := w.EffectiveWorkerName()
+				identity.Username = runtimeName
+				identity.WorkerName = runtimeName
+				break
+			}
+		}
 		return nil
 	}
 
@@ -88,16 +102,16 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 	return nil
 }
 
-func (e *CREnricher) lookupTeamByField(ctx context.Context, field, value string) (string, bool, error) {
+func (e *CREnricher) lookupTeamByField(ctx context.Context, field, value string) (*v1beta1.Team, bool, error) {
 	var list v1beta1.TeamList
 	if err := e.client.List(ctx, &list,
 		client.InNamespace(e.namespace),
 		client.MatchingFieldsSelector{Selector: fields.OneTermEqualSelector(field, value)},
 	); err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	if len(list.Items) == 0 {
-		return "", false, nil
+		return nil, false, nil
 	}
-	return list.Items[0].Name, true, nil
+	return &list.Items[0], true, nil
 }

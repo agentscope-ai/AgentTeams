@@ -118,6 +118,83 @@ func TestGetWorkerSynthesizesTeamMember(t *testing.T) {
 	}
 }
 
+func TestGetWorkerSynthesizesTeamMemberByRuntimeWorkerName(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-worker-lead", WorkerName: "lead", Model: "qwen3.5-plus"}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "alpha-worker-dev", WorkerName: "dev", Model: "qwen3.5-plus"},
+	}
+	team.Status.Members = []v1beta1.TeamMemberStatus{
+		{
+			Name:         "alpha-worker-dev",
+			RuntimeName:  "dev",
+			Role:         "worker",
+			RoomID:       "!dev-room:example.com",
+			MatrixUserID: "@dev:example.com",
+			Observed:     true,
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/dev", nil)
+	req.SetPathValue("name", "dev")
+	rec := httptest.NewRecorder()
+	handler.GetWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var resp WorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Team != "alpha-team" || resp.Name != "alpha-worker-dev" || resp.Role != "worker" {
+		t.Fatalf("unexpected synthesized response: %+v", resp)
+	}
+	if resp.RoomID != "!dev-room:example.com" {
+		t.Errorf("RoomID=%q, want %q", resp.RoomID, "!dev-room:example.com")
+	}
+	if resp.MatrixUserID != "@dev:example.com" {
+		t.Errorf("MatrixUserID=%q, want %q", resp.MatrixUserID, "@dev:example.com")
+	}
+}
+
+func TestGetWorkerFindsStandaloneWorkerByRuntimeWorkerName(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	worker := &v1beta1.Worker{}
+	worker.Name = "alpha-worker-testmcp"
+	worker.Namespace = "default"
+	worker.Spec.WorkerName = "testmcp"
+	worker.Status.Phase = "Running"
+	worker.Status.MatrixUserID = "@testmcp:example.com"
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/testmcp", nil)
+	req.SetPathValue("name", "testmcp")
+	rec := httptest.NewRecorder()
+	handler.GetWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var resp WorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Name != "alpha-worker-testmcp" || resp.Phase != "Running" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp.MatrixUserID != "@testmcp:example.com" {
+		t.Fatalf("MatrixUserID=%q, want @testmcp:example.com", resp.MatrixUserID)
+	}
+}
+
 // /api/v1/workers must list standalone workers and synthetic team members.
 // Workers with team annotations (legacy CRs) must NOT be duplicated.
 func TestListWorkersAggregatesTeamMembers(t *testing.T) {

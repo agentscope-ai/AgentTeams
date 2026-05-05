@@ -128,18 +128,21 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	}
 
 	workerNames := make([]string, 0, len(t.Spec.Workers))
+	workerRuntimeNames := make([]string, 0, len(t.Spec.Workers))
 	for _, w := range t.Spec.Workers {
 		workerNames = append(workerNames, w.Name)
+		workerRuntimeNames = append(workerRuntimeNames, w.EffectiveWorkerName())
 	}
 	if err := validateTeamRuntimeNames(t); err != nil {
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
+	leaderRuntimeName := t.Spec.Leader.EffectiveWorkerName()
 
 	// --- Step 1: Team-level infrastructure ---
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
 		TeamName:    t.Name,
-		LeaderName:  t.Spec.Leader.Name,
-		WorkerNames: workerNames,
+		LeaderName:  leaderRuntimeName,
+		WorkerNames: workerRuntimeNames,
 		AdminSpec:   t.Spec.Admin,
 	})
 	if err != nil {
@@ -196,7 +199,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 			Namespace:           t.Namespace,
 			Role:                role,
 			TeamName:            t.Name,
-			TeamLeaderName:      t.Spec.Leader.Name,
+			TeamLeaderName:      leaderRuntimeName,
 			ExistingRoomID:      ms.RoomID,
 			CurrentExposedPorts: ms.ExposedPorts,
 		}
@@ -206,6 +209,28 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		r.removeLegacyMember(ctx, runtimeName)
 	}
 	pruneMembers(&t.Status, desiredNames)
+
+	// --- Step 3.5: Leader coordination context + SOUL.md template ---
+	// Must run before member reconciliation so renderAndPushSoulTemplate
+	// pushes the final SOUL.md to MinIO before the leader container starts
+	// and before DeployWorkerConfig would otherwise race with it.
+	var teamAdminID string
+	if t.Spec.Admin != nil {
+		teamAdminID = t.Spec.Admin.MatrixUserID
+	}
+	if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
+		LeaderName:        leaderRuntimeName,
+		Role:              RoleTeamLeader.String(),
+		TeamName:          t.Name,
+		TeamRoomID:        rooms.TeamRoomID,
+		LeaderDMRoomID:    rooms.LeaderDMRoomID,
+		HeartbeatEvery:    leaderHeartbeatEvery(t),
+		WorkerIdleTimeout: t.Spec.Leader.WorkerIdleTimeout,
+		TeamWorkers:       workerRuntimeNames,
+		TeamAdminID:       teamAdminID,
+	}); err != nil {
+		logger.Error(err, "leader coordination context injection failed (non-fatal)")
+	}
 
 	// --- Step 4: Reconcile each desired member (leader first) ---
 	//
@@ -248,27 +273,9 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		r.reconcileLegacyMember(ctx, t, m, ms)
 	}
 
-	// --- Step 5: Leader-specific hooks (coordination, groupAllowFrom, registry) ---
-	var teamAdminID string
-	if t.Spec.Admin != nil {
-		teamAdminID = t.Spec.Admin.MatrixUserID
-	}
-	if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
-		LeaderName:        t.Spec.Leader.Name,
-		Role:              RoleTeamLeader.String(),
-		TeamName:          t.Name,
-		TeamRoomID:        rooms.TeamRoomID,
-		LeaderDMRoomID:    rooms.LeaderDMRoomID,
-		HeartbeatEvery:    leaderHeartbeatEvery(t),
-		WorkerIdleTimeout: t.Spec.Leader.WorkerIdleTimeout,
-		TeamWorkers:       workerNames,
-		TeamAdminID:       teamAdminID,
-	}); err != nil {
-		logger.Error(err, "leader coordination context injection failed (non-fatal)")
-	}
-
+	// --- Step 5: Registry updates ---
 	if r.Legacy != nil && r.Legacy.Enabled() {
-		leaderMatrixID := r.Legacy.MatrixUserID(t.Spec.Leader.Name)
+		leaderMatrixID := r.Legacy.MatrixUserID(leaderRuntimeName)
 		if err := r.Legacy.UpdateManagerGroupAllowFrom(leaderMatrixID, true); err != nil {
 			logger.Error(err, "failed to update Manager groupAllowFrom for team leader (non-fatal)")
 		}
@@ -472,7 +479,7 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 			Namespace:           t.Namespace,
 			Role:                role,
 			TeamName:            t.Name,
-			TeamLeaderName:      t.Spec.Leader.Name,
+			TeamLeaderName:      t.Spec.Leader.EffectiveWorkerName(),
 			ExistingRoomID:      existingRoomID,
 			CurrentExposedPorts: exposed,
 		}
@@ -504,7 +511,7 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 
 	if r.Legacy != nil && r.Legacy.Enabled() {
 		if t.Spec.Leader.Name != "" {
-			leaderMatrixID := r.Legacy.MatrixUserID(t.Spec.Leader.Name)
+			leaderMatrixID := r.Legacy.MatrixUserID(t.Spec.Leader.EffectiveWorkerName())
 			if err := r.Legacy.UpdateManagerGroupAllowFrom(leaderMatrixID, false); err != nil {
 				logger.Error(err, "failed to revoke Manager groupAllowFrom (non-fatal)")
 			}
@@ -751,7 +758,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			SpecChanged:       memberSpecChanged(t, RoleTeamWorker, w.Name),
 			IsUpdate:          workerObserved,
 			TeamName:          t.Name,
-			TeamLeaderName:    t.Spec.Leader.Name,
+			TeamLeaderName:    t.Spec.Leader.EffectiveWorkerName(),
 			TeamAdminMatrixID: teamAdminMatrixID(t),
 			PodLabels:         memberLabels(RoleTeamWorker, w.Labels),
 			Owner:             t,
@@ -865,12 +872,12 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, t.Spec.Leader.ChannelPolicy)
 	workerNames := make([]string, 0, len(t.Spec.Workers))
 	for _, w := range t.Spec.Workers {
-		workerNames = append(workerNames, w.Name)
+		workerNames = append(workerNames, w.EffectiveWorkerName())
 	}
 	policy = appendGroupAllowExtra(policy, workerNames...)
-	if t.Spec.Admin != nil && t.Spec.Admin.Name != "" {
-		policy = appendGroupAllowExtra(policy, t.Spec.Admin.Name)
-		policy = appendDmAllowExtra(policy, t.Spec.Admin.Name)
+	if adminID := teamAdminMatrixID(t); adminID != "" {
+		policy = appendGroupAllowExtra(policy, adminID)
+		policy = appendDmAllowExtra(policy, adminID)
 	}
 	return v1beta1.WorkerSpec{
 		Model:         t.Spec.Leader.Model,
@@ -901,15 +908,15 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 // resolution chain used by standalone Worker CRs.
 func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1beta1.WorkerSpec {
 	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, w.ChannelPolicy)
-	policy = appendGroupAllowExtra(policy, t.Spec.Leader.Name)
-	if t.Spec.Admin != nil && t.Spec.Admin.Name != "" {
-		policy = appendGroupAllowExtra(policy, t.Spec.Admin.Name)
+	policy = appendGroupAllowExtra(policy, t.Spec.Leader.EffectiveWorkerName())
+	if adminID := teamAdminMatrixID(t); adminID != "" {
+		policy = appendGroupAllowExtra(policy, adminID)
 	}
 	peerMentions := t.Spec.PeerMentions == nil || *t.Spec.PeerMentions
 	if peerMentions {
 		for _, peer := range t.Spec.Workers {
 			if peer.Name != w.Name {
-				policy = appendGroupAllowExtra(policy, peer.Name)
+				policy = appendGroupAllowExtra(policy, peer.EffectiveWorkerName())
 			}
 		}
 	}

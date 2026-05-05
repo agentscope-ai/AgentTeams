@@ -163,6 +163,14 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if ok, err := h.findStandaloneWorkerByRuntimeName(r.Context(), name, &worker); err != nil {
+		writeK8sError(w, "get worker", err)
+		return
+	} else if ok {
+		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
+		return
+	}
+
 	// Fall back to synthesizing a response from the Team CR.
 	team, member, ok, terr := h.findTeamMember(r.Context(), name)
 	if terr != nil {
@@ -976,6 +984,21 @@ func teamLeaderMatches(leader v1beta1.LeaderSpec, name string) bool {
 
 func teamWorkerMatches(worker v1beta1.TeamWorkerSpec, name string) bool {
 	return worker.Name == name || (worker.WorkerName != "" && worker.WorkerName == name)
+}
+
+func (h *ResourceHandler) findStandaloneWorkerByRuntimeName(ctx context.Context, name string, out *v1beta1.Worker) (bool, error) {
+	var list v1beta1.WorkerList
+	if err := h.client.List(ctx, &list, client.InNamespace(h.namespace)); err != nil {
+		return false, err
+	}
+	for i := range list.Items {
+		w := &list.Items[i]
+		if w.Spec.WorkerName == name {
+			*out = *w
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // teamMemberToResponse synthesizes a WorkerResponse for a Team member without

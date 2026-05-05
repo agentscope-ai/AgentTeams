@@ -112,6 +112,62 @@ func TestTeamWorkerSpecToWorkerSpec_RuntimePassthrough(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredMembers_RuntimeWorkerNamesDriveMatrixPolicy(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.Leader = v1beta1.LeaderSpec{
+		Name:       "alpha-worker-lead",
+		WorkerName: "lead",
+		Model:      "gpt-4o",
+	}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "alpha-worker-dev", WorkerName: "dev", Model: "gpt-4o"},
+		{Name: "alpha-worker-qa", WorkerName: "qa", Model: "gpt-4o"},
+	}
+	team.Spec.Admin = &v1beta1.TeamAdminSpec{
+		Name:         "alpha-human-yhf",
+		MatrixUserID: "@yhf:example.com",
+	}
+
+	members := buildDesiredMembers(team, "")
+	byName := map[string]MemberContext{}
+	for _, m := range members {
+		byName[m.Name] = m
+	}
+
+	if got := byName["alpha-worker-lead"].RuntimeName; got != "lead" {
+		t.Fatalf("leader RuntimeName=%q, want lead", got)
+	}
+	if got := byName["alpha-worker-dev"].RuntimeName; got != "dev" {
+		t.Fatalf("worker RuntimeName=%q, want dev", got)
+	}
+	if got := byName["alpha-worker-dev"].TeamLeaderName; got != "lead" {
+		t.Fatalf("worker TeamLeaderName=%q, want lead", got)
+	}
+
+	leaderAllow := byName["alpha-worker-lead"].Spec.ChannelPolicy.GroupAllowExtra
+	if !stringSliceContains(leaderAllow, "dev") || !stringSliceContains(leaderAllow, "qa") {
+		t.Fatalf("leader groupAllowExtra=%v, want runtime worker names dev/qa", leaderAllow)
+	}
+	if stringSliceContains(leaderAllow, "alpha-worker-dev") {
+		t.Fatalf("leader groupAllowExtra=%v must not use CR worker name", leaderAllow)
+	}
+	if !stringSliceContains(leaderAllow, "@yhf:example.com") || stringSliceContains(leaderAllow, "alpha-human-yhf") {
+		t.Fatalf("leader groupAllowExtra=%v must use admin MatrixUserID, not admin CR name", leaderAllow)
+	}
+
+	devAllow := byName["alpha-worker-dev"].Spec.ChannelPolicy.GroupAllowExtra
+	if !stringSliceContains(devAllow, "lead") || !stringSliceContains(devAllow, "qa") {
+		t.Fatalf("dev groupAllowExtra=%v, want runtime leader/peer names lead/qa", devAllow)
+	}
+	if stringSliceContains(devAllow, "alpha-worker-lead") || stringSliceContains(devAllow, "alpha-worker-qa") {
+		t.Fatalf("dev groupAllowExtra=%v must not use CR member names", devAllow)
+	}
+	if !stringSliceContains(devAllow, "@yhf:example.com") || stringSliceContains(devAllow, "alpha-human-yhf") {
+		t.Fatalf("dev groupAllowExtra=%v must use admin MatrixUserID, not admin CR name", devAllow)
+	}
+}
+
 // TestBuildDesiredMembers_SpecChangedDetection locks in the per-member
 // spec-change detection that prevents unnecessary container recreation. It
 // covers three cases on the same reconcile:
@@ -593,4 +649,13 @@ func TestBuildDesiredMembers_SystemLabelsOverrideUserLabels(t *testing.T) {
 	if got := byName["w1"].PodLabels["hiclaw.io/role"]; got != RoleTeamWorker.String() {
 		t.Errorf("w1 role got %q, want %q", got, RoleTeamWorker.String())
 	}
+}
+
+func stringSliceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

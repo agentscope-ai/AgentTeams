@@ -1,6 +1,6 @@
 ---
 name: worker-management
-description: Use when admin requests hand-creating or resetting a Worker, starting/stopping a Worker, managing Worker skills, enabling peer mentions, or opening a CoPaw console. Use hiclaw-find-worker only as a helper for Nacos-backed market import or when task assignment needs you to discover a suitable Worker.
+description: Use when admin requests hand-creating or resetting a Worker, starting/stopping a Worker, managing Worker skills, enabling peer mentions, or opening a QwenPaw console. Use hiclaw-find-worker only as a helper for Nacos-backed market import or when task assignment needs you to discover a suitable Worker.
 ---
 
 # Worker Management
@@ -52,7 +52,7 @@ Read the relevant doc **before** executing. Do not load all of them.
 | Start/stop/check idle workers | `references/lifecycle.md` | `scripts/lifecycle-worker.sh` |
 | Push/add/remove skills | `references/skills-management.md` | `scripts/push-worker-skills.sh` |
 | Switch a worker's runtime (openclaw ↔ copaw ↔ hermes) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
-| Open/close CoPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
+| Open/close QwenPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
 | Enable direct @mentions between workers | `references/peer-mentions.md` | `scripts/enable-peer-mentions.sh` |
 | Get remote worker install command | `references/lifecycle.md` | `scripts/get-worker-install-cmd.sh` |
 | Reset a worker | `references/create-worker.md` | `hiclaw delete worker` + `hiclaw create worker` |

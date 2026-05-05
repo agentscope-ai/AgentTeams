@@ -34,16 +34,16 @@ The Manager is configured via environment variables set during installation. The
 | `HICLAW_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
 | `HICLAW_MANAGER_RUNTIME` | No | `openclaw` | Manager engine: **`openclaw`** (default, `hiclaw-manager` image) or **`copaw`** (`hiclaw-manager-copaw` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
 
-### CoPaw Manager (`HICLAW_MANAGER_RUNTIME=copaw`)
+### QwenPaw Manager (formerly CoPaw, `HICLAW_MANAGER_RUNTIME=copaw`)
 
-When you choose the CoPaw Manager at install time, the controller runs the **`hiclaw-manager-copaw`** image instead of the OpenClaw-based **`hiclaw-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python CoPaw vs Node OpenClaw). Multi-channel setup and skills follow the CoPaw workspace conventions under `/root/manager-workspace`.
+When you choose the QwenPaw Manager at install time, the controller runs the **`hiclaw-manager-copaw`** image instead of the OpenClaw-based **`hiclaw-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python QwenPaw vs Node OpenClaw). Multi-channel setup and skills follow the QwenPaw workspace conventions under `/root/manager-workspace`.
 
 ### Customizing the Manager Agent
 
 The Manager Agent's behavior is defined by three files stored in the **`hiclaw-storage`** MinIO bucket (S3 path prefix `agents/manager/`). The installer bind-mounts the host workspace to **`/root/manager-workspace`** in the Manager container, which is kept in sync with that bucket — edit either via MinIO UI/API or by editing files on the host under `HICLAW_WORKSPACE_DIR` (default `~/hiclaw-manager`).
 
 1. **SOUL.md** - Agent identity, security rules, communication model
-2. **HEARTBEAT.md** - Periodic check routine (OpenClaw heartbeat or CoPaw equivalent, depending on runtime)
+2. **HEARTBEAT.md** - Periodic check routine (OpenClaw heartbeat or QwenPaw equivalent, depending on runtime)
 3. **AGENTS.md** - Available skills and task workflow
 
 If your install still exposes MinIO on localhost, use the MinIO Console; otherwise use `mc` from inside **`hiclaw-controller`** or edit the mirrored files under the workspace directory on the host.

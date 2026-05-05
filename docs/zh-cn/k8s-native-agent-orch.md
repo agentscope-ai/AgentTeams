@@ -78,7 +78,7 @@ apiVersion: hiclaw.io/v1beta1
 
 #### Worker — 基本执行单元
 
-**命名说明：** Python Worker 运行时官方名称为 **CoPaw**（镜像 `hiclaw-copaw-worker`）。部分旧文档或讨论中曾使用 **QwenPaw**，指同一运行时。
+**命名说明：** Python Worker 运行时当前名称为 **QwenPaw**（镜像 `hiclaw-copaw-worker`）。早期文档曾使用 **CoPaw**，指同一运行时。
 
 ```yaml
 apiVersion: hiclaw.io/v1beta1
@@ -493,7 +493,7 @@ HiClaw Controller (Reconcile Loop)
 | Human-in-the-Loop | ❌ 仅 CLI 交互 | ✅ Matrix Room 实时旁观与介入 |
 | 声明式配置 | ⚠️ Blueprint YAML（单 Agent） | ✅ K8s CRD 风格（Worker/Team/Human/Manager） |
 | K8s 原生部署 | ❌ | ✅ incluster 模式，Helm 安装 |
-| 多 Agent 运行时 | ✅ OpenClaw, Hermes | ✅ OpenClaw, CoPaw, Hermes, ZeroClaw, NanoClaw |
+| 多 Agent 运行时 | ✅ OpenClaw, Hermes | ✅ OpenClaw, QwenPaw, Hermes, ZeroClaw, NanoClaw |
 
 ### 5.4 互补关系与未来集成
 
@@ -507,7 +507,7 @@ NemoClaw 和 HiClaw 不是竞争关系，而是互补关系——它们解决的
 │  NemoClaw（安全运行时层）                      │
 │  沙箱隔离 / 推理路由 / 网络策略 / 凭证管理      │
 ├─────────────────────────────────────────────┤
-│  OpenClaw / CoPaw / Hermes（Agent 运行时）    │
+│  OpenClaw / QwenPaw / Hermes（Agent 运行时）   │
 │  LLM 交互 / 工具调用 / 技能执行                │
 └─────────────────────────────────────────────┘
 ```
@@ -529,7 +529,7 @@ HiClaw 的 Worker Backend 抽象层设计使其可以对接不同的底层运行
 | IM 客户端 | Element Web | 零配置浏览器客户端 |
 | 文件存储 | MinIO | S3 兼容对象存储 |
 | AI Gateway | Higress (CNCF Sandbox) | 云原生 AI Gateway，LLM 代理 + MCP Server 托管 + Consumer 鉴权 |
-| Agent 运行时 | OpenClaw, CoPaw, Hermes 等 | 多种运行时，从 500MB 到 <10MB 内存 |
+| Agent 运行时 | OpenClaw, QwenPaw, Hermes 等 | 多种运行时，从 500MB 到 <10MB 内存 |
 | 技能生态 | skills.sh | 80,000+ 社区技能 |
 | MCP 集成 | mcporter | 通过 Gateway 安全调用 MCP Server |
 
@@ -577,7 +577,7 @@ helm install hiclaw ./helm/hiclaw
 ## 9. 项目状态与路线图
 
 - **2026-03-04**: 项目开源，Apache 2.0 协议
-- **已发布**: OpenClaw/CoPaw 多运行时支持、MCP Server 集成、Team 架构、Human 接入
+- **已发布**: OpenClaw/QwenPaw 多运行时支持、MCP Server 集成、Team 架构、Human 接入
 - **进行中**: ZeroClaw（Rust 超轻量运行时，3.4MB）、NanoClaw（极简运行时，<4000 LOC）
 - **规划中**: Team 管理中心（可视化 Dashboard）、incluster 模式 Helm Chart、NemoClaw 运行时集成
 

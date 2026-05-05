@@ -1,6 +1,6 @@
-# CoPaw Worker Agent Workspace
+# QwenPaw Worker Agent Workspace
 
-You are a **CoPaw Worker** — a Python-based agent. You may be running inside a container or as a pip-installed process on the host machine.
+You are a **QwenPaw Worker** — a Python-based agent. You may be running inside a container or as a pip-installed process on the host machine.
 
 ## Workspace Layout
 

@@ -58,9 +58,57 @@ func TestBuildDesiredMembers_LeaderAndWorkers(t *testing.T) {
 		if m.PodLabels["hiclaw.io/team"] != "alpha" {
 			t.Errorf("member %s missing hiclaw.io/team label: %v", m.Name, m.PodLabels)
 		}
-		if m.Spec.Runtime != "copaw" {
-			t.Errorf("member %s runtime=%q, want copaw", m.Name, m.Spec.Runtime)
+		switch m.Role {
+		case RoleTeamLeader:
+			// Leader runtime is intentionally hardcoded to copaw in
+			// leaderWorkerSpec() because LeaderSpec has no runtime field
+			// and only the copaw team-leader agent template exists today.
+			if m.Spec.Runtime != "copaw" {
+				t.Errorf("leader %s runtime=%q, want copaw", m.Name, m.Spec.Runtime)
+			}
+		case RoleTeamWorker:
+			// Worker runtime is passed through from TeamWorkerSpec.Runtime.
+			// The fixture leaves it unset, so empty string is expected here;
+			// the downstream backend.ResolveRuntime resolves it against
+			// TeamReconciler.DefaultRuntime (from HICLAW_DEFAULT_WORKER_RUNTIME).
+			if m.Spec.Runtime != "" {
+				t.Errorf("worker %s runtime=%q, want \"\" (pass-through from TeamWorkerSpec)", m.Name, m.Spec.Runtime)
+			}
 		}
+	}
+}
+
+// TestTeamWorkerSpecToWorkerSpec_RuntimePassthrough locks in the fix for the
+// regression introduced by PR #666: team_controller must not override the
+// per-member Runtime field when projecting TeamWorkerSpec into WorkerSpec.
+//
+// Before the fix, Runtime was hardcoded to "copaw" regardless of what the
+// user declared in Team.Spec.Workers[].runtime, silently breaking
+// HICLAW_DEFAULT_WORKER_RUNTIME=hermes|openclaw installs and ignoring
+// explicit per-worker runtime pins.
+func TestTeamWorkerSpecToWorkerSpec_RuntimePassthrough(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead", Model: "gpt-4o"}
+
+	cases := []struct {
+		name    string
+		runtime string
+	}{
+		{"explicit_hermes", "hermes"},
+		{"explicit_openclaw", "openclaw"},
+		{"explicit_copaw", "copaw"},
+		{"empty_defers_to_fallback", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := v1beta1.TeamWorkerSpec{Name: "alpha-dev", Model: "gpt-4o", Runtime: tc.runtime}
+			team.Spec.Workers = []v1beta1.TeamWorkerSpec{w}
+			got := teamWorkerSpecToWorkerSpec(team, w)
+			if got.Runtime != tc.runtime {
+				t.Fatalf("runtime=%q, want %q (must be passed through verbatim; empty string is valid and resolved downstream by backend.ResolveRuntime)", got.Runtime, tc.runtime)
+			}
+		})
 	}
 }
 

@@ -858,6 +858,13 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 //   - leader is always on the worker's groupAllow
 //   - team admin (if any) is on the worker's groupAllow
 //   - if Team.Spec.PeerMentions is true (default), all peers are groupAllow too
+//
+// Runtime is passed through from TeamWorkerSpec. An empty value is intentional
+// and means "no per-member preference" — backend.ResolveRuntime resolves it
+// against TeamReconciler.DefaultRuntime (sourced from HICLAW_DEFAULT_WORKER_RUNTIME
+// via MemberDeps.DefaultRuntime → backend.CreateRequest.RuntimeFallback),
+// falling back to RuntimeOpenClaw if neither is set. This matches the
+// resolution chain used by standalone Worker CRs.
 func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1beta1.WorkerSpec {
 	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, w.ChannelPolicy)
 	policy = appendGroupAllowExtra(policy, t.Spec.Leader.Name)
@@ -874,7 +881,7 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 	}
 	return v1beta1.WorkerSpec{
 		Model:         w.Model,
-		Runtime:       "copaw",
+		Runtime:       w.Runtime,
 		Image:         w.Image,
 		Identity:      w.Identity,
 		Soul:          w.Soul,

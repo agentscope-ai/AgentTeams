@@ -886,6 +886,50 @@ func TestManagerUpdate_MCPServersChange_RewritesMcporterJSON(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// spec.env propagation
+// ---------------------------------------------------------------------------
+
+func TestManagerCreate_EnvPassesToBackend(t *testing.T) {
+	resetManagerMocks()
+
+	mgrName := fixtures.UniqueName("test-mgr-env")
+	mgr := fixtures.NewTestManager(mgrName)
+	mgr.Spec.Env = map[string]string{
+		"USER_MGR":   "hello",
+		"USER_EMPTY": "",
+		// System-wins: HICLAW_MANAGER_NAME is produced by MockManagerEnvBuilder
+		// and must override this user-supplied value.
+		"HICLAW_MANAGER_NAME": "user-should-lose",
+	}
+
+	if err := k8sClient.Create(ctx, mgr); err != nil {
+		t.Fatalf("failed to create Manager CR: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, mgr)
+	})
+
+	waitForManagerRunning(t, mgr)
+
+	req, ok := mockMgrBackend.LastCreateReq()
+	if !ok {
+		t.Fatalf("no CreateRequest recorded for manager %q", mgrName)
+	}
+	if got := req.Env["USER_MGR"]; got != "hello" {
+		t.Errorf("USER_MGR=%q, want %q", got, "hello")
+	}
+	if got, present := req.Env["USER_EMPTY"]; !present || got != "" {
+		t.Errorf("USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
+	}
+	if got := req.Env["HICLAW_MANAGER_NAME"]; got != mgrName {
+		t.Errorf("HICLAW_MANAGER_NAME=%q, want %q (system wins)", got, mgrName)
+	}
+	if got := req.Env["MOCK_ENV"]; got != "true" {
+		t.Errorf("MOCK_ENV=%q, want %q (system env preserved)", got, "true")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Manager Welcome (first-boot onboarding) tests
 // ---------------------------------------------------------------------------
 

@@ -151,6 +151,47 @@ func TestHashMemberSourceSpec_IgnoresPeerChanges(t *testing.T) {
 	}
 }
 
+// TestHashMemberSourceSpec_EnvChangeFlipsHash ensures user-defined env edits
+// on either LeaderSpec or TeamWorkerSpec propagate through
+// hashMemberSourceSpec, so the reconciler recreates the container when env
+// changes.
+func TestHashMemberSourceSpec_EnvChangeFlipsHash(t *testing.T) {
+	base := &v1beta1.Team{}
+	base.Name = "alpha"
+	base.Spec.Leader = v1beta1.LeaderSpec{
+		Name:  "alpha-lead",
+		Model: "gpt-4o",
+		Env:   map[string]string{"FOO": "1"},
+	}
+	base.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "alpha-dev", Model: "gpt-4o", Env: map[string]string{"BAR": "1"}},
+	}
+
+	// Leader env edit.
+	leaderMut := base.DeepCopy()
+	leaderMut.Spec.Leader.Env = map[string]string{"FOO": "2"}
+	if hashMemberSourceSpec(base, RoleTeamLeader, "alpha-lead") ==
+		hashMemberSourceSpec(leaderMut, RoleTeamLeader, "alpha-lead") {
+		t.Errorf("leader hash unchanged after Env edit; expected different")
+	}
+
+	// Worker env edit.
+	workerMut := base.DeepCopy()
+	workerMut.Spec.Workers[0].Env = map[string]string{"BAR": "2"}
+	if hashMemberSourceSpec(base, RoleTeamWorker, "alpha-dev") ==
+		hashMemberSourceSpec(workerMut, RoleTeamWorker, "alpha-dev") {
+		t.Errorf("alpha-dev hash unchanged after Env edit; expected different")
+	}
+
+	// Adding a key to a worker's env also flips the hash.
+	workerAdd := base.DeepCopy()
+	workerAdd.Spec.Workers[0].Env = map[string]string{"BAR": "1", "BAZ": "1"}
+	if hashMemberSourceSpec(base, RoleTeamWorker, "alpha-dev") ==
+		hashMemberSourceSpec(workerAdd, RoleTeamWorker, "alpha-dev") {
+		t.Errorf("alpha-dev hash unchanged after Env key addition; expected different")
+	}
+}
+
 // registryEntry is the minimal subset of service.workersRegistry we need to
 // inspect in tests — duplicated locally because the registry shape (and
 // WorkerRegistryEntry fields we care about) are stable JSON contracts that

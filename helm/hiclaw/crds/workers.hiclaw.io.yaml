@@ -107,6 +107,15 @@ spec:
                   type: string
                   enum: [Running, Sleeping, Stopped]
                   description: "Desired lifecycle state (default: Running). The controller reconciles actual state toward this."
+                env:
+                  type: object
+                  description: |
+                    User-defined environment variables injected into the worker container.
+                    Keys that collide with variables already set by the controller or backend
+                    (HICLAW_*, OPENCLAW_*, HOME, and similar internal keys) are silently
+                    ignored with a warning log — the system value always wins.
+                  additionalProperties:
+                    type: string
                 labels:
                   type: object
                   additionalProperties:

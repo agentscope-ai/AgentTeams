@@ -726,17 +726,13 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
        ' \
        /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
         mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
-    # Anti-tampering bypass: openclaw's config-observe-recovery clobbers the file
-    # back to .bak whenever it sees "missing-meta-vs-last-good", which strips
-    # external edits like channels.matrix.network.dangerouslyAllowPrivateNetwork.
-    # Stamp meta and mirror to .bak so our edits survive.
-    _oc_ver=$(openclaw --version 2>/dev/null | head -1 | awk '{print $NF}')
-    [ -z "${_oc_ver}" ] && _oc_ver="hiclaw-bootstrap"
-    jq --arg ver "${_oc_ver}" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-       '.meta = ((.meta // {}) + {lastTouchedVersion: $ver, lastTouchedAt: $ts})' \
-       /root/manager-workspace/openclaw.json > /tmp/openclaw.meta.json && \
-        mv /tmp/openclaw.meta.json /root/manager-workspace/openclaw.json
-    cp -f /root/manager-workspace/openclaw.json /root/manager-workspace/openclaw.json.bak
+    # Disable openclaw's observe-recovery mechanism which compares config against
+    # a lastKnownGood baseline in config-health.json. When meta is missing from the
+    # current file but present in the baseline, observe-recovery restores from .bak,
+    # undoing user customizations (plugins, channels, etc).
+    # Clearing config-health.json removes the baseline so observe-recovery won't
+    # interfere, while preserving .bak as a backup.
+    rm -f /root/manager-workspace/.openclaw/logs/config-health.json
     # Verify the token was written correctly
     _written_token=$(jq -r '.channels.matrix.accessToken' /root/manager-workspace/openclaw.json 2>/dev/null)
     if [ -z "${_written_token}" ] || [ "${_written_token}" = "null" ]; then

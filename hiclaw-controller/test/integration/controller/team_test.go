@@ -711,6 +711,78 @@ func TestTeamUpdate_AddWorker_DoesNotRecreateExisting(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// spec.env propagation for team members
+// ---------------------------------------------------------------------------
+
+func TestTeam_MemberEnv_PassesToBackend(t *testing.T) {
+	resetMocks()
+
+	name := fixtures.UniqueName("t-env")
+	leader := name + "-lead"
+	worker := name + "-dev"
+	team := fixtures.NewTestTeam(name, leader, worker)
+	team.Spec.Leader.Env = map[string]string{
+		"USER_LEAD":          "L1",
+		"USER_EMPTY":         "",
+		"HICLAW_WORKER_NAME": "user-should-lose",
+	}
+	team.Spec.Workers[0].Env = map[string]string{
+		"USER_WORK":          "W1",
+		"USER_EMPTY":         "",
+		"HICLAW_WORKER_NAME": "user-should-lose",
+	}
+
+	if err := k8sClient.Create(ctx, team); err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+	t.Cleanup(func() { _ = deleteAndWait(t, team) })
+
+	waitForTeamPhase(t, team, "Active")
+
+	leaderReq, ok := mockBackend.FindCreateReq(leader)
+	if !ok {
+		t.Fatalf("no CreateRequest recorded for team leader %q", leader)
+	}
+	if got := leaderReq.Env["USER_LEAD"]; got != "L1" {
+		t.Errorf("leader USER_LEAD=%q, want %q", got, "L1")
+	}
+	if got, present := leaderReq.Env["USER_EMPTY"]; !present || got != "" {
+		t.Errorf("leader USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
+	}
+	if got := leaderReq.Env["HICLAW_WORKER_NAME"]; got != leader {
+		t.Errorf("leader HICLAW_WORKER_NAME=%q, want %q (system wins)", got, leader)
+	}
+	if got := leaderReq.Env["MOCK_ENV"]; got != "true" {
+		t.Errorf("leader MOCK_ENV=%q, want %q (system env preserved)", got, "true")
+	}
+
+	workerReq, ok := mockBackend.FindCreateReq(worker)
+	if !ok {
+		t.Fatalf("no CreateRequest recorded for team worker %q", worker)
+	}
+	if got := workerReq.Env["USER_WORK"]; got != "W1" {
+		t.Errorf("worker USER_WORK=%q, want %q", got, "W1")
+	}
+	if got, present := workerReq.Env["USER_EMPTY"]; !present || got != "" {
+		t.Errorf("worker USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
+	}
+	if got := workerReq.Env["HICLAW_WORKER_NAME"]; got != worker {
+		t.Errorf("worker HICLAW_WORKER_NAME=%q, want %q (system wins)", got, worker)
+	}
+	if got := workerReq.Env["MOCK_ENV"]; got != "true" {
+		t.Errorf("worker MOCK_ENV=%q, want %q (system env preserved)", got, "true")
+	}
+
+	// Leader's env must NOT leak into worker's env.
+	if _, present := workerReq.Env["USER_LEAD"]; present {
+		t.Errorf("worker Env leaked leader-only key USER_LEAD: %v", workerReq.Env)
+	}
+	if _, present := leaderReq.Env["USER_WORK"]; present {
+		t.Errorf("leader Env leaked worker-only key USER_WORK: %v", leaderReq.Env)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // CR Labels → Pod Labels propagation (Team)
 // ---------------------------------------------------------------------------
 

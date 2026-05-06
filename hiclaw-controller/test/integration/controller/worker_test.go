@@ -632,6 +632,50 @@ func TestWorkerDelete_ProvisionFailed_StillCleans(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// spec.env propagation
+// ---------------------------------------------------------------------------
+
+func TestWorkerCreate_EnvPassesToBackend(t *testing.T) {
+	resetMocks()
+
+	workerName := fixtures.UniqueName("test-env")
+	worker := fixtures.NewTestWorker(workerName)
+	worker.Spec.Env = map[string]string{
+		"USER_FOO":   "bar",
+		"USER_EMPTY": "",
+		// System-wins: HICLAW_WORKER_NAME is produced by MockEnvBuilder and
+		// must override this user-supplied value.
+		"HICLAW_WORKER_NAME": "user-should-lose",
+	}
+
+	if err := k8sClient.Create(ctx, worker); err != nil {
+		t.Fatalf("failed to create Worker CR: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, worker)
+	})
+
+	waitForRunning(t, worker)
+
+	req, ok := mockBackend.FindCreateReq(workerName)
+	if !ok {
+		t.Fatalf("no CreateRequest recorded for worker %q", workerName)
+	}
+	if got := req.Env["USER_FOO"]; got != "bar" {
+		t.Errorf("USER_FOO=%q, want %q", got, "bar")
+	}
+	if got, present := req.Env["USER_EMPTY"]; !present || got != "" {
+		t.Errorf("USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
+	}
+	if got := req.Env["HICLAW_WORKER_NAME"]; got != workerName {
+		t.Errorf("HICLAW_WORKER_NAME=%q, want %q (system wins)", got, workerName)
+	}
+	if got := req.Env["MOCK_ENV"]; got != "true" {
+		t.Errorf("MOCK_ENV=%q, want %q (system env preserved)", got, "true")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Worker MCP config propagation
 // ---------------------------------------------------------------------------
 

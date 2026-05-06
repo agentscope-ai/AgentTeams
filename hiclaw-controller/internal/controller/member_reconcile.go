@@ -360,6 +360,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 
 	workerEnv := d.EnvBuilder.Build(m.Name, prov)
+	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
 	saName := d.ResourcePrefix.SAName(authpkg.RoleWorker, m.Name)
 
 	// Identity labels: callers own the full label set now that the backend

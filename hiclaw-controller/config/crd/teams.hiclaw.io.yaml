@@ -80,6 +80,15 @@ spec:
                       type: string
                       enum: [Running, Sleeping, Stopped]
                       description: "Desired lifecycle state for the team leader (default: Running)"
+                    env:
+                      type: object
+                      description: |
+                        User-defined environment variables injected into the leader container.
+                        Keys that collide with variables already set by the controller or backend
+                        (HICLAW_*, OPENCLAW_*, HOME, and similar internal keys) are silently
+                        ignored with a warning log — the system value always wins.
+                      additionalProperties:
+                        type: string
                     labels:
                       type: object
                       additionalProperties:
@@ -257,6 +266,16 @@ spec:
                                 the controller before the request reaches the
                                 provider.
                               x-kubernetes-preserve-unknown-fields: true
+                      env:
+                        type: object
+                        description: |
+                          User-defined environment variables injected into this team worker's
+                          container. Keys that collide with variables already set by the
+                          controller or backend (HICLAW_*, OPENCLAW_*, HOME, and similar
+                          internal keys) are silently ignored with a warning log — the system
+                          value always wins.
+                        additionalProperties:
+                          type: string
                       labels:
                         type: object
                         additionalProperties:

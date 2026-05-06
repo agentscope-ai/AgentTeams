@@ -29,10 +29,15 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 # ============ Stage 3: Download kube-apiserver (native arch to avoid QEMU TLS bugs) ============
 FROM --platform=$BUILDPLATFORM ${HIGRESS_REGISTRY}/higress/alpine:3.20 AS kube-bin
 ARG KUBE_VERSION=v1.31.3
-ARG TARGETARCH=amd64
+# TARGETARCH is auto-injected by buildx for multi-arch builds. For plain
+# `docker build` (no buildx) it is unset, so fall back to `uname -m` —
+# safe here because the stage is pinned to BUILDPLATFORM and a non-buildx
+# build is always single-arch == host arch.
+ARG TARGETARCH
 RUN apk add --no-cache curl && \
+    ARCH="${TARGETARCH:-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')}" && \
     curl -fSL -o /kube-apiserver \
-      "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${TARGETARCH}/kube-apiserver" && \
+      "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-apiserver" && \
     chmod +x /kube-apiserver
 
 # ============ Final: Minimal image with all artifacts ============

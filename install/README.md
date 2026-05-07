@@ -12,7 +12,7 @@ One-click installation script for HiClaw Manager and Worker Agents.
 ### macOS / Linux
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/HiClaw/main/install/hiclaw-install.sh)
 ```
 
 ### Windows (PowerShell 7+)

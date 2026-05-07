@@ -225,6 +225,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		MatrixToken:       state.ProvResult.MatrixToken,
 		GatewayKey:        state.ProvResult.GatewayKey,
 		MatrixPassword:    state.ProvResult.MatrixPassword,
+		MinIOPassword:     state.ProvResult.MinIOPassword,
 		McpServers:        m.Spec.McpServers,
 		TeamAdminMatrixID: m.TeamAdminMatrixID,
 		Heartbeat:         m.Heartbeat,

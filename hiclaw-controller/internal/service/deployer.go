@@ -29,6 +29,7 @@ type WorkerDeployRequest struct {
 	MatrixToken    string
 	GatewayKey     string
 	MatrixPassword string
+	MinIOPassword  string
 
 	// MCP servers declared in spec.mcpServers. The deployer translates this into
 	// mcporter-servers.json and injects Authorization: Bearer <GatewayKey>.
@@ -240,6 +241,31 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if req.MatrixPassword != "" {
 		if err := d.oss.PutObject(ctx, agentPrefix+"/credentials/matrix/password", []byte(req.MatrixPassword)); err != nil {
 			logger.Error(err, "failed to write Matrix password to storage (non-fatal)")
+		}
+	}
+
+	// --- MinIO password to storage ---
+	if req.MinIOPassword != "" {
+		if err := d.oss.PutObject(ctx, agentPrefix+"/credentials/minio/password", []byte(req.MinIOPassword)); err != nil {
+			logger.Error(err, "failed to write MinIO password to storage (non-fatal)")
+		}
+	}
+
+	// --- Credential bundle to storage ---
+	if req.MinIOPassword != "" || req.MatrixPassword != "" || req.GatewayKey != "" || req.MatrixToken != "" {
+		bundle := map[string]string{
+			"matrixPassword": req.MatrixPassword,
+			"minioPassword":  req.MinIOPassword,
+			"gatewayKey":     req.GatewayKey,
+			"matrixToken":    req.MatrixToken,
+		}
+		bundleJSON, err := json.Marshal(bundle)
+		if err != nil {
+			logger.Error(err, "failed to marshal credential bundle (non-fatal)")
+		} else {
+			if err := d.oss.PutObject(ctx, agentPrefix+"/credentials/bundle.json", bundleJSON); err != nil {
+				logger.Error(err, "failed to write credential bundle to storage (non-fatal)")
+			}
 		}
 	}
 

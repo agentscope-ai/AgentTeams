@@ -17,7 +17,13 @@ type CreateWorkerRequest struct {
 	Package       string                     `json:"package,omitempty"`
 	Expose        []v1beta1.ExposePort       `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
-	State         *string                    `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+
+	// ContainerManaged indicates whether the controller should manage
+	// container lifecycle for this worker. When false, container
+	// reconciliation is skipped entirely (for remote/pip workers).
+	// Default is true (controller manages container).
+	ContainerManaged *bool   `json:"containerManaged,omitempty"`
+	State            *string `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 
 	// Team context (set by Team handler or CLI)
 	Team       string `json:"team,omitempty"`
@@ -37,23 +43,30 @@ type UpdateWorkerRequest struct {
 	Package       string                     `json:"package,omitempty"`
 	Expose        []v1beta1.ExposePort       `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
-	State         *string                    `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+
+	// ContainerManaged indicates whether the controller should manage
+	// container lifecycle for this worker. When false, container
+	// reconciliation is skipped entirely (for remote/pip workers).
+	// Default is true (controller manages container).
+	ContainerManaged *bool   `json:"containerManaged,omitempty"`
+	State            *string `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 }
 
 type WorkerResponse struct {
-	Name           string            `json:"name"`
-	Phase          string            `json:"phase"`
-	State          string            `json:"state,omitempty"` // desired lifecycle state
-	Model          string            `json:"model,omitempty"`
-	Runtime        string            `json:"runtime,omitempty"`
-	Image          string            `json:"image,omitempty"`
-	ContainerState string            `json:"containerState,omitempty"`
-	MatrixUserID   string            `json:"matrixUserID,omitempty"`
-	RoomID         string            `json:"roomID,omitempty"`
-	Message        string            `json:"message,omitempty"`
-	ExposedPorts   []ExposedPortInfo `json:"exposedPorts,omitempty"`
-	Team           string            `json:"team,omitempty"`
-	Role           string            `json:"role,omitempty"`
+	Name             string            `json:"name"`
+	Phase            string            `json:"phase"`
+	ContainerManaged bool              `json:"containerManaged,omitempty"`
+	State            string            `json:"state,omitempty"` // desired lifecycle state
+	Model            string            `json:"model,omitempty"`
+	Runtime          string            `json:"runtime,omitempty"`
+	Image            string            `json:"image,omitempty"`
+	ContainerState   string            `json:"containerState,omitempty"`
+	MatrixUserID     string            `json:"matrixUserID,omitempty"`
+	RoomID           string            `json:"roomID,omitempty"`
+	Message          string            `json:"message,omitempty"`
+	ExposedPorts     []ExposedPortInfo `json:"exposedPorts,omitempty"`
+	Team             string            `json:"team,omitempty"`
+	Role             string            `json:"role,omitempty"`
 }
 
 type ExposedPortInfo struct {

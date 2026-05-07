@@ -152,6 +152,10 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// (not the local file), so a subsequent reconcile's mirror would push the
 	// stale local copy back over OSS, transiently exposing wrapped-empty or
 	// pre-merge content (the root cause of test-17 flakes).
+	// Ensure the local agent directory exists before mirroring
+	if err := os.MkdirAll(localAgentDir, 0755); err != nil {
+		return fmt.Errorf("create agent dir: %w", err)
+	}
 	logger.Info("syncing agent files to storage", "name", req.Name)
 	mirrorExcludes := []string{"SOUL.md", "AGENTS.md", "HEARTBEAT.md"}
 	if err := d.oss.Mirror(ctx, localAgentDir+"/", agentPrefix+"/", oss.MirrorOptions{Overwrite: true, Exclude: mirrorExcludes}); err != nil {

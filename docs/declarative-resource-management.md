@@ -84,7 +84,7 @@ spec:
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
 | `spec.runtime` | string | No | `openclaw` | Agent runtime: `openclaw`, `copaw`, or `hermes` |
 | `spec.image` | string | No | — | Custom Docker image; if empty, the controller uses `HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE` (defaults `hiclaw/worker-agent:latest` / `hiclaw/copaw-worker:latest` / `hiclaw-hermes-worker:latest`) |
-| `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; CoPaw: merged into SOUL.md per controller) |
+| `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
 | `spec.skills` | []string | No | — | Built-in skills, distributed by Manager |

@@ -81,6 +81,12 @@ type WorkerSpec struct {
 	Expose        []ExposePort       `json:"expose,omitempty"`  // ports to expose via Higress gateway
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"`
 
+	// ContainerManaged indicates whether the controller should manage
+	// container lifecycle for this worker. When false, container
+	// reconciliation is skipped entirely (for remote/pip workers).
+	// Default is true (controller manages container).
+	ContainerManaged *bool `json:"containerManaged,omitempty"`
+
 	// State is the desired lifecycle state of the worker.
 	// Valid values: "Running" (default), "Sleeping", "Stopped".
 	// The controller reconciles actual backend state toward this desired state.
@@ -92,6 +98,13 @@ type WorkerSpec struct {
 	// scoped to agents/<name>/* and shared/*).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
+	// Env holds user-defined environment variables injected into the worker
+	// container. Keys that collide with variables already set by the
+	// controller or backend (HICLAW_*, OPENCLAW_*, HOME, and similar
+	// internal keys) are silently ignored with a warning log — the system
+	// value always wins.
+	Env map[string]string `json:"env,omitempty"`
+
 	// Labels are user-defined Pod labels stamped onto the worker Pod.
 	// Merged under the four-layer priority order (see controller docs):
 	// pod-template < CR metadata.labels < CR spec.labels < controller
@@ -101,6 +114,14 @@ type WorkerSpec struct {
 	// embed WorkerSpec-shaped hashes keep a stable spec hash when the
 	// field is absent.
 	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// DesiredContainerMan returns the effective desired containerManaged, defaulting to true.
+func (s WorkerSpec) DesiredContainerMan() bool {
+	if s.ContainerManaged != nil {
+		return *s.ContainerManaged
+	}
+	return true
 }
 
 // DesiredState returns the effective desired state, defaulting to "Running".
@@ -197,6 +218,10 @@ type LeaderSpec struct {
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
+	// Env holds user-defined environment variables injected into the
+	// leader container. See WorkerSpec.Env for the collision policy.
+	Env map[string]string `json:"env,omitempty"`
+
 	// Labels are user-defined Pod labels stamped onto the leader Pod.
 	// Merged on top of Team.metadata.labels and below controller system
 	// labels (see WorkerSpec.Labels godoc). omitempty preserves
@@ -230,6 +255,10 @@ type TeamWorkerSpec struct {
 	// When empty the controller applies team-member defaults (agents/<name>/*
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
+
+	// Env holds user-defined environment variables injected into this
+	// team worker's container. See WorkerSpec.Env for the collision policy.
+	Env map[string]string `json:"env,omitempty"`
 
 	// Labels are user-defined Pod labels stamped onto this team worker's
 	// Pod. Merged on top of Team.metadata.labels and below controller
@@ -398,6 +427,10 @@ type ManagerSpec struct {
 	// When empty the controller applies a sensible default (object-storage
 	// scoped to agents/<name>/*, shared/*, and manager/*).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
+
+	// Env holds user-defined environment variables injected into the
+	// manager container. See WorkerSpec.Env for the collision policy.
+	Env map[string]string `json:"env,omitempty"`
 
 	// Labels are user-defined Pod labels stamped onto the manager Pod.
 	// Merged under the four-layer priority order (see WorkerSpec.Labels

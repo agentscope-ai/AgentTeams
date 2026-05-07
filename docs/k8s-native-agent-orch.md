@@ -76,7 +76,7 @@ apiVersion: hiclaw.io/v1beta1
 
 #### Worker — execution unit
 
-**Naming:** The Python Worker runtime is **CoPaw** (image `hiclaw-copaw-worker`). Older materials sometimes used **QwenPaw** for the same runtime.
+**Naming:** The Python Worker runtime is **QwenPaw** (image `hiclaw-copaw-worker`). Older materials sometimes used **CoPaw** for the same runtime.
 
 ```yaml
 apiVersion: hiclaw.io/v1beta1
@@ -441,7 +441,7 @@ Human tiers in the same rooms
 | Teams / Humans | None | Team + Human CRDs |
 | Declarative | Single-Agent blueprint | Worker/Team/Human/Manager |
 | K8s-native deploy | No | Incluster + Helm |
-| Runtimes | OpenClaw, Hermes, … | OpenClaw, CoPaw, Hermes, ZeroClaw*, NanoClaw* |
+| Runtimes | OpenClaw, Hermes, … | OpenClaw, QwenPaw, Hermes, ZeroClaw*, NanoClaw* |
 
 \* Roadmap / lightweight options (see project README).
 
@@ -455,7 +455,7 @@ Human tiers in the same rooms
 │ NemoClaw — sandbox runtime layer    │
 │ isolation / routing / policy        │
 ├────────────────────────────────────┤
-│ OpenClaw / CoPaw / … — Agent engines│
+│ OpenClaw / QwenPaw / … — Agent engines│
 └────────────────────────────────────┘
 ```
 
@@ -471,7 +471,7 @@ The Worker backend could one day plug NemoClaw under each Worker—HiClaw orches
 | IM UI | Element Web | Browser client |
 | Files | MinIO | S3 API |
 | AI Gateway | Higress (CNCF Sandbox) | LLM + MCP + consumer auth |
-| Runtimes | OpenClaw, CoPaw, … | From large to lightweight images |
+| Runtimes | OpenClaw, QwenPaw, … | From large to lightweight images |
 | Skills | skills.sh ecosystem | Large community catalog |
 | MCP CLI | mcporter | Calls through Gateway |
 
@@ -512,7 +512,7 @@ You can also install from a published Helm chart once the repo is added. The cha
 ## 9. Status and roadmap
 
 - **2026-03-04**: Open sourced, Apache 2.0.
-- **Shipped**: OpenClaw/CoPaw, MCP integration, Team + Human model.
+- **Shipped**: OpenClaw/QwenPaw, MCP integration, Team + Human model.
 - **In progress**: ZeroClaw (Rust ultra-light), NanoClaw (minimal LOC runtime)—see README for current state.
 - **Planning**: Team admin dashboard, deeper incluster/Helm story, optional NemoClaw-style sandbox under Workers.
 

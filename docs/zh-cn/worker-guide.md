@@ -24,7 +24,7 @@ Worker 由 **CR** 描述。除在 Matrix 里让 Manager 创建外，你还可以
 | 运行时 | 主要工作目录 | 说明 |
 |--------|----------------|------|
 | **openclaw** | `/root/hiclaw-fs/agents/<worker-name>/`（`HOME` 指向此处） | `openclaw.json`、`SOUL.md`、`AGENTS.md`、skills、`.openclaw/` 等。共享数据：`/root/hiclaw-fs/shared/`。 |
-| **copaw** | `/root/.hiclaw-worker/<worker-name>/`（CoPaw 配置在 `.copaw/`） | 兼容性符号链接 **`/root/hiclaw-fs`** 指向该 Worker 树，便于沿用 OpenClaw 风格路径的脚本。 |
+| **copaw** | `/root/.hiclaw-worker/<worker-name>/`（QwenPaw 配置在 `.copaw/`） | 兼容性符号链接 **`/root/hiclaw-fs`** 指向该 Worker 树，便于沿用 OpenClaw 风格路径的脚本。 |
 | **hermes** | `/root/hiclaw-fs/agents/<worker-name>/`（`HOME` 即工作区，与 OpenClaw 相同的镜像根） | Hermes 状态在目录内 **`.hermes/`**（如 `.hermes/config.yaml`、`state.db`）。 |
 
 ## 安装

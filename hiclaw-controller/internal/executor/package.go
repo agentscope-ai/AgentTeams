@@ -79,11 +79,12 @@ func (p *PackageResolver) Resolve(ctx context.Context, uri string) (string, erro
 }
 
 // ResolveAndExtract downloads/locates a package, extracts it, and returns the
-// extracted directory path. The directory follows the standard package layout:
+// extracted directory path. Typical layout (SOUL.md is optional; DeployWorkerConfig
+// supplies a default SOUL when missing):
 //
 //	{extractDir}/{name}/
 //	├── config/
-//	│   ├── SOUL.md
+//	│   ├── SOUL.md (optional)
 //	│   └── AGENTS.md (optional)
 //	├── skills/ (optional)
 //	└── Dockerfile (optional)
@@ -99,9 +100,6 @@ func (p *PackageResolver) ResolveAndExtract(ctx context.Context, uri, name strin
 
 	// If Resolve already returned a directory (e.g. nacos://), use it directly.
 	if info, err := os.Stat(resolved); err == nil && info.IsDir() {
-		if err := validatePackageDir(resolved); err != nil {
-			return "", err
-		}
 		return resolved, nil
 	}
 
@@ -117,15 +115,12 @@ func (p *PackageResolver) ResolveAndExtract(ctx context.Context, uri, name strin
 		return "", fmt.Errorf("extract ZIP %s: %s: %w", resolved, string(out), err)
 	}
 
-	if err := validatePackageDir(destDir); err != nil {
-		return "", err
-	}
-
 	return destDir, nil
 }
 
 // DeployToMinIO copies extracted package contents to the worker's MinIO agent space.
-// This ensures SOUL.md, custom skills, etc. are in place before create-worker.sh runs.
+// Config files and skills from the package are applied when present; SOUL may come
+// from the package, inline spec, or DeployWorkerConfig defaults.
 //
 // To avoid a race with the background MinIO→local sync (which could overwrite local
 // files between the local write and the mc mirror push), we push to MinIO FIRST from
@@ -275,16 +270,6 @@ func mcPut(ctx context.Context, minioPath string, data []byte) error {
 		return fmt.Errorf("mc cp to %s: %s: %w", minioPath, string(out), err)
 	}
 	return nil
-}
-
-// validatePackageDir checks that a SOUL.md exists in the package directory.
-func validatePackageDir(dir string) error {
-	for _, rel := range []string{"SOUL.md", "config/SOUL.md"} {
-		if _, err := os.Stat(filepath.Join(dir, rel)); err == nil {
-			return nil
-		}
-	}
-	return fmt.Errorf("invalid package: SOUL.md not found in %s (checked root and config/)", dir)
 }
 
 // wrapWithBuiltinMarkers wraps user AGENTS.md content with hiclaw-builtin markers.

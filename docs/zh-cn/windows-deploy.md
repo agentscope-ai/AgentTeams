@@ -47,7 +47,7 @@
 | 内存 | 4 GB | 8 GB 及以上 |
 | 磁盘 | 10 GB 可用空间 | 20 GB 及以上 |
 
-> **说明**：如果你计划部署多个 Worker Agent 来体验更强大的 Agent Teams 能力，建议使用 4C8GB 以上配置。OpenClaw 单个 Worker 约 500MB 内存量级，CoPaw 约 150MB，Hermes 随负载介于两者之间。
+> **说明**：如果你计划部署多个 Worker Agent 来体验更强大的 Agent Teams 能力，建议使用 4C8GB 以上配置。OpenClaw 单个 Worker 约 500MB 内存量级，QwenPaw 约 150MB，Hermes 随负载介于两者之间。
 
 ### 软件依赖
 
@@ -298,7 +298,7 @@ LLM API Key: ****
 --- 默认 Worker 运行时 ---
 
   1) OpenClaw（Node.js，约 500MB 内存量级）
-  2) CoPaw（Python，约 150MB；旧文档或称「QwenPaw」）
+  2) QwenPaw（Python，约 150MB；内部镜像名：copaw）
   3) Hermes（Python Hermes Worker 运行时）
 
 请选择 [1/2/3]:
@@ -307,7 +307,7 @@ LLM API Key: ****
 | 运行时 | 内存（量级） | 特点 |
 |--------|-------------|------|
 | OpenClaw | ~500MB | 功能丰富，内置 Web 控制台 |
-| CoPaw | ~150MB | 轻量 Python 运行时 |
+| QwenPaw | ~150MB | 轻量 Python 运行时 |
 | Hermes | 视负载 | 工作区内 `.hermes/` 策略与状态 |
 
 请按机器配置与任务类型选择。

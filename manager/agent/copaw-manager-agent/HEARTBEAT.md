@@ -1,6 +1,6 @@
-## Manager Heartbeat Checklist (CoPaw Runtime)
+## Manager Heartbeat Checklist (QwenPaw Runtime)
 
-This checklist is for the CoPaw Manager runtime. Every send into a Matrix **group** room (Worker room, Leader room, project room) or admin notification **must** go through **`copaw channels send`** via the shell tool (see **CoPaw Message CLI Reference** at the end).
+This checklist is for the QwenPaw Manager runtime. Every send into a Matrix **group** room (Worker room, Leader room, project room) or admin notification **must** go through **`copaw channels send`** via the shell tool (see **QwenPaw Message CLI Reference** at the end).
 
 **Hard rules (heartbeat sends — same intent as AGENTS.md Gotchas):**
 - **Workers do not see admin DMs.** Status pings, overdue triggers, and task follow-ups belong in the correct Matrix room via `copaw channels send`, using the room id from the task entry, project `meta.json`, or `hiclaw get workers -o json`. Do not rely on admin-facing text alone.
@@ -259,9 +259,9 @@ If the output is `available`, proceed with the following steps:
 
 ---
 
-## CoPaw Message CLI Reference
+## QwenPaw Message CLI Reference
 
-For CoPaw runtime, use the following CLI command format to send messages:
+For QwenPaw runtime, use the following CLI command format to send messages:
 
 ```bash
 copaw channels send \

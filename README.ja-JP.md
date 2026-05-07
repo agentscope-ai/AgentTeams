@@ -32,9 +32,9 @@
 
 - **2026-04-24**: [English](blog/hiclaw-1.1.0-release.md) | [中文](blog/zh-cn/hiclaw-1.1.0-release.md) — HiClaw v1.1.0：Kubernetes ネイティブコントロールプレーン、Hermes 自律コーディング Agent ランタイム、1.7 GB イメージ縮小、hiclaw CLI がシェルスクリプトに代わる。
 - **2026-04-14**: [English](blog/hiclaw-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/hiclaw-k8s-native-multi-agent-collaboration.zh-CN.md) — Kubernetes ネイティブなマルチ Agent 協調オーケストレーションとしての HiClaw の解説。
-- **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — HiClaw 1.0.9：宣言型リソース管理、Worker テンプレートマーケット、Manager CoPaw、Nacos Skills 登録センターなど。
+- **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — HiClaw 1.0.9：宣言型リソース管理、Worker テンプレートマーケット、Manager QwenPaw、Nacos Skills 登録センターなど。
 - **2026-03-14**: [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — HiClaw 1.0.6：エンタープライズ MCP Server 管理、認証情報ゼロ露出。
-- **2026-03-10**: [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — HiClaw 1.0.4：CoPaw Worker、メモリ約 80% 削減。
+- **2026-03-10**: [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — HiClaw 1.0.4：QwenPaw（旧CoPaw）Worker、メモリ約 80% 削減。
 - **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — HiClaw オープンソース化。
 
 ## HiClaw を選ぶ理由
@@ -172,7 +172,7 @@ helm install hiclaw higress.io/hiclaw \
 | `worker.defaultRuntime` | 任意 | Worker デフォルトランタイム: `openclaw`（デフォルト）、`copaw`、または `hermes` |
 
 <details>
-<summary>代替ランタイムの使用（CoPaw Manager + Hermes Workers）</summary>
+<summary>代替ランタイムの使用（QwenPaw Manager + Hermes Workers）</summary>
 
 ```bash
 helm install hiclaw higress.io/hiclaw \
@@ -345,7 +345,7 @@ Worker Alice    Worker Bob              Worker Charlie
 
 ### ✅ リリース済み
 
-- ~~**CoPaw** — 軽量 Agent ランタイム~~ [1.0.4 でリリース](blog/hiclaw-1.0.4-release.md): メモリ使用量約 150MB（OpenClaw の約 500MB に対して）、さらにブラウザ自動操作用のローカルホストモードに対応。
+- ~~**QwenPaw（旧CoPaw）** — 軽量 Agent ランタイム~~ [1.0.4 でリリース](blog/hiclaw-1.0.4-release.md): メモリ使用量約 150MB（OpenClaw の約 500MB に対して）、さらにブラウザ自動操作用のローカルホストモードに対応。
 - ~~**ユニバーサル MCP サービスサポート** — MCP サーバー統合~~ [1.0.6 でリリース](blog/hiclaw-1.0.6-release.md): 任意の MCP サーバーをゲートウェイ経由で安全に Worker に公開可能。Worker は Higress 発行のトークンのみを使用し、実際の認証情報はゲートウェイの外に出ません。
 
 ### 進行中

@@ -44,7 +44,7 @@ HICLAW_LLM_API_KEY="sk-xxx" make install
 | 容器 | 职责 |
 |------|------|
 | **`hiclaw-controller`** | 内嵌 Higress、Tuwunel、MinIO、Element Web 与 Go controller（REST API 在容器网络内 **8090** 端口）。 |
-| **`hiclaw-manager`** | 仅运行 Manager Agent（默认 OpenClaw；若安装时选择 `HICLAW_MANAGER_RUNTIME=copaw` 则为 CoPaw Manager 镜像）。 |
+| **`hiclaw-manager`** | 仅运行 Manager Agent（默认 OpenClaw；若安装时选择 `HICLAW_MANAGER_RUNTIME=copaw` 则为 QwenPaw Manager 镜像）。 |
 
 创建 Worker 后会出现 `hiclaw-worker-*`、`hiclaw-copaw-worker-*`、`hiclaw-hermes-worker-*` 等容器。
 

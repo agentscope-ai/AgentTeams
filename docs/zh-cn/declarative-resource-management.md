@@ -82,7 +82,7 @@ spec:
 | `spec.model` | string | 是 | — | LLM 模型 ID，如 `claude-sonnet-4-6`、`qwen3.5-plus` |
 | `spec.runtime` | string | 否 | `openclaw` | Agent 运行时：`openclaw`、`copaw` 或 `hermes` |
 | `spec.image` | string | 否 | — | 自定义镜像；留空则使用 `HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE`（默认 `hiclaw/worker-agent:latest` / `hiclaw/copaw-worker:latest` / `hiclaw-hermes-worker:latest`） |
-| `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；CoPaw：按实现合并入 SOUL.md） |
+| `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
 | `spec.skills` | []string | 否 | — | 内置 skills 列表，由 Manager 统一分发 |

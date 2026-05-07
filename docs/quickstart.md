@@ -46,7 +46,7 @@ The default **embedded** install starts two main containers (see [architecture.m
 | Container | Role |
 |-----------|------|
 | **`hiclaw-controller`** | Bundles Higress, Tuwunel, MinIO, Element Web, and the Go controller (REST API on port **8090** inside the Docker network). |
-| **`hiclaw-manager`** | Lightweight Manager Agent only (OpenClaw **or** CoPaw when `HICLAW_MANAGER_RUNTIME=copaw`). |
+| **`hiclaw-manager`** | Lightweight Manager Agent only (OpenClaw **or** QwenPaw when `HICLAW_MANAGER_RUNTIME=copaw`). |
 
 Worker containers (`hiclaw-worker-*`, `hiclaw-copaw-worker-*`, `hiclaw-hermes-worker-*`) are created when you add Workers.
 

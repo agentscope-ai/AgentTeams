@@ -233,6 +233,13 @@ func (in *LeaderSpec) DeepCopyInto(out *LeaderSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.Env != nil {
+		in, out := &in.Env, &out.Env
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.Labels != nil {
 		in, out := &in.Labels, &out.Labels
 		*out = make(map[string]string, len(*in))
@@ -365,6 +372,13 @@ func (in *ManagerSpec) DeepCopyInto(out *ManagerSpec) {
 		*out = make([]AccessEntry, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.Env != nil {
+		in, out := &in.Env, &out.Env
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
 		}
 	}
 	if in.Labels != nil {
@@ -605,6 +619,13 @@ func (in *TeamWorkerSpec) DeepCopyInto(out *TeamWorkerSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.Env != nil {
+		in, out := &in.Env, &out.Env
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.Labels != nil {
 		in, out := &in.Labels, &out.Labels
 		*out = make(map[string]string, len(*in))
@@ -706,6 +727,11 @@ func (in *WorkerSpec) DeepCopyInto(out *WorkerSpec) {
 		*out = new(ChannelPolicySpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ContainerManaged != nil {
+		in, out := &in.ContainerManaged, &out.ContainerManaged
+		*out = new(bool)
+		**out = **in
+	}
 	if in.State != nil {
 		in, out := &in.State, &out.State
 		*out = new(string)
@@ -716,6 +742,13 @@ func (in *WorkerSpec) DeepCopyInto(out *WorkerSpec) {
 		*out = make([]AccessEntry, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.Env != nil {
+		in, out := &in.Env, &out.Env
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
 		}
 	}
 	if in.Labels != nil {

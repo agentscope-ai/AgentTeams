@@ -351,4 +351,8 @@ if [ -n "${HICLAW_CONTROLLER_URL:-}" ]; then
     log "Background readiness reporter started (PID: $!)"
 fi
 
+# Disable openclaw's observe-recovery to prevent stale baseline from overwriting
+# user-customized openclaw.json on gateway restart. .bak is preserved as backup.
+rm -f "${HOME}/.openclaw/logs/config-health.json" 2>/dev/null || true
+
 exec openclaw gateway run --verbose --force

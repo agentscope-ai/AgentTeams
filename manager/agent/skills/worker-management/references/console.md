@@ -1,12 +1,12 @@
-# CoPaw Console Management
+# QwenPaw Console Management
 
-Browser-based dashboard for CoPaw Workers — view status, logs, and configuration.
+Browser-based dashboard for QwenPaw Workers — view status, logs, and configuration.
 
-CoPaw Workers are created **without** the console by default to save ~500MB RAM. Enable on demand when admin asks to "open console", "debug the worker", "access the worker shell", etc.
+QwenPaw Workers are created **without** the console by default to save ~500MB RAM. Enable on demand when admin asks to "open console", "debug the worker", "access the worker shell", etc.
 
 ## Constraints
 
-- Only local CoPaw containers support this
+- Only local QwenPaw containers support this
 - Remote workers and openclaw workers do NOT — tell admin to SSH directly
 - Not available on cloud (SAE) — use SAE console or SLS logs instead
 

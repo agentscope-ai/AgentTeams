@@ -799,7 +799,7 @@ function Wait-ManagerReady {
     $elapsed = 0
     Write-Log (Get-Msg "install.wait_ready" -f $Timeout)
 
-    $runtime = if ($script:config.MANAGER_RUNTIME) { $script:config.MANAGER_RUNTIME } else { "openclaw" }
+    $runtime = if ($script:config.MANAGER_RUNTIME) { $script:config.MANAGER_RUNTIME } else { "copaw" }
 
     while ($elapsed -lt $Timeout) {
         try {
@@ -2028,22 +2028,22 @@ function Step-Workspace {
 function Step-Runtime {
     Write-Log (Get-Msg "worker_runtime.title")
     Write-Host ""
-    Write-Host "  1) $(Get-Msg 'worker_runtime.openclaw')"
-    Write-Host "  2) $(Get-Msg 'worker_runtime.copaw')"
+    Write-Host "  1) $(Get-Msg 'worker_runtime.copaw')"
+    Write-Host "  2) $(Get-Msg 'worker_runtime.openclaw')"
     Write-Host "  3) $(Get-Msg 'worker_runtime.hermes')"
     Write-Host ""
 
     if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "openclaw" }
+        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "copaw" }
     } elseif ($script:HICLAW_UPGRADE -and $env:HICLAW_DEFAULT_WORKER_RUNTIME) {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "worker_runtime.title_short"), $env:HICLAW_DEFAULT_WORKER_RUNTIME)
         $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
         if ($rtChoice -eq "b") { $script:StepResult = "back"; return }
         if ($rtChoice) {
             $script:config.DEFAULT_WORKER_RUNTIME = switch ($rtChoice) {
-                "2" { "copaw" }
+                "2" { "openclaw" }
                 "3" { "hermes" }
-                default { "openclaw" }
+                default { "copaw" }
             }
         } else {
             $script:config.DEFAULT_WORKER_RUNTIME = $env:HICLAW_DEFAULT_WORKER_RUNTIME
@@ -2055,9 +2055,9 @@ function Step-Runtime {
         if ($rtChoice -eq "b") { $script:StepResult = "back"; return }
         $rtChoice = if ($rtChoice) { $rtChoice } else { "1" }
         $script:config.DEFAULT_WORKER_RUNTIME = switch ($rtChoice) {
-            "2" { "copaw" }
+            "2" { "openclaw" }
             "3" { "hermes" }
-            default { "openclaw" }
+            default { "copaw" }
         }
     }
     Write-Log (Get-Msg "worker_runtime.selected" -f $script:config.DEFAULT_WORKER_RUNTIME)
@@ -2066,18 +2066,18 @@ function Step-Runtime {
 function Step-ManagerRuntime {
     Write-Log (Get-Msg "manager_runtime.title")
     Write-Host ""
-    Write-Host "  1) $(Get-Msg 'manager_runtime.openclaw')"
-    Write-Host "  2) $(Get-Msg 'manager_runtime.copaw')"
+    Write-Host "  1) $(Get-Msg 'manager_runtime.copaw')"
+    Write-Host "  2) $(Get-Msg 'manager_runtime.openclaw')"
     Write-Host ""
 
     if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.MANAGER_RUNTIME = if ($env:HICLAW_MANAGER_RUNTIME) { $env:HICLAW_MANAGER_RUNTIME } else { "openclaw" }
+        $script:config.MANAGER_RUNTIME = if ($env:HICLAW_MANAGER_RUNTIME) { $env:HICLAW_MANAGER_RUNTIME } else { "copaw" }
     } elseif ($script:HICLAW_UPGRADE -and $env:HICLAW_MANAGER_RUNTIME) {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "manager_runtime.title_short"), $env:HICLAW_MANAGER_RUNTIME)
         $mrChoice = Read-Host (Get-Msg "manager_runtime.choice")
         if ($mrChoice -eq "b") { $script:StepResult = "back"; return }
         if ($mrChoice) {
-            $script:config.MANAGER_RUNTIME = if ($mrChoice -eq "2") { "copaw" } else { "openclaw" }
+            $script:config.MANAGER_RUNTIME = if ($mrChoice -eq "2") { "openclaw" } else { "copaw" }
         } else {
             $script:config.MANAGER_RUNTIME = $env:HICLAW_MANAGER_RUNTIME
         }
@@ -2087,7 +2087,7 @@ function Step-ManagerRuntime {
         $mrChoice = Read-Host (Get-Msg "manager_runtime.choice")
         if ($mrChoice -eq "b") { $script:StepResult = "back"; return }
         $mrChoice = if ($mrChoice) { $mrChoice } else { "1" }
-        $script:config.MANAGER_RUNTIME = if ($mrChoice -eq "2") { "copaw" } else { "openclaw" }
+        $script:config.MANAGER_RUNTIME = if ($mrChoice -eq "2") { "openclaw" } else { "copaw" }
     }
     Write-Log (Get-Msg "manager_runtime.selected" -f $script:config.MANAGER_RUNTIME)
 }
@@ -2392,9 +2392,9 @@ function Install-Manager {
     }
 
     # ── State machine ─────────────────────────────────────────────────────────
-    $_steps = @("Step-Lang", "Step-Mode", "Step-Existing", "Step-Llm", "Step-Admin",
+    $_steps = @("Step-Lang", "Step-Mode", "Step-Existing", "Step-Llm", "Step-ManagerRuntime", "Step-Runtime", "Step-Admin",
                 "Step-Network", "Step-Ports", "Step-Domains", "Step-Github", "Step-Skills",
-                "Step-Volume", "Step-Workspace", "Step-ManagerRuntime", "Step-Runtime", "Step-E2ee", "Step-DockerProxy", "Step-Idle",
+                "Step-Volume", "Step-Workspace", "Step-E2ee", "Step-DockerProxy", "Step-Idle",
                 "Step-Hostshare")
     $_stepHistory = [System.Collections.Generic.List[int]]::new()
     $_stepIdx = 0
@@ -2437,7 +2437,7 @@ function Install-Manager {
         Write-Log (Get-Msg "workspace.dir_label" -f $script:config.WORKSPACE_DIR)
     }
     if (-not $script:config.DEFAULT_WORKER_RUNTIME) {
-        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "openclaw" }
+        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "copaw" }
         Write-Log (Get-Msg "worker_runtime.selected" -f $script:config.DEFAULT_WORKER_RUNTIME)
     }
     if (-not $script:config.MATRIX_E2EE) {
@@ -2453,7 +2453,7 @@ function Install-Manager {
         $script:config.LOCAL_ONLY = if ($env:HICLAW_LOCAL_ONLY) { $env:HICLAW_LOCAL_ONLY } else { "1" }
     }
     if (-not $script:config.MANAGER_RUNTIME) {
-        $script:config.MANAGER_RUNTIME = if ($env:HICLAW_MANAGER_RUNTIME) { $env:HICLAW_MANAGER_RUNTIME } else { "openclaw" }
+        $script:config.MANAGER_RUNTIME = if ($env:HICLAW_MANAGER_RUNTIME) { $env:HICLAW_MANAGER_RUNTIME } else { "copaw" }
     }
     if (-not $script:config.PORT_GATEWAY) {
         $script:config.PORT_GATEWAY = if ($env:HICLAW_PORT_GATEWAY) { $env:HICLAW_PORT_GATEWAY } else { "18080" }

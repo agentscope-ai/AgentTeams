@@ -1121,7 +1121,7 @@ wait_manager_ready() {
     log "$(msg install.wait_ready "${timeout}")"
 
     # Wait for Manager agent to be healthy inside the container
-    local runtime="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+    local runtime="${HICLAW_MANAGER_RUNTIME:-copaw}"
     while [ "${elapsed}" -lt "${timeout}" ]; do
         case "${runtime}" in
             copaw)
@@ -2124,14 +2124,14 @@ step_workspace() {
 step_runtime() {
     log "$(msg worker_runtime.title)"
     echo ""
-    echo "  1) $(msg worker_runtime.openclaw)"
-    echo "  2) $(msg worker_runtime.copaw)"
+    echo "  1) $(msg worker_runtime.copaw)"
+    echo "  2) $(msg worker_runtime.openclaw)"
     if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
         echo "  3) $(msg worker_runtime.hermes)"
     fi
     echo ""
     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+        HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
     elif [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_WORKER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg worker_runtime.title_short)" "${HICLAW_DEFAULT_WORKER_RUNTIME}")"
         local _runtime_choice
@@ -2139,13 +2139,13 @@ step_runtime() {
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
-                2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+                2) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
                 3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
                        HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
                    else
-                       HICLAW_DEFAULT_WORKER_RUNTIME="openclaw"
+                       HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
                    fi ;;
-                *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
+                *) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
             esac
         fi
     elif [ -z "${HICLAW_DEFAULT_WORKER_RUNTIME+x}" ]; then
@@ -2154,13 +2154,13 @@ step_runtime() {
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
-            2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+            2) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
             3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
                    HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
                else
-                   HICLAW_DEFAULT_WORKER_RUNTIME="openclaw"
+                   HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
                fi ;;
-            *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
+            *) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
         esac
     fi
     export HICLAW_DEFAULT_WORKER_RUNTIME
@@ -2170,11 +2170,11 @@ step_runtime() {
 step_manager_runtime() {
     log "$(msg manager_runtime.title)"
     echo ""
-    echo "  1) $(msg manager_runtime.openclaw)"
-    echo "  2) $(msg manager_runtime.copaw)"
+    echo "  1) $(msg manager_runtime.copaw)"
+    echo "  2) $(msg manager_runtime.openclaw)"
     echo ""
     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+        HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}"
     elif [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_MANAGER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg manager_runtime.title_short)" "${HICLAW_MANAGER_RUNTIME}")"
         local _runtime_choice
@@ -2182,8 +2182,8 @@ step_manager_runtime() {
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
-                2) HICLAW_MANAGER_RUNTIME="copaw" ;;
-                *) HICLAW_MANAGER_RUNTIME="openclaw" ;;
+                2) HICLAW_MANAGER_RUNTIME="openclaw" ;;
+                *) HICLAW_MANAGER_RUNTIME="copaw" ;;
             esac
         fi
     elif [ -z "${HICLAW_MANAGER_RUNTIME+x}" ]; then
@@ -2192,8 +2192,8 @@ step_manager_runtime() {
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
-            2) HICLAW_MANAGER_RUNTIME="copaw" ;;
-            *) HICLAW_MANAGER_RUNTIME="openclaw" ;;
+            2) HICLAW_MANAGER_RUNTIME="openclaw" ;;
+            *) HICLAW_MANAGER_RUNTIME="copaw" ;;
         esac
     fi
     export HICLAW_MANAGER_RUNTIME
@@ -2439,9 +2439,9 @@ install_manager() {
     fi
 
     # ── State machine ─────────────────────────────────────────────────────────
-    local _STEPS=( step_lang step_mode step_version step_existing step_llm step_admin step_network \
-                   step_ports step_domains step_github step_skills step_volume \
-                   step_workspace step_manager_runtime step_runtime step_e2ee step_docker_proxy step_idle step_hostshare )
+    local _STEPS=( step_lang step_mode step_version step_existing step_llm step_manager_runtime step_runtime step_admin step_network 
+                   step_ports step_domains step_github step_skills step_volume 
+                   step_workspace step_e2ee step_docker_proxy step_idle step_hostshare )
     local _STEP_HISTORY=()
     local _step_idx=0
     while [ "${_step_idx}" -lt "${#_STEPS[@]}" ]; do
@@ -2478,9 +2478,9 @@ install_manager() {
     fi
     HICLAW_WORKSPACE_DIR="$(cd "${HICLAW_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${HICLAW_WORKSPACE_DIR}")"
     mkdir -p "${HICLAW_WORKSPACE_DIR}"
-    HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+    HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}"
     export HICLAW_MANAGER_RUNTIME
-    HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
     HICLAW_MATRIX_E2EE="${HICLAW_MATRIX_E2EE:-0}"
     export HICLAW_MATRIX_E2EE
     HICLAW_WORKER_IDLE_TIMEOUT="${HICLAW_WORKER_IDLE_TIMEOUT:-720}"
@@ -2539,7 +2539,7 @@ HICLAW_PORT_ELEMENT_WEB=${HICLAW_PORT_ELEMENT_WEB}
 HICLAW_PORT_MANAGER_CONSOLE=${HICLAW_PORT_MANAGER_CONSOLE:-18888}
 
 # Manager runtime (openclaw | copaw)
-HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-openclaw}
+HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-copaw}
 
 # Matrix
 HICLAW_MATRIX_DOMAIN=${HICLAW_MATRIX_DOMAIN}
@@ -2586,7 +2586,7 @@ HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
 HICLAW_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
 
 # Default Worker runtime (openclaw | copaw | hermes)
-HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}
+HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
 HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}
@@ -2941,9 +2941,9 @@ CREDEOF
             -e "HICLAW_LLM_API_KEY=${HICLAW_LLM_API_KEY}"
             -e "HICLAW_DEFAULT_MODEL=${HICLAW_DEFAULT_MODEL}"
             -e "HICLAW_MANAGER_GATEWAY_KEY=${HICLAW_MANAGER_GATEWAY_KEY}"
-            -e "HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-openclaw}"
+            -e "HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-copaw}"
             -e "HICLAW_MANAGER_IMAGE=$([ "${HICLAW_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
-            -e "HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+            -e "HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
             -e "HICLAW_WORKER_IMAGE=${WORKER_IMAGE}"
             -e "HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
             -e "HICLAW_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
@@ -3196,7 +3196,7 @@ CREDEOF
             -e HOME=/root/manager-workspace \
             -w /root/manager-workspace \
             -e HOST_ORIGINAL_HOME="${HICLAW_HOST_SHARE_DIR}" \
-            -e HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}" \
+            -e HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}" \
             ${JVM_ARGS:+-e JVM_ARGS="${JVM_ARGS}"} \
             ${YOLO_ARGS} \
             ${MATRIX_DEBUG_ARGS} \

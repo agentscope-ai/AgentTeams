@@ -1,7 +1,8 @@
 {{- if .Values.controller.uninstallHook.enabled }}
 {{- $name := printf "%s-uninstall-cleanup" (include "hiclaw.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- $ns := include "hiclaw.namespace" . }}
-{{- $hookImage := printf "%s:%s" .Values.controller.uninstallHook.image.repository .Values.controller.uninstallHook.image.tag }}
+{{- $tag := default "1.30" .Values.controller.uninstallHook.image.tag }}
+{{- $hookImage := printf "%s:%s" .Values.controller.uninstallHook.image.repository $tag }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -12,7 +13,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -24,7 +25,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
 rules:
   - apiGroups: ["hiclaw.io"]
     resources: ["managers", "workers", "teams", "humans"]
@@ -40,7 +41,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -60,7 +61,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
 spec:
   backoffLimit: {{ .Values.controller.uninstallHook.backoffLimit | default 1 }}
   activeDeadlineSeconds: {{ .Values.controller.uninstallHook.activeDeadlineSeconds | default 1500 }}
@@ -83,7 +84,7 @@ spec:
             - name: NS
               value: {{ $ns | quote }}
             - name: TIMEOUT
-              value: {{ printf "%ds" (int .Values.controller.uninstallHook.timeoutSeconds) | quote }}
+              value: {{ printf "%ds" (.Values.controller.uninstallHook.timeoutSeconds | default 300 | int) | quote }}
           command:
             - /bin/sh
             - -c

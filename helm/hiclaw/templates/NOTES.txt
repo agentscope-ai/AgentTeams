@@ -26,7 +26,7 @@ Uninstalling
 ========================================================================
 
 By default this chart installs a pre-delete Helm hook
-(Job: {{ include "hiclaw.fullname" . }}-uninstall-cleanup) that deletes
+(Job: {{ printf "%s-uninstall-cleanup" (include "hiclaw.fullname" .) | trunc 63 | trimSuffix "-" }}) that deletes
 all Manager / Worker / Team / Human CRs first and waits for the
 controller to process their finalizers (cleaning up Pods, Matrix users,
 OSS data) before Helm removes the controller and the rest of the chart.
@@ -35,9 +35,12 @@ Normal uninstall:
   helm uninstall {{ .Release.Name }} -n {{ include "hiclaw.namespace" . }}
 
 If you pass --no-hooks (or set controller.uninstallHook.enabled=false),
-delete the CRs manually first, then uninstall the chart:
-  kubectl delete managers.hiclaw.io,workers.hiclaw.io,\
-    teams.hiclaw.io,humans.hiclaw.io --all -n {{ include "hiclaw.namespace" . }} --wait=true
+delete the CRs manually first (Manager FIRST — it owns the admin DM
+room — then the rest), then uninstall the chart:
+  kubectl delete managers.hiclaw.io --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
+  kubectl delete workers.hiclaw.io  --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
+  kubectl delete teams.hiclaw.io    --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
+  kubectl delete humans.hiclaw.io   --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
   helm uninstall {{ .Release.Name }} -n {{ include "hiclaw.namespace" . }}
 
 If the controller is already gone / the hook times out and CRs are

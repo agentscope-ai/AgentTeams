@@ -75,3 +75,38 @@ func TestSecretCredentialStore_AppLabelHonorsResourcePrefix(t *testing.T) {
 		t.Fatalf("expected app label %q, got %q (labels=%v)", want, got, sec.Labels)
 	}
 }
+
+func TestProvisionerLoadWorkerCredentialsMigratesLegacyRuntimeSecret(t *testing.T) {
+	client := fakeclient.NewSimpleClientset()
+	store := &SecretCredentialStore{
+		Client:         client,
+		Namespace:      "hiclaw",
+		ControllerName: "ctl-a",
+		ResourcePrefix: auth.DefaultResourcePrefix,
+	}
+	legacy := &WorkerCredentials{
+		MatrixPassword: "pw",
+		MinIOPassword:  "miniopw",
+		GatewayKey:     "gw",
+		MatrixToken:    "token",
+	}
+	if err := store.Save(context.Background(), "leader", legacy); err != nil {
+		t.Fatalf("save legacy credentials: %v", err)
+	}
+
+	p := NewProvisioner(ProvisionerConfig{Creds: store})
+	creds, err := p.loadWorkerCredentials(context.Background(), "team-a-worker-leader", "leader")
+	if err != nil {
+		t.Fatalf("loadWorkerCredentials: %v", err)
+	}
+	if creds == nil || creds.GatewayKey != "gw" {
+		t.Fatalf("migrated creds=%+v, want gateway key gw", creds)
+	}
+
+	if _, err := client.CoreV1().Secrets("hiclaw").Get(context.Background(), "hiclaw-creds-team-a-worker-leader", metav1.GetOptions{}); err != nil {
+		t.Fatalf("expected CR-name credential secret after migration: %v", err)
+	}
+	if _, err := client.CoreV1().Secrets("hiclaw").Get(context.Background(), "hiclaw-creds-leader", metav1.GetOptions{}); err != nil {
+		t.Fatalf("legacy runtime-name credential secret should remain untouched: %v", err)
+	}
+}

@@ -73,7 +73,7 @@ type MemberContext struct {
 	Heartbeat *agentconfig.HeartbeatConfig
 
 	// ExistingMatrixUserID is non-empty when prior provisioning has recorded a
-	// Matrix user; the Infra phase then uses RefreshCredentials instead of
+	// Matrix user; the Infra phase then uses RefreshWorkerCredentials instead of
 	// ProvisionWorker.
 	ExistingMatrixUserID string
 	// ExistingRoomID is the last-observed RoomID from the owning CR's status.
@@ -145,7 +145,7 @@ type MemberDeps struct {
 // RoomID, and ProvResult into state.
 func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) (reconcile.Result, error) {
 	if m.ExistingMatrixUserID != "" {
-		refreshResult, err := d.Provisioner.RefreshCredentials(ctx, m.RuntimeName)
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials: %w", err)
 		}
@@ -178,6 +178,7 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 
 	provResult, err := d.Provisioner.ProvisionWorker(ctx, service.WorkerProvisionRequest{
 		Name:           m.RuntimeName,
+		CredentialName: m.Name,
 		Role:           m.Role.String(),
 		TeamName:       m.TeamName,
 		TeamLeaderName: m.TeamLeaderName,
@@ -354,7 +355,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 	prov := state.ProvResult
 	if prov == nil || prov.MatrixToken == "" {
-		refreshResult, err := d.Provisioner.RefreshCredentials(ctx, m.Name)
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials for container: %w", err)
 		}
@@ -479,7 +480,7 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	if err := d.Deployer.CleanupOSSData(ctx, m.RuntimeName); err != nil {
 		logger.Error(err, "failed to clean up OSS agent data (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
 	}
-	if err := d.Provisioner.DeleteCredentials(ctx, m.RuntimeName); err != nil {
+	if err := d.Provisioner.DeleteWorkerCredentials(ctx, m.Name); err != nil {
 		logger.Error(err, "failed to delete credentials (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
 	}
 	if err := d.Provisioner.DeleteServiceAccount(ctx, m.Name); err != nil {

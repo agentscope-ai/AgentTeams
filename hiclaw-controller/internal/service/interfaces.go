@@ -12,11 +12,13 @@ type WorkerProvisioner interface {
 	ProvisionWorker(ctx context.Context, req WorkerProvisionRequest) (*WorkerProvisionResult, error)
 	DeprovisionWorker(ctx context.Context, req WorkerDeprovisionRequest) error
 	RefreshCredentials(ctx context.Context, workerName string) (*RefreshResult, error)
+	RefreshWorkerCredentials(ctx context.Context, credentialName, workerName string) (*RefreshResult, error)
 	EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error
 	ReconcileExpose(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
 	EnsureServiceAccount(ctx context.Context, workerName string) error
 	DeleteServiceAccount(ctx context.Context, workerName string) error
 	DeleteCredentials(ctx context.Context, workerName string) error
+	DeleteWorkerCredentials(ctx context.Context, credentialName string) error
 	RequestSAToken(ctx context.Context, workerName string) (string, error)
 	// LeaveAllWorkerRooms logs in as the worker (using stored credentials,
 	// or resetting the password via admin if they are stale) and makes

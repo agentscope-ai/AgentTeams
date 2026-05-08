@@ -12,38 +12,47 @@ import (
 type MockProvisioner struct {
 	mu sync.Mutex
 
-	ProvisionWorkerFn         func(ctx context.Context, req service.WorkerProvisionRequest) (*service.WorkerProvisionResult, error)
-	DeprovisionWorkerFn       func(ctx context.Context, req service.WorkerDeprovisionRequest) error
-	RefreshCredentialsFn      func(ctx context.Context, workerName string) (*service.RefreshResult, error)
-	EnsureWorkerGatewayAuthFn func(ctx context.Context, workerName, gatewayKey string) error
-	ReconcileExposeFn         func(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
-	EnsureServiceAccountFn    func(ctx context.Context, workerName string) error
-	DeleteServiceAccountFn    func(ctx context.Context, workerName string) error
-	DeleteCredentialsFn       func(ctx context.Context, workerName string) error
-	RequestSATokenFn          func(ctx context.Context, workerName string) (string, error)
-	LeaveAllWorkerRoomsFn     func(ctx context.Context, workerName string) error
-	DeleteWorkerRoomFn        func(ctx context.Context, roomID string) error
-	MatrixUserIDFn            func(name string) string
-	ProvisionTeamRoomsFn      func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
-	DeleteTeamRoomAliasesFn   func(ctx context.Context, teamName, leaderName string) error
-	DeleteWorkerRoomAliasFn   func(ctx context.Context, workerName string) error
+	ProvisionWorkerFn          func(ctx context.Context, req service.WorkerProvisionRequest) (*service.WorkerProvisionResult, error)
+	DeprovisionWorkerFn        func(ctx context.Context, req service.WorkerDeprovisionRequest) error
+	RefreshCredentialsFn       func(ctx context.Context, workerName string) (*service.RefreshResult, error)
+	RefreshWorkerCredentialsFn func(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error)
+	EnsureWorkerGatewayAuthFn  func(ctx context.Context, workerName, gatewayKey string) error
+	ReconcileExposeFn          func(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
+	EnsureServiceAccountFn     func(ctx context.Context, workerName string) error
+	DeleteServiceAccountFn     func(ctx context.Context, workerName string) error
+	DeleteCredentialsFn        func(ctx context.Context, workerName string) error
+	DeleteWorkerCredentialsFn  func(ctx context.Context, credentialName string) error
+	RequestSATokenFn           func(ctx context.Context, workerName string) (string, error)
+	LeaveAllWorkerRoomsFn      func(ctx context.Context, workerName string) error
+	DeleteWorkerRoomFn         func(ctx context.Context, roomID string) error
+	MatrixUserIDFn             func(name string) string
+	ProvisionTeamRoomsFn       func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
+	DeleteTeamRoomAliasesFn    func(ctx context.Context, teamName, leaderName string) error
+	DeleteWorkerRoomAliasFn    func(ctx context.Context, workerName string) error
 
 	Calls struct {
-		ProvisionWorker         []service.WorkerProvisionRequest
-		DeprovisionWorker       []service.WorkerDeprovisionRequest
-		RefreshCredentials      []string
-		EnsureWorkerGatewayAuth []string
-		ReconcileExpose         []string
-		EnsureServiceAccount    []string
-		DeleteServiceAccount    []string
-		DeleteCredentials       []string
-		RequestSAToken          []string
-		LeaveAllWorkerRooms     []string
-		DeleteWorkerRoom        []string
-		ProvisionTeamRooms      []service.TeamRoomRequest
-		DeleteTeamRoomAliases   []string
-		DeleteWorkerRoomAlias   []string
+		ProvisionWorker          []service.WorkerProvisionRequest
+		DeprovisionWorker        []service.WorkerDeprovisionRequest
+		RefreshCredentials       []string
+		RefreshWorkerCredentials []workerCredentialCall
+		EnsureWorkerGatewayAuth  []string
+		ReconcileExpose          []string
+		EnsureServiceAccount     []string
+		DeleteServiceAccount     []string
+		DeleteCredentials        []string
+		DeleteWorkerCredentials  []string
+		RequestSAToken           []string
+		LeaveAllWorkerRooms      []string
+		DeleteWorkerRoom         []string
+		ProvisionTeamRooms       []service.TeamRoomRequest
+		DeleteTeamRoomAliases    []string
+		DeleteWorkerRoomAlias    []string
 	}
+}
+
+type workerCredentialCall struct {
+	CredentialName string
+	WorkerName     string
 }
 
 func NewMockProvisioner() *MockProvisioner {
@@ -59,10 +68,12 @@ func (m *MockProvisioner) Reset() {
 	m.DeprovisionWorkerFn = nil
 	m.RefreshCredentialsFn = nil
 	m.EnsureWorkerGatewayAuthFn = nil
+	m.RefreshWorkerCredentialsFn = nil
 	m.ReconcileExposeFn = nil
 	m.EnsureServiceAccountFn = nil
 	m.DeleteServiceAccountFn = nil
 	m.DeleteCredentialsFn = nil
+	m.DeleteWorkerCredentialsFn = nil
 	m.RequestSATokenFn = nil
 	m.LeaveAllWorkerRoomsFn = nil
 	m.DeleteWorkerRoomFn = nil
@@ -81,20 +92,22 @@ func (m *MockProvisioner) ClearCalls() {
 
 func (m *MockProvisioner) clearCallsLocked() {
 	m.Calls = struct {
-		ProvisionWorker         []service.WorkerProvisionRequest
-		DeprovisionWorker       []service.WorkerDeprovisionRequest
-		RefreshCredentials      []string
-		EnsureWorkerGatewayAuth []string
-		ReconcileExpose         []string
-		EnsureServiceAccount    []string
-		DeleteServiceAccount    []string
-		DeleteCredentials       []string
-		RequestSAToken          []string
-		LeaveAllWorkerRooms     []string
-		DeleteWorkerRoom        []string
-		ProvisionTeamRooms      []service.TeamRoomRequest
-		DeleteTeamRoomAliases   []string
-		DeleteWorkerRoomAlias   []string
+		ProvisionWorker          []service.WorkerProvisionRequest
+		DeprovisionWorker        []service.WorkerDeprovisionRequest
+		RefreshCredentials       []string
+		RefreshWorkerCredentials []workerCredentialCall
+		EnsureWorkerGatewayAuth  []string
+		ReconcileExpose          []string
+		EnsureServiceAccount     []string
+		DeleteServiceAccount     []string
+		DeleteCredentials        []string
+		DeleteWorkerCredentials  []string
+		RequestSAToken           []string
+		LeaveAllWorkerRooms      []string
+		DeleteWorkerRoom         []string
+		ProvisionTeamRooms       []service.TeamRoomRequest
+		DeleteTeamRoomAliases    []string
+		DeleteWorkerRoomAlias    []string
 	}{}
 }
 
@@ -154,6 +167,24 @@ func (m *MockProvisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerNam
 	return nil
 }
 
+func (m *MockProvisioner) RefreshWorkerCredentials(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error) {
+	m.mu.Lock()
+	m.Calls.RefreshWorkerCredentials = append(m.Calls.RefreshWorkerCredentials, workerCredentialCall{
+		CredentialName: credentialName,
+		WorkerName:     workerName,
+	})
+	fn := m.RefreshWorkerCredentialsFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, credentialName, workerName)
+	}
+	return &service.RefreshResult{
+		MatrixToken:    "mock-token-" + workerName,
+		GatewayKey:     "mock-gw-key-" + workerName,
+		MinIOPassword:  "mock-minio-pw",
+		MatrixPassword: "mock-matrix-pw",
+	}, nil
+}
 
 func (m *MockProvisioner) ReconcileExpose(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error) {
 	m.mu.Lock()
@@ -195,6 +226,17 @@ func (m *MockProvisioner) DeleteCredentials(ctx context.Context, workerName stri
 	m.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, workerName)
+	}
+	return nil
+}
+
+func (m *MockProvisioner) DeleteWorkerCredentials(ctx context.Context, credentialName string) error {
+	m.mu.Lock()
+	m.Calls.DeleteWorkerCredentials = append(m.Calls.DeleteWorkerCredentials, credentialName)
+	fn := m.DeleteWorkerCredentialsFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, credentialName)
 	}
 	return nil
 }

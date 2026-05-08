@@ -21,6 +21,7 @@ import (
 // WorkerProvisionRequest describes the infrastructure to provision for a worker.
 type WorkerProvisionRequest struct {
 	Name           string
+	CredentialName string
 	Role           string // "standalone" | "team_leader" | "worker"
 	TeamName       string
 	TeamLeaderName string
@@ -285,6 +286,10 @@ func (p *Provisioner) DeleteManagerRoom(ctx context.Context, roomID string) erro
 func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRequest) (*WorkerProvisionResult, error) {
 	logger := log.FromContext(ctx)
 	workerName := req.Name
+	credentialName := req.CredentialName
+	if credentialName == "" {
+		credentialName = workerName
+	}
 	consumerName := "worker-" + workerName
 	workerMatrixID := p.matrix.UserID(workerName)
 	managerMatrixID := p.matrix.UserID("manager")
@@ -293,7 +298,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	isTeamWorker := req.TeamLeaderName != ""
 
 	// Step 1: Load or generate credentials
-	creds, err := p.creds.Load(ctx, workerName)
+	creds, err := p.loadWorkerCredentials(ctx, credentialName, workerName)
 	if err != nil {
 		return nil, fmt.Errorf("load credentials: %w", err)
 	}
@@ -302,7 +307,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		if err != nil {
 			return nil, fmt.Errorf("generate credentials: %w", err)
 		}
-		if err := p.creds.Save(ctx, workerName, creds); err != nil {
+		if err := p.creds.Save(ctx, credentialName, creds); err != nil {
 			return nil, fmt.Errorf("save credentials: %w", err)
 		}
 	}
@@ -384,7 +389,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	// Persist the freshly-registered Matrix token. Room identity is no
 	// longer stored here — the Matrix alias is the sole source of truth
 	// and is resolved via CreateRoom on every reconcile.
-	if err := p.creds.Save(ctx, workerName, creds); err != nil {
+	if err := p.creds.Save(ctx, credentialName, creds); err != nil {
 		logger.Error(err, "failed to persist credentials (non-fatal)")
 	}
 
@@ -435,7 +440,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	}
 	if consumerResult.APIKey != "" && consumerResult.APIKey != creds.GatewayKey {
 		creds.GatewayKey = consumerResult.APIKey
-		_ = p.creds.Save(ctx, workerName, creds)
+		_ = p.creds.Save(ctx, credentialName, creds)
 	}
 
 	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName); err != nil {
@@ -521,9 +526,18 @@ func (p *Provisioner) ensureMatrixToken(ctx context.Context, matrixUsername stri
 // RefreshCredentials loads persisted credentials and obtains a Matrix token,
 // reusing the cached token when present. Used during update operations.
 func (p *Provisioner) RefreshCredentials(ctx context.Context, workerName string) (*RefreshResult, error) {
-	creds, err := p.creds.Load(ctx, workerName)
+	return p.RefreshWorkerCredentials(ctx, workerName, workerName)
+}
+
+// RefreshWorkerCredentials loads worker credentials by their owning CR key while
+// refreshing the Matrix token for the runtime worker identity.
+func (p *Provisioner) RefreshWorkerCredentials(ctx context.Context, credentialName, workerName string) (*RefreshResult, error) {
+	if credentialName == "" {
+		credentialName = workerName
+	}
+	creds, err := p.loadWorkerCredentials(ctx, credentialName, workerName)
 	if err != nil || creds == nil {
-		return nil, fmt.Errorf("credentials not found for %s", workerName)
+		return nil, fmt.Errorf("credentials not found for %s", credentialName)
 	}
 
 	hadToken := creds.MatrixToken != ""
@@ -532,7 +546,7 @@ func (p *Provisioner) RefreshCredentials(ctx context.Context, workerName string)
 		return nil, fmt.Errorf("Matrix login failed: %w", err)
 	}
 	if !hadToken {
-		if err := p.creds.Save(ctx, workerName, creds); err != nil {
+		if err := p.creds.Save(ctx, credentialName, creds); err != nil {
 			return nil, fmt.Errorf("persist matrix token: %w", err)
 		}
 	}
@@ -543,6 +557,22 @@ func (p *Provisioner) RefreshCredentials(ctx context.Context, workerName string)
 		MinIOPassword:  creds.MinIOPassword,
 		MatrixPassword: creds.MatrixPassword,
 	}, nil
+}
+
+func (p *Provisioner) loadWorkerCredentials(ctx context.Context, credentialName, workerName string) (*WorkerCredentials, error) {
+	creds, err := p.creds.Load(ctx, credentialName)
+	if err != nil || creds != nil || credentialName == workerName {
+		return creds, err
+	}
+
+	legacyCreds, err := p.creds.Load(ctx, workerName)
+	if err != nil || legacyCreds == nil {
+		return legacyCreds, err
+	}
+	if err := p.creds.Save(ctx, credentialName, legacyCreds); err != nil {
+		return nil, fmt.Errorf("migrate legacy worker credentials: %w", err)
+	}
+	return legacyCreds, nil
 }
 
 // RefreshManagerCredentials loads persisted credentials for the Manager and
@@ -756,7 +786,12 @@ func (p *Provisioner) ReconcileRoomMembership(ctx context.Context, roomID string
 
 // DeleteCredentials removes persisted credentials for a worker.
 func (p *Provisioner) DeleteCredentials(ctx context.Context, workerName string) error {
-	return p.creds.Delete(ctx, workerName)
+	return p.DeleteWorkerCredentials(ctx, workerName)
+}
+
+// DeleteWorkerCredentials removes persisted credentials for a worker-like CR.
+func (p *Provisioner) DeleteWorkerCredentials(ctx context.Context, credentialName string) error {
+	return p.creds.Delete(ctx, credentialName)
 }
 
 // DeleteTeamRoomAliases removes the room aliases that identify a team's group

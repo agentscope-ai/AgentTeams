@@ -8,6 +8,7 @@ import (
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
+	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 )
 
 func TestLeaderHeartbeatEvery(t *testing.T) {
@@ -165,6 +166,78 @@ func TestBuildDesiredMembers_RuntimeWorkerNamesDriveMatrixPolicy(t *testing.T) {
 	}
 	if !stringSliceContains(devAllow, "@yhf:example.com") || stringSliceContains(devAllow, "alpha-human-yhf") {
 		t.Fatalf("dev groupAllowExtra=%v must use admin MatrixUserID, not admin CR name", devAllow)
+	}
+}
+
+func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+	member := MemberContext{
+		Name:        "alpha-worker-lead",
+		RuntimeName: "leader",
+		Role:        RoleTeamLeader,
+	}
+
+	if _, err := ReconcileMemberInfra(context.Background(), MemberDeps{Provisioner: prov}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+
+	if len(prov.Calls.ProvisionWorker) != 1 {
+		t.Fatalf("ProvisionWorker calls=%d, want 1", len(prov.Calls.ProvisionWorker))
+	}
+	req := prov.Calls.ProvisionWorker[0]
+	if req.Name != "leader" {
+		t.Fatalf("ProvisionWorker Name=%q, want runtime workerName leader", req.Name)
+	}
+	if req.CredentialName != "alpha-worker-lead" {
+		t.Fatalf("ProvisionWorker CredentialName=%q, want CR name alpha-worker-lead", req.CredentialName)
+	}
+}
+
+func TestReconcileMemberRefreshUsesCRNameCredentialAndRuntimeMatrixName(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+	member := MemberContext{
+		Name:                 "alpha-worker-lead",
+		RuntimeName:          "leader",
+		Role:                 RoleTeamLeader,
+		ExistingMatrixUserID: "@leader:localhost",
+	}
+
+	if _, err := ReconcileMemberInfra(context.Background(), MemberDeps{Provisioner: prov}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+
+	if len(prov.Calls.RefreshWorkerCredentials) != 1 {
+		t.Fatalf("RefreshWorkerCredentials calls=%d, want 1", len(prov.Calls.RefreshWorkerCredentials))
+	}
+	call := prov.Calls.RefreshWorkerCredentials[0]
+	if call.CredentialName != "alpha-worker-lead" {
+		t.Fatalf("CredentialName=%q, want CR name alpha-worker-lead", call.CredentialName)
+	}
+	if call.WorkerName != "leader" {
+		t.Fatalf("WorkerName=%q, want runtime workerName leader", call.WorkerName)
+	}
+}
+
+func TestReconcileMemberDeleteUsesCRNameForCredentialDelete(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	deployer := mocks.NewMockDeployer()
+	member := MemberContext{
+		Name:        "alpha-worker-lead",
+		RuntimeName: "leader",
+		Role:        RoleTeamLeader,
+	}
+
+	if err := ReconcileMemberDelete(context.Background(), MemberDeps{Provisioner: prov, Deployer: deployer}, member); err != nil {
+		t.Fatalf("ReconcileMemberDelete: %v", err)
+	}
+
+	if len(prov.Calls.DeprovisionWorker) != 1 || prov.Calls.DeprovisionWorker[0].Name != "leader" {
+		t.Fatalf("DeprovisionWorker calls=%v, want runtime workerName leader", prov.Calls.DeprovisionWorker)
+	}
+	if len(prov.Calls.DeleteWorkerCredentials) != 1 || prov.Calls.DeleteWorkerCredentials[0] != "alpha-worker-lead" {
+		t.Fatalf("DeleteWorkerCredentials calls=%v, want CR name alpha-worker-lead", prov.Calls.DeleteWorkerCredentials)
 	}
 }
 

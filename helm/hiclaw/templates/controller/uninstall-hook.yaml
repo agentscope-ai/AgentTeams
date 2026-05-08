@@ -1,8 +1,9 @@
 {{- if .Values.controller.uninstallHook.enabled }}
 {{- $name := printf "%s-uninstall-cleanup" (include "hiclaw.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- $ns := include "hiclaw.namespace" . }}
-{{- $tag := default "1.30" .Values.controller.uninstallHook.image.tag }}
-{{- $hookImage := printf "%s:%s" .Values.controller.uninstallHook.image.repository $tag }}
+{{- $ctrlTag := default .Values.global.imageTag .Values.controller.image.tag | default .Chart.AppVersion }}
+{{- $hookImage := printf "%s:%s" .Values.controller.image.repository $ctrlTag }}
+{{- $hookPullPolicy := default "IfNotPresent" .Values.controller.image.pullPolicy }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -79,7 +80,7 @@ spec:
       containers:
         - name: cleanup
           image: {{ $hookImage | quote }}
-          imagePullPolicy: {{ .Values.controller.uninstallHook.image.pullPolicy | default "IfNotPresent" }}
+          imagePullPolicy: {{ $hookPullPolicy }}
           env:
             - name: NS
               value: {{ $ns | quote }}

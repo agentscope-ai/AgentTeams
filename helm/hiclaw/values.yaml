@@ -195,11 +195,10 @@ controller:
     # so the controller's finalizer logic can clean up Pods, Matrix users,
     # and OSS data. Set to false to skip auto-cleanup (you must then
     # delete those CRs manually before `helm uninstall`).
+    #
+    # The hook reuses the controller image (which ships kubectl) so it
+    # does not depend on Docker Hub being reachable from the cluster.
     enabled: true
-    image:
-      repository: bitnami/kubectl
-      tag: "1.30"
-      pullPolicy: IfNotPresent
     timeoutSeconds: 300         # per-resource-group `kubectl delete --wait` timeout
     backoffLimit: 1
     activeDeadlineSeconds: 1500 # hard ceiling: 4 groups × timeoutSeconds + headroom

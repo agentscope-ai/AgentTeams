@@ -1,7 +1,7 @@
 {{- if .Values.controller.uninstallHook.enabled }}
 {{- $name := printf "%s-uninstall-cleanup" (include "hiclaw.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- $ns := include "hiclaw.namespace" . }}
-{{- $ctrlTag := default .Values.global.imageTag .Values.controller.image.tag | default .Chart.AppVersion }}
+{{- $ctrlTag := include "hiclaw.imageTag" (dict "tag" .Values.controller.image.tag "global" .Values.global "root" $) }}
 {{- $hookImage := printf "%s:%s" .Values.controller.image.repository $ctrlTag }}
 {{- $hookPullPolicy := default "IfNotPresent" .Values.controller.image.pullPolicy }}
 apiVersion: v1

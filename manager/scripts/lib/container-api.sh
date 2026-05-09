@@ -122,9 +122,11 @@ worker_backend_stop() {
 }
 
 # Get worker status as a lowercase phase string.
-# Possible values: running | ready | sleeping | stopped | not_found | unknown.
+# Possible values mirror the controller's WorkerResponse.Phase, lowercased:
+# pending | running | ready | sleeping | stopped | not_found | unknown.
 # Uses /status endpoint so that a worker that has self-reported readiness shows
-# up as "ready" rather than just "running".
+# up as "ready" rather than just "running". Callers should treat both
+# "running" and "ready" as live states.
 worker_backend_status() {
     local worker_name="$1"
     local response code body phase
@@ -233,7 +235,7 @@ worker_backend_wait_ready() {
                 _log "Worker ${worker_name} is ready!"
                 return 0
                 ;;
-            not_found|stopped|unknown)
+            not_found|stopped|sleeping|unknown)
                 _log "Worker ${worker_name} status: ${status} — aborting wait"
                 return 1
                 ;;

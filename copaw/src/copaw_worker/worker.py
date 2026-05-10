@@ -15,6 +15,7 @@ import os
 import platform
 import shutil
 import stat
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,43 @@ from copaw_worker.bridge import bridge_openclaw_to_copaw
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+def _read_text_with_retry(path: Path, max_retries: int = 5, delay_ms: int = 100) -> str:
+    """Read text from path with retry on UnicodeDecodeError.
+
+    This handles the race condition between mc mirror reporting completion and
+    the file being fully written to disk. The race can cause partial reads
+    of multi-byte UTF-8 characters at the end of the file.
+
+    Args:
+        path: Path to read from
+        max_retries: Maximum number of retry attempts (default 5)
+        delay_ms: Delay between retries in milliseconds (default 100)
+
+    Returns:
+        The file contents as a string
+
+    Raises:
+        UnicodeDecodeError: If all retries fail
+        FileNotFoundError: If file does not exist
+    """
+    for attempt in range(max_retries):
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as e:
+            if attempt < max_retries - 1:
+                logger.debug(
+                    "UnicodeDecodeError reading %s (attempt %d/%d): %s — retrying...",
+                    path, attempt + 1, max_retries, e,
+                )
+                time.sleep(delay_ms / 1000.0)
+            else:
+                logger.warning(
+                    "UnicodeDecodeError reading %s after %d attempts: %s",
+                    path, max_retries, e,
+                )
+                raise
 
 
 class Worker:
@@ -124,14 +162,14 @@ class Worker:
         for name in ("SOUL.md", "AGENTS.md"):
             src = self.sync.local_dir / name
             if src.exists():
-                (workspace_dir / name).write_text(src.read_text())
+                (workspace_dir / name).write_text(_read_text_with_retry(src))
         for name in ("HEARTBEAT.md",):
             dst = workspace_dir / name
             if dst.exists():
                 continue
             src = self.sync.local_dir / name
             if src.exists():
-                dst.write_text(src.read_text())
+                dst.write_text(_read_text_with_retry(src))
 
         # 5. Bridge openclaw.json -> CoPaw workspaces/default/agent.json + providers.json
         #    Infer gateway port from FS endpoint so bridge's _port_remap uses
@@ -509,9 +547,10 @@ class Worker:
         console.print("[yellow]Config changed, re-bridging...[/yellow]")
         try:
             openclaw_cfg = self.sync.get_config()
-            # Use local Worker-managed files; fallback to MinIO for initial bootstrap
-            soul = (self.sync.local_dir / "SOUL.md").read_text() if (self.sync.local_dir / "SOUL.md").exists() else self.sync.get_soul()
-            agents = (self.sync.local_dir / "AGENTS.md").read_text() if (self.sync.local_dir / "AGENTS.md").exists() else self.sync.get_agents_md()
+            soul_path = self.sync.local_dir / "SOUL.md"
+            soul = _read_text_with_retry(soul_path) if soul_path.exists() else self.sync.get_soul()
+            agents_path = self.sync.local_dir / "AGENTS.md"
+            agents = _read_text_with_retry(agents_path) if agents_path.exists() else self.sync.get_agents_md()
 
             if soul:
                 workspace_dir = self._copaw_working_dir / "workspaces" / "default"

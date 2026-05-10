@@ -36,6 +36,32 @@ logger = logging.getLogger(__name__)
 _MC_ALIAS = "hiclaw"
 
 
+def _read_text_with_retry(path: Path, max_retries: int = 5, delay_ms: int = 100) -> Optional[str]:
+    """Read text from path with retry on UnicodeDecodeError.
+
+    This handles the race condition between mc mirror reporting completion and
+    the file being fully written to disk. The race can cause partial reads
+    of multi-byte UTF-8 characters at the end of the file.
+    """
+    for attempt in range(max_retries):
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as e:
+            if attempt < max_retries - 1:
+                logger.debug(
+                    "UnicodeDecodeError reading %s (attempt %d/%d): %s — retrying...",
+                    path, attempt + 1, max_retries, e,
+                )
+                time.sleep(delay_ms / 1000.0)
+            else:
+                logger.warning(
+                    "UnicodeDecodeError reading %s after %d attempts: %s",
+                    path, max_retries, e,
+                )
+                raise
+    return None
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """Deep merge override into base (override wins leaf conflicts)."""
     result = dict(base)
@@ -271,7 +297,7 @@ class FileSync:
         agents_path = self.local_dir / "AGENTS.md"
         if agents_path.exists():
             try:
-                content = agents_path.read_text()
+                content = _read_text_with_retry(agents_path)
                 import re
                 m = re.search(r'\*\*Team\*\*:\s*(\S+)', content)
                 if m:
@@ -281,7 +307,7 @@ class FileSync:
         config_path = self.local_dir / "openclaw.json"
         if config_path.exists():
             try:
-                config = json.loads(config_path.read_text())
+                config = json.loads(_read_text_with_retry(config_path))
                 return config.get("team_id") or None
             except Exception:
                 pass
@@ -292,7 +318,7 @@ class FileSync:
         agents_path = self.local_dir / "AGENTS.md"
         if agents_path.exists():
             try:
-                content = agents_path.read_text()
+                content = _read_text_with_retry(agents_path)
                 return "Upstream coordinator" in content
             except Exception:
                 pass

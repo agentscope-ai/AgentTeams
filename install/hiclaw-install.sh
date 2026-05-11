@@ -232,6 +232,15 @@ msg() {
         "install.mode.manual_selected.en") text="Manual mode selected - you will choose LLM provider and customize options" ;;
         "install.mode.invalid.zh") text="无效选择，默认使用快速开始模式" ;;
         "install.mode.invalid.en") text="Invalid choice, defaulting to Quick Start mode" ;;
+        # --- Upgrade mode sub-menu ---
+        "upgrade.mode.prompt.zh") text="请选择升级方式：" ;;
+        "upgrade.mode.prompt.en") text="Select upgrade mode:" ;;
+        "upgrade.mode.keep_all.zh") text="  1) 保留所有参数，一键升级（推荐）" ;;
+        "upgrade.mode.keep_all.en") text="  1) Keep all parameters, quick upgrade (recommended)" ;;
+        "upgrade.mode.confirm_each.zh") text="  2) 逐个确认参数（可修改）" ;;
+        "upgrade.mode.confirm_each.en") text="  2) Confirm each parameter (can modify)" ;;
+        "upgrade.mode.back.zh") text="  3) 返回" ;;
+        "upgrade.mode.back.en") text="  3) Back" ;;
         # --- Version selection ---
         "install.version.title.zh") text="--- 版本选择 ---" ;;
         "install.version.title.en") text="--- Version Selection ---" ;;
@@ -434,12 +443,12 @@ msg() {
         "llm.provider.selected_openai.en") text="  Provider: %s (OpenAI-compatible)" ;;
         "llm.provider.invalid.zh") text="无效选择: %s（请输入 1 或 2）" ;;
         "llm.provider.invalid.en") text="Invalid choice: %s (please enter 1 or 2)" ;;
-        "llm.qwen.model_prompt.zh") text="默认模型 ID [qwen3.6-plus]" ;;
-        "llm.qwen.model_prompt.en") text="Default Model ID [qwen3.6-plus]" ;;
-        "llm.openai.base_url_prompt.zh") text="Base URL（例如 https://api.openai.com/v1）" ;;
-        "llm.openai.base_url_prompt.en") text="Base URL (e.g., https://api.openai.com/v1)" ;;
-        "llm.openai.model_prompt.zh") text="默认模型 ID [gpt-5.4]" ;;
-        "llm.openai.model_prompt.en") text="Default Model ID [gpt-5.4]" ;;
+        "llm.qwen.model_prompt.zh") text="默认模型 ID" ;;
+        "llm.qwen.model_prompt.en") text="Default Model ID" ;;
+        "llm.openai.base_url_prompt.zh") text="Base URL" ;;
+        "llm.openai.base_url_prompt.en") text="Base URL" ;;
+        "llm.openai.model_prompt.zh") text="默认模型 ID" ;;
+        "llm.openai.model_prompt.en") text="Default Model ID" ;;
         "llm.openai.base_url_label.zh") text="  Base URL: %s" ;;
         "llm.openai.base_url_label.en") text="  Base URL: %s" ;;
         # --- Custom model parameters ---
@@ -1121,7 +1130,7 @@ wait_manager_ready() {
     log "$(msg install.wait_ready "${timeout}")"
 
     # Wait for Manager agent to be healthy inside the container
-    local runtime="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+    local runtime="${HICLAW_MANAGER_RUNTIME:-copaw}"
     while [ "${elapsed}" -lt "${timeout}" ]; do
         case "${runtime}" in
             copaw)
@@ -1226,6 +1235,19 @@ read_secret() {
         fi
     done
     echo
+}
+
+# Load current parameter values from env file for upgrade mode display
+load_current_params_from_env() {
+    local env_file="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+    if [ -f "${env_file}" ]; then
+        [ -z "${HICLAW_LLM_PROVIDER:+x}" ] && HICLAW_LLM_PROVIDER="$(grep '^HICLAW_LLM_PROVIDER=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${HICLAW_OPENAI_BASE_URL:+x}" ] && HICLAW_OPENAI_BASE_URL="$(grep '^HICLAW_OPENAI_BASE_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${HICLAW_DEFAULT_MODEL:+x}" ] && HICLAW_DEFAULT_MODEL="$(grep '^HICLAW_DEFAULT_MODEL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${HICLAW_EMBEDDING_MODEL:+x}" ] && HICLAW_EMBEDDING_MODEL="$(grep '^HICLAW_EMBEDDING_MODEL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${HICLAW_WORKSPACE_DIR:+x}" ] && HICLAW_WORKSPACE_DIR="$(grep '^HICLAW_WORKSPACE_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${HICLAW_HOST_SHARE_DIR:+x}" ] && HICLAW_HOST_SHARE_DIR="$(grep '^HICLAW_HOST_SHARE_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+    fi
 }
 
 # In non-interactive mode, uses default or errors if required and no default.
@@ -1462,9 +1484,14 @@ should_skip_step() {
             local _env="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
             [ ! -f "${_env}" ] && return 0
             ;;
+        # Keep-All upgrade mode: skip all config steps (step_volume/step_workspace handled separately)
+        step_llm|step_admin|step_network|step_ports|step_domains|step_github|step_skills|step_runtime|step_manager_runtime|step_e2ee|step_docker_proxy|step_idle|step_hostshare)
+            [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ] && return 0
+            ;;
         step_volume|step_workspace)
             [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
             [ "${HICLAW_QUICKSTART}" = "1" ] && return 0
+            [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_e2ee|step_idle)
             [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
@@ -1654,6 +1681,35 @@ step_existing() {
         1|upgrade)
             HICLAW_UPGRADE=1
             log "$(msg install.existing.upgrading)"
+            # Show upgrade mode sub-menu (unless already set via env var)
+            if [ "${HICLAW_UPGRADE_KEEP_ALL:-0}" != "1" ]; then
+                echo ""
+                echo "$(msg upgrade.mode.prompt)"
+                echo "$(msg upgrade.mode.keep_all)"
+                echo "$(msg upgrade.mode.confirm_each)"
+                echo "$(msg upgrade.mode.back)"
+                echo ""
+                local UPGRADE_MODE_CHOICE
+                read -e -p "$(msg install.existing.prompt): " UPGRADE_MODE_CHOICE
+                UPGRADE_MODE_CHOICE="${UPGRADE_MODE_CHOICE:-1}"
+                case "${UPGRADE_MODE_CHOICE}" in
+                    1|keep)
+                        HICLAW_UPGRADE_KEEP_ALL=1
+                        ;;
+                    2|confirm)
+                        HICLAW_UPGRADE_KEEP_ALL=0
+                        ;;
+                    3|b)
+                        STEP_RESULT="back"
+                        return 0
+                        ;;
+                    *)
+                        HICLAW_UPGRADE_KEEP_ALL=0
+                        ;;
+                esac
+            fi
+            # Load current parameters for both Keep-All and confirm-each modes
+            load_current_params_from_env
             if [ -n "${running_manager}" ] || [ -n "${running_workers}" ]; then
                 echo ""
                 echo -e "\033[33m$(msg install.existing.warn_manager_stop)\033[0m"
@@ -1777,24 +1833,44 @@ step_llm() {
         [ -n "${HICLAW_OPENAI_BASE_URL+x}" ] && export HICLAW_OPENAI_BASE_URL
         return 0
     fi
-    echo ""
-    echo "$(msg llm.providers_title)"
-    echo "$(msg llm.provider.alibaba)"
-    echo "$(msg llm.provider.openai_compat)"
-    echo ""
-    local PROVIDER_CHOICE
-    if [ "${HICLAW_QUICKSTART}" = "1" ]; then
-        read -e -p "$(msg llm.provider.select) [1]: " PROVIDER_CHOICE
-        PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
+
+    # Upgrade Keep-All mode: skip provider selection, use loaded values
+    local SKIP_TO_EMBEDDING=0
+    if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ] && [ -n "${HICLAW_LLM_PROVIDER}" ]; then
+        log "$(msg llm.provider.label "${HICLAW_LLM_PROVIDER}")"
+        log "$(msg llm.openai.base_url_label "${HICLAW_OPENAI_BASE_URL}")"
+        log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
+        PROVIDER_CHOICE="${HICLAW_LLM_PROVIDER}"
+        SKIP_TO_EMBEDDING=1
     else
-        read -e -p "$(msg llm.provider.select): " PROVIDER_CHOICE
-        PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
+        echo ""
+        echo "$(msg llm.providers_title)"
+        echo "$(msg llm.provider.alibaba)"
+        echo "$(msg llm.provider.openai_compat)"
+        echo ""
+        local PROVIDER_CHOICE
+        # If upgrade mode with loaded provider, show current as default
+        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_LLM_PROVIDER}" ]; then
+            local _prov_display
+            case "${HICLAW_LLM_PROVIDER}" in
+                openai-compat) _prov_display="2" ;;
+                *)             _prov_display="1" ;;
+            esac
+            read -e -p "$(msg llm.provider.select) [${_prov_display}]: " PROVIDER_CHOICE
+            PROVIDER_CHOICE="${PROVIDER_CHOICE:-${_prov_display}}"
+        elif [ "${HICLAW_QUICKSTART}" = "1" ]; then
+            read -e -p "$(msg llm.provider.select) [1]: " PROVIDER_CHOICE
+            PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
+        else
+            read -e -p "$(msg llm.provider.select): " PROVIDER_CHOICE
+            PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
+        fi
+        if [ "${PROVIDER_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
     fi
-    if [ "${PROVIDER_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
     local ALIBABA_MODEL_CHOICE=""
     local ALIBABA_ACCESS=""
     case "${PROVIDER_CHOICE}" in
-        1|alibaba-cloud)
+        1|alibaba-cloud|openai-compat)
             if [ "${HICLAW_LANGUAGE}" = "en" ]; then
                 HICLAW_LLM_PROVIDER="openai-compat"
                 HICLAW_OPENAI_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -1807,7 +1883,19 @@ step_llm() {
                 echo "$(msg llm.codingplan.model.minimax)"
                 echo ""
                 local CODINGPLAN_MODEL_CHOICE
-                if [ "${HICLAW_QUICKSTART}" = "1" ]; then
+                # If upgrade with loaded model, show current as default
+                if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_MODEL}" ]; then
+                    local _model_default
+                    case "${HICLAW_DEFAULT_MODEL}" in
+                        qwen3.6-plus) _model_default="1" ;;
+                        glm-5)        _model_default="2" ;;
+                        kimi-k2.5)    _model_default="3" ;;
+                        MiniMax-M2.5) _model_default="4" ;;
+                        *)            _model_default="1" ;;
+                    esac
+                    read -e -p "$(msg llm.codingplan.model.select) [${_model_default}]: " CODINGPLAN_MODEL_CHOICE
+                    CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-${_model_default}}"
+                elif [ "${HICLAW_QUICKSTART}" = "1" ]; then
                     read -e -p "$(msg llm.codingplan.model.select) [1]: " CODINGPLAN_MODEL_CHOICE
                     CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-1}"
                 else
@@ -1831,7 +1919,21 @@ step_llm() {
                 echo "$(msg llm.alibaba.model.bailian)"
                 echo "$(msg llm.alibaba.model.codingplan_legacy)"
                 echo ""
-                if [ "${HICLAW_QUICKSTART}" = "1" ]; then
+                if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_OPENAI_BASE_URL}" ]; then
+                    # Determine alibaba access type from loaded URL
+                    local _access_default="1"
+                    if echo "${HICLAW_OPENAI_BASE_URL}" | grep -q "token-plan"; then
+                        _access_default="1"
+                    elif echo "${HICLAW_OPENAI_BASE_URL}" | grep -q "dashscope"; then
+                        if echo "${HICLAW_OPENAI_BASE_URL}" | grep -q "intl"; then
+                            _access_default="3"
+                        else
+                            _access_default="2"
+                        fi
+                    fi
+                    read -e -p "$(msg llm.alibaba.model.select) [${_access_default}]: " ALIBABA_MODEL_CHOICE
+                    ALIBABA_MODEL_CHOICE="${ALIBABA_MODEL_CHOICE:-${_access_default}}"
+                elif [ "${HICLAW_QUICKSTART}" = "1" ]; then
                     read -e -p "$(msg llm.alibaba.model.select) [1]: " ALIBABA_MODEL_CHOICE
                     ALIBABA_MODEL_CHOICE="${ALIBABA_MODEL_CHOICE:-1}"
                 else
@@ -1852,7 +1954,19 @@ step_llm() {
                         echo "$(msg llm.codingplan.model.minimax)"
                         echo ""
                         local CODINGPLAN_MODEL_CHOICE
-                        if [ "${HICLAW_QUICKSTART}" = "1" ]; then
+                        # If upgrade with loaded model, show current as default
+                        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_MODEL}" ]; then
+                            local _model_default
+                            case "${HICLAW_DEFAULT_MODEL}" in
+                                qwen3.6-plus) _model_default="1" ;;
+                                glm-5)        _model_default="2" ;;
+                                kimi-k2.5)    _model_default="3" ;;
+                                MiniMax-M2.5) _model_default="4" ;;
+                                *)            _model_default="1" ;;
+                            esac
+                            read -e -p "$(msg llm.codingplan.model.select) [${_model_default}]: " CODINGPLAN_MODEL_CHOICE
+                            CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-${_model_default}}"
+                        elif [ "${HICLAW_QUICKSTART}" = "1" ]; then
                             read -e -p "$(msg llm.codingplan.model.select) [1]: " CODINGPLAN_MODEL_CHOICE
                             CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-1}"
                         else
@@ -1875,7 +1989,11 @@ step_llm() {
                         HICLAW_LLM_PROVIDER="qwen"
                         HICLAW_OPENAI_BASE_URL=""
                         echo ""
-                        read -e -p "$(msg llm.qwen.model_prompt): " HICLAW_DEFAULT_MODEL
+                        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_MODEL}" ]; then
+                            read -e -p "$(msg llm.qwen.model_prompt) [${HICLAW_DEFAULT_MODEL}]: " HICLAW_DEFAULT_MODEL
+                        else
+                            read -e -p "$(msg llm.qwen.model_prompt) [qwen3.6-plus]: " HICLAW_DEFAULT_MODEL
+                        fi
                         if [ "${HICLAW_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                         HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}"
                         log "$(msg llm.provider.selected_qwen)"
@@ -1887,7 +2005,11 @@ step_llm() {
                         HICLAW_LLM_PROVIDER="openai-compat"
                         HICLAW_OPENAI_BASE_URL="https://coding.dashscope.aliyuncs.com/v1"
                         echo ""
-                        read -e -p "$(msg llm.qwen.model_prompt): " HICLAW_DEFAULT_MODEL
+                        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_MODEL}" ]; then
+                            read -e -p "$(msg llm.qwen.model_prompt) [${HICLAW_DEFAULT_MODEL}]: " HICLAW_DEFAULT_MODEL
+                        else
+                            read -e -p "$(msg llm.qwen.model_prompt): " HICLAW_DEFAULT_MODEL
+                        fi
                         if [ "${HICLAW_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                         HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}"
                         log "$(msg llm.provider.selected_codingplan_legacy)"
@@ -1928,11 +2050,32 @@ step_llm() {
             HICLAW_LLM_PROVIDER="openai-compat"
             log "$(msg llm.provider.selected_openai "${HICLAW_LLM_PROVIDER}")"
             echo ""
-            read -e -p "$(msg llm.openai.base_url_prompt): " HICLAW_OPENAI_BASE_URL
-            if [ "${HICLAW_OPENAI_BASE_URL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-            read -e -p "$(msg llm.openai.model_prompt): " HICLAW_DEFAULT_MODEL
-            if [ "${HICLAW_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-            HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-gpt-5.4}"
+            if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ]; then
+                log "$(msg prompt.upgrade_keep "$(msg llm.openai.base_url_prompt)" "${HICLAW_OPENAI_BASE_URL}")"
+            else
+                _current="${HICLAW_OPENAI_BASE_URL}"
+                if [ -n "${_current}" ]; then
+                    read -e -p "$(msg llm.openai.base_url_prompt) [${_current}]: " HICLAW_OPENAI_BASE_URL
+                else
+                    read -e -p "$(msg llm.openai.base_url_prompt) [https://api.openai.com/v1]: " HICLAW_OPENAI_BASE_URL
+                fi
+                if [ "${HICLAW_OPENAI_BASE_URL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+                HICLAW_OPENAI_BASE_URL="${HICLAW_OPENAI_BASE_URL:-${_current}}"
+                [ -z "${HICLAW_OPENAI_BASE_URL}" ] && HICLAW_OPENAI_BASE_URL="https://api.openai.com/v1"
+            fi
+            if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ]; then
+                log "$(msg prompt.upgrade_keep "$(msg llm.openai.model_prompt)" "${HICLAW_DEFAULT_MODEL}")"
+            else
+                _current="${HICLAW_DEFAULT_MODEL}"
+                if [ -n "${_current}" ]; then
+                    read -e -p "$(msg llm.openai.model_prompt) [${_current}]: " HICLAW_DEFAULT_MODEL
+                else
+                    read -e -p "$(msg llm.openai.model_prompt) [gpt-5.4]: " HICLAW_DEFAULT_MODEL
+                fi
+                if [ "${HICLAW_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+                HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-${_current}}"
+                [ -z "${HICLAW_DEFAULT_MODEL}" ] && HICLAW_DEFAULT_MODEL="gpt-5.4"
+            fi
             log "$(msg llm.openai.base_url_label "${HICLAW_OPENAI_BASE_URL}")"
             log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
             prompt_custom_model_params "${HICLAW_DEFAULT_MODEL}" || return 0
@@ -1944,6 +2087,17 @@ step_llm() {
             error "$(msg llm.provider.invalid "${PROVIDER_CHOICE}")"
             ;;
     esac
+
+    # Skip to embedding if Keep-All mode handled LLM params
+    if [ "${SKIP_TO_EMBEDDING}" = "1" ]; then
+        if [ -n "${HICLAW_EMBEDDING_MODEL}" ]; then
+            log "$(msg llm.embedding.title)"
+            log "$(msg llm.model.label "${HICLAW_EMBEDDING_MODEL}")"
+            log ""
+        fi
+        return 0
+    fi
+
     # --- Embedding model (optional, auto-tested) ---
     echo ""
     log "$(msg llm.embedding.title)"
@@ -1963,11 +2117,17 @@ step_llm() {
             HICLAW_EMBEDDING_MODEL="text-embedding-v4"
             ;;
         2)
-            read -e -p "$(msg llm.embedding.custom_prompt): " HICLAW_EMBEDDING_MODEL
-            if [ "${HICLAW_EMBEDDING_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-            if [ -z "${HICLAW_EMBEDDING_MODEL}" ]; then
-                HICLAW_EMBEDDING_MODEL=""
-                log "$(msg llm.embedding.disabled)"
+            if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ]; then
+                log "$(msg prompt.upgrade_keep "$(msg llm.embedding.custom_prompt)" "${HICLAW_EMBEDDING_MODEL}")"
+            else
+                _current="${HICLAW_EMBEDDING_MODEL}"
+                if [ -n "${_current}" ]; then
+                    read -e -p "$(msg llm.embedding.custom_prompt) [${_current}]: " HICLAW_EMBEDDING_MODEL
+                else
+                    read -e -p "$(msg llm.embedding.custom_prompt): " HICLAW_EMBEDDING_MODEL
+                fi
+                if [ "${HICLAW_EMBEDDING_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+                HICLAW_EMBEDDING_MODEL="${HICLAW_EMBEDDING_MODEL:-${_current}}"
             fi
             ;;
         3)
@@ -2109,13 +2269,22 @@ step_workspace() {
         return 0
     fi
     # ─────────────────────────────────────────────────────────────────
-    if [ -z "${HICLAW_WORKSPACE_DIR+x}" ]; then
-        local _input
-        read -e -p "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager"): " _input
+    local _input
+    if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ]; then
+        log "$(msg prompt.upgrade_keep "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager")" "${HICLAW_WORKSPACE_DIR}")"
+        _input="${HICLAW_WORKSPACE_DIR}"
+    else
+        local _current="${HICLAW_WORKSPACE_DIR}"
+        if [ -n "${_current}" ]; then
+            read -e -p "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager") [${_current}]: " _input
+        else
+            read -e -p "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager"): " _input
+        fi
         if [ "${_input}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-        HICLAW_WORKSPACE_DIR="${_input:-${HOME}/hiclaw-manager}"
-        export HICLAW_WORKSPACE_DIR
+        _input="${_input:-${_current}}"
     fi
+    HICLAW_WORKSPACE_DIR="${_input:-${HOME}/hiclaw-manager}"
+    export HICLAW_WORKSPACE_DIR
     HICLAW_WORKSPACE_DIR="$(cd "${HICLAW_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${HICLAW_WORKSPACE_DIR}")"
     mkdir -p "${HICLAW_WORKSPACE_DIR}"
     log "$(msg workspace.dir_label "${HICLAW_WORKSPACE_DIR}")"
@@ -2124,14 +2293,14 @@ step_workspace() {
 step_runtime() {
     log "$(msg worker_runtime.title)"
     echo ""
-    echo "  1) $(msg worker_runtime.openclaw)"
-    echo "  2) $(msg worker_runtime.copaw)"
+    echo "  1) $(msg worker_runtime.copaw)"
+    echo "  2) $(msg worker_runtime.openclaw)"
     if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
         echo "  3) $(msg worker_runtime.hermes)"
     fi
     echo ""
     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+        HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
     elif [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_WORKER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg worker_runtime.title_short)" "${HICLAW_DEFAULT_WORKER_RUNTIME}")"
         local _runtime_choice
@@ -2139,13 +2308,13 @@ step_runtime() {
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
-                2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+                2) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
                 3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
                        HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
                    else
-                       HICLAW_DEFAULT_WORKER_RUNTIME="openclaw"
+                       HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
                    fi ;;
-                *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
+                *) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
             esac
         fi
     elif [ -z "${HICLAW_DEFAULT_WORKER_RUNTIME+x}" ]; then
@@ -2154,13 +2323,13 @@ step_runtime() {
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
-            2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+            2) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
             3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
                    HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
                else
-                   HICLAW_DEFAULT_WORKER_RUNTIME="openclaw"
+                   HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
                fi ;;
-            *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
+            *) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
         esac
     fi
     export HICLAW_DEFAULT_WORKER_RUNTIME
@@ -2170,11 +2339,11 @@ step_runtime() {
 step_manager_runtime() {
     log "$(msg manager_runtime.title)"
     echo ""
-    echo "  1) $(msg manager_runtime.openclaw)"
-    echo "  2) $(msg manager_runtime.copaw)"
+    echo "  1) $(msg manager_runtime.copaw)"
+    echo "  2) $(msg manager_runtime.openclaw)"
     echo ""
     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+        HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}"
     elif [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_MANAGER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg manager_runtime.title_short)" "${HICLAW_MANAGER_RUNTIME}")"
         local _runtime_choice
@@ -2182,8 +2351,8 @@ step_manager_runtime() {
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
-                2) HICLAW_MANAGER_RUNTIME="copaw" ;;
-                *) HICLAW_MANAGER_RUNTIME="openclaw" ;;
+                2) HICLAW_MANAGER_RUNTIME="openclaw" ;;
+                *) HICLAW_MANAGER_RUNTIME="copaw" ;;
             esac
         fi
     elif [ -z "${HICLAW_MANAGER_RUNTIME+x}" ]; then
@@ -2192,8 +2361,8 @@ step_manager_runtime() {
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
-            2) HICLAW_MANAGER_RUNTIME="copaw" ;;
-            *) HICLAW_MANAGER_RUNTIME="openclaw" ;;
+            2) HICLAW_MANAGER_RUNTIME="openclaw" ;;
+            *) HICLAW_MANAGER_RUNTIME="copaw" ;;
         esac
     fi
     export HICLAW_MANAGER_RUNTIME
@@ -2357,10 +2526,15 @@ step_hostshare() {
         return 0
     fi
     # ─────────────────────────────────────────────────────────────────
+    local _current="${HICLAW_HOST_SHARE_DIR}"
     local _share_dir
-    read -e -p "$(msg host_share.prompt "$HOME"): " _share_dir
+    if [ -n "${_current}" ]; then
+        read -e -p "$(msg host_share.prompt "$HOME") [${_current}]: " _share_dir
+    else
+        read -e -p "$(msg host_share.prompt "$HOME"): " _share_dir
+    fi
     if [ "${_share_dir}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-    HICLAW_HOST_SHARE_DIR="${_share_dir:-$HOME}"
+    HICLAW_HOST_SHARE_DIR="${_share_dir:-${_current:-$HOME}}"
     export HICLAW_HOST_SHARE_DIR
 }
 
@@ -2439,9 +2613,9 @@ install_manager() {
     fi
 
     # ── State machine ─────────────────────────────────────────────────────────
-    local _STEPS=( step_lang step_mode step_version step_existing step_llm step_admin step_network \
-                   step_ports step_domains step_github step_skills step_volume \
-                   step_workspace step_manager_runtime step_runtime step_e2ee step_docker_proxy step_idle step_hostshare )
+    local _STEPS=( step_lang step_mode step_version step_existing step_llm step_manager_runtime step_runtime step_admin step_network 
+                   step_ports step_domains step_github step_skills step_volume 
+                   step_workspace step_e2ee step_docker_proxy step_idle step_hostshare )
     local _STEP_HISTORY=()
     local _step_idx=0
     while [ "${_step_idx}" -lt "${#_STEPS[@]}" ]; do
@@ -2478,9 +2652,9 @@ install_manager() {
     fi
     HICLAW_WORKSPACE_DIR="$(cd "${HICLAW_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${HICLAW_WORKSPACE_DIR}")"
     mkdir -p "${HICLAW_WORKSPACE_DIR}"
-    HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+    HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}"
     export HICLAW_MANAGER_RUNTIME
-    HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
     HICLAW_MATRIX_E2EE="${HICLAW_MATRIX_E2EE:-0}"
     export HICLAW_MATRIX_E2EE
     HICLAW_WORKER_IDLE_TIMEOUT="${HICLAW_WORKER_IDLE_TIMEOUT:-720}"
@@ -2539,7 +2713,7 @@ HICLAW_PORT_ELEMENT_WEB=${HICLAW_PORT_ELEMENT_WEB}
 HICLAW_PORT_MANAGER_CONSOLE=${HICLAW_PORT_MANAGER_CONSOLE:-18888}
 
 # Manager runtime (openclaw | copaw)
-HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-openclaw}
+HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-copaw}
 
 # Matrix
 HICLAW_MATRIX_DOMAIN=${HICLAW_MATRIX_DOMAIN}
@@ -2586,7 +2760,7 @@ HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
 HICLAW_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
 
 # Default Worker runtime (openclaw | copaw | hermes)
-HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}
+HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
 HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}
@@ -2941,9 +3115,9 @@ CREDEOF
             -e "HICLAW_LLM_API_KEY=${HICLAW_LLM_API_KEY}"
             -e "HICLAW_DEFAULT_MODEL=${HICLAW_DEFAULT_MODEL}"
             -e "HICLAW_MANAGER_GATEWAY_KEY=${HICLAW_MANAGER_GATEWAY_KEY}"
-            -e "HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-openclaw}"
+            -e "HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-copaw}"
             -e "HICLAW_MANAGER_IMAGE=$([ "${HICLAW_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
-            -e "HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+            -e "HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
             -e "HICLAW_WORKER_IMAGE=${WORKER_IMAGE}"
             -e "HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
             -e "HICLAW_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
@@ -3196,7 +3370,7 @@ CREDEOF
             -e HOME=/root/manager-workspace \
             -w /root/manager-workspace \
             -e HOST_ORIGINAL_HOME="${HICLAW_HOST_SHARE_DIR}" \
-            -e HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}" \
+            -e HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}" \
             ${JVM_ARGS:+-e JVM_ARGS="${JVM_ARGS}"} \
             ${YOLO_ARGS} \
             ${MATRIX_DEBUG_ARGS} \

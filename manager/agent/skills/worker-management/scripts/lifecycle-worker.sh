@@ -256,7 +256,7 @@ action_check_idle() {
             fi
         else
             # Worker has no active tasks (neither finite nor infinite)
-            if [ "$container_status" != "running" ]; then
+            if [ "$container_status" != "running" ] && [ "$container_status" != "ready" ]; then
                 continue
             fi
 
@@ -471,8 +471,10 @@ action_ensure_ready() {
     status=$(worker_backend_status "$worker")
     _log "Worker $worker status=$status"
 
-    if [ "$status" = "running" ]; then
-        echo "{\"worker\":\"$worker\",\"status\":\"ready\",\"container_status\":\"running\"}"
+    # Treat both "running" and "ready" as live states. /status returns "ready"
+    # once the worker has self-reported readiness; before that it's "running".
+    if [ "$status" = "running" ] || [ "$status" = "ready" ]; then
+        echo "{\"worker\":\"$worker\",\"status\":\"ready\",\"container_status\":\"$status\"}"
         return 0
     fi
 

@@ -43,7 +43,7 @@ RUN apk add --no-cache curl && \
 # ============ Final: Minimal image with all artifacts ============
 FROM ${HIGRESS_REGISTRY}/higress/alpine:3.20
 
-RUN apk add --no-cache bash jq curl unzip
+RUN apk add --no-cache bash jq curl unzip kubectl
 
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc
 COPY --from=builder /hiclaw-controller /usr/local/bin/hiclaw-controller

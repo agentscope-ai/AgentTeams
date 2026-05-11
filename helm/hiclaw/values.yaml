@@ -189,6 +189,20 @@ controller:
     annotations: {}
   env: {}
   timezone: "Asia/Shanghai"
+  uninstallHook:
+    # When enabled, helm uninstall first runs a Job that deletes all
+    # Manager/Worker/Team/Human CRs while the controller is still alive,
+    # so the controller's finalizer logic can clean up Pods, Matrix users,
+    # and OSS data. Set to false to skip auto-cleanup (you must then
+    # delete those CRs manually before `helm uninstall`).
+    #
+    # The hook reuses the controller image (which ships kubectl) so it
+    # does not depend on Docker Hub being reachable from the cluster.
+    enabled: true
+    timeoutSeconds: 300         # per-resource-group `kubectl delete --wait` timeout
+    backoffLimit: 1
+    activeDeadlineSeconds: 1500 # hard ceiling: 4 groups × timeoutSeconds + headroom
+    resources: {}               # override if your cluster has tight quotas
 
 # ── Manager Agent (CRD-driven) ────────────────────────────────────────────
 # When enabled, the controller creates a Manager CR at startup. The

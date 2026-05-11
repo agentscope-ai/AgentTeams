@@ -259,7 +259,6 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
         # Preserve all other fields (especially authConfig.allowedConsumers and version).
         patched=$(echo "${existing_route_resp}" | jq --argjson domains "${AI_ROUTE_DOMAINS}" '
             .data
-            | .upstreams[0].provider = "'"${LLM_PROVIDER}"'"
             | .domains = $domains
             | .headerControl.enabled = true
             | .headerControl.request.add = [{"key":"user-agent","value":"HiClaw/'"${HICLAW_VERSION}"'"}]

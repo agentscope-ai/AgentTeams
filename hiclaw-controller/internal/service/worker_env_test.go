@@ -17,6 +17,8 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 		AIGatewayURL:  "http://aigw.example.com:8080",
 		MatrixURL:     "http://matrix.example.com:8080",
 		Runtime:       "docker",
+		SkillsAPIURL:  "nacos://skills.example.com:8848/public",
+		NacosAuthType: "sts-hiclaw",
 	})
 
 	env := builder.Build("alice", &WorkerProvisionResult{
@@ -41,6 +43,8 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 		"HOME":                       "/root/hiclaw-fs/agents/alice",
 		"HICLAW_WORKER_GATEWAY_KEY":  "gateway-key",
 		"HICLAW_WORKER_MATRIX_TOKEN": "matrix-token",
+		"SKILLS_API_URL":             "nacos://skills.example.com:8848/public",
+		"NACOS_AUTH_TYPE":            "sts-hiclaw",
 	} {
 		if got := env[key]; got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)
@@ -64,6 +68,7 @@ func TestWorkerEnvBuilderBuildManagerUsesConfiguredRuntimeAndBucket(t *testing.T
 		MatrixURL:     "http://matrix.example.com:8080",
 		AdminUser:     "admin",
 		Runtime:       "docker",
+		SkillsAPIURL:  "nacos://skills.example.com:8848/public",
 	})
 
 	env := builder.BuildManager("manager", &ManagerProvisionResult{
@@ -81,6 +86,7 @@ func TestWorkerEnvBuilderBuildManagerUsesConfiguredRuntimeAndBucket(t *testing.T
 		"HICLAW_FS_BUCKET":           "hiclaw-fs",
 		"HICLAW_RUNTIME":             "docker",
 		"HICLAW_ADMIN_USER":          "admin",
+		"SKILLS_API_URL":             "nacos://skills.example.com:8848/public",
 	} {
 		if got := env[key]; got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)

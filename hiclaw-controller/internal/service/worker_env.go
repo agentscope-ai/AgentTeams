@@ -132,4 +132,10 @@ func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	if b.defaults.CMSWorkspace != "" {
 		env["HICLAW_CMS_WORKSPACE"] = b.defaults.CMSWorkspace
 	}
+	if b.defaults.SkillsAPIURL != "" {
+		env["SKILLS_API_URL"] = b.defaults.SkillsAPIURL
+	}
+	if b.defaults.NacosAuthType != "" {
+		env["NACOS_AUTH_TYPE"] = b.defaults.NacosAuthType
+	}
 }

@@ -50,7 +50,7 @@
 set -e
 
 HICLAW_VERSION="${HICLAW_VERSION:-}"
-HICLAW_KNOWN_STABLE_VERSION="v1.1.0"   # fallback if GitHub API is unreachable
+HICLAW_KNOWN_STABLE_VERSION="v1.1.1"   # fallback if GitHub API is unreachable
 
 # Returns 0 (true) if $1 < $2 using semver order; "latest" is treated as greatest
 _ver_lt() {
@@ -1584,7 +1584,7 @@ step_version() {
     local _fetched
     _fetched=$(curl -sf --max-time 5 \
         -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/alibaba/hiclaw/releases/latest" \
+        "https://api.github.com/repos/agentscope-ai/HiClaw/releases/latest" \
         2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
     if [ -n "${_fetched}" ]; then
         HICLAW_KNOWN_STABLE_VERSION="${_fetched}"

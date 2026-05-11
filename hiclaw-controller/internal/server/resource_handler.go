@@ -985,6 +985,13 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		InitialPassword: h.Status.InitialPassword,
 		Rooms:           h.Status.Rooms,
 		Message:         h.Status.Message,
+
+		// Spec echo (#729 PUT route support — see HumanResponse godoc).
+		Email:             h.Spec.Email,
+		PermissionLevel:   h.Spec.PermissionLevel,
+		AccessibleTeams:   h.Spec.AccessibleTeams,
+		AccessibleWorkers: h.Spec.AccessibleWorkers,
+		Note:              h.Spec.Note,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"

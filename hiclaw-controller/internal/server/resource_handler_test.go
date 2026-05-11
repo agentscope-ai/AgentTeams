@@ -544,6 +544,60 @@ func TestUpdateHumanPermissionLevel(t *testing.T) {
 	}
 }
 
+// TestGetHumanEchoesSpecFields verifies the response shape carries the
+// spec-level fields needed for read-modify-write callers (downstream
+// dependents like haopaw BFF that need to add/remove a single team from
+// accessibleTeams without overwriting other spec state). Before this PR,
+// HumanResponse only echoed DisplayName + Status fields; spec fields like
+// AccessibleTeams / Email / PermissionLevel were invisible, forcing
+// callers to use raw kubectl or DELETE+CREATE workarounds.
+func TestGetHumanEchoesSpecFields(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	existing := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "dave", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:       "Dave",
+			Email:             "dave@example.com",
+			PermissionLevel:   2,
+			AccessibleTeams:   []string{"alpha", "beta"},
+			AccessibleWorkers: []string{"w1"},
+			Note:              "team admin for alpha",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).WithObjects(existing).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/humans/dave", nil)
+	req.SetPathValue("name", "dave")
+	rec := httptest.NewRecorder()
+	handler.GetHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var resp HumanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Email != "dave@example.com" {
+		t.Fatalf("Email not echoed: got %q", resp.Email)
+	}
+	if resp.PermissionLevel != 2 {
+		t.Fatalf("PermissionLevel not echoed: got %d", resp.PermissionLevel)
+	}
+	if len(resp.AccessibleTeams) != 2 || resp.AccessibleTeams[0] != "alpha" || resp.AccessibleTeams[1] != "beta" {
+		t.Fatalf("AccessibleTeams not echoed: got %v", resp.AccessibleTeams)
+	}
+	if len(resp.AccessibleWorkers) != 1 || resp.AccessibleWorkers[0] != "w1" {
+		t.Fatalf("AccessibleWorkers not echoed: got %v", resp.AccessibleWorkers)
+	}
+	if resp.Note != "team admin for alpha" {
+		t.Fatalf("Note not echoed: got %q", resp.Note)
+	}
+}
+
 // TestUpdateHumanNotFound verifies the same writeK8sError flow as
 // UpdateWorker / UpdateTeam: missing resource → 404, not 500.
 func TestUpdateHumanNotFound(t *testing.T) {

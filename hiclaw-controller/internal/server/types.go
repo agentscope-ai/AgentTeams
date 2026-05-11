@@ -203,6 +203,17 @@ type HumanResponse struct {
 	InitialPassword string   `json:"initialPassword,omitempty"`
 	Rooms           []string `json:"rooms,omitempty"`
 	Message         string   `json:"message,omitempty"`
+
+	// Spec echo (added 2026-05 with PUT /humans/{name} route — fixes #729).
+	// Surfacing these fields lets callers do read-modify-write without a
+	// separate kubectl/raw-CR fetch. Useful for the upcoming UpdateHuman
+	// flow where caller adds/removes one entry from accessibleTeams
+	// without overwriting other spec state.
+	Email             string   `json:"email,omitempty"`
+	PermissionLevel   int      `json:"permissionLevel,omitempty"`
+	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	Note              string   `json:"note,omitempty"`
 }
 
 type HumanListResponse struct {

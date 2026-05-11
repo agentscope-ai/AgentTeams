@@ -2163,18 +2163,35 @@ step_llm() {
 step_admin() {
     log "$(msg admin.title)"
     prompt HICLAW_ADMIN_USER "$(msg admin.username_prompt)" "admin" || return 0
-    if [ -z "${HICLAW_ADMIN_PASSWORD}" ]; then
+
+    # Pre-set via env var: validate; in non-interactive mode fail fast,
+    # in interactive mode warn and fall through to the retry prompt.
+    if [ -n "${HICLAW_ADMIN_PASSWORD:-}" ]; then
+        log "  $(msg prompt.preset "$(msg admin.password_prompt)")"
+        if [ ${#HICLAW_ADMIN_PASSWORD} -ge 8 ]; then
+            log ""
+            return 0
+        fi
+        if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+            die "$(msg admin.password_too_short "${#HICLAW_ADMIN_PASSWORD}")"
+        fi
+        error "$(msg admin.password_too_short "${#HICLAW_ADMIN_PASSWORD}")"
+        unset HICLAW_ADMIN_PASSWORD
+    fi
+
+    while true; do
+        unset HICLAW_ADMIN_PASSWORD
         prompt_optional HICLAW_ADMIN_PASSWORD "$(msg admin.password_prompt)" "true" || return 0
         if [ -z "${HICLAW_ADMIN_PASSWORD}" ]; then
             HICLAW_ADMIN_PASSWORD="admin$(openssl rand -hex 6)"
             log "$(msg admin.password_generated)"
+            break
         fi
-    else
-        log "  $(msg prompt.preset "$(msg admin.password_prompt)")"
-    fi
-    if [ ${#HICLAW_ADMIN_PASSWORD} -lt 8 ]; then
-        die "$(msg admin.password_too_short "${#HICLAW_ADMIN_PASSWORD}")"
-    fi
+        if [ ${#HICLAW_ADMIN_PASSWORD} -ge 8 ]; then
+            break
+        fi
+        error "$(msg admin.password_too_short "${#HICLAW_ADMIN_PASSWORD}")"
+    done
     log ""
 }
 

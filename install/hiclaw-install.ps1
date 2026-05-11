@@ -1990,6 +1990,13 @@ function Step-Skills {
 
 function Step-Volume {
     Write-Log (Get-Msg "data.title")
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if ($script:HICLAW_NON_INTERACTIVE) {
+        $script:config.DATA_DIR = if ($env:HICLAW_DATA_DIR) { $env:HICLAW_DATA_DIR } else { "hiclaw-data" }
+        Write-Log "  $(Get-Msg 'data.volume_using' -f $script:config.DATA_DIR) (non-interactive, skipped)"
+        return
+    }
+    # ─────────────────────────────────────────────────────────────────
     $dataDirInput = Read-Host (Get-Msg "data.volume_prompt")
     if ($dataDirInput -eq "b") { $script:StepResult = "back"; return }
     $script:config.DATA_DIR = if ($dataDirInput) { $dataDirInput } else { "hiclaw-data" }
@@ -1998,6 +2005,16 @@ function Step-Volume {
 
 function Step-Workspace {
     Write-Log (Get-Msg "workspace.title")
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if ($script:HICLAW_NON_INTERACTIVE) {
+        $script:config.WORKSPACE_DIR = if ($env:HICLAW_WORKSPACE_DIR) { $env:HICLAW_WORKSPACE_DIR } else { "$env:USERPROFILE\hiclaw-manager" }
+        if (-not (Test-Path $script:config.WORKSPACE_DIR)) {
+            New-Item -ItemType Directory -Path $script:config.WORKSPACE_DIR -Force | Out-Null
+        }
+        Write-Log "  $(Get-Msg 'workspace.dir_label' -f $script:config.WORKSPACE_DIR) (non-interactive, skipped)"
+        return
+    }
+    # ─────────────────────────────────────────────────────────────────
     $defaultWorkspace = "$env:USERPROFILE\hiclaw-manager"
     $wsInput = Read-Host (Get-Msg "workspace.dir_prompt" -f $defaultWorkspace)
     if ($wsInput -eq "b") { $script:StepResult = "back"; return }
@@ -2078,6 +2095,13 @@ function Step-ManagerRuntime {
 function Step-E2ee {
     Write-Host ""
     Write-Log (Get-Msg "matrix_e2ee.title")
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if ($script:HICLAW_NON_INTERACTIVE) {
+        $script:config.MATRIX_E2EE = if ($env:HICLAW_MATRIX_E2EE) { $env:HICLAW_MATRIX_E2EE } else { "0" }
+        Write-Log "  $(Get-Msg 'matrix_e2ee.title_short') = $($script:config.MATRIX_E2EE) (non-interactive, skipped)"
+        return
+    }
+    # ─────────────────────────────────────────────────────────────────
     Write-Host ""
     Write-Host "  $(Get-Msg 'matrix_e2ee.desc')"
     Write-Host ""
@@ -2116,6 +2140,14 @@ function Step-DockerProxy {
         $script:config.DOCKER_PROXY = "0"
         return
     }
+
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if ($script:HICLAW_NON_INTERACTIVE) {
+        $script:config.DOCKER_PROXY = if ($env:HICLAW_DOCKER_PROXY) { $env:HICLAW_DOCKER_PROXY } else { "0" }
+        Write-Log "  $(Get-Msg 'docker_proxy.title_short') = $($script:config.DOCKER_PROXY) (non-interactive, skipped)"
+        return
+    }
+    # ─────────────────────────────────────────────────────────────────
 
     Write-Host ""
     Write-Log (Get-Msg "docker_proxy.title")
@@ -2170,6 +2202,13 @@ function Step-DockerProxy {
 }
 
 function Step-Idle {
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if ($script:HICLAW_NON_INTERACTIVE) {
+        $script:config.WORKER_IDLE_TIMEOUT = if ($env:HICLAW_WORKER_IDLE_TIMEOUT) { $env:HICLAW_WORKER_IDLE_TIMEOUT } else { "720" }
+        Write-Log "  $(Get-Msg 'idle_timeout.label') = $($script:config.WORKER_IDLE_TIMEOUT) (non-interactive, skipped)"
+        return
+    }
+    # ─────────────────────────────────────────────────────────────────
     if ($script:HICLAW_UPGRADE -and $env:HICLAW_WORKER_IDLE_TIMEOUT) {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "idle_timeout.label"), $env:HICLAW_WORKER_IDLE_TIMEOUT)
         $idleInput = Read-Host (Get-Msg "idle_timeout.prompt")
@@ -2187,6 +2226,13 @@ function Step-Idle {
 }
 
 function Step-Hostshare {
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if ($script:HICLAW_NON_INTERACTIVE) {
+        $script:config.HOST_SHARE_DIR = if ($env:HICLAW_HOST_SHARE_DIR) { $env:HICLAW_HOST_SHARE_DIR } else { $env:USERPROFILE }
+        Write-Log "  $(Get-Msg 'host_share.label') = $($script:config.HOST_SHARE_DIR) (non-interactive, skipped)"
+        return
+    }
+    # ─────────────────────────────────────────────────────────────────
     $shareInput = Read-Host (Get-Msg "host_share.prompt" -f $env:USERPROFILE)
     if ($shareInput -eq "b") { $script:StepResult = "back"; return }
     $script:config.HOST_SHARE_DIR = if ($shareInput) { $shareInput } else { $env:USERPROFILE }

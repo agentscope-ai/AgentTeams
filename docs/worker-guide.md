@@ -24,7 +24,7 @@ Full field reference: [Declarative Resource Management](declarative-resource-man
 | Runtime | Primary workspace | Notes |
 |---------|-------------------|--------|
 | **openclaw** | `/root/hiclaw-fs/agents/<worker-name>/` (`HOME` points here) | `openclaw.json`, `SOUL.md`, `AGENTS.md`, skills, `.openclaw/` live under this tree. Shared data: `/root/hiclaw-fs/shared/`. |
-| **copaw** | `/root/.hiclaw-worker/<worker-name>/` (CoPaw config in `.copaw/`) | A symlink **`/root/hiclaw-fs`** → the per-worker tree keeps scripts that assume OpenClaw-style paths working. |
+| **copaw** | `/root/.hiclaw-worker/<worker-name>/` (QwenPaw config in `.copaw/`) | A symlink **`/root/hiclaw-fs`** → the per-worker tree keeps scripts that assume OpenClaw-style paths working. |
 | **hermes** | `/root/hiclaw-fs/agents/<worker-name>/` (`HOME` equals workspace, same mirror root as OpenClaw) | Hermes policy/state under **`.hermes/`** inside that directory (e.g. `.hermes/config.yaml`, `state.db`). |
 
 ## Installation

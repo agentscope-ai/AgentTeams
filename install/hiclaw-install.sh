@@ -51,6 +51,14 @@ set -e
 
 HICLAW_VERSION="${HICLAW_VERSION:-}"
 HICLAW_KNOWN_STABLE_VERSION="v1.1.0"   # fallback if GitHub API is unreachable
+
+# Returns 0 (true) if $1 < $2 using semver order; "latest" is treated as greatest
+_ver_lt() {
+    [ "$1" = "latest" ] && return 1
+    [ "$2" = "latest" ] && return 0
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n%s' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
 HICLAW_NON_INTERACTIVE="${HICLAW_NON_INTERACTIVE:-0}"
 HICLAW_MOUNT_SOCKET="${HICLAW_MOUNT_SOCKET:-1}"
 HICLAW_DOCKER_PROXY="${HICLAW_DOCKER_PROXY:-1}"
@@ -112,15 +120,17 @@ detect_timezone() {
         tz=$(timedatectl show --value -p Timezone 2>/dev/null)
     fi
 
-    # If still not detected, warn and prompt user
+    # If still not detected, warn and prompt user. Diagnostics go to stderr —
+    # this function returns its value via stdout to `$(detect_timezone)`, so
+    # any echo here would leak into HICLAW_TIMEZONE and downstream image tags.
     if [ -z "${tz}" ]; then
-        echo ""
-        echo -e "\033[33m[HiClaw WARNING]\033[0m Could not detect timezone automatically."
-        echo -e "\033[33m[HiClaw]\033[0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York)."
-        echo ""
+        echo "" >&2
+        echo -e "\033[33m[HiClaw WARNING]\033[0m Could not detect timezone automatically." >&2
+        echo -e "\033[33m[HiClaw]\033[0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York)." >&2
+        echo "" >&2
         if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
             tz="Asia/Shanghai"
-            log "Using default timezone: ${tz}"
+            log "Using default timezone: ${tz}" >&2
         else
             read -e -p "Timezone [Asia/Shanghai]: " tz
             tz="${tz:-Asia/Shanghai}"
@@ -968,6 +978,13 @@ resolve_image_tags() {
     COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-copaw-worker:${HICLAW_VERSION}}"
     HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-hermes-worker:${HICLAW_VERSION}}"
     EMBEDDED_IMAGE="${HICLAW_INSTALL_EMBEDDED_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-embedded:${HICLAW_VERSION}}"
+    # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
+    if [ -z "${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${HICLAW_VERSION}" "v1.0.4"; then
+        COPAW_WORKER_IMAGE=""
+    fi
+    if [ -z "${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+        HERMES_WORKER_IMAGE=""
+    fi
 }
 
 # Resolve the embedded controller image. Embedded mode is the only supported
@@ -1000,14 +1017,26 @@ resolve_embedded_image() {
         EMBEDDED_IMAGE="${_versioned}"
         return 0
     fi
+
+    # Versions before v1.1.0 predate hiclaw-embedded entirely — their manager image
+    # bundled all infrastructure.  Falling back to hiclaw-embedded:latest would
+    # silently swap in the v1.1.0 architecture (embedded kube-apiserver) which
+    # crashes under QEMU on Apple Silicon.  Auto-activate legacy mode instead.
+    if _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+        log "INFO: ${HICLAW_VERSION} predates hiclaw-embedded; switching to legacy all-in-one manager architecture."
+        log "WARNING: Legacy all-in-one mode requires HICLAW_VERSION <= v1.0.9 (older bundled manager image)."
+        log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
+        HICLAW_USE_EMBEDDED=0
+        return 0
+    fi
+
     if ${DOCKER_CMD} pull "${_latest}" >/dev/null 2>&1; then
         log "embedded ${HICLAW_VERSION} not found, using latest"
         EMBEDDED_IMAGE="${_latest}"
         return 0
     fi
 
-    # Escape hatch for older versions (HICLAW_VERSION <= v1.0.9) whose manager image
-    # still bundled the infrastructure — opt-in only, never silent.
+    # Explicit escape hatch — still honoured for edge cases.
     if [ "${HICLAW_FORCE_LEGACY:-0}" = "1" ]; then
         log "WARNING: HICLAW_FORCE_LEGACY=1 — using legacy all-in-one manager architecture."
         log "WARNING: This requires HICLAW_VERSION <= v1.0.9 (older bundled manager image)."
@@ -2049,6 +2078,14 @@ step_skills() {
 
 step_volume() {
     log "$(msg data.title)"
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        HICLAW_DATA_DIR="${HICLAW_DATA_DIR:-hiclaw-data}"
+        log "  $(msg data.volume_using "${HICLAW_DATA_DIR}") (non-interactive, skipped)"
+        export HICLAW_DATA_DIR
+        return 0
+    fi
+    # ─────────────────────────────────────────────────────────────────
     if [ -z "${HICLAW_DATA_DIR+x}" ]; then
         local _input
         read -e -p "$(msg data.volume_prompt): " _input
@@ -2062,6 +2099,16 @@ step_volume() {
 
 step_workspace() {
     log "$(msg workspace.title)"
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        HICLAW_WORKSPACE_DIR="${HICLAW_WORKSPACE_DIR:-${HOME}/hiclaw-manager}"
+        HICLAW_WORKSPACE_DIR="$(cd "${HICLAW_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${HICLAW_WORKSPACE_DIR}")"
+        mkdir -p "${HICLAW_WORKSPACE_DIR}"
+        log "  $(msg workspace.dir_label "${HICLAW_WORKSPACE_DIR}") (non-interactive, skipped)"
+        export HICLAW_WORKSPACE_DIR
+        return 0
+    fi
+    # ─────────────────────────────────────────────────────────────────
     if [ -z "${HICLAW_WORKSPACE_DIR+x}" ]; then
         local _input
         read -e -p "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager"): " _input
@@ -2079,7 +2126,9 @@ step_runtime() {
     echo ""
     echo "  1) $(msg worker_runtime.openclaw)"
     echo "  2) $(msg worker_runtime.copaw)"
-    echo "  3) $(msg worker_runtime.hermes)"
+    if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+        echo "  3) $(msg worker_runtime.hermes)"
+    fi
     echo ""
     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
         HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
@@ -2091,7 +2140,11 @@ step_runtime() {
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
                 2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
-                3) HICLAW_DEFAULT_WORKER_RUNTIME="hermes" ;;
+                3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+                       HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+                   else
+                       HICLAW_DEFAULT_WORKER_RUNTIME="openclaw"
+                   fi ;;
                 *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
             esac
         fi
@@ -2102,7 +2155,11 @@ step_runtime() {
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
             2) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
-            3) HICLAW_DEFAULT_WORKER_RUNTIME="hermes" ;;
+            3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+                   HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+               else
+                   HICLAW_DEFAULT_WORKER_RUNTIME="openclaw"
+               fi ;;
             *) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
         esac
     fi
@@ -2146,6 +2203,14 @@ step_manager_runtime() {
 step_e2ee() {
     log ""
     log "$(msg matrix_e2ee.title)"
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        HICLAW_MATRIX_E2EE="${HICLAW_MATRIX_E2EE:-0}"
+        log "  $(msg matrix_e2ee.title_short) = ${HICLAW_MATRIX_E2EE} (non-interactive, skipped)"
+        export HICLAW_MATRIX_E2EE
+        return 0
+    fi
+    # ─────────────────────────────────────────────────────────────────
     echo ""
     echo -e "  $(msg matrix_e2ee.desc)"
     echo ""
@@ -2189,6 +2254,15 @@ step_docker_proxy() {
         HICLAW_DOCKER_PROXY="0"
         return 0
     fi
+
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        HICLAW_DOCKER_PROXY="${HICLAW_DOCKER_PROXY:-0}"
+        log "  $(msg docker_proxy.title_short) = ${HICLAW_DOCKER_PROXY} (non-interactive, skipped)"
+        export HICLAW_DOCKER_PROXY
+        return 0
+    fi
+    # ─────────────────────────────────────────────────────────────────
 
     echo ""
     echo -e "  \033[1m$(msg docker_proxy.title)\033[0m"
@@ -2249,6 +2323,14 @@ step_docker_proxy() {
 }
 
 step_idle() {
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        HICLAW_WORKER_IDLE_TIMEOUT="${HICLAW_WORKER_IDLE_TIMEOUT:-720}"
+        log "  $(msg idle_timeout.label) = ${HICLAW_WORKER_IDLE_TIMEOUT} (non-interactive, skipped)"
+        export HICLAW_WORKER_IDLE_TIMEOUT
+        return 0
+    fi
+    # ─────────────────────────────────────────────────────────────────
     if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_WORKER_IDLE_TIMEOUT}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg idle_timeout.label)" "${HICLAW_WORKER_IDLE_TIMEOUT}")"
         local _idle_timeout
@@ -2267,6 +2349,14 @@ step_idle() {
 }
 
 step_hostshare() {
+    # ── Non-interactive guard (deep defense) ──────────────────────────
+    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        HICLAW_HOST_SHARE_DIR="${HICLAW_HOST_SHARE_DIR:-${HOME}}"
+        log "  $(msg host_share.label) = ${HICLAW_HOST_SHARE_DIR} (non-interactive, skipped)"
+        export HICLAW_HOST_SHARE_DIR
+        return 0
+    fi
+    # ─────────────────────────────────────────────────────────────────
     local _share_dir
     read -e -p "$(msg host_share.prompt "$HOME"): " _share_dir
     if [ "${_share_dir}" = "b" ]; then STEP_RESULT="back"; return 0; fi
@@ -2602,6 +2692,7 @@ EOF
     # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
     _pull_image() {
         local _img="$1" _exists_key="$2" _pull_key="$3"
+        [ -z "${_img}" ] && return 0
         if echo "${_img}" | grep -q "^${LOCAL_IMAGE_PREFIX}"; then
             if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
                 log "$(msg "${_exists_key}" "${_img}")"
@@ -2609,7 +2700,19 @@ EOF
             fi
         fi
         log "$(msg "${_pull_key}" "${_img}")"
-        ${DOCKER_CMD} pull "${_img}"
+        local _attempt=1
+        while [ $_attempt -le 3 ]; do
+            if ${DOCKER_CMD} pull "${_img}"; then
+                return 0
+            fi
+            if [ $_attempt -lt 3 ]; then
+                log "Pull failed (attempt ${_attempt}/3), retrying in 5s..."
+                sleep 5
+            fi
+            _attempt=$((_attempt + 1))
+        done
+        error "Failed to pull ${_img} after 3 attempts"
+        return 1
     }
 
     # Embedded controller image (resolve versioned tag, fallback to latest)

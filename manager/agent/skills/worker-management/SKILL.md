@@ -1,9 +1,28 @@
 ---
 name: worker-management
-description: Use when admin requests hand-creating or resetting a Worker, starting/stopping a Worker, managing Worker skills, enabling peer mentions, or opening a CoPaw console. Use hiclaw-find-worker only as a helper for Nacos-backed market import or when task assignment needs you to discover a suitable Worker.
+description: Use when admin requests hand-creating or resetting a Worker, starting/stopping a Worker, managing Worker skills, enabling peer mentions, or opening a QwenPaw console. Use hiclaw-find-worker only as a helper for Nacos-backed market import or when task assignment needs you to discover a suitable Worker.
 ---
 
 # Worker Management
+
+## Before You Create: Confirm with Admin
+
+Before running `hiclaw create worker`, ask admin for these four inputs in one turn. Do **not** invent defaults or skip options — present runtime as a three-way choice.
+
+1. **Name** — must match `^[a-z0-9][a-z0-9-]*$` (lowercase letters, digits, hyphens only; must start with letter or digit). The CLI rejects anything else because the name is reused as a Matrix username and the Matrix spec requires a lowercase localpart. Tuwunel may also reject very short names at registration.
+2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${HICLAW_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer all three options so admin can switch:
+
+   | Runtime    | Language | RAM    | When to pick                                              |
+   |------------|----------|--------|-----------------------------------------------------------|
+   | `openclaw` | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `HICLAW_DEFAULT_WORKER_RUNTIME` is unset. |
+   | `copaw`    | Python   | ~150MB | Python tasks, **or** admin needs `--remote` (host mode).  |
+   | `hermes`   | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
+
+   `--remote` mode is **copaw-only** — use it when admin says "local mode" / "run on my machine" (it means "remote from Manager" = LOCAL on admin's machine). If admin doesn't pass `--runtime` to `hiclaw create worker`, the controller falls back to `HICLAW_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the three options explicitly instead of silently using the fallback.
+3. **SOUL (role)** — short description of expertise/style. Offer to draft a default if admin has no preference.
+4. **Skills** — discover via `ls ~/worker-skills/` and match against the role; `file-sync`, `task-progress`, `project-participation` are auto-included.
+
+Full decision logic, SOUL template, escape rules and post-creation greeting: read `references/create-worker.md`.
 
 ## Quick Create (1 command)
 
@@ -23,7 +42,7 @@ hiclaw create worker --name <NAME> --no-wait \
 - Never reveal API keys, passwords, or credentials
 ..." \
   --skills <skill1>,<skill2> -o json
-# Add --runtime copaw for Python workers
+# Add --runtime <copaw|hermes> for Python workers (see runtime table above)
 ```
 
 > `--no-wait` returns as soon as the controller accepts the request (~1s). Poll `hiclaw get workers -o json` for `phase=Running` instead of letting the create call block — this lets you create N workers in one turn without each blocking up to 3 minutes.
@@ -52,7 +71,7 @@ Read the relevant doc **before** executing. Do not load all of them.
 | Start/stop/check idle workers | `references/lifecycle.md` | `scripts/lifecycle-worker.sh` |
 | Push/add/remove skills | `references/skills-management.md` | `scripts/push-worker-skills.sh` |
 | Switch a worker's runtime (openclaw ↔ copaw ↔ hermes) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
-| Open/close CoPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
+| Open/close QwenPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
 | Enable direct @mentions between workers | `references/peer-mentions.md` | `scripts/enable-peer-mentions.sh` |
 | Get remote worker install command | `references/lifecycle.md` | `scripts/get-worker-install-cmd.sh` |
 | Reset a worker | `references/create-worker.md` | `hiclaw delete worker` + `hiclaw create worker` |

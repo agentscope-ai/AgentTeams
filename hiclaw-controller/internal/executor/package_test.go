@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"archive/zip"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -523,6 +524,73 @@ func TestValidateNacosURI_FailsWhenRequestedVersionIsNotOnline(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `online version "v1" not found`) {
 		t.Fatalf("expected online-version-not-found error, got: %v", err)
+	}
+}
+
+func TestResolveAndExtract_FileDirectoryWithoutSoulmd_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	importDir := t.TempDir()
+	pkgRoot := filepath.Join(importDir, "pkgroot")
+	if err := os.MkdirAll(pkgRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgRoot, "note.txt"), []byte("no soul"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	abs, err := filepath.Abs(pkgRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	pr := NewPackageResolver(importDir)
+	out, err := pr.ResolveAndExtract(ctx, u.String(), "ignored")
+	if err != nil {
+		t.Fatalf("ResolveAndExtract: %v", err)
+	}
+	if filepath.Clean(out) != filepath.Clean(pkgRoot) {
+		t.Fatalf("got dir %q want %q", out, pkgRoot)
+	}
+}
+
+func TestResolveAndExtract_ZipWithoutSoulmd_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	importDir := t.TempDir()
+	zipPath := filepath.Join(importDir, "minimal.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("skills/x.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("skill")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	absZip, err := filepath.Abs(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(absZip)}
+	pr := NewPackageResolver(importDir)
+	out, err := pr.ResolveAndExtract(ctx, u.String(), "w1")
+	if err != nil {
+		t.Fatalf("ResolveAndExtract: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(out, "skills", "x.txt"))
+	if err != nil {
+		t.Fatalf("read extracted file: %v", err)
+	}
+	if string(data) != "skill" {
+		t.Fatalf("content = %q", string(data))
 	}
 }
 

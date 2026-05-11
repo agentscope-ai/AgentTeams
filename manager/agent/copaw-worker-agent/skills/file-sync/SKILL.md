@@ -3,7 +3,7 @@ name: file-sync
 description: Sync files with centralized storage. Use when your coordinator or another Worker notifies you of file updates (config changes, task files, shared data, collaboration artifacts).
 ---
 
-# File Sync (CoPaw Worker)
+# File Sync (QwenPaw Worker)
 
 ## Sync agent config files
 

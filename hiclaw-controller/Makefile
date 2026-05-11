@@ -1,4 +1,4 @@
-.PHONY: build build-controller build-cli clean test test-unit test-integration test-all
+.PHONY: build build-controller build-cli clean test test-unit test-integration test-all generate controller-gen
 
 # --- Build ---
 
@@ -39,6 +39,18 @@ test-integration: setup-envtest
 	go test -tags=integration -race -count=1 -v -timeout=120s ./test/integration/...
 
 test-all: test-unit test-integration
+
+# --- Generate ---
+
+CONTROLLER_GEN ?= $(GOBIN)/controller-gen
+
+controller-gen: ## Ensure controller-gen is installed
+	@test -x $(CONTROLLER_GEN) || go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+
+generate: controller-gen ## Regenerate deepcopy functions and sync CRDs to Helm
+	$(CONTROLLER_GEN) object paths=./api/...
+	cp config/crd/*.yaml ../helm/hiclaw/crds/
+	@echo "==> DeepCopy regenerated, CRDs synced to Helm"
 
 # --- Tools ---
 

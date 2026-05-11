@@ -12,13 +12,13 @@ import (
 type MockDeployer struct {
 	mu sync.Mutex
 
-	DeployPackageFn              func(ctx context.Context, workerName string, pkg string, isUpdate bool) error
-	WriteInlineConfigsFn         func(workerName string, spec v1beta1.WorkerSpec) error
-	DeployWorkerConfigFn         func(ctx context.Context, req service.WorkerDeployRequest) error
-	PushOnDemandSkillsFn         func(ctx context.Context, workerName string, skills []string) error
-	CleanupOSSDataFn             func(ctx context.Context, workerName string) error
-	InjectCoordinationContextFn  func(ctx context.Context, req service.CoordinationDeployRequest) error
-	EnsureTeamStorageFn          func(ctx context.Context, teamName string) error
+	DeployPackageFn             func(ctx context.Context, workerName string, pkg string, isUpdate bool) error
+	WriteInlineConfigsFn        func(workerName string, spec v1beta1.WorkerSpec) error
+	DeployWorkerConfigFn        func(ctx context.Context, req service.WorkerDeployRequest) error
+	PushOnDemandSkillsFn        func(ctx context.Context, workerName string, skills []string) error
+	CleanupOSSDataFn            func(ctx context.Context, workerName string) error
+	InjectCoordinationContextFn func(ctx context.Context, req service.CoordinationDeployRequest) error
+	EnsureTeamStorageFn         func(ctx context.Context, teamName string) error
 
 	Calls struct {
 		DeployPackage             []string
@@ -143,6 +143,16 @@ func (m *MockDeployer) EnsureTeamStorage(ctx context.Context, teamName string) e
 		return fn(ctx, teamName)
 	}
 	return nil
+}
+
+// DeployWorkerConfigSnapshot returns a snapshot of DeployWorkerConfig calls
+// safe for concurrent use with the reconciler goroutine.
+func (m *MockDeployer) DeployWorkerConfigSnapshot() []service.WorkerDeployRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]service.WorkerDeployRequest, len(m.Calls.DeployWorkerConfig))
+	copy(out, m.Calls.DeployWorkerConfig)
+	return out
 }
 
 // CallCounts returns a snapshot of call counts safe for concurrent use.

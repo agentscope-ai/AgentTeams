@@ -632,6 +632,50 @@ func TestWorkerDelete_ProvisionFailed_StillCleans(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// spec.env propagation
+// ---------------------------------------------------------------------------
+
+func TestWorkerCreate_EnvPassesToBackend(t *testing.T) {
+	resetMocks()
+
+	workerName := fixtures.UniqueName("test-env")
+	worker := fixtures.NewTestWorker(workerName)
+	worker.Spec.Env = map[string]string{
+		"USER_FOO":   "bar",
+		"USER_EMPTY": "",
+		// System-wins: HICLAW_WORKER_NAME is produced by MockEnvBuilder and
+		// must override this user-supplied value.
+		"HICLAW_WORKER_NAME": "user-should-lose",
+	}
+
+	if err := k8sClient.Create(ctx, worker); err != nil {
+		t.Fatalf("failed to create Worker CR: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, worker)
+	})
+
+	waitForRunning(t, worker)
+
+	req, ok := mockBackend.FindCreateReq(workerName)
+	if !ok {
+		t.Fatalf("no CreateRequest recorded for worker %q", workerName)
+	}
+	if got := req.Env["USER_FOO"]; got != "bar" {
+		t.Errorf("USER_FOO=%q, want %q", got, "bar")
+	}
+	if got, present := req.Env["USER_EMPTY"]; !present || got != "" {
+		t.Errorf("USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
+	}
+	if got := req.Env["HICLAW_WORKER_NAME"]; got != workerName {
+		t.Errorf("HICLAW_WORKER_NAME=%q, want %q (system wins)", got, workerName)
+	}
+	if got := req.Env["MOCK_ENV"]; got != "true" {
+		t.Errorf("MOCK_ENV=%q, want %q (system env preserved)", got, "true")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Worker MCP config propagation
 // ---------------------------------------------------------------------------
 
@@ -681,7 +725,7 @@ func TestWorkerUpdate_MCPServersChange_RewritesMcporterJSON(t *testing.T) {
 		if w.Status.ObservedGeneration != w.Generation {
 			return fmt.Errorf("ObservedGeneration=%d, want %d", w.Status.ObservedGeneration, w.Generation)
 		}
-		for _, req := range mockDeploy.Calls.DeployWorkerConfig {
+		for _, req := range mockDeploy.DeployWorkerConfigSnapshot() {
 			if req.Name != workerName {
 				continue
 			}
@@ -699,7 +743,8 @@ func TestWorkerUpdate_MCPServersChange_RewritesMcporterJSON(t *testing.T) {
 				return nil
 			}
 		}
-		return fmt.Errorf("DeployWorkerConfig not called with updated McpServers=%v (calls=%d)", expectedServers, len(mockDeploy.Calls.DeployWorkerConfig))
+		snap := mockDeploy.DeployWorkerConfigSnapshot()
+		return fmt.Errorf("DeployWorkerConfig not called with updated McpServers=%v (calls=%d)", expectedServers, len(snap))
 	})
 }
 
@@ -751,12 +796,12 @@ func TestWorkerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) 
 		t.Fatalf("backend Create was never called for %q (captured=%v)", name, capMu.Keys())
 	}
 
-	assertLabel(t, labels, "owner", "alice")                   // metadata propagated
-	assertLabel(t, labels, "env", "prod")                      // spec propagated
-	assertLabel(t, labels, "team", "spec-team")                // spec beats metadata
-	assertLabel(t, labels, v1beta1.LabelController, wantCtl)   // system beats user
-	assertLabel(t, labels, "hiclaw.io/worker", name)           // system beats user
-	assertLabel(t, labels, "hiclaw.io/role", "standalone")     // system
+	assertLabel(t, labels, "owner", "alice")                 // metadata propagated
+	assertLabel(t, labels, "env", "prod")                    // spec propagated
+	assertLabel(t, labels, "team", "spec-team")              // spec beats metadata
+	assertLabel(t, labels, v1beta1.LabelController, wantCtl) // system beats user
+	assertLabel(t, labels, "hiclaw.io/worker", name)         // system beats user
+	assertLabel(t, labels, "hiclaw.io/role", "standalone")   // system
 }
 
 // TestWorkerLabels_MetadataLabelsChangeDoesNotRecreatePod verifies the

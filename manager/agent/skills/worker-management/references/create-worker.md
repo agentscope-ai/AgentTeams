@@ -150,7 +150,7 @@ This command returns ALL workers with their current `phase`:
 
 **Typical time to `Running`**:
 - OpenClaw Worker: 10-30 seconds
-- CoPaw Worker: 15-45 seconds
+- QwenPaw Worker: 15-45 seconds
 - Hermes Worker: 15-45 seconds
 
 Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after ~90s, report the situation to admin — but do **NOT** abandon the CLI and try to create the Worker again via curl or any other path. The create request was already accepted; a duplicate POST will fail with 409 Conflict and confuse the picture.
@@ -177,7 +177,7 @@ Run `echo "${HICLAW_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matc
 
 **OpenClaw / Hermes Manager** — incremental DM messages are supported, so polling-then-reply within a single turn is fine: → use **Path A**.
 
-**CoPaw Manager** — only the final text reply of a turn reaches admin in DM (see `copaw-manager-agent/AGENTS.md` "Message Sending Rules"). Polling for `phase=Running` blocks the reply for 30-60s+ and tends to compound when admin sends a follow-up message during that window (the runtime queues both, then the model conflates them and replies only to the latest). → use **Path B (fast-reply)**.
+**QwenPaw Manager** — only the final text reply of a turn reaches admin in DM (see `copaw-manager-agent/AGENTS.md` "Message Sending Rules"). Polling for `phase=Running` blocks the reply for 30-60s+ and tends to compound when admin sends a follow-up message during that window (the runtime queues both, then the model conflates them and replies only to the latest). → use **Path B (fast-reply)**.
 
 ---
 
@@ -223,9 +223,9 @@ If the helper exits with code 2 instead of sending, it prints the target room, m
 
 ---
 
-### Path B — CoPaw Manager (fast-reply, deferred greeting)
+### Path B — QwenPaw Manager (fast-reply, deferred greeting)
 
-**Hard rule for CoPaw**: your create-worker turn MUST emit its final DM reply within ~60s of receiving the admin's request. Polling for `phase=Running` and greeting the Worker happen in **separate later turns**, not in the same turn as the admin reply.
+**Hard rule for QwenPaw**: your create-worker turn MUST emit its final DM reply within ~60s of receiving the admin's request. Polling for `phase=Running` and greeting the Worker happen in **separate later turns**, not in the same turn as the admin reply.
 
 #### B1. Confirm controller accepted the create request
 

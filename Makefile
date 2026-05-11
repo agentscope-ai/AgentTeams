@@ -108,7 +108,7 @@ LINES          ?= 50
         test test-quick test-installed test-embedded \
         install install-embedded uninstall uninstall-embedded replay replay-log \
         verify wait-ready wait-ready-embedded \
-        sync-crds check-crd-sync \
+        generate sync-crds check-crd-sync \
         status logs \
         mirror-images clean help
 
@@ -733,6 +733,9 @@ local-k8s-up: ## Create kind cluster and deploy HiClaw via Helm
 
 local-k8s-down: ## Tear down the local HiClaw kind cluster
 	@bash hack/local-k8s-down.sh
+
+generate: ## Regenerate deepcopy functions and sync CRDs to Helm chart
+	$(MAKE) -C hiclaw-controller generate
 
 sync-crds: ## Sync CRDs from hiclaw-controller/config/crd/ to helm/hiclaw/crds/
 	@echo "==> Syncing CRDs to Helm chart..."

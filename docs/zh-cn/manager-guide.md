@@ -34,16 +34,16 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `HICLAW_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
 | `HICLAW_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`hiclaw-manager` 镜像）或 **`copaw`**（`hiclaw-manager-copaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
 
-### CoPaw Manager（`HICLAW_MANAGER_RUNTIME=copaw`）
+### QwenPaw Manager（原 CoPaw，`HICLAW_MANAGER_RUNTIME=copaw`）
 
-安装时若选择 CoPaw Manager，controller 会拉起 **`hiclaw-manager-copaw`** 镜像而非基于 OpenClaw 的 **`hiclaw-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python CoPaw vs Node OpenClaw）。多通道与技能遵循 CoPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
+安装时若选择 QwenPaw Manager，controller 会拉起 **`hiclaw-manager-copaw`** 镜像而非基于 OpenClaw 的 **`hiclaw-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
 
 ### 自定义 Manager Agent
 
 以下三个文件存放在 MinIO **`hiclaw-storage`** 桶中（对象前缀 `agents/manager/`）。安装脚本将宿主机工作区 bind mount 到 Manager 容器的 **`/root/manager-workspace`**，并与该桶保持同步——既可在 MinIO 控制台/API 中编辑，也可直接编辑宿主机 `HICLAW_WORKSPACE_DIR`（默认 `~/hiclaw-manager`）下的对应文件。
 
 1. **SOUL.md** - Agent 身份、安全规则、通信模型
-2. **HEARTBEAT.md** - 定期检查例程（随运行时为 OpenClaw 心跳或 CoPaw 等价机制）
+2. **HEARTBEAT.md** - 定期检查例程（随运行时为 OpenClaw 心跳或 QwenPaw 等价机制）
 3. **AGENTS.md** - 可用技能和任务工作流
 
 若本地仍暴露 MinIO 端口，可使用 MinIO 控制台；否则在 **`hiclaw-controller`** 内使用 `mc`，或编辑宿主机工作区中的镜像文件。

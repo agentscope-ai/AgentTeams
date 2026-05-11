@@ -47,7 +47,7 @@ This guide explains how to deploy HiClaw multi-agent collaboration platform on W
 | Memory | 4 GB | 8 GB or more |
 | Disk | 10 GB free space | 20 GB or more |
 
-> **Note**: If you plan to deploy multiple Worker Agents for more powerful Agent Teams capabilities, we recommend 4 cores and 8 GB RAM or higher. The OpenClaw runtime uses approximately 500MB memory per Worker, CoPaw about 150MB, and Hermes is typically between the two depending on workload.
+> **Note**: If you plan to deploy multiple Worker Agents for more powerful Agent Teams capabilities, we recommend 4 cores and 8 GB RAM or higher. The OpenClaw runtime uses approximately 500MB memory per Worker, QwenPaw about 150MB, and Hermes is typically between the two depending on workload.
 
 ### Software Dependencies
 
@@ -292,7 +292,7 @@ The following configurations can be skipped by pressing Enter to use default val
 --- Default Worker Runtime ---
 
   1) OpenClaw (Node.js, ~500MB memory typical)
-  2) CoPaw (Python, ~150MB typical; legacy docs may say "QwenPaw")
+  2) QwenPaw (Python, ~150MB typical; internal image name: copaw)
   3) Hermes (Python Hermes worker runtime)
 
 Enter choice [1/2/3]:
@@ -301,7 +301,7 @@ Enter choice [1/2/3]:
 | Runtime | Memory (typical) | Features |
 |---------|------------------|----------|
 | OpenClaw | ~500MB | Feature-rich, built-in Web console |
-| CoPaw | ~150MB | Lightweight Python runtime |
+| QwenPaw | ~150MB | Lightweight Python runtime |
 | Hermes | Varies | Hermes policy tree under `.hermes/` in the worker workspace |
 
 Choose based on your machine configuration and the kind of tasks you expect Workers to run.

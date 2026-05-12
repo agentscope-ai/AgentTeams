@@ -253,13 +253,11 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
     existing_route_resp=$(higress_get /v1/ai/routes/default-ai-route)
     if [ -n "${existing_route_resp}" ]; then
         # Extract the AiRoute object from the response wrapper (.data), then patch:
-        #   - upstreams[0].provider: reflect current LLM provider
         #   - domains: ensure internal local domain is always present
         #   - headerControl.request.add: inject User-Agent header (add = set if absent, don't overwrite)
-        # Preserve all other fields (especially authConfig.allowedConsumers and version).
+        # Preserve all other fields (especially upstreams[0].provider, authConfig.allowedConsumers and version).
         patched=$(echo "${existing_route_resp}" | jq --argjson domains "${AI_ROUTE_DOMAINS}" '
             .data
-            | .upstreams[0].provider = "'"${LLM_PROVIDER}"'"
             | .domains = $domains
             | .headerControl.enabled = true
             | .headerControl.request.add = [{"key":"user-agent","value":"HiClaw/'"${HICLAW_VERSION}"'"}]

@@ -96,21 +96,22 @@ RUN python -m venv /opt/venv/copaw \
 # --- Overlay real copaw-worker source (high-frequency changes) ---
 # This layer is rebuilt on every src/ change but does NOT invalidate the
 # heavy venv layers above, saving ~2 GB of re-download on typical upgrades.
-COPY scripts/patch_copaw_stream_errors.py /tmp/patch_copaw_stream_errors.py
 COPY src/ /tmp/copaw-worker/src/
 RUN SITE=/opt/venv/copaw/lib/python3.11/site-packages \
-    && /opt/venv/copaw/bin/python /tmp/patch_copaw_stream_errors.py "$SITE" \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$SITE/copaw_worker/" \
     && rm -rf "$SITE/copaw/app/channels/matrix" \
     && cp -a /tmp/copaw-worker/src/matrix "$SITE/copaw/app/channels/" \
     && if [ -f /tmp/copaw-worker/src/matrix/config.py ]; then \
          cp /tmp/copaw-worker/src/matrix/config.py "$SITE/copaw/config/config.py"; \
        fi \
-    && rm -f /tmp/patch_copaw_stream_errors.py \
     && rm -rf /tmp/copaw-worker/
 
-# CoPaw runtime CLI (make it available in PATH for skills)
+# copaw CLI symlink (make it available in PATH for skills)
 RUN ln -sf /opt/venv/copaw/bin/copaw /usr/local/bin/copaw
+
+# copaw-sync wrapper
+RUN printf '#!/bin/bash\nexec python3 "/root/.hiclaw-worker/${HICLAW_WORKER_NAME}/skills/file-sync/scripts/copaw-sync.py" "$@"\n' \
+    > /usr/local/bin/copaw-sync && chmod +x /usr/local/bin/copaw-sync
 
 # Entrypoint script
 COPY --chmod=755 scripts/copaw-worker-entrypoint.sh /opt/hiclaw/scripts/copaw-worker-entrypoint.sh

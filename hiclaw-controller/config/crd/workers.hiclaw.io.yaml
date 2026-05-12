@@ -42,7 +42,39 @@ spec:
                   type: array
                   items:
                     type: string
-                  description: HiClaw built-in skills to enable
+                    not:
+                      pattern: '^nacos://'
+                  description: HiClaw built-in skills to enable (remote registry skills must use remoteSkills)
+                remoteSkills:
+                  type: array
+                  description: Remote skills fetched from source registries.
+                  items:
+                    type: object
+                    required: [source, skills]
+                    properties:
+                      source:
+                        type: string
+                        pattern: '^nacos://[^/]+/[^/?#]+$'
+                        description: Remote source in nacos://host[:port]/namespace-id format.
+                      authType:
+                        type: string
+                        enum: [sts-hiclaw, nacos, none]
+                        default: nacos
+                        description: "Authentication mode for remote source access. nacos: username/password embedded in source URL (default); sts-hiclaw: STS credential provider; none: unauthenticated."
+                      skills:
+                        type: array
+                        minItems: 1
+                        description: Skills to fetch from the remote source.
+                        items:
+                          type: object
+                          required: [name]
+                          properties:
+                            name:
+                              type: string
+                            version:
+                              type: string
+                            label:
+                              type: string
                 mcpServers:
                   type: array
                   description: MCP servers callable via mcporter. url is the full endpoint; transport defaults to http.

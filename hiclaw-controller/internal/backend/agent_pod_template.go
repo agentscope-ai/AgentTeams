@@ -231,3 +231,44 @@ func mergeStringMaps(base, overrides map[string]string) map[string]string {
 	}
 	return out
 }
+
+// ExtractSchedulingFields extracts scheduling-related fields from a
+// PodTemplateSpec, for use by SandboxBackend when building SandboxSpec.
+// Returns zero values when the template does not specify these fields.
+func ExtractSchedulingFields(tmpl corev1.PodTemplateSpec) (
+	nodeSelector map[string]string,
+	tolerations []corev1.Toleration,
+	affinity *corev1.Affinity,
+) {
+	nodeSelector = tmpl.Spec.NodeSelector
+	tolerations = tmpl.Spec.Tolerations
+	affinity = tmpl.Spec.Affinity
+	return
+}
+
+// ExtractVolumes extracts volumes and the "worker" container's volumeMounts
+// from a PodTemplateSpec, for use by SandboxBackend when building SandboxSpec.
+// If no "worker" container exists, volumeMounts is nil.
+func ExtractVolumes(tmpl corev1.PodTemplateSpec) ([]corev1.Volume, []corev1.VolumeMount) {
+	volumes := tmpl.Spec.Volumes
+	var volumeMounts []corev1.VolumeMount
+	for _, c := range tmpl.Spec.Containers {
+		if c.Name == "worker" {
+			volumeMounts = c.VolumeMounts
+			break
+		}
+	}
+	return volumes, volumeMounts
+}
+
+// ExtractEnv extracts environment variables from the "worker" container in a
+// PodTemplateSpec, for use by SandboxBackend when building SandboxSpec.
+// Returns nil if no "worker" container exists or it has no env vars.
+func ExtractEnv(tmpl corev1.PodTemplateSpec) []corev1.EnvVar {
+	for _, c := range tmpl.Spec.Containers {
+		if c.Name == "worker" {
+			return c.Env
+		}
+	}
+	return nil
+}

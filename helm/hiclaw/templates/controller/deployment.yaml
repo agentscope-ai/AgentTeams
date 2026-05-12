@@ -65,6 +65,14 @@ spec:
               value: {{ .Values.controller.resourceAutoPrefix | default true | quote }}
             - name: HICLAW_WORKER_BACKEND
               value: {{ .Values.controller.workerBackend | quote }}
+            {{- if eq .Values.controller.workerBackend "sandbox" }}
+            - name: HICLAW_SANDBOX_PROVIDER_TYPE
+              value: {{ .Values.controller.sandbox.providerType | quote }}
+            {{- if .Values.controller.sandbox.capabilities }}
+            - name: HICLAW_SANDBOX_CAPABILITIES
+              value: {{ .Values.controller.sandbox.capabilities | quote }}
+            {{- end }}
+            {{- end }}
             - name: HICLAW_K8S_NAMESPACE
               valueFrom:
                 fieldRef:

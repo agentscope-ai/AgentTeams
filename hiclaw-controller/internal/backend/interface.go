@@ -157,6 +157,13 @@ type CreateRequest struct {
 	// Pod via native K8s garbage collection. Docker backend ignores this
 	// field.
 	Owner metav1.Object `json:"-"`
+
+	// AppliedSpecHash is the controller-computed hash of the workload-relevant
+	// portion of the source spec. SandboxBackend writes it to the new
+	// CR's hiclaw.io/last-applied-spec-hash annotation so that subsequent
+	// reconciles can compare it against the desired hash and decide
+	// between Resume and Delete+Create. Other backends ignore it.
+	AppliedSpecHash string `json:"-"`
 }
 
 // Deployment modes returned by backends.
@@ -175,6 +182,14 @@ type WorkerResult struct {
 	AppID           string       `json:"app_id,omitempty"`
 	RawStatus       string       `json:"raw_status,omitempty"`
 	ConsoleHostPort string       `json:"console_host_port,omitempty"`
+
+	// AppliedSpecHash is the pod-spec hash recorded on the underlying
+	// sandbox resource at create time, read back from the CR's
+	// hiclaw.io/last-applied-spec-hash annotation. Populated only by
+	// SandboxBackend.Status; empty for other backends. Empty also means
+	// "legacy CR created before annotation support" — the reconciler
+	// treats empty as a forced recreate.
+	AppliedSpecHash string `json:"applied_spec_hash,omitempty"`
 }
 
 // WorkerBackend defines the interface for worker lifecycle operations.

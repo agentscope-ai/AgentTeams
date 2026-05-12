@@ -516,3 +516,56 @@ func TestLoadAgentPodTemplate_GetError(t *testing.T) {
 		t.Fatalf("API error must produce zero PodTemplateSpec, got %+v", got)
 	}
 }
+
+// ── ExtractEnv tests ─────────────────────────────────────────────────────
+
+func TestExtractEnv_EmptyTemplate(t *testing.T) {
+	got := ExtractEnv(corev1.PodTemplateSpec{})
+	if got != nil {
+		t.Fatalf("empty template must return nil, got %v", got)
+	}
+}
+
+func TestExtractEnv_WorkerContainerWithEnv(t *testing.T) {
+	tmpl := corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "sidecar",
+					Env:  []corev1.EnvVar{{Name: "SIDECAR_VAR", Value: "ignored"}},
+				},
+				{
+					Name: "worker",
+					Env: []corev1.EnvVar{
+						{Name: "FOO", Value: "bar"},
+						{Name: "BAZ", Value: "qux"},
+					},
+				},
+			},
+		},
+	}
+	got := ExtractEnv(tmpl)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 env vars, got %d", len(got))
+	}
+	if got[0].Name != "FOO" || got[0].Value != "bar" {
+		t.Errorf("env[0] = %v, want FOO=bar", got[0])
+	}
+	if got[1].Name != "BAZ" || got[1].Value != "qux" {
+		t.Errorf("env[1] = %v, want BAZ=qux", got[1])
+	}
+}
+
+func TestExtractEnv_NoWorkerContainer(t *testing.T) {
+	tmpl := corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "other", Env: []corev1.EnvVar{{Name: "X", Value: "y"}}},
+			},
+		},
+	}
+	got := ExtractEnv(tmpl)
+	if got != nil {
+		t.Fatalf("no worker container must return nil, got %v", got)
+	}
+}

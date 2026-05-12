@@ -819,6 +819,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 		Spec:               leaderSpec,
 		Generation:         t.Generation,
 		SpecChanged:        memberSpecChanged(t, RoleTeamLeader, t.Spec.Leader.Name),
+		AppliedSpecHash:    hashAppliedWorkerSpec(leaderSpec),
 		IsUpdate:           leaderObserved,
 		TeamName:           teamRuntimeName,
 		TeamLeaderName:     "",
@@ -840,6 +841,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			Spec:               spec,
 			Generation:         t.Generation,
 			SpecChanged:        memberSpecChanged(t, RoleTeamWorker, w.Name),
+			AppliedSpecHash:    hashAppliedWorkerSpec(spec),
 			IsUpdate:           workerObserved,
 			TeamName:           teamRuntimeName,
 			TeamLeaderName:     t.Spec.Leader.EffectiveWorkerName(),
@@ -920,7 +922,9 @@ func hashMemberSourceSpec(t *v1beta1.Team, role MemberRole, name string) string 
 	var payload any
 	switch role {
 	case RoleTeamLeader:
-		payload = leaderInput{Leader: t.Spec.Leader, TeamPolicy: t.Spec.ChannelPolicy}
+		leader := t.Spec.Leader
+		leader.State = nil // exclude lifecycle state from hash
+		payload = leaderInput{Leader: leader, TeamPolicy: t.Spec.ChannelPolicy}
 	case RoleTeamWorker:
 		var ws v1beta1.TeamWorkerSpec
 		found := false
@@ -934,6 +938,7 @@ func hashMemberSourceSpec(t *v1beta1.Team, role MemberRole, name string) string 
 		if !found {
 			return ""
 		}
+		ws.State = nil // exclude lifecycle state from hash
 		payload = workerInput{
 			Worker:       ws,
 			TeamPolicy:   t.Spec.ChannelPolicy,
@@ -1144,6 +1149,25 @@ func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}),
 				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/team", r.ControllerName)),
 			)
+		} else if wb != nil && wb.Name() == "sandbox" {
+			if sb, ok := wb.(*backend.SandboxBackend); ok {
+				bldr = bldr.Watches(
+					sb.WatchObject(),
+					handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+						teamName := obj.GetLabels()["hiclaw.io/team"]
+						if teamName == "" {
+							return nil
+						}
+						return []reconcile.Request{
+							{NamespacedName: client.ObjectKey{
+								Name:      teamName,
+								Namespace: obj.GetNamespace(),
+							}},
+						}
+					}),
+					builder.WithPredicates(sandboxLifecyclePredicates("hiclaw.io/team", r.ControllerName)),
+				)
+			}
 		}
 	}
 

@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -288,6 +290,7 @@ func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext 
 		// is already Running, fall into the spec-change branch, and Delete
 		// the container via force=true (SIGKILL, exit 137).
 		SpecChanged:          w.Status.ObservedGeneration > 0 && w.Generation != w.Status.ObservedGeneration,
+		AppliedSpecHash:      hashAppliedWorkerSpec(w.Spec),
 		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
 		TeamName:             w.Annotations["hiclaw.io/team"],
 		TeamLeaderName:       w.Annotations["hiclaw.io/team-leader"],
@@ -364,10 +367,60 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}),
 				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/worker", r.ControllerName)),
 			)
+		} else if wb != nil && wb.Name() == "sandbox" {
+			if sb, ok := wb.(*backend.SandboxBackend); ok {
+				bldr = bldr.Watches(
+					sb.WatchObject(),
+					handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+						workerName := obj.GetLabels()["hiclaw.io/worker"]
+						if workerName == "" {
+							return nil
+						}
+						if obj.GetLabels()["hiclaw.io/team"] != "" {
+							return nil
+						}
+						return []reconcile.Request{
+							{NamespacedName: client.ObjectKey{
+								Name:      workerName,
+								Namespace: obj.GetNamespace(),
+							}},
+						}
+					}),
+					builder.WithPredicates(sandboxLifecyclePredicates("hiclaw.io/worker", r.ControllerName)),
+				)
+			}
 		}
 	}
 
 	return bldr.Complete(r)
+}
+
+// hashAppliedWorkerSpec computes a fnv64a hash of the WorkerSpec with State
+// zeroed out. This captures all spec fields that should trigger sandbox
+// recreation when changed.
+//
+// Current coverage (fnv64a over json.Marshal with State=nil):
+//
+//	Model, Runtime, Image, WorkerName, Identity, Soul, Agents, Skills,
+//	RemoteSkills, McpServers, Package, Expose, ChannelPolicy, AccessEntries,
+//	Labels, Env.
+//
+// Consumed by workerMemberContext to populate MemberContext.AppliedSpecHash,
+// which the sandbox backend stamps onto the underlying CR via the
+// hiclaw.io/last-applied-spec-hash annotation.
+//
+// TODO: When Agent-side hot-reload lands, narrow to pod-affecting fields
+// only (Image, Runtime, Model, Env, Labels, AccessEntries, Expose) and
+// handle config-only changes via the reload channel.
+func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
+	spec.State = nil // exclude lifecycle state from hash
+	buf, err := json.Marshal(spec)
+	if err != nil {
+		return ""
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%x", h.Sum64())
 }
 
 // podLifecyclePredicates filters Pod events to only trigger reconciliation on
@@ -412,6 +465,54 @@ func podLifecyclePredicates(labelKey, controllerName string) predicate.Predicate
 			return false
 		},
 	}
+}
+
+// sandboxLifecyclePredicates filters Sandbox CR events to only trigger
+// reconciliation on create, delete, or .status.phase transitions.
+// A sandbox is considered "ours" only when it carries both the given labelKey
+// with a non-empty value and hiclaw.io/controller == controllerName.
+func sandboxLifecyclePredicates(labelKey, controllerName string) predicate.Predicate {
+	matches := func(obj client.Object) bool {
+		l := obj.GetLabels()
+		return l[labelKey] != "" && l[v1beta1.LabelController] == controllerName
+	}
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return matches(e.Object)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return matches(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if !matches(e.ObjectNew) {
+				return false
+			}
+			// For unstructured objects, compare .status.phase string.
+			oldPhase := extractUnstructuredPhase(e.ObjectOld)
+			newPhase := extractUnstructuredPhase(e.ObjectNew)
+			return oldPhase != newPhase
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return false
+		},
+	}
+}
+
+// extractUnstructuredPhase reads .status.phase from an unstructured object.
+func extractUnstructuredPhase(obj client.Object) string {
+	u, ok := obj.(interface {
+		UnstructuredContent() map[string]interface{}
+	})
+	if !ok {
+		return ""
+	}
+	content := u.UnstructuredContent()
+	status, ok := content["status"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	phase, _ := status["phase"].(string)
+	return phase
 }
 
 // --- Package-level helpers ---

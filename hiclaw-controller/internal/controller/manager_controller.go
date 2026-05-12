@@ -202,6 +202,25 @@ func (r *ManagerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}),
 				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/manager", r.ControllerName)),
 			)
+		} else if wb != nil && wb.Name() == "sandbox" {
+			if sb, ok := wb.(*backend.SandboxBackend); ok {
+				bldr = bldr.Watches(
+					sb.WatchObject(),
+					handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+						managerName := obj.GetLabels()["hiclaw.io/manager"]
+						if managerName == "" {
+							return nil
+						}
+						return []reconcile.Request{
+							{NamespacedName: client.ObjectKey{
+								Name:      managerName,
+								Namespace: obj.GetNamespace(),
+							}},
+						}
+					}),
+					builder.WithPredicates(sandboxLifecyclePredicates("hiclaw.io/manager", r.ControllerName)),
+				)
+			}
 		}
 	}
 

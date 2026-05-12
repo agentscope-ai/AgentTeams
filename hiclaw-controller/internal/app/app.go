@@ -762,6 +762,12 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme) []backend.W
 		} else {
 			workers = append(workers, k8s)
 		}
+	case "sandbox":
+		if sb, err := backend.NewSandboxBackendFromConfig(cfg.SandboxConfig(), cfg.ContainerPrefix, scheme, cfg.SandboxCapabilities); err != nil {
+			log.Printf("[WARN] Failed to create Sandbox backend: %v", err)
+		} else {
+			workers = append(workers, sb)
+		}
 	}
 
 	return workers

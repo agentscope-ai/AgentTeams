@@ -61,7 +61,21 @@ type MemberContext struct {
 	// isolates the "did the spec change" question from the transport that
 	// answers it, so Team members — which have no per-member Generation —
 	// can participate without abusing the int64 fields.
+	//
+	// NOTE: Sandbox backend does not consult this flag. Sandbox decides
+	// rebuild-vs-resume by comparing AppliedSpecHash against the hash
+	// recorded on the underlying CR (WorkerResult.AppliedSpecHash).
+	// SpecChanged is consumed by the Docker / k8s branches only.
 	SpecChanged bool
+
+	// AppliedSpecHash is the controller-computed hash of the source spec
+	// (excluding State). The sandbox backend stamps it onto the underlying
+	// Sandbox CR via the hiclaw.io/last-applied-spec-hash annotation at
+	// create time, and ReconcileMemberContainer compares the live
+	// annotation (surfaced as WorkerResult.AppliedSpecHash) against this
+	// value to decide between Resume and Delete+Create. Backends other
+	// than sandbox ignore it.
+	AppliedSpecHash string
 
 	// IsUpdate indicates the member has been successfully provisioned before;
 	// controls MCP reauthorization and deployer "update" semantics.
@@ -316,6 +330,27 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	switch result.Status {
 	case backend.StatusRunning, backend.StatusStarting, backend.StatusReady:
 		state.ContainerState = string(result.Status)
+
+		// Sandbox: rebuild-vs-noop is decided by comparing the desired
+		// AppliedSpecHash against the hash recorded on the live CR
+		// (WorkerResult.AppliedSpecHash). SpecChanged is intentionally
+		// ignored on this path because it is computed from
+		// Generation != ObservedGeneration and would conflate state-only
+		// transitions (Sleeping → Running) with pod-affecting edits.
+		if wb.Name() == "sandbox" {
+			if result.AppliedSpecHash == "" || result.AppliedSpecHash == m.AppliedSpecHash {
+				return reconcile.Result{}, nil
+			}
+			logger.Info("sandbox spec hash mismatch, recreating container",
+				"name", m.Name,
+				"appliedHash", result.AppliedSpecHash,
+				"desiredHash", m.AppliedSpecHash)
+			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+				return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
+			}
+			return createMemberContainer(ctx, d, m, state, wb)
+		}
+
 		if !specChanged {
 			return reconcile.Result{}, nil
 		}
@@ -330,12 +365,46 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 
 	case backend.StatusStopped:
 		state.ContainerState = string(result.Status)
-		if wb.Name() == "docker" && !specChanged {
-			if err := wb.Start(ctx, m.Name); err != nil {
-				return reconcile.Result{}, fmt.Errorf("start container: %w", err)
+
+		// Docker: keep the historical "no spec change → start, otherwise
+		// recreate" behavior verbatim. Docker has no annotation account
+		// and continues to rely on Generation comparison.
+		if wb.Name() == "docker" {
+			if !specChanged {
+				if err := wb.Start(ctx, m.Name); err != nil {
+					return reconcile.Result{}, fmt.Errorf("start container: %w", err)
+				}
+				return reconcile.Result{}, nil
 			}
-			return reconcile.Result{}, nil
+			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+				return reconcile.Result{}, fmt.Errorf("delete stale container: %w", err)
+			}
+			return createMemberContainer(ctx, d, m, state, wb)
 		}
+
+		// Sandbox: compare desired AppliedSpecHash against the CR's recorded
+		// AppliedSpecHash. Same hash means only state-only fields changed
+		// (e.g. Sleeping → Running) and a Resume is correct. Hash
+		// mismatch (or empty applied hash from a legacy CR) falls back to
+		// Delete+Create so pod-affecting edits actually take effect.
+		if wb.Name() == "sandbox" {
+			if result.AppliedSpecHash != "" && result.AppliedSpecHash == m.AppliedSpecHash {
+				if err := wb.Start(ctx, m.Name); err != nil {
+					return reconcile.Result{}, fmt.Errorf("resume sandbox: %w", err)
+				}
+				return reconcile.Result{}, nil
+			}
+			logger.Info("sandbox stopped with stale or missing hash, recreating",
+				"name", m.Name,
+				"appliedHash", result.AppliedSpecHash,
+				"desiredHash", m.AppliedSpecHash)
+			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+				return reconcile.Result{}, fmt.Errorf("delete stale sandbox: %w", err)
+			}
+			return createMemberContainer(ctx, d, m, state, wb)
+		}
+
+		// Other backends (k8s) keep the historical delete+create path.
 		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete stale container: %w", err)
 		}
@@ -345,12 +414,19 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 		return createMemberContainer(ctx, d, m, state, wb)
 
 	default:
+		// Transient / unknown state (e.g. PhaseFailed, provider unreachable).
+		// Historically this branch eagerly called wb.Delete + recreate,
+		// which turned any momentary status blip into a full delete/recreate
+		// cycle — the root cause of "sandbox unexpectedly deleted" reports.
+		// We now only record the observed state and requeue; recovery is
+		// driven by either a watch event on phase transition or the next
+		// periodic reconcile.
 		state.ContainerState = string(result.Status)
-		logger.Info("container in unexpected state, recreating", "name", m.Name, "status", result.Status)
-		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
-			return reconcile.Result{}, fmt.Errorf("delete container in unknown state: %w", err)
-		}
-		return createMemberContainer(ctx, d, m, state, wb)
+		logger.Info("container in transient state, waiting (no delete)",
+			"name", m.Name,
+			"status", result.Status,
+			"rawStatus", result.RawStatus)
+		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 	}
 }
 
@@ -422,8 +498,12 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		Resources:          agentResourcesToBackend(m.Spec.Resources),
 		Labels:             labels,
 		Owner:              m.Owner,
+		// SpecHash is consumed by SandboxBackend.Create to stamp the
+		// hiclaw.io/last-applied-spec-hash annotation on the new CR; other
+		// backends ignore it.
+		AppliedSpecHash: m.AppliedSpecHash,
 	}
-	if wb.Name() != "k8s" {
+	if wb.Name() != "k8s" && wb.Name() != "sandbox" {
 		token, err := d.Provisioner.RequestSAToken(ctx, m.Name)
 		if err != nil {
 			logger.Error(err, "SA token request failed (non-fatal, worker auth will fail)")

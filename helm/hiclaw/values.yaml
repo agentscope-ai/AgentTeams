@@ -182,9 +182,19 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
-  workerBackend: "k8s"        # k8s | sae
+  workerBackend: "k8s"        # k8s | sae | sandbox
   resourcePrefix: "hiclaw-"
   resourceAutoPrefix: true
+
+  # Sandbox backend configuration (only used when workerBackend == "sandbox")
+  sandbox:
+    providerType: "openkruise"    # currently only "openkruise" is supported
+    # Comma-separated capability names to enable. Unknown tokens and empty
+    # string both disable everything (opt-in model). Set to "hibernate" to
+    # enable Hibernate/Resume; leave empty in environments that do not
+    # support hibernate so SandboxBackend.Stop falls back to Delete.
+    capabilities: "hibernate"
+
   serviceAccount:
     create: true
     name: ""

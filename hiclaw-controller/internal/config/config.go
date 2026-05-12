@@ -61,6 +61,10 @@ type Config struct {
 	// Worker backend selection
 	WorkerBackend string
 
+	// Sandbox backend configuration
+	SandboxProviderType string // "openkruise" (default)
+	SandboxCapabilities string // comma-separated opt-in list, e.g. "hibernate"; empty = all disabled
+
 	// Region (used by AI Gateway / OSS, etc.)
 	Region string
 
@@ -263,6 +267,9 @@ func LoadConfig() *Config {
 			os.Getenv("HICLAW_WORKER_BACKEND"),
 			os.Getenv("HICLAW_ALIYUN_WORKER_BACKEND"),
 		),
+
+		SandboxProviderType: envOrDefault("HICLAW_SANDBOX_PROVIDER_TYPE", "openkruise"),
+		SandboxCapabilities: os.Getenv("HICLAW_SANDBOX_CAPABILITIES"),
 
 		Region: envOrDefault("HICLAW_REGION", "cn-hangzhou"),
 
@@ -474,6 +481,20 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 		WorkerMemory:         c.K8sWorkerMemory,
 		ControllerName:       c.ControllerName,
 		ResourcePrefix:       c.ResourcePrefix,
+	}
+}
+
+func (c *Config) SandboxConfig() backend.SandboxConfig {
+	return backend.SandboxConfig{
+		Namespace:         c.K8sNamespace,
+		ProviderType:      c.SandboxProviderType,
+		WorkerImage:       envOrDefault("HICLAW_WORKER_IMAGE", "hiclaw/worker-agent:latest"),
+		CopawWorkerImage:  envOrDefault("HICLAW_COPAW_WORKER_IMAGE", "hiclaw/copaw-worker:latest"),
+		HermesWorkerImage: envOrDefault("HICLAW_HERMES_WORKER_IMAGE", "hiclaw/hermes-worker:latest"),
+		WorkerCPU:         c.K8sWorkerCPU,
+		WorkerMemory:      c.K8sWorkerMemory,
+		ControllerName:    c.ControllerName,
+		ResourcePrefix:    c.ResourcePrefix,
 	}
 }
 

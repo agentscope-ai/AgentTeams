@@ -187,9 +187,9 @@ For each entry (one JSON object per line):
 2. **`Pending`** and queued < 90s ago — leave the entry, drain again next heartbeat.
 3. **`Pending`** and queued > 90s ago — flag the anomaly to admin in DM (Step 7) and remove the entry.
 4. **`Failed`** — read the worker's `message` field, notify admin in DM with the failure reason, remove the entry.
-5. **`Running`** — fetch `room_id`, greet the Worker, then notify admin in DM that the Worker is up:
+5. **`Running`** — fetch `roomID` from `hiclaw get workers -o json`, greet the Worker, then notify admin in DM that the Worker is up:
    ```bash
-   ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .room_id // empty')
+   ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
    bash /opt/hiclaw/agent/skills/worker-management/scripts/send-worker-greeting.sh \
      --worker "<NAME>" --room "${ROOM_ID}"
    # Then notify admin via copaw channels send to the resolved admin DM room:

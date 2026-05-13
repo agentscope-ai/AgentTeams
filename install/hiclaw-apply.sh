@@ -21,6 +21,10 @@ log() {
 
 error() {
     echo -e "\033[31m[HiClaw Apply ERROR]\033[0m $1" >&2
+}
+
+die() {
+    error "$1"
     exit 1
 }
 
@@ -34,7 +38,7 @@ if [ -z "${CONTAINER_CMD}" ]; then
     elif command -v podman > /dev/null 2>&1; then
         CONTAINER_CMD="podman"
     else
-        error "Neither docker nor podman found"
+        die "Neither docker nor podman found"
     fi
 fi
 
@@ -42,7 +46,7 @@ fi
 # Verify Manager container is running
 # ============================================================
 if ! ${CONTAINER_CMD} ps --filter name=hiclaw-manager --format '{{.Names}}' 2>/dev/null | grep -q 'hiclaw-manager'; then
-    error "hiclaw-manager container is not running"
+    die "hiclaw-manager container is not running"
 fi
 
 # Ensure /tmp/import exists before copying files into container
@@ -63,7 +67,7 @@ for arg in "$@"; do
             ARGS+=("/tmp/import/${BASENAME}")
             log "Copied ${arg} → container:/tmp/import/${BASENAME}"
         else
-            error "File not found: ${arg}"
+            die "File not found: ${arg}"
         fi
         continue
     fi

@@ -68,6 +68,24 @@ _orch_api_code() {
     fi
 }
 
+# Like _orch_api but appends "\n<http_code>" to the body, so callers can
+# branch on status code (e.g. 404 vs 200) rather than only inspecting JSON.
+_orch_api_full() {
+    local method="$1" path="$2" body="${3:-}"
+    local url="${CONTAINER_API_BASE}${path}"
+    _resolve_controller_token
+    local auth_args=()
+    if [ -n "${_HICLAW_CONTROLLER_TOKEN}" ]; then
+        auth_args=(-H "Authorization: Bearer ${_HICLAW_CONTROLLER_TOKEN}")
+    fi
+    if [ -n "$body" ]; then
+        curl -s -w $'\n%{http_code}' -X "$method" "$url" "${auth_args[@]}" \
+            -H "Content-Type: application/json" -d "$body"
+    else
+        curl -s -w $'\n%{http_code}' -X "$method" "$url" "${auth_args[@]}"
+    fi
+}
+
 # ============================================================
 # Worker Backend API (unified — controller handles Docker/SAE dispatch)
 # ============================================================
@@ -76,46 +94,68 @@ _orch_api_code() {
 # Usage: worker_backend_create '{"name":"alice","image":"img:latest","env":{...}}'
 worker_backend_create() {
     local body="$1"
-    _orch_api POST /workers "$body"
+    _orch_api POST /api/v1/workers "$body"
 }
 
 # Delete a worker by name.
 worker_backend_delete() {
     local worker_name="$1"
-    _orch_api DELETE "/workers/${worker_name}"
+    _orch_api DELETE "/api/v1/workers/${worker_name}"
 }
 
 # Start a stopped worker. Returns 0 on success.
+# Maps to controller's "wake" lifecycle action (sets spec.state=Running).
 worker_backend_start() {
     local worker_name="$1"
     local code
-    code=$(_orch_api_code POST "/workers/${worker_name}/start")
+    code=$(_orch_api_code POST "/api/v1/workers/${worker_name}/wake")
     [ "${code}" -ge 200 ] && [ "${code}" -lt 300 ]
 }
 
 # Stop a running worker. Returns 0 on success.
+# Maps to controller's "sleep" lifecycle action (sets spec.state=Sleeping).
 worker_backend_stop() {
     local worker_name="$1"
     local code
-    code=$(_orch_api_code POST "/workers/${worker_name}/stop")
+    code=$(_orch_api_code POST "/api/v1/workers/${worker_name}/sleep")
     [ "${code}" -ge 200 ] && [ "${code}" -lt 300 ]
 }
 
-# Get worker status. Returns JSON with .status field.
+# Get worker status as a lowercase phase string.
+# Possible values mirror the controller's WorkerResponse.Phase, lowercased:
+# pending | running | ready | sleeping | stopped | not_found | unknown.
+# Uses /status endpoint so that a worker that has self-reported readiness shows
+# up as "ready" rather than just "running". Callers should treat both
+# "running" and "ready" as live states.
 worker_backend_status() {
     local worker_name="$1"
-    _orch_api GET "/workers/${worker_name}" | jq -r '.status // "unknown"' 2>/dev/null
+    local response code body phase
+    response=$(_orch_api_full GET "/api/v1/workers/${worker_name}/status")
+    code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    case "${code}" in
+        2[0-9][0-9])
+            phase=$(echo "${body}" | jq -r '.phase // "unknown"' 2>/dev/null | tr '[:upper:]' '[:lower:]')
+            echo "${phase:-unknown}"
+            ;;
+        404)
+            echo "not_found"
+            ;;
+        *)
+            echo "unknown"
+            ;;
+    esac
 }
 
 # List all workers. Returns JSON with .workers array.
 worker_backend_list() {
-    _orch_api GET /workers
+    _orch_api GET /api/v1/workers
 }
 
 # Check if controller API is reachable.
 container_api_available() {
     local code
-    code=$(_orch_api_code GET /workers 2>/dev/null) || true
+    code=$(_orch_api_code GET /api/v1/workers 2>/dev/null) || true
     [ "${code}" = "200" ]
 }
 
@@ -195,7 +235,7 @@ worker_backend_wait_ready() {
                 _log "Worker ${worker_name} is ready!"
                 return 0
                 ;;
-            not_found|stopped|unknown)
+            not_found|stopped|sleeping|unknown)
                 _log "Worker ${worker_name} status: ${status} — aborting wait"
                 return 1
                 ;;

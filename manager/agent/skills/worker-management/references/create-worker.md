@@ -217,7 +217,7 @@ bash /opt/hiclaw/agent/skills/worker-management/scripts/send-worker-greeting.sh 
   --room "<ROOM_ID>"
 ```
 
-`<ROOM_ID>` is the `room_id` field from the `hiclaw create worker -o json` response. Pass `--text "<custom message>"` to personalize the greeting.
+`<ROOM_ID>` is the `roomID` field from the `hiclaw create worker -o json` response. Pass `--text "<custom message>"` to personalize the greeting.
 
 If the helper exits with code 2 instead of sending, it prints the target room, mention, and message text — deliver that greeting via your native message channel to the printed room.
 
@@ -229,7 +229,7 @@ If the helper exits with code 2 instead of sending, it prints the target room, m
 
 #### B1. Confirm controller accepted the create request
 
-You already ran `hiclaw create worker ... --no-wait -o json` in Step 2 above. The JSON response should contain `"phase": "Pending"` (or similar acceptance fields like `"name"`, `"room_id"`). That is enough — **do NOT** loop on `hiclaw get workers -o json` here.
+You already ran `hiclaw create worker ... --no-wait -o json` in Step 2 above. The JSON response should contain `"phase": "Pending"` (or similar acceptance fields like `"name"`, `"roomID"`). That is enough — **do NOT** loop on `hiclaw get workers -o json` here.
 
 If the create call returned an error or the response is missing the expected fields, report the error to admin in your final text reply and stop. Do not retry the create call (that returns 409 Conflict).
 
@@ -238,14 +238,14 @@ If the create call returned an error or the response is missing the expected fie
 Append a one-line entry to `~/pending-workers.json` (create the file if missing) so your next heartbeat knows to poll status and send the greeting:
 
 ```bash
-ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .room_id // empty')
+ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
 mkdir -p ~/ && touch ~/pending-workers.json
 jq -n --arg name "<NAME>" --arg room "${ROOM_ID}" --arg ts "$(date -Iseconds)" \
   '{name:$name, room_id:$room, queued_at:$ts}' \
   >> ~/pending-workers.json
 ```
 
-If `room_id` is empty (controller hasn't created the room yet), still record `name` only — heartbeat will look it up later.
+If `ROOM_ID` is empty (controller hasn't created the room yet), still record `name` only — heartbeat will look it up later.
 
 #### B3. Reply to admin — THIS IS YOUR FINAL TEXT RESPONSE
 

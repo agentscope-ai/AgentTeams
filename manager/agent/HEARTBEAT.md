@@ -28,7 +28,7 @@ The `active_tasks` field in state.json contains all in-progress tasks (both fini
 
 ### 1b. Sending to Matrix group rooms (Worker / Leader / project)
 
-Steps 2, 2b, 3, 4, and 6 send into Matrix **group** rooms. For each send, use the **message** tool with `channel=matrix`, `target=room:<room_id>`, and the message body shown in that step (include @mentions in the body as required). Take `room_id` from the `state.json` entry, project `meta.json`, or `hiclaw get workers -o json` as each step describes.
+Steps 2, 2b, 3, 4, and 6 send into Matrix **group** rooms. For each send, use the **message** tool with `channel=matrix`, `target=room:<room_id>`, and the message body shown in that step (include @mentions in the body as required). Take `room_id` from the `state.json` entry or project `meta.json`; when a step uses `hiclaw get workers -o json`, read `roomID` (camelCase, e.g. `.roomID` in `jq`).
 
 ---
 

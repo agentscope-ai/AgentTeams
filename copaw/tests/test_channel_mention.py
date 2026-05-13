@@ -42,7 +42,9 @@ def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
     )
 
     assert content["m.mentions"] == {"user_ids": ["@worker-a:hs.local"]}
-    assert content["body"].startswith("@worker-a:hs.local ")
+    # body should use display name (localpart fallback), not full MXID
+    assert content["body"].startswith("worker-a ")
+    assert "@worker-a:hs.local" not in content["body"]
     assert (
         'href="https://matrix.to/#/%40worker-a%3Ahs.local"'
         in content["formatted_body"]
@@ -66,7 +68,9 @@ def test_apply_mention_fallback_sender_id_when_no_explicit_list():
     )
 
     assert content["m.mentions"] == {"user_ids": ["@alice:hs.local"]}
-    assert "@alice:hs.local" in content["body"]
+    # body should use display name (localpart fallback), not full MXID
+    assert "alice" in content["body"]
+    assert "@alice:hs.local" not in content["body"]
     assert (
         'href="https://matrix.to/#/%40alice%3Ahs.local"'
         in content["formatted_body"]
@@ -85,8 +89,9 @@ def test_apply_mention_body_scan_rewrites_existing_mxid_to_anchor():
     ch._apply_mention(content, "!room:hs.local")
 
     assert content["m.mentions"] == {"user_ids": ["@worker-b:hs.local"]}
-    # Body already had the MXID — no duplicate prefix.
-    assert content["body"].count("@worker-b:hs.local") == 1
+    # Body MXID should be replaced with display name (localpart fallback).
+    assert "worker-b" in content["body"]
+    assert "@worker-b:hs.local" not in content["body"]
     # First occurrence in formatted_body is replaced with a matrix.to anchor.
     assert (
         'href="https://matrix.to/#/%40worker-b%3Ahs.local"'
@@ -165,7 +170,9 @@ def test_apply_mention_synthesizes_formatted_body_for_media_events():
     )
 
     assert content["format"] == "org.matrix.custom.html"
-    assert content["body"].startswith("@worker-d:hs.local ")
+    # body should use display name (localpart fallback), not full MXID
+    assert content["body"].startswith("worker-d ")
+    assert "@worker-d:hs.local" not in content["body"]
     assert (
         'href="https://matrix.to/#/%40worker-d%3Ahs.local"'
         in content["formatted_body"]

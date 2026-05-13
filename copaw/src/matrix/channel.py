@@ -1992,10 +1992,12 @@ class MatrixChannel(BaseChannel):
             html_body = html.escape(body).replace("\n", "<br>\n")
 
         for mxid in targets:
-            if mxid not in body:
-                body = f"{mxid} {body}" if body else mxid
-            mxid_enc = urllib.parse.quote(mxid, safe="")
             display = self._resolve_display_name(mxid, room_id) or mxid
+            if mxid in body:
+                body = body.replace(mxid, display, 1)
+            elif display not in body:
+                body = f"{display} {body}" if body else display
+            mxid_enc = urllib.parse.quote(mxid, safe="")
             anchor = (
                 f'<a href="https://matrix.to/#/{mxid_enc}">'
                 f"{html.escape(display)}</a>"

@@ -192,11 +192,11 @@ def _mc(
         exc.cmd = redacted_cmd
         log = logger.warning if warn_on_error else logger.debug
         log(
-            "mc command failed returncode=%s cmd=%s stdout=%s stderr=%s",
+            "mc command failed returncode=%s cmd=%s stdout=%r stderr=%r",
             exc.returncode,
             " ".join(redacted_cmd),
-            exc.stdout,
-            exc.stderr,
+            _preview_text(exc.stdout),
+            _preview_text(exc.stderr),
         )
         raise
     if log_output:

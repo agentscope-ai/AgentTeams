@@ -316,18 +316,21 @@ def _make_inbound_channel() -> MatrixChannel:
     return ch
 
 
-def _event(body: str, mentioned: bool = False):
+def _event(body: str, mentioned: bool = False, thread: bool = False):
     mentions = (
         {"user_ids": ["@copywriting-assistant:hs.local"]}
         if mentioned
         else {}
     )
+    content = {"m.mentions": mentions}
+    if thread:
+        content["m.relates_to"] = {"rel_type": "m.thread"}
     return SimpleNamespace(
         sender="@alice:hs.local",
         body=body,
         event_id="$event",
         server_timestamp=0,
-        source={"content": {"m.mentions": mentions}},
+        source={"content": content},
     )
 
 
@@ -369,6 +372,15 @@ def test_matrix_control_command_requires_mention_in_group():
     asyncio.run(ch._on_room_event(_FakeRoom(), _event("/approve")))
 
     assert len(ch.enqueued) == 0
+
+
+def test_matrix_unmentioned_thread_message_does_not_pollute_history():
+    ch = _make_inbound_channel()
+
+    asyncio.run(ch._on_room_event(_FakeRoom(), _event("side thread", thread=True)))
+
+    assert len(ch.enqueued) == 0
+    assert ch._room_histories == {}
 
 
 def test_matrix_double_slash_stop_normalized_with_mention():

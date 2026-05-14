@@ -716,6 +716,19 @@ class MatrixChannel(BaseChannel):
                 return bool(room_cfg["requireMention"])
         return True  # default: require mention in group rooms
 
+    def _is_thread_event(self, event: Any) -> bool:
+        """Return True when an inbound Matrix event belongs to a thread."""
+        source = getattr(event, "source", {}) or {}
+        if not isinstance(source, dict):
+            return False
+        content = source.get("content", {}) or {}
+        if not isinstance(content, dict):
+            return False
+        relates_to = content.get("m.relates_to", {}) or {}
+        if not isinstance(relates_to, dict):
+            return False
+        return relates_to.get("rel_type") == "m.thread"
+
     # pylint: disable=too-many-return-statements
     def _was_mentioned(self, event: Any, text: str) -> bool:
         if not self._user_id:
@@ -1186,11 +1199,14 @@ class MatrixChannel(BaseChannel):
         if not self._check_allowed(sender_id, room_id, is_dm):
             return
 
+        is_thread_event = self._is_thread_event(event)
         if not is_dm:
             if self._require_mention(room_id) and not self._was_mentioned(
                 event,
                 "",
             ):
+                if is_thread_event:
+                    return
                 # Record as history (text description only)
                 body = event.body or ""
                 if isinstance(event, RoomEncryptedImage):
@@ -1321,10 +1337,11 @@ class MatrixChannel(BaseChannel):
                         text=f"{sender_name}:",
                     ),
                 )
-            content_parts = self._apply_history_to_parts(
-                room_id,
-                content_parts,
-            )
+            if not is_thread_event:
+                content_parts = self._apply_history_to_parts(
+                    room_id,
+                    content_parts,
+                )
 
         worker_name = (self._user_id or "").split(":")[0].lstrip("@")
         payload = {
@@ -1342,7 +1359,7 @@ class MatrixChannel(BaseChannel):
 
         if self._enqueue:
             self._enqueue(payload)
-            if not is_dm:
+            if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
     # ------------------------------------------------------------------
@@ -1504,12 +1521,14 @@ class MatrixChannel(BaseChannel):
         if not self._check_allowed(sender_id, room_id, is_dm):
             return
 
+        is_thread_event = self._is_thread_event(event)
+        mentioned = True if is_dm else self._was_mentioned(event, text)
+        if not is_dm and is_thread_event and not mentioned:
+            return
+
         # Mention check for group rooms
         if not is_dm:
-            if self._require_mention(room_id) and not self._was_mentioned(
-                event,
-                text,
-            ):
+            if self._require_mention(room_id) and not mentioned:
                 self._record_history(
                     room_id,
                     HistoryEntry(
@@ -1578,10 +1597,11 @@ class MatrixChannel(BaseChannel):
                 type=ContentType.TEXT,
                 text=f"{sender_name}: {command_text}",
             )
-            content_parts = self._apply_history_to_parts(
-                room_id,
-                content_parts,
-            )
+            if not is_thread_event:
+                content_parts = self._apply_history_to_parts(
+                    room_id,
+                    content_parts,
+                )
 
         worker_name = (self._user_id or "").split(":")[0].lstrip("@")
         payload = {
@@ -1599,7 +1619,7 @@ class MatrixChannel(BaseChannel):
 
         if self._enqueue:
             self._enqueue(payload)
-            if not is_dm:
+            if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
     # ------------------------------------------------------------------
@@ -1624,6 +1644,7 @@ class MatrixChannel(BaseChannel):
         if not self._check_allowed(sender_id, room_id, is_dm):
             return
 
+        is_thread_event = self._is_thread_event(event)
         # For group rooms, apply the same mention policy as text messages.
         # Media body (filename) rarely contains a mention, but respect
         # m.mentions if the client sends it.
@@ -1632,6 +1653,8 @@ class MatrixChannel(BaseChannel):
                 event,
                 "",
             ):
+                if is_thread_event:
+                    return
                 await self._record_media_history(
                     room,
                     event,
@@ -1729,10 +1752,11 @@ class MatrixChannel(BaseChannel):
                         text=f"{sender_name}:",
                     ),
                 )
-            content_parts = self._apply_history_to_parts(
-                room_id,
-                content_parts,
-            )
+            if not is_thread_event:
+                content_parts = self._apply_history_to_parts(
+                    room_id,
+                    content_parts,
+                )
 
         worker_name = (self._user_id or "").split(":")[0].lstrip("@")
         payload = {
@@ -1750,7 +1774,7 @@ class MatrixChannel(BaseChannel):
 
         if self._enqueue:
             self._enqueue(payload)
-            if not is_dm:
+            if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
     # ------------------------------------------------------------------

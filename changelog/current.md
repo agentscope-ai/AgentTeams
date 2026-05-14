@@ -4,6 +4,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- fix(copaw): exclude inbound Matrix thread messages from room-history context.
 - fix(copaw): seed the CoPaw worker agent heartbeat interval at 10 minutes.
 - feat(agent): add non-overridable credential file access prohibition to CoPaw worker and team leader agent prompts.
 - fix(manager): agent docs and jq examples use `roomID` for `hiclaw get workers` / `hiclaw create worker` JSON (CLI field name), not `room_id`

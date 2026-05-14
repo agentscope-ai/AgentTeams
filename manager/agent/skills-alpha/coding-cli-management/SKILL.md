@@ -1,6 +1,6 @@
 ---
 name: coding-cli-management
-description: Execute AI coding CLI tools (Claude Code / Gemini CLI / qodercli) on behalf of Workers. Use when a Worker sends a coding-request: message, asking Manager to run coding operations in their workspace.
+description: "Execute AI coding CLI tools (Claude Code / Gemini CLI / qodercli) on behalf of Workers. Use when a Worker sends a coding-request: message, asking Manager to run coding operations in their workspace."
 ---
 
 # Coding CLI Management

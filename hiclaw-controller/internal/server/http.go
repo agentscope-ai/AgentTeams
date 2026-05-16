@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
@@ -29,13 +31,21 @@ type ServerDeps struct {
 
 // HTTPServer serves the unified controller REST API.
 type HTTPServer struct {
-	Addr string
-	Mux  *http.ServeMux
+	Addr   string
+	Mux    *http.ServeMux
+	server *http.Server
 }
 
 func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux := http.NewServeMux()
-	s := &HTTPServer{Addr: addr, Mux: mux}
+	s := &HTTPServer{
+		Addr: addr,
+		Mux:  mux,
+		server: &http.Server{
+			Addr:    addr,
+			Handler: mux,
+		},
+	}
 
 	mw := deps.AuthMw
 
@@ -114,5 +124,14 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 func (s *HTTPServer) Start() error {
 	logger := log.Log.WithName("http-server")
 	logger.Info("starting unified REST API server", "addr", s.Addr)
-	return http.ListenAndServe(s.Addr, s.Mux)
+	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// Shutdown gracefully stops the HTTP server, waiting for in-flight requests
+// to finish or ctx to be cancelled. Idempotent.
+func (s *HTTPServer) Shutdown(ctx context.Context) error {
+	return s.server.Shutdown(ctx)
 }

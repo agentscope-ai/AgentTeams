@@ -14,6 +14,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/executor"
+	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -73,7 +74,10 @@ type TeamReconciler struct {
 	ResourcePrefix auth.ResourcePrefix
 }
 
-func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
+	start := time.Now()
+	defer func() { metrics.Observe("team", start, reterr) }()
+
 	logger := log.FromContext(ctx)
 
 	var team v1beta1.Team

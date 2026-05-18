@@ -1403,22 +1403,41 @@ generate_key() {
 
 # Detect container runtime socket on the host
 detect_socket() {
-    # Check for Podman
+    # 1. First priority: Check if rootless Podman socket is ALREADY running/existing
+    if [ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]; then
+        echo "${XDG_RUNTIME_DIR}/podman/podman.sock"
+        return 0
+    fi
+
+    # 2. Check for system-wide rootful Podman socket
     if [ -S "/run/podman/podman.sock" ]; then
         echo "/run/podman/podman.sock"
-    # Check for standard Docker socket
-    elif [ -S "/var/run/docker.sock" ]; then
+        return 0
+    fi
+
+    # 3. Check for standard system-wide Docker socket
+    if [ -S "/var/run/docker.sock" ]; then
         echo "/var/run/docker.sock"
-    else
-        # Try to get socket from current active docker context, Example: OrbStack returns "unix:///Users/xxx/.orbstack/run/docker.sock"
-        # Note: docker context ls outputs empty lines for non-current contexts,
-        # so we use 'grep .' to filter them out before extracting the path
-        if command -v docker >/dev/null 2>&1; then
-            local socket_path
-            socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
-            if [ -n "${socket_path}" ] && [ -S "${socket_path}" ]; then
-                echo "${socket_path}"
-            fi
+        return 0
+    fi
+
+    # 4. Try to get socket from current active docker context (e.g., Docker Desktop/OrbStack)
+    if command -v docker >/dev/null 2>&1; then
+        local socket_path
+        socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
+        if [ -n "${socket_path}" ] && [ -S "${socket_path}" ]; then
+            echo "${socket_path}"
+            return 0
+        fi
+    fi
+
+    # 5. Active Fallback: If Podman is installed but not running, auto-enable and start its rootless socket
+    if command -v podman >/dev/null 2>&1; then
+        systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
+        # Double check if the rootless socket was successfully created after turning it on
+        if [ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]; then
+            echo "${XDG_RUNTIME_DIR}/podman/podman.sock"
+            return 0
         fi
     fi
 }

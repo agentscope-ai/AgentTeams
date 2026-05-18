@@ -102,17 +102,21 @@ func (l *LegacyCompat) PutManagerConfig(configJSON []byte) error {
 	ctx := context.Background()
 	key := l.managerAgentPrefix() + "/openclaw.json"
 
-	// Read existing config to preserve groupAllowFrom additions
+	// Read existing config to preserve user customizations on top of the
+	// generated defaults: groupAllowFrom additions plus user-modified plugin
+	// entries (e.g. memory-core dreaming schedule, extra load paths).
 	existingData, err := l.OSS.GetObject(ctx, key)
 	if err == nil && len(existingData) > 0 {
 		var existingCfg map[string]interface{}
 		var newCfg map[string]interface{}
 		if json.Unmarshal(existingData, &existingCfg) == nil && json.Unmarshal(configJSON, &newCfg) == nil {
 			mergeGroupAllowFrom(existingCfg, newCfg)
-			merged, err := json.MarshalIndent(newCfg, "", "  ")
-			if err == nil {
+			if merged, mErr := json.MarshalIndent(newCfg, "", "  "); mErr == nil {
 				configJSON = merged
 			}
+		}
+		if pluginMerged, pErr := mergeUserPluginConfig(configJSON, existingData); pErr == nil {
+			configJSON = pluginMerged
 		}
 	}
 

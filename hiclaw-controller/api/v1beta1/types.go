@@ -66,8 +66,9 @@ type RemoteSkill struct {
 
 // RemoteSkillSource groups remote skills by source and auth mode.
 // Source format: nacos://host:port/{namespace-id}
-// AuthType values: "nacos" (username:password embedded in source URL as nacos://user:pass@host:port/namespace, default),
-// "sts-hiclaw" (STS credential provider), "none" (unauthenticated).
+// AuthType values: "nacos" (username:password embedded in source URL as nacos://user:pass@host:port/namespace),
+// "sts-hiclaw" (STS credential provider), "none" (unauthenticated). Empty auto-detects:
+// embedded username/password selects "nacos"; otherwise "none".
 type RemoteSkillSource struct {
 	Source   string        `json:"source"`
 	AuthType string        `json:"authType,omitempty"`

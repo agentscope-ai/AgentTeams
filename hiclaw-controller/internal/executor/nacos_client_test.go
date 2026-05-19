@@ -130,9 +130,41 @@ func TestNewNacosAIClient_STS_IssueUsesAIRegistryForNamespace(t *testing.T) {
 	if rec.last.Entries[0].Scope.NamespaceID != "my-nacos-ns" {
 		t.Errorf("Scope.NamespaceID = %q", rec.last.Entries[0].Scope.NamespaceID)
 	}
+	if len(rec.last.Entries[0].Permissions) != 2 ||
+		rec.last.Entries[0].Permissions[0] != "read" ||
+		rec.last.Entries[0].Permissions[1] != "list" {
+		t.Errorf("Permissions = %+v, want [read list]", rec.last.Entries[0].Permissions)
+	}
 	if len(rec.last.Entries[0].Scope.Resources) != 2 ||
 		rec.last.Entries[0].Scope.Resources[0] != "agentSpec/*" ||
 		rec.last.Entries[0].Scope.Resources[1] != "skill/*" {
 		t.Errorf("Scope.Resources = %+v, want [agentSpec/* skill/*]", rec.last.Entries[0].Scope.Resources)
+	}
+}
+
+func TestNewNacosAIClient_STS_UsesCustomResources(t *testing.T) {
+	s := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(s.Close)
+	u, err := url.Parse(s.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := &recordingIssueClient{}
+	_, err = NewNacosAIClient(
+		context.Background(),
+		u.Host,
+		"my-nacos-ns",
+		nacosAuthTypeSTS,
+		rec,
+		WithNacosSTSResources([]string{"skill/demo"}),
+	)
+	if err != nil {
+		t.Fatalf("NewNacosAIClient: %v", err)
+	}
+
+	got := rec.last.Entries[0].Scope.Resources
+	if len(got) != 1 || got[0] != "skill/demo" {
+		t.Fatalf("Scope.Resources = %+v, want [skill/demo]", got)
 	}
 }

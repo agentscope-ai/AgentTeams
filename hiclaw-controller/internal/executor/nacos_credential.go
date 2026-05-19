@@ -27,6 +27,8 @@ const (
 	nacosAuthTypeSTS   = "sts-hiclaw"
 )
 
+var defaultNacosSTSResources = []string{"agentSpec/*", "skill/*"}
+
 // nacosCredential abstracts all authentication logic for NacosAIClient.
 // NacosAIClient never touches credential state directly — it only calls
 // Refresh before sending a request and Apply to inject headers.
@@ -170,17 +172,20 @@ type nacosSTSCredential struct {
 	cached      *credprovider.IssueResponse
 }
 
-func newNacosSTSCredential(namespace string, client credprovider.Client) *nacosSTSCredential {
+func newNacosSTSCredential(namespace string, client credprovider.Client, resources []string) *nacosSTSCredential {
+	if len(resources) == 0 {
+		resources = defaultNacosSTSResources
+	}
 	sessionName := uuid.NewString()
 	tm := credprovider.NewTokenManager(client, credprovider.IssueRequest{
 		SessionName: sessionName,
 		Entries: []credprovider.AccessEntry{
 			{
 				Service:     credprovider.ServiceAIRegistry,
-				Permissions: []string{"read", "write"},
+				Permissions: []string{"read", "list"},
 				Scope: credprovider.AccessScope{
 					NamespaceID: namespace,
-					Resources:   []string{"agentSpec/*", "skill/*"},
+					Resources:   append([]string(nil), resources...),
 				},
 			},
 		},

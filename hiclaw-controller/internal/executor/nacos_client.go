@@ -26,6 +26,18 @@ type NacosAIClient struct {
 	cred       nacosCredential
 }
 
+type nacosAIClientOptions struct {
+	stsResources []string
+}
+
+type NacosAIClientOption func(*nacosAIClientOptions)
+
+func WithNacosSTSResources(resources []string) NacosAIClientOption {
+	return func(opts *nacosAIClientOptions) {
+		opts.stsResources = append([]string(nil), resources...)
+	}
+}
+
 // NewNacosAIClient constructs and connects a NacosAIClient.
 //
 //   - rawAddr: host:port, optionally prefixed with user:pass@ or nacos://
@@ -38,7 +50,13 @@ func NewNacosAIClient(
 	namespace string,
 	authType string,
 	credClient credprovider.Client,
+	options ...NacosAIClientOption,
 ) (*NacosAIClient, error) {
+	opts := nacosAIClientOptions{}
+	for _, apply := range options {
+		apply(&opts)
+	}
+
 	host, port, username, password, err := parseNacosAddr(rawAddr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid nacos address %q: %w", rawAddr, err)
@@ -78,7 +96,7 @@ func NewNacosAIClient(
 		if credClient == nil {
 			return nil, fmt.Errorf("sts-hiclaw auth requires a credprovider.Client")
 		}
-		cred = newNacosSTSCredential(namespace, credClient)
+		cred = newNacosSTSCredential(namespace, credClient, opts.stsResources)
 	case nacosAuthTypeNone, "":
 		cred = nacosNoneCredential{}
 	default:

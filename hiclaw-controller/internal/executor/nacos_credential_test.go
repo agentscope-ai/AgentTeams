@@ -15,7 +15,7 @@ func TestNacosSTSCredential_RefreshAndApply_SpasHeaders(t *testing.T) {
 
 	ctx := context.Background()
 	stub := stubCredForCredentialTest()
-	c := newNacosSTSCredential("team-ns", stub)
+	c := newNacosSTSCredential("team-ns", stub, nil)
 	if err := c.Refresh(ctx); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestNacosSTSCredential_Apply_EmptyNamespace_StillSetsHeaders(t *testing.T) 
 	t.Parallel()
 	ctx := context.Background()
 	stub := stubCredForCredentialTest()
-	c := newNacosSTSCredential("", stub)
+	c := newNacosSTSCredential("", stub, nil)
 	if err := c.Refresh(ctx); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestNacosSTSCredential_Apply_EmptyNamespace_StillSetsHeaders(t *testing.T) 
 func TestNacosSTSCredential_Apply_WithoutRefresh_DoesNotSetSpas(t *testing.T) {
 	t.Parallel()
 	stub := stubCredForCredentialTest()
-	c := newNacosSTSCredential("ns", stub)
+	c := newNacosSTSCredential("ns", stub, nil)
 	req, _ := http.NewRequest(http.MethodGet, "http://example", nil)
 	c.Apply(req)
 	if req.Header.Get("Spas-AccessKey") != "" {

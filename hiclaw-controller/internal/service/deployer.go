@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -360,6 +361,7 @@ type nacosClientKey struct {
 	nacosAddr string
 	namespace string
 	authType  string
+	resources string
 }
 
 func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix string, remoteSkills []v1beta1.RemoteSkillSource) error {
@@ -375,6 +377,14 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 		if len(source.Skills) == 0 {
 			return fmt.Errorf("remoteSkills source %q has empty skills list", source.Source)
 		}
+		for _, skill := range source.Skills {
+			if strings.TrimSpace(skill.Name) == "" {
+				return fmt.Errorf("remoteSkills source %q has an entry with empty name", source.Source)
+			}
+			if skill.Version != "" && skill.Label != "" {
+				return fmt.Errorf("remote skill %q in source %q cannot set both version and label", skill.Name, source.Source)
+			}
+		}
 
 		nacosAddr, namespace, err := parseNacosRemoteSource(source.Source)
 		if err != nil {
@@ -386,11 +396,17 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 			return fmt.Errorf("invalid remoteSkills.authType for source %q: %w", source.Source, err)
 		}
 
+		stsResources := remoteSkillSTSResources(source.Skills)
 		key := nacosClientKey{nacosAddr: nacosAddr, namespace: namespace, authType: authType}
+		var opts []executor.NacosAIClientOption
+		if authType == "sts-hiclaw" {
+			key.resources = strings.Join(stsResources, ",")
+			opts = append(opts, executor.WithNacosSTSResources(stsResources))
+		}
 		client, ok := clients[key]
 		if !ok {
 			logger.Info("connecting to nacos", "worker", workerName, "source", source.Source, "authType", authType)
-			client, err = executor.NewNacosAIClient(ctx, nacosAddr, namespace, authType, d.nacosCredClient)
+			client, err = executor.NewNacosAIClient(ctx, nacosAddr, namespace, authType, d.nacosCredClient, opts...)
 			if err != nil {
 				return fmt.Errorf("connect to nacos source %q: %w", source.Source, err)
 			}
@@ -398,13 +414,6 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 		}
 
 		for _, skill := range source.Skills {
-			if skill.Name == "" {
-				return fmt.Errorf("remoteSkills source %q has an entry with empty name", source.Source)
-			}
-			if skill.Version != "" && skill.Label != "" {
-				return fmt.Errorf("remote skill %q in source %q cannot set both version and label", skill.Name, source.Source)
-			}
-
 			tmpDir, err := os.MkdirTemp("", "nacos-skill-")
 			if err != nil {
 				return fmt.Errorf("create temp dir for skill %q: %w", skill.Name, err)
@@ -440,16 +449,29 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 
 func mapRemoteSkillAuthType(raw string) (string, error) {
 	authType := strings.TrimSpace(raw)
-	if authType == "" {
-		authType = "nacos"
-	}
-
 	switch authType {
-	case "sts-hiclaw", "nacos", "none":
+	case "", "sts-hiclaw", "nacos", "none":
 		return authType, nil
 	default:
 		return "", fmt.Errorf("unsupported authType %q", raw)
 	}
+}
+
+func remoteSkillSTSResources(skills []v1beta1.RemoteSkill) []string {
+	seen := make(map[string]struct{}, len(skills))
+	for _, skill := range skills {
+		name := strings.TrimSpace(skill.Name)
+		if name == "" {
+			continue
+		}
+		seen["skill/"+name] = struct{}{}
+	}
+	resources := make([]string, 0, len(seen))
+	for res := range seen {
+		resources = append(resources, res)
+	}
+	sort.Strings(resources)
+	return resources
 }
 
 func parseNacosRemoteSource(raw string) (nacosAddr, namespace string, err error) {

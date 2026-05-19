@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -10,7 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -113,19 +114,106 @@ func (c *NacosAIClient) GetSkill(ctx context.Context, name, outputDir, version, 
 	}
 	tmp.Close()
 
-	// Extract the ZIP directly into outputDir/. The ZIP is expected to contain
-	// a top-level directory named after the skill (e.g. baidu-search/SKILL.md),
-	// so the result will be outputDir/{name}/SKILL.md — matching what the caller
-	// reads back via filepath.Join(outputDir, name).
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create skill directory: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "unzip", "-q", "-o", tmpPath, "-d", outputDir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to extract skill ZIP for %s: %s: %w", name, string(out), err)
+	if err := extractSkillZip(tmpPath, outputDir); err != nil {
+		return fmt.Errorf("failed to extract skill ZIP for %s: %w", name, err)
 	}
 	return nil
+}
+
+func extractSkillZip(zipPath, outputDir string) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	outputAbs, err := filepath.Abs(outputDir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range reader.File {
+		rel, err := cleanZipEntryName(entry.Name)
+		if err != nil {
+			return fmt.Errorf("unsafe ZIP entry %q: %w", entry.Name, err)
+		}
+
+		mode := entry.FileInfo().Mode()
+		if mode&os.ModeSymlink != 0 {
+			return fmt.Errorf("unsafe ZIP entry %q: symlinks are not allowed", entry.Name)
+		}
+		if typ := mode.Type(); typ != 0 && typ != os.ModeDir {
+			return fmt.Errorf("unsafe ZIP entry %q: special files are not allowed", entry.Name)
+		}
+
+		dest := filepath.Join(outputDir, filepath.FromSlash(rel))
+		destAbs, err := filepath.Abs(dest)
+		if err != nil {
+			return err
+		}
+		if !isPathInside(destAbs, outputAbs) {
+			return fmt.Errorf("unsafe ZIP entry %q: escapes destination", entry.Name)
+		}
+
+		if entry.FileInfo().IsDir() {
+			if err := os.MkdirAll(destAbs, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(destAbs), 0o755); err != nil {
+			return err
+		}
+		if err := writeZipFile(entry, destAbs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanZipEntryName(name string) (string, error) {
+	if name == "" || strings.Contains(name, "\\") || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return "", fmt.Errorf("invalid path")
+	}
+	clean := path.Clean(name)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("path traversal is not allowed")
+	}
+	return clean, nil
+}
+
+func isPathInside(pathAbs, rootAbs string) bool {
+	if pathAbs == rootAbs {
+		return true
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func writeZipFile(entry *zip.File, dest string) error {
+	in, err := entry.Open()
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	mode := entry.FileInfo().Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func (c *NacosAIClient) GetAgentSpec(ctx context.Context, name, outputDir string, version, label string) error {

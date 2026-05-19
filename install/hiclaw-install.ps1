@@ -2053,21 +2053,36 @@ function Step-Admin {
     $script:config.ADMIN_USER = Read-Prompt -VarName "HICLAW_ADMIN_USER" -PromptText (Get-Msg "admin.username_prompt") -Default "admin"
     if ($script:StepResult -eq "back") { return }
 
-    if (-not $env:HICLAW_ADMIN_PASSWORD) {
+    # Pre-set via env var: validate; non-interactive fails fast,
+    # interactive warns and falls through to the retry prompt.
+    if ($env:HICLAW_ADMIN_PASSWORD) {
+        $script:config.ADMIN_PASSWORD = $env:HICLAW_ADMIN_PASSWORD
+        Write-Log (Get-Msg "prompt.preset" -f (Get-Msg "admin.password_prompt"))
+        if ($script:config.ADMIN_PASSWORD.Length -ge 8) {
+            Write-Log ""
+            return
+        }
+        if ($script:HICLAW_NON_INTERACTIVE) {
+            Write-Error (Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)
+        }
+        Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m $(Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)"
+        [Environment]::SetEnvironmentVariable("HICLAW_ADMIN_PASSWORD", $null, "Process")
+    }
+
+    while ($true) {
+        [Environment]::SetEnvironmentVariable("HICLAW_ADMIN_PASSWORD", $null, "Process")
         $script:config.ADMIN_PASSWORD = Read-Prompt -VarName "HICLAW_ADMIN_PASSWORD" -PromptText (Get-Msg "admin.password_prompt") -Secret -Optional
         if ($script:StepResult -eq "back") { return }
         if (-not $script:config.ADMIN_PASSWORD) {
             $randomSuffix = (New-RandomKey).Substring(0, 12)
             $script:config.ADMIN_PASSWORD = "admin$randomSuffix"
             Write-Log (Get-Msg "admin.password_generated")
+            break
         }
-    } else {
-        $script:config.ADMIN_PASSWORD = $env:HICLAW_ADMIN_PASSWORD
-        Write-Log (Get-Msg "prompt.preset" -f (Get-Msg "admin.password_prompt"))
-    }
-
-    if ($script:config.ADMIN_PASSWORD.Length -lt 8) {
-        Write-Error (Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)
+        if ($script:config.ADMIN_PASSWORD.Length -ge 8) {
+            break
+        }
+        Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m $(Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)"
     }
 
     Write-Log ""

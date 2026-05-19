@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -27,6 +29,9 @@ type HumanReconciler struct {
 }
 
 func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
+	start := time.Now()
+	defer func() { metrics.Observe("human", start, reterr) }()
+
 	logger := log.FromContext(ctx)
 
 	var human v1beta1.Human

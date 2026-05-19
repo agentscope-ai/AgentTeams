@@ -186,7 +186,7 @@ config = {
     "OTEL_EXPORTER_OTLP_PROTOCOL": protocol,
     "OTEL_EXPORTER_OTLP_HEADERS": f"x-arms-license-key={license_key},x-arms-project={arms_project},x-cms-workspace={cms_workspace}",
     "OTEL_SERVICE_NAME": service_name,
-    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "http,gen_ai_latest_experimental",
     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
     "LOONGSUITE_PYTHON_SITE_BOOTSTRAP": "true",
 }

@@ -1433,6 +1433,8 @@ detect_socket() {
 
     # 5. Active Fallback: If Podman is installed but not running, auto-enable and start its rootless socket
     if command -v podman >/dev/null 2>&1; then
+        # Safely inform the user via stderr to satisfy PR review without polluting stdout capture
+        echo "Enabling rootless Podman socket via systemd..." >&2
         systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
         # Double check if the rootless socket was successfully created after turning it on
         if [ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]; then

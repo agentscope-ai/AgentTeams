@@ -115,7 +115,9 @@ func (l *LegacyCompat) PutManagerConfig(configJSON []byte) error {
 				configJSON = merged
 			}
 		}
-		if pluginMerged, pErr := mergeUserPluginConfig(configJSON, existingData); pErr == nil {
+		if pluginMerged, pErr := mergeUserPluginConfig(configJSON, existingData); pErr != nil {
+			fmt.Printf("warning: plugin config merge failed for %s, using generated config: %v\n", key, pErr)
+		} else {
 			configJSON = pluginMerged
 		}
 	}

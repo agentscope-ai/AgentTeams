@@ -44,6 +44,10 @@ spec:
               value: "true"
             - name: CONDUWUIT_DB_POOL_WORKERS_LIMIT
               value: "32"
+            # Keep Matrix profile display names equal to HiClaw identities by
+            # default; Tuwunel otherwise appends its built-in "💕" suffix.
+            - name: CONDUWUIT_NEW_USER_DISPLAYNAME_SUFFIX
+              value: {{ .Values.matrix.tuwunel.newUserDisplayNameSuffix | default "" | quote }}
             - name: CONDUWUIT_SERVER_NAME
               value: {{ include "hiclaw.tuwunel.serverName" . | quote }}
             - name: CONDUWUIT_REGISTRATION_TOKEN

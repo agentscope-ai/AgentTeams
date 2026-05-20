@@ -20,5 +20,7 @@
       "groups": {}
     }
   },
-  "running": {}
+  "running": {
+    "max_iters": 200
+  }
 }

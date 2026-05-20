@@ -106,12 +106,12 @@ ALICE_LOGIN=$(matrix_login "alice" "" 2>/dev/null || echo "{}")
 # Check Higress consumer.
 # Manager (especially copaw runtime) often replies progressively: the first
 # reply just acknowledges the request ("I'll create alice…"), and the actual
-# `hiclaw create worker` call happens in subsequent turns ~10-30s later. So
-# the consumer may not exist immediately when matrix_wait_for_reply returns.
-# Poll for up to 90s before failing.
+# `hiclaw create worker` call happens in subsequent turns and can take longer
+# under CI LLM latency. So the consumer may not exist immediately when
+# matrix_wait_for_reply returns. Poll for up to 180s before failing.
 higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null
 CONSUMERS=""
-for i in $(seq 1 90); do
+for i in $(seq 1 180); do
     CONSUMERS=$(higress_get_consumers 2>/dev/null || echo "")
     if echo "${CONSUMERS}" | grep -q "worker-alice"; then
         break

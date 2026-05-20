@@ -200,7 +200,7 @@ build-harness-worker: ## Build Harness Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
 		-t $(LOCAL_HARNESS_WORKER) \
-		HiClaw/harness/
+		./harness/
 
 # ---------- Tag ----------
 
@@ -466,7 +466,7 @@ else
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
 		--push \
 		./hermes/
-	endif
+endif
 
 push-harness-worker: buildx-setup ## Build + push multi-arch Harness Worker image
 	@echo "==> Building + pushing multi-arch Harness Worker: $(HARNESS_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -478,7 +478,7 @@ ifeq ($(IS_PODMAN),1)
 			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(HARNESS_WORKER_TAG) \
-			HiClaw/harness/ && ) true
+			./harness/ && ) true
 	podman manifest push --all $(HARNESS_WORKER_TAG) docker://$(HARNESS_WORKER_TAG)
 	$(if $(PUSH_LATEST), \
 		podman manifest push --all $(HARNESS_WORKER_TAG) docker://$(HARNESS_WORKER_IMAGE):latest && \
@@ -492,8 +492,8 @@ else
 		-t $(HARNESS_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(HARNESS_WORKER_IMAGE):latest) \
 		--push \
-		HiClaw/harness/
-	endif
+		./harness/
+endif
 
 # ---------- Push native-arch only (dev use) ----------
 # WARNING: Pushing single-arch images will overwrite multi-arch manifests.

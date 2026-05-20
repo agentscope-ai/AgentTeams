@@ -122,6 +122,80 @@ EOF
 }
 
 # ============================================================
+# CoPaw token_usage.json Parsing
+# ============================================================
+
+# CoPaw aggregates LLM token counts in .copaw/token_usage.json keyed by
+# date → provider:model.  We sum across all dates and models to get totals.
+
+_detect_copaw_token_usage() {
+    local base_dir="$1"
+    echo "${base_dir}/.copaw/token_usage.json"
+}
+
+_read_copaw_token_totals() {
+    local container="$1"
+    local base_dir="$2"
+    local token_file result
+    token_file=$(_detect_copaw_token_usage "$base_dir")
+    result=$(docker exec "$container" sh -c "cat '${token_file}' 2>/dev/null" 2>/dev/null \
+        | jq -c '[to_entries[].value | to_entries[].value] | {
+            call_count: (map(.call_count) | add // 0),
+            prompt_tokens: (map(.prompt_tokens) | add // 0),
+            completion_tokens: (map(.completion_tokens) | add // 0)
+        }' 2>/dev/null)
+    if [ -z "$result" ] || [ "$result" = "null" ]; then
+        echo '{"call_count":0,"prompt_tokens":0,"completion_tokens":0}'
+    else
+        echo "$result"
+    fi
+}
+
+_collect_copaw_delta() {
+    local container="$1"
+    local base_dir="$2"
+    local baseline_totals="$3"
+
+    local current
+    current=$(_read_copaw_token_totals "$container" "$base_dir")
+    [ -z "$current" ] && return 0
+
+    local base_calls base_input base_output
+    base_calls=$(echo "$baseline_totals" | jq -r '.call_count // 0')
+    base_input=$(echo "$baseline_totals" | jq -r '.prompt_tokens // 0')
+    base_output=$(echo "$baseline_totals" | jq -r '.completion_tokens // 0')
+
+    local cur_calls cur_input cur_output
+    cur_calls=$(echo "$current" | jq -r '.call_count // 0')
+    cur_input=$(echo "$current" | jq -r '.prompt_tokens // 0')
+    cur_output=$(echo "$current" | jq -r '.completion_tokens // 0')
+
+    local delta_calls=$((cur_calls - base_calls))
+    local delta_input=$((cur_input - base_input))
+    local delta_output=$((cur_output - base_output))
+    local delta_total=$((delta_input + delta_output))
+
+    cat <<EOF
+{
+  "llm_calls": ${delta_calls},
+  "tokens": {
+    "input": ${delta_input},
+    "output": ${delta_output},
+    "cache_read": 0,
+    "cache_write": 0,
+    "total": ${delta_total}
+  },
+  "timing": {
+    "start": "",
+    "end": "",
+    "duration_seconds": 0
+  },
+  "runtime": "copaw"
+}
+EOF
+}
+
+# ============================================================
 # Session JSONL Parsing
 # ============================================================
 
@@ -575,6 +649,10 @@ snapshot_baseline() {
         local manager_snapshot
         manager_snapshot=$(_snapshot_hermes_sessions "$manager_container" "$manager_db")
         snapshot_result=$(echo "$snapshot_result" | jq --argjson o "$manager_snapshot" '.offsets.manager = $o')
+    elif [ "$manager_runtime" = "copaw" ]; then
+        local manager_copaw_totals
+        manager_copaw_totals=$(_read_copaw_token_totals "$manager_container" "/root/manager-workspace")
+        snapshot_result=$(echo "$snapshot_result" | jq --argjson o "$manager_copaw_totals" '.offsets.manager = $o')
     elif _is_metrics_supported "$manager_container" "/root/manager-workspace"; then
         local manager_files
         manager_files=$(docker exec "$manager_container" \
@@ -608,6 +686,10 @@ snapshot_baseline() {
             local worker_snapshot
             worker_snapshot=$(_snapshot_hermes_sessions "$worker_container" "$worker_db")
             snapshot_result=$(echo "$snapshot_result" | jq --arg w "$worker" --argjson o "$worker_snapshot" '.offsets[$w] = $o')
+        elif [ "$worker_runtime" = "copaw" ]; then
+            local worker_copaw_totals
+            worker_copaw_totals=$(_read_copaw_token_totals "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+            snapshot_result=$(echo "$snapshot_result" | jq --arg w "$worker" --argjson o "$worker_copaw_totals" '.offsets[$w] = $o')
         elif ! _is_metrics_supported "$worker_container" "/root/hiclaw-fs/agents/${worker}"; then
             continue
         else
@@ -741,6 +823,15 @@ collect_delta_metrics() {
             delta_result=$(echo "$delta_result" | jq --argjson m "$manager_delta" '.agents.manager = $m')
             log_info "Manager delta: $(echo "$manager_delta" | jq -r '.llm_calls') LLM calls, $(echo "$manager_delta" | jq -r '.tokens.total') tokens" >&2
         fi
+    elif [ "$manager_runtime" = "copaw" ]; then
+        local manager_offsets
+        manager_offsets=$(echo "$baseline" | jq -c '.offsets.manager // {}')
+        local manager_delta
+        manager_delta=$(_collect_copaw_delta "$manager_container" "/root/manager-workspace" "$manager_offsets")
+        if [ -n "$manager_delta" ]; then
+            delta_result=$(echo "$delta_result" | jq --argjson m "$manager_delta" '.agents.manager = $m')
+            log_info "Manager delta: $(echo "$manager_delta" | jq -r '.llm_calls') LLM calls, $(echo "$manager_delta" | jq -r '.tokens.total') tokens" >&2
+        fi
     elif _is_metrics_supported "$manager_container" "/root/manager-workspace"; then
         local manager_offsets
         manager_offsets=$(echo "$baseline" | jq -r '.offsets.manager // empty')
@@ -775,6 +866,7 @@ collect_delta_metrics() {
         fi
 
         if [ "$worker_runtime" != "hermes" ] && \
+           [ "$worker_runtime" != "copaw" ] && \
            ! _is_metrics_supported "$worker_container" "/root/hiclaw-fs/agents/${worker}"; then
             log_info "Worker '${worker}' runtime '${worker_runtime}' does not record session metrics; emitting unsupported placeholder" >&2
             local worker_blob
@@ -790,6 +882,10 @@ collect_delta_metrics() {
             local worker_db
             worker_db=$(_detect_hermes_state_db "/root/hiclaw-fs/agents/${worker}")
             worker_delta=$(_collect_hermes_delta "$worker_container" "$worker_db" "$worker_offsets")
+        elif [ "$worker_runtime" = "copaw" ]; then
+            local worker_copaw_offsets
+            worker_copaw_offsets=$(echo "$baseline" | jq -c --arg w "$worker" '.offsets[$w] // {}')
+            worker_delta=$(_collect_copaw_delta "$worker_container" "/root/hiclaw-fs/agents/${worker}" "$worker_copaw_offsets")
         else
             worker_delta=$(_collect_agent_delta "$worker_container" "$worker_session_dir" "$worker_offsets")
         fi
@@ -843,6 +939,22 @@ collect_test_metrics() {
         local manager_db
         manager_db=$(_detect_hermes_state_db "/root/manager-workspace")
         manager_metrics=$(_collect_hermes_latest_metrics "$manager_container" "$manager_db")
+    elif [ "$manager_runtime" = "copaw" ]; then
+        local manager_copaw_totals
+        manager_copaw_totals=$(_read_copaw_token_totals "$manager_container" "/root/manager-workspace")
+        local total_input total_output total_calls
+        total_calls=$(echo "$manager_copaw_totals" | jq -r '.call_count // 0')
+        total_input=$(echo "$manager_copaw_totals" | jq -r '.prompt_tokens // 0')
+        total_output=$(echo "$manager_copaw_totals" | jq -r '.completion_tokens // 0')
+        manager_metrics=$(cat <<EOF
+{
+  "llm_calls": ${total_calls},
+  "tokens": {"input": ${total_input}, "output": ${total_output}, "cache_read": 0, "cache_write": 0, "total": $((total_input + total_output))},
+  "timing": {"start": "", "end": "", "duration_seconds": 0},
+  "runtime": "copaw"
+}
+EOF
+)
     elif _is_metrics_supported "$manager_container" "/root/manager-workspace"; then
         local manager_session
         manager_session=$(get_latest_session "$manager_container" "$manager_session_dir")
@@ -880,6 +992,7 @@ collect_test_metrics() {
         fi
 
         if [ "$worker_runtime" != "hermes" ] && \
+           [ "$worker_runtime" != "copaw" ] && \
            ! _is_metrics_supported "$worker_container" "/root/hiclaw-fs/agents/${worker}"; then
             log_info "Worker '${worker}' runtime '${worker_runtime}' does not record session metrics; emitting unsupported placeholder" >&2
             local worker_blob
@@ -893,6 +1006,22 @@ collect_test_metrics() {
             local worker_db
             worker_db=$(_detect_hermes_state_db "/root/hiclaw-fs/agents/${worker}")
             worker_metrics=$(_collect_hermes_latest_metrics "$worker_container" "$worker_db")
+        elif [ "$worker_runtime" = "copaw" ]; then
+            local worker_copaw_totals
+            worker_copaw_totals=$(_read_copaw_token_totals "$worker_container" "/root/hiclaw-fs/agents/${worker}")
+            local wc_calls wc_input wc_output
+            wc_calls=$(echo "$worker_copaw_totals" | jq -r '.call_count // 0')
+            wc_input=$(echo "$worker_copaw_totals" | jq -r '.prompt_tokens // 0')
+            wc_output=$(echo "$worker_copaw_totals" | jq -r '.completion_tokens // 0')
+            worker_metrics=$(cat <<EOF
+{
+  "llm_calls": ${wc_calls},
+  "tokens": {"input": ${wc_input}, "output": ${wc_output}, "cache_read": 0, "cache_write": 0, "total": $((wc_input + wc_output))},
+  "timing": {"start": "", "end": "", "duration_seconds": 0},
+  "runtime": "copaw"
+}
+EOF
+)
         else
             local worker_session
             worker_session=$(get_latest_session "$worker_container" "$worker_session_dir")

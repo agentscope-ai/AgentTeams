@@ -3131,6 +3131,27 @@ function Install-Manager {
             $ctrlArgs += @("-e", "HICLAW_LANGUAGE=$($script:HICLAW_LANGUAGE)")
         }
 
+        # Optional: CMS/ARMS observability. In embedded mode the controller
+        # spawns the Manager and Workers, so it must receive these settings.
+        $cmsTracesEnabled = if ($env:HICLAW_CMS_TRACES_ENABLED) { $env:HICLAW_CMS_TRACES_ENABLED } else { "false" }
+        $cmsServiceName = if ($env:HICLAW_CMS_SERVICE_NAME) { $env:HICLAW_CMS_SERVICE_NAME } else { "hiclaw-manager" }
+        $cmsMetricsEnabled = if ($env:HICLAW_CMS_METRICS_ENABLED) { $env:HICLAW_CMS_METRICS_ENABLED } else { "false" }
+        $ctrlArgs += @("-e", "HICLAW_CMS_TRACES_ENABLED=$cmsTracesEnabled")
+        $ctrlArgs += @("-e", "HICLAW_CMS_SERVICE_NAME=$cmsServiceName")
+        $ctrlArgs += @("-e", "HICLAW_CMS_METRICS_ENABLED=$cmsMetricsEnabled")
+        if ($env:HICLAW_CMS_ENDPOINT) {
+            $ctrlArgs += @("-e", "HICLAW_CMS_ENDPOINT=$($env:HICLAW_CMS_ENDPOINT)")
+        }
+        if ($env:HICLAW_CMS_LICENSE_KEY) {
+            $ctrlArgs += @("-e", "HICLAW_CMS_LICENSE_KEY=$($env:HICLAW_CMS_LICENSE_KEY)")
+        }
+        if ($env:HICLAW_CMS_PROJECT) {
+            $ctrlArgs += @("-e", "HICLAW_CMS_PROJECT=$($env:HICLAW_CMS_PROJECT)")
+        }
+        if ($env:HICLAW_CMS_WORKSPACE) {
+            $ctrlArgs += @("-e", "HICLAW_CMS_WORKSPACE=$($env:HICLAW_CMS_WORKSPACE)")
+        }
+
         # Mount the docker socket so the controller can spawn manager + workers.
         $ctrlArgs += @("-v", "//var/run/docker.sock:/var/run/docker.sock")
         $ctrlArgs += @("--security-opt", "label=disable")

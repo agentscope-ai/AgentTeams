@@ -3191,10 +3191,27 @@ CREDEOF
         if [ -n "${HICLAW_OPENAI_BASE_URL:-}" ]; then
             _ctrl_env_args+=(-e "HICLAW_OPENAI_BASE_URL=${HICLAW_OPENAI_BASE_URL}")
         fi
-
         # Optional: language
         if [ -n "${HICLAW_LANGUAGE:-}" ]; then
             _ctrl_env_args+=(-e "HICLAW_LANGUAGE=${HICLAW_LANGUAGE}")
+        fi
+
+        # Optional: CMS/ARMS observability. In embedded mode the controller
+        # spawns the Manager and Workers, so it must receive these settings.
+        _ctrl_env_args+=(-e "HICLAW_CMS_TRACES_ENABLED=${HICLAW_CMS_TRACES_ENABLED:-false}")
+        _ctrl_env_args+=(-e "HICLAW_CMS_SERVICE_NAME=${HICLAW_CMS_SERVICE_NAME:-hiclaw-manager}")
+        _ctrl_env_args+=(-e "HICLAW_CMS_METRICS_ENABLED=${HICLAW_CMS_METRICS_ENABLED:-false}")
+        if [ -n "${HICLAW_CMS_ENDPOINT:-}" ]; then
+            _ctrl_env_args+=(-e "HICLAW_CMS_ENDPOINT=${HICLAW_CMS_ENDPOINT}")
+        fi
+        if [ -n "${HICLAW_CMS_LICENSE_KEY:-}" ]; then
+            _ctrl_env_args+=(-e "HICLAW_CMS_LICENSE_KEY=${HICLAW_CMS_LICENSE_KEY}")
+        fi
+        if [ -n "${HICLAW_CMS_PROJECT:-}" ]; then
+            _ctrl_env_args+=(-e "HICLAW_CMS_PROJECT=${HICLAW_CMS_PROJECT}")
+        fi
+        if [ -n "${HICLAW_CMS_WORKSPACE:-}" ]; then
+            _ctrl_env_args+=(-e "HICLAW_CMS_WORKSPACE=${HICLAW_CMS_WORKSPACE}")
         fi
 
         # shellcheck disable=SC2086

@@ -127,9 +127,10 @@ func (p *PackageResolver) ResolveAndExtract(ctx context.Context, uri, name strin
 	return destDir, nil
 }
 
-// DeployToMinIO copies extracted package contents to the worker's MinIO agent space.
-// Config files and skills from the package are applied when present; SOUL may come
-// from the package, inline spec, or DeployWorkerConfig defaults.
+// DeployToMinIO seeds extracted package contents to the worker's agent space.
+// Package files are initialization defaults: a later reconcile must not overwrite
+// runtime-mutated files for the same worker. Controller-owned generated files are
+// still overwritten by DeployWorkerConfig after this package layer is applied.
 //
 // To avoid a race with the background MinIO→local sync (which could overwrite local
 // files between the local write and the mc mirror push), we push to MinIO FIRST from
@@ -254,27 +255,30 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 		}
 	}
 
-	// ── Phase 2: Copy to local agent dir (safe — MinIO already has new content) ──
+	// ── Phase 2: Seed local package files without overwriting runtime changes ──
 
 	for _, f := range configFiles {
 		if excludeMemory && (f.name == "SOUL.md" || f.name == "AGENTS.md") {
 			continue
 		}
-		os.WriteFile(filepath.Join(agentDir, f.name), f.data, 0644)
+		if _, err := writeFileSeedOnly(filepath.Join(agentDir, f.name), f.data); err != nil {
+			return fmt.Errorf("seed local %s: %w", f.name, err)
+		}
 	}
 	for _, dirName := range configSubdirs {
 		src := filepath.Join(configDir, dirName)
 		dst := filepath.Join(agentDir, dirName)
-		cpCmd := exec.CommandContext(ctx, "cp", "-r", src, dst)
-		cpCmd.CombinedOutput()
+		if err := copyDirSeedOnly(src, dst); err != nil {
+			return fmt.Errorf("seed local config directory %s: %w", dirName, err)
+		}
 	}
 
 	// Skills
 	if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
 		destSkills := filepath.Join(agentDir, "skills")
-		os.MkdirAll(destSkills, 0755)
-		cpCmd := exec.CommandContext(ctx, "cp", "-r", skillsDir+"/.", destSkills+"/")
-		cpCmd.CombinedOutput()
+		if err := copyDirSeedOnly(skillsDir, destSkills); err != nil {
+			return fmt.Errorf("seed local skills: %w", err)
+		}
 	}
 
 	// Crons
@@ -328,6 +332,43 @@ func putPackageFileSeedOnly(ctx context.Context, storage oss.StorageClient, loca
 		return false, err
 	}
 	return true, storage.PutFile(ctx, localPath, target)
+}
+
+func writeFileSeedOnly(path string, data []byte) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, data, 0644)
+}
+
+func copyDirSeedOnly(srcDir, dstDir string) error {
+	return filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dstDir, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(dst, 0755)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		_, err = writeFileSeedOnly(dst, data)
+		return err
+	})
 }
 
 // wrapWithBuiltinMarkers wraps user AGENTS.md content with hiclaw-builtin markers.

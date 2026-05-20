@@ -665,6 +665,62 @@ func TestPutPackageObjectSeedOnlyPreservesExistingStorageObject(t *testing.T) {
 	}
 }
 
+func TestWriteFileSeedOnlyPreservesExistingLocalFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config", "credagent.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("runtime"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	seeded, err := writeFileSeedOnly(path, []byte("template"))
+	if err != nil {
+		t.Fatalf("writeFileSeedOnly failed: %v", err)
+	}
+	if seeded {
+		t.Fatalf("existing file should not be seeded")
+	}
+	assertFileContent(t, path, "runtime")
+
+	newPath := filepath.Join(filepath.Dir(path), "new.json")
+	seeded, err = writeFileSeedOnly(newPath, []byte("template"))
+	if err != nil {
+		t.Fatalf("writeFileSeedOnly new file failed: %v", err)
+	}
+	if !seeded {
+		t.Fatalf("new file should be seeded")
+	}
+	assertFileContent(t, newPath, "template")
+}
+
+func TestCopyDirSeedOnlyPreservesExistingLocalFiles(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	dst := filepath.Join(root, "dst")
+	if err := os.MkdirAll(filepath.Join(src, "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "nested", "settings.json"), []byte("template"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "nested", "new.json"), []byte("new-template"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dst, "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "nested", "settings.json"), []byte("runtime"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDirSeedOnly(src, dst); err != nil {
+		t.Fatalf("copyDirSeedOnly failed: %v", err)
+	}
+	assertFileContent(t, filepath.Join(dst, "nested", "settings.json"), "runtime")
+	assertFileContent(t, filepath.Join(dst, "nested", "new.json"), "new-template")
+}
+
 // --- helpers ---
 
 // stubCredClient returns a static STS-like triple for Nacos Spas signing tests.

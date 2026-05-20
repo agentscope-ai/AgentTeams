@@ -402,6 +402,11 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
 	saName := d.ResourcePrefix.SAName(authpkg.RoleWorker, m.Name)
 
+	// Inject harness type for harness workers
+	if m.Spec.Runtime == "harness" && m.Spec.HarnessType != "" {
+		workerEnv["HICLAW_HARNESS_TYPE"] = m.Spec.HarnessType
+	}
+
 	// Identity labels: callers own the full label set now that the backend
 	// is stateless (see A7). The backend only stamps hiclaw.io/runtime.
 	labels := make(map[string]string, len(m.PodLabels)+2)

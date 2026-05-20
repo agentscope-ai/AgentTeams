@@ -1,0 +1,13 @@
+[model]
+default = "gpt-5.5"
+
+[approval_policy]
+mode = "on-request"
+
+[sandbox]
+mode = "workspace-write"
+
+[features]
+memories = false
+undo = false
+hooks = true

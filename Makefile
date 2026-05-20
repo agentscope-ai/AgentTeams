@@ -30,6 +30,7 @@ WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/hiclaw-worker
 COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/hiclaw-copaw-worker
 HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/hiclaw-hermes-worker
 OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/hiclaw-openhuman-worker
+HARNESS_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/hiclaw-harness-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/hiclaw-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/hiclaw-embedded
@@ -40,6 +41,7 @@ WORKER_TAG         ?= $(WORKER_IMAGE):$(VERSION)
 COPAW_WORKER_TAG   ?= $(COPAW_WORKER_IMAGE):$(VERSION)
 HERMES_WORKER_TAG  ?= $(HERMES_WORKER_IMAGE):$(VERSION)
 OPENHUMAN_WORKER_TAG ?= $(OPENHUMAN_WORKER_IMAGE):$(VERSION)
+HARNESS_WORKER_TAG   ?= $(HARNESS_WORKER_IMAGE):$(VERSION)
 OPENCLAW_BASE_TAG  ?= $(OPENCLAW_BASE_IMAGE):$(VERSION)
 CONTROLLER_TAG     ?= $(CONTROLLER_IMAGE):$(VERSION)
 EMBEDDED_TAG       ?= $(EMBEDDED_IMAGE):$(VERSION)
@@ -51,6 +53,7 @@ LOCAL_WORKER         = hiclaw/worker-agent:$(VERSION)
 LOCAL_COPAW_WORKER   = hiclaw/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = hiclaw/hermes-worker:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = hiclaw/openhuman-worker:$(VERSION)
+LOCAL_HARNESS_WORKER   = hiclaw/harness-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = hiclaw/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = hiclaw/hiclaw-controller:$(VERSION)
 LOCAL_EMBEDDED       = hiclaw/hiclaw-embedded:$(VERSION)
@@ -104,9 +107,9 @@ LINES          ?= 50
 
 # ---------- Phony targets ----------
 
-.PHONY: all build build-openclaw-base build-hiclaw-controller build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
-        tag push push-openclaw-base push-hiclaw-controller push-embedded push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
-        push-native push-native-manager push-native-manager-copaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
+.PHONY: all build build-openclaw-base build-hiclaw-controller build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-harness-worker \
+        tag push push-openclaw-base push-hiclaw-controller push-embedded push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker push-harness-worker \
+        push-native push-native-manager push-native-manager-copaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker push-native-harness-worker \
         buildx-setup \
         test test-quick test-installed test-embedded \
         install install-embedded uninstall uninstall-embedded replay replay-log \
@@ -121,7 +124,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-hiclaw-controller ## Build all images (base image pulled from registry, not rebuilt locally)
+build: build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-harness-worker build-hiclaw-controller ## Build all images (base image pulled from registry, not rebuilt locally)
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -192,6 +195,13 @@ build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
 		-t $(LOCAL_OPENHUMAN_WORKER) \
 		-f openhuman/Dockerfile .
 
+build-harness-worker: ## Build Harness Worker image
+	@echo "==> Building Harness Worker image: $(LOCAL_HARNESS_WORKER) (registry: $(HIGRESS_REGISTRY))"
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		-t $(LOCAL_HARNESS_WORKER) \
+		HiClaw/harness/
+
 # ---------- Tag ----------
 
 tag: build ## Tag images for registry push
@@ -200,12 +210,14 @@ tag: build ## Tag images for registry push
 	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_TAG)
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_TAG)
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_TAG)
+	docker tag $(LOCAL_HARNESS_WORKER) $(HARNESS_WORKER_TAG)
 ifeq ($(PUSH_LATEST),yes)
 	docker tag $(LOCAL_MANAGER) $(MANAGER_IMAGE):latest
 	docker tag $(LOCAL_WORKER) $(WORKER_IMAGE):latest
 	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_IMAGE):latest
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_IMAGE):latest
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_IMAGE):latest
+	docker tag $(LOCAL_HARNESS_WORKER) $(HARNESS_WORKER_IMAGE):latest
 	docker tag $(LOCAL_CONTROLLER) $(CONTROLLER_IMAGE):latest
 	@echo "==> Images tagged as $(VERSION) and latest"
 else
@@ -234,7 +246,7 @@ else
 	fi
 endif
 
-push: push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-hiclaw-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
+push: push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-harness-worker push-hiclaw-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
 
 push-openclaw-base: buildx-setup ## Build + push multi-arch OpenClaw base image
 	@echo "==> Building + pushing multi-arch OpenClaw base: $(OPENCLAW_BASE_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -454,7 +466,34 @@ else
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
 		--push \
 		./hermes/
-endif
+	endif
+
+push-harness-worker: buildx-setup ## Build + push multi-arch Harness Worker image
+	@echo "==> Building + pushing multi-arch Harness Worker: $(HARNESS_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
+ifeq ($(IS_PODMAN),1)
+	-podman manifest rm $(HARNESS_WORKER_TAG) 2>/dev/null
+	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
+		echo "  -> Building Harness Worker for $(plat)..." && \
+		podman build --platform $(plat) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--manifest $(HARNESS_WORKER_TAG) \
+			HiClaw/harness/ && ) true
+	podman manifest push --all $(HARNESS_WORKER_TAG) docker://$(HARNESS_WORKER_TAG)
+	$(if $(PUSH_LATEST), \
+		podman manifest push --all $(HARNESS_WORKER_TAG) docker://$(HARNESS_WORKER_IMAGE):latest && \
+		echo "  -> Also pushed :latest tag")
+else
+	docker buildx build \
+		--builder $(BUILDX_BUILDER) \
+		--platform $(MULTIARCH_PLATFORMS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		-t $(HARNESS_WORKER_TAG) \
+		$(if $(PUSH_LATEST),-t $(HARNESS_WORKER_IMAGE):latest) \
+		--push \
+		HiClaw/harness/
+	endif
 
 # ---------- Push native-arch only (dev use) ----------
 # WARNING: Pushing single-arch images will overwrite multi-arch manifests.
@@ -470,11 +509,14 @@ push-native: tag ## Push native-arch images (dev only, overwrites multi-arch!)
 	docker push $(COPAW_WORKER_TAG)
 	@echo "==> Pushing Hermes Worker: $(HERMES_WORKER_TAG)"
 	docker push $(HERMES_WORKER_TAG)
+	@echo "==> Pushing Harness Worker: $(HARNESS_WORKER_TAG)"
+	docker push $(HARNESS_WORKER_TAG)
 ifeq ($(PUSH_LATEST),yes)
 	docker push $(MANAGER_IMAGE):latest
 	docker push $(WORKER_IMAGE):latest
 	docker push $(COPAW_WORKER_IMAGE):latest
 	docker push $(HERMES_WORKER_IMAGE):latest
+	docker push $(HARNESS_WORKER_IMAGE):latest
 endif
 
 push-native-manager: build-manager ## Push native-arch Manager only (dev)
@@ -500,6 +542,10 @@ push-native-hermes-worker: build-hermes-worker ## Push native-arch Hermes Worker
 push-native-openhuman-worker: build-openhuman-worker ## Push native-arch OpenHuman Worker only (dev)
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_TAG)
 	docker push $(OPENHUMAN_WORKER_TAG)
+
+push-native-harness-worker: build-harness-worker ## Push native-arch Harness Worker only (dev)
+	docker tag $(LOCAL_HARNESS_WORKER) $(HARNESS_WORKER_TAG)
+	docker push $(HARNESS_WORKER_TAG)
 
 # ---------- Test ----------
 

@@ -1,0 +1,14 @@
+{
+  "model": {
+    "name": "gemini-2.5-pro"
+  },
+  "security": {
+    "auth": {
+      "selectedType": "api-key",
+      "apiKey": ""
+    }
+  },
+  "general": {
+    "defaultApprovalMode": "auto_edit"
+  }
+}

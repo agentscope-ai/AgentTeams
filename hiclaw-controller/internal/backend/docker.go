@@ -24,6 +24,7 @@ type DockerConfig struct {
 	CopawWorkerImage     string // default copaw worker image (HICLAW_COPAW_WORKER_IMAGE)
 	HermesWorkerImage    string // default hermes worker image (HICLAW_HERMES_WORKER_IMAGE)
 	OpenHumanWorkerImage string // default openhuman worker image (HICLAW_OPENHUMAN_WORKER_IMAGE)
+	HarnessWorkerImage   string // default harness worker image (HICLAW_HARNESS_WORKER_IMAGE)
 	DefaultNetwork       string // default Docker network (default "hiclaw-net")
 }
 
@@ -113,6 +114,8 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			image = d.config.HermesWorkerImage
 		case req.Runtime == RuntimeOpenHuman && d.config.OpenHumanWorkerImage != "":
 			image = d.config.OpenHumanWorkerImage
+		case req.Runtime == RuntimeHarness && d.config.HarnessWorkerImage != "":
+			image = d.config.HarnessWorkerImage
 		default:
 			image = d.config.WorkerImage
 		}

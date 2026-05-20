@@ -90,7 +90,8 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string              `json:"model"`
 	ModelProvider string              `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string              `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman (default: openclaw)
+	Runtime       string              `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman | harness (default: openclaw)
+	HarnessType   string              `json:"harnessType,omitempty"`   // claude | gemini | opencode | codex (default: claude)
 	Image         string              `json:"image,omitempty"`         // custom Docker image
 	WorkerName    string              `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string              `json:"identity,omitempty"`
@@ -290,6 +291,7 @@ type TeamWorkerSpec struct {
 	Model         string              `json:"model,omitempty"`
 	ModelProvider string              `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
 	Runtime       string              `json:"runtime,omitempty"`
+	HarnessType   string              `json:"harnessType,omitempty"` // claude | gemini | opencode | codex (default: claude)
 	Image         string              `json:"image,omitempty"`
 	Identity      string              `json:"identity,omitempty"`
 	Soul          string              `json:"soul,omitempty"`

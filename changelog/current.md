@@ -13,4 +13,5 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - fix(hiclaw-controller): use UUID STS session names for credential-provider requests while logging the original caller label for traceability.
 - fix(copaw-worker): pin the bundled Nacos CLI package to `@nacos-group/cli@1.0.5-beta.1`.
 - fix(hiclaw-controller): preserve runtime-mutated package files during reconcile by seeding package/base files without overwriting existing storage objects.
+- fix(copaw): stop Matrix typing indicators when a run completes without sending a message or is cancelled.
 - fix(manager): quote coding CLI skill frontmatter descriptions that contain colons.

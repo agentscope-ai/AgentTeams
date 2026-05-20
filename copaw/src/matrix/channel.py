@@ -2028,6 +2028,34 @@ class MatrixChannel(BaseChannel):
                     )
         return user_id.split(":")[0].lstrip("@") or user_id
 
+    async def _on_process_completed(
+        self,
+        request: Any,
+        to_handle: str,
+        send_meta: Dict[str, Any],
+    ) -> None:
+        base_completed = getattr(super(), "_on_process_completed", None)
+        try:
+            if base_completed:
+                await base_completed(request, to_handle, send_meta)
+        finally:
+            await self._send_typing(to_handle, False)
+
+    async def _on_consume_error(
+        self,
+        request: Any,
+        to_handle: str,
+        err_text: str,
+    ) -> None:
+        if "Task has been cancelled" in (err_text or ""):
+            logger.info(
+                "MatrixChannel: suppressing cancellation error for %s",
+                to_handle,
+            )
+            await self._send_typing(to_handle, False)
+            return
+        await super()._on_consume_error(request, to_handle, err_text)
+
     # ------------------------------------------------------------------
     # Outgoing send — text
     # Markdown→HTML (formatted_body); m.mentions when meta has sender_id.

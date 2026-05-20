@@ -328,7 +328,7 @@ func (m *MockProvisioner) CallCounts() (provision, deprovision, refresh, leaveAl
 	defer m.mu.Unlock()
 	return len(m.Calls.ProvisionWorker),
 		len(m.Calls.DeprovisionWorker),
-		len(m.Calls.RefreshCredentials),
+		len(m.Calls.RefreshCredentials) + len(m.Calls.RefreshWorkerCredentials),
 		len(m.Calls.LeaveAllWorkerRooms)
 }
 

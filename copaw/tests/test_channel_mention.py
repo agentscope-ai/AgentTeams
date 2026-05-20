@@ -1,4 +1,4 @@
-"""Tests for MatrixChannel._apply_mention: outgoing visible mentions.
+"""Tests for MatrixChannel Matrix-specific outgoing behavior.
 
 openclaw >= 2026.4.x's mention monitor requires BOTH ``m.mentions.user_ids``
 metadata AND a *visible* mention (a ``matrix.to`` link in ``formatted_body``
@@ -8,7 +8,18 @@ three-layer invariant that ``_apply_mention`` must uphold so CoPaw-issued
 messages actually wake up receiving OpenClaw agents.
 """
 
+import asyncio
+
 from matrix.channel import MatrixChannel
+
+
+class _TypingClient:
+    def __init__(self):
+        self.rooms = {}
+        self.calls = []
+
+    async def room_typing(self, room_id, *, typing_state, timeout):
+        self.calls.append((room_id, typing_state, timeout))
 
 
 def _make_channel(user_id: str = "@bot:hs.local") -> MatrixChannel:
@@ -23,7 +34,15 @@ def _make_channel(user_id: str = "@bot:hs.local") -> MatrixChannel:
     ch = MatrixChannel.__new__(MatrixChannel)
     ch._user_id = user_id
     ch._client = None
+    ch._typing_tasks = {}
     return ch
+
+
+def _make_typing_channel() -> tuple[MatrixChannel, _TypingClient]:
+    ch = _make_channel()
+    client = _TypingClient()
+    ch._client = client
+    return ch, client
 
 
 def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
@@ -199,3 +218,27 @@ def test_apply_mention_multiple_targets_all_get_visible_anchors():
             f'href="https://matrix.to/#/{uid_enc}"'
             in content["formatted_body"]
         )
+
+
+def test_process_completed_stops_typing_even_without_reply():
+    ch, client = _make_typing_channel()
+
+    asyncio.run(ch._on_process_completed(None, "!room:hs.local", {}))
+
+    assert client.calls[-1][0] == "!room:hs.local"
+    assert client.calls[-1][1] is False
+
+
+def test_cancelled_consume_error_stops_typing_without_matrix_noise():
+    ch, client = _make_typing_channel()
+
+    asyncio.run(
+        ch._on_consume_error(
+            None,
+            "!room:hs.local",
+            "Task has been cancelled",
+        )
+    )
+
+    assert client.calls[-1][0] == "!room:hs.local"
+    assert client.calls[-1][1] is False

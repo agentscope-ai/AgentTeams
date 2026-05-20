@@ -721,6 +721,45 @@ func TestCopyDirSeedOnlyPreservesExistingLocalFiles(t *testing.T) {
 	assertFileContent(t, filepath.Join(dst, "nested", "new.json"), "new-template")
 }
 
+func TestSeedDirToStoragePreservesExistingObjects(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	src := filepath.Join(root, "skills")
+	if err := os.MkdirAll(filepath.Join(src, "tool"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "tool", "SKILL.md"), []byte("template"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "tool", "extra.md"), []byte("extra-template"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	if err := store.PutObject(ctx, "agents/alice/skills/tool/SKILL.md", []byte("runtime")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := seedDirToStorage(ctx, store, src, "agents/alice/skills"); err != nil {
+		t.Fatalf("seedDirToStorage failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/alice/skills/tool/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "runtime" {
+		t.Fatalf("existing storage object overwritten: %q", got)
+	}
+	got, err = store.GetObject(ctx, "agents/alice/skills/tool/extra.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "extra-template" {
+		t.Fatalf("new storage seed object = %q", got)
+	}
+}
+
 // --- helpers ---
 
 // stubCredClient returns a static STS-like triple for Nacos Spas signing tests.

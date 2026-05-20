@@ -242,16 +242,28 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 
 	// Skills
 	if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
-		mcCmd := exec.CommandContext(ctx, "mc", "mirror", skillsDir+"/", minioBase+"/skills/", "--overwrite")
-		if out, err := mcCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("mc mirror skills to MinIO: %s: %w", string(out), err)
+		if storage != nil {
+			if err := seedDirToStorage(ctx, storage, skillsDir, agentPrefix+"/skills"); err != nil {
+				return fmt.Errorf("seed skills to storage: %w", err)
+			}
+		} else {
+			mcCmd := exec.CommandContext(ctx, "mc", "mirror", skillsDir+"/", minioBase+"/skills/", "--overwrite")
+			if out, err := mcCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("mc mirror skills to MinIO: %s: %w", string(out), err)
+			}
 		}
 	}
 
 	// Crons
 	if cronData != nil {
-		if err := mcPut(ctx, minioBase+"/.openclaw/cron/jobs.json", cronData); err != nil {
-			return fmt.Errorf("push crons to MinIO: %w", err)
+		if storage != nil {
+			if _, err := putPackageObjectSeedOnly(ctx, storage, true, agentPrefix+"/.openclaw/cron/jobs.json", cronData); err != nil {
+				return fmt.Errorf("seed crons to storage: %w", err)
+			}
+		} else {
+			if err := mcPut(ctx, minioBase+"/.openclaw/cron/jobs.json", cronData); err != nil {
+				return fmt.Errorf("push crons to MinIO: %w", err)
+			}
 		}
 	}
 
@@ -284,8 +296,9 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 	// Crons
 	if cronData != nil {
 		destCron := filepath.Join(agentDir, ".openclaw", "cron")
-		os.MkdirAll(destCron, 0755)
-		os.WriteFile(filepath.Join(destCron, "jobs.json"), cronData, 0644)
+		if _, err := writeFileSeedOnly(filepath.Join(destCron, "jobs.json"), cronData); err != nil {
+			return fmt.Errorf("seed local crons: %w", err)
+		}
 	}
 
 	return nil
@@ -332,6 +345,24 @@ func putPackageFileSeedOnly(ctx context.Context, storage oss.StorageClient, loca
 		return false, err
 	}
 	return true, storage.PutFile(ctx, localPath, target)
+}
+
+func seedDirToStorage(ctx context.Context, storage oss.StorageClient, srcDir, dstPrefix string) error {
+	return filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		target := strings.TrimSuffix(dstPrefix, "/") + "/" + filepath.ToSlash(rel)
+		_, err = putPackageFileSeedOnly(ctx, storage, path, target)
+		return err
+	})
 }
 
 func writeFileSeedOnly(path string, data []byte) (bool, error) {

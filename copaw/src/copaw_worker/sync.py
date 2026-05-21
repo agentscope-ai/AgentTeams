@@ -97,7 +97,11 @@ def _merge_openclaw_config(remote_text: str, local_text: str) -> str:
     return json.dumps(merged, indent=2)
 
 
-def _mc(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+def _mc(
+    *args: str,
+    check: bool = True,
+    log_output: bool = True,
+) -> subprocess.CompletedProcess:
     """Run an mc command and return the result."""
     mc_bin = shutil.which("mc")
     if not mc_bin:
@@ -105,10 +109,16 @@ def _mc(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     cmd = [mc_bin, *args]
     logger.info("mc cmd: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=check)
-    logger.info("mc stdout (%d chars): %r", len(result.stdout), result.stdout[:200])
-    if result.stderr:
-        logger.info("mc stderr: %r", result.stderr[:200])
+    if log_output:
+        logger.info("mc stdout (%d chars): %r", len(result.stdout), result.stdout[:200])
+        if result.stderr:
+            logger.info("mc stderr: %r", result.stderr[:200])
     return result
+
+
+def _looks_like_missing_object_error(stderr: str | None) -> bool:
+    text = stderr or ""
+    return "Object does not exist" in text or "The specified key does not exist" in text
 
 
 class FileSync:
@@ -201,14 +211,27 @@ class FileSync:
         """Download object content as text using mc cat."""
         self._ensure_alias()
         try:
-            result = _mc("cat", self._object_path(key), check=True)
-            return result.stdout
-        except subprocess.CalledProcessError as exc:
-            logger.debug("mc cat failed for %s: %s", key, exc.stderr)
-            return None
+            result = _mc(
+                "cat",
+                self._object_path(key),
+                check=False,
+                log_output=False,
+            )
         except Exception as exc:
             logger.debug("mc cat error for %s: %s", key, exc)
             return None
+        if result.returncode == 0:
+            return result.stdout
+        if _looks_like_missing_object_error(result.stderr):
+            logger.debug("mc cat missing object for %s: %s", key, result.stderr)
+            return None
+        logger.warning(
+            "mc cat failed returncode=%s key=%s stderr=%r",
+            result.returncode,
+            key,
+            (result.stderr or "")[:200],
+        )
+        return None
 
     def _ls(self, prefix: str) -> list[str]:
         """List objects under prefix, return list of relative names."""

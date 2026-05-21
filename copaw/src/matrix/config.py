@@ -26,6 +26,9 @@ from ..constant import (
 )
 from ..providers.models import ModelSlotConfig
 
+# React loop max iterations — configurable via environment variable.
+REACT_MAX_ITERS = max(1, int(os.environ.get("COPAW_REACT_MAX_ITERS", "200")))
+
 
 def generate_short_agent_id() -> str:
     """Generate a 6-character short UUID for agent identification.
@@ -474,10 +477,11 @@ class AgentsRunningConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     max_iters: int = Field(
-        default=100,
+        default=REACT_MAX_ITERS,
         ge=1,
         description=(
-            "Maximum number of reasoning-acting iterations for ReAct agent"
+            "Maximum number of reasoning-acting iterations for ReAct agent. "
+            "Override via COPAW_REACT_MAX_ITERS env var or agent config JSON."
         ),
     )
 

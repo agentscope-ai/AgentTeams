@@ -21,5 +21,8 @@
       "group_allow_from": [],
       "groups": {}
     }
+  },
+  "running": {
+    "max_iters": 200
   }
 }

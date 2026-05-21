@@ -79,6 +79,15 @@ _detect_session_dir() {
     esac
 }
 
+manager_runtime_id() {
+    local manager_container="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}}"
+    _detect_runtime "$manager_container" "/root/manager-workspace"
+}
+
+manager_runtime_is_copaw() {
+    [ "$(manager_runtime_id)" = "copaw" ]
+}
+
 # Detect Hermes state DB path for a workspace root.
 # Usage: _detect_hermes_state_db <base_workspace_dir>
 _detect_hermes_state_db() {

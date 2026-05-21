@@ -185,7 +185,7 @@ matrix_wait_for_reply() {
         if [ -n "${nudge_token}" ] && [ -n "${nudge_room}" ] && [ -n "${nudge_message}" ] \
                 && [ $((elapsed % nudge_interval)) -eq 0 ]; then
             log_info "Sending nudge to Manager (elapsed: ${elapsed}s)..."
-            matrix_send_message "${nudge_token}" "${nudge_room}" "${nudge_message}" 2>/dev/null || true
+            matrix_send_message "${nudge_token}" "${nudge_room}" "${nudge_message}" >/dev/null 2>&1 || true
         fi
 
         local messages
@@ -255,7 +255,7 @@ matrix_wait_for_reply_matching() {
         if [ -n "${nudge_token}" ] && [ -n "${nudge_room}" ] && [ -n "${nudge_message}" ] \
                 && [ $((elapsed % nudge_interval)) -eq 0 ]; then
             log_info "Sending nudge to Manager (elapsed: ${elapsed}s)..."
-            matrix_send_message "${nudge_token}" "${nudge_room}" "${nudge_message}" 2>/dev/null || true
+            matrix_send_message "${nudge_token}" "${nudge_room}" "${nudge_message}" >/dev/null 2>&1 || true
         fi
 
         local messages
@@ -419,7 +419,7 @@ matrix_wait_for_message_containing() {
         if [ -n "${nudge_token}" ] && [ -n "${nudge_room}" ] && [ -n "${nudge_message}" ] \
                 && [ $((elapsed % nudge_interval)) -eq 0 ]; then
             log_info "Sending nudge to Manager (elapsed: ${elapsed}s)..."
-            matrix_send_message "${nudge_token}" "${nudge_room}" "${nudge_message}" 2>/dev/null || true
+            matrix_send_message "${nudge_token}" "${nudge_room}" "${nudge_message}" >/dev/null 2>&1 || true
         fi
 
         local messages all_bodies

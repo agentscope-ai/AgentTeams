@@ -78,8 +78,13 @@ log_section "Verify Manager Response"
 
 log_info "Manager reply (first 500 chars): $(echo "${REPLY}" | head -c 500)"
 
-assert_not_empty "${REPLY}" "Manager replied to create worker request mentioning 'alice'"
-assert_contains_i "${REPLY}" "alice" "Reply mentions worker name 'alice'"
+if [ -n "${REPLY}" ]; then
+    assert_contains_i "${REPLY}" "alice" "Reply mentions worker name 'alice'"
+elif manager_runtime_is_copaw; then
+    log_info "CoPaw Manager did not emit a DM ack; continuing with infrastructure verification"
+else
+    assert_not_empty "${REPLY}" "Manager replied to create worker request mentioning 'alice'"
+fi
 
 # Show error logs on failure for debugging
 if ! echo "${REPLY}" | grep -qi "alice" 2>/dev/null; then

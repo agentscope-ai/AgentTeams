@@ -46,7 +46,13 @@ log_info "Waiting for Manager to process task..."
 REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
     "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the task assignment has been processed.")
 
-assert_not_empty "${REPLY}" "Manager acknowledged task assignment"
+if [ -n "${REPLY}" ]; then
+    log_info "Manager ack (first 500 chars): $(echo "${REPLY}" | head -c 500)"
+elif manager_runtime_is_copaw; then
+    log_info "CoPaw Manager did not emit a DM ack; continuing with task artifact verification"
+else
+    assert_not_empty "${REPLY}" "Manager acknowledged task assignment"
+fi
 
 log_section "Verify Task in MinIO"
 

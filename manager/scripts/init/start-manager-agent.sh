@@ -1170,16 +1170,17 @@ if [ "${HICLAW_RUNTIME}" = "aliyun" ]; then
     ) &
     log "Local→OSS sync started (PID: $!)"
 
-    # OSS → Local: periodic pull (shared data, agent configs)
+    # OSS → Local: periodic pull (shared data, agent configs, manager openclaw.json)
     (
         while true; do
-            sleep 300
+            sleep 60
             ensure_mc_credentials 2>/dev/null || true
-            mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" /root/hiclaw-fs/shared/ --overwrite --newer-than "5m" 2>/dev/null || true
-            mc mirror "${HICLAW_STORAGE_PREFIX}/agents/" /root/hiclaw-fs/agents/ --overwrite --newer-than "5m" 2>/dev/null || true
+            mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" /root/hiclaw-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc mirror "${HICLAW_STORAGE_PREFIX}/agents/" /root/hiclaw-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc cp "${HICLAW_STORAGE_PREFIX}/manager/openclaw.json" /root/manager-workspace/openclaw.json 2>/dev/null || true
         done
     ) &
-    log "OSS→Local sync started (every 5m, PID: $!)"
+    log "OSS→Local sync started (every 60s, PID: $!)"
 fi
 
 # K8s mode: start background file sync (workspace ↔ MinIO)
@@ -1202,16 +1203,17 @@ if [ "${HICLAW_RUNTIME}" = "k8s" ]; then
     ) &
     log "Local→MinIO sync started (PID: $!)"
 
-    # MinIO → Local: periodic pull (shared data, agent configs)
+    # MinIO → Local: periodic pull (shared data, agent configs, manager openclaw.json)
     (
         while true; do
-            sleep 300
-            mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" /root/hiclaw-fs/shared/ --overwrite --newer-than "5m" 2>/dev/null || true
-            mc mirror "${HICLAW_STORAGE_PREFIX}/agents/" /root/hiclaw-fs/agents/ --overwrite --newer-than "5m" 2>/dev/null || true
-            mc mirror "${HICLAW_STORAGE_PREFIX}/hiclaw-config/" /root/hiclaw-fs/hiclaw-config/ --overwrite --newer-than "15s" 2>/dev/null || true
+            sleep 60
+            mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" /root/hiclaw-fs/shared/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc mirror "${HICLAW_STORAGE_PREFIX}/agents/" /root/hiclaw-fs/agents/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc mirror "${HICLAW_STORAGE_PREFIX}/hiclaw-config/" /root/hiclaw-fs/hiclaw-config/ --overwrite --newer-than "1m" 2>/dev/null || true
+            mc cp "${HICLAW_STORAGE_PREFIX}/manager/openclaw.json" /root/manager-workspace/openclaw.json 2>/dev/null || true
         done
     ) &
-    log "MinIO→Local sync started (every 5m, PID: $!)"
+    log "MinIO→Local sync started (every 60s, PID: $!)"
 fi
 
 # ============================================================

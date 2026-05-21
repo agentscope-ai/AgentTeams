@@ -450,11 +450,15 @@ func (a *App) initServiceLayer(_ context.Context) error {
 
 	a.envBuilder = service.NewWorkerEnvBuilder(cfg.WorkerEnv)
 
-	if cfg.KubeMode == "embedded" {
+	if a.oss != nil {
+		agentFSDir := ""
+		if cfg.KubeMode == "embedded" {
+			agentFSDir = cfg.AgentFSDir()
+		}
 		a.legacy = service.NewLegacyCompat(service.LegacyConfig{
 			OSS:          a.oss,
 			MatrixDomain: cfg.MatrixDomain,
-			AgentFSDir:   cfg.AgentFSDir(),
+			AgentFSDir:   agentFSDir,
 		})
 	}
 

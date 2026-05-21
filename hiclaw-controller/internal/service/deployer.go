@@ -233,24 +233,42 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	// in InjectCoordinationContext, so skip here.
 	if req.Role != "team_leader" {
 		soulKey := agentPrefix + "/SOUL.md"
-		_, err := d.oss.GetObject(ctx, soulKey)
-		if err == nil {
-			logger.Info("SOUL.md: seed-only, keeping existing version", "worker", req.Name)
-		} else if !os.IsNotExist(err) {
-			logger.Error(err, "SOUL.md: check existing failed, skipping seed", "worker", req.Name)
-		} else {
+		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes")) && req.Spec.Identity != "")
+		if inlineOwnsSoul {
 			soulPath := filepath.Join(localAgentDir, "SOUL.md")
-			var soulContent []byte
-			if req.Spec.Soul != "" {
-				soulContent = []byte(req.Spec.Soul)
-			} else if data, err := os.ReadFile(soulPath); err == nil {
-				soulContent = data
-			} else if !req.IsUpdate {
-				soulContent = []byte(fmt.Sprintf("# %s\n\nYou are %s, an AI worker agent.\n", req.Name, req.Name))
+			soulContent, readErr := os.ReadFile(soulPath)
+			if readErr != nil {
+				if req.Spec.Soul != "" {
+					soulContent = []byte(req.Spec.Soul)
+				} else {
+					logger.Error(readErr, "SOUL.md: inline content unavailable, skipping push", "worker", req.Name)
+				}
 			}
 			if len(soulContent) > 0 {
 				if err := d.oss.PutObject(ctx, soulKey, soulContent); err != nil {
 					logger.Error(err, "SOUL.md push failed (non-fatal)")
+				} else {
+					logger.Info("SOUL.md: inline config pushed", "worker", req.Name)
+				}
+			}
+		} else {
+			_, err := d.oss.GetObject(ctx, soulKey)
+			if err == nil {
+				logger.Info("SOUL.md: seed-only, keeping existing version", "worker", req.Name)
+			} else if !os.IsNotExist(err) {
+				logger.Error(err, "SOUL.md: check existing failed, skipping seed", "worker", req.Name)
+			} else {
+				soulPath := filepath.Join(localAgentDir, "SOUL.md")
+				var soulContent []byte
+				if data, err := os.ReadFile(soulPath); err == nil {
+					soulContent = data
+				} else if !req.IsUpdate {
+					soulContent = []byte(fmt.Sprintf("# %s\n\nYou are %s, an AI worker agent.\n", req.Name, req.Name))
+				}
+				if len(soulContent) > 0 {
+					if err := d.oss.PutObject(ctx, soulKey, soulContent); err != nil {
+						logger.Error(err, "SOUL.md push failed (non-fatal)")
+					}
 				}
 			}
 		}

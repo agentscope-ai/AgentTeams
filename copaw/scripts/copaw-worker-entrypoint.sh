@@ -17,7 +17,10 @@ source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
 
 WORKER_NAME="${HICLAW_WORKER_NAME:?HICLAW_WORKER_NAME is required}"
 WORKER_CR_NAME="${HICLAW_WORKER_CR_NAME:-${WORKER_NAME}}"
-INSTALL_DIR="/root/.hiclaw-worker"
+# Align with openclaw/hermes: HOME == workspace == MinIO mirror root.
+# The controller injects HOME=/root/hiclaw-fs/agents/<WORKER_NAME>; we set
+# install_dir to its parent so that install_dir/<name> == HOME.
+INSTALL_DIR="/root/hiclaw-fs/agents"
 
 log() {
     echo "[hiclaw-copaw-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -51,16 +54,10 @@ else
 fi
 log "  FS bucket: ${FS_BUCKET}"
 
-# Set up skills CLI symlink: ~/.agents/skills -> worker's skills directory
-# This makes `skills add -g` install skills into the worker's MinIO-synced skills/ dir
-WORKER_SKILLS_DIR="${INSTALL_DIR}/${WORKER_NAME}/skills"
-mkdir -p "${WORKER_SKILLS_DIR}"
-mkdir -p "${HOME}/.agents"
-ln -sfn "${WORKER_SKILLS_DIR}" "${HOME}/.agents/skills"
-
-# Create /root/hiclaw-fs symlink so scripts using absolute paths work in CoPaw
-# (OpenClaw workers use /root/hiclaw-fs natively; CoPaw stores synced files under INSTALL_DIR)
-ln -sfn "${INSTALL_DIR}/${WORKER_NAME}" /root/hiclaw-fs 2>/dev/null || true
+# Workspace == HOME, so ~/skills is the real directory synced from MinIO.
+# Expose it as ~/.agents/skills for tools that walk that legacy path.
+mkdir -p "${INSTALL_DIR}/${WORKER_NAME}/skills" "${HOME}/.agents"
+ln -sfn "${INSTALL_DIR}/${WORKER_NAME}/skills" "${HOME}/.agents/skills"
 
 # Background readiness reporter — report ready to controller when CoPaw bridge completes
 _start_readiness_reporter() {

@@ -4,6 +4,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- feat(team-leader): refresh Team Leader coordination prompts and built-in skills for project, task, file-sharing, communication, organization, and mcporter workflows.
+
 - feat(hiclaw-controller): propagate controller-level skills API and Nacos auth defaults to workers.
 - fix(copaw): suppress noisy warnings when optional MinIO objects do not exist.
 - fix(hiclaw-controller): preserve default object-storage access when custom non-storage entries are configured.

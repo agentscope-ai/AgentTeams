@@ -135,22 +135,26 @@ log_section "Start Worker Container"
 # In real test, we would parse the install command from REPLY
 log_info "Worker Alice verification complete (container start requires install params from Manager)"
 
-log_section "Verify CoPaw Worker Probes"
+if [ "${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}" = "copaw" ]; then
+    log_section "Verify CoPaw Worker Probes"
 
-if wait_for_worker_container "alice" 180; then
-    PROBE_OUTPUT=$(check_copaw_worker_probes "alice" "ready" 90)
-    PROBE_STATUS=$?
-    if [ "${PROBE_STATUS}" = "0" ]; then
-        log_pass "CoPaw Worker Alice /worker/livez and /worker/readyz are valid"
-        log_info "${PROBE_OUTPUT}"
-    elif [ "${PROBE_STATUS}" = "2" ]; then
-        log_info "CoPaw Worker Alice probes skipped"
+    if wait_for_worker_container "alice" 180; then
+        PROBE_OUTPUT=$(check_copaw_worker_probes "alice" "ready" 90)
+        PROBE_STATUS=$?
+        if [ "${PROBE_STATUS}" = "0" ]; then
+            log_pass "CoPaw Worker Alice /worker/livez and /worker/readyz are valid"
+            log_info "${PROBE_OUTPUT}"
+        elif [ "${PROBE_STATUS}" = "2" ]; then
+            log_info "CoPaw Worker Alice probes skipped"
+        else
+            log_fail "CoPaw Worker Alice probes failed"
+            log_info "${PROBE_OUTPUT}"
+        fi
     else
-        log_fail "CoPaw Worker Alice probes failed"
-        log_info "${PROBE_OUTPUT}"
+        log_info "CoPaw Worker Alice probes skipped because container was not started by this test run"
     fi
 else
-    log_info "CoPaw Worker Alice probes skipped because container was not started by this test run"
+    log_info "CoPaw Worker Alice probes skipped for worker runtime '${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}'"
 fi
 
 log_section "Collect Metrics"

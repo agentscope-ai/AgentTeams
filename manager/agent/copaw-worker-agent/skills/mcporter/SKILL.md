@@ -31,10 +31,13 @@ When your coordinator @mentions you saying a new MCP server has been configured,
 
 ### Step 1: Pull the updated config
 
-Run your file-sync skill to pull the latest files from MinIO:
+Use the `filesync` tool to pull the latest config files:
 
-```bash
-# Use the file-sync skill to sync
+```json
+{
+  "action": "pull",
+  "path": "shared/"
+}
 ```
 
 ### Step 2: Discover the new server and its tools
@@ -107,4 +110,4 @@ After generating the skill, reply to your coordinator confirming:
 - **Transport**: MCP Servers use HTTP transport (configured in config/mcporter.json)
 - **Auth**: Authorization header with Bearer token is auto-configured — you don't need to manage credentials
 - **Permissions**: Your MCP access is controlled by your coordinator. If you get 403 from the MCP Server, ask your coordinator to re-authorize your access
-- **Config not found**: If `./config/mcporter.json` doesn't exist yet, use your file-sync skill first — your coordinator pushes the config to MinIO after setting up MCP servers
+- **Config not found**: If `./config/mcporter.json` doesn't exist yet, use your `file-sharing` skill first; your coordinator publishes the config after setting up MCP servers

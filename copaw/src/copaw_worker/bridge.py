@@ -1,47 +1,45 @@
 """
-Bridge: translate a Controller-side config (today: openclaw.json) into CoPaw's
-on-disk runtime files.
+Bridge between HiClaw's standard space and CoPaw's runtime space.
 
-The bridge runs in two distinct phases on every invocation:
+The standard space is the OpenClaw-style sync root restored from MinIO, for
+example ``/root/.hiclaw-worker/<name>/``. It is the durable, runtime-agnostic
+layout owned by HiClaw:
 
-1. **create** — when a target file is missing, copy it from an in-tree template
-   (``copaw_worker/templates/*.json``) verbatim. Templates carry *all* defaults
-   (security off, channels.console enabled, identity fields, etc.), so the
-   policy engine no longer needs to encode any "safe default" logic.
+  - ``openclaw.json``
+  - ``SOUL.md`` / ``AGENTS.md`` / ``HEARTBEAT.md``
+  - ``skills/``, ``config/``, ``credentials/``, and other synced files
 
-2. **restart (overlay)** — after the file exists, apply ``_CONTROLLER_FIELDS``
-   in order: only the handful of keys that Controller genuinely owns get
-   refreshed from openclaw.json. Everything else — user edits, CoPaw's own
-   migration writes — is left alone.
+The runtime space is CoPaw's native working directory under the standard space,
+for example ``/root/.hiclaw-worker/<name>/.copaw/``. It is the layout that the
+CoPaw process actually reads and mutates while running:
 
-This split replaces the old "big policy table per file" model, where every
-leaf default was a ``local-wins`` lambda scattered across ~60 entries. Defaults
-now live in human-readable JSON, and the code only needs to describe the
-controller → CoPaw mapping.
+  - ``config.json``
+  - ``providers.json`` and ``.copaw.secret/providers.json``
+  - ``workspaces/default/agent.json``
+  - ``workspaces/default/SOUL.md`` / ``AGENTS.md`` / ``HEARTBEAT.md``
 
-Three merge policies remain for fields Controller touches on every restart:
+Standard space -> runtime space:
 
-* ``remote-wins`` — Controller value overwrites existing leaf.
-* ``union`` — remote list ∪ local list (dedup, local order first).
-* ``deep-merge`` — recursive dict merge with local-wins-at-leaves. Controller
-  may ADD keys but cannot overwrite an existing leaf. Used for
-  ``channels.matrix.groups``.
+  - Convert ``openclaw.json`` into CoPaw-native structured config:
+    ``config.json``, ``providers.json``, and ``workspaces/default/agent.json``.
+  - Patch CoPaw path constants so the running process reads this runtime space.
+  - Copy ``providers.json`` into the adjacent secret dir that CoPaw reads.
+  - Copy prompt files into ``workspaces/default/``.
+  - Copy ``config/mcporter.json`` into
+    ``workspaces/default/config/mcporter.json``; the legacy
+    ``mcporter-servers.json`` source is still accepted.
+  - Expose Manager-pushed ``skills/<name>/`` directories by making
+    ``workspaces/default/skills`` a symlink to the standard-space ``skills/``
+    directory. The standard space remains canonical.
 
-``env`` is NOT bridged: Controller does not carry env through openclaw.json,
-and the bridge never touches ``agent.json.env``. Users/agents edit that field
-themselves via the CoPaw UI or by hand.
+Runtime space -> standard space:
 
-Files touched on each invocation (assuming ``agent="default"``):
-
-  - ``<working_dir>/config.json`` — global CoPaw config (create-only).
-    Contains security defaults. Once created, bridge never modifies it.
-  - ``<working_dir>/workspaces/default/agent.json`` — per-agent config.
-    Created from ``agent.{profile}.json`` template, then overlaid with
-    controller fields on every restart.
-  - ``<working_dir>/providers.json`` — LLM creds (always remote-wins,
-    controller is sole source of truth for provider endpoints/keys).
-  - ``<working_dir>.secret/providers.json`` — the path copaw actually reads.
+  - Copy agent-edited prompt files from ``workspaces/default/`` back to the
+    standard space when the runtime copy is newer.
+  - Leave MinIO upload to ``sync.push_local``; this bridge only materializes the
+    standard-space files that the normal push loop will persist.
 """
+
 from __future__ import annotations
 
 import json
@@ -54,15 +52,114 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-
 # Sentinel returned by derivers to mean "skip this policy this run" (the
 # corresponding key is left as-is in agent.json).
 _MISSING: Any = object()
 
 
-# ---------------------------------------------------------------------------
-# Environment / path helpers
-# ---------------------------------------------------------------------------
+def bridge_standard_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    controller_config: dict[str, Any],
+    *,
+    skill_names: list[str] | None = None,
+    profile: str = "worker",
+    agent: str = "default",
+) -> None:
+    """Materialize standard-space files into CoPaw's runtime space."""
+    sync_outer_prompt_files_to_inner(standard_dir, runtime_dir)
+    bridge_openclaw_to_copaw(
+        controller_config,
+        runtime_dir,
+        profile=profile,
+        agent=agent,
+    )
+    _apply_credential_guard(standard_dir, runtime_dir)
+    sync_mcporter_config_to_runtime(standard_dir, runtime_dir)
+    if skill_names is not None:
+        sync_skills_to_runtime(standard_dir, runtime_dir, skill_names)
+
+
+def refresh_standard_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    controller_config: dict[str, Any],
+    *,
+    get_soul: Callable[[], str | None],
+    get_agents_md: Callable[[], str | None],
+    skill_names: list[str] | None = None,
+    profile: str = "worker",
+    agent: str = "default",
+) -> None:
+    """Refresh runtime space during re-bridge, including legacy prompt fallback."""
+    sync_rebridged_prompt_files_to_inner(
+        standard_dir,
+        runtime_dir,
+        get_soul=get_soul,
+        get_agents_md=get_agents_md,
+    )
+    bridge_openclaw_to_copaw(
+        controller_config,
+        runtime_dir,
+        profile=profile,
+        agent=agent,
+    )
+    _apply_credential_guard(standard_dir, runtime_dir)
+    sync_mcporter_config_to_runtime(standard_dir, runtime_dir)
+    if skill_names is not None:
+        sync_skills_to_runtime(standard_dir, runtime_dir, skill_names)
+
+
+def bridge_openclaw_to_copaw(
+    openclaw_cfg: dict[str, Any],
+    working_dir: Path,
+    *,
+    profile: str = "worker",
+    agent: str = "default",
+) -> None:
+    """Bridge OpenClaw-style config into CoPaw's runtime files."""
+    if profile not in ("worker", "manager"):
+        raise ValueError(
+            f"unknown bridge profile: {profile!r} (use 'worker' or 'manager')"
+        )
+
+    working_dir.mkdir(parents=True, exist_ok=True)
+    in_container = _is_in_container()
+
+    _write_config_json(working_dir)
+    _write_providers_json(openclaw_cfg, working_dir, in_container)
+    _write_agent_json(
+        openclaw_cfg,
+        working_dir,
+        in_container,
+        profile=profile,
+        agent=agent,
+    )
+
+    os.environ["COPAW_WORKING_DIR"] = str(working_dir)
+    _patch_copaw_paths(working_dir)
+
+    secret_dir = _secret_dir(working_dir)
+    providers_src = working_dir / "providers.json"
+    if providers_src.exists():
+        shutil.copy2(providers_src, secret_dir / "providers.json")
+
+
+def bridge_controller_to_copaw(
+    controller_config: dict[str, Any],
+    working_dir: Path,
+    *,
+    profile: str = "worker",
+    agent: str = "default",
+) -> None:
+    """Compatibility alias for bridge_openclaw_to_copaw."""
+    bridge_openclaw_to_copaw(
+        controller_config,
+        working_dir,
+        profile=profile,
+        agent=agent,
+    )
+
 
 def _port_remap(url: str, is_container: bool) -> str:
     """Remap container-internal :8080 to host-exposed gateway port when needed."""
@@ -82,12 +179,7 @@ def _secret_dir(working_dir: Path) -> Path:
 
 
 def _patch_copaw_paths(working_dir: Path) -> None:
-    """Patch copaw's module-level path constants to point at working_dir.
-
-    copaw.constant captures WORKING_DIR / SECRET_DIR at import time from
-    env vars, so setting COPAW_WORKING_DIR after import has no effect.
-    We must update the live module objects directly.
-    """
+    """Patch copaw's module-level path constants to point at working_dir."""
     secret_dir = _secret_dir(working_dir)
     secret_dir.mkdir(parents=True, exist_ok=True)
 
@@ -95,7 +187,9 @@ def _patch_copaw_paths(working_dir: Path) -> None:
         import copaw.constant as _const
         _const.WORKING_DIR = working_dir
         _const.SECRET_DIR = secret_dir
-        _const.ACTIVE_SKILLS_DIR = working_dir / "active_skills"
+        _const.ACTIVE_SKILLS_DIR = (
+            working_dir / "workspaces" / "default" / "skills"
+        )
         _const.CUSTOMIZED_SKILLS_DIR = working_dir / "customized_skills"
         _const.MEMORY_DIR = working_dir / "memory"
         _const.CUSTOM_CHANNELS_DIR = working_dir / "custom_channels"
@@ -123,10 +217,6 @@ def _patch_copaw_paths(working_dir: Path) -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Template installation
-# ---------------------------------------------------------------------------
-
 def _template_text(name: str) -> str:
     """Read a template by basename from the in-tree templates/ directory."""
     return (resources.files("copaw_worker") / "templates" / name).read_text(
@@ -135,11 +225,7 @@ def _template_text(name: str) -> str:
 
 
 def _install_from_template(dst: Path, template_name: str) -> bool:
-    """Copy template → dst only if dst is missing. Returns True when installed.
-
-    Parent directories are created as needed. Existing files are left alone
-    unconditionally — this is the "create phase" contract.
-    """
+    """Copy template -> dst only if dst is missing. Returns True when installed."""
     if dst.exists():
         return False
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -148,82 +234,222 @@ def _install_from_template(dst: Path, template_name: str) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Bridge entry point
-# ---------------------------------------------------------------------------
+def sync_mcporter_config_to_runtime(standard_dir: Path, runtime_dir: Path) -> Path | None:
+    """Copy mcporter config from standard space into CoPaw's default workspace."""
+    src_candidates = (
+        standard_dir / "config" / "mcporter.json",
+        standard_dir / "mcporter-servers.json",
+    )
+    src = next((candidate for candidate in src_candidates if candidate.exists()), None)
+    if src is None:
+        logger.info("No mcporter config found to copy from %s", standard_dir)
+        return None
 
-def bridge_controller_to_copaw(
-    controller_config: dict[str, Any],
-    working_dir: Path,
-    *,
-    profile: str = "worker",
-    agent: str = "default",
+    dst = runtime_dir / "workspaces" / "default" / "config" / "mcporter.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    logger.info("mcporter config copied to %s", dst)
+    return dst
+
+
+def sync_skills_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    skill_names: list[str],
+) -> list[str]:
+    """Expose Manager-pushed skills in CoPaw runtime space via symlink."""
+    standard_skills_dir = standard_dir / "skills"
+    standard_skills_dir.mkdir(parents=True, exist_ok=True)
+
+    # MinIO does not preserve Unix permission bits. Restore executable scripts
+    # in the standard space because runtime skills are a direct symlink to it.
+    for sh in standard_skills_dir.rglob("*.sh"):
+        sh.chmod(sh.stat().st_mode | 0o111)
+
+    skill_name_set = set(skill_names)
+    for child in list(standard_skills_dir.iterdir()):
+        if child.is_dir() and child.name not in skill_name_set:
+            shutil.rmtree(child)
+            logger.info("Removed stale standard skill no longer in MinIO: %s", child.name)
+
+    workspace_skills_dir = runtime_dir / "workspaces" / "default" / "skills"
+    workspace_skills_dir.parent.mkdir(parents=True, exist_ok=True)
+    dedup_customized_skills(runtime_dir)
+
+    expected_target = standard_skills_dir.resolve()
+    if workspace_skills_dir.is_symlink():
+        if workspace_skills_dir.resolve() != expected_target:
+            workspace_skills_dir.unlink()
+    elif workspace_skills_dir.exists():
+        if workspace_skills_dir.is_dir():
+            shutil.rmtree(workspace_skills_dir)
+        else:
+            workspace_skills_dir.unlink()
+
+    if not workspace_skills_dir.exists():
+        target = os.path.relpath(standard_skills_dir, workspace_skills_dir.parent)
+        workspace_skills_dir.symlink_to(target, target_is_directory=True)
+        logger.info("Linked runtime skills dir %s -> %s", workspace_skills_dir, target)
+
+    installed = [
+        skill_name
+        for skill_name in skill_names
+        if (standard_skills_dir / skill_name).exists()
+    ]
+    for skill_name in installed:
+        logger.info("Exposed MinIO skill: %s", skill_name)
+    enable_workspace_skills_by_default(runtime_dir, installed)
+    return installed
+
+
+def enable_workspace_skills_by_default(
+    runtime_dir: Path,
+    skill_names: list[str],
 ) -> None:
-    """Bridge a Controller-side config into CoPaw's runtime files.
+    """Seed CoPaw's workspace manifest so exposed HiClaw skills are active."""
+    if not skill_names:
+        return
 
-    Args:
-        controller_config: parsed openclaw.json dict (future: may be a
-            different shape from a different controller format).
-        working_dir: CoPaw working dir (e.g. ``~/.copaw``).
-        profile: ``"worker"`` or ``"manager"``. Selects which
-            ``agent.<profile>.json`` template is used on first boot.
-        agent: CoPaw workspace key; determines
-            ``workspaces/<agent>/agent.json``. Defaults to ``"default"``.
-            Exposed for future multi-agent-per-container scenarios.
-    """
-    if profile not in ("worker", "manager"):
-        raise ValueError(
-            f"unknown bridge profile: {profile!r} (use 'worker' or 'manager')"
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    workspace_skills_dir = workspace_dir / "skills"
+    manifest_path = workspace_dir / "skill.json"
+
+    manifest: dict[str, Any] = {
+        "schema_version": "workspace-skill-manifest.v1",
+        "version": 1,
+        "skills": {},
+    }
+    if manifest_path.exists():
+        try:
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                manifest.update(loaded)
+        except json.JSONDecodeError:
+            logger.warning(
+                "Invalid CoPaw skill manifest, recreating: %s",
+                manifest_path,
+            )
+
+    if not isinstance(manifest.get("skills"), dict):
+        manifest["skills"] = {}
+    skills = manifest["skills"]
+    changed = False
+    for skill_name in sorted(set(skill_names)):
+        if not (workspace_skills_dir / skill_name / "SKILL.md").exists():
+            continue
+        existing = skills.get(skill_name)
+        if isinstance(existing, dict):
+            if existing.get("enabled") is not True:
+                existing["enabled"] = True
+                changed = True
+            if not existing.get("channels"):
+                existing["channels"] = ["all"]
+                changed = True
+            continue
+        skills[skill_name] = {
+            "enabled": True,
+            "channels": ["all"],
+            "source": "customized",
+        }
+        changed = True
+
+    if changed or not manifest_path.exists():
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
         )
 
-    working_dir.mkdir(parents=True, exist_ok=True)
-    in_container = _is_in_container()
 
-    _write_config_json(working_dir)
-    _write_providers_json(controller_config, working_dir, in_container)
-    _write_agent_json(
-        controller_config,
-        working_dir,
-        in_container,
-        profile=profile,
-        agent=agent,
-    )
+def dedup_customized_skills(runtime_dir: Path) -> None:
+    """Remove customized skills that shadow CoPaw builtins."""
+    customized_dir = runtime_dir / "customized_skills"
+    if not customized_dir.is_dir():
+        return
 
-    os.environ["COPAW_WORKING_DIR"] = str(working_dir)
-    _patch_copaw_paths(working_dir)
+    try:
+        import copaw.agents.skills as _skills_pkg
+        builtin_skills_root = Path(_skills_pkg.__file__).resolve().parent
+    except (ImportError, AttributeError):
+        return
 
-    secret_dir = _secret_dir(working_dir)
-    providers_src = working_dir / "providers.json"
-    if providers_src.exists():
-        shutil.copy2(providers_src, secret_dir / "providers.json")
+    builtin_names: set[str] = set()
+    if builtin_skills_root.is_dir():
+        for child in builtin_skills_root.iterdir():
+            if child.is_dir() and not child.name.startswith("_"):
+                builtin_names.add(child.name)
+
+    if not builtin_names:
+        return
+
+    for child in list(customized_dir.iterdir()):
+        if child.is_dir() and child.name in builtin_names:
+            shutil.rmtree(child)
+            logger.info(
+                "Removed stale customized skill '%s' (now a builtin)",
+                child.name,
+            )
 
 
-# Deprecated alias — callers should migrate to ``bridge_controller_to_copaw``.
-# Kept as a thin wrapper so existing imports (start-copaw-manager.sh, tests)
-# do not break mid-refactor. Remove once all call sites are updated.
-def bridge_openclaw_to_copaw(
-    openclaw_cfg: dict[str, Any],
-    working_dir: Path,
+def sync_outer_prompt_files_to_inner(local_dir: Path, copaw_working_dir: Path) -> None:
+    """Copy OpenClaw-style prompt files into CoPaw's default workspace."""
+    workspace_dir = copaw_working_dir / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in ("SOUL.md", "AGENTS.md"):
+        src = local_dir / name
+        if src.exists():
+            (workspace_dir / name).write_text(src.read_text())
+
+    heartbeat_dst = workspace_dir / "HEARTBEAT.md"
+    if not heartbeat_dst.exists():
+        heartbeat_src = local_dir / "HEARTBEAT.md"
+        if heartbeat_src.exists():
+            heartbeat_dst.write_text(heartbeat_src.read_text())
+
+
+def sync_rebridged_prompt_files_to_inner(
+    local_dir: Path,
+    copaw_working_dir: Path,
     *,
-    profile: str = "worker",
+    get_soul: Callable[[], str | None],
+    get_agents_md: Callable[[], str | None],
 ) -> None:
-    bridge_controller_to_copaw(openclaw_cfg, working_dir, profile=profile)
+    """Refresh CoPaw prompt files during re-bridge while preserving legacy fallback."""
+    soul_path = local_dir / "SOUL.md"
+    agents_path = local_dir / "AGENTS.md"
+    soul = soul_path.read_text() if soul_path.exists() else get_soul()
+    agents = agents_path.read_text() if agents_path.exists() else get_agents_md()
 
+    workspace_dir = copaw_working_dir / "workspaces" / "default"
+    if soul:
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        (workspace_dir / "SOUL.md").write_text(soul)
+    if agents:
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        (workspace_dir / "AGENTS.md").write_text(agents)
 
-# ---------------------------------------------------------------------------
-# Resolvers — read a single derived value out of the controller config
-# ---------------------------------------------------------------------------
 
 def _matrix_raw(cfg: dict[str, Any]) -> dict[str, Any]:
     return cfg.get("channels", {}).get("matrix", {})
 
 
-def _resolve_active_model(cfg: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the config dict of the active model from openclaw.json, or None.
+def _matrix_bool(
+    cfg: dict[str, Any],
+    camel_key: str,
+    snake_key: str,
+    default: bool,
+) -> bool:
+    matrix = _matrix_raw(cfg)
+    if camel_key in matrix:
+        return bool(matrix.get(camel_key))
+    if snake_key in matrix:
+        return bool(matrix.get(snake_key))
+    return default
 
-    Prefers ``agents.defaults.model.primary`` ("provider_id/model_id");
-    falls back to the first model of the first provider.
-    """
+
+def _resolve_active_model(cfg: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the config dict of the active model from openclaw.json, or None."""
     providers_raw = cfg.get("models", {}).get("providers", {})
     if not providers_raw:
         return None
@@ -317,16 +543,7 @@ def _resolve_history_limit(cfg: dict[str, Any]) -> int | None:
 
 
 def _derive_matrix_user_id(cfg: dict[str, Any], _in_container: bool = False) -> Any:
-    """Matrix user_id: prefer openclaw channels.matrix.userId/user_id, else
-    synthesise ``@${HICLAW_WORKER_NAME or WORKER_NAME or 'manager'}:${HICLAW_MATRIX_DOMAIN}``.
-
-    Controller's agentconfig generator always writes ``channels.matrix.userId``
-    for Workers; the env-fallback is for Manager whose openclaw.json
-    historically does not carry a userId.
-
-    Returns ``_MISSING`` when nothing is derivable, so we never clobber an
-    existing agent.json leaf with an empty string.
-    """
+    """Derive CoPaw Matrix user_id from OpenClaw config or env."""
     m = _matrix_raw(cfg)
     uid = m.get("userId") or m.get("user_id")
     if uid:
@@ -339,11 +556,7 @@ def _derive_matrix_user_id(cfg: dict[str, Any], _in_container: bool = False) -> 
 
 
 def _derive_heartbeat(cfg: dict[str, Any], _in_container: bool = False) -> Any:
-    """Map openclaw agents.defaults.heartbeat → copaw heartbeat block.
-
-    Returns ``_MISSING`` when openclaw did not declare heartbeat so we do
-    not clobber an existing agent-side setting.
-    """
+    """Map openclaw agents.defaults.heartbeat -> copaw heartbeat block."""
     hb = cfg.get("agents", {}).get("defaults", {}).get("heartbeat")
     if not isinstance(hb, dict) or not hb:
         return _MISSING
@@ -356,10 +569,6 @@ def _derive_heartbeat(cfg: dict[str, Any], _in_container: bool = False) -> Any:
         out["active_hours"] = hb["activeHours"]
     return out
 
-
-# ---------------------------------------------------------------------------
-# Policy engine (restart-phase overlay only)
-# ---------------------------------------------------------------------------
 
 def _get_path(container: dict[str, Any], path: tuple[str, ...]) -> Any:
     """Return value at ``path`` inside nested dicts, or ``_MISSING``."""
@@ -455,19 +664,10 @@ def _apply_policy(
     raise ValueError(f"unknown merge policy: {policy}")
 
 
-# ---------------------------------------------------------------------------
-# Controller field table — slim restart-overlay list
-# ---------------------------------------------------------------------------
-
-# Each entry: (path, policy, deriver). ``deriver(cfg, in_container)`` returns
-# the remote value to apply, or ``_MISSING`` to signal "don't touch this key
-# on this run". Defaults for everything NOT in this list live in the
-# templates under copaw_worker/templates/.
 _PolicyDeriver = Callable[[dict[str, Any], bool], Any]
 
 
 _CONTROLLER_FIELDS: list[tuple[tuple[str, ...], str, _PolicyDeriver]] = [
-    # ── channels.matrix: controller-owned scalars ────────────────────────
     (("channels", "matrix", "enabled"),
      "remote-wins", lambda c, _: _matrix_raw(c).get("enabled", True)),
     (("channels", "matrix", "homeserver"),
@@ -482,55 +682,44 @@ _CONTROLLER_FIELDS: list[tuple[tuple[str, ...], str, _PolicyDeriver]] = [
      "remote-wins", lambda c, _: _matrix_raw(c).get("dm", {}).get("policy", "allowlist")),
     (("channels", "matrix", "group_policy"),
      "remote-wins", lambda c, _: _matrix_raw(c).get("groupPolicy", "allowlist")),
+    (("channels", "matrix", "filter_tool_messages"),
+     "remote-wins", lambda c, _: _matrix_bool(c, "filterToolMessages", "filter_tool_messages", False)),
+    (("channels", "matrix", "filter_thinking"),
+     "remote-wins", lambda c, _: _matrix_bool(c, "filterThinking", "filter_thinking", True)),
     (("channels", "matrix", "vision_enabled"),
      "remote-wins", lambda c, _: _resolve_vision_enabled(c)),
     (("channels", "matrix", "history_limit"),
      "remote-wins",
      lambda c, _: _resolve_history_limit(c) if _resolve_history_limit(c) is not None else _MISSING),
-
-    # ── channels.matrix: collection fields ───────────────────────────────
     (("channels", "matrix", "allow_from"),
      "union", lambda c, _: _matrix_raw(c).get("dm", {}).get("allowFrom", []) or []),
     (("channels", "matrix", "group_allow_from"),
      "union", lambda c, _: _matrix_raw(c).get("groupAllowFrom", []) or []),
     (("channels", "matrix", "groups"),
      "deep-merge", lambda c, _: _matrix_raw(c).get("groups", {}) or {}),
-
-    # ── running.* (controller-owned) ─────────────────────────────────────
     (("running", "max_input_length"),
      "remote-wins",
      lambda c, _: _resolve_context_window(c) if _resolve_context_window(c) is not None else _MISSING),
     (("running", "embedding_config"),
      "remote-wins",
      lambda c, ic: _resolve_embedding_config(c, ic) if _resolve_embedding_config(c, ic) is not None else _MISSING),
-
-    # ── heartbeat ────────────────────────────────────────────────────────
-    # Seed-only: controller provides the initial heartbeat config on first
-    # boot; after that the user/agent owns it (can adjust every, disable,
-    # etc.) and restarts will not overwrite their changes.
     (("heartbeat",), "seed", _derive_heartbeat),
 ]
 
 
-# ---------------------------------------------------------------------------
-# config.json — create-only from template
-# ---------------------------------------------------------------------------
+def _apply_credential_guard(standard_dir: Path, runtime_dir: Path) -> None:
+    """Inject credagent.json paths into CoPaw's file guard config."""
+    from copaw_worker.hooks.credential_guard import apply_credential_guard
+
+    count = apply_credential_guard(standard_dir, runtime_dir)
+    if count > 0:
+        logger.info("bridge: credential guard applied %d protected paths", count)
+
 
 def _write_config_json(working_dir: Path) -> None:
-    """Install config.json from template if missing. Never overwrite.
-
-    ``config.json`` is CoPaw's global singleton — it owns cross-workspace
-    defaults like ``security.*.enabled``. The bridge seeds safe defaults on
-    first boot (tool_guard / file_guard / skill_scanner all disabled) and
-    then stays out of the way: user edits via the CoPaw UI or by hand are
-    authoritative from that point on.
-    """
+    """Install config.json from template if missing. Never overwrite."""
     _install_from_template(working_dir / "config.json", "config.json")
 
-
-# ---------------------------------------------------------------------------
-# agent.json — template create + controller-field overlay
-# ---------------------------------------------------------------------------
 
 def _write_agent_json(
     controller_config: dict[str, Any],
@@ -540,16 +729,7 @@ def _write_agent_json(
     profile: str = "worker",
     agent: str = "default",
 ) -> None:
-    """Create agent.json from template if absent; then overlay controller fields.
-
-    The template carries all defaults (identity, language, console channel,
-    matrix channel skeleton, running skeleton, Manager-only require_mention).
-    The ``_CONTROLLER_FIELDS`` overlay only touches Matrix scalars and
-    running.* fields that Controller genuinely owns — user edits to anything
-    else survive restarts. Security concerns (tool_guard / file_guard /
-    skill_scanner) live in the global ``config.json`` singleton, never in
-    ``agent.json``.
-    """
+    """Create agent.json from template if absent; then overlay controller fields."""
     agent_path = working_dir / "workspaces" / agent / "agent.json"
     _install_from_template(agent_path, f"agent.{profile}.json")
 
@@ -579,10 +759,6 @@ def _write_agent_json(
     with open(agent_path, "w") as f:
         json.dump(existing, f, indent=2, ensure_ascii=False)
 
-
-# ---------------------------------------------------------------------------
-# providers.json — always remote-wins (controller is sole source of truth)
-# ---------------------------------------------------------------------------
 
 def _write_providers_json(
     cfg: dict[str, Any],
@@ -646,10 +822,38 @@ def _write_providers_json(
     with open(providers_path, "w") as f:
         json.dump(providers_data, f, indent=2, ensure_ascii=False)
 
+def bridge_runtime_to_standard(standard_dir: Path) -> None:
+    """Materialize runtime-space edits back into the standard sync root."""
+    sync_inner_prompt_files_to_outer(standard_dir)
 
-# ---------------------------------------------------------------------------
-# CLI entry point — used by manager/scripts/init/start-copaw-manager.sh
-# ---------------------------------------------------------------------------
+
+def sync_inner_prompt_files_to_outer(local_dir: Path) -> None:
+    """Copy agent-edited prompt files from CoPaw workspace back to sync root."""
+    inner_outer_files = ("AGENTS.md", "SOUL.md", "HEARTBEAT.md")
+    copaw_ws_dir = local_dir / ".copaw" / "workspaces" / "default"
+    for name in inner_outer_files:
+        inner = copaw_ws_dir / name
+        outer = local_dir / name
+        if not inner.exists():
+            continue
+        try:
+            inner_mtime = inner.stat().st_mtime
+        except OSError:
+            continue
+        # Only copy if inner is newer than outer (or outer doesn't exist)
+        outer_mtime = outer.stat().st_mtime if outer.exists() else 0
+        if inner_mtime > outer_mtime:
+            inner_content = inner.read_text(errors="replace")
+            outer_content = outer.read_text(errors="replace") if outer.exists() else ""
+            if inner_content != outer_content:
+                outer.write_text(inner_content)
+                logger.debug(
+                    "Inner→Outer sync: .copaw/workspaces/default/%s → %s",
+                    name,
+                    name,
+                )
+
+
 
 def _main_cli(argv: list[str] | None = None) -> int:
     import argparse
@@ -683,7 +887,7 @@ def _main_cli(argv: list[str] | None = None) -> int:
     with open(openclaw_path) as f:
         controller_config = json.load(f)
 
-    bridge_controller_to_copaw(
+    bridge_openclaw_to_copaw(
         controller_config,
         working_dir,
         profile=args.profile,

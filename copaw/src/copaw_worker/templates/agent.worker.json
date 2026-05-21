@@ -8,7 +8,7 @@
     "PROFILE.md"
   ],
   "heartbeat": {
-    "enabled": true,
+    "enabled": false,
     "every": "10m"
   },
   "channels": {
@@ -17,7 +17,7 @@
     },
     "matrix": {
       "enabled": true,
-      "filter_tool_messages": true,
+      "filter_tool_messages": false,
       "filter_thinking": true,
       "allow_from": [],
       "group_allow_from": [],

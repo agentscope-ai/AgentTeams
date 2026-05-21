@@ -4,6 +4,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- feat(copaw): add runtime hooks, task/message/file-sync tools, health probes, and refreshed Worker coordination builtins.
+
 - feat(hiclaw-controller): propagate controller-level skills API and Nacos auth defaults to workers.
 - fix(copaw): suppress noisy warnings when optional MinIO objects do not exist.
 - fix(hiclaw-controller): preserve default object-storage access when custom non-storage entries are configured.

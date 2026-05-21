@@ -383,6 +383,154 @@ wait_for_worker_container() {
     return 1
 }
 
+# check_copaw_worker_probes <worker_name> [expected_readiness] [request_timeout]
+# Verifies CoPaw worker adapter probes from inside the worker container:
+#   - GET /worker/livez must return HTTP 200 and liveness=alive
+#   - GET /worker/readyz must return HTTP 200+ready or HTTP 503+not_ready
+# expected_readiness: any | ready | not_ready (default: any)
+check_copaw_worker_probes() {
+    local worker="$1"
+    local expected="${2:-any}"
+    local request_timeout="${3:-75}"
+    local container="hiclaw-worker-${worker}"
+    local worker_port
+
+    case "${expected}" in
+        any|ready|not_ready) ;;
+        *)
+            echo "CoPaw worker probes expected readiness is invalid: ${expected}" >&2
+            return 1
+            ;;
+    esac
+
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+        echo "CoPaw worker probes skipped: container '${container}' is not running" >&2
+        return 2
+    fi
+
+    worker_port="$(
+        docker exec "${container}" sh -lc '
+            if [ -n "${HICLAW_WORKER_PORT:-}" ]; then
+                printf "%s" "${HICLAW_WORKER_PORT}"
+            else
+                console_port="${HICLAW_CONSOLE_PORT:-8088}"
+                printf "%s" "$((console_port + 1))"
+            fi
+        ' 2>/dev/null
+    )"
+    worker_port="${worker_port:-8089}"
+
+    docker exec \
+        -e HICLAW_WORKER_PORT="${worker_port}" \
+        -e HICLAW_EXPECT_READINESS="${expected}" \
+        -e HICLAW_PROBE_REQUEST_TIMEOUT="${request_timeout}" \
+        "${container}" \
+        python3 -c '
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+port = os.environ["HICLAW_WORKER_PORT"]
+expected = os.environ.get("HICLAW_EXPECT_READINESS", "any")
+request_timeout = float(os.environ.get("HICLAW_PROBE_REQUEST_TIMEOUT", "75"))
+base_url = f"http://127.0.0.1:{port}"
+required_components = {"copaw", "sync", "bridge", "model", "matrix"}
+
+class RetryableProbeError(Exception):
+    pass
+
+def get_json(path, accepted_statuses):
+    url = base_url + path
+    try:
+        with urllib.request.urlopen(url, timeout=request_timeout) as resp:
+            status = getattr(resp, "status", 200)
+            body = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        body = exc.read().decode("utf-8")
+    except Exception as exc:
+        raise RetryableProbeError(f"{path} request failed: {type(exc).__name__}: {exc}") from exc
+
+    if status not in accepted_statuses:
+        print(f"{path} unexpected HTTP status: {status}", file=sys.stderr)
+        print(body, file=sys.stderr)
+        sys.exit(11)
+
+    try:
+        payload = json.loads(body)
+    except Exception as exc:
+        print(f"{path} invalid JSON: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(body, file=sys.stderr)
+        sys.exit(12)
+    return status, payload
+
+def validate_once():
+    live_status, live = get_json("/worker/livez", {200})
+    if live.get("liveness") != "alive":
+        print(f"/worker/livez invalid liveness: {live.get('liveness')!r}", file=sys.stderr)
+        sys.exit(13)
+
+    ready_status, ready = get_json("/worker/readyz", {200, 503})
+    readiness = ready.get("readiness")
+    if readiness not in {"ready", "not_ready"}:
+        print(f"/worker/readyz invalid readiness: {readiness!r}", file=sys.stderr)
+        sys.exit(14)
+    if ready_status == 200 and readiness != "ready":
+        print(f"/worker/readyz HTTP 200 requires readiness=ready, got {readiness!r}", file=sys.stderr)
+        sys.exit(15)
+    if ready_status == 503 and readiness != "not_ready":
+        print(f"/worker/readyz HTTP 503 requires readiness=not_ready, got {readiness!r}", file=sys.stderr)
+        sys.exit(16)
+    if expected != "any" and readiness != expected:
+        raise RetryableProbeError(f"expected readiness {expected!r}, got {readiness!r}")
+
+    healthiness = ready.get("healthiness")
+    if healthiness not in {"healthy", "unhealthy"}:
+        print(f"/worker/readyz invalid healthiness: {healthiness!r}", file=sys.stderr)
+        sys.exit(18)
+
+    components = ready.get("components")
+    if not isinstance(components, dict):
+        print("/worker/readyz components must be an object", file=sys.stderr)
+        sys.exit(19)
+    missing = required_components - set(components)
+    if missing:
+        print(f"/worker/readyz missing components: {sorted(missing)}", file=sys.stderr)
+        sys.exit(20)
+    for name in sorted(required_components):
+        item = components.get(name)
+        if not isinstance(item, dict):
+            print(f"/worker/readyz component {name} must be an object", file=sys.stderr)
+            sys.exit(21)
+        value = item.get("healthiness")
+        if value not in {"healthy", "unhealthy"}:
+            print(f"/worker/readyz component {name} has invalid healthiness: {value!r}", file=sys.stderr)
+            sys.exit(22)
+    return live, ready
+
+deadline = time.monotonic() + request_timeout
+last_error = None
+while True:
+    try:
+        live, ready = validate_once()
+        break
+    except RetryableProbeError as exc:
+        last_error = exc
+        if time.monotonic() >= deadline:
+            print(str(last_error), file=sys.stderr)
+            sys.exit(10)
+        time.sleep(2)
+
+print("== /worker/livez ==")
+print(json.dumps(live, ensure_ascii=False, indent=2))
+print("== /worker/readyz ==")
+print(json.dumps(ready, ensure_ascii=False, indent=2))
+' 2>&1
+}
+
 # ============================================================
 # Config Detection
 # ============================================================

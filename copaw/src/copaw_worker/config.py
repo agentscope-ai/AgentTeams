@@ -13,8 +13,10 @@ class WorkerConfig:
         minio_secret_key: str,
         minio_bucket: str = "hiclaw-storage",
         minio_secure: bool = False,
+        sync_interval: int = 60,
         install_dir: Path | None = None,
         console_port: int = 8088,
+        worker_port: int | None = None,
         worker_cr_name: str | None = None,
     ) -> None:
         self.worker_name = worker_name

@@ -6,6 +6,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - feat(copaw): add runtime hooks, task/message/file-sync tools, health probes, and refreshed Worker coordination builtins.
 - fix(copaw): keep WorkerConfig CLI startup arguments aligned with the CoPaw worker API port and sync interval.
+- fix(copaw): make direct CoPaw worker readiness-check replies explicit and align the ZIP import probe prompt.
 
 - feat(hiclaw-controller): propagate controller-level skills API and Nacos auth defaults to workers.
 - fix(copaw): suppress noisy warnings when optional MinIO objects do not exist.

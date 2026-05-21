@@ -348,7 +348,7 @@ else
             "${ADMIN_TOKEN}" \
             "${ROOM_ID}" \
             "${WORKER_MATRIX_ID}" \
-            "Hello! Please reply with a short greeting." \
+            "Readiness check: please reply with the exact text READY." \
             180 30)
 
         if [ -n "${REPLY}" ]; then

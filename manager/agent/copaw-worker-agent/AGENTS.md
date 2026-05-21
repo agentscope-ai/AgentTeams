@@ -54,6 +54,8 @@ Most assigned tasks move through these phases:
 | Submit | Call `taskflow(action="submit_task")`. This writes the result, pushes the task directory, and verifies `result.md` on storage — all in one call. | `task-management` |
 | Notify | Notify your coordinator only when there is a concrete completion, blocker, question, or requested answer. | `communication` |
 
+If the current message is a direct readiness check or explicitly asks you to reply with specific text, answer directly in the current room. Do not use `taskflow` for that check, and do not treat it as low-information chatter.
+
 Keep private planning notes under the task workspace. Do not create shared task-level plans.
 
 ## 6. Example Sessions

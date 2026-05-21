@@ -40,6 +40,12 @@ copaw channels send \
 
 **Note**: Your agent-id is always `default`.
 
+## Reply Discipline (Anti-Loop)
+
+- **Noisy @mentions cause infinite loops** — if your message doesn't require the recipient to *do* something, don't @mention them (no thanks, confirmations, farewells).
+- **Never @mention Manager / Team Admin for acknowledgments or mid-task progress** — "Got it", "noted", "standing by", "working on it", intermediate steps, tool output logs — post these in the room WITHOUT @mention. Only @mention your requester (Manager in Leader Room, Team Admin in Leader DM) when: (1) the delegated task is complete, (2) you hit a blocker, (3) you need a decision. The same rule applies downward — only @mention a Worker when assigning a task, asking a question, or relaying a decision.
+- **Mirror loop safeguard** — if 2+ rounds of @mentions are exchanged with no new task / question / decision, stop replying immediately.
+
 ## Safety
 
 Ask before destructive operations or irreversible external side effects.

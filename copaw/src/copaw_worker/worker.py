@@ -59,6 +59,7 @@ class Worker:
         self._server: Any | None = None
         self._health: HealthState | None = None
         self._openclaw_cfg: dict[str, Any] | None = None
+        self._matrix_ready_marker: Path | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -226,6 +227,13 @@ class Worker:
 
         # 4. Set up CoPaw working directory
         self._copaw_working_dir.mkdir(parents=True, exist_ok=True)
+        self._matrix_ready_marker = (
+            Path("/tmp") / f"hiclaw-copaw-{self.worker_name}-matrix-ready"
+        )
+        self._matrix_ready_marker.unlink(missing_ok=True)
+        os.environ["HICLAW_MATRIX_CHANNEL_READY_FILE"] = str(
+            self._matrix_ready_marker,
+        )
         logger.info(
             "startup stage=prepare_runtime_dir worker=%s copaw_working_dir=%s",
             self.worker_name,
@@ -354,6 +362,20 @@ class Worker:
         from .bridge import _port_remap, _is_in_container
         homeserver = _port_remap(matrix_cfg.get("homeserver", ""), _is_in_container())
         matrix = await asyncio.to_thread(check_matrix_service, homeserver)
+        if matrix.healthiness == "healthy":
+            marker_ready = (
+                self._matrix_ready_marker is not None
+                and self._matrix_ready_marker.exists()
+            )
+            if not marker_ready:
+                matrix = ComponentHealth(
+                    "unhealthy",
+                    "Matrix channel is not ready",
+                    {
+                        **(matrix.details or {}),
+                        "channelReady": False,
+                    },
+                )
         self._health.update("matrix", matrix.healthiness, matrix.message, matrix.details)
 
         snapshot = self._health.to_dict()

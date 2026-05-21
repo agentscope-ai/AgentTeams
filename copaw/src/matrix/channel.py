@@ -587,6 +587,27 @@ class MatrixChannel(BaseChannel):
                     exc,
                 )
 
+    @staticmethod
+    def _ready_marker_path() -> Optional[Path]:
+        marker = os.environ.get("HICLAW_MATRIX_CHANNEL_READY_FILE")
+        if marker:
+            return Path(marker)
+        return None
+
+    def _mark_channel_ready(self) -> None:
+        """Mark the Matrix channel ready for worker-level readiness probes."""
+        path = self._ready_marker_path()
+        if not path:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("ready\n", encoding="utf-8")
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: failed to write ready marker: %s",
+                exc,
+            )
+
     async def _e2ee_maintenance(self) -> None:
         """Perform E2EE key maintenance tasks after each sync.
 
@@ -700,6 +721,8 @@ class MatrixChannel(BaseChannel):
                     "MatrixChannel: full-state sync exception: %s",
                     exc,
                 )
+
+        self._mark_channel_ready()
 
         while True:
             try:

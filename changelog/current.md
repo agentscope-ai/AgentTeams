@@ -8,6 +8,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - fix(copaw): keep WorkerConfig CLI startup arguments aligned with the CoPaw worker API port and sync interval.
 - fix(copaw): make direct CoPaw worker readiness-check replies explicit and align the ZIP import probe prompt.
 - fix(copaw): avoid swallowing fresh Matrix messages during first-start sync token initialization.
+- fix(copaw): gate Worker readiness on Matrix channel startup so probes do not pass before messages can be handled.
 
 - feat(hiclaw-controller): propagate controller-level skills API and Nacos auth defaults to workers.
 - fix(copaw): suppress noisy warnings when optional MinIO objects do not exist.

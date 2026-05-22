@@ -64,7 +64,21 @@ Change `[ ]` to `[~]` for the task. Sync plan.md to MinIO.
 ### 2e. @mention Worker in Project Room
 
 Adapt language to admin's preferred language:
+```bash
+bash /opt/hiclaw/agent/skills/project-management/scripts/send-project-message.sh \
+  --room-id "<project-room-id>" \
+  --target-user "@{worker}:{domain}" \
+  --text "@{worker}:{domain} New task [{task-id}]: {task title}
+
+{2-3 sentence summary}
+
+Full spec: ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/spec.md
+
+Please file-sync, read the spec, create plan.md before starting. @mention me when complete."
 ```
+
+Message body template:
+```text
 @{worker}:{domain} New task [{task-id}]: {task title}
 
 {2-3 sentence summary}
@@ -88,7 +102,7 @@ Pull task directory from MinIO, then read `result.md` for the Outcome status: `S
 2. Identify who revises (`return to {task-id}` → original assignee, `reassign to @{worker}` → specified worker)
 3. Create revision task: `meta.json` with `is_revision_for` and `triggered_by` fields, `spec.md` referencing the feedback source
 4. Push to MinIO, add revision task to plan.md
-5. @mention the worker in project room
+5. @mention the worker in project room with `send-project-message.sh`
 6. **Do NOT proceed to next phase** until revision is complete
 
 ### 3c. BLOCKED → Handle blocker
@@ -121,5 +135,5 @@ If the same Worker has another task ready, assign immediately — they're availa
 1. Update meta.json: `status → completed`
 2. Update plan.md Status to "completed"
 3. Sync to MinIO
-4. Post completion summary in project room, @mention admin
+4. Post completion summary in project room with `send-project-message.sh`, @mention admin
 5. Update `memory/YYYY-MM-DD.md` with project outcome

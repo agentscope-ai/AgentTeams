@@ -149,13 +149,11 @@ done
 
 - Filter projects with `"status": "active"`
 - For each active project, read `project_room_id` from meta.json, then read plan.md and find tasks marked as `[~]` (in progress)
-- If the responsible Worker has had no activity during this heartbeat cycle, **ensure the Worker's container is running first** (`lifecycle-worker.sh --action ensure-ready --worker {worker}`), then **use `copaw channels send` via shell** to send a follow-up to the project room:
+- If the responsible Worker has had no activity during this heartbeat cycle, **ensure the Worker's container is running first** (`lifecycle-worker.sh --action ensure-ready --worker {worker}`), then use the project message helper to send a follow-up to the project room:
   ```bash
-  copaw channels send \
-    --agent-id default \
-    --channel matrix \
+  bash /opt/hiclaw/agent/skills/project-management/scripts/send-project-message.sh \
+    --room-id "{project_room_id}" \
     --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}" \
-    --target-session "{project_room_id}" \
     --text "@{worker}:${HICLAW_MATRIX_DOMAIN} Any progress on your current task {task-id} \"{title}\"? Please let us know if you're blocked."
   ```
 - If a Worker has reported task completion in the project room but plan.md has not been updated yet, handle it immediately (see the project management section in AGENTS.md)

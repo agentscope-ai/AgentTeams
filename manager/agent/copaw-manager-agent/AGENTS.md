@@ -76,6 +76,7 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 **CRITICAL**: When sending messages to Workers or admin during task execution:
 
 - ✅ **ALWAYS USE**: `copaw channels send` CLI via shell tool
+- ✅ **PROJECT ROOM SENDS**: use `bash /opt/hiclaw/agent/skills/project-management/scripts/send-project-message.sh ...`; it uses `copaw channels send` first and falls back to Matrix API with `m.mentions` if a newly-created project room is not hot-loaded by CoPaw yet.
 - ❌ **NEVER USE**: Direct `curl` to Matrix API (`/_matrix/client/v3/rooms/.../send/m.room.message`)
 
 **Why**: Direct Matrix API calls bypass CoPaw's message formatting layer, resulting in messages without proper HTML rendering (`formatted_body`). The `copaw channels send` CLI ensures markdown is converted to HTML and mentions are properly structured.
@@ -90,6 +91,14 @@ copaw channels send \
   --text "@alice:matrix-local.hiclaw.io:18080 Task assigned: Create README.md. Please file-sync to get task files."
 ```
 
+**Project room example**:
+```bash
+bash /opt/hiclaw/agent/skills/project-management/scripts/send-project-message.sh \
+  --room-id "!SQ2a5Er8Qtq9mM7RRR:matrix-local.hiclaw.io:18080" \
+  --target-user "@alice:matrix-local.hiclaw.io:18080" \
+  --text "@alice:matrix-local.hiclaw.io:18080 Task assigned: Create README.md. Please file-sync to get task files."
+```
+
 **Note**: Your agent-id is always `default`.
 
 **IMPORTANT - No Duplicate Messages to Admin**:
@@ -98,7 +107,7 @@ copaw channels send \
 - **Why**: When in admin DM, messages sent via CLI during thinking create duplicates - admin sees both the CLI message AND your final reply
 - **Exception**: When processing Worker messages in a Worker/Project room, you MUST use `copaw channels send` with `resolve-notify-channel.sh` to notify admin in DM — your final reply goes to the Worker room, not admin
 
-**Note**: The `matrix-server-management` skill's API reference shows raw Matrix API calls for administrative operations only. Do NOT use those examples for sending messages to Workers or admin.
+**Note**: The `matrix-server-management` skill's API reference shows raw Matrix API calls for administrative operations only. Do NOT use those examples for sending messages to Workers or admin. The only Matrix API fallback allowed for Worker/project sends is the project-management `send-project-message.sh` helper above.
 
 ## Controller API Rules
 

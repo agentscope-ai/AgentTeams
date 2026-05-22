@@ -11,6 +11,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - fix(copaw): gate Worker readiness on Matrix channel startup so probes do not pass before messages can be handled.
 - fix(copaw): answer Matrix runtime readiness probes directly once the channel is receiving mentioned messages.
 - fix(copaw): handle targeted Matrix readiness probes before the normal agent dispatch and policy path.
+- fix(manager): keep task state registration compatible with legacy finite-task arguments used by Manager agents.
 - fix(manager): auto-join local workers into project rooms after Matrix invite, register project rooms in Manager Matrix config, and add a CoPaw project-room send fallback so CoPaw/Hermes project coordination can continue.
 - feat(team-leader): refresh Team Leader coordination prompts and built-in skills for project, task, file-sharing, communication, organization, and mcporter workflows.
 - fix(team-leader): keep legacy Team Leader skill names and helper scripts available for existing workspaces and integration tests.

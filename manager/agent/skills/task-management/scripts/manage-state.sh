@@ -208,6 +208,7 @@ ASSIGNED_TO=""
 ROOM_ID=""
 PROJECT_ROOM_ID=""
 DELEGATED_TO_TEAM=""
+TASK_TYPE=""
 SCHEDULE=""
 TIMEZONE=""
 NEXT_SCHEDULED_AT=""
@@ -217,10 +218,12 @@ while [[ $# -gt 0 ]]; do
         --action)           ACTION="$2";            shift 2 ;;
         --task-id)          TASK_ID="$2";           shift 2 ;;
         --title)            TITLE="$2";             shift 2 ;;
+        --task-title)       TITLE="$2";             shift 2 ;;
         --assigned-to)      ASSIGNED_TO="$2";       shift 2 ;;
         --room-id)          ROOM_ID="$2";           shift 2 ;;
         --project-room-id)  PROJECT_ROOM_ID="$2";   shift 2 ;;
         --delegated-to-team) DELEGATED_TO_TEAM="$2"; shift 2 ;;
+        --type)             TASK_TYPE="$2";         shift 2 ;;
         --schedule)         SCHEDULE="$2";          shift 2 ;;
         --timezone)         TIMEZONE="$2";          shift 2 ;;
         --next-scheduled-at) NEXT_SCHEDULED_AT="$2"; shift 2 ;;
@@ -230,6 +233,17 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ "$ACTION" = "add" ]; then
+    case "${TASK_TYPE:-finite}" in
+        finite|"") ACTION="add-finite" ;;
+        infinite) ACTION="add-infinite" ;;
+        *)
+            echo "ERROR: Unknown task type '$TASK_TYPE' for legacy add action. Use: finite, infinite" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 if [ -z "$ACTION" ]; then
     echo "Usage: $0 --action <init|add-finite|add-infinite|complete|executed|set-admin-dm|list> [options]" >&2

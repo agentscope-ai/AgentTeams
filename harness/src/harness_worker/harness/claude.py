@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -114,15 +115,24 @@ class ClaudeHarness(BaseHarness):
         self._api_key: str = _DEFAULT_API_KEY
 
     def bridge_config(self, openclaw_cfg: dict[str, Any], harness_home: Path) -> None:
-        """Write workspace/.claude/settings.json from openclaw.json.
+        """Write workspace/.claude/settings.json, .claude.json (MCP), CLAUDE.md, and .claude/skills/.
 
         harness_home is workspace_dir/.harness; settings go one level up so
         the Claude CLI picks them up from the workspace root.
 
-        Merge order (later wins):
-          1. Existing settings.json on disk  (user customisations survive restarts)
-          2. <harness_home>/claude.settings.json  (per-worker MinIO override)
-          3. Controller-managed fields: model, permissions, env
+        Merge order for settings.json (later wins):
+          1. Existing settings.json on disk      (user customisations survive)
+          2. <harness_home>/claude.settings.json (per-worker MinIO override)
+          3. Controller-managed fields: model, permissions, env (always win)
+
+        MCP servers are written separately to .claude.json under
+        projects[workspace]["mcpServers"] — Claude Code reads project-level
+        MCP servers from there, not from settings.json["mcpServers"].
+
+        Side effects:
+          - workspace/.claude.json  MCP servers updated (controller owns the key)
+          - workspace/CLAUDE.md     generated from SOUL.md + AGENTS.md
+          - workspace/.claude/skills/ synced from workspace/skills/ via symlinks
         """
         self._model = _resolve_active_model(openclaw_cfg)
         self._base_url, self._api_key = _resolve_credentials(openclaw_cfg)
@@ -149,18 +159,35 @@ class ClaudeHarness(BaseHarness):
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning("bridge: ignoring invalid claude.settings.json: %s", exc)
 
+        # Remove stale mcpServers from settings.json — Claude Code reads
+        # project-level MCP servers from .claude.json, not from settings.json.
+        existing.pop("mcpServers", None)
+
         # Controller-managed fields — always overwrite whatever is on disk.
         existing["model"] = self._model
         # dontAsk: non-interactive mode required for subprocess invocation.
         # bypassPermissions is blocked when running as root (container default).
-        existing["permissions"] = {"defaultMode": "dontAsk"}
+        # allow mcp__* so native MCP tool calls are not denied in dontAsk mode.
+        existing["permissions"] = {"defaultMode": "dontAsk", "allow": ["mcp__*"]}
         existing["env"] = {**existing.get("env", {}), **self._build_env()}
 
         cfg_file.write_text(json.dumps(existing, indent=2))
+
+        # Write MCP servers to .claude.json under projects[workspace]["mcpServers"].
+        # Claude Code stores project-level MCP servers here (type "http" / "sse").
+        self._write_mcp_dot_claude(workspace, self._build_mcp_servers(workspace))
         logger.info(
             "bridge: claude settings → %s (model=%s, url=%s)",
             cfg_file, self._model, self._base_url,
         )
+
+        # Generate CLAUDE.md from SOUL.md + AGENTS.md so Claude CLI has the
+        # agent's persona and behaviour rules as project instructions.
+        self._generate_claude_md(workspace)
+
+        # Mirror workspace/skills/ → workspace/.claude/skills/ so Claude Code
+        # discovers skills natively without listing them in CLAUDE.md.
+        self._sync_skills_dir(workspace)
 
     def _build_env(self) -> dict[str, str]:
         # Set every ANTHROPIC_*_MODEL alias to the same value so Claude CLI
@@ -177,6 +204,141 @@ class ClaudeHarness(BaseHarness):
             "API_TIMEOUT_MS":                            "3000000",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":  "1",
         }
+
+    def _write_mcp_dot_claude(self, workspace: Path, mcp_servers: dict[str, Any]) -> None:
+        """Write project-level MCP servers into workspace/.claude.json.
+
+        Claude Code reads project-level MCP servers from
+        .claude.json["projects"][cwd]["mcpServers"], NOT from settings.json.
+        Since HOME = workspace in the harness container, .claude.json is at
+        workspace/.claude.json.
+
+        Controller fully owns the mcpServers key: the entire dict is replaced
+        so stale entries from previous runs (persisted in MinIO) are removed.
+        All other .claude.json content (cachedGrowthBookFeatures, etc.) is preserved.
+        """
+        dot_claude = workspace / ".claude.json"
+        try:
+            data: dict[str, Any] = json.loads(dot_claude.read_text(encoding="utf-8")) if dot_claude.exists() else {}
+        except (json.JSONDecodeError, OSError):
+            data = {}
+
+        workspace_key = str(workspace)
+        data.setdefault("projects", {}).setdefault(workspace_key, {})
+
+        if mcp_servers:
+            data["projects"][workspace_key]["mcpServers"] = mcp_servers
+        else:
+            data["projects"][workspace_key].pop("mcpServers", None)
+
+        dot_claude.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        logger.info("bridge: wrote %d MCP server(s) to .claude.json projects[%s]", len(mcp_servers), workspace_key)
+
+    def _build_mcp_servers(self, workspace: Path) -> dict[str, Any]:
+        """Read config/mcporter.json and return a mcpServers dict for .claude.json.
+
+        HTTP/SSE transport servers are wired directly into Claude's project-level
+        MCP config in .claude.json. `mcporter serve` is not used — Claude Code
+        connects to these servers natively via HTTP or SSE transport.
+
+        Mapping from mcporter-servers.json transport to Claude Code .claude.json type:
+          "http"  → "http"   (MCP Streamable HTTP, as used by `claude mcp add --transport http`)
+          "sse"   → "sse"    (SSE, persistent connection)
+
+        Lookup order (mirrors FileSync.pull_all fallback):
+          1. workspace/config/mcporter.json  (canonical since v1.0.6)
+          2. workspace/mcporter-servers.json (backward-compat symlink)
+        """
+        _TRANSPORT_MAP = {"http": "http", "sse": "sse"}
+
+        for candidate in (
+            workspace / "config" / "mcporter.json",
+            workspace / "mcporter-servers.json",
+        ):
+            if not candidate.exists():
+                continue
+            try:
+                config = json.loads(candidate.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            servers: dict[str, Any] = config.get("mcpServers", {})
+            if not servers:
+                continue
+
+            result: dict[str, Any] = {}
+            for name, srv in servers.items():
+                transport = srv.get("transport", "http")
+                claude_type = _TRANSPORT_MAP.get(transport)
+                if claude_type and srv.get("url"):
+                    entry: dict[str, Any] = {"type": claude_type, "url": srv["url"]}
+                    if srv.get("headers"):
+                        entry["headers"] = srv["headers"]
+                    result[name] = entry
+
+            if result:
+                logger.info("bridge: wiring %d MCP server(s) directly (HTTP/SSE)", len(result))
+                return result
+        return {}
+
+    def _generate_claude_md(self, workspace: Path) -> None:
+        """Generate workspace/CLAUDE.md from SOUL.md + AGENTS.md.
+
+        Claude CLI reads CLAUDE.md automatically as project instructions.
+        Source files are NOT modified so copaw/hermes runtimes remain compatible.
+        If neither file exists, CLAUDE.md is left untouched.
+        """
+        parts: list[str] = []
+        for fname in ("SOUL.md", "AGENTS.md"):
+            f = workspace / fname
+            if f.exists():
+                try:
+                    content = f.read_text(encoding="utf-8").strip()
+                    if content:
+                        parts.append(content)
+                except OSError:
+                    pass
+        if not parts:
+            return
+        claude_md = workspace / "CLAUDE.md"
+        claude_md.write_text("\n\n---\n\n".join(parts) + "\n", encoding="utf-8")
+        logger.info("bridge: generated CLAUDE.md (%d sections)", len(parts))
+
+    def _sync_skills_dir(self, workspace: Path) -> None:
+        """Mirror workspace/skills/ → workspace/.claude/skills/ via symlinks.
+
+        Claude Code discovers skills from .claude/skills/<name>/SKILL.md.
+        Symlinks avoid data duplication; push_loop still pushes from workspace/skills/.
+        Stale symlinks for removed skills are cleaned up automatically.
+        Non-symlink entries (user-managed) are left untouched.
+        """
+        src_dir = workspace / "skills"
+        dst_dir = workspace / ".claude" / "skills"
+        if not src_dir.is_dir():
+            return
+        dst_dir.mkdir(parents=True, exist_ok=True)
+
+        current_skills = {d.name for d in src_dir.iterdir() if d.is_dir()}
+
+        for existing in list(dst_dir.iterdir()):
+            if existing.name not in current_skills:
+                if existing.is_symlink():
+                    existing.unlink()
+                elif existing.is_dir():
+                    shutil.rmtree(existing)
+
+        for skill_name in current_skills:
+            skill_link = dst_dir / skill_name
+            skill_target = (src_dir / skill_name).resolve()
+            if skill_link.is_symlink():
+                if skill_link.resolve() == skill_target:
+                    continue
+                skill_link.unlink()
+            elif skill_link.exists():
+                continue  # user-managed directory, don't touch
+            skill_link.symlink_to(skill_target)
+
+        logger.info("bridge: synced %d skills to .claude/skills/", len(current_skills))
 
     def build_command(
         self,

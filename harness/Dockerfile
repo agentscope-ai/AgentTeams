@@ -49,13 +49,14 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends nodejs npm && \
     rm -rf /var/lib/apt/lists/*
 
-# Install all four CLI agents via npm
+# Install all four CLI agents + mcporter via npm
 RUN npm config set registry "${NPM_REGISTRY}" && \
     npm install -g \
         @anthropic-ai/claude-code \
         @google/gemini-cli \
         opencode-ai \
-        @openai/codex && \
+        @openai/codex \
+        mcporter && \
     rm -rf /root/.npm
 
 # Python venv

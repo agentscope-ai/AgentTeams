@@ -282,16 +282,29 @@ class Worker:
     async def _on_files_pulled(self, pulled_files: list[str]) -> None:
         if self.sync is None:
             return
-        if "openclaw.json" not in pulled_files:
-            return
-        console.print("[yellow]openclaw.json changed; re-bridging...[/yellow]")
-        try:
-            openclaw_cfg = self.sync.get_config()
-            self._harness.bridge_config(openclaw_cfg, self._harness_home)
-            self._load_env_file(self._harness_home / ".env")
-            console.print("[green]Re-bridge complete.[/green]")
-        except Exception as exc:
-            console.print(f"[red]Re-bridge failed: {exc}[/red]")
+
+        has_config_change = "openclaw.json" in pulled_files
+        has_skills_change = any(f.startswith("skills/") for f in pulled_files)
+        has_persona_change = any(f in pulled_files for f in ("SOUL.md", "AGENTS.md"))
+
+        if has_config_change:
+            console.print("[yellow]openclaw.json changed; re-bridging...[/yellow]")
+            try:
+                openclaw_cfg = self.sync.get_config()
+                self._harness.bridge_config(openclaw_cfg, self._harness_home)
+                self._load_env_file(self._harness_home / ".env")
+                console.print("[green]Re-bridge complete.[/green]")
+            except Exception as exc:
+                console.print(f"[red]Re-bridge failed: {exc}[/red]")
+        elif has_skills_change or has_persona_change:
+            # Lightweight refresh: no model/env change, only instructions update.
+            console.print("[yellow]Skills/persona changed; refreshing CLAUDE.md and skills...[/yellow]")
+            try:
+                self._harness._generate_claude_md(self.config.workspace_dir)
+                self._harness._sync_skills_dir(self.config.workspace_dir)
+                console.print("[green]CLAUDE.md and .claude/skills/ refreshed.[/green]")
+            except Exception as exc:
+                console.print(f"[red]Skills refresh failed: {exc}[/red]")
 
     def _matrix_relogin(self, openclaw_cfg: Dict[str, Any]) -> Dict[str, Any]:
         import json

@@ -6,9 +6,13 @@ import (
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestLeaderHeartbeatEvery(t *testing.T) {
@@ -376,6 +380,77 @@ func TestHashMemberSourceSpec_EnvChangeFlipsHash(t *testing.T) {
 	}
 }
 
+func TestReconcileTeamNormalInjectsLeaderCoordinationAfterMemberConfig(t *testing.T) {
+	ctx := context.Background()
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Leader: v1beta1.LeaderSpec{
+				Name:       "alpha-lead",
+				WorkerName: "leader",
+				Model:      "qwen",
+				Agents:     "custom leader AGENTS.md",
+			},
+			Workers: []v1beta1.TeamWorkerSpec{{
+				Name:       "alpha-dev",
+				WorkerName: "dev",
+				Model:      "qwen",
+			}},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	var calls []string
+	deployer := mocks.NewMockDeployer()
+	deployer.DeployWorkerConfigFn = func(ctx context.Context, req service.WorkerDeployRequest) error {
+		calls = append(calls, "config:"+req.Name)
+		return nil
+	}
+	deployer.InjectCoordinationContextFn = func(ctx context.Context, req service.CoordinationDeployRequest) error {
+		calls = append(calls, "inject:"+req.LeaderName)
+		if req.LeaderName != "leader" {
+			t.Fatalf("LeaderName=%q, want leader", req.LeaderName)
+		}
+		if len(req.TeamWorkers) != 1 || req.TeamWorkers[0] != "dev" {
+			t.Fatalf("TeamWorkers=%v, want [dev]", req.TeamWorkers)
+		}
+		return nil
+	}
+
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    deployer,
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		AgentFSDir:  t.TempDir(),
+	}
+	if _, err := r.reconcileTeamNormal(ctx, team); err != nil {
+		t.Fatalf("reconcileTeamNormal: %v", err)
+	}
+
+	leaderConfig := callIndex(calls, "config:leader")
+	inject := callIndex(calls, "inject:leader")
+	if leaderConfig == -1 || inject == -1 {
+		t.Fatalf("calls=%v, want config:leader and inject:leader", calls)
+	}
+	if inject < leaderConfig {
+		t.Fatalf("calls=%v, leader coordination injection must run after leader AGENTS.md config write", calls)
+	}
+	if inject != len(calls)-1 {
+		t.Fatalf("calls=%v, leader coordination injection must run after all member config writes", calls)
+	}
+}
+
 // registryEntry is the minimal subset of service.workersRegistry we need to
 // inspect in tests — duplicated locally because the registry shape (and
 // WorkerRegistryEntry fields we care about) are stable JSON contracts that
@@ -738,4 +813,13 @@ func stringSliceContains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func callIndex(calls []string, target string) int {
+	for i, call := range calls {
+		if call == target {
+			return i
+		}
+	}
+	return -1
 }

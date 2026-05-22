@@ -88,6 +88,7 @@ type CreateTeamRequest struct {
 	TeamName      string                     `json:"teamName,omitempty"`
 	Description   string                     `json:"description,omitempty"`
 	Admin         *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
+	HumanMembers  []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
 	Leader        TeamLeaderRequest          `json:"leader"`
 	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
 	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
@@ -135,6 +136,7 @@ type UpdateTeamRequest struct {
 	TeamName      string                     `json:"teamName,omitempty"`
 	Description   string                     `json:"description,omitempty"`
 	Admin         *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
+	HumanMembers  []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
 	Leader        *TeamLeaderRequest         `json:"leader,omitempty"`
 	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
 	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
@@ -146,6 +148,8 @@ type TeamResponse struct {
 	TeamName           string                           `json:"teamName,omitempty"`
 	Phase              string                           `json:"phase"`
 	Description        string                           `json:"description,omitempty"`
+	Admin              *v1beta1.TeamAdminSpec           `json:"admin,omitempty"`
+	HumanMembers       []v1beta1.TeamMemberSpec         `json:"humanMembers,omitempty"`
 	LeaderName         string                           `json:"leaderName"`
 	LeaderHeartbeat    *v1beta1.TeamLeaderHeartbeatSpec `json:"leaderHeartbeat,omitempty"`
 	WorkerIdleTimeout  string                           `json:"workerIdleTimeout,omitempty"`

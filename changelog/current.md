@@ -9,6 +9,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - fix(team-leader): keep legacy Team Leader skill names and helper scripts available for existing workspaces and integration tests.
 
 - feat(hiclaw-controller): propagate controller-level skills API and Nacos auth defaults to workers.
+- fix(hiclaw-controller): let inline Worker SOUL config override package-seeded SOUL.md during package updates.
 - fix(copaw): suppress noisy warnings when optional MinIO objects do not exist.
 - fix(hiclaw-controller): preserve default object-storage access when custom non-storage entries are configured.
 - fix(copaw): skip static mc alias setup for k8s workers that use wrapper-provided credentials.
@@ -29,3 +30,4 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - fix(copaw): require slash-prefixed runtime control commands and normalize Element double-slash commands.
 - fix(manager): quote coding CLI skill frontmatter descriptions that contain colons.
 - feat(controller): separate CR resource names from runtime worker names across controller identity, credentials, storage defaults, and readiness reporting.
+- feat(controller): support Team human coordinator members, team-admin-owned Matrix rooms, and leader/worker remote skills; document coordinators as Team Room participants only.

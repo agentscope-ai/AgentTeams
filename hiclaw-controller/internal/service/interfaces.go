@@ -29,6 +29,7 @@ type WorkerProvisioner interface {
 	// asynchronously inside tuwunel.
 	DeleteWorkerRoom(ctx context.Context, roomID string) error
 	MatrixUserID(name string) string
+	LoginAsHuman(ctx context.Context, username, password string) (string, error)
 	ProvisionTeamRooms(ctx context.Context, req TeamRoomRequest) (*TeamRoomResult, error)
 	DeleteTeamRoomAliases(ctx context.Context, teamName, leaderName string) error
 	DeleteWorkerRoomAlias(ctx context.Context, workerName string) error

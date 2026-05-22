@@ -38,7 +38,8 @@ type WorkerDeployRequest struct {
 	// mcporter-servers.json and injects Authorization: Bearer <GatewayKey>.
 	McpServers []v1beta1.MCPServer
 
-	TeamAdminMatrixID string
+	TeamAdminMatrixID  string
+	TeamCoordinatorIDs []string
 
 	// Heartbeat config from Team CR leader spec (nil for non-leader workers)
 	Heartbeat *agentconfig.HeartbeatConfig
@@ -48,15 +49,17 @@ type WorkerDeployRequest struct {
 
 // CoordinationDeployRequest describes coordination context injection for a team leader.
 type CoordinationDeployRequest struct {
-	LeaderName        string
-	Role              string
-	TeamName          string
-	TeamRoomID        string
-	LeaderDMRoomID    string
-	HeartbeatEvery    string
-	WorkerIdleTimeout string
-	TeamWorkers       []string
-	TeamAdminID       string
+	LeaderName         string
+	Role               string
+	TeamName           string
+	TeamRoomID         string
+	LeaderDMRoomID     string
+	HeartbeatEvery     string
+	WorkerIdleTimeout  string
+	TeamWorkers        []string
+	TeamAdminID        string
+	TeamCoordinatorIDs []string
+	LeaderSoul         string // from CR spec.leader.soul; used as seed if non-empty
 }
 
 // --- Deployer ---
@@ -108,7 +111,14 @@ func NewDeployer(cfg DeployerConfig) *Deployer {
 // DeployPackage resolves, downloads, extracts, and deploys a package to OSS.
 // No-op if uri is empty.
 func (d *Deployer) DeployPackage(ctx context.Context, name, uri string, isUpdate bool) error {
-	if uri == "" || d.packages == nil {
+	if uri == "" {
+		return nil
+	}
+	logger := log.FromContext(ctx)
+	safeURI := redactPackageURI(uri)
+	logger.Info("package parameter detected; starting package deploy", "name", name, "package", safeURI, "isUpdate", isUpdate)
+	if d.packages == nil {
+		logger.Info("package resolver unavailable; skipping package deploy", "name", name, "package", safeURI)
 		return nil
 	}
 
@@ -117,12 +127,15 @@ func (d *Deployer) DeployPackage(ctx context.Context, name, uri string, isUpdate
 		return fmt.Errorf("package resolve/extract failed: %w", err)
 	}
 	if extractedDir == "" {
+		logger.Info("package resolve/extract returned empty result; skipping package deploy", "name", name, "package", safeURI, "isUpdate", isUpdate)
 		return nil
 	}
+	logger.Info("package resolved and extracted", "name", name, "package", safeURI, "extractedDir", extractedDir, "isUpdate", isUpdate)
 
 	if err := d.packages.DeployToMinIO(ctx, extractedDir, name, isUpdate, d.oss); err != nil {
 		return fmt.Errorf("package deploy failed: %w", err)
 	}
+	logger.Info("package deploy completed", "name", name, "package", safeURI, "isUpdate", isUpdate)
 
 	return nil
 }
@@ -214,23 +227,50 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		return fmt.Errorf("config push to storage failed: %w", err)
 	}
 
-	// --- SOUL.md ---
-	// Priority: inline spec (user intent) > local file (from package) > generated default.
-	// Inline spec is read directly from memory to avoid local file race with background mc mirror.
-	soulPath := filepath.Join(localAgentDir, "SOUL.md")
-	if req.Spec.Soul != "" {
-		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(req.Spec.Soul)); err != nil {
-			logger.Error(err, "SOUL.md push failed (non-fatal)")
-		}
-	} else if soulData, err := os.ReadFile(soulPath); err == nil {
-		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", soulData); err != nil {
-			logger.Error(err, "SOUL.md push failed (non-fatal)")
-		}
-	} else if !req.IsUpdate && req.Role != "team_leader" {
-		// Team leaders get SOUL.md from template rendering in InjectCoordinationContext.
-		soulContent := fmt.Sprintf("# %s\n\nYou are %s, an AI worker agent.\n", req.Name, req.Name)
-		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(soulContent)); err != nil {
-			logger.Error(err, "SOUL.md push failed (non-fatal)")
+	// --- SOUL.md (seed-only) ---
+	// Written once on first deploy; never overwritten so the agent owns it
+	// after startup. Team leaders are handled by renderAndPushSoulTemplate
+	// in InjectCoordinationContext, so skip here.
+	if req.Role != "team_leader" {
+		soulKey := agentPrefix + "/SOUL.md"
+		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes")) && req.Spec.Identity != "")
+		if inlineOwnsSoul {
+			soulPath := filepath.Join(localAgentDir, "SOUL.md")
+			soulContent, readErr := os.ReadFile(soulPath)
+			if readErr != nil {
+				if req.Spec.Soul != "" {
+					soulContent = []byte(req.Spec.Soul)
+				} else {
+					logger.Error(readErr, "SOUL.md: inline content unavailable, skipping push", "worker", req.Name)
+				}
+			}
+			if len(soulContent) > 0 {
+				if err := d.oss.PutObject(ctx, soulKey, soulContent); err != nil {
+					logger.Error(err, "SOUL.md push failed (non-fatal)")
+				} else {
+					logger.Info("SOUL.md: inline config pushed", "worker", req.Name)
+				}
+			}
+		} else {
+			_, err := d.oss.GetObject(ctx, soulKey)
+			if err == nil {
+				logger.Info("SOUL.md: seed-only, keeping existing version", "worker", req.Name)
+			} else if !os.IsNotExist(err) {
+				logger.Error(err, "SOUL.md: check existing failed, skipping seed", "worker", req.Name)
+			} else {
+				soulPath := filepath.Join(localAgentDir, "SOUL.md")
+				var soulContent []byte
+				if data, err := os.ReadFile(soulPath); err == nil {
+					soulContent = data
+				} else if !req.IsUpdate {
+					soulContent = []byte(fmt.Sprintf("# %s\n\nYou are %s, an AI worker agent.\n", req.Name, req.Name))
+				}
+				if len(soulContent) > 0 {
+					if err := d.oss.PutObject(ctx, soulKey, soulContent); err != nil {
+						logger.Error(err, "SOUL.md push failed (non-fatal)")
+					}
+				}
+			}
 		}
 	}
 
@@ -259,7 +299,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	}
 
 	// --- AGENTS.md: merge builtin section + inject coordination context ---
-	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.Spec.Agents); err != nil {
+	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
 
@@ -281,16 +321,17 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 	}
 
 	coordCtx := agentconfig.CoordinationContext{
-		WorkerName:        req.LeaderName,
-		Role:              req.Role,
-		MatrixDomain:      d.matrixDomain,
-		TeamName:          req.TeamName,
-		TeamRoomID:        req.TeamRoomID,
-		LeaderDMRoomID:    req.LeaderDMRoomID,
-		HeartbeatEvery:    req.HeartbeatEvery,
-		WorkerIdleTimeout: req.WorkerIdleTimeout,
-		TeamWorkers:       teamWorkers,
-		TeamAdminID:       req.TeamAdminID,
+		WorkerName:         req.LeaderName,
+		Role:               req.Role,
+		MatrixDomain:       d.matrixDomain,
+		TeamName:           req.TeamName,
+		TeamRoomID:         req.TeamRoomID,
+		LeaderDMRoomID:     req.LeaderDMRoomID,
+		HeartbeatEvery:     req.HeartbeatEvery,
+		WorkerIdleTimeout:  req.WorkerIdleTimeout,
+		TeamWorkers:        teamWorkers,
+		TeamAdminID:        req.TeamAdminID,
+		TeamCoordinatorIDs: req.TeamCoordinatorIDs,
 	}
 
 	existing, _ := d.oss.GetObject(ctx, leaderAgentPrefix+"/AGENTS.md")
@@ -307,9 +348,25 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 	return nil
 }
 
-// renderAndPushSoulTemplate reads SOUL.md.tmpl from the builtin team-leader-agent
-// directory, substitutes ${VAR} placeholders, and pushes the result as SOUL.md.
+// renderAndPushSoulTemplate seeds the team leader's SOUL.md into OSS.
+// Seed-only: if OSS already has SOUL.md, it is never overwritten -- the agent
+// owns it after first startup. Priority: CR spec.leader.soul > template.
 func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix string, req CoordinationDeployRequest) error {
+	soulKey := agentPrefix + "/SOUL.md"
+	_, err := d.oss.GetObject(ctx, soulKey)
+	if err == nil {
+		log.FromContext(ctx).Info("SOUL.md: seed-only, keeping existing version", "leader", req.LeaderName)
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		log.FromContext(ctx).Error(err, "SOUL.md: check existing failed, skipping seed", "leader", req.LeaderName)
+		return nil
+	}
+
+	if req.LeaderSoul != "" {
+		return d.oss.PutObject(ctx, soulKey, []byte(req.LeaderSoul))
+	}
+
 	tmplPath := filepath.Join(d.builtinAgentDir("team_leader", ""), "SOUL.md.tmpl")
 	tmplData, err := os.ReadFile(tmplPath)
 	if err != nil {
@@ -329,7 +386,7 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	result = strings.ReplaceAll(result, "${TEAM_NAME}", req.TeamName)
 	result = strings.ReplaceAll(result, "${TEAM_WORKERS}", strings.Join(workerNames, ", "))
 
-	return d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(result))
+	return d.oss.PutObject(ctx, soulKey, []byte(result))
 }
 
 // PushOnDemandSkills pushes on-demand skills to a worker.
@@ -663,37 +720,71 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 
 // --- Internal helpers ---
 
+func redactPackageURI(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	if username := u.User.Username(); username != "" {
+		u.User = url.User(username)
+	} else {
+		u.User = nil
+	}
+	return u.String()
+}
+
 // prepareAndPushAgentsMD merges the builtin AGENTS.md section and injects
 // coordination context in a single OSS read-write cycle.
-func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID, inlineAgents string) error {
+func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID string, teamCoordinatorIDs []string, inlineAgents string) error {
+	logger := log.FromContext(ctx)
 	builtinPath := filepath.Join(d.builtinAgentDir(role, runtime), "AGENTS.md")
 	builtinContent, err := os.ReadFile(builtinPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read builtin AGENTS.md: %w", err)
 	}
+	if len(builtinContent) > 0 {
+		logger.Info("AGENTS.md builtin template loaded", "worker", workerName, "role", role, "runtime", runtime, "path", builtinPath, "bytes", len(builtinContent))
+	} else {
+		logger.Info("AGENTS.md builtin template not found", "worker", workerName, "role", role, "runtime", runtime, "path", builtinPath)
+	}
 
 	// Priority: inline spec (user intent) > OSS (from package).
 	// Read inline directly from memory to avoid local file race with background mc mirror.
 	var content string
+	source := "oss"
 	if inlineAgents != "" {
 		content = inlineAgents
+		source = "inline spec.agents"
 	} else {
-		existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
+		existing, err := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
+		if err != nil {
+			if os.IsNotExist(err) {
+				logger.Info("AGENTS.md package/OSS source not found", "worker", workerName, "key", agentPrefix+"/AGENTS.md")
+			} else {
+				logger.Error(err, "AGENTS.md package/OSS source read failed; continuing with empty content", "worker", workerName, "key", agentPrefix+"/AGENTS.md")
+			}
+		} else {
+			logger.Info("AGENTS.md package/OSS source loaded", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(existing), "hasBuiltinMarkers", strings.Contains(string(existing), "<!-- hiclaw-builtin-start -->"))
+		}
 		content = string(existing)
 	}
+	logger.Info("AGENTS.md source selected", "worker", workerName, "source", source, "bytes", len(content), "hasBuiltinMarkers", strings.Contains(content, "<!-- hiclaw-builtin-start -->"))
 	if len(builtinContent) > 0 {
+		sourceBytes := len(content)
 		content = agentconfig.MergeBuiltinSection(content, string(builtinContent))
+		logger.Info("AGENTS.md builtin section merged", "worker", workerName, "source", source, "builtinBytes", len(builtinContent), "sourceBytes", sourceBytes, "resultBytes", len(content))
 	}
 
 	// Team leaders get their coordination context from TeamReconciler.InjectCoordinationContext
 	// which has the full context (room IDs, worker list). Skip here to avoid overwriting.
 	if role != "team_leader" {
 		coordCtx := agentconfig.CoordinationContext{
-			WorkerName:     workerName,
-			MatrixDomain:   d.matrixDomain,
-			TeamName:       teamName,
-			TeamLeaderName: teamLeaderName,
-			TeamAdminID:    teamAdminMatrixID,
+			WorkerName:         workerName,
+			MatrixDomain:       d.matrixDomain,
+			TeamName:           teamName,
+			TeamLeaderName:     teamLeaderName,
+			TeamAdminID:        teamAdminMatrixID,
+			TeamCoordinatorIDs: teamCoordinatorIDs,
 		}
 		if teamLeaderName != "" {
 			coordCtx.Role = "worker"
@@ -701,9 +792,16 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 			coordCtx.Role = "standalone"
 		}
 		content = agentconfig.InjectCoordinationContext(content, coordCtx)
+		logger.Info("AGENTS.md coordination context injected", "worker", workerName, "role", coordCtx.Role, "team", teamName, "teamLeader", teamLeaderName, "coordinatorCount", len(teamCoordinatorIDs), "resultBytes", len(content))
+	} else {
+		logger.Info("AGENTS.md coordination context skipped", "worker", workerName, "role", role, "reason", "team leader context is injected after room IDs are known")
 	}
 
-	return d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(content))
+	if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(content)); err != nil {
+		return err
+	}
+	logger.Info("AGENTS.md pushed to storage", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(content), "source", source)
+	return nil
 }
 
 // pushBuiltinSkills copies builtin skill directories to the worker's OSS prefix.

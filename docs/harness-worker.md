@@ -247,7 +247,7 @@ worker:
   defaultImage:
     harness:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-harness-worker
-      tag: "0.3.2"
+      tag: "latest"
 ```
 
 ### Build and push
@@ -256,9 +256,9 @@ worker:
 cd HiClaw/harness
 
 docker build --platform linux/amd64 \
-  -t higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-harness-worker:0.3.2 .
+  -t higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-harness-worker:latest .
 
-docker push higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-harness-worker:0.3.2
+docker push higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-harness-worker:latest
 ```
 
 ### Rolling update (patch Team CR image, then bounce pod)
@@ -266,7 +266,7 @@ docker push higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-harness-
 ```bash
 kubectl patch team <team-name> -n <namespace> --type=json \
   -p='[{"op":"replace","path":"/spec/workers/<idx>/image",
-        "value":"higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-harness-worker:0.3.2"}]'
+        "value":"higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-harness-worker:latest"}]'
 
 kubectl delete pod hiclaw-worker-<worker-name> -n <namespace>
 ```

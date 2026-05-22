@@ -187,6 +187,13 @@ _worker_auto_join() {
         source "${creds_file}"
     fi
 
+    if [ -z "${WORKER_PASSWORD}" ]; then
+        WORKER_PASSWORD=$(mc cat "${HICLAW_STORAGE_PREFIX}/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
+    fi
+    if [ -z "${WORKER_PASSWORD}" ] && [ -f "/root/hiclaw-fs/agents/${worker}/credentials/matrix/password" ]; then
+        WORKER_PASSWORD=$(cat "/root/hiclaw-fs/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
+    fi
+
     if [ -n "${WORKER_PASSWORD}" ]; then
         worker_token=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
             -H 'Content-Type: application/json' \
@@ -212,6 +219,48 @@ _worker_auto_join() {
     fi
 }
 
+_patch_manager_project_room_config() {
+    local config_path="$1"
+    local workers_json=""
+    [ -f "${config_path}" ] || return 0
+
+    workers_json=$(
+        for worker in "${WORKER_ARR[@]}"; do
+            worker=$(echo "${worker}" | tr -d ' ')
+            [ -z "${worker}" ] && continue
+            echo "@${worker}:${MATRIX_DOMAIN}"
+        done | jq -R . | jq -s .
+    )
+
+    jq --arg room "${ROOM_ID}" --argjson workers "${workers_json}" \
+        ".channels.matrix.groupAllowFrom = ((.channels.matrix.groupAllowFrom // []) + \$workers | unique)
+         | .channels.matrix.groups = (.channels.matrix.groups // {})
+         | .channels.matrix.groups[\$room] = {\"allow\": true, \"requireMention\": false, \"autoReply\": true}" \
+        "${config_path}" > /tmp/project-manager-config.json
+    mv /tmp/project-manager-config.json "${config_path}"
+}
+
+_patch_copaw_project_room_config() {
+    local agent_json="${HOME}/.copaw/workspaces/default/agent.json"
+    local workers_json=""
+    [ -f "${agent_json}" ] || return 0
+
+    workers_json=$(
+        for worker in "${WORKER_ARR[@]}"; do
+            worker=$(echo "${worker}" | tr -d ' ')
+            [ -z "${worker}" ] && continue
+            echo "@${worker}:${MATRIX_DOMAIN}"
+        done | jq -R . | jq -s .
+    )
+
+    jq --arg room "${ROOM_ID}" --argjson workers "${workers_json}" \
+        ".channels.matrix.group_allow_from = ((.channels.matrix.group_allow_from // []) + \$workers | unique)
+         | .channels.matrix.groups = (.channels.matrix.groups // {})
+         | .channels.matrix.groups[\$room] = {\"allow\": true, \"requireMention\": false, \"autoReply\": true}" \
+        "${agent_json}" > /tmp/project-copaw-agent.json
+    mv /tmp/project-copaw-agent.json "${agent_json}"
+}
+
 for worker in "${WORKER_ARR[@]}"; do
     worker=$(echo "${worker}" | tr -d ' ')
     [ -z "${worker}" ] && continue
@@ -224,28 +273,17 @@ done
 log "Step 3: Updating Manager groupAllowFrom..."
 MANAGER_CONFIG="/root/hiclaw-fs/agents/manager/openclaw.json"
 if [ -f "${MANAGER_CONFIG}" ]; then
-    UPDATED_CONFIG="${MANAGER_CONFIG}"
-    for worker in "${WORKER_ARR[@]}"; do
-        worker=$(echo "${worker}" | tr -d ' ')
-        [ -z "${worker}" ] && continue
-        WORKER_MATRIX_ID="@${worker}:${MATRIX_DOMAIN}"
-        ALREADY_IN=$(jq -r --arg w "${WORKER_MATRIX_ID}" \
-            '.channels.matrix.groupAllowFrom // [] | map(select(. == $w)) | length' \
-            "${UPDATED_CONFIG}" 2>/dev/null || echo "0")
-        if [ "${ALREADY_IN}" = "0" ]; then
-            jq --arg w "${WORKER_MATRIX_ID}" \
-                '.channels.matrix.groupAllowFrom += [$w]' \
-                "${UPDATED_CONFIG}" > /tmp/manager-cfg-updated.json
-            mv /tmp/manager-cfg-updated.json "${UPDATED_CONFIG}"
-            log "  Added ${WORKER_MATRIX_ID} to groupAllowFrom"
-        else
-            log "  ${WORKER_MATRIX_ID} already in groupAllowFrom"
-        fi
-    done
+    _patch_manager_project_room_config "${MANAGER_CONFIG}"
     # Sync updated Manager config to MinIO
     mc cp "${MANAGER_CONFIG}" "${HICLAW_STORAGE_PREFIX}/agents/manager/openclaw.json" 2>/dev/null || true
     log "  Manager config synced to MinIO"
 fi
+if [ -f "${HOME}/openclaw.json" ]; then
+    _patch_manager_project_room_config "${HOME}/openclaw.json"
+    log "  Manager runtime openclaw.json updated"
+fi
+_patch_copaw_project_room_config
+log "  CoPaw Manager project room config updated when available"
 
 # ============================================================
 # Step 4: Sync project files to MinIO

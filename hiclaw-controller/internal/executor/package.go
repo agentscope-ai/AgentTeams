@@ -12,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/hiclaw/hiclaw-controller/internal/credprovider"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // PackageResolver handles file://, http(s)://, and nacos:// package URIs.
@@ -41,21 +43,51 @@ func (p *PackageResolver) Resolve(ctx context.Context, uri string) (string, erro
 	if uri == "" {
 		return "", nil
 	}
+	logger := log.FromContext(ctx)
 
 	parsed, err := url.Parse(uri)
 	if err != nil {
 		return "", fmt.Errorf("invalid package URI %q: %w", uri, err)
 	}
+	safeURI := safePackageURI(uri)
+	scheme := parsed.Scheme
+	if scheme == "" {
+		scheme = "minio"
+	}
+	logger.Info("package resolve started", "package", safeURI, "scheme", scheme)
 
 	switch parsed.Scheme {
 	case "file":
-		return p.resolveFile(parsed)
+		resolved, err := p.resolveFile(parsed)
+		if err != nil {
+			return "", err
+		}
+		logger.Info("package pull completed", "package", safeURI, "scheme", scheme, "path", resolved, "format", packagePathFormat(resolved))
+		return resolved, nil
 	case "http", "https":
-		return p.resolveHTTP(ctx, uri)
+		logger.Info("package pull started", "package", safeURI, "scheme", scheme)
+		resolved, err := p.resolveHTTP(ctx, uri)
+		if err != nil {
+			return "", err
+		}
+		logger.Info("package pull completed", "package", safeURI, "scheme", scheme, "path", resolved, "format", packagePathFormat(resolved))
+		return resolved, nil
 	case "nacos":
-		return p.resolveNacos(ctx, parsed)
+		logger.Info("package pull started", "package", safeURI, "scheme", scheme)
+		resolved, err := p.resolveNacos(ctx, parsed)
+		if err != nil {
+			return "", err
+		}
+		logger.Info("package pull completed", "package", safeURI, "scheme", scheme, "path", resolved, "format", packagePathFormat(resolved))
+		return resolved, nil
 	case "oss":
-		return p.resolveOSS(ctx, parsed)
+		logger.Info("package pull started", "package", safeURI, "scheme", scheme)
+		resolved, err := p.resolveOSS(ctx, parsed)
+		if err != nil {
+			return "", err
+		}
+		logger.Info("package pull completed", "package", safeURI, "scheme", scheme, "path", resolved, "format", packagePathFormat(resolved))
+		return resolved, nil
 	default:
 		// Treat as relative MinIO path (e.g. "packages/alice.zip")
 		// Use content-addressable cache: download to /tmp/import/{md5}.zip
@@ -76,13 +108,16 @@ func (p *PackageResolver) Resolve(ctx context.Context, uri string) (string, erro
 
 		destPath := filepath.Join(p.ImportDir, etag+".zip")
 		if _, err := os.Stat(destPath); err == nil {
+			logger.Info("package pull cache hit", "package", safeURI, "scheme", scheme, "minioPath", minioPath, "path", destPath, "etag", etag, "format", "zip")
 			return destPath, nil // cache hit, same content
 		}
 
+		logger.Info("package pull started", "package", safeURI, "scheme", scheme, "minioPath", minioPath, "path", destPath, "etag", etag)
 		cmd := exec.CommandContext(ctx, "mc", "cp", minioPath, destPath)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("failed to download %s from MinIO: %s: %w", minioPath, string(out), err)
 		}
+		logger.Info("package pull completed", "package", safeURI, "scheme", scheme, "minioPath", minioPath, "path", destPath, "etag", etag, "format", "zip")
 		return destPath, nil
 	}
 }
@@ -101,6 +136,7 @@ func (p *PackageResolver) ResolveAndExtract(ctx context.Context, uri, name strin
 	if uri == "" {
 		return "", nil
 	}
+	logger := log.FromContext(ctx)
 
 	resolved, err := p.Resolve(ctx, uri)
 	if err != nil {
@@ -119,6 +155,7 @@ func (p *PackageResolver) ResolveAndExtract(ctx context.Context, uri, name strin
 		return "", fmt.Errorf("create extract dir: %w", err)
 	}
 
+	logger.Info("package extract started", "name", name, "package", safePackageURI(uri), "archive", resolved, "targetDir", destDir, "format", "zip")
 	cmd := exec.CommandContext(ctx, "unzip", "-q", "-o", resolved, "-d", destDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("extract ZIP %s: %s: %w", resolved, string(out), err)
@@ -136,6 +173,7 @@ func (p *PackageResolver) ResolveAndExtract(ctx context.Context, uri, name strin
 // files between the local write and the mc mirror push), we push to MinIO FIRST from
 // the extracted directory (immune to background sync), then copy to the local agent dir.
 func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, workerName string, excludeMemory bool, storage oss.StorageClient) error {
+	logger := log.FromContext(ctx)
 	agentDir := fmt.Sprintf("/root/hiclaw-fs/agents/%s", workerName)
 	if err := os.MkdirAll(agentDir, 0755); err != nil {
 		return fmt.Errorf("create agent dir: %w", err)
@@ -158,6 +196,7 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 
 	configDir := filepath.Join(extractedDir, "config")
 	if info, err := os.Stat(configDir); err == nil && info.IsDir() {
+		logger.Info("package config directory detected", "worker", workerName, "path", configDir)
 		entries, _ := os.ReadDir(configDir)
 		for _, e := range entries {
 			if e.IsDir() {
@@ -170,14 +209,22 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 			src := filepath.Join(configDir, e.Name())
 			data, err := os.ReadFile(src)
 			if err != nil {
+				logger.Error(err, "package config file read failed; skipping", "worker", workerName, "path", src, "file", e.Name())
 				continue
 			}
 			if e.Name() == "AGENTS.md" {
+				fileSize := int64(len(data))
+				if info, err := e.Info(); err == nil {
+					fileSize = info.Size()
+				}
+				logger.Info("package AGENTS.md detected", "worker", workerName, "path", src, "fileSizeBytes", fileSize, "loadedBytes", len(data), "hasBuiltinMarkers", strings.Contains(string(data), "<!-- hiclaw-builtin-start -->"), "willWrapBuiltinMarkers", !strings.Contains(string(data), "<!-- hiclaw-builtin-start -->"))
 				data = wrapWithBuiltinMarkers(data)
+				logger.Info("package AGENTS.md prepared for storage", "worker", workerName, "path", src, "bytes", len(data), "hasBuiltinMarkers", strings.Contains(string(data), "<!-- hiclaw-builtin-start -->"))
 			}
 			configFiles = append(configFiles, fileEntry{name: e.Name(), data: data})
 		}
 	} else {
+		logger.Info("package config directory not found; checking root SOUL.md fallback", "worker", workerName, "path", configDir)
 		// Fallback: SOUL.md at root level
 		src := filepath.Join(extractedDir, "SOUL.md")
 		if data, err := os.ReadFile(src); err == nil {
@@ -200,12 +247,26 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 		}
 	}
 
+	configFileNames := make([]string, 0, len(configFiles))
+	for _, f := range configFiles {
+		configFileNames = append(configFileNames, f.name)
+	}
+	sort.Strings(configFileNames)
+	sort.Strings(configSubdirs)
+	skillNames := topLevelDirNames(skillsDir)
+	packageFiles, packageFileCount, packageFileListTruncated := listPackageFiles(extractedDir, 200)
+	hasCrons := cronData != nil
+	logger.Info("package layout detected", "worker", workerName, "extractedDir", extractedDir, "format", packagePathFormat(extractedDir), "configFiles", configFileNames, "configSubdirs", configSubdirs, "skills", skillNames, "hasCrons", hasCrons, "packageFileCount", packageFileCount, "packageFiles", packageFiles, "packageFileListTruncated", packageFileListTruncated, "isUpdate", excludeMemory)
+
 	// ── Phase 1: Push to MinIO FIRST from extracted dir (immune to background sync) ──
 
 	// Config files — when excludeMemory is true (update path), skip SOUL.md and AGENTS.md
 	// because DeployWorkerConfig handles them with proper inline override priority.
+	var pushedConfigFiles []string
+	var skippedConfigFiles []string
 	for _, f := range configFiles {
 		if excludeMemory && (f.name == "SOUL.md" || f.name == "AGENTS.md") {
+			skippedConfigFiles = append(skippedConfigFiles, f.name)
 			continue
 		}
 		useStorageClient := storage != nil
@@ -213,8 +274,60 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 		if !useStorageClient {
 			target = minioBase + "/" + f.name
 		}
-		if _, err := putPackageObjectSeedOnly(ctx, storage, useStorageClient, target, f.data); err != nil {
+		seeded, err := putPackageObjectSeedOnly(ctx, storage, useStorageClient, target, f.data)
+		if err != nil {
 			return fmt.Errorf("push %s to MinIO: %w", f.name, err)
+		}
+		if f.name == "AGENTS.md" && seeded {
+			logger.Info("package AGENTS.md pushed to storage", "worker", workerName, "target", target, "bytes", len(f.data), "storageClient", useStorageClient)
+		}
+		if seeded {
+			pushedConfigFiles = append(pushedConfigFiles, f.name)
+		}
+	}
+	if len(skippedConfigFiles) > 0 {
+		sort.Strings(skippedConfigFiles)
+		logger.Info("package config files skipped during package deploy", "worker", workerName, "files", skippedConfigFiles, "reason", "update path keeps SOUL.md and AGENTS.md under DeployWorkerConfig control")
+	}
+	if len(pushedConfigFiles) > 0 {
+		sort.Strings(pushedConfigFiles)
+		logger.Info("package config files pushed to storage", "worker", workerName, "files", pushedConfigFiles, "target", minioBase, "controllerManagedTarget", agentPrefix, "controllerManagedStorageClient", storage != nil)
+	}
+	if len(configSubdirs) > 0 && storage != nil {
+		var seededSubdirFiles []string
+		for _, dirName := range configSubdirs {
+			srcDir := filepath.Join(configDir, dirName)
+			if err := filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if entry.IsDir() {
+					return nil
+				}
+				if entry.Type()&os.ModeSymlink != 0 {
+					return nil
+				}
+				rel, err := filepath.Rel(configDir, path)
+				if err != nil {
+					return err
+				}
+				rel = filepath.ToSlash(rel)
+				target := agentPrefix + "/" + rel
+				seeded, err := putPackageFileSeedOnly(ctx, storage, path, target)
+				if err != nil {
+					return err
+				}
+				if seeded {
+					seededSubdirFiles = append(seededSubdirFiles, rel)
+				}
+				return nil
+			}); err != nil {
+				return fmt.Errorf("seed config directory %s to storage: %w", dirName, err)
+			}
+		}
+		if len(seededSubdirFiles) > 0 {
+			sort.Strings(seededSubdirFiles)
+			logger.Info("package config subdir files seeded to storage", "worker", workerName, "files", seededSubdirFiles, "target", agentPrefix)
 		}
 	}
 	if len(configSubdirs) > 0 && storage != nil {
@@ -242,8 +355,10 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 
 	// Skills
 	if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
+		target := minioBase + "/skills/"
 		if storage != nil {
-			if err := seedDirToStorage(ctx, storage, skillsDir, agentPrefix+"/skills"); err != nil {
+			target = agentPrefix + "/skills"
+			if err := seedDirToStorage(ctx, storage, skillsDir, target); err != nil {
 				return fmt.Errorf("seed skills to storage: %w", err)
 			}
 		} else {
@@ -252,23 +367,28 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 				return fmt.Errorf("mc mirror skills to MinIO: %s: %w", string(out), err)
 			}
 		}
+		logger.Info("package skills pushed to storage", "worker", workerName, "skills", skillNames, "target", target)
 	}
 
 	// Crons
 	if cronData != nil {
+		target := minioBase + "/.openclaw/cron/jobs.json"
 		if storage != nil {
-			if _, err := putPackageObjectSeedOnly(ctx, storage, true, agentPrefix+"/.openclaw/cron/jobs.json", cronData); err != nil {
+			target = agentPrefix + "/.openclaw/cron/jobs.json"
+			if _, err := putPackageObjectSeedOnly(ctx, storage, true, target, cronData); err != nil {
 				return fmt.Errorf("seed crons to storage: %w", err)
 			}
 		} else {
-			if err := mcPut(ctx, minioBase+"/.openclaw/cron/jobs.json", cronData); err != nil {
+			if err := mcPut(ctx, target, cronData); err != nil {
 				return fmt.Errorf("push crons to MinIO: %w", err)
 			}
 		}
+		logger.Info("package crons pushed to storage", "worker", workerName, "target", target)
 	}
 
 	// ── Phase 2: Seed local package files without overwriting runtime changes ──
 
+	var localConfigFiles []string
 	for _, f := range configFiles {
 		if excludeMemory && (f.name == "SOUL.md" || f.name == "AGENTS.md") {
 			continue
@@ -276,6 +396,11 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 		if _, err := writeFileSeedOnly(filepath.Join(agentDir, f.name), f.data); err != nil {
 			return fmt.Errorf("seed local %s: %w", f.name, err)
 		}
+		localConfigFiles = append(localConfigFiles, f.name)
+	}
+	if len(localConfigFiles) > 0 {
+		sort.Strings(localConfigFiles)
+		logger.Info("package config files copied to local agent dir", "worker", workerName, "files", localConfigFiles, "target", agentDir)
 	}
 	for _, dirName := range configSubdirs {
 		src := filepath.Join(configDir, dirName)
@@ -301,6 +426,7 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 		}
 	}
 
+	logger.Info("package files deployed", "worker", workerName, "storageTarget", minioBase, "controllerManagedTarget", agentPrefix, "localTarget", agentDir, "controllerManagedStorageClient", storage != nil)
 	return nil
 }
 
@@ -515,6 +641,67 @@ func getMinIOETag(ctx context.Context, minioPath string) string {
 		}
 	}
 	return ""
+}
+
+func safePackageURI(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	if username := u.User.Username(); username != "" {
+		u.User = url.User(username)
+	} else {
+		u.User = nil
+	}
+	return u.String()
+}
+
+func packagePathFormat(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "unknown"
+	}
+	if info.IsDir() {
+		return "directory"
+	}
+	if strings.EqualFold(filepath.Ext(path), ".zip") {
+		return "zip"
+	}
+	return "file"
+}
+
+func topLevelDirNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func listPackageFiles(root string, limit int) ([]string, int, bool) {
+	var files []string
+	count := 0
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		count++
+		if len(files) < limit {
+			if rel, err := filepath.Rel(root, path); err == nil {
+				files = append(files, rel)
+			}
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files, count, count > len(files)
 }
 
 // --- Private resolve methods ---

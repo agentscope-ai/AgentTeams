@@ -74,6 +74,12 @@ type TeamReconciler struct {
 	ResourcePrefix auth.ResourcePrefix
 }
 
+type teamAdminActor struct {
+	MatrixUserID string
+	Token        string
+	Username     string
+}
+
 func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
 	start := time.Now()
 	defer func() { metrics.Observe("team", start, reterr) }()
@@ -109,6 +115,42 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 	return r.reconcileTeamNormal(ctx, &team)
 }
 
+func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.Team) (teamAdminActor, error) {
+	if t.Spec.Admin == nil {
+		return teamAdminActor{}, nil
+	}
+	if strings.TrimSpace(t.Spec.Admin.Name) == "" {
+		return teamAdminActor{}, fmt.Errorf("team admin human name is required")
+	}
+
+	var human v1beta1.Human
+	key := client.ObjectKey{Name: t.Spec.Admin.Name, Namespace: t.Namespace}
+	if err := r.Get(ctx, key, &human); err != nil {
+		return teamAdminActor{}, fmt.Errorf("load team admin human %s/%s: %w", key.Namespace, key.Name, err)
+	}
+
+	username := human.Spec.EffectiveUsername(human.Name)
+	matrixUserID := r.Provisioner.MatrixUserID(username)
+	if t.Spec.Admin.MatrixUserID != "" && t.Spec.Admin.MatrixUserID != matrixUserID {
+		return teamAdminActor{}, fmt.Errorf("team admin matrixUserId %q does not match Human %s/%s matrix user %q",
+			t.Spec.Admin.MatrixUserID, key.Namespace, key.Name, matrixUserID)
+	}
+	if human.Status.InitialPassword == "" {
+		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no initial password; cannot obtain Matrix token",
+			key.Namespace, key.Name)
+	}
+
+	token, err := r.Provisioner.LoginAsHuman(ctx, username, human.Status.InitialPassword)
+	if err != nil {
+		return teamAdminActor{}, fmt.Errorf("login as team admin human %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	return teamAdminActor{
+		MatrixUserID: matrixUserID,
+		Token:        token,
+		Username:     username,
+	}, nil
+}
+
 // reconcileTeamNormal drives one convergence pass over a Team CR:
 //  1. Provision team-level infra (rooms, shared storage)
 //  2. Clean up stale members (in Status.Members but no longer desired)
@@ -138,13 +180,29 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	}
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
 	leaderRuntimeName := t.Spec.Leader.EffectiveWorkerName()
+	adminActor, err := r.resolveTeamAdminActor(ctx, t)
+	if err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
+	derivedTeam := t
+	if adminActor.MatrixUserID != "" {
+		derivedTeam = t.DeepCopy()
+		if derivedTeam.Spec.Admin == nil {
+			derivedTeam.Spec.Admin = &v1beta1.TeamAdminSpec{}
+		}
+		derivedTeam.Spec.Admin.MatrixUserID = adminActor.MatrixUserID
+	}
 
 	// --- Step 1: Team-level infrastructure ---
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
-		TeamName:    teamRuntimeName,
-		LeaderName:  leaderRuntimeName,
-		WorkerNames: workerRuntimeNames,
-		AdminSpec:   t.Spec.Admin,
+		TeamName:             teamRuntimeName,
+		LeaderName:           leaderRuntimeName,
+		LeaderCredentialName: t.Spec.Leader.Name,
+		WorkerNames:          workerRuntimeNames,
+		AdminSpec:            derivedTeam.Spec.Admin,
+		HumanMembers:         t.Spec.HumanMembers,
+		TeamAdminActorToken:  adminActor.Token,
+		TeamAdminActorName:   adminActor.Username,
 	})
 	if err != nil {
 		return r.failTeam(ctx, t, patchBase, fmt.Sprintf("provision team rooms: %v", err))
@@ -162,7 +220,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	}
 
 	// --- Step 3: Stale cleanup ---
-	desiredMembers := buildDesiredMembers(t, r.ControllerName)
+	desiredMembers := buildDesiredMembers(derivedTeam, r.ControllerName)
 	desiredNames := make(map[string]struct{}, len(desiredMembers))
 	for _, m := range desiredMembers {
 		desiredNames[m.Name] = struct{}{}
@@ -215,20 +273,18 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	// Must run before member reconciliation so renderAndPushSoulTemplate
 	// pushes the final SOUL.md to MinIO before the leader container starts
 	// and before DeployWorkerConfig would otherwise race with it.
-	var teamAdminID string
-	if t.Spec.Admin != nil {
-		teamAdminID = t.Spec.Admin.MatrixUserID
-	}
 	if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
-		LeaderName:        leaderRuntimeName,
-		Role:              RoleTeamLeader.String(),
-		TeamName:          teamRuntimeName,
-		TeamRoomID:        rooms.TeamRoomID,
-		LeaderDMRoomID:    rooms.LeaderDMRoomID,
-		HeartbeatEvery:    leaderHeartbeatEvery(t),
-		WorkerIdleTimeout: t.Spec.Leader.WorkerIdleTimeout,
-		TeamWorkers:       workerRuntimeNames,
-		TeamAdminID:       teamAdminID,
+		LeaderName:         leaderRuntimeName,
+		Role:               RoleTeamLeader.String(),
+		TeamName:           teamRuntimeName,
+		TeamRoomID:         rooms.TeamRoomID,
+		LeaderDMRoomID:     rooms.LeaderDMRoomID,
+		HeartbeatEvery:     leaderHeartbeatEvery(t),
+		WorkerIdleTimeout:  t.Spec.Leader.WorkerIdleTimeout,
+		TeamWorkers:        workerRuntimeNames,
+		TeamAdminID:        teamAdminMatrixID(derivedTeam),
+		TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
+		LeaderSoul:         t.Spec.Leader.Soul,
 	}); err != nil {
 		logger.Error(err, "leader coordination context injection failed (non-fatal)")
 	}
@@ -286,7 +342,8 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 			Workers:        workerNames,
 			TeamRoomID:     rooms.TeamRoomID,
 			LeaderDMRoomID: rooms.LeaderDMRoomID,
-			Admin:          teamAdminRegistryEntry(t.Spec.Admin),
+			Admin:          teamAdminRegistryEntry(derivedTeam.Spec.Admin),
+			Members:        teamMemberRegistryEntries(t.Spec.HumanMembers),
 		}); err != nil {
 			logger.Error(err, "teams-registry update failed (non-fatal)")
 		}
@@ -495,8 +552,8 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 			// For "observed but no longer in Spec.Workers" entries (stale),
 			// the inner loop finds no match and mctx.Spec stays zero. The
 			// same rationale as the stale cleanup in reconcileTeamNormal
-			// applies: DeleteConsumer cascades MCP authorization removal by
-			// consumer key, so losing Spec.McpServers here is acceptable.
+			// applies: deleting gateway and runtime resources here does not
+			// need Spec.McpServers, which only feeds mcporter config writes.
 			for _, w := range t.Spec.Workers {
 				if w.Name == name {
 					mctx.Spec = teamWorkerSpecToWorkerSpec(t, w)
@@ -723,48 +780,47 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 	var leaderHeartbeat *agentconfig.HeartbeatConfig
 	if t.Spec.Leader.Heartbeat != nil && t.Spec.Leader.Heartbeat.Enabled {
 		every := t.Spec.Leader.Heartbeat.Every
-		if every == "" {
-			every = "30m"
-		}
 		leaderHeartbeat = &agentconfig.HeartbeatConfig{
 			Enabled: true,
 			Every:   every,
 		}
 	}
 	members = append(members, MemberContext{
-		Name:              t.Spec.Leader.Name,
-		RuntimeName:       t.Spec.Leader.EffectiveWorkerName(),
-		Namespace:         t.Namespace,
-		Role:              RoleTeamLeader,
-		Spec:              leaderSpec,
-		Generation:        t.Generation,
-		SpecChanged:       memberSpecChanged(t, RoleTeamLeader, t.Spec.Leader.Name),
-		IsUpdate:          leaderObserved,
-		TeamName:          teamRuntimeName,
-		TeamLeaderName:    "",
-		TeamAdminMatrixID: teamAdminMatrixID(t),
-		PodLabels:         memberLabels(RoleTeamLeader, t.Spec.Leader.Labels),
-		Owner:             t,
-		Heartbeat:         leaderHeartbeat,
+		Name:               t.Spec.Leader.Name,
+		RuntimeName:        t.Spec.Leader.EffectiveWorkerName(),
+		Namespace:          t.Namespace,
+		Role:               RoleTeamLeader,
+		Spec:               leaderSpec,
+		Generation:         t.Generation,
+		SpecChanged:        memberSpecChanged(t, RoleTeamLeader, t.Spec.Leader.Name),
+		IsUpdate:           leaderObserved,
+		TeamName:           teamRuntimeName,
+		TeamLeaderName:     "",
+		TeamAdminMatrixID:  teamAdminMatrixID(t),
+		TeamCoordinatorIDs: teamCoordinatorIDs(t),
+		PodLabels:          memberLabels(RoleTeamLeader, t.Spec.Leader.Labels),
+		Owner:              t,
+		Heartbeat:          leaderHeartbeat,
 	})
 
 	for _, w := range t.Spec.Workers {
 		workerObserved := isObserved(w.Name)
 		spec := teamWorkerSpecToWorkerSpec(t, w)
 		members = append(members, MemberContext{
-			Name:              w.Name,
-			RuntimeName:       w.EffectiveWorkerName(),
-			Namespace:         t.Namespace,
-			Role:              RoleTeamWorker,
-			Spec:              spec,
-			Generation:        t.Generation,
-			SpecChanged:       memberSpecChanged(t, RoleTeamWorker, w.Name),
-			IsUpdate:          workerObserved,
-			TeamName:          teamRuntimeName,
-			TeamLeaderName:    t.Spec.Leader.EffectiveWorkerName(),
-			TeamAdminMatrixID: teamAdminMatrixID(t),
-			PodLabels:         memberLabels(RoleTeamWorker, w.Labels),
-			Owner:             t,
+			Name:               w.Name,
+			RuntimeName:        w.EffectiveWorkerName(),
+			Namespace:          t.Namespace,
+			Role:               RoleTeamWorker,
+			Spec:               spec,
+			Generation:         t.Generation,
+			SpecChanged:        memberSpecChanged(t, RoleTeamWorker, w.Name),
+			IsUpdate:           workerObserved,
+			TeamName:           teamRuntimeName,
+			TeamLeaderName:     t.Spec.Leader.EffectiveWorkerName(),
+			TeamAdminMatrixID:  teamAdminMatrixID(t),
+			TeamCoordinatorIDs: teamCoordinatorIDs(t),
+			PodLabels:          memberLabels(RoleTeamWorker, w.Labels),
+			Owner:              t,
 		})
 	}
 	return members
@@ -870,7 +926,7 @@ func hashMemberSourceSpec(t *v1beta1.Team, role MemberRole, name string) string 
 }
 
 // leaderWorkerSpec projects a LeaderSpec into WorkerSpec with merged channel
-// policy (team leader can @ all members + admin).
+// policy (team leader can @ all workers + human coordinators).
 func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, t.Spec.Leader.ChannelPolicy)
 	workerNames := make([]string, 0, len(t.Spec.Workers))
@@ -878,9 +934,11 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 		workerNames = append(workerNames, w.EffectiveWorkerName())
 	}
 	policy = appendGroupAllowExtra(policy, workerNames...)
-	if adminID := teamAdminMatrixID(t); adminID != "" {
-		policy = appendGroupAllowExtra(policy, adminID)
-		policy = appendDmAllowExtra(policy, adminID)
+	if coordinatorIDs := teamCoordinatorIDs(t); len(coordinatorIDs) > 0 {
+		policy = appendGroupAllowExtra(policy, coordinatorIDs...)
+	}
+	if teamAdminID := teamAdminMatrixID(t); teamAdminID != "" {
+		policy = appendDmAllowExtra(policy, teamAdminID)
 	}
 	return v1beta1.WorkerSpec{
 		Model:         t.Spec.Leader.Model,
@@ -889,8 +947,9 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 		Identity:      t.Spec.Leader.Identity,
 		Soul:          t.Spec.Leader.Soul,
 		Agents:        t.Spec.Leader.Agents,
-		McpServers:    t.Spec.Leader.McpServers,
 		Package:       t.Spec.Leader.Package,
+		RemoteSkills:  t.Spec.Leader.RemoteSkills,
+		McpServers:    t.Spec.Leader.McpServers,
 		ChannelPolicy: policy,
 		State:         t.Spec.Leader.State,
 		Env:           t.Spec.Leader.Env,
@@ -900,7 +959,7 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 // teamWorkerSpecToWorkerSpec projects a TeamWorkerSpec into WorkerSpec with
 // the policy merge rules:
 //   - leader is always on the worker's groupAllow
-//   - team admin (if any) is on the worker's groupAllow
+//   - team admin and coordinator members are on the worker's groupAllow
 //   - if Team.Spec.PeerMentions is true (default), all peers are groupAllow too
 //
 // Runtime is passed through from TeamWorkerSpec. An empty value is intentional
@@ -912,8 +971,8 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1beta1.WorkerSpec {
 	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, w.ChannelPolicy)
 	policy = appendGroupAllowExtra(policy, t.Spec.Leader.EffectiveWorkerName())
-	if adminID := teamAdminMatrixID(t); adminID != "" {
-		policy = appendGroupAllowExtra(policy, adminID)
+	if coordinatorIDs := teamCoordinatorIDs(t); len(coordinatorIDs) > 0 {
+		policy = appendGroupAllowExtra(policy, coordinatorIDs...)
 	}
 	peerMentions := t.Spec.PeerMentions == nil || *t.Spec.PeerMentions
 	if peerMentions {
@@ -961,6 +1020,45 @@ func teamAdminMatrixID(t *v1beta1.Team) string {
 		return ""
 	}
 	return t.Spec.Admin.MatrixUserID
+}
+
+func teamCoordinatorIDs(t *v1beta1.Team) []string {
+	ids := make([]string, 0, 1+len(t.Spec.HumanMembers))
+	if adminID := teamAdminMatrixID(t); adminID != "" {
+		ids = append(ids, adminID)
+	}
+	for _, member := range t.Spec.HumanMembers {
+		if !teamMemberIsCoordinator(member) {
+			continue
+		}
+		switch {
+		case member.MatrixUserID != "":
+			ids = append(ids, member.MatrixUserID)
+		case member.Name != "":
+			ids = append(ids, member.Name)
+		}
+	}
+	return uniqueTeamStrings(ids)
+}
+
+func teamMemberIsCoordinator(member v1beta1.TeamMemberSpec) bool {
+	return member.Role == "" || member.Role == "coordinator"
+}
+
+func uniqueTeamStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -1067,4 +1165,19 @@ func teamAdminRegistryEntry(admin *v1beta1.TeamAdminSpec) *service.TeamAdminEntr
 		Name:         admin.Name,
 		MatrixUserID: admin.MatrixUserID,
 	}
+}
+
+func teamMemberRegistryEntries(members []v1beta1.TeamMemberSpec) []service.TeamMemberEntry {
+	if len(members) == 0 {
+		return nil
+	}
+	entries := make([]service.TeamMemberEntry, 0, len(members))
+	for _, member := range members {
+		entries = append(entries, service.TeamMemberEntry{
+			Name:         member.Name,
+			MatrixUserID: member.MatrixUserID,
+			Role:         member.Role,
+		})
+	}
+	return entries
 }

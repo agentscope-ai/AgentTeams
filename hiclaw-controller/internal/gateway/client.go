@@ -43,6 +43,10 @@ type Client interface {
 	// EnsureAIProvider creates an LLM provider configuration.
 	EnsureAIProvider(ctx context.Context, req AIProviderRequest) error
 
+	// EnsureStreamIdleTimeout updates the gateway stream idle timeout used by
+	// long-running LLM streaming responses.
+	EnsureStreamIdleTimeout(ctx context.Context, seconds int) error
+
 	// EnsureAIRoute creates an AI route with consumer auth.
 	EnsureAIRoute(ctx context.Context, req AIRouteRequest) error
 

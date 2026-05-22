@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // EnsureHumanUser registers (or logs in) a Matrix account for a Human CR.
@@ -65,5 +66,7 @@ func (p *Provisioner) KickFromRoom(ctx context.Context, roomID, userID, reason s
 // holds a valid user token (password may be stale) and must rely on the
 // admin bot instead of /leave. Fire-and-forget at the bot layer.
 func (p *Provisioner) ForceLeaveRoom(ctx context.Context, userID, roomID string) error {
-	return p.matrix.AdminCommand(ctx, fmt.Sprintf("!admin users force-leave-room %s %s", userID, roomID))
+	cmd := fmt.Sprintf("!admin users force-leave-room %s %s", userID, roomID)
+	log.FromContext(ctx).Info("sending tuwunel force-leave-room admin command", "room", roomID, "user", userID, "command", cmd)
+	return p.matrix.AdminCommand(ctx, cmd)
 }

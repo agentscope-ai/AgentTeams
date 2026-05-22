@@ -315,14 +315,15 @@ func TestHashMemberSourceSpec_IgnoresPeerChanges(t *testing.T) {
 		Name: "alpha-qa", Model: "gpt-4o",
 	})
 	after.Spec.Admin = &v1beta1.TeamAdminSpec{Name: "alice", MatrixUserID: "@alice:example.com"}
+	after.Spec.HumanMembers = []v1beta1.TeamMemberSpec{{Name: "bob", MatrixUserID: "@bob:example.com", Role: "coordinator"}}
 
 	if hashMemberSourceSpec(base, RoleTeamLeader, "alpha-lead") !=
 		hashMemberSourceSpec(after, RoleTeamLeader, "alpha-lead") {
-		t.Errorf("leader hash changed after adding worker+admin; expected stable (no user-authored change)")
+		t.Errorf("leader hash changed after adding worker+admin+member; expected stable (no user-authored change)")
 	}
 	if hashMemberSourceSpec(base, RoleTeamWorker, "alpha-dev") !=
 		hashMemberSourceSpec(after, RoleTeamWorker, "alpha-dev") {
-		t.Errorf("alpha-dev hash changed after adding peer+admin; expected stable")
+		t.Errorf("alpha-dev hash changed after adding peer+admin+member; expected stable")
 	}
 
 	// Sanity: a real source change DOES flip the hash.

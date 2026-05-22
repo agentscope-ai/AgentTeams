@@ -39,12 +39,13 @@ type Config struct {
 	StorageProvider string // "minio"   | "oss"
 
 	// Gateway initialization (only consulted when GatewayProvider == "higress")
-	LLMProvider   string // e.g. "qwen", "openai"
-	LLMAPIKey     string
-	LLMApiURL     string // provider-specific base URL (optional)
-	OpenAIBaseURL string // custom base URL for openai-compat providers
-	TuwunelURL    string // internal Tuwunel URL, e.g. http://tuwunel:6167
-	ElementWebURL string // internal Element Web URL (optional)
+	LLMProvider                string // e.g. "qwen", "openai"
+	LLMAPIKey                  string
+	LLMApiURL                  string // provider-specific base URL (optional)
+	OpenAIBaseURL              string // custom base URL for openai-compat providers
+	AIStreamIdleTimeoutSeconds int
+	TuwunelURL                 string // internal Tuwunel URL, e.g. http://tuwunel:6167
+	ElementWebURL              string // internal Element Web URL (optional)
 }
 
 func (c Config) managesGatewayRoutes() bool {
@@ -258,6 +259,14 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 
 	// 3. LLM Provider
 	if cfg.LLMAPIKey != "" {
+		streamIdleTimeout := cfg.AIStreamIdleTimeoutSeconds
+		if streamIdleTimeout <= 0 {
+			streamIdleTimeout = 900
+		}
+		if err := i.Gateway.EnsureStreamIdleTimeout(ctx, streamIdleTimeout); err != nil {
+			logger.Error(err, "failed to update Higress stream idle timeout (non-fatal)")
+		}
+
 		provider := cfg.LLMProvider
 		if provider == "" {
 			provider = "qwen"

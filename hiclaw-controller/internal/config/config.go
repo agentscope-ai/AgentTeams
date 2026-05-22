@@ -137,9 +137,10 @@ type Config struct {
 	ModelMaxTokens     int
 
 	// LLM provider (for Gateway initialization)
-	LLMProvider   string
-	LLMAPIKey     string
-	OpenAIBaseURL string // HICLAW_OPENAI_BASE_URL — custom base URL for openai-compat providers
+	LLMProvider                string
+	LLMAPIKey                  string
+	OpenAIBaseURL              string // HICLAW_OPENAI_BASE_URL — custom base URL for openai-compat providers
+	AIStreamIdleTimeoutSeconds int    // HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS
 
 	// Element Web URL (for Gateway route initialization)
 	ElementWebURL string
@@ -315,10 +316,11 @@ func LoadConfig() *Config {
 		ModelContextWindow: envOrDefaultInt("HICLAW_MODEL_CONTEXT_WINDOW", 0),
 		ModelMaxTokens:     envOrDefaultInt("HICLAW_MODEL_MAX_TOKENS", 0),
 
-		LLMProvider:   envOrDefault("HICLAW_LLM_PROVIDER", "qwen"),
-		LLMAPIKey:     os.Getenv("HICLAW_LLM_API_KEY"),
-		OpenAIBaseURL: os.Getenv("HICLAW_OPENAI_BASE_URL"),
-		ElementWebURL: os.Getenv("HICLAW_ELEMENT_WEB_URL"),
+		LLMProvider:                envOrDefault("HICLAW_LLM_PROVIDER", "qwen"),
+		LLMAPIKey:                  os.Getenv("HICLAW_LLM_API_KEY"),
+		OpenAIBaseURL:              os.Getenv("HICLAW_OPENAI_BASE_URL"),
+		AIStreamIdleTimeoutSeconds: envOrDefaultInt("HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS", 900),
+		ElementWebURL:              os.Getenv("HICLAW_ELEMENT_WEB_URL"),
 
 		UserLanguage: envOrDefault("HICLAW_LANGUAGE", "zh"),
 		UserTimezone: envOrDefault("TZ", "Asia/Shanghai"),
@@ -653,6 +655,9 @@ func (c *Config) ManagerAgentEnv() map[string]string {
 	setIfNonEmpty("HICLAW_EMBEDDING_MODEL", c.EmbeddingModel)
 	setIfNonEmpty("HICLAW_LLM_PROVIDER", c.LLMProvider)
 	setIfNonEmpty("HICLAW_LLM_API_KEY", c.LLMAPIKey)
+	if c.AIStreamIdleTimeoutSeconds > 0 {
+		env["HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS"] = strconv.Itoa(c.AIStreamIdleTimeoutSeconds)
+	}
 	setIfNonEmpty("HICLAW_ELEMENT_WEB_URL", c.ElementWebURL)
 	if c.MatrixE2EE {
 		env["HICLAW_MATRIX_E2EE"] = "1"

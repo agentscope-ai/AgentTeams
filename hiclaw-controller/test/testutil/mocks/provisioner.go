@@ -26,6 +26,7 @@ type MockProvisioner struct {
 	LeaveAllWorkerRoomsFn      func(ctx context.Context, workerName string) error
 	DeleteWorkerRoomFn         func(ctx context.Context, roomID string) error
 	MatrixUserIDFn             func(name string) string
+	LoginAsHumanFn             func(ctx context.Context, username, password string) (string, error)
 	ProvisionTeamRoomsFn       func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
 	DeleteTeamRoomAliasesFn    func(ctx context.Context, teamName, leaderName string) error
 	DeleteWorkerRoomAliasFn    func(ctx context.Context, workerName string) error
@@ -44,6 +45,7 @@ type MockProvisioner struct {
 		RequestSAToken           []string
 		LeaveAllWorkerRooms      []string
 		DeleteWorkerRoom         []string
+		LoginAsHuman             []humanLoginCall
 		ProvisionTeamRooms       []service.TeamRoomRequest
 		DeleteTeamRoomAliases    []string
 		DeleteWorkerRoomAlias    []string
@@ -53,6 +55,11 @@ type MockProvisioner struct {
 type workerCredentialCall struct {
 	CredentialName string
 	WorkerName     string
+}
+
+type humanLoginCall struct {
+	Username string
+	Password string
 }
 
 func NewMockProvisioner() *MockProvisioner {
@@ -78,6 +85,7 @@ func (m *MockProvisioner) Reset() {
 	m.LeaveAllWorkerRoomsFn = nil
 	m.DeleteWorkerRoomFn = nil
 	m.MatrixUserIDFn = nil
+	m.LoginAsHumanFn = nil
 	m.ProvisionTeamRoomsFn = nil
 	m.DeleteTeamRoomAliasesFn = nil
 	m.DeleteWorkerRoomAliasFn = nil
@@ -105,6 +113,7 @@ func (m *MockProvisioner) clearCallsLocked() {
 		RequestSAToken           []string
 		LeaveAllWorkerRooms      []string
 		DeleteWorkerRoom         []string
+		LoginAsHuman             []humanLoginCall
 		ProvisionTeamRooms       []service.TeamRoomRequest
 		DeleteTeamRoomAliases    []string
 		DeleteWorkerRoomAlias    []string
@@ -156,17 +165,6 @@ func (m *MockProvisioner) RefreshCredentials(ctx context.Context, workerName str
 	}, nil
 }
 
-func (m *MockProvisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error {
-	m.mu.Lock()
-	m.Calls.EnsureWorkerGatewayAuth = append(m.Calls.EnsureWorkerGatewayAuth, workerName)
-	fn := m.EnsureWorkerGatewayAuthFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, workerName, gatewayKey)
-	}
-	return nil
-}
-
 func (m *MockProvisioner) RefreshWorkerCredentials(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error) {
 	m.mu.Lock()
 	m.Calls.RefreshWorkerCredentials = append(m.Calls.RefreshWorkerCredentials, workerCredentialCall{
@@ -184,6 +182,17 @@ func (m *MockProvisioner) RefreshWorkerCredentials(ctx context.Context, credenti
 		MinIOPassword:  "mock-minio-pw",
 		MatrixPassword: "mock-matrix-pw",
 	}, nil
+}
+
+func (m *MockProvisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error {
+	m.mu.Lock()
+	m.Calls.EnsureWorkerGatewayAuth = append(m.Calls.EnsureWorkerGatewayAuth, workerName)
+	fn := m.EnsureWorkerGatewayAuthFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, workerName, gatewayKey)
+	}
+	return nil
 }
 
 func (m *MockProvisioner) ReconcileExpose(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error) {
@@ -275,13 +284,21 @@ func (m *MockProvisioner) DeleteWorkerRoom(ctx context.Context, roomID string) e
 }
 
 func (m *MockProvisioner) MatrixUserID(name string) string {
-	m.mu.Lock()
-	fn := m.MatrixUserIDFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(name)
+	if m.MatrixUserIDFn != nil {
+		return m.MatrixUserIDFn(name)
 	}
 	return "@" + name + ":localhost"
+}
+
+func (m *MockProvisioner) LoginAsHuman(ctx context.Context, username, password string) (string, error) {
+	m.mu.Lock()
+	m.Calls.LoginAsHuman = append(m.Calls.LoginAsHuman, humanLoginCall{Username: username, Password: password})
+	fn := m.LoginAsHumanFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, username, password)
+	}
+	return "mock-human-token-" + username, nil
 }
 
 func (m *MockProvisioner) ProvisionTeamRooms(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error) {

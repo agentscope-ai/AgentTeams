@@ -77,13 +77,25 @@ type Client interface {
 	// Uses an admin access token internally.
 	ListRoomMembers(ctx context.Context, roomID string) ([]RoomMember, error)
 
+	// ListRoomMembersWithToken is the same operation using the supplied
+	// access token. The token's user must be allowed to read room state.
+	ListRoomMembersWithToken(ctx context.Context, roomID, userToken string) ([]RoomMember, error)
+
 	// InviteToRoom invites userID to roomID using an admin access token.
 	// Idempotent: returns nil if the user is already joined/invited.
 	InviteToRoom(ctx context.Context, roomID, userID string) error
 
+	// InviteToRoomWithToken invites userID to roomID using the supplied token.
+	// The token's user must already be joined in the room.
+	InviteToRoomWithToken(ctx context.Context, roomID, userID, inviterToken string) error
+
 	// KickFromRoom removes userID from roomID using an admin access token.
 	// Idempotent: returns nil if the user is not currently in the room.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
+
+	// KickFromRoomWithToken removes userID from roomID using the supplied token.
+	// The token's user must be joined and have enough power in the room.
+	KickFromRoomWithToken(ctx context.Context, roomID, userID, reason, kickerToken string) error
 
 	// UserID builds a full Matrix user ID from a localpart.
 	UserID(localpart string) string
@@ -528,6 +540,13 @@ func (c *TuwunelClient) ListRoomMembers(ctx context.Context, roomID string) ([]R
 	if err != nil {
 		return nil, fmt.Errorf("list members %s: %w", roomID, err)
 	}
+	return c.ListRoomMembersWithToken(ctx, roomID, token)
+}
+
+func (c *TuwunelClient) ListRoomMembersWithToken(ctx context.Context, roomID, userToken string) ([]RoomMember, error) {
+	if userToken == "" {
+		return nil, fmt.Errorf("list members %s: empty user token", roomID)
+	}
 	encodedRoom := encodeRoomID(roomID)
 
 	var resp struct {
@@ -543,7 +562,7 @@ func (c *TuwunelClient) ListRoomMembers(ctx context.Context, roomID string) ([]R
 
 	statusCode, respBody, err := c.doJSON(ctx, http.MethodGet,
 		fmt.Sprintf("/_matrix/client/v3/rooms/%s/members", encodedRoom),
-		token, nil, &resp)
+		userToken, nil, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("list members %s: %w", roomID, err)
 	}
@@ -573,6 +592,13 @@ func (c *TuwunelClient) InviteToRoom(ctx context.Context, roomID, userID string)
 	if err != nil {
 		return fmt.Errorf("invite %s to %s: %w", userID, roomID, err)
 	}
+	return c.InviteToRoomWithToken(ctx, roomID, userID, token)
+}
+
+func (c *TuwunelClient) InviteToRoomWithToken(ctx context.Context, roomID, userID, inviterToken string) error {
+	if inviterToken == "" {
+		return fmt.Errorf("invite %s to %s: empty inviter token", userID, roomID)
+	}
 	encodedRoom := encodeRoomID(roomID)
 
 	var resp struct {
@@ -582,7 +608,7 @@ func (c *TuwunelClient) InviteToRoom(ctx context.Context, roomID, userID string)
 
 	statusCode, respBody, err := c.doJSON(ctx, http.MethodPost,
 		fmt.Sprintf("/_matrix/client/v3/rooms/%s/invite", encodedRoom),
-		token, map[string]string{"user_id": userID}, &resp)
+		inviterToken, map[string]string{"user_id": userID}, &resp)
 	if err != nil {
 		return fmt.Errorf("invite %s to %s: %w", userID, roomID, err)
 	}
@@ -605,6 +631,13 @@ func (c *TuwunelClient) KickFromRoom(ctx context.Context, roomID, userID, reason
 	if err != nil {
 		return fmt.Errorf("kick %s from %s: %w", userID, roomID, err)
 	}
+	return c.KickFromRoomWithToken(ctx, roomID, userID, reason, token)
+}
+
+func (c *TuwunelClient) KickFromRoomWithToken(ctx context.Context, roomID, userID, reason, kickerToken string) error {
+	if kickerToken == "" {
+		return fmt.Errorf("kick %s from %s: empty kicker token", userID, roomID)
+	}
 	encodedRoom := encodeRoomID(roomID)
 
 	body := map[string]string{"user_id": userID}
@@ -619,7 +652,7 @@ func (c *TuwunelClient) KickFromRoom(ctx context.Context, roomID, userID, reason
 
 	statusCode, respBody, err := c.doJSON(ctx, http.MethodPost,
 		fmt.Sprintf("/_matrix/client/v3/rooms/%s/kick", encodedRoom),
-		token, body, &resp)
+		kickerToken, body, &resp)
 	if err != nil {
 		return fmt.Errorf("kick %s from %s: %w", userID, roomID, err)
 	}

@@ -169,6 +169,55 @@ else
     log "  WARNING: Could not obtain admin token — admin will need to accept invite manually"
 fi
 
+_worker_auto_join() {
+    local worker="$1"
+    local room_id="$2"
+    local creds_file="/data/worker-creds/${worker}.env"
+    local worker_token=""
+    local room_enc=""
+    local WORKER_PASSWORD=""
+    local WORKER_MATRIX_TOKEN=""
+
+    if [ -z "${worker}" ] || [ -z "${room_id}" ]; then
+        return 0
+    fi
+
+    if [ -f "${creds_file}" ]; then
+        # shellcheck disable=SC1090
+        source "${creds_file}"
+    fi
+
+    if [ -n "${WORKER_PASSWORD}" ]; then
+        worker_token=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+            -H 'Content-Type: application/json' \
+            -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${worker}"'"},"password":"'"${WORKER_PASSWORD}"'"}' \
+            2>/dev/null | jq -r '.access_token // empty')
+    elif [ -n "${WORKER_MATRIX_TOKEN}" ]; then
+        worker_token="${WORKER_MATRIX_TOKEN}"
+    fi
+
+    if [ -z "${worker_token}" ]; then
+        log "  WARNING: Could not obtain Matrix token for worker ${worker} — worker will need to accept project room invite"
+        return 0
+    fi
+
+    room_enc=$(echo "${room_id}" | sed 's/!/%21/g')
+    if curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
+        -H "Authorization: Bearer ${worker_token}" \
+        -H 'Content-Type: application/json' \
+        -d '{}' > /dev/null 2>&1; then
+        log "  Worker ${worker} auto-joined project room"
+    else
+        log "  WARNING: Worker ${worker} failed to auto-join project room"
+    fi
+}
+
+for worker in "${WORKER_ARR[@]}"; do
+    worker=$(echo "${worker}" | tr -d ' ')
+    [ -z "${worker}" ] && continue
+    _worker_auto_join "${worker}" "${ROOM_ID}"
+done
+
 # ============================================================
 # Step 3: Add Workers to Manager's groupAllowFrom
 # ============================================================

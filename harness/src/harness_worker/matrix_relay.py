@@ -99,19 +99,25 @@ class MatrixRelay:
 
         full_message = context + body
 
-        try:
-            await self.client.room_typing(room.room_id, typing=True, timeout=60000)
-        except Exception:
-            pass
+        async def _typing_keepalive(room_id: str) -> None:
+            """Renew typing indicator every 30 s so it doesn't expire mid-run."""
+            while True:
+                try:
+                    await self.client.room_typing(room_id, typing_state=True, timeout=40_000)
+                except Exception:
+                    pass
+                await asyncio.sleep(30)
 
+        keepalive = asyncio.create_task(_typing_keepalive(room.room_id))
         try:
             reply, new_sid = await self.on_invoke(full_message, None)
         except Exception as exc:
             logger.error("invoke failed: %s", exc)
             reply = f"Sorry, an error occurred: {exc}"
         finally:
+            keepalive.cancel()
             try:
-                await self.client.room_typing(room.room_id, typing=False)
+                await self.client.room_typing(room.room_id, typing_state=False)
             except Exception:
                 pass
 

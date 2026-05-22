@@ -26,4 +26,4 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - fix(copaw): require slash-prefixed runtime control commands and normalize Element double-slash commands.
 - fix(manager): quote coding CLI skill frontmatter descriptions that contain colons.
 - feat(controller): separate CR resource names from runtime worker names across controller identity, credentials, storage defaults, and readiness reporting.
-- feat(controller): support Team human coordinator members, team-admin-owned Matrix rooms, and leader/worker remote skills.
+- feat(controller): support Team human coordinator members, team-admin-owned Matrix rooms, and leader/worker remote skills; document coordinators as Team Room participants only.

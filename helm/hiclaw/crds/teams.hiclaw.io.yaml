@@ -56,7 +56,7 @@ spec:
                       description: "Matrix user ID (e.g. @john:domain)"
                 humanMembers:
                   type: array
-                  description: "Additional human members of this Team. In this version, role=coordinator can enter Team rooms and assign work like the Team admin."
+                  description: "Additional human members of this Team. In this version, role=coordinator joins the Team Room and can assign work there like the Team admin."
                   items:
                     type: object
                     required: [name]
@@ -70,7 +70,7 @@ spec:
                       role:
                         type: string
                         enum: [coordinator]
-                        description: "Human member role. coordinator can @mention the leader/workers and enter the leader DM."
+                        description: "Human member role. coordinator can @mention the leader/workers in the Team Room; Leader DM remains limited to the Team admin and leader."
                 leader:
                   type: object
                   required: [name]

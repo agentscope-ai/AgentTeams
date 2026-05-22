@@ -215,7 +215,7 @@ spec:
 | `spec.peerMentions` | bool | 否 | 为 `true`（默认）时，团队 Worker 可在群房间中互相 @mention |
 | `spec.channelPolicy` | object | 否 | 团队级群聊/DM 允许与拒绝列表覆盖（字段形状与 Worker 的 `channelPolicy` 相同） |
 | `spec.admin` | object | 否 | 团队专属人类管理员（须含 `name`；可选 `matrixUserId`）。省略则使用全局 Admin |
-| `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。当前版本支持 `role: coordinator`，可像 Team Admin 一样进入团队房间并分派任务 |
+| `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。当前版本支持 `role: coordinator`，可进入 Team Room 并像 Team Admin 一样在其中分派任务 |
 | `spec.leader` | object | 是 | Team Leader 配置 |
 | `spec.workers` | []object | 是 | Team Worker 列表 |
 
@@ -345,7 +345,7 @@ spec:
 
 ### Team Members
 
-使用 `spec.humanMembers` 添加属于 Team 的真人成员，这些成员不是 Worker。第一版支持的成员角色是 `coordinator`，语义沿用当前 Team Admin 的交互模型：成员会被邀请进入 Team Room 和 Leader DM，Leader/Worker 会把他们的 @mention 当作授权任务分派处理。
+使用 `spec.humanMembers` 添加属于 Team 的真人成员，这些成员不是 Worker。第一版支持的成员角色是 `coordinator`：成员会被邀请进入 Team Room，Leader/Worker 会把他们在 Team Room 中的 @mention 当作授权任务分派处理。Leader DM 仍只保留 Team Admin 和 Leader。
 
 ```yaml
 spec:

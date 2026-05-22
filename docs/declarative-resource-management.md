@@ -217,7 +217,7 @@ spec:
 | `spec.peerMentions` | bool | No | If `true` (default), team Workers may @mention each other in group rooms |
 | `spec.channelPolicy` | object | No | Team-wide overrides for group/DM allow-deny lists (same shape as Worker `channelPolicy`) |
 | `spec.admin` | object | No | Team-specific human admin (`name` required; `matrixUserId` optional). Defaults to global Admin when omitted |
-| `spec.humanMembers` | []object | No | Additional human Team members. In this version, `role: coordinator` members can enter Team rooms and assign work like the Team Admin |
+| `spec.humanMembers` | []object | No | Additional human Team members. In this version, `role: coordinator` members join the Team Room and can assign work there like the Team Admin |
 | `spec.leader` | object | Yes | Team Leader configuration |
 | `spec.workers` | []object | Yes | Team Worker list |
 
@@ -347,7 +347,7 @@ If not specified, the global Admin is used by default. The Team Admin is invited
 
 ### Team Members
 
-Use `spec.humanMembers` to add human members who are part of the Team but are not Workers. The first supported member role is `coordinator`, which keeps the current Team Admin interaction model: the member is invited to the Team Room and Leader DM, and Leader/Workers accept their @mentions as authorized task assignment.
+Use `spec.humanMembers` to add human members who are part of the Team but are not Workers. The first supported member role is `coordinator`: the member is invited to the Team Room, and Leader/Workers accept their @mentions there as authorized task assignment. Leader DM remains limited to the Team Admin and Leader.
 
 ```yaml
 spec:

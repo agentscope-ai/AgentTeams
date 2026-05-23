@@ -258,8 +258,8 @@ spec:
 Team Leader 本质上是一个 Worker 容器，但有以下区别：
 
 - 使用 `team-leader-agent` 模板（SOUL.md.tmpl + AGENTS.md + HEARTBEAT.md）
-- 拥有 `team-task-management` skill（管理 team-state.json、查找可用 Worker）
-- 拥有 `worker-lifecycle` skill，用于执行 `hiclaw worker status|wake|sleep|ensure-ready`
+- 拥有 canonical Team Leader skills：`team-coordination` 负责协作策略，`project-management` 负责 Project 状态和 ready node 解析，`task-management` 负责委派 Worker 任务
+- 新建 Team Leader workspace 不再安装旧的 `team-project-management`、`team-task-coordination`、`team-task-management` 兼容别名；已经复制过这些别名的旧 workspace 会保留本地文件，直到显式升级或重建
 - 不拥有 `worker-management`、`mcp-server-management` 等 Manager 独占 skill
 - 在 `workers-registry.json` 中标记为 `role: "team_leader"`
 - 采用委派优先原则——始终将任务分配给团队 Worker，自己不执行领域任务

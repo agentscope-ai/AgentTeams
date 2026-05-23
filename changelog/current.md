@@ -17,6 +17,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - fix(hiclaw-controller): apply the configured AI stream idle timeout to the self-hosted Higress gateway.
 - feat(team-leader): refresh Team Leader coordination prompts and built-in skills for project, task, file-sharing, communication, organization, and mcporter workflows.
 - fix(team-leader): keep legacy Team Leader skill names and helper scripts available for existing workspaces and integration tests.
+- refactor(team-leader): remove legacy Team Leader skill aliases after migrating docs and integration checks to canonical project, task, and coordination skills.
 
 - feat(hiclaw-controller): propagate controller-level skills API and Nacos auth defaults to workers.
 - fix(hiclaw-controller): let inline Worker SOUL config override package-seeded SOUL.md during package updates.

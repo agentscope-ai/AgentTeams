@@ -213,10 +213,15 @@ These are shared by **OpenClaw** and **QwenPaw** Managers (QwenPaw-specific prom
 
 Under **`manager/agent/team-leader-agent/skills/`**:
 
-- `team-project-management`  
-- `team-task-coordination`  
-- `team-task-management`  
-- `worker-lifecycle`  
+- `communication`
+- `file-sharing`
+- `mcporter`
+- `organization`
+- `project-management`
+- `task-management`
+- `team-coordination`
+
+The older compatibility aliases `team-project-management`, `team-task-coordination`, and `team-task-management` are removed from the built-in template. Existing Team Leader workspaces that already contain those copied skills are not mutated in place; new and upgraded workspaces should use the canonical `project-management`, `task-management`, and `team-coordination` skills.
 
 ---
 

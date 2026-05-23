@@ -260,8 +260,8 @@ spec:
 A Team Leader is essentially a Worker container, but with key differences:
 
 - Uses the `team-leader-agent` template (SOUL.md.tmpl + AGENTS.md + HEARTBEAT.md)
-- Has the `team-task-management` skill (manages team-state.json, finds available Workers)
-- Has the `worker-lifecycle` skill for `hiclaw worker status|wake|sleep|ensure-ready`
+- Has canonical Team Leader skills: `team-coordination` for strategy, `project-management` for Project state and ready-node resolution, and `task-management` for Worker task delegation
+- Does not install the older `team-project-management`, `team-task-coordination`, or `team-task-management` compatibility aliases into new Team Leader workspaces; existing workspaces that already copied those aliases keep their local files until explicitly upgraded or recreated
 - Does NOT have Manager-exclusive skills like `worker-management` or `mcp-server-management`
 - Marked as `role: "team_leader"` in `workers-registry.json`
 - Follows a delegation-first principle — always assigns tasks to team Workers, never executes domain tasks itself

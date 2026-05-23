@@ -215,6 +215,7 @@ spec:
 | `spec.peerMentions` | bool | 否 | 为 `true`（默认）时，团队 Worker 可在群房间中互相 @mention |
 | `spec.channelPolicy` | object | 否 | 团队级群聊/DM 允许与拒绝列表覆盖（字段形状与 Worker 的 `channelPolicy` 相同） |
 | `spec.admin` | object | 否 | 团队专属人类管理员（须含 `name`；可选 `matrixUserId`）。省略则使用全局 Admin |
+| `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。当前版本支持 `role: coordinator`，可进入 Team Room 并像 Team Admin 一样在其中分派任务 |
 | `spec.leader` | object | 是 | Team Leader 配置 |
 | `spec.workers` | []object | 是 | Team Worker 列表 |
 
@@ -257,8 +258,8 @@ spec:
 Team Leader 本质上是一个 Worker 容器，但有以下区别：
 
 - 使用 `team-leader-agent` 模板（SOUL.md.tmpl + AGENTS.md + HEARTBEAT.md）
-- 拥有 `team-task-management` skill（管理 team-state.json、查找可用 Worker）
-- 拥有 `worker-lifecycle` skill，用于执行 `hiclaw worker status|wake|sleep|ensure-ready`
+- 拥有 canonical Team Leader skills：`team-coordination` 负责协作策略，`project-management` 负责 Project 状态和 ready node 解析，`task-management` 负责委派 Worker 任务
+- 新建 Team Leader workspace 不再安装旧的 `team-project-management`、`team-task-coordination`、`team-task-management` 兼容别名；已经复制过这些别名的旧 workspace 会保留本地文件，直到显式升级或重建
 - 不拥有 `worker-management`、`mcp-server-management` 等 Manager 独占 skill
 - 在 `workers-registry.json` 中标记为 `role: "team_leader"`
 - 采用委派优先原则——始终将任务分配给团队 Worker，自己不执行领域任务
@@ -341,6 +342,21 @@ spec:
 ```
 
 如果不指定，默认使用全局 Admin。Team Admin 会被邀请到 Team Room 和 Leader DM，可以直接与 Leader 沟通团队事务。
+
+### Team Members
+
+使用 `spec.humanMembers` 添加属于 Team 的真人成员，这些成员不是 Worker。第一版支持的成员角色是 `coordinator`：成员会被邀请进入 Team Room，Leader/Worker 会把他们在 Team Room 中的 @mention 当作授权任务分派处理。Leader DM 仍只保留 Team Admin 和 Leader。
+
+```yaml
+spec:
+  admin:
+    name: pm-zhang
+    matrixUserId: "@pm-zhang:domain"
+  humanMembers:
+    - name: tech-lead-li
+      matrixUserId: "@tech-lead-li:domain"
+      role: coordinator
+```
 
 ## Manager
 

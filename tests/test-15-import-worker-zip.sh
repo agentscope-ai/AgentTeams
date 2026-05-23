@@ -281,6 +281,19 @@ log_section "Admin ↔ Worker Messaging"
 if ! require_llm_key; then
     log_info "Skipping messaging test (no LLM API key)"
 else
+    if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
+        log_info "Waiting for CoPaw Worker readiness probe before messaging..."
+        PROBE_OUTPUT=$(check_copaw_worker_probes "${TEST_WORKER}" "ready" 180)
+        PROBE_STATUS=$?
+        if [ "${PROBE_STATUS}" = "0" ]; then
+            log_pass "CoPaw Worker readiness probe is ready"
+            log_info "${PROBE_OUTPUT}"
+        else
+            log_fail "CoPaw Worker readiness probe did not become ready"
+            log_info "${PROBE_OUTPUT}"
+        fi
+    fi
+
     # Login as admin
     ADMIN_LOGIN=$(matrix_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" 2>/dev/null)
     ADMIN_TOKEN=$(echo "${ADMIN_LOGIN}" | jq -r '.access_token // empty')
@@ -335,7 +348,7 @@ else
             "${ADMIN_TOKEN}" \
             "${ROOM_ID}" \
             "${WORKER_MATRIX_ID}" \
-            "Hello! Please reply with a short greeting." \
+            "Readiness check: please reply with the exact text READY." \
             180 30)
 
         if [ -n "${REPLY}" ]; then

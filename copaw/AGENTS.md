@@ -70,7 +70,7 @@ For CoPaw runtime, the Worker must translate this into **CoPaw's native configur
 │   config/mcporter.json      │
 │   credentials/              │
 └──────────────┬──────────────┘
-               │ pull: FileSync.mirror_all / pull_all       (sync.py)
+               │ pull: startup mirror_all / explicit shared pull (sync.py)
                │ push: FileSync.push_local                  (sync.py)
                ▼
 ┌─────────────────────────────┐
@@ -141,8 +141,8 @@ The authoritative design for the sync/bridge/propagate chain is [`docs/copaw-bri
 
 ### To modify the conversion chain
 - [copaw/src/copaw_worker/bridge.py](src/copaw_worker/bridge.py) — `bridge_controller_to_copaw()`; template create + controller-field overlay. Templates live in [copaw/src/copaw_worker/templates/](src/copaw_worker/templates/).
-- [copaw/src/copaw_worker/sync.py](src/copaw_worker/sync.py) — `FileSync` class: `mirror_all` / `pull_all` / `push_local`; `sync_loop` / `push_loop`
-- [copaw/src/copaw_worker/worker.py](src/copaw_worker/worker.py) — `Worker.start()` orchestrates pull → bridge → propagate; `_on_files_pulled()` is the re-bridge callback
+- [copaw/src/copaw_worker/sync.py](src/copaw_worker/sync.py) — `FileSync` class: `mirror_all` / `push_local` / shared-file helpers; `push_loop`
+- [copaw/src/copaw_worker/worker.py](src/copaw_worker/worker.py) — `Worker.start()` orchestrates startup mirror → bridge → runtime push loop
 
 ### To modify the Worker container
 - [copaw/Dockerfile](Dockerfile) — Python 3.11 base, pip install `.`
@@ -330,7 +330,7 @@ docker logs hiclaw-manager --tail 200    # supervisord-level + any uncaught stdo
 
 Level is controlled by `COPAW_LOG_LEVEL=debug|info|warning|error` (default `info`). HiClaw Worker containers **do not** set it by default; bounce the container with `-e COPAW_LOG_LEVEL=debug` when you need `_download_mxc` / sync-loop detail.
 
-> ⚠️ Only `copaw.*` and the root logger reach stdout. Any third-party or vendored logger using a different namespace is **silently dropped at INFO level.** The in-tree Matrix channel (`copaw/src/matrix/channel.py`) currently uses `logging.getLogger("qwenpaw.channels.matrix")` — see the Known gotchas section.
+> ⚠️ Only `copaw.*` and the root logger reach stdout. Any third-party or vendored logger using a different namespace is **silently dropped at INFO level.** The in-tree Matrix channel (`copaw/src/matrix/channel.py`) uses `logging.getLogger("copaw.channels.matrix")` so channel decisions are visible in normal Worker logs.
 
 **Session files (per-agent conversation history):**
 
@@ -382,25 +382,15 @@ Use this ladder for *any* "agent didn't respond" symptom. Each step narrows wher
 
 These make healthy runs look broken or sick runs look healthy — learn them before chasing false positives.
 
-1. **Every 5 minutes the Worker logs `Config changed, re-bridging...`.**
-   `sync_loop` default interval is `300s` (see `sync.py :: sync_loop`, `cli.py` default `--sync-interval 300`). `pull_all` compares `_merge_openclaw_config(remote, local) != existing` for `openclaw.json`; in practice this diff is currently *not* stable across cycles (under investigation — candidate causes: Manager periodically rewriting MinIO `openclaw.json`, or non-determinism inside `_merge_openclaw_config` dict-ordering / set-union). Consequences:
-   - A fresh `agent.json` is written every 5 min → CoPaw framework's `AgentConfigWatcher` restarts the Matrix channel.
-   - An in-flight LLM request that straddles the reload logs `Task has been cancelled!` — **this is a side effect, not a root cause** of non-responsiveness unless you see it *exactly* at the moment of your tested message.
-   - `_on_files_pulled` has a "Hot-update MatrixChannel's allowlist without restarting" branch, but it only hot-patches allowlist; structural changes still go through the framework's restart path.
-   When debugging, record the reload cadence first so you can separate "real failure" from "reload window collision."
-   > Remove this gotcha once the 5-min diff-stability root cause is landed.
+1. **Runtime config changes require a Worker restart.**
+   CoPaw worker no longer runs a background Remote -> Local config pull loop. Startup `mirror_all()` restores MinIO state, and runtime Local -> Remote preservation is handled by `push_loop`. Shared data can still be pulled explicitly through the filesync tool, but `openclaw.json`, skills, and mcporter config are refreshed by restarting the Worker.
 
-2. **Matrix channel logs are silent by default.** `copaw/src/matrix/channel.py` uses `logging.getLogger("qwenpaw.channels.matrix")`. CoPaw's runtime filter only promotes `copaw.*` (plus root) to stdout, so allowlist rejections, mention filtering, login retries, and sync-loop errors from the channel **never surface** at INFO. Workarounds for the moment:
-   - Rebuild with `COPAW_LOG_LEVEL=debug` *and* additionally raise the `qwenpaw` logger via a shell into the container (`python -c 'import logging; logging.getLogger("qwenpaw").setLevel("DEBUG")'` won't persist across process lifetime — patch the entrypoint or add a bootstrap hook), or
-   - Treat the root-cause fix (rename logger to `copaw.channels.matrix` or hiclaw-specific) as a prerequisite for serious Matrix-layer debugging.
-   > Remove this gotcha once the logger is renamed under `copaw.*`.
-
-3. **Team Leader startup always logs `authorization denied: team-leader "<name>" cannot ready worker`.** `hiclaw-controller/internal/auth/authorizer.go :: authorizeTeamLeaderWorkerAction` does not list `ActionReady` — the Leader's `hiclaw worker report-ready` call inside `copaw-worker-entrypoint.sh` gets a 403. The Worker process keeps running fine; only the readiness self-report is lost. Ignore it while debugging non-response issues — it is *not* the cause.
+2. **Team Leader startup always logs `authorization denied: team-leader "<name>" cannot ready worker`.** `hiclaw-controller/internal/auth/authorizer.go :: authorizeTeamLeaderWorkerAction` does not list `ActionReady` — the Leader's `hiclaw worker report-ready` call inside `copaw-worker-entrypoint.sh` gets a 403. The Worker process keeps running fine; only the readiness self-report is lost. Ignore it while debugging non-response issues — it is *not* the cause.
    > Remove this gotcha once `authorizeTeamLeaderWorkerAction` accepts `ActionReady` for the Leader's own team.
 
-4. **Manager-side MCP server re-setup can touch MinIO `openclaw.json`.** If you re-run `setup-mcp-server.sh` (or Manager triggers it on heartbeat), MinIO objects are rewritten even when content matches, bumping mtime. Combined with gotcha 1 this can show as a storm of re-bridges; check Manager logs around the reload moments.
+3. **Manager-side MCP server re-setup can touch MinIO `openclaw.json`.** If you re-run `setup-mcp-server.sh` (or Manager triggers it on heartbeat), MinIO objects are rewritten even when content matches, bumping mtime. Combined with gotcha 1 this can show as a storm of re-bridges; check Manager logs around the reload moments.
 
-5. **Session files survive `make uninstall-embedded`** (volumes are not removed). Reproducing a bug from a clean slate requires the full-wipe command in § Build, Install, Test — Embedded mode.
+4. **Session files survive `make uninstall-embedded`** (volumes are not removed). Reproducing a bug from a clean slate requires the full-wipe command in § Build, Install, Test — Embedded mode.
 
 ### Dev tooling
 
@@ -442,11 +432,11 @@ Runtime pairings:
 
 3. **`bridge()` has runtime-level side effects.** Beyond writing three JSON files it sets env vars and monkey-patches upstream CoPaw modules. Calling it twice in the same process works (it is idempotent by design), but tests that simulate multiple workers in-process must reset `COPAW_WORKING_DIR` and reload `copaw.constant` / `copaw.providers.store` between runs.
 
-4. **Merge logic belongs to the Controller, not the Worker.** MinIO is the single source of truth; `pull_all` should overwrite. The one legitimate exception today is `openclaw.json` (Worker-side merge preserves local `accessToken`); everything else is scheduled to migrate into the Controller.
+4. **Merge logic belongs to the Controller, not the Worker.** MinIO is the single source of truth at startup. Runtime Remote → Local updates are explicit for shared data; config/skills/mcporter updates are applied by restarting the Worker and re-running the startup mirror/bridge path.
 
-5. **Skill injection currently writes `active_skills/` directly and bypasses CoPaw's `skill_pool/` → `workspaces/default/skills/` reconcile flow.** This works today but will break when upstream CoPaw is updated. Target flow: drop skills into `skill_pool/`, mark them `source: "external"`, let `reconcile_workspace_manifest` propagate.
+5. **Manager-pushed skills are exposed via `.copaw/workspaces/default/skills/`.** This path is a symlink to the standard-space `skills/` directory. Do not reintroduce writes to the legacy `.copaw/active_skills/` path or copy skills into runtime space.
 
-6. **`SOUL.md` / `AGENTS.md` are not in the pull allowlist yet.** Controller edits to these in MinIO will not propagate to running Workers until the Worker restarts. Known gap — see the design doc before "fixing" it.
+6. **`SOUL.md` / `AGENTS.md` remote edits require restart.** Runtime agent edits are saved back to standard space and then pushed, but Controller edits in MinIO do not overwrite a running Worker. Restart to apply remote prompt/config changes.
 
 7. **Manager runtime overlays.** `manager/agent/copaw-manager-agent/AGENTS.md` and `HEARTBEAT.md` are overlaid on top of `manager/agent/` at container build time (via `upgrade-builtins.sh`) when runtime=copaw. Changes to the shared versions only take effect for OpenClaw until you mirror them into `copaw-manager-agent/`. `SOUL.md` and `TOOLS.md` are shared across both runtimes — **do not fork them**.
 

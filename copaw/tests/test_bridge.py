@@ -18,12 +18,22 @@ overwrite), ``union`` (list dedup), ``deep-merge`` (local-wins-at-leaves for
 """
 
 import json
+import os
+import stat
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from copaw_worker.bridge import bridge_controller_to_copaw
+from copaw_worker.bridge import (
+    bridge_controller_to_copaw,
+    bridge_runtime_to_standard,
+    bridge_standard_to_runtime,
+    refresh_standard_to_runtime,
+    sync_mcporter_config_to_runtime,
+    sync_outer_prompt_files_to_inner,
+    sync_skills_to_runtime,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +123,8 @@ def test_create_installs_worker_agent_json_from_template():
     assert agent["system_prompt_files"] == ["AGENTS.md", "SOUL.md", "PROFILE.md"]
     # Console on by default, from template.
     assert agent["channels"]["console"]["enabled"] is True
+    assert agent["channels"]["matrix"]["filter_tool_messages"] is False
+    assert agent["channels"]["matrix"]["filter_thinking"] is True
     # Manager-only fields absent.
     assert "require_mention" not in agent["channels"]["matrix"]
     assert "require_approval" not in agent.get("running", {})
@@ -130,6 +142,8 @@ def test_create_installs_manager_agent_json_from_template(monkeypatch):
         "AGENTS.md", "SOUL.md", "PROFILE.md", "TOOLS.md",
     ]
     assert agent["channels"]["matrix"]["require_mention"] is True
+    assert agent["channels"]["matrix"]["filter_tool_messages"] is False
+    assert agent["channels"]["matrix"]["filter_thinking"] is True
     assert "require_approval" not in agent.get("running", {})
     assert agent["channels"]["matrix"]["user_id"] == "@manager:matrix.example.org"
 
@@ -221,6 +235,39 @@ def test_remote_wins_access_token_refreshes():
         cfg["channels"]["matrix"]["accessToken"] = "tok_v2"
         _run_bridge(cfg, working_dir)
         assert _read_agent(working_dir)["channels"]["matrix"]["access_token"] == "tok_v2"
+
+
+def test_remote_wins_matrix_stream_filters_use_defaults():
+    """Bridge applies default Matrix stream filter policy when unset."""
+    cfg = _make_openclaw_cfg()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        working_dir = Path(tmpdir) / "agent"
+        _run_bridge(cfg, working_dir)
+
+        agent_path = _agent_json_path(working_dir)
+        agent = json.loads(agent_path.read_text())
+        agent["channels"]["matrix"]["filter_tool_messages"] = True
+        agent["channels"]["matrix"]["filter_thinking"] = True
+        agent_path.write_text(json.dumps(agent))
+
+        _run_bridge(cfg, working_dir)
+
+        matrix = _read_agent(working_dir)["channels"]["matrix"]
+        assert matrix["filter_tool_messages"] is False
+        assert matrix["filter_thinking"] is True
+
+
+def test_remote_wins_matrix_stream_filters_allow_controller_override():
+    cfg = _make_openclaw_cfg()
+    cfg["channels"]["matrix"]["filterToolMessages"] = True
+    cfg["channels"]["matrix"]["filterThinking"] = False
+
+    agent = _bridge_and_read_agent(cfg)
+
+    matrix = agent["channels"]["matrix"]
+    assert matrix["filter_tool_messages"] is True
+    assert matrix["filter_thinking"] is False
 
 
 def test_remote_wins_max_input_length_refreshes():
@@ -356,10 +403,10 @@ def test_manager_user_id_from_openclaw_wins_over_env(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Heartbeat (controller field; remote-wins)
+# Heartbeat (template seed + controller fallback seed)
 # ---------------------------------------------------------------------------
 
-def test_manager_heartbeat_seeded_from_openclaw(monkeypatch):
+def test_manager_template_heartbeat_wins_over_openclaw_seed(monkeypatch):
     monkeypatch.setenv("HICLAW_MATRIX_DOMAIN", "matrix.example.org")
 
     cfg = _make_openclaw_cfg()
@@ -370,16 +417,39 @@ def test_manager_heartbeat_seeded_from_openclaw(monkeypatch):
     }
 
     agent = _bridge_and_read_agent(cfg, profile="manager")
-    assert agent["heartbeat"] == {
-        "enabled": True, "every": "5m", "target": "self",
-        "active_hours": "09:00-18:00",
+    assert agent["heartbeat"] == {"enabled": True, "every": "10m"}
+
+
+def test_worker_template_seeds_default_heartbeat_when_openclaw_silent():
+    agent = _bridge_and_read_agent(_make_openclaw_cfg())
+    assert agent["heartbeat"] == {"enabled": False, "every": "10m"}
+
+
+def test_openclaw_heartbeat_seeds_existing_agent_without_heartbeat():
+    cfg = _make_openclaw_cfg()
+    cfg["agents"]["defaults"]["heartbeat"] = {
+        "every": "5m",
+        "target": "self",
+        "activeHours": "09:00-18:00",
     }
 
+    with tempfile.TemporaryDirectory() as tmpdir:
+        working_dir = Path(tmpdir) / "agent"
+        _run_bridge(_make_openclaw_cfg(), working_dir)
+        agent_path = _agent_json_path(working_dir)
+        agent = json.loads(agent_path.read_text())
+        agent.pop("heartbeat")
+        agent_path.write_text(json.dumps(agent))
 
-def test_heartbeat_absent_when_openclaw_silent():
-    """Worker openclaw.json never declares heartbeat; agent.json gets none."""
-    agent = _bridge_and_read_agent(_make_openclaw_cfg())
-    assert "heartbeat" not in agent
+        _run_bridge(cfg, working_dir)
+        agent = _read_agent(working_dir)
+
+    assert agent["heartbeat"] == {
+        "enabled": True,
+        "every": "5m",
+        "target": "self",
+        "active_hours": "09:00-18:00",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -402,3 +472,222 @@ def test_bridge_openclaw_to_copaw_alias_still_works():
         bridge_openclaw_to_copaw(_make_openclaw_cfg(), working_dir)
         assert _agent_json_path(working_dir).exists()
         assert (working_dir / "config.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Standard/runtime file materialization
+# ---------------------------------------------------------------------------
+
+def test_sync_outer_prompt_files_to_inner_copies_prompts_and_seeds_heartbeat(tmp_path):
+    """SOUL/AGENTS refresh every run; HEARTBEAT is copied only on first boot."""
+    standard_dir = tmp_path / "standard"
+    runtime_dir = tmp_path / "standard" / ".copaw"
+    standard_dir.mkdir()
+    (standard_dir / "SOUL.md").write_text("soul v1")
+    (standard_dir / "AGENTS.md").write_text("agents v1")
+    (standard_dir / "HEARTBEAT.md").write_text("heartbeat v1")
+
+    sync_outer_prompt_files_to_inner(standard_dir, runtime_dir)
+    workspace_dir = runtime_dir / "workspaces" / "default"
+
+    assert (workspace_dir / "SOUL.md").read_text() == "soul v1"
+    assert (workspace_dir / "AGENTS.md").read_text() == "agents v1"
+    assert (workspace_dir / "HEARTBEAT.md").read_text() == "heartbeat v1"
+
+    (standard_dir / "SOUL.md").write_text("soul v2")
+    (standard_dir / "AGENTS.md").write_text("agents v2")
+    (standard_dir / "HEARTBEAT.md").write_text("heartbeat v2")
+    sync_outer_prompt_files_to_inner(standard_dir, runtime_dir)
+
+    assert (workspace_dir / "SOUL.md").read_text() == "soul v2"
+    assert (workspace_dir / "AGENTS.md").read_text() == "agents v2"
+    assert (workspace_dir / "HEARTBEAT.md").read_text() == "heartbeat v1"
+
+
+def test_refresh_standard_to_runtime_uses_legacy_prompt_fallbacks(tmp_path):
+    """Re-bridge can still seed prompts from legacy MinIO readers."""
+    standard_dir = tmp_path / "standard"
+    runtime_dir = tmp_path / "standard" / ".copaw"
+    standard_dir.mkdir()
+
+    refresh_standard_to_runtime(
+        standard_dir,
+        runtime_dir,
+        _make_openclaw_cfg(),
+        get_soul=lambda: "fallback soul",
+        get_agents_md=lambda: "fallback agents",
+    )
+
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    assert (workspace_dir / "SOUL.md").read_text() == "fallback soul"
+    assert (workspace_dir / "AGENTS.md").read_text() == "fallback agents"
+    assert (workspace_dir / "agent.json").exists()
+
+
+def test_sync_mcporter_config_to_runtime_prefers_config_path(tmp_path):
+    """config/mcporter.json wins over legacy mcporter-servers.json."""
+    standard_dir = tmp_path / "standard"
+    runtime_dir = tmp_path / "standard" / ".copaw"
+    (standard_dir / "config").mkdir(parents=True)
+    (standard_dir / "config" / "mcporter.json").write_text("new config")
+    (standard_dir / "mcporter-servers.json").write_text("legacy config")
+
+    copied = sync_mcporter_config_to_runtime(standard_dir, runtime_dir)
+
+    assert copied == runtime_dir / "workspaces" / "default" / "config" / "mcporter.json"
+    assert copied.read_text() == "new config"
+
+
+def test_sync_skills_to_runtime_exposes_standard_skills_via_symlink(tmp_path):
+    """Runtime workspace skills are a projection of standard-space skills."""
+    standard_dir = tmp_path / "standard"
+    runtime_dir = standard_dir / ".copaw"
+    src_skill = standard_dir / "skills" / "github"
+    script = src_skill / "scripts" / "run.sh"
+    script.parent.mkdir(parents=True)
+    (src_skill / "SKILL.md").write_text("Use GitHub.")
+    script.write_text("#!/bin/sh\necho ok\n")
+    script.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    installed = sync_skills_to_runtime(standard_dir, runtime_dir, ["github"])
+
+    workspace_skills = runtime_dir / "workspaces" / "default" / "skills"
+    assert installed == ["github"]
+    assert workspace_skills.is_symlink()
+    assert workspace_skills.resolve() == (standard_dir / "skills").resolve()
+    assert (workspace_skills / "github" / "SKILL.md").read_text() == "Use GitHub."
+    dst_script = workspace_skills / "github" / "scripts" / "run.sh"
+    assert dst_script.read_text() == "#!/bin/sh\necho ok\n"
+    assert dst_script.stat().st_mode & stat.S_IXUSR
+    manifest = json.loads(
+        (runtime_dir / "workspaces" / "default" / "skill.json").read_text(),
+    )
+    assert manifest["skills"]["github"]["enabled"] is True
+    assert manifest["skills"]["github"]["channels"] == ["all"]
+
+
+def test_sync_skills_to_runtime_reenables_projected_manifest_entries(tmp_path):
+    """HiClaw-projected skills are enabled even after CoPaw reconciled them off."""
+    standard_dir = tmp_path / "standard"
+    runtime_dir = standard_dir / ".copaw"
+    src_skill = standard_dir / "skills" / "github"
+    src_skill.mkdir(parents=True)
+    (src_skill / "SKILL.md").write_text("Use GitHub.")
+
+    manifest_path = runtime_dir / "workspaces" / "default" / "skill.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "workspace-skill-manifest.v1",
+                "version": 1,
+                "skills": {
+                    "github": {
+                        "enabled": False,
+                        "channels": ["matrix"],
+                        "source": "customized",
+                    },
+                },
+            },
+        ),
+    )
+
+    installed = sync_skills_to_runtime(standard_dir, runtime_dir, ["github"])
+
+    assert installed == ["github"]
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["skills"]["github"]["enabled"] is True
+    assert manifest["skills"]["github"]["channels"] == ["matrix"]
+
+
+def test_sync_skills_to_runtime_replaces_runtime_dir_and_cleans_stale_standard_skills(tmp_path):
+    """Runtime skills dir is derived; stale local copies are removed."""
+    standard_dir = tmp_path / "standard"
+    runtime_dir = standard_dir / ".copaw"
+    workspace_skills = runtime_dir / "workspaces" / "default" / "skills"
+    stale_runtime_skill = workspace_skills / "stale"
+    stale_runtime_skill.mkdir(parents=True)
+    (stale_runtime_skill / "SKILL.md").write_text("remove me")
+
+    stale_standard_skill = standard_dir / "skills" / "stale-standard"
+    stale_standard_skill.mkdir(parents=True)
+    (stale_standard_skill / "SKILL.md").write_text("remove me too")
+
+    fresh_skill = standard_dir / "skills" / "fresh"
+    fresh_skill.mkdir(parents=True)
+    (fresh_skill / "SKILL.md").write_text("new")
+
+    installed = sync_skills_to_runtime(standard_dir, runtime_dir, ["fresh"])
+
+    assert installed == ["fresh"]
+    assert workspace_skills.is_symlink()
+    assert workspace_skills.resolve() == (standard_dir / "skills").resolve()
+    assert (workspace_skills / "fresh" / "SKILL.md").read_text() == "new"
+    assert not (workspace_skills / "stale").exists()
+    assert not (workspace_skills / "stale-standard").exists()
+
+
+def test_bridge_runtime_to_standard_copies_newer_prompt_edits(tmp_path):
+    """Agent-edited runtime prompts are materialized back to the sync root."""
+    standard_dir = tmp_path / "standard"
+    workspace_dir = standard_dir / ".copaw" / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True)
+    outer = standard_dir / "AGENTS.md"
+    inner = workspace_dir / "AGENTS.md"
+    outer.write_text("outer")
+    inner.write_text("inner")
+    os.utime(outer, (1, 1))
+    os.utime(inner, (2, 2))
+
+    bridge_runtime_to_standard(standard_dir)
+
+    assert outer.read_text() == "inner"
+
+
+def test_bridge_runtime_to_standard_keeps_newer_or_same_age_outer_prompts(tmp_path):
+    """Runtime prompts only win when they are strictly newer than standard space."""
+    standard_dir = tmp_path / "standard"
+    workspace_dir = standard_dir / ".copaw" / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True)
+    outer = standard_dir / "AGENTS.md"
+    inner = workspace_dir / "AGENTS.md"
+    outer.write_text("outer")
+    inner.write_text("inner")
+
+    os.utime(outer, (2, 2))
+    os.utime(inner, (1, 1))
+    bridge_runtime_to_standard(standard_dir)
+    assert outer.read_text() == "outer"
+
+    os.utime(outer, (2, 2))
+    os.utime(inner, (2, 2))
+    bridge_runtime_to_standard(standard_dir)
+    assert outer.read_text() == "outer"
+
+
+def test_bridge_standard_to_runtime_materializes_prompts_mcporter_and_skills(tmp_path):
+    """High-level bridge writes CoPaw config plus standard-space file copies."""
+    standard_dir = tmp_path / "standard"
+    runtime_dir = standard_dir / ".copaw"
+    skill_dir = standard_dir / "skills" / "task-management"
+    (standard_dir / "config").mkdir(parents=True)
+    skill_dir.mkdir(parents=True)
+    (standard_dir / "SOUL.md").write_text("soul")
+    (standard_dir / "AGENTS.md").write_text("agents")
+    (standard_dir / "config" / "mcporter.json").write_text('{"mcpServers": {}}')
+    (skill_dir / "SKILL.md").write_text("Use task tools.")
+
+    bridge_standard_to_runtime(
+        standard_dir,
+        runtime_dir,
+        _make_openclaw_cfg(),
+        skill_names=["task-management"],
+    )
+
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    assert (workspace_dir / "SOUL.md").read_text() == "soul"
+    assert (workspace_dir / "AGENTS.md").read_text() == "agents"
+    assert (workspace_dir / "config" / "mcporter.json").read_text() == '{"mcpServers": {}}'
+    assert (workspace_dir / "skills" / "task-management" / "SKILL.md").read_text() == "Use task tools."
+    assert (workspace_dir / "agent.json").exists()
+    assert (runtime_dir / "providers.json").exists()

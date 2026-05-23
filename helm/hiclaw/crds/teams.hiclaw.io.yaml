@@ -54,6 +54,23 @@ spec:
                     matrixUserId:
                       type: string
                       description: "Matrix user ID (e.g. @john:domain)"
+                humanMembers:
+                  type: array
+                  description: "Additional human members of this Team. In this version, role=coordinator joins the Team Room and can assign work there like the Team admin."
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: "Human name / Matrix localpart"
+                      matrixUserId:
+                        type: string
+                        description: "Matrix user ID (e.g. @john:domain)"
+                      role:
+                        type: string
+                        enum: [coordinator]
+                        description: "Human member role. coordinator can @mention the leader/workers in the Team Room; Leader DM remains limited to the Team admin and leader."
                 leader:
                   type: object
                   required: [name]
@@ -73,6 +90,35 @@ spec:
                       type: string
                     package:
                       type: string
+                    remoteSkills:
+                      type: array
+                      description: Remote skills fetched from source registries.
+                      items:
+                        type: object
+                        required: [source, skills]
+                        properties:
+                          source:
+                            type: string
+                            pattern: '^nacos://[^/]+/[^/?#]+$'
+                            description: Remote source in nacos://host[:port]/namespace-id format.
+                          authType:
+                            type: string
+                            enum: [sts-hiclaw, nacos, none]
+                            description: "Authentication mode for remote source access. Empty auto-detects: embedded username/password selects nacos; otherwise none. nacos: username/password embedded in source URL; sts-hiclaw: STS credential provider; none: unauthenticated."
+                          skills:
+                            type: array
+                            minItems: 1
+                            description: Skills to fetch from the remote source.
+                            items:
+                              type: object
+                              required: [name]
+                              properties:
+                                name:
+                                  type: string
+                                version:
+                                  type: string
+                                label:
+                                  type: string
                     mcpServers:
                       type: array
                       description: MCP servers callable via mcporter. url is the full endpoint; transport defaults to http.
@@ -102,15 +148,6 @@ spec:
                       type: string
                       enum: [Running, Sleeping, Stopped]
                       description: "Desired lifecycle state for the team leader (default: Running)"
-                    env:
-                      type: object
-                      description: |
-                        User-defined environment variables injected into the leader container.
-                        Keys that collide with variables already set by the controller or backend
-                        (HICLAW_*, OPENCLAW_*, HOME, and similar internal keys) are silently
-                        ignored with a warning log — the system value always wins.
-                      additionalProperties:
-                        type: string
                     labels:
                       type: object
                       additionalProperties:
@@ -120,6 +157,17 @@ spec:
                         Merged on top of Team.metadata.labels and below controller
                         system labels. Entries whose keys collide with system labels
                         are silently overridden.
+                    env:
+                      type: object
+                      description: |
+                        User-defined environment variables injected into the leader container.
+                        Keys that collide with variables already set by the controller or backend
+                        (HICLAW_*, OPENCLAW_*, HOME, and similar internal keys) are silently
+                        ignored with a warning log — the system value always wins.
+                      additionalProperties:
+                        type: string
+                      propertyNames:
+                        pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
                     channelPolicy:
                       type: object
                       properties:
@@ -323,6 +371,15 @@ spec:
                                 the controller before the request reaches the
                                 provider.
                               x-kubernetes-preserve-unknown-fields: true
+                      labels:
+                        type: object
+                        additionalProperties:
+                          type: string
+                        description: >
+                          User-defined Pod labels stamped onto this team worker Pod.
+                          Merged on top of Team.metadata.labels and below controller
+                          system labels. Entries whose keys collide with system labels
+                          are silently overridden.
                       env:
                         type: object
                         description: |
@@ -333,15 +390,8 @@ spec:
                           value always wins.
                         additionalProperties:
                           type: string
-                      labels:
-                        type: object
-                        additionalProperties:
-                          type: string
-                        description: >
-                          User-defined Pod labels stamped onto this team worker Pod.
-                          Merged on top of Team.metadata.labels and below controller
-                          system labels. Entries whose keys collide with system labels
-                          are silently overridden.
+                        propertyNames:
+                          pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
             status:
               type: object
               properties:

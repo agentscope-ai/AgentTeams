@@ -336,18 +336,25 @@ func (l *LegacyCompat) RemoveFromWorkersRegistry(workerName string) error {
 
 // TeamRegistryEntry describes a team entry in teams-registry.json.
 type TeamRegistryEntry struct {
-	Name            string          `json:"-"`
-	Leader          string          `json:"leader"`
-	Workers         []string        `json:"workers"`
-	TeamRoomID      string          `json:"team_room_id"`
-	LeaderDMRoomID  string          `json:"leader_dm_room_id,omitempty"`
-	Admin           *TeamAdminEntry `json:"admin,omitempty"`
-	CreatedAt       string          `json:"created_at,omitempty"`
+	Name           string            `json:"-"`
+	Leader         string            `json:"leader"`
+	Workers        []string          `json:"workers"`
+	TeamRoomID     string            `json:"team_room_id"`
+	LeaderDMRoomID string            `json:"leader_dm_room_id,omitempty"`
+	Admin          *TeamAdminEntry   `json:"admin,omitempty"`
+	Members        []TeamMemberEntry `json:"members,omitempty"`
+	CreatedAt      string            `json:"created_at,omitempty"`
 }
 
 type TeamAdminEntry struct {
 	Name         string `json:"name"`
 	MatrixUserID string `json:"matrix_user_id"`
+}
+
+type TeamMemberEntry struct {
+	Name         string `json:"name"`
+	MatrixUserID string `json:"matrix_user_id,omitempty"`
+	Role         string `json:"role,omitempty"`
 }
 
 type teamsRegistry struct {

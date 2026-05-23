@@ -371,6 +371,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			Description:   req.Description,
 			TeamName:      req.TeamName,
 			Admin:         req.Admin,
+			HumanMembers:  req.HumanMembers,
 			PeerMentions:  req.PeerMentions,
 			ChannelPolicy: req.ChannelPolicy,
 			Leader: v1beta1.LeaderSpec{
@@ -861,6 +862,8 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 		TeamName:          t.Spec.EffectiveTeamName(t.Name),
 		Phase:             t.Status.Phase,
 		Description:       t.Spec.Description,
+		Admin:             t.Spec.Admin,
+		HumanMembers:      t.Spec.HumanMembers,
 		LeaderName:        t.Spec.Leader.Name,
 		LeaderHeartbeat:   t.Spec.Leader.Heartbeat,
 		WorkerIdleTimeout: t.Spec.Leader.WorkerIdleTimeout,

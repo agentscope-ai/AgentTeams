@@ -7,17 +7,18 @@ import (
 
 // CoordinationContext describes the team/coordination context to inject into AGENTS.md.
 type CoordinationContext struct {
-	WorkerName        string
-	Role              string // "worker", "team_leader", "standalone"
-	MatrixDomain      string
-	TeamName          string
-	TeamLeaderName    string
-	TeamAdminID       string // full Matrix ID of team admin
-	TeamRoomID        string
-	LeaderDMRoomID    string
-	HeartbeatEvery    string
-	WorkerIdleTimeout string
-	TeamWorkers       []TeamWorkerInfo // for leaders: list of team workers
+	WorkerName         string
+	Role               string // "worker", "team_leader", "standalone"
+	MatrixDomain       string
+	TeamName           string
+	TeamLeaderName     string
+	TeamAdminID        string // full Matrix ID of team admin
+	TeamCoordinatorIDs []string
+	TeamRoomID         string
+	LeaderDMRoomID     string
+	HeartbeatEvery     string
+	WorkerIdleTimeout  string
+	TeamWorkers        []TeamWorkerInfo // for leaders: list of team workers
 }
 
 // TeamWorkerInfo describes a team worker for leader context injection.
@@ -59,6 +60,7 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 		if ctx.TeamAdminID != "" {
 			fmt.Fprintf(&b, "- **Team Admin**: %s — can assign tasks and make decisions within the team\n", ctx.TeamAdminID)
 		}
+		writeTeamCoordinators(&b, ctx.TeamCoordinatorIDs, ctx.TeamAdminID)
 		fmt.Fprintf(&b, "- **Team**: %s\n", ctx.TeamName)
 		if ctx.TeamRoomID != "" {
 			fmt.Fprintf(&b, "- **Team Room**: %s — @mention workers here for task assignment\n", ctx.TeamRoomID)
@@ -82,7 +84,7 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 				fmt.Fprintf(&b, "  - @%s:%s — Room: %s\n", w.Name, ctx.MatrixDomain, roomInfo)
 			}
 		}
-		b.WriteString("- You decompose tasks from Manager or Team Admin and assign sub-tasks to your team workers\n")
+		b.WriteString("- You decompose tasks from Manager, Team Admin, or coordinator members and assign sub-tasks to your team workers\n")
 		b.WriteString("- @mention workers in the Team Room for task assignment\n")
 		b.WriteString("- Use team-state.json as the source of truth for task activity before deciding whether a worker is idle\n")
 		b.WriteString("- You decide when to wake or sleep team workers; the controller only executes the lifecycle action you request\n")
@@ -94,10 +96,16 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 		if ctx.TeamAdminID != "" {
 			fmt.Fprintf(&b, "- **Team Admin**: %s (has admin authority within this team)\n", ctx.TeamAdminID)
 		}
+		writeTeamCoordinators(&b, ctx.TeamCoordinatorIDs, ctx.TeamAdminID)
 		b.WriteString("- Report task completion, blockers, and questions to your coordinator\n")
-		if ctx.TeamAdminID != "" {
+		switch {
+		case ctx.TeamAdminID != "" && len(ctx.TeamCoordinatorIDs) > 0:
+			b.WriteString("- Respond to @mentions from your coordinator, Team Admin, coordinator members, and global Admin\n")
+		case ctx.TeamAdminID != "":
 			b.WriteString("- Respond to @mentions from your coordinator, Team Admin, and global Admin\n")
-		} else {
+		case len(ctx.TeamCoordinatorIDs) > 0:
+			b.WriteString("- Respond to @mentions from your coordinator, coordinator members, and global Admin\n")
+		default:
 			b.WriteString("- Respond to @mentions from your coordinator and global Admin\n")
 		}
 		b.WriteString("- Do NOT @mention Manager directly — all communication goes through your Team Leader\n")
@@ -111,6 +119,33 @@ func buildCoordinationBlock(ctx CoordinationContext) string {
 	b.WriteString(teamCtxEnd)
 	b.WriteString("\n")
 	return b.String()
+}
+
+func writeTeamCoordinators(b *strings.Builder, ids []string, adminID string) {
+	ids = uniqueCoordinationIDs(ids, adminID)
+	if len(ids) == 0 {
+		return
+	}
+	b.WriteString("- **Coordinator Members**:\n")
+	for _, id := range ids {
+		fmt.Fprintf(b, "  - %s — can assign tasks and make decisions within the team\n", id)
+	}
+}
+
+func uniqueCoordinationIDs(ids []string, exclude string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || id == exclude {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func removeCoordinationBlock(content string) string {

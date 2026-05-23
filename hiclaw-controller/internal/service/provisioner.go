@@ -47,10 +47,14 @@ type WorkerDeprovisionRequest struct {
 
 // TeamRoomRequest describes rooms to create for a team.
 type TeamRoomRequest struct {
-	TeamName    string
-	LeaderName  string
-	WorkerNames []string
-	AdminSpec   *v1beta1.TeamAdminSpec
+	TeamName             string
+	LeaderName           string
+	LeaderCredentialName string
+	WorkerNames          []string
+	AdminSpec            *v1beta1.TeamAdminSpec
+	HumanMembers         []v1beta1.TeamMemberSpec
+	TeamAdminActorToken  string
+	TeamAdminActorName   string
 }
 
 // TeamRoomResult contains the created room IDs.
@@ -653,24 +657,49 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	logger := log.FromContext(ctx)
 	managerMatrixID := p.matrix.UserID("manager")
 	adminMatrixID := p.matrix.UserID(p.adminUser)
+	teamCoordinatorIDs := p.resolveTeamCoordinatorMatrixIDs(req.AdminSpec, req.HumanMembers)
+	teamMemberIDs := p.resolveTeamMemberMatrixIDs(req.HumanMembers)
 	leaderMatrixID := p.matrix.UserID(req.LeaderName)
-
-	// Team Room: Leader + Admin + all Workers
-	teamInvites := []string{adminMatrixID, leaderMatrixID}
-	for _, wn := range req.WorkerNames {
-		teamInvites = append(teamInvites, p.matrix.UserID(wn))
+	teamAdminID, hasTeamAdmin := p.resolveTeamAdminMatrixID(req.AdminSpec)
+	if req.AdminSpec != nil && !hasTeamAdmin {
+		return nil, fmt.Errorf("team admin is configured but has no matrix identity")
 	}
-	teamPowerLevels := map[string]int{
+	if hasTeamAdmin && req.TeamAdminActorToken == "" {
+		return nil, fmt.Errorf("team admin actor token is required when team admin is configured")
+	}
+
+	// Team Room: teamAdmin creates and owns the room when configured. Without
+	// teamAdmin, keep the legacy Admin bootstrap and membership fallback.
+	teamDesired := []string{}
+	if hasTeamAdmin {
+		teamDesired = appendUniqueStrings(teamDesired, teamAdminID)
+	} else {
+		teamDesired = appendUniqueStrings(teamDesired, adminMatrixID)
+	}
+	teamDesired = appendUniqueStrings(teamDesired, leaderMatrixID)
+	teamDesired = appendUniqueStrings(teamDesired, teamCoordinatorIDs...)
+	teamDesired = appendUniqueStrings(teamDesired, teamMemberIDs...)
+	for _, wn := range req.WorkerNames {
+		teamDesired = appendUniqueStrings(teamDesired, p.matrix.UserID(wn))
+	}
+	teamInvites := teamDesired
+	teamRoomPowerLevels := map[string]int{
 		managerMatrixID: 100,
-		adminMatrixID:   100,
 		leaderMatrixID:  100,
+	}
+	if hasTeamAdmin {
+		teamRoomPowerLevels[teamAdminID] = 100
+		teamInvites = withoutString(teamDesired, teamAdminID)
+	} else {
+		teamRoomPowerLevels[adminMatrixID] = 100
 	}
 
 	teamRoom, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
 		Name:          fmt.Sprintf("Team: %s", req.TeamName),
 		Topic:         fmt.Sprintf("Team room for %s", req.TeamName),
 		Invite:        teamInvites,
-		PowerLevels:   teamPowerLevels,
+		PowerLevels:   teamRoomPowerLevels,
+		CreatorToken:  req.TeamAdminActorToken,
 		RoomAliasName: roomAliasLocalpart("team", req.TeamName),
 	})
 	if err != nil {
@@ -681,20 +710,44 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	// Reconcile unconditionally: on fresh creation the invite list already
 	// took effect and Reconcile is a no-op; on alias resolution it catches
 	// up members added/removed since the previous run.
-	if err := p.ReconcileRoomMembership(ctx, teamRoom.RoomID, teamInvites); err != nil {
+	if hasTeamAdmin {
+		if err := p.matrix.JoinRoom(ctx, teamRoom.RoomID, req.TeamAdminActorToken); err != nil {
+			return nil, fmt.Errorf("team admin join team room: %w", err)
+		}
+		if err := p.ReconcileRoomMembershipWithActorToken(ctx, teamRoom.RoomID, teamDesired, req.TeamAdminActorToken, req.TeamAdminActorName); err != nil {
+			return nil, fmt.Errorf("reconcile team room membership as team admin: %w", err)
+		}
+		if teamAdminID != adminMatrixID {
+			if present, _, err := p.observedRoomMembershipWithToken(ctx, teamRoom.RoomID, adminMatrixID, req.TeamAdminActorToken); err != nil {
+				return nil, fmt.Errorf("check global admin team room membership: %w", err)
+			} else if present {
+				if err := p.matrix.LeaveRoom(ctx, teamRoom.RoomID, ""); err != nil {
+					return nil, fmt.Errorf("global admin leave team room: %w", err)
+				}
+			}
+		}
+	} else if err := p.ReconcileRoomMembership(ctx, teamRoom.RoomID, teamDesired); err != nil {
 		return nil, fmt.Errorf("reconcile team room membership: %w", err)
 	}
 
-	// Leader DM Room: Leader + Admin (+ optional Team Admin)
-	leaderDMInvites := []string{adminMatrixID, leaderMatrixID}
-	if req.AdminSpec != nil && req.AdminSpec.MatrixUserID != "" {
-		leaderDMInvites = append(leaderDMInvites, req.AdminSpec.MatrixUserID)
+	// Leader DM Room: only Leader + Team Admin when configured; otherwise
+	// fallback to the global Admin for legacy teams.
+	leaderDMDesired := []string{leaderMatrixID}
+	if hasTeamAdmin {
+		leaderDMDesired = appendUniqueStrings(leaderDMDesired, teamAdminID)
+	} else {
+		leaderDMDesired = appendUniqueStrings(leaderDMDesired, adminMatrixID)
+	}
+	leaderDMInvites := leaderDMDesired
+	if hasTeamAdmin {
+		leaderDMInvites = withoutString(leaderDMDesired, teamAdminID)
 	}
 	leaderDMRoom, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
 		Name:          fmt.Sprintf("Leader DM: %s", req.LeaderName),
 		Topic:         fmt.Sprintf("DM channel for team leader %s", req.LeaderName),
 		Invite:        leaderDMInvites,
-		PowerLevels:   teamPowerLevels,
+		PowerLevels:   p.leaderDMPowerLevels(managerMatrixID, adminMatrixID, leaderMatrixID, teamAdminID, hasTeamAdmin),
+		CreatorToken:  req.TeamAdminActorToken,
 		RoomAliasName: roomAliasLocalpart("leader-dm", req.LeaderName),
 	})
 	if err != nil {
@@ -702,7 +755,26 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	}
 	logger.Info("leader DM room ready", "roomID", leaderDMRoom.RoomID, "created", leaderDMRoom.Created)
 
-	if err := p.ReconcileRoomMembership(ctx, leaderDMRoom.RoomID, leaderDMInvites); err != nil {
+	if hasTeamAdmin {
+		if err := p.ensureTeamAdminJoinedLeaderDM(ctx, leaderDMRoom.RoomID, teamAdminID, req.TeamAdminActorToken, req.LeaderCredentialName, req.LeaderName, leaderDMRoom.Created); err != nil {
+			return nil, err
+		}
+	}
+
+	leaderDMInviteToken := ""
+	leaderDMInviteActor := ""
+	if hasTeamAdmin {
+		leaderDMInviteToken = req.TeamAdminActorToken
+		leaderDMInviteActor = req.TeamAdminActorName
+	} else if !leaderDMRoom.Created {
+		if token, err := p.leaderInviteToken(ctx, req.LeaderCredentialName, req.LeaderName); err != nil {
+			logger.Error(err, "failed to load leader token for existing leader DM; falling back to admin invite", "leader", req.LeaderName)
+		} else {
+			leaderDMInviteToken = token
+			leaderDMInviteActor = "leader"
+		}
+	}
+	if err := p.ReconcileRoomMembershipWithActorToken(ctx, leaderDMRoom.RoomID, leaderDMDesired, leaderDMInviteToken, leaderDMInviteActor); err != nil {
 		return nil, fmt.Errorf("reconcile leader DM membership: %w", err)
 	}
 
@@ -710,6 +782,141 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		TeamRoomID:     teamRoom.RoomID,
 		LeaderDMRoomID: leaderDMRoom.RoomID,
 	}, nil
+}
+
+func (p *Provisioner) ensureTeamAdminJoinedLeaderDM(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName string, created bool) error {
+	if err := p.matrix.JoinRoom(ctx, roomID, teamAdminToken); err == nil {
+		return nil
+	} else if created {
+		return fmt.Errorf("team admin join leader DM room: %w", err)
+	} else {
+		joinErr := err
+		leaderToken, tokenErr := p.leaderInviteToken(ctx, leaderCredentialName, leaderName)
+		if tokenErr != nil {
+			return fmt.Errorf("team admin join leader DM room: %w", joinErr)
+		}
+		if inviteErr := p.matrix.InviteToRoomWithToken(ctx, roomID, teamAdminID, leaderToken); inviteErr != nil {
+			return fmt.Errorf("leader invite team admin to leader DM room: %w", inviteErr)
+		}
+		if retryErr := p.matrix.JoinRoom(ctx, roomID, teamAdminToken); retryErr != nil {
+			return fmt.Errorf("team admin join leader DM room after leader invite: %w", retryErr)
+		}
+		return nil
+	}
+}
+
+func (p *Provisioner) leaderDMPowerLevels(managerMatrixID, adminMatrixID, leaderMatrixID, teamAdminID string, hasTeamAdmin bool) map[string]int {
+	levels := map[string]int{
+		managerMatrixID: 100,
+		leaderMatrixID:  100,
+	}
+	if hasTeamAdmin {
+		levels[teamAdminID] = 100
+	} else {
+		levels[adminMatrixID] = 100
+	}
+	return levels
+}
+
+func (p *Provisioner) resolveTeamAdminMatrixID(admin *v1beta1.TeamAdminSpec) (string, bool) {
+	if admin == nil {
+		return "", false
+	}
+	if admin.MatrixUserID != "" {
+		return admin.MatrixUserID, true
+	}
+	if admin.Name != "" {
+		return p.matrix.UserID(admin.Name), true
+	}
+	return "", false
+}
+
+func (p *Provisioner) resolveTeamCoordinatorMatrixIDs(admin *v1beta1.TeamAdminSpec, members []v1beta1.TeamMemberSpec) []string {
+	ids := make([]string, 0, 1+len(members))
+	if id, ok := p.resolveTeamAdminMatrixID(admin); ok {
+		ids = append(ids, id)
+	}
+	for _, member := range members {
+		if !teamMemberIsCoordinator(member) {
+			continue
+		}
+		if member.MatrixUserID != "" {
+			ids = append(ids, member.MatrixUserID)
+			continue
+		}
+		if member.Name != "" {
+			ids = append(ids, p.matrix.UserID(member.Name))
+		}
+	}
+	return uniqueStrings(ids)
+}
+
+func (p *Provisioner) resolveTeamMemberMatrixIDs(members []v1beta1.TeamMemberSpec) []string {
+	ids := make([]string, 0, len(members))
+	for _, member := range members {
+		if member.MatrixUserID != "" {
+			ids = append(ids, member.MatrixUserID)
+			continue
+		}
+		if member.Name != "" {
+			ids = append(ids, p.matrix.UserID(member.Name))
+		}
+	}
+	return uniqueStrings(ids)
+}
+
+func teamMemberIsCoordinator(member v1beta1.TeamMemberSpec) bool {
+	return member.Role == "" || member.Role == "coordinator"
+}
+
+func appendUniqueStrings(base []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(base)+len(values))
+	out := make([]string, 0, len(base)+len(values))
+	for _, v := range base {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+func uniqueStrings(values []string) []string {
+	return appendUniqueStrings(nil, values...)
+}
+
+func withoutString(values []string, target string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == target {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureRoomMember invites userID into roomID. Idempotent (treats
@@ -731,9 +938,23 @@ func (p *Provisioner) EnsureRoomNonMember(ctx context.Context, roomID, userID, r
 // returned after processing every user (best-effort semantics, consistent
 // with DeprovisionWorker).
 func (p *Provisioner) ReconcileRoomMembership(ctx context.Context, roomID string, desired []string) error {
+	return p.ReconcileRoomMembershipWithActorToken(ctx, roomID, desired, "", "")
+}
+
+func (p *Provisioner) ReconcileRoomMembershipWithInviteToken(ctx context.Context, roomID string, desired []string, inviteToken, inviteActor string) error {
+	return p.ReconcileRoomMembershipWithActorToken(ctx, roomID, desired, inviteToken, inviteActor)
+}
+
+func (p *Provisioner) ReconcileRoomMembershipWithActorToken(ctx context.Context, roomID string, desired []string, actorToken, actorName string) error {
 	logger := log.FromContext(ctx)
 
-	current, err := p.matrix.ListRoomMembers(ctx, roomID)
+	var current []matrix.RoomMember
+	var err error
+	if actorToken != "" {
+		current, err = p.matrix.ListRoomMembersWithToken(ctx, roomID, actorToken)
+	} else {
+		current, err = p.matrix.ListRoomMembers(ctx, roomID)
+	}
 	if err != nil {
 		return fmt.Errorf("list members of %s: %w", roomID, err)
 	}
@@ -756,7 +977,14 @@ func (p *Provisioner) ReconcileRoomMembership(ctx context.Context, roomID string
 		if _, ok := currentSet[u]; ok {
 			continue
 		}
-		if err := p.matrix.InviteToRoom(ctx, roomID, u); err != nil {
+		var err error
+		if actorToken != "" {
+			logger.Info("inviting user to room with joined member token", "room", roomID, "user", u, "actor", actorName)
+			err = p.matrix.InviteToRoomWithToken(ctx, roomID, u, actorToken)
+		} else {
+			err = p.matrix.InviteToRoom(ctx, roomID, u)
+		}
+		if err != nil {
 			logger.Error(err, "failed to invite user to room", "room", roomID, "user", u)
 			if firstErr == nil {
 				firstErr = err
@@ -772,8 +1000,43 @@ func (p *Provisioner) ReconcileRoomMembership(ctx context.Context, roomID string
 		// power level 100 and some rooms (e.g. Manager Admin DM) expect it
 		// implicitly. Callers must include the admin in `desired` when they
 		// want it to stay.
-		if err := p.matrix.KickFromRoom(ctx, roomID, m.UserID, "removed from desired member set"); err != nil {
+		if m.UserID == p.matrix.UserID(p.adminUser) {
+			continue
+		}
+		logger.Info("room member not desired; attempting removal",
+			"room", roomID,
+			"user", m.UserID,
+			"membership", m.Membership,
+			"currentCount", len(currentSet),
+			"desiredCount", len(desiredSet))
+		var err error
+		if actorToken != "" {
+			logger.Info("kicking user from room with joined member token", "room", roomID, "user", m.UserID, "actor", actorName)
+			err = p.matrix.KickFromRoomWithToken(ctx, roomID, m.UserID, "removed from desired member set", actorToken)
+		} else {
+			err = p.matrix.KickFromRoom(ctx, roomID, m.UserID, "removed from desired member set")
+		}
+		if err != nil {
 			logger.Error(err, "failed to kick user from room", "room", roomID, "user", m.UserID)
+			if shouldForceLeaveAfterKickError(err) {
+				if forceErr := p.ForceLeaveRoom(ctx, m.UserID, roomID); forceErr == nil {
+					logger.Info("force-leave-room command sent after kick failed", "room", roomID, "user", m.UserID)
+					stillPresent, memberships, checkErr := p.observedRoomMembership(ctx, roomID, m.UserID)
+					if checkErr != nil {
+						logger.Error(checkErr, "failed to verify force-leave-room result", "room", roomID, "user", m.UserID)
+					} else {
+						logger.Info("force-leave-room post-check",
+							"room", roomID,
+							"user", m.UserID,
+							"stillPresent", stillPresent,
+							"memberships", memberships)
+					}
+					continue
+				} else {
+					logger.Error(forceErr, "failed to send force-leave-room command", "room", roomID, "user", m.UserID)
+					err = forceErr
+				}
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -781,6 +1044,68 @@ func (p *Provisioner) ReconcileRoomMembership(ctx context.Context, roomID string
 	}
 
 	return firstErr
+}
+
+func (p *Provisioner) leaderInviteToken(ctx context.Context, credentialName, leaderName string) (string, error) {
+	if p.creds == nil {
+		return "", fmt.Errorf("credential store unavailable")
+	}
+	if credentialName == "" {
+		credentialName = leaderName
+	}
+	refresh, err := p.RefreshWorkerCredentials(ctx, credentialName, leaderName)
+	if err != nil {
+		return "", err
+	}
+	if refresh.MatrixToken == "" {
+		return "", fmt.Errorf("leader matrix token is empty")
+	}
+	return refresh.MatrixToken, nil
+}
+
+func (p *Provisioner) observedRoomMembership(ctx context.Context, roomID, userID string) (bool, []string, error) {
+	members, err := p.matrix.ListRoomMembers(ctx, roomID)
+	if err != nil {
+		return false, nil, err
+	}
+	return observedMembershipFromMembers(members, userID), observedMembershipsFromMembers(members, userID), nil
+}
+
+func (p *Provisioner) observedRoomMembershipWithToken(ctx context.Context, roomID, userID, token string) (bool, []string, error) {
+	members, err := p.matrix.ListRoomMembersWithToken(ctx, roomID, token)
+	if err != nil {
+		return false, nil, err
+	}
+	return observedMembershipFromMembers(members, userID), observedMembershipsFromMembers(members, userID), nil
+}
+
+func observedMembershipFromMembers(members []matrix.RoomMember, userID string) bool {
+	for _, member := range members {
+		if member.UserID == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func observedMembershipsFromMembers(members []matrix.RoomMember, userID string) []string {
+	memberships := make([]string, 0, 1)
+	for _, member := range members {
+		if member.UserID != userID {
+			continue
+		}
+		memberships = append(memberships, member.Membership)
+	}
+	return memberships
+}
+
+func shouldForceLeaveAfterKickError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "m_forbidden") &&
+		(strings.Contains(msg, "not have enough power") || strings.Contains(msg, "power"))
 }
 
 // DeleteCredentials removes persisted credentials for a worker.

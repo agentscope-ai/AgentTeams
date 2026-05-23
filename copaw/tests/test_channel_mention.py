@@ -24,6 +24,24 @@ class _TypingClient:
         self.calls.append((room_id, typing_state, timeout))
 
 
+class _SendClient:
+    def __init__(self):
+        self.rooms = {}
+        self.sent = []
+
+    async def room_send(
+        self,
+        room_id,
+        event_type,
+        content,
+        ignore_unverified_devices=True,
+    ):
+        self.sent.append(
+            (room_id, event_type, content, ignore_unverified_devices),
+        )
+        return SimpleNamespace(event_id="$reply")
+
+
 async def _noop_typing(*_args, **_kwargs):
     return None
 
@@ -395,3 +413,46 @@ def test_matrix_double_slash_stop_normalized_with_mention():
 
     assert len(ch.enqueued) == 1
     assert _first_text(ch.enqueued[0]) == "/stop"
+
+
+def test_matrix_readiness_probe_replies_directly_without_enqueue():
+    ch = _make_inbound_channel()
+    client = _SendClient()
+    ch._client = client
+
+    asyncio.run(
+        ch._on_room_event(
+            _FakeRoom(),
+            _event(
+                "copywriting-assistant: Readiness check: please reply with "
+                "the exact text READY.",
+                mentioned=True,
+            ),
+        ),
+    )
+
+    assert ch.enqueued == []
+    assert len(client.sent) == 1
+    assert client.sent[0][0] == "!room:hs.local"
+    assert client.sent[0][2]["body"] == "READY"
+
+
+def test_matrix_readiness_probe_bypasses_allowlist_when_targeted():
+    ch = _make_inbound_channel()
+    client = _SendClient()
+    ch._client = client
+    ch._check_allowed = lambda *_args: False
+
+    asyncio.run(
+        ch._on_room_event(
+            _FakeRoom(),
+            _event(
+                "@copywriting-assistant:hs.local Readiness check: please "
+                "reply with the exact text READY.",
+            ),
+        ),
+    )
+
+    assert ch.enqueued == []
+    assert len(client.sent) == 1
+    assert client.sent[0][2]["body"] == "READY"

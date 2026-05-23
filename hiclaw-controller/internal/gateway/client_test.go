@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -365,6 +366,45 @@ func TestEnsureAIRoute_ExistingSkipsPOST(t *testing.T) {
 	}
 	if postCalled {
 		t.Fatalf("EnsureAIRoute POSTed to /v1/ai/routes despite route existing; must be a no-op")
+	}
+}
+
+func TestEnsureStreamIdleTimeoutPatchesHigressConfig(t *testing.T) {
+	var putBody map[string]interface{}
+	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/system/init":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/session/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "test"})
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/system/higress-config" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data":    "data:\n  higress: |-\n    downstream:\n      connectionBufferLimits: 32768\n      idleTimeout: 180\n      routeTimeout: 0\n    upstream:\n      idleTimeout: 10\n",
+			})
+		case r.URL.Path == "/system/higress-config" && r.Method == http.MethodPut:
+			_ = json.NewDecoder(r.Body).Decode(&putBody)
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Logf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+
+	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
+	if err := c.EnsureStreamIdleTimeout(context.Background(), 900); err != nil {
+		t.Fatalf("EnsureStreamIdleTimeout: %v", err)
+	}
+	if putBody == nil {
+		t.Fatalf("expected PUT to /system/higress-config")
+	}
+	config, _ := putBody["config"].(string)
+	if !strings.Contains(config, "      idleTimeout: 900") {
+		t.Fatalf("patched config does not contain downstream idleTimeout 900:\n%s", config)
+	}
+	if !strings.Contains(config, "    upstream:\n      idleTimeout: 10") {
+		t.Fatalf("patched config should preserve upstream idleTimeout:\n%s", config)
 	}
 }
 

@@ -1,14 +1,14 @@
 {
   "security": {
     "tool_guard": {
-      "enabled": false,
+      "enabled": true,
       "guarded_tools": [],
       "denied_tools": [],
       "custom_rules": [],
       "disabled_rules": []
     },
     "file_guard": {
-      "enabled": false,
+      "enabled": true,
       "sensitive_files": []
     },
     "skill_scanner": {

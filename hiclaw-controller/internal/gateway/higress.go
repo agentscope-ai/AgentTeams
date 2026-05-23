@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -374,6 +375,79 @@ func (c *HigressClient) EnsureAIProvider(ctx context.Context, req AIProviderRequ
 		return nil
 	}
 	return fmt.Errorf("ensure AI provider %s: HTTP %d", req.Name, sc)
+}
+
+func (c *HigressClient) EnsureStreamIdleTimeout(ctx context.Context, seconds int) error {
+	if seconds <= 0 {
+		seconds = 900
+	}
+
+	respBody, sc, err := c.doJSON(ctx, http.MethodGet, "/system/higress-config", nil)
+	if err != nil {
+		return fmt.Errorf("ensure stream idle timeout: read higress config: %w", err)
+	}
+	if sc != http.StatusOK {
+		return fmt.Errorf("ensure stream idle timeout: read higress config HTTP %d", sc)
+	}
+
+	var resp struct {
+		Success bool        `json:"success"`
+		Data    interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return fmt.Errorf("ensure stream idle timeout: parse higress config response: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("ensure stream idle timeout: higress config response was unsuccessful")
+	}
+	config, ok := resp.Data.(string)
+	if !ok {
+		return fmt.Errorf("ensure stream idle timeout: higress config data was %T, want string", resp.Data)
+	}
+
+	patched := patchDownstreamIdleTimeout(config, seconds)
+	_, putSC, putErr := c.doJSON(ctx, http.MethodPut, "/system/higress-config", map[string]interface{}{"config": patched})
+	if putErr != nil {
+		return fmt.Errorf("ensure stream idle timeout: update higress config: %w", putErr)
+	}
+	if putSC != http.StatusOK && putSC != http.StatusCreated && putSC != http.StatusNoContent {
+		return fmt.Errorf("ensure stream idle timeout: update higress config HTTP %d", putSC)
+	}
+	return nil
+}
+
+func patchDownstreamIdleTimeout(config string, seconds int) string {
+	lines := strings.Split(config, "\n")
+	out := make([]string, 0, len(lines)+1)
+	inDownstream := false
+	patched := false
+	value := "      idleTimeout: " + strconv.Itoa(seconds)
+
+	for _, line := range lines {
+		if line == "    downstream:" {
+			inDownstream = true
+			out = append(out, line)
+			continue
+		}
+		if inDownstream && strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "      ") {
+			if !patched {
+				out = append(out, value)
+				patched = true
+			}
+			inDownstream = false
+		}
+		if inDownstream && strings.HasPrefix(strings.TrimSpace(line), "idleTimeout:") {
+			out = append(out, value)
+			patched = true
+			continue
+		}
+		out = append(out, line)
+	}
+
+	if inDownstream && !patched {
+		out = append(out, value)
+	}
+	return strings.Join(out, "\n")
 }
 
 // EnsureAIRoute creates the AI route skeleton (name, path, upstream, key-auth

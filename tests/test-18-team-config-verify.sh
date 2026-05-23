@@ -351,13 +351,15 @@ fi
 # ============================================================
 log_section "Verify Skills by Role"
 
-# Leader should have team-task-management skill
-LEADER_TTM=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/team-task-management/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
-if [ "${LEADER_TTM}" = "yes" ]; then
-    log_pass "Leader has team-task-management skill"
-else
-    log_fail "Leader missing team-task-management skill"
-fi
+# Leader should have canonical Team Leader skills
+for skill in team-coordination project-management task-management; do
+    LEADER_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
+    if [ "${LEADER_SKILL}" = "yes" ]; then
+        log_pass "Leader has ${skill} skill"
+    else
+        log_fail "Leader missing ${skill} skill"
+    fi
+done
 
 # Workers should have standard worker skills
 for skill in file-sync task-progress mcporter; do

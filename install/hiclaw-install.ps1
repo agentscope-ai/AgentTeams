@@ -3127,6 +3127,9 @@ function Install-Manager {
         if ($config.OPENAI_BASE_URL) {
             $ctrlArgs += @("-e", "HICLAW_OPENAI_BASE_URL=$($config.OPENAI_BASE_URL)")
         }
+        if ($env:HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS) {
+            $ctrlArgs += @("-e", "HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS=$($env:HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS)")
+        }
         if ($script:HICLAW_LANGUAGE) {
             $ctrlArgs += @("-e", "HICLAW_LANGUAGE=$($script:HICLAW_LANGUAGE)")
         }

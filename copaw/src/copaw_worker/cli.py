@@ -28,9 +28,14 @@ def main() -> None:
         fs_key: str = typer.Option(..., "--fs-key", help="MinIO access key"),
         fs_secret: str = typer.Option(..., "--fs-secret", help="MinIO secret key"),
         fs_bucket: str = typer.Option("hiclaw-storage", "--fs-bucket", help="MinIO bucket"),
-        sync_interval: int = typer.Option(300, "--sync-interval", help="Sync interval (seconds)"),
+        sync_interval: int = typer.Option(
+            60,
+            "--sync-interval",
+            help="Runtime config pull interval in seconds (default: 60).",
+        ),
         install_dir: Optional[str] = typer.Option(None, "--install-dir", help="Base install dir"),
         console_port: int = typer.Option(8088, "--console-port", help="Web console port (default: 8088)"),
+        worker_port: Optional[int] = typer.Option(None, "--worker-port", help="HiClaw worker API port (default: console-port + 1)"),
     ) -> None:
         """Start the CoPaw Worker and connect to Matrix."""
         config = WorkerConfig(
@@ -40,9 +45,10 @@ def main() -> None:
             minio_access_key=fs_key,
             minio_secret_key=fs_secret,
             minio_bucket=fs_bucket,
-            sync_interval=sync_interval,
             install_dir=Path(install_dir) if install_dir else None,
             console_port=console_port,
+            worker_port=worker_port,
+            sync_interval=sync_interval,
         )
         worker = Worker(config)
 

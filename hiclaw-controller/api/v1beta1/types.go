@@ -219,6 +219,7 @@ type TeamSpec struct {
 	Description   string             `json:"description,omitempty"`
 	TeamName      string             `json:"teamName,omitempty"`
 	Admin         *TeamAdminSpec     `json:"admin,omitempty"`
+	HumanMembers  []TeamMemberSpec   `json:"humanMembers,omitempty"`
 	Leader        LeaderSpec         `json:"leader"`
 	Workers       []TeamWorkerSpec   `json:"workers,omitempty"`
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
@@ -237,6 +238,12 @@ type TeamAdminSpec struct {
 	MatrixUserID string `json:"matrixUserId,omitempty"`
 }
 
+type TeamMemberSpec struct {
+	Name         string `json:"name"`
+	MatrixUserID string `json:"matrixUserId,omitempty"`
+	Role         string `json:"role,omitempty"` // coordinator (default)
+}
+
 type LeaderSpec struct {
 	Name              string                   `json:"name"`
 	WorkerName        string                   `json:"workerName,omitempty"`
@@ -245,6 +252,7 @@ type LeaderSpec struct {
 	Soul              string                   `json:"soul,omitempty"`
 	Agents            string                   `json:"agents,omitempty"`
 	Package           string                   `json:"package,omitempty"`
+	RemoteSkills      []RemoteSkillSource      `json:"remoteSkills,omitempty"` // remote skills from source registries
 	McpServers        []MCPServer              `json:"mcpServers,omitempty"`
 	Heartbeat         *TeamLeaderHeartbeatSpec `json:"heartbeat,omitempty"`
 	WorkerIdleTimeout string                   `json:"workerIdleTimeout,omitempty"`

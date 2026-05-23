@@ -2,7 +2,7 @@
 # test-21-team-project-dag.sh - Case 21: Team project DAG orchestration end-to-end
 #
 # Tests:
-#   Part A (infrastructure): Team storage, S3 policy, skills, DAG resolver, state tracking
+#   Part A (infrastructure): Team storage, S3 policy, canonical Team Leader skills
 #   Part B (room topology): Manager NOT in Team Room / Leader DM / Worker Rooms
 #   Part C (e2e via LLM): Admin delegates task in Leader DM, Leader coordinates workers via Team Room
 #
@@ -37,10 +37,11 @@ This gives you Team Room ID, Leader DM, and worker list with room IDs. You CANNO
 
 ## Core Principles
 
-- **NEVER do domain work yourself** — you are a coordinator. Always delegate to workers using the send-team-message.sh script
-- To assign a task to a worker, run: bash ./skills/team-task-management/scripts/send-team-message.sh --room-id TEAM_ROOM_ID --to @worker:domain --message MESSAGE
-- Workers only process messages with @mentions sent via send-team-message.sh
-- Read team-task-management SKILL.md for detailed instructions"
+- **NEVER do domain work yourself** — you are a coordinator. Always delegate ready Project nodes to workers with taskflow
+- Read team-coordination, project-management, and task-management before planning and delegating work
+- Use projectflow to manage Project plans and ready nodes
+- Use taskflow delegate_task to create task files for each ready node, then @mention the assigned Worker in the Team Room
+- Workers only process task assignments addressed to them in the Team Room"
     [ "${w}" = "${TEST_W1}" ] && ROLE_DESC="Backend Developer"
     [ "${w}" = "${TEST_W2}" ] && ROLE_DESC="QA Engineer"
 
@@ -153,7 +154,7 @@ fi
 # ============================================================
 log_section "Verify Leader Skills"
 
-for skill in team-task-management team-project-management team-task-coordination; do
+for skill in team-coordination project-management task-management; do
     SKILL_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
     if [ "${SKILL_EXISTS}" = "yes" ]; then
         log_pass "Leader has ${skill} skill"
@@ -210,163 +211,24 @@ else
 fi
 
 # ============================================================
-# Section 7: DAG Resolver Tests (infrastructure)
+# Section 7: Verify Canonical Team Leader Skill Guidance
 # ============================================================
-log_section "DAG Resolver Tests"
+log_section "Verify Canonical Team Leader Skill Guidance"
 
 LEADER_HOME="/root/hiclaw-fs/agents/${TEST_LEADER}"
-PLAN_PATH="/root/hiclaw-fs/teams/${TEST_TEAM}/projects/tp-infra-test/plan.md"
+PROJECT_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/project-management/SKILL.md" 2>/dev/null)
+TASK_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/task-management/SKILL.md" 2>/dev/null)
+COORDINATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/team-coordination/SKILL.md" 2>/dev/null)
 
-# Copy scripts to Leader HOME (same as create-team.sh does via skills push)
-exec_in_manager bash -c "
-    mkdir -p '${LEADER_HOME}/skills/team-project-management/scripts'
-    mkdir -p '${LEADER_HOME}/skills/team-task-management/scripts'
-    cp /opt/hiclaw/agent/team-leader-agent/skills/team-project-management/scripts/resolve-dag.sh \
-       '${LEADER_HOME}/skills/team-project-management/scripts/'
-    cp /opt/hiclaw/agent/team-leader-agent/skills/team-project-management/scripts/create-team-project.sh \
-       '${LEADER_HOME}/skills/team-project-management/scripts/'
-    cp /opt/hiclaw/agent/team-leader-agent/skills/team-task-management/scripts/manage-team-state.sh \
-       '${LEADER_HOME}/skills/team-task-management/scripts/'
-" 2>/dev/null
-
-# Write DAG plan
-exec_in_manager bash -c "
-mkdir -p /root/hiclaw-fs/teams/${TEST_TEAM}/projects/tp-infra-test
-cat > '${PLAN_PATH}' <<'PLAN'
-# Team Project: Infra Test
-
-## DAG Task Plan
-
-- [ ] st-01 — Design schema (assigned: @${TEST_W1}:${TEST_MATRIX_DOMAIN})
-- [ ] st-02 — Design API (assigned: @${TEST_W1}:${TEST_MATRIX_DOMAIN})
-- [ ] st-03 — Implement backend (assigned: @${TEST_W1}:${TEST_MATRIX_DOMAIN}, depends: st-01, st-02)
-- [ ] st-04 — Write tests (assigned: @${TEST_W2}:${TEST_MATRIX_DOMAIN}, depends: st-02)
-- [ ] st-05 — Integration test (assigned: @${TEST_W2}:${TEST_MATRIX_DOMAIN}, depends: st-03, st-04)
-
-## Change Log
-PLAN
-" 2>/dev/null
-
-# Validate
-VALIDATE_OUTPUT=$(exec_in_manager bash -c "
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash ${LEADER_HOME}/skills/team-project-management/scripts/resolve-dag.sh \
-        --plan '${PLAN_PATH}' --action validate
-" 2>&1)
-VALID=$(echo "${VALIDATE_OUTPUT}" | jq -r '.valid // empty' 2>/dev/null)
-assert_eq "true" "${VALID}" "DAG validate: no cycles"
-
-# Wave 1
-READY_OUTPUT=$(exec_in_manager bash -c "
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash ${LEADER_HOME}/skills/team-project-management/scripts/resolve-dag.sh \
-        --plan '${PLAN_PATH}' --action ready
-" 2>&1)
-READY_IDS=$(echo "${READY_OUTPUT}" | jq -r '[.ready_tasks[].id] | sort | join(",")' 2>/dev/null)
-assert_eq "st-01,st-02" "${READY_IDS}" "DAG wave 1: st-01, st-02 ready"
-
-# Complete st-01, st-02 → wave 2
-exec_in_manager bash -c "
-    sed -i 's/- \[ \] st-01/- [x] st-01/' '${PLAN_PATH}'
-    sed -i 's/- \[ \] st-02/- [x] st-02/' '${PLAN_PATH}'
-" 2>/dev/null
-
-WAVE2_OUTPUT=$(exec_in_manager bash -c "
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash ${LEADER_HOME}/skills/team-project-management/scripts/resolve-dag.sh \
-        --plan '${PLAN_PATH}' --action ready
-" 2>&1)
-WAVE2_IDS=$(echo "${WAVE2_OUTPUT}" | jq -r '[.ready_tasks[].id] | sort | join(",")' 2>/dev/null)
-assert_eq "st-03,st-04" "${WAVE2_IDS}" "DAG wave 2: st-03, st-04 ready (parallel)"
-
-# Complete st-03, st-04 → wave 3
-exec_in_manager bash -c "
-    sed -i 's/- \[ \] st-03/- [x] st-03/' '${PLAN_PATH}'
-    sed -i 's/- \[ \] st-04/- [x] st-04/' '${PLAN_PATH}'
-" 2>/dev/null
-
-WAVE3_OUTPUT=$(exec_in_manager bash -c "
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash ${LEADER_HOME}/skills/team-project-management/scripts/resolve-dag.sh \
-        --plan '${PLAN_PATH}' --action ready
-" 2>&1)
-WAVE3_IDS=$(echo "${WAVE3_OUTPUT}" | jq -r '[.ready_tasks[].id] | join(",")' 2>/dev/null)
-assert_eq "st-05" "${WAVE3_IDS}" "DAG wave 3: st-05 ready"
-
-# Cycle detection
-exec_in_manager bash -c "
-cat > /tmp/cycle-plan.md <<'PLAN'
-# Cycle Test
-## DAG Task Plan
-- [ ] st-01 — A (assigned: @w1:d, depends: st-03)
-- [ ] st-02 — B (assigned: @w2:d, depends: st-01)
-- [ ] st-03 — C (assigned: @w1:d, depends: st-02)
-PLAN
-" 2>/dev/null
-
-CYCLE_OUTPUT=$(exec_in_manager bash -c "
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash /opt/hiclaw/agent/team-leader-agent/skills/team-project-management/scripts/resolve-dag.sh \
-        --plan /tmp/cycle-plan.md --action validate 2>&1 || true
-" 2>&1)
-if echo "${CYCLE_OUTPUT}" | grep -q '"valid": false'; then
-    log_pass "DAG cycle detection: correctly identified cycle"
-else
-    log_fail "DAG cycle detection failed"
-fi
+assert_contains "${PROJECT_SKILL}" "projectflow" "project-management documents projectflow"
+assert_contains "${PROJECT_SKILL}" "ready_nodes" "project-management documents DAG ready nodes"
+assert_contains "${TASK_SKILL}" "taskflow" "task-management documents taskflow"
+assert_contains "${TASK_SKILL}" "delegate_task" "task-management documents task delegation"
+assert_contains "${COORDINATION_SKILL}" "DAG" "team-coordination documents DAG strategy"
+assert_contains "${COORDINATION_SKILL}" "Loop" "team-coordination documents Loop strategy"
 
 # ============================================================
-# Section 8: State Tracking Tests
-# ============================================================
-log_section "State Tracking"
-
-STATE_SCRIPT="${LEADER_HOME}/skills/team-task-management/scripts/manage-team-state.sh"
-
-exec_in_manager bash -c "
-    rm -f '${LEADER_HOME}/team-state.json'
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash '${STATE_SCRIPT}' --action init
-" 2>/dev/null
-
-# Manager source
-ADD_OUT=$(exec_in_manager bash -c "
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash '${STATE_SCRIPT}' --action add-project --project-id tp-mgr --title 'Mgr Project' --source manager --parent-task-id task-mgr
-" 2>&1)
-assert_contains "${ADD_OUT}" "OK" "add-project (manager source)"
-
-# Team Admin source
-ADD_OUT2=$(exec_in_manager bash -c "
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash '${STATE_SCRIPT}' --action add-project --project-id tp-admin --title 'Admin Project' --source team-admin --requester '@admin:domain'
-" 2>&1)
-assert_contains "${ADD_OUT2}" "OK" "add-project (team-admin source)"
-
-STATE_JSON=$(exec_in_manager cat "${LEADER_HOME}/team-state.json" 2>/dev/null)
-assert_eq "2" "$(echo "${STATE_JSON}" | jq '.active_projects | length')" "2 active projects in state"
-
-# Complete manager project
-exec_in_manager bash -c "
-    export HOME='${LEADER_HOME}'
-    cd '${LEADER_HOME}'
-    bash '${STATE_SCRIPT}' --action complete-project --project-id tp-mgr
-" 2>/dev/null
-STATE_JSON2=$(exec_in_manager cat "${LEADER_HOME}/team-state.json" 2>/dev/null)
-assert_eq "1" "$(echo "${STATE_JSON2}" | jq '.active_projects | length')" "1 project remaining after completion"
-assert_eq "tp-admin" "$(echo "${STATE_JSON2}" | jq -r '.active_projects[0].project_id')" "Remaining project is admin project"
-
-# ============================================================
-# Section 9: End-to-End LLM Test — Admin delegates via Leader DM
+# Section 8: End-to-End LLM Test — Admin delegates via Leader DM
 # ============================================================
 log_section "E2E: Admin Delegates Task via Leader DM"
 

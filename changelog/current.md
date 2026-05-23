@@ -4,6 +4,24 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- feat(copaw): add runtime hooks, task/message/file-sync tools, health probes, and refreshed Worker coordination builtins.
+- fix(copaw): keep WorkerConfig CLI startup arguments aligned with the CoPaw worker API port and sync interval.
+- fix(copaw): make direct CoPaw worker readiness-check replies explicit and align the ZIP import probe prompt.
+- fix(copaw): restore MatrixChannel thread-relation helpers used by `copaw channels send`.
+- fix(copaw): avoid swallowing fresh Matrix messages during first-start sync token initialization.
+- fix(copaw): gate Worker readiness on Matrix channel startup so probes do not pass before messages can be handled.
+- fix(copaw): answer Matrix runtime readiness probes directly once the channel is receiving mentioned messages.
+- fix(copaw): handle targeted Matrix readiness probes before the normal agent dispatch and policy path.
+- fix(manager): keep task state registration compatible with legacy finite-task arguments used by Manager agents.
+- fix(manager): auto-join local workers into project rooms after Matrix invite and register project rooms in Manager Matrix config so CoPaw/Hermes project coordination can continue.
+- fix(hiclaw-controller): apply the configured AI stream idle timeout to the self-hosted Higress gateway.
+- feat(team-leader): refresh Team Leader coordination prompts and built-in skills for project, task, file-sharing, communication, organization, and mcporter workflows.
+- fix(team-leader): keep legacy Team Leader skill names and helper scripts available for existing workspaces and integration tests.
+- refactor(team-leader): remove legacy Team Leader skill aliases after migrating docs and integration checks to canonical project, task, and coordination skills.
+
+- feat(hiclaw-controller): propagate controller-level skills API and Nacos auth defaults to workers.
+- fix(hiclaw-controller): let inline Worker SOUL config override package-seeded SOUL.md during package updates.
+- fix(copaw): suppress noisy warnings when optional MinIO objects do not exist.
 - fix(hiclaw-controller): preserve default object-storage access when custom non-storage entries are configured.
 - fix(copaw): skip static mc alias setup for k8s workers that use wrapper-provided credentials.
 - fix(copaw): exclude inbound Matrix thread messages from room-history context.
@@ -23,3 +41,4 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - fix(copaw): require slash-prefixed runtime control commands and normalize Element double-slash commands.
 - fix(manager): quote coding CLI skill frontmatter descriptions that contain colons.
 - feat(controller): separate CR resource names from runtime worker names across controller identity, credentials, storage defaults, and readiness reporting.
+- feat(controller): support Team human coordinator members, team-admin-owned Matrix rooms, and leader/worker remote skills; document coordinators as Team Room participants only.

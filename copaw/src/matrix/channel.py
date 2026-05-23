@@ -14,7 +14,7 @@ import os
 import re
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -40,7 +40,7 @@ from nio import (
 )
 from nio.responses import JoinedMembersResponse, WhoamiResponse
 
-logger = logging.getLogger("qwenpaw.channels.matrix")
+logger = logging.getLogger("copaw.channels.matrix")
 
 # ---------------------------------------------------------------------------
 # Lazy import of QwenPaw base types so this file can be syntax-checked without
@@ -53,11 +53,16 @@ try:
         ContentType,
         FileContent,
         ImageContent,
+        MessageType,
+        RunStatus,
         TextContent,
         VideoContent,
     )
 except ImportError:  # pragma: no cover
     BaseChannel = object  # type: ignore[assignment,misc]
+    ContentType = None  # type: ignore[assignment]
+    MessageType = None  # type: ignore[assignment]
+    RunStatus = None  # type: ignore[assignment]
 
 
 CHANNEL_KEY = "matrix"
@@ -87,6 +92,39 @@ _SLASH_COMMANDS = frozenset(
 _SLASH_ALIASES: dict[str, str] = {
     "reset": "clear",
 }
+_CONTROL_COMMAND_ALIASES: dict[str, str] = {
+    "stop": "/stop",
+    "approve": "/approve",
+    "deny": "/deny",
+    "approval": "/approval",
+}
+_STOP_RESPONSE_RE = re.compile(
+    r"Session\s+`matrix:[^`]+`:\s+(?P<status>[^.]+)\.",
+    re.IGNORECASE,
+)
+_READINESS_REPLY_RE = re.compile(
+    r"\breadiness\s+check\b.*\breply\s+with\s+the\s+exact\s+text\s+READY\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_THREAD_META_ROOT_KEY = "thread_root_event_id"
+_MATRIX_THREAD_META_KEY = "matrix_thread_root_event_id"
+_MATRIX_OWN_THREAD_ROOT_KEY = "matrix_own_thread_root_event_id"
+_MATRIX_PENDING_THREAD_PARTS_KEY = "matrix_pending_thread_parts"
+_MATRIX_PENDING_FINAL_MESSAGE_KEY = "matrix_pending_final_message"
+_TOOL_CALL_MESSAGE_TYPE_NAMES = frozenset(
+    {
+        "FUNCTION_CALL",
+        "PLUGIN_CALL",
+        "MCP_TOOL_CALL",
+    },
+)
+_TOOL_OUTPUT_MESSAGE_TYPE_NAMES = frozenset(
+    {
+        "FUNCTION_CALL_OUTPUT",
+        "PLUGIN_CALL_OUTPUT",
+        "MCP_TOOL_CALL_OUTPUT",
+    },
+)
 
 
 def _md_to_html(text: str) -> str:
@@ -134,6 +172,37 @@ def _md_to_html(text: str) -> str:
             "markdown-it-py not installed; formatted_body will be plain text",
         )
         return html.escape(text).replace("\n", "<br>\n")
+
+
+def _clean_control_response_text(text: str) -> str:
+    """Hide channel-internal session ids from user-facing control replies."""
+    if not text:
+        return text
+    match = _STOP_RESPONSE_RE.search(text)
+    if not match:
+        return text
+    status = match.group("status").strip()
+    status = status[:1].upper() + status[1:] if status else "Task stopped"
+    return _STOP_RESPONSE_RE.sub(status + ".", text)
+
+
+def _ends_with_no_reply_control(text: str) -> bool:
+    """Return true when the final non-empty output line is NO_REPLY."""
+    return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
+
+
+def _readiness_probe_reply(text: str) -> str | None:
+    """Return the direct reply for the Matrix runtime readiness probe."""
+    return "READY" if _READINESS_REPLY_RE.search(text or "") else None
+
+
+def _enum_name(value: Any) -> str:
+    """Return a stable enum-like name for runtime schemas."""
+    name = getattr(value, "name", None)
+    if name:
+        return str(name).upper()
+    value_str = str(value)
+    return value_str.rsplit(".", 1)[-1].upper()
 
 
 # Markers that separate accumulated history from the triggering message,
@@ -494,9 +563,8 @@ class MatrixChannel(BaseChannel):
     def _load_sync_token(self) -> Optional[str]:
         """Load persisted next_batch token from disk, or None.
 
-        The token file is pulled from MinIO by FileSync.pull_all() during
-        startup, so it's already on disk when this runs — even on a fresh
-        container after destroy/recreate.
+        The token file is restored by the startup MinIO mirror, so it's already
+        on disk when this runs, even on a fresh container after destroy/recreate.
         """
         path = self._sync_token_path()
         if path and path.exists():
@@ -527,6 +595,27 @@ class MatrixChannel(BaseChannel):
                     "MatrixChannel: failed to save sync token: %s",
                     exc,
                 )
+
+    @staticmethod
+    def _ready_marker_path() -> Optional[Path]:
+        marker = os.environ.get("HICLAW_MATRIX_CHANNEL_READY_FILE")
+        if marker:
+            return Path(marker)
+        return None
+
+    def _mark_channel_ready(self) -> None:
+        """Mark the Matrix channel ready for worker-level readiness probes."""
+        path = self._ready_marker_path()
+        if not path:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("ready\n", encoding="utf-8")
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: failed to write ready marker: %s",
+                exc,
+            )
 
     async def _e2ee_maintenance(self) -> None:
         """Perform E2EE key maintenance tasks after each sync.
@@ -564,6 +653,8 @@ class MatrixChannel(BaseChannel):
         # deploy), do an initial sync with callbacks suppressed — only capture
         # next_batch so subsequent syncs are incremental.  This prevents
         # replaying old messages when the token file doesn't exist yet.
+        # Use timeout=0 so startup does not long-poll and swallow fresh
+        # messages that arrive while callbacks are temporarily suppressed.
         #
         # To truly suppress callbacks, temporarily remove event callbacks
         # before the sync and restore them after, because nio's sync()
@@ -578,7 +669,7 @@ class MatrixChannel(BaseChannel):
                 self._client.event_callbacks.clear()
                 try:
                     resp = await self._client.sync(
-                        timeout=self._cfg.sync_timeout_ms,
+                        timeout=0,
                         full_state=True,
                     )
                 finally:
@@ -639,6 +730,8 @@ class MatrixChannel(BaseChannel):
                     "MatrixChannel: full-state sync exception: %s",
                     exc,
                 )
+
+        self._mark_channel_ready()
 
         while True:
             try:
@@ -728,6 +821,42 @@ class MatrixChannel(BaseChannel):
         if not isinstance(relates_to, dict):
             return False
         return relates_to.get("rel_type") == "m.thread"
+
+    def _targeted_readiness_probe_reply(self, event: Any, text: str) -> str | None:
+        """Return a direct readiness reply if this event explicitly targets us."""
+        reply = _readiness_probe_reply(text)
+        if not reply or not self._user_id:
+            return None
+
+        content = getattr(event, "source", {}).get("content", {}) or {}
+        mentions = content.get("m.mentions", {}) or {}
+        if self._user_id in mentions.get("user_ids", []):
+            return reply
+        if re.search(re.escape(self._user_id), text, re.IGNORECASE):
+            return reply
+        return None
+
+    async def _send_plain_text(self, room_id: str, text: str) -> None:
+        """Send a plain Matrix text event without invoking the agent path."""
+        if not self._client:
+            logger.error("MatrixChannel: direct send called but client not ready")
+            return
+        try:
+            await self._client.room_send(
+                room_id,
+                "m.room.message",
+                {
+                    "msgtype": "m.text",
+                    "body": text,
+                },
+                ignore_unverified_devices=True,
+            )
+        except Exception as exc:
+            logger.exception(
+                "MatrixChannel: direct send failed to %s: %s",
+                room_id,
+                exc,
+            )
 
     # pylint: disable=too-many-return-statements
     def _was_mentioned(self, event: Any, text: str) -> bool:
@@ -823,8 +952,17 @@ class MatrixChannel(BaseChannel):
                 return result.strip()
         return text
 
-    def _control_command_text(self, text: str) -> str | None:
-        """Return normalized runtime control command text, if any."""
+    def _control_command_text(self, text: str, *, allow_bare: bool) -> str | None:
+        """Return normalized runtime control command text, if any.
+
+        Control commands must be detected before normal room history and model
+        routing. The channel owns only text normalization; command execution is
+        handled later by CoPaw's CommandRegistry/ControlCommand layer.
+
+        Element Web requires unknown slash commands to be sent as a leading
+        double slash, so normalize ``//stop`` to ``/stop``. Bare aliases are
+        only accepted when the caller explicitly allows them.
+        """
         registry = getattr(self, "_command_registry", None)
         if registry is None:
             return None
@@ -838,6 +976,21 @@ class MatrixChannel(BaseChannel):
             if normalized != stripped and registry.is_control_command(normalized):
                 return normalized
 
+        if not allow_bare:
+            return None
+
+        parts = stripped.split(None, 1)
+        if not parts:
+            return None
+        command = _CONTROL_COMMAND_ALIASES.get(parts[0].lower())
+        if command is None:
+            return None
+
+        candidate = command
+        if len(parts) > 1:
+            candidate = f"{command} {parts[1]}"
+        if registry.is_control_command(candidate):
+            return candidate
         return None
 
     # ------------------------------------------------------------------
@@ -1353,6 +1506,7 @@ class MatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "worker_name": worker_name,
                 "event_id": event.event_id,
+                "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
             },
         }
@@ -1506,6 +1660,18 @@ class MatrixChannel(BaseChannel):
         sender_id = event.sender
         text = event.body or ""
 
+        direct_reply = self._targeted_readiness_probe_reply(event, text)
+        if direct_reply:
+            logger.info(
+                "MatrixChannel: replying directly to targeted readiness probe "
+                "from %s in %s",
+                sender_id,
+                room_id,
+            )
+            await self._send_read_receipt(room_id, event.event_id)
+            await self._send_plain_text(room_id, direct_reply)
+            return
+
         # Use Matrix API to reliably detect DM rooms
         # (nio's room.users is unreliable after token restore)
         is_dm = await self._is_dm_room(room_id, sender_id)
@@ -1522,13 +1688,21 @@ class MatrixChannel(BaseChannel):
             return
 
         is_thread_event = self._is_thread_event(event)
+        stripped = self._strip_mention_prefix(text, room)
         mentioned = True if is_dm else self._was_mentioned(event, text)
         if not is_dm and is_thread_event and not mentioned:
             return
+        control_text = self._control_command_text(stripped, allow_bare=mentioned)
+        is_control_command = control_text is not None
 
-        # Mention check for group rooms
+        # Mention check for group rooms. Runtime control commands are allowed
+        # through after mention-prefix stripping so @worker /stop reaches
+        # CoPaw's native control-command path instead of the model.
         if not is_dm:
-            if self._require_mention(room_id) and not mentioned:
+            requires_mention = self._require_mention(room_id)
+            if requires_mention and not mentioned and not is_control_command:
+                if is_thread_event:
+                    return
                 self._record_history(
                     room_id,
                     HistoryEntry(
@@ -1546,8 +1720,7 @@ class MatrixChannel(BaseChannel):
 
         # Strip leading @mention so slash commands and NO_REPLY are detected
         # regardless of room type (group or DM).
-        command_text = text
-        stripped = self._strip_mention_prefix(text, room)
+        command_text = control_text or text
 
         # NO_REPLY protocol: the sender explicitly signals "nothing to say".
         # Drop it silently to prevent infinite ping-pong between agents.
@@ -1560,14 +1733,24 @@ class MatrixChannel(BaseChannel):
             await self._send_typing(room_id, False)
             return
 
-        control_text = self._control_command_text(stripped)
-        cmd = ""
-        if control_text is not None:
-            command_text = control_text
-        elif stripped.startswith("/"):
-            cmd = stripped.lstrip("/").split()[0]
-        if control_text is None and cmd in _SLASH_COMMANDS:
-            command_text = stripped
+        direct_reply = _readiness_probe_reply(stripped)
+        if direct_reply:
+            logger.info(
+                "MatrixChannel: replying directly to readiness probe from %s "
+                "in %s",
+                sender_id,
+                room_id,
+            )
+            await self._send_plain_text(room_id, direct_reply)
+            if not is_dm and not is_thread_event:
+                self._clear_history(room_id)
+            return
+
+        cmd = (
+            stripped.lstrip("/").split()[0] if stripped.startswith("/") else ""
+        )
+        if is_control_command or cmd in _SLASH_COMMANDS:
+            command_text = control_text or stripped
             # Apply alias (e.g. /reset -> /clear)
             if cmd in _SLASH_ALIASES:
                 canonical = _SLASH_ALIASES[cmd]
@@ -1590,7 +1773,7 @@ class MatrixChannel(BaseChannel):
             TextContent(type=ContentType.TEXT, text=command_text),
         ]
         is_slash_cmd = command_text.startswith("/")
-        if not is_dm and not is_slash_cmd:
+        if not is_dm and not is_slash_cmd and not is_control_command:
             # Prefix sender identity so the LLM can distinguish participants
             sender_name = self._get_display_name(room, sender_id)
             content_parts[0] = TextContent(
@@ -1613,6 +1796,7 @@ class MatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "worker_name": worker_name,
                 "event_id": event.event_id,
+                "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
             },
         }
@@ -1768,6 +1952,7 @@ class MatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "worker_name": worker_name,
                 "event_id": event.event_id,
+                "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
             },
         }
@@ -2074,6 +2259,106 @@ class MatrixChannel(BaseChannel):
                     )
         return user_id.split(":")[0].lstrip("@") or user_id
 
+    def _with_thread_relation_meta(
+        self,
+        meta: Optional[Dict[str, Any]],
+        thread_root_event_id: str,
+    ) -> Dict[str, Any]:
+        """Return send metadata pinned to a Matrix thread root."""
+        meta_dict = dict(meta or {})
+        if thread_root_event_id:
+            meta_dict[_MATRIX_THREAD_META_KEY] = thread_root_event_id
+            meta_dict.setdefault(_THREAD_META_ROOT_KEY, thread_root_event_id)
+        return meta_dict
+
+    async def _send_or_queue_thread_parts(
+        self,
+        room_id: str,
+        parts: List[Any],
+        meta: Optional[Dict[str, Any]],
+    ) -> bool:
+        """Send follow-up parts in the current thread, or queue until rooted."""
+        meta_dict = meta if isinstance(meta, dict) else {}
+        thread_root = (
+            meta_dict.get(_MATRIX_THREAD_META_KEY)
+            or meta_dict.get(_THREAD_META_ROOT_KEY)
+            or meta_dict.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        )
+        if not thread_root:
+            meta_dict.setdefault(_MATRIX_PENDING_THREAD_PARTS_KEY, []).extend(
+                parts,
+            )
+            return True
+
+        thread_meta = self._with_thread_relation_meta(meta_dict, thread_root)
+        for part in parts:
+            if isinstance(part, str):
+                await self.send(room_id, part, thread_meta)
+            else:
+                await self.send_media(room_id, part, thread_meta)
+        return True
+
+    async def _flush_pending_thread_parts(
+        self,
+        room_id: str,
+        meta: Optional[Dict[str, Any]],
+    ) -> None:
+        """Flush queued follow-up parts after the first event becomes root."""
+        meta_dict = meta if isinstance(meta, dict) else {}
+        pending = meta_dict.pop(_MATRIX_PENDING_THREAD_PARTS_KEY, []) or []
+        if pending:
+            await self._send_or_queue_thread_parts(room_id, pending, meta_dict)
+        await self._flush_pending_final_message_to_thread(room_id, meta_dict)
+
+    async def _flush_pending_final_message_to_thread(
+        self,
+        room_id: str,
+        meta: Optional[Dict[str, Any]],
+    ) -> None:
+        """Flush a queued final text message into the established thread."""
+        meta_dict = meta if isinstance(meta, dict) else {}
+        final_text = meta_dict.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
+        if not final_text:
+            return
+
+        thread_root = (
+            meta_dict.get(_MATRIX_THREAD_META_KEY)
+            or meta_dict.get(_THREAD_META_ROOT_KEY)
+            or meta_dict.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        )
+        if not thread_root:
+            meta_dict[_MATRIX_PENDING_FINAL_MESSAGE_KEY] = final_text
+            return
+
+        await self.send(
+            room_id,
+            str(final_text),
+            self._with_thread_relation_meta(meta_dict, thread_root),
+        )
+
+    def _apply_thread_relation(
+        self,
+        content: Dict[str, Any],
+        meta: Optional[Dict[str, Any]],
+    ) -> None:
+        """Attach Matrix thread relation metadata to an outgoing event."""
+        if not isinstance(content, dict) or not isinstance(meta, dict):
+            return
+
+        thread_root = (
+            meta.get(_MATRIX_THREAD_META_KEY)
+            or meta.get(_THREAD_META_ROOT_KEY)
+            or meta.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        )
+        if not thread_root:
+            return
+
+        content["m.relates_to"] = {
+            "rel_type": "m.thread",
+            "event_id": thread_root,
+            "is_falling_back": False,
+        }
+
     async def _on_process_completed(
         self,
         request: Any,
@@ -2104,7 +2389,8 @@ class MatrixChannel(BaseChannel):
 
     # ------------------------------------------------------------------
     # Outgoing send — text
-    # Markdown→HTML (formatted_body); m.mentions when meta has sender_id.
+    # Markdown→HTML (formatted_body); m.mentions only for explicit targets or
+    # visible Matrix IDs in the body. Do not auto-mention the original sender.
     # ------------------------------------------------------------------
 
     async def send(
@@ -2122,13 +2408,15 @@ class MatrixChannel(BaseChannel):
         # NO_REPLY protocol: agent decided it has nothing to say.
         # Suppress the outgoing message entirely to avoid triggering the
         # recipient (which would cause an infinite NO_REPLY ping-pong).
-        if text.strip() == "NO_REPLY":
+        if _ends_with_no_reply_control(text):
             logger.info(
                 "MatrixChannel: suppressing NO_REPLY send to %s",
                 room_id,
             )
             await self._send_typing(room_id, False)
             return
+
+        text = _clean_control_response_text(text)
 
         html_body = _md_to_html(text)
         content: dict[str, Any] = {
@@ -2144,24 +2432,32 @@ class MatrixChannel(BaseChannel):
             len(html_body),
         )
 
-        meta_dict = meta or {}
+        meta_dict = meta if isinstance(meta, dict) else {}
         explicit_ids = meta_dict.get("mention_user_ids") or None
-        sender_id = meta_dict.get("sender_id") or meta_dict.get("user_id")
-        if explicit_ids or sender_id:
+        body_mentions = self._extract_mentions_from_text(text)
+        if explicit_ids or body_mentions:
             self._apply_mention(
                 content,
                 room_id,
                 explicit_user_ids=explicit_ids,
-                fallback_user_id=sender_id if not explicit_ids else None,
             )
+        self._apply_thread_relation(content, meta_dict)
 
         try:
-            await self._client.room_send(
+            resp = await self._client.room_send(
                 room_id,
                 "m.room.message",
                 content,
                 ignore_unverified_devices=True,
             )
+            event_id = getattr(resp, "event_id", None)
+            if (
+                event_id
+                and not meta_dict.get(_MATRIX_THREAD_META_KEY)
+                and not meta_dict.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+            ):
+                meta_dict[_MATRIX_OWN_THREAD_ROOT_KEY] = event_id
+                await self._flush_pending_thread_parts(room_id, meta_dict)
         except Exception as exc:
             logger.exception(
                 "MatrixChannel: send failed to %s: %s",
@@ -2240,25 +2536,30 @@ class MatrixChannel(BaseChannel):
                     "size": file_size,
                 },
             }
-            meta_dict = meta or {}
+            meta_dict = meta if isinstance(meta, dict) else {}
             explicit_ids = meta_dict.get("mention_user_ids") or None
-            sender_id = meta_dict.get("sender_id") or meta_dict.get("user_id")
-            if explicit_ids or sender_id:
+            if explicit_ids:
                 self._apply_mention(
                     event_content,
                     room_id,
                     explicit_user_ids=explicit_ids,
-                    fallback_user_id=(
-                        sender_id if not explicit_ids else None
-                    ),
                 )
+            self._apply_thread_relation(event_content, meta_dict)
 
-            await self._client.room_send(
+            resp = await self._client.room_send(
                 room_id,
                 "m.room.message",
                 event_content,
                 ignore_unverified_devices=True,
             )
+            event_id = getattr(resp, "event_id", None)
+            if (
+                event_id
+                and not meta_dict.get(_MATRIX_THREAD_META_KEY)
+                and not meta_dict.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+            ):
+                meta_dict[_MATRIX_OWN_THREAD_ROOT_KEY] = event_id
+                await self._flush_pending_thread_parts(room_id, meta_dict)
             logger.debug(
                 "MatrixChannel: sent %s %s to %s",
                 matrix_msgtype,

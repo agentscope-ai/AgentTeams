@@ -282,6 +282,10 @@ func (a *AIGatewayClient) EnsureAIProvider(_ context.Context, _ AIProviderReques
 	return ErrUnsupportedOp
 }
 
+func (a *AIGatewayClient) EnsureStreamIdleTimeout(_ context.Context, _ int) error {
+	return ErrUnsupportedOp
+}
+
 func (a *AIGatewayClient) EnsureAIRoute(_ context.Context, _ AIRouteRequest) error {
 	return ErrUnsupportedOp
 }

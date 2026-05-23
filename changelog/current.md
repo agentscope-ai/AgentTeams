@@ -7,6 +7,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - feat(copaw): add runtime hooks, task/message/file-sync tools, health probes, and refreshed Worker coordination builtins.
 - fix(copaw): keep WorkerConfig CLI startup arguments aligned with the CoPaw worker API port and sync interval.
 - fix(copaw): make direct CoPaw worker readiness-check replies explicit and align the ZIP import probe prompt.
+- fix(copaw): restore MatrixChannel thread-relation helpers used by `copaw channels send`.
 - fix(copaw): avoid swallowing fresh Matrix messages during first-start sync token initialization.
 - fix(copaw): gate Worker readiness on Matrix channel startup so probes do not pass before messages can be handled.
 - fix(copaw): answer Matrix runtime readiness probes directly once the channel is receiving mentioned messages.

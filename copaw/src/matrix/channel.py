@@ -2259,6 +2259,106 @@ class MatrixChannel(BaseChannel):
                     )
         return user_id.split(":")[0].lstrip("@") or user_id
 
+    def _with_thread_relation_meta(
+        self,
+        meta: Optional[Dict[str, Any]],
+        thread_root_event_id: str,
+    ) -> Dict[str, Any]:
+        """Return send metadata pinned to a Matrix thread root."""
+        meta_dict = dict(meta or {})
+        if thread_root_event_id:
+            meta_dict[_MATRIX_THREAD_META_KEY] = thread_root_event_id
+            meta_dict.setdefault(_THREAD_META_ROOT_KEY, thread_root_event_id)
+        return meta_dict
+
+    async def _send_or_queue_thread_parts(
+        self,
+        room_id: str,
+        parts: List[Any],
+        meta: Optional[Dict[str, Any]],
+    ) -> bool:
+        """Send follow-up parts in the current thread, or queue until rooted."""
+        meta_dict = meta if isinstance(meta, dict) else {}
+        thread_root = (
+            meta_dict.get(_MATRIX_THREAD_META_KEY)
+            or meta_dict.get(_THREAD_META_ROOT_KEY)
+            or meta_dict.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        )
+        if not thread_root:
+            meta_dict.setdefault(_MATRIX_PENDING_THREAD_PARTS_KEY, []).extend(
+                parts,
+            )
+            return True
+
+        thread_meta = self._with_thread_relation_meta(meta_dict, thread_root)
+        for part in parts:
+            if isinstance(part, str):
+                await self.send(room_id, part, thread_meta)
+            else:
+                await self.send_media(room_id, part, thread_meta)
+        return True
+
+    async def _flush_pending_thread_parts(
+        self,
+        room_id: str,
+        meta: Optional[Dict[str, Any]],
+    ) -> None:
+        """Flush queued follow-up parts after the first event becomes root."""
+        meta_dict = meta if isinstance(meta, dict) else {}
+        pending = meta_dict.pop(_MATRIX_PENDING_THREAD_PARTS_KEY, []) or []
+        if pending:
+            await self._send_or_queue_thread_parts(room_id, pending, meta_dict)
+        await self._flush_pending_final_message_to_thread(room_id, meta_dict)
+
+    async def _flush_pending_final_message_to_thread(
+        self,
+        room_id: str,
+        meta: Optional[Dict[str, Any]],
+    ) -> None:
+        """Flush a queued final text message into the established thread."""
+        meta_dict = meta if isinstance(meta, dict) else {}
+        final_text = meta_dict.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
+        if not final_text:
+            return
+
+        thread_root = (
+            meta_dict.get(_MATRIX_THREAD_META_KEY)
+            or meta_dict.get(_THREAD_META_ROOT_KEY)
+            or meta_dict.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        )
+        if not thread_root:
+            meta_dict[_MATRIX_PENDING_FINAL_MESSAGE_KEY] = final_text
+            return
+
+        await self.send(
+            room_id,
+            str(final_text),
+            self._with_thread_relation_meta(meta_dict, thread_root),
+        )
+
+    def _apply_thread_relation(
+        self,
+        content: Dict[str, Any],
+        meta: Optional[Dict[str, Any]],
+    ) -> None:
+        """Attach Matrix thread relation metadata to an outgoing event."""
+        if not isinstance(content, dict) or not isinstance(meta, dict):
+            return
+
+        thread_root = (
+            meta.get(_MATRIX_THREAD_META_KEY)
+            or meta.get(_THREAD_META_ROOT_KEY)
+            or meta.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        )
+        if not thread_root:
+            return
+
+        content["m.relates_to"] = {
+            "rel_type": "m.thread",
+            "event_id": thread_root,
+            "is_falling_back": False,
+        }
+
     async def _on_process_completed(
         self,
         request: Any,

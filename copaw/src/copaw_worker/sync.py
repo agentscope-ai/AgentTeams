@@ -234,7 +234,9 @@ class FileSync:
         self.worker_name = worker_name
         self.worker_cr_name = worker_cr_name or worker_name
         self._secure = secure
-        self.local_dir = local_dir or Path.home() / ".copaw-worker" / worker_name
+        self.local_dir = local_dir or Path(
+            os.environ.get("COPAW_WORKING_DIR", Path.home() / ".copaw-worker")
+        ) / worker_name
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self.shared_dir = shared_dir or self.local_dir / "shared"
         self.global_shared_dir = global_shared_dir or self.local_dir / "global-shared"

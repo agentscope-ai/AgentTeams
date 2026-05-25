@@ -22,6 +22,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug Fixes**
 
+- **CoPaw local runtime paths**: CoPaw direct-run defaults now honor `COPAW_INSTALL_DIR` and `COPAW_WORKING_DIR` before falling back to local home-directory paths, while container entrypoints can continue to pass explicit directories.
+
 - **Installer robustness**: Rootless Podman socket detection, retry behavior for too-short admin passwords, multi-line error output, GitHub repository URL defaults, stable fallback version handling, and Windows stream-idle-timeout propagation were corrected.
 
 - **Helm cleanup and Matrix display names**: Helm uninstall now cleans up Manager/Worker pods, and Tuwunel's default display-name suffix is disabled in the chart.

@@ -208,7 +208,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [embedded, manager, manager-copaw, worker, copaw-worker, hermes-worker]
+        target: [embedded, manager, manager-copaw, worker, copaw-worker, hermes-worker, harness-worker]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -348,6 +348,25 @@ jobs:
             filter_env: SHARD_C_TESTS
             manager_runtime: copaw
             worker_runtime: hermes
+          # Harness worker coverage: validate bridge_config (.claude/settings.json,
+          # .claude.json MCP, CLAUDE.md, .claude/skills/) + matrix-nio relay end-to-end.
+          # Pairs with copaw manager (same adapter family as hermes). controller-cr-2
+          # excluded (team controller hardcodes Runtime: "copaw"). Claude CLI routes
+          # through the embedded Higress gateway via ANTHROPIC_BASE_URL injected by
+          # the controller; CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 suppresses
+          # out-of-band calls.
+          - shard: llm-interaction
+            filter_env: SHARD_A_TESTS
+            manager_runtime: copaw
+            worker_runtime: harness
+          - shard: llm-interaction-2
+            filter_env: SHARD_B_TESTS
+            manager_runtime: copaw
+            worker_runtime: harness
+          - shard: controller-cr
+            filter_env: SHARD_C_TESTS
+            manager_runtime: copaw
+            worker_runtime: harness
 
     steps:
       - name: Free Up Disk Space

@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base hiclaw-controller embedded manager manager-copaw worker copaw-worker hermes-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base hiclaw-controller embedded manager manager-copaw worker copaw-worker hermes-worker harness-worker'
         required: false
         type: string
         default: 'all'
@@ -117,19 +117,21 @@ jobs:
           ${{ steps.meta.outputs.targets == 'all' ||
               contains(steps.meta.outputs.targets, 'worker') ||
               contains(steps.meta.outputs.targets, 'copaw-worker') ||
-              contains(steps.meta.outputs.targets, 'hermes-worker') }}
+              contains(steps.meta.outputs.targets, 'hermes-worker') ||
+              contains(steps.meta.outputs.targets, 'harness-worker') }}
         run: |
           TARGETS="${{ steps.meta.outputs.targets }}"
           MAKE_TARGETS=""
           if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw worker; then MAKE_TARGETS="${MAKE_TARGETS} push-worker"; fi
           if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw copaw-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-copaw-worker"; fi
           if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw hermes-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-hermes-worker"; fi
+          if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw harness-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-harness-worker"; fi
           make ${MAKE_TARGETS} \
             VERSION=${{ steps.meta.outputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
             REPO=${{ env.REPO }} \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
+            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/ --build-arg NPM_REGISTRY=https://registry.npmjs.org/"
 
       - name: Summary
         env:
@@ -141,6 +143,7 @@ jobs:
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-worker
           COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-copaw-worker
           HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-hermes-worker
+          HARNESS_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-harness-worker
           CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-controller
           EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-embedded
         run: |
@@ -154,6 +157,7 @@ jobs:
           echo "- Worker: \`${WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Harness Worker: \`${HARNESS_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Controller: \`${CONTROLLER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Embedded: \`${EMBEDDED_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Base: \`${OPENCLAW_BASE_IMAGE}:latest\` (pre-built, not rebuilt here)" >> $GITHUB_STEP_SUMMARY

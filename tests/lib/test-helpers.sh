@@ -420,12 +420,14 @@ check_copaw_worker_probes() {
     )"
     worker_port="${worker_port:-8089}"
 
-    docker exec \
-        -e HICLAW_WORKER_PORT="${worker_port}" \
-        -e HICLAW_EXPECT_READINESS="${expected}" \
-        -e HICLAW_PROBE_REQUEST_TIMEOUT="${request_timeout}" \
-        "${container}" \
-        python3 -c '
+    local probe_output probe_status
+    probe_output="$(
+        docker exec \
+            -e HICLAW_WORKER_PORT="${worker_port}" \
+            -e HICLAW_EXPECT_READINESS="${expected}" \
+            -e HICLAW_PROBE_REQUEST_TIMEOUT="${request_timeout}" \
+            "${container}" \
+            python3 -c '
 import json
 import os
 import sys
@@ -529,6 +531,20 @@ print(json.dumps(live, ensure_ascii=False, indent=2))
 print("== /worker/readyz ==")
 print(json.dumps(ready, ensure_ascii=False, indent=2))
 ' 2>&1
+    )"
+    probe_status=$?
+
+    printf "%s\n" "${probe_output}"
+
+    if [ "${probe_status}" -ne 0 ]; then
+        printf "\n--- container state: %s ---\n" "${container}"
+        docker inspect --format='status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} startedAt={{.State.StartedAt}} finishedAt={{.State.FinishedAt}} error={{.State.Error}}' "${container}" 2>&1 || true
+        printf -- "--- docker logs %s (last 100 lines) ---\n" "${container}"
+        docker logs --tail 100 "${container}" 2>&1 || true
+        printf -- "--- end of diagnostics ---\n"
+    fi
+
+    return ${probe_status}
 }
 
 # ============================================================

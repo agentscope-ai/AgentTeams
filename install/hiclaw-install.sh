@@ -2184,6 +2184,7 @@ step_llm() {
 step_admin() {
     log "$(msg admin.title)"
     prompt HICLAW_ADMIN_USER "$(msg admin.username_prompt)" "admin" || return 0
+    HICLAW_ADMIN_USER="$(printf '%s' "${HICLAW_ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
 
     # Pre-set via env var: validate; in non-interactive mode fail fast,
     # in interactive mode warn and fall through to the retry prompt.

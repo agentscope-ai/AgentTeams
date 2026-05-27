@@ -2052,6 +2052,7 @@ function Step-Admin {
     Write-Log (Get-Msg "admin.title")
     $script:config.ADMIN_USER = Read-Prompt -VarName "HICLAW_ADMIN_USER" -PromptText (Get-Msg "admin.username_prompt") -Default "admin"
     if ($script:StepResult -eq "back") { return }
+    $script:config.ADMIN_USER = $script:config.ADMIN_USER.ToLowerInvariant()
 
     # Pre-set via env var: validate; non-interactive fails fast,
     # interactive warns and falls through to the retry prompt.

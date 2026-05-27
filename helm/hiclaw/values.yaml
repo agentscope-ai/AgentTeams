@@ -268,6 +268,9 @@ worker:
     hermes:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-hermes-worker
       tag: ""                 # defaults to global.imageTag
+    openhuman:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker
+      tag: ""                 # defaults to global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:

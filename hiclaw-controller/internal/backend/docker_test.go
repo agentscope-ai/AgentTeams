@@ -443,9 +443,11 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw_uses_copaw_image", RuntimeCopaw, "", "hiclaw/copaw-worker:latest"},
 		{"explicit_hermes_uses_hermes_image", RuntimeHermes, "", "hiclaw/hermes-worker:latest"},
 		{"explicit_openclaw_uses_worker_image", RuntimeOpenClaw, "", "hiclaw/worker-agent:latest"},
+		{"explicit_openhuman_uses_openhuman_image", RuntimeOpenHuman, "", "hiclaw/openhuman-worker:latest"},
 		{"empty_runtime_with_no_fallback_uses_worker_image", "", "", "hiclaw/worker-agent:latest"},
 		{"empty_runtime_with_copaw_fallback_uses_copaw_image", "", RuntimeCopaw, "hiclaw/copaw-worker:latest"},
 		{"empty_runtime_with_hermes_fallback_uses_hermes_image", "", RuntimeHermes, "hiclaw/hermes-worker:latest"},
+		{"empty_runtime_with_openhuman_fallback_uses_openhuman_image", "", RuntimeOpenHuman, "hiclaw/openhuman-worker:latest"},
 		{"explicit_runtime_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "hiclaw/worker-agent:latest"},
 	}
 	for _, tc := range cases {
@@ -455,10 +457,11 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 
 			b := &DockerBackend{
 				config: DockerConfig{
-					WorkerImage:       "hiclaw/worker-agent:latest",
-					CopawWorkerImage:  "hiclaw/copaw-worker:latest",
-					HermesWorkerImage: "hiclaw/hermes-worker:latest",
-					DefaultNetwork:    "hiclaw-net",
+					WorkerImage:          "hiclaw/worker-agent:latest",
+					CopawWorkerImage:     "hiclaw/copaw-worker:latest",
+					HermesWorkerImage:    "hiclaw/hermes-worker:latest",
+					OpenHumanWorkerImage: "hiclaw/openhuman-worker:latest",
+					DefaultNetwork:       "hiclaw-net",
 				},
 				containerPrefix: "hiclaw-worker-",
 				client: &http.Client{

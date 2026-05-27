@@ -236,7 +236,7 @@ spec:
                         type: string
                       runtime:
                         type: string
-                        enum: [openclaw, copaw, hermes]
+                        enum: [openclaw, copaw, hermes, openhuman]
                       image:
                         type: string
                       identity:

@@ -23,11 +23,12 @@ func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult)
 		"HICLAW_WORKER_NAME":         workerName,
 		"HICLAW_WORKER_GATEWAY_KEY":  prov.GatewayKey,
 		"HICLAW_WORKER_MATRIX_TOKEN": prov.MatrixToken,
+		"HICLAW_WORKER_ROOM_ID":      prov.RoomID,
 		"HICLAW_FS_ACCESS_KEY":       workerName,
 		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
 		"OPENCLAW_DISABLE_BONJOUR":   "1",
 		"OPENCLAW_MDNS_HOSTNAME":     "hiclaw-w-" + workerName,
-		"HICLAW_CONSOLE_PORT":       "8088",
+		"HICLAW_CONSOLE_PORT":        "8088",
 		"HOME":                       "/root/hiclaw-fs/agents/" + workerName,
 	}
 
@@ -81,13 +82,13 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 
 func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	for k, v := range map[string]string{
-		"HICLAW_MATRIX_DOMAIN":   b.defaults.MatrixDomain,
-		"HICLAW_FS_ENDPOINT":     b.defaults.FSEndpoint,
-		"HICLAW_FS_BUCKET":       b.defaults.FSBucket,
-		"HICLAW_STORAGE_PREFIX":  b.defaults.StoragePrefix,
-		"HICLAW_CONTROLLER_URL":  b.defaults.ControllerURL,
-		"HICLAW_AI_GATEWAY_URL":  b.defaults.AIGatewayURL,
-		"HICLAW_MATRIX_URL":      b.defaults.MatrixURL,
+		"HICLAW_MATRIX_DOMAIN":  b.defaults.MatrixDomain,
+		"HICLAW_FS_ENDPOINT":    b.defaults.FSEndpoint,
+		"HICLAW_FS_BUCKET":      b.defaults.FSBucket,
+		"HICLAW_STORAGE_PREFIX": b.defaults.StoragePrefix,
+		"HICLAW_CONTROLLER_URL": b.defaults.ControllerURL,
+		"HICLAW_AI_GATEWAY_URL": b.defaults.AIGatewayURL,
+		"HICLAW_MATRIX_URL":     b.defaults.MatrixURL,
 	} {
 		if v != "" {
 			env[k] = v

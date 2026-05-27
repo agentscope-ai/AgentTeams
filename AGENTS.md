@@ -16,6 +16,7 @@ hiclaw/
 ├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
 ├── copaw/               # CoPaw Python package source (published as e.g. copaw-worker on PyPI)
 ├── hermes/              # Hermes Python package source (Hermes Matrix worker runtime)
+├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
 ├── shared/lib/          # Shared shell libs copied into images (hiclaw-env.sh, render-skills.sh, …)
 ├── install/             # Local install scripts (Docker Compose / embedded “all-in-one” stack)
@@ -49,7 +50,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `openclaw` (default) | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / HiClaw manager config). |
 | `copaw` | Python CoPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-copaw-manager.sh`). |
 
-Hermes is a **Worker** runtime in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **copaw** only.
+Hermes and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **copaw** only.
 
 **Deployment runtime** (`HICLAW_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 
@@ -178,6 +179,13 @@ The Manager **image** is an agent runtime plus scripts; Higress, Tuwunel, MinIO,
 
 - [hermes/](hermes/) — Python package layout under `hermes/src/` (`hermes_worker`, `hermes_matrix`, CLI)
 
+### To modify the OpenHuman worker runtime
+
+- [openhuman/](openhuman/) — Rust-based Worker runtime with native Matrix support (`channel-matrix` feature flag)
+- [openhuman/Dockerfile](openhuman/Dockerfile) — Multi-stage build: `rust:1.93-bookworm` → `debian:bookworm-slim`
+- [openhuman/scripts/openhuman-worker-entrypoint.sh](openhuman/scripts/openhuman-worker-entrypoint.sh) — Entrypoint: config.toml generation, MinIO sync, health check
+- [manager/agent/openhuman-worker-agent/](manager/agent/openhuman-worker-agent/) — Agent template and skills
+
 ### To manage Worker containers via socket (local Docker)
 
 - [manager/scripts/lib/container-api.sh](manager/scripts/lib/container-api.sh) — Docker/Podman REST API helpers for direct Worker creation on the Manager host
@@ -215,6 +223,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 | Agent Framework | OpenClaw (fork) | Default Manager/Worker runtime (Node.js gateway + Matrix plugin) |
 | Agent Framework | CoPaw (Python / AgentScope) | Alternative Manager and Worker runtime |
 | Agent Framework | Hermes (`hermes-worker`) | Alternative Python Worker runtime |
+| Agent Framework | OpenHuman (`openhuman-core`) | Alternative Rust Worker runtime with native Matrix |
 | MCP CLI | mcporter | Worker calls MCP Server tools via CLI |
 
 ## Changelog Policy

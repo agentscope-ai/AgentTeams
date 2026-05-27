@@ -24,6 +24,7 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 	env := builder.Build("alice", &WorkerProvisionResult{
 		GatewayKey:    "gateway-key",
 		MatrixToken:   "matrix-token",
+		RoomID:        "!room123:matrix.example.com",
 		MinIOPassword: "secret",
 	})
 
@@ -43,6 +44,7 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 		"HOME":                       "/root/hiclaw-fs/agents/alice",
 		"HICLAW_WORKER_GATEWAY_KEY":  "gateway-key",
 		"HICLAW_WORKER_MATRIX_TOKEN": "matrix-token",
+		"HICLAW_WORKER_ROOM_ID":      "!room123:matrix.example.com",
 		"SKILLS_API_URL":             "nacos://skills.example.com:8848/public",
 		"NACOS_AUTH_TYPE":            "sts-hiclaw",
 	} {

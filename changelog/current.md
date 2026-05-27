@@ -20,6 +20,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **Controller observability**: Controller-side reconcile metrics, graceful HTTP/background goroutine shutdown, and test diagnostics were added to make runtime and CI failures easier to inspect.
 
+- **OpenHuman runtime**: OpenHuman added as the fourth Worker runtime with native Matrix support via `channel-matrix` feature flag; includes controller routing (K8s + Docker backends), Dockerfile, entrypoint script, agent template, Helm chart integration, and Makefile build targets.
+
 **Bug Fixes**
 
 - **Installer robustness**: Rootless Podman socket detection, retry behavior for too-short admin passwords, multi-line error output, GitHub repository URL defaults, stable fallback version handling, and Windows stream-idle-timeout propagation were corrected.

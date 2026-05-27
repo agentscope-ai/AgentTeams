@@ -864,6 +864,8 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 			return filepath.Join(baseDir, "copaw-worker-agent")
 		case "hermes":
 			return filepath.Join(baseDir, "hermes-worker-agent")
+		case "openhuman":
+			return filepath.Join(baseDir, "openhuman-worker-agent")
 		}
 		return d.workerAgentDir
 	}

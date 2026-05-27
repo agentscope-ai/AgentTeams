@@ -14,8 +14,11 @@
 - [如何主动指挥 Worker](#如何主动指挥-worker)
 - [如何切换 Manager 的模型](#如何切换-manager-的模型)
 - [如何切换 Worker 的模型](#如何切换-worker-的模型)
+- [如何配置 OpenRouter 或模型名带斜杠的供应商](#如何配置-openrouter-或模型名带斜杠的供应商)
 - [如何切换 Worker 的运行时](#如何切换-worker-的运行时)
+- [为什么 QwenPaw 仍然使用 `copaw` 作为 runtime 值或镜像名](#为什么-qwenpaw-仍然使用-copaw-作为-runtime-值或镜像名)
 - [如何接入自己实现的 agent 作为 Worker](#如何接入自己实现的-agent-作为-worker)
+- [HiClaw 可以连接已有的 Higress 实例吗](#hiclaw-可以连接已有的-higress-实例吗)
 - [如何使用 Worker 模板市场](#如何使用-worker-模板市场)
 - [HiClaw 支持发送和接收文件吗](#hiclaw-支持发送和接收文件吗)
 - [为什么 Manager/Worker 一直显示"输入中"](#为什么-managerworker-一直显示输入中)
@@ -266,6 +269,13 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 - **Docker Desktop**：升级到 4.39.0 或更高版本
 - **Podman**：确保 Podman Engine **Server 版本 ≥ 5.7.1**（可通过 `podman version` 查看）
 
+**情况五：Linux 主机 SELinux 拦截挂载目录**
+
+如果详细日志，尤其是 `mc-mirror.log`，在工作目录或共享目录下出现
+`permission denied`，且主机启用了 SELinux，可能是容器没有访问 bind mount 的
+SELinux 标签。请在 Docker/Podman 允许挂载的位置重新执行安装；如果是手动等价挂载，
+需要给工作目录和共享目录的 `-v` 参数加上 `:z`，让容器可以访问挂载路径。
+
 ---
 
 ## 局域网其他电脑如何访问 Web 端
@@ -289,6 +299,12 @@ http://<局域网IP>:18080
 ```
 
 例如局域网 IP 是 `192.168.1.100`，则填写 `http://192.168.1.100:18080`。
+
+如果登录页仍然提示 homeserver 错误：
+
+1. 确认安装时选择了允许外部访问。本机模式只绑定到 `127.0.0.1`，局域网其他设备无法访问。
+2. 确认 Manager 所在机器的防火墙放行 `18080`（Matrix/Higress Gateway）和 `18088`（Element Web）。
+3. 不要在其他设备上使用默认的 `matrix-local.hiclaw.io`；该域名会解析到当前设备自己的 loopback 地址。
 
 ---
 
@@ -335,6 +351,8 @@ HiClaw 支持两种模型切换方式：**切换当前会话模型**（即时生
 OpenClaw 需要在配置中设置模型的上下文窗口大小（`contextWindow`）。HiClaw 默认使用 qwen3.5-plus 的 200K token 窗口。如果切换到窗口不同的模型但没有更新这个设置，当对话接近窗口上限时，OpenClaw 不知道何时压缩上下文，可能导致 session 无法使用。
 
 模型切换技能会根据模型名自动修改 OpenClaw 配置中的 `contextWindow` 和 `maxTokens`。
+
+如果看到 `model_context_window_exceeded`，先用 `/new` 开启新会话，或切换到上下文窗口更大的模型。随后确认目标模型配置里的 `contextWindow` 与供应商实际窗口一致，再继续长上下文对话。
 
 **切换步骤**
 
@@ -404,6 +422,25 @@ Manager 会使用模型切换技能完成配置更新。
 
 ---
 
+## 如何配置 OpenRouter 或模型名带斜杠的供应商
+
+在 Higress AI 路由配置中，**服务名称**是内部名称，不是模型名，不能包含 `/`。
+`openrouter/`、`stepfun/` 这类模型前缀应放在模型匹配规则里。
+
+OpenRouter 示例：
+
+| 字段 | 值 |
+|------|----|
+| 服务名称 | `openrouter` |
+| 模型匹配规则 | regex，例如 `^openrouter/.*$` |
+| 协议 | `openai` |
+| 自定义 URL | `https://openrouter.ai/api/v1` |
+
+配置完成后，告诉 Manager 使用完整模型名，例如
+`openrouter/stepfun-eur-1-70b`。Higress 会根据模型名前缀匹配到对应供应商路由。
+
+---
+
 ## 如何切换 Worker 的运行时
 
 HiClaw v1.1.0+ 支持三种 Worker 运行时：
@@ -445,6 +482,17 @@ Manager 会通过 worker-management 技能触发容器重建。Worker 的 Matrix
 
 ---
 
+## 为什么 QwenPaw 仍然使用 `copaw` 作为 runtime 值或镜像名
+
+`QwenPaw` 是原 `CoPaw` 运行时的对外展示名称。为了兼容已有安装，部分内部名称会继续保留
+`copaw`，包括 Worker CRD 的 runtime 值、`hiclaw-copaw-worker` 这类镜像名，以及
+`HICLAW_MANAGER_RUNTIME=copaw` 这类环境变量值。
+
+除非 chart、controller 和镜像已经明确支持新的值，否则不要把这些内部值改成
+`qwenpaw`。保留 `copaw` 是为了避免破坏已有配置、Helm values、镜像拉取和升级路径。
+
+---
+
 ## 如何接入自己实现的 agent 作为 Worker
 
 不能直接通过新增任意 `spec.runtime` 值来接入。当前 Worker CRD 只接受
@@ -458,6 +506,24 @@ image。具体见 [导入已有 Worker](import-worker.md)，以及
 
 如果要新增一种完全不同的 runtime，需要修改 controller、runtime 默认镜像以及对应
 agent 模板接线，不是纯配置项。
+
+---
+
+## HiClaw 可以连接已有的 Higress 实例吗
+
+当前不能通过 `gateway.provider=higress` 连接已有 Higress。Helm chart 会校验
+`gateway.provider=higress` 必须搭配 `gateway.mode=managed`，也就是由 HiClaw 部署并管理 Higress。
+
+不建议把已有 Higress 配置目录直接复制到 HiClaw 托管的 Higress 中。HiClaw 会调和它需要的
+AI routes、consumers 和网关资源，复制进去的资源可能和 HiClaw 管理的状态冲突，或在安装/调和流程中被覆盖。
+
+当前支持的路径是：
+
+- 使用 HiClaw 托管的 Higress 承载 HiClaw 流量
+- 在适用场景下使用外部 `ai-gateway` provider
+
+如果要支持已有的自管 Higress，需要单独设计 external Higress 模式，包括 Gateway/Console URL、
+访问凭据、资源命名隔离，以及避免影响已有 routes 和 consumers 的保护策略。
 
 ---
 
@@ -487,6 +553,9 @@ hiclaw apply -f my-worker.yaml
 **接收你发送的文件**：支持。在 Element Web 中点击附件按钮上传文件，Manager 或 Worker 会收到 Matrix 媒体消息并可以读取其内容。
 
 **向你发送文件**：支持。当你要求 Manager（或 Worker）发送文件时——例如任务产物、生成的报告或它能访问的任意文件——它会将文件上传到 Matrix 媒体服务器，并以可下载附件的形式发送到房间中，你在 Element Web 里点击即可下载。
+
+Manager 或 Worker 输出的路径通常是容器内部路径。如果你在宿主机上无法直接访问该路径，
+请要求 Agent 把文件作为附件发送，或提供可下载链接，而不是依赖原始容器路径。
 
 ---
 
@@ -598,7 +667,9 @@ docker exec -it hiclaw-controller cat /var/log/hiclaw/higress-gateway.log
 - **503**：容器内网络环境问题，导致外网 LLM 服务不可达。
 - **404**：模型名称填写有误。
 
-要判断是后端服务出错还是 Higress 自身配置问题，查看日志中的 `upstream_host` 字段：如果该字段有值，说明请求已到达后端，异常状态码是由上游服务返回的；如果为空，说明 Higress 本身无法路由该请求。
+要判断是后端服务出错还是 Higress 自身配置问题，查看日志中的 `upstream_host` 字段：如果该字段是真实 host，说明请求已到达后端，异常状态码是由上游服务返回的；如果是 `-` 或为空，说明 Higress 没有选中上游集群；日志里出现 `response_code_details: cluster_not_found` 时，通常表示模型路由或服务来源配置不正确。
+
+自部署 OpenAI 兼容服务时，检查 Higress 的供应商配置是否指向真实 URL，而不是不存在的服务名。同时在容器内用相同 base URL 和 API key 验证上游是否可达。
 
 ### 4. 检查模型配置
 

@@ -14,8 +14,11 @@
 - [How to talk to a Worker directly](#how-to-talk-to-a-worker-directly)
 - [How to switch the Manager's model](#how-to-switch-the-managers-model)
 - [How to switch a Worker's model](#how-to-switch-a-workers-model)
+- [How to configure OpenRouter or another model provider with slashes in model names](#how-to-configure-openrouter-or-another-model-provider-with-slashes-in-model-names)
 - [How to switch a Worker's runtime](#how-to-switch-a-workers-runtime)
+- [Why does QwenPaw still use `copaw` in runtime values or image names](#why-does-qwenpaw-still-use-copaw-in-runtime-values-or-image-names)
 - [Can I connect my own agent implementation as a Worker](#can-i-connect-my-own-agent-implementation-as-a-worker)
+- [Can HiClaw connect to an existing Higress instance](#can-hiclaw-connect-to-an-existing-higress-instance)
 - [How to use the Worker Template Marketplace](#how-to-use-the-worker-template-marketplace)
 - [Does HiClaw support sending and receiving files](#does-hiclaw-support-sending-and-receiving-files)
 - [Why does Manager/Worker keep showing "typing"](#why-does-managerworker-keep-showing-typing)
@@ -266,6 +269,15 @@ If you're using a Mac with Apple Silicon (M1/M2/M3/M4) and Docker Desktop is old
 - **Docker Desktop**: Upgrade to 4.39.0 or later
 - **Podman**: Ensure Podman Engine **Server version ≥ 5.7.1** (check with `podman version`)
 
+**Case 5: Linux host with SELinux volume denial**
+
+If the detailed log, especially `mc-mirror.log`, contains `permission denied`
+for files under the mounted workspace or host-share directory on an SELinux
+enabled Linux host, the bind mount may need an SELinux relabel option. Re-run
+the installer from a workspace location where Docker/Podman is allowed to mount
+files, or add `:z` to equivalent manual bind mounts so the container can access
+the mounted path.
+
 ---
 
 ## Accessing the web UI from other devices on the LAN
@@ -289,6 +301,15 @@ http://<LAN-IP>:18080
 ```
 
 For example, if your LAN IP is `192.168.1.100`, enter `http://192.168.1.100:18080`.
+
+If the login page still reports a homeserver error:
+
+1. Confirm the installer was run with external access enabled. Local-only mode
+   binds services to `127.0.0.1`, so other devices cannot reach them.
+2. Make sure the machine firewall allows ports `18080` (Matrix/Higress gateway)
+   and `18088` (Element Web).
+3. Do not use the default `matrix-local.hiclaw.io` address from another device;
+   that name resolves to the client machine's loopback address.
 
 ---
 
@@ -338,6 +359,11 @@ The model-switch skill:
 1. Looks up the correct `contextWindow` and `maxTokens` for the target model
 2. Updates OpenClaw's config accordingly
 3. Tests connectivity before applying the change
+
+If you see `model_context_window_exceeded`, first start a new session with
+`/new` or switch to a model with a larger context window. Then verify that the
+target model's `contextWindow` in the model configuration matches the provider's
+real limit before continuing the long conversation.
 
 **Step 1: Configure Higress AI Route**
 
@@ -400,6 +426,28 @@ Reference: [Higress AI Quick Start — Console Configuration](https://higress.ai
 
 ---
 
+## How to configure OpenRouter or another model provider with slashes in model names
+
+In Higress AI route configuration, the **service name** is an internal name and
+should not be the model name. It must not contain `/`. Put provider-specific
+model prefixes such as `openrouter/` or `stepfun/` in the model matching rule
+instead.
+
+Example for OpenRouter:
+
+| Field | Value |
+|-------|-------|
+| Service name | `openrouter` |
+| Model matching rule | regex, for example `^openrouter/.*$` |
+| Protocol | `openai` |
+| Custom URL | `https://openrouter.ai/api/v1` |
+
+After the route is configured, ask Manager to use the full model name, for
+example `openrouter/stepfun-eur-1-70b`. The model name prefix is what lets
+Higress select the matching provider route.
+
+---
+
 ## How to switch a Worker's runtime
 
 HiClaw v1.1.0+ supports three Worker runtimes:
@@ -441,6 +489,20 @@ Manager will use the worker-management skill to trigger a container recreation. 
 
 ---
 
+## Why does QwenPaw still use `copaw` in runtime values or image names
+
+`QwenPaw` is the user-facing name of the Python runtime that was previously
+called `CoPaw`. Some internal compatibility names intentionally remain `copaw`,
+including the Worker CRD runtime value, image names such as
+`hiclaw-copaw-worker`, and environment values such as
+`HICLAW_MANAGER_RUNTIME=copaw`.
+
+Do not change these internal values to `qwenpaw` unless the chart, controller,
+and images explicitly support that new value. They are kept stable to avoid
+breaking existing installations, Helm values, and image pull paths.
+
+---
+
 ## Can I connect my own agent implementation as a Worker
 
 Not by adding an arbitrary new `spec.runtime` value. The Worker CRD currently
@@ -455,6 +517,28 @@ and the `spec.package` / `spec.image` fields in
 Adding a completely new runtime requires code changes in the controller,
 runtime image defaults, and the corresponding agent template wiring. It is not
 a configuration-only operation.
+
+---
+
+## Can HiClaw connect to an existing Higress instance
+
+Not with `gateway.provider=higress` today. The Helm chart validates that
+`gateway.provider=higress` uses `gateway.mode=managed`, which means HiClaw
+deploys and owns the Higress instance it uses.
+
+Do not copy an existing Higress configuration directory into the HiClaw-managed
+Higress instance. HiClaw reconciles the AI routes, consumers, and gateway
+resources it needs, so copied resources can conflict with or be overwritten by
+HiClaw-managed state.
+
+The supported paths are:
+
+- use the Higress instance managed by HiClaw for HiClaw traffic
+- use the external `ai-gateway` provider path where applicable
+
+Connecting to an existing self-managed Higress instance would require a separate
+external-Higress design, including gateway/console URLs, credentials, resource
+naming isolation, and safeguards around existing routes and consumers.
 
 ---
 
@@ -484,6 +568,11 @@ With a `package` reference in the YAML pointing to a marketplace template.
 **Receiving files from you**: Yes. You can upload a file directly in Element Web (the attachment button), and Manager or Worker will receive it as a Matrix media message and can read its content.
 
 **Sending files to you**: Yes. When you ask Manager (or a Worker) to send you a file — such as a task output artifact, a generated report, or any file it has access to — it will upload the file to the Matrix media server and send it to the room as a downloadable attachment. You can then click to download it in Element Web.
+
+Paths printed by Manager or Worker are usually container-internal paths. If you
+cannot access a path directly from the host, ask the agent to send the file as
+an attachment or provide a downloadable link instead of relying on the raw
+container path.
 
 ---
 
@@ -595,7 +684,18 @@ Search the log for the relevant status code. Common causes:
 - **503**: The container can't reach the external LLM service — likely a network issue inside the container.
 - **404**: The model name is probably wrong.
 
-To determine whether the error came from the backend or from a Higress misconfiguration, check the `upstream_host` field in the log entry. If `upstream_host` has a value, the request reached the backend and the error was returned by the upstream service. If it's empty, Higress itself couldn't route the request.
+To determine whether the error came from the backend or from a Higress
+misconfiguration, check the `upstream_host` field in the log entry. If
+`upstream_host` has a real host value, the request reached the backend and the
+error was returned by the upstream service. If it is `-` or empty, Higress did
+not select an upstream cluster; a log entry with `response_code_details:
+cluster_not_found` usually means the model route or service source is
+misconfigured.
+
+For self-hosted OpenAI-compatible services, check whether the Higress provider
+configuration points to a real URL instead of a non-existent service name. Also
+verify from inside the container that the upstream URL is reachable with the
+same base URL and API key.
 
 ### 4. Check model configuration
 

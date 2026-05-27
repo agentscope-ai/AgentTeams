@@ -295,6 +295,7 @@ wait_team_active() {
         elapsed=$((elapsed + 5))
     done
     echo "wait_team_active: team=${team_name} timed out after ${timeout}s, last_phase='${last}'" >&2
+    dump_diagnostics team "${team_name}"
     return 1
 }
 
@@ -318,6 +319,7 @@ wait_worker_phase() {
         elapsed=$((elapsed + 5))
     done
     echo "wait_worker_phase: worker=${worker_name} timed out after ${timeout}s, last_phase='${last}'" >&2
+    dump_diagnostics worker "${worker_name}"
     return 1
 }
 
@@ -347,6 +349,7 @@ wait_worker_provisioned() {
         elapsed=$((elapsed + 5))
     done
     echo "wait_worker_provisioned: worker=${worker_name} timed out after ${timeout}s, roomID='${room_id}' matrixUserID='${mxid}'" >&2
+    dump_diagnostics worker "${worker_name}"
     return 1
 }
 
@@ -380,6 +383,7 @@ wait_for_worker_container() {
     done
 
     log_info "Worker container '${container}' did not start within ${timeout}s" >&2
+    dump_diagnostics worker "${worker}"
     return 1
 }
 
@@ -420,12 +424,14 @@ check_copaw_worker_probes() {
     )"
     worker_port="${worker_port:-8089}"
 
-    docker exec \
-        -e HICLAW_WORKER_PORT="${worker_port}" \
-        -e HICLAW_EXPECT_READINESS="${expected}" \
-        -e HICLAW_PROBE_REQUEST_TIMEOUT="${request_timeout}" \
-        "${container}" \
-        python3 -c '
+    local probe_output probe_status
+    probe_output="$(
+        docker exec \
+            -e HICLAW_WORKER_PORT="${worker_port}" \
+            -e HICLAW_EXPECT_READINESS="${expected}" \
+            -e HICLAW_PROBE_REQUEST_TIMEOUT="${request_timeout}" \
+            "${container}" \
+            python3 -c '
 import json
 import os
 import sys
@@ -529,6 +535,16 @@ print(json.dumps(live, ensure_ascii=False, indent=2))
 print("== /worker/readyz ==")
 print(json.dumps(ready, ensure_ascii=False, indent=2))
 ' 2>&1
+    )"
+    probe_status=$?
+
+    printf "%s\n" "${probe_output}"
+
+    if [ "${probe_status}" -ne 0 ]; then
+        dump_diagnostics worker "${worker}"
+    fi
+
+    return ${probe_status}
 }
 
 # ============================================================
@@ -693,4 +709,55 @@ stop_worker_container() {
     local container_name="$1"
     docker stop "${container_name}" 2>/dev/null || true
     docker rm "${container_name}" 2>/dev/null || true
+}
+
+# ============================================================
+# Diagnostics (failure-time dumps)
+# ============================================================
+
+# dump_diagnostics <kind> <name>
+# Print diagnostic info to stderr when a wait/probe fails. Always returns 0
+# so callers can chain it before their own `return 1` / `log_fail`.
+#
+# kind=worker: worker container logs (race-prone; may be gone) + container
+#              state + controller logs filtered for the name + worker CR JSON.
+# kind=team:   controller logs filtered for the name + team CR JSON.
+#
+# Worker container `docker logs` is attempted FIRST because the controller
+# may force-delete the container within ~100ms of probe failure; everything
+# after that point may show "No such container". The controller container
+# itself is long-lived so its logs are always available.
+dump_diagnostics() {
+    local kind="$1"
+    local name="$2"
+    local controller="${TEST_CONTROLLER_CONTAINER:-hiclaw-controller}"
+
+    {
+        case "${kind}" in
+            worker)
+                local container="hiclaw-worker-${name}"
+                printf "\n--- docker logs %s (last 100 lines) ---\n" "${container}"
+                docker logs --tail 100 "${container}" 2>&1 || true
+                printf "\n--- container state: %s ---\n" "${container}"
+                docker inspect --format='status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} startedAt={{.State.StartedAt}} finishedAt={{.State.FinishedAt}} error={{.State.Error}}' "${container}" 2>&1 || true
+                printf "\n--- controller logs (recent, filtered for %s) ---\n" "${name}"
+                docker logs --tail 300 "${controller}" 2>&1 \
+                    | grep -E "${name}|recreating|spec changed" | tail -50 || true
+                printf "\n--- hiclaw get worker %s ---\n" "${name}"
+                exec_in_agent hiclaw get workers "${name}" -o json 2>&1 || true
+                ;;
+            team)
+                printf "\n--- controller logs (recent, filtered for %s) ---\n" "${name}"
+                docker logs --tail 300 "${controller}" 2>&1 \
+                    | grep -E "${name}|team reconciled|member" | tail -80 || true
+                printf "\n--- hiclaw get team %s ---\n" "${name}"
+                exec_in_agent hiclaw get teams "${name}" -o json 2>&1 || true
+                ;;
+            *)
+                printf "dump_diagnostics: unknown kind '%s' (name=%s)\n" "${kind}" "${name}"
+                ;;
+        esac
+        printf -- "--- end of diagnostics ---\n"
+    } >&2
+    return 0
 }

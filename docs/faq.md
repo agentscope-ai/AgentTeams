@@ -15,6 +15,7 @@
 - [How to switch the Manager's model](#how-to-switch-the-managers-model)
 - [How to switch a Worker's model](#how-to-switch-a-workers-model)
 - [How to switch a Worker's runtime](#how-to-switch-a-workers-runtime)
+- [Can I connect my own agent implementation as a Worker](#can-i-connect-my-own-agent-implementation-as-a-worker)
 - [How to use the Worker Template Marketplace](#how-to-use-the-worker-template-marketplace)
 - [Does HiClaw support sending and receiving files](#does-hiclaw-support-sending-and-receiving-files)
 - [Why does Manager/Worker keep showing "typing"](#why-does-managerworker-keep-showing-typing)
@@ -437,6 +438,23 @@ Tell Manager to switch a Worker's runtime:
 > "Switch alice's runtime to hermes"
 
 Manager will use the worker-management skill to trigger a container recreation. The Worker's Matrix account, room, gateway consumer, MinIO data, and persisted credentials are preserved. Container-local ephemeral state (caches, in-flight task progress) will be lost.
+
+---
+
+## Can I connect my own agent implementation as a Worker
+
+Not by adding an arbitrary new `spec.runtime` value. The Worker CRD currently
+accepts only `openclaw`, `copaw`, or `hermes` as runtimes.
+
+For most custom Worker needs, package your role prompt, skills, dependencies,
+and optional Dockerfile as a Worker package, or set a custom image while keeping
+one of the supported runtimes. See [Importing Existing Workers](import-worker.md)
+and the `spec.package` / `spec.image` fields in
+[Declarative Resource Management](declarative-resource-management.md#worker-resource).
+
+Adding a completely new runtime requires code changes in the controller,
+runtime image defaults, and the corresponding agent template wiring. It is not
+a configuration-only operation.
 
 ---
 

@@ -15,6 +15,7 @@
 - [如何切换 Manager 的模型](#如何切换-manager-的模型)
 - [如何切换 Worker 的模型](#如何切换-worker-的模型)
 - [如何切换 Worker 的运行时](#如何切换-worker-的运行时)
+- [如何接入自己实现的 agent 作为 Worker](#如何接入自己实现的-agent-作为-worker)
 - [如何使用 Worker 模板市场](#如何使用-worker-模板市场)
 - [HiClaw 支持发送和接收文件吗](#hiclaw-支持发送和接收文件吗)
 - [为什么 Manager/Worker 一直显示"输入中"](#为什么-managerworker-一直显示输入中)
@@ -441,6 +442,22 @@ spec:
 > "把 alice 的运行时切换为 hermes"
 
 Manager 会通过 worker-management 技能触发容器重建。Worker 的 Matrix 账号、房间、网关 Consumer、MinIO 数据和持久化凭据都会保留。容器本地临时状态（缓存、进行中的任务）会丢失。
+
+---
+
+## 如何接入自己实现的 agent 作为 Worker
+
+不能直接通过新增任意 `spec.runtime` 值来接入。当前 Worker CRD 只接受
+`openclaw`、`copaw` 或 `hermes` 三种运行时。
+
+大多数自定义 Worker 场景应通过 Worker package 或自定义镜像完成：把角色提示词、
+skills、依赖和可选 Dockerfile 打包，或在保留受支持 runtime 的前提下设置自定义
+image。具体见 [导入已有 Worker](import-worker.md)，以及
+[声明式资源管理](declarative-resource-management.md#worker-资源) 中的
+`spec.package` / `spec.image` 字段。
+
+如果要新增一种完全不同的 runtime，需要修改 controller、runtime 默认镜像以及对应
+agent 模板接线，不是纯配置项。
 
 ---
 

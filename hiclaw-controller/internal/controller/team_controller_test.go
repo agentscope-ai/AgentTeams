@@ -5,11 +5,25 @@ import (
 	"encoding/json"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 )
+
+func newTeamTestClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+}
 
 func TestLeaderHeartbeatEvery(t *testing.T) {
 	team := &v1beta1.Team{}
@@ -76,6 +90,52 @@ func TestBuildDesiredMembers_LeaderAndWorkers(t *testing.T) {
 				t.Errorf("worker %s runtime=%q, want \"\" (pass-through from TeamWorkerSpec)", m.Name, m.Spec.Runtime)
 			}
 		}
+	}
+}
+
+func TestValidateNoStandaloneWorkerRuntimeConflicts(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Leader: v1beta1.LeaderSpec{Name: "alpha-lead"},
+			Workers: []v1beta1.TeamWorkerSpec{
+				{Name: "alpha-dev", WorkerName: "shared-dev"},
+			},
+		},
+	}
+	standalone := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "existing-worker", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{WorkerName: "shared-dev"},
+	}
+	r := &TeamReconciler{Client: newTeamTestClient(t, standalone)}
+
+	err := r.validateNoStandaloneWorkerRuntimeConflicts(context.Background(), team)
+	if err == nil {
+		t.Fatalf("expected runtime name conflict with standalone Worker")
+	}
+	if got := err.Error(); got != `team member worker[alpha-dev] runtime workerName "shared-dev" conflicts with existing standalone Worker default/existing-worker` {
+		t.Fatalf("unexpected error: %s", got)
+	}
+}
+
+func TestValidateNoStandaloneWorkerRuntimeConflictsAllowsDifferentNamespace(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Leader: v1beta1.LeaderSpec{Name: "alpha-lead"},
+			Workers: []v1beta1.TeamWorkerSpec{
+				{Name: "alpha-dev", WorkerName: "shared-dev"},
+			},
+		},
+	}
+	standalone := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "existing-worker", Namespace: "other"},
+		Spec:       v1beta1.WorkerSpec{WorkerName: "shared-dev"},
+	}
+	r := &TeamReconciler{Client: newTeamTestClient(t, standalone)}
+
+	if err := r.validateNoStandaloneWorkerRuntimeConflicts(context.Background(), team); err != nil {
+		t.Fatalf("validateNoStandaloneWorkerRuntimeConflicts: %v", err)
 	}
 }
 

@@ -3,16 +3,20 @@
 ## When to Delegate to a Team
 
 Delegate to a Team Leader when:
-- The task matches the team's domain/expertise
+- The task semantically matches the team's name, description, Leader, or Worker roster
 - The task is complex enough to benefit from decomposition
 - Multiple workers with different skills are needed
+
+Team matching is a Manager-side judgement based on the current Team data. The
+Team registry and Team API do not define structured `domain`, `expertise`,
+`skills`, or `capabilities` fields for filtering teams.
 
 ## Delegation Flow
 
 ```
 Manager receives task from Admin
   ↓
-Manager checks team info via `hiclaw get team <TEAM_NAME>` for matching team
+Manager checks team info via `hiclaw get team <TEAM_NAME>` and chooses a matching team
   ↓
 Manager creates task: shared/tasks/{task-id}/
   - meta.json: assigned_to = leader name

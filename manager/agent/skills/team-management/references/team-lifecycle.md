@@ -25,9 +25,13 @@ Check status: `hiclaw get team <TEAM_NAME>`
 
 ## Task Delegation to Teams
 
-When Manager receives a task matching a team's domain:
+When Manager receives a task that semantically matches a Team's name,
+description, Leader, or Worker roster:
 
 1. Use `manage-state.sh --action add-finite --delegated-to-team <TEAM>` to track
 2. @mention the Team Leader in the Leader Room with the task
 3. Team Leader handles decomposition and assignment internally
 4. Manager only checks with Team Leader for progress (never team workers)
+
+The Team registry and Team API do not expose structured domain/expertise fields
+for automatic filtering.

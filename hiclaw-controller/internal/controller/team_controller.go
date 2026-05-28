@@ -1023,11 +1023,15 @@ func (r *TeamReconciler) validateNoStandaloneWorkerRuntimeConflicts(ctx context.
 		return nil
 	}
 
-	desired := map[string]string{
+	desiredNames := map[string]string{
+		t.Spec.Leader.Name: "leader[" + t.Spec.Leader.Name + "]",
+	}
+	desiredRuntimeNames := map[string]string{
 		t.Spec.Leader.EffectiveWorkerName(): "leader[" + t.Spec.Leader.Name + "]",
 	}
 	for _, w := range t.Spec.Workers {
-		desired[w.EffectiveWorkerName()] = "worker[" + w.Name + "]"
+		desiredNames[w.Name] = "worker[" + w.Name + "]"
+		desiredRuntimeNames[w.EffectiveWorkerName()] = "worker[" + w.Name + "]"
 	}
 
 	var workers v1beta1.WorkerList
@@ -1035,8 +1039,11 @@ func (r *TeamReconciler) validateNoStandaloneWorkerRuntimeConflicts(ctx context.
 		return fmt.Errorf("list standalone workers: %w", err)
 	}
 	for _, worker := range workers.Items {
+		if owner, ok := desiredNames[worker.Name]; ok {
+			return fmt.Errorf("team member %s name %q conflicts with existing standalone Worker %s/%s", owner, worker.Name, worker.Namespace, worker.Name)
+		}
 		runtimeName := worker.Spec.EffectiveWorkerName(worker.Name)
-		if owner, ok := desired[runtimeName]; ok {
+		if owner, ok := desiredRuntimeNames[runtimeName]; ok {
 			return fmt.Errorf("team member %s runtime workerName %q conflicts with existing standalone Worker %s/%s", owner, runtimeName, worker.Namespace, worker.Name)
 		}
 	}

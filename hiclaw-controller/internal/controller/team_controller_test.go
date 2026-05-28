@@ -118,6 +118,31 @@ func TestValidateNoStandaloneWorkerRuntimeConflicts(t *testing.T) {
 	}
 }
 
+func TestValidateNoStandaloneWorkerRuntimeConflictsRejectsCRNameConflict(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Leader: v1beta1.LeaderSpec{Name: "alpha-lead", WorkerName: "team-lead"},
+			Workers: []v1beta1.TeamWorkerSpec{
+				{Name: "alpha-dev", WorkerName: "team-dev"},
+			},
+		},
+	}
+	standalone := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{WorkerName: "standalone-dev"},
+	}
+	r := &TeamReconciler{Client: newTeamTestClient(t, standalone)}
+
+	err := r.validateNoStandaloneWorkerRuntimeConflicts(context.Background(), team)
+	if err == nil {
+		t.Fatalf("expected CR name conflict with standalone Worker")
+	}
+	if got := err.Error(); got != `team member worker[alpha-dev] name "alpha-dev" conflicts with existing standalone Worker default/alpha-dev` {
+		t.Fatalf("unexpected error: %s", got)
+	}
+}
+
 func TestValidateNoStandaloneWorkerRuntimeConflictsAllowsDifferentNamespace(t *testing.T) {
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},

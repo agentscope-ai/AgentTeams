@@ -549,3 +549,26 @@ matrix_find_dm_room() {
 
     return 1
 }
+
+# Dump recent Manager DM messages to stderr.
+#
+# Use when a test fails because Manager didn't perform an expected action
+# (didn't create a Worker, didn't open a project room, etc.). Manager's last
+# few DM replies usually reveal the cause — e.g. it asked for confirmation
+# instead of acting, or it errored out internally. Without this dump, those
+# failures look like silent infrastructure timeouts.
+#
+# Usage: dump_manager_dm_messages <token> <dm_room> [note]
+dump_manager_dm_messages() {
+    local token="$1"
+    local dm_room="$2"
+    local note="${3:-Manager DM dump}"
+    {
+        printf "\n--- %s ---\n" "${note}"
+        matrix_read_messages "${token}" "${dm_room}" 20 2>&1 \
+            | jq -r '.chunk[] | "[\(.sender // "?")] \(.content.body // "<no body>" | tostring | .[0:400])"' 2>&1 \
+            | head -40 || true
+        printf -- "--- end of Manager DM dump ---\n"
+    } >&2
+    return 0
+}

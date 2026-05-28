@@ -103,7 +103,14 @@ TASK_DESCRIPTION="I need a collaborative GitHub PR workflow test:
 
 GitHub repo: ${GITHUB_OWNER}/${GITHUB_REPO}
 
-Please create workers alice (developer), bob (reviewer), and charlie (qa-tester) and coordinate this workflow."
+Please create workers alice (developer), bob (reviewer), and charlie (qa-tester) and coordinate this workflow.
+
+For each worker creation, use these exact values — do not ask me to confirm any of them:
+- alice: runtime=install default; SOUL/role='Developer who implements features in JavaScript and pushes commits'; skills='github-operations'
+- bob: runtime=install default; SOUL/role='Code reviewer who inspects PRs for correctness and quality'; skills='github-operations'
+- charlie: runtime=install default; SOUL/role='QA tester who writes unit tests and verifies behavior'; skills='github-operations'
+
+If a worker already exists, reuse it instead of recreating. Proceed immediately."
 
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" "${TASK_DESCRIPTION}"
 

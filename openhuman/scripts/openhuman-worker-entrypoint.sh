@@ -12,8 +12,8 @@
 #   - [channels_config.matrix]
 #       Native Matrix channel for direct human/manager interaction.
 #   - LLM inference settings (via openhuman-core CLI):
-#       Routes LLM traffic to the HiClaw AI gateway (Higress) instead of
-#       OpenHuman's default api.openhuman.ai SaaS endpoint.
+#       Routes LLM traffic to the HiClaw AI gateway (Higress); startup is
+#       aborted (fail-closed) if the gateway config is missing.
 #
 # Environment variables (set by controller during worker creation):
 #   HICLAW_WORKER_NAME            - Worker name (required)
@@ -21,9 +21,9 @@
 #   HICLAW_FS_ACCESS_KEY          - MinIO access key (required in local mode)
 #   HICLAW_FS_SECRET_KEY          - MinIO secret key (required in local mode)
 #   HICLAW_RUNTIME                - "aliyun" for cloud mode (uses RRSA/STS)
-#   HICLAW_AI_GATEWAY_URL         - HiClaw AI gateway base URL (LLM fallback)
-#   HICLAW_WORKER_GATEWAY_KEY     - Higress consumer key (LLM API key fallback)
-#   HICLAW_DEFAULT_MODEL            - Default model id (LLM fallback, default qwen-plus)
+#   HICLAW_AI_GATEWAY_URL         - HiClaw AI gateway base URL (required)
+#   HICLAW_WORKER_GATEWAY_KEY     - Higress consumer key (required)
+#   HICLAW_DEFAULT_MODEL            - Default model id (default qwen-plus)
 #   MATRIX_HOMESERVER_URL         - Matrix homeserver URL (fallback)
 #   MATRIX_ACCESS_TOKEN           - Matrix access token (fallback)
 #   MATRIX_HOME_ROOM_ID           - Matrix room ID
@@ -225,9 +225,9 @@ log "config.toml generated at ${WORKSPACE}/config.toml"
 
 # --- LLM routing through HiClaw AI gateway (Higress) ---
 # Use openhuman-core's CLI to register the HiClaw gateway as an
-# OpenAI-compatible inference endpoint. This bypasses OpenHuman's
-# default api.openhuman.ai SaaS provider (which would require sign-in)
-# and routes all LLM workloads through Higress instead.
+# OpenAI-compatible inference endpoint. This is REQUIRED for HiClaw-managed
+# workers; if not configured, the entrypoint aborts (fail-closed) to
+# prevent silent routing of workloads to external services.
 export OPENHUMAN_CONFIG="${WORKSPACE}/config.toml"
 if [ -n "${BRIDGE_LLM_BASE_URL}" ] && [ -n "${BRIDGE_LLM_API_KEY}" ]; then
     log "Configuring LLM: endpoint=${BRIDGE_LLM_BASE_URL} model=${BRIDGE_LLM_PRIMARY}"
@@ -237,7 +237,8 @@ if [ -n "${BRIDGE_LLM_BASE_URL}" ] && [ -n "${BRIDGE_LLM_API_KEY}" ]; then
         --default_model "${BRIDGE_LLM_PRIMARY}" \
         >/dev/null 2>&1 || log "WARNING: openhuman-core config update_model_settings failed"
 else
-    log "WARNING: LLM gateway not configured (base_url or api_key missing); worker will fall back to OpenHuman SaaS"
+    log "FATAL: LLM gateway not configured (HICLAW_AI_GATEWAY_URL or HICLAW_WORKER_GATEWAY_KEY missing). HiClaw-managed workers must route through the platform AI gateway; refusing to start to prevent silent fallback to external services."
+    exit 1
 fi
 
 # Generate a random core token if not set

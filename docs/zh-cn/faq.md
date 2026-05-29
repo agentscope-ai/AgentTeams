@@ -138,8 +138,8 @@ hiclaw create worker --name alice
 # 指定模型和运行时创建 Worker
 hiclaw create worker --name bob --model claude-sonnet-4-6 --runtime hermes
 
-# 创建带技能和 MCP Server 的 Worker
-hiclaw create worker --name charlie --skills github-operations --mcp-servers github
+# 创建带技能的 Worker
+hiclaw create worker --name charlie --skills github-operations
 
 # 使用自定义 SOUL.md 创建 Worker
 hiclaw create worker --name diana --soul-file /path/to/SOUL.md
@@ -168,9 +168,6 @@ hiclaw update worker --name alice --runtime hermes
 
 # 更新 Worker 技能
 hiclaw update worker --name alice --skills github-operations,code-review
-
-# 添加 MCP Server 访问权限
-hiclaw update worker --name alice --mcp-servers github,sentry
 ```
 
 ### 应用 YAML 定义
@@ -178,7 +175,26 @@ hiclaw update worker --name alice --mcp-servers github,sentry
 ```bash
 # 应用单个 YAML 资源
 hiclaw apply -f worker-alice.yaml
+```
 
+对于直接 CLI 参数未覆盖的字段（例如 `spec.mcpServers`），请使用 YAML：
+
+```yaml
+apiVersion: hiclaw.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  workerName: alice
+  skills:
+    - github-operations
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http
+```
+
+```bash
 # 从 zip 包导入 Worker
 hiclaw apply worker --name alice --zip worker-package.zip
 ```
@@ -228,11 +244,27 @@ HICLAW_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://higress.ai/hiclaw/install.s
 ```
 
 该变量存在时，HiClaw 会自动配置 GitHub MCP Server，并生成 Manager 侧
-`mcporter` 配置。之后创建或更新 Worker 时给它 GitHub MCP 能力：
+`mcporter` 配置。之后在 Worker YAML manifest 中声明 GitHub MCP 能力：
+
+```yaml
+apiVersion: hiclaw.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  workerName: alice
+  skills:
+    - github-operations
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http
+```
+
+通过当前支持的 YAML 路径应用：
 
 ```bash
-hiclaw create worker --name alice --skills github-operations --mcp-servers github
-hiclaw update worker --name alice --mcp-servers github
+hiclaw apply -f worker-alice.yaml
 ```
 
 如果已有安装当时跳过了 token，请在原工作目录重新执行安装并提供

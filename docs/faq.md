@@ -139,8 +139,8 @@ hiclaw create worker --name alice
 # Create a worker with specific model and runtime
 hiclaw create worker --name bob --model claude-sonnet-4-6 --runtime hermes
 
-# Create a worker with skills and MCP servers
-hiclaw create worker --name charlie --skills github-operations --mcp-servers github
+# Create a worker with skills
+hiclaw create worker --name charlie --skills github-operations
 
 # Create a worker with a custom SOUL.md
 hiclaw create worker --name diana --soul-file /path/to/SOUL.md
@@ -169,9 +169,6 @@ hiclaw update worker --name alice --runtime hermes
 
 # Update a worker's skills
 hiclaw update worker --name alice --skills github-operations,code-review
-
-# Add MCP server access
-hiclaw update worker --name alice --mcp-servers github,sentry
 ```
 
 ### Apply YAML definitions
@@ -179,7 +176,26 @@ hiclaw update worker --name alice --mcp-servers github,sentry
 ```bash
 # Apply a single YAML resource
 hiclaw apply -f worker-alice.yaml
+```
 
+Use YAML for fields not exposed by direct CLI flags, such as `spec.mcpServers`:
+
+```yaml
+apiVersion: hiclaw.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  workerName: alice
+  skills:
+    - github-operations
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http
+```
+
+```bash
 # Import a worker from a zip package
 hiclaw apply worker --name alice --zip worker-package.zip
 ```
@@ -230,12 +246,28 @@ HICLAW_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://higress.ai/hiclaw/install.s
 ```
 
 When this variable is present, HiClaw configures the GitHub MCP Server and
-generates Manager-side `mcporter` configuration automatically. After that, give
-a Worker the GitHub MCP capability when creating or updating it:
+generates Manager-side `mcporter` configuration automatically. After that,
+declare the GitHub MCP capability in the Worker manifest:
+
+```yaml
+apiVersion: hiclaw.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  workerName: alice
+  skills:
+    - github-operations
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http
+```
+
+Apply it with the supported YAML path:
 
 ```bash
-hiclaw create worker --name alice --skills github-operations --mcp-servers github
-hiclaw update worker --name alice --mcp-servers github
+hiclaw apply -f worker-alice.yaml
 ```
 
 For an existing installation that skipped the token, re-run the installer from

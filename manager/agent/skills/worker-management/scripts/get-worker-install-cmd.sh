@@ -56,11 +56,20 @@ FS_DOMAIN="${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}"
 FS_EXTERNAL_PORT="${HICLAW_PORT_GATEWAY:-18080}"
 FS_EXTERNAL_ENDPOINT="http://${FS_DOMAIN}:${FS_EXTERNAL_PORT}"
 FS_INTERNAL_ENDPOINT="http://${FS_DOMAIN%%:*}:9000"
+DOCKER_NETWORK="${HICLAW_DOCKER_NETWORK:-hiclaw-net}"
 
 if [ "${RUNTIME}" = "copaw" ]; then
-    INSTALL_CMD="pip install -i https://mirrors.aliyun.com/pypi/simple/ copaw-worker && copaw-worker --name ${WORKER_NAME} --fs ${FS_EXTERNAL_ENDPOINT} --fs-key ${WORKER_NAME} --fs-secret ${WORKER_MINIO_PASSWORD} --console-port 8088"
+    if [ "${DEPLOYMENT}" = "local" ]; then
+        INSTALL_CMD="docker run -d --name hiclaw-worker-${WORKER_NAME} --network ${DOCKER_NETWORK} --restart unless-stopped -e HICLAW_WORKER_NAME=${WORKER_NAME} -e HICLAW_FS_ENDPOINT=${FS_INTERNAL_ENDPOINT} -e HICLAW_FS_ACCESS_KEY=${WORKER_NAME} -e HICLAW_FS_SECRET_KEY=${WORKER_MINIO_PASSWORD} -e HICLAW_CONSOLE_PORT=8088 \${HICLAW_COPAW_WORKER_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-copaw-worker:latest}"
+    else
+        INSTALL_CMD="pip install -i https://mirrors.aliyun.com/pypi/simple/ copaw-worker && copaw-worker --name ${WORKER_NAME} --fs ${FS_EXTERNAL_ENDPOINT} --fs-key ${WORKER_NAME} --fs-secret ${WORKER_MINIO_PASSWORD} --console-port 8088"
+    fi
 else
-    INSTALL_CMD="bash hiclaw-install.sh worker --name ${WORKER_NAME} --fs ${FS_INTERNAL_ENDPOINT} --fs-key ${WORKER_NAME} --fs-secret ${WORKER_MINIO_PASSWORD}"
+    if [ "${DEPLOYMENT}" = "local" ]; then
+        INSTALL_CMD="docker run -d --name hiclaw-worker-${WORKER_NAME} --network ${DOCKER_NETWORK} --restart unless-stopped -e HICLAW_WORKER_NAME=${WORKER_NAME} -e HICLAW_FS_ENDPOINT=${FS_INTERNAL_ENDPOINT} -e HICLAW_FS_ACCESS_KEY=${WORKER_NAME} -e HICLAW_FS_SECRET_KEY=${WORKER_MINIO_PASSWORD} \${HICLAW_WORKER_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-worker:latest}"
+    else
+        INSTALL_CMD="bash hiclaw-install.sh worker --name ${WORKER_NAME} --fs ${FS_EXTERNAL_ENDPOINT} --fs-key ${WORKER_NAME} --fs-secret ${WORKER_MINIO_PASSWORD}"
+    fi
 fi
 
 jq -n \

@@ -24,6 +24,8 @@ const (
 	RoleTeamWorker MemberRole = "worker"
 )
 
+const dockerHostInternalExtraHost = "host.docker.internal:host-gateway"
+
 // String renders the role as stored in annotations / legacy registries.
 func (r MemberRole) String() string { return string(r) }
 
@@ -380,6 +382,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		Runtime:            m.Spec.Runtime,
 		RuntimeFallback:    d.DefaultRuntime,
 		Env:                workerEnv,
+		ExtraHosts:         extraHostsForBackend(wb),
 		ServiceAccountName: saName,
 		Labels:             labels,
 		Owner:              m.Owner,
@@ -399,6 +402,13 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		return reconcile.Result{}, fmt.Errorf("create container: %w", err)
 	}
 	return reconcile.Result{}, nil
+}
+
+func extraHostsForBackend(wb backend.WorkerBackend) []string {
+	if wb != nil && wb.Name() == "docker" {
+		return []string{dockerHostInternalExtraHost}
+	}
+	return nil
 }
 
 // ReconcileMemberExpose reconciles Higress port exposure for the member.

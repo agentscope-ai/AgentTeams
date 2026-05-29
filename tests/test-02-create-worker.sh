@@ -55,9 +55,25 @@ wait_for_session_stable 5 60
 # Snapshot metrics baseline before sending message (to calculate delta later)
 METRICS_BASELINE=$(snapshot_baseline)
 
-# Send create worker request
+# Send create worker request.
+#
+# Why the prompt is so explicit: worker-management/SKILL.md instructs Manager
+# to ask admin for FOUR inputs (name / runtime / SOUL / skills) before running
+# `hiclaw create worker`, and to NOT invent defaults. A vague prompt that only
+# names the worker is therefore a coin flip — sometimes the LLM follows
+# SKILL.md strictly and replies with a 4-question confirmation, never calling
+# the CLI, and downstream assertions (consumer / SOUL.md) silently fail. We
+# avoid that by spelling out all four inputs and telling Manager to skip
+# confirmation, so the test exercises actual Worker creation rather than the
+# LLM's confirmation-loop behavior.
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Please create a new Worker for frontend development tasks. The worker's name (username) must be exactly 'alice'. She should have access to GitHub MCP."
+    "Please create a new Worker now using these exact values — do not ask me to confirm any of them:
+- name: alice
+- runtime: use the install default (do not ask, just pick whatever the env says)
+- SOUL/role: Frontend developer specializing in modern web frameworks, responsive design, and clean UI implementation
+- skills: github-operations (file-sync / task-progress / project-participation are auto-included, no need to ask)
+
+Proceed immediately and tell me when she is created."
 
 log_info "Waiting for Manager to create Worker Alice..."
 

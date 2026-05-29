@@ -260,12 +260,16 @@ func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext 
 				"hiclaw.io/role":        role.String(),
 			},
 		),
-		// For Worker CR, spec change is detected the classic way:
-		// Generation increments on every spec mutation; ObservedGeneration
-		// is written after a successful reconcile. Status defaults to 0
-		// on a freshly created Worker, which correctly marks the first
-		// reconcile as "changed" so the initial container is created.
-		SpecChanged:          w.Generation != w.Status.ObservedGeneration,
+		// SpecChanged is gated on ObservedGeneration > 0 so a brand-new
+		// Worker (Generation=1, ObservedGeneration=0) reports
+		// SpecChanged=false. Initial creation then goes through the
+		// StatusNotFound branch in ensureMemberContainerPresent
+		// unambiguously. Without the gate, a second reconcile queued by
+		// the finalizer write can read a stale informer cache
+		// (ObservedGeneration still 0) after the just-created container
+		// is already Running, fall into the spec-change branch, and Delete
+		// the container via force=true (SIGKILL, exit 137).
+		SpecChanged:          w.Status.ObservedGeneration > 0 && w.Generation != w.Status.ObservedGeneration,
 		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
 		TeamName:             w.Annotations["hiclaw.io/team"],
 		TeamLeaderName:       w.Annotations["hiclaw.io/team-leader"],

@@ -37,6 +37,45 @@ trap _cleanup EXIT
 
 minio_setup
 
+_get_higress_consumers_or_fail() {
+    local label="$1"
+    local consumers
+
+    if ! higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null 2>&1; then
+        log_fail "Unable to log in to Higress before ${label}"
+        return 1
+    fi
+
+    if ! consumers=$(higress_get_consumers 2>/dev/null); then
+        log_fail "Unable to query Higress consumers during ${label}"
+        return 1
+    fi
+
+    if ! echo "${consumers}" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
+        log_fail "Higress consumers response during ${label} is not valid JSON with a data array"
+        return 1
+    fi
+
+    HIGRESS_CONSUMERS_JSON="${consumers}"
+}
+
+_worker_container_exists() {
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-worker-${TEST_WORKER}$"
+}
+
+_higress_consumer_exists() {
+    echo "${HIGRESS_CONSUMERS_JSON}" | jq -r '.data[]?.name // empty' 2>/dev/null \
+        | grep -Fxq "worker-${TEST_WORKER}"
+}
+
+_minio_agent_dir_listing() {
+    minio_list_dir "agents/${TEST_WORKER}/" 2>/dev/null || true
+}
+
+_minio_worker_yaml() {
+    exec_in_manager mc cat "${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
+}
+
 # ============================================================
 # Section 1: Create the worker
 # ============================================================
@@ -73,12 +112,14 @@ fi
 # ============================================================
 log_section "Snapshot Pre-Delete State"
 
-higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null 2>&1 || true
-CONSUMERS_BEFORE=$(higress_get_consumers 2>/dev/null || echo "")
-if echo "${CONSUMERS_BEFORE}" | jq -r '.data[]?.name // empty' 2>/dev/null | grep -Fxq "worker-${TEST_WORKER}"; then
-    log_pass "Higress consumer 'worker-${TEST_WORKER}' exists before delete"
-else
-    log_fail "Higress consumer 'worker-${TEST_WORKER}' missing before delete (cannot test cleanup)"
+HIGRESS_CONSUMERS_JSON=""
+if _get_higress_consumers_or_fail "pre-delete snapshot"; then
+    CONSUMERS_BEFORE="${HIGRESS_CONSUMERS_JSON}"
+    if _higress_consumer_exists; then
+        log_pass "Higress consumer 'worker-${TEST_WORKER}' exists before delete"
+    else
+        log_fail "Higress consumer 'worker-${TEST_WORKER}' missing before delete (cannot test cleanup)"
+    fi
 fi
 
 if minio_file_exists "agents/${TEST_WORKER}/SOUL.md"; then
@@ -87,7 +128,7 @@ else
     log_fail "MinIO SOUL.md missing before delete (cannot test cleanup)"
 fi
 
-PRE_YAML=$(exec_in_manager mc cat "${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || echo "")
+PRE_YAML=$(_minio_worker_yaml)
 if [ -n "${PRE_YAML}" ]; then
     log_pass "MinIO YAML exists before delete"
 else
@@ -111,7 +152,19 @@ fi
 log_info "Waiting for controller to release resources..."
 DEADLINE=$(( $(date +%s) + 120 ))
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-    if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-worker-${TEST_WORKER}$"; then
+    HIGRESS_CONSUMERS_JSON=""
+    HIGRESS_QUERY_OK=0
+    if _get_higress_consumers_or_fail "post-delete wait"; then
+        HIGRESS_QUERY_OK=1
+    fi
+    AGENT_DIR_LISTING=$(_minio_agent_dir_listing)
+    POST_YAML=$(_minio_worker_yaml)
+
+    if ! _worker_container_exists \
+        && [ "${HIGRESS_QUERY_OK}" -eq 1 ] \
+        && ! _higress_consumer_exists \
+        && [ -z "${AGENT_DIR_LISTING}" ] \
+        && [ -z "${POST_YAML}" ]; then
         break
     fi
     sleep 5
@@ -123,7 +176,7 @@ done
 log_section "Verify Cleanup"
 
 # (a) container removed (not just stopped)
-if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-worker-${TEST_WORKER}$"; then
+if _worker_container_exists; then
     STATUS=$(docker inspect --format '{{.State.Status}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || echo unknown)
     log_fail "Worker container still present (status: ${STATUS})"
 else
@@ -131,15 +184,18 @@ else
 fi
 
 # (b) Higress consumer removed
-CONSUMERS_AFTER=$(higress_get_consumers 2>/dev/null || echo "")
-if echo "${CONSUMERS_AFTER}" | jq -r '.data[]?.name // empty' 2>/dev/null | grep -Fxq "worker-${TEST_WORKER}"; then
-    log_fail "Higress consumer 'worker-${TEST_WORKER}' still present after delete"
-else
-    log_pass "Higress consumer removed"
+HIGRESS_CONSUMERS_JSON=""
+if _get_higress_consumers_or_fail "post-delete assertion"; then
+    CONSUMERS_AFTER="${HIGRESS_CONSUMERS_JSON}"
+    if _higress_consumer_exists; then
+        log_fail "Higress consumer 'worker-${TEST_WORKER}' still present after delete"
+    else
+        log_pass "Higress consumer removed"
+    fi
 fi
 
 # (c) MinIO agents/<name>/ removed (or empty)
-AGENT_DIR_LISTING=$(minio_list_dir "agents/${TEST_WORKER}/" 2>/dev/null || echo "")
+AGENT_DIR_LISTING=$(_minio_agent_dir_listing)
 if [ -z "${AGENT_DIR_LISTING}" ]; then
     log_pass "MinIO agents/${TEST_WORKER}/ removed"
 else
@@ -147,7 +203,7 @@ else
 fi
 
 # (d) MinIO YAML removed
-POST_YAML=$(exec_in_manager mc cat "${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || echo "")
+POST_YAML=$(_minio_worker_yaml)
 if [ -z "${POST_YAML}" ]; then
     log_pass "MinIO YAML removed"
 else

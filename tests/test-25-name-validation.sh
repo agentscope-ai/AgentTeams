@@ -17,23 +17,53 @@ source "${SCRIPT_DIR}/lib/higress-client.sh"
 test_setup "25-name-validation"
 
 TEST_VALID_NAME="test-namechk-$$"
+ACCEPTED_INVALID_NAMES=()
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_VALID_NAME}"
+    for bad_name in "${ACCEPTED_INVALID_NAMES[@]}"; do
+        log_info "Cleaning up mistakenly accepted invalid worker: ${bad_name}"
+        exec_in_agent hiclaw delete worker "${bad_name}" 2>/dev/null || true
+        docker rm -f "hiclaw-worker-${bad_name}" 2>/dev/null || true
+    done
     exec_in_agent hiclaw delete worker "${TEST_VALID_NAME}" 2>/dev/null || true
     sleep 3
     docker rm -f "hiclaw-worker-${TEST_VALID_NAME}" 2>/dev/null || true
 }
 trap _cleanup EXIT
 
+_get_higress_consumers_or_fail() {
+    local label="$1"
+    local consumers
+
+    if ! higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null 2>&1; then
+        log_fail "Unable to log in to Higress before ${label}" >&2
+        return 1
+    fi
+
+    if ! consumers=$(higress_get_consumers 2>/dev/null); then
+        log_fail "Unable to query Higress consumers during ${label}" >&2
+        return 1
+    fi
+
+    if ! echo "${consumers}" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
+        log_fail "Higress consumers response during ${label} is not valid JSON with a data array" >&2
+        return 1
+    fi
+
+    HIGRESS_CONSUMERS_JSON="${consumers}"
+}
+
 # ============================================================
 # Section 1: Snapshot Higress consumers before any create calls
 # ============================================================
 log_section "Snapshot Initial State"
 
-higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null 2>&1 || true
-CONSUMERS_BEFORE=$(higress_get_consumers 2>/dev/null || echo "")
-log_info "Higress consumer count before: $(echo "${CONSUMERS_BEFORE}" | jq -r '.data | length // 0' 2>/dev/null || echo "?")"
+HIGRESS_CONSUMERS_JSON=""
+if _get_higress_consumers_or_fail "initial snapshot"; then
+    CONSUMERS_BEFORE="${HIGRESS_CONSUMERS_JSON}"
+    log_info "Higress consumer count before: $(echo "${CONSUMERS_BEFORE}" | jq -r '.data | length // 0' 2>/dev/null || echo "?")"
+fi
 
 # ============================================================
 # Section 2: Bad names — assert CLI rejects with expected error
@@ -66,6 +96,11 @@ for case_entry in "${INVALID_CASES[@]}"; do
         log_pass "CLI rejected ${label} name (exit=${EXIT_CODE}): '${bad_name}'"
     else
         log_fail "CLI accepted invalid ${label} name '${bad_name}' (exit=0)"
+        if [ -n "${bad_name}" ]; then
+            ACCEPTED_INVALID_NAMES+=("${bad_name}")
+            exec_in_agent hiclaw delete worker "${bad_name}" 2>/dev/null || true
+            docker rm -f "hiclaw-worker-${bad_name}" 2>/dev/null || true
+        fi
     fi
 
     if echo "${OUTPUT}" | grep -q "${expected_substr}"; then
@@ -80,22 +115,25 @@ done
 # ============================================================
 log_section "Verify No Higress Leak"
 
-CONSUMERS_AFTER=$(higress_get_consumers 2>/dev/null || echo "")
+HIGRESS_CONSUMERS_JSON=""
 LEAKED=""
-for case_entry in "${INVALID_CASES[@]}"; do
-    rest="${case_entry#*|}"
-    bad_name="${rest%%|*}"
-    [ -z "${bad_name}" ] && continue
-    if echo "${CONSUMERS_AFTER}" | jq -r '.data[]?.name // empty' 2>/dev/null \
-        | grep -Fxq "worker-${bad_name}"; then
-        LEAKED="${LEAKED} ${bad_name}"
-    fi
-done
+if _get_higress_consumers_or_fail "invalid-name leak check"; then
+    CONSUMERS_AFTER="${HIGRESS_CONSUMERS_JSON}"
+    for case_entry in "${INVALID_CASES[@]}"; do
+        rest="${case_entry#*|}"
+        bad_name="${rest%%|*}"
+        [ -z "${bad_name}" ] && continue
+        if echo "${CONSUMERS_AFTER}" | jq -r '.data[]?.name // empty' 2>/dev/null \
+            | grep -Fxq "worker-${bad_name}"; then
+            LEAKED="${LEAKED} ${bad_name}"
+        fi
+    done
 
-if [ -z "${LEAKED}" ]; then
-    log_pass "No Higress consumer created for any rejected name"
-else
-    log_fail "Higress consumers leaked for invalid names:${LEAKED}"
+    if [ -z "${LEAKED}" ]; then
+        log_pass "No Higress consumer created for any rejected name"
+    else
+        log_fail "Higress consumers leaked for invalid names:${LEAKED}"
+    fi
 fi
 
 # ============================================================

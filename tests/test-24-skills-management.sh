@@ -92,6 +92,12 @@ else
     log_fail "Built-in skill 'file-sync' missing in MinIO"
 fi
 
+if minio_file_exists "agents/${TEST_WORKER}/skills/github-operations/SKILL.md"; then
+    log_pass "On-demand skill 'github-operations' present in MinIO"
+else
+    log_fail "On-demand skill 'github-operations' missing in MinIO"
+fi
+
 # ============================================================
 # Section 3: Update skills via `hiclaw update worker --skills`
 # ============================================================
@@ -136,6 +142,12 @@ if echo "${UPDATED_SKILLS}" | jq -e 'index("github-operations")' >/dev/null 2>&1
     log_fail "Registry still contains 'github-operations' after replacement update"
 else
     log_pass "Replaced skill 'github-operations' no longer in registry"
+fi
+
+if minio_file_exists "agents/${TEST_WORKER}/skills/git-delegation/SKILL.md"; then
+    log_pass "On-demand skill 'git-delegation' present in MinIO after update"
+else
+    log_fail "On-demand skill 'git-delegation' missing in MinIO after update"
 fi
 
 # Worker container should still be running (skills update must not crash it)

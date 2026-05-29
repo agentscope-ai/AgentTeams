@@ -33,5 +33,7 @@ description, Leader, or Worker roster:
 3. Team Leader handles decomposition and assignment internally
 4. Manager only checks with Team Leader for progress (never team workers)
 
-The Team registry and Team API do not expose structured domain/expertise fields
-for automatic filtering.
+The Team registry and Team API do not expose structured team-level
+domain/expertise/capability fields for automatic filtering. Worker-level skills
+may describe individual members, but Manager delegation is not backed by a
+structured Team filter.

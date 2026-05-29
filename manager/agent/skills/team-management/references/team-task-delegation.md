@@ -8,8 +8,10 @@ Delegate to a Team Leader when:
 - Multiple workers with different skills are needed
 
 Team matching is a Manager-side judgement based on the current Team data. The
-Team registry and Team API do not define structured `domain`, `expertise`,
-`skills`, or `capabilities` fields for filtering teams.
+Team registry and Team API do not define structured team-level
+matching/filtering fields such as `domain`, `expertise`, or `capabilities`.
+Worker-level `skills` can describe individual members, but Manager delegation is
+not backed by a structured Team filter.
 
 ## Delegation Flow
 

@@ -321,10 +321,11 @@ Leader aggregates results, @mentions Manager
 Manager notifies Admin
 ```
 
-Team matching is not backed by structured `domain`, `expertise`, `skills`, or
-`capabilities` fields on the Team object. Use `spec.description`, the Team name,
-Leader name, and Worker names to make the Team's responsibility clear to the
-Manager.
+Team matching is not backed by structured team-level matching/filtering fields
+such as `domain`, `expertise`, or `capabilities` on the Team object. Worker-level
+`skills` can still describe individual members, but Manager delegation is based
+on semantic judgement over the Team name, `spec.description`, Leader name, and
+Worker names rather than a structured Team filter.
 
 ### Team Status
 

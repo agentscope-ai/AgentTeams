@@ -319,9 +319,10 @@ Leader 汇总结果，@mention Manager
 Manager 通知 Admin
 ```
 
-Team 匹配目前没有结构化的 `domain`、`expertise`、`skills` 或
-`capabilities` 字段。建议通过 `spec.description`、Team 名称、Leader 名称和
-Worker 名称清楚表达团队职责，供 Manager 做语义判断。
+Team 匹配目前没有结构化的团队级 matching/filtering 字段，例如 `domain`、
+`expertise` 或 `capabilities`。Worker 级别的 `skills` 仍可描述单个成员，
+但 Manager 委派不是基于结构化 Team filter，而是结合 Team 名称、
+`spec.description`、Leader 名称和 Worker 名称做语义判断。
 
 ### Team 状态
 

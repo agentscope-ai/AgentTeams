@@ -129,10 +129,12 @@ else
 fi
 
 PRE_YAML=$(_minio_worker_yaml)
+PRE_YAML_EXISTS=0
 if [ -n "${PRE_YAML}" ]; then
+    PRE_YAML_EXISTS=1
     log_pass "MinIO YAML exists before delete"
 else
-    log_fail "MinIO YAML missing before delete"
+    log_info "MinIO YAML absent before delete (expected for REST-created workers)"
 fi
 
 # ============================================================
@@ -164,7 +166,7 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
         && [ "${HIGRESS_QUERY_OK}" -eq 1 ] \
         && ! _higress_consumer_exists \
         && [ -z "${AGENT_DIR_LISTING}" ] \
-        && [ -z "${POST_YAML}" ]; then
+        && { [ "${PRE_YAML_EXISTS}" -eq 0 ] || [ -z "${POST_YAML}" ]; }; then
         break
     fi
     sleep 5
@@ -202,9 +204,11 @@ else
     log_fail "MinIO agents/${TEST_WORKER}/ still contains files: $(echo "${AGENT_DIR_LISTING}" | head -3)"
 fi
 
-# (d) MinIO YAML removed
+# (d) MinIO YAML removed if this worker was created from a declarative YAML
 POST_YAML=$(_minio_worker_yaml)
-if [ -z "${POST_YAML}" ]; then
+if [ "${PRE_YAML_EXISTS}" -eq 0 ]; then
+    log_info "MinIO YAML removal check skipped (no pre-delete YAML for REST-created worker)"
+elif [ -z "${POST_YAML}" ]; then
     log_pass "MinIO YAML removed"
 else
     log_fail "MinIO YAML still present"

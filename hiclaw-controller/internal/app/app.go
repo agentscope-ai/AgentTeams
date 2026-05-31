@@ -453,6 +453,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		ManagerEnabled:    cfg.ManagerEnabled,
 		AIGatewayURL:      cfg.WorkerEnv.AIGatewayURL,
 		ManagerModel:      cfg.ManagerModel,
+		MatrixConfig:      cfg.MatrixConfig(),
 	})
 
 	a.envBuilder = service.NewWorkerEnvBuilder(cfg.WorkerEnv)

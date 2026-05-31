@@ -378,6 +378,7 @@ func LoadConfig() *Config {
 		if ctrlHost := extractHost(cfg.WorkerEnv.ControllerURL); ctrlHost != "" {
 			cfg.WorkerEnv.MatrixURL = replaceHost(cfg.WorkerEnv.MatrixURL, ctrlHost)
 			cfg.WorkerEnv.FSEndpoint = replaceHost(cfg.WorkerEnv.FSEndpoint, ctrlHost)
+			cfg.WorkerEnv.AIGatewayURL = replaceHost(cfg.WorkerEnv.AIGatewayURL, ctrlHost)
 		}
 	}
 	// S3/MinIO API is never on the Higress HTTP gateway port (8080). Misconfigured

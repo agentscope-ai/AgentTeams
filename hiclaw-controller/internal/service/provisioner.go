@@ -76,6 +76,7 @@ type RefreshResult struct {
 // ProvisionerConfig holds configuration for constructing a Provisioner.
 type ProvisionerConfig struct {
 	Matrix       matrix.Client
+	MatrixConfig matrix.Config
 	Gateway      gateway.Client
 	OSSAdmin     oss.StorageAdminClient // nil in incluster/cloud mode
 	Creds        CredentialStore
@@ -135,6 +136,7 @@ type ProvisionerConfig struct {
 // users, K8s ServiceAccounts, and port exposure.
 type Provisioner struct {
 	matrix         matrix.Client
+	matrixConfig   matrix.Config
 	gateway        gateway.Client
 	ossAdmin       oss.StorageAdminClient
 	creds          CredentialStore
@@ -167,6 +169,7 @@ type Provisioner struct {
 func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 	return &Provisioner{
 		matrix:            cfg.Matrix,
+		matrixConfig:      cfg.MatrixConfig,
 		gateway:           cfg.Gateway,
 		ossAdmin:          cfg.OSSAdmin,
 		creds:             cfg.Creds,
@@ -189,6 +192,13 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 // MatrixUserID builds a full Matrix user ID from a localpart.
 func (p *Provisioner) MatrixUserID(name string) string {
 	return p.matrix.UserID(name)
+}
+
+// MatrixAppServiceEnabled reports whether the controller is running in
+// Matrix AppService mode. In this mode, user registration and login use
+// the Application Service API instead of passwords.
+func (p *Provisioner) MatrixAppServiceEnabled() bool {
+	return p.matrixConfig.AppServiceEnabled
 }
 
 // roomAliasLocalpart is the single source of truth for how controller-managed
@@ -318,14 +328,23 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 
 	// Step 2: Register Matrix account
 	logger.Info("registering Matrix account", "name", workerName)
-	userCreds, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
-		Username: workerName,
-		Password: creds.MatrixPassword,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Matrix registration failed: %w", err)
+	var userCreds *matrix.UserCredentials
+	if p.MatrixAppServiceEnabled() {
+		userCreds, err = p.matrix.EnsureAppServiceUser(ctx, workerName)
+		if err != nil {
+			return nil, fmt.Errorf("Matrix AS registration failed: %w", err)
+		}
+		creds.MatrixPassword = "" // No password in AppService mode
+	} else {
+		userCreds, err = p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
+			Username: workerName,
+			Password: creds.MatrixPassword,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("Matrix registration failed: %w", err)
+		}
+		creds.MatrixPassword = userCreds.Password
 	}
-	creds.MatrixPassword = userCreds.Password
 	// Cache the freshly issued access token so subsequent reconciles can reuse
 	// it via RefreshCredentials instead of issuing a new login (which would
 	// rotate channels.matrix.accessToken in openclaw.json and trigger a
@@ -519,7 +538,13 @@ func (p *Provisioner) ensureMatrixToken(ctx context.Context, matrixUsername stri
 	if creds.MatrixToken != "" {
 		return creds.MatrixToken, nil
 	}
-	tok, err := p.matrix.Login(ctx, matrixUsername, creds.MatrixPassword)
+	var tok string
+	var err error
+	if p.MatrixAppServiceEnabled() {
+		tok, err = p.matrix.LoginAppServiceUser(ctx, matrixUsername)
+	} else {
+		tok, err = p.matrix.Login(ctx, matrixUsername, creds.MatrixPassword)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -1212,14 +1237,23 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 
 	// Step 2: Register Matrix account (always "manager", matching container script)
 	logger.Info("registering Manager Matrix account", "matrixUser", matrixUsername)
-	userCreds, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
-		Username: matrixUsername,
-		Password: creds.MatrixPassword,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Matrix registration failed: %w", err)
+	var userCreds *matrix.UserCredentials
+	if p.MatrixAppServiceEnabled() {
+		userCreds, err = p.matrix.EnsureAppServiceUser(ctx, matrixUsername)
+		if err != nil {
+			return nil, fmt.Errorf("Matrix AS registration failed: %w", err)
+		}
+		creds.MatrixPassword = "" // No password in AppService mode
+	} else {
+		userCreds, err = p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
+			Username: matrixUsername,
+			Password: creds.MatrixPassword,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("Matrix registration failed: %w", err)
+		}
+		creds.MatrixPassword = userCreds.Password
 	}
-	creds.MatrixPassword = userCreds.Password
 	// Cache the freshly issued access token so subsequent reconciles can
 	// reuse it via RefreshManagerCredentials instead of issuing a new login
 	// (which would rotate channels.matrix.accessToken in openclaw.json and

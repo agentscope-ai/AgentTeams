@@ -141,6 +141,19 @@ func (f *fakeTeamMatrix) UserID(localpart string) string {
 	return "@" + localpart + ":localhost"
 }
 
+func (f *fakeTeamMatrix) EnsureAppServiceUser(_ context.Context, username string) (*matrix.UserCredentials, error) {
+	return &matrix.UserCredentials{UserID: f.UserID(username), AccessToken: "as-token-" + username, Created: true}, nil
+}
+
+func (f *fakeTeamMatrix) LoginAppServiceUser(_ context.Context, username string) (string, error) {
+	return "as-token-" + username, nil
+}
+
+func (f *fakeTeamMatrix) SetPasswordAsAdmin(_ context.Context, _, _ string) error { return nil }
+
+func (f *fakeTeamMatrix) RegisterAppService(_ context.Context, _ matrix.AppServiceRegistration) error { return nil }
+func (f *fakeTeamMatrix) AppServiceSmokeTest(_ context.Context) error { return nil }
+
 func TestProvisionTeamRoomsInvitesExplicitTeamAdminAndLeavesNewLeaderDM(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{

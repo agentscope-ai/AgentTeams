@@ -33,6 +33,7 @@ type WorkerProvisioner interface {
 	ProvisionTeamRooms(ctx context.Context, req TeamRoomRequest) (*TeamRoomResult, error)
 	DeleteTeamRoomAliases(ctx context.Context, teamName, leaderName string) error
 	DeleteWorkerRoomAlias(ctx context.Context, workerName string) error
+	MatrixAppServiceEnabled() bool
 }
 
 // WorkerDeployer defines the deployment operations used by WorkerReconciler
@@ -169,6 +170,7 @@ type HumanProvisioner interface {
 	// of roomID via "!admin users force-leave-room". Fire-and-forget at
 	// the bot layer, but the admin message delivery itself is confirmed.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
+	MatrixAppServiceEnabled() bool
 }
 
 // HumanCredentials is the subset of matrix.UserCredentials that the Human

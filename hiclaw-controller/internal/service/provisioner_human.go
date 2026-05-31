@@ -15,6 +15,27 @@ import (
 // envelope (unlike Workers/Managers), so the caller is responsible for
 // recording the returned password in the CR status if needed.
 func (p *Provisioner) EnsureHumanUser(ctx context.Context, username string) (*HumanCredentials, error) {
+	if p.MatrixAppServiceEnabled() {
+		uc, err := p.matrix.EnsureAppServiceUser(ctx, username)
+		if err != nil {
+			return nil, fmt.Errorf("ensure human AS user %s: %w", username, err)
+		}
+		// Set an initial password so the human can log in via Element.
+		password, err := matrix.GeneratePassword(16)
+		if err != nil {
+			return nil, fmt.Errorf("generate human password: %w", err)
+		}
+		if err := p.matrix.SetPasswordAsAdmin(ctx, uc.UserID, password); err != nil {
+			return nil, fmt.Errorf("set human password via admin: %w", err)
+		}
+		return &HumanCredentials{
+			UserID:      uc.UserID,
+			AccessToken: uc.AccessToken,
+			Password:    password,
+		}, nil
+	}
+
+	// Legacy path
 	uc, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{Username: username})
 	if err != nil {
 		return nil, fmt.Errorf("ensure human matrix user %s: %w", username, err)
@@ -33,6 +54,9 @@ func (p *Provisioner) EnsureHumanUser(ctx context.Context, username string) (*Hu
 // branch issues "!admin users reset-password", which would silently
 // overwrite any password the user changed via Element.
 func (p *Provisioner) LoginAsHuman(ctx context.Context, username, password string) (string, error) {
+	if p.MatrixAppServiceEnabled() {
+		return p.matrix.LoginAppServiceUser(ctx, username)
+	}
 	return p.matrix.Login(ctx, username, password)
 }
 

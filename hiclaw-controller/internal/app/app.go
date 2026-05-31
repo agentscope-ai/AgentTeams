@@ -154,6 +154,12 @@ func (a *App) Start(ctx context.Context) error {
 				TuwunelURL:                 a.cfg.MatrixServerURL,
 				ElementWebURL:              a.cfg.ElementWebURL,
 				ControllerName:             a.cfg.ControllerName,
+				AppServiceEnabled:         a.cfg.MatrixAppServiceEnabled,
+				AppServiceID:              a.cfg.MatrixAppServiceID,
+				AppServiceToken:           a.cfg.MatrixAppServiceASToken,
+				AppServiceHSToken:         a.cfg.MatrixAppServiceHSToken,
+				AppServiceSenderLocalpart: a.cfg.MatrixAppServiceSenderLocalpart,
+				MatrixDomain:              a.cfg.MatrixDomain,
 			},
 		}
 		if err := init.Run(ctx); err != nil {

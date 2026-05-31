@@ -126,6 +126,13 @@ type Config struct {
 	MatrixAdminPassword     string
 	MatrixE2EE              bool
 
+	// Matrix AppService mode
+	MatrixAppServiceEnabled         bool
+	MatrixAppServiceID              string
+	MatrixAppServiceASToken         string
+	MatrixAppServiceHSToken         string
+	MatrixAppServiceSenderLocalpart string
+
 	// Object storage (embedded MinIO)
 	OSSStoragePrefix string
 
@@ -308,6 +315,12 @@ func LoadConfig() *Config {
 		MatrixAdminUser:         os.Getenv("HICLAW_ADMIN_USER"),
 		MatrixAdminPassword:     os.Getenv("HICLAW_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("HICLAW_MATRIX_E2EE") == "1" || os.Getenv("HICLAW_MATRIX_E2EE") == "true",
+
+		MatrixAppServiceEnabled:         os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") == "1" || os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") == "true",
+		MatrixAppServiceID:              envOrDefault("HICLAW_MATRIX_APPSERVICE_ID", "hiclaw-controller"),
+		MatrixAppServiceASToken:         os.Getenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN"),
+		MatrixAppServiceHSToken:         os.Getenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN"),
+		MatrixAppServiceSenderLocalpart: envOrDefault("HICLAW_MATRIX_APPSERVICE_SENDER_LOCALPART", "hiclaw-controller"),
 
 		OSSStoragePrefix: envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
 
@@ -597,12 +610,17 @@ func normalizeMinIOS3Endpoint(raw string) string {
 
 func (c *Config) MatrixConfig() matrix.Config {
 	return matrix.Config{
-		ServerURL:         c.MatrixServerURL,
-		Domain:            c.MatrixDomain,
-		RegistrationToken: c.MatrixRegistrationToken,
-		AdminUser:         c.MatrixAdminUser,
-		AdminPassword:     c.MatrixAdminPassword,
-		E2EEEnabled:       c.MatrixE2EE,
+		ServerURL:                 c.MatrixServerURL,
+		Domain:                    c.MatrixDomain,
+		RegistrationToken:         c.MatrixRegistrationToken,
+		AdminUser:                 c.MatrixAdminUser,
+		AdminPassword:             c.MatrixAdminPassword,
+		E2EEEnabled:               c.MatrixE2EE,
+		AppServiceEnabled:         c.MatrixAppServiceEnabled,
+		AppServiceID:              c.MatrixAppServiceID,
+		AppServiceToken:           c.MatrixAppServiceASToken,
+		AppServiceHSToken:         c.MatrixAppServiceHSToken,
+		AppServiceSenderLocalpart: c.MatrixAppServiceSenderLocalpart,
 	}
 }
 

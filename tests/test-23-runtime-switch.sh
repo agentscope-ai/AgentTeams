@@ -35,6 +35,28 @@ trap _cleanup EXIT
 
 minio_setup
 
+_get_higress_consumers_or_fail() {
+    local label="$1"
+    local consumers
+
+    if ! higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null 2>&1; then
+        log_fail "Unable to log in to Higress before ${label}"
+        return 1
+    fi
+
+    if ! consumers=$(higress_get_consumers 2>/dev/null); then
+        log_fail "Unable to query Higress consumers during ${label}"
+        return 1
+    fi
+
+    if ! echo "${consumers}" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
+        log_fail "Higress consumers response during ${label} is not valid JSON with a data array"
+        return 1
+    fi
+
+    HIGRESS_CONSUMERS_JSON="${consumers}"
+}
+
 # ============================================================
 # Section 1: Create worker with openclaw runtime
 # ============================================================
@@ -83,12 +105,14 @@ fi
 OLD_ROOM_ID=$(get_worker_room_id "${TEST_WORKER}")
 log_info "Pre-switch roomID: ${OLD_ROOM_ID}"
 
-higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null 2>&1 || true
-OLD_CONSUMERS=$(higress_get_consumers 2>/dev/null || echo "")
-if echo "${OLD_CONSUMERS}" | jq -r '.data[]?.name // empty' 2>/dev/null | grep -Fxq "worker-${TEST_WORKER}"; then
-    log_pass "Higress consumer present pre-switch"
-else
-    log_fail "Higress consumer missing pre-switch"
+HIGRESS_CONSUMERS_JSON=""
+if _get_higress_consumers_or_fail "pre-switch snapshot"; then
+    OLD_CONSUMERS="${HIGRESS_CONSUMERS_JSON}"
+    if echo "${OLD_CONSUMERS}" | jq -r '.data[]?.name // empty' 2>/dev/null | grep -Fxq "worker-${TEST_WORKER}"; then
+        log_pass "Higress consumer present pre-switch"
+    else
+        log_fail "Higress consumer missing pre-switch"
+    fi
 fi
 
 # Write sentinel file to MinIO (proxy for user data the controller must preserve)
@@ -156,11 +180,14 @@ else
 fi
 
 # Higress consumer preserved (same name)
-NEW_CONSUMERS=$(higress_get_consumers 2>/dev/null || echo "")
-if echo "${NEW_CONSUMERS}" | jq -r '.data[]?.name // empty' 2>/dev/null | grep -Fxq "worker-${TEST_WORKER}"; then
-    log_pass "Higress consumer preserved across runtime switch"
-else
-    log_fail "Higress consumer missing after runtime switch"
+HIGRESS_CONSUMERS_JSON=""
+if _get_higress_consumers_or_fail "post-switch assertion"; then
+    NEW_CONSUMERS="${HIGRESS_CONSUMERS_JSON}"
+    if echo "${NEW_CONSUMERS}" | jq -r '.data[]?.name // empty' 2>/dev/null | grep -Fxq "worker-${TEST_WORKER}"; then
+        log_pass "Higress consumer preserved across runtime switch"
+    else
+        log_fail "Higress consumer missing after runtime switch"
+    fi
 fi
 
 # Sentinel preserved

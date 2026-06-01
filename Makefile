@@ -195,7 +195,7 @@ build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
 		-t $(LOCAL_OPENHUMAN_WORKER) \
 		-f openhuman/Dockerfile .
 
-build-harness-worker: ## Build Harness Worker image
+build-harness-worker: build-hiclaw-controller ## Build Harness Worker image
 	@echo "==> Building Harness Worker image: $(LOCAL_HARNESS_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
@@ -468,7 +468,7 @@ else
 		./hermes/
 endif
 
-push-harness-worker: buildx-setup ## Build + push multi-arch Harness Worker image
+push-harness-worker: push-hiclaw-controller buildx-setup ## Build + push multi-arch Harness Worker image
 	@echo "==> Building + pushing multi-arch Harness Worker: $(HARNESS_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(HARNESS_WORKER_TAG) 2>/dev/null

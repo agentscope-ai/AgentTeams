@@ -168,14 +168,14 @@ class ClaudeHarness(BaseHarness):
         # dontAsk: non-interactive mode required for subprocess invocation.
         # bypassPermissions is blocked when running as root (container default).
         # allow mcp__* so native MCP tool calls are not denied in dontAsk mode.
-        existing["permissions"] = {"defaultMode": "dontAsk", "allow": ["mcp__*"]}
+        existing["permissions"] = {"defaultMode": "dontAsk", "allow": ["mcp__*", "Write(*)", "Read(*)", "Bash(*)"]}
         existing["env"] = {**existing.get("env", {}), **self._build_env()}
 
         cfg_file.write_text(json.dumps(existing, indent=2))
 
         # Write MCP servers to .claude.json under projects[workspace]["mcpServers"].
-        # Claude Code stores project-level MCP servers here (type "http" / "sse").
-        self._write_mcp_dot_claude(workspace, self._build_mcp_servers(workspace))
+        # Claude Code stores project-level MCP servers here (type "http" / "sse" / "stdio").
+        self._write_mcp_dot_claude(workspace, self._build_mcp_servers(workspace, harness_home))
         logger.info(
             "bridge: claude settings → %s (model=%s, url=%s)",
             cfg_file, self._model, self._base_url,
@@ -188,6 +188,10 @@ class ClaudeHarness(BaseHarness):
         # Mirror workspace/skills/ → workspace/.claude/skills/ so Claude Code
         # discovers skills natively without listing them in CLAUDE.md.
         self._sync_skills_dir(workspace)
+
+        # Copy .harness/claudeignore → workspace/.claudeignore so Claude Code
+        # respects operator-defined ignore patterns.
+        self._write_claudeignore(workspace, harness_home)
 
     def _build_env(self) -> dict[str, str]:
         # Set every ANTHROPIC_*_MODEL alias to the same value so Claude CLI
@@ -234,23 +238,23 @@ class ClaudeHarness(BaseHarness):
         dot_claude.write_text(json.dumps(data, indent=2), encoding="utf-8")
         logger.info("bridge: wrote %d MCP server(s) to .claude.json projects[%s]", len(mcp_servers), workspace_key)
 
-    def _build_mcp_servers(self, workspace: Path) -> dict[str, Any]:
-        """Read config/mcporter.json and return a mcpServers dict for .claude.json.
+    def _build_mcp_servers(self, workspace: Path, harness_home: Path) -> dict[str, Any]:
+        """Read config/mcporter.json and .harness/mcp-local.json; return mcpServers for .claude.json.
 
-        HTTP/SSE transport servers are wired directly into Claude's project-level
-        MCP config in .claude.json. `mcporter serve` is not used — Claude Code
-        connects to these servers natively via HTTP or SSE transport.
+        Transport mapping:
+          "http"  → {"type": "http", "url": ...}   (MCP Streamable HTTP)
+          "sse"   → {"type": "sse",  "url": ...}   (SSE persistent connection)
+          "stdio" → {"type": "stdio", "command": ..., "args": ..., "env": ...}
 
-        Mapping from mcporter-servers.json transport to Claude Code .claude.json type:
-          "http"  → "http"   (MCP Streamable HTTP, as used by `claude mcp add --transport http`)
-          "sse"   → "sse"    (SSE, persistent connection)
-
-        Lookup order (mirrors FileSync.pull_all fallback):
-          1. workspace/config/mcporter.json  (canonical since v1.0.6)
-          2. workspace/mcporter-servers.json (backward-compat symlink)
+        Sources (later entries win on name collision):
+          1. workspace/config/mcporter.json  — Manager-managed HTTP/SSE servers
+          2. workspace/mcporter-servers.json — backward-compat fallback
+          3. .harness/mcp-local.json         — harness-local stdio/HTTP override (not pushed to MinIO)
         """
         _TRANSPORT_MAP = {"http": "http", "sse": "sse"}
+        result: dict[str, Any] = {}
 
+        # --- HTTP/SSE from Manager-managed mcporter.json ---
         for candidate in (
             workspace / "config" / "mcporter.json",
             workspace / "mcporter-servers.json",
@@ -261,13 +265,7 @@ class ClaudeHarness(BaseHarness):
                 config = json.loads(candidate.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
-
-            servers: dict[str, Any] = config.get("mcpServers", {})
-            if not servers:
-                continue
-
-            result: dict[str, Any] = {}
-            for name, srv in servers.items():
+            for name, srv in config.get("mcpServers", {}).items():
                 transport = srv.get("transport", "http")
                 claude_type = _TRANSPORT_MAP.get(transport)
                 if claude_type and srv.get("url"):
@@ -275,11 +273,35 @@ class ClaudeHarness(BaseHarness):
                     if srv.get("headers"):
                         entry["headers"] = srv["headers"]
                     result[name] = entry
-
             if result:
-                logger.info("bridge: wiring %d MCP server(s) directly (HTTP/SSE)", len(result))
-                return result
-        return {}
+                break
+
+        # --- stdio (and additional HTTP/SSE) from .harness/mcp-local.json ---
+        local_cfg = harness_home / "mcp-local.json"
+        if local_cfg.exists():
+            try:
+                local = json.loads(local_cfg.read_text(encoding="utf-8"))
+                for name, srv in local.get("mcpServers", {}).items():
+                    transport = srv.get("transport", "stdio")
+                    if transport == "stdio" and srv.get("command"):
+                        entry = {"type": "stdio", "command": srv["command"]}
+                        if srv.get("args"):
+                            entry["args"] = srv["args"]
+                        if srv.get("env"):
+                            entry["env"] = srv["env"]
+                        result[name] = entry
+                    elif _TRANSPORT_MAP.get(transport) and srv.get("url"):
+                        entry = {"type": _TRANSPORT_MAP[transport], "url": srv["url"]}
+                        if srv.get("headers"):
+                            entry["headers"] = srv["headers"]
+                        result[name] = entry
+                logger.info("bridge: loaded mcp-local.json (%d total MCP server(s))", len(result))
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("bridge: ignoring invalid mcp-local.json: %s", exc)
+
+        if result:
+            logger.info("bridge: wiring %d MCP server(s) to .claude.json", len(result))
+        return result
 
     def _generate_claude_md(self, workspace: Path) -> None:
         """Generate workspace/CLAUDE.md from SOUL.md + AGENTS.md.
@@ -321,11 +343,8 @@ class ClaudeHarness(BaseHarness):
         current_skills = {d.name for d in src_dir.iterdir() if d.is_dir()}
 
         for existing in list(dst_dir.iterdir()):
-            if existing.name not in current_skills:
-                if existing.is_symlink():
-                    existing.unlink()
-                elif existing.is_dir():
-                    shutil.rmtree(existing)
+            if existing.name not in current_skills and existing.is_symlink():
+                existing.unlink()
 
         for skill_name in current_skills:
             skill_link = dst_dir / skill_name
@@ -339,6 +358,27 @@ class ClaudeHarness(BaseHarness):
             skill_link.symlink_to(skill_target)
 
         logger.info("bridge: synced %d skills to .claude/skills/", len(current_skills))
+
+    def _write_claudeignore(self, workspace: Path, harness_home: Path) -> None:
+        """Copy .harness/claudeignore → workspace/.claudeignore.
+
+        Operator drops .harness/claudeignore in MinIO to control what Claude Code
+        ignores when scanning project files. Falls back to safe defaults if absent.
+        """
+        src = harness_home / "claudeignore"
+        dst = workspace / ".claudeignore"
+        if src.exists():
+            shutil.copy2(src, dst)
+            logger.info("bridge: wrote .claudeignore from %s", src)
+        elif not dst.exists():
+            dst.write_text(
+                "# generated by hiclaw harness\n"
+                ".harness/\n"
+                ".claude/\n"
+                "*.tar\n"
+                "*.log\n",
+                encoding="utf-8",
+            )
 
     def build_command(
         self,

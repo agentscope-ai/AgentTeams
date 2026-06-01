@@ -106,3 +106,45 @@ func TestWorkerMemberContext_NilLabelsSafe(t *testing.T) {
 		t.Fatalf("expected exactly the 2 system labels on nil-labels Worker, got %v", mctx.PodLabels)
 	}
 }
+
+// TestWorkerMemberContext_SpecChangedGate locks in the brand-new-worker
+// guard. The "brand new" case is the load-bearing one: a second reconcile
+// queued by the finalizer write can read a stale informer cache and see
+// the just-created container as Running while ObservedGeneration is still
+// 0. Without the gate, SpecChanged=true on that intervening pass causes
+// ensureMemberContainerPresent to Delete (force=true → SIGKILL) the
+// container right after first create.
+func TestWorkerMemberContext_SpecChangedGate(t *testing.T) {
+	r := &WorkerReconciler{ControllerName: "ctl-x"}
+
+	cases := []struct {
+		name     string
+		gen      int64
+		observed int64
+		want     bool
+	}{
+		// Brand-new Worker: never reconciled. Must NOT report SpecChanged
+		// even though Generation > ObservedGeneration — that delta is the
+		// "we have never observed this resource" signal, not a user edit.
+		{"brand_new", 1, 0, false},
+		// First reconcile committed: no edit pending.
+		{"observed_no_edit", 1, 1, false},
+		// User edit after first reconcile: spec genuinely diverged.
+		{"observed_with_edit", 2, 1, true},
+		// Periodic resync with no spec change.
+		{"resync_no_edit", 5, 5, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &v1beta1.Worker{}
+			w.Name = "solo"
+			w.Generation = tc.gen
+			w.Status.ObservedGeneration = tc.observed
+			mctx := r.workerMemberContext(w)
+			if mctx.SpecChanged != tc.want {
+				t.Fatalf("SpecChanged for (gen=%d, observed=%d): got %v, want %v",
+					tc.gen, tc.observed, mctx.SpecChanged, tc.want)
+			}
+		})
+	}
+}

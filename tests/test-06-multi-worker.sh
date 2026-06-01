@@ -38,8 +38,21 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
 # Alice is running from previous tests; bob will be created below (offset=0 is correct for new workers)
 wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice" "bob")
+# worker-management/SKILL.md tells Manager to ask admin for FOUR inputs
+# (name / runtime / SOUL / skills) before running `hiclaw create worker`
+# and not to invent defaults. A vague prompt that only names the worker is
+# therefore a coin flip — sometimes Manager replies with a confirmation
+# request, never calls the CLI, and the consumer/SOUL.md polls below
+# silently time out. Spell out all four inputs and tell Manager to skip
+# confirmation so this test exercises actual Worker creation.
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Create a new Worker for backend development. The worker's name (username) must be exactly 'bob'. He should have access to GitHub MCP."
+    "Please create a new Worker now using these exact values — do not ask me to confirm any of them:
+- name: bob
+- runtime: use the install default (do not ask, just pick whatever the env says)
+- SOUL/role: Backend developer specializing in REST APIs, server-side logic, and data persistence
+- skills: github-operations (file-sync / task-progress / project-participation are auto-included, no need to ask)
+
+Proceed immediately and tell me when he is created."
 
 log_info "Waiting for Manager to create Worker Bob..."
 REPLY=$(matrix_wait_for_message_containing "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" \
@@ -53,6 +66,9 @@ assert_contains_i "${REPLY}" "bob" "Reply mentions worker name 'bob'"
 sleep 30
 higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null
 CONSUMERS=$(higress_get_consumers)
+if ! echo "${CONSUMERS}" | grep -qi "worker-bob"; then
+    dump_manager_dm_messages "${ADMIN_TOKEN}" "${DM_ROOM}" "worker-bob consumer missing"
+fi
 assert_contains_i "${CONSUMERS}" "worker-bob" "Higress consumer 'worker-bob' exists"
 
 minio_setup

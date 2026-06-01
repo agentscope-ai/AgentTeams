@@ -22,6 +22,8 @@ type HigressClient struct {
 
 	mu      sync.Mutex
 	cookies []*http.Cookie
+
+	aiRouteMu sync.Mutex
 }
 
 // NewHigressClient creates a gateway Client for Higress Console API.
@@ -185,6 +187,9 @@ func (c *HigressClient) DeauthorizeAIRoutes(ctx context.Context, consumerName st
 }
 
 func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string, add bool) error {
+	c.aiRouteMu.Lock()
+	defer c.aiRouteMu.Unlock()
+
 	respBody, statusCode, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/routes", nil)
 	if err != nil {
 		return fmt.Errorf("list AI routes: %w", err)

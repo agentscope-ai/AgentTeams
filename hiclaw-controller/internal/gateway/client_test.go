@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -131,6 +133,76 @@ func TestAuthorizeAIRoutes(t *testing.T) {
 	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
 	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice"); err != nil {
 		t.Fatalf("AuthorizeAIRoutes: %v", err)
+	}
+}
+
+func TestAuthorizeAIRoutesSerializesRouteUpdates(t *testing.T) {
+	var mu sync.Mutex
+	activePUTs := 0
+	maxActivePUTs := 0
+
+	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/system/init":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/session/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "test"})
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v1/ai/routes" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"name": "route-1"},
+				},
+			})
+		case r.URL.Path == "/v1/ai/routes/route-1" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"name": "route-1",
+					"authConfig": map[string]interface{}{
+						"allowedConsumers": []string{"manager"},
+					},
+				},
+			})
+		case r.URL.Path == "/v1/ai/routes/route-1" && r.Method == "PUT":
+			mu.Lock()
+			activePUTs++
+			if activePUTs > maxActivePUTs {
+				maxActivePUTs = activePUTs
+			}
+			mu.Unlock()
+
+			time.Sleep(20 * time.Millisecond)
+
+			mu.Lock()
+			activePUTs--
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Logf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+
+	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for _, consumer := range []string{"worker-a", "worker-b", "worker-c", "worker-d"} {
+		wg.Add(1)
+		go func(consumer string) {
+			defer wg.Done()
+			errs <- c.AuthorizeAIRoutes(context.Background(), consumer)
+		}(consumer)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AuthorizeAIRoutes: %v", err)
+		}
+	}
+
+	if maxActivePUTs != 1 {
+		t.Fatalf("AI route PUTs ran concurrently: maxActivePUTs=%d, want 1", maxActivePUTs)
 	}
 }
 

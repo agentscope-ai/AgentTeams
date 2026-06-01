@@ -1447,71 +1447,105 @@ generate_key() {
     openssl rand -hex 32
 }
 
+# ============================================================
 # Detect container runtime socket on the host
+#
+# Dependency: Requires DOCKER_CMD to reflect the TRUE underlying runtime.
+#             (Crucial for unmasking 'podman' disguised as 'docker'.
+#              Must be strictly resolved prior, e.g., via check_container_runtime)
+# ============================================================
 detect_socket() {
     local _uid
     _uid=$(id -u)
     local _xdg_dir="${XDG_RUNTIME_DIR:-/run/user/${_uid}}"
 
-    if [ "${DOCKER_CMD}" = "podman" ]; then
-        # Podman path
-        if [ "${_uid}" -eq 0 ]; then
-            # Root user
-            if [ -S "/run/podman/podman.sock" ]; then
-                echo "/run/podman/podman.sock"
-                return 0
-            fi
-            # Fallback: try to start socket via systemctl
-            if command -v systemctl >/dev/null 2>&1; then
-                systemctl enable --now podman.socket >/dev/null 2>&1 || true
-                if [ -S "/run/podman/podman.sock" ]; then
-                    echo "/run/podman/podman.sock"
-                    return 0
-                fi
-            fi
-        else
-            # Non-root user
-            if [ -S "${_xdg_dir}/podman/podman.sock" ]; then
-                echo "${_xdg_dir}/podman/podman.sock"
-                return 0
-            fi
-            # Fallback: try to start user-level socket via systemctl
-            if command -v systemctl >/dev/null 2>&1; then
-                systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
-                if [ -S "${_xdg_dir}/podman/podman.sock" ]; then
-                    echo "${_xdg_dir}/podman/podman.sock"
-                    return 0
-                fi
-            fi
-        fi
-    else
-        # Docker path
-        # 1. Standard rootless path
-        if [ -S "${_xdg_dir}/docker.sock" ]; then
-            echo "${_xdg_dir}/docker.sock"
-            return 0
-        fi
-        # 2. Docker Desktop path
-        if [ -S "${HOME}/.docker/run/docker.sock" ]; then
-            echo "${HOME}/.docker/run/docker.sock"
-            return 0
-        fi
-        # 3. Use `context ls` to find active endpoint
-        if command -v docker >/dev/null 2>&1; then
-            local _socket_path
-            _socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
-            if [ -n "${_socket_path}" ] && [ -S "${_socket_path}" ]; then
-                echo "${_socket_path}"
-                return 0
-            fi
-        fi
-        # 4. System-wide socket
-        if [ -S "/var/run/docker.sock" ]; then
-            echo "/var/run/docker.sock"
+    # 1. Highest priority: Respect explicitly defined DOCKER_HOST environment variable.
+    #    Both Docker and Podman support this standard.
+    if [ -n "${DOCKER_HOST}" ]; then
+        local _host_socket
+        _host_socket=$(echo "${DOCKER_HOST}" | sed 's|^unix://||')
+        if [ -S "${_host_socket}" ]; then
+            echo "${_host_socket}"
             return 0
         fi
     fi
 
+    # 2. Route based on the resolved container runtime
+    case "${DOCKER_CMD}" in
+        podman)
+            # ==========================================
+            # Podman path handling
+            # ==========================================
+            if [ "${_uid}" -eq 0 ]; then
+                # Root user
+                if [ -S "/run/podman/podman.sock" ]; then
+                    echo "/run/podman/podman.sock"
+                    return 0
+                fi
+                # Fallback: Try to auto-start system-level socket
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl enable --now podman.socket >/dev/null 2>&1 || true
+                    if [ -S "/run/podman/podman.sock" ]; then
+                        echo "/run/podman/podman.sock"
+                        return 0
+                    fi
+                fi
+            else
+                # Non-root user
+                if [ -S "${_xdg_dir}/podman/podman.sock" ]; then
+                    echo "${_xdg_dir}/podman/podman.sock"
+                    return 0
+                fi
+                # Fallback: Try to auto-start user-level socket
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
+                    if [ -S "${_xdg_dir}/podman/podman.sock" ]; then
+                        echo "${_xdg_dir}/podman/podman.sock"
+                        return 0
+                    fi
+                fi
+            fi
+            ;;
+
+        docker)
+            # ==========================================
+            # Docker path handling
+            # ==========================================
+
+            # 2. Next highest priority: Currently active Docker Context via CLI
+            if command -v docker >/dev/null 2>&1; then
+                local _socket_path
+                _socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
+                if [ -n "${_socket_path}" ] && [ -S "${_socket_path}" ]; then
+                    echo "${_socket_path}"
+                    return 0
+                fi
+            fi
+
+            # 3. Common default path: Rootless mode
+            if [ -S "${_xdg_dir}/docker.sock" ]; then
+                echo "${_xdg_dir}/docker.sock"
+                return 0
+            fi
+
+            # 4. Common default path: Docker Desktop (macOS / Linux Desktop)
+            if [ -S "${HOME}/.docker/run/docker.sock" ]; then
+                echo "${HOME}/.docker/run/docker.sock"
+                return 0
+            fi
+
+            # 5. Final fallback: System-wide global socket
+            if [ -S "/var/run/docker.sock" ]; then
+                echo "/var/run/docker.sock"
+                return 0
+            fi
+            ;;
+
+        *)
+            ;;
+    esac
+
+    # Return empty if no socket is found
     echo ""
     return 0
 }
@@ -1562,6 +1596,7 @@ detect_lan_ip() {
 
     echo ""
 }
+
 
 # ============================================================
 # Step-back navigation helpers

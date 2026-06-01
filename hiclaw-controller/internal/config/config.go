@@ -322,7 +322,7 @@ func LoadConfig() *Config {
 		MatrixAdminPassword:     os.Getenv("HICLAW_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("HICLAW_MATRIX_E2EE") == "1" || os.Getenv("HICLAW_MATRIX_E2EE") == "true",
 
-		MatrixAppServiceEnabled:         os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") == "1" || os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") == "true",
+		MatrixAppServiceEnabled:         os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") != "0" && os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") != "false",
 		MatrixAppServiceID:              envOrDefault("HICLAW_MATRIX_APPSERVICE_ID", "hiclaw-controller"),
 		MatrixAppServiceASToken:         os.Getenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN"),
 		MatrixAppServiceHSToken:         os.Getenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN"),

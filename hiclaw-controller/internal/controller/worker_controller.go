@@ -109,8 +109,6 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 
 // reconcileNormal builds a MemberContext from the Worker CR, runs the shared
 // member reconcile phases, and writes runtime state back to Worker.Status.
-// Legacy Manager groupAllowFrom is updated here only for standalone workers;
-// team leaders are handled by TeamReconciler.
 func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker) (reconcile.Result, error) {
 	deps := MemberDeps{
 		Provisioner:    r.Provisioner,
@@ -155,8 +153,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 }
 
 // reconcileDelete cleans up all infrastructure for the Worker and then removes
-// the finalizer. Legacy Manager groupAllowFrom is rolled back here only for
-// standalone workers.
+// the finalizer.
 func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worker) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("deleting worker", "name", w.Name)
@@ -175,10 +172,8 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 
 	if r.Legacy != nil && r.Legacy.Enabled() {
 		workerMatrixID := r.Provisioner.MatrixUserID(w.Name)
-		if mctx.Role == RoleStandalone {
-			if err := r.Legacy.UpdateManagerGroupAllowFrom(workerMatrixID, false); err != nil {
-				logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
-			}
+		if err := r.Legacy.UpdateManagerGroupAllowFrom(workerMatrixID, false); err != nil {
+			logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
 		}
 		if err := r.Legacy.RemoveFromWorkersRegistry(mctx.RuntimeName); err != nil {
 			logger.Error(err, "failed to remove from workers registry (non-fatal)")
@@ -203,15 +198,9 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 	}
 	logger := log.FromContext(ctx)
 
-	role := w.Annotations["hiclaw.io/role"]
-	teamName := w.Annotations["hiclaw.io/team"]
-	teamLeaderName := w.Annotations["hiclaw.io/team-leader"]
-	memberRole := roleForAnnotations(role, teamLeaderName)
-
-	// Only standalone workers grant themselves group-DM publish rights. Team
-	// leaders are handled by TeamReconciler; team workers never go through
-	// WorkerReconciler post-refactor.
-	if memberRole == RoleStandalone && state.ProvResult != nil {
+	// WorkerReconciler only handles standalone workers. Grant group-DM
+	// publish rights for the standalone worker.
+	if state.ProvResult != nil {
 		if err := r.Legacy.UpdateManagerGroupAllowFrom(state.ProvResult.MatrixUserID, true); err != nil {
 			logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
 		}
@@ -225,8 +214,6 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 		Runtime:      w.Spec.Runtime,
 		Deployment:   "local",
 		Skills:       w.Spec.Skills,
-		Role:         role,
-		TeamID:       nilIfEmpty(teamName),
 		Image:        nilIfEmpty(w.Spec.Image),
 	}); err != nil {
 		logger.Error(err, "registry update failed (non-fatal)")
@@ -234,21 +221,24 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 }
 
 // workerMemberContext translates a Worker CR into a MemberContext for the
-// shared member reconcile helpers. The returned PodLabels are built by
-// layering four sources low-to-high: ConfigMap-based pod template (added
-// downstream by ApplyPodTemplate), the CR's metadata.labels, the CR's
-// spec.labels, and the controller-forced system labels (controller name
-// and member role). Controller-forced keys deliberately come last so
-// anything the user writes that collides (e.g. `hiclaw.io/controller`)
-// is silently overridden rather than rejected.
+// shared member reconcile helpers. WorkerReconciler always produces a
+// standalone context — team semantics are injected externally by
+// TeamReconciler via Matrix Room invite and MinIO AGENTS.MD, never via
+// Worker CR annotations.
+//
+// PodLabels are built by layering four sources low-to-high: ConfigMap-based
+// pod template (added downstream by ApplyPodTemplate), the CR's
+// metadata.labels, the CR's spec.labels, and the controller-forced system
+// labels (controller name and member role). Controller-forced keys
+// deliberately come last so anything the user writes that collides (e.g.
+// `hiclaw.io/controller`) is silently overridden rather than rejected.
 func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
-	role := roleForAnnotations(w.Annotations["hiclaw.io/role"], w.Annotations["hiclaw.io/team-leader"])
 	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
 	return MemberContext{
 		Name:               w.Name,
 		RuntimeName:        runtimeName,
 		Namespace:          w.Namespace,
-		Role:               role,
+		Role:               RoleStandalone,
 		Spec:               w.Spec,
 		Generation:         w.Generation,
 		ObservedGeneration: w.Status.ObservedGeneration,
@@ -257,7 +247,7 @@ func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext 
 			w.Spec.Labels,
 			map[string]string{
 				v1beta1.LabelController: r.ControllerName,
-				"hiclaw.io/role":        role.String(),
+				"hiclaw.io/role":        RoleStandalone.String(),
 			},
 		),
 		// SpecChanged is gated on ObservedGeneration > 0 so a brand-new
@@ -271,9 +261,6 @@ func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext 
 		// the container via force=true (SIGKILL, exit 137).
 		SpecChanged:          w.Status.ObservedGeneration > 0 && w.Generation != w.Status.ObservedGeneration,
 		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
-		TeamName:             w.Annotations["hiclaw.io/team"],
-		TeamLeaderName:       w.Annotations["hiclaw.io/team-leader"],
-		TeamAdminMatrixID:    w.Annotations["hiclaw.io/team-admin-id"],
 		ExistingMatrixUserID: w.Status.MatrixUserID,
 		ExistingRoomID:       w.Status.RoomID,
 		CurrentExposedPorts:  w.Status.ExposedPorts,
@@ -330,11 +317,6 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
 					workerName := obj.GetLabels()["hiclaw.io/worker"]
 					if workerName == "" {
-						return nil
-					}
-					// Skip pods owned by a Team (those are reconciled via
-					// the Team controller's own pod watch).
-					if obj.GetLabels()["hiclaw.io/team"] != "" {
 						return nil
 					}
 					return []reconcile.Request{
@@ -405,13 +387,3 @@ func nilIfEmpty(s string) *string {
 	return &s
 }
 
-// roleForAnnotations maps Worker CR annotations to a MemberRole.
-func roleForAnnotations(role, teamLeaderName string) MemberRole {
-	if role == "team_leader" {
-		return RoleTeamLeader
-	}
-	if teamLeaderName != "" {
-		return RoleTeamWorker
-	}
-	return RoleStandalone
-}

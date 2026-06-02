@@ -298,9 +298,13 @@ class FileSync:
             controller_url,
         )
         if self._k8s_mode:
-            logger.info("_ensure_alias: k8s mode, skipping mc alias set (mc-wrapper handles credentials)")
-            self._alias_set = True
-            return
+            mc_host_set = bool(os.environ.get(f"MC_HOST_{_MC_ALIAS}"))
+            if mc_host_set:
+                logger.info("_ensure_alias: k8s mode, MC_HOST_%s already set (mc-wrapper), skipping alias set", _MC_ALIAS)
+                self._alias_set = True
+                return
+            # MC_HOST not set (static MinIO in k8s) — fall through to static alias setup
+            logger.info("_ensure_alias: k8s mode, MC_HOST_%s not set, falling back to static alias set", _MC_ALIAS)
         if self._cloud_mode:
             logger.info("_ensure_alias: credential path=sts, refreshing MC_HOST_%s", _MC_ALIAS)
             self._refresh_cloud_credentials()

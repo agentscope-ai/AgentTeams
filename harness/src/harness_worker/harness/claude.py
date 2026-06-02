@@ -399,30 +399,130 @@ class ClaudeHarness(BaseHarness):
         return argv
 
     def process_stream_line(self, line: str, state: dict) -> None:
-        # Stream-JSON events from `claude --output-format stream-json`:
-        #   content_block_delta / text_delta  → accumulate text fragments
-        #   result                            → capture session_id, fallback text
+        # Stream-JSON events from `claude --output-format stream-json --verbose`:
+        #   Wrapped CLI events (primary):
+        #     system/init  → session bootstrap
+        #     assistant    → text + tool_use content blocks
+        #     user         → tool_result content blocks
+        #     result       → session_id, cost, duration
+        #   Raw SSE events (fallback for legacy CLI versions):
+        #     content_block_start/delta/stop, content_block_delta/text_delta
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            if line.strip():
+                logger.debug("claude raw: %s", line[:200])
             return
 
         event_type = event.get("type")
 
-        if event_type == "content_block_delta":
-            delta = event.get("delta", {})
-            if delta.get("type") == "text_delta":
-                state.setdefault("text_chunks", []).append(delta.get("text", ""))
-            elif delta.get("type") == "thinking_delta":
-                logger.debug("thinking chunk: %s", delta.get("thinking", "")[:80])
+        # --- Wrapped CLI events ---
+        if event_type == "assistant":
+            self._handle_assistant_message(event, state)
+        elif event_type == "user":
+            self._handle_user_message(event, state)
+        elif event_type == "system":
+            if event.get("subtype") == "init":
+                state["session_id"] = event.get("session_id")
+                logger.info("claude session init: %s", state["session_id"])
 
+        # --- SSE pass-through events (fallback) ---
+        elif event_type == "content_block_start":
+            cb = event.get("content_block", {})
+            if cb.get("type") == "tool_use":
+                idx = event.get("index")
+                state.setdefault("active_tools", {})[idx] = {
+                    "name": cb.get("name", "unknown"),
+                    "input_fragments": [],
+                }
+                logger.info("claude tool start: %s", cb.get("name"))
+        elif event_type == "content_block_delta":
+            delta = event.get("delta", {})
+            dt = delta.get("type")
+            if dt == "text_delta":
+                state.setdefault("text_chunks", []).append(delta.get("text", ""))
+            elif dt == "thinking_delta":
+                logger.debug("claude thinking: %s", delta.get("thinking", "")[:80])
+            elif dt == "input_json_delta":
+                idx = event.get("index")
+                tools = state.get("active_tools", {})
+                if idx in tools:
+                    tools[idx]["input_fragments"].append(delta.get("partial_json", ""))
+        elif event_type == "content_block_stop":
+            idx = event.get("index")
+            tools = state.get("active_tools", {})
+            if idx in tools:
+                self._log_completed_tool(tools.pop(idx))
+
+        # --- Final result event ---
         elif event_type == "result":
             state["session_id"] = event.get("session_id")
-            # Fallback: if no deltas were emitted, use the final result string.
+            cost = event.get("total_cost_usd")
+            dur = event.get("duration_ms")
+            turns = event.get("num_turns")
+            if cost is not None or dur is not None:
+                logger.info(
+                    "claude result: cost=$%.4f duration=%sms turns=%s",
+                    cost or 0, dur, turns,
+                )
+            # Fallback: if no content was emitted, use the final result string.
             if not state.get("text_chunks"):
                 result = event.get("result", "")
                 if result:
                     state.setdefault("text_chunks", []).append(result)
+
+    def _handle_assistant_message(self, event: dict, state: dict) -> None:
+        msg = event.get("message", {})
+        for block in msg.get("content", []):
+            btype = block.get("type")
+            if btype == "text":
+                text = block.get("text", "")
+                if text:
+                    state.setdefault("text_chunks", []).append(text)
+            elif btype == "tool_use":
+                self._log_tool_use(block.get("name", "unknown"), block.get("input") or {})
+
+    def _handle_user_message(self, event: dict, state: dict) -> None:
+        msg = event.get("message", {})
+        content = msg.get("content", [])
+        if isinstance(content, str):
+            return
+        for block in content:
+            if block.get("type") != "tool_result":
+                continue
+            raw = block.get("content")
+            if isinstance(raw, list):
+                text = "".join(c.get("text", "") for c in raw if isinstance(c, dict))
+            else:
+                text = str(raw) if raw is not None else ""
+            is_err = block.get("is_error", False)
+            preview = text.strip().replace("\n", " ⏎ ")[:200]
+            if is_err:
+                logger.warning("claude tool_result (ERROR): %s", preview)
+            else:
+                logger.info("claude tool_result: %s", preview)
+
+    def _log_completed_tool(self, tool_data: dict) -> None:
+        raw = "".join(tool_data["input_fragments"])
+        try:
+            args = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            logger.warning("claude tool %s: unparseable args: %s", tool_data["name"], raw[:200])
+            return
+        self._log_tool_use(tool_data["name"], args)
+
+    @staticmethod
+    def _log_tool_use(name: str, args: dict) -> None:
+        if name == "Bash":
+            logger.info("claude Bash: %s", str(args.get("command", ""))[:300])
+        elif name in ("Edit", "Write", "Read", "MultiEdit", "NotebookEdit"):
+            logger.info("claude %s: %s", name, args.get("file_path") or args.get("path") or "?")
+        elif name in ("Glob", "Grep"):
+            logger.info("claude %s: %s", name, args.get("pattern") or args.get("query") or "?")
+        elif name.startswith("mcp__"):
+            logger.info("claude MCP %s: %s", name, json.dumps(args)[:200])
+        else:
+            logger.info("claude tool %s: %s", name, json.dumps(args)[:200])
 
     def parse_output(self, stdout_bytes: bytes) -> tuple[str, str | None]:
         state: dict = {}

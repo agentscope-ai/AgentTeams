@@ -14,13 +14,61 @@ spec:
           properties:
             spec:
               type: object
-              required: [leader]
               properties:
                 description:
                   type: string
                 teamName:
                   type: string
                   description: Runtime/storage team identity. Defaults to metadata.name.
+                workerMembers:
+                  type: array
+                  description: >
+                    References to existing Worker CRs as team members. When
+                    non-empty, the TeamReconciler uses the new decoupled path
+                    (membership validation, Matrix invite, MinIO inject, status
+                    aggregation) and ignores the deprecated leader/workers fields.
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: "metadata.name of the referenced Worker CR."
+                      role:
+                        type: string
+                        enum: [team_leader, worker]
+                        description: "Role within the team. Empty defaults to worker. Exactly one member must have role=team_leader."
+                accessPolicy:
+                  type: object
+                  description: >
+                    Team-level default access policy. DefaultEntries are unioned
+                    with each member Worker's own spec.accessEntries at credential
+                    issuance time.
+                  properties:
+                    defaultEntries:
+                      type: array
+                      description: "Default access entries applied to all team members."
+                      items:
+                        type: object
+                        required: [service]
+                        properties:
+                          service:
+                            type: string
+                            enum: [object-storage, ai-gateway, ai-registry]
+                            description: Logical cloud service identifier
+                          permissions:
+                            type: array
+                            items:
+                              type: string
+                              enum: [read, write, list, delete]
+                          scope:
+                            type: object
+                            description: >
+                              Schema-less scope blob. Template vars ${self.name} /
+                              ${self.kind} / ${self.namespace} / ${self.team} are
+                              expanded by the controller before the request reaches
+                              the provider.
+                            x-kubernetes-preserve-unknown-fields: true
                 peerMentions:
                   type: boolean
                   description: "Whether team workers can @mention each other in group rooms (default: true)"

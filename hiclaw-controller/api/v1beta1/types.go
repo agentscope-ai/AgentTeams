@@ -216,14 +216,50 @@ type Team struct {
 }
 
 type TeamSpec struct {
-	Description   string             `json:"description,omitempty"`
-	TeamName      string             `json:"teamName,omitempty"`
-	Admin         *TeamAdminSpec     `json:"admin,omitempty"`
-	HumanMembers  []TeamMemberSpec   `json:"humanMembers,omitempty"`
-	Leader        LeaderSpec         `json:"leader"`
-	Workers       []TeamWorkerSpec   `json:"workers,omitempty"`
+	Description  string           `json:"description,omitempty"`
+	TeamName     string           `json:"teamName,omitempty"`
+	Admin        *TeamAdminSpec   `json:"admin,omitempty"`
+	HumanMembers []TeamMemberSpec `json:"humanMembers,omitempty"`
+
+	// WorkerMembers references existing Worker CRs as team members.
+	// When non-empty, the TeamReconciler uses the new path (membership
+	// validation → Matrix invite → MinIO inject → status aggregation)
+	// and ignores the deprecated Leader/Workers fields.
+	WorkerMembers []TeamWorkerRef `json:"workerMembers,omitempty"`
+
+	// AccessPolicy declares team-level default access entries that are
+	// unioned with each member Worker's own spec.accessEntries at
+	// credential issuance time.
+	AccessPolicy *TeamAccessPolicySpec `json:"accessPolicy,omitempty"`
+
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"` // team-wide overrides
+
+	// Deprecated: Leader defines the team leader's runtime configuration.
+	// Retained for backward compatibility during migration. Ignored when
+	// WorkerMembers is non-empty.
+	Leader LeaderSpec `json:"leader,omitempty"`
+	// Deprecated: Workers defines team worker runtime configurations.
+	// Retained for backward compatibility during migration. Ignored when
+	// WorkerMembers is non-empty.
+	Workers []TeamWorkerSpec `json:"workers,omitempty"`
+}
+
+// TeamWorkerRef references an existing Worker CR as a team member.
+type TeamWorkerRef struct {
+	// Name is the metadata.name of the referenced Worker CR.
+	Name string `json:"name"`
+	// Role is this member's role within the team: "team_leader" or "worker".
+	// Empty defaults to "worker".
+	Role string `json:"role,omitempty"`
+}
+
+// TeamAccessPolicySpec declares team-level default access policy.
+type TeamAccessPolicySpec struct {
+	// DefaultEntries are access entries applied to all team members.
+	// At credential issuance time, these are unioned with the Worker's
+	// own spec.accessEntries.
+	DefaultEntries []AccessEntry `json:"defaultEntries,omitempty"`
 }
 
 func (s TeamSpec) EffectiveTeamName(metadataName string) string {

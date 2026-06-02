@@ -22,6 +22,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/initializer"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
+	"github.com/hiclaw/hiclaw-controller/internal/migration"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	"github.com/hiclaw/hiclaw-controller/internal/server"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
@@ -509,6 +510,20 @@ func (a *App) initReconcilers(_ context.Context) error {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}
 
+	var teamMigrator *migration.TeamMigrator
+	if a.cfg.AutoMigrateTeams {
+		teamMigrator = &migration.TeamMigrator{
+			Client:      a.mgr.GetClient(),
+			Backend:     a.registry,
+			Provisioner: a.provisioner,
+			Deployer:    a.deployer,
+			Scheme:      a.mgr.GetScheme(),
+			Recorder:    a.mgr.GetEventRecorderFor("team-migration"),
+			Enabled:     true,
+			BatchSize:   a.cfg.AutoMigrateBatchSize,
+		}
+	}
+
 	if err := (&controller.TeamReconciler{
 		Client:         a.mgr.GetClient(),
 		Provisioner:    a.provisioner,
@@ -520,6 +535,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		AgentFSDir:     a.cfg.AgentFSDir(),
 		ControllerName: a.cfg.ControllerName,
 		ResourcePrefix: resourcePrefix,
+		Migrator:       teamMigrator,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}

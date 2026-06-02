@@ -15,6 +15,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/executor"
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
+	"github.com/hiclaw/hiclaw-controller/internal/migration"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -75,6 +76,10 @@ type TeamReconciler struct {
 	// createMemberContainer uses it when computing saName. Empty collapses
 	// to DefaultResourcePrefix ("hiclaw-").
 	ResourcePrefix auth.ResourcePrefix
+
+	// Migrator handles automatic migration of legacy Team CRs to the decoupled
+	// model. nil disables auto-migration.
+	Migrator *migration.TeamMigrator
 }
 
 type teamAdminActor struct {
@@ -171,6 +176,19 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 			return reconcile.Result{}, err
 		}
 		patchBase = client.MergeFrom(t.DeepCopy())
+	}
+
+	// --- Auto-migration: convert legacy Teams to decoupled model ---
+	if r.Migrator != nil {
+		if r.Migrator.MigrationInProgress(t) {
+			return r.Migrator.Step(ctx, t)
+		}
+		if r.Migrator.NeedsMigration(t) {
+			if r.Migrator.TryAcquire(ctx) {
+				return r.Migrator.Step(ctx, t)
+			}
+			// Rate-limited: continue legacy path for this reconcile
+		}
 	}
 
 	// --- Route dispatch: decoupled path when WorkerMembers is populated ---

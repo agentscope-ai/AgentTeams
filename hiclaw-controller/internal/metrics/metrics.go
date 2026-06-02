@@ -54,10 +54,34 @@ var (
 		},
 		[]string{"kind"},
 	)
+
+	// MigrationPhase tracks the current migration phase for each Team.
+	// The gauge is set to 1 for the current phase (team×phase pair);
+	// consumers should use max_over_time or last_over_time to determine
+	// the latest phase per team.
+	MigrationPhase = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: subsystem,
+			Name:      "team_migration_phase",
+			Help:      "Current migration phase of a Team CR (1 = active phase).",
+		},
+		[]string{"team", "phase"},
+	)
+
+	// MigrationFailures counts migration step failures, partitioned by the
+	// phase in which the failure occurred.
+	MigrationFailures = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: subsystem,
+			Name:      "team_migration_failures_total",
+			Help:      "Number of migration step failures, partitioned by phase.",
+		},
+		[]string{"phase"},
+	)
 )
 
 func init() {
-	metrics.Registry.MustRegister(ReconcileDuration, ReconcileTotal, ReconcileErrors)
+	metrics.Registry.MustRegister(ReconcileDuration, ReconcileTotal, ReconcileErrors, MigrationPhase, MigrationFailures)
 }
 
 // Observe records duration and outcome for a single Reconcile call. Intended

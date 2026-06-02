@@ -19,6 +19,33 @@ const (
 // the same namespace do not reconcile each other's resources.
 const LabelController = "hiclaw.io/controller"
 
+// Team auto-migration annotations and finalizer.
+const (
+	// AnnotationAutoMigrate controls per-Team migration opt-out.
+	// Values: "enabled" (default when absent), "disabled", "rollback".
+	AnnotationAutoMigrate = "hiclaw.io/auto-migrate"
+
+	// AnnotationMigrationPhase tracks the current migration state machine phase.
+	AnnotationMigrationPhase = "hiclaw.io/migration-phase"
+
+	// AnnotationMigratedAt records the UTC timestamp when migration completed.
+	AnnotationMigratedAt = "hiclaw.io/migrated-at"
+
+	// FinalizerMigration prevents Team deletion while migration is in-flight.
+	FinalizerMigration = "hiclaw.io/migration-in-flight"
+)
+
+// Migration phase constants used as values for AnnotationMigrationPhase.
+const (
+	MigrationPhaseNotStarted           = ""
+	MigrationPhaseWorkerCRsCreated     = "WorkerCRsCreated"
+	MigrationPhaseStatusSeeded         = "StatusSeeded"
+	MigrationPhasePodsReparented       = "PodsReparented"
+	MigrationPhaseCoordinationInjected = "CoordinationInjected"
+	MigrationPhaseTeamSpecPatched      = "TeamSpecPatched"
+	MigrationPhaseMigrated             = "Migrated"
+)
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry".
 //
@@ -211,6 +238,7 @@ type WorkerList struct {
 
 // +genclient
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="MIGRATION",type=string,JSONPath=`.metadata.annotations.hiclaw\.io/migration-phase`,priority=0
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // Team represents a group of workers led by a Team Leader.

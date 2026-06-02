@@ -163,6 +163,11 @@ type Config struct {
 	CMSWorkspace      string
 	CMSServiceName    string
 
+	// Auto-migration: converts legacy Teams (spec.leader + spec.workers) to
+	// the decoupled model (spec.workerMembers referencing standalone Worker CRs).
+	AutoMigrateTeams     bool // HICLAW_AUTO_MIGRATE_TEAMS (default true)
+	AutoMigrateBatchSize int  // HICLAW_AUTO_MIGRATE_BATCH_SIZE (default 3)
+
 	// Pre-resolved worker environment defaults (passed to worker containers)
 	WorkerEnv WorkerEnvDefaults
 }
@@ -333,6 +338,9 @@ func LoadConfig() *Config {
 		CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
 		CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
 		CMSServiceName:    envOrDefault("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager"),
+
+		AutoMigrateTeams:     envBoolDefault("HICLAW_AUTO_MIGRATE_TEAMS", true),
+		AutoMigrateBatchSize: envOrDefaultInt("HICLAW_AUTO_MIGRATE_BATCH_SIZE", 3),
 
 		WorkerEnv: WorkerEnvDefaults{
 			MatrixDomain:  envOrDefault("HICLAW_MATRIX_DOMAIN", "matrix-local.hiclaw.io:8080"),

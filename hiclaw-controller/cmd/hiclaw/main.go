@@ -26,6 +26,7 @@ Environment variables:
 	rootCmd.AddCommand(deleteCmd())
 	rootCmd.AddCommand(workerCmd())
 	rootCmd.AddCommand(statusCmd())
+	rootCmd.AddCommand(migrateCmd())
 	rootCmd.AddCommand(versionCmd())
 
 	if err := rootCmd.Execute(); err != nil {

@@ -15,9 +15,6 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func newTeamTestClient(t *testing.T, objs ...client.Object) client.Client {

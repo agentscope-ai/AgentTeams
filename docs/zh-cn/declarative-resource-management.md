@@ -306,7 +306,7 @@ Leader DM:     Team Admin ↔ Leader                    ← 团队管理通道
 ```
 Admin 下发任务 → Manager
   ↓
-Manager 判断匹配某个 Team 的领域
+Manager 结合 Team 名称、描述、Leader 与 Worker 列表语义判断匹配的 Team
   ↓
 Manager 创建任务 spec，@mention Leader
   ↓
@@ -318,6 +318,11 @@ Leader 汇总结果，@mention Manager
   ↓
 Manager 通知 Admin
 ```
+
+Team 匹配目前没有结构化的团队级 matching/filtering 字段，例如 `domain`、
+`expertise` 或 `capabilities`。Worker 级别的 `skills` 仍可描述单个成员，
+但 Manager 委派不是基于结构化 Team filter，而是结合 Team 名称、
+`spec.description`、Leader 名称和 Worker 名称做语义判断。
 
 ### Team 状态
 

@@ -1,6 +1,7 @@
 """WorkerConfig: parsed from CLI args / env vars."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -26,7 +27,9 @@ class WorkerConfig:
         self.minio_secret_key = minio_secret_key
         self.minio_bucket = minio_bucket
         self.minio_secure = minio_secure
-        self.install_dir = install_dir or Path.home() / ".hiclaw-worker"
+        self.install_dir = install_dir or Path(
+            os.environ.get("COPAW_INSTALL_DIR", Path.home() / ".hiclaw-worker")
+        )
         self.console_port = console_port
         self.worker_port = worker_port or (console_port + 1)
         self.sync_interval = sync_interval

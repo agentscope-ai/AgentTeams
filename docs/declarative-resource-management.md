@@ -308,7 +308,7 @@ Key design: the Team Room does NOT include the Manager, establishing a delegatio
 ```
 Admin assigns task → Manager
   ↓
-Manager determines the task matches a Team's domain
+Manager semantically chooses a matching Team from its name, description, Leader, and Workers
   ↓
 Manager creates task spec, @mentions Leader
   ↓
@@ -320,6 +320,12 @@ Leader aggregates results, @mentions Manager
   ↓
 Manager notifies Admin
 ```
+
+Team matching is not backed by structured team-level matching/filtering fields
+such as `domain`, `expertise`, or `capabilities` on the Team object. Worker-level
+`skills` can still describe individual members, but Manager delegation is based
+on semantic judgement over the Team name, `spec.description`, Leader name, and
+Worker names rather than a structured Team filter.
 
 ### Team Status
 

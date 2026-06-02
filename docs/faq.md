@@ -5,6 +5,7 @@
 - [How to check the current HiClaw version](#how-to-check-the-current-hiclaw-version)
 - [Understanding the new architecture (v1.1.0+)](#understanding-the-new-architecture-v110)
 - [How to use the hiclaw CLI to manage resources](#how-to-use-the-hiclaw-cli-to-manage-resources)
+- [How to configure GitHub credentials for Workers](#how-to-configure-github-credentials-for-workers)
 - [How to connect Feishu/DingTalk/WeCom/Discord/Telegram](#how-to-connect-feishudingtalkwecomdiscordtelegram)
 - [Installation script exits immediately on Windows](#installation-script-exits-immediately-on-windows)
 - [Installation fails: "manifest unknown" for embedded image](#installation-fails-manifest-unknown-for-embedded-image)
@@ -12,9 +13,14 @@
 - [Accessing the web UI from other devices on the LAN](#accessing-the-web-ui-from-other-devices-on-the-lan)
 - [Cannot connect to Matrix server locally](#cannot-connect-to-matrix-server-locally)
 - [How to talk to a Worker directly](#how-to-talk-to-a-worker-directly)
+- [How to connect third-party, local, or multi-provider models](#how-to-connect-third-party-local-or-multi-provider-models)
 - [How to switch the Manager's model](#how-to-switch-the-managers-model)
 - [How to switch a Worker's model](#how-to-switch-a-workers-model)
+- [How to configure OpenRouter or another model provider with slashes in model names](#how-to-configure-openrouter-or-another-model-provider-with-slashes-in-model-names)
 - [How to switch a Worker's runtime](#how-to-switch-a-workers-runtime)
+- [Why does QwenPaw still use `copaw` in runtime values or image names](#why-does-qwenpaw-still-use-copaw-in-runtime-values-or-image-names)
+- [Can I connect my own agent implementation as a Worker](#can-i-connect-my-own-agent-implementation-as-a-worker)
+- [Can HiClaw connect to an existing Higress instance](#can-hiclaw-connect-to-an-existing-higress-instance)
 - [How to use the Worker Template Marketplace](#how-to-use-the-worker-template-marketplace)
 - [Does HiClaw support sending and receiving files](#does-hiclaw-support-sending-and-receiving-files)
 - [Why does Manager/Worker keep showing "typing"](#why-does-managerworker-keep-showing-typing)
@@ -33,6 +39,17 @@ Run the following command to see the installed version:
 ```bash
 docker exec hiclaw-manager cat /opt/hiclaw/agent/.builtin-version
 ```
+
+In v1.1.0+ installs, you can also query the controller-side CLI:
+
+```bash
+docker exec hiclaw-controller hiclaw version
+```
+
+Older `latest` images may print a commit hash instead of a semantic version if
+that image was rebuilt before version metadata was standardized. In that case,
+match the hash against the release or commit history, or upgrade with an
+explicit `HICLAW_VERSION`.
 
 To install a specific version, use the `HICLAW_VERSION` environment variable during installation:
 
@@ -122,8 +139,8 @@ hiclaw create worker --name alice
 # Create a worker with specific model and runtime
 hiclaw create worker --name bob --model claude-sonnet-4-6 --runtime hermes
 
-# Create a worker with skills and MCP servers
-hiclaw create worker --name charlie --skills github-operations --mcp-servers github
+# Create a worker with skills
+hiclaw create worker --name charlie --skills github-operations
 
 # Create a worker with a custom SOUL.md
 hiclaw create worker --name diana --soul-file /path/to/SOUL.md
@@ -152,9 +169,6 @@ hiclaw update worker --name alice --runtime hermes
 
 # Update a worker's skills
 hiclaw update worker --name alice --skills github-operations,code-review
-
-# Add MCP server access
-hiclaw update worker --name alice --mcp-servers github,sentry
 ```
 
 ### Apply YAML definitions
@@ -162,7 +176,26 @@ hiclaw update worker --name alice --mcp-servers github,sentry
 ```bash
 # Apply a single YAML resource
 hiclaw apply -f worker-alice.yaml
+```
 
+Use YAML for fields not exposed by direct CLI flags, such as `spec.mcpServers`:
+
+```yaml
+apiVersion: hiclaw.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  workerName: alice
+  skills:
+    - github-operations
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http
+```
+
+```bash
 # Import a worker from a zip package
 hiclaw apply worker --name alice --zip worker-package.zip
 ```
@@ -196,6 +229,52 @@ hiclaw delete human john
 > **Tip:** Most Manager Agent operations (creating workers, switching models, assigning tasks) ultimately call the same `hiclaw` CLI under the hood. Using the CLI directly is useful for debugging, bulk operations, or automation scripts.
 
 For declarative YAML resource definitions, see [Declarative Resource Management](declarative-resource-management.md).
+
+---
+
+## How to configure GitHub credentials for Workers
+
+GitHub credentials are configured as an MCP Server credential, not copied into
+Worker containers. Workers call GitHub through `mcporter` and the AI Gateway;
+the real GitHub PAT stays in the gateway-side MCP configuration.
+
+During installation, set or enter `HICLAW_GITHUB_TOKEN` when the installer asks
+for the optional GitHub Personal Access Token:
+
+```bash
+HICLAW_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+```
+
+When this variable is present, HiClaw configures the GitHub MCP Server and
+generates Manager-side `mcporter` configuration automatically. After that,
+declare the GitHub MCP capability in the Worker manifest:
+
+```yaml
+apiVersion: hiclaw.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  workerName: alice
+  skills:
+    - github-operations
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http
+```
+
+Apply it with the supported YAML path:
+
+```bash
+hiclaw apply -f worker-alice.yaml
+```
+
+For an existing installation that skipped the token, re-run the installer from
+the original workspace and provide `HICLAW_GITHUB_TOKEN`, or configure the
+GitHub MCP Server in the gateway manually and then authorize the target
+Manager/Worker consumer. Do not paste a PAT into a Worker prompt or
+container-local config.
 
 ---
 
@@ -265,6 +344,15 @@ If you're using a Mac with Apple Silicon (M1/M2/M3/M4) and Docker Desktop is old
 - **Docker Desktop**: Upgrade to 4.39.0 or later
 - **Podman**: Ensure Podman Engine **Server version ≥ 5.7.1** (check with `podman version`)
 
+**Case 5: Linux host with SELinux volume denial**
+
+If the detailed log, especially `mc-mirror.log`, contains `permission denied`
+for files under the mounted workspace or host-share directory on an SELinux
+enabled Linux host, the bind mount may need an SELinux relabel option. Re-run
+the installer from a workspace location where Docker/Podman is allowed to mount
+files, or add `:z` to equivalent manual bind mounts so the container can access
+the mounted path.
+
 ---
 
 ## Accessing the web UI from other devices on the LAN
@@ -289,6 +377,19 @@ http://<LAN-IP>:18080
 
 For example, if your LAN IP is `192.168.1.100`, enter `http://192.168.1.100:18080`.
 
+If the login page still reports a homeserver error:
+
+1. Confirm the installer was run with external access enabled. Local-only mode
+   binds services to `127.0.0.1`, so other devices cannot reach them.
+2. Make sure the machine firewall allows ports `18080` (Matrix/Higress gateway)
+   and `18088` (Element Web).
+3. Do not use the default `matrix-local.hiclaw.io` address from another device;
+   that name resolves to the client machine's loopback address.
+
+For FluffyChat or Element Mobile over Tailscale, use the same rule: set the
+homeserver to `http://<tailscale-ip>:18080` and make sure the phone and the
+HiClaw host can reach each other in the Tailscale network.
+
 ---
 
 ## Cannot connect to Matrix server locally
@@ -306,6 +407,46 @@ After creating a Worker, Manager automatically adds you and the Worker to a shar
 When using Element or similar clients, type `@` followed by the first letter(s) of the Worker's display name to trigger autocomplete and select the right user.
 
 Alternatively, you can click the Worker's avatar and open a **direct message** (DM) conversation. In a DM you don't need to @mention — every message triggers the Worker. Keep in mind that Manager is not in the DM room and won't see any of that conversation.
+
+---
+
+## How to connect third-party, local, or multi-provider models
+
+HiClaw does not read your `~/.openclaw/openclaw.json` provider definitions
+directly. Model traffic goes through the HiClaw AI Gateway. OpenClaw/QwenPaw
+usually sees one provider named `hiclaw-gateway`; Higress then routes each
+requested model name to the real upstream provider.
+
+### Third-party OpenAI-compatible APIs
+
+For an OpenAI-compatible service, create or update a Higress AI route with:
+
+- the provider's base URL, including `/v1` when the provider requires it
+- the provider API key
+- a model matching rule that matches the model id you will ask Manager or a
+  Worker to use
+
+Then ask Manager to switch to that same model id, or create/update a Worker with
+that model. Do not rely on `/model list` alone as the source of available
+Higress providers; it shows the agent-side known model list, not every route
+defined in Higress.
+
+### Local models such as Ollama or LM Studio
+
+Local models are supported when the service exposes an OpenAI-compatible API
+that the HiClaw containers can reach. From inside Docker, `localhost` means the
+container itself, not your Mac or host machine. Use a reachable host address,
+for example `http://host.docker.internal:<port>/v1` on Docker Desktop, or the
+host LAN IP on Linux/Podman when `host.docker.internal` is not available.
+
+### Multiple providers and task-specific models
+
+Configure separate Higress AI routes with prefix or regex model matching rules,
+for example one rule for `qwen*` and another for `claude*`. Then assign the
+desired model explicitly to the Manager or a Worker. HiClaw can use different
+models for different Workers, but automatic model selection by task type is not
+a built-in policy; express that policy through Worker roles or switch the model
+explicitly.
 
 ---
 
@@ -337,6 +478,11 @@ The model-switch skill:
 1. Looks up the correct `contextWindow` and `maxTokens` for the target model
 2. Updates OpenClaw's config accordingly
 3. Tests connectivity before applying the change
+
+If you see `model_context_window_exceeded`, first start a new session with
+`/new` or switch to a model with a larger context window. Then verify that the
+target model's `contextWindow` in the model configuration matches the provider's
+real limit before continuing the long conversation.
 
 **Step 1: Configure Higress AI Route**
 
@@ -399,6 +545,28 @@ Reference: [Higress AI Quick Start — Console Configuration](https://higress.ai
 
 ---
 
+## How to configure OpenRouter or another model provider with slashes in model names
+
+In Higress AI route configuration, the **service name** is an internal name and
+should not be the model name. It must not contain `/`. Put provider-specific
+model prefixes such as `openrouter/` or `stepfun/` in the model matching rule
+instead.
+
+Example for OpenRouter:
+
+| Field | Value |
+|-------|-------|
+| Service name | `openrouter` |
+| Model matching rule | regex, for example `^openrouter/.*$` |
+| Protocol | `openai` |
+| Custom URL | `https://openrouter.ai/api/v1` |
+
+After the route is configured, ask Manager to use the full model name, for
+example `openrouter/stepfun-eur-1-70b`. The model name prefix is what lets
+Higress select the matching provider route.
+
+---
+
 ## How to switch a Worker's runtime
 
 HiClaw v1.1.0+ supports three Worker runtimes:
@@ -440,6 +608,59 @@ Manager will use the worker-management skill to trigger a container recreation. 
 
 ---
 
+## Why does QwenPaw still use `copaw` in runtime values or image names
+
+`QwenPaw` is the user-facing name of the Python runtime that was previously
+called `CoPaw`. Some internal compatibility names intentionally remain `copaw`,
+including the Worker CRD runtime value, image names such as
+`hiclaw-copaw-worker`, and environment values such as
+`HICLAW_MANAGER_RUNTIME=copaw`.
+
+Do not change these internal values to `qwenpaw` unless the chart, controller,
+and images explicitly support that new value. They are kept stable to avoid
+breaking existing installations, Helm values, and image pull paths.
+
+---
+
+## Can I connect my own agent implementation as a Worker
+
+Not by adding an arbitrary new `spec.runtime` value. The Worker CRD currently
+accepts only `openclaw`, `copaw`, or `hermes` as runtimes.
+
+For most custom Worker needs, package your role prompt, skills, dependencies,
+and optional Dockerfile as a Worker package, or set a custom image while keeping
+one of the supported runtimes. See [Importing Existing Workers](import-worker.md)
+and the `spec.package` / `spec.image` fields in
+[Declarative Resource Management](declarative-resource-management.md#worker-resource).
+
+Adding a completely new runtime requires code changes in the controller,
+runtime image defaults, and the corresponding agent template wiring. It is not
+a configuration-only operation.
+
+---
+
+## Can HiClaw connect to an existing Higress instance
+
+Not with `gateway.provider=higress` today. The Helm chart validates that
+`gateway.provider=higress` uses `gateway.mode=managed`, which means HiClaw
+deploys and owns the Higress instance it uses.
+
+Do not copy an existing Higress configuration directory into the HiClaw-managed
+Higress instance. HiClaw reconciles the AI routes, consumers, and gateway
+resources it needs, so copied resources can conflict with or be overwritten by
+HiClaw-managed state.
+
+The supported paths are:
+
+- use the Higress instance managed by HiClaw for HiClaw traffic
+- use the external `ai-gateway` provider path where applicable
+
+Connecting to an existing self-managed Higress instance would require a separate
+external-Higress design, including gateway/console URLs, credentials, resource
+naming isolation, and safeguards around existing routes and consumers.
+
+---
+
 ## How to use the Worker Template Marketplace
 
 HiClaw v1.1.0+ includes a Worker Template Marketplace backed by Nacos. Instead of configuring Workers from scratch, you can import pre-built templates:
@@ -466,6 +687,11 @@ With a `package` reference in the YAML pointing to a marketplace template.
 **Receiving files from you**: Yes. You can upload a file directly in Element Web (the attachment button), and Manager or Worker will receive it as a Matrix media message and can read its content.
 
 **Sending files to you**: Yes. When you ask Manager (or a Worker) to send you a file — such as a task output artifact, a generated report, or any file it has access to — it will upload the file to the Matrix media server and send it to the room as a downloadable attachment. You can then click to download it in Element Web.
+
+Paths printed by Manager or Worker are usually container-internal paths. If you
+cannot access a path directly from the host, ask the agent to send the file as
+an attachment or provide a downloadable link instead of relying on the raw
+container path.
 
 ---
 
@@ -577,7 +803,18 @@ Search the log for the relevant status code. Common causes:
 - **503**: The container can't reach the external LLM service — likely a network issue inside the container.
 - **404**: The model name is probably wrong.
 
-To determine whether the error came from the backend or from a Higress misconfiguration, check the `upstream_host` field in the log entry. If `upstream_host` has a value, the request reached the backend and the error was returned by the upstream service. If it's empty, Higress itself couldn't route the request.
+To determine whether the error came from the backend or from a Higress
+misconfiguration, check the `upstream_host` field in the log entry. If
+`upstream_host` has a real host value, the request reached the backend and the
+error was returned by the upstream service. If it is `-` or empty, Higress did
+not select an upstream cluster; a log entry with `response_code_details:
+cluster_not_found` usually means the model route or service source is
+misconfigured.
+
+For self-hosted OpenAI-compatible services, check whether the Higress provider
+configuration points to a real URL instead of a non-existent service name. Also
+verify from inside the container that the upstream URL is reachable with the
+same base URL and API key.
 
 ### 4. Check model configuration
 

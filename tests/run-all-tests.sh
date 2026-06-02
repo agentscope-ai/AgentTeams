@@ -83,6 +83,49 @@ error() {
     echo -e "\033[31m[ORCHESTRATOR ERROR]\033[0m $1" >&2
 }
 
+_filter_has_test() {
+    local filter="$1"
+    local test_num="$2"
+
+    printf '%s\n' "${filter}" | grep -qw -- "${test_num}"
+}
+
+_expand_controller_cr_filter_for_ci() {
+    local filter="$1"
+    local expanded="${filter}"
+    local required_old_shard="15 17 18 19 20 100"
+    local new_controller_tests="22 23 24 25"
+    local test_num
+
+    for test_num in ${required_old_shard}; do
+        if ! _filter_has_test "${filter}" "${test_num}"; then
+            printf '%s\n' "${filter}"
+            return 0
+        fi
+    done
+
+    for test_num in ${new_controller_tests}; do
+        if ls "${SCRIPT_DIR}"/test-"${test_num}"-*.sh >/dev/null 2>&1 \
+            && ! _filter_has_test "${expanded}" "${test_num}"; then
+            expanded="${expanded} ${test_num}"
+        fi
+    done
+
+    printf '%s\n' "${expanded}"
+}
+
+# pull_request_target runs the workflow definition from the base branch, so a PR
+# that only updates SHARD_C_TESTS would not exercise newly added tests until
+# after merge. The checked-out test runner is from the PR HEAD, so expand the
+# legacy controller shard here as a compatibility bridge for CI.
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -n "${TEST_FILTER}" ]; then
+    EXPANDED_TEST_FILTER="$(_expand_controller_cr_filter_for_ci "${TEST_FILTER}")"
+    if [ "${EXPANDED_TEST_FILTER}" != "${TEST_FILTER}" ]; then
+        log "Expanded controller-cr test filter: ${TEST_FILTER} -> ${EXPANDED_TEST_FILTER}"
+        TEST_FILTER="${EXPANDED_TEST_FILTER}"
+    fi
+fi
+
 cleanup() {
     if [ "${USE_EXISTING}" = true ]; then
         log "Using existing installation — skipping container cleanup"

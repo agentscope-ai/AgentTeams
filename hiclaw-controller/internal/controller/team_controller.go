@@ -179,6 +179,9 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	if err := validateTeamRuntimeNames(t); err != nil {
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
+	if err := r.validateNoStandaloneWorkerRuntimeConflicts(ctx, t); err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
 	leaderRuntimeName := t.Spec.Leader.EffectiveWorkerName()
 	adminActor, err := r.resolveTeamAdminActor(ctx, t)
@@ -1014,6 +1017,38 @@ func validateTeamRuntimeNames(t *v1beta1.Team) error {
 			return fmt.Errorf("duplicate team runtime workerName %q between %s and worker[%s]", runtimeName, owner, w.Name)
 		}
 		seen[runtimeName] = "worker[" + w.Name + "]"
+	}
+	return nil
+}
+
+func (r *TeamReconciler) validateNoStandaloneWorkerRuntimeConflicts(ctx context.Context, t *v1beta1.Team) error {
+	if r.Client == nil {
+		return nil
+	}
+
+	desiredNames := map[string]string{
+		t.Spec.Leader.Name: "leader[" + t.Spec.Leader.Name + "]",
+	}
+	desiredRuntimeNames := map[string]string{
+		t.Spec.Leader.EffectiveWorkerName(): "leader[" + t.Spec.Leader.Name + "]",
+	}
+	for _, w := range t.Spec.Workers {
+		desiredNames[w.Name] = "worker[" + w.Name + "]"
+		desiredRuntimeNames[w.EffectiveWorkerName()] = "worker[" + w.Name + "]"
+	}
+
+	var workers v1beta1.WorkerList
+	if err := r.List(ctx, &workers, client.InNamespace(t.Namespace)); err != nil {
+		return fmt.Errorf("list standalone workers: %w", err)
+	}
+	for _, worker := range workers.Items {
+		if owner, ok := desiredNames[worker.Name]; ok {
+			return fmt.Errorf("team member %s name %q conflicts with existing standalone Worker %s/%s", owner, worker.Name, worker.Namespace, worker.Name)
+		}
+		runtimeName := worker.Spec.EffectiveWorkerName(worker.Name)
+		if owner, ok := desiredRuntimeNames[runtimeName]; ok {
+			return fmt.Errorf("team member %s runtime workerName %q conflicts with existing standalone Worker %s/%s", owner, runtimeName, worker.Namespace, worker.Name)
+		}
 	}
 	return nil
 }

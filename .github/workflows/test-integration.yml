@@ -65,9 +65,9 @@ env:
   # Shard D: Controller/CR tests 2 (team project DAG)
   SHARD_A_TESTS: "01 02 03 04 05 06"
   SHARD_B_TESTS: "14"
-  SHARD_C_TESTS: "15 17 18 19 20 100"
+  SHARD_C_TESTS: "15 17 18 19 20 22 23 24 25 100"
   SHARD_D_TESTS: "21"
-  NON_GITHUB_TESTS: "01 02 03 04 05 06 14 15 17 18 19 20 21 100"
+  NON_GITHUB_TESTS: "01 02 03 04 05 06 14 15 17 18 19 20 21 22 23 24 25 100"
 
 jobs:
   # Step 0: Detect which paths changed so we can decide whether to rebuild

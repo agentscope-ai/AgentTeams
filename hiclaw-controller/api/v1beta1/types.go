@@ -102,6 +102,12 @@ type WorkerSpec struct {
 	Expose        []ExposePort        `json:"expose,omitempty"`  // ports to expose via Higress gateway
 	ChannelPolicy *ChannelPolicySpec  `json:"channelPolicy,omitempty"`
 
+	// IdleTimeout is the duration after which this Worker is considered idle
+	// and eligible for automatic sleep. Read by AutoSleepController (not yet
+	// introduced in open-source; field reserved for commercial alignment).
+	// Example: "720m".
+	IdleTimeout string `json:"idleTimeout,omitempty"`
+
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
 	// reconciliation is skipped entirely (for remote/pip workers).
@@ -234,6 +240,12 @@ type TeamSpec struct {
 
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"` // team-wide overrides
+
+	// HeartbeatEvery configures the Team Leader agent's periodic heartbeat
+	// check interval. The TeamReconciler writes this value into the leader
+	// Worker's openclaw.json and coordination context AGENTS.md.
+	// Example: "30m". Empty means leader heartbeat is disabled.
+	HeartbeatEvery string `json:"heartbeatEvery,omitempty"`
 
 	// Deprecated: Leader defines the team leader's runtime configuration.
 	// Retained for backward compatibility during migration. Ignored when

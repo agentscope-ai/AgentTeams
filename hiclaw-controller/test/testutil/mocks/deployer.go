@@ -18,6 +18,8 @@ type MockDeployer struct {
 	PushOnDemandSkillsFn        func(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSDataFn            func(ctx context.Context, workerName string) error
 	InjectCoordinationContextFn func(ctx context.Context, req service.CoordinationDeployRequest) error
+	InjectWorkerCoordinationFn  func(ctx context.Context, req service.WorkerCoordinationRequest) error
+	InjectHeartbeatConfigFn     func(ctx context.Context, req service.InjectHeartbeatRequest) error
 	EnsureTeamStorageFn         func(ctx context.Context, teamName string) error
 
 	Calls struct {
@@ -27,6 +29,8 @@ type MockDeployer struct {
 		PushOnDemandSkills        []string
 		CleanupOSSData            []string
 		InjectCoordinationContext []service.CoordinationDeployRequest
+		InjectWorkerCoordination  []service.WorkerCoordinationRequest
+		InjectHeartbeatConfig     []service.InjectHeartbeatRequest
 		EnsureTeamStorage         []string
 	}
 }
@@ -46,6 +50,8 @@ func (m *MockDeployer) Reset() {
 	m.PushOnDemandSkillsFn = nil
 	m.CleanupOSSDataFn = nil
 	m.InjectCoordinationContextFn = nil
+	m.InjectWorkerCoordinationFn = nil
+	m.InjectHeartbeatConfigFn = nil
 	m.EnsureTeamStorageFn = nil
 }
 
@@ -64,6 +70,8 @@ func (m *MockDeployer) clearCallsLocked() {
 		PushOnDemandSkills        []string
 		CleanupOSSData            []string
 		InjectCoordinationContext []service.CoordinationDeployRequest
+		InjectWorkerCoordination  []service.WorkerCoordinationRequest
+		InjectHeartbeatConfig     []service.InjectHeartbeatRequest
 		EnsureTeamStorage         []string
 	}{}
 }
@@ -141,6 +149,28 @@ func (m *MockDeployer) EnsureTeamStorage(ctx context.Context, teamName string) e
 	m.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, teamName)
+	}
+	return nil
+}
+
+func (m *MockDeployer) InjectWorkerCoordination(ctx context.Context, req service.WorkerCoordinationRequest) error {
+	m.mu.Lock()
+	m.Calls.InjectWorkerCoordination = append(m.Calls.InjectWorkerCoordination, req)
+	fn := m.InjectWorkerCoordinationFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return nil
+}
+
+func (m *MockDeployer) InjectHeartbeatConfig(ctx context.Context, req service.InjectHeartbeatRequest) error {
+	m.mu.Lock()
+	m.Calls.InjectHeartbeatConfig = append(m.Calls.InjectHeartbeatConfig, req)
+	fn := m.InjectHeartbeatConfigFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
 	}
 	return nil
 }

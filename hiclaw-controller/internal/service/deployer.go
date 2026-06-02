@@ -56,10 +56,32 @@ type CoordinationDeployRequest struct {
 	LeaderDMRoomID     string
 	HeartbeatEvery     string
 	WorkerIdleTimeout  string
-	TeamWorkers        []string
+	TeamWorkers        []TeamWorkerEntry
 	TeamAdminID        string
 	TeamCoordinatorIDs []string
 	LeaderSoul         string // from CR spec.leader.soul; used as seed if non-empty
+}
+
+// TeamWorkerEntry carries worker name + room ID for coordination context rendering.
+type TeamWorkerEntry struct {
+	Name   string
+	RoomID string
+}
+
+// WorkerCoordinationRequest describes coordination context injection for a team member worker.
+type WorkerCoordinationRequest struct {
+	WorkerName         string
+	TeamName           string
+	TeamLeaderName     string
+	TeamAdminID        string
+	TeamCoordinatorIDs []string
+}
+
+// InjectHeartbeatRequest describes heartbeat config injection into a leader's openclaw.json.
+type InjectHeartbeatRequest struct {
+	WorkerName string
+	Enabled    bool
+	Every      string // e.g. "30m"
 }
 
 // --- Deployer ---
@@ -316,8 +338,8 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 	leaderAgentPrefix := fmt.Sprintf("agents/%s", req.LeaderName)
 
 	teamWorkers := make([]agentconfig.TeamWorkerInfo, 0, len(req.TeamWorkers))
-	for _, wn := range req.TeamWorkers {
-		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: wn})
+	for _, tw := range req.TeamWorkers {
+		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: tw.Name, RoomID: tw.RoomID})
 	}
 
 	coordCtx := agentconfig.CoordinationContext{
@@ -377,8 +399,8 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	}
 
 	workerNames := make([]string, 0, len(req.TeamWorkers))
-	for _, wn := range req.TeamWorkers {
-		workerNames = append(workerNames, wn)
+	for _, tw := range req.TeamWorkers {
+		workerNames = append(workerNames, tw.Name)
 	}
 
 	result := string(tmplData)
@@ -387,6 +409,34 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	result = strings.ReplaceAll(result, "${TEAM_WORKERS}", strings.Join(workerNames, ", "))
 
 	return d.oss.PutObject(ctx, soulKey, []byte(result))
+}
+
+// InjectWorkerCoordination writes team coordination context into a team member
+// worker's AGENTS.md. This is the worker-side counterpart to
+// InjectCoordinationContext (which targets the leader).
+func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error {
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
+	coordCtx := agentconfig.CoordinationContext{
+		WorkerName:         req.WorkerName,
+		Role:               "worker",
+		MatrixDomain:       d.matrixDomain,
+		TeamName:           req.TeamName,
+		TeamLeaderName:     req.TeamLeaderName,
+		TeamAdminID:        req.TeamAdminID,
+		TeamCoordinatorIDs: req.TeamCoordinatorIDs,
+	}
+	injected := agentconfig.InjectCoordinationContext(string(existing), coordCtx)
+	return d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(injected))
+}
+
+// InjectHeartbeatConfig reads the leader's existing openclaw.json from OSS,
+// injects or updates the heartbeat configuration, and writes it back.
+func (d *Deployer) InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error {
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every)
+	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
 
 // PushOnDemandSkills pushes on-demand skills to a worker.

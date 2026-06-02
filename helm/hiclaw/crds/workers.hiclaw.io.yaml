@@ -144,6 +144,11 @@ spec:
                     for this worker. Use for remote workers whose process is managed
                     externally (e.g., via systemd). Default is true (controller
                     creates and manages containers).
+                idleTimeout:
+                  type: string
+                  description: >
+                    Duration after which this Worker is considered idle and eligible
+                    for automatic sleep. Read by AutoSleepController. Example: "720m".
                 state:
                   type: string
                   enum: [Running, Sleeping, Stopped]

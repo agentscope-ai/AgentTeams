@@ -359,6 +359,21 @@ func (a *App) initFieldIndexers(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("index team worker names: %w", err)
 	}
+	if err := idx.IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerMembersField, func(obj crclient.Object) []string {
+		team, ok := obj.(*v1beta1.Team)
+		if !ok {
+			return nil
+		}
+		names := make([]string, 0, len(team.Spec.WorkerMembers))
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name != "" {
+				names = append(names, ref.Name)
+			}
+		}
+		return names
+	}); err != nil {
+		return fmt.Errorf("index team workerMembers name: %w", err)
+	}
 	return nil
 }
 

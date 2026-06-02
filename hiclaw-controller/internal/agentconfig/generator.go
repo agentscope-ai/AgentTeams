@@ -390,7 +390,7 @@ func defaultModelSpec(modelName string) ModelSpec {
 		"deepseek-reasoner":      {256000, 128000, false, true},
 		"kimi-k2.5":              {256000, 128000, true, true},
 		"glm-5":                  {200000, 128000, false, true},
-		"MiniMax-M3":             {200000, 128000, false, true},
+		"MiniMax-M3":             {512000, 128000, true, true},
 		"MiniMax-M2.7":           {200000, 128000, false, true},
 		"MiniMax-M2.7-highspeed": {200000, 128000, false, true},
 	}

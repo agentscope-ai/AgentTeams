@@ -1459,8 +1459,7 @@ detect_socket() {
     _uid=$(id -u)
     local _xdg_dir="${XDG_RUNTIME_DIR:-/run/user/${_uid}}"
 
-    # 1. Highest priority: Respect explicitly defined DOCKER_HOST environment variable.
-    #    Both Docker and Podman support this standard.
+    # 1. Respect explicitly defined DOCKER_HOST environment variable
     if [ -n "${DOCKER_HOST}" ]; then
         local _host_socket
         _host_socket=$(echo "${DOCKER_HOST}" | sed 's|^unix://||')
@@ -1473,22 +1472,12 @@ detect_socket() {
     # 2. Route based on the resolved container runtime
     case "${DOCKER_CMD}" in
         podman)
-            # ==========================================
             # Podman path handling
-            # ==========================================
             if [ "${_uid}" -eq 0 ]; then
                 # Root user
                 if [ -S "/run/podman/podman.sock" ]; then
                     echo "/run/podman/podman.sock"
                     return 0
-                fi
-                # Fallback: Try to auto-start system-level socket
-                if command -v systemctl >/dev/null 2>&1; then
-                    systemctl enable --now podman.socket >/dev/null 2>&1 || true
-                    if [ -S "/run/podman/podman.sock" ]; then
-                        echo "/run/podman/podman.sock"
-                        return 0
-                    fi
                 fi
             else
                 # Non-root user
@@ -1496,23 +1485,10 @@ detect_socket() {
                     echo "${_xdg_dir}/podman/podman.sock"
                     return 0
                 fi
-                # Fallback: Try to auto-start user-level socket
-                if command -v systemctl >/dev/null 2>&1; then
-                    systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
-                    if [ -S "${_xdg_dir}/podman/podman.sock" ]; then
-                        echo "${_xdg_dir}/podman/podman.sock"
-                        return 0
-                    fi
-                fi
             fi
             ;;
-
         docker)
-            # ==========================================
             # Docker path handling
-            # ==========================================
-
-            # 2. Next highest priority: Currently active Docker Context via CLI
             if command -v docker >/dev/null 2>&1; then
                 local _socket_path
                 _socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
@@ -1522,25 +1498,21 @@ detect_socket() {
                 fi
             fi
 
-            # 3. Common default path: Rootless mode
             if [ -S "${_xdg_dir}/docker.sock" ]; then
                 echo "${_xdg_dir}/docker.sock"
                 return 0
             fi
 
-            # 4. Common default path: Docker Desktop (macOS / Linux Desktop)
             if [ -S "${HOME}/.docker/run/docker.sock" ]; then
                 echo "${HOME}/.docker/run/docker.sock"
                 return 0
             fi
 
-            # 5. Final fallback: System-wide global socket
             if [ -S "/var/run/docker.sock" ]; then
                 echo "/var/run/docker.sock"
                 return 0
             fi
             ;;
-
         *)
             ;;
     esac
@@ -1548,6 +1520,25 @@ detect_socket() {
     # Return empty if no socket is found
     echo ""
     return 0
+}
+
+# Ensure Podman API socket is active (State mutation)
+ensure_podman_socket() {
+    # Only applicable if runtime is podman and systemctl is available
+    if [ "${DOCKER_CMD:-}" != "podman" ] || ! command -v systemctl >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "Ensuring Podman API socket is active..." >&2
+    local _uid
+    _uid=$(id -u)
+
+    # Enable and start the socket based on user privileges
+    if [ "${_uid}" -eq 0 ]; then
+        systemctl enable --now podman.socket >/dev/null 2>&1 || true
+    else
+        systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
+    fi
 }
 
 # Detect local LAN IP address (cross-platform: macOS and Linux)
@@ -2739,8 +2730,11 @@ step_podman_autostart() {
     fi
 }
 
+# ============================================================
+# Setup dedicated Podman autostart service for HiClaw
+# ============================================================
 setup_podman_autostart() {
-    # 只在检测到使用的是 podman 且开启了自启选项时才执行
+    # Only execute if using podman and autostart is enabled
     if [ "${DOCKER_CMD:-docker}" != "podman" ] || [ "${HICLAW_PODMAN_AUTOSTART:-0}" != "1" ]; then
         return 0
     fi
@@ -2750,63 +2744,79 @@ setup_podman_autostart() {
     local current_user
     current_user="$(whoami)"
 
-    # 定义要注入的 Systemd Override 内容
-    # 注意：第一个空的 ExecStart= 是必须的，用于清空系统默认的硬编码指令
-    local _override_content="[Service]
-ExecStart=
-ExecStart=/usr/bin/podman \$LOGGING start --all --filter restart-policy=always --filter restart-policy=unless-stopped"
+    # Define the dedicated HiClaw service content
+    # Strict scoping: Only manage containers matching '--filter name=hiclaw'
+    local _service_content="[Unit]
+Description=HiClaw Dedicated Podman Autostart Service
+Documentation=https://github.com/agentscope-ai/HiClaw
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+Environment=LOGGING=\"--log-level=info\"
+ExecStart=/usr/bin/podman \$LOGGING start --filter name=hiclaw --filter restart-policy=always --filter restart-policy=unless-stopped
+ExecStop=/usr/bin/podman \$LOGGING stop --filter name=hiclaw --filter restart-policy=always --filter restart-policy=unless-stopped
+
+[Install]
+WantedBy=default.target"
 
     if [ "${current_user}" = "root" ]; then
-        # ==========================================
-        # Rootful 模式
-        # ==========================================
+        # Rootful Mode (System-wide dedicated service)
         log "$(msg install.podman.root_setup)"
 
-        # 1. 注入 Systemd Drop-in 覆盖配置
-        local _sys_dir="/etc/systemd/system/podman-restart.service.d"
+        local _sys_dir="/etc/systemd/system"
         mkdir -p "${_sys_dir}"
-        echo "${_override_content}" > "${_sys_dir}/override.conf"
+        echo "${_service_content}" > "${_sys_dir}/hiclaw-podman-restart.service"
+
         systemctl daemon-reload >/dev/null 2>&1 || true
 
-        # 2. 启用系统级 systemd 服务
-        if systemctl enable --now podman-restart.service >/dev/null 2>&1; then
+        if systemctl enable --now hiclaw-podman-restart.service >/dev/null 2>&1; then
             log "$(msg install.podman.root_success)"
         else
             log "$(msg install.podman.root_fail)"
         fi
     else
-        # ==========================================
-        # Rootless 模式
-        # ==========================================
+        # Rootless Mode (User-level dedicated service)
         log "$(msg install.podman.user_setup "${current_user}")"
 
-        # 1. 开启 Linger，允许用户在未登录时运行后台服务
+        # 1. Enable Linger for background execution (Graceful escalation strategy)
         if ! loginctl show-user "${current_user}" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then
             log "$(msg install.podman.linger_enable)"
-            if command -v sudo >/dev/null 2>&1; then
-                if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-                    sudo -n loginctl enable-linger "${current_user}" 2>/dev/null || log "$(msg install.podman.linger_warn)"
-                else
-                    sudo loginctl enable-linger "${current_user}" || log "$(msg install.podman.linger_warn)"
-                fi
+
+            # Step A: Try to enable linger natively without sudo (works via Polkit on modern desktops)
+            if loginctl enable-linger "${current_user}" >/dev/null 2>&1; then
+                log "Successfully enabled systemd linger natively."
             else
-                log "$(msg install.podman.linger_warn)"
+                # Step B: Fallback to sudo if the native non-privileged execution fails
+                log "Native linger enablement failed. Distro security policy requires privileges."
+                if command -v sudo >/dev/null 2>&1; then
+                    log "Attempting to enable systemd linger via sudo (enter password if prompted)..."
+                    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+                        sudo -n loginctl enable-linger "${current_user}" 2>/dev/null || log "$(msg install.podman.linger_warn)"
+                    else
+                        sudo loginctl enable-linger "${current_user}" || log "$(msg install.podman.linger_warn)"
+                    fi
+                else
+                    log "$(msg install.podman.linger_warn)"
+                fi
             fi
         fi
 
-        # 2. 导出 XDG_RUNTIME_DIR，这对 systemctl --user 极其重要
+        # 2. Export XDG_RUNTIME_DIR to ensure user systemctl commands work
         if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
             export XDG_RUNTIME_DIR="/run/user/$(id -u)"
         fi
 
-        # 3. 注入 Systemd Drop-in 覆盖配置
-        local _user_dir="${HOME}/.config/systemd/user/podman-restart.service.d"
+        # 3. Write dedicated service file to user directory
+        local _user_dir="${HOME}/.config/systemd/user"
         mkdir -p "${_user_dir}"
-        echo "${_override_content}" > "${_user_dir}/override.conf"
+        echo "${_service_content}" > "${_user_dir}/hiclaw-podman-restart.service"
+
         systemctl --user daemon-reload >/dev/null 2>&1 || true
 
-        # 4. 启用用户级 systemd 服务
-        if systemctl --user enable --now podman-restart.service >/dev/null 2>&1; then
+        if systemctl --user enable --now hiclaw-podman-restart.service >/dev/null 2>&1; then
              log "$(msg install.podman.user_success)"
         else
              log "$(msg install.podman.user_fail)"
@@ -3074,6 +3084,12 @@ EOF
     # Detect container runtime socket
     SOCKET_MOUNT_ARGS=""
     if [ "${HICLAW_MOUNT_SOCKET}" = "1" ]; then
+        # Actively ensure the API socket is enabled and active before detection.
+        if [ "${DOCKER_CMD:-}" = "podman" ]; then
+            ensure_podman_socket
+            # Give systemd a brief moment to assert the socket
+            sleep 1
+        fi
         CONTAINER_SOCK=$(detect_socket)
         if [ -n "${CONTAINER_SOCK}" ]; then
             log "$(msg install.socket_detected "${CONTAINER_SOCK}")"
@@ -3950,27 +3966,23 @@ test_embedding_connectivity() {
 uninstall_hiclaw() {
     log "$(msg uninstall.title)"
 
-    # Disable and remove Podman autostart service & overrides
+    # Safely disable and remove the dedicated HiClaw Podman autostart service
     if [ "${DOCKER_CMD}" = "podman" ] && command -v systemctl >/dev/null 2>&1; then
         local _systemctl_cmd="systemctl"
-        local _override_dir="/etc/systemd/system/podman-restart.service.d"
+        local _service_dir="/etc/systemd/system"
 
         if [ "$(id -u)" != "0" ]; then
             _systemctl_cmd="systemctl --user"
-            _override_dir="${HOME}/.config/systemd/user/podman-restart.service.d"
+            _service_dir="${HOME}/.config/systemd/user"
         fi
 
-        log "Disabling Podman autostart service..."
-        ${_systemctl_cmd} disable --now podman-restart.service 2>/dev/null || true
-
-        # 清理我们在安装时注入的 override.conf
-        if [ -f "${_override_dir}/override.conf" ]; then
-            log "Removing Podman systemd override configuration..."
-            rm -f "${_override_dir}/override.conf"
-            # 尝试删除空目录，如果目录里还有别的用户自己的配置则保留
-            rmdir "${_override_dir}" 2>/dev/null || true
+        if [ -f "${_service_dir}/hiclaw-podman-restart.service" ]; then
+            log "Disabling and removing dedicated HiClaw Podman autostart service..."
+            ${_systemctl_cmd} disable --now hiclaw-podman-restart.service 2>/dev/null || true
+            rm -f "${_service_dir}/hiclaw-podman-restart.service"
             ${_systemctl_cmd} daemon-reload 2>/dev/null || true
         fi
+        # Note: Native podman-restart.service is strictly untouched per maintainer review.
     fi
 
     # Capture manager image before removing (needed for workspace cleanup on Linux)
@@ -4073,9 +4085,8 @@ uninstall_hiclaw() {
 }
 
 # ============================================================
-# Check container runtime (docker or podman)
+# Check container runtime (docker or podman) and environment
 # ============================================================
-
 check_container_runtime() {
     if command -v docker >/dev/null 2>&1; then
         DOCKER_CMD="docker"
@@ -4090,7 +4101,7 @@ check_container_runtime() {
         exit 1
     fi
 
-    # Command exists — check if daemon is running
+    # Unified health check (Validates runtime responsiveness)
     if ! ${DOCKER_CMD} ps >/dev/null 2>&1; then
         echo -e "\033[31m[HiClaw ERROR]\033[0m $(msg error.docker_not_running)" >&2
         exit 1

@@ -289,3 +289,33 @@ func TestLookupWorkerTeam_StandaloneWorkerReturnsEmpty(t *testing.T) {
 		t.Fatalf("LookupWorkerTeamRole(solo) = (%q,%v), want (\"\",false)", team, isLeader)
 	}
 }
+
+func TestLookupWorkerTeamRole_DecoupledIgnoresStaleLegacyLeader(t *testing.T) {
+	scheme := newAuthTestScheme(t)
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "old-lead"}
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "new-lead", Role: "team_leader"},
+		{Name: "dev", Role: "worker"},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team).
+		WithIndex(&v1beta1.Team{}, teamLeaderNameField, indexTeamLeaderNames).
+		WithIndex(&v1beta1.Team{}, teamWorkerNameField, indexTeamWorkerNames).
+		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
+		Build()
+
+	if got := LookupWorkerTeam(context.Background(), k8sClient, "default", "old-lead"); got != "" {
+		t.Fatalf("LookupWorkerTeam(old-lead) = %q, want empty because workerMembers is authoritative", got)
+	}
+	if teamName, isLeader := LookupWorkerTeamRole(context.Background(), k8sClient, "default", "new-lead"); teamName != "alpha-team" || !isLeader {
+		t.Fatalf("LookupWorkerTeamRole(new-lead) = (%q,%v), want (alpha-team,true)", teamName, isLeader)
+	}
+	if teamName, isLeader := LookupWorkerTeamRole(context.Background(), k8sClient, "default", "dev"); teamName != "alpha-team" || isLeader {
+		t.Fatalf("LookupWorkerTeamRole(dev) = (%q,%v), want (alpha-team,false)", teamName, isLeader)
+	}
+}

@@ -97,6 +97,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		{"infra-clients", a.initInfraClients},
 		{"backends", a.initBackends},
 		{"controller-manager", a.initControllerManager},
+		{"crd-preflight", a.initCRDPreflight},
 		{"field-indexers", a.initFieldIndexers},
 		{"auth", a.initAuth},
 		{"service-layer", a.initServiceLayer},

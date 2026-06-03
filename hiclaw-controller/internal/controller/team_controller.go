@@ -34,9 +34,9 @@ import (
 // consumed by the auth enricher to resolve team membership by worker name
 // without enumerating every Team.
 const (
-	TeamLeaderNameField       = "spec.leader.name"
-	TeamWorkerNameField       = "spec.workerNames"
-	TeamWorkerMembersField    = "spec.workerMembers.name"
+	TeamLeaderNameField    = "spec.leader.name"
+	TeamWorkerNameField    = "spec.workerNames"
+	TeamWorkerMembersField = "spec.workerMembers.name"
 )
 
 // TeamReconciler reconciles Team resources. It directly owns the lifecycle of
@@ -100,12 +100,19 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 	}
 
 	if !team.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(&team, finalizerName) {
+		if controllerutil.ContainsFinalizer(&team, finalizerName) || controllerutil.ContainsFinalizer(&team, v1beta1.FinalizerMigration) {
 			if err := r.handleDelete(ctx, &team); err != nil {
 				logger.Error(err, "failed to delete team", "name", team.Name)
 				return reconcile.Result{RequeueAfter: 30 * time.Second}, err
 			}
+			if controllerutil.ContainsFinalizer(&team, v1beta1.FinalizerMigration) {
+				if err := r.cleanupMigrationOwnedWorkers(ctx, &team); err != nil {
+					logger.Error(err, "failed to cleanup migration-owned workers", "name", team.Name)
+					return reconcile.Result{RequeueAfter: 30 * time.Second}, err
+				}
+			}
 			controllerutil.RemoveFinalizer(&team, finalizerName)
+			controllerutil.RemoveFinalizer(&team, v1beta1.FinalizerMigration)
 			if err := r.Update(ctx, &team); err != nil {
 				return reconcile.Result{}, err
 			}
@@ -164,7 +171,7 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 //  2. Write local inline configs
 //  3. Clean up stale members (in Status.Members but no longer desired)
 //  4. Reconcile each desired member (leader + workers) via the shared phases
-//  4.5. Inject leader coordination context + SOUL.md template (after package deploy)
+//     4.5. Inject leader coordination context + SOUL.md template (after package deploy)
 //  5. Registry updates + summarise backend readiness and patch Team.Status
 func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Team) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
@@ -642,9 +649,54 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 	return nil
 }
 
+func (r *TeamReconciler) cleanupMigrationOwnedWorkers(ctx context.Context, t *v1beta1.Team) error {
+	names := make(map[string]struct{})
+	if t.Spec.Leader.Name != "" {
+		names[t.Spec.Leader.Name] = struct{}{}
+	}
+	for _, w := range t.Spec.Workers {
+		if w.Name != "" {
+			names[w.Name] = struct{}{}
+		}
+	}
+	for _, ref := range t.Spec.WorkerMembers {
+		if ref.Name != "" {
+			names[ref.Name] = struct{}{}
+		}
+	}
+
+	errs := make([]error, 0)
+	for name := range names {
+		var worker v1beta1.Worker
+		key := client.ObjectKey{Name: name, Namespace: t.Namespace}
+		if err := r.Get(ctx, key, &worker); err != nil {
+			if ignored := client.IgnoreNotFound(err); ignored != nil {
+				errs = append(errs, fmt.Errorf("get migration-owned worker %q: %w", name, ignored))
+			}
+			continue
+		}
+		ann := worker.GetAnnotations()
+		if ann[v1beta1.AnnotationMigrationOwned] != "true" || ann[v1beta1.AnnotationMigratedFromTeam] != t.Name {
+			continue
+		}
+		if err := r.Delete(ctx, &worker); err != nil {
+			if ignored := client.IgnoreNotFound(err); ignored != nil {
+				errs = append(errs, fmt.Errorf("delete migration-owned worker %q: %w", name, ignored))
+			}
+		}
+	}
+	return kerrors.NewAggregate(errs)
+}
+
 // ---------------------------------------------------------------------------
 // Decoupled path: Team references standalone Worker CRs via spec.workerMembers
 // ---------------------------------------------------------------------------
+
+type decoupledTeamMember struct {
+	ref         v1beta1.TeamWorkerRef
+	worker      v1beta1.Worker
+	runtimeName string
+}
 
 // reconcileTeamDecoupled is the new path for Teams whose spec.workerMembers
 // is populated. It manages team organization (rooms, coordination context,
@@ -658,28 +710,8 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
 
-	// 2. Fetch all referenced Worker CRs
-	type resolvedMember struct {
-		ref    v1beta1.TeamWorkerRef
-		worker v1beta1.Worker
-	}
-	members := make([]resolvedMember, 0, len(t.Spec.WorkerMembers))
-	allProvisioned := true
-	var degradedMsgs []string
-
-	for _, ref := range t.Spec.WorkerMembers {
-		var w v1beta1.Worker
-		key := client.ObjectKey{Name: ref.Name, Namespace: t.Namespace}
-		if err := r.Get(ctx, key, &w); err != nil {
-			degradedMsgs = append(degradedMsgs, fmt.Sprintf("Worker %q not found", ref.Name))
-			continue
-		}
-		if w.Status.MatrixUserID == "" {
-			allProvisioned = false
-		}
-		members = append(members, resolvedMember{ref: ref, worker: w})
-	}
-
+	// 2. Resolve decoupled membership snapshot from Worker CRs.
+	members, allProvisioned, degradedMsgs := r.resolveDecoupledMembers(ctx, t)
 	if len(degradedMsgs) > 0 {
 		t.Status.Phase = "Degraded"
 		t.Status.Message = strings.Join(degradedMsgs, "; ")
@@ -714,17 +746,9 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 
 	// 4. Team-level infrastructure
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
-	var leaderWorker v1beta1.Worker
-	workerRuntimeNames := make([]string, 0, len(workerRefs))
-	for _, rm := range members {
-		rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
-		if rm.ref.Name == leaderRef.Name {
-			leaderWorker = rm.worker
-		} else {
-			workerRuntimeNames = append(workerRuntimeNames, rn)
-		}
-	}
-	leaderRuntimeName := leaderWorker.Spec.EffectiveWorkerName(leaderWorker.Name)
+	leaderMember := decoupledLeaderMember(members, leaderRef.Name)
+	leaderRuntimeName := leaderMember.runtimeName
+	workerRuntimeNames := decoupledWorkerRuntimeNames(members, leaderRef.Name)
 
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
 		TeamName:             teamRuntimeName,
@@ -747,17 +771,7 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 	}
 
 	// 5. Coordination context + heartbeat injection
-	teamWorkerEntries := make([]service.TeamWorkerEntry, 0, len(workerRuntimeNames))
-	for _, rm := range members {
-		if rm.ref.Name == leaderRef.Name {
-			continue
-		}
-		rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
-		teamWorkerEntries = append(teamWorkerEntries, service.TeamWorkerEntry{
-			Name:   rn,
-			RoomID: rm.worker.Status.RoomID,
-		})
-	}
+	teamWorkerEntries := decoupledTeamWorkerEntries(members, leaderRef.Name)
 
 	// Leader coordination context
 	if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
@@ -771,7 +785,7 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		TeamWorkers:        teamWorkerEntries,
 		TeamAdminID:        teamAdminMatrixID(derivedTeam),
 		TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
-		LeaderSoul:         leaderWorker.Spec.Soul,
+		LeaderSoul:         leaderMember.worker.Spec.Soul,
 	}); err != nil {
 		logger.Error(err, "leader coordination context injection failed (non-fatal)")
 	}
@@ -792,15 +806,14 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		if rm.ref.Name == leaderRef.Name {
 			continue
 		}
-		rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
-			WorkerName:         rn,
+			WorkerName:         rm.runtimeName,
 			TeamName:           teamRuntimeName,
 			TeamLeaderName:     leaderRuntimeName,
 			TeamAdminID:        teamAdminMatrixID(derivedTeam),
 			TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
 		}); err != nil {
-			logger.Error(err, "worker coordination context injection failed (non-fatal)", "worker", rn)
+			logger.Error(err, "worker coordination context injection failed (non-fatal)", "worker", rm.runtimeName)
 		}
 	}
 
@@ -834,60 +847,19 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		adminMatrixID := teamAdminMatrixID(derivedTeam)
 		if adminMatrixID != "" {
 			for _, rm := range members {
-				rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
 				if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
-					WorkerName:           rn,
+					WorkerName:           rm.runtimeName,
 					PrimaryActorMatrixID: leaderMatrixID,
 					AdminMatrixID:        adminMatrixID,
 				}); err != nil {
-					logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rn)
+					logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rm.runtimeName)
 				}
 			}
 		}
 	}
 
 	// 7. Status aggregation
-	desiredNames := make(map[string]struct{}, len(t.Spec.WorkerMembers))
-	for _, ref := range t.Spec.WorkerMembers {
-		desiredNames[ref.Name] = struct{}{}
-	}
-	pruneMembers(&t.Status, desiredNames)
-
-	var leaderReady bool
-	readyWorkers := 0
-	for _, rm := range members {
-		rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
-		role := "worker"
-		if rm.ref.Name == leaderRef.Name {
-			role = RoleTeamLeader.String()
-		}
-		ms := memberStatus(&t.Status, rm.ref.Name, MemberRole(role))
-		ms.RuntimeName = rn
-		ms.MatrixUserID = rm.worker.Status.MatrixUserID
-		ms.RoomID = rm.worker.Status.RoomID
-		ms.Observed = true
-		ready := rm.worker.Status.Phase == "Running"
-		ms.Ready = ready
-		if rm.ref.Name == leaderRef.Name {
-			leaderReady = ready
-		} else if ready {
-			readyWorkers++
-		}
-	}
-
-	sortMembers(&t.Status)
-	t.Status.TotalWorkers = len(workerRefs)
-	t.Status.LeaderReady = leaderReady
-	t.Status.ReadyWorkers = readyWorkers
-
-	switch {
-	case leaderReady && readyWorkers == t.Status.TotalWorkers:
-		t.Status.Phase = "Active"
-		t.Status.Message = ""
-	default:
-		t.Status.Phase = "Pending"
-		t.Status.Message = ""
-	}
+	leaderReady, readyWorkers := aggregateDecoupledTeamStatus(t, members, leaderRef.Name, len(workerRefs))
 
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
 		logger.Error(err, "failed to patch team status (non-fatal)")
@@ -900,6 +872,108 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		"readyWorkers", readyWorkers,
 		"totalWorkers", t.Status.TotalWorkers)
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+}
+
+func (r *TeamReconciler) resolveDecoupledMembers(ctx context.Context, t *v1beta1.Team) ([]decoupledTeamMember, bool, []string) {
+	members := make([]decoupledTeamMember, 0, len(t.Spec.WorkerMembers))
+	allProvisioned := true
+	var degradedMsgs []string
+
+	for _, ref := range t.Spec.WorkerMembers {
+		var w v1beta1.Worker
+		key := client.ObjectKey{Name: ref.Name, Namespace: t.Namespace}
+		if err := r.Get(ctx, key, &w); err != nil {
+			degradedMsgs = append(degradedMsgs, fmt.Sprintf("Worker %q not found", ref.Name))
+			continue
+		}
+		if w.Status.MatrixUserID == "" {
+			allProvisioned = false
+		}
+		members = append(members, decoupledTeamMember{
+			ref:         ref,
+			worker:      w,
+			runtimeName: w.Spec.EffectiveWorkerName(w.Name),
+		})
+	}
+	return members, allProvisioned, degradedMsgs
+}
+
+func decoupledLeaderMember(members []decoupledTeamMember, leaderName string) decoupledTeamMember {
+	for _, member := range members {
+		if member.ref.Name == leaderName {
+			return member
+		}
+	}
+	return decoupledTeamMember{}
+}
+
+func decoupledWorkerRuntimeNames(members []decoupledTeamMember, leaderName string) []string {
+	names := make([]string, 0, len(members))
+	for _, member := range members {
+		if member.ref.Name == leaderName {
+			continue
+		}
+		names = append(names, member.runtimeName)
+	}
+	return names
+}
+
+func decoupledTeamWorkerEntries(members []decoupledTeamMember, leaderName string) []service.TeamWorkerEntry {
+	entries := make([]service.TeamWorkerEntry, 0, len(members))
+	for _, member := range members {
+		if member.ref.Name == leaderName {
+			continue
+		}
+		entries = append(entries, service.TeamWorkerEntry{
+			Name:   member.runtimeName,
+			RoomID: member.worker.Status.RoomID,
+		})
+	}
+	return entries
+}
+
+func aggregateDecoupledTeamStatus(t *v1beta1.Team, members []decoupledTeamMember, leaderName string, totalWorkers int) (bool, int) {
+	desiredNames := make(map[string]struct{}, len(t.Spec.WorkerMembers))
+	for _, ref := range t.Spec.WorkerMembers {
+		desiredNames[ref.Name] = struct{}{}
+	}
+	pruneMembers(&t.Status, desiredNames)
+
+	var leaderReady bool
+	readyWorkers := 0
+	for _, member := range members {
+		role := "worker"
+		if member.ref.Name == leaderName {
+			role = RoleTeamLeader.String()
+		}
+		ms := memberStatus(&t.Status, member.ref.Name, MemberRole(role))
+		ms.RuntimeName = member.runtimeName
+		ms.MatrixUserID = member.worker.Status.MatrixUserID
+		ms.RoomID = member.worker.Status.RoomID
+		ms.Observed = true
+		ready := member.worker.Status.Phase == "Running"
+		ms.Ready = ready
+		if member.ref.Name == leaderName {
+			leaderReady = ready
+		} else if ready {
+			readyWorkers++
+		}
+	}
+
+	sortMembers(&t.Status)
+	t.Status.TotalWorkers = totalWorkers
+	t.Status.LeaderReady = leaderReady
+	t.Status.ReadyWorkers = readyWorkers
+
+	switch {
+	case leaderReady && readyWorkers == t.Status.TotalWorkers:
+		t.Status.Phase = "Active"
+		t.Status.Message = ""
+	default:
+		t.Status.Phase = "Pending"
+		t.Status.Message = ""
+	}
+	return leaderReady, readyWorkers
 }
 
 // handleDeleteDecoupled handles Team deletion for the decoupled path.

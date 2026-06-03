@@ -912,10 +912,10 @@ func callIndex(calls []string, target string) int {
 
 func TestValidateWorkerMembers(t *testing.T) {
 	tests := []struct {
-		name      string
-		refs      []v1beta1.TeamWorkerRef
-		wantErr   string
-		wantLeader string
+		name        string
+		refs        []v1beta1.TeamWorkerRef
+		wantErr     string
+		wantLeader  string
 		wantWorkers int
 	}{
 		{
@@ -1408,6 +1408,59 @@ func TestWorkerToTeamMapFunc(t *testing.T) {
 	reqs = r.workerToTeamRequests(context.Background(), unknown)
 	if len(reqs) != 0 {
 		t.Errorf("expected 0 requests for unknown worker, got %d: %v", len(reqs), reqs)
+	}
+}
+
+func TestCleanupMigrationOwnedWorkersDeletesOnlyOwnedWorkers(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Leader: v1beta1.LeaderSpec{Name: "lead"},
+			Workers: []v1beta1.TeamWorkerSpec{
+				{Name: "dev"},
+				{Name: "solo"},
+			},
+		},
+	}
+	owned := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dev",
+			Namespace: "default",
+			Annotations: map[string]string{
+				v1beta1.AnnotationMigrationOwned:   "true",
+				v1beta1.AnnotationMigratedFromTeam: "team-a",
+			},
+		},
+	}
+	otherTeamOwned := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lead",
+			Namespace: "default",
+			Annotations: map[string]string{
+				v1beta1.AnnotationMigrationOwned:   "true",
+				v1beta1.AnnotationMigratedFromTeam: "other-team",
+			},
+		},
+	}
+	standalone := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "default"},
+	}
+
+	c := newTeamTestClient(t, team, owned, otherTeamOwned, standalone)
+	r := &TeamReconciler{Client: c}
+	if err := r.cleanupMigrationOwnedWorkers(context.Background(), team); err != nil {
+		t.Fatalf("cleanupMigrationOwnedWorkers: %v", err)
+	}
+
+	var out v1beta1.Worker
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "dev", Namespace: "default"}, &out); err == nil {
+		t.Fatalf("migration-owned worker dev still exists")
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "lead", Namespace: "default"}, &out); err != nil {
+		t.Fatalf("worker owned by another team should remain: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "solo", Namespace: "default"}, &out); err != nil {
+		t.Fatalf("standalone worker should remain: %v", err)
 	}
 }
 

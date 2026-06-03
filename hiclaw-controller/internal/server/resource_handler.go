@@ -181,8 +181,9 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 
 	workers := make([]WorkerResponse, 0)
 
-	// Standalone workers only when not filtering by team (team members don't
-	// have Worker CRs).
+	// Standalone workers only when not filtering by team. Decoupled team
+	// members have Worker CRs, but are skipped here and emitted from the
+	// Team loop below so the list has one authoritative team-member view.
 	if teamFilter == "" {
 		var list v1beta1.WorkerList
 		if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
@@ -209,6 +210,12 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	for i := range teams.Items {
 		team := &teams.Items[i]
 		if teamFilter != "" && team.Name != teamFilter {
+			continue
+		}
+		if len(team.Spec.WorkerMembers) > 0 {
+			for _, ref := range team.Spec.WorkerMembers {
+				workers = append(workers, h.teamMemberToResponse(r.Context(), team, ref.Name))
+			}
 			continue
 		}
 		workers = append(workers, h.teamMemberToResponse(r.Context(), team, team.Spec.Leader.Name))
@@ -1031,6 +1038,33 @@ func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1b
 // default"), so Manager skills and `hiclaw get worker` observe the same
 // value for Team workers as they would for standalone Workers.
 func (h *ResourceHandler) teamMemberToResponse(ctx context.Context, t *v1beta1.Team, memberName string) WorkerResponse {
+	if role, ok := decoupledMemberRole(t, memberName); ok {
+		var worker v1beta1.Worker
+		if err := h.client.Get(ctx, client.ObjectKey{Name: memberName, Namespace: h.namespace}, &worker); err == nil {
+			resp := workerToResponse(ctx, h.client, h.namespace, &worker)
+			resp.Team = t.Name
+			resp.Role = role
+			return resp
+		}
+
+		ms := t.Status.MemberByName(memberName)
+		resp := WorkerResponse{
+			Name:  memberName,
+			Team:  t.Name,
+			Role:  role,
+			Phase: "Pending",
+			State: "Running",
+		}
+		if ms != nil {
+			resp.RoomID = ms.RoomID
+			resp.MatrixUserID = ms.MatrixUserID
+			for _, p := range ms.ExposedPorts {
+				resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: p.Port, Domain: p.Domain})
+			}
+		}
+		return resp
+	}
+
 	isLeader := t.Spec.Leader.Name == memberName
 	ms := t.Status.MemberByName(memberName)
 
@@ -1091,6 +1125,19 @@ func (h *ResourceHandler) teamMemberToResponse(ctx context.Context, t *v1beta1.T
 		resp.Phase = "Running"
 	}
 	return resp
+}
+
+func decoupledMemberRole(t *v1beta1.Team, memberName string) (string, bool) {
+	for _, ref := range t.Spec.WorkerMembers {
+		if ref.Name != memberName {
+			continue
+		}
+		if ref.Role == "team_leader" {
+			return "team_leader", true
+		}
+		return "worker", true
+	}
+	return "", false
 }
 
 // writeK8sError maps K8s API errors to HTTP status codes.

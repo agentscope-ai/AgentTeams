@@ -161,6 +161,73 @@ func TestListWorkersAggregatesTeamMembers(t *testing.T) {
 	}
 }
 
+func TestListWorkersAggregatesDecoupledTeamMembers(t *testing.T) {
+	scheme := newServerTestScheme(t)
+
+	lead := &v1beta1.Worker{}
+	lead.Name = "alpha-lead"
+	lead.Namespace = "default"
+	lead.Spec.Model = "qwen3.5-plus"
+	lead.Spec.WorkerName = "lead"
+	lead.Status.Phase = "Running"
+	lead.Status.MatrixUserID = "@alpha-lead:example.com"
+	lead.Status.RoomID = "!lead:example.com"
+
+	dev := &v1beta1.Worker{}
+	dev.Name = "alpha-dev"
+	dev.Namespace = "default"
+	dev.Spec.Runtime = "openclaw"
+	dev.Spec.Model = "qwen3.5-plus"
+	dev.Status.Phase = "Running"
+
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.Leader.Name = "stale-legacy-lead"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-lead", Role: "team_leader"},
+		{Name: "alpha-dev", Role: "worker"},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(lead, dev, team).
+		WithIndex(&v1beta1.Team{}, "spec.workerMembers.name", indexServerTeamWorkerMemberNames).
+		Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
+	rec := httptest.NewRecorder()
+	handler.ListWorkers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var list WorkerListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list.Total != 2 {
+		t.Fatalf("expected 2 decoupled team members, got %d: %+v", list.Total, list.Workers)
+	}
+	byName := map[string]WorkerResponse{}
+	for _, worker := range list.Workers {
+		if worker.Name == "" {
+			t.Fatalf("unexpected empty worker entry: %+v", list.Workers)
+		}
+		byName[worker.Name] = worker
+	}
+	if byName["alpha-lead"].Role != "team_leader" || byName["alpha-lead"].Team != "alpha-team" {
+		t.Fatalf("alpha-lead response = %+v, want team_leader in alpha-team", byName["alpha-lead"])
+	}
+	if byName["alpha-dev"].Role != "worker" || byName["alpha-dev"].Runtime != "openclaw" {
+		t.Fatalf("alpha-dev response = %+v, want worker with runtime openclaw", byName["alpha-dev"])
+	}
+	if _, ok := byName["stale-legacy-lead"]; ok {
+		t.Fatalf("stale legacy leader should not be listed when workerMembers is set: %+v", list.Workers)
+	}
+}
+
 func TestUpdateWorkerRejectsTeamMember(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	team := &v1beta1.Team{}
@@ -179,6 +246,20 @@ func TestUpdateWorkerRejectsTeamMember(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusConflict, rec.Code, rec.Body.String())
 	}
+}
+
+func indexServerTeamWorkerMemberNames(obj client.Object) []string {
+	team, ok := obj.(*v1beta1.Team)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(team.Spec.WorkerMembers))
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name != "" {
+			names = append(names, ref.Name)
+		}
+	}
+	return names
 }
 
 func TestDeleteWorkerRejectsTeamMember(t *testing.T) {

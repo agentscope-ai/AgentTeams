@@ -30,13 +30,13 @@ func LookupWorkerTeam(ctx context.Context, c client.Reader, namespace, workerNam
 	if workerName == "" || c == nil {
 		return ""
 	}
-	if name := lookupTeamByField(ctx, c, namespace, teamLeaderNameField, workerName); name != "" {
+	if name, _, ok := lookupDecoupledTeamRole(ctx, c, namespace, workerName); ok {
 		return name
 	}
-	if name := lookupTeamByField(ctx, c, namespace, teamWorkerMembersField, workerName); name != "" {
+	if name := lookupLegacyTeamByField(ctx, c, namespace, teamLeaderNameField, workerName); name != "" {
 		return name
 	}
-	if name := lookupTeamByField(ctx, c, namespace, teamWorkerNameField, workerName); name != "" {
+	if name := lookupLegacyTeamByField(ctx, c, namespace, teamWorkerNameField, workerName); name != "" {
 		return name
 	}
 	return ""
@@ -49,23 +49,45 @@ func LookupWorkerTeamRole(ctx context.Context, c client.Reader, namespace, worke
 	if workerName == "" || c == nil {
 		return "", false
 	}
-	if name := lookupTeamByField(ctx, c, namespace, teamLeaderNameField, workerName); name != "" {
+	if name, isLeader, ok := lookupDecoupledTeamRole(ctx, c, namespace, workerName); ok {
+		return name, isLeader
+	}
+	if name := lookupLegacyTeamByField(ctx, c, namespace, teamLeaderNameField, workerName); name != "" {
 		return name, true
 	}
-	if name := lookupTeamByField(ctx, c, namespace, teamWorkerMembersField, workerName); name != "" {
-		return name, false
-	}
-	if name := lookupTeamByField(ctx, c, namespace, teamWorkerNameField, workerName); name != "" {
+	if name := lookupLegacyTeamByField(ctx, c, namespace, teamWorkerNameField, workerName); name != "" {
 		return name, false
 	}
 	return "", false
 }
 
-// lookupTeamByField runs a cache-backed List with an exact-match field
-// selector. Returns the first matching Team's metadata.name, or "" on miss
-// or transient error. Errors are intentionally swallowed: identity/auth
-// callers degrade to "no team" rather than fail the request.
-func lookupTeamByField(ctx context.Context, c client.Reader, namespace, field, value string) string {
+// lookupDecoupledTeamRole resolves membership through spec.workerMembers. When a
+// Team has workerMembers, those references are the authoritative membership and
+// role source; legacy spec.leader/spec.workers on the same Team are ignored.
+func lookupDecoupledTeamRole(ctx context.Context, c client.Reader, namespace, workerName string) (teamName string, isLeader bool, ok bool) {
+	var list v1beta1.TeamList
+	if err := c.List(ctx, &list,
+		client.InNamespace(namespace),
+		client.MatchingFieldsSelector{Selector: fields.OneTermEqualSelector(teamWorkerMembersField, workerName)},
+	); err != nil {
+		return "", false, false
+	}
+	for i := range list.Items {
+		team := &list.Items[i]
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name != workerName {
+				continue
+			}
+			return team.Name, ref.Role == "team_leader", true
+		}
+	}
+	return "", false, false
+}
+
+// lookupLegacyTeamByField runs a cache-backed List with an exact-match field
+// selector for legacy Teams only. Teams with spec.workerMembers are skipped so
+// stale spec.leader/spec.workers values cannot grant obsolete team membership.
+func lookupLegacyTeamByField(ctx context.Context, c client.Reader, namespace, field, value string) string {
 	var list v1beta1.TeamList
 	if err := c.List(ctx, &list,
 		client.InNamespace(namespace),
@@ -73,8 +95,12 @@ func lookupTeamByField(ctx context.Context, c client.Reader, namespace, field, v
 	); err != nil {
 		return ""
 	}
-	if len(list.Items) == 0 {
-		return ""
+	for i := range list.Items {
+		team := &list.Items[i]
+		if len(team.Spec.WorkerMembers) > 0 {
+			continue
+		}
+		return team.Name
 	}
-	return list.Items[0].Name
+	return ""
 }

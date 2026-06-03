@@ -133,20 +133,69 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	var crEntries []v1beta1.AccessEntry
 	kind := "TeamWorker"
 	runtimeName := name
-	switch {
-	case leaderMatches(team.Spec.Leader, name):
-		crEntries = team.Spec.Leader.AccessEntries
-		kind = "TeamLeader"
-		runtimeName = team.Spec.Leader.EffectiveWorkerName()
-	default:
-		for _, w := range team.Spec.Workers {
-			if teamWorkerMatches(w, name) {
-				crEntries = w.AccessEntries
-				runtimeName = w.EffectiveWorkerName()
-				break
+
+	// Decoupled path: team members are standalone Worker CRs referenced via
+	// team.spec.workerMembers. The CR's own spec.accessEntries is the source
+	// of truth for member-scope entries; runtime name comes from
+	// worker.Spec.EffectiveWorkerName so ${self.name} expansion matches the
+	// Pod's actual identity.
+	foundDecoupled := false
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name != name {
+			continue
+		}
+		var w v1beta1.Worker
+		if err := r.client.Get(ctx, client.ObjectKey{Name: name, Namespace: r.namespace}, &w); err != nil {
+			if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+				return "", nil, fmt.Errorf("get team-member worker %q (team %q): %w", name, teamName, err)
+			}
+		}
+		if len(w.Spec.AccessEntries) > 0 {
+			crEntries = append([]v1beta1.AccessEntry{}, w.Spec.AccessEntries...)
+		}
+		if w.Name != "" {
+			runtimeName = w.Spec.EffectiveWorkerName(w.Name)
+		}
+		if ref.Role == "team_leader" {
+			kind = "TeamLeader"
+		}
+		foundDecoupled = true
+		break
+	}
+
+	if !foundDecoupled {
+		// Legacy path: leader and workers live inline on the Team CR
+		// (no standalone Worker CRs). Retained for backward compatibility
+		// while the cluster migrates to the decoupled WorkerMembers shape.
+		switch {
+		case leaderMatches(team.Spec.Leader, name):
+			crEntries = team.Spec.Leader.AccessEntries
+			kind = "TeamLeader"
+			runtimeName = team.Spec.Leader.EffectiveWorkerName()
+		default:
+			for _, w := range team.Spec.Workers {
+				if teamWorkerMatches(w, name) {
+					crEntries = w.AccessEntries
+					runtimeName = w.EffectiveWorkerName()
+					break
+				}
 			}
 		}
 	}
+
+	// Union with team-level AccessPolicy.DefaultEntries: every member of
+	// this Team inherits these entries on top of its own. Defaults are
+	// prepended so member-defined entries with the same service appear
+	// later in the list (downstream resolveEntries treats each entry
+	// independently — RAM Policy translation in the STS sidecar handles
+	// overlap correctly).
+	if team.Spec.AccessPolicy != nil && len(team.Spec.AccessPolicy.DefaultEntries) > 0 {
+		union := make([]v1beta1.AccessEntry, 0, len(team.Spec.AccessPolicy.DefaultEntries)+len(crEntries))
+		union = append(union, team.Spec.AccessPolicy.DefaultEntries...)
+		union = append(union, crEntries...)
+		crEntries = union
+	}
+
 	if len(crEntries) == 0 {
 		crEntries = DefaultEntriesForTeamMember()
 	} else if !hasServiceEntry(crEntries, credprovider.ServiceObjectStorage) {

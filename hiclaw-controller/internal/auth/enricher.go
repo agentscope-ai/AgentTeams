@@ -6,16 +6,7 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/fields"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-)
-
-// Team field indexers registered by app.initFieldIndexers. Duplicated as
-// string constants here (instead of importing the controller package) to
-// avoid a circular dependency between auth and controller.
-const (
-	teamLeaderNameField = "spec.leader.name"
-	teamWorkerNameField = "spec.workerNames"
 )
 
 // IdentityEnricher resolves additional identity fields (role, team) from
@@ -24,10 +15,16 @@ type IdentityEnricher interface {
 	EnrichIdentity(ctx context.Context, identity *CallerIdentity) error
 }
 
-// CREnricher enriches CallerIdentity for worker callers. Standalone workers
-// resolve from their Worker CR (annotations are authoritative). Team members
-// no longer have Worker CRs post-refactor, so the enricher falls back to a
-// reverse lookup against Team CRs via field indexers.
+// CREnricher enriches CallerIdentity for worker callers. Team membership is
+// resolved by reverse-querying Team CR via informer cache field indexers
+// (Team CR.spec.{leader.name,workerMembers,workers} as single source of
+// truth) — Worker CR annotations are NOT consulted, to avoid drift between
+// Worker and Team reconcile cycles.
+//
+// In the decoupled model, members are standalone Worker CRs referenced from
+// Team.spec.workerMembers; in the legacy model, members live inline in
+// Team.spec.workers without their own Worker CRs. Both shapes are covered
+// transparently by LookupWorkerTeamRole.
 type CREnricher struct {
 	client    client.Client
 	namespace string
@@ -47,68 +44,53 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 		return nil
 	}
 
-	// 1. Try Worker CR (standalone worker case).
-	var worker v1beta1.Worker
-	key := client.ObjectKey{Name: identity.Username, Namespace: e.namespace}
-	err := e.client.Get(ctx, key, &worker)
-	switch {
-	case err == nil:
-		runtimeName := worker.Spec.EffectiveWorkerName(worker.Name)
-		identity.WorkerName = runtimeName
-		if role := worker.Annotations["hiclaw.io/role"]; role == "team_leader" {
+	// Reverse-lookup team membership via Team CR cache. This works for
+	// both decoupled (spec.workerMembers) and legacy (spec.workers)
+	// shapes, and covers leaders via spec.leader.name.
+	teamName, isLeader := LookupWorkerTeamRole(ctx, e.client, e.namespace, identity.Username)
+	if teamName != "" {
+		identity.Team = teamName
+		if isLeader {
 			identity.Role = RoleTeamLeader
 		}
-		if team := worker.Annotations["hiclaw.io/team"]; team != "" {
-			identity.Team = team
-		}
+	}
+
+	// Try Worker CR for runtime name (decoupled members and standalone
+	// workers always have a Worker CR; legacy team members do not).
+	var worker v1beta1.Worker
+	key := client.ObjectKey{Name: identity.Username, Namespace: e.namespace}
+	switch err := e.client.Get(ctx, key, &worker); {
+	case err == nil:
+		identity.WorkerName = worker.Spec.EffectiveWorkerName(worker.Name)
 		return nil
-	case !apierrors.IsNotFound(err):
+	case apierrors.IsNotFound(err):
+		// Worker CR missing — legacy team member path. Resolve runtime
+		// name from the Team CR (already located above).
+	default:
 		return fmt.Errorf("enrich identity: get worker %q: %w", identity.Username, err)
 	}
 
-	// 2. Worker CR missing — fall back to Team CR reverse lookup. A worker
-	//    name can only belong to one team at a time; the same is true for
-	//    leaders (a leader is not referenced as a worker in its own Team).
-	if team, ok, lerr := e.lookupTeamByField(ctx, teamLeaderNameField, identity.Username); lerr != nil {
-		return fmt.Errorf("enrich identity: lookup team leader %q: %w", identity.Username, lerr)
-	} else if ok {
-		identity.Role = RoleTeamLeader
-		identity.Team = team.Name
-		runtimeName := team.Spec.Leader.EffectiveWorkerName()
-		identity.WorkerName = runtimeName
-		return nil
+	if teamName != "" {
+		identity.WorkerName = legacyTeamMemberRuntimeName(ctx, e.client, e.namespace, teamName, identity.Username, isLeader)
 	}
-
-	if team, ok, werr := e.lookupTeamByField(ctx, teamWorkerNameField, identity.Username); werr != nil {
-		return fmt.Errorf("enrich identity: lookup team worker %q: %w", identity.Username, werr)
-	} else if ok {
-		identity.Team = team.Name
-		for _, w := range team.Spec.Workers {
-			if w.Name == identity.Username {
-				runtimeName := w.EffectiveWorkerName()
-				identity.WorkerName = runtimeName
-				break
-			}
-		}
-		return nil
-	}
-
-	// No Worker CR and no Team membership: leave as a vanilla Worker caller.
-	// The authorizer will apply the worker-scope permission check against the
-	// username itself.
 	return nil
 }
 
-func (e *CREnricher) lookupTeamByField(ctx context.Context, field, value string) (*v1beta1.Team, bool, error) {
-	var list v1beta1.TeamList
-	if err := e.client.List(ctx, &list,
-		client.InNamespace(e.namespace),
-		client.MatchingFieldsSelector{Selector: fields.OneTermEqualSelector(field, value)},
-	); err != nil {
-		return nil, false, err
+// legacyTeamMemberRuntimeName resolves the runtime name for a legacy team
+// member (no Worker CR). Decoupled members never reach this path because
+// their Worker CR Get succeeds in the caller above.
+func legacyTeamMemberRuntimeName(ctx context.Context, c client.Reader, namespace, teamName, username string, isLeader bool) string {
+	var team v1beta1.Team
+	if err := c.Get(ctx, client.ObjectKey{Name: teamName, Namespace: namespace}, &team); err != nil {
+		return username
 	}
-	if len(list.Items) == 0 {
-		return nil, false, nil
+	if isLeader {
+		return team.Spec.Leader.EffectiveWorkerName()
 	}
-	return &list.Items[0], true, nil
+	for _, w := range team.Spec.Workers {
+		if w.Name == username {
+			return w.EffectiveWorkerName()
+		}
+	}
+	return username
 }

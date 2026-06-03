@@ -142,7 +142,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, workerToResponse(worker))
+	httputil.WriteJSON(w, http.StatusCreated, workerToResponse(r.Context(), h.client, h.namespace, worker))
 }
 
 func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +156,7 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker)
 	switch {
 	case err == nil:
-		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
+		httputil.WriteJSON(w, http.StatusOK, workerToResponse(r.Context(), h.client, h.namespace, &worker))
 		return
 	case !apierrors.IsNotFound(err):
 		writeK8sError(w, "get worker", err)
@@ -190,12 +190,13 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for i := range list.Items {
-			if isTeamMemberWorker(&list.Items[i]) {
-				// Defensive: legacy resource created before the refactor. Skip
-				// to avoid duplicating the synthesized team view.
+			if h.isTeamMemberWorker(r.Context(), &list.Items[i]) {
+				// Worker CR is referenced from a Team's
+				// spec.workerMembers (decoupled) — skip to avoid
+				// duplicating the synthesized team-member view.
 				continue
 			}
-			workers = append(workers, workerToResponse(&list.Items[i]))
+			workers = append(workers, workerToResponse(r.Context(), h.client, h.namespace, &list.Items[i]))
 		}
 	}
 
@@ -219,16 +220,16 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, WorkerListResponse{Workers: workers, Total: len(workers)})
 }
 
-// isTeamMemberWorker reports whether a Worker CR was created by the old
-// (pre-refactor) TeamReconciler and should be hidden from the aggregated
-// /workers view.
-func isTeamMemberWorker(w *v1beta1.Worker) bool {
-	if w.Annotations == nil {
+// isTeamMemberWorker reports whether a Worker CR is currently a member of
+// any Team in the namespace, according to the Team CR cache (single source
+// of truth: Team.spec.{leader.name,workerMembers,workers}). Used by
+// ListWorkers to suppress the Worker CR entry when the synthesized
+// team-member entry is already produced from the Team CR loop.
+func (h *ResourceHandler) isTeamMemberWorker(ctx context.Context, w *v1beta1.Worker) bool {
+	if w == nil {
 		return false
 	}
-	return w.Annotations["hiclaw.io/team"] != "" ||
-		w.Annotations["hiclaw.io/team-leader"] != "" ||
-		w.Annotations["hiclaw.io/role"] == "team_leader"
+	return authpkg.LookupWorkerTeam(ctx, h.client, h.namespace, w.Name) != ""
 }
 
 func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
@@ -313,7 +314,7 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
+		httputil.WriteJSON(w, http.StatusOK, workerToResponse(r.Context(), h.client, h.namespace, &worker))
 		return
 	}
 }
@@ -840,7 +841,7 @@ func (h *ResourceHandler) DeleteManager(w http.ResponseWriter, r *http.Request) 
 
 // --- Conversion helpers ---
 
-func workerToResponse(w *v1beta1.Worker) WorkerResponse {
+func workerToResponse(ctx context.Context, c client.Reader, namespace string, w *v1beta1.Worker) WorkerResponse {
 	resp := WorkerResponse{
 		Name:           w.Name,
 		Phase:          w.Status.Phase,
@@ -859,9 +860,16 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
-	if w.Annotations != nil {
-		resp.Team = w.Annotations["hiclaw.io/team"]
-		resp.Role = w.Annotations["hiclaw.io/role"]
+	// Team/Role come from the Team CR cache (single source of truth) — never
+	// from Worker annotations, which can drift out of sync with TeamReconciler
+	// in the decoupled model.
+	if teamName, isLeader := authpkg.LookupWorkerTeamRole(ctx, c, namespace, w.Name); teamName != "" {
+		resp.Team = teamName
+		if isLeader {
+			resp.Role = "team_leader"
+		} else {
+			resp.Role = "team_worker"
+		}
 	}
 	for _, ep := range w.Status.ExposedPorts {
 		resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: ep.Port, Domain: ep.Domain})

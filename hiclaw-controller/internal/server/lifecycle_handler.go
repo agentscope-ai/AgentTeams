@@ -187,7 +187,7 @@ func (h *LifecycleHandler) GetWorkerRuntimeStatus(w http.ResponseWriter, r *http
 		return
 	}
 
-	resp := workerToResponse(&worker)
+	resp := workerToResponse(r.Context(), h.k8s, h.namespace, &worker)
 
 	b := h.registry.DetectWorkerBackend(r.Context())
 	if b != nil {

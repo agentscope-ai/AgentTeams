@@ -84,6 +84,17 @@ type InjectHeartbeatRequest struct {
 	Every      string // e.g. "30m"
 }
 
+// InjectChannelPolicyRequest describes a channel-policy override applied to a
+// member worker's openclaw.json. Used by TeamReconciler in the decoupled path
+// to switch a Worker's Matrix allow-list from [manager, admin] (standalone
+// default produced by WorkerReconciler) to [primary, admin] where primary is
+// the Team Leader. Reset back to manager-mode on team deletion.
+type InjectChannelPolicyRequest struct {
+	WorkerName           string
+	PrimaryActorMatrixID string // leader Matrix ID (team mode) or @manager:domain (standalone reset)
+	AdminMatrixID        string
+}
+
 // --- Deployer ---
 
 // DeployerConfig holds configuration for constructing a Deployer.
@@ -436,6 +447,23 @@ func (d *Deployer) InjectHeartbeatConfig(ctx context.Context, req InjectHeartbea
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
 	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every)
+	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
+}
+
+// InjectChannelPolicy reads a member worker's existing openclaw.json from OSS,
+// patches channels.matrix.groupAllowFrom and channels.matrix.dm.allowFrom to
+// [primaryActor, admin], and writes it back. WorkerReconciler regenerates
+// openclaw.json with standalone semantics ([manager, admin]); when a Worker
+// is referenced into a Team via spec.workerMembers, TeamReconciler calls this
+// to override the policy with the Team Leader. On Team deletion, the caller
+// resets primary back to @manager:domain.
+func (d *Deployer) InjectChannelPolicy(ctx context.Context, req InjectChannelPolicyRequest) error {
+	if req.WorkerName == "" || req.PrimaryActorMatrixID == "" || req.AdminMatrixID == "" {
+		return nil
+	}
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	updated := agentconfig.InjectChannelPolicy(existing, req.PrimaryActorMatrixID, req.AdminMatrixID)
 	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
 
@@ -926,6 +954,12 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 // config provides defaults for any new entries; existing user-modified
 // entries override generated values so that customizations (e.g. memory-core
 // dreaming schedule) survive controller reconciles.
+//
+// It also preserves channels.matrix.groupAllowFrom and channels.matrix.dm.allowFrom
+// from the existing config, because TeamReconciler in the decoupled path
+// overrides these to [leader, admin] for team members. WorkerReconciler is
+// team-agnostic and would otherwise revert them to standalone [manager, admin]
+// on every reconcile, breaking team-scoped task delivery.
 func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 	var generated, existing map[string]interface{}
 	if err := json.Unmarshal(generatedJSON, &generated); err != nil {
@@ -935,10 +969,12 @@ func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 		return generatedJSON, err
 	}
 
+	preserveChannelMatrixAllowFrom(generated, existing)
+
 	genPlugins, _ := generated["plugins"].(map[string]interface{})
 	existPlugins, _ := existing["plugins"].(map[string]interface{})
 	if genPlugins == nil || existPlugins == nil {
-		return generatedJSON, nil
+		return json.MarshalIndent(generated, "", "  ")
 	}
 
 	// Merge plugin entries: generated provides base/defaults, existing
@@ -993,6 +1029,47 @@ func toMap(v interface{}) map[string]interface{} {
 		return m
 	}
 	return nil
+}
+
+// preserveChannelMatrixAllowFrom copies channels.matrix.groupAllowFrom and
+// channels.matrix.dm.allowFrom from existing into generated when the existing
+// values are non-empty. This ensures TeamReconciler-injected team-mode
+// channel policies are not reverted to standalone defaults on every Worker
+// reconcile.
+func preserveChannelMatrixAllowFrom(generated, existing map[string]interface{}) {
+	existChannels, _ := existing["channels"].(map[string]interface{})
+	if existChannels == nil {
+		return
+	}
+	existMatrix, _ := existChannels["matrix"].(map[string]interface{})
+	if existMatrix == nil {
+		return
+	}
+
+	genChannels, _ := generated["channels"].(map[string]interface{})
+	if genChannels == nil {
+		genChannels = make(map[string]interface{})
+		generated["channels"] = genChannels
+	}
+	genMatrix, _ := genChannels["matrix"].(map[string]interface{})
+	if genMatrix == nil {
+		genMatrix = make(map[string]interface{})
+		genChannels["matrix"] = genMatrix
+	}
+
+	if existAllow, ok := existMatrix["groupAllowFrom"].([]interface{}); ok && len(existAllow) > 0 {
+		genMatrix["groupAllowFrom"] = existAllow
+	}
+	if existDM, ok := existMatrix["dm"].(map[string]interface{}); ok {
+		genDM, _ := genMatrix["dm"].(map[string]interface{})
+		if genDM == nil {
+			genDM = make(map[string]interface{})
+			genMatrix["dm"] = genDM
+		}
+		if existDMAllow, ok := existDM["allowFrom"].([]interface{}); ok && len(existDMAllow) > 0 {
+			genDM["allowFrom"] = existDMAllow
+		}
+	}
 }
 
 // deepMergeMap recursively merges override into base; override wins on

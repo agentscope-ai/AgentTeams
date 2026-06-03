@@ -825,6 +825,25 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		}); err != nil {
 			logger.Error(err, "teams-registry update failed (non-fatal)")
 		}
+
+		// Override each member's openclaw.json channel policy from the
+		// standalone default ([manager, admin]) written by WorkerReconciler
+		// to the team-mode policy ([leader, admin]). This must run on every
+		// reconcile since WorkerReconciler regenerates openclaw.json
+		// independently and would otherwise revert the policy.
+		adminMatrixID := teamAdminMatrixID(derivedTeam)
+		if adminMatrixID != "" {
+			for _, rm := range members {
+				rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
+				if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
+					WorkerName:           rn,
+					PrimaryActorMatrixID: leaderMatrixID,
+					AdminMatrixID:        adminMatrixID,
+				}); err != nil {
+					logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rn)
+				}
+			}
+		}
 	}
 
 	// 7. Status aggregation
@@ -945,6 +964,31 @@ func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.T
 		}
 		if err := r.Legacy.RemoveFromTeamsRegistry(ctx, teamRuntimeName); err != nil {
 			logger.Error(err, "failed to remove team from registry (non-fatal)")
+		}
+
+		// Revert each member's openclaw.json channel policy from the
+		// team-mode override ([leader, admin]) back to the standalone
+		// default ([manager, admin]). Without this, a Worker that previously
+		// belonged to a Team would keep accepting commands from the old
+		// leader after detachment.
+		managerMatrixID := r.Legacy.MatrixUserID("manager")
+		adminMatrixID := teamAdminMatrixID(t)
+		if adminMatrixID != "" {
+			for _, ref := range t.Spec.WorkerMembers {
+				var w v1beta1.Worker
+				key := client.ObjectKey{Name: ref.Name, Namespace: t.Namespace}
+				if err := r.Get(ctx, key, &w); err != nil {
+					continue
+				}
+				rn := w.Spec.EffectiveWorkerName(w.Name)
+				if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
+					WorkerName:           rn,
+					PrimaryActorMatrixID: managerMatrixID,
+					AdminMatrixID:        adminMatrixID,
+				}); err != nil {
+					logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", rn)
+				}
+			}
 		}
 	}
 

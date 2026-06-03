@@ -274,3 +274,87 @@ func TestDefaultModelSpec(t *testing.T) {
 		t.Errorf("unknown model ctx = %d, want 150000", unknown.ContextWindow)
 	}
 }
+
+func TestInjectChannelPolicy_FromExisting(t *testing.T) {
+	existing := []byte(`{
+  "channels": {
+    "matrix": {
+      "groupAllowFrom": ["@manager:m.test", "@admin:m.test"],
+      "dm": {"allowFrom": ["@manager:m.test", "@admin:m.test"]}
+    }
+  }
+}`)
+
+	out := InjectChannelPolicy(existing, "@leader:m.test", "@admin:m.test")
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	matrix := got["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	gaf := matrix["groupAllowFrom"].([]interface{})
+	if len(gaf) != 2 || gaf[0] != "@leader:m.test" || gaf[1] != "@admin:m.test" {
+		t.Errorf("groupAllowFrom = %v, want [@leader:m.test @admin:m.test]", gaf)
+	}
+	dm := matrix["dm"].(map[string]interface{})
+	daf := dm["allowFrom"].([]interface{})
+	if len(daf) != 2 || daf[0] != "@leader:m.test" || daf[1] != "@admin:m.test" {
+		t.Errorf("dm.allowFrom = %v, want [@leader:m.test @admin:m.test]", daf)
+	}
+}
+
+func TestInjectChannelPolicy_FromEmpty(t *testing.T) {
+	out := InjectChannelPolicy(nil, "@leader:m.test", "@admin:m.test")
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	matrix := got["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	if gaf := matrix["groupAllowFrom"].([]interface{}); len(gaf) != 2 {
+		t.Errorf("expected groupAllowFrom of length 2, got %v", gaf)
+	}
+	if _, ok := matrix["dm"].(map[string]interface{})["allowFrom"].([]interface{}); !ok {
+		t.Errorf("expected dm.allowFrom to be set")
+	}
+}
+
+func TestInjectChannelPolicy_EmptyInputsAreNoop(t *testing.T) {
+	existing := []byte(`{"channels":{"matrix":{"groupAllowFrom":["@a:x","@b:x"]}}}`)
+
+	if got := InjectChannelPolicy(existing, "", "@admin:m.test"); string(got) != string(existing) {
+		t.Errorf("empty primary should noop, got %s", string(got))
+	}
+	if got := InjectChannelPolicy(existing, "@leader:m.test", ""); string(got) != string(existing) {
+		t.Errorf("empty admin should noop, got %s", string(got))
+	}
+}
+
+func TestInjectChannelPolicy_PreservesUnrelatedFields(t *testing.T) {
+	existing := []byte(`{
+  "agents": {"defaults": {"model": "qwen-plus"}},
+  "channels": {
+    "matrix": {
+      "homeserver": "http://m.test",
+      "groupAllowFrom": ["@old:m.test"]
+    }
+  },
+  "extras": {"foo": "bar"}
+}`)
+	out := InjectChannelPolicy(existing, "@leader:m.test", "@admin:m.test")
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if model := got["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["model"]; model != "qwen-plus" {
+		t.Errorf("agents.defaults.model lost: %v", model)
+	}
+	matrix := got["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	if hs := matrix["homeserver"]; hs != "http://m.test" {
+		t.Errorf("channels.matrix.homeserver lost: %v", hs)
+	}
+	if extras := got["extras"].(map[string]interface{})["foo"]; extras != "bar" {
+		t.Errorf("extras.foo lost: %v", extras)
+	}
+}

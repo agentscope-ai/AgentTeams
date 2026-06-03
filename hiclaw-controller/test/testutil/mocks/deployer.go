@@ -20,6 +20,7 @@ type MockDeployer struct {
 	InjectCoordinationContextFn func(ctx context.Context, req service.CoordinationDeployRequest) error
 	InjectWorkerCoordinationFn  func(ctx context.Context, req service.WorkerCoordinationRequest) error
 	InjectHeartbeatConfigFn     func(ctx context.Context, req service.InjectHeartbeatRequest) error
+	InjectChannelPolicyFn       func(ctx context.Context, req service.InjectChannelPolicyRequest) error
 	EnsureTeamStorageFn         func(ctx context.Context, teamName string) error
 
 	Calls struct {
@@ -31,6 +32,7 @@ type MockDeployer struct {
 		InjectCoordinationContext []service.CoordinationDeployRequest
 		InjectWorkerCoordination  []service.WorkerCoordinationRequest
 		InjectHeartbeatConfig     []service.InjectHeartbeatRequest
+		InjectChannelPolicy       []service.InjectChannelPolicyRequest
 		EnsureTeamStorage         []string
 	}
 }
@@ -52,6 +54,7 @@ func (m *MockDeployer) Reset() {
 	m.InjectCoordinationContextFn = nil
 	m.InjectWorkerCoordinationFn = nil
 	m.InjectHeartbeatConfigFn = nil
+	m.InjectChannelPolicyFn = nil
 	m.EnsureTeamStorageFn = nil
 }
 
@@ -72,6 +75,7 @@ func (m *MockDeployer) clearCallsLocked() {
 		InjectCoordinationContext []service.CoordinationDeployRequest
 		InjectWorkerCoordination  []service.WorkerCoordinationRequest
 		InjectHeartbeatConfig     []service.InjectHeartbeatRequest
+		InjectChannelPolicy       []service.InjectChannelPolicyRequest
 		EnsureTeamStorage         []string
 	}{}
 }
@@ -168,6 +172,17 @@ func (m *MockDeployer) InjectHeartbeatConfig(ctx context.Context, req service.In
 	m.mu.Lock()
 	m.Calls.InjectHeartbeatConfig = append(m.Calls.InjectHeartbeatConfig, req)
 	fn := m.InjectHeartbeatConfigFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return nil
+}
+
+func (m *MockDeployer) InjectChannelPolicy(ctx context.Context, req service.InjectChannelPolicyRequest) error {
+	m.mu.Lock()
+	m.Calls.InjectChannelPolicy = append(m.Calls.InjectChannelPolicy, req)
+	fn := m.InjectChannelPolicyFn
 	m.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, req)

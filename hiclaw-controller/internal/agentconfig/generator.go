@@ -523,3 +523,51 @@ func InjectHeartbeat(existing []byte, enabled bool, every string) []byte {
 	out, _ := json.MarshalIndent(config, "", "  ")
 	return out
 }
+
+// InjectChannelPolicy patches channels.matrix.groupAllowFrom and
+// channels.matrix.dm.allowFrom in an existing openclaw.json blob so the
+// worker only accepts group/DM messages from primaryActorMatrixID and
+// adminMatrixID. Caller controls the semantics of "primary": for a Team
+// member it is the Team Leader's Matrix ID; for a standalone worker it is
+// @manager:domain.
+//
+// This exists because WorkerReconciler always generates openclaw.json with
+// standalone semantics ([manager, admin]). When a Worker is referenced into
+// a Team via spec.workerMembers, TeamReconciler must override the policy to
+// [leader, admin] so leader-issued tasks are accepted. Empty inputs are
+// treated as no-op to avoid wiping a valid policy on partial information.
+func InjectChannelPolicy(existing []byte, primaryActorMatrixID, adminMatrixID string) []byte {
+	if primaryActorMatrixID == "" || adminMatrixID == "" {
+		return existing
+	}
+	var config map[string]interface{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &config)
+	}
+	if config == nil {
+		config = make(map[string]interface{})
+	}
+	channels, _ := config["channels"].(map[string]interface{})
+	if channels == nil {
+		channels = make(map[string]interface{})
+		config["channels"] = channels
+	}
+	matrix, _ := channels["matrix"].(map[string]interface{})
+	if matrix == nil {
+		matrix = make(map[string]interface{})
+		channels["matrix"] = matrix
+	}
+
+	allowFrom := []interface{}{primaryActorMatrixID, adminMatrixID}
+	matrix["groupAllowFrom"] = allowFrom
+
+	dm, _ := matrix["dm"].(map[string]interface{})
+	if dm == nil {
+		dm = make(map[string]interface{})
+		matrix["dm"] = dm
+	}
+	dm["allowFrom"] = allowFrom
+
+	out, _ := json.MarshalIndent(config, "", "  ")
+	return out
+}

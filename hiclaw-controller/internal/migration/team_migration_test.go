@@ -584,4 +584,7 @@ func (d *noopDeployer) InjectWorkerCoordination(_ context.Context, _ service.Wor
 func (d *noopDeployer) InjectHeartbeatConfig(_ context.Context, _ service.InjectHeartbeatRequest) error {
 	return nil
 }
+func (d *noopDeployer) InjectChannelPolicy(_ context.Context, _ service.InjectChannelPolicyRequest) error {
+	return nil
+}
 func (d *noopDeployer) EnsureTeamStorage(_ context.Context, _ string) error { return nil }

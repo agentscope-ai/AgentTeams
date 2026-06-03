@@ -167,20 +167,21 @@ type Config struct {
 	WorkerEnv WorkerEnvDefaults
 }
 
-// WorkerEnvDefaults holds environment variable defaults injected into worker containers.
+// WorkerEnvDefaults holds environment variable defaults injected into worker and manager containers.
 // All values are resolved once at config load time from the controller's own environment.
 type WorkerEnvDefaults struct {
-	MatrixDomain  string
-	FSEndpoint    string
-	FSBucket      string
-	StoragePrefix string
-	ControllerURL string
-	AIGatewayURL  string
-	MatrixURL     string
-	AdminUser     string
-	Runtime       string // "docker" for embedded, "k8s" for incluster
-	YoloMode      bool   // HICLAW_YOLO=1 — propagated to managers and workers
-	MatrixDebug   bool   // HICLAW_MATRIX_DEBUG=1 — propagated to managers and workers,
+	MatrixDomain         string
+	FSEndpoint           string
+	FSBucket             string
+	StoragePrefix        string
+	ControllerURL        string
+	AIGatewayURL         string
+	MatrixURL            string
+	AdminUser            string
+	Runtime              string // "docker" for embedded, "k8s" for incluster
+	DefaultWorkerRuntime string
+	YoloMode             bool // HICLAW_YOLO=1 — propagated to managers and workers
+	MatrixDebug          bool // HICLAW_MATRIX_DEBUG=1 — propagated to managers and workers,
 	// translated to OPENCLAW_MATRIX_DEBUG=1 by the container entrypoints to
 	// enable structured INFO-level traces in the openclaw matrix plugin.
 
@@ -335,16 +336,17 @@ func LoadConfig() *Config {
 		CMSServiceName:    envOrDefault("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager"),
 
 		WorkerEnv: WorkerEnvDefaults{
-			MatrixDomain:  envOrDefault("HICLAW_MATRIX_DOMAIN", "matrix-local.hiclaw.io:8080"),
-			FSEndpoint:    os.Getenv("HICLAW_FS_ENDPOINT"),
-			FSBucket:      envOrDefault("HICLAW_FS_BUCKET", "hiclaw-storage"),
-			StoragePrefix: envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
-			ControllerURL: os.Getenv("HICLAW_CONTROLLER_URL"),
-			AIGatewayURL:  envOrDefault("HICLAW_AI_GATEWAY_URL", "http://aigw-local.hiclaw.io:8080"),
-			MatrixURL:     envOrDefault("HICLAW_MATRIX_URL", "http://matrix-local.hiclaw.io:8080"),
-			AdminUser:     os.Getenv("HICLAW_ADMIN_USER"),
-			YoloMode:      envBool("HICLAW_YOLO"),
-			MatrixDebug:   envBool("HICLAW_MATRIX_DEBUG"),
+			MatrixDomain:         envOrDefault("HICLAW_MATRIX_DOMAIN", "matrix-local.hiclaw.io:8080"),
+			FSEndpoint:           os.Getenv("HICLAW_FS_ENDPOINT"),
+			FSBucket:             envOrDefault("HICLAW_FS_BUCKET", "hiclaw-storage"),
+			StoragePrefix:        envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
+			ControllerURL:        os.Getenv("HICLAW_CONTROLLER_URL"),
+			AIGatewayURL:         envOrDefault("HICLAW_AI_GATEWAY_URL", "http://aigw-local.hiclaw.io:8080"),
+			MatrixURL:            envOrDefault("HICLAW_MATRIX_URL", "http://matrix-local.hiclaw.io:8080"),
+			AdminUser:            os.Getenv("HICLAW_ADMIN_USER"),
+			DefaultWorkerRuntime: os.Getenv("HICLAW_DEFAULT_WORKER_RUNTIME"),
+			YoloMode:             envBool("HICLAW_YOLO"),
+			MatrixDebug:          envBool("HICLAW_MATRIX_DEBUG"),
 
 			// CMS observability (propagated from controller env to all workers/managers)
 			CMSTracesEnabled:  envBool("HICLAW_CMS_TRACES_ENABLED"),

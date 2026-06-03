@@ -64,6 +64,9 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	if b.defaults.AdminUser != "" {
 		env["HICLAW_ADMIN_USER"] = b.defaults.AdminUser
 	}
+	if b.defaults.DefaultWorkerRuntime != "" {
+		env["HICLAW_DEFAULT_WORKER_RUNTIME"] = b.defaults.DefaultWorkerRuntime
+	}
 
 	cfg := spec.Config
 	if cfg.HeartbeatInterval != "" {

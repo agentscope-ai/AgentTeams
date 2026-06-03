@@ -61,16 +61,17 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 
 func TestWorkerEnvBuilderBuildManagerUsesConfiguredRuntimeAndBucket(t *testing.T) {
 	builder := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
-		MatrixDomain:  "matrix.example.com",
-		FSEndpoint:    "http://fs.example.com:9000",
-		FSBucket:      "hiclaw-fs",
-		StoragePrefix: "teams/demo",
-		ControllerURL: "http://controller.example.com:8090",
-		AIGatewayURL:  "http://aigw.example.com:8080",
-		MatrixURL:     "http://matrix.example.com:8080",
-		AdminUser:     "admin",
-		Runtime:       "docker",
-		SkillsAPIURL:  "nacos://skills.example.com:8848/public",
+		MatrixDomain:         "matrix.example.com",
+		FSEndpoint:           "http://fs.example.com:9000",
+		FSBucket:             "hiclaw-fs",
+		StoragePrefix:        "teams/demo",
+		ControllerURL:        "http://controller.example.com:8090",
+		AIGatewayURL:         "http://aigw.example.com:8080",
+		MatrixURL:            "http://matrix.example.com:8080",
+		AdminUser:            "admin",
+		Runtime:              "docker",
+		DefaultWorkerRuntime: "copaw",
+		SkillsAPIURL:         "nacos://skills.example.com:8848/public",
 	})
 
 	env := builder.BuildManager("manager", &ManagerProvisionResult{
@@ -80,15 +81,16 @@ func TestWorkerEnvBuilderBuildManagerUsesConfiguredRuntimeAndBucket(t *testing.T
 	}, v1beta1.ManagerSpec{})
 
 	for key, want := range map[string]string{
-		"HICLAW_MANAGER_NAME":        "manager",
-		"HICLAW_MANAGER_GATEWAY_KEY": "gateway-key",
-		"HICLAW_MANAGER_PASSWORD":    "matrix-password",
-		"HICLAW_FS_ACCESS_KEY":       "manager",
-		"HICLAW_FS_SECRET_KEY":       "secret",
-		"HICLAW_FS_BUCKET":           "hiclaw-fs",
-		"HICLAW_RUNTIME":             "docker",
-		"HICLAW_ADMIN_USER":          "admin",
-		"SKILLS_API_URL":             "nacos://skills.example.com:8848/public",
+		"HICLAW_MANAGER_NAME":           "manager",
+		"HICLAW_MANAGER_GATEWAY_KEY":    "gateway-key",
+		"HICLAW_MANAGER_PASSWORD":       "matrix-password",
+		"HICLAW_FS_ACCESS_KEY":          "manager",
+		"HICLAW_FS_SECRET_KEY":          "secret",
+		"HICLAW_FS_BUCKET":              "hiclaw-fs",
+		"HICLAW_RUNTIME":                "docker",
+		"HICLAW_DEFAULT_WORKER_RUNTIME": "copaw",
+		"HICLAW_ADMIN_USER":             "admin",
+		"SKILLS_API_URL":                "nacos://skills.example.com:8848/public",
 	} {
 		if got := env[key]; got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)

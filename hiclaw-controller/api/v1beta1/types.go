@@ -275,6 +275,9 @@ type TeamSpec struct {
 	// When non-empty, the TeamReconciler uses the new path (membership
 	// validation → Matrix invite → MinIO inject → status aggregation)
 	// and ignores the deprecated Leader/Workers fields.
+	// +kubebuilder:validation:MaxItems=128
+	// +listType=map
+	// +listMapKey=name
 	WorkerMembers []TeamWorkerRef `json:"workerMembers,omitempty"`
 
 	// AccessPolicy declares team-level default access entries that are
@@ -304,6 +307,7 @@ type TeamSpec struct {
 // TeamWorkerRef references an existing Worker CR as a team member.
 type TeamWorkerRef struct {
 	// Name is the metadata.name of the referenced Worker CR.
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 	// Role is this member's role within the team: "team_leader" or "worker".
 	// Empty defaults to "worker".

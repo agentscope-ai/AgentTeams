@@ -22,14 +22,16 @@ spec:
                   description: Runtime/storage team identity. Defaults to metadata.name.
                 workerMembers:
                   type: array
+                  maxItems: 128
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - name
                   description: >
                     References to existing Worker CRs as team members. When
                     non-empty, the TeamReconciler uses the new decoupled path
                     (membership validation, Matrix invite, MinIO inject, status
                     aggregation) and ignores the deprecated leader/workers fields.
                   x-kubernetes-validations:
-                    - rule: "self.all(m1, self.filter(m2, m2.name == m1.name).size() == 1)"
-                      message: "workerMembers names must be unique"
                     - rule: "self.filter(m, m.role == 'team_leader').size() == 1"
                       message: "workerMembers must contain exactly one team_leader"
                   items:
@@ -38,6 +40,7 @@ spec:
                     properties:
                       name:
                         type: string
+                        maxLength: 253
                         description: "metadata.name of the referenced Worker CR."
                       role:
                         type: string

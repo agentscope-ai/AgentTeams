@@ -139,7 +139,7 @@ OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE)
 build-hiclaw-controller: ## Build hiclaw-controller image (prerequisite for Manager)
 	@echo "==> Building hiclaw-controller image: $(LOCAL_CONTROLLER)"
 	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
-	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./hiclaw-controller/
 	@rm -rf ./hiclaw-controller/agent

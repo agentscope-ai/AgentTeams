@@ -93,6 +93,30 @@ type CreateTeamRequest struct {
 	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
 	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+
+	// Decoupled format: independent Worker CRs referenced by the Team.
+	Members        []TeamMemberRequest `json:"members,omitempty"`
+	HeartbeatEvery string              `json:"heartbeatEvery,omitempty"`
+}
+
+// TeamMemberRequest represents a member in the decoupled team creation format.
+type TeamMemberRequest struct {
+	Name             string                     `json:"name"`
+	WorkerName       string                     `json:"workerName,omitempty"`
+	Role             string                     `json:"role"` // "team_leader" or "worker"
+	Model            string                     `json:"model,omitempty"`
+	Runtime          string                     `json:"runtime,omitempty"`
+	Image            string                     `json:"image,omitempty"`
+	Identity         string                     `json:"identity,omitempty"`
+	Soul             string                     `json:"soul,omitempty"`
+	Agents           string                     `json:"agents,omitempty"`
+	Skills           []string                   `json:"skills,omitempty"`
+	McpServers       []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
+	Package          string                     `json:"package,omitempty"`
+	Expose           []v1beta1.ExposePort       `json:"expose,omitempty"`
+	ChannelPolicy    *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	ContainerManaged *bool                      `json:"containerManaged,omitempty"`
+	State            *string                    `json:"state,omitempty"`
 }
 
 type TeamLeaderRequest struct {
@@ -143,6 +167,12 @@ type UpdateTeamRequest struct {
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 }
 
+// TeamMemberRefResponse is the response representation of a team member reference.
+type TeamMemberRefResponse struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
 type TeamResponse struct {
 	Name               string                           `json:"name"`
 	TeamName           string                           `json:"teamName,omitempty"`
@@ -161,6 +191,7 @@ type TeamResponse struct {
 	Message            string                           `json:"message,omitempty"`
 	WorkerNames        []string                         `json:"workerNames,omitempty"`
 	WorkerExposedPorts map[string][]ExposedPortInfo     `json:"workerExposedPorts,omitempty"`
+	Members            []TeamMemberRefResponse          `json:"members,omitempty"`
 }
 
 type TeamListResponse struct {

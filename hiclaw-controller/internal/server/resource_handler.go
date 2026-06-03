@@ -357,6 +357,19 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+
+	// Format detection: members non-empty → decoupled path
+	hasMembers := len(req.Members) > 0
+	hasLegacy := req.Leader.Name != ""
+	if hasMembers && hasLegacy {
+		httputil.WriteError(w, http.StatusBadRequest, "cannot specify both 'members' and 'leader'; choose one format")
+		return
+	}
+	if hasMembers {
+		h.createTeamDecoupled(w, r, &req)
+		return
+	}
+
 	if req.Leader.Name == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "leader.name is required")
 		return
@@ -877,9 +890,23 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
-	for _, w := range t.Spec.Workers {
-		resp.WorkerNames = append(resp.WorkerNames, w.Name)
+
+	// Decoupled format: derive LeaderName, WorkerNames, and Members from WorkerMembers.
+	if len(t.Spec.WorkerMembers) > 0 {
+		for _, ref := range t.Spec.WorkerMembers {
+			resp.Members = append(resp.Members, TeamMemberRefResponse{Name: ref.Name, Role: ref.Role})
+			if ref.Role == "team_leader" {
+				resp.LeaderName = ref.Name
+			} else {
+				resp.WorkerNames = append(resp.WorkerNames, ref.Name)
+			}
+		}
+	} else {
+		for _, w := range t.Spec.Workers {
+			resp.WorkerNames = append(resp.WorkerNames, w.Name)
+		}
 	}
+
 	for _, ms := range t.Status.Members {
 		if len(ms.ExposedPorts) == 0 {
 			continue
@@ -972,6 +999,11 @@ func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1b
 		for _, w := range t.Spec.Workers {
 			if w.Name == name {
 				return t, w.Name, true, nil
+			}
+		}
+		for _, ref := range t.Spec.WorkerMembers {
+			if ref.Name == name {
+				return t, ref.Name, true, nil
 			}
 		}
 	}

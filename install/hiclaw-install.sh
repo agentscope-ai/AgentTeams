@@ -1471,31 +1471,13 @@ detect_socket() {
 
     # 2. Route based on the resolved container runtime
     case "${DOCKER_CMD}" in
-        podman)
-            # Podman path handling
-            if [ "${_uid}" -eq 0 ]; then
-                # Root user
-                if [ -S "/run/podman/podman.sock" ]; then
-                    echo "/run/podman/podman.sock"
-                    return 0
-                fi
-            else
-                # Non-root user
-                if [ -S "${_xdg_dir}/podman/podman.sock" ]; then
-                    echo "${_xdg_dir}/podman/podman.sock"
-                    return 0
-                fi
-            fi
-            ;;
         docker)
             # Docker path handling
-            if command -v docker >/dev/null 2>&1; then
-                local _socket_path
-                _socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
-                if [ -n "${_socket_path}" ] && [ -S "${_socket_path}" ]; then
-                    echo "${_socket_path}"
-                    return 0
-                fi
+            local _socket_path
+            _socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
+            if [ -n "${_socket_path}" ] && [ -S "${_socket_path}" ]; then
+                echo "${_socket_path}"
+                return 0
             fi
 
             if [ -S "${_xdg_dir}/docker.sock" ]; then
@@ -1511,6 +1493,22 @@ detect_socket() {
             if [ -S "/var/run/docker.sock" ]; then
                 echo "/var/run/docker.sock"
                 return 0
+            fi
+            ;;
+        podman)
+            # Podman path handling
+            if [ "${_uid}" -eq 0 ]; then
+                # Root user
+                if [ -S "/run/podman/podman.sock" ]; then
+                    echo "/run/podman/podman.sock"
+                    return 0
+                fi
+            else
+                # Non-root user
+                if [ -S "${_xdg_dir}/podman/podman.sock" ]; then
+                    echo "${_xdg_dir}/podman/podman.sock"
+                    return 0
+                fi
             fi
             ;;
         *)

@@ -2,6 +2,7 @@ package migration
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -46,8 +47,8 @@ func legacyTeam() *v1beta1.Team {
 			},
 		},
 		Status: v1beta1.TeamStatus{
-			Phase:       "Active",
-			TeamRoomID:  "!teamRoom:local",
+			Phase:          "Active",
+			TeamRoomID:     "!teamRoom:local",
 			LeaderDMRoomID: "!leaderDM:local",
 			Members: []v1beta1.TeamMemberStatus{
 				{Name: "leader-bot", RuntimeName: "leader-bot", Role: "team_leader", MatrixUserID: "@leader-bot:local", RoomID: "!leader:local", Observed: true, Ready: true},
@@ -259,6 +260,15 @@ func TestStepCreateWorkerCRs(t *testing.T) {
 	if leader.Spec.Model != "qwen-plus" {
 		t.Errorf("leader model = %q, want qwen-plus", leader.Spec.Model)
 	}
+	if leader.Annotations[v1beta1.AnnotationMigrationOwned] != "true" {
+		t.Errorf("leader migration-owned annotation = %q, want true", leader.Annotations[v1beta1.AnnotationMigrationOwned])
+	}
+	if leader.Annotations[v1beta1.AnnotationMigratedFromTeam] != "research" {
+		t.Errorf("leader migrated-from-team annotation = %q, want research", leader.Annotations[v1beta1.AnnotationMigratedFromTeam])
+	}
+	if leader.Annotations[v1beta1.AnnotationMigratedMemberRole] != "team_leader" {
+		t.Errorf("leader migrated-member-role annotation = %q, want team_leader", leader.Annotations[v1beta1.AnnotationMigratedMemberRole])
+	}
 
 	// Verify migration finalizer added
 	if err := fc.Get(ctx, types.NamespacedName{Name: "research", Namespace: testNS}, team); err != nil {
@@ -283,6 +293,89 @@ func TestStepCreateWorkerCRs(t *testing.T) {
 	err = m.stepCreateWorkerCRs(ctx, team)
 	if err != nil {
 		t.Fatalf("stepCreateWorkerCRs (idempotent): %v", err)
+	}
+}
+
+func TestStepCreateWorkerCRsConflictsWithUnownedExistingWorker(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	team := legacyTeam()
+	existingCoder := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "coder", Namespace: testNS},
+		Spec:       teamWorkerSpecToWorkerSpecForMigration(team, team.Spec.Workers[0]),
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, existingCoder).
+		WithStatusSubresource(team, existingCoder).
+		Build()
+	m := &TeamMigrator{Client: fc, Scheme: scheme, Enabled: true, BatchSize: 3}
+
+	err := m.stepCreateWorkerCRs(ctx, team)
+	if err == nil {
+		t.Fatal("stepCreateWorkerCRs should fail when an unowned Worker with the member name already exists")
+	}
+	if !strings.Contains(err.Error(), v1beta1.AnnotationAllowMigrationAdopt) {
+		t.Fatalf("error = %q, want adoption guidance mentioning %s", err.Error(), v1beta1.AnnotationAllowMigrationAdopt)
+	}
+}
+
+func TestStepCreateWorkerCRsAdoptsExplicitMatchingWorker(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	team := legacyTeam()
+	existingCoder := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "coder",
+			Namespace: testNS,
+			Annotations: map[string]string{
+				v1beta1.AnnotationAllowMigrationAdopt: "true",
+			},
+		},
+		Spec: teamWorkerSpecToWorkerSpecForMigration(team, team.Spec.Workers[0]),
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, existingCoder).
+		WithStatusSubresource(team, existingCoder).
+		Build()
+	m := &TeamMigrator{Client: fc, Scheme: scheme, Enabled: true, BatchSize: 3}
+
+	if err := m.stepCreateWorkerCRs(ctx, team); err != nil {
+		t.Fatalf("stepCreateWorkerCRs should adopt explicitly marked matching Worker: %v", err)
+	}
+}
+
+func TestStepCreateWorkerCRsRejectsAdoptWithMismatchedSpec(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	team := legacyTeam()
+	existingCoder := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "coder",
+			Namespace: testNS,
+			Annotations: map[string]string{
+				v1beta1.AnnotationAllowMigrationAdopt: "true",
+			},
+		},
+		Spec: v1beta1.WorkerSpec{Model: "different-model"},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, existingCoder).
+		WithStatusSubresource(team, existingCoder).
+		Build()
+	m := &TeamMigrator{Client: fc, Scheme: scheme, Enabled: true, BatchSize: 3}
+
+	err := m.stepCreateWorkerCRs(ctx, team)
+	if err == nil {
+		t.Fatal("stepCreateWorkerCRs should reject adoption when the Worker spec differs")
+	}
+	if !strings.Contains(err.Error(), "spec does not match") {
+		t.Fatalf("error = %q, want spec mismatch", err.Error())
 	}
 }
 
@@ -566,8 +659,8 @@ func addWorkerStatusSubresource(t *testing.T, fc client.Client, scheme *runtime.
 // noopDeployer implements service.WorkerDeployer with all no-ops.
 type noopDeployer struct{}
 
-func (d *noopDeployer) DeployPackage(_ context.Context, _, _ string, _ bool) error     { return nil }
-func (d *noopDeployer) WriteInlineConfigs(_ string, _ v1beta1.WorkerSpec) error         { return nil }
+func (d *noopDeployer) DeployPackage(_ context.Context, _, _ string, _ bool) error { return nil }
+func (d *noopDeployer) WriteInlineConfigs(_ string, _ v1beta1.WorkerSpec) error    { return nil }
 func (d *noopDeployer) DeployWorkerConfig(_ context.Context, _ service.WorkerDeployRequest) error {
 	return nil
 }

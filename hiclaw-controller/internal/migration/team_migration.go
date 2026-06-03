@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -157,14 +158,14 @@ func (m *TeamMigrator) stepCreateWorkerCRs(ctx context.Context, t *v1beta1.Team)
 
 	// Create Worker CR for leader
 	leaderSpec := leaderWorkerSpecForMigration(t)
-	if err := m.ensureWorkerCR(ctx, t, t.Spec.Leader.Name, leaderSpec); err != nil {
+	if err := m.ensureWorkerCR(ctx, t, t.Spec.Leader.Name, "team_leader", leaderSpec); err != nil {
 		return fmt.Errorf("create leader Worker CR %q: %w", t.Spec.Leader.Name, err)
 	}
 
 	// Create Worker CRs for each team worker
 	for _, w := range t.Spec.Workers {
 		workerSpec := teamWorkerSpecToWorkerSpecForMigration(t, w)
-		if err := m.ensureWorkerCR(ctx, t, w.Name, workerSpec); err != nil {
+		if err := m.ensureWorkerCR(ctx, t, w.Name, "worker", workerSpec); err != nil {
 			return fmt.Errorf("create worker Worker CR %q: %w", w.Name, err)
 		}
 	}
@@ -326,22 +327,28 @@ func (m *TeamMigrator) stepFinalize(ctx context.Context, t *v1beta1.Team) error 
 
 // --- Helpers ---
 
-// ensureWorkerCR creates a Worker CR if it does not already exist (idempotent).
-func (m *TeamMigrator) ensureWorkerCR(ctx context.Context, t *v1beta1.Team, name string, spec v1beta1.WorkerSpec) error {
+// ensureWorkerCR creates a Worker CR if it does not already exist.
+//
+// If a Worker with the same name already exists, it is safe to reuse only when
+// it can be proven to be the same migrated member from a previous attempt, or
+// when an operator explicitly marked it for adoption and the projected spec
+// matches. A bare name match is not enough: legacy Team members did not have
+// Worker CR identity, so a pre-existing standalone Worker may be unrelated.
+func (m *TeamMigrator) ensureWorkerCR(ctx context.Context, t *v1beta1.Team, name, role string, spec v1beta1.WorkerSpec) error {
 	var existing v1beta1.Worker
 	key := client.ObjectKey{Name: name, Namespace: t.Namespace}
 	if err := m.Client.Get(ctx, key, &existing); err == nil {
-		// Already exists — skip
-		return nil
+		return validateExistingWorkerForMigration(t, &existing, role, spec)
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get worker %q: %w", name, err)
 	}
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: t.Namespace,
-			Labels:    map[string]string{},
+			Name:        name,
+			Namespace:   t.Namespace,
+			Labels:      map[string]string{},
+			Annotations: migrationWorkerAnnotations(t, role),
 		},
 		Spec: spec,
 	}
@@ -351,6 +358,34 @@ func (m *TeamMigrator) ensureWorkerCR(ctx context.Context, t *v1beta1.Team, name
 		}
 	}
 	return m.Client.Create(ctx, worker)
+}
+
+func migrationWorkerAnnotations(t *v1beta1.Team, role string) map[string]string {
+	return map[string]string{
+		v1beta1.AnnotationMigrationOwned:     "true",
+		v1beta1.AnnotationMigratedFromTeam:   t.Name,
+		v1beta1.AnnotationMigratedMemberRole: role,
+	}
+}
+
+func validateExistingWorkerForMigration(t *v1beta1.Team, existing *v1beta1.Worker, expectedRole string, expected v1beta1.WorkerSpec) error {
+	if existing == nil {
+		return fmt.Errorf("existing worker is nil")
+	}
+	if !reflect.DeepEqual(existing.Spec, expected) {
+		return fmt.Errorf("worker %q already exists but spec does not match projected Team member spec", existing.Name)
+	}
+	ann := existing.Annotations
+	if ann[v1beta1.AnnotationMigrationOwned] == "true" &&
+		ann[v1beta1.AnnotationMigratedFromTeam] == t.Name &&
+		ann[v1beta1.AnnotationMigratedMemberRole] == expectedRole {
+		return nil
+	}
+	if ann[v1beta1.AnnotationAllowMigrationAdopt] == "true" {
+		return nil
+	}
+	return fmt.Errorf("worker %q already exists and is not owned by this migration; delete/rename it or annotate %s=true after verifying it should be adopted",
+		existing.Name, v1beta1.AnnotationAllowMigrationAdopt)
 }
 
 // seedWorkerStatus patches a Worker's status subresource with data from

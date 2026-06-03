@@ -31,6 +31,22 @@ const (
 	// AnnotationMigratedAt records the UTC timestamp when migration completed.
 	AnnotationMigratedAt = "hiclaw.io/migrated-at"
 
+	// AnnotationMigrationOwned marks Worker CRs created by the Team migrator.
+	AnnotationMigrationOwned = "hiclaw.io/migration-owned"
+
+	// AnnotationMigratedFromTeam records the Team name that created this Worker
+	// during migration. It is used to distinguish idempotent retries from
+	// unrelated pre-existing Workers with the same name.
+	AnnotationMigratedFromTeam = "hiclaw.io/migrated-from-team"
+
+	// AnnotationMigratedMemberRole records the migrated Team role for a Worker.
+	AnnotationMigratedMemberRole = "hiclaw.io/migrated-member-role"
+
+	// AnnotationAllowMigrationAdopt lets an operator explicitly adopt a
+	// pre-created Worker during Team migration when its spec matches the
+	// projected legacy member spec.
+	AnnotationAllowMigrationAdopt = "hiclaw.io/allow-migration-adopt"
+
 	// FinalizerMigration prevents Team deletion while migration is in-flight.
 	FinalizerMigration = "hiclaw.io/migration-in-flight"
 )

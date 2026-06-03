@@ -27,6 +27,11 @@ spec:
                     non-empty, the TeamReconciler uses the new decoupled path
                     (membership validation, Matrix invite, MinIO inject, status
                     aggregation) and ignores the deprecated leader/workers fields.
+                  x-kubernetes-validations:
+                    - rule: "self.all(m1, self.filter(m2, m2.name == m1.name).size() == 1)"
+                      message: "workerMembers names must be unique"
+                    - rule: "self.filter(m, m.role == 'team_leader').size() == 1"
+                      message: "workerMembers must contain exactly one team_leader"
                   items:
                     type: object
                     required: [name]

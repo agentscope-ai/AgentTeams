@@ -522,6 +522,9 @@ spec:
         - name: Phase
           type: string
           jsonPath: .status.phase
+        - name: Migration
+          type: string
+          jsonPath: .metadata.annotations.hiclaw\.io/migration-phase
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

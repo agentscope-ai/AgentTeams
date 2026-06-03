@@ -680,22 +680,18 @@ msg() {
         "install.podman.linger_enable.en") text="Attempting to enable systemd linger (enter sudo password if prompted)..." ;;
         "install.podman.linger_warn.zh") text="警告: 无法自动启用 linger。驻留可能失败，请手动执行: sudo loginctl enable-linger \$(whoami)" ;;
         "install.podman.linger_warn.en") text="WARNING: Failed to auto-enable linger. Please run manually: sudo loginctl enable-linger \$(whoami)" ;;
-        "install.podman.root_setup.zh") text="检测到 root 用户。正在配置系统级 podman-restart 服务..." ;;
-        "install.podman.root_setup.en") text="Root user detected. Configuring system-wide podman-restart service..." ;;
-        "install.podman.root_success.zh") text="✅ 系统级 podman-restart 服务已成功启用并运行。" ;;
-        "install.podman.root_success.en") text="✅ System-wide podman-restart service successfully enabled and running." ;;
-        "install.podman.root_fail.zh") text="⚠️ 系统级 podman-restart 服务启用失败，请稍后手动检查。" ;;
-        "install.podman.root_fail.en") text="⚠️ Failed to enable system-wide podman-restart service. Please check manually later." ;;
-        "install.podman.user_setup.zh") text="检测到普通用户 (%s)。正在配置用户级 podman-restart 服务..." ;;
-        "install.podman.user_setup.en") text="Non-root user (%s) detected. Configuring user-level podman-restart service..." ;;
-        "install.podman.user_success.zh") text="✅ 用户级 podman-restart 服务已成功启用并运行。" ;;
-        "install.podman.user_success.en") text="✅ User-level podman-restart service successfully enabled and running." ;;
-        "install.podman.user_fail.zh") text="⚠️ 用户级 podman-restart 服务启用失败。\n提示：这通常是因为缺少 XDG_RUNTIME_DIR 或 dbus 没有运行。您可以尝试手动执行: systemctl --user enable --now podman-restart.service" ;;
-        "install.podman.user_fail.en") text="⚠️ Failed to enable user-level podman-restart service.\nHint: This is usually due to missing XDG_RUNTIME_DIR or dbus not running. Try manually: systemctl --user enable --now podman-restart.service" ;;
-        "install.podman.cleanup.zh") text="清理临时容器以移交 systemd 接管..." ;;
-        "install.podman.cleanup.en") text="Cleaning up temp containers to hand over to systemd..." ;;
-        "install.podman.systemd_reload.zh") text="正在重载 systemd 并启动 hiclaw.service..." ;;
-        "install.podman.systemd_reload.en") text="Reloading systemd and starting hiclaw.service..." ;;
+        "install.podman.root_setup.zh") text="检测到 root 用户。正在配置系统级 hiclaw-podman-restart 服务..." ;;
+        "install.podman.root_setup.en") text="Root user detected. Configuring system-wide hiclaw-podman-restart service..." ;;
+        "install.podman.root_success.zh") text="✅ 系统级 hiclaw-podman-restart 服务已成功启用并运行。" ;;
+        "install.podman.root_success.en") text="✅ System-wide hiclaw-podman-restart service successfully enabled and running." ;;
+        "install.podman.root_fail.zh") text="⚠️ 系统级 hiclaw-podman-restart 服务启用失败，请稍后手动检查。" ;;
+        "install.podman.root_fail.en") text="⚠️ Failed to enable system-wide hiclaw-podman-restart service. Please check manually later." ;;
+        "install.podman.user_setup.zh") text="检测到普通用户 (%s)。正在配置用户级 hiclaw-podman-restart 服务..." ;;
+        "install.podman.user_setup.en") text="Non-root user (%s) detected. Configuring user-level hiclaw-podman-restart service..." ;;
+        "install.podman.user_success.zh") text="✅ 用户级 hiclaw-podman-restart 服务已成功启用并运行。" ;;
+        "install.podman.user_success.en") text="✅ User-level hiclaw-podman-restart service successfully enabled and running." ;;
+        "install.podman.user_fail.zh") text="⚠️ 用户级 hiclaw-podman-restart 服务启用失败。\n提示：这通常是因为缺少 XDG_RUNTIME_DIR 或 dbus 没有运行。您可以尝试手动执行: systemctl --user enable --now hiclaw-podman-restart.service" ;;
+        "install.podman.user_fail.en") text="⚠️ Failed to enable user-level hiclaw-podman-restart service.\nHint: This is usually due to missing XDG_RUNTIME_DIR or dbus not running. Try manually: systemctl --user enable --now hiclaw-podman-restart.service" ;;
         "install.podman.success.zh") text="Podman 开机自启配置完成。" ;;
         "install.podman.success.en") text="Podman autostart successfully configured." ;;
         # --- Worker idle timeout ---
@@ -2760,6 +2756,8 @@ ExecStop=/usr/bin/podman \$LOGGING stop --filter name=hiclaw --filter restart-po
 [Install]
 WantedBy=default.target"
 
+    local _autostart_ok=0
+
     if [ "${current_user}" = "root" ]; then
         # Rootful Mode (System-wide dedicated service)
         log "$(msg install.podman.root_setup)"
@@ -2772,29 +2770,35 @@ WantedBy=default.target"
 
         if systemctl enable --now hiclaw-podman-restart.service >/dev/null 2>&1; then
             log "$(msg install.podman.root_success)"
+            _autostart_ok=1
         else
             log "$(msg install.podman.root_fail)"
         fi
-    else
+else
         # Rootless Mode (User-level dedicated service)
         log "$(msg install.podman.user_setup "${current_user}")"
 
+        local _linger_ok=0
+
         # 1. Enable Linger for background execution (Graceful escalation strategy)
-        if ! loginctl show-user "${current_user}" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then
+        if loginctl show-user "${current_user}" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then
+            _linger_ok=1
+        else
             log "$(msg install.podman.linger_enable)"
 
-            # Step A: Try to enable linger natively without sudo (works via Polkit on modern desktops)
+            # Step A: Try to enable linger natively without sudo
             if loginctl enable-linger "${current_user}" >/dev/null 2>&1; then
                 log "Successfully enabled systemd linger natively."
+                _linger_ok=1
             else
-                # Step B: Fallback to sudo if the native non-privileged execution fails
+                # Step B: Fallback to sudo
                 log "Native linger enablement failed. Distro security policy requires privileges."
                 if command -v sudo >/dev/null 2>&1; then
                     log "Attempting to enable systemd linger via sudo (enter password if prompted)..."
                     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-                        sudo -n loginctl enable-linger "${current_user}" 2>/dev/null || log "$(msg install.podman.linger_warn)"
+                        sudo -n loginctl enable-linger "${current_user}" 2>/dev/null && _linger_ok=1 || log "$(msg install.podman.linger_warn)"
                     else
-                        sudo loginctl enable-linger "${current_user}" || log "$(msg install.podman.linger_warn)"
+                        sudo loginctl enable-linger "${current_user}" && _linger_ok=1 || log "$(msg install.podman.linger_warn)"
                     fi
                 else
                     log "$(msg install.podman.linger_warn)"
@@ -2815,12 +2819,22 @@ WantedBy=default.target"
         systemctl --user daemon-reload >/dev/null 2>&1 || true
 
         if systemctl --user enable --now hiclaw-podman-restart.service >/dev/null 2>&1; then
-             log "$(msg install.podman.user_success)"
+            log "$(msg install.podman.user_success)"
+            # Crucial: Only consider autostart fully successful if systemd linger is also enabled
+            if [ "${_linger_ok}" = "1" ]; then
+                _autostart_ok=1
+            else
+                log "⚠️ Service enabled, but since systemd linger is not active, containers will not auto-recover on system reboot."
+            fi
         else
-             log "$(msg install.podman.user_fail)"
+            log "$(msg install.podman.user_fail)"
         fi
     fi
-    log "$(msg install.podman.success)"
+
+    # Only print final success banner if the service AND linger were actually enabled
+    if [ "${_autostart_ok}" = "1" ]; then
+        log "$(msg install.podman.success)"
+    fi
 }
 
 # ============================================================

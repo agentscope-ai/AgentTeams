@@ -290,78 +290,134 @@ _snapshot_hermes_sessions() {
     local container="$1"
     local state_db="$2"
 
-    docker exec -i -e HERMES_STATE_DB="$state_db" "$container" python3 - <<'PY'
+    local output status
+    output=$(docker exec -i \
+        -e HERMES_STATE_DB="$state_db" \
+        -e HERMES_METRICS_SCHEMA_WAIT_SECONDS="${HERMES_METRICS_SCHEMA_WAIT_SECONDS:-15}" \
+        "$container" python3 - <<'PY' 2>&1
 import datetime
 import json
 import os
 import sqlite3
+import time
+
+
+def emit_empty() -> None:
+    print(json.dumps({"sessions": {}}))
+
+
+def is_expected_operational_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc).lower()
+    return (
+        "no such table: sessions" in msg
+        or "no such table: messages" in msg
+        or "database is locked" in msg
+        or "unable to open database file" in msg
+    )
+
+
+def has_required_schema(cur: sqlite3.Cursor) -> bool:
+    rows = cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()
+    tables = {row["name"] for row in rows}
+    return "sessions" in tables and "messages" in tables
 
 db_path = os.environ.get("HERMES_STATE_DB", "")
 if not db_path or not os.path.exists(db_path):
-    print(json.dumps({"sessions": {}}))
+    emit_empty()
     raise SystemExit(0)
 
-conn = sqlite3.connect(db_path)
-conn.row_factory = sqlite3.Row
-cur = conn.cursor()
-query = """
-SELECT
-    s.id,
-    s.started_at,
-    COALESCE(s.ended_at, MAX(m.timestamp), s.started_at) AS end_ts,
-    s.input_tokens,
-    s.output_tokens,
-    s.cache_read_tokens,
-    s.cache_write_tokens,
-    SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) AS llm_calls
-FROM sessions s
-LEFT JOIN messages m ON m.session_id = s.id
-GROUP BY
-    s.id,
-    s.started_at,
-    s.ended_at,
-    s.input_tokens,
-    s.output_tokens,
-    s.cache_read_tokens,
-    s.cache_write_tokens
-ORDER BY s.started_at DESC
-"""
+try:
+    conn = sqlite3.connect(db_path, timeout=1)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
 
-def iso(ts: float | None) -> str:
-    if ts is None:
-        return ""
-    return datetime.datetime.fromtimestamp(
-        float(ts), tz=datetime.timezone.utc
-    ).isoformat()
+    wait_seconds = float(os.environ.get("HERMES_METRICS_SCHEMA_WAIT_SECONDS", "15"))
+    deadline = time.time() + max(0, wait_seconds)
+    while True:
+        try:
+            if has_required_schema(cur):
+                break
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc).lower():
+                raise
 
-out = {"sessions": {}}
-for row in cur.execute(query):
-    start = float(row["started_at"] or 0)
-    end = float(row["end_ts"] or start)
-    input_tokens = int(row["input_tokens"] or 0)
-    output_tokens = int(row["output_tokens"] or 0)
-    cache_read = int(row["cache_read_tokens"] or 0)
-    cache_write = int(row["cache_write_tokens"] or 0)
-    out["sessions"][row["id"]] = {
-        "llm_calls": int(row["llm_calls"] or 0),
-        "tokens": {
-            "input": input_tokens,
-            "output": output_tokens,
-            "cache_read": cache_read,
-            "cache_write": cache_write,
-            "total": input_tokens + output_tokens,
-        },
-        "timing": {
-            "start_epoch": start,
-            "end_epoch": end,
-            "start": iso(start),
-            "end": iso(end),
-            "duration_seconds": max(0, int(end - start)),
-        },
-    }
+        if time.time() >= deadline:
+            emit_empty()
+            raise SystemExit(0)
+        time.sleep(1)
 
-print(json.dumps(out))
+    query = """
+    SELECT
+        s.id,
+        s.started_at,
+        COALESCE(s.ended_at, MAX(m.timestamp), s.started_at) AS end_ts,
+        s.input_tokens,
+        s.output_tokens,
+        s.cache_read_tokens,
+        s.cache_write_tokens,
+        SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) AS llm_calls
+    FROM sessions s
+    LEFT JOIN messages m ON m.session_id = s.id
+    GROUP BY
+        s.id,
+        s.started_at,
+        s.ended_at,
+        s.input_tokens,
+        s.output_tokens,
+        s.cache_read_tokens,
+        s.cache_write_tokens
+    ORDER BY s.started_at DESC
+    """
+
+    def iso(ts: float | None) -> str:
+        if ts is None:
+            return ""
+        return datetime.datetime.fromtimestamp(
+            float(ts), tz=datetime.timezone.utc
+        ).isoformat()
+
+    out = {"sessions": {}}
+    for row in cur.execute(query):
+        start = float(row["started_at"] or 0)
+        end = float(row["end_ts"] or start)
+        input_tokens = int(row["input_tokens"] or 0)
+        output_tokens = int(row["output_tokens"] or 0)
+        cache_read = int(row["cache_read_tokens"] or 0)
+        cache_write = int(row["cache_write_tokens"] or 0)
+        out["sessions"][row["id"]] = {
+            "llm_calls": int(row["llm_calls"] or 0),
+            "tokens": {
+                "input": input_tokens,
+                "output": output_tokens,
+                "cache_read": cache_read,
+                "cache_write": cache_write,
+                "total": input_tokens + output_tokens,
+            },
+            "timing": {
+                "start_epoch": start,
+                "end_epoch": end,
+                "start": iso(start),
+                "end": iso(end),
+                "duration_seconds": max(0, int(end - start)),
+            },
+        }
+
+    print(json.dumps(out))
+except sqlite3.OperationalError as exc:
+    if is_expected_operational_error(exc):
+        emit_empty()
+        raise SystemExit(0)
+    raise
 PY
+    )
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$output" >&2
+        return "$status"
+    fi
+    printf '%s\n' "$output"
 }
 
 # Collect metrics for the latest Hermes session from state.db.

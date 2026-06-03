@@ -21,7 +21,7 @@ spec:
                   description: LLM model ID (e.g. claude-sonnet-4-6, qwen3.6-plus)
                 runtime:
                   type: string
-                  enum: [openclaw, copaw, hermes]
+                  enum: [openclaw, copaw, hermes, openhuman]
                   description: |
                     Agent runtime. When omitted the controller falls back to
                     HICLAW_DEFAULT_WORKER_RUNTIME (set at install time), and

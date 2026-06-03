@@ -9,9 +9,10 @@ If the admin asks you to import an existing Worker template, search a registry f
 | "copaw", "Python worker", "pip worker", "host worker" | `copaw` | |
 | "local worker", "local mode", "access my local environment", "run on my machine" | `copaw` | `--remote` |
 | "hermes", "hermes worker", "hermes-agent" | `hermes` | |
+| "openhuman", "OpenHuman worker", "openhuman framework" | `openhuman` | |
 | "openclaw", "container worker", "docker worker", or none of the above | default (uses `${HICLAW_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 
-When in doubt, ask: "Should this be a copaw (Python, ~150MB RAM), openclaw (Node.js, ~500MB RAM), or hermes (Python, ~200MB RAM) worker?"
+When in doubt, ask: "Should this be a copaw (Python, ~150MB RAM), openclaw (Node.js, ~500MB RAM), hermes (Python, ~200MB RAM), or openhuman (Rust, ~300MB RAM, native Matrix E2EE) worker?"
 
 ## Step 0.5: Receive configuration from AGENTS.md
 
@@ -100,7 +101,7 @@ hiclaw create worker \
   [--model <MODEL_ID>] \
   [--mcp-servers s1,s2] \
   [--skills s1,s2] \
-  [--runtime openclaw|copaw|hermes] \
+  [--runtime openclaw|copaw|hermes|openhuman] \
   -o json
 ```
 
@@ -118,7 +119,7 @@ Escape rules inside the `--soul "..."` string:
 | `--model` | Model ID. If not specified, defaults to `$HICLAW_DEFAULT_MODEL` (set at install time and propagated to your container by the controller); falls back to `qwen3.5-plus` only when that env var is also unset. |
 | `--skills` | Comma-separated built-in skills to assign |
 | `--mcp-servers` | Comma-separated MCP servers to authorize |
-| `--runtime` | Agent runtime: `openclaw` (default), `copaw`, or `hermes` |
+| `--runtime` | Agent runtime: `openclaw` (default), `copaw`, `hermes`, or `openhuman` |
 | `--no-wait` | **Strongly recommended.** Return as soon as the controller accepts the create request (~1s) instead of blocking up to 3 minutes for `phase=Ready`. Always pair with the Step 2.5 poll. |
 | `-o json` | Output full JSON response from controller |
 
@@ -152,6 +153,7 @@ This command returns ALL workers with their current `phase`:
 - OpenClaw Worker: 10-30 seconds
 - QwenPaw Worker: 15-45 seconds
 - Hermes Worker: 15-45 seconds
+- OpenHuman Worker: 15-45 seconds
 
 Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after ~90s, report the situation to admin — but do **NOT** abandon the CLI and try to create the Worker again via curl or any other path. The create request was already accepted; a duplicate POST will fail with 409 Conflict and confuse the picture.
 

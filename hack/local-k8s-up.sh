@@ -72,6 +72,7 @@ CONTROLLER_IMAGE="hiclaw/hiclaw-controller:local"
 WORKER_IMAGE="hiclaw/worker-agent:local"
 COPAW_WORKER_IMAGE="hiclaw/copaw-worker:local"
 HERMES_WORKER_IMAGE="hiclaw/hermes-worker:local"
+OPENHUMAN_WORKER_IMAGE="hiclaw/openhuman-worker:local"
 HELM_IMAGE_OVERRIDES=""
 
 if [ "$SKIP_BUILD" = "0" ]; then
@@ -122,6 +123,10 @@ if [ "$SKIP_BUILD" = "0" ]; then
         --build-context shared="${PROJECT_ROOT}/shared/lib" \
         -f "${PROJECT_ROOT}/hermes/Dockerfile" "${PROJECT_ROOT}/hermes"
 
+    log "Building worker image (openhuman)..."
+    docker build -t "$OPENHUMAN_WORKER_IMAGE" \
+        -f "${PROJECT_ROOT}/openhuman/Dockerfile" "${PROJECT_ROOT}"
+
     log "Loading images into kind cluster..."
     kind load docker-image "$MANAGER_IMAGE" --name "$CLUSTER_NAME"
     kind load docker-image "$COPAW_MANAGER_IMAGE" --name "$CLUSTER_NAME"
@@ -129,6 +134,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
     kind load docker-image "$WORKER_IMAGE" --name "$CLUSTER_NAME"
     kind load docker-image "$COPAW_WORKER_IMAGE" --name "$CLUSTER_NAME"
     kind load docker-image "$HERMES_WORKER_IMAGE" --name "$CLUSTER_NAME"
+    kind load docker-image "$OPENHUMAN_WORKER_IMAGE" --name "$CLUSTER_NAME"
 
     # Pre-load Docker Hub images that Kind nodes may not be able to pull directly
     # (e.g., behind GFW or with unreliable Docker Hub access)
@@ -160,6 +166,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openclaw.repository=hiclaw/worker-agent --set worker.defaultImage.openclaw.tag=local"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.copaw.repository=hiclaw/copaw-worker --set worker.defaultImage.copaw.tag=local"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.hermes.repository=hiclaw/hermes-worker --set worker.defaultImage.hermes.tag=local"
+    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openhuman.repository=hiclaw/openhuman-worker --set worker.defaultImage.openhuman.tag=local"
 
     log "Local images built and loaded"
 else

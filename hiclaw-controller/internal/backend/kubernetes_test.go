@@ -432,18 +432,20 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		{"openclaw", RuntimeOpenClaw, "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 		{"hermes", RuntimeHermes, "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 		{"copaw", RuntimeCopaw, "/root/.copaw-worker", ""},
+		{"openhuman", RuntimeOpenHuman, "/home/openhuman/.openhuman", ""},
 		{"empty_default", "", "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:         "hiclaw",
-				WorkerImage:       "hiclaw/worker-agent:latest",
-				CopawWorkerImage:  "hiclaw/copaw-worker:latest",
-				HermesWorkerImage: "hiclaw/hermes-worker:latest",
-				WorkerCPU:         "1000m",
-				WorkerMemory:      "2Gi",
+				Namespace:            "hiclaw",
+				WorkerImage:          "hiclaw/worker-agent:latest",
+				CopawWorkerImage:     "hiclaw/copaw-worker:latest",
+				HermesWorkerImage:    "hiclaw/hermes-worker:latest",
+				OpenHumanWorkerImage: "hiclaw/openhuman-worker:latest",
+				WorkerCPU:            "1000m",
+				WorkerMemory:         "2Gi",
 			}, "hiclaw-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
@@ -488,21 +490,24 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw", RuntimeCopaw, "", "hiclaw/copaw-worker:latest", RuntimeCopaw},
 		{"explicit_hermes", RuntimeHermes, "", "hiclaw/hermes-worker:latest", RuntimeHermes},
 		{"explicit_openclaw", RuntimeOpenClaw, "", "hiclaw/worker-agent:latest", RuntimeOpenClaw},
+		{"explicit_openhuman", RuntimeOpenHuman, "", "hiclaw/openhuman-worker:latest", RuntimeOpenHuman},
 		{"empty_no_fallback", "", "", "hiclaw/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_with_copaw_fallback", "", RuntimeCopaw, "hiclaw/copaw-worker:latest", RuntimeCopaw},
 		{"empty_with_hermes_fallback", "", RuntimeHermes, "hiclaw/hermes-worker:latest", RuntimeHermes},
+		{"empty_with_openhuman_fallback", "", RuntimeOpenHuman, "hiclaw/openhuman-worker:latest", RuntimeOpenHuman},
 		{"explicit_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "hiclaw/worker-agent:latest", RuntimeOpenClaw},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:         "hiclaw",
-				WorkerImage:       "hiclaw/worker-agent:latest",
-				CopawWorkerImage:  "hiclaw/copaw-worker:latest",
-				HermesWorkerImage: "hiclaw/hermes-worker:latest",
-				WorkerCPU:         "1000m",
-				WorkerMemory:      "2Gi",
+				Namespace:            "hiclaw",
+				WorkerImage:          "hiclaw/worker-agent:latest",
+				CopawWorkerImage:     "hiclaw/copaw-worker:latest",
+				HermesWorkerImage:    "hiclaw/hermes-worker:latest",
+				OpenHumanWorkerImage: "hiclaw/openhuman-worker:latest",
+				WorkerCPU:            "1000m",
+				WorkerMemory:         "2Gi",
 			}, "hiclaw-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{

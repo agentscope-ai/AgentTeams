@@ -1198,21 +1198,20 @@ func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.T
 		// leader after detachment.
 		managerMatrixID := r.Legacy.MatrixUserID("manager")
 		adminMatrixID := teamAdminMatrixID(t)
-		if adminMatrixID != "" {
-			for _, ref := range t.Spec.WorkerMembers {
-				var w v1beta1.Worker
-				key := client.ObjectKey{Name: ref.Name, Namespace: t.Namespace}
-				if err := r.Get(ctx, key, &w); err != nil {
-					continue
-				}
-				rn := w.Spec.EffectiveWorkerName(w.Name)
-				if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
-					WorkerName:     rn,
-					GroupAllowFrom: []string{managerMatrixID, adminMatrixID},
-					DMAllowFrom:    []string{managerMatrixID, adminMatrixID},
-				}); err != nil {
-					logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", rn)
-				}
+		standaloneAllowFrom := uniqueTeamStrings([]string{managerMatrixID, adminMatrixID})
+		for _, ref := range t.Spec.WorkerMembers {
+			var w v1beta1.Worker
+			key := client.ObjectKey{Name: ref.Name, Namespace: t.Namespace}
+			if err := r.Get(ctx, key, &w); err != nil {
+				continue
+			}
+			rn := w.Spec.EffectiveWorkerName(w.Name)
+			if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
+				WorkerName:     rn,
+				GroupAllowFrom: standaloneAllowFrom,
+				DMAllowFrom:    standaloneAllowFrom,
+			}); err != nil {
+				logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", rn)
 			}
 		}
 	}

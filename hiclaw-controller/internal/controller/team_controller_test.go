@@ -1425,6 +1425,58 @@ func TestReconcileTeamDecoupled_MemberRemoved(t *testing.T) {
 	}
 }
 
+func TestHandleDeleteDecoupledResetsChannelPolicyWithoutTeamAdmin(t *testing.T) {
+	ctx := context.Background()
+	legacy, _ := newTestLegacy(t)
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev", Role: "worker"},
+			},
+		},
+	}
+
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{
+		Client:      newTeamTestClient(t, team.DeepCopy(), leaderWorker.DeepCopy(), worker.DeepCopy()),
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    deployer,
+		Legacy:      legacy,
+	}
+
+	if err := r.handleDeleteDecoupled(ctx, team); err != nil {
+		t.Fatalf("handleDeleteDecoupled: %v", err)
+	}
+
+	policies := map[string]service.InjectChannelPolicyRequest{}
+	for _, call := range deployer.Calls.InjectChannelPolicy {
+		policies[call.WorkerName] = call
+	}
+	for _, workerName := range []string{"lead", "dev"} {
+		policy, ok := policies[workerName]
+		if !ok {
+			t.Fatalf("missing channel policy reset for %s; calls=%+v", workerName, deployer.Calls.InjectChannelPolicy)
+		}
+		if len(policy.GroupAllowFrom) != 1 || policy.GroupAllowFrom[0] != "@manager:matrix.local" {
+			t.Fatalf("%s groupAllowFrom=%v, want [@manager:matrix.local]", workerName, policy.GroupAllowFrom)
+		}
+		if len(policy.DMAllowFrom) != 1 || policy.DMAllowFrom[0] != "@manager:matrix.local" {
+			t.Fatalf("%s dmAllowFrom=%v, want [@manager:matrix.local]", workerName, policy.DMAllowFrom)
+		}
+	}
+}
+
 func TestReconcileTeamDecoupled_HeartbeatFromTeamCR(t *testing.T) {
 	ctx := context.Background()
 

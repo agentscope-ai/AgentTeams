@@ -190,7 +190,7 @@ func TestAuthorizeAIRoutesSerializesRouteUpdates(t *testing.T) {
 		wg.Add(1)
 		go func(consumer string) {
 			defer wg.Done()
-			errs <- c.AuthorizeAIRoutes(context.Background(), consumer)
+			errs <- c.AuthorizeAIRoutes(context.Background(), consumer, "")
 		}(consumer)
 	}
 	wg.Wait()

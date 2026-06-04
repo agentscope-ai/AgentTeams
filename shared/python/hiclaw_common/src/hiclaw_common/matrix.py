@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -40,6 +41,40 @@ from hiclaw_common.policies import DualAllowList, HistoryBuffer, apply_outbound_
 logger = logging.getLogger(__name__)
 
 _STARTUP_GRACE_MS = 10_000
+
+try:
+    from markdown_it import MarkdownIt as _MarkdownIt
+    _md = _MarkdownIt()
+    _HAVE_MD = True
+except ImportError:
+    _HAVE_MD = False
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def _to_html(text: str) -> str:
+    """Convert reply text (markdown + <think> tags) to Matrix-compatible HTML.
+
+    <think>...</think> → <blockquote><em>💭 ...</em></blockquote>
+    Markdown bold/blockquote/code rendered via markdown-it-py when available.
+    """
+    def _render_think(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        if _HAVE_MD:
+            inner_html = _md.render(inner).strip()
+        else:
+            inner_html = inner.replace("\n", "<br/>")
+        return f"<blockquote>💭 {inner_html}</blockquote>"
+
+    html = _THINK_RE.sub(_render_think, text)
+
+    if _HAVE_MD:
+        return _md.render(html)
+
+    # Minimal regex fallback: bold + inline code only
+    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
+    html = re.sub(r"`([^`]+)`", r"<code>\1</code>", html)
+    return html
 _TYPING_KEEPALIVE_INTERVAL = 30  # seconds between keepalive renewals
 _TYPING_TIMEOUT_MS = 40_000       # mautrix typing timeout per renewal
 
@@ -149,7 +184,12 @@ class MautrixRelay:
             except Exception:
                 pass
 
-        content: dict = {"msgtype": "m.text", "body": reply}
+        content: dict = {
+            "msgtype": "m.text",
+            "body": reply,
+            "format": "org.matrix.custom.html",
+            "formatted_body": _to_html(reply),
+        }
         apply_outbound_mentions(content, self_user_id=self._user_id)
 
         try:

@@ -184,12 +184,40 @@ class Worker:
 
         timeout_seconds = int(os.environ.get("HICLAW_HARNESS_TIMEOUT_MS", "600000")) / 1000.0
 
+        harness_env = self._harness.env(self.sync.get_config() if self.sync else {})
+        merged_env = {**os.environ, **harness_env}
+
+        # Slash command → interactive REPL via pty
+        stripped = message.lstrip()
+        if stripped.startswith("/") and len(stripped) > 1 and not stripped[1:2].isspace():
+            logger.info("invoke_harness: slash command detected, using REPL path")
+            try:
+                text, sid = await asyncio.wait_for(
+                    self._harness.invoke_repl(
+                        stripped,
+                        session_id,
+                        self.config.workspace_dir,
+                        merged_env,
+                        timeout_seconds,
+                    ),
+                    timeout=timeout_seconds + 5,
+                )
+                return text, sid
+            except NotImplementedError:
+                logger.warning(
+                    "Harness %s lacks REPL support, falling back to -p mode",
+                    self._harness.name,
+                )
+            except asyncio.TimeoutError:
+                return "Sorry, the REPL command timed out.", session_id
+            except Exception as exc:
+                logger.error("REPL invocation failed: %s", exc)
+                return f"Sorry, REPL error: {exc}", session_id
+
         try:
             argv = self._harness.build_command(
                 message, session_id, self.config.workspace_dir
             )
-            harness_env = self._harness.env(self.sync.get_config() if self.sync else {})
-            merged_env = {**os.environ, **harness_env}
 
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -207,7 +235,18 @@ class Worker:
 
                 # Read stdout line by line as Claude streams
                 while True:
-                    line_bytes = await proc.stdout.readline()
+                    try:
+                        line_bytes = await proc.stdout.readline()
+                    except asyncio.LimitOverrunError as exc:
+                        logger.warning("claude stream: line exceeded 64KB limit (%d bytes), stopping", exc.consumed)
+                        state.setdefault("text_chunks", []).append(
+                            "\n> ⚠️ **stream truncated** — response line exceeded 64 KB limit\n"
+                        )
+                        try:
+                            await proc.stdout.read(exc.consumed)
+                        except Exception:
+                            pass
+                        break
                     if not line_bytes:
                         break
                     line = line_bytes.decode("utf-8", errors="replace").strip()

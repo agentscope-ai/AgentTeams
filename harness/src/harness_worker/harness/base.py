@@ -40,6 +40,21 @@ class BaseHarness(ABC):
           session_id:  str | None — session id from result event
         """
 
+    async def invoke_repl(
+        self,
+        message: str,
+        session_id: str | None,
+        workspace: Path,
+        env: dict[str, str],
+        timeout_seconds: float,
+    ) -> tuple[str, str | None]:
+        """Run an interactive REPL command via pty. Returns (text, session_id).
+
+        Override in harnesses that support built-in slash commands.
+        Default raises NotImplementedError so worker falls back gracefully.
+        """
+        raise NotImplementedError(f"{self.name} does not support REPL commands")
+
 
 _HARNESS_REGISTRY: dict[str, type[BaseHarness]] = {}
 

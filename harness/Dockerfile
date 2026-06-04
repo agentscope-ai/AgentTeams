@@ -84,6 +84,13 @@ COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
 # Copy harness-worker source directly to site-packages
 COPY src/harness_worker /opt/venv/harness/lib/python3.11/site-packages/harness_worker
 
+# Overlay hiclaw_common source (picks up changes without invalidating the heavy pip-install layer)
+COPY --from=shared-python hiclaw_common/src/hiclaw_common /opt/venv/harness/lib/python3.11/site-packages/hiclaw_common
+
+# markdown-it-py: required by hiclaw_common.matrix for HTML formatting.
+# Explicit step so adding it to hiclaw_common[matrix] doesn't bust the heavy pip cache above.
+RUN /opt/venv/harness/bin/pip install --no-cache-dir 'markdown-it-py>=3.0'
+
 # Create entrypoint wrapper script
 RUN echo '#!/bin/bash\nexec /opt/venv/harness/bin/python -m harness_worker.cli "$@"' > /usr/local/bin/harness-worker && chmod +x /usr/local/bin/harness-worker
 

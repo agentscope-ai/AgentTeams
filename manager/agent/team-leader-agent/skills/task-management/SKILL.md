@@ -101,6 +101,38 @@ Keep machine-facing identifiers and protocol tokens unchanged:
 - `BLOCKED`
 - `INTERRUPTED`
 
+## Worker Name Canonicality
+
+`assigned_to`, Matrix @mention, and all task tracking fields must use the Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract it mechanically — never guess, strip, or transform.
+
+### Lookup (mandatory before assigning any task)
+
+```bash
+# 1. Resolve team CR name
+TEAM_CR="$(hiclaw get workers "${HICLAW_WORKER_CR_NAME:-$HICLAW_WORKER_NAME}" -o json | jq -r '.team')"
+
+# 2. Get all team workers
+hiclaw get workers --team "$TEAM_CR" -o json
+
+# 3. Extract localpart from matrixUserID for each worker
+#    @worker-issue-resolver:domain → worker-issue-resolver
+```
+
+Use the extracted localpart verbatim everywhere:
+
+- `manage-team-state.sh --assigned-to <localpart>`
+- Matrix @mention: `@<localpart>:<domain>`
+- `meta.json` `assigned_to` field
+
+### Common mistake
+
+CLI `.name` may include a deployment prefix (e.g. `magic-cn-x0a4t4pr201-worker-issue-resolver`). **Do NOT use `.name` directly and do NOT manually strip prefixes.** Always extract the localpart from `.matrixUserID` instead.
+
+| CLI `.name` | `matrixUserID` | ✅ `assigned_to` | ❌ Wrong |
+|---|---|---|---|
+| `magic-cn-...-worker-issue-resolver` | `@worker-issue-resolver:domain` | `worker-issue-resolver` | `issue-resolver` |
+| `magic-cn-...-dev-worker` | `@dev-worker:domain` | `dev-worker` | `worker` |
+
 ## Delegate A Ready Node
 
 Delegate only nodes returned by:

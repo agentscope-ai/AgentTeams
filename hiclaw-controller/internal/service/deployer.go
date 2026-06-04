@@ -250,17 +250,17 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		return fmt.Errorf("config generation failed: %w", err)
 	}
 
-	// On update, preserve user-customized plugin entries (e.g. memory-core
-	// dreaming schedule) from the existing openclaw.json in storage. The
-	// generated config provides defaults for any new entries; existing
-	// user-modified entries override the generated values.
-	if req.IsUpdate {
-		if existingJSON, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json"); err == nil && len(existingJSON) > 0 {
-			if merged, mergeErr := mergeUserPluginConfig(configJSON, existingJSON); mergeErr != nil {
-				logger.Error(mergeErr, "plugin config merge failed, using generated config")
-			} else {
-				configJSON = merged
-			}
+	// Preserve user-customized plugin entries (e.g. memory-core dreaming
+	// schedule) from the existing openclaw.json in storage. This is not
+	// limited to IsUpdate: during legacy Team migration, Worker CR status is
+	// seeded before WorkerReconciler's first pass, and TeamReconciler may have
+	// already written a team-mode channel policy. Requiring IsUpdate would let
+	// that first standalone Worker pass clobber the Team overlay.
+	if existingJSON, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json"); err == nil && len(existingJSON) > 0 {
+		if merged, mergeErr := mergeUserPluginConfig(configJSON, existingJSON); mergeErr != nil {
+			logger.Error(mergeErr, "plugin config merge failed, using generated config")
+		} else {
+			configJSON = merged
 		}
 	}
 
@@ -886,6 +886,14 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 	// Team leaders get their coordination context from TeamReconciler.InjectCoordinationContext
 	// which has the full context (room IDs, worker list). Skip here to avoid overwriting.
 	if role != "team_leader" {
+		if role == "standalone" && hasDecoupledTeamContext(content) {
+			logger.Info("AGENTS.md team coordination context preserved", "worker", workerName, "role", role, "reason", "worker is likely referenced by a decoupled Team")
+			if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(content)); err != nil {
+				return err
+			}
+			logger.Info("AGENTS.md pushed to storage", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(content), "source", source)
+			return nil
+		}
 		coordCtx := agentconfig.CoordinationContext{
 			WorkerName:         workerName,
 			MatrixDomain:       d.matrixDomain,
@@ -910,6 +918,15 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 	}
 	logger.Info("AGENTS.md pushed to storage", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(content), "source", source)
 	return nil
+}
+
+func hasDecoupledTeamContext(content string) bool {
+	if !strings.Contains(content, "<!-- hiclaw-team-context-start -->") {
+		return false
+	}
+	return strings.Contains(content, "Do NOT @mention Manager") ||
+		strings.Contains(content, "- **Team Workers**:") ||
+		strings.Contains(content, "- **Team Room**:")
 }
 
 // pushBuiltinSkills copies builtin skill directories to the worker's OSS prefix.

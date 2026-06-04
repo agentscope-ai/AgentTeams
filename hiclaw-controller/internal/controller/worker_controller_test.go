@@ -1,9 +1,15 @@
 package controller
 
 import (
+	"context"
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/service"
+	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // TestWorkerMemberContext_StampsControllerAndRoleLabels verifies that a
@@ -146,5 +152,54 @@ func TestWorkerMemberContext_SpecChangedGate(t *testing.T) {
 					tc.gen, tc.observed, mctx.SpecChanged, tc.want)
 			}
 		})
+	}
+}
+
+func TestWorkerReconcilerLegacySkipsDecoupledTeamMemberStandaloneState(t *testing.T) {
+	ctx := context.Background()
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@dev:matrix.local",
+			RoomID:       "!room-dev:matrix.local",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: RoleTeamLeader.String()},
+				{Name: "dev"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(worker.DeepCopy(), team.DeepCopy()).
+		Build()
+	legacy, fakeOSS := newTestLegacy(t)
+	prov := mocks.NewMockProvisioner()
+	prov.MatrixUserIDFn = func(name string) string {
+		return "@" + name + ":matrix.local"
+	}
+	r := &WorkerReconciler{
+		Client:      c,
+		Provisioner: prov,
+		Legacy:      legacy,
+	}
+
+	r.reconcileLegacy(ctx, worker, &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixUserID: "@dev:matrix.local"},
+	})
+
+	if _, err := fakeOSS.GetObject(ctx, "agents/manager/workers-registry.json"); err == nil {
+		t.Fatalf("WorkerReconciler must not write standalone workers-registry rows for decoupled Team members")
 	}
 }

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -197,6 +198,26 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 		return
 	}
 	logger := log.FromContext(ctx)
+	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
+
+	role, inTeam, err := r.decoupledTeamRoleForWorker(ctx, w.Namespace, w.Name)
+	if err != nil {
+		logger.Error(err, "failed to check decoupled Team membership before legacy worker update (non-fatal)", "worker", w.Name)
+	}
+	if inTeam {
+		// Decoupled Team members are still reconciled by WorkerReconciler for
+		// Worker-owned lifecycle/config, but TeamReconciler owns legacy
+		// team-scoped artifacts: workers-registry role/team_id rows,
+		// Manager allow-list membership, and member channel policy overlays.
+		// Writing standalone legacy state here races with TeamReconciler and
+		// can make CI/user-visible config oscillate.
+		if role != RoleTeamLeader {
+			if err := r.Legacy.UpdateManagerGroupAllowFrom(r.Legacy.MatrixUserID(runtimeName), false); err != nil {
+				logger.Error(err, "failed to revoke standalone Manager groupAllowFrom for Team worker (non-fatal)", "worker", w.Name, "runtimeName", runtimeName)
+			}
+		}
+		return
+	}
 
 	// WorkerReconciler only handles standalone workers. Grant group-DM
 	// publish rights for the standalone worker.
@@ -206,7 +227,6 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 		}
 	}
 
-	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
 	if err := r.Legacy.UpdateWorkersRegistry(service.WorkerRegistryEntry{
 		Name:         runtimeName,
 		MatrixUserID: r.Provisioner.MatrixUserID(runtimeName),
@@ -218,6 +238,41 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 	}); err != nil {
 		logger.Error(err, "registry update failed (non-fatal)")
 	}
+}
+
+func (r *WorkerReconciler) decoupledTeamRoleForWorker(ctx context.Context, namespace, workerName string) (MemberRole, bool, error) {
+	if r.Client == nil || workerName == "" {
+		return "", false, nil
+	}
+
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams,
+		client.InNamespace(namespace),
+		client.MatchingFields{TeamWorkerMembersField: workerName},
+	); err != nil {
+		// Unit-test fake clients and older controller setups may not have the
+		// field index registered. Fall back to namespace enumeration so the
+		// safety check still works.
+		if listErr := r.List(ctx, &teams, client.InNamespace(namespace)); listErr != nil {
+			return "", false, fmt.Errorf("list teams by workerMembers index: %w; fallback list: %v", err, listErr)
+		}
+	}
+
+	for _, team := range teams.Items {
+		if len(team.Spec.WorkerMembers) == 0 {
+			continue
+		}
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name != workerName {
+				continue
+			}
+			if ref.Role == RoleTeamLeader.String() {
+				return RoleTeamLeader, true, nil
+			}
+			return RoleTeamWorker, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // workerMemberContext translates a Worker CR into a MemberContext for the
@@ -386,4 +441,3 @@ func nilIfEmpty(s string) *string {
 	}
 	return &s
 }
-

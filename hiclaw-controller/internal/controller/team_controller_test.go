@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
@@ -1551,6 +1552,25 @@ func TestWorkerToTeamMapFunc(t *testing.T) {
 	reqs = r.workerToTeamRequests(context.Background(), unknown)
 	if len(reqs) != 0 {
 		t.Errorf("expected 0 requests for unknown worker, got %d: %v", len(reqs), reqs)
+	}
+}
+
+func TestWorkerStatusChangePredicateTriggersOnWorkerSpecChange(t *testing.T) {
+	p := workerStatusChangePredicate()
+	oldW := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Generation: 1},
+		Status: v1beta1.WorkerStatus{
+			ObservedGeneration: 1,
+			Phase:              "Running",
+			MatrixUserID:       "@dev:matrix.local",
+			RoomID:             "!room-dev:matrix.local",
+		},
+	}
+	newW := oldW.DeepCopy()
+	newW.Generation = 2
+
+	if !p.Update(event.UpdateEvent{ObjectOld: oldW, ObjectNew: newW}) {
+		t.Fatalf("worker spec/generation change must enqueue owning Team so decoupled channelPolicy overlays are recalculated")
 	}
 }
 

@@ -854,6 +854,8 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 			role := RoleTeamWorker
 			if rm.ref.Name == leaderRef.Name {
 				role = RoleTeamLeader
+			} else if err := r.Legacy.UpdateManagerGroupAllowFrom(r.Legacy.MatrixUserID(rm.runtimeName), false); err != nil {
+				logger.Error(err, "failed to revoke Manager groupAllowFrom for team worker (non-fatal)", "worker", rm.runtimeName)
 			}
 			ms := decoupledMemberStatusSnapshot(rm, role)
 			r.reconcileLegacyMember(ctx, derivedTeam, decoupledMemberContext(derivedTeam, rm, role, teamRuntimeName, leaderRuntimeName), &ms)
@@ -1837,7 +1839,9 @@ func workerStatusChangePredicate() predicate.Predicate {
 			if !ok1 || !ok2 {
 				return false
 			}
-			return oldW.Status.Phase != newW.Status.Phase ||
+			return oldW.Generation != newW.Generation ||
+				oldW.Status.ObservedGeneration != newW.Status.ObservedGeneration ||
+				oldW.Status.Phase != newW.Status.Phase ||
 				oldW.Status.MatrixUserID != newW.Status.MatrixUserID ||
 				oldW.Status.RoomID != newW.Status.RoomID
 		},

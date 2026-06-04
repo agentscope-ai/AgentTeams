@@ -128,6 +128,10 @@ type Client interface {
 	// AppServiceSmokeTest verifies that a previously registered AppService
 	// is active by attempting an AS login as the sender_localpart user.
 	AppServiceSmokeTest(ctx context.Context) error
+
+	// VerifyAccessToken checks whether a user access token is still valid
+	// by calling GET /_matrix/client/v3/account/whoami. Returns nil if valid.
+	VerifyAccessToken(ctx context.Context, accessToken string) error
 }
 
 // TuwunelClient implements Client for Tuwunel (conduwuit) homeservers.
@@ -389,6 +393,20 @@ func (c *TuwunelClient) doJSONWithASToken(ctx context.Context, method, path stri
 	return c.doJSON(ctx, method, path, c.config.AppServiceToken, reqBody, respOut)
 }
 
+
+// VerifyAccessToken checks whether a user access token is still valid
+// by calling GET /_matrix/client/v3/account/whoami.
+func (c *TuwunelClient) VerifyAccessToken(ctx context.Context, accessToken string) error {
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodGet,
+		"/_matrix/client/v3/account/whoami", accessToken, nil, nil)
+	if err != nil {
+		return fmt.Errorf("verify access token: %w", err)
+	}
+	if statusCode != http.StatusOK {
+		return fmt.Errorf("verify access token: HTTP %d: %s", statusCode, truncate(respBody, 200))
+	}
+	return nil
+}
 func (c *TuwunelClient) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
 	path := fmt.Sprintf("/_matrix/client/v3/profile/%s/displayname", url.PathEscape(userID))
 	body := map[string]string{"displayname": displayName}

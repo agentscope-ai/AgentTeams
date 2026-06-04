@@ -65,7 +65,8 @@ if [ "${HICLAW_RUNTIME}" = "aliyun" ] || [ "${HICLAW_RUNTIME}" = "k8s" ]; then
         # K8s mode: controller handles initialization (admin registration, Higress setup).
         # Manager only needs credentials injected by the ManagerReconciler.
         : "${HICLAW_MANAGER_GATEWAY_KEY:?HICLAW_MANAGER_GATEWAY_KEY is required (injected by controller)}"
-        : "${HICLAW_MANAGER_PASSWORD:?HICLAW_MANAGER_PASSWORD is required (injected by controller)}"
+        # HICLAW_MANAGER_PASSWORD is optional: not needed in AppService mode
+        # (token obtained via AS login), only required in legacy password mode.
     else
         # Cloud (aliyun) mode: Manager still does its own initialization
         : "${HICLAW_REGISTRATION_TOKEN:?HICLAW_REGISTRATION_TOKEN is required}"

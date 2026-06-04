@@ -46,7 +46,10 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	env := map[string]string{
 		"HICLAW_MANAGER_NAME":        managerName,
 		"HICLAW_MANAGER_GATEWAY_KEY": prov.GatewayKey,
-		"HICLAW_MANAGER_PASSWORD":    prov.MatrixPassword,
+		// In AS mode MatrixPassword is empty; set a placeholder so the
+		// entrypoint's :? validation passes. The password is never used
+		// for login in AS mode (token obtained via AS login instead).
+		"HICLAW_MANAGER_PASSWORD":    valueOrPlaceholder(prov.MatrixPassword),
 		"HICLAW_FS_ACCESS_KEY":       managerName,
 		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
 		"OPENCLAW_DISABLE_BONJOUR":   "1",
@@ -139,4 +142,13 @@ func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	if b.defaults.NacosAuthType != "" {
 		env["NACOS_AUTH_TYPE"] = b.defaults.NacosAuthType
 	}
+}
+
+// valueOrPlaceholder returns v if non-empty, otherwise a harmless placeholder.
+// Used for env vars that must be present but are unused in certain modes.
+func valueOrPlaceholder(v string) string {
+	if v != "" {
+		return v
+	}
+	return "as-mode-not-used"
 }

@@ -607,6 +607,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		ControllerName: a.cfg.ControllerName,
 		SocketPath:     a.cfg.SocketPath,
 		MatrixConfig:   a.cfg.MatrixConfig(),
+		Provisioner:    a.provisioner,
 	})
 	return nil
 }

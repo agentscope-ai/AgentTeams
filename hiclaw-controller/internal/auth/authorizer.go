@@ -16,7 +16,8 @@ const (
 	ActionEnsureReady Action = "ensure-ready"
 	ActionReady       Action = "ready"
 	ActionSTS         Action = "sts"
-	ActionStatus      Action = "status"
+	ActionStatus             Action = "status"
+	ActionRefreshMatrixToken Action = "refresh-matrix-token"
 	ActionGateway     Action = "gateway"
 )
 
@@ -129,6 +130,8 @@ func (a *Authorizer) authorizeWorkerSelfAction(caller *CallerIdentity, req Authz
 	case ActionGet:
 		return a.requireSelf(caller, req)
 	case ActionStatus:
+		return a.requireSelf(caller, req)
+	case ActionRefreshMatrixToken:
 		return a.requireSelf(caller, req)
 	default:
 		return deny(caller, req)

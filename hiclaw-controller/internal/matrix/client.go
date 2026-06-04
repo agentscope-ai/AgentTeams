@@ -117,8 +117,13 @@ type Client interface {
 	SetPasswordAsAdmin(ctx context.Context, userID, password string) error
 
 	// RegisterAppService registers an Application Service with the homeserver
-	// via the admin bot command. Processing is asynchronous.
+	// via the admin bot command. Includes smoke-test-first idempotency and
+	// unregister-before-register fallback for safe token rotation.
 	RegisterAppService(ctx context.Context, reg AppServiceRegistration) error
+
+	// UnregisterAppService removes an Application Service registration by ID.
+	// Uses admin bot command; does not require a valid as_token.
+	UnregisterAppService(ctx context.Context, id string) error
 
 	// AppServiceSmokeTest verifies that a previously registered AppService
 	// is active by attempting an AS login as the sender_localpart user.

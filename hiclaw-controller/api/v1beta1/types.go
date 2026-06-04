@@ -87,6 +87,19 @@ type Worker struct {
 	Status            WorkerStatus `json:"status,omitempty"`
 }
 
+// AgentConfigRef references external agent configuration (SOUL.md, AGENTS.md).
+// When set and inline Soul/Agents fields are empty, content is loaded from
+// the referenced source. Inline fields always take precedence.
+type AgentConfigRef struct {
+	// Source type: "configmap", "nacos", "minio"
+	Source string `json:"source"`
+
+	// For configmap: "namespace/name"
+	// For nacos: "nacos://namespace/dataId?group=xxx"
+	// For minio: "bucket/key-prefix"
+	URI string `json:"uri"`
+}
+
 type WorkerSpec struct {
 	Model         string              `json:"model"`
 	Runtime       string              `json:"runtime,omitempty"`    // openclaw | copaw | hermes (default: openclaw)
@@ -135,6 +148,11 @@ type WorkerSpec struct {
 	// embed WorkerSpec-shaped hashes keep a stable spec hash when the
 	// field is absent.
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// AgentConfigRef references external agent configuration sources.
+	// When set and inline Soul/Agents fields are empty, content is loaded
+	// from the referenced source. Inline fields always take precedence.
+	AgentConfigRef *AgentConfigRef `json:"agentConfigRef,omitempty"`
 }
 
 // DesiredContainerMan returns the effective desired containerManaged, defaulting to true.
@@ -275,6 +293,11 @@ type LeaderSpec struct {
 	// hashMemberSourceSpec stability for Teams that never set this
 	// field.
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// AgentConfigRef references external agent configuration sources.
+	// When set and inline Soul/Agents fields are empty, content is loaded
+	// from the referenced source. Inline fields always take precedence.
+	AgentConfigRef *AgentConfigRef `json:"agentConfigRef,omitempty"`
 }
 
 type TeamLeaderHeartbeatSpec struct {
@@ -314,6 +337,11 @@ type TeamWorkerSpec struct {
 	// system labels (see WorkerSpec.Labels godoc). omitempty preserves
 	// hashMemberSourceSpec stability for existing Teams.
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// AgentConfigRef references external agent configuration sources.
+	// When set and inline Soul/Agents fields are empty, content is loaded
+	// from the referenced source. Inline fields always take precedence.
+	AgentConfigRef *AgentConfigRef `json:"agentConfigRef,omitempty"`
 }
 
 // EffectiveWorkerName returns the runtime identity key for a team leader.
@@ -323,6 +351,7 @@ func (s LeaderSpec) EffectiveWorkerName() string {
 		return s.WorkerName
 	}
 	return s.Name
+
 }
 
 // EffectiveWorkerName returns the runtime identity key for a team worker.
@@ -518,6 +547,11 @@ type ManagerSpec struct {
 	// godoc): pod-template < CR metadata.labels < CR spec.labels <
 	// controller system labels.
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// AgentConfigRef references external agent configuration sources.
+	// When set and inline Soul/Agents fields are empty, content is loaded
+	// from the referenced source. Inline fields always take precedence.
+	AgentConfigRef *AgentConfigRef `json:"agentConfigRef,omitempty"`
 }
 
 // DesiredState returns the effective desired state, defaulting to "Running".
@@ -526,6 +560,7 @@ func (s ManagerSpec) DesiredState() string {
 		return *s.State
 	}
 	return "Running"
+
 }
 
 type ManagerConfig struct {

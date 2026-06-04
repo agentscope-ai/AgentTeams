@@ -33,22 +33,35 @@ func RenderAppServiceRegistration(cfg Config) AppServiceRegistration {
 }
 
 // RegisterAppService sends the AppService registration YAML to the Tuwunel
-// admin bot via the #admins room. Processing is asynchronous; call
-// AppServiceSmokeTest afterwards to verify the registration took effect.
+// admin bot via the #admins room. It first attempts a smoke test; if the
+// existing registration already works with the current token, registration
+// is skipped (idempotent across restarts). When the smoke test fails (e.g.,
+// token was rotated), it unregisters the old registration first to ensure
+// clean state regardless of Tuwunel's overwrite semantics for same-ID
+// registrations.
 func (c *TuwunelClient) RegisterAppService(ctx context.Context, reg AppServiceRegistration) error {
+	// Fast path: current token already works.
+	if err := c.AppServiceSmokeTest(ctx); err == nil {
+		return nil
+	}
+
+	// Slow path: token changed or first registration.
+	// Unregister first to ensure clean state regardless of whether Tuwunel
+	// overwrites or rejects same-ID registrations with different tokens.
+	// Best-effort: ignore errors (registration may not exist yet).
+	_ = c.UnregisterAppService(ctx, reg.ID)
+
 	yamlBytes, err := yaml.Marshal(reg)
 	if err != nil {
 		return fmt.Errorf("marshal appservice registration: %w", err)
 	}
 
-	// Format: !admin appservices register followed by fenced YAML block
 	command := fmt.Sprintf("!admin appservices register\n```yaml\n%s```", string(yamlBytes))
 
 	if err := c.AdminCommand(ctx, command); err != nil {
 		return fmt.Errorf("send appservice registration command: %w", err)
 	}
 
-	// Give the admin bot time to process the command
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -56,6 +69,15 @@ func (c *TuwunelClient) RegisterAppService(ctx context.Context, reg AppServiceRe
 	}
 
 	return nil
+}
+
+
+// UnregisterAppService removes the AppService registration from the homeserver.
+// Uses the admin bot command; works regardless of the current as_token validity
+// because admin commands authenticate via admin user login, not as_token.
+func (c *TuwunelClient) UnregisterAppService(ctx context.Context, id string) error {
+	cmd := fmt.Sprintf("!admin appservices unregister %s", id)
+	return c.AdminCommand(ctx, cmd)
 }
 
 // AppServiceSmokeTest verifies that the AppService registration is active by

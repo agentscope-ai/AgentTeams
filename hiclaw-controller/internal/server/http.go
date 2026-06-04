@@ -9,6 +9,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/credentials"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
+	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	"github.com/hiclaw/hiclaw-controller/internal/proxy"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,7 +27,8 @@ type ServerDeps struct {
 	KubeMode       string
 	Namespace      string
 	ControllerName string // HICLAW_CONTROLLER_NAME; empty in embedded mode
-	SocketPath     string // Docker proxy (embedded only)
+	SocketPath     string       // Docker proxy (embedded only)
+	MatrixConfig   matrix.Config // for AppService rotation endpoint
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -110,6 +112,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// STS is self-scoped: no {name} in path; handler uses CallerIdentity to scope the issued token.
 	ch := NewCredentialsHandler(deps.STS)
 	mux.Handle("POST /api/v1/credentials/sts", mw.RequireAuthz(authpkg.ActionSTS, "credentials", nil)(http.HandlerFunc(ch.RefreshSTS)))
+
+	// --- AppService management ---
+	ash := NewAppServiceHandler(deps.MatrixConfig)
+	mux.Handle("POST /api/v1/appservice/rotate-token", mw.RequireAuthz(authpkg.ActionUpdate, "appservice", nil)(http.HandlerFunc(ash.RotateToken)))
 
 	// --- Docker API passthrough (embedded mode only) ---
 	if deps.KubeMode == "embedded" && deps.SocketPath != "" {

@@ -524,18 +524,30 @@ func (p *Provisioner) DeprovisionWorker(ctx context.Context, req WorkerDeprovisi
 	return nil
 }
 
-// ensureMatrixToken returns creds.MatrixToken if it is non-empty; otherwise it
-// performs a fresh matrix.Login under matrixUsername, persists the new token
-// back to creds, and returns it. Reusing the cached token across reconciles is
-// critical: the controller pushes the manager's openclaw.json into the shared
-// filesystem mount on every DeployManagerConfig call, and any change to
-// channels.matrix.accessToken triggers an openclaw matrix-client reload (and
-// in practice often a full gateway restart due to the related token churn),
-// which tears down in-flight agent dispatches. Callers should Save the
-// updated creds back to the credential store after this returns so the
-// freshly-issued token survives controller restarts.
+// ensureMatrixToken obtains a Matrix access token for the given user.
+//
+// In AppService mode: always performs a fresh AS login (lightweight, no
+// password needed). This ensures automatic recovery if the homeserver
+// invalidates the token, and avoids stale-token issues without extra cost.
+//
+// In legacy password mode: reuses the cached token when present. This is
+// critical because the controller pushes openclaw.json on every reconcile,
+// and any change to channels.matrix.accessToken triggers an openclaw
+// matrix-client reload (often a full gateway restart), which tears down
+// in-flight agent dispatches. Agent runtimes do NOT support config hot-reload
+// (see TODO in manager_reconcile_container.go); container recreation is
+// required for config changes to take effect.
+//
+// Callers should Save the updated creds back to the credential store after
+// this returns so the freshly-issued token survives controller restarts.
 func (p *Provisioner) ensureMatrixToken(ctx context.Context, matrixUsername string, creds *WorkerCredentials) (string, error) {
-	if creds.MatrixToken != "" {
+	// In AppService mode, always re-login to obtain a fresh token.
+	// AS login is lightweight (no password, single HTTP call) and this
+	// ensures automatic recovery if the homeserver invalidates the token.
+	// In legacy mode, reuse the cached token to avoid unnecessary password
+	// logins which would rotate channels.matrix.accessToken and trigger
+	// gateway restarts in the agent runtime.
+	if creds.MatrixToken != "" && !p.MatrixAppServiceEnabled() {
 		return creds.MatrixToken, nil
 	}
 	var tok string
@@ -1545,6 +1557,11 @@ func (p *Provisioner) DeprovisionManager(ctx context.Context, name string) error
 	}
 
 	return nil
+}
+
+// CredentialNames returns all credential store keys (worker/manager names).
+func (p *Provisioner) CredentialNames(ctx context.Context) ([]string, error) {
+	return p.creds.List(ctx)
 }
 
 // BackfillLegacyPasswords generates and sets Matrix passwords for workers

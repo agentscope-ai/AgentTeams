@@ -191,8 +191,19 @@ func (a *App) Start(ctx context.Context) error {
 		// created without passwords in AS mode. This enables seamless
 		// rollback without manual intervention.
 		if !a.cfg.MatrixAppServiceEnabled {
+			// Legacy mode: backfill passwords for AS-created accounts.
 			if err := a.provisioner.BackfillLegacyPasswords(ctx); err != nil {
 				logger.Error(err, "legacy password backfill had errors (non-fatal)")
+			}
+		} else {
+			// AS mode: clean up stale password files from previous legacy mode.
+			names, listErr := a.provisioner.CredentialNames(ctx)
+			if listErr != nil {
+				logger.Error(listErr, "failed to list credentials for password cleanup (non-fatal)")
+			} else if len(names) > 0 {
+				if err := a.deployer.CleanLegacyPasswordFiles(ctx, names); err != nil {
+					logger.Error(err, "legacy password cleanup had errors (non-fatal)")
+				}
 			}
 		}
 
@@ -501,15 +512,16 @@ func (a *App) initServiceLayer(_ context.Context) error {
 	}
 
 	a.deployer = service.NewDeployer(service.DeployerConfig{
-		AgentConfig:     a.agentGen,
-		OSS:             a.oss,
-		Executor:        a.shell,
-		Packages:        a.packages,
-		Legacy:          a.legacy,
-		AgentFSDir:      cfg.AgentFSDir(),
-		WorkerAgentDir:  cfg.WorkerAgentDir(),
-		MatrixDomain:    cfg.MatrixDomain,
-		NacosCredClient: a.credProvider,
+		AgentConfig:         a.agentGen,
+		OSS:                 a.oss,
+		Executor:            a.shell,
+		Packages:            a.packages,
+		Legacy:              a.legacy,
+		AgentFSDir:          cfg.AgentFSDir(),
+		WorkerAgentDir:      cfg.WorkerAgentDir(),
+		MatrixDomain:        cfg.MatrixDomain,
+		AgentConfigResolver: agentconfig.NewResolver(a.k8sClient, a.oss),
+		NacosCredClient:     a.credProvider,
 	})
 
 	return nil
@@ -594,6 +606,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		Namespace:      a.namespace,
 		ControllerName: a.cfg.ControllerName,
 		SocketPath:     a.cfg.SocketPath,
+		MatrixConfig:   a.cfg.MatrixConfig(),
 	})
 	return nil
 }

@@ -152,6 +152,7 @@ func (f *fakeTeamMatrix) LoginAppServiceUser(_ context.Context, username string)
 func (f *fakeTeamMatrix) SetPasswordAsAdmin(_ context.Context, _, _ string) error { return nil }
 
 func (f *fakeTeamMatrix) RegisterAppService(_ context.Context, _ matrix.AppServiceRegistration) error { return nil }
+func (f *fakeTeamMatrix) UnregisterAppService(_ context.Context, _ string) error                     { return nil }
 func (f *fakeTeamMatrix) AppServiceSmokeTest(_ context.Context) error { return nil }
 
 func TestProvisionTeamRoomsInvitesExplicitTeamAdminAndLeavesNewLeaderDM(t *testing.T) {

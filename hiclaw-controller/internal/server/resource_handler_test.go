@@ -262,6 +262,137 @@ func indexServerTeamWorkerMemberNames(obj client.Object) []string {
 	return names
 }
 
+func TestUpdateTeamDecoupledUpdatesMemberWorkerCR(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-lead", Role: "team_leader"},
+		{Name: "alpha-dev", Role: "worker"},
+	}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{{Name: "alpha-dev", Skills: []string{"old-team-skill"}}}
+	leader := &v1beta1.Worker{}
+	leader.Name = "alpha-lead"
+	leader.Namespace = "default"
+	leader.Spec.Model = "qwen"
+	worker := &v1beta1.Worker{}
+	worker.Name = "alpha-dev"
+	worker.Namespace = "default"
+	worker.Spec.Model = "qwen"
+	worker.Spec.Skills = []string{"old-worker-skill"}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team, leader, worker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{
+		"workers":[
+			{"name":"alpha-dev","skills":["review","refactor"],"model":"qwen-plus"}
+		]
+	}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/teams/alpha-team", bytes.NewReader(body))
+	req.SetPathValue("name", "alpha-team")
+	rec := httptest.NewRecorder()
+	handler.UpdateTeam(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var updatedWorker v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &updatedWorker); err != nil {
+		t.Fatalf("get updated worker: %v", err)
+	}
+	if got := updatedWorker.Spec.Skills; len(got) != 2 || got[0] != "review" || got[1] != "refactor" {
+		t.Fatalf("worker skills=%v, want [review refactor]", got)
+	}
+	if updatedWorker.Spec.Model != "qwen-plus" {
+		t.Fatalf("worker model=%q, want qwen-plus", updatedWorker.Spec.Model)
+	}
+
+	var updatedTeam v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-team", Namespace: "default"}, &updatedTeam); err != nil {
+		t.Fatalf("get updated team: %v", err)
+	}
+	if len(updatedTeam.Spec.Workers) != 1 || len(updatedTeam.Spec.Workers[0].Skills) != 1 || updatedTeam.Spec.Workers[0].Skills[0] != "old-team-skill" {
+		t.Fatalf("decoupled Team update must not rewrite legacy spec.workers, got %+v", updatedTeam.Spec.Workers)
+	}
+}
+
+func TestUpdateTeamDecoupledRejectsNonMemberWorker(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-lead", Role: "team_leader"},
+		{Name: "alpha-dev", Role: "worker"},
+	}
+	leader := &v1beta1.Worker{}
+	leader.Name = "alpha-lead"
+	leader.Namespace = "default"
+	worker := &v1beta1.Worker{}
+	worker.Name = "stranger"
+	worker.Namespace = "default"
+	worker.Spec.Skills = []string{"old-skill"}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team, leader, worker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"workers":[{"name":"stranger","skills":["review"]}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/teams/alpha-team", bytes.NewReader(body))
+	req.SetPathValue("name", "alpha-team")
+	rec := httptest.NewRecorder()
+	handler.UpdateTeam(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+
+	var unchanged v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "stranger", Namespace: "default"}, &unchanged); err != nil {
+		t.Fatalf("get unchanged worker: %v", err)
+	}
+	if got := unchanged.Spec.Skills; len(got) != 1 || got[0] != "old-skill" {
+		t.Fatalf("non-member worker skills changed: %v", got)
+	}
+}
+
+func TestUpdateTeamLegacyStillUpdatesEmbeddedWorkers(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{}
+	team.Name = "legacy-team"
+	team.Namespace = "default"
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{{Name: "legacy-dev", Skills: []string{"old-skill"}}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"workers":[{"name":"legacy-dev","skills":["review"],"model":"qwen-plus"}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/teams/legacy-team", bytes.NewReader(body))
+	req.SetPathValue("name", "legacy-team")
+	rec := httptest.NewRecorder()
+	handler.UpdateTeam(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var updatedTeam v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-team", Namespace: "default"}, &updatedTeam); err != nil {
+		t.Fatalf("get updated team: %v", err)
+	}
+	if len(updatedTeam.Spec.Workers) != 1 {
+		t.Fatalf("workers=%v, want one worker", updatedTeam.Spec.Workers)
+	}
+	if updatedTeam.Spec.Workers[0].Model != "qwen-plus" {
+		t.Fatalf("worker model=%q, want qwen-plus", updatedTeam.Spec.Workers[0].Model)
+	}
+	if got := updatedTeam.Spec.Workers[0].Skills; len(got) != 1 || got[0] != "review" {
+		t.Fatalf("worker skills=%v, want [review]", got)
+	}
+}
+
 func TestDeleteWorkerRejectsTeamMember(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	team := &v1beta1.Team{}

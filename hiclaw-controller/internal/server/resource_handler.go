@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -508,60 +509,14 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.ChannelPolicy != nil {
 			team.Spec.ChannelPolicy = req.ChannelPolicy
 		}
-		if req.Leader != nil {
-			if req.Leader.WorkerName != "" {
-				team.Spec.Leader.WorkerName = req.Leader.WorkerName
+		if len(team.Spec.WorkerMembers) > 0 {
+			if err := h.updateDecoupledTeamMembers(ctx, &team, &req); err != nil {
+				httputil.WriteError(w, http.StatusBadRequest, err.Error())
+				return
 			}
-			if req.Leader.Model != "" {
-				team.Spec.Leader.Model = req.Leader.Model
-			}
-			if req.Leader.Identity != "" {
-				team.Spec.Leader.Identity = req.Leader.Identity
-			}
-			if req.Leader.Soul != "" {
-				team.Spec.Leader.Soul = req.Leader.Soul
-			}
-			if req.Leader.Agents != "" {
-				team.Spec.Leader.Agents = req.Leader.Agents
-			}
-			if req.Leader.Package != "" {
-				team.Spec.Leader.Package = req.Leader.Package
-			}
-			if req.Leader.Heartbeat != nil {
-				team.Spec.Leader.Heartbeat = toHeartbeatSpec(req.Leader.Heartbeat)
-			}
-			if req.Leader.WorkerIdleTimeout != "" {
-				team.Spec.Leader.WorkerIdleTimeout = req.Leader.WorkerIdleTimeout
-			}
-			if req.Leader.McpServers != nil {
-				team.Spec.Leader.McpServers = req.Leader.McpServers
-			}
-			if req.Leader.ChannelPolicy != nil {
-				team.Spec.Leader.ChannelPolicy = req.Leader.ChannelPolicy
-			}
-			if req.Leader.State != nil {
-				team.Spec.Leader.State = req.Leader.State
-			}
-		}
-		if req.Workers != nil {
-			team.Spec.Workers = nil
-			for _, tw := range req.Workers {
-				team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
-					Name:          tw.Name,
-					WorkerName:    tw.WorkerName,
-					Model:         tw.Model,
-					Runtime:       tw.Runtime,
-					Image:         tw.Image,
-					Identity:      tw.Identity,
-					Soul:          tw.Soul,
-					Agents:        tw.Agents,
-					Skills:        tw.Skills,
-					McpServers:    tw.McpServers,
-					Package:       tw.Package,
-					Expose:        tw.Expose,
-					ChannelPolicy: tw.ChannelPolicy,
-				})
-			}
+			applyDecoupledTeamLegacyHints(&team, &req)
+		} else {
+			applyLegacyTeamRuntimeUpdate(&team, &req)
 		}
 
 		if err := h.client.Update(ctx, &team); err != nil {
@@ -576,6 +531,222 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, teamToResponse(&team))
 		return
 	}
+}
+
+func applyLegacyTeamRuntimeUpdate(team *v1beta1.Team, req *UpdateTeamRequest) {
+	if req.Leader != nil {
+		if req.Leader.WorkerName != "" {
+			team.Spec.Leader.WorkerName = req.Leader.WorkerName
+		}
+		if req.Leader.Model != "" {
+			team.Spec.Leader.Model = req.Leader.Model
+		}
+		if req.Leader.Identity != "" {
+			team.Spec.Leader.Identity = req.Leader.Identity
+		}
+		if req.Leader.Soul != "" {
+			team.Spec.Leader.Soul = req.Leader.Soul
+		}
+		if req.Leader.Agents != "" {
+			team.Spec.Leader.Agents = req.Leader.Agents
+		}
+		if req.Leader.Package != "" {
+			team.Spec.Leader.Package = req.Leader.Package
+		}
+		if req.Leader.Heartbeat != nil {
+			team.Spec.Leader.Heartbeat = toHeartbeatSpec(req.Leader.Heartbeat)
+		}
+		if req.Leader.WorkerIdleTimeout != "" {
+			team.Spec.Leader.WorkerIdleTimeout = req.Leader.WorkerIdleTimeout
+		}
+		if req.Leader.McpServers != nil {
+			team.Spec.Leader.McpServers = req.Leader.McpServers
+		}
+		if req.Leader.ChannelPolicy != nil {
+			team.Spec.Leader.ChannelPolicy = req.Leader.ChannelPolicy
+		}
+		if req.Leader.State != nil {
+			team.Spec.Leader.State = req.Leader.State
+		}
+	}
+	if req.Workers != nil {
+		team.Spec.Workers = nil
+		for _, tw := range req.Workers {
+			team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
+				Name:          tw.Name,
+				WorkerName:    tw.WorkerName,
+				Model:         tw.Model,
+				Runtime:       tw.Runtime,
+				Image:         tw.Image,
+				Identity:      tw.Identity,
+				Soul:          tw.Soul,
+				Agents:        tw.Agents,
+				Skills:        tw.Skills,
+				McpServers:    tw.McpServers,
+				Package:       tw.Package,
+				Expose:        tw.Expose,
+				ChannelPolicy: tw.ChannelPolicy,
+				State:         tw.State,
+			})
+		}
+	}
+}
+
+func applyDecoupledTeamLegacyHints(team *v1beta1.Team, req *UpdateTeamRequest) {
+	if req.Leader != nil {
+		if req.Leader.Heartbeat != nil {
+			heartbeat := toHeartbeatSpec(req.Leader.Heartbeat)
+			team.Spec.Leader.Heartbeat = heartbeat
+			if heartbeat != nil && heartbeat.Enabled {
+				team.Spec.HeartbeatEvery = heartbeat.Every
+			} else {
+				team.Spec.HeartbeatEvery = ""
+			}
+		}
+		if req.Leader.WorkerIdleTimeout != "" {
+			team.Spec.Leader.WorkerIdleTimeout = req.Leader.WorkerIdleTimeout
+		}
+	}
+}
+
+func (h *ResourceHandler) updateDecoupledTeamMembers(ctx context.Context, team *v1beta1.Team, req *UpdateTeamRequest) error {
+	leaderName, workerNames, err := decoupledTeamMemberIndex(team)
+	if err != nil {
+		return err
+	}
+	if req.Leader != nil {
+		if err := h.updateWorkerCRForTeamLeader(ctx, leaderName, req.Leader); err != nil {
+			return err
+		}
+	}
+	for _, workerReq := range req.Workers {
+		if workerReq.Name == "" {
+			return fmt.Errorf("workers[].name is required for decoupled team updates")
+		}
+		if _, ok := workerNames[workerReq.Name]; !ok {
+			return fmt.Errorf("worker %q is not a non-leader member of team %q", workerReq.Name, team.Name)
+		}
+		if err := h.updateWorkerCRForTeamWorker(ctx, workerReq); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decoupledTeamMemberIndex(team *v1beta1.Team) (leader string, workers map[string]struct{}, err error) {
+	workers = make(map[string]struct{}, len(team.Spec.WorkerMembers))
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name == "" {
+			continue
+		}
+		if ref.Role == "team_leader" {
+			if leader != "" {
+				return "", nil, fmt.Errorf("team %q has multiple team leaders in workerMembers", team.Name)
+			}
+			leader = ref.Name
+			continue
+		}
+		workers[ref.Name] = struct{}{}
+	}
+	if leader == "" {
+		return "", nil, fmt.Errorf("team %q has no team_leader in workerMembers", team.Name)
+	}
+	return leader, workers, nil
+}
+
+func (h *ResourceHandler) updateWorkerCRForTeamLeader(ctx context.Context, name string, req *TeamLeaderRequest) error {
+	return h.updateWorkerCRSpec(ctx, name, func(spec *v1beta1.WorkerSpec) {
+		if req.WorkerName != "" {
+			spec.WorkerName = req.WorkerName
+		}
+		if req.Model != "" {
+			spec.Model = req.Model
+		}
+		if req.Identity != "" {
+			spec.Identity = req.Identity
+		}
+		if req.Soul != "" {
+			spec.Soul = req.Soul
+		}
+		if req.Agents != "" {
+			spec.Agents = req.Agents
+		}
+		if req.Package != "" {
+			spec.Package = req.Package
+		}
+		if req.McpServers != nil {
+			spec.McpServers = req.McpServers
+		}
+		if req.ChannelPolicy != nil {
+			spec.ChannelPolicy = req.ChannelPolicy
+		}
+		if req.State != nil {
+			spec.State = req.State
+		}
+	})
+}
+
+func (h *ResourceHandler) updateWorkerCRForTeamWorker(ctx context.Context, req TeamWorkerRequest) error {
+	return h.updateWorkerCRSpec(ctx, req.Name, func(spec *v1beta1.WorkerSpec) {
+		if req.WorkerName != "" {
+			spec.WorkerName = req.WorkerName
+		}
+		if req.Model != "" {
+			spec.Model = req.Model
+		}
+		if req.Runtime != "" {
+			spec.Runtime = req.Runtime
+		}
+		if req.Image != "" {
+			spec.Image = req.Image
+		}
+		if req.Identity != "" {
+			spec.Identity = req.Identity
+		}
+		if req.Soul != "" {
+			spec.Soul = req.Soul
+		}
+		if req.Agents != "" {
+			spec.Agents = req.Agents
+		}
+		if req.Skills != nil {
+			spec.Skills = req.Skills
+		}
+		if req.McpServers != nil {
+			spec.McpServers = req.McpServers
+		}
+		if req.Package != "" {
+			spec.Package = req.Package
+		}
+		if req.Expose != nil {
+			spec.Expose = req.Expose
+		}
+		if req.ChannelPolicy != nil {
+			spec.ChannelPolicy = req.ChannelPolicy
+		}
+		if req.State != nil {
+			spec.State = req.State
+		}
+	})
+}
+
+func (h *ResourceHandler) updateWorkerCRSpec(ctx context.Context, name string, mutate func(*v1beta1.WorkerSpec)) error {
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var worker v1beta1.Worker
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+			return fmt.Errorf("get worker %q for team member update: %w", name, err)
+		}
+		mutate(&worker.Spec)
+		if err := h.client.Update(ctx, &worker); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			return fmt.Errorf("update worker %q for team member update: %w", name, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("update worker %q for team member update exhausted retries", name)
 }
 
 func (h *ResourceHandler) DeleteTeam(w http.ResponseWriter, r *http.Request) {

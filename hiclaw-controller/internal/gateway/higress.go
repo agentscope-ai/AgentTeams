@@ -178,15 +178,18 @@ func (c *HigressClient) DeleteConsumer(ctx context.Context, name string) error {
 	return nil
 }
 
-func (c *HigressClient) AuthorizeAIRoutes(ctx context.Context, consumerName string, _ string) error {
-	return c.modifyAIRoutes(ctx, consumerName, true)
+func (c *HigressClient) AuthorizeAIRoutes(ctx context.Context, consumerName string, modelAPIID string) error {
+	return c.modifyAIRoutes(ctx, consumerName, modelAPIID, true)
 }
 
-func (c *HigressClient) DeauthorizeAIRoutes(ctx context.Context, consumerName string, _ string) error {
-	return c.modifyAIRoutes(ctx, consumerName, false)
+func (c *HigressClient) DeauthorizeAIRoutes(ctx context.Context, consumerName string, modelAPIID string) error {
+	return c.modifyAIRoutes(ctx, consumerName, modelAPIID, false)
 }
 
-func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string, add bool) error {
+// modifyAIRoutes adds or removes the consumer from AI routes' allowedConsumers.
+// When providerFilter is non-empty, only routes whose upstreams reference that
+// provider are modified; when empty, all routes are modified (legacy behavior).
+func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string, providerFilter string, add bool) error {
 	c.aiRouteMu.Lock()
 	defer c.aiRouteMu.Unlock()
 
@@ -257,6 +260,11 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 				break
 			}
 
+			// When providerFilter is set, skip routes that don't match the provider.
+			if providerFilter != "" && !routeMatchesProvider(route, providerFilter) {
+				break
+			}
+
 			authConfig, _ := route["authConfig"].(map[string]interface{})
 			if authConfig == nil {
 				authConfig = make(map[string]interface{})
@@ -303,6 +311,24 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 	}
 
 	return firstErr
+}
+
+// routeMatchesProvider checks if any upstream in the route references the given provider.
+func routeMatchesProvider(route map[string]interface{}, provider string) bool {
+	upstreams, ok := route["upstreams"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, u := range upstreams {
+		ups, ok := u.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if p, _ := ups["provider"].(string); p == provider {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *HigressClient) ExposePort(ctx context.Context, req PortExposeRequest) error {

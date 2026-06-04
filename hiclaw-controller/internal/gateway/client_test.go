@@ -528,6 +528,72 @@ func TestEnsureAIRoute_MissingCreatesSkeletonWithoutAllowedConsumers(t *testing.
 	}
 }
 
+func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
+	var putRoutes []string
+	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/system/init":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/session/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "test"})
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v1/ai/routes" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"name": "qwen-route"},
+					{"name": "openai-route"},
+				},
+			})
+		case r.URL.Path == "/v1/ai/routes/qwen-route" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"name":      "qwen-route",
+					"upstreams": []interface{}{map[string]interface{}{"provider": "qwen"}},
+					"authConfig": map[string]interface{}{
+						"allowedConsumers": []string{"manager"},
+					},
+				},
+			})
+		case r.URL.Path == "/v1/ai/routes/openai-route" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"name":      "openai-route",
+					"upstreams": []interface{}{map[string]interface{}{"provider": "openai"}},
+					"authConfig": map[string]interface{}{
+						"allowedConsumers": []string{"manager"},
+					},
+				},
+			})
+		case strings.HasPrefix(r.URL.Path, "/v1/ai/routes/") && r.Method == "PUT":
+			routeName := strings.TrimPrefix(r.URL.Path, "/v1/ai/routes/")
+			putRoutes = append(putRoutes, routeName)
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Logf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+
+	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
+
+	// With provider filter "qwen", only qwen-route should be PUT
+	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice", "qwen"); err != nil {
+		t.Fatalf("AuthorizeAIRoutes: %v", err)
+	}
+	if len(putRoutes) != 1 || putRoutes[0] != "qwen-route" {
+		t.Errorf("expected PUT only on qwen-route, got %v", putRoutes)
+	}
+
+	// Without provider filter, both routes should be PUT
+	putRoutes = nil
+	if err := c.AuthorizeAIRoutes(context.Background(), "worker-bob", ""); err != nil {
+		t.Fatalf("AuthorizeAIRoutes (no filter): %v", err)
+	}
+	if len(putRoutes) != 2 {
+		t.Errorf("expected PUT on 2 routes, got %v", putRoutes)
+	}
+}
+
 func TestResolveModelProvider_Higress(t *testing.T) {
 	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

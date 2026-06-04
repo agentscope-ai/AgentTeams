@@ -79,6 +79,10 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g mcporter skills @nacos-group/cli && \
     rm -rf /root/.npm
 
+# Stage hiclaw_common from shared build context (rarely changes — separate cache layer).
+# shared-python maps to HiClaw/shared/python/ via --build-context shared-python=./shared/python
+COPY --from=shared-python hiclaw_common /tmp/hiclaw-common
+
 # --- Heavy install layer (cached unless HERMES_GIT_REF or hermes-worker
 #     pyproject.toml change) ---
 #
@@ -99,6 +103,7 @@ RUN python -m venv /opt/venv/hermes \
     && /opt/venv/hermes/bin/pip install --upgrade pip setuptools wheel \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+    && /opt/venv/hermes/bin/pip install --no-cache-dir /tmp/hiclaw-common \
     && /opt/venv/hermes/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \

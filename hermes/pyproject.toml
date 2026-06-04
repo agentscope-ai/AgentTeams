@@ -13,6 +13,10 @@ dependencies = [
     # hermes-agent itself is installed from git in the Dockerfile (HERMES_GIT_REF).
     # Listing it as a hard PyPI dep would prevent the pinned-tag install path,
     # so the wheel relies on it being already present in the environment.
+    # hiclaw-common is installed from shared/python/hiclaw_common via the
+    # --build-context shared-python build arg; for local dev run:
+    #   pip install -e ../shared/python/hiclaw_common
+    "hiclaw-common>=0.1.0",
     "mautrix[encryption]",
     "matrix-nio[e2e]>=0.24.0",
     "markdown-it-py>=3.0",

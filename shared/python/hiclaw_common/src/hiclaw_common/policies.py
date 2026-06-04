@@ -1,6 +1,8 @@
-"""Pure Matrix policy helpers for the HiClaw Harness overlay.
+"""Pure Matrix policy helpers shared across all HiClaw worker runtimes.
 
-Copied verbatim from hermes_matrix.policies — dependency-free stdlib module.
+Intentionally import-free of any Matrix SDK — only models the HiClaw policy
+layer: outbound mention enrichment, dual allow-lists, copaw-style history
+buffering.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ _MATRIX_USER_ID_RE = re.compile(
 
 
 def normalize_user_id(uid: str) -> str:
+    """Lowercase MXIDs and ensure a leading ``@`` for set membership."""
     normalized = (uid or "").strip().lower()
     if normalized and not normalized.startswith("@"):
         normalized = "@" + normalized
@@ -38,9 +41,14 @@ def _policy_mode(value: Optional[str], default: str = "allowlist") -> str:
     return default
 
 
-def extract_mentions_from_text(text: str, self_user_id: str | None = None) -> List[str]:
+def extract_mentions_from_text(
+    text: str,
+    self_user_id: str | None = None,
+) -> List[str]:
+    """Return ordered, de-duplicated MXIDs discovered in ``text``."""
     if not text:
         return []
+
     seen: Set[str] = set()
     self_uid = (self_user_id or "").strip().lower()
     mentions: List[str] = []
@@ -55,10 +63,14 @@ def extract_mentions_from_text(text: str, self_user_id: str | None = None) -> Li
     return mentions
 
 
-def _merge_mentions_block(message: MutableMapping[str, Any], new_user_ids: List[str]) -> None:
+def _merge_mentions_block(
+    message: MutableMapping[str, Any],
+    new_user_ids: List[str],
+) -> None:
     current = message.get("m.mentions")
     merged: Dict[str, Any] = dict(current) if isinstance(current, Mapping) else {}
     existing_user_ids = merged.get("user_ids")
+
     seen: Set[str] = set()
     combined: List[str] = []
     for raw in list(existing_user_ids or []) + list(new_user_ids):
@@ -69,27 +81,37 @@ def _merge_mentions_block(message: MutableMapping[str, Any], new_user_ids: List[
             continue
         seen.add(key)
         combined.append(raw)
+
     if combined:
         merged["user_ids"] = combined
     else:
         merged.pop("user_ids", None)
+
     if merged:
         message["m.mentions"] = merged
 
 
-def apply_outbound_mentions(content: MutableMapping[str, Any], self_user_id: str | None = None) -> None:
+def apply_outbound_mentions(
+    content: MutableMapping[str, Any],
+    self_user_id: str | None = None,
+) -> None:
+    """Populate ``m.mentions.user_ids`` from body text (MSC3952 / Matrix v1.7)."""
     mentioned = extract_mentions_from_text(
         content.get("body", "") if isinstance(content.get("body"), str) else "",
         self_user_id=self_user_id,
     )
+
     new_content = content.get("m.new_content")
     if isinstance(new_content, dict):
         for mxid in extract_mentions_from_text(
-            new_content.get("body", "") if isinstance(new_content.get("body"), str) else "",
+            new_content.get("body", "")
+            if isinstance(new_content.get("body"), str)
+            else "",
             self_user_id=self_user_id,
         ):
             if mxid.lower() not in {item.lower() for item in mentioned}:
                 mentioned.append(mxid)
+
     _merge_mentions_block(content, mentioned)
     if isinstance(new_content, dict):
         _merge_mentions_block(new_content, mentioned)
@@ -97,6 +119,8 @@ def apply_outbound_mentions(content: MutableMapping[str, Any], self_user_id: str
 
 @dataclass(frozen=True)
 class DualAllowList:
+    """Allow-list policy split by DM and group contexts."""
+
     dm_policy: str = "allowlist"
     group_policy: str = "allowlist"
     dm_allow: frozenset[str] = field(default_factory=frozenset)
@@ -106,7 +130,10 @@ class DualAllowList:
     def from_env(cls) -> "DualAllowList":
         return cls(
             dm_policy=_policy_mode(os.getenv("MATRIX_DM_POLICY"), "allowlist"),
-            group_policy=_policy_mode(os.getenv("MATRIX_GROUP_POLICY"), "allowlist"),
+            group_policy=_policy_mode(
+                os.getenv("MATRIX_GROUP_POLICY"),
+                "allowlist",
+            ),
             dm_allow=frozenset(
                 normalize_user_id(value)
                 for value in _csv_set(os.getenv("MATRIX_ALLOWED_USERS"))
@@ -125,12 +152,14 @@ class DualAllowList:
         normalized = normalize_user_id(sender)
         if not normalized:
             return False
+
         if is_dm:
             if self.dm_policy == "disabled":
                 return False
             if self.dm_policy == "open":
                 return True
             return normalized in self.dm_allow
+
         if self.group_policy == "disabled":
             return False
         if self.group_policy == "open":
@@ -146,6 +175,8 @@ class _HistoryEntry:
 
 @dataclass
 class HistoryBuffer:
+    """Per-room copaw-style history buffer for unmentioned group chatter."""
+
     limit: int = DEFAULT_HISTORY_LIMIT
     _entries: Dict[str, List[_HistoryEntry]] = field(default_factory=dict)
 
@@ -173,6 +204,7 @@ class HistoryBuffer:
         entries = self._entries.pop(room_id, None)
         if not entries:
             return ""
+
         lines = [f"{entry.sender}: {entry.body}" for entry in entries]
         return (
             f"{HISTORY_CONTEXT_MARKER}\n"

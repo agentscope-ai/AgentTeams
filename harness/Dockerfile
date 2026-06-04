@@ -63,10 +63,17 @@ RUN npm config set registry "${NPM_REGISTRY}" && \
 RUN python3 -m venv /opt/venv/harness
 ENV PATH="/opt/venv/harness/bin:$PATH"
 
-# Python deps - use matrix-nio instead of nio
+# Install hiclaw_common (policies, sync, mautrix relay) from shared build context.
+# shared-python maps to HiClaw/shared/python/ via --build-context shared-python=./shared/python
+COPY --from=shared-python hiclaw_common /tmp/hiclaw-common
 RUN /opt/venv/harness/bin/pip install \
         --index-url "${PIP_INDEX_URL}" \
-        typer rich httpx matrix-nio
+        '/tmp/hiclaw-common[matrix]'
+
+# Python runtime deps (harness-worker itself; hiclaw_common covers mautrix)
+RUN /opt/venv/harness/bin/pip install \
+        --index-url "${PIP_INDEX_URL}" \
+        typer rich httpx
 
 # Copy mc binary (mc:20260216 puts it at /usr/bin/mc)
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc

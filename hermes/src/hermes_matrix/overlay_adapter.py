@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 from gateway.config import PlatformConfig
 from gateway.platforms._matrix_native import MatrixAdapter as _NativeMatrixAdapter
 
-from hermes_matrix.policies import (
+from hiclaw_common.policies import (
     DualAllowList,
     HistoryBuffer,
     apply_outbound_mentions,

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hiclaw-common"
+version = "0.1.0"
+description = "Shared runtime capabilities for HiClaw worker runtimes"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+matrix = ["mautrix[encryption]>=0.20"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hiclaw_common"]

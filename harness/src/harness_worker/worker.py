@@ -33,6 +33,7 @@ class Worker:
         self._relay_task: Optional[asyncio.Task] = None
         self._stopping = False
         self._harness = None
+        self._current_session_id: Optional[str] = None
 
     async def run(self) -> None:
         if not await self.start():
@@ -108,6 +109,10 @@ class Worker:
         self._load_env_file(self._harness_home / ".env")
         self._apply_matrix_env(openclaw_cfg)
 
+        self._current_session_id = self._load_session()
+        if self._current_session_id:
+            console.print(f"[dim]Resuming Claude session: {self._current_session_id}[/dim]")
+
         asyncio.create_task(
             sync_loop(
                 self.sync,
@@ -121,7 +126,7 @@ class Worker:
         return True
 
     async def _run_matrix_relay(self) -> None:
-        from harness_worker.policies import DualAllowList, HistoryBuffer
+        from hiclaw_common.policies import DualAllowList, HistoryBuffer
 
         openclaw_cfg = self.sync.get_config() if self.sync else {}
         matrix_cfg = openclaw_cfg.get("channels", {}).get("matrix", {})
@@ -133,8 +138,6 @@ class Worker:
             await asyncio.sleep(float("inf"))
             return
 
-        from nio import AsyncClient
-
         worker_name = os.environ.get("HICLAW_WORKER_NAME", self.worker_name)
         domain = os.environ.get("HICLAW_MATRIX_DOMAIN", "")
         if not worker_name or not domain:
@@ -143,23 +146,25 @@ class Worker:
             return
 
         full_user_id = f"@{worker_name}:{domain}"
-
         device_id = matrix_cfg.get("deviceId", "")
-        client = AsyncClient(homeserver, full_user_id)
-        client.restore_login(user_id=full_user_id, device_id=device_id, access_token=access_token)
 
         policies = DualAllowList.from_env()
         history = HistoryBuffer.from_env()
 
+        async def _on_invoke(message: str) -> tuple[str, Optional[str]]:
+            reply, new_sid = await self._invoke_harness(message, self._current_session_id)
+            if new_sid:
+                self._current_session_id = new_sid
+            return reply, new_sid
+
         relay = MatrixRelay(
-            client=client,
+            homeserver=homeserver,
+            user_id=full_user_id,
+            access_token=access_token,
+            device_id=device_id,
             policies=policies,
             history=history,
-            user_id=full_user_id,
-            harness=self._harness,
-            harness_home=self._harness_home,
-            workspace_dir=self.config.workspace_dir,
-            on_invoke=self._invoke_harness,
+            on_invoke=_on_invoke,
         )
 
         console.print("[bold green]Matrix relay connected.[/bold green]")
@@ -307,9 +312,7 @@ class Worker:
                 console.print(f"[red]Skills refresh failed: {exc}[/red]")
 
     def _matrix_relogin(self, openclaw_cfg: Dict[str, Any]) -> Dict[str, Any]:
-        import json
-        import urllib.error
-        import urllib.request
+        from hiclaw_common.matrix import matrix_relogin
 
         if self.sync is None:
             return openclaw_cfg
@@ -328,34 +331,14 @@ class Worker:
         if not homeserver or not matrix_password:
             return openclaw_cfg
 
-        login_url = f"{homeserver}/_matrix/client/v3/login"
-        body = json.dumps({
-            "type": "m.login.password",
-            "identifier": {"type": "m.id.user", "user": self.worker_name},
-            "password": matrix_password,
-        }).encode()
-
-        try:
-            req = urllib.request.Request(
-                login_url,
-                data=body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                payload = json.loads(resp.read())
-        except (urllib.error.URLError, ValueError, TimeoutError) as exc:
+        result = matrix_relogin(homeserver, self.worker_name, matrix_password)
+        if result is None:
             console.print(
-                f"[yellow]Matrix re-login failed: {exc} — using existing token (E2EE may not work).[/yellow]"
+                "[yellow]Matrix re-login failed — using existing token (E2EE may not work).[/yellow]"
             )
             return openclaw_cfg
 
-        new_token = payload.get("access_token", "")
-        new_device = payload.get("device_id", "")
-        if not new_token:
-            console.print("[yellow]Matrix re-login returned no token; keeping current.[/yellow]")
-            return openclaw_cfg
-
+        new_token, new_device = result
         openclaw_cfg.setdefault("channels", {}).setdefault("matrix", {})
         openclaw_cfg["channels"]["matrix"]["accessToken"] = new_token
         if new_device:

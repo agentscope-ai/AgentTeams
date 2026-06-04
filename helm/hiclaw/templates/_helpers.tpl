@@ -189,6 +189,9 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{- define "hiclaw.worker.openhumanImage" -}}
-{{- $tag := default (include "hiclaw.globalImageTag" .) .Values.worker.defaultImage.openhuman.tag }}
-{{- printf "%s:%s" .Values.worker.defaultImage.openhuman.repository $tag }}
+{{- $defaultImages := default dict .Values.worker.defaultImage -}}
+{{- $openhuman := default dict (index $defaultImages "openhuman") -}}
+{{- $repository := default "higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker" (index $openhuman "repository") -}}
+{{- $tag := default (include "hiclaw.globalImageTag" .) (index $openhuman "tag") }}
+{{- printf "%s:%s" $repository $tag }}
 {{- end }}

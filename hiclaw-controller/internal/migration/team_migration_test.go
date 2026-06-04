@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -462,6 +463,82 @@ func TestStepReparentPods_Docker(t *testing.T) {
 	}
 }
 
+func TestStepReparentPods_K8sUsesWorkerLabel(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	team := legacyTeam()
+	team.UID = "team-uid"
+	team.Annotations = map[string]string{v1beta1.AnnotationMigrationPhase: v1beta1.MigrationPhaseStatusSeeded}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "leader-bot",
+			Namespace: testNS,
+			UID:       "worker-uid",
+		},
+		Spec: v1beta1.WorkerSpec{Model: "qwen-plus"},
+	}
+	oldController := true
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hiclaw-worker-leader-bot",
+			Namespace: testNS,
+			Labels: map[string]string{
+				"app":              "hiclaw-worker",
+				"hiclaw.io/worker": "leader-bot",
+				"hiclaw.io/team":   "research",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: v1beta1.SchemeGroupVersion.String(),
+				Kind:       "Team",
+				Name:       "research",
+				UID:        team.UID,
+				Controller: &oldController,
+			}},
+		},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, worker, pod).
+		WithStatusSubresource(team).
+		Build()
+	m := &TeamMigrator{
+		Client:    fc,
+		Backend:   backend.NewRegistry([]backend.WorkerBackend{fakeWorkerBackend{name: "k8s", available: true}}),
+		Scheme:    scheme,
+		Enabled:   true,
+		BatchSize: 3,
+	}
+
+	if err := m.stepReparentPods(ctx, team); err != nil {
+		t.Fatalf("stepReparentPods: %v", err)
+	}
+
+	var gotPod corev1.Pod
+	if err := fc.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: testNS}, &gotPod); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotPod.OwnerReferences) != 1 {
+		t.Fatalf("ownerReferences = %+v, want exactly one Worker owner", gotPod.OwnerReferences)
+	}
+	ref := gotPod.OwnerReferences[0]
+	if ref.Kind != "Worker" || ref.Name != "leader-bot" || ref.UID != worker.UID {
+		t.Fatalf("ownerReference = %+v, want Worker/leader-bot uid %s", ref, worker.UID)
+	}
+	if ref.Controller == nil || !*ref.Controller {
+		t.Fatalf("ownerReference.Controller = %v, want true", ref.Controller)
+	}
+
+	var gotTeam v1beta1.Team
+	if err := fc.Get(ctx, types.NamespacedName{Name: "research", Namespace: testNS}, &gotTeam); err != nil {
+		t.Fatal(err)
+	}
+	if gotTeam.Annotations[v1beta1.AnnotationMigrationPhase] != v1beta1.MigrationPhasePodsReparented {
+		t.Errorf("phase = %q, want PodsReparented", gotTeam.Annotations[v1beta1.AnnotationMigrationPhase])
+	}
+}
+
 func TestStepPatchTeamSpec(t *testing.T) {
 	scheme := newScheme(t)
 	ctx := context.Background()
@@ -641,6 +718,33 @@ func TestFullMigrationFlow(t *testing.T) {
 }
 
 // --- Test helpers ---
+
+type fakeWorkerBackend struct {
+	name      string
+	available bool
+}
+
+func (f fakeWorkerBackend) Name() string { return f.name }
+
+func (f fakeWorkerBackend) DeploymentMode() string { return backend.DeployCloud }
+
+func (f fakeWorkerBackend) Available(context.Context) bool { return f.available }
+
+func (f fakeWorkerBackend) NeedsCredentialInjection() bool { return false }
+
+func (f fakeWorkerBackend) Create(context.Context, backend.CreateRequest) (*backend.WorkerResult, error) {
+	return nil, nil
+}
+
+func (f fakeWorkerBackend) Delete(context.Context, string) error { return nil }
+
+func (f fakeWorkerBackend) Start(context.Context, string) error { return nil }
+
+func (f fakeWorkerBackend) Stop(context.Context, string) error { return nil }
+
+func (f fakeWorkerBackend) Status(context.Context, string) (*backend.WorkerResult, error) {
+	return nil, nil
+}
 
 func refreshTeam(t *testing.T, fc client.Client, team *v1beta1.Team) {
 	t.Helper()

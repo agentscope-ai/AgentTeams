@@ -415,7 +415,7 @@ func (m *TeamMigrator) reparentPod(ctx context.Context, t *v1beta1.Team, memberN
 	// Find the Pod for this member
 	var podList corev1.PodList
 	if err := m.Client.List(ctx, &podList, client.InNamespace(t.Namespace), client.MatchingLabels{
-		"app": memberName,
+		"hiclaw.io/worker": memberName,
 	}); err != nil {
 		return fmt.Errorf("list pods for member %q: %w", memberName, err)
 	}
@@ -446,7 +446,9 @@ func (m *TeamMigrator) reparentPod(ctx context.Context, t *v1beta1.Team, memberN
 	for i := range podList.Items {
 		pod := &podList.Items[i]
 
-		// Replace ownerReferences using JSON strategic merge patch
+		// Replace ownerReferences using JSON merge patch. Strategic merge
+		// merges ownerReferences by identity and would leave the old Team
+		// controller reference in place.
 		ownerRefs := []metav1.OwnerReference{newOwnerRef}
 		patchData, err := json.Marshal(map[string]interface{}{
 			"metadata": map[string]interface{}{
@@ -457,7 +459,7 @@ func (m *TeamMigrator) reparentPod(ctx context.Context, t *v1beta1.Team, memberN
 			return fmt.Errorf("marshal reparent patch for pod %q: %w", pod.Name, err)
 		}
 
-		if err := m.Client.Patch(ctx, pod, client.RawPatch(types.StrategicMergePatchType, patchData)); err != nil {
+		if err := m.Client.Patch(ctx, pod, client.RawPatch(types.MergePatchType, patchData)); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}

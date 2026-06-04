@@ -285,7 +285,11 @@ func TestInjectChannelPolicy_FromExisting(t *testing.T) {
   }
 }`)
 
-	out := InjectChannelPolicy(existing, "@leader:m.test", "@admin:m.test")
+	out := InjectChannelPolicy(
+		existing,
+		[]string{"@leader:m.test", "@admin:m.test", "@dev:m.test"},
+		[]string{"@leader:m.test", "@admin:m.test"},
+	)
 
 	var got map[string]interface{}
 	if err := json.Unmarshal(out, &got); err != nil {
@@ -293,8 +297,8 @@ func TestInjectChannelPolicy_FromExisting(t *testing.T) {
 	}
 	matrix := got["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
 	gaf := matrix["groupAllowFrom"].([]interface{})
-	if len(gaf) != 2 || gaf[0] != "@leader:m.test" || gaf[1] != "@admin:m.test" {
-		t.Errorf("groupAllowFrom = %v, want [@leader:m.test @admin:m.test]", gaf)
+	if len(gaf) != 3 || gaf[0] != "@leader:m.test" || gaf[1] != "@admin:m.test" || gaf[2] != "@dev:m.test" {
+		t.Errorf("groupAllowFrom = %v, want [@leader:m.test @admin:m.test @dev:m.test]", gaf)
 	}
 	dm := matrix["dm"].(map[string]interface{})
 	daf := dm["allowFrom"].([]interface{})
@@ -304,7 +308,11 @@ func TestInjectChannelPolicy_FromExisting(t *testing.T) {
 }
 
 func TestInjectChannelPolicy_FromEmpty(t *testing.T) {
-	out := InjectChannelPolicy(nil, "@leader:m.test", "@admin:m.test")
+	out := InjectChannelPolicy(
+		nil,
+		[]string{"@leader:m.test", "@admin:m.test", "@leader:m.test"},
+		[]string{"@admin:m.test"},
+	)
 
 	var got map[string]interface{}
 	if err := json.Unmarshal(out, &got); err != nil {
@@ -314,19 +322,23 @@ func TestInjectChannelPolicy_FromEmpty(t *testing.T) {
 	if gaf := matrix["groupAllowFrom"].([]interface{}); len(gaf) != 2 {
 		t.Errorf("expected groupAllowFrom of length 2, got %v", gaf)
 	}
-	if _, ok := matrix["dm"].(map[string]interface{})["allowFrom"].([]interface{}); !ok {
-		t.Errorf("expected dm.allowFrom to be set")
+	daf, ok := matrix["dm"].(map[string]interface{})["allowFrom"].([]interface{})
+	if !ok {
+		t.Fatalf("expected dm.allowFrom to be set")
+	}
+	if len(daf) != 1 || daf[0] != "@admin:m.test" {
+		t.Errorf("dm.allowFrom = %v, want [@admin:m.test]", daf)
 	}
 }
 
 func TestInjectChannelPolicy_EmptyInputsAreNoop(t *testing.T) {
 	existing := []byte(`{"channels":{"matrix":{"groupAllowFrom":["@a:x","@b:x"]}}}`)
 
-	if got := InjectChannelPolicy(existing, "", "@admin:m.test"); string(got) != string(existing) {
-		t.Errorf("empty primary should noop, got %s", string(got))
+	if got := InjectChannelPolicy(existing, nil, []string{"@admin:m.test"}); string(got) != string(existing) {
+		t.Errorf("empty group allow should noop, got %s", string(got))
 	}
-	if got := InjectChannelPolicy(existing, "@leader:m.test", ""); string(got) != string(existing) {
-		t.Errorf("empty admin should noop, got %s", string(got))
+	if got := InjectChannelPolicy(existing, []string{"@leader:m.test"}, nil); string(got) != string(existing) {
+		t.Errorf("empty dm allow should noop, got %s", string(got))
 	}
 }
 
@@ -341,7 +353,7 @@ func TestInjectChannelPolicy_PreservesUnrelatedFields(t *testing.T) {
   },
   "extras": {"foo": "bar"}
 }`)
-	out := InjectChannelPolicy(existing, "@leader:m.test", "@admin:m.test")
+	out := InjectChannelPolicy(existing, []string{"@leader:m.test"}, []string{"@admin:m.test"})
 
 	var got map[string]interface{}
 	if err := json.Unmarshal(out, &got); err != nil {

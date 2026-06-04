@@ -773,6 +773,17 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 	// 5. Coordination context + heartbeat injection
 	teamWorkerEntries := decoupledTeamWorkerEntries(members, leaderRef.Name)
 
+	// Overlay Team Leader built-ins onto the decoupled leader Worker before
+	// injecting the team coordination context. The Worker still owns its
+	// lifecycle and credentials; this only restores role-specific prompt and
+	// skill assets that legacy Teams had generated directly.
+	if err := r.Deployer.SyncTeamLeaderAssets(ctx, service.SyncTeamLeaderAssetsRequest{
+		WorkerName: leaderRuntimeName,
+		Runtime:    leaderMember.worker.Spec.Runtime,
+	}); err != nil {
+		logger.Error(err, "team leader asset sync failed (non-fatal)", "worker", leaderRuntimeName)
+	}
+
 	// Leader coordination context
 	if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
 		LeaderName:         leaderRuntimeName,
@@ -839,21 +850,21 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 			logger.Error(err, "teams-registry update failed (non-fatal)")
 		}
 
-		// Override each member's openclaw.json channel policy from the
-		// standalone default ([manager, admin]) written by WorkerReconciler
-		// to the team-mode policy ([leader, admin]). This must run on every
-		// reconcile since WorkerReconciler regenerates openclaw.json
-		// independently and would otherwise revert the policy.
-		adminMatrixID := teamAdminMatrixID(derivedTeam)
-		if adminMatrixID != "" {
-			for _, rm := range members {
-				if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
-					WorkerName:           rm.runtimeName,
-					PrimaryActorMatrixID: leaderMatrixID,
-					AdminMatrixID:        adminMatrixID,
-				}); err != nil {
-					logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rm.runtimeName)
-				}
+		for _, rm := range members {
+			role := RoleTeamWorker
+			if rm.ref.Name == leaderRef.Name {
+				role = RoleTeamLeader
+			}
+			ms := decoupledMemberStatusSnapshot(rm, role)
+			r.reconcileLegacyMember(ctx, derivedTeam, decoupledMemberContext(derivedTeam, rm, role, teamRuntimeName, leaderRuntimeName), &ms)
+
+			policy := r.decoupledChannelPolicy(derivedTeam, members, leaderRef.Name, rm, role)
+			if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
+				WorkerName:     rm.runtimeName,
+				GroupAllowFrom: policy.GroupAllowFrom,
+				DMAllowFrom:    policy.DMAllowFrom,
+			}); err != nil {
+				logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rm.runtimeName)
 			}
 		}
 	}
@@ -930,6 +941,144 @@ func decoupledTeamWorkerEntries(members []decoupledTeamMember, leaderName string
 		})
 	}
 	return entries
+}
+
+type decoupledChannelAllowLists struct {
+	GroupAllowFrom []string
+	DMAllowFrom    []string
+}
+
+func decoupledMemberStatusSnapshot(member decoupledTeamMember, role MemberRole) v1beta1.TeamMemberStatus {
+	return v1beta1.TeamMemberStatus{
+		Name:         member.ref.Name,
+		RuntimeName:  member.runtimeName,
+		Role:         role.String(),
+		MatrixUserID: member.worker.Status.MatrixUserID,
+		RoomID:       member.worker.Status.RoomID,
+		Observed:     true,
+		Ready:        member.worker.Status.Phase == "Running",
+	}
+}
+
+func decoupledMemberContext(t *v1beta1.Team, member decoupledTeamMember, role MemberRole, teamRuntimeName, leaderRuntimeName string) MemberContext {
+	teamLeaderName := ""
+	if role == RoleTeamWorker {
+		teamLeaderName = leaderRuntimeName
+	}
+	return MemberContext{
+		Name:               member.ref.Name,
+		RuntimeName:        member.runtimeName,
+		Namespace:          member.worker.Namespace,
+		Role:               role,
+		Spec:               member.worker.Spec,
+		TeamName:           teamRuntimeName,
+		TeamLeaderName:     teamLeaderName,
+		TeamAdminMatrixID:  teamAdminMatrixID(t),
+		TeamCoordinatorIDs: teamCoordinatorIDs(t),
+	}
+}
+
+func (r *TeamReconciler) decoupledChannelPolicy(t *v1beta1.Team, members []decoupledTeamMember, leaderName string, current decoupledTeamMember, role MemberRole) decoupledChannelAllowLists {
+	resolve := func(value string) string {
+		if value == "" || strings.HasPrefix(value, "@") {
+			return value
+		}
+		if r.Legacy != nil && r.Legacy.Enabled() {
+			return r.Legacy.MatrixUserID(value)
+		}
+		if r.Provisioner != nil {
+			return r.Provisioner.MatrixUserID(value)
+		}
+		return value
+	}
+
+	leaderRuntimeName := decoupledLeaderMember(members, leaderName).runtimeName
+	managerMatrixID := resolve("manager")
+	coordinatorIDs := teamCoordinatorIDs(t)
+
+	groupAllow := make([]string, 0)
+	dmAllow := make([]string, 0)
+
+	switch role {
+	case RoleTeamLeader:
+		groupAllow = append(groupAllow, managerMatrixID)
+		groupAllow = appendResolved(groupAllow, resolve, coordinatorIDs...)
+		for _, member := range members {
+			if member.ref.Name == leaderName {
+				continue
+			}
+			groupAllow = append(groupAllow, resolve(member.runtimeName))
+		}
+		dmAllow = append(dmAllow, managerMatrixID)
+		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
+	default:
+		leaderMatrixID := resolve(leaderRuntimeName)
+		groupAllow = append(groupAllow, leaderMatrixID)
+		groupAllow = appendResolved(groupAllow, resolve, coordinatorIDs...)
+		if t.Spec.PeerMentions == nil || *t.Spec.PeerMentions {
+			for _, member := range members {
+				if member.ref.Name == leaderName || member.ref.Name == current.ref.Name {
+					continue
+				}
+				groupAllow = append(groupAllow, resolve(member.runtimeName))
+			}
+		}
+		dmAllow = append(dmAllow, leaderMatrixID)
+		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
+	}
+
+	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, decoupledIndividualChannelPolicy(t, current, role))
+	if policy != nil {
+		groupAllow = applyChannelAllowPolicy(groupAllow, policy.GroupAllowExtra, policy.GroupDenyExtra, resolve)
+		dmAllow = applyChannelAllowPolicy(dmAllow, policy.DmAllowExtra, policy.DmDenyExtra, resolve)
+	}
+	return decoupledChannelAllowLists{
+		GroupAllowFrom: uniqueTeamStrings(groupAllow),
+		DMAllowFrom:    uniqueTeamStrings(dmAllow),
+	}
+}
+
+func decoupledIndividualChannelPolicy(t *v1beta1.Team, member decoupledTeamMember, role MemberRole) *v1beta1.ChannelPolicySpec {
+	if role == RoleTeamLeader && t.Spec.Leader.Name == member.ref.Name {
+		return t.Spec.Leader.ChannelPolicy
+	}
+	for _, worker := range t.Spec.Workers {
+		if worker.Name == member.ref.Name {
+			return worker.ChannelPolicy
+		}
+	}
+	return member.worker.Spec.ChannelPolicy
+}
+
+func appendResolved(values []string, resolve func(string) string, items ...string) []string {
+	for _, item := range items {
+		values = append(values, resolve(item))
+	}
+	return values
+}
+
+func applyChannelAllowPolicy(base, allowExtra, denyExtra []string, resolve func(string) string) []string {
+	out := append([]string{}, base...)
+	out = appendResolved(out, resolve, allowExtra...)
+	deny := make(map[string]struct{}, len(denyExtra)*2)
+	for _, item := range denyExtra {
+		if item == "" {
+			continue
+		}
+		deny[item] = struct{}{}
+		deny[resolve(item)] = struct{}{}
+	}
+	filtered := make([]string, 0, len(out))
+	for _, item := range out {
+		if item == "" {
+			continue
+		}
+		if _, ok := deny[item]; ok {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }
 
 func aggregateDecoupledTeamStatus(t *v1beta1.Team, members []decoupledTeamMember, leaderName string, totalWorkers int) (bool, int) {
@@ -1056,9 +1205,9 @@ func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.T
 				}
 				rn := w.Spec.EffectiveWorkerName(w.Name)
 				if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
-					WorkerName:           rn,
-					PrimaryActorMatrixID: managerMatrixID,
-					AdminMatrixID:        adminMatrixID,
+					WorkerName:     rn,
+					GroupAllowFrom: []string{managerMatrixID, adminMatrixID},
+					DMAllowFrom:    []string{managerMatrixID, adminMatrixID},
 				}); err != nil {
 					logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", rn)
 				}

@@ -87,12 +87,20 @@ type InjectHeartbeatRequest struct {
 // InjectChannelPolicyRequest describes a channel-policy override applied to a
 // member worker's openclaw.json. Used by TeamReconciler in the decoupled path
 // to switch a Worker's Matrix allow-list from [manager, admin] (standalone
-// default produced by WorkerReconciler) to [primary, admin] where primary is
-// the Team Leader. Reset back to manager-mode on team deletion.
+// default produced by WorkerReconciler) to the role-aware Team allow-list.
+// Reset back to manager-mode on team deletion.
 type InjectChannelPolicyRequest struct {
-	WorkerName           string
-	PrimaryActorMatrixID string // leader Matrix ID (team mode) or @manager:domain (standalone reset)
-	AdminMatrixID        string
+	WorkerName     string
+	GroupAllowFrom []string
+	DMAllowFrom    []string
+}
+
+// SyncTeamLeaderAssetsRequest describes the role-specific, non-credential
+// assets that must be overlaid when a standalone Worker is attached as a Team
+// Leader in the decoupled Team path.
+type SyncTeamLeaderAssetsRequest struct {
+	WorkerName string
+	Runtime    string
 }
 
 // --- Deployer ---
@@ -452,19 +460,41 @@ func (d *Deployer) InjectHeartbeatConfig(ctx context.Context, req InjectHeartbea
 
 // InjectChannelPolicy reads a member worker's existing openclaw.json from OSS,
 // patches channels.matrix.groupAllowFrom and channels.matrix.dm.allowFrom to
-// [primaryActor, admin], and writes it back. WorkerReconciler regenerates
-// openclaw.json with standalone semantics ([manager, admin]); when a Worker
-// is referenced into a Team via spec.workerMembers, TeamReconciler calls this
-// to override the policy with the Team Leader. On Team deletion, the caller
-// resets primary back to @manager:domain.
+// the caller-computed final allow-lists, and writes it back. WorkerReconciler
+// regenerates openclaw.json with standalone semantics; when a Worker is
+// referenced into a Team via spec.workerMembers, TeamReconciler calls this to
+// apply the role-aware Team policy. On Team deletion, the caller resets the
+// lists to standalone manager/admin semantics.
 func (d *Deployer) InjectChannelPolicy(ctx context.Context, req InjectChannelPolicyRequest) error {
-	if req.WorkerName == "" || req.PrimaryActorMatrixID == "" || req.AdminMatrixID == "" {
+	if req.WorkerName == "" || len(req.GroupAllowFrom) == 0 || len(req.DMAllowFrom) == 0 {
 		return nil
 	}
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
-	updated := agentconfig.InjectChannelPolicy(existing, req.PrimaryActorMatrixID, req.AdminMatrixID)
+	updated := agentconfig.InjectChannelPolicy(existing, req.GroupAllowFrom, req.DMAllowFrom)
 	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
+}
+
+// SyncTeamLeaderAssets overlays the Team Leader built-in AGENTS.md section,
+// built-in skills, and seed-only top-level files onto an already-provisioned
+// Worker. It intentionally does not rewrite openclaw.json or credentials:
+// decoupled Teams do not own Worker lifecycle/config wholesale.
+func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderAssetsRequest) error {
+	if req.WorkerName == "" {
+		return nil
+	}
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	role := "team_leader"
+	if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, "", "", "", nil, ""); err != nil {
+		return err
+	}
+	if err := d.pushBuiltinSkills(ctx, req.WorkerName, agentPrefix, role, req.Runtime); err != nil {
+		return err
+	}
+	if err := d.pushBuiltinTopLevelFiles(ctx, req.WorkerName, agentPrefix, role, req.Runtime); err != nil {
+		return err
+	}
+	return nil
 }
 
 // PushOnDemandSkills pushes on-demand skills to a worker.

@@ -47,6 +47,7 @@ type WorkerDeployer interface {
 	InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error
 	InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error
 	InjectChannelPolicy(ctx context.Context, req InjectChannelPolicyRequest) error
+	SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderAssetsRequest) error
 	EnsureTeamStorage(ctx context.Context, teamName string) error
 }
 

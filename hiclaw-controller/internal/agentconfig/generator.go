@@ -138,7 +138,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"model": map[string]interface{}{
 					"primary": "hiclaw-gateway/" + modelName,
 				},
-				"models":       g.allModelAliases(modelName),
+				"models":        g.allModelAliases(modelName),
 				"maxConcurrent": 4,
 				"subagents": map[string]interface{}{
 					"maxConcurrent": 8,
@@ -378,21 +378,21 @@ func defaultModelSpec(modelName string) ModelSpec {
 	}
 
 	presets := map[string]preset{
-		"gpt-5.3-codex":     {400000, 128000, true, true},
-		"gpt-5-mini":        {400000, 128000, true, true},
-		"gpt-5-nano":        {400000, 128000, true, true},
-		"claude-opus-4-6":   {1000000, 128000, true, true},
-		"claude-sonnet-4-6": {1000000, 64000, true, true},
-		"claude-haiku-4-5":  {200000, 64000, true, true},
-		"qwen3.6-plus":      {200000, 64000, true, true},
-		"qwen3.5-plus":      {200000, 64000, true, true},
-		"deepseek-chat":     {256000, 128000, false, true},
-		"deepseek-reasoner": {256000, 128000, false, true},
-		"kimi-k2.5":         {256000, 128000, true, true},
-		"glm-5":             {200000, 128000, false, true},
-		"MiniMax-M2.7":          {200000, 128000, false, true},
+		"gpt-5.3-codex":          {400000, 128000, true, true},
+		"gpt-5-mini":             {400000, 128000, true, true},
+		"gpt-5-nano":             {400000, 128000, true, true},
+		"claude-opus-4-6":        {1000000, 128000, true, true},
+		"claude-sonnet-4-6":      {1000000, 64000, true, true},
+		"claude-haiku-4-5":       {200000, 64000, true, true},
+		"qwen3.6-plus":           {200000, 64000, true, true},
+		"qwen3.5-plus":           {200000, 64000, true, true},
+		"deepseek-chat":          {256000, 128000, false, true},
+		"deepseek-reasoner":      {256000, 128000, false, true},
+		"kimi-k2.5":              {256000, 128000, true, true},
+		"glm-5":                  {200000, 128000, false, true},
+		"MiniMax-M2.7":           {200000, 128000, false, true},
 		"MiniMax-M2.7-highspeed": {200000, 128000, false, true},
-		"MiniMax-M2.5":          {200000, 128000, false, true},
+		"MiniMax-M2.5":           {200000, 128000, false, true},
 	}
 
 	p, found := presets[modelName]
@@ -525,19 +525,13 @@ func InjectHeartbeat(existing []byte, enabled bool, every string) []byte {
 }
 
 // InjectChannelPolicy patches channels.matrix.groupAllowFrom and
-// channels.matrix.dm.allowFrom in an existing openclaw.json blob so the
-// worker only accepts group/DM messages from primaryActorMatrixID and
-// adminMatrixID. Caller controls the semantics of "primary": for a Team
-// member it is the Team Leader's Matrix ID; for a standalone worker it is
-// @manager:domain.
-//
-// This exists because WorkerReconciler always generates openclaw.json with
-// standalone semantics ([manager, admin]). When a Worker is referenced into
-// a Team via spec.workerMembers, TeamReconciler must override the policy to
-// [leader, admin] so leader-issued tasks are accepted. Empty inputs are
-// treated as no-op to avoid wiping a valid policy on partial information.
-func InjectChannelPolicy(existing []byte, primaryActorMatrixID, adminMatrixID string) []byte {
-	if primaryActorMatrixID == "" || adminMatrixID == "" {
+// channels.matrix.dm.allowFrom in an existing openclaw.json blob with the
+// caller-computed final allow-lists. Empty inputs are treated as no-op to
+// avoid wiping a valid policy on partial information.
+func InjectChannelPolicy(existing []byte, groupAllowFrom, dmAllowFrom []string) []byte {
+	groupAllowFrom = uniqueNonEmptyStrings(groupAllowFrom)
+	dmAllowFrom = uniqueNonEmptyStrings(dmAllowFrom)
+	if len(groupAllowFrom) == 0 || len(dmAllowFrom) == 0 {
 		return existing
 	}
 	var config map[string]interface{}
@@ -558,16 +552,39 @@ func InjectChannelPolicy(existing []byte, primaryActorMatrixID, adminMatrixID st
 		channels["matrix"] = matrix
 	}
 
-	allowFrom := []interface{}{primaryActorMatrixID, adminMatrixID}
-	matrix["groupAllowFrom"] = allowFrom
+	matrix["groupAllowFrom"] = stringSliceToInterfaces(groupAllowFrom)
 
 	dm, _ := matrix["dm"].(map[string]interface{})
 	if dm == nil {
 		dm = make(map[string]interface{})
 		matrix["dm"] = dm
 	}
-	dm["allowFrom"] = allowFrom
+	dm["allowFrom"] = stringSliceToInterfaces(dmAllowFrom)
 
 	out, _ := json.MarshalIndent(config, "", "  ")
+	return out
+}
+
+func stringSliceToInterfaces(values []string) []interface{} {
+	out := make([]interface{}, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
 	return out
 }

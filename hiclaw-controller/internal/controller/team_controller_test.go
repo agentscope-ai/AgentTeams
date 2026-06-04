@@ -1159,6 +1159,149 @@ func TestReconcileTeamDecoupled_WorkerNotFound(t *testing.T) {
 	}
 }
 
+func TestReconcileTeamDecoupled_RoleAwareChannelPolicy(t *testing.T) {
+	ctx := context.Background()
+	legacy, _ := newTestLegacy(t)
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen", Runtime: "copaw"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	worker1 := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Spec: v1beta1.WorkerSpec{
+			Model: "qwen",
+			ChannelPolicy: &v1beta1.ChannelPolicySpec{
+				GroupDenyExtra: []string{"qa"},
+			},
+		},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@dev:matrix.local",
+			RoomID:       "!room-dev:matrix.local",
+		},
+	}
+	worker2 := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "qa", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@qa:matrix.local",
+			RoomID:       "!room-qa:matrix.local",
+		},
+	}
+	admin := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:     "Alice",
+			PermissionLevel: 2,
+		},
+		Status: v1beta1.HumanStatus{
+			Phase:           "Active",
+			MatrixUserID:    "@alice:matrix.local",
+			InitialPassword: "pw",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Admin: &v1beta1.TeamAdminSpec{
+				Name:         "alice",
+				MatrixUserID: "@alice:matrix.local",
+			},
+			ChannelPolicy: &v1beta1.ChannelPolicySpec{
+				GroupAllowExtra: []string{"external-bot"},
+			},
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+				{Name: "qa"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker1.DeepCopy(), worker2.DeepCopy(), admin.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	provisioner := mocks.NewMockProvisioner()
+	provisioner.MatrixUserIDFn = func(name string) string {
+		return "@" + name + ":matrix.local"
+	}
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: provisioner,
+		Deployer:    deployer,
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		Legacy:      legacy,
+		AgentFSDir:  t.TempDir(),
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	if _, err := r.reconcileTeamDecoupled(ctx, team, patchBase); err != nil {
+		t.Fatalf("reconcileTeamDecoupled: %v", err)
+	}
+
+	if len(deployer.Calls.SyncTeamLeaderAssets) != 1 {
+		t.Fatalf("SyncTeamLeaderAssets calls=%d, want 1", len(deployer.Calls.SyncTeamLeaderAssets))
+	}
+	if got := deployer.Calls.SyncTeamLeaderAssets[0].WorkerName; got != "lead" {
+		t.Fatalf("SyncTeamLeaderAssets WorkerName=%q, want lead", got)
+	}
+
+	policies := map[string]service.InjectChannelPolicyRequest{}
+	for _, call := range deployer.Calls.InjectChannelPolicy {
+		policies[call.WorkerName] = call
+	}
+	leaderPolicy := policies["lead"]
+	if !stringSliceContains(leaderPolicy.GroupAllowFrom, "@manager:matrix.local") {
+		t.Errorf("leader groupAllowFrom=%v, want manager", leaderPolicy.GroupAllowFrom)
+	}
+	if !stringSliceContains(leaderPolicy.GroupAllowFrom, "@dev:matrix.local") ||
+		!stringSliceContains(leaderPolicy.GroupAllowFrom, "@qa:matrix.local") {
+		t.Errorf("leader groupAllowFrom=%v, want both workers", leaderPolicy.GroupAllowFrom)
+	}
+	if !stringSliceContains(leaderPolicy.GroupAllowFrom, "@alice:matrix.local") ||
+		!stringSliceContains(leaderPolicy.DMAllowFrom, "@alice:matrix.local") {
+		t.Errorf("leader policy=%+v, want team admin in group and dm", leaderPolicy)
+	}
+	if !stringSliceContains(leaderPolicy.GroupAllowFrom, "@external-bot:matrix.local") {
+		t.Errorf("leader groupAllowFrom=%v, want team-level external bot", leaderPolicy.GroupAllowFrom)
+	}
+
+	devPolicy := policies["dev"]
+	if !stringSliceContains(devPolicy.GroupAllowFrom, "@lead:matrix.local") {
+		t.Errorf("dev groupAllowFrom=%v, want leader", devPolicy.GroupAllowFrom)
+	}
+	if stringSliceContains(devPolicy.GroupAllowFrom, "@manager:matrix.local") {
+		t.Errorf("dev groupAllowFrom=%v, must not include manager", devPolicy.GroupAllowFrom)
+	}
+	if stringSliceContains(devPolicy.GroupAllowFrom, "@qa:matrix.local") {
+		t.Errorf("dev groupAllowFrom=%v, must not include denied peer qa", devPolicy.GroupAllowFrom)
+	}
+	if !stringSliceContains(devPolicy.GroupAllowFrom, "@external-bot:matrix.local") {
+		t.Errorf("dev groupAllowFrom=%v, want team-level external bot", devPolicy.GroupAllowFrom)
+	}
+
+	qaPolicy := policies["qa"]
+	if !stringSliceContains(qaPolicy.GroupAllowFrom, "@dev:matrix.local") {
+		t.Errorf("qa groupAllowFrom=%v, want peer dev", qaPolicy.GroupAllowFrom)
+	}
+}
+
 func TestReconcileTeamDecoupled_WorkerNotProvisioned(t *testing.T) {
 	ctx := context.Background()
 

@@ -75,6 +75,8 @@ spec:
               value: {{ include "hiclaw.worker.copawImage" . | quote }}
             - name: HICLAW_HERMES_WORKER_IMAGE
               value: {{ include "hiclaw.worker.hermesImage" . | quote }}
+            - name: HICLAW_OPENHUMAN_WORKER_IMAGE
+              value: {{ include "hiclaw.worker.openhumanImage" . | quote }}
             - name: HICLAW_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ

@@ -54,6 +54,7 @@ wait_for_session_stable 5 60
 
 # Snapshot metrics baseline before sending message (to calculate delta later)
 METRICS_BASELINE=$(snapshot_baseline)
+TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 # Send create worker request.
 #
@@ -66,10 +67,13 @@ METRICS_BASELINE=$(snapshot_baseline)
 # avoid that by spelling out all four inputs and telling Manager to skip
 # confirmation, so the test exercises actual Worker creation rather than the
 # LLM's confirmation-loop behavior.
+#
+# The runtime is explicit for the same reason: CI matrix runtime must win over
+# any rendered fallback text the Manager may have cached in its workspace.
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Please create a new Worker now using these exact values — do not ask me to confirm any of them:
 - name: alice
-- runtime: use the install default (do not ask, just pick whatever the env says)
+- runtime: ${TEST_WORKER_RUNTIME} (use this exact runtime; do not reinterpret it as the install default)
 - SOUL/role: Frontend developer specializing in modern web frameworks, responsive design, and clean UI implementation
 - skills: github-operations (file-sync / task-progress / project-participation are auto-included, no need to ask)
 
@@ -145,13 +149,18 @@ assert_eq "0" "${ALICE_SOUL_EXISTS}" "Worker Alice SOUL.md exists in MinIO"
 ALICE_SOUL=$(minio_read_file "agents/alice/SOUL.md")
 assert_contains_i "${ALICE_SOUL}" "frontend" "Alice's SOUL.md mentions frontend"
 
+ALICE_WORKER_JSON=$(exec_in_agent hiclaw get workers alice -o json 2>/dev/null || echo "{}")
+ALICE_RUNTIME=$(echo "${ALICE_WORKER_JSON}" | jq -r '.runtime // empty')
+assert_eq "${TEST_WORKER_RUNTIME}" "${ALICE_RUNTIME}" \
+    "Worker Alice runtime matches test matrix (got: '${ALICE_RUNTIME}', want: '${TEST_WORKER_RUNTIME}')"
+
 log_section "Start Worker Container"
 
 # Extract install parameters from Manager's reply and start Worker
 # In real test, we would parse the install command from REPLY
 log_info "Worker Alice verification complete (container start requires install params from Manager)"
 
-if [ "${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}" = "copaw" ]; then
+if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
     log_section "Verify CoPaw Worker Probes"
 
     if wait_for_worker_container "alice" 180; then
@@ -170,7 +179,7 @@ if [ "${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}" = "copaw" ]; then
         log_info "CoPaw Worker Alice probes skipped because container was not started by this test run"
     fi
 else
-    log_info "CoPaw Worker Alice probes skipped for worker runtime '${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}'"
+    log_info "CoPaw Worker Alice probes skipped for worker runtime '${TEST_WORKER_RUNTIME}'"
 fi
 
 log_section "Collect Metrics"

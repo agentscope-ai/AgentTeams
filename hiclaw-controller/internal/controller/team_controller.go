@@ -153,10 +153,11 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 
 // reconcileTeamNormal drives one convergence pass over a Team CR:
 //  1. Provision team-level infra (rooms, shared storage)
-//  2. Clean up stale members (in Status.Members but no longer desired)
-//  3. Reconcile each desired member (leader + workers) via the shared phases
-//  4. Inject leader coordination context + register with Manager + Legacy
-//  5. Summarise backend readiness and patch Team.Status
+//  2. Write local inline configs
+//  3. Clean up stale members (in Status.Members but no longer desired)
+//  4. Reconcile each desired member (leader + workers) via the shared phases
+//  4.5. Inject leader coordination context + SOUL.md template (after package deploy)
+//  5. Registry updates + summarise backend readiness and patch Team.Status
 func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Team) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -176,6 +177,9 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		workerRuntimeNames = append(workerRuntimeNames, w.EffectiveWorkerName())
 	}
 	if err := validateTeamRuntimeNames(t); err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
+	if err := r.validateNoStandaloneWorkerRuntimeConflicts(ctx, t); err != nil {
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
@@ -269,26 +273,6 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	}
 	pruneMembers(&t.Status, desiredNames)
 
-	// --- Step 3.5: Leader coordination context + SOUL.md template ---
-	// Must run before member reconciliation so renderAndPushSoulTemplate
-	// pushes the final SOUL.md to MinIO before the leader container starts
-	// and before DeployWorkerConfig would otherwise race with it.
-	if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
-		LeaderName:         leaderRuntimeName,
-		Role:               RoleTeamLeader.String(),
-		TeamName:           teamRuntimeName,
-		TeamRoomID:         rooms.TeamRoomID,
-		LeaderDMRoomID:     rooms.LeaderDMRoomID,
-		HeartbeatEvery:     leaderHeartbeatEvery(t),
-		WorkerIdleTimeout:  t.Spec.Leader.WorkerIdleTimeout,
-		TeamWorkers:        workerRuntimeNames,
-		TeamAdminID:        teamAdminMatrixID(derivedTeam),
-		TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
-		LeaderSoul:         t.Spec.Leader.Soul,
-	}); err != nil {
-		logger.Error(err, "leader coordination context injection failed (non-fatal)")
-	}
-
 	// --- Step 4: Reconcile each desired member (leader first) ---
 	//
 	// ms.Observed flips to true the moment ReconcileMemberInfra returns nil —
@@ -328,6 +312,28 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		// only after ReconcileMemberExpose succeeded: a fully converged
 		// member is what the Manager-side tooling expects to find there.
 		r.reconcileLegacyMember(ctx, t, m, ms)
+	}
+
+	// --- Step 4.5: Leader coordination context + SOUL.md template ---
+	// Runs AFTER member reconciliation so that package deploy (seed-only)
+	// writes the leader's package AGENTS.md and SOUL.md to OSS first.
+	// InjectCoordinationContext then reads the package content from OSS and
+	// overlays coordination context on top; renderAndPushSoulTemplate is
+	// seed-only and correctly skips when the package already provided SOUL.md.
+	if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
+		LeaderName:         leaderRuntimeName,
+		Role:               RoleTeamLeader.String(),
+		TeamName:           teamRuntimeName,
+		TeamRoomID:         rooms.TeamRoomID,
+		LeaderDMRoomID:     rooms.LeaderDMRoomID,
+		HeartbeatEvery:     leaderHeartbeatEvery(t),
+		WorkerIdleTimeout:  t.Spec.Leader.WorkerIdleTimeout,
+		TeamWorkers:        workerRuntimeNames,
+		TeamAdminID:        teamAdminMatrixID(derivedTeam),
+		TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
+		LeaderSoul:         t.Spec.Leader.Soul,
+	}); err != nil {
+		logger.Error(err, "leader coordination context injection failed (non-fatal)")
 	}
 
 	// --- Step 5: Registry updates ---
@@ -1011,6 +1017,38 @@ func validateTeamRuntimeNames(t *v1beta1.Team) error {
 			return fmt.Errorf("duplicate team runtime workerName %q between %s and worker[%s]", runtimeName, owner, w.Name)
 		}
 		seen[runtimeName] = "worker[" + w.Name + "]"
+	}
+	return nil
+}
+
+func (r *TeamReconciler) validateNoStandaloneWorkerRuntimeConflicts(ctx context.Context, t *v1beta1.Team) error {
+	if r.Client == nil {
+		return nil
+	}
+
+	desiredNames := map[string]string{
+		t.Spec.Leader.Name: "leader[" + t.Spec.Leader.Name + "]",
+	}
+	desiredRuntimeNames := map[string]string{
+		t.Spec.Leader.EffectiveWorkerName(): "leader[" + t.Spec.Leader.Name + "]",
+	}
+	for _, w := range t.Spec.Workers {
+		desiredNames[w.Name] = "worker[" + w.Name + "]"
+		desiredRuntimeNames[w.EffectiveWorkerName()] = "worker[" + w.Name + "]"
+	}
+
+	var workers v1beta1.WorkerList
+	if err := r.List(ctx, &workers, client.InNamespace(t.Namespace)); err != nil {
+		return fmt.Errorf("list standalone workers: %w", err)
+	}
+	for _, worker := range workers.Items {
+		if owner, ok := desiredNames[worker.Name]; ok {
+			return fmt.Errorf("team member %s name %q conflicts with existing standalone Worker %s/%s", owner, worker.Name, worker.Namespace, worker.Name)
+		}
+		runtimeName := worker.Spec.EffectiveWorkerName(worker.Name)
+		if owner, ok := desiredRuntimeNames[runtimeName]; ok {
+			return fmt.Errorf("team member %s runtime workerName %q conflicts with existing standalone Worker %s/%s", owner, runtimeName, worker.Namespace, worker.Name)
+		}
 	}
 	return nil
 }

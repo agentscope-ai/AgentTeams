@@ -69,7 +69,13 @@ class FileSync:
         self.bucket = bucket
         self.worker_name = worker_name
         self._secure = secure
-        self.local_dir = local_dir or Path.home() / ".copaw-worker" / worker_name
+        configured_working_dir = os.environ.get("COPAW_WORKING_DIR")
+        if local_dir is not None:
+            self.local_dir = local_dir
+        elif configured_working_dir:
+            self.local_dir = Path(configured_working_dir).parent
+        else:
+            self.local_dir = Path.home() / ".copaw-worker" / worker_name
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self._prefix = f"agents/{worker_name}"
         self._alias_set = False

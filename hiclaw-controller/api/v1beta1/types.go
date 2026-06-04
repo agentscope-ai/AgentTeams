@@ -102,7 +102,7 @@ type AgentConfigRef struct {
 
 type WorkerSpec struct {
 	Model         string              `json:"model"`
-	Runtime       string              `json:"runtime,omitempty"`    // openclaw | copaw | hermes (default: openclaw)
+	Runtime       string              `json:"runtime,omitempty"`    // openclaw | copaw | hermes | openhuman (default: openclaw)
 	Image         string              `json:"image,omitempty"`      // custom Docker image
 	WorkerName    string              `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string              `json:"identity,omitempty"`
@@ -518,7 +518,7 @@ type Manager struct {
 
 type ManagerSpec struct {
 	Model      string        `json:"model"`
-	Runtime    string        `json:"runtime,omitempty"`    // openclaw | copaw | hermes (default: openclaw)
+	Runtime    string        `json:"runtime,omitempty"`    // openclaw | copaw | hermes | openhuman (default: openclaw)
 	Image      string        `json:"image,omitempty"`      // custom Docker image
 	Soul       string        `json:"soul,omitempty"`       // custom SOUL.md content
 	Agents     string        `json:"agents,omitempty"`     // custom AGENTS.md content

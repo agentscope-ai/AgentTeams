@@ -1403,45 +1403,44 @@ generate_key() {
 
 # Detect container runtime socket on the host
 detect_socket() {
-    # 1. First priority: Check if rootless Podman socket is ALREADY running/existing
-    if [ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]; then
-        echo "${XDG_RUNTIME_DIR}/podman/podman.sock"
-        return 0
-    fi
+    local socket_path
 
-    # 2. Check for system-wide rootful Podman socket
-    if [ -S "/run/podman/podman.sock" ]; then
-        echo "/run/podman/podman.sock"
-        return 0
-    fi
+    case "${DOCKER_CMD:-}" in
+        docker)
+            # Match the socket mounted into the controller to the Docker CLI
+            # context used to create networks, volumes, and containers.
+            socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
+            if [ -n "${socket_path}" ] && [ -S "${socket_path}" ]; then
+                echo "${socket_path}"
+                return 0
+            fi
+            if [ -S "/var/run/docker.sock" ]; then
+                echo "/var/run/docker.sock"
+                return 0
+            fi
+            ;;
+        podman)
+            # Match the mounted socket to Podman when Podman is the selected
+            # runtime; do not let a Docker socket shadow an existing Podman API.
+            if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]; then
+                echo "${XDG_RUNTIME_DIR}/podman/podman.sock"
+                return 0
+            fi
+            if [ -S "/run/podman/podman.sock" ]; then
+                echo "/run/podman/podman.sock"
+                return 0
+            fi
 
-    # 3. Check for standard system-wide Docker socket
-    if [ -S "/var/run/docker.sock" ]; then
-        echo "/var/run/docker.sock"
-        return 0
-    fi
-
-    # 4. Try to get socket from current active docker context (e.g., Docker Desktop/OrbStack)
-    if command -v docker >/dev/null 2>&1; then
-        local socket_path
-        socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
-        if [ -n "${socket_path}" ] && [ -S "${socket_path}" ]; then
-            echo "${socket_path}"
-            return 0
-        fi
-    fi
-
-    # 5. Active Fallback: If Podman is installed but not running, auto-enable and start its rootless socket
-    if command -v podman >/dev/null 2>&1; then
-        # Safely inform the user via stderr to satisfy PR review without polluting stdout capture
-        echo "Enabling rootless Podman socket via systemd..." >&2
-        systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
-        # Double check if the rootless socket was successfully created after turning it on
-        if [ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]; then
-            echo "${XDG_RUNTIME_DIR}/podman/podman.sock"
-            return 0
-        fi
-    fi
+            # Active fallback: if Podman is installed but not running, try to
+            # enable its rootless socket without polluting stdout capture.
+            echo "Enabling rootless Podman socket via systemd..." >&2
+            systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
+            if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/podman/podman.sock" ]; then
+                echo "${XDG_RUNTIME_DIR}/podman/podman.sock"
+                return 0
+            fi
+            ;;
+    esac
 }
 
 # Detect local LAN IP address (cross-platform: macOS and Linux)

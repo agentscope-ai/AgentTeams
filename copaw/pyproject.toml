@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "copaw-worker"
-version = "0.1.11"
+version = "1.0.3"
 description = "Lightweight HiClaw Worker runtime based on CoPaw"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
-    "copaw==0.0.5",
+    "copaw>=1.0.2,<2.0",
     "matrix-nio[e2e]>=0.24.0",
     "markdown-it-py>=3.0",
     "linkify-it-py>=2.0",
@@ -25,3 +25,6 @@ copaw-worker = "copaw_worker.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+copaw_worker = ["templates/*.json"]

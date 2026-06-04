@@ -17,7 +17,7 @@
 #
 # Usage:
 #   update-worker-config.sh --name <NAME> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]
-#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
+#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
 #
 # Prerequisites:
 #   - Worker must already exist (created via create-worker.sh)
@@ -65,7 +65,7 @@ done
 
 if [ -z "${WORKER_NAME}" ]; then
     echo "Usage: update-worker-config.sh --name <NAME> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]"
-    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
+    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
     exit 1
 fi
 
@@ -74,7 +74,7 @@ fi
 #
 # Why: changing runtime requires destroying the old container and
 # starting a new one from a different image (openclaw vs copaw vs
-# hermes). The controller's reconcile loop is the only path that
+# hermes vs openhuman). The controller's reconcile loop is the only path that
 # does this correctly — see hiclaw-controller/internal/controller/
 # member_reconcile.go::ensureMemberContainerPresent. Trying to do
 # it in-place from the manager would double-write config files and
@@ -82,8 +82,8 @@ fi
 # ============================================================
 if [ -n "${RUNTIME}" ]; then
     case "${RUNTIME}" in
-        openclaw|copaw|hermes) ;;
-        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, hermes." ;;
+        openclaw|copaw|hermes|openhuman) ;;
+        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, hermes, openhuman." ;;
     esac
 
     if [ -n "${PACKAGE_DIR}" ]; then

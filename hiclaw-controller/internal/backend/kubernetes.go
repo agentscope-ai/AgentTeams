@@ -22,12 +22,13 @@ const defaultK8sNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/n
 
 // K8sConfig holds Kubernetes backend configuration.
 type K8sConfig struct {
-	Namespace         string
-	WorkerImage       string
-	CopawWorkerImage  string
-	HermesWorkerImage string
-	WorkerCPU         string
-	WorkerMemory      string
+	Namespace            string
+	WorkerImage          string
+	CopawWorkerImage     string
+	HermesWorkerImage    string
+	OpenHumanWorkerImage string
+	WorkerCPU            string
+	WorkerMemory         string
 
 	// ControllerName identifies this controller instance. The agent
 	// PodTemplateSpec overlay (see LoadAgentPodTemplate) is looked up as the
@@ -179,6 +180,44 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	// SA token is mounted via projected volume; tell the worker where to read it.
 	req.Env["HICLAW_AUTH_TOKEN_FILE"] = "/var/run/secrets/hiclaw/token"
 
+	// For OpenHuman runtime, map internal env var names to the aliases expected
+	// by openhuman-worker-entrypoint.sh: MATRIX_ACCESS_TOKEN, MATRIX_HOME_ROOM_ID,
+	// MATRIX_HOMESERVER_URL. These differ from the HICLAW_* names the controller
+	// uses internally.
+	if req.Runtime == RuntimeOpenHuman {
+		if v := req.Env["HICLAW_WORKER_MATRIX_TOKEN"]; v != "" {
+			req.Env["MATRIX_ACCESS_TOKEN"] = v
+		}
+		if v := req.Env["HICLAW_WORKER_ROOM_ID"]; v != "" {
+			req.Env["MATRIX_HOME_ROOM_ID"] = v
+		}
+		if v := req.Env["HICLAW_MATRIX_URL"]; v != "" {
+			req.Env["MATRIX_HOMESERVER_URL"] = v
+		}
+
+		// Build MATRIX_USER_ID for openhuman-worker-entrypoint.sh (fallback;
+		// primary source is openclaw.json channels.matrix.userId).
+		if domain := req.Env["HICLAW_MATRIX_DOMAIN"]; domain != "" && req.Env["HICLAW_WORKER_NAME"] != "" {
+			req.Env["MATRIX_USER_ID"] = fmt.Sprintf("@%s:%s", req.Env["HICLAW_WORKER_NAME"], domain)
+		}
+
+		// Build MATRIX_ALLOWED_USERS for openhuman-worker-entrypoint.sh.
+		// Primary source is openclaw.json (dm.allowFrom + groupAllowFrom)
+		// read by the entrypoint's bridge layer; env var serves as fallback.
+		var allowedUsers []string
+		if domain := req.Env["HICLAW_MATRIX_DOMAIN"]; domain != "" {
+			// Admin user — can DM and @mention the worker.
+			if admin := os.Getenv("HICLAW_ADMIN_USER"); admin != "" {
+				allowedUsers = append(allowedUsers, fmt.Sprintf("@%s:%s", admin, domain))
+			}
+			// Manager Matrix username is "manager" by convention (see agentconfig/generator.go).
+			allowedUsers = append(allowedUsers, fmt.Sprintf("@manager:%s", domain))
+		}
+		if len(allowedUsers) > 0 {
+			req.Env["MATRIX_ALLOWED_USERS"] = strings.Join(allowedUsers, ",")
+		}
+	}
+
 	image := req.Image
 	if image == "" {
 		switch {
@@ -186,6 +225,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			image = k.config.CopawWorkerImage
 		case req.Runtime == RuntimeHermes && k.config.HermesWorkerImage != "":
 			image = k.config.HermesWorkerImage
+		case req.Runtime == RuntimeOpenHuman && k.config.OpenHumanWorkerImage != "":
+			image = k.config.OpenHumanWorkerImage
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -198,6 +239,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		switch {
 		case req.Runtime == RuntimeCopaw:
 			req.WorkingDir = "/root/.copaw-worker"
+		case req.Runtime == RuntimeOpenHuman:
+			req.WorkingDir = "/home/openhuman/.openhuman"
 		default:
 			// Both openclaw and hermes use the same workspace layout:
 			// HOME == WorkingDir == /root/hiclaw-fs/agents/<name> (== MinIO
@@ -525,6 +568,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeCopaw
 	case RuntimeHermes:
 		return RuntimeHermes
+	case RuntimeOpenHuman:
+		return RuntimeOpenHuman
 	default:
 		return RuntimeOpenClaw
 	}

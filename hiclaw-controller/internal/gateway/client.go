@@ -13,11 +13,13 @@ type Client interface {
 	DeleteConsumer(ctx context.Context, name string) error
 
 	// AuthorizeAIRoutes adds the consumer to all AI routes' allowedConsumers.
-	// Handles 409 conflict with retry logic.
-	AuthorizeAIRoutes(ctx context.Context, consumerName string) error
+	// Handles 409 conflict with retry logic. When modelAPIID is non-empty,
+	// it overrides the default Model API ID for consumer authorization.
+	AuthorizeAIRoutes(ctx context.Context, consumerName string, modelAPIID string) error
 
 	// DeauthorizeAIRoutes removes the consumer from all AI routes' allowedConsumers.
-	DeauthorizeAIRoutes(ctx context.Context, consumerName string) error
+	// When modelAPIID is non-empty, it overrides the default Model API ID.
+	DeauthorizeAIRoutes(ctx context.Context, consumerName string, modelAPIID string) error
 
 	// ExposePort creates gateway resources to expose a worker port.
 	ExposePort(ctx context.Context, req PortExposeRequest) error
@@ -49,6 +51,11 @@ type Client interface {
 
 	// EnsureAIRoute creates an AI route with consumer auth.
 	EnsureAIRoute(ctx context.Context, req AIRouteRequest) error
+
+	// ResolveModelProvider looks up a named APIG Model API (HttpApi) and returns
+	// its basePath, Intranet subdomain URL, and httpApiId. Only meaningful for
+	// the ai-gateway provider; Higress returns ErrUnsupportedOp.
+	ResolveModelProvider(ctx context.Context, name string) (*ModelProviderInfo, error)
 
 	// Healthy returns nil if the gateway console is reachable and authenticated.
 	Healthy(ctx context.Context) error

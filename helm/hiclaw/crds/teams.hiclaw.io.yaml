@@ -82,6 +82,14 @@ spec:
                       description: Runtime identity for leader (Matrix localpart, OSS path key). Defaults to leader.name.
                     model:
                       type: string
+                    modelProvider:
+                      type: string
+                      description: >
+                        Name of the APIG Model API (HttpApi) to use as the LLM provider.
+                        When set, the controller discovers the Model API's endpoint
+                        (basePath + Intranet subdomain) and authorization target from
+                        the APIG ListHttpApis API. When omitted, the cluster-wide
+                        AI Gateway URL and Model API ID are used.
                     identity:
                       type: string
                     soul:
@@ -234,6 +242,14 @@ spec:
                         description: Runtime identity for worker (Matrix localpart, OSS path key). Defaults to worker.name.
                       model:
                         type: string
+                      modelProvider:
+                        type: string
+                        description: >
+                          Name of the APIG Model API (HttpApi) to use as the LLM provider.
+                          When set, the controller discovers the Model API's endpoint
+                          (basePath + Intranet subdomain) and authorization target from
+                          the APIG ListHttpApis API. When omitted, the cluster-wide
+                          AI Gateway URL and Model API ID are used.
                       runtime:
                         type: string
                         enum: [openclaw, copaw, hermes, openhuman]

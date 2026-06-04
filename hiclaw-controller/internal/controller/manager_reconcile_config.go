@@ -25,6 +25,10 @@ func (r *ManagerReconciler) reconcileManagerConfig(ctx context.Context, s *manag
 		return reconcile.Result{}, fmt.Errorf("deploy package: %w", err)
 	}
 
+	var aiGatewayURL string
+	if s.modelProviderInfo != nil {
+		aiGatewayURL = s.modelProviderInfo.IntranetURL
+	}
 	if err := r.Deployer.DeployManagerConfig(ctx, service.ManagerDeployRequest{
 		Name:           m.Name,
 		Spec:           m.Spec,
@@ -32,6 +36,7 @@ func (r *ManagerReconciler) reconcileManagerConfig(ctx context.Context, s *manag
 		GatewayKey:     s.provResult.GatewayKey,
 		MatrixPassword: s.provResult.MatrixPassword,
 		McpServers:     m.Spec.McpServers,
+		AIGatewayURL:   aiGatewayURL,
 		IsUpdate:       isUpdate,
 	}); err != nil {
 		return reconcile.Result{}, fmt.Errorf("deploy manager config: %w", err)

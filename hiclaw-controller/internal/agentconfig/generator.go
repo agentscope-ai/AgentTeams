@@ -38,8 +38,10 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	}
 
 	aiGatewayURL := g.config.AIGatewayURL
+	if req.AIGatewayURL != "" {
+		aiGatewayURL = req.AIGatewayURL
+	}
 	if aiGatewayURL == "" {
-		// K8s deployments must set HICLAW_AI_GATEWAY_URL (Helm injects it automatically).
 		aiGatewayURL = "http://aigw-local.hiclaw.io:8080"
 	}
 
@@ -138,7 +140,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"model": map[string]interface{}{
 					"primary": "hiclaw-gateway/" + modelName,
 				},
-				"models":       g.allModelAliases(modelName),
+				"models":        g.allModelAliases(modelName),
 				"maxConcurrent": 4,
 				"subagents": map[string]interface{}{
 					"maxConcurrent": 8,
@@ -378,21 +380,21 @@ func defaultModelSpec(modelName string) ModelSpec {
 	}
 
 	presets := map[string]preset{
-		"gpt-5.3-codex":     {400000, 128000, true, true},
-		"gpt-5-mini":        {400000, 128000, true, true},
-		"gpt-5-nano":        {400000, 128000, true, true},
-		"claude-opus-4-6":   {1000000, 128000, true, true},
-		"claude-sonnet-4-6": {1000000, 64000, true, true},
-		"claude-haiku-4-5":  {200000, 64000, true, true},
-		"qwen3.6-plus":      {200000, 64000, true, true},
-		"qwen3.5-plus":      {200000, 64000, true, true},
-		"deepseek-chat":     {256000, 128000, false, true},
-		"deepseek-reasoner": {256000, 128000, false, true},
-		"kimi-k2.5":         {256000, 128000, true, true},
-		"glm-5":             {200000, 128000, false, true},
-		"MiniMax-M2.7":          {200000, 128000, false, true},
+		"gpt-5.3-codex":          {400000, 128000, true, true},
+		"gpt-5-mini":             {400000, 128000, true, true},
+		"gpt-5-nano":             {400000, 128000, true, true},
+		"claude-opus-4-6":        {1000000, 128000, true, true},
+		"claude-sonnet-4-6":      {1000000, 64000, true, true},
+		"claude-haiku-4-5":       {200000, 64000, true, true},
+		"qwen3.6-plus":           {200000, 64000, true, true},
+		"qwen3.5-plus":           {200000, 64000, true, true},
+		"deepseek-chat":          {256000, 128000, false, true},
+		"deepseek-reasoner":      {256000, 128000, false, true},
+		"kimi-k2.5":              {256000, 128000, true, true},
+		"glm-5":                  {200000, 128000, false, true},
+		"MiniMax-M2.7":           {200000, 128000, false, true},
 		"MiniMax-M2.7-highspeed": {200000, 128000, false, true},
-		"MiniMax-M2.5":          {200000, 128000, false, true},
+		"MiniMax-M2.5":           {200000, 128000, false, true},
 	}
 
 	p, found := presets[modelName]

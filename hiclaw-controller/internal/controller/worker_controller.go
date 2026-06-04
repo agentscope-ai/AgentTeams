@@ -7,6 +7,7 @@ import (
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
@@ -40,6 +41,7 @@ type WorkerReconciler struct {
 	EnvBuilder     service.WorkerEnvBuilderI
 	ResourcePrefix auth.ResourcePrefix   // tenant prefix used to derive SA names
 	Legacy         *service.LegacyCompat // nil in incluster mode
+	GatewayClient  gateway.Client        // gateway client for modelProvider resolution
 
 	// DefaultRuntime is the value passed to backend.CreateRequest.RuntimeFallback
 	// when a Worker CR omits spec.runtime. Sourced from
@@ -119,13 +121,27 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		EnvBuilder:     r.EnvBuilder,
 		ResourcePrefix: r.ResourcePrefix,
 		DefaultRuntime: r.DefaultRuntime,
+		GatewayClient:  r.GatewayClient,
 	}
 	mctx := r.workerMemberContext(w)
+
+	if w.Spec.ModelProvider != "" && r.GatewayClient != nil {
+		info, err := r.GatewayClient.ResolveModelProvider(ctx, w.Spec.ModelProvider)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("resolve model provider %q: %w", w.Spec.ModelProvider, err)
+		}
+		mctx.ModelProviderInfo = info
+	}
+
 	state := &MemberState{}
 
 	if res, err := ReconcileMemberInfra(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
 		return res, err
+	}
+	if err := EnsureModelProviderAuth(ctx, deps, mctx, state); err != nil {
+		applyMemberStateToWorker(w, state)
+		return reconcile.Result{}, err
 	}
 	if err := EnsureMemberServiceAccount(ctx, deps, mctx); err != nil {
 		applyMemberStateToWorker(w, state)
@@ -168,6 +184,7 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 		EnvBuilder:     r.EnvBuilder,
 		ResourcePrefix: r.ResourcePrefix,
 		DefaultRuntime: r.DefaultRuntime,
+		GatewayClient:  r.GatewayClient,
 	}
 	mctx := r.workerMemberContext(w)
 

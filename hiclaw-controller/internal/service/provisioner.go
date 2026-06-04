@@ -447,7 +447,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		_ = p.creds.Save(ctx, credentialName, creds)
 	}
 
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return nil, fmt.Errorf("AI route authorization failed: %w", err)
 	}
 	// Higress WASM key-auth plugin needs ~1-2s to sync after route update.
@@ -488,7 +488,7 @@ func (p *Provisioner) DeprovisionWorker(ctx context.Context, req WorkerDeprovisi
 	}
 
 	// Deauthorize gateway
-	if err := p.gateway.DeauthorizeAIRoutes(ctx, consumerName); err != nil {
+	if err := p.gateway.DeauthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		logger.Error(err, "failed to deauthorize AI routes (non-fatal)")
 	}
 	if err := p.gateway.DeleteConsumer(ctx, consumerName); err != nil {
@@ -620,7 +620,7 @@ func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName,
 	if err != nil {
 		return fmt.Errorf("ensure consumer: %w", err)
 	}
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return fmt.Errorf("authorize AI routes: %w", err)
 	}
 	return nil
@@ -640,7 +640,7 @@ func (p *Provisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, g
 	if err != nil {
 		return fmt.Errorf("ensure consumer: %w", err)
 	}
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return fmt.Errorf("authorize AI routes: %w", err)
 	}
 	return nil
@@ -1280,7 +1280,7 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 		_ = p.creds.Save(ctx, managerName, creds)
 	}
 
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return nil, fmt.Errorf("AI route authorization failed: %w", err)
 	}
 	// Higress WASM key-auth plugin needs ~1-2s to sync after route update.
@@ -1497,7 +1497,7 @@ func (p *Provisioner) DeprovisionManager(ctx context.Context, name string) error
 	logger := log.FromContext(ctx)
 	consumerName := "manager"
 
-	if err := p.gateway.DeauthorizeAIRoutes(ctx, consumerName); err != nil {
+	if err := p.gateway.DeauthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		logger.Error(err, "failed to deauthorize AI routes (non-fatal)")
 	}
 	if err := p.gateway.DeleteConsumer(ctx, consumerName); err != nil {

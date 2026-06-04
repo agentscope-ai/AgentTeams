@@ -178,11 +178,11 @@ func (c *HigressClient) DeleteConsumer(ctx context.Context, name string) error {
 	return nil
 }
 
-func (c *HigressClient) AuthorizeAIRoutes(ctx context.Context, consumerName string) error {
+func (c *HigressClient) AuthorizeAIRoutes(ctx context.Context, consumerName string, _ string) error {
 	return c.modifyAIRoutes(ctx, consumerName, true)
 }
 
-func (c *HigressClient) DeauthorizeAIRoutes(ctx context.Context, consumerName string) error {
+func (c *HigressClient) DeauthorizeAIRoutes(ctx context.Context, consumerName string, _ string) error {
 	return c.modifyAIRoutes(ctx, consumerName, false)
 }
 
@@ -524,6 +524,87 @@ func (c *HigressClient) EnsureAIRoute(ctx context.Context, req AIRouteRequest) e
 	default:
 		return fmt.Errorf("ensure AI route %s: check existence: HTTP %d", req.Name, sc)
 	}
+}
+
+func (c *HigressClient) ResolveModelProvider(ctx context.Context, name string) (*ModelProviderInfo, error) {
+	// Verify the provider exists.
+	_, sc, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/providers/"+name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("higress: get AI provider %q: %w", name, err)
+	}
+	if sc == http.StatusNotFound {
+		return nil, fmt.Errorf("higress: model provider %q not found", name)
+	}
+	if sc != http.StatusOK {
+		return nil, fmt.Errorf("higress: get AI provider %q: HTTP %d", name, sc)
+	}
+
+	// Find the AI route that uses this provider.
+	routesBody, sc, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/routes", nil)
+	if err != nil {
+		return nil, fmt.Errorf("higress: list AI routes: %w", err)
+	}
+	if sc != http.StatusOK {
+		return nil, fmt.Errorf("higress: list AI routes: HTTP %d", sc)
+	}
+
+	var listResp struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(routesBody, &listResp); err != nil {
+		return nil, fmt.Errorf("higress: decode AI routes list: %w", err)
+	}
+
+	for _, raw := range listResp.Data {
+		var routeInfo struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &routeInfo); err != nil || routeInfo.Name == "" {
+			continue
+		}
+
+		routeBody, sc, err := c.doJSON(ctx, http.MethodGet, "/v1/ai/routes/"+routeInfo.Name, nil)
+		if err != nil || sc != http.StatusOK {
+			continue
+		}
+
+		var routeResp struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(routeBody, &routeResp); err != nil {
+			continue
+		}
+		routeData := routeResp.Data
+		if routeData == nil {
+			routeData = routeBody
+		}
+
+		var route struct {
+			PathPredicate struct {
+				MatchValue string `json:"matchValue"`
+			} `json:"pathPredicate"`
+			Upstreams []struct {
+				Provider string `json:"provider"`
+			} `json:"upstreams"`
+		}
+		if err := json.Unmarshal(routeData, &route); err != nil {
+			continue
+		}
+
+		for _, ups := range route.Upstreams {
+			if ups.Provider == name {
+				basePath := route.PathPredicate.MatchValue
+				intranetURL := strings.TrimRight(c.config.DataPlaneURL, "/") + basePath
+				return &ModelProviderInfo{
+					HttpApiID:   name,
+					BasePath:    basePath,
+					IntranetURL: intranetURL,
+				}, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("higress: no AI route found for model provider %q", name)
 }
 
 func (c *HigressClient) Healthy(ctx context.Context) error {

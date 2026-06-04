@@ -2,14 +2,14 @@ package agentconfig
 
 // Config holds parameters for generating agent runtime configurations.
 type Config struct {
-	MatrixDomain     string // Matrix domain for user IDs, e.g. "matrix-local.hiclaw.io:8080"
-	MatrixServerURL  string // Matrix CS API URL for agent connections
-	AIGatewayURL     string // AI gateway URL for model API calls
-	AdminUser        string // admin username
-	DefaultModel     string // default model name
-	EmbeddingModel   string // embedding model for memory search (optional)
-	Runtime          string // "docker", "k8s", "aliyun"
-	E2EEEnabled      bool   // enable Matrix E2EE
+	MatrixDomain    string // Matrix domain for user IDs, e.g. "matrix-local.hiclaw.io:8080"
+	MatrixServerURL string // Matrix CS API URL for agent connections
+	AIGatewayURL    string // AI gateway URL for model API calls
+	AdminUser       string // admin username
+	DefaultModel    string // default model name
+	EmbeddingModel  string // embedding model for memory search (optional)
+	Runtime         string // "docker", "k8s", "aliyun"
+	E2EEEnabled     bool   // enable Matrix E2EE
 
 	// Model parameter overrides (empty = use defaults from model table)
 	ModelContextWindow int
@@ -35,12 +35,13 @@ type HeartbeatConfig struct {
 
 // WorkerConfigRequest describes everything needed to generate a worker's config files.
 type WorkerConfigRequest struct {
-	WorkerName     string // e.g. "worker-alice"
-	MatrixToken    string // worker's Matrix access token
-	GatewayKey     string // worker's gateway API key
-	ModelName      string // optional: override default model
-	TeamLeaderName string // if non-empty, this is a team worker
-	ChannelPolicy  *ChannelPolicy // optional communication policy overrides
+	WorkerName     string           // e.g. "worker-alice"
+	MatrixToken    string           // worker's Matrix access token
+	GatewayKey     string           // worker's gateway API key
+	ModelName      string           // optional: override default model
+	AIGatewayURL   string           // per-worker AI Gateway URL override (from modelProvider)
+	TeamLeaderName string           // if non-empty, this is a team worker
+	ChannelPolicy  *ChannelPolicy   // optional communication policy overrides
 	Heartbeat      *HeartbeatConfig // optional: team leader heartbeat settings
 }
 

@@ -82,6 +82,9 @@ spec:
                       description: Runtime identity for leader (Matrix localpart, OSS path key). Defaults to leader.name.
                     model:
                       type: string
+                    modelProvider:
+                      type: string
+                      description: Name of the AI gateway Model API to use as the LLM provider.
                     identity:
                       type: string
                     soul:
@@ -234,6 +237,9 @@ spec:
                         description: Runtime identity for worker (Matrix localpart, OSS path key). Defaults to worker.name.
                       model:
                         type: string
+                      modelProvider:
+                        type: string
+                        description: Name of the AI gateway Model API to use as the LLM provider.
                       runtime:
                         type: string
                         enum: [openclaw, copaw, hermes, openhuman]

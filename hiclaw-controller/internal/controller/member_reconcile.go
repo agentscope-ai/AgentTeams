@@ -9,6 +9,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -99,6 +100,10 @@ type MemberContext struct {
 	// Workers this is the Worker CR; for Team members (leader or worker)
 	// this is the Team CR.
 	Owner metav1.Object
+
+	// ModelProviderInfo is the resolved APIG Model API info when
+	// spec.modelProvider is set. Nil when not set or on non-ai-gateway.
+	ModelProviderInfo *gateway.ModelProviderInfo
 }
 
 // MemberState captures reconcile outputs that the caller writes back to the
@@ -117,10 +122,11 @@ type MemberState struct {
 // invoke. Both WorkerReconciler and TeamReconciler build a MemberDeps once
 // and pass it through each phase.
 type MemberDeps struct {
-	Provisioner service.WorkerProvisioner
-	Deployer    service.WorkerDeployer
-	Backend     *backend.Registry
-	EnvBuilder  service.WorkerEnvBuilderI
+	Provisioner   service.WorkerProvisioner
+	Deployer      service.WorkerDeployer
+	Backend       *backend.Registry
+	EnvBuilder    service.WorkerEnvBuilderI
+	GatewayClient gateway.Client
 
 	// ResourcePrefix is the tenant-level prefix that scopes ServiceAccount
 	// (and Pod) names for every member this reconciler provisions. Empty
@@ -185,6 +191,22 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 	return reconcile.Result{}, nil
 }
 
+// EnsureModelProviderAuth authorizes the member's gateway consumer on the
+// model provider's HttpApi. No-op when modelProvider is not set.
+func EnsureModelProviderAuth(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) error {
+	if m.ModelProviderInfo == nil || d.GatewayClient == nil {
+		return nil
+	}
+	if state.ProvResult == nil || state.ProvResult.GatewayKey == "" {
+		return nil
+	}
+	consumerName := "worker-" + m.RuntimeName
+	if err := d.GatewayClient.AuthorizeAIRoutes(ctx, consumerName, m.ModelProviderInfo.HttpApiID); err != nil {
+		return fmt.Errorf("authorize model provider %s: %w", m.ModelProviderInfo.HttpApiID, err)
+	}
+	return nil
+}
+
 // EnsureMemberServiceAccount ensures the Kubernetes ServiceAccount used by the
 // member pod exists. Separated from Infra because SA creation can race with
 // the K8s API after namespace setup and benefits from independent retry.
@@ -210,6 +232,10 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return fmt.Errorf("write inline configs: %w", err)
 	}
 
+	var aiGatewayURL string
+	if m.ModelProviderInfo != nil {
+		aiGatewayURL = m.ModelProviderInfo.IntranetURL
+	}
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
 		Name:              m.RuntimeName,
 		Spec:              m.Spec,
@@ -223,6 +249,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		TeamAdminMatrixID: m.TeamAdminMatrixID,
 		Heartbeat:         m.Heartbeat,
 		IsUpdate:          m.IsUpdate,
+		AIGatewayURL:      aiGatewayURL,
 	}); err != nil {
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
@@ -364,6 +391,9 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 	workerEnv := d.EnvBuilder.Build(m.RuntimeName, prov)
 	workerEnv["HICLAW_WORKER_CR_NAME"] = m.Name
+	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
+		workerEnv["HICLAW_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
+	}
 	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
 	saName := d.ResourcePrefix.SAName(authpkg.RoleWorker, m.Name)
 

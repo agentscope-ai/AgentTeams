@@ -6,6 +6,7 @@ type Config struct {
 	AdminUser                 string // console login username
 	AdminPassword             string // console login password
 	AllowDefaultAdminFallback bool   // embedded bootstrap only: recover from all-in-one default admin/admin
+	DataPlaneURL              string // gateway data plane URL, e.g. http://aigw-local.hiclaw.io:8080
 }
 
 // ConsumerRequest describes a gateway consumer to create.
@@ -43,6 +44,14 @@ type AIProviderRequest struct {
 	Tokens   []string
 	Protocol string                 // e.g. "openai/v1"
 	Raw      map[string]interface{} // provider-specific raw config
+}
+
+// ModelProviderInfo holds the resolved endpoint info for a named model provider
+// discovered via the APIG ListHttpApis API.
+type ModelProviderInfo struct {
+	HttpApiID   string // APIG httpApiId for consumer authorization
+	BasePath    string // e.g. "/v1"
+	IntranetURL string // full Intranet URL including protocol and domain (e.g. "http://xxx.internal.xxx.com")
 }
 
 // AIRouteRequest describes an AI route skeleton to create.

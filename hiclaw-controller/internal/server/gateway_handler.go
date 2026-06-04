@@ -64,7 +64,7 @@ func (h *GatewayHandler) BindConsumer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.gw.AuthorizeAIRoutes(r.Context(), consumerName); err != nil {
+	if err := h.gw.AuthorizeAIRoutes(r.Context(), consumerName, ""); err != nil {
 		log.Printf("[ERROR] bind consumer %s: %v", consumerName, err)
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

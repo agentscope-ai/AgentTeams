@@ -104,6 +104,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		},
 		Spec: v1beta1.WorkerSpec{
 			Model:            req.Model,
+			ModelProvider:    req.ModelProvider,
 			WorkerName:       req.WorkerName,
 			Runtime:          req.Runtime,
 			Image:            req.Image,
@@ -263,6 +264,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 
 		if req.Model != "" {
 			worker.Spec.Model = req.Model
+		}
+		if req.ModelProvider != "" {
+			worker.Spec.ModelProvider = req.ModelProvider
 		}
 		if req.WorkerName != "" {
 			worker.Spec.WorkerName = req.WorkerName

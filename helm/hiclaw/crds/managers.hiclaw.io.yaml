@@ -19,6 +19,14 @@ spec:
                 model:
                   type: string
                   description: LLM model ID (e.g. qwen3.6-plus, claude-sonnet-4-6)
+                modelProvider:
+                  type: string
+                  description: >
+                    Name of the APIG Model API (HttpApi) to use as the LLM provider.
+                    When set, the controller discovers the Model API's endpoint
+                    (basePath + Intranet subdomain) and authorization target from
+                    the APIG ListHttpApis API. When omitted, the cluster-wide
+                    AI Gateway URL and Model API ID are used.
                 runtime:
                   type: string
                   enum: [openclaw, copaw]

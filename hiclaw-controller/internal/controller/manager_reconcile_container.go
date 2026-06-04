@@ -146,6 +146,9 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 	}
 
 	managerEnv := r.EnvBuilder.BuildManager(m.Name, prov, m.Spec)
+	if s.modelProviderInfo != nil && s.modelProviderInfo.IntranetURL != "" {
+		managerEnv["HICLAW_AI_GATEWAY_URL"] = s.modelProviderInfo.IntranetURL
+	}
 	mergeUserEnv(managerEnv, m.Spec.Env, logger, "manager/"+m.Name)
 	containerName := r.managerContainerName(m.Name)
 	saName := r.ResourcePrefix.SAName(authpkg.RoleManager, m.Name)

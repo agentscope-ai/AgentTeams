@@ -8,6 +8,7 @@ type CreateWorkerRequest struct {
 	Name          string                     `json:"name"`
 	WorkerName    string                     `json:"workerName,omitempty"`
 	Model         string                     `json:"model,omitempty"`
+	ModelProvider string                     `json:"modelProvider,omitempty"`
 	Runtime       string                     `json:"runtime,omitempty"`
 	Image         string                     `json:"image,omitempty"`
 	Identity      string                     `json:"identity,omitempty"`
@@ -35,6 +36,7 @@ type CreateWorkerRequest struct {
 type UpdateWorkerRequest struct {
 	WorkerName    string                     `json:"workerName,omitempty"`
 	Model         string                     `json:"model,omitempty"`
+	ModelProvider string                     `json:"modelProvider,omitempty"`
 	Runtime       string                     `json:"runtime,omitempty"`
 	Image         string                     `json:"image,omitempty"`
 	Identity      string                     `json:"identity,omitempty"`

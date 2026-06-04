@@ -280,11 +280,6 @@ type TeamSpec struct {
 	// +listMapKey=name
 	WorkerMembers []TeamWorkerRef `json:"workerMembers,omitempty"`
 
-	// AccessPolicy declares team-level default access entries that are
-	// unioned with each member Worker's own spec.accessEntries at
-	// credential issuance time.
-	AccessPolicy *TeamAccessPolicySpec `json:"accessPolicy,omitempty"`
-
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"` // team-wide overrides
 
@@ -312,14 +307,6 @@ type TeamWorkerRef struct {
 	// Role is this member's role within the team: "team_leader" or "worker".
 	// Empty defaults to "worker".
 	Role string `json:"role,omitempty"`
-}
-
-// TeamAccessPolicySpec declares team-level default access policy.
-type TeamAccessPolicySpec struct {
-	// DefaultEntries are access entries applied to all team members.
-	// At credential issuance time, these are unioned with the Worker's
-	// own spec.accessEntries.
-	DefaultEntries []AccessEntry `json:"defaultEntries,omitempty"`
 }
 
 func (s TeamSpec) EffectiveTeamName(metadataName string) string {

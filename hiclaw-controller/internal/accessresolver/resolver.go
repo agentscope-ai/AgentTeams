@@ -183,19 +183,6 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 		}
 	}
 
-	// Union with team-level AccessPolicy.DefaultEntries: every member of
-	// this Team inherits these entries on top of its own. Defaults are
-	// prepended so member-defined entries with the same service appear
-	// later in the list (downstream resolveEntries treats each entry
-	// independently — RAM Policy translation in the STS sidecar handles
-	// overlap correctly).
-	if team.Spec.AccessPolicy != nil && len(team.Spec.AccessPolicy.DefaultEntries) > 0 {
-		union := make([]v1beta1.AccessEntry, 0, len(team.Spec.AccessPolicy.DefaultEntries)+len(crEntries))
-		union = append(union, team.Spec.AccessPolicy.DefaultEntries...)
-		union = append(union, crEntries...)
-		crEntries = union
-	}
-
 	if len(crEntries) == 0 {
 		crEntries = DefaultEntriesForTeamMember()
 	} else if !hasServiceEntry(crEntries, credprovider.ServiceObjectStorage) {

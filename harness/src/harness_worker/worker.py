@@ -187,33 +187,6 @@ class Worker:
         harness_env = self._harness.env(self.sync.get_config() if self.sync else {})
         merged_env = {**os.environ, **harness_env}
 
-        # Slash command → interactive REPL via pty
-        stripped = message.lstrip()
-        if stripped.startswith("/") and len(stripped) > 1 and not stripped[1:2].isspace():
-            logger.info("invoke_harness: slash command detected, using REPL path")
-            try:
-                text, sid = await asyncio.wait_for(
-                    self._harness.invoke_repl(
-                        stripped,
-                        session_id,
-                        self.config.workspace_dir,
-                        merged_env,
-                        timeout_seconds,
-                    ),
-                    timeout=timeout_seconds + 5,
-                )
-                return text, sid
-            except NotImplementedError:
-                logger.warning(
-                    "Harness %s lacks REPL support, falling back to -p mode",
-                    self._harness.name,
-                )
-            except asyncio.TimeoutError:
-                return "Sorry, the REPL command timed out.", session_id
-            except Exception as exc:
-                logger.error("REPL invocation failed: %s", exc)
-                return f"Sorry, REPL error: {exc}", session_id
-
         try:
             argv = self._harness.build_command(
                 message, session_id, self.config.workspace_dir

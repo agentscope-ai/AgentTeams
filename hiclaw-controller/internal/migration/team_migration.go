@@ -497,17 +497,19 @@ func (m *TeamMigrator) setPhase(ctx context.Context, t *v1beta1.Team, phase stri
 // handled by reconcileTeamDecoupled after migration).
 func leaderWorkerSpecForMigration(t *v1beta1.Team) v1beta1.WorkerSpec {
 	return v1beta1.WorkerSpec{
-		Model:        t.Spec.Leader.Model,
-		Runtime:      "copaw",
-		WorkerName:   t.Spec.Leader.WorkerName,
-		Identity:     t.Spec.Leader.Identity,
-		Soul:         t.Spec.Leader.Soul,
-		Agents:       t.Spec.Leader.Agents,
-		Package:      t.Spec.Leader.Package,
-		RemoteSkills: t.Spec.Leader.RemoteSkills,
-		McpServers:   t.Spec.Leader.McpServers,
-		State:        t.Spec.Leader.State,
-		Env:          t.Spec.Leader.Env,
+		Model:         t.Spec.Leader.Model,
+		Runtime:       "copaw",
+		WorkerName:    t.Spec.Leader.WorkerName,
+		Identity:      t.Spec.Leader.Identity,
+		Soul:          t.Spec.Leader.Soul,
+		Agents:        t.Spec.Leader.Agents,
+		Package:       t.Spec.Leader.Package,
+		RemoteSkills:  t.Spec.Leader.RemoteSkills,
+		McpServers:    t.Spec.Leader.McpServers,
+		State:         t.Spec.Leader.State,
+		AccessEntries: t.Spec.Leader.AccessEntries,
+		Env:           t.Spec.Leader.Env,
+		Labels:        t.Spec.Leader.Labels,
 	}
 }
 
@@ -515,20 +517,22 @@ func leaderWorkerSpecForMigration(t *v1beta1.Team) v1beta1.WorkerSpec {
 // WorkerSpec. ChannelPolicy is NOT merged (handled by reconcileTeamDecoupled).
 func teamWorkerSpecToWorkerSpecForMigration(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1beta1.WorkerSpec {
 	return v1beta1.WorkerSpec{
-		Model:        w.Model,
-		Runtime:      w.Runtime,
-		WorkerName:   w.WorkerName,
-		Image:        w.Image,
-		Identity:     w.Identity,
-		Soul:         w.Soul,
-		Agents:       w.Agents,
-		Skills:       w.Skills,
-		RemoteSkills: w.RemoteSkills,
-		McpServers:   w.McpServers,
-		Package:      w.Package,
-		Expose:       w.Expose,
-		State:        w.State,
-		Env:          w.Env,
+		Model:         w.Model,
+		Runtime:       w.Runtime,
+		WorkerName:    w.WorkerName,
+		Image:         w.Image,
+		Identity:      w.Identity,
+		Soul:          w.Soul,
+		Agents:        w.Agents,
+		Skills:        w.Skills,
+		RemoteSkills:  w.RemoteSkills,
+		McpServers:    w.McpServers,
+		Package:       w.Package,
+		Expose:        w.Expose,
+		State:         w.State,
+		AccessEntries: w.AccessEntries,
+		Env:           w.Env,
+		Labels:        w.Labels,
 	}
 }
 

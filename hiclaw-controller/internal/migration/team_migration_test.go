@@ -233,6 +233,10 @@ func TestStepCreateWorkerCRs(t *testing.T) {
 	ctx := context.Background()
 
 	team := legacyTeam()
+	team.Spec.Leader.AccessEntries = []v1beta1.AccessEntry{{Service: "ai-gateway", Permissions: []string{"read"}}}
+	team.Spec.Leader.Labels = map[string]string{"tier": "leader", "owner": "platform"}
+	team.Spec.Workers[0].AccessEntries = []v1beta1.AccessEntry{{Service: "ai-registry", Permissions: []string{"read"}}}
+	team.Spec.Workers[0].Labels = map[string]string{"tier": "worker", "owner": "research"}
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).WithStatusSubresource(team).Build()
 
 	m := &TeamMigrator{Client: fc, Scheme: scheme, Enabled: true, BatchSize: 3}
@@ -261,6 +265,12 @@ func TestStepCreateWorkerCRs(t *testing.T) {
 	if leader.Spec.Model != "qwen-plus" {
 		t.Errorf("leader model = %q, want qwen-plus", leader.Spec.Model)
 	}
+	if len(leader.Spec.AccessEntries) != 1 || leader.Spec.AccessEntries[0].Service != "ai-gateway" {
+		t.Errorf("leader accessEntries = %+v, want ai-gateway entry", leader.Spec.AccessEntries)
+	}
+	if leader.Spec.Labels["tier"] != "leader" || leader.Spec.Labels["owner"] != "platform" {
+		t.Errorf("leader spec.labels = %+v, want migrated leader labels", leader.Spec.Labels)
+	}
 	if leader.Annotations[v1beta1.AnnotationMigrationOwned] != "true" {
 		t.Errorf("leader migration-owned annotation = %q, want true", leader.Annotations[v1beta1.AnnotationMigrationOwned])
 	}
@@ -269,6 +279,17 @@ func TestStepCreateWorkerCRs(t *testing.T) {
 	}
 	if leader.Annotations[v1beta1.AnnotationMigratedMemberRole] != "team_leader" {
 		t.Errorf("leader migrated-member-role annotation = %q, want team_leader", leader.Annotations[v1beta1.AnnotationMigratedMemberRole])
+	}
+
+	var coder v1beta1.Worker
+	if err := fc.Get(ctx, types.NamespacedName{Name: "coder", Namespace: testNS}, &coder); err != nil {
+		t.Fatal(err)
+	}
+	if len(coder.Spec.AccessEntries) != 1 || coder.Spec.AccessEntries[0].Service != "ai-registry" {
+		t.Errorf("coder accessEntries = %+v, want ai-registry entry", coder.Spec.AccessEntries)
+	}
+	if coder.Spec.Labels["tier"] != "worker" || coder.Spec.Labels["owner"] != "research" {
+		t.Errorf("coder spec.labels = %+v, want migrated worker labels", coder.Spec.Labels)
 	}
 
 	// Verify migration finalizer added

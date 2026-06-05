@@ -276,8 +276,6 @@ type TeamSpec struct {
 	// validation → Matrix invite → MinIO inject → status aggregation)
 	// and ignores the deprecated Leader/Workers fields.
 	// +kubebuilder:validation:MaxItems=128
-	// +listType=map
-	// +listMapKey=name
 	WorkerMembers []TeamWorkerRef `json:"workerMembers,omitempty"`
 
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true

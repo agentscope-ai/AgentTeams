@@ -89,6 +89,61 @@ func (m *TeamMigrator) MigrationInProgress(t *v1beta1.Team) bool {
 	return false
 }
 
+// RecoverLostMigrationState restarts migration when the Team lost its phase
+// marker but migration-owned Worker CRs already exist. Until workerMembers is
+// patched, the legacy Team spec remains the source of truth.
+func (m *TeamMigrator) RecoverLostMigrationState(ctx context.Context, t *v1beta1.Team) (bool, error) {
+	if !m.Enabled || m.Client == nil {
+		return false, nil
+	}
+	if len(t.Spec.WorkerMembers) > 0 || m.MigrationInProgress(t) {
+		return false, nil
+	}
+	if t.Spec.Leader.Name == "" && len(t.Spec.Workers) == 0 {
+		return false, nil
+	}
+	if ann := t.Annotations[v1beta1.AnnotationAutoMigrate]; ann == "disabled" {
+		return false, nil
+	}
+
+	found, err := m.hasRecoverableMigrationWorker(ctx, t)
+	if err != nil || !found {
+		return found, err
+	}
+	return true, m.stepCreateWorkerCRs(ctx, t)
+}
+
+func (m *TeamMigrator) hasRecoverableMigrationWorker(ctx context.Context, t *v1beta1.Team) (bool, error) {
+	desiredRoles := map[string]string{}
+	if t.Spec.Leader.Name != "" {
+		desiredRoles[t.Spec.Leader.Name] = "team_leader"
+	}
+	for _, w := range t.Spec.Workers {
+		if w.Name != "" {
+			desiredRoles[w.Name] = "worker"
+		}
+	}
+
+	var workers v1beta1.WorkerList
+	if err := m.Client.List(ctx, &workers, client.InNamespace(t.Namespace)); err != nil {
+		return false, fmt.Errorf("list workers for lost migration recovery: %w", err)
+	}
+	for i := range workers.Items {
+		worker := &workers.Items[i]
+		role, ok := desiredRoles[worker.Name]
+		if !ok {
+			continue
+		}
+		ann := worker.GetAnnotations()
+		if ann[v1beta1.AnnotationMigrationOwned] == "true" &&
+			ann[v1beta1.AnnotationMigratedFromTeam] == t.Name &&
+			ann[v1beta1.AnnotationMigratedMemberRole] == role {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // TryAcquire checks whether a new migration can be started (batch limiting).
 // It counts Teams currently in-progress and returns true if under the limit.
 func (m *TeamMigrator) TryAcquire(ctx context.Context) bool {
@@ -279,6 +334,10 @@ func (m *TeamMigrator) stepInjectCoordination(ctx context.Context, t *v1beta1.Te
 // stepPatchTeamSpec writes spec.workerMembers to trigger the decoupled path.
 // Legacy spec.leader/spec.workers fields are preserved (removed in v1beta2).
 func (m *TeamMigrator) stepPatchTeamSpec(ctx context.Context, t *v1beta1.Team) error {
+	if err := m.syncMigrationOwnedWorkersFromCurrentLegacySpec(ctx, t); err != nil {
+		return err
+	}
+
 	patch := client.MergeFrom(t.DeepCopy())
 
 	// Build workerMembers from existing leader + workers
@@ -338,7 +397,7 @@ func (m *TeamMigrator) ensureWorkerCR(ctx context.Context, t *v1beta1.Team, name
 	var existing v1beta1.Worker
 	key := client.ObjectKey{Name: name, Namespace: t.Namespace}
 	if err := m.Client.Get(ctx, key, &existing); err == nil {
-		return validateExistingWorkerForMigration(t, &existing, role, spec)
+		return m.validateOrSyncExistingWorkerForMigration(ctx, t, &existing, role, spec)
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get worker %q: %w", name, err)
 	}
@@ -360,6 +419,46 @@ func (m *TeamMigrator) ensureWorkerCR(ctx context.Context, t *v1beta1.Team, name
 	return m.Client.Create(ctx, worker)
 }
 
+func (m *TeamMigrator) syncMigrationOwnedWorkersFromCurrentLegacySpec(ctx context.Context, t *v1beta1.Team) error {
+	desiredNames := map[string]struct{}{}
+
+	if t.Spec.Leader.Name != "" {
+		desiredNames[t.Spec.Leader.Name] = struct{}{}
+		if err := m.ensureWorkerCR(ctx, t, t.Spec.Leader.Name, "team_leader", leaderWorkerSpecForMigration(t)); err != nil {
+			return fmt.Errorf("sync leader Worker CR %q: %w", t.Spec.Leader.Name, err)
+		}
+	}
+	for _, w := range t.Spec.Workers {
+		if w.Name == "" {
+			continue
+		}
+		desiredNames[w.Name] = struct{}{}
+		if err := m.ensureWorkerCR(ctx, t, w.Name, "worker", teamWorkerSpecToWorkerSpecForMigration(t, w)); err != nil {
+			return fmt.Errorf("sync worker Worker CR %q: %w", w.Name, err)
+		}
+	}
+
+	var workers v1beta1.WorkerList
+	if err := m.Client.List(ctx, &workers, client.InNamespace(t.Namespace)); err != nil {
+		return fmt.Errorf("list workers for migration final sync: %w", err)
+	}
+	for i := range workers.Items {
+		worker := &workers.Items[i]
+		if _, ok := desiredNames[worker.Name]; ok {
+			continue
+		}
+		ann := worker.GetAnnotations()
+		if ann[v1beta1.AnnotationMigrationOwned] != "true" ||
+			ann[v1beta1.AnnotationMigratedFromTeam] != t.Name {
+			continue
+		}
+		if err := m.Client.Delete(ctx, worker); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale migration-owned worker %q: %w", worker.Name, err)
+		}
+	}
+	return nil
+}
+
 func migrationWorkerAnnotations(t *v1beta1.Team, role string) map[string]string {
 	return map[string]string{
 		v1beta1.AnnotationMigrationOwned:     "true",
@@ -368,18 +467,25 @@ func migrationWorkerAnnotations(t *v1beta1.Team, role string) map[string]string 
 	}
 }
 
-func validateExistingWorkerForMigration(t *v1beta1.Team, existing *v1beta1.Worker, expectedRole string, expected v1beta1.WorkerSpec) error {
+func (m *TeamMigrator) validateOrSyncExistingWorkerForMigration(ctx context.Context, t *v1beta1.Team, existing *v1beta1.Worker, expectedRole string, expected v1beta1.WorkerSpec) error {
 	if existing == nil {
 		return fmt.Errorf("existing worker is nil")
-	}
-	if !reflect.DeepEqual(existing.Spec, expected) {
-		return fmt.Errorf("worker %q already exists but spec does not match projected Team member spec", existing.Name)
 	}
 	ann := existing.Annotations
 	if ann[v1beta1.AnnotationMigrationOwned] == "true" &&
 		ann[v1beta1.AnnotationMigratedFromTeam] == t.Name &&
 		ann[v1beta1.AnnotationMigratedMemberRole] == expectedRole {
+		if !reflect.DeepEqual(existing.Spec, expected) {
+			patch := client.MergeFrom(existing.DeepCopy())
+			existing.Spec = expected
+			if err := m.Client.Patch(ctx, existing, patch); err != nil {
+				return fmt.Errorf("sync migration-owned worker %q spec: %w", existing.Name, err)
+			}
+		}
 		return nil
+	}
+	if !reflect.DeepEqual(existing.Spec, expected) {
+		return fmt.Errorf("worker %q already exists but spec does not match projected Team member spec", existing.Name)
 	}
 	if ann[v1beta1.AnnotationAllowMigrationAdopt] == "true" {
 		return nil

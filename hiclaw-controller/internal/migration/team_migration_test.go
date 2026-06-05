@@ -60,6 +60,15 @@ func legacyTeam() *v1beta1.Team {
 	}
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNeedsMigration(t *testing.T) {
 	m := &TeamMigrator{Enabled: true, BatchSize: 3}
 
@@ -191,6 +200,89 @@ func TestMigrationInProgress(t *testing.T) {
 				t.Errorf("MigrationInProgress(%q) = %v, want %v", tt.phase, got, tt.expect)
 			}
 		})
+	}
+}
+
+func TestRecoverLostMigrationStateRestartsMigration(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	team := legacyTeam()
+	team.Status.Phase = "Failed"
+	team.Status.Message = "team member leader[leader-bot] name conflicts with existing standalone Worker"
+	team.Spec.Leader.Model = "qwen-new"
+	existingLeader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "leader-bot",
+			Namespace:   testNS,
+			Annotations: migrationWorkerAnnotations(team, "team_leader"),
+		},
+		Spec: v1beta1.WorkerSpec{Model: "qwen-old", Runtime: backend.RuntimeCopaw},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, existingLeader).
+		WithStatusSubresource(team, existingLeader).
+		Build()
+	m := &TeamMigrator{Client: fc, Scheme: scheme, Enabled: true, BatchSize: 3}
+
+	recovered, err := m.RecoverLostMigrationState(ctx, team)
+	if err != nil {
+		t.Fatalf("RecoverLostMigrationState: %v", err)
+	}
+	if !recovered {
+		t.Fatal("RecoverLostMigrationState should recover a Team with migration-owned Worker remnants")
+	}
+
+	var gotTeam v1beta1.Team
+	if err := fc.Get(ctx, types.NamespacedName{Name: "research", Namespace: testNS}, &gotTeam); err != nil {
+		t.Fatal(err)
+	}
+	if gotTeam.Annotations[v1beta1.AnnotationMigrationPhase] != v1beta1.MigrationPhaseWorkerCRsCreated {
+		t.Errorf("phase = %q, want WorkerCRsCreated", gotTeam.Annotations[v1beta1.AnnotationMigrationPhase])
+	}
+	if !containsString(gotTeam.Finalizers, v1beta1.FinalizerMigration) {
+		t.Errorf("finalizers = %+v, want %s", gotTeam.Finalizers, v1beta1.FinalizerMigration)
+	}
+
+	var leader v1beta1.Worker
+	if err := fc.Get(ctx, types.NamespacedName{Name: "leader-bot", Namespace: testNS}, &leader); err != nil {
+		t.Fatal(err)
+	}
+	if leader.Spec.Model != "qwen-new" {
+		t.Errorf("leader model = %q, want qwen-new", leader.Spec.Model)
+	}
+	for _, name := range []string{"coder", "tester"} {
+		var worker v1beta1.Worker
+		if err := fc.Get(ctx, types.NamespacedName{Name: name, Namespace: testNS}, &worker); err != nil {
+			t.Fatalf("missing recovered worker %q: %v", name, err)
+		}
+	}
+}
+
+func TestRecoverLostMigrationStateIgnoresUnownedWorker(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	team := legacyTeam()
+	team.Status.Phase = "Failed"
+	unownedLeader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "leader-bot", Namespace: testNS},
+		Spec:       v1beta1.WorkerSpec{Model: "standalone"},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, unownedLeader).
+		WithStatusSubresource(team, unownedLeader).
+		Build()
+	m := &TeamMigrator{Client: fc, Scheme: scheme, Enabled: true, BatchSize: 3}
+
+	recovered, err := m.RecoverLostMigrationState(ctx, team)
+	if err != nil {
+		t.Fatalf("RecoverLostMigrationState: %v", err)
+	}
+	if recovered {
+		t.Fatal("RecoverLostMigrationState should ignore unowned Workers")
 	}
 }
 
@@ -597,6 +689,88 @@ func TestStepPatchTeamSpec(t *testing.T) {
 	}
 	if len(team.Spec.Workers) != 2 {
 		t.Error("legacy spec.workers should be preserved")
+	}
+}
+
+func TestStepPatchTeamSpecFinalSyncsCurrentLegacySpec(t *testing.T) {
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	team := legacyTeam()
+	team.Annotations = map[string]string{v1beta1.AnnotationMigrationPhase: v1beta1.MigrationPhaseCoordinationInjected}
+	team.Spec.Leader.Model = "qwen-leader-new"
+	team.Spec.Workers = team.Spec.Workers[:1]
+	team.Spec.Workers[0].Model = "qwen-coder-new"
+
+	leader := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "leader-bot",
+			Namespace:   testNS,
+			Annotations: migrationWorkerAnnotations(team, "team_leader"),
+		},
+		Spec: v1beta1.WorkerSpec{Model: "qwen-leader-old", Runtime: backend.RuntimeCopaw},
+	}
+	coder := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "coder",
+			Namespace:   testNS,
+			Annotations: migrationWorkerAnnotations(team, "worker"),
+		},
+		Spec: v1beta1.WorkerSpec{Model: "qwen-coder-old"},
+	}
+	staleTester := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "tester",
+			Namespace:   testNS,
+			Annotations: migrationWorkerAnnotations(team, "worker"),
+		},
+		Spec: v1beta1.WorkerSpec{Model: "qwen-tester-old"},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, leader, coder, staleTester).
+		WithStatusSubresource(team, leader, coder, staleTester).
+		Build()
+	m := &TeamMigrator{Client: fc, Scheme: scheme, Enabled: true, BatchSize: 3}
+
+	if err := m.stepPatchTeamSpec(ctx, team); err != nil {
+		t.Fatalf("stepPatchTeamSpec: %v", err)
+	}
+
+	var gotTeam v1beta1.Team
+	if err := fc.Get(ctx, types.NamespacedName{Name: "research", Namespace: testNS}, &gotTeam); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotTeam.Spec.WorkerMembers) != 2 {
+		t.Fatalf("workerMembers count = %d, want 2", len(gotTeam.Spec.WorkerMembers))
+	}
+	if gotTeam.Spec.WorkerMembers[0].Name != "leader-bot" || gotTeam.Spec.WorkerMembers[1].Name != "coder" {
+		t.Fatalf("workerMembers = %+v, want leader-bot and coder", gotTeam.Spec.WorkerMembers)
+	}
+
+	var gotLeader v1beta1.Worker
+	if err := fc.Get(ctx, types.NamespacedName{Name: "leader-bot", Namespace: testNS}, &gotLeader); err != nil {
+		t.Fatal(err)
+	}
+	if gotLeader.Spec.Model != "qwen-leader-new" {
+		t.Errorf("leader model = %q, want qwen-leader-new", gotLeader.Spec.Model)
+	}
+
+	var gotCoder v1beta1.Worker
+	if err := fc.Get(ctx, types.NamespacedName{Name: "coder", Namespace: testNS}, &gotCoder); err != nil {
+		t.Fatal(err)
+	}
+	if gotCoder.Spec.Model != "qwen-coder-new" {
+		t.Errorf("coder model = %q, want qwen-coder-new", gotCoder.Spec.Model)
+	}
+
+	var gotTester v1beta1.Worker
+	err := fc.Get(ctx, types.NamespacedName{Name: "tester", Namespace: testNS}, &gotTester)
+	if err == nil {
+		t.Fatal("stale migration-owned tester should be deleted before workerMembers patch")
+	}
+	if client.IgnoreNotFound(err) != nil {
+		t.Fatal(err)
 	}
 }
 

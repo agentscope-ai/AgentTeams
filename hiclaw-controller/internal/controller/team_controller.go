@@ -190,6 +190,12 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		if r.Migrator.MigrationInProgress(t) {
 			return r.Migrator.Step(ctx, t)
 		}
+		if recovered, err := r.Migrator.RecoverLostMigrationState(ctx, t); recovered || err != nil {
+			if err != nil {
+				return reconcile.Result{RequeueAfter: reconcileRetryDelay}, err
+			}
+			return reconcile.Result{Requeue: true}, nil
+		}
 		if r.Migrator.NeedsMigration(t) {
 			if r.Migrator.TryAcquire(ctx) {
 				return r.Migrator.Step(ctx, t)

@@ -1451,6 +1451,8 @@ generate_key() {
 #              Must be strictly resolved prior, e.g., via check_container_runtime)
 # ============================================================
 detect_socket() {
+    local socket_path
+
     # 1. Respect explicitly defined DOCKER_HOST environment variable
     if [ -n "${DOCKER_HOST}" ]; then
         local _host_socket
@@ -1465,10 +1467,9 @@ detect_socket() {
     case "${DOCKER_CMD}" in
         docker)
             # Docker path handling
-            local _socket_path
-            _socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
-            if [ -n "${_socket_path}" ] && [ -S "${_socket_path}" ]; then
-                echo "${_socket_path}"
+            socket_path=$(docker context ls --format '{{if .Current}}{{.DockerEndpoint}}{{end}}' 2>/dev/null | grep . | sed 's|^unix://||')
+            if [ -n "${socket_path}" ] && [ -S "${socket_path}" ]; then
+                echo "${socket_path}"
                 return 0
             fi
 
@@ -1491,10 +1492,14 @@ detect_socket() {
             fi
             ;;
         podman)
-            # Podman path handling (Unified root/rootless via XDG_RUNTIME_DIR fallback)
-            local _sock="${XDG_RUNTIME_DIR:-/run}/podman/podman.sock"
-            if [ -S "${_sock}" ]; then
-                echo "${_sock}"
+            # Podman path handling
+            if [ "$(id -u)" -eq 0 ]; then
+                socket_path="/run/podman/podman.sock"
+            else
+                socket_path="${XDG_RUNTIME_DIR}/podman/podman.sock"
+            fi
+            if [ -S "${socket_path}" ]; then
+                echo "${socket_path}"
                 return 0
             fi
             ;;
@@ -1509,26 +1514,27 @@ detect_socket() {
 
 # Ensure Podman API socket is active (State mutation)
 ensure_podman_socket() {
+    local socket_path
+
     # Only applicable if runtime is podman and systemctl is available
     if [ "${DOCKER_CMD:-}" != "podman" ] || ! command -v systemctl >/dev/null 2>&1; then
         return 0
     fi
 
     echo "Ensuring Podman API socket is active..." >&2
-    local _uid
-    _uid=$(id -u)
 
     # Enable and start the socket based on user privileges
-    if [ "${_uid}" -eq 0 ]; then
+    if [ "$(id -u)" -eq 0 ]; then
+        socket_path="/run/podman/podman.sock"
         systemctl enable --now podman.socket >/dev/null 2>&1 || true
     else
+        socket_path="${XDG_RUNTIME_DIR}/podman/podman.sock"
         systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
     fi
 
     # Give systemd a brief moment to assert the socket for root or rootless user
-    local _sock="${XDG_RUNTIME_DIR:-/run}/podman/podman.sock"
     for _i in 1 2 3; do
-        [ -S "${_sock}" ] && break
+        [ -S "${socket_path}" ] && break
         sleep 1
     done
 }

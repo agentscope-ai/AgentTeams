@@ -957,15 +957,18 @@ type decoupledChannelAllowLists struct {
 }
 
 func decoupledMemberStatusSnapshot(member decoupledTeamMember, role MemberRole) v1beta1.TeamMemberStatus {
-	return v1beta1.TeamMemberStatus{
-		Name:         member.ref.Name,
-		RuntimeName:  member.runtimeName,
-		Role:         role.String(),
-		MatrixUserID: member.worker.Status.MatrixUserID,
-		RoomID:       member.worker.Status.RoomID,
-		Observed:     true,
-		Ready:        member.worker.Status.Phase == "Running",
-	}
+	ms := v1beta1.TeamMemberStatus{Name: member.ref.Name, Role: role.String()}
+	syncDecoupledMemberStatus(&ms, member)
+	return ms
+}
+
+func syncDecoupledMemberStatus(ms *v1beta1.TeamMemberStatus, member decoupledTeamMember) {
+	ms.RuntimeName = member.runtimeName
+	ms.MatrixUserID = member.worker.Status.MatrixUserID
+	ms.RoomID = member.worker.Status.RoomID
+	ms.Observed = true
+	ms.Ready = member.worker.Status.Phase == "Running"
+	ms.ExposedPorts = member.worker.Status.ExposedPorts
 }
 
 func decoupledMemberContext(t *v1beta1.Team, member decoupledTeamMember, role MemberRole, teamRuntimeName, leaderRuntimeName string) MemberContext {
@@ -1104,15 +1107,10 @@ func aggregateDecoupledTeamStatus(t *v1beta1.Team, members []decoupledTeamMember
 			role = RoleTeamLeader.String()
 		}
 		ms := memberStatus(&t.Status, member.ref.Name, MemberRole(role))
-		ms.RuntimeName = member.runtimeName
-		ms.MatrixUserID = member.worker.Status.MatrixUserID
-		ms.RoomID = member.worker.Status.RoomID
-		ms.Observed = true
-		ready := member.worker.Status.Phase == "Running"
-		ms.Ready = ready
+		syncDecoupledMemberStatus(ms, member)
 		if member.ref.Name == leaderName {
-			leaderReady = ready
-		} else if ready {
+			leaderReady = ms.Ready
+		} else if ms.Ready {
 			readyWorkers++
 		}
 	}

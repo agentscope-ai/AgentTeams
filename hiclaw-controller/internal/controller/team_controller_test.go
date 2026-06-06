@@ -1020,9 +1020,15 @@ func TestReconcileTeamDecoupled_HappyPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
 		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
 		Status: v1beta1.WorkerStatus{
-			Phase:        "Running",
-			MatrixUserID: "@dev:matrix.local",
-			RoomID:       "!room-dev:matrix.local",
+			Phase:          "Running",
+			MatrixUserID:   "@dev:matrix.local",
+			RoomID:         "!room-dev:matrix.local",
+			ContainerState: "ready",
+			LastHeartbeat:  "2026-06-06T03:01:00Z",
+			Message:        "worker detail",
+			ExposedPorts: []v1beta1.ExposedPortStatus{
+				{Port: 8080, Domain: "dev.example.com"},
+			},
 		},
 	}
 	team := &v1beta1.Team{
@@ -1082,6 +1088,23 @@ func TestReconcileTeamDecoupled_HappyPath(t *testing.T) {
 	}
 	if team.Status.TotalWorkers != 1 {
 		t.Errorf("TotalWorkers=%d, want 1", team.Status.TotalWorkers)
+	}
+	leaderStatus := team.Status.MemberByName("lead")
+	if leaderStatus == nil {
+		t.Fatal("leader member status missing")
+	}
+	if leaderStatus.RuntimeName != "lead" || leaderStatus.MatrixUserID != "@lead:matrix.local" || leaderStatus.RoomID != "!room-lead:matrix.local" {
+		t.Fatalf("leader status = %+v, want synced runtime identity", leaderStatus)
+	}
+	devStatus := team.Status.MemberByName("dev")
+	if devStatus == nil {
+		t.Fatal("dev member status missing")
+	}
+	if devStatus.RuntimeName != "dev" || devStatus.MatrixUserID != "@dev:matrix.local" || devStatus.RoomID != "!room-dev:matrix.local" {
+		t.Fatalf("dev status = %+v, want synced runtime identity", devStatus)
+	}
+	if len(devStatus.ExposedPorts) != 1 || devStatus.ExposedPorts[0].Port != 8080 || devStatus.ExposedPorts[0].Domain != "dev.example.com" {
+		t.Fatalf("dev exposed ports = %+v, want Worker exposed ports", devStatus.ExposedPorts)
 	}
 
 	// Verify coordination was injected for the leader

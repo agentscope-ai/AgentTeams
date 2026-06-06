@@ -1451,10 +1451,6 @@ generate_key() {
 #              Must be strictly resolved prior, e.g., via check_container_runtime)
 # ============================================================
 detect_socket() {
-    local _uid
-    _uid=$(id -u)
-    local _xdg_dir="${XDG_RUNTIME_DIR:-/run/user/${_uid}}"
-
     # 1. Respect explicitly defined DOCKER_HOST environment variable
     if [ -n "${DOCKER_HOST}" ]; then
         local _host_socket
@@ -1476,35 +1472,30 @@ detect_socket() {
                 return 0
             fi
 
-            if [ -S "${_xdg_dir}/docker.sock" ]; then
-                echo "${_xdg_dir}/docker.sock"
+            # Rootless Docker
+            if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/docker.sock" ]; then
+                echo "${XDG_RUNTIME_DIR}/docker.sock"
                 return 0
             fi
 
+            # Rootless Docker (macOS fallback)
             if [ -S "${HOME}/.docker/run/docker.sock" ]; then
                 echo "${HOME}/.docker/run/docker.sock"
                 return 0
             fi
 
+            # Root Docker
             if [ -S "/var/run/docker.sock" ]; then
                 echo "/var/run/docker.sock"
                 return 0
             fi
             ;;
         podman)
-            # Podman path handling
-            if [ "${_uid}" -eq 0 ]; then
-                # Root user
-                if [ -S "/run/podman/podman.sock" ]; then
-                    echo "/run/podman/podman.sock"
-                    return 0
-                fi
-            else
-                # Non-root user
-                if [ -S "${_xdg_dir}/podman/podman.sock" ]; then
-                    echo "${_xdg_dir}/podman/podman.sock"
-                    return 0
-                fi
+            # Podman path handling (Unified root/rootless via XDG_RUNTIME_DIR fallback)
+            local _sock="${XDG_RUNTIME_DIR:-/run}/podman/podman.sock"
+            if [ -S "${_sock}" ]; then
+                echo "${_sock}"
+                return 0
             fi
             ;;
         *)
@@ -1533,6 +1524,13 @@ ensure_podman_socket() {
     else
         systemctl --user enable --now podman.socket >/dev/null 2>&1 || true
     fi
+
+    # Give systemd a brief moment to assert the socket for root or rootless user
+    local _sock="${XDG_RUNTIME_DIR:-/run}/podman/podman.sock"
+    for _i in 1 2 3; do
+        [ -S "${_sock}" ] && break
+        sleep 1
+    done
 }
 
 # Detect local LAN IP address (cross-platform: macOS and Linux)
@@ -2774,7 +2772,7 @@ WantedBy=default.target"
         else
             log "$(msg install.podman.root_fail)"
         fi
-else
+    else
         # Rootless Mode (User-level dedicated service)
         log "$(msg install.podman.user_setup "${current_user}")"
 
@@ -2806,12 +2804,7 @@ else
             fi
         fi
 
-        # 2. Export XDG_RUNTIME_DIR to ensure user systemctl commands work
-        if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
-            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-        fi
-
-        # 3. Write dedicated service file to user directory
+        # 2. Write dedicated service file to user directory
         local _user_dir="${HOME}/.config/systemd/user"
         mkdir -p "${_user_dir}"
         echo "${_service_content}" > "${_user_dir}/hiclaw-podman-restart.service"
@@ -3099,8 +3092,6 @@ EOF
         # Actively ensure the API socket is enabled and active before detection.
         if [ "${DOCKER_CMD:-}" = "podman" ]; then
             ensure_podman_socket
-            # Give systemd a brief moment to assert the socket
-            sleep 1
         fi
         CONTAINER_SOCK=$(detect_socket)
         if [ -n "${CONTAINER_SOCK}" ]; then
@@ -4100,6 +4091,11 @@ uninstall_hiclaw() {
 # Check container runtime (docker or podman) and environment
 # ============================================================
 check_container_runtime() {
+    # Ensure the rootless environment baseline (XDG_RUNTIME_DIR) is ready before engine detection.
+    if [ "$(id -u)" -ne 0 ] && [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    fi
+
     if command -v docker >/dev/null 2>&1; then
         DOCKER_CMD="docker"
         # Check for podman disguised as docker (alias or podman-docker package)

@@ -1455,10 +1455,9 @@ detect_socket() {
 
     # 1. Respect explicitly defined DOCKER_HOST environment variable
     if [ -n "${DOCKER_HOST}" ]; then
-        local _host_socket
-        _host_socket=$(echo "${DOCKER_HOST}" | sed 's|^unix://||')
-        if [ -S "${_host_socket}" ]; then
-            echo "${_host_socket}"
+        socket_path=$(echo "${DOCKER_HOST}" | sed 's|^unix://||')
+        if [ -S "${socket_path}" ]; then
+            echo "${socket_path}"
             return 0
         fi
     fi
@@ -1503,8 +1502,6 @@ detect_socket() {
                 return 0
             fi
             ;;
-        *)
-            ;;
     esac
 
     # Return empty if no socket is found
@@ -1533,6 +1530,7 @@ ensure_podman_socket() {
     fi
 
     # Give systemd a brief moment to assert the socket for root or rootless user
+    local _i
     for _i in 1 2 3; do
         [ -S "${socket_path}" ] && break
         sleep 1

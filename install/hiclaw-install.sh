@@ -431,8 +431,8 @@ msg() {
         "llm.codingplan.model.glm5.en") text="  2) glm-5  - Zhipu GLM-5 (recommended for coding)" ;;
         "llm.codingplan.model.kimi.zh") text="  3) kimi-k2.5  - Moonshot Kimi K2.5" ;;
         "llm.codingplan.model.kimi.en") text="  3) kimi-k2.5  - Moonshot Kimi K2.5" ;;
-        "llm.codingplan.model.minimax.zh") text="  4) MiniMax-M2.5  - MiniMax M2.5" ;;
-        "llm.codingplan.model.minimax.en") text="  4) MiniMax-M2.5  - MiniMax M2.5" ;;
+        "llm.codingplan.model.minimax.zh") text="  4) MiniMax-M3  - MiniMax M3" ;;
+        "llm.codingplan.model.minimax.en") text="  4) MiniMax-M3  - MiniMax M3" ;;
         "llm.codingplan.model.select.zh") text="选择模型 [1/2/3/4]" ;;
         "llm.codingplan.model.select.en") text="Select model [1/2/3/4]" ;;
         "llm.provider.selected_tokenplan.zh") text="  提供商: 阿里云通义 Token 套餐（兼容模式）" ;;
@@ -1075,7 +1075,7 @@ resolve_embedded_image() {
 # ============================================================
 # Known models list — used to detect custom models during install
 # ============================================================
-KNOWN_MODELS="gpt-5.4 gpt-5.3-codex gpt-5-mini gpt-5-nano claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5 qwen3.6-plus qwen3.5-plus deepseek-chat deepseek-reasoner kimi-k2.5 glm-5 MiniMax-M2.7 MiniMax-M2.7-highspeed MiniMax-M2.5"
+KNOWN_MODELS="gpt-5.4 gpt-5.3-codex gpt-5-mini gpt-5-nano claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5 qwen3.6-plus qwen3.5-plus deepseek-chat deepseek-reasoner kimi-k2.5 glm-5 MiniMax-M3 MiniMax-M2.7 MiniMax-M2.7-highspeed"
 
 is_known_model() {
     local model="$1"
@@ -1914,7 +1914,7 @@ step_llm() {
                         qwen3.6-plus) _model_default="1" ;;
                         glm-5)        _model_default="2" ;;
                         kimi-k2.5)    _model_default="3" ;;
-                        MiniMax-M2.5) _model_default="4" ;;
+                        MiniMax-M3)   _model_default="4" ;;
                         *)            _model_default="1" ;;
                     esac
                     read -e -p "$(msg llm.codingplan.model.select) [${_model_default}]: " CODINGPLAN_MODEL_CHOICE
@@ -1931,7 +1931,7 @@ step_llm() {
                     1|qwen3.6-plus) HICLAW_DEFAULT_MODEL="qwen3.6-plus" ;;
                     2|glm-5)        HICLAW_DEFAULT_MODEL="glm-5" ;;
                     3|kimi-k2.5)    HICLAW_DEFAULT_MODEL="kimi-k2.5" ;;
-                    4|MiniMax-M2.5) HICLAW_DEFAULT_MODEL="MiniMax-M2.5" ;;
+                    4|MiniMax-M3)   HICLAW_DEFAULT_MODEL="MiniMax-M3" ;;
                     *)              HICLAW_DEFAULT_MODEL="qwen3.6-plus" ;;
                 esac
                 log "$(msg llm.provider.selected_codingplan)"
@@ -1985,7 +1985,7 @@ step_llm() {
                                 qwen3.6-plus) _model_default="1" ;;
                                 glm-5)        _model_default="2" ;;
                                 kimi-k2.5)    _model_default="3" ;;
-                                MiniMax-M2.5) _model_default="4" ;;
+                                MiniMax-M3)   _model_default="4" ;;
                                 *)            _model_default="1" ;;
                             esac
                             read -e -p "$(msg llm.codingplan.model.select) [${_model_default}]: " CODINGPLAN_MODEL_CHOICE
@@ -2002,7 +2002,7 @@ step_llm() {
                             1|qwen3.6-plus) HICLAW_DEFAULT_MODEL="qwen3.6-plus" ;;
                             2|glm-5)        HICLAW_DEFAULT_MODEL="glm-5" ;;
                             3|kimi-k2.5)    HICLAW_DEFAULT_MODEL="kimi-k2.5" ;;
-                            4|MiniMax-M2.5) HICLAW_DEFAULT_MODEL="MiniMax-M2.5" ;;
+                            4|MiniMax-M3)   HICLAW_DEFAULT_MODEL="MiniMax-M3" ;;
                             *)              HICLAW_DEFAULT_MODEL="qwen3.6-plus" ;;
                         esac
                         log "$(msg llm.provider.selected_tokenplan)"

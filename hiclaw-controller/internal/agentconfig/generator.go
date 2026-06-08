@@ -138,7 +138,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"model": map[string]interface{}{
 					"primary": "hiclaw-gateway/" + modelName,
 				},
-				"models":       g.allModelAliases(modelName),
+				"models":        g.allModelAliases(modelName),
 				"maxConcurrent": 4,
 				"subagents": map[string]interface{}{
 					"maxConcurrent": 8,
@@ -378,21 +378,21 @@ func defaultModelSpec(modelName string) ModelSpec {
 	}
 
 	presets := map[string]preset{
-		"gpt-5.3-codex":     {400000, 128000, true, true},
-		"gpt-5-mini":        {400000, 128000, true, true},
-		"gpt-5-nano":        {400000, 128000, true, true},
-		"claude-opus-4-6":   {1000000, 128000, true, true},
-		"claude-sonnet-4-6": {1000000, 64000, true, true},
-		"claude-haiku-4-5":  {200000, 64000, true, true},
-		"qwen3.6-plus":      {200000, 64000, true, true},
-		"qwen3.5-plus":      {200000, 64000, true, true},
-		"deepseek-chat":     {256000, 128000, false, true},
-		"deepseek-reasoner": {256000, 128000, false, true},
-		"kimi-k2.5":         {256000, 128000, true, true},
-		"glm-5":             {200000, 128000, false, true},
-		"MiniMax-M2.7":          {200000, 128000, false, true},
+		"gpt-5.3-codex":          {400000, 128000, true, true},
+		"gpt-5-mini":             {400000, 128000, true, true},
+		"gpt-5-nano":             {400000, 128000, true, true},
+		"claude-opus-4-6":        {1000000, 128000, true, true},
+		"claude-sonnet-4-6":      {1000000, 64000, true, true},
+		"claude-haiku-4-5":       {200000, 64000, true, true},
+		"qwen3.6-plus":           {200000, 64000, true, true},
+		"qwen3.5-plus":           {200000, 64000, true, true},
+		"deepseek-chat":          {256000, 128000, false, true},
+		"deepseek-reasoner":      {256000, 128000, false, true},
+		"kimi-k2.5":              {256000, 128000, true, true},
+		"glm-5":                  {200000, 128000, false, true},
+		"MiniMax-M3":             {512000, 128000, true, true},
+		"MiniMax-M2.7":           {200000, 128000, false, true},
 		"MiniMax-M2.7-highspeed": {200000, 128000, false, true},
-		"MiniMax-M2.5":          {200000, 128000, false, true},
 	}
 
 	p, found := presets[modelName]
@@ -453,7 +453,7 @@ func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
 		"qwen3.6-plus", "qwen3.5-plus",
 		"deepseek-chat", "deepseek-reasoner",
 		"kimi-k2.5", "glm-5",
-		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
+		"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
 	}
 
 	specs := make([]ModelSpec, 0, len(allModels)+1)
@@ -477,7 +477,7 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 		"qwen3.6-plus", "qwen3.5-plus",
 		"deepseek-chat", "deepseek-reasoner",
 		"kimi-k2.5", "glm-5",
-		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
+		"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
 	}
 
 	aliases := make(map[string]interface{})

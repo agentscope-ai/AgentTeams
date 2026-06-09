@@ -59,6 +59,8 @@ def run(
     matrix_token: Optional[str] = typer.Option(None, "--matrix-token", envvar="HICLAW_WORKER_MATRIX_TOKEN", help="Pre-provisioned Matrix access token (override)"),
     gateway_url: Optional[str] = typer.Option(None, "--gateway-url", envvar="HICLAW_AI_GATEWAY_URL", help="Higress gateway URL (externally reachable)"),
     gateway_key: Optional[str] = typer.Option(None, "--gateway-key", envvar="HICLAW_WORKER_GATEWAY_KEY", help="Higress consumer key"),
+    use_subscription: bool = typer.Option(False, "--use-subscription", envvar="HICLAW_USE_CLAUDE_SUBSCRIPTION", help="Use claude.ai subscription via OAuth (run `claude login` first). Skips AI gateway."),
+    model: Optional[str] = typer.Option(None, "--model", envvar="HICLAW_MODEL", help="Override LLM model (e.g. claude-opus-4-5). In subscription mode defaults to claude-sonnet-4-5 if not set."),
     install_dir: Optional[Path] = typer.Option(None, "--install-dir", envvar="HICLAW_INSTALL_DIR", help="Local workspace root (default ~/.hiclaw/agents)"),
     sync_interval: int = typer.Option(60, "--sync-interval", envvar="HICLAW_SYNC_INTERVAL", help="Pull interval (seconds)"),
     harness_type: str = typer.Option("claude", "--harness-type", envvar="HICLAW_HARNESS_TYPE", help="Harness CLI: claude|gemini|opencode|codex"),
@@ -86,10 +88,14 @@ def run(
         os.environ["HICLAW_MATRIX_HOMESERVER"] = matrix_homeserver
     if matrix_token:
         os.environ["HICLAW_WORKER_MATRIX_TOKEN"] = matrix_token
-    if gateway_url:
+    if use_subscription:
+        os.environ["HICLAW_USE_CLAUDE_SUBSCRIPTION"] = "1"
+    elif gateway_url:
         os.environ["HICLAW_AI_GATEWAY_URL"] = gateway_url
     if gateway_key:
         os.environ["HICLAW_WORKER_GATEWAY_KEY"] = gateway_key
+    if model:
+        os.environ["HICLAW_MODEL"] = model
 
     config = WorkerConfig(
         worker_name=name,
@@ -101,6 +107,7 @@ def run(
         sync_interval=sync_interval,
         install_dir=install_dir.expanduser() if install_dir else _default_install_dir(),
         harness_type=harness_type,
+        model=model,
     )
     _run_worker(RemoteWorker(config))
 

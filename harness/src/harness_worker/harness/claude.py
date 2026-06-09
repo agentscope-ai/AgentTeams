@@ -15,6 +15,11 @@ suffix required. Higress converts the Anthropic request to the upstream provider
 format (OpenAI for MiniMax) before forwarding, and converts the response back.
 
 Credential priority (resolved at bridge_config time):
+  0. HICLAW_USE_CLAUDE_SUBSCRIPTION=1              claude.ai subscription (OAuth)
+       → ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY are NOT set so Claude CLI
+         falls back to the OAuth token from `claude login` (~/.claude/.credentials.json).
+         ANTHROPIC_MODEL is still set to steer the model within the subscription.
+         Use `claude login` once before starting harness-remote.
   1. HICLAW_CLAUDE_BASE_URL + HICLAW_LLM_API_KEY   explicit operator override
   2. HICLAW_AI_GATEWAY_URL + HICLAW_WORKER_GATEWAY_KEY  default in cluster
        → Claude CLI  →  http://higress-gateway/v1/messages
@@ -57,6 +62,10 @@ _DEFAULT_BASE_URL = "https://api.minimax.io/anthropic"
 _DEFAULT_API_KEY = "apikey-testing"
 _DEFAULT_MODEL = "MiniMax-M2.7"
 
+# Default Claude model used in subscription mode when openclaw.json specifies a
+# gateway-only model (e.g. "MiniMax-M2") that doesn't exist on Anthropic's API.
+_SUBSCRIPTION_DEFAULT_MODEL = "claude-sonnet-4-6"
+
 
 def _resolve_active_model(cfg: dict[str, Any]) -> str:
     """Read active model id from openclaw.json agents.defaults.model.primary.
@@ -86,8 +95,17 @@ def _resolve_active_model(cfg: dict[str, Any]) -> str:
 def _resolve_credentials(openclaw_cfg: dict[str, Any]) -> tuple[str, str]:
     """Return (base_url, api_key) for Claude CLI's ANTHROPIC_* env vars.
 
+    Returns ("", "") when subscription mode is active — callers must not set
+    ANTHROPIC_BASE_URL/API_KEY in that case so Claude CLI uses its OAuth token.
+
     See module docstring for the full priority chain.
     """
+    # Priority 0: claude.ai subscription — OAuth credentials from `claude login`.
+    # Both ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY are intentionally left unset
+    # so Claude CLI falls back to ~/.claude/.credentials.json.
+    if os.environ.get("HICLAW_USE_CLAUDE_SUBSCRIPTION", "").lower() in ("1", "true", "yes"):
+        return "", ""
+
     # Priority 1: explicit operator override — useful for pointing at a
     # different LLM provider or a custom Anthropic-compatible endpoint.
     explicit_url = os.environ.get("HICLAW_CLAUDE_BASE_URL", "")
@@ -111,23 +129,31 @@ def _resolve_credentials(openclaw_cfg: dict[str, Any]) -> tuple[str, str]:
 def _build_anthropic_env(base_url: str, api_key: str, model: str) -> dict[str, str]:
     """Build the ANTHROPIC_* env dict passed to every claude subprocess.
 
-    Every model alias is pinned to the same value so Claude CLI never falls
-    back to a model not registered in Higress. ANTHROPIC_AUTH_TOKEN and
-    ANTHROPIC_API_KEY are both set to the same key; if claude-cli starts
-    warning about "auth conflict" for a new version, unset AUTH_TOKEN here.
+    When base_url is empty (subscription mode), ANTHROPIC_BASE_URL and the key
+    vars are omitted so Claude CLI uses its OAuth token from `claude login`.
+
+    Gateway mode: every model alias is pinned to the same value so Claude CLI
+    never falls back to a model not registered in Higress.
+
+    Subscription mode: only ANTHROPIC_MODEL is set; the small/fast/sonnet/opus/haiku
+    aliases are left unset so Claude Code picks sensible defaults per task instead
+    of forcing the same model everywhere (which can trigger thinking API mismatches).
     """
-    return {
-        "ANTHROPIC_BASE_URL":                        base_url,
-        "ANTHROPIC_API_KEY":                         api_key,
-        "ANTHROPIC_AUTH_TOKEN":                      api_key,
-        "ANTHROPIC_MODEL":                           model,
-        "ANTHROPIC_SMALL_FAST_MODEL":                model,
-        "ANTHROPIC_DEFAULT_SONNET_MODEL":            model,
-        "ANTHROPIC_DEFAULT_OPUS_MODEL":              model,
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL":             model,
-        "API_TIMEOUT_MS":                            "3000000",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":  "1",
+    env: dict[str, str] = {
+        "ANTHROPIC_MODEL":  model,
+        "API_TIMEOUT_MS":   "3000000",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     }
+    if base_url:
+        # Gateway mode: pin all aliases so requests never escape the gateway.
+        env["ANTHROPIC_BASE_URL"]             = base_url
+        env["ANTHROPIC_API_KEY"]              = api_key
+        env["ANTHROPIC_AUTH_TOKEN"]           = api_key
+        env["ANTHROPIC_SMALL_FAST_MODEL"]     = model
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model
+        env["ANTHROPIC_DEFAULT_OPUS_MODEL"]   = model
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]  = model
+    return env
 
 
 @register_harness("claude")
@@ -161,6 +187,18 @@ class ClaudeHarness(BaseHarness):
         """
         self._model = _resolve_active_model(openclaw_cfg)
         self._base_url, self._api_key = _resolve_credentials(openclaw_cfg)
+        # CLI/env model override — always wins when explicitly set.
+        cli_model = os.environ.get("HICLAW_MODEL", "").strip()
+        if cli_model:
+            self._model = cli_model
+        elif not self._base_url and not self._model.startswith("claude-"):
+            # Subscription mode: openclaw.json specifies a gateway-only model
+            # (e.g. "MiniMax-M2") that doesn't exist on Anthropic's API.
+            logger.info(
+                "bridge: subscription mode — model %r is gateway-only, using %r",
+                self._model, _SUBSCRIPTION_DEFAULT_MODEL,
+            )
+            self._model = _SUBSCRIPTION_DEFAULT_MODEL
 
         workspace = harness_home.parent
         cfg_file = workspace / ".claude" / "settings.json"
@@ -239,7 +277,23 @@ class ClaudeHarness(BaseHarness):
         # bypassPermissions is blocked when running as root (container default).
         # allow mcp__* so native MCP tool calls are not denied in dontAsk mode.
         existing["permissions"] = {"defaultMode": "dontAsk", "allow": ["mcp__*", "Write(*)", "Read(*)", "Bash(*)", "Glob(*)", "LS(*)", "WebSearch(*)", "WebFetch(*)"]}
-        existing["env"] = {**existing.get("env", {}), **self._build_env()}
+        # In subscription mode (base_url is empty) all gateway-pinned keys must be
+        # removed from disk — merging alone would leave stale values from a
+        # previous gateway run, causing Claude CLI to route through the old URL
+        # or use gateway-only model names for small/fast tasks.
+        env_base = existing.get("env", {})
+        if not self._base_url:
+            for k in (
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_SMALL_FAST_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            ):
+                env_base.pop(k, None)
+        existing["env"] = {**env_base, **self._build_env()}
 
         cfg_file.write_text(json.dumps(existing, indent=2))
 

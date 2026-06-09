@@ -39,6 +39,7 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
         libffi-dev \
         curl \
         git \
+        openssh-client \
         jq \
         ripgrep \
         tzdata && \
@@ -58,6 +59,12 @@ RUN npm config set registry "${NPM_REGISTRY}" && \
         @openai/codex \
         mcporter && \
     rm -rf /root/.npm
+
+# Install Bazelisk as native binary named `bazel` (no Node.js wrapper overhead)
+RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
+    curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-${ARCH}" \
+         -o /usr/local/bin/bazel && \
+    chmod +x /usr/local/bin/bazel
 
 # Python venv
 RUN python3 -m venv /opt/venv/harness

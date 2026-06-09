@@ -170,6 +170,7 @@ class Worker:
             policies=policies,
             history=history,
             on_invoke=_on_invoke,
+            media_dir=self.config.workspace_dir,
         )
 
         console.print("[bold green]Matrix relay connected.[/bold green]")
@@ -203,6 +204,7 @@ class Worker:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(self.config.workspace_dir),
+                limit=32 * 1024 * 1024,  # 32MB — handles large image/file tool results
             )
 
             state: dict = {}

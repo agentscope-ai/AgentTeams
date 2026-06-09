@@ -16,6 +16,7 @@ class WorkerConfig:
         sync_interval: int = 300,
         install_dir: Path | None = None,
         harness_type: str = "claude",
+        model: str | None = None,
     ) -> None:
         self.worker_name = worker_name
         self.minio_endpoint = minio_endpoint
@@ -26,6 +27,7 @@ class WorkerConfig:
         self.sync_interval = sync_interval
         self.install_dir = install_dir or Path("/root/hiclaw-fs/agents")
         self.harness_type = harness_type
+        self.model = model
 
     @property
     def workspace_dir(self) -> Path:

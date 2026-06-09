@@ -597,6 +597,29 @@ test-quick: ## Run test-01 only (quick smoke test)
 test-installed: ## Run tests against an already-installed Manager (no container lifecycle)
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 
+# ---------- harness-remote CLI ----------
+
+PIP ?= pip3
+
+install-remote: ## Install harness-remote CLI into the current Python environment
+	@echo "==> Installing hiclaw-common (shared library)..."
+	$(PIP) install --quiet shared/python/hiclaw_common
+	@echo "==> Installing harness-worker (includes harness-remote CLI)..."
+	$(PIP) install --quiet harness/
+	@echo ""
+	@echo "harness-remote is ready. Run: harness-remote --help"
+
+install-remote-dev: ## Install harness-remote in editable mode (changes take effect immediately)
+	@echo "==> Installing hiclaw-common in editable mode..."
+	$(PIP) install --quiet -e shared/python/hiclaw_common
+	@echo "==> Installing harness-worker in editable mode..."
+	$(PIP) install --quiet -e harness/
+	@echo ""
+	@echo "harness-remote (editable) is ready. Run: harness-remote --help"
+
+uninstall-remote: ## Uninstall harness-remote CLI
+	$(PIP) uninstall -y harness-worker hiclaw-common 2>/dev/null || true
+
 # ---------- Install / Uninstall ----------
 
 install: ## Install Manager locally (non-interactive, set HICLAW_LLM_API_KEY)
@@ -866,6 +889,11 @@ help: ## Show this help
 	@echo "  make status                                     # Show all hiclaw container statuses"
 	@echo "  make logs                                       # Show last 50 lines of Manager + Worker logs"
 	@echo "  make logs LINES=100                             # Show last 100 lines"
+	@echo ""
+	@echo "harness-remote CLI (local developer tool):"
+	@echo "  make install-remote                             # Install harness-remote into current Python env"
+	@echo "  make install-remote-dev                        # Install in editable mode (source changes live)"
+	@echo "  make uninstall-remote                          # Uninstall harness-worker + hiclaw-common"
 	@echo ""
 	@echo "Install / Uninstall / Replay:"
 	@echo "  HICLAW_LLM_API_KEY=sk-xxx make install          # Build + install Manager (non-interactive)"

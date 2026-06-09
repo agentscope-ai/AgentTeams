@@ -1,6 +1,7 @@
 """Matrix relay for harness-worker — thin adapter over hiclaw_common.matrix."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from hiclaw_common.matrix import MautrixRelay
@@ -21,6 +22,7 @@ class MatrixRelay:
         policies: DualAllowList,
         history: HistoryBuffer,
         on_invoke: Callable[[str], Awaitable[tuple[str, Optional[str]]]],
+        media_dir: Optional[Path] = None,
         # Legacy keyword args kept for call-site compatibility; unused.
         harness=None,
         harness_home=None,
@@ -35,6 +37,7 @@ class MatrixRelay:
             policies=policies,
             history=history,
             on_invoke=on_invoke,
+            media_dir=media_dir,
         )
 
     async def run(self) -> None:

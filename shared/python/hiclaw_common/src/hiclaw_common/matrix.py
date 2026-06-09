@@ -24,6 +24,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from mautrix.client import Client
@@ -91,11 +92,13 @@ class MautrixRelay:
         policies: DualAllowList,
         history: HistoryBuffer,
         on_invoke: Callable[[str], Awaitable[tuple[str, Optional[str]]]],
+        media_dir: Optional[Path] = None,
     ) -> None:
         self._user_id = user_id
         self._policies = policies
         self._history = history
         self._on_invoke = on_invoke
+        self._media_dir = media_dir
         self._start_ms = int(time.time() * 1000) - _STARTUP_GRACE_MS
         self._dm_cache: dict[str, bool] = {}
 
@@ -145,6 +148,46 @@ class MautrixRelay:
         except Exception as exc:
             logger.error("Error processing message in %s: %s", event.room_id, exc)
 
+    async def _download_media(self, event: MessageEvent) -> str:
+        """Download media attachment and return an augmented message prefix.
+
+        Returns empty string when the event is not a media message or when
+        ``media_dir`` was not provided.  On success returns a line like:
+          [Image saved to: /workspace/image.png]
+        so Claude can read the file by path.
+        """
+        if not self._media_dir:
+            return ""
+
+        msgtype = str(getattr(event.content, "msgtype", "") or "")
+        _media_types = {"m.image": "Image", "m.file": "File", "m.video": "Video", "m.audio": "Audio"}
+        if msgtype not in _media_types:
+            return ""
+
+        mxc_url = getattr(event.content, "url", None)
+        if not mxc_url:
+            return ""
+
+        try:
+            data: bytes = await self._client.download_media(mxc_url)
+        except Exception as exc:
+            logger.warning("Failed to download media %s: %s", mxc_url, exc)
+            return ""
+
+        filename = re.sub(r"[^\w.\-]", "_", getattr(event.content, "body", "") or "attachment")
+        dest = self._media_dir / filename
+        stem = dest.stem
+        suffix = dest.suffix
+        counter = 1
+        while dest.exists():
+            dest = self._media_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        logger.info("Downloaded %s to %s (%d bytes)", msgtype, dest, len(data))
+        return f"[{_media_types[msgtype]} saved to: {dest}]\n"
+
     async def _process_message(self, event: MessageEvent) -> None:
         if str(event.sender) == self._user_id:
             return
@@ -169,7 +212,8 @@ class MautrixRelay:
         if not is_dm:
             context = self._history.drain(str(room_id))
 
-        full_message = context + body
+        media_prefix = await self._download_media(event)
+        full_message = context + media_prefix + body
 
         keepalive = asyncio.create_task(self._typing_keepalive(room_id))
         try:

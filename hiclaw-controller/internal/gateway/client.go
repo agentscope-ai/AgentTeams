@@ -12,13 +12,14 @@ type Client interface {
 	// DeleteConsumer removes a consumer by name. No-op if not found.
 	DeleteConsumer(ctx context.Context, name string) error
 
-	// AuthorizeAIRoutes adds the consumer to all AI routes' allowedConsumers.
+	// AuthorizeAIRoutes adds the consumer to AI routes' allowedConsumers.
 	// Handles 409 conflict with retry logic. When modelAPIID is non-empty,
-	// it overrides the default Model API ID for consumer authorization.
+	// the consumer is authorized only on that provider route and removed
+	// from other AI routes.
 	AuthorizeAIRoutes(ctx context.Context, consumerName string, modelAPIID string) error
 
-	// DeauthorizeAIRoutes removes the consumer from all AI routes' allowedConsumers.
-	// When modelAPIID is non-empty, it overrides the default Model API ID.
+	// DeauthorizeAIRoutes removes the consumer from AI routes' allowedConsumers.
+	// When modelAPIID is non-empty, only that provider route is modified.
 	DeauthorizeAIRoutes(ctx context.Context, consumerName string, modelAPIID string) error
 
 	// ExposePort creates gateway resources to expose a worker port.

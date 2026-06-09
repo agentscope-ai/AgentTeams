@@ -187,8 +187,10 @@ func (c *HigressClient) DeauthorizeAIRoutes(ctx context.Context, consumerName st
 }
 
 // modifyAIRoutes adds or removes the consumer from AI routes' allowedConsumers.
-// When providerFilter is non-empty, only routes whose upstreams reference that
-// provider are modified; when empty, all routes are modified (legacy behavior).
+// When providerFilter is non-empty, AuthorizeAIRoutes keeps the consumer only
+// on matching routes and removes it from non-matching routes; DeauthorizeAIRoutes
+// removes it only from matching routes. Empty providerFilter keeps the legacy
+// all-route behavior.
 func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string, providerFilter string, add bool) error {
 	c.aiRouteMu.Lock()
 	defer c.aiRouteMu.Unlock()
@@ -260,8 +262,8 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 				break
 			}
 
-			// When providerFilter is set, skip routes that don't match the provider.
-			if providerFilter != "" && !routeMatchesProvider(route, providerFilter) {
+			matchesProvider := providerFilter == "" || routeMatchesProvider(route, providerFilter)
+			if providerFilter != "" && !add && !matchesProvider {
 				break
 			}
 
@@ -272,7 +274,8 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 
 			consumers := toStringSlice(authConfig["allowedConsumers"])
 
-			if add {
+			changed := true
+			if add && matchesProvider {
 				if !containsString(consumers, consumerName) {
 					consumers = append(consumers, consumerName)
 				}
@@ -281,7 +284,13 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 				// so WASM needs to reload credentials even if the name was
 				// already in allowedConsumers.
 			} else {
+				before := len(consumers)
 				consumers = removeString(consumers, consumerName)
+				changed = before != len(consumers)
+			}
+
+			if !changed {
+				break
 			}
 
 			authConfig["allowedConsumers"] = consumers

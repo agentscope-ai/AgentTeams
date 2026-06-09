@@ -101,6 +101,7 @@ type TeamLeaderRequest struct {
 	Name              string                      `json:"name"`
 	WorkerName        string                      `json:"workerName,omitempty"`
 	Model             string                      `json:"model,omitempty"`
+	ModelProvider     string                      `json:"modelProvider,omitempty"`
 	Identity          string                      `json:"identity,omitempty"`
 	Soul              string                      `json:"soul,omitempty"`
 	Agents            string                      `json:"agents,omitempty"`
@@ -121,6 +122,7 @@ type TeamWorkerRequest struct {
 	Name          string                     `json:"name"`
 	WorkerName    string                     `json:"workerName,omitempty"`
 	Model         string                     `json:"model,omitempty"`
+	ModelProvider string                     `json:"modelProvider,omitempty"`
 	Runtime       string                     `json:"runtime,omitempty"`
 	Image         string                     `json:"image,omitempty"`
 	Identity      string                     `json:"identity,omitempty"`
@@ -200,30 +202,32 @@ type HumanListResponse struct {
 // --- Manager API types ---
 
 type CreateManagerRequest struct {
-	Name       string                 `json:"name"`
-	Model      string                 `json:"model"`
-	Runtime    string                 `json:"runtime,omitempty"`
-	Image      string                 `json:"image,omitempty"`
-	Soul       string                 `json:"soul,omitempty"`
-	Agents     string                 `json:"agents,omitempty"`
-	Skills     []string               `json:"skills,omitempty"`
-	McpServers []v1beta1.MCPServer    `json:"mcpServers,omitempty"`
-	Package    string                 `json:"package,omitempty"`
-	Config     *v1beta1.ManagerConfig `json:"config,omitempty"`
-	State      *string                `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+	Name          string                 `json:"name"`
+	Model         string                 `json:"model"`
+	ModelProvider string                 `json:"modelProvider,omitempty"`
+	Runtime       string                 `json:"runtime,omitempty"`
+	Image         string                 `json:"image,omitempty"`
+	Soul          string                 `json:"soul,omitempty"`
+	Agents        string                 `json:"agents,omitempty"`
+	Skills        []string               `json:"skills,omitempty"`
+	McpServers    []v1beta1.MCPServer    `json:"mcpServers,omitempty"`
+	Package       string                 `json:"package,omitempty"`
+	Config        *v1beta1.ManagerConfig `json:"config,omitempty"`
+	State         *string                `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 }
 
 type UpdateManagerRequest struct {
-	Model      string                 `json:"model,omitempty"`
-	Runtime    string                 `json:"runtime,omitempty"`
-	Image      string                 `json:"image,omitempty"`
-	Soul       string                 `json:"soul,omitempty"`
-	Agents     string                 `json:"agents,omitempty"`
-	Skills     []string               `json:"skills,omitempty"`
-	McpServers []v1beta1.MCPServer    `json:"mcpServers,omitempty"`
-	Package    string                 `json:"package,omitempty"`
-	Config     *v1beta1.ManagerConfig `json:"config,omitempty"`
-	State      *string                `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+	Model         string                 `json:"model,omitempty"`
+	ModelProvider string                 `json:"modelProvider,omitempty"`
+	Runtime       string                 `json:"runtime,omitempty"`
+	Image         string                 `json:"image,omitempty"`
+	Soul          string                 `json:"soul,omitempty"`
+	Agents        string                 `json:"agents,omitempty"`
+	Skills        []string               `json:"skills,omitempty"`
+	McpServers    []v1beta1.MCPServer    `json:"mcpServers,omitempty"`
+	Package       string                 `json:"package,omitempty"`
+	Config        *v1beta1.ManagerConfig `json:"config,omitempty"`
+	State         *string                `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 }
 
 type ManagerResponse struct {

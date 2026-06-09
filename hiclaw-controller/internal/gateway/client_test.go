@@ -529,7 +529,7 @@ func TestEnsureAIRoute_MissingCreatesSkeletonWithoutAllowedConsumers(t *testing.
 }
 
 func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
-	var putRoutes []string
+	putRoutes := map[string]map[string]interface{}{}
 	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/system/init":
@@ -560,13 +560,17 @@ func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
 					"name":      "openai-route",
 					"upstreams": []interface{}{map[string]interface{}{"provider": "openai"}},
 					"authConfig": map[string]interface{}{
-						"allowedConsumers": []string{"manager"},
+						"allowedConsumers": []string{"manager", "worker-alice"},
 					},
 				},
 			})
 		case strings.HasPrefix(r.URL.Path, "/v1/ai/routes/") && r.Method == "PUT":
 			routeName := strings.TrimPrefix(r.URL.Path, "/v1/ai/routes/")
-			putRoutes = append(putRoutes, routeName)
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode PUT body: %v", err)
+			}
+			putRoutes[routeName] = body
 			w.WriteHeader(http.StatusOK)
 		default:
 			t.Logf("unexpected: %s %s", r.Method, r.URL.Path)
@@ -576,16 +580,25 @@ func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
 
 	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
 
-	// With provider filter "qwen", only qwen-route should be PUT
+	// With provider filter "qwen", qwen-route is authorized and stale
+	// worker-alice authorization is removed from non-matching openai-route.
 	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice", "qwen"); err != nil {
 		t.Fatalf("AuthorizeAIRoutes: %v", err)
 	}
-	if len(putRoutes) != 1 || putRoutes[0] != "qwen-route" {
-		t.Errorf("expected PUT only on qwen-route, got %v", putRoutes)
+	if len(putRoutes) != 2 {
+		t.Fatalf("expected PUT on qwen-route and stale openai-route, got %v", putRoutes)
+	}
+	qwenConsumers := toStringSlice(putRoutes["qwen-route"]["authConfig"].(map[string]interface{})["allowedConsumers"])
+	if !containsString(qwenConsumers, "worker-alice") {
+		t.Fatalf("qwen-route allowedConsumers=%v, want worker-alice", qwenConsumers)
+	}
+	openAIConsumers := toStringSlice(putRoutes["openai-route"]["authConfig"].(map[string]interface{})["allowedConsumers"])
+	if containsString(openAIConsumers, "worker-alice") {
+		t.Fatalf("openai-route allowedConsumers=%v, want worker-alice removed", openAIConsumers)
 	}
 
 	// Without provider filter, both routes should be PUT
-	putRoutes = nil
+	putRoutes = map[string]map[string]interface{}{}
 	if err := c.AuthorizeAIRoutes(context.Background(), "worker-bob", ""); err != nil {
 		t.Fatalf("AuthorizeAIRoutes (no filter): %v", err)
 	}

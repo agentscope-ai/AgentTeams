@@ -174,12 +174,17 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 
 	log.FromContext(ctx).Info("provisioning member infrastructure", "name", m.Name, "runtimeName", m.RuntimeName, "role", m.Role)
 
+	modelProviderID := ""
+	if m.ModelProviderInfo != nil {
+		modelProviderID = m.ModelProviderInfo.HttpApiID
+	}
 	provResult, err := d.Provisioner.ProvisionWorker(ctx, service.WorkerProvisionRequest{
-		Name:           m.RuntimeName,
-		CredentialName: m.Name,
-		Role:           m.Role.String(),
-		TeamName:       m.TeamName,
-		TeamLeaderName: m.TeamLeaderName,
+		Name:            m.RuntimeName,
+		CredentialName:  m.Name,
+		ModelProviderID: modelProviderID,
+		Role:            m.Role.String(),
+		TeamName:        m.TeamName,
+		TeamLeaderName:  m.TeamLeaderName,
 	})
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("provision worker: %w", err)

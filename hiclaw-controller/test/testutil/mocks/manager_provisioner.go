@@ -15,7 +15,7 @@ type MockManagerProvisioner struct {
 	DeprovisionManagerFn          func(ctx context.Context, name string) error
 	RefreshCredentialsFn          func(ctx context.Context, name string) (*service.RefreshResult, error)
 	RefreshManagerCredentialsFn   func(ctx context.Context, managerName string) (*service.RefreshResult, error)
-	EnsureManagerGatewayAuthFn    func(ctx context.Context, managerName, gatewayKey string) error
+	EnsureManagerGatewayAuthFn    func(ctx context.Context, managerName, gatewayKey, modelProviderID string) error
 	EnsureManagerServiceAccountFn func(ctx context.Context, managerName string) error
 	DeleteManagerServiceAccountFn func(ctx context.Context, managerName string) error
 	DeleteCredentialsFn           func(ctx context.Context, name string) error
@@ -32,7 +32,7 @@ type MockManagerProvisioner struct {
 		DeprovisionManager          []string
 		RefreshCredentials          []string
 		RefreshManagerCredentials   []string
-		EnsureManagerGatewayAuth    []string
+		EnsureManagerGatewayAuth    []managerGatewayAuthCall
 		EnsureManagerServiceAccount []string
 		DeleteManagerServiceAccount []string
 		DeleteCredentials           []string
@@ -48,6 +48,12 @@ type MockManagerProvisioner struct {
 
 func NewMockManagerProvisioner() *MockManagerProvisioner {
 	return &MockManagerProvisioner{}
+}
+
+type managerGatewayAuthCall struct {
+	Name            string
+	GatewayKey      string
+	ModelProviderID string
 }
 
 func (m *MockManagerProvisioner) Reset() {
@@ -83,7 +89,7 @@ func (m *MockManagerProvisioner) clearCallsLocked() {
 		DeprovisionManager          []string
 		RefreshCredentials          []string
 		RefreshManagerCredentials   []string
-		EnsureManagerGatewayAuth    []string
+		EnsureManagerGatewayAuth    []managerGatewayAuthCall
 		EnsureManagerServiceAccount []string
 		DeleteManagerServiceAccount []string
 		DeleteCredentials           []string
@@ -158,13 +164,17 @@ func (m *MockManagerProvisioner) RefreshManagerCredentials(ctx context.Context, 
 	}, nil
 }
 
-func (m *MockManagerProvisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey string) error {
+func (m *MockManagerProvisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey, modelProviderID string) error {
 	m.mu.Lock()
-	m.Calls.EnsureManagerGatewayAuth = append(m.Calls.EnsureManagerGatewayAuth, managerName)
+	m.Calls.EnsureManagerGatewayAuth = append(m.Calls.EnsureManagerGatewayAuth, managerGatewayAuthCall{
+		Name:            managerName,
+		GatewayKey:      gatewayKey,
+		ModelProviderID: modelProviderID,
+	})
 	fn := m.EnsureManagerGatewayAuthFn
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, managerName, gatewayKey)
+		return fn(ctx, managerName, gatewayKey, modelProviderID)
 	}
 	return nil
 }

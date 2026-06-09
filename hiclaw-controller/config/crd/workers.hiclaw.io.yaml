@@ -24,11 +24,15 @@ spec:
                   description: Name of the AI gateway Model API to use as the LLM provider.
                 runtime:
                   type: string
-                  enum: [openclaw, copaw, hermes, openhuman]
+                  enum: [openclaw, copaw, hermes, openhuman, harness]
                   description: |
                     Agent runtime. When omitted the controller falls back to
                     HICLAW_DEFAULT_WORKER_RUNTIME (set at install time), and
                     finally to "openclaw" if neither is set.
+                harnessType:
+                  type: string
+                  enum: [claude, gemini, opencode, codex]
+                  description: 'Harness CLI when runtime=harness (default: claude).'
                 image:
                   type: string
                   description: Custom Docker image for this worker

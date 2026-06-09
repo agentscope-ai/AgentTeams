@@ -242,7 +242,17 @@ spec:
                         description: Name of the AI gateway Model API to use as the LLM provider.
                       runtime:
                         type: string
-                        enum: [openclaw, copaw, hermes, openhuman]
+                        enum: [openclaw, copaw, hermes, openhuman, harness]
+                      harnessType:
+                        type: string
+                        enum: [claude, gemini, opencode, codex]
+                        description: 'Harness CLI when runtime=harness (default: claude).'
+                      containerManaged:
+                        type: boolean
+                        description: >
+                          When false, the controller skips container lifecycle for this
+                          team worker (remote worker whose process is managed externally).
+                          Default true.
                       image:
                         type: string
                       identity:

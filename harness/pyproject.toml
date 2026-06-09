@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 harness-worker = "harness_worker.cli:main"
+harness-remote = "harness_worker.remote_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/harness_worker"]

@@ -303,6 +303,8 @@ type TeamWorkerSpec struct {
 	Expose        []ExposePort        `json:"expose,omitempty"`
 	ChannelPolicy *ChannelPolicySpec  `json:"channelPolicy,omitempty"`
 	State         *string             `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+	// ContainerManaged: when false, controller skips container lifecycle for this team worker (remote worker, e.g. local dev env)
+	ContainerManaged *bool `json:"containerManaged,omitempty"`
 
 	// AccessEntries declares the cloud permissions this team worker should be
 	// granted via hiclaw-credential-provider. See AccessEntry for semantics.

@@ -21,7 +21,13 @@ _MISSING: Any = object()
 
 
 def _port_remap(url: str, is_container: bool) -> str:
-    if not is_container and url and ":8080" in url:
+    if is_container:
+        return url
+    # Allow explicit override for remote workers (e.g. localhost:6167 via port-forward).
+    override = os.environ.get("HICLAW_MATRIX_HOMESERVER")
+    if override and url and ".svc.cluster.local" in url:
+        return override
+    if url and ":8080" in url:
         gateway_port = os.environ.get("HICLAW_PORT_GATEWAY", "18080")
         return url.replace(":8080", f":{gateway_port}")
     return url

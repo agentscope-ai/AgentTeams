@@ -238,7 +238,7 @@ class ClaudeHarness(BaseHarness):
         # dontAsk: non-interactive mode required for subprocess invocation.
         # bypassPermissions is blocked when running as root (container default).
         # allow mcp__* so native MCP tool calls are not denied in dontAsk mode.
-        existing["permissions"] = {"defaultMode": "dontAsk", "allow": ["mcp__*", "Write(*)", "Read(*)", "Bash(*)"]}
+        existing["permissions"] = {"defaultMode": "dontAsk", "allow": ["mcp__*", "Write(*)", "Read(*)", "Bash(*)", "Glob(*)", "LS(*)", "WebSearch(*)", "WebFetch(*)"]}
         existing["env"] = {**existing.get("env", {}), **self._build_env()}
 
         cfg_file.write_text(json.dumps(existing, indent=2))

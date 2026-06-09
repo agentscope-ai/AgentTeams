@@ -55,6 +55,7 @@ def run(
     fs_bucket: str = typer.Option("hiclaw-storage", "--fs-bucket", envvar="HICLAW_FS_BUCKET", help="MinIO bucket"),
     fs_secure: bool = typer.Option(False, "--fs-secure", envvar="HICLAW_FS_SECURE", help="Use TLS for MinIO"),
     matrix_domain: Optional[str] = typer.Option(None, "--matrix-domain", envvar="HICLAW_MATRIX_DOMAIN", help="Matrix homeserver domain"),
+    matrix_homeserver: Optional[str] = typer.Option(None, "--matrix-homeserver", envvar="HICLAW_MATRIX_HOMESERVER", help="Override Matrix homeserver URL (e.g. http://localhost:6167 when port-forwarding)"),
     matrix_token: Optional[str] = typer.Option(None, "--matrix-token", envvar="HICLAW_WORKER_MATRIX_TOKEN", help="Pre-provisioned Matrix access token (override)"),
     gateway_url: Optional[str] = typer.Option(None, "--gateway-url", envvar="HICLAW_AI_GATEWAY_URL", help="Higress gateway URL (externally reachable)"),
     gateway_key: Optional[str] = typer.Option(None, "--gateway-key", envvar="HICLAW_WORKER_GATEWAY_KEY", help="Higress consumer key"),
@@ -81,6 +82,8 @@ def run(
     os.environ["HICLAW_WORKER_NAME"] = name
     if matrix_domain:
         os.environ["HICLAW_MATRIX_DOMAIN"] = matrix_domain
+    if matrix_homeserver:
+        os.environ["HICLAW_MATRIX_HOMESERVER"] = matrix_homeserver
     if matrix_token:
         os.environ["HICLAW_WORKER_MATRIX_TOKEN"] = matrix_token
     if gateway_url:

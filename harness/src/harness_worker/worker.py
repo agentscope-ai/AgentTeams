@@ -140,6 +140,11 @@ class Worker:
 
         worker_name = os.environ.get("HICLAW_WORKER_NAME", self.worker_name)
         domain = os.environ.get("HICLAW_MATRIX_DOMAIN", "")
+        if not domain:
+            # Derive domain from userId in openclaw.json (e.g. "@name:domain" → "domain")
+            user_id = matrix_cfg.get("userId", "")
+            if ":" in user_id:
+                domain = user_id.split(":", 1)[1]
         if not worker_name or not domain:
             console.print("[yellow]Matrix credentials incomplete; running without relay.[/yellow]")
             await asyncio.sleep(float("inf"))

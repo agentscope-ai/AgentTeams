@@ -172,17 +172,6 @@ spec:
                     hiclaw.io/role, hiclaw.io/runtime, app). Entries whose
                     keys collide with those system labels are silently
                     overridden.
-                env:
-                  type: object
-                  description: |
-                    User-defined environment variables injected into the worker container.
-                    Keys that collide with variables already set by the controller or backend
-                    (HICLAW_*, OPENCLAW_*, HOME, and similar internal keys) are silently
-                    ignored with a warning log — the system value always wins.
-                  additionalProperties:
-                    type: string
-                  propertyNames:
-                    pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
                 accessEntries:
                   type: array
                   description: >

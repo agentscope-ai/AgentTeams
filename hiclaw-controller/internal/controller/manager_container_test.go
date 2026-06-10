@@ -8,6 +8,7 @@ import (
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 )
@@ -80,12 +81,12 @@ func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 	labels := captureManagerCreateLabels(t, m)
 
 	cases := map[string]string{
-		"owner":                 "alice",       // metadata.labels propagated
-		"env":                   "prod",        // spec.labels propagated
-		"tier":                  "spec-tier",   // spec beats metadata
-		"hiclaw.io/manager":     "default",     // system label
-		"hiclaw.io/role":        "manager",     // system label
-		"hiclaw.io/runtime":     "copaw",       // system label
+		"owner":                 "alice",     // metadata.labels propagated
+		"env":                   "prod",      // spec.labels propagated
+		"tier":                  "spec-tier", // spec beats metadata
+		"hiclaw.io/manager":     "default",   // system label
+		"hiclaw.io/role":        "manager",   // system label
+		"hiclaw.io/runtime":     "copaw",     // system label
 		"app":                   "hiclaw-manager",
 		v1beta1.LabelController: "real-ctl",
 	}
@@ -153,5 +154,54 @@ func TestCreateManagerContainer_NilLabelsSafe(t *testing.T) {
 		if _, ok := labels[k]; !ok {
 			t.Errorf("missing system label %q on labelless Manager (full=%v)", k, labels)
 		}
+	}
+}
+
+func TestReconcileManagerInfrastructurePassesModelProviderToProvision(t *testing.T) {
+	prov := mocks.NewMockManagerProvisioner()
+	r := &ManagerReconciler{Provisioner: prov}
+	m := &v1beta1.Manager{}
+	m.Name = "default"
+
+	scope := &managerScope{
+		manager:           m,
+		modelProviderInfo: &gateway.ModelProviderInfo{HttpApiID: "qwen-http-api"},
+	}
+
+	if _, err := r.reconcileManagerInfrastructure(context.Background(), scope); err != nil {
+		t.Fatalf("reconcileManagerInfrastructure: %v", err)
+	}
+	if len(prov.Calls.ProvisionManager) != 1 {
+		t.Fatalf("ProvisionManager calls=%d, want 1", len(prov.Calls.ProvisionManager))
+	}
+	if got := prov.Calls.ProvisionManager[0].ModelProviderID; got != "qwen-http-api" {
+		t.Fatalf("ProvisionManager ModelProviderID=%q, want qwen-http-api", got)
+	}
+}
+
+func TestReconcileManagerInfrastructureRestoresModelProviderAuth(t *testing.T) {
+	prov := mocks.NewMockManagerProvisioner()
+	r := &ManagerReconciler{Provisioner: prov}
+	m := &v1beta1.Manager{}
+	m.Name = "default"
+	m.Status.MatrixUserID = "@manager:localhost"
+
+	scope := &managerScope{
+		manager:           m,
+		modelProviderInfo: &gateway.ModelProviderInfo{HttpApiID: "openai-http-api"},
+	}
+
+	if _, err := r.reconcileManagerInfrastructure(context.Background(), scope); err != nil {
+		t.Fatalf("reconcileManagerInfrastructure: %v", err)
+	}
+	if len(prov.Calls.EnsureManagerGatewayAuth) != 1 {
+		t.Fatalf("EnsureManagerGatewayAuth calls=%d, want 1", len(prov.Calls.EnsureManagerGatewayAuth))
+	}
+	call := prov.Calls.EnsureManagerGatewayAuth[0]
+	if call.Name != "default" {
+		t.Fatalf("EnsureManagerGatewayAuth name=%q, want default", call.Name)
+	}
+	if call.ModelProviderID != "openai-http-api" {
+		t.Fatalf("EnsureManagerGatewayAuth ModelProviderID=%q, want openai-http-api", call.ModelProviderID)
 	}
 }

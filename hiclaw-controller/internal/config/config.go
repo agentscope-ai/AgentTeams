@@ -616,6 +616,7 @@ func (c *Config) GatewayConfig() gateway.Config {
 		AdminUser:                 c.HigressAdminUser,
 		AdminPassword:             c.HigressAdminPassword,
 		AllowDefaultAdminFallback: c.KubeMode == "embedded",
+		DataPlaneURL:              c.WorkerEnv.AIGatewayURL,
 	}
 }
 

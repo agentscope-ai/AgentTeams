@@ -131,7 +131,7 @@ func TestAuthorizeAIRoutes(t *testing.T) {
 	}))
 
 	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
-	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice"); err != nil {
+	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice", ""); err != nil {
 		t.Fatalf("AuthorizeAIRoutes: %v", err)
 	}
 }
@@ -190,7 +190,7 @@ func TestAuthorizeAIRoutesSerializesRouteUpdates(t *testing.T) {
 		wg.Add(1)
 		go func(consumer string) {
 			defer wg.Done()
-			errs <- c.AuthorizeAIRoutes(context.Background(), consumer)
+			errs <- c.AuthorizeAIRoutes(context.Background(), consumer, "")
 		}(consumer)
 	}
 	wg.Wait()
@@ -384,7 +384,7 @@ func TestAuthorizeAIRoutes_PUTFailsPropagatesError(t *testing.T) {
 	}))
 
 	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
-	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice"); err == nil {
+	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice", ""); err == nil {
 		t.Fatalf("AuthorizeAIRoutes: expected error from 500 PUT, got nil")
 	}
 }
@@ -525,5 +525,183 @@ func TestEnsureAIRoute_MissingCreatesSkeletonWithoutAllowedConsumers(t *testing.
 	}
 	if _, present := authConfig["allowedConsumers"]; present {
 		t.Fatalf("authConfig.allowedConsumers must NOT be written by EnsureAIRoute; got %v", authConfig["allowedConsumers"])
+	}
+}
+
+func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
+	putRoutes := map[string]map[string]interface{}{}
+	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/system/init":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/session/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "test"})
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v1/ai/routes" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"name": "qwen-route"},
+					{"name": "openai-route"},
+				},
+			})
+		case r.URL.Path == "/v1/ai/routes/qwen-route" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"name":      "qwen-route",
+					"upstreams": []interface{}{map[string]interface{}{"provider": "qwen"}},
+					"authConfig": map[string]interface{}{
+						"allowedConsumers": []string{"manager"},
+					},
+				},
+			})
+		case r.URL.Path == "/v1/ai/routes/openai-route" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"name":      "openai-route",
+					"upstreams": []interface{}{map[string]interface{}{"provider": "openai"}},
+					"authConfig": map[string]interface{}{
+						"allowedConsumers": []string{"manager", "worker-alice"},
+					},
+				},
+			})
+		case strings.HasPrefix(r.URL.Path, "/v1/ai/routes/") && r.Method == "PUT":
+			routeName := strings.TrimPrefix(r.URL.Path, "/v1/ai/routes/")
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode PUT body: %v", err)
+			}
+			putRoutes[routeName] = body
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Logf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+
+	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
+
+	// With provider filter "qwen", qwen-route is authorized and stale
+	// worker-alice authorization is removed from non-matching openai-route.
+	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice", "qwen"); err != nil {
+		t.Fatalf("AuthorizeAIRoutes: %v", err)
+	}
+	if len(putRoutes) != 2 {
+		t.Fatalf("expected PUT on qwen-route and stale openai-route, got %v", putRoutes)
+	}
+	qwenConsumers := toStringSlice(putRoutes["qwen-route"]["authConfig"].(map[string]interface{})["allowedConsumers"])
+	if !containsString(qwenConsumers, "worker-alice") {
+		t.Fatalf("qwen-route allowedConsumers=%v, want worker-alice", qwenConsumers)
+	}
+	openAIConsumers := toStringSlice(putRoutes["openai-route"]["authConfig"].(map[string]interface{})["allowedConsumers"])
+	if containsString(openAIConsumers, "worker-alice") {
+		t.Fatalf("openai-route allowedConsumers=%v, want worker-alice removed", openAIConsumers)
+	}
+
+	// Without provider filter, both routes should be PUT
+	putRoutes = map[string]map[string]interface{}{}
+	if err := c.AuthorizeAIRoutes(context.Background(), "worker-bob", ""); err != nil {
+		t.Fatalf("AuthorizeAIRoutes (no filter): %v", err)
+	}
+	if len(putRoutes) != 2 {
+		t.Errorf("expected PUT on 2 routes, got %v", putRoutes)
+	}
+}
+
+func TestResolveModelProvider_Higress(t *testing.T) {
+	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/system/init":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/session/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "test"})
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v1/ai/providers/qwen" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{"name": "qwen", "type": "qwen"},
+			})
+		case r.URL.Path == "/v1/ai/routes" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"name": "qwen-route"},
+					{"name": "openai-route"},
+				},
+			})
+		case r.URL.Path == "/v1/ai/routes/qwen-route" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"name": "qwen-route",
+					"pathPredicate": map[string]interface{}{
+						"matchValue": "/v1/qwen",
+					},
+					"upstreams": []interface{}{
+						map[string]interface{}{"provider": "qwen", "weight": 100},
+					},
+				},
+			})
+		case r.URL.Path == "/v1/ai/routes/openai-route" && r.Method == "GET":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"name": "openai-route",
+					"pathPredicate": map[string]interface{}{
+						"matchValue": "/v1",
+					},
+					"upstreams": []interface{}{
+						map[string]interface{}{"provider": "openai", "weight": 100},
+					},
+				},
+			})
+		default:
+			t.Logf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+
+	c := NewHigressClient(Config{
+		ConsoleURL:   "http://higress.test",
+		DataPlaneURL: "http://aigw-local.hiclaw.io:8080",
+	}, client)
+
+	info, err := c.ResolveModelProvider(context.Background(), "qwen")
+	if err != nil {
+		t.Fatalf("ResolveModelProvider: %v", err)
+	}
+	if info.HttpApiID != "qwen" {
+		t.Errorf("HttpApiID = %q, want qwen", info.HttpApiID)
+	}
+	if info.BasePath != "/v1/qwen" {
+		t.Errorf("BasePath = %q, want /v1/qwen", info.BasePath)
+	}
+	if info.IntranetURL != "http://aigw-local.hiclaw.io:8080/v1/qwen" {
+		t.Errorf("IntranetURL = %q, want http://aigw-local.hiclaw.io:8080/v1/qwen", info.IntranetURL)
+	}
+}
+
+func TestResolveModelProvider_Higress_NotFound(t *testing.T) {
+	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/system/init":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/session/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "test"})
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v1/ai/providers/nonexist" && r.Method == "GET":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Logf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+
+	c := NewHigressClient(Config{
+		ConsoleURL:   "http://higress.test",
+		DataPlaneURL: "http://aigw-local.hiclaw.io:8080",
+	}, client)
+
+	_, err := c.ResolveModelProvider(context.Background(), "nonexist")
+	if err == nil {
+		t.Fatal("expected error for nonexistent provider, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want it to contain 'not found'", err.Error())
 	}
 }

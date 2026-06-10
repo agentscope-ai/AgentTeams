@@ -12,6 +12,7 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
@@ -265,9 +266,10 @@ func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
 	prov := mocks.NewMockProvisioner()
 	state := &MemberState{}
 	member := MemberContext{
-		Name:        "alpha-worker-lead",
-		RuntimeName: "leader",
-		Role:        RoleTeamLeader,
+		Name:              "alpha-worker-lead",
+		RuntimeName:       "leader",
+		Role:              RoleTeamLeader,
+		ModelProviderInfo: &gateway.ModelProviderInfo{HttpApiID: "qwen-http-api"},
 	}
 
 	if _, err := ReconcileMemberInfra(context.Background(), MemberDeps{Provisioner: prov}, member, state); err != nil {
@@ -283,6 +285,9 @@ func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
 	}
 	if req.CredentialName != "alpha-worker-lead" {
 		t.Fatalf("ProvisionWorker CredentialName=%q, want CR name alpha-worker-lead", req.CredentialName)
+	}
+	if req.ModelProviderID != "qwen-http-api" {
+		t.Fatalf("ProvisionWorker ModelProviderID=%q, want qwen-http-api", req.ModelProviderID)
 	}
 }
 

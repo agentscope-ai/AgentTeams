@@ -34,6 +34,9 @@ type WorkerDeployRequest struct {
 	GatewayKey     string
 	MatrixPassword string
 
+	// AIGatewayURL overrides the cluster-wide AI Gateway URL when modelProvider is set.
+	AIGatewayURL string
+
 	// MCP servers declared in spec.mcpServers. The deployer translates this into
 	// mcporter-servers.json and injects Authorization: Bearer <GatewayKey>.
 	McpServers []v1beta1.MCPServer
@@ -201,6 +204,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		MatrixToken:    req.MatrixToken,
 		GatewayKey:     req.GatewayKey,
 		ModelName:      req.Spec.Model,
+		AIGatewayURL:   req.AIGatewayURL,
 		TeamLeaderName: req.TeamLeaderName,
 		ChannelPolicy:  channelPolicy,
 		Heartbeat:      req.Heartbeat,
@@ -644,6 +648,9 @@ type ManagerDeployRequest struct {
 	// mcporter-servers.json and injects Authorization: Bearer <GatewayKey>.
 	McpServers []v1beta1.MCPServer
 
+	// AIGatewayURL overrides the cluster-wide AI Gateway URL when modelProvider is set.
+	AIGatewayURL string
+
 	IsUpdate bool
 }
 
@@ -662,10 +669,11 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:  "manager",
-		MatrixToken: req.MatrixToken,
-		GatewayKey:  req.GatewayKey,
-		ModelName:   req.Spec.Model,
+		WorkerName:   "manager",
+		MatrixToken:  req.MatrixToken,
+		GatewayKey:   req.GatewayKey,
+		ModelName:    req.Spec.Model,
+		AIGatewayURL: req.AIGatewayURL,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)

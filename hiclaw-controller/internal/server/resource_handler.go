@@ -116,6 +116,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Package:          req.Package,
 			Expose:           req.Expose,
 			ChannelPolicy:    req.ChannelPolicy,
+			Resources:        req.Resources,
 			ContainerManaged: &containerManaged,
 			State:            req.State,
 		},
@@ -301,6 +302,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.ChannelPolicy != nil {
 			worker.Spec.ChannelPolicy = req.ChannelPolicy
 		}
+		if req.Resources != nil {
+			worker.Spec.Resources = req.Resources
+		}
 		if req.ContainerManaged != nil {
 			worker.Spec.ContainerManaged = req.ContainerManaged
 		}
@@ -392,6 +396,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 				WorkerIdleTimeout: req.Leader.WorkerIdleTimeout,
 				ChannelPolicy:     req.Leader.ChannelPolicy,
 				State:             req.Leader.State,
+				Resources:         req.Leader.Resources,
 			},
 		},
 	}
@@ -413,6 +418,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			Expose:        tw.Expose,
 			ChannelPolicy: tw.ChannelPolicy,
 			State:         tw.State,
+			Resources:     tw.Resources,
 		})
 	}
 
@@ -530,6 +536,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 			if req.Leader.State != nil {
 				team.Spec.Leader.State = req.Leader.State
 			}
+			if req.Leader.Resources != nil {
+				team.Spec.Leader.Resources = req.Leader.Resources
+			}
 		}
 		if req.Workers != nil {
 			team.Spec.Workers = nil
@@ -549,6 +558,8 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 					Package:       tw.Package,
 					Expose:        tw.Expose,
 					ChannelPolicy: tw.ChannelPolicy,
+					State:         tw.State,
+					Resources:     tw.Resources,
 				})
 			}
 		}
@@ -705,6 +716,7 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 			McpServers:    req.McpServers,
 			Package:       req.Package,
 			State:         req.State,
+			Resources:     req.Resources,
 		},
 	}
 	if req.Config != nil {
@@ -805,6 +817,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		}
 		if req.State != nil {
 			mgr.Spec.State = req.State
+		}
+		if req.Resources != nil {
+			mgr.Spec.Resources = req.Resources
 		}
 
 		if err := h.client.Update(ctx, &mgr); err != nil {

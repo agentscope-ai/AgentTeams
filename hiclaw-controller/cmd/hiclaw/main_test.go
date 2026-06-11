@@ -152,6 +152,52 @@ spec:
 	}
 }
 
+func TestBuildApplyBody_PreservesWorkerResources(t *testing.T) {
+	input := `apiVersion: hiclaw.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  model: claude-sonnet-4-6
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+`
+	var res yamlResource
+	if err := sigyaml.Unmarshal([]byte(input), &res); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	body := buildApplyBody(res, true)
+	if body["name"] != "alice" {
+		t.Fatalf("body name = %v, want alice", body["name"])
+	}
+
+	resources, ok := body["resources"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("body resources = %T, want map[string]interface{}", body["resources"])
+	}
+	requests, ok := resources["requests"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("resources.requests = %T, want map[string]interface{}", resources["requests"])
+	}
+	limits, ok := resources["limits"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("resources.limits = %T, want map[string]interface{}", resources["limits"])
+	}
+
+	if requests["cpu"] != "500m" || requests["memory"] != "1Gi" {
+		t.Fatalf("requests = %#v, want cpu=500m memory=1Gi", requests)
+	}
+	if limits["cpu"] != "1" || limits["memory"] != "2Gi" {
+		t.Fatalf("limits = %#v, want cpu=1 memory=2Gi", limits)
+	}
+}
+
 func TestParseYAML_MultiDocument(t *testing.T) {
 	input := `apiVersion: hiclaw.io/v1beta1
 kind: Team
@@ -348,9 +394,9 @@ spec:
 
 func TestParseYAML_PackageFieldInSpec(t *testing.T) {
 	tests := []struct {
-		name     string
-		yaml     string
-		wantPkg  string
+		name    string
+		yaml    string
+		wantPkg string
 	}{
 		{
 			name: "nacos package",

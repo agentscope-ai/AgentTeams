@@ -807,6 +807,37 @@ func TestWorkerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) 
 	assertLabel(t, labels, "hiclaw.io/role", "standalone")   // system
 }
 
+func TestWorkerResources_PropagateToBackendCreate(t *testing.T) {
+	resetMocks()
+
+	name := fixtures.UniqueName("resources-worker")
+	w := fixtures.NewTestWorker(name)
+	w.Spec.Resources = &v1beta1.AgentResourceRequirements{
+		Requests: v1beta1.AgentResourceValues{CPU: "250m", Memory: "512Mi"},
+		Limits:   v1beta1.AgentResourceValues{CPU: "2", Memory: "4Gi"},
+	}
+
+	if err := k8sClient.Create(ctx, w); err != nil {
+		t.Fatalf("create Worker: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, w) })
+
+	waitForRunning(t, w)
+
+	req, ok := mockBackend.FindCreateReq(name)
+	if !ok {
+		creates, _, _, _, _ := mockBackend.CallSnapshot()
+		t.Fatalf("backend Create was never called for %q (creates=%v)", name, creates)
+	}
+	if req.Resources == nil {
+		t.Fatal("CreateRequest.Resources = nil, want Worker spec resources")
+	}
+	if req.Resources.CPURequest != "250m" || req.Resources.MemoryRequest != "512Mi" ||
+		req.Resources.CPULimit != "2" || req.Resources.MemoryLimit != "4Gi" {
+		t.Fatalf("CreateRequest.Resources = %+v", req.Resources)
+	}
+}
+
 // TestWorkerLabels_MetadataLabelsChangeDoesNotRecreatePod verifies the
 // documented non-disruption contract: changing only metadata.labels
 // after the Pod is Running must NOT trigger backend.Delete +

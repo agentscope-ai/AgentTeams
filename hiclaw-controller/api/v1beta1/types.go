@@ -75,6 +75,20 @@ type RemoteSkillSource struct {
 	Skills   []RemoteSkill `json:"skills"`
 }
 
+// AgentResourceRequirements declares optional CPU/memory requests and limits
+// for one managed agent Pod. Empty fields fall back to controller/backend
+// defaults field-by-field.
+type AgentResourceRequirements struct {
+	Requests AgentResourceValues `json:"requests,omitempty"`
+	Limits   AgentResourceValues `json:"limits,omitempty"`
+}
+
+// AgentResourceValues holds Kubernetes quantity strings for CPU and memory.
+type AgentResourceValues struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+}
+
 // +genclient
 // +kubebuilder:subresource:status
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -88,20 +102,21 @@ type Worker struct {
 }
 
 type WorkerSpec struct {
-	Model         string              `json:"model"`
-	ModelProvider string              `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string              `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman (default: openclaw)
-	Image         string              `json:"image,omitempty"`         // custom Docker image
-	WorkerName    string              `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
-	Identity      string              `json:"identity,omitempty"`
-	Soul          string              `json:"soul,omitempty"`
-	Agents        string              `json:"agents,omitempty"`
-	Skills        []string            `json:"skills,omitempty"`       // built-in skills only
-	RemoteSkills  []RemoteSkillSource `json:"remoteSkills,omitempty"` // remote skills from source registries
-	McpServers    []MCPServer         `json:"mcpServers,omitempty"`
-	Package       string              `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-hiclaw|none
-	Expose        []ExposePort        `json:"expose,omitempty"`  // ports to expose via Higress gateway
-	ChannelPolicy *ChannelPolicySpec  `json:"channelPolicy,omitempty"`
+	Model         string                     `json:"model"`
+	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman (default: openclaw)
+	Image         string                     `json:"image,omitempty"`         // custom Docker image
+	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
+	Identity      string                     `json:"identity,omitempty"`
+	Soul          string                     `json:"soul,omitempty"`
+	Agents        string                     `json:"agents,omitempty"`
+	Skills        []string                   `json:"skills,omitempty"`       // built-in skills only
+	RemoteSkills  []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
+	McpServers    []MCPServer                `json:"mcpServers,omitempty"`
+	Package       string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-hiclaw|none
+	Expose        []ExposePort               `json:"expose,omitempty"`  // ports to expose via Higress gateway
+	ChannelPolicy *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Resources     *AgentResourceRequirements `json:"resources,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -246,20 +261,21 @@ type TeamMemberSpec struct {
 }
 
 type LeaderSpec struct {
-	Name              string                   `json:"name"`
-	WorkerName        string                   `json:"workerName,omitempty"`
-	Model             string                   `json:"model,omitempty"`
-	ModelProvider     string                   `json:"modelProvider,omitempty"` // APIG Model API name for per-leader LLM provider
-	Identity          string                   `json:"identity,omitempty"`
-	Soul              string                   `json:"soul,omitempty"`
-	Agents            string                   `json:"agents,omitempty"`
-	Package           string                   `json:"package,omitempty"`
-	RemoteSkills      []RemoteSkillSource      `json:"remoteSkills,omitempty"` // remote skills from source registries
-	McpServers        []MCPServer              `json:"mcpServers,omitempty"`
-	Heartbeat         *TeamLeaderHeartbeatSpec `json:"heartbeat,omitempty"`
-	WorkerIdleTimeout string                   `json:"workerIdleTimeout,omitempty"`
-	ChannelPolicy     *ChannelPolicySpec       `json:"channelPolicy,omitempty"`
-	State             *string                  `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+	Name              string                     `json:"name"`
+	WorkerName        string                     `json:"workerName,omitempty"`
+	Model             string                     `json:"model,omitempty"`
+	ModelProvider     string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-leader LLM provider
+	Identity          string                     `json:"identity,omitempty"`
+	Soul              string                     `json:"soul,omitempty"`
+	Agents            string                     `json:"agents,omitempty"`
+	Package           string                     `json:"package,omitempty"`
+	RemoteSkills      []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
+	McpServers        []MCPServer                `json:"mcpServers,omitempty"`
+	Heartbeat         *TeamLeaderHeartbeatSpec   `json:"heartbeat,omitempty"`
+	WorkerIdleTimeout string                     `json:"workerIdleTimeout,omitempty"`
+	ChannelPolicy     *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	State             *string                    `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+	Resources         *AgentResourceRequirements `json:"resources,omitempty"`
 
 	// AccessEntries declares the cloud permissions this leader should be
 	// granted via hiclaw-credential-provider. See AccessEntry for semantics.
@@ -285,22 +301,23 @@ type TeamLeaderHeartbeatSpec struct {
 }
 
 type TeamWorkerSpec struct {
-	Name          string              `json:"name"`
-	WorkerName    string              `json:"workerName,omitempty"`
-	Model         string              `json:"model,omitempty"`
-	ModelProvider string              `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string              `json:"runtime,omitempty"`
-	Image         string              `json:"image,omitempty"`
-	Identity      string              `json:"identity,omitempty"`
-	Soul          string              `json:"soul,omitempty"`
-	Agents        string              `json:"agents,omitempty"`
-	Skills        []string            `json:"skills,omitempty"`
-	RemoteSkills  []RemoteSkillSource `json:"remoteSkills,omitempty"` // remote skills from source registries
-	McpServers    []MCPServer         `json:"mcpServers,omitempty"`
-	Package       string              `json:"package,omitempty"`
-	Expose        []ExposePort        `json:"expose,omitempty"`
-	ChannelPolicy *ChannelPolicySpec  `json:"channelPolicy,omitempty"`
-	State         *string             `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+	Name          string                     `json:"name"`
+	WorkerName    string                     `json:"workerName,omitempty"`
+	Model         string                     `json:"model,omitempty"`
+	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
+	Runtime       string                     `json:"runtime,omitempty"`
+	Image         string                     `json:"image,omitempty"`
+	Identity      string                     `json:"identity,omitempty"`
+	Soul          string                     `json:"soul,omitempty"`
+	Agents        string                     `json:"agents,omitempty"`
+	Skills        []string                   `json:"skills,omitempty"`
+	RemoteSkills  []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
+	McpServers    []MCPServer                `json:"mcpServers,omitempty"`
+	Package       string                     `json:"package,omitempty"`
+	Expose        []ExposePort               `json:"expose,omitempty"`
+	ChannelPolicy *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	State         *string                    `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
+	Resources     *AgentResourceRequirements `json:"resources,omitempty"`
 
 	// AccessEntries declares the cloud permissions this team worker should be
 	// granted via hiclaw-credential-provider. See AccessEntry for semantics.
@@ -491,16 +508,17 @@ type Manager struct {
 }
 
 type ManagerSpec struct {
-	Model         string        `json:"model"`
-	ModelProvider string        `json:"modelProvider,omitempty"` // APIG Model API name for per-manager LLM provider
-	Runtime       string        `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman (default: openclaw)
-	Image         string        `json:"image,omitempty"`         // custom Docker image
-	Soul          string        `json:"soul,omitempty"`          // custom SOUL.md content
-	Agents        string        `json:"agents,omitempty"`        // custom AGENTS.md content
-	Skills        []string      `json:"skills,omitempty"`        // on-demand skills to enable
-	McpServers    []MCPServer   `json:"mcpServers,omitempty"`    // MCP servers callable by the Manager via mcporter
-	Package       string        `json:"package,omitempty"`       // file://, http(s)://, or nacos://; optional ?authType= for Nacos
-	Config        ManagerConfig `json:"config,omitempty"`
+	Model         string                     `json:"model"`
+	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-manager LLM provider
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman (default: openclaw)
+	Image         string                     `json:"image,omitempty"`         // custom Docker image
+	Soul          string                     `json:"soul,omitempty"`          // custom SOUL.md content
+	Agents        string                     `json:"agents,omitempty"`        // custom AGENTS.md content
+	Skills        []string                   `json:"skills,omitempty"`        // on-demand skills to enable
+	McpServers    []MCPServer                `json:"mcpServers,omitempty"`    // MCP servers callable by the Manager via mcporter
+	Package       string                     `json:"package,omitempty"`       // file://, http(s)://, or nacos://; optional ?authType= for Nacos
+	Config        ManagerConfig              `json:"config,omitempty"`
+	Resources     *AgentResourceRequirements `json:"resources,omitempty"`
 
 	// State is the desired lifecycle state of the manager.
 	// Valid values: "Running" (default), "Sleeping", "Stopped".

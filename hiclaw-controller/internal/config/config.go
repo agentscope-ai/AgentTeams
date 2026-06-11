@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/credentials"
@@ -87,6 +88,7 @@ type Config struct {
 	ManagerModel            string
 	ManagerRuntime          string
 	ManagerImage            string
+	ManagerSpecResources    *v1beta1.AgentResourceRequirements
 	K8sManagerCPURequest    string
 	K8sManagerMemoryRequest string
 	K8sManagerCPU           string
@@ -204,20 +206,10 @@ type WorkerEnvDefaults struct {
 }
 
 type managerSpecEnv struct {
-	Model     string               `json:"model"`
-	Runtime   string               `json:"runtime"`
-	Image     string               `json:"image"`
-	Resources managerSpecResources `json:"resources"`
-}
-
-type managerSpecResources struct {
-	Requests managerSpecResourceValues `json:"requests"`
-	Limits   managerSpecResourceValues `json:"limits"`
-}
-
-type managerSpecResourceValues struct {
-	CPU    string `json:"cpu"`
-	Memory string `json:"memory"`
+	Model     string                            `json:"model"`
+	Runtime   string                            `json:"runtime"`
+	Image     string                            `json:"image"`
+	Resources v1beta1.AgentResourceRequirements `json:"resources"`
 }
 
 func LoadConfig() *Config {
@@ -538,6 +530,10 @@ func applyManagerSpec(cfg *Config, specJSON string) error {
 	if spec.Image != "" {
 		cfg.ManagerImage = spec.Image
 	}
+	if !agentResourcesEmpty(spec.Resources) {
+		resources := spec.Resources
+		cfg.ManagerSpecResources = &resources
+	}
 	if spec.Resources.Requests.CPU != "" {
 		cfg.K8sManagerCPURequest = spec.Resources.Requests.CPU
 	}
@@ -552,6 +548,13 @@ func applyManagerSpec(cfg *Config, specJSON string) error {
 	}
 
 	return nil
+}
+
+func agentResourcesEmpty(r v1beta1.AgentResourceRequirements) bool {
+	return r.Requests.CPU == "" &&
+		r.Requests.Memory == "" &&
+		r.Limits.CPU == "" &&
+		r.Limits.Memory == ""
 }
 
 // extractHost returns the hostname from a URL (e.g. "http://hiclaw-controller:8090" → "hiclaw-controller").

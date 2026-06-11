@@ -56,6 +56,7 @@ func createWorkerCmd() *cobra.Command {
   hiclaw create worker --name alice --soul-file /path/to/SOUL.md --skills github-operations
   hiclaw create worker --name charlie --runtime copaw --expose 8080,3000
   hiclaw create worker --name remote-worker --runtime copaw --container-managed=false
+  To configure CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.
   To configure mcpServers, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
@@ -240,7 +241,8 @@ func createTeamCmd() *cobra.Command {
   hiclaw create team --name alpha --leader-name alpha-lead
   hiclaw create team --name alpha --leader-name alpha-lead --workers alice,bob
   hiclaw create team --name alpha --leader-name alpha-lead --leader-model claude-sonnet-4-6 --description "Frontend team"
-  hiclaw create team --name alpha --leader-name alpha-lead --leader-heartbeat-every 30m --worker-idle-timeout 12h`,
+  hiclaw create team --name alpha --leader-name alpha-lead --leader-heartbeat-every 30m --worker-idle-timeout 12h
+  To configure per-member CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f team.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -382,7 +384,8 @@ func createManagerCmd() *cobra.Command {
 		Long: `Create a new Manager resource.
 
   hiclaw create manager --name default --model qwen3.6-plus
-  hiclaw create manager --name default --model claude-sonnet-4-6 --runtime copaw`,
+  hiclaw create manager --name default --model claude-sonnet-4-6 --runtime copaw
+  To configure CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f manager.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")

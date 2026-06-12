@@ -14,6 +14,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/executor"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
@@ -72,6 +73,7 @@ type TeamReconciler struct {
 	// createMemberContainer uses it when computing saName. Empty collapses
 	// to DefaultResourcePrefix ("hiclaw-").
 	ResourcePrefix auth.ResourcePrefix
+	GatewayClient  gateway.Client // gateway client for modelProvider resolution
 }
 
 type teamAdminActor struct {
@@ -156,7 +158,7 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 //  2. Write local inline configs
 //  3. Clean up stale members (in Status.Members but no longer desired)
 //  4. Reconcile each desired member (leader + workers) via the shared phases
-//  4.5. Inject leader coordination context + SOUL.md template (after package deploy)
+//     4.5. Inject leader coordination context + SOUL.md template (after package deploy)
 //  5. Registry updates + summarise backend readiness and patch Team.Status
 func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Team) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
@@ -225,6 +227,19 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 
 	// --- Step 3: Stale cleanup ---
 	desiredMembers := buildDesiredMembers(derivedTeam, r.ControllerName)
+	if r.GatewayClient != nil {
+		for i := range desiredMembers {
+			mp := desiredMembers[i].Spec.ModelProvider
+			if mp == "" {
+				continue
+			}
+			info, err := r.GatewayClient.ResolveModelProvider(ctx, mp)
+			if err != nil {
+				return r.failTeam(ctx, t, patchBase, fmt.Sprintf("resolve model provider %q for %s: %v", mp, desiredMembers[i].Name, err))
+			}
+			desiredMembers[i].ModelProviderInfo = info
+		}
+	}
 	desiredNames := make(map[string]struct{}, len(desiredMembers))
 	for _, m := range desiredMembers {
 		desiredNames[m.Name] = struct{}{}
@@ -236,6 +251,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		EnvBuilder:     r.EnvBuilder,
 		ResourcePrefix: r.ResourcePrefix,
 		DefaultRuntime: r.DefaultRuntime,
+		GatewayClient:  r.GatewayClient,
 	}
 	// staleCtx.Spec is intentionally left zero. The original TeamWorkerSpec
 	// has already been removed from t.Spec.Workers, and we never persisted a
@@ -411,6 +427,9 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 	if _, err := ReconcileMemberInfra(ctx, deps, m, state); err != nil {
 		return err
 	}
+	if err := EnsureModelProviderAuth(ctx, deps, m, state); err != nil {
+		return err
+	}
 	ms.Observed = true
 	if state.RoomID != "" {
 		ms.RoomID = state.RoomID
@@ -511,6 +530,7 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 		EnvBuilder:     r.EnvBuilder,
 		ResourcePrefix: r.ResourcePrefix,
 		DefaultRuntime: r.DefaultRuntime,
+		GatewayClient:  r.GatewayClient,
 	}
 
 	// Union of Status.Members and desired members to guarantee cleanup even
@@ -948,6 +968,7 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 	}
 	return v1beta1.WorkerSpec{
 		Model:         t.Spec.Leader.Model,
+		ModelProvider: t.Spec.Leader.ModelProvider,
 		Runtime:       "copaw",
 		WorkerName:    t.Spec.Leader.WorkerName,
 		Identity:      t.Spec.Leader.Identity,
@@ -990,6 +1011,7 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 	}
 	return v1beta1.WorkerSpec{
 		Model:         w.Model,
+		ModelProvider: w.ModelProvider,
 		Runtime:       w.Runtime,
 		WorkerName:    w.WorkerName,
 		Image:         w.Image,

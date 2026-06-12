@@ -21,7 +21,7 @@ Do not write these in chat or task specs:
 - `hiclaw/hiclaw-storage/...`
 - `teams/{team}/shared/...`
 - `/root/hiclaw-fs/...`
-- `/root/.hiclaw-worker/...`
+- `/root/hiclaw-fs/agents/...`
 
 ## Team Task Files
 

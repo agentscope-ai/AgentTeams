@@ -539,6 +539,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		Legacy:         a.legacy,
 		DefaultRuntime: a.cfg.DefaultWorkerRuntime,
 		ControllerName: a.cfg.ControllerName,
+		GatewayClient:  a.gateway,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}
@@ -554,6 +555,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		AgentFSDir:     a.cfg.AgentFSDir(),
 		ControllerName: a.cfg.ControllerName,
 		ResourcePrefix: resourcePrefix,
+		GatewayClient:  a.gateway,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
@@ -578,6 +580,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		ControllerName:   a.cfg.ControllerName,
 		UserLanguage:     a.cfg.UserLanguage,
 		UserTimezone:     a.cfg.UserTimezone,
+		GatewayClient:    a.gateway,
 	}
 	if a.cfg.KubeMode == "embedded" {
 		mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{

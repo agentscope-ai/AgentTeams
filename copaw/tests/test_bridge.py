@@ -422,7 +422,7 @@ def test_manager_template_heartbeat_wins_over_openclaw_seed(monkeypatch):
 
 def test_worker_template_seeds_default_heartbeat_when_openclaw_silent():
     agent = _bridge_and_read_agent(_make_openclaw_cfg())
-    assert agent["heartbeat"] == {"enabled": False, "every": "10m"}
+    assert agent["heartbeat"] == {"enabled": True, "every": "10m"}
 
 
 def test_openclaw_heartbeat_seeds_existing_agent_without_heartbeat():

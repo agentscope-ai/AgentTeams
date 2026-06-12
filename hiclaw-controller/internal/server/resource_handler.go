@@ -104,6 +104,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		},
 		Spec: v1beta1.WorkerSpec{
 			Model:            req.Model,
+			ModelProvider:    req.ModelProvider,
 			WorkerName:       req.WorkerName,
 			Runtime:          req.Runtime,
 			Image:            req.Image,
@@ -264,6 +265,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.Model != "" {
 			worker.Spec.Model = req.Model
 		}
+		if req.ModelProvider != "" {
+			worker.Spec.ModelProvider = req.ModelProvider
+		}
 		if req.WorkerName != "" {
 			worker.Spec.WorkerName = req.WorkerName
 		}
@@ -378,6 +382,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 				Name:              req.Leader.Name,
 				WorkerName:        req.Leader.WorkerName,
 				Model:             req.Leader.Model,
+				ModelProvider:     req.Leader.ModelProvider,
 				Identity:          req.Leader.Identity,
 				Soul:              req.Leader.Soul,
 				Agents:            req.Leader.Agents,
@@ -396,6 +401,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			Name:          tw.Name,
 			WorkerName:    tw.WorkerName,
 			Model:         tw.Model,
+			ModelProvider: tw.ModelProvider,
 			Runtime:       tw.Runtime,
 			Image:         tw.Image,
 			Identity:      tw.Identity,
@@ -494,6 +500,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 			if req.Leader.Model != "" {
 				team.Spec.Leader.Model = req.Leader.Model
 			}
+			if req.Leader.ModelProvider != "" {
+				team.Spec.Leader.ModelProvider = req.Leader.ModelProvider
+			}
 			if req.Leader.Identity != "" {
 				team.Spec.Leader.Identity = req.Leader.Identity
 			}
@@ -529,6 +538,7 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 					Name:          tw.Name,
 					WorkerName:    tw.WorkerName,
 					Model:         tw.Model,
+					ModelProvider: tw.ModelProvider,
 					Runtime:       tw.Runtime,
 					Image:         tw.Image,
 					Identity:      tw.Identity,
@@ -685,15 +695,16 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.ManagerSpec{
-			Model:      req.Model,
-			Runtime:    req.Runtime,
-			Image:      req.Image,
-			Soul:       req.Soul,
-			Agents:     req.Agents,
-			Skills:     req.Skills,
-			McpServers: req.McpServers,
-			Package:    req.Package,
-			State:      req.State,
+			Model:         req.Model,
+			ModelProvider: req.ModelProvider,
+			Runtime:       req.Runtime,
+			Image:         req.Image,
+			Soul:          req.Soul,
+			Agents:        req.Agents,
+			Skills:        req.Skills,
+			McpServers:    req.McpServers,
+			Package:       req.Package,
+			State:         req.State,
 		},
 	}
 	if req.Config != nil {
@@ -764,6 +775,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 
 		if req.Model != "" {
 			mgr.Spec.Model = req.Model
+		}
+		if req.ModelProvider != "" {
+			mgr.Spec.ModelProvider = req.ModelProvider
 		}
 		if req.Runtime != "" {
 			mgr.Spec.Runtime = req.Runtime

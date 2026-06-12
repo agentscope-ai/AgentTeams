@@ -210,10 +210,11 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 		"name":"alpha-team",
 		"leader":{
 			"name":"alpha-lead",
+			"modelProvider":"qwen",
 			"heartbeat":{"enabled":true,"every":"30m"},
 			"workerIdleTimeout":"12h"
 		},
-		"workers":[]
+		"workers":[{"name":"alpha-dev","modelProvider":"openai"}]
 	}`)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(createBody))
 	createRec := httptest.NewRecorder()
@@ -232,12 +233,20 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 	if created.Spec.Leader.WorkerIdleTimeout != "12h" {
 		t.Fatalf("expected worker idle timeout 12h, got %q", created.Spec.Leader.WorkerIdleTimeout)
 	}
+	if created.Spec.Leader.ModelProvider != "qwen" {
+		t.Fatalf("leader.modelProvider=%q, want qwen", created.Spec.Leader.ModelProvider)
+	}
+	if len(created.Spec.Workers) != 1 || created.Spec.Workers[0].ModelProvider != "openai" {
+		t.Fatalf("workers modelProvider not persisted: %#v", created.Spec.Workers)
+	}
 
 	updateBody := []byte(`{
 		"leader":{
+			"modelProvider":"dashscope",
 			"heartbeat":{"enabled":true,"every":"45m"},
 			"workerIdleTimeout":"24h"
-		}
+		},
+		"workers":[{"name":"alpha-qa","modelProvider":"qwen"}]
 	}`)
 	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/teams/alpha-team", bytes.NewReader(updateBody))
 	updateReq.SetPathValue("name", "alpha-team")
@@ -256,6 +265,12 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 	}
 	if updated.Spec.Leader.WorkerIdleTimeout != "24h" {
 		t.Fatalf("expected worker idle timeout 24h, got %q", updated.Spec.Leader.WorkerIdleTimeout)
+	}
+	if updated.Spec.Leader.ModelProvider != "dashscope" {
+		t.Fatalf("leader.modelProvider=%q, want dashscope", updated.Spec.Leader.ModelProvider)
+	}
+	if len(updated.Spec.Workers) != 1 || updated.Spec.Workers[0].Name != "alpha-qa" || updated.Spec.Workers[0].ModelProvider != "qwen" {
+		t.Fatalf("workers after update=%#v, want alpha-qa with qwen modelProvider", updated.Spec.Workers)
 	}
 
 	var resp TeamResponse
@@ -300,6 +315,45 @@ func TestCreateTeamPersistsRuntimeWorkerNames(t *testing.T) {
 	}
 	if got := stored.Spec.Workers[0].WorkerName; got != "dev-runtime" {
 		t.Fatalf("workers[0].workerName = %q, want dev-runtime", got)
+	}
+}
+
+func TestCreateAndUpdateManagerPersistsModelProvider(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	createBody := []byte(`{"name":"default","model":"qwen-plus","modelProvider":"qwen"}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	handler.CreateManager(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, createRec.Code, createRec.Body.String())
+	}
+
+	var created v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "default", Namespace: "default"}, &created); err != nil {
+		t.Fatalf("get created manager: %v", err)
+	}
+	if created.Spec.ModelProvider != "qwen" {
+		t.Fatalf("created manager modelProvider=%q, want qwen", created.Spec.ModelProvider)
+	}
+
+	updateBody := []byte(`{"modelProvider":"openai"}`)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/managers/default", bytes.NewReader(updateBody))
+	updateReq.SetPathValue("name", "default")
+	updateRec := httptest.NewRecorder()
+	handler.UpdateManager(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+
+	var updated v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "default", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated manager: %v", err)
+	}
+	if updated.Spec.ModelProvider != "openai" {
+		t.Fatalf("updated manager modelProvider=%q, want openai", updated.Spec.ModelProvider)
 	}
 }
 

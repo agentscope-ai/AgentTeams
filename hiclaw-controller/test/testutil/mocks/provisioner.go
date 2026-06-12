@@ -16,7 +16,7 @@ type MockProvisioner struct {
 	DeprovisionWorkerFn        func(ctx context.Context, req service.WorkerDeprovisionRequest) error
 	RefreshCredentialsFn       func(ctx context.Context, workerName string) (*service.RefreshResult, error)
 	RefreshWorkerCredentialsFn func(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error)
-	EnsureWorkerGatewayAuthFn  func(ctx context.Context, workerName, gatewayKey string) error
+	EnsureWorkerGatewayAuthFn  func(ctx context.Context, workerName, gatewayKey, modelProviderID string) error
 	ReconcileExposeFn          func(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
 	EnsureServiceAccountFn     func(ctx context.Context, workerName string) error
 	DeleteServiceAccountFn     func(ctx context.Context, workerName string) error
@@ -36,7 +36,7 @@ type MockProvisioner struct {
 		DeprovisionWorker        []service.WorkerDeprovisionRequest
 		RefreshCredentials       []string
 		RefreshWorkerCredentials []workerCredentialCall
-		EnsureWorkerGatewayAuth  []string
+		EnsureWorkerGatewayAuth  []gatewayAuthCall
 		ReconcileExpose          []string
 		EnsureServiceAccount     []string
 		DeleteServiceAccount     []string
@@ -55,6 +55,12 @@ type MockProvisioner struct {
 type workerCredentialCall struct {
 	CredentialName string
 	WorkerName     string
+}
+
+type gatewayAuthCall struct {
+	Name            string
+	GatewayKey      string
+	ModelProviderID string
 }
 
 type humanLoginCall struct {
@@ -104,7 +110,7 @@ func (m *MockProvisioner) clearCallsLocked() {
 		DeprovisionWorker        []service.WorkerDeprovisionRequest
 		RefreshCredentials       []string
 		RefreshWorkerCredentials []workerCredentialCall
-		EnsureWorkerGatewayAuth  []string
+		EnsureWorkerGatewayAuth  []gatewayAuthCall
 		ReconcileExpose          []string
 		EnsureServiceAccount     []string
 		DeleteServiceAccount     []string
@@ -184,13 +190,17 @@ func (m *MockProvisioner) RefreshWorkerCredentials(ctx context.Context, credenti
 	}, nil
 }
 
-func (m *MockProvisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error {
+func (m *MockProvisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey, modelProviderID string) error {
 	m.mu.Lock()
-	m.Calls.EnsureWorkerGatewayAuth = append(m.Calls.EnsureWorkerGatewayAuth, workerName)
+	m.Calls.EnsureWorkerGatewayAuth = append(m.Calls.EnsureWorkerGatewayAuth, gatewayAuthCall{
+		Name:            workerName,
+		GatewayKey:      gatewayKey,
+		ModelProviderID: modelProviderID,
+	})
 	fn := m.EnsureWorkerGatewayAuthFn
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, workerName, gatewayKey)
+		return fn(ctx, workerName, gatewayKey, modelProviderID)
 	}
 	return nil
 }

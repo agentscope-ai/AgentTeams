@@ -102,9 +102,10 @@ type AgentConfigRef struct {
 
 type WorkerSpec struct {
 	Model         string              `json:"model"`
-	Runtime       string              `json:"runtime,omitempty"`    // openclaw | copaw | hermes | openhuman (default: openclaw)
-	Image         string              `json:"image,omitempty"`      // custom Docker image
-	WorkerName    string              `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
+	ModelProvider string              `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
+	Runtime       string              `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman (default: openclaw)
+	Image         string              `json:"image,omitempty"`         // custom Docker image
+	WorkerName    string              `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string              `json:"identity,omitempty"`
 	Soul          string              `json:"soul,omitempty"`
 	Agents        string              `json:"agents,omitempty"`
@@ -266,6 +267,7 @@ type LeaderSpec struct {
 	Name              string                   `json:"name"`
 	WorkerName        string                   `json:"workerName,omitempty"`
 	Model             string                   `json:"model,omitempty"`
+	ModelProvider     string                   `json:"modelProvider,omitempty"` // APIG Model API name for per-leader LLM provider
 	Identity          string                   `json:"identity,omitempty"`
 	Soul              string                   `json:"soul,omitempty"`
 	Agents            string                   `json:"agents,omitempty"`
@@ -309,6 +311,7 @@ type TeamWorkerSpec struct {
 	Name          string              `json:"name"`
 	WorkerName    string              `json:"workerName,omitempty"`
 	Model         string              `json:"model,omitempty"`
+	ModelProvider string              `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
 	Runtime       string              `json:"runtime,omitempty"`
 	Image         string              `json:"image,omitempty"`
 	Identity      string              `json:"identity,omitempty"`
@@ -517,15 +520,16 @@ type Manager struct {
 }
 
 type ManagerSpec struct {
-	Model      string        `json:"model"`
-	Runtime    string        `json:"runtime,omitempty"`    // openclaw | copaw | hermes | openhuman (default: openclaw)
-	Image      string        `json:"image,omitempty"`      // custom Docker image
-	Soul       string        `json:"soul,omitempty"`       // custom SOUL.md content
-	Agents     string        `json:"agents,omitempty"`     // custom AGENTS.md content
-	Skills     []string      `json:"skills,omitempty"`     // on-demand skills to enable
-	McpServers []MCPServer   `json:"mcpServers,omitempty"` // MCP servers callable by the Manager via mcporter
-	Package    string        `json:"package,omitempty"`    // file://, http(s)://, or nacos://; optional ?authType= for Nacos
-	Config     ManagerConfig `json:"config,omitempty"`
+	Model         string        `json:"model"`
+	ModelProvider string        `json:"modelProvider,omitempty"` // APIG Model API name for per-manager LLM provider
+	Runtime       string        `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman (default: openclaw)
+	Image         string        `json:"image,omitempty"`         // custom Docker image
+	Soul          string        `json:"soul,omitempty"`          // custom SOUL.md content
+	Agents        string        `json:"agents,omitempty"`        // custom AGENTS.md content
+	Skills        []string      `json:"skills,omitempty"`        // on-demand skills to enable
+	McpServers    []MCPServer   `json:"mcpServers,omitempty"`    // MCP servers callable by the Manager via mcporter
+	Package       string        `json:"package,omitempty"`       // file://, http(s)://, or nacos://; optional ?authType= for Nacos
+	Config        ManagerConfig `json:"config,omitempty"`
 
 	// State is the desired lifecycle state of the manager.
 	// Valid values: "Running" (default), "Sleeping", "Stopped".

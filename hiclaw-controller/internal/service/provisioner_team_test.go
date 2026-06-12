@@ -155,6 +155,8 @@ func (f *fakeTeamMatrix) RegisterAppService(_ context.Context, _ matrix.AppServi
 func (f *fakeTeamMatrix) UnregisterAppService(_ context.Context, _ string) error                     { return nil }
 func (f *fakeTeamMatrix) AppServiceSmokeTest(_ context.Context) error { return nil }
 
+func (f *fakeTeamMatrix) VerifyAccessToken(_ context.Context, _ string) error { return nil }
+
 func TestProvisionTeamRoomsInvitesExplicitTeamAdminAndLeavesNewLeaderDM(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{

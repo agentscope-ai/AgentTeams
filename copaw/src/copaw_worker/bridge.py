@@ -5,9 +5,14 @@ picks up the right workspace.
 """
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 import json
 import os
 import shutil
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -74,10 +79,13 @@ def _patch_copaw_paths(working_dir: Path) -> None:
 def bridge_openclaw_to_copaw(
     openclaw_cfg: dict[str, Any],
     working_dir: Path,
+    *,
+    profile: str = "manager",
 ) -> None:
     """
     Read openclaw_cfg (parsed openclaw.json) and write:
-      - <working_dir>/config.json          (channels + agents)
+      - <working_dir>/config.json          (global config)
+      - <working_dir>/workspaces/default/agent.json (per-agent config)
       - <working_dir>/providers.json       (LLM credentials, for reference)
       - <working_dir>.secret/providers.json (where copaw actually reads from)
 
@@ -89,6 +97,7 @@ def bridge_openclaw_to_copaw(
     in_container = _is_in_container()
 
     _write_config_json(openclaw_cfg, working_dir, in_container)
+    _write_agent_json(openclaw_cfg, working_dir, in_container, profile=profile)
     _write_providers_json(openclaw_cfg, working_dir, in_container)
 
     os.environ["COPAW_WORKING_DIR"] = str(working_dir)
@@ -238,6 +247,105 @@ def _write_config_json(
         json.dump(existing, f, indent=2, ensure_ascii=False)
 
 
+
+
+# ---------------------------------------------------------------------------
+# agent.json — per-agent config (CoPaw 1.0.2+ reads this, not config.json)
+# ---------------------------------------------------------------------------
+
+def _write_agent_json(
+    cfg: dict[str, Any],
+    working_dir: Path,
+    in_container: bool,
+    *,
+    profile: str = "worker",
+) -> None:
+    """Create agent.json from template, then overlay Matrix channel config.
+
+    CoPaw 1.0.2+ reads workspace/agent.json for per-agent configuration.
+    The template provides defaults; we overlay controller-owned fields
+    (Matrix access_token, homeserver, allowlists, context window).
+    """
+    workspace_dir = working_dir / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    agent_path = workspace_dir / "agent.json"
+
+    # Install from template if missing
+    if not agent_path.exists():
+        template_name = f"agent.{profile}.json"
+        try:
+            # Try loading from package templates directory
+            tmpl_dir = Path(__file__).resolve().parent / "templates"
+            tmpl_path = tmpl_dir / template_name
+            if tmpl_path.exists():
+                shutil.copy2(str(tmpl_path), str(agent_path))
+            else:
+                # Fallback: create minimal agent.json
+                minimal = {
+                    "id": "default",
+                    "name": "Manager" if profile == "manager" else "Default Agent",
+                    "language": "zh",
+                    "channels": {
+                        "console": {"enabled": True},
+                        "matrix": {
+                            "enabled": True,
+                            "filter_tool_messages": False,
+                            "filter_thinking": True,
+                            "allow_from": [],
+                            "group_allow_from": [],
+                            "groups": {},
+                        },
+                    },
+                    "running": {"max_iters": 200},
+                }
+                with open(agent_path, "w") as f:
+                    json.dump(minimal, f, indent=2)
+        except Exception:
+            pass
+
+    # Load existing agent.json
+    try:
+        with open(agent_path) as f:
+            agent_cfg = json.load(f)
+    except Exception:
+        agent_cfg = {"id": "default", "channels": {}, "running": {}}
+
+    # Overlay Matrix channel config from openclaw.json
+    matrix_raw = cfg.get("channels", {}).get("matrix", {})
+    homeserver = _port_remap(matrix_raw.get("homeserver", ""), in_container)
+    access_token = matrix_raw.get("accessToken", "")
+
+    dm_cfg = matrix_raw.get("dm", {})
+    dm_allow_from: list[str] = dm_cfg.get("allowFrom", [])
+    group_allow_from: list[str] = matrix_raw.get("groupAllowFrom", [])
+    groups = matrix_raw.get("groups", {})
+
+    matrix_ch = agent_cfg.setdefault("channels", {}).setdefault("matrix", {})
+    matrix_ch["enabled"] = matrix_raw.get("enabled", True)
+    if homeserver:
+        matrix_ch["homeserver"] = homeserver
+    if access_token:
+        matrix_ch["access_token"] = access_token
+    matrix_ch["allow_from"] = dm_allow_from
+    matrix_ch["group_allow_from"] = group_allow_from
+    matrix_ch["groups"] = groups
+    matrix_ch["filter_tool_messages"] = True
+    matrix_ch["filter_thinking"] = True
+
+    # Disable console channel (we use Matrix)
+    agent_cfg.setdefault("channels", {}).setdefault("console", {})["enabled"] = False
+
+    # Bridge context window
+    context_window = _resolve_context_window(cfg)
+    if context_window is not None:
+        agent_cfg.setdefault("running", {})["max_input_length"] = context_window
+
+    # Set workspace_dir
+    agent_cfg.setdefault("workspace_dir", str(workspace_dir))
+
+    with open(agent_path, "w") as f:
+        json.dump(agent_cfg, f, indent=2, ensure_ascii=False)
+
 # ---------------------------------------------------------------------------
 # providers.json
 # ---------------------------------------------------------------------------
@@ -308,3 +416,85 @@ def _write_providers_json(
     providers_path = working_dir / "providers.json"
     with open(providers_path, "w") as f:
         json.dump(providers_data, f, indent=2, ensure_ascii=False)
+
+
+
+# ---------------------------------------------------------------------------
+# Runtime-to-standard sync (worker uses this to push edits back to sync root)
+# ---------------------------------------------------------------------------
+
+def bridge_runtime_to_standard(standard_dir):
+    """Materialize runtime-space edits back into the standard sync root."""
+    sync_inner_prompt_files_to_outer(standard_dir)
+
+
+def sync_inner_prompt_files_to_outer(local_dir):
+    """Copy agent-edited prompt files from CoPaw workspace back to sync root."""
+    inner_outer_files = ("AGENTS.md", "SOUL.md", "HEARTBEAT.md")
+    copaw_ws_dir = Path(local_dir) / ".copaw" / "workspaces" / "default"
+    for name in inner_outer_files:
+        inner = copaw_ws_dir / name
+        outer = Path(local_dir) / name
+        if not inner.exists():
+            continue
+        try:
+            inner_mtime = inner.stat().st_mtime
+        except OSError:
+            continue
+        outer_mtime = outer.stat().st_mtime if outer.exists() else 0
+        if inner_mtime > outer_mtime:
+            inner_content = inner.read_text(errors="replace")
+            outer_content = outer.read_text(errors="replace") if outer.exists() else ""
+            if inner_content != outer_content:
+                outer.write_text(inner_content)
+                logger.debug(
+                    "Inner->Outer sync: .copaw/workspaces/default/%s -> %s",
+                    name,
+                    name,
+                )
+
+# ---------------------------------------------------------------------------
+# CLI entry point — used by manager/scripts/init/start-copaw-manager.sh
+# ---------------------------------------------------------------------------
+
+def _main_cli(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m copaw_worker.bridge",
+        description="Bridge Controller config into CoPaw runtime files.",
+    )
+    parser.add_argument("--openclaw-json", required=True,
+                        help="Path to openclaw.json")
+    parser.add_argument("--working-dir", required=True,
+                        help="CoPaw working dir (e.g. ~/.copaw)")
+    parser.add_argument("--profile", default="manager",
+                        choices=["worker", "manager"],
+                        help="Template profile (default: manager)")
+    args = parser.parse_args(argv)
+
+    from pathlib import Path as _Path
+    import json as _json
+
+    openclaw_path = _Path(args.openclaw_json)
+    if not openclaw_path.exists():
+        print(f"ERROR: {openclaw_path} not found", flush=True)
+        return 1
+
+    working_dir = _Path(args.working_dir)
+    working_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(openclaw_path) as f:
+        controller_config = _json.load(f)
+
+    bridge_openclaw_to_copaw(
+        controller_config,
+        working_dir,
+        profile=args.profile,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(_main_cli())

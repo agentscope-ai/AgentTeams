@@ -152,10 +152,7 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 	mergeUserEnv(managerEnv, m.Spec.Env, logger, "manager/"+m.Name)
 	containerName := r.managerContainerName(m.Name)
 	saName := r.ResourcePrefix.SAName(authpkg.RoleManager, m.Name)
-	resources := r.ManagerResources
-	if m.Spec.Resources != nil {
-		resources = agentResourcesToBackend(m.Spec.Resources)
-	}
+	resources := mergeAgentResourcesWithBackendDefaults(r.ManagerResources, m.Spec.Resources)
 	// Pod labels are layered low-to-high: CR metadata.labels, CR
 	// spec.labels, then controller-forced system labels. The last layer
 	// wins on collision so a user-supplied `hiclaw.io/controller` (or

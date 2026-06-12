@@ -187,6 +187,30 @@ func TestCreateManagerContainerSpecResourcesOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestCreateManagerContainerSpecResourcesPartiallyOverrideDefaults(t *testing.T) {
+	m := &v1beta1.Manager{}
+	m.Name = "default"
+	m.Namespace = "hiclaw"
+	m.Spec.Resources = &v1beta1.AgentResourceRequirements{
+		Limits: v1beta1.AgentResourceValues{CPU: "3"},
+	}
+
+	req := captureManagerCreateRequest(t, m, &backend.ResourceRequirements{
+		CPURequest:    "100m",
+		MemoryRequest: "256Mi",
+		CPULimit:      "1",
+		MemoryLimit:   "2Gi",
+	})
+
+	if req.Resources == nil {
+		t.Fatal("CreateRequest.Resources = nil, want merged manager resources")
+	}
+	if req.Resources.CPURequest != "100m" || req.Resources.MemoryRequest != "256Mi" ||
+		req.Resources.CPULimit != "3" || req.Resources.MemoryLimit != "2Gi" {
+		t.Fatalf("CreateRequest.Resources = %+v", req.Resources)
+	}
+}
+
 func TestCreateManagerContainerUsesDefaultResourcesWhenSpecResourcesUnset(t *testing.T) {
 	m := &v1beta1.Manager{}
 	m.Name = "default"

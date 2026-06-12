@@ -50,6 +50,10 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 		// entrypoint's :? validation passes. The password is never used
 		// for login in AS mode (token obtained via AS login instead).
 		"HICLAW_MANAGER_PASSWORD":    valueOrPlaceholder(prov.MatrixPassword),
+		// Pre-inject the Matrix access token so the Manager entrypoint can
+		// skip password-based login. Required in AppService mode (no password)
+		// and beneficial in legacy mode (avoids a redundant login round-trip).
+		"HICLAW_MANAGER_MATRIX_TOKEN": prov.MatrixToken,
 		"HICLAW_FS_ACCESS_KEY":       managerName,
 		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
 		"OPENCLAW_DISABLE_BONJOUR":   "1",

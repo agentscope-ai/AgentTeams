@@ -168,8 +168,20 @@ helm install hiclaw higress.io/hiclaw \
 | `credentials.llmProvider` | no | LLM provider name, defaults to `openai-compat` |
 | `credentials.defaultModel` | no | Default model, defaults to `gpt-5.4` |
 | `credentials.llmBaseUrl` | no | OpenAI-compatible base URL (e.g. `https://api.deepseek.com/v1`). Leave empty for official OpenAI API |
+| `preflight.llm.enabled` | no | Run an install/upgrade hook that validates the LLM API key, base URL, and model before the controller starts. Defaults to `true` |
 | `manager.runtime` | no | Manager agent runtime: `openclaw` (default), `copaw`, or `hermes` |
 | `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, or `hermes` |
+
+Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
+
+```bash
+helm install hiclaw higress.io/hiclaw \
+  -n hiclaw-system --create-namespace \
+  --set credentials.llmApiKey=<your-api-key> \
+  --set credentials.adminPassword=<your-admin-password> \
+  --set gateway.publicURL=http://localhost:18080 \
+  --set preflight.llm.enabled=false
+```
 
 <details>
 <summary>Using alternative runtimes (QwenPaw Manager + Hermes Workers)</summary>

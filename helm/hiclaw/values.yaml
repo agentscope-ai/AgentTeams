@@ -22,6 +22,16 @@ credentials:
   defaultModel: "gpt-5.4"
   llmBaseUrl: ""              # OpenAI-compatible base URL (e.g. https://api.openai.com/v1)
 
+# ── Preflight checks ─────────────────────────────────────────────────────
+preflight:
+  llm:
+    enabled: true              # run a Helm pre-install/pre-upgrade LLM probe
+    strict: true               # fail install/upgrade when the probe fails
+    timeoutSeconds: 30         # per HTTP request timeout
+    retries: 2                 # retry transient network/429/5xx failures
+    activeDeadlineSeconds: 120 # hard ceiling for the hook Job
+    resources: {}
+
 # ── Matrix ────────────────────────────────────────────────────────────────
 matrix:
   provider: tuwunel           # tuwunel | synapse

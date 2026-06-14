@@ -2840,8 +2840,15 @@ EOF
         CONTAINER_SOCK=$(detect_socket)
         if [ -n "${CONTAINER_SOCK}" ]; then
             log "$(msg install.socket_detected "${CONTAINER_SOCK}")"
-            SOCKET_MOUNT_ARGS="-v ${CONTAINER_SOCK}:/var/run/docker.sock --security-opt label=disable"
-        else
+            # Docker/Podman API socket -- only mount when detection succeeded.
+            # On Windows + WSL the installer cannot auto-detect a Unix socket
+            # path, so CONTAINER_SOCK may be empty.
+            local _socket_args=""
+            if [ -n "${CONTAINER_SOCK}" ]; then
+                _socket_args="-v ${CONTAINER_SOCK}:/var/run/docker.sock --security-opt label=disable"
+            fi
+
+            ${_socket_args} \n        else
             log "$(msg install.socket_not_found)"
             # Interactive confirmation when socket not found
             if [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
@@ -3135,6 +3142,10 @@ CREDEOF
     if [ "${HICLAW_USE_EMBEDDED}" = "1" ]; then
         # ============================================================
         # New architecture: embedded controller + auto-created manager
+        log "INFO: using embedded controller architecture."
+        if [ -z "${CONTAINER_SOCK}" ]; then
+            log "WARNING: CONTAINER_SOCK is empty -- embedded controller will start but Workers cannot be created."
+        fi
         # ============================================================
 
         # Internal port: 8080 (Higress gateway inside the container).

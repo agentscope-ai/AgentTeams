@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,8 +71,9 @@ func TestRunLLMPreflightPostsChatCompletion(t *testing.T) {
 			t.Fatalf("Authorization=%q", got)
 		}
 		var body struct {
-			Model    string `json:"model"`
-			Messages []struct {
+			Model     string `json:"model"`
+			MaxTokens int    `json:"max_tokens"`
+			Messages  []struct {
 				Role    string `json:"role"`
 				Content string `json:"content"`
 			} `json:"messages"`
@@ -81,6 +83,9 @@ func TestRunLLMPreflightPostsChatCompletion(t *testing.T) {
 		}
 		if body.Model != "test-model" {
 			t.Fatalf("model=%q, want test-model", body.Model)
+		}
+		if body.MaxTokens != 1 {
+			t.Fatalf("max_tokens=%d, want 1", body.MaxTokens)
 		}
 		if len(body.Messages) != 1 || body.Messages[0].Role != "user" {
 			t.Fatalf("messages=%+v", body.Messages)
@@ -143,17 +148,50 @@ func TestRunLLMPreflightRetriesTransientFailure(t *testing.T) {
 	defer srv.Close()
 
 	err := runLLMPreflight(context.Background(), llmPreflightOptions{
-		Provider: "custom",
-		APIKey:   "sk-test",
-		BaseURL:  srv.URL + "/v1",
-		Model:    "test-model",
-		Timeout:  time.Second,
-		Retries:  1,
+		Provider:     "custom",
+		APIKey:       "sk-test",
+		BaseURL:      srv.URL + "/v1",
+		Model:        "test-model",
+		Timeout:      time.Second,
+		Retries:      1,
+		RetryBackoff: -1,
 	})
 	if err != nil {
 		t.Fatalf("runLLMPreflight: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 2 {
 		t.Fatalf("calls=%d, want 2", got)
+	}
+}
+
+func TestRunLLMPreflightDoesNotRetryAfterContextCancellation(t *testing.T) {
+	var calls int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusBadGateway)
+		cancel()
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	err := runLLMPreflight(ctx, llmPreflightOptions{
+		Provider:     "custom",
+		APIKey:       "sk-test",
+		BaseURL:      srv.URL + "/v1",
+		Model:        "test-model",
+		Timeout:      time.Second,
+		Retries:      1,
+		RetryBackoff: 10 * time.Second,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v, want context canceled", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("calls=%d, want 1", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("elapsed=%s, want cancellation before retry backoff finishes", elapsed)
 	}
 }

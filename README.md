@@ -169,6 +169,11 @@ helm install hiclaw higress.io/hiclaw \
 | `credentials.defaultModel` | no | Default model, defaults to `gpt-5.4` |
 | `credentials.llmBaseUrl` | no | OpenAI-compatible base URL (e.g. `https://api.deepseek.com/v1`). Leave empty for official OpenAI API |
 | `preflight.llm.enabled` | no | Run an install/upgrade hook that validates the LLM API key, base URL, and model before the controller starts. Defaults to `true` |
+| `preflight.llm.strict` | no | Fail the Helm install/upgrade when the LLM preflight fails. Defaults to `true`; set to `false` to emit a warning and continue |
+| `preflight.llm.timeoutSeconds` | no | Per-request timeout for the LLM preflight HTTP probe. Defaults to `30` |
+| `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
+| `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
+| `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
 | `manager.runtime` | no | Manager agent runtime: `openclaw` (default), `copaw`, or `hermes` |
 | `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, or `hermes` |
 

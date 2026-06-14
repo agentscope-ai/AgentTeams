@@ -23,6 +23,7 @@ spec:
         {{- include "hiclaw.component.selectorLabels" (dict "root" . "component" "llm-preflight") | nindent 8 }}
     spec:
       restartPolicy: Never
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

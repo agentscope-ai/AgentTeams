@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	defaultOpenAICompatibleBaseURL = "https://api.openai.com/v1"
-	defaultQwenCompatibleBaseURL   = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	defaultLLMPreflightTimeout     = 30 * time.Second
-	defaultLLMPreflightRetries     = 2
+	defaultOpenAICompatibleBaseURL  = "https://api.openai.com/v1"
+	defaultQwenCompatibleBaseURL    = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	defaultLLMPreflightTimeout      = 30 * time.Second
+	defaultLLMPreflightRetries      = 2
+	defaultLLMPreflightRetryBackoff = 500 * time.Millisecond
 )
 
 type llmPreflightOptions struct {
@@ -33,7 +34,8 @@ type llmPreflightOptions struct {
 	Retries  int
 	Strict   bool
 
-	HTTPClient *http.Client
+	HTTPClient   *http.Client
+	RetryBackoff time.Duration
 }
 
 type llmPreflightConfig struct {
@@ -43,6 +45,7 @@ type llmPreflightConfig struct {
 	Model    string
 	Timeout  time.Duration
 	Retries  int
+	Backoff  time.Duration
 }
 
 type llmPreflightStatusError struct {
@@ -127,6 +130,7 @@ func resolveLLMPreflightConfig(opts llmPreflightOptions) (llmPreflightConfig, er
 		Model:    strings.TrimSpace(opts.Model),
 		Timeout:  opts.Timeout,
 		Retries:  opts.Retries,
+		Backoff:  opts.RetryBackoff,
 	}
 	if cfg.Provider == "" {
 		cfg.Provider = "openai-compat"
@@ -142,6 +146,12 @@ func resolveLLMPreflightConfig(opts llmPreflightOptions) (llmPreflightConfig, er
 	}
 	if cfg.Retries < 0 {
 		cfg.Retries = 0
+	}
+	if cfg.Backoff == 0 {
+		cfg.Backoff = defaultLLMPreflightRetryBackoff
+	}
+	if cfg.Backoff < 0 {
+		cfg.Backoff = 0
 	}
 
 	baseURL, err := resolveLLMPreflightBaseURL(cfg.Provider, cfg.BaseURL)
@@ -199,6 +209,9 @@ func runLLMPreflight(ctx context.Context, opts llmPreflightOptions) error {
 		if !isRetryableLLMPreflightError(lastErr) || attempt == cfg.Retries {
 			break
 		}
+		if err := waitLLMPreflightRetryBackoff(ctx, cfg.Backoff, attempt); err != nil {
+			return err
+		}
 	}
 	return lastErr
 }
@@ -206,7 +219,8 @@ func runLLMPreflight(ctx context.Context, opts llmPreflightOptions) error {
 func runLLMPreflightAttempt(ctx context.Context, client *http.Client, cfg llmPreflightConfig) error {
 	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
 	payload := map[string]interface{}{
-		"model": cfg.Model,
+		"model":      cfg.Model,
+		"max_tokens": 1,
 		"messages": []map[string]string{
 			{"role": "user", "content": "Reply with only one word: ok"},
 		},
@@ -242,6 +256,9 @@ func runLLMPreflightAttempt(ctx context.Context, client *http.Client, cfg llmPre
 }
 
 func isRetryableLLMPreflightError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	var transportErr *llmPreflightTransportError
 	if errors.As(err, &transportErr) {
 		return true
@@ -251,6 +268,24 @@ func isRetryableLLMPreflightError(err error) bool {
 		return statusErr.StatusCode == http.StatusTooManyRequests || statusErr.StatusCode >= 500
 	}
 	return false
+}
+
+func waitLLMPreflightRetryBackoff(ctx context.Context, baseDelay time.Duration, attempt int) error {
+	if baseDelay <= 0 {
+		return nil
+	}
+	delay := baseDelay
+	for i := 0; i < attempt; i++ {
+		delay *= 2
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func preflightStatusHint(status int) string {

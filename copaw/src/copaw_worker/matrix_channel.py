@@ -496,7 +496,7 @@ class MatrixChannel(BaseChannel):
 
         return False
 
-        async def _sync_loop(self) -> None:
+    async def _sync_loop(self) -> None:
         next_batch: Optional[str] = self._load_sync_token()
 
         # When no persisted token exists (old version upgrade or first deploy),

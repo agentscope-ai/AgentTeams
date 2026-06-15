@@ -90,6 +90,17 @@ RUN python -m venv /opt/venv/standard \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         /tmp/copaw-worker/
 
+# --- Patch CoPaw 1.0.2 Matrix channel indentation bug ---
+# _sync_loop method def is indented one level too deep inside
+# _refresh_matrix_token, causing IndentationError that prevents
+# the Matrix channel from loading. Fixed upstream but not yet released.
+RUN MATRIX_CH=/opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels/matrix/channel.py \
+    && if [ -f "$MATRIX_CH" ]; then \
+         sed -i '750s/^        async def _sync_loop/    async def _sync_loop/' "$MATRIX_CH"; \
+         find /opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels/matrix/__pycache__ -name 'channel*' -delete 2>/dev/null || true; \
+         echo 'Patched Matrix channel _sync_loop indentation'; \
+       fi
+
 # --- Lite venv: copaw from GitHub fork ---
 RUN python -m venv /opt/venv/lite \
     && /opt/venv/lite/bin/pip install --no-cache-dir \

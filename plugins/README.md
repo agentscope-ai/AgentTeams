@@ -42,6 +42,11 @@ Plugins are distributed as tarballs whose root is the plugin content itself:
     └── uninstall.sh
 ```
 
+`metadata.name` must use 1-63 lowercase letters, digits, `-`, or `_`, starting
+and ending with a letter or digit. Manifest-controlled paths (`package.include`,
+prompts, skills, MCP args, and adapters) must be relative paths inside the
+plugin root and must not contain `..` segments.
+
 The lifecycle entrypoints are the shared contract:
 
 - `scripts/install.sh`: detects supported local runtimes and dispatches to the

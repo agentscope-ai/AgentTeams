@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -14,9 +15,19 @@ from typing import Any, Dict, Optional, Tuple
 
 from agentteams_cli.config_store import ConfigStore
 
+PLUGIN_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?$")
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _validate_plugin_name(name: str) -> None:
+    if not PLUGIN_NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            "invalid plugin name: use 1-63 lowercase letters, digits, '-' or '_', "
+            "starting and ending with a letter or digit"
+        )
 
 
 def _load_metadata(manifest_path: Path) -> Tuple[str, str, list[str]]:
@@ -52,6 +63,7 @@ def _load_metadata(manifest_path: Path) -> Tuple[str, str, list[str]]:
     version = metadata.get("version", "")
     if not name:
         raise ValueError("metadata.name is required")
+    _validate_plugin_name(name)
     if not version:
         raise ValueError("metadata.version is required")
     return name, version, dependencies
@@ -163,6 +175,7 @@ def install(
 
     tmp: Optional[tempfile.TemporaryDirectory[str]] = None
     try:
+        _validate_plugin_name(name)
         plugin_root, tmp = _prepare_package(package) if package else (_find_plugin_root(source), None)  # type: ignore[arg-type]
         manifest_name, version, dependencies = _load_metadata(plugin_root / "plugin.yaml")
         if manifest_name != name:
@@ -212,6 +225,12 @@ def update(
     package: Optional[Path] = None,
     source: Optional[Path] = None,
 ) -> bool:
+    try:
+        _validate_plugin_name(name)
+    except ValueError as exc:
+        print(f"ERROR: Failed to update {name}: {exc}")
+        return False
+
     old = store.get_plugin_manifest(name)
     if not old:
         print(f"Plugin '{name}' is not installed. Use 'install' first.")
@@ -224,6 +243,12 @@ def update(
 
 
 def uninstall(store: ConfigStore, name: str) -> bool:
+    try:
+        _validate_plugin_name(name)
+    except ValueError as exc:
+        print(f"ERROR: Failed to uninstall {name}: {exc}")
+        return False
+
     manifest = store.get_plugin_manifest(name)
     if not manifest:
         print(f"Plugin '{name}' is not installed.")

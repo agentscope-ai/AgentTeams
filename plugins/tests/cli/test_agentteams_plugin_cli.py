@@ -140,6 +140,76 @@ class AgentTeamsPluginCliTest(unittest.TestCase):
         self.assertTrue(package.is_file(), package)
         return package
 
+    def run_validate_plugin(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["ruby", str(REPO_ROOT / "plugins" / "scripts" / "validate-plugin.rb"), str(self.plugin_root / "plugin.yaml")],
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_validate_plugin_rejects_unsafe_names_and_paths(self) -> None:
+        manifest_path = self.plugin_root / "plugin.yaml"
+        original = manifest_path.read_text(encoding="utf-8")
+        cases = [
+            (
+                f"name: {PLUGIN_NAME}",
+                "name: ../escaped-plugin",
+                "metadata.name must use",
+            ),
+            (
+                "- prompts",
+                "- ../prompts",
+                "package.include must not contain '..' segments",
+            ),
+            (
+                "team: prompts/team.md",
+                "team: /tmp/team.md",
+                "prompts.team must be a relative path",
+            ),
+            (
+                "path: skills/team/communication",
+                "path: ../skills/team/communication",
+                "skills.team.path must not contain '..' segments",
+            ),
+            (
+                "- mcp/server.py",
+                "- ../mcp/server.py",
+                "mcp.servers.demo.args must not contain '..' segments",
+            ),
+            (
+                "path: adapters/demo",
+                "path: /tmp/adapters/demo",
+                "adapters.demo.path must be a relative path",
+            ),
+        ]
+
+        for old, new, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertIn(old, original)
+                manifest_path.write_text(original.replace(old, new, 1), encoding="utf-8")
+                result = self.run_validate_plugin()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr + result.stdout)
+
+        manifest_path.write_text(original, encoding="utf-8")
+
+    def test_cli_rejects_unsafe_plugin_name_before_installing(self) -> None:
+        manifest_path = self.plugin_root / "plugin.yaml"
+        manifest_path.write_text(
+            manifest_path.read_text(encoding="utf-8").replace(f"name: {PLUGIN_NAME}", "name: ../escaped-plugin", 1),
+            encoding="utf-8",
+        )
+
+        result = self.run_agentteams("plugin", "install", "../escaped-plugin", "--source", str(self.plugin_root))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid plugin name", result.stdout + result.stderr)
+        self.assertFalse((self.project / ".agentteams" / "escaped-plugin").exists())
+        self.assertFalse((self.project / ".agentteams" / "plugins" / PLUGIN_NAME).exists())
+
     def test_plugin_tarball_contract(self) -> None:
         package = self.package_demo_plugin()
 

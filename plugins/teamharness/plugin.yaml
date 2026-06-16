@@ -1,0 +1,72 @@
+apiVersion: hiclaw.agentteam/v1alpha1
+kind: AgentTeamPlugin
+metadata:
+  name: teamharness
+  version: 0.1.0
+prompts:
+  team: prompts/team/TEAMS.md
+  agent:
+    leader: prompts/agent/leader.md
+    worker: prompts/agent/worker.md
+    remoteMember: prompts/agent/remote-member.md
+  manager:
+    agents: prompts/manager/AGENTS.md
+    tools: prompts/manager/TOOLS.md
+    heartbeat: prompts/manager/HEARTBEAT.md
+skills:
+  agent:
+    - id: mcporter
+      path: skills/agent/mcporter
+      roles: [leader, worker, manager, remote-member]
+    - id: find-skills
+      path: skills/agent/find-skills
+      roles: [leader, worker, manager, remote-member]
+  team:
+    - id: organization
+      path: skills/team/organization
+      roles: [leader, worker, manager, remote-member]
+    - id: communication
+      path: skills/team/communication
+      roles: [leader, worker, manager, remote-member]
+    - id: file-sharing
+      path: skills/team/file-sharing
+      roles: [leader, worker, manager, remote-member]
+    - id: team-coordination
+      path: skills/team/team-coordination
+      roles: [leader]
+    - id: project-management
+      path: skills/team/project-management
+      roles: [leader]
+    - id: task-delegation
+      path: skills/team/task-delegation
+      roles: [leader]
+    - id: task-execution
+      path: skills/team/task-execution
+      roles: [worker, remote-member]
+mcp:
+  servers:
+    - id: teamharness
+      transport: stdio
+      command: python
+      args:
+        - mcp/server.py
+      tools:
+        - health
+        - message
+        - roomflow
+        - filesync
+        - projectflow
+        - taskflow
+adapters:
+  - id: qwenpaw
+    path: adapters/qwenpaw
+  - id: claude-code
+    path: adapters/claude-code
+package:
+  include:
+    - plugin.yaml
+    - prompts/
+    - skills/
+    - mcp/
+    - adapters/
+    - scripts/

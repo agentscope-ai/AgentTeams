@@ -12,6 +12,13 @@
 
 [English](./README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
+> **📣 项目改名进行中：HiClaw → AgentTeams。**
+> CLI 二进制 `hiclaw`、环境变量 `HICLAW_*`、CRD group `hiclaw.io` 以及
+> Helm chart `hiclaw` 都将继续可用。新的对应名称
+> （`agt`、`AGENTTEAMS_*`、`agentteams.io`、`agentteams`）正在分阶段引入，
+> 全程保持向后兼容。详细迁移计划与时间表见
+> [#861](https://github.com/agentscope-ai/HiClaw/issues/861)。
+
 **HiClaw 是一个开源的协作式多智能体运行平台。让多个 Agent 在一个受控、可审计的房间中协作，人类全程可见、随时可介入。 采用 Manager-Workers 架构，Manager 统一调度多个 Workers，专注于企业内的人和 Agent、Agents 之间的协作场景。**
 
 HiClaw 并不和其他 xxClaw 对标，自己不实现 Agent 逻辑，而是编排和管理多个 Agent 容器（Manager 和众多 Workers）。

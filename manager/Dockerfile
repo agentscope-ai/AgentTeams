@@ -28,6 +28,7 @@ COPY --from=mc /usr/bin/mc /usr/local/bin/mc
 
 # hiclaw CLI — for worker/team/human management via controller REST API
 COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+RUN ln -sf /usr/local/bin/hiclaw /usr/local/bin/agt
 
 # ---- Built-in observability plugin (bundled unconditionally, enabled at runtime) ----
 # Placed before agent/configs COPY so that code changes do not invalidate this layer.

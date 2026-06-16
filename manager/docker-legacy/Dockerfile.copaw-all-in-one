@@ -78,6 +78,7 @@ COPY --from=element-web /app /opt/element-web
 # hiclaw-controller + hiclaw CLI + kube-apiserver (from pre-built image)
 COPY --from=hiclaw-controller /usr/local/bin/hiclaw-controller /usr/local/bin/hiclaw-controller
 COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+RUN ln -sf /usr/local/bin/hiclaw /usr/local/bin/agt
 COPY --from=hiclaw-controller /usr/local/bin/kube-apiserver /usr/local/bin/kube-apiserver
 COPY --from=hiclaw-controller /opt/hiclaw/config/crd/ /opt/hiclaw/config/crd/
 

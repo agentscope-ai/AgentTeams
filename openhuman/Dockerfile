@@ -166,6 +166,7 @@ COPY manager/agent/openhuman-worker-agent/ /opt/hiclaw/agent/openhuman-worker-ag
 
 # hiclaw CLI — for worker lifecycle management via controller REST API
 COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+RUN ln -sf /usr/local/bin/hiclaw /usr/local/bin/agt
 
 # Copy the built binary and upstream license (GPL-3.0 compliance: recipients
 # must be able to identify the license of the included GPL component).

@@ -52,6 +52,7 @@ COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
 # hiclaw CLI — for worker/team/human management via controller REST API
 COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+RUN ln -sf /usr/local/bin/hiclaw /usr/local/bin/agt
 
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 

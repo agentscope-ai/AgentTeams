@@ -122,10 +122,10 @@ def test_mcp_client_env_includes_sts_refresh_inputs(monkeypatch, tmp_path: Path)
     assert env["HICLAW_AUTH_TOKEN_FILE"] == "/var/run/secrets/hiclaw/token"
     assert env["HICLAW_CLUSTER_ID"] == "cluster-a"
     assert env["HICLAW_FS_ENDPOINT"] == "https://oss.example.test"
+    assert env["HICLAW_FS_ACCESS_KEY"] == "static-ak"
+    assert env["HICLAW_FS_SECRET_KEY"] == "static-sk"
+    assert env["MC_HOST_hiclaw"] == "https://temporary@example.test"
     assert env["QWENPAW_WORKING_DIR"] == str(tmp_path / ".qwenpaw")
-    assert "HICLAW_FS_ACCESS_KEY" not in env
-    assert "HICLAW_FS_SECRET_KEY" not in env
-    assert "MC_HOST_hiclaw" not in env
 
 
 def test_teamharness_installs_workspace_teams_md_without_overwriting_agentspec(tmp_path: Path, monkeypatch) -> None:
@@ -370,6 +370,28 @@ def test_private_tool_result_wrapper_redacts_text_blocks(tmp_path: Path, monkeyp
 
     assert module.sanitize_tool_result(result)["redacted"] is True
     assert result["content"][0]["text"] == "[REDACTED]"
+
+
+def test_output_sanitizer_skips_when_qwenpaw_private_acting_missing(monkeypatch) -> None:
+    module = _load_plugin()
+
+    class QwenPawAgent:
+        pass
+
+    react_agent_module = types.ModuleType("qwenpaw.agents.react_agent")
+    react_agent_module.QwenPawAgent = QwenPawAgent
+    monkeypatch.setitem(sys.modules, "qwenpaw", types.ModuleType("qwenpaw"))
+    monkeypatch.setitem(sys.modules, "qwenpaw.agents", types.ModuleType("qwenpaw.agents"))
+    monkeypatch.setitem(sys.modules, "qwenpaw.agents.react_agent", react_agent_module)
+
+    result = module.install_output_sanitizer_wrapper()
+
+    assert result == {
+        "ok": True,
+        "installed": False,
+        "reason": "qwenpaw agent _acting hook unavailable",
+    }
+    assert not hasattr(QwenPawAgent, "_teamharness_sanitizer_installed")
 
 
 def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeypatch) -> None:

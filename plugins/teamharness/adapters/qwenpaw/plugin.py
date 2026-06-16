@@ -667,6 +667,9 @@ def _mcp_client_env() -> Dict[str, str]:
         "HICLAW_AUTH_TOKEN_FILE",
         "HICLAW_CLUSTER_ID",
         "HICLAW_FS_ENDPOINT",
+        "HICLAW_FS_ACCESS_KEY",
+        "HICLAW_FS_SECRET_KEY",
+        "MC_HOST_hiclaw",
         "QWENPAW_WORKING_DIR",
         "COPAW_WORKING_DIR",
     ):
@@ -724,7 +727,9 @@ def install_output_sanitizer_wrapper() -> Dict[str, Any]:
     if getattr(QwenPawAgent, "_teamharness_sanitizer_installed", False):
         return {"ok": True, "installed": True, "action": "unchanged"}
 
-    original = QwenPawAgent._acting
+    original = getattr(QwenPawAgent, "_acting", None)
+    if not callable(original):
+        return {"ok": True, "installed": False, "reason": "qwenpaw agent _acting hook unavailable"}
 
     async def _acting_with_sanitizer(self, tool_call):
         result = await original(self, tool_call)

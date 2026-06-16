@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 	"github.com/spf13/cobra"
 )
 
@@ -236,10 +237,10 @@ func workerReportReadyCmd() *cobra.Command {
 Worker name is read from --name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME env var.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
-				name = os.Getenv("HICLAW_WORKER_CR_NAME")
+				name = envcompat.Lookup("HICLAW_WORKER_CR_NAME")
 			}
 			if name == "" {
-				name = os.Getenv("HICLAW_WORKER_NAME")
+				name = envcompat.Lookup("HICLAW_WORKER_NAME")
 			}
 			if name == "" {
 				return fmt.Errorf("--name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME is required")

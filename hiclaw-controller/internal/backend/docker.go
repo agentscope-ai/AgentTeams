@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 )
 
 // DockerConfig holds Docker backend configuration.
@@ -155,7 +157,7 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 		// Build MATRIX_ALLOWED_USERS (fallback; primary is openclaw.json dm.allowFrom + groupAllowFrom).
 		var allowedUsers []string
 		if domain := req.Env["HICLAW_MATRIX_DOMAIN"]; domain != "" {
-			if admin := os.Getenv("HICLAW_ADMIN_USER"); admin != "" {
+			if admin := envcompat.Lookup("HICLAW_ADMIN_USER"); admin != "" {
 				allowedUsers = append(allowedUsers, fmt.Sprintf("@%s:%s", admin, domain))
 			}
 			// Manager Matrix username is "manager" by convention (see agentconfig/generator.go).

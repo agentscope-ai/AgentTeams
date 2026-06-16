@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -169,7 +170,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		req.Env = make(map[string]string)
 	}
 	mergeOSSRegionFromProcessEnv(req.Env)
-	if rt := os.Getenv("HICLAW_RUNTIME"); rt != "" {
+	if rt := envcompat.Lookup("HICLAW_RUNTIME"); rt != "" {
 		req.Env["HICLAW_RUNTIME"] = rt
 	} else {
 		req.Env["HICLAW_RUNTIME"] = "k8s"
@@ -207,7 +208,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		var allowedUsers []string
 		if domain := req.Env["HICLAW_MATRIX_DOMAIN"]; domain != "" {
 			// Admin user — can DM and @mention the worker.
-			if admin := os.Getenv("HICLAW_ADMIN_USER"); admin != "" {
+			if admin := envcompat.Lookup("HICLAW_ADMIN_USER"); admin != "" {
 				allowedUsers = append(allowedUsers, fmt.Sprintf("@%s:%s", admin, domain))
 			}
 			// Manager Matrix username is "manager" by convention (see agentconfig/generator.go).
@@ -495,12 +496,12 @@ func mergeOSSRegionFromProcessEnv(env map[string]string) {
 	}
 	bucket := firstNonEmptyTrimmed(
 		env["HICLAW_FS_BUCKET"],
-		os.Getenv("HICLAW_FS_BUCKET"),
+		envcompat.Lookup("HICLAW_FS_BUCKET"),
 	)
 	if bucket != "" && strings.TrimSpace(env["HICLAW_FS_BUCKET"]) == "" {
 		env["HICLAW_FS_BUCKET"] = bucket
 	}
-	if v := strings.TrimSpace(os.Getenv("HICLAW_REGION")); v != "" && strings.TrimSpace(env["HICLAW_REGION"]) == "" {
+	if v := strings.TrimSpace(envcompat.Lookup("HICLAW_REGION")); v != "" && strings.TrimSpace(env["HICLAW_REGION"]) == "" {
 		env["HICLAW_REGION"] = v
 	}
 }
@@ -613,7 +614,7 @@ func loadK8sRESTConfig() (*rest.Config, error) {
 }
 
 func detectK8sNamespace() string {
-	if ns := strings.TrimSpace(os.Getenv("HICLAW_K8S_NAMESPACE")); ns != "" {
+	if ns := strings.TrimSpace(envcompat.Lookup("HICLAW_K8S_NAMESPACE")); ns != "" {
 		return ns
 	}
 	if data, err := os.ReadFile(defaultK8sNamespaceFile); err == nil {

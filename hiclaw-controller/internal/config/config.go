@@ -12,6 +12,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/credentials"
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
@@ -227,7 +228,7 @@ func LoadConfig() *Config {
 	}
 	// ContainerPrefix defaults to "${resourcePrefix}worker-" when auto-prefix
 	// is enabled. HICLAW_PROXY_CONTAINER_PREFIX remains an explicit override.
-	containerPrefix := os.Getenv("HICLAW_PROXY_CONTAINER_PREFIX")
+	containerPrefix := envcompat.Lookup("HICLAW_PROXY_CONTAINER_PREFIX")
 	if containerPrefix == "" && resourceAutoPrefix {
 		containerPrefix = resourcePrefix + "worker-"
 	}
@@ -251,103 +252,103 @@ func LoadConfig() *Config {
 		GatewayProvider: envOrDefault("HICLAW_GATEWAY_PROVIDER", "higress"),
 		StorageProvider: envOrDefault("HICLAW_STORAGE_PROVIDER", "minio"),
 
-		CredentialProviderURL: os.Getenv("HICLAW_CREDENTIAL_PROVIDER_URL"),
+		CredentialProviderURL: envcompat.Lookup("HICLAW_CREDENTIAL_PROVIDER_URL"),
 
 		HigressBaseURL:    envOrDefault("HICLAW_AI_GATEWAY_ADMIN_URL", "http://127.0.0.1:8001"),
 		HigressCookieFile: os.Getenv("HIGRESS_COOKIE_FILE"),
 		// Higress and Matrix share the same admin credentials.
-		HigressAdminUser:     os.Getenv("HICLAW_ADMIN_USER"),
-		HigressAdminPassword: os.Getenv("HICLAW_ADMIN_PASSWORD"),
+		HigressAdminUser:     envcompat.Lookup("HICLAW_ADMIN_USER"),
+		HigressAdminPassword: envcompat.Lookup("HICLAW_ADMIN_PASSWORD"),
 
 		WorkerBackend: firstNonEmpty(
-			os.Getenv("HICLAW_WORKER_BACKEND"),
-			os.Getenv("HICLAW_ALIYUN_WORKER_BACKEND"),
+			envcompat.Lookup("HICLAW_WORKER_BACKEND"),
+			envcompat.Lookup("HICLAW_ALIYUN_WORKER_BACKEND"),
 		),
 
 		Region: envOrDefault("HICLAW_REGION", "cn-hangzhou"),
 
-		GWGatewayID:  os.Getenv("HICLAW_GW_GATEWAY_ID"),
-		GWModelAPIID: os.Getenv("HICLAW_GW_MODEL_API_ID"),
-		GWEnvID:      os.Getenv("HICLAW_GW_ENV_ID"),
+		GWGatewayID:  envcompat.Lookup("HICLAW_GW_GATEWAY_ID"),
+		GWModelAPIID: envcompat.Lookup("HICLAW_GW_MODEL_API_ID"),
+		GWEnvID:      envcompat.Lookup("HICLAW_GW_ENV_ID"),
 
 		OSSBucket: envOrDefault("HICLAW_FS_BUCKET", "hiclaw-storage"),
 
-		K8sNamespace:    os.Getenv("HICLAW_K8S_NAMESPACE"),
+		K8sNamespace:    envcompat.Lookup("HICLAW_K8S_NAMESPACE"),
 		K8sWorkerCPU:    envOrDefault("HICLAW_K8S_WORKER_CPU", "1000m"),
 		K8sWorkerMemory: envOrDefault("HICLAW_K8S_WORKER_MEMORY", "2Gi"),
 
 		ManagerEnabled:          envOrDefault("HICLAW_MANAGER_ENABLED", "true") == "true",
-		ManagerModel:            firstNonEmpty(os.Getenv("HICLAW_MANAGER_MODEL"), envOrDefault("HICLAW_DEFAULT_MODEL", "qwen3.6-plus")),
+		ManagerModel:            firstNonEmpty(envcompat.Lookup("HICLAW_MANAGER_MODEL"), envOrDefault("HICLAW_DEFAULT_MODEL", "qwen3.6-plus")),
 		ManagerRuntime:          envOrDefault("HICLAW_MANAGER_RUNTIME", "openclaw"),
-		ManagerImage:            os.Getenv("HICLAW_MANAGER_IMAGE"),
-		DefaultWorkerRuntime:    os.Getenv("HICLAW_DEFAULT_WORKER_RUNTIME"),
+		ManagerImage:            envcompat.Lookup("HICLAW_MANAGER_IMAGE"),
+		DefaultWorkerRuntime:    envcompat.Lookup("HICLAW_DEFAULT_WORKER_RUNTIME"),
 		K8sManagerCPURequest:    envOrDefault("HICLAW_K8S_MANAGER_CPU_REQUEST", "500m"),
 		K8sManagerMemoryRequest: envOrDefault("HICLAW_K8S_MANAGER_MEMORY_REQUEST", "1Gi"),
 		K8sManagerCPU:           envOrDefault("HICLAW_K8S_MANAGER_CPU", "2"),
 		K8sManagerMemory:        envOrDefault("HICLAW_K8S_MANAGER_MEMORY", "4Gi"),
 
-		ControllerURL:  os.Getenv("HICLAW_CONTROLLER_URL"),
-		ControllerName: os.Getenv("HICLAW_CONTROLLER_NAME"),
+		ControllerURL:  envcompat.Lookup("HICLAW_CONTROLLER_URL"),
+		ControllerName: envcompat.Lookup("HICLAW_CONTROLLER_NAME"),
 
-		ManagerWorkspaceDir: os.Getenv("HICLAW_WORKSPACE_DIR"),
-		HostShareDir:        os.Getenv("HICLAW_HOST_SHARE_DIR"),
+		ManagerWorkspaceDir: envcompat.Lookup("HICLAW_WORKSPACE_DIR"),
+		HostShareDir:        envcompat.Lookup("HICLAW_HOST_SHARE_DIR"),
 		ManagerConsolePort:  envOrDefault("HICLAW_PORT_MANAGER_CONSOLE", "18888"),
-		ManagerPassword:     os.Getenv("HICLAW_MANAGER_PASSWORD"),
-		ManagerGatewayKey:   os.Getenv("HICLAW_MANAGER_GATEWAY_KEY"),
+		ManagerPassword:     envcompat.Lookup("HICLAW_MANAGER_PASSWORD"),
+		ManagerGatewayKey:   envcompat.Lookup("HICLAW_MANAGER_GATEWAY_KEY"),
 
 		MatrixServerURL:         envOrDefault("HICLAW_MATRIX_URL", "http://matrix-local.hiclaw.io:8080"),
 		MatrixDomain:            envOrDefault("HICLAW_MATRIX_DOMAIN", "matrix-local.hiclaw.io:8080"),
-		MatrixRegistrationToken: envOrDefault("HICLAW_MATRIX_REGISTRATION_TOKEN", os.Getenv("HICLAW_REGISTRATION_TOKEN")),
-		MatrixAdminUser:         os.Getenv("HICLAW_ADMIN_USER"),
-		MatrixAdminPassword:     os.Getenv("HICLAW_ADMIN_PASSWORD"),
-		MatrixE2EE:              os.Getenv("HICLAW_MATRIX_E2EE") == "1" || os.Getenv("HICLAW_MATRIX_E2EE") == "true",
+		MatrixRegistrationToken: envOrDefault("HICLAW_MATRIX_REGISTRATION_TOKEN", envcompat.Lookup("HICLAW_REGISTRATION_TOKEN")),
+		MatrixAdminUser:         envcompat.Lookup("HICLAW_ADMIN_USER"),
+		MatrixAdminPassword:     envcompat.Lookup("HICLAW_ADMIN_PASSWORD"),
+		MatrixE2EE:              envcompat.Lookup("HICLAW_MATRIX_E2EE") == "1" || envcompat.Lookup("HICLAW_MATRIX_E2EE") == "true",
 
 		OSSStoragePrefix: envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
 
 		DefaultModel:       envOrDefault("HICLAW_DEFAULT_MODEL", "qwen3.6-plus"),
-		EmbeddingModel:     os.Getenv("HICLAW_EMBEDDING_MODEL"),
+		EmbeddingModel:     envcompat.Lookup("HICLAW_EMBEDDING_MODEL"),
 		Runtime:            envOrDefault("HICLAW_RUNTIME", "docker"),
 		ModelContextWindow: envOrDefaultInt("HICLAW_MODEL_CONTEXT_WINDOW", 0),
 		ModelMaxTokens:     envOrDefaultInt("HICLAW_MODEL_MAX_TOKENS", 0),
 
 		LLMProvider:                envOrDefault("HICLAW_LLM_PROVIDER", "qwen"),
-		LLMAPIKey:                  os.Getenv("HICLAW_LLM_API_KEY"),
-		OpenAIBaseURL:              os.Getenv("HICLAW_OPENAI_BASE_URL"),
+		LLMAPIKey:                  envcompat.Lookup("HICLAW_LLM_API_KEY"),
+		OpenAIBaseURL:              envcompat.Lookup("HICLAW_OPENAI_BASE_URL"),
 		AIStreamIdleTimeoutSeconds: envOrDefaultInt("HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS", 900),
-		ElementWebURL:              os.Getenv("HICLAW_ELEMENT_WEB_URL"),
+		ElementWebURL:              envcompat.Lookup("HICLAW_ELEMENT_WEB_URL"),
 
 		UserLanguage: envOrDefault("HICLAW_LANGUAGE", "zh"),
 		UserTimezone: envOrDefault("TZ", "Asia/Shanghai"),
 
 		CMSTracesEnabled:  envBool("HICLAW_CMS_TRACES_ENABLED"),
 		CMSMetricsEnabled: envBool("HICLAW_CMS_METRICS_ENABLED"),
-		CMSEndpoint:       os.Getenv("HICLAW_CMS_ENDPOINT"),
-		CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
-		CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
-		CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
+		CMSEndpoint:       envcompat.Lookup("HICLAW_CMS_ENDPOINT"),
+		CMSLicenseKey:     envcompat.Lookup("HICLAW_CMS_LICENSE_KEY"),
+		CMSProject:        envcompat.Lookup("HICLAW_CMS_PROJECT"),
+		CMSWorkspace:      envcompat.Lookup("HICLAW_CMS_WORKSPACE"),
 		CMSServiceName:    envOrDefault("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager"),
 
 		WorkerEnv: WorkerEnvDefaults{
 			MatrixDomain:         envOrDefault("HICLAW_MATRIX_DOMAIN", "matrix-local.hiclaw.io:8080"),
-			FSEndpoint:           os.Getenv("HICLAW_FS_ENDPOINT"),
+			FSEndpoint:           envcompat.Lookup("HICLAW_FS_ENDPOINT"),
 			FSBucket:             envOrDefault("HICLAW_FS_BUCKET", "hiclaw-storage"),
 			StoragePrefix:        envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
-			ControllerURL:        os.Getenv("HICLAW_CONTROLLER_URL"),
+			ControllerURL:        envcompat.Lookup("HICLAW_CONTROLLER_URL"),
 			AIGatewayURL:         envOrDefault("HICLAW_AI_GATEWAY_URL", "http://aigw-local.hiclaw.io:8080"),
 			MatrixURL:            envOrDefault("HICLAW_MATRIX_URL", "http://matrix-local.hiclaw.io:8080"),
-			AdminUser:            os.Getenv("HICLAW_ADMIN_USER"),
-			DefaultWorkerRuntime: os.Getenv("HICLAW_DEFAULT_WORKER_RUNTIME"),
+			AdminUser:            envcompat.Lookup("HICLAW_ADMIN_USER"),
+			DefaultWorkerRuntime: envcompat.Lookup("HICLAW_DEFAULT_WORKER_RUNTIME"),
 			YoloMode:             envBool("HICLAW_YOLO"),
 			MatrixDebug:          envBool("HICLAW_MATRIX_DEBUG"),
 
 			// CMS observability (propagated from controller env to all workers/managers)
 			CMSTracesEnabled:  envBool("HICLAW_CMS_TRACES_ENABLED"),
 			CMSMetricsEnabled: envBool("HICLAW_CMS_METRICS_ENABLED"),
-			CMSEndpoint:       os.Getenv("HICLAW_CMS_ENDPOINT"),
-			CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
-			CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
-			CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
-			SkillsAPIURL:      envOrDefault("SKILLS_API_URL", os.Getenv("HICLAW_SKILLS_API_URL")),
+			CMSEndpoint:       envcompat.Lookup("HICLAW_CMS_ENDPOINT"),
+			CMSLicenseKey:     envcompat.Lookup("HICLAW_CMS_LICENSE_KEY"),
+			CMSProject:        envcompat.Lookup("HICLAW_CMS_PROJECT"),
+			CMSWorkspace:      envcompat.Lookup("HICLAW_CMS_WORKSPACE"),
+			SkillsAPIURL:      envOrDefault("SKILLS_API_URL", envcompat.Lookup("HICLAW_SKILLS_API_URL")),
 			NacosAuthType:     os.Getenv("NACOS_AUTH_TYPE"),
 		},
 	}
@@ -365,7 +366,7 @@ func LoadConfig() *Config {
 	// HICLAW_FS_DOMAIN:8080 URLs are rewritten to the MinIO object port.
 	cfg.WorkerEnv.FSEndpoint = normalizeMinIOS3Endpoint(cfg.WorkerEnv.FSEndpoint)
 
-	if specJSON := os.Getenv("HICLAW_MANAGER_SPEC"); specJSON != "" {
+	if specJSON := envcompat.Lookup("HICLAW_MANAGER_SPEC"); specJSON != "" {
 		if err := applyManagerSpec(cfg, specJSON); err != nil {
 			panic(fmt.Sprintf("invalid HICLAW_MANAGER_SPEC: %v", err))
 		}
@@ -436,7 +437,7 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 func (c *Config) STSConfig() credentials.STSConfig {
 	return credentials.STSConfig{
 		OSSBucket:   c.OSSBucket,
-		OSSEndpoint: firstNonEmpty(os.Getenv("HICLAW_FS_ENDPOINT"), c.WorkerEnv.FSEndpoint),
+		OSSEndpoint: firstNonEmpty(envcompat.Lookup("HICLAW_FS_ENDPOINT"), c.WorkerEnv.FSEndpoint),
 	}
 }
 
@@ -478,32 +479,19 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 }
 
 func envOrDefault(key, defaultVal string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultVal
+	return envcompat.OrDefault(key, defaultVal)
 }
 
 func envOrDefaultInt(key string, defaultVal int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return defaultVal
+	return envcompat.OrDefaultInt(key, defaultVal)
 }
 
 func envBool(key string) bool {
-	v := os.Getenv(key)
-	return v == "1" || v == "true" || v == "True" || v == "TRUE"
+	return envcompat.Bool(key)
 }
 
 func envBoolDefault(key string, defaultVal bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return defaultVal
-	}
-	return v == "1" || v == "true" || v == "True" || v == "TRUE"
+	return envcompat.BoolDefault(key, defaultVal)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -624,9 +612,9 @@ func (c *Config) GatewayConfig() gateway.Config {
 }
 
 func (c *Config) OSSConfig() oss.Config {
-	accessKey := firstNonEmpty(os.Getenv("HICLAW_FS_ACCESS_KEY"), os.Getenv("HICLAW_MINIO_USER"))
-	secretKey := firstNonEmpty(os.Getenv("HICLAW_FS_SECRET_KEY"), os.Getenv("HICLAW_MINIO_PASSWORD"))
-	endpoint := firstNonEmpty(os.Getenv("HICLAW_FS_ENDPOINT"), c.WorkerEnv.FSEndpoint)
+	accessKey := firstNonEmpty(envcompat.Lookup("HICLAW_FS_ACCESS_KEY"), envcompat.Lookup("HICLAW_MINIO_USER"))
+	secretKey := firstNonEmpty(envcompat.Lookup("HICLAW_FS_SECRET_KEY"), envcompat.Lookup("HICLAW_MINIO_PASSWORD"))
+	endpoint := firstNonEmpty(envcompat.Lookup("HICLAW_FS_ENDPOINT"), c.WorkerEnv.FSEndpoint)
 	return oss.Config{
 		StoragePrefix: c.OSSStoragePrefix,
 		Bucket:        c.OSSBucket,
@@ -646,8 +634,8 @@ func (c *Config) ManagerAgentEnv() map[string]string {
 			env[k] = v
 		}
 	}
-	setIfNonEmpty("HICLAW_MINIO_USER", os.Getenv("HICLAW_MINIO_USER"))
-	setIfNonEmpty("HICLAW_MINIO_PASSWORD", os.Getenv("HICLAW_MINIO_PASSWORD"))
+	setIfNonEmpty("HICLAW_MINIO_USER", envcompat.Lookup("HICLAW_MINIO_USER"))
+	setIfNonEmpty("HICLAW_MINIO_PASSWORD", envcompat.Lookup("HICLAW_MINIO_PASSWORD"))
 	setIfNonEmpty("HICLAW_ADMIN_USER", c.MatrixAdminUser)
 	setIfNonEmpty("HICLAW_ADMIN_PASSWORD", c.MatrixAdminPassword)
 	setIfNonEmpty("HICLAW_REGISTRATION_TOKEN", c.MatrixRegistrationToken)
@@ -656,8 +644,8 @@ func (c *Config) ManagerAgentEnv() map[string]string {
 	setIfNonEmpty("HICLAW_AI_GATEWAY_URL", c.WorkerEnv.AIGatewayURL)
 	setIfNonEmpty("HICLAW_FS_ENDPOINT", c.WorkerEnv.FSEndpoint)
 	setIfNonEmpty("HICLAW_FS_BUCKET", c.WorkerEnv.FSBucket)
-	setIfNonEmpty("HICLAW_FS_ACCESS_KEY", firstNonEmpty(os.Getenv("HICLAW_FS_ACCESS_KEY"), os.Getenv("HICLAW_MINIO_USER")))
-	setIfNonEmpty("HICLAW_FS_SECRET_KEY", firstNonEmpty(os.Getenv("HICLAW_FS_SECRET_KEY"), os.Getenv("HICLAW_MINIO_PASSWORD")))
+	setIfNonEmpty("HICLAW_FS_ACCESS_KEY", firstNonEmpty(envcompat.Lookup("HICLAW_FS_ACCESS_KEY"), envcompat.Lookup("HICLAW_MINIO_USER")))
+	setIfNonEmpty("HICLAW_FS_SECRET_KEY", firstNonEmpty(envcompat.Lookup("HICLAW_FS_SECRET_KEY"), envcompat.Lookup("HICLAW_MINIO_PASSWORD")))
 	setIfNonEmpty("HICLAW_STORAGE_PREFIX", c.OSSStoragePrefix)
 	setIfNonEmpty("HICLAW_MATRIX_DOMAIN", c.MatrixDomain)
 	setIfNonEmpty("HICLAW_DEFAULT_MODEL", c.DefaultModel)

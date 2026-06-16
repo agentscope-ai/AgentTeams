@@ -2,8 +2,9 @@ package proxy
 
 import (
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 )
 
 // Higress registry pattern: higress-registry.{region}.cr.aliyuncs.com
@@ -68,7 +69,7 @@ func NewSecurityValidator() *SecurityValidator {
 	// Additional allowed image sources — can be a registry (e.g. "ghcr.io")
 	// or registry+path (e.g. "ghcr.io/myorg", "registry.example.com/team/workers")
 	var allowedRegistries []string
-	if env := os.Getenv("HICLAW_PROXY_ALLOWED_REGISTRIES"); env != "" {
+	if env := envcompat.Lookup("HICLAW_PROXY_ALLOWED_REGISTRIES"); env != "" {
 		for _, r := range strings.Split(env, ",") {
 			r = strings.TrimSpace(r)
 			if r != "" {
@@ -82,14 +83,14 @@ func NewSecurityValidator() *SecurityValidator {
 	// HICLAW_RESOURCE_PREFIX with fallback "hiclaw-". If auto-prefix is
 	// disabled, keep prefix empty and skip prefix enforcement.
 	autoPrefix := true
-	if v := os.Getenv("HICLAW_RESOURCE_AUTOPREFIX"); v != "" {
+	if v := envcompat.Lookup("HICLAW_RESOURCE_AUTOPREFIX"); v != "" {
 		autoPrefix = v == "1" || v == "true" || v == "True" || v == "TRUE"
 	}
 	prefix := ""
-	if env := os.Getenv("HICLAW_PROXY_CONTAINER_PREFIX"); env != "" {
+	if env := envcompat.Lookup("HICLAW_PROXY_CONTAINER_PREFIX"); env != "" {
 		prefix = env
 	} else if autoPrefix {
-		rp := os.Getenv("HICLAW_RESOURCE_PREFIX")
+		rp := envcompat.Lookup("HICLAW_RESOURCE_PREFIX")
 		if rp == "" {
 			rp = "hiclaw-"
 		}

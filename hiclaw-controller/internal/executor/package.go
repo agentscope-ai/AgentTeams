@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/hiclaw/hiclaw-controller/internal/credprovider"
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -92,7 +93,7 @@ func (p *PackageResolver) Resolve(ctx context.Context, uri string) (string, erro
 		// Treat as relative MinIO path (e.g. "packages/alice.zip")
 		// Use content-addressable cache: download to /tmp/import/{md5}.zip
 		// If the same content already exists locally, skip re-download.
-		storagePrefix := os.Getenv("HICLAW_STORAGE_PREFIX")
+		storagePrefix := envcompat.Lookup("HICLAW_STORAGE_PREFIX")
 		if storagePrefix == "" {
 			storagePrefix = "hiclaw/hiclaw-storage"
 		}
@@ -179,7 +180,7 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 		return fmt.Errorf("create agent dir: %w", err)
 	}
 
-	storagePrefix := os.Getenv("HICLAW_STORAGE_PREFIX")
+	storagePrefix := envcompat.Lookup("HICLAW_STORAGE_PREFIX")
 	if storagePrefix == "" {
 		storagePrefix = "hiclaw/hiclaw-storage"
 	}
@@ -722,7 +723,7 @@ func (p *PackageResolver) resolveOSS(ctx context.Context, u *url.URL) (string, e
 	}
 
 	// Download from MinIO
-	storagePrefix := os.Getenv("HICLAW_STORAGE_PREFIX")
+	storagePrefix := envcompat.Lookup("HICLAW_STORAGE_PREFIX")
 	if storagePrefix == "" {
 		storagePrefix = "hiclaw/hiclaw-storage"
 	}

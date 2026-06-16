@@ -6,11 +6,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/hiclaw/hiclaw-controller/internal/credprovider"
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 )
 
 const (
@@ -171,8 +171,8 @@ func parseNacosAddr(raw string) (host, port, username, password string, err erro
 	}
 
 	if username == "" && password == "" {
-		username = os.Getenv("HICLAW_NACOS_USERNAME")
-		password = os.Getenv("HICLAW_NACOS_PASSWORD")
+		username = envcompat.Lookup("HICLAW_NACOS_USERNAME")
+		password = envcompat.Lookup("HICLAW_NACOS_PASSWORD")
 	}
 
 	return parsed.Hostname(), port, username, password, nil

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 	"github.com/spf13/cobra"
 )
 
@@ -434,7 +435,7 @@ var workerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // fallback every `hiclaw create worker` / `hiclaw apply worker` invoked by the
 // Manager Agent would silently override the admin's install-time model choice.
 func defaultWorkerModel() string {
-	if m := strings.TrimSpace(os.Getenv("HICLAW_DEFAULT_MODEL")); m != "" {
+	if m := strings.TrimSpace(envcompat.Lookup("HICLAW_DEFAULT_MODEL")); m != "" {
 		return m
 	}
 	return "qwen3.6-plus"
@@ -457,7 +458,7 @@ func expandPackageURI(raw string) (string, error) {
 		return raw, nil
 	}
 
-	base := strings.TrimSpace(os.Getenv("HICLAW_NACOS_REGISTRY_URI"))
+	base := strings.TrimSpace(envcompat.Lookup("HICLAW_NACOS_REGISTRY_URI"))
 	if base == "" {
 		base = "nacos://market.hiclaw.io:80/public"
 	}

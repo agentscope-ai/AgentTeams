@@ -5,6 +5,8 @@ import (
 	"net/smtp"
 	"os"
 	"strings"
+
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 )
 
 // Config holds SMTP configuration from environment variables.
@@ -18,15 +20,15 @@ type Config struct {
 
 // ConfigFromEnv reads SMTP config from HICLAW_SMTP_* environment variables.
 func ConfigFromEnv() *Config {
-	host := os.Getenv("HICLAW_SMTP_HOST")
+	host := envcompat.Lookup("HICLAW_SMTP_HOST")
 	if host == "" {
 		return nil
 	}
 	return &Config{
 		Host: host,
 		Port: envOrDefault("HICLAW_SMTP_PORT", "465"),
-		User: os.Getenv("HICLAW_SMTP_USER"),
-		Pass: os.Getenv("HICLAW_SMTP_PASS"),
+		User: envcompat.Lookup("HICLAW_SMTP_USER"),
+		Pass: envcompat.Lookup("HICLAW_SMTP_PASS"),
 		From: envOrDefault("HICLAW_SMTP_FROM", "HiClaw <noreply@hiclaw.io>"),
 	}
 }

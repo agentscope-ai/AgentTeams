@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
 )
 
 // APIClient is a thin HTTP wrapper for the hiclaw-controller REST API.
@@ -31,7 +33,7 @@ func (e *APIError) Error() string {
 
 // NewAPIClient constructs a client from environment variables.
 func NewAPIClient() *APIClient {
-	baseURL := os.Getenv("HICLAW_CONTROLLER_URL")
+	baseURL := envcompat.Lookup("HICLAW_CONTROLLER_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost:8090"
 	}
@@ -51,10 +53,10 @@ func NewAPIClient() *APIClient {
 //  2. HICLAW_AUTH_TOKEN_FILE env var pointing to a token file (K8s projected volume)
 //  3. empty string (unauthenticated, for controllers with auth disabled)
 func discoverToken() string {
-	if token := os.Getenv("HICLAW_AUTH_TOKEN"); token != "" {
+	if token := envcompat.Lookup("HICLAW_AUTH_TOKEN"); token != "" {
 		return token
 	}
-	if path := os.Getenv("HICLAW_AUTH_TOKEN_FILE"); path != "" {
+	if path := envcompat.Lookup("HICLAW_AUTH_TOKEN_FILE"); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if t := strings.TrimSpace(string(data)); t != "" {
 				return t

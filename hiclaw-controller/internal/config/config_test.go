@@ -229,3 +229,87 @@ func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) 
 		t.Fatalf("ContainerPrefix = %q, want %q", cfg.ContainerPrefix, "custom-worker-")
 	}
 }
+
+// --- HiClaw → AgentTeams rename (#861): dual-prefix env regression ---
+
+func TestLoadConfigReadsAgentTeamsPrefixedEnv(t *testing.T) {
+	// String + bool + int values, mixing categories that go through
+	// envOrDefault / envBool / envOrDefaultInt / direct envcompat.Lookup.
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_FS_BUCKET", "new-bucket")
+	t.Setenv("AGENTTEAMS_LLM_API_KEY", "at-key")
+	t.Setenv("AGENTTEAMS_LLM_PROVIDER", "anthropic")
+	t.Setenv("AGENTTEAMS_MATRIX_E2EE", "1")
+	t.Setenv("AGENTTEAMS_CMS_TRACES_ENABLED", "true")
+	t.Setenv("AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS", "1200")
+
+	cfg := LoadConfig()
+
+	if cfg.KubeMode != "incluster" {
+		t.Errorf("KubeMode = %q, want incluster (from AGENTTEAMS_KUBE_MODE)", cfg.KubeMode)
+	}
+	if cfg.OSSBucket != "new-bucket" {
+		t.Errorf("OSSBucket = %q, want new-bucket (from AGENTTEAMS_FS_BUCKET)", cfg.OSSBucket)
+	}
+	if cfg.LLMAPIKey != "at-key" {
+		t.Errorf("LLMAPIKey = %q, want at-key (from AGENTTEAMS_LLM_API_KEY)", cfg.LLMAPIKey)
+	}
+	if cfg.LLMProvider != "anthropic" {
+		t.Errorf("LLMProvider = %q, want anthropic (from AGENTTEAMS_LLM_PROVIDER)", cfg.LLMProvider)
+	}
+	if !cfg.MatrixE2EE {
+		t.Errorf("MatrixE2EE = false, want true (from AGENTTEAMS_MATRIX_E2EE)")
+	}
+	if !cfg.CMSTracesEnabled {
+		t.Errorf("CMSTracesEnabled = false, want true (from AGENTTEAMS_CMS_TRACES_ENABLED)")
+	}
+	if cfg.AIStreamIdleTimeoutSeconds != 1200 {
+		t.Errorf("AIStreamIdleTimeoutSeconds = %d, want 1200 (from AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS)", cfg.AIStreamIdleTimeoutSeconds)
+	}
+}
+
+func TestLoadConfigPrefersAgentTeamsOverHiclaw(t *testing.T) {
+	// When both prefixes are set, AGENTTEAMS_ wins for every category.
+	t.Setenv("HICLAW_LLM_API_KEY", "old-key")
+	t.Setenv("AGENTTEAMS_LLM_API_KEY", "new-key")
+	t.Setenv("HICLAW_DEFAULT_MODEL", "old-model")
+	t.Setenv("AGENTTEAMS_DEFAULT_MODEL", "new-model")
+	t.Setenv("HICLAW_YOLO", "1")
+	t.Setenv("AGENTTEAMS_YOLO", "0")
+	t.Setenv("HICLAW_MODEL_MAX_TOKENS", "1000")
+	t.Setenv("AGENTTEAMS_MODEL_MAX_TOKENS", "4096")
+
+	cfg := LoadConfig()
+
+	if cfg.LLMAPIKey != "new-key" {
+		t.Errorf("LLMAPIKey = %q, want new-key (AGENTTEAMS_ should win)", cfg.LLMAPIKey)
+	}
+	if cfg.DefaultModel != "new-model" {
+		t.Errorf("DefaultModel = %q, want new-model", cfg.DefaultModel)
+	}
+	if cfg.WorkerEnv.YoloMode {
+		t.Errorf("WorkerEnv.YoloMode = true, want false (AGENTTEAMS_YOLO=0 should win over HICLAW_YOLO=1)")
+	}
+	if cfg.ModelMaxTokens != 4096 {
+		t.Errorf("ModelMaxTokens = %d, want 4096", cfg.ModelMaxTokens)
+	}
+}
+
+func TestLoadConfigFallsBackToHiclawWhenAgentTeamsUnset(t *testing.T) {
+	// Only legacy prefix set — must still flow through to Config.
+	t.Setenv("HICLAW_LLM_API_KEY", "legacy-key")
+	t.Setenv("HICLAW_FS_BUCKET", "legacy-bucket")
+	t.Setenv("HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS", "300")
+
+	cfg := LoadConfig()
+
+	if cfg.LLMAPIKey != "legacy-key" {
+		t.Errorf("LLMAPIKey = %q, want legacy-key (HICLAW_ fallback)", cfg.LLMAPIKey)
+	}
+	if cfg.OSSBucket != "legacy-bucket" {
+		t.Errorf("OSSBucket = %q, want legacy-bucket", cfg.OSSBucket)
+	}
+	if cfg.AIStreamIdleTimeoutSeconds != 300 {
+		t.Errorf("AIStreamIdleTimeoutSeconds = %d, want 300", cfg.AIStreamIdleTimeoutSeconds)
+	}
+}

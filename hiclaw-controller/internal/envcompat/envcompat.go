@@ -23,10 +23,21 @@ const (
 	newPrefix    = "AGENTTEAMS_"
 )
 
+// warningSink receives one call per first observation of a deprecated key.
+// It is overridable for tests; the default sends to controller-runtime's
+// logger under "env-fallback".
 var (
 	deprecationOnce sync.Map
-	logger          = ctrl.Log.WithName("env-fallback")
+	warningSinkMu   sync.RWMutex
+	warningSink     = defaultWarningSink
 )
+
+func defaultWarningSink(oldKey, newKey string) {
+	ctrl.Log.WithName("env-fallback").Info(
+		"legacy environment variable is deprecated",
+		"old", oldKey, "new", newKey,
+	)
+}
 
 // translateKey maps "HICLAW_FOO" → "AGENTTEAMS_FOO". Returns ("", false) when
 // key has no recognized prefix.
@@ -57,8 +68,10 @@ func warnDeprecated(oldKey, newKey string) {
 	if _, loaded := deprecationOnce.LoadOrStore(oldKey, struct{}{}); loaded {
 		return
 	}
-	logger.Info("legacy environment variable is deprecated",
-		"old", oldKey, "new", newKey)
+	warningSinkMu.RLock()
+	sink := warningSink
+	warningSinkMu.RUnlock()
+	sink(oldKey, newKey)
 }
 
 // OrDefault returns Lookup(key) or defaultVal when the value is empty.
@@ -101,4 +114,20 @@ func resetDeprecationWarningsForTest() {
 		deprecationOnce.Delete(k)
 		return true
 	})
+}
+
+// setWarningSinkForTest replaces the deprecation warning sink and returns a
+// function that restores the previous sink. Always pair with
+// resetDeprecationWarningsForTest if the test relies on observing warnings
+// for keys that earlier tests may have already triggered.
+func setWarningSinkForTest(fn func(oldKey, newKey string)) func() {
+	warningSinkMu.Lock()
+	prev := warningSink
+	warningSink = fn
+	warningSinkMu.Unlock()
+	return func() {
+		warningSinkMu.Lock()
+		warningSink = prev
+		warningSinkMu.Unlock()
+	}
 }

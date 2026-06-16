@@ -3,7 +3,6 @@ package mail
 import (
 	"fmt"
 	"net/smtp"
-	"os"
 	"strings"
 
 	"github.com/hiclaw/hiclaw-controller/internal/envcompat"
@@ -26,10 +25,10 @@ func ConfigFromEnv() *Config {
 	}
 	return &Config{
 		Host: host,
-		Port: envOrDefault("HICLAW_SMTP_PORT", "465"),
+		Port: envcompat.OrDefault("HICLAW_SMTP_PORT", "465"),
 		User: envcompat.Lookup("HICLAW_SMTP_USER"),
 		Pass: envcompat.Lookup("HICLAW_SMTP_PASS"),
-		From: envOrDefault("HICLAW_SMTP_FROM", "HiClaw <noreply@hiclaw.io>"),
+		From: envcompat.OrDefault("HICLAW_SMTP_FROM", "HiClaw <noreply@hiclaw.io>"),
 	}
 }
 
@@ -66,11 +65,4 @@ Please log in using Element Web and change your password immediately.
 	auth := smtp.PlainAuth("", cfg.User, cfg.Pass, cfg.Host)
 
 	return smtp.SendMail(addr, auth, cfg.From, []string{to}, []byte(msg))
-}
-
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }

@@ -125,6 +125,34 @@ Escape rules inside the `--soul "..."` string:
 
 The controller handles everything: Matrix registration, room creation, Higress consumer, AI/MCP authorization, config generation, MinIO sync, skills push, and container startup.
 
+### CPU and memory resources
+
+If admin asks you to set CPU or memory requests/limits, use a YAML manifest instead of CLI flags:
+
+```yaml
+apiVersion: hiclaw.io/v1beta1
+kind: Worker
+metadata:
+  name: <NAME>
+spec:
+  model: <MODEL_ID>
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+```
+
+Apply it with:
+
+```bash
+hiclaw apply -f worker.yaml
+```
+
+Changing `spec.resources` recreates the managed container. Confirm the Worker is idle or that admin accepts interruption before changing resources.
+
 ### MCP server short-circuit
 
 The controller authorizes the Worker on **existing** MCP servers only. If the admin requested MCP access (e.g. "GitHub MCP") but the server doesn't exist yet, **do NOT attempt to create it during worker creation**. Just note in your reply that the MCP server needs to be set up separately (via `mcp-server-management` skill) and proceed to Post-creation.

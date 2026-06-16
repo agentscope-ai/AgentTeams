@@ -68,6 +68,30 @@ spec:
                   type: string
                   enum: [Running, Sleeping, Stopped]
                   description: "Desired lifecycle state (default: Running). The controller reconciles actual state toward this."
+                resources:
+                  type: object
+                  description: >
+                    CPU and memory requests/limits for this Manager Pod.
+                    Empty fields fall back to controller defaults.
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          description: Kubernetes CPU quantity, e.g. 500m
+                        memory:
+                          type: string
+                          description: Kubernetes memory quantity, e.g. 1Gi
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          description: Kubernetes CPU quantity, e.g. "2"
+                        memory:
+                          type: string
+                          description: Kubernetes memory quantity, e.g. 4Gi
                 env:
                   type: object
                   description: |

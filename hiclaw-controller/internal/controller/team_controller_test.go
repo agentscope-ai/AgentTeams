@@ -200,6 +200,42 @@ func TestTeamWorkerSpecToWorkerSpec_RuntimePassthrough(t *testing.T) {
 	}
 }
 
+func TestTeamMemberResourcesProjectToWorkerSpec(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.Leader = v1beta1.LeaderSpec{
+		Name: "alpha-lead",
+		Resources: &v1beta1.AgentResourceRequirements{
+			Requests: v1beta1.AgentResourceValues{CPU: "300m", Memory: "768Mi"},
+			Limits:   v1beta1.AgentResourceValues{CPU: "2", Memory: "3Gi"},
+		},
+	}
+	worker := v1beta1.TeamWorkerSpec{
+		Name: "alpha-dev",
+		Resources: &v1beta1.AgentResourceRequirements{
+			Requests: v1beta1.AgentResourceValues{CPU: "200m", Memory: "512Mi"},
+			Limits:   v1beta1.AgentResourceValues{CPU: "1", Memory: "2Gi"},
+		},
+	}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{worker}
+
+	leaderSpec := leaderWorkerSpec(team)
+	if leaderSpec.Resources == nil {
+		t.Fatal("leaderWorkerSpec Resources = nil, want leader resources")
+	}
+	if leaderSpec.Resources.Requests.CPU != "300m" || leaderSpec.Resources.Limits.Memory != "3Gi" {
+		t.Fatalf("leaderWorkerSpec Resources = %+v", leaderSpec.Resources)
+	}
+
+	workerSpec := teamWorkerSpecToWorkerSpec(team, worker)
+	if workerSpec.Resources == nil {
+		t.Fatal("teamWorkerSpecToWorkerSpec Resources = nil, want worker resources")
+	}
+	if workerSpec.Resources.Requests.CPU != "200m" || workerSpec.Resources.Limits.Memory != "2Gi" {
+		t.Fatalf("teamWorkerSpecToWorkerSpec Resources = %+v", workerSpec.Resources)
+	}
+}
+
 func TestBuildDesiredMembers_RuntimeWorkerNamesDriveMatrixPolicy(t *testing.T) {
 	team := &v1beta1.Team{}
 	team.Name = "alpha"

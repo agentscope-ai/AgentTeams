@@ -92,13 +92,6 @@ func applyOneResource(client *APIClient, res yamlResource) error {
 	// Build plural endpoint
 	endpoint := "/api/v1/" + kind + "s"
 
-	// The REST API expects name in the body for create, not in spec
-	body := make(map[string]interface{})
-	body["name"] = name
-	for k, v := range res.Spec {
-		body[k] = v
-	}
-
 	exists, err := client.ResourceExists(endpoint + "/" + name)
 	if err != nil {
 		return fmt.Errorf("check %s/%s: %w", kind, name, err)
@@ -107,15 +100,13 @@ func applyOneResource(client *APIClient, res yamlResource) error {
 	var resp map[string]interface{}
 	if exists {
 		// PUT update — send only spec fields (no name in body for PUT)
-		updateBody := make(map[string]interface{})
-		for k, v := range res.Spec {
-			updateBody[k] = v
-		}
+		updateBody := buildApplyBody(res, false)
 		if err := client.DoJSON("PUT", endpoint+"/"+name, updateBody, &resp); err != nil {
 			return fmt.Errorf("update %s/%s: %w", kind, name, err)
 		}
 		fmt.Printf("  %s/%s configured\n", kind, name)
 	} else {
+		body := buildApplyBody(res, true)
 		if err := client.DoJSON("POST", endpoint, body, &resp); err != nil {
 			return fmt.Errorf("create %s/%s: %w", kind, name, err)
 		}
@@ -123,6 +114,17 @@ func applyOneResource(client *APIClient, res yamlResource) error {
 	}
 
 	return nil
+}
+
+func buildApplyBody(res yamlResource, includeName bool) map[string]interface{} {
+	body := make(map[string]interface{})
+	if includeName {
+		body["name"] = res.Metadata.Name
+	}
+	for k, v := range res.Spec {
+		body[k] = v
+	}
+	return body
 }
 
 func splitYAMLDocs(content string) []string {

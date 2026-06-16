@@ -795,6 +795,23 @@ func TestK8sCreate_ResourcesOverridePartial(t *testing.T) {
 	}
 }
 
+func TestK8sCreate_InvalidResourcesOverrideReturnsError(t *testing.T) {
+	b, _ := newTestK8sBackendWithFake(K8sConfig{})
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Create panicked on invalid resources override: %v", r)
+		}
+	}()
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:      "invalid-resources",
+		Resources: &ResourceRequirements{CPULimit: "not-cpu"},
+	}); err == nil {
+		t.Fatal("expected Create to return an error for invalid resources override")
+	}
+}
+
 // K10: Resources override wins over a template that also specifies resources
 // (overlay.ResourcesOverride takes precedence over template container.Resources).
 func TestK8sCreate_ResourcesOverrideBeatsTemplate(t *testing.T) {

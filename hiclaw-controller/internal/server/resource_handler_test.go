@@ -60,6 +60,99 @@ func TestCreateWorkerRejectsExistingTeamMemberName(t *testing.T) {
 	}
 }
 
+func TestCreateWorkerPreservesResources(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"name":"resource-worker","model":"qwen3.5-plus","resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var worker v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "resource-worker", Namespace: "default"}, &worker); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	assertAgentResources(t, worker.Spec.Resources, "250m", "512Mi", "2", "4Gi")
+}
+
+func TestUpdateWorkerPreservesResources(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	worker := &v1beta1.Worker{}
+	worker.Name = "resource-worker"
+	worker.Namespace = "default"
+	worker.Spec.Model = "qwen3.5-plus"
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"resources":{"requests":{"cpu":"300m","memory":"768Mi"},"limits":{"cpu":"3","memory":"5Gi"}}}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/resource-worker", bytes.NewReader(body))
+	req.SetPathValue("name", "resource-worker")
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "resource-worker", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	assertAgentResources(t, got.Spec.Resources, "300m", "768Mi", "3", "5Gi")
+}
+
+func TestCreateTeamPreservesMemberResources(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{
+		"name":"resource-team",
+		"leader":{"name":"resource-lead","resources":{"requests":{"cpu":"300m","memory":"768Mi"},"limits":{"cpu":"2","memory":"3Gi"}}},
+		"workers":[{"name":"resource-dev","resources":{"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}}]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateTeam(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var team v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "resource-team", Namespace: "default"}, &team); err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	assertAgentResources(t, team.Spec.Leader.Resources, "300m", "768Mi", "2", "3Gi")
+	if len(team.Spec.Workers) != 1 {
+		t.Fatalf("workers len=%d, want 1", len(team.Spec.Workers))
+	}
+	assertAgentResources(t, team.Spec.Workers[0].Resources, "200m", "512Mi", "1", "2Gi")
+}
+
+func TestCreateManagerPreservesResources(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"name":"default","model":"qwen3.5-plus","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"3","memory":"5Gi"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateManager(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var mgr v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "default", Namespace: "default"}, &mgr); err != nil {
+		t.Fatalf("get manager: %v", err)
+	}
+	assertAgentResources(t, mgr.Spec.Resources, "500m", "1Gi", "3", "5Gi")
+}
+
 // /api/v1/workers/{name} must synthesize a response for a team member even
 // though no Worker CR exists. The synthesized response MUST carry the
 // RoomID + MatrixUserID recorded in Team.Status.Members so that clients like
@@ -554,4 +647,23 @@ func newServerTestScheme(t *testing.T) *runtime.Scheme {
 		t.Fatalf("add hiclaw scheme: %v", err)
 	}
 	return scheme
+}
+
+func assertAgentResources(t *testing.T, got *v1beta1.AgentResourceRequirements, cpuReq, memReq, cpuLimit, memLimit string) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("resources = nil")
+	}
+	if got.Requests.CPU != cpuReq {
+		t.Fatalf("requests.cpu = %q, want %q (resources=%+v)", got.Requests.CPU, cpuReq, got)
+	}
+	if got.Requests.Memory != memReq {
+		t.Fatalf("requests.memory = %q, want %q (resources=%+v)", got.Requests.Memory, memReq, got)
+	}
+	if got.Limits.CPU != cpuLimit {
+		t.Fatalf("limits.cpu = %q, want %q (resources=%+v)", got.Limits.CPU, cpuLimit, got)
+	}
+	if got.Limits.Memory != memLimit {
+		t.Fatalf("limits.memory = %q, want %q (resources=%+v)", got.Limits.Memory, memLimit, got)
+	}
 }

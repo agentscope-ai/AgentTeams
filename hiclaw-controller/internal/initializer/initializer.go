@@ -23,16 +23,17 @@ import (
 
 // Config holds parameters for cluster initialization.
 type Config struct {
-	ManagerEnabled bool
-	ManagerModel   string
-	ManagerRuntime string
-	ManagerImage   string
-	AdminUser      string
-	AdminPassword  string
-	Namespace      string
-	IsEmbedded     bool   // embedded mode: use static service sources for local services
-	AgentFSDir     string // local filesystem root for agent workspaces (embedded mode)
-	ControllerName string // HICLAW_CONTROLLER_NAME; stamped as hiclaw.io/controller label on created CRs in incluster mode
+	ManagerEnabled   bool
+	ManagerModel     string
+	ManagerRuntime   string
+	ManagerImage     string
+	ManagerResources *v1beta1.AgentResourceRequirements
+	AdminUser        string
+	AdminPassword    string
+	Namespace        string
+	IsEmbedded       bool   // embedded mode: use static service sources for local services
+	AgentFSDir       string // local filesystem root for agent workspaces (embedded mode)
+	ControllerName   string // HICLAW_CONTROLLER_NAME; stamped as hiclaw.io/controller label on created CRs in incluster mode
 
 	// Provider selection — drives which initialization steps run.
 	GatewayProvider string // "higress" | "ai-gateway"
@@ -457,6 +458,9 @@ func (i *Initializer) ensureManagerCR(ctx context.Context) error {
 	}
 	if i.Config.ManagerImage != "" {
 		spec["image"] = i.Config.ManagerImage
+	}
+	if i.Config.ManagerResources != nil {
+		spec["resources"] = i.Config.ManagerResources
 	}
 
 	metadata := map[string]interface{}{

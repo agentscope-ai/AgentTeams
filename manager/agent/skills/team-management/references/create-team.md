@@ -19,6 +19,39 @@ Notes:
 - `--leader-model` defaults to the install-time configured model (`$HICLAW_DEFAULT_MODEL` propagated by the controller); falls back to `qwen3.5-plus` only when that is unset
 - Team Admin defaults to Global Admin
 - Controller forces `runtime: copaw` for all team members
+- For CPU/memory requests and limits, use YAML with `hiclaw apply -f`; the simple team CLI flags do not expose per-member resources
+
+## CPU and memory resources
+
+Use `leader.resources` and `workers[].resources` when admin asks for per-member CPU or memory requests/limits:
+
+```yaml
+apiVersion: hiclaw.io/v1beta1
+kind: Team
+metadata:
+  name: <TEAM_NAME>
+spec:
+  leader:
+    name: <LEADER_NAME>
+    resources:
+      requests:
+        cpu: 300m
+        memory: 768Mi
+      limits:
+        cpu: "2"
+        memory: 3Gi
+  workers:
+    - name: <WORKER_NAME>
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+```
+
+Changing resources recreates the affected member container. Confirm the team is idle or that admin accepts interruption before applying resource changes.
 
 ## What the Controller Does
 

@@ -19,7 +19,11 @@ import (
 // in the exact merged Pod-label set without spinning up envtest.
 func captureManagerCreateLabels(t *testing.T, mgr *v1beta1.Manager) map[string]string {
 	t.Helper()
+	return captureManagerCreateRequest(t, mgr, nil).Labels
+}
 
+func captureManagerCreateRequest(t *testing.T, mgr *v1beta1.Manager, defaults *backend.ResourceRequirements) backend.CreateRequest {
+	t.Helper()
 	mockBackend := mocks.NewMockWorkerBackend()
 	var (
 		mu      sync.Mutex
@@ -33,11 +37,12 @@ func captureManagerCreateLabels(t *testing.T, mgr *v1beta1.Manager) map[string]s
 	}
 
 	r := &ManagerReconciler{
-		Provisioner:    mocks.NewMockManagerProvisioner(),
-		EnvBuilder:     mocks.NewMockManagerEnvBuilder(),
-		ResourcePrefix: auth.ResourcePrefix("hiclaw-"),
-		ControllerName: "real-ctl",
-		DefaultRuntime: "copaw",
+		Provisioner:      mocks.NewMockManagerProvisioner(),
+		EnvBuilder:       mocks.NewMockManagerEnvBuilder(),
+		ResourcePrefix:   auth.ResourcePrefix("hiclaw-"),
+		ControllerName:   "real-ctl",
+		DefaultRuntime:   "copaw",
+		ManagerResources: defaults,
 	}
 
 	scope := &managerScope{
@@ -55,7 +60,7 @@ func captureManagerCreateLabels(t *testing.T, mgr *v1beta1.Manager) map[string]s
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	return capture.Labels
+	return capture
 }
 
 // TestCreateManagerContainer_MergesMetadataAndSpecLabels verifies the
@@ -154,6 +159,73 @@ func TestCreateManagerContainer_NilLabelsSafe(t *testing.T) {
 		if _, ok := labels[k]; !ok {
 			t.Errorf("missing system label %q on labelless Manager (full=%v)", k, labels)
 		}
+	}
+}
+
+func TestCreateManagerContainerSpecResourcesOverrideDefaults(t *testing.T) {
+	m := &v1beta1.Manager{}
+	m.Name = "default"
+	m.Namespace = "hiclaw"
+	m.Spec.Resources = &v1beta1.AgentResourceRequirements{
+		Requests: v1beta1.AgentResourceValues{CPU: "750m", Memory: "1536Mi"},
+		Limits:   v1beta1.AgentResourceValues{CPU: "3", Memory: "5Gi"},
+	}
+
+	req := captureManagerCreateRequest(t, m, &backend.ResourceRequirements{
+		CPURequest:    "100m",
+		MemoryRequest: "256Mi",
+		CPULimit:      "1",
+		MemoryLimit:   "2Gi",
+	})
+
+	if req.Resources == nil {
+		t.Fatal("CreateRequest.Resources = nil, want manager spec resources")
+	}
+	if req.Resources.CPURequest != "750m" || req.Resources.MemoryRequest != "1536Mi" ||
+		req.Resources.CPULimit != "3" || req.Resources.MemoryLimit != "5Gi" {
+		t.Fatalf("CreateRequest.Resources = %+v", req.Resources)
+	}
+}
+
+func TestCreateManagerContainerSpecResourcesPartiallyOverrideDefaults(t *testing.T) {
+	m := &v1beta1.Manager{}
+	m.Name = "default"
+	m.Namespace = "hiclaw"
+	m.Spec.Resources = &v1beta1.AgentResourceRequirements{
+		Limits: v1beta1.AgentResourceValues{CPU: "3"},
+	}
+
+	req := captureManagerCreateRequest(t, m, &backend.ResourceRequirements{
+		CPURequest:    "100m",
+		MemoryRequest: "256Mi",
+		CPULimit:      "1",
+		MemoryLimit:   "2Gi",
+	})
+
+	if req.Resources == nil {
+		t.Fatal("CreateRequest.Resources = nil, want merged manager resources")
+	}
+	if req.Resources.CPURequest != "100m" || req.Resources.MemoryRequest != "256Mi" ||
+		req.Resources.CPULimit != "3" || req.Resources.MemoryLimit != "2Gi" {
+		t.Fatalf("CreateRequest.Resources = %+v", req.Resources)
+	}
+}
+
+func TestCreateManagerContainerUsesDefaultResourcesWhenSpecResourcesUnset(t *testing.T) {
+	m := &v1beta1.Manager{}
+	m.Name = "default"
+	m.Namespace = "hiclaw"
+	defaults := &backend.ResourceRequirements{
+		CPURequest:    "100m",
+		MemoryRequest: "256Mi",
+		CPULimit:      "1",
+		MemoryLimit:   "2Gi",
+	}
+
+	req := captureManagerCreateRequest(t, m, defaults)
+
+	if req.Resources != defaults {
+		t.Fatalf("CreateRequest.Resources = %+v, want default pointer %+v", req.Resources, defaults)
 	}
 }
 

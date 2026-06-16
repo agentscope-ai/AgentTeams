@@ -151,6 +151,30 @@ spec:
                       type: string
                       enum: [Running, Sleeping, Stopped]
                       description: "Desired lifecycle state for the team leader (default: Running)"
+                    resources:
+                      type: object
+                      description: >
+                        CPU and memory requests/limits for the Team Leader Pod.
+                        Empty fields fall back to controller/backend defaults.
+                      properties:
+                        requests:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              description: Kubernetes CPU quantity, e.g. 300m
+                            memory:
+                              type: string
+                              description: Kubernetes memory quantity, e.g. 768Mi
+                        limits:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              description: Kubernetes CPU quantity, e.g. "2"
+                            memory:
+                              type: string
+                              description: Kubernetes memory quantity, e.g. 3Gi
                     labels:
                       type: object
                       additionalProperties:
@@ -341,6 +365,31 @@ spec:
                         type: string
                         enum: [Running, Sleeping, Stopped]
                         description: "Desired lifecycle state for this team worker (default: Running)"
+                      resources:
+                        type: object
+                        description: >
+                          CPU and memory requests/limits for this Team Worker
+                          Pod. Empty fields fall back to controller/backend
+                          defaults.
+                        properties:
+                          requests:
+                            type: object
+                            properties:
+                              cpu:
+                                type: string
+                                description: Kubernetes CPU quantity, e.g. 200m
+                              memory:
+                                type: string
+                                description: Kubernetes memory quantity, e.g. 512Mi
+                          limits:
+                            type: object
+                            properties:
+                              cpu:
+                                type: string
+                                description: Kubernetes CPU quantity, e.g. "1"
+                              memory:
+                                type: string
+                                description: Kubernetes memory quantity, e.g. 2Gi
                       accessEntries:
                         type: array
                         description: >

@@ -140,6 +140,7 @@ func (a *App) Start(ctx context.Context) error {
 				ManagerModel:               a.cfg.ManagerModel,
 				ManagerRuntime:             a.cfg.ManagerRuntime,
 				ManagerImage:               a.cfg.ManagerImage,
+				ManagerResources:           a.cfg.ManagerSpecResources,
 				AdminUser:                  a.cfg.MatrixAdminUser,
 				AdminPassword:              a.cfg.MatrixAdminPassword,
 				Namespace:                  a.namespace,

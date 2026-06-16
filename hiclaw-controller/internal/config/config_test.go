@@ -56,6 +56,12 @@ func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	if cfg.K8sManagerMemory != "5Gi" {
 		t.Fatalf("K8sManagerMemory = %q, want %q", cfg.K8sManagerMemory, "5Gi")
 	}
+	if cfg.ManagerSpecResources == nil {
+		t.Fatal("ManagerSpecResources = nil, want resources from HICLAW_MANAGER_SPEC")
+	}
+	if cfg.ManagerSpecResources.Requests.CPU != "750m" || cfg.ManagerSpecResources.Limits.Memory != "5Gi" {
+		t.Fatalf("ManagerSpecResources = %+v", cfg.ManagerSpecResources)
+	}
 }
 
 func TestLoadConfigUsesLegacyManagerEnvFallback(t *testing.T) {

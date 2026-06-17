@@ -94,6 +94,76 @@ func TestGenerateOpenClawConfig_TeamWorker(t *testing.T) {
 	}
 }
 
+func TestGenerateOpenClawConfig_DMPolicyOpen(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+		DMPolicy:        "open",
+	})
+
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "worker-alice",
+		MatrixToken: "tok",
+		GatewayKey:  "key",
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	matrixCfg := config["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	dm, ok := matrixCfg["dm"].(map[string]interface{})
+	if !ok {
+		t.Fatal("dm config missing")
+	}
+	if dm["policy"] != "open" {
+		t.Errorf("dm.policy = %v, want open", dm["policy"])
+	}
+	allowFrom := toStringSlice(dm["allowFrom"])
+	if len(allowFrom) != 1 || allowFrom[0] != "*" {
+		t.Errorf("dm.allowFrom = %v, want [\"*\"]", allowFrom)
+	}
+	if dm["sessionScope"] != "per-room" {
+		t.Errorf("dm.sessionScope = %v, want per-room", dm["sessionScope"])
+	}
+}
+
+func TestGenerateOpenClawConfig_DMPolicyDefault(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+		// DMPolicy unset — should default to allowlist
+	})
+
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "worker-alice",
+		MatrixToken: "tok",
+		GatewayKey:  "key",
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+
+	var config map[string]interface{}
+	json.Unmarshal(data, &config)
+
+	matrixCfg := config["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	dm := matrixCfg["dm"].(map[string]interface{})
+	if dm["policy"] != "allowlist" {
+		t.Errorf("dm.policy = %v, want allowlist", dm["policy"])
+	}
+	allowFrom := toStringSlice(dm["allowFrom"])
+	if !containsString(allowFrom, "@manager:matrix.test:8080") {
+		t.Errorf("dm.allowFrom missing manager: %v", allowFrom)
+	}
+}
+
 func TestGenerateOpenClawConfig_ChannelPolicy(t *testing.T) {
 	g := NewGenerator(Config{
 		MatrixDomain:    "d",

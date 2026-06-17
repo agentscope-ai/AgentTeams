@@ -127,6 +127,11 @@ spec:
               value: {{ include "hiclaw.matrix.internalURL" . | quote }}
             - name: HICLAW_MATRIX_DOMAIN
               value: {{ include "hiclaw.matrix.serverName" . | quote }}
+            {{- /* DM policy override (optional) */}}
+            {{- if .Values.controller.dmPolicy }}
+            - name: HICLAW_DM_POLICY
+              value: {{ .Values.controller.dmPolicy | quote }}
+            {{- end }}
             {{- /* OSS storage prefix */}}
             - name: HICLAW_STORAGE_PREFIX
               value: {{ include "hiclaw.storage.remoteRoot" . | quote }}

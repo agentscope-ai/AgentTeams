@@ -220,15 +220,12 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 	}
 
 	cfg := map[string]interface{}{
-		"homeserver":  serverURL,
-		"enabled":     true,
-		"userId":      workerMatrixID,
-		"accessToken": req.MatrixToken,
-		"encryption":  g.config.E2EEEnabled,
-		"dm": map[string]interface{}{
-			"policy":    "allowlist",
-			"allowFrom": dmAllowFrom,
-		},
+		"homeserver":     serverURL,
+		"enabled":        true,
+		"userId":         workerMatrixID,
+		"accessToken":    req.MatrixToken,
+		"encryption":     g.config.E2EEEnabled,
+		"dm":             g.buildDMConfig(dmAllowFrom),
 		"groupPolicy":    "allowlist",
 		"groupAllowFrom": groupAllowFrom,
 		"groups": map[string]interface{}{
@@ -264,6 +261,24 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 	}
 
 	return cfg
+}
+
+// buildDMConfig produces the dm sub-block for the Matrix channel config.
+// When DMPolicy is "open" (set via HICLAW_DM_POLICY), the worker accepts DMs
+// from any user with per-room session isolation; otherwise the default
+// "allowlist" mode restricts DMs to the computed allow list.
+func (g *Generator) buildDMConfig(dmAllowFrom []string) map[string]interface{} {
+	if g.config.DMPolicy == "open" {
+		return map[string]interface{}{
+			"policy":       "open",
+			"allowFrom":    []string{"*"},
+			"sessionScope": "per-room",
+		}
+	}
+	return map[string]interface{}{
+		"policy":    "allowlist",
+		"allowFrom": dmAllowFrom,
+	}
 }
 
 func (g *Generator) applyChannelPolicy(config map[string]interface{}, policy *ChannelPolicy, domain string) {

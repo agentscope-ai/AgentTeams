@@ -127,6 +127,7 @@ type Config struct {
 	MatrixAdminUser         string
 	MatrixAdminPassword     string
 	MatrixE2EE              bool
+	DMPolicy                string // HICLAW_DM_POLICY — dm.policy: "allowlist" (default) or "open"
 
 	// Object storage (embedded MinIO)
 	OSSStoragePrefix string
@@ -301,6 +302,7 @@ func LoadConfig() *Config {
 		MatrixAdminUser:         os.Getenv("HICLAW_ADMIN_USER"),
 		MatrixAdminPassword:     os.Getenv("HICLAW_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("HICLAW_MATRIX_E2EE") == "1" || os.Getenv("HICLAW_MATRIX_E2EE") == "true",
+		DMPolicy:                envOrDefault("HICLAW_DM_POLICY", "allowlist"),
 
 		OSSStoragePrefix: envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
 
@@ -710,6 +712,7 @@ func (c *Config) AgentConfig() agentconfig.Config {
 		EmbeddingModel:     c.EmbeddingModel,
 		Runtime:            c.Runtime,
 		E2EEEnabled:        c.MatrixE2EE,
+		DMPolicy:           c.DMPolicy,
 		ModelContextWindow: c.ModelContextWindow,
 		ModelMaxTokens:     c.ModelMaxTokens,
 		CMSTracesEnabled:   c.CMSTracesEnabled,

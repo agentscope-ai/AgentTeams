@@ -10,6 +10,7 @@ type Config struct {
 	EmbeddingModel  string // embedding model for memory search (optional)
 	Runtime         string // "docker", "k8s", "aliyun"
 	E2EEEnabled     bool   // enable Matrix E2EE
+	DMPolicy        string // dm.policy: "allowlist" (default) or "open"
 
 	// Model parameter overrides (empty = use defaults from model table)
 	ModelContextWindow int

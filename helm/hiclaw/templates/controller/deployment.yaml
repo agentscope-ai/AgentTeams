@@ -65,6 +65,8 @@ spec:
               value: {{ .Values.controller.resourceAutoPrefix | default true | quote }}
             - name: HICLAW_WORKER_BACKEND
               value: {{ .Values.controller.workerBackend | quote }}
+            - name: HICLAW_WORKER_BACKEND_RUNTIME
+              value: {{ .Values.controller.workerBackendRuntime | default "pod" | quote }}
             {{- if eq .Values.controller.workerBackend "sandbox" }}
             - name: HICLAW_SANDBOX_PROVIDER_TYPE
               value: {{ .Values.controller.sandbox.providerType | quote }}

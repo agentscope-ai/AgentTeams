@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -14,21 +15,42 @@ import (
 
 // LifecycleHandler handles imperative worker lifecycle operations.
 type LifecycleHandler struct {
-	k8s       client.Client
-	registry  *backend.Registry
-	namespace string
+	k8s                   client.Client
+	registry              *backend.Registry
+	namespace             string
+	defaultBackendRuntime string
 
 	readyMu sync.RWMutex
 	ready   map[string]bool
 }
 
-func NewLifecycleHandler(k8s client.Client, registry *backend.Registry, namespace string) *LifecycleHandler {
+func NewLifecycleHandler(k8s client.Client, registry *backend.Registry, namespace, defaultBackendRuntime string) *LifecycleHandler {
 	return &LifecycleHandler{
-		k8s:       k8s,
-		registry:  registry,
-		namespace: namespace,
-		ready:     make(map[string]bool),
+		k8s:                   k8s,
+		registry:              registry,
+		namespace:             namespace,
+		defaultBackendRuntime: defaultBackendRuntime,
+		ready:                 make(map[string]bool),
 	}
+}
+
+func (h *LifecycleHandler) resolveBackendRuntime(worker *v1beta1.Worker) string {
+	br := worker.Spec.GetBackendRuntime()
+	if br == "" {
+		br = h.defaultBackendRuntime
+	}
+	return br
+}
+
+func (h *LifecycleHandler) workerBackend(ctx context.Context, worker *v1beta1.Worker) backend.WorkerBackend {
+	if h.registry == nil {
+		return nil
+	}
+	b, err := h.registry.GetBackendForType(ctx, h.resolveBackendRuntime(worker))
+	if err != nil {
+		return h.registry.DetectWorkerBackend(ctx)
+	}
+	return b
 }
 
 // Wake handles POST /api/v1/workers/{name}/wake
@@ -54,7 +76,7 @@ func (h *LifecycleHandler) Wake(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Directly operate on backend for immediate response
-	b := h.registry.DetectWorkerBackend(r.Context())
+	b := h.workerBackend(r.Context(), &worker)
 	if b != nil {
 		_ = b.Start(r.Context(), name)
 	}
@@ -93,7 +115,7 @@ func (h *LifecycleHandler) Sleep(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Directly operate on backend for immediate response
-	b := h.registry.DetectWorkerBackend(r.Context())
+	b := h.workerBackend(r.Context(), &worker)
 	if b != nil {
 		_ = b.Stop(r.Context(), name)
 	}
@@ -133,7 +155,7 @@ func (h *LifecycleHandler) EnsureReady(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Directly operate on backend for immediate response
-		b := h.registry.DetectWorkerBackend(r.Context())
+		b := h.workerBackend(r.Context(), &worker)
 		if b != nil {
 			if err := b.Start(r.Context(), name); err != nil {
 				// Start may fail if container/pod was removed (Stopped state on K8s).
@@ -189,7 +211,7 @@ func (h *LifecycleHandler) GetWorkerRuntimeStatus(w http.ResponseWriter, r *http
 
 	resp := workerToResponse(&worker)
 
-	b := h.registry.DetectWorkerBackend(r.Context())
+	b := h.workerBackend(r.Context(), &worker)
 	if b != nil {
 		result, err := b.Status(r.Context(), name)
 		if err == nil && result != nil {

@@ -17,16 +17,17 @@ import (
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
-	Client         client.Client
-	Backend        *backend.Registry
-	Gateway        gateway.Client
-	OSS            oss.StorageClient
-	STS            *credentials.STSService
-	AuthMw         *authpkg.Middleware
-	KubeMode       string
-	Namespace      string
-	ControllerName string // HICLAW_CONTROLLER_NAME; empty in embedded mode
-	SocketPath     string // Docker proxy (embedded only)
+	Client                client.Client
+	Backend               *backend.Registry
+	Gateway               gateway.Client
+	OSS                   oss.StorageClient
+	STS                   *credentials.STSService
+	AuthMw                *authpkg.Middleware
+	KubeMode              string
+	Namespace             string
+	DefaultBackendRuntime string
+	ControllerName        string // HICLAW_CONTROLLER_NAME; empty in embedded mode
+	SocketPath            string // Docker proxy (embedded only)
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -93,7 +94,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/packages", mw.RequireAuthz(authpkg.ActionCreate, "worker", nil)(http.HandlerFunc(ph.Upload)))
 
 	// --- Imperative lifecycle ---
-	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace)
+	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace, deps.DefaultBackendRuntime)
 	mux.Handle("POST /api/v1/workers/{name}/wake", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Wake)))
 	mux.Handle("POST /api/v1/workers/{name}/sleep", mw.RequireAuthz(authpkg.ActionSleep, "worker", nameFn)(http.HandlerFunc(lh.Sleep)))
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))

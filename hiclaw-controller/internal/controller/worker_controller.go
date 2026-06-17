@@ -53,6 +53,9 @@ type WorkerReconciler struct {
 	// "openclaw".
 	DefaultRuntime string
 
+	// DefaultBackendRuntime is used when Worker spec.backendRuntime is unset.
+	DefaultBackendRuntime string
+
 	// ControllerName identifies this controller instance. Stamped on every
 	// Pod/SA/Secret created under this reconciler via the
 	// hiclaw.io/controller label so multiple controller instances sharing a
@@ -264,6 +267,10 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
 	role := roleForAnnotations(w.Annotations["hiclaw.io/role"], w.Annotations["hiclaw.io/team-leader"])
 	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
+	backendRuntime := w.Spec.GetBackendRuntime()
+	if backendRuntime == "" {
+		backendRuntime = r.DefaultBackendRuntime
+	}
 	return MemberContext{
 		Name:               w.Name,
 		RuntimeName:        runtimeName,
@@ -299,6 +306,8 @@ func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext 
 		ExistingRoomID:       w.Status.RoomID,
 		CurrentExposedPorts:  w.Status.ExposedPorts,
 		Owner:                w,
+		BackendRuntime:       backendRuntime,
+		StatusBackendRuntime: w.Status.BackendRuntime,
 	}
 }
 
@@ -320,6 +329,9 @@ func applyMemberStateToWorker(w *v1beta1.Worker, state *MemberState) {
 	}
 	if state.ExposedPorts != nil || len(w.Spec.Expose) == 0 {
 		w.Status.ExposedPorts = state.ExposedPorts
+	}
+	if state.BackendRuntime != "" {
+		w.Status.BackendRuntime = state.BackendRuntime
 	}
 }
 

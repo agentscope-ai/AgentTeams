@@ -482,32 +482,34 @@ func (a *App) initServiceLayer(_ context.Context) error {
 func (a *App) initReconcilers(_ context.Context) error {
 	resourcePrefix := authpkg.ResourcePrefix(a.cfg.ResourcePrefix)
 	if err := (&controller.WorkerReconciler{
-		Client:         a.mgr.GetClient(),
-		Provisioner:    a.provisioner,
-		Deployer:       a.deployer,
-		Backend:        a.registry,
-		EnvBuilder:     a.envBuilder,
-		ResourcePrefix: resourcePrefix,
-		Legacy:         a.legacy,
-		DefaultRuntime: a.cfg.DefaultWorkerRuntime,
-		ControllerName: a.cfg.ControllerName,
-		GatewayClient:  a.gateway,
+		Client:                a.mgr.GetClient(),
+		Provisioner:           a.provisioner,
+		Deployer:              a.deployer,
+		Backend:               a.registry,
+		EnvBuilder:            a.envBuilder,
+		ResourcePrefix:        resourcePrefix,
+		Legacy:                a.legacy,
+		DefaultRuntime:        a.cfg.DefaultWorkerRuntime,
+		DefaultBackendRuntime: a.cfg.DefaultWorkerBackendRuntime,
+		ControllerName:        a.cfg.ControllerName,
+		GatewayClient:         a.gateway,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}
 
 	if err := (&controller.TeamReconciler{
-		Client:         a.mgr.GetClient(),
-		Provisioner:    a.provisioner,
-		Deployer:       a.deployer,
-		Backend:        a.registry,
-		EnvBuilder:     a.envBuilder,
-		Legacy:         a.legacy,
-		DefaultRuntime: a.cfg.DefaultWorkerRuntime,
-		AgentFSDir:     a.cfg.AgentFSDir(),
-		ControllerName: a.cfg.ControllerName,
-		ResourcePrefix: resourcePrefix,
-		GatewayClient:  a.gateway,
+		Client:                a.mgr.GetClient(),
+		Provisioner:           a.provisioner,
+		Deployer:              a.deployer,
+		Backend:               a.registry,
+		EnvBuilder:            a.envBuilder,
+		Legacy:                a.legacy,
+		DefaultRuntime:        a.cfg.DefaultWorkerRuntime,
+		DefaultBackendRuntime: a.cfg.DefaultWorkerBackendRuntime,
+		AgentFSDir:            a.cfg.AgentFSDir(),
+		ControllerName:        a.cfg.ControllerName,
+		ResourcePrefix:        resourcePrefix,
+		GatewayClient:         a.gateway,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
@@ -551,16 +553,17 @@ func (a *App) initReconcilers(_ context.Context) error {
 
 func (a *App) initHTTPServer(_ context.Context) error {
 	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
-		Client:         a.mgr.GetClient(),
-		Backend:        a.registry,
-		Gateway:        a.gateway,
-		OSS:            a.oss,
-		STS:            a.stsService,
-		AuthMw:         a.authMw,
-		KubeMode:       a.cfg.KubeMode,
-		Namespace:      a.namespace,
-		ControllerName: a.cfg.ControllerName,
-		SocketPath:     a.cfg.SocketPath,
+		Client:                a.mgr.GetClient(),
+		Backend:               a.registry,
+		Gateway:               a.gateway,
+		OSS:                   a.oss,
+		STS:                   a.stsService,
+		AuthMw:                a.authMw,
+		KubeMode:              a.cfg.KubeMode,
+		Namespace:             a.namespace,
+		DefaultBackendRuntime: a.cfg.DefaultWorkerBackendRuntime,
+		ControllerName:        a.cfg.ControllerName,
+		SocketPath:            a.cfg.SocketPath,
 	})
 	return nil
 }

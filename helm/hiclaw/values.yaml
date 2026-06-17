@@ -182,7 +182,8 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
-  workerBackend: "k8s"        # k8s | sae | sandbox
+  workerBackend: "k8s"            # k8s | sae | sandbox
+  workerBackendRuntime: "pod"     # pod | sandbox (default spec.backendRuntime)
   resourcePrefix: "hiclaw-"
   resourceAutoPrefix: true
 

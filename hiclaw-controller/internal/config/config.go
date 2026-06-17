@@ -105,6 +105,12 @@ type Config struct {
 	// and only the caller knows which env var applies.
 	DefaultWorkerRuntime string
 
+	// DefaultWorkerBackendRuntime is the cluster-level default backendRuntime
+	// when a Worker CR's spec.backendRuntime is not explicitly set.
+	// Supported values are "pod" and "sandbox". Sourced from
+	// HICLAW_WORKER_BACKEND_RUNTIME.
+	DefaultWorkerBackendRuntime string
+
 	// Controller URL (advertised to workers for STS refresh etc.)
 	ControllerURL string
 
@@ -283,15 +289,16 @@ func LoadConfig() *Config {
 		K8sWorkerCPU:    envOrDefault("HICLAW_K8S_WORKER_CPU", "1000m"),
 		K8sWorkerMemory: envOrDefault("HICLAW_K8S_WORKER_MEMORY", "2Gi"),
 
-		ManagerEnabled:          envOrDefault("HICLAW_MANAGER_ENABLED", "true") == "true",
-		ManagerModel:            firstNonEmpty(os.Getenv("HICLAW_MANAGER_MODEL"), envOrDefault("HICLAW_DEFAULT_MODEL", "qwen3.6-plus")),
-		ManagerRuntime:          envOrDefault("HICLAW_MANAGER_RUNTIME", "openclaw"),
-		ManagerImage:            os.Getenv("HICLAW_MANAGER_IMAGE"),
-		DefaultWorkerRuntime:    os.Getenv("HICLAW_DEFAULT_WORKER_RUNTIME"),
-		K8sManagerCPURequest:    envOrDefault("HICLAW_K8S_MANAGER_CPU_REQUEST", "500m"),
-		K8sManagerMemoryRequest: envOrDefault("HICLAW_K8S_MANAGER_MEMORY_REQUEST", "1Gi"),
-		K8sManagerCPU:           envOrDefault("HICLAW_K8S_MANAGER_CPU", "2"),
-		K8sManagerMemory:        envOrDefault("HICLAW_K8S_MANAGER_MEMORY", "4Gi"),
+		ManagerEnabled:              envOrDefault("HICLAW_MANAGER_ENABLED", "true") == "true",
+		ManagerModel:                firstNonEmpty(os.Getenv("HICLAW_MANAGER_MODEL"), envOrDefault("HICLAW_DEFAULT_MODEL", "qwen3.6-plus")),
+		ManagerRuntime:              envOrDefault("HICLAW_MANAGER_RUNTIME", "openclaw"),
+		ManagerImage:                os.Getenv("HICLAW_MANAGER_IMAGE"),
+		DefaultWorkerRuntime:        os.Getenv("HICLAW_DEFAULT_WORKER_RUNTIME"),
+		DefaultWorkerBackendRuntime: envOrDefault("HICLAW_WORKER_BACKEND_RUNTIME", "pod"),
+		K8sManagerCPURequest:        envOrDefault("HICLAW_K8S_MANAGER_CPU_REQUEST", "500m"),
+		K8sManagerMemoryRequest:     envOrDefault("HICLAW_K8S_MANAGER_MEMORY_REQUEST", "1Gi"),
+		K8sManagerCPU:               envOrDefault("HICLAW_K8S_MANAGER_CPU", "2"),
+		K8sManagerMemory:            envOrDefault("HICLAW_K8S_MANAGER_MEMORY", "4Gi"),
 
 		ControllerURL:  os.Getenv("HICLAW_CONTROLLER_URL"),
 		ControllerName: os.Getenv("HICLAW_CONTROLLER_NAME"),

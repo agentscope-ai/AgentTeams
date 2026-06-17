@@ -55,3 +55,18 @@ func (r *Registry) GetWorkerBackend(ctx context.Context, name string) (WorkerBac
 	}
 	return nil, fmt.Errorf("unknown worker backend: %q", name)
 }
+
+// GetBackendForType returns the backend for the given backendRuntime type.
+// "pod" maps to the Kubernetes backend, while "sandbox" maps to SandboxBackend.
+func (r *Registry) GetBackendForType(ctx context.Context, backendRuntime string) (WorkerBackend, error) {
+	targetName := backendRuntime
+	if backendRuntime == "pod" {
+		targetName = "k8s"
+	}
+	for _, b := range r.workerBackends {
+		if b.Name() == targetName && b.Available(ctx) {
+			return b, nil
+		}
+	}
+	return nil, fmt.Errorf("backend %q (backendRuntime=%q) not available", targetName, backendRuntime)
+}

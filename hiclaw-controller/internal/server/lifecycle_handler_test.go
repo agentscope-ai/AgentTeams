@@ -27,7 +27,7 @@ func TestLifecycleSleepSetsSleepingPhase(t *testing.T) {
 		WithObjects(worker).
 		Build()
 	backendStub := &stubWorkerBackend{status: backend.StatusStopped}
-	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default", "pod")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/sleep", nil)
 	req.SetPathValue("name", "alpha-dev")
@@ -76,7 +76,7 @@ func TestLifecycleWakeSetsRunningPhase(t *testing.T) {
 		WithObjects(worker).
 		Build()
 	backendStub := &stubWorkerBackend{status: backend.StatusRunning}
-	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default", "pod")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/wake", nil)
 	req.SetPathValue("name", "alpha-dev")
@@ -112,7 +112,7 @@ func TestLifecycleEnsureReadyStartsSleepingWorker(t *testing.T) {
 		WithObjects(worker).
 		Build()
 	backendStub := &stubWorkerBackend{status: backend.StatusRunning}
-	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default", "pod")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ensure-ready", nil)
 	req.SetPathValue("name", "alpha-dev")

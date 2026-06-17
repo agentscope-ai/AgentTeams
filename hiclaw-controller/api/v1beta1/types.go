@@ -75,6 +75,12 @@ type RemoteSkillSource struct {
 	Skills   []RemoteSkill `json:"skills"`
 }
 
+// BackendRuntime constants define the container runtime backend for a worker.
+const (
+	BackendRuntimePod     = "pod"
+	BackendRuntimeSandbox = "sandbox"
+)
+
 // AgentResourceRequirements declares optional CPU/memory requests and limits
 // for one managed agent Pod. Empty fields fall back to controller/backend
 // defaults field-by-field.
@@ -142,6 +148,12 @@ type WorkerSpec struct {
 	// value always wins.
 	Env map[string]string `json:"env,omitempty"`
 
+	// BackendRuntime specifies the container runtime backend for this worker.
+	// "pod" (default): creates a standard Kubernetes Pod.
+	// "sandbox": creates a Sandbox CR via the configured sandbox plugin.
+	// Only effective in incluster mode; ignored in embedded (Docker) mode.
+	BackendRuntime *string `json:"backendRuntime,omitempty"`
+
 	// Labels are user-defined Pod labels stamped onto the worker Pod.
 	// Merged under the four-layer priority order (see controller docs):
 	// pod-template < CR metadata.labels < CR spec.labels < controller
@@ -151,6 +163,15 @@ type WorkerSpec struct {
 	// embed WorkerSpec-shaped hashes keep a stable spec hash when the
 	// field is absent.
 	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// GetBackendRuntime returns the explicitly set backendRuntime from spec, or empty string
+// if not set. Empty means "use cluster-level default from HICLAW_WORKER_BACKEND_RUNTIME".
+func (s WorkerSpec) GetBackendRuntime() string {
+	if s.BackendRuntime != nil && *s.BackendRuntime != "" {
+		return *s.BackendRuntime
+	}
+	return ""
 }
 
 // DesiredContainerMan returns the effective desired containerManaged, defaulting to true.
@@ -203,6 +224,10 @@ type WorkerStatus struct {
 	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+
+	// BackendRuntime records the backend type currently used for this worker's container.
+	// Empty means pre-upgrade status and is treated as the spec/default backend.
+	BackendRuntime string `json:"backendRuntime,omitempty"`
 }
 
 // ExposedPortStatus records a port that has been exposed via Higress.

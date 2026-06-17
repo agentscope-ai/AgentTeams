@@ -184,6 +184,14 @@ spec:
                     ignored with a warning log — the system value always wins.
                   additionalProperties:
                     type: string
+                backendRuntime:
+                  type: string
+                  enum: ["pod", "sandbox"]
+                  description: |
+                    Container runtime backend for this worker.
+                    "pod" (default): standard Kubernetes Pod.
+                    "sandbox": Sandbox CR via configured plugin.
+                    Only effective in incluster mode; ignored in embedded (Docker) mode.
                 labels:
                   type: object
                   additionalProperties:
@@ -257,6 +265,9 @@ spec:
                         type: integer
                       domain:
                         type: string
+                backendRuntime:
+                  type: string
+                  description: The backend type currently deployed for this worker.
       subresources:
         status: {}
       additionalPrinterColumns:

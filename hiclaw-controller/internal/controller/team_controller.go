@@ -57,6 +57,9 @@ type TeamReconciler struct {
 	// back to RuntimeOpenClaw.
 	DefaultRuntime string
 
+	// DefaultBackendRuntime is used when Team member specs omit backendRuntime.
+	DefaultBackendRuntime string
+
 	AgentFSDir string // for writing inline configs to the local agent FS
 
 	// ControllerName, when non-empty, is merged as hiclaw.io/controller
@@ -226,7 +229,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	}
 
 	// --- Step 3: Stale cleanup ---
-	desiredMembers := buildDesiredMembers(derivedTeam, r.ControllerName)
+	desiredMembers := buildDesiredMembers(derivedTeam, r.ControllerName, r.DefaultBackendRuntime)
 	if r.GatewayClient != nil {
 		for i := range desiredMembers {
 			mp := desiredMembers[i].Spec.ModelProvider
@@ -771,7 +774,11 @@ func observedMemberNames(s *v1beta1.TeamStatus) []string {
 // context (peer list inflated into ChannelPolicy, admin Matrix injections)
 // is intentionally excluded so adding/removing a peer does NOT recreate the
 // other members — only the newly added member gets a fresh container.
-func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext {
+func buildDesiredMembers(t *v1beta1.Team, controllerName string, defaultBackendRuntimeOpt ...string) []MemberContext {
+	defaultBackendRuntime := v1beta1.BackendRuntimePod
+	if len(defaultBackendRuntimeOpt) > 0 && defaultBackendRuntimeOpt[0] != "" {
+		defaultBackendRuntime = defaultBackendRuntimeOpt[0]
+	}
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
 	isObserved := func(name string) bool {
 		if ms := t.Status.MemberByName(name); ms != nil {
@@ -828,6 +835,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 		PodLabels:          memberLabels(RoleTeamLeader, t.Spec.Leader.Labels),
 		Owner:              t,
 		Heartbeat:          leaderHeartbeat,
+		BackendRuntime:     defaultBackendRuntime,
 	})
 
 	for _, w := range t.Spec.Workers {
@@ -849,6 +857,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			TeamCoordinatorIDs: teamCoordinatorIDs(t),
 			PodLabels:          memberLabels(RoleTeamWorker, w.Labels),
 			Owner:              t,
+			BackendRuntime:     defaultBackendRuntime,
 		})
 	}
 	return members

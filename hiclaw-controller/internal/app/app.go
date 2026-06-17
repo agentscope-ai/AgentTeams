@@ -22,6 +22,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/initializer"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
+	"github.com/hiclaw/hiclaw-controller/internal/mirror"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	"github.com/hiclaw/hiclaw-controller/internal/server"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
@@ -544,6 +545,10 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 	if err := mgrReconciler.SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup ManagerReconciler: %w", err)
+	}
+
+	if err := mirror.SetupWithManager(a.mgr); err != nil {
+		return fmt.Errorf("setup agentteams.io mirror: %w", err)
 	}
 
 	return nil

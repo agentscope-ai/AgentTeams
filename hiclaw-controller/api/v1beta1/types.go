@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	GroupName = "hiclaw.io"
-	Version   = "v1beta1"
+	GroupName    = "hiclaw.io"
+	GroupNameNew = "agentteams.io"
+	Version      = "v1beta1"
 )
 
 // LabelController marks the hiclaw-controller instance that owns a CR.

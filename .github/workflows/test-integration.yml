@@ -1,7 +1,7 @@
 name: Integration Tests
 
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - main
     paths:
@@ -57,6 +57,10 @@ on:
         required: false
         default: 'qwen3.6-plus'
 
+permissions:
+  contents: read
+  pull-requests: read
+
 env:
   # Tests that do not require a GitHub token, split into four shards for parallel execution
   # Shard A: LLM interaction tests (sequential dependency: 02 creates alice → 03-06 use alice)
@@ -86,10 +90,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Detect openclaw-base changes (PR only)
         id: filter
-        if: github.event_name == 'pull_request_target'
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -101,7 +106,7 @@ jobs:
       - name: Decide whether to rebuild openclaw-base
         id: decide
         run: |
-          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "openclaw_base=${{ steps.filter.outputs.openclaw_base }}" >> $GITHUB_OUTPUT
           else
             # push to main / tag / workflow_dispatch: always rebuild
@@ -118,6 +123,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -166,6 +172,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -215,6 +222,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -285,7 +293,15 @@ jobs:
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
   integration-tests:
     needs: build-images
-    if: always() && needs.build-images.result == 'success'
+    # This job injects HICLAW_LLM_API_KEY and executes repository scripts/images.
+    # Never run it for fork PRs, where the checked-out code is untrusted.
+    if: |
+      always() &&
+      needs.build-images.result == 'success' &&
+      (
+        github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -365,6 +381,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          persist-credentials: false
 
       - name: Download all images
         uses: actions/download-artifact@v4
@@ -408,7 +425,7 @@ jobs:
       # ============================================================
 
       - name: Download latest release baseline
-        if: github.event_name == 'pull_request_target' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        if: github.event_name == 'pull_request' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         continue-on-error: true
         run: |
           mkdir -p baseline-metrics
@@ -428,7 +445,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate metrics comparison and post PR comment
-        if: github.event_name == 'pull_request_target' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        if: github.event_name == 'pull_request' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -492,7 +509,7 @@ jobs:
           fi
 
       - name: Post failure comment to PR
-        if: github.event_name == 'pull_request_target' && failure()
+        if: github.event_name == 'pull_request' && failure()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -639,6 +656,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.version.outputs.version }}
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

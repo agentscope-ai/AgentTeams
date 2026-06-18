@@ -364,7 +364,7 @@ Worker names rather than a structured Team filter.
 | Degraded | Some Workers unavailable or not ready; Leader may still run |
 | Failed | Reconciliation error — check `status.message` |
 
-**Status fields:** `observedGeneration`, `conditions`, `teamRoomID`, `leaderDMRoomID`, `leaderReady`, `readyWorkers`, `totalWorkers`, `members`.
+**Status fields:** `observedGeneration`, `conditions`, `teamRoomID`, `leaderDMRoomID`, `leaderReady`, `readyWorkers`, `totalWorkers`, `members` (including each member's `roomID`, `matrixUserID`, readiness, and worker `exposedPorts`).
 
 ### Team Admin
 

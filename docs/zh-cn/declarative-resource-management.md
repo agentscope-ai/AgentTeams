@@ -333,7 +333,7 @@ Team 匹配目前没有结构化的团队级 matching/filtering 字段，例如 
 | Degraded | 部分 Worker 未就绪或不可用；Leader 可能仍在运行 |
 | Failed | 调和失败，查看 `status.message` |
 
-**状态字段：** `observedGeneration`、`conditions`、`teamRoomID`、`leaderDMRoomID`、`leaderReady`、`readyWorkers`、`totalWorkers`、`members`。
+**状态字段：** `observedGeneration`、`conditions`、`teamRoomID`、`leaderDMRoomID`、`leaderReady`、`readyWorkers`、`totalWorkers`、`members`（包含每个成员的 `roomID`、`matrixUserID`、就绪状态，以及 Worker 的 `exposedPorts`）。
 
 ### Team Admin
 

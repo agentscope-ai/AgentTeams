@@ -259,7 +259,10 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	defaultResources := buildDefaultResources(k.config.WorkerCPU, k.config.WorkerMemory)
 	var resourcesOverride *corev1.ResourceRequirements
 	if req.Resources != nil {
-		merged := mergeResourceOverrides(defaultResources, req.Resources)
+		merged, err := mergeResourceOverrides(defaultResources, req.Resources)
+		if err != nil {
+			return nil, fmt.Errorf("invalid resource override for %s: %w", req.Name, err)
+		}
 		resourcesOverride = &merged
 	}
 
@@ -448,24 +451,40 @@ func buildDefaultResources(workerCPU, workerMemory string) corev1.ResourceRequir
 
 // mergeResourceOverrides layers a ResourceRequirements override (from
 // CreateRequest.Resources) on top of defaults, field by field.
-func mergeResourceOverrides(defaults corev1.ResourceRequirements, override *ResourceRequirements) corev1.ResourceRequirements {
+func mergeResourceOverrides(defaults corev1.ResourceRequirements, override *ResourceRequirements) (corev1.ResourceRequirements, error) {
 	out := *defaults.DeepCopy()
 	if override == nil {
-		return out
+		return out, nil
 	}
 	if override.CPULimit != "" {
-		out.Limits[corev1.ResourceCPU] = resource.MustParse(override.CPULimit)
+		q, err := resource.ParseQuantity(override.CPULimit)
+		if err != nil {
+			return out, fmt.Errorf("limits.cpu: %w", err)
+		}
+		out.Limits[corev1.ResourceCPU] = q
 	}
 	if override.MemoryLimit != "" {
-		out.Limits[corev1.ResourceMemory] = resource.MustParse(override.MemoryLimit)
+		q, err := resource.ParseQuantity(override.MemoryLimit)
+		if err != nil {
+			return out, fmt.Errorf("limits.memory: %w", err)
+		}
+		out.Limits[corev1.ResourceMemory] = q
 	}
 	if override.CPURequest != "" {
-		out.Requests[corev1.ResourceCPU] = resource.MustParse(override.CPURequest)
+		q, err := resource.ParseQuantity(override.CPURequest)
+		if err != nil {
+			return out, fmt.Errorf("requests.cpu: %w", err)
+		}
+		out.Requests[corev1.ResourceCPU] = q
 	}
 	if override.MemoryRequest != "" {
-		out.Requests[corev1.ResourceMemory] = resource.MustParse(override.MemoryRequest)
+		q, err := resource.ParseQuantity(override.MemoryRequest)
+		if err != nil {
+			return out, fmt.Errorf("requests.memory: %w", err)
+		}
+		out.Requests[corev1.ResourceMemory] = q
 	}
-	return out
+	return out, nil
 }
 
 // mergeOSSRegionFromProcessEnv sets HICLAW_FS_BUCKET and HICLAW_REGION when the client

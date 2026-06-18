@@ -419,6 +419,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		Env:                workerEnv,
 		ExtraHosts:         extraHostsForBackend(wb),
 		ServiceAccountName: saName,
+		Resources:          agentResourcesToBackend(m.Spec.Resources),
 		Labels:             labels,
 		Owner:              m.Owner,
 	}

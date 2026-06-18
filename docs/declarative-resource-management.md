@@ -74,6 +74,13 @@ spec:
     - name: github
       url: https://gateway.example.com/mcp-servers/github/mcp
       transport: http              # "http" (default, Streamable HTTP) or "sse"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
 ```
 
 ### Field Reference
@@ -93,6 +100,9 @@ spec:
 | `spec.expose` | []object | No | — | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
 | `spec.channelPolicy` | object | No | — | Additive/deny-list overrides for group @mentions and DMs (see [Channel policy](#channel-policy-worker-and-team)) |
 | `spec.state` | string | No | `Running` | Desired lifecycle: `Running`, `Sleeping`, or `Stopped` — controller reconciles containers toward this |
+| `spec.resources` | object | No | install/backend defaults | CPU/memory requests and limits for this Worker Pod. Shape: `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory` using Kubernetes quantity strings |
+
+Changing `spec.resources` updates the Worker spec and recreates the managed container/Pod. Avoid resource changes while a Worker is actively processing a task.
 
 ### identity / soul / agents vs package
 
@@ -171,6 +181,13 @@ spec:
       enabled: true
       every: 30m
     workerIdleTimeout: 12h
+    resources:
+      requests:
+        cpu: 300m
+        memory: 768Mi
+      limits:
+        cpu: "2"
+        memory: 3Gi
     soul: |
       # Alpha Lead - Team Leader
       ## Personality
@@ -183,6 +200,13 @@ spec:
     - name: alpha-dev
       model: claude-sonnet-4-6
       skills: [github-operations]
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 2Gi
       mcpServers:
         - name: github
           url: https://gateway.example.com/mcp-servers/github/mcp
@@ -235,6 +259,7 @@ spec:
 | `leader.heartbeat.every` | string | No | Heartbeat interval hint injected into the Team Leader workspace |
 | `leader.workerIdleTimeout` | string | No | Idle timeout the Team Leader uses when deciding whether to sleep team workers |
 | `leader.state` | string | No | `Running` (default), `Sleeping`, or `Stopped` — desired lifecycle for the Leader container |
+| `leader.resources` | object | No | CPU/memory requests and limits for the Team Leader Pod |
 | `leader.channelPolicy` | object | No | Per-leader overrides on top of team defaults |
 
 **Worker fields (same as standalone Worker spec):**
@@ -254,6 +279,9 @@ spec:
 | `workers[].expose` | []object | No | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
 | `workers[].channelPolicy` | object | No | Per-worker communication policy overrides |
 | `workers[].state` | string | No | `Running` (default), `Sleeping`, or `Stopped` — desired lifecycle for this team Worker |
+| `workers[].resources` | object | No | CPU/memory requests and limits for this Team Worker Pod |
+
+Changing Team member `resources` updates the Team spec hash and recreates the affected member container/Pod.
 
 ### What Makes Team Leader Special
 
@@ -393,6 +421,13 @@ spec:
     heartbeatInterval: 15m
     workerIdleTimeout: 720m
     notifyChannel: admin-dm
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "3"
+      memory: 5Gi
   # state: Running   # optional: Running | Sleeping | Stopped
 ```
 
@@ -410,6 +445,7 @@ spec:
 | `spec.mcpServers` | []object | No | — | MCP servers callable via mcporter. Each item: `name`, `url`, `transport` (`http`/`sse`). Gateway-side authorization is out of scope. |
 | `spec.package` | string | No | — | Package URI (`file://`, `http(s)://`, `nacos://`) |
 | `spec.state` | string | No | `Running` | Desired lifecycle: `Running`, `Sleeping`, `Stopped` |
+| `spec.resources` | object | No | install/backend defaults | CPU/memory requests and limits for the Manager Pod. Shape: `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory` |
 | `spec.config.heartbeatInterval` | string | No | — | Heartbeat check interval (e.g. `15m`) |
 | `spec.config.workerIdleTimeout` | string | No | — | Idle timeout before auto-sleep (e.g. `720m`) |
 | `spec.config.notifyChannel` | string | No | — | Notification channel (e.g. `admin-dm`) |

@@ -118,3 +118,80 @@ func TestTeamSpec_DeepCopyCascadesToMemberLabels(t *testing.T) {
 		t.Fatalf("Workers[1].Labels should remain nil after DeepCopy, got %v", cp.Workers[1].Labels)
 	}
 }
+
+func TestWorkerSpec_DeepCopyResources(t *testing.T) {
+	src := WorkerSpec{
+		Model: "m",
+		Resources: &AgentResourceRequirements{
+			Requests: AgentResourceValues{CPU: "250m", Memory: "512Mi"},
+			Limits:   AgentResourceValues{CPU: "2", Memory: "4Gi"},
+		},
+	}
+	cp := *src.DeepCopy()
+
+	if !reflect.DeepEqual(cp.Resources, src.Resources) {
+		t.Fatalf("copy resources=%v want %v", cp.Resources, src.Resources)
+	}
+	src.Resources.Requests.CPU = "500m"
+	if cp.Resources.Requests.CPU != "250m" {
+		t.Fatalf("DeepCopy aliased WorkerSpec.Resources: %v", cp.Resources)
+	}
+
+	srcNil := WorkerSpec{Model: "m"}
+	cpNil := *srcNil.DeepCopy()
+	if cpNil.Resources != nil {
+		t.Fatalf("expected nil Resources on deep-copy of nil source, got %v", cpNil.Resources)
+	}
+}
+
+func TestManagerSpec_DeepCopyResources(t *testing.T) {
+	src := ManagerSpec{
+		Model: "m",
+		Resources: &AgentResourceRequirements{
+			Requests: AgentResourceValues{CPU: "500m", Memory: "1Gi"},
+			Limits:   AgentResourceValues{CPU: "3", Memory: "5Gi"},
+		},
+	}
+	cp := *src.DeepCopy()
+
+	src.Resources.Limits.Memory = "6Gi"
+	if cp.Resources.Limits.Memory != "5Gi" {
+		t.Fatalf("DeepCopy aliased ManagerSpec.Resources: %v", cp.Resources)
+	}
+}
+
+func TestTeamSpec_DeepCopyCascadesToMemberResources(t *testing.T) {
+	src := TeamSpec{
+		Leader: LeaderSpec{
+			Name: "lead",
+			Resources: &AgentResourceRequirements{
+				Requests: AgentResourceValues{CPU: "300m", Memory: "768Mi"},
+				Limits:   AgentResourceValues{CPU: "2", Memory: "3Gi"},
+			},
+		},
+		Workers: []TeamWorkerSpec{
+			{
+				Name: "w1",
+				Resources: &AgentResourceRequirements{
+					Requests: AgentResourceValues{CPU: "200m", Memory: "512Mi"},
+					Limits:   AgentResourceValues{CPU: "1", Memory: "2Gi"},
+				},
+			},
+			{Name: "w2"},
+		},
+	}
+	cp := *src.DeepCopy()
+
+	src.Leader.Resources.Requests.CPU = "999m"
+	src.Workers[0].Resources.Limits.Memory = "9Gi"
+
+	if cp.Leader.Resources.Requests.CPU != "300m" {
+		t.Fatalf("LeaderSpec.Resources not isolated: %v", cp.Leader.Resources)
+	}
+	if cp.Workers[0].Resources.Limits.Memory != "2Gi" {
+		t.Fatalf("TeamWorkerSpec.Resources not isolated: %v", cp.Workers[0].Resources)
+	}
+	if cp.Workers[1].Resources != nil {
+		t.Fatalf("Workers[1].Resources should remain nil after DeepCopy, got %v", cp.Workers[1].Resources)
+	}
+}

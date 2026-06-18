@@ -979,6 +979,7 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 		McpServers:    t.Spec.Leader.McpServers,
 		ChannelPolicy: policy,
 		State:         t.Spec.Leader.State,
+		Resources:     t.Spec.Leader.Resources,
 		Env:           t.Spec.Leader.Env,
 	}
 }
@@ -1025,6 +1026,7 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 		Expose:        w.Expose,
 		ChannelPolicy: policy,
 		State:         w.State,
+		Resources:     w.Resources,
 		Env:           w.Env,
 	}
 }

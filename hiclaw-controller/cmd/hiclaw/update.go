@@ -44,6 +44,7 @@ func updateWorkerCmd() *cobra.Command {
   hiclaw update worker --name alice --image hiclaw/worker-agent:v1.2.0
   hiclaw update worker --name alice --skills github-operations,code-review
   hiclaw update worker --name remote-worker --container-managed=false
+  To update CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.
   To update mcpServers, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
@@ -123,7 +124,8 @@ func updateTeamCmd() *cobra.Command {
 
   hiclaw update team --name alpha --description "Updated description"
   hiclaw update team --name alpha --leader-model claude-sonnet-4-6
-  hiclaw update team --name alpha --leader-heartbeat-every 30m --worker-idle-timeout 12h`,
+  hiclaw update team --name alpha --leader-heartbeat-every 30m --worker-idle-timeout 12h
+  To update per-member CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f team.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -187,7 +189,8 @@ func updateManagerCmd() *cobra.Command {
 		Long: `Update an existing Manager resource. Only specified fields are changed.
 
   hiclaw update manager --name default --model claude-sonnet-4-6
-  hiclaw update manager --name default --image hiclaw/manager-agent:v1.2.0`,
+  hiclaw update manager --name default --image hiclaw/manager-agent:v1.2.0
+  To update CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f manager.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")

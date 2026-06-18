@@ -23,6 +23,8 @@ Before running `hiclaw create worker`, ask admin for these four inputs in one tu
 3. **SOUL (role)** — short description of expertise/style. Offer to draft a default if admin has no preference.
 4. **Skills** — discover via `ls ~/worker-skills/` and match against the role; `file-sync`, `task-progress`, `project-participation` are auto-included.
 
+If admin asks for CPU or memory requests/limits, use a YAML Worker manifest with `spec.resources` and apply it with `hiclaw apply -f`. The simple `hiclaw create worker` / `hiclaw update worker` flags do not expose resource tuning. Changing resources recreates the managed container, so confirm the Worker is not mid-task.
+
 Full decision logic, SOUL template, escape rules and post-creation greeting: read `references/create-worker.md`.
 
 ## Quick Create (1 command)

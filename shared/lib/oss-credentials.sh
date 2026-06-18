@@ -59,9 +59,16 @@ _oss_refresh_sts_via_controller() {
         return 1
     fi
 
-    resp=$(curl -s -w "\n%{http_code}" -X POST "${_controller_url}/api/v1/credentials/sts" \
-        -H "Authorization: Bearer ${bearer}" \
-        --connect-timeout 10 --max-time 30 2>&1)
+    if [ -n "${HICLAW_CLUSTER_ID:-}" ]; then
+        resp=$(curl -s -w "\n%{http_code}" -X POST "${_controller_url}/api/v1/credentials/sts" \
+            -H "Authorization: Bearer ${bearer}" \
+            -H "X-HiClaw-Cluster-ID: ${HICLAW_CLUSTER_ID}" \
+            --connect-timeout 10 --max-time 30 2>&1)
+    else
+        resp=$(curl -s -w "\n%{http_code}" -X POST "${_controller_url}/api/v1/credentials/sts" \
+            -H "Authorization: Bearer ${bearer}" \
+            --connect-timeout 10 --max-time 30 2>&1)
+    fi
 
     http_code=$(echo "${resp}" | tail -1)
     resp=$(echo "${resp}" | sed '$d')

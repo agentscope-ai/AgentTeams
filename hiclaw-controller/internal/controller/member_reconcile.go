@@ -72,6 +72,7 @@ type MemberContext struct {
 	TeamLeaderName     string
 	TeamAdminMatrixID  string
 	TeamCoordinatorIDs []string
+	PeerWorkerNames    []string // runtime names of all peer workers for @mention routing
 
 	// Heartbeat config from Team CR leader spec (nil for non-leader members)
 	Heartbeat *agentconfig.HeartbeatConfig
@@ -252,6 +253,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		MatrixPassword:    state.ProvResult.MatrixPassword,
 		McpServers:        m.Spec.McpServers,
 		TeamAdminMatrixID: m.TeamAdminMatrixID,
+		PeerWorkers:       m.PeerWorkerNames,
 		Heartbeat:         m.Heartbeat,
 		IsUpdate:          m.IsUpdate,
 		AIGatewayURL:      aiGatewayURL,

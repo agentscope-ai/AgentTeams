@@ -801,6 +801,31 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 	}
 	members := make([]MemberContext, 0, 1+len(t.Spec.Workers))
 
+	// Pre-compute the full member name list for peer @mention routing.
+	// Peer workers = all members except self — needed so that the generated
+	// openclaw.json includes peerMentions, allowing cross-room @mentions to
+	// actually deliver (Matrix @mentions are room-scoped by default).
+	leaderRuntimeName := t.Spec.Leader.EffectiveWorkerName()
+	allWorkerNames := make([]string, 0, len(t.Spec.Workers))
+	for _, w := range t.Spec.Workers {
+		allWorkerNames = append(allWorkerNames, w.EffectiveWorkerName())
+	}
+	// Leader peers: all team workers (leader has no peer leaders).
+	leaderPeerNames := make([]string, len(allWorkerNames))
+	copy(leaderPeerNames, allWorkerNames)
+	// Per-worker peers: leader + all workers except self.
+	workerPeerNameSets := make([][]string, len(t.Spec.Workers))
+	for i := range t.Spec.Workers {
+		peers := make([]string, 0, 1+len(t.Spec.Workers)-1)
+		peers = append(peers, leaderRuntimeName)
+		for j, w := range t.Spec.Workers {
+			if i != j {
+				peers = append(peers, w.EffectiveWorkerName())
+			}
+		}
+		workerPeerNameSets[i] = peers
+	}
+
 	leaderSpec := leaderWorkerSpec(t)
 	leaderObserved := isObserved(t.Spec.Leader.Name)
 	var leaderHeartbeat *agentconfig.HeartbeatConfig
@@ -824,12 +849,13 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 		TeamLeaderName:     "",
 		TeamAdminMatrixID:  teamAdminMatrixID(t),
 		TeamCoordinatorIDs: teamCoordinatorIDs(t),
+		PeerWorkerNames:    leaderPeerNames,
 		PodLabels:          memberLabels(RoleTeamLeader, t.Spec.Leader.Labels),
 		Owner:              t,
 		Heartbeat:          leaderHeartbeat,
 	})
 
-	for _, w := range t.Spec.Workers {
+	for i, w := range t.Spec.Workers {
 		workerObserved := isObserved(w.Name)
 		spec := teamWorkerSpecToWorkerSpec(t, w)
 		members = append(members, MemberContext{
@@ -845,6 +871,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			TeamLeaderName:     t.Spec.Leader.EffectiveWorkerName(),
 			TeamAdminMatrixID:  teamAdminMatrixID(t),
 			TeamCoordinatorIDs: teamCoordinatorIDs(t),
+			PeerWorkerNames:    workerPeerNameSets[i],
 			PodLabels:          memberLabels(RoleTeamWorker, w.Labels),
 			Owner:              t,
 		})

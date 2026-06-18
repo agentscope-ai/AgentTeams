@@ -274,3 +274,109 @@ func TestDefaultModelSpec(t *testing.T) {
 		t.Errorf("unknown model ctx = %d, want 150000", unknown.ContextWindow)
 	}
 }
+
+func TestGenerateOpenClawConfig_PeerMentions(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+	})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "worker-alice",
+		MatrixToken: "tok",
+		GatewayKey:  "key",
+		PeerWorkers: []string{"worker-bob", "worker-carol"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	matrixCfg := config["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	peerMentions, ok := matrixCfg["peerMentions"].([]interface{})
+	if !ok {
+		t.Fatal("peerMentions missing or wrong type")
+	}
+	if len(peerMentions) != 2 {
+		t.Fatalf("peerMentions len = %d, want 2", len(peerMentions))
+	}
+	if peerMentions[0] != "@worker-bob:matrix.test:8080" {
+		t.Errorf("peerMentions[0] = %v", peerMentions[0])
+	}
+	if peerMentions[1] != "@worker-carol:matrix.test:8080" {
+		t.Errorf("peerMentions[1] = %v", peerMentions[1])
+	}
+}
+
+func TestGenerateOpenClawConfig_NoPeerMentionsWhenEmpty(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+	})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "worker-alice",
+		MatrixToken: "tok",
+		GatewayKey:  "key",
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	matrixCfg := config["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	if _, exists := matrixCfg["peerMentions"]; exists {
+		t.Error("peerMentions should not exist when PeerWorkers is empty")
+	}
+}
+
+func TestGenerateOpenClawConfig_TeamWorkerWithPeerMentions(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+	})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:     "worker-dev-1",
+		MatrixToken:    "tok",
+		GatewayKey:     "key",
+		TeamLeaderName: "team-lead-dev",
+		PeerWorkers:    []string{"team-lead-dev", "worker-dev-2", "worker-dev-3"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	json.Unmarshal(data, &config)
+	matrixCfg := config["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+
+	peerMentions, ok := matrixCfg["peerMentions"].([]interface{})
+	if !ok {
+		t.Fatal("peerMentions missing for team worker")
+	}
+	if len(peerMentions) != 3 {
+		t.Fatalf("peerMentions len = %d, want 3", len(peerMentions))
+	}
+
+	groupAllow := toStringSlice(matrixCfg["groupAllowFrom"])
+	if !containsString(groupAllow, "@team-lead-dev:matrix.test:8080") {
+		t.Error("team worker groupAllowFrom missing leader")
+	}
+	if containsString(groupAllow, "@manager:matrix.test:8080") {
+		t.Error("team worker should not have manager in groupAllowFrom")
+	}
+
+	foundLeader := false
+	for _, pm := range peerMentions {
+		if pm.(string) == "@team-lead-dev:matrix.test:8080" {
+			foundLeader = true
+		}
+	}
+	if !foundLeader {
+		t.Error("peerMentions should include team leader")
+	}
+}

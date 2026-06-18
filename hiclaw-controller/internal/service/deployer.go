@@ -43,6 +43,7 @@ type WorkerDeployRequest struct {
 
 	TeamAdminMatrixID  string
 	TeamCoordinatorIDs []string
+	PeerWorkers        []string // localparts of peer workers for @mention routing
 
 	// Heartbeat config from Team CR leader spec (nil for non-leader workers)
 	Heartbeat *agentconfig.HeartbeatConfig
@@ -206,6 +207,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		ModelName:      req.Spec.Model,
 		AIGatewayURL:   req.AIGatewayURL,
 		TeamLeaderName: req.TeamLeaderName,
+		PeerWorkers:    req.PeerWorkers,
 		ChannelPolicy:  channelPolicy,
 		Heartbeat:      req.Heartbeat,
 	})

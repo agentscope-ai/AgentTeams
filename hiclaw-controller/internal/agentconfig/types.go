@@ -41,6 +41,7 @@ type WorkerConfigRequest struct {
 	ModelName      string           // optional: override default model
 	AIGatewayURL   string           // per-worker AI Gateway URL override (from modelProvider)
 	TeamLeaderName string           // if non-empty, this is a team worker
+	PeerWorkers    []string         // Matrix localparts of peer workers for @mention routing
 	ChannelPolicy  *ChannelPolicy   // optional communication policy overrides
 	Heartbeat      *HeartbeatConfig // optional: team leader heartbeat settings
 }

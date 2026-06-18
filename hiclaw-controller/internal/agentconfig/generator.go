@@ -196,9 +196,38 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		}
 	}
 
+	// Infer supports_multimodal / supports_image from the model spec
+	spec := g.resolveModelSpec(modelName)
+	agents := config["agents"].(map[string]interface{})
+	defaults := agents["defaults"].(map[string]interface{})
+	for _, inputType := range spec.Input {
+		if inputType == "image" {
+			defaults["supports_multimodal"] = true
+			defaults["supports_image"] = true
+			break
+		}
+	}
+
 	// Apply channel policy overrides
 	if req.ChannelPolicy != nil {
 		g.applyChannelPolicy(config, req.ChannelPolicy, matrixDomain)
+	}
+
+	// Inject peerMentions for cross-worker @mention routing within the team.
+	// Without this, Matrix @mentions are room-scoped and workers in different
+	// rooms never see each other's mentions — leader delegation silently fails.
+	if len(req.PeerWorkers) > 0 {
+		channels, _ := config["channels"].(map[string]interface{})
+		if channels != nil {
+			matrixCfg, _ := channels["matrix"].(map[string]interface{})
+			if matrixCfg != nil {
+				peerMentions := make([]string, 0, len(req.PeerWorkers))
+				for _, w := range req.PeerWorkers {
+					peerMentions = append(peerMentions, fmt.Sprintf("@%s:%s", w, matrixDomain))
+				}
+				matrixCfg["peerMentions"] = peerMentions
+			}
+		}
 	}
 
 	return json.MarshalIndent(config, "", "  ")

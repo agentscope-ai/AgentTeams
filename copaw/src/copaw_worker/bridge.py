@@ -777,7 +777,13 @@ def _write_providers_json(
 
         models_raw = provider_cfg.get("models", [])
         models = [
-            {"id": m["id"], "name": m.get("name", m["id"])}
+            {
+                "id": m["id"],
+                "name": m.get("name", m["id"]),
+                "supports_image": "image" in m.get("input", []),
+                "supports_video": "video" in m.get("input", []),
+                "supports_multimodal": "image" in m.get("input", []) or "video" in m.get("input", []),
+            }
             for m in models_raw
             if m.get("id")
         ]

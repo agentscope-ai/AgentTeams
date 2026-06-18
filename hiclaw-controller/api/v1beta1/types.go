@@ -13,17 +13,71 @@ const (
 )
 
 const (
+	// ConditionInfrastructureReady is used on Manager and Worker when Matrix
+	// identity, rooms, gateway consumer credentials, and object-storage
+	// credentials have been provisioned or refreshed. It is set False when
+	// infrastructure provisioning, credential refresh, or gateway route
+	// authorization blocks the reconcile.
 	ConditionInfrastructureReady = "InfrastructureReady"
+
+	// ConditionServiceAccountReady is used on Manager and Worker when the
+	// Kubernetes ServiceAccount needed by the agent pod exists and can be used
+	// for token projection. It is set False when ServiceAccount creation or
+	// validation fails.
 	ConditionServiceAccountReady = "ServiceAccountReady"
-	ConditionConfigSynced        = "ConfigSynced"
-	ConditionContainerReady      = "ContainerReady"
-	ConditionExposedPortsReady   = "ExposedPortsReady"
-	ConditionTeamRoomsReady      = "TeamRoomsReady"
-	ConditionTeamStorageReady    = "TeamStorageReady"
-	ConditionMembersReady        = "MembersReady"
-	ConditionMatrixUserReady     = "MatrixUserReady"
-	ConditionRoomAccessReady     = "RoomAccessReady"
-	ConditionReady               = "Ready"
+
+	// ConditionConfigSynced is used on Manager and Worker after package
+	// content, inline config, mcporter config, and requested skills have been
+	// written to the backing object store. It is set False when config or
+	// package deployment fails.
+	ConditionConfigSynced = "ConfigSynced"
+
+	// ConditionContainerReady is used on Manager and Worker when the backing
+	// pod/container has reached the requested lifecycle state. For Running
+	// resources it becomes True once the backend reports Running or Ready; for
+	// Sleeping/Stopped resources it becomes True once that desired state has
+	// been reconciled.
+	ConditionContainerReady = "ContainerReady"
+
+	// ConditionExposedPortsReady is used on Worker when spec.expose routes have
+	// been reconciled through the gateway. It is also set True with reason
+	// NotRequired when no exposed ports are requested.
+	ConditionExposedPortsReady = "ExposedPortsReady"
+
+	// ConditionTeamRoomsReady is used on Team when the shared Team room and the
+	// Leader DM room have been provisioned. It is set False when Matrix room
+	// creation, aliasing, or membership setup blocks team reconciliation.
+	ConditionTeamRoomsReady = "TeamRoomsReady"
+
+	// ConditionTeamStorageReady is used on Team when shared team storage has
+	// been initialized. It is set False when storage initialization fails; Team
+	// reconciliation can continue in a degraded state because this step is
+	// best-effort today.
+	ConditionTeamStorageReady = "TeamStorageReady"
+
+	// ConditionMembersReady is used on Team to summarize the leader and worker
+	// member reconcile loop. It is True when every desired member has completed
+	// its infra, config, container, and expose phases and the backend reports
+	// the desired members ready; it is False while members are pending or any
+	// member reconcile fails.
+	ConditionMembersReady = "MembersReady"
+
+	// ConditionMatrixUserReady is used on Human when the Matrix account exists
+	// and display-name sync has been attempted. It is set False when Matrix
+	// user creation blocks the reconcile.
+	ConditionMatrixUserReady = "MatrixUserReady"
+
+	// ConditionRoomAccessReady is used on Human when desired room access has
+	// been reconciled from accessibleWorkers and accessibleTeams. It is set
+	// False when invites, joins, or kicks fail; Human reconciliation still
+	// records partial progress and retries on the next pass.
+	ConditionRoomAccessReady = "RoomAccessReady"
+
+	// ConditionReady is the aggregate condition exposed by every HiClaw CRD.
+	// It is True only when that resource's required lower-level conditions are
+	// True, and False when reconcile is still in progress or a blocking phase
+	// failed. Use it for kubectl wait, GitOps health checks, and UI summaries.
+	ConditionReady = "Ready"
 )
 
 // LabelController marks the hiclaw-controller instance that owns a CR.

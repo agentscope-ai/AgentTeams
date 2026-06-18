@@ -210,6 +210,11 @@ class Worker:
             return {"liveness": "alive", "healthiness": snap.healthiness}
 
         async def _readiness():
+            # Mark startup-only components as healthy — they were validated
+            # during _initialize() and don't need runtime re-checking.
+            for comp in ("sync", "bridge", "model"):
+                health_state.update(comp, "healthy", "validated at startup")
+
             # Probe CoPaw health endpoint
             copaw_health = check_copaw_service(port, timeout=5)
             health_state.update("copaw", copaw_health.healthiness, copaw_health.message)

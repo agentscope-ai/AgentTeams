@@ -16,6 +16,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 WORKER_SCRIPT="${PROJECT_ROOT}/manager/agent/worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
 COPAW_SCRIPT="${PROJECT_ROOT}/manager/agent/copaw-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
+HERMES_SCRIPT="${PROJECT_ROOT}/manager/agent/hermes-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; echo "       expected: $2"; echo "       got:      $3"; FAIL=$((FAIL + 1)); }
@@ -184,15 +185,33 @@ EOF
     chmod +x "${mockbin}/skills"
 }
 
+create_mock_curl() {
+    local mockbin="$1"
+    cat > "${mockbin}/curl" <<'EOF'
+#!/bin/sh
+set -eu
+
+log_file="${TEST_CURL_LOG:?}"
+printf '%s\n' "$*" >> "${log_file}"
+cat <<'OUT'
+{"access_key_id":"test-ak","access_key_secret":"test-sk","security_token":"test-sts"}
+200
+OUT
+EOF
+    chmod +x "${mockbin}/curl"
+}
+
 run_case() {
     local script_path="$1" query="$2" log_file="$3"
     local mockbin="${TMPDIR_ROOT}/mockbin"
     create_mock_npx "${mockbin}"
     create_mock_skills "${mockbin}"
+    create_mock_curl "${mockbin}"
 
     PATH="${mockbin}:${PATH}" \
     TEST_NPX_LOG="${log_file}" \
     TEST_SKILLS_LOG="${TMPDIR_ROOT}/skills.log" \
+    TEST_CURL_LOG="${TMPDIR_ROOT}/curl.log" \
     SKILLS_API_URL="nacos://registry.local:8848" \
     HICLAW_FIND_SKILL_MAX_RESULTS=3 \
     HICLAW_FIND_SKILL_NACOS_PAGE_SIZE=50 \
@@ -204,10 +223,12 @@ run_case_with_env() {
     local mockbin="${TMPDIR_ROOT}/mockbin"
     create_mock_npx "${mockbin}"
     create_mock_skills "${mockbin}"
+    create_mock_curl "${mockbin}"
 
     PATH="${mockbin}:${PATH}" \
     TEST_NPX_LOG="${log_file}" \
     TEST_SKILLS_LOG="${skills_log_file}" \
+    TEST_CURL_LOG="${TMPDIR_ROOT}/curl.log" \
     SKILLS_API_URL="${skills_api_url}" \
     HICLAW_FIND_SKILL_MAX_RESULTS=3 \
     HICLAW_FIND_SKILL_NACOS_PAGE_SIZE=50 \
@@ -216,7 +237,7 @@ run_case_with_env() {
 
 echo ""
 echo "=== TC1: react performance should still return React skills ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-react.log"
@@ -236,7 +257,7 @@ done
 
 echo ""
 echo "=== TC2: pr review should rank code-review skills ahead of postgres matches ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-pr-review.log"
@@ -252,7 +273,7 @@ done
 
 echo ""
 echo "=== TC3: nacos backend should derive host/port from SKILLS_API_URL scheme ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-nacos-conn.log"
@@ -267,7 +288,7 @@ done
 
 echo ""
 echo "=== TC4: nacos backend should derive namespace from SKILLS_API_URL path ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-nacos-namespace.log"
@@ -280,7 +301,7 @@ done
 
 echo ""
 echo "=== TC5: https skills api should use skills CLI backend ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-skills-sh.log"
@@ -290,6 +311,41 @@ for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}"; do
         assert_contains "${case_name}: should use skills CLI output" "react-performance-toolkit" "${output}"
         assert_contains "${case_name}: should call skills find" "find react performance" "$(cat "${skills_log}")"
         assert_eq "${case_name}: nacos cli should not be used for https registry" "" "$(cat "${log_file}" 2>/dev/null || true)"
+    }
+done
+
+echo ""
+echo "=== TC6: sts-hiclaw nacos backend should request controller STS with cluster header ==="
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+    {
+        case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
+        mockbin="${TMPDIR_ROOT}/${case_name}-sts-mockbin"
+        log_file="${TMPDIR_ROOT}/${case_name}-sts-npx.log"
+        curl_log="${TMPDIR_ROOT}/${case_name}-sts-curl.log"
+        skills_log="${TMPDIR_ROOT}/${case_name}-sts-skills.log"
+        create_mock_npx "${mockbin}"
+        create_mock_skills "${mockbin}"
+        create_mock_curl "${mockbin}"
+
+        output="$(PATH="${mockbin}:${PATH}" \
+            TEST_NPX_LOG="${log_file}" \
+            TEST_SKILLS_LOG="${skills_log}" \
+            TEST_CURL_LOG="${curl_log}" \
+            SKILLS_API_URL="nacos://registry.local:8848/team-a" \
+            NACOS_AUTH_TYPE="sts-hiclaw" \
+            HICLAW_CONTROLLER_URL="http://controller:8090" \
+            HICLAW_AUTH_TOKEN="controller-token" \
+            HICLAW_CLUSTER_ID="remote-cluster-a" \
+            HICLAW_FIND_SKILL_MAX_RESULTS=3 \
+            HICLAW_FIND_SKILL_NACOS_PAGE_SIZE=50 \
+            /bin/sh "${script_path}" find review | strip_ansi)"
+
+        assert_contains "${case_name}: should still return sts-backed results" "requesting-code-review" "${output}"
+        assert_contains "${case_name}: controller STS call should include cluster header" "X-HiClaw-Cluster-ID: remote-cluster-a" "$(cat "${curl_log}")"
+        assert_contains "${case_name}: controller STS call should include bearer" "Authorization: Bearer controller-token" "$(cat "${curl_log}")"
+        assert_contains "${case_name}: nacos cli should use sts auth type" "--auth-type sts-hiclaw" "$(cat "${log_file}")"
+        assert_contains "${case_name}: nacos cli should pass sts access key" "--access-key test-ak" "$(cat "${log_file}")"
+        assert_contains "${case_name}: nacos cli should pass sts token" "--security-token test-sts" "$(cat "${log_file}")"
     }
 done
 

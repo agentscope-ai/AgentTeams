@@ -12,6 +12,20 @@ const (
 	Version   = "v1beta1"
 )
 
+const (
+	ConditionInfrastructureReady = "InfrastructureReady"
+	ConditionServiceAccountReady = "ServiceAccountReady"
+	ConditionConfigSynced        = "ConfigSynced"
+	ConditionContainerReady      = "ContainerReady"
+	ConditionExposedPortsReady   = "ExposedPortsReady"
+	ConditionTeamRoomsReady      = "TeamRoomsReady"
+	ConditionTeamStorageReady    = "TeamStorageReady"
+	ConditionMembersReady        = "MembersReady"
+	ConditionMatrixUserReady     = "MatrixUserReady"
+	ConditionRoomAccessReady     = "RoomAccessReady"
+	ConditionReady               = "Ready"
+)
+
 // LabelController marks the hiclaw-controller instance that owns a CR.
 // The value must equal the owning controller's HICLAW_CONTROLLER_NAME
 // environment variable. When set, the controller's informer cache
@@ -205,6 +219,7 @@ type WorkerStatus struct {
 	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	Conditions         []metav1.Condition  `json:"conditions,omitempty"`
 }
 
 // ExposedPortStatus records a port that has been exposed via Higress.
@@ -360,13 +375,15 @@ func (s TeamWorkerSpec) EffectiveWorkerName() string {
 }
 
 type TeamStatus struct {
-	Phase          string `json:"phase,omitempty"` // Pending/Active/Degraded/Failed
-	TeamRoomID     string `json:"teamRoomID,omitempty"`
-	LeaderDMRoomID string `json:"leaderDMRoomID,omitempty"`
-	LeaderReady    bool   `json:"leaderReady,omitempty"`
-	ReadyWorkers   int    `json:"readyWorkers,omitempty"`
-	TotalWorkers   int    `json:"totalWorkers,omitempty"`
-	Message        string `json:"message,omitempty"`
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Phase              string             `json:"phase,omitempty"` // Pending/Active/Degraded/Failed
+	TeamRoomID         string             `json:"teamRoomID,omitempty"`
+	LeaderDMRoomID     string             `json:"leaderDMRoomID,omitempty"`
+	LeaderReady        bool               `json:"leaderReady,omitempty"`
+	ReadyWorkers       int                `json:"readyWorkers,omitempty"`
+	TotalWorkers       int                `json:"totalWorkers,omitempty"`
+	Message            string             `json:"message,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 	// Members carries per-member state (one entry per leader + worker).
 	// TeamReconciler sorts the slice by Name for stable status patches and
 	// deterministic test assertions.
@@ -472,13 +489,15 @@ type HumanSpec struct {
 }
 
 type HumanStatus struct {
-	Phase                       string   `json:"phase,omitempty"` // Pending/Active/Failed
-	MatrixUserID                string   `json:"matrixUserID,omitempty"`
-	InitialPassword             string   `json:"initialPassword,omitempty"` // Set on creation, shown once
-	DisplayNameSyncedGeneration int64    `json:"displayNameSyncedGeneration,omitempty"`
-	Rooms                       []string `json:"rooms,omitempty"`
-	EmailSent                   bool     `json:"emailSent,omitempty"`
-	Message                     string   `json:"message,omitempty"`
+	ObservedGeneration          int64              `json:"observedGeneration,omitempty"`
+	Phase                       string             `json:"phase,omitempty"` // Pending/Active/Failed
+	MatrixUserID                string             `json:"matrixUserID,omitempty"`
+	InitialPassword             string             `json:"initialPassword,omitempty"` // Set on creation, shown once
+	DisplayNameSyncedGeneration int64              `json:"displayNameSyncedGeneration,omitempty"`
+	Rooms                       []string           `json:"rooms,omitempty"`
+	EmailSent                   bool               `json:"emailSent,omitempty"`
+	Message                     string             `json:"message,omitempty"`
+	Conditions                  []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // EffectiveUsername returns the Matrix localpart for a Human.
@@ -564,13 +583,14 @@ type ManagerConfig struct {
 }
 
 type ManagerStatus struct {
-	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
-	Phase              string `json:"phase,omitempty"` // Pending/Running/Updating/Failed
-	MatrixUserID       string `json:"matrixUserID,omitempty"`
-	RoomID             string `json:"roomID,omitempty"` // Admin DM room
-	ContainerState     string `json:"containerState,omitempty"`
-	Version            string `json:"version,omitempty"`
-	Message            string `json:"message,omitempty"`
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Phase              string             `json:"phase,omitempty"` // Pending/Running/Updating/Failed
+	MatrixUserID       string             `json:"matrixUserID,omitempty"`
+	RoomID             string             `json:"roomID,omitempty"` // Admin DM room
+	ContainerState     string             `json:"containerState,omitempty"`
+	Version            string             `json:"version,omitempty"`
+	Message            string             `json:"message,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 
 	// WelcomeSent records whether the controller has already delivered the
 	// first-boot onboarding prompt to the Admin DM room. Used as the

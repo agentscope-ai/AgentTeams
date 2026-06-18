@@ -52,6 +52,7 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("query container status: %w", err)
 	}
+	m.Status.ContainerState = string(result.Status)
 
 	// TODO(hot-reload): All spec changes trigger container recreation because
 	// agents only load config at startup (no hot-reload). When agent-side config

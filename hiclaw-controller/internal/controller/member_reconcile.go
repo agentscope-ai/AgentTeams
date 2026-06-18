@@ -459,7 +459,7 @@ func ReconcileMemberExpose(ctx context.Context, d MemberDeps, m MemberContext, s
 	if err != nil {
 		log.FromContext(ctx).Error(err, "failed to reconcile exposed ports (non-fatal)", "name", m.Name)
 		state.ExposedPorts = m.CurrentExposedPorts
-		return nil
+		return err
 	}
 	state.ExposedPorts = exposedPorts
 	return nil

@@ -1,9 +1,20 @@
 package controller
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // TestWorkerMemberContext_StampsControllerAndRoleLabels verifies that a
@@ -146,5 +157,59 @@ func TestWorkerMemberContext_SpecChangedGate(t *testing.T) {
 					tc.gen, tc.observed, mctx.SpecChanged, tc.want)
 			}
 		})
+	}
+}
+
+func TestWorkerReconcileConditionsShowServiceAccountFailure(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "gpt-4o"},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(worker).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		Build()
+	prov := mocks.NewMockProvisioner()
+	prov.EnsureServiceAccountFn = func(context.Context, string) error {
+		return errors.New("service account unavailable")
+	}
+	r := &WorkerReconciler{
+		Client:      c,
+		Provisioner: prov,
+		Deployer:    mocks.NewMockDeployer(),
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "alice", Namespace: "default"},
+	})
+	if err == nil {
+		t.Fatal("expected reconcile error")
+	}
+
+	var out v1beta1.Worker
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "alice", Namespace: "default"}, &out); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if out.Status.MatrixUserID != "@alice:localhost" {
+		t.Fatalf("MatrixUserID=%q, want provisioned user", out.Status.MatrixUserID)
+	}
+	if cond := meta.FindStatusCondition(out.Status.Conditions, v1beta1.ConditionInfrastructureReady); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("InfrastructureReady condition=%+v, want True", cond)
+	}
+	if cond := meta.FindStatusCondition(out.Status.Conditions, v1beta1.ConditionServiceAccountReady); cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "ServiceAccountFailed" {
+		t.Fatalf("ServiceAccountReady condition=%+v, want False ServiceAccountFailed", cond)
+	}
+	if cond := meta.FindStatusCondition(out.Status.Conditions, v1beta1.ConditionReady); cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready condition=%+v, want False", cond)
+	}
+	if out.Status.ObservedGeneration != 0 {
+		t.Fatalf("ObservedGeneration=%d, want 0 on failed reconcile", out.Status.ObservedGeneration)
 	}
 }

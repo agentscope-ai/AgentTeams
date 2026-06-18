@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -24,9 +25,10 @@ import (
 // Errors from individual invite/join/kick operations are never returned
 // — the function always runs to completion so partial failures don't
 // block unrelated rooms.
-func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope) {
+func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope) (bool, string) {
 	logger := log.FromContext(ctx)
 	h := s.human
+	failures := make([]string, 0)
 
 	desired := buildDesiredHumanRooms(ctx, r.Client, h)
 
@@ -50,6 +52,7 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 		}
 		if err := r.Provisioner.InviteToRoom(ctx, rid, matrixUserID); err != nil {
 			logger.Error(err, "failed to invite human to room", "room", rid)
+			failures = append(failures, "invite "+rid+": "+err.Error())
 			continue
 		}
 		// Acquire a user token lazily — only on the first new-room
@@ -60,10 +63,12 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 		if token == "" {
 			logger.V(1).Info("user token unavailable; invite-only this cycle",
 				"room", rid, "human", h.Name, "username", s.username)
+			failures = append(failures, "join "+rid+": user token unavailable")
 			continue
 		}
 		if err := r.Provisioner.JoinRoomAs(ctx, rid, token); err != nil {
 			logger.Error(err, "failed to join room as human", "room", rid)
+			failures = append(failures, "join "+rid+": "+err.Error())
 			continue
 		}
 		next = append(next, rid)
@@ -80,10 +85,15 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 		if err := r.Provisioner.KickFromRoom(ctx, rid, matrixUserID, "access revoked"); err != nil {
 			logger.Error(err, "failed to kick human from room", "room", rid)
 			kept = append(kept, rid)
+			failures = append(failures, "kick "+rid+": "+err.Error())
 		}
 	}
 
 	h.Status.Rooms = kept
+	if len(failures) > 0 {
+		return false, strings.Join(failures, "; ")
+	}
+	return true, "Desired room membership is reconciled."
 }
 
 // ensureUserToken returns a Matrix access token for the human,

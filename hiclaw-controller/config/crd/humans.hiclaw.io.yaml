@@ -44,6 +44,9 @@ spec:
             status:
               type: object
               properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
                 phase:
                   type: string
                   enum: [Pending, Active, Failed]
@@ -63,6 +66,28 @@ spec:
                   type: boolean
                 message:
                   type: string
+                conditions:
+                  type: array
+                  description: Kubernetes-style conditions describing reconcile progress and blockers.
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
       subresources:
         status: {}
       additionalPrinterColumns:

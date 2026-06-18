@@ -49,6 +49,9 @@ var (
 	mockMgrBackend *mocks.MockWorkerBackend
 	mockMgrEnv     *mocks.MockManagerEnvBuilder
 
+	// Human mocks
+	mockHumanProv *mocks.MockHumanProvisioner
+
 	// Legacy wiring — real LegacyCompat against an in-memory OSS so tests can
 	// assert workers-registry.json / teams-registry.json side effects.
 	testOSS    *ossfake.Memory
@@ -192,6 +195,15 @@ func TestMain(m *testing.M) {
 		panic(fmt.Sprintf("failed to setup ManagerReconciler: %v", err))
 	}
 
+	mockHumanProv = mocks.NewMockHumanProvisioner()
+	humanReconciler := &controller.HumanReconciler{
+		Client:      mgr.GetClient(),
+		Provisioner: mockHumanProv,
+	}
+	if err := humanReconciler.SetupWithManager(mgr); err != nil {
+		panic(fmt.Sprintf("failed to setup HumanReconciler: %v", err))
+	}
+
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
 			panic(fmt.Sprintf("failed to start manager: %v", err))
@@ -219,6 +231,7 @@ func resetMocks() {
 	mockDeploy.Reset()
 	mockBackend.Reset()
 	mockEnv.Reset()
+	mockHumanProv.Reset()
 }
 
 // resetManagerMocks resets all Manager mock call records and Fn overrides.

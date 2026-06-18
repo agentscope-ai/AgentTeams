@@ -18,6 +18,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -211,13 +212,18 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		TeamAdminActorName:   adminActor.Username,
 	})
 	if err != nil {
+		setCondition(&t.Status.Conditions, v1beta1.ConditionTeamRoomsReady, metav1.ConditionFalse, "ProvisionFailed", err.Error(), t.Generation)
 		return r.failTeam(ctx, t, patchBase, fmt.Sprintf("provision team rooms: %v", err))
 	}
 	t.Status.TeamRoomID = rooms.TeamRoomID
 	t.Status.LeaderDMRoomID = rooms.LeaderDMRoomID
+	setCondition(&t.Status.Conditions, v1beta1.ConditionTeamRoomsReady, metav1.ConditionTrue, "Provisioned", "Team room and leader DM are ready.", t.Generation)
 
 	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {
 		logger.Error(err, "team shared storage init failed (non-fatal)", "name", t.Name, "teamName", teamRuntimeName)
+		setCondition(&t.Status.Conditions, v1beta1.ConditionTeamStorageReady, metav1.ConditionFalse, "StorageFailed", err.Error(), t.Generation)
+	} else {
+		setCondition(&t.Status.Conditions, v1beta1.ConditionTeamStorageReady, metav1.ConditionTrue, "Initialized", "Shared team storage is initialized.", t.Generation)
 	}
 
 	// --- Step 2: Write local inline configs (shared FS with agents) ---
@@ -382,13 +388,18 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	case len(perMemberErrors) > 0:
 		t.Status.Phase = "Degraded"
 		t.Status.Message = strings.Join(perMemberErrors, "; ")
+		setCondition(&t.Status.Conditions, v1beta1.ConditionMembersReady, metav1.ConditionFalse, "MemberFailed", t.Status.Message, t.Generation)
 	case leaderReady && readyWorkers == t.Status.TotalWorkers:
 		t.Status.Phase = "Active"
 		t.Status.Message = ""
+		t.Status.ObservedGeneration = t.Generation
+		setCondition(&t.Status.Conditions, v1beta1.ConditionMembersReady, metav1.ConditionTrue, "Reconciled", "All desired team members are reconciled.", t.Generation)
 	default:
 		t.Status.Phase = "Pending"
 		t.Status.Message = ""
+		setCondition(&t.Status.Conditions, v1beta1.ConditionMembersReady, metav1.ConditionFalse, "MembersPending", "Waiting for team member containers to become ready.", t.Generation)
 	}
+	setTeamReadyCondition(t)
 
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
 		logger.Error(err, "failed to patch team status (non-fatal)")
@@ -690,10 +701,19 @@ func (r *TeamReconciler) removeLegacyMember(ctx context.Context, runtimeName str
 func (r *TeamReconciler) failTeam(ctx context.Context, t *v1beta1.Team, patchBase client.Patch, msg string) (reconcile.Result, error) {
 	t.Status.Phase = "Failed"
 	t.Status.Message = msg
+	setCondition(&t.Status.Conditions, v1beta1.ConditionReady, metav1.ConditionFalse, "ReconcileFailed", msg, t.Generation)
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
 		log.FromContext(ctx).Error(err, "failed to patch team status after failure (non-fatal)")
 	}
 	return reconcile.Result{RequeueAfter: reconcileRetryDelay}, fmt.Errorf("%s", msg)
+}
+
+func setTeamReadyCondition(t *v1beta1.Team) {
+	setReadyFromDependencies(&t.Status.Conditions, t.Generation,
+		v1beta1.ConditionTeamRoomsReady,
+		v1beta1.ConditionTeamStorageReady,
+		v1beta1.ConditionMembersReady,
+	)
 }
 
 // --- helpers ---

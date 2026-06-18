@@ -24,6 +24,8 @@ from rich.panel import Panel
 from copaw_worker.config import WorkerConfig
 from copaw_worker.sync import FileSync, sync_loop, push_loop
 from copaw_worker.bridge import bridge_openclaw_to_copaw
+from copaw_worker.worker_api import WorkerAPIServer
+from copaw_worker.health import HealthState, check_copaw_service, check_matrix_service
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -197,6 +199,54 @@ class Worker:
 
         clear_builtin_channel_cache()
 
+        # --- Worker API server (liveness/readiness probes) ---
+        worker_port = self.config.worker_port or (port + 1)
+        health_state = HealthState(
+            self._copaw_working_dir / "health.json"
+        )
+
+        async def _liveness():
+            snap = health_state.snapshot()
+            return {"liveness": "alive", "healthiness": snap.healthiness}
+
+        async def _readiness():
+            # Probe CoPaw health endpoint
+            copaw_health = check_copaw_service(port, timeout=5)
+            health_state.update("copaw", copaw_health.healthiness, copaw_health.message)
+
+            # Probe Matrix homeserver
+            matrix_cfg = {}
+            try:
+                cfg_path = self.sync.local_dir / "openclaw.json"
+                if cfg_path.exists():
+                    import json as _json
+                    matrix_cfg = _json.loads(cfg_path.read_text()).get("channels", {}).get("matrix", {})
+            except Exception:
+                pass
+            homeserver = matrix_cfg.get("homeserver", "")
+            if homeserver:
+                mx_health = check_matrix_service(homeserver, timeout=5)
+                health_state.update("matrix", mx_health.healthiness, mx_health.message)
+
+            snap = health_state.snapshot()
+            return {
+                "readiness": "ready" if snap.healthiness == "healthy" else "not_ready",
+                "healthiness": snap.healthiness,
+                "message": snap.message,
+                "components": {
+                    k: {"healthiness": v.healthiness, "message": v.message}
+                    for k, v in snap.components.items()
+                },
+            }
+
+        api_server = WorkerAPIServer(
+            host="0.0.0.0",
+            port=worker_port,
+            liveness_handler=_liveness,
+            readiness_handler=_readiness,
+        )
+        await api_server.start()
+
         uv_config = uvicorn.Config(
             "copaw.app._app:app",
             host="0.0.0.0",
@@ -212,6 +262,8 @@ class Worker:
             await server.serve()
         except asyncio.CancelledError:
             server.should_exit = True
+        finally:
+            await api_server.stop()
 
     async def _run_copaw_headless(self) -> None:
         """Start CoPaw's AgentRunner + ChannelManager (no HTTP server)."""

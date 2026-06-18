@@ -521,7 +521,6 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		AgentFSDir:          cfg.AgentFSDir(),
 		WorkerAgentDir:      cfg.WorkerAgentDir(),
 		MatrixDomain:        cfg.MatrixDomain,
-		AgentConfigResolver: agentconfig.NewResolver(a.k8sClient, a.oss),
 		NacosCredClient:     a.credProvider,
 	})
 

@@ -77,7 +77,6 @@ type DeployerConfig struct {
 	AgentFSDir         string // embedded: /root/hiclaw-fs/agents
 	WorkerAgentDir     string // source for builtin agent files
 	MatrixDomain       string
-	AgentConfigResolver *agentconfig.Resolver // resolves external agent config refs
 
 	// NacosCredClient is used when remoteSkills use sts-hiclaw (see CRD authType).
 	NacosCredClient credprovider.Client
@@ -95,7 +94,6 @@ type Deployer struct {
 	agentFSDir          string
 	workerAgentDir      string
 	matrixDomain        string
-	agentConfigResolver *agentconfig.Resolver
 	nacosCredClient     credprovider.Client
 }
 
@@ -109,7 +107,6 @@ func NewDeployer(cfg DeployerConfig) *Deployer {
 		agentFSDir:          cfg.AgentFSDir,
 		workerAgentDir:      cfg.WorkerAgentDir,
 		matrixDomain:        cfg.MatrixDomain,
-		agentConfigResolver: cfg.AgentConfigResolver,
 		nacosCredClient:     cfg.NacosCredClient,
 	}
 }
@@ -242,21 +239,6 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		soulKey := agentPrefix + "/SOUL.md"
 		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes")) && req.Spec.Identity != "")
 		// Try external config ref if no inline soul
-		if !inlineOwnsSoul && req.Spec.AgentConfigRef != nil && d.agentConfigResolver != nil {
-			resolved, resolveErr := d.agentConfigResolver.Resolve(ctx, req.Spec.AgentConfigRef, "SOUL.md")
-			if resolveErr != nil {
-				logger.Error(resolveErr, "SOUL.md external config resolution failed; falling back", "worker", req.Name)
-			} else if resolved != "" {
-				soulKey := agentPrefix + "/SOUL.md"
-				if err := d.oss.PutObject(ctx, soulKey, []byte(resolved)); err != nil {
-					logger.Error(err, "SOUL.md push from external config failed (non-fatal)")
-				} else {
-					logger.Info("SOUL.md: external config pushed", "worker", req.Name, "source", req.Spec.AgentConfigRef.Source)
-				}
-				// Skip further soul processing — external ref satisfied the requirement
-				goto soulDone
-			}
-		}
 		if inlineOwnsSoul {
 			soulPath := filepath.Join(localAgentDir, "SOUL.md")
 			soulContent, readErr := os.ReadFile(soulPath)
@@ -297,7 +279,6 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 	}
 
-	soulDone:
 	// --- mcporter-servers.json ---
 	if len(req.McpServers) > 0 {
 		mcporterJSON, err := d.agentConfig.GenerateMcporterConfig(req.GatewayKey, req.McpServers)
@@ -323,7 +304,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	}
 
 	// --- AGENTS.md: merge builtin section + inject coordination context ---
-	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamCoordinatorIDs, req.Spec.Agents, req.Spec.AgentConfigRef); err != nil {
+	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
 
@@ -726,14 +707,6 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 
 	// --- SOUL.md: inline > external ref ---
 	soulContent := req.Spec.Soul
-	if soulContent == "" && req.Spec.AgentConfigRef != nil && d.agentConfigResolver != nil {
-		resolved, resolveErr := d.agentConfigResolver.Resolve(ctx, req.Spec.AgentConfigRef, "SOUL.md")
-		if resolveErr != nil {
-			logger.Error(resolveErr, "Manager SOUL.md external config resolution failed", "source", req.Spec.AgentConfigRef.Source)
-		} else {
-			soulContent = resolved
-		}
-	}
 	if soulContent != "" {
 		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(soulContent)); err != nil {
 			logger.Error(err, "SOUL.md push failed (non-fatal)")
@@ -742,14 +715,6 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 
 	// --- AGENTS.md: inline > external ref ---
 	agentsContent := req.Spec.Agents
-	if agentsContent == "" && req.Spec.AgentConfigRef != nil && d.agentConfigResolver != nil {
-		resolved, resolveErr := d.agentConfigResolver.Resolve(ctx, req.Spec.AgentConfigRef, "AGENTS.md")
-		if resolveErr != nil {
-			logger.Error(resolveErr, "Manager AGENTS.md external config resolution failed", "source", req.Spec.AgentConfigRef.Source)
-		} else {
-			agentsContent = resolved
-		}
-	}
 	if agentsContent != "" {
 		if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(agentsContent)); err != nil {
 			logger.Error(err, "AGENTS.md push failed (non-fatal)")
@@ -795,7 +760,7 @@ func redactPackageURI(raw string) string {
 
 // prepareAndPushAgentsMD merges the builtin AGENTS.md section and injects
 // coordination context in a single OSS read-write cycle.
-func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID string, teamCoordinatorIDs []string, inlineAgents string, agentConfigRef *v1beta1.AgentConfigRef) error {
+func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agentPrefix, role, runtime, teamName, teamLeaderName, teamAdminMatrixID string, teamCoordinatorIDs []string, inlineAgents string) error {
 	logger := log.FromContext(ctx)
 	builtinPath := filepath.Join(d.builtinAgentDir(role, runtime), "AGENTS.md")
 	builtinContent, err := os.ReadFile(builtinPath)
@@ -808,22 +773,13 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 		logger.Info("AGENTS.md builtin template not found", "worker", workerName, "role", role, "runtime", runtime, "path", builtinPath)
 	}
 
-	// Priority: inline spec (user intent) > external ref (agentConfigRef) > OSS (from package).
+	// Priority: inline spec (user intent) > OSS (from package).
 	// Read inline directly from memory to avoid local file race with background mc mirror.
 	var content string
 	source := "oss"
 	if inlineAgents != "" {
 		content = inlineAgents
 		source = "inline spec.agents"
-	} else if agentConfigRef != nil && d.agentConfigResolver != nil {
-		resolved, err := d.agentConfigResolver.Resolve(ctx, agentConfigRef, "AGENTS.md")
-		if err != nil {
-			logger.Error(err, "AGENTS.md external config resolution failed; falling back to OSS", "worker", workerName, "ref", agentConfigRef.Source)
-		} else if resolved != "" {
-			content = resolved
-			source = "agentConfigRef:" + agentConfigRef.Source
-			logger.Info("AGENTS.md loaded from external config", "worker", workerName, "source", source, "bytes", len(content))
-		}
 	}
 	if content == "" && source == "oss" {
 		existing, err := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")

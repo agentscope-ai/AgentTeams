@@ -25,7 +25,7 @@ from copaw_worker.config import WorkerConfig
 from copaw_worker.sync import FileSync, sync_loop, push_loop
 from copaw_worker.bridge import bridge_openclaw_to_copaw
 from copaw_worker.worker_api import WorkerAPIServer
-from copaw_worker.health import HealthState, check_copaw_service, check_matrix_service
+from copaw_worker.health import HealthState, check_matrix_service
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -215,9 +215,13 @@ class Worker:
             for comp in ("sync", "bridge", "model"):
                 health_state.update(comp, "healthy", "validated at startup")
 
-            # Probe CoPaw health endpoint
-            copaw_health = check_copaw_service(port, timeout=5)
-            health_state.update("copaw", copaw_health.healthiness, copaw_health.message)
+            # Probe CoPaw console (TCP reachability — CoPaw has no /health endpoint)
+            import socket as _socket
+            try:
+                with _socket.create_connection(("127.0.0.1", port), timeout=3):
+                    health_state.update("copaw", "healthy", f"console reachable on port {port}")
+            except Exception as e:
+                health_state.update("copaw", "unhealthy", f"console unreachable: {e}")
 
             # Probe Matrix homeserver
             matrix_cfg = {}

@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-26-progress-watchdog.sh - Unit-style test for Manager task progress watchdog
 
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -94,13 +94,23 @@ assert_json_field() {
     fi
 }
 
-first="$("${WATCHDOG}" --task-id task-001)"
+run_watchdog() {
+    local task_id="$1"
+    local output
+    if ! output="$("${WATCHDOG}" --task-id "${task_id}")"; then
+        echo "FAIL: watchdog exited non-zero for ${task_id}" >&2
+        exit 1
+    fi
+    printf '%s\n' "${output}"
+}
+
+first="$(run_watchdog task-001)"
 assert_json_field "${first}" '.status' 'normal'
 assert_json_field "${first}" '.stale_heartbeat_count' '0'
 first_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-001") | .last_progress_at' "${HOME}/state.json")"
 
 sleep 1
-second="$("${WATCHDOG}" --task-id task-001)"
+second="$(run_watchdog task-001)"
 assert_json_field "${second}" '.status' 'repeated'
 assert_json_field "${second}" '.stale_heartbeat_count' '1'
 
@@ -125,18 +135,40 @@ cat >> "${HICLAW_FS_ROOT}/shared/tasks/task-001/progress/2026-06-19.md" <<'EOF_P
 - Next step: Add watchdog hook.
 EOF_PROGRESS
 
-third="$("${WATCHDOG}" --task-id task-001)"
+third="$(run_watchdog task-001)"
 assert_json_field "${third}" '.status' 'normal'
 assert_json_field "${third}" '.stale_heartbeat_count' '0'
 
-missing="$("${WATCHDOG}" --task-id task-002)"
+missing="$(run_watchdog task-002)"
 assert_json_field "${missing}" '.status' 'unknown'
 assert_json_field "${missing}" '.stale_heartbeat_count' '1'
 
-blocked="$("${WATCHDOG}" --task-id task-003)"
+blocked="$(run_watchdog task-003)"
 assert_json_field "${blocked}" '.status' 'blocked'
 assert_json_field "${blocked}" '.stale_heartbeat_count' '0'
+blocked_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-003") | .last_progress_at' "${HOME}/state.json")"
 
-long_running="$("${WATCHDOG}" --task-id task-004)"
+sleep 1
+blocked_again="$(run_watchdog task-003)"
+assert_json_field "${blocked_again}" '.status' 'blocked'
+assert_json_field "${blocked_again}" '.stale_heartbeat_count' '0'
+blocked_again_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-003") | .last_progress_at' "${HOME}/state.json")"
+if [ "${blocked_again_progress_at}" != "${blocked_progress_at}" ]; then
+    echo "FAIL: unchanged blocked progress should not refresh last_progress_at" >&2
+    exit 1
+fi
+
+long_running="$(run_watchdog task-004)"
 assert_json_field "${long_running}" '.status' 'long_running'
 assert_json_field "${long_running}" '.stale_heartbeat_count' '0'
+long_running_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-004") | .last_progress_at' "${HOME}/state.json")"
+
+sleep 1
+long_running_again="$(run_watchdog task-004)"
+assert_json_field "${long_running_again}" '.status' 'long_running'
+assert_json_field "${long_running_again}" '.stale_heartbeat_count' '0'
+long_running_again_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-004") | .last_progress_at' "${HOME}/state.json")"
+if [ "${long_running_again_progress_at}" != "${long_running_progress_at}" ]; then
+    echo "FAIL: unchanged long-running progress should not refresh last_progress_at" >&2
+    exit 1
+fi

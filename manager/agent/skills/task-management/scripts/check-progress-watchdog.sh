@@ -81,6 +81,23 @@ _expected_next_update_at() {
     '
 }
 
+_has_blocker_signal() {
+    awk '
+        {
+            line = tolower($0)
+            gsub(/[^[:alnum:]_]+/, " ", line)
+            n = split(line, words, " ")
+            for (i = 1; i <= n; i++) {
+                if (words[i] == "blocked" || words[i] == "blocker") {
+                    found = 1
+                    exit
+                }
+            }
+        }
+        END { exit found ? 0 : 1 }
+    '
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --task-id) TASK_ID="$2"; shift 2 ;;
@@ -137,12 +154,16 @@ expected_next_update_at="$(printf '%s\n' "${latest_block}" | _expected_next_upda
 previous_fingerprint=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id) | .last_progress_fingerprint // empty' "${STATE_FILE}")
 previous_count=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id) | .stale_heartbeat_count // 0' "${STATE_FILE}")
 now="$(_ts)"
+progress_changed="false"
+if [ "${fingerprint}" != "${previous_fingerprint}" ]; then
+    progress_changed="true"
+fi
 
 if [ -n "${expected_next_update_at}" ] && [[ "${expected_next_update_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "${expected_next_update_at}" > "${now}" ]]; then
     status="long_running"
     count=0
     action="progress_long_running"
-elif printf '%s\n' "${latest_block}" | grep -Eiq '\b(blocked|blocker)\b'; then
+elif printf '%s\n' "${latest_block}" | _has_blocker_signal; then
     status="blocked"
     count=0
     action="progress_blocked"
@@ -165,9 +186,10 @@ jq --arg id "${TASK_ID}" \
    --arg action "${action}" \
    --arg summary "${summary}" \
    --arg expected_next_update_at "${expected_next_update_at}" \
+   --arg progress_changed "${progress_changed}" \
    --argjson count "${count}" '
     (.active_tasks[] | select(.task_id == $id)) |= (
-        (if $action == "progress_changed" or $action == "progress_blocked" or $action == "progress_long_running" then .last_progress_at = $now else . end)
+        (if $progress_changed == "true" then .last_progress_at = $now else . end)
         | .last_progress_fingerprint = $fingerprint
         | .stale_heartbeat_count = $count
         | .last_watchdog_action = $action

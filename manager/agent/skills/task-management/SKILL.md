@@ -11,6 +11,7 @@ description: Use when admin gives a task to delegate to a Worker, when a Worker 
 - **Delegation-first** — always prefer assigning to a Worker over doing it yourself. Only self-execute when admin explicitly says "do it yourself" or the task is within your management skills
 - **Never @mention a Worker after recording infinite task execution** — this creates a rapid-fire loop (execute → report → trigger → execute → ...) that burns tokens continuously. Triggering happens only during heartbeat
 - **Always use `manage-state.sh` to modify state.json** — never edit manually with jq. The script handles atomicity, deduplication, and initialization
+- **Use the progress watchdog during heartbeat** — `check-progress-watchdog.sh` compares task progress logs across heartbeat cycles so you can distinguish normal long-running work from repeated or stale progress
 - **Every task assigned to a Worker MUST be registered in state.json** — this includes coordination, research, review, and management tasks, not just coding tasks. If a task is missing from state.json, the Worker's container will be auto-stopped by idle timeout while still working
 - **Always push task files to MinIO before notifying Worker** — Worker needs to file-sync to get the spec
 - **Always pull task directory from MinIO before reading results** — Worker pushes results there
@@ -26,4 +27,4 @@ Read the relevant doc **before** executing. Do not load all of them.
 | Admin gives task, no Worker specified | `references/worker-selection.md` |
 | Assign a one-off task or handle completion | `references/finite-tasks.md` |
 | Create or manage a recurring scheduled task | `references/infinite-tasks.md` |
-| Need to update state.json or resolve notification channel | `references/state-management.md` |
+| Need to update state.json, check progress watchdog state, or resolve notification channel | `references/state-management.md` |

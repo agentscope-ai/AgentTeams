@@ -35,18 +35,28 @@ WATCHDOG_SCRIPT=/opt/hiclaw/agent/skills/task-management/scripts/check-progress-
 | `last_progress_at` | Time when you last saw a changed progress block |
 | `last_progress_fingerprint` | Stable hash of the latest progress block |
 | `stale_heartbeat_count` | Consecutive heartbeat checks with repeated or missing progress |
-| `last_watchdog_action` | `progress_changed`, `progress_blocked`, `repeated_progress`, or `missing_progress` |
+| `last_watchdog_action` | `progress_changed`, `progress_long_running`, `progress_blocked`, `repeated_progress`, or `missing_progress` |
 | `last_watchdog_checked_at` | Time when watchdog last checked this task |
 | `last_progress_summary` | Heading of the latest progress block |
+| `expected_next_update_at` | Optional future UTC timestamp declared by a long-running progress block |
 
 Watchdog output statuses:
 
 | Status | Meaning | Heartbeat action |
 |------|---------|------------------|
 | `normal` | Latest progress block changed | Continue normal heartbeat handling |
+| `long_running` | Latest progress block declares a future `Expected next update` | Treat it as a grace window and do not escalate before that time |
 | `blocked` | Latest progress block explicitly reports a blocker | Report the blocker to admin and ask only for missing decision/input if actionable |
-| `repeated` | Latest progress block is unchanged | Ask for status on the first repeated cycle; escalate to admin when repeated again |
+| `repeated` | Latest progress block is unchanged | Ask for status on the first repeated cycle; record suspected stale progress on the second; escalate to admin on the third or later |
 | `unknown` | No finite task or progress log was found | Ask the Worker to write progress or report a blocker; escalate if this repeats |
+
+For long-running steps, the watchdog recognizes this exact optional line inside the latest progress block:
+
+```markdown
+- Expected next update: 2026-06-19T12:30:00Z
+```
+
+Use UTC `YYYY-MM-DDTHH:MM:SSZ`. Natural-language durations are ignored.
 
 ## Notification channel resolution
 

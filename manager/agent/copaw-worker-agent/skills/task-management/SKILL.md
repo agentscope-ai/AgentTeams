@@ -118,4 +118,6 @@ Progress notes are optional unless the task spec asks for them. If you write pro
 shared/tasks/{task-id}/progress/YYYY-MM-DD.md
 ```
 
+For a long-running step, include a UTC line such as `- Expected next update: 2026-06-19T12:30:00Z` so heartbeat does not treat unchanged progress as suspected stale work before that time.
+
 Progress updates that require no decision should not @mention anyone.

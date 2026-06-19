@@ -14,6 +14,7 @@ export HOME="${TMP_DIR}/home"
 export HICLAW_FS_ROOT="${TMP_DIR}/hiclaw-fs"
 mkdir -p "${HOME}" "${HICLAW_FS_ROOT}/shared/tasks/task-001/progress"
 mkdir -p "${HICLAW_FS_ROOT}/shared/tasks/task-003/progress"
+mkdir -p "${HICLAW_FS_ROOT}/shared/tasks/task-004/progress"
 
 cat > "${HOME}/state.json" <<'JSON'
 {
@@ -39,6 +40,13 @@ cat > "${HOME}/state.json" <<'JSON'
       "type": "finite",
       "assigned_to": "carol",
       "room_id": "!carol:example"
+    },
+    {
+      "task_id": "task-004",
+      "title": "Long running progress log",
+      "type": "finite",
+      "assigned_to": "dave",
+      "room_id": "!dave:example"
     }
   ],
   "updated_at": "2026-06-19T00:00:00Z"
@@ -61,6 +69,16 @@ cat > "${HICLAW_FS_ROOT}/shared/tasks/task-003/progress/2026-06-19.md" <<'EOF_PR
 - Current state: Cannot continue safely.
 - Issues encountered: Blocked waiting for admin credentials.
 - Next step: Ask for the missing credential.
+EOF_PROGRESS
+
+cat > "${HICLAW_FS_ROOT}/shared/tasks/task-004/progress/2026-06-19.md" <<'EOF_PROGRESS'
+## 12:00 - Run full integration suite
+
+- What was done: Started the full integration suite.
+- Current state: Long-running command is still executing.
+- Issues encountered: None.
+- Next step: Wait for completion.
+- Expected next update: 2999-01-01T00:00:00Z
 EOF_PROGRESS
 
 assert_json_field() {
@@ -118,3 +136,7 @@ assert_json_field "${missing}" '.stale_heartbeat_count' '1'
 blocked="$("${WATCHDOG}" --task-id task-003)"
 assert_json_field "${blocked}" '.status' 'blocked'
 assert_json_field "${blocked}" '.stale_heartbeat_count' '0'
+
+long_running="$("${WATCHDOG}" --task-id task-004)"
+assert_json_field "${long_running}" '.status' 'long_running'
+assert_json_field "${long_running}" '.stale_heartbeat_count' '0'

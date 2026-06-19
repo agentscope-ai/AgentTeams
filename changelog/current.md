@@ -4,7 +4,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
-- feat(manager): add task progress watchdog state checks for heartbeat-based stuck Worker detection (#947).
+- feat(manager): add task progress watchdog state checks for heartbeat-based suspected stale Worker detection, including long-running step grace windows (#947).
 - fix(agent): update file-sharing path guidance for CoPaw and Team Leader agents to use `/root/hiclaw-fs/agents/...` instead of the retired `/root/.hiclaw-worker/...` path.
 - feat(controller): add per-agent `spec.resources` support for Manager, Worker, Team Leader, and Team Worker CRDs.
 

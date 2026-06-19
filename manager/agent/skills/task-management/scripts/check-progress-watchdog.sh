@@ -69,6 +69,18 @@ _fingerprint() {
     fi
 }
 
+_expected_next_update_at() {
+    awk '
+        BEGIN { IGNORECASE = 1 }
+        /^[[:space:]]*-[[:space:]]*Expected next update:[[:space:]]*/ {
+            sub(/^[[:space:]]*-[[:space:]]*Expected next update:[[:space:]]*/, "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            print
+            exit
+        }
+    '
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --task-id) TASK_ID="$2"; shift 2 ;;
@@ -121,11 +133,16 @@ if [ -z "${latest_block}" ]; then
 fi
 
 fingerprint="$(printf '%s' "${latest_block}" | _fingerprint)"
+expected_next_update_at="$(printf '%s\n' "${latest_block}" | _expected_next_update_at)"
 previous_fingerprint=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id) | .last_progress_fingerprint // empty' "${STATE_FILE}")
 previous_count=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id) | .stale_heartbeat_count // 0' "${STATE_FILE}")
 now="$(_ts)"
 
-if printf '%s\n' "${latest_block}" | grep -Eiq '\b(blocked|blocker)\b'; then
+if [ -n "${expected_next_update_at}" ] && [[ "${expected_next_update_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "${expected_next_update_at}" > "${now}" ]]; then
+    status="long_running"
+    count=0
+    action="progress_long_running"
+elif printf '%s\n' "${latest_block}" | grep -Eiq '\b(blocked|blocker)\b'; then
     status="blocked"
     count=0
     action="progress_blocked"
@@ -146,15 +163,17 @@ jq --arg id "${TASK_ID}" \
    --arg now "${now}" \
    --arg fingerprint "${fingerprint}" \
    --arg action "${action}" \
-    --arg summary "${summary}" \
-    --argjson count "${count}" '
+   --arg summary "${summary}" \
+   --arg expected_next_update_at "${expected_next_update_at}" \
+   --argjson count "${count}" '
     (.active_tasks[] | select(.task_id == $id)) |= (
-        (if $action == "progress_changed" or $action == "progress_blocked" then .last_progress_at = $now else . end)
+        (if $action == "progress_changed" or $action == "progress_blocked" or $action == "progress_long_running" then .last_progress_at = $now else . end)
         | .last_progress_fingerprint = $fingerprint
         | .stale_heartbeat_count = $count
         | .last_watchdog_action = $action
         | .last_watchdog_checked_at = $now
         | .last_progress_summary = $summary
+        | (if $expected_next_update_at != "" then .expected_next_update_at = $expected_next_update_at else del(.expected_next_update_at) end)
     )
     | .updated_at = $now
 ' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
@@ -164,6 +183,7 @@ jq -n \
     --arg status "${status}" \
     --arg last_progress_summary "${summary}" \
     --arg last_watchdog_action "${action}" \
+    --arg expected_next_update_at "${expected_next_update_at}" \
     --argjson stale_heartbeat_count "${count}" \
     '{
         task_id: $task_id,
@@ -171,4 +191,4 @@ jq -n \
         stale_heartbeat_count: $stale_heartbeat_count,
         last_progress_summary: $last_progress_summary,
         last_watchdog_action: $last_watchdog_action
-    }'
+    } + (if $expected_next_update_at != "" then {expected_next_update_at: $expected_next_update_at} else {} end)'

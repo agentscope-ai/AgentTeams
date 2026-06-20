@@ -75,6 +75,24 @@ def _patch_copaw_paths(working_dir: Path) -> None:
     except (ImportError, AttributeError):
         pass
 
+    # copaw.app.channels.registry binds CUSTOM_CHANNELS_DIR via
+    # `from ...constant import CUSTOM_CHANNELS_DIR` at import time, so it keeps
+    # a STALE copy of the default path even after we patch copaw.constant above.
+    # _discover_custom_channels() / register_custom_channel_routes() read this
+    # module global at CALL time, so rebinding it here (before ChannelManager
+    # starts) makes them see our working_dir/custom_channels regardless of
+    # import order. Without this the patched matrix_channel.py is never
+    # discovered and copaw falls back to its builtin (broken) Matrix channel.
+    try:
+        import copaw.app.channels.registry as _channels_registry
+        _channels_registry.CUSTOM_CHANNELS_DIR = working_dir / "custom_channels"
+        logger.info(
+            "bridge: patched channels registry CUSTOM_CHANNELS_DIR -> %s",
+            _channels_registry.CUSTOM_CHANNELS_DIR,
+        )
+    except ImportError:
+        pass
+
 
 def bridge_openclaw_to_copaw(
     openclaw_cfg: dict[str, Any],

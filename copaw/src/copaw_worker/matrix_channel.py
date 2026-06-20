@@ -223,6 +223,44 @@ class MatrixChannel(BaseChannel):
             return payload.get("sender_id") or ""
         return getattr(payload, "session_id", "") or ""
 
+    def _content_has_text(self, contents: list) -> bool:
+        """Override to also recognize plain-dict content parts.
+
+        copaw's base ``_content_has_text`` only matches Content objects
+        (``getattr(c, 'type') == ContentType.TEXT``). This channel
+        builds ``content_parts`` as plain dicts
+        ``{'type': 'text', 'text': ...}`` which are only converted to
+        Content objects later in ``build_agent_request_from_native``.
+        Without this override the dicts fail the text check before that
+        conversion runs, so ``_apply_no_text_debounce`` buffers every
+        incoming message and the agent never runs (the worker never
+        replies). Mirror the dict shape produced by
+        ``_build_content_part`` / ``_apply_history_to_parts``.
+        """
+        for c in contents or []:
+            if isinstance(c, dict):
+                if c.get("type") == "text" and (c.get("text") or "").strip():
+                    return True
+                continue
+            t = getattr(c, "type", None)
+            if t == ContentType.TEXT and (getattr(c, "text", None) or "").strip():
+                return True
+        return False
+
+    def _content_has_audio(self, contents: list) -> bool:
+        """Override to also recognize plain-dict audio parts (see
+        ``_content_has_text``): audio-only messages must bypass the
+        no-text debounce, otherwise they are buffered forever.
+        """
+        for c in contents or []:
+            if isinstance(c, dict):
+                if c.get("type") == "audio":
+                    return True
+                continue
+            if getattr(c, "type", None) == ContentType.AUDIO:
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------

@@ -6,19 +6,19 @@ import "fmt"
 type Action string
 
 const (
-	ActionCreate      Action = "create"
-	ActionUpdate      Action = "update"
-	ActionDelete      Action = "delete"
-	ActionGet         Action = "get"
-	ActionList        Action = "list"
-	ActionWake        Action = "wake"
-	ActionSleep       Action = "sleep"
-	ActionEnsureReady Action = "ensure-ready"
-	ActionReady       Action = "ready"
-	ActionSTS         Action = "sts"
+	ActionCreate             Action = "create"
+	ActionUpdate             Action = "update"
+	ActionDelete             Action = "delete"
+	ActionGet                Action = "get"
+	ActionList               Action = "list"
+	ActionWake               Action = "wake"
+	ActionSleep              Action = "sleep"
+	ActionEnsureReady        Action = "ensure-ready"
+	ActionReady              Action = "ready"
+	ActionSTS                Action = "sts"
 	ActionStatus             Action = "status"
 	ActionRefreshMatrixToken Action = "refresh-matrix-token"
-	ActionGateway     Action = "gateway"
+	ActionGateway            Action = "gateway"
 )
 
 // AuthzRequest describes the resource being accessed.
@@ -73,7 +73,11 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		return deny(caller, req)
 
 	case "credentials":
-		if req.Action == ActionSTS {
+		// Credential endpoints (STS + Matrix token refresh) are always
+		// self-scoped: the issued token / refreshed credential is bound to the
+		// calling identity, and these routes never embed a target ResourceName
+		// (the handler uses caller.Username), so no requireSelf check is needed.
+		if req.Action == ActionSTS || req.Action == ActionRefreshMatrixToken {
 			return nil
 		}
 		return deny(caller, req)
@@ -107,11 +111,11 @@ func (a *Authorizer) authorizeWorker(caller *CallerIdentity, req AuthzRequest) e
 		return a.authorizeWorkerSelfAction(caller, req)
 
 	case "credentials":
-		// Credential endpoints (STS refresh) are always self-scoped: the
-		// issued token carries policy based on the calling worker's
-		// identity. We don't check ResourceName because these endpoints
-		// never embed one.
-		if req.Action == ActionSTS {
+		// Credential endpoints (STS + Matrix token refresh) are always
+		// self-scoped: the issued token / refreshed credential is bound to the
+		// calling worker, and these routes never embed a target ResourceName
+		// (the handler uses caller.Username), so no requireSelf check is needed.
+		if req.Action == ActionSTS || req.Action == ActionRefreshMatrixToken {
 			return nil
 		}
 		return deny(caller, req)
@@ -130,8 +134,6 @@ func (a *Authorizer) authorizeWorkerSelfAction(caller *CallerIdentity, req Authz
 	case ActionGet:
 		return a.requireSelf(caller, req)
 	case ActionStatus:
-		return a.requireSelf(caller, req)
-	case ActionRefreshMatrixToken:
 		return a.requireSelf(caller, req)
 	default:
 		return deny(caller, req)

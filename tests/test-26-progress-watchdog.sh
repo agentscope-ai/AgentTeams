@@ -28,11 +28,29 @@ cat > "${HOME}/state.json" <<'JSON'
       "room_id": "!alice:example"
     },
     {
+      "task_id": "task-001",
+      "title": "Duplicate non-finite task should not be touched",
+      "type": "infinite",
+      "assigned_to": "alice",
+      "room_id": "!alice:example",
+      "stale_heartbeat_count": 99,
+      "last_watchdog_action": "do_not_touch"
+    },
+    {
       "task_id": "task-002",
       "title": "Missing progress log",
       "type": "finite",
       "assigned_to": "bob",
       "room_id": "!bob:example"
+    },
+    {
+      "task_id": "task-002",
+      "title": "Duplicate missing-progress non-finite task should not be touched",
+      "type": "infinite",
+      "assigned_to": "bob",
+      "room_id": "!bob:example",
+      "stale_heartbeat_count": 42,
+      "last_watchdog_action": "do_not_touch"
     },
     {
       "task_id": "task-003",
@@ -107,19 +125,25 @@ run_watchdog() {
 first="$(run_watchdog task-001)"
 assert_json_field "${first}" '.status' 'normal'
 assert_json_field "${first}" '.stale_heartbeat_count' '0'
-first_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-001") | .last_progress_at' "${HOME}/state.json")"
+first_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-001" and .type == "finite") | .last_progress_at' "${HOME}/state.json")"
 
 sleep 1
 second="$(run_watchdog task-001)"
 assert_json_field "${second}" '.status' 'repeated'
 assert_json_field "${second}" '.stale_heartbeat_count' '1'
 
-count="$(jq -r '.active_tasks[] | select(.task_id == "task-001") | .stale_heartbeat_count' "${HOME}/state.json")"
-if [ "${count}" != "1" ]; then
-    echo "FAIL: state.json stale_heartbeat_count should be 1, got ${count}" >&2
+finite_count="$(jq -r '.active_tasks[] | select(.task_id == "task-001" and .type == "finite") | .stale_heartbeat_count' "${HOME}/state.json")"
+duplicate_count="$(jq -r '.active_tasks[] | select(.task_id == "task-001" and .type == "infinite") | .stale_heartbeat_count' "${HOME}/state.json")"
+duplicate_action="$(jq -r '.active_tasks[] | select(.task_id == "task-001" and .type == "infinite") | .last_watchdog_action' "${HOME}/state.json")"
+if [ "${finite_count}" != "1" ]; then
+    echo "FAIL: finite state.json stale_heartbeat_count should be 1, got ${finite_count}" >&2
     exit 1
 fi
-second_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-001") | .last_progress_at' "${HOME}/state.json")"
+if [ "${duplicate_count}" != "99" ] || [ "${duplicate_action}" != "do_not_touch" ]; then
+    echo "FAIL: duplicate non-finite task-001 entry was modified" >&2
+    exit 1
+fi
+second_progress_at="$(jq -r '.active_tasks[] | select(.task_id == "task-001" and .type == "finite") | .last_progress_at' "${HOME}/state.json")"
 if [ "${second_progress_at}" != "${first_progress_at}" ]; then
     echo "FAIL: repeated progress should not refresh last_progress_at" >&2
     exit 1
@@ -142,6 +166,12 @@ assert_json_field "${third}" '.stale_heartbeat_count' '0'
 missing="$(run_watchdog task-002)"
 assert_json_field "${missing}" '.status' 'unknown'
 assert_json_field "${missing}" '.stale_heartbeat_count' '1'
+missing_duplicate_count="$(jq -r '.active_tasks[] | select(.task_id == "task-002" and .type == "infinite") | .stale_heartbeat_count' "${HOME}/state.json")"
+missing_duplicate_action="$(jq -r '.active_tasks[] | select(.task_id == "task-002" and .type == "infinite") | .last_watchdog_action' "${HOME}/state.json")"
+if [ "${missing_duplicate_count}" != "42" ] || [ "${missing_duplicate_action}" != "do_not_touch" ]; then
+    echo "FAIL: duplicate non-finite task-002 entry was modified" >&2
+    exit 1
+fi
 
 blocked="$(run_watchdog task-003)"
 assert_json_field "${blocked}" '.status' 'blocked'

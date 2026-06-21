@@ -131,7 +131,7 @@ if [ -z "${latest_block}" ]; then
     now="$(_ts)"
     tmp="$(mktemp)"
     jq --arg id "${TASK_ID}" --arg now "${now}" '
-        (.active_tasks[] | select(.task_id == $id)) |= (
+        (.active_tasks[] | select(.task_id == $id and .type == "finite")) |= (
             .stale_heartbeat_count = ((.stale_heartbeat_count // 0) + 1)
             | .last_watchdog_action = "missing_progress"
             | .last_watchdog_checked_at = $now
@@ -139,7 +139,7 @@ if [ -z "${latest_block}" ]; then
         | .updated_at = $now
     ' "${STATE_FILE}" > "${tmp}" && mv "${tmp}" "${STATE_FILE}"
 
-    count=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id) | .stale_heartbeat_count // 0' "${STATE_FILE}")
+    count=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id and .type == "finite") | .stale_heartbeat_count // 0' "${STATE_FILE}")
     jq -n \
         --arg task_id "${TASK_ID}" \
         --arg status "unknown" \
@@ -151,8 +151,8 @@ fi
 
 fingerprint="$(printf '%s' "${latest_block}" | _fingerprint)"
 expected_next_update_at="$(printf '%s\n' "${latest_block}" | _expected_next_update_at)"
-previous_fingerprint=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id) | .last_progress_fingerprint // empty' "${STATE_FILE}")
-previous_count=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id) | .stale_heartbeat_count // 0' "${STATE_FILE}")
+previous_fingerprint=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id and .type == "finite") | .last_progress_fingerprint // empty' "${STATE_FILE}")
+previous_count=$(jq -r --arg id "${TASK_ID}" '.active_tasks[] | select(.task_id == $id and .type == "finite") | .stale_heartbeat_count // 0' "${STATE_FILE}")
 now="$(_ts)"
 progress_changed="false"
 if [ "${fingerprint}" != "${previous_fingerprint}" ]; then
@@ -188,7 +188,7 @@ jq --arg id "${TASK_ID}" \
    --arg expected_next_update_at "${expected_next_update_at}" \
    --arg progress_changed "${progress_changed}" \
    --argjson count "${count}" '
-    (.active_tasks[] | select(.task_id == $id)) |= (
+    (.active_tasks[] | select(.task_id == $id and .type == "finite")) |= (
         (if $progress_changed == "true" then .last_progress_at = $now else . end)
         | .last_progress_fingerprint = $fingerprint
         | .stale_heartbeat_count = $count

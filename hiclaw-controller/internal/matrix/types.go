@@ -19,6 +19,16 @@ type Config struct {
 	AppServiceToken           string // as_token — never logged or exposed to agents
 	AppServiceHSToken         string // hs_token — reserved for future AS HTTP receiver
 	AppServiceSenderLocalpart string // e.g. "hiclaw-controller"
+
+	// AppServiceUserNamespaceRegex optionally narrows the exclusive Matrix
+	// user namespace claimed by the AppService. When empty, the controller
+	// claims the broad "@.*:<domain>" namespace, which is ONLY safe when the
+	// homeserver is exclusively HiClaw-managed (the only supported mode —
+	// enforced by Helm's matrix.mode=managed and the embedded Tuwunel
+	// install). Set this to a restrictive regex (e.g. "@hiclaw-.*:<domain>")
+	// when running AppService mode against a shared/existing homeserver so
+	// the as_token cannot impersonate non-HiClaw local users.
+	AppServiceUserNamespaceRegex string
 }
 
 // EnsureUserRequest describes a user to register or log in.

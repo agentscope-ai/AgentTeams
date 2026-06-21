@@ -393,7 +393,6 @@ func (c *TuwunelClient) doJSONWithASToken(ctx context.Context, method, path stri
 	return c.doJSON(ctx, method, path, c.config.AppServiceToken, reqBody, respOut)
 }
 
-
 // VerifyAccessToken checks whether a user access token is still valid
 // by calling GET /_matrix/client/v3/account/whoami.
 func (c *TuwunelClient) VerifyAccessToken(ctx context.Context, accessToken string) error {

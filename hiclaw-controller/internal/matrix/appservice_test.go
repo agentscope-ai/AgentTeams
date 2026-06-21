@@ -11,6 +11,48 @@ import (
 
 // helperAdminServer creates a test server that handles admin login, admin room
 // resolution, and message sending. It captures the sent admin command body.
+// TestRenderAppServiceRegistration_DefaultBroadNamespace documents and pins
+// the managed-homeserver security model: with no override the AppService
+// claims the exclusive "@.*:<domain>" namespace (safe only for an
+// exclusively HiClaw-managed homeserver).
+func TestRenderAppServiceRegistration_DefaultBroadNamespace(t *testing.T) {
+	cfg := Config{
+		Domain:                    "test.domain",
+		AppServiceID:              "hiclaw-controller",
+		AppServiceToken:           "as",
+		AppServiceHSToken:         "hs",
+		AppServiceSenderLocalpart: "hiclaw-controller",
+	}
+	reg := RenderAppServiceRegistration(cfg)
+	if len(reg.Namespaces.Users) != 1 {
+		t.Fatalf("want 1 user namespace, got %d", len(reg.Namespaces.Users))
+	}
+	u := reg.Namespaces.Users[0]
+	if !u.Exclusive || u.Regex != "@.*:test.domain" {
+		t.Errorf("user namespace = {Exclusive:%v, Regex:%q}, want {true, @.*:test.domain}", u.Exclusive, u.Regex)
+	}
+}
+
+// TestRenderAppServiceRegistration_NarrowedNamespace verifies the operator
+// escape hatch: setting AppServiceUserNamespaceRegex narrows impersonation
+// scope so the as_token cannot act as non-HiClaw local users on a shared
+// homeserver.
+func TestRenderAppServiceRegistration_NarrowedNamespace(t *testing.T) {
+	cfg := Config{
+		Domain:                       "test.domain",
+		AppServiceID:                 "hiclaw-controller",
+		AppServiceToken:              "as",
+		AppServiceHSToken:            "hs",
+		AppServiceSenderLocalpart:    "hiclaw-controller",
+		AppServiceUserNamespaceRegex: "@hiclaw-.*:test.domain",
+	}
+	reg := RenderAppServiceRegistration(cfg)
+	u := reg.Namespaces.Users[0]
+	if !u.Exclusive || u.Regex != "@hiclaw-.*:test.domain" {
+		t.Errorf("narrowed user namespace = {Exclusive:%v, Regex:%q}, want {true, @hiclaw-.*:test.domain}", u.Exclusive, u.Regex)
+	}
+}
+
 func helperAdminServer(t *testing.T, onMessage func(body string)) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,13 +79,13 @@ func helperAdminServer(t *testing.T, onMessage func(body string)) *httptest.Serv
 
 func newTestASClient(serverURL string, httpClient *http.Client) *TuwunelClient {
 	return NewTuwunelClient(Config{
-		ServerURL:               serverURL,
-		Domain:                  "test.domain",
-		AdminUser:               "admin",
-		AdminPassword:           "adminpw",
-		AppServiceID:            "hiclaw-controller",
-		AppServiceToken:         "test-as-token",
-		AppServiceHSToken:       "test-hs-token",
+		ServerURL:                 serverURL,
+		Domain:                    "test.domain",
+		AdminUser:                 "admin",
+		AdminPassword:             "adminpw",
+		AppServiceID:              "hiclaw-controller",
+		AppServiceToken:           "test-as-token",
+		AppServiceHSToken:         "test-hs-token",
 		AppServiceSenderLocalpart: "hiclaw-controller",
 	}, httpClient)
 }

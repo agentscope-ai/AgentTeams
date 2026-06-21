@@ -9,10 +9,30 @@ import (
 )
 
 // RenderAppServiceRegistration builds an AppServiceRegistration from the
-// current Matrix config. The registration covers all local users (exclusive)
-// and HiClaw-managed room aliases.
+// current Matrix config.
+//
+// Security model — user namespace:
+//
+//	By default the registration claims the exclusive "@.*:<domain>" user
+//	namespace, which means the as_token can impersonate EVERY local user on
+//	the homeserver. This is only safe when the homeserver is exclusively
+//	HiClaw-managed — i.e. HiClaw provisions the homeserver and every local
+//	user on it. That is the only supported deployment mode: the embedded
+//	install ships an embedded Tuwunel, and Helm's 00-validate.yaml rejects
+//	anything but matrix.provider=tuwunel + matrix.mode=managed.
+//
+//	DO NOT enable AppService mode against a shared or pre-existing
+//	homeserver that also hosts non-HiClaw users. Doing so would let the
+//	as_token impersonate those users. Instead set
+//	HICLAW_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX to a restrictive regex
+//	(e.g. "@hiclaw-.*:<domain>") that covers only HiClaw-managed localparts,
+//	and ensure HiClaw-managed users are created under that prefix.
 func RenderAppServiceRegistration(cfg Config) AppServiceRegistration {
 	domain := cfg.Domain
+	userRegex := cfg.AppServiceUserNamespaceRegex
+	if userRegex == "" {
+		userRegex = fmt.Sprintf("@.*:%s", domain)
+	}
 	return AppServiceRegistration{
 		ID:              cfg.AppServiceID,
 		URL:             nil, // Phase 1: no push from homeserver
@@ -22,7 +42,7 @@ func RenderAppServiceRegistration(cfg Config) AppServiceRegistration {
 		RateLimited:     false,
 		Namespaces: AppServiceNamespaces{
 			Users: []AppServiceNamespace{
-				{Exclusive: true, Regex: fmt.Sprintf("@.*:%s", domain)},
+				{Exclusive: true, Regex: userRegex},
 			},
 			Aliases: []AppServiceNamespace{
 				{Exclusive: false, Regex: fmt.Sprintf("#hiclaw-.*:%s", domain)},
@@ -70,7 +90,6 @@ func (c *TuwunelClient) RegisterAppService(ctx context.Context, reg AppServiceRe
 
 	return nil
 }
-
 
 // UnregisterAppService removes the AppService registration from the homeserver.
 // Uses the admin bot command; works regardless of the current as_token validity

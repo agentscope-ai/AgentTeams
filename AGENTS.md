@@ -6,6 +6,19 @@ This file helps AI Agents (and human developers) quickly understand the project 
 
 HiClaw is an open-source Agent Teams system that uses IM (Matrix protocol) for multi-Agent collaboration with human-in-the-loop oversight. It consists of a Manager Agent (coordinator) and Worker Agents (task executors), connected via an AI Gateway (Higress), Matrix Homeserver (Tuwunel), and HTTP file storage (MinIO or cloud OSS). Production-style deployments use the Kubernetes operator and Helm chart; local installs use Docker Compose scripts under `install/`.
 
+## Current Initiatives
+
+Active cross-cutting efforts that affect multiple PRs. **Check this section before reviewing or submitting code** — your change may overlap with or depend on one of these initiatives.
+
+| Initiative | Tracking | Impact |
+|------------|----------|--------|
+| **HiClaw → AgentTeams rename** | #861, PR #951 | All new `HICLAW_*` env vars must also support `AGENTTEAMS_*` via `shared/lib/resolve-env.sh`. New CRDs must register under both `hiclaw.io` and `agentteams.io` groups. Phase 0 is backwards-compatible; existing `HICLAW_*` vars keep working. |
+| **CRD status.conditions** | #924, PR #946 | Controller reconcilers are being refactored to report structured conditions. Changes to reconciler status logic should coordinate with this PR. |
+| **Sandbox worker runtime** | PR #941 | Adds a new `sandbox` runtime option. Changes to worker lifecycle, Dockerfile, or runtime selection should be aware of this addition. |
+| **Team / Worker CRD decoupling** | PR #910 | Separates org membership from runtime definition. Changes to Team or Worker CRD specs should check compatibility. |
+
+> **Maintainers**: update this table when a major initiative starts or lands. Remove entries once merged and released. Keep it short — only efforts that span multiple files or affect other contributors' PRs belong here.
+
 ## Project Structure
 
 ```

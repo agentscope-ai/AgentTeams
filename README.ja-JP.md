@@ -30,6 +30,8 @@
 
 ## ニュース
 
+- **2026-05-27**: [Release Notes](https://github.com/agentscope-ai/HiClaw/releases/tag/v1.1.2) — HiClaw v1.1.2：インストーラのデフォルト Worker ランタイムを QwenPaw に変更し keep-all アップグレードフローをサポート、Team に人間コーディネーターを追加し Team Leader の協調ツールを刷新、Nacos リモートスキル対応と `sts-hiclaw` / `ai-registry` STS 認証、Worker の CR 名と Runtime 名の分離、コントローラーの reconcile メトリクスと正常終了を追加。
+- **2026-05-07**: [Release Notes](https://github.com/agentscope-ai/HiClaw/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — HiClaw v1.1.1：Worker/Manager/Team CRD と Team Leader 上の宣言的 MCP（破壊的変更）、CR の `spec.env` カスタム環境変数、Token Plan・Qwen Cloud international・`qwen3.6-plus` モデル、コントローラー RBAC の名前空間スコープ化、Worker パッケージの `SOUL.md` 任意化。
 - **2026-04-24**: [English](blog/hiclaw-1.1.0-release.md) | [中文](blog/zh-cn/hiclaw-1.1.0-release.md) — HiClaw v1.1.0：Kubernetes ネイティブコントロールプレーン、Hermes 自律コーディング Agent ランタイム、1.7 GB イメージ縮小、hiclaw CLI がシェルスクリプトに代わる。
 - **2026-04-14**: [English](blog/hiclaw-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/hiclaw-k8s-native-multi-agent-collaboration.zh-CN.md) — Kubernetes ネイティブなマルチ Agent 協調オーケストレーションとしての HiClaw の解説。
 - **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — HiClaw 1.0.9：宣言型リソース管理、Worker テンプレートマーケット、Manager QwenPaw、Nacos Skills 登録センターなど。

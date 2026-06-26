@@ -1,5 +1,5 @@
 <h1 align="center">
-    <img src="https://img.alicdn.com/imgextra/i2/O1CN01hTYQMO28B3H9qP7RV_!!6000000007893-2-tps-1490-392.png" alt="HiClaw"  width="290" height="72.5">
+    <img src="https://img.alicdn.com/imgextra/i3/O1CN01hRhtys1Y3svmSnfhX_!!6000000003004-2-tps-478-472.png" alt="AgentTeams"  width="290" height="290">
   <br>
 </h1>
 

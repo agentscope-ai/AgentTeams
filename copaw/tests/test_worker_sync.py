@@ -7,10 +7,13 @@ from copaw_worker import sync
 from copaw_worker.sync import FileSync
 
 
-def test_ensure_alias_skips_static_alias_in_k8s_mode(monkeypatch, tmp_path):
+def test_ensure_alias_skips_static_alias_in_k8s_mode_when_mc_host_exists(
+    monkeypatch, tmp_path
+):
     calls = []
 
     monkeypatch.setenv("HICLAW_RUNTIME", "k8s")
+    monkeypatch.setenv("MC_HOST_hiclaw", "http://token@example.com")
     monkeypatch.setattr(sync, "_mc", lambda *args, **_kwargs: calls.append(args))
 
     fs = FileSync(
@@ -26,6 +29,32 @@ def test_ensure_alias_skips_static_alias_in_k8s_mode(monkeypatch, tmp_path):
 
     assert fs._alias_set is True
     assert calls == []
+
+
+def test_ensure_alias_falls_back_to_static_alias_in_local_k8s(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    monkeypatch.setenv("HICLAW_RUNTIME", "k8s")
+    monkeypatch.delenv("MC_HOST_hiclaw", raising=False)
+    monkeypatch.setattr(sync, "_mc", lambda *args, **_kwargs: calls.append(args))
+
+    fs = FileSync(
+        endpoint="minio:9000",
+        access_key="tt",
+        secret_key="secret",
+        bucket="hiclaw",
+        worker_name="tt",
+        local_dir=tmp_path,
+    )
+
+    fs._ensure_alias()
+
+    assert fs._alias_set is True
+    assert calls == [
+        ("alias", "set", "hiclaw", "http://minio:9000", "tt", "secret")
+    ]
 
 
 def test_filesync_fallback_uses_copaw_working_dir_parent(monkeypatch, tmp_path):

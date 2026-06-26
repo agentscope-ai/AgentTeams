@@ -279,7 +279,8 @@ class FileSync:
 
         Cloud mode (RRSA/STS): refresh credentials before every mc batch
         via the shared shell function (lazy, no-op when token is valid).
-        Local mode: set mc alias once with static credentials.
+        Local and self-hosted k8s modes: set mc alias once with static
+        credentials, unless k8s already injected ``MC_HOST_hiclaw``.
         """
         runtime = os.environ.get("HICLAW_RUNTIME", "<unset>")
         mc_host_set = bool(os.environ.get(f"MC_HOST_{_MC_ALIAS}"))
@@ -297,8 +298,11 @@ class FileSync:
             mc_host_set,
             controller_url,
         )
-        if self._k8s_mode:
-            logger.info("_ensure_alias: k8s mode, skipping mc alias set (mc-wrapper handles credentials)")
+        if self._k8s_mode and mc_host_set:
+            logger.info(
+                "_ensure_alias: k8s mode with MC_HOST_%s, skipping static alias set",
+                _MC_ALIAS,
+            )
             self._alias_set = True
             return
         if self._cloud_mode:
@@ -314,7 +318,7 @@ class FileSync:
         if self._alias_set:
             logger.info("_ensure_alias: credential path=static, alias already set")
             return
-        # Local mode: static credentials, set alias once
+        # Local and self-hosted k8s modes use static credentials.
         if self.endpoint.startswith("http"):
             url = self.endpoint
         else:

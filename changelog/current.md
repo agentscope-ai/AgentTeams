@@ -13,6 +13,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 **Bug Fixes**
 
+- **CoPaw Worker k8s storage**: CoPaw workers in self-hosted k8s deployments now fall back to static MinIO alias setup when `MC_HOST_hiclaw` is not injected, restoring startup `mc mirror` behavior while preserving cloud STS mode.
 - **CoPaw Worker heartbeat**: CoPaw worker templates now seed heartbeat at a 10-minute interval so Team Leader agents created from the worker template can run heartbeat turns without requiring an explicit Team CR heartbeat spec.
 - **Helm CRDs**: Removed unsupported `propertyNames` schema fields from Worker and Team CRDs so Kubernetes API servers accept the chart CRDs.
 - **CoPaw local runtime paths**: CoPaw direct-run defaults now honor `COPAW_INSTALL_DIR` and `COPAW_WORKING_DIR` before falling back to local home-directory paths, while container entrypoints can continue to pass explicit directories.

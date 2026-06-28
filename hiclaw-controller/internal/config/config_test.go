@@ -1,8 +1,16 @@
 package config
 
 import (
+	"os"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	// Provide AS tokens for all tests so LoadConfig() does not panic.
+	os.Setenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN", "test-as-token")
+	os.Setenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN", "test-hs-token")
+	os.Exit(m.Run())
+}
 
 func TestNormalizeMinIOS3Endpoint(t *testing.T) {
 	tests := []struct {
@@ -32,6 +40,8 @@ func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 		}
 	}`)
 	t.Setenv("HICLAW_DEFAULT_MODEL", "qwen-default")
+	t.Setenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN", "test-as-token-for-unit-tests")
+	t.Setenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN", "test-hs-token-for-unit-tests")
 
 	cfg := LoadConfig()
 

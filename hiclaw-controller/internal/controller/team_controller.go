@@ -137,7 +137,7 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 		return teamAdminActor{}, fmt.Errorf("team admin matrixUserId %q does not match Human %s/%s matrix user %q",
 			t.Spec.Admin.MatrixUserID, key.Namespace, key.Name, matrixUserID)
 	}
-	if human.Status.InitialPassword == "" {
+	if !r.Provisioner.MatrixAppServiceEnabled() && human.Status.InitialPassword == "" {
 		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no initial password; cannot obtain Matrix token",
 			key.Namespace, key.Name)
 	}

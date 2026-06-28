@@ -101,6 +101,7 @@ type Worker struct {
 	Status            WorkerStatus `json:"status,omitempty"`
 }
 
+
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
@@ -151,6 +152,7 @@ type WorkerSpec struct {
 	// embed WorkerSpec-shaped hashes keep a stable spec hash when the
 	// field is absent.
 	Labels map[string]string `json:"labels,omitempty"`
+
 }
 
 // DesiredContainerMan returns the effective desired containerManaged, defaulting to true.
@@ -293,6 +295,7 @@ type LeaderSpec struct {
 	// hashMemberSourceSpec stability for Teams that never set this
 	// field.
 	Labels map[string]string `json:"labels,omitempty"`
+
 }
 
 type TeamLeaderHeartbeatSpec struct {
@@ -334,6 +337,7 @@ type TeamWorkerSpec struct {
 	// system labels (see WorkerSpec.Labels godoc). omitempty preserves
 	// hashMemberSourceSpec stability for existing Teams.
 	Labels map[string]string `json:"labels,omitempty"`
+
 }
 
 // EffectiveWorkerName returns the runtime identity key for a team leader.
@@ -343,6 +347,7 @@ func (s LeaderSpec) EffectiveWorkerName() string {
 		return s.WorkerName
 	}
 	return s.Name
+
 }
 
 // EffectiveWorkerName returns the runtime identity key for a team worker.
@@ -540,6 +545,7 @@ type ManagerSpec struct {
 	// godoc): pod-template < CR metadata.labels < CR spec.labels <
 	// controller system labels.
 	Labels map[string]string `json:"labels,omitempty"`
+
 }
 
 // DesiredState returns the effective desired state, defaulting to "Running".
@@ -548,6 +554,7 @@ func (s ManagerSpec) DesiredState() string {
 		return *s.State
 	}
 	return "Running"
+
 }
 
 type ManagerConfig struct {

@@ -28,6 +28,7 @@ Environment variables:
 	rootCmd.AddCommand(statusCmd())
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(llmPreflightCmd())
+	rootCmd.AddCommand(rotateCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

@@ -366,4 +366,8 @@ func (m *MockProvisioner) ServiceAccountCallCounts() (ensure, delete int) {
 	return len(m.Calls.EnsureServiceAccount), len(m.Calls.DeleteServiceAccount)
 }
 
+func (m *MockProvisioner) MatrixAppServiceEnabled() bool {
+	return false
+}
+
 var _ service.WorkerProvisioner = (*MockProvisioner)(nil)

@@ -65,7 +65,8 @@ if [ "${HICLAW_RUNTIME}" = "aliyun" ] || [ "${HICLAW_RUNTIME}" = "k8s" ]; then
         # K8s mode: controller handles initialization (admin registration, Higress setup).
         # Manager only needs credentials injected by the ManagerReconciler.
         : "${HICLAW_MANAGER_GATEWAY_KEY:?HICLAW_MANAGER_GATEWAY_KEY is required (injected by controller)}"
-        : "${HICLAW_MANAGER_PASSWORD:?HICLAW_MANAGER_PASSWORD is required (injected by controller)}"
+        # HICLAW_MANAGER_PASSWORD is optional: not needed in AppService mode
+        # (token obtained via AS login), only required in legacy password mode.
     else
         # Cloud (aliyun) mode: Manager still does its own initialization
         : "${HICLAW_REGISTRATION_TOKEN:?HICLAW_REGISTRATION_TOKEN is required}"
@@ -220,13 +221,20 @@ if [ "${HICLAW_RUNTIME}" != "aliyun" ] && [ "${HICLAW_RUNTIME}" != "k8s" ]; then
 fi
 
 # ============================================================
-# Register Matrix users via Registration API (single-step, no UIAA)
-# K8s mode: skip — controller Initializer + ManagerReconciler already did this
+# Obtain Manager Matrix access token.
+#
+# Priority:
+#   1. Pre-injected token (HICLAW_MANAGER_MATRIX_TOKEN) — set by the
+#      controller in both AppService mode (where no password exists) and
+#      legacy mode (to avoid a redundant login round-trip).
+#   2. Password-based login — fallback for containers started without
+#      controller involvement (manual docker run, legacy installs).
 # ============================================================
-if [ "${HICLAW_RUNTIME}" = "k8s" ]; then
-    log "K8s mode: skipping Matrix registration (handled by controller)"
-    # Controller injects HICLAW_MANAGER_PASSWORD via env; login to get token
-    log "Obtaining Manager Matrix access token..."
+if [ -n "${HICLAW_MANAGER_MATRIX_TOKEN:-}" ]; then
+    MANAGER_TOKEN="${HICLAW_MANAGER_MATRIX_TOKEN}"
+    log "Manager Matrix token pre-injected by controller (token prefix: ${MANAGER_TOKEN:0:10}...)"
+elif [ "${HICLAW_RUNTIME}" = "k8s" ]; then
+    log "K8s mode: obtaining Manager Matrix token via password login..."
     _LOGIN_RESPONSE=$(curl -s -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
         -d '{

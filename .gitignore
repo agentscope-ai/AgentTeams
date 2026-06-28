@@ -41,9 +41,11 @@ package.json
 pnpm-lock.yaml
 .cursor/
 
-# Compiled binaries
+# Compiled binaries (build outputs of `make build` in hiclaw-controller/);
+# the multi-stage Dockerfiles build from source, so never commit these.
 hiclaw-controller/controller
 hiclaw-controller/hiclaw
+hiclaw-controller/bin/
 
 # Build-time agent templates (copied from manager/agent/ during docker build)
 hiclaw-controller/agent/

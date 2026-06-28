@@ -112,6 +112,68 @@ func TestAuthorizer_WorkerCannotMutate(t *testing.T) {
 	}
 }
 
+// TestAuthorizer_WorkerCredentialsRefreshMatrixToken covers the self-scoped
+// POST /api/v1/credentials/matrix-token route: a Worker must be able to
+// refresh its own Matrix token (the handler uses caller.Username, the route
+// never embeds a target ResourceName) and must still be allowed STS, while
+// other credential actions are denied. Previously this route landed in the
+// "credentials" branch which only permitted ActionSTS, so the worker could
+// not recover from a Matrix 401.
+func TestAuthorizer_WorkerCredentialsRefreshMatrixToken(t *testing.T) {
+	az := NewAuthorizer()
+	caller := &CallerIdentity{Role: RoleWorker, Username: "alice", WorkerName: "alice"}
+
+	allowed := []AuthzRequest{
+		{Action: ActionRefreshMatrixToken, ResourceKind: "credentials"},
+		{Action: ActionSTS, ResourceKind: "credentials"},
+	}
+	for _, req := range allowed {
+		if err := az.Authorize(caller, req); err != nil {
+			t.Errorf("worker should be allowed %s credentials, got: %v", req.Action, err)
+		}
+	}
+
+	// ActionRefreshMatrixToken is credentials-scoped only (it refreshes the
+	// caller's own Matrix token via the credentials route); it is not a worker
+	// resource action, so a worker-kind request is denied.
+	if err := az.Authorize(caller, AuthzRequest{Action: ActionRefreshMatrixToken, ResourceKind: "worker", ResourceName: "alice"}); err == nil {
+		t.Error("worker refresh-matrix-token on worker kind should be denied (credentials-scoped action)")
+	}
+
+	// Other credential actions remain denied.
+	denied := []AuthzRequest{
+		{Action: ActionCreate, ResourceKind: "credentials"},
+		{Action: ActionGet, ResourceKind: "credentials"},
+		{Action: ActionDelete, ResourceKind: "credentials"},
+	}
+	for _, req := range denied {
+		if err := az.Authorize(caller, req); err == nil {
+			t.Errorf("worker should be denied %s credentials", req.Action)
+		}
+	}
+}
+
+// TestAuthorizer_TeamLeaderCredentialsRefreshMatrixToken ensures a team leader
+// can also self-refresh its Matrix token via the same self-scoped credential route.
+func TestAuthorizer_TeamLeaderCredentialsRefreshMatrixToken(t *testing.T) {
+	az := NewAuthorizer()
+	caller := &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+
+	allowed := []AuthzRequest{
+		{Action: ActionRefreshMatrixToken, ResourceKind: "credentials"},
+		{Action: ActionSTS, ResourceKind: "credentials"},
+	}
+	for _, req := range allowed {
+		if err := az.Authorize(caller, req); err != nil {
+			t.Errorf("team-leader should be allowed %s credentials, got: %v", req.Action, err)
+		}
+	}
+
+	if err := az.Authorize(caller, AuthzRequest{Action: ActionGet, ResourceKind: "credentials"}); err == nil {
+		t.Error("team-leader should be denied get credentials")
+	}
+}
+
 func TestAuthorizer_NilCaller(t *testing.T) {
 	az := NewAuthorizer()
 	if err := az.Authorize(nil, AuthzRequest{Action: ActionGet, ResourceKind: "worker"}); err == nil {

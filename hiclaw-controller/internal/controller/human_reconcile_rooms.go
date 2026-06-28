@@ -107,7 +107,7 @@ func (r *HumanReconciler) ensureUserToken(ctx context.Context, s *humanScope) st
 	// reconciles fall through to here. Without a stored password we
 	// cannot log in, so return empty and let the caller fall back to
 	// admin-only invite.
-	if s.human.Status.InitialPassword == "" {
+	if !r.Provisioner.MatrixAppServiceEnabled() && s.human.Status.InitialPassword == "" {
 		return ""
 	}
 

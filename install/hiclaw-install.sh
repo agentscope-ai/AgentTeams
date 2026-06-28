@@ -2968,6 +2968,23 @@ install_manager() {
     HICLAW_MINIO_PASSWORD="${HICLAW_MINIO_PASSWORD:-${HICLAW_ADMIN_PASSWORD}}"
     HICLAW_MANAGER_GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-$(generate_key)}"
 
+    # Matrix AppService tokens — generate once during install/upgrade if not provided.
+    # Persisted to env file so they survive controller restarts.
+    HICLAW_MATRIX_APPSERVICE_ENABLED="${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}"
+    export HICLAW_MATRIX_APPSERVICE_ENABLED
+    if [ "${HICLAW_MATRIX_APPSERVICE_ENABLED}" != "false" ] && [ "${HICLAW_MATRIX_APPSERVICE_ENABLED}" != "0" ]; then
+        if [ -z "${HICLAW_MATRIX_APPSERVICE_AS_TOKEN}" ]; then
+            HICLAW_MATRIX_APPSERVICE_AS_TOKEN="$(openssl rand -hex 32)"
+            log "  Auto-generated AppService as_token (saved to env file)"
+        fi
+        if [ -z "${HICLAW_MATRIX_APPSERVICE_HS_TOKEN}" ]; then
+            HICLAW_MATRIX_APPSERVICE_HS_TOKEN="$(openssl rand -hex 32)"
+            log "  Auto-generated AppService hs_token (saved to env file)"
+        fi
+        export HICLAW_MATRIX_APPSERVICE_AS_TOKEN
+        export HICLAW_MATRIX_APPSERVICE_HS_TOKEN
+    fi
+
     # Detect Apple Silicon (M1/M2/M3/M4) - need JVM fix for Higress Console
     # See: https://github.com/agentscope-ai/HiClaw/issues/249
     if [ -z "${JVM_ARGS:-}" ] && [ "$(uname -m)" = "arm64" ] && [ "$(uname -s)" = "Darwin" ]; then
@@ -3060,6 +3077,11 @@ HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
 HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}
+
+# Matrix AppService
+HICLAW_MATRIX_APPSERVICE_ENABLED=${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}
+HICLAW_MATRIX_APPSERVICE_AS_TOKEN=${HICLAW_MATRIX_APPSERVICE_AS_TOKEN:-}
+HICLAW_MATRIX_APPSERVICE_HS_TOKEN=${HICLAW_MATRIX_APPSERVICE_HS_TOKEN:-}
 
 # Docker API proxy (0=disabled, 1=enabled; default: 1)
 HICLAW_DOCKER_PROXY=${HICLAW_DOCKER_PROXY:-1}
@@ -3428,6 +3450,9 @@ CREDEOF
             -e "HICLAW_ELEMENT_HOMESERVER_URL=http://127.0.0.1:${HICLAW_PORT_GATEWAY}"
             -e "HICLAW_MATRIX_URL=http://127.0.0.1:6167"
             -e "HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}"
+            -e "HICLAW_MATRIX_APPSERVICE_ENABLED=${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}"
+            -e "HICLAW_MATRIX_APPSERVICE_AS_TOKEN=${HICLAW_MATRIX_APPSERVICE_AS_TOKEN:-}"
+            -e "HICLAW_MATRIX_APPSERVICE_HS_TOKEN=${HICLAW_MATRIX_APPSERVICE_HS_TOKEN:-}"
             -e "HICLAW_MINIO_ENDPOINT=http://127.0.0.1:9000"
             -e "HICLAW_MINIO_BUCKET=hiclaw-storage"
             -e "HICLAW_STORAGE_PREFIX=hiclaw/hiclaw-storage"

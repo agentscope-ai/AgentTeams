@@ -212,5 +212,9 @@ func (m *MockHumanProvisioner) ForceLeaveRoom(ctx context.Context, userID, roomI
 	return nil
 }
 
+func (m *MockHumanProvisioner) MatrixAppServiceEnabled() bool {
+	return false
+}
+
 // Compile-time interface satisfaction check.
 var _ service.HumanProvisioner = (*MockHumanProvisioner)(nil)

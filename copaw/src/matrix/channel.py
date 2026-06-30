@@ -74,6 +74,10 @@ TYPING_RENEWAL_INTERVAL_S = 25
 TYPING_MAX_DURATION_S = 120
 DM_CACHE_TTL_MS = 30_000
 
+# Token refresh tunables
+MAX_TOKEN_REFRESH_RETRIES = 3
+TOKEN_REFRESH_BACKOFF_S = 5
+
 # Known QwenPaw slash commands — used to decide whether to strip
 # @mention prefix
 _SLASH_COMMANDS = frozenset(
@@ -459,8 +463,43 @@ class MatrixChannel(BaseChannel):
                         )
                         self._cfg.encryption = False
             else:
-                logger.error("MatrixChannel: token login failed: %s", whoami)
-                return
+                logger.warning(
+                    "MatrixChannel: initial whoami failed (%s), "
+                    "attempting token refresh",
+                    whoami,
+                )
+                if await self._refresh_matrix_token():
+                    self._client.access_token = self._cfg.access_token
+                    whoami = await self._client.whoami()
+                    if isinstance(whoami, WhoamiResponse):
+                        self._user_id = whoami.user_id
+                        self._client.user_id = whoami.user_id
+                        self._client.user = whoami.user_id
+                        if whoami.device_id:
+                            self._client.device_id = whoami.device_id
+                        logger.info(
+                            "MatrixChannel: logged in as %s after token refresh",
+                            self._user_id,
+                        )
+                        if self._cfg.encryption and self._client.store_path:
+                            if self._client.device_id:
+                                self._client.load_store()
+                            else:
+                                self._cfg.encryption = False
+                    else:
+                        logger.error(
+                            "MatrixChannel: token refresh succeeded but "
+                            "whoami still fails: %s",
+                            whoami,
+                        )
+                        return
+                else:
+                    logger.error(
+                        "MatrixChannel: token login failed and refresh "
+                        "unavailable: %s",
+                        whoami,
+                    )
+                    return
         elif self._cfg.username and self._cfg.password:
             resp = await self._client.login(
                 self._cfg.username,
@@ -646,6 +685,68 @@ class MatrixChannel(BaseChannel):
             logger.warning("MatrixChannel: E2EE maintenance error: %s", exc)
 
     # pylint: disable=too-many-branches,too-many-statements
+    async def _refresh_matrix_token(self) -> bool:
+        """Call controller to get a fresh Matrix access token.
+
+        Returns True if token was refreshed successfully.
+        """
+        controller_url = os.environ.get("HICLAW_CONTROLLER_URL", "")
+        auth_token_file = os.environ.get("HICLAW_AUTH_TOKEN_FILE", "")
+        auth_token = os.environ.get("HICLAW_AUTH_TOKEN", "")
+
+        if not controller_url:
+            logger.warning(
+                "MatrixChannel: HICLAW_CONTROLLER_URL not set, "
+                "cannot refresh token",
+            )
+            return False
+
+        bearer = auth_token
+        if not bearer and auth_token_file:
+            try:
+                bearer = Path(auth_token_file).read_text().strip()
+            except Exception as exc:
+                logger.warning(
+                    "MatrixChannel: failed to read auth token file: %s",
+                    exc,
+                )
+                return False
+
+        if not bearer:
+            logger.warning(
+                "MatrixChannel: no auth token available for token refresh",
+            )
+            return False
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{controller_url}/api/v1/credentials/matrix-token",
+                    headers={"Authorization": f"Bearer {bearer}"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    new_token = data.get("access_token", "")
+                    if new_token:
+                        self._cfg.access_token = new_token
+                        self._client.access_token = new_token
+                        logger.info(
+                            "MatrixChannel: token refreshed successfully",
+                        )
+                        return True
+                logger.warning(
+                    "MatrixChannel: token refresh failed: HTTP %d %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+        except Exception as exc:
+            logger.exception(
+                "MatrixChannel: token refresh request failed: %s",
+                exc,
+            )
+
+        return False
+
     async def _sync_loop(self) -> None:
         next_batch: Optional[str] = self._load_sync_token()
 
@@ -752,6 +853,24 @@ class MatrixChannel(BaseChannel):
                     # to-device)
                     await self._e2ee_maintenance()
                 else:
+                    err_str = str(resp)
+                    if "M_UNKNOWN_TOKEN" in err_str or "401" in err_str:
+                        logger.warning(
+                            "MatrixChannel: received 401, "
+                            "attempting token refresh",
+                        )
+                        refreshed = False
+                        for _attempt in range(MAX_TOKEN_REFRESH_RETRIES):
+                            if await self._refresh_matrix_token():
+                                refreshed = True
+                                break
+                            await asyncio.sleep(TOKEN_REFRESH_BACKOFF_S)
+                        if not refreshed:
+                            logger.error(
+                                "MatrixChannel: token refresh exhausted, "
+                                "sync will keep retrying",
+                            )
+                        continue
                     logger.warning("MatrixChannel: sync error: %s", resp)
                     await asyncio.sleep(5)
             except asyncio.CancelledError:

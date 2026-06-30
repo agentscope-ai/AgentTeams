@@ -1,1 +1,0 @@
-"""AgentTeams CLI package."""

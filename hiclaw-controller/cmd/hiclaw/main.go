@@ -27,6 +27,7 @@ Environment variables:
 	rootCmd.AddCommand(workerCmd())
 	rootCmd.AddCommand(statusCmd())
 	rootCmd.AddCommand(versionCmd())
+	rootCmd.AddCommand(rotateCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

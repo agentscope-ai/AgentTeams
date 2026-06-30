@@ -10,6 +10,25 @@ type Config struct {
 	AdminUser         string // global admin username
 	AdminPassword     string // global admin password
 	E2EEEnabled       bool   // whether to enable E2EE on new rooms
+
+	// AppService mode configuration. When enabled, the controller acts as a
+	// Matrix Application Service, using as_token to register/login users
+	// without passwords. Legacy password-based auth is preserved when disabled.
+	AppServiceEnabled         bool
+	AppServiceID              string // e.g. "hiclaw-controller"
+	AppServiceToken           string // as_token — never logged or exposed to agents
+	AppServiceHSToken         string // hs_token — reserved for future AS HTTP receiver
+	AppServiceSenderLocalpart string // e.g. "hiclaw-controller"
+
+	// AppServiceUserNamespaceRegex optionally narrows the exclusive Matrix
+	// user namespace claimed by the AppService. When empty, the controller
+	// claims the broad "@.*:<domain>" namespace, which is ONLY safe when the
+	// homeserver is exclusively HiClaw-managed (the only supported mode —
+	// enforced by Helm's matrix.mode=managed and the embedded Tuwunel
+	// install). Set this to a restrictive regex (e.g. "@hiclaw-.*:<domain>")
+	// when running AppService mode against a shared/existing homeserver so
+	// the as_token cannot impersonate non-HiClaw local users.
+	AppServiceUserNamespaceRegex string
 }
 
 // EnsureUserRequest describes a user to register or log in.
@@ -60,6 +79,31 @@ type RoomInfo struct {
 type RoomMember struct {
 	UserID     string
 	Membership string // "join" | "invite"
+}
+
+// AppServiceRegistration describes a Matrix Application Service registration.
+// Rendered as YAML and sent to the homeserver via admin command.
+type AppServiceRegistration struct {
+	ID              string               `yaml:"id"`
+	URL             *string              `yaml:"url"` // nil = no push from HS
+	ASToken         string               `yaml:"as_token"`
+	HSToken         string               `yaml:"hs_token"`
+	SenderLocalpart string               `yaml:"sender_localpart"`
+	RateLimited     bool                 `yaml:"rate_limited"`
+	Namespaces      AppServiceNamespaces `yaml:"namespaces"`
+}
+
+// AppServiceNamespaces holds the user/alias/room namespace declarations.
+type AppServiceNamespaces struct {
+	Users   []AppServiceNamespace `yaml:"users"`
+	Aliases []AppServiceNamespace `yaml:"aliases"`
+	Rooms   []AppServiceNamespace `yaml:"rooms"`
+}
+
+// AppServiceNamespace is a single namespace entry with exclusivity flag.
+type AppServiceNamespace struct {
+	Exclusive bool   `yaml:"exclusive"`
+	Regex     string `yaml:"regex"`
 }
 
 // GeneratePassword produces a cryptographically secure random password

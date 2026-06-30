@@ -28,6 +28,14 @@ matrix:
   mode: managed               # managed | existing
   internalURL: ""             # existing mode only; managed mode auto-derives
   serverName: ""              # existing mode only; managed mode auto-derives
+  # Matrix AppService registration (controller registers as an appservice
+  # to provision worker/human Matrix accounts without passwords). Enabled by
+  # default; the controller panics if as_token/hs_token are absent, so the
+  # runtime-env Secret auto-generates and preserves them when these are empty.
+  appservice:
+    enabled: true            # set false to disable AppService mode entirely
+    asToken: ""             # override the Matrix AppService as_token (auto-generated if empty)
+    hsToken: ""             # override the Matrix AppService hs_token (auto-generated if empty)
   tuwunel:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel

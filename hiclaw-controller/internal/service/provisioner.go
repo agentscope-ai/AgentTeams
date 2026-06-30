@@ -77,6 +77,7 @@ type RefreshResult struct {
 // ProvisionerConfig holds configuration for constructing a Provisioner.
 type ProvisionerConfig struct {
 	Matrix       matrix.Client
+	MatrixConfig matrix.Config
 	Gateway      gateway.Client
 	OSSAdmin     oss.StorageAdminClient // nil in incluster/cloud mode
 	Creds        CredentialStore
@@ -136,6 +137,7 @@ type ProvisionerConfig struct {
 // users, K8s ServiceAccounts, and port exposure.
 type Provisioner struct {
 	matrix         matrix.Client
+	matrixConfig   matrix.Config
 	gateway        gateway.Client
 	ossAdmin       oss.StorageAdminClient
 	creds          CredentialStore
@@ -168,6 +170,7 @@ type Provisioner struct {
 func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 	return &Provisioner{
 		matrix:            cfg.Matrix,
+		matrixConfig:      cfg.MatrixConfig,
 		gateway:           cfg.Gateway,
 		ossAdmin:          cfg.OSSAdmin,
 		creds:             cfg.Creds,
@@ -190,6 +193,13 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 // MatrixUserID builds a full Matrix user ID from a localpart.
 func (p *Provisioner) MatrixUserID(name string) string {
 	return p.matrix.UserID(name)
+}
+
+// MatrixAppServiceEnabled reports whether the controller is running in
+// Matrix AppService mode. In this mode, user registration and login use
+// the Application Service API instead of passwords.
+func (p *Provisioner) MatrixAppServiceEnabled() bool {
+	return p.matrixConfig.AppServiceEnabled
 }
 
 // roomAliasLocalpart is the single source of truth for how controller-managed
@@ -319,14 +329,23 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 
 	// Step 2: Register Matrix account
 	logger.Info("registering Matrix account", "name", workerName)
-	userCreds, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
-		Username: workerName,
-		Password: creds.MatrixPassword,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Matrix registration failed: %w", err)
+	var userCreds *matrix.UserCredentials
+	if p.MatrixAppServiceEnabled() {
+		userCreds, err = p.matrix.EnsureAppServiceUser(ctx, workerName)
+		if err != nil {
+			return nil, fmt.Errorf("Matrix AS registration failed: %w", err)
+		}
+		creds.MatrixPassword = "" // No password in AppService mode
+	} else {
+		userCreds, err = p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
+			Username: workerName,
+			Password: creds.MatrixPassword,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("Matrix registration failed: %w", err)
+		}
+		creds.MatrixPassword = userCreds.Password
 	}
-	creds.MatrixPassword = userCreds.Password
 	// Cache the freshly issued access token so subsequent reconciles can reuse
 	// it via RefreshCredentials instead of issuing a new login (which would
 	// rotate channels.matrix.accessToken in openclaw.json and trigger a
@@ -506,26 +525,69 @@ func (p *Provisioner) DeprovisionWorker(ctx context.Context, req WorkerDeprovisi
 	return nil
 }
 
-// ensureMatrixToken returns creds.MatrixToken if it is non-empty; otherwise it
-// performs a fresh matrix.Login under matrixUsername, persists the new token
-// back to creds, and returns it. Reusing the cached token across reconciles is
-// critical: the controller pushes the manager's openclaw.json into the shared
-// filesystem mount on every DeployManagerConfig call, and any change to
-// channels.matrix.accessToken triggers an openclaw matrix-client reload (and
-// in practice often a full gateway restart due to the related token churn),
-// which tears down in-flight agent dispatches. Callers should Save the
-// updated creds back to the credential store after this returns so the
-// freshly-issued token survives controller restarts.
+// ensureMatrixToken obtains a Matrix access token for the given user.
+//
+// Always reuses the cached token when present, regardless of AS or legacy
+// mode. Re-login on Tuwunel (conduwuit) invalidates the previous access
+// token, which would break any running Worker that still holds it. Token
+// refresh is handled on-demand via POST /api/v1/credentials/matrix-token
+// when a Worker encounters a 401 from the homeserver.
+//
+// Callers should Save the updated creds back to the credential store after
+// this returns so the token survives controller restarts.
 func (p *Provisioner) ensureMatrixToken(ctx context.Context, matrixUsername string, creds *WorkerCredentials) (string, error) {
+	// Always reuse cached token. Re-login invalidates the old token on
+	// Tuwunel, breaking running Workers. On-demand refresh is available
+	// via POST /api/v1/credentials/matrix-token for 401 recovery.
 	if creds.MatrixToken != "" {
 		return creds.MatrixToken, nil
 	}
-	tok, err := p.matrix.Login(ctx, matrixUsername, creds.MatrixPassword)
+	var tok string
+	var err error
+	if p.MatrixAppServiceEnabled() {
+		tok, err = p.matrix.LoginAppServiceUser(ctx, matrixUsername)
+	} else {
+		tok, err = p.matrix.Login(ctx, matrixUsername, creds.MatrixPassword)
+	}
 	if err != nil {
 		return "", err
 	}
 	creds.MatrixToken = tok
 	return tok, nil
+}
+
+// ForceRefreshMatrixToken issues a fresh Matrix access token for the given
+// worker/manager, bypassing the cache. Called when the caller reports a 401
+// from the homeserver. Persists the new token to the credential store.
+func (p *Provisioner) ForceRefreshMatrixToken(ctx context.Context, name string) (*RefreshResult, error) {
+	creds, err := p.creds.Load(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("load credentials for %s: %w", name, err)
+	}
+	if creds == nil {
+		return nil, fmt.Errorf("no credentials found for %s", name)
+	}
+
+	// Clear cached token to force re-login
+	creds.MatrixToken = ""
+
+	var tok string
+	if p.MatrixAppServiceEnabled() {
+		tok, err = p.matrix.LoginAppServiceUser(ctx, name)
+	} else {
+		tok, err = p.matrix.Login(ctx, name, creds.MatrixPassword)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("re-login for %s: %w", name, err)
+	}
+
+	creds.MatrixToken = tok
+	if saveErr := p.creds.Save(ctx, name, creds); saveErr != nil {
+		// Non-fatal: token is valid even if persistence fails
+		log.FromContext(ctx).Error(saveErr, "failed to persist refreshed matrix token", "name", name)
+	}
+
+	return &RefreshResult{MatrixToken: tok}, nil
 }
 
 // RefreshCredentials loads persisted credentials and obtains a Matrix token,
@@ -1214,14 +1276,23 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 
 	// Step 2: Register Matrix account (always "manager", matching container script)
 	logger.Info("registering Manager Matrix account", "matrixUser", matrixUsername)
-	userCreds, err := p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
-		Username: matrixUsername,
-		Password: creds.MatrixPassword,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Matrix registration failed: %w", err)
+	var userCreds *matrix.UserCredentials
+	if p.MatrixAppServiceEnabled() {
+		userCreds, err = p.matrix.EnsureAppServiceUser(ctx, matrixUsername)
+		if err != nil {
+			return nil, fmt.Errorf("Matrix AS registration failed: %w", err)
+		}
+		creds.MatrixPassword = "" // No password in AppService mode
+	} else {
+		userCreds, err = p.matrix.EnsureUser(ctx, matrix.EnsureUserRequest{
+			Username: matrixUsername,
+			Password: creds.MatrixPassword,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("Matrix registration failed: %w", err)
+		}
+		creds.MatrixPassword = userCreds.Password
 	}
-	creds.MatrixPassword = userCreds.Password
 	// Cache the freshly issued access token so subsequent reconciles can
 	// reuse it via RefreshManagerCredentials instead of issuing a new login
 	// (which would rotate channels.matrix.accessToken in openclaw.json and
@@ -1513,4 +1584,83 @@ func (p *Provisioner) DeprovisionManager(ctx context.Context, name string) error
 	}
 
 	return nil
+}
+
+// CredentialNames returns all credential store keys (worker/manager names).
+func (p *Provisioner) CredentialNames(ctx context.Context) ([]string, error) {
+	return p.creds.List(ctx)
+}
+
+// BackfillLegacyPasswords generates and sets Matrix passwords for workers
+// and managers that were created in AppService mode (no password) when the
+// controller is switched back to legacy password-based mode. This ensures
+// a seamless rollback without manual intervention.
+func (p *Provisioner) BackfillLegacyPasswords(ctx context.Context) error {
+	logger := log.FromContext(ctx).WithName("backfill")
+
+	names, err := p.creds.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list credentials: %w", err)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+
+	var firstErr error
+	backfilled := 0
+	for _, name := range names {
+		creds, err := p.creds.Load(ctx, name)
+		if err != nil {
+			logger.Error(err, "failed to load credentials", "name", name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if creds == nil {
+			continue
+		}
+		// Already has a password — nothing to do.
+		if creds.MatrixPassword != "" {
+			continue
+		}
+
+		password, err := matrix.GeneratePassword(16)
+		if err != nil {
+			logger.Error(err, "failed to generate password", "name", name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+
+		userID := p.matrix.UserID(name)
+		if err := p.matrix.SetPasswordAsAdmin(ctx, userID, password); err != nil {
+			logger.Error(err, "failed to set password via admin", "name", name, "userID", userID)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+
+		creds.MatrixPassword = password
+		// Clear cached AS token — it's no longer valid after password reset
+		// and legacy mode will obtain a new token via password login.
+		creds.MatrixToken = ""
+		if err := p.creds.Save(ctx, name, creds); err != nil {
+			logger.Error(err, "failed to save backfilled credentials", "name", name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+
+		backfilled++
+		logger.Info("backfilled legacy password", "name", name, "userID", userID)
+	}
+
+	if backfilled > 0 {
+		logger.Info("legacy password backfill complete", "backfilled", backfilled, "total", len(names))
+	}
+	return firstErr
 }

@@ -1,0 +1,17 @@
+{
+  "id": "teamharness",
+  "displayName": "TeamHarness",
+  "deployMode": "plugin-probe",
+  "detection": {
+    "paths": ["~/.qwenpaw", "~/.claude"],
+    "commands": ["qwenpaw", "claude"]
+  },
+  "pluginProbe": {
+    "source": {
+      "type": "tar",
+      "tarball": "$PILOT_DIR/plugins/teamharness.tar.gz",
+      "destDir": "$PILOT_DATA/plugins/teamharness"
+    },
+    "mountType": "wrapper"
+  }
+}

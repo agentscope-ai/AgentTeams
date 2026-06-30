@@ -69,14 +69,14 @@ type CoordinationDeployRequest struct {
 
 // DeployerConfig holds configuration for constructing a Deployer.
 type DeployerConfig struct {
-	AgentConfig    *agentconfig.Generator
-	OSS            oss.StorageClient
-	Executor       *executor.Shell
-	Packages       *executor.PackageResolver
-	Legacy         *LegacyCompat
-	AgentFSDir     string // embedded: /root/hiclaw-fs/agents
-	WorkerAgentDir string // source for builtin agent files
-	MatrixDomain   string
+	AgentConfig        *agentconfig.Generator
+	OSS                oss.StorageClient
+	Executor           *executor.Shell
+	Packages           *executor.PackageResolver
+	Legacy             *LegacyCompat
+	AgentFSDir         string // embedded: /root/hiclaw-fs/agents
+	WorkerAgentDir     string // source for builtin agent files
+	MatrixDomain       string
 
 	// NacosCredClient is used when remoteSkills use sts-hiclaw (see CRD authType).
 	NacosCredClient credprovider.Client
@@ -86,28 +86,28 @@ type DeployerConfig struct {
 // inline config writes, openclaw.json generation, AGENTS.md merging, skill pushing,
 // and OSS synchronization.
 type Deployer struct {
-	agentConfig     *agentconfig.Generator
-	oss             oss.StorageClient
-	executor        *executor.Shell
-	packages        *executor.PackageResolver
-	legacy          *LegacyCompat
-	agentFSDir      string
-	workerAgentDir  string
-	matrixDomain    string
-	nacosCredClient credprovider.Client
+	agentConfig         *agentconfig.Generator
+	oss                 oss.StorageClient
+	executor            *executor.Shell
+	packages            *executor.PackageResolver
+	legacy              *LegacyCompat
+	agentFSDir          string
+	workerAgentDir      string
+	matrixDomain        string
+	nacosCredClient     credprovider.Client
 }
 
 func NewDeployer(cfg DeployerConfig) *Deployer {
 	return &Deployer{
-		agentConfig:     cfg.AgentConfig,
-		oss:             cfg.OSS,
-		executor:        cfg.Executor,
-		packages:        cfg.Packages,
-		legacy:          cfg.Legacy,
-		agentFSDir:      cfg.AgentFSDir,
-		workerAgentDir:  cfg.WorkerAgentDir,
-		matrixDomain:    cfg.MatrixDomain,
-		nacosCredClient: cfg.NacosCredClient,
+		agentConfig:         cfg.AgentConfig,
+		oss:                 cfg.OSS,
+		executor:            cfg.Executor,
+		packages:            cfg.Packages,
+		legacy:              cfg.Legacy,
+		agentFSDir:          cfg.AgentFSDir,
+		workerAgentDir:      cfg.WorkerAgentDir,
+		matrixDomain:        cfg.MatrixDomain,
+		nacosCredClient:     cfg.NacosCredClient,
 	}
 }
 
@@ -238,6 +238,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if req.Role != "team_leader" {
 		soulKey := agentPrefix + "/SOUL.md"
 		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes")) && req.Spec.Identity != "")
+		// Try external config ref if no inline soul
 		if inlineOwnsSoul {
 			soulPath := filepath.Join(localAgentDir, "SOUL.md")
 			soulContent, readErr := os.ReadFile(soulPath)
@@ -618,6 +619,20 @@ func parseNacosRemoteSource(raw string) (nacosAddr, namespace string, err error)
 }
 
 // CleanupOSSData removes all agent data from OSS for a deleted worker.
+// CleanLegacyPasswordFiles removes credentials/matrix/password from OSS for
+// all listed agents. Called when switching from legacy password mode to
+// AppService mode to prevent stale password files from lingering.
+func (d *Deployer) CleanLegacyPasswordFiles(ctx context.Context, names []string) error {
+	logger := log.FromContext(ctx).WithName("password-cleanup")
+	for _, name := range names {
+		key := fmt.Sprintf("agents/%s/credentials/matrix/password", name)
+		if err := d.oss.DeleteObject(ctx, key); err != nil {
+			logger.Error(err, "failed to delete legacy password file (non-fatal)", "name", name)
+		}
+	}
+	return nil
+}
+
 func (d *Deployer) CleanupOSSData(ctx context.Context, workerName string) error {
 	agentPrefix := fmt.Sprintf("agents/%s/", workerName)
 	return d.oss.DeletePrefix(ctx, agentPrefix)
@@ -690,16 +705,18 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 		}
 	}
 
-	// --- SOUL.md (only if explicitly set in CRD spec) ---
-	if req.Spec.Soul != "" {
-		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(req.Spec.Soul)); err != nil {
+	// --- SOUL.md: inline > external ref ---
+	soulContent := req.Spec.Soul
+	if soulContent != "" {
+		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(soulContent)); err != nil {
 			logger.Error(err, "SOUL.md push failed (non-fatal)")
 		}
 	}
 
-	// --- AGENTS.md (only if explicitly set in CRD spec) ---
-	if req.Spec.Agents != "" {
-		if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(req.Spec.Agents)); err != nil {
+	// --- AGENTS.md: inline > external ref ---
+	agentsContent := req.Spec.Agents
+	if agentsContent != "" {
+		if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(agentsContent)); err != nil {
 			logger.Error(err, "AGENTS.md push failed (non-fatal)")
 		}
 	}
@@ -763,7 +780,8 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 	if inlineAgents != "" {
 		content = inlineAgents
 		source = "inline spec.agents"
-	} else {
+	}
+	if content == "" && source == "oss" {
 		existing, err := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
 		if err != nil {
 			if os.IsNotExist(err) {

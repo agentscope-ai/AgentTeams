@@ -18,7 +18,7 @@ def _sync(tmp_path):
         endpoint="http://minio:9000",
         access_key="minio",
         secret_key="password",
-        bucket="hiclaw-storage",
+        bucket="agentteams-storage",
         worker_name="dag-team-dev",
         local_dir=tmp_path / "worker",
     )
@@ -114,7 +114,7 @@ def test_mirror_all_restores_worker_prefix_and_shared_without_credentials(tmp_pa
     assert commands == [
         (
             "mirror",
-            "hiclaw/hiclaw-storage/agents/dag-team-dev/",
+            "agentteams/agentteams-storage/agents/dag-team-dev/",
             f"{sync.local_dir}/",
             "--overwrite",
             "--exclude",
@@ -122,7 +122,7 @@ def test_mirror_all_restores_worker_prefix_and_shared_without_credentials(tmp_pa
         ),
         (
             "mirror",
-            "hiclaw/hiclaw-storage/teams/dag-team/shared/",
+            "agentteams/agentteams-storage/teams/dag-team/shared/",
             f"{sync.shared_dir}/",
             "--overwrite",
         ),
@@ -152,7 +152,7 @@ def test_mirror_all_restores_global_shared_for_team_leader(tmp_path, monkeypatch
     assert commands == [
         (
             "mirror",
-            "hiclaw/hiclaw-storage/agents/dag-team-dev/",
+            "agentteams/agentteams-storage/agents/dag-team-dev/",
             f"{sync.local_dir}/",
             "--overwrite",
             "--exclude",
@@ -160,13 +160,13 @@ def test_mirror_all_restores_global_shared_for_team_leader(tmp_path, monkeypatch
         ),
         (
             "mirror",
-            "hiclaw/hiclaw-storage/teams/dag-team/shared/",
+            "agentteams/agentteams-storage/teams/dag-team/shared/",
             f"{sync.shared_dir}/",
             "--overwrite",
         ),
         (
             "mirror",
-            "hiclaw/hiclaw-storage/shared/",
+            "agentteams/agentteams-storage/shared/",
             f"{sync.global_shared_dir}/",
             "--overwrite",
         ),
@@ -178,7 +178,7 @@ def test_pull_and_push_shared_paths_are_explicit_minio_operations(tmp_path, monk
     commands = []
 
     monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
-    monkeypatch.setattr(sync, "_get_shared_remote", lambda: "hiclaw/hiclaw-storage/teams/dag-team/shared/")
+    monkeypatch.setattr(sync, "_get_shared_remote", lambda: "agentteams/agentteams-storage/teams/dag-team/shared/")
 
     local_report = sync.shared_dir / "tasks" / "st-01" / "report.md"
     local_report.parent.mkdir(parents=True)
@@ -196,14 +196,14 @@ def test_pull_and_push_shared_paths_are_explicit_minio_operations(tmp_path, monk
     assert commands == [
         (
             "mirror",
-            "hiclaw/hiclaw-storage/teams/dag-team/shared/tasks/st-01/",
+            "agentteams/agentteams-storage/teams/dag-team/shared/tasks/st-01/",
             f"{sync.shared_dir / 'tasks' / 'st-01'}/",
             "--overwrite",
         ),
         (
             "mirror",
             f"{sync.shared_dir / 'tasks' / 'st-01'}/",
-            "hiclaw/hiclaw-storage/teams/dag-team/shared/tasks/st-01/",
+            "agentteams/agentteams-storage/teams/dag-team/shared/tasks/st-01/",
             "--overwrite",
             "--exclude",
             "base/",
@@ -221,7 +221,7 @@ def test_pull_shared_path_falls_back_to_mirror_for_remote_directory_prefix(
     commands = []
 
     monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
-    monkeypatch.setattr(sync, "_get_shared_remote", lambda: "hiclaw/hiclaw-storage/teams/dag-team/shared/")
+    monkeypatch.setattr(sync, "_get_shared_remote", lambda: "agentteams/agentteams-storage/teams/dag-team/shared/")
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
@@ -241,12 +241,12 @@ def test_pull_shared_path_falls_back_to_mirror_for_remote_directory_prefix(
     assert commands == [
         (
             "cp",
-            "hiclaw/hiclaw-storage/teams/dag-team/shared/projects/project-20260512-001122",
+            "agentteams/agentteams-storage/teams/dag-team/shared/projects/project-20260512-001122",
             str(sync.shared_dir / "projects" / "project-20260512-001122"),
         ),
         (
             "mirror",
-            "hiclaw/hiclaw-storage/teams/dag-team/shared/projects/project-20260512-001122/",
+            "agentteams/agentteams-storage/teams/dag-team/shared/projects/project-20260512-001122/",
             f"{sync.shared_dir / 'projects' / 'project-20260512-001122'}/",
             "--overwrite",
         ),
@@ -309,7 +309,7 @@ def test_pull_all_refreshes_config_mcporter_and_skills_without_shared(tmp_path, 
     assert commands == [
         (
             "mirror",
-            "hiclaw/hiclaw-storage/agents/dag-team-dev/skills/github/",
+            "agentteams/agentteams-storage/agents/dag-team-dev/skills/github/",
             f"{sync.local_dir / 'skills' / 'github'}/",
             "--overwrite",
         )
@@ -358,10 +358,10 @@ def test_push_local_preserves_user_data_but_skips_manager_and_mirrored_state(tmp
         "skills/github/SKILL.md",
     }
     assert set(pushed_destinations) == {
-        "hiclaw/hiclaw-storage/agents/dag-team-dev/AGENTS.md",
-        "hiclaw/hiclaw-storage/agents/dag-team-dev/memory/note.txt",
-        "hiclaw/hiclaw-storage/agents/dag-team-dev/memory/shared/note.txt",
-        "hiclaw/hiclaw-storage/agents/dag-team-dev/skills/github/SKILL.md",
+        "agentteams/agentteams-storage/agents/dag-team-dev/AGENTS.md",
+        "agentteams/agentteams-storage/agents/dag-team-dev/memory/note.txt",
+        "agentteams/agentteams-storage/agents/dag-team-dev/memory/shared/note.txt",
+        "agentteams/agentteams-storage/agents/dag-team-dev/skills/github/SKILL.md",
     }
 
 

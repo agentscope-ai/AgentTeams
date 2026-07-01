@@ -229,7 +229,7 @@ func TestCreateManagerContainerUsesDefaultResourcesWhenSpecResourcesUnset(t *tes
 	}
 }
 
-func TestReconcileManagerInfrastructurePassesModelProviderToProvision(t *testing.T) {
+func TestReconcileManagerInfrastructureKeepsModelProviderOutOfProvision(t *testing.T) {
 	prov := mocks.NewMockManagerProvisioner()
 	r := &ManagerReconciler{Provisioner: prov}
 	m := &v1beta1.Manager{}
@@ -246,12 +246,12 @@ func TestReconcileManagerInfrastructurePassesModelProviderToProvision(t *testing
 	if len(prov.Calls.ProvisionManager) != 1 {
 		t.Fatalf("ProvisionManager calls=%d, want 1", len(prov.Calls.ProvisionManager))
 	}
-	if got := prov.Calls.ProvisionManager[0].ModelProviderID; got != "qwen-http-api" {
-		t.Fatalf("ProvisionManager ModelProviderID=%q, want qwen-http-api", got)
+	if got := prov.Calls.ProvisionManager[0].Name; got != "default" {
+		t.Fatalf("ProvisionManager Name=%q, want default", got)
 	}
 }
 
-func TestReconcileManagerInfrastructureRestoresModelProviderAuth(t *testing.T) {
+func TestReconcileManagerInfrastructureRestoresGatewayAuth(t *testing.T) {
 	prov := mocks.NewMockManagerProvisioner()
 	r := &ManagerReconciler{Provisioner: prov}
 	m := &v1beta1.Manager{}
@@ -273,7 +273,7 @@ func TestReconcileManagerInfrastructureRestoresModelProviderAuth(t *testing.T) {
 	if call.Name != "default" {
 		t.Fatalf("EnsureManagerGatewayAuth name=%q, want default", call.Name)
 	}
-	if call.ModelProviderID != "openai-http-api" {
-		t.Fatalf("EnsureManagerGatewayAuth ModelProviderID=%q, want openai-http-api", call.ModelProviderID)
+	if call.GatewayKey == "" {
+		t.Fatal("EnsureManagerGatewayAuth GatewayKey is empty")
 	}
 }

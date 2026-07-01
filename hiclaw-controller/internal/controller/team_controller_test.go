@@ -322,9 +322,6 @@ func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
 	if req.CredentialName != "alpha-worker-lead" {
 		t.Fatalf("ProvisionWorker CredentialName=%q, want CR name alpha-worker-lead", req.CredentialName)
 	}
-	if req.ModelProviderID != "qwen-http-api" {
-		t.Fatalf("ProvisionWorker ModelProviderID=%q, want qwen-http-api", req.ModelProviderID)
-	}
 }
 
 func TestReconcileMemberRefreshUsesCRNameCredentialAndRuntimeMatrixName(t *testing.T) {

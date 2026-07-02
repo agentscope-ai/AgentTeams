@@ -492,3 +492,36 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 	}
 	return aliases
 }
+
+// InjectHeartbeat reads existing openclaw.json bytes, injects or updates the
+// heartbeat configuration under agents.defaults.heartbeat, and returns the
+// updated JSON bytes. If enabled is false or every is empty, the heartbeat
+// key is removed.
+func InjectHeartbeat(existing []byte, enabled bool, every string) []byte {
+	var config map[string]interface{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &config)
+	}
+	if config == nil {
+		config = make(map[string]interface{})
+	}
+	agents, _ := config["agents"].(map[string]interface{})
+	if agents == nil {
+		agents = make(map[string]interface{})
+		config["agents"] = agents
+	}
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	if defaults == nil {
+		defaults = make(map[string]interface{})
+		agents["defaults"] = defaults
+	}
+
+	if enabled && every != "" {
+		defaults["heartbeat"] = map[string]interface{}{"enabled": true, "every": every}
+	} else {
+		delete(defaults, "heartbeat")
+	}
+
+	out, _ := json.MarshalIndent(config, "", "  ")
+	return out
+}

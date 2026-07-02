@@ -284,6 +284,12 @@ type TeamSpec struct {
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"` // team-wide overrides
 
+	// HeartbeatEvery configures the Team Leader agent's periodic heartbeat
+	// check interval. The TeamReconciler writes this value into the leader
+	// Worker's openclaw.json and coordination context AGENTS.md.
+	// Example: "30m". Empty means leader heartbeat is disabled.
+	HeartbeatEvery string `json:"heartbeatEvery,omitempty"`
+
 	// Deprecated: Leader defines the team leader's runtime configuration.
 	// Retained for backward compatibility during migration. Ignored when
 	// WorkerMembers is non-empty.

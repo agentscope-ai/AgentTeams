@@ -92,6 +92,12 @@ spec:
                       type: array
                       items:
                         type: string
+                heartbeatEvery:
+                  type: string
+                  description: >
+                    Configures the Team Leader agent's periodic heartbeat check interval.
+                    The TeamReconciler writes this into the leader Worker's openclaw.json
+                    and coordination context. Example: "30m". Empty disables leader heartbeat.
                 admin:
                   type: object
                   description: "Team-specific admin (human). Has admin authority within this team."

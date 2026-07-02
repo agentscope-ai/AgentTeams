@@ -47,6 +47,8 @@ type WorkerDeployer interface {
 	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSData(ctx context.Context, workerName string) error
 	InjectCoordinationContext(ctx context.Context, req CoordinationDeployRequest) error
+	InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error
+	InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error
 	EnsureTeamStorage(ctx context.Context, teamName string) error
 }
 

@@ -540,8 +540,8 @@ func TestReconcileTeamNormalInjectsLeaderCoordinationAfterMemberConfig(t *testin
 		if req.LeaderName != "leader" {
 			t.Fatalf("LeaderName=%q, want leader", req.LeaderName)
 		}
-		if len(req.TeamWorkers) != 1 || req.TeamWorkers[0] != "dev" {
-			t.Fatalf("TeamWorkers=%v, want [dev]", req.TeamWorkers)
+		if len(req.TeamWorkers) != 1 || req.TeamWorkers[0].Name != "dev" {
+			t.Fatalf("TeamWorkers=%v, want [{Name:dev}]", req.TeamWorkers)
 		}
 		return nil
 	}

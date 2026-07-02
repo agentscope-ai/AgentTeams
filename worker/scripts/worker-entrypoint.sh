@@ -165,16 +165,13 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 #     - Uses find to detect files modified after the last pull; only runs mc mirror when needed
 #     - Avoids mc mirror --watch TOCTOU bug (crashes on atomic ops like npm install)
 #     - The bulk mirror excludes openclaw.json (local-first field merge; see merge-openclaw-config.sh),
-#       SOUL.md/AGENTS.md/HEARTBEAT.md (handled by the per-file loop below
-#       with an mtime guard), and various caches.
-#     - The per-file `mc cp`-if-newer loop pushes SOUL.md/AGENTS.md/HEARTBEAT.md
+#       SOUL.md/AGENTS.md/HEARTBEAT.md, and various caches.
+#     - The per-file `mc cp`-if-newer loop pushes SOUL.md/AGENTS.md
 #       only when the local copy was modified after the last pull. This lets
-#       the agent persist its own self-edits (HEARTBEAT.md checklist tweaks,
-#       SOUL.md "personality evolution") without pushing back the unmodified
-#       package content that was just pulled. mc mirror is run before the
-#       touch ${PULL_MARKER} on every pull path, so package content always
-#       has mtime <= PULL_MARKER and the -nt check stays false until the
-#       agent itself writes.
+#       the agent persist its own self-edits (SOUL.md "personality evolution")
+#       without pushing back the unmodified package content that was just
+#       pulled. HEARTBEAT.md is pull-only here: the runtime reads it regularly,
+#       so treating it as locally editable can create an upload loop.
 #
 #   Remote -> Local: on-demand pull via file-sync skill (triggered by Manager @mention)
 #     + 5-minute fallback pull of Manager-managed paths as safety net
@@ -185,24 +182,53 @@ log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 # ────────────────────────────────────────────────────────────────────────────
 (
     while true; do
-        # Only push files modified AFTER the last pull (avoids pushing back freshly-pulled files)
-        CHANGED=$(find "${WORKSPACE}/" -type f -newer "${PULL_MARKER}" 2>/dev/null | head -1)
-        if [ -n "${CHANGED}" ]; then
+        # Only push files modified AFTER the last pull, and only when those
+        # files are eligible for Local->Remote sync. Ignoring excluded paths
+        # prevents runtime files such as HEARTBEAT.md or credentials from
+        # triggering an empty mc mirror every few seconds.
+        BULK_CHANGED=$(find "${WORKSPACE}/" \
+            \( -path "${WORKSPACE}/.agents" -o -path "${WORKSPACE}/credentials" \
+               -o -path "${WORKSPACE}/.cache" -o -path "${WORKSPACE}/.npm" \
+               -o -path "${WORKSPACE}/.local" -o -path "${WORKSPACE}/.mc" \
+               -o -path "${WORKSPACE}/.openclaw/matrix" \
+               -o -path "${WORKSPACE}/.openclaw/canvas" \) -prune -o \
+            -type f -newer "${PULL_MARKER}" \
+            ! -name "openclaw.json" \
+            ! -name "mcporter-servers.json" \
+            ! -path "${WORKSPACE}/config/mcporter.json" \
+            ! -name "*.lock" \
+            ! -name ".last-pull" \
+            ! -name "SOUL.md" \
+            ! -name "AGENTS.md" \
+            ! -name "HEARTBEAT.md" \
+            -print -quit 2>/dev/null || true)
+
+        PROMPT_CHANGED=""
+        for _mf in SOUL.md AGENTS.md; do
+            if [ -f "${WORKSPACE}/${_mf}" ] && [ "${WORKSPACE}/${_mf}" -nt "${PULL_MARKER}" ]; then
+                PROMPT_CHANGED="1"
+                break
+            fi
+        done
+
+        if [ -n "${BULK_CHANGED}" ] || [ -n "${PROMPT_CHANGED}" ]; then
             ensure_mc_credentials 2>/dev/null || true
-            if ! mc mirror "${WORKSPACE}/" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" --overwrite \
-                --exclude "openclaw.json" \
-                --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
-                --exclude "credentials/**" \
-                --exclude ".cache/**" --exclude ".npm/**" \
-                --exclude ".local/**" --exclude ".mc/**" --exclude "*.lock" \
-                --exclude ".last-pull" \
-                --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" \
-                --exclude "SOUL.md" --exclude "AGENTS.md" --exclude "HEARTBEAT.md" 2>&1; then
-                log "WARNING: Local->Remote sync failed"
+            if [ -n "${BULK_CHANGED}" ]; then
+                if ! mc mirror "${WORKSPACE}/" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" --overwrite \
+                    --exclude "openclaw.json" \
+                    --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
+                    --exclude "credentials/**" \
+                    --exclude ".cache/**" --exclude ".npm/**" \
+                    --exclude ".local/**" --exclude ".mc/**" --exclude "*.lock" \
+                    --exclude ".last-pull" \
+                    --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" \
+                    --exclude "SOUL.md" --exclude "AGENTS.md" --exclude "HEARTBEAT.md" 2>&1; then
+                    log "WARNING: Local->Remote sync failed"
+                fi
             fi
             # Per-file push for agent-self-modifiable files: only when locally
             # modified after the last pull. See block comment above for design.
-            for _mf in SOUL.md AGENTS.md HEARTBEAT.md; do
+            for _mf in SOUL.md AGENTS.md; do
                 if [ -f "${WORKSPACE}/${_mf}" ] && [ "${WORKSPACE}/${_mf}" -nt "${PULL_MARKER}" ]; then
                     mc cp "${WORKSPACE}/${_mf}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/${_mf}" 2>/dev/null || true
                 fi

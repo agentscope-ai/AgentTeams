@@ -16,7 +16,7 @@ type MockProvisioner struct {
 	DeprovisionWorkerFn        func(ctx context.Context, req service.WorkerDeprovisionRequest) error
 	RefreshCredentialsFn       func(ctx context.Context, workerName string) (*service.RefreshResult, error)
 	RefreshWorkerCredentialsFn func(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error)
-	EnsureWorkerGatewayAuthFn  func(ctx context.Context, workerName, gatewayKey, modelProviderID string) error
+	EnsureWorkerGatewayAuthFn  func(ctx context.Context, workerName, gatewayKey string) error
 	ReconcileExposeFn          func(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
 	EnsureServiceAccountFn     func(ctx context.Context, workerName string) error
 	DeleteServiceAccountFn     func(ctx context.Context, workerName string) error
@@ -58,9 +58,8 @@ type workerCredentialCall struct {
 }
 
 type gatewayAuthCall struct {
-	Name            string
-	GatewayKey      string
-	ModelProviderID string
+	Name       string
+	GatewayKey string
 }
 
 type humanLoginCall struct {
@@ -190,17 +189,16 @@ func (m *MockProvisioner) RefreshWorkerCredentials(ctx context.Context, credenti
 	}, nil
 }
 
-func (m *MockProvisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey, modelProviderID string) error {
+func (m *MockProvisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error {
 	m.mu.Lock()
 	m.Calls.EnsureWorkerGatewayAuth = append(m.Calls.EnsureWorkerGatewayAuth, gatewayAuthCall{
-		Name:            workerName,
-		GatewayKey:      gatewayKey,
-		ModelProviderID: modelProviderID,
+		Name:       workerName,
+		GatewayKey: gatewayKey,
 	})
 	fn := m.EnsureWorkerGatewayAuthFn
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, workerName, gatewayKey, modelProviderID)
+		return fn(ctx, workerName, gatewayKey)
 	}
 	return nil
 }

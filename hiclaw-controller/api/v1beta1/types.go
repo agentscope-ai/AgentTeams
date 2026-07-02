@@ -274,6 +274,7 @@ type TeamSpec struct {
 	// When non-empty, the TeamReconciler uses the new path (membership
 	// validation → Matrix invite → MinIO inject → status aggregation)
 	// and ignores the deprecated Leader/Workers fields.
+	// +kubebuilder:validation:MaxItems=128
 	WorkerMembers []TeamWorkerRef `json:"workerMembers,omitempty"`
 
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true

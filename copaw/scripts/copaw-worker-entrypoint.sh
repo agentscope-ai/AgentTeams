@@ -4,26 +4,26 @@
 # or lite-copaw-worker.
 #
 # Mode selection:
-#   - HICLAW_CONSOLE_PORT set   → standard mode (copaw-worker, PyPI CoPaw venv)
-#   - HICLAW_CONSOLE_PORT unset → lite mode (lite-copaw-worker, lite CoPaw venv)
+#   - AGENTTEAMS_CONSOLE_PORT/HICLAW_CONSOLE_PORT set   → standard mode
+#   - console port unset → lite mode
 #
 # Environment variables (set by container_create_worker in container-api.sh):
-#   HICLAW_WORKER_NAME   - Worker name (required)
-#   HICLAW_FS_ENDPOINT   - MinIO endpoint (required in local mode)
-#   HICLAW_FS_ACCESS_KEY - MinIO access key (required in local mode)
-#   HICLAW_FS_SECRET_KEY - MinIO secret key (required in local mode)
-#   HICLAW_CONSOLE_PORT  - CoPaw web console port (triggers standard mode, costs ~500MB RAM)
-#   HICLAW_RUNTIME       - "aliyun" for cloud mode (uses RRSA/STS via hiclaw-env.sh)
+#   AGENTTEAMS_WORKER_NAME   - Worker name (required)
+#   AGENTTEAMS_FS_ENDPOINT   - MinIO endpoint (required in local mode)
+#   AGENTTEAMS_FS_ACCESS_KEY - MinIO access key (required in local mode)
+#   AGENTTEAMS_FS_SECRET_KEY - MinIO secret key (required in local mode)
+#   AGENTTEAMS_CONSOLE_PORT  - CoPaw web console port (triggers standard mode)
 #   TZ                   - Timezone (optional)
 
 set -e
 
-# Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
+# Source shared environment bootstrap (provides worker-deps env and storage credentials)
+source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
-WORKER_NAME="${HICLAW_WORKER_NAME:?HICLAW_WORKER_NAME is required}"
+WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-${HICLAW_WORKER_NAME:-}}"
+[ -n "${WORKER_NAME}" ] || { echo "AGENTTEAMS_WORKER_NAME is required" >&2; exit 1; }
 INSTALL_DIR="/root/.copaw-worker"
-CONSOLE_PORT="${HICLAW_CONSOLE_PORT:-}"
+CONSOLE_PORT="${AGENTTEAMS_CONSOLE_PORT:-${HICLAW_CONSOLE_PORT:-}}"
 
 log() {
     echo "[hiclaw-copaw-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -37,23 +37,28 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 # ── Credential setup ─────────────────────────────────────────────────────────
-# Cloud mode: RRSA/STS credentials via MC_HOST_hiclaw (set by ensure_mc_credentials).
-# FileSync._ensure_alias() detects MC_HOST_hiclaw and skips mc alias set.
-# Local mode: explicit FS endpoint/key/secret passed via CLI args.
-if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
-    log "Cloud mode: configuring OSS credentials via RRSA..."
-    ensure_mc_credentials || { log "ERROR: Failed to obtain OSS credentials"; exit 1; }
-    # CLI requires --fs/--fs-key/--fs-secret but they are unused when MC_HOST_hiclaw is set
+# Controller-mediated OSS: STS credentials via MC_HOST_hiclaw.
+# Local MinIO: explicit FS endpoint/key/secret passed via CLI args.
+if ensure_mc_credentials && [ -n "${MC_HOST_hiclaw:-}" ]; then
+    log "Configuring OSS credentials via controller-issued STS..."
+    # CLI requires --fs/--fs-key/--fs-secret but they are unused when MC_HOST_hiclaw is set.
     FS_ENDPOINT="https://oss-placeholder.aliyuncs.com"
     FS_ACCESS_KEY="rrsa"
     FS_SECRET_KEY="rrsa"
-    FS_BUCKET="${HICLAW_OSS_BUCKET:-hiclaw-cloud-storage}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_FS_BUCKET:-${HICLAW_OSS_BUCKET:-hiclaw-storage}}}"
     log "  OSS bucket: ${FS_BUCKET}"
 else
-    FS_ENDPOINT="${HICLAW_FS_ENDPOINT:?HICLAW_FS_ENDPOINT is required}"
-    FS_ACCESS_KEY="${HICLAW_FS_ACCESS_KEY:?HICLAW_FS_ACCESS_KEY is required}"
-    FS_SECRET_KEY="${HICLAW_FS_SECRET_KEY:?HICLAW_FS_SECRET_KEY is required}"
-    FS_BUCKET="hiclaw-storage"
+    if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" = "oss" ]; then
+        log "ERROR: OSS storage requires controller-issued storage credentials, but MC_HOST_hiclaw is not configured"
+        exit 1
+    fi
+    FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-${HICLAW_FS_ENDPOINT:-}}"
+    FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-${HICLAW_FS_ACCESS_KEY:-}}"
+    FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-${HICLAW_FS_SECRET_KEY:-}}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_FS_BUCKET:-${HICLAW_OSS_BUCKET:-hiclaw-storage}}}"
+    [ -n "${FS_ENDPOINT}" ] || { log "ERROR: AGENTTEAMS_FS_ENDPOINT is required"; exit 1; }
+    [ -n "${FS_ACCESS_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_ACCESS_KEY is required"; exit 1; }
+    [ -n "${FS_SECRET_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_SECRET_KEY is required"; exit 1; }
 fi
 
 # Set up skills CLI symlink: ~/.agents/skills -> worker's skills directory

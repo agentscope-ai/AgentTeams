@@ -85,6 +85,13 @@ COPY manager/agent/hermes-worker-agent/ /opt/hiclaw/agent/hermes-worker-agent/
 COPY manager/agent/team-leader-agent/ /opt/hiclaw/agent/team-leader-agent/
 COPY manager/agent/skills/ /opt/hiclaw/agent/skills/
 
+# Composite health check (plan §7, Step 3/S3a): controller /healthz + MinIO
+# /minio/health/live + Tuwunel /_matrix/client/versions must ALL succeed for
+# the container to report healthy. Uses curl, already apt-get installed above.
+COPY hiclaw-controller/healthcheck.sh /opt/hiclaw/scripts/healthcheck.sh
+COPY hiclaw-controller/preflight.sh /opt/hiclaw/scripts/preflight.sh
+RUN chmod +x /opt/hiclaw/scripts/healthcheck.sh /opt/hiclaw/scripts/preflight.sh
+
 # ---- Ports ----
 # 8080: Higress Gateway (unified entry point)
 # 8001: Higress Console
@@ -106,6 +113,14 @@ VOLUME ["/data"]
 # read them.
 ENV HICLAW_CONTROLLER_URL=http://127.0.0.1:8090 \
     HICLAW_AUTH_TOKEN_FILE=/var/run/hiclaw/cli-token
+
+# ---- Health check ----
+# Composite: controller + MinIO + Tuwunel must ALL respond for "healthy".
+# start-period gives the supervisord-managed stack (kine integrity pre-flight,
+# embedded kube-apiserver, CRD registration, Higress pipeline, MinIO, Tuwunel)
+# time to come up before the first probe counts toward the unhealthy streak.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD ["/opt/hiclaw/scripts/healthcheck.sh"]
 
 # ---- Start ----
 ENTRYPOINT ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

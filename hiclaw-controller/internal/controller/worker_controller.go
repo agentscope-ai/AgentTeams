@@ -12,6 +12,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -85,6 +86,10 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 			worker.Status.Message = ""
 		} else {
 			worker.Status.Message = reterr.Error()
+			setCondition(&worker.Status.Conditions, v1beta1.ConditionReady, metav1.ConditionFalse, "ReconcileFailed", reterr.Error(), worker.Generation)
+		}
+		if reterr == nil {
+			setWorkerReadyCondition(&worker)
 		}
 		if err := r.Status().Patch(ctx, &worker, patchBase); err != nil {
 			logger.Error(err, "failed to patch worker status")
@@ -138,25 +143,48 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 
 	if res, err := ReconcileMemberInfra(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
+		if err != nil {
+			setCondition(&w.Status.Conditions, v1beta1.ConditionInfrastructureReady, metav1.ConditionFalse, "ProvisionFailed", err.Error(), w.Generation)
+		} else {
+			setCondition(&w.Status.Conditions, v1beta1.ConditionInfrastructureReady, metav1.ConditionFalse, "Reconciling", "Infrastructure is still reconciling.", w.Generation)
+		}
 		return res, err
 	}
 	if err := EnsureModelProviderAuth(ctx, deps, mctx, state); err != nil {
 		applyMemberStateToWorker(w, state)
+		setCondition(&w.Status.Conditions, v1beta1.ConditionInfrastructureReady, metav1.ConditionFalse, "GatewayAuthFailed", err.Error(), w.Generation)
 		return reconcile.Result{}, err
 	}
+	setCondition(&w.Status.Conditions, v1beta1.ConditionInfrastructureReady, metav1.ConditionTrue, "Provisioned", "Matrix user, room, gateway consumer, and storage credentials are ready.", w.Generation)
 	if err := EnsureMemberServiceAccount(ctx, deps, mctx); err != nil {
 		applyMemberStateToWorker(w, state)
+		setCondition(&w.Status.Conditions, v1beta1.ConditionServiceAccountReady, metav1.ConditionFalse, "ServiceAccountFailed", err.Error(), w.Generation)
 		return reconcile.Result{}, err
 	}
+	setCondition(&w.Status.Conditions, v1beta1.ConditionServiceAccountReady, metav1.ConditionTrue, "Provisioned", "ServiceAccount is ready.", w.Generation)
 	if err := ReconcileMemberConfig(ctx, deps, mctx, state); err != nil {
 		applyMemberStateToWorker(w, state)
+		setCondition(&w.Status.Conditions, v1beta1.ConditionConfigSynced, metav1.ConditionFalse, "ConfigSyncFailed", err.Error(), w.Generation)
 		return reconcile.Result{}, err
 	}
+	setCondition(&w.Status.Conditions, v1beta1.ConditionConfigSynced, metav1.ConditionTrue, "Synced", "Workspace config and skills are synced to object storage.", w.Generation)
 	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
+		if err != nil {
+			setCondition(&w.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionFalse, "ContainerFailed", err.Error(), w.Generation)
+		} else {
+			setCondition(&w.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionFalse, "Reconciling", "Container is still reconciling.", w.Generation)
+		}
 		return res, err
 	}
-	_ = ReconcileMemberExpose(ctx, deps, mctx, state)
+	setWorkerContainerReadyCondition(w, state)
+	if err := ReconcileMemberExpose(ctx, deps, mctx, state); err != nil {
+		setCondition(&w.Status.Conditions, v1beta1.ConditionExposedPortsReady, metav1.ConditionFalse, "ExposeFailed", err.Error(), w.Generation)
+	} else if len(w.Spec.Expose) == 0 {
+		setCondition(&w.Status.Conditions, v1beta1.ConditionExposedPortsReady, metav1.ConditionTrue, "NotRequired", "No exposed ports are requested.", w.Generation)
+	} else {
+		setCondition(&w.Status.Conditions, v1beta1.ConditionExposedPortsReady, metav1.ConditionTrue, "Reconciled", "Exposed ports are reconciled.", w.Generation)
+	}
 	applyMemberStateToWorker(w, state)
 
 	r.reconcileLegacy(ctx, w, state)
@@ -169,6 +197,35 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+}
+
+func setWorkerContainerReadyCondition(w *v1beta1.Worker, state *MemberState) {
+	if !w.Spec.DesiredContainerMan() {
+		setCondition(&w.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionTrue, "NotManaged", "Container lifecycle is managed externally.", w.Generation)
+		return
+	}
+	switch w.Spec.DesiredState() {
+	case "Stopped":
+		setCondition(&w.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionTrue, "Stopped", "Container is stopped as requested.", w.Generation)
+	case "Sleeping":
+		setCondition(&w.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionTrue, "Sleeping", "Container is sleeping as requested.", w.Generation)
+	default:
+		if state.ContainerState == string(backend.StatusRunning) || state.ContainerState == string(backend.StatusReady) {
+			setCondition(&w.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionTrue, "Running", "Container is running.", w.Generation)
+			return
+		}
+		setCondition(&w.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionFalse, "ContainerStarting", "Container has been created and is still starting.", w.Generation)
+	}
+}
+
+func setWorkerReadyCondition(w *v1beta1.Worker) {
+	setReadyFromDependencies(&w.Status.Conditions, w.Generation,
+		v1beta1.ConditionInfrastructureReady,
+		v1beta1.ConditionServiceAccountReady,
+		v1beta1.ConditionConfigSynced,
+		v1beta1.ConditionContainerReady,
+		v1beta1.ConditionExposedPortsReady,
+	)
 }
 
 // reconcileDelete cleans up all infrastructure for the Worker and then removes

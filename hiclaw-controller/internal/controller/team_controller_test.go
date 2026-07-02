@@ -3,12 +3,16 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
@@ -25,6 +29,19 @@ func newTeamTestClient(t *testing.T, objs ...client.Object) client.Client {
 		t.Fatalf("register scheme: %v", err)
 	}
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+}
+
+func newTeamStatusTestClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
 }
 
 func TestLeaderHeartbeatEvery(t *testing.T) {
@@ -92,6 +109,47 @@ func TestBuildDesiredMembers_LeaderAndWorkers(t *testing.T) {
 				t.Errorf("worker %s runtime=%q, want \"\" (pass-through from TeamWorkerSpec)", m.Name, m.Spec.Runtime)
 			}
 		}
+	}
+}
+
+func TestTeamReconcileConditionsShowRoomProvisionFailure(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Leader: v1beta1.LeaderSpec{Name: "alpha-lead", Model: "gpt-4o"},
+		},
+	}
+	c := newTeamStatusTestClient(t, team)
+	prov := mocks.NewMockProvisioner()
+	prov.ProvisionTeamRoomsFn = func(context.Context, service.TeamRoomRequest) (*service.TeamRoomResult, error) {
+		return nil, errors.New("matrix room API unavailable")
+	}
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: prov,
+		Deployer:    mocks.NewMockDeployer(),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "alpha", Namespace: "default"},
+	})
+	if err == nil {
+		t.Fatal("expected reconcile error")
+	}
+
+	var out v1beta1.Team
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "alpha", Namespace: "default"}, &out); err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	if cond := meta.FindStatusCondition(out.Status.Conditions, v1beta1.ConditionTeamRoomsReady); cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "ProvisionFailed" {
+		t.Fatalf("TeamRoomsReady condition=%+v, want False ProvisionFailed", cond)
+	}
+	if cond := meta.FindStatusCondition(out.Status.Conditions, v1beta1.ConditionReady); cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready condition=%+v, want False", cond)
+	}
+	if out.Status.ObservedGeneration != 0 {
+		t.Fatalf("ObservedGeneration=%d, want 0 on failed reconcile", out.Status.ObservedGeneration)
 	}
 }
 

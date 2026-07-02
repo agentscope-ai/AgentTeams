@@ -12,6 +12,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -102,9 +103,13 @@ func (r *ManagerReconciler) Reconcile(ctx context.Context, req reconcile.Request
 			mgr.Status.Message = ""
 		} else {
 			mgr.Status.Message = reterr.Error()
+			setCondition(&mgr.Status.Conditions, v1beta1.ConditionReady, metav1.ConditionFalse, "ReconcileFailed", reterr.Error(), mgr.Generation)
 		}
 		if mgr.Spec.Image != "" {
 			mgr.Status.Version = mgr.Spec.Image
+		}
+		if reterr == nil {
+			setManagerReadyCondition(&mgr)
 		}
 
 		if err := r.Status().Patch(ctx, &mgr, patchBase); err != nil {
@@ -142,23 +147,44 @@ func (r *ManagerReconciler) reconcileManagerNormal(ctx context.Context, s *manag
 	}
 
 	if res, err := r.reconcileManagerInfrastructure(ctx, s); err != nil || res.RequeueAfter > 0 {
+		if err != nil {
+			setCondition(&s.manager.Status.Conditions, v1beta1.ConditionInfrastructureReady, metav1.ConditionFalse, "ProvisionFailed", err.Error(), s.manager.Generation)
+		} else {
+			setCondition(&s.manager.Status.Conditions, v1beta1.ConditionInfrastructureReady, metav1.ConditionFalse, "Reconciling", "Infrastructure is still reconciling.", s.manager.Generation)
+		}
 		return res, err
 	}
 	if s.modelProviderInfo != nil && r.GatewayClient != nil && s.provResult != nil {
 		consumerName := "manager"
 		if err := r.GatewayClient.AuthorizeAIRoutes(ctx, consumerName, s.modelProviderInfo.HttpApiID); err != nil {
+			setCondition(&s.manager.Status.Conditions, v1beta1.ConditionInfrastructureReady, metav1.ConditionFalse, "GatewayAuthFailed", err.Error(), s.manager.Generation)
 			return reconcile.Result{}, fmt.Errorf("authorize model provider %s for manager: %w", s.modelProviderInfo.HttpApiID, err)
 		}
 	}
+	setCondition(&s.manager.Status.Conditions, v1beta1.ConditionInfrastructureReady, metav1.ConditionTrue, "Provisioned", "Matrix user, room, gateway consumer, and storage credentials are ready.", s.manager.Generation)
 	if err := r.Provisioner.EnsureManagerServiceAccount(ctx, s.manager.Name); err != nil {
+		setCondition(&s.manager.Status.Conditions, v1beta1.ConditionServiceAccountReady, metav1.ConditionFalse, "ServiceAccountFailed", err.Error(), s.manager.Generation)
 		return reconcile.Result{}, fmt.Errorf("ServiceAccount: %w", err)
 	}
+	setCondition(&s.manager.Status.Conditions, v1beta1.ConditionServiceAccountReady, metav1.ConditionTrue, "Provisioned", "ServiceAccount is ready.", s.manager.Generation)
 	if res, err := r.reconcileManagerConfig(ctx, s); err != nil || res.RequeueAfter > 0 {
+		if err != nil {
+			setCondition(&s.manager.Status.Conditions, v1beta1.ConditionConfigSynced, metav1.ConditionFalse, "ConfigSyncFailed", err.Error(), s.manager.Generation)
+		} else {
+			setCondition(&s.manager.Status.Conditions, v1beta1.ConditionConfigSynced, metav1.ConditionFalse, "Reconciling", "Config sync is still reconciling.", s.manager.Generation)
+		}
 		return res, err
 	}
+	setCondition(&s.manager.Status.Conditions, v1beta1.ConditionConfigSynced, metav1.ConditionTrue, "Synced", "Workspace config and skills are synced to object storage.", s.manager.Generation)
 	if res, err := r.reconcileManagerContainer(ctx, s); err != nil || res.RequeueAfter > 0 {
+		if err != nil {
+			setCondition(&s.manager.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionFalse, "ContainerFailed", err.Error(), s.manager.Generation)
+		} else {
+			setCondition(&s.manager.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionFalse, "Reconciling", "Container is still reconciling.", s.manager.Generation)
+		}
 		return res, err
 	}
+	setManagerContainerReadyCondition(s.manager)
 	// Welcome message must run AFTER the container is up: the Manager's
 	// matrix user only joins the Admin DM room once OpenClaw inside the
 	// container has performed its first /sync. Sending earlier means the
@@ -178,6 +204,30 @@ func (r *ManagerReconciler) reconcileManagerNormal(ctx context.Context, s *manag
 	}
 
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+}
+
+func setManagerContainerReadyCondition(m *v1beta1.Manager) {
+	switch m.Spec.DesiredState() {
+	case "Stopped":
+		setCondition(&m.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionTrue, "Stopped", "Container is stopped as requested.", m.Generation)
+	case "Sleeping":
+		setCondition(&m.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionTrue, "Sleeping", "Container is sleeping as requested.", m.Generation)
+	default:
+		if m.Status.ContainerState == string(backend.StatusRunning) || m.Status.ContainerState == string(backend.StatusReady) {
+			setCondition(&m.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionTrue, "Running", "Container is running.", m.Generation)
+			return
+		}
+		setCondition(&m.Status.Conditions, v1beta1.ConditionContainerReady, metav1.ConditionFalse, "ContainerStarting", "Container has been created and is still starting.", m.Generation)
+	}
+}
+
+func setManagerReadyCondition(m *v1beta1.Manager) {
+	setReadyFromDependencies(&m.Status.Conditions, m.Generation,
+		v1beta1.ConditionInfrastructureReady,
+		v1beta1.ConditionServiceAccountReady,
+		v1beta1.ConditionConfigSynced,
+		v1beta1.ConditionContainerReady,
+	)
 }
 
 func (r *ManagerReconciler) SetupWithManager(mgr ctrl.Manager) error {

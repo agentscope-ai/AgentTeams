@@ -7,6 +7,7 @@ import (
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,8 +60,11 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 		human.Status.Phase = computeHumanPhase(&human, reterr)
 		if reterr == nil {
 			human.Status.Message = ""
+			human.Status.ObservedGeneration = human.Generation
+			setHumanReadyCondition(&human)
 		} else {
 			human.Status.Message = reterr.Error()
+			setCondition(&human.Status.Conditions, v1beta1.ConditionReady, metav1.ConditionFalse, "ReconcileFailed", reterr.Error(), human.Generation)
 		}
 
 		if err := r.Status().Patch(ctx, &human, patchBase); err != nil {
@@ -93,12 +97,25 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 // on room invite/kick does not block the next reconcile.
 func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScope) (reconcile.Result, error) {
 	if err := r.reconcileHumanInfra(ctx, s); err != nil {
+		setCondition(&s.human.Status.Conditions, v1beta1.ConditionMatrixUserReady, metav1.ConditionFalse, "MatrixUserFailed", err.Error(), s.human.Generation)
 		return reconcile.Result{RequeueAfter: reconcileInterval}, err
 	}
-	r.reconcileHumanRooms(ctx, s)
+	setCondition(&s.human.Status.Conditions, v1beta1.ConditionMatrixUserReady, metav1.ConditionTrue, "Provisioned", "Matrix user exists and display name sync has been attempted.", s.human.Generation)
+	if ok, msg := r.reconcileHumanRooms(ctx, s); !ok {
+		setCondition(&s.human.Status.Conditions, v1beta1.ConditionRoomAccessReady, metav1.ConditionFalse, "RoomAccessFailed", msg, s.human.Generation)
+	} else {
+		setCondition(&s.human.Status.Conditions, v1beta1.ConditionRoomAccessReady, metav1.ConditionTrue, "Reconciled", "Desired room membership is reconciled.", s.human.Generation)
+	}
 	r.reconcileHumanLegacy(ctx, s)
 
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+}
+
+func setHumanReadyCondition(h *v1beta1.Human) {
+	setReadyFromDependencies(&h.Status.Conditions, h.Generation,
+		v1beta1.ConditionMatrixUserReady,
+		v1beta1.ConditionRoomAccessReady,
+	)
 }
 
 func (r *HumanReconciler) SetupWithManager(mgr ctrl.Manager) error {

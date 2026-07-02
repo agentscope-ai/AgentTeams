@@ -147,7 +147,7 @@ spec:
 | Stopped | 已调和到停止期望 |
 | Failed | 创建或运行失败，查看 `status.message` |
 
-**状态字段（节选）：** `observedGeneration`、`matrixUserID`、`roomID`、`containerState`、`lastHeartbeat`、`message`、`exposedPorts`（暴露端口及域名）。
+**状态字段（节选）：** `observedGeneration`、`conditions`、`matrixUserID`、`roomID`、`containerState`、`lastHeartbeat`、`message`、`exposedPorts`（暴露端口及域名）。
 
 ## Team
 
@@ -333,7 +333,7 @@ Team 匹配目前没有结构化的团队级 matching/filtering 字段，例如 
 | Degraded | 部分 Worker 未就绪或不可用；Leader 可能仍在运行 |
 | Failed | 调和失败，查看 `status.message` |
 
-**状态字段：** `teamRoomID`、`leaderDMRoomID`、`leaderReady`、`readyWorkers`、`totalWorkers`、`workerExposedPorts`（按 Worker 名索引的暴露端口信息）。
+**状态字段：** `observedGeneration`、`conditions`、`teamRoomID`、`leaderDMRoomID`、`leaderReady`、`readyWorkers`、`totalWorkers`、`members`（包含每个成员的 `roomID`、`matrixUserID`、就绪状态，以及 Worker 的 `exposedPorts`）。
 
 ### Team Admin
 
@@ -421,7 +421,26 @@ spec:
 | Updating | 规格或发布中 |
 | Failed | 错误，见 `status.message` |
 
-**其它状态字段：** `observedGeneration`、`matrixUserID`、`roomID`、`containerState`、`version`。
+**其它状态字段：** `observedGeneration`、`conditions`、`matrixUserID`、`roomID`、`containerState`、`version`。
+
+### Status Conditions
+
+`Manager`、`Worker`、`Team`、`Human` 都会暴露 Kubernetes 风格的 `status.conditions`。需要机器可读的就绪信号或精确定位卡在哪个调和阶段时，优先使用 conditions：
+
+```bash
+kubectl wait --for=condition=Ready worker/alice -n hiclaw-system --timeout=10m
+kubectl get worker alice -n hiclaw-system -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}{"\n"}{end}'
+```
+
+常见 condition 类型：
+
+| 资源 | Conditions |
+|------|------------|
+| Manager / Worker | `InfrastructureReady`、`ServiceAccountReady`、`ConfigSynced`、`ContainerReady`、`ExposedPortsReady`（Worker 暴露端口相关）、`Ready` |
+| Team | `TeamRoomsReady`、`TeamStorageReady`、`MembersReady`、`Ready` |
+| Human | `MatrixUserReady`、`RoomAccessReady`、`Ready` |
+
+`status.phase` 与 `status.message` 会继续保留用于兼容。自动化、GitOps 健康检查和排查局部调和失败时，建议读取 `conditions`。
 
 ## Human
 

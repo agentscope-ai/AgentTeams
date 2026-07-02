@@ -247,6 +247,28 @@ spec:
                   format: date-time
                 message:
                   type: string
+                conditions:
+                  type: array
+                  description: Kubernetes-style conditions describing reconcile progress and blockers.
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
                 exposedPorts:
                   type: array
                   description: Ports currently exposed via Higress gateway

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -173,6 +174,37 @@ func TestHumanReconciler_Create_HappyPath(t *testing.T) {
 	if !hasFinalizer {
 		t.Errorf("finalizer %q not added on create reconcile; found %v",
 			finalizerName, out.Finalizers)
+	}
+}
+
+func TestHumanReconciler_ConditionsShowRoomAccessFailure(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	human := newHuman("alice", v1beta1.HumanSpec{
+		DisplayName:       "Alice",
+		PermissionLevel:   2,
+		AccessibleWorkers: []string{"w1"},
+	})
+	rig := newHumanRig(t, human, worker)
+	rig.prov.InviteToRoomFn = func(context.Context, string, string) error {
+		return errors.New("matrix invite failed")
+	}
+
+	out, _, err := rig.reconcile("alice")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if cond := meta.FindStatusCondition(out.Status.Conditions, v1beta1.ConditionMatrixUserReady); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("MatrixUserReady condition=%+v, want True", cond)
+	}
+	if cond := meta.FindStatusCondition(out.Status.Conditions, v1beta1.ConditionRoomAccessReady); cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "RoomAccessFailed" {
+		t.Fatalf("RoomAccessReady condition=%+v, want False RoomAccessFailed", cond)
+	}
+	if cond := meta.FindStatusCondition(out.Status.Conditions, v1beta1.ConditionReady); cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready condition=%+v, want False", cond)
+	}
+	if len(out.Status.Rooms) != 0 {
+		t.Fatalf("Status.Rooms=%v, want empty because invite failed", out.Status.Rooms)
 	}
 }
 

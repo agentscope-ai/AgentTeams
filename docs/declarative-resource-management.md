@@ -159,7 +159,7 @@ When the Controller receives a Worker resource, it executes:
 | Stopped | Desired stopped state reconciled |
 | Failed | Creation or runtime failure — check `status.message` |
 
-**Status fields (subset):** `status.observedGeneration`, `status.matrixUserID`, `status.roomID`, `status.containerState`, `status.lastHeartbeat`, `status.message`, `status.exposedPorts` (per-port `domain` after expose).
+**Status fields (subset):** `status.observedGeneration`, `status.conditions`, `status.matrixUserID`, `status.roomID`, `status.containerState`, `status.lastHeartbeat`, `status.message`, `status.exposedPorts` (per-port `domain` after expose).
 
 ## Team
 
@@ -364,7 +364,7 @@ Worker names rather than a structured Team filter.
 | Degraded | Some Workers unavailable or not ready; Leader may still run |
 | Failed | Reconciliation error — check `status.message` |
 
-**Status fields:** `teamRoomID`, `leaderDMRoomID`, `leaderReady`, `readyWorkers`, `totalWorkers`, `workerExposedPorts` (map of worker name → exposed port statuses).
+**Status fields:** `observedGeneration`, `conditions`, `teamRoomID`, `leaderDMRoomID`, `leaderReady`, `readyWorkers`, `totalWorkers`, `members` (including each member's `roomID`, `matrixUserID`, readiness, and worker `exposedPorts`).
 
 ### Team Admin
 
@@ -460,7 +460,26 @@ spec:
 | Updating | Spec or rollout in progress |
 | Failed | Error — see `status.message` |
 
-**Other status fields:** `observedGeneration`, `matrixUserID`, `roomID`, `containerState`, `version`.
+**Other status fields:** `observedGeneration`, `conditions`, `matrixUserID`, `roomID`, `containerState`, `version`.
+
+### Status Conditions
+
+All `Manager`, `Worker`, `Team`, and `Human` resources expose Kubernetes-style `status.conditions`. Use them when you need a machine-readable readiness signal or a precise blocked phase:
+
+```bash
+kubectl wait --for=condition=Ready worker/alice -n hiclaw-system --timeout=10m
+kubectl get worker alice -n hiclaw-system -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}{"\n"}{end}'
+```
+
+Common condition types include:
+
+| Resource | Conditions |
+|----------|------------|
+| Manager / Worker | `InfrastructureReady`, `ServiceAccountReady`, `ConfigSynced`, `ContainerReady`, `ExposedPortsReady` (Worker only when expose is relevant), `Ready` |
+| Team | `TeamRoomsReady`, `TeamStorageReady`, `MembersReady`, `Ready` |
+| Human | `MatrixUserReady`, `RoomAccessReady`, `Ready` |
+
+`status.phase` and `status.message` remain for compatibility. Prefer `conditions` for automation, GitOps health checks, and debugging partial reconcile failures.
 
 ## Human
 

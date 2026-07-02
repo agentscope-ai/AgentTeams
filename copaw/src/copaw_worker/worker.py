@@ -15,6 +15,7 @@ import os
 import platform
 import shutil
 import stat
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +30,41 @@ from copaw_worker.health import HealthState, check_matrix_service
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+def _read_prompt_text_stable(path: Path, *, attempts: int = 6, delay: float = 0.2) -> str:
+    """Read a UTF-8 prompt file after transient mirror/write races settle."""
+    last_data = b""
+    last_error: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            before = path.stat()
+            data = path.read_bytes()
+            after = path.stat()
+            text = data.decode("utf-8")
+            if before.st_size == after.st_size and before.st_mtime_ns == after.st_mtime_ns:
+                return text
+            last_data = data
+            last_error = OSError(f"{path} changed while reading")
+        except (OSError, UnicodeDecodeError) as exc:
+            last_error = exc
+            try:
+                last_data = path.read_bytes()
+            except OSError:
+                pass
+
+        if attempt < attempts:
+            time.sleep(delay)
+
+    logger.warning(
+        "Prompt file %s did not become a stable UTF-8 file after %d attempts; "
+        "using replacement decoding. Last error: %s",
+        path,
+        attempts,
+        last_error,
+    )
+    return last_data.decode("utf-8", errors="replace")
 
 
 class Worker:
@@ -127,7 +163,7 @@ class Worker:
         for name in ("SOUL.md", "AGENTS.md"):
             src = self.sync.local_dir / name
             if src.exists():
-                (self._copaw_working_dir / name).write_text(src.read_text())
+                (self._copaw_working_dir / name).write_text(_read_prompt_text_stable(src), encoding="utf-8")
 
         # 5. Bridge openclaw.json -> CoPaw config.json + providers.json
         #    Infer gateway port from FS endpoint so bridge's _port_remap uses
@@ -624,13 +660,15 @@ class Worker:
         try:
             openclaw_cfg = self.sync.get_config()
             # Use local Worker-managed files; fallback to MinIO for initial bootstrap
-            soul = (self.sync.local_dir / "SOUL.md").read_text() if (self.sync.local_dir / "SOUL.md").exists() else self.sync.get_soul()
-            agents = (self.sync.local_dir / "AGENTS.md").read_text() if (self.sync.local_dir / "AGENTS.md").exists() else self.sync.get_agents_md()
+            soul_path = self.sync.local_dir / "SOUL.md"
+            agents_path = self.sync.local_dir / "AGENTS.md"
+            soul = _read_prompt_text_stable(soul_path) if soul_path.exists() else self.sync.get_soul()
+            agents = _read_prompt_text_stable(agents_path) if agents_path.exists() else self.sync.get_agents_md()
 
             if soul:
-                (self._copaw_working_dir / "SOUL.md").write_text(soul)
+                (self._copaw_working_dir / "SOUL.md").write_text(soul, encoding="utf-8")
             if agents:
-                (self._copaw_working_dir / "AGENTS.md").write_text(agents)
+                (self._copaw_working_dir / "AGENTS.md").write_text(agents, encoding="utf-8")
 
             bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
             console.print("[green]Config re-bridged.[/green]")

@@ -101,6 +101,21 @@ RUN MATRIX_CH=/opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels
          echo 'Patched Matrix channel _sync_loop indentation'; \
        fi
 
+# --- Patch CoPaw stream-error classification (standard venv) ---
+# Upstream classifies mid-stream disconnects (RemoteProtocolError, "peer closed
+# connection", "incomplete chunked read", stream-idle timeouts) as an
+# UnknownAgentException instead of a retryable ModelTimeoutException, and caps
+# the timeout at 60s. Patch fails the build loudly if the upstream markers move.
+COPY scripts/patch_copaw_stream_errors.py /tmp/
+
+RUN /opt/venv/standard/bin/python /tmp/patch_copaw_stream_errors.py \
+        /opt/venv/standard/lib/python3.11/site-packages \
+    && grep -q 'ModelTimeoutException(model, timeout=900' \
+        /opt/venv/standard/lib/python3.11/site-packages/copaw/exceptions.py \
+    && grep -q '"stream_idle_timeout"' \
+        /opt/venv/standard/lib/python3.11/site-packages/copaw/exceptions.py \
+    && rm /tmp/patch_copaw_stream_errors.py
+
 # --- Lite venv: copaw from GitHub fork ---
 RUN python -m venv /opt/venv/lite \
     && /opt/venv/lite/bin/pip install --no-cache-dir \

@@ -59,6 +59,8 @@ def _make_channel(user_id: str = "@bot:hs.local") -> MatrixChannel:
     ch._user_id = user_id
     ch._client = None
     ch._typing_tasks = {}
+    ch._localpart_cache = {}
+    ch._startup_replay_buffer = []
     return ch
 
 
@@ -455,4 +457,326 @@ def test_matrix_readiness_probe_bypasses_allowlist_when_targeted():
 
     assert ch.enqueued == []
     assert len(client.sent) == 1
+
+
+# ---------------------------------------------------------------------------
+# Bare-@mention resolution (tier 4) — room-members localpart cache
+# ---------------------------------------------------------------------------
+
+
+class _RoomMember:
+    def __init__(self, user_id):
+        self.user_id = user_id
+
+
+class _JoinedMembersResponse:
+    """Stand-in for nio.responses.JoinedMembersResponse."""
+
+    def __init__(self, members):
+        self.members = members
+
+
+class _JoinedMembersClient:
+    def __init__(self, members_by_room):
+        self._members_by_room = members_by_room
+        self.calls = []
+
+    async def joined_members(self, room_id):
+        self.calls.append(room_id)
+        members = self._members_by_room.get(room_id, [])
+        return _JoinedMembersResponse([_RoomMember(m) for m in members])
+
+
+def _bare_mention_event(body: str):
+    """A room-message event with no m.mentions / formatted_body / full MXID —
+    only a bare ``@localpart`` in the plain-text body."""
+    return SimpleNamespace(
+        sender="@alice:hs.local",
+        body=body,
+        event_id="$event",
+        server_timestamp=0,
+        source={"content": {"m.mentions": {}}},
+    )
+
+
+def test_was_mentioned_resolves_bare_localpart_via_room_members():
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    ch._client = _JoinedMembersClient(
+        {
+            "!room:hs.local": [
+                "@alice:hs.local",
+                "@copywriting-assistant:hs.local",
+            ],
+        },
+    )
+    matrix_channel.JoinedMembersResponse = _JoinedMembersResponse
+
+    event = _bare_mention_event("@copywriting-assistant can you take this?")
+    mentioned = asyncio.run(
+        ch._was_mentioned(event, event.body, "!room:hs.local"),
+    )
+
+    assert mentioned is True
+
+
+def test_was_mentioned_bare_localpart_cache_is_ttl_bounded():
+    """The localpart cache should avoid hammering joined_members every call."""
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    client = _JoinedMembersClient(
+        {
+            "!room:hs.local": [
+                "@alice:hs.local",
+                "@copywriting-assistant:hs.local",
+            ],
+        },
+    )
+    ch._client = client
+    matrix_channel.JoinedMembersResponse = _JoinedMembersResponse
+
+    event = _bare_mention_event("@copywriting-assistant ping")
+    asyncio.run(ch._was_mentioned(event, event.body, "!room:hs.local"))
+    asyncio.run(ch._was_mentioned(event, event.body, "!room:hs.local"))
+
+    assert len(client.calls) == 1
+
+
+def test_was_mentioned_bare_localpart_not_in_room_returns_false():
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    ch._client = _JoinedMembersClient(
+        {"!room:hs.local": ["@alice:hs.local", "@bob:hs.local"]},
+    )
+    matrix_channel.JoinedMembersResponse = _JoinedMembersResponse
+
+    event = _bare_mention_event("@someone-else can you take this?")
+    mentioned = asyncio.run(
+        ch._was_mentioned(event, event.body, "!room:hs.local"),
+    )
+
+    assert mentioned is False
+
+
+def test_registry_localparts_reads_workers_registry_json(tmp_path, monkeypatch):
+    """Manager-only extra tier: ~/workers-registry.json worker names resolve
+    to MXIDs on this channel's homeserver domain."""
+    registry = tmp_path / "workers-registry.json"
+    registry.write_text(
+        '{"workers": {"alice": {"room_id": "!x:hs.local"}, '
+        '"bob": {"room_id": "!y:hs.local"}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(matrix_channel.Path, "home", lambda: tmp_path)
+
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    result = ch._registry_localparts()
+
+    assert result == {
+        "alice": "@alice:hs.local",
+        "bob": "@bob:hs.local",
+    }
+
+
+def test_registry_localparts_missing_file_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(matrix_channel.Path, "home", lambda: tmp_path)
+
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    result = ch._registry_localparts()
+
+    assert result == {}
+
+
+def test_was_mentioned_bare_localpart_falls_back_to_workers_registry(
+    tmp_path, monkeypatch,
+):
+    """When the room-members lookup misses (e.g. the target hasn't spoken in
+    this room / joined_members hiccup), the Manager gets one more chance via
+    ~/workers-registry.json."""
+    registry = tmp_path / "workers-registry.json"
+    registry.write_text(
+        '{"workers": {"copywriting-assistant": {"room_id": "!x:hs.local"}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(matrix_channel.Path, "home", lambda: tmp_path)
+
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    # Room-members lookup misses (empty room).
+    ch._client = _JoinedMembersClient({"!room:hs.local": []})
+    matrix_channel.JoinedMembersResponse = _JoinedMembersResponse
+
+    event = _bare_mention_event("@copywriting-assistant can you take this?")
+    mentioned = asyncio.run(
+        ch._was_mentioned(event, event.body, "!room:hs.local"),
+    )
+
+    assert mentioned is True
+
+
+def test_matrix_bare_mention_wakes_handler_in_group_room():
+    """End-to-end: a bare ``@localpart`` (no homeserver suffix) in a group
+    room wakes the handler and enqueues the message, exactly like a full
+    m.mentions-based mention would."""
+    ch = _make_inbound_channel()
+    ch._require_mention = lambda _room_id: True
+    ch._client = _JoinedMembersClient(
+        {
+            "!room:hs.local": [
+                "@alice:hs.local",
+                "@copywriting-assistant:hs.local",
+            ],
+        },
+    )
+    matrix_channel.JoinedMembersResponse = _JoinedMembersResponse
+
+    asyncio.run(
+        ch._on_room_event(
+            _FakeRoom(),
+            _bare_mention_event("@copywriting-assistant please help"),
+        ),
+    )
+
+    assert len(ch.enqueued) == 1
+
+
+# ---------------------------------------------------------------------------
+# Immediate ack — direct room_send bypassing the queue
+# ---------------------------------------------------------------------------
+
+
+def test_immediate_ack_sent_before_enqueue_by_default(monkeypatch):
+    monkeypatch.delenv("HICLAW_CHAT_ACK", raising=False)
+    ch = _make_inbound_channel()
+    client = _SendClient()
+    ch._client = client
+
+    asyncio.run(
+        ch._on_room_event(
+            _FakeRoom(),
+            _event("copywriting-assistant: please help", mentioned=True),
+        ),
+    )
+
+    assert len(ch.enqueued) == 1
+    # Ack was sent directly via room_send, bypassing the queue.
+    assert len(client.sent) == 1
+    assert client.sent[0][0] == "!room:hs.local"
+    assert client.sent[0][2]["body"]
+    # Short, single-line ack — not spammy.
+    assert "\n" not in client.sent[0][2]["body"]
+
+
+def test_immediate_ack_disabled_via_env(monkeypatch):
+    monkeypatch.setenv("HICLAW_CHAT_ACK", "0")
+    ch = _make_inbound_channel()
+    client = _SendClient()
+    ch._client = client
+
+    asyncio.run(
+        ch._on_room_event(
+            _FakeRoom(),
+            _event("copywriting-assistant: please help", mentioned=True),
+        ),
+    )
+
+    assert len(ch.enqueued) == 1
+    assert client.sent == []
+
+
+def test_immediate_ack_env_false_string_disables():
+    import os
+
+    prev = os.environ.pop("HICLAW_CHAT_ACK", None)
+    os.environ["HICLAW_CHAT_ACK"] = "false"
+    try:
+        ch = _make_inbound_channel()
+        client = _SendClient()
+        ch._client = client
+
+        asyncio.run(
+            ch._on_room_event(
+                _FakeRoom(),
+                _event("copywriting-assistant: please help", mentioned=True),
+            ),
+        )
+
+        assert client.sent == []
+    finally:
+        if prev is None:
+            os.environ.pop("HICLAW_CHAT_ACK", None)
+        else:
+            os.environ["HICLAW_CHAT_ACK"] = prev
+
+
+def test_immediate_ack_not_sent_for_readiness_probe():
+    """Readiness probes take the direct-reply path; no ack should also fire."""
+    ch = _make_inbound_channel()
+    client = _SendClient()
+    ch._client = client
+
+    asyncio.run(
+        ch._on_room_event(
+            _FakeRoom(),
+            _event(
+                "copywriting-assistant: Readiness check: please reply with "
+                "the exact text READY.",
+                mentioned=True,
+            ),
+        ),
+    )
+
+    assert ch.enqueued == []
+    assert len(client.sent) == 1
     assert client.sent[0][2]["body"] == "READY"
+
+
+# ---------------------------------------------------------------------------
+# Catch-up replay — buffer suppressed startup messages, replay after ready
+# ---------------------------------------------------------------------------
+
+
+def test_startup_buffer_skips_own_messages():
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    ch._startup_replay_buffer = []
+
+    own_event = SimpleNamespace(
+        sender="@copywriting-assistant:hs.local",
+        event_id="$own",
+    )
+    ch._buffer_startup_event(_FakeRoom(), own_event)
+
+    assert ch._startup_replay_buffer == []
+
+
+def test_startup_buffer_caps_at_limit():
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    ch._startup_replay_buffer = []
+
+    for i in range(matrix_channel.STARTUP_REPLAY_BUFFER_CAP + 10):
+        event = SimpleNamespace(sender="@alice:hs.local", event_id=f"$e{i}")
+        ch._buffer_startup_event(_FakeRoom(), event)
+
+    assert (
+        len(ch._startup_replay_buffer) == matrix_channel.STARTUP_REPLAY_BUFFER_CAP
+    )
+
+
+def test_startup_replay_processes_buffered_messages_through_normal_path():
+    """No first-boot message loss: buffered events are replayed through the
+    normal _on_room_event handling path once the channel is ready."""
+    ch = _make_inbound_channel()
+    ch._startup_replay_buffer = [
+        (_FakeRoom(), _event("copywriting-assistant: /stop", mentioned=True)),
+        (_FakeRoom(), _event("copywriting-assistant: hello", mentioned=True)),
+    ]
+
+    asyncio.run(ch._replay_startup_buffer())
+
+    assert ch._startup_replay_buffer == []
+    assert len(ch.enqueued) == 2
+
+
+def test_startup_replay_noop_when_buffer_empty():
+    ch = _make_inbound_channel()
+    ch._startup_replay_buffer = []
+
+    asyncio.run(ch._replay_startup_buffer())
+
+    assert ch.enqueued == []

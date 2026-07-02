@@ -54,6 +54,8 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 
 将更多自包含的 `SKILL.md` 放到 `agents/manager/skills/<skill-name>/`。Manager 运行时会自动发现该目录下的技能。
 
+目录结构、frontmatter 和 Agent-facing 写作规则见 [Skill 格式与贡献指南](skill-format.md)。
+
 添加新技能的步骤：
 1. 创建目录：`agents/manager/skills/<your-skill-name>/`
 2. 编写 `SKILL.md`，包含完整的 API 参考和示例

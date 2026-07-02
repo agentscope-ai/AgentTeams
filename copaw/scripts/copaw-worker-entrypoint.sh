@@ -37,25 +37,25 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 # ── Credential setup ─────────────────────────────────────────────────────────
-# Controller-mediated OSS: STS credentials via MC_HOST_agentteams.
+# Controller-mediated OSS: STS credentials via MC_HOST_hiclaw.
 # Local MinIO: explicit FS endpoint/key/secret passed via CLI args.
-if ensure_mc_credentials && agentteams_mc_host_configured; then
+if ensure_mc_credentials && [ -n "${MC_HOST_hiclaw:-}" ]; then
     log "Configuring OSS credentials via controller-issued STS..."
-    # CLI requires --fs/--fs-key/--fs-secret but they are unused when MC_HOST_agentteams is set.
+    # CLI requires --fs/--fs-key/--fs-secret but they are unused when MC_HOST_hiclaw is set.
     FS_ENDPOINT="https://oss-placeholder.aliyuncs.com"
     FS_ACCESS_KEY="rrsa"
     FS_SECRET_KEY="rrsa"
-    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_OSS_BUCKET:-agentteams-storage}}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_FS_BUCKET:-${HICLAW_OSS_BUCKET:-hiclaw-storage}}}"
     log "  OSS bucket: ${FS_BUCKET}"
 else
     if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" = "oss" ]; then
-        log "ERROR: OSS storage requires controller-issued storage credentials, but $(agentteams_mc_host_var) is not configured"
+        log "ERROR: OSS storage requires controller-issued storage credentials, but MC_HOST_hiclaw is not configured"
         exit 1
     fi
     FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-${HICLAW_FS_ENDPOINT:-}}"
     FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-${HICLAW_FS_ACCESS_KEY:-}}"
     FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-${HICLAW_FS_SECRET_KEY:-}}"
-    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_OSS_BUCKET:-hiclaw-storage}}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_FS_BUCKET:-${HICLAW_OSS_BUCKET:-hiclaw-storage}}}"
     [ -n "${FS_ENDPOINT}" ] || { log "ERROR: AGENTTEAMS_FS_ENDPOINT is required"; exit 1; }
     [ -n "${FS_ACCESS_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_ACCESS_KEY is required"; exit 1; }
     [ -n "${FS_SECRET_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_SECRET_KEY is required"; exit 1; }

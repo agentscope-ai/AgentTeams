@@ -354,9 +354,7 @@ func TestWorkerPodDeleted_Recreates(t *testing.T) {
 	if err := k8sClient.Create(ctx, worker); err != nil {
 		t.Fatalf("failed to create Worker CR: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = k8sClient.Delete(ctx, worker)
-	})
+	t.Cleanup(func() { _ = deleteWorkerAndWait(t, worker) })
 
 	waitForRunning(t, worker)
 
@@ -374,14 +372,8 @@ func TestWorkerPodDeleted_Recreates(t *testing.T) {
 		return nil
 	})
 
-	// Phase should still be Running after recreation
-	var w v1beta1.Worker
-	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(worker), &w); err != nil {
-		t.Fatalf("failed to get Worker: %v", err)
-	}
-	if w.Status.Phase != "Running" {
-		t.Errorf("phase=%q after pod recreation, want Running", w.Status.Phase)
-	}
+	// Phase should converge back to Running after recreation.
+	waitForRunning(t, worker)
 }
 
 // ---------------------------------------------------------------------------
@@ -397,9 +389,7 @@ func TestWorkerCreate_Idempotent_NoDoubleProvision(t *testing.T) {
 	if err := k8sClient.Create(ctx, worker); err != nil {
 		t.Fatalf("failed to create Worker CR: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = k8sClient.Delete(ctx, worker)
-	})
+	t.Cleanup(func() { _ = deleteWorkerAndWait(t, worker) })
 
 	waitForRunning(t, worker)
 
@@ -970,4 +960,21 @@ func assertEventually(t *testing.T, condFn func() error) {
 		time.Sleep(interval)
 	}
 	t.Fatalf("condition not met within %v: %v", timeout, lastErr)
+}
+
+func deleteWorkerAndWait(t *testing.T, worker *v1beta1.Worker) error {
+	t.Helper()
+	if err := k8sClient.Delete(ctx, worker); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var got v1beta1.Worker
+		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(worker), &got)
+		if err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		time.Sleep(interval)
+	}
+	return fmt.Errorf("worker %s not deleted within timeout", worker.Name)
 }

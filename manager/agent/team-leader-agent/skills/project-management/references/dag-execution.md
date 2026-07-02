@@ -39,10 +39,7 @@ Each task node uses:
 
 - `taskId`: stable node ID. Use `{projectId}-{seq}`.
 - `title`: short human-readable work unit.
-- `assignedTo`: Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract mechanically from `hiclaw get workers --team "$TEAM_CR" -o json` output. Never strip, guess, or transform.
-  - ❌ Do NOT use CLI `.name` field directly (may include deployment prefixes)
-  - ❌ Do NOT strip prefixes yourself
-  - Example: `@worker-issue-resolver:domain` → `worker-issue-resolver`
+- `assignedTo`: Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Get it from `hiclaw get workers --team "$TEAM_CR" -o json` and copy it verbatim. Example: `@worker-issue-resolver:domain` -> `worker-issue-resolver`.
 - `dependsOn`: list of task IDs that must produce accepted upstream results first.
 
 Do not use `worker`, `owner`, `dependencies`, or short standalone IDs like `st-01`.

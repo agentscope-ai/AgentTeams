@@ -23,7 +23,7 @@ from rich.panel import Panel
 
 from copaw_worker.config import WorkerConfig
 from copaw_worker.sync import FileSync, sync_loop, push_loop
-from copaw_worker.bridge import bridge_openclaw_to_copaw
+from copaw_worker.bridge import bridge_openclaw_to_copaw, sync_skills_to_runtime
 from copaw_worker.worker_api import WorkerAPIServer
 from copaw_worker.health import HealthState, check_matrix_service
 
@@ -140,7 +140,11 @@ class Worker:
 
         console.print("[yellow]Bridging configuration to CoPaw...[/yellow]")
         try:
-            bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
+            bridge_openclaw_to_copaw(
+                openclaw_cfg,
+                self._copaw_working_dir,
+                profile="worker",
+            )
         except Exception as exc:
             console.print(f"[red]Config bridge failed: {exc}[/red]")
             return False
@@ -506,6 +510,11 @@ class Worker:
 
         if skill_names:
             console.print(f"[green]Skills installed: {', '.join(skill_names)}[/green]")
+        sync_skills_to_runtime(
+            self.sync.local_dir,
+            self._copaw_working_dir,
+            skill_names,
+        )
 
         # 3. Remove stale skills from active_skills/ that are no longer in MinIO
         #    and are not CoPaw builtins.
@@ -599,7 +608,7 @@ class Worker:
         src = self.sync.local_dir / "config" / "mcporter.json"
         if not src.exists():
             return
-        dst = self._copaw_working_dir / "config" / "mcporter.json"
+        dst = self._copaw_working_dir / "workspaces" / "default" / "config" / "mcporter.json"
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         logger.info("mcporter config copied to %s", dst)
@@ -635,7 +644,11 @@ class Worker:
             if agents:
                 (self._copaw_working_dir / "AGENTS.md").write_text(agents)
 
-            bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
+            bridge_openclaw_to_copaw(
+                openclaw_cfg,
+                self._copaw_working_dir,
+                profile="worker",
+            )
             console.print("[green]Config re-bridged.[/green]")
         except Exception as exc:
             console.print(f"[red]Re-bridge failed: {exc}[/red]")

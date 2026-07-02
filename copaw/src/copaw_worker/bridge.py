@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 import json
 import os
 import shutil
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -94,11 +93,12 @@ def _patch_copaw_paths(working_dir: Path) -> None:
         pass
 
 
-def bridge_openclaw_to_copaw(
+def bridge_controller_to_copaw(
     openclaw_cfg: dict[str, Any],
     working_dir: Path,
     *,
-    profile: str = "manager",
+    profile: str = "worker",
+    agent: str = "default",
 ) -> None:
     """
     Read openclaw_cfg (parsed openclaw.json) and write:
@@ -111,11 +111,20 @@ def bridge_openclaw_to_copaw(
     path constants so the running process uses the correct directory.
 
     """
+    if profile not in {"worker", "manager"}:
+        raise ValueError(f"unknown bridge profile: {profile}")
+
     working_dir.mkdir(parents=True, exist_ok=True)
     in_container = _is_in_container()
 
-    _write_config_json(openclaw_cfg, working_dir, in_container)
-    _write_agent_json(openclaw_cfg, working_dir, in_container, profile=profile)
+    _write_config_json(openclaw_cfg, working_dir)
+    _write_agent_json(
+        openclaw_cfg,
+        working_dir,
+        in_container,
+        profile=profile,
+        agent=agent,
+    )
     _write_providers_json(openclaw_cfg, working_dir, in_container)
 
     os.environ["COPAW_WORKING_DIR"] = str(working_dir)
@@ -128,6 +137,22 @@ def bridge_openclaw_to_copaw(
     providers_src = working_dir / "providers.json"
     if providers_src.exists():
         shutil.copy2(providers_src, secret_dir / "providers.json")
+
+
+def bridge_openclaw_to_copaw(
+    openclaw_cfg: dict[str, Any],
+    working_dir: Path,
+    *,
+    profile: str = "manager",
+    agent: str = "default",
+) -> None:
+    """Backward-compatible alias for the controller bridge entry point."""
+    bridge_controller_to_copaw(
+        openclaw_cfg,
+        working_dir,
+        profile=profile,
+        agent=agent,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +247,70 @@ def _resolve_matrix_user_id(
     return ""
 
 
+def _template_path(name: str) -> Path:
+    return Path(__file__).resolve().parent / "templates" / name
+
+
+def _dedup_union(left: list[Any], right: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    for item in [*left, *right]:
+        if item not in merged:
+            merged.append(item)
+    return merged
+
+
+def _deep_merge_controller_defaults(local: Any, remote: Any) -> Any:
+    if isinstance(local, dict) and isinstance(remote, dict):
+        result = dict(local)
+        for key, value in remote.items():
+            if key not in result:
+                result[key] = value
+            else:
+                result[key] = _deep_merge_controller_defaults(result[key], value)
+        return result
+    return local
+
+
+def _heartbeat_from_openclaw(cfg: dict[str, Any]) -> dict[str, Any] | None:
+    raw = (
+        cfg.get("agents", {})
+        .get("defaults", {})
+        .get("heartbeat")
+    )
+    if not raw:
+        return None
+    heartbeat = {"enabled": True}
+    if "every" in raw:
+        heartbeat["every"] = raw["every"]
+    if "target" in raw:
+        heartbeat["target"] = raw["target"]
+    if "activeHours" in raw:
+        heartbeat["active_hours"] = raw["activeHours"]
+    return heartbeat
+
+
+def _embedding_config_from_openclaw(
+    cfg: dict[str, Any],
+    in_container: bool,
+) -> dict[str, Any] | None:
+    raw = (
+        cfg.get("agents", {})
+        .get("defaults", {})
+        .get("memorySearch")
+    )
+    if not raw:
+        return None
+
+    remote = raw.get("remote", {})
+    return {
+        "backend": raw.get("provider", "openai"),
+        "model_name": raw.get("model", ""),
+        "base_url": _port_remap(remote.get("baseUrl", ""), in_container),
+        "api_key": remote.get("apiKey", ""),
+        "dimensions": int(raw.get("outputDimensionality", 1024)),
+    }
+
+
 # ---------------------------------------------------------------------------
 # config.json
 # ---------------------------------------------------------------------------
@@ -229,76 +318,15 @@ def _resolve_matrix_user_id(
 def _write_config_json(
     cfg: dict[str, Any],
     working_dir: Path,
-    in_container: bool,
 ) -> None:
-    matrix_raw = cfg.get("channels", {}).get("matrix", {})
-    homeserver = _port_remap(
-        matrix_raw.get("homeserver", ""), in_container
-    )
-    access_token = matrix_raw.get("accessToken", "")
-    user_id = _resolve_matrix_user_id(matrix_raw)
-
-    # DM allowlist
-    dm_cfg = matrix_raw.get("dm", {})
-    dm_policy = dm_cfg.get("policy", "allowlist")
-    dm_allow_from: list[str] = dm_cfg.get("allowFrom", [])
-
-    # Group allowlist
-    group_policy = matrix_raw.get("groupPolicy", "allowlist")
-    group_allow_from: list[str] = matrix_raw.get("groupAllowFrom", [])
-
-    # Per-room/group config (pass through as-is for MatrixChannel to use)
-    groups = matrix_raw.get("groups", {})
-
-    # History limit: openclaw uses camelCase "historyLimit", bridge to snake_case.
-    history_limit = matrix_raw.get("historyLimit")
-    if history_limit is None:
-        history_limit = (
-            cfg.get("messages", {}).get("groupChat", {}).get("historyLimit")
-        )
-
-    matrix_channel_cfg: dict[str, Any] = {
-        "enabled": matrix_raw.get("enabled", True),
-        "homeserver": homeserver,
-        "access_token": access_token,
-        "encryption": matrix_raw.get("encryption", False),
-        "dm_policy": dm_policy,
-        "allow_from": dm_allow_from,
-        "group_policy": group_policy,
-        "group_allow_from": group_allow_from,
-        "groups": groups,
-        "filter_tool_messages": True,
-        "filter_thinking": True,
-        "vision_enabled": _resolve_vision_enabled(cfg),
-    }
-    if history_limit is not None:
-        matrix_channel_cfg["history_limit"] = int(history_limit)
-    if user_id:
-        matrix_channel_cfg["user_id"] = user_id
-
     config_path = working_dir / "config.json"
-    # Merge with existing config to avoid clobbering other settings
-    existing: dict[str, Any] = {}
     if config_path.exists():
-        with open(config_path) as f:
-            existing = json.load(f)
-
-    existing.setdefault("channels", {})["matrix"] = matrix_channel_cfg
-    # Disable console channel (we use Matrix)
-    existing["channels"].setdefault("console", {})["enabled"] = False
-
-    # Bridge model context window → agents.running.max_input_length so that
-    # CoPaw's memory compaction threshold tracks the actual model capability.
-    # We read contextWindow from the first model of the primary (or first)
-    # provider to avoid hard-coding a default that mismatches the real model.
-    context_window = _resolve_context_window(cfg)
-    if context_window is not None:
-        existing.setdefault("agents", {}).setdefault("running", {})[
-            "max_input_length"
-        ] = context_window
-
-    with open(config_path, "w") as f:
-        json.dump(existing, f, indent=2, ensure_ascii=False)
+        return
+    tmpl_path = _template_path("config.json")
+    if tmpl_path.exists():
+        shutil.copy2(tmpl_path, config_path)
+        return
+    config_path.write_text(json.dumps({"security": {}}, indent=2))
 
 
 
@@ -313,6 +341,7 @@ def _write_agent_json(
     in_container: bool,
     *,
     profile: str = "worker",
+    agent: str = "default",
 ) -> None:
     """Create agent.json from template, then overlay Matrix channel config.
 
@@ -320,7 +349,7 @@ def _write_agent_json(
     The template provides defaults; we overlay controller-owned fields
     (Matrix access_token, homeserver, allowlists, context window).
     """
-    workspace_dir = working_dir / "workspaces" / "default"
+    workspace_dir = working_dir / "workspaces" / agent
     workspace_dir.mkdir(parents=True, exist_ok=True)
     agent_path = workspace_dir / "agent.json"
 
@@ -328,9 +357,7 @@ def _write_agent_json(
     if not agent_path.exists():
         template_name = f"agent.{profile}.json"
         try:
-            # Try loading from package templates directory
-            tmpl_dir = Path(__file__).resolve().parent / "templates"
-            tmpl_path = tmpl_dir / template_name
+            tmpl_path = _template_path(template_name)
             if tmpl_path.exists():
                 shutil.copy2(str(tmpl_path), str(agent_path))
             else:
@@ -355,7 +382,7 @@ def _write_agent_json(
                 with open(agent_path, "w") as f:
                     json.dump(minimal, f, indent=2)
         except Exception:
-            pass
+            logger.exception("failed to seed CoPaw agent template")
 
     # Load existing agent.json
     try:
@@ -383,19 +410,38 @@ def _write_agent_json(
         matrix_ch["access_token"] = access_token
     if user_id:
         matrix_ch["user_id"] = user_id
-    matrix_ch["allow_from"] = dm_allow_from
-    matrix_ch["group_allow_from"] = group_allow_from
-    matrix_ch["groups"] = groups
-    matrix_ch["filter_tool_messages"] = True
-    matrix_ch["filter_thinking"] = True
-
-    # Disable console channel (we use Matrix)
-    agent_cfg.setdefault("channels", {}).setdefault("console", {})["enabled"] = False
+    matrix_ch["allow_from"] = _dedup_union(
+        matrix_ch.get("allow_from", []),
+        dm_allow_from,
+    )
+    matrix_ch["group_allow_from"] = _dedup_union(
+        matrix_ch.get("group_allow_from", []),
+        group_allow_from,
+    )
+    matrix_ch["groups"] = _deep_merge_controller_defaults(
+        matrix_ch.get("groups", {}),
+        groups,
+    )
+    matrix_ch["filter_tool_messages"] = matrix_raw.get("filterToolMessages", False)
+    matrix_ch["filter_thinking"] = matrix_raw.get("filterThinking", True)
+    matrix_ch["vision_enabled"] = _resolve_vision_enabled(cfg)
 
     # Bridge context window
     context_window = _resolve_context_window(cfg)
     if context_window is not None:
         agent_cfg.setdefault("running", {})["max_input_length"] = context_window
+
+    embedding_config = _embedding_config_from_openclaw(cfg, in_container)
+    running_cfg = agent_cfg.setdefault("running", {})
+    if embedding_config is not None:
+        running_cfg["embedding_config"] = embedding_config
+    else:
+        running_cfg.pop("embedding_config", None)
+
+    if "heartbeat" not in agent_cfg:
+        heartbeat = _heartbeat_from_openclaw(cfg)
+        if heartbeat is not None:
+            agent_cfg["heartbeat"] = heartbeat
 
     # Set workspace_dir
     agent_cfg.setdefault("workspace_dir", str(workspace_dir))
@@ -479,6 +525,168 @@ def _write_providers_json(
 # ---------------------------------------------------------------------------
 # Runtime-to-standard sync (worker uses this to push edits back to sync root)
 # ---------------------------------------------------------------------------
+
+def bridge_standard_to_runtime(
+    standard_dir,
+    runtime_dir,
+    openclaw_cfg: dict[str, Any],
+    *,
+    skill_names: list[str] | None = None,
+    profile: str = "worker",
+    agent: str = "default",
+) -> None:
+    """Materialize controller-owned standard workspace files into CoPaw."""
+    bridge_controller_to_copaw(
+        openclaw_cfg,
+        Path(runtime_dir),
+        profile=profile,
+        agent=agent,
+    )
+    sync_outer_prompt_files_to_inner(standard_dir, runtime_dir, agent=agent)
+    sync_mcporter_config_to_runtime(standard_dir, runtime_dir, agent=agent)
+    sync_skills_to_runtime(standard_dir, runtime_dir, skill_names, agent=agent)
+
+
+def refresh_standard_to_runtime(
+    standard_dir,
+    runtime_dir,
+    openclaw_cfg: dict[str, Any],
+    *,
+    get_soul=None,
+    get_agents_md=None,
+    skill_names: list[str] | None = None,
+    profile: str = "worker",
+    agent: str = "default",
+) -> None:
+    """Refresh runtime files, seeding missing prompts from legacy readers."""
+    standard_path = Path(standard_dir)
+    standard_path.mkdir(parents=True, exist_ok=True)
+
+    fallbacks = {
+        "SOUL.md": get_soul,
+        "AGENTS.md": get_agents_md,
+    }
+    for name, reader in fallbacks.items():
+        path = standard_path / name
+        if path.exists() or reader is None:
+            continue
+        content = reader()
+        if content:
+            path.write_text(content)
+
+    bridge_standard_to_runtime(
+        standard_path,
+        runtime_dir,
+        openclaw_cfg,
+        skill_names=skill_names,
+        profile=profile,
+        agent=agent,
+    )
+
+
+def sync_outer_prompt_files_to_inner(standard_dir, runtime_dir, *, agent: str = "default"):
+    """Copy standard prompt files into the CoPaw workspace."""
+    standard_path = Path(standard_dir)
+    workspace_dir = Path(runtime_dir) / "workspaces" / agent
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in ("SOUL.md", "AGENTS.md"):
+        src = standard_path / name
+        if src.exists():
+            shutil.copy2(src, workspace_dir / name)
+
+    heartbeat_src = standard_path / "HEARTBEAT.md"
+    heartbeat_dst = workspace_dir / "HEARTBEAT.md"
+    if heartbeat_src.exists() and not heartbeat_dst.exists():
+        shutil.copy2(heartbeat_src, heartbeat_dst)
+
+
+def sync_mcporter_config_to_runtime(standard_dir, runtime_dir, *, agent: str = "default"):
+    """Copy mcporter config into the CoPaw workspace config directory."""
+    standard_path = Path(standard_dir)
+    runtime_path = Path(runtime_dir)
+    src = standard_path / "config" / "mcporter.json"
+    if not src.exists():
+        src = standard_path / "mcporter-servers.json"
+    if not src.exists():
+        return None
+
+    dst = runtime_path / "workspaces" / agent / "config" / "mcporter.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst
+
+
+def _ensure_symlink(link: Path, target: Path) -> None:
+    if link.is_symlink():
+        if link.resolve() == target.resolve():
+            return
+        link.unlink()
+    elif link.exists():
+        if link.is_dir():
+            shutil.rmtree(link)
+        else:
+            link.unlink()
+    link.symlink_to(target, target_is_directory=True)
+
+
+def _load_skill_manifest(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {
+            "schema_version": "workspace-skill-manifest.v1",
+            "version": 1,
+            "skills": {},
+        }
+    try:
+        manifest = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        manifest = {}
+    manifest.setdefault("schema_version", "workspace-skill-manifest.v1")
+    manifest.setdefault("version", 1)
+    manifest.setdefault("skills", {})
+    return manifest
+
+
+def sync_skills_to_runtime(
+    standard_dir,
+    runtime_dir,
+    skill_names: list[str] | None,
+    *,
+    agent: str = "default",
+) -> list[str]:
+    """Expose standard-space skills in the CoPaw workspace and manifest."""
+    standard_path = Path(standard_dir)
+    runtime_path = Path(runtime_dir)
+    standard_skills = standard_path / "skills"
+    standard_skills.mkdir(parents=True, exist_ok=True)
+
+    requested = set(skill_names or [])
+    installed: list[str] = []
+    for child in list(standard_skills.iterdir()):
+        if not child.is_dir():
+            continue
+        if requested and child.name not in requested:
+            shutil.rmtree(child)
+            continue
+        if requested or (child / "SKILL.md").exists():
+            installed.append(child.name)
+            for script in child.rglob("*.sh"):
+                script.chmod(script.stat().st_mode | 0o111)
+
+    workspace_dir = runtime_path / "workspaces" / agent
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_symlink(workspace_dir / "skills", standard_skills)
+
+    manifest_path = workspace_dir / "skill.json"
+    manifest = _load_skill_manifest(manifest_path)
+    for name in installed:
+        entry = manifest["skills"].setdefault(name, {})
+        entry["enabled"] = True
+        entry.setdefault("channels", ["all"])
+        entry.setdefault("source", "customized")
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+    return installed
+
 
 def bridge_runtime_to_standard(standard_dir):
     """Materialize runtime-space edits back into the standard sync root."""

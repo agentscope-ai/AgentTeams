@@ -5,7 +5,14 @@ import subprocess
 
 import pytest
 
-from copaw_worker.sync import BridgeRuntimeError, FileSync, _mc, push_local, sync_loop
+from copaw_worker.sync import (
+    BridgeRuntimeError,
+    FileSync,
+    _mc,
+    _remove_managed_child_dir,
+    push_local,
+    sync_loop,
+)
 
 
 @pytest.fixture
@@ -89,6 +96,31 @@ def test_cat_non_missing_failure_warns(tmp_path, monkeypatch, caplog):
     assert sync._cat("agents/worker/openclaw.json") is None
     assert "mc cat failed" in caplog.text
     assert "AccessDenied: denied" in caplog.text
+
+
+def test_remove_managed_child_dir_removes_direct_child_only(tmp_path):
+    parent = tmp_path / "skills"
+    child = parent / "stale"
+    child.mkdir(parents=True)
+    (child / "SKILL.md").write_text("old")
+
+    assert _remove_managed_child_dir(parent, child) is True
+    assert not child.exists()
+
+
+def test_remove_managed_child_dir_refuses_symlink(tmp_path, caplog):
+    parent = tmp_path / "skills"
+    outside = tmp_path / "outside"
+    link = parent / "linked"
+    parent.mkdir()
+    outside.mkdir()
+    link.symlink_to(outside, target_is_directory=True)
+    caplog.set_level(logging.WARNING)
+
+    assert _remove_managed_child_dir(parent, link) is False
+    assert link.exists()
+    assert outside.exists()
+    assert "Refusing to remove unmanaged directory" in caplog.text
 
 
 def test_mirror_all_restores_worker_prefix_and_shared_without_credentials(tmp_path, monkeypatch):

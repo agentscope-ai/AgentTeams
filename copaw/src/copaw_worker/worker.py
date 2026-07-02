@@ -31,6 +31,27 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
+def _remove_managed_child_dir(parent: Path, child: Path) -> bool:
+    """Remove a direct child directory without following links or path escapes."""
+    try:
+        parent_resolved = parent.resolve(strict=True)
+        child_parent = child.parent.resolve(strict=True)
+    except OSError as exc:
+        logger.warning("Refusing to remove unresolved path %s: %s", child, exc)
+        return False
+
+    if child_parent != parent_resolved or child.is_symlink() or not child.is_dir():
+        logger.warning(
+            "Refusing to remove unmanaged directory: parent=%s child=%s",
+            parent,
+            child,
+        )
+        return False
+
+    shutil.rmtree(child)
+    return True
+
+
 class Worker:
     def __init__(self, config: WorkerConfig) -> None:
         self.config = config
@@ -519,8 +540,8 @@ class Worker:
         keep_names = builtin_names | set(skill_names) | {"file-sync"}
         for child in list(active_skills_dir.iterdir()):
             if child.is_dir() and child.name not in keep_names:
-                shutil.rmtree(child)
-                logger.info("Removed stale active skill: %s", child.name)
+                if _remove_managed_child_dir(active_skills_dir, child):
+                    logger.info("Removed stale active skill: %s", child.name)
 
     def _dedup_customized_skills(self) -> None:
         """Remove customized skills that shadow CoPaw builtins.
@@ -554,14 +575,13 @@ class Worker:
             return
 
         # Remove customized copies that duplicate a builtin
-        import shutil
         for child in list(customized_dir.iterdir()):
             if child.is_dir() and child.name in builtin_names:
-                shutil.rmtree(child)
-                logger.info(
-                    "Removed stale customized skill '%s' (now a builtin)",
-                    child.name,
-                )
+                if _remove_managed_child_dir(customized_dir, child):
+                    logger.info(
+                        "Removed stale customized skill '%s' (now a builtin)",
+                        child.name,
+                    )
 
     # ------------------------------------------------------------------
     # MatrixChannel installation

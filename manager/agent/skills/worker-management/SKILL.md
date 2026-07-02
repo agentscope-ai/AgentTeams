@@ -63,6 +63,7 @@ hiclaw create worker --name <NAME> --no-wait \
 - **Workers are stateless** — all state is in centralized storage. Reset = recreate config files
 - **Matrix accounts persist in Tuwunel** (cannot be deleted via API) — reuse same username on reset
 - **Changing a Worker's `--runtime` is a destructive operation** — the controller deletes the old container and creates a new one from the target runtime's image (openclaw/copaw/hermes/openhuman). Matrix account, room, gateway consumer, MinIO data and persisted credentials are preserved; container-local state (caches, in-memory session, current task progress) is lost. Always confirm with admin first, and avoid switching runtime while the Worker is mid-task.
+- **Delete Workers with the wrapper script** — never invent flags for `hiclaw delete worker`. The CLI syntax is positional: `hiclaw delete worker <name>`; `--name` is invalid. Use `scripts/delete-worker.sh` so failures are reported as failures and optional record cleanup is done with valid JSON operations.
 
 ## Operation Reference
 
@@ -77,7 +78,30 @@ Read the relevant doc **before** executing. Do not load all of them.
 | Open/close QwenPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
 | Enable direct @mentions between workers | `references/peer-mentions.md` | `scripts/enable-peer-mentions.sh` |
 | Reset a worker | `references/create-worker.md` | `hiclaw delete worker` + `hiclaw create worker` |
-| Delete a worker (remove container) | `references/lifecycle.md` | `scripts/lifecycle-worker.sh` |
+| Delete a worker permanently | `references/lifecycle.md` | `scripts/delete-worker.sh --worker <name>` |
+
+## Deleting a Worker
+
+When admin asks you to remove/delete a Worker, run the wrapper script:
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/delete-worker.sh \
+  --worker <NAME>
+```
+
+If admin also asks to clean task/lifecycle records, or replies yes after you ask, run:
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/delete-worker.sh \
+  --worker <NAME> \
+  --records-only
+```
+
+Rules:
+
+- Do not use `hiclaw delete worker --name <NAME>`; that flag does not exist.
+- Do not say the Worker was deleted unless the script returns JSON with `"deleted": true`.
+- Do not call `write_file` to clean records. The script updates `state.json`, `worker-lifecycle.json`, and `workers-registry.json` safely when record cleanup is requested.
 
 ## Switching Runtime
 

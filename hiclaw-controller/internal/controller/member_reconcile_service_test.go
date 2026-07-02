@@ -8,6 +8,7 @@ import (
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -182,11 +183,15 @@ func TestReconcileMemberService_SkipsWhenDisabled(t *testing.T) {
 	}
 }
 
-// TestReconcileMemberService_SkipsWhenExposeEmpty covers the edge case
-// where ServiceEnabled is true but the member exposes no ports — a
-// portless Service is useless, the reconciler must skip with no error.
-func TestReconcileMemberService_SkipsWhenExposeEmpty(t *testing.T) {
+// TestReconcileMemberService_DeletesWhenExposeEmpty covers the edge case
+// where ServiceEnabled is true but the member exposes no ports. A portless
+// Service is useless, and an existing Service from a previous expose config
+// must be removed.
+func TestReconcileMemberService_DeletesWhenExposeEmpty(t *testing.T) {
 	svc := newFakeServiceClient()
+	svc.store["hiclaw-worker-carol"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "hiclaw-worker-carol", Namespace: "hiclaw"},
+	}
 	deps := newServiceTestDeps(svc)
 	mc := newServiceTestMember("carol", true) // no ports
 
@@ -196,8 +201,11 @@ func TestReconcileMemberService_SkipsWhenExposeEmpty(t *testing.T) {
 	if svc.createCalls != 0 {
 		t.Errorf("Create calls = %d, want 0 when expose is empty", svc.createCalls)
 	}
-	if svc.getCalls != 0 {
-		t.Errorf("Get calls = %d, want 0 when expose is empty", svc.getCalls)
+	if svc.deleteCalls != 1 {
+		t.Errorf("Delete calls = %d, want 1 when expose is empty and Service exists", svc.deleteCalls)
+	}
+	if _, ok := svc.store["hiclaw-worker-carol"]; ok {
+		t.Fatal("expected stale Service to be deleted when expose is empty")
 	}
 }
 
@@ -271,5 +279,30 @@ func TestEnsureServiceDeleted_PropagatesUnexpectedError(t *testing.T) {
 
 	if err := ensureServiceDeleted(context.Background(), mc, deps); err == nil {
 		t.Fatal("expected non-NotFound error to propagate")
+	}
+}
+
+func TestReconcileMemberDelete_DeletesService(t *testing.T) {
+	svc := newFakeServiceClient()
+	svc.store["hiclaw-worker-heidi"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "hiclaw-worker-heidi", Namespace: "hiclaw"},
+	}
+	deps := newServiceTestDeps(svc)
+	deps.Provisioner = mocks.NewMockProvisioner()
+	deps.Deployer = mocks.NewMockDeployer()
+	member := MemberContext{
+		Name:        "heidi",
+		RuntimeName: "heidi",
+		Role:        RoleStandalone,
+	}
+
+	if err := ReconcileMemberDelete(context.Background(), *deps, member); err != nil {
+		t.Fatalf("ReconcileMemberDelete: %v", err)
+	}
+	if svc.deleteCalls != 1 {
+		t.Fatalf("Delete calls = %d, want 1", svc.deleteCalls)
+	}
+	if _, ok := svc.store["hiclaw-worker-heidi"]; ok {
+		t.Fatal("expected Service to be deleted during member finalizer cleanup")
 	}
 }

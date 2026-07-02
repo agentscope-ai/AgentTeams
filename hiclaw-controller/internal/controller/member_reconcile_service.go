@@ -28,10 +28,11 @@ func ReconcileMemberService(ctx context.Context, mc *MemberContext, deps *Member
 func ensureServiceExists(ctx context.Context, mc *MemberContext, deps *MemberDeps) error {
 	logger := log.FromContext(ctx)
 
-	// A Service without ports is useless; skip with a log.
+	// A Service without ports is useless; delete any stale Service from a
+	// previous expose config.
 	if len(mc.Spec.Expose) == 0 {
-		logger.V(1).Info("serviceEnabled is true but no ports declared in spec.expose, skipping Service creation", "name", mc.Name)
-		return nil
+		logger.V(1).Info("serviceEnabled is true but no ports declared in spec.expose, deleting stale Service if present", "name", mc.Name)
+		return ensureServiceDeleted(ctx, mc, deps)
 	}
 
 	svcClient, ns, err := resolveServiceClient(ctx, mc, deps)

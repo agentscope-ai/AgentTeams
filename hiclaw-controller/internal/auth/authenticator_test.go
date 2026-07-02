@@ -233,6 +233,27 @@ func TestAuthenticate_RemoteCluster(t *testing.T) {
 	}
 }
 
+func TestAuthenticate_RemoteClusterRejectsAdminAndManager(t *testing.T) {
+	for _, username := range []string{
+		"system:serviceaccount:hiclaw:hiclaw-admin",
+		"system:serviceaccount:hiclaw:hiclaw-manager",
+	} {
+		remoteTR := &fakeTokenReviewClient{
+			authenticated: true,
+			username:      username,
+		}
+		remoteCli := &fakeRemoteCoreClient{tokenReviewClient: remoteTR}
+		remoteProvider := &fakeRemoteProvider{
+			clients: map[string]backend.K8sCoreClient{"remote-cluster": remoteCli},
+		}
+		auth := NewTokenReviewAuthenticator(fakeclient.NewSimpleClientset(), DefaultAudience, DefaultResourcePrefix, remoteProvider)
+
+		if _, err := auth.Authenticate(context.Background(), "remote-token-"+username, "remote-cluster"); err == nil {
+			t.Fatalf("expected remote token for %s to be rejected", username)
+		}
+	}
+}
+
 func TestAuthenticate_RemoteCacheNil(t *testing.T) {
 	// When remoteCache is nil, remote authentication should fail.
 	localClient := fakeclient.NewSimpleClientset()

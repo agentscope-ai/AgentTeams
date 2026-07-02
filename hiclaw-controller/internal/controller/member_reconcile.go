@@ -634,6 +634,9 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 			}
 		}
 	}
+	if err := ensureServiceDeleted(ctx, &m, &d); err != nil {
+		logger.Error(err, "failed to delete member Service (non-fatal)", "name", m.Name)
+	}
 
 	if err := d.Deployer.CleanupOSSData(ctx, m.RuntimeName); err != nil {
 		logger.Error(err, "failed to clean up OSS agent data (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)

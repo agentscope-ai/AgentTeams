@@ -138,6 +138,9 @@ func (a *TokenReviewAuthenticator) Authenticate(ctx context.Context, token strin
 	if err != nil {
 		return nil, err
 	}
+	if clusterID != "" && (identity.Role == RoleAdmin || identity.Role == RoleManager) {
+		return nil, fmt.Errorf("remote cluster token cannot authenticate as %s", identity.Role)
+	}
 
 	a.putInCache(key, identity)
 	return identity, nil

@@ -169,6 +169,8 @@ type Config struct {
 	Runtime            string
 	ModelContextWindow int
 	ModelMaxTokens     int
+	ModelReasoning     *bool
+	ModelVision        *bool
 
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
@@ -383,6 +385,8 @@ func LoadConfig() *Config {
 		Runtime:            envOrDefault("AGENTTEAMS_RUNTIME", "docker"),
 		ModelContextWindow: envOrDefaultInt("AGENTTEAMS_MODEL_CONTEXT_WINDOW", 0),
 		ModelMaxTokens:     envOrDefaultInt("AGENTTEAMS_MODEL_MAX_TOKENS", 0),
+		ModelReasoning:     envBoolPtr("AGENTTEAMS_MODEL_REASONING"),
+		ModelVision:        envBoolPtr("AGENTTEAMS_MODEL_VISION"),
 
 		LLMProvider:                envOrDefault("AGENTTEAMS_LLM_PROVIDER", "qwen"),
 		LLMAPIKey:                  os.Getenv("AGENTTEAMS_LLM_API_KEY"),
@@ -623,6 +627,15 @@ func envBoolDefault(key string, defaultVal bool) bool {
 	return v == "1" || v == "true" || v == "True" || v == "TRUE"
 }
 
+func envBoolPtr(key string) *bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	parsed := v == "1" || v == "true" || v == "True" || v == "TRUE"
+	return &parsed
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -844,6 +857,8 @@ func (c *Config) AgentConfig() agentconfig.Config {
 		E2EEEnabled:        c.MatrixE2EE,
 		ModelContextWindow: c.ModelContextWindow,
 		ModelMaxTokens:     c.ModelMaxTokens,
+		ModelReasoning:     c.ModelReasoning,
+		ModelVision:        c.ModelVision,
 		CMSTracesEnabled:   c.CMSTracesEnabled,
 		CMSMetricsEnabled:  c.CMSMetricsEnabled,
 		CMSEndpoint:        c.CMSEndpoint,

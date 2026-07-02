@@ -14,6 +14,7 @@
 - [Cannot connect to Matrix server locally](#cannot-connect-to-matrix-server-locally)
 - [How to talk to a Worker directly](#how-to-talk-to-a-worker-directly)
 - [How to connect third-party, local, or multi-provider models](#how-to-connect-third-party-local-or-multi-provider-models)
+- [Why does my custom Higress AI route never match](#why-does-my-custom-higress-ai-route-never-match)
 - [How to switch the Manager's model](#how-to-switch-the-managers-model)
 - [How to switch a Worker's model](#how-to-switch-a-workers-model)
 - [How to configure OpenRouter or another model provider with slashes in model names](#how-to-configure-openrouter-or-another-model-provider-with-slashes-in-model-names)
@@ -447,6 +448,23 @@ desired model explicitly to the Manager or a Worker. HiClaw can use different
 models for different Workers, but automatic model selection by task type is not
 a built-in policy; express that policy through Worker roles or switch the model
 explicitly.
+
+---
+
+## Why does my custom Higress AI route never match
+
+HiClaw creates a `default-ai-route` during setup. When that route has no
+`modelPredicates`, it can match all model requests, so a later custom route may
+look like it has lower priority.
+
+For multiple AI routes, make the model matching rules unambiguous:
+
+- Add `modelPredicates` to each custom route, such as a prefix match for
+  `deepseek` or a regex for `^openrouter/.*$`.
+- Also constrain `default-ai-route` to the models it should own, such as
+  `qwen*`, instead of leaving it without `modelPredicates`.
+- Use the same model id when switching Manager or Worker models; the route is
+  selected from the requested model name, not from the provider display name.
 
 ---
 

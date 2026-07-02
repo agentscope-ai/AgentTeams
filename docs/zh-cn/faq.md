@@ -14,6 +14,7 @@
 - [本地访问 Matrix 服务器不通](#本地访问-matrix-服务器不通)
 - [如何主动指挥 Worker](#如何主动指挥-worker)
 - [如何接入第三方、本地或多供应商模型](#如何接入第三方本地或多供应商模型)
+- [为什么自定义 Higress AI 路由总是匹配不到](#为什么自定义-higress-ai-路由总是匹配不到)
 - [如何切换 Manager 的模型](#如何切换-manager-的模型)
 - [如何切换 Worker 的模型](#如何切换-worker-的模型)
 - [如何配置 OpenRouter 或模型名带斜杠的供应商](#如何配置-openrouter-或模型名带斜杠的供应商)
@@ -430,6 +431,19 @@ Docker Desktop 下的 `http://host.docker.internal:<port>/v1`，或在 Linux/Pod
 `qwen*`，另一条匹配 `claude*`。然后明确给 Manager 或 Worker 指定目标模型。HiClaw
 可以让不同 Worker 使用不同模型，但不会内置按任务类型自动选择模型的策略；这类策略需要
 通过 Worker 角色设计或显式切换模型表达。
+
+---
+
+## 为什么自定义 Higress AI 路由总是匹配不到
+
+HiClaw 安装时会创建 `default-ai-route`。如果这条路由没有配置
+`modelPredicates`，它可能匹配所有模型请求，因此后添加的自定义路由看起来像是优先级更低。
+
+存在多条 AI route 时，需要让模型匹配规则不重叠：
+
+- 给每条自定义 route 配置 `modelPredicates`，例如用前缀匹配 `deepseek`，或用正则匹配 `^openrouter/.*$`。
+- 同时也要限制 `default-ai-route` 只匹配它负责的模型，例如 `qwen*`，不要让它保持空 `modelPredicates`。
+- 切换 Manager 或 Worker 模型时使用同一个 model id；路由是根据请求里的模型名选择的，不是根据供应商展示名选择的。
 
 ---
 

@@ -67,6 +67,9 @@ type TeamReconciler struct {
 	// MemberContext.PodLabels → backend.CreateRequest.Labels. Empty in
 	// embedded mode.
 	ControllerName string
+	Namespace      string
+
+	RemoteWatchRegistrar RemoteWatchRegistrar
 
 	// ResourcePrefix scopes team-member ServiceAccount and Pod names per
 	// HiClaw tenant instance. Forwarded into MemberDeps.ResourcePrefix so
@@ -1184,24 +1187,50 @@ func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
-				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
-					teamName := obj.GetLabels()["hiclaw.io/team"]
-					if teamName == "" {
-						return nil
-					}
-					return []reconcile.Request{
-						{NamespacedName: client.ObjectKey{
-							Name:      teamName,
-							Namespace: obj.GetNamespace(),
-						}},
-					}
-				}),
+				teamPodEventHandler(""),
 				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/team", r.ControllerName)),
 			)
 		}
 	}
 
-	return bldr.Complete(r)
+	ctl, err := bldr.Build(r)
+	if err != nil {
+		return err
+	}
+	if r.RemoteWatchRegistrar != nil && r.Backend != nil {
+		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
+			r.RemoteWatchRegistrar.RegisterWatch(
+				ctl,
+				&corev1.Pod{},
+				teamPodEventHandler(r.Namespace),
+				podLifecyclePredicates("hiclaw.io/team", r.ControllerName),
+			)
+		}
+	}
+	return nil
+}
+
+func teamPodEventHandler(localNamespace string) handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+		return teamPodRequests(obj, localNamespace)
+	})
+}
+
+func teamPodRequests(obj client.Object, localNamespace string) []reconcile.Request {
+	teamName := obj.GetLabels()["hiclaw.io/team"]
+	if teamName == "" {
+		return nil
+	}
+	namespace := localNamespace
+	if namespace == "" {
+		namespace = obj.GetNamespace()
+	}
+	return []reconcile.Request{
+		{NamespacedName: client.ObjectKey{
+			Name:      teamName,
+			Namespace: namespace,
+		}},
+	}
 }
 
 // --- Policy helpers (preserved from prior implementation) ---

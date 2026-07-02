@@ -230,6 +230,12 @@ type WorkerStatus struct {
 	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+
+	// DeployMode/TargetCluster record where the current backend resource was
+	// actually provisioned. Once set, target changes are only accepted after
+	// the Worker has reached the Stopped phase.
+	DeployMode    string             `json:"deployMode,omitempty"`
+	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
 }
 
 // ExposedPortStatus records a port that has been exposed via Higress.

@@ -275,6 +275,21 @@ spec:
                         type: integer
                       domain:
                         type: string
+                deployMode:
+                  type: string
+                  enum: ["Local", "Remote"]
+                  description: "Applied deployment mode for the current Worker runtime resource."
+                targetCluster:
+                  type: object
+                  description: "Applied remote cluster target for the current Worker runtime resource."
+                  properties:
+                    id:
+                      type: string
+                      description: "ACS/ACK cluster ID."
+                    namespace:
+                      type: string
+                      description: "Target namespace in the remote cluster."
+                  required: ["id", "namespace"]
       subresources:
         status: {}
       additionalPrinterColumns:

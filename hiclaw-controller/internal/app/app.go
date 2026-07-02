@@ -381,9 +381,10 @@ func (a *App) initBackends(_ context.Context) error {
 	// the manager's cache will be running.
 	if a.credProvider != nil {
 		a.remoteClientCache = remoteclient.NewCache(remoteclient.CacheConfig{
-			CredClient: a.credProvider,
-			CtrlClient: a.mgr.GetClient(),
-			Scheme:     a.scheme,
+			CredClient:     a.credProvider,
+			CtrlClient:     a.mgr.GetClient(),
+			Scheme:         a.scheme,
+			ControllerName: a.cfg.ControllerName,
 		})
 	}
 	workerBackends := buildWorkerBackends(a.cfg, a.scheme, a.remoteClientCache)
@@ -560,33 +561,41 @@ func (a *App) initServiceLayer(_ context.Context) error {
 
 func (a *App) initReconcilers(_ context.Context) error {
 	resourcePrefix := authpkg.ResourcePrefix(a.cfg.ResourcePrefix)
+	var remoteWatchRegistrar controller.RemoteWatchRegistrar
+	if a.remoteClientCache != nil {
+		remoteWatchRegistrar = a.remoteClientCache
+	}
 	if err := (&controller.WorkerReconciler{
-		Client:         a.mgr.GetClient(),
-		Provisioner:    a.provisioner,
-		Deployer:       a.deployer,
-		Backend:        a.registry,
-		EnvBuilder:     a.envBuilder,
-		ResourcePrefix: resourcePrefix,
-		Legacy:         a.legacy,
-		DefaultRuntime: a.cfg.DefaultWorkerRuntime,
-		ControllerName: a.cfg.ControllerName,
-		GatewayClient:  a.gateway,
+		Client:               a.mgr.GetClient(),
+		Provisioner:          a.provisioner,
+		Deployer:             a.deployer,
+		Backend:              a.registry,
+		EnvBuilder:           a.envBuilder,
+		ResourcePrefix:       resourcePrefix,
+		Legacy:               a.legacy,
+		DefaultRuntime:       a.cfg.DefaultWorkerRuntime,
+		ControllerName:       a.cfg.ControllerName,
+		Namespace:            a.namespace,
+		RemoteWatchRegistrar: remoteWatchRegistrar,
+		GatewayClient:        a.gateway,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}
 
 	if err := (&controller.TeamReconciler{
-		Client:         a.mgr.GetClient(),
-		Provisioner:    a.provisioner,
-		Deployer:       a.deployer,
-		Backend:        a.registry,
-		EnvBuilder:     a.envBuilder,
-		Legacy:         a.legacy,
-		DefaultRuntime: a.cfg.DefaultWorkerRuntime,
-		AgentFSDir:     a.cfg.AgentFSDir(),
-		ControllerName: a.cfg.ControllerName,
-		ResourcePrefix: resourcePrefix,
-		GatewayClient:  a.gateway,
+		Client:               a.mgr.GetClient(),
+		Provisioner:          a.provisioner,
+		Deployer:             a.deployer,
+		Backend:              a.registry,
+		EnvBuilder:           a.envBuilder,
+		Legacy:               a.legacy,
+		DefaultRuntime:       a.cfg.DefaultWorkerRuntime,
+		AgentFSDir:           a.cfg.AgentFSDir(),
+		ControllerName:       a.cfg.ControllerName,
+		Namespace:            a.namespace,
+		RemoteWatchRegistrar: remoteWatchRegistrar,
+		ResourcePrefix:       resourcePrefix,
+		GatewayClient:        a.gateway,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}

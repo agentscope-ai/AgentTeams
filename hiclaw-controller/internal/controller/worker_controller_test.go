@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TestWorkerMemberContext_StampsControllerAndRoleLabels verifies that a
@@ -146,5 +148,123 @@ func TestWorkerMemberContext_SpecChangedGate(t *testing.T) {
 					tc.gen, tc.observed, mctx.SpecChanged, tc.want)
 			}
 		})
+	}
+}
+
+func TestEffectiveWorkerSpecForTargetRejectsRunningChange(t *testing.T) {
+	remote := v1beta1.DeployModeRemote
+	w := &v1beta1.Worker{
+		Spec: v1beta1.WorkerSpec{
+			DeployMode:    &remote,
+			TargetCluster: &v1beta1.TargetClusterSpec{ID: "cluster-b", Namespace: "agents"},
+		},
+		Status: v1beta1.WorkerStatus{
+			Phase:      "Running",
+			DeployMode: v1beta1.DeployModeRemote,
+			TargetCluster: &v1beta1.TargetClusterSpec{
+				ID:        "cluster-a",
+				Namespace: "agents",
+			},
+		},
+	}
+
+	if _, err := effectiveWorkerSpecForTarget(w); err == nil {
+		t.Fatal("expected running target change to be rejected")
+	}
+}
+
+func TestEffectiveWorkerSpecForTargetUsesAppliedTargetUntilStopped(t *testing.T) {
+	remote := v1beta1.DeployModeRemote
+	stopped := "Stopped"
+	w := &v1beta1.Worker{
+		Spec: v1beta1.WorkerSpec{
+			State:         &stopped,
+			DeployMode:    &remote,
+			TargetCluster: &v1beta1.TargetClusterSpec{ID: "cluster-b", Namespace: "agents-b"},
+		},
+		Status: v1beta1.WorkerStatus{
+			Phase:      "Stopping",
+			DeployMode: v1beta1.DeployModeRemote,
+			TargetCluster: &v1beta1.TargetClusterSpec{
+				ID:        "cluster-a",
+				Namespace: "agents-a",
+			},
+		},
+	}
+
+	spec, err := effectiveWorkerSpecForTarget(w)
+	if err != nil {
+		t.Fatalf("effectiveWorkerSpecForTarget: %v", err)
+	}
+	if spec.TargetCluster == nil || spec.TargetCluster.ID != "cluster-a" || spec.TargetCluster.Namespace != "agents-a" {
+		t.Fatalf("TargetCluster=%+v, want applied cluster-a/agents-a", spec.TargetCluster)
+	}
+}
+
+func TestEffectiveWorkerSpecForTargetAllowsChangeAfterStopped(t *testing.T) {
+	remote := v1beta1.DeployModeRemote
+	stopped := "Stopped"
+	w := &v1beta1.Worker{
+		Spec: v1beta1.WorkerSpec{
+			State:         &stopped,
+			DeployMode:    &remote,
+			TargetCluster: &v1beta1.TargetClusterSpec{ID: "cluster-b", Namespace: "agents-b"},
+		},
+		Status: v1beta1.WorkerStatus{
+			Phase:      "Stopped",
+			DeployMode: v1beta1.DeployModeRemote,
+			TargetCluster: &v1beta1.TargetClusterSpec{
+				ID:        "cluster-a",
+				Namespace: "agents-a",
+			},
+		},
+	}
+
+	spec, err := effectiveWorkerSpecForTarget(w)
+	if err != nil {
+		t.Fatalf("effectiveWorkerSpecForTarget: %v", err)
+	}
+	if spec.TargetCluster == nil || spec.TargetCluster.ID != "cluster-b" || spec.TargetCluster.Namespace != "agents-b" {
+		t.Fatalf("TargetCluster=%+v, want desired cluster-b/agents-b", spec.TargetCluster)
+	}
+}
+
+func TestWorkerPodRequests_RemoteWatchUsesLocalNamespace(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hiclaw-worker-alice",
+			Namespace: "remote-ns",
+			Labels: map[string]string{
+				"hiclaw.io/worker": "alice",
+			},
+		},
+	}
+
+	reqs := workerPodRequests(pod, "local-ns")
+	if len(reqs) != 1 {
+		t.Fatalf("requests=%v, want one", reqs)
+	}
+	if reqs[0].Name != "alice" || reqs[0].Namespace != "local-ns" {
+		t.Fatalf("request=%s/%s, want local-ns/alice", reqs[0].Namespace, reqs[0].Name)
+	}
+}
+
+func TestTeamPodRequests_RemoteWatchUsesLocalNamespace(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hiclaw-worker-dev",
+			Namespace: "remote-ns",
+			Labels: map[string]string{
+				"hiclaw.io/team": "team-a",
+			},
+		},
+	}
+
+	reqs := teamPodRequests(pod, "local-ns")
+	if len(reqs) != 1 {
+		t.Fatalf("requests=%v, want one", reqs)
+	}
+	if reqs[0].Name != "team-a" || reqs[0].Namespace != "local-ns" {
+		t.Fatalf("request=%s/%s, want local-ns/team-a", reqs[0].Namespace, reqs[0].Name)
 	}
 }

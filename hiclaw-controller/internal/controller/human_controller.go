@@ -123,6 +123,7 @@ func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScop
 		return reconcile.Result{RequeueAfter: reconcileInterval}, err
 	}
 	r.reconcileHumanRooms(ctx, s)
+	r.reconcileHumanWorkerAllowlist(ctx, s)
 	r.reconcileHumanLegacy(ctx, s)
 
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil

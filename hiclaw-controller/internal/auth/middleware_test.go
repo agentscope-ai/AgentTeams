@@ -13,7 +13,7 @@ type mockAuthenticator struct {
 	tokens map[string]*CallerIdentity
 }
 
-func (m *mockAuthenticator) Authenticate(_ context.Context, token string) (*CallerIdentity, error) {
+func (m *mockAuthenticator) Authenticate(_ context.Context, token string, clusterID string) (*CallerIdentity, error) {
 	if id, ok := m.tokens[token]; ok {
 		cp := *id
 		return &cp, nil

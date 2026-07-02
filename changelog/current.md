@@ -6,6 +6,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 - fix(agent): update file-sharing path guidance for CoPaw and Team Leader agents to use `/root/hiclaw-fs/agents/...` instead of the retired `/root/.hiclaw-worker/...` path.
 - feat(controller): add per-agent `spec.resources` support for Manager, Worker, Team Leader, and Team Worker CRDs.
+- fix(worker): pass `X-HiClaw-Cluster-ID` when remote Workers refresh controller-issued STS credentials for OSS and Nacos AI registry access.
+- feat(hiclaw-controller): support a separate agent-pod-template for `deployMode: Remote` Workers via an optional `pod-template-remote.yaml` key on the controller-scoped pod-template ConfigMap; remote-mode Pod creation prefers this key and transparently falls back to `pod-template.yaml` when it is absent or empty, while non-remote/Sandbox paths keep ignoring it.
 
 - **OpenHuman runtime**: OpenHuman added as the fourth Worker runtime with native Matrix support via `channel-matrix` feature flag; includes controller routing (K8s + Docker backends), Dockerfile, entrypoint script, agent template, Helm chart integration, and Makefile build targets.
 - **Multi model providers**: Worker, Team, and Manager specs can now select a Higress model provider via `spec.modelProvider`; the controller resolves the provider, injects the matching gateway URL into runtime config, and authorizes consumers only on the selected AI route.

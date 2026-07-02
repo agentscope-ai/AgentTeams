@@ -140,7 +140,9 @@ func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bo
 		return nil, false
 	}
 
-	identity, err := m.authenticator.Authenticate(r.Context(), token)
+	clusterID := r.Header.Get("X-HiClaw-Cluster-ID")
+
+	identity, err := m.authenticator.Authenticate(r.Context(), token, clusterID)
 	if err != nil {
 		log.Printf("[AUTH] authentication failed: %v", err)
 		return nil, false

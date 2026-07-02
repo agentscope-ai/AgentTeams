@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 )
@@ -110,4 +111,112 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// mockBackend is a minimal WorkerBackend implementation used to test
+// resolveBackendForMember when the backend is NOT a *backend.K8sBackend.
+type mockBackend struct{}
+
+func (m *mockBackend) Name() string                     { return "mock" }
+func (m *mockBackend) DeploymentMode() string           { return "local" }
+func (m *mockBackend) Available(_ context.Context) bool { return true }
+func (m *mockBackend) NeedsCredentialInjection() bool   { return false }
+func (m *mockBackend) Create(_ context.Context, _ backend.CreateRequest) (*backend.WorkerResult, error) {
+	return nil, nil
+}
+func (m *mockBackend) Delete(_ context.Context, _ string) error { return nil }
+func (m *mockBackend) Start(_ context.Context, _ string) error  { return nil }
+func (m *mockBackend) Stop(_ context.Context, _ string) error   { return nil }
+func (m *mockBackend) Status(_ context.Context, _ string) (*backend.WorkerResult, error) {
+	return nil, nil
+}
+
+func TestResolveBackendForMember_LocalMode(t *testing.T) {
+	// When DeployMode is empty or "Local", the original backend is returned unchanged.
+	k8sB := backend.NewK8sBackendWithClient(nil, backend.K8sConfig{Namespace: "default"}, "hiclaw-worker-", nil)
+
+	tests := []struct {
+		name       string
+		deployMode string
+	}{
+		{"empty deploy mode", ""},
+		{"explicit Local mode", v1beta1.DeployModeLocal},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := MemberContext{
+				Name:       "worker-a",
+				DeployMode: tt.deployMode,
+			}
+			got := resolveBackendForMember(k8sB, m)
+			if got != k8sB {
+				t.Errorf("expected original backend pointer, got a different instance")
+			}
+		})
+	}
+}
+
+func TestResolveBackendForMember_RemoteMode(t *testing.T) {
+	// When DeployMode="Remote" and TargetClusterID is set with a K8sBackend,
+	// should return a new K8sBackend with remote target configured.
+	k8sB := backend.NewK8sBackendWithClient(nil, backend.K8sConfig{Namespace: "default"}, "hiclaw-worker-", nil)
+
+	m := MemberContext{
+		Name:            "worker-b",
+		DeployMode:      v1beta1.DeployModeRemote,
+		TargetClusterID: "cluster-remote-1",
+		TargetNamespace: "remote-ns",
+	}
+
+	got := resolveBackendForMember(k8sB, m)
+	if got == k8sB {
+		t.Fatal("expected a new backend instance for remote mode, got same pointer")
+	}
+
+	// Verify the returned value is still a *backend.K8sBackend.
+	remoteK8s, ok := got.(*backend.K8sBackend)
+	if !ok {
+		t.Fatalf("expected *backend.K8sBackend, got %T", got)
+	}
+
+	// The remote backend should still report as "k8s".
+	if remoteK8s.Name() != "k8s" {
+		t.Errorf("remote backend Name() = %q, want %q", remoteK8s.Name(), "k8s")
+	}
+}
+
+func TestResolveBackendForMember_NonK8sBackend(t *testing.T) {
+	// When DeployMode="Remote" but the backend is not a *K8sBackend,
+	// should return the original backend unchanged.
+	mb := &mockBackend{}
+	m := MemberContext{
+		Name:            "worker-c",
+		DeployMode:      v1beta1.DeployModeRemote,
+		TargetClusterID: "cluster-remote-2",
+		TargetNamespace: "remote-ns",
+	}
+
+	got := resolveBackendForMember(mb, m)
+	if got != mb {
+		t.Errorf("expected original mock backend, got a different instance")
+	}
+}
+
+func TestResolveBackendForMember_EmptyClusterID(t *testing.T) {
+	// When DeployMode="Remote" but TargetClusterID is empty,
+	// should return the original backend unchanged.
+	k8sB := backend.NewK8sBackendWithClient(nil, backend.K8sConfig{Namespace: "default"}, "hiclaw-worker-", nil)
+
+	m := MemberContext{
+		Name:            "worker-d",
+		DeployMode:      v1beta1.DeployModeRemote,
+		TargetClusterID: "",
+		TargetNamespace: "remote-ns",
+	}
+
+	got := resolveBackendForMember(k8sB, m)
+	if got != k8sB {
+		t.Errorf("expected original backend (empty clusterID), got a different instance")
+	}
 }

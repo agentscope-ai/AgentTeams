@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -20,6 +21,7 @@ const (
 	StatusRunning  WorkerStatus = "running"
 	StatusReady    WorkerStatus = "ready"
 	StatusStopped  WorkerStatus = "stopped"
+	StatusSleeping WorkerStatus = "sleeping"
 	StatusStarting WorkerStatus = "starting"
 	StatusNotFound WorkerStatus = "not_found"
 	StatusUnknown  WorkerStatus = "unknown"
@@ -155,8 +157,24 @@ type CreateRequest struct {
 	// OwnerReference via controllerutil.SetControllerReference, so that
 	// deletion of the owning CR (Worker / Team / Manager) cascades to the
 	// Pod via native K8s garbage collection. Docker backend ignores this
-	// field.
+	// field. Skipped when DeployMode is "Remote" (cross-cluster ownerRef
+	// is not possible).
 	Owner metav1.Object `json:"-"`
+
+	// DeployMode selects local (same cluster) or remote (different cluster)
+	// Pod placement. "Local" (default/empty) uses the backend's own client;
+	// "Remote" routes through RemoteClientProvider.
+	DeployMode string `json:"-"`
+
+	// TargetClusterID identifies the remote cluster (Remote mode only).
+	TargetClusterID string `json:"-"`
+
+	// TargetNamespace overrides the namespace in the remote cluster (Remote
+	// mode only). Empty means the backend falls back to its own namespace.
+	TargetNamespace string `json:"-"`
+
+	// ServiceEnabled indicates whether a Service should be created for the Pod.
+	ServiceEnabled bool `json:"-"`
 }
 
 // Deployment modes returned by backends.
@@ -164,6 +182,36 @@ const (
 	DeployLocal = "local"
 	DeployCloud = "cloud"
 )
+
+// RemoteClientProvider abstracts access to remote cluster k8s clients.
+// The remoteclient.Cache implements this interface.
+type RemoteClientProvider interface {
+	ResolveClient(ctx context.Context, clusterID string) (K8sCoreClient, error)
+}
+
+// K8sServiceClient is the minimal Service client surface needed by the backend.
+type K8sServiceClient interface {
+	Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Service, error)
+	Create(ctx context.Context, svc *corev1.Service, opts metav1.CreateOptions) (*corev1.Service, error)
+	Update(ctx context.Context, svc *corev1.Service, opts metav1.UpdateOptions) (*corev1.Service, error)
+	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
+}
+
+// K8sNamespaceClient is the minimal Namespace client surface needed by the backend.
+type K8sNamespaceClient interface {
+	Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Namespace, error)
+	Create(ctx context.Context, ns *corev1.Namespace, opts metav1.CreateOptions) (*corev1.Namespace, error)
+}
+
+// ServiceBackend is an optional capability of a WorkerBackend that can
+// provide Kubernetes Service lifecycle operations. Only K8sBackend implements
+// this; Docker backend does not support Service management.
+type ServiceBackend interface {
+	// ServiceClient returns a K8sServiceClient and resolved namespace for the
+	// appropriate cluster based on deploy mode. Callers use this to create,
+	// update, or delete Services alongside member pods.
+	ServiceClient(ctx context.Context, deployMode, targetClusterID, targetNamespace string) (K8sServiceClient, string, error)
+}
 
 // WorkerResult holds the result of a worker operation.
 type WorkerResult struct {

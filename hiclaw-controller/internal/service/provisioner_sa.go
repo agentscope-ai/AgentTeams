@@ -257,3 +257,78 @@ func (p *Provisioner) RequestSAToken(ctx context.Context, workerName string) (st
 	}
 	return result.Status.Token, nil
 }
+
+// EnsureRemoteServiceAccount creates the worker ServiceAccount on the remote
+// cluster identified by clusterID. It is idempotent: if the SA already exists,
+// it returns nil.
+func (p *Provisioner) EnsureRemoteServiceAccount(
+	ctx context.Context,
+	workerName, clusterID, namespace string,
+) error {
+	if p.remoteCache == nil {
+		return fmt.Errorf("remote client provider not configured")
+	}
+
+	cli, err := p.remoteCache.ResolveClient(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("resolve remote client for cluster %s: %w", clusterID, err)
+	}
+
+	// Ensure the target namespace exists on the remote cluster before creating the SA.
+	if _, err := cli.Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check remote namespace %s in cluster %s: %w", namespace, clusterID, err)
+		}
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: namespace},
+		}
+		if _, err := cli.Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create remote namespace %s in cluster %s: %w", namespace, clusterID, err)
+		}
+	}
+
+	saName := p.resourcePrefix.SAName(authpkg.RoleWorker, workerName)
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      saName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "hiclaw-controller",
+				"hiclaw.io/role":               "worker",
+				"hiclaw.io/worker":             workerName,
+			},
+		},
+	}
+
+	if _, err := cli.ServiceAccounts(namespace).Create(ctx, sa, metav1.CreateOptions{}); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil
+		}
+		return fmt.Errorf("create remote SA %s in cluster %s namespace %s: %w", saName, clusterID, namespace, err)
+	}
+	return nil
+}
+
+// DeleteRemoteServiceAccount deletes the remote worker SA. NotFound is ignored.
+func (p *Provisioner) DeleteRemoteServiceAccount(
+	ctx context.Context,
+	workerName, clusterID, namespace string,
+) error {
+	if p.remoteCache == nil {
+		return fmt.Errorf("remote client provider not configured")
+	}
+
+	cli, err := p.remoteCache.ResolveClient(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("resolve remote client for cluster %s: %w", clusterID, err)
+	}
+
+	saName := p.resourcePrefix.SAName(authpkg.RoleWorker, workerName)
+	if err := cli.ServiceAccounts(namespace).Delete(ctx, saName, metav1.DeleteOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete remote SA %s in cluster %s namespace %s: %w", saName, clusterID, namespace, err)
+	}
+	return nil
+}

@@ -184,6 +184,24 @@ spec:
                     ignored with a warning log — the system value always wins.
                   additionalProperties:
                     type: string
+                deployMode:
+                  type: string
+                  enum: ["Local", "Remote"]
+                  description: "Where the worker pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster."
+                targetCluster:
+                  type: object
+                  description: "Remote cluster target for deployment. Required when deployMode is Remote."
+                  properties:
+                    id:
+                      type: string
+                      description: "ACS/ACK cluster ID."
+                    namespace:
+                      type: string
+                      description: "Target namespace in the remote cluster."
+                  required: ["id", "namespace"]
+                serviceEnabled:
+                  type: boolean
+                  description: "Whether to create a ClusterIP Service alongside the worker pod."
                 labels:
                   type: object
                   additionalProperties:
@@ -235,7 +253,7 @@ spec:
                   format: int64
                 phase:
                   type: string
-                  enum: [Pending, Running, Sleeping, Updating, Stopped, Failed]
+                  enum: [Pending, Starting, Running, Updating, Stopping, Sleeping, Stopped, Failed]
                 matrixUserID:
                   type: string
                 roomID:

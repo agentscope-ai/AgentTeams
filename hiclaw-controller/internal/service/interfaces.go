@@ -17,6 +17,8 @@ type WorkerProvisioner interface {
 	ReconcileExpose(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
 	EnsureServiceAccount(ctx context.Context, workerName string) error
 	DeleteServiceAccount(ctx context.Context, workerName string) error
+	EnsureRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error
+	DeleteRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error
 	DeleteCredentials(ctx context.Context, workerName string) error
 	DeleteWorkerCredentials(ctx context.Context, credentialName string) error
 	RequestSAToken(ctx context.Context, workerName string) (string, error)

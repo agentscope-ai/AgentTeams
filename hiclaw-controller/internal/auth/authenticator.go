@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
+
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -39,8 +41,9 @@ type CallerIdentity struct {
 }
 
 // Authenticator validates a bearer token and returns a basic identity.
+// clusterID selects the cluster for TokenReview; empty string means local.
 type Authenticator interface {
-	Authenticate(ctx context.Context, token string) (*CallerIdentity, error)
+	Authenticate(ctx context.Context, token string, clusterID string) (*CallerIdentity, error)
 }
 
 // TokenReviewAuthenticator validates tokens via the K8s TokenReview API.
@@ -50,9 +53,10 @@ type Authenticator interface {
 // oldest-expiry eviction. This keeps memory usage proportional to live tokens
 // even under adversarial input.
 type TokenReviewAuthenticator struct {
-	client   kubernetes.Interface
-	audience string
-	prefix   ResourcePrefix
+	client      kubernetes.Interface
+	audience    string
+	prefix      ResourcePrefix
+	remoteCache backend.RemoteClientProvider // remote cluster client resolver; nil = local-only
 
 	cacheMu         sync.RWMutex
 	cache           map[[32]byte]cachedResult
@@ -70,7 +74,7 @@ type cachedResult struct {
 // TokenReview API. audience is the expected token audience (typically
 // "hiclaw-controller"); prefix is the tenant resource prefix used to parse
 // SA usernames back into CallerIdentity.
-func NewTokenReviewAuthenticator(client kubernetes.Interface, audience string, prefix ResourcePrefix) *TokenReviewAuthenticator {
+func NewTokenReviewAuthenticator(client kubernetes.Interface, audience string, prefix ResourcePrefix, remoteCache backend.RemoteClientProvider) *TokenReviewAuthenticator {
 	if audience == "" {
 		audience = DefaultAudience
 	}
@@ -78,6 +82,7 @@ func NewTokenReviewAuthenticator(client kubernetes.Interface, audience string, p
 		client:          client,
 		audience:        audience,
 		prefix:          prefix.Or(DefaultResourcePrefix),
+		remoteCache:     remoteCache,
 		cache:           make(map[[32]byte]cachedResult),
 		cacheTTL:        defaultCacheTTL,
 		cacheMax:        defaultCacheMax,
@@ -85,12 +90,13 @@ func NewTokenReviewAuthenticator(client kubernetes.Interface, audience string, p
 	}
 }
 
-func (a *TokenReviewAuthenticator) Authenticate(ctx context.Context, token string) (*CallerIdentity, error) {
+func (a *TokenReviewAuthenticator) Authenticate(ctx context.Context, token string, clusterID string) (*CallerIdentity, error) {
 	if token == "" {
 		return nil, fmt.Errorf("empty token")
 	}
 
-	key := sha256.Sum256([]byte(token))
+	// Include clusterID in cache key so tokens for different clusters don't collide.
+	key := sha256.Sum256([]byte(clusterID + ":" + token))
 
 	if id := a.getFromCache(key); id != nil {
 		return id, nil
@@ -103,7 +109,23 @@ func (a *TokenReviewAuthenticator) Authenticate(ctx context.Context, token strin
 		},
 	}
 
-	result, err := a.client.AuthenticationV1().TokenReviews().Create(ctx, review, metav1.CreateOptions{})
+	var result *authenticationv1.TokenReview
+	var err error
+
+	if clusterID == "" {
+		// Local cluster TokenReview.
+		result, err = a.client.AuthenticationV1().TokenReviews().Create(ctx, review, metav1.CreateOptions{})
+	} else {
+		// Remote cluster TokenReview.
+		if a.remoteCache == nil {
+			return nil, fmt.Errorf("remote cluster authentication not supported")
+		}
+		cli, resolveErr := a.remoteCache.ResolveClient(ctx, clusterID)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve remote cluster %q: %w", clusterID, resolveErr)
+		}
+		result, err = cli.TokenReviews().Create(ctx, review, metav1.CreateOptions{})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("token review request failed: %w", err)
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/initializer"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
+	"github.com/hiclaw/hiclaw-controller/internal/remoteclient"
 	"github.com/hiclaw/hiclaw-controller/internal/server"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/internal/store"
@@ -76,6 +77,12 @@ type App struct {
 	agentGen *agentconfig.Generator
 	registry *backend.Registry
 
+	// Remote-cluster k8s client cache. Non-nil only when the credential
+	// provider sidecar is configured; consumed by the K8s worker backend
+	// to route operations against Workers/Managers deployed to remote
+	// clusters and refreshed by a background maintenance loop.
+	remoteClientCache *remoteclient.Cache
+
 	// Service layer
 	provisioner *service.Provisioner
 	deployer    *service.Deployer
@@ -94,8 +101,12 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	}{
 		{"scheme", a.initScheme},
 		{"infra-clients", a.initInfraClients},
-		{"backends", a.initBackends},
+		// controller-manager must be initialized before backends so that
+		// initBackends can construct the remote-client cache with
+		// mgr.GetClient() (only used by the maintenance loop, not yet at
+		// construction time).
 		{"controller-manager", a.initControllerManager},
+		{"backends", a.initBackends},
 		{"field-indexers", a.initFieldIndexers},
 		{"auth", a.initAuth},
 		{"service-layer", a.initServiceLayer},
@@ -144,6 +155,13 @@ func (a *App) Start(ctx context.Context) error {
 		}
 	})
 
+	// Launch the remote-client cache maintenance loop. StartMaintenanceLoop
+	// internally spawns its own goroutine and returns immediately; it
+	// runs until ctx is cancelled.
+	if a.remoteClientCache != nil {
+		a.remoteClientCache.StartMaintenanceLoop(ctx)
+	}
+
 	// Run cluster initialization only after this instance becomes the leader.
 	// In embedded mode (no leader election) Elected() closes immediately.
 	a.wg.Go(func() {
@@ -175,12 +193,12 @@ func (a *App) Start(ctx context.Context) error {
 				TuwunelURL:                 a.cfg.MatrixServerURL,
 				ElementWebURL:              a.cfg.ElementWebURL,
 				ControllerName:             a.cfg.ControllerName,
-				AppServiceEnabled:         a.cfg.MatrixAppServiceEnabled,
-				AppServiceID:              a.cfg.MatrixAppServiceID,
-				AppServiceToken:           a.cfg.MatrixAppServiceASToken,
-				AppServiceHSToken:         a.cfg.MatrixAppServiceHSToken,
-				AppServiceSenderLocalpart: a.cfg.MatrixAppServiceSenderLocalpart,
-				MatrixDomain:              a.cfg.MatrixDomain,
+				AppServiceEnabled:          a.cfg.MatrixAppServiceEnabled,
+				AppServiceID:               a.cfg.MatrixAppServiceID,
+				AppServiceToken:            a.cfg.MatrixAppServiceASToken,
+				AppServiceHSToken:          a.cfg.MatrixAppServiceHSToken,
+				AppServiceSenderLocalpart:  a.cfg.MatrixAppServiceSenderLocalpart,
+				MatrixDomain:               a.cfg.MatrixDomain,
 			},
 		}
 		if err := init.Run(ctx); err != nil {
@@ -356,7 +374,19 @@ func (s *ossControllerCredSource) Resolve(ctx context.Context) (oss.Credentials,
 }
 
 func (a *App) initBackends(_ context.Context) error {
-	workerBackends := buildWorkerBackends(a.cfg, a.scheme)
+	// Initialize the remote-cluster k8s client cache when the credential
+	// provider sidecar is configured. The cache holds references to
+	// mgr.GetClient() and the credential client; actual List calls happen
+	// later from the maintenance loop and from GetOrCreate, by which time
+	// the manager's cache will be running.
+	if a.credProvider != nil {
+		a.remoteClientCache = remoteclient.NewCache(remoteclient.CacheConfig{
+			CredClient: a.credProvider,
+			CtrlClient: a.mgr.GetClient(),
+			Scheme:     a.scheme,
+		})
+	}
+	workerBackends := buildWorkerBackends(a.cfg, a.scheme, a.remoteClientCache)
 	a.registry = backend.NewRegistry(workerBackends)
 	return nil
 }
@@ -435,7 +465,7 @@ func (a *App) initAuth(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("create kubernetes client: %w", err)
 		}
-		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix))
+		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix), a.remoteClientCache)
 		go authenticator.StartCleanup(ctx)
 		enricher := authpkg.NewCREnricher(a.mgr.GetClient(), a.namespace)
 		authorizer := authpkg.NewAuthorizer()
@@ -496,6 +526,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		AIGatewayURL:      cfg.WorkerEnv.AIGatewayURL,
 		ManagerModel:      cfg.ManagerModel,
 		MatrixConfig:      cfg.MatrixConfig(),
+		RemoteCache:       a.remoteClientCache,
 	})
 
 	a.envBuilder = service.NewWorkerEnvBuilder(cfg.WorkerEnv)
@@ -513,15 +544,15 @@ func (a *App) initServiceLayer(_ context.Context) error {
 	}
 
 	a.deployer = service.NewDeployer(service.DeployerConfig{
-		AgentConfig:         a.agentGen,
-		OSS:                 a.oss,
-		Executor:            a.shell,
-		Packages:            a.packages,
-		Legacy:              a.legacy,
-		AgentFSDir:          cfg.AgentFSDir(),
-		WorkerAgentDir:      cfg.WorkerAgentDir(),
-		MatrixDomain:        cfg.MatrixDomain,
-		NacosCredClient:     a.credProvider,
+		AgentConfig:     a.agentGen,
+		OSS:             a.oss,
+		Executor:        a.shell,
+		Packages:        a.packages,
+		Legacy:          a.legacy,
+		AgentFSDir:      cfg.AgentFSDir(),
+		WorkerAgentDir:  cfg.WorkerAgentDir(),
+		MatrixDomain:    cfg.MatrixDomain,
+		NacosCredClient: a.credProvider,
 	})
 
 	return nil
@@ -793,7 +824,7 @@ func bootstrapAdminCLIToken(ctx context.Context, prov *service.Provisioner) erro
 // backend doesn't need it.
 // Gateway selection is handled in initInfraClients via gateway.Client,
 // so this function only cares about worker runtimes (docker vs k8s).
-func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme) []backend.WorkerBackend {
+func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache backend.RemoteClientProvider) []backend.WorkerBackend {
 	var workers []backend.WorkerBackend
 
 	if cfg.KubeMode == "embedded" {
@@ -807,7 +838,10 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme) []backend.W
 
 	switch effectiveBackend {
 	case "k8s":
-		if k8s, err := backend.NewK8sBackend(cfg.K8sConfig(), cfg.ContainerPrefix, scheme); err != nil {
+		// remoteCache is nil when the credential provider sidecar is not
+		// configured; in that case NewK8sBackendWithCache behaves
+		// identically to NewK8sBackend.
+		if k8s, err := backend.NewK8sBackendWithCache(cfg.K8sConfig(), cfg.ContainerPrefix, scheme, remoteCache); err != nil {
 			log.Printf("[WARN] Failed to create K8s backend: %v", err)
 		} else {
 			workers = append(workers, k8s)

@@ -16,6 +16,7 @@ import (
 type APIClient struct {
 	BaseURL    string
 	Token      string
+	ClusterID  string // remote cluster identifier; empty for local mode
 	HTTPClient *http.Client
 }
 
@@ -38,12 +39,19 @@ func NewAPIClient() *APIClient {
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	return &APIClient{
-		BaseURL: baseURL,
-		Token:   discoverToken(),
+		BaseURL:   baseURL,
+		Token:     discoverToken(),
+		ClusterID: discoverClusterID(),
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// discoverClusterID returns the cluster ID injected into the Worker Pod via
+// the HICLAW_CLUSTER_ID environment variable. Empty string means local mode.
+func discoverClusterID() string {
+	return os.Getenv("HICLAW_CLUSTER_ID")
 }
 
 // discoverToken returns a bearer token using a multi-level fallback:
@@ -88,6 +96,9 @@ func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, e
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if c.ClusterID != "" {
+		req.Header.Set("X-HiClaw-Cluster-ID", c.ClusterID)
 	}
 
 	return c.HTTPClient.Do(req)
@@ -159,6 +170,9 @@ func (c *APIClient) DoMultipart(path, fieldName, fileName string, fileData []byt
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if c.ClusterID != "" {
+		req.Header.Set("X-HiClaw-Cluster-ID", c.ClusterID)
 	}
 
 	resp, err := c.HTTPClient.Do(req)

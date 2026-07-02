@@ -71,6 +71,10 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 
 	patchBase := client.MergeFrom(worker.DeepCopy())
 
+	// Shared MemberState captured by the defer so phase computation can
+	// observe the actual container state recorded during reconcile.
+	state := &MemberState{}
+
 	// Unified status patch at the end of every reconcile. ObservedGeneration
 	// is only written when reconcile succeeds, preventing the infinite-loop
 	// bug where a failed status write triggered re-reconcile with
@@ -79,7 +83,7 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		if !worker.DeletionTimestamp.IsZero() {
 			return
 		}
-		worker.Status.Phase = computeWorkerPhase(&worker, reterr)
+		worker.Status.Phase = computeWorkerPhase(&worker, state.ContainerState, reterr)
 		if reterr == nil {
 			worker.Status.ObservedGeneration = worker.Generation
 			worker.Status.Message = ""
@@ -107,14 +111,14 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		}
 	}
 
-	return r.reconcileNormal(ctx, &worker)
+	return r.reconcileNormal(ctx, &worker, state)
 }
 
 // reconcileNormal builds a MemberContext from the Worker CR, runs the shared
 // member reconcile phases, and writes runtime state back to Worker.Status.
 // Legacy Manager groupAllowFrom is updated here only for standalone workers;
 // team leaders are handled by TeamReconciler.
-func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker) (reconcile.Result, error) {
+func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker, state *MemberState) (reconcile.Result, error) {
 	deps := MemberDeps{
 		Provisioner:    r.Provisioner,
 		Deployer:       r.Deployer,
@@ -134,7 +138,10 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		mctx.ModelProviderInfo = info
 	}
 
-	state := &MemberState{}
+	// Validate cross-cluster deployment fields before entering phases.
+	if err := ValidateMemberDeployment(mctx); err != nil {
+		return reconcile.Result{}, err
+	}
 
 	if res, err := ReconcileMemberInfra(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
@@ -155,6 +162,10 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
 		return res, err
+	}
+	if err := ReconcileMemberService(ctx, &mctx, &deps); err != nil {
+		applyMemberStateToWorker(w, state)
+		return reconcile.Result{}, err
 	}
 	_ = ReconcileMemberExpose(ctx, deps, mctx, state)
 	applyMemberStateToWorker(w, state)
@@ -262,6 +273,22 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
 	role := roleForAnnotations(w.Annotations["hiclaw.io/role"], w.Annotations["hiclaw.io/team-leader"])
 	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
+
+	// Cross-cluster deployment fields.
+	deployMode := v1beta1.DeployModeLocal
+	if w.Spec.DeployMode != nil {
+		deployMode = *w.Spec.DeployMode
+	}
+	var targetClusterID, targetNamespace string
+	if w.Spec.TargetCluster != nil {
+		targetClusterID = w.Spec.TargetCluster.ID
+		targetNamespace = w.Spec.TargetCluster.Namespace
+	}
+	var serviceEnabled bool
+	if w.Spec.ServiceEnabled != nil {
+		serviceEnabled = *w.Spec.ServiceEnabled
+	}
+
 	return MemberContext{
 		Name:               w.Name,
 		RuntimeName:        runtimeName,
@@ -296,6 +323,10 @@ func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext 
 		ExistingRoomID:       w.Status.RoomID,
 		CurrentExposedPorts:  w.Status.ExposedPorts,
 		Owner:                w,
+		DeployMode:           deployMode,
+		TargetClusterID:      targetClusterID,
+		TargetNamespace:      targetNamespace,
+		ServiceEnabled:       serviceEnabled,
 	}
 }
 
@@ -321,20 +352,9 @@ func applyMemberStateToWorker(w *v1beta1.Worker, state *MemberState) {
 }
 
 // computeWorkerPhase determines the Worker status phase from the reconcile
-// outcome. On success, phase reflects the desired lifecycle state.
-func computeWorkerPhase(w *v1beta1.Worker, reconcileErr error) string {
-	if reconcileErr != nil {
-		if w.Status.MatrixUserID == "" {
-			return "Failed"
-		}
-		if w.Status.Phase == "" {
-			return "Pending"
-		}
-		// Keep the old Phase to avoid marking a healthy worker as Failed on a
-		// transient error; the error surfaces through Status.Message instead.
-		return w.Status.Phase
-	}
-	return w.Spec.DesiredState()
+// outcome. Delegates to the shared computeMemberPhase function.
+func computeWorkerPhase(w *v1beta1.Worker, containerState string, reconcileErr error) string {
+	return computeMemberPhase(w.Status.Phase, w.Status.MatrixUserID, w.Spec.DesiredState(), containerState, reconcileErr)
 }
 
 func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {

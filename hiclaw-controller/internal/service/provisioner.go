@@ -9,6 +9,7 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
@@ -129,6 +130,10 @@ type ProvisionerConfig struct {
 	// the manager; otherwise Conduwuit/Tuwunel returns HTTP 403 (it rejects
 	// invites to non-existent local users).
 	ManagerEnabled bool
+
+	// RemoteCache resolves remote cluster clients for cross-cluster SA operations.
+	// May be nil when remote mode is not configured.
+	RemoteCache backend.RemoteClientProvider
 }
 
 // Provisioner orchestrates infrastructure provisioning and deprovisioning
@@ -148,6 +153,7 @@ type Provisioner struct {
 	adminUser      string
 	resourcePrefix authpkg.ResourcePrefix
 	controllerName string
+	remoteCache    backend.RemoteClientProvider
 
 	managerPassword   string
 	managerGatewayKey string
@@ -186,6 +192,7 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 		managerEnabled:    cfg.ManagerEnabled,
 		aiGatewayURL:      cfg.AIGatewayURL,
 		managerModel:      cfg.ManagerModel,
+		remoteCache:       cfg.RemoteCache,
 	}
 }
 

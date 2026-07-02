@@ -175,6 +175,24 @@ spec:
                             memory:
                               type: string
                               description: Kubernetes memory quantity, e.g. 3Gi
+                    deployMode:
+                      type: string
+                      enum: ["Local", "Remote"]
+                      description: "Where the leader pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster."
+                    targetCluster:
+                      type: object
+                      description: "Remote cluster target for deployment. Required when deployMode is Remote."
+                      properties:
+                        id:
+                          type: string
+                          description: "ACS/ACK cluster ID."
+                        namespace:
+                          type: string
+                          description: "Target namespace in the remote cluster."
+                      required: ["id", "namespace"]
+                    serviceEnabled:
+                      type: boolean
+                      description: "Whether to create a ClusterIP Service alongside the leader pod."
                     labels:
                       type: object
                       additionalProperties:
@@ -390,6 +408,24 @@ spec:
                               memory:
                                 type: string
                                 description: Kubernetes memory quantity, e.g. 2Gi
+                      deployMode:
+                        type: string
+                        enum: ["Local", "Remote"]
+                        description: "Where this team worker pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster."
+                      targetCluster:
+                        type: object
+                        description: "Remote cluster target for deployment. Required when deployMode is Remote."
+                        properties:
+                          id:
+                            type: string
+                            description: "ACS/ACK cluster ID."
+                          namespace:
+                            type: string
+                            description: "Target namespace in the remote cluster."
+                        required: ["id", "namespace"]
+                      serviceEnabled:
+                        type: boolean
+                        description: "Whether to create a ClusterIP Service alongside this team worker pod."
                       accessEntries:
                         type: array
                         description: >
@@ -493,6 +529,21 @@ spec:
                       ready:
                         type: boolean
                         description: "Mirrors backend.Status Running/Ready. Aggregates into leaderReady and readyWorkers."
+                      phase:
+                        type: string
+                        enum: [Pending, Starting, Running, Updating, Stopping, Sleeping, Stopped, Failed]
+                      containerState:
+                        type: string
+                      message:
+                        type: string
+                      lastActiveAt:
+                        type: string
+                        format: date-time
+                        description: "Latest runtime-reported business activity time for this member."
+                      lastHeartbeat:
+                        type: string
+                        format: date-time
+                        description: "Latest heartbeat timestamp for this member."
                       exposedPorts:
                         type: array
                         description: "Ports currently exposed via Higress for this member (workers only)."

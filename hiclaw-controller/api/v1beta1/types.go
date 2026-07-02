@@ -89,6 +89,20 @@ type AgentResourceValues struct {
 	Memory string `json:"memory,omitempty"`
 }
 
+// DeployMode constants define where the worker pod runs.
+const (
+	DeployModeLocal  = "Local"
+	DeployModeRemote = "Remote"
+)
+
+// TargetClusterSpec identifies the remote cluster and namespace for deployment.
+type TargetClusterSpec struct {
+	// ID is the ACS/ACK cluster ID.
+	ID string `json:"id"`
+	// Namespace is the target namespace in the remote cluster.
+	Namespace string `json:"namespace"`
+}
+
 // +genclient
 // +kubebuilder:subresource:status
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -100,7 +114,6 @@ type Worker struct {
 	Spec              WorkerSpec   `json:"spec"`
 	Status            WorkerStatus `json:"status,omitempty"`
 }
-
 
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
@@ -136,6 +149,19 @@ type WorkerSpec struct {
 	// scoped to agents/<name>/* and shared/*).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
+	// DeployMode specifies where the worker pod runs.
+	// "Local" (default): created in the controller's own cluster.
+	// "Remote": created in the cluster identified by TargetCluster.
+	DeployMode *string `json:"deployMode,omitempty"`
+
+	// TargetCluster specifies the remote cluster target for deployment.
+	// Required when DeployMode is "Remote".
+	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
+
+	// ServiceEnabled controls whether a ClusterIP Service is created
+	// alongside the worker pod (same cluster, namespace, name).
+	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
+
 	// Env holds user-defined environment variables injected into the worker
 	// container. Keys that collide with variables already set by the
 	// controller or backend (HICLAW_*, OPENCLAW_*, HOME, and similar
@@ -152,7 +178,6 @@ type WorkerSpec struct {
 	// embed WorkerSpec-shaped hashes keep a stable spec hash when the
 	// field is absent.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // DesiredContainerMan returns the effective desired containerManaged, defaulting to true.
@@ -285,6 +310,19 @@ type LeaderSpec struct {
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
+	// DeployMode specifies where the leader pod runs.
+	// "Local" (default): created in the controller's own cluster.
+	// "Remote": created in the cluster identified by TargetCluster.
+	DeployMode *string `json:"deployMode,omitempty"`
+
+	// TargetCluster specifies the remote cluster target for deployment.
+	// Required when DeployMode is "Remote".
+	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
+
+	// ServiceEnabled controls whether a ClusterIP Service is created
+	// alongside the leader pod (same cluster, namespace, name).
+	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
+
 	// Env holds user-defined environment variables injected into the
 	// leader container. See WorkerSpec.Env for the collision policy.
 	Env map[string]string `json:"env,omitempty"`
@@ -295,7 +333,6 @@ type LeaderSpec struct {
 	// hashMemberSourceSpec stability for Teams that never set this
 	// field.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 type TeamLeaderHeartbeatSpec struct {
@@ -328,6 +365,19 @@ type TeamWorkerSpec struct {
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
+	// DeployMode specifies where the team worker pod runs.
+	// "Local" (default): created in the controller's own cluster.
+	// "Remote": created in the cluster identified by TargetCluster.
+	DeployMode *string `json:"deployMode,omitempty"`
+
+	// TargetCluster specifies the remote cluster target for deployment.
+	// Required when DeployMode is "Remote".
+	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
+
+	// ServiceEnabled controls whether a ClusterIP Service is created
+	// alongside the team worker pod (same cluster, namespace, name).
+	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
+
 	// Env holds user-defined environment variables injected into this
 	// team worker's container. See WorkerSpec.Env for the collision policy.
 	Env map[string]string `json:"env,omitempty"`
@@ -337,7 +387,6 @@ type TeamWorkerSpec struct {
 	// system labels (see WorkerSpec.Labels godoc). omitempty preserves
 	// hashMemberSourceSpec stability for existing Teams.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // EffectiveWorkerName returns the runtime identity key for a team leader.
@@ -436,6 +485,17 @@ type TeamMemberStatus struct {
 	// summarizeBackendReadiness on each reconcile pass. Aggregates into
 	// Team.Status.LeaderReady and Team.Status.ReadyWorkers.
 	Ready bool `json:"ready,omitempty"`
+	// Phase is the member lifecycle phase: Pending, Starting, Running,
+	// Updating, Stopping, Sleeping, Stopped, Failed.
+	Phase string `json:"phase,omitempty"`
+	// ContainerState is the raw backend container status.
+	ContainerState string `json:"containerState,omitempty"`
+	// Message holds per-member error detail from reconcile. Cleared on success.
+	Message string `json:"message,omitempty"`
+	// LastActiveAt is the latest runtime-reported business activity time.
+	LastActiveAt string `json:"lastActiveAt,omitempty"`
+	// LastHeartbeat is the latest heartbeat timestamp for this member.
+	LastHeartbeat string `json:"lastHeartbeat,omitempty"`
 	// ExposedPorts records the ports currently exposed via Higress for this
 	// member. Leader members never expose ports (this field stays nil).
 	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
@@ -545,7 +605,6 @@ type ManagerSpec struct {
 	// godoc): pod-template < CR metadata.labels < CR spec.labels <
 	// controller system labels.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // DesiredState returns the effective desired state, defaulting to "Running".

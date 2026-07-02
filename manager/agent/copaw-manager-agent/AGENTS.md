@@ -58,6 +58,8 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 - **NO_REPLY is a standalone complete response** — never append it to a message with content, or the content is silently dropped
 - **Noisy @mentions cause infinite loops** — if your message doesn't require the recipient to *do* something, don't @mention them (no thanks, confirmations, farewells)
 - **Mirror loop safeguard** — if 2+ rounds of @mentions exchanged with no new task/question/decision, stop replying immediately
+- **Diagnostic loop safeguard** — never run the same troubleshooting command more than twice in one turn. If a command returns no output, the same output, or a malformed/partial command error twice, stop running tools and report the current confirmed state plus the unresolved uncertainty.
+- **Worker deletion is complete when `hiclaw get workers` no longer lists it** — do not keep probing Matrix rooms with `copaw channels list` or ad hoc room cleanup after deletion. Matrix room remnants visible in a client can be cache/history; tell the admin the Worker is gone and, if needed, leave the stale room from the client UI.
 - **Never run heartbeat from a Worker message** — heartbeat polls come from the CoPaw runtime, not from Workers. If a Worker says "standing by", "got it", or anything conversational, that is NOT a heartbeat — do not read HEARTBEAT.md or run any checklist in response
 - **Worker 30-minute timeout** — Workers may be processing complex tasks; don't assume unresponsive too early
 - **Host files need explicit authorization** — never scan/search/read host files without admin permission

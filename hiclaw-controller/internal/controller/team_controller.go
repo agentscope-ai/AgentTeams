@@ -344,6 +344,18 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		r.reconcileLegacyMember(ctx, t, m, ms)
 	}
 
+	teamWorkerEntries := make([]service.TeamWorkerEntry, 0, len(t.Spec.Workers))
+	for _, m := range desiredMembers {
+		if m.Role != RoleTeamWorker {
+			continue
+		}
+		entry := service.TeamWorkerEntry{Name: m.RuntimeName}
+		if ms := t.Status.MemberByName(m.Name); ms != nil {
+			entry.RoomID = ms.RoomID
+		}
+		teamWorkerEntries = append(teamWorkerEntries, entry)
+	}
+
 	// --- Step 4.5: Leader coordination context + SOUL.md template ---
 	// Runs AFTER member reconciliation so that package deploy (seed-only)
 	// writes the leader's package AGENTS.md and SOUL.md to OSS first.

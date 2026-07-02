@@ -151,6 +151,9 @@ func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bo
 	if m.enricher != nil {
 		if err := m.enricher.EnrichIdentity(r.Context(), identity); err != nil {
 			log.Printf("[AUTH] identity enrichment failed for %s: %v", identity.Username, err)
+			if clusterID != "" || identity.ClusterID != "" {
+				return nil, false
+			}
 		}
 	}
 

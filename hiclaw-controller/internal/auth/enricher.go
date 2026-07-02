@@ -31,10 +31,15 @@ type IdentityEnricher interface {
 type CREnricher struct {
 	client    client.Client
 	namespace string
+	prefix    ResourcePrefix
 }
 
-func NewCREnricher(c client.Client, namespace string) *CREnricher {
-	return &CREnricher{client: c, namespace: namespace}
+func NewCREnricher(c client.Client, namespace string, prefix ...ResourcePrefix) *CREnricher {
+	p := DefaultResourcePrefix
+	if len(prefix) > 0 {
+		p = prefix[0].Or(DefaultResourcePrefix)
+	}
+	return &CREnricher{client: c, namespace: namespace, prefix: p}
 }
 
 func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentity) error {
@@ -53,6 +58,9 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 	err := e.client.Get(ctx, key, &worker)
 	switch {
 	case err == nil:
+		if err := e.validateRemoteWorkerIdentity(identity, &worker); err != nil {
+			return err
+		}
 		runtimeName := worker.Spec.EffectiveWorkerName(worker.Name)
 		identity.WorkerName = runtimeName
 		if role := worker.Annotations["hiclaw.io/role"]; role == "team_leader" {
@@ -64,6 +72,9 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 		return nil
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("enrich identity: get worker %q: %w", identity.Username, err)
+	}
+	if identity.ClusterID != "" {
+		return fmt.Errorf("remote identity %q is not backed by a Worker CR", identity.Username)
 	}
 
 	// 2. Worker CR missing — fall back to Team CR reverse lookup. A worker
@@ -96,6 +107,32 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 	// No Worker CR and no Team membership: leave as a vanilla Worker caller.
 	// The authorizer will apply the worker-scope permission check against the
 	// username itself.
+	return nil
+}
+
+func (e *CREnricher) validateRemoteWorkerIdentity(identity *CallerIdentity, worker *v1beta1.Worker) error {
+	if identity.ClusterID == "" {
+		return nil
+	}
+	if worker.Spec.DeployMode == nil || *worker.Spec.DeployMode != v1beta1.DeployModeRemote {
+		return fmt.Errorf("remote identity %q is not backed by a remote Worker", identity.Username)
+	}
+	if worker.Spec.TargetCluster == nil {
+		return fmt.Errorf("remote Worker %q has no targetCluster", worker.Name)
+	}
+	if worker.Spec.TargetCluster.ID != identity.ClusterID {
+		return fmt.Errorf("remote identity %q cluster %q does not match Worker target cluster %q",
+			identity.Username, identity.ClusterID, worker.Spec.TargetCluster.ID)
+	}
+	if worker.Spec.TargetCluster.Namespace != identity.ServiceAccountNamespace {
+		return fmt.Errorf("remote identity %q namespace %q does not match Worker target namespace %q",
+			identity.Username, identity.ServiceAccountNamespace, worker.Spec.TargetCluster.Namespace)
+	}
+	expectedSA := e.prefix.SAName(RoleWorker, worker.Name)
+	if identity.ServiceAccountName != expectedSA {
+		return fmt.Errorf("remote identity %q serviceAccount %q does not match Worker serviceAccount %q",
+			identity.Username, identity.ServiceAccountName, expectedSA)
+	}
 	return nil
 }
 

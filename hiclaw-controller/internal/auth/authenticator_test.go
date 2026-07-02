@@ -20,6 +20,9 @@ func TestParseSAUsername_Admin(t *testing.T) {
 	if id.Role != RoleAdmin || id.Username != "admin" {
 		t.Errorf("expected admin, got %+v", id)
 	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "hiclaw-admin" {
+		t.Errorf("unexpected service account identity: %+v", id)
+	}
 }
 
 func TestParseSAUsername_Manager(t *testing.T) {
@@ -39,6 +42,9 @@ func TestParseSAUsername_Worker(t *testing.T) {
 	}
 	if id.Role != RoleWorker || id.Username != "alice" || id.WorkerName != "alice" {
 		t.Errorf("expected worker alice, got %+v", id)
+	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "hiclaw-worker-alice" {
+		t.Errorf("unexpected service account identity: %+v", id)
 	}
 }
 
@@ -79,6 +85,9 @@ func TestParseSAUsername_CustomPrefix(t *testing.T) {
 	if id.Role != RoleWorker || id.Username != "alice" {
 		t.Errorf("expected worker alice, got %+v", id)
 	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "teamB-worker-alice" {
+		t.Errorf("unexpected service account identity: %+v", id)
+	}
 
 	if _, err := p.ParseSAUsername("system:serviceaccount:hiclaw:hiclaw-worker-alice"); err == nil {
 		t.Errorf("default-prefixed SA must not match the teamB prefix")
@@ -90,6 +99,9 @@ func TestParseSAUsername_CustomPrefix(t *testing.T) {
 	}
 	if id.Role != RoleManager || id.Username != "manager" {
 		t.Errorf("expected manager, got %+v", id)
+	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "teamB-manager" {
+		t.Errorf("unexpected service account identity: %+v", id)
 	}
 }
 
@@ -230,6 +242,9 @@ func TestAuthenticate_RemoteCluster(t *testing.T) {
 	}
 	if id.Role != RoleWorker || id.Username != "alice" {
 		t.Fatalf("expected worker alice, got %+v", id)
+	}
+	if id.ClusterID != "remote-cluster" || id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "hiclaw-worker-alice" {
+		t.Fatalf("unexpected remote identity metadata: %+v", id)
 	}
 }
 

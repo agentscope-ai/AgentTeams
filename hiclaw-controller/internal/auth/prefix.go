@@ -128,16 +128,17 @@ func (p ResourcePrefix) ParseSAUsername(username string) (*CallerIdentity, error
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("cannot parse SA from username: %q", username)
 	}
+	saNamespace := parts[0]
 	saName := parts[1]
 
 	switch {
 	case saName == p.AdminName():
-		return &CallerIdentity{Role: RoleAdmin, Username: "admin"}, nil
+		return &CallerIdentity{Role: RoleAdmin, Username: "admin", ServiceAccountNamespace: saNamespace, ServiceAccountName: saName}, nil
 	case saName == p.ManagerDefaultName():
-		return &CallerIdentity{Role: RoleManager, Username: "manager"}, nil
+		return &CallerIdentity{Role: RoleManager, Username: "manager", ServiceAccountNamespace: saNamespace, ServiceAccountName: saName}, nil
 	case strings.HasPrefix(saName, p.WorkerNamePrefix()):
 		name := saName[len(p.WorkerNamePrefix()):]
-		return &CallerIdentity{Role: RoleWorker, Username: name, WorkerName: name}, nil
+		return &CallerIdentity{Role: RoleWorker, Username: name, WorkerName: name, ServiceAccountNamespace: saNamespace, ServiceAccountName: saName}, nil
 	default:
 		return nil, fmt.Errorf("unrecognized SA name pattern: %q", saName)
 	}

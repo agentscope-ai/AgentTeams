@@ -34,10 +34,13 @@ const (
 
 // CallerIdentity represents the authenticated caller.
 type CallerIdentity struct {
-	Role       string // admin | manager | team-leader | worker
-	Username   string // canonical name (worker name, "manager", or "admin")
-	Team       string // team name (filled by Enricher, empty for standalone)
-	WorkerName string // equals Username when Role is worker or team-leader
+	Role                    string // admin | manager | team-leader | worker
+	Username                string // canonical name (worker name, "manager", or "admin")
+	Team                    string // team name (filled by Enricher, empty for standalone)
+	WorkerName              string // equals Username when Role is worker or team-leader
+	ClusterID               string // remote cluster selected by TokenReview; empty for local
+	ServiceAccountNamespace string // namespace parsed from TokenReview username
+	ServiceAccountName      string // service account parsed from TokenReview username
 }
 
 // Authenticator validates a bearer token and returns a basic identity.
@@ -138,6 +141,7 @@ func (a *TokenReviewAuthenticator) Authenticate(ctx context.Context, token strin
 	if err != nil {
 		return nil, err
 	}
+	identity.ClusterID = clusterID
 	if clusterID != "" && (identity.Role == RoleAdmin || identity.Role == RoleManager) {
 		return nil, fmt.Errorf("remote cluster token cannot authenticate as %s", identity.Role)
 	}

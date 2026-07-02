@@ -298,6 +298,95 @@ func TestBuildDesiredMembers_RuntimeWorkerNamesDriveMatrixPolicy(t *testing.T) {
 	}
 }
 
+// TestForceSoloPeerMentions_NonSoloUnchanged verifies solo=false leaves the
+// Team untouched (no copy, no mutation) — the multi-user default behavior.
+func TestForceSoloPeerMentions_NonSoloUnchanged(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	falseVal := false
+	team.Spec.PeerMentions = &falseVal
+
+	got := forceSoloPeerMentions(team, false)
+
+	if got != team {
+		t.Fatal("forceSoloPeerMentions(solo=false) returned a different pointer, want the same Team unchanged")
+	}
+	if got.Spec.PeerMentions == nil || *got.Spec.PeerMentions != false {
+		t.Fatalf("PeerMentions = %v, want unchanged false", got.Spec.PeerMentions)
+	}
+}
+
+// TestForceSoloPeerMentions_SoloForcesTrueWhenFalse verifies solo mode
+// overrides an explicit PeerMentions=false to true.
+func TestForceSoloPeerMentions_SoloForcesTrueWhenFalse(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	falseVal := false
+	team.Spec.PeerMentions = &falseVal
+
+	got := forceSoloPeerMentions(team, true)
+
+	if got.Spec.PeerMentions == nil || !*got.Spec.PeerMentions {
+		t.Fatalf("PeerMentions = %v, want forced true in solo mode", got.Spec.PeerMentions)
+	}
+	// Original must not be mutated — forceSoloPeerMentions must DeepCopy.
+	if team.Spec.PeerMentions == nil || *team.Spec.PeerMentions != false {
+		t.Fatalf("original Team was mutated in place: PeerMentions = %v, want untouched false", team.Spec.PeerMentions)
+	}
+}
+
+// TestForceSoloPeerMentions_SoloForcesTrueWhenNil verifies solo mode also
+// forces true when PeerMentions was never set (nil), matching the "true is
+// already the default" case but making it explicit/non-overridable.
+func TestForceSoloPeerMentions_SoloForcesTrueWhenNil(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+
+	got := forceSoloPeerMentions(team, true)
+
+	if got.Spec.PeerMentions == nil || !*got.Spec.PeerMentions {
+		t.Fatalf("PeerMentions = %v, want forced true in solo mode", got.Spec.PeerMentions)
+	}
+}
+
+// TestBuildDesiredMembers_SoloForcedPeerMentionsAddsGroupAllow verifies the
+// forced PeerMentions flows all the way through to the worker's
+// ChannelPolicy.GroupAllowExtra, using the same helper the reconciler calls
+// before buildDesiredMembers.
+func TestBuildDesiredMembers_SoloForcedPeerMentionsAddsGroupAllow(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead", Model: "gpt-4o"}
+	falseVal := false
+	team.Spec.PeerMentions = &falseVal
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "alpha-dev", Model: "gpt-4o"},
+		{Name: "alpha-qa", Model: "gpt-4o"},
+	}
+
+	// Without solo mode: PeerMentions=false means peers do NOT see each other.
+	membersOff := buildDesiredMembers(forceSoloPeerMentions(team, false), "")
+	byNameOff := map[string]MemberContext{}
+	for _, m := range membersOff {
+		byNameOff[m.Name] = m
+	}
+	devAllowOff := byNameOff["alpha-dev"].Spec.ChannelPolicy.GroupAllowExtra
+	if stringSliceContains(devAllowOff, "alpha-qa") {
+		t.Fatalf("PeerMentions=false: dev groupAllowExtra=%v must not contain peer qa", devAllowOff)
+	}
+
+	// With solo mode: PeerMentions is forced true, peers see each other.
+	membersOn := buildDesiredMembers(forceSoloPeerMentions(team, true), "")
+	byNameOn := map[string]MemberContext{}
+	for _, m := range membersOn {
+		byNameOn[m.Name] = m
+	}
+	devAllowOn := byNameOn["alpha-dev"].Spec.ChannelPolicy.GroupAllowExtra
+	if !stringSliceContains(devAllowOn, "alpha-qa") {
+		t.Fatalf("solo forced PeerMentions=true: dev groupAllowExtra=%v, want peer qa included", devAllowOn)
+	}
+}
+
 func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
 	prov := mocks.NewMockProvisioner()
 	state := &MemberState{}

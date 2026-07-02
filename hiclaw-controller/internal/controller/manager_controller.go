@@ -63,6 +63,11 @@ type ManagerReconciler struct {
 	// when an admin upgrades from the legacy single-container manager.
 	UserLanguage string
 	UserTimezone string
+
+	// SoloOperator, when true, is forwarded into ManagerWelcomeRequest so
+	// reconcileManagerWelcome sends the non-interview welcome variant.
+	// Sourced from HICLAW_SOLO_OPERATOR (Config.SoloOperator).
+	SoloOperator bool
 }
 
 // managerContainerName returns the container/pod name for a Manager CR.

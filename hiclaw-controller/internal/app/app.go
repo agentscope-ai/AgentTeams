@@ -556,6 +556,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		ControllerName: a.cfg.ControllerName,
 		ResourcePrefix: resourcePrefix,
 		GatewayClient:  a.gateway,
+		SoloOperator:   a.cfg.SoloOperator,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
@@ -581,6 +582,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		UserLanguage:     a.cfg.UserLanguage,
 		UserTimezone:     a.cfg.UserTimezone,
 		GatewayClient:    a.gateway,
+		SoloOperator:     a.cfg.SoloOperator,
 	}
 	if a.cfg.KubeMode == "embedded" {
 		mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{
@@ -611,6 +613,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		SocketPath:     a.cfg.SocketPath,
 		MatrixConfig:   a.cfg.MatrixConfig(),
 		Provisioner:    a.provisioner,
+		SoloOperator:   a.cfg.SoloOperator,
 	})
 	return nil
 }

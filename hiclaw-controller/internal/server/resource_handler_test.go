@@ -639,6 +639,81 @@ func TestCreate_EmptyControllerName_NoLabel(t *testing.T) {
 	}
 }
 
+// TestCreateHuman_SoloOperatorDefaultsToAdmin verifies that in solo mode,
+// a CreateHuman request that omits permissionLevel is created as Admin (1).
+func TestCreateHuman_SoloOperatorDefaultsToAdmin(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler.SetSoloOperator(true)
+
+	body := []byte(`{"name":"solo-human","displayName":"Solo Human"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateHuman(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "solo-human", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if human.Spec.PermissionLevel != 1 {
+		t.Fatalf("PermissionLevel = %d, want 1 (Admin) in solo mode with unset request field", human.Spec.PermissionLevel)
+	}
+}
+
+// TestCreateHuman_SoloOperatorRespectsExplicitPermissionLevel verifies solo
+// mode never overrides an explicit non-zero PermissionLevel from the caller.
+func TestCreateHuman_SoloOperatorRespectsExplicitPermissionLevel(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler.SetSoloOperator(true)
+
+	body := []byte(`{"name":"solo-worker-human","displayName":"Solo Worker Human","permissionLevel":3}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateHuman(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "solo-worker-human", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if human.Spec.PermissionLevel != 3 {
+		t.Fatalf("PermissionLevel = %d, want 3 (explicit request value must not be overridden)", human.Spec.PermissionLevel)
+	}
+}
+
+// TestCreateHuman_NonSoloLeavesPermissionLevelZero verifies the default
+// (non-solo) behavior is unchanged: an omitted permissionLevel stays 0.
+func TestCreateHuman_NonSoloLeavesPermissionLevelZero(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	// soloOperator defaults to false; SetSoloOperator intentionally not called.
+
+	body := []byte(`{"name":"multi-human","displayName":"Multi Human"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/humans", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateHuman(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var human v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "multi-human", Namespace: "default"}, &human); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if human.Spec.PermissionLevel != 0 {
+		t.Fatalf("PermissionLevel = %d, want 0 (unchanged multi-user default)", human.Spec.PermissionLevel)
+	}
+}
+
 func newServerTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 

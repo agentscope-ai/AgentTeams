@@ -40,6 +40,25 @@ type ResourceHandler struct {
 	// controller instance, regardless of what the caller attempts to set.
 	// Empty string means no enforcement (embedded mode).
 	controllerName string
+
+	// soloOperator, when true, makes CreateHuman default PermissionLevel
+	// to 1 (Admin) when the request omits one (zero value). There is only
+	// one human in solo mode, so requiring an explicit admin grant on
+	// every install is unnecessary friction. Set via SetSoloOperator;
+	// defaults to false (unchanged multi-user behavior) so the existing
+	// NewResourceHandler constructor signature does not need to change.
+	// See docs/implementation-milestone-1.md Step 7 scope guard: this is
+	// intentionally the ONLY PermissionLevel touch-point for solo mode —
+	// a deeper strip across handlers is explicitly deferred.
+	soloOperator bool
+}
+
+// SetSoloOperator configures whether this handler runs in single-operator
+// mode. Kept as a post-construction setter rather than a NewResourceHandler
+// parameter to avoid rippling a signature change across its ~20 existing
+// call sites for a single narrow behavior change.
+func (h *ResourceHandler) SetSoloOperator(solo bool) {
+	h.soloOperator = solo
 }
 
 // NewResourceHandler creates a handler. backend may be nil, in which case
@@ -609,6 +628,14 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	permissionLevel := req.PermissionLevel
+	if h.soloOperator && permissionLevel == 0 {
+		// Solo mode: the sole Human defaults to Admin (1) when the caller
+		// didn't specify a level. Only applies to the zero-value (unset);
+		// an explicit non-zero level from the caller is never overridden.
+		permissionLevel = 1
+	}
+
 	human := &v1beta1.Human{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      req.Name,
@@ -617,7 +644,7 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 		Spec: v1beta1.HumanSpec{
 			DisplayName:       req.DisplayName,
 			Email:             req.Email,
-			PermissionLevel:   req.PermissionLevel,
+			PermissionLevel:   permissionLevel,
 			AccessibleTeams:   req.AccessibleTeams,
 			AccessibleWorkers: req.AccessibleWorkers,
 			Note:              req.Note,

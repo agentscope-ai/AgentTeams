@@ -74,6 +74,13 @@ type TeamReconciler struct {
 	// to DefaultResourcePrefix ("hiclaw-").
 	ResourcePrefix auth.ResourcePrefix
 	GatewayClient  gateway.Client // gateway client for modelProvider resolution
+
+	// SoloOperator, when true, forces every Team's effective PeerMentions
+	// to true regardless of Team.Spec.PeerMentions — there is only one
+	// human operator, so cross-worker mentions can't leak outside the
+	// org the way they could in a multi-team setup. Sourced from
+	// HICLAW_SOLO_OPERATOR (Config.SoloOperator).
+	SoloOperator bool
 }
 
 type teamAdminActor struct {
@@ -198,6 +205,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		}
 		derivedTeam.Spec.Admin.MatrixUserID = adminActor.MatrixUserID
 	}
+	derivedTeam = forceSoloPeerMentions(derivedTeam, r.SoloOperator)
 
 	// --- Step 1: Team-level infrastructure ---
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
@@ -982,6 +990,32 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 		Resources:     t.Spec.Leader.Resources,
 		Env:           t.Spec.Leader.Env,
 	}
+}
+
+// forceSoloPeerMentions returns a Team whose effective Spec.PeerMentions is
+// true when solo is true, regardless of what the Team's own spec says.
+// With a single human operator there is no one else the peer-visibility
+// restriction protects against, so the toggle is overridden (not merely
+// defaulted) in solo mode.
+//
+// Returns t unchanged (no copy) when solo is false or PeerMentions is
+// already effectively true, to avoid an unnecessary DeepCopy on the common
+// path. Otherwise ALWAYS DeepCopies before mutating, even if the caller
+// already passed in a derived copy (e.g. for Admin.MatrixUserID
+// substitution) — t may still be the live/working reconcile object shared
+// with the deferred end-of-Reconcile status patch, and mutating its Spec in
+// place would corrupt that patch base.
+func forceSoloPeerMentions(t *v1beta1.Team, solo bool) *v1beta1.Team {
+	if !solo {
+		return t
+	}
+	if t.Spec.PeerMentions != nil && *t.Spec.PeerMentions {
+		return t
+	}
+	out := t.DeepCopy()
+	forced := true
+	out.Spec.PeerMentions = &forced
+	return out
 }
 
 // teamWorkerSpecToWorkerSpec projects a TeamWorkerSpec into WorkerSpec with

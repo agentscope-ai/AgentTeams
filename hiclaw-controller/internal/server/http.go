@@ -31,6 +31,7 @@ type ServerDeps struct {
 	SocketPath     string       // Docker proxy (embedded only)
 	MatrixConfig   matrix.Config       // for AppService rotation endpoint
 	Provisioner    *service.Provisioner // for Matrix token refresh
+	SoloOperator   bool                 // HICLAW_SOLO_OPERATOR; defaults the sole Human to Admin
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -63,6 +64,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Declarative resource CRUD ---
 	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName)
+	rh.SetSoloOperator(deps.SoloOperator)
 	nameFn := authpkg.NameFromPath
 
 	// Workers

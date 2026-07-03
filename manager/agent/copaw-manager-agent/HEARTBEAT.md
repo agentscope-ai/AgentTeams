@@ -66,6 +66,28 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   ```bash
   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
   ```
+- **Blocked-age nudge:** if the entry has `"status": "blocked"`, compare `blocked_since` to the current UTC time. When it is older than **~24h**, this is a **finding** — escalate it now in the Step 7 report (do not wait for the daily digest gate) using the `[task-id] blocker text` envelope, e.g. `[{task-id}] blocked since {blocked_since} — {blocked_reason}; still unresolved after 24h`. Re-raise once per 24h of continued blockage (don't re-nudge every heartbeat cycle) — after sending, note the nudge time so the next cycle can tell whether another 24h has elapsed.
+
+---
+
+### 2a. Orphaned-Task Sweep
+
+Container delete+recreate on any spec change (`member_reconcile.go` — "spec changed, recreating container" → delete → recreate) strands whatever task the Worker had in flight: the entry stays in `active_tasks` forever unless something notices. For each **finite** active task (this includes team-delegated ones, keyed on the Team Leader):
+
+1. Check the assigned worker's container status:
+   ```bash
+   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+     --action ensure-ready --worker {worker}
+   ```
+   `recreated` or `failed` is a strong orphan signal — the container backing this task's context is gone or unreachable.
+2. Cross-check task-dir recency: look at the task's `shared/tasks/{task-id}/progress/` prefix and find the latest `YYYY-MM-DD.md` by filename. If there has been **no new progress entry across N heartbeat cycles** (use the same "no response for more than one cycle" threshold as Step 2), treat it as stalled.
+3. If **either** signal fires (worker gone/recreated/failed, **or** no progress across N cycles): do **not** silently drop the entry and do **not** delete it — mark it blocked instead:
+   ```bash
+   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+     --action mark-blocked --task-id {task-id} --reason "orphaned: container recreated/stalled"
+   ```
+   then flag it in the Step 7 report immediately (same `[task-id]` envelope as the blocked-age nudge above — this is itself a fresh `mark-blocked`, so it will also be picked up by the blocked-age check on future cycles once `blocked_since` ages past 24h).
+4. Cancelling the task stays a human decision — the sweep only ever calls `mark-blocked`, never `cancel`. The admin (or the Worker, once it resurfaces) can `unblock`, `reassign`, or `cancel` explicitly.
 
 ---
 
@@ -259,7 +281,7 @@ If the output is `available`, proceed with the following steps:
 
 #### Daily digest (quiet-day gate)
 
-Findings (anomalies, blockers, capacity asks) always go out immediately via the reporting flow above — the digest never replaces that. The digest exists only to break silence on days where the healthy-branch above would otherwise send nothing.
+Findings (anomalies, blockers, capacity asks, blocked-age nudges from Step 2, orphan-sweep flags from Step 2a) always go out immediately via the reporting flow above — the digest never replaces that. The digest exists only to break silence on days where the healthy-branch above would otherwise send nothing.
 
 Time-gate this against `last_digest_sent_at` in state.json so it fires **at most once per 24h**:
 

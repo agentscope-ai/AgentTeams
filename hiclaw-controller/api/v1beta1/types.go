@@ -240,6 +240,15 @@ type TeamSpec struct {
 	Workers       []TeamWorkerSpec   `json:"workers,omitempty"`
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"` // team-wide overrides
+
+	// ModelProvider is the team-wide default APIG Model API name for LLM
+	// provider resolution. Per-agent Leader.ModelProvider / TeamWorkerSpec.
+	// ModelProvider always win when set; this value is used only as a
+	// fallback for members that leave their own field empty. Both empty
+	// preserves the pre-existing authorize-all default behavior.
+	// omitempty keeps hashMemberSourceSpec byte-identical for Teams that
+	// never set this field (see the digest stability contract below).
+	ModelProvider string `json:"modelProvider,omitempty"`
 }
 
 func (s TeamSpec) EffectiveTeamName(metadataName string) string {

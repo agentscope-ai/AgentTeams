@@ -378,6 +378,75 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 	}
 }
 
+// TestCreateAndUpdateTeamPersistsTeamWideModelProvider is the REST-parity
+// guard for docs/implementation-milestone-3.md Step 4: without ModelProvider
+// on CreateTeamRequest/UpdateTeamRequest/TeamResponse, `hiclaw apply` would
+// silently drop the team-wide field.
+func TestCreateAndUpdateTeamPersistsTeamWideModelProvider(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	createBody := []byte(`{
+		"name":"alpha-team",
+		"modelProvider":"qwen",
+		"leader":{"name":"alpha-lead"},
+		"workers":[{"name":"alpha-dev"}]
+	}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	handler.CreateTeam(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, createRec.Code, createRec.Body.String())
+	}
+
+	var created v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-team", Namespace: "default"}, &created); err != nil {
+		t.Fatalf("get created team: %v", err)
+	}
+	if created.Spec.ModelProvider != "qwen" {
+		t.Fatalf("spec.modelProvider=%q, want qwen", created.Spec.ModelProvider)
+	}
+	// Per-agent fields were left empty on create, so the projection fallback
+	// (not persistence) resolves them — the raw stored spec stays empty.
+	if created.Spec.Leader.ModelProvider != "" {
+		t.Fatalf("leader.modelProvider=%q, want empty (falls back at projection time)", created.Spec.Leader.ModelProvider)
+	}
+
+	var createResp TeamResponse
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if createResp.ModelProvider != "qwen" {
+		t.Fatalf("create response modelProvider=%q, want qwen", createResp.ModelProvider)
+	}
+
+	updateBody := []byte(`{"modelProvider":"dashscope"}`)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/teams/alpha-team", bytes.NewReader(updateBody))
+	updateReq.SetPathValue("name", "alpha-team")
+	updateRec := httptest.NewRecorder()
+	handler.UpdateTeam(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+
+	var updated v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-team", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated team: %v", err)
+	}
+	if updated.Spec.ModelProvider != "dashscope" {
+		t.Fatalf("spec.modelProvider after update=%q, want dashscope", updated.Spec.ModelProvider)
+	}
+
+	var updateResp TeamResponse
+	if err := json.Unmarshal(updateRec.Body.Bytes(), &updateResp); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if updateResp.ModelProvider != "dashscope" {
+		t.Fatalf("update response modelProvider=%q, want dashscope", updateResp.ModelProvider)
+	}
+}
+
 func TestCreateTeamPersistsRuntimeWorkerNames(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()

@@ -401,6 +401,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			HumanMembers:  req.HumanMembers,
 			PeerMentions:  req.PeerMentions,
 			ChannelPolicy: req.ChannelPolicy,
+			ModelProvider: req.ModelProvider,
 			Leader: v1beta1.LeaderSpec{
 				Name:              req.Leader.Name,
 				WorkerName:        req.Leader.WorkerName,
@@ -508,6 +509,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.TeamName != "" {
 			team.Spec.TeamName = req.TeamName
+		}
+		if req.ModelProvider != "" {
+			team.Spec.ModelProvider = req.ModelProvider
 		}
 		if req.Admin != nil {
 			team.Spec.Admin = req.Admin
@@ -1109,6 +1113,7 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 		LeaderName:        t.Spec.Leader.Name,
 		LeaderHeartbeat:   t.Spec.Leader.Heartbeat,
 		WorkerIdleTimeout: t.Spec.Leader.WorkerIdleTimeout,
+		ModelProvider:     t.Spec.ModelProvider,
 		TeamRoomID:        t.Status.TeamRoomID,
 		LeaderDMRoomID:    t.Status.LeaderDMRoomID,
 		LeaderReady:       t.Status.LeaderReady,

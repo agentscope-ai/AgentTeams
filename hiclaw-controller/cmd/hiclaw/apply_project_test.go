@@ -88,3 +88,92 @@ spec:
 		t.Fatalf("second apply (update) failed: %v", err)
 	}
 }
+
+// TestApplyFromFiles_TeamModelProviderRoundTrip is the acceptance check for
+// docs/implementation-milestone-3.md Step 4: a Team YAML carrying the
+// team-wide spec.modelProvider field must round-trip through `hiclaw apply`
+// (buildApplyBody flattens all spec keys generically, but without the field
+// on CreateTeamRequest/UpdateTeamRequest the controller would silently drop
+// it on decode).
+func TestApplyFromFiles_TeamModelProviderRoundTrip(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	authMw := authpkg.NewMiddleware(nil, nil, authpkg.NewAuthorizer(), nil, "default")
+
+	httpServer := server.NewHTTPServer("ignored:0", server.ServerDeps{
+		Client:    k8sClient,
+		AuthMw:    authMw,
+		Namespace: "default",
+	})
+
+	ts := httptest.NewServer(httpServer.Mux)
+	defer ts.Close()
+
+	t.Setenv("HICLAW_CONTROLLER_URL", ts.URL)
+	os.Unsetenv("HICLAW_AUTH_TOKEN")
+	os.Unsetenv("HICLAW_AUTH_TOKEN_FILE")
+
+	content := `apiVersion: hiclaw.io/v1beta1
+kind: Team
+metadata:
+  name: team-modelprovider-e2e
+spec:
+  modelProvider: qwen
+  leader:
+    name: team-modelprovider-e2e-lead
+`
+	tmpFile, err := os.CreateTemp("", "hiclaw-team-*.yaml")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.WriteString(content); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// First apply: existence-check GET (404) -> POST create.
+	if err := applyFromFiles([]string{tmpFile.Name()}); err != nil {
+		t.Fatalf("first apply (create) failed: %v", err)
+	}
+
+	var created v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "team-modelprovider-e2e", Namespace: "default"}, &created); err != nil {
+		t.Fatalf("team not created: %v", err)
+	}
+	if created.Spec.ModelProvider != "qwen" {
+		t.Fatalf("spec.modelProvider = %q, want qwen", created.Spec.ModelProvider)
+	}
+
+	// Second apply with a changed value: existence-check GET (200) -> PUT update.
+	content2 := `apiVersion: hiclaw.io/v1beta1
+kind: Team
+metadata:
+  name: team-modelprovider-e2e
+spec:
+  modelProvider: dashscope
+  leader:
+    name: team-modelprovider-e2e-lead
+`
+	if err := os.WriteFile(tmpFile.Name(), []byte(content2), 0o644); err != nil {
+		t.Fatalf("rewrite temp file: %v", err)
+	}
+	if err := applyFromFiles([]string{tmpFile.Name()}); err != nil {
+		t.Fatalf("second apply (update) failed: %v", err)
+	}
+
+	var updated v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "team-modelprovider-e2e", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("team not found after update: %v", err)
+	}
+	if updated.Spec.ModelProvider != "dashscope" {
+		t.Fatalf("spec.modelProvider after update = %q, want dashscope", updated.Spec.ModelProvider)
+	}
+}

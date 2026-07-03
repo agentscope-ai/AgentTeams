@@ -917,18 +917,24 @@ func memberSpecChanged(t *v1beta1.Team, role MemberRole, name string) bool {
 // JSON key churn.
 func hashMemberSourceSpec(t *v1beta1.Team, role MemberRole, name string) string {
 	type leaderInput struct {
-		Leader     v1beta1.LeaderSpec         `json:"leader"`
-		TeamPolicy *v1beta1.ChannelPolicySpec `json:"teamPolicy,omitempty"`
+		Leader            v1beta1.LeaderSpec         `json:"leader"`
+		TeamPolicy        *v1beta1.ChannelPolicySpec `json:"teamPolicy,omitempty"`
+		TeamModelProvider string                     `json:"teamModelProvider,omitempty"`
 	}
 	type workerInput struct {
-		Worker       v1beta1.TeamWorkerSpec     `json:"worker"`
-		TeamPolicy   *v1beta1.ChannelPolicySpec `json:"teamPolicy,omitempty"`
-		PeerMentions *bool                      `json:"peerMentions,omitempty"`
+		Worker            v1beta1.TeamWorkerSpec     `json:"worker"`
+		TeamPolicy        *v1beta1.ChannelPolicySpec `json:"teamPolicy,omitempty"`
+		PeerMentions      *bool                      `json:"peerMentions,omitempty"`
+		TeamModelProvider string                     `json:"teamModelProvider,omitempty"`
 	}
 	var payload any
 	switch role {
 	case RoleTeamLeader:
-		payload = leaderInput{Leader: t.Spec.Leader, TeamPolicy: t.Spec.ChannelPolicy}
+		payload = leaderInput{
+			Leader:            t.Spec.Leader,
+			TeamPolicy:        t.Spec.ChannelPolicy,
+			TeamModelProvider: t.Spec.ModelProvider,
+		}
 	case RoleTeamWorker:
 		var ws v1beta1.TeamWorkerSpec
 		found := false
@@ -943,9 +949,10 @@ func hashMemberSourceSpec(t *v1beta1.Team, role MemberRole, name string) string 
 			return ""
 		}
 		payload = workerInput{
-			Worker:       ws,
-			TeamPolicy:   t.Spec.ChannelPolicy,
-			PeerMentions: t.Spec.PeerMentions,
+			Worker:            ws,
+			TeamPolicy:        t.Spec.ChannelPolicy,
+			PeerMentions:      t.Spec.PeerMentions,
+			TeamModelProvider: t.Spec.ModelProvider,
 		}
 	default:
 		return ""
@@ -974,9 +981,17 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 	if teamAdminID := teamAdminMatrixID(t); teamAdminID != "" {
 		policy = appendDmAllowExtra(policy, teamAdminID)
 	}
+	// Per-agent ModelProvider always wins; an empty per-agent value falls
+	// back to the team-wide default. Both empty preserves the pre-existing
+	// authorize-all default (higress.go ResolveModelProvider is never
+	// called when the resolved value stays "").
+	modelProvider := t.Spec.Leader.ModelProvider
+	if modelProvider == "" {
+		modelProvider = t.Spec.ModelProvider
+	}
 	return v1beta1.WorkerSpec{
 		Model:         t.Spec.Leader.Model,
-		ModelProvider: t.Spec.Leader.ModelProvider,
+		ModelProvider: modelProvider,
 		Runtime:       "copaw",
 		WorkerName:    t.Spec.Leader.WorkerName,
 		Identity:      t.Spec.Leader.Identity,
@@ -1044,9 +1059,16 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 			}
 		}
 	}
+	// Per-agent ModelProvider always wins; an empty per-agent value falls
+	// back to the team-wide default (see leaderWorkerSpec for the same
+	// rule applied to the leader).
+	modelProvider := w.ModelProvider
+	if modelProvider == "" {
+		modelProvider = t.Spec.ModelProvider
+	}
 	return v1beta1.WorkerSpec{
 		Model:         w.Model,
-		ModelProvider: w.ModelProvider,
+		ModelProvider: modelProvider,
 		Runtime:       w.Runtime,
 		WorkerName:    w.WorkerName,
 		Image:         w.Image,

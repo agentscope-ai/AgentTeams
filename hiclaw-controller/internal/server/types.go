@@ -97,6 +97,7 @@ type CreateTeamRequest struct {
 	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
 	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	ModelProvider string                     `json:"modelProvider,omitempty"`
 }
 
 type TeamLeaderRequest struct {
@@ -149,6 +150,7 @@ type UpdateTeamRequest struct {
 	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
 	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	ModelProvider string                     `json:"modelProvider,omitempty"`
 }
 
 type TeamResponse struct {
@@ -161,6 +163,7 @@ type TeamResponse struct {
 	LeaderName         string                           `json:"leaderName"`
 	LeaderHeartbeat    *v1beta1.TeamLeaderHeartbeatSpec `json:"leaderHeartbeat,omitempty"`
 	WorkerIdleTimeout  string                           `json:"workerIdleTimeout,omitempty"`
+	ModelProvider      string                           `json:"modelProvider,omitempty"`
 	TeamRoomID         string                           `json:"teamRoomID,omitempty"`
 	LeaderDMRoomID     string                           `json:"leaderDMRoomID,omitempty"`
 	LeaderReady        bool                             `json:"leaderReady"`

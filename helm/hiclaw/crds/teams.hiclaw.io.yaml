@@ -21,6 +21,9 @@ spec:
                 teamName:
                   type: string
                   description: Runtime/storage team identity. Defaults to metadata.name.
+                modelProvider:
+                  type: string
+                  description: "Team-wide default APIG Model API name for LLM provider resolution. Per-agent leader/worker modelProvider always wins; empty falls back to this value. Both empty preserves the default authorize-all behavior."
                 peerMentions:
                   type: boolean
                   description: "Whether team workers can @mention each other in group rooms (default: true)"

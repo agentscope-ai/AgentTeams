@@ -3209,6 +3209,52 @@ function Install-Manager {
         Write-Log "Embedded controller started: agentteams-controller"
 
         # Wait for infra inside the controller container.
+        function Show-HigressGatewayTimeoutDiagnostics {
+            param([string]$Container)
+
+            Write-Log "Higress Gateway diagnostics:"
+            $architecture = docker exec $Container uname -m 2>$null
+            $inotifyInstances = docker exec $Container cat /proc/sys/fs/inotify/max_user_instances 2>$null
+            $maxMapCount = docker exec $Container cat /proc/sys/vm/max_map_count 2>$null
+            $overcommitMemory = docker exec $Container cat /proc/sys/vm/overcommit_memory 2>$null
+            if ($architecture) {
+                $architecture = $architecture | Select-Object -First 1
+                Write-Log "  architecture=$architecture"
+            }
+            if ($inotifyInstances) {
+                Write-Log "  fs.inotify.max_user_instances=$inotifyInstances"
+                $parsed = 0
+                if ([int]::TryParse(($inotifyInstances | Select-Object -First 1), [ref]$parsed) -and $parsed -lt 1024) {
+                    Write-Log "  WARNING: fs.inotify.max_user_instances is low and may exhaust file-watch resources."
+                    Write-Log "  Try on the host: sudo sysctl -w fs.inotify.max_user_instances=1024"
+                }
+            }
+            if ($maxMapCount) {
+                Write-Log "  vm.max_map_count=$($maxMapCount | Select-Object -First 1)"
+            }
+            if ($overcommitMemory) {
+                Write-Log "  vm.overcommit_memory=$($overcommitMemory | Select-Object -First 1)"
+            }
+
+            $gatewayTail = docker exec $Container sh -c "tail -80 /var/log/hiclaw/higress-gateway.log 2>/dev/null" 2>$null
+            if ($LASTEXITCODE -eq 0 -and $gatewayTail) {
+                foreach ($line in $gatewayTail) {
+                    Write-Log "  gateway-log: $line"
+                }
+                $joined = ($gatewayTail -join "`n")
+                if ($joined -match "Fatal error|Check failed: 12|trace/breakpoint trap|core dumped") {
+                    Write-Log "  Detected Envoy/V8 fatal exit. Compare the architecture and kernel limits above when reporting this failure."
+                    if ($architecture -match "^(aarch64|arm64)$") {
+                        Write-Log "  WARNING: This failure has been reported on ARM64 even after raising the kernel limits."
+                        Write-Log "  If disabling Wasm makes the gateway start, treat that only as Higress Wasm/V8 compatibility evidence."
+                        Write-Log "  Keep Wasm enabled for normal use because AgentTeams relies on it for gateway authentication and AI routing."
+                    }
+                }
+            } else {
+                Write-Log "  No Higress Gateway log found at /var/log/hiclaw/higress-gateway.log"
+            }
+        }
+
         function Wait-EmbeddedUrl {
             param([string]$Url, [string]$Container, [int]$MaxWait, [string]$Description)
             $elapsed = 0
@@ -3223,6 +3269,9 @@ function Install-Manager {
                 $elapsed += 2
             }
             Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $Description not ready after ${MaxWait}s" -ForegroundColor Red
+            if ($Description -eq "Higress Gateway") {
+                Show-HigressGatewayTimeoutDiagnostics -Container $Container
+            }
             return $false
         }
 

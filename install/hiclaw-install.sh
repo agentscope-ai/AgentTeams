@@ -3577,6 +3577,53 @@ CREDEOF
         log "Embedded controller started: agentteams-controller"
 
         # Wait for infrastructure inside the controller container
+        _report_higress_gateway_timeout() {
+            local ctr="$1"
+            local architecture=""
+            local inotify_instances=""
+            local max_map_count=""
+            local overcommit_memory=""
+            local gateway_tail=""
+
+            log "Higress Gateway diagnostics:"
+            architecture="$(${DOCKER_CMD} exec "${ctr}" uname -m 2>/dev/null || true)"
+            inotify_instances="$(${DOCKER_CMD} exec "${ctr}" cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null || true)"
+            max_map_count="$(${DOCKER_CMD} exec "${ctr}" cat /proc/sys/vm/max_map_count 2>/dev/null || true)"
+            overcommit_memory="$(${DOCKER_CMD} exec "${ctr}" cat /proc/sys/vm/overcommit_memory 2>/dev/null || true)"
+            [ -n "${architecture}" ] && log "  architecture=${architecture}"
+            if [ -n "${inotify_instances}" ]; then
+                log "  fs.inotify.max_user_instances=${inotify_instances}"
+                case "${inotify_instances}" in
+                    ''|*[!0-9]*) ;;
+                    *)
+                        if [ "${inotify_instances}" -lt 1024 ]; then
+                            log "  WARNING: fs.inotify.max_user_instances is low and may exhaust file-watch resources."
+                            log "  Try on the host: sudo sysctl -w fs.inotify.max_user_instances=1024"
+                        fi
+                        ;;
+                esac
+            fi
+            [ -n "${max_map_count}" ] && log "  vm.max_map_count=${max_map_count}"
+            [ -n "${overcommit_memory}" ] && log "  vm.overcommit_memory=${overcommit_memory}"
+
+            gateway_tail="$(${DOCKER_CMD} exec "${ctr}" sh -c 'tail -80 /var/log/hiclaw/higress-gateway.log 2>/dev/null' 2>/dev/null || true)"
+            if [ -n "${gateway_tail}" ]; then
+                printf '%s\n' "${gateway_tail}" | sed 's/^/[AgentTeams]   gateway-log: /'
+                if printf '%s\n' "${gateway_tail}" | grep -qiE 'Fatal error|Check failed: 12|trace/breakpoint trap|core dumped'; then
+                    log "  Detected Envoy/V8 fatal exit. Compare the architecture and kernel limits above when reporting this failure."
+                    case "${architecture}" in
+                        aarch64|arm64)
+                            log "  WARNING: This failure has been reported on ARM64 even after raising the kernel limits."
+                            log "  If disabling Wasm makes the gateway start, treat that only as Higress Wasm/V8 compatibility evidence."
+                            log "  Keep Wasm enabled for normal use because AgentTeams relies on it for gateway authentication and AI routing."
+                            ;;
+                    esac
+                fi
+            else
+                log "  No Higress Gateway log found at /var/log/hiclaw/higress-gateway.log"
+            fi
+        }
+
         _wait_for_url() {
             local url="$1" ctr="$2" max_wait="${3:-120}" desc="${4:-service}"
             local elapsed=0
@@ -3590,6 +3637,9 @@ CREDEOF
                 elapsed=$((elapsed + 2))
             done
             log "ERROR: ${desc} not ready after ${max_wait}s"
+            if [ "${desc}" = "Higress Gateway" ]; then
+                _report_higress_gateway_timeout "${ctr}"
+            fi
             return 1
         }
 

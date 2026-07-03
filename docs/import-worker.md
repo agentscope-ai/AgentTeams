@@ -18,7 +18,7 @@ The recommended way to manage HiClaw resources is via YAML files.
 
 ```yaml
 # worker.yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -42,7 +42,7 @@ A Team consists of a Leader and one or more Workers. The Leader receives tasks f
 
 ```yaml
 # team.yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: alpha-team
@@ -69,7 +69,7 @@ Human users get a Matrix account and are invited into the appropriate rooms base
 
 ```yaml
 # human.yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: john
@@ -96,7 +96,7 @@ Permission levels:
 Use `---` separators to apply multiple resources in one file:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: alpha-team
@@ -108,7 +108,7 @@ spec:
     - name: alpha-dev
       model: claude-sonnet-4-6
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: john

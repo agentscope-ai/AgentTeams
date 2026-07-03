@@ -130,7 +130,7 @@ The controller handles everything: Matrix registration, room creation, Higress c
 If admin asks you to set CPU or memory requests/limits, use a YAML manifest instead of CLI flags:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: <NAME>

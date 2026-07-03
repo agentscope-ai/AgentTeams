@@ -19,7 +19,7 @@ func baseOverlay() PodOverlay {
 	return PodOverlay{
 		Name:               "hiclaw-worker-alice",
 		Namespace:          "hiclaw",
-		Labels:             map[string]string{"app": "hiclaw-worker", "hiclaw.io/worker": "alice"},
+		Labels:             map[string]string{"app": "hiclaw-worker", "agentteams.io/worker": "alice"},
 		Annotations:        map[string]string{"hiclaw.io/test-overlay": "controller"},
 		ServiceAccountName: "hiclaw-worker-alice",
 		Container: corev1.Container{
@@ -128,7 +128,7 @@ func TestApplyPodTemplate_MetadataLabelsMerge(t *testing.T) {
 	if pod.Labels["app"] != "hiclaw-worker" {
 		t.Fatalf("overlay must win on app: %q", pod.Labels["app"])
 	}
-	if pod.Labels["hiclaw.io/worker"] != "alice" {
+	if pod.Labels["agentteams.io/worker"] != "alice" {
 		t.Fatalf("overlay-only label missing: %+v", pod.Labels)
 	}
 }

@@ -53,7 +53,7 @@ type CacheConfig struct {
 	CredClient     credprovider.Client
 	CtrlClient     client.Client // controller-runtime client for querying CRs
 	Scheme         *runtime.Scheme
-	ControllerName string // label filter applied to remote watches: hiclaw.io/controller=<name>
+	ControllerName string // label filter applied to remote watches: agentteams.io/controller=<name>
 }
 
 // remoteWatch describes a watch registration that should be applied
@@ -300,7 +300,7 @@ func (c *Cache) startRemoteCache(ctx context.Context, restCfg *rest.Config, clus
 	c.logger.Info("starting remote cache", "clusterID", clusterID, "watches", len(c.watches))
 
 	labelSelector := labels.SelectorFromSet(labels.Set{
-		"hiclaw.io/controller": c.controllerName,
+		"agentteams.io/controller": c.controllerName,
 	})
 	byObject := make(map[client.Object]ctrlcache.ByObject, len(c.watches))
 	for _, w := range c.watches {

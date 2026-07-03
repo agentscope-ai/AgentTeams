@@ -69,7 +69,7 @@ HUMAN_MATRIX_ID="@${TEST_HUMAN}:${TEST_MATRIX_DOMAIN}"
 log_section "Create Human via Declarative YAML (before Team)"
 
 exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_HUMAN}.yaml << 'YAMLEOF'
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: ${TEST_HUMAN}
@@ -155,7 +155,7 @@ SOUL
 done
 
 exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_TEAM}.yaml << YAMLEOF
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: ${TEST_TEAM}

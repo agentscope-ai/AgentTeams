@@ -93,7 +93,7 @@ type ProvisionerConfig struct {
 	ResourcePrefix authpkg.ResourcePrefix
 
 	// ControllerName identifies this controller instance. Stamped on every
-	// ServiceAccount created by the provisioner via hiclaw.io/controller.
+	// ServiceAccount created by the provisioner via agentteams.io/controller.
 	ControllerName string
 
 	// Pre-generated Manager secrets (from install script env).

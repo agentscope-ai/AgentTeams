@@ -66,7 +66,7 @@ func (p ResourcePrefix) AdminName() string {
 // "hiclaw-worker". Purely decorative — useful for ad-hoc kubectl grouping
 // (`kubectl get pod -l app=hiclaw-worker`) and external dashboards. No
 // in-tree code selects on this label; isolation between controller
-// instances is done via hiclaw.io/controller. Kept stable for external
+// instances is done via agentteams.io/controller. Kept stable for external
 // tooling compatibility.
 func (p ResourcePrefix) WorkerAppLabel() string {
 	return p.effective() + "worker"

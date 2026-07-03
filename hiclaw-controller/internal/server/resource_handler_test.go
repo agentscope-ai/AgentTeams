@@ -499,7 +499,7 @@ func TestCreateTeam_WithoutWorkers(t *testing.T) {
 }
 
 // TestCreateWorker_StampsControllerLabel verifies that the HTTP API
-// force-overwrites the hiclaw.io/controller label on Create. A caller
+// force-overwrites the agentteams.io/controller label on Create. A caller
 // attempting to smuggle a different controller value must not succeed:
 // the serving controller's own name always wins.
 func TestCreateWorker_StampsControllerLabel(t *testing.T) {

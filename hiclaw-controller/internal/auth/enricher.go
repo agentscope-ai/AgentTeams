@@ -63,10 +63,10 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 		}
 		runtimeName := worker.Spec.EffectiveWorkerName(worker.Name)
 		identity.WorkerName = runtimeName
-		if role := worker.Annotations["hiclaw.io/role"]; role == "team_leader" {
+		if role := worker.Annotations["agentteams.io/role"]; role == "team_leader" {
 			identity.Role = RoleTeamLeader
 		}
-		if team := worker.Annotations["hiclaw.io/team"]; team != "" {
+		if team := worker.Annotations["agentteams.io/team"]; team != "" {
 			identity.Team = team
 		}
 		return nil

@@ -150,8 +150,8 @@ func TestReconcileMemberService_CreatesWhenEnabled(t *testing.T) {
 	if svc.createCalls != 1 {
 		t.Errorf("Create calls = %d, want 1", svc.createCalls)
 	}
-	if got := stored.Spec.Selector["hiclaw.io/worker"]; got != "alice" {
-		t.Errorf("Selector hiclaw.io/worker = %q, want alice", got)
+	if got := stored.Spec.Selector["agentteams.io/worker"]; got != "alice" {
+		t.Errorf("Selector agentteams.io/worker = %q, want alice", got)
 	}
 	if len(stored.Spec.Ports) != 2 {
 		t.Errorf("Ports len = %d, want 2", len(stored.Spec.Ports))
@@ -217,7 +217,7 @@ func TestReconcileMemberService_UpdatesWhenPortsDiffer(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "hiclaw-worker-dave", Namespace: "hiclaw"},
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
-			Selector: map[string]string{"hiclaw.io/worker": "dave"},
+			Selector: map[string]string{"agentteams.io/worker": "dave"},
 			Ports: []corev1.ServicePort{
 				{Name: "port-1111", Port: 1111, Protocol: corev1.ProtocolTCP},
 			},

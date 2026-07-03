@@ -729,7 +729,7 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	logger.Info("starting in-cluster mode")
 
 	// HICLAW_CONTROLLER_NAME is mandatory in incluster mode: it drives the
-	// leader election lease name, the hiclaw.io/controller CR label
+	// leader election lease name, the agentteams.io/controller CR label
 	// selector, and the agent pod template ConfigMap name. Running with
 	// an empty value would silently collapse these three scopes onto
 	// global defaults, causing cross-instance interference in the same

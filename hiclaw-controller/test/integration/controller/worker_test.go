@@ -159,11 +159,11 @@ func TestWorkerFinalizer_AddedOnCreate(t *testing.T) {
 			return err
 		}
 		for _, f := range w.Finalizers {
-			if f == "hiclaw.io/cleanup" {
+			if f == "agentteams.io/cleanup" {
 				return nil
 			}
 		}
-		return fmt.Errorf("finalizer hiclaw.io/cleanup not found in %v", w.Finalizers)
+		return fmt.Errorf("finalizer agentteams.io/cleanup not found in %v", w.Finalizers)
 	})
 }
 
@@ -774,7 +774,7 @@ func TestWorkerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) 
 		"env":                   "prod",
 		"team":                  "spec-team",      // overrides metadata
 		v1beta1.LabelController: "spec-attacker",  // must be overridden by system
-		"hiclaw.io/worker":      "spec-fake-name", // must be overridden by system
+		"agentteams.io/worker":  "spec-fake-name", // must be overridden by system
 	}
 
 	if err := k8sClient.Create(ctx, w); err != nil {
@@ -789,12 +789,12 @@ func TestWorkerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) 
 		t.Fatalf("backend Create was never called for %q (captured=%v)", name, capMu.Keys())
 	}
 
-	assertLabel(t, labels, "owner", "alice")                 // metadata propagated
-	assertLabel(t, labels, "env", "prod")                    // spec propagated
-	assertLabel(t, labels, "team", "spec-team")              // spec beats metadata
-	assertLabel(t, labels, v1beta1.LabelController, wantCtl) // system beats user
-	assertLabel(t, labels, "hiclaw.io/worker", name)         // system beats user
-	assertLabel(t, labels, "hiclaw.io/role", "standalone")   // system
+	assertLabel(t, labels, "owner", "alice")                   // metadata propagated
+	assertLabel(t, labels, "env", "prod")                      // spec propagated
+	assertLabel(t, labels, "team", "spec-team")                // spec beats metadata
+	assertLabel(t, labels, v1beta1.LabelController, wantCtl)   // system beats user
+	assertLabel(t, labels, "agentteams.io/worker", name)       // system beats user
+	assertLabel(t, labels, "agentteams.io/role", "standalone") // system
 }
 
 func TestWorkerResources_PropagateToBackendCreate(t *testing.T) {

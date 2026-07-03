@@ -62,7 +62,7 @@ type TeamReconciler struct {
 
 	AgentFSDir string // for writing inline configs to the local agent FS
 
-	// ControllerName, when non-empty, is merged as hiclaw.io/controller
+	// ControllerName, when non-empty, is merged as agentteams.io/controller
 	// into the PodLabels of every team member MemberContext this reconciler
 	// builds, so the resulting Pods match the owning controller instance's
 	// label-scoped cache. Post-refactor (PR #666) Teams no longer create
@@ -1169,7 +1169,7 @@ func observedMemberNames(s *v1beta1.TeamStatus) []string {
 }
 
 // buildDesiredMembers translates a Team spec into MemberContexts for leader
-// and each worker. Every member is tagged with PodLabel hiclaw.io/team=<name>
+// and each worker. Every member is tagged with PodLabel agentteams.io/team=<name>
 // so the Team controller can watch their pod lifecycle via a shared predicate.
 //
 // SpecChanged is computed per member via hashMemberSourceSpec, which digests
@@ -1199,8 +1199,8 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			t.ObjectMeta.Labels,
 			perMemberLabels,
 			map[string]string{
-				"hiclaw.io/team":        t.Name,
-				"hiclaw.io/role":        role.String(),
+				"agentteams.io/team":    t.Name,
+				"agentteams.io/role":    role.String(),
 				v1beta1.LabelController: controllerName,
 			},
 		)
@@ -1553,7 +1553,7 @@ func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
 				teamPodEventHandler(""),
-				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/team", r.ControllerName)),
+				builder.WithPredicates(podLifecyclePredicates("agentteams.io/team", r.ControllerName)),
 			)
 		}
 	}
@@ -1577,7 +1577,7 @@ func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				ctl,
 				&corev1.Pod{},
 				teamPodEventHandler(r.Namespace),
-				podLifecyclePredicates("hiclaw.io/team", r.ControllerName),
+				podLifecyclePredicates("agentteams.io/team", r.ControllerName),
 			)
 		}
 	}
@@ -1591,7 +1591,7 @@ func teamPodEventHandler(localNamespace string) handler.EventHandler {
 }
 
 func teamPodRequests(obj client.Object, localNamespace string) []reconcile.Request {
-	teamName := obj.GetLabels()["hiclaw.io/team"]
+	teamName := obj.GetLabels()["agentteams.io/team"]
 	if teamName == "" {
 		return nil
 	}

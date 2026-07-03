@@ -34,7 +34,7 @@ type ResourceHandler struct {
 	namespace string
 	backend   *backend.Registry
 
-	// controllerName is stamped as hiclaw.io/controller on every CR this
+	// controllerName is stamped as agentteams.io/controller on every CR this
 	// handler creates, overwriting any value supplied by the client. This
 	// enforces that HTTP-created resources always belong to the serving
 	// controller instance, regardless of what the caller attempts to set.
@@ -44,7 +44,7 @@ type ResourceHandler struct {
 
 // NewResourceHandler creates a handler. backend may be nil, in which case
 // runtime status is omitted from synthetic team member responses.
-// controllerName, when non-empty, is force-stamped as hiclaw.io/controller
+// controllerName, when non-empty, is force-stamped as agentteams.io/controller
 // on every CR this handler creates so HTTP-created resources cannot escape
 // the serving controller instance's cache scope.
 func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, controllerName string) *ResourceHandler {
@@ -228,9 +228,9 @@ func isTeamMemberWorker(w *v1beta1.Worker) bool {
 	if w.Annotations == nil {
 		return false
 	}
-	return w.Annotations["hiclaw.io/team"] != "" ||
-		w.Annotations["hiclaw.io/team-leader"] != "" ||
-		w.Annotations["hiclaw.io/role"] == "team_leader"
+	return w.Annotations["agentteams.io/team"] != "" ||
+		w.Annotations["agentteams.io/team-leader"] != "" ||
+		w.Annotations["agentteams.io/role"] == "team_leader"
 }
 
 func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
@@ -876,8 +876,8 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		resp.Phase = "Pending"
 	}
 	if w.Annotations != nil {
-		resp.Team = w.Annotations["hiclaw.io/team"]
-		resp.Role = w.Annotations["hiclaw.io/role"]
+		resp.Team = w.Annotations["agentteams.io/team"]
+		resp.Role = w.Annotations["agentteams.io/role"]
 	}
 	for _, ep := range w.Status.ExposedPorts {
 		resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: ep.Port, Domain: ep.Domain})

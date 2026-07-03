@@ -36,7 +36,7 @@ bundle.
 ## Field Contract
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1 # master current: no runtime yaml protocol yet
+apiVersion: agentteams.io/v1beta1 # master current: no runtime yaml protocol yet
 kind: MemberRuntimeConfig # master current: no runtime yaml protocol yet
 
 # Config snapshot metadata. QwenPaw uses this section to detect whether the

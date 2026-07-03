@@ -72,8 +72,8 @@ func TestBuildDesiredMembers_LeaderAndWorkers(t *testing.T) {
 		t.Errorf("alpha-qa should be IsUpdate=false (not observed in Status.Members)")
 	}
 	for _, m := range members {
-		if m.PodLabels["hiclaw.io/team"] != "alpha" {
-			t.Errorf("member %s missing hiclaw.io/team label: %v", m.Name, m.PodLabels)
+		if m.PodLabels["agentteams.io/team"] != "alpha" {
+			t.Errorf("member %s missing agentteams.io/team label: %v", m.Name, m.PodLabels)
 		}
 		switch m.Role {
 		case RoleTeamLeader:
@@ -739,7 +739,7 @@ func TestRemoveLegacyMember_DeletesEntry(t *testing.T) {
 // TestBuildDesiredMembers_StampsControllerLabelOnPodLabels verifies that when
 // the TeamReconciler propagates a non-empty ControllerName into
 // buildDesiredMembers, every derived MemberContext carries the
-// hiclaw.io/controller PodLabel so the resulting Pod lands inside the
+// agentteams.io/controller PodLabel so the resulting Pod lands inside the
 // owning controller instance's label-scoped informer cache.
 //
 // Post-refactor (PR #666) the label is stamped via MemberContext.PodLabels →
@@ -763,11 +763,11 @@ func TestBuildDesiredMembers_StampsControllerLabelOnPodLabels(t *testing.T) {
 		if got := m.PodLabels[v1beta1.LabelController]; got != "ctrl-a" {
 			t.Fatalf("member %s: expected controller label ctrl-a in PodLabels, got %q (labels=%v)", m.Name, got, m.PodLabels)
 		}
-		if got := m.PodLabels["hiclaw.io/team"]; got != team.Name {
+		if got := m.PodLabels["agentteams.io/team"]; got != team.Name {
 			t.Fatalf("member %s: expected team label %q, got %q", m.Name, team.Name, got)
 		}
-		if m.PodLabels["hiclaw.io/role"] == "" {
-			t.Fatalf("member %s: expected non-empty hiclaw.io/role", m.Name)
+		if m.PodLabels["agentteams.io/role"] == "" {
+			t.Fatalf("member %s: expected non-empty agentteams.io/role", m.Name)
 		}
 	}
 }
@@ -895,14 +895,14 @@ func TestBuildDesiredMembers_SystemLabelsOverrideUserLabels(t *testing.T) {
 				Labels: map[string]string{v1beta1.LabelController: "spec-attacker"},
 			},
 			Workers: []v1beta1.TeamWorkerSpec{
-				{Name: "w1", Model: "qwen", Labels: map[string]string{"hiclaw.io/role": "evil"}},
+				{Name: "w1", Model: "qwen", Labels: map[string]string{"agentteams.io/role": "evil"}},
 			},
 		},
 	}
 	team.Name = "alpha"
 	team.ObjectMeta.Labels = map[string]string{
 		v1beta1.LabelController: "metadata-attacker",
-		"hiclaw.io/team":        "other-team",
+		"agentteams.io/team":    "other-team",
 	}
 
 	members := buildDesiredMembers(team, "real-ctl")
@@ -914,14 +914,14 @@ func TestBuildDesiredMembers_SystemLabelsOverrideUserLabels(t *testing.T) {
 		if got := byName[name].PodLabels[v1beta1.LabelController]; got != "real-ctl" {
 			t.Errorf("%s: controller label got %q, want real-ctl", name, got)
 		}
-		if got := byName[name].PodLabels["hiclaw.io/team"]; got != "alpha" {
+		if got := byName[name].PodLabels["agentteams.io/team"]; got != "alpha" {
 			t.Errorf("%s: team label got %q, want alpha", name, got)
 		}
 	}
-	if got := byName["lead"].PodLabels["hiclaw.io/role"]; got != RoleTeamLeader.String() {
+	if got := byName["lead"].PodLabels["agentteams.io/role"]; got != RoleTeamLeader.String() {
 		t.Errorf("leader role got %q, want %q", got, RoleTeamLeader.String())
 	}
-	if got := byName["w1"].PodLabels["hiclaw.io/role"]; got != RoleTeamWorker.String() {
+	if got := byName["w1"].PodLabels["agentteams.io/role"]; got != RoleTeamWorker.String() {
 		t.Errorf("w1 role got %q, want %q", got, RoleTeamWorker.String())
 	}
 }
@@ -950,10 +950,10 @@ func callIndex(calls []string, target string) int {
 
 func TestValidateWorkerMembers(t *testing.T) {
 	tests := []struct {
-		name      string
-		refs      []v1beta1.TeamWorkerRef
-		wantErr   string
-		wantLeader string
+		name        string
+		refs        []v1beta1.TeamWorkerRef
+		wantErr     string
+		wantLeader  string
 		wantWorkers int
 	}{
 		{

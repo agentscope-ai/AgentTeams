@@ -453,11 +453,11 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		saName = k.workerNamePrefix() + req.Name
 	}
 
-	// Callers own the full label set except hiclaw.io/runtime, which the
+	// Callers own the full label set except agentteams.io/runtime, which the
 	// backend stamps because it knows the resolved runtime value (after
 	// CRD spec + operator-default fallback).
 	podLabels := map[string]string{
-		"hiclaw.io/runtime": defaultRuntime(req.Runtime),
+		"agentteams.io/runtime": defaultRuntime(req.Runtime),
 	}
 	for k, v := range req.Labels {
 		podLabels[k] = v

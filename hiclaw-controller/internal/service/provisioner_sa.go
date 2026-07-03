@@ -36,7 +36,7 @@ func (p *Provisioner) EnsureServiceAccount(ctx context.Context, workerName strin
 			Namespace: ns,
 			Labels: map[string]string{
 				"app":                   p.resourcePrefix.WorkerAppLabel(),
-				"hiclaw.io/worker":      workerName,
+				"agentteams.io/worker":  workerName,
 				v1beta1.LabelController: p.controllerName,
 			},
 		},
@@ -87,7 +87,7 @@ func (p *Provisioner) EnsureManagerServiceAccount(ctx context.Context, managerNa
 			Namespace: ns,
 			Labels: map[string]string{
 				"app":                   p.resourcePrefix.ManagerAppLabel(),
-				"hiclaw.io/manager":     managerName,
+				"agentteams.io/manager": managerName,
 				v1beta1.LabelController: p.controllerName,
 			},
 		},
@@ -179,7 +179,7 @@ func (p *Provisioner) EnsureAdminServiceAccount(ctx context.Context) error {
 			Name:      saName,
 			Namespace: ns,
 			Labels: map[string]string{
-				"hiclaw.io/role": authpkg.RoleAdmin,
+				"agentteams.io/role": authpkg.RoleAdmin,
 			},
 		},
 	}
@@ -294,8 +294,8 @@ func (p *Provisioner) EnsureRemoteServiceAccount(
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "hiclaw-controller",
-				"hiclaw.io/role":               "worker",
-				"hiclaw.io/worker":             workerName,
+				"agentteams.io/role":           "worker",
+				"agentteams.io/worker":         workerName,
 			},
 		},
 	}

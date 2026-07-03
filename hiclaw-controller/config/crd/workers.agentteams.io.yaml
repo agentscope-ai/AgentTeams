@@ -1,9 +1,9 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: workers.hiclaw.io
+  name: workers.agentteams.io
 spec:
-  group: hiclaw.io
+  group: agentteams.io
   versions:
     - name: v1beta1
       served: true
@@ -210,8 +210,8 @@ spec:
                     User-defined Pod labels stamped onto this worker's Pod.
                     Merged on top of the ConfigMap-based pod-template overlay
                     and CR metadata.labels, and below controller-forced
-                    system labels (hiclaw.io/controller, hiclaw.io/worker,
-                    hiclaw.io/role, hiclaw.io/runtime, app). Entries whose
+                    system labels (agentteams.io/controller, agentteams.io/worker,
+                    agentteams.io/role, agentteams.io/runtime, app). Entries whose
                     keys collide with those system labels are silently
                     overridden.
                 accessEntries:

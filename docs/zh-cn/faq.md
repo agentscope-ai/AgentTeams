@@ -180,7 +180,7 @@ hiclaw apply -f worker-alice.yaml
 对于直接 CLI 参数未覆盖的字段（例如 `spec.mcpServers`），请使用 YAML：
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -247,7 +247,7 @@ HICLAW_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://higress.ai/hiclaw/install.s
 `mcporter` 配置。之后在 Worker YAML manifest 中声明 GitHub MCP 能力：
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -569,7 +569,7 @@ hiclaw create worker --name alice --runtime hermes
 或通过 YAML：
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice

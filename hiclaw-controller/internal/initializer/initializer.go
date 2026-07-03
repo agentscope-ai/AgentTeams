@@ -33,7 +33,7 @@ type Config struct {
 	Namespace        string
 	IsEmbedded       bool   // embedded mode: use static service sources for local services
 	AgentFSDir       string // local filesystem root for agent workspaces (embedded mode)
-	ControllerName   string // HICLAW_CONTROLLER_NAME; stamped as hiclaw.io/controller label on created CRs in incluster mode
+	ControllerName   string // HICLAW_CONTROLLER_NAME; stamped as agentteams.io/controller label on created CRs in incluster mode
 
 	// Matrix AppService mode
 	AppServiceEnabled         bool

@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	finalizerName       = "hiclaw.io/cleanup"
+	finalizerName       = "agentteams.io/cleanup"
 	reconcileInterval   = 5 * time.Minute
 	reconcileRetryDelay = 30 * time.Second
 )
@@ -54,7 +54,7 @@ type WorkerReconciler struct {
 
 	// ControllerName identifies this controller instance. Stamped on every
 	// Pod/SA/Secret created under this reconciler via the
-	// hiclaw.io/controller label so multiple controller instances sharing a
+	// agentteams.io/controller label so multiple controller instances sharing a
 	// namespace do not cross-watch each other's resources.
 	ControllerName string
 	Namespace      string
@@ -275,7 +275,7 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 // metadata.labels, the CR's spec.labels, and the controller-forced system
 // labels (controller name and member role). Controller-forced keys
 // deliberately come last so anything the user writes that collides (e.g.
-// `hiclaw.io/controller`) is silently overridden rather than rejected.
+// `agentteams.io/controller`) is silently overridden rather than rejected.
 func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
 	return r.workerMemberContextWithSpec(w, w.Spec)
 }
@@ -311,7 +311,7 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 			spec.Labels,
 			map[string]string{
 				v1beta1.LabelController: r.ControllerName,
-				"hiclaw.io/role":        RoleStandalone.String(),
+				"agentteams.io/role":    RoleStandalone.String(),
 			},
 		),
 		// SpecChanged is gated on ObservedGeneration > 0 so a brand-new
@@ -456,7 +456,7 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
 				workerPodEventHandler(""),
-				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/worker", r.ControllerName)),
+				builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
 			)
 		}
 	}
@@ -471,7 +471,7 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				ctl,
 				&corev1.Pod{},
 				workerPodEventHandler(r.Namespace),
-				podLifecyclePredicates("hiclaw.io/worker", r.ControllerName),
+				podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
 			)
 		}
 	}
@@ -489,13 +489,13 @@ func workerPodEventHandler(localNamespace string) handler.EventHandler {
 }
 
 func workerPodRequests(obj client.Object, localNamespace string) []reconcile.Request {
-	workerName := obj.GetLabels()["hiclaw.io/worker"]
+	workerName := obj.GetLabels()["agentteams.io/worker"]
 	if workerName == "" {
 		return nil
 	}
 	// Skip pods owned by a Team (those are reconciled via
 	// the Team controller's own pod watch).
-	if obj.GetLabels()["hiclaw.io/team"] != "" {
+	if obj.GetLabels()["agentteams.io/team"] != "" {
 		return nil
 	}
 	namespace := localNamespace
@@ -514,10 +514,10 @@ func workerPodRequests(obj client.Object, localNamespace string) []reconcile.Req
 // create, delete, or phase transitions. A pod is considered "ours" only when
 // it carries both:
 //
-//   - labelKey (one of "hiclaw.io/worker" / "hiclaw.io/team" /
-//     "hiclaw.io/manager") with a non-empty value — identifying which CR
+//   - labelKey (one of "agentteams.io/worker" / "agentteams.io/team" /
+//     "agentteams.io/manager") with a non-empty value — identifying which CR
 //     kind owns the pod.
-//   - hiclaw.io/controller == controllerName — identifying which controller
+//   - agentteams.io/controller == controllerName — identifying which controller
 //     instance owns the pod.
 //
 // The controller filter is defense-in-depth against the informer cache label

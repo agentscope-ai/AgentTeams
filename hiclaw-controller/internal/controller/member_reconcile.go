@@ -90,7 +90,7 @@ type MemberContext struct {
 	CurrentExposedPorts []v1beta1.ExposedPortStatus
 
 	// PodLabels are merged into backend.CreateRequest.Labels. Used by Team
-	// members to tag pods with "hiclaw.io/team=<teamName>" so the Team
+	// members to tag pods with "agentteams.io/team=<teamName>" so the Team
 	// reconciler can watch member pod lifecycle events.
 	PodLabels map[string]string
 
@@ -483,13 +483,13 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	saName := d.ResourcePrefix.SAName(authpkg.RoleWorker, m.Name)
 
 	// Identity labels: callers own the full label set now that the backend
-	// is stateless (see A7). The backend only stamps hiclaw.io/runtime.
+	// is stateless (see A7). The backend only stamps agentteams.io/runtime.
 	labels := make(map[string]string, len(m.PodLabels)+2)
 	for k, v := range m.PodLabels {
 		labels[k] = v
 	}
 	labels["app"] = d.ResourcePrefix.WorkerAppLabel()
-	labels["hiclaw.io/worker"] = m.Name
+	labels["agentteams.io/worker"] = m.Name
 
 	createReq := backend.CreateRequest{
 		Name:               m.Name,

@@ -56,8 +56,8 @@ func ensureServiceExists(ctx context.Context, mc *MemberContext, deps *MemberDep
 				Name:      svcName,
 				Namespace: ns,
 				Labels: map[string]string{
-					"hiclaw.io/worker": mc.Name,
-					"app":              deps.ResourcePrefix.WorkerAppLabel(),
+					"agentteams.io/worker": mc.Name,
+					"app":                  deps.ResourcePrefix.WorkerAppLabel(),
 				},
 			},
 			Spec: corev1.ServiceSpec{
@@ -150,7 +150,7 @@ func serviceName(deps *MemberDeps, mc *MemberContext) string {
 // Uses the identity label stamped by createMemberContainer.
 func serviceSelector(mc *MemberContext) map[string]string {
 	return map[string]string{
-		"hiclaw.io/worker": mc.Name,
+		"agentteams.io/worker": mc.Name,
 	}
 }
 

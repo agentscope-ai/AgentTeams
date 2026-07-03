@@ -131,10 +131,10 @@ type CreateRequest struct {
 	ContainerName string `json:"-"`
 
 	// Labels carries the full K8s label set for the Pod. Callers own the
-	// identity labels (`app`, `hiclaw.io/worker` or `hiclaw.io/manager`,
-	// `hiclaw.io/controller`, `hiclaw.io/role`, `hiclaw.io/team` when
+	// identity labels (`app`, `agentteams.io/worker` or `agentteams.io/manager`,
+	// `agentteams.io/controller`, `agentteams.io/role`, `agentteams.io/team` when
 	// applicable). The backend does NOT synthesize tenant/role defaults;
-	// it only stamps `hiclaw.io/runtime` from the resolved runtime value
+	// it only stamps `agentteams.io/runtime` from the resolved runtime value
 	// (the backend alone knows the post-resolution value after
 	// `ResolveRuntime`).
 	Labels map[string]string `json:"-"`

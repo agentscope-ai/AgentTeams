@@ -67,8 +67,8 @@ func captureManagerCreateRequest(t *testing.T, mgr *v1beta1.Manager, defaults *b
 // full three-layer composition the Manager reconciler performs: CR
 // metadata.labels and CR spec.labels both reach the Pod, spec wins over
 // metadata on collision, and controller-forced system labels (app,
-// hiclaw.io/manager, hiclaw.io/controller, hiclaw.io/role,
-// hiclaw.io/runtime) are always present and correct.
+// agentteams.io/manager, agentteams.io/controller, agentteams.io/role,
+// agentteams.io/runtime) are always present and correct.
 func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 	m := &v1beta1.Manager{}
 	m.Name = "default"
@@ -89,9 +89,9 @@ func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 		"owner":                 "alice",     // metadata.labels propagated
 		"env":                   "prod",      // spec.labels propagated
 		"tier":                  "spec-tier", // spec beats metadata
-		"hiclaw.io/manager":     "default",   // system label
-		"hiclaw.io/role":        "manager",   // system label
-		"hiclaw.io/runtime":     "copaw",     // system label
+		"agentteams.io/manager": "default",   // system label
+		"agentteams.io/role":    "manager",   // system label
+		"agentteams.io/runtime": "copaw",     // system label
 		"app":                   "hiclaw-manager",
 		v1beta1.LabelController: "real-ctl",
 	}
@@ -103,7 +103,7 @@ func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 }
 
 // TestCreateManagerContainer_SystemLabelsOverrideUserLabels verifies
-// the reserved-key contract: a user putting hiclaw.io/controller or
+// the reserved-key contract: a user putting agentteams.io/controller or
 // app into their CR labels (metadata or spec) cannot spoof the
 // controller's identity — the system layer is applied last and wins
 // silently.
@@ -117,8 +117,8 @@ func TestCreateManagerContainer_SystemLabelsOverrideUserLabels(t *testing.T) {
 	}
 	m.Spec.Labels = map[string]string{
 		v1beta1.LabelController: "spec-attacker",
-		"hiclaw.io/role":        "evil-role",
-		"hiclaw.io/manager":     "spoofed",
+		"agentteams.io/role":    "evil-role",
+		"agentteams.io/manager": "spoofed",
 	}
 	m.Spec.Runtime = "copaw"
 
@@ -130,10 +130,10 @@ func TestCreateManagerContainer_SystemLabelsOverrideUserLabels(t *testing.T) {
 	if got := labels["app"]; got != "hiclaw-manager" {
 		t.Errorf("app label got %q, want hiclaw-manager", got)
 	}
-	if got := labels["hiclaw.io/role"]; got != "manager" {
+	if got := labels["agentteams.io/role"]; got != "manager" {
 		t.Errorf("role label got %q, want manager", got)
 	}
-	if got := labels["hiclaw.io/manager"]; got != "default" {
+	if got := labels["agentteams.io/manager"]; got != "default" {
 		t.Errorf("manager label got %q, want default", got)
 	}
 }
@@ -151,9 +151,9 @@ func TestCreateManagerContainer_NilLabelsSafe(t *testing.T) {
 
 	for _, k := range []string{
 		"app",
-		"hiclaw.io/manager",
-		"hiclaw.io/role",
-		"hiclaw.io/runtime",
+		"agentteams.io/manager",
+		"agentteams.io/role",
+		"agentteams.io/runtime",
 		v1beta1.LabelController,
 	} {
 		if _, ok := labels[k]; !ok {

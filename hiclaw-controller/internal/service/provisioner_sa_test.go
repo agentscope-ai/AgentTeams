@@ -18,7 +18,7 @@ import (
 
 // TestProvisioner_EnsureServiceAccount_StampsControllerLabel verifies that
 // Worker and Manager SAs created by the Provisioner carry
-// hiclaw.io/controller so peer instances do not treat them as their own.
+// agentteams.io/controller so peer instances do not treat them as their own.
 func TestProvisioner_EnsureServiceAccount_StampsControllerLabel(t *testing.T) {
 	client := fakeclient.NewSimpleClientset()
 	p := NewProvisioner(ProvisionerConfig{

@@ -301,8 +301,8 @@ func TestK8sStatus(t *testing.T) {
 			Name:      "hiclaw-worker-bob",
 			Namespace: "hiclaw",
 			Labels: map[string]string{
-				"app":              "hiclaw-worker",
-				"hiclaw.io/worker": "bob",
+				"app":                  "hiclaw-worker",
+				"agentteams.io/worker": "bob",
 			},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
@@ -376,8 +376,8 @@ func TestK8sWithPrefix(t *testing.T) {
 			Name:      "hiclaw-manager",
 			Namespace: "hiclaw",
 			Labels: map[string]string{
-				"app":               "hiclaw-manager",
-				"hiclaw.io/manager": "default",
+				"app":                   "hiclaw-manager",
+				"agentteams.io/manager": "default",
 			},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
@@ -567,7 +567,7 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 			if got := pod.Spec.Containers[0].Image; got != tc.wantImage {
 				t.Fatalf("image = %q, want %q", got, tc.wantImage)
 			}
-			if got := pod.Labels["hiclaw.io/runtime"]; got != tc.wantLabel {
+			if got := pod.Labels["agentteams.io/runtime"]; got != tc.wantLabel {
 				t.Fatalf("runtime label = %q, want %q", got, tc.wantLabel)
 			}
 		})
@@ -626,8 +626,8 @@ spec:
 	if _, err := b.Create(context.Background(), CreateRequest{
 		Name: "alice",
 		Labels: map[string]string{
-			"app":              "hiclaw-worker",
-			"hiclaw.io/worker": "alice",
+			"app":                  "hiclaw-worker",
+			"agentteams.io/worker": "alice",
 		},
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -646,7 +646,7 @@ spec:
 	if pod.Labels["nsm.alibabacloud.com/inject-sidecar"] != "ansm-magic-xxx" {
 		t.Fatalf("ANSM label: %+v", pod.Labels)
 	}
-	if pod.Labels["hiclaw.io/worker"] != "alice" || pod.Labels["app"] != "hiclaw-worker" {
+	if pod.Labels["agentteams.io/worker"] != "alice" || pod.Labels["app"] != "hiclaw-worker" {
 		t.Fatalf("overlay labels: %+v", pod.Labels)
 	}
 	if pod.Spec.SecurityContext == nil || len(pod.Spec.SecurityContext.Sysctls) != 1 {
@@ -911,8 +911,8 @@ func TestK8sCreate_CustomResourcePrefix(t *testing.T) {
 		Name:               "alice",
 		ServiceAccountName: "teamB-worker-alice",
 		Labels: map[string]string{
-			"app":              "teamB-worker",
-			"hiclaw.io/worker": "alice",
+			"app":                  "teamB-worker",
+			"agentteams.io/worker": "alice",
 		},
 	}); err != nil {
 		t.Fatalf("Create: %v", err)

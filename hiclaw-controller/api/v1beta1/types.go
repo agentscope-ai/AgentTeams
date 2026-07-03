@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	GroupName = "hiclaw.io"
+	GroupName = "agentteams.io"
 	Version   = "v1beta1"
 )
 
@@ -17,7 +17,7 @@ const (
 // environment variable. When set, the controller's informer cache
 // filters CR events by this label so multiple controller instances in
 // the same namespace do not reconcile each other's resources.
-const LabelController = "hiclaw.io/controller"
+const LabelController = "agentteams.io/controller"
 
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry".
@@ -173,7 +173,7 @@ type WorkerSpec struct {
 	// Merged under the four-layer priority order (see controller docs):
 	// pod-template < CR metadata.labels < CR spec.labels < controller
 	// system labels. Entries whose keys collide with controller-forced
-	// system labels (hiclaw.io/controller, hiclaw.io/worker, etc.) are
+	// system labels (agentteams.io/controller, agentteams.io/worker, etc.) are
 	// silently overridden. Must carry the omitempty tag so Teams that
 	// embed WorkerSpec-shaped hashes keep a stable spec hash when the
 	// field is absent.

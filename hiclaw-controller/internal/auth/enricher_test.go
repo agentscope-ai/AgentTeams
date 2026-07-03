@@ -152,6 +152,61 @@ func TestCREnricher_RemoteWorkerRequiresMatchingTarget(t *testing.T) {
 	}
 }
 
+func TestCREnricher_RemoteWorkerPrefersStatusTarget(t *testing.T) {
+	scheme := newAuthTestScheme(t)
+	remoteMode := v1beta1.DeployModeRemote
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alice",
+			Namespace: "default",
+		},
+		Spec: v1beta1.WorkerSpec{
+			DeployMode: &remoteMode,
+			TargetCluster: &v1beta1.TargetClusterSpec{
+				ID:        "new-cluster",
+				Namespace: "new-ns",
+			},
+		},
+		Status: v1beta1.WorkerStatus{
+			DeployMode: v1beta1.DeployModeRemote,
+			TargetCluster: &v1beta1.TargetClusterSpec{
+				ID:        "old-cluster",
+				Namespace: "old-ns",
+			},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(worker).
+		Build()
+	enricher := NewCREnricher(k8sClient, "default")
+
+	oldTargetIdentity := &CallerIdentity{
+		Role:                    RoleWorker,
+		Username:                "alice",
+		WorkerName:              "alice",
+		ClusterID:               "old-cluster",
+		ServiceAccountNamespace: "old-ns",
+		ServiceAccountName:      "hiclaw-worker-alice",
+	}
+	if err := enricher.EnrichIdentity(context.Background(), oldTargetIdentity); err != nil {
+		t.Fatalf("EnrichIdentity old target: %v", err)
+	}
+
+	newTargetIdentity := &CallerIdentity{
+		Role:                    RoleWorker,
+		Username:                "alice",
+		WorkerName:              "alice",
+		ClusterID:               "new-cluster",
+		ServiceAccountNamespace: "new-ns",
+		ServiceAccountName:      "hiclaw-worker-alice",
+	}
+	if err := enricher.EnrichIdentity(context.Background(), newTargetIdentity); err == nil {
+		t.Fatal("expected spec-only new target to be rejected while status still pins old target")
+	}
+}
+
 func TestCREnricher_RemoteWorkerRejectsTargetMismatch(t *testing.T) {
 	scheme := newAuthTestScheme(t)
 	remoteMode := v1beta1.DeployModeRemote

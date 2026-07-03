@@ -34,11 +34,6 @@ type DockerConfig struct {
 	// K8sConfig.WorkerCPU/WorkerMemory (see kubernetes.go buildDefaultResources).
 	WorkerCPU    string // default "1000m" (HICLAW_DOCKER_WORKER_CPU)
 	WorkerMemory string // default "2Gi" (HICLAW_DOCKER_WORKER_MEMORY)
-
-	// ManagerCPU / ManagerMemory are the analogous defaults for the Manager
-	// container (HICLAW_DOCKER_MANAGER_CPU / HICLAW_DOCKER_MANAGER_MEMORY).
-	ManagerCPU    string
-	ManagerMemory string
 }
 
 // DockerBackend manages worker containers via the Docker Engine API over a Unix socket.

@@ -155,10 +155,12 @@ _relogin() {
     fi
 
     log "Higress session expired, re-logging in..."
+    local body
+    body=$(jq -nc --arg u "${admin_user}" --arg p "${admin_password}" '{username:$u,password:$p}')
     curl -sf -o /dev/null -X POST "${CONSOLE_URL}/session/login" \
         -H 'Content-Type: application/json' \
         -c "${HIGRESS_COOKIE_FILE}" \
-        -d '{"username":"'"${admin_user}"'","password":"'"${admin_password}"'"}' 2>/dev/null \
+        -d "${body}" 2>/dev/null \
         || { log "ERROR: re-login to Higress Console failed"; return 1; }
     return 0
 }
@@ -251,29 +253,77 @@ higress_get() {
     done
 }
 
+# higress_delete <path> <desc> — session-aware DELETE, mirrors higress_api /
+# higress_get: retries exactly once after a re-login if the response looks
+# like the session-expired HTML page (or a 401/403), else hard-fails after
+# the re-login attempt. Treats HTTP 200/204/404 as success (404 means the
+# resource is already absent, which is a fine outcome for --delete). Returns
+# non-zero only on a genuine failure (auth failure, or an unexpected status
+# after a successful re-login attempt was already exhausted).
+higress_delete() {
+    local path="$1"
+    local desc="$2"
+    local attempt
+
+    for attempt in 1 2; do
+        local tmpfile
+        tmpfile=$(mktemp)
+        local http_code
+        http_code=$(curl -s -o "${tmpfile}" -w '%{http_code}' -X DELETE "${CONSOLE_URL}${path}" \
+            -b "${HIGRESS_COOKIE_FILE}" 2>/dev/null) || true
+        local response
+        response=$(cat "${tmpfile}" 2>/dev/null)
+        rm -f "${tmpfile}"
+
+        if echo "${response}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
+            if [ "${attempt}" -eq 1 ]; then
+                _relogin || return 1
+                continue
+            fi
+            log "ERROR: ${desc} ... got HTML page after re-login (session still invalid)"
+            return 1
+        fi
+
+        if [ "${http_code}" = "401" ] || [ "${http_code}" = "403" ]; then
+            if [ "${attempt}" -eq 1 ]; then
+                _relogin || return 1
+                continue
+            fi
+            log "ERROR: ${desc} ... HTTP ${http_code} auth failed after re-login"
+            return 1
+        fi
+
+        if [ "${http_code}" = "200" ] || [ "${http_code}" = "204" ]; then
+            log "${desc} ... OK (HTTP ${http_code})"
+            return 0
+        fi
+
+        if [ "${http_code}" = "404" ]; then
+            log "${desc} ... already absent (HTTP 404)"
+            return 0
+        fi
+
+        log "ERROR: ${desc} ... unexpected (HTTP ${http_code})"
+        return 1
+    done
+}
+
 # ============================================================
 # Delete path
 # ============================================================
 if [ "${DO_DELETE}" = "true" ]; then
     log "Deleting extra LLM provider '${PROVIDER_NAME}' (route, provider, service-source)..."
 
-    _del_tmpfile=$(mktemp)
-    curl -s -o "${_del_tmpfile}" -X DELETE "${CONSOLE_URL}/v1/ai/routes/${_ROUTE_NAME}" \
-        -b "${HIGRESS_COOKIE_FILE}" 2>/dev/null || true
-    rm -f "${_del_tmpfile}"
-    log "Deleted AI route ${_ROUTE_NAME} (if it existed)"
+    _del_failed="false"
 
-    _del_tmpfile=$(mktemp)
-    curl -s -o "${_del_tmpfile}" -X DELETE "${CONSOLE_URL}/v1/ai/providers/${PROVIDER_NAME}" \
-        -b "${HIGRESS_COOKIE_FILE}" 2>/dev/null || true
-    rm -f "${_del_tmpfile}"
-    log "Deleted LLM provider ${PROVIDER_NAME} (if it existed)"
+    higress_delete "/v1/ai/routes/${_ROUTE_NAME}" "Deleting AI route ${_ROUTE_NAME}" || _del_failed="true"
+    higress_delete "/v1/ai/providers/${PROVIDER_NAME}" "Deleting LLM provider ${PROVIDER_NAME}" || _del_failed="true"
+    higress_delete "/v1/service-sources/${PROVIDER_NAME}" "Deleting DNS service source ${PROVIDER_NAME}" || _del_failed="true"
 
-    _del_tmpfile=$(mktemp)
-    curl -s -o "${_del_tmpfile}" -X DELETE "${CONSOLE_URL}/v1/service-sources/${PROVIDER_NAME}" \
-        -b "${HIGRESS_COOKIE_FILE}" 2>/dev/null || true
-    rm -f "${_del_tmpfile}"
-    log "Deleted DNS service source ${PROVIDER_NAME} (if it existed)"
+    if [ "${_del_failed}" = "true" ]; then
+        log "ERROR: one or more deletes failed for provider '${PROVIDER_NAME}' — session/auth issue or unexpected response; provider may NOT be fully removed. Check HIGRESS_COOKIE_FILE / HICLAW_ADMIN_USER / HICLAW_ADMIN_PASSWORD and retry."
+        exit 1
+    fi
 
     log "Provider '${PROVIDER_NAME}' removed."
     exit 0

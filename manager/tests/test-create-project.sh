@@ -209,6 +209,22 @@ calls() {
     cat "$1/calls.log"
 }
 
+# ── Direct unit test of the yaml_dq() escaping helper ─────────────────────────
+# create-project.sh cannot be `source`d wholesale (it's a `set -e` script that
+# runs its whole flow top-level and requires flags/env). Also, a --title
+# containing a raw '"' or '\' currently crashes the script much earlier than
+# Step 5 (federated Project CR) — the meta.json heredoc and the Matrix
+# createRoom JSON body interpolate PROJECT_TITLE unescaped too (pre-existing,
+# tracked separately, out of scope for the YAML-CR-only fix under test here).
+# So we extract just the yaml_dq() function body via sed and source that
+# snippet in a subshell to unit-test the escaping logic in isolation.
+yaml_dq_direct() {
+    local input="$1"
+    local fn_src
+    fn_src=$(sed -n '/^yaml_dq() {/,/^}/p' "${CREATE_PROJECT_SCRIPT}")
+    bash -c "${fn_src}"$'\n''yaml_dq "$1"' -- "${input}"
+}
+
 project_dir() {
     # project_dir <sandbox> <project-id> — create-project.sh hardcodes
     # /root/hiclaw-fs/shared/projects/<id>; on this box that resolves under
@@ -340,13 +356,15 @@ echo "=== TC6: --team + --repo emits a Project CR and calls hiclaw apply -f ==="
     assert_contains "hiclaw apply -f was invoked" "hiclaw apply -f" "${log}"
     assert_contains "applied YAML has apiVersion" "apiVersion: hiclaw.io/v1beta1" "${log}"
     assert_contains "applied YAML has kind: Project" "kind: Project" "${log}"
-    assert_contains "applied YAML names the project" "name: ${pid}" "${log}"
-    assert_contains "applied YAML sets team" "team: teamA" "${log}"
-    assert_contains "applied YAML has rw repo" "url: https://git.fake.local/teamA/repo-rw.git" "${log}"
-    assert_contains "applied YAML marks rw access" "access: rw" "${log}"
-    assert_contains "applied YAML has ro repo" "url: https://git.fake.local/teamA/repo-ro.git" "${log}"
-    assert_contains "applied YAML marks ro access" "access: ro" "${log}"
-    assert_contains "applied YAML lists workers" "- alice" "${log}"
+    # Scalars are emitted as quoted YAML strings (yaml_dq) so that chat-origin
+    # values can never break out of the scalar — see the injection fix above.
+    assert_contains "applied YAML names the project" "name: \"${pid}\"" "${log}"
+    assert_contains "applied YAML sets team" 'team: "teamA"' "${log}"
+    assert_contains "applied YAML has rw repo" 'url: "https://git.fake.local/teamA/repo-rw.git"' "${log}"
+    assert_contains "applied YAML marks rw access" 'access: "rw"' "${log}"
+    assert_contains "applied YAML has ro repo" 'url: "https://git.fake.local/teamA/repo-ro.git"' "${log}"
+    assert_contains "applied YAML marks ro access" 'access: "ro"' "${log}"
+    assert_contains "applied YAML lists workers" '- "alice"' "${log}"
 
     # Chat-flow layer still written, untouched, alongside the CR.
     pd=$(project_dir "${s}" "${pid}")
@@ -385,6 +403,146 @@ echo "=== TC7: hiclaw apply failure does not fail the whole script (chat-flow pr
     else
         fail "chat-flow meta.json unaffected by CR-apply failure" "file exists" "missing"
     fi
+    cleanup_real_project_dir "${pid}"
+}
+
+echo ""
+echo "=== TC8: yaml_dq() escapes quotes/backslashes/newlines/tabs correctly (unit-level) ==="
+# NOTE: a --title containing a raw '"' or '\' currently crashes create-project.sh
+# well before Step 5 (the meta.json heredoc and the Matrix createRoom JSON body
+# also interpolate PROJECT_TITLE unescaped — a separate, pre-existing JSON-
+# injection issue outside this fix's scope, which only covers the YAML CR
+# emitted in Step 5). So the adversarial quote+backslash case is exercised
+# directly against yaml_dq() rather than through a full end-to-end run.
+{
+    evil_title='Say "hi" \ bye'
+    got=$(yaml_dq_direct "${evil_title}")
+    # backslash escaped first, then quotes: Say "hi" \ bye -> Say \"hi\" \\ bye
+    assert_eq "quote+backslash title escapes correctly" '"Say \"hi\" \\ bye"' "${got}"
+
+    # No unescaped '"' may appear anywhere except the wrapping quotes — i.e.
+    # stripping the outer quotes and all valid \" / \\ escapes must leave zero
+    # bare '"' characters that could terminate the scalar early.
+    inner="${got#\"}"; inner="${inner%\"}"
+    stripped="${inner//\\\\/}"; stripped="${stripped//\\\"/}"
+    assert_not_contains "no unescaped quote remains inside the scalar" '"' "${stripped}"
+
+    newline_tab_title=$'line one\nline two\ttabbed'
+    got2=$(yaml_dq_direct "${newline_tab_title}")
+    assert_eq "newline and tab map to YAML escapes" '"line one\nline two\ttabbed"' "${got2}"
+
+    cr_title=$'has\r\ncarriage return'
+    got3=$(yaml_dq_direct "${cr_title}")
+    assert_eq "bare CR is stripped, newline still escaped" '"has\ncarriage return"' "${got3}"
+
+    plain_title="Normal Project Title"
+    got4=$(yaml_dq_direct "${plain_title}")
+    assert_eq "plain slug-like title is unchanged apart from quoting" '"Normal Project Title"' "${got4}"
+}
+
+echo ""
+echo "=== TC8b: end-to-end — a YAML-adversarial but JSON-safe title stays a single quoted scalar ==="
+{
+    s=$(new_sandbox)
+    write_curl_shim "${s}"
+    write_mc_shim "${s}"
+    write_hiclaw_shim "${s}"
+    pid="proj-tc8b-$$"
+    cleanup_real_project_dir "${pid}"
+
+    # No '"' or '\' (those crash the unrelated, out-of-scope JSON emission —
+    # see note above), but a leading '- ' and an embedded ':' are both things
+    # that would misparse as YAML structure if this scalar were left unquoted.
+    yaml_title="- Title: with a colon"
+    out=$(run_create_project "${s}" --id "${pid}" --title "${yaml_title}" --workers "alice" \
+        --team "teamA" --repo "https://git.fake.local/teamA/repo.git:rw")
+    log=$(calls "${s}")
+
+    assert_contains "description scalar is quoted and intact" 'description: "- Title: with a colon"' "${log}"
+    assert_contains "still applies the CR successfully" "hiclaw apply -f" "${log}"
+    assert_contains "still prints the RESULT block" "---RESULT---" "${out}"
+    cleanup_real_project_dir "${pid}"
+}
+
+echo ""
+echo "=== TC9: unquoted-looking repo/worker/team scalars stay quoted in the emitted CR ==="
+{
+    s=$(new_sandbox)
+    write_curl_shim "${s}"
+    write_mc_shim "${s}"
+    write_hiclaw_shim "${s}"
+    pid="proj-tc9-$$"
+    cleanup_real_project_dir "${pid}"
+
+    out=$(run_create_project "${s}" --id "${pid}" --title "Quoting Check" --workers "alice,bob" \
+        --team "teamA" \
+        --repo "https://git.fake.local/teamA/repo-rw.git:rw" \
+        --repo "https://git.fake.local/teamA/repo-ro.git:ro")
+    log=$(calls "${s}")
+
+    assert_contains "metadata.name is double-quoted" "name: \"${pid}\"" "${log}"
+    assert_contains "spec.team is double-quoted" 'team: "teamA"' "${log}"
+    assert_contains "repo url is double-quoted" 'url: "https://git.fake.local/teamA/repo-rw.git"' "${log}"
+    assert_contains "repo access is double-quoted" 'access: "rw"' "${log}"
+    assert_contains "worker entry is double-quoted" '- "alice"' "${log}"
+
+    cleanup_real_project_dir "${pid}"
+}
+
+echo ""
+echo "=== TC10: --team containing invalid characters (space) hard-fails, no side effects ==="
+{
+    s=$(new_sandbox)
+    write_curl_shim "${s}"
+    write_mc_shim "${s}"
+    write_hiclaw_shim "${s}"
+    pid="proj-tc10-$$"
+    cleanup_real_project_dir "${pid}"
+
+    set +e
+    out=$(run_create_project "${s}" --id "${pid}" --title "Bad Team" --workers "alice" \
+        --team "team A" --repo "https://git.fake.local/teamA/repo.git:rw")
+    rc=$?
+    set -e
+    log=$(calls "${s}")
+
+    if [ "${rc}" -ne 0 ]; then
+        pass "invalid --team (space) causes non-zero exit"
+    else
+        fail "invalid --team (space) causes non-zero exit" "non-zero" "0"
+    fi
+    assert_contains "error mentions --team validation" "--team must match" "${out}"
+    assert_eq "no Matrix/MinIO/hiclaw calls happened" "" "${log}"
+    if [ -f "$(project_dir "${s}" "${pid}")/meta.json" ]; then
+        fail "no meta.json written on --team validation failure" "absent" "present"
+    else
+        pass "no meta.json written on --team validation failure"
+    fi
+    cleanup_real_project_dir "${pid}"
+}
+
+echo ""
+echo "=== TC11: --team containing a colon hard-fails ==="
+{
+    s=$(new_sandbox)
+    write_curl_shim "${s}"
+    write_mc_shim "${s}"
+    write_hiclaw_shim "${s}"
+    pid="proj-tc11-$$"
+    cleanup_real_project_dir "${pid}"
+
+    set +e
+    out=$(run_create_project "${s}" --id "${pid}" --title "Bad Team Colon" --workers "alice" \
+        --team "team:A" --repo "https://git.fake.local/teamA/repo.git:rw")
+    rc=$?
+    set -e
+
+    if [ "${rc}" -ne 0 ]; then
+        pass "invalid --team (colon) causes non-zero exit"
+    else
+        fail "invalid --team (colon) causes non-zero exit" "non-zero" "0"
+    fi
+    assert_contains "error mentions --team validation" "--team must match" "${out}"
     cleanup_real_project_dir "${pid}"
 }
 

@@ -98,6 +98,17 @@ class _FakeClient:
         return event
 
 
+async def _connect_and_send_return(adapter: MatrixAdapter, content: dict) -> Any:
+    """Like ``_connect_and_send`` but returns the wrapped call's own result,
+    so suppression tests can assert on what the caller actually sees.
+    """
+    await adapter.connect()
+    client = adapter._client
+    return await client.send_message_event(
+        "!room:matrix.local", "m.room.message", content
+    )
+
+
 @pytest.fixture()
 def adapter(monkeypatch: pytest.MonkeyPatch) -> MatrixAdapter:
     for name in ("MATRIX_FILTER_TOOL_MESSAGES", "MATRIX_FILTER_THINKING"):
@@ -133,15 +144,21 @@ async def test_tool_and_thinking_suppressed_when_env_enabled(
     a = MatrixAdapter(config=object())
     a._client = _FakeClient()
 
-    tool_sent = await _connect_and_send(
+    tool_result = await _connect_and_send_return(
         a, {"body": "ran a tool", "hermes.event_kind": "tool"}
     )
-    assert tool_sent == []
+    assert a._client.sent == []
+    assert tool_result is not None
+    assert isinstance(tool_result, str) and tool_result
+    assert "suppress" in tool_result.lower()
 
-    thinking_sent = await _connect_and_send(
+    thinking_result = await _connect_and_send_return(
         a, {"body": "pondering", "hermes.event_kind": "thinking"}
     )
-    assert thinking_sent == []
+    assert a._client.sent == []
+    assert thinking_result is not None
+    assert isinstance(thinking_result, str) and thinking_result
+    assert "suppress" in thinking_result.lower()
 
 
 @pytest.mark.asyncio

@@ -1082,6 +1082,7 @@ class MatrixChannel(BaseChannel):
             return cached["localparts"]
 
         localparts: Dict[str, str] = {}
+        success = False
         if self._client:
             try:
                 resp = await self._client.joined_members(room_id)
@@ -1091,6 +1092,7 @@ class MatrixChannel(BaseChannel):
                         lp = mxid.split(":")[0].lstrip("@").lower()
                         if lp:
                             localparts[lp] = mxid
+                    success = True
                 else:
                     logger.debug(
                         "MatrixChannel: joined_members failed for localpart "
@@ -1105,10 +1107,18 @@ class MatrixChannel(BaseChannel):
                     room_id,
                     exc,
                 )
-        self._localpart_cache[room_id] = {
-            "localparts": localparts,
-            "ts": now,
-        }
+        if success:
+            self._localpart_cache[room_id] = {
+                "localparts": localparts,
+                "ts": now,
+            }
+            return localparts
+        # joined_members failed/raised: don't poison the cache with an empty
+        # result for a full TTL. Fall back to a prior (stale) cache entry if
+        # we have one; otherwise return empty without caching so the next
+        # call retries joined_members immediately.
+        if cached:
+            return cached["localparts"]
         return localparts
 
     def _registry_localparts(self) -> Dict[str, str]:

@@ -281,10 +281,15 @@ do_provision() {
     update_worker_mcporter
 
     log "Applying repo-collaborator roles from project ${PROJECT_ID} manifest..."
+    local repos_out
+    if ! repos_out=$(read_manifest_repos "${PROJECT_ID}"); then
+        log "ERROR: could not read manifest for project ${PROJECT_ID}; aborting (no repo grants set)"
+        exit 1
+    fi
     while IFS='|' read -r url access; do
         [ -z "${url}" ] && continue
         set_collaborator_role "${url}" "${access}"
-    done < <(read_manifest_repos "${PROJECT_ID}")
+    done <<< "${repos_out}"
 
     log "Provisioning complete for worker=${WORKER} project=${PROJECT_ID}"
     log "NOTE: PAT was never written to disk/log by this script beyond Higress's credential store."
@@ -292,10 +297,15 @@ do_provision() {
 
 do_deprovision() {
     log "Deprovisioning worker=${WORKER} project=${DEPROVISION_ID}..."
+    local repos_out
+    if ! repos_out=$(read_manifest_repos "${DEPROVISION_ID}"); then
+        log "ERROR: could not read manifest for project ${DEPROVISION_ID}; aborting (no repo grants reversed, registration untouched)"
+        exit 1
+    fi
     while IFS='|' read -r url access; do
         [ -z "${url}" ] && continue
         remove_collaborator_role "${url}"
-    done < <(read_manifest_repos "${DEPROVISION_ID}")
+    done <<< "${repos_out}"
 
     deregister_worker_mcp_server
 

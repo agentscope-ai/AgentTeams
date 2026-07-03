@@ -251,6 +251,7 @@ test('MinIO route falls back to a directory listing when the object 404s', async
   try {
     const res = await request(server, 'GET', '/api/files/shared/projects');
     assert.equal(res.statusCode, 200);
+    assert.equal(res.headers['cache-control'], 'no-store');
     const parsed = JSON.parse(res.body);
     assert.deepEqual(parsed.directories, ['proj-1']);
     assert.equal(parsed.files.length, 1);
@@ -260,7 +261,7 @@ test('MinIO route falls back to a directory listing when the object 404s', async
   }
 });
 
-test('listing responses are never cached: no etag/last-modified/cache-control headers, even with conditional request headers present', async () => {
+test('listing responses are never cached: no etag/last-modified, and an explicit no-store cache-control, even with conditional request headers present', async () => {
   const controllerClient = fakeControllerClient();
   const minioClient = fakeMinioClient({
     getObjectResult: { statusCode: 404, body: Buffer.alloc(0) },
@@ -276,7 +277,11 @@ test('listing responses are never cached: no etag/last-modified/cache-control he
     });
     assert.equal(res.statusCode, 200);
     assert.equal(res.headers.etag, undefined);
-    assert.equal(res.headers['cache-control'], undefined);
+    assert.equal(res.headers['last-modified'], undefined);
+    // Listings must never be cached by intermediaries/the browser -- unlike
+    // the object 200 path (Cache-Control: no-cache), this asserts the
+    // listing 200 carries an explicit no-store directive.
+    assert.equal(res.headers['cache-control'], 'no-store');
     const parsed = JSON.parse(res.body);
     assert.deepEqual(parsed.directories, ['proj-1']);
   } finally {

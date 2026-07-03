@@ -58,6 +58,58 @@ test('MinioClient.getObject signs the request and returns the upstream body', as
   }
 });
 
+test('MinioClient.getObject percent-encodes a key with spaces on the wire while keeping the SignedHeaders shape unchanged', async () => {
+  let seenPath;
+  let seenAuth;
+  const upstream = await startUpstream((req, res) => {
+    seenPath = req.url;
+    seenAuth = req.headers.authorization;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"task_id":"t1"}');
+  });
+  let seenAuthPlainAscii;
+  const upstream2 = await startUpstream((req, res) => {
+    seenAuthPlainAscii = req.headers.authorization;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"task_id":"t1"}');
+  });
+  try {
+    const { port } = upstream.address();
+    const client = new MinioClient({
+      endpoint: `http://127.0.0.1:${port}`,
+      accessKey: 'ak',
+      secretKey: 'sk',
+      bucket: 'hiclaw-storage',
+    });
+    const res = await client.getObject('shared/tasks/a b/meta.json');
+    assert.equal(res.statusCode, 200);
+    // The request line actually sent on the wire must be percent-encoded --
+    // a raw space would both break the HTTP request line and mismatch the
+    // signature MinIO recomputes from the real path (SignatureDoesNotMatch).
+    assert.equal(seenPath, '/hiclaw-storage/shared/tasks/a%20b/meta.json');
+    assert.ok(seenAuth.startsWith('AWS4-HMAC-SHA256'));
+
+    const { port: port2 } = upstream2.address();
+    const client2 = new MinioClient({
+      endpoint: `http://127.0.0.1:${port2}`,
+      accessKey: 'ak',
+      secretKey: 'sk',
+      bucket: 'hiclaw-storage',
+    });
+    await client2.getObject('shared/tasks/t1/meta.json');
+
+    // The SignedHeaders portion of the Authorization header must be
+    // byte-identical to a plain-ASCII key -- encoding only ever affects the
+    // canonical URI, never which headers are signed.
+    const signedHeadersOf = (auth) => auth.match(/SignedHeaders=([^,]*)/)[1];
+    assert.equal(signedHeadersOf(seenAuth), signedHeadersOf(seenAuthPlainAscii));
+    assert.equal(signedHeadersOf(seenAuth), 'host;x-amz-content-sha256;x-amz-date');
+  } finally {
+    upstream.close();
+    upstream2.close();
+  }
+});
+
 test('MinioClient.listObjects parses ListObjectsV2 XML into prefixes/objects', async () => {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult>

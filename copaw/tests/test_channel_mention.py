@@ -555,6 +555,69 @@ def test_was_mentioned_bare_localpart_not_in_room_returns_false():
     assert mentioned is False
 
 
+class _FlakyJoinedMembersClient:
+    """First call fails (raises or returns a non-response), then succeeds."""
+
+    def __init__(self, members_by_room, fail_mode="raise"):
+        self._members_by_room = members_by_room
+        self._fail_mode = fail_mode
+        self.calls = []
+
+    async def joined_members(self, room_id):
+        self.calls.append(room_id)
+        if len(self.calls) == 1:
+            if self._fail_mode == "raise":
+                raise RuntimeError("simulated joined_members failure")
+            return "not-a-joined-members-response"
+        members = self._members_by_room.get(room_id, [])
+        return _JoinedMembersResponse([_RoomMember(m) for m in members])
+
+
+def test_localpart_cache_not_poisoned_by_joined_members_failure():
+    """A failing joined_members call must not stamp an empty cache entry —
+    otherwise every bare-@mention resolves False for the full TTL."""
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    client = _FlakyJoinedMembersClient(
+        {
+            "!room:hs.local": [
+                "@alice:hs.local",
+                "@copywriting-assistant:hs.local",
+            ],
+        },
+    )
+    ch._client = client
+    matrix_channel.JoinedMembersResponse = _JoinedMembersResponse
+
+    first = asyncio.run(ch._get_room_localparts("!room:hs.local"))
+    assert first == {}
+    assert "!room:hs.local" not in ch._localpart_cache
+
+    second = asyncio.run(ch._get_room_localparts("!room:hs.local"))
+    assert second == {
+        "alice": "@alice:hs.local",
+        "copywriting-assistant": "@copywriting-assistant:hs.local",
+    }
+    assert len(client.calls) == 2
+
+
+def test_localpart_cache_not_poisoned_by_non_response():
+    ch = _make_channel(user_id="@copywriting-assistant:hs.local")
+    client = _FlakyJoinedMembersClient(
+        {"!room:hs.local": ["@copywriting-assistant:hs.local"]},
+        fail_mode="bad-response",
+    )
+    ch._client = client
+    matrix_channel.JoinedMembersResponse = _JoinedMembersResponse
+
+    first = asyncio.run(ch._get_room_localparts("!room:hs.local"))
+    assert first == {}
+    assert "!room:hs.local" not in ch._localpart_cache
+
+    second = asyncio.run(ch._get_room_localparts("!room:hs.local"))
+    assert second == {"copywriting-assistant": "@copywriting-assistant:hs.local"}
+    assert len(client.calls) == 2
+
+
 def test_registry_localparts_reads_workers_registry_json(tmp_path, monkeypatch):
     """Manager-only extra tier: ~/workers-registry.json worker names resolve
     to MXIDs on this channel's homeserver domain."""

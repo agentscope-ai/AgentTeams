@@ -38,19 +38,11 @@ func TestDockerConfigResourceDefaults(t *testing.T) {
 	if dc.WorkerMemory != "2Gi" {
 		t.Errorf("WorkerMemory = %q, want %q", dc.WorkerMemory, "2Gi")
 	}
-	if dc.ManagerCPU != "1000m" {
-		t.Errorf("ManagerCPU = %q, want %q", dc.ManagerCPU, "1000m")
-	}
-	if dc.ManagerMemory != "2Gi" {
-		t.Errorf("ManagerMemory = %q, want %q", dc.ManagerMemory, "2Gi")
-	}
 }
 
 func TestDockerConfigResourceEnvOverrides(t *testing.T) {
 	t.Setenv("HICLAW_DOCKER_WORKER_CPU", "500m")
 	t.Setenv("HICLAW_DOCKER_WORKER_MEMORY", "1Gi")
-	t.Setenv("HICLAW_DOCKER_MANAGER_CPU", "2000m")
-	t.Setenv("HICLAW_DOCKER_MANAGER_MEMORY", "4Gi")
 
 	cfg := &Config{}
 	dc := cfg.DockerConfig()
@@ -59,12 +51,6 @@ func TestDockerConfigResourceEnvOverrides(t *testing.T) {
 	}
 	if dc.WorkerMemory != "1Gi" {
 		t.Errorf("WorkerMemory = %q, want %q", dc.WorkerMemory, "1Gi")
-	}
-	if dc.ManagerCPU != "2000m" {
-		t.Errorf("ManagerCPU = %q, want %q", dc.ManagerCPU, "2000m")
-	}
-	if dc.ManagerMemory != "4Gi" {
-		t.Errorf("ManagerMemory = %q, want %q", dc.ManagerMemory, "4Gi")
 	}
 }
 

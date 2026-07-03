@@ -159,6 +159,11 @@ async function handleMinio(res, minioClient, key, requestedPath, requestHeaders 
       sendJson(res, 404, { error: 'not found', path: requestedPath });
       return;
     }
+    // Listing responses are never cached (see comment above) -- unlike the
+    // object 200 path (which sets Cache-Control: no-cache), sendJson sets no
+    // cache-control header at all, so it's set explicitly here to keep
+    // intermediaries/the browser from serving stale directory contents.
+    res.setHeader('cache-control', 'no-store');
     sendJson(res, 200, {
       prefix,
       directories: listing.prefixes.map((p) => p.slice(prefix.length).replace(/\/$/, '')),

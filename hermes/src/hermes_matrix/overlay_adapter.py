@@ -29,6 +29,18 @@ from hermes_matrix.policies import (
     should_suppress_outbound,
 )
 
+try:  # pragma: no cover - exercised indirectly; import shape depends on env
+    from mautrix.types import EventID as _EventID
+except Exception:  # pragma: no cover - defensive fallback if mautrix isn't importable
+    _EventID = str  # type: ignore[assignment]
+
+# Synthetic, obviously-fake event id returned for outbound events that were
+# suppressed (quiet-rooms). ``send_message_event`` normally resolves to
+# mautrix's ``EventID`` (a ``str`` subtype); returning ``None`` here would
+# break callers that treat the result as an event id (e.g. building an
+# ``m.replace`` ``relates_to`` for streaming edits).
+_SUPPRESSED_EVENT_ID = _EventID("$hiclaw-suppressed")
+
 logger = logging.getLogger(__name__)
 _IMAGE_FILENAME_EXTENSIONS = frozenset({
     ".png",
@@ -140,7 +152,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
                     filter_tool=filter_tool,
                     filter_thinking=filter_thinking,
                 ):
-                    return None
+                    return _SUPPRESSED_EVENT_ID
                 apply_outbound_mentions(content, self_user_id=self._user_id)
             return await original(room_id, event_type, content, *args, **kwargs)
 

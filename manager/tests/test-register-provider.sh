@@ -105,9 +105,15 @@ cat > "${BIN_DIR}/curl" <<'CURL_EOF'
 #   - otherwise return 200 with an empty JSON body (so higress_get's
 #     GET->PUT/POST branch in the caller takes the POST/create path, unless
 #     a test pre-seeds a canned response via CANNED_GET_BODY/CANNED_GET_PATH).
-# Non-GET (POST/PUT/DELETE) always "succeeds" with success:true so the
-# script's branch logic proceeds; the point of this harness is the call
-# shape, not real Higress semantics.
+# DELETE behavior:
+#   - also honors STALE_COUNTER_FILE (stale-cookie shim covers the delete
+#     path's session-aware higress_delete helper too), decrementing the same
+#     shared credit as GET.
+#   - otherwise 200 with an empty body ("deleted"/"absent", either way a
+#     success from higress_delete's point of view).
+# POST/PUT always "succeed" with success:true so the script's branch logic
+# proceeds; the point of this harness is the call shape, not real Higress
+# semantics.
 method="GET"
 path=""
 outfile=""
@@ -133,7 +139,7 @@ done
 resp_body=""
 http_code="200"
 
-if [ "${method}" = "GET" ]; then
+if [ "${method}" = "GET" ] || [ "${method}" = "DELETE" ]; then
     remaining=0
     if [ -n "${STALE_COUNTER_FILE:-}" ] && [ -f "${STALE_COUNTER_FILE}" ]; then
         remaining=$(cat "${STALE_COUNTER_FILE}")
@@ -142,11 +148,15 @@ if [ "${method}" = "GET" ]; then
         resp_body='<!DOCTYPE html><html><body>login</body></html>'
         remaining=$((remaining - 1))
         echo "${remaining}" > "${STALE_COUNTER_FILE}"
-    elif [ "${path}" = "${CANNED_GET_PATH:-__none__}" ]; then
+    elif [ "${method}" = "GET" ] && [ "${path}" = "${CANNED_GET_PATH:-__none__}" ]; then
         resp_body="${CANNED_GET_BODY:-}"
-    else
+    elif [ "${method}" = "GET" ]; then
         resp_body=""
         http_code="404"
+    else
+        # DELETE, no stale credit remaining: succeed with an empty 200 body.
+        resp_body=""
+        http_code="200"
     fi
 elif [ "${method}" = "POST" ] && [[ "${path}" == *"/session/login"* ]]; then
     resp_body=""
@@ -194,7 +204,7 @@ run_register_provider() {
         export HIGRESS_COOKIE_FILE="${home}/cookie"
         touch "${HIGRESS_COOKIE_FILE}"
         export HICLAW_ADMIN_USER="admin"
-        export HICLAW_ADMIN_PASSWORD="admin-pass"
+        export HICLAW_ADMIN_PASSWORD="${TEST_ADMIN_PASSWORD:-admin-pass}"
         export STALE_COUNTER_FILE="${home}/stale-counter"
         echo "${stale_count}" > "${STALE_COUNTER_FILE}"
         bash "${RUN_SCRIPT}" "$@"
@@ -267,11 +277,49 @@ assert_contains "delete removes the route" "method=DELETE path=http://127.0.0.1:
 assert_contains "delete removes the provider" "method=DELETE path=http://127.0.0.1:8001/v1/ai/providers/ollama" "${log5}"
 assert_contains "delete removes the service-source" "method=DELETE path=http://127.0.0.1:8001/v1/service-sources/ollama" "${log5}"
 
+echo "=== Test 5b: --delete against a stale cookie -> exactly one re-login, then succeeds ==="
+home5b=$(new_home)
+# STALE_COUNTER_FILE is shared across GET and DELETE in the shim; a credit of
+# 1 makes only the FIRST call (the route DELETE) come back as the expired-
+# session HTML page, forcing exactly one re-login before the retried DELETE
+# (and the two subsequent deletes) succeed.
+rc=$(run_register_provider "${home5b}" 1 -- ollama --delete)
+log5b=$(cat "${CALL_LOG}")
+stdout5b=$(cat "${home5b}/stdout.log")
+relogin_count5b=$(printf '%s\n' "${log5b}" | grep -c 'path=http://127.0.0.1:8001/session/login' || true)
+assert_eq "--delete with stale cookie still exits 0" "0" "${rc}"
+assert_eq "--delete with stale cookie does exactly one re-login" "1" "${relogin_count5b}"
+assert_contains "delete removes the route after re-login" "method=DELETE path=http://127.0.0.1:8001/v1/ai/routes/hiclaw-ollama-route" "${log5b}"
+assert_contains "delete removes the provider after re-login" "method=DELETE path=http://127.0.0.1:8001/v1/ai/providers/ollama" "${log5b}"
+assert_contains "delete removes the service-source after re-login" "method=DELETE path=http://127.0.0.1:8001/v1/service-sources/ollama" "${log5b}"
+assert_contains "--delete with stale cookie reports final success" "Provider 'ollama' removed." "${stdout5b}"
+
+echo "=== Test 5c: creds with a double-quote produce valid JSON in the re-login body ==="
+home5c=$(new_home)
+# Force exactly one HTML/stale response so _relogin fires, then capture the
+# login POST body from the call log and confirm it's valid, correctly-valued
+# JSON even though the password (HICLAW_ADMIN_PASSWORD, sourced from an
+# already-exported env var same as production) contains an embedded double
+# quote.
+export TEST_ADMIN_PASSWORD='p"a"ss'
+rc=$(run_register_provider "${home5c}" 1 -- ollama --url https://ollama.com/v1 --key ollama-test-key)
+unset TEST_ADMIN_PASSWORD
+log5c=$(cat "${CALL_LOG}")
+login_body=$(printf '%s\n' "${log5c}" | grep 'path=http://127.0.0.1:8001/session/login' -A1 | grep '^CURL body=' | sed 's/^CURL body=//' | head -n1)
+assert_eq "creds-with-quote run still exits 0" "0" "${rc}"
+parsed_ok="no"
+if printf '%s' "${login_body}" | jq -e . >/dev/null 2>&1; then
+    parsed_pw=$(printf '%s' "${login_body}" | jq -r '.password')
+    [ "${parsed_pw}" = 'p"a"ss' ] && parsed_ok="yes"
+fi
+assert_eq "login body with embedded quote is valid JSON with the exact password" "yes" "${parsed_ok}"
+
 echo "=== Test 6: call log never contains default-ai-route (any test's log) ==="
 combined_log="${log1}
 ${log2}
 ${log4}
-${log5}"
+${log5}
+${log5b}"
 assert_not_contains "no test's call log references default-ai-route" "default-ai-route" "${combined_log}"
 
 echo "=== Test 6b: grep-assert — script CODE never references default-ai-route ==="

@@ -489,8 +489,6 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		DefaultNetwork:       envOrDefault("HICLAW_DOCKER_NETWORK", "hiclaw-net"),
 		WorkerCPU:            envOrDefault("HICLAW_DOCKER_WORKER_CPU", "1000m"),
 		WorkerMemory:         envOrDefault("HICLAW_DOCKER_WORKER_MEMORY", "2Gi"),
-		ManagerCPU:           envOrDefault("HICLAW_DOCKER_MANAGER_CPU", "1000m"),
-		ManagerMemory:        envOrDefault("HICLAW_DOCKER_MANAGER_MEMORY", "2Gi"),
 	}
 }
 

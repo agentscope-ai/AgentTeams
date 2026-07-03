@@ -50,6 +50,24 @@ _fail() {
     exit 1
 }
 
+# Escape an arbitrary string for use as a YAML double-quoted scalar and wrap
+# it in the surrounding quotes. Chat-origin values (PROJECT_TITLE especially)
+# must never be interpolated into emitted YAML unescaped — a stray '"', '\',
+# or newline would break out of the scalar and corrupt/inject the document
+# that is later fed to `hiclaw apply -f`.
+# Order matters: escape backslashes FIRST (so we don't double-escape the
+# backslashes we're about to introduce for \n / \t), then quotes, then map
+# newlines/tabs to their YAML escapes, and finally drop bare CRs.
+yaml_dq() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/}"
+    s="${s//$'\t'/\\t}"
+    printf '"%s"' "$s"
+}
+
 # Validate the optional federation flags (--team / --repo) up front, before
 # any Matrix/MinIO side effects — a bad --repo access value should never
 # leave a half-created project behind.
@@ -65,6 +83,18 @@ for _repo_spec in "${PROJECT_REPOS[@]+"${PROJECT_REPOS[@]}"}"; do
         _fail "--repo access must be rw or ro: ${_repo_spec}"
     fi
 done
+
+# PROJECT_ID and PROJECT_TEAM must be k8s-name-safe anyway (they become
+# Project/Team resource identifiers), so hard-validate against a safe
+# charset here — this also guarantees they can never break out of an
+# unquoted YAML scalar (':' or a leading '- ' would otherwise misparse).
+_SAFE_NAME_RE='^[A-Za-z0-9._-]+$'
+if ! [[ "${PROJECT_ID}" =~ ${_SAFE_NAME_RE} ]]; then
+    _fail "--id must match ${_SAFE_NAME_RE}: ${PROJECT_ID}"
+fi
+if [ -n "${PROJECT_TEAM}" ] && ! [[ "${PROJECT_TEAM}" =~ ${_SAFE_NAME_RE} ]]; then
+    _fail "--team must match ${_SAFE_NAME_RE}: ${PROJECT_TEAM}"
+fi
 
 # Ensure Manager Matrix token is available
 SECRETS_FILE="/data/hiclaw-secrets.env"
@@ -339,23 +369,23 @@ if [ -n "${PROJECT_TEAM}" ]; then
         echo "apiVersion: hiclaw.io/v1beta1"
         echo "kind: Project"
         echo "metadata:"
-        echo "  name: ${PROJECT_ID}"
+        echo "  name: $(yaml_dq "${PROJECT_ID}")"
         echo "spec:"
-        echo "  team: ${PROJECT_TEAM}"
-        echo "  description: \"${PROJECT_TITLE}\""
+        echo "  team: $(yaml_dq "${PROJECT_TEAM}")"
+        echo "  description: $(yaml_dq "${PROJECT_TITLE}")"
         echo "  repos:"
         for _repo_spec in "${PROJECT_REPOS[@]}"; do
             _repo_url="${_repo_spec%:*}"
             _repo_access="${_repo_spec##*:}"
-            echo "    - url: ${_repo_url}"
-            echo "      access: ${_repo_access}"
+            echo "    - url: $(yaml_dq "${_repo_url}")"
+            echo "      access: $(yaml_dq "${_repo_access}")"
         done
         if [ -n "${WORKERS_CSV}" ]; then
             echo "  workers:"
             echo "${WORKERS_CSV}" | tr ',' '\n' | while read -r w; do
                 w=$(echo "${w}" | tr -d ' ')
                 [ -z "${w}" ] && continue
-                echo "    - ${w}"
+                echo "    - $(yaml_dq "${w}")"
             done
         fi
     } > "${PROJECT_CR_FILE}"

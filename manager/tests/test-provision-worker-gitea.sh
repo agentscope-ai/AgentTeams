@@ -249,7 +249,10 @@ MCSHIM
 
 run_provision() {
     # run_provision <sandbox> <args...>
+    # Preserves the wrapped script's real exit code (needed by TC11/TC12)
+    # while still resetting the fake higress cookie afterward either way.
     local sandbox="$1"; shift
+    local rc=0
     HOME="${sandbox}/home" \
     PATH="${sandbox}/bin:${PATH}" \
     FAKE_CALL_LOG="${sandbox}/calls.log" \
@@ -259,8 +262,9 @@ run_provision() {
     HICLAW_AI_GATEWAY_DOMAIN="aigw-test.local" \
     HICLAW_STORAGE_PREFIX="hiclaw/hiclaw-storage" \
     SETUP_MCP_PROXY_SCRIPT="${SETUP_MCP_PROXY_SCRIPT}" \
-    bash "${PROVISION_SCRIPT}" "$@" 2>&1
+    bash "${PROVISION_SCRIPT}" "$@" 2>&1 || rc=$?
     : > "${sandbox}/higress-cookie" 2>/dev/null || true
+    return "${rc}"
 }
 
 run_setup_mcp_proxy() {
@@ -449,6 +453,43 @@ EOF
     log=$(calls "${s}")
     assert_contains "reports skipped" "Step 5: Skipped (--skip-worker-broadcast)" "${out}"
     assert_not_contains "no broadcast PUT with worker-bob fires" '"consumers":["manager","worker-bob"]' "${log}"
+}
+
+echo ""
+echo "=== TC11: provision — missing/unreadable manifest aborts BEFORE 'Provisioning complete' ==="
+{
+    s=$(new_sandbox)
+    write_curl_shim "${s}"
+    write_mc_shim "${s}"
+    # Deliberately do NOT write a manifest for proj-missing anywhere (mc cat
+    # and the hiclaw-fs fallback both fail) so read_manifest_repos returns 1.
+    rc=0
+    out=$(run_provision "${s}" alice --project proj-missing) || rc=$?
+    log=$(calls "${s}")
+    assert_eq "do_provision exits non-zero on unreadable manifest" "1" "${rc}"
+    assert_contains "logs the manifest-read error" "ERROR: could not read manifest for project proj-missing; aborting (no repo grants set)" "${out}"
+    assert_not_contains "does NOT print Provisioning complete" "Provisioning complete" "${out}"
+    assert_not_contains "no collaborator PUT ever fires" "/collaborators/worker-alice" "${log}"
+}
+
+echo ""
+echo "=== TC12: --deprovision — missing/unreadable manifest aborts BEFORE deregistration ==="
+{
+    s=$(new_sandbox)
+    write_curl_shim "${s}"
+    write_mc_shim "${s}"
+    write_manifest "${s}" "proj1" "${FIXTURE_MANIFEST}"
+    run_provision "${s}" alice --project proj1 > /dev/null
+    : > "${s}/calls.log"
+    # Now deprovision a DIFFERENT project id with no manifest on disk at all.
+    rc=0
+    out=$(run_provision "${s}" alice --deprovision proj-missing) || rc=$?
+    log=$(calls "${s}")
+    assert_eq "do_deprovision exits non-zero on unreadable manifest" "1" "${rc}"
+    assert_contains "logs the manifest-read error" "ERROR: could not read manifest for project proj-missing; aborting (no repo grants reversed, registration untouched)" "${out}"
+    assert_not_contains "does NOT print Deprovisioning complete" "Deprovisioning complete" "${out}"
+    assert_not_contains "no collaborator DELETE ever fires" "/collaborators/worker-alice" "${log}"
+    assert_not_contains "never reaches deregistration of the mcp server" "DELETE http://127.0.0.1:8001/v1/mcpServer?name=mcp-gitea-alice" "${log}"
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────

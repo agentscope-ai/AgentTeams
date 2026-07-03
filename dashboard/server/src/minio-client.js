@@ -8,7 +8,7 @@
 const http = require('node:http');
 const https = require('node:https');
 const { URL } = require('node:url');
-const { signRequest, canonicalQueryString } = require('./sigv4');
+const { signRequest, canonicalQueryString, uriEncode } = require('./sigv4');
 
 class MinioClient {
   /**
@@ -51,8 +51,22 @@ class MinioClient {
     // request headers independently of which headers were signed.
     const requestHeaders = { ...headers, ...extraHeaders };
 
+    // The wire path must be percent-encoded the SAME way signRequest's
+    // canonicalUri is (sigv4.js's uriEncode per segment), because signRequest
+    // is given the RAW path (see below) and computes the canonical URI from
+    // it internally. If we sent the raw path as-is here, a key with spaces or
+    // other reserved characters would (a) mismatch the signature MinIO
+    // recomputes from the actual request-line path, and (b) be an invalid
+    // HTTP request line outright. Do NOT pre-encode the path before calling
+    // signRequest -- signRequest re-encodes every segment itself, so passing
+    // an already-encoded path would double-encode the signature while this
+    // wire path stays single-encoded, reintroducing the same mismatch.
     const qs = canonicalQueryString(query);
-    const fullPath = qs ? `${path}?${qs}` : path;
+    const encodedPath = path
+      .split('/')
+      .map((seg) => (seg === '' ? '' : uriEncode(seg, true)))
+      .join('/');
+    const fullPath = qs ? `${encodedPath}?${qs}` : encodedPath;
 
     const transport = this._transport();
 

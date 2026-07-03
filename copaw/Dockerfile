@@ -136,6 +136,12 @@ RUN python -m venv /opt/venv/lite \
 #   patch_reme_lazy.py             — reme: chromadb/pandas/mcp/elasticsearch
 #   patch_agentscope_lazy.py       — agentscope: redis/socketio/sqlalchemy/mcp
 #   patch_agentscope_runtime_lazy.py — agentscope_runtime: opentelemetry/a2a/fastapi
+#
+# Each patch script silently no-ops on any source block whose upstream markers
+# it no longer finds (see the per-file `if "..." in src:` guards inside the
+# scripts), so upstream source drift could regress the lite-venv RSS savings
+# without failing the build. Verify each patch actually landed by grepping for
+# a stable string it unconditionally writes; fail the build (exit 1) if not.
 # ---------------------------------------------------------------------------
 COPY scripts/patch_reme_lazy.py \
      scripts/patch_agentscope_lazy.py \
@@ -146,6 +152,9 @@ RUN SITE=/opt/venv/lite/lib/python3.11/site-packages \
     && /opt/venv/lite/bin/python /tmp/patch_reme_lazy.py "$SITE/reme" \
     && /opt/venv/lite/bin/python /tmp/patch_agentscope_lazy.py "$SITE/agentscope" \
     && /opt/venv/lite/bin/python /tmp/patch_agentscope_runtime_lazy.py "$SITE/agentscope_runtime" \
+    && grep -q '_LAZY_SUBMODULES = {' "$SITE/reme/core/__init__.py" \
+    && grep -q '_LAZY_MAP = {' "$SITE/agentscope/agent/__init__.py" \
+    && grep -q 'install_lazy_loader(' "$SITE/agentscope_runtime/engine/__init__.py" \
     && rm /tmp/patch_*_lazy.py
 
 # --- Overlay real copaw-worker source (high-frequency changes, ~128KB) ---

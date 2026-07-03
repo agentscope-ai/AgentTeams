@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -543,15 +541,6 @@ func envOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
-}
-
-// generateRandomHex returns a cryptographically random hex string of n bytes (2n hex chars).
-func generateRandomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return hex.EncodeToString(b)
 }
 
 func envOrDefaultInt(key string, defaultVal int) int {

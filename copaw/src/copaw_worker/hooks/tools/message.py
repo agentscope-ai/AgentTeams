@@ -19,6 +19,7 @@ from copaw_worker.hooks.message_filter import (
     extract_matrix_mentions,
     filter_outgoing_matrix_message,
 )
+from copaw_worker.hooks.tools._toolhelpers import _error, _ok
 
 logger = logging.getLogger(__name__)
 
@@ -38,25 +39,6 @@ class MatrixTarget:
 
 class MessageToolError(ValueError):
     """Expected user-facing error from the message tool."""
-
-
-def _response(payload: dict[str, Any]) -> ToolResponse:
-    return ToolResponse(
-        content=[
-            TextBlock(
-                type="text",
-                text=json.dumps(payload, ensure_ascii=False),
-            ),
-        ],
-    )
-
-
-def _ok(**payload: Any) -> ToolResponse:
-    return _response({"ok": True, **payload})
-
-
-def _error(message: str, **payload: Any) -> ToolResponse:
-    return _response({"ok": False, "error": message, **payload})
 
 
 def parse_matrix_target(target: str) -> MatrixTarget:

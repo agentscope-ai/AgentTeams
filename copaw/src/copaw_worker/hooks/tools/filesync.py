@@ -8,33 +8,14 @@ import os
 from pathlib import Path
 from typing import Any
 
-from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
+from copaw_worker.hooks.tools._toolhelpers import _error, _ok
 from copaw_worker.sync import FileSync
 
 
 class FilesyncToolError(ValueError):
     """Expected user-facing error from the filesync tool."""
-
-
-def _response(payload: dict[str, Any]) -> ToolResponse:
-    return ToolResponse(
-        content=[
-            TextBlock(
-                type="text",
-                text=json.dumps(payload, ensure_ascii=False),
-            ),
-        ],
-    )
-
-
-def _ok(**payload: Any) -> ToolResponse:
-    return _response({"ok": True, **payload})
-
-
-def _error(message: str, **payload: Any) -> ToolResponse:
-    return _response({"ok": False, "error": message, **payload})
 
 
 def _copaw_working_dir() -> Path:

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import subprocess
 
 import pytest
@@ -363,6 +364,75 @@ def test_push_local_preserves_user_data_but_skips_manager_and_mirrored_state(tmp
         "hiclaw/hiclaw-storage/agents/dag-team-dev/memory/shared/note.txt",
         "hiclaw/hiclaw-storage/agents/dag-team-dev/skills/github/SKILL.md",
     }
+
+
+def test_push_local_skips_remote_cat_when_mtime_unchanged_since_last_push(tmp_path, monkeypatch):
+    sync = _sync(tmp_path)
+    monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+
+    note = sync.local_dir / "memory" / "note.txt"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("first content")
+
+    cat_calls = []
+
+    def fake_cat(key):
+        cat_calls.append(key)
+        return None  # simulate no remote object yet
+
+    monkeypatch.setattr(sync, "_cat", fake_cat)
+    monkeypatch.setattr(
+        "copaw_worker.sync._mc",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
+    )
+
+    # First push: file is new, so _cat must be consulted and the file uploaded.
+    pushed_first = push_local(sync, since=0)
+    assert [p.replace(os.sep, "/") for p in pushed_first] == ["memory/note.txt"]
+    assert cat_calls == [f"agents/{sync.worker_name}/memory/note.txt"]
+
+    # Second push with the same mtime and content: the cache should short-circuit
+    # before any remote GET, and the file should not be re-uploaded.
+    cat_calls.clear()
+    pushed_second = push_local(sync, since=0)
+    assert pushed_second == []
+    assert cat_calls == []
+
+
+def test_push_local_re_verifies_remote_when_content_changes_at_same_mtime(tmp_path, monkeypatch):
+    sync = _sync(tmp_path)
+    monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+
+    note = sync.local_dir / "memory" / "note.txt"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("first content")
+
+    cat_responses = [None, None]
+    cat_calls = []
+
+    def fake_cat(key):
+        cat_calls.append(key)
+        return cat_responses.pop(0) if cat_responses else None
+
+    monkeypatch.setattr(sync, "_cat", fake_cat)
+    monkeypatch.setattr(
+        "copaw_worker.sync._mc",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
+    )
+
+    pushed_first = push_local(sync, since=0)
+    assert [p.replace(os.sep, "/") for p in pushed_first] == ["memory/note.txt"]
+
+    # Rewrite with different content but force the same mtime as before to
+    # simulate a same-second edit; the cache must not skip the remote check.
+    original_mtime = note.stat().st_mtime
+    note.write_text("second content, different from first")
+    os.utime(note, (original_mtime, original_mtime))
+
+    cat_calls.clear()
+    pushed_second = push_local(sync, since=0)
+    assert [p.replace(os.sep, "/") for p in pushed_second] == ["memory/note.txt"]
+    assert cat_calls == [f"agents/{sync.worker_name}/memory/note.txt"]
 
 
 class _RecordingHealth:

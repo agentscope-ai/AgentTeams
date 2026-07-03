@@ -287,14 +287,24 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	// --- Step 3: Stale cleanup ---
 	desiredMembers := buildDesiredMembers(derivedTeam, r.ControllerName)
 	if r.GatewayClient != nil {
+		// Memoize by distinct provider name: multiple members commonly share
+		// the same team-wide (or pinned) ModelProvider, and ResolveModelProvider
+		// is a serial gateway call, so resolving each distinct name once and
+		// fanning the result out avoids duplicate round-trips per reconcile.
+		resolved := make(map[string]*gateway.ModelProviderInfo, len(desiredMembers))
 		for i := range desiredMembers {
 			mp := desiredMembers[i].Spec.ModelProvider
 			if mp == "" {
 				continue
 			}
-			info, err := r.GatewayClient.ResolveModelProvider(ctx, mp)
-			if err != nil {
-				return r.failTeam(ctx, t, patchBase, fmt.Sprintf("resolve model provider %q for %s: %v", mp, desiredMembers[i].Name, err))
+			info, ok := resolved[mp]
+			if !ok {
+				var err error
+				info, err = r.GatewayClient.ResolveModelProvider(ctx, mp)
+				if err != nil {
+					return r.failTeam(ctx, t, patchBase, fmt.Sprintf("resolve model provider %q for %s: %v", mp, desiredMembers[i].Name, err))
+				}
+				resolved[mp] = info
 			}
 			desiredMembers[i].ModelProviderInfo = info
 		}

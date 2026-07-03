@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { startPolling } from '../poll.js';
 import { escapeHtml, badgeClass } from '../ui.js';
+import { openTaskDetail } from './task-detail.js';
 
 const POLL_MS = 15000;
 
@@ -71,6 +72,11 @@ async function renderTable(body, state) {
       </tbody>
     </table>
     ${
+      active.length
+        ? '<p class="muted">Click a row to open the task detail panel.</p>'
+        : ''
+    }
+    ${
       cancelled.length
         ? `<div class="section-title">Cancelled (${cancelled.length})</div>
            <div class="file-list">${cancelled
@@ -89,6 +95,10 @@ async function renderTable(body, state) {
         : ''
     }
   `;
+
+  body.querySelectorAll('tr[data-task-id]').forEach((row) => {
+    row.addEventListener('click', () => openTaskDetail(row.dataset.taskId));
+  });
 }
 
 async function buildRow(task) {
@@ -103,8 +113,9 @@ async function buildRow(task) {
     }
   }
 
+  const hasId = Boolean(task.task_id);
   return `
-    <tr>
+    <tr${hasId ? ` data-task-id="${escapeHtml(task.task_id)}" class="row-clickable"` : ''}>
       <td>${escapeHtml(task.task_id || '-')}<br/><span class="muted">${escapeHtml(task.title || '')}</span></td>
       <td>${escapeHtml(task.type || '-')}</td>
       <td>${escapeHtml(task.assigned_to || '-')}</td>

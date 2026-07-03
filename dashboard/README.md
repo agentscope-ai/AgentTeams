@@ -17,6 +17,13 @@ object routes (`/api/tasks/*`, `/api/files/*`). See
 [`docs/implementation-milestone-3.md`](../docs/implementation-milestone-3.md)
 ("Step 2 — Proxy ETag / conditional GET...") for the full contract.
 
+Milestone 3, Step 3 adds **v2**: a task-detail panel, a status kanban
+("Board" tab), and a dependency-ordered plan/DAG view on Project cards — all
+rendered from data contracts the proxy already served (no new endpoints, no
+new proxy routes, `dashboard/server` untouched by this step). See
+[`docs/implementation-milestone-3.md`](../docs/implementation-milestone-3.md)
+("Step 3 — Dashboard v2...") for the full contract.
+
 ## Layout
 
 - `server/` — a small, near-zero-dependency Node proxy (`node:http` + a
@@ -104,7 +111,7 @@ browser without exposing that token client-side. The proxy:
 
 ```bash
 cd dashboard/server && npm install && npm test    # node:test, no network required
-cd dashboard/web    && npm install && npm run build
+cd dashboard/web    && npm install && npm test && npm run build   # node --test (pure parsers) + Vite build
 ```
 
 ```powershell
@@ -178,11 +185,41 @@ production build.
   above. No UI-visible change; reduces redundant re-downloads on the SPA's
   15s poll cycle.
 
-**Deferred to M3 later steps** (already possible against existing controller
-endpoints, but out of scope for this step): kanban/DAG + task-detail (v2),
-cross-instance fan-out, observability kit, Gitea API context panels.
-
 **Deferred to deploy** (per the plan's unverified-assumption ledger items
 1–2): that MinIO honors unsigned conditional headers on `GetObject` the way
 generic S3 does, and the observed bandwidth/latency effect of browser
 revalidation against a live proxy — both are stub-tested only here.
+
+**Lands in M3 Step 3 (v2)** — strictly a view over data contracts already
+served (no new endpoints, no proxy changes):
+- **Task detail panel**: click a row in the Manager Tasks table to open a
+  drawer with `meta.json` (status, project, assignee, `depends_on`),
+  `result.md`'s Outcome badge (`SUCCESS`/`SUCCESS_WITH_NOTES`/
+  `REVISION_NEEDED`/`BLOCKED`), and the latest `progress/YYYY-MM-DD.md` note.
+  Refreshes every 15s while open; every sub-fetch tolerates 404 independently.
+- **Board tab (status kanban)**: four columns — **Active** (state.json
+  entries without `status: blocked`; any other/unknown status string is
+  bucketed here with its raw badge, per the open meta.json status-enum
+  ledger item), **Blocked** (`blocked_reason`/`blocked_since`), **Completed**
+  (MinIO `shared/tasks/` ids whose `meta.json.status === "completed"`, minus
+  currently-active ids, capped at the ~50 most recent ids by the
+  `task-YYYYMMDD-HHMMSS` timestamp prefix to bound meta.json fetches),
+  **Cancelled** (state.json `cancelled_tasks`). Renders four empty columns
+  (never an error) when `/api/manager-tasks` 404s. No drag-drop — writes
+  beyond v1.5 stay chat/CLI actions (decision #17).
+- **Project DAG / plan expander**: each Project card gains a collapsible
+  "Plan" section parsing `plan.md` into `### Phase` groups with per-task
+  marker/assignee/depends-on annotations (decision #16 — this only deepens
+  the chat-flow side of the card; the CRD fields are untouched). A plan.md
+  that doesn't parse into any recognizable task line falls back silently to
+  the existing `[ ]`/`[~]`/`[x]`/`[!]` marker-count view alone (ledger #3 —
+  live plan.md is LLM-written and may drift from the documented format; the
+  parser never throws).
+- Pure parsing logic (`src/plan-parse.js`) is covered by `node --test` in
+  `test/plan-parse.test.js` (`npm test`, no DOM, no network) — plan-line/
+  phase/depends-on parsing including drift cases, kanban bucketing, latest-
+  progress-file selection, and the recent-id cap/sort.
+
+**Deferred to later milestones**: cross-instance fan-out, observability kit,
+Gitea API context panels, live rendering against a real lead-written
+plan.md (ledger #3).

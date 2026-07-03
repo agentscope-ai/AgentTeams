@@ -1,11 +1,13 @@
 import { renderOverview } from './panels/overview.js';
 import { renderTasks } from './panels/tasks.js';
+import { renderBoard } from './panels/board.js';
 import { renderProjects } from './panels/projects.js';
 import { renderFiles } from './panels/files.js';
 
 const panels = {
   overview: renderOverview,
   tasks: renderTasks,
+  board: renderBoard,
   projects: renderProjects,
   files: renderFiles,
 };

@@ -374,3 +374,153 @@ dialog::backdrop {
 .muted {
   color: var(--text-dim);
 }
+
+/* v2: status kanban (Milestone 3, Step 3) */
+
+.board-columns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .board-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.board-column {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-height: 80px;
+}
+
+.board-column-header {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border);
+}
+
+.board-column-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.board-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.board-card:hover {
+  border-color: var(--accent);
+}
+
+.board-card-id {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.board-card-title {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.board-card-meta {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.row-clickable {
+  cursor: pointer;
+}
+
+.row-clickable:hover td {
+  background: var(--panel-2);
+}
+
+/* v2: project DAG / plan expander */
+
+.plan-expander {
+  margin-top: 10px;
+}
+
+.plan-expander summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12.5px;
+}
+
+.dag-view {
+  margin-top: 8px;
+}
+
+.dag-phase {
+  margin-bottom: 10px;
+}
+
+.dag-phase-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.dag-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dag-task {
+  font-size: 12.5px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.dag-task:last-child {
+  border-bottom: none;
+}
+
+/* v2: task-detail drawer */
+
+.task-detail-dialog {
+  width: 100%;
+  max-width: 560px;
+  max-height: 80vh;
+  overflow: auto;
+}
+
+.task-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.task-detail-header button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.task-detail-header button:hover {
+  color: var(--text);
+}

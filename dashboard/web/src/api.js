@@ -37,6 +37,16 @@ export const api = {
   // MinIO-backed reads. Callers should catch 404 (missing file) themselves --
   // it's an expected condition (e.g. a project with no plan.md yet).
   taskMeta: (taskId) => request(`/api/tasks/${encodeURIComponent(taskId)}/meta.json`),
+  taskResult: (taskId) => request(`/api/tasks/${encodeURIComponent(taskId)}/result.md`),
+  taskProgressList: (taskId) => request(`/api/tasks/${encodeURIComponent(taskId)}/progress`),
+  taskProgressFile: (taskId, filename) =>
+    request(`/api/tasks/${encodeURIComponent(taskId)}/progress/${encodeURIComponent(filename)}`),
+  // Directory listing of shared/tasks/ itself -- no rest segment, per
+  // allowlist.js `/api/tasks/<...rest>` (rest may be empty), falls back to
+  // the proxy's list-on-404 behavior (handler.js) and returns
+  // {directories:[taskIds], files:[]}. Used by the v2 board's Completed
+  // column to enumerate known task ids (Milestone 3, Step 3).
+  taskList: () => request('/api/tasks/'),
   fileBrowse: (pathSegments) => request(`/api/files/${pathSegments.map(encodeURIComponent).join('/')}`),
   fileGetJson: (pathSegments) => request(`/api/files/${pathSegments.map(encodeURIComponent).join('/')}`),
   fileGetText: (pathSegments) => request(`/api/files/${pathSegments.map(encodeURIComponent).join('/')}`),

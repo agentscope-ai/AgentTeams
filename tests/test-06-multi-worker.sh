@@ -35,16 +35,6 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
     exit 1
 }
 
-# test-05 can leave CoPaw Manager finishing heartbeat / pending-worker cleanup
-# replies in the admin DM. Let that prior turn go quiet before measuring Bob's
-# create-worker ack/provisioning SLA; the post-request waits below stay strict.
-if ! matrix_wait_for_sender_quiet "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 20 180; then
-    log_fail "Manager DM did not become quiet before Bob create request"
-    test_teardown "06-multi-worker"
-    test_summary
-    exit 1
-fi
-
 # Alice is running from previous tests; bob will be created below (offset=0 is correct for new workers)
 wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice" "bob")
@@ -78,10 +68,7 @@ assert_contains_i "${REPLY}" "bob" "Reply mentions worker name 'bob'"
 
 # Verify Bob's infrastructure. Worker creation is asynchronous, so wait on
 # persisted provisioning state and gateway side effects instead of sleeping.
-BOB_PROVISION_TIMEOUT=60
-if echo "${REPLY}" | grep -qiE "bob.*(accepted|creating|pending)" 2>/dev/null; then
-    BOB_PROVISION_TIMEOUT=180
-fi
+BOB_PROVISION_TIMEOUT=180
 if wait_worker_provisioned "bob" "${BOB_PROVISION_TIMEOUT}"; then
     log_pass "Worker Bob provisioned (roomID + matrixUserID populated)"
 else

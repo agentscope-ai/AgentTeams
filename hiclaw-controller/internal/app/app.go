@@ -610,19 +610,20 @@ func (a *App) initReconcilers(_ context.Context) error {
 
 func (a *App) initHTTPServer(_ context.Context) error {
 	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
-		Client:         a.mgr.GetClient(),
-		Backend:        a.registry,
-		Gateway:        a.gateway,
-		OSS:            a.oss,
-		STS:            a.stsService,
-		AuthMw:         a.authMw,
-		KubeMode:       a.cfg.KubeMode,
-		Namespace:      a.namespace,
-		ControllerName: a.cfg.ControllerName,
-		SocketPath:     a.cfg.SocketPath,
-		MatrixConfig:   a.cfg.MatrixConfig(),
-		Provisioner:    a.provisioner,
-		SoloOperator:   a.cfg.SoloOperator,
+		Client:           a.mgr.GetClient(),
+		Backend:          a.registry,
+		Gateway:          a.gateway,
+		OSS:              a.oss,
+		STS:              a.stsService,
+		AuthMw:           a.authMw,
+		KubeMode:         a.cfg.KubeMode,
+		Namespace:        a.namespace,
+		ControllerName:   a.cfg.ControllerName,
+		SocketPath:       a.cfg.SocketPath,
+		MatrixConfig:     a.cfg.MatrixConfig(),
+		Provisioner:      a.provisioner,
+		SoloOperator:     a.cfg.SoloOperator,
+		ManagerStateFile: a.cfg.ManagerStateFile(),
 	})
 	return nil
 }

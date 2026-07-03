@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -43,7 +44,7 @@ func getWorkersCmd() *cobra.Command {
 
 			if len(args) == 1 {
 				var resp workerResp
-				if err := client.DoJSON("GET", "/api/v1/workers/"+args[0], nil, &resp); err != nil {
+				if err := client.DoJSON(context.Background(), "GET", "/api/v1/workers/"+args[0], nil, &resp); err != nil {
 					return fmt.Errorf("get worker: %w", err)
 				}
 				if output == "json" {
@@ -59,7 +60,7 @@ func getWorkersCmd() *cobra.Command {
 				path += "?team=" + team
 			}
 			var resp workerListResp
-			if err := client.DoJSON("GET", path, nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "GET", path, nil, &resp); err != nil {
 				return fmt.Errorf("list workers: %w", err)
 			}
 			if output == "json" {
@@ -112,7 +113,7 @@ func getTeamsCmd() *cobra.Command {
 
 			if len(args) == 1 {
 				var resp teamResp
-				if err := client.DoJSON("GET", "/api/v1/teams/"+args[0], nil, &resp); err != nil {
+				if err := client.DoJSON(context.Background(), "GET", "/api/v1/teams/"+args[0], nil, &resp); err != nil {
 					return fmt.Errorf("get team: %w", err)
 				}
 				if output == "json" {
@@ -124,7 +125,7 @@ func getTeamsCmd() *cobra.Command {
 			}
 
 			var resp teamListResp
-			if err := client.DoJSON("GET", "/api/v1/teams", nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "GET", "/api/v1/teams", nil, &resp); err != nil {
 				return fmt.Errorf("list teams: %w", err)
 			}
 			if output == "json" {
@@ -177,7 +178,7 @@ func getHumansCmd() *cobra.Command {
 
 			if len(args) == 1 {
 				var resp humanResp
-				if err := client.DoJSON("GET", "/api/v1/humans/"+args[0], nil, &resp); err != nil {
+				if err := client.DoJSON(context.Background(), "GET", "/api/v1/humans/"+args[0], nil, &resp); err != nil {
 					return fmt.Errorf("get human: %w", err)
 				}
 				if output == "json" {
@@ -189,7 +190,7 @@ func getHumansCmd() *cobra.Command {
 			}
 
 			var resp humanListResp
-			if err := client.DoJSON("GET", "/api/v1/humans", nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "GET", "/api/v1/humans", nil, &resp); err != nil {
 				return fmt.Errorf("list humans: %w", err)
 			}
 			if output == "json" {
@@ -240,7 +241,7 @@ func getManagersCmd() *cobra.Command {
 
 			if len(args) == 1 {
 				var resp managerResp
-				if err := client.DoJSON("GET", "/api/v1/managers/"+args[0], nil, &resp); err != nil {
+				if err := client.DoJSON(context.Background(), "GET", "/api/v1/managers/"+args[0], nil, &resp); err != nil {
 					return fmt.Errorf("get manager: %w", err)
 				}
 				if output == "json" {
@@ -252,7 +253,7 @@ func getManagersCmd() *cobra.Command {
 			}
 
 			var resp managerListResp
-			if err := client.DoJSON("GET", "/api/v1/managers", nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "GET", "/api/v1/managers", nil, &resp); err != nil {
 				return fmt.Errorf("list managers: %w", err)
 			}
 			if output == "json" {

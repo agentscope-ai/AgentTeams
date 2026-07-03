@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -82,7 +83,7 @@ func updateWorkerCmd() *cobra.Command {
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
-			if err := client.DoJSON("PUT", "/api/v1/workers/"+name, req, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "PUT", "/api/v1/workers/"+name, req, &resp); err != nil {
 				return fmt.Errorf("update worker: %w", err)
 			}
 			fmt.Printf("worker/%s configured\n", name)
@@ -153,7 +154,7 @@ func updateTeamCmd() *cobra.Command {
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
-			if err := client.DoJSON("PUT", "/api/v1/teams/"+name, req, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "PUT", "/api/v1/teams/"+name, req, &resp); err != nil {
 				return fmt.Errorf("update team: %w", err)
 			}
 			fmt.Printf("team/%s configured\n", name)
@@ -208,7 +209,7 @@ func updateManagerCmd() *cobra.Command {
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
-			if err := client.DoJSON("PUT", "/api/v1/managers/"+name, req, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "PUT", "/api/v1/managers/"+name, req, &resp); err != nil {
 				return fmt.Errorf("update manager: %w", err)
 			}
 			fmt.Printf("manager/%s configured\n", name)

@@ -1289,6 +1289,57 @@ func TestBuildDesiredMembers_SystemLabelsOverrideUserLabels(t *testing.T) {
 	}
 }
 
+// TestResolveTeamAdminActor_CachesTokenAcrossReconciles guards finding #14:
+// LoginAsHuman issues a fresh Tuwunel device session on every call (no
+// device_id), so calling it on every 5-minute reconcile leaks one device
+// session per tick. resolveTeamAdminActor must cache the token after the
+// first successful login and reuse it on subsequent steady-state calls
+// instead of re-invoking Provisioner.LoginAsHuman.
+func TestResolveTeamAdminActor_CachesTokenAcrossReconciles(t *testing.T) {
+	ctx := context.Background()
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{DisplayName: "Alice"},
+		Status:     v1beta1.HumanStatus{InitialPassword: "s3cret"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Admin: &v1beta1.TeamAdminSpec{Name: "alice"},
+		},
+	}
+
+	c := newTeamTestClient(t, human.DeepCopy())
+	prov := mocks.NewMockProvisioner()
+	r := &TeamReconciler{Client: c, Provisioner: prov}
+
+	actor1, err := r.resolveTeamAdminActor(ctx, team)
+	if err != nil {
+		t.Fatalf("resolveTeamAdminActor (1st): %v", err)
+	}
+	if actor1.Token == "" {
+		t.Fatalf("expected non-empty token on first resolve")
+	}
+	if calls := len(prov.Calls.LoginAsHuman); calls != 1 {
+		t.Fatalf("LoginAsHuman calls after 1st resolve = %d, want 1", calls)
+	}
+
+	// Simulate subsequent steady-state reconciles (5-minute ticks): the
+	// token must be reused, not re-fetched.
+	for i := 0; i < 3; i++ {
+		actor, err := r.resolveTeamAdminActor(ctx, team)
+		if err != nil {
+			t.Fatalf("resolveTeamAdminActor (steady-state %d): %v", i, err)
+		}
+		if actor.Token != actor1.Token {
+			t.Fatalf("steady-state token %q != first token %q", actor.Token, actor1.Token)
+		}
+	}
+	if calls := len(prov.Calls.LoginAsHuman); calls != 1 {
+		t.Fatalf("LoginAsHuman calls after steady-state reconciles = %d, want 1 (no re-login)", calls)
+	}
+}
+
 func stringSliceContains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

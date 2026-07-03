@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -45,7 +46,7 @@ func workerWakeCmd() *cobra.Command {
 			_ = team
 			client := NewAPIClient()
 			var resp lifecycleResp
-			if err := client.DoJSON("POST", "/api/v1/workers/"+name+"/wake", nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "POST", "/api/v1/workers/"+name+"/wake", nil, &resp); err != nil {
 				return fmt.Errorf("wake worker: %w", err)
 			}
 			fmt.Printf("worker/%s phase=%s\n", resp.Name, resp.Phase)
@@ -82,7 +83,7 @@ func workerSleepCmd() *cobra.Command {
 			_ = team
 			client := NewAPIClient()
 			var resp lifecycleResp
-			if err := client.DoJSON("POST", "/api/v1/workers/"+name+"/sleep", nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "POST", "/api/v1/workers/"+name+"/sleep", nil, &resp); err != nil {
 				return fmt.Errorf("sleep worker: %w", err)
 			}
 			fmt.Printf("worker/%s phase=%s\n", resp.Name, resp.Phase)
@@ -119,7 +120,7 @@ func workerEnsureReadyCmd() *cobra.Command {
 			_ = team
 			client := NewAPIClient()
 			var resp lifecycleResp
-			if err := client.DoJSON("POST", "/api/v1/workers/"+name+"/ensure-ready", nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "POST", "/api/v1/workers/"+name+"/ensure-ready", nil, &resp); err != nil {
 				return fmt.Errorf("ensure-ready: %w", err)
 			}
 			fmt.Printf("worker/%s phase=%s\n", resp.Name, resp.Phase)
@@ -159,7 +160,7 @@ func workerStatusCmd() *cobra.Command {
 
 			if name != "" {
 				var resp workerResp
-				if err := client.DoJSON("GET", "/api/v1/workers/"+name+"/status", nil, &resp); err != nil {
+				if err := client.DoJSON(context.Background(), "GET", "/api/v1/workers/"+name+"/status", nil, &resp); err != nil {
 					return fmt.Errorf("worker status: %w", err)
 				}
 				if output == "json" {
@@ -172,7 +173,7 @@ func workerStatusCmd() *cobra.Command {
 
 			// --team: list all workers in team, show runtime summary table
 			var resp workerListResp
-			if err := client.DoJSON("GET", "/api/v1/workers?team="+team, nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "GET", "/api/v1/workers?team="+team, nil, &resp); err != nil {
 				return fmt.Errorf("list team workers: %w", err)
 			}
 			if output == "json" {
@@ -187,7 +188,7 @@ func workerStatusCmd() *cobra.Command {
 			var rows [][]string
 			for _, w := range resp.Workers {
 				var detail workerResp
-				if err := client.DoJSON("GET", "/api/v1/workers/"+w.Name+"/status", nil, &detail); err != nil {
+				if err := client.DoJSON(context.Background(), "GET", "/api/v1/workers/"+w.Name+"/status", nil, &detail); err != nil {
 					return fmt.Errorf("worker %s status: %w", w.Name, err)
 				}
 				rows = append(rows, []string{
@@ -253,7 +254,7 @@ Worker name is read from --name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME en
 			// Initial ready report with retries
 			var lastErr error
 			for attempt := 1; attempt <= 5; attempt++ {
-				if err := client.DoJSON("POST", path, nil, nil); err != nil {
+				if err := client.DoJSON(context.Background(), "POST", path, nil, nil); err != nil {
 					lastErr = err
 					fmt.Fprintf(os.Stderr, "report-ready attempt %d/5 failed: %v\n", attempt, err)
 					time.Sleep(time.Duration(attempt) * 2 * time.Second)
@@ -276,7 +277,7 @@ Worker name is read from --name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME en
 			// Heartbeat loop
 			for {
 				time.Sleep(interval)
-				if err := client.DoJSON("POST", path, nil, nil); err != nil {
+				if err := client.DoJSON(context.Background(), "POST", path, nil, nil); err != nil {
 					fmt.Fprintf(os.Stderr, "heartbeat failed: %v (will retry)\n", err)
 					// Re-read token on failure (may have rotated)
 					client = NewAPIClient()

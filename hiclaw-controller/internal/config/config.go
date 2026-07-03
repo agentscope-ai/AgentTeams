@@ -219,6 +219,7 @@ type WorkerEnvDefaults struct {
 	CMSLicenseKey     string
 	CMSProject        string
 	CMSWorkspace      string
+	CMSServiceName    string
 
 	// SkillsAPIURL is propagated to workers as SKILLS_API_URL.
 	// Sourced from SKILLS_API_URL, falling back to HICLAW_SKILLS_API_URL.
@@ -383,6 +384,7 @@ func LoadConfig() *Config {
 			CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
 			CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
 			CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
+			CMSServiceName:    os.Getenv("HICLAW_CMS_SERVICE_NAME"),
 			SkillsAPIURL:      envOrDefault("SKILLS_API_URL", os.Getenv("HICLAW_SKILLS_API_URL")),
 			NacosAuthType:     os.Getenv("NACOS_AUTH_TYPE"),
 		},

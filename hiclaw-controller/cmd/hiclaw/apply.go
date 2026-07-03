@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -92,7 +93,7 @@ func applyOneResource(client *APIClient, res yamlResource) error {
 	// Build plural endpoint
 	endpoint := "/api/v1/" + kind + "s"
 
-	exists, err := client.ResourceExists(endpoint + "/" + name)
+	exists, err := client.ResourceExists(context.Background(), endpoint+"/"+name)
 	if err != nil {
 		return fmt.Errorf("check %s/%s: %w", kind, name, err)
 	}
@@ -101,13 +102,13 @@ func applyOneResource(client *APIClient, res yamlResource) error {
 	if exists {
 		// PUT update — send only spec fields (no name in body for PUT)
 		updateBody := buildApplyBody(res, false)
-		if err := client.DoJSON("PUT", endpoint+"/"+name, updateBody, &resp); err != nil {
+		if err := client.DoJSON(context.Background(), "PUT", endpoint+"/"+name, updateBody, &resp); err != nil {
 			return fmt.Errorf("update %s/%s: %w", kind, name, err)
 		}
 		fmt.Printf("  %s/%s configured\n", kind, name)
 	} else {
 		body := buildApplyBody(res, true)
-		if err := client.DoJSON("POST", endpoint, body, &resp); err != nil {
+		if err := client.DoJSON(context.Background(), "POST", endpoint, body, &resp); err != nil {
 			return fmt.Errorf("create %s/%s: %w", kind, name, err)
 		}
 		fmt.Printf("  %s/%s created\n", kind, name)
@@ -234,13 +235,13 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 	var pkgResp struct {
 		PackageUri string `json:"packageUri"`
 	}
-	if err := client.DoMultipart("/api/v1/packages", "file", filepath.Base(zipPath), zipData,
+	if err := client.DoMultipart(context.Background(), "/api/v1/packages", "file", filepath.Base(zipPath), zipData,
 		map[string]string{"name": name}, &pkgResp); err != nil {
 		return fmt.Errorf("upload package: %w", err)
 	}
 
 	// Upsert Worker
-	exists, err := client.ResourceExists("/api/v1/workers/" + name)
+	exists, err := client.ResourceExists(context.Background(), "/api/v1/workers/"+name)
 	if err != nil {
 		return fmt.Errorf("check worker/%s: %w", name, err)
 	}
@@ -252,7 +253,7 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 			"package": pkgResp.PackageUri,
 		}
 		setIfNotEmpty(updateBody, "runtime", runtime)
-		if err := client.DoJSON("PUT", "/api/v1/workers/"+name, updateBody, &resp); err != nil {
+		if err := client.DoJSON(context.Background(), "PUT", "/api/v1/workers/"+name, updateBody, &resp); err != nil {
 			return fmt.Errorf("update worker/%s: %w", name, err)
 		}
 		fmt.Printf("  worker/%s updated\n", name)
@@ -263,7 +264,7 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 			"package": pkgResp.PackageUri,
 		}
 		setIfNotEmpty(createBody, "runtime", runtime)
-		if err := client.DoJSON("POST", "/api/v1/workers", createBody, &resp); err != nil {
+		if err := client.DoJSON(context.Background(), "POST", "/api/v1/workers", createBody, &resp); err != nil {
 			return fmt.Errorf("create worker/%s: %w", name, err)
 		}
 		fmt.Printf("  worker/%s created\n", name)
@@ -296,7 +297,7 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 
 	client := NewAPIClient()
 
-	exists, err := client.ResourceExists("/api/v1/workers/" + name)
+	exists, err := client.ResourceExists(context.Background(), "/api/v1/workers/"+name)
 	if err != nil {
 		return fmt.Errorf("check worker/%s: %w", name, err)
 	}
@@ -320,13 +321,13 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 
 	var resp map[string]interface{}
 	if exists {
-		if err := client.DoJSON("PUT", "/api/v1/workers/"+name, req, &resp); err != nil {
+		if err := client.DoJSON(context.Background(), "PUT", "/api/v1/workers/"+name, req, &resp); err != nil {
 			return fmt.Errorf("update worker/%s: %w", name, err)
 		}
 		fmt.Printf("  worker/%s configured\n", name)
 	} else {
 		req["name"] = name
-		if err := client.DoJSON("POST", "/api/v1/workers", req, &resp); err != nil {
+		if err := client.DoJSON(context.Background(), "POST", "/api/v1/workers", req, &resp); err != nil {
 			return fmt.Errorf("create worker/%s: %w", name, err)
 		}
 		fmt.Printf("  worker/%s created\n", name)

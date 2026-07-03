@@ -780,3 +780,145 @@ func TestGeneratePassword(t *testing.T) {
 		t.Error("two generated passwords should not be equal")
 	}
 }
+
+// TestListJoinedRooms_403DoesNotClearAdminToken verifies that a 401/403 on a
+// per-user-token call (ListJoinedRooms uses userToken, never the cached
+// admin token) does not evict the cached admin token. Before the fix,
+// doJSON unconditionally cleared c.adminToken on any 401/403 regardless of
+// which token was used, forcing an unnecessary re-login on the next admin
+// call.
+func TestListJoinedRooms_403DoesNotClearAdminToken(t *testing.T) {
+	var adminLoginCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			atomic.AddInt32(&adminLoginCalls, 1)
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/joined_rooms":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "user token rejected",
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	// Prime the admin token cache the same way ensureAdminToken would.
+	if _, err := c.ensureAdminToken(context.Background()); err != nil {
+		t.Fatalf("prime admin token: %v", err)
+	}
+	if got := atomic.LoadInt32(&adminLoginCalls); got != 1 {
+		t.Fatalf("admin logins after priming = %d, want 1", got)
+	}
+
+	// A 403 on a per-user-token call must not evict the cached admin token.
+	if _, err := c.ListJoinedRooms(context.Background(), "user-tok"); err == nil {
+		t.Error("expected error for 403 response, got nil")
+	}
+
+	if _, err := c.ensureAdminToken(context.Background()); err != nil {
+		t.Fatalf("ensureAdminToken after user-token 403: %v", err)
+	}
+	if got := atomic.LoadInt32(&adminLoginCalls); got != 1 {
+		t.Errorf("admin logins after user-token 403 = %d, want 1 (cached token should not have been cleared)", got)
+	}
+}
+
+// TestKickFromRoom_IdempotentForbidden_DoesNotClearAdminToken verifies that
+// KickFromRoom's expected/idempotent 403 (M_FORBIDDEN, "not in room") does
+// not evict the cached admin token, even though KickFromRoom authenticates
+// with the admin token. Only a genuine admin-token invalidation (401, or
+// 403 M_UNKNOWN_TOKEN) should clear the cache.
+func TestKickFromRoom_IdempotentForbidden_DoesNotClearAdminToken(t *testing.T) {
+	var adminLoginCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			atomic.AddInt32(&adminLoginCalls, 1)
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/kick":
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_FORBIDDEN",
+				"error":   "User @alice:d is not in the room.",
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	if err := c.KickFromRoom(context.Background(), "!room:d", "@alice:d", ""); err != nil {
+		t.Fatalf("expected nil for idempotent not-in-room kick, got %v", err)
+	}
+	if got := atomic.LoadInt32(&adminLoginCalls); got != 1 {
+		t.Fatalf("admin logins after first kick = %d, want 1", got)
+	}
+
+	// A second admin-authenticated call should reuse the cached token
+	// instead of re-logging in, proving the idempotent 403 above did not
+	// clear the cache.
+	if err := c.KickFromRoom(context.Background(), "!room:d", "@alice:d", ""); err != nil {
+		t.Fatalf("expected nil for second idempotent kick, got %v", err)
+	}
+	if got := atomic.LoadInt32(&adminLoginCalls); got != 1 {
+		t.Errorf("admin logins after second kick = %d, want 1 (cached token should not have been cleared)", got)
+	}
+}
+
+// TestDoJSONAsAdmin_ClearsOnUnknownToken verifies the positive case: a 401
+// (or 403 M_UNKNOWN_TOKEN) on an admin-token call must still clear the
+// cache so the next call re-authenticates, preserving the original
+// behavior for genuine token invalidation.
+func TestDoJSONAsAdmin_ClearsOnUnknownToken(t *testing.T) {
+	var adminLoginCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			atomic.AddInt32(&adminLoginCalls, 1)
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/directory/room/#missing:d":
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"errcode": "M_UNKNOWN_TOKEN",
+				"error":   "admin token expired",
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "admin", AdminPassword: "pw",
+	}, server.Client())
+
+	if _, _, err := c.ResolveRoomAlias(context.Background(), "#missing:d"); err == nil {
+		t.Error("expected error for unauthorized resolve, got nil")
+	}
+	if got := atomic.LoadInt32(&adminLoginCalls); got != 1 {
+		t.Fatalf("admin logins after first call = %d, want 1", got)
+	}
+
+	// The cached admin token should have been cleared, forcing a re-login
+	// on the next admin-authenticated call.
+	if _, err := c.ensureAdminToken(context.Background()); err != nil {
+		t.Fatalf("ensureAdminToken after invalidation: %v", err)
+	}
+	if got := atomic.LoadInt32(&adminLoginCalls); got != 2 {
+		t.Errorf("admin logins after invalidation = %d, want 2 (token should have been cleared and re-fetched)", got)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -106,7 +107,7 @@ func createWorkerCmd() *cobra.Command {
 
 			client := NewAPIClient()
 			var createResp map[string]interface{}
-			if err := client.DoJSON("POST", "/api/v1/workers", req, &createResp); err != nil {
+			if err := client.DoJSON(context.Background(), "POST", "/api/v1/workers", req, &createResp); err != nil {
 				return fmt.Errorf("create worker: %w", err)
 			}
 
@@ -158,7 +159,7 @@ func waitForWorkerReady(client *APIClient, name string, timeout time.Duration) (
 
 	for {
 		var resp workerResp
-		err := client.DoJSON("GET", "/api/v1/workers/"+name+"/status", nil, &resp)
+		err := client.DoJSON(context.Background(), "GET", "/api/v1/workers/"+name+"/status", nil, &resp)
 		if err == nil {
 			last = &resp
 			switch resp.Phase {
@@ -282,7 +283,7 @@ func createTeamCmd() *cobra.Command {
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
-			if err := client.DoJSON("POST", "/api/v1/teams", req, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "POST", "/api/v1/teams", req, &resp); err != nil {
 				return fmt.Errorf("create team: %w", err)
 			}
 			fmt.Printf("team/%s created\n", name)
@@ -347,7 +348,7 @@ func createHumanCmd() *cobra.Command {
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
-			if err := client.DoJSON("POST", "/api/v1/humans", req, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "POST", "/api/v1/humans", req, &resp); err != nil {
 				return fmt.Errorf("create human: %w", err)
 			}
 			fmt.Printf("human/%s created\n", name)
@@ -404,7 +405,7 @@ func createManagerCmd() *cobra.Command {
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
-			if err := client.DoJSON("POST", "/api/v1/managers", req, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "POST", "/api/v1/managers", req, &resp); err != nil {
 				return fmt.Errorf("create manager: %w", err)
 			}
 			fmt.Printf("manager/%s created\n", name)

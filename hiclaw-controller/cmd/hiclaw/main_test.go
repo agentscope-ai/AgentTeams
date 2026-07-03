@@ -147,8 +147,8 @@ spec:
 	if res.Metadata.Name != "alice" {
 		t.Errorf("expected name alice, got %s", res.Metadata.Name)
 	}
-	if res.APIVersion != "hiclaw.io/v1beta1" {
-		t.Errorf("expected apiVersion hiclaw.io/v1beta1, got %s", res.APIVersion)
+	if res.APIVersion != "agentteams.io/v1beta1" {
+		t.Errorf("expected apiVersion agentteams.io/v1beta1, got %s", res.APIVersion)
 	}
 }
 

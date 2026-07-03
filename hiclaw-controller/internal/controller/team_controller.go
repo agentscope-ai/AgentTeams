@@ -829,16 +829,6 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 		}
 	}
 
-	// Cross-cluster deployment fields for leader.
-	leaderDeployMode := v1beta1.DeployModeLocal
-	if t.Spec.Leader.DeployMode != nil {
-		leaderDeployMode = *t.Spec.Leader.DeployMode
-	}
-	var leaderClusterID, leaderNamespace string
-	if t.Spec.Leader.TargetCluster != nil {
-		leaderClusterID = t.Spec.Leader.TargetCluster.ID
-		leaderNamespace = t.Spec.Leader.TargetCluster.Namespace
-	}
 	var leaderServiceEnabled bool
 	if t.Spec.Leader.ServiceEnabled != nil {
 		leaderServiceEnabled = *t.Spec.Leader.ServiceEnabled
@@ -860,9 +850,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 		PodLabels:          memberLabels(RoleTeamLeader, t.Spec.Leader.Labels),
 		Owner:              t,
 		Heartbeat:          leaderHeartbeat,
-		DeployMode:         leaderDeployMode,
-		TargetClusterID:    leaderClusterID,
-		TargetNamespace:    leaderNamespace,
+		DeployMode:         v1beta1.DeployModeLocal,
 		ServiceEnabled:     leaderServiceEnabled,
 	})
 
@@ -870,16 +858,6 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 		workerObserved := isObserved(w.Name)
 		spec := teamWorkerSpecToWorkerSpec(t, w)
 
-		// Cross-cluster deployment fields for team worker.
-		wDeployMode := v1beta1.DeployModeLocal
-		if w.DeployMode != nil {
-			wDeployMode = *w.DeployMode
-		}
-		var wClusterID, wNamespace string
-		if w.TargetCluster != nil {
-			wClusterID = w.TargetCluster.ID
-			wNamespace = w.TargetCluster.Namespace
-		}
 		var wServiceEnabled bool
 		if w.ServiceEnabled != nil {
 			wServiceEnabled = *w.ServiceEnabled
@@ -900,9 +878,7 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			TeamCoordinatorIDs: teamCoordinatorIDs(t),
 			PodLabels:          memberLabels(RoleTeamWorker, w.Labels),
 			Owner:              t,
-			DeployMode:         wDeployMode,
-			TargetClusterID:    wClusterID,
-			TargetNamespace:    wNamespace,
+			DeployMode:         v1beta1.DeployModeLocal,
 			ServiceEnabled:     wServiceEnabled,
 		})
 	}

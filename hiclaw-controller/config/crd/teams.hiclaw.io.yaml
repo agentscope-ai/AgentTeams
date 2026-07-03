@@ -175,21 +175,6 @@ spec:
                             memory:
                               type: string
                               description: Kubernetes memory quantity, e.g. 3Gi
-                    deployMode:
-                      type: string
-                      enum: ["Local", "Remote"]
-                      description: "Where the leader pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster."
-                    targetCluster:
-                      type: object
-                      description: "Remote cluster target for deployment. Required when deployMode is Remote."
-                      properties:
-                        id:
-                          type: string
-                          description: "ACS/ACK cluster ID."
-                        namespace:
-                          type: string
-                          description: "Target namespace in the remote cluster."
-                      required: ["id", "namespace"]
                     serviceEnabled:
                       type: boolean
                       description: "Whether to create a ClusterIP Service alongside the leader pod."
@@ -408,21 +393,6 @@ spec:
                               memory:
                                 type: string
                                 description: Kubernetes memory quantity, e.g. 2Gi
-                      deployMode:
-                        type: string
-                        enum: ["Local", "Remote"]
-                        description: "Where this team worker pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster."
-                      targetCluster:
-                        type: object
-                        description: "Remote cluster target for deployment. Required when deployMode is Remote."
-                        properties:
-                          id:
-                            type: string
-                            description: "ACS/ACK cluster ID."
-                          namespace:
-                            type: string
-                            description: "Target namespace in the remote cluster."
-                        required: ["id", "namespace"]
                       serviceEnabled:
                         type: boolean
                         description: "Whether to create a ClusterIP Service alongside this team worker pod."

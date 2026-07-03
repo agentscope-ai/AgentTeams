@@ -150,66 +150,6 @@ func TestTargetClusterSpec_JSONTags(t *testing.T) {
 	}
 }
 
-// TestLeaderSpec_DeployFieldsRoundTrip verifies the same set of
-// cross-cluster fields on LeaderSpec — the Leader path is exercised
-// separately because Team admission paths embed LeaderSpec, not
-// WorkerSpec.
-func TestLeaderSpec_DeployFieldsRoundTrip(t *testing.T) {
-	orig := LeaderSpec{
-		Name:       "ld",
-		DeployMode: strPtr("Remote"),
-		TargetCluster: &TargetClusterSpec{
-			ID:        "c-leader",
-			Namespace: "leaders",
-		},
-		ServiceEnabled: boolPtr(true),
-	}
-	data, err := json.Marshal(orig)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var got LeaderSpec
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if got.DeployMode == nil || *got.DeployMode != "Remote" {
-		t.Fatalf("DeployMode = %v", got.DeployMode)
-	}
-	if got.TargetCluster == nil || got.TargetCluster.ID != "c-leader" {
-		t.Fatalf("TargetCluster = %+v", got.TargetCluster)
-	}
-	if got.ServiceEnabled == nil || *got.ServiceEnabled != true {
-		t.Fatalf("ServiceEnabled = %v", got.ServiceEnabled)
-	}
-}
-
-// TestTeamWorkerSpec_DeployFieldsRoundTrip mirrors the round-trip
-// assertion for TeamWorkerSpec, the third struct that carries the
-// cross-cluster deployment triple.
-func TestTeamWorkerSpec_DeployFieldsRoundTrip(t *testing.T) {
-	orig := TeamWorkerSpec{
-		Name:       "w1",
-		DeployMode: strPtr("Local"),
-	}
-	data, err := json.Marshal(orig)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if !strings.Contains(string(data), `"deployMode":"Local"`) {
-		t.Fatalf("Marshal = %s", data)
-	}
-	var got TeamWorkerSpec
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if got.DeployMode == nil || *got.DeployMode != "Local" {
-		t.Fatalf("DeployMode = %v", got.DeployMode)
-	}
-	if got.TargetCluster != nil {
-		t.Errorf("TargetCluster should be nil when omitted, got %+v", got.TargetCluster)
-	}
-}
-
 // TestWorkerSpec_DeepCopyLabels verifies WorkerSpec.Labels is deep-copied:
 // mutating the source map after DeepCopy must not mutate the copy. Covers
 // nil, empty-but-non-nil, and populated variants because our hand-edited

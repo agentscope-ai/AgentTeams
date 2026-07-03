@@ -277,16 +277,6 @@ func (in *LeaderSpec) DeepCopyInto(out *LeaderSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	if in.DeployMode != nil {
-		in, out := &in.DeployMode, &out.DeployMode
-		*out = new(string)
-		**out = **in
-	}
-	if in.TargetCluster != nil {
-		in, out := &in.TargetCluster, &out.TargetCluster
-		*out = new(TargetClusterSpec)
-		**out = **in
-	}
 	if in.ServiceEnabled != nil {
 		in, out := &in.ServiceEnabled, &out.ServiceEnabled
 		*out = new(bool)
@@ -764,16 +754,6 @@ func (in *TeamWorkerSpec) DeepCopyInto(out *TeamWorkerSpec) {
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
-	}
-	if in.DeployMode != nil {
-		in, out := &in.DeployMode, &out.DeployMode
-		*out = new(string)
-		**out = **in
-	}
-	if in.TargetCluster != nil {
-		in, out := &in.TargetCluster, &out.TargetCluster
-		*out = new(TargetClusterSpec)
-		**out = **in
 	}
 	if in.ServiceEnabled != nil {
 		in, out := &in.ServiceEnabled, &out.ServiceEnabled

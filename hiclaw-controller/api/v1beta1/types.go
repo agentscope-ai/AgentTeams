@@ -316,15 +316,6 @@ type LeaderSpec struct {
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
-	// DeployMode specifies where the leader pod runs.
-	// "Local" (default): created in the controller's own cluster.
-	// "Remote": created in the cluster identified by TargetCluster.
-	DeployMode *string `json:"deployMode,omitempty"`
-
-	// TargetCluster specifies the remote cluster target for deployment.
-	// Required when DeployMode is "Remote".
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
-
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the leader pod (same cluster, namespace, name).
 	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
@@ -370,15 +361,6 @@ type TeamWorkerSpec struct {
 	// When empty the controller applies team-member defaults (agents/<name>/*
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
-
-	// DeployMode specifies where the team worker pod runs.
-	// "Local" (default): created in the controller's own cluster.
-	// "Remote": created in the cluster identified by TargetCluster.
-	DeployMode *string `json:"deployMode,omitempty"`
-
-	// TargetCluster specifies the remote cluster target for deployment.
-	// Required when DeployMode is "Remote".
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
 
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the team worker pod (same cluster, namespace, name).

@@ -2746,7 +2746,7 @@ function Install-Manager {
             "--env-file", $script:HICLAW_ENV_FILE,
             "-e", "HOME=/root/manager-workspace",
             "-w", "/root/manager-workspace",
-            "-e", "HOST_ORIGINAL_HOME=$($config.HOST_SHARE_DIR)",
+            "-e", "HOST_ORIGINAL_HOME=$(ConvertTo-DockerPath -Path $config.HOST_SHARE_DIR)",
             "-e", "HICLAW_MANAGER_RUNTIME=$($config.MANAGER_RUNTIME)"
         )
 
@@ -3135,8 +3135,8 @@ function Install-Manager {
             "-e", "HICLAW_AI_GATEWAY_URL=http://$aigwDomain",
             "-e", "HICLAW_CONTROLLER_URL=http://hiclaw-controller:8090",
             "-e", "HICLAW_DOCKER_NETWORK=hiclaw-net",
-            "-e", "HICLAW_WORKSPACE_DIR=$($config.WORKSPACE_DIR)",
-            "-e", "HICLAW_HOST_SHARE_DIR=$($config.HOST_SHARE_DIR)",
+            "-e", "HICLAW_WORKSPACE_DIR=$(ConvertTo-DockerPath -Path $config.WORKSPACE_DIR)",
+            "-e", "HICLAW_HOST_SHARE_DIR=$(ConvertTo-DockerPath -Path $config.HOST_SHARE_DIR)",
             "-e", "HICLAW_MANAGER_ENABLED=true",
             "-e", "HICLAW_PORT_MANAGER_CONSOLE=$($config.PORT_MANAGER_CONSOLE)"
         )

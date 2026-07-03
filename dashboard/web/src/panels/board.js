@@ -24,17 +24,12 @@ export function renderBoard(root) {
 
   const stop = startPolling(
     async () => {
-      let state = null;
-      try {
-        state = await api.managerTasks();
-      } catch (err) {
-        if (err.status !== 404) throw err;
-        // 404 = manager-tasks state unavailable -- bucketTasks(undefined, ...)
-        // degrades to four empty columns, which is exactly what we want to
-        // render here (not an error state).
-      }
+      // api.managerTasks() and resolveCompletedIds() are independent reads --
+      // run them concurrently instead of serially. managerTasks()'s 404
+      // tolerance is folded into fetchManagerTasks() below so Promise.all
+      // doesn't abort resolveCompletedIds() on that (expected) rejection.
+      const [state, completedIds] = await Promise.all([fetchManagerTasks(), resolveCompletedIds()]);
 
-      const completedIds = await resolveCompletedIds();
       const columns = bucketTasks(state, completedIds);
       renderColumns(body, columns);
     },
@@ -45,6 +40,21 @@ export function renderBoard(root) {
   );
 
   return stop;
+}
+
+/**
+ * fetchManagerTasks wraps api.managerTasks(), degrading a 404 (embedded-only
+ * feature, or the Manager hasn't run `init` yet) to null -- bucketTasks(null,
+ * ...) already renders four empty columns for that case, so this isn't an
+ * error state. Any other failure still propagates to the poll's onError.
+ */
+async function fetchManagerTasks() {
+  try {
+    return await api.managerTasks();
+  } catch (err) {
+    if (err.status === 404) return null;
+    throw err;
+  }
 }
 
 /**

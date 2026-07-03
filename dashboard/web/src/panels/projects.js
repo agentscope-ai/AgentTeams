@@ -5,12 +5,6 @@ import { countTaskMarkers, parsePlanTasks } from '../plan-parse.js';
 
 const POLL_MS = 15000;
 
-// Re-exported for any external caller that imported countTaskMarkers from
-// here pre-v2 -- the implementation itself now lives in plan-parse.js
-// (Milestone 3, Step 3) so the DAG view and the progress-counts view above
-// share one parser instead of forking it.
-export { countTaskMarkers };
-
 /**
  * renderProjects mounts the Project browser: one card per Project CRD
  * (from GET /api/projects, Step 1), joined by id with the chat-flow layer

@@ -29,6 +29,8 @@ export function confirmAction(message) {
   msgEl.textContent = message;
 
   return new Promise((resolve) => {
+    const form = dialog.querySelector('#confirm-form');
+
     function onCancel() {
       cleanup();
       dialog.close();
@@ -40,12 +42,24 @@ export function confirmAction(message) {
       dialog.close();
       resolve(true);
     }
+    // The native <dialog> also closes on Escape (or any other close not
+    // routed through onCancel/onSubmit above) -- without this listener that
+    // path leaves the Promise unresolved forever and the click listeners
+    // dangling for the next confirmAction() call.
+    function onDialogClose() {
+      cleanup();
+      resolve(false);
+    }
     function cleanup() {
       cancelBtn.removeEventListener('click', onCancel);
-      dialog.querySelector('#confirm-form').removeEventListener('submit', onSubmit);
+      form.removeEventListener('submit', onSubmit);
+      dialog.removeEventListener('close', onDialogClose);
+      dialog.removeEventListener('cancel', onDialogClose);
     }
     cancelBtn.addEventListener('click', onCancel);
-    dialog.querySelector('#confirm-form').addEventListener('submit', onSubmit);
+    form.addEventListener('submit', onSubmit);
+    dialog.addEventListener('close', onDialogClose);
+    dialog.addEventListener('cancel', onDialogClose);
     dialog.showModal();
   });
 }
@@ -63,6 +77,8 @@ export function promptMessage(title) {
   textarea.value = '';
 
   return new Promise((resolve) => {
+    const form = dialog.querySelector('#message-form');
+
     function onCancel() {
       cleanup();
       dialog.close();
@@ -75,12 +91,22 @@ export function promptMessage(title) {
       const value = textarea.value.trim();
       resolve(value.length > 0 ? value : null);
     }
+    // See confirmAction() -- Escape (or any close not routed through
+    // onCancel/onSubmit) must still resolve the Promise and remove listeners.
+    function onDialogClose() {
+      cleanup();
+      resolve(null);
+    }
     function cleanup() {
       cancelBtn.removeEventListener('click', onCancel);
-      dialog.querySelector('#message-form').removeEventListener('submit', onSubmit);
+      form.removeEventListener('submit', onSubmit);
+      dialog.removeEventListener('close', onDialogClose);
+      dialog.removeEventListener('cancel', onDialogClose);
     }
     cancelBtn.addEventListener('click', onCancel);
-    dialog.querySelector('#message-form').addEventListener('submit', onSubmit);
+    form.addEventListener('submit', onSubmit);
+    dialog.addEventListener('close', onDialogClose);
+    dialog.addEventListener('cancel', onDialogClose);
     dialog.showModal();
     textarea.focus();
   });

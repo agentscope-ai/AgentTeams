@@ -1,8 +1,17 @@
 import { api } from '../api.js';
+import { startPolling } from '../poll.js';
 import { escapeHtml } from '../ui.js';
 import { latestProgressFile } from '../plan-parse.js';
 
 const REFRESH_MS = 15000;
+
+// Tracks the teardown for whatever invocation of openTaskDetail is currently
+// live -- module-level because the dialog itself is a singleton (reused
+// across calls via getElementById), so a second openTaskDetail() call must
+// tear down the first invocation's poll/listeners before wiring up its own,
+// or the stale invocation keeps refreshing the (now-repurposed) body.
+let closeCurrent = null;
+let currentTaskId = null;
 
 const OUTCOME_RE = /\*\*Status\*\*:\s*(SUCCESS_WITH_NOTES|SUCCESS|REVISION_NEEDED|BLOCKED)/;
 
@@ -20,6 +29,17 @@ const OUTCOME_RE = /\*\*Status\*\*:\s*(SUCCESS_WITH_NOTES|SUCCESS|REVISION_NEEDE
  * @param {string} taskId
  */
 export function openTaskDetail(taskId) {
+  // Guard against reopening while already open for the same task -- avoid
+  // tearing down and re-wiring a poll that's already correctly running.
+  if (closeCurrent && currentTaskId === taskId) return;
+
+  // A prior invocation (for a different task, or one whose close() teardown
+  // never ran) is still live -- tear it down first so its 15s timer and
+  // listeners don't keep firing against this invocation's (repurposed) body.
+  if (closeCurrent) {
+    closeCurrent();
+  }
+
   let dialog = document.getElementById('task-detail-dialog');
   if (!dialog) {
     dialog = document.createElement('dialog');
@@ -40,36 +60,38 @@ export function openTaskDetail(taskId) {
   const closeBtn = dialog.querySelector('#task-detail-close');
   title.textContent = taskId;
 
-  let stopped = false;
-  let timer = null;
-
   async function refresh() {
-    if (stopped) return;
     try {
       const detail = await loadTaskDetail(taskId);
-      if (!stopped) renderDetail(body, detail);
+      renderDetail(body, detail);
     } catch (err) {
-      if (!stopped) {
-        body.innerHTML = `<div class="error-state">Failed to load: ${escapeHtml(err.message)}</div>`;
-      }
-    }
-    if (!stopped) {
-      timer = setTimeout(refresh, REFRESH_MS);
+      body.innerHTML = `<div class="error-state">Failed to load: ${escapeHtml(err.message)}</div>`;
     }
   }
 
+  const stopPolling = startPolling(refresh, REFRESH_MS, () => {
+    /* refresh() already renders its own error-state on failure; nothing
+     * further to do here -- startPolling still requires an onError so a
+     * thrown error can't otherwise surface as an unhandled rejection. */
+  });
+
   function close() {
-    stopped = true;
-    if (timer) clearTimeout(timer);
+    stopPolling();
     closeBtn.removeEventListener('click', close);
     dialog.removeEventListener('close', close);
     dialog.close();
+    if (closeCurrent === close) {
+      closeCurrent = null;
+      currentTaskId = null;
+    }
   }
 
   closeBtn.addEventListener('click', close);
   dialog.addEventListener('close', close);
 
-  refresh();
+  closeCurrent = close;
+  currentTaskId = taskId;
+
   dialog.showModal();
 }
 

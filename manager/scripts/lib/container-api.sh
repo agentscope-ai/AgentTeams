@@ -218,6 +218,62 @@ container_get_manager_ip() {
     hostname -I 2>/dev/null | awk '{print $1}'
 }
 
+# ============================================================
+# Matrix messaging
+# ============================================================
+
+# Send a Matrix room message (m.room.message, msgtype m.text), optionally
+# with m.mentions user_ids. Generates its own transaction id.
+#
+# Usage:
+#   send_matrix_message <matrix_url> <token> <room_id> <body> [mention_user_id ...]
+#
+# - matrix_url: base Matrix server URL (e.g. "${HICLAW_MATRIX_URL}")
+# - token:      bearer token to authenticate as (caller resolves this —
+#               token-resolution fallbacks vary per caller and are NOT
+#               duplicated here)
+# - room_id:    target room id
+# - body:       message text (plain, not JSON-escaped by the caller — this
+#               function JSON-escapes it)
+# - mention_user_id...: zero or more Matrix user ids to include in
+#               m.mentions.user_ids (omit entirely for no m.mentions field)
+#
+# Returns 0 on success, 1 on failure (curl failure), matching the
+# best-effort "log a WARNING and continue" style of its callers — callers
+# still decide how to log/handle the non-zero return.
+send_matrix_message() {
+    local matrix_url="$1" token="$2" room_id="$3" body="$4"
+    shift 4
+    local mentions=("$@")
+
+    local txn_id
+    txn_id="sm-$(date +%s%N)"
+
+    # JSON-escape the body (backslash and double-quote only — callers have
+    # historically passed pre-composed plain text without embedded newlines).
+    local escaped_body="${body//\\/\\\\}"
+    escaped_body="${escaped_body//\"/\\\"}"
+
+    local data
+    if [ "${#mentions[@]}" -gt 0 ]; then
+        local mentions_json=""
+        local m
+        for m in "${mentions[@]}"; do
+            mentions_json="${mentions_json:+${mentions_json},}\"${m}\""
+        done
+        data="{\"msgtype\":\"m.text\",\"body\":\"${escaped_body}\",\"m.mentions\":{\"user_ids\":[${mentions_json}]}}"
+    else
+        data="{\"msgtype\":\"m.text\",\"body\":\"${escaped_body}\"}"
+    fi
+
+    curl -sf -X PUT \
+        "${matrix_url}/_matrix/client/v3/rooms/${room_id}/send/m.room.message/${txn_id}" \
+        -H "Authorization: Bearer ${token}" \
+        -H 'Content-Type: application/json' \
+        -d "${data}" \
+        > /dev/null 2>&1
+}
+
 # Wait for a worker to report ready via controller.
 # Usage: worker_backend_wait_ready <worker_name> [timeout_seconds]
 worker_backend_wait_ready() {

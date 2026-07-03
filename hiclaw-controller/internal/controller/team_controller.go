@@ -680,6 +680,9 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 	if err != nil {
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
+	if err := r.validateWorkerMembersExclusive(ctx, t); err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
 
 	// 2. Fetch all referenced Worker CRs
 	type resolvedMember struct {
@@ -1028,6 +1031,47 @@ func validateWorkerMembers(refs []v1beta1.TeamWorkerRef) (leader *v1beta1.TeamWo
 		return nil, nil, fmt.Errorf("workerMembers contains multiple leaders: %v", leaders)
 	}
 	return leader, workers, nil
+}
+
+func (r *TeamReconciler) validateWorkerMembersExclusive(ctx context.Context, t *v1beta1.Team) error {
+	for _, ref := range t.Spec.WorkerMembers {
+		teams, err := r.teamsReferencingWorkerMember(ctx, t.Namespace, ref.Name)
+		if err != nil {
+			return fmt.Errorf("lookup workerMembers reference %q: %w", ref.Name, err)
+		}
+		for _, other := range teams {
+			if other.Name == t.Name {
+				continue
+			}
+			return fmt.Errorf("workerMembers name %q is already referenced by Team %s/%s", ref.Name, other.Namespace, other.Name)
+		}
+	}
+	return nil
+}
+
+func (r *TeamReconciler) teamsReferencingWorkerMember(ctx context.Context, namespace, name string) ([]v1beta1.Team, error) {
+	var indexed v1beta1.TeamList
+	if err := r.List(ctx, &indexed,
+		client.InNamespace(namespace),
+		client.MatchingFields{TeamWorkerMembersField: name},
+	); err == nil {
+		return indexed.Items, nil
+	}
+
+	var list v1beta1.TeamList
+	if err := r.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	matches := make([]v1beta1.Team, 0, len(list.Items))
+	for _, team := range list.Items {
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name == name {
+				matches = append(matches, team)
+				break
+			}
+		}
+	}
+	return matches, nil
 }
 
 // reconcileLegacyMember upserts a team member (leader or worker) into the

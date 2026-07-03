@@ -14,8 +14,9 @@ import (
 // string constants here (instead of importing the controller package) to
 // avoid a circular dependency between auth and controller.
 const (
-	teamLeaderNameField = "spec.leader.name"
-	teamWorkerNameField = "spec.workerNames"
+	teamLeaderNameField    = "spec.leader.name"
+	teamWorkerNameField    = "spec.workerNames"
+	teamWorkerMembersField = "spec.workerMembers.name"
 )
 
 // IdentityEnricher resolves additional identity fields (role, team) from
@@ -69,6 +70,18 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 		if team := worker.Annotations["agentteams.io/team"]; team != "" {
 			identity.Team = team
 		}
+		if identity.Team == "" {
+			team, role, ok, lerr := e.lookupTeamWorkerMember(ctx, identity.Username)
+			if lerr != nil {
+				return fmt.Errorf("enrich identity: lookup worker member %q: %w", identity.Username, lerr)
+			}
+			if ok {
+				identity.Team = team.Name
+				if role == "team_leader" {
+					identity.Role = RoleTeamLeader
+				}
+			}
+		}
 		return nil
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("enrich identity: get worker %q: %w", identity.Username, err)
@@ -103,11 +116,46 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 		}
 		return nil
 	}
+	if team, role, ok, werr := e.lookupTeamWorkerMember(ctx, identity.Username); werr != nil {
+		return fmt.Errorf("enrich identity: lookup worker member %q: %w", identity.Username, werr)
+	} else if ok {
+		identity.Team = team.Name
+		if role == "team_leader" {
+			identity.Role = RoleTeamLeader
+		}
+		return nil
+	}
 
 	// No Worker CR and no Team membership: leave as a vanilla Worker caller.
 	// The authorizer will apply the worker-scope permission check against the
 	// username itself.
 	return nil
+}
+
+func (e *CREnricher) lookupTeamWorkerMember(ctx context.Context, name string) (*v1beta1.Team, string, bool, error) {
+	var list v1beta1.TeamList
+	if err := e.client.List(ctx, &list,
+		client.InNamespace(e.namespace),
+		client.MatchingFieldsSelector{Selector: fields.OneTermEqualSelector(teamWorkerMembersField, name)},
+	); err != nil {
+		if err := e.client.List(ctx, &list, client.InNamespace(e.namespace)); err != nil {
+			return nil, "", false, err
+		}
+	}
+	for i := range list.Items {
+		team := &list.Items[i]
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name != name {
+				continue
+			}
+			role := ref.Role
+			if role == "" {
+				role = "worker"
+			}
+			return team, role, true, nil
+		}
+	}
+	return nil, "", false, nil
 }
 
 func (e *CREnricher) validateRemoteWorkerIdentity(identity *CallerIdentity, worker *v1beta1.Worker) error {

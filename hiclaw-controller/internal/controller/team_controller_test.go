@@ -1257,6 +1257,64 @@ func TestReconcileTeamDecoupled_WorkerNotProvisioned(t *testing.T) {
 	}
 }
 
+func TestReconcileTeamDecoupled_RejectsWorkerReferencedByAnotherTeam(t *testing.T) {
+	ctx := context.Background()
+
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead-a", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+	otherTeam := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-b", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead-b", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), otherTeam.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    deployer,
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		AgentFSDir:  t.TempDir(),
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	if err == nil {
+		t.Fatal("expected duplicate workerMembers reference error")
+	}
+	if !contains(err.Error(), "already referenced by Team default/team-b") {
+		t.Fatalf("error=%q, want team-b duplicate reference", err.Error())
+	}
+	if team.Status.Phase != "Failed" {
+		t.Fatalf("Phase=%q, want Failed", team.Status.Phase)
+	}
+	if len(deployer.Calls.InjectWorkerCoordination) != 0 {
+		t.Fatalf("InjectWorkerCoordination calls=%d, want 0", len(deployer.Calls.InjectWorkerCoordination))
+	}
+}
+
 func TestReconcileTeamDecoupled_MemberRemoved(t *testing.T) {
 	ctx := context.Background()
 

@@ -42,7 +42,7 @@ func (r *HumanReconciler) reconcileHumanWorkerAllowlist(ctx context.Context, s *
 		w := &workers.Items[i]
 		_, shouldAllow := desired[w.Name]
 		managed := annotationSet(w.Annotations[humanManagedAllowlistAnnotation])
-		isManaged := managed[h.Name]
+		_, isManaged := managed[h.Name]
 
 		if shouldAllow {
 			if err := r.addHumanToWorkerAllowlist(ctx, w, h.Name, matrixUserID, isManaged); err != nil {
@@ -73,7 +73,7 @@ func (r *HumanReconciler) cleanupHumanWorkerAllowlist(ctx context.Context, s *hu
 	}
 	for i := range workers.Items {
 		w := &workers.Items[i]
-		if annotationSet(w.Annotations[humanManagedAllowlistAnnotation])[s.human.Name] {
+		if _, ok := annotationSet(w.Annotations[humanManagedAllowlistAnnotation])[s.human.Name]; ok {
 			if err := r.removeHumanFromWorkerAllowlist(ctx, w, s.human.Name, matrixUserID); err != nil {
 				logger.Error(err, "failed to clean up human worker allowlist", "worker", w.Name, "human", s.human.Name)
 			}

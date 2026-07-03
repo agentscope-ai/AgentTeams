@@ -12,6 +12,11 @@ audit-log entries. See
 [`docs/implementation-milestone-3.md`](../docs/implementation-milestone-3.md)
 ("Step 1 — Dashboard v1.5...") for the full contract.
 
+Milestone 3, Step 2 adds **conditional-GET caching** on the proxy's MinIO
+object routes (`/api/tasks/*`, `/api/files/*`). See
+[`docs/implementation-milestone-3.md`](../docs/implementation-milestone-3.md)
+("Step 2 — Proxy ETag / conditional GET...") for the full contract.
+
 ## Layout
 
 - `server/` — a small, near-zero-dependency Node proxy (`node:http` + a
@@ -61,6 +66,21 @@ browser without exposing that token client-side. The proxy:
      this preview.
    - Everything else is rejected: unknown path shapes → `404`; a disallowed
      method on a known path shape → `405`.
+   - **(M3 Step 2) Conditional-GET on MinIO object routes**: `If-None-Match`
+     / `If-Modified-Since` from the browser request are forwarded to MinIO
+     as **unsigned** transport headers (the SigV4 `SignedHeaders` set —
+     `host;x-amz-content-sha256;x-amz-date` — never changes, whether or not
+     conditional headers are present; see `server/src/sigv4.js` and
+     `server/src/minio-client.js`). A MinIO `304` relays straight through as
+     a bodyless `304`; a `200` relays `ETag` + `Last-Modified` plus
+     `Cache-Control: no-cache` (forces revalidation on every poll instead of
+     letting the browser cache heuristically — the SPA polls fixed URLs, so
+     the browser supplies `If-None-Match` automatically once an `ETag` has
+     been seen; **no SPA change required**). Directory-listing responses
+     (`/api/files/<root>/` when the object 404s) are **never** cached — they
+     aggregate many objects and can change whenever any one of them does.
+     Controller-proxied `GET`s are unaffected (small JSON; not worth
+     caching).
    - `/docker/` (the controller's embedded-mode Docker socket passthrough)
      has **no route here at all** — it is never proxied, under any
      conditions.
@@ -154,8 +174,15 @@ production build.
   textarea dialog and posting to the two message-injection routes above.
   Success toasts the destination room id; a `409` (room not provisioned yet)
   is surfaced as a distinct, friendlier error rather than a generic failure.
+- **(M3 Step 2)** Conditional-GET caching on the MinIO object routes — see
+  above. No UI-visible change; reduces redundant re-downloads on the SPA's
+  15s poll cycle.
 
 **Deferred to M3 later steps** (already possible against existing controller
 endpoints, but out of scope for this step): kanban/DAG + task-detail (v2),
-cross-instance fan-out, ETag conditional-GET, observability kit, Gitea API
-context panels.
+cross-instance fan-out, observability kit, Gitea API context panels.
+
+**Deferred to deploy** (per the plan's unverified-assumption ledger items
+1–2): that MinIO honors unsigned conditional headers on `GetObject` the way
+generic S3 does, and the observed bandwidth/latency effect of browser
+revalidation against a live proxy — both are stub-tested only here.

@@ -50,9 +50,12 @@ function fakeControllerClient({ statusCode = 200, body = '{}', headers = {} } = 
 }
 
 function fakeMinioClient({ getObjectResult, listObjectsResult } = {}) {
+  const getObjectCalls = [];
   return {
-    async getObject(key) {
-      if (typeof getObjectResult === 'function') return getObjectResult(key);
+    getObjectCalls,
+    async getObject(key, opts) {
+      getObjectCalls.push({ key, conditionalHeaders: (opts && opts.conditionalHeaders) || {} });
+      if (typeof getObjectResult === 'function') return getObjectResult(key, opts);
       return getObjectResult || { statusCode: 404, body: Buffer.alloc(0) };
     },
     async listObjects(prefix) {
@@ -60,6 +63,21 @@ function fakeMinioClient({ getObjectResult, listObjectsResult } = {}) {
       return listObjectsResult || { prefixes: [], objects: [] };
     },
   };
+}
+
+function requestWithHeaders(server, method, path, headers) {
+  const { port } = server.address();
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path, method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () =>
+        resolve({ statusCode: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }),
+      );
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 test('GET /api/managers proxies to the controller and relays body/status', async () => {
@@ -160,6 +178,66 @@ test('MinIO object route returns the object body with a guessed content-type', a
   }
 });
 
+test('MinIO object route relays etag/last-modified/Cache-Control on a 200', async () => {
+  const controllerClient = fakeControllerClient();
+  const minioClient = fakeMinioClient({
+    getObjectResult: {
+      statusCode: 200,
+      body: Buffer.from('{"task_id":"t1"}'),
+      headers: { etag: '"abc123"', 'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT' },
+    },
+  });
+  const server = await startServer({ controllerClient, minioClient, logWrite: () => {} });
+  try {
+    const res = await request(server, 'GET', '/api/tasks/t1/meta.json');
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.headers.etag, '"abc123"');
+    assert.equal(res.headers['last-modified'], 'Thu, 01 Jan 2026 00:00:00 GMT');
+    assert.equal(res.headers['cache-control'], 'no-cache');
+    assert.equal(res.body, '{"task_id":"t1"}');
+  } finally {
+    server.close();
+  }
+});
+
+test('MinIO route forwards If-None-Match / If-Modified-Since from the browser request to minioClient.getObject', async () => {
+  const controllerClient = fakeControllerClient();
+  const minioClient = fakeMinioClient({
+    getObjectResult: { statusCode: 200, body: Buffer.from('{}'), headers: {} },
+  });
+  const server = await startServer({ controllerClient, minioClient, logWrite: () => {} });
+  try {
+    await requestWithHeaders(server, 'GET', '/api/tasks/t1/meta.json', {
+      'if-none-match': '"abc123"',
+      'if-modified-since': 'Wed, 31 Dec 2025 00:00:00 GMT',
+    });
+    assert.equal(minioClient.getObjectCalls.length, 1);
+    assert.deepEqual(minioClient.getObjectCalls[0].conditionalHeaders, {
+      'if-none-match': '"abc123"',
+      'if-modified-since': 'Wed, 31 Dec 2025 00:00:00 GMT',
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('upstream 304 relays as a bodyless 304 to the browser', async () => {
+  const controllerClient = fakeControllerClient();
+  const minioClient = fakeMinioClient({
+    getObjectResult: { statusCode: 304, body: Buffer.alloc(0), headers: {} },
+  });
+  const server = await startServer({ controllerClient, minioClient, logWrite: () => {} });
+  try {
+    const res = await requestWithHeaders(server, 'GET', '/api/tasks/t1/meta.json', {
+      'if-none-match': '"abc123"',
+    });
+    assert.equal(res.statusCode, 304);
+    assert.equal(res.body, '');
+  } finally {
+    server.close();
+  }
+});
+
 test('MinIO route falls back to a directory listing when the object 404s', async () => {
   const controllerClient = fakeControllerClient();
   const minioClient = fakeMinioClient({
@@ -177,6 +255,30 @@ test('MinIO route falls back to a directory listing when the object 404s', async
     assert.deepEqual(parsed.directories, ['proj-1']);
     assert.equal(parsed.files.length, 1);
     assert.equal(parsed.files[0].key, 'readme.txt');
+  } finally {
+    server.close();
+  }
+});
+
+test('listing responses are never cached: no etag/last-modified/cache-control headers, even with conditional request headers present', async () => {
+  const controllerClient = fakeControllerClient();
+  const minioClient = fakeMinioClient({
+    getObjectResult: { statusCode: 404, body: Buffer.alloc(0) },
+    listObjectsResult: {
+      prefixes: ['shared/projects/proj-1/'],
+      objects: [{ key: 'shared/projects/readme.txt', size: 12, lastModified: '2026-01-01T00:00:00Z' }],
+    },
+  });
+  const server = await startServer({ controllerClient, minioClient, logWrite: () => {} });
+  try {
+    const res = await requestWithHeaders(server, 'GET', '/api/files/shared/projects', {
+      'if-none-match': '"whatever"',
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.headers.etag, undefined);
+    assert.equal(res.headers['cache-control'], undefined);
+    const parsed = JSON.parse(res.body);
+    assert.deepEqual(parsed.directories, ['proj-1']);
   } finally {
     server.close();
   }

@@ -31,7 +31,7 @@ class MinioClient {
     return this.endpointUrl.protocol === 'https:' ? https : http;
   }
 
-  _request(method, path, query, { asBuffer = false } = {}) {
+  _request(method, path, query, { asBuffer = false, extraHeaders = {} } = {}) {
     const host = this.endpointUrl.host;
     const { headers } = signRequest({
       method,
@@ -42,6 +42,14 @@ class MinioClient {
       secretKey: this.secretKey,
       region: this.region,
     });
+
+    // extraHeaders (e.g. If-None-Match / If-Modified-Since) are merged onto
+    // the transport request AFTER signing and are deliberately NOT part of
+    // signRequest's canonicalHeadersMap -- they must stay unsigned so the
+    // SigV4 SignedHeaders list (host;x-amz-content-sha256;x-amz-date) never
+    // changes shape (plan Milestone 3, Step 2). MinIO/S3 evaluate conditional
+    // request headers independently of which headers were signed.
+    const requestHeaders = { ...headers, ...extraHeaders };
 
     const qs = canonicalQueryString(query);
     const fullPath = qs ? `${path}?${qs}` : path;
@@ -56,7 +64,7 @@ class MinioClient {
           port: this.endpointUrl.port || (this.endpointUrl.protocol === 'https:' ? 443 : 80),
           path: fullPath,
           method,
-          headers,
+          headers: requestHeaders,
         },
         (res) => {
           const chunks = [];
@@ -74,11 +82,19 @@ class MinioClient {
 
   /**
    * getObject fetches an object by key. Returns { statusCode, body (Buffer), headers }.
-   * Callers should treat statusCode 404 as "not found" and anything >=400 as an error.
+   * Callers should treat statusCode 404 as "not found", 304 as "not modified"
+   * (when conditionalHeaders were supplied), and anything >=400 (other than
+   * 304) as an error.
+   *
+   * @param {string} key
+   * @param {Object} [opts]
+   * @param {{ 'if-none-match'?: string, 'if-modified-since'?: string }} [opts.conditionalHeaders]
+   *   Forwarded verbatim as UNSIGNED request headers (plan Milestone 3, Step 2)
+   *   -- never merged into the SigV4 signature.
    */
-  async getObject(key) {
+  async getObject(key, { conditionalHeaders } = {}) {
     const path = `/${this.bucket}/${key}`;
-    return this._request('GET', path, {}, { asBuffer: true });
+    return this._request('GET', path, {}, { asBuffer: true, extraHeaders: conditionalHeaders || {} });
   }
 
   /**

@@ -105,7 +105,7 @@ function createRequestHandler(deps) {
       }
 
       if (route.target === 'minio') {
-        await handleMinio(res, minioClient, route.minioKey, url.pathname);
+        await handleMinio(res, minioClient, route.minioKey, url.pathname, req.headers);
         return;
       }
 
@@ -116,15 +116,33 @@ function createRequestHandler(deps) {
   };
 }
 
-async function handleMinio(res, minioClient, key, requestedPath) {
+async function handleMinio(res, minioClient, key, requestedPath, requestHeaders = {}) {
   // /api/files/<root>/ (trailing slash implied by no extension AND the
   // caller wanting a directory listing) is ambiguous from the path alone,
   // so we try GetObject first (covers meta.json/plan.md/state files) and
   // fall back to a prefix listing on 404 -- this covers both the file
   // browser (directories) and direct file reads (objects) through one route.
-  const getRes = await minioClient.getObject(key);
+  //
+  // Conditional-GET (plan Milestone 3, Step 2): the browser's own HTTP cache
+  // supplies If-None-Match/If-Modified-Since on repeat polls once we've
+  // relayed ETag/Last-Modified once; we forward those two request headers to
+  // MinIO UNSIGNED (never touching SigV4) and relay a bodyless 304 straight
+  // through. Listing responses are never cached (aggregate many objects).
+  const conditionalHeaders = pickConditionalHeaders(requestHeaders);
+  const getRes = await minioClient.getObject(key, { conditionalHeaders });
+
+  if (getRes.statusCode === 304) {
+    res.writeHead(304, {});
+    res.end();
+    return;
+  }
   if (getRes.statusCode === 200) {
-    res.writeHead(200, { 'content-type': guessContentType(key) });
+    const headers = { 'content-type': guessContentType(key), 'cache-control': 'no-cache' };
+    if (getRes.headers) {
+      if (getRes.headers.etag) headers.etag = getRes.headers.etag;
+      if (getRes.headers['last-modified']) headers['last-modified'] = getRes.headers['last-modified'];
+    }
+    res.writeHead(200, headers);
     res.end(getRes.body);
     return;
   }
@@ -151,6 +169,19 @@ async function handleMinio(res, minioClient, key, requestedPath) {
   } catch (err) {
     sendJson(res, 502, { error: 'minio list failed', detail: String((err && err.message) || err) });
   }
+}
+
+/**
+ * pickConditionalHeaders extracts only If-None-Match / If-Modified-Since
+ * from an incoming request's headers, for forwarding to MinIO as unsigned
+ * transport headers (plan Milestone 3, Step 2). Node lower-cases incoming
+ * header names, so this reads the lower-case forms.
+ */
+function pickConditionalHeaders(requestHeaders) {
+  const out = {};
+  if (requestHeaders['if-none-match']) out['if-none-match'] = requestHeaders['if-none-match'];
+  if (requestHeaders['if-modified-since']) out['if-modified-since'] = requestHeaders['if-modified-since'];
+  return out;
 }
 
 function guessContentType(key) {

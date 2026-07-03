@@ -92,6 +92,88 @@ test('MinioClient.listObjects parses ListObjectsV2 XML into prefixes/objects', a
   }
 });
 
+test('MinioClient.getObject forwards conditional headers unsigned, without changing SignedHeaders', async () => {
+  let seenAuthWithConditional;
+  let seenIfNoneMatch;
+  let seenIfModifiedSince;
+  const upstream = await startUpstream((req, res) => {
+    if (req.url === '/hiclaw-storage/shared/tasks/t1/meta.json') {
+      seenAuthWithConditional = req.headers.authorization;
+      seenIfNoneMatch = req.headers['if-none-match'];
+      seenIfModifiedSince = req.headers['if-modified-since'];
+      res.writeHead(200, { 'content-type': 'application/json', etag: '"abc123"', 'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT' });
+      res.end('{"task_id":"t1"}');
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  let seenAuthNoConditional;
+  const upstream2 = await startUpstream((req, res) => {
+    seenAuthNoConditional = req.headers.authorization;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"task_id":"t1"}');
+  });
+  try {
+    const { port } = upstream.address();
+    const client = new MinioClient({
+      endpoint: `http://127.0.0.1:${port}`,
+      accessKey: 'ak',
+      secretKey: 'sk',
+      bucket: 'hiclaw-storage',
+    });
+    const res = await client.getObject('shared/tasks/t1/meta.json', {
+      conditionalHeaders: { 'if-none-match': '"abc123"', 'if-modified-since': 'Wed, 31 Dec 2025 00:00:00 GMT' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.headers.etag, '"abc123"');
+    assert.equal(seenIfNoneMatch, '"abc123"');
+    assert.equal(seenIfModifiedSince, 'Wed, 31 Dec 2025 00:00:00 GMT');
+
+    const { port: port2 } = upstream2.address();
+    const client2 = new MinioClient({
+      endpoint: `http://127.0.0.1:${port2}`,
+      accessKey: 'ak',
+      secretKey: 'sk',
+      bucket: 'hiclaw-storage',
+    });
+    await client2.getObject('shared/tasks/t1/meta.json');
+
+    // The SignedHeaders portion of the Authorization header must be
+    // byte-identical whether or not conditional headers were supplied --
+    // they are merged onto the transport request AFTER signing and must
+    // never appear in SignedHeaders (plan Milestone 3, Step 2).
+    const signedHeadersOf = (auth) => auth.match(/SignedHeaders=([^,]*)/)[1];
+    assert.equal(signedHeadersOf(seenAuthWithConditional), signedHeadersOf(seenAuthNoConditional));
+    assert.equal(signedHeadersOf(seenAuthWithConditional), 'host;x-amz-content-sha256;x-amz-date');
+  } finally {
+    upstream.close();
+    upstream2.close();
+  }
+});
+
+test('MinioClient.getObject relays a 304 from upstream with no body expectation', async () => {
+  const upstream = await startUpstream((req, res) => {
+    res.writeHead(304, {});
+    res.end();
+  });
+  try {
+    const { port } = upstream.address();
+    const client = new MinioClient({
+      endpoint: `http://127.0.0.1:${port}`,
+      accessKey: 'ak',
+      secretKey: 'sk',
+      bucket: 'hiclaw-storage',
+    });
+    const res = await client.getObject('shared/tasks/t1/meta.json', {
+      conditionalHeaders: { 'if-none-match': '"abc123"' },
+    });
+    assert.equal(res.statusCode, 304);
+  } finally {
+    upstream.close();
+  }
+});
+
 test('MinioClient.listObjects throws on an error status', async () => {
   const upstream = await startUpstream((req, res) => {
     res.writeHead(403, { 'content-type': 'application/xml' });

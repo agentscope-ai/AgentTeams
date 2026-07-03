@@ -248,51 +248,9 @@ func TestCache_HasWorkersDeployed_WorkerCR(t *testing.T) {
 	}
 }
 
-func TestCache_HasWorkersDeployed_TeamLeaderAndWorkers(t *testing.T) {
-	mode := "Remote"
-	leaderTeam := &v1beta1.Team{
-		ObjectMeta: metav1.ObjectMeta{Name: "t-leader", Namespace: "default"},
-		Spec: v1beta1.TeamSpec{
-			Leader: v1beta1.LeaderSpec{
-				Name:          "lead",
-				DeployMode:    &mode,
-				TargetCluster: &v1beta1.TargetClusterSpec{ID: "c-leader", Namespace: "ns"},
-			},
-		},
-	}
-	workerTeam := &v1beta1.Team{
-		ObjectMeta: metav1.ObjectMeta{Name: "t-worker", Namespace: "default"},
-		Spec: v1beta1.TeamSpec{
-			Leader: v1beta1.LeaderSpec{Name: "lead2"},
-			Workers: []v1beta1.TeamWorkerSpec{{
-				Name:          "w",
-				DeployMode:    &mode,
-				TargetCluster: &v1beta1.TargetClusterSpec{ID: "c-worker", Namespace: "ns"},
-			}},
-		},
-	}
-	scheme := newTestScheme(t)
-	ctrl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(leaderTeam, workerTeam).Build()
-	c := NewCache(CacheConfig{
-		CredClient: &fakeCredClient{},
-		CtrlClient: ctrl,
-		Scheme:     scheme,
-	})
-
-	for _, id := range []string{"c-leader", "c-worker"} {
-		got, err := c.hasWorkersDeployed(context.Background(), id)
-		if err != nil {
-			t.Fatalf("hasWorkersDeployed(%s): %v", id, err)
-		}
-		if !got {
-			t.Errorf("expected hasWorkersDeployed=true for cluster %s", id)
-		}
-	}
-}
-
 // TestCache_Maintain_RemovesUnused exercises the maintenance loop logic
 // directly (without StartMaintenanceLoop) — entries near expiration with
-// no referencing Workers/Teams must be evicted.
+// no referencing Workers must be evicted.
 func TestCache_Maintain_RemovesUnused(t *testing.T) {
 	cred := &fakeCredClient{
 		kubeconfig: testKubeconfig,
@@ -304,8 +262,8 @@ func TestCache_Maintain_RemovesUnused(t *testing.T) {
 	}
 
 	// Force expiration to be within the renew threshold so maintain()
-	// considers it. With no Workers/Teams referencing c-stale, the entry
-	// must be removed.
+	// considers it. With no Workers referencing c-stale, the entry must be
+	// removed.
 	c.mu.Lock()
 	c.entries["c-stale"].Expiration = time.Now().Add(30 * time.Minute)
 	c.mu.Unlock()
@@ -316,7 +274,7 @@ func TestCache_Maintain_RemovesUnused(t *testing.T) {
 	_, exists := c.entries["c-stale"]
 	c.mu.RUnlock()
 	if exists {
-		t.Error("maintain() should remove entries with no referencing Worker/Team CRs")
+		t.Error("maintain() should remove entries with no referencing Worker CRs")
 	}
 }
 

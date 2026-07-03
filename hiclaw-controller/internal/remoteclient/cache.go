@@ -336,8 +336,8 @@ func (c *Cache) startRemoteCache(ctx context.Context, restCfg *rest.Config, clus
 	return nil
 }
 
-// hasWorkersDeployed checks whether any Worker or Team CR references the given
-// cluster as a remote deployment target.
+// hasWorkersDeployed checks whether any Worker CR references the given cluster
+// as a remote deployment target.
 func (c *Cache) hasWorkersDeployed(ctx context.Context, clusterID string) (bool, error) {
 	// List Workers with spec.deployMode=Remote and spec.targetCluster.id=clusterID.
 	var workers v1beta1.WorkerList
@@ -351,23 +351,6 @@ func (c *Cache) hasWorkersDeployed(ctx context.Context, clusterID string) (bool,
 		}
 	}
 
-	// List Teams and check leader + workers.
-	var teams v1beta1.TeamList
-	if err := c.ctrlClient.List(ctx, &teams); err != nil {
-		return false, err
-	}
-	for _, t := range teams.Items {
-		if t.Spec.Leader.DeployMode != nil && *t.Spec.Leader.DeployMode == v1beta1.DeployModeRemote &&
-			t.Spec.Leader.TargetCluster != nil && t.Spec.Leader.TargetCluster.ID == clusterID {
-			return true, nil
-		}
-		for _, w := range t.Spec.Workers {
-			if w.DeployMode != nil && *w.DeployMode == v1beta1.DeployModeRemote &&
-				w.TargetCluster != nil && w.TargetCluster.ID == clusterID {
-				return true, nil
-			}
-		}
-	}
 	return false, nil
 }
 

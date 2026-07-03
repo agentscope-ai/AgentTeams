@@ -18,11 +18,24 @@
 #   --header "Key: Value"   Repeatable. Auth header(s) to forward to the backend MCP server.
 #                           Examples: --header "Authorization: Bearer xxx"
 #                                     --header "X-API-Key: my-key"
+#   --consumers <csv>       Authorize exactly this comma-separated consumer list in Step 5
+#                           instead of broadcasting to every registry worker (e.g. for a
+#                           per-worker server). Implies --skip-worker-broadcast's mcporter
+#                           side-effects are limited to the given consumer names.
+#   --skip-worker-broadcast Skip Step 5 entirely (no all-workers consumer PUT, no
+#                           workers-registry.json mcporter rewrite). Used by callers
+#                           (e.g. provision-worker-gitea.sh, #12/#14) that own their own
+#                           narrow, single-consumer authorization out-of-band.
+#
+#   Default behavior (no --consumers / --skip-worker-broadcast) is unchanged: Step 5
+#   still authorizes every worker in workers-registry.json and rewrites every worker's
+#   config/mcporter.json.
 #
 # Examples:
 #   bash setup-mcp-proxy.sh sentry https://mcp.sentry.dev/mcp http
 #   bash setup-mcp-proxy.sh notion https://mcp.notion.com/mcp http --header "Authorization: Bearer ntn_xxx"
 #   bash setup-mcp-proxy.sh asana https://mcp.asana.com/sse sse --header "X-API-Key: my-key"
+#   bash setup-mcp-proxy.sh gitea-alice https://gitea-mcp:8080 http --header "Authorization: Bearer <PAT>" --skip-worker-broadcast
 #
 # Prerequisites:
 #   - HIGRESS_COOKIE_FILE env var (session cookie for Higress Console)
@@ -38,6 +51,8 @@ SERVER_NAME=""
 MCP_URL=""
 TRANSPORT=""
 HEADERS=()
+CONSUMERS_CSV=""
+SKIP_WORKER_BROADCAST="false"
 
 POSITIONAL=()
 while [ $# -gt 0 ]; do
@@ -45,6 +60,14 @@ while [ $# -gt 0 ]; do
         --header)
             HEADERS+=("${2:-}")
             shift 2
+            ;;
+        --consumers)
+            CONSUMERS_CSV="${2:-}"
+            shift 2
+            ;;
+        --skip-worker-broadcast)
+            SKIP_WORKER_BROADCAST="true"
+            shift
             ;;
         *)
             POSITIONAL+=("$1")
@@ -325,6 +348,15 @@ fi
 # ============================================================
 # Step 5: Authorize existing Workers and update their configs
 # ============================================================
+if [ "${SKIP_WORKER_BROADCAST}" = "true" ]; then
+    log "Step 5: Skipped (--skip-worker-broadcast) — caller owns consumer authorization for ${MCP_SERVER_NAME}"
+elif [ -n "${CONSUMERS_CSV}" ]; then
+    log "Step 5: Authorizing explicit consumer list for ${MCP_SERVER_NAME}..."
+    CONSUMER_LIST=$(printf '%s' "${CONSUMERS_CSV}" | jq -R 'split(",") | map(select(length > 0))')
+    higress_api PUT /v1/mcpServer/consumers "Authorizing consumers for ${MCP_SERVER_NAME}" \
+        '{"mcpServerName":"'"${MCP_SERVER_NAME}"'","consumers":'"${CONSUMER_LIST}"'}'
+    log "  (--consumers given: skipping the all-workers mcporter rewrite)"
+else
 log "Step 5: Authorizing existing Workers for ${MCP_SERVER_NAME}..."
 REGISTRY_FILE="${HOME}/workers-registry.json"
 if [ -f "${REGISTRY_FILE}" ]; then
@@ -384,6 +416,7 @@ if [ -f "${REGISTRY_FILE}" ]; then
     done
 else
     log "  No workers-registry.json found, skipping Worker authorization"
+fi
 fi
 
 log "${MCP_SERVER_NAME} proxy setup complete"

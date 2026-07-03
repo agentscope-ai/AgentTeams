@@ -18,6 +18,8 @@
 //   POST /api/workers/{name}/wake           -> controller POST /api/v1/workers/{name}/wake
 //   POST /api/workers/{name}/sleep          -> controller POST /api/v1/workers/{name}/sleep
 //   POST /api/workers/{name}/ensure-ready   -> controller POST /api/v1/workers/{name}/ensure-ready
+//   POST /api/managers/{name}/message       -> controller POST /api/v1/managers/{name}/message
+//   POST /api/teams/{name}/message          -> controller POST /api/v1/teams/{name}/message
 // Everything else -> not allowed (404 for unknown path shapes, 405 for a
 // known path with a disallowed method).
 //
@@ -26,6 +28,11 @@
 const CONTROLLER_LIST_KINDS = new Set(['managers', 'teams', 'workers', 'manager-tasks', 'projects']);
 
 const WRITE_ACTIONS = new Set(['wake', 'sleep', 'ensure-ready']);
+
+// Kinds that support the message-injection write (plan Milestone 3, Step 1 --
+// docs/implementation-milestone-3.md "Step 1"). Path shape only:
+// /api/<managers|teams>/{name}/message.
+const MESSAGE_KINDS = new Set(['managers', 'teams']);
 
 // MinIO-backed prefixes the file/task browsers may read under.
 const MINIO_ALLOWED_ROOTS = new Set(['shared', 'agents']);
@@ -93,6 +100,36 @@ function classify(method, pathname) {
     };
   }
 
+  // /api/managers|teams/{name}/message -> controller POST (write, logged).
+  // The OUTER condition checks ONLY the path shape (never the method) so a
+  // GET to this exact shape falls through to the branch below it and is
+  // rejected there (405, since GET IS a valid method for the shorter
+  // "/api/managers|teams/..." GET-passthrough shape) rather than being
+  // mis-routed as a controller GET passthrough for a path the controller
+  // doesn't actually serve as GET. This exactly mirrors the WRITE_ACTIONS
+  // branch above: shape-match the outer condition, method-check inside.
+  if (
+    MESSAGE_KINDS.has(segments[1]) &&
+    segments.length === 4 &&
+    segments[3] === 'message'
+  ) {
+    if (method !== 'POST') return { ok: false, status: 405 };
+    const targetKind = segments[1];
+    const targetName = segments[2];
+    if (!targetName) return { ok: false, status: 404 };
+    return {
+      ok: true,
+      route: {
+        target: 'controller',
+        kind: 'write',
+        controllerPath: `/api/v1/${targetKind}/${encodeURIComponent(targetName)}/message`,
+        action: 'message',
+        targetKind,
+        targetName,
+      },
+    };
+  }
+
   // /api/managers|teams|workers|manager-tasks|projects[/...]  -> controller GET passthrough
   if (CONTROLLER_LIST_KINDS.has(segments[1])) {
     if (method !== 'GET') return { ok: false, status: 405 };
@@ -141,4 +178,4 @@ function normalizeMinioKey(segments) {
   return key;
 }
 
-module.exports = { classify, MINIO_ALLOWED_ROOTS, WRITE_ACTIONS };
+module.exports = { classify, MINIO_ALLOWED_ROOTS, WRITE_ACTIONS, MESSAGE_KINDS };

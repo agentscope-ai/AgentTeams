@@ -46,4 +46,20 @@ export const api = {
   wake: (name) => request(`/api/workers/${encodeURIComponent(name)}/wake`, { method: 'POST' }),
   sleep: (name) => request(`/api/workers/${encodeURIComponent(name)}/sleep`, { method: 'POST' }),
   ensureReady: (name) => request(`/api/workers/${encodeURIComponent(name)}/ensure-ready`, { method: 'POST' }),
+
+  // Message injection (v1.5). Posts a system-level message into the
+  // manager's admin DM room, or the team's leader room. 409 means the room
+  // isn't provisioned yet -- callers should surface that distinctly.
+  messageManager: (name, body) =>
+    request(`/api/managers/${encodeURIComponent(name)}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    }),
+  messageTeam: (name, body) =>
+    request(`/api/teams/${encodeURIComponent(name)}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    }),
 };

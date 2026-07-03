@@ -50,6 +50,42 @@ export function confirmAction(message) {
   });
 }
 
+/**
+ * promptMessage opens a textarea dialog and resolves with the entered text,
+ * or null if the operator cancelled or submitted empty text.
+ */
+export function promptMessage(title) {
+  const dialog = document.getElementById('message-dialog');
+  const titleEl = document.getElementById('message-dialog-title');
+  const textarea = document.getElementById('message-body');
+  const cancelBtn = document.getElementById('message-cancel');
+  titleEl.textContent = title;
+  textarea.value = '';
+
+  return new Promise((resolve) => {
+    function onCancel() {
+      cleanup();
+      dialog.close();
+      resolve(null);
+    }
+    function onSubmit(ev) {
+      ev.preventDefault();
+      cleanup();
+      dialog.close();
+      const value = textarea.value.trim();
+      resolve(value.length > 0 ? value : null);
+    }
+    function cleanup() {
+      cancelBtn.removeEventListener('click', onCancel);
+      dialog.querySelector('#message-form').removeEventListener('submit', onSubmit);
+    }
+    cancelBtn.addEventListener('click', onCancel);
+    dialog.querySelector('#message-form').addEventListener('submit', onSubmit);
+    dialog.showModal();
+    textarea.focus();
+  });
+}
+
 export function badgeClass(phaseOrState) {
   const v = String(phaseOrState || '').toLowerCase();
   if (['ready', 'running', 'completed', 'active'].includes(v)) return 'badge-ready';

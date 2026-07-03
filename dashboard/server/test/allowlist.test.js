@@ -113,3 +113,45 @@ test('/docker/ is never routable', () => {
   assert.equal(d.ok, false);
   assert.equal(d.status, 404);
 });
+
+test('POST /api/managers|teams/{name}/message classify as controller writes', () => {
+  for (const kind of ['managers', 'teams']) {
+    const d = classify('POST', `/api/${kind}/alice/message`);
+    assert.equal(d.ok, true, `${kind} message should be allowed`);
+    assert.equal(d.route.target, 'controller');
+    assert.equal(d.route.kind, 'write');
+    assert.equal(d.route.controllerPath, `/api/v1/${kind}/alice/message`);
+    assert.equal(d.route.action, 'message');
+    assert.equal(d.route.targetKind, kind);
+    assert.equal(d.route.targetName, 'alice');
+  }
+});
+
+test('GET on the message path is rejected (write-only route)', () => {
+  for (const kind of ['managers', 'teams']) {
+    const d = classify('GET', `/api/${kind}/alice/message`);
+    assert.equal(d.ok, false);
+    assert.equal(d.status, 405);
+  }
+});
+
+test('POST /api/managers/x/message/extra (5 segments) falls through to the list-kinds branch and 405s', () => {
+  // validator-verified: this is NOT a 404 -- the 5-segment path still starts
+  // with a CONTROLLER_LIST_KINDS segment[1], so it falls to the GET-passthrough
+  // branch below the message branch, which rejects non-GET with 405.
+  const d = classify('POST', '/api/managers/x/message/extra');
+  assert.equal(d.ok, false);
+  assert.equal(d.status, 405);
+});
+
+test('message path segment names stay encodeURIComponent-escaped', () => {
+  const d = classify('POST', '/api/managers/a b/message');
+  assert.equal(d.ok, true);
+  assert.equal(d.route.controllerPath, '/api/v1/managers/a%20b/message');
+});
+
+test('message action requires exactly the "message" literal at the 4th segment', () => {
+  const d = classify('POST', '/api/managers/alice/other-action');
+  assert.equal(d.ok, false);
+  assert.equal(d.status, 405); // falls through to list-kinds GET-passthrough branch, non-GET
+});

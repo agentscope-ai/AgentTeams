@@ -2,6 +2,17 @@
 
 const { classify } = require('./allowlist');
 
+// Cap on request bodies read for allow-listed writes (plan Milestone 3,
+// Step 1). Message bodies are operator-typed chat instructions -- there is
+// no legitimate reason for one to approach this, and an unbounded read is a
+// memory-exhaustion vector for the proxy process.
+const MAX_BODY_BYTES = 64 * 1024;
+
+// Audit-log body preview cap (plan Milestone 3, Step 1, decision #17): the
+// preview exists to help an operator recognize *which* message a log line
+// refers to without ever persisting the full (possibly sensitive) body.
+const BODY_PREVIEW_MAX_CHARS = 120;
+
 /**
  * createRequestHandler builds a Node http(s) request listener.
  *
@@ -55,18 +66,38 @@ function createRequestHandler(deps) {
       if (route.target === 'controller') {
         let body;
         if (route.kind === 'write') {
-          body = await readBody(req);
+          try {
+            body = await readBody(req, MAX_BODY_BYTES);
+          } catch (err) {
+            if (err && err.code === 'BODY_TOO_LARGE') {
+              sendJson(res, 413, { error: 'request body too large' });
+              return;
+            }
+            throw err;
+          }
         }
         const controllerPath = route.controllerPath + (url.search || '');
         const upstream = await controllerClient.request(method, controllerPath, body);
 
         if (route.kind === 'write') {
-          logWrite({
-            action: route.action,
-            worker: route.workerName,
-            status: upstream.statusCode,
-            remoteAddr: req.socket ? req.socket.remoteAddress : undefined,
-          });
+          if (route.action === 'message') {
+            logWrite({
+              action: 'message',
+              kind: route.targetKind,
+              target: route.targetName,
+              status: upstream.statusCode,
+              remoteAddr: req.socket ? req.socket.remoteAddress : undefined,
+              bodyLen: body ? body.length : 0,
+              bodyPreview: bodyPreview(body),
+            });
+          } else {
+            logWrite({
+              action: route.action,
+              worker: route.workerName,
+              status: upstream.statusCode,
+              remoteAddr: req.socket ? req.socket.remoteAddress : undefined,
+            });
+          }
         }
 
         relayJson(res, upstream);
@@ -128,13 +159,49 @@ function guessContentType(key) {
   return 'application/octet-stream';
 }
 
-function readBody(req) {
+/**
+ * readBody buffers the request body, rejecting with a `BODY_TOO_LARGE`-coded
+ * error (never resolving, never calling the upstream) once more than
+ * `maxBytes` have been received.
+ */
+function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+    let total = 0;
+    let rejected = false;
+    req.on('data', (c) => {
+      if (rejected) return;
+      total += c.length;
+      if (typeof maxBytes === 'number' && total > maxBytes) {
+        rejected = true;
+        const err = new Error('request body too large');
+        err.code = 'BODY_TOO_LARGE';
+        reject(err);
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (rejected) return;
+      resolve(Buffer.concat(chunks));
+    });
+    req.on('error', (err) => {
+      if (rejected) return;
+      reject(err);
+    });
   });
+}
+
+/**
+ * bodyPreview renders a truncated, log-safe preview of a request body for
+ * the audit trail. Never returns the full body -- callers must not log
+ * `body` itself (plan #17: message bodies may carry sensitive instructions).
+ */
+function bodyPreview(body) {
+  if (!body || body.length === 0) return '';
+  const text = body.toString('utf8');
+  if (text.length <= BODY_PREVIEW_MAX_CHARS) return text;
+  return text.slice(0, BODY_PREVIEW_MAX_CHARS);
 }
 
 function relayJson(res, upstream) {

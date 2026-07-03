@@ -5,6 +5,13 @@ served behind a same-origin proxy. See
 [`docs/implementation-milestone-2.md`](../docs/implementation-milestone-2.md)
 ("Step 3 — Dashboard v1...") for the full contract this implements.
 
+Milestone 3, Step 1 adds **v1.5**: a message-injection UI (Message button on
+Manager/Team cards) wired to the `POST .../message` controller routes that
+have existed since M1, plus the matching scoped proxy-allowlist extension and
+audit-log entries. See
+[`docs/implementation-milestone-3.md`](../docs/implementation-milestone-3.md)
+("Step 1 — Dashboard v1.5...") for the full contract.
+
 ## Layout
 
 - `server/` — a small, near-zero-dependency Node proxy (`node:http` + a
@@ -39,10 +46,19 @@ browser without exposing that token client-side. The proxy:
    - `GET /api/files/<shared|agents>/<...>` → MinIO, rooted at `shared/` or
      `agents/` only (path-traversal guarded — see the allowlist tests).
    - `POST /api/workers/{name}/wake|sleep|ensure-ready` → controller
-     `POST /api/v1/workers/{name}/...` — **the only writes allowed**, each
-     one logged server-side (`server/src/request-log.js`) as a JSON line
-     with timestamp, action, worker name, and resulting status code (the
-     #17 audit trail).
+     `POST /api/v1/workers/{name}/...` — logged server-side
+     (`server/src/request-log.js`) as a JSON line with timestamp, action,
+     worker name, and resulting status code (the #17 audit trail).
+   - `POST /api/managers/{name}/message` and `POST /api/teams/{name}/message`
+     (added in M3 Step 1) → controller `POST /api/v1/managers|teams/{name}/message`
+     — injects an operator-authored message into the manager's admin DM room
+     or the team's leader room (409 if that room isn't provisioned yet).
+     Request bodies are capped at **64 KB** (413 over the cap, no upstream
+     call made). Logged as a JSON line with timestamp, `action:"message"`,
+     `kind` (`"managers"`|`"teams"`), `target` (the manager/team name),
+     status code, and `bodyLen` + a **`bodyPreview` truncated to ≤120
+     chars** — the full message body is never written to the log, only
+     this preview.
    - Everything else is rejected: unknown path shapes → `404`; a disallowed
      method on a known path shape → `405`.
    - `/docker/` (the controller's embedded-mode Docker socket passthrough)
@@ -134,8 +150,12 @@ production build.
 - File browser under `shared/` and `agents/` (list + read; no upload/delete).
 - Wake / Sleep / Ensure Ready buttons on worker cards, each behind a
   confirm dialog, calling the three allow-listed write routes.
+- **(M3 Step 1 / v1.5)** Message buttons on Manager and Team cards, opening a
+  textarea dialog and posting to the two message-injection routes above.
+  Success toasts the destination room id; a `409` (room not provisioned yet)
+  is surfaced as a distinct, friendlier error rather than a generic failure.
 
-**Deferred to M3** (already possible against existing controller endpoints,
-but out of scope for this step): message-injection UI (v1.5), kanban/DAG +
-task-detail (v2), cross-instance fan-out, ETag conditional-GET,
-observability kit, Gitea API context panels.
+**Deferred to M3 later steps** (already possible against existing controller
+endpoints, but out of scope for this step): kanban/DAG + task-detail (v2),
+cross-instance fan-out, ETag conditional-GET, observability kit, Gitea API
+context panels.

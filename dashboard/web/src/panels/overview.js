@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { startPolling } from '../poll.js';
-import { escapeHtml, showToast, confirmAction, badgeClass } from '../ui.js';
+import { escapeHtml, showToast, confirmAction, promptMessage, badgeClass } from '../ui.js';
 
 const POLL_MANAGERS_TEAMS_MS = 15000;
 const POLL_WORKERS_MS = 30000; // workers list does a live backend Status() call per member -- slower cadence
@@ -76,7 +76,7 @@ function renderManagerCards(el, managers) {
   el.innerHTML = managers
     .map(
       (m) => `
-    <div class="card">
+    <div class="card" data-manager="${escapeHtml(m.name)}">
       <div class="card-header">
         <span class="card-name">${escapeHtml(m.name)}</span>
         <span class="badge ${badgeClass(m.phase)}">${escapeHtml(m.phase)}</span>
@@ -87,9 +87,16 @@ function renderManagerCards(el, managers) {
         State: ${escapeHtml(m.state || 'unknown')}<br/>
         Welcome sent: ${m.welcomeSent ? 'yes' : 'no'}
       </div>
+      <div class="card-actions">
+        <button class="action-btn" data-message-kind="manager" data-name="${escapeHtml(m.name)}">Message</button>
+      </div>
     </div>`,
     )
     .join('');
+
+  el.querySelectorAll('button[data-message-kind]').forEach((btn) => {
+    btn.addEventListener('click', () => onMessageAction(btn));
+  });
 }
 
 function renderTeamCards(el, teams) {
@@ -100,7 +107,7 @@ function renderTeamCards(el, teams) {
   el.innerHTML = teams
     .map(
       (t) => `
-    <div class="card">
+    <div class="card" data-team="${escapeHtml(t.name)}">
       <div class="card-header">
         <span class="card-name">${escapeHtml(t.name)}</span>
         <span class="badge ${badgeClass(t.phase)}">${escapeHtml(t.phase)}</span>
@@ -110,9 +117,16 @@ function renderTeamCards(el, teams) {
         Workers ready: ${t.readyWorkers ?? 0} / ${t.totalWorkers ?? 0}<br/>
         Leader ready: ${t.leaderReady ? 'yes' : 'no'}
       </div>
+      <div class="card-actions">
+        <button class="action-btn" data-message-kind="team" data-name="${escapeHtml(t.name)}">Message</button>
+      </div>
     </div>`,
     )
     .join('');
+
+  el.querySelectorAll('button[data-message-kind]').forEach((btn) => {
+    btn.addEventListener('click', () => onMessageAction(btn));
+  });
 }
 
 function renderWorkerCards(el, workers) {
@@ -145,6 +159,27 @@ function renderWorkerCards(el, workers) {
   el.querySelectorAll('button.action-btn').forEach((btn) => {
     btn.addEventListener('click', () => onWorkerAction(btn));
   });
+}
+
+async function onMessageAction(btn) {
+  const kind = btn.dataset.messageKind; // 'manager' | 'team'
+  const name = btn.dataset.name;
+  const body = await promptMessage(`Send a message to ${kind} "${name}":`);
+  if (!body) return;
+
+  btn.disabled = true;
+  try {
+    const res = kind === 'manager' ? await api.messageManager(name, body) : await api.messageTeam(name, body);
+    showToast(`${name}: message sent to ${res.roomID}`);
+  } catch (err) {
+    if (err.status === 409) {
+      showToast(`${name}: room not provisioned yet`, { error: true });
+    } else {
+      showToast(`${name}: message failed -- ${err.message}`, { error: true });
+    }
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function onWorkerAction(btn) {

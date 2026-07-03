@@ -354,6 +354,23 @@ dialog::backdrop {
   color: white;
 }
 
+#message-dialog {
+  max-width: 480px;
+  width: 100%;
+}
+
+#message-body {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+}
+
 .muted {
   color: var(--text-dim);
 }

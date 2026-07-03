@@ -220,6 +220,127 @@ test('path traversal on /api/files is rejected before touching MinIO', async () 
   }
 });
 
+test('POST /api/managers/{name}/message forwards the body verbatim and logs an audit line', async () => {
+  const controllerClient = fakeControllerClient({ statusCode: 200, body: '{"roomID":"!room:x","sent":true}' });
+  const minioClient = fakeMinioClient();
+  const logs = [];
+  const server = await startServer({ controllerClient, minioClient, logWrite: (e) => logs.push(e) });
+  try {
+    const payload = JSON.stringify({ body: 'please pause new task intake' });
+    const res = await request(server, 'POST', '/api/managers/alice/message', payload);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(JSON.parse(res.body), { roomID: '!room:x', sent: true });
+    assert.equal(controllerClient.calls[0].method, 'POST');
+    assert.equal(controllerClient.calls[0].path, '/api/v1/managers/alice/message');
+    assert.equal(controllerClient.calls[0].body, payload);
+
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].action, 'message');
+    assert.equal(logs[0].kind, 'managers');
+    assert.equal(logs[0].target, 'alice');
+    assert.equal(logs[0].status, 200);
+    assert.equal(logs[0].bodyLen, Buffer.byteLength(payload));
+    assert.equal(logs[0].bodyPreview, payload);
+    assert.ok(!('body' in logs[0]), 'the full body must never be logged');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/teams/{name}/message works the same as managers', async () => {
+  const controllerClient = fakeControllerClient({ statusCode: 200, body: '{"roomID":"!team:x","sent":true}' });
+  const minioClient = fakeMinioClient();
+  const logs = [];
+  const server = await startServer({ controllerClient, minioClient, logWrite: (e) => logs.push(e) });
+  try {
+    const payload = JSON.stringify({ body: 'ship the hotfix first' });
+    const res = await request(server, 'POST', '/api/teams/backend/message', payload);
+    assert.equal(res.statusCode, 200);
+    assert.equal(controllerClient.calls[0].path, '/api/v1/teams/backend/message');
+    assert.equal(logs[0].kind, 'teams');
+    assert.equal(logs[0].target, 'backend');
+  } finally {
+    server.close();
+  }
+});
+
+test('message audit log preview is truncated to 120 chars, bodyLen reflects the full body', async () => {
+  const controllerClient = fakeControllerClient({ statusCode: 200, body: '{"roomID":"!r","sent":true}' });
+  const minioClient = fakeMinioClient();
+  const logs = [];
+  const server = await startServer({ controllerClient, minioClient, logWrite: (e) => logs.push(e) });
+  try {
+    const longBody = 'x'.repeat(500);
+    const payload = JSON.stringify({ body: longBody });
+    const res = await request(server, 'POST', '/api/managers/alice/message', payload);
+    assert.equal(res.statusCode, 200);
+    assert.equal(logs[0].bodyPreview.length, 120);
+    assert.equal(logs[0].bodyLen, Buffer.byteLength(payload));
+  } finally {
+    server.close();
+  }
+});
+
+test('409/400 from the controller relay through unchanged for message routes', async () => {
+  const controllerClient = fakeControllerClient({
+    statusCode: 409,
+    body: '{"error":"manager admin DM room is not provisioned yet"}',
+  });
+  const minioClient = fakeMinioClient();
+  const server = await startServer({ controllerClient, minioClient, logWrite: () => {} });
+  try {
+    const res = await request(server, 'POST', '/api/managers/alice/message', JSON.stringify({ body: 'hi' }));
+    assert.equal(res.statusCode, 409);
+    assert.deepEqual(JSON.parse(res.body), { error: 'manager admin DM room is not provisioned yet' });
+  } finally {
+    server.close();
+  }
+});
+
+test('GET on a message path is rejected before reaching controllerClient', async () => {
+  const controllerClient = fakeControllerClient();
+  const minioClient = fakeMinioClient();
+  const server = await startServer({ controllerClient, minioClient, logWrite: () => {} });
+  try {
+    const res = await request(server, 'GET', '/api/managers/alice/message');
+    assert.equal(res.statusCode, 405);
+    assert.equal(controllerClient.calls.length, 0);
+  } finally {
+    server.close();
+  }
+});
+
+test('oversized message body is rejected with 413 and never reaches the controller', async () => {
+  const controllerClient = fakeControllerClient();
+  const minioClient = fakeMinioClient();
+  const server = await startServer({ controllerClient, minioClient, logWrite: () => {} });
+  try {
+    const oversized = JSON.stringify({ body: 'x'.repeat(70 * 1024) });
+    const res = await request(server, 'POST', '/api/managers/alice/message', oversized);
+    assert.equal(res.statusCode, 413);
+    assert.equal(controllerClient.calls.length, 0);
+  } finally {
+    server.close();
+  }
+});
+
+test('token never appears in message-route response headers/body', async () => {
+  const controllerClient = fakeControllerClient({
+    statusCode: 200,
+    body: '{"roomID":"!r","sent":true}',
+    headers: { 'x-upstream': 'yes' },
+  });
+  const minioClient = fakeMinioClient();
+  const server = await startServer({ controllerClient, minioClient, logWrite: () => {} });
+  try {
+    const res = await request(server, 'POST', '/api/managers/alice/message', JSON.stringify({ body: 'hi' }));
+    assert.equal(res.headers.authorization, undefined);
+    assert.ok(!res.body.includes('Bearer'));
+  } finally {
+    server.close();
+  }
+});
+
 test('/docker/ is never proxied even with a static file resolver present', async () => {
   const controllerClient = fakeControllerClient();
   const minioClient = fakeMinioClient();

@@ -65,7 +65,10 @@
           { "id": "glm-5",             "name": "glm-5",             "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] },
           { "id": "MiniMax-M2.7",      "name": "MiniMax-M2.7",      "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] },
           { "id": "MiniMax-M2.7-highspeed", "name": "MiniMax-M2.7-highspeed", "reasoning": true, "contextWindow": 200000, "maxTokens": 128000, "input": ["text"] },
-          { "id": "MiniMax-M2.5",      "name": "MiniMax-M2.5",      "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] }
+          { "id": "MiniMax-M2.5",      "name": "MiniMax-M2.5",      "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] },
+          { "id": "ollama/gpt-oss:120b-cloud", "name": "ollama/gpt-oss:120b-cloud", "reasoning": true, "contextWindow": 128000, "maxTokens": 32000, "input": ["text"] },
+          { "id": "mimo/MiMo-V2.5",    "name": "mimo/MiMo-V2.5",    "reasoning": true,  "contextWindow": 128000,  "maxTokens": 32000,  "input": ["text"] },
+          { "id": "mimo/MiMo-V2.5-Pro","name": "mimo/MiMo-V2.5-Pro","reasoning": true,  "contextWindow": 200000,  "maxTokens": 64000,  "input": ["text"] }
         ]
       }
     }
@@ -93,7 +96,10 @@
         "hiclaw-gateway/glm-5":             { "alias": "glm-5" },
         "hiclaw-gateway/MiniMax-M2.7":      { "alias": "MiniMax-M2.7" },
         "hiclaw-gateway/MiniMax-M2.7-highspeed": { "alias": "MiniMax-M2.7-highspeed" },
-        "hiclaw-gateway/MiniMax-M2.5":      { "alias": "MiniMax-M2.5" }
+        "hiclaw-gateway/MiniMax-M2.5":      { "alias": "MiniMax-M2.5" },
+        "hiclaw-gateway/ollama/gpt-oss:120b-cloud": { "alias": "ollama/gpt-oss:120b-cloud" },
+        "hiclaw-gateway/mimo/MiMo-V2.5":     { "alias": "mimo/MiMo-V2.5" },
+        "hiclaw-gateway/mimo/MiMo-V2.5-Pro": { "alias": "mimo/MiMo-V2.5-Pro" }
       },
       "maxConcurrent": 8,
       "subagents": {
@@ -101,7 +107,7 @@
       },
       "elevatedDefault": "full",
       "heartbeat": {
-        "every": "1h",
+        "every": "${HICLAW_MANAGER_HEARTBEAT_INTERVAL}",
         "prompt": "Read ~/HEARTBEAT.md and follow the checklist. Scan ~/hiclaw-fs/shared/tasks/*/meta.json to find tasks with status=assigned. For each, read assigned_to and room_id, then ask the Worker for progress in their Room (the human admin can see the inquiry). If a Worker confirms completion, update meta.json to status=completed with completed_at. Also scan ~/hiclaw-fs/shared/projects/*/meta.json for active projects — for each, read plan.md and check if any in-progress ([~]) tasks have stalled (no recent @mention from the assigned Worker); if stalled, @mention the Worker in the project room asking for a status update. Assess capacity vs pending tasks. Reply HEARTBEAT_OK if nothing needs attention."
       }
     }

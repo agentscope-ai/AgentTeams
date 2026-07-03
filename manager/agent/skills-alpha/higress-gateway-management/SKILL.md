@@ -118,7 +118,7 @@ curl -X POST http://127.0.0.1:8001/v1/ai/routes \
   }'
 ```
 
-When adding a new provider route with `modelPredicates`, also update the `default-ai-route` to add matching `modelPredicates` for its own models, so routes are unambiguous.
+**Never update `default-ai-route` to add a new provider's `modelPredicates`.** `default-ai-route` is rewritten on every Manager boot (`manager/scripts/init/setup-higress.sh:253-281`), so any manual edit to it would be silently clobbered at the next restart. Instead, keep the new provider entirely on its own route (own name, own `modelPredicate` prefix like `"deepseek/"`) — that alone makes the routes unambiguous, with nothing to touch on `default-ai-route`. This is the same rule `setup-higress.sh`'s extra-provider loop follows (`:288-386`) and what the `provider-management` skill's `register-provider.sh` automates end-to-end (service-source + provider + `hiclaw-<name>-route`) — prefer that skill for adding a provider from chat; use the manual steps here only when the console API needs deeper inspection.
 
 Key fields:
 - **domains**: which domain(s) this AI route serves (e.g. `${HICLAW_AI_GATEWAY_DOMAIN}`)

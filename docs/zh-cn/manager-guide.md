@@ -33,6 +33,7 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `HICLAW_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
 | `HICLAW_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
 | `HICLAW_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`hiclaw-manager` 镜像）或 **`copaw`**（`hiclaw-manager-copaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
+| `HICLAW_SOLO_OPERATOR` | 否 | - | 当只有一位用户独自使用 HiClaw（无多人组织）时设为 `1`/`true`。会跳过 Manager 的 4 项入职访谈问题、强制所有 Team 的 `peerMentions` 为 `true`，并在未指定时将唯一的 Human 的 `permissionLevel` 默认设为 Admin。 |
 
 ### QwenPaw Manager（原 CoPaw，`HICLAW_MANAGER_RUNTIME=copaw`）
 

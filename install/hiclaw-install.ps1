@@ -70,6 +70,29 @@ $script:config = @{}     # Shared config hashtable for step functions
 # ANSI escape character for terminal colors
 $script:ESC = [char]0x1B
 
+# Returns $true if $V1 < $V2 using semver order; "latest" is treated as greatest.
+# Mirrors the bash installer's _ver_lt (install/hiclaw-install.sh) for cross-source parity.
+function Test-VerLt {
+    param([string]$V1, [string]$V2)
+    if ($V1 -eq "latest") { return $false }
+    if ($V2 -eq "latest") { return $true }
+    if ($V1 -eq $V2) { return $false }
+    try {
+        $p1 = ($V1.TrimStart("v") -split '\.') | ForEach-Object { [int]$_ }
+        $p2 = ($V2.TrimStart("v") -split '\.') | ForEach-Object { [int]$_ }
+        for ($i = 0; $i -lt [Math]::Max($p1.Length, $p2.Length); $i++) {
+            $a = if ($i -lt $p1.Length) { $p1[$i] } else { 0 }
+            $b = if ($i -lt $p2.Length) { $p2[$i] } else { 0 }
+            if ($a -lt $b) { return $true }
+            if ($a -gt $b) { return $false }
+        }
+        return $false
+    } catch {
+        # Non-semver strings (e.g. commit SHAs): fall back to string comparison.
+        return ($V1 -lt $V2)
+    }
+}
+
 # ============================================================
 # Log all output to file
 # ============================================================
@@ -2209,11 +2232,16 @@ function Step-Runtime {
     Write-Host ""
     Write-Host "  1) $(Get-Msg 'worker_runtime.copaw')"
     Write-Host "  2) $(Get-Msg 'worker_runtime.openclaw')"
-    Write-Host "  3) $(Get-Msg 'worker_runtime.hermes')"
+    $hermesAvailable = -not (Test-VerLt $script:HICLAW_VERSION "v1.1.0")
+    if ($hermesAvailable) {
+        Write-Host "  3) $(Get-Msg 'worker_runtime.hermes')"
+    }
     Write-Host ""
 
+    $defaultRuntime = if ($hermesAvailable) { "hermes" } else { "copaw" }
+
     if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "copaw" }
+        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { $defaultRuntime }
     } elseif ($script:HICLAW_UPGRADE -and $env:HICLAW_DEFAULT_WORKER_RUNTIME) {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "worker_runtime.title_short"), $env:HICLAW_DEFAULT_WORKER_RUNTIME)
         $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
@@ -2221,8 +2249,8 @@ function Step-Runtime {
         if ($rtChoice) {
             $script:config.DEFAULT_WORKER_RUNTIME = switch ($rtChoice) {
                 "2" { "openclaw" }
-                "3" { "hermes" }
-                default { "copaw" }
+                "3" { if ($hermesAvailable) { "hermes" } else { "copaw" } }
+                default { $defaultRuntime }
             }
         } else {
             $script:config.DEFAULT_WORKER_RUNTIME = $env:HICLAW_DEFAULT_WORKER_RUNTIME
@@ -2235,8 +2263,8 @@ function Step-Runtime {
         $rtChoice = if ($rtChoice) { $rtChoice } else { "1" }
         $script:config.DEFAULT_WORKER_RUNTIME = switch ($rtChoice) {
             "2" { "openclaw" }
-            "3" { "hermes" }
-            default { "copaw" }
+            "3" { if ($hermesAvailable) { "hermes" } else { "copaw" } }
+            default { $defaultRuntime }
         }
     }
     Write-Log (Get-Msg "worker_runtime.selected" -f $script:config.DEFAULT_WORKER_RUNTIME)
@@ -2621,7 +2649,8 @@ function Install-Manager {
         Write-Log (Get-Msg "workspace.dir_label" -f $script:config.WORKSPACE_DIR)
     }
     if (-not $script:config.DEFAULT_WORKER_RUNTIME) {
-        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "copaw" }
+        $_defaultRuntime = if (-not (Test-VerLt $script:HICLAW_VERSION "v1.1.0")) { "hermes" } else { "copaw" }
+        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { $_defaultRuntime }
         Write-Log (Get-Msg "worker_runtime.selected" -f $script:config.DEFAULT_WORKER_RUNTIME)
     }
     if (-not $script:config.MATRIX_E2EE) {

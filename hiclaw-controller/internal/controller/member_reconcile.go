@@ -423,6 +423,14 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		Labels:             labels,
 		Owner:              m.Owner,
 	}
+	if wb.Name() == "docker" {
+		// Members should survive a host/Docker-daemon restart the same way
+		// the Manager container does (manager_reconcile_container.go
+		// applyEmbeddedConfig). K8s Pods have no equivalent restart-policy
+		// concept at this layer (kubelet + Deployment/owner semantics
+		// differ), so this is Docker-only.
+		createReq.RestartPolicy = "unless-stopped"
+	}
 	if wb.Name() != "k8s" {
 		token, err := d.Provisioner.RequestSAToken(ctx, m.Name)
 		if err != nil {

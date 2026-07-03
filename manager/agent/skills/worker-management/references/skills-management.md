@@ -35,5 +35,5 @@ After pushing, the script notifies affected Workers via Matrix @mention to use `
 ## Key facts
 
 - `file-sync`, `task-progress`, `project-participation` are default skills — always included, cannot be removed
-- Skills are Manager-controlled: Workers cannot modify their own skills (local→remote sync excludes `skills/**`)
+- Workers CAN self-install skills locally (e.g. writing a new `~/skills/<name>/` directory persists across syncs). The floor is builtin-only: any skill name the Manager pushes (`push-worker-skills.sh`) is re-overwritten on every sync (~5-minute reconcile, `Overwrite:true`), so Manager-managed skill names always win. Non-builtin, self-installed skill directories that don't collide with a Manager-pushed name are left alone and persist
 - After writing any file a Worker needs, always notify them to `file-sync`

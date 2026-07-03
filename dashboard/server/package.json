@@ -1,0 +1,16 @@
+{
+  "name": "hiclaw-dashboard-server",
+  "version": "1.0.0",
+  "description": "Same-origin proxy for the HiClaw dashboard SPA. Injects the admin token, enforces a scoped read/write allowlist, and never exposes the token to the browser.",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {}
+}

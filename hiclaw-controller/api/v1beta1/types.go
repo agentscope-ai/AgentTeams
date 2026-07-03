@@ -101,7 +101,6 @@ type Worker struct {
 	Status            WorkerStatus `json:"status,omitempty"`
 }
 
-
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
@@ -152,7 +151,6 @@ type WorkerSpec struct {
 	// embed WorkerSpec-shaped hashes keep a stable spec hash when the
 	// field is absent.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // DesiredContainerMan returns the effective desired containerManaged, defaulting to true.
@@ -242,6 +240,15 @@ type TeamSpec struct {
 	Workers       []TeamWorkerSpec   `json:"workers,omitempty"`
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"` // team-wide overrides
+
+	// ModelProvider is the team-wide default APIG Model API name for LLM
+	// provider resolution. Per-agent Leader.ModelProvider / TeamWorkerSpec.
+	// ModelProvider always win when set; this value is used only as a
+	// fallback for members that leave their own field empty. Both empty
+	// preserves the pre-existing authorize-all default behavior.
+	// omitempty keeps hashMemberSourceSpec byte-identical for Teams that
+	// never set this field (see the digest stability contract below).
+	ModelProvider string `json:"modelProvider,omitempty"`
 }
 
 func (s TeamSpec) EffectiveTeamName(metadataName string) string {
@@ -295,7 +302,6 @@ type LeaderSpec struct {
 	// hashMemberSourceSpec stability for Teams that never set this
 	// field.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 type TeamLeaderHeartbeatSpec struct {
@@ -337,7 +343,6 @@ type TeamWorkerSpec struct {
 	// system labels (see WorkerSpec.Labels godoc). omitempty preserves
 	// hashMemberSourceSpec stability for existing Teams.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // EffectiveWorkerName returns the runtime identity key for a team leader.
@@ -545,7 +550,6 @@ type ManagerSpec struct {
 	// godoc): pod-template < CR metadata.labels < CR spec.labels <
 	// controller system labels.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // DesiredState returns the effective desired state, defaulting to "Running".
@@ -588,4 +592,113 @@ type ManagerList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Manager `json:"items"`
+}
+
+// +genclient
+// +kubebuilder:subresource:status
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// Project binds a Team to a working repo (RW) plus optional source repos (RO).
+// Git access is via the existing gitea-mcp with a per-worker Gitea identity (no
+// controller Gitea client): the controller only projects a flat manifest to MinIO
+// at shared/projects/<id>/ and records the assigned workers + per-repo access.
+// RW/RO is enforced via the assigned worker-user's Gitea repo-collaborator role
+// (#13), applied by the provisioning helper (scripts/provision-worker-gitea.sh);
+// the manifest carries the access as the source of that mapping. The CR is
+// source of truth, MinIO is cache (decision #6).
+type Project struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              ProjectSpec   `json:"spec"`
+	Status            ProjectStatus `json:"status,omitempty"`
+}
+
+type ProjectSpec struct {
+	Team        string        `json:"team"` // required — team-scoped (decision #2)
+	Description string        `json:"description,omitempty"`
+	ProjectName string        `json:"projectName,omitempty"` // runtime/storage identity; defaults to metadata.name
+	Repos       []ProjectRepo `json:"repos"`                 // >=1; exactly one SHOULD be access=rw
+	Workers     []string      `json:"workers,omitempty"`     // runtime-names; empty = all members of spec.team
+}
+
+// ProjectRepo binds one repo at a given access level.
+// access=rw|ro is enforced via the assigned worker-user's Gitea repo-collaborator
+// role (#13: ro→read, rw→write), applied by the provisioning helper; carried in
+// the manifest as the source of that mapping. No credential material lives here.
+type ProjectRepo struct {
+	URL    string `json:"url"`
+	Access string `json:"access"`         // rw | ro — enforced via the worker-user's Gitea collaborator role (#13)
+	Name   string `json:"name,omitempty"` // friendly label; defaults to owner/repo slug
+}
+
+// EffectiveProjectName mirrors WorkerSpec.EffectiveWorkerName / TeamSpec.EffectiveTeamName.
+// Empty ProjectName falls back to metadata.name supplied by caller.
+func (s ProjectSpec) EffectiveProjectName(metadataName string) string {
+	if s.ProjectName != "" {
+		return s.ProjectName
+	}
+	return metadataName
+}
+
+type ProjectStatus struct {
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Phase: Pending/Provisioning/Ready/Degraded/Failed are reconciler-computed;
+	// Completed/Archived are operator-set only (decision #18).
+	Phase           string             `json:"phase,omitempty"`
+	Message         string             `json:"message,omitempty"`
+	RepoCount       int                `json:"repoCount,omitempty"`       // backs the Repos printer column
+	RecordedWorkers []string           `json:"recordedWorkers,omitempty"` // workers recorded in the manifest; operator helper (#12) provisions Gitea user/mcp-gitea-<worker>/collaborator role from it
+	Conditions      []ProjectCondition `json:"conditions,omitempty"`
+}
+
+// ProjectCondition mirrors the standard condition idiom.
+// Type is one of ReposResolved|WorkersRecorded|MinIOProjected|LeaderNotified|DeprovisionPending.
+type ProjectCondition struct {
+	Type               string      `json:"type"`
+	Status             string      `json:"status"` // True|False|Unknown
+	Reason             string      `json:"reason,omitempty"`
+	Message            string      `json:"message,omitempty"`
+	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
+}
+
+// ConditionByType returns a pointer to the ProjectCondition entry of the given
+// type, or nil when absent.
+func (s *ProjectStatus) ConditionByType(condType string) *ProjectCondition {
+	for i := range s.Conditions {
+		if s.Conditions[i].Type == condType {
+			return &s.Conditions[i]
+		}
+	}
+	return nil
+}
+
+// SetCondition upserts a condition by type. LastTransitionTime is only bumped
+// when the status actually changes, matching the standard k8s condition
+// idiom (avoids status-patch churn on every reconcile pass).
+func (s *ProjectStatus) SetCondition(condType, status, reason, message string) {
+	now := metav1.Now()
+	if existing := s.ConditionByType(condType); existing != nil {
+		if existing.Status != status {
+			existing.LastTransitionTime = now
+		}
+		existing.Status = status
+		existing.Reason = reason
+		existing.Message = message
+		return
+	}
+	s.Conditions = append(s.Conditions, ProjectCondition{
+		Type:               condType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: now,
+	})
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type ProjectList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Project `json:"items"`
 }

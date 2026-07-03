@@ -74,6 +74,13 @@ type TeamReconciler struct {
 	// to DefaultResourcePrefix ("hiclaw-").
 	ResourcePrefix auth.ResourcePrefix
 	GatewayClient  gateway.Client // gateway client for modelProvider resolution
+
+	// SoloOperator, when true, forces every Team's effective PeerMentions
+	// to true regardless of Team.Spec.PeerMentions — there is only one
+	// human operator, so cross-worker mentions can't leak outside the
+	// org the way they could in a multi-team setup. Sourced from
+	// HICLAW_SOLO_OPERATOR (Config.SoloOperator).
+	SoloOperator bool
 }
 
 type teamAdminActor struct {
@@ -198,6 +205,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		}
 		derivedTeam.Spec.Admin.MatrixUserID = adminActor.MatrixUserID
 	}
+	derivedTeam = forceSoloPeerMentions(derivedTeam, r.SoloOperator)
 
 	// --- Step 1: Team-level infrastructure ---
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
@@ -909,18 +917,24 @@ func memberSpecChanged(t *v1beta1.Team, role MemberRole, name string) bool {
 // JSON key churn.
 func hashMemberSourceSpec(t *v1beta1.Team, role MemberRole, name string) string {
 	type leaderInput struct {
-		Leader     v1beta1.LeaderSpec         `json:"leader"`
-		TeamPolicy *v1beta1.ChannelPolicySpec `json:"teamPolicy,omitempty"`
+		Leader            v1beta1.LeaderSpec         `json:"leader"`
+		TeamPolicy        *v1beta1.ChannelPolicySpec `json:"teamPolicy,omitempty"`
+		TeamModelProvider string                     `json:"teamModelProvider,omitempty"`
 	}
 	type workerInput struct {
-		Worker       v1beta1.TeamWorkerSpec     `json:"worker"`
-		TeamPolicy   *v1beta1.ChannelPolicySpec `json:"teamPolicy,omitempty"`
-		PeerMentions *bool                      `json:"peerMentions,omitempty"`
+		Worker            v1beta1.TeamWorkerSpec     `json:"worker"`
+		TeamPolicy        *v1beta1.ChannelPolicySpec `json:"teamPolicy,omitempty"`
+		PeerMentions      *bool                      `json:"peerMentions,omitempty"`
+		TeamModelProvider string                     `json:"teamModelProvider,omitempty"`
 	}
 	var payload any
 	switch role {
 	case RoleTeamLeader:
-		payload = leaderInput{Leader: t.Spec.Leader, TeamPolicy: t.Spec.ChannelPolicy}
+		payload = leaderInput{
+			Leader:            t.Spec.Leader,
+			TeamPolicy:        t.Spec.ChannelPolicy,
+			TeamModelProvider: t.Spec.ModelProvider,
+		}
 	case RoleTeamWorker:
 		var ws v1beta1.TeamWorkerSpec
 		found := false
@@ -935,9 +949,10 @@ func hashMemberSourceSpec(t *v1beta1.Team, role MemberRole, name string) string 
 			return ""
 		}
 		payload = workerInput{
-			Worker:       ws,
-			TeamPolicy:   t.Spec.ChannelPolicy,
-			PeerMentions: t.Spec.PeerMentions,
+			Worker:            ws,
+			TeamPolicy:        t.Spec.ChannelPolicy,
+			PeerMentions:      t.Spec.PeerMentions,
+			TeamModelProvider: t.Spec.ModelProvider,
 		}
 	default:
 		return ""
@@ -966,9 +981,17 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 	if teamAdminID := teamAdminMatrixID(t); teamAdminID != "" {
 		policy = appendDmAllowExtra(policy, teamAdminID)
 	}
+	// Per-agent ModelProvider always wins; an empty per-agent value falls
+	// back to the team-wide default. Both empty preserves the pre-existing
+	// authorize-all default (higress.go ResolveModelProvider is never
+	// called when the resolved value stays "").
+	modelProvider := t.Spec.Leader.ModelProvider
+	if modelProvider == "" {
+		modelProvider = t.Spec.ModelProvider
+	}
 	return v1beta1.WorkerSpec{
 		Model:         t.Spec.Leader.Model,
-		ModelProvider: t.Spec.Leader.ModelProvider,
+		ModelProvider: modelProvider,
 		Runtime:       "copaw",
 		WorkerName:    t.Spec.Leader.WorkerName,
 		Identity:      t.Spec.Leader.Identity,
@@ -982,6 +1005,32 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 		Resources:     t.Spec.Leader.Resources,
 		Env:           t.Spec.Leader.Env,
 	}
+}
+
+// forceSoloPeerMentions returns a Team whose effective Spec.PeerMentions is
+// true when solo is true, regardless of what the Team's own spec says.
+// With a single human operator there is no one else the peer-visibility
+// restriction protects against, so the toggle is overridden (not merely
+// defaulted) in solo mode.
+//
+// Returns t unchanged (no copy) when solo is false or PeerMentions is
+// already effectively true, to avoid an unnecessary DeepCopy on the common
+// path. Otherwise ALWAYS DeepCopies before mutating, even if the caller
+// already passed in a derived copy (e.g. for Admin.MatrixUserID
+// substitution) — t may still be the live/working reconcile object shared
+// with the deferred end-of-Reconcile status patch, and mutating its Spec in
+// place would corrupt that patch base.
+func forceSoloPeerMentions(t *v1beta1.Team, solo bool) *v1beta1.Team {
+	if !solo {
+		return t
+	}
+	if t.Spec.PeerMentions != nil && *t.Spec.PeerMentions {
+		return t
+	}
+	out := t.DeepCopy()
+	forced := true
+	out.Spec.PeerMentions = &forced
+	return out
 }
 
 // teamWorkerSpecToWorkerSpec projects a TeamWorkerSpec into WorkerSpec with
@@ -1010,9 +1059,16 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 			}
 		}
 	}
+	// Per-agent ModelProvider always wins; an empty per-agent value falls
+	// back to the team-wide default (see leaderWorkerSpec for the same
+	// rule applied to the leader).
+	modelProvider := w.ModelProvider
+	if modelProvider == "" {
+		modelProvider = t.Spec.ModelProvider
+	}
 	return v1beta1.WorkerSpec{
 		Model:         w.Model,
-		ModelProvider: w.ModelProvider,
+		ModelProvider: modelProvider,
 		Runtime:       w.Runtime,
 		WorkerName:    w.WorkerName,
 		Image:         w.Image,

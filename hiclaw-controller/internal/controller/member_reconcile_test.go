@@ -100,6 +100,60 @@ func TestCreateMemberContainerPassesSpecResources(t *testing.T) {
 	}
 }
 
+func TestCreateMemberContainerSetsRestartPolicyForDocker(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "docker"
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"},
+	}
+
+	_, err := createMemberContainer(context.Background(), MemberDeps{
+		Provisioner: mocks.NewMockProvisioner(),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+	}, MemberContext{
+		Name: "alice",
+		Spec: v1beta1.WorkerSpec{Image: "img:latest"},
+	}, state, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer failed: %v", err)
+	}
+
+	req, ok := wb.LastCreateReq()
+	if !ok {
+		t.Fatal("expected backend Create to be called")
+	}
+	if req.RestartPolicy != "unless-stopped" {
+		t.Fatalf("RestartPolicy = %q, want %q", req.RestartPolicy, "unless-stopped")
+	}
+}
+
+func TestCreateMemberContainerDoesNotSetRestartPolicyForK8s(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "k8s"
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"},
+	}
+
+	_, err := createMemberContainer(context.Background(), MemberDeps{
+		Provisioner: mocks.NewMockProvisioner(),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+	}, MemberContext{
+		Name: "alice",
+		Spec: v1beta1.WorkerSpec{Image: "img:latest"},
+	}, state, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer failed: %v", err)
+	}
+
+	req, ok := wb.LastCreateReq()
+	if !ok {
+		t.Fatal("expected backend Create to be called")
+	}
+	if req.RestartPolicy != "" {
+		t.Fatalf("RestartPolicy = %q, want empty for k8s backend", req.RestartPolicy)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

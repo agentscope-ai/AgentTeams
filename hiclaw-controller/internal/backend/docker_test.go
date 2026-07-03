@@ -423,6 +423,297 @@ func TestDockerDeleteNotFound(t *testing.T) {
 	}
 }
 
+// capturedPayloadServer is a minimal Docker mock that records the full
+// decoded dockerCreatePayload (including HostConfig) of every
+// POST /containers/create request, for resource-limit / restart-policy
+// assertions.
+type capturedPayloadServer struct {
+	srv      *httptest.Server
+	payloads []dockerCreatePayload
+}
+
+func (c *capturedPayloadServer) last() dockerCreatePayload {
+	return c.payloads[len(c.payloads)-1]
+}
+
+func capturePayloadServer(t *testing.T) *capturedPayloadServer {
+	t.Helper()
+	captured := &capturedPayloadServer{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /images/", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-x"})
+	})
+	mux.HandleFunc("POST /containers/create", func(w http.ResponseWriter, r *http.Request) {
+		var payload dockerCreatePayload
+		json.NewDecoder(r.Body).Decode(&payload)
+		captured.payloads = append(captured.payloads, payload)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-test"})
+	})
+	mux.HandleFunc("POST /containers/{id}/start", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"Id":    "sha256-test",
+			"State": map[string]interface{}{"Status": "running"},
+		})
+	})
+	mux.HandleFunc("DELETE /containers/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	captured.srv = httptest.NewServer(mux)
+	return captured
+}
+
+func newCapturingDockerBackend(t *testing.T, serverURL string, cfg DockerConfig) *DockerBackend {
+	t.Helper()
+	if cfg.WorkerImage == "" {
+		cfg.WorkerImage = "hiclaw/worker-agent:latest"
+	}
+	if cfg.DefaultNetwork == "" {
+		cfg.DefaultNetwork = "hiclaw-net"
+	}
+	return &DockerBackend{
+		config:          cfg,
+		containerPrefix: "hiclaw-worker-",
+		client: &http.Client{
+			Transport: &testTransport{serverURL: serverURL},
+		},
+	}
+}
+
+// TestDockerCreateResourceLimitsFromRequest verifies that an explicit
+// req.Resources override is converted to Docker Engine API units
+// (NanoCpus / Memory bytes) and that HostConfig is actually attached to the
+// create payload (guards against the HostConfig attach-condition trap in
+// buildCreatePayload).
+func TestDockerCreateResourceLimitsFromRequest(t *testing.T) {
+	captured := capturePayloadServer(t)
+	defer captured.srv.Close()
+
+	b := newCapturingDockerBackend(t, captured.srv.URL, DockerConfig{
+		WorkerCPU:    "1000m",
+		WorkerMemory: "2Gi",
+	})
+
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name: "x",
+		Resources: &ResourceRequirements{
+			CPULimit:    "500m",
+			MemoryLimit: "1Gi",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	payload := captured.last()
+	if payload.HostConfig == nil {
+		t.Fatal("expected HostConfig to be attached to the create payload, got nil")
+	}
+	wantNanoCPUs := int64(500) * 1e6 // 500m -> 500,000,000 nanocpus
+	if payload.HostConfig.NanoCpus != wantNanoCPUs {
+		t.Errorf("NanoCpus = %d, want %d", payload.HostConfig.NanoCpus, wantNanoCPUs)
+	}
+	wantMemoryBytes := int64(1) * 1024 * 1024 * 1024 // 1Gi
+	if payload.HostConfig.Memory != wantMemoryBytes {
+		t.Errorf("Memory = %d, want %d", payload.HostConfig.Memory, wantMemoryBytes)
+	}
+}
+
+// TestDockerCreateResourceLimitsDefaults verifies that when req.Resources is
+// nil, the Docker backend falls back to its configured defaults (mirroring
+// kubernetes.go buildDefaultResources' 1000m/2Gi convention), and that an
+// empty DockerConfig.WorkerCPU/WorkerMemory falls back further to the
+// hardcoded 1000m/2Gi.
+func TestDockerCreateResourceLimitsDefaults(t *testing.T) {
+	t.Run("configured_defaults_used_when_resources_nil", func(t *testing.T) {
+		captured := capturePayloadServer(t)
+		defer captured.srv.Close()
+
+		b := newCapturingDockerBackend(t, captured.srv.URL, DockerConfig{
+			WorkerCPU:    "1000m",
+			WorkerMemory: "2Gi",
+		})
+
+		_, err := b.Create(context.Background(), CreateRequest{Name: "x"})
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		payload := captured.last()
+		if payload.HostConfig == nil {
+			t.Fatal("expected HostConfig to be attached, got nil")
+		}
+		wantNanoCPUs := int64(1000) * 1e6
+		if payload.HostConfig.NanoCpus != wantNanoCPUs {
+			t.Errorf("NanoCpus = %d, want %d", payload.HostConfig.NanoCpus, wantNanoCPUs)
+		}
+		wantMemoryBytes := int64(2) * 1024 * 1024 * 1024
+		if payload.HostConfig.Memory != wantMemoryBytes {
+			t.Errorf("Memory = %d, want %d", payload.HostConfig.Memory, wantMemoryBytes)
+		}
+	})
+
+	t.Run("hardcoded_fallback_when_config_empty", func(t *testing.T) {
+		captured := capturePayloadServer(t)
+		defer captured.srv.Close()
+
+		// DockerConfig.WorkerCPU/WorkerMemory left empty — backend must
+		// still apply the 1000m/2Gi convention shared with the K8s backend.
+		b := newCapturingDockerBackend(t, captured.srv.URL, DockerConfig{})
+
+		_, err := b.Create(context.Background(), CreateRequest{Name: "x"})
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		payload := captured.last()
+		if payload.HostConfig == nil {
+			t.Fatal("expected HostConfig to be attached, got nil")
+		}
+		wantNanoCPUs := int64(1000) * 1e6
+		if payload.HostConfig.NanoCpus != wantNanoCPUs {
+			t.Errorf("NanoCpus = %d, want %d", payload.HostConfig.NanoCpus, wantNanoCPUs)
+		}
+		wantMemoryBytes := int64(2) * 1024 * 1024 * 1024
+		if payload.HostConfig.Memory != wantMemoryBytes {
+			t.Errorf("Memory = %d, want %d", payload.HostConfig.Memory, wantMemoryBytes)
+		}
+	})
+
+	t.Run("partial_override_falls_back_per_field", func(t *testing.T) {
+		captured := capturePayloadServer(t)
+		defer captured.srv.Close()
+
+		b := newCapturingDockerBackend(t, captured.srv.URL, DockerConfig{
+			WorkerCPU:    "1000m",
+			WorkerMemory: "2Gi",
+		})
+
+		// Only CPULimit overridden; MemoryLimit must fall back to the default.
+		_, err := b.Create(context.Background(), CreateRequest{
+			Name: "x",
+			Resources: &ResourceRequirements{
+				CPULimit: "250m",
+			},
+		})
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		payload := captured.last()
+		if payload.HostConfig == nil {
+			t.Fatal("expected HostConfig to be attached, got nil")
+		}
+		wantNanoCPUs := int64(250) * 1e6
+		if payload.HostConfig.NanoCpus != wantNanoCPUs {
+			t.Errorf("NanoCpus = %d, want %d", payload.HostConfig.NanoCpus, wantNanoCPUs)
+		}
+		wantMemoryBytes := int64(2) * 1024 * 1024 * 1024
+		if payload.HostConfig.Memory != wantMemoryBytes {
+			t.Errorf("Memory = %d, want %d (should fall back to default when unset)", payload.HostConfig.Memory, wantMemoryBytes)
+		}
+	})
+}
+
+// TestDockerBuildCreatePayloadRestartPolicy verifies RestartPolicy is
+// attached to HostConfig when set on the request (used by both the Manager
+// path, applyEmbeddedConfig, and the member/worker path for Docker).
+func TestDockerBuildCreatePayloadRestartPolicy(t *testing.T) {
+	captured := capturePayloadServer(t)
+	defer captured.srv.Close()
+
+	b := newCapturingDockerBackend(t, captured.srv.URL, DockerConfig{})
+
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name:          "x",
+		RestartPolicy: "unless-stopped",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	payload := captured.last()
+	if payload.HostConfig == nil {
+		t.Fatal("expected HostConfig to be attached, got nil")
+	}
+	if payload.HostConfig.RestartPolicy == nil {
+		t.Fatal("expected RestartPolicy to be set")
+	}
+	if payload.HostConfig.RestartPolicy.Name != "unless-stopped" {
+		t.Errorf("RestartPolicy.Name = %q, want %q", payload.HostConfig.RestartPolicy.Name, "unless-stopped")
+	}
+}
+
+func TestMergeDockerResourceOverrides(t *testing.T) {
+	cases := []struct {
+		name         string
+		defaultCPU   string
+		defaultMem   string
+		override     *ResourceRequirements
+		wantNanoCPUs int64
+		wantMemory   int64
+	}{
+		{
+			name:         "nil_override_uses_defaults",
+			defaultCPU:   "1000m",
+			defaultMem:   "2Gi",
+			override:     nil,
+			wantNanoCPUs: 1000 * 1e6,
+			wantMemory:   2 * 1024 * 1024 * 1024,
+		},
+		{
+			name:       "full_override",
+			defaultCPU: "1000m",
+			defaultMem: "2Gi",
+			override: &ResourceRequirements{
+				CPULimit:    "2000m",
+				MemoryLimit: "4Gi",
+			},
+			wantNanoCPUs: 2000 * 1e6,
+			wantMemory:   4 * 1024 * 1024 * 1024,
+		},
+		{
+			name:       "cpu_only_override",
+			defaultCPU: "1000m",
+			defaultMem: "2Gi",
+			override: &ResourceRequirements{
+				CPULimit: "500m",
+			},
+			wantNanoCPUs: 500 * 1e6,
+			wantMemory:   2 * 1024 * 1024 * 1024,
+		},
+		{
+			name:       "memory_only_override",
+			defaultCPU: "1000m",
+			defaultMem: "2Gi",
+			override: &ResourceRequirements{
+				MemoryLimit: "512Mi",
+			},
+			wantNanoCPUs: 1000 * 1e6,
+			wantMemory:   512 * 1024 * 1024,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotNanoCPUs, gotMemory, err := mergeDockerResourceOverrides(tc.defaultCPU, tc.defaultMem, tc.override)
+			if err != nil {
+				t.Fatalf("mergeDockerResourceOverrides failed: %v", err)
+			}
+			if gotNanoCPUs != tc.wantNanoCPUs {
+				t.Errorf("nanoCPUs = %d, want %d", gotNanoCPUs, tc.wantNanoCPUs)
+			}
+			if gotMemory != tc.wantMemory {
+				t.Errorf("memory = %d, want %d", gotMemory, tc.wantMemory)
+			}
+		})
+	}
+}
+
 func TestNormalizeDockerStatus(t *testing.T) {
 	cases := []struct {
 		input    string

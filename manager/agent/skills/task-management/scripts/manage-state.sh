@@ -12,6 +12,12 @@
 #   manage-state.sh --action executed      --task-id T --next-scheduled-at ISO
 #   manage-state.sh --action set-admin-dm  --room-id R
 #   manage-state.sh --action list
+#   manage-state.sh --action mark-blocked  --task-id T --reason "..."
+#   manage-state.sh --action unblock       --task-id T
+#   manage-state.sh --action cancel        --task-id T --reason "..."
+#   manage-state.sh --action reassign      --task-id T --assigned-to W --room-id R
+#   manage-state.sh --action last-digest   get
+#   manage-state.sh --action last-digest   set --at ISO
 
 set -euo pipefail
 
@@ -27,18 +33,19 @@ _ensure_state_file() {
 {
   "admin_dm_room_id": null,
   "active_tasks": [],
+  "cancelled_tasks": [],
+  "last_digest_sent_at": null,
   "updated_at": "$(_ts)"
 }
 EOF
     else
-        # Backfill admin_dm_room_id for pre-existing state files
-        local has_field
-        has_field=$(jq 'has("admin_dm_room_id")' "$STATE_FILE")
-        if [ "$has_field" = "false" ]; then
-            local tmp
-            tmp=$(mktemp)
-            jq '. + {admin_dm_room_id: null}' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
-        fi
+        # Backfill fields added over time for pre-existing state files
+        local tmp
+        tmp=$(mktemp)
+        jq '(if has("admin_dm_room_id") then . else . + {admin_dm_room_id: null} end)
+            | (if has("cancelled_tasks") then . else . + {cancelled_tasks: []} end)
+            | (if has("last_digest_sent_at") then . else . + {last_digest_sent_at: null} end)' \
+           "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
     fi
 }
 
@@ -52,17 +59,38 @@ action_init() {
 action_add_finite() {
     _ensure_state_file
 
-    local existing
-    existing=$(jq -r --arg id "$TASK_ID" \
-        '[.active_tasks[] | select(.task_id == $id)] | length' "$STATE_FILE")
-    if [ "$existing" -gt 0 ]; then
+    # Exact duplicate (same id + same title + same assignee) is a true SKIP.
+    local exact_dup
+    exact_dup=$(jq -r --arg id "$TASK_ID" --arg title "$TITLE" --arg worker "$ASSIGNED_TO" \
+        '[.active_tasks[] | select(.task_id == $id and .title == $title and .assigned_to == $worker)] | length' \
+        "$STATE_FILE")
+    if [ "$exact_dup" -gt 0 ]; then
         echo "SKIP: task $TASK_ID already in active_tasks"
         return 0
     fi
 
+    # Same id but different title/assignee: suffix the id (-2, -3, ...) so both survive.
+    local final_id="$TASK_ID"
+    local existing
+    existing=$(jq -r --arg id "$TASK_ID" \
+        '[.active_tasks[] | select(.task_id == $id)] | length' "$STATE_FILE")
+    if [ "$existing" -gt 0 ]; then
+        local suffix=2
+        while true; do
+            final_id="${TASK_ID}-${suffix}"
+            local clash
+            clash=$(jq -r --arg id "$final_id" \
+                '[.active_tasks[] | select(.task_id == $id)] | length' "$STATE_FILE")
+            if [ "$clash" -eq 0 ]; then
+                break
+            fi
+            suffix=$(( suffix + 1 ))
+        done
+    fi
+
     local tmp
     tmp=$(mktemp)
-    jq --arg id "$TASK_ID" \
+    jq --arg id "$final_id" \
        --arg title "$TITLE" \
        --arg worker "$ASSIGNED_TO" \
        --arg room "$ROOM_ID" \
@@ -80,7 +108,11 @@ action_add_finite() {
         | .updated_at = $ts' \
        "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 
-    echo "OK: added finite task $TASK_ID \"$TITLE\" (assigned to $ASSIGNED_TO)"
+    if [ "$final_id" != "$TASK_ID" ]; then
+        echo "OK: added finite task $final_id \"$TITLE\" (assigned to $ASSIGNED_TO) [id suffixed from $TASK_ID due to collision]"
+    else
+        echo "OK: added finite task $final_id \"$TITLE\" (assigned to $ASSIGNED_TO)"
+    fi
 }
 
 action_add_infinite() {
@@ -178,6 +210,130 @@ action_set_admin_dm() {
     echo "OK: admin_dm_room_id set to $ROOM_ID"
 }
 
+action_mark_blocked() {
+    _ensure_state_file
+
+    local existing
+    existing=$(jq -r --arg id "$TASK_ID" \
+        '[.active_tasks[] | select(.task_id == $id)] | length' "$STATE_FILE")
+    if [ "$existing" -eq 0 ]; then
+        echo "SKIP: task $TASK_ID not found in active_tasks"
+        return 0
+    fi
+
+    local tmp
+    tmp=$(mktemp)
+    jq --arg id "$TASK_ID" \
+       --arg reason "${REASON:-}" \
+       --arg ts "$(_ts)" \
+       '(.active_tasks[] | select(.task_id == $id))
+        |= (.status = "blocked" | .blocked_since = $ts
+            | if $reason != "" then .blocked_reason = $reason else . end)
+        | .updated_at = $ts' \
+       "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+
+    echo "OK: task $TASK_ID marked blocked (reason: ${REASON:-none})"
+}
+
+action_unblock() {
+    _ensure_state_file
+
+    local existing
+    existing=$(jq -r --arg id "$TASK_ID" \
+        '[.active_tasks[] | select(.task_id == $id)] | length' "$STATE_FILE")
+    if [ "$existing" -eq 0 ]; then
+        echo "SKIP: task $TASK_ID not found in active_tasks"
+        return 0
+    fi
+
+    local tmp
+    tmp=$(mktemp)
+    jq --arg id "$TASK_ID" --arg ts "$(_ts)" \
+       '(.active_tasks[] | select(.task_id == $id))
+        |= (del(.status, .blocked_since, .blocked_reason))
+        | .updated_at = $ts' \
+       "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+
+    echo "OK: task $TASK_ID unblocked"
+}
+
+action_cancel() {
+    _ensure_state_file
+
+    local existing
+    existing=$(jq -r --arg id "$TASK_ID" \
+        '[.active_tasks[] | select(.task_id == $id)] | length' "$STATE_FILE")
+    if [ "$existing" -eq 0 ]; then
+        echo "SKIP: task $TASK_ID not found in active_tasks"
+        return 0
+    fi
+
+    local tmp
+    tmp=$(mktemp)
+    jq --arg id "$TASK_ID" \
+       --arg reason "${REASON:-}" \
+       --arg ts "$(_ts)" \
+       '.cancelled_tasks += [
+            (.active_tasks[] | select(.task_id == $id)) + {cancelled_at: $ts, cancel_reason: $reason}
+        ]
+        | .active_tasks = [.active_tasks[] | select(.task_id != $id)]
+        | .updated_at = $ts' \
+       "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+
+    echo "OK: cancelled task $TASK_ID (reason: ${REASON:-none})"
+}
+
+action_reassign() {
+    _ensure_state_file
+
+    local existing
+    existing=$(jq -r --arg id "$TASK_ID" \
+        '[.active_tasks[] | select(.task_id == $id)] | length' "$STATE_FILE")
+    if [ "$existing" -eq 0 ]; then
+        echo "SKIP: task $TASK_ID not found in active_tasks"
+        return 0
+    fi
+
+    local tmp
+    tmp=$(mktemp)
+    jq --arg id "$TASK_ID" \
+       --arg worker "$ASSIGNED_TO" \
+       --arg room "$ROOM_ID" \
+       --arg ts "$(_ts)" \
+       '(.active_tasks[] | select(.task_id == $id))
+        |= (.assigned_to = $worker | .room_id = $room)
+        | .updated_at = $ts' \
+       "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+
+    echo "OK: reassigned task $TASK_ID to $ASSIGNED_TO (room $ROOM_ID)"
+}
+
+action_last_digest() {
+    _ensure_state_file
+
+    case "${SUBACTION:-get}" in
+        get)
+            jq -r '.last_digest_sent_at // "null"' "$STATE_FILE"
+            ;;
+        set)
+            if [ -z "${AT_TS:-}" ]; then
+                echo "ERROR: 'last-digest set' requires --at ISO" >&2
+                exit 1
+            fi
+            local tmp
+            tmp=$(mktemp)
+            jq --arg at "$AT_TS" --arg ts "$(_ts)" \
+               '.last_digest_sent_at = $at | .updated_at = $ts' \
+               "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+            echo "OK: last_digest_sent_at set to $AT_TS"
+            ;;
+        *)
+            echo "ERROR: Unknown last-digest subaction '${SUBACTION:-}'. Use: get, set" >&2
+            exit 1
+            ;;
+    esac
+}
+
 action_list() {
     _ensure_state_file
 
@@ -192,9 +348,13 @@ action_list() {
         return 0
     fi
 
-    jq -r '.active_tasks[] | [.task_id, .type, .assigned_to, (.title // "-")] | @tsv' "$STATE_FILE" | \
-        while IFS=$'\t' read -r tid ttype worker title; do
-            echo "  $tid  type=$ttype  worker=$worker  title=\"$title\""
+    jq -r '.active_tasks[] | [.task_id, .type, .assigned_to, (.title // "-"), (.status // "-"), (.blocked_since // "-")] | @tsv' "$STATE_FILE" | \
+        while IFS=$'\t' read -r tid ttype worker title status blocked_since; do
+            if [ "$status" = "blocked" ]; then
+                echo "  [BLOCKED since $blocked_since] $tid  type=$ttype  worker=$worker  title=\"$title\""
+            else
+                echo "  $tid  type=$ttype  worker=$worker  title=\"$title\""
+            fi
         done
     echo "Total: $count active task(s). Updated: $(jq -r '.updated_at' "$STATE_FILE")"
 }
@@ -212,6 +372,9 @@ TASK_TYPE=""
 SCHEDULE=""
 TIMEZONE=""
 NEXT_SCHEDULED_AT=""
+REASON=""
+SUBACTION=""
+AT_TS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -227,6 +390,19 @@ while [[ $# -gt 0 ]]; do
         --schedule)         SCHEDULE="$2";          shift 2 ;;
         --timezone)         TIMEZONE="$2";          shift 2 ;;
         --next-scheduled-at) NEXT_SCHEDULED_AT="$2"; shift 2 ;;
+        --reason)           REASON="$2";            shift 2 ;;
+        --at)               AT_TS="$2";             shift 2 ;;
+        get|set)
+            # Positional subaction for `--action last-digest` (plan-specified form:
+            # `last-digest get` / `last-digest set <ts>`). Only meaningful there;
+            # harmless no-op token otherwise since ACTION dispatch validates it.
+            SUBACTION="$1"
+            shift
+            if [ "$SUBACTION" = "set" ] && [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+                AT_TS="$1"
+                shift
+            fi
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
@@ -246,7 +422,7 @@ if [ "$ACTION" = "add" ]; then
 fi
 
 if [ -z "$ACTION" ]; then
-    echo "Usage: $0 --action <init|add-finite|add-infinite|complete|executed|set-admin-dm|list> [options]" >&2
+    echo "Usage: $0 --action <init|add-finite|add-infinite|complete|executed|set-admin-dm|list|mark-blocked|unblock|cancel|reassign|last-digest> [options]" >&2
     echo "" >&2
     echo "Actions:" >&2
     echo "  init          Ensure state.json exists (no-op if already present)" >&2
@@ -256,6 +432,11 @@ if [ -z "$ACTION" ]; then
     echo "  executed      --task-id T --next-scheduled-at ISO   (updates infinite task after execution)" >&2
     echo "  set-admin-dm  --room-id R   (saves admin DM room ID for heartbeat use)" >&2
     echo "  list          Show all active tasks" >&2
+    echo "  mark-blocked  --task-id T --reason \"...\"   (sets status=blocked + blocked_since)" >&2
+    echo "  unblock       --task-id T   (clears blocked status)" >&2
+    echo "  cancel        --task-id T --reason \"...\"   (removes task, records reason in cancelled_tasks)" >&2
+    echo "  reassign      --task-id T --assigned-to W --room-id R   (swaps assignee/room)" >&2
+    echo "  last-digest   get | set --at ISO   (reads/writes last_digest_sent_at)" >&2
     exit 1
 fi
 
@@ -300,8 +481,27 @@ case "$ACTION" in
     list)
         action_list
         ;;
+    mark-blocked)
+        _validate_required TASK_ID
+        action_mark_blocked
+        ;;
+    unblock)
+        _validate_required TASK_ID
+        action_unblock
+        ;;
+    cancel)
+        _validate_required TASK_ID
+        action_cancel
+        ;;
+    reassign)
+        _validate_required TASK_ID ASSIGNED_TO ROOM_ID
+        action_reassign
+        ;;
+    last-digest)
+        action_last_digest
+        ;;
     *)
-        echo "ERROR: Unknown action '$ACTION'. Use: init, add-finite, add-infinite, complete, executed, set-admin-dm, list" >&2
+        echo "ERROR: Unknown action '$ACTION'. Use: init, add-finite, add-infinite, complete, executed, set-admin-dm, list, mark-blocked, unblock, cancel, reassign, last-digest" >&2
         exit 1
         ;;
 esac

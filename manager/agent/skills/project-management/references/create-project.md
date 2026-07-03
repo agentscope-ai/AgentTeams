@@ -37,6 +37,34 @@ The script handles: directory creation, meta.json, placeholder plan.md, Matrix r
 
 After the script, **fill in the full plan.md** with phases, tasks, and assignments (see `references/plan-format.md` for format).
 
+### Two-layer model: chat-flow vs Project CRD
+
+`create-project.sh` always writes the **chat-flow layer** above (`meta.json`/`plan.md` —
+execution: phases, tasks, assignments). If the project also needs one or more **Gitea repos
+provisioned** for the team, add `--team` and repeatable `--repo`:
+
+```bash
+bash /opt/hiclaw/agent/skills/project-management/scripts/create-project.sh \
+  --id "${PROJECT_ID}" \
+  --title "<title>" \
+  --workers "worker1,worker2,worker3" \
+  --team "<TEAM_NAME>" \
+  --repo "https://git.pawcommit.com/team/repo-a.git:rw" \
+  --repo "https://git.pawcommit.com/team/repo-b.git:ro"
+```
+
+This additionally emits a `Project` CR YAML (`apiVersion: hiclaw.io/v1beta1`, `kind: Project` —
+see `hiclaw-controller/api/v1beta1/types.go` `ProjectSpec` for the exact schema) and runs
+`hiclaw apply -f` against it — a **second, federated document** (repo/access provisioning),
+sharing the same project id as `meta.json` but never merged into it (decision #16). `--team` and
+`--repo` are optional; every `access` value must be `rw` or `ro`; omitting both flags is a no-op
+for this layer (no CR is created) and produces the same chat-flow output as before.
+
+The Project CRD does NOT grant any credentials itself — actual Gitea user/PAT provisioning and
+repo-collaborator role enforcement is a separate, operator-run step
+(`scripts/provision-worker-gitea.sh --project <id>`, decision #12). See
+`git-delegation-management/SKILL.md` for why the Manager never handles PATs directly.
+
 ## Step 1c: Present plan (and confirm)
 
 ### If YOLO=OFF (Step 0)

@@ -249,6 +249,7 @@ class FileSync:
         self._cloud_mode = os.environ.get("HICLAW_RUNTIME") == "aliyun"
         self._k8s_mode = os.environ.get("HICLAW_RUNTIME") == "k8s"
         self._worker_info: dict[str, Any] | None = None
+        self._skipped_local_skills_logged: set[str] = set()
 
     # ------------------------------------------------------------------
     # mc alias management
@@ -711,9 +712,16 @@ class FileSync:
             minio_skill_set = set(minio_skills)
             for child in list(local_skills_dir.iterdir()):
                 if child.is_dir() and child.name not in minio_skill_set:
-                    shutil.rmtree(child)
-                    changed.append(f"skills/{child.name}/ (removed)")
-                    logger.info("Removed local skill no longer in MinIO: %s", child.name)
+                    # Locally-installed skills (e.g. self-installed by the worker)
+                    # are not tracked in MinIO. Skip pruning them instead of
+                    # rmtree-ing on every sync loop iteration; the controller's
+                    # Overwrite:true push still wins name collisions (plan §4.5).
+                    if child.name not in self._skipped_local_skills_logged:
+                        self._skipped_local_skills_logged.add(child.name)
+                        logger.info(
+                            "Skipping local skill not in MinIO (not pruned): %s",
+                            child.name,
+                        )
 
         return changed
 

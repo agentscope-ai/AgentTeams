@@ -279,7 +279,7 @@ worker:
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker
       tag: ""                 # defaults to global.imageTag
-  defaultRuntime: "openclaw"
+  defaultRuntime: "hermes"
   resources:
     requests:
       cpu: 100m

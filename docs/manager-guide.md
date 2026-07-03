@@ -33,6 +33,7 @@ The Manager is configured via environment variables set during installation. The
 | `HICLAW_MOUNT_SOCKET` | No | `1` | Mount container runtime socket for direct Worker creation |
 | `HICLAW_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
 | `HICLAW_MANAGER_RUNTIME` | No | `openclaw` | Manager engine: **`openclaw`** (default, `hiclaw-manager` image) or **`copaw`** (`hiclaw-manager-copaw` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
+| `HICLAW_SOLO_OPERATOR` | No | - | Set to `1`/`true` when a single human runs HiClaw alone (no multi-person org). Skips the Manager's 4-question onboarding interview, forces every Team's `peerMentions` to `true`, and defaults the sole Human's `permissionLevel` to Admin when unset. |
 
 ### QwenPaw Manager (formerly CoPaw, `HICLAW_MANAGER_RUNTIME=copaw`)
 

@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // DockerConfig holds Docker backend configuration.
@@ -25,6 +27,13 @@ type DockerConfig struct {
 	HermesWorkerImage    string // default hermes worker image (HICLAW_HERMES_WORKER_IMAGE)
 	OpenHumanWorkerImage string // default openhuman worker image (HICLAW_OPENHUMAN_WORKER_IMAGE)
 	DefaultNetwork       string // default Docker network (default "hiclaw-net")
+
+	// WorkerCPU / WorkerMemory are the k8s-style default resource limit
+	// strings (e.g. "1000m", "2Gi") applied to worker containers when
+	// CreateRequest.Resources is nil or leaves a field unset. Mirrors
+	// K8sConfig.WorkerCPU/WorkerMemory (see kubernetes.go buildDefaultResources).
+	WorkerCPU    string // default "1000m" (HICLAW_DOCKER_WORKER_CPU)
+	WorkerMemory string // default "2Gi" (HICLAW_DOCKER_WORKER_MEMORY)
 }
 
 // DockerBackend manages worker containers via the Docker Engine API over a Unix socket.
@@ -495,6 +504,8 @@ type dockerHostConfig struct {
 	PortBindings  map[string][]dockerPortBinding `json:"PortBindings,omitempty"`
 	RestartPolicy *dockerRestartPolicy           `json:"RestartPolicy,omitempty"`
 	SecurityOpt   []string                       `json:"SecurityOpt,omitempty"`
+	Memory        int64                          `json:"Memory,omitempty"`
+	NanoCpus      int64                          `json:"NanoCpus,omitempty"`
 }
 
 type dockerRestartPolicy struct {
@@ -552,6 +563,26 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 		hc.RestartPolicy = &dockerRestartPolicy{Name: req.RestartPolicy}
 	}
 
+	// Resource limits: defaults (WorkerCPU/WorkerMemory) merged with any
+	// per-request override, mirroring kubernetes.go buildDefaultResources +
+	// mergeResourceOverrides. Docker HostConfig only exposes hard limits
+	// (Memory/NanoCpus) — there is no request-vs-limit distinction, so only
+	// the Limit side of req.Resources is consulted.
+	defaultCPU, defaultMemory := d.config.WorkerCPU, d.config.WorkerMemory
+	if defaultCPU == "" {
+		defaultCPU = "1000m"
+	}
+	if defaultMemory == "" {
+		defaultMemory = "2Gi"
+	}
+	nanoCPUs, memoryBytes, err := mergeDockerResourceOverrides(defaultCPU, defaultMemory, req.Resources)
+	if err != nil {
+		log.Printf("[Docker] invalid resource override for %s, using defaults: %v", req.Name, err)
+	} else {
+		hc.NanoCpus = nanoCPUs
+		hc.Memory = memoryBytes
+	}
+
 	// Console port binding (CoPaw workers)
 	if consolePort != "" && hostPort > 0 {
 		portKey := consolePort + "/tcp"
@@ -582,7 +613,7 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 	}
 
 	if hc.NetworkMode != "" || len(hc.ExtraHosts) > 0 || len(hc.PortBindings) > 0 ||
-		len(hc.Binds) > 0 || hc.RestartPolicy != nil {
+		len(hc.Binds) > 0 || hc.RestartPolicy != nil || hc.Memory > 0 || hc.NanoCpus > 0 {
 		p.HostConfig = hc
 	}
 
@@ -596,6 +627,41 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 	}
 
 	return p
+}
+
+// mergeDockerResourceOverrides converts the effective CPU/memory limit for a
+// Docker container to Docker Engine API units: NanoCpus (CPU quota in
+// billionths of a CPU) and Memory (bytes). Per-request override.Limits win
+// over the backend defaults, field by field — mirrors kubernetes.go
+// mergeResourceOverrides semantics. override may be nil, in which case the
+// defaults alone are used.
+func mergeDockerResourceOverrides(defaultCPU, defaultMemory string, override *ResourceRequirements) (nanoCPUs int64, memoryBytes int64, err error) {
+	cpu := defaultCPU
+	memory := defaultMemory
+	if override != nil {
+		if override.CPULimit != "" {
+			cpu = override.CPULimit
+		}
+		if override.MemoryLimit != "" {
+			memory = override.MemoryLimit
+		}
+	}
+
+	cpuQty, err := resource.ParseQuantity(cpu)
+	if err != nil {
+		return 0, 0, fmt.Errorf("cpu: %w", err)
+	}
+	memQty, err := resource.ParseQuantity(memory)
+	if err != nil {
+		return 0, 0, fmt.Errorf("memory: %w", err)
+	}
+
+	// CPU: k8s MilliValue() is millicores (1000 == 1 full CPU); Docker
+	// NanoCpus is billionths of a CPU (1e9 == 1 full CPU). 1 millicore ==
+	// 1e6 nanocpus.
+	nanoCPUs = cpuQty.MilliValue() * 1e6
+	memoryBytes = memQty.Value()
+	return nanoCPUs, memoryBytes, nil
 }
 
 func normalizeDockerStatus(status string) WorkerStatus {

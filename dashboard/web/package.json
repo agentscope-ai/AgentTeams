@@ -1,0 +1,16 @@
+{
+  "name": "hiclaw-dashboard-web",
+  "version": "1.0.0",
+  "description": "HiClaw dashboard v1 SPA (read-only) + v1.1 wake/sleep -- talks only to the same-origin proxy in dashboard/server.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

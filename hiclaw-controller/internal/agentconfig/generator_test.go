@@ -274,3 +274,71 @@ func TestDefaultModelSpec(t *testing.T) {
 		t.Errorf("unknown model ctx = %d, want 150000", unknown.ContextWindow)
 	}
 }
+
+// TestDefaultModelSpec_ExtraProviders covers the provisional Ollama/MiMo
+// catalog entries added for the setup-higress.sh extra-provider loop
+// (plan v2.3 Phase 2b, decision #7; S5/S6 live-gated).
+func TestDefaultModelSpec_ExtraProviders(t *testing.T) {
+	cases := []struct {
+		name        string
+		wantCtx     int
+		wantMax     int
+		wantVisible bool
+	}{
+		{"ollama/gpt-oss:120b-cloud", 128000, 32000, false},
+		{"mimo/MiMo-V2.5", 128000, 32000, false},
+		{"mimo/MiMo-V2.5-Pro", 200000, 64000, false},
+	}
+	for _, tc := range cases {
+		spec := defaultModelSpec(tc.name)
+		if spec.ContextWindow != tc.wantCtx {
+			t.Errorf("%s ctx = %d, want %d", tc.name, spec.ContextWindow, tc.wantCtx)
+		}
+		if spec.MaxTokens != tc.wantMax {
+			t.Errorf("%s max = %d, want %d", tc.name, spec.MaxTokens, tc.wantMax)
+		}
+		if !spec.Reasoning {
+			t.Errorf("%s should default to reasoning=true", tc.name)
+		}
+		hasImage := len(spec.Input) == 2 && spec.Input[1] == "image"
+		if hasImage != tc.wantVisible {
+			t.Errorf("%s vision = %v, want %v", tc.name, hasImage, tc.wantVisible)
+		}
+	}
+}
+
+// TestAllModelSpecsAndAliases_IncludeExtraProviders asserts the new
+// ollama/mimo ids resolve through the same allModelSpecs/allModelAliases
+// paths used to render openclaw.json, and that both slices agree with
+// defaultModelSpec's ctx/max (drift guard across the two in-generator
+// catalog spots).
+func TestAllModelSpecsAndAliases_IncludeExtraProviders(t *testing.T) {
+	g := NewGenerator(Config{DefaultModel: "qwen3.5-plus"})
+
+	wantIDs := []string{"ollama/gpt-oss:120b-cloud", "mimo/MiMo-V2.5", "mimo/MiMo-V2.5-Pro"}
+
+	specs := g.allModelSpecs("qwen3.5-plus")
+	specByID := make(map[string]ModelSpec, len(specs))
+	for _, s := range specs {
+		specByID[s.ID] = s
+	}
+	aliases := g.allModelAliases("qwen3.5-plus")
+
+	for _, id := range wantIDs {
+		spec, ok := specByID[id]
+		if !ok {
+			t.Errorf("allModelSpecs missing %q", id)
+			continue
+		}
+		want := defaultModelSpec(id)
+		if spec.ContextWindow != want.ContextWindow || spec.MaxTokens != want.MaxTokens {
+			t.Errorf("allModelSpecs[%q] = {ctx:%d max:%d}, want {ctx:%d max:%d}",
+				id, spec.ContextWindow, spec.MaxTokens, want.ContextWindow, want.MaxTokens)
+		}
+
+		aliasKey := "hiclaw-gateway/" + id
+		if _, ok := aliases[aliasKey]; !ok {
+			t.Errorf("allModelAliases missing %q", aliasKey)
+		}
+	}
+}

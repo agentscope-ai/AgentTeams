@@ -9,6 +9,24 @@
 
 ## Assigning a finite task
 
+### Structured intake (before generating the task ID)
+
+When a human hands over a finite task, walk the request through this fill-in-the-blanks skeleton before you create anything. Fill each field by best guess from what the human already said; ask **at most one** clarifying question for the fields you genuinely cannot infer; then confirm the filled-in skeleton back to the human in **one message** before dispatching. This skeleton doubles as the schema behind the future dashboard task form.
+
+```
+Deliverable:          {what "done" produces — a file, a PR, a report, a decision}
+Acceptance criteria:  {how you or the human will know it's done}
+Target team/worker:   {which team or worker should do this — infer from worker-selection.md if not stated}
+Priority:             {normal | high | urgent — default normal if unstated}
+Due:                  {date/time, or "none" if open-ended}
+```
+
+Rules:
+- Best-guess first. Only ask a clarifying question when a field is truly ambiguous (e.g. deliverable format is unclear, or no team/worker fits) — never ask about fields you can reasonably infer.
+- One question maximum, and only if needed. Bundle it into a single message rather than asking field-by-field.
+- Confirm once: after filling the skeleton (with or without the human's answer to your one question), send back the completed skeleton in one message so the human can correct it before work starts, then proceed to step 1 below.
+- The confirmed skeleton's `Deliverable` and `Acceptance criteria` become the basis for `spec.md` (step 2); `Target team/worker` drives `assigned_to`/`room_id` (steps 2–5); `Priority` and `Due` are recorded in `meta.json` alongside `type` and `status`.
+
 1. Generate task ID: `task-YYYYMMDD-HHMMSS`
 2. Create task directory and files:
    ```bash

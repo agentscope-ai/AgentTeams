@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HiClaw Dashboard</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <h1>HiClaw Dashboard</h1>
+        <nav id="tabs" class="tabs">
+          <button class="tab-btn active" data-tab="overview">Overview</button>
+          <button class="tab-btn" data-tab="tasks">Manager Tasks</button>
+          <button class="tab-btn" data-tab="board">Board</button>
+          <button class="tab-btn" data-tab="projects">Projects</button>
+          <button class="tab-btn" data-tab="files">Files</button>
+        </nav>
+      </header>
+      <main id="main"></main>
+      <div id="toast" class="toast" hidden></div>
+      <dialog id="confirm-dialog">
+        <form method="dialog" id="confirm-form">
+          <p id="confirm-message"></p>
+          <div class="dialog-actions">
+            <button type="button" id="confirm-cancel">Cancel</button>
+            <button type="submit" id="confirm-ok" class="danger">Confirm</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="message-dialog">
+        <form method="dialog" id="message-form">
+          <p id="message-dialog-title"></p>
+          <textarea id="message-body" rows="6" placeholder="Message text..."></textarea>
+          <div class="dialog-actions">
+            <button type="button" id="message-cancel">Cancel</button>
+            <button type="submit" id="message-send">Send</button>
+          </div>
+        </form>
+      </dialog>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

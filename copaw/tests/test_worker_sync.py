@@ -94,3 +94,43 @@ def test_cat_non_missing_failure_warns(monkeypatch, tmp_path, caplog):
     assert fs._cat("agents/tt/openclaw.json") is None
     assert "mc cat failed" in caplog.text
     assert "AccessDenied: denied" in caplog.text
+
+
+def test_pull_all_skips_local_skill_absent_from_minio(monkeypatch, tmp_path, caplog):
+    """A self-installed skill dir (present locally, absent in MinIO) must
+    survive pull_all instead of being rmtree'd, and the skip should be
+    logged exactly once even across repeated pull_all calls."""
+    fs = FileSync(
+        endpoint="minio:9000",
+        access_key="tt",
+        secret_key="secret",
+        bucket="hiclaw",
+        worker_name="tt",
+        local_dir=tmp_path,
+    )
+
+    local_only_skill = fs.local_dir / "skills" / "self-installed"
+    local_only_skill.mkdir(parents=True, exist_ok=True)
+    (local_only_skill / "SKILL.md").write_text("hello", encoding="utf-8")
+    marker = local_only_skill / "SKILL.md"
+
+    monkeypatch.setattr(fs, "_cat", lambda _key: None)
+    monkeypatch.setattr(fs, "_ls", lambda _prefix: [])
+    monkeypatch.setattr(
+        sync,
+        "_mc",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(_args, 0, stdout="", stderr=""),
+    )
+    caplog.set_level(logging.INFO)
+
+    changed = fs.pull_all()
+    assert not any("self-installed" in c and "removed" in c for c in changed)
+    assert local_only_skill.is_dir()
+    assert marker.read_text(encoding="utf-8") == "hello"
+    assert caplog.text.count("self-installed") == 1
+
+    # A second pull_all should not skip/rmtree, and must not re-log.
+    caplog.clear()
+    fs.pull_all()
+    assert local_only_skill.is_dir()
+    assert "self-installed" not in caplog.text

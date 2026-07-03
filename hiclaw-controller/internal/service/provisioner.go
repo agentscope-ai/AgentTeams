@@ -195,6 +195,14 @@ func (p *Provisioner) MatrixUserID(name string) string {
 	return p.matrix.UserID(name)
 }
 
+// SendAdminMessage delivers body to roomID using the homeserver-admin
+// identity, bypassing the recipient's own token. Used by the message-
+// injection HTTP endpoints (plan #17) to post operator-authored messages
+// directly into a Manager's Admin DM room or a Team's leader room.
+func (p *Provisioner) SendAdminMessage(ctx context.Context, roomID, body string) error {
+	return p.matrix.SendMessageAsAdmin(ctx, roomID, body)
+}
+
 // MatrixAppServiceEnabled reports whether the controller is running in
 // Matrix AppService mode. In this mode, user registration and login use
 // the Application Service API instead of passwords.
@@ -1383,6 +1391,11 @@ type ManagerWelcomeRequest struct {
 	// "Asia/Shanghai"). Embedded as plain text so the agent can infer
 	// the admin's likely region and offer additional language options.
 	Timezone string
+	// SoloOperator, when true, renders the non-interview welcome variant
+	// (renderManagerWelcomeBodySolo) instead of the normal 4-question
+	// onboarding interview. Sourced from Config.SoloOperator /
+	// HICLAW_SOLO_OPERATOR.
+	SoloOperator bool
 }
 
 // SendManagerWelcome delivers the first-boot onboarding prompt that asks
@@ -1530,7 +1543,12 @@ func (p *Provisioner) SendManagerWelcomeMessage(ctx context.Context, req Manager
 	if timezone == "" {
 		timezone = "Asia/Shanghai"
 	}
-	body := renderManagerWelcomeBody(language, timezone)
+	var body string
+	if req.SoloOperator {
+		body = renderManagerWelcomeBodySolo(language, timezone)
+	} else {
+		body = renderManagerWelcomeBody(language, timezone)
+	}
 	if err := p.matrix.SendMessageAsAdmin(ctx, req.RoomID, body); err != nil {
 		return fmt.Errorf("welcome: send to %s: %w", req.RoomID, err)
 	}
@@ -1561,6 +1579,36 @@ Please begin the onboarding conversation:
 5. After they reply, write their preferences to ~/SOUL.md
 6. Confirm what you wrote, and ask if they would like to adjust anything
 7. Once confirmed, run: touch ~/soul-configured
+
+The human admin will start chatting shortly.`, language, timezone, language, timezone)
+}
+
+// renderManagerWelcomeBodySolo returns the first-boot onboarding prompt used
+// when Config.SoloOperator is true: a single human is running HiClaw alone,
+// so the normal 4-question identity interview (name / communication style /
+// behavior guidelines / language confirmation) is unnecessary ceremony —
+// there's nobody else to introduce the agent to, and no org-wide SOUL.md
+// consensus to negotiate. The agent still greets the admin and still writes
+// ~/SOUL.md + touches ~/soul-configured so downstream gating (that checks
+// for soul-configured) behaves identically to the interview path, but it
+// picks sensible defaults itself instead of asking.
+func renderManagerWelcomeBodySolo(language, timezone string) string {
+	return fmt.Sprintf(`This is an automated message from the HiClaw setup. This is a fresh installation running in solo mode (single operator).
+
+--- Installation Context ---
+User Language: %s  (zh = Chinese, en = English)
+User Timezone: %s  (IANA timezone identifier)
+---
+
+You are an AI agent that manages a team of worker agents. You are being run by a single human operator working solo — there is no larger organization to onboard.
+
+Please do the following, without conducting an interview or asking the admin multiple setup questions:
+
+1. Greet the admin briefly and describe what you can do (coordinate workers, manage tasks, run multi-agent projects)
+2. Use "%s" as your default communication language (the user's install-time preference); you may switch languages if the admin addresses you in a different one
+3. The user's timezone is %s — use it to interpret schedules and deadlines they mention
+4. Write a minimal ~/SOUL.md using sensible defaults (default name, direct and concise communication style, no special behavior constraints), then touch ~/soul-configured
+5. Let the admin know they can adjust your name or style at any time just by asking
 
 The human admin will start chatting shortly.`, language, timezone, language, timezone)
 }

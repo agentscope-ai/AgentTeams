@@ -29,6 +29,22 @@ def _is_in_container() -> bool:
     return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
 
 
+def _quiet_rooms_enabled() -> bool:
+    """True if HICLAW_QUIET_ROOMS is set truthily (Phase 5b, default off).
+
+    Mechanism-only gate: when enabled, the bridge additionally writes a
+    root-level ``show_tool_details: false`` into config.json (the tap
+    hypothesized in the reshape plan for suppressing per-tool-call chatter —
+    efficacy against the external BaseChannel is unverified, see plan S2).
+    When unset (default), config.json output is byte-identical to before
+    this flag existed.
+    """
+    raw = os.environ.get("HICLAW_QUIET_ROOMS")
+    if raw is None:
+        return False
+    return raw.strip().lower() in ("true", "1", "yes", "on")
+
+
 def _secret_dir(working_dir: Path) -> Path:
     """Return the secret dir path that copaw uses alongside working_dir."""
     return Path(str(working_dir) + ".secret")
@@ -261,6 +277,19 @@ def _write_config_json(
             "max_input_length"
         ] = context_window
 
+    # Phase 5b "quiet rooms" (env-gated, default off): root-level
+    # show_tool_details is a separate knob from channels.matrix.* above
+    # (copaw/src/matrix/config.py:1164, defaults True, never set anywhere
+    # today). Only touch it when the operator opts in — leaving the env
+    # unset must produce byte-identical config.json output to before this
+    # flag existed.
+    if _quiet_rooms_enabled():
+        existing["show_tool_details"] = False
+    else:
+        # Restart-time overlay: if quiet rooms was previously enabled and is
+        # now off, don't leave a stale show_tool_details behind.
+        existing.pop("show_tool_details", None)
+
     with open(config_path, "w") as f:
         json.dump(existing, f, indent=2, ensure_ascii=False)
 
@@ -357,6 +386,17 @@ def _write_agent_json(
     context_window = _resolve_context_window(cfg)
     if context_window is not None:
         agent_cfg.setdefault("running", {})["max_input_length"] = context_window
+
+    # Manager heartbeat interval — HICLAW_MANAGER_HEARTBEAT_INTERVAL flows from
+    # the controller (see hiclaw-controller/internal/service/worker_env.go) and
+    # overrides the template-seeded heartbeat.every (hardcoded "30m" in
+    # templates/agent.manager.json). Only the manager profile reads this env
+    # var; the worker template already defaults to 10m on its own.
+    if profile == "manager":
+        heartbeat_every = os.environ.get(
+            "HICLAW_MANAGER_HEARTBEAT_INTERVAL", "10m"
+        ).strip() or "10m"
+        agent_cfg.setdefault("heartbeat", {})["every"] = heartbeat_every
 
     # Set workspace_dir
     agent_cfg.setdefault("workspace_dir", str(workspace_dir))

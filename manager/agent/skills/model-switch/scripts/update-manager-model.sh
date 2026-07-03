@@ -101,6 +101,14 @@ case "${MODEL_NAME}" in
         CTX=256000; MAX=128000 ;;
     glm-5|MiniMax-M2.7|MiniMax-M2.7-highspeed|MiniMax-M2.5)
         CTX=200000; MAX=128000 ;;
+    # ⚠️ Provisional (plan v2.3 S5/S6, decision #7): Ollama Cloud + Xiaomi MiMo,
+    # registered by setup-higress.sh's env-gated extra-provider loop. Keep in
+    # sync with hiclaw-controller/internal/agentconfig/generator.go,
+    # manager/configs/known-models.json and manager-openclaw.json.tmpl.
+    ollama/gpt-oss:120b-cloud|mimo/MiMo-V2.5)
+        CTX=128000; MAX=32000 ;;
+    mimo/MiMo-V2.5-Pro)
+        CTX=200000; MAX=64000 ;;
     *)
         CTX=150000; MAX=128000 ;;
 esac

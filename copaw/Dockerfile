@@ -45,6 +45,8 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
         curl \
         git \
         jq \
+        ripgrep \
+        ffmpeg \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
@@ -68,7 +70,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     rm -rf /var/lib/apt/lists/*
 
 RUN npm config set registry ${NPM_REGISTRY} && \
-    npm install -g mcporter skills && \
+    npm install -g mcporter skills @nacos-group/cli && \
     rm -rf /root/.npm
 
 # Download lite CoPaw source archive from GitHub
@@ -100,6 +102,21 @@ RUN MATRIX_CH=/opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels
          find /opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels/matrix/__pycache__ -name 'channel*' -delete 2>/dev/null || true; \
          echo 'Patched Matrix channel _sync_loop indentation'; \
        fi
+
+# --- Patch CoPaw stream-error classification (standard venv) ---
+# Upstream classifies mid-stream disconnects (RemoteProtocolError, "peer closed
+# connection", "incomplete chunked read", stream-idle timeouts) as an
+# UnknownAgentException instead of a retryable ModelTimeoutException, and caps
+# the timeout at 60s. Patch fails the build loudly if the upstream markers move.
+COPY scripts/patch_copaw_stream_errors.py /tmp/
+
+RUN /opt/venv/standard/bin/python /tmp/patch_copaw_stream_errors.py \
+        /opt/venv/standard/lib/python3.11/site-packages \
+    && grep -q 'ModelTimeoutException(model, timeout=900' \
+        /opt/venv/standard/lib/python3.11/site-packages/copaw/exceptions.py \
+    && grep -q '"stream_idle_timeout"' \
+        /opt/venv/standard/lib/python3.11/site-packages/copaw/exceptions.py \
+    && rm /tmp/patch_copaw_stream_errors.py
 
 # --- Lite venv: copaw from GitHub fork ---
 RUN python -m venv /opt/venv/lite \

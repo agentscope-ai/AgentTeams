@@ -13,6 +13,22 @@ shared/projects/{project-id}/
 └── plan.md
 ```
 
+## Two-layer model (chat-flow vs Project CRD)
+
+This skill's `meta.json`/`plan.md` are the **execution layer** — chat-flow tracking of phases,
+tasks, and assignments, always created by `create-project.sh`. There is a **second, federated
+layer**: the `Project` CRD (`hiclaw-controller`'s `/api/v1/projects`), which is **repo/access
+provisioning** — which team owns the project, which Gitea repos are attached, and at what access
+level (`rw`/`ro`). The two are linked only by the shared project id; there is no schema merge
+between them.
+
+Create the CRD layer by adding `--team <TEAM_NAME>` and one or more repeatable
+`--repo <URL>:<rw|ro>` flags to the same `create-project.sh` call (`references/create-project.md`
+Step 1b). Omit both flags when the project has no repo to provision (e.g. pure coordination/chat
+work) — this remains the default and produces byte-identical output to a project with no CRD.
+The CRD is applied via `hiclaw apply -f`, which POSTs/PUTs to the controller's Project REST
+routes; the Manager container bundles the `hiclaw` CLI.
+
 ## Gotchas
 
 - **Check YOLO mode BEFORE drafting the plan** — `[ "${HICLAW_YOLO:-}" = "1" ] || [ -f ~/yolo-mode ]`. In YOLO mode you MUST auto-confirm in `create-project.md` Step 1c; never post a "please confirm" question, the admin will not reply and the project stalls forever. See `references/create-project.md` Step 0.
@@ -23,6 +39,7 @@ shared/projects/{project-id}/
 - **plan.md had duplicate sections in the old version** — use `references/plan-format.md` as the canonical format
 - **Always adapt language to admin's preferred language** when posting in rooms or DMs
 - **Always read SOUL.md before composing notifications** — use the persona and language defined there
+- **`--team`/`--repo` only add the Project CRD, never replace chat-flow tracking** — `plan.md`/`meta.json` remain the source of truth for task status regardless; the CRD is repo/access provisioning only, not a second place to track phases
 
 ## Operation Reference
 

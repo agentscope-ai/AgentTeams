@@ -92,6 +92,63 @@ def _merge_mentions_block(
         message["m.mentions"] = merged
 
 
+def should_suppress_outbound(
+    content: Mapping[str, Any],
+    *,
+    filter_tool: bool = False,
+    filter_thinking: bool = False,
+) -> bool:
+    """Return True if an outbound Matrix event should be dropped (quiet rooms).
+
+    Policy (Phase 5b — "quiet rooms"): when the filters are enabled we drop
+    **tool-call / intermediate / thinking-shaped** events but always let the
+    following through, regardless of the filter flags:
+
+      * a plain final assistant reply — ``msgtype in {None, "m.text"}`` with
+        no ``hermes.event_kind`` marking it as tool/thinking output.
+      * lifecycle/heartbeat-of-life events — anything whose
+        ``hermes.event_kind`` is ``"start"``, ``"finish"``, or ``"heartbeat"``.
+      * edits (``m.relates_to.rel_type == "m.replace"``) to the **final**
+        message — streamed replace-in-place updates must still land so the
+        room shows the final text, even if earlier partial edits were
+        suppressed.
+
+    hermes-agent (and the HiClaw overlay) is expected to tag outbound content
+    with an ``hermes.event_kind`` key of ``"tool"``, ``"thinking"``,
+    ``"start"``, ``"finish"``, or ``"heartbeat"`` when it is not a plain final
+    reply. Content with no such marker is treated as a plain final message and
+    is never suppressed — this keeps the function conservative: it only
+    drops events it can positively identify as tool/thinking chatter.
+
+    When both ``filter_tool`` and ``filter_thinking`` are False (the default,
+    matching ``HICLAW_QUIET_ROOMS=false``) this always returns False — the
+    function is a no-op until the env gate turns it on.
+    """
+    if not filter_tool and not filter_thinking:
+        return False
+
+    if not isinstance(content, Mapping):
+        return False
+
+    relates_to = content.get("m.relates_to")
+    if isinstance(relates_to, Mapping) and relates_to.get("rel_type") == "m.replace":
+        # Edits to an already-sent message (streamed final-message updates)
+        # always pass — dropping them would leave the room showing stale or
+        # no text at all for the final reply.
+        return False
+
+    event_kind = content.get("hermes.event_kind")
+    if event_kind in ("start", "finish", "heartbeat"):
+        return False
+
+    if event_kind == "tool" and filter_tool:
+        return True
+    if event_kind == "thinking" and filter_thinking:
+        return True
+
+    return False
+
+
 def apply_outbound_mentions(
     content: MutableMapping[str, Any],
     self_user_id: str | None = None,

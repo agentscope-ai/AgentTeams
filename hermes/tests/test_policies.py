@@ -7,6 +7,7 @@ from hermes_matrix.policies import (
     HistoryBuffer,
     apply_outbound_mentions,
     extract_mentions_from_text,
+    should_suppress_outbound,
 )
 
 
@@ -97,3 +98,62 @@ def test_history_buffer_respects_limit() -> None:
     assert "alice: one" not in drained
     assert "bob: two" in drained
     assert "carol: three" in drained
+
+
+def test_should_suppress_outbound_noop_when_both_filters_off() -> None:
+    """Mechanism default-off: with no filters enabled, nothing is suppressed,
+    including content explicitly tagged as tool/thinking chatter.
+    """
+    tool_content = {"body": "ran a tool", "hermes.event_kind": "tool"}
+    thinking_content = {"body": "thinking...", "hermes.event_kind": "thinking"}
+
+    assert should_suppress_outbound(tool_content) is False
+    assert should_suppress_outbound(thinking_content) is False
+
+
+def test_should_suppress_outbound_drops_tool_and_thinking_when_enabled() -> None:
+    tool_content = {"body": "ran a tool", "hermes.event_kind": "tool"}
+    thinking_content = {"body": "thinking...", "hermes.event_kind": "thinking"}
+
+    assert should_suppress_outbound(tool_content, filter_tool=True) is True
+    assert should_suppress_outbound(thinking_content, filter_thinking=True) is True
+
+    # Each filter only gates its own category.
+    assert should_suppress_outbound(tool_content, filter_thinking=True) is False
+    assert should_suppress_outbound(thinking_content, filter_tool=True) is False
+
+
+def test_should_suppress_outbound_always_passes_plain_final_text() -> None:
+    plain = {"body": "final answer", "msgtype": "m.text"}
+    untagged = {"body": "final answer"}
+
+    assert should_suppress_outbound(
+        plain, filter_tool=True, filter_thinking=True
+    ) is False
+    assert should_suppress_outbound(
+        untagged, filter_tool=True, filter_thinking=True
+    ) is False
+
+
+def test_should_suppress_outbound_always_passes_lifecycle_events() -> None:
+    for kind in ("start", "finish", "heartbeat"):
+        content = {"body": f"[{kind}]", "hermes.event_kind": kind}
+        assert should_suppress_outbound(
+            content, filter_tool=True, filter_thinking=True
+        ) is False
+
+
+def test_should_suppress_outbound_always_passes_replace_edits() -> None:
+    """m.replace edits (streamed final-message updates) must never be
+    dropped, even if the event would otherwise look like tool/thinking
+    chatter — dropping them could leave the room showing stale text.
+    """
+    edit_content = {
+        "body": "* edited final text",
+        "hermes.event_kind": "tool",
+        "m.relates_to": {"rel_type": "m.replace", "event_id": "$abc"},
+    }
+
+    assert should_suppress_outbound(
+        edit_content, filter_tool=True, filter_thinking=True
+    ) is False

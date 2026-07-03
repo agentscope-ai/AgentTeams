@@ -29,6 +29,31 @@ func TestNormalizeMinIOS3Endpoint(t *testing.T) {
 	}
 }
 
+func TestDockerConfigResourceDefaults(t *testing.T) {
+	cfg := &Config{}
+	dc := cfg.DockerConfig()
+	if dc.WorkerCPU != "1000m" {
+		t.Errorf("WorkerCPU = %q, want %q", dc.WorkerCPU, "1000m")
+	}
+	if dc.WorkerMemory != "2Gi" {
+		t.Errorf("WorkerMemory = %q, want %q", dc.WorkerMemory, "2Gi")
+	}
+}
+
+func TestDockerConfigResourceEnvOverrides(t *testing.T) {
+	t.Setenv("HICLAW_DOCKER_WORKER_CPU", "500m")
+	t.Setenv("HICLAW_DOCKER_WORKER_MEMORY", "1Gi")
+
+	cfg := &Config{}
+	dc := cfg.DockerConfig()
+	if dc.WorkerCPU != "500m" {
+		t.Errorf("WorkerCPU = %q, want %q", dc.WorkerCPU, "500m")
+	}
+	if dc.WorkerMemory != "1Gi" {
+		t.Errorf("WorkerMemory = %q, want %q", dc.WorkerMemory, "1Gi")
+	}
+}
+
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	t.Setenv("HICLAW_MANAGER_SPEC", `{
 		"model":"qwen-max",
@@ -237,5 +262,33 @@ func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) 
 
 	if cfg.ContainerPrefix != "custom-worker-" {
 		t.Fatalf("ContainerPrefix = %q, want %q", cfg.ContainerPrefix, "custom-worker-")
+	}
+}
+
+func TestLoadConfigSoloOperatorDefaultsFalse(t *testing.T) {
+	cfg := LoadConfig()
+
+	if cfg.SoloOperator {
+		t.Fatal("SoloOperator = true, want false when HICLAW_SOLO_OPERATOR is unset")
+	}
+}
+
+func TestLoadConfigSoloOperatorParsesTruthyValues(t *testing.T) {
+	for _, v := range []string{"1", "true", "True", "TRUE"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("HICLAW_SOLO_OPERATOR", v)
+			cfg := LoadConfig()
+			if !cfg.SoloOperator {
+				t.Fatalf("SoloOperator = false, want true for HICLAW_SOLO_OPERATOR=%q", v)
+			}
+		})
+	}
+}
+
+func TestLoadConfigSoloOperatorFalseForOtherValues(t *testing.T) {
+	t.Setenv("HICLAW_SOLO_OPERATOR", "0")
+	cfg := LoadConfig()
+	if cfg.SoloOperator {
+		t.Fatal("SoloOperator = true, want false for HICLAW_SOLO_OPERATOR=0")
 	}
 }

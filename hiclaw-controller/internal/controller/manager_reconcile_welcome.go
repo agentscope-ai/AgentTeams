@@ -202,9 +202,10 @@ func (r *ManagerReconciler) reconcileManagerWelcome(ctx context.Context, s *mana
 	// SEND. Failures here are intentionally NOT rolled back — see the
 	// big concurrency-model comment above.
 	if err := r.Provisioner.SendManagerWelcomeMessage(ctx, service.ManagerWelcomeRequest{
-		RoomID:   m.Status.RoomID,
-		Language: r.UserLanguage,
-		Timezone: r.UserTimezone,
+		RoomID:       m.Status.RoomID,
+		Language:     r.UserLanguage,
+		Timezone:     r.UserTimezone,
+		SoloOperator: r.SoloOperator,
 	}); err != nil {
 		logger.Error(err, "manager welcome send failed AFTER claim — admin may need to prompt the agent manually",
 			"manager", m.Name, "roomID", m.Status.RoomID)

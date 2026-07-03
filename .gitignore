@@ -38,6 +38,8 @@ manager/copaw-agent/
 # Node.js
 node_modules/
 package.json
+# dashboard/ is a real Node subproject — its manifests are hand-authored source
+!dashboard/**/package.json
 pnpm-lock.yaml
 .cursor/
 

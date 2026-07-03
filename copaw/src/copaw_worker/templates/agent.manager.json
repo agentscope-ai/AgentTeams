@@ -10,7 +10,7 @@
   ],
   "heartbeat": {
     "enabled": true,
-    "every": "30m"
+    "every": "10m"
   },
   "channels": {
     "console": {

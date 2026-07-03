@@ -1,0 +1,45 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { loadConfig, readTokenFile } = require('../src/config');
+
+test('loadConfig applies documented defaults when env is empty', () => {
+  const cfg = loadConfig({});
+  assert.equal(cfg.port, 8090);
+  assert.equal(cfg.controllerUrl, 'http://127.0.0.1:8080');
+  assert.equal(cfg.tokenFile, '/var/run/hiclaw/cli-token');
+  assert.equal(cfg.minio.endpoint, 'http://127.0.0.1:9000');
+  assert.equal(cfg.minio.bucket, 'hiclaw-storage');
+});
+
+test('loadConfig reads every documented env var, never hardcoding secrets/bucket', () => {
+  const env = {
+    PORT: '9999',
+    HICLAW_CONTROLLER_URL: 'http://controller.internal:8080',
+    HICLAW_AUTH_TOKEN_FILE: '/tmp/tok',
+    MINIO_ENDPOINT: 'http://minio.internal:9000',
+    MINIO_ACCESS_KEY: 'ak',
+    MINIO_SECRET_KEY: 'sk',
+    HICLAW_FS_BUCKET: 'custom-bucket',
+  };
+  const cfg = loadConfig(env);
+  assert.equal(cfg.port, 9999);
+  assert.equal(cfg.controllerUrl, 'http://controller.internal:8080');
+  assert.equal(cfg.tokenFile, '/tmp/tok');
+  assert.equal(cfg.minio.endpoint, 'http://minio.internal:9000');
+  assert.equal(cfg.minio.accessKey, 'ak');
+  assert.equal(cfg.minio.secretKey, 'sk');
+  assert.equal(cfg.minio.bucket, 'custom-bucket');
+});
+
+test('readTokenFile trims trailing whitespace/newlines', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-test-'));
+  const file = path.join(dir, 'token');
+  fs.writeFileSync(file, 'abc123\n');
+  assert.equal(readTokenFile(file), 'abc123');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

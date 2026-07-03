@@ -53,7 +53,7 @@ cat ~/workers-registry.json
 ## 注意
 
 - 内置 skills（`file-sync`、`task-progress`、`project-participation`、`mcporter`、`find-skills`）由 Worker 镜像自动分配，无需通过此目录管理
-- 此目录中的 skills 由 Manager 统一维护，Worker 不能修改自己的 skills
+- Worker 可以自行安装 skills（例如在本地写入新的 `~/skills/<name>/` 目录，会在同步中持久保留）。但底线是"内置名称优先"：Manager 推送过的 skill 名称（`push-worker-skills.sh`）会在每次同步（约每 5 分钟一次的 reconcile，`Overwrite:true`）中被重新覆盖，因此 Manager 管理的 skill 名称始终生效；只要不与 Manager 推送的名称冲突，Worker 自行安装的非内置 skill 目录会被保留、不会被清除
 - Worker 的 on-demand skill 分配记录在 `~/workers-registry.json`
 
 ## 内置 Skills

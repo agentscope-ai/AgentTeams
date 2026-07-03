@@ -2,11 +2,20 @@
 # create-project.sh - Create a project directory structure and Matrix room
 #
 # Usage:
-#   create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...>
+#   create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...> \
+#     [--team <TEAM_NAME>] [--repo <URL>:<rw|ro> ...]
 #
 # Prerequisites:
 #   - Worker SOUL.md files must already exist
 #   - Environment: HICLAW_MATRIX_DOMAIN, HICLAW_ADMIN_USER, MANAGER_MATRIX_TOKEN
+#
+# Federation (decision #16): this script always writes the chat-flow
+# meta.json/plan.md (execution layer, unchanged). When --team is ALSO given,
+# it additionally emits a `Project` CR YAML (hiclaw-controller/api/v1beta1
+# ProjectSpec — see types.go) and applies it via `hiclaw apply -f` — a
+# SECOND, federated document (repo/access provisioning) linked by project id,
+# never merged into meta.json. Omitting --team is a no-op for this layer and
+# the script's output is byte-identical to before this flag existed.
 
 set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
@@ -14,18 +23,22 @@ source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 PROJECT_ID=""
 PROJECT_TITLE=""
 WORKERS_CSV=""
+PROJECT_TEAM=""
+declare -a PROJECT_REPOS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --id)      PROJECT_ID="$2"; shift 2 ;;
         --title)   PROJECT_TITLE="$2"; shift 2 ;;
         --workers) WORKERS_CSV="$2"; shift 2 ;;
+        --team)    PROJECT_TEAM="$2"; shift 2 ;;
+        --repo)    PROJECT_REPOS+=("$2"); shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
 if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || [ -z "${WORKERS_CSV}" ]; then
-    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...>"
+    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...> [--team <TEAM_NAME>] [--repo <URL>:<rw|ro> ...]"
     exit 1
 fi
 
@@ -36,6 +49,52 @@ _fail() {
     echo '{"error": "'"$1"'"}'
     exit 1
 }
+
+# Escape an arbitrary string for use as a YAML double-quoted scalar and wrap
+# it in the surrounding quotes. Chat-origin values (PROJECT_TITLE especially)
+# must never be interpolated into emitted YAML unescaped — a stray '"', '\',
+# or newline would break out of the scalar and corrupt/inject the document
+# that is later fed to `hiclaw apply -f`.
+# Order matters: escape backslashes FIRST (so we don't double-escape the
+# backslashes we're about to introduce for \n / \t), then quotes, then map
+# newlines/tabs to their YAML escapes, and finally drop bare CRs.
+yaml_dq() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/}"
+    s="${s//$'\t'/\\t}"
+    printf '"%s"' "$s"
+}
+
+# Validate the optional federation flags (--team / --repo) up front, before
+# any Matrix/MinIO side effects — a bad --repo access value should never
+# leave a half-created project behind.
+if [ -n "${PROJECT_TEAM}" ] && [ "${#PROJECT_REPOS[@]}" -eq 0 ]; then
+    _fail "--team requires at least one --repo <url>:<rw|ro>"
+fi
+if [ "${#PROJECT_REPOS[@]}" -gt 0 ] && [ -z "${PROJECT_TEAM}" ]; then
+    _fail "--repo requires --team"
+fi
+for _repo_spec in "${PROJECT_REPOS[@]+"${PROJECT_REPOS[@]}"}"; do
+    _repo_access="${_repo_spec##*:}"
+    if [ "${_repo_access}" != "rw" ] && [ "${_repo_access}" != "ro" ]; then
+        _fail "--repo access must be rw or ro: ${_repo_spec}"
+    fi
+done
+
+# PROJECT_ID and PROJECT_TEAM must be k8s-name-safe anyway (they become
+# Project/Team resource identifiers), so hard-validate against a safe
+# charset here — this also guarantees they can never break out of an
+# unquoted YAML scalar (':' or a leading '- ' would otherwise misparse).
+_SAFE_NAME_RE='^[A-Za-z0-9._-]+$'
+if ! [[ "${PROJECT_ID}" =~ ${_SAFE_NAME_RE} ]]; then
+    _fail "--id must match ${_SAFE_NAME_RE}: ${PROJECT_ID}"
+fi
+if [ -n "${PROJECT_TEAM}" ] && ! [[ "${PROJECT_TEAM}" =~ ${_SAFE_NAME_RE} ]]; then
+    _fail "--team must match ${_SAFE_NAME_RE}: ${PROJECT_TEAM}"
+fi
 
 # Ensure Manager Matrix token is available
 SECRETS_FILE="/data/hiclaw-secrets.env"
@@ -293,6 +352,50 @@ mc mirror "${PROJECT_DIR}/" "${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_
 mc stat "${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/meta.json" > /dev/null 2>&1 \
     || _fail "meta.json not found in MinIO after sync"
 log "  MinIO sync verified"
+
+# ============================================================
+# Step 5 (optional): Federated Project CR — repo/access provisioning layer
+# ============================================================
+# Only runs when --team was given (decision #16). This is IN ADDITION to the
+# meta.json/plan.md chat-flow written above, never a replacement — same
+# project id, two documents, no schema merge. `hiclaw apply -f` hits the
+# controller's Project REST routes (Step 1, /api/v1/projects); the Manager
+# image bundles the `hiclaw` CLI (manager/Dockerfile.copaw).
+if [ -n "${PROJECT_TEAM}" ]; then
+    log "Step 5: Applying federated Project CR (team=${PROJECT_TEAM})..."
+
+    PROJECT_CR_FILE="${PROJECT_DIR}/project-cr.yaml"
+    {
+        echo "apiVersion: hiclaw.io/v1beta1"
+        echo "kind: Project"
+        echo "metadata:"
+        echo "  name: $(yaml_dq "${PROJECT_ID}")"
+        echo "spec:"
+        echo "  team: $(yaml_dq "${PROJECT_TEAM}")"
+        echo "  description: $(yaml_dq "${PROJECT_TITLE}")"
+        echo "  repos:"
+        for _repo_spec in "${PROJECT_REPOS[@]}"; do
+            _repo_url="${_repo_spec%:*}"
+            _repo_access="${_repo_spec##*:}"
+            echo "    - url: $(yaml_dq "${_repo_url}")"
+            echo "      access: $(yaml_dq "${_repo_access}")"
+        done
+        if [ -n "${WORKERS_CSV}" ]; then
+            echo "  workers:"
+            echo "${WORKERS_CSV}" | tr ',' '\n' | while read -r w; do
+                w=$(echo "${w}" | tr -d ' ')
+                [ -z "${w}" ] && continue
+                echo "    - $(yaml_dq "${w}")"
+            done
+        fi
+    } > "${PROJECT_CR_FILE}"
+
+    if hiclaw apply -f "${PROJECT_CR_FILE}"; then
+        log "  Project CR applied (${PROJECT_CR_FILE})"
+    else
+        log "  WARNING: hiclaw apply -f failed for Project CR — repo/access provisioning layer not created; chat-flow project is unaffected"
+    fi
+fi
 
 # ============================================================
 # Output JSON result

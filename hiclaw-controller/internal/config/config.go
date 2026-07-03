@@ -181,6 +181,17 @@ type Config struct {
 
 	// Pre-resolved worker environment defaults (passed to worker containers)
 	WorkerEnv WorkerEnvDefaults
+
+	// SoloOperator, when true, tailors the first-boot experience for a
+	// single human running HiClaw alone rather than a multi-person org:
+	// the Manager welcome prompt skips the 4-question identity interview
+	// (renderManagerWelcomeBodySolo), every Team's PeerMentions is forced
+	// to true regardless of Team.Spec.PeerMentions (there is only one
+	// human to loop in, so cross-mentions can't leak to strangers), and
+	// the sole Human created via the HTTP API defaults to Admin
+	// (PermissionLevel=1) when the request omits one. Sourced from
+	// HICLAW_SOLO_OPERATOR. Default false (unchanged multi-user behavior).
+	SoloOperator bool
 }
 
 // WorkerEnvDefaults holds environment variable defaults injected into worker and manager containers.
@@ -340,6 +351,10 @@ func LoadConfig() *Config {
 		UserLanguage: envOrDefault("HICLAW_LANGUAGE", "zh"),
 		UserTimezone: envOrDefault("TZ", "Asia/Shanghai"),
 
+		// HICLAW_SOLO_OPERATOR: set "1"/"true" when a single human runs
+		// HiClaw alone (no multi-person org). See Config.SoloOperator doc.
+		SoloOperator: envBool("HICLAW_SOLO_OPERATOR"),
+
 		CMSTracesEnabled:  envBool("HICLAW_CMS_TRACES_ENABLED"),
 		CMSMetricsEnabled: envBool("HICLAW_CMS_METRICS_ENABLED"),
 		CMSEndpoint:       os.Getenv("HICLAW_CMS_ENDPOINT"),
@@ -431,6 +446,14 @@ func (c *Config) AgentFSDir() string {
 	return envOrDefault("HICLAW_AGENT_FS_DIR", "/root/hiclaw-fs/agents")
 }
 
+// ManagerStateFile returns the path to the Manager Agent's task-tracking
+// state.json (embedded mode), defaulting to "<AgentFSDir>/manager/state.json".
+// HICLAW_MANAGER_STATE_FILE overrides the default for testing/non-standard
+// layouts.
+func (c *Config) ManagerStateFile() string {
+	return envOrDefault("HICLAW_MANAGER_STATE_FILE", filepath.Join(c.AgentFSDir(), "manager", "state.json"))
+}
+
 // WorkerAgentDir returns the source directory for builtin worker agent files.
 func (c *Config) WorkerAgentDir() string {
 	return envOrDefault("HICLAW_WORKER_AGENT_DIR", "/opt/hiclaw/agent/worker-agent")
@@ -464,6 +487,8 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		HermesWorkerImage:    envOrDefault("HICLAW_HERMES_WORKER_IMAGE", "hiclaw/hermes-worker:latest"),
 		OpenHumanWorkerImage: envOrDefault("HICLAW_OPENHUMAN_WORKER_IMAGE", "hiclaw/openhuman-worker:latest"),
 		DefaultNetwork:       envOrDefault("HICLAW_DOCKER_NETWORK", "hiclaw-net"),
+		WorkerCPU:            envOrDefault("HICLAW_DOCKER_WORKER_CPU", "1000m"),
+		WorkerMemory:         envOrDefault("HICLAW_DOCKER_WORKER_MEMORY", "2Gi"),
 	}
 }
 

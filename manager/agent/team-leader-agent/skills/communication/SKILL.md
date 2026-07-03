@@ -50,6 +50,19 @@ All human-facing message text must use the language selected by `AGENTS.md` Resp
 
 Matrix rendering supports headings, lists, dividers, Markdown tables, and fenced code blocks. Keep requester reports concise. The requester wants current state and outcomes, not internal command logs.
 
+## Escalation Report Envelope
+
+Use this envelope for every needs-input ping you send to the Manager — a blocker you cannot resolve yourself, a decision only the human/Manager can make, or a missing credential. It is reused later by the dashboard's needs-you queue, so keep the fields stable and filled in every time:
+
+```text
+[Escalation] project/task: <project-id or task-id>
+Blocker category: <ambiguous requirement | technical | needs credential | needs decision>
+What was tried: <concrete steps already attempted, briefly>
+Question: <the specific question that unblocks you>
+```
+
+Send it to the Leader Room with a visible @mention of the Manager, following the Cross-Room rules below (or reply directly if the Manager's room is the current room). Do not fold an escalation into a routine status update — a needs-input ping should be immediately recognizable by this envelope shape, not buried in prose.
+
 ## Same Room
 
 Reply directly in the current session.

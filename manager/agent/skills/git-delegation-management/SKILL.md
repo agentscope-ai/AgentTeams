@@ -15,6 +15,24 @@ The Manager has access to:
 
 This allows git operations to use the correct author name, email, and authentication.
 
+## Repo URLs and access — read from the Project manifest, not inline paths
+
+A project's repos and their access level (`rw`/`ro`) are declared in its **Project manifest**
+(`shared/projects/<id>/manifest.json`, MinIO-projected from the `Project` CRD created by
+`project-management`'s `create-project.sh --team ... --repo <url>:<access>` — decision #16).
+Always resolve repo URLs from that manifest rather than hardcoding or guessing a path, so
+provisioning and delegation stay consistent with what was actually granted.
+
+Per-worker Gitea identity (decision #4/#12/#13) is provisioned separately by the operator-run
+`scripts/provision-worker-gitea.sh --project <id>` — it creates the worker's own Gitea user, mints
+a scoped PAT, registers that worker's single-consumer `mcp-gitea-<worker>` server, and sets the
+repo-collaborator role (`rw`→write, `ro`→read) from the manifest's `access` field.
+
+**The Manager/this skill never handles PATs.** Git credentials used here are the host's own
+(`.gitconfig` / SSH keys above) — the Manager does not read, generate, or forward any worker's
+Gitea PAT; those live only in Higress (as each `mcp-gitea-<worker>`'s `defaultCredential`) and are
+never passed through the Manager or the controller.
+
 ---
 
 ## Handling `git-request:` Messages

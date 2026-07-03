@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import html
 import io
+import json
 import logging
 import mimetypes
 import os
@@ -73,6 +74,11 @@ TYPING_SERVER_TIMEOUT_MS = 30000
 TYPING_RENEWAL_INTERVAL_S = 25
 TYPING_MAX_DURATION_S = 120
 DM_CACHE_TTL_MS = 30_000
+# Room-membership localpart cache (tier-4 bare-@mention resolution)
+LOCALPART_CACHE_TTL_MS = 60_000
+# Catch-up replay: cap on buffered startup messages (avoid unbounded growth
+# if a room is very chatty while the channel is still starting up)
+STARTUP_REPLAY_BUFFER_CAP = 50
 
 # Token refresh tunables
 MAX_TOKEN_REFRESH_RETRIES = 3
@@ -200,6 +206,18 @@ def _readiness_probe_reply(text: str) -> str | None:
     return "READY" if _READINESS_REPLY_RE.search(text or "") else None
 
 
+def _chat_ack_enabled() -> bool:
+    """Return whether immediate chat acks are enabled (default: on).
+
+    ``HICLAW_CHAT_ACK`` — unset or any of "1"/"true" (case-insensitive) means
+    on; "0"/"false" means off.
+    """
+    raw = os.environ.get("HICLAW_CHAT_ACK")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("0", "false")
+
+
 def _enum_name(value: Any) -> str:
     """Return a stable enum-like name for runtime schemas."""
     name = getattr(value, "name", None)
@@ -325,6 +343,12 @@ class MatrixChannel(BaseChannel):
         self._dm_room_cache: Dict[str, Dict[str, Any]] = {}
         # Shared HTTP client for media downloads (created in start())
         self._http_client: Optional[httpx.AsyncClient] = None
+        # Bare-@mention resolution (tier 4): room_id -> {"localparts": {lp:
+        # mxid}, "ts": timestamp}. Built from room members via joined_members.
+        self._localpart_cache: Dict[str, Dict[str, Any]] = {}
+        # Startup replay buffer: events received while callbacks were
+        # suppressed during the initial catch-up sync, replayed once ready.
+        self._startup_replay_buffer: List[Any] = []
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -747,33 +771,86 @@ class MatrixChannel(BaseChannel):
 
         return False
 
+    def _buffer_startup_event(self, room: MatrixRoom, event: Any) -> None:
+        """Capture a message event received while startup sync is buffering.
+
+        Registered as a temporary event callback during the initial catch-up
+        sync so no first-boot message is silently dropped. Own messages are
+        skipped (they're not something we need to react to) and the buffer
+        is capped so a very chatty room during startup can't grow it
+        unboundedly.
+        """
+        if getattr(event, "sender", None) == self._user_id:
+            return
+        if len(self._startup_replay_buffer) >= STARTUP_REPLAY_BUFFER_CAP:
+            logger.warning(
+                "MatrixChannel: startup replay buffer full (%d), dropping "
+                "event %s in %s",
+                STARTUP_REPLAY_BUFFER_CAP,
+                getattr(event, "event_id", "?"),
+                getattr(room, "room_id", "?"),
+            )
+            return
+        self._startup_replay_buffer.append((room, event))
+
+    async def _replay_startup_buffer(self) -> None:
+        """Replay buffered startup messages through the normal handling path.
+
+        Called once the channel is ready (after the initial sync completes),
+        so messages that arrived while callbacks were suppressed are handled
+        exactly as if they'd arrived normally — instead of being lost.
+        """
+        buffered = self._startup_replay_buffer
+        self._startup_replay_buffer = []
+        if not buffered:
+            return
+        logger.info(
+            "MatrixChannel: replaying %d buffered startup message(s)",
+            len(buffered),
+        )
+        for room, event in buffered:
+            try:
+                await self._on_room_event(room, event)
+            except Exception as exc:
+                logger.exception(
+                    "MatrixChannel: error replaying buffered event %s: %s",
+                    getattr(event, "event_id", "?"),
+                    exc,
+                )
+
     async def _sync_loop(self) -> None:
         next_batch: Optional[str] = self._load_sync_token()
 
         # When no persisted token exists (old version upgrade or first
-        # deploy), do an initial sync with callbacks suppressed — only capture
-        # next_batch so subsequent syncs are incremental.  This prevents
-        # replaying old messages when the token file doesn't exist yet.
-        # Use timeout=0 so startup does not long-poll and swallow fresh
-        # messages that arrive while callbacks are temporarily suppressed.
+        # deploy), do an initial sync with normal callbacks suppressed —
+        # only capture next_batch so subsequent syncs are incremental. This
+        # prevents replaying *old* (pre-restart) history as if it were new.
+        # A temporary buffering callback captures messages that arrive
+        # *during* this window so they are replayed (not lost) once ready.
+        # Use timeout=0 so startup does not long-poll and delay the replay.
         #
-        # To truly suppress callbacks, temporarily remove event callbacks
+        # To truly suppress the normal callbacks, temporarily remove them
         # before the sync and restore them after, because nio's sync()
         # internally calls receive_response() which fires callbacks.
         if next_batch is None:
             logger.info(
                 "MatrixChannel: no sync token found, "
-                "performing catch-up sync (messages suppressed)",
+                "performing catch-up sync (messages buffered for replay)",
             )
             try:
                 saved_cbs = self._client.event_callbacks[:]
                 self._client.event_callbacks.clear()
+                self._client.add_event_callback(
+                    self._buffer_startup_event,
+                    (RoomMessageText,),
+                )
                 try:
                     resp = await self._client.sync(
                         timeout=0,
                         full_state=True,
                     )
                 finally:
+                    self._client.event_callbacks.clear()
                     self._client.event_callbacks.extend(saved_cbs)
                 if isinstance(resp, SyncResponse):
                     next_batch = resp.next_batch
@@ -786,7 +863,7 @@ class MatrixChannel(BaseChannel):
                     await self._e2ee_maintenance()
                     logger.info(
                         "MatrixChannel: catch-up sync done, "
-                        "will process messages from next sync",
+                        "will replay any buffered messages once ready",
                     )
                 else:
                     logger.warning(
@@ -833,6 +910,7 @@ class MatrixChannel(BaseChannel):
                 )
 
         self._mark_channel_ready()
+        await self._replay_startup_buffer()
 
         while True:
             try:
@@ -977,8 +1055,107 @@ class MatrixChannel(BaseChannel):
                 exc,
             )
 
+    async def _send_immediate_ack(self, room_id: str) -> None:
+        """Send a short direct ack the instant a task/mention is accepted.
+
+        Bypasses the enqueue/agent-processing queue entirely (direct
+        ``room_send``, same primitive as ``_send_plain_text``) so the sender
+        gets fast feedback even if the agent itself is slow to respond.
+        Gated by ``HICLAW_CHAT_ACK`` (default on).
+        """
+        if not _chat_ack_enabled():
+            return
+        await self._send_plain_text(room_id, "On it — working on this now.")
+
+    async def _get_room_localparts(self, room_id: str) -> Dict[str, str]:
+        """Return {localpart: mxid} for members of *room_id*, TTL-cached.
+
+        Built from room members (``joined_members``) so tier-4 bare-@mention
+        resolution works even without ``~/workers-registry.json``. Manager
+        deployments additionally consult the workers registry (see
+        ``_registry_localparts``) so cross-room resolution works before the
+        target has ever spoken in this particular room.
+        """
+        now = int(time.time() * 1000)
+        cached = self._localpart_cache.get(room_id)
+        if cached and (now - cached["ts"]) < LOCALPART_CACHE_TTL_MS:
+            return cached["localparts"]
+
+        localparts: Dict[str, str] = {}
+        success = False
+        if self._client:
+            try:
+                resp = await self._client.joined_members(room_id)
+                if isinstance(resp, JoinedMembersResponse):
+                    for member in resp.members:
+                        mxid = member.user_id
+                        lp = mxid.split(":")[0].lstrip("@").lower()
+                        if lp:
+                            localparts[lp] = mxid
+                    success = True
+                else:
+                    logger.debug(
+                        "MatrixChannel: joined_members failed for localpart "
+                        "cache %s: %s",
+                        room_id,
+                        resp,
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "MatrixChannel: joined_members error for localpart "
+                    "cache %s: %s",
+                    room_id,
+                    exc,
+                )
+        if success:
+            self._localpart_cache[room_id] = {
+                "localparts": localparts,
+                "ts": now,
+            }
+            return localparts
+        # joined_members failed/raised: don't poison the cache with an empty
+        # result for a full TTL. Fall back to a prior (stale) cache entry if
+        # we have one; otherwise return empty without caching so the next
+        # call retries joined_members immediately.
+        if cached:
+            return cached["localparts"]
+        return localparts
+
+    def _registry_localparts(self) -> Dict[str, str]:
+        """Manager-only extra tier: resolve localparts from workers-registry.
+
+        Returns {localpart: mxid} synthesized from ``~/workers-registry.json``
+        worker names plus this channel's own homeserver domain. Best-effort —
+        any error yields an empty mapping.
+        """
+        if not self._user_id or ":" not in self._user_id:
+            return {}
+        domain = self._user_id.split(":", 1)[1]
+        registry_path = Path.home() / "workers-registry.json"
+        if not registry_path.exists():
+            return {}
+        try:
+            data = json.loads(registry_path.read_text(encoding="utf-8"))
+            workers = data.get("workers", {}) or {}
+            return {
+                str(name).lower(): f"@{name}:{domain}"
+                for name in workers
+                if name
+            }
+        except Exception as exc:
+            logger.debug(
+                "MatrixChannel: failed to read workers-registry.json: %s",
+                exc,
+            )
+            return {}
+
     # pylint: disable=too-many-return-statements
-    def _was_mentioned(self, event: Any, text: str) -> bool:
+    async def _was_mentioned(
+        self,
+        event: Any,
+        text: str,
+        room_id: str | None = None,
+    ) -> bool:
         if not self._user_id:
             return False
         # 1. Check m.mentions (structured mention from Matrix spec)
@@ -1012,6 +1189,24 @@ class MatrixChannel(BaseChannel):
             re.IGNORECASE,
         ):
             return True
+        # 4. Bare @localpart (no homeserver suffix), e.g. "@alice hi" —
+        # resolved against a localpart cache built from room members (and,
+        # for the Manager, optionally ~/workers-registry.json).
+        if text and room_id:
+            my_localpart = self._user_id.split(":")[0].lstrip("@").lower()
+            bare_mentions = {
+                m.lower() for m in re.findall(r"@([A-Za-z0-9_.\-]+)\b", text)
+            }
+            if my_localpart in bare_mentions:
+                localparts = await self._get_room_localparts(room_id)
+                if my_localpart in localparts:
+                    return True
+                # Room members lookup may miss the target (e.g. cache/API
+                # hiccup); manager deployments get one more chance via the
+                # workers registry.
+                registry = self._registry_localparts()
+                if my_localpart in registry:
+                    return True
         return False
 
     def _strip_mention_prefix(self, text: str, room: Any = None) -> str:
@@ -1473,9 +1668,10 @@ class MatrixChannel(BaseChannel):
 
         is_thread_event = self._is_thread_event(event)
         if not is_dm:
-            if self._require_mention(room_id) and not self._was_mentioned(
+            if self._require_mention(room_id) and not await self._was_mentioned(
                 event,
                 "",
+                room_id,
             ):
                 if is_thread_event:
                     return
@@ -1631,6 +1827,7 @@ class MatrixChannel(BaseChannel):
         }
 
         if self._enqueue:
+            await self._send_immediate_ack(room_id)
             self._enqueue(payload)
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
@@ -1808,7 +2005,9 @@ class MatrixChannel(BaseChannel):
 
         is_thread_event = self._is_thread_event(event)
         stripped = self._strip_mention_prefix(text, room)
-        mentioned = True if is_dm else self._was_mentioned(event, text)
+        mentioned = (
+            True if is_dm else await self._was_mentioned(event, text, room_id)
+        )
         if not is_dm and is_thread_event and not mentioned:
             return
         control_text = self._control_command_text(stripped, allow_bare=mentioned)
@@ -1921,6 +2120,7 @@ class MatrixChannel(BaseChannel):
         }
 
         if self._enqueue:
+            await self._send_immediate_ack(room_id)
             self._enqueue(payload)
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
@@ -1952,9 +2152,10 @@ class MatrixChannel(BaseChannel):
         # Media body (filename) rarely contains a mention, but respect
         # m.mentions if the client sends it.
         if not is_dm:
-            if self._require_mention(room_id) and not self._was_mentioned(
+            if self._require_mention(room_id) and not await self._was_mentioned(
                 event,
                 "",
+                room_id,
             ):
                 if is_thread_event:
                     return
@@ -2077,6 +2278,7 @@ class MatrixChannel(BaseChannel):
         }
 
         if self._enqueue:
+            await self._send_immediate_ack(room_id)
             self._enqueue(payload)
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)

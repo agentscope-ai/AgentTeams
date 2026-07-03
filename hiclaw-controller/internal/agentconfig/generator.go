@@ -395,6 +395,16 @@ func defaultModelSpec(modelName string) ModelSpec {
 		"MiniMax-M2.7":           {200000, 128000, false, true},
 		"MiniMax-M2.7-highspeed": {200000, 128000, false, true},
 		"MiniMax-M2.5":           {200000, 128000, false, true},
+		// ⚠️ Provisional (plan v2.3 S5/S6, decision #7): Ollama Cloud + Xiaomi MiMo
+		// are OpenAI-compatible providers registered by setup-higress.sh's
+		// env-gated extra-provider loop (HICLAW_EXTRA_LLM_PROVIDERS). Exact
+		// hosted base URL (MiMo) and current model catalog (both) are unverified
+		// from this checkout — confirm at deploy and update all 4 catalog spots
+		// together (this file, known-models.json, manager-openclaw.json.tmpl,
+		// update-manager-model.sh) if they change.
+		"ollama/gpt-oss:120b-cloud": {128000, 32000, false, true},
+		"mimo/MiMo-V2.5":            {128000, 32000, false, true},
+		"mimo/MiMo-V2.5-Pro":        {200000, 64000, false, true},
 	}
 
 	p, found := presets[modelName]
@@ -456,6 +466,8 @@ func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
 		"deepseek-chat", "deepseek-reasoner",
 		"kimi-k2.5", "glm-5",
 		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
+		// ⚠️ Provisional (S5/S6) — see defaultModelSpec comment above.
+		"ollama/gpt-oss:120b-cloud", "mimo/MiMo-V2.5", "mimo/MiMo-V2.5-Pro",
 	}
 
 	specs := make([]ModelSpec, 0, len(allModels)+1)
@@ -480,6 +492,8 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 		"deepseek-chat", "deepseek-reasoner",
 		"kimi-k2.5", "glm-5",
 		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
+		// ⚠️ Provisional (S5/S6) — see defaultModelSpec comment above.
+		"ollama/gpt-oss:120b-cloud", "mimo/MiMo-V2.5", "mimo/MiMo-V2.5-Pro",
 	}
 
 	aliases := make(map[string]interface{})

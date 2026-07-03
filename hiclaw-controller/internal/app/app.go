@@ -175,12 +175,12 @@ func (a *App) Start(ctx context.Context) error {
 				TuwunelURL:                 a.cfg.MatrixServerURL,
 				ElementWebURL:              a.cfg.ElementWebURL,
 				ControllerName:             a.cfg.ControllerName,
-				AppServiceEnabled:         a.cfg.MatrixAppServiceEnabled,
-				AppServiceID:              a.cfg.MatrixAppServiceID,
-				AppServiceToken:           a.cfg.MatrixAppServiceASToken,
-				AppServiceHSToken:         a.cfg.MatrixAppServiceHSToken,
-				AppServiceSenderLocalpart: a.cfg.MatrixAppServiceSenderLocalpart,
-				MatrixDomain:              a.cfg.MatrixDomain,
+				AppServiceEnabled:          a.cfg.MatrixAppServiceEnabled,
+				AppServiceID:               a.cfg.MatrixAppServiceID,
+				AppServiceToken:            a.cfg.MatrixAppServiceASToken,
+				AppServiceHSToken:          a.cfg.MatrixAppServiceHSToken,
+				AppServiceSenderLocalpart:  a.cfg.MatrixAppServiceSenderLocalpart,
+				MatrixDomain:               a.cfg.MatrixDomain,
 			},
 		}
 		if err := init.Run(ctx); err != nil {
@@ -513,15 +513,15 @@ func (a *App) initServiceLayer(_ context.Context) error {
 	}
 
 	a.deployer = service.NewDeployer(service.DeployerConfig{
-		AgentConfig:         a.agentGen,
-		OSS:                 a.oss,
-		Executor:            a.shell,
-		Packages:            a.packages,
-		Legacy:              a.legacy,
-		AgentFSDir:          cfg.AgentFSDir(),
-		WorkerAgentDir:      cfg.WorkerAgentDir(),
-		MatrixDomain:        cfg.MatrixDomain,
-		NacosCredClient:     a.credProvider,
+		AgentConfig:     a.agentGen,
+		OSS:             a.oss,
+		Executor:        a.shell,
+		Packages:        a.packages,
+		Legacy:          a.legacy,
+		AgentFSDir:      cfg.AgentFSDir(),
+		WorkerAgentDir:  cfg.WorkerAgentDir(),
+		MatrixDomain:    cfg.MatrixDomain,
+		NacosCredClient: a.credProvider,
 	})
 
 	return nil
@@ -556,6 +556,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		ControllerName: a.cfg.ControllerName,
 		ResourcePrefix: resourcePrefix,
 		GatewayClient:  a.gateway,
+		SoloOperator:   a.cfg.SoloOperator,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
@@ -581,6 +582,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		UserLanguage:     a.cfg.UserLanguage,
 		UserTimezone:     a.cfg.UserTimezone,
 		GatewayClient:    a.gateway,
+		SoloOperator:     a.cfg.SoloOperator,
 	}
 	if a.cfg.KubeMode == "embedded" {
 		mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{
@@ -594,23 +596,34 @@ func (a *App) initReconcilers(_ context.Context) error {
 		return fmt.Errorf("setup ManagerReconciler: %w", err)
 	}
 
+	if err := (&controller.ProjectReconciler{
+		Client:         a.mgr.GetClient(),
+		OSS:            a.oss,
+		Messenger:      a.provisioner,
+		ControllerName: a.cfg.ControllerName,
+	}).SetupWithManager(a.mgr); err != nil {
+		return fmt.Errorf("setup ProjectReconciler: %w", err)
+	}
+
 	return nil
 }
 
 func (a *App) initHTTPServer(_ context.Context) error {
 	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
-		Client:         a.mgr.GetClient(),
-		Backend:        a.registry,
-		Gateway:        a.gateway,
-		OSS:            a.oss,
-		STS:            a.stsService,
-		AuthMw:         a.authMw,
-		KubeMode:       a.cfg.KubeMode,
-		Namespace:      a.namespace,
-		ControllerName: a.cfg.ControllerName,
-		SocketPath:     a.cfg.SocketPath,
-		MatrixConfig:   a.cfg.MatrixConfig(),
-		Provisioner:    a.provisioner,
+		Client:           a.mgr.GetClient(),
+		Backend:          a.registry,
+		Gateway:          a.gateway,
+		OSS:              a.oss,
+		STS:              a.stsService,
+		AuthMw:           a.authMw,
+		KubeMode:         a.cfg.KubeMode,
+		Namespace:        a.namespace,
+		ControllerName:   a.cfg.ControllerName,
+		SocketPath:       a.cfg.SocketPath,
+		MatrixConfig:     a.cfg.MatrixConfig(),
+		Provisioner:      a.provisioner,
+		SoloOperator:     a.cfg.SoloOperator,
+		ManagerStateFile: a.cfg.ManagerStateFile(),
 	})
 	return nil
 }

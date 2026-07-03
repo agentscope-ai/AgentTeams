@@ -44,6 +44,14 @@ def _is_in_container() -> bool:
     return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
 
 
+def _truthy_env(name: str, default: bool = False) -> bool:
+    """Parse a boolean-ish env var the same way the overlay adapter does."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("true", "1", "yes", "on")
+
+
 def _port_remap(url: str, is_container: bool) -> str:
     """Remap container-internal :8080 to host-exposed gateway port when needed.
 
@@ -246,11 +254,20 @@ def _matrix_env(cfg: Dict[str, Any]) -> Dict[str, str]:
             "dmMentionThreads"
         ) else "false",
         "MATRIX_HOME_ROOM": matrix_raw.get("homeRoomId", ""),
-        # Custom adapter knobs (not read by upstream hermes; consumed by
-        # hermes_matrix.adapter directly).
+        # Custom adapter knobs — not read by upstream hermes; consumed by
+        # hermes_matrix.overlay_adapter.MatrixAdapter directly (constructor +
+        # _wrap_send_message_event / _handle_media_message).
         "MATRIX_VISION_ENABLED": "true" if _resolve_vision_enabled(cfg) else "false",
-        "MATRIX_FILTER_TOOL_MESSAGES": "true",
-        "MATRIX_FILTER_THINKING": "true",
+        # Phase 5b "quiet rooms": derived from HICLAW_QUIET_ROOMS, default
+        # false. Mechanism-only, env-gated — flipping HICLAW_QUIET_ROOMS on
+        # is what makes should_suppress_outbound() actually drop tool-call /
+        # thinking chatter in the overlay's send_message_event wrapper.
+        "MATRIX_FILTER_TOOL_MESSAGES": (
+            "true" if _truthy_env("HICLAW_QUIET_ROOMS") else "false"
+        ),
+        "MATRIX_FILTER_THINKING": (
+            "true" if _truthy_env("HICLAW_QUIET_ROOMS") else "false"
+        ),
     }
 
     history_limit = matrix_raw.get("historyLimit") or (

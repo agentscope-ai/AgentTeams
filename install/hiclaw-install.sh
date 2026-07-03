@@ -2447,7 +2447,13 @@ step_runtime() {
     fi
     echo ""
     if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
+        if [ -z "${HICLAW_DEFAULT_WORKER_RUNTIME:-}" ]; then
+            if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+                HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+            else
+                HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
+            fi
+        fi
     elif [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_WORKER_RUNTIME}" ]; then
         log "$(msg prompt.upgrade_keep "$(msg worker_runtime.title_short)" "${HICLAW_DEFAULT_WORKER_RUNTIME}")"
         local _runtime_choice
@@ -2461,7 +2467,11 @@ step_runtime() {
                    else
                        HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
                    fi ;;
-                *) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+                *) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+                       HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+                   else
+                       HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
+                   fi ;;
             esac
         fi
     elif [ -z "${HICLAW_DEFAULT_WORKER_RUNTIME+x}" ]; then
@@ -2476,7 +2486,11 @@ step_runtime() {
                else
                    HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
                fi ;;
-            *) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+            *) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+                   HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+               else
+                   HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
+               fi ;;
         esac
     fi
     export HICLAW_DEFAULT_WORKER_RUNTIME

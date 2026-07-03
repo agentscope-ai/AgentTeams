@@ -200,6 +200,97 @@ func TestTeamWorkerSpecToWorkerSpec_RuntimePassthrough(t *testing.T) {
 	}
 }
 
+// TestModelProviderProjection_PerAgentWinsTeamWideFallsBackBothEmptyStaysEmpty
+// covers the three fallback cases from docs/implementation-milestone-3.md
+// Step 4: per-agent ModelProvider always wins; an empty per-agent value
+// falls back to the team-wide Spec.ModelProvider; both empty stays empty
+// (preserving the pre-existing authorize-all default).
+func TestModelProviderProjection_PerAgentWinsTeamWideFallsBackBothEmptyStaysEmpty(t *testing.T) {
+	t.Run("leader", func(t *testing.T) {
+		cases := []struct {
+			name              string
+			teamModelProvider string
+			leaderModel       string
+			want              string
+		}{
+			{"per_agent_wins", "team-wide", "per-leader", "per-leader"},
+			{"empty_falls_back_to_team_wide", "team-wide", "", "team-wide"},
+			{"both_empty_stays_empty", "", "", ""},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				team := &v1beta1.Team{}
+				team.Name = "alpha"
+				team.Spec.ModelProvider = tc.teamModelProvider
+				team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead", ModelProvider: tc.leaderModel}
+				got := leaderWorkerSpec(team)
+				if got.ModelProvider != tc.want {
+					t.Fatalf("leaderWorkerSpec ModelProvider=%q, want %q", got.ModelProvider, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("worker", func(t *testing.T) {
+		cases := []struct {
+			name              string
+			teamModelProvider string
+			workerModel       string
+			want              string
+		}{
+			{"per_agent_wins", "team-wide", "per-worker", "per-worker"},
+			{"empty_falls_back_to_team_wide", "team-wide", "", "team-wide"},
+			{"both_empty_stays_empty", "", "", ""},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				team := &v1beta1.Team{}
+				team.Name = "alpha"
+				team.Spec.ModelProvider = tc.teamModelProvider
+				team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead"}
+				w := v1beta1.TeamWorkerSpec{Name: "alpha-dev", ModelProvider: tc.workerModel}
+				team.Spec.Workers = []v1beta1.TeamWorkerSpec{w}
+				got := teamWorkerSpecToWorkerSpec(team, w)
+				if got.ModelProvider != tc.want {
+					t.Fatalf("teamWorkerSpecToWorkerSpec ModelProvider=%q, want %q", got.ModelProvider, tc.want)
+				}
+			})
+		}
+	})
+}
+
+// TestBuildDesiredMembers_TeamWideModelProviderFeedsResolveLoop is the
+// reconcile-level guard: buildDesiredMembers must project the team-wide
+// fallback into MemberContext.Spec.ModelProvider so the resolve loop in
+// reconcileTeamNormal (which reads desiredMembers[i].Spec.ModelProvider)
+// calls GatewayClient.ResolveModelProvider with the team-wide value for a
+// member with no per-member pin.
+func TestBuildDesiredMembers_TeamWideModelProviderFeedsResolveLoop(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.ModelProvider = "team-wide-provider"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead"}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "alpha-dev"},                                 // no per-member pin -> falls back
+		{Name: "alpha-qa", ModelProvider: "per-worker-pin"}, // per-member pin -> wins
+	}
+
+	members := buildDesiredMembers(team, "")
+	byName := map[string]MemberContext{}
+	for _, m := range members {
+		byName[m.Name] = m
+	}
+	if byName["alpha-lead"].Spec.ModelProvider != "team-wide-provider" {
+		t.Fatalf("leader Spec.ModelProvider=%q, want team-wide-provider", byName["alpha-lead"].Spec.ModelProvider)
+	}
+	if byName["alpha-dev"].Spec.ModelProvider != "team-wide-provider" {
+		t.Fatalf("alpha-dev Spec.ModelProvider=%q, want team-wide-provider (no per-member pin)", byName["alpha-dev"].Spec.ModelProvider)
+	}
+	if byName["alpha-qa"].Spec.ModelProvider != "per-worker-pin" {
+		t.Fatalf("alpha-qa Spec.ModelProvider=%q, want per-worker-pin (per-member pin wins)", byName["alpha-qa"].Spec.ModelProvider)
+	}
+}
+
 func TestTeamMemberResourcesProjectToWorkerSpec(t *testing.T) {
 	team := &v1beta1.Team{}
 	team.Name = "alpha"
@@ -295,6 +386,95 @@ func TestBuildDesiredMembers_RuntimeWorkerNamesDriveMatrixPolicy(t *testing.T) {
 	}
 	if !stringSliceContains(devAllow, "@yhf:example.com") || stringSliceContains(devAllow, "alpha-human-yhf") {
 		t.Fatalf("dev groupAllowExtra=%v must use admin MatrixUserID, not admin CR name", devAllow)
+	}
+}
+
+// TestForceSoloPeerMentions_NonSoloUnchanged verifies solo=false leaves the
+// Team untouched (no copy, no mutation) — the multi-user default behavior.
+func TestForceSoloPeerMentions_NonSoloUnchanged(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	falseVal := false
+	team.Spec.PeerMentions = &falseVal
+
+	got := forceSoloPeerMentions(team, false)
+
+	if got != team {
+		t.Fatal("forceSoloPeerMentions(solo=false) returned a different pointer, want the same Team unchanged")
+	}
+	if got.Spec.PeerMentions == nil || *got.Spec.PeerMentions != false {
+		t.Fatalf("PeerMentions = %v, want unchanged false", got.Spec.PeerMentions)
+	}
+}
+
+// TestForceSoloPeerMentions_SoloForcesTrueWhenFalse verifies solo mode
+// overrides an explicit PeerMentions=false to true.
+func TestForceSoloPeerMentions_SoloForcesTrueWhenFalse(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	falseVal := false
+	team.Spec.PeerMentions = &falseVal
+
+	got := forceSoloPeerMentions(team, true)
+
+	if got.Spec.PeerMentions == nil || !*got.Spec.PeerMentions {
+		t.Fatalf("PeerMentions = %v, want forced true in solo mode", got.Spec.PeerMentions)
+	}
+	// Original must not be mutated — forceSoloPeerMentions must DeepCopy.
+	if team.Spec.PeerMentions == nil || *team.Spec.PeerMentions != false {
+		t.Fatalf("original Team was mutated in place: PeerMentions = %v, want untouched false", team.Spec.PeerMentions)
+	}
+}
+
+// TestForceSoloPeerMentions_SoloForcesTrueWhenNil verifies solo mode also
+// forces true when PeerMentions was never set (nil), matching the "true is
+// already the default" case but making it explicit/non-overridable.
+func TestForceSoloPeerMentions_SoloForcesTrueWhenNil(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+
+	got := forceSoloPeerMentions(team, true)
+
+	if got.Spec.PeerMentions == nil || !*got.Spec.PeerMentions {
+		t.Fatalf("PeerMentions = %v, want forced true in solo mode", got.Spec.PeerMentions)
+	}
+}
+
+// TestBuildDesiredMembers_SoloForcedPeerMentionsAddsGroupAllow verifies the
+// forced PeerMentions flows all the way through to the worker's
+// ChannelPolicy.GroupAllowExtra, using the same helper the reconciler calls
+// before buildDesiredMembers.
+func TestBuildDesiredMembers_SoloForcedPeerMentionsAddsGroupAllow(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead", Model: "gpt-4o"}
+	falseVal := false
+	team.Spec.PeerMentions = &falseVal
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "alpha-dev", Model: "gpt-4o"},
+		{Name: "alpha-qa", Model: "gpt-4o"},
+	}
+
+	// Without solo mode: PeerMentions=false means peers do NOT see each other.
+	membersOff := buildDesiredMembers(forceSoloPeerMentions(team, false), "")
+	byNameOff := map[string]MemberContext{}
+	for _, m := range membersOff {
+		byNameOff[m.Name] = m
+	}
+	devAllowOff := byNameOff["alpha-dev"].Spec.ChannelPolicy.GroupAllowExtra
+	if stringSliceContains(devAllowOff, "alpha-qa") {
+		t.Fatalf("PeerMentions=false: dev groupAllowExtra=%v must not contain peer qa", devAllowOff)
+	}
+
+	// With solo mode: PeerMentions is forced true, peers see each other.
+	membersOn := buildDesiredMembers(forceSoloPeerMentions(team, true), "")
+	byNameOn := map[string]MemberContext{}
+	for _, m := range membersOn {
+		byNameOn[m.Name] = m
+	}
+	devAllowOn := byNameOn["alpha-dev"].Spec.ChannelPolicy.GroupAllowExtra
+	if !stringSliceContains(devAllowOn, "alpha-qa") {
+		t.Fatalf("solo forced PeerMentions=true: dev groupAllowExtra=%v, want peer qa included", devAllowOn)
 	}
 }
 
@@ -503,6 +683,81 @@ func TestHashMemberSourceSpec_EnvChangeFlipsHash(t *testing.T) {
 	}
 }
 
+// TestHashMemberSourceSpec_TeamWideModelProvider is the mandatory digest
+// test for docs/implementation-milestone-3.md Step 4's "one real trap":
+// hashMemberSourceSpec digests the RAW LeaderSpec/TeamWorkerSpec, not the
+// projected WorkerSpec, so the team-wide field must be added to BOTH digest
+// input structs directly. It asserts both directions:
+//   - a Team that never sets Spec.ModelProvider keeps a byte-identical hash
+//     across an unrelated no-op reconcile (omitempty means zero hash churn,
+//     dodging a mass container-recreate on upgrade)
+//   - setting/changing the team-wide field DOES flip the hash for a member
+//     with no per-member pin (so the reconciler recreates the container and
+//     refreshes the stale HICLAW_AI_GATEWAY_URL env var — the trap this test
+//     guards against)
+func TestHashMemberSourceSpec_TeamWideModelProvider(t *testing.T) {
+	base := &v1beta1.Team{}
+	base.Name = "alpha"
+	base.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead", Model: "gpt-4o"}
+	base.Spec.Workers = []v1beta1.TeamWorkerSpec{
+		{Name: "alpha-dev", Model: "gpt-4o"},
+	}
+
+	// Unset team-wide field: re-hashing an unmodified copy must be
+	// byte-identical (the omitempty contract — no field, no key, no churn).
+	unchanged := base.DeepCopy()
+	if hashMemberSourceSpec(base, RoleTeamLeader, "alpha-lead") !=
+		hashMemberSourceSpec(unchanged, RoleTeamLeader, "alpha-lead") {
+		t.Errorf("leader hash changed with team-wide ModelProvider unset on both sides; expected byte-identical")
+	}
+	if hashMemberSourceSpec(base, RoleTeamWorker, "alpha-dev") !=
+		hashMemberSourceSpec(unchanged, RoleTeamWorker, "alpha-dev") {
+		t.Errorf("alpha-dev hash changed with team-wide ModelProvider unset on both sides; expected byte-identical")
+	}
+
+	// Setting the team-wide field flips the hash for members with no
+	// per-member pin.
+	withTeamWide := base.DeepCopy()
+	withTeamWide.Spec.ModelProvider = "team-wide-provider"
+	if hashMemberSourceSpec(base, RoleTeamLeader, "alpha-lead") ==
+		hashMemberSourceSpec(withTeamWide, RoleTeamLeader, "alpha-lead") {
+		t.Errorf("leader hash unchanged after setting team-wide ModelProvider; expected different")
+	}
+	if hashMemberSourceSpec(base, RoleTeamWorker, "alpha-dev") ==
+		hashMemberSourceSpec(withTeamWide, RoleTeamWorker, "alpha-dev") {
+		t.Errorf("alpha-dev hash unchanged after setting team-wide ModelProvider; expected different")
+	}
+
+	// Changing (not just setting) the team-wide field also flips the hash.
+	changedTeamWide := withTeamWide.DeepCopy()
+	changedTeamWide.Spec.ModelProvider = "different-team-wide-provider"
+	if hashMemberSourceSpec(withTeamWide, RoleTeamLeader, "alpha-lead") ==
+		hashMemberSourceSpec(changedTeamWide, RoleTeamLeader, "alpha-lead") {
+		t.Errorf("leader hash unchanged after changing team-wide ModelProvider value; expected different")
+	}
+	if hashMemberSourceSpec(withTeamWide, RoleTeamWorker, "alpha-dev") ==
+		hashMemberSourceSpec(changedTeamWide, RoleTeamWorker, "alpha-dev") {
+		t.Errorf("alpha-dev hash unchanged after changing team-wide ModelProvider value; expected different")
+	}
+
+	// A per-member pin already differentiates from the team-wide value, but
+	// the digest is over the RAW per-member spec — a worker with its own
+	// pin set is unaffected by team-wide churn only insofar as the pin
+	// value itself doesn't change; this hash DOES still flip because the
+	// workerInput payload embeds TeamModelProvider regardless of whether
+	// the per-member field is set (documenting the actual digest shape,
+	// not a behavioral loophole — the fallback logic lives in the
+	// projection functions, not in the hash).
+	pinned := base.DeepCopy()
+	pinned.Spec.Workers[0].ModelProvider = "per-worker-pin"
+	pinnedWithTeamWide := pinned.DeepCopy()
+	pinnedWithTeamWide.Spec.ModelProvider = "team-wide-provider"
+	if hashMemberSourceSpec(pinned, RoleTeamWorker, "alpha-dev") ==
+		hashMemberSourceSpec(pinnedWithTeamWide, RoleTeamWorker, "alpha-dev") {
+		t.Errorf("pinned worker hash unchanged after team-wide ModelProvider set; expected different (digest is unconditional on the raw spec)")
+	}
+}
+
 func TestReconcileTeamNormalInjectsLeaderCoordinationAfterMemberConfig(t *testing.T) {
 	ctx := context.Background()
 	team := &v1beta1.Team{
@@ -571,6 +826,111 @@ func TestReconcileTeamNormalInjectsLeaderCoordinationAfterMemberConfig(t *testin
 	}
 	if inject != len(calls)-1 {
 		t.Fatalf("calls=%v, leader coordination injection must run after all member config writes", calls)
+	}
+}
+
+// fakeModelProviderGateway is a minimal gateway.Client stub that only
+// records the names passed to ResolveModelProvider and returns a
+// deterministic ModelProviderInfo per name. All other methods are no-ops —
+// this is intentionally the smallest possible implementation of the
+// interface, scoped to this test file.
+type fakeModelProviderGateway struct {
+	resolvedNames []string
+}
+
+func (f *fakeModelProviderGateway) EnsureConsumer(context.Context, gateway.ConsumerRequest) (*gateway.ConsumerResult, error) {
+	return &gateway.ConsumerResult{}, nil
+}
+func (f *fakeModelProviderGateway) DeleteConsumer(context.Context, string) error { return nil }
+func (f *fakeModelProviderGateway) AuthorizeAIRoutes(context.Context, string, string) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) DeauthorizeAIRoutes(context.Context, string, string) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) ExposePort(context.Context, gateway.PortExposeRequest) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) UnexposePort(context.Context, gateway.PortExposeRequest) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) EnsureServiceSource(context.Context, string, string, int, string) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) EnsureStaticServiceSource(context.Context, string, string, int) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) EnsureRoute(context.Context, string, []string, string, int, string) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) DeleteRoute(context.Context, string) error { return nil }
+func (f *fakeModelProviderGateway) EnsureAIProvider(context.Context, gateway.AIProviderRequest) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) EnsureStreamIdleTimeout(context.Context, int) error { return nil }
+func (f *fakeModelProviderGateway) EnsureAIRoute(context.Context, gateway.AIRouteRequest) error {
+	return nil
+}
+func (f *fakeModelProviderGateway) ResolveModelProvider(_ context.Context, name string) (*gateway.ModelProviderInfo, error) {
+	f.resolvedNames = append(f.resolvedNames, name)
+	return &gateway.ModelProviderInfo{HttpApiID: name + "-http-api"}, nil
+}
+func (f *fakeModelProviderGateway) Healthy(context.Context) error { return nil }
+
+// TestReconcileTeamNormal_ResolvesTeamWideModelProviderForUnpinnedMember is
+// the reconcile-level guard (docs/implementation-milestone-3.md Step 4
+// acceptance): a team-wide Spec.ModelProvider must reach
+// GatewayClient.ResolveModelProvider for a member that leaves its own
+// modelProvider field empty, exactly as a per-member pin would.
+func TestReconcileTeamNormal_ResolvesTeamWideModelProviderForUnpinnedMember(t *testing.T) {
+	ctx := context.Background()
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			ModelProvider: "team-wide-provider",
+			Leader: v1beta1.LeaderSpec{
+				Name:       "alpha-lead",
+				WorkerName: "leader",
+			},
+			Workers: []v1beta1.TeamWorkerSpec{{
+				Name:       "alpha-dev",
+				WorkerName: "dev",
+			}},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	fakeGateway := &fakeModelProviderGateway{}
+
+	r := &TeamReconciler{
+		Client:        c,
+		Provisioner:   mocks.NewMockProvisioner(),
+		Deployer:      mocks.NewMockDeployer(),
+		Backend:       backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:    mocks.NewMockEnvBuilder(),
+		AgentFSDir:    t.TempDir(),
+		GatewayClient: fakeGateway,
+	}
+	if _, err := r.reconcileTeamNormal(ctx, team); err != nil {
+		t.Fatalf("reconcileTeamNormal: %v", err)
+	}
+
+	if len(fakeGateway.resolvedNames) != 2 {
+		t.Fatalf("ResolveModelProvider calls=%v, want 2 (leader+worker) resolved with team-wide-provider", fakeGateway.resolvedNames)
+	}
+	for _, name := range fakeGateway.resolvedNames {
+		if name != "team-wide-provider" {
+			t.Fatalf("ResolveModelProvider called with %q, want team-wide-provider for every unpinned member", name)
+		}
 	}
 }
 

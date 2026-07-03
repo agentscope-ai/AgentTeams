@@ -631,6 +631,10 @@ fi # end K8s mode skip for admin DM room
 log "Generating Manager openclaw.json..."
 export MANAGER_MATRIX_TOKEN="${MANAGER_TOKEN}"
 export MANAGER_GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY}"
+# Heartbeat interval: default 10m when the controller doesn't set one (see
+# hiclaw-controller/internal/service/worker_env.go). Used both for template
+# substitution (fresh install) and the jq overlay (upgrade path below).
+export HICLAW_MANAGER_HEARTBEAT_INTERVAL="${HICLAW_MANAGER_HEARTBEAT_INTERVAL:-10m}"
 # Resolve model parameters based on model name
 MODEL_NAME="${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}"
 case "${MODEL_NAME}" in
@@ -693,6 +697,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
        --arg emb_model "${HICLAW_EMBEDDING_MODEL}" \
        --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
        --arg matrix_user_id "@manager:${MATRIX_DOMAIN}" \
+       --arg heartbeat_every "${HICLAW_MANAGER_HEARTBEAT_INTERVAL}" \
        --argjson e2ee "${MATRIX_E2EE_ENABLED}" \
        --argjson known_models "${KNOWN_MODELS}" \
        --argjson ctx "${MODEL_CONTEXT_WINDOW}" \
@@ -722,6 +727,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
         | .channels.matrix.encryption = $e2ee
         | .channels.matrix.network = ((.channels.matrix.network // {}) + {"dangerouslyAllowPrivateNetwork": true})
         | .channels.matrix.autoJoin = "always"
+        | .agents.defaults.heartbeat = ((.agents.defaults.heartbeat // {}) + {"every": $heartbeat_every})
         # OpenClaw YOLO defaults: host exec without approval prompts (see openclaw docs tools/exec-approvals)
         | .tools = (.tools // {})
         | .tools.exec = ((.tools.exec // {}) + {"host":"gateway","security":"full","ask":"off"})
@@ -758,6 +764,7 @@ else
            --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
            --arg key "${HICLAW_MANAGER_GATEWAY_KEY}" \
            --arg model "${MODEL_NAME}" \
+           --arg heartbeat_every "${HICLAW_MANAGER_HEARTBEAT_INTERVAL}" \
            --argjson ctx "${MODEL_CONTEXT_WINDOW}" \
            --argjson max "${MODEL_MAX_TOKENS}" \
            --argjson reasoning "${MODEL_REASONING}" \
@@ -766,13 +773,16 @@ else
             (if $emb_model != "" then .agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}} else . end)
             | .models.providers["hiclaw-gateway"].models += [{"id": $model, "name": $model, "reasoning": $reasoning, "contextWindow": $ctx, "maxTokens": $max, "input": $input}]
             | .agents.defaults.models += {("hiclaw-gateway/" + $model): {"alias": $model}}
+            | .agents.defaults.heartbeat = ((.agents.defaults.heartbeat // {}) + {"every": $heartbeat_every})
            ' /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
             mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
     elif [ -n "${HICLAW_EMBEDDING_MODEL}" ]; then
         jq --arg emb_model "${HICLAW_EMBEDDING_MODEL}" \
            --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
            --arg key "${HICLAW_MANAGER_GATEWAY_KEY}" \
-           '.agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}}' \
+           --arg heartbeat_every "${HICLAW_MANAGER_HEARTBEAT_INTERVAL}" \
+           '.agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":("http://" + $aigw_domain + ":8080/v1"),"apiKey":$key}}
+            | .agents.defaults.heartbeat = ((.agents.defaults.heartbeat // {}) + {"every": $heartbeat_every})' \
            /root/manager-workspace/openclaw.json > /tmp/openclaw.json.tmp && \
             mv /tmp/openclaw.json.tmp /root/manager-workspace/openclaw.json
     fi

@@ -170,6 +170,20 @@ When replanning:
 - resume scheduling only when new work should actually proceed
 - dispatch only ready nodes
 
+## Cross-Team Requests
+
+You cannot delegate directly into another team. When the work you need is owned by a different team, route the request through the Manager rather than reaching into that team yourself:
+
+1. Send the request to the Manager (Leader Room @mention, per `communication`'s Cross-Room rules — or the Escalation Report envelope if you are blocked pending the result).
+2. The Manager creates the new task or Project in the serving team and relays that team's result back to you.
+3. Treat the relayed result the same as any other accepted input to your DAG/Loop planning.
+
+This keeps each team's scoping intact (see Design The Work above) — you never end up with a Worker task or Project node that crosses team ownership.
+
+## PeerMentions Scope Note
+
+`PeerMentions` only enables ad-hoc worker↔worker @mention chat within your own team's room scope. It creates no tasks and grants no delegation authority — a worker mentioning a peer is not a task assignment, and it does not let one team's worker reach another team's worker. Cross-team communication always goes through the Manager (see Cross-Team Requests above), never via PeerMentions.
+
 ## Patch Rules
 
 Do not:

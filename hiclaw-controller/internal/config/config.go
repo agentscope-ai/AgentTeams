@@ -422,7 +422,8 @@ func LoadConfig() *Config {
 	// Tokens must be provided via env vars (set by install script or manually).
 	// We do NOT auto-generate at runtime to prevent token drift across restarts.
 	if cfg.MatrixAppServiceEnabled {
-		cfg.MatrixAppServicePushURL = appServicePushURL(cfg.ControllerURL)
+		matrixControllerURL := firstNonEmpty(os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_CONTROLLER_URL"), cfg.ControllerURL)
+		cfg.MatrixAppServicePushURL = appServicePushURL(matrixControllerURL)
 		if cfg.MatrixAppServiceASToken == "" {
 			panic("HICLAW_MATRIX_APPSERVICE_AS_TOKEN is required when AppService mode is enabled; run install script or set env var")
 		}
@@ -712,7 +713,7 @@ func appServicePushURL(controllerURL string) string {
 	if controllerURL == "" {
 		return ""
 	}
-	return controllerURL + "/_matrix/app/v1"
+	return controllerURL
 }
 
 func (c *Config) GatewayConfig() gateway.Config {

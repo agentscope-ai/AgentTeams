@@ -184,7 +184,17 @@ func TestMatrixConfigIncludesAppServicePushURL(t *testing.T) {
 		MatrixAppServicePushURL: appServicePushURL("http://controller.example.com:8090/"),
 	}
 
-	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://controller.example.com:8090/_matrix/app/v1"; got != want {
+	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://controller.example.com:8090"; got != want {
+		t.Fatalf("AppServicePushURL = %q, want %q", got, want)
+	}
+}
+
+func TestLoadConfigUsesMatrixAppServiceControllerURLOverride(t *testing.T) {
+	t.Setenv("AGENTTEAMS_MATRIX_APPSERVICE_CONTROLLER_URL", "http://matrix-facing-controller:8090/")
+
+	cfg := LoadConfig()
+
+	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://matrix-facing-controller:8090"; got != want {
 		t.Fatalf("AppServicePushURL = %q, want %q", got, want)
 	}
 }

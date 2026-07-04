@@ -52,6 +52,17 @@ func mentionEvent(roomID, eventID, sender string, userIDs []string) matrixEvent 
 
 func TestNewHTTPServerRegistersAppserviceTransactionRoute(t *testing.T) {
 	k8s := fake.NewClientBuilder().WithScheme(newAppserviceTestScheme(t)).Build()
+	pushURL := "http://controller.example.com:8090"
+	reg := matrix.RenderAppServiceRegistration(matrix.Config{
+		AppServiceID:              "agentteams-controller",
+		AppServiceToken:           "as-token",
+		AppServiceHSToken:         "correct-token",
+		AppServiceSenderLocalpart: "agentteams-controller",
+		AppServicePushURL:         pushURL,
+	})
+	if reg.URL == nil {
+		t.Fatal("registration URL is nil")
+	}
 	srv := NewHTTPServer(":0", ServerDeps{
 		Client:       k8s,
 		Namespace:    "default",
@@ -59,7 +70,7 @@ func TestNewHTTPServerRegistersAppserviceTransactionRoute(t *testing.T) {
 		MatrixConfig: matrix.Config{AppServiceEnabled: true, AppServiceHSToken: "correct-token"},
 	})
 
-	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-from-mux", txnBody(t, nil))
+	req := httptest.NewRequest(http.MethodPut, *reg.URL+"/_matrix/app/v1/transactions/txn-from-mux", txnBody(t, nil))
 	req.Header.Set("Authorization", "Bearer correct-token")
 	rec := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(rec, req)

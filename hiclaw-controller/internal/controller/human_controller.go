@@ -2,9 +2,15 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/controller/humanidentity"
+	_ "github.com/hiclaw/hiclaw-controller/internal/controller/humanidentity/externalsso"
+	_ "github.com/hiclaw/hiclaw-controller/internal/controller/humanidentity/legacypassword"
+	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -14,6 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+const appServiceNotReadyRequeue = 5 * time.Second
 
 // HumanReconciler reconciles Human resources using Service-layer orchestration.
 //
@@ -56,29 +64,40 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 			return
 		}
 
-		human.Status.Phase = computeHumanPhase(&human, reterr)
 		if reterr == nil {
-			human.Status.Message = ""
+			if human.Status.Phase != "Degraded" {
+				human.Status.Message = ""
+			}
 		} else {
 			human.Status.Message = reterr.Error()
 		}
+		human.Status.Phase = computeHumanPhase(&human, reterr)
 
 		if err := r.Status().Patch(ctx, &human, patchBase); err != nil {
-			logger.Error(err, "failed to patch human status")
+			logger.Error(err, "failed to patch human status; CR will appear to have no status",
+				"name", human.Name, "phase", human.Status.Phase, "matrixUserID", human.Status.MatrixUserID)
 			reterr = kerrors.NewAggregate([]error{reterr, err})
+			return
 		}
+		logger.Info("human status patched",
+			"name", human.Name, "phase", human.Status.Phase,
+			"matrixUserID", human.Status.MatrixUserID, "reconcileFailed", reterr != nil)
 	}()
 
 	if !human.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&human, finalizerName) {
+			if err := r.resolveHumanScope(s); err != nil && human.Status.MatrixUserID == "" {
+				logger.Error(err, "failed to resolve deleting human identity; continuing best-effort cleanup", "name", human.Name)
+			}
 			return r.reconcileHumanDelete(ctx, s)
 		}
 		return reconcile.Result{}, nil
 	}
 
 	if !controllerutil.ContainsFinalizer(&human, finalizerName) {
+		base := human.DeepCopy()
 		controllerutil.AddFinalizer(&human, finalizerName)
-		if err := r.Update(ctx, &human); err != nil {
+		if err := r.Patch(ctx, &human, client.MergeFrom(base)); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
@@ -92,13 +111,49 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 // phases log errors but never return them, so a transient Matrix hiccup
 // on room invite/kick does not block the next reconcile.
 func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScope) (reconcile.Result, error) {
+	if err := r.resolveHumanScope(s); err != nil {
+		s.human.Status.Phase = "Degraded"
+		s.human.Status.Message = err.Error()
+		return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+	}
 	if err := r.reconcileHumanInfra(ctx, s); err != nil {
+		if errors.Is(err, matrix.ErrAppServiceNotReady) {
+			log.FromContext(ctx).Info("Matrix AppService not active yet; requeueing human provisioning",
+				"name", s.human.Name)
+			return reconcile.Result{RequeueAfter: appServiceNotReadyRequeue}, nil
+		}
 		return reconcile.Result{RequeueAfter: reconcileInterval}, err
 	}
 	r.reconcileHumanRooms(ctx, s)
 	r.reconcileHumanLegacy(ctx, s)
 
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+}
+
+func (r *HumanReconciler) resolveHumanScope(s *humanScope) error {
+	resolved, err := humanidentity.ResolveHuman(&s.human.Spec, s.human.Name, humanidentity.Deps{
+		Provisioner: r.Provisioner,
+	})
+	if err != nil {
+		return err
+	}
+	// Once a Matrix account exists, the derived MXID is the human's stable
+	// identity. Any change to it — switching to/from SSO, editing
+	// identitySource.subject, or renaming the legacy username — means a
+	// different account. Re-provisioning in place would leave Status.Rooms
+	// pointing at the previous user's memberships, so the rooms phase would
+	// treat them as already observed and never invite/join the new user,
+	// leaving a Human that looks Active but whose new identity is in no
+	// rooms. Block the switch and require recreating the CR instead.
+	if s.human.Status.MatrixUserID != "" && s.human.Status.MatrixUserID != resolved.MatrixUserID {
+		return fmt.Errorf("identitySource changed; recreate CR to switch identity")
+	}
+	s.identity = resolved
+	s.username = resolved.MatrixLocalpart
+	if !resolved.ManagesInitialPassword {
+		s.human.Status.InitialPassword = ""
+	}
+	return nil
 }
 
 func (r *HumanReconciler) SetupWithManager(mgr ctrl.Manager) error {

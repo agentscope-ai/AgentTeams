@@ -248,6 +248,7 @@ type WorkerStatus struct {
 	RoomID             string              `json:"roomID,omitempty"`
 	ContainerState     string              `json:"containerState,omitempty"`
 	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
+	LastActiveAt       string              `json:"lastActiveAt,omitempty"`
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
@@ -564,13 +565,19 @@ type Human struct {
 }
 
 type HumanSpec struct {
-	DisplayName       string   `json:"displayName"`
-	Username          string   `json:"username,omitempty"`
-	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"` // 1=Admin, 2=Team, 3=Worker
-	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
-	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
-	Note              string   `json:"note,omitempty"`
+	DisplayName       string              `json:"displayName"`
+	Username          string              `json:"username,omitempty"`
+	Email             string              `json:"email,omitempty"`
+	PermissionLevel   int                 `json:"permissionLevel"` // 1=Admin, 2=Team, 3=Worker
+	AccessibleTeams   []string            `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string            `json:"accessibleWorkers,omitempty"`
+	IdentitySource    *IdentitySourceSpec `json:"identitySource,omitempty"`
+	Note              string              `json:"note,omitempty"`
+}
+
+type IdentitySourceSpec struct {
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
 }
 
 type HumanStatus struct {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,7 +12,18 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	hiclawmetrics "github.com/hiclaw/hiclaw-controller/internal/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+// ErrAppServiceNotReady signals that the homeserver rejected an AppService
+// call because it does not yet recognize the controller's as_token
+// (M_UNKNOWN_TOKEN). This is a transient startup race: the controller's
+// AppService registration has not been registered/verified with the
+// homeserver yet. Callers should treat it as retryable and requeue quietly
+// instead of logging it as a hard error.
+var ErrAppServiceNotReady = errors.New("matrix appservice token not active yet")
 
 // Client abstracts Matrix homeserver operations.
 // Implementations: TuwunelClient (current), future SynapseClient.
@@ -39,6 +51,14 @@ type Client interface {
 	// same localpart starts fresh. Idempotent: a missing alias returns nil.
 	// The alias argument MUST be the full form "#localpart:server".
 	DeleteRoomAlias(ctx context.Context, alias string) error
+
+	// SetRoomName updates the human-readable Matrix room name. When userToken
+	// is empty, it falls back to the homeserver-admin identity.
+	SetRoomName(ctx context.Context, roomID, name, userToken string) error
+
+	// SetRoomState writes a Matrix room state event. When userToken is empty,
+	// it falls back to the homeserver-admin identity.
+	SetRoomState(ctx context.Context, roomID, eventType, stateKey string, content map[string]interface{}, userToken string) error
 
 	// JoinRoom makes the user identified by token join the given room.
 	JoinRoom(ctx context.Context, roomID, userToken string) error
@@ -97,6 +117,9 @@ type Client interface {
 	// The token's user must be joined and have enough power in the room.
 	KickFromRoomWithToken(ctx context.Context, roomID, userID, reason, kickerToken string) error
 
+	// SyncMessages returns Matrix room message events visible to the admin user.
+	SyncMessages(ctx context.Context, since string, timeout time.Duration) (*SyncMessagesResult, error)
+
 	// UserID builds a full Matrix user ID from a localpart.
 	UserID(localpart string) string
 
@@ -132,6 +155,18 @@ type Client interface {
 	// VerifyAccessToken checks whether a user access token is still valid
 	// by calling GET /_matrix/client/v3/account/whoami. Returns nil if valid.
 	VerifyAccessToken(ctx context.Context, accessToken string) error
+}
+
+type MessageEvent struct {
+	RoomID   string
+	EventID  string
+	Sender   string
+	Mentions []string
+}
+
+type SyncMessagesResult struct {
+	NextBatch string
+	Events    []MessageEvent
 }
 
 // TuwunelClient implements Client for Tuwunel (conduwuit) homeservers.
@@ -314,13 +349,18 @@ func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username strin
 		Error       string `json:"error"`
 	}
 
+	logger := log.FromContext(ctx).WithValues("matrixUserID", c.UserID(username), "localpart", username)
+
 	statusCode, _, err := c.doJSONWithASToken(ctx, http.MethodPost,
 		"/_matrix/client/v3/register", regBody, &regResp)
 	if err != nil {
+		logger.Error(err, "AppService register request failed (transport)")
 		return nil, fmt.Errorf("AS register user %s: %w", username, err)
 	}
 
 	if statusCode == http.StatusOK || statusCode == http.StatusCreated {
+		logger.Info("AppService registered new Matrix account",
+			"httpStatus", statusCode, "registeredUserID", regResp.UserID, "hasAccessToken", regResp.AccessToken != "")
 		return &UserCredentials{
 			UserID:      regResp.UserID,
 			AccessToken: regResp.AccessToken,
@@ -331,8 +371,14 @@ func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username strin
 
 	// User already exists → fall back to AS login
 	if regResp.ErrCode == "M_USER_IN_USE" {
+		logger.Info("Matrix account already exists; falling back to AppService login", "httpStatus", statusCode)
 		token, loginErr := c.LoginAppServiceUser(ctx, username)
 		if loginErr != nil {
+			if errors.Is(loginErr, ErrAppServiceNotReady) {
+				logger.Info("Matrix AppService token not active yet during login fallback; will retry")
+				return nil, loginErr
+			}
+			logger.Error(loginErr, "AppService login failed for existing Matrix account")
 			return nil, fmt.Errorf("AS user %s exists but AS login failed: %w", username, loginErr)
 		}
 		return &UserCredentials{
@@ -343,6 +389,17 @@ func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username strin
 		}, nil
 	}
 
+	// Startup race: homeserver does not recognize the as_token yet. This is
+	// transient and self-heals once cluster init registers/verifies the
+	// AppService, so report it as retryable instead of a hard error.
+	if statusCode == http.StatusUnauthorized && regResp.ErrCode == "M_UNKNOWN_TOKEN" {
+		logger.Info("Matrix AppService token not active yet; will retry once it is registered/verified",
+			"httpStatus", statusCode)
+		return nil, fmt.Errorf("AS register user %s: %w", username, ErrAppServiceNotReady)
+	}
+
+	logger.Error(nil, "AppService register rejected by homeserver",
+		"httpStatus", statusCode, "errcode", regResp.ErrCode, "error", regResp.Error)
 	return nil, fmt.Errorf("AS register user %s: %s (%s)", username, regResp.ErrCode, regResp.Error)
 }
 
@@ -369,6 +426,9 @@ func (c *TuwunelClient) LoginAppServiceUser(ctx context.Context, username string
 		return "", fmt.Errorf("AS login %s: %w", username, err)
 	}
 	if statusCode != http.StatusOK {
+		if statusCode == http.StatusUnauthorized && resp.ErrCode == "M_UNKNOWN_TOKEN" {
+			return "", fmt.Errorf("AS login %s: %w", username, ErrAppServiceNotReady)
+		}
 		return "", fmt.Errorf("AS login %s: HTTP %d %s %s: %s",
 			username, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
 	}
@@ -421,7 +481,9 @@ func (c *TuwunelClient) SetDisplayName(ctx context.Context, userID, accessToken,
 
 func (c *TuwunelClient) CreateRoom(ctx context.Context, req CreateRoomRequest) (*RoomInfo, error) {
 	token := req.CreatorToken
+	tokenSource := "explicit"
 	if token == "" {
+		tokenSource = "admin"
 		var err error
 		token, err = c.ensureAdminToken(ctx)
 		if err != nil {
@@ -447,16 +509,18 @@ func (c *TuwunelClient) CreateRoom(ctx context.Context, req CreateRoomRequest) (
 		}
 	}
 
+	initialState := append([]StateEvent(nil), req.InitialState...)
 	if req.E2EE {
-		body["initial_state"] = []map[string]interface{}{
-			{
-				"type":      "m.room.encryption",
-				"state_key": "",
-				"content": map[string]string{
-					"algorithm": "m.megolm.v1.aes-sha2",
-				},
+		initialState = append(initialState, StateEvent{
+			Type:     "m.room.encryption",
+			StateKey: "",
+			Content: map[string]interface{}{
+				"algorithm": "m.megolm.v1.aes-sha2",
 			},
-		}
+		})
+	}
+	if len(initialState) > 0 {
+		body["initial_state"] = initialState
 	}
 
 	var resp struct {
@@ -495,8 +559,66 @@ func (c *TuwunelClient) CreateRoom(ctx context.Context, req CreateRoomRequest) (
 		return &RoomInfo{RoomID: existingID, Created: false}, nil
 	}
 
+	if statusCode == http.StatusForbidden || resp.ErrCode == "M_FORBIDDEN" {
+		c.logCreateRoomFailureDiagnostics(ctx, req, token, tokenSource, statusCode, resp.ErrCode, resp.Error, respBody)
+	}
+
 	return nil, fmt.Errorf("create room %q: HTTP %d %s %s: %s",
 		req.Name, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
+}
+
+func (c *TuwunelClient) logCreateRoomFailureDiagnostics(ctx context.Context, req CreateRoomRequest, token, tokenSource string, statusCode int, errCode, errText string, respBody []byte) {
+	senderUserID := ""
+	senderPowerLevel := 0
+	senderPowerLevelFound := false
+	whoamiErr := ""
+	if token != "" {
+		if userID, err := c.accessTokenUserID(ctx, token); err != nil {
+			whoamiErr = err.Error()
+		} else {
+			senderUserID = userID
+			senderPowerLevel, senderPowerLevelFound = req.PowerLevels[userID]
+		}
+	}
+
+	expectedAdminUserID := c.UserID(c.config.AdminUser)
+	expectedAdminPowerLevel, expectedAdminPowerLevelFound := req.PowerLevels[expectedAdminUserID]
+
+	log.FromContext(ctx).Info("Matrix createRoom rejected",
+		"roomName", req.Name,
+		"roomAliasName", req.RoomAliasName,
+		"httpStatus", statusCode,
+		"errcode", errCode,
+		"error", errText,
+		"response", truncate(respBody, 500),
+		"tokenSource", tokenSource,
+		"senderUserID", senderUserID,
+		"senderWhoamiError", whoamiErr,
+		"senderPowerLevel", senderPowerLevel,
+		"senderPowerLevelFound", senderPowerLevelFound,
+		"expectedAdminUserID", expectedAdminUserID,
+		"expectedAdminPowerLevel", expectedAdminPowerLevel,
+		"expectedAdminPowerLevelFound", expectedAdminPowerLevelFound,
+		"powerLevels", req.PowerLevels,
+		"invite", req.Invite)
+}
+
+func (c *TuwunelClient) accessTokenUserID(ctx context.Context, accessToken string) (string, error) {
+	var resp struct {
+		UserID string `json:"user_id"`
+	}
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodGet,
+		"/_matrix/client/v3/account/whoami", accessToken, nil, &resp)
+	if err != nil {
+		return "", fmt.Errorf("whoami: %w", err)
+	}
+	if statusCode != http.StatusOK {
+		return "", fmt.Errorf("whoami: HTTP %d: %s", statusCode, truncate(respBody, 200))
+	}
+	if resp.UserID == "" {
+		return "", errors.New("whoami: empty user_id")
+	}
+	return resp.UserID, nil
 }
 
 // ResolveRoomAlias implements Client.ResolveRoomAlias.
@@ -557,6 +679,55 @@ func (c *TuwunelClient) DeleteRoomAlias(ctx context.Context, alias string) error
 	}
 	return fmt.Errorf("delete alias %s: HTTP %d %s %s: %s",
 		alias, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
+}
+
+func (c *TuwunelClient) SetRoomName(ctx context.Context, roomID, name, userToken string) error {
+	token := userToken
+	if token == "" {
+		var err error
+		token, err = c.ensureAdminToken(ctx)
+		if err != nil {
+			return fmt.Errorf("set room name %s: %w", roomID, err)
+		}
+	}
+	encodedRoom := encodeRoomID(roomID)
+	body := map[string]string{"name": name}
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodPut,
+		fmt.Sprintf("/_matrix/client/v3/rooms/%s/state/m.room.name/", encodedRoom),
+		token, body, nil)
+	if err != nil {
+		return fmt.Errorf("set room name %s: %w", roomID, err)
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return fmt.Errorf("set room name %s: HTTP %d: %s", roomID, statusCode, truncate(respBody, 500))
+	}
+	return nil
+}
+
+func (c *TuwunelClient) SetRoomState(ctx context.Context, roomID, eventType, stateKey string, content map[string]interface{}, userToken string) error {
+	token := userToken
+	if token == "" {
+		var err error
+		token, err = c.ensureAdminToken(ctx)
+		if err != nil {
+			return fmt.Errorf("set room state %s %s: %w", roomID, eventType, err)
+		}
+	}
+	if content == nil {
+		content = map[string]interface{}{}
+	}
+	encodedRoom := encodeRoomID(roomID)
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/state/%s/%s",
+		encodedRoom, url.PathEscape(eventType), url.PathEscape(stateKey))
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodPut, path, token, content, nil)
+	if err != nil {
+		return fmt.Errorf("set room state %s %s: %w", roomID, eventType, err)
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return fmt.Errorf("set room state %s %s: HTTP %d: %s",
+			roomID, eventType, statusCode, truncate(respBody, 500))
+	}
+	return nil
 }
 
 func (c *TuwunelClient) JoinRoom(ctx context.Context, roomID, userToken string) error {
@@ -831,16 +1002,80 @@ func (c *TuwunelClient) ListJoinedRooms(ctx context.Context, userToken string) (
 	return resp.JoinedRooms, nil
 }
 
+func (c *TuwunelClient) SyncMessages(ctx context.Context, since string, timeout time.Duration) (*SyncMessagesResult, error) {
+	token, err := c.ensureAdminToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("timeout", fmt.Sprintf("%d", timeout.Milliseconds()))
+	if since != "" {
+		q.Set("since", since)
+	}
+	path := "/_matrix/client/v3/sync?" + q.Encode()
+
+	var resp struct {
+		NextBatch string `json:"next_batch"`
+		Rooms     struct {
+			Join map[string]struct {
+				Timeline struct {
+					Events []struct {
+						Type    string `json:"type"`
+						EventID string `json:"event_id"`
+						Sender  string `json:"sender"`
+						Content struct {
+							Mentions struct {
+								UserIDs []string `json:"user_ids"`
+							} `json:"m.mentions"`
+						} `json:"content"`
+					} `json:"events"`
+				} `json:"timeline"`
+			} `json:"join"`
+		} `json:"rooms"`
+	}
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodGet, path, token, nil, &resp)
+	if err != nil {
+		return nil, fmt.Errorf("sync messages: %w", err)
+	}
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("sync messages: HTTP %d: %s", statusCode, truncate(respBody, 500))
+	}
+	out := &SyncMessagesResult{NextBatch: resp.NextBatch}
+	for roomID, room := range resp.Rooms.Join {
+		for _, event := range room.Timeline.Events {
+			if event.Type != "m.room.message" || len(event.Content.Mentions.UserIDs) == 0 {
+				continue
+			}
+			out.Events = append(out.Events, MessageEvent{
+				RoomID:   roomID,
+				EventID:  event.EventID,
+				Sender:   event.Sender,
+				Mentions: event.Content.Mentions.UserIDs,
+			})
+		}
+	}
+	return out, nil
+}
+
 // doJSON performs an HTTP request with JSON body/response.
 // Returns the HTTP status code, the raw response body, and any transport/decode error.
 // If respOut is nil, the response body is not decoded (but still read and returned).
 // The raw body is always returned (possibly nil) so callers can include it in
 // diagnostic error messages even when respOut is set.
 func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, reqBody interface{}, respOut interface{}) (int, []byte, error) {
+	operation := matrixOperation(method, path)
+	start := time.Now()
+	statusCode := 0
+	var observeErr error
+	defer func() {
+		hiclawmetrics.ObserveUpstream("matrix", operation, start, statusCode, observeErr)
+	}()
+
 	var bodyReader io.Reader
 	if reqBody != nil {
 		data, err := json.Marshal(reqBody)
 		if err != nil {
+			observeErr = err
 			return 0, nil, fmt.Errorf("marshal request: %w", err)
 		}
 		bodyReader = bytes.NewReader(data)
@@ -849,6 +1084,7 @@ func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, 
 	url := strings.TrimRight(c.config.ServerURL, "/") + path
 	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
+		observeErr = err
 		return 0, nil, err
 	}
 	if reqBody != nil {
@@ -860,9 +1096,11 @@ func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		observeErr = err
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
+	statusCode = resp.StatusCode
 
 	// Clear cached admin token on auth failure so next call re-authenticates
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -873,11 +1111,56 @@ func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, 
 
 	if respOut != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, respOut); err != nil {
+			observeErr = fmt.Errorf("%w: %w", hiclawmetrics.ErrDecodeResponse, err)
 			return resp.StatusCode, respBody, fmt.Errorf("decode response: %w (body: %s)", err, truncate(respBody, 200))
 		}
 	}
 
 	return resp.StatusCode, respBody, nil
+}
+
+func matrixOperation(method, path string) string {
+	pathOnly := path
+	if idx := strings.IndexByte(pathOnly, '?'); idx >= 0 {
+		pathOnly = pathOnly[:idx]
+	}
+
+	switch {
+	case method == http.MethodPost && pathOnly == "/_matrix/client/v3/register":
+		return "register_user"
+	case method == http.MethodPost && pathOnly == "/_matrix/client/v3/login":
+		return "login"
+	case method == http.MethodPut && strings.Contains(pathOnly, "/profile/") && strings.HasSuffix(pathOnly, "/displayname"):
+		return "set_display_name"
+	case method == http.MethodPost && pathOnly == "/_matrix/client/v3/createRoom":
+		return "create_room"
+	case method == http.MethodGet && strings.HasPrefix(pathOnly, "/_matrix/client/v3/directory/room/"):
+		return "resolve_room_alias"
+	case method == http.MethodDelete && strings.HasPrefix(pathOnly, "/_matrix/client/v3/directory/room/"):
+		return "delete_room_alias"
+	case method == http.MethodPut && strings.Contains(pathOnly, "/state/m.room.name/"):
+		return "set_room_name"
+	case method == http.MethodPut && strings.Contains(pathOnly, "/state/"):
+		return "set_room_state"
+	case method == http.MethodPost && strings.HasSuffix(pathOnly, "/join"):
+		return "join_room"
+	case method == http.MethodPost && strings.HasSuffix(pathOnly, "/leave"):
+		return "leave_room"
+	case method == http.MethodPut && strings.Contains(pathOnly, "/send/m.room.message/"):
+		return "send_message"
+	case method == http.MethodGet && strings.HasSuffix(pathOnly, "/members"):
+		return "list_room_members"
+	case method == http.MethodPost && strings.HasSuffix(pathOnly, "/invite"):
+		return "invite"
+	case method == http.MethodPost && strings.HasSuffix(pathOnly, "/kick"):
+		return "kick"
+	case method == http.MethodGet && pathOnly == "/_matrix/client/v3/joined_rooms":
+		return "list_joined_rooms"
+	case method == http.MethodGet && pathOnly == "/_matrix/client/v3/sync":
+		return "sync_messages"
+	default:
+		return "unknown"
+	}
 }
 
 // encodeRoomID percent-encodes the "!" in room IDs for URL paths.

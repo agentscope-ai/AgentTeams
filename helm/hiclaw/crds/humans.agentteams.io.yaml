@@ -39,6 +39,15 @@ spec:
                   items:
                     type: string
                   description: Standalone workers this human can access (L2/L3)
+                identitySource:
+                  type: object
+                  nullable: true
+                  properties:
+                    issuer:
+                      type: string
+                    subject:
+                      type: string
+                  required: [issuer, subject]
                 note:
                   type: string
             status:

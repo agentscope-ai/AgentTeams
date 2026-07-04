@@ -37,7 +37,7 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 
 	matrixUserID := h.Status.MatrixUserID
 	if matrixUserID == "" {
-		matrixUserID = r.Provisioner.MatrixUserID(s.username)
+		matrixUserID = s.identity.MatrixUserID
 	}
 
 	// Start with currently-observed rooms; we'll prune removals below.
@@ -107,11 +107,14 @@ func (r *HumanReconciler) ensureUserToken(ctx context.Context, s *humanScope) st
 	// reconciles fall through to here. Without a stored password we
 	// cannot log in, so return empty and let the caller fall back to
 	// admin-only invite.
-	if !r.Provisioner.MatrixAppServiceEnabled() && s.human.Status.InitialPassword == "" {
+	if s.identity.Source == nil {
+		return ""
+	}
+	if s.identity.ManagesInitialPassword && !r.Provisioner.MatrixAppServiceEnabled() && s.human.Status.InitialPassword == "" {
 		return ""
 	}
 
-	token, err := r.Provisioner.LoginAsHuman(ctx, s.username, s.human.Status.InitialPassword)
+	token, err := s.identity.Source.EnsureUserToken(ctx, &s.human.Spec, &s.human.Status, s.human.Name)
 	if err != nil {
 		log.FromContext(ctx).Info("human login with stored password failed; continuing with admin-only room management",
 			"name", s.human.Name, "err", err.Error())

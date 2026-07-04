@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
@@ -62,6 +63,12 @@ func (f *fakeTeamMatrix) ResolveRoomAlias(context.Context, string) (string, bool
 }
 
 func (f *fakeTeamMatrix) DeleteRoomAlias(context.Context, string) error { return nil }
+
+func (f *fakeTeamMatrix) SetRoomName(context.Context, string, string, string) error { return nil }
+
+func (f *fakeTeamMatrix) SetRoomState(context.Context, string, string, string, map[string]interface{}, string) error {
+	return nil
+}
 
 func (f *fakeTeamMatrix) JoinRoom(_ context.Context, roomID, token string) error {
 	f.joins = append(f.joins, roomUserCall{roomID: roomID, userID: token})
@@ -135,6 +142,10 @@ func (f *fakeTeamMatrix) KickFromRoomWithToken(_ context.Context, roomID, userID
 	}
 	f.members[roomID] = next
 	return nil
+}
+
+func (f *fakeTeamMatrix) SyncMessages(context.Context, string, time.Duration) (*matrix.SyncMessagesResult, error) {
+	return &matrix.SyncMessagesResult{}, nil
 }
 
 func (f *fakeTeamMatrix) UserID(localpart string) string {

@@ -151,6 +151,22 @@ type HumanProvisioner interface {
 	// room management on this reconcile pass.
 	LoginAsHuman(ctx context.Context, username, password string) (string, error)
 
+	// RegisterAppServiceUser registers (or logs in to) a Matrix account
+	// via the AppService API. Returns Created=true on first registration.
+	RegisterAppServiceUser(ctx context.Context, username string) (*HumanCredentials, error)
+
+	// RegisterLegacyUser registers via the registration_token flow.
+	RegisterLegacyUser(ctx context.Context, username string) (*HumanCredentials, error)
+
+	// SetUserPassword writes a password for the given user via the admin bot.
+	SetUserPassword(ctx context.Context, userID, password string) error
+
+	// LoginAppServiceUser obtains a token via AS login (no password).
+	LoginAppServiceUser(ctx context.Context, username string) (string, error)
+
+	// LoginWithPassword obtains a token via the password login flow.
+	LoginWithPassword(ctx context.Context, username, password string) (string, error)
+
 	// SetDisplayName updates the Matrix profile displayname for the user.
 	// Requires a user-scoped access token.
 	SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error
@@ -175,6 +191,10 @@ type HumanProvisioner interface {
 	// of roomID via "!admin users force-leave-room". Fire-and-forget at
 	// the bot layer, but the admin message delivery itself is confirmed.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
+
+	// DeactivateHumanUser disables a Human Matrix account after membership removal.
+	DeactivateHumanUser(ctx context.Context, userID string) error
+
 	MatrixAppServiceEnabled() bool
 }
 
@@ -185,6 +205,7 @@ type HumanCredentials struct {
 	UserID      string
 	AccessToken string
 	Password    string
+	Created     bool
 }
 
 // Compile-time interface satisfaction checks.

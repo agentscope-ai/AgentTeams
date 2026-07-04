@@ -1,4 +1,4 @@
-"""Tests for MatrixChannel Matrix-specific outgoing behavior.
+"""Tests for MatrixChannel outgoing visible mentions.
 
 openclaw >= 2026.4.x's mention monitor requires BOTH ``m.mentions.user_ids``
 metadata AND a *visible* mention (a ``matrix.to`` link in ``formatted_body``
@@ -11,39 +11,8 @@ messages actually wake up receiving OpenClaw agents.
 import asyncio
 from types import SimpleNamespace
 
-from matrix import channel as matrix_channel
+import matrix.channel as matrix_channel
 from matrix.channel import MatrixChannel
-
-
-class _TypingClient:
-    def __init__(self):
-        self.rooms = {}
-        self.calls = []
-
-    async def room_typing(self, room_id, *, typing_state, timeout):
-        self.calls.append((room_id, typing_state, timeout))
-
-
-class _SendClient:
-    def __init__(self):
-        self.rooms = {}
-        self.sent = []
-
-    async def room_send(
-        self,
-        room_id,
-        event_type,
-        content,
-        ignore_unverified_devices=True,
-    ):
-        self.sent.append(
-            (room_id, event_type, content, ignore_unverified_devices),
-        )
-        return SimpleNamespace(event_id="$reply")
-
-
-async def _noop_typing(*_args, **_kwargs):
-    return None
 
 
 def _make_channel(user_id: str = "@bot:hs.local") -> MatrixChannel:
@@ -58,15 +27,21 @@ def _make_channel(user_id: str = "@bot:hs.local") -> MatrixChannel:
     ch = MatrixChannel.__new__(MatrixChannel)
     ch._user_id = user_id
     ch._client = None
-    ch._typing_tasks = {}
     return ch
 
 
-def _make_typing_channel() -> tuple[MatrixChannel, _TypingClient]:
-    ch = _make_channel()
-    client = _TypingClient()
-    ch._client = client
-    return ch, client
+class _FakeClient:
+    def __init__(self):
+        self.rooms = {}
+        self.sent = []
+
+    async def room_send(self, room_id, message_type, content, **kwargs):
+        self.sent.append((room_id, message_type, content, kwargs))
+        return SimpleNamespace(event_id=f"$sent{len(self.sent)}")
+
+
+async def _noop_typing(_room_id, _typing):
+    return None
 
 
 def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
@@ -85,9 +60,7 @@ def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
     )
 
     assert content["m.mentions"] == {"user_ids": ["@worker-a:hs.local"]}
-    # body should use display name (localpart fallback), not full MXID
-    assert content["body"].startswith("worker-a ")
-    assert "@worker-a:hs.local" not in content["body"]
+    assert content["body"].startswith("@worker-a:hs.local ")
     assert (
         'href="https://matrix.to/#/%40worker-a%3Ahs.local"'
         in content["formatted_body"]
@@ -111,9 +84,7 @@ def test_apply_mention_fallback_sender_id_when_no_explicit_list():
     )
 
     assert content["m.mentions"] == {"user_ids": ["@alice:hs.local"]}
-    # body should use display name (localpart fallback), not full MXID
-    assert "alice" in content["body"]
-    assert "@alice:hs.local" not in content["body"]
+    assert "@alice:hs.local" in content["body"]
     assert (
         'href="https://matrix.to/#/%40alice%3Ahs.local"'
         in content["formatted_body"]
@@ -132,9 +103,8 @@ def test_apply_mention_body_scan_rewrites_existing_mxid_to_anchor():
     ch._apply_mention(content, "!room:hs.local")
 
     assert content["m.mentions"] == {"user_ids": ["@worker-b:hs.local"]}
-    # Body MXID should be replaced with display name (localpart fallback).
-    assert "worker-b" in content["body"]
-    assert "@worker-b:hs.local" not in content["body"]
+    # Body already had the MXID — no duplicate prefix.
+    assert content["body"].count("@worker-b:hs.local") == 1
     # First occurrence in formatted_body is replaced with a matrix.to anchor.
     assert (
         'href="https://matrix.to/#/%40worker-b%3Ahs.local"'
@@ -213,9 +183,7 @@ def test_apply_mention_synthesizes_formatted_body_for_media_events():
     )
 
     assert content["format"] == "org.matrix.custom.html"
-    # body should use display name (localpart fallback), not full MXID
-    assert content["body"].startswith("worker-d ")
-    assert "@worker-d:hs.local" not in content["body"]
+    assert content["body"].startswith("@worker-d:hs.local ")
     assert (
         'href="https://matrix.to/#/%40worker-d%3Ahs.local"'
         in content["formatted_body"]
@@ -251,28 +219,79 @@ def test_apply_mention_multiple_targets_all_get_visible_anchors():
         )
 
 
-def test_process_completed_stops_typing_even_without_reply():
-    ch, client = _make_typing_channel()
-
-    asyncio.run(ch._on_process_completed(None, "!room:hs.local", {}))
-
-    assert client.calls[-1][0] == "!room:hs.local"
-    assert client.calls[-1][1] is False
-
-
-def test_cancelled_consume_error_stops_typing_without_matrix_noise():
-    ch, client = _make_typing_channel()
+def test_send_does_not_auto_mention_sender_id():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
 
     asyncio.run(
-        ch._on_consume_error(
-            None,
+        ch.send(
             "!room:hs.local",
-            "Task has been cancelled",
-        )
+            "Got it, thanks!",
+            {"sender_id": "@alice:hs.local"},
+        ),
     )
 
-    assert client.calls[-1][0] == "!room:hs.local"
-    assert client.calls[-1][1] is False
+    content = client.sent[0][2]
+    assert "m.mentions" not in content
+    assert "@alice:hs.local" not in content["body"]
+
+
+def test_send_enriches_visible_body_mentions():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!room:hs.local",
+            "@alice:hs.local please review this.",
+            {"sender_id": "@bob:hs.local"},
+        ),
+    )
+
+    content = client.sent[0][2]
+    assert content["m.mentions"] == {"user_ids": ["@alice:hs.local"]}
+    assert "@bob:hs.local" not in content["body"]
+
+
+def test_send_suppresses_no_reply_as_final_control_line():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!room:hs.local",
+            (
+                "任务已完成并报告。\n"
+                "已通过 @mention 向 coordinator 报告 TASK_COMPLETED。\n\n"
+                "NO_REPLY\n"
+            ),
+        ),
+    )
+
+    assert client.sent == []
+
+
+def test_send_keeps_no_reply_when_not_final_control_line():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!room:hs.local",
+            "The literal token NO_REPLY is documented here, then normal text.",
+        ),
+    )
+
+    assert len(client.sent) == 1
+    assert "NO_REPLY" in client.sent[0][2]["body"]
 
 
 class _FakeCommandRegistry:
@@ -289,6 +308,8 @@ class _FakeCfg:
 
 class _FakeContentType:
     TEXT = "text"
+    DATA = "data"
+    FILE = "file"
 
 
 class _FakeTextContent:
@@ -303,7 +324,7 @@ class _FakeRoom:
 
     def user_name(self, user_id):
         if user_id == "@copywriting-assistant:hs.local":
-            return "copywriting-assistant"
+            return "copywriting-assistant 💕"
         return user_id
 
 
@@ -319,7 +340,6 @@ def _make_inbound_channel() -> MatrixChannel:
     if not hasattr(matrix_channel, "TextContent"):
         matrix_channel.TextContent = _FakeTextContent
         matrix_channel.ContentType = _FakeContentType
-
     ch = _make_channel(user_id="@copywriting-assistant:hs.local")
     ch._cfg = _FakeCfg()
     ch._room_histories = {}
@@ -334,21 +354,18 @@ def _make_inbound_channel() -> MatrixChannel:
     return ch
 
 
-def _event(body: str, mentioned: bool = False, thread: bool = False):
+def _event(body: str, mentioned: bool = False):
     mentions = (
         {"user_ids": ["@copywriting-assistant:hs.local"]}
         if mentioned
         else {}
     )
-    content = {"m.mentions": mentions}
-    if thread:
-        content["m.relates_to"] = {"rel_type": "m.thread"}
     return SimpleNamespace(
         sender="@alice:hs.local",
         body=body,
         event_id="$event",
         server_timestamp=0,
-        source={"content": content},
+        source={"content": {"m.mentions": mentions}},
     )
 
 
@@ -362,7 +379,7 @@ def test_matrix_control_command_strips_mention_before_enqueue():
     asyncio.run(
         ch._on_room_event(
             _FakeRoom(),
-            _event("copywriting-assistant: /stop", mentioned=True),
+            _event("copywriting-assistant 💕: /stop", mentioned=True),
         ),
     )
 
@@ -371,43 +388,39 @@ def test_matrix_control_command_strips_mention_before_enqueue():
 
 
 def test_matrix_bare_stop_not_recognized_without_slash():
+    """Bare 'stop' (no leading /) is not a control command even with mention."""
     ch = _make_inbound_channel()
 
     asyncio.run(
         ch._on_room_event(
             _FakeRoom(),
-            _event("copywriting-assistant: stop", mentioned=True),
+            _event("copywriting-assistant 💕: stop", mentioned=True),
         ),
     )
 
     assert len(ch.enqueued) == 1
+    # Bare 'stop' goes through as normal text, not converted to /stop
     assert "/stop" not in _first_text(ch.enqueued[0])
 
 
 def test_matrix_control_command_requires_mention_in_group():
+    """Control commands in group rooms require @mention (no bypass)."""
     ch = _make_inbound_channel()
 
     asyncio.run(ch._on_room_event(_FakeRoom(), _event("/approve")))
 
+    # Without mention, /approve is recorded as history, not enqueued
     assert len(ch.enqueued) == 0
-
-
-def test_matrix_unmentioned_thread_message_does_not_pollute_history():
-    ch = _make_inbound_channel()
-
-    asyncio.run(ch._on_room_event(_FakeRoom(), _event("side thread", thread=True)))
-
-    assert len(ch.enqueued) == 0
-    assert ch._room_histories == {}
 
 
 def test_matrix_double_slash_stop_normalized_with_mention():
+    """Element-style //stop is normalized to /stop when mentioned."""
     ch = _make_inbound_channel()
 
     asyncio.run(
         ch._on_room_event(
             _FakeRoom(),
-            _event("copywriting-assistant: //stop", mentioned=True),
+            _event("copywriting-assistant 💕: //stop", mentioned=True),
         ),
     )
 
@@ -417,7 +430,7 @@ def test_matrix_double_slash_stop_normalized_with_mention():
 
 def test_matrix_readiness_probe_replies_directly_without_enqueue():
     ch = _make_inbound_channel()
-    client = _SendClient()
+    client = _FakeClient()
     ch._client = client
 
     asyncio.run(
@@ -439,7 +452,7 @@ def test_matrix_readiness_probe_replies_directly_without_enqueue():
 
 def test_matrix_readiness_probe_bypasses_allowlist_when_targeted():
     ch = _make_inbound_channel()
-    client = _SendClient()
+    client = _FakeClient()
     ch._client = client
     ch._check_allowed = lambda *_args: False
 
@@ -456,3 +469,354 @@ def test_matrix_readiness_probe_bypasses_allowlist_when_targeted():
     assert ch.enqueued == []
     assert len(client.sent) == 1
     assert client.sent[0][2]["body"] == "READY"
+
+
+def test_matrix_suppresses_cancelled_task_error_message():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+
+    asyncio.run(
+        ch._on_consume_error(
+            SimpleNamespace(channel_meta={}),
+            "!room:hs.local",
+            "Error: Task has been cancelled!",
+        ),
+    )
+
+    assert client.sent == []
+
+
+def test_send_hides_matrix_session_id_in_stop_response():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!room:hs.local",
+            "**Task Stopped**\n\n"
+            "Session `matrix:!room:hs.local`: running task stopped.",
+            {},
+        ),
+    )
+
+    content = client.sent[0][2]
+    assert "matrix:!room:hs.local" not in content["body"]
+    assert content["body"] == "**Task Stopped**\n\nRunning task stopped."
+
+
+def test_send_with_matrix_thread_meta_adds_thread_relation():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!room:hs.local",
+            "reading files",
+            {"matrix_thread_root_event_id": "$task-root"},
+        ),
+    )
+
+    content = client.sent[0][2]
+    assert content["m.relates_to"] == {
+        "rel_type": "m.thread",
+        "event_id": "$task-root",
+        "is_falling_back": True,
+        "m.in_reply_to": {"event_id": "$task-root"},
+    }
+
+
+def test_send_with_plain_thread_root_meta_stays_in_main_timeline():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!room:hs.local",
+            "final result",
+            {"thread_root_event_id": "$task-root"},
+        ),
+    )
+
+    content = client.sent[0][2]
+    assert "m.relates_to" not in content
+
+
+def test_reasoning_completed_message_waits_for_own_first_message_thread():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+    ch._message_to_content_parts = lambda _event: [
+        _FakeTextContent(matrix_channel.ContentType.TEXT, "thinking")
+    ]
+
+    async def _send_content_parts(to_handle, parts, meta):
+        await ch.send(to_handle, parts[0].text, meta)
+
+    ch.send_content_parts = _send_content_parts
+    event = SimpleNamespace(type="MessageType.REASONING")
+    meta = {"thread_root_event_id": "$incoming-task"}
+
+    asyncio.run(
+        ch.on_event_message_completed(
+            SimpleNamespace(),
+            "!room:hs.local",
+            event,
+            meta,
+        ),
+    )
+    assert client.sent == []
+
+    asyncio.run(ch.send("!room:hs.local", "收到任务", meta))
+
+    assert client.sent[0][2]["body"] == "收到任务"
+    assert "m.relates_to" not in client.sent[0][2]
+    assert client.sent[1][2]["body"] == "thinking"
+    assert client.sent[1][2]["m.relates_to"]["event_id"] == "$sent1"
+    assert client.sent[1][2]["m.relates_to"]["event_id"] != "$incoming-task"
+
+
+def test_final_message_completed_stays_in_main_timeline():
+    ch = _make_channel()
+    captured = []
+
+    async def _capture_send_message_content(to_handle, event, meta):
+        captured.append((to_handle, event, meta))
+
+    ch.send_message_content = _capture_send_message_content
+    event = SimpleNamespace(type="MessageType.MESSAGE")
+
+    asyncio.run(
+        ch.on_event_message_completed(
+            SimpleNamespace(),
+            "!room:hs.local",
+            event,
+            {"thread_root_event_id": "$task-root"},
+        ),
+    )
+
+    assert captured[0][0] == "!room:hs.local"
+    assert "matrix_thread_root_event_id" not in captured[0][2]
+
+
+def test_first_and_final_messages_stay_main_middle_message_goes_thread():
+    ch = _make_channel()
+    main = []
+    thread = []
+
+    async def _capture_main(to_handle, event, meta):
+        main.append((to_handle, event.text))
+        meta.setdefault("matrix_own_thread_root_event_id", "$first")
+
+    async def _capture_thread(to_handle, parts, meta):
+        thread.append((
+            to_handle,
+            parts[0].text,
+            meta.get("matrix_thread_root_event_id"),
+        ))
+
+    ch.send_message_content = _capture_main
+    ch.send_content_parts = _capture_thread
+    ch._message_to_content_parts = lambda event: [
+        _FakeTextContent(matrix_channel.ContentType.TEXT, event.text)
+    ]
+    meta = {"thread_root_event_id": "$incoming-task"}
+
+    for text in ("first", "middle", "final"):
+        asyncio.run(
+            ch.on_event_message_completed(
+                SimpleNamespace(),
+                "!room:hs.local",
+                SimpleNamespace(type="MessageType.MESSAGE", text=text),
+                meta,
+            ),
+        )
+
+    asyncio.run(ch._on_process_completed(SimpleNamespace(), "!room:hs.local", meta))
+
+    assert main == [
+        ("!room:hs.local", "first"),
+        ("!room:hs.local", "final"),
+    ]
+    assert thread == [("!room:hs.local", "middle", "$first")]
+
+
+def test_pending_message_flushes_before_following_tool_call():
+    ch = _make_channel()
+    main = []
+    thread = []
+
+    async def _capture_main(to_handle, event, meta):
+        main.append((to_handle, event.text))
+        meta.setdefault("matrix_own_thread_root_event_id", "$first")
+
+    async def _capture_thread(to_handle, parts, meta):
+        thread.append((
+            to_handle,
+            parts[0].text,
+            meta.get("matrix_thread_root_event_id"),
+        ))
+
+    ch.send_message_content = _capture_main
+    ch.send_content_parts = _capture_thread
+    ch._message_to_content_parts = lambda event: [
+        _FakeTextContent(matrix_channel.ContentType.TEXT, event.text)
+    ]
+    meta = {"thread_root_event_id": "$incoming-task"}
+
+    events = [
+        SimpleNamespace(type="MessageType.MESSAGE", text="first"),
+        SimpleNamespace(type="MessageType.MESSAGE", text="准备提交任务"),
+        SimpleNamespace(type="MessageType.MCP_TOOL_CALL", text="tool: taskflow"),
+        SimpleNamespace(type="MessageType.MESSAGE", text="任务已提交"),
+    ]
+    for event in events:
+        asyncio.run(
+            ch.on_event_message_completed(
+                SimpleNamespace(),
+                "!room:hs.local",
+                event,
+                meta,
+            ),
+        )
+
+    asyncio.run(ch._on_process_completed(SimpleNamespace(), "!room:hs.local", meta))
+
+    assert main == [
+        ("!room:hs.local", "first"),
+        ("!room:hs.local", "任务已提交"),
+    ]
+    assert thread == [
+        ("!room:hs.local", "准备提交任务", "$first"),
+        ("!room:hs.local", "tool: taskflow", "$first"),
+    ]
+
+
+def test_tool_call_completed_message_routes_to_task_thread():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+    ch._message_to_content_parts = lambda _event: [
+        _FakeTextContent(matrix_channel.ContentType.TEXT, "tool: read_file")
+    ]
+
+    async def _send_content_parts(to_handle, parts, meta):
+        await ch.send(to_handle, parts[0].text, meta)
+
+    ch.send_content_parts = _send_content_parts
+    event = SimpleNamespace(type="MessageType.MCP_TOOL_CALL")
+    meta = {"thread_root_event_id": "$incoming-task"}
+
+    asyncio.run(ch.send("!room:hs.local", "收到任务", meta))
+
+    asyncio.run(
+        ch.on_event_message_completed(
+            SimpleNamespace(),
+            "!room:hs.local",
+            event,
+            meta,
+        ),
+    )
+
+    assert client.sent[0][2]["body"] == "收到任务"
+    assert "m.relates_to" not in client.sent[0][2]
+    assert client.sent[1][2]["body"] == "tool: read_file"
+    assert client.sent[1][2]["m.relates_to"]["event_id"] == "$sent1"
+
+
+def test_tool_output_completed_message_without_media_is_not_sent():
+    ch = _make_channel()
+    captured = []
+
+    async def _capture_send_content_parts(to_handle, parts, meta):
+        captured.append((to_handle, event, meta))
+
+    ch.send_content_parts = _capture_send_content_parts
+    ch._tool_output_media_parts = lambda _event: []
+    event = SimpleNamespace(type="MessageType.MCP_TOOL_CALL_OUTPUT")
+
+    asyncio.run(
+        ch.on_event_message_completed(
+            SimpleNamespace(),
+            "!room:hs.local",
+            event,
+            {"thread_root_event_id": "$task-root"},
+        ),
+    )
+
+    assert captured == []
+
+
+def test_tool_output_completed_message_preserves_attachments():
+    ch = _make_channel()
+    captured = []
+    file_part = SimpleNamespace(
+        type=matrix_channel.ContentType.FILE,
+        file_url="file:///tmp/result.tar.gz",
+    )
+
+    async def _capture_send_content_parts(to_handle, parts, meta):
+        captured.append((to_handle, parts, meta))
+
+    ch.send_content_parts = _capture_send_content_parts
+    ch._tool_output_media_parts = lambda _event: [file_part]
+    event = SimpleNamespace(type="MessageType.MCP_TOOL_CALL_OUTPUT")
+
+    asyncio.run(
+        ch.on_event_message_completed(
+            SimpleNamespace(),
+            "!room:hs.local",
+            event,
+            {"thread_root_event_id": "$task-root"},
+        ),
+    )
+
+    assert captured == [
+        (
+            "!room:hs.local",
+            [file_part],
+            {"thread_root_event_id": "$task-root"},
+        ),
+    ]
+
+
+def test_streaming_tool_content_is_consumed_without_sending():
+    ch = _make_channel()
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+    ch._filter_tool_messages = False
+
+    async def _send_content_parts(to_handle, parts, meta):
+        await ch.send(to_handle, parts[0].text, meta)
+
+    ch.send_content_parts = _send_content_parts
+
+    event = SimpleNamespace(
+        type=matrix_channel.ContentType.DATA,
+        status=SimpleNamespace(name="InProgress"),
+        data={
+            "name": "read_file",
+            "output": [{"type": "text", "text": "opened spec.md"}],
+        },
+    )
+
+    handled = asyncio.run(
+        ch.on_event_content(
+            SimpleNamespace(),
+            "!room:hs.local",
+            event,
+            {"thread_root_event_id": "$task-root"},
+        ),
+    )
+
+    assert handled is True
+    assert client.sent == []

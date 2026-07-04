@@ -96,12 +96,7 @@ _SLASH_COMMANDS = frozenset(
 _SLASH_ALIASES: dict[str, str] = {
     "reset": "clear",
 }
-_CONTROL_COMMAND_ALIASES: dict[str, str] = {
-    "stop": "/stop",
-    "approve": "/approve",
-    "deny": "/deny",
-    "approval": "/approval",
-}
+
 _STOP_RESPONSE_RE = re.compile(
     r"Session\s+`matrix:[^`]+`:\s+(?P<status>[^.]+)\.",
     re.IGNORECASE,
@@ -115,6 +110,8 @@ _MATRIX_THREAD_META_KEY = "matrix_thread_root_event_id"
 _MATRIX_OWN_THREAD_ROOT_KEY = "matrix_own_thread_root_event_id"
 _MATRIX_PENDING_THREAD_PARTS_KEY = "matrix_pending_thread_parts"
 _MATRIX_PENDING_FINAL_MESSAGE_KEY = "matrix_pending_final_message"
+_MATRIX_FORCE_NOTICE_KEY = "matrix_force_notice"
+_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY = "matrix_placeholder_thread_root"
 _TOOL_CALL_MESSAGE_TYPE_NAMES = frozenset(
     {
         "FUNCTION_CALL",
@@ -325,6 +322,11 @@ class MatrixChannel(BaseChannel):
         self._dm_room_cache: Dict[str, Dict[str, Any]] = {}
         # Shared HTTP client for media downloads (created in start())
         self._http_client: Optional[httpx.AsyncClient] = None
+        # Shared send_meta state for proactive sends (cron/scheduled)
+        # Maps room_id → send_meta dict so thread root persists across events
+        self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+        # Track active thread root per room for error handling
+        self._active_thread_roots: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -374,8 +376,8 @@ class MatrixChannel(BaseChannel):
     def from_env(cls, process: Callable, on_reply_sent=None) -> "MatrixChannel":
         import os
         cfg = MatrixChannelConfig({
-            "homeserver": os.environ.get("HICLAW_MATRIX_SERVER", ""),
-            "access_token": os.environ.get("HICLAW_MATRIX_TOKEN", ""),
+            "homeserver": os.environ.get("AGENTTEAMS_MATRIX_SERVER", ""),
+            "access_token": os.environ.get("AGENTTEAMS_MATRIX_TOKEN", ""),
         })
         return cls(process=process, config=cfg, on_reply_sent=on_reply_sent)
 
@@ -637,7 +639,7 @@ class MatrixChannel(BaseChannel):
 
     @staticmethod
     def _ready_marker_path() -> Optional[Path]:
-        marker = os.environ.get("HICLAW_MATRIX_CHANNEL_READY_FILE")
+        marker = os.environ.get("AGENTTEAMS_MATRIX_CHANNEL_READY_FILE")
         if marker:
             return Path(marker)
         return None
@@ -1098,18 +1100,6 @@ class MatrixChannel(BaseChannel):
         if not allow_bare:
             return None
 
-        parts = stripped.split(None, 1)
-        if not parts:
-            return None
-        command = _CONTROL_COMMAND_ALIASES.get(parts[0].lower())
-        if command is None:
-            return None
-
-        candidate = command
-        if len(parts) > 1:
-            candidate = f"{command} {parts[1]}"
-        if registry.is_control_command(candidate):
-            return candidate
         return None
 
     # ------------------------------------------------------------------
@@ -1814,12 +1804,9 @@ class MatrixChannel(BaseChannel):
         control_text = self._control_command_text(stripped, allow_bare=mentioned)
         is_control_command = control_text is not None
 
-        # Mention check for group rooms. Runtime control commands are allowed
-        # through after mention-prefix stripping so @worker /stop reaches
-        # CoPaw's native control-command path instead of the model.
         if not is_dm:
             requires_mention = self._require_mention(room_id)
-            if requires_mention and not mentioned and not is_control_command:
+            if requires_mention and not mentioned:
                 if is_thread_event:
                     return
                 self._record_history(
@@ -2276,6 +2263,50 @@ class MatrixChannel(BaseChannel):
         return meta.get("room_id", getattr(request, "user_id", ""))
 
     # ------------------------------------------------------------------
+    # Proactive send (cron/scheduled) — thread-aware send_event override
+    # ------------------------------------------------------------------
+
+    async def send_event(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        event: Any,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Route proactive (cron) events through thread-aware logic.
+
+        The base send_event only calls send_message_content, bypassing
+        on_event_message_completed and thread routing. This override uses
+        shared per-room state so the thread root persists across events
+        within one proactive send stream.
+        """
+        obj = getattr(event, "object", None)
+        status = getattr(event, "status", None)
+        to_handle = self.to_handle_from_target(
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+        # Get or create shared send_meta for this proactive send
+        send_meta = self._proactive_send_state.get(to_handle)
+        if send_meta is None:
+            send_meta = dict(meta or {})
+            self._proactive_send_state[to_handle] = send_meta
+
+        if obj == "message" and self._is_completed_status(status):
+            await self.on_event_message_completed(
+                None,
+                to_handle,
+                event,
+                send_meta,
+            )
+        elif obj == "response":
+            # Stream completed — flush deferred final message and clean up
+            await self._on_process_completed(None, to_handle, send_meta)
+            self._proactive_send_state.pop(to_handle, None)
+
+    # ------------------------------------------------------------------
     # Mention helper — MSC3952 m.mentions from body text scan
     # ------------------------------------------------------------------
 
@@ -2455,6 +2486,44 @@ class MatrixChannel(BaseChannel):
             self._with_thread_relation_meta(meta_dict, thread_root),
         )
 
+    async def _ensure_thread_root(
+        self,
+        to_handle: str,
+        send_meta: Dict[str, Any],
+    ) -> None:
+        """Create a placeholder thread-root message if none exists yet.
+
+        Sends "处理中..." to the main room as the thread root so that
+        reasoning/tool_call content can be sent to the thread immediately.
+        The final MESSAGE is sent as a separate new message in the main room.
+        """
+        if send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY):
+            return
+        if not self._client:
+            return
+        content: dict[str, Any] = {
+            "msgtype": "m.notice",
+            "body": "处理中...",
+        }
+        try:
+            resp = await self._client.room_send(
+                to_handle,
+                "m.room.message",
+                content,
+                ignore_unverified_devices=True,
+            )
+            event_id = getattr(resp, "event_id", None)
+            if event_id:
+                send_meta[_MATRIX_OWN_THREAD_ROOT_KEY] = event_id
+                send_meta[_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY] = True
+                self._active_thread_roots[to_handle] = event_id
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: _ensure_thread_root failed for %s: %s",
+                to_handle,
+                exc,
+            )
+
     def _apply_thread_relation(
         self,
         content: Dict[str, Any],
@@ -2478,12 +2547,193 @@ class MatrixChannel(BaseChannel):
             "is_falling_back": False,
         }
 
+    def _is_completed_status(self, status: Any) -> bool:
+        if RunStatus is not None and status == RunStatus.Completed:
+            return True
+        return _enum_name(status) == "COMPLETED"
+
+    def _is_in_progress_status(self, status: Any) -> bool:
+        if RunStatus is not None and status == RunStatus.InProgress:
+            return True
+        return _enum_name(status) == "INPROGRESS"
+
+    def _is_reasoning_message(self, message_type: Any) -> bool:
+        if MessageType is not None and message_type == MessageType.REASONING:
+            return True
+        return _enum_name(message_type) == "REASONING"
+
+    def _is_tool_call_message(self, message_type: Any) -> bool:
+        return _enum_name(message_type) in _TOOL_CALL_MESSAGE_TYPE_NAMES
+
+    def _is_tool_output_message(self, message_type: Any) -> bool:
+        return _enum_name(message_type) in _TOOL_OUTPUT_MESSAGE_TYPE_NAMES
+
+    def _is_message_event(self, message_type: Any) -> bool:
+        if MessageType is not None and message_type == MessageType.MESSAGE:
+            return True
+        return _enum_name(message_type) == "MESSAGE"
+
+    def _thread_content_parts(self, event: Any) -> List[Any]:
+        """Render event for thread display, bypassing filter_tool_messages."""
+        style = replace(self._render_style, filter_tool_messages=False)
+        renderer = self._renderer.__class__(style)
+        return renderer.message_to_parts(event)
+
+    def _tool_output_media_parts(self, event: Any) -> List[Any]:
+        """Render only media/file parts from a tool output message."""
+        style = replace(self._render_style, filter_tool_messages=True)
+        renderer = self._renderer.__class__(style)
+        return renderer.message_to_parts(event)
+
+    async def on_event_content(
+        self,
+        request: Any,
+        to_handle: str,
+        event: Any,
+        send_meta: Dict[str, Any],
+    ) -> bool:
+        """Consume streaming tool progress without sending Matrix noise."""
+        del request
+        if getattr(event, "type", None) != ContentType.DATA:
+            return False
+        if not self._is_in_progress_status(getattr(event, "status", None)):
+            return False
+        data = getattr(event, "data", None) or {}
+        if not isinstance(data, dict) or "output" not in data:
+            return False
+        return True
+
+    async def on_event_message_completed(
+        self,
+        request: Any,
+        to_handle: str,
+        event: Any,
+        send_meta: Dict[str, Any],
+    ) -> None:
+        """Keep final messages in-room and progress summaries in the task thread."""
+        del request
+        message_type = getattr(event, "type", None)
+        if self._is_reasoning_message(
+            message_type,
+        ) or self._is_tool_call_message(message_type):
+            await self._ensure_thread_root(to_handle, send_meta)
+            await self._flush_pending_final_message_to_thread(
+                to_handle,
+                send_meta,
+            )
+            parts = self._message_to_content_parts(event)
+            if not parts:
+                return
+            if self._is_reasoning_message(message_type):
+                send_meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            await self._send_or_queue_thread_parts(
+                to_handle,
+                parts,
+                send_meta,
+            )
+            send_meta.pop(_MATRIX_FORCE_NOTICE_KEY, None)
+            return
+        if self._is_tool_output_message(message_type):
+            await self._flush_pending_final_message_to_thread(
+                to_handle,
+                send_meta,
+            )
+            parts = self._tool_output_media_parts(event)
+            if parts:
+                await self.send_content_parts(to_handle, parts, send_meta)
+            return
+
+        if self._is_message_event(message_type):
+            if not send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY):
+                await self.send_message_content(to_handle, event, send_meta)
+                return
+
+            await self._flush_pending_final_message_to_thread(
+                to_handle,
+                send_meta,
+            )
+            send_meta[_MATRIX_PENDING_FINAL_MESSAGE_KEY] = event
+            return
+
+        await self.send_message_content(to_handle, event, send_meta)
+
+    async def _edit_thread_root(
+        self,
+        to_handle: str,
+        send_meta: Dict[str, Any],
+        text: str,
+        *,
+        msgtype: str = "m.notice",
+        html: Optional[str] = None,
+    ) -> None:
+        """Edit the thread-root placeholder message content."""
+        root_event_id = send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        if not root_event_id or not self._client:
+            return
+        new_content: dict[str, Any] = {"msgtype": msgtype, "body": text}
+        if html:
+            new_content["format"] = "org.matrix.custom.html"
+            new_content["formatted_body"] = html
+        content: dict[str, Any] = {
+            "msgtype": msgtype,
+            "body": f"* {text}",
+            "m.new_content": new_content,
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": root_event_id,
+            },
+        }
+        if html:
+            content["format"] = "org.matrix.custom.html"
+            content["formatted_body"] = f"* {html}"
+        try:
+            await self._client.room_send(
+                to_handle,
+                "m.room.message",
+                content,
+                ignore_unverified_devices=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: _edit_thread_root failed: %s", exc,
+            )
+
     async def _on_process_completed(
         self,
         request: Any,
         to_handle: str,
         send_meta: Dict[str, Any],
     ) -> None:
+        """Edit thread root with final reply, or send directly if no thread."""
+        pending = send_meta.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
+        is_placeholder = send_meta.pop(_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY, False)
+        if is_placeholder:
+            if pending is not None:
+                parts = self._message_to_content_parts(pending)
+                text = "\n".join(
+                    getattr(p, "text", "") or getattr(p, "refusal", "") or ""
+                    for p in parts
+                    if getattr(p, "type", None)
+                    in (ContentType.TEXT, ContentType.REFUSAL)
+                ).strip()
+                if text:
+                    html = _md_to_html(text)
+                    await self._edit_thread_root(
+                        to_handle, send_meta, text,
+                        msgtype="m.text", html=html,
+                    )
+                else:
+                    await self._edit_thread_root(
+                        to_handle, send_meta, "已完成",
+                    )
+            else:
+                await self._edit_thread_root(
+                    to_handle, send_meta, "已完成",
+                )
+            self._active_thread_roots.pop(to_handle, None)
+        elif pending is not None:
+            await self.send_message_content(to_handle, pending, send_meta)
+        await self._send_typing(to_handle, False)
         base_completed = getattr(super(), "_on_process_completed", None)
         try:
             if base_completed:
@@ -2497,6 +2747,12 @@ class MatrixChannel(BaseChannel):
         to_handle: str,
         err_text: str,
     ) -> None:
+        """Suppress user-visible cancellation noise after native /stop."""
+        root_id = self._active_thread_roots.pop(to_handle, None)
+        if root_id:
+            fallback_meta = {_MATRIX_OWN_THREAD_ROOT_KEY: root_id}
+            status = "已取消" if "Task has been cancelled" in (err_text or "") else "处理异常"
+            await self._edit_thread_root(to_handle, fallback_meta, status)
         if "Task has been cancelled" in (err_text or ""):
             logger.info(
                 "MatrixChannel: suppressing cancellation error for %s",
@@ -2538,8 +2794,10 @@ class MatrixChannel(BaseChannel):
         text = _clean_control_response_text(text)
 
         html_body = _md_to_html(text)
+        meta_dict = meta if isinstance(meta, dict) else {}
+        msgtype = "m.notice" if meta_dict.pop(_MATRIX_FORCE_NOTICE_KEY, False) else "m.text"
         content: dict[str, Any] = {
-            "msgtype": "m.text",
+            "msgtype": msgtype,
             "body": text,
             "format": "org.matrix.custom.html",
             "formatted_body": html_body,
@@ -2551,7 +2809,6 @@ class MatrixChannel(BaseChannel):
             len(html_body),
         )
 
-        meta_dict = meta if isinstance(meta, dict) else {}
         explicit_ids = meta_dict.get("mention_user_ids") or None
         body_mentions = self._extract_mentions_from_text(text)
         if explicit_ids or body_mentions:

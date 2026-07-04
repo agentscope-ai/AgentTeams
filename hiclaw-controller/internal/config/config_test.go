@@ -1,8 +1,16 @@
 package config
 
 import (
+	"os"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	// Provide AS tokens for all tests so LoadConfig() does not panic.
+	os.Setenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN", "test-as-token")
+	os.Setenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN", "test-hs-token")
+	os.Exit(m.Run())
+}
 
 func TestNormalizeMinIOS3Endpoint(t *testing.T) {
 	tests := []struct {
@@ -21,6 +29,47 @@ func TestNormalizeMinIOS3Endpoint(t *testing.T) {
 	}
 }
 
+func TestLoadConfigMetricsBindAddrDefaultsByMode(t *testing.T) {
+	t.Run("embedded", func(t *testing.T) {
+		t.Setenv("HICLAW_KUBE_MODE", "embedded")
+		t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+		cfg := LoadConfig()
+		if cfg.MetricsBindAddr != "0" {
+			t.Fatalf("MetricsBindAddr = %q, want disabled metrics in embedded mode", cfg.MetricsBindAddr)
+		}
+	})
+
+	t.Run("incluster", func(t *testing.T) {
+		t.Setenv("HICLAW_KUBE_MODE", "incluster")
+		t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+		cfg := LoadConfig()
+		if cfg.MetricsBindAddr != ":8080" {
+			t.Fatalf("MetricsBindAddr = %q, want :8080 in incluster mode", cfg.MetricsBindAddr)
+		}
+	})
+}
+
+func TestLoadConfigMetricsBindAddrPrefersAgentTeamsEnv(t *testing.T) {
+	t.Setenv("HICLAW_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", ":19090")
+
+	cfg := LoadConfig()
+	if cfg.MetricsBindAddr != ":19090" {
+		t.Fatalf("MetricsBindAddr = %q, want AGENTTEAMS_METRICS_BIND_ADDR", cfg.MetricsBindAddr)
+	}
+}
+
+func TestLoadConfigMetricsBindAddrIgnoresLegacyFallback(t *testing.T) {
+	t.Setenv("HICLAW_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+	t.Setenv("HICLAW_METRICS_BIND_ADDR", ":18080")
+
+	cfg := LoadConfig()
+	if cfg.MetricsBindAddr != ":8080" {
+		t.Fatalf("MetricsBindAddr = %q, want default :8080 without HICLAW fallback", cfg.MetricsBindAddr)
+	}
+}
+
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	t.Setenv("HICLAW_MANAGER_SPEC", `{
 		"model":"qwen-max",
@@ -32,6 +81,8 @@ func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 		}
 	}`)
 	t.Setenv("HICLAW_DEFAULT_MODEL", "qwen-default")
+	t.Setenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN", "test-as-token-for-unit-tests")
+	t.Setenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN", "test-hs-token-for-unit-tests")
 
 	cfg := LoadConfig()
 
@@ -55,6 +106,12 @@ func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	}
 	if cfg.K8sManagerMemory != "5Gi" {
 		t.Fatalf("K8sManagerMemory = %q, want %q", cfg.K8sManagerMemory, "5Gi")
+	}
+	if cfg.ManagerSpecResources == nil {
+		t.Fatal("ManagerSpecResources = nil, want resources from HICLAW_MANAGER_SPEC")
+	}
+	if cfg.ManagerSpecResources.Requests.CPU != "750m" || cfg.ManagerSpecResources.Limits.Memory != "5Gi" {
+		t.Fatalf("ManagerSpecResources = %+v", cfg.ManagerSpecResources)
 	}
 }
 

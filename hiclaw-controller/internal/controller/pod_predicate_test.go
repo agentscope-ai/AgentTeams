@@ -11,7 +11,7 @@ import (
 
 // TestPodLifecyclePredicates_FiltersByKindAndControllerLabel locks in the
 // two-key gate on Pod events: a pod must carry both the kind label (e.g.
-// hiclaw.io/worker) AND hiclaw.io/controller matching this reconciler's
+// agentteams.io/worker) AND agentteams.io/controller matching this reconciler's
 // ControllerName. Pods missing either label (or carrying a different
 // controller name) must NOT trigger reconciliation — this prevents two
 // hiclaw-controller instances sharing a namespace from cross-reconciling
@@ -20,7 +20,7 @@ import (
 // opts.Cache.ByObject scoping).
 func TestPodLifecyclePredicates_FiltersByKindAndControllerLabel(t *testing.T) {
 	const (
-		kindKey  = "hiclaw.io/worker"
+		kindKey  = "agentteams.io/worker"
 		ctlName  = "ctl-a"
 		otherCtl = "ctl-b"
 	)
@@ -81,7 +81,7 @@ func TestPodLifecyclePredicates_FiltersByKindAndControllerLabel(t *testing.T) {
 // of phase transitions.
 func TestPodLifecyclePredicates_UpdateRequiresPhaseChange(t *testing.T) {
 	const (
-		kindKey = "hiclaw.io/worker"
+		kindKey = "agentteams.io/worker"
 		ctlName = "ctl-a"
 	)
 

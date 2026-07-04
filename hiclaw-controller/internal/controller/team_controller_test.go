@@ -12,12 +12,10 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/oss/ossfake"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func newTeamTestClient(t *testing.T, objs ...client.Object) client.Client {
@@ -74,8 +72,8 @@ func TestBuildDesiredMembers_LeaderAndWorkers(t *testing.T) {
 		t.Errorf("alpha-qa should be IsUpdate=false (not observed in Status.Members)")
 	}
 	for _, m := range members {
-		if m.PodLabels["hiclaw.io/team"] != "alpha" {
-			t.Errorf("member %s missing hiclaw.io/team label: %v", m.Name, m.PodLabels)
+		if m.PodLabels["agentteams.io/team"] != "alpha" {
+			t.Errorf("member %s missing agentteams.io/team label: %v", m.Name, m.PodLabels)
 		}
 		switch m.Role {
 		case RoleTeamLeader:
@@ -202,6 +200,42 @@ func TestTeamWorkerSpecToWorkerSpec_RuntimePassthrough(t *testing.T) {
 	}
 }
 
+func TestTeamMemberResourcesProjectToWorkerSpec(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Spec.Leader = v1beta1.LeaderSpec{
+		Name: "alpha-lead",
+		Resources: &v1beta1.AgentResourceRequirements{
+			Requests: v1beta1.AgentResourceValues{CPU: "300m", Memory: "768Mi"},
+			Limits:   v1beta1.AgentResourceValues{CPU: "2", Memory: "3Gi"},
+		},
+	}
+	worker := v1beta1.TeamWorkerSpec{
+		Name: "alpha-dev",
+		Resources: &v1beta1.AgentResourceRequirements{
+			Requests: v1beta1.AgentResourceValues{CPU: "200m", Memory: "512Mi"},
+			Limits:   v1beta1.AgentResourceValues{CPU: "1", Memory: "2Gi"},
+		},
+	}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{worker}
+
+	leaderSpec := leaderWorkerSpec(team)
+	if leaderSpec.Resources == nil {
+		t.Fatal("leaderWorkerSpec Resources = nil, want leader resources")
+	}
+	if leaderSpec.Resources.Requests.CPU != "300m" || leaderSpec.Resources.Limits.Memory != "3Gi" {
+		t.Fatalf("leaderWorkerSpec Resources = %+v", leaderSpec.Resources)
+	}
+
+	workerSpec := teamWorkerSpecToWorkerSpec(team, worker)
+	if workerSpec.Resources == nil {
+		t.Fatal("teamWorkerSpecToWorkerSpec Resources = nil, want worker resources")
+	}
+	if workerSpec.Resources.Requests.CPU != "200m" || workerSpec.Resources.Limits.Memory != "2Gi" {
+		t.Fatalf("teamWorkerSpecToWorkerSpec Resources = %+v", workerSpec.Resources)
+	}
+}
+
 func TestBuildDesiredMembers_RuntimeWorkerNamesDriveMatrixPolicy(t *testing.T) {
 	team := &v1beta1.Team{}
 	team.Name = "alpha"
@@ -268,9 +302,10 @@ func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
 	prov := mocks.NewMockProvisioner()
 	state := &MemberState{}
 	member := MemberContext{
-		Name:        "alpha-worker-lead",
-		RuntimeName: "leader",
-		Role:        RoleTeamLeader,
+		Name:              "alpha-worker-lead",
+		RuntimeName:       "leader",
+		Role:              RoleTeamLeader,
+		ModelProviderInfo: &gateway.ModelProviderInfo{HttpApiID: "qwen-http-api"},
 	}
 
 	if _, err := ReconcileMemberInfra(context.Background(), MemberDeps{Provisioner: prov}, member, state); err != nil {
@@ -505,8 +540,8 @@ func TestReconcileTeamNormalInjectsLeaderCoordinationAfterMemberConfig(t *testin
 		if req.LeaderName != "leader" {
 			t.Fatalf("LeaderName=%q, want leader", req.LeaderName)
 		}
-		if len(req.TeamWorkers) != 1 || req.TeamWorkers[0] != "dev" {
-			t.Fatalf("TeamWorkers=%v, want [dev]", req.TeamWorkers)
+		if len(req.TeamWorkers) != 1 || req.TeamWorkers[0].Name != "dev" {
+			t.Fatalf("TeamWorkers=%v, want [{Name:dev}]", req.TeamWorkers)
 		}
 		return nil
 	}
@@ -704,7 +739,7 @@ func TestRemoveLegacyMember_DeletesEntry(t *testing.T) {
 // TestBuildDesiredMembers_StampsControllerLabelOnPodLabels verifies that when
 // the TeamReconciler propagates a non-empty ControllerName into
 // buildDesiredMembers, every derived MemberContext carries the
-// hiclaw.io/controller PodLabel so the resulting Pod lands inside the
+// agentteams.io/controller PodLabel so the resulting Pod lands inside the
 // owning controller instance's label-scoped informer cache.
 //
 // Post-refactor (PR #666) the label is stamped via MemberContext.PodLabels →
@@ -728,11 +763,11 @@ func TestBuildDesiredMembers_StampsControllerLabelOnPodLabels(t *testing.T) {
 		if got := m.PodLabels[v1beta1.LabelController]; got != "ctrl-a" {
 			t.Fatalf("member %s: expected controller label ctrl-a in PodLabels, got %q (labels=%v)", m.Name, got, m.PodLabels)
 		}
-		if got := m.PodLabels["hiclaw.io/team"]; got != team.Name {
+		if got := m.PodLabels["agentteams.io/team"]; got != team.Name {
 			t.Fatalf("member %s: expected team label %q, got %q", m.Name, team.Name, got)
 		}
-		if m.PodLabels["hiclaw.io/role"] == "" {
-			t.Fatalf("member %s: expected non-empty hiclaw.io/role", m.Name)
+		if m.PodLabels["agentteams.io/role"] == "" {
+			t.Fatalf("member %s: expected non-empty agentteams.io/role", m.Name)
 		}
 	}
 }
@@ -860,14 +895,14 @@ func TestBuildDesiredMembers_SystemLabelsOverrideUserLabels(t *testing.T) {
 				Labels: map[string]string{v1beta1.LabelController: "spec-attacker"},
 			},
 			Workers: []v1beta1.TeamWorkerSpec{
-				{Name: "w1", Model: "qwen", Labels: map[string]string{"hiclaw.io/role": "evil"}},
+				{Name: "w1", Model: "qwen", Labels: map[string]string{"agentteams.io/role": "evil"}},
 			},
 		},
 	}
 	team.Name = "alpha"
 	team.ObjectMeta.Labels = map[string]string{
 		v1beta1.LabelController: "metadata-attacker",
-		"hiclaw.io/team":        "other-team",
+		"agentteams.io/team":    "other-team",
 	}
 
 	members := buildDesiredMembers(team, "real-ctl")
@@ -879,14 +914,14 @@ func TestBuildDesiredMembers_SystemLabelsOverrideUserLabels(t *testing.T) {
 		if got := byName[name].PodLabels[v1beta1.LabelController]; got != "real-ctl" {
 			t.Errorf("%s: controller label got %q, want real-ctl", name, got)
 		}
-		if got := byName[name].PodLabels["hiclaw.io/team"]; got != "alpha" {
+		if got := byName[name].PodLabels["agentteams.io/team"]; got != "alpha" {
 			t.Errorf("%s: team label got %q, want alpha", name, got)
 		}
 	}
-	if got := byName["lead"].PodLabels["hiclaw.io/role"]; got != RoleTeamLeader.String() {
+	if got := byName["lead"].PodLabels["agentteams.io/role"]; got != RoleTeamLeader.String() {
 		t.Errorf("leader role got %q, want %q", got, RoleTeamLeader.String())
 	}
-	if got := byName["w1"].PodLabels["hiclaw.io/role"]; got != RoleTeamWorker.String() {
+	if got := byName["w1"].PodLabels["agentteams.io/role"]; got != RoleTeamWorker.String() {
 		t.Errorf("w1 role got %q, want %q", got, RoleTeamWorker.String())
 	}
 }
@@ -907,4 +942,581 @@ func callIndex(calls []string, target string) int {
 		}
 	}
 	return -1
+}
+
+// ---------------------------------------------------------------------------
+// Decoupled path tests
+// ---------------------------------------------------------------------------
+
+func TestValidateWorkerMembers(t *testing.T) {
+	tests := []struct {
+		name        string
+		refs        []v1beta1.TeamWorkerRef
+		wantErr     string
+		wantLeader  string
+		wantWorkers int
+	}{
+		{
+			name:    "empty list",
+			refs:    nil,
+			wantErr: "must not be empty",
+		},
+		{
+			name: "no leader",
+			refs: []v1beta1.TeamWorkerRef{
+				{Name: "w1"},
+				{Name: "w2"},
+			},
+			wantErr: "must contain exactly one member with role",
+		},
+		{
+			name: "multiple leaders",
+			refs: []v1beta1.TeamWorkerRef{
+				{Name: "lead1", Role: "team_leader"},
+				{Name: "lead2", Role: "team_leader"},
+			},
+			wantErr: "multiple leaders",
+		},
+		{
+			name: "duplicate name",
+			refs: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "w1"},
+				{Name: "w1"},
+			},
+			wantErr: "duplicate",
+		},
+		{
+			name: "empty name",
+			refs: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: ""},
+			},
+			wantErr: "must not be empty",
+		},
+		{
+			name: "valid",
+			refs: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "w1"},
+				{Name: "w2", Role: "worker"},
+			},
+			wantLeader:  "lead",
+			wantWorkers: 2,
+		},
+		{
+			name: "single leader only",
+			refs: []v1beta1.TeamWorkerRef{
+				{Name: "solo-lead", Role: "team_leader"},
+			},
+			wantLeader:  "solo-lead",
+			wantWorkers: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			leader, workers, err := validateWorkerMembers(tc.refs)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if !stringSliceContains([]string{err.Error()}, "") && err.Error() == "" {
+					// always true, but let's check contains
+				}
+				if got := err.Error(); !contains(got, tc.wantErr) {
+					t.Fatalf("error=%q, want substring %q", got, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if leader == nil || leader.Name != tc.wantLeader {
+				t.Fatalf("leader=%v, want name=%q", leader, tc.wantLeader)
+			}
+			if len(workers) != tc.wantWorkers {
+				t.Fatalf("workers=%d, want %d", len(workers), tc.wantWorkers)
+			}
+		})
+	}
+}
+
+func TestReconcileTeamDecoupled_HappyPath(t *testing.T) {
+	ctx := context.Background()
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	worker1 := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@dev:matrix.local",
+			RoomID:       "!room-dev:matrix.local",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), worker1.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	prov := mocks.NewMockProvisioner()
+
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: prov,
+		Deployer:    deployer,
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		AgentFSDir:  t.TempDir(),
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	team.Status.Phase = "Pending"
+	if err := c.Status().Patch(ctx, team, patchBase); err != nil {
+		t.Fatalf("init status: %v", err)
+	}
+
+	patchBase = client.MergeFrom(team.DeepCopy())
+	result, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	if err != nil {
+		t.Fatalf("reconcileTeamDecoupled: %v", err)
+	}
+	if result.RequeueAfter != reconcileInterval {
+		t.Errorf("RequeueAfter=%v, want %v", result.RequeueAfter, reconcileInterval)
+	}
+	if team.Status.Phase != "Active" {
+		t.Errorf("Phase=%q, want Active", team.Status.Phase)
+	}
+	if !team.Status.LeaderReady {
+		t.Errorf("LeaderReady=false, want true")
+	}
+	if team.Status.ReadyWorkers != 1 {
+		t.Errorf("ReadyWorkers=%d, want 1", team.Status.ReadyWorkers)
+	}
+	if team.Status.TotalWorkers != 1 {
+		t.Errorf("TotalWorkers=%d, want 1", team.Status.TotalWorkers)
+	}
+
+	// Verify coordination was injected for the leader
+	if len(deployer.Calls.InjectCoordinationContext) != 1 {
+		t.Fatalf("InjectCoordinationContext calls=%d, want 1", len(deployer.Calls.InjectCoordinationContext))
+	}
+	coordReq := deployer.Calls.InjectCoordinationContext[0]
+	if coordReq.LeaderName != "lead" {
+		t.Errorf("coord LeaderName=%q, want lead", coordReq.LeaderName)
+	}
+
+	// Verify worker coordination was injected
+	if len(deployer.Calls.InjectWorkerCoordination) != 1 {
+		t.Fatalf("InjectWorkerCoordination calls=%d, want 1", len(deployer.Calls.InjectWorkerCoordination))
+	}
+	workerCoord := deployer.Calls.InjectWorkerCoordination[0]
+	if workerCoord.WorkerName != "dev" {
+		t.Errorf("workerCoord WorkerName=%q, want dev", workerCoord.WorkerName)
+	}
+	if workerCoord.TeamLeaderName != "lead" {
+		t.Errorf("workerCoord TeamLeaderName=%q, want lead", workerCoord.TeamLeaderName)
+	}
+}
+
+func TestReconcileTeamDecoupled_WorkerNotFound(t *testing.T) {
+	ctx := context.Background()
+
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "ghost"},
+			},
+		},
+	}
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    mocks.NewMockDeployer(),
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		AgentFSDir:  t.TempDir(),
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if team.Status.Phase != "Degraded" {
+		t.Errorf("Phase=%q, want Degraded", team.Status.Phase)
+	}
+	if !contains(team.Status.Message, "ghost") {
+		t.Errorf("Message=%q, want mention of 'ghost'", team.Status.Message)
+	}
+}
+
+func TestReconcileTeamDecoupled_WorkerNotProvisioned(t *testing.T) {
+	ctx := context.Background()
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	// Worker exists but has no MatrixUserID (not yet provisioned)
+	unprovisionedWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status:     v1beta1.WorkerStatus{Phase: "Pending"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), unprovisionedWorker.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    mocks.NewMockDeployer(),
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		AgentFSDir:  t.TempDir(),
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	result, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if team.Status.Phase != "Pending" {
+		t.Errorf("Phase=%q, want Pending", team.Status.Phase)
+	}
+	if result.RequeueAfter != reconcileRetryDelay {
+		t.Errorf("RequeueAfter=%v, want %v", result.RequeueAfter, reconcileRetryDelay)
+	}
+}
+
+func TestReconcileTeamDecoupled_RejectsWorkerReferencedByAnotherTeam(t *testing.T) {
+	ctx := context.Background()
+
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead-a", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+	otherTeam := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-b", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead-b", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), otherTeam.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    deployer,
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		AgentFSDir:  t.TempDir(),
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	if err == nil {
+		t.Fatal("expected duplicate workerMembers reference error")
+	}
+	if !contains(err.Error(), "already referenced by Team default/team-b") {
+		t.Fatalf("error=%q, want team-b duplicate reference", err.Error())
+	}
+	if team.Status.Phase != "Failed" {
+		t.Fatalf("Phase=%q, want Failed", team.Status.Phase)
+	}
+	if len(deployer.Calls.InjectWorkerCoordination) != 0 {
+		t.Fatalf("InjectWorkerCoordination calls=%d, want 0", len(deployer.Calls.InjectWorkerCoordination))
+	}
+}
+
+func TestReconcileTeamDecoupled_MemberRemoved(t *testing.T) {
+	ctx := context.Background()
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+			},
+		},
+		Status: v1beta1.TeamStatus{
+			Phase: "Active",
+			Members: []v1beta1.TeamMemberStatus{
+				{Name: "lead", Role: "team_leader", MatrixUserID: "@lead:matrix.local", Observed: true},
+				{Name: "removed-worker", Role: "worker", MatrixUserID: "@removed:matrix.local", Observed: true},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    mocks.NewMockDeployer(),
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		AgentFSDir:  t.TempDir(),
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	if err != nil {
+		t.Fatalf("reconcileTeamDecoupled: %v", err)
+	}
+
+	// "removed-worker" should have been pruned from Status.Members
+	if ms := team.Status.MemberByName("removed-worker"); ms != nil {
+		t.Errorf("removed-worker should have been pruned from Status.Members, still present: %+v", ms)
+	}
+	if ms := team.Status.MemberByName("lead"); ms == nil {
+		t.Errorf("lead should still be in Status.Members")
+	}
+}
+
+func TestReconcileTeamDecoupled_HeartbeatFromTeamCR(t *testing.T) {
+	ctx := context.Background()
+
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			HeartbeatEvery: "30m",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{
+		Client:      c,
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    deployer,
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		AgentFSDir:  t.TempDir(),
+	}
+
+	patchBase := client.MergeFrom(team.DeepCopy())
+	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	if err != nil {
+		t.Fatalf("reconcileTeamDecoupled: %v", err)
+	}
+
+	// Verify heartbeat was injected into coordination context
+	if len(deployer.Calls.InjectCoordinationContext) != 1 {
+		t.Fatalf("InjectCoordinationContext calls=%d, want 1", len(deployer.Calls.InjectCoordinationContext))
+	}
+	coordReq := deployer.Calls.InjectCoordinationContext[0]
+	if coordReq.HeartbeatEvery != "30m" {
+		t.Errorf("coord HeartbeatEvery=%q, want 30m", coordReq.HeartbeatEvery)
+	}
+
+	// Verify InjectHeartbeatConfig was called
+	if len(deployer.Calls.InjectHeartbeatConfig) != 1 {
+		t.Fatalf("InjectHeartbeatConfig calls=%d, want 1", len(deployer.Calls.InjectHeartbeatConfig))
+	}
+	hbReq := deployer.Calls.InjectHeartbeatConfig[0]
+	if !hbReq.Enabled {
+		t.Errorf("heartbeat Enabled=false, want true")
+	}
+	if hbReq.Every != "30m" {
+		t.Errorf("heartbeat Every=%q, want 30m", hbReq.Every)
+	}
+	if hbReq.WorkerName != "lead" {
+		t.Errorf("heartbeat WorkerName=%q, want lead", hbReq.WorkerName)
+	}
+}
+
+func TestWorkerToTeamMapFunc(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy()).
+		WithIndex(&v1beta1.Team{}, TeamWorkerMembersField, func(obj client.Object) []string {
+			tm, ok := obj.(*v1beta1.Team)
+			if !ok {
+				return nil
+			}
+			names := make([]string, 0, len(tm.Spec.WorkerMembers))
+			for _, ref := range tm.Spec.WorkerMembers {
+				if ref.Name != "" {
+					names = append(names, ref.Name)
+				}
+			}
+			return names
+		}).
+		Build()
+
+	r := &TeamReconciler{Client: c}
+
+	// Worker "dev" should map to team-a
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+	}
+	reqs := r.workerToTeamRequests(context.Background(), worker)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d: %v", len(reqs), reqs)
+	}
+	if reqs[0].Name != "team-a" {
+		t.Errorf("request Name=%q, want team-a", reqs[0].Name)
+	}
+
+	// Worker "unknown" should map to nothing
+	unknown := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "unknown", Namespace: "default"},
+	}
+	reqs = r.workerToTeamRequests(context.Background(), unknown)
+	if len(reqs) != 0 {
+		t.Errorf("expected 0 requests for unknown worker, got %d: %v", len(reqs), reqs)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && searchSubstring(s, substr)))
+}
+
+func searchSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

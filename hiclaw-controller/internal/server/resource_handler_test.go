@@ -60,6 +60,99 @@ func TestCreateWorkerRejectsExistingTeamMemberName(t *testing.T) {
 	}
 }
 
+func TestCreateWorkerPreservesResources(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"name":"resource-worker","model":"qwen3.5-plus","resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var worker v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "resource-worker", Namespace: "default"}, &worker); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	assertAgentResources(t, worker.Spec.Resources, "250m", "512Mi", "2", "4Gi")
+}
+
+func TestUpdateWorkerPreservesResources(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	worker := &v1beta1.Worker{}
+	worker.Name = "resource-worker"
+	worker.Namespace = "default"
+	worker.Spec.Model = "qwen3.5-plus"
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"resources":{"requests":{"cpu":"300m","memory":"768Mi"},"limits":{"cpu":"3","memory":"5Gi"}}}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/resource-worker", bytes.NewReader(body))
+	req.SetPathValue("name", "resource-worker")
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "resource-worker", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	assertAgentResources(t, got.Spec.Resources, "300m", "768Mi", "3", "5Gi")
+}
+
+func TestCreateTeamPreservesMemberResources(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{
+		"name":"resource-team",
+		"leader":{"name":"resource-lead","resources":{"requests":{"cpu":"300m","memory":"768Mi"},"limits":{"cpu":"2","memory":"3Gi"}}},
+		"workers":[{"name":"resource-dev","resources":{"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}}]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateTeam(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var team v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "resource-team", Namespace: "default"}, &team); err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	assertAgentResources(t, team.Spec.Leader.Resources, "300m", "768Mi", "2", "3Gi")
+	if len(team.Spec.Workers) != 1 {
+		t.Fatalf("workers len=%d, want 1", len(team.Spec.Workers))
+	}
+	assertAgentResources(t, team.Spec.Workers[0].Resources, "200m", "512Mi", "1", "2Gi")
+}
+
+func TestCreateManagerPreservesResources(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"name":"default","model":"qwen3.5-plus","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"3","memory":"5Gi"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateManager(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var mgr v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "default", Namespace: "default"}, &mgr); err != nil {
+		t.Fatalf("get manager: %v", err)
+	}
+	assertAgentResources(t, mgr.Spec.Resources, "500m", "1Gi", "3", "5Gi")
+}
+
 // /api/v1/workers/{name} must synthesize a response for a team member even
 // though no Worker CR exists. The synthesized response MUST carry the
 // RoomID + MatrixUserID recorded in Team.Status.Members so that clients like
@@ -118,6 +211,49 @@ func TestGetWorkerSynthesizesTeamMember(t *testing.T) {
 	}
 }
 
+func TestGetWorkerEnrichesDecoupledMemberCR(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	worker := &v1beta1.Worker{}
+	worker.Name = "alpha-dev"
+	worker.Namespace = "default"
+	worker.Spec.Runtime = "copaw"
+	worker.Status.RoomID = "!worker-room:example.com"
+	worker.Status.MatrixUserID = "@alpha-dev:example.com"
+
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-lead", Role: "team_leader"},
+		{Name: "alpha-dev"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(worker, team).
+		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
+		Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+	handler.GetWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var resp WorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Name != "alpha-dev" || resp.Team != "alpha-team" || resp.Role != "worker" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp.Runtime != "copaw" || resp.RoomID != "!worker-room:example.com" {
+		t.Fatalf("runtime/room not preserved from Worker CR: %+v", resp)
+	}
+}
+
 // /api/v1/workers must list standalone workers and synthetic team members.
 // Workers with team annotations (legacy CRs) must NOT be duplicated.
 func TestListWorkersAggregatesTeamMembers(t *testing.T) {
@@ -158,6 +294,67 @@ func TestListWorkersAggregatesTeamMembers(t *testing.T) {
 		if !names[want] {
 			t.Errorf("missing %q in aggregated list: %+v", want, list.Workers)
 		}
+	}
+}
+
+func TestListWorkersTeamFilterIncludesDecoupledMembers(t *testing.T) {
+	scheme := newServerTestScheme(t)
+
+	solo := &v1beta1.Worker{}
+	solo.Name = "solo"
+	solo.Namespace = "default"
+
+	lead := &v1beta1.Worker{}
+	lead.Name = "alpha-lead"
+	lead.Namespace = "default"
+	lead.Spec.Runtime = "copaw"
+
+	dev := &v1beta1.Worker{}
+	dev.Name = "alpha-dev"
+	dev.Namespace = "default"
+	dev.Spec.Runtime = "openclaw"
+
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-lead", Role: "team_leader"},
+		{Name: "alpha-dev"},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(solo, lead, dev, team).
+		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
+		Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers?team=alpha-team", nil)
+	rec := httptest.NewRecorder()
+	handler.ListWorkers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var list WorkerListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list.Total != 2 {
+		t.Fatalf("expected 2 team members, got %d: %+v", list.Total, list.Workers)
+	}
+	roles := map[string]string{}
+	for _, w := range list.Workers {
+		if w.Team != "alpha-team" {
+			t.Fatalf("unexpected team for %s: %+v", w.Name, w)
+		}
+		roles[w.Name] = w.Role
+	}
+	if roles["alpha-lead"] != "team_leader" || roles["alpha-dev"] != "worker" {
+		t.Fatalf("roles=%v, want lead team_leader and dev worker", roles)
+	}
+	if _, ok := roles["solo"]; ok {
+		t.Fatalf("solo worker leaked into team filter: %+v", list.Workers)
 	}
 }
 
@@ -210,10 +407,11 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 		"name":"alpha-team",
 		"leader":{
 			"name":"alpha-lead",
+			"modelProvider":"qwen",
 			"heartbeat":{"enabled":true,"every":"30m"},
 			"workerIdleTimeout":"12h"
 		},
-		"workers":[]
+		"workers":[{"name":"alpha-dev","modelProvider":"openai"}]
 	}`)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(createBody))
 	createRec := httptest.NewRecorder()
@@ -232,12 +430,20 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 	if created.Spec.Leader.WorkerIdleTimeout != "12h" {
 		t.Fatalf("expected worker idle timeout 12h, got %q", created.Spec.Leader.WorkerIdleTimeout)
 	}
+	if created.Spec.Leader.ModelProvider != "qwen" {
+		t.Fatalf("leader.modelProvider=%q, want qwen", created.Spec.Leader.ModelProvider)
+	}
+	if len(created.Spec.Workers) != 1 || created.Spec.Workers[0].ModelProvider != "openai" {
+		t.Fatalf("workers modelProvider not persisted: %#v", created.Spec.Workers)
+	}
 
 	updateBody := []byte(`{
 		"leader":{
+			"modelProvider":"dashscope",
 			"heartbeat":{"enabled":true,"every":"45m"},
 			"workerIdleTimeout":"24h"
-		}
+		},
+		"workers":[{"name":"alpha-qa","modelProvider":"qwen"}]
 	}`)
 	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/teams/alpha-team", bytes.NewReader(updateBody))
 	updateReq.SetPathValue("name", "alpha-team")
@@ -256,6 +462,12 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 	}
 	if updated.Spec.Leader.WorkerIdleTimeout != "24h" {
 		t.Fatalf("expected worker idle timeout 24h, got %q", updated.Spec.Leader.WorkerIdleTimeout)
+	}
+	if updated.Spec.Leader.ModelProvider != "dashscope" {
+		t.Fatalf("leader.modelProvider=%q, want dashscope", updated.Spec.Leader.ModelProvider)
+	}
+	if len(updated.Spec.Workers) != 1 || updated.Spec.Workers[0].Name != "alpha-qa" || updated.Spec.Workers[0].ModelProvider != "qwen" {
+		t.Fatalf("workers after update=%#v, want alpha-qa with qwen modelProvider", updated.Spec.Workers)
 	}
 
 	var resp TeamResponse
@@ -300,6 +512,45 @@ func TestCreateTeamPersistsRuntimeWorkerNames(t *testing.T) {
 	}
 	if got := stored.Spec.Workers[0].WorkerName; got != "dev-runtime" {
 		t.Fatalf("workers[0].workerName = %q, want dev-runtime", got)
+	}
+}
+
+func TestCreateAndUpdateManagerPersistsModelProvider(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	createBody := []byte(`{"name":"default","model":"qwen-plus","modelProvider":"qwen"}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	handler.CreateManager(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, createRec.Code, createRec.Body.String())
+	}
+
+	var created v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "default", Namespace: "default"}, &created); err != nil {
+		t.Fatalf("get created manager: %v", err)
+	}
+	if created.Spec.ModelProvider != "qwen" {
+		t.Fatalf("created manager modelProvider=%q, want qwen", created.Spec.ModelProvider)
+	}
+
+	updateBody := []byte(`{"modelProvider":"openai"}`)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/managers/default", bytes.NewReader(updateBody))
+	updateReq.SetPathValue("name", "default")
+	updateRec := httptest.NewRecorder()
+	handler.UpdateManager(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+
+	var updated v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "default", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated manager: %v", err)
+	}
+	if updated.Spec.ModelProvider != "openai" {
+		t.Fatalf("updated manager modelProvider=%q, want openai", updated.Spec.ModelProvider)
 	}
 }
 
@@ -352,7 +603,7 @@ func TestCreateTeam_WithoutWorkers(t *testing.T) {
 }
 
 // TestCreateWorker_StampsControllerLabel verifies that the HTTP API
-// force-overwrites the hiclaw.io/controller label on Create. A caller
+// force-overwrites the agentteams.io/controller label on Create. A caller
 // attempting to smuggle a different controller value must not succeed:
 // the serving controller's own name always wins.
 func TestCreateWorker_StampsControllerLabel(t *testing.T) {
@@ -500,4 +751,37 @@ func newServerTestScheme(t *testing.T) *runtime.Scheme {
 		t.Fatalf("add hiclaw scheme: %v", err)
 	}
 	return scheme
+}
+
+func indexTeamWorkerMemberNames(obj client.Object) []string {
+	team, ok := obj.(*v1beta1.Team)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(team.Spec.WorkerMembers))
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name != "" {
+			names = append(names, ref.Name)
+		}
+	}
+	return names
+}
+
+func assertAgentResources(t *testing.T, got *v1beta1.AgentResourceRequirements, cpuReq, memReq, cpuLimit, memLimit string) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("resources = nil")
+	}
+	if got.Requests.CPU != cpuReq {
+		t.Fatalf("requests.cpu = %q, want %q (resources=%+v)", got.Requests.CPU, cpuReq, got)
+	}
+	if got.Requests.Memory != memReq {
+		t.Fatalf("requests.memory = %q, want %q (resources=%+v)", got.Requests.Memory, memReq, got)
+	}
+	if got.Limits.CPU != cpuLimit {
+		t.Fatalf("limits.cpu = %q, want %q (resources=%+v)", got.Limits.CPU, cpuLimit, got)
+	}
+	if got.Limits.Memory != memLimit {
+		t.Fatalf("limits.memory = %q, want %q (resources=%+v)", got.Limits.Memory, memLimit, got)
+	}
 }

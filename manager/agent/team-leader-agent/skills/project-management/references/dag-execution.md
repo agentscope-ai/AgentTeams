@@ -21,13 +21,13 @@ The DAG is the current execution plan. It can be replaced when results, blockers
       {
         "taskId": "{project-id}-01",
         "title": "Short task title",
-        "assignedTo": "worker-runtime-short-name",
+        "assignedTo": "<matrix-localpart>",
         "dependsOn": []
       },
       {
         "taskId": "{project-id}-02",
         "title": "Follow-up task title",
-        "assignedTo": "worker-runtime-short-name",
+        "assignedTo": "<matrix-localpart>",
         "dependsOn": ["{project-id}-01"]
       }
     ]
@@ -39,7 +39,10 @@ Each task node uses:
 
 - `taskId`: stable node ID. Use `{projectId}-{seq}`.
 - `title`: short human-readable work unit.
-- `assignedTo`: Worker runtime short name that matches its Matrix localpart. If organization data shows a deployment-prefixed Worker CR name such as `magic-cn-plt4s29va0r-worker-dev-worker`, strip the deployment/resource prefix and use `dev-worker`. If you have a Matrix ID such as `@dev-worker:domain`, use `dev-worker`.
+- `assignedTo`: Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract mechanically from `hiclaw get workers --team "$TEAM_CR" -o json` output. Never strip, guess, or transform.
+  - ❌ Do NOT use CLI `.name` field directly (may include deployment prefixes)
+  - ❌ Do NOT strip prefixes yourself
+  - Example: `@worker-issue-resolver:domain` → `worker-issue-resolver`
 - `dependsOn`: list of task IDs that must produce accepted upstream results first.
 
 Do not use `worker`, `owner`, `dependencies`, or short standalone IDs like `st-01`.

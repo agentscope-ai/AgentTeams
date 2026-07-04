@@ -80,7 +80,7 @@ AGENTS_CONTENT="# Inline Test Workspace
 
 # Write YAML with inline soul and agents (in agent container where hiclaw CLI runs)
 exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_WORKER}.yaml << 'YAMLEOF'
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: ${TEST_WORKER}
@@ -317,7 +317,7 @@ OVERRIDE_AGENTS="# OVERRIDDEN AGENTS FROM INLINE
 This agents config was set via inline field."
 
 exec_in_agent bash -c "cat > /tmp/hiclaw-override-${TEST_WORKER_OVERRIDE}.yaml << 'YAMLEOF'
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: ${TEST_WORKER_OVERRIDE}

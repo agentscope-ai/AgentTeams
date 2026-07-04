@@ -34,6 +34,9 @@ type WorkerDeployRequest struct {
 	GatewayKey     string
 	MatrixPassword string
 
+	// AIGatewayURL overrides the cluster-wide AI Gateway URL when modelProvider is set.
+	AIGatewayURL string
+
 	// MCP servers declared in spec.mcpServers. The deployer translates this into
 	// mcporter-servers.json and injects Authorization: Bearer <GatewayKey>.
 	McpServers []v1beta1.MCPServer
@@ -56,10 +59,40 @@ type CoordinationDeployRequest struct {
 	LeaderDMRoomID     string
 	HeartbeatEvery     string
 	WorkerIdleTimeout  string
-	TeamWorkers        []string
+	TeamWorkers        []TeamWorkerEntry
 	TeamAdminID        string
 	TeamCoordinatorIDs []string
 	LeaderSoul         string // from CR spec.leader.soul; used as seed if non-empty
+}
+
+// TeamWorkerEntry carries worker name + room ID for coordination context rendering.
+type TeamWorkerEntry struct {
+	Name   string
+	RoomID string
+}
+
+// WorkerCoordinationRequest describes coordination context injection for a team member worker.
+type WorkerCoordinationRequest struct {
+	WorkerName         string
+	TeamName           string
+	TeamLeaderName     string
+	TeamAdminID        string
+	TeamCoordinatorIDs []string
+}
+
+// InjectHeartbeatRequest describes heartbeat config injection into a leader's openclaw.json.
+type InjectHeartbeatRequest struct {
+	WorkerName string
+	Enabled    bool
+	Every      string // e.g. "30m"
+}
+
+// SandboxWorkerDepsRequest carries runtime material that backs sandbox dynamic
+// mounts for a Worker.
+type SandboxWorkerDepsRequest struct {
+	WorkerName string
+	Env        map[string]string
+	AuthToken  string
 }
 
 // --- Deployer ---
@@ -106,6 +139,43 @@ func NewDeployer(cfg DeployerConfig) *Deployer {
 		matrixDomain:    cfg.MatrixDomain,
 		nacosCredClient: cfg.NacosCredClient,
 	}
+}
+
+// MaterializeSandboxWorkerDeps writes the objects referenced by sandbox
+// WorkerDeps dynamic mounts before the SandboxClaim is created.
+func (d *Deployer) MaterializeSandboxWorkerDeps(ctx context.Context, req SandboxWorkerDepsRequest) error {
+	if d.oss == nil {
+		return nil
+	}
+	base := fmt.Sprintf("workers-deps/%s", req.WorkerName)
+	if len(req.Env) > 0 {
+		if err := d.oss.PutObject(ctx, base+"/env", renderSandboxWorkerEnv(req.Env)); err != nil {
+			return fmt.Errorf("materialize sandbox worker env: %w", err)
+		}
+	}
+	if req.AuthToken != "" {
+		if err := d.oss.PutObject(ctx, base+"/token", []byte(req.AuthToken)); err != nil {
+			return fmt.Errorf("materialize sandbox worker token: %w", err)
+		}
+	}
+	return nil
+}
+
+func renderSandboxWorkerEnv(env map[string]string) []byte {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var out strings.Builder
+	for _, key := range keys {
+		out.WriteString(key)
+		out.WriteByte('=')
+		out.WriteString(env[key])
+		out.WriteByte('\n')
+	}
+	return []byte(out.String())
 }
 
 // DeployPackage resolves, downloads, extracts, and deploys a package to OSS.
@@ -201,6 +271,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		MatrixToken:    req.MatrixToken,
 		GatewayKey:     req.GatewayKey,
 		ModelName:      req.Spec.Model,
+		AIGatewayURL:   req.AIGatewayURL,
 		TeamLeaderName: req.TeamLeaderName,
 		ChannelPolicy:  channelPolicy,
 		Heartbeat:      req.Heartbeat,
@@ -234,6 +305,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if req.Role != "team_leader" {
 		soulKey := agentPrefix + "/SOUL.md"
 		inlineOwnsSoul := req.Spec.Soul != "" || ((strings.EqualFold(req.Spec.Runtime, "copaw") || strings.EqualFold(req.Spec.Runtime, "hermes")) && req.Spec.Identity != "")
+		// Try external config ref if no inline soul
 		if inlineOwnsSoul {
 			soulPath := filepath.Join(localAgentDir, "SOUL.md")
 			soulContent, readErr := os.ReadFile(soulPath)
@@ -316,8 +388,8 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 	leaderAgentPrefix := fmt.Sprintf("agents/%s", req.LeaderName)
 
 	teamWorkers := make([]agentconfig.TeamWorkerInfo, 0, len(req.TeamWorkers))
-	for _, wn := range req.TeamWorkers {
-		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: wn})
+	for _, tw := range req.TeamWorkers {
+		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: tw.Name, RoomID: tw.RoomID})
 	}
 
 	coordCtx := agentconfig.CoordinationContext{
@@ -377,8 +449,8 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	}
 
 	workerNames := make([]string, 0, len(req.TeamWorkers))
-	for _, wn := range req.TeamWorkers {
-		workerNames = append(workerNames, wn)
+	for _, tw := range req.TeamWorkers {
+		workerNames = append(workerNames, tw.Name)
 	}
 
 	result := string(tmplData)
@@ -387,6 +459,34 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	result = strings.ReplaceAll(result, "${TEAM_WORKERS}", strings.Join(workerNames, ", "))
 
 	return d.oss.PutObject(ctx, soulKey, []byte(result))
+}
+
+// InjectWorkerCoordination writes team coordination context into a team member
+// worker's AGENTS.md. This is the worker-side counterpart to
+// InjectCoordinationContext, which targets the leader.
+func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error {
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
+	coordCtx := agentconfig.CoordinationContext{
+		WorkerName:         req.WorkerName,
+		Role:               "worker",
+		MatrixDomain:       d.matrixDomain,
+		TeamName:           req.TeamName,
+		TeamLeaderName:     req.TeamLeaderName,
+		TeamAdminID:        req.TeamAdminID,
+		TeamCoordinatorIDs: req.TeamCoordinatorIDs,
+	}
+	injected := agentconfig.InjectCoordinationContext(string(existing), coordCtx)
+	return d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(injected))
+}
+
+// InjectHeartbeatConfig reads the leader's existing openclaw.json from OSS,
+// injects or updates the heartbeat configuration, and writes it back.
+func (d *Deployer) InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error {
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every)
+	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
 
 // PushOnDemandSkills pushes on-demand skills to a worker.
@@ -614,6 +714,20 @@ func parseNacosRemoteSource(raw string) (nacosAddr, namespace string, err error)
 }
 
 // CleanupOSSData removes all agent data from OSS for a deleted worker.
+// CleanLegacyPasswordFiles removes credentials/matrix/password from OSS for
+// all listed agents. Called when switching from legacy password mode to
+// AppService mode to prevent stale password files from lingering.
+func (d *Deployer) CleanLegacyPasswordFiles(ctx context.Context, names []string) error {
+	logger := log.FromContext(ctx).WithName("password-cleanup")
+	for _, name := range names {
+		key := fmt.Sprintf("agents/%s/credentials/matrix/password", name)
+		if err := d.oss.DeleteObject(ctx, key); err != nil {
+			logger.Error(err, "failed to delete legacy password file (non-fatal)", "name", name)
+		}
+	}
+	return nil
+}
+
 func (d *Deployer) CleanupOSSData(ctx context.Context, workerName string) error {
 	agentPrefix := fmt.Sprintf("agents/%s/", workerName)
 	return d.oss.DeletePrefix(ctx, agentPrefix)
@@ -644,6 +758,9 @@ type ManagerDeployRequest struct {
 	// mcporter-servers.json and injects Authorization: Bearer <GatewayKey>.
 	McpServers []v1beta1.MCPServer
 
+	// AIGatewayURL overrides the cluster-wide AI Gateway URL when modelProvider is set.
+	AIGatewayURL string
+
 	IsUpdate bool
 }
 
@@ -662,10 +779,11 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:  "manager",
-		MatrixToken: req.MatrixToken,
-		GatewayKey:  req.GatewayKey,
-		ModelName:   req.Spec.Model,
+		WorkerName:   "manager",
+		MatrixToken:  req.MatrixToken,
+		GatewayKey:   req.GatewayKey,
+		ModelName:    req.Spec.Model,
+		AIGatewayURL: req.AIGatewayURL,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)
@@ -682,16 +800,18 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 		}
 	}
 
-	// --- SOUL.md (only if explicitly set in CRD spec) ---
-	if req.Spec.Soul != "" {
-		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(req.Spec.Soul)); err != nil {
+	// --- SOUL.md: inline > external ref ---
+	soulContent := req.Spec.Soul
+	if soulContent != "" {
+		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte(soulContent)); err != nil {
 			logger.Error(err, "SOUL.md push failed (non-fatal)")
 		}
 	}
 
-	// --- AGENTS.md (only if explicitly set in CRD spec) ---
-	if req.Spec.Agents != "" {
-		if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(req.Spec.Agents)); err != nil {
+	// --- AGENTS.md: inline > external ref ---
+	agentsContent := req.Spec.Agents
+	if agentsContent != "" {
+		if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(agentsContent)); err != nil {
 			logger.Error(err, "AGENTS.md push failed (non-fatal)")
 		}
 	}
@@ -755,7 +875,8 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 	if inlineAgents != "" {
 		content = inlineAgents
 		source = "inline spec.agents"
-	} else {
+	}
+	if content == "" && source == "oss" {
 		existing, err := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -864,6 +985,8 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 			return filepath.Join(baseDir, "copaw-worker-agent")
 		case "hermes":
 			return filepath.Join(baseDir, "hermes-worker-agent")
+		case "openhuman":
+			return filepath.Join(baseDir, "openhuman-worker-agent")
 		}
 		return d.workerAgentDir
 	}

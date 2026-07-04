@@ -14,6 +14,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/executor"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
@@ -22,8 +23,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -31,8 +34,9 @@ import (
 // consumed by the auth enricher to resolve team membership by worker name
 // without enumerating every Team.
 const (
-	TeamLeaderNameField = "spec.leader.name"
-	TeamWorkerNameField = "spec.workerNames"
+	TeamLeaderNameField    = "spec.leader.name"
+	TeamWorkerNameField    = "spec.workerNames"
+	TeamWorkerMembersField = "spec.workerMembers.name"
 )
 
 // TeamReconciler reconciles Team resources. It directly owns the lifecycle of
@@ -58,7 +62,7 @@ type TeamReconciler struct {
 
 	AgentFSDir string // for writing inline configs to the local agent FS
 
-	// ControllerName, when non-empty, is merged as hiclaw.io/controller
+	// ControllerName, when non-empty, is merged as agentteams.io/controller
 	// into the PodLabels of every team member MemberContext this reconciler
 	// builds, so the resulting Pods match the owning controller instance's
 	// label-scoped cache. Post-refactor (PR #666) Teams no longer create
@@ -66,12 +70,16 @@ type TeamReconciler struct {
 	// MemberContext.PodLabels → backend.CreateRequest.Labels. Empty in
 	// embedded mode.
 	ControllerName string
+	Namespace      string
+
+	RemoteWatchRegistrar RemoteWatchRegistrar
 
 	// ResourcePrefix scopes team-member ServiceAccount and Pod names per
 	// HiClaw tenant instance. Forwarded into MemberDeps.ResourcePrefix so
 	// createMemberContainer uses it when computing saName. Empty collapses
 	// to DefaultResourcePrefix ("hiclaw-").
 	ResourcePrefix auth.ResourcePrefix
+	GatewayClient  gateway.Client // gateway client for modelProvider resolution
 }
 
 type teamAdminActor struct {
@@ -135,7 +143,7 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 		return teamAdminActor{}, fmt.Errorf("team admin matrixUserId %q does not match Human %s/%s matrix user %q",
 			t.Spec.Admin.MatrixUserID, key.Namespace, key.Name, matrixUserID)
 	}
-	if human.Status.InitialPassword == "" {
+	if !r.Provisioner.MatrixAppServiceEnabled() && human.Status.InitialPassword == "" {
 		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no initial password; cannot obtain Matrix token",
 			key.Namespace, key.Name)
 	}
@@ -156,7 +164,7 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 //  2. Write local inline configs
 //  3. Clean up stale members (in Status.Members but no longer desired)
 //  4. Reconcile each desired member (leader + workers) via the shared phases
-//  4.5. Inject leader coordination context + SOUL.md template (after package deploy)
+//     4.5. Inject leader coordination context + SOUL.md template (after package deploy)
 //  5. Registry updates + summarise backend readiness and patch Team.Status
 func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Team) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
@@ -168,6 +176,11 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 			return reconcile.Result{}, err
 		}
 		patchBase = client.MergeFrom(t.DeepCopy())
+	}
+
+	// --- Route dispatch: decoupled path when WorkerMembers is populated ---
+	if len(t.Spec.WorkerMembers) > 0 {
+		return r.reconcileTeamDecoupled(ctx, t, patchBase)
 	}
 
 	workerNames := make([]string, 0, len(t.Spec.Workers))
@@ -225,6 +238,19 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 
 	// --- Step 3: Stale cleanup ---
 	desiredMembers := buildDesiredMembers(derivedTeam, r.ControllerName)
+	if r.GatewayClient != nil {
+		for i := range desiredMembers {
+			mp := desiredMembers[i].Spec.ModelProvider
+			if mp == "" {
+				continue
+			}
+			info, err := r.GatewayClient.ResolveModelProvider(ctx, mp)
+			if err != nil {
+				return r.failTeam(ctx, t, patchBase, fmt.Sprintf("resolve model provider %q for %s: %v", mp, desiredMembers[i].Name, err))
+			}
+			desiredMembers[i].ModelProviderInfo = info
+		}
+	}
 	desiredNames := make(map[string]struct{}, len(desiredMembers))
 	for _, m := range desiredMembers {
 		desiredNames[m.Name] = struct{}{}
@@ -236,6 +262,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		EnvBuilder:     r.EnvBuilder,
 		ResourcePrefix: r.ResourcePrefix,
 		DefaultRuntime: r.DefaultRuntime,
+		GatewayClient:  r.GatewayClient,
 	}
 	// staleCtx.Spec is intentionally left zero. The original TeamWorkerSpec
 	// has already been removed from t.Spec.Workers, and we never persisted a
@@ -298,9 +325,12 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		}
 		if err := r.reconcileMember(ctx, deps, m, ms); err != nil {
 			logger.Error(err, "team member reconcile failed", "name", m.Name)
+			ms.Message = err.Error()
+			ms.Phase = computeMemberPhase(ms.Phase, ms.MatrixUserID, m.Spec.DesiredState(), ms.ContainerState, err)
 			perMemberErrors = append(perMemberErrors, fmt.Sprintf("%s: %v", m.Name, err))
 			continue
 		}
+		ms.Message = ""
 		// Record the hash only after a full reconcile success so a failed
 		// mid-phase attempt on the next pass still sees SpecChanged=true
 		// and retries the container recreation. ms.Observed was already
@@ -312,6 +342,18 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		// only after ReconcileMemberExpose succeeded: a fully converged
 		// member is what the Manager-side tooling expects to find there.
 		r.reconcileLegacyMember(ctx, t, m, ms)
+	}
+
+	teamWorkerEntries := make([]service.TeamWorkerEntry, 0, len(t.Spec.Workers))
+	for _, m := range desiredMembers {
+		if m.Role != RoleTeamWorker {
+			continue
+		}
+		entry := service.TeamWorkerEntry{Name: m.RuntimeName}
+		if ms := t.Status.MemberByName(m.Name); ms != nil {
+			entry.RoomID = ms.RoomID
+		}
+		teamWorkerEntries = append(teamWorkerEntries, entry)
 	}
 
 	// --- Step 4.5: Leader coordination context + SOUL.md template ---
@@ -328,7 +370,7 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		LeaderDMRoomID:     rooms.LeaderDMRoomID,
 		HeartbeatEvery:     leaderHeartbeatEvery(t),
 		WorkerIdleTimeout:  t.Spec.Leader.WorkerIdleTimeout,
-		TeamWorkers:        workerRuntimeNames,
+		TeamWorkers:        teamWorkerEntries,
 		TeamAdminID:        teamAdminMatrixID(derivedTeam),
 		TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
 		LeaderSoul:         t.Spec.Leader.Soul,
@@ -400,6 +442,11 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 // see the Step 4 comment in reconcileTeamNormal for why post-infra failures
 // must not revoke observed status (token-rotation hazard).
 func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m MemberContext, ms *v1beta1.TeamMemberStatus) error {
+	// Validate cross-cluster deployment fields before entering phases.
+	if err := ValidateMemberDeployment(m); err != nil {
+		return err
+	}
+
 	state := &MemberState{}
 
 	// Pre-populate ExistingMatrixUserID when we've already provisioned the
@@ -409,6 +456,9 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 	}
 
 	if _, err := ReconcileMemberInfra(ctx, deps, m, state); err != nil {
+		return err
+	}
+	if err := EnsureModelProviderAuth(ctx, deps, m, state); err != nil {
 		return err
 	}
 	ms.Observed = true
@@ -426,6 +476,9 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 		return err
 	}
 	if _, err := ReconcileMemberContainer(ctx, deps, m, state); err != nil {
+		return err
+	}
+	if err := ReconcileMemberService(ctx, &m, &deps); err != nil {
 		return err
 	}
 	_ = ReconcileMemberExpose(ctx, deps, m, state)
@@ -455,13 +508,16 @@ func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1bet
 		return false, 0
 	}
 	for _, m := range members {
-		result, err := wb.Status(ctx, m.Name)
+		mwb := resolveBackendForMember(wb, m)
+		result, err := mwb.Status(ctx, m.Name)
 		if err != nil {
 			continue
 		}
 		ready := result.Status == backend.StatusRunning || result.Status == backend.StatusReady
 		if ms := t.Status.MemberByName(m.Name); ms != nil {
 			ms.Ready = ready
+			ms.ContainerState = string(result.Status)
+			ms.Phase = computeMemberPhase(ms.Phase, ms.MatrixUserID, m.Spec.DesiredState(), ms.ContainerState, nil)
 		}
 		if m.Role == RoleTeamLeader {
 			leaderReady = ready
@@ -500,6 +556,10 @@ func (r *TeamReconciler) writeInlineConfigs(t *v1beta1.Team) error {
 }
 
 func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) error {
+	if len(t.Spec.WorkerMembers) > 0 {
+		return r.handleDeleteDecoupled(ctx, t)
+	}
+
 	logger := log.FromContext(ctx)
 	logger.Info("deleting team", "name", t.Name)
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
@@ -511,6 +571,7 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 		EnvBuilder:     r.EnvBuilder,
 		ResourcePrefix: r.ResourcePrefix,
 		DefaultRuntime: r.DefaultRuntime,
+		GatewayClient:  r.GatewayClient,
 	}
 
 	// Union of Status.Members and desired members to guarantee cleanup even
@@ -602,6 +663,415 @@ func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) erro
 		return kerrors.NewAggregate(errs)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Decoupled path: Team references standalone Worker CRs via spec.workerMembers
+// ---------------------------------------------------------------------------
+
+// reconcileTeamDecoupled is the new path for Teams whose spec.workerMembers
+// is populated. It manages team organization (rooms, coordination context,
+// heartbeat injection, status aggregation) without managing member runtime.
+func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.Team, patchBase client.Patch) (reconcile.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// 1. Validate workerMembers
+	leaderRef, workerRefs, err := validateWorkerMembers(t.Spec.WorkerMembers)
+	if err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
+	if err := r.validateWorkerMembersExclusive(ctx, t); err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
+
+	// 2. Fetch all referenced Worker CRs
+	type resolvedMember struct {
+		ref    v1beta1.TeamWorkerRef
+		worker v1beta1.Worker
+	}
+	members := make([]resolvedMember, 0, len(t.Spec.WorkerMembers))
+	allProvisioned := true
+	var degradedMsgs []string
+
+	for _, ref := range t.Spec.WorkerMembers {
+		var w v1beta1.Worker
+		key := client.ObjectKey{Name: ref.Name, Namespace: t.Namespace}
+		if err := r.Get(ctx, key, &w); err != nil {
+			degradedMsgs = append(degradedMsgs, fmt.Sprintf("Worker %q not found", ref.Name))
+			continue
+		}
+		if w.Status.MatrixUserID == "" {
+			allProvisioned = false
+		}
+		members = append(members, resolvedMember{ref: ref, worker: w})
+	}
+
+	if len(degradedMsgs) > 0 {
+		t.Status.Phase = "Degraded"
+		t.Status.Message = strings.Join(degradedMsgs, "; ")
+		if err := r.Status().Patch(ctx, t, patchBase); err != nil {
+			logger.Error(err, "failed to patch team status (non-fatal)")
+		}
+		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
+	}
+
+	if !allProvisioned {
+		t.Status.Phase = "Pending"
+		t.Status.Message = "waiting for member Workers to be provisioned"
+		if err := r.Status().Patch(ctx, t, patchBase); err != nil {
+			logger.Error(err, "failed to patch team status (non-fatal)")
+		}
+		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
+	}
+
+	// 3. Resolve admin actor
+	adminActor, err := r.resolveTeamAdminActor(ctx, t)
+	if err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
+	derivedTeam := t
+	if adminActor.MatrixUserID != "" {
+		derivedTeam = t.DeepCopy()
+		if derivedTeam.Spec.Admin == nil {
+			derivedTeam.Spec.Admin = &v1beta1.TeamAdminSpec{}
+		}
+		derivedTeam.Spec.Admin.MatrixUserID = adminActor.MatrixUserID
+	}
+
+	// 4. Team-level infrastructure
+	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
+	var leaderWorker v1beta1.Worker
+	workerRuntimeNames := make([]string, 0, len(workerRefs))
+	for _, rm := range members {
+		rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
+		if rm.ref.Name == leaderRef.Name {
+			leaderWorker = rm.worker
+		} else {
+			workerRuntimeNames = append(workerRuntimeNames, rn)
+		}
+	}
+	leaderRuntimeName := leaderWorker.Spec.EffectiveWorkerName(leaderWorker.Name)
+
+	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
+		TeamName:             teamRuntimeName,
+		LeaderName:           leaderRuntimeName,
+		LeaderCredentialName: leaderRef.Name,
+		WorkerNames:          workerRuntimeNames,
+		AdminSpec:            derivedTeam.Spec.Admin,
+		HumanMembers:         t.Spec.HumanMembers,
+		TeamAdminActorToken:  adminActor.Token,
+		TeamAdminActorName:   adminActor.Username,
+	})
+	if err != nil {
+		return r.failTeam(ctx, t, patchBase, fmt.Sprintf("provision team rooms: %v", err))
+	}
+	t.Status.TeamRoomID = rooms.TeamRoomID
+	t.Status.LeaderDMRoomID = rooms.LeaderDMRoomID
+
+	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {
+		logger.Error(err, "team shared storage init failed (non-fatal)", "name", t.Name, "teamName", teamRuntimeName)
+	}
+
+	// 5. Coordination context + heartbeat injection
+	teamWorkerEntries := make([]service.TeamWorkerEntry, 0, len(workerRuntimeNames))
+	for _, rm := range members {
+		if rm.ref.Name == leaderRef.Name {
+			continue
+		}
+		rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
+		teamWorkerEntries = append(teamWorkerEntries, service.TeamWorkerEntry{
+			Name:   rn,
+			RoomID: rm.worker.Status.RoomID,
+		})
+	}
+
+	// Leader coordination context
+	if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
+		LeaderName:         leaderRuntimeName,
+		Role:               RoleTeamLeader.String(),
+		TeamName:           teamRuntimeName,
+		TeamRoomID:         rooms.TeamRoomID,
+		LeaderDMRoomID:     rooms.LeaderDMRoomID,
+		HeartbeatEvery:     t.Spec.HeartbeatEvery,
+		WorkerIdleTimeout:  "", // decoupled path does not inject
+		TeamWorkers:        teamWorkerEntries,
+		TeamAdminID:        teamAdminMatrixID(derivedTeam),
+		TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
+		LeaderSoul:         leaderWorker.Spec.Soul,
+	}); err != nil {
+		logger.Error(err, "leader coordination context injection failed (non-fatal)")
+	}
+
+	// Leader heartbeat injection
+	if t.Spec.HeartbeatEvery != "" {
+		if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
+			WorkerName: leaderRuntimeName,
+			Enabled:    true,
+			Every:      t.Spec.HeartbeatEvery,
+		}); err != nil {
+			logger.Error(err, "leader heartbeat config injection failed (non-fatal)")
+		}
+	}
+
+	// Worker coordination context
+	for _, rm := range members {
+		if rm.ref.Name == leaderRef.Name {
+			continue
+		}
+		rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
+		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
+			WorkerName:         rn,
+			TeamName:           teamRuntimeName,
+			TeamLeaderName:     leaderRuntimeName,
+			TeamAdminID:        teamAdminMatrixID(derivedTeam),
+			TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
+		}); err != nil {
+			logger.Error(err, "worker coordination context injection failed (non-fatal)", "worker", rn)
+		}
+	}
+
+	// 6. Legacy registry updates
+	if r.Legacy != nil && r.Legacy.Enabled() {
+		leaderMatrixID := r.Legacy.MatrixUserID(leaderRuntimeName)
+		if err := r.Legacy.UpdateManagerGroupAllowFrom(leaderMatrixID, true); err != nil {
+			logger.Error(err, "failed to update Manager groupAllowFrom for team leader (non-fatal)")
+		}
+		workerNames := make([]string, 0, len(workerRefs))
+		for _, ref := range workerRefs {
+			workerNames = append(workerNames, ref.Name)
+		}
+		if err := r.Legacy.UpdateTeamsRegistry(service.TeamRegistryEntry{
+			Name:           teamRuntimeName,
+			Leader:         leaderRef.Name,
+			Workers:        workerNames,
+			TeamRoomID:     rooms.TeamRoomID,
+			LeaderDMRoomID: rooms.LeaderDMRoomID,
+			Admin:          teamAdminRegistryEntry(derivedTeam.Spec.Admin),
+			Members:        teamMemberRegistryEntries(t.Spec.HumanMembers),
+		}); err != nil {
+			logger.Error(err, "teams-registry update failed (non-fatal)")
+		}
+	}
+
+	// 7. Status aggregation
+	desiredNames := make(map[string]struct{}, len(t.Spec.WorkerMembers))
+	for _, ref := range t.Spec.WorkerMembers {
+		desiredNames[ref.Name] = struct{}{}
+	}
+	pruneMembers(&t.Status, desiredNames)
+
+	var leaderReady bool
+	readyWorkers := 0
+	for _, rm := range members {
+		rn := rm.worker.Spec.EffectiveWorkerName(rm.worker.Name)
+		role := "worker"
+		if rm.ref.Name == leaderRef.Name {
+			role = RoleTeamLeader.String()
+		}
+		ms := memberStatus(&t.Status, rm.ref.Name, MemberRole(role))
+		ms.RuntimeName = rn
+		ms.MatrixUserID = rm.worker.Status.MatrixUserID
+		ms.RoomID = rm.worker.Status.RoomID
+		ms.Observed = true
+		ready := rm.worker.Status.Phase == "Running"
+		ms.Ready = ready
+		if rm.ref.Name == leaderRef.Name {
+			leaderReady = ready
+		} else if ready {
+			readyWorkers++
+		}
+	}
+
+	sortMembers(&t.Status)
+	t.Status.TotalWorkers = len(workerRefs)
+	t.Status.LeaderReady = leaderReady
+	t.Status.ReadyWorkers = readyWorkers
+
+	switch {
+	case leaderReady && readyWorkers == t.Status.TotalWorkers:
+		t.Status.Phase = "Active"
+		t.Status.Message = ""
+	default:
+		t.Status.Phase = "Pending"
+		t.Status.Message = ""
+	}
+
+	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
+		logger.Error(err, "failed to patch team status (non-fatal)")
+	}
+
+	logger.Info("team reconciled (decoupled)",
+		"name", t.Name,
+		"phase", t.Status.Phase,
+		"leaderReady", leaderReady,
+		"readyWorkers", readyWorkers,
+		"totalWorkers", t.Status.TotalWorkers)
+	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+}
+
+// handleDeleteDecoupled handles Team deletion for the decoupled path.
+// It revokes team coordination from members (writing standalone context back),
+// removes registry entries, and deletes room aliases. It does NOT destroy
+// member Workers — they have independent lifecycles.
+func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.Team) error {
+	logger := log.FromContext(ctx)
+	logger.Info("deleting team (decoupled)", "name", t.Name)
+	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
+
+	// Revert each member's coordination context to standalone.
+	for _, ref := range t.Spec.WorkerMembers {
+		var w v1beta1.Worker
+		key := client.ObjectKey{Name: ref.Name, Namespace: t.Namespace}
+		if err := r.Get(ctx, key, &w); err != nil {
+			// Worker already deleted or not found — nothing to revert.
+			continue
+		}
+		rn := w.Spec.EffectiveWorkerName(w.Name)
+		// Inject empty team context → standalone coordination.
+		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
+			WorkerName:         rn,
+			TeamName:           "",
+			TeamLeaderName:     "",
+			TeamAdminID:        "",
+			TeamCoordinatorIDs: nil,
+		}); err != nil {
+			logger.Error(err, "failed to revert worker coordination to standalone (non-fatal)", "worker", rn)
+		}
+	}
+
+	// Remove heartbeat config from the leader.
+	leaderRef, _, _ := validateWorkerMembers(t.Spec.WorkerMembers)
+	if leaderRef != nil {
+		var leaderW v1beta1.Worker
+		key := client.ObjectKey{Name: leaderRef.Name, Namespace: t.Namespace}
+		if err := r.Get(ctx, key, &leaderW); err == nil {
+			leaderRN := leaderW.Spec.EffectiveWorkerName(leaderW.Name)
+			if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
+				WorkerName: leaderRN,
+				Enabled:    false,
+				Every:      "",
+			}); err != nil {
+				logger.Error(err, "failed to remove leader heartbeat config (non-fatal)")
+			}
+		}
+	}
+
+	// Legacy registry cleanup.
+	if r.Legacy != nil && r.Legacy.Enabled() {
+		if leaderRef != nil {
+			var leaderW v1beta1.Worker
+			key := client.ObjectKey{Name: leaderRef.Name, Namespace: t.Namespace}
+			if err := r.Get(ctx, key, &leaderW); err == nil {
+				leaderRN := leaderW.Spec.EffectiveWorkerName(leaderW.Name)
+				leaderMatrixID := r.Legacy.MatrixUserID(leaderRN)
+				if err := r.Legacy.UpdateManagerGroupAllowFrom(leaderMatrixID, false); err != nil {
+					logger.Error(err, "failed to revoke Manager groupAllowFrom (non-fatal)")
+				}
+			}
+		}
+		if err := r.Legacy.RemoveFromTeamsRegistry(ctx, teamRuntimeName); err != nil {
+			logger.Error(err, "failed to remove team from registry (non-fatal)")
+		}
+	}
+
+	// Delete team room aliases so a fresh Team CR with the same name gets
+	// clean aliases.
+	leaderRuntimeName := ""
+	if leaderRef != nil {
+		var leaderW v1beta1.Worker
+		key := client.ObjectKey{Name: leaderRef.Name, Namespace: t.Namespace}
+		if err := r.Get(ctx, key, &leaderW); err == nil {
+			leaderRuntimeName = leaderW.Spec.EffectiveWorkerName(leaderW.Name)
+		}
+	}
+	if err := r.Provisioner.DeleteTeamRoomAliases(ctx, teamRuntimeName, leaderRuntimeName); err != nil {
+		logger.Error(err, "failed to delete team room aliases (non-fatal)")
+	}
+
+	return nil
+}
+
+// validateWorkerMembers validates the workerMembers list: exactly one
+// role=team_leader, no duplicates, non-empty names. Returns the leader ref,
+// the worker refs (excluding leader), and any validation error.
+func validateWorkerMembers(refs []v1beta1.TeamWorkerRef) (leader *v1beta1.TeamWorkerRef, workers []v1beta1.TeamWorkerRef, err error) {
+	if len(refs) == 0 {
+		return nil, nil, fmt.Errorf("workerMembers must not be empty")
+	}
+	seen := make(map[string]struct{}, len(refs))
+	var leaders []string
+	workers = make([]v1beta1.TeamWorkerRef, 0, len(refs)-1)
+
+	for i := range refs {
+		ref := &refs[i]
+		if ref.Name == "" {
+			return nil, nil, fmt.Errorf("workerMembers[%d].name must not be empty", i)
+		}
+		if _, dup := seen[ref.Name]; dup {
+			return nil, nil, fmt.Errorf("duplicate workerMembers name %q", ref.Name)
+		}
+		seen[ref.Name] = struct{}{}
+
+		role := ref.Role
+		if role == "" {
+			role = "worker"
+		}
+		if role == RoleTeamLeader.String() {
+			leaders = append(leaders, ref.Name)
+			leader = ref
+		} else {
+			workers = append(workers, *ref)
+		}
+	}
+
+	if len(leaders) == 0 {
+		return nil, nil, fmt.Errorf("workerMembers must contain exactly one member with role=%q", RoleTeamLeader.String())
+	}
+	if len(leaders) > 1 {
+		return nil, nil, fmt.Errorf("workerMembers contains multiple leaders: %v", leaders)
+	}
+	return leader, workers, nil
+}
+
+func (r *TeamReconciler) validateWorkerMembersExclusive(ctx context.Context, t *v1beta1.Team) error {
+	for _, ref := range t.Spec.WorkerMembers {
+		teams, err := r.teamsReferencingWorkerMember(ctx, t.Namespace, ref.Name)
+		if err != nil {
+			return fmt.Errorf("lookup workerMembers reference %q: %w", ref.Name, err)
+		}
+		for _, other := range teams {
+			if other.Name == t.Name {
+				continue
+			}
+			return fmt.Errorf("workerMembers name %q is already referenced by Team %s/%s", ref.Name, other.Namespace, other.Name)
+		}
+	}
+	return nil
+}
+
+func (r *TeamReconciler) teamsReferencingWorkerMember(ctx context.Context, namespace, name string) ([]v1beta1.Team, error) {
+	var indexed v1beta1.TeamList
+	if err := r.List(ctx, &indexed,
+		client.InNamespace(namespace),
+		client.MatchingFields{TeamWorkerMembersField: name},
+	); err == nil {
+		return indexed.Items, nil
+	}
+
+	var list v1beta1.TeamList
+	if err := r.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	matches := make([]v1beta1.Team, 0, len(list.Items))
+	for _, team := range list.Items {
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name == name {
+				matches = append(matches, team)
+				break
+			}
+		}
+	}
+	return matches, nil
 }
 
 // reconcileLegacyMember upserts a team member (leader or worker) into the
@@ -743,7 +1213,7 @@ func observedMemberNames(s *v1beta1.TeamStatus) []string {
 }
 
 // buildDesiredMembers translates a Team spec into MemberContexts for leader
-// and each worker. Every member is tagged with PodLabel hiclaw.io/team=<name>
+// and each worker. Every member is tagged with PodLabel agentteams.io/team=<name>
 // so the Team controller can watch their pod lifecycle via a shared predicate.
 //
 // SpecChanged is computed per member via hashMemberSourceSpec, which digests
@@ -773,8 +1243,8 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			t.ObjectMeta.Labels,
 			perMemberLabels,
 			map[string]string{
-				"hiclaw.io/team":        t.Name,
-				"hiclaw.io/role":        role.String(),
+				"agentteams.io/team":    t.Name,
+				"agentteams.io/role":    role.String(),
 				v1beta1.LabelController: controllerName,
 			},
 		)
@@ -791,6 +1261,12 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			Every:   every,
 		}
 	}
+
+	var leaderServiceEnabled bool
+	if t.Spec.Leader.ServiceEnabled != nil {
+		leaderServiceEnabled = *t.Spec.Leader.ServiceEnabled
+	}
+
 	members = append(members, MemberContext{
 		Name:               t.Spec.Leader.Name,
 		RuntimeName:        t.Spec.Leader.EffectiveWorkerName(),
@@ -807,11 +1283,19 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 		PodLabels:          memberLabels(RoleTeamLeader, t.Spec.Leader.Labels),
 		Owner:              t,
 		Heartbeat:          leaderHeartbeat,
+		DeployMode:         v1beta1.DeployModeLocal,
+		ServiceEnabled:     leaderServiceEnabled,
 	})
 
 	for _, w := range t.Spec.Workers {
 		workerObserved := isObserved(w.Name)
 		spec := teamWorkerSpecToWorkerSpec(t, w)
+
+		var wServiceEnabled bool
+		if w.ServiceEnabled != nil {
+			wServiceEnabled = *w.ServiceEnabled
+		}
+
 		members = append(members, MemberContext{
 			Name:               w.Name,
 			RuntimeName:        w.EffectiveWorkerName(),
@@ -827,6 +1311,8 @@ func buildDesiredMembers(t *v1beta1.Team, controllerName string) []MemberContext
 			TeamCoordinatorIDs: teamCoordinatorIDs(t),
 			PodLabels:          memberLabels(RoleTeamWorker, w.Labels),
 			Owner:              t,
+			DeployMode:         v1beta1.DeployModeLocal,
+			ServiceEnabled:     wServiceEnabled,
 		})
 	}
 	return members
@@ -948,6 +1434,7 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 	}
 	return v1beta1.WorkerSpec{
 		Model:         t.Spec.Leader.Model,
+		ModelProvider: t.Spec.Leader.ModelProvider,
 		Runtime:       "copaw",
 		WorkerName:    t.Spec.Leader.WorkerName,
 		Identity:      t.Spec.Leader.Identity,
@@ -958,6 +1445,7 @@ func leaderWorkerSpec(t *v1beta1.Team) v1beta1.WorkerSpec {
 		McpServers:    t.Spec.Leader.McpServers,
 		ChannelPolicy: policy,
 		State:         t.Spec.Leader.State,
+		Resources:     t.Spec.Leader.Resources,
 		Env:           t.Spec.Leader.Env,
 	}
 }
@@ -990,6 +1478,7 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 	}
 	return v1beta1.WorkerSpec{
 		Model:         w.Model,
+		ModelProvider: w.ModelProvider,
 		Runtime:       w.Runtime,
 		WorkerName:    w.WorkerName,
 		Image:         w.Image,
@@ -1003,6 +1492,7 @@ func teamWorkerSpecToWorkerSpec(t *v1beta1.Team, w v1beta1.TeamWorkerSpec) v1bet
 		Expose:        w.Expose,
 		ChannelPolicy: policy,
 		State:         w.State,
+		Resources:     w.Resources,
 		Env:           w.Env,
 	}
 }
@@ -1106,24 +1596,104 @@ func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
-				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
-					teamName := obj.GetLabels()["hiclaw.io/team"]
-					if teamName == "" {
-						return nil
-					}
-					return []reconcile.Request{
-						{NamespacedName: client.ObjectKey{
-							Name:      teamName,
-							Namespace: obj.GetNamespace(),
-						}},
-					}
-				}),
-				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/team", r.ControllerName)),
+				teamPodEventHandler(""),
+				builder.WithPredicates(podLifecyclePredicates("agentteams.io/team", r.ControllerName)),
 			)
 		}
 	}
 
-	return bldr.Complete(r)
+	// Watch Worker CRs whose status changes for the decoupled path. When a
+	// referenced Worker's status changes, the owning Team is enqueued via the
+	// spec.workerMembers.name field indexer.
+	bldr = bldr.Watches(
+		&v1beta1.Worker{},
+		handler.EnqueueRequestsFromMapFunc(r.workerToTeamRequests),
+		builder.WithPredicates(workerStatusChangePredicate()),
+	)
+
+	ctl, err := bldr.Build(r)
+	if err != nil {
+		return err
+	}
+	if r.RemoteWatchRegistrar != nil && r.Backend != nil {
+		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
+			r.RemoteWatchRegistrar.RegisterWatch(
+				ctl,
+				&corev1.Pod{},
+				teamPodEventHandler(r.Namespace),
+				podLifecyclePredicates("agentteams.io/team", r.ControllerName),
+			)
+		}
+	}
+	return nil
+}
+
+func teamPodEventHandler(localNamespace string) handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+		return teamPodRequests(obj, localNamespace)
+	})
+}
+
+func teamPodRequests(obj client.Object, localNamespace string) []reconcile.Request {
+	teamName := obj.GetLabels()["agentteams.io/team"]
+	if teamName == "" {
+		return nil
+	}
+	namespace := localNamespace
+	if namespace == "" {
+		namespace = obj.GetNamespace()
+	}
+	return []reconcile.Request{
+		{NamespacedName: client.ObjectKey{
+			Name:      teamName,
+			Namespace: namespace,
+		}},
+	}
+}
+
+// workerToTeamRequests maps a Worker event to the Team(s) that reference it
+// via spec.workerMembers[*].name.
+func (r *TeamReconciler) workerToTeamRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	var teamList v1beta1.TeamList
+	if err := r.List(ctx, &teamList,
+		client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{TeamWorkerMembersField: obj.GetName()},
+	); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(teamList.Items))
+	for _, t := range teamList.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: client.ObjectKey{Name: t.Name, Namespace: t.Namespace},
+		})
+	}
+	return reqs
+}
+
+// workerStatusChangePredicate triggers only on Worker status subresource
+// changes (Phase, MatrixUserID, RoomID) and delete events.
+func workerStatusChangePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return false
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldW, ok1 := e.ObjectOld.(*v1beta1.Worker)
+			newW, ok2 := e.ObjectNew.(*v1beta1.Worker)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return oldW.Status.Phase != newW.Status.Phase ||
+				oldW.Status.MatrixUserID != newW.Status.MatrixUserID ||
+				oldW.Status.RoomID != newW.Status.RoomID
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return true
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return false
+		},
+	}
 }
 
 // --- Policy helpers (preserved from prior implementation) ---

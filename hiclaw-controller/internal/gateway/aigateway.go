@@ -41,6 +41,7 @@ type apigClient interface {
 	CreateConsumerAuthorizationRules(req *apig.CreateConsumerAuthorizationRulesRequest) (*apig.CreateConsumerAuthorizationRulesResponse, error)
 	QueryConsumerAuthorizationRules(req *apig.QueryConsumerAuthorizationRulesRequest) (*apig.QueryConsumerAuthorizationRulesResponse, error)
 	DeleteConsumerAuthorizationRule(consumerAuthorizationRuleID *string, consumerID *string) (*apig.DeleteConsumerAuthorizationRuleResponse, error)
+	ListHttpApis(req *apig.ListHttpApisRequest) (*apig.ListHttpApisResponse, error)
 }
 
 // AIGatewayClient implements gateway.Client against Alibaba Cloud APIG.
@@ -167,8 +168,12 @@ func (a *AIGatewayClient) DeleteConsumer(_ context.Context, name string) error {
 	return nil
 }
 
-func (a *AIGatewayClient) AuthorizeAIRoutes(_ context.Context, consumerName string) error {
-	if a.config.ModelAPIID == "" || a.config.EnvID == "" {
+func (a *AIGatewayClient) AuthorizeAIRoutes(_ context.Context, consumerName string, modelAPIID string) error {
+	effectiveModelAPIID := a.config.ModelAPIID
+	if modelAPIID != "" {
+		effectiveModelAPIID = modelAPIID
+	}
+	if effectiveModelAPIID == "" || a.config.EnvID == "" {
 		return fmt.Errorf("ai-gateway: ModelAPIID and EnvID must be configured to authorize consumers")
 	}
 	full := a.consumerName(consumerName)
@@ -182,7 +187,7 @@ func (a *AIGatewayClient) AuthorizeAIRoutes(_ context.Context, consumerName stri
 
 	query := (&apig.QueryConsumerAuthorizationRulesRequest{}).
 		SetConsumerId(id).
-		SetResourceId(a.config.ModelAPIID).
+		SetResourceId(effectiveModelAPIID).
 		SetEnvironmentId(a.config.EnvID).
 		SetResourceType("LLM").
 		SetPageNumber(1).
@@ -190,7 +195,6 @@ func (a *AIGatewayClient) AuthorizeAIRoutes(_ context.Context, consumerName stri
 	if qresp, qerr := a.client.QueryConsumerAuthorizationRules(query); qerr == nil &&
 		qresp != nil && qresp.Body != nil && qresp.Body.Data != nil &&
 		len(qresp.Body.Data.Items) > 0 {
-		// Already authorized.
 		return nil
 	}
 
@@ -200,19 +204,23 @@ func (a *AIGatewayClient) AuthorizeAIRoutes(_ context.Context, consumerName stri
 		ResourceType: tea.String("LLM"),
 		ExpireMode:   tea.String("LongTerm"),
 		ResourceIdentifier: &apig.CreateConsumerAuthorizationRulesRequestAuthorizationRulesResourceIdentifier{
-			ResourceId:    tea.String(a.config.ModelAPIID),
+			ResourceId:    tea.String(effectiveModelAPIID),
 			EnvironmentId: tea.String(a.config.EnvID),
 		},
 	}})
 	if _, err := a.client.CreateConsumerAuthorizationRules(create); err != nil {
 		return fmt.Errorf("ai-gateway: CreateConsumerAuthorizationRules: %w", err)
 	}
-	log.Printf("[ai-gateway] authorized consumer %s on model %s", full, a.config.ModelAPIID)
+	log.Printf("[ai-gateway] authorized consumer %s on model %s", full, effectiveModelAPIID)
 	return nil
 }
 
-func (a *AIGatewayClient) DeauthorizeAIRoutes(_ context.Context, consumerName string) error {
-	if a.config.ModelAPIID == "" || a.config.EnvID == "" {
+func (a *AIGatewayClient) DeauthorizeAIRoutes(_ context.Context, consumerName string, modelAPIID string) error {
+	effectiveModelAPIID := a.config.ModelAPIID
+	if modelAPIID != "" {
+		effectiveModelAPIID = modelAPIID
+	}
+	if effectiveModelAPIID == "" || a.config.EnvID == "" {
 		return nil // nothing to revoke
 	}
 	full := a.consumerName(consumerName)
@@ -225,7 +233,7 @@ func (a *AIGatewayClient) DeauthorizeAIRoutes(_ context.Context, consumerName st
 	}
 	query := (&apig.QueryConsumerAuthorizationRulesRequest{}).
 		SetConsumerId(id).
-		SetResourceId(a.config.ModelAPIID).
+		SetResourceId(effectiveModelAPIID).
 		SetEnvironmentId(a.config.EnvID).
 		SetResourceType("LLM").
 		SetPageNumber(1).
@@ -304,6 +312,81 @@ func (a *AIGatewayClient) Healthy(_ context.Context) error {
 		return fmt.Errorf("ai-gateway: list consumers: %w", err)
 	}
 	return nil
+}
+
+// ResolveModelProvider looks up a named APIG Model API (HttpApi of type LLM)
+// and returns its basePath, Intranet subdomain URL, and httpApiId.
+func (a *AIGatewayClient) ResolveModelProvider(_ context.Context, name string) (*ModelProviderInfo, error) {
+	if a.config.GatewayID == "" {
+		return nil, fmt.Errorf("ai-gateway: gateway ID is required to resolve model provider")
+	}
+
+	page := int32(1)
+	for {
+		req := (&apig.ListHttpApisRequest{}).
+			SetGatewayId(a.config.GatewayID).
+			SetGatewayType("AI").
+			SetTypes("LLM").
+			SetName(name).
+			SetPageNumber(page).
+			SetPageSize(100)
+		resp, err := a.client.ListHttpApis(req)
+		if err != nil {
+			return nil, fmt.Errorf("ai-gateway: ListHttpApis: %w", err)
+		}
+		if resp == nil || resp.Body == nil || resp.Body.Data == nil {
+			return nil, fmt.Errorf("ai-gateway: model provider %q not found", name)
+		}
+		for _, item := range resp.Body.Data.Items {
+			if item == nil {
+				continue
+			}
+			for _, api := range item.VersionedHttpApis {
+				if api == nil || api.Name == nil || *api.Name != name {
+					continue
+				}
+				info := &ModelProviderInfo{
+					HttpApiID: tea.StringValue(api.HttpApiId),
+					BasePath:  tea.StringValue(api.BasePath),
+				}
+				info.IntranetURL = resolveIntranetURL(api.DeployConfigs, info.BasePath)
+				if info.IntranetURL == "" {
+					return nil, fmt.Errorf("ai-gateway: model provider %q has no Intranet subdomain", name)
+				}
+				return info, nil
+			}
+		}
+		if len(resp.Body.Data.Items) < 100 {
+			break
+		}
+		page++
+	}
+	return nil, fmt.Errorf("ai-gateway: model provider %q not found", name)
+}
+
+// resolveIntranetURL finds the Intranet subdomain in deploy configs and
+// constructs the full URL with basePath.
+func resolveIntranetURL(deployConfigs []*apig.HttpApiDeployConfig, basePath string) string {
+	for _, dc := range deployConfigs {
+		if dc == nil {
+			continue
+		}
+		for _, sd := range dc.SubDomains {
+			if sd == nil || sd.NetworkType == nil || *sd.NetworkType != "Intranet" {
+				continue
+			}
+			domain := tea.StringValue(sd.Name)
+			if domain == "" {
+				continue
+			}
+			protocol := "http"
+			if sd.Protocol != nil && strings.EqualFold(*sd.Protocol, "HTTPS") {
+				protocol = "https"
+			}
+			return protocol + "://" + domain + basePath
+		}
+	}
+	return ""
 }
 
 // TriggerPush is a no-op on APIG: configuration propagates

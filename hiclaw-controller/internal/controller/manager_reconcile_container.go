@@ -146,12 +146,16 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 	}
 
 	managerEnv := r.EnvBuilder.BuildManager(m.Name, prov, m.Spec)
+	if s.modelProviderInfo != nil && s.modelProviderInfo.IntranetURL != "" {
+		managerEnv["HICLAW_AI_GATEWAY_URL"] = s.modelProviderInfo.IntranetURL
+	}
 	mergeUserEnv(managerEnv, m.Spec.Env, logger, "manager/"+m.Name)
 	containerName := r.managerContainerName(m.Name)
 	saName := r.ResourcePrefix.SAName(authpkg.RoleManager, m.Name)
+	resources := mergeAgentResourcesWithBackendDefaults(r.ManagerResources, m.Spec.Resources)
 	// Pod labels are layered low-to-high: CR metadata.labels, CR
 	// spec.labels, then controller-forced system labels. The last layer
-	// wins on collision so a user-supplied `hiclaw.io/controller` (or
+	// wins on collision so a user-supplied `agentteams.io/controller` (or
 	// any other reserved key) cannot spoof the controller identity.
 	createReq := backend.CreateRequest{
 		Name:               m.Name,
@@ -161,15 +165,15 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 		RuntimeFallback:    r.DefaultRuntime,
 		Env:                managerEnv,
 		ServiceAccountName: saName,
-		Resources:          r.ManagerResources,
+		Resources:          resources,
 		Labels: mergeLabels(
 			m.ObjectMeta.Labels,
 			m.Spec.Labels,
 			map[string]string{
 				"app":                   r.ResourcePrefix.ManagerAppLabel(),
-				"hiclaw.io/manager":     m.Name,
-				"hiclaw.io/role":        "manager",
-				"hiclaw.io/runtime":     backend.ResolveRuntime(m.Spec.Runtime, r.DefaultRuntime),
+				"agentteams.io/manager": m.Name,
+				"agentteams.io/role":    "manager",
+				"agentteams.io/runtime": backend.ResolveRuntime(m.Spec.Runtime, r.DefaultRuntime),
 				v1beta1.LabelController: r.ControllerName,
 			},
 		),

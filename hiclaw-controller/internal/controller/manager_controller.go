@@ -8,6 +8,7 @@ import (
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
@@ -41,6 +42,7 @@ type ManagerReconciler struct {
 	ManagerResources *backend.ResourceRequirements
 	ResourcePrefix   auth.ResourcePrefix    // tenant prefix used to derive Pod names and labels
 	EmbeddedConfig   *ManagerEmbeddedConfig // non-nil in embedded mode only
+	GatewayClient    gateway.Client         // gateway client for modelProvider resolution
 
 	// DefaultRuntime is the value passed to backend.CreateRequest.RuntimeFallback
 	// when a Manager CR omits spec.runtime. Sourced from HICLAW_MANAGER_RUNTIME
@@ -49,7 +51,7 @@ type ManagerReconciler struct {
 	DefaultRuntime string
 
 	// ControllerName identifies this controller instance. Stamped on every
-	// Manager Pod via hiclaw.io/controller so multi-instance deployments
+	// Manager Pod via agentteams.io/controller so multi-instance deployments
 	// sharing a namespace do not cross-watch each other's resources.
 	ControllerName string
 
@@ -131,8 +133,22 @@ func (r *ManagerReconciler) Reconcile(ctx context.Context, req reconcile.Request
 // reconcileManagerNormal runs the declarative convergence loop: infrastructure,
 // config, container. Critical-path phases are serial with early return on error.
 func (r *ManagerReconciler) reconcileManagerNormal(ctx context.Context, s *managerScope) (reconcile.Result, error) {
+	if s.manager.Spec.ModelProvider != "" && r.GatewayClient != nil {
+		info, err := r.GatewayClient.ResolveModelProvider(ctx, s.manager.Spec.ModelProvider)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("resolve model provider %q: %w", s.manager.Spec.ModelProvider, err)
+		}
+		s.modelProviderInfo = info
+	}
+
 	if res, err := r.reconcileManagerInfrastructure(ctx, s); err != nil || res.RequeueAfter > 0 {
 		return res, err
+	}
+	if s.modelProviderInfo != nil && r.GatewayClient != nil && s.provResult != nil {
+		consumerName := "manager"
+		if err := r.GatewayClient.AuthorizeAIRoutes(ctx, consumerName, s.modelProviderInfo.HttpApiID); err != nil {
+			return reconcile.Result{}, fmt.Errorf("authorize model provider %s for manager: %w", s.modelProviderInfo.HttpApiID, err)
+		}
 	}
 	if err := r.Provisioner.EnsureManagerServiceAccount(ctx, s.manager.Name); err != nil {
 		return reconcile.Result{}, fmt.Errorf("ServiceAccount: %w", err)
@@ -173,7 +189,7 @@ func (r *ManagerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
 				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
-					managerName := obj.GetLabels()["hiclaw.io/manager"]
+					managerName := obj.GetLabels()["agentteams.io/manager"]
 					if managerName == "" {
 						return nil
 					}
@@ -184,7 +200,7 @@ func (r *ManagerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 						}},
 					}
 				}),
-				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/manager", r.ControllerName)),
+				builder.WithPredicates(podLifecyclePredicates("agentteams.io/manager", r.ControllerName)),
 			)
 		}
 	}

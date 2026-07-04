@@ -12,34 +12,38 @@ import (
 type MockProvisioner struct {
 	mu sync.Mutex
 
-	ProvisionWorkerFn          func(ctx context.Context, req service.WorkerProvisionRequest) (*service.WorkerProvisionResult, error)
-	DeprovisionWorkerFn        func(ctx context.Context, req service.WorkerDeprovisionRequest) error
-	RefreshCredentialsFn       func(ctx context.Context, workerName string) (*service.RefreshResult, error)
-	RefreshWorkerCredentialsFn func(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error)
-	EnsureWorkerGatewayAuthFn  func(ctx context.Context, workerName, gatewayKey string) error
-	ReconcileExposeFn          func(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
-	EnsureServiceAccountFn     func(ctx context.Context, workerName string) error
-	DeleteServiceAccountFn     func(ctx context.Context, workerName string) error
-	DeleteCredentialsFn        func(ctx context.Context, workerName string) error
-	DeleteWorkerCredentialsFn  func(ctx context.Context, credentialName string) error
-	RequestSATokenFn           func(ctx context.Context, workerName string) (string, error)
-	LeaveAllWorkerRoomsFn      func(ctx context.Context, workerName string) error
-	DeleteWorkerRoomFn         func(ctx context.Context, roomID string) error
-	MatrixUserIDFn             func(name string) string
-	LoginAsHumanFn             func(ctx context.Context, username, password string) (string, error)
-	ProvisionTeamRoomsFn       func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
-	DeleteTeamRoomAliasesFn    func(ctx context.Context, teamName, leaderName string) error
-	DeleteWorkerRoomAliasFn    func(ctx context.Context, workerName string) error
+	ProvisionWorkerFn            func(ctx context.Context, req service.WorkerProvisionRequest) (*service.WorkerProvisionResult, error)
+	DeprovisionWorkerFn          func(ctx context.Context, req service.WorkerDeprovisionRequest) error
+	RefreshCredentialsFn         func(ctx context.Context, workerName string) (*service.RefreshResult, error)
+	RefreshWorkerCredentialsFn   func(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error)
+	EnsureWorkerGatewayAuthFn    func(ctx context.Context, workerName, gatewayKey string) error
+	ReconcileExposeFn            func(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
+	EnsureServiceAccountFn       func(ctx context.Context, workerName string) error
+	DeleteServiceAccountFn       func(ctx context.Context, workerName string) error
+	EnsureRemoteServiceAccountFn func(ctx context.Context, workerName, clusterID, namespace string) error
+	DeleteRemoteServiceAccountFn func(ctx context.Context, workerName, clusterID, namespace string) error
+	DeleteCredentialsFn          func(ctx context.Context, workerName string) error
+	DeleteWorkerCredentialsFn    func(ctx context.Context, credentialName string) error
+	RequestSATokenFn             func(ctx context.Context, workerName string) (string, error)
+	LeaveAllWorkerRoomsFn        func(ctx context.Context, workerName string) error
+	DeleteWorkerRoomFn           func(ctx context.Context, roomID string) error
+	MatrixUserIDFn               func(name string) string
+	LoginAsHumanFn               func(ctx context.Context, username, password string) (string, error)
+	ProvisionTeamRoomsFn         func(ctx context.Context, req service.TeamRoomRequest) (*service.TeamRoomResult, error)
+	DeleteTeamRoomAliasesFn      func(ctx context.Context, teamName, leaderName string) error
+	DeleteWorkerRoomAliasFn      func(ctx context.Context, workerName string) error
 
 	Calls struct {
 		ProvisionWorker          []service.WorkerProvisionRequest
 		DeprovisionWorker        []service.WorkerDeprovisionRequest
 		RefreshCredentials       []string
 		RefreshWorkerCredentials []workerCredentialCall
-		EnsureWorkerGatewayAuth  []string
+		EnsureWorkerGatewayAuth  []gatewayAuthCall
 		ReconcileExpose          []string
 		EnsureServiceAccount     []string
 		DeleteServiceAccount     []string
+		EnsureRemoteSA           []string
+		DeleteRemoteSA           []string
 		DeleteCredentials        []string
 		DeleteWorkerCredentials  []string
 		RequestSAToken           []string
@@ -55,6 +59,11 @@ type MockProvisioner struct {
 type workerCredentialCall struct {
 	CredentialName string
 	WorkerName     string
+}
+
+type gatewayAuthCall struct {
+	Name       string
+	GatewayKey string
 }
 
 type humanLoginCall struct {
@@ -79,6 +88,8 @@ func (m *MockProvisioner) Reset() {
 	m.ReconcileExposeFn = nil
 	m.EnsureServiceAccountFn = nil
 	m.DeleteServiceAccountFn = nil
+	m.EnsureRemoteServiceAccountFn = nil
+	m.DeleteRemoteServiceAccountFn = nil
 	m.DeleteCredentialsFn = nil
 	m.DeleteWorkerCredentialsFn = nil
 	m.RequestSATokenFn = nil
@@ -104,10 +115,12 @@ func (m *MockProvisioner) clearCallsLocked() {
 		DeprovisionWorker        []service.WorkerDeprovisionRequest
 		RefreshCredentials       []string
 		RefreshWorkerCredentials []workerCredentialCall
-		EnsureWorkerGatewayAuth  []string
+		EnsureWorkerGatewayAuth  []gatewayAuthCall
 		ReconcileExpose          []string
 		EnsureServiceAccount     []string
 		DeleteServiceAccount     []string
+		EnsureRemoteSA           []string
+		DeleteRemoteSA           []string
 		DeleteCredentials        []string
 		DeleteWorkerCredentials  []string
 		RequestSAToken           []string
@@ -186,7 +199,10 @@ func (m *MockProvisioner) RefreshWorkerCredentials(ctx context.Context, credenti
 
 func (m *MockProvisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error {
 	m.mu.Lock()
-	m.Calls.EnsureWorkerGatewayAuth = append(m.Calls.EnsureWorkerGatewayAuth, workerName)
+	m.Calls.EnsureWorkerGatewayAuth = append(m.Calls.EnsureWorkerGatewayAuth, gatewayAuthCall{
+		Name:       workerName,
+		GatewayKey: gatewayKey,
+	})
 	fn := m.EnsureWorkerGatewayAuthFn
 	m.mu.Unlock()
 	if fn != nil {
@@ -224,6 +240,28 @@ func (m *MockProvisioner) DeleteServiceAccount(ctx context.Context, workerName s
 	m.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, workerName)
+	}
+	return nil
+}
+
+func (m *MockProvisioner) EnsureRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error {
+	m.mu.Lock()
+	m.Calls.EnsureRemoteSA = append(m.Calls.EnsureRemoteSA, workerName)
+	fn := m.EnsureRemoteServiceAccountFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, workerName, clusterID, namespace)
+	}
+	return nil
+}
+
+func (m *MockProvisioner) DeleteRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error {
+	m.mu.Lock()
+	m.Calls.DeleteRemoteSA = append(m.Calls.DeleteRemoteSA, workerName)
+	fn := m.DeleteRemoteServiceAccountFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, workerName, clusterID, namespace)
 	}
 	return nil
 }
@@ -354,6 +392,10 @@ func (m *MockProvisioner) ServiceAccountCallCounts() (ensure, delete int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.Calls.EnsureServiceAccount), len(m.Calls.DeleteServiceAccount)
+}
+
+func (m *MockProvisioner) MatrixAppServiceEnabled() bool {
+	return false
 }
 
 var _ service.WorkerProvisioner = (*MockProvisioner)(nil)

@@ -23,16 +23,25 @@ import (
 
 // Config holds parameters for cluster initialization.
 type Config struct {
-	ManagerEnabled bool
-	ManagerModel   string
-	ManagerRuntime string
-	ManagerImage   string
-	AdminUser      string
-	AdminPassword  string
-	Namespace      string
-	IsEmbedded     bool   // embedded mode: use static service sources for local services
-	AgentFSDir     string // local filesystem root for agent workspaces (embedded mode)
-	ControllerName string // HICLAW_CONTROLLER_NAME; stamped as hiclaw.io/controller label on created CRs in incluster mode
+	ManagerEnabled   bool
+	ManagerModel     string
+	ManagerRuntime   string
+	ManagerImage     string
+	ManagerResources *v1beta1.AgentResourceRequirements
+	AdminUser        string
+	AdminPassword    string
+	Namespace        string
+	IsEmbedded       bool   // embedded mode: use static service sources for local services
+	AgentFSDir       string // local filesystem root for agent workspaces (embedded mode)
+	ControllerName   string // HICLAW_CONTROLLER_NAME; stamped as agentteams.io/controller label on created CRs in incluster mode
+
+	// Matrix AppService mode
+	AppServiceEnabled         bool
+	AppServiceID              string
+	AppServiceToken           string
+	AppServiceHSToken         string
+	AppServiceSenderLocalpart string
+	MatrixDomain              string // needed for AS registration YAML
 
 	// Provider selection — drives which initialization steps run.
 	GatewayProvider string // "higress" | "ai-gateway"
@@ -90,6 +99,16 @@ func (i *Initializer) Run(ctx context.Context) error {
 		return fmt.Errorf("admin registration failed: %w", err)
 	}
 	logger.Info("admin account ready", "user", i.Config.AdminUser)
+
+	// Register Matrix AppService if enabled (must happen after admin is ready)
+	if i.Config.AppServiceEnabled {
+		if err := i.registerAppService(ctx); err != nil {
+			return fmt.Errorf("Matrix AppService registration failed: %w", err)
+		}
+		logger.Info("Matrix AppService registered and verified",
+			"id", i.Config.AppServiceID,
+			"sender", i.Config.AppServiceSenderLocalpart)
+	}
 
 	if i.Gateway != nil {
 		if err := i.waitForGateway(ctx); err != nil {
@@ -191,6 +210,26 @@ func (i *Initializer) registerAdmin(ctx context.Context) error {
 		Password: i.Config.AdminPassword,
 	})
 	return err
+}
+
+// registerAppService registers the HiClaw controller as a Matrix Application
+// Service via the Tuwunel admin bot, then verifies with a smoke test.
+func (i *Initializer) registerAppService(ctx context.Context) error {
+	cfg := matrix.Config{
+		Domain:                    i.Config.MatrixDomain,
+		AppServiceID:              i.Config.AppServiceID,
+		AppServiceToken:           i.Config.AppServiceToken,
+		AppServiceHSToken:         i.Config.AppServiceHSToken,
+		AppServiceSenderLocalpart: i.Config.AppServiceSenderLocalpart,
+	}
+	reg := matrix.RenderAppServiceRegistration(cfg)
+	if err := i.Matrix.RegisterAppService(ctx, reg); err != nil {
+		return fmt.Errorf("register appservice: %w", err)
+	}
+	if err := i.Matrix.AppServiceSmokeTest(ctx); err != nil {
+		return fmt.Errorf("appservice smoke test: %w", err)
+	}
+	return nil
 }
 
 // waitForGateway polls the Higress Console until it responds.
@@ -457,6 +496,9 @@ func (i *Initializer) ensureManagerCR(ctx context.Context) error {
 	}
 	if i.Config.ManagerImage != "" {
 		spec["image"] = i.Config.ManagerImage
+	}
+	if i.Config.ManagerResources != nil {
+		spec["resources"] = i.Config.ManagerResources
 	}
 
 	metadata := map[string]interface{}{

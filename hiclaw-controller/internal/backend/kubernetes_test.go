@@ -81,6 +81,48 @@ func (f *fakeK8sCoreClient) ConfigMaps(namespace string) K8sConfigMapClient {
 	}
 }
 
+func (f *fakeK8sCoreClient) Services(_ string) K8sServiceClient {
+	return &fakeK8sServiceClient{}
+}
+
+func (f *fakeK8sCoreClient) Namespaces() K8sNamespaceClient {
+	return &fakeK8sNamespaceClient{}
+}
+
+func (f *fakeK8sCoreClient) ServiceAccounts(_ string) K8sServiceAccountClient {
+	panic("not implemented")
+}
+
+func (f *fakeK8sCoreClient) TokenReviews() K8sTokenReviewClient {
+	panic("not implemented")
+}
+
+// fakeK8sServiceClient is a no-op stub for tests that don't exercise Services.
+type fakeK8sServiceClient struct{}
+
+func (f *fakeK8sServiceClient) Get(_ context.Context, _ string, _ metav1.GetOptions) (*corev1.Service, error) {
+	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "")
+}
+func (f *fakeK8sServiceClient) Create(_ context.Context, svc *corev1.Service, _ metav1.CreateOptions) (*corev1.Service, error) {
+	return svc, nil
+}
+func (f *fakeK8sServiceClient) Update(_ context.Context, svc *corev1.Service, _ metav1.UpdateOptions) (*corev1.Service, error) {
+	return svc, nil
+}
+func (f *fakeK8sServiceClient) Delete(_ context.Context, _ string, _ metav1.DeleteOptions) error {
+	return nil
+}
+
+// fakeK8sNamespaceClient is a no-op stub for tests that don't exercise Namespaces.
+type fakeK8sNamespaceClient struct{}
+
+func (f *fakeK8sNamespaceClient) Get(_ context.Context, _ string, _ metav1.GetOptions) (*corev1.Namespace, error) {
+	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "")
+}
+func (f *fakeK8sNamespaceClient) Create(_ context.Context, ns *corev1.Namespace, _ metav1.CreateOptions) (*corev1.Namespace, error) {
+	return ns, nil
+}
+
 type fakeK8sConfigMapClient struct {
 	namespace string
 	store     map[string]*corev1.ConfigMap
@@ -259,8 +301,8 @@ func TestK8sStatus(t *testing.T) {
 			Name:      "hiclaw-worker-bob",
 			Namespace: "hiclaw",
 			Labels: map[string]string{
-				"app":              "hiclaw-worker",
-				"hiclaw.io/worker": "bob",
+				"app":                  "hiclaw-worker",
+				"agentteams.io/worker": "bob",
 			},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
@@ -334,8 +376,8 @@ func TestK8sWithPrefix(t *testing.T) {
 			Name:      "hiclaw-manager",
 			Namespace: "hiclaw",
 			Labels: map[string]string{
-				"app":               "hiclaw-manager",
-				"hiclaw.io/manager": "default",
+				"app":                   "hiclaw-manager",
+				"agentteams.io/manager": "default",
 			},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
@@ -432,18 +474,20 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		{"openclaw", RuntimeOpenClaw, "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 		{"hermes", RuntimeHermes, "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 		{"copaw", RuntimeCopaw, "/root/.copaw-worker", ""},
+		{"openhuman", RuntimeOpenHuman, "/home/openhuman/.openhuman", ""},
 		{"empty_default", "", "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:         "hiclaw",
-				WorkerImage:       "hiclaw/worker-agent:latest",
-				CopawWorkerImage:  "hiclaw/copaw-worker:latest",
-				HermesWorkerImage: "hiclaw/hermes-worker:latest",
-				WorkerCPU:         "1000m",
-				WorkerMemory:      "2Gi",
+				Namespace:            "hiclaw",
+				WorkerImage:          "hiclaw/worker-agent:latest",
+				CopawWorkerImage:     "hiclaw/copaw-worker:latest",
+				HermesWorkerImage:    "hiclaw/hermes-worker:latest",
+				OpenHumanWorkerImage: "hiclaw/openhuman-worker:latest",
+				WorkerCPU:            "1000m",
+				WorkerMemory:         "2Gi",
 			}, "hiclaw-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
@@ -488,21 +532,24 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw", RuntimeCopaw, "", "hiclaw/copaw-worker:latest", RuntimeCopaw},
 		{"explicit_hermes", RuntimeHermes, "", "hiclaw/hermes-worker:latest", RuntimeHermes},
 		{"explicit_openclaw", RuntimeOpenClaw, "", "hiclaw/worker-agent:latest", RuntimeOpenClaw},
+		{"explicit_openhuman", RuntimeOpenHuman, "", "hiclaw/openhuman-worker:latest", RuntimeOpenHuman},
 		{"empty_no_fallback", "", "", "hiclaw/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_with_copaw_fallback", "", RuntimeCopaw, "hiclaw/copaw-worker:latest", RuntimeCopaw},
 		{"empty_with_hermes_fallback", "", RuntimeHermes, "hiclaw/hermes-worker:latest", RuntimeHermes},
+		{"empty_with_openhuman_fallback", "", RuntimeOpenHuman, "hiclaw/openhuman-worker:latest", RuntimeOpenHuman},
 		{"explicit_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "hiclaw/worker-agent:latest", RuntimeOpenClaw},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:         "hiclaw",
-				WorkerImage:       "hiclaw/worker-agent:latest",
-				CopawWorkerImage:  "hiclaw/copaw-worker:latest",
-				HermesWorkerImage: "hiclaw/hermes-worker:latest",
-				WorkerCPU:         "1000m",
-				WorkerMemory:      "2Gi",
+				Namespace:            "hiclaw",
+				WorkerImage:          "hiclaw/worker-agent:latest",
+				CopawWorkerImage:     "hiclaw/copaw-worker:latest",
+				HermesWorkerImage:    "hiclaw/hermes-worker:latest",
+				OpenHumanWorkerImage: "hiclaw/openhuman-worker:latest",
+				WorkerCPU:            "1000m",
+				WorkerMemory:         "2Gi",
 			}, "hiclaw-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
@@ -520,7 +567,7 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 			if got := pod.Spec.Containers[0].Image; got != tc.wantImage {
 				t.Fatalf("image = %q, want %q", got, tc.wantImage)
 			}
-			if got := pod.Labels["hiclaw.io/runtime"]; got != tc.wantLabel {
+			if got := pod.Labels["agentteams.io/runtime"]; got != tc.wantLabel {
 				t.Fatalf("runtime label = %q, want %q", got, tc.wantLabel)
 			}
 		})
@@ -579,8 +626,8 @@ spec:
 	if _, err := b.Create(context.Background(), CreateRequest{
 		Name: "alice",
 		Labels: map[string]string{
-			"app":              "hiclaw-worker",
-			"hiclaw.io/worker": "alice",
+			"app":                  "hiclaw-worker",
+			"agentteams.io/worker": "alice",
 		},
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -599,7 +646,7 @@ spec:
 	if pod.Labels["nsm.alibabacloud.com/inject-sidecar"] != "ansm-magic-xxx" {
 		t.Fatalf("ANSM label: %+v", pod.Labels)
 	}
-	if pod.Labels["hiclaw.io/worker"] != "alice" || pod.Labels["app"] != "hiclaw-worker" {
+	if pod.Labels["agentteams.io/worker"] != "alice" || pod.Labels["app"] != "hiclaw-worker" {
 		t.Fatalf("overlay labels: %+v", pod.Labels)
 	}
 	if pod.Spec.SecurityContext == nil || len(pod.Spec.SecurityContext.Sysctls) != 1 {
@@ -790,6 +837,23 @@ func TestK8sCreate_ResourcesOverridePartial(t *testing.T) {
 	}
 }
 
+func TestK8sCreate_InvalidResourcesOverrideReturnsError(t *testing.T) {
+	b, _ := newTestK8sBackendWithFake(K8sConfig{})
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Create panicked on invalid resources override: %v", r)
+		}
+	}()
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:      "invalid-resources",
+		Resources: &ResourceRequirements{CPULimit: "not-cpu"},
+	}); err == nil {
+		t.Fatal("expected Create to return an error for invalid resources override")
+	}
+}
+
 // K10: Resources override wins over a template that also specifies resources
 // (overlay.ResourcesOverride takes precedence over template container.Resources).
 func TestK8sCreate_ResourcesOverrideBeatsTemplate(t *testing.T) {
@@ -847,8 +911,8 @@ func TestK8sCreate_CustomResourcePrefix(t *testing.T) {
 		Name:               "alice",
 		ServiceAccountName: "teamB-worker-alice",
 		Labels: map[string]string{
-			"app":              "teamB-worker",
-			"hiclaw.io/worker": "alice",
+			"app":                  "teamB-worker",
+			"agentteams.io/worker": "alice",
 		},
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -883,5 +947,282 @@ func TestK8sCreate_DefaultSAFallback(t *testing.T) {
 	}
 	if pod.Spec.ServiceAccountName != "acme-worker-bob" {
 		t.Fatalf("SA = %q, want acme-worker-bob", pod.Spec.ServiceAccountName)
+	}
+}
+
+// ── Cross-cluster routing tests ──────────────────────────────────────────
+
+// statefulNamespaceClient backs ensureRemoteNamespace tests; it tracks both
+// stored namespaces and a configurable Get error to exercise the IsNotFound /
+// IsAlreadyExists branches in the backend.
+type statefulNamespaceClient struct {
+	store       map[string]*corev1.Namespace
+	createErr   error
+	getCalls    int
+	createCalls int
+}
+
+func (s *statefulNamespaceClient) Get(_ context.Context, name string, _ metav1.GetOptions) (*corev1.Namespace, error) {
+	s.getCalls++
+	if ns, ok := s.store[name]; ok {
+		return ns.DeepCopy(), nil
+	}
+	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, name)
+}
+
+func (s *statefulNamespaceClient) Create(_ context.Context, ns *corev1.Namespace, _ metav1.CreateOptions) (*corev1.Namespace, error) {
+	s.createCalls++
+	if s.createErr != nil {
+		return nil, s.createErr
+	}
+	if _, exists := s.store[ns.Name]; exists {
+		return nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "namespaces"}, ns.Name)
+	}
+	cp := ns.DeepCopy()
+	s.store[cp.Name] = cp
+	return cp.DeepCopy(), nil
+}
+
+// remoteFakeClient wraps fakeK8sCoreClient with a stateful Namespace client so
+// ensureRemoteNamespace can be exercised end-to-end.
+type remoteFakeClient struct {
+	*fakeK8sCoreClient
+	nsClient *statefulNamespaceClient
+}
+
+func (r *remoteFakeClient) Namespaces() K8sNamespaceClient { return r.nsClient }
+
+func newRemoteFakeClient() *remoteFakeClient {
+	return &remoteFakeClient{
+		fakeK8sCoreClient: newFakeK8sCoreClient(),
+		nsClient: &statefulNamespaceClient{
+			store: map[string]*corev1.Namespace{},
+		},
+	}
+}
+
+// fakeRemoteCache implements RemoteClientProvider by serving a single
+// pre-built K8sCoreClient regardless of clusterID. Tests can also wire in
+// a configurable error to exercise resolveClient failure paths.
+type fakeRemoteCache struct {
+	client    K8sCoreClient
+	resolveEr error
+	calls     int
+	lastID    string
+}
+
+func (f *fakeRemoteCache) ResolveClient(_ context.Context, clusterID string) (K8sCoreClient, error) {
+	f.calls++
+	f.lastID = clusterID
+	if f.resolveEr != nil {
+		return nil, f.resolveEr
+	}
+	return f.client, nil
+}
+
+func TestK8sResolveClient_Local(t *testing.T) {
+	b := newTestK8sBackend()
+
+	cases := []string{"", v1beta1.DeployModeLocal}
+	for _, mode := range cases {
+		t.Run("mode="+mode, func(t *testing.T) {
+			cli, ns, err := b.resolveClient(context.Background(), mode, "", "")
+			if err != nil {
+				t.Fatalf("resolveClient(%q): %v", mode, err)
+			}
+			if cli != b.client {
+				t.Errorf("expected local client to be returned for mode %q", mode)
+			}
+			if ns != b.namespace {
+				t.Errorf("namespace = %q, want %q", ns, b.namespace)
+			}
+		})
+	}
+}
+
+func TestK8sResolveClient_Remote(t *testing.T) {
+	remote := newRemoteFakeClient()
+	cache := &fakeRemoteCache{client: remote}
+
+	b, _ := newTestK8sBackendWithFake(K8sConfig{})
+	b.remoteCache = cache
+
+	cli, ns, err := b.resolveClient(context.Background(), v1beta1.DeployModeRemote, "c-1", "team-a")
+	if err != nil {
+		t.Fatalf("resolveClient: %v", err)
+	}
+	if cli != remote {
+		t.Error("expected remote client from cache")
+	}
+	if ns != "team-a" {
+		t.Errorf("namespace = %q, want team-a", ns)
+	}
+	if cache.calls != 1 || cache.lastID != "c-1" {
+		t.Errorf("cache.ResolveClient invocation = (%d, %q), want (1, c-1)", cache.calls, cache.lastID)
+	}
+}
+
+// TestK8sResolveClient_RemoteEmptyNamespaceFallsBack covers the helper's
+// fallback from an empty TargetNamespace to the backend's local namespace.
+func TestK8sResolveClient_RemoteEmptyNamespaceFallsBack(t *testing.T) {
+	remote := newRemoteFakeClient()
+	cache := &fakeRemoteCache{client: remote}
+
+	b, _ := newTestK8sBackendWithFake(K8sConfig{})
+	b.remoteCache = cache
+
+	_, ns, err := b.resolveClient(context.Background(), v1beta1.DeployModeRemote, "c-1", "")
+	if err != nil {
+		t.Fatalf("resolveClient: %v", err)
+	}
+	if ns != b.namespace {
+		t.Errorf("namespace = %q, want backend default %q", ns, b.namespace)
+	}
+}
+
+func TestK8sResolveClient_RemoteWithoutCache(t *testing.T) {
+	b, _ := newTestK8sBackendWithFake(K8sConfig{})
+	// remoteCache intentionally left nil.
+
+	if _, _, err := b.resolveClient(context.Background(), v1beta1.DeployModeRemote, "c-1", "team-a"); err == nil {
+		t.Fatal("expected error when DeployMode=Remote but remoteCache is nil")
+	}
+}
+
+func TestK8sResolveClient_RemoteCacheError(t *testing.T) {
+	cache := &fakeRemoteCache{resolveEr: apierrors.NewServiceUnavailable("sts down")}
+	b, _ := newTestK8sBackendWithFake(K8sConfig{})
+	b.remoteCache = cache
+
+	if _, _, err := b.resolveClient(context.Background(), v1beta1.DeployModeRemote, "c-1", "team-a"); err == nil {
+		t.Fatal("expected error when remote cache returns error")
+	}
+}
+
+func TestK8sEnsureRemoteNamespace_CreatesWhenAbsent(t *testing.T) {
+	b := newTestK8sBackend()
+	remote := newRemoteFakeClient()
+
+	if err := b.ensureRemoteNamespace(context.Background(), remote, "team-a"); err != nil {
+		t.Fatalf("ensureRemoteNamespace: %v", err)
+	}
+	if remote.nsClient.createCalls != 1 {
+		t.Errorf("Namespaces().Create calls = %d, want 1", remote.nsClient.createCalls)
+	}
+	if _, ok := remote.nsClient.store["team-a"]; !ok {
+		t.Error("namespace must be stored after creation")
+	}
+}
+
+func TestK8sEnsureRemoteNamespace_IdempotentExisting(t *testing.T) {
+	b := newTestK8sBackend()
+	remote := newRemoteFakeClient()
+	remote.nsClient.store["team-a"] = &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a"},
+	}
+
+	if err := b.ensureRemoteNamespace(context.Background(), remote, "team-a"); err != nil {
+		t.Fatalf("ensureRemoteNamespace (existing): %v", err)
+	}
+	if remote.nsClient.createCalls != 0 {
+		t.Errorf("Create must not be called when namespace already exists; calls=%d", remote.nsClient.createCalls)
+	}
+}
+
+func TestK8sEnsureRemoteNamespace_AlreadyExistsRace(t *testing.T) {
+	b := newTestK8sBackend()
+	remote := newRemoteFakeClient()
+	// Simulate a race where Get returns NotFound but the subsequent Create
+	// loses to a concurrent creator.
+	remote.nsClient.createErr = apierrors.NewAlreadyExists(schema.GroupResource{Resource: "namespaces"}, "team-a")
+
+	if err := b.ensureRemoteNamespace(context.Background(), remote, "team-a"); err != nil {
+		t.Fatalf("AlreadyExists must be tolerated, got %v", err)
+	}
+}
+
+// TestK8sCreate_RemoteSkipsOwnerReference verifies that Create() skips
+// stamping a controller OwnerReference when the request targets a remote
+// cluster — cross-cluster ownerRefs are not possible.
+func TestK8sCreate_RemoteSkipsOwnerReference(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+
+	remote := newRemoteFakeClient()
+	cache := &fakeRemoteCache{client: remote}
+
+	local := newFakeK8sCoreClient()
+	b := NewK8sBackendWithRemote(local, cache, K8sConfig{
+		Namespace:   "hiclaw",
+		WorkerImage: "hiclaw/worker-agent:latest",
+	}, "hiclaw-worker-", scheme)
+
+	owner := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "hiclaw", UID: "u-1"},
+	}
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:            "alice",
+		Owner:           owner,
+		DeployMode:      v1beta1.DeployModeRemote,
+		TargetClusterID: "c-1",
+		TargetNamespace: "team-a",
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Pod must land in the REMOTE client at the target namespace, not the local one.
+	pod, err := remote.Pods("team-a").Get(context.Background(), "hiclaw-worker-alice", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("remote pod lookup: %v", err)
+	}
+	if len(pod.OwnerReferences) != 0 {
+		t.Errorf("remote pod must have NO ownerReferences (cross-cluster ownerRef impossible), got %+v", pod.OwnerReferences)
+	}
+
+	// Sanity: target namespace must have been ensured.
+	if _, ok := remote.nsClient.store["team-a"]; !ok {
+		t.Error("ensureRemoteNamespace must run before Create in Remote mode")
+	}
+
+	// Local backend must NOT have received the pod.
+	if _, err := local.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-alice", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("local backend must not store the remote pod, got err=%v", err)
+	}
+}
+
+// TestK8sCreate_LocalKeepsOwnerReference is the complementary assertion:
+// when DeployMode is empty (Local), Create still stamps the controller
+// OwnerReference. This guards against a refactor that accidentally broadens
+// the "skip ownerRef" branch beyond Remote mode.
+func TestK8sCreate_LocalKeepsOwnerReference(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+
+	client := newFakeK8sCoreClient()
+	b := NewK8sBackendWithClient(client, K8sConfig{
+		Namespace:   "hiclaw",
+		WorkerImage: "hiclaw/worker-agent:latest",
+	}, "hiclaw-worker-", scheme)
+
+	owner := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "hiclaw", UID: "u-2"},
+	}
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:  "bob",
+		Owner: owner,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	pod, err := client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-bob", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(pod.OwnerReferences) != 1 {
+		t.Fatalf("expected 1 ownerReference for Local pod, got %+v", pod.OwnerReferences)
 	}
 }

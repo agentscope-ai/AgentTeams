@@ -23,11 +23,12 @@ func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult)
 		"HICLAW_WORKER_NAME":         workerName,
 		"HICLAW_WORKER_GATEWAY_KEY":  prov.GatewayKey,
 		"HICLAW_WORKER_MATRIX_TOKEN": prov.MatrixToken,
+		"HICLAW_WORKER_ROOM_ID":      prov.RoomID,
 		"HICLAW_FS_ACCESS_KEY":       workerName,
 		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
 		"OPENCLAW_DISABLE_BONJOUR":   "1",
 		"OPENCLAW_MDNS_HOSTNAME":     "hiclaw-w-" + workerName,
-		"HICLAW_CONSOLE_PORT":       "8088",
+		"HICLAW_CONSOLE_PORT":        "8088",
 		"HOME":                       "/root/hiclaw-fs/agents/" + workerName,
 	}
 
@@ -45,7 +46,14 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	env := map[string]string{
 		"HICLAW_MANAGER_NAME":        managerName,
 		"HICLAW_MANAGER_GATEWAY_KEY": prov.GatewayKey,
-		"HICLAW_MANAGER_PASSWORD":    prov.MatrixPassword,
+		// In AS mode MatrixPassword is empty; set a placeholder so the
+		// entrypoint's :? validation passes. The password is never used
+		// for login in AS mode (token obtained via AS login instead).
+		"HICLAW_MANAGER_PASSWORD":    valueOrPlaceholder(prov.MatrixPassword),
+		// Pre-inject the Matrix access token so the Manager entrypoint can
+		// skip password-based login. Required in AppService mode (no password)
+		// and beneficial in legacy mode (avoids a redundant login round-trip).
+		"HICLAW_MANAGER_MATRIX_TOKEN": prov.MatrixToken,
 		"HICLAW_FS_ACCESS_KEY":       managerName,
 		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
 		"OPENCLAW_DISABLE_BONJOUR":   "1",
@@ -62,6 +70,9 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	}
 	if b.defaults.AdminUser != "" {
 		env["HICLAW_ADMIN_USER"] = b.defaults.AdminUser
+	}
+	if b.defaults.DefaultWorkerRuntime != "" {
+		env["HICLAW_DEFAULT_WORKER_RUNTIME"] = b.defaults.DefaultWorkerRuntime
 	}
 
 	cfg := spec.Config
@@ -81,13 +92,13 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 
 func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	for k, v := range map[string]string{
-		"HICLAW_MATRIX_DOMAIN":   b.defaults.MatrixDomain,
-		"HICLAW_FS_ENDPOINT":     b.defaults.FSEndpoint,
-		"HICLAW_FS_BUCKET":       b.defaults.FSBucket,
-		"HICLAW_STORAGE_PREFIX":  b.defaults.StoragePrefix,
-		"HICLAW_CONTROLLER_URL":  b.defaults.ControllerURL,
-		"HICLAW_AI_GATEWAY_URL":  b.defaults.AIGatewayURL,
-		"HICLAW_MATRIX_URL":      b.defaults.MatrixURL,
+		"HICLAW_MATRIX_DOMAIN":  b.defaults.MatrixDomain,
+		"HICLAW_FS_ENDPOINT":    b.defaults.FSEndpoint,
+		"HICLAW_FS_BUCKET":      b.defaults.FSBucket,
+		"HICLAW_STORAGE_PREFIX": b.defaults.StoragePrefix,
+		"HICLAW_CONTROLLER_URL": b.defaults.ControllerURL,
+		"HICLAW_AI_GATEWAY_URL": b.defaults.AIGatewayURL,
+		"HICLAW_MATRIX_URL":     b.defaults.MatrixURL,
 	} {
 		if v != "" {
 			env[k] = v
@@ -138,4 +149,13 @@ func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	if b.defaults.NacosAuthType != "" {
 		env["NACOS_AUTH_TYPE"] = b.defaults.NacosAuthType
 	}
+}
+
+// valueOrPlaceholder returns v if non-empty, otherwise a harmless placeholder.
+// Used for env vars that must be present but are unused in certain modes.
+func valueOrPlaceholder(v string) string {
+	if v != "" {
+		return v
+	}
+	return "as-mode-not-used"
 }

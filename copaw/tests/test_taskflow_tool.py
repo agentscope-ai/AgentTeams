@@ -24,7 +24,7 @@ def _response_json(response):
 
 
 def _set_actor(monkeypatch, actor: str) -> None:
-    monkeypatch.setenv("HICLAW_MATRIX_USER_ID", actor)
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_USER_ID", actor)
 
 
 def _mock_sync(monkeypatch) -> MagicMock:

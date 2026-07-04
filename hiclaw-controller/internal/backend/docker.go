@@ -19,11 +19,12 @@ import (
 
 // DockerConfig holds Docker backend configuration.
 type DockerConfig struct {
-	SocketPath        string
-	WorkerImage       string // default worker image (HICLAW_WORKER_IMAGE)
-	CopawWorkerImage  string // default copaw worker image (HICLAW_COPAW_WORKER_IMAGE)
-	HermesWorkerImage string // default hermes worker image (HICLAW_HERMES_WORKER_IMAGE)
-	DefaultNetwork    string // default Docker network (default "hiclaw-net")
+	SocketPath           string
+	WorkerImage          string // default worker image (HICLAW_WORKER_IMAGE)
+	CopawWorkerImage     string // default copaw worker image (HICLAW_COPAW_WORKER_IMAGE)
+	HermesWorkerImage    string // default hermes worker image (HICLAW_HERMES_WORKER_IMAGE)
+	OpenHumanWorkerImage string // default openhuman worker image (HICLAW_OPENHUMAN_WORKER_IMAGE)
+	DefaultNetwork       string // default Docker network (default "hiclaw-net")
 }
 
 // DockerBackend manages worker containers via the Docker Engine API over a Unix socket.
@@ -110,6 +111,8 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			image = d.config.CopawWorkerImage
 		case req.Runtime == RuntimeHermes && d.config.HermesWorkerImage != "":
 			image = d.config.HermesWorkerImage
+		case req.Runtime == RuntimeOpenHuman && d.config.OpenHumanWorkerImage != "":
+			image = d.config.OpenHumanWorkerImage
 		default:
 			image = d.config.WorkerImage
 		}
@@ -132,9 +135,45 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 		req.Env["HICLAW_CONTROLLER_URL"] = req.ControllerURL
 	}
 
-	// Infer WorkingDir from HOME env if not set
+	// For OpenHuman runtime, map canonical HICLAW_* env vars to the MATRIX_*
+	// aliases expected by openhuman-worker-entrypoint.sh (fallback path;
+	// primary source is openclaw.json pulled from centralized storage).
+	if req.Runtime == RuntimeOpenHuman && req.Env != nil {
+		if v := req.Env["HICLAW_WORKER_MATRIX_TOKEN"]; v != "" {
+			req.Env["MATRIX_ACCESS_TOKEN"] = v
+		}
+		if v := req.Env["HICLAW_WORKER_ROOM_ID"]; v != "" {
+			req.Env["MATRIX_HOME_ROOM_ID"] = v
+		}
+		if v := req.Env["HICLAW_MATRIX_URL"]; v != "" {
+			req.Env["MATRIX_HOMESERVER_URL"] = v
+		}
+		// Build MATRIX_USER_ID (fallback; primary is openclaw.json channels.matrix.userId).
+		if domain := req.Env["HICLAW_MATRIX_DOMAIN"]; domain != "" && req.Env["HICLAW_WORKER_NAME"] != "" {
+			req.Env["MATRIX_USER_ID"] = fmt.Sprintf("@%s:%s", req.Env["HICLAW_WORKER_NAME"], domain)
+		}
+		// Build MATRIX_ALLOWED_USERS (fallback; primary is openclaw.json dm.allowFrom + groupAllowFrom).
+		var allowedUsers []string
+		if domain := req.Env["HICLAW_MATRIX_DOMAIN"]; domain != "" {
+			if admin := os.Getenv("HICLAW_ADMIN_USER"); admin != "" {
+				allowedUsers = append(allowedUsers, fmt.Sprintf("@%s:%s", admin, domain))
+			}
+			// Manager Matrix username is "manager" by convention (see agentconfig/generator.go).
+			allowedUsers = append(allowedUsers, fmt.Sprintf("@manager:%s", domain))
+		}
+		if len(allowedUsers) > 0 {
+			req.Env["MATRIX_ALLOWED_USERS"] = strings.Join(allowedUsers, ",")
+		}
+	}
+
+	// Infer WorkingDir from HOME env if not set.
+	// OpenHuman uses a dedicated non-root workspace baked into the image;
+	// other runtimes (openclaw / copaw / hermes) derive from HOME, which
+	// the service layer already sets to the per-worker hiclaw-fs path.
 	if req.WorkingDir == "" {
-		if home, ok := req.Env["HOME"]; ok {
+		if req.Runtime == RuntimeOpenHuman {
+			req.WorkingDir = "/home/openhuman/.openhuman"
+		} else if home, ok := req.Env["HOME"]; ok {
 			req.WorkingDir = home
 		}
 	}

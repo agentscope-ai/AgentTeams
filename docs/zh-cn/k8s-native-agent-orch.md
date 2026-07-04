@@ -73,7 +73,7 @@ Admin（人类管理员）
 HiClaw 定义了四种核心资源类型，全部采用 Kubernetes CRD 风格的声明式 YAML：
 
 ```
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 ```
 
 #### Worker — 基本执行单元
@@ -81,7 +81,7 @@ apiVersion: hiclaw.io/v1beta1
 **命名说明：** Python Worker 运行时当前名称为 **QwenPaw**（镜像 `hiclaw-copaw-worker`）。早期文档曾使用 **CoPaw**，指同一运行时。
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -109,7 +109,7 @@ spec:
 #### Team — 协作单元
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: frontend-team
@@ -156,7 +156,7 @@ Leader DM:    Admin ↔ Leader                     ← 团队管理与对齐
 #### Human — 真人用户
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: zhangsan
@@ -171,7 +171,7 @@ spec:
 #### Manager — 协调 Agent（CRD）
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Manager
 metadata:
   name: default                       # 嵌入式部署常见主实例名

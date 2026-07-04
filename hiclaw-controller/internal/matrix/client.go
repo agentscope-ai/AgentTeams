@@ -99,6 +99,39 @@ type Client interface {
 
 	// UserID builds a full Matrix user ID from a localpart.
 	UserID(localpart string) string
+
+	// EnsureAppServiceUser registers a user via the Application Service API.
+	// Uses as_token authentication instead of registration_token.
+	// Returns credentials with empty Password. If the user already exists,
+	// falls back to LoginAppServiceUser.
+	EnsureAppServiceUser(ctx context.Context, username string) (*UserCredentials, error)
+
+	// LoginAppServiceUser obtains an access token for a user via the
+	// Application Service login flow (m.login.application_service).
+	// The as_token is used as Bearer authentication; no password needed.
+	LoginAppServiceUser(ctx context.Context, username string) (string, error)
+
+	// SetPasswordAsAdmin sets a user's password via the Tuwunel admin bot.
+	// Used to set initial passwords for Human users in AppService mode so
+	// they can still log in via Element.
+	SetPasswordAsAdmin(ctx context.Context, userID, password string) error
+
+	// RegisterAppService registers an Application Service with the homeserver
+	// via the admin bot command. Includes smoke-test-first idempotency and
+	// unregister-before-register fallback for safe token rotation.
+	RegisterAppService(ctx context.Context, reg AppServiceRegistration) error
+
+	// UnregisterAppService removes an Application Service registration by ID.
+	// Uses admin bot command; does not require a valid as_token.
+	UnregisterAppService(ctx context.Context, id string) error
+
+	// AppServiceSmokeTest verifies that a previously registered AppService
+	// is active by attempting an AS login as the sender_localpart user.
+	AppServiceSmokeTest(ctx context.Context) error
+
+	// VerifyAccessToken checks whether a user access token is still valid
+	// by calling GET /_matrix/client/v3/account/whoami. Returns nil if valid.
+	VerifyAccessToken(ctx context.Context, accessToken string) error
 }
 
 // TuwunelClient implements Client for Tuwunel (conduwuit) homeservers.
@@ -266,6 +299,113 @@ func (c *TuwunelClient) Login(ctx context.Context, username, password string) (s
 	return resp.AccessToken, nil
 }
 
+// EnsureAppServiceUser registers a user via the Matrix Application Service API.
+// It uses the as_token as Bearer authentication instead of a registration token.
+// If the user already exists (M_USER_IN_USE), it falls back to LoginAppServiceUser.
+func (c *TuwunelClient) EnsureAppServiceUser(ctx context.Context, username string) (*UserCredentials, error) {
+	regBody := map[string]interface{}{
+		"type":     "m.login.application_service",
+		"username": username,
+	}
+	var regResp struct {
+		UserID      string `json:"user_id"`
+		AccessToken string `json:"access_token"`
+		ErrCode     string `json:"errcode"`
+		Error       string `json:"error"`
+	}
+
+	statusCode, _, err := c.doJSONWithASToken(ctx, http.MethodPost,
+		"/_matrix/client/v3/register", regBody, &regResp)
+	if err != nil {
+		return nil, fmt.Errorf("AS register user %s: %w", username, err)
+	}
+
+	if statusCode == http.StatusOK || statusCode == http.StatusCreated {
+		return &UserCredentials{
+			UserID:      regResp.UserID,
+			AccessToken: regResp.AccessToken,
+			Password:    "",
+			Created:     true,
+		}, nil
+	}
+
+	// User already exists → fall back to AS login
+	if regResp.ErrCode == "M_USER_IN_USE" {
+		token, loginErr := c.LoginAppServiceUser(ctx, username)
+		if loginErr != nil {
+			return nil, fmt.Errorf("AS user %s exists but AS login failed: %w", username, loginErr)
+		}
+		return &UserCredentials{
+			UserID:      c.UserID(username),
+			AccessToken: token,
+			Password:    "",
+			Created:     false,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("AS register user %s: %s (%s)", username, regResp.ErrCode, regResp.Error)
+}
+
+// LoginAppServiceUser obtains an access token for a user via the Application
+// Service login flow. The as_token authenticates the request; no user password
+// is needed.
+func (c *TuwunelClient) LoginAppServiceUser(ctx context.Context, username string) (string, error) {
+	body := map[string]interface{}{
+		"type": "m.login.application_service",
+		"identifier": map[string]string{
+			"type": "m.id.user",
+			"user": username,
+		},
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+		ErrCode     string `json:"errcode"`
+		Error       string `json:"error"`
+	}
+
+	statusCode, respBody, err := c.doJSONWithASToken(ctx, http.MethodPost,
+		"/_matrix/client/v3/login", body, &resp)
+	if err != nil {
+		return "", fmt.Errorf("AS login %s: %w", username, err)
+	}
+	if statusCode != http.StatusOK {
+		return "", fmt.Errorf("AS login %s: HTTP %d %s %s: %s",
+			username, statusCode, resp.ErrCode, resp.Error, truncate(respBody, 500))
+	}
+	if resp.AccessToken == "" {
+		return "", fmt.Errorf("AS login %s: empty access token", username)
+	}
+	return resp.AccessToken, nil
+}
+
+// SetPasswordAsAdmin sets a user's password via the Tuwunel admin bot command.
+// This is used in AppService mode to set initial passwords for Human users
+// so they can still log in via Element with username/password.
+func (c *TuwunelClient) SetPasswordAsAdmin(ctx context.Context, userID, password string) error {
+	cmd := fmt.Sprintf("!admin users reset-password %s %s", userID, password)
+	return c.AdminCommand(ctx, cmd)
+}
+
+// doJSONWithASToken performs an HTTP request authenticated with the AppService
+// as_token instead of a user access token. Reuses the same JSON plumbing as
+// doJSON but substitutes the Bearer token.
+func (c *TuwunelClient) doJSONWithASToken(ctx context.Context, method, path string, reqBody interface{}, respOut interface{}) (int, []byte, error) {
+	return c.doJSON(ctx, method, path, c.config.AppServiceToken, reqBody, respOut)
+}
+
+// VerifyAccessToken checks whether a user access token is still valid
+// by calling GET /_matrix/client/v3/account/whoami.
+func (c *TuwunelClient) VerifyAccessToken(ctx context.Context, accessToken string) error {
+	statusCode, respBody, err := c.doJSON(ctx, http.MethodGet,
+		"/_matrix/client/v3/account/whoami", accessToken, nil, nil)
+	if err != nil {
+		return fmt.Errorf("verify access token: %w", err)
+	}
+	if statusCode != http.StatusOK {
+		return fmt.Errorf("verify access token: HTTP %d: %s", statusCode, truncate(respBody, 200))
+	}
+	return nil
+}
 func (c *TuwunelClient) SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error {
 	path := fmt.Sprintf("/_matrix/client/v3/profile/%s/displayname", url.PathEscape(userID))
 	body := map[string]string{"displayname": displayName}

@@ -19,6 +19,8 @@ import (
 // optimistic locking conflicts when the controller updates status between Get and Update.
 const k8sUpdateMaxRetries = 3
 
+const teamWorkerMembersField = "spec.workerMembers.name"
+
 // ResourceHandler handles declarative CRUD operations on CRs.
 //
 // Post-refactor contract:
@@ -34,7 +36,7 @@ type ResourceHandler struct {
 	namespace string
 	backend   *backend.Registry
 
-	// controllerName is stamped as hiclaw.io/controller on every CR this
+	// controllerName is stamped as agentteams.io/controller on every CR this
 	// handler creates, overwriting any value supplied by the client. This
 	// enforces that HTTP-created resources always belong to the serving
 	// controller instance, regardless of what the caller attempts to set.
@@ -44,7 +46,7 @@ type ResourceHandler struct {
 
 // NewResourceHandler creates a handler. backend may be nil, in which case
 // runtime status is omitted from synthetic team member responses.
-// controllerName, when non-empty, is force-stamped as hiclaw.io/controller
+// controllerName, when non-empty, is force-stamped as agentteams.io/controller
 // on every CR this handler creates so HTTP-created resources cannot escape
 // the serving controller instance's cache scope.
 func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, controllerName string) *ResourceHandler {
@@ -104,6 +106,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		},
 		Spec: v1beta1.WorkerSpec{
 			Model:            req.Model,
+			ModelProvider:    req.ModelProvider,
 			WorkerName:       req.WorkerName,
 			Runtime:          req.Runtime,
 			Image:            req.Image,
@@ -115,6 +118,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Package:          req.Package,
 			Expose:           req.Expose,
 			ChannelPolicy:    req.ChannelPolicy,
+			Resources:        req.Resources,
 			ContainerManaged: &containerManaged,
 			State:            req.State,
 		},
@@ -156,7 +160,14 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker)
 	switch {
 	case err == nil:
-		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
+		resp := workerToResponse(&worker)
+		if team, member, ok, terr := h.findTeamMember(r.Context(), name); terr != nil {
+			writeK8sError(w, "get worker", terr)
+			return
+		} else if ok {
+			h.applyTeamMember(&resp, team, member)
+		}
+		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
 	case !apierrors.IsNotFound(err):
 		writeK8sError(w, "get worker", err)
@@ -181,22 +192,29 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 
 	workers := make([]WorkerResponse, 0)
 
-	// Standalone workers only when not filtering by team (team members don't
-	// have Worker CRs).
-	if teamFilter == "" {
-		var list v1beta1.WorkerList
-		if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
-			writeK8sError(w, "list workers", err)
+	seen := make(map[string]struct{})
+	var list v1beta1.WorkerList
+	if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
+		writeK8sError(w, "list workers", err)
+		return
+	}
+	for i := range list.Items {
+		resp := workerToResponse(&list.Items[i])
+		if team, member, ok, terr := h.findTeamMember(r.Context(), list.Items[i].Name); terr != nil {
+			writeK8sError(w, "list workers: lookup team member", terr)
 			return
+		} else if ok {
+			h.applyTeamMember(&resp, team, member)
+		} else if isTeamMemberWorker(&list.Items[i]) {
+			// Defensive: legacy resource created before the refactor. Skip
+			// to avoid duplicating the synthesized team view.
+			continue
 		}
-		for i := range list.Items {
-			if isTeamMemberWorker(&list.Items[i]) {
-				// Defensive: legacy resource created before the refactor. Skip
-				// to avoid duplicating the synthesized team view.
-				continue
-			}
-			workers = append(workers, workerToResponse(&list.Items[i]))
+		if teamFilter != "" && resp.Team != teamFilter {
+			continue
 		}
+		workers = append(workers, resp)
+		seen[resp.Name] = struct{}{}
 	}
 
 	var teams v1beta1.TeamList
@@ -210,9 +228,25 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		if teamFilter != "" && team.Name != teamFilter {
 			continue
 		}
-		workers = append(workers, h.teamMemberToResponse(r.Context(), team, team.Spec.Leader.Name))
+		if team.Spec.Leader.Name != "" {
+			if _, ok := seen[team.Spec.Leader.Name]; !ok {
+				workers = append(workers, h.teamMemberToResponse(r.Context(), team, team.Spec.Leader.Name))
+				seen[team.Spec.Leader.Name] = struct{}{}
+			}
+		}
 		for _, worker := range team.Spec.Workers {
+			if _, ok := seen[worker.Name]; ok {
+				continue
+			}
 			workers = append(workers, h.teamMemberToResponse(r.Context(), team, worker.Name))
+			seen[worker.Name] = struct{}{}
+		}
+		for _, ref := range team.Spec.WorkerMembers {
+			if _, ok := seen[ref.Name]; ok {
+				continue
+			}
+			workers = append(workers, h.teamMemberToResponse(r.Context(), team, ref.Name))
+			seen[ref.Name] = struct{}{}
 		}
 	}
 
@@ -226,9 +260,9 @@ func isTeamMemberWorker(w *v1beta1.Worker) bool {
 	if w.Annotations == nil {
 		return false
 	}
-	return w.Annotations["hiclaw.io/team"] != "" ||
-		w.Annotations["hiclaw.io/team-leader"] != "" ||
-		w.Annotations["hiclaw.io/role"] == "team_leader"
+	return w.Annotations["agentteams.io/team"] != "" ||
+		w.Annotations["agentteams.io/team-leader"] != "" ||
+		w.Annotations["agentteams.io/role"] == "team_leader"
 }
 
 func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
@@ -264,6 +298,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.Model != "" {
 			worker.Spec.Model = req.Model
 		}
+		if req.ModelProvider != "" {
+			worker.Spec.ModelProvider = req.ModelProvider
+		}
 		if req.WorkerName != "" {
 			worker.Spec.WorkerName = req.WorkerName
 		}
@@ -296,6 +333,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.ChannelPolicy != nil {
 			worker.Spec.ChannelPolicy = req.ChannelPolicy
+		}
+		if req.Resources != nil {
+			worker.Spec.Resources = req.Resources
 		}
 		if req.ContainerManaged != nil {
 			worker.Spec.ContainerManaged = req.ContainerManaged
@@ -378,6 +418,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 				Name:              req.Leader.Name,
 				WorkerName:        req.Leader.WorkerName,
 				Model:             req.Leader.Model,
+				ModelProvider:     req.Leader.ModelProvider,
 				Identity:          req.Leader.Identity,
 				Soul:              req.Leader.Soul,
 				Agents:            req.Leader.Agents,
@@ -387,6 +428,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 				WorkerIdleTimeout: req.Leader.WorkerIdleTimeout,
 				ChannelPolicy:     req.Leader.ChannelPolicy,
 				State:             req.Leader.State,
+				Resources:         req.Leader.Resources,
 			},
 		},
 	}
@@ -396,6 +438,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			Name:          tw.Name,
 			WorkerName:    tw.WorkerName,
 			Model:         tw.Model,
+			ModelProvider: tw.ModelProvider,
 			Runtime:       tw.Runtime,
 			Image:         tw.Image,
 			Identity:      tw.Identity,
@@ -407,6 +450,7 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			Expose:        tw.Expose,
 			ChannelPolicy: tw.ChannelPolicy,
 			State:         tw.State,
+			Resources:     tw.Resources,
 		})
 	}
 
@@ -494,6 +538,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 			if req.Leader.Model != "" {
 				team.Spec.Leader.Model = req.Leader.Model
 			}
+			if req.Leader.ModelProvider != "" {
+				team.Spec.Leader.ModelProvider = req.Leader.ModelProvider
+			}
 			if req.Leader.Identity != "" {
 				team.Spec.Leader.Identity = req.Leader.Identity
 			}
@@ -521,6 +568,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 			if req.Leader.State != nil {
 				team.Spec.Leader.State = req.Leader.State
 			}
+			if req.Leader.Resources != nil {
+				team.Spec.Leader.Resources = req.Leader.Resources
+			}
 		}
 		if req.Workers != nil {
 			team.Spec.Workers = nil
@@ -529,6 +579,7 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 					Name:          tw.Name,
 					WorkerName:    tw.WorkerName,
 					Model:         tw.Model,
+					ModelProvider: tw.ModelProvider,
 					Runtime:       tw.Runtime,
 					Image:         tw.Image,
 					Identity:      tw.Identity,
@@ -539,6 +590,8 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 					Package:       tw.Package,
 					Expose:        tw.Expose,
 					ChannelPolicy: tw.ChannelPolicy,
+					State:         tw.State,
+					Resources:     tw.Resources,
 				})
 			}
 		}
@@ -685,15 +738,17 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.ManagerSpec{
-			Model:      req.Model,
-			Runtime:    req.Runtime,
-			Image:      req.Image,
-			Soul:       req.Soul,
-			Agents:     req.Agents,
-			Skills:     req.Skills,
-			McpServers: req.McpServers,
-			Package:    req.Package,
-			State:      req.State,
+			Model:         req.Model,
+			ModelProvider: req.ModelProvider,
+			Runtime:       req.Runtime,
+			Image:         req.Image,
+			Soul:          req.Soul,
+			Agents:        req.Agents,
+			Skills:        req.Skills,
+			McpServers:    req.McpServers,
+			Package:       req.Package,
+			State:         req.State,
+			Resources:     req.Resources,
 		},
 	}
 	if req.Config != nil {
@@ -765,6 +820,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		if req.Model != "" {
 			mgr.Spec.Model = req.Model
 		}
+		if req.ModelProvider != "" {
+			mgr.Spec.ModelProvider = req.ModelProvider
+		}
 		if req.Runtime != "" {
 			mgr.Spec.Runtime = req.Runtime
 		}
@@ -791,6 +849,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		}
 		if req.State != nil {
 			mgr.Spec.State = req.State
+		}
+		if req.Resources != nil {
+			mgr.Spec.Resources = req.Resources
 		}
 
 		if err := h.client.Update(ctx, &mgr); err != nil {
@@ -847,8 +908,8 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		resp.Phase = "Pending"
 	}
 	if w.Annotations != nil {
-		resp.Team = w.Annotations["hiclaw.io/team"]
-		resp.Role = w.Annotations["hiclaw.io/role"]
+		resp.Team = w.Annotations["agentteams.io/team"]
+		resp.Role = w.Annotations["agentteams.io/role"]
 	}
 	for _, ep := range w.Status.ExposedPorts {
 		resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: ep.Port, Domain: ep.Domain})
@@ -960,6 +1021,21 @@ func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (s
 // findTeamMember does the same as findTeamForMember but also returns the
 // resolved Team CR and the member's name (for response synthesis).
 func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1beta1.Team, string, bool, error) {
+	var indexed v1beta1.TeamList
+	if err := h.client.List(ctx, &indexed,
+		client.InNamespace(h.namespace),
+		client.MatchingFields{teamWorkerMembersField: name},
+	); err == nil {
+		for i := range indexed.Items {
+			t := &indexed.Items[i]
+			for _, ref := range t.Spec.WorkerMembers {
+				if ref.Name == name {
+					return t, ref.Name, true, nil
+				}
+			}
+		}
+	}
+
 	var list v1beta1.TeamList
 	if err := h.client.List(ctx, &list, client.InNamespace(h.namespace)); err != nil {
 		return nil, "", false, err
@@ -974,8 +1050,42 @@ func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1b
 				return t, w.Name, true, nil
 			}
 		}
+		for _, ref := range t.Spec.WorkerMembers {
+			if ref.Name == name {
+				return t, ref.Name, true, nil
+			}
+		}
 	}
 	return nil, "", false, nil
+}
+
+func (h *ResourceHandler) applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string) {
+	resp.Team = t.Name
+	resp.Role = teamMemberRole(t, memberName)
+	if ms := t.Status.MemberByName(memberName); ms != nil {
+		if resp.RoomID == "" {
+			resp.RoomID = ms.RoomID
+		}
+		if resp.MatrixUserID == "" {
+			resp.MatrixUserID = ms.MatrixUserID
+		}
+	}
+}
+
+func teamMemberRole(t *v1beta1.Team, memberName string) string {
+	for _, ref := range t.Spec.WorkerMembers {
+		if ref.Name != memberName {
+			continue
+		}
+		if ref.Role == "team_leader" {
+			return "team_leader"
+		}
+		return "worker"
+	}
+	if t.Spec.Leader.Name == memberName {
+		return "team_leader"
+	}
+	return "worker"
 }
 
 // teamMemberToResponse synthesizes a WorkerResponse for a Team member without
@@ -991,7 +1101,7 @@ func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1b
 // default"), so Manager skills and `hiclaw get worker` observe the same
 // value for Team workers as they would for standalone Workers.
 func (h *ResourceHandler) teamMemberToResponse(ctx context.Context, t *v1beta1.Team, memberName string) WorkerResponse {
-	isLeader := t.Spec.Leader.Name == memberName
+	isLeader := teamMemberRole(t, memberName) == "team_leader"
 	ms := t.Status.MemberByName(memberName)
 
 	resp := WorkerResponse{

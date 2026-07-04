@@ -96,3 +96,33 @@ func TestGetWorkerBackend_AutoDetect(t *testing.T) {
 		t.Errorf("expected docker, got %s", got.Name())
 	}
 }
+
+func TestGetBackendForType(t *testing.T) {
+	ctx := context.Background()
+	k8s := &mockWorkerBackend{name: "k8s", available: true}
+	sandbox := &mockWorkerBackend{name: "sandbox", available: true}
+	reg := NewRegistry([]WorkerBackend{k8s, sandbox})
+
+	podBackend, err := reg.GetBackendForType(ctx, "pod")
+	if err != nil {
+		t.Fatalf("pod backend: %v", err)
+	}
+	if podBackend.Name() != "k8s" {
+		t.Fatalf("pod backend = %q, want k8s", podBackend.Name())
+	}
+
+	sandboxBackend, err := reg.GetBackendForType(ctx, "sandbox")
+	if err != nil {
+		t.Fatalf("sandbox backend: %v", err)
+	}
+	if sandboxBackend.Name() != "sandbox" {
+		t.Fatalf("sandbox backend = %q, want sandbox", sandboxBackend.Name())
+	}
+}
+
+func TestGetBackendForType_Unknown(t *testing.T) {
+	reg := NewRegistry([]WorkerBackend{&mockWorkerBackend{name: "k8s", available: true}})
+	if _, err := reg.GetBackendForType(context.Background(), "edge"); err == nil {
+		t.Fatal("expected error for unknown backendRuntime")
+	}
+}

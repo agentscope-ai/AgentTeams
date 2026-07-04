@@ -21,7 +21,7 @@ Do not use in chat, task outputs, or normal reasoning:
 - `hiclaw/hiclaw-storage/...`
 - `teams/{team}/shared/...`
 - `/root/hiclaw-fs/...`
-- `/root/.hiclaw-worker/...`
+- `/root/hiclaw-fs/agents/...`
 
 ## Task Lifecycle Sync
 

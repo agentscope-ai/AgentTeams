@@ -24,6 +24,8 @@ After creation, the Leader is online in the Leader Room (Manager + Global Admin 
 
 > Full workflow: read `references/create-team.md`
 
+If admin asks for CPU or memory requests/limits, use a YAML Team manifest with `leader.resources` and/or `workers[].resources`, then apply it with `hiclaw apply -f`. The simple `hiclaw create team` / `hiclaw update team` flags do not expose resource tuning. Changing member resources recreates the affected member container, so confirm the team is not mid-task.
+
 ## Gotchas
 
 - **Team Leader is a Worker container** — same runtime, but with team-leader-agent skills instead of worker-agent skills

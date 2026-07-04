@@ -126,7 +126,7 @@ func TestValidateWorkerName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseYAML_SingleWorker(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -147,13 +147,59 @@ spec:
 	if res.Metadata.Name != "alice" {
 		t.Errorf("expected name alice, got %s", res.Metadata.Name)
 	}
-	if res.APIVersion != "hiclaw.io/v1beta1" {
-		t.Errorf("expected apiVersion hiclaw.io/v1beta1, got %s", res.APIVersion)
+	if res.APIVersion != "agentteams.io/v1beta1" {
+		t.Errorf("expected apiVersion agentteams.io/v1beta1, got %s", res.APIVersion)
+	}
+}
+
+func TestBuildApplyBody_PreservesWorkerResources(t *testing.T) {
+	input := `apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  model: claude-sonnet-4-6
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+`
+	var res yamlResource
+	if err := sigyaml.Unmarshal([]byte(input), &res); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	body := buildApplyBody(res, true)
+	if body["name"] != "alice" {
+		t.Fatalf("body name = %v, want alice", body["name"])
+	}
+
+	resources, ok := body["resources"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("body resources = %T, want map[string]interface{}", body["resources"])
+	}
+	requests, ok := resources["requests"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("resources.requests = %T, want map[string]interface{}", resources["requests"])
+	}
+	limits, ok := resources["limits"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("resources.limits = %T, want map[string]interface{}", resources["limits"])
+	}
+
+	if requests["cpu"] != "500m" || requests["memory"] != "1Gi" {
+		t.Fatalf("requests = %#v, want cpu=500m memory=1Gi", requests)
+	}
+	if limits["cpu"] != "1" || limits["memory"] != "2Gi" {
+		t.Fatalf("limits = %#v, want cpu=1 memory=2Gi", limits)
 	}
 }
 
 func TestParseYAML_MultiDocument(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: alpha-team
@@ -161,7 +207,7 @@ spec:
   leader:
     name: alpha-lead
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: john
@@ -169,7 +215,7 @@ spec:
   displayName: John Doe
   permissionLevel: 2
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: bob
@@ -203,7 +249,7 @@ spec:
 func TestParseYAML_SkipsEmptyDocs(t *testing.T) {
 	input := `---
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -220,7 +266,7 @@ spec:
 }
 
 func TestParseYAML_MissingNameSkipped(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 spec:
   model: test
@@ -240,7 +286,7 @@ spec:
 }
 
 func TestParseYAML_MissingKindSkipped(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 metadata:
   name: alice
 spec:
@@ -261,7 +307,7 @@ spec:
 }
 
 func TestParseYAML_NameInMetadataOnly(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: my-team
@@ -310,7 +356,7 @@ func TestSplitYAMLDocs(t *testing.T) {
 }
 
 func TestParseYAML_WorkerWithInlineFields(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -348,13 +394,13 @@ spec:
 
 func TestParseYAML_PackageFieldInSpec(t *testing.T) {
 	tests := []struct {
-		name     string
-		yaml     string
-		wantPkg  string
+		name    string
+		yaml    string
+		wantPkg string
 	}{
 		{
 			name: "nacos package",
-			yaml: `apiVersion: hiclaw.io/v1beta1
+			yaml: `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -366,7 +412,7 @@ spec:
 		},
 		{
 			name: "http package",
-			yaml: `apiVersion: hiclaw.io/v1beta1
+			yaml: `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: bob
@@ -378,7 +424,7 @@ spec:
 		},
 		{
 			name: "no package field",
-			yaml: `apiVersion: hiclaw.io/v1beta1
+			yaml: `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: charlie
@@ -410,7 +456,7 @@ spec:
 func TestApplyFromFiles_Integration(t *testing.T) {
 	// Verify applyFromFiles reads and parses a real temp file without panicking.
 	// It will fail on the HTTP call, but we can verify the file-reading + parsing path.
-	content := `apiVersion: hiclaw.io/v1beta1
+	content := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice

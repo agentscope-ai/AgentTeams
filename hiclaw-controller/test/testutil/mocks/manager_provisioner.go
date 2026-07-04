@@ -32,7 +32,7 @@ type MockManagerProvisioner struct {
 		DeprovisionManager          []string
 		RefreshCredentials          []string
 		RefreshManagerCredentials   []string
-		EnsureManagerGatewayAuth    []string
+		EnsureManagerGatewayAuth    []managerGatewayAuthCall
 		EnsureManagerServiceAccount []string
 		DeleteManagerServiceAccount []string
 		DeleteCredentials           []string
@@ -48,6 +48,11 @@ type MockManagerProvisioner struct {
 
 func NewMockManagerProvisioner() *MockManagerProvisioner {
 	return &MockManagerProvisioner{}
+}
+
+type managerGatewayAuthCall struct {
+	Name       string
+	GatewayKey string
 }
 
 func (m *MockManagerProvisioner) Reset() {
@@ -83,7 +88,7 @@ func (m *MockManagerProvisioner) clearCallsLocked() {
 		DeprovisionManager          []string
 		RefreshCredentials          []string
 		RefreshManagerCredentials   []string
-		EnsureManagerGatewayAuth    []string
+		EnsureManagerGatewayAuth    []managerGatewayAuthCall
 		EnsureManagerServiceAccount []string
 		DeleteManagerServiceAccount []string
 		DeleteCredentials           []string
@@ -160,7 +165,10 @@ func (m *MockManagerProvisioner) RefreshManagerCredentials(ctx context.Context, 
 
 func (m *MockManagerProvisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey string) error {
 	m.mu.Lock()
-	m.Calls.EnsureManagerGatewayAuth = append(m.Calls.EnsureManagerGatewayAuth, managerName)
+	m.Calls.EnsureManagerGatewayAuth = append(m.Calls.EnsureManagerGatewayAuth, managerGatewayAuthCall{
+		Name:       managerName,
+		GatewayKey: gatewayKey,
+	})
 	fn := m.EnsureManagerGatewayAuthFn
 	m.mu.Unlock()
 	if fn != nil {

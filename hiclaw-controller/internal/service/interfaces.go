@@ -17,6 +17,8 @@ type WorkerProvisioner interface {
 	ReconcileExpose(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
 	EnsureServiceAccount(ctx context.Context, workerName string) error
 	DeleteServiceAccount(ctx context.Context, workerName string) error
+	EnsureRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error
+	DeleteRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error
 	DeleteCredentials(ctx context.Context, workerName string) error
 	DeleteWorkerCredentials(ctx context.Context, credentialName string) error
 	RequestSAToken(ctx context.Context, workerName string) (string, error)
@@ -33,6 +35,7 @@ type WorkerProvisioner interface {
 	ProvisionTeamRooms(ctx context.Context, req TeamRoomRequest) (*TeamRoomResult, error)
 	DeleteTeamRoomAliases(ctx context.Context, teamName, leaderName string) error
 	DeleteWorkerRoomAlias(ctx context.Context, workerName string) error
+	MatrixAppServiceEnabled() bool
 }
 
 // WorkerDeployer defines the deployment operations used by WorkerReconciler
@@ -44,7 +47,10 @@ type WorkerDeployer interface {
 	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSData(ctx context.Context, workerName string) error
 	InjectCoordinationContext(ctx context.Context, req CoordinationDeployRequest) error
+	InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error
+	InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error
 	EnsureTeamStorage(ctx context.Context, teamName string) error
+	MaterializeSandboxWorkerDeps(ctx context.Context, req SandboxWorkerDepsRequest) error
 }
 
 // WorkerEnvBuilderI defines env map construction for worker containers.
@@ -169,6 +175,7 @@ type HumanProvisioner interface {
 	// of roomID via "!admin users force-leave-room". Fire-and-forget at
 	// the bot layer, but the admin message delivery itself is confirmed.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
+	MatrixAppServiceEnabled() bool
 }
 
 // HumanCredentials is the subset of matrix.UserCredentials that the Human

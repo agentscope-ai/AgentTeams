@@ -187,3 +187,8 @@ app.kubernetes.io/component: {{ .component }}
 {{- $tag := default (include "hiclaw.globalImageTag" .) .Values.worker.defaultImage.hermes.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.hermes.repository $tag }}
 {{- end }}
+
+{{- define "hiclaw.worker.openhumanImage" -}}
+{{- $tag := default (include "hiclaw.globalImageTag" .) .Values.worker.defaultImage.openhuman.tag }}
+{{- printf "%s:%s" .Values.worker.defaultImage.openhuman.repository $tag }}
+{{- end }}

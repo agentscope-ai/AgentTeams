@@ -28,6 +28,14 @@ matrix:
   mode: managed               # managed | existing
   internalURL: ""             # existing mode only; managed mode auto-derives
   serverName: ""              # existing mode only; managed mode auto-derives
+  # Matrix AppService registration (controller registers as an appservice
+  # to provision worker/human Matrix accounts without passwords). Enabled by
+  # default; the controller panics if as_token/hs_token are absent, so the
+  # runtime-env Secret auto-generates and preserves them when these are empty.
+  appservice:
+    enabled: true            # set false to disable AppService mode entirely
+    asToken: ""             # override the Matrix AppService as_token (auto-generated if empty)
+    hsToken: ""             # override the Matrix AppService hs_token (auto-generated if empty)
   tuwunel:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel
@@ -175,6 +183,16 @@ controller:
     type: ClusterIP
     port: 8090
     targetPort: 8090
+  metrics:
+    enabled: true
+    bindAddress: ":8080"
+    port: 8080
+    targetPort: 8080
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
   resources:
     requests:
       cpu: 100m
@@ -182,7 +200,14 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
-  workerBackend: "k8s"        # k8s | sae
+  workerBackend: "k8s"        # k8s | sandbox
+  # Sandbox backend configuration. Set Worker.spec.backendRuntime=sandbox to
+  # use this backend for an individual Worker.
+  sandbox:
+    providerType: "openkruise"
+    capabilities: ""          # comma-separated provider capabilities, e.g. "hibernate,pool"
+    agentRuntimeImage: ""     # optional override for the SandboxSet agent runtime image
+    prewarmSize: 1            # SandboxSet warm pool size; 0 disables prewarm replicas
   resourcePrefix: "hiclaw-"
   resourceAutoPrefix: true
   serviceAccount:
@@ -267,6 +292,9 @@ worker:
       tag: ""                 # defaults to global.imageTag
     hermes:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-hermes-worker
+      tag: ""                 # defaults to global.imageTag
+    openhuman:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker
       tag: ""                 # defaults to global.imageTag
   defaultRuntime: "openclaw"
   resources:

@@ -40,6 +40,8 @@ type CredentialStore interface {
 	Load(ctx context.Context, workerName string) (*WorkerCredentials, error)
 	Save(ctx context.Context, workerName string, creds *WorkerCredentials) error
 	Delete(ctx context.Context, workerName string) error
+	// List returns the names of all workers/managers with stored credentials.
+	List(ctx context.Context) ([]string, error)
 }
 
 // FileCredentialStore persists credentials as env files (embedded mode).
@@ -101,6 +103,24 @@ func (s *FileCredentialStore) Delete(_ context.Context, workerName string) error
 	return nil
 }
 
+func (s *FileCredentialStore) List(_ context.Context) ([]string, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read creds dir: %w", err)
+	}
+	var names []string
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() && strings.HasSuffix(name, ".env") {
+			names = append(names, strings.TrimSuffix(name, ".env"))
+		}
+	}
+	return names, nil
+}
+
 func parseEnvLine(line string) (string, string) {
 	idx := strings.IndexByte(line, '=')
 	if idx < 0 {
@@ -147,7 +167,7 @@ type SecretCredentialStore struct {
 	Client    kubernetes.Interface
 	Namespace string
 	// ControllerName identifies this controller instance. Stamped on the
-	// credential Secret via hiclaw.io/controller so multi-instance
+	// credential Secret via agentteams.io/controller so multi-instance
 	// deployments sharing a namespace can filter by owner.
 	ControllerName string
 	// ResourcePrefix is the tenant prefix used to derive the decorative
@@ -184,7 +204,7 @@ func (s *SecretCredentialStore) Save(ctx context.Context, workerName string, cre
 			Namespace: s.Namespace,
 			Labels: map[string]string{
 				"app":                   s.ResourcePrefix.WorkerAppLabel(),
-				"hiclaw.io/worker":      workerName,
+				"agentteams.io/worker":  workerName,
 				v1beta1.LabelController: s.ControllerName,
 			},
 		},
@@ -216,4 +236,20 @@ func (s *SecretCredentialStore) Delete(ctx context.Context, workerName string) e
 		return nil
 	}
 	return err
+}
+
+func (s *SecretCredentialStore) List(ctx context.Context) ([]string, error) {
+	secrets, err := s.Client.CoreV1().Secrets(s.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: v1beta1.LabelController + "=" + s.ControllerName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list credential secrets: %w", err)
+	}
+	var names []string
+	for _, sec := range secrets.Items {
+		if name, ok := sec.Labels["agentteams.io/worker"]; ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }

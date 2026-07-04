@@ -55,3 +55,35 @@ func (r *Registry) GetWorkerBackend(ctx context.Context, name string) (WorkerBac
 	}
 	return nil, fmt.Errorf("unknown worker backend: %q", name)
 }
+
+// GetBackendForType resolves the API-level backendRuntime value to a concrete
+// backend implementation. "pod" intentionally keeps the historical auto-detect
+// behavior so embedded Docker and in-cluster K8s both continue to work.
+func (r *Registry) GetBackendForType(ctx context.Context, backendRuntime string) (WorkerBackend, error) {
+	switch backendRuntime {
+	case "", "pod":
+		return r.GetWorkerBackend(ctx, "")
+	case "sandbox":
+		return r.GetWorkerBackend(ctx, "sandbox")
+	default:
+		return nil, fmt.Errorf("unknown backendRuntime: %q", backendRuntime)
+	}
+}
+
+// FindServiceBackend returns the first registered backend that can manage
+// Kubernetes Services for the requested member placement.
+func (r *Registry) FindServiceBackend(ctx context.Context, deployMode, targetClusterID, targetNamespace string) ServiceBackend {
+	for _, b := range r.workerBackends {
+		if !b.Available(ctx) {
+			continue
+		}
+		sb, ok := b.(ServiceBackend)
+		if !ok {
+			continue
+		}
+		if _, _, err := sb.ServiceClient(ctx, deployMode, targetClusterID, targetNamespace); err == nil {
+			return sb
+		}
+	}
+	return nil
+}

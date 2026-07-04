@@ -38,8 +38,10 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	}
 
 	aiGatewayURL := g.config.AIGatewayURL
+	if req.AIGatewayURL != "" {
+		aiGatewayURL = req.AIGatewayURL
+	}
 	if aiGatewayURL == "" {
-		// K8s deployments must set HICLAW_AI_GATEWAY_URL (Helm injects it automatically).
 		aiGatewayURL = "http://aigw-local.hiclaw.io:8080"
 	}
 
@@ -138,7 +140,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"model": map[string]interface{}{
 					"primary": "hiclaw-gateway/" + modelName,
 				},
-				"models":       g.allModelAliases(modelName),
+				"models":        g.allModelAliases(modelName),
 				"maxConcurrent": 4,
 				"subagents": map[string]interface{}{
 					"maxConcurrent": 8,
@@ -378,21 +380,21 @@ func defaultModelSpec(modelName string) ModelSpec {
 	}
 
 	presets := map[string]preset{
-		"gpt-5.3-codex":     {400000, 128000, true, true},
-		"gpt-5-mini":        {400000, 128000, true, true},
-		"gpt-5-nano":        {400000, 128000, true, true},
-		"claude-opus-4-6":   {1000000, 128000, true, true},
-		"claude-sonnet-4-6": {1000000, 64000, true, true},
-		"claude-haiku-4-5":  {200000, 64000, true, true},
-		"qwen3.6-plus":      {200000, 64000, true, true},
-		"qwen3.5-plus":      {200000, 64000, true, true},
-		"deepseek-chat":     {256000, 128000, false, true},
-		"deepseek-reasoner": {256000, 128000, false, true},
-		"kimi-k2.5":         {256000, 128000, true, true},
-		"glm-5":             {200000, 128000, false, true},
-		"MiniMax-M2.7":          {200000, 128000, false, true},
+		"gpt-5.3-codex":          {400000, 128000, true, true},
+		"gpt-5-mini":             {400000, 128000, true, true},
+		"gpt-5-nano":             {400000, 128000, true, true},
+		"claude-opus-4-6":        {1000000, 128000, true, true},
+		"claude-sonnet-4-6":      {1000000, 64000, true, true},
+		"claude-haiku-4-5":       {200000, 64000, true, true},
+		"qwen3.6-plus":           {200000, 64000, true, true},
+		"qwen3.5-plus":           {200000, 64000, true, true},
+		"deepseek-chat":          {256000, 128000, false, true},
+		"deepseek-reasoner":      {256000, 128000, false, true},
+		"kimi-k2.5":              {256000, 128000, true, true},
+		"glm-5":                  {200000, 128000, false, true},
+		"MiniMax-M2.7":           {200000, 128000, false, true},
 		"MiniMax-M2.7-highspeed": {200000, 128000, false, true},
-		"MiniMax-M2.5":          {200000, 128000, false, true},
+		"MiniMax-M2.5":           {200000, 128000, false, true},
 	}
 
 	p, found := presets[modelName]
@@ -489,4 +491,37 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 		aliases["hiclaw-gateway/"+selectedModel] = map[string]interface{}{"alias": selectedModel}
 	}
 	return aliases
+}
+
+// InjectHeartbeat reads existing openclaw.json bytes, injects or updates the
+// heartbeat configuration under agents.defaults.heartbeat, and returns the
+// updated JSON bytes. If enabled is false or every is empty, the heartbeat
+// key is removed.
+func InjectHeartbeat(existing []byte, enabled bool, every string) []byte {
+	var config map[string]interface{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &config)
+	}
+	if config == nil {
+		config = make(map[string]interface{})
+	}
+	agents, _ := config["agents"].(map[string]interface{})
+	if agents == nil {
+		agents = make(map[string]interface{})
+		config["agents"] = agents
+	}
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	if defaults == nil {
+		defaults = make(map[string]interface{})
+		agents["defaults"] = defaults
+	}
+
+	if enabled && every != "" {
+		defaults["heartbeat"] = map[string]interface{}{"enabled": true, "every": every}
+	} else {
+		delete(defaults, "heartbeat")
+	}
+
+	out, _ := json.MarshalIndent(config, "", "  ")
+	return out
 }

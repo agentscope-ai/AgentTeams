@@ -93,7 +93,7 @@ log_section "Create Team"
 #   Worker 2 (qa): no per-worker policy (should still have W1 via peer mention)
 
 exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_TEAM}.yaml << 'YAMLEOF'
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: ${TEST_TEAM}

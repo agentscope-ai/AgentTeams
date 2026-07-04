@@ -2,14 +2,16 @@ package controller
 
 import (
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type managerScope struct {
-	manager    *v1beta1.Manager
-	provResult *service.ManagerProvisionResult
-	patchBase  client.Patch
+	manager           *v1beta1.Manager
+	provResult        *service.ManagerProvisionResult
+	patchBase         client.Patch
+	modelProviderInfo *gateway.ModelProviderInfo
 }
 
 // computeManagerPhase determines the Manager status phase based on reconcile outcome.

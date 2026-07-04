@@ -92,6 +92,8 @@ type VolumeMount struct {
 // dynamically without baking them into the warm SandboxSet image.
 type WorkerDepsSpec struct {
 	InplaceUpdateImage  string
+	Env                 map[string]string
+	AuthToken           string
 	DynamicVolumeMounts []DynamicVolumeMount
 }
 

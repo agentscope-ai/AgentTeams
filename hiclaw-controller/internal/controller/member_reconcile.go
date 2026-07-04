@@ -350,7 +350,7 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	}
 	currentBackend := m.StatusBackendRuntime
 	if currentBackend == "" {
-		currentBackend = desiredBackend
+		currentBackend = v1beta1.BackendRuntimePod
 	}
 	wb, err := d.Backend.GetBackendForType(ctx, currentBackend)
 	if err != nil {
@@ -565,6 +565,9 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 			logger.Error(err, "SA token request failed (non-fatal, worker auth will fail)")
 		}
 		createReq.AuthToken = token
+	}
+	if wb.Name() == "sandbox" {
+		createReq.WorkersDeps = backend.BuildSandboxWorkerDeps(m.Name, createReq.Env, createReq.AuthToken, createReq.WorkersDeps)
 	}
 
 	if _, err := wb.Create(ctx, createReq); err != nil {

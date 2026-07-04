@@ -214,6 +214,7 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 	if workerImage == "" {
 		return nil, fmt.Errorf("no worker image configured for sandbox backend")
 	}
+	req.WorkersDeps = BuildSandboxWorkerDeps(req.Name, req.Env, req.AuthToken, req.WorkersDeps)
 	if req.WorkersDeps != nil && req.WorkersDeps.InplaceUpdateImage == "" {
 		req.WorkersDeps.InplaceUpdateImage = workerImage
 	}

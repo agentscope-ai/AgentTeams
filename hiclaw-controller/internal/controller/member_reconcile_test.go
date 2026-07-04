@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -101,6 +102,88 @@ func TestCreateMemberContainerPassesSpecResources(t *testing.T) {
 	}
 }
 
+func TestCreateMemberContainerPassesSandboxWorkerDeps(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "sandbox"
+	prov := mocks.NewMockProvisioner()
+	prov.RequestSATokenFn = func(ctx context.Context, workerName string) (string, error) {
+		return "sa-token-" + workerName, nil
+	}
+	envBuilder := mocks.NewMockEnvBuilder()
+	envBuilder.BuildFn = func(workerName string, prov *service.WorkerProvisionResult) map[string]string {
+		return map[string]string{
+			"AGENTTEAMS_TEST_ENV": "true",
+		}
+	}
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"},
+	}
+
+	_, err := createMemberContainer(context.Background(), MemberDeps{
+		Provisioner: prov,
+		EnvBuilder:  envBuilder,
+	}, MemberContext{
+		Name:           "alice",
+		RuntimeName:    "alice",
+		BackendRuntime: v1beta1.BackendRuntimeSandbox,
+		Spec:           v1beta1.WorkerSpec{Image: "img:latest"},
+	}, state, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer failed: %v", err)
+	}
+
+	req, ok := wb.LastCreateReq()
+	if !ok {
+		t.Fatal("expected backend Create to be called")
+	}
+	if req.WorkersDeps == nil {
+		t.Fatal("CreateRequest.WorkersDeps = nil, want sandbox runtime deps")
+	}
+	if req.WorkersDeps.AuthToken != "sa-token-alice" {
+		t.Fatalf("WorkersDeps.AuthToken=%q, want sa-token-alice", req.WorkersDeps.AuthToken)
+	}
+	if got := req.WorkersDeps.Env["AGENTTEAMS_TEST_ENV"]; got != "true" {
+		t.Fatalf("WorkersDeps.Env[AGENTTEAMS_TEST_ENV]=%q, want true (all=%v)", got, req.WorkersDeps.Env)
+	}
+	if !hasDynamicMount(req.WorkersDeps.DynamicVolumeMounts, "/mnt/agentteams/env", "workers-deps/alice/env") {
+		t.Fatalf("missing env dynamic mount: %+v", req.WorkersDeps.DynamicVolumeMounts)
+	}
+	if !hasDynamicMount(req.WorkersDeps.DynamicVolumeMounts, "/var/run/secrets/agentteams", "workers-deps/alice/token") {
+		t.Fatalf("missing token dynamic mount: %+v", req.WorkersDeps.DynamicVolumeMounts)
+	}
+}
+
+func TestEnsureMemberContainerPresentBlocksLegacyPodToSandboxSwitch(t *testing.T) {
+	podBackend := mocks.NewMockWorkerBackend()
+	podBackend.NameOverride = "k8s"
+	podBackend.StatusFn = func(ctx context.Context, name string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{Name: name, Status: backend.StatusRunning}, nil
+	}
+	sandboxBackend := mocks.NewMockWorkerBackend()
+	sandboxBackend.NameOverride = "sandbox"
+	state := &MemberState{}
+
+	_, err := ensureMemberContainerPresent(context.Background(), MemberDeps{
+		Provisioner: mocks.NewMockProvisioner(),
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{podBackend, sandboxBackend}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+	}, MemberContext{
+		Name:                 "alice",
+		BackendRuntime:       v1beta1.BackendRuntimeSandbox,
+		StatusBackendRuntime: "",
+		Spec:                 v1beta1.WorkerSpec{},
+	}, state)
+	if err == nil {
+		t.Fatal("expected backend switch to be blocked")
+	}
+	if !strings.Contains(err.Error(), "spec.backendRuntime cannot be changed until the Worker is Stopped") {
+		t.Fatalf("error=%v, want backend switch guard", err)
+	}
+	if _, ok := sandboxBackend.LastCreateReq(); ok {
+		t.Fatal("sandbox backend Create was called; want legacy pod switch blocked")
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -111,6 +194,15 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func hasDynamicMount(mounts []backend.DynamicVolumeMount, mountPath, subPath string) bool {
+	for _, mount := range mounts {
+		if mount.MountPath == mountPath && mount.SubPath == subPath {
+			return true
+		}
+	}
+	return false
 }
 
 // mockBackend is a minimal WorkerBackend implementation used to test

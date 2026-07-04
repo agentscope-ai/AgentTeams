@@ -99,8 +99,13 @@ assert_eq "${TEST_HUMAN}" "${HUMAN_NAME_CHK}" "Human CR has correct name"
 log_info "Waiting for controller to reconcile Human..."
 HUMAN_TIMEOUT=90; HUMAN_ELAPSED=0
 HUMAN_CREATED=false
+HUMAN_PHASE=""
+HUMAN_STATUS_MXID=""
 while [ "${HUMAN_ELAPSED}" -lt "${HUMAN_TIMEOUT}" ]; do
-    if exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep -q "human created.*${TEST_HUMAN}"; then
+    HUMAN_STATUS=$(exec_in_agent hiclaw get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "{}")
+    HUMAN_PHASE=$(echo "${HUMAN_STATUS}" | jq -r '.phase // empty' 2>/dev/null)
+    HUMAN_STATUS_MXID=$(echo "${HUMAN_STATUS}" | jq -r '.matrixUserID // empty' 2>/dev/null)
+    if [ "${HUMAN_PHASE}" = "Active" ] && [ -n "${HUMAN_STATUS_MXID}" ]; then
         HUMAN_CREATED=true
         break
     fi
@@ -111,6 +116,7 @@ if [ "${HUMAN_CREATED}" = true ]; then
     log_pass "HumanReconciler created human (took ~${HUMAN_ELAPSED}s)"
 else
     log_fail "HumanReconciler did not create human within ${HUMAN_TIMEOUT}s"
+    log_info "Last Human status: phase='${HUMAN_PHASE}' matrixUserID='${HUMAN_STATUS_MXID}'"
     exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep "${TEST_HUMAN}" | tail -5
 fi
 

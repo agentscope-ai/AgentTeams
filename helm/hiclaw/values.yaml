@@ -183,6 +183,16 @@ controller:
     type: ClusterIP
     port: 8090
     targetPort: 8090
+  metrics:
+    enabled: true
+    bindAddress: ":8080"
+    port: 8080
+    targetPort: 8080
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
   resources:
     requests:
       cpu: 100m

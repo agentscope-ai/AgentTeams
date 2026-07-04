@@ -27,9 +27,9 @@ type ServerDeps struct {
 	AuthMw         *authpkg.Middleware
 	KubeMode       string
 	Namespace      string
-	ControllerName string // HICLAW_CONTROLLER_NAME; empty in embedded mode
-	SocketPath     string       // Docker proxy (embedded only)
-	MatrixConfig   matrix.Config       // for AppService rotation endpoint
+	ControllerName string               // HICLAW_CONTROLLER_NAME; empty in embedded mode
+	SocketPath     string               // Docker proxy (embedded only)
+	MatrixConfig   matrix.Config        // for AppService rotation endpoint
 	Provisioner    *service.Provisioner // for Matrix token refresh
 }
 
@@ -47,7 +47,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		Mux:  mux,
 		server: &http.Server{
 			Addr:    addr,
-			Handler: mux,
+			Handler: withControllerHTTPMetrics(mux),
 		},
 	}
 

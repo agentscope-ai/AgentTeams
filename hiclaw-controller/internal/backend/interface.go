@@ -6,6 +6,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 )
 
 // Typed errors for backend operations.
@@ -24,8 +25,11 @@ const (
 	StatusSleeping WorkerStatus = "sleeping"
 	StatusStarting WorkerStatus = "starting"
 	StatusNotFound WorkerStatus = "not_found"
+	StatusFailed   WorkerStatus = "failed"
 	StatusUnknown  WorkerStatus = "unknown"
 )
+
+const BuiltinSandboxInstanceName = "agentteams-builtin"
 
 // Supported worker runtimes.
 const (
@@ -84,6 +88,22 @@ type VolumeMount struct {
 	ReadOnly      bool
 }
 
+// WorkerDepsSpec describes runtime assets that sandbox backends can mount
+// dynamically without baking them into the warm SandboxSet image.
+type WorkerDepsSpec struct {
+	InplaceUpdateImage  string
+	DynamicVolumeMounts []DynamicVolumeMount
+}
+
+// DynamicVolumeMount maps a provider-managed persistent volume into a sandbox.
+type DynamicVolumeMount struct {
+	PVName     string
+	MountPath  string
+	SubPath    string
+	ReadOnly   bool
+	Attributes map[string]string
+}
+
 // PortMapping describes a host-to-container port binding (Docker backend only).
 type PortMapping struct {
 	HostIP        string // e.g. "127.0.0.1"; empty = all interfaces
@@ -98,6 +118,9 @@ type CreateRequest struct {
 	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "openhuman"
+	// BackendRuntime selects the infrastructure backend flavor for this
+	// worker: "pod" (default K8s Pod) or "sandbox" (OpenKruise Sandbox).
+	BackendRuntime string `json:"-"`
 	// RuntimeFallback is the value used by Backend.Create when Runtime is
 	// empty, before falling back to RuntimeOpenClaw. Manager / Worker
 	// reconcilers populate this from HICLAW_MANAGER_RUNTIME /
@@ -114,9 +137,10 @@ type CreateRequest struct {
 	// SA-based auth — ServiceAccountName is set on K8s Pods (projected token).
 	// AuthToken is the pre-issued SA token for Docker backend.
 	// AuthAudience is the projected token audience (K8s backend only; defaults to "hiclaw-controller").
-	ServiceAccountName string `json:"-"`
-	AuthToken          string `json:"-"`
-	AuthAudience       string `json:"-"`
+	ServiceAccountName    string `json:"-"`
+	AuthToken             string `json:"-"`
+	AuthAudience          string `json:"-"`
+	AuthExpirationSeconds int64  `json:"-"`
 
 	// Resources overrides default resource limits for this container.
 	// nil = use backend defaults (e.g. K8sConfig.WorkerCPU/WorkerMemory).
@@ -175,6 +199,13 @@ type CreateRequest struct {
 
 	// ServiceEnabled indicates whether a Service should be created for the Pod.
 	ServiceEnabled bool `json:"-"`
+
+	// SandboxSetName optionally selects a provider-specific SandboxSet. The
+	// current OpenKruise backend uses the built-in warm pool.
+	SandboxSetName string `json:"-"`
+
+	// WorkersDeps carries sandbox-specific dynamic mount and image update data.
+	WorkersDeps *WorkerDepsSpec `json:"-"`
 }
 
 // Deployment modes returned by backends.
@@ -187,6 +218,13 @@ const (
 // The remoteclient.Cache implements this interface.
 type RemoteClientProvider interface {
 	ResolveClient(ctx context.Context, clusterID string) (K8sCoreClient, error)
+}
+
+// RemoteClusterClientProvider exposes both typed and dynamic clients for a
+// remote cluster. Sandbox backends use the dynamic client for CRD operations.
+type RemoteClusterClientProvider interface {
+	RemoteClientProvider
+	ResolveDynamicClient(ctx context.Context, clusterID string) (dynamic.Interface, error)
 }
 
 // K8sServiceClient is the minimal Service client surface needed by the backend.
@@ -219,9 +257,11 @@ type WorkerResult struct {
 	Backend         string       `json:"backend"`
 	DeploymentMode  string       `json:"deployment_mode"`
 	Status          WorkerStatus `json:"status"`
+	Message         string       `json:"message,omitempty"`
 	ContainerID     string       `json:"container_id,omitempty"`
 	AppID           string       `json:"app_id,omitempty"`
 	RawStatus       string       `json:"raw_status,omitempty"`
+	AppliedSpecHash string       `json:"applied_spec_hash,omitempty"`
 	ConsoleHostPort string       `json:"console_host_port,omitempty"`
 }
 

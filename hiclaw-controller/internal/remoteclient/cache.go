@@ -9,6 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
 	authenticationv1client "k8s.io/client-go/kubernetes/typed/authentication/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
@@ -362,6 +363,16 @@ func (c *Cache) ResolveClient(ctx context.Context, clusterID string) (backend.K8
 		return nil, err
 	}
 	return entry.Client, nil
+}
+
+// ResolveDynamicClient returns a dynamic client for the given remote cluster.
+// Sandbox backends need this for provider CRDs such as SandboxClaim.
+func (c *Cache) ResolveDynamicClient(ctx context.Context, clusterID string) (dynamic.Interface, error) {
+	entry, err := c.GetOrCreate(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return dynamic.NewForConfig(entry.RestConfig)
 }
 
 // k8sCoreClientWrapper adapts *corev1client.CoreV1Client to backend.K8sCoreClient.

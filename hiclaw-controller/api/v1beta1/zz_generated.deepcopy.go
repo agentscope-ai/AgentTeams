@@ -922,6 +922,11 @@ func (in *WorkerSpec) DeepCopyInto(out *WorkerSpec) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.BackendRuntime != nil {
+		in, out := &in.BackendRuntime, &out.BackendRuntime
+		*out = new(string)
+		**out = **in
+	}
 	if in.TargetCluster != nil {
 		in, out := &in.TargetCluster, &out.TargetCluster
 		*out = new(TargetClusterSpec)

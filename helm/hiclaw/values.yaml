@@ -190,7 +190,14 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
-  workerBackend: "k8s"        # k8s | sae
+  workerBackend: "k8s"        # k8s | sandbox
+  # Sandbox backend configuration. Set Worker.spec.backendRuntime=sandbox to
+  # use this backend for an individual Worker.
+  sandbox:
+    providerType: "openkruise"
+    capabilities: ""          # comma-separated provider capabilities, e.g. "hibernate,pool"
+    agentRuntimeImage: ""     # optional override for the SandboxSet agent runtime image
+    prewarmSize: 1            # SandboxSet warm pool size; 0 disables prewarm replicas
   resourcePrefix: "hiclaw-"
   resourceAutoPrefix: true
   serviceAccount:

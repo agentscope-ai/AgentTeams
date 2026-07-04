@@ -95,6 +95,12 @@ const (
 	DeployModeRemote = "Remote"
 )
 
+// BackendRuntime constants define worker infrastructure backend choices.
+const (
+	BackendRuntimePod     = "pod"
+	BackendRuntimeSandbox = "sandbox"
+)
+
 // TargetClusterSpec identifies the remote cluster and namespace for deployment.
 type TargetClusterSpec struct {
 	// ID is the ACS/ACK cluster ID.
@@ -154,6 +160,11 @@ type WorkerSpec struct {
 	// "Remote": created in the cluster identified by TargetCluster.
 	DeployMode *string `json:"deployMode,omitempty"`
 
+	// BackendRuntime selects the worker infrastructure backend.
+	// "pod" (default): create a normal Pod through the existing backend.
+	// "sandbox": claim an OpenKruise Sandbox instance.
+	BackendRuntime *string `json:"backendRuntime,omitempty"`
+
 	// TargetCluster specifies the remote cluster target for deployment.
 	// Required when DeployMode is "Remote".
 	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
@@ -196,6 +207,15 @@ func (s WorkerSpec) DesiredState() string {
 	return "Running"
 }
 
+// GetBackendRuntime returns the explicitly requested backend runtime, or
+// "pod" when the CR leaves it unset.
+func (s WorkerSpec) GetBackendRuntime() string {
+	if s.BackendRuntime != nil && *s.BackendRuntime != "" {
+		return *s.BackendRuntime
+	}
+	return BackendRuntimePod
+}
+
 // EffectiveWorkerName returns the runtime identity key for a Worker.
 // Empty WorkerName falls back to metadata.name supplied by caller.
 func (s WorkerSpec) EffectiveWorkerName(metadataName string) string {
@@ -236,6 +256,10 @@ type WorkerStatus struct {
 	// the Worker has reached the Stopped phase.
 	DeployMode    string             `json:"deployMode,omitempty"`
 	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
+
+	// BackendRuntime records the backend type currently used for this
+	// worker's container.
+	BackendRuntime string `json:"backendRuntime,omitempty"`
 }
 
 // ExposedPortStatus records a port that has been exposed via Higress.

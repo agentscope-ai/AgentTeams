@@ -129,13 +129,9 @@ func resolveServiceClient(ctx context.Context, mc *MemberContext, deps *MemberDe
 	if deps.Backend == nil {
 		return nil, "", fmt.Errorf("no backend registry available")
 	}
-	wb := deps.Backend.DetectWorkerBackend(ctx)
-	if wb == nil {
-		return nil, "", fmt.Errorf("no worker backend available")
-	}
-	sb, ok := wb.(backend.ServiceBackend)
-	if !ok {
-		return nil, "", fmt.Errorf("backend %q does not support Service management", wb.Name())
+	sb := deps.Backend.FindServiceBackend(ctx, mc.DeployMode, mc.TargetClusterID, mc.TargetNamespace)
+	if sb == nil {
+		return nil, "", fmt.Errorf("no worker backend supports Service management")
 	}
 	return sb.ServiceClient(ctx, mc.DeployMode, mc.TargetClusterID, mc.TargetNamespace)
 }

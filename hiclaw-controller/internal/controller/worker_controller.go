@@ -330,6 +330,8 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		CurrentExposedPorts:  w.Status.ExposedPorts,
 		Owner:                w,
 		DeployMode:           deployMode,
+		BackendRuntime:       spec.GetBackendRuntime(),
+		StatusBackendRuntime: w.Status.BackendRuntime,
 		TargetClusterID:      targetClusterID,
 		TargetNamespace:      targetNamespace,
 		ServiceEnabled:       serviceEnabled,
@@ -379,6 +381,9 @@ func workerSpecWithAppliedDeploymentTarget(spec v1beta1.WorkerSpec, status v1bet
 
 func applyDeploymentTargetStatus(w *v1beta1.Worker, m MemberContext) {
 	w.Status.DeployMode = m.DeployMode
+	if m.BackendRuntime != "" {
+		w.Status.BackendRuntime = m.BackendRuntime
+	}
 	if m.DeployMode == v1beta1.DeployModeRemote || m.TargetClusterID != "" || m.TargetNamespace != "" {
 		w.Status.TargetCluster = &v1beta1.TargetClusterSpec{
 			ID:        m.TargetClusterID,
@@ -436,6 +441,9 @@ func applyMemberStateToWorker(w *v1beta1.Worker, state *MemberState) {
 	if state.ContainerState != "" {
 		w.Status.ContainerState = state.ContainerState
 	}
+	if state.BackendRuntime != "" {
+		w.Status.BackendRuntime = state.BackendRuntime
+	}
 	if state.ExposedPorts != nil || len(w.Spec.Expose) == 0 {
 		w.Status.ExposedPorts = state.ExposedPorts
 	}
@@ -459,6 +467,19 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
 			)
 		}
+		if wb, err := r.Backend.GetWorkerBackend(context.Background(), "sandbox"); err == nil {
+			if sb, ok := wb.(*backend.SandboxBackend); ok && sb.Available(context.Background()) {
+				bldr = bldr.Watches(
+					sb.WatchObject(),
+					workerPodEventHandler(""),
+					builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
+				).Watches(
+					sb.ClaimWatchObject(),
+					workerPodEventHandler(""),
+					builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
+				)
+			}
+		}
 	}
 
 	ctl, err := bldr.Build(r)
@@ -473,6 +494,22 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				workerPodEventHandler(r.Namespace),
 				podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
 			)
+		}
+		if wb, err := r.Backend.GetWorkerBackend(context.Background(), "sandbox"); err == nil {
+			if sb, ok := wb.(*backend.SandboxBackend); ok && sb.Available(context.Background()) {
+				r.RemoteWatchRegistrar.RegisterWatch(
+					ctl,
+					sb.WatchObject(),
+					workerPodEventHandler(r.Namespace),
+					podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
+				)
+				r.RemoteWatchRegistrar.RegisterWatch(
+					ctl,
+					sb.ClaimWatchObject(),
+					workerPodEventHandler(r.Namespace),
+					podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
+				)
+			}
 		}
 	}
 	return nil

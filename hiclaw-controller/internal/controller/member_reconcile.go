@@ -108,6 +108,12 @@ type MemberContext struct {
 	// DeployMode specifies where the member pod runs: "Local" (default) or
 	// "Remote". Sourced from spec.deployMode with a default of "Local".
 	DeployMode string
+	// BackendRuntime selects the concrete infrastructure backend: "pod" or
+	// "sandbox". Empty is treated as "pod".
+	BackendRuntime string
+	// StatusBackendRuntime is the currently recorded backend runtime for
+	// this member's backend resource.
+	StatusBackendRuntime string
 	// TargetClusterID is the remote cluster ID when DeployMode is "Remote".
 	// Sourced from spec.targetCluster.id.
 	TargetClusterID string
@@ -126,6 +132,7 @@ type MemberState struct {
 	RoomID         string
 	ContainerState string
 	ExposedPorts   []v1beta1.ExposedPortStatus
+	BackendRuntime string
 	// ProvResult is the credentials bundle produced by Infra; passed through
 	// Config and Container phases for idempotent reuse within one reconcile.
 	ProvResult *service.WorkerProvisionResult
@@ -138,6 +145,9 @@ func resolveBackendForMember(wb backend.WorkerBackend, m MemberContext) backend.
 	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
 		if k8sBackend, ok := wb.(*backend.K8sBackend); ok {
 			return k8sBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
+		}
+		if sandboxBackend, ok := wb.(*backend.SandboxBackend); ok {
+			return sandboxBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
 		}
 	}
 	return wb
@@ -334,7 +344,18 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	if d.Backend == nil {
 		return reconcile.Result{}, nil
 	}
-	wb := d.Backend.DetectWorkerBackend(ctx)
+	desiredBackend := m.BackendRuntime
+	if desiredBackend == "" {
+		desiredBackend = v1beta1.BackendRuntimePod
+	}
+	currentBackend := m.StatusBackendRuntime
+	if currentBackend == "" {
+		currentBackend = desiredBackend
+	}
+	wb, err := d.Backend.GetBackendForType(ctx, currentBackend)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 	if wb == nil {
 		log.FromContext(ctx).Info("no worker backend available, member needs manual start", "name", m.Name)
 		return reconcile.Result{}, nil
@@ -345,6 +366,9 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	result, err := wb.Status(ctx, m.Name)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("query container status: %w", err)
+	}
+	if desiredBackend != currentBackend && result.Status != backend.StatusNotFound {
+		return reconcile.Result{}, fmt.Errorf("spec.backendRuntime cannot be changed until the Worker is Stopped; current=%s, desired=%s", currentBackend, desiredBackend)
 	}
 
 	// Spec-change decision is owned by the caller (see MemberContext.SpecChanged
@@ -368,6 +392,7 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 		res, err := createMemberContainer(ctx, d, m, state, wb)
 		if err == nil {
 			state.ContainerState = string(backend.StatusStarting)
+			state.BackendRuntime = desiredBackend
 		}
 		return res, err
 
@@ -385,13 +410,27 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 		res, err := createMemberContainer(ctx, d, m, state, wb)
 		if err == nil {
 			state.ContainerState = string(backend.StatusStarting)
+			state.BackendRuntime = desiredBackend
 		}
 		return res, err
 
 	case backend.StatusNotFound:
-		res, err := createMemberContainer(ctx, d, m, state, wb)
+		createBackend := desiredBackend
+		if m.Spec.DesiredState() == "Stopped" {
+			createBackend = currentBackend
+		}
+		createWb := wb
+		if createBackend != currentBackend {
+			if altWb, err := d.Backend.GetBackendForType(ctx, createBackend); err == nil {
+				createWb = resolveBackendForMember(altWb, m)
+			} else {
+				return reconcile.Result{}, err
+			}
+		}
+		res, err := createMemberContainer(ctx, d, m, state, createWb)
 		if err == nil {
 			state.ContainerState = string(backend.StatusStarting)
+			state.BackendRuntime = createBackend
 		}
 		return res, err
 
@@ -409,7 +448,17 @@ func ensureMemberContainerAbsent(ctx context.Context, d MemberDeps, m MemberCont
 	if d.Backend == nil {
 		return reconcile.Result{}, nil
 	}
-	wb := d.Backend.DetectWorkerBackend(ctx)
+	currentBackend := m.StatusBackendRuntime
+	if currentBackend == "" {
+		currentBackend = m.BackendRuntime
+	}
+	if currentBackend == "" {
+		currentBackend = v1beta1.BackendRuntimePod
+	}
+	wb, err := d.Backend.GetBackendForType(ctx, currentBackend)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 	if wb == nil {
 		return reconcile.Result{}, nil
 	}
@@ -495,6 +544,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		Name:               m.Name,
 		Image:              m.Spec.Image,
 		Runtime:            m.Spec.Runtime,
+		BackendRuntime:     m.BackendRuntime,
 		RuntimeFallback:    d.DefaultRuntime,
 		Env:                workerEnv,
 		ExtraHosts:         extraHostsForBackend(wb),
@@ -560,6 +610,9 @@ func computeMemberPhase(currentPhase, matrixUserID, desiredState, containerState
 	default: // Running
 		if containerState == string(backend.StatusRunning) || containerState == string(backend.StatusReady) {
 			return "Running"
+		}
+		if containerState == string(backend.StatusFailed) {
+			return "Failed"
 		}
 		if containerState == string(backend.StatusStarting) {
 			return "Starting"
@@ -627,11 +680,20 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	// worker containers are Docker objects the apiserver does not know
 	// about, so this is the only reliable cleanup path.
 	if d.Backend != nil {
-		if wb := d.Backend.DetectWorkerBackend(ctx); wb != nil {
+		currentBackend := m.StatusBackendRuntime
+		if currentBackend == "" {
+			currentBackend = m.BackendRuntime
+		}
+		if currentBackend == "" {
+			currentBackend = v1beta1.BackendRuntimePod
+		}
+		if wb, err := d.Backend.GetBackendForType(ctx, currentBackend); err == nil && wb != nil {
 			wb = resolveBackendForMember(wb, m)
 			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 				logger.Error(err, "failed to delete member container (may already be removed)", "name", m.Name)
 			}
+		} else if err != nil {
+			logger.Error(err, "failed to resolve member backend for delete", "name", m.Name, "backendRuntime", currentBackend)
 		}
 	}
 	if err := ensureServiceDeleted(ctx, &m, &d); err != nil {

@@ -848,7 +848,7 @@ func bootstrapAdminCLIToken(ctx context.Context, prov *service.Provisioner) erro
 // backend doesn't need it.
 // Gateway selection is handled in initInfraClients via gateway.Client,
 // so this function only cares about worker runtimes (docker vs k8s).
-func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache backend.RemoteClientProvider) []backend.WorkerBackend {
+func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache backend.RemoteClusterClientProvider) []backend.WorkerBackend {
 	var workers []backend.WorkerBackend
 
 	if cfg.KubeMode == "embedded" {
@@ -861,7 +861,7 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache
 	}
 
 	switch effectiveBackend {
-	case "k8s":
+	case "k8s", "sandbox":
 		// remoteCache is nil when the credential provider sidecar is not
 		// configured; in that case NewK8sBackendWithCache behaves
 		// identically to NewK8sBackend.
@@ -869,6 +869,17 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache
 			log.Printf("[WARN] Failed to create K8s backend: %v", err)
 		} else {
 			workers = append(workers, k8s)
+		}
+		if sandboxBackend, err := backend.NewSandboxBackendFromConfig(
+			cfg.SandboxConfig(),
+			cfg.ContainerPrefix,
+			scheme,
+			cfg.SandboxCapabilities,
+			remoteCache,
+		); err != nil {
+			log.Printf("[WARN] Failed to create Sandbox backend: %v", err)
+		} else {
+			workers = append(workers, sandboxBackend)
 		}
 	}
 

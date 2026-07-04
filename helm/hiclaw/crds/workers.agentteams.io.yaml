@@ -188,6 +188,10 @@ spec:
                   type: string
                   enum: ["Local", "Remote"]
                   description: "Where the worker pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster."
+                backendRuntime:
+                  type: string
+                  enum: ["pod", "sandbox"]
+                  description: "Worker infrastructure backend. pod (default) creates a normal Pod; sandbox claims an OpenKruise Sandbox instance."
                 targetCluster:
                   type: object
                   description: "Remote cluster target for deployment. Required when deployMode is Remote."
@@ -279,6 +283,10 @@ spec:
                   type: string
                   enum: ["Local", "Remote"]
                   description: "Applied deployment mode for the current Worker runtime resource."
+                backendRuntime:
+                  type: string
+                  enum: ["pod", "sandbox"]
+                  description: "Applied backend runtime for the current Worker runtime resource."
                 targetCluster:
                   type: object
                   description: "Applied remote cluster target for the current Worker runtime resource."

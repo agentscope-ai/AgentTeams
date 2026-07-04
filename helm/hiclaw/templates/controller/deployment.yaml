@@ -30,6 +30,11 @@ spec:
             - name: http
               containerPort: {{ .Values.controller.service.targetPort }}
               protocol: TCP
+            {{- if .Values.controller.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.controller.metrics.targetPort }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ include "hiclaw.secretName" . }}
@@ -38,6 +43,8 @@ spec:
               value: "incluster"
             - name: HICLAW_HTTP_ADDR
               value: {{ printf ":%v" .Values.controller.service.targetPort | quote }}
+            - name: AGENTTEAMS_METRICS_BIND_ADDR
+              value: {{ ternary .Values.controller.metrics.bindAddress "0" .Values.controller.metrics.enabled | quote }}
             - name: HICLAW_CONTROLLER_URL
               value: {{ include "hiclaw.controller.internalURL" . | quote }}
             {{- /*

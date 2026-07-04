@@ -22,6 +22,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/initializer"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
+	agentteamsmetrics "github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	"github.com/hiclaw/hiclaw-controller/internal/remoteclient"
 	"github.com/hiclaw/hiclaw-controller/internal/server"
@@ -649,6 +650,14 @@ func (a *App) initReconcilers(_ context.Context) error {
 		return fmt.Errorf("setup ManagerReconciler: %w", err)
 	}
 
+	if err := a.mgr.Add(&agentteamsmetrics.CRCountCollector{
+		Client:       a.mgr.GetClient(),
+		Namespace:    a.namespace,
+		SkipManagers: !a.cfg.ManagerEnabled,
+	}); err != nil {
+		return fmt.Errorf("setup CR count collector: %w", err)
+	}
+
 	return nil
 }
 
@@ -703,7 +712,7 @@ func (a *App) startEmbedded(ctx context.Context) (*rest.Config, error) {
 	a.mgr, err = ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme: a.scheme,
 		Metrics: metricsserver.Options{
-			BindAddress: "0",
+			BindAddress: a.cfg.MetricsBindAddr,
 		},
 	})
 	if err != nil {
@@ -742,7 +751,10 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	restCfg := ctrl.GetConfigOrDie()
 	leaseID := a.cfg.ControllerName + "-leader"
 	opts := ctrl.Options{
-		Scheme:                        a.scheme,
+		Scheme: a.scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: a.cfg.MetricsBindAddr,
+		},
 		LeaderElection:                true,
 		LeaderElectionID:              leaseID,
 		LeaderElectionReleaseOnCancel: true,

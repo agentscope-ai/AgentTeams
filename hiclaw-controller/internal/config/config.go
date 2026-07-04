@@ -21,12 +21,13 @@ import (
 
 type Config struct {
 	// Controller core
-	KubeMode  string // "embedded" or "incluster"
-	DataDir   string
-	HTTPAddr  string
-	ConfigDir string
-	CRDDir    string
-	SkillsDir string
+	KubeMode        string // "embedded" or "incluster"
+	DataDir         string
+	HTTPAddr        string
+	MetricsBindAddr string
+	ConfigDir       string
+	CRDDir          string
+	SkillsDir       string
 
 	// ResourcePrefix is the tenant-level prefix used to derive Pod/SA/label/
 	// session names created by this controller. Default "hiclaw-". Set via
@@ -233,6 +234,16 @@ type managerSpecEnv struct {
 }
 
 func LoadConfig() *Config {
+	kubeMode := envOrDefault("HICLAW_KUBE_MODE", "embedded")
+	metricsBindAddr := os.Getenv("AGENTTEAMS_METRICS_BIND_ADDR")
+	if metricsBindAddr == "" {
+		if kubeMode == "embedded" {
+			metricsBindAddr = "0"
+		} else {
+			metricsBindAddr = ":8080"
+		}
+	}
+
 	dataDir := envOrDefault("HICLAW_DATA_DIR", "/data/hiclaw-controller")
 	if !filepath.IsAbs(dataDir) {
 		if wd, err := os.Getwd(); err == nil {
@@ -253,12 +264,13 @@ func LoadConfig() *Config {
 	}
 
 	cfg := &Config{
-		KubeMode:  envOrDefault("HICLAW_KUBE_MODE", "embedded"),
-		DataDir:   dataDir,
-		HTTPAddr:  envOrDefault("HICLAW_HTTP_ADDR", ":8090"),
-		ConfigDir: envOrDefault("HICLAW_CONFIG_DIR", "/root/hiclaw-fs/hiclaw-config"),
-		CRDDir:    envOrDefault("HICLAW_CRD_DIR", "/opt/hiclaw/config/crd"),
-		SkillsDir: envOrDefault("HICLAW_SKILLS_DIR", "/opt/hiclaw/agent/skills"),
+		KubeMode:        kubeMode,
+		DataDir:         dataDir,
+		HTTPAddr:        envOrDefault("HICLAW_HTTP_ADDR", ":8090"),
+		MetricsBindAddr: metricsBindAddr,
+		ConfigDir:       envOrDefault("HICLAW_CONFIG_DIR", "/root/hiclaw-fs/hiclaw-config"),
+		CRDDir:          envOrDefault("HICLAW_CRD_DIR", "/opt/hiclaw/config/crd"),
+		SkillsDir:       envOrDefault("HICLAW_SKILLS_DIR", "/opt/hiclaw/agent/skills"),
 
 		ResourcePrefix:     resourcePrefix,
 		ResourceAutoPrefix: resourceAutoPrefix,

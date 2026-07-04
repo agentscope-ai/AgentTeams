@@ -368,8 +368,8 @@ func buildUnifiedSandboxSetObject(name, namespace, image string, prewarmSize int
 		"image":           image,
 		"imagePullPolicy": "IfNotPresent",
 		"env": []interface{}{
-			map[string]interface{}{"name": "HICLAW_WORKER_ENV_MOUNT_DIR", "value": "/mnt/hiclaw/env"},
-			map[string]interface{}{"name": "HICLAW_WORKER_ENV_MOUNT_REQUIRED", "value": "1"},
+			map[string]interface{}{"name": "AGENTTEAMS_WORKER_ENV_MOUNT_DIR", "value": "/mnt/agentteams/env"},
+			map[string]interface{}{"name": "AGENTTEAMS_WORKER_ENV_MOUNT_REQUIRED", "value": "1"},
 		},
 	}
 	if resourcesMap := sandboxSetResourcesMap(resources); len(resourcesMap) > 0 {
@@ -934,7 +934,7 @@ func NewSandboxBackendFromConfig(cfg SandboxConfig, containerPrefix string, sche
 // ProviderCapabilities. Every recognized token enables one capability.
 // Unknown tokens and the empty string both yield the zero value (all
 // capabilities disabled), so administrators can opt out cleanly by not
-// setting HICLAW_SANDBOX_CAPABILITIES. To enable Hibernate, set the env
+// setting AGENTTEAMS_SANDBOX_CAPABILITIES. To enable Hibernate, set the env
 // to "hibernate".
 func ParseCapabilities(s string) sandbox.ProviderCapabilities {
 	caps := sandbox.ProviderCapabilities{}

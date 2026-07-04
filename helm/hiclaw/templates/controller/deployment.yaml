@@ -65,17 +65,17 @@ spec:
               value: {{ .Values.controller.resourceAutoPrefix | default true | quote }}
             - name: HICLAW_WORKER_BACKEND
               value: {{ .Values.controller.workerBackend | quote }}
-            - name: HICLAW_SANDBOX_PROVIDER_TYPE
+            - name: AGENTTEAMS_SANDBOX_PROVIDER_TYPE
               value: {{ .Values.controller.sandbox.providerType | default "openkruise" | quote }}
             {{- if .Values.controller.sandbox.capabilities }}
-            - name: HICLAW_SANDBOX_CAPABILITIES
+            - name: AGENTTEAMS_SANDBOX_CAPABILITIES
               value: {{ .Values.controller.sandbox.capabilities | quote }}
             {{- end }}
             {{- if .Values.controller.sandbox.agentRuntimeImage }}
-            - name: HICLAW_SANDBOX_AGENT_RUNTIME_IMAGE
+            - name: AGENTTEAMS_SANDBOX_AGENT_RUNTIME_IMAGE
               value: {{ .Values.controller.sandbox.agentRuntimeImage | quote }}
             {{- end }}
-            - name: HICLAW_SANDBOX_PREWARM_SIZE
+            - name: AGENTTEAMS_SANDBOX_PREWARM_SIZE
               value: {{ .Values.controller.sandbox.prewarmSize | default 1 | quote }}
             - name: HICLAW_K8S_NAMESPACE
               valueFrom:

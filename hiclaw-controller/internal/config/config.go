@@ -296,10 +296,10 @@ func LoadConfig() *Config {
 		K8sWorkerCPU:    envOrDefault("HICLAW_K8S_WORKER_CPU", "1000m"),
 		K8sWorkerMemory: envOrDefault("HICLAW_K8S_WORKER_MEMORY", "2Gi"),
 
-		SandboxProviderType:          envOrDefault("HICLAW_SANDBOX_PROVIDER_TYPE", "openkruise"),
-		SandboxCapabilities:          os.Getenv("HICLAW_SANDBOX_CAPABILITIES"),
-		SandboxPrewarmSize:           envOrDefaultInt("HICLAW_SANDBOX_PREWARM_SIZE", backend.DefaultSandboxPrewarmSize),
-		SandboxPrewarmSizeConfigured: os.Getenv("HICLAW_SANDBOX_PREWARM_SIZE") != "",
+		SandboxProviderType:          envOrDefault("AGENTTEAMS_SANDBOX_PROVIDER_TYPE", "openkruise"),
+		SandboxCapabilities:          os.Getenv("AGENTTEAMS_SANDBOX_CAPABILITIES"),
+		SandboxPrewarmSize:           envOrDefaultInt("AGENTTEAMS_SANDBOX_PREWARM_SIZE", backend.DefaultSandboxPrewarmSize),
+		SandboxPrewarmSizeConfigured: os.Getenv("AGENTTEAMS_SANDBOX_PREWARM_SIZE") != "",
 
 		ManagerEnabled:          envOrDefault("HICLAW_MANAGER_ENABLED", "true") == "true",
 		ManagerModel:            firstNonEmpty(os.Getenv("HICLAW_MANAGER_MODEL"), envOrDefault("HICLAW_DEFAULT_MODEL", "qwen3.6-plus")),
@@ -526,7 +526,7 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 	return backend.SandboxConfig{
 		Namespace:                    c.K8sNamespace,
 		ProviderType:                 c.SandboxProviderType,
-		AgentRuntimeImage:            os.Getenv("HICLAW_SANDBOX_AGENT_RUNTIME_IMAGE"),
+		AgentRuntimeImage:            os.Getenv("AGENTTEAMS_SANDBOX_AGENT_RUNTIME_IMAGE"),
 		WorkerImage:                  envOrDefault("HICLAW_WORKER_IMAGE", "hiclaw/worker-agent:latest"),
 		CopawWorkerImage:             envOrDefault("HICLAW_COPAW_WORKER_IMAGE", "hiclaw/copaw-worker:latest"),
 		HermesWorkerImage:            envOrDefault("HICLAW_HERMES_WORKER_IMAGE", "hiclaw/hermes-worker:latest"),

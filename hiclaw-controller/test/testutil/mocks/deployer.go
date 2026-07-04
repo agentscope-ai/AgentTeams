@@ -12,26 +12,28 @@ import (
 type MockDeployer struct {
 	mu sync.Mutex
 
-	DeployPackageFn             func(ctx context.Context, workerName string, pkg string, isUpdate bool) error
-	WriteInlineConfigsFn        func(workerName string, spec v1beta1.WorkerSpec) error
-	DeployWorkerConfigFn        func(ctx context.Context, req service.WorkerDeployRequest) error
-	PushOnDemandSkillsFn        func(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
-	CleanupOSSDataFn            func(ctx context.Context, workerName string) error
-	InjectCoordinationContextFn func(ctx context.Context, req service.CoordinationDeployRequest) error
-	InjectWorkerCoordinationFn  func(ctx context.Context, req service.WorkerCoordinationRequest) error
-	InjectHeartbeatConfigFn     func(ctx context.Context, req service.InjectHeartbeatRequest) error
-	EnsureTeamStorageFn         func(ctx context.Context, teamName string) error
+	DeployPackageFn                func(ctx context.Context, workerName string, pkg string, isUpdate bool) error
+	WriteInlineConfigsFn           func(workerName string, spec v1beta1.WorkerSpec) error
+	DeployWorkerConfigFn           func(ctx context.Context, req service.WorkerDeployRequest) error
+	PushOnDemandSkillsFn           func(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
+	CleanupOSSDataFn               func(ctx context.Context, workerName string) error
+	InjectCoordinationContextFn    func(ctx context.Context, req service.CoordinationDeployRequest) error
+	InjectWorkerCoordinationFn     func(ctx context.Context, req service.WorkerCoordinationRequest) error
+	InjectHeartbeatConfigFn        func(ctx context.Context, req service.InjectHeartbeatRequest) error
+	EnsureTeamStorageFn            func(ctx context.Context, teamName string) error
+	MaterializeSandboxWorkerDepsFn func(ctx context.Context, req service.SandboxWorkerDepsRequest) error
 
 	Calls struct {
-		DeployPackage             []string
-		WriteInlineConfigs        []string
-		DeployWorkerConfig        []service.WorkerDeployRequest
-		PushOnDemandSkills        []string
-		CleanupOSSData            []string
-		InjectCoordinationContext []service.CoordinationDeployRequest
-		InjectWorkerCoordination  []service.WorkerCoordinationRequest
-		InjectHeartbeatConfig     []service.InjectHeartbeatRequest
-		EnsureTeamStorage         []string
+		DeployPackage                []string
+		WriteInlineConfigs           []string
+		DeployWorkerConfig           []service.WorkerDeployRequest
+		PushOnDemandSkills           []string
+		CleanupOSSData               []string
+		InjectCoordinationContext    []service.CoordinationDeployRequest
+		InjectWorkerCoordination     []service.WorkerCoordinationRequest
+		InjectHeartbeatConfig        []service.InjectHeartbeatRequest
+		EnsureTeamStorage            []string
+		MaterializeSandboxWorkerDeps []service.SandboxWorkerDepsRequest
 	}
 }
 
@@ -53,6 +55,7 @@ func (m *MockDeployer) Reset() {
 	m.InjectWorkerCoordinationFn = nil
 	m.InjectHeartbeatConfigFn = nil
 	m.EnsureTeamStorageFn = nil
+	m.MaterializeSandboxWorkerDepsFn = nil
 }
 
 // ClearCalls resets call records only, preserving Fn overrides.
@@ -64,15 +67,16 @@ func (m *MockDeployer) ClearCalls() {
 
 func (m *MockDeployer) clearCallsLocked() {
 	m.Calls = struct {
-		DeployPackage             []string
-		WriteInlineConfigs        []string
-		DeployWorkerConfig        []service.WorkerDeployRequest
-		PushOnDemandSkills        []string
-		CleanupOSSData            []string
-		InjectCoordinationContext []service.CoordinationDeployRequest
-		InjectWorkerCoordination  []service.WorkerCoordinationRequest
-		InjectHeartbeatConfig     []service.InjectHeartbeatRequest
-		EnsureTeamStorage         []string
+		DeployPackage                []string
+		WriteInlineConfigs           []string
+		DeployWorkerConfig           []service.WorkerDeployRequest
+		PushOnDemandSkills           []string
+		CleanupOSSData               []string
+		InjectCoordinationContext    []service.CoordinationDeployRequest
+		InjectWorkerCoordination     []service.WorkerCoordinationRequest
+		InjectHeartbeatConfig        []service.InjectHeartbeatRequest
+		EnsureTeamStorage            []string
+		MaterializeSandboxWorkerDeps []service.SandboxWorkerDepsRequest
 	}{}
 }
 
@@ -168,6 +172,17 @@ func (m *MockDeployer) InjectHeartbeatConfig(ctx context.Context, req service.In
 	m.mu.Lock()
 	m.Calls.InjectHeartbeatConfig = append(m.Calls.InjectHeartbeatConfig, req)
 	fn := m.InjectHeartbeatConfigFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return nil
+}
+
+func (m *MockDeployer) MaterializeSandboxWorkerDeps(ctx context.Context, req service.SandboxWorkerDepsRequest) error {
+	m.mu.Lock()
+	m.Calls.MaterializeSandboxWorkerDeps = append(m.Calls.MaterializeSandboxWorkerDeps, req)
+	fn := m.MaterializeSandboxWorkerDepsFn
 	m.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, req)

@@ -568,6 +568,16 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 	if wb.Name() == "sandbox" {
 		createReq.WorkersDeps = backend.BuildSandboxWorkerDeps(m.Name, createReq.Env, createReq.AuthToken, createReq.WorkersDeps)
+		if d.Deployer == nil {
+			return reconcile.Result{}, fmt.Errorf("materialize sandbox worker deps: deployer is required")
+		}
+		if err := d.Deployer.MaterializeSandboxWorkerDeps(ctx, service.SandboxWorkerDepsRequest{
+			WorkerName: m.Name,
+			Env:        createReq.WorkersDeps.Env,
+			AuthToken:  createReq.WorkersDeps.AuthToken,
+		}); err != nil {
+			return reconcile.Result{}, fmt.Errorf("materialize sandbox worker deps: %w", err)
+		}
 	}
 
 	if _, err := wb.Create(ctx, createReq); err != nil {

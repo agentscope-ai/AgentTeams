@@ -50,6 +50,7 @@ type WorkerDeployer interface {
 	InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error
 	InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error
 	EnsureTeamStorage(ctx context.Context, teamName string) error
+	MaterializeSandboxWorkerDeps(ctx context.Context, req SandboxWorkerDepsRequest) error
 }
 
 // WorkerEnvBuilderI defines env map construction for worker containers.

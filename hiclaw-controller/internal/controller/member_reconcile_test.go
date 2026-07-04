@@ -105,9 +105,30 @@ func TestCreateMemberContainerPassesSpecResources(t *testing.T) {
 func TestCreateMemberContainerPassesSandboxWorkerDeps(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
 	wb.NameOverride = "sandbox"
+	materialized := false
+	wb.CreateFn = func(ctx context.Context, req backend.CreateRequest) (*backend.WorkerResult, error) {
+		if !materialized {
+			t.Fatal("backend Create called before sandbox worker deps were materialized")
+		}
+		return &backend.WorkerResult{Name: req.Name, Backend: wb.Name(), Status: backend.StatusStarting}, nil
+	}
 	prov := mocks.NewMockProvisioner()
 	prov.RequestSATokenFn = func(ctx context.Context, workerName string) (string, error) {
 		return "sa-token-" + workerName, nil
+	}
+	deployer := mocks.NewMockDeployer()
+	deployer.MaterializeSandboxWorkerDepsFn = func(ctx context.Context, req service.SandboxWorkerDepsRequest) error {
+		materialized = true
+		if req.WorkerName != "alice" {
+			t.Fatalf("SandboxWorkerDepsRequest.WorkerName=%q, want alice", req.WorkerName)
+		}
+		if req.AuthToken != "sa-token-alice" {
+			t.Fatalf("SandboxWorkerDepsRequest.AuthToken=%q, want sa-token-alice", req.AuthToken)
+		}
+		if got := req.Env["AGENTTEAMS_TEST_ENV"]; got != "true" {
+			t.Fatalf("SandboxWorkerDepsRequest.Env[AGENTTEAMS_TEST_ENV]=%q, want true (all=%v)", got, req.Env)
+		}
+		return nil
 	}
 	envBuilder := mocks.NewMockEnvBuilder()
 	envBuilder.BuildFn = func(workerName string, prov *service.WorkerProvisionResult) map[string]string {
@@ -121,6 +142,7 @@ func TestCreateMemberContainerPassesSandboxWorkerDeps(t *testing.T) {
 
 	_, err := createMemberContainer(context.Background(), MemberDeps{
 		Provisioner: prov,
+		Deployer:    deployer,
 		EnvBuilder:  envBuilder,
 	}, MemberContext{
 		Name:           "alice",

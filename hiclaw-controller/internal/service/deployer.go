@@ -87,18 +87,26 @@ type InjectHeartbeatRequest struct {
 	Every      string // e.g. "30m"
 }
 
+// SandboxWorkerDepsRequest carries runtime material that backs sandbox dynamic
+// mounts for a Worker.
+type SandboxWorkerDepsRequest struct {
+	WorkerName string
+	Env        map[string]string
+	AuthToken  string
+}
+
 // --- Deployer ---
 
 // DeployerConfig holds configuration for constructing a Deployer.
 type DeployerConfig struct {
-	AgentConfig        *agentconfig.Generator
-	OSS                oss.StorageClient
-	Executor           *executor.Shell
-	Packages           *executor.PackageResolver
-	Legacy             *LegacyCompat
-	AgentFSDir         string // embedded: /root/hiclaw-fs/agents
-	WorkerAgentDir     string // source for builtin agent files
-	MatrixDomain       string
+	AgentConfig    *agentconfig.Generator
+	OSS            oss.StorageClient
+	Executor       *executor.Shell
+	Packages       *executor.PackageResolver
+	Legacy         *LegacyCompat
+	AgentFSDir     string // embedded: /root/hiclaw-fs/agents
+	WorkerAgentDir string // source for builtin agent files
+	MatrixDomain   string
 
 	// NacosCredClient is used when remoteSkills use sts-hiclaw (see CRD authType).
 	NacosCredClient credprovider.Client
@@ -108,29 +116,66 @@ type DeployerConfig struct {
 // inline config writes, openclaw.json generation, AGENTS.md merging, skill pushing,
 // and OSS synchronization.
 type Deployer struct {
-	agentConfig         *agentconfig.Generator
-	oss                 oss.StorageClient
-	executor            *executor.Shell
-	packages            *executor.PackageResolver
-	legacy              *LegacyCompat
-	agentFSDir          string
-	workerAgentDir      string
-	matrixDomain        string
-	nacosCredClient     credprovider.Client
+	agentConfig     *agentconfig.Generator
+	oss             oss.StorageClient
+	executor        *executor.Shell
+	packages        *executor.PackageResolver
+	legacy          *LegacyCompat
+	agentFSDir      string
+	workerAgentDir  string
+	matrixDomain    string
+	nacosCredClient credprovider.Client
 }
 
 func NewDeployer(cfg DeployerConfig) *Deployer {
 	return &Deployer{
-		agentConfig:         cfg.AgentConfig,
-		oss:                 cfg.OSS,
-		executor:            cfg.Executor,
-		packages:            cfg.Packages,
-		legacy:              cfg.Legacy,
-		agentFSDir:          cfg.AgentFSDir,
-		workerAgentDir:      cfg.WorkerAgentDir,
-		matrixDomain:        cfg.MatrixDomain,
-		nacosCredClient:     cfg.NacosCredClient,
+		agentConfig:     cfg.AgentConfig,
+		oss:             cfg.OSS,
+		executor:        cfg.Executor,
+		packages:        cfg.Packages,
+		legacy:          cfg.Legacy,
+		agentFSDir:      cfg.AgentFSDir,
+		workerAgentDir:  cfg.WorkerAgentDir,
+		matrixDomain:    cfg.MatrixDomain,
+		nacosCredClient: cfg.NacosCredClient,
 	}
+}
+
+// MaterializeSandboxWorkerDeps writes the objects referenced by sandbox
+// WorkerDeps dynamic mounts before the SandboxClaim is created.
+func (d *Deployer) MaterializeSandboxWorkerDeps(ctx context.Context, req SandboxWorkerDepsRequest) error {
+	if d.oss == nil {
+		return nil
+	}
+	base := fmt.Sprintf("workers-deps/%s", req.WorkerName)
+	if len(req.Env) > 0 {
+		if err := d.oss.PutObject(ctx, base+"/env", renderSandboxWorkerEnv(req.Env)); err != nil {
+			return fmt.Errorf("materialize sandbox worker env: %w", err)
+		}
+	}
+	if req.AuthToken != "" {
+		if err := d.oss.PutObject(ctx, base+"/token", []byte(req.AuthToken)); err != nil {
+			return fmt.Errorf("materialize sandbox worker token: %w", err)
+		}
+	}
+	return nil
+}
+
+func renderSandboxWorkerEnv(env map[string]string) []byte {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var out strings.Builder
+	for _, key := range keys {
+		out.WriteString(key)
+		out.WriteByte('=')
+		out.WriteString(env[key])
+		out.WriteByte('\n')
+	}
+	return []byte(out.String())
 }
 
 // DeployPackage resolves, downloads, extracts, and deploys a package to OSS.

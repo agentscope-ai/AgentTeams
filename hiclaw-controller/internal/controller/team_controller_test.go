@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 
@@ -322,6 +324,65 @@ func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
 	if req.CredentialName != "alpha-worker-lead" {
 		t.Fatalf("ProvisionWorker CredentialName=%q, want CR name alpha-worker-lead", req.CredentialName)
 	}
+}
+
+func TestResolveTeamAdminActor_ExternalSSOHumanUsesResolvedIdentity(t *testing.T) {
+	issuer := "https://sso.example.com"
+	subject := "user-123"
+	localpart := testSSOLocalpart(issuer, subject)
+	matrixUserID := "@" + localpart + ":localhost"
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			Username: "legacy-alice",
+			IdentitySource: &v1beta1.IdentitySourceSpec{
+				Issuer:  issuer,
+				Subject: subject,
+			},
+		},
+		Status: v1beta1.HumanStatus{
+			Phase:        "Active",
+			MatrixUserID: matrixUserID,
+		},
+	}
+	prov := mocks.NewMockProvisioner()
+	prov.AppServiceEnabled = true
+	r := &TeamReconciler{
+		Client:      newTeamTestClient(t, human),
+		Provisioner: prov,
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Admin: &v1beta1.TeamAdminSpec{Name: "alice", MatrixUserID: matrixUserID},
+		},
+	}
+
+	actor, err := r.resolveTeamAdminActor(context.Background(), team)
+	if err != nil {
+		t.Fatalf("resolveTeamAdminActor: %v", err)
+	}
+	if actor.MatrixUserID != matrixUserID {
+		t.Fatalf("MatrixUserID=%q, want %q", actor.MatrixUserID, matrixUserID)
+	}
+	if actor.Username != localpart {
+		t.Fatalf("Username=%q, want resolved SSO localpart %q", actor.Username, localpart)
+	}
+	if actor.Token != "mock-as-token-"+localpart {
+		t.Fatalf("Token=%q, want AppService token for resolved SSO localpart", actor.Token)
+	}
+	if len(prov.Calls.LoginAppServiceUser) != 1 || prov.Calls.LoginAppServiceUser[0] != localpart {
+		t.Fatalf("LoginAppServiceUser calls=%v, want [%s]", prov.Calls.LoginAppServiceUser, localpart)
+	}
+	if len(prov.Calls.LoginAsHuman) != 0 || len(prov.Calls.LoginWithPassword) != 0 {
+		t.Fatalf("legacy login must not be used for SSO admin, LoginAsHuman=%v LoginWithPassword=%v",
+			prov.Calls.LoginAsHuman, prov.Calls.LoginWithPassword)
+	}
+}
+
+func testSSOLocalpart(issuer, subject string) string {
+	digest := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	return hex.EncodeToString(digest[:16])
 }
 
 func TestReconcileMemberRefreshUsesCRNameCredentialAndRuntimeMatrixName(t *testing.T) {

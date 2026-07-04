@@ -13,6 +13,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
 	"github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/internal/controller/humanidentity"
 	"github.com/hiclaw/hiclaw-controller/internal/executor"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/metrics"
@@ -137,25 +138,42 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 		return teamAdminActor{}, fmt.Errorf("load team admin human %s/%s: %w", key.Namespace, key.Name, err)
 	}
 
-	username := human.Spec.EffectiveUsername(human.Name)
-	matrixUserID := r.Provisioner.MatrixUserID(username)
+	humanProv, ok := r.Provisioner.(service.HumanProvisioner)
+	if !ok {
+		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s requires HumanProvisioner support", key.Namespace, key.Name)
+	}
+	identity, err := humanidentity.ResolveHuman(&human.Spec, human.Name, humanidentity.Deps{Provisioner: humanProv})
+	if err != nil {
+		return teamAdminActor{}, fmt.Errorf("resolve team admin human %s/%s identity: %w", key.Namespace, key.Name, err)
+	}
+	matrixUserID := human.Status.MatrixUserID
+	if matrixUserID == "" {
+		matrixUserID = identity.MatrixUserID
+	}
+	if matrixUserID != identity.MatrixUserID {
+		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s status.matrixUserID %q does not match resolved identity %q",
+			key.Namespace, key.Name, matrixUserID, identity.MatrixUserID)
+	}
 	if t.Spec.Admin.MatrixUserID != "" && t.Spec.Admin.MatrixUserID != matrixUserID {
 		return teamAdminActor{}, fmt.Errorf("team admin matrixUserId %q does not match Human %s/%s matrix user %q",
 			t.Spec.Admin.MatrixUserID, key.Namespace, key.Name, matrixUserID)
 	}
-	if !r.Provisioner.MatrixAppServiceEnabled() && human.Status.InitialPassword == "" {
+	if identity.ManagesInitialPassword && !r.Provisioner.MatrixAppServiceEnabled() && human.Status.InitialPassword == "" {
 		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no initial password; cannot obtain Matrix token",
 			key.Namespace, key.Name)
 	}
 
-	token, err := r.Provisioner.LoginAsHuman(ctx, username, human.Status.InitialPassword)
+	token, err := identity.Source.EnsureUserToken(ctx, &human.Spec, &human.Status, human.Name)
 	if err != nil {
 		return teamAdminActor{}, fmt.Errorf("login as team admin human %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	if token == "" {
+		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no Matrix token", key.Namespace, key.Name)
 	}
 	return teamAdminActor{
 		MatrixUserID: matrixUserID,
 		Token:        token,
-		Username:     username,
+		Username:     identity.MatrixLocalpart,
 	}, nil
 }
 

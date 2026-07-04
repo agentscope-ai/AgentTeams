@@ -199,6 +199,7 @@ func (a *App) Start(ctx context.Context) error {
 				AppServiceToken:            a.cfg.MatrixAppServiceASToken,
 				AppServiceHSToken:          a.cfg.MatrixAppServiceHSToken,
 				AppServiceSenderLocalpart:  a.cfg.MatrixAppServiceSenderLocalpart,
+				AppServicePushURL:          a.cfg.MatrixAppServicePushURL,
 				MatrixDomain:               a.cfg.MatrixDomain,
 			},
 		}

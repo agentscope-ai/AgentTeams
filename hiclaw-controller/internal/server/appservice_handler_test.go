@@ -10,6 +10,8 @@ import (
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
+	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,6 +48,25 @@ func mentionEvent(roomID, eventID, sender string, userIDs []string) matrixEvent 
 		UserIDs []string `json:"user_ids"`
 	}{UserIDs: userIDs}
 	return ev
+}
+
+func TestNewHTTPServerRegistersAppserviceTransactionRoute(t *testing.T) {
+	k8s := fake.NewClientBuilder().WithScheme(newAppserviceTestScheme(t)).Build()
+	srv := NewHTTPServer(":0", ServerDeps{
+		Client:       k8s,
+		Namespace:    "default",
+		AuthMw:       authpkg.NewMiddleware(nil, nil, nil, nil, ""),
+		MatrixConfig: matrix.Config{AppServiceEnabled: true, AppServiceHSToken: "correct-token"},
+	})
+
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-from-mux", txnBody(t, nil))
+	req.Header.Set("Authorization", "Bearer correct-token")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q, want 200 from mounted AppService transaction route", rec.Code, rec.Body.String())
+	}
 }
 
 // --- Standalone Worker Tests ---

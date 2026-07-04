@@ -17,12 +17,24 @@ def _render_entrypoint(tmp_path: Path, *, mc_host: bool) -> Path:
 
     lib_dir = fake_root / "scripts" / "lib"
     lib_dir.mkdir(parents=True)
-    mc_line = 'export MC_HOST_hiclaw="https://ak:sk@oss.example.com"\n' if mc_host else ""
+    mc_line = (
+        'export "MC_HOST_${AGENTTEAMS_STORAGE_ALIAS:-agentteams}=https://ak:sk@oss.example.com"\n'
+        if mc_host
+        else ""
+    )
     (lib_dir / "hiclaw-env.sh").write_text(
         "#!/bin/sh\n"
+        "AGENTTEAMS_STORAGE_ALIAS=\"${AGENTTEAMS_STORAGE_ALIAS:-agentteams}\"\n"
         "ensure_mc_credentials() {\n"
         f"{mc_line}"
         "  return 0\n"
+        "}\n"
+        "agentteams_mc_host_var() {\n"
+        "  printf 'MC_HOST_%s' \"${AGENTTEAMS_STORAGE_ALIAS:-agentteams}\"\n"
+        "}\n"
+        "agentteams_mc_host_configured() {\n"
+        "  var=\"$(agentteams_mc_host_var)\"\n"
+        "  [ -n \"${!var:-}\" ]\n"
         "}\n"
     )
 
@@ -39,7 +51,7 @@ def _render_entrypoint(tmp_path: Path, *, mc_host: bool) -> Path:
     return rendered
 
 
-def test_entrypoint_uses_hiclaw_mc_host_and_bucket_contract(tmp_path):
+def test_entrypoint_uses_agentteams_mc_host_and_legacy_bucket_contract(tmp_path):
     script = _render_entrypoint(tmp_path, mc_host=True)
     capture = tmp_path / "args.txt"
     env = {
@@ -58,7 +70,7 @@ def test_entrypoint_uses_hiclaw_mc_host_and_bucket_contract(tmp_path):
     assert args[args.index("--fs-bucket") + 1] == "custom-bucket"
 
 
-def test_entrypoint_reports_missing_hiclaw_mc_host_for_oss(tmp_path):
+def test_entrypoint_reports_missing_agentteams_mc_host_for_oss(tmp_path):
     script = _render_entrypoint(tmp_path, mc_host=False)
     env = {
         **os.environ,
@@ -71,4 +83,4 @@ def test_entrypoint_reports_missing_hiclaw_mc_host_for_oss(tmp_path):
     result = subprocess.run([str(script)], env=env, text=True, capture_output=True)
 
     assert result.returncode == 1
-    assert "MC_HOST_hiclaw is not configured" in result.stdout
+    assert "MC_HOST_agentteams is not configured" in result.stdout

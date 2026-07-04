@@ -96,10 +96,12 @@ echo "=== oss credentials STS controller request ==="
 
 with_cluster="$(run_refresh with-cluster remote-cluster-a)"
 assert_contains "cluster id should be sent as controller header" "X-HiClaw-Cluster-ID: remote-cluster-a" "${with_cluster}"
+assert_contains "AgentTeams cluster header should also be sent" "X-AgentTeams-Cluster-ID: remote-cluster-a" "${with_cluster}"
 assert_contains "bearer token should still be sent" "Authorization: Bearer controller-token" "${with_cluster}"
 
 without_cluster="$(run_refresh without-cluster)"
 assert_not_contains "cluster header should be omitted when HICLAW_CLUSTER_ID is empty" "X-HiClaw-Cluster-ID:" "${without_cluster}"
+assert_not_contains "AgentTeams cluster header should be omitted when cluster id is empty" "X-AgentTeams-Cluster-ID:" "${without_cluster}"
 assert_contains "bearer token should be sent without cluster id" "Authorization: Bearer controller-token" "${without_cluster}"
 
 echo "All oss-credentials tests passed"

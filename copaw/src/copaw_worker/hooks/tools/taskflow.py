@@ -65,7 +65,11 @@ def _store() -> FileSystemTaskStore:
 
 
 def _current_actor() -> str | None:
-    configured = os.getenv("HICLAW_MATRIX_USER_ID") or os.getenv("COPAW_MATRIX_USER_ID")
+    configured = (
+        os.getenv("AGENTTEAMS_MATRIX_USER_ID")
+        or os.getenv("HICLAW_MATRIX_USER_ID")
+        or os.getenv("COPAW_MATRIX_USER_ID")
+    )
     if configured:
         return configured.strip()
 

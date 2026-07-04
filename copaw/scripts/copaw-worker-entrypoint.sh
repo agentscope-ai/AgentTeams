@@ -37,11 +37,11 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 # ── Credential setup ─────────────────────────────────────────────────────────
-# Controller-mediated OSS: STS credentials via MC_HOST_hiclaw.
+# Controller-mediated OSS: STS credentials via MC_HOST_${AGENTTEAMS_STORAGE_ALIAS:-agentteams}.
 # Local MinIO: explicit FS endpoint/key/secret passed via CLI args.
-if ensure_mc_credentials && [ -n "${MC_HOST_hiclaw:-}" ]; then
+if ensure_mc_credentials && agentteams_mc_host_configured; then
     log "Configuring OSS credentials via controller-issued STS..."
-    # CLI requires --fs/--fs-key/--fs-secret but they are unused when MC_HOST_hiclaw is set.
+    # CLI requires --fs/--fs-key/--fs-secret but they are unused when the mc host is set.
     FS_ENDPOINT="https://oss-placeholder.aliyuncs.com"
     FS_ACCESS_KEY="rrsa"
     FS_SECRET_KEY="rrsa"
@@ -49,7 +49,7 @@ if ensure_mc_credentials && [ -n "${MC_HOST_hiclaw:-}" ]; then
     log "  OSS bucket: ${FS_BUCKET}"
 else
     if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" = "oss" ]; then
-        log "ERROR: OSS storage requires controller-issued storage credentials, but MC_HOST_hiclaw is not configured"
+        log "ERROR: OSS storage requires controller-issued storage credentials, but $(agentteams_mc_host_var) is not configured"
         exit 1
     fi
     FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-${HICLAW_FS_ENDPOINT:-}}"

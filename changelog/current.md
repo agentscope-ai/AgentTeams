@@ -12,6 +12,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 - fix(worker): pass `X-HiClaw-Cluster-ID` when remote Workers refresh controller-issued STS credentials for OSS and Nacos AI registry access.
 - feat(hiclaw-controller): support a separate agent-pod-template for `deployMode: Remote` Workers via an optional `pod-template-remote.yaml` key on the controller-scoped pod-template ConfigMap; remote-mode Pod creation prefers this key and transparently falls back to `pod-template.yaml` when it is absent or empty, while non-remote/Sandbox paths keep ignoring it.
 - feat(controller): move Kubernetes resources to the `agentteams.io/v1beta1` API group and decouple Team membership through `spec.workerMembers` references to standalone Worker CRs.
+- feat(runtime): let Worker runtimes consume terminal `AGENTTEAMS_*` storage, controller, and auth environment variables while preserving existing `HICLAW_*` deployment compatibility.
 
 - **OpenHuman runtime**: OpenHuman added as the fourth Worker runtime with native Matrix support via `channel-matrix` feature flag; includes controller routing (K8s + Docker backends), Dockerfile, entrypoint script, agent template, Helm chart integration, and Makefile build targets.
 - **Multi model providers**: Worker, Team, and Manager specs can now select a Higress model provider via `spec.modelProvider`; the controller resolves the provider, injects the matching gateway URL into runtime config, and authorizes consumers only on the selected AI route.

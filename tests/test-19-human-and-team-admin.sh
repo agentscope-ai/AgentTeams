@@ -230,6 +230,10 @@ assert_not_empty "${TEAM_ROOM_ID}" "Team Room ID exists: ${TEAM_ROOM_ID}"
 # ============================================================
 log_section "Verify groupAllowFrom (backfill result)"
 
+wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.groupAllowFrom" "${HUMAN_MATRIX_ID}" 120 || true
+wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.dm.allowFrom" "${HUMAN_MATRIX_ID}" 120 || true
+wait_agent_matrix_allow_contains "${TEST_W1}" ".channels.matrix.groupAllowFrom" "${HUMAN_MATRIX_ID}" 120 || true
+
 LEADER_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
 if echo "${LEADER_GAF}" | grep -q "${HUMAN_MATRIX_ID}"; then
     log_pass "Leader groupAllowFrom includes Team Admin (backfilled)"

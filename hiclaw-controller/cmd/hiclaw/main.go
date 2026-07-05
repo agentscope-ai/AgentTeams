@@ -14,9 +14,14 @@ func main() {
 hiclaw-controller REST API.
 
 Environment variables:
-  HICLAW_CONTROLLER_URL   Controller base URL (default: http://localhost:8090)
-  HICLAW_AUTH_TOKEN        Bearer token for authentication
-  HICLAW_AUTH_TOKEN_FILE   Path to a file containing the bearer token (K8s projected volume)`,
+  AGENTTEAMS_CONTROLLER_URL / HICLAW_CONTROLLER_URL
+      Controller base URL (default: http://localhost:8090)
+  AGENTTEAMS_AUTH_TOKEN / HICLAW_AUTH_TOKEN
+      Bearer token for authentication
+  AGENTTEAMS_AUTH_TOKEN_FILE / HICLAW_AUTH_TOKEN_FILE
+      Path to a file containing the bearer token (K8s projected volume)
+
+Legacy HICLAW_* names are accepted for compatibility with existing installs.`,
 	}
 
 	rootCmd.AddCommand(applyCmd())

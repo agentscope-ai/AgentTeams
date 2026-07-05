@@ -354,6 +354,9 @@ func (r *TeamReconciler) reconcileTeamLegacy(ctx context.Context, t *v1beta1.Tea
 		logger.Error(err, "legacy team context injection failed (non-fatal)")
 	}
 	if r.Legacy != nil && r.Legacy.Enabled() {
+		if err := r.Legacy.UpdateManagerGroupAllowFrom(r.Legacy.MatrixUserID(leaderRuntimeName), true); err != nil {
+			logger.Error(err, "failed to update Manager groupAllowFrom for team leader (non-fatal)")
+		}
 		if err := r.Legacy.UpdateTeamsRegistry(service.TeamRegistryEntry{
 			Name:           teamRuntimeName,
 			Leader:         t.Spec.Leader.Name,
@@ -655,6 +658,14 @@ func (r *TeamReconciler) injectLegacyTeamContext(ctx context.Context, t *v1beta1
 		}
 		if err := r.deployLegacyRuntimeConfig(ctx, t, member, leader.RuntimeName, rooms, roster); err != nil {
 			return err
+		}
+		policy := r.legacyChannelPolicy(t, members, member, leader.RuntimeName)
+		if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
+			WorkerName:     member.RuntimeName,
+			GroupAllowFrom: policy.GroupAllowFrom,
+			DMAllowFrom:    policy.DMAllowFrom,
+		}); err != nil {
+			logger.Error(err, "channel policy injection failed (non-fatal)", "worker", member.RuntimeName)
 		}
 	}
 	return nil
@@ -1504,6 +1515,77 @@ func (r *TeamReconciler) decoupledChannelPolicy(t *v1beta1.Team, members []decou
 	}
 
 	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, decoupledIndividualChannelPolicy(t, current, role))
+	if policy != nil {
+		groupAllow = applyChannelAllowPolicy(groupAllow, policy.GroupAllowExtra, policy.GroupDenyExtra, resolve)
+		dmAllow = applyChannelAllowPolicy(dmAllow, policy.DmAllowExtra, policy.DmDenyExtra, resolve)
+	}
+	return decoupledChannelAllowLists{
+		GroupAllowFrom: uniqueTeamStrings(groupAllow),
+		DMAllowFrom:    uniqueTeamStrings(dmAllow),
+	}
+}
+
+func (r *TeamReconciler) legacyChannelPolicy(t *v1beta1.Team, members []MemberContext, current MemberContext, leaderRuntimeName string) decoupledChannelAllowLists {
+	resolve := func(value string) string {
+		if value == "" || strings.HasPrefix(value, "@") {
+			return value
+		}
+		if r.Legacy != nil && r.Legacy.Enabled() {
+			return r.Legacy.MatrixUserID(value)
+		}
+		if r.Provisioner != nil {
+			return r.Provisioner.MatrixUserID(value)
+		}
+		return value
+	}
+
+	if leaderRuntimeName == "" {
+		for _, member := range members {
+			if member.Role == RoleTeamLeader {
+				leaderRuntimeName = member.RuntimeName
+				break
+			}
+		}
+	}
+	managerMatrixID := resolve("manager")
+	coordinatorIDs := teamCoordinatorIDs(t)
+
+	var systemAdminID string
+	if r.SystemAdminUser != "" {
+		systemAdminID = resolve(r.SystemAdminUser)
+	}
+
+	groupAllow := make([]string, 0)
+	dmAllow := make([]string, 0)
+
+	if current.Role == RoleTeamLeader {
+		groupAllow = append(groupAllow, managerMatrixID, systemAdminID)
+		groupAllow = appendResolved(groupAllow, resolve, coordinatorIDs...)
+		for _, member := range members {
+			if member.Role == RoleTeamLeader {
+				continue
+			}
+			groupAllow = append(groupAllow, resolve(member.RuntimeName))
+		}
+		dmAllow = append(dmAllow, managerMatrixID, systemAdminID)
+		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
+	} else {
+		leaderMatrixID := resolve(leaderRuntimeName)
+		groupAllow = append(groupAllow, leaderMatrixID, systemAdminID)
+		groupAllow = appendResolved(groupAllow, resolve, coordinatorIDs...)
+		if t.Spec.PeerMentions == nil || *t.Spec.PeerMentions {
+			for _, member := range members {
+				if member.Role == RoleTeamLeader || member.Name == current.Name {
+					continue
+				}
+				groupAllow = append(groupAllow, resolve(member.RuntimeName))
+			}
+		}
+		dmAllow = append(dmAllow, leaderMatrixID, systemAdminID)
+		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
+	}
+
+	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, current.Spec.ChannelPolicy)
 	if policy != nil {
 		groupAllow = applyChannelAllowPolicy(groupAllow, policy.GroupAllowExtra, policy.GroupDenyExtra, resolve)
 		dmAllow = applyChannelAllowPolicy(dmAllow, policy.DmAllowExtra, policy.DmDenyExtra, resolve)

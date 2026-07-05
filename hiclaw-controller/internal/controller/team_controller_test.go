@@ -443,6 +443,55 @@ func TestReconcileLegacyMember_NoOpWhenLegacyNil(t *testing.T) {
 	r.removeLegacyMember(context.Background(), "x")
 }
 
+func TestLegacyChannelPolicy_BuildsFinalAllowLists(t *testing.T) {
+	legacy, _ := newTestLegacy(t)
+	r := &TeamReconciler{Legacy: legacy, SystemAdminUser: "admin"}
+	team := &v1beta1.Team{
+		Spec: v1beta1.TeamSpec{
+			Admin: &v1beta1.TeamAdminSpec{
+				Name:         "alice",
+				MatrixUserID: "@alice:matrix.local",
+			},
+			ChannelPolicy: &v1beta1.ChannelPolicySpec{
+				GroupAllowExtra: []string{"external-bot"},
+			},
+		},
+	}
+	members := []MemberContext{
+		{Name: "lead", RuntimeName: "lead", Role: RoleTeamLeader},
+		{Name: "dev", RuntimeName: "dev", Role: RoleTeamWorker, Spec: v1beta1.WorkerSpec{
+			ChannelPolicy: &v1beta1.ChannelPolicySpec{GroupDenyExtra: []string{"qa"}},
+		}},
+		{Name: "qa", RuntimeName: "qa", Role: RoleTeamWorker},
+	}
+
+	leaderPolicy := r.legacyChannelPolicy(team, members, members[0], "lead")
+	for _, want := range []string{"@manager:matrix.local", "@admin:matrix.local", "@alice:matrix.local", "@dev:matrix.local", "@qa:matrix.local", "@external-bot:matrix.local"} {
+		if !stringSliceContains(leaderPolicy.GroupAllowFrom, want) {
+			t.Fatalf("leader groupAllowFrom=%v, missing %s", leaderPolicy.GroupAllowFrom, want)
+		}
+	}
+	if !stringSliceContains(leaderPolicy.DMAllowFrom, "@alice:matrix.local") {
+		t.Fatalf("leader dmAllowFrom=%v, missing team admin", leaderPolicy.DMAllowFrom)
+	}
+
+	devPolicy := r.legacyChannelPolicy(team, members, members[1], "lead")
+	if !stringSliceContains(devPolicy.GroupAllowFrom, "@lead:matrix.local") {
+		t.Fatalf("dev groupAllowFrom=%v, missing leader", devPolicy.GroupAllowFrom)
+	}
+	if stringSliceContains(devPolicy.GroupAllowFrom, "@qa:matrix.local") {
+		t.Fatalf("dev groupAllowFrom=%v, must not include denied qa peer", devPolicy.GroupAllowFrom)
+	}
+	if !stringSliceContains(devPolicy.GroupAllowFrom, "@external-bot:matrix.local") {
+		t.Fatalf("dev groupAllowFrom=%v, missing team policy extra", devPolicy.GroupAllowFrom)
+	}
+
+	qaPolicy := r.legacyChannelPolicy(team, members, members[2], "lead")
+	if !stringSliceContains(qaPolicy.GroupAllowFrom, "@dev:matrix.local") {
+		t.Fatalf("qa groupAllowFrom=%v, missing peer dev", qaPolicy.GroupAllowFrom)
+	}
+}
+
 // TestRemoveLegacyMember_DeletesEntry covers the stale-cleanup and
 // handleDelete paths: once removed, the entry disappears so manager-side
 // skills no longer see a ghost worker.

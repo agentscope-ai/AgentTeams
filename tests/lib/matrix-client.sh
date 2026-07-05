@@ -150,6 +150,16 @@ matrix_read_messages() {
         -H "Authorization: Bearer ${token}"
 }
 
+matrix_latest_reply_event() {
+    local token="$1"
+    local room_id="$2"
+    local from_user="$3"
+
+    matrix_read_messages "${token}" "${room_id}" 20 2>/dev/null | \
+        jq -r --arg user "${from_user}" \
+        '[.chunk[] | select(.sender | startswith($user)) | select(.type == "m.room.message") | select(.content.body != null) | .event_id] | first // ""' 2>/dev/null
+}
+
 # Wait for a reply from a specific user in a room
 # Usage: matrix_wait_for_reply <access_token> <room_id> <from_user_prefix> [timeout_seconds]
 # Returns: the reply message body, or empty string on timeout
@@ -166,7 +176,6 @@ matrix_wait_for_reply() {
     local nudge_room="${6:-}"
     local nudge_message="${7:-}"
     local nudge_interval="${8:-600}"
-    local elapsed=0
 
     # Snapshot the latest m.room.message event_id from the target user before we
     # start waiting. We filter on type=m.room.message with a non-null body so
@@ -177,11 +186,26 @@ matrix_wait_for_reply() {
         jq -r --arg user "${from_user}" \
         '[.chunk[] | select(.sender | startswith($user)) | select(.type == "m.room.message") | select(.content.body != null) | .event_id] | first // ""' 2>/dev/null)
 
+    matrix_wait_for_reply_since "${token}" "${room_id}" "${from_user}" "${baseline_event}" "${timeout}" \
+        "${nudge_token}" "${nudge_room}" "${nudge_message}" "${nudge_interval}"
+}
+
+matrix_wait_for_reply_since() {
+    local token="$1"
+    local room_id="$2"
+    local from_user="$3"
+    local baseline_event="$4"
+    local timeout="${5:-180}"
+    local nudge_token="${6:-}"
+    local nudge_room="${7:-}"
+    local nudge_message="${8:-}"
+    local nudge_interval="${9:-600}"
+    local elapsed=0
+
     while [ "${elapsed}" -lt "${timeout}" ]; do
         sleep 10
         elapsed=$((elapsed + 10))
 
-        # Send nudge if configured and interval reached
         if [ -n "${nudge_token}" ] && [ -n "${nudge_room}" ] && [ -n "${nudge_message}" ] \
                 && [ $((elapsed % nudge_interval)) -eq 0 ]; then
             log_info "Sending nudge to Manager (elapsed: ${elapsed}s)..."
@@ -191,16 +215,12 @@ matrix_wait_for_reply() {
         local messages
         messages=$(matrix_read_messages "${token}" "${room_id}" 20 2>/dev/null) || continue
 
-        # Find the newest m.room.message from the target user that has a body.
-        # Some runtimes (hermes-agent) emit reactions/redactions around their
-        # actual reply, so we must look past those to find the real message.
         local latest_event latest_body
         latest_event=$(echo "${messages}" | jq -r --arg user "${from_user}" \
             '[.chunk[] | select(.sender | startswith($user)) | select(.type == "m.room.message") | select(.content.body != null) | .event_id] | first // ""' 2>/dev/null)
         latest_body=$(echo "${messages}" | jq -r --arg user "${from_user}" \
             '[.chunk[] | select(.sender | startswith($user)) | select(.type == "m.room.message") | select(.content.body != null) | .content.body] | first // empty' 2>/dev/null)
 
-        # Only return if the event_id differs from baseline (i.e., it's a NEW message)
         if [ -n "${latest_body}" ] && [ "${latest_event}" != "${baseline_event}" ]; then
             echo "${latest_body}"
             return 0

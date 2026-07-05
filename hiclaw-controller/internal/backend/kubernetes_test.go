@@ -317,6 +317,96 @@ func TestK8sStatus(t *testing.T) {
 	}
 }
 
+func TestK8sStatus_ContainerFailureReasons(t *testing.T) {
+	cases := []struct {
+		name        string
+		podStatus   corev1.PodStatus
+		wantStatus  WorkerStatus
+		wantRaw     string
+		wantMessage string
+	}{
+		{
+			name: "pending image pull backoff fails worker",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "ImagePullBackOff",
+							Message: `failed to pull image "registry.example.com/worker:missing": not found`,
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusFailed,
+			wantRaw:     "ImagePullBackOff",
+			wantMessage: `container worker: ImagePullBackOff: failed to pull image "registry.example.com/worker:missing": not found`,
+		},
+		{
+			name: "init container config error fails worker",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				InitContainerStatuses: []corev1.ContainerStatus{{
+					Name: "init",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CreateContainerConfigError",
+							Message: "secret missing",
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusFailed,
+			wantRaw:     "CreateContainerConfigError",
+			wantMessage: "container init: CreateContainerConfigError: secret missing",
+		},
+		{
+			name: "ordinary pending container creation still starts",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason: "ContainerCreating",
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusStarting,
+			wantRaw:     "Pending",
+			wantMessage: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newFakeK8sCoreClient(&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "agentteams-worker-test",
+					Namespace: "agentteams",
+				},
+				Status: tc.podStatus,
+			})
+			b := NewK8sBackendWithClient(client, K8sConfig{Namespace: "agentteams"}, "agentteams-worker-", nil)
+
+			result, err := b.Status(context.Background(), "test")
+			if err != nil {
+				t.Fatalf("Status failed: %v", err)
+			}
+			if result.Status != tc.wantStatus {
+				t.Fatalf("Status = %s, want %s", result.Status, tc.wantStatus)
+			}
+			if result.RawStatus != tc.wantRaw {
+				t.Fatalf("RawStatus = %q, want %q", result.RawStatus, tc.wantRaw)
+			}
+			if result.Message != tc.wantMessage {
+				t.Fatalf("Message = %q, want %q", result.Message, tc.wantMessage)
+			}
+		})
+	}
+}
+
 func TestK8sStopAndDelete(t *testing.T) {
 	b := newTestK8sBackend(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

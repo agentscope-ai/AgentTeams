@@ -559,13 +559,76 @@ func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, er
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes get pod %s: %w", k.workerPodName(name), err)
 	}
+	status := normalizeK8sPodPhase(pod.Status.Phase)
+	rawStatus := rawK8sPhase(pod.Status.Phase)
+	var message string
+	if containerStatus, containerMessage, containerRaw, ok := podContainerFailureStatus(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses); ok {
+		status = containerStatus
+		message = containerMessage
+		rawStatus = containerRaw
+	}
 	return &WorkerResult{
 		Name:           name,
 		Backend:        "k8s",
 		DeploymentMode: DeployCloud,
-		Status:         normalizeK8sPodPhase(pod.Status.Phase),
-		RawStatus:      rawK8sPhase(pod.Status.Phase),
+		Status:         status,
+		Message:        message,
+		RawStatus:      rawStatus,
 	}, nil
+}
+
+func podContainerFailureStatus(statusGroups ...[]corev1.ContainerStatus) (WorkerStatus, string, string, bool) {
+	for _, statuses := range statusGroups {
+		for i := range statuses {
+			cs := statuses[i]
+			if waiting := cs.State.Waiting; waiting != nil {
+				reason := strings.TrimSpace(waiting.Reason)
+				if isK8sContainerFailureReason(reason) {
+					return StatusFailed, formatK8sContainerStateMessage(cs.Name, reason, waiting.Message), reason, true
+				}
+			}
+			if terminated := cs.State.Terminated; terminated != nil && terminated.ExitCode != 0 {
+				reason := strings.TrimSpace(terminated.Reason)
+				if reason == "" {
+					reason = fmt.Sprintf("ExitCode%d", terminated.ExitCode)
+				}
+				return StatusFailed, formatK8sContainerStateMessage(cs.Name, reason, terminated.Message), reason, true
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+func isK8sContainerFailureReason(reason string) bool {
+	switch reason {
+	case "CrashLoopBackOff",
+		"CreateContainerConfigError",
+		"CreateContainerError",
+		"ErrImageNeverPull",
+		"ErrImagePull",
+		"ImageInspectError",
+		"ImagePullBackOff",
+		"InvalidImageName",
+		"RegistryUnavailable",
+		"RunContainerError":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatK8sContainerStateMessage(containerName, reason, message string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "container failed"
+	}
+	if containerName != "" {
+		reason = fmt.Sprintf("container %s: %s", containerName, reason)
+	}
+	if msg := strings.TrimSpace(message); msg != "" {
+		return reason + ": " + msg
+	}
+	return reason
 }
 
 func (k *K8sBackend) podName(prefix, name string) string {

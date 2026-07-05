@@ -132,3 +132,81 @@ func TestPodLifecyclePredicates_UpdateRequiresPhaseChange(t *testing.T) {
 		})
 	}
 }
+
+func TestPodLifecyclePredicates_UpdateRequiresStatusSignalChange(t *testing.T) {
+	const (
+		kindKey = "agentteams.io/worker"
+		ctlName = "ctl-a"
+	)
+
+	mine := map[string]string{kindKey: "alice", v1beta1.LabelController: ctlName}
+	other := map[string]string{kindKey: "alice", v1beta1.LabelController: "ctl-b"}
+
+	mk := func(labels map[string]string, phase corev1.PodPhase, ready corev1.ConditionStatus, waitingReason, waitingMessage string) *corev1.Pod {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Status: corev1.PodStatus{
+				Phase: phase,
+				Conditions: []corev1.PodCondition{{
+					Type:   corev1.PodReady,
+					Status: ready,
+				}},
+			},
+		}
+		if waitingReason != "" || waitingMessage != "" {
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name: "worker",
+				State: corev1.ContainerState{
+					Waiting: &corev1.ContainerStateWaiting{
+						Reason:  waitingReason,
+						Message: waitingMessage,
+					},
+				},
+			}}
+		}
+		return pod
+	}
+
+	pred := podLifecyclePredicates(kindKey, ctlName)
+
+	tests := []struct {
+		name string
+		old  *corev1.Pod
+		new  *corev1.Pod
+		want bool
+	}{
+		{
+			name: "mine, phase unchanged, waiting reason changed -> accept",
+			old:  mk(mine, corev1.PodPending, corev1.ConditionFalse, "ContainerCreating", ""),
+			new:  mk(mine, corev1.PodPending, corev1.ConditionFalse, "ImagePullBackOff", "image not found"),
+			want: true,
+		},
+		{
+			name: "mine, phase unchanged, Ready changed -> accept",
+			old:  mk(mine, corev1.PodRunning, corev1.ConditionTrue, "", ""),
+			new:  mk(mine, corev1.PodRunning, corev1.ConditionFalse, "", ""),
+			want: true,
+		},
+		{
+			name: "mine, status signal unchanged -> reject",
+			old:  mk(mine, corev1.PodPending, corev1.ConditionFalse, "ImagePullBackOff", "image not found"),
+			new:  mk(mine, corev1.PodPending, corev1.ConditionFalse, "ImagePullBackOff", "image not found"),
+			want: false,
+		},
+		{
+			name: "other controller, status signal changed -> reject",
+			old:  mk(other, corev1.PodPending, corev1.ConditionFalse, "ContainerCreating", ""),
+			new:  mk(other, corev1.PodPending, corev1.ConditionFalse, "ImagePullBackOff", "image not found"),
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := pred.Update(event.UpdateEvent{ObjectOld: tc.old, ObjectNew: tc.new})
+			if got != tc.want {
+				t.Errorf("Update: got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

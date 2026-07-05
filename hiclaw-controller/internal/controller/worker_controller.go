@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -548,7 +550,7 @@ func workerPodRequests(obj client.Object, localNamespace string) []reconcile.Req
 }
 
 // podLifecyclePredicates filters Pod events to only trigger reconciliation on
-// create, delete, or phase transitions. A pod is considered "ours" only when
+// create, delete, or relevant status transitions. A pod is considered "ours" only when
 // it carries both:
 //
 //   - labelKey (one of "agentteams.io/worker" / "agentteams.io/team" /
@@ -583,12 +585,60 @@ func podLifecyclePredicates(labelKey, controllerName string) predicate.Predicate
 			if !ok1 || !ok2 {
 				return true
 			}
-			return oldPod.Status.Phase != newPod.Status.Phase
+			return podLifecycleSignal(oldPod) != podLifecycleSignal(newPod)
 		},
 		GenericFunc: func(e event.GenericEvent) bool {
 			return false
 		},
 	}
+}
+
+func podLifecycleSignal(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		string(pod.Status.Phase),
+		podReadyConditionSignal(pod.Status.Conditions),
+		podContainerStatusesSignal(pod.Status.InitContainerStatuses),
+		podContainerStatusesSignal(pod.Status.ContainerStatuses),
+	}, "\n")
+}
+
+func podReadyConditionSignal(conditions []corev1.PodCondition) string {
+	for i := range conditions {
+		cond := conditions[i]
+		if cond.Type == corev1.PodReady {
+			return fmt.Sprintf("%s|%s|%s", cond.Status, cond.Reason, cond.Message)
+		}
+	}
+	return ""
+}
+
+func podContainerStatusesSignal(statuses []corev1.ContainerStatus) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(statuses))
+	for i := range statuses {
+		cs := statuses[i]
+		state, reason, message := "unknown", "", ""
+		switch {
+		case cs.State.Waiting != nil:
+			state = "waiting"
+			reason = cs.State.Waiting.Reason
+			message = cs.State.Waiting.Message
+		case cs.State.Running != nil:
+			state = "running"
+		case cs.State.Terminated != nil:
+			state = "terminated"
+			reason = cs.State.Terminated.Reason
+			message = cs.State.Terminated.Message
+		}
+		parts = append(parts, fmt.Sprintf("%s|%s|%s|%s|%t", cs.Name, state, reason, message, cs.Ready))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\n")
 }
 
 // --- Package-level helpers ---

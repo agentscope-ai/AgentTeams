@@ -211,6 +211,49 @@ func TestGetWorkerSynthesizesTeamMember(t *testing.T) {
 	}
 }
 
+func TestGetWorkerEnrichesDecoupledMemberCR(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	worker := &v1beta1.Worker{}
+	worker.Name = "alpha-dev"
+	worker.Namespace = "default"
+	worker.Spec.Runtime = "copaw"
+	worker.Status.RoomID = "!worker-room:example.com"
+	worker.Status.MatrixUserID = "@alpha-dev:example.com"
+
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-lead", Role: "team_leader"},
+		{Name: "alpha-dev"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(worker, team).
+		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
+		Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+	handler.GetWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var resp WorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Name != "alpha-dev" || resp.Team != "alpha-team" || resp.Role != "worker" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp.Runtime != "copaw" || resp.RoomID != "!worker-room:example.com" {
+		t.Fatalf("runtime/room not preserved from Worker CR: %+v", resp)
+	}
+}
+
 // /api/v1/workers must list standalone workers and synthetic team members.
 // Workers with team annotations (legacy CRs) must NOT be duplicated.
 func TestListWorkersAggregatesTeamMembers(t *testing.T) {
@@ -251,6 +294,67 @@ func TestListWorkersAggregatesTeamMembers(t *testing.T) {
 		if !names[want] {
 			t.Errorf("missing %q in aggregated list: %+v", want, list.Workers)
 		}
+	}
+}
+
+func TestListWorkersTeamFilterIncludesDecoupledMembers(t *testing.T) {
+	scheme := newServerTestScheme(t)
+
+	solo := &v1beta1.Worker{}
+	solo.Name = "solo"
+	solo.Namespace = "default"
+
+	lead := &v1beta1.Worker{}
+	lead.Name = "alpha-lead"
+	lead.Namespace = "default"
+	lead.Spec.Runtime = "copaw"
+
+	dev := &v1beta1.Worker{}
+	dev.Name = "alpha-dev"
+	dev.Namespace = "default"
+	dev.Spec.Runtime = "openclaw"
+
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-lead", Role: "team_leader"},
+		{Name: "alpha-dev"},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(solo, lead, dev, team).
+		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
+		Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers?team=alpha-team", nil)
+	rec := httptest.NewRecorder()
+	handler.ListWorkers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var list WorkerListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list.Total != 2 {
+		t.Fatalf("expected 2 team members, got %d: %+v", list.Total, list.Workers)
+	}
+	roles := map[string]string{}
+	for _, w := range list.Workers {
+		if w.Team != "alpha-team" {
+			t.Fatalf("unexpected team for %s: %+v", w.Name, w)
+		}
+		roles[w.Name] = w.Role
+	}
+	if roles["alpha-lead"] != "team_leader" || roles["alpha-dev"] != "worker" {
+		t.Fatalf("roles=%v, want lead team_leader and dev worker", roles)
+	}
+	if _, ok := roles["solo"]; ok {
+		t.Fatalf("solo worker leaked into team filter: %+v", list.Workers)
 	}
 }
 
@@ -499,7 +603,7 @@ func TestCreateTeam_WithoutWorkers(t *testing.T) {
 }
 
 // TestCreateWorker_StampsControllerLabel verifies that the HTTP API
-// force-overwrites the hiclaw.io/controller label on Create. A caller
+// force-overwrites the agentteams.io/controller label on Create. A caller
 // attempting to smuggle a different controller value must not succeed:
 // the serving controller's own name always wins.
 func TestCreateWorker_StampsControllerLabel(t *testing.T) {
@@ -647,6 +751,20 @@ func newServerTestScheme(t *testing.T) *runtime.Scheme {
 		t.Fatalf("add hiclaw scheme: %v", err)
 	}
 	return scheme
+}
+
+func indexTeamWorkerMemberNames(obj client.Object) []string {
+	team, ok := obj.(*v1beta1.Team)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(team.Spec.WorkerMembers))
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name != "" {
+			names = append(names, ref.Name)
+		}
+	}
+	return names
 }
 
 func assertAgentResources(t *testing.T, got *v1beta1.AgentResourceRequirements, cpuReq, memReq, cpuLimit, memLimit string) {

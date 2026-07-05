@@ -106,9 +106,9 @@ func newReadyTeam(name, roomID string) *v1beta1.Team {
 // double the initial-provisioning latency and create opportunities for
 // partial-state visibility.
 //
-// LoginAsHuman must NOT be called during first-time create: EnsureHumanUser
-// already returns a usable access token, so a fresh provisioning reconcile
-// costs exactly one Matrix device session.
+// Steady-state login must NOT be called during first-time create:
+// EnsurePrecreated already returns a usable access token, so a fresh
+// provisioning reconcile costs exactly one Matrix device session.
 func TestHumanReconciler_Create_HappyPath(t *testing.T) {
 	worker := newReadyWorker("w1", "!room-w1:localhost")
 	team := newReadyTeam("t1", "!room-t1:localhost")
@@ -130,9 +130,9 @@ func TestHumanReconciler_Create_HappyPath(t *testing.T) {
 		t.Errorf("EnsureHumanUser called %d times, want 1: %+v",
 			len(rig.prov.Calls.EnsureHumanUser), rig.prov.Calls.EnsureHumanUser)
 	}
-	if len(rig.prov.Calls.LoginAsHuman) != 0 {
-		t.Errorf("LoginAsHuman should not be called during first-time create (EnsureHumanUser already returned a token); got %d calls",
-			len(rig.prov.Calls.LoginAsHuman))
+	if len(rig.prov.Calls.LoginWithPassword) != 0 {
+		t.Errorf("LoginWithPassword should not be called during first-time create (EnsurePrecreated already returned a token); got %d calls",
+			len(rig.prov.Calls.LoginWithPassword))
 	}
 
 	if len(rig.prov.Calls.InviteToRoom) != 2 {
@@ -176,6 +176,53 @@ func TestHumanReconciler_Create_HappyPath(t *testing.T) {
 	}
 }
 
+// TestHumanReconciler_FinalizerPatchPreservesIdentitySource locks in the
+// Worker-style MergeFrom patch when adding the cleanup finalizer. A full
+// Update would rewrite the entire spec from the in-memory object and can
+// drop fields the typed client failed to round-trip (notably
+// spec.identitySource), silently converting SSO Humans into legacy ones.
+func TestHumanReconciler_FinalizerPatchPreservesIdentitySource(t *testing.T) {
+	issuer := "https://idp.example.com/pool"
+	subject := "user-subject-123"
+	human := newHuman("sso-user", v1beta1.HumanSpec{
+		DisplayName:     "SSO User",
+		Username:        "sso-user",
+		PermissionLevel: 1,
+		IdentitySource: &v1beta1.IdentitySourceSpec{
+			Issuer:  issuer,
+			Subject: subject,
+		},
+	})
+
+	rig := newHumanRig(t, human)
+	rig.prov.AppServiceEnabled = true
+
+	out, _, err := rig.reconcile("sso-user")
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if out.Spec.IdentitySource == nil {
+		t.Fatal("spec.identitySource was dropped while adding finalizer")
+	}
+	if out.Spec.IdentitySource.Issuer != issuer {
+		t.Errorf("spec.identitySource.issuer=%q, want %q", out.Spec.IdentitySource.Issuer, issuer)
+	}
+	if out.Spec.IdentitySource.Subject != subject {
+		t.Errorf("spec.identitySource.subject=%q, want %q", out.Spec.IdentitySource.Subject, subject)
+	}
+	if len(rig.prov.Calls.RegisterLegacyUser) != 0 {
+		t.Errorf("RegisterLegacyUser should not be called for SSO human, got %d calls",
+			len(rig.prov.Calls.RegisterLegacyUser))
+	}
+	if len(rig.prov.Calls.RegisterAppServiceUser) != 1 {
+		t.Errorf("RegisterAppServiceUser calls=%d, want 1", len(rig.prov.Calls.RegisterAppServiceUser))
+	}
+	if out.Status.InitialPassword != "" {
+		t.Errorf("Status.InitialPassword=%q, want empty for SSO human", out.Status.InitialPassword)
+	}
+}
+
 // TestHumanReconciler_Update_AddRoom adds a new AccessibleTeam to an
 // already-Active Human and asserts that only the new room triggers
 // Invite/Join (no duplicate calls against rooms already in Status.Rooms).
@@ -213,12 +260,17 @@ func TestHumanReconciler_Update_AddRoom(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	// Steady-state login, not EnsureHumanUser.
+	// Steady-state token acquisition goes through the legacy_password
+	// identity source's EnsureUserToken -> LoginWithPassword, not the
+	// EnsureHumanUser composite and not the legacy LoginAsHuman shim.
 	if len(rig.prov.Calls.EnsureHumanUser) != 0 {
 		t.Errorf("EnsureHumanUser should not be called on update, got %d calls", len(rig.prov.Calls.EnsureHumanUser))
 	}
-	if len(rig.prov.Calls.LoginAsHuman) != 1 {
-		t.Errorf("LoginAsHuman calls=%d, want 1", len(rig.prov.Calls.LoginAsHuman))
+	if len(rig.prov.Calls.LoginWithPassword) != 1 {
+		t.Errorf("LoginWithPassword calls=%d, want 1", len(rig.prov.Calls.LoginWithPassword))
+	}
+	if len(rig.prov.Calls.LoginAsHuman) != 0 {
+		t.Errorf("LoginAsHuman (legacy shim) should not be used by the human steady-state path, got %d calls", len(rig.prov.Calls.LoginAsHuman))
 	}
 
 	// Exactly one new room's worth of work: the team room.
@@ -315,13 +367,13 @@ func TestHumanReconciler_Update_PendingResource(t *testing.T) {
 		t.Errorf("no joins expected for pending worker, got: %+v", rig.prov.Calls.JoinRoomAs)
 	}
 	// With lazy login, a reconcile that has no new rooms to /join must
-	// not trigger LoginAsHuman either — EnsureHumanUser on this
+	// not trigger a steady-state login either — EnsurePrecreated on this
 	// first-time pass already seeded scope.userToken, but there's no
 	// work for it to do, and we must not generate a fresh device when
 	// the spec is effectively a no-op.
-	if len(rig.prov.Calls.LoginAsHuman) != 0 {
-		t.Errorf("LoginAsHuman should not be called when there are no rooms to join, got %d",
-			len(rig.prov.Calls.LoginAsHuman))
+	if len(rig.prov.Calls.LoginWithPassword) != 0 {
+		t.Errorf("LoginWithPassword should not be called when there are no rooms to join, got %d",
+			len(rig.prov.Calls.LoginWithPassword))
 	}
 	if len(out.Status.Rooms) != 0 {
 		t.Errorf("Status.Rooms=%v, want empty (worker still pending)", out.Status.Rooms)
@@ -336,7 +388,7 @@ func TestHumanReconciler_Update_PendingResource(t *testing.T) {
 // TestHumanReconciler_SteadyState_NoLogin locks in the device-bloat
 // fix: once a Human is Active and Status.Rooms matches the desired set,
 // periodic reconciles (driven by reconcileInterval every 5 minutes)
-// must NOT call LoginAsHuman. Every Login call without a device_id
+// must NOT call LoginWithPassword. Every Login call without a device_id
 // creates a new Matrix device session on the homeserver; under the
 // pre-fix behavior a single Human would accumulate ~288 orphan devices
 // per day. The invariant "desired == observed ⇒ zero Matrix writes"
@@ -366,9 +418,9 @@ func TestHumanReconciler_SteadyState_NoLogin(t *testing.T) {
 		t.Errorf("EnsureHumanUser must not be called on steady-state reconcile, got %d",
 			len(rig.prov.Calls.EnsureHumanUser))
 	}
-	if len(rig.prov.Calls.LoginAsHuman) != 0 {
-		t.Errorf("LoginAsHuman must not be called when desired == observed; device bloat regression! got %d",
-			len(rig.prov.Calls.LoginAsHuman))
+	if len(rig.prov.Calls.LoginWithPassword) != 0 {
+		t.Errorf("LoginWithPassword must not be called when desired == observed; device bloat regression! got %d",
+			len(rig.prov.Calls.LoginWithPassword))
 	}
 	if len(rig.prov.Calls.InviteToRoom) != 0 {
 		t.Errorf("no invites expected on steady-state, got %+v", rig.prov.Calls.InviteToRoom)
@@ -463,7 +515,9 @@ func TestHumanReconciler_Login_StalePassword(t *testing.T) {
 	human.Finalizers = []string{finalizerName}
 
 	rig := newHumanRig(t, human, worker)
-	rig.prov.LoginAsHumanFn = func(ctx context.Context, name, password string) (string, error) {
+	// Steady-state token acquisition uses LoginWithPassword; simulate the
+	// stored password no longer working after the user rotated it.
+	rig.prov.LoginWithPasswordFn = func(ctx context.Context, name, password string) (string, error) {
 		return "", errors.New("M_FORBIDDEN: invalid password")
 	}
 
@@ -475,8 +529,8 @@ func TestHumanReconciler_Login_StalePassword(t *testing.T) {
 	if len(rig.prov.Calls.EnsureHumanUser) != 0 {
 		t.Errorf("EnsureHumanUser must not be called on stale password; got %d calls", len(rig.prov.Calls.EnsureHumanUser))
 	}
-	if len(rig.prov.Calls.LoginAsHuman) != 1 {
-		t.Errorf("LoginAsHuman should be attempted once, got %d", len(rig.prov.Calls.LoginAsHuman))
+	if len(rig.prov.Calls.LoginWithPassword) != 1 {
+		t.Errorf("LoginWithPassword should be attempted once, got %d", len(rig.prov.Calls.LoginWithPassword))
 	}
 
 	// Admin-only invite happened; no /join.
@@ -494,6 +548,70 @@ func TestHumanReconciler_Login_StalePassword(t *testing.T) {
 	}
 	if out.Status.Phase != "Active" {
 		t.Errorf("Status.Phase=%q, want Active (account still healthy)", out.Status.Phase)
+	}
+}
+
+// TestHumanReconciler_RevertSSOToLegacy_Blocked covers the identity-switch
+// guard for the SSO→legacy direction. A Human that was provisioned through
+// an external SSO identity carries an SSO-derived MatrixUserID and a set of
+// rooms that user already joined. If spec.identitySource is then removed,
+// the spec resolves to the legacy_password source whose username-derived
+// MXID differs from the recorded one.
+//
+// Re-provisioning in place would be unsafe: reconcileHumanInfra would swap
+// MatrixUserID to the new legacy account, but Status.Rooms still lists the
+// old SSO user's memberships, so the rooms phase would treat every desired
+// room as already observed and never invite/join the new user — leaving a
+// Human that reports Active with rooms while the new identity is in none of
+// them. The guard must instead degrade the Human and keep all prior state
+// intact so the operator can recreate the CR.
+func TestHumanReconciler_RevertSSOToLegacy_Blocked(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	human := newHuman("sso-user", v1beta1.HumanSpec{
+		Username:          "sso-user",
+		AccessibleWorkers: []string{"w1"},
+	})
+	// Previously provisioned via SSO: recorded MXID is the SSO hash-derived
+	// localpart, which differs from the legacy "@sso-user:localhost" the
+	// now-identitySource-less spec resolves to.
+	ssoUserID := "@ssohash00112233445566778899aabb:localhost"
+	human.Status.MatrixUserID = ssoUserID
+	human.Status.Rooms = []string{"!room-w1:localhost"}
+	human.Status.Phase = "Active"
+	human.Finalizers = []string{finalizerName}
+
+	rig := newHumanRig(t, human, worker)
+
+	out, _, err := rig.reconcile("sso-user")
+	if err != nil {
+		t.Fatalf("reconcile should degrade (non-fatal), got error: %v", err)
+	}
+
+	if out.Status.Phase != "Degraded" {
+		t.Errorf("Status.Phase=%q, want Degraded", out.Status.Phase)
+	}
+	if out.Status.Message == "" {
+		t.Error("Status.Message should explain the blocked identity switch")
+	}
+	// Identity must not be silently swapped to the legacy account.
+	if out.Status.MatrixUserID != ssoUserID {
+		t.Errorf("Status.MatrixUserID=%q, want unchanged %q", out.Status.MatrixUserID, ssoUserID)
+	}
+	// No new account may be provisioned under the legacy username.
+	if len(rig.prov.Calls.EnsureHumanUser) != 0 || len(rig.prov.Calls.RegisterLegacyUser) != 0 ||
+		len(rig.prov.Calls.RegisterAppServiceUser) != 0 {
+		t.Errorf("no provisioning expected on blocked switch; EnsureHumanUser=%d RegisterLegacyUser=%d RegisterAppServiceUser=%d",
+			len(rig.prov.Calls.EnsureHumanUser), len(rig.prov.Calls.RegisterLegacyUser), len(rig.prov.Calls.RegisterAppServiceUser))
+	}
+	// The rooms phase must not run, so no membership churn for either user.
+	if len(rig.prov.Calls.InviteToRoom) != 0 || len(rig.prov.Calls.JoinRoomAs) != 0 ||
+		len(rig.prov.Calls.KickFromRoom) != 0 {
+		t.Errorf("no room mutations expected on blocked switch; invites=%+v joins=%+v kicks=%+v",
+			rig.prov.Calls.InviteToRoom, rig.prov.Calls.JoinRoomAs, rig.prov.Calls.KickFromRoom)
+	}
+	// Prior room state is preserved untouched.
+	if len(out.Status.Rooms) != 1 || out.Status.Rooms[0] != "!room-w1:localhost" {
+		t.Errorf("Status.Rooms=%v, want preserved [!room-w1:localhost]", out.Status.Rooms)
 	}
 }
 

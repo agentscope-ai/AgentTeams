@@ -121,3 +121,37 @@ func TestDeployWorkerConfigInlineSoulOverridesPackageSeed(t *testing.T) {
 		t.Fatalf("SOUL.md still contains package seed content: %s", got)
 	}
 }
+
+func TestMaterializeSandboxWorkerDepsWritesEnvAndToken(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	err := deployer.MaterializeSandboxWorkerDeps(ctx, SandboxWorkerDepsRequest{
+		WorkerName: "alice",
+		Env: map[string]string{
+			"AGENTTEAMS_ALPHA": "1",
+			"AGENTTEAMS_BETA":  "two",
+		},
+		AuthToken: "sa-token-alice",
+	})
+	if err != nil {
+		t.Fatalf("MaterializeSandboxWorkerDeps failed: %v", err)
+	}
+
+	env, err := store.GetObject(ctx, "workers-deps/alice/env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(env), "AGENTTEAMS_ALPHA=1\nAGENTTEAMS_BETA=two\n"; got != want {
+		t.Fatalf("env object=%q, want %q", got, want)
+	}
+
+	token, err := store.GetObject(ctx, "workers-deps/alice/token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(token), "sa-token-alice"; got != want {
+		t.Fatalf("token object=%q, want %q", got, want)
+	}
+}

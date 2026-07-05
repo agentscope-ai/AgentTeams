@@ -30,6 +30,11 @@ spec:
             - name: http
               containerPort: {{ .Values.controller.service.targetPort }}
               protocol: TCP
+            {{- if .Values.controller.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.controller.metrics.targetPort }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ include "hiclaw.secretName" . }}
@@ -38,6 +43,8 @@ spec:
               value: "incluster"
             - name: HICLAW_HTTP_ADDR
               value: {{ printf ":%v" .Values.controller.service.targetPort | quote }}
+            - name: AGENTTEAMS_METRICS_BIND_ADDR
+              value: {{ ternary .Values.controller.metrics.bindAddress "0" .Values.controller.metrics.enabled | quote }}
             - name: HICLAW_CONTROLLER_URL
               value: {{ include "hiclaw.controller.internalURL" . | quote }}
             {{- /*
@@ -65,6 +72,18 @@ spec:
               value: {{ .Values.controller.resourceAutoPrefix | default true | quote }}
             - name: HICLAW_WORKER_BACKEND
               value: {{ .Values.controller.workerBackend | quote }}
+            - name: AGENTTEAMS_SANDBOX_PROVIDER_TYPE
+              value: {{ .Values.controller.sandbox.providerType | default "openkruise" | quote }}
+            {{- if .Values.controller.sandbox.capabilities }}
+            - name: AGENTTEAMS_SANDBOX_CAPABILITIES
+              value: {{ .Values.controller.sandbox.capabilities | quote }}
+            {{- end }}
+            {{- if .Values.controller.sandbox.agentRuntimeImage }}
+            - name: AGENTTEAMS_SANDBOX_AGENT_RUNTIME_IMAGE
+              value: {{ .Values.controller.sandbox.agentRuntimeImage | quote }}
+            {{- end }}
+            - name: AGENTTEAMS_SANDBOX_PREWARM_SIZE
+              value: {{ .Values.controller.sandbox.prewarmSize | default 1 | quote }}
             - name: HICLAW_K8S_NAMESPACE
               valueFrom:
                 fieldRef:

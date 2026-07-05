@@ -59,24 +59,54 @@ type CoordinationDeployRequest struct {
 	LeaderDMRoomID     string
 	HeartbeatEvery     string
 	WorkerIdleTimeout  string
-	TeamWorkers        []string
+	TeamWorkers        []TeamWorkerEntry
 	TeamAdminID        string
 	TeamCoordinatorIDs []string
 	LeaderSoul         string // from CR spec.leader.soul; used as seed if non-empty
+}
+
+// TeamWorkerEntry carries worker name + room ID for coordination context rendering.
+type TeamWorkerEntry struct {
+	Name   string
+	RoomID string
+}
+
+// WorkerCoordinationRequest describes coordination context injection for a team member worker.
+type WorkerCoordinationRequest struct {
+	WorkerName         string
+	TeamName           string
+	TeamLeaderName     string
+	TeamAdminID        string
+	TeamCoordinatorIDs []string
+}
+
+// InjectHeartbeatRequest describes heartbeat config injection into a leader's openclaw.json.
+type InjectHeartbeatRequest struct {
+	WorkerName string
+	Enabled    bool
+	Every      string // e.g. "30m"
+}
+
+// SandboxWorkerDepsRequest carries runtime material that backs sandbox dynamic
+// mounts for a Worker.
+type SandboxWorkerDepsRequest struct {
+	WorkerName string
+	Env        map[string]string
+	AuthToken  string
 }
 
 // --- Deployer ---
 
 // DeployerConfig holds configuration for constructing a Deployer.
 type DeployerConfig struct {
-	AgentConfig        *agentconfig.Generator
-	OSS                oss.StorageClient
-	Executor           *executor.Shell
-	Packages           *executor.PackageResolver
-	Legacy             *LegacyCompat
-	AgentFSDir         string // embedded: /root/hiclaw-fs/agents
-	WorkerAgentDir     string // source for builtin agent files
-	MatrixDomain       string
+	AgentConfig    *agentconfig.Generator
+	OSS            oss.StorageClient
+	Executor       *executor.Shell
+	Packages       *executor.PackageResolver
+	Legacy         *LegacyCompat
+	AgentFSDir     string // embedded: /root/hiclaw-fs/agents
+	WorkerAgentDir string // source for builtin agent files
+	MatrixDomain   string
 
 	// NacosCredClient is used when remoteSkills use sts-hiclaw (see CRD authType).
 	NacosCredClient credprovider.Client
@@ -86,29 +116,66 @@ type DeployerConfig struct {
 // inline config writes, openclaw.json generation, AGENTS.md merging, skill pushing,
 // and OSS synchronization.
 type Deployer struct {
-	agentConfig         *agentconfig.Generator
-	oss                 oss.StorageClient
-	executor            *executor.Shell
-	packages            *executor.PackageResolver
-	legacy              *LegacyCompat
-	agentFSDir          string
-	workerAgentDir      string
-	matrixDomain        string
-	nacosCredClient     credprovider.Client
+	agentConfig     *agentconfig.Generator
+	oss             oss.StorageClient
+	executor        *executor.Shell
+	packages        *executor.PackageResolver
+	legacy          *LegacyCompat
+	agentFSDir      string
+	workerAgentDir  string
+	matrixDomain    string
+	nacosCredClient credprovider.Client
 }
 
 func NewDeployer(cfg DeployerConfig) *Deployer {
 	return &Deployer{
-		agentConfig:         cfg.AgentConfig,
-		oss:                 cfg.OSS,
-		executor:            cfg.Executor,
-		packages:            cfg.Packages,
-		legacy:              cfg.Legacy,
-		agentFSDir:          cfg.AgentFSDir,
-		workerAgentDir:      cfg.WorkerAgentDir,
-		matrixDomain:        cfg.MatrixDomain,
-		nacosCredClient:     cfg.NacosCredClient,
+		agentConfig:     cfg.AgentConfig,
+		oss:             cfg.OSS,
+		executor:        cfg.Executor,
+		packages:        cfg.Packages,
+		legacy:          cfg.Legacy,
+		agentFSDir:      cfg.AgentFSDir,
+		workerAgentDir:  cfg.WorkerAgentDir,
+		matrixDomain:    cfg.MatrixDomain,
+		nacosCredClient: cfg.NacosCredClient,
 	}
+}
+
+// MaterializeSandboxWorkerDeps writes the objects referenced by sandbox
+// WorkerDeps dynamic mounts before the SandboxClaim is created.
+func (d *Deployer) MaterializeSandboxWorkerDeps(ctx context.Context, req SandboxWorkerDepsRequest) error {
+	if d.oss == nil {
+		return nil
+	}
+	base := fmt.Sprintf("workers-deps/%s", req.WorkerName)
+	if len(req.Env) > 0 {
+		if err := d.oss.PutObject(ctx, base+"/env", renderSandboxWorkerEnv(req.Env)); err != nil {
+			return fmt.Errorf("materialize sandbox worker env: %w", err)
+		}
+	}
+	if req.AuthToken != "" {
+		if err := d.oss.PutObject(ctx, base+"/token", []byte(req.AuthToken)); err != nil {
+			return fmt.Errorf("materialize sandbox worker token: %w", err)
+		}
+	}
+	return nil
+}
+
+func renderSandboxWorkerEnv(env map[string]string) []byte {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var out strings.Builder
+	for _, key := range keys {
+		out.WriteString(key)
+		out.WriteByte('=')
+		out.WriteString(env[key])
+		out.WriteByte('\n')
+	}
+	return []byte(out.String())
 }
 
 // DeployPackage resolves, downloads, extracts, and deploys a package to OSS.
@@ -321,8 +388,8 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 	leaderAgentPrefix := fmt.Sprintf("agents/%s", req.LeaderName)
 
 	teamWorkers := make([]agentconfig.TeamWorkerInfo, 0, len(req.TeamWorkers))
-	for _, wn := range req.TeamWorkers {
-		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: wn})
+	for _, tw := range req.TeamWorkers {
+		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: tw.Name, RoomID: tw.RoomID})
 	}
 
 	coordCtx := agentconfig.CoordinationContext{
@@ -382,8 +449,8 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	}
 
 	workerNames := make([]string, 0, len(req.TeamWorkers))
-	for _, wn := range req.TeamWorkers {
-		workerNames = append(workerNames, wn)
+	for _, tw := range req.TeamWorkers {
+		workerNames = append(workerNames, tw.Name)
 	}
 
 	result := string(tmplData)
@@ -392,6 +459,34 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	result = strings.ReplaceAll(result, "${TEAM_WORKERS}", strings.Join(workerNames, ", "))
 
 	return d.oss.PutObject(ctx, soulKey, []byte(result))
+}
+
+// InjectWorkerCoordination writes team coordination context into a team member
+// worker's AGENTS.md. This is the worker-side counterpart to
+// InjectCoordinationContext, which targets the leader.
+func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error {
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
+	coordCtx := agentconfig.CoordinationContext{
+		WorkerName:         req.WorkerName,
+		Role:               "worker",
+		MatrixDomain:       d.matrixDomain,
+		TeamName:           req.TeamName,
+		TeamLeaderName:     req.TeamLeaderName,
+		TeamAdminID:        req.TeamAdminID,
+		TeamCoordinatorIDs: req.TeamCoordinatorIDs,
+	}
+	injected := agentconfig.InjectCoordinationContext(string(existing), coordCtx)
+	return d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(injected))
+}
+
+// InjectHeartbeatConfig reads the leader's existing openclaw.json from OSS,
+// injects or updates the heartbeat configuration, and writes it back.
+func (d *Deployer) InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error {
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every)
+	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
 
 // PushOnDemandSkills pushes on-demand skills to a worker.

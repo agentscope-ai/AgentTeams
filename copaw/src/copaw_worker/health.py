@@ -21,8 +21,8 @@ Strategy:
               a shutdown request, or the bounded startup probe cannot reach
               the native CoPaw health endpoint.
           Runtime health:
-            - check: worker API GET /worker/readyz probes
-              http://127.0.0.1:{console_port}/health on demand.
+            - check: health report loop probes
+              http://127.0.0.1:{console_port}/health periodically.
             - healthy: probe returns 200.
             - unhealthy: probe fails/times out, the FastAPI app exits
               unexpectedly, or server.serve() returns before requested
@@ -221,7 +221,7 @@ def _snapshot_to_dict(snapshot: HealthSnapshot) -> dict[str, Any]:
 def check_model_service(
     openclaw_cfg: dict[str, Any],
     *,
-    timeout: float = 60,
+    timeout: float = 20,
 ) -> ComponentHealth:
     active = _active_model_provider(openclaw_cfg)
     if active is None:
@@ -250,13 +250,14 @@ def check_model_service(
 
     chat_url = f"{base_url}/chat/completions"
     token_param = _max_tokens_param(model_id)
-    body = json.dumps(
-        {
-            "model": model_id,
-            "messages": [{"role": "user", "content": "ping"}],
-            token_param: 1,
-        }
-    ).encode("utf-8")
+    payload: dict[str, Any] = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "ping"}],
+        token_param: 1,
+    }
+    if _supports_enable_thinking(model_id):
+        payload["enable_thinking"] = False
+    body = json.dumps(payload).encode("utf-8")
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -429,6 +430,14 @@ def _active_model_provider(
             if isinstance(model, dict) and model.get("id"):
                 return str(provider_id), str(model["id"]), provider_cfg
     return None
+
+
+_ENABLE_THINKING_MODELS = {"qwen", "qwq", "deepseek"}
+
+
+def _supports_enable_thinking(model_id: str) -> bool:
+    lower = model_id.lower()
+    return any(lower.startswith(prefix) for prefix in _ENABLE_THINKING_MODELS)
 
 
 def _max_tokens_param(model_id: str) -> str:

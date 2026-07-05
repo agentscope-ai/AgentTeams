@@ -168,11 +168,11 @@ func TestManagerFinalizer_AddedOnCreate(t *testing.T) {
 			return err
 		}
 		for _, f := range m.Finalizers {
-			if f == "hiclaw.io/cleanup" {
+			if f == "agentteams.io/cleanup" {
 				return nil
 			}
 		}
-		return fmt.Errorf("finalizer hiclaw.io/cleanup not found in %v", m.Finalizers)
+		return fmt.Errorf("finalizer agentteams.io/cleanup not found in %v", m.Finalizers)
 	})
 }
 
@@ -1161,8 +1161,8 @@ func TestManagerWelcome_LLMAuthNotReady_RequeuesUntilPropagated(t *testing.T) {
 // the Manager reconcile pipeline end-to-end and asserts the labels
 // handed to backend.Create reflect the four-layer merge: CR metadata
 // and spec labels both propagate, spec beats metadata on collision,
-// and controller-forced system labels (app, hiclaw.io/controller,
-// hiclaw.io/manager, hiclaw.io/role, hiclaw.io/runtime) override any
+// and controller-forced system labels (app, agentteams.io/controller,
+// agentteams.io/manager, agentteams.io/role, agentteams.io/runtime) override any
 // reserved keys a user stuffed into either layer.
 func TestManagerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) {
 	resetManagerMocks()
@@ -1207,8 +1207,8 @@ func TestManagerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T)
 	assertLabel(t, labels, "env", "prod")
 	assertLabel(t, labels, "tier", "spec-tier")
 	assertLabel(t, labels, v1beta1.LabelController, "test-ctl")
-	assertLabel(t, labels, "hiclaw.io/manager", mgrName)
-	assertLabel(t, labels, "hiclaw.io/role", "manager")
+	assertLabel(t, labels, "agentteams.io/manager", mgrName)
+	assertLabel(t, labels, "agentteams.io/role", "manager")
 	// app label must be the ResourcePrefix-derived value, not the
 	// user-supplied "spoofed-app"; ManagerReconciler wired in suite
 	// construction uses the default (empty) ResourcePrefix which maps

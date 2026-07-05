@@ -51,7 +51,7 @@ type ManagerReconciler struct {
 	DefaultRuntime string
 
 	// ControllerName identifies this controller instance. Stamped on every
-	// Manager Pod via hiclaw.io/controller so multi-instance deployments
+	// Manager Pod via agentteams.io/controller so multi-instance deployments
 	// sharing a namespace do not cross-watch each other's resources.
 	ControllerName string
 
@@ -189,7 +189,7 @@ func (r *ManagerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
 				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
-					managerName := obj.GetLabels()["hiclaw.io/manager"]
+					managerName := obj.GetLabels()["agentteams.io/manager"]
 					if managerName == "" {
 						return nil
 					}
@@ -200,7 +200,7 @@ func (r *ManagerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 						}},
 					}
 				}),
-				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/manager", r.ControllerName)),
+				builder.WithPredicates(podLifecyclePredicates("agentteams.io/manager", r.ControllerName)),
 			)
 		}
 	}

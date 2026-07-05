@@ -90,7 +90,7 @@ type MemberContext struct {
 	CurrentExposedPorts []v1beta1.ExposedPortStatus
 
 	// PodLabels are merged into backend.CreateRequest.Labels. Used by Team
-	// members to tag pods with "hiclaw.io/team=<teamName>" so the Team
+	// members to tag pods with "agentteams.io/team=<teamName>" so the Team
 	// reconciler can watch member pod lifecycle events.
 	PodLabels map[string]string
 
@@ -104,6 +104,25 @@ type MemberContext struct {
 	// ModelProviderInfo is the resolved APIG Model API info when
 	// spec.modelProvider is set. Nil when not set or on non-ai-gateway.
 	ModelProviderInfo *gateway.ModelProviderInfo
+
+	// DeployMode specifies where the member pod runs: "Local" (default) or
+	// "Remote". Sourced from spec.deployMode with a default of "Local".
+	DeployMode string
+	// BackendRuntime selects the concrete infrastructure backend: "pod" or
+	// "sandbox". Empty is treated as "pod".
+	BackendRuntime string
+	// StatusBackendRuntime is the currently recorded backend runtime for
+	// this member's backend resource.
+	StatusBackendRuntime string
+	// TargetClusterID is the remote cluster ID when DeployMode is "Remote".
+	// Sourced from spec.targetCluster.id.
+	TargetClusterID string
+	// TargetNamespace is the namespace in the remote cluster when DeployMode
+	// is "Remote". Sourced from spec.targetCluster.namespace.
+	TargetNamespace string
+	// ServiceEnabled controls whether a ClusterIP Service is created
+	// alongside the member pod. Sourced from spec.serviceEnabled.
+	ServiceEnabled bool
 }
 
 // MemberState captures reconcile outputs that the caller writes back to the
@@ -113,9 +132,25 @@ type MemberState struct {
 	RoomID         string
 	ContainerState string
 	ExposedPorts   []v1beta1.ExposedPortStatus
+	BackendRuntime string
 	// ProvResult is the credentials bundle produced by Infra; passed through
 	// Config and Container phases for idempotent reuse within one reconcile.
 	ProvResult *service.WorkerProvisionResult
+}
+
+// resolveBackendForMember returns a backend configured for the member's
+// deploy target. For remote members using the K8s backend, it applies
+// WithRemoteTarget so that Status/Delete/Stop route to the correct cluster.
+func resolveBackendForMember(wb backend.WorkerBackend, m MemberContext) backend.WorkerBackend {
+	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
+		if k8sBackend, ok := wb.(*backend.K8sBackend); ok {
+			return k8sBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
+		}
+		if sandboxBackend, ok := wb.(*backend.SandboxBackend); ok {
+			return sandboxBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
+		}
+	}
+	return wb
 }
 
 // MemberDeps aggregates the service-layer dependencies the member phases
@@ -149,6 +184,24 @@ type MemberDeps struct {
 	DefaultRuntime string
 }
 
+// ValidateMemberDeployment checks the cross-cluster deployment fields on a
+// MemberContext for consistency. Returns a non-nil error when:
+//   - DeployMode is not "Local" or "Remote"
+//   - DeployMode is "Remote" but TargetClusterID or TargetNamespace is empty
+func ValidateMemberDeployment(m MemberContext) error {
+	switch m.DeployMode {
+	case v1beta1.DeployModeLocal, v1beta1.DeployModeRemote:
+	default:
+		return fmt.Errorf("invalid deployMode %q: must be \"Local\" or \"Remote\"", m.DeployMode)
+	}
+	if m.DeployMode == v1beta1.DeployModeRemote {
+		if m.TargetClusterID == "" || m.TargetNamespace == "" {
+			return fmt.Errorf("deployMode \"Remote\" requires targetCluster.id and targetCluster.namespace")
+		}
+	}
+	return nil
+}
+
 // ReconcileMemberInfra ensures Matrix account, Gateway consumer, MinIO user,
 // and DM room are provisioned (or credentials refreshed). Writes MatrixUserID,
 // RoomID, and ProvResult into state.
@@ -174,17 +227,12 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 
 	log.FromContext(ctx).Info("provisioning member infrastructure", "name", m.Name, "runtimeName", m.RuntimeName, "role", m.Role)
 
-	modelProviderID := ""
-	if m.ModelProviderInfo != nil {
-		modelProviderID = m.ModelProviderInfo.HttpApiID
-	}
 	provResult, err := d.Provisioner.ProvisionWorker(ctx, service.WorkerProvisionRequest{
-		Name:            m.RuntimeName,
-		CredentialName:  m.Name,
-		ModelProviderID: modelProviderID,
-		Role:            m.Role.String(),
-		TeamName:        m.TeamName,
-		TeamLeaderName:  m.TeamLeaderName,
+		Name:           m.RuntimeName,
+		CredentialName: m.Name,
+		Role:           m.Role.String(),
+		TeamName:       m.TeamName,
+		TeamLeaderName: m.TeamLeaderName,
 	})
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("provision worker: %w", err)
@@ -284,9 +332,9 @@ func ReconcileMemberContainer(ctx context.Context, d MemberDeps, m MemberContext
 	desired := m.Spec.DesiredState()
 	switch desired {
 	case "Stopped":
-		return ensureMemberContainerAbsent(ctx, d, m, true)
+		return ensureMemberContainerAbsent(ctx, d, m, true, state)
 	case "Sleeping":
-		return ensureMemberContainerAbsent(ctx, d, m, false)
+		return ensureMemberContainerAbsent(ctx, d, m, false, state)
 	default:
 		return ensureMemberContainerPresent(ctx, d, m, state)
 	}
@@ -296,16 +344,31 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	if d.Backend == nil {
 		return reconcile.Result{}, nil
 	}
-	wb := d.Backend.DetectWorkerBackend(ctx)
+	desiredBackend := m.BackendRuntime
+	if desiredBackend == "" {
+		desiredBackend = v1beta1.BackendRuntimePod
+	}
+	currentBackend := m.StatusBackendRuntime
+	if currentBackend == "" {
+		currentBackend = v1beta1.BackendRuntimePod
+	}
+	wb, err := d.Backend.GetBackendForType(ctx, currentBackend)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 	if wb == nil {
 		log.FromContext(ctx).Info("no worker backend available, member needs manual start", "name", m.Name)
 		return reconcile.Result{}, nil
 	}
+	wb = resolveBackendForMember(wb, m)
 
 	logger := log.FromContext(ctx)
 	result, err := wb.Status(ctx, m.Name)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("query container status: %w", err)
+	}
+	if desiredBackend != currentBackend && result.Status != backend.StatusNotFound {
+		return reconcile.Result{}, fmt.Errorf("spec.backendRuntime cannot be changed until the Worker is Stopped; current=%s, desired=%s", currentBackend, desiredBackend)
 	}
 
 	// Spec-change decision is owned by the caller (see MemberContext.SpecChanged
@@ -326,9 +389,14 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
 		}
-		return createMemberContainer(ctx, d, m, state, wb)
+		res, err := createMemberContainer(ctx, d, m, state, wb)
+		if err == nil {
+			state.ContainerState = string(backend.StatusStarting)
+			state.BackendRuntime = desiredBackend
+		}
+		return res, err
 
-	case backend.StatusStopped:
+	case backend.StatusStopped, backend.StatusSleeping:
 		state.ContainerState = string(result.Status)
 		if wb.Name() == "docker" && !specChanged {
 			if err := wb.Start(ctx, m.Name); err != nil {
@@ -339,10 +407,32 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete stale container: %w", err)
 		}
-		return createMemberContainer(ctx, d, m, state, wb)
+		res, err := createMemberContainer(ctx, d, m, state, wb)
+		if err == nil {
+			state.ContainerState = string(backend.StatusStarting)
+			state.BackendRuntime = desiredBackend
+		}
+		return res, err
 
 	case backend.StatusNotFound:
-		return createMemberContainer(ctx, d, m, state, wb)
+		createBackend := desiredBackend
+		if m.Spec.DesiredState() == "Stopped" {
+			createBackend = currentBackend
+		}
+		createWb := wb
+		if createBackend != currentBackend {
+			if altWb, err := d.Backend.GetBackendForType(ctx, createBackend); err == nil {
+				createWb = resolveBackendForMember(altWb, m)
+			} else {
+				return reconcile.Result{}, err
+			}
+		}
+		res, err := createMemberContainer(ctx, d, m, state, createWb)
+		if err == nil {
+			state.ContainerState = string(backend.StatusStarting)
+			state.BackendRuntime = createBackend
+		}
+		return res, err
 
 	default:
 		state.ContainerState = string(result.Status)
@@ -354,28 +444,67 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	}
 }
 
-func ensureMemberContainerAbsent(ctx context.Context, d MemberDeps, m MemberContext, remove bool) (reconcile.Result, error) {
+func ensureMemberContainerAbsent(ctx context.Context, d MemberDeps, m MemberContext, remove bool, state *MemberState) (reconcile.Result, error) {
 	if d.Backend == nil {
 		return reconcile.Result{}, nil
 	}
-	wb := d.Backend.DetectWorkerBackend(ctx)
+	currentBackend := m.StatusBackendRuntime
+	if currentBackend == "" {
+		currentBackend = m.BackendRuntime
+	}
+	if currentBackend == "" {
+		currentBackend = v1beta1.BackendRuntimePod
+	}
+	wb, err := d.Backend.GetBackendForType(ctx, currentBackend)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 	if wb == nil {
 		return reconcile.Result{}, nil
 	}
+	wb = resolveBackendForMember(wb, m)
+
+	result, err := wb.Status(ctx, m.Name)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("query status for absent: %w", err)
+	}
+	state.ContainerState = string(result.Status)
+
+	// Already gone
+	if result.Status == backend.StatusNotFound {
+		return reconcile.Result{}, nil
+	}
+
 	if remove {
+		// Stopped: need full deletion regardless of current state
 		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container: %w", err)
 		}
+		state.ContainerState = "stopping"
 	} else {
+		// Sleeping: skip if already sleeping/stopped
+		if result.Status == backend.StatusStopped || result.Status == backend.StatusSleeping {
+			return reconcile.Result{}, nil
+		}
 		if err := wb.Stop(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("stop container: %w", err)
 		}
+		state.ContainerState = "stopping"
 	}
 	return reconcile.Result{}, nil
 }
 
 func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState, wb backend.WorkerBackend) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
+
+	// Ensure remote ServiceAccount exists before creating the Pod in a
+	// remote cluster. The SA provides projected-token authentication back
+	// to the local controller via TokenReview routing.
+	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
+		if err := d.Provisioner.EnsureRemoteServiceAccount(ctx, m.Name, m.TargetClusterID, m.TargetNamespace); err != nil {
+			return reconcile.Result{}, fmt.Errorf("ensure remote SA for worker %s: %w", m.Name, err)
+		}
+	}
 
 	prov := state.ProvResult
 	if prov == nil || prov.MatrixToken == "" {
@@ -403,18 +532,19 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	saName := d.ResourcePrefix.SAName(authpkg.RoleWorker, m.Name)
 
 	// Identity labels: callers own the full label set now that the backend
-	// is stateless (see A7). The backend only stamps hiclaw.io/runtime.
+	// is stateless (see A7). The backend only stamps agentteams.io/runtime.
 	labels := make(map[string]string, len(m.PodLabels)+2)
 	for k, v := range m.PodLabels {
 		labels[k] = v
 	}
 	labels["app"] = d.ResourcePrefix.WorkerAppLabel()
-	labels["hiclaw.io/worker"] = m.Name
+	labels["agentteams.io/worker"] = m.Name
 
 	createReq := backend.CreateRequest{
 		Name:               m.Name,
 		Image:              m.Spec.Image,
 		Runtime:            m.Spec.Runtime,
+		BackendRuntime:     m.BackendRuntime,
 		RuntimeFallback:    d.DefaultRuntime,
 		Env:                workerEnv,
 		ExtraHosts:         extraHostsForBackend(wb),
@@ -422,6 +552,12 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		Resources:          agentResourcesToBackend(m.Spec.Resources),
 		Labels:             labels,
 		Owner:              m.Owner,
+		// DeployMode / TargetClusterID / TargetNamespace route the Pod to
+		// the correct cluster. Without them, Remote workers would always
+		// be created in the local cluster.
+		DeployMode:      m.DeployMode,
+		TargetClusterID: m.TargetClusterID,
+		TargetNamespace: m.TargetNamespace,
 	}
 	if wb.Name() != "k8s" {
 		token, err := d.Provisioner.RequestSAToken(ctx, m.Name)
@@ -429,6 +565,19 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 			logger.Error(err, "SA token request failed (non-fatal, worker auth will fail)")
 		}
 		createReq.AuthToken = token
+	}
+	if wb.Name() == "sandbox" {
+		createReq.WorkersDeps = backend.BuildSandboxWorkerDeps(m.Name, createReq.Env, createReq.AuthToken, createReq.WorkersDeps)
+		if d.Deployer == nil {
+			return reconcile.Result{}, fmt.Errorf("materialize sandbox worker deps: deployer is required")
+		}
+		if err := d.Deployer.MaterializeSandboxWorkerDeps(ctx, service.SandboxWorkerDepsRequest{
+			WorkerName: m.Name,
+			Env:        createReq.WorkersDeps.Env,
+			AuthToken:  createReq.WorkersDeps.AuthToken,
+		}); err != nil {
+			return reconcile.Result{}, fmt.Errorf("materialize sandbox worker deps: %w", err)
+		}
 	}
 
 	if _, err := wb.Create(ctx, createReq); err != nil {
@@ -445,6 +594,44 @@ func extraHostsForBackend(wb backend.WorkerBackend) []string {
 		return []string{dockerHostInternalExtraHost}
 	}
 	return nil
+}
+
+// computeMemberPhase derives the lifecycle phase from desired state,
+// observed container status, and reconcile outcome. Single source of truth
+// for both Worker and Team member paths.
+func computeMemberPhase(currentPhase, matrixUserID, desiredState, containerState string, reconcileErr error) string {
+	if reconcileErr != nil {
+		if matrixUserID == "" {
+			return "Failed"
+		}
+		if currentPhase == "" {
+			return "Pending"
+		}
+		return currentPhase
+	}
+	switch desiredState {
+	case "Sleeping":
+		if containerState == "stopping" {
+			return "Stopping"
+		}
+		return "Sleeping"
+	case "Stopped":
+		if containerState == "stopping" {
+			return "Stopping"
+		}
+		return "Stopped"
+	default: // Running
+		if containerState == string(backend.StatusRunning) || containerState == string(backend.StatusReady) {
+			return "Running"
+		}
+		if containerState == string(backend.StatusFailed) {
+			return "Failed"
+		}
+		if containerState == string(backend.StatusStarting) {
+			return "Starting"
+		}
+		return "Pending"
+	}
 }
 
 // ReconcileMemberExpose reconciles Higress port exposure for the member.
@@ -506,11 +693,24 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	// worker containers are Docker objects the apiserver does not know
 	// about, so this is the only reliable cleanup path.
 	if d.Backend != nil {
-		if wb := d.Backend.DetectWorkerBackend(ctx); wb != nil {
+		currentBackend := m.StatusBackendRuntime
+		if currentBackend == "" {
+			currentBackend = m.BackendRuntime
+		}
+		if currentBackend == "" {
+			currentBackend = v1beta1.BackendRuntimePod
+		}
+		if wb, err := d.Backend.GetBackendForType(ctx, currentBackend); err == nil && wb != nil {
+			wb = resolveBackendForMember(wb, m)
 			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 				logger.Error(err, "failed to delete member container (may already be removed)", "name", m.Name)
 			}
+		} else if err != nil {
+			logger.Error(err, "failed to resolve member backend for delete", "name", m.Name, "backendRuntime", currentBackend)
 		}
+	}
+	if err := ensureServiceDeleted(ctx, &m, &d); err != nil {
+		logger.Error(err, "failed to delete member Service (non-fatal)", "name", m.Name)
 	}
 
 	if err := d.Deployer.CleanupOSSData(ctx, m.RuntimeName); err != nil {
@@ -521,6 +721,13 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	}
 	if err := d.Provisioner.DeleteServiceAccount(ctx, m.Name); err != nil {
 		logger.Error(err, "failed to delete ServiceAccount (non-fatal)", "name", m.Name)
+	}
+	// Clean up remote ServiceAccount when the member was deployed to a
+	// remote cluster. Non-fatal: log and continue.
+	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
+		if err := d.Provisioner.DeleteRemoteServiceAccount(ctx, m.Name, m.TargetClusterID, m.TargetNamespace); err != nil {
+			logger.Error(err, "failed to delete remote ServiceAccount (non-fatal)", "name", m.Name, "cluster", m.TargetClusterID)
+		}
 	}
 	// Every worker (standalone, team leader, team worker) owns a per-worker
 	// comm room created by ProvisionWorker. Release its alias here so a

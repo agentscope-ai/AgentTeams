@@ -13,10 +13,12 @@ type WorkerProvisioner interface {
 	DeprovisionWorker(ctx context.Context, req WorkerDeprovisionRequest) error
 	RefreshCredentials(ctx context.Context, workerName string) (*RefreshResult, error)
 	RefreshWorkerCredentials(ctx context.Context, credentialName, workerName string) (*RefreshResult, error)
-	EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey, modelProviderID string) error
+	EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error
 	ReconcileExpose(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
 	EnsureServiceAccount(ctx context.Context, workerName string) error
 	DeleteServiceAccount(ctx context.Context, workerName string) error
+	EnsureRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error
+	DeleteRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error
 	DeleteCredentials(ctx context.Context, workerName string) error
 	DeleteWorkerCredentials(ctx context.Context, credentialName string) error
 	RequestSAToken(ctx context.Context, workerName string) (string, error)
@@ -45,7 +47,10 @@ type WorkerDeployer interface {
 	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
 	CleanupOSSData(ctx context.Context, workerName string) error
 	InjectCoordinationContext(ctx context.Context, req CoordinationDeployRequest) error
+	InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error
+	InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error
 	EnsureTeamStorage(ctx context.Context, teamName string) error
+	MaterializeSandboxWorkerDeps(ctx context.Context, req SandboxWorkerDepsRequest) error
 }
 
 // WorkerEnvBuilderI defines env map construction for worker containers.
@@ -65,7 +70,7 @@ type ManagerProvisioner interface {
 	DeprovisionManager(ctx context.Context, name string) error
 	RefreshCredentials(ctx context.Context, name string) (*RefreshResult, error)
 	RefreshManagerCredentials(ctx context.Context, managerName string) (*RefreshResult, error)
-	EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey, modelProviderID string) error
+	EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey string) error
 	EnsureManagerServiceAccount(ctx context.Context, managerName string) error
 	DeleteManagerServiceAccount(ctx context.Context, managerName string) error
 	DeleteCredentials(ctx context.Context, name string) error
@@ -146,6 +151,22 @@ type HumanProvisioner interface {
 	// room management on this reconcile pass.
 	LoginAsHuman(ctx context.Context, username, password string) (string, error)
 
+	// RegisterAppServiceUser registers (or logs in to) a Matrix account
+	// via the AppService API. Returns Created=true on first registration.
+	RegisterAppServiceUser(ctx context.Context, username string) (*HumanCredentials, error)
+
+	// RegisterLegacyUser registers via the registration_token flow.
+	RegisterLegacyUser(ctx context.Context, username string) (*HumanCredentials, error)
+
+	// SetUserPassword writes a password for the given user via the admin bot.
+	SetUserPassword(ctx context.Context, userID, password string) error
+
+	// LoginAppServiceUser obtains a token via AS login (no password).
+	LoginAppServiceUser(ctx context.Context, username string) (string, error)
+
+	// LoginWithPassword obtains a token via the password login flow.
+	LoginWithPassword(ctx context.Context, username, password string) (string, error)
+
 	// SetDisplayName updates the Matrix profile displayname for the user.
 	// Requires a user-scoped access token.
 	SetDisplayName(ctx context.Context, userID, accessToken, displayName string) error
@@ -170,6 +191,10 @@ type HumanProvisioner interface {
 	// of roomID via "!admin users force-leave-room". Fire-and-forget at
 	// the bot layer, but the admin message delivery itself is confirmed.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
+
+	// DeactivateHumanUser disables a Human Matrix account after membership removal.
+	DeactivateHumanUser(ctx context.Context, userID string) error
+
 	MatrixAppServiceEnabled() bool
 }
 
@@ -180,6 +205,7 @@ type HumanCredentials struct {
 	UserID      string
 	AccessToken string
 	Password    string
+	Created     bool
 }
 
 // Compile-time interface satisfaction checks.

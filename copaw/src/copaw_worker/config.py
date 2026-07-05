@@ -12,7 +12,7 @@ class WorkerConfig:
         minio_endpoint: str,
         minio_access_key: str,
         minio_secret_key: str,
-        minio_bucket: str = "hiclaw-storage",
+        minio_bucket: str = "agentteams-storage",
         minio_secure: bool = False,
         sync_interval: int = 60,
         install_dir: Path | None = None,

@@ -1,9 +1,9 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: teams.hiclaw.io
+  name: teams.agentteams.io
 spec:
-  group: hiclaw.io
+  group: agentteams.io
   versions:
     - name: v1beta1
       served: true
@@ -14,13 +14,30 @@ spec:
           properties:
             spec:
               type: object
-              required: [leader]
               properties:
                 description:
                   type: string
                 teamName:
                   type: string
                   description: Runtime/storage team identity. Defaults to metadata.name.
+                workerMembers:
+                  type: array
+                  description: >
+                    References to existing Worker CRs as team members. When
+                    non-empty, the TeamReconciler uses the new decoupled path
+                    (membership validation, Matrix invite, MinIO inject, status
+                    aggregation) and ignores the deprecated leader/workers fields.
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: "metadata.name of the referenced Worker CR."
+                      role:
+                        type: string
+                        enum: [team_leader, worker]
+                        description: "Role within the team. Empty defaults to worker. Exactly one member must have role=team_leader."
                 peerMentions:
                   type: boolean
                   description: "Whether team workers can @mention each other in group rooms (default: true)"
@@ -44,6 +61,12 @@ spec:
                       type: array
                       items:
                         type: string
+                heartbeatEvery:
+                  type: string
+                  description: >
+                    Configures the Team Leader agent's periodic heartbeat check interval.
+                    The TeamReconciler writes this into the leader Worker's openclaw.json
+                    and coordination context. Example: "30m". Empty disables leader heartbeat.
                 admin:
                   type: object
                   description: "Team-specific admin (human). Has admin authority within this team."
@@ -175,6 +198,9 @@ spec:
                             memory:
                               type: string
                               description: Kubernetes memory quantity, e.g. 3Gi
+                    serviceEnabled:
+                      type: boolean
+                      description: "Whether to create a ClusterIP Service alongside the leader pod."
                     labels:
                       type: object
                       additionalProperties:
@@ -390,6 +416,9 @@ spec:
                               memory:
                                 type: string
                                 description: Kubernetes memory quantity, e.g. 2Gi
+                      serviceEnabled:
+                        type: boolean
+                        description: "Whether to create a ClusterIP Service alongside this team worker pod."
                       accessEntries:
                         type: array
                         description: >
@@ -493,6 +522,21 @@ spec:
                       ready:
                         type: boolean
                         description: "Mirrors backend.Status Running/Ready. Aggregates into leaderReady and readyWorkers."
+                      phase:
+                        type: string
+                        enum: [Pending, Starting, Running, Updating, Stopping, Sleeping, Stopped, Failed]
+                      containerState:
+                        type: string
+                      message:
+                        type: string
+                      lastActiveAt:
+                        type: string
+                        format: date-time
+                        description: "Latest runtime-reported business activity time for this member."
+                      lastHeartbeat:
+                        type: string
+                        format: date-time
+                        description: "Latest heartbeat timestamp for this member."
                       exposedPorts:
                         type: array
                         description: "Ports currently exposed via Higress for this member (workers only)."

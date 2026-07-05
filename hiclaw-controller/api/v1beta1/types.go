@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	GroupName = "hiclaw.io"
+	GroupName = "agentteams.io"
 	Version   = "v1beta1"
 )
 
@@ -17,7 +17,7 @@ const (
 // environment variable. When set, the controller's informer cache
 // filters CR events by this label so multiple controller instances in
 // the same namespace do not reconcile each other's resources.
-const LabelController = "hiclaw.io/controller"
+const LabelController = "agentteams.io/controller"
 
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry".
@@ -89,6 +89,26 @@ type AgentResourceValues struct {
 	Memory string `json:"memory,omitempty"`
 }
 
+// DeployMode constants define where the worker pod runs.
+const (
+	DeployModeLocal  = "Local"
+	DeployModeRemote = "Remote"
+)
+
+// BackendRuntime constants define worker infrastructure backend choices.
+const (
+	BackendRuntimePod     = "pod"
+	BackendRuntimeSandbox = "sandbox"
+)
+
+// TargetClusterSpec identifies the remote cluster and namespace for deployment.
+type TargetClusterSpec struct {
+	// ID is the ACS/ACK cluster ID.
+	ID string `json:"id"`
+	// Namespace is the target namespace in the remote cluster.
+	Namespace string `json:"namespace"`
+}
+
 // +genclient
 // +kubebuilder:subresource:status
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -100,7 +120,6 @@ type Worker struct {
 	Spec              WorkerSpec   `json:"spec"`
 	Status            WorkerStatus `json:"status,omitempty"`
 }
-
 
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
@@ -136,6 +155,24 @@ type WorkerSpec struct {
 	// scoped to agents/<name>/* and shared/*).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
+	// DeployMode specifies where the worker pod runs.
+	// "Local" (default): created in the controller's own cluster.
+	// "Remote": created in the cluster identified by TargetCluster.
+	DeployMode *string `json:"deployMode,omitempty"`
+
+	// BackendRuntime selects the worker infrastructure backend.
+	// "pod" (default): create a normal Pod through the existing backend.
+	// "sandbox": claim an OpenKruise Sandbox instance.
+	BackendRuntime *string `json:"backendRuntime,omitempty"`
+
+	// TargetCluster specifies the remote cluster target for deployment.
+	// Required when DeployMode is "Remote".
+	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
+
+	// ServiceEnabled controls whether a ClusterIP Service is created
+	// alongside the worker pod (same cluster, namespace, name).
+	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
+
 	// Env holds user-defined environment variables injected into the worker
 	// container. Keys that collide with variables already set by the
 	// controller or backend (HICLAW_*, OPENCLAW_*, HOME, and similar
@@ -147,12 +184,11 @@ type WorkerSpec struct {
 	// Merged under the four-layer priority order (see controller docs):
 	// pod-template < CR metadata.labels < CR spec.labels < controller
 	// system labels. Entries whose keys collide with controller-forced
-	// system labels (hiclaw.io/controller, hiclaw.io/worker, etc.) are
+	// system labels (agentteams.io/controller, agentteams.io/worker, etc.) are
 	// silently overridden. Must carry the omitempty tag so Teams that
 	// embed WorkerSpec-shaped hashes keep a stable spec hash when the
 	// field is absent.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // DesiredContainerMan returns the effective desired containerManaged, defaulting to true.
@@ -169,6 +205,15 @@ func (s WorkerSpec) DesiredState() string {
 		return *s.State
 	}
 	return "Running"
+}
+
+// GetBackendRuntime returns the explicitly requested backend runtime, or
+// "pod" when the CR leaves it unset.
+func (s WorkerSpec) GetBackendRuntime() string {
+	if s.BackendRuntime != nil && *s.BackendRuntime != "" {
+		return *s.BackendRuntime
+	}
+	return BackendRuntimePod
 }
 
 // EffectiveWorkerName returns the runtime identity key for a Worker.
@@ -203,8 +248,19 @@ type WorkerStatus struct {
 	RoomID             string              `json:"roomID,omitempty"`
 	ContainerState     string              `json:"containerState,omitempty"`
 	LastHeartbeat      string              `json:"lastHeartbeat,omitempty"`
+	LastActiveAt       string              `json:"lastActiveAt,omitempty"`
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+
+	// DeployMode/TargetCluster record where the current backend resource was
+	// actually provisioned. Once set, target changes are only accepted after
+	// the Worker has reached the Stopped phase.
+	DeployMode    string             `json:"deployMode,omitempty"`
+	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
+
+	// BackendRuntime records the backend type currently used for this
+	// worker's container.
+	BackendRuntime string `json:"backendRuntime,omitempty"`
 }
 
 // ExposedPortStatus records a port that has been exposed via Higress.
@@ -234,14 +290,44 @@ type Team struct {
 }
 
 type TeamSpec struct {
-	Description   string             `json:"description,omitempty"`
-	TeamName      string             `json:"teamName,omitempty"`
-	Admin         *TeamAdminSpec     `json:"admin,omitempty"`
-	HumanMembers  []TeamMemberSpec   `json:"humanMembers,omitempty"`
-	Leader        LeaderSpec         `json:"leader"`
-	Workers       []TeamWorkerSpec   `json:"workers,omitempty"`
+	Description  string           `json:"description,omitempty"`
+	TeamName     string           `json:"teamName,omitempty"`
+	Admin        *TeamAdminSpec   `json:"admin,omitempty"`
+	HumanMembers []TeamMemberSpec `json:"humanMembers,omitempty"`
+
+	// WorkerMembers references existing Worker CRs as team members.
+	// When non-empty, the TeamReconciler uses the new path (membership
+	// validation → Matrix invite → MinIO inject → status aggregation)
+	// and ignores the deprecated Leader/Workers fields.
+	// +kubebuilder:validation:MaxItems=128
+	WorkerMembers []TeamWorkerRef `json:"workerMembers,omitempty"`
+
 	PeerMentions  *bool              `json:"peerMentions,omitempty"`  // default true
 	ChannelPolicy *ChannelPolicySpec `json:"channelPolicy,omitempty"` // team-wide overrides
+
+	// HeartbeatEvery configures the Team Leader agent's periodic heartbeat
+	// check interval. The TeamReconciler writes this value into the leader
+	// Worker's openclaw.json and coordination context AGENTS.md.
+	// Example: "30m". Empty means leader heartbeat is disabled.
+	HeartbeatEvery string `json:"heartbeatEvery,omitempty"`
+
+	// Deprecated: Leader defines the team leader's runtime configuration.
+	// Retained for backward compatibility during migration. Ignored when
+	// WorkerMembers is non-empty.
+	Leader LeaderSpec `json:"leader,omitempty"`
+	// Deprecated: Workers defines team worker runtime configurations.
+	// Retained for backward compatibility during migration. Ignored when
+	// WorkerMembers is non-empty.
+	Workers []TeamWorkerSpec `json:"workers,omitempty"`
+}
+
+// TeamWorkerRef references an existing Worker CR as a team member.
+type TeamWorkerRef struct {
+	// Name is the metadata.name of the referenced Worker CR.
+	Name string `json:"name"`
+	// Role is this member's role within the team: "team_leader" or "worker".
+	// Empty defaults to "worker".
+	Role string `json:"role,omitempty"`
 }
 
 func (s TeamSpec) EffectiveTeamName(metadataName string) string {
@@ -285,6 +371,10 @@ type LeaderSpec struct {
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
+	// ServiceEnabled controls whether a ClusterIP Service is created
+	// alongside the leader pod (same cluster, namespace, name).
+	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
+
 	// Env holds user-defined environment variables injected into the
 	// leader container. See WorkerSpec.Env for the collision policy.
 	Env map[string]string `json:"env,omitempty"`
@@ -295,7 +385,6 @@ type LeaderSpec struct {
 	// hashMemberSourceSpec stability for Teams that never set this
 	// field.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 type TeamLeaderHeartbeatSpec struct {
@@ -328,6 +417,10 @@ type TeamWorkerSpec struct {
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
 
+	// ServiceEnabled controls whether a ClusterIP Service is created
+	// alongside the team worker pod (same cluster, namespace, name).
+	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
+
 	// Env holds user-defined environment variables injected into this
 	// team worker's container. See WorkerSpec.Env for the collision policy.
 	Env map[string]string `json:"env,omitempty"`
@@ -337,7 +430,6 @@ type TeamWorkerSpec struct {
 	// system labels (see WorkerSpec.Labels godoc). omitempty preserves
 	// hashMemberSourceSpec stability for existing Teams.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // EffectiveWorkerName returns the runtime identity key for a team leader.
@@ -436,6 +528,17 @@ type TeamMemberStatus struct {
 	// summarizeBackendReadiness on each reconcile pass. Aggregates into
 	// Team.Status.LeaderReady and Team.Status.ReadyWorkers.
 	Ready bool `json:"ready,omitempty"`
+	// Phase is the member lifecycle phase: Pending, Starting, Running,
+	// Updating, Stopping, Sleeping, Stopped, Failed.
+	Phase string `json:"phase,omitempty"`
+	// ContainerState is the raw backend container status.
+	ContainerState string `json:"containerState,omitempty"`
+	// Message holds per-member error detail from reconcile. Cleared on success.
+	Message string `json:"message,omitempty"`
+	// LastActiveAt is the latest runtime-reported business activity time.
+	LastActiveAt string `json:"lastActiveAt,omitempty"`
+	// LastHeartbeat is the latest heartbeat timestamp for this member.
+	LastHeartbeat string `json:"lastHeartbeat,omitempty"`
 	// ExposedPorts records the ports currently exposed via Higress for this
 	// member. Leader members never expose ports (this field stays nil).
 	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
@@ -462,13 +565,19 @@ type Human struct {
 }
 
 type HumanSpec struct {
-	DisplayName       string   `json:"displayName"`
-	Username          string   `json:"username,omitempty"`
-	Email             string   `json:"email,omitempty"`
-	PermissionLevel   int      `json:"permissionLevel"` // 1=Admin, 2=Team, 3=Worker
-	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
-	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
-	Note              string   `json:"note,omitempty"`
+	DisplayName       string              `json:"displayName"`
+	Username          string              `json:"username,omitempty"`
+	Email             string              `json:"email,omitempty"`
+	PermissionLevel   int                 `json:"permissionLevel"` // 1=Admin, 2=Team, 3=Worker
+	AccessibleTeams   []string            `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string            `json:"accessibleWorkers,omitempty"`
+	IdentitySource    *IdentitySourceSpec `json:"identitySource,omitempty"`
+	Note              string              `json:"note,omitempty"`
+}
+
+type IdentitySourceSpec struct {
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
 }
 
 type HumanStatus struct {
@@ -545,7 +654,6 @@ type ManagerSpec struct {
 	// godoc): pod-template < CR metadata.labels < CR spec.labels <
 	// controller system labels.
 	Labels map[string]string `json:"labels,omitempty"`
-
 }
 
 // DesiredState returns the effective desired state, defaulting to "Running".

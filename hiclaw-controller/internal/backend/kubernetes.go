@@ -7,15 +7,19 @@ import (
 	"sort"
 	"strings"
 
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	authenticationv1client "k8s.io/client-go/kubernetes/typed/authentication/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 )
 
 const defaultK8sNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
@@ -48,8 +52,14 @@ type K8sConfig struct {
 // K8sBackend manages worker lifecycle via Kubernetes Pods.
 type K8sBackend struct {
 	client          K8sCoreClient
+	remoteCache     RemoteClientProvider // remote cluster client cache (may be nil)
 	config          K8sConfig
 	containerPrefix string
+
+	// Fields for remote routing (set via WithRemoteTarget).
+	deployMode      string
+	targetClusterID string
+	targetNamespace string
 
 	// scheme is used to resolve GVK for CreateRequest.Owner when stamping
 	// the child Pod's controller OwnerReference via
@@ -57,12 +67,32 @@ type K8sBackend struct {
 	// never supply Owner" — typical for unit tests that don't exercise
 	// ownerRef behaviour.
 	scheme *runtime.Scheme
+
+	// namespace is a convenience alias for config.Namespace used by
+	// resolveClient to return the local namespace.
+	namespace string
+}
+
+// K8sServiceAccountClient is the minimal ServiceAccount client surface needed.
+type K8sServiceAccountClient interface {
+	Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.ServiceAccount, error)
+	Create(ctx context.Context, sa *corev1.ServiceAccount, opts metav1.CreateOptions) (*corev1.ServiceAccount, error)
+	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
+}
+
+// K8sTokenReviewClient is the minimal TokenReview client surface needed for authentication.
+type K8sTokenReviewClient interface {
+	Create(ctx context.Context, review *authenticationv1.TokenReview, opts metav1.CreateOptions) (*authenticationv1.TokenReview, error)
 }
 
 // K8sCoreClient is the minimal CoreV1 client surface needed by the backend.
 type K8sCoreClient interface {
 	Pods(namespace string) K8sPodClient
 	ConfigMaps(namespace string) K8sConfigMapClient
+	Services(namespace string) K8sServiceClient
+	Namespaces() K8sNamespaceClient
+	ServiceAccounts(namespace string) K8sServiceAccountClient
+	TokenReviews() K8sTokenReviewClient
 }
 
 // K8sPodClient is the minimal Pod client surface needed by the backend.
@@ -81,7 +111,8 @@ type K8sConfigMapClient interface {
 
 // k8sCoreClientWrapper adapts *corev1client.CoreV1Client to K8sCoreClient.
 type k8sCoreClientWrapper struct {
-	client *corev1client.CoreV1Client
+	client     *corev1client.CoreV1Client
+	authClient *authenticationv1client.AuthenticationV1Client
 }
 
 func (w *k8sCoreClientWrapper) Pods(namespace string) K8sPodClient {
@@ -92,11 +123,36 @@ func (w *k8sCoreClientWrapper) ConfigMaps(namespace string) K8sConfigMapClient {
 	return w.client.ConfigMaps(namespace)
 }
 
+func (w *k8sCoreClientWrapper) Services(namespace string) K8sServiceClient {
+	return w.client.Services(namespace)
+}
+
+func (w *k8sCoreClientWrapper) Namespaces() K8sNamespaceClient {
+	return w.client.Namespaces()
+}
+
+func (w *k8sCoreClientWrapper) ServiceAccounts(namespace string) K8sServiceAccountClient {
+	return w.client.ServiceAccounts(namespace)
+}
+
+func (w *k8sCoreClientWrapper) TokenReviews() K8sTokenReviewClient {
+	return w.authClient.TokenReviews()
+}
+
 // NewK8sBackend creates a Kubernetes backend using in-cluster config or kubeconfig.
 // scheme is used by Create to stamp CR-to-Pod controller OwnerReferences
 // (see CreateRequest.Owner); it must have all CR kinds that might appear as
 // Owner registered.
 func NewK8sBackend(config K8sConfig, containerPrefix string, scheme *runtime.Scheme) (*K8sBackend, error) {
+	return NewK8sBackendWithCache(config, containerPrefix, scheme, nil)
+}
+
+// NewK8sBackendWithCache creates a Kubernetes backend using in-cluster config
+// or kubeconfig, and wires in an optional remote-cluster client cache used
+// to route operations against Workers/Managers deployed to remote clusters.
+// remoteCache may be nil when no remote clusters are configured; in that
+// case the backend behaves identically to NewK8sBackend.
+func NewK8sBackendWithCache(config K8sConfig, containerPrefix string, scheme *runtime.Scheme, remoteCache RemoteClientProvider) (*K8sBackend, error) {
 	restConfig, err := loadK8sRESTConfig()
 	if err != nil {
 		return nil, err
@@ -105,7 +161,11 @@ func NewK8sBackend(config K8sConfig, containerPrefix string, scheme *runtime.Sch
 	if err != nil {
 		return nil, fmt.Errorf("create kubernetes client: %w", err)
 	}
-	return NewK8sBackendWithClient(&k8sCoreClientWrapper{client: clientset}, config, containerPrefix, scheme), nil
+	authClient, err := authenticationv1client.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create authentication client: %w", err)
+	}
+	return NewK8sBackendWithRemote(&k8sCoreClientWrapper{client: clientset, authClient: authClient}, remoteCache, config, containerPrefix, scheme), nil
 }
 
 // NewK8sBackendWithClient creates a Kubernetes backend with a custom client.
@@ -125,7 +185,16 @@ func NewK8sBackendWithClient(client K8sCoreClient, config K8sConfig, containerPr
 		config:          config,
 		containerPrefix: containerPrefix,
 		scheme:          scheme,
+		namespace:       config.Namespace,
 	}
+}
+
+// NewK8sBackendWithRemote creates a Kubernetes backend with remote cluster support.
+// remoteCache may be nil if no remote clusters are configured.
+func NewK8sBackendWithRemote(client K8sCoreClient, remoteCache RemoteClientProvider, config K8sConfig, containerPrefix string, scheme *runtime.Scheme) *K8sBackend {
+	b := NewK8sBackendWithClient(client, config, containerPrefix, scheme)
+	b.remoteCache = remoteCache
+	return b
 }
 
 // WithPrefix returns a shallow copy of the backend with a different container name prefix.
@@ -136,6 +205,67 @@ func (k *K8sBackend) WithPrefix(prefix string) *K8sBackend {
 	cp := *k
 	cp.containerPrefix = prefix
 	return &cp
+}
+
+// WithRemoteTarget returns a shallow copy of the backend configured to route
+// Delete and Status operations to the specified remote cluster/namespace.
+// Use this when the controller needs to operate on a pod in a remote cluster
+// via the interface methods that only accept a name.
+func (k *K8sBackend) WithRemoteTarget(deployMode, clusterID, namespace string) *K8sBackend {
+	cp := *k
+	cp.deployMode = deployMode
+	cp.targetClusterID = clusterID
+	cp.targetNamespace = namespace
+	return &cp
+}
+
+// resolveClient returns the appropriate K8sCoreClient and namespace based on
+// deploy mode. For Remote mode, it fetches the client from remoteCache.
+func (k *K8sBackend) resolveClient(ctx context.Context, deployMode, targetClusterID, targetNamespace string) (K8sCoreClient, string, error) {
+	if deployMode == v1beta1.DeployModeRemote {
+		if k.remoteCache == nil {
+			return nil, "", fmt.Errorf("remote client cache not configured")
+		}
+		client, err := k.remoteCache.ResolveClient(ctx, targetClusterID)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get remote client for cluster %s: %w", targetClusterID, err)
+		}
+		ns := targetNamespace
+		if ns == "" {
+			ns = k.namespace
+		}
+		return client, ns, nil
+	}
+	return k.client, k.namespace, nil
+}
+
+// ServiceClient implements ServiceBackend. It returns a K8sServiceClient and
+// resolved namespace for the appropriate cluster based on deploy mode.
+func (k *K8sBackend) ServiceClient(ctx context.Context, deployMode, targetClusterID, targetNamespace string) (K8sServiceClient, string, error) {
+	client, ns, err := k.resolveClient(ctx, deployMode, targetClusterID, targetNamespace)
+	if err != nil {
+		return nil, "", err
+	}
+	return client.Services(ns), ns, nil
+}
+
+// ensureRemoteNamespace ensures the target namespace exists in the remote cluster.
+func (k *K8sBackend) ensureRemoteNamespace(ctx context.Context, client K8sCoreClient, namespace string) error {
+	_, err := client.Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to check namespace %s: %w", namespace, err)
+	}
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace},
+	}
+	_, err = client.Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create namespace %s: %w", namespace, err)
+	}
+	return nil
 }
 
 func (k *K8sBackend) Name() string                   { return "k8s" }
@@ -155,11 +285,24 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	// HICLAW_DEFAULT_WORKER_RUNTIME for workers).
 	req.Runtime = ResolveRuntime(req.Runtime, req.RuntimeFallback)
 
+	// Resolve the target client and namespace based on deploy mode.
+	targetClient, targetNS, err := k.resolveClient(ctx, req.DeployMode, req.TargetClusterID, req.TargetNamespace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve client for create: %w", err)
+	}
+
+	// Ensure the remote namespace exists before creating the Pod.
+	if req.DeployMode == v1beta1.DeployModeRemote {
+		if err := k.ensureRemoteNamespace(ctx, targetClient, targetNS); err != nil {
+			return nil, fmt.Errorf("ensure remote namespace: %w", err)
+		}
+	}
+
 	podName := req.ContainerName
 	if podName == "" {
 		podName = k.podName(req.NamePrefix, req.Name)
 	}
-	if _, err := k.client.Pods(k.config.Namespace).Get(ctx, podName, metav1.GetOptions{}); err == nil {
+	if _, err := targetClient.Pods(targetNS).Get(ctx, podName, metav1.GetOptions{}); err == nil {
 		return nil, fmt.Errorf("%w: pod %q", ErrConflict, podName)
 	} else if !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("kubernetes get pod %s: %w", podName, err)
@@ -216,6 +359,12 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		if len(allowedUsers) > 0 {
 			req.Env["MATRIX_ALLOWED_USERS"] = strings.Join(allowedUsers, ",")
 		}
+	}
+
+	// Inject cluster ID so the worker CLI sends X-HiClaw-Cluster-ID header
+	// for remote TokenReview routing.
+	if req.DeployMode == v1beta1.DeployModeRemote && req.TargetClusterID != "" {
+		req.Env["HICLAW_CLUSTER_ID"] = req.TargetClusterID
 	}
 
 	image := req.Image
@@ -304,21 +453,21 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		saName = k.workerNamePrefix() + req.Name
 	}
 
-	// Callers own the full label set except hiclaw.io/runtime, which the
+	// Callers own the full label set except agentteams.io/runtime, which the
 	// backend stamps because it knows the resolved runtime value (after
 	// CRD spec + operator-default fallback).
 	podLabels := map[string]string{
-		"hiclaw.io/runtime": defaultRuntime(req.Runtime),
+		"agentteams.io/runtime": defaultRuntime(req.Runtime),
 	}
 	for k, v := range req.Labels {
 		podLabels[k] = v
 	}
 
-	tmpl := LoadAgentPodTemplate(ctx, k.client, k.config.Namespace, k.config.ControllerName)
+	tmpl := LoadAgentPodTemplate(ctx, k.client, k.config.Namespace, k.config.ControllerName, req.DeployMode)
 
 	pod := ApplyPodTemplate(tmpl, PodOverlay{
 		Name:               podName,
-		Namespace:          k.config.Namespace,
+		Namespace:          targetNS,
 		Labels:             podLabels,
 		Annotations:        nil,
 		ServiceAccountName: saName,
@@ -330,7 +479,9 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		HostAliases:        buildHostAliases(req.ExtraHosts),
 	})
 
-	if req.Owner != nil {
+	// Skip controller OwnerReference for remote pods — cross-cluster ownerRef
+	// is not possible. Local pods still get ownerRef for GC cascading.
+	if req.Owner != nil && req.DeployMode != v1beta1.DeployModeRemote {
 		if k.scheme == nil {
 			return nil, fmt.Errorf("kubernetes backend: scheme is required when CreateRequest.Owner is set")
 		}
@@ -339,7 +490,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		}
 	}
 
-	created, err := k.client.Pods(k.config.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	created, err := targetClient.Pods(targetNS).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return nil, fmt.Errorf("%w: pod %q", ErrConflict, podName)
@@ -356,8 +507,12 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 }
 
 func (k *K8sBackend) Delete(ctx context.Context, name string) error {
+	targetClient, targetNS, err := k.resolveClient(ctx, k.deployMode, k.targetClusterID, k.targetNamespace)
+	if err != nil {
+		return fmt.Errorf("resolve client for delete: %w", err)
+	}
 	podName := k.workerPodName(name)
-	err := k.client.Pods(k.config.Namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+	err = targetClient.Pods(targetNS).Delete(ctx, podName, metav1.DeleteOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
@@ -368,7 +523,11 @@ func (k *K8sBackend) Delete(ctx context.Context, name string) error {
 }
 
 func (k *K8sBackend) Start(ctx context.Context, name string) error {
-	pod, err := k.client.Pods(k.config.Namespace).Get(ctx, k.workerPodName(name), metav1.GetOptions{})
+	targetClient, targetNS, err := k.resolveClient(ctx, k.deployMode, k.targetClusterID, k.targetNamespace)
+	if err != nil {
+		return fmt.Errorf("resolve client for start: %w", err)
+	}
+	pod, err := targetClient.Pods(targetNS).Get(ctx, k.workerPodName(name), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return fmt.Errorf("%w: worker %q", ErrNotFound, name)
 	}
@@ -389,20 +548,87 @@ func (k *K8sBackend) Stop(ctx context.Context, name string) error {
 }
 
 func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, error) {
-	pod, err := k.client.Pods(k.config.Namespace).Get(ctx, k.workerPodName(name), metav1.GetOptions{})
+	targetClient, targetNS, err := k.resolveClient(ctx, k.deployMode, k.targetClusterID, k.targetNamespace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve client for status: %w", err)
+	}
+	pod, err := targetClient.Pods(targetNS).Get(ctx, k.workerPodName(name), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return &WorkerResult{Name: name, Backend: "k8s", Status: StatusNotFound}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes get pod %s: %w", k.workerPodName(name), err)
 	}
+	status := normalizeK8sPodPhase(pod.Status.Phase)
+	rawStatus := rawK8sPhase(pod.Status.Phase)
+	var message string
+	if containerStatus, containerMessage, containerRaw, ok := podContainerFailureStatus(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses); ok {
+		status = containerStatus
+		message = containerMessage
+		rawStatus = containerRaw
+	}
 	return &WorkerResult{
 		Name:           name,
 		Backend:        "k8s",
 		DeploymentMode: DeployCloud,
-		Status:         normalizeK8sPodPhase(pod.Status.Phase),
-		RawStatus:      rawK8sPhase(pod.Status.Phase),
+		Status:         status,
+		Message:        message,
+		RawStatus:      rawStatus,
 	}, nil
+}
+
+func podContainerFailureStatus(statusGroups ...[]corev1.ContainerStatus) (WorkerStatus, string, string, bool) {
+	for _, statuses := range statusGroups {
+		for i := range statuses {
+			cs := statuses[i]
+			if waiting := cs.State.Waiting; waiting != nil {
+				reason := strings.TrimSpace(waiting.Reason)
+				if isK8sContainerFailureReason(reason) {
+					return StatusFailed, formatK8sContainerStateMessage(cs.Name, reason, waiting.Message), reason, true
+				}
+			}
+			if terminated := cs.State.Terminated; terminated != nil && terminated.ExitCode != 0 {
+				reason := strings.TrimSpace(terminated.Reason)
+				if reason == "" {
+					reason = fmt.Sprintf("ExitCode%d", terminated.ExitCode)
+				}
+				return StatusFailed, formatK8sContainerStateMessage(cs.Name, reason, terminated.Message), reason, true
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+func isK8sContainerFailureReason(reason string) bool {
+	switch reason {
+	case "CrashLoopBackOff",
+		"CreateContainerConfigError",
+		"CreateContainerError",
+		"ErrImageNeverPull",
+		"ErrImagePull",
+		"ImageInspectError",
+		"ImagePullBackOff",
+		"InvalidImageName",
+		"RegistryUnavailable",
+		"RunContainerError":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatK8sContainerStateMessage(containerName, reason, message string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "container failed"
+	}
+	if containerName != "" {
+		reason = fmt.Sprintf("container %s: %s", containerName, reason)
+	}
+	if msg := strings.TrimSpace(message); msg != "" {
+		return reason + ": " + msg
+	}
+	return reason
 }
 
 func (k *K8sBackend) podName(prefix, name string) string {

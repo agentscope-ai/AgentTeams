@@ -68,10 +68,10 @@ Design principles:
 
 ### 3.2 Declarative resources (CRD-style)
 
-Four core kinds share `apiVersion: hiclaw.io/v1beta1`:
+Four core kinds share `apiVersion: agentteams.io/v1beta1`:
 
 ```
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 ```
 
 #### Worker — execution unit
@@ -79,7 +79,7 @@ apiVersion: hiclaw.io/v1beta1
 **Naming:** The Python Worker runtime is **QwenPaw** (image `hiclaw-copaw-worker`). Older materials sometimes used **CoPaw** for the same runtime.
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -107,7 +107,7 @@ Each Worker maps to: a Docker container (or K8s Pod) + Matrix account + MinIO na
 #### Team — collaboration unit
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: frontend-team
@@ -154,7 +154,7 @@ Leader DM:    Admin ↔ Leader                     ← team alignment / manageme
 #### Human — real user
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: john
@@ -169,7 +169,7 @@ spec:
 #### Manager — coordinator (CR)
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Manager
 metadata:
   name: default                       # common name for the primary instance in embedded installs

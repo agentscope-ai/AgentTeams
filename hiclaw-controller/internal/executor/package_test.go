@@ -3,6 +3,7 @@ package executor
 import (
 	"archive/zip"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -772,6 +773,12 @@ func (stubCredClient) Issue(ctx context.Context, req credprovider.IssueRequest) 
 		SecurityToken:   "test-security-token",
 		Expiration:      "2099-01-01T00:00:00Z",
 	}, nil
+}
+
+// GetKubeconfig is a stub to satisfy the credprovider.Client interface; this
+// test only exercises Nacos Spas signing.
+func (stubCredClient) GetKubeconfig(context.Context, string) (*credprovider.KubeconfigResponse, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 func newNacosAgentSpecCheckTestServer(t *testing.T, listStatus int, listBody string, getStatus int, getBody string) *httptest.Server {
 	t.Helper()

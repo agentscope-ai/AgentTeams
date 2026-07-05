@@ -168,7 +168,7 @@ def test_check_model_service_reports_unhealthy_for_failed_chat_completion_prefli
                 "providers": {
                     "hiclaw-gateway": {
                         "api": "openai-completions",
-                        "baseUrl": "http://aigw-local.hiclaw.io:8080/v1",
+                        "baseUrl": "http://aigw-local.agentteams.io:8080/v1",
                         "apiKey": "secret",
                         "models": [{"id": "qwen3.5-plus"}],
                     }
@@ -181,16 +181,17 @@ def test_check_model_service_reports_unhealthy_for_failed_chat_completion_prefli
 
     assert result.healthiness == "unhealthy"
     assert result.message == "model chat completion preflight returned HTTP 404"
-    assert result.details["endpoint"] == "http://aigw-local.hiclaw.io:8080/v1/chat/completions"
+    assert result.details["endpoint"] == "http://aigw-local.agentteams.io:8080/v1/chat/completions"
     assert result.details["http_status"] == 404
     assert opened == [
         (
-            "http://aigw-local.hiclaw.io:8080/v1/chat/completions",
+            "http://aigw-local.agentteams.io:8080/v1/chat/completions",
             "POST",
             {
                 "model": "qwen3.5-plus",
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,
+                "enable_thinking": False,
             },
             "Bearer secret",
             3,
@@ -221,7 +222,7 @@ def test_check_model_service_uses_max_completion_tokens_for_gpt5(monkeypatch):
             "models": {
                 "providers": {
                     "hiclaw-gateway": {
-                        "baseUrl": "http://aigw-local.hiclaw.io:8080/v1",
+                        "baseUrl": "http://aigw-local.agentteams.io:8080/v1",
                         "apiKey": "secret",
                         "models": [{"id": "gpt-5.4"}],
                     }

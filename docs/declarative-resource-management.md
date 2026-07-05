@@ -34,7 +34,7 @@ Admin (Human administrator)
 | Human | Real human user | Matrix account + Room permissions |
 | Manager | Coordinator Agent (task routing, Worker/Team orchestration) | Manager Agent runtime (same stack as Workers; reconciled like other CRs) |
 
-All resources share a unified API version: `apiVersion: hiclaw.io/v1beta1`.
+All resources share a unified API version: `apiVersion: agentteams.io/v1beta1`.
 
 **kubectl short names** (when CRDs are installed): `wk` (Worker), `tm` (Team), `hm` (Human), `mgr` (Manager).
 
@@ -45,7 +45,7 @@ A Worker is the basic execution unit in HiClaw — an AI Agent running in a Dock
 ### Basic Configuration
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -122,7 +122,7 @@ For custom skills, use `spec.package` to provide a ZIP containing a `skills/` di
 ### Worker with Custom Package
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: devops-alice
@@ -168,7 +168,7 @@ A Team is HiClaw's collaboration unit, consisting of one Team Leader and one or 
 ### Basic Configuration
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: alpha-team
@@ -401,7 +401,7 @@ The **Manager** resource describes the HiClaw Manager Agent — the coordinator 
 ### Basic configuration
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Manager
 metadata:
   name: default
@@ -469,7 +469,7 @@ A Human resource represents a real person. Upon creation, a Matrix account is au
 ### Basic Configuration
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: john
@@ -752,7 +752,7 @@ Deletion order is not automatic: use `hiclaw delete` per resource (respect depen
 # company-setup.yaml
 
 # --- Team definitions ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: product-team
@@ -774,7 +774,7 @@ spec:
     - name: qa-engineer
       model: claude-sonnet-4-6
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: ops-team
@@ -788,7 +788,7 @@ spec:
       model: claude-sonnet-4-6
 ---
 # --- Standalone Worker ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: admin-assistant
@@ -796,7 +796,7 @@ spec:
   model: claude-sonnet-4-6
 ---
 # --- Human users ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: zhang-san
@@ -807,7 +807,7 @@ spec:
   accessibleTeams: [product-team]
   note: Product manager
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: li-si
@@ -818,7 +818,7 @@ spec:
   accessibleTeams: [product-team]
   note: Backend developer
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: wang-wu
@@ -891,7 +891,7 @@ When the expose configuration is removed or the Worker is deleted, all associate
 ### Configuration
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -914,7 +914,7 @@ spec:
 Team Workers also support `expose`:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: dev-team

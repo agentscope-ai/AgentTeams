@@ -8,12 +8,24 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
+
+	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 )
 
 // AgentPodTemplateConfigMapKey is the data key inside the controller-scoped
 // ConfigMap that carries the PodTemplateSpec YAML. The controller reads this
 // and only this key; any other keys in the same ConfigMap are ignored.
 const AgentPodTemplateConfigMapKey = "pod-template.yaml"
+
+// AgentPodTemplateRemoteConfigMapKey is an optional data key inside the same
+// ConfigMap. When the agent is being created in remote deploy mode
+// (DeployMode=Remote) and this key is present and non-empty, the controller
+// uses it instead of AgentPodTemplateConfigMapKey. This lets operators ship
+// remote-cluster-specific scheduling fields (tolerations, nodeSelector,
+// imagePullSecrets, etc.) without affecting in-cluster Pods. When the key is
+// absent or empty in remote mode, the controller returns a zero-value
+// PodTemplateSpec (no overlay) — it does NOT fall back to pod-template.yaml.
+const AgentPodTemplateRemoteConfigMapKey = "pod-template-remote.yaml"
 
 // PodOverlay carries every controller-computed field that ApplyPodTemplate
 // must force onto the final Pod. Anything NOT in this struct is either copied
@@ -68,7 +80,14 @@ type PodOverlay struct {
 //   - NotFound: V(1) debug — a common "no overlay configured" state.
 //   - Parse failure: Error — the user's YAML is almost certainly wrong.
 //   - Other API errors: Info — likely transient; next Create retries.
-func LoadAgentPodTemplate(ctx context.Context, client K8sCoreClient, namespace, name string) corev1.PodTemplateSpec {
+//
+// When deployMode == v1beta1.DeployModeRemote, the loader only tries the
+// AgentPodTemplateRemoteConfigMapKey ("pod-template-remote.yaml") within the
+// same ConfigMap. If that key is missing or empty, it returns a zero-value
+// PodTemplateSpec (no overlay) without falling back to pod-template.yaml.
+// Any other deployMode value (including the empty string) only consults the
+// standard key, preserving the original behaviour.
+func LoadAgentPodTemplate(ctx context.Context, client K8sCoreClient, namespace, name, deployMode string) corev1.PodTemplateSpec {
 	logger := log.FromContext(ctx).WithName("agent-pod-template")
 	if client == nil || namespace == "" || name == "" {
 		return corev1.PodTemplateSpec{}
@@ -84,14 +103,33 @@ func LoadAgentPodTemplate(ctx context.Context, client K8sCoreClient, namespace, 
 			"namespace", namespace, "name", name, "err", err.Error())
 		return corev1.PodTemplateSpec{}
 	}
-	raw, ok := cm.Data[AgentPodTemplateConfigMapKey]
-	if !ok || raw == "" {
-		return corev1.PodTemplateSpec{}
+
+	// Resolve which key to consume. Remote deploy mode uses only the remote
+	// key; if absent or empty, no overlay is applied (no fallback to local).
+	var raw string
+	var usedKey string
+	if deployMode == v1beta1.DeployModeRemote {
+		v, ok := cm.Data[AgentPodTemplateRemoteConfigMapKey]
+		if !ok || v == "" {
+			logger.V(1).Info("remote pod template key not found or empty; using empty overlay",
+				"namespace", namespace, "name", name, "key", AgentPodTemplateRemoteConfigMapKey)
+			return corev1.PodTemplateSpec{}
+		}
+		raw = v
+		usedKey = AgentPodTemplateRemoteConfigMapKey
+	} else {
+		v, ok := cm.Data[AgentPodTemplateConfigMapKey]
+		if !ok || v == "" {
+			return corev1.PodTemplateSpec{}
+		}
+		raw = v
+		usedKey = AgentPodTemplateConfigMapKey
 	}
+
 	var tmpl corev1.PodTemplateSpec
 	if err := yaml.Unmarshal([]byte(raw), &tmpl); err != nil {
 		logger.Error(err, "agent pod template YAML parse failed; using empty overlay",
-			"namespace", namespace, "name", name, "key", AgentPodTemplateConfigMapKey)
+			"namespace", namespace, "name", name, "key", usedKey)
 		return corev1.PodTemplateSpec{}
 	}
 	return tmpl

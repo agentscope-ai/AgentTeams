@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 )
 
 // Typed errors for backend operations.
@@ -20,10 +22,14 @@ const (
 	StatusRunning  WorkerStatus = "running"
 	StatusReady    WorkerStatus = "ready"
 	StatusStopped  WorkerStatus = "stopped"
+	StatusSleeping WorkerStatus = "sleeping"
 	StatusStarting WorkerStatus = "starting"
 	StatusNotFound WorkerStatus = "not_found"
+	StatusFailed   WorkerStatus = "failed"
 	StatusUnknown  WorkerStatus = "unknown"
 )
+
+const BuiltinSandboxInstanceName = "agentteams-builtin"
 
 // Supported worker runtimes.
 const (
@@ -82,6 +88,24 @@ type VolumeMount struct {
 	ReadOnly      bool
 }
 
+// WorkerDepsSpec describes runtime assets that sandbox backends can mount
+// dynamically without baking them into the warm SandboxSet image.
+type WorkerDepsSpec struct {
+	InplaceUpdateImage  string
+	Env                 map[string]string
+	AuthToken           string
+	DynamicVolumeMounts []DynamicVolumeMount
+}
+
+// DynamicVolumeMount maps a provider-managed persistent volume into a sandbox.
+type DynamicVolumeMount struct {
+	PVName     string
+	MountPath  string
+	SubPath    string
+	ReadOnly   bool
+	Attributes map[string]string
+}
+
 // PortMapping describes a host-to-container port binding (Docker backend only).
 type PortMapping struct {
 	HostIP        string // e.g. "127.0.0.1"; empty = all interfaces
@@ -96,6 +120,9 @@ type CreateRequest struct {
 	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "openhuman"
+	// BackendRuntime selects the infrastructure backend flavor for this
+	// worker: "pod" (default K8s Pod) or "sandbox" (OpenKruise Sandbox).
+	BackendRuntime string `json:"-"`
 	// RuntimeFallback is the value used by Backend.Create when Runtime is
 	// empty, before falling back to RuntimeOpenClaw. Manager / Worker
 	// reconcilers populate this from HICLAW_MANAGER_RUNTIME /
@@ -112,9 +139,10 @@ type CreateRequest struct {
 	// SA-based auth — ServiceAccountName is set on K8s Pods (projected token).
 	// AuthToken is the pre-issued SA token for Docker backend.
 	// AuthAudience is the projected token audience (K8s backend only; defaults to "hiclaw-controller").
-	ServiceAccountName string `json:"-"`
-	AuthToken          string `json:"-"`
-	AuthAudience       string `json:"-"`
+	ServiceAccountName    string `json:"-"`
+	AuthToken             string `json:"-"`
+	AuthAudience          string `json:"-"`
+	AuthExpirationSeconds int64  `json:"-"`
 
 	// Resources overrides default resource limits for this container.
 	// nil = use backend defaults (e.g. K8sConfig.WorkerCPU/WorkerMemory).
@@ -129,10 +157,10 @@ type CreateRequest struct {
 	ContainerName string `json:"-"`
 
 	// Labels carries the full K8s label set for the Pod. Callers own the
-	// identity labels (`app`, `hiclaw.io/worker` or `hiclaw.io/manager`,
-	// `hiclaw.io/controller`, `hiclaw.io/role`, `hiclaw.io/team` when
+	// identity labels (`app`, `agentteams.io/worker` or `agentteams.io/manager`,
+	// `agentteams.io/controller`, `agentteams.io/role`, `agentteams.io/team` when
 	// applicable). The backend does NOT synthesize tenant/role defaults;
-	// it only stamps `hiclaw.io/runtime` from the resolved runtime value
+	// it only stamps `agentteams.io/runtime` from the resolved runtime value
 	// (the backend alone knows the post-resolution value after
 	// `ResolveRuntime`).
 	Labels map[string]string `json:"-"`
@@ -155,8 +183,31 @@ type CreateRequest struct {
 	// OwnerReference via controllerutil.SetControllerReference, so that
 	// deletion of the owning CR (Worker / Team / Manager) cascades to the
 	// Pod via native K8s garbage collection. Docker backend ignores this
-	// field.
+	// field. Skipped when DeployMode is "Remote" (cross-cluster ownerRef
+	// is not possible).
 	Owner metav1.Object `json:"-"`
+
+	// DeployMode selects local (same cluster) or remote (different cluster)
+	// Pod placement. "Local" (default/empty) uses the backend's own client;
+	// "Remote" routes through RemoteClientProvider.
+	DeployMode string `json:"-"`
+
+	// TargetClusterID identifies the remote cluster (Remote mode only).
+	TargetClusterID string `json:"-"`
+
+	// TargetNamespace overrides the namespace in the remote cluster (Remote
+	// mode only). Empty means the backend falls back to its own namespace.
+	TargetNamespace string `json:"-"`
+
+	// ServiceEnabled indicates whether a Service should be created for the Pod.
+	ServiceEnabled bool `json:"-"`
+
+	// SandboxSetName optionally selects a provider-specific SandboxSet. The
+	// current OpenKruise backend uses the built-in warm pool.
+	SandboxSetName string `json:"-"`
+
+	// WorkersDeps carries sandbox-specific dynamic mount and image update data.
+	WorkersDeps *WorkerDepsSpec `json:"-"`
 }
 
 // Deployment modes returned by backends.
@@ -165,15 +216,54 @@ const (
 	DeployCloud = "cloud"
 )
 
+// RemoteClientProvider abstracts access to remote cluster k8s clients.
+// The remoteclient.Cache implements this interface.
+type RemoteClientProvider interface {
+	ResolveClient(ctx context.Context, clusterID string) (K8sCoreClient, error)
+}
+
+// RemoteClusterClientProvider exposes both typed and dynamic clients for a
+// remote cluster. Sandbox backends use the dynamic client for CRD operations.
+type RemoteClusterClientProvider interface {
+	RemoteClientProvider
+	ResolveDynamicClient(ctx context.Context, clusterID string) (dynamic.Interface, error)
+}
+
+// K8sServiceClient is the minimal Service client surface needed by the backend.
+type K8sServiceClient interface {
+	Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Service, error)
+	Create(ctx context.Context, svc *corev1.Service, opts metav1.CreateOptions) (*corev1.Service, error)
+	Update(ctx context.Context, svc *corev1.Service, opts metav1.UpdateOptions) (*corev1.Service, error)
+	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
+}
+
+// K8sNamespaceClient is the minimal Namespace client surface needed by the backend.
+type K8sNamespaceClient interface {
+	Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Namespace, error)
+	Create(ctx context.Context, ns *corev1.Namespace, opts metav1.CreateOptions) (*corev1.Namespace, error)
+}
+
+// ServiceBackend is an optional capability of a WorkerBackend that can
+// provide Kubernetes Service lifecycle operations. Only K8sBackend implements
+// this; Docker backend does not support Service management.
+type ServiceBackend interface {
+	// ServiceClient returns a K8sServiceClient and resolved namespace for the
+	// appropriate cluster based on deploy mode. Callers use this to create,
+	// update, or delete Services alongside member pods.
+	ServiceClient(ctx context.Context, deployMode, targetClusterID, targetNamespace string) (K8sServiceClient, string, error)
+}
+
 // WorkerResult holds the result of a worker operation.
 type WorkerResult struct {
 	Name            string       `json:"name"`
 	Backend         string       `json:"backend"`
 	DeploymentMode  string       `json:"deployment_mode"`
 	Status          WorkerStatus `json:"status"`
+	Message         string       `json:"message,omitempty"`
 	ContainerID     string       `json:"container_id,omitempty"`
 	AppID           string       `json:"app_id,omitempty"`
 	RawStatus       string       `json:"raw_status,omitempty"`
+	AppliedSpecHash string       `json:"applied_spec_hash,omitempty"`
 	ConsoleHostPort string       `json:"console_host_port,omitempty"`
 }
 

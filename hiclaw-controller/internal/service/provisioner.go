@@ -9,6 +9,7 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
@@ -20,12 +21,11 @@ import (
 
 // WorkerProvisionRequest describes the infrastructure to provision for a worker.
 type WorkerProvisionRequest struct {
-	Name            string
-	CredentialName  string
-	ModelProviderID string
-	Role            string // "standalone" | "team_leader" | "worker"
-	TeamName        string
-	TeamLeaderName  string
+	Name           string
+	CredentialName string
+	Role           string // "standalone" | "team_leader" | "worker"
+	TeamName       string
+	TeamLeaderName string
 }
 
 // WorkerProvisionResult contains all outputs from a successful provision.
@@ -93,7 +93,7 @@ type ProvisionerConfig struct {
 	ResourcePrefix authpkg.ResourcePrefix
 
 	// ControllerName identifies this controller instance. Stamped on every
-	// ServiceAccount created by the provisioner via hiclaw.io/controller.
+	// ServiceAccount created by the provisioner via agentteams.io/controller.
 	ControllerName string
 
 	// Pre-generated Manager secrets (from install script env).
@@ -130,6 +130,10 @@ type ProvisionerConfig struct {
 	// the manager; otherwise Conduwuit/Tuwunel returns HTTP 403 (it rejects
 	// invites to non-existent local users).
 	ManagerEnabled bool
+
+	// RemoteCache resolves remote cluster clients for cross-cluster SA operations.
+	// May be nil when remote mode is not configured.
+	RemoteCache backend.RemoteClientProvider
 }
 
 // Provisioner orchestrates infrastructure provisioning and deprovisioning
@@ -149,6 +153,7 @@ type Provisioner struct {
 	adminUser      string
 	resourcePrefix authpkg.ResourcePrefix
 	controllerName string
+	remoteCache    backend.RemoteClientProvider
 
 	managerPassword   string
 	managerGatewayKey string
@@ -187,6 +192,7 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 		managerEnabled:    cfg.ManagerEnabled,
 		aiGatewayURL:      cfg.AIGatewayURL,
 		managerModel:      cfg.ManagerModel,
+		remoteCache:       cfg.RemoteCache,
 	}
 }
 
@@ -467,7 +473,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		_ = p.creds.Save(ctx, credentialName, creds)
 	}
 
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, req.ModelProviderID); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return nil, fmt.Errorf("AI route authorization failed: %w", err)
 	}
 	// Higress WASM key-auth plugin needs ~1-2s to sync after route update.
@@ -674,7 +680,7 @@ func (p *Provisioner) RefreshManagerCredentials(ctx context.Context, managerName
 // EnsureManagerGatewayAuth ensures the Manager's gateway consumer exists and is
 // authorized on AI routes. Called during container recreation to restore auth
 // that may have been lost (e.g. after upgrade with fresh Higress state).
-func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey, modelProviderID string) error {
+func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey string) error {
 	consumerName := "manager"
 	_, err := p.gateway.EnsureConsumer(ctx, gateway.ConsumerRequest{
 		Name:          consumerName,
@@ -683,7 +689,7 @@ func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName,
 	if err != nil {
 		return fmt.Errorf("ensure consumer: %w", err)
 	}
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, modelProviderID); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return fmt.Errorf("authorize AI routes: %w", err)
 	}
 	return nil
@@ -694,7 +700,7 @@ func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName,
 // to defensively restore auth that may have been lost (e.g. if the Higress
 // route was rewritten, or after upgrade with fresh Higress state). Mirrors
 // EnsureManagerGatewayAuth but uses the worker-scoped consumer name.
-func (p *Provisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey, modelProviderID string) error {
+func (p *Provisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error {
 	consumerName := "worker-" + workerName
 	_, err := p.gateway.EnsureConsumer(ctx, gateway.ConsumerRequest{
 		Name:          consumerName,
@@ -703,7 +709,7 @@ func (p *Provisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, g
 	if err != nil {
 		return fmt.Errorf("ensure consumer: %w", err)
 	}
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, modelProviderID); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return fmt.Errorf("authorize AI routes: %w", err)
 	}
 	return nil
@@ -1228,8 +1234,7 @@ func (p *Provisioner) DeleteManagerRoomAlias(ctx context.Context, managerName st
 
 // ManagerProvisionRequest describes the infrastructure to provision for a Manager.
 type ManagerProvisionRequest struct {
-	Name            string
-	ModelProviderID string
+	Name string
 }
 
 // ManagerProvisionResult contains all outputs from a successful Manager provision.
@@ -1353,7 +1358,7 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 		_ = p.creds.Save(ctx, managerName, creds)
 	}
 
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, req.ModelProviderID); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return nil, fmt.Errorf("AI route authorization failed: %w", err)
 	}
 	// Higress WASM key-auth plugin needs ~1-2s to sync after route update.

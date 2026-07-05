@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -16,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -25,7 +28,7 @@ import (
 )
 
 const (
-	finalizerName       = "hiclaw.io/cleanup"
+	finalizerName       = "agentteams.io/cleanup"
 	reconcileInterval   = 5 * time.Minute
 	reconcileRetryDelay = 30 * time.Second
 )
@@ -53,9 +56,12 @@ type WorkerReconciler struct {
 
 	// ControllerName identifies this controller instance. Stamped on every
 	// Pod/SA/Secret created under this reconciler via the
-	// hiclaw.io/controller label so multiple controller instances sharing a
+	// agentteams.io/controller label so multiple controller instances sharing a
 	// namespace do not cross-watch each other's resources.
 	ControllerName string
+	Namespace      string
+
+	RemoteWatchRegistrar RemoteWatchRegistrar
 }
 
 func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -71,6 +77,10 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 
 	patchBase := client.MergeFrom(worker.DeepCopy())
 
+	// Shared MemberState captured by the defer so phase computation can
+	// observe the actual container state recorded during reconcile.
+	state := &MemberState{}
+
 	// Unified status patch at the end of every reconcile. ObservedGeneration
 	// is only written when reconcile succeeds, preventing the infinite-loop
 	// bug where a failed status write triggered re-reconcile with
@@ -79,7 +89,7 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		if !worker.DeletionTimestamp.IsZero() {
 			return
 		}
-		worker.Status.Phase = computeWorkerPhase(&worker, reterr)
+		worker.Status.Phase = computeWorkerPhase(&worker, state.ContainerState, reterr)
 		if reterr == nil {
 			worker.Status.ObservedGeneration = worker.Generation
 			worker.Status.Message = ""
@@ -107,14 +117,14 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		}
 	}
 
-	return r.reconcileNormal(ctx, &worker)
+	return r.reconcileNormal(ctx, &worker, state)
 }
 
 // reconcileNormal builds a MemberContext from the Worker CR, runs the shared
 // member reconcile phases, and writes runtime state back to Worker.Status.
 // Legacy Manager groupAllowFrom is updated here only for standalone workers;
 // team leaders are handled by TeamReconciler.
-func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker) (reconcile.Result, error) {
+func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker, state *MemberState) (reconcile.Result, error) {
 	deps := MemberDeps{
 		Provisioner:    r.Provisioner,
 		Deployer:       r.Deployer,
@@ -124,7 +134,11 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		DefaultRuntime: r.DefaultRuntime,
 		GatewayClient:  r.GatewayClient,
 	}
-	mctx := r.workerMemberContext(w)
+	spec, err := effectiveWorkerSpecForTarget(w)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	mctx := r.workerMemberContextWithSpec(w, spec)
 
 	if w.Spec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, w.Spec.ModelProvider)
@@ -134,7 +148,10 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		mctx.ModelProviderInfo = info
 	}
 
-	state := &MemberState{}
+	// Validate cross-cluster deployment fields before entering phases.
+	if err := ValidateMemberDeployment(mctx); err != nil {
+		return reconcile.Result{}, err
+	}
 
 	if res, err := ReconcileMemberInfra(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
@@ -154,7 +171,15 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
+		if err == nil {
+			applyDeploymentTargetStatus(w, mctx)
+		}
 		return res, err
+	}
+	applyDeploymentTargetStatus(w, mctx)
+	if err := ReconcileMemberService(ctx, &mctx, &deps); err != nil {
+		applyMemberStateToWorker(w, state)
+		return reconcile.Result{}, err
 	}
 	_ = ReconcileMemberExpose(ctx, deps, mctx, state)
 	applyMemberStateToWorker(w, state)
@@ -172,8 +197,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 }
 
 // reconcileDelete cleans up all infrastructure for the Worker and then removes
-// the finalizer. Legacy Manager groupAllowFrom is rolled back here only for
-// standalone workers.
+// the finalizer.
 func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worker) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("deleting worker", "name", w.Name)
@@ -187,16 +211,15 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 		DefaultRuntime: r.DefaultRuntime,
 		GatewayClient:  r.GatewayClient,
 	}
-	mctx := r.workerMemberContext(w)
+	spec := workerSpecWithAppliedDeploymentTarget(w.Spec, w.Status)
+	mctx := r.workerMemberContextWithSpec(w, spec)
 
 	_ = ReconcileMemberDelete(ctx, deps, mctx)
 
 	if r.Legacy != nil && r.Legacy.Enabled() {
 		workerMatrixID := r.Provisioner.MatrixUserID(w.Name)
-		if mctx.Role == RoleStandalone {
-			if err := r.Legacy.UpdateManagerGroupAllowFrom(workerMatrixID, false); err != nil {
-				logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
-			}
+		if err := r.Legacy.UpdateManagerGroupAllowFrom(workerMatrixID, false); err != nil {
+			logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
 		}
 		if err := r.Legacy.RemoveFromWorkersRegistry(mctx.RuntimeName); err != nil {
 			logger.Error(err, "failed to remove from workers registry (non-fatal)")
@@ -221,15 +244,9 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 	}
 	logger := log.FromContext(ctx)
 
-	role := w.Annotations["hiclaw.io/role"]
-	teamName := w.Annotations["hiclaw.io/team"]
-	teamLeaderName := w.Annotations["hiclaw.io/team-leader"]
-	memberRole := roleForAnnotations(role, teamLeaderName)
-
-	// Only standalone workers grant themselves group-DM publish rights. Team
-	// leaders are handled by TeamReconciler; team workers never go through
-	// WorkerReconciler post-refactor.
-	if memberRole == RoleStandalone && state.ProvResult != nil {
+	// WorkerReconciler only handles standalone workers. Grant group-DM
+	// publish rights for the standalone worker.
+	if state.ProvResult != nil {
 		if err := r.Legacy.UpdateManagerGroupAllowFrom(state.ProvResult.MatrixUserID, true); err != nil {
 			logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
 		}
@@ -243,8 +260,6 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 		Runtime:      w.Spec.Runtime,
 		Deployment:   "local",
 		Skills:       w.Spec.Skills,
-		Role:         role,
-		TeamID:       nilIfEmpty(teamName),
 		Image:        nilIfEmpty(w.Spec.Image),
 	}); err != nil {
 		logger.Error(err, "registry update failed (non-fatal)")
@@ -252,30 +267,53 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 }
 
 // workerMemberContext translates a Worker CR into a MemberContext for the
-// shared member reconcile helpers. The returned PodLabels are built by
-// layering four sources low-to-high: ConfigMap-based pod template (added
-// downstream by ApplyPodTemplate), the CR's metadata.labels, the CR's
-// spec.labels, and the controller-forced system labels (controller name
-// and member role). Controller-forced keys deliberately come last so
-// anything the user writes that collides (e.g. `hiclaw.io/controller`)
-// is silently overridden rather than rejected.
+// shared member reconcile helpers. WorkerReconciler always produces a
+// standalone context — team semantics are injected externally by
+// TeamReconciler via Matrix Room invite and MinIO AGENTS.MD, never via
+// Worker CR annotations.
+//
+// PodLabels are built by layering four sources low-to-high: ConfigMap-based
+// pod template (added downstream by ApplyPodTemplate), the CR's
+// metadata.labels, the CR's spec.labels, and the controller-forced system
+// labels (controller name and member role). Controller-forced keys
+// deliberately come last so anything the user writes that collides (e.g.
+// `agentteams.io/controller`) is silently overridden rather than rejected.
 func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
-	role := roleForAnnotations(w.Annotations["hiclaw.io/role"], w.Annotations["hiclaw.io/team-leader"])
-	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
+	return r.workerMemberContextWithSpec(w, w.Spec)
+}
+
+func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v1beta1.WorkerSpec) MemberContext {
+	runtimeName := spec.EffectiveWorkerName(w.Name)
+
+	// Cross-cluster deployment fields.
+	deployMode := v1beta1.DeployModeLocal
+	if spec.DeployMode != nil {
+		deployMode = *spec.DeployMode
+	}
+	var targetClusterID, targetNamespace string
+	if spec.TargetCluster != nil {
+		targetClusterID = spec.TargetCluster.ID
+		targetNamespace = spec.TargetCluster.Namespace
+	}
+	var serviceEnabled bool
+	if spec.ServiceEnabled != nil {
+		serviceEnabled = *spec.ServiceEnabled
+	}
+
 	return MemberContext{
 		Name:               w.Name,
 		RuntimeName:        runtimeName,
 		Namespace:          w.Namespace,
-		Role:               role,
-		Spec:               w.Spec,
+		Role:               RoleStandalone,
+		Spec:               spec,
 		Generation:         w.Generation,
 		ObservedGeneration: w.Status.ObservedGeneration,
 		PodLabels: mergeLabels(
 			w.ObjectMeta.Labels,
-			w.Spec.Labels,
+			spec.Labels,
 			map[string]string{
 				v1beta1.LabelController: r.ControllerName,
-				"hiclaw.io/role":        role.String(),
+				"agentteams.io/role":    RoleStandalone.String(),
 			},
 		),
 		// SpecChanged is gated on ObservedGeneration > 0 so a brand-new
@@ -289,14 +327,104 @@ func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext 
 		// the container via force=true (SIGKILL, exit 137).
 		SpecChanged:          w.Status.ObservedGeneration > 0 && w.Generation != w.Status.ObservedGeneration,
 		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
-		TeamName:             w.Annotations["hiclaw.io/team"],
-		TeamLeaderName:       w.Annotations["hiclaw.io/team-leader"],
-		TeamAdminMatrixID:    w.Annotations["hiclaw.io/team-admin-id"],
 		ExistingMatrixUserID: w.Status.MatrixUserID,
 		ExistingRoomID:       w.Status.RoomID,
 		CurrentExposedPorts:  w.Status.ExposedPorts,
 		Owner:                w,
+		DeployMode:           deployMode,
+		BackendRuntime:       spec.GetBackendRuntime(),
+		StatusBackendRuntime: w.Status.BackendRuntime,
+		TargetClusterID:      targetClusterID,
+		TargetNamespace:      targetNamespace,
+		ServiceEnabled:       serviceEnabled,
 	}
+}
+
+func effectiveWorkerSpecForTarget(w *v1beta1.Worker) (v1beta1.WorkerSpec, error) {
+	spec := *w.Spec.DeepCopy()
+	if w.Status.DeployMode == "" && w.Status.TargetCluster == nil {
+		return spec, nil
+	}
+	statusMode := w.Status.DeployMode
+	if statusMode == "" {
+		statusMode = v1beta1.DeployModeLocal
+	}
+	desiredMode, desiredTarget := workerSpecDeploymentTarget(spec)
+	if statusMode == desiredMode && sameTargetCluster(w.Status.TargetCluster, desiredTarget) {
+		return spec, nil
+	}
+	if spec.DesiredState() != "Stopped" {
+		return spec, fmt.Errorf("spec.deployMode/spec.targetCluster cannot be changed until the Worker is Stopped; current=%s, desired=%s",
+			deploymentTargetSummary(statusMode, w.Status.TargetCluster),
+			deploymentTargetSummary(desiredMode, desiredTarget))
+	}
+	if w.Status.Phase != "Stopped" {
+		return workerSpecWithAppliedDeploymentTarget(spec, w.Status), nil
+	}
+	return spec, nil
+}
+
+func workerSpecWithAppliedDeploymentTarget(spec v1beta1.WorkerSpec, status v1beta1.WorkerStatus) v1beta1.WorkerSpec {
+	if status.DeployMode == "" && status.TargetCluster == nil {
+		return spec
+	}
+	mode := status.DeployMode
+	if mode == "" {
+		mode = v1beta1.DeployModeLocal
+	}
+	spec.DeployMode = &mode
+	if mode == v1beta1.DeployModeRemote && status.TargetCluster != nil {
+		spec.TargetCluster = status.TargetCluster.DeepCopy()
+	} else if mode == v1beta1.DeployModeLocal {
+		spec.TargetCluster = nil
+	}
+	return spec
+}
+
+func applyDeploymentTargetStatus(w *v1beta1.Worker, m MemberContext) {
+	w.Status.DeployMode = m.DeployMode
+	if m.BackendRuntime != "" {
+		w.Status.BackendRuntime = m.BackendRuntime
+	}
+	if m.DeployMode == v1beta1.DeployModeRemote || m.TargetClusterID != "" || m.TargetNamespace != "" {
+		w.Status.TargetCluster = &v1beta1.TargetClusterSpec{
+			ID:        m.TargetClusterID,
+			Namespace: m.TargetNamespace,
+		}
+	} else {
+		w.Status.TargetCluster = nil
+	}
+}
+
+func workerSpecDeploymentTarget(spec v1beta1.WorkerSpec) (string, *v1beta1.TargetClusterSpec) {
+	mode := v1beta1.DeployModeLocal
+	if spec.DeployMode != nil && *spec.DeployMode != "" {
+		mode = *spec.DeployMode
+	}
+	if mode != v1beta1.DeployModeRemote {
+		return mode, nil
+	}
+	if spec.TargetCluster == nil {
+		return mode, nil
+	}
+	return mode, spec.TargetCluster.DeepCopy()
+}
+
+func sameTargetCluster(a, b *v1beta1.TargetClusterSpec) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.ID == b.ID && a.Namespace == b.Namespace
+}
+
+func deploymentTargetSummary(mode string, target *v1beta1.TargetClusterSpec) string {
+	if mode == "" {
+		mode = v1beta1.DeployModeLocal
+	}
+	if mode != v1beta1.DeployModeRemote || target == nil {
+		return mode
+	}
+	return fmt.Sprintf("%s/%s/%s", mode, target.ID, target.Namespace)
 }
 
 // applyMemberStateToWorker copies runtime state into Worker.Status fields.
@@ -315,26 +443,18 @@ func applyMemberStateToWorker(w *v1beta1.Worker, state *MemberState) {
 	if state.ContainerState != "" {
 		w.Status.ContainerState = state.ContainerState
 	}
+	if state.BackendRuntime != "" {
+		w.Status.BackendRuntime = state.BackendRuntime
+	}
 	if state.ExposedPorts != nil || len(w.Spec.Expose) == 0 {
 		w.Status.ExposedPorts = state.ExposedPorts
 	}
 }
 
 // computeWorkerPhase determines the Worker status phase from the reconcile
-// outcome. On success, phase reflects the desired lifecycle state.
-func computeWorkerPhase(w *v1beta1.Worker, reconcileErr error) string {
-	if reconcileErr != nil {
-		if w.Status.MatrixUserID == "" {
-			return "Failed"
-		}
-		if w.Status.Phase == "" {
-			return "Pending"
-		}
-		// Keep the old Phase to avoid marking a healthy worker as Failed on a
-		// transient error; the error surfaces through Status.Message instead.
-		return w.Status.Phase
-	}
-	return w.Spec.DesiredState()
+// outcome. Delegates to the shared computeMemberPhase function.
+func computeWorkerPhase(w *v1beta1.Worker, containerState string, reconcileErr error) string {
+	return computeMemberPhase(w.Status.Phase, w.Status.MatrixUserID, w.Spec.DesiredState(), containerState, reconcileErr)
 }
 
 func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -345,39 +465,98 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
-				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
-					workerName := obj.GetLabels()["hiclaw.io/worker"]
-					if workerName == "" {
-						return nil
-					}
-					// Skip pods owned by a Team (those are reconciled via
-					// the Team controller's own pod watch).
-					if obj.GetLabels()["hiclaw.io/team"] != "" {
-						return nil
-					}
-					return []reconcile.Request{
-						{NamespacedName: client.ObjectKey{
-							Name:      workerName,
-							Namespace: obj.GetNamespace(),
-						}},
-					}
-				}),
-				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/worker", r.ControllerName)),
+				workerPodEventHandler(""),
+				builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
 			)
+		}
+		if wb, err := r.Backend.GetWorkerBackend(context.Background(), "sandbox"); err == nil {
+			if sb, ok := wb.(*backend.SandboxBackend); ok && sb.Available(context.Background()) {
+				bldr = bldr.Watches(
+					sb.WatchObject(),
+					workerPodEventHandler(""),
+					builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
+				).Watches(
+					sb.ClaimWatchObject(),
+					workerPodEventHandler(""),
+					builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
+				)
+			}
 		}
 	}
 
-	return bldr.Complete(r)
+	ctl, err := bldr.Build(r)
+	if err != nil {
+		return err
+	}
+	if r.RemoteWatchRegistrar != nil && r.Backend != nil {
+		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
+			r.RemoteWatchRegistrar.RegisterWatch(
+				ctl,
+				&corev1.Pod{},
+				workerPodEventHandler(r.Namespace),
+				podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
+			)
+		}
+		if wb, err := r.Backend.GetWorkerBackend(context.Background(), "sandbox"); err == nil {
+			if sb, ok := wb.(*backend.SandboxBackend); ok && sb.Available(context.Background()) {
+				r.RemoteWatchRegistrar.RegisterWatch(
+					ctl,
+					sb.WatchObject(),
+					workerPodEventHandler(r.Namespace),
+					podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
+				)
+				r.RemoteWatchRegistrar.RegisterWatch(
+					ctl,
+					sb.ClaimWatchObject(),
+					workerPodEventHandler(r.Namespace),
+					podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
+				)
+			}
+		}
+	}
+	return nil
+}
+
+type RemoteWatchRegistrar interface {
+	RegisterWatch(ctrlcontroller.Controller, client.Object, handler.EventHandler, ...predicate.Predicate)
+}
+
+func workerPodEventHandler(localNamespace string) handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+		return workerPodRequests(obj, localNamespace)
+	})
+}
+
+func workerPodRequests(obj client.Object, localNamespace string) []reconcile.Request {
+	workerName := obj.GetLabels()["agentteams.io/worker"]
+	if workerName == "" {
+		return nil
+	}
+	// Skip pods owned by a Team (those are reconciled via
+	// the Team controller's own pod watch).
+	if obj.GetLabels()["agentteams.io/team"] != "" {
+		return nil
+	}
+	namespace := localNamespace
+	if namespace == "" {
+		namespace = obj.GetNamespace()
+	}
+	return []reconcile.Request{
+		{NamespacedName: client.ObjectKey{
+			Name:      workerName,
+			Namespace: namespace,
+		}},
+	}
 }
 
 // podLifecyclePredicates filters Pod events to only trigger reconciliation on
-// create, delete, or phase transitions. A pod is considered "ours" only when
+// create, delete, or relevant status transitions. A pod is considered "ours" only when
 // it carries both:
 //
-//   - labelKey (one of "hiclaw.io/worker" / "hiclaw.io/team" /
-//     "hiclaw.io/manager") with a non-empty value — identifying which CR
+//   - labelKey (one of "agentteams.io/worker" / "agentteams.io/team" /
+//     "agentteams.io/manager") with a non-empty value — identifying which CR
 //     kind owns the pod.
-//   - hiclaw.io/controller == controllerName — identifying which controller
+//   - agentteams.io/controller == controllerName — identifying which controller
 //     instance owns the pod.
 //
 // The controller filter is defense-in-depth against the informer cache label
@@ -406,12 +585,60 @@ func podLifecyclePredicates(labelKey, controllerName string) predicate.Predicate
 			if !ok1 || !ok2 {
 				return true
 			}
-			return oldPod.Status.Phase != newPod.Status.Phase
+			return podLifecycleSignal(oldPod) != podLifecycleSignal(newPod)
 		},
 		GenericFunc: func(e event.GenericEvent) bool {
 			return false
 		},
 	}
+}
+
+func podLifecycleSignal(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		string(pod.Status.Phase),
+		podReadyConditionSignal(pod.Status.Conditions),
+		podContainerStatusesSignal(pod.Status.InitContainerStatuses),
+		podContainerStatusesSignal(pod.Status.ContainerStatuses),
+	}, "\n")
+}
+
+func podReadyConditionSignal(conditions []corev1.PodCondition) string {
+	for i := range conditions {
+		cond := conditions[i]
+		if cond.Type == corev1.PodReady {
+			return fmt.Sprintf("%s|%s|%s", cond.Status, cond.Reason, cond.Message)
+		}
+	}
+	return ""
+}
+
+func podContainerStatusesSignal(statuses []corev1.ContainerStatus) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(statuses))
+	for i := range statuses {
+		cs := statuses[i]
+		state, reason, message := "unknown", "", ""
+		switch {
+		case cs.State.Waiting != nil:
+			state = "waiting"
+			reason = cs.State.Waiting.Reason
+			message = cs.State.Waiting.Message
+		case cs.State.Running != nil:
+			state = "running"
+		case cs.State.Terminated != nil:
+			state = "terminated"
+			reason = cs.State.Terminated.Reason
+			message = cs.State.Terminated.Message
+		}
+		parts = append(parts, fmt.Sprintf("%s|%s|%s|%s|%t", cs.Name, state, reason, message, cs.Ready))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\n")
 }
 
 // --- Package-level helpers ---
@@ -421,15 +648,4 @@ func nilIfEmpty(s string) *string {
 		return nil
 	}
 	return &s
-}
-
-// roleForAnnotations maps Worker CR annotations to a MemberRole.
-func roleForAnnotations(role, teamLeaderName string) MemberRole {
-	if role == "team_leader" {
-		return RoleTeamLeader
-	}
-	if teamLeaderName != "" {
-		return RoleTeamWorker
-	}
-	return RoleStandalone
 }

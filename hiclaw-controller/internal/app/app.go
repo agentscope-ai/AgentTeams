@@ -22,7 +22,9 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/initializer"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
+	agentteamsmetrics "github.com/hiclaw/hiclaw-controller/internal/metrics"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
+	"github.com/hiclaw/hiclaw-controller/internal/remoteclient"
 	"github.com/hiclaw/hiclaw-controller/internal/server"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/internal/store"
@@ -76,6 +78,12 @@ type App struct {
 	agentGen *agentconfig.Generator
 	registry *backend.Registry
 
+	// Remote-cluster k8s client cache. Non-nil only when the credential
+	// provider sidecar is configured; consumed by the K8s worker backend
+	// to route operations against Workers/Managers deployed to remote
+	// clusters and refreshed by a background maintenance loop.
+	remoteClientCache *remoteclient.Cache
+
 	// Service layer
 	provisioner *service.Provisioner
 	deployer    *service.Deployer
@@ -94,8 +102,12 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	}{
 		{"scheme", a.initScheme},
 		{"infra-clients", a.initInfraClients},
-		{"backends", a.initBackends},
+		// controller-manager must be initialized before backends so that
+		// initBackends can construct the remote-client cache with
+		// mgr.GetClient() (only used by the maintenance loop, not yet at
+		// construction time).
 		{"controller-manager", a.initControllerManager},
+		{"backends", a.initBackends},
 		{"field-indexers", a.initFieldIndexers},
 		{"auth", a.initAuth},
 		{"service-layer", a.initServiceLayer},
@@ -144,6 +156,13 @@ func (a *App) Start(ctx context.Context) error {
 		}
 	})
 
+	// Launch the remote-client cache maintenance loop. StartMaintenanceLoop
+	// internally spawns its own goroutine and returns immediately; it
+	// runs until ctx is cancelled.
+	if a.remoteClientCache != nil {
+		a.remoteClientCache.StartMaintenanceLoop(ctx)
+	}
+
 	// Run cluster initialization only after this instance becomes the leader.
 	// In embedded mode (no leader election) Elected() closes immediately.
 	a.wg.Go(func() {
@@ -175,12 +194,13 @@ func (a *App) Start(ctx context.Context) error {
 				TuwunelURL:                 a.cfg.MatrixServerURL,
 				ElementWebURL:              a.cfg.ElementWebURL,
 				ControllerName:             a.cfg.ControllerName,
-				AppServiceEnabled:         a.cfg.MatrixAppServiceEnabled,
-				AppServiceID:              a.cfg.MatrixAppServiceID,
-				AppServiceToken:           a.cfg.MatrixAppServiceASToken,
-				AppServiceHSToken:         a.cfg.MatrixAppServiceHSToken,
-				AppServiceSenderLocalpart: a.cfg.MatrixAppServiceSenderLocalpart,
-				MatrixDomain:              a.cfg.MatrixDomain,
+				AppServiceEnabled:          a.cfg.MatrixAppServiceEnabled,
+				AppServiceID:               a.cfg.MatrixAppServiceID,
+				AppServiceToken:            a.cfg.MatrixAppServiceASToken,
+				AppServiceHSToken:          a.cfg.MatrixAppServiceHSToken,
+				AppServiceSenderLocalpart:  a.cfg.MatrixAppServiceSenderLocalpart,
+				AppServicePushURL:          a.cfg.MatrixAppServicePushURL,
+				MatrixDomain:               a.cfg.MatrixDomain,
 			},
 		}
 		if err := init.Run(ctx); err != nil {
@@ -356,7 +376,20 @@ func (s *ossControllerCredSource) Resolve(ctx context.Context) (oss.Credentials,
 }
 
 func (a *App) initBackends(_ context.Context) error {
-	workerBackends := buildWorkerBackends(a.cfg, a.scheme)
+	// Initialize the remote-cluster k8s client cache when the credential
+	// provider sidecar is configured. The cache holds references to
+	// mgr.GetClient() and the credential client; actual List calls happen
+	// later from the maintenance loop and from GetOrCreate, by which time
+	// the manager's cache will be running.
+	if a.credProvider != nil {
+		a.remoteClientCache = remoteclient.NewCache(remoteclient.CacheConfig{
+			CredClient:     a.credProvider,
+			CtrlClient:     a.mgr.GetClient(),
+			Scheme:         a.scheme,
+			ControllerName: a.cfg.ControllerName,
+		})
+	}
+	workerBackends := buildWorkerBackends(a.cfg, a.scheme, a.remoteClientCache)
 	a.registry = backend.NewRegistry(workerBackends)
 	return nil
 }
@@ -407,6 +440,21 @@ func (a *App) initFieldIndexers(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("index team worker names: %w", err)
 	}
+	if err := idx.IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerMembersField, func(obj crclient.Object) []string {
+		team, ok := obj.(*v1beta1.Team)
+		if !ok {
+			return nil
+		}
+		names := make([]string, 0, len(team.Spec.WorkerMembers))
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name != "" {
+				names = append(names, ref.Name)
+			}
+		}
+		return names
+	}); err != nil {
+		return fmt.Errorf("index team workerMembers name: %w", err)
+	}
 	return nil
 }
 
@@ -435,7 +483,7 @@ func (a *App) initAuth(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("create kubernetes client: %w", err)
 		}
-		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix))
+		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix), a.remoteClientCache)
 		go authenticator.StartCleanup(ctx)
 		enricher := authpkg.NewCREnricher(a.mgr.GetClient(), a.namespace)
 		authorizer := authpkg.NewAuthorizer()
@@ -496,6 +544,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		AIGatewayURL:      cfg.WorkerEnv.AIGatewayURL,
 		ManagerModel:      cfg.ManagerModel,
 		MatrixConfig:      cfg.MatrixConfig(),
+		RemoteCache:       a.remoteClientCache,
 	})
 
 	a.envBuilder = service.NewWorkerEnvBuilder(cfg.WorkerEnv)
@@ -513,15 +562,15 @@ func (a *App) initServiceLayer(_ context.Context) error {
 	}
 
 	a.deployer = service.NewDeployer(service.DeployerConfig{
-		AgentConfig:         a.agentGen,
-		OSS:                 a.oss,
-		Executor:            a.shell,
-		Packages:            a.packages,
-		Legacy:              a.legacy,
-		AgentFSDir:          cfg.AgentFSDir(),
-		WorkerAgentDir:      cfg.WorkerAgentDir(),
-		MatrixDomain:        cfg.MatrixDomain,
-		NacosCredClient:     a.credProvider,
+		AgentConfig:     a.agentGen,
+		OSS:             a.oss,
+		Executor:        a.shell,
+		Packages:        a.packages,
+		Legacy:          a.legacy,
+		AgentFSDir:      cfg.AgentFSDir(),
+		WorkerAgentDir:  cfg.WorkerAgentDir(),
+		MatrixDomain:    cfg.MatrixDomain,
+		NacosCredClient: a.credProvider,
 	})
 
 	return nil
@@ -529,33 +578,41 @@ func (a *App) initServiceLayer(_ context.Context) error {
 
 func (a *App) initReconcilers(_ context.Context) error {
 	resourcePrefix := authpkg.ResourcePrefix(a.cfg.ResourcePrefix)
+	var remoteWatchRegistrar controller.RemoteWatchRegistrar
+	if a.remoteClientCache != nil {
+		remoteWatchRegistrar = a.remoteClientCache
+	}
 	if err := (&controller.WorkerReconciler{
-		Client:         a.mgr.GetClient(),
-		Provisioner:    a.provisioner,
-		Deployer:       a.deployer,
-		Backend:        a.registry,
-		EnvBuilder:     a.envBuilder,
-		ResourcePrefix: resourcePrefix,
-		Legacy:         a.legacy,
-		DefaultRuntime: a.cfg.DefaultWorkerRuntime,
-		ControllerName: a.cfg.ControllerName,
-		GatewayClient:  a.gateway,
+		Client:               a.mgr.GetClient(),
+		Provisioner:          a.provisioner,
+		Deployer:             a.deployer,
+		Backend:              a.registry,
+		EnvBuilder:           a.envBuilder,
+		ResourcePrefix:       resourcePrefix,
+		Legacy:               a.legacy,
+		DefaultRuntime:       a.cfg.DefaultWorkerRuntime,
+		ControllerName:       a.cfg.ControllerName,
+		Namespace:            a.namespace,
+		RemoteWatchRegistrar: remoteWatchRegistrar,
+		GatewayClient:        a.gateway,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}
 
 	if err := (&controller.TeamReconciler{
-		Client:         a.mgr.GetClient(),
-		Provisioner:    a.provisioner,
-		Deployer:       a.deployer,
-		Backend:        a.registry,
-		EnvBuilder:     a.envBuilder,
-		Legacy:         a.legacy,
-		DefaultRuntime: a.cfg.DefaultWorkerRuntime,
-		AgentFSDir:     a.cfg.AgentFSDir(),
-		ControllerName: a.cfg.ControllerName,
-		ResourcePrefix: resourcePrefix,
-		GatewayClient:  a.gateway,
+		Client:               a.mgr.GetClient(),
+		Provisioner:          a.provisioner,
+		Deployer:             a.deployer,
+		Backend:              a.registry,
+		EnvBuilder:           a.envBuilder,
+		Legacy:               a.legacy,
+		DefaultRuntime:       a.cfg.DefaultWorkerRuntime,
+		AgentFSDir:           a.cfg.AgentFSDir(),
+		ControllerName:       a.cfg.ControllerName,
+		Namespace:            a.namespace,
+		RemoteWatchRegistrar: remoteWatchRegistrar,
+		ResourcePrefix:       resourcePrefix,
+		GatewayClient:        a.gateway,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
@@ -592,6 +649,14 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 	if err := mgrReconciler.SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup ManagerReconciler: %w", err)
+	}
+
+	if err := a.mgr.Add(&agentteamsmetrics.CRCountCollector{
+		Client:       a.mgr.GetClient(),
+		Namespace:    a.namespace,
+		SkipManagers: !a.cfg.ManagerEnabled,
+	}); err != nil {
+		return fmt.Errorf("setup CR count collector: %w", err)
 	}
 
 	return nil
@@ -648,7 +713,7 @@ func (a *App) startEmbedded(ctx context.Context) (*rest.Config, error) {
 	a.mgr, err = ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme: a.scheme,
 		Metrics: metricsserver.Options{
-			BindAddress: "0",
+			BindAddress: a.cfg.MetricsBindAddr,
 		},
 	})
 	if err != nil {
@@ -674,7 +739,7 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	logger.Info("starting in-cluster mode")
 
 	// HICLAW_CONTROLLER_NAME is mandatory in incluster mode: it drives the
-	// leader election lease name, the hiclaw.io/controller CR label
+	// leader election lease name, the agentteams.io/controller CR label
 	// selector, and the agent pod template ConfigMap name. Running with
 	// an empty value would silently collapse these three scopes onto
 	// global defaults, causing cross-instance interference in the same
@@ -687,7 +752,10 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	restCfg := ctrl.GetConfigOrDie()
 	leaseID := a.cfg.ControllerName + "-leader"
 	opts := ctrl.Options{
-		Scheme:                        a.scheme,
+		Scheme: a.scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: a.cfg.MetricsBindAddr,
+		},
 		LeaderElection:                true,
 		LeaderElectionID:              leaseID,
 		LeaderElectionReleaseOnCancel: true,
@@ -793,7 +861,7 @@ func bootstrapAdminCLIToken(ctx context.Context, prov *service.Provisioner) erro
 // backend doesn't need it.
 // Gateway selection is handled in initInfraClients via gateway.Client,
 // so this function only cares about worker runtimes (docker vs k8s).
-func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme) []backend.WorkerBackend {
+func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache backend.RemoteClusterClientProvider) []backend.WorkerBackend {
 	var workers []backend.WorkerBackend
 
 	if cfg.KubeMode == "embedded" {
@@ -806,11 +874,25 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme) []backend.W
 	}
 
 	switch effectiveBackend {
-	case "k8s":
-		if k8s, err := backend.NewK8sBackend(cfg.K8sConfig(), cfg.ContainerPrefix, scheme); err != nil {
+	case "k8s", "sandbox":
+		// remoteCache is nil when the credential provider sidecar is not
+		// configured; in that case NewK8sBackendWithCache behaves
+		// identically to NewK8sBackend.
+		if k8s, err := backend.NewK8sBackendWithCache(cfg.K8sConfig(), cfg.ContainerPrefix, scheme, remoteCache); err != nil {
 			log.Printf("[WARN] Failed to create K8s backend: %v", err)
 		} else {
 			workers = append(workers, k8s)
+		}
+		if sandboxBackend, err := backend.NewSandboxBackendFromConfig(
+			cfg.SandboxConfig(),
+			cfg.ContainerPrefix,
+			scheme,
+			cfg.SandboxCapabilities,
+			remoteCache,
+		); err != nil {
+			log.Printf("[WARN] Failed to create Sandbox backend: %v", err)
+		} else {
+			workers = append(workers, sandboxBackend)
 		}
 	}
 

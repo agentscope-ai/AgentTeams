@@ -159,11 +159,11 @@ func TestWorkerFinalizer_AddedOnCreate(t *testing.T) {
 			return err
 		}
 		for _, f := range w.Finalizers {
-			if f == "hiclaw.io/cleanup" {
+			if f == "agentteams.io/cleanup" {
 				return nil
 			}
 		}
-		return fmt.Errorf("finalizer hiclaw.io/cleanup not found in %v", w.Finalizers)
+		return fmt.Errorf("finalizer agentteams.io/cleanup not found in %v", w.Finalizers)
 	})
 }
 
@@ -354,9 +354,7 @@ func TestWorkerPodDeleted_Recreates(t *testing.T) {
 	if err := k8sClient.Create(ctx, worker); err != nil {
 		t.Fatalf("failed to create Worker CR: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = k8sClient.Delete(ctx, worker)
-	})
+	t.Cleanup(func() { _ = deleteWorkerAndWait(t, worker) })
 
 	waitForRunning(t, worker)
 
@@ -374,14 +372,8 @@ func TestWorkerPodDeleted_Recreates(t *testing.T) {
 		return nil
 	})
 
-	// Phase should still be Running after recreation
-	var w v1beta1.Worker
-	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(worker), &w); err != nil {
-		t.Fatalf("failed to get Worker: %v", err)
-	}
-	if w.Status.Phase != "Running" {
-		t.Errorf("phase=%q after pod recreation, want Running", w.Status.Phase)
-	}
+	// Phase should converge back to Running after recreation.
+	waitForRunning(t, worker)
 }
 
 // ---------------------------------------------------------------------------
@@ -397,9 +389,7 @@ func TestWorkerCreate_Idempotent_NoDoubleProvision(t *testing.T) {
 	if err := k8sClient.Create(ctx, worker); err != nil {
 		t.Fatalf("failed to create Worker CR: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = k8sClient.Delete(ctx, worker)
-	})
+	t.Cleanup(func() { _ = deleteWorkerAndWait(t, worker) })
 
 	waitForRunning(t, worker)
 
@@ -784,7 +774,7 @@ func TestWorkerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) 
 		"env":                   "prod",
 		"team":                  "spec-team",      // overrides metadata
 		v1beta1.LabelController: "spec-attacker",  // must be overridden by system
-		"hiclaw.io/worker":      "spec-fake-name", // must be overridden by system
+		"agentteams.io/worker":  "spec-fake-name", // must be overridden by system
 	}
 
 	if err := k8sClient.Create(ctx, w); err != nil {
@@ -799,12 +789,12 @@ func TestWorkerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) 
 		t.Fatalf("backend Create was never called for %q (captured=%v)", name, capMu.Keys())
 	}
 
-	assertLabel(t, labels, "owner", "alice")                 // metadata propagated
-	assertLabel(t, labels, "env", "prod")                    // spec propagated
-	assertLabel(t, labels, "team", "spec-team")              // spec beats metadata
-	assertLabel(t, labels, v1beta1.LabelController, wantCtl) // system beats user
-	assertLabel(t, labels, "hiclaw.io/worker", name)         // system beats user
-	assertLabel(t, labels, "hiclaw.io/role", "standalone")   // system
+	assertLabel(t, labels, "owner", "alice")                   // metadata propagated
+	assertLabel(t, labels, "env", "prod")                      // spec propagated
+	assertLabel(t, labels, "team", "spec-team")                // spec beats metadata
+	assertLabel(t, labels, v1beta1.LabelController, wantCtl)   // system beats user
+	assertLabel(t, labels, "agentteams.io/worker", name)       // system beats user
+	assertLabel(t, labels, "agentteams.io/role", "standalone") // system
 }
 
 func TestWorkerResources_PropagateToBackendCreate(t *testing.T) {
@@ -970,4 +960,21 @@ func assertEventually(t *testing.T, condFn func() error) {
 		time.Sleep(interval)
 	}
 	t.Fatalf("condition not met within %v: %v", timeout, lastErr)
+}
+
+func deleteWorkerAndWait(t *testing.T, worker *v1beta1.Worker) error {
+	t.Helper()
+	if err := k8sClient.Delete(ctx, worker); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var got v1beta1.Worker
+		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(worker), &got)
+		if err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		time.Sleep(interval)
+	}
+	return fmt.Errorf("worker %s not deleted within timeout", worker.Name)
 }

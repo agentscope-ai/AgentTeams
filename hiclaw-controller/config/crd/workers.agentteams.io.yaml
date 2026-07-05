@@ -1,9 +1,9 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: workers.hiclaw.io
+  name: workers.agentteams.io
 spec:
-  group: hiclaw.io
+  group: agentteams.io
   versions:
     - name: v1beta1
       served: true
@@ -184,6 +184,28 @@ spec:
                     ignored with a warning log — the system value always wins.
                   additionalProperties:
                     type: string
+                deployMode:
+                  type: string
+                  enum: ["Local", "Remote"]
+                  description: "Where the worker pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster."
+                backendRuntime:
+                  type: string
+                  enum: ["pod", "sandbox"]
+                  description: "Worker infrastructure backend. pod (default) creates a normal Pod; sandbox claims an OpenKruise Sandbox instance."
+                targetCluster:
+                  type: object
+                  description: "Remote cluster target for deployment. Required when deployMode is Remote."
+                  properties:
+                    id:
+                      type: string
+                      description: "ACS/ACK cluster ID."
+                    namespace:
+                      type: string
+                      description: "Target namespace in the remote cluster."
+                  required: ["id", "namespace"]
+                serviceEnabled:
+                  type: boolean
+                  description: "Whether to create a ClusterIP Service alongside the worker pod."
                 labels:
                   type: object
                   additionalProperties:
@@ -192,8 +214,8 @@ spec:
                     User-defined Pod labels stamped onto this worker's Pod.
                     Merged on top of the ConfigMap-based pod-template overlay
                     and CR metadata.labels, and below controller-forced
-                    system labels (hiclaw.io/controller, hiclaw.io/worker,
-                    hiclaw.io/role, hiclaw.io/runtime, app). Entries whose
+                    system labels (agentteams.io/controller, agentteams.io/worker,
+                    agentteams.io/role, agentteams.io/runtime, app). Entries whose
                     keys collide with those system labels are silently
                     overridden.
                 accessEntries:
@@ -235,7 +257,7 @@ spec:
                   format: int64
                 phase:
                   type: string
-                  enum: [Pending, Running, Sleeping, Updating, Stopped, Failed]
+                  enum: [Pending, Starting, Running, Updating, Stopping, Sleeping, Stopped, Failed]
                 matrixUserID:
                   type: string
                 roomID:
@@ -243,6 +265,9 @@ spec:
                 containerState:
                   type: string
                 lastHeartbeat:
+                  type: string
+                  format: date-time
+                lastActiveAt:
                   type: string
                   format: date-time
                 message:
@@ -257,6 +282,25 @@ spec:
                         type: integer
                       domain:
                         type: string
+                deployMode:
+                  type: string
+                  enum: ["Local", "Remote"]
+                  description: "Applied deployment mode for the current Worker runtime resource."
+                backendRuntime:
+                  type: string
+                  enum: ["pod", "sandbox"]
+                  description: "Applied backend runtime for the current Worker runtime resource."
+                targetCluster:
+                  type: object
+                  description: "Applied remote cluster target for the current Worker runtime resource."
+                  properties:
+                    id:
+                      type: string
+                      description: "ACS/ACK cluster ID."
+                    namespace:
+                      type: string
+                      description: "Target namespace in the remote cluster."
+                  required: ["id", "namespace"]
       subresources:
         status: {}
       additionalPrinterColumns:

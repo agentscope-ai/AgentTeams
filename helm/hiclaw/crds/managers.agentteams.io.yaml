@@ -163,6 +163,8 @@ spec:
                 observedGeneration:
                   type: integer
                   format: int64
+                specHash:
+                  type: string
                 phase:
                   type: string
                   enum: [Pending, Running, Sleeping, Updating, Stopped, Failed]

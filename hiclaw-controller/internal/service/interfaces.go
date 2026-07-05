@@ -2,9 +2,17 @@ package service
 
 import (
 	"context"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 )
+
+type SATokenProjection struct {
+	Token               string
+	IssuedAt            time.Time
+	ExpirationTimestamp time.Time
+	ExpirationSeconds   int64
+}
 
 // WorkerProvisioner defines the provisioning operations used by WorkerReconciler
 // and TeamReconciler. Implemented by *Provisioner; extracted for testability.
@@ -17,11 +25,14 @@ type WorkerProvisioner interface {
 	ReconcileExpose(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
 	EnsureServiceAccount(ctx context.Context, workerName string) error
 	DeleteServiceAccount(ctx context.Context, workerName string) error
+	EnsureRemoteNamespace(ctx context.Context, clusterID, namespace string) error
 	EnsureRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error
 	DeleteRemoteServiceAccount(ctx context.Context, workerName, clusterID, namespace string) error
 	DeleteCredentials(ctx context.Context, workerName string) error
 	DeleteWorkerCredentials(ctx context.Context, credentialName string) error
-	RequestSAToken(ctx context.Context, workerName string) (string, error)
+	RequestSAToken(ctx context.Context, workerName string) (string, time.Time, error)
+	RequestSATokenWithExpiration(ctx context.Context, workerName string, expirationSeconds int64) (string, error)
+	ProjectSAToken(ctx context.Context, workerName string, expirationSeconds int64) (*SATokenProjection, error)
 	// LeaveAllWorkerRooms logs in as the worker (using stored credentials,
 	// or resetting the password via admin if they are stale) and makes
 	// the worker leave every room it is currently joined to.
@@ -32,7 +43,9 @@ type WorkerProvisioner interface {
 	DeleteWorkerRoom(ctx context.Context, roomID string) error
 	MatrixUserID(name string) string
 	LoginAsHuman(ctx context.Context, username, password string) (string, error)
+	LoginAppServiceUser(ctx context.Context, username string) (string, error)
 	ProvisionTeamRooms(ctx context.Context, req TeamRoomRequest) (*TeamRoomResult, error)
+	ArchiveTeamRooms(ctx context.Context, req TeamRoomArchiveRequest) error
 	DeleteTeamRoomAliases(ctx context.Context, teamName, leaderName string) error
 	DeleteWorkerRoomAlias(ctx context.Context, workerName string) error
 	MatrixAppServiceEnabled() bool
@@ -43,14 +56,18 @@ type WorkerProvisioner interface {
 type WorkerDeployer interface {
 	DeployPackage(ctx context.Context, name, uri string, isUpdate bool) error
 	WriteInlineConfigs(name string, spec v1beta1.WorkerSpec) error
+	DeployMemberRuntimeConfig(ctx context.Context, req MemberRuntimeConfigDeployRequest) error
+	MergeMemberRuntimeTeamContext(ctx context.Context, req MemberRuntimeConfigDeployRequest) error
 	DeployWorkerConfig(ctx context.Context, req WorkerDeployRequest) error
 	PushOnDemandSkills(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
+	PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error
 	CleanupOSSData(ctx context.Context, workerName string) error
 	InjectCoordinationContext(ctx context.Context, req CoordinationDeployRequest) error
 	InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error
 	InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error
+	InjectChannelPolicy(ctx context.Context, req InjectChannelPolicyRequest) error
+	SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderAssetsRequest) error
 	EnsureTeamStorage(ctx context.Context, teamName string) error
-	MaterializeSandboxWorkerDeps(ctx context.Context, req SandboxWorkerDepsRequest) error
 }
 
 // WorkerEnvBuilderI defines env map construction for worker containers.
@@ -142,6 +159,11 @@ type HumanProvisioner interface {
 	// LoginAsHuman with the stored password instead to avoid triggering
 	// the orphan-recovery password reset inside matrix.EnsureUser, which
 	// would clobber any user-initiated password change made in Element.
+	//
+	// Retained for backward compatibility with the team-admin login
+	// path and existing mock-driven tests. New code that needs to
+	// distinguish "register" from "set password" should call the
+	// decomposed primitives below instead.
 	EnsureHumanUser(ctx context.Context, username string) (*HumanCredentials, error)
 
 	// LoginAsHuman obtains a fresh access token for an already-provisioned
@@ -151,14 +173,27 @@ type HumanProvisioner interface {
 	// room management on this reconcile pass.
 	LoginAsHuman(ctx context.Context, username, password string) (string, error)
 
-	// RegisterAppServiceUser registers (or logs in to) a Matrix account
-	// via the AppService API. Returns Created=true on first registration.
+	// --- Decomposed primitives ---
+	//
+	// The following five methods are the smallest semantic units the
+	// composite EnsureHumanUser/LoginAsHuman were decomposed into. Each
+	// performs exactly one Matrix-side action; the choice of *which*
+	// to call lives at the call site. Used by the humanidentity
+	// registry to express per-identity-type behaviour without growing
+	// if/else branches inside the composites.
+
+	// RegisterAppServiceUser registers (or logs in to) a Matrix
+	// account via the AppService API. Returns Created=true on first
+	// registration, Created=false on M_USER_IN_USE fallback.
 	RegisterAppServiceUser(ctx context.Context, username string) (*HumanCredentials, error)
 
 	// RegisterLegacyUser registers via the registration_token flow.
+	// On M_USER_IN_USE the underlying client falls through to
+	// orphan recovery (admin reset + login).
 	RegisterLegacyUser(ctx context.Context, username string) (*HumanCredentials, error)
 
-	// SetUserPassword writes a password for the given user via the admin bot.
+	// SetUserPassword writes a password for the given user via the
+	// admin bot. Best-effort fire-and-forget at the bot layer.
 	SetUserPassword(ctx context.Context, userID, password string) error
 
 	// LoginAppServiceUser obtains a token via AS login (no password).
@@ -192,7 +227,9 @@ type HumanProvisioner interface {
 	// the bot layer, but the admin message delivery itself is confirmed.
 	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
 
-	// DeactivateHumanUser disables a Human Matrix account after membership removal.
+	// DeactivateHumanUser disables a Human Matrix account after membership
+	// removal. SSO Humans rely on this path so existing access tokens stop
+	// being usable after the CR is deleted.
 	DeactivateHumanUser(ctx context.Context, userID string) error
 
 	MatrixAppServiceEnabled() bool
@@ -205,7 +242,12 @@ type HumanCredentials struct {
 	UserID      string
 	AccessToken string
 	Password    string
-	Created     bool
+	// Created reports whether the underlying register call actually
+	// created a new account (true) or fell back to logging in to an
+	// existing one (false). Identity-source implementations gate
+	// password assignment on this flag — re-registering must not
+	// silently clobber a password rotated by the user via Element.
+	Created bool
 }
 
 // Compile-time interface satisfaction checks.

@@ -21,8 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-const appServiceNotReadyRequeue = 5 * time.Second
-
 // HumanReconciler reconciles Human resources using Service-layer orchestration.
 //
 // Unlike Worker/Manager, a Human has no backend container and no gateway

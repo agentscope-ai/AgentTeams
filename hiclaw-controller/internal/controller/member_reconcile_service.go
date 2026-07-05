@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
+	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,27 +18,30 @@ import (
 // ReconcileMemberService ensures a ClusterIP Service exists (or is removed)
 // based on ServiceEnabled. This phase runs after ReconcileMemberContainer so
 // the Pod selector labels are guaranteed to be present on the target pod.
-func ReconcileMemberService(ctx context.Context, mc *MemberContext, deps *MemberDeps) error {
+// Returns the Service name on success (empty string when the Service is
+// disabled, deleted or skipped).
+func ReconcileMemberService(ctx context.Context, mc *MemberContext, deps *MemberDeps) (string, error) {
 	if !mc.ServiceEnabled {
-		return ensureServiceDeleted(ctx, mc, deps)
+		return "", ensureServiceDeleted(ctx, mc, deps)
 	}
 	return ensureServiceExists(ctx, mc, deps)
 }
 
 // ensureServiceExists creates or updates a ClusterIP Service for the member pod.
-func ensureServiceExists(ctx context.Context, mc *MemberContext, deps *MemberDeps) error {
+// Returns the Service name when the Service exists or has just been created;
+// returns an empty string when creation is skipped (no ports declared).
+func ensureServiceExists(ctx context.Context, mc *MemberContext, deps *MemberDeps) (string, error) {
 	logger := log.FromContext(ctx)
 
-	// A Service without ports is useless; delete any stale Service from a
-	// previous expose config.
+	// A Service without ports is useless; skip with a log.
 	if len(mc.Spec.Expose) == 0 {
-		logger.V(1).Info("serviceEnabled is true but no ports declared in spec.expose, deleting stale Service if present", "name", mc.Name)
-		return ensureServiceDeleted(ctx, mc, deps)
+		logger.V(1).Info("serviceEnabled is true but no ports declared in spec.expose, skipping Service creation", "name", mc.Name)
+		return "", nil
 	}
 
 	svcClient, ns, err := resolveServiceClient(ctx, mc, deps)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	svcName := serviceName(deps, mc)
@@ -46,7 +50,7 @@ func ensureServiceExists(ctx context.Context, mc *MemberContext, deps *MemberDep
 
 	existing, err := svcClient.Get(ctx, svcName, metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get service %s/%s: %w", ns, svcName, err)
+		return "", fmt.Errorf("get service %s/%s: %w", ns, svcName, err)
 	}
 
 	if apierrors.IsNotFound(err) {
@@ -56,8 +60,8 @@ func ensureServiceExists(ctx context.Context, mc *MemberContext, deps *MemberDep
 				Name:      svcName,
 				Namespace: ns,
 				Labels: map[string]string{
-					"agentteams.io/worker": mc.Name,
-					"app":                  deps.ResourcePrefix.WorkerAppLabel(),
+					v1beta1.LabelWorker: mc.Name,
+					"app":               deps.ResourcePrefix.WorkerAppLabel(),
 				},
 			},
 			Spec: corev1.ServiceSpec{
@@ -69,84 +73,83 @@ func ensureServiceExists(ctx context.Context, mc *MemberContext, deps *MemberDep
 		if _, err := svcClient.Create(ctx, svc, metav1.CreateOptions{}); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				// Lost the race; will reconcile on next pass.
-				return nil
+				return svcName, nil
 			}
-			return fmt.Errorf("create service %s/%s: %w", ns, svcName, err)
+			return "", fmt.Errorf("create service %s/%s: %w", ns, svcName, err)
 		}
 		logger.Info("created ClusterIP Service for member", "name", mc.Name, "service", svcName, "namespace", ns)
-		return nil
+		return svcName, nil
 	}
 
 	// Update if selector or ports differ.
 	needsUpdate := !reflect.DeepEqual(existing.Spec.Selector, selector) ||
 		!reflect.DeepEqual(existing.Spec.Ports, desiredPorts)
 	if !needsUpdate {
-		return nil
+		return svcName, nil
 	}
 
 	existing.Spec.Selector = selector
 	existing.Spec.Ports = desiredPorts
 	if _, err := svcClient.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update service %s/%s: %w", ns, svcName, err)
+		return "", fmt.Errorf("update service %s/%s: %w", ns, svcName, err)
 	}
 	logger.Info("updated ClusterIP Service for member", "name", mc.Name, "service", svcName, "namespace", ns)
-	return nil
+	return svcName, nil
 }
 
-// ensureServiceDeleted removes the ClusterIP Service for the member pod.
+// ensureServiceDeleted removes every ClusterIP Service tagged with this
+// member via the worker identity label. Using a label selector
+// (instead of name-based delete) guarantees both current and legacy
+// naming conventions are cleaned up in a single pass.
 func ensureServiceDeleted(ctx context.Context, mc *MemberContext, deps *MemberDeps) error {
 	svcClient, ns, err := resolveServiceClient(ctx, mc, deps)
 	if err != nil {
 		// If the backend doesn't support services (e.g. Docker), nothing to delete.
 		return nil
 	}
-
-	svcName := serviceName(deps, mc)
-
-	// Get first: skip deletion if Service does not exist.
-	_, err = svcClient.Get(ctx, svcName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
+	selector := fmt.Sprintf("%s=%s", v1beta1.LabelWorker, mc.Name)
+	list, err := svcClient.List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		return fmt.Errorf("check service %s/%s: %w", ns, svcName, err)
+		return fmt.Errorf("list services for worker %s in %s: %w", mc.Name, ns, err)
 	}
-
-	// Service exists — delete it.
-	if err := svcClient.Delete(ctx, svcName, metav1.DeleteOptions{}); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
+	logger := log.FromContext(ctx)
+	for i := range list.Items {
+		svc := &list.Items[i]
+		if err := svcClient.Delete(ctx, svc.Name, metav1.DeleteOptions{}); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("delete service %s/%s: %w", ns, svc.Name, err)
 		}
-		return fmt.Errorf("delete service %s/%s: %w", ns, svcName, err)
+		logger.Info("deleted Service for worker", "worker", mc.Name, "service", svc.Name, "namespace", ns)
 	}
-	log.FromContext(ctx).Info("deleted ClusterIP Service for member", "name", mc.Name, "service", svcName, "namespace", ns)
 	return nil
 }
 
-// resolveServiceClient obtains a K8sServiceClient from the detected backend.
-// Returns an error if no backend supports Service management.
+// resolveServiceClient obtains a K8sServiceClient by searching for a backend
+// that implements ServiceBackend. Returns an error if none qualifies.
 func resolveServiceClient(ctx context.Context, mc *MemberContext, deps *MemberDeps) (backend.K8sServiceClient, string, error) {
 	if deps.Backend == nil {
 		return nil, "", fmt.Errorf("no backend registry available")
 	}
-	sb := deps.Backend.FindServiceBackend(ctx, mc.DeployMode, mc.TargetClusterID, mc.TargetNamespace)
+	sb := deps.Backend.FindServiceBackend(ctx)
 	if sb == nil {
-		return nil, "", fmt.Errorf("no worker backend supports Service management")
+		return nil, "", fmt.Errorf("no backend supports Service management")
 	}
 	return sb.ServiceClient(ctx, mc.DeployMode, mc.TargetClusterID, mc.TargetNamespace)
 }
 
-// serviceName returns the K8s Service name for the member, using the same
-// prefix + name convention as Pod names (e.g. "hiclaw-worker-alice").
-func serviceName(deps *MemberDeps, mc *MemberContext) string {
-	return deps.ResourcePrefix.WorkerNamePrefix() + mc.Name
+// serviceName returns the K8s Service name for the member. The Service name
+// matches the Pod name which is the bare Worker CR name (mc.Name).
+func serviceName(_ *MemberDeps, mc *MemberContext) string {
+	return mc.Name
 }
 
 // serviceSelector builds the label selector that matches the member Pod.
 // Uses the identity label stamped by createMemberContainer.
 func serviceSelector(mc *MemberContext) map[string]string {
 	return map[string]string{
-		"agentteams.io/worker": mc.Name,
+		v1beta1.LabelWorker: mc.Name,
 	}
 }
 

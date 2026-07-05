@@ -50,20 +50,26 @@ type PodOverlay struct {
 	// ResourcesOverride nor template-container.Resources provides a value.
 	DefaultResources corev1.ResourceRequirements
 
-	// TokenVolume + TokenVolumeMount are always appended to Pod volumes and
-	// the agent container's volumeMounts, regardless of what the template
-	// specifies.
-	TokenVolume      corev1.Volume
-	TokenVolumeMount corev1.VolumeMount
+	// TokenVolume + TokenVolumeMount are appended to Pod volumes and the
+	// agent container's volumeMounts unless DisableTokenProjection is true.
+	TokenVolume            corev1.Volume
+	TokenVolumeMount       corev1.VolumeMount
+	DisableTokenProjection bool
 
 	// HostAliases from CreateRequest.ExtraHosts; appended to any host
 	// aliases the template already declared.
 	HostAliases []corev1.HostAlias
+
+	// ExtraVolumes / ExtraVolumeMounts are controller-derived mounts such as
+	// sandbox worker-deps token/env/data and custom OSS mounts. They are
+	// appended after the token volume.
+	ExtraVolumes      []corev1.Volume
+	ExtraVolumeMounts []corev1.VolumeMount
 }
 
 // LoadAgentPodTemplate fetches the agent PodTemplateSpec overlay from the
 // ConfigMap named `name` (typically the controller's own name, i.e. the
-// HICLAW_CONTROLLER_NAME env var) in `namespace`. The key
+// AGENTTEAMS_CONTROLLER_NAME env var) in `namespace`. The key
 // AgentPodTemplateConfigMapKey ("pod-template.yaml") is expected to carry
 // a YAML document with the two top-level fields of corev1.PodTemplateSpec
 // directly (metadata:, spec:) — NOT a full apiVersion/kind-wrapped
@@ -179,7 +185,10 @@ func ApplyPodTemplate(tmpl corev1.PodTemplateSpec, overlay PodOverlay) *corev1.P
 	agentContainer = overlayAgentContainer(agentContainer, overlay)
 	pod.Spec.Containers = append([]corev1.Container{agentContainer}, sidecars...)
 
-	pod.Spec.Volumes = append(pod.Spec.Volumes, overlay.TokenVolume)
+	if !overlay.DisableTokenProjection {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, overlay.TokenVolume)
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, overlay.ExtraVolumes...)
 
 	pod.Spec.ServiceAccountName = overlay.ServiceAccountName
 	pod.Spec.AutomountServiceAccountToken = boolPtr(false)
@@ -238,7 +247,10 @@ func overlayAgentContainer(base corev1.Container, overlay PodOverlay) corev1.Con
 	if overlay.Container.WorkingDir != "" {
 		out.WorkingDir = overlay.Container.WorkingDir
 	}
-	out.VolumeMounts = append(out.VolumeMounts, overlay.TokenVolumeMount)
+	if !overlay.DisableTokenProjection {
+		out.VolumeMounts = append(out.VolumeMounts, overlay.TokenVolumeMount)
+	}
+	out.VolumeMounts = append(out.VolumeMounts, overlay.ExtraVolumeMounts...)
 
 	switch {
 	case overlay.ResourcesOverride != nil:
@@ -268,4 +280,45 @@ func mergeStringMaps(base, overrides map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// ExtractSchedulingFields extracts scheduling-related fields from a
+// PodTemplateSpec.
+// Returns zero values when the template does not specify these fields.
+func ExtractSchedulingFields(tmpl corev1.PodTemplateSpec) (
+	nodeSelector map[string]string,
+	tolerations []corev1.Toleration,
+	affinity *corev1.Affinity,
+) {
+	nodeSelector = tmpl.Spec.NodeSelector
+	tolerations = tmpl.Spec.Tolerations
+	affinity = tmpl.Spec.Affinity
+	return
+}
+
+// ExtractVolumes extracts volumes and the "worker" container's volumeMounts
+// from a PodTemplateSpec.
+// If no "worker" container exists, volumeMounts is nil.
+func ExtractVolumes(tmpl corev1.PodTemplateSpec) ([]corev1.Volume, []corev1.VolumeMount) {
+	volumes := tmpl.Spec.Volumes
+	var volumeMounts []corev1.VolumeMount
+	for _, c := range tmpl.Spec.Containers {
+		if c.Name == "worker" {
+			volumeMounts = c.VolumeMounts
+			break
+		}
+	}
+	return volumes, volumeMounts
+}
+
+// ExtractEnv extracts environment variables from the "worker" container in a
+// PodTemplateSpec.
+// Returns nil if no "worker" container exists or it has no env vars.
+func ExtractEnv(tmpl corev1.PodTemplateSpec) []corev1.EnvVar {
+	for _, c := range tmpl.Spec.Containers {
+		if c.Name == "worker" {
+			return c.Env
+		}
+	}
+	return nil
 }

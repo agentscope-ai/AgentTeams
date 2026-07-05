@@ -14,7 +14,7 @@ import (
 // agentteams.io/worker) AND agentteams.io/controller matching this reconciler's
 // ControllerName. Pods missing either label (or carrying a different
 // controller name) must NOT trigger reconciliation — this prevents two
-// hiclaw-controller instances sharing a namespace from cross-reconciling
+// agentteams-controller instances sharing a namespace from cross-reconciling
 // each other's Pods when the informer cache scoping is bypassed (defense-
 // in-depth against a future watch source added without
 // opts.Cache.ByObject scoping).
@@ -61,7 +61,7 @@ func TestPodLifecyclePredicates_FiltersByKindAndControllerLabel(t *testing.T) {
 		},
 	}
 
-	pred := podLifecyclePredicates(kindKey, ctlName)
+	pred := PodLifecyclePredicates(kindKey, ctlName)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := pod(tc.labels)
@@ -95,7 +95,7 @@ func TestPodLifecyclePredicates_UpdateRequiresPhaseChange(t *testing.T) {
 		}
 	}
 
-	pred := podLifecyclePredicates(kindKey, ctlName)
+	pred := PodLifecyclePredicates(kindKey, ctlName)
 
 	tests := []struct {
 		name string
@@ -167,7 +167,7 @@ func TestPodLifecyclePredicates_UpdateRequiresStatusSignalChange(t *testing.T) {
 		return pod
 	}
 
-	pred := podLifecyclePredicates(kindKey, ctlName)
+	pred := PodLifecyclePredicates(kindKey, ctlName)
 
 	tests := []struct {
 		name string

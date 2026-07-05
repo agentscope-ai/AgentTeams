@@ -32,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -578,41 +579,62 @@ func (a *App) initServiceLayer(_ context.Context) error {
 
 func (a *App) initReconcilers(_ context.Context) error {
 	resourcePrefix := authpkg.ResourcePrefix(a.cfg.ResourcePrefix)
-	var remoteWatchRegistrar controller.RemoteWatchRegistrar
-	if a.remoteClientCache != nil {
-		remoteWatchRegistrar = a.remoteClientCache
+	var dynamicClient dynamic.Interface
+	if a.restCfg != nil {
+		var err error
+		dynamicClient, err = dynamic.NewForConfig(a.restCfg)
+		if err != nil {
+			return fmt.Errorf("create dynamic client: %w", err)
+		}
 	}
-	if err := (&controller.WorkerReconciler{
-		Client:               a.mgr.GetClient(),
-		Provisioner:          a.provisioner,
-		Deployer:             a.deployer,
-		Backend:              a.registry,
-		EnvBuilder:           a.envBuilder,
-		ResourcePrefix:       resourcePrefix,
-		Legacy:               a.legacy,
-		DefaultRuntime:       a.cfg.DefaultWorkerRuntime,
-		ControllerName:       a.cfg.ControllerName,
-		Namespace:            a.namespace,
-		RemoteWatchRegistrar: remoteWatchRegistrar,
-		GatewayClient:        a.gateway,
+	var remoteDynamicClientProvider backend.RemoteDynamicClientProvider
+	if a.remoteClientCache != nil {
+		remoteDynamicClientProvider = a.remoteClientCache
+	}
+	if _, err := (&controller.WorkerReconciler{
+		Client:                      a.mgr.GetClient(),
+		Provisioner:                 a.provisioner,
+		Deployer:                    a.deployer,
+		Backend:                     a.registry,
+		EnvBuilder:                  a.envBuilder,
+		ResourcePrefix:              resourcePrefix,
+		Legacy:                      a.legacy,
+		DefaultRuntime:              a.cfg.DefaultWorkerRuntime,
+		DefaultBackendRuntime:       a.cfg.WorkerBackendRuntime,
+		ControllerName:              a.cfg.ControllerName,
+		GatewayClient:               a.gateway,
+		DynamicClient:               dynamicClient,
+		RemoteDynamicClientProvider: remoteDynamicClientProvider,
+		AuthTokenExpirationSeconds:  a.cfg.AuthTokenExpirationSeconds,
+		WorkerDepsStorageBucket:     a.cfg.WorkerDepsStorageBucket,
+		WorkerDepsStorageEndpoint:   a.cfg.WorkerDepsStorageEndpoint,
+		MountAuthType:               a.cfg.WorkerDepsMountAuthType,
+		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}
 
-	if err := (&controller.TeamReconciler{
-		Client:               a.mgr.GetClient(),
-		Provisioner:          a.provisioner,
-		Deployer:             a.deployer,
-		Backend:              a.registry,
-		EnvBuilder:           a.envBuilder,
-		Legacy:               a.legacy,
-		DefaultRuntime:       a.cfg.DefaultWorkerRuntime,
-		AgentFSDir:           a.cfg.AgentFSDir(),
-		ControllerName:       a.cfg.ControllerName,
-		Namespace:            a.namespace,
-		RemoteWatchRegistrar: remoteWatchRegistrar,
-		ResourcePrefix:       resourcePrefix,
-		GatewayClient:        a.gateway,
+	if _, err := (&controller.TeamReconciler{
+		Client:                      a.mgr.GetClient(),
+		Provisioner:                 a.provisioner,
+		Deployer:                    a.deployer,
+		Backend:                     a.registry,
+		EnvBuilder:                  a.envBuilder,
+		Legacy:                      a.legacy,
+		DefaultRuntime:              a.cfg.DefaultWorkerRuntime,
+		DefaultBackendRuntime:       a.cfg.WorkerBackendRuntime,
+		AgentFSDir:                  a.cfg.AgentFSDir(),
+		ControllerName:              a.cfg.ControllerName,
+		ResourcePrefix:              resourcePrefix,
+		GatewayClient:               a.gateway,
+		DynamicClient:               dynamicClient,
+		RemoteDynamicClientProvider: remoteDynamicClientProvider,
+		AuthTokenExpirationSeconds:  a.cfg.AuthTokenExpirationSeconds,
+		WorkerDepsStorageBucket:     a.cfg.WorkerDepsStorageBucket,
+		WorkerDepsStorageEndpoint:   a.cfg.WorkerDepsStorageEndpoint,
+		MountAuthType:               a.cfg.WorkerDepsMountAuthType,
+		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
+		SystemAdminUser:             a.cfg.MatrixAdminUser,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}

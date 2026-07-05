@@ -50,7 +50,8 @@ type Config struct {
 	ContainerPrefix string // worker container/pod name prefix; derived from ResourcePrefix when HICLAW_PROXY_CONTAINER_PREFIX is unset
 
 	// Auth
-	AuthAudience string // SA token audience for TokenReview
+	AuthAudience               string // SA token audience for TokenReview
+	AuthTokenExpirationSeconds int64
 
 	// Provider selection (driven by Helm values)
 	GatewayProvider string // "higress" | "ai-gateway"
@@ -63,7 +64,8 @@ type Config struct {
 	HigressAdminPassword string
 
 	// Worker backend selection
-	WorkerBackend string
+	WorkerBackend        string
+	WorkerBackendRuntime string
 
 	// Region (used by AI Gateway / OSS, etc.)
 	Region string
@@ -75,6 +77,11 @@ type Config struct {
 
 	// Object storage bucket (shared by minio and oss backends)
 	OSSBucket string
+
+	WorkerDepsStorageBucket   string
+	WorkerDepsStorageEndpoint string
+	WorkerDepsMountAuthType   string
+	WorkerDepsMountRoleName   string
 
 	// Credential provider sidecar (hiclaw-credential-provider) used by the
 	// controller to obtain STS tokens for its own cloud SDK clients (APIG,
@@ -280,7 +287,11 @@ func LoadConfig() *Config {
 		SocketPath:      envOrDefault("HICLAW_PROXY_SOCKET", "/var/run/docker.sock"),
 		ContainerPrefix: containerPrefix,
 
-		AuthAudience: envOrDefault("HICLAW_AUTH_AUDIENCE", "hiclaw-controller"),
+		AuthAudience: firstNonEmpty(
+			os.Getenv("AGENTTEAMS_AUTH_AUDIENCE"),
+			envOrDefault("HICLAW_AUTH_AUDIENCE", "hiclaw-controller"),
+		),
+		AuthTokenExpirationSeconds: int64(envOrDefaultInt("AGENTTEAMS_AUTH_TOKEN_EXPIRATION_SECONDS", int(backend.DefaultAuthTokenExpirationSeconds))),
 
 		GatewayProvider: envOrDefault("HICLAW_GATEWAY_PROVIDER", "higress"),
 		StorageProvider: envOrDefault("HICLAW_STORAGE_PROVIDER", "minio"),
@@ -297,6 +308,7 @@ func LoadConfig() *Config {
 			os.Getenv("HICLAW_WORKER_BACKEND"),
 			os.Getenv("HICLAW_ALIYUN_WORKER_BACKEND"),
 		),
+		WorkerBackendRuntime: os.Getenv("AGENTTEAMS_WORKER_BACKEND_RUNTIME"),
 
 		Region: envOrDefault("HICLAW_REGION", "cn-hangzhou"),
 
@@ -305,6 +317,19 @@ func LoadConfig() *Config {
 		GWEnvID:      os.Getenv("HICLAW_GW_ENV_ID"),
 
 		OSSBucket: envOrDefault("HICLAW_FS_BUCKET", "hiclaw-storage"),
+		WorkerDepsStorageBucket: firstNonEmpty(
+			os.Getenv("AGENTTEAMS_WORKER_DEPS_STORAGE_BUCKET"),
+			os.Getenv("AGENTTEAMS_FS_BUCKET"),
+			os.Getenv("HICLAW_FS_BUCKET"),
+			"agentteams-storage",
+		),
+		WorkerDepsStorageEndpoint: firstNonEmpty(
+			os.Getenv("AGENTTEAMS_WORKER_DEPS_STORAGE_ENDPOINT"),
+			os.Getenv("AGENTTEAMS_FS_ENDPOINT"),
+			os.Getenv("HICLAW_FS_ENDPOINT"),
+		),
+		WorkerDepsMountAuthType: envOrDefault("AGENTTEAMS_MOUNT_AUTH_TYPE", "RRSA"),
+		WorkerDepsMountRoleName: os.Getenv("AGENTTEAMS_MOUNT_ROLE_NAME"),
 
 		K8sNamespace:    os.Getenv("HICLAW_K8S_NAMESPACE"),
 		K8sWorkerCPU:    envOrDefault("HICLAW_K8S_WORKER_CPU", "1000m"),

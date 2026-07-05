@@ -17,17 +17,17 @@ import (
 
 func baseOverlay() PodOverlay {
 	return PodOverlay{
-		Name:               "hiclaw-worker-alice",
+		Name:               "agentteams-worker-alice",
 		Namespace:          "hiclaw",
-		Labels:             map[string]string{"app": "hiclaw-worker", "agentteams.io/worker": "alice"},
-		Annotations:        map[string]string{"hiclaw.io/test-overlay": "controller"},
-		ServiceAccountName: "hiclaw-worker-alice",
+		Labels:             map[string]string{"app": "agentteams-worker", "agentteams.io/worker": "alice"},
+		Annotations:        map[string]string{"agentteams.io/test-overlay": "controller"},
+		ServiceAccountName: "agentteams-worker-alice",
 		Container: corev1.Container{
 			Name:            "worker",
 			Image:           "hiclaw/worker:latest",
 			ImagePullPolicy: corev1.PullIfNotPresent,
-			Env:             []corev1.EnvVar{{Name: "HICLAW_RUNTIME", Value: "k8s"}},
-			WorkingDir:      "/root/hiclaw-fs/agents/alice",
+			Env:             []corev1.EnvVar{{Name: "AGENTTEAMS_RUNTIME", Value: "k8s"}},
+			WorkingDir:      "/root/agentteams-fs/agents/alice",
 		},
 		DefaultResources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
@@ -40,19 +40,19 @@ func baseOverlay() PodOverlay {
 			},
 		},
 		TokenVolume: corev1.Volume{
-			Name: "hiclaw-token",
+			Name: "agentteams-token",
 			VolumeSource: corev1.VolumeSource{
 				Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{
 					ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
-						Audience: "hiclaw-controller",
+						Audience: "agentteams-controller",
 						Path:     "token",
 					},
 				}}},
 			},
 		},
 		TokenVolumeMount: corev1.VolumeMount{
-			Name:      "hiclaw-token",
-			MountPath: "/var/run/secrets/hiclaw",
+			Name:      "agentteams-token",
+			MountPath: "/var/run/secrets/agentteams",
 			ReadOnly:  true,
 		},
 	}
@@ -89,10 +89,10 @@ func findVolumeMount(mounts []corev1.VolumeMount, name string) *corev1.VolumeMou
 
 func TestApplyPodTemplate_EmptyTemplate(t *testing.T) {
 	pod := ApplyPodTemplate(corev1.PodTemplateSpec{}, baseOverlay())
-	if pod.Name != "hiclaw-worker-alice" || pod.Namespace != "hiclaw" {
+	if pod.Name != "agentteams-worker-alice" || pod.Namespace != "hiclaw" {
 		t.Fatalf("name/ns: %+v", pod.ObjectMeta)
 	}
-	if pod.Spec.ServiceAccountName != "hiclaw-worker-alice" {
+	if pod.Spec.ServiceAccountName != "agentteams-worker-alice" {
 		t.Fatalf("SA: %q", pod.Spec.ServiceAccountName)
 	}
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
@@ -107,10 +107,10 @@ func TestApplyPodTemplate_EmptyTemplate(t *testing.T) {
 	if pod.Spec.Containers[0].Image != "hiclaw/worker:latest" {
 		t.Fatalf("image: %q", pod.Spec.Containers[0].Image)
 	}
-	if v := findVolume(pod.Spec.Volumes, "hiclaw-token"); v == nil {
+	if v := findVolume(pod.Spec.Volumes, "agentteams-token"); v == nil {
 		t.Fatalf("token volume missing: %+v", pod.Spec.Volumes)
 	}
-	if m := findVolumeMount(pod.Spec.Containers[0].VolumeMounts, "hiclaw-token"); m == nil {
+	if m := findVolumeMount(pod.Spec.Containers[0].VolumeMounts, "agentteams-token"); m == nil {
 		t.Fatalf("token volume mount missing: %+v", pod.Spec.Containers[0].VolumeMounts)
 	}
 }
@@ -125,7 +125,7 @@ func TestApplyPodTemplate_MetadataLabelsMerge(t *testing.T) {
 	if pod.Labels["a"] != "x" {
 		t.Fatalf("template-only label missing: %+v", pod.Labels)
 	}
-	if pod.Labels["app"] != "hiclaw-worker" {
+	if pod.Labels["app"] != "agentteams-worker" {
 		t.Fatalf("overlay must win on app: %q", pod.Labels["app"])
 	}
 	if pod.Labels["agentteams.io/worker"] != "alice" {
@@ -139,7 +139,7 @@ func TestApplyPodTemplate_MetadataAnnotationsMerge(t *testing.T) {
 			Annotations: map[string]string{
 				"foo": "bar",
 				// overlay should overwrite this key
-				"hiclaw.io/test-overlay": "should-be-overwritten",
+				"agentteams.io/test-overlay": "should-be-overwritten",
 			},
 		},
 	}
@@ -147,8 +147,8 @@ func TestApplyPodTemplate_MetadataAnnotationsMerge(t *testing.T) {
 	if pod.Annotations["foo"] != "bar" {
 		t.Fatalf("template annotation dropped: %+v", pod.Annotations)
 	}
-	if pod.Annotations["hiclaw.io/test-overlay"] != "controller" {
-		t.Fatalf("overlay must win on annotation: %q", pod.Annotations["hiclaw.io/test-overlay"])
+	if pod.Annotations["agentteams.io/test-overlay"] != "controller" {
+		t.Fatalf("overlay must win on annotation: %q", pod.Annotations["agentteams.io/test-overlay"])
 	}
 }
 
@@ -319,7 +319,7 @@ func TestApplyPodTemplate_TokenVolumeAppended(t *testing.T) {
 	if findVolume(pod.Spec.Volumes, "cache") == nil {
 		t.Fatalf("template volume dropped")
 	}
-	if findVolume(pod.Spec.Volumes, "hiclaw-token") == nil {
+	if findVolume(pod.Spec.Volumes, "agentteams-token") == nil {
 		t.Fatalf("token volume not appended")
 	}
 }
@@ -377,7 +377,7 @@ func TestApplyPodTemplate_HostAliasesAppended(t *testing.T) {
 func TestApplyPodTemplate_ServiceAccountNameCodeWins(t *testing.T) {
 	tmpl := corev1.PodTemplateSpec{Spec: corev1.PodSpec{ServiceAccountName: "foo"}}
 	pod := ApplyPodTemplate(tmpl, baseOverlay())
-	if pod.Spec.ServiceAccountName != "hiclaw-worker-alice" {
+	if pod.Spec.ServiceAccountName != "agentteams-worker-alice" {
 		t.Fatalf("SA: %q", pod.Spec.ServiceAccountName)
 	}
 }
@@ -570,8 +570,9 @@ func TestLoadAgentPodTemplate_RemoteKeyMissing_ReturnsEmpty(t *testing.T) {
 }
 
 // TestLoadAgentPodTemplate_NonRemoteIgnoresRemoteKey validates that any
-// non-Remote deployMode (including the empty string and the explicit Local
-// mode) ignores pod-template-remote.yaml even when it is present.
+// non-Remote deployMode (including the empty string used by SandboxBackend
+// and the explicit Local mode) ignores pod-template-remote.yaml even when
+// it is present.
 func TestLoadAgentPodTemplate_NonRemoteIgnoresRemoteKey(t *testing.T) {
 	fake := newFakeK8sCoreClient()
 	fake.injectConfigMap(&corev1.ConfigMap{
@@ -609,5 +610,58 @@ func TestLoadAgentPodTemplate_RemoteKeyOnly(t *testing.T) {
 	got2 := LoadAgentPodTemplate(context.Background(), fake, loaderTestNS, loaderTestName, "")
 	if !reflect.DeepEqual(got2, corev1.PodTemplateSpec{}) {
 		t.Fatalf("non-remote with only remote key must produce zero PodTemplateSpec, got %+v", got2)
+	}
+}
+
+// ── ExtractEnv tests ─────────────────────────────────────────────────────
+
+func TestExtractEnv_EmptyTemplate(t *testing.T) {
+	got := ExtractEnv(corev1.PodTemplateSpec{})
+	if got != nil {
+		t.Fatalf("empty template must return nil, got %v", got)
+	}
+}
+
+func TestExtractEnv_WorkerContainerWithEnv(t *testing.T) {
+	tmpl := corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "sidecar",
+					Env:  []corev1.EnvVar{{Name: "SIDECAR_VAR", Value: "ignored"}},
+				},
+				{
+					Name: "worker",
+					Env: []corev1.EnvVar{
+						{Name: "FOO", Value: "bar"},
+						{Name: "BAZ", Value: "qux"},
+					},
+				},
+			},
+		},
+	}
+	got := ExtractEnv(tmpl)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 env vars, got %d", len(got))
+	}
+	if got[0].Name != "FOO" || got[0].Value != "bar" {
+		t.Errorf("env[0] = %v, want FOO=bar", got[0])
+	}
+	if got[1].Name != "BAZ" || got[1].Value != "qux" {
+		t.Errorf("env[1] = %v, want BAZ=qux", got[1])
+	}
+}
+
+func TestExtractEnv_NoWorkerContainer(t *testing.T) {
+	tmpl := corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "other", Env: []corev1.EnvVar{{Name: "X", Value: "y"}}},
+			},
+		},
+	}
+	got := ExtractEnv(tmpl)
+	if got != nil {
+		t.Fatalf("no worker container must return nil, got %v", got)
 	}
 }

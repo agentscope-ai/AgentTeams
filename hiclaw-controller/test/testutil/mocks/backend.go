@@ -88,6 +88,8 @@ func (m *MockWorkerBackend) SimulatePodDeletion(name string) {
 }
 
 func (m *MockWorkerBackend) Name() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.NameOverride != "" {
 		return m.NameOverride
 	}

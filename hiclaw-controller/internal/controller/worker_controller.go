@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"time"
@@ -15,10 +17,11 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -28,9 +31,15 @@ import (
 )
 
 const (
-	finalizerName       = "agentteams.io/cleanup"
-	reconcileInterval   = 5 * time.Minute
-	reconcileRetryDelay = 30 * time.Second
+	finalizerName         = "agentteams.io/cleanup"
+	reconcileInterval     = 5 * time.Minute
+	edgeReconcileInterval = 1 * time.Minute
+	edgeHeartbeatTimeout  = 2 * time.Minute
+	reconcileRetryDelay   = 30 * time.Second
+	// appServiceNotReadyRequeue is the short backoff used while the
+	// controller's Matrix AppService token has not been registered/verified
+	// with the homeserver yet (transient startup race, M_UNKNOWN_TOKEN).
+	appServiceNotReadyRequeue = 5 * time.Second
 )
 
 // WorkerReconciler reconciles standalone Worker resources. Team members are
@@ -39,29 +48,45 @@ const (
 type WorkerReconciler struct {
 	client.Client
 
-	Provisioner    service.WorkerProvisioner
-	Deployer       service.WorkerDeployer
-	Backend        *backend.Registry
-	EnvBuilder     service.WorkerEnvBuilderI
-	ResourcePrefix auth.ResourcePrefix   // tenant prefix used to derive SA names
-	Legacy         *service.LegacyCompat // nil in incluster mode
-	GatewayClient  gateway.Client        // gateway client for modelProvider resolution
+	Provisioner                 service.WorkerProvisioner
+	Deployer                    service.WorkerDeployer
+	Backend                     *backend.Registry
+	EnvBuilder                  service.WorkerEnvBuilderI
+	ResourcePrefix              auth.ResourcePrefix   // tenant prefix used to derive SA names
+	Legacy                      *service.LegacyCompat // nil in incluster mode
+	GatewayClient               gateway.Client        // gateway client for modelProvider resolution
+	DynamicClient               dynamic.Interface
+	RemoteDynamicClientProvider backend.RemoteDynamicClientProvider
+	AuthTokenExpirationSeconds  int64
 
 	// DefaultRuntime is the value passed to backend.CreateRequest.RuntimeFallback
 	// when a Worker CR omits spec.runtime. Sourced from
-	// HICLAW_DEFAULT_WORKER_RUNTIME (Config.DefaultWorkerRuntime). Empty means
+	// AGENTTEAMS_DEFAULT_WORKER_RUNTIME (Config.DefaultWorkerRuntime). Empty means
 	// "no operator preference" — backend.ResolveRuntime will fall back to
 	// "openclaw".
 	DefaultRuntime string
+
+	// DefaultBackendRuntime is the cluster-level default backendRuntime ("pod" or "sandbox").
+	// Used when Worker CR's spec.backendRuntime is not set.
+	// Sourced from AGENTTEAMS_WORKER_BACKEND_RUNTIME env var.
+	DefaultBackendRuntime string
 
 	// ControllerName identifies this controller instance. Stamped on every
 	// Pod/SA/Secret created under this reconciler via the
 	// agentteams.io/controller label so multiple controller instances sharing a
 	// namespace do not cross-watch each other's resources.
 	ControllerName string
-	Namespace      string
 
-	RemoteWatchRegistrar RemoteWatchRegistrar
+	// AuthCache is cleared after deleting a rotated Edge Worker's
+	// ServiceAccount so old SA tokens cannot pass via cached TokenReview.
+	AuthCache interface{ InvalidateCache() }
+
+	// WorkerDepsStorageBucket/Endpoint identify the main workspace OSS bucket
+	// used for the built-in sandbox token/env/data mounts.
+	WorkerDepsStorageBucket   string
+	WorkerDepsStorageEndpoint string
+	MountAuthType             string
+	MountRoleName             string
 }
 
 func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -89,10 +114,18 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		if !worker.DeletionTimestamp.IsZero() {
 			return
 		}
-		worker.Status.Phase = computeWorkerPhase(&worker, state.ContainerState, reterr)
+		if isEdgeWorker(&worker) && reterr == nil {
+			if edgeHeartbeatStale(worker.Status.LastHeartbeat, edgeHeartbeatTimeout) {
+				worker.Status.Phase = "Pending"
+			} else if worker.Status.Phase == "" {
+				worker.Status.Phase = "Pending"
+			}
+		} else {
+			worker.Status.Phase = computeWorkerPhase(&worker, state.ContainerState, reterr)
+		}
 		if reterr == nil {
 			worker.Status.ObservedGeneration = worker.Generation
-			worker.Status.Message = ""
+			worker.Status.Message = state.Message
 		} else {
 			worker.Status.Message = reterr.Error()
 		}
@@ -120,32 +153,104 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 	return r.reconcileNormal(ctx, &worker, state)
 }
 
+func isEdgeWorker(w *v1beta1.Worker) bool {
+	return w != nil && w.Spec.DeployMode != nil && *w.Spec.DeployMode == v1beta1.DeployModeEdge
+}
+
+func edgeHeartbeatStale(lastHeartbeat string, timeout time.Duration) bool {
+	if lastHeartbeat == "" {
+		return true
+	}
+	ts, err := time.Parse(time.RFC3339, lastHeartbeat)
+	if err != nil {
+		return true
+	}
+	return time.Since(ts) > timeout
+}
+
 // reconcileNormal builds a MemberContext from the Worker CR, runs the shared
 // member reconcile phases, and writes runtime state back to Worker.Status.
-// Legacy Manager groupAllowFrom is updated here only for standalone workers;
-// team leaders are handled by TeamReconciler.
 func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker, state *MemberState) (reconcile.Result, error) {
+	logger := log.FromContext(ctx)
+
 	deps := MemberDeps{
-		Provisioner:    r.Provisioner,
-		Deployer:       r.Deployer,
-		Backend:        r.Backend,
-		EnvBuilder:     r.EnvBuilder,
-		ResourcePrefix: r.ResourcePrefix,
-		DefaultRuntime: r.DefaultRuntime,
-		GatewayClient:  r.GatewayClient,
+		Provisioner:                 r.Provisioner,
+		Deployer:                    r.Deployer,
+		Backend:                     r.Backend,
+		EnvBuilder:                  r.EnvBuilder,
+		ResourcePrefix:              r.ResourcePrefix,
+		DefaultRuntime:              r.DefaultRuntime,
+		GatewayClient:               r.GatewayClient,
+		DynamicClient:               r.DynamicClient,
+		RemoteDynamicClientProvider: r.RemoteDynamicClientProvider,
+		AuthTokenExpirationSeconds:  r.AuthTokenExpirationSeconds,
+		ControllerName:              r.ControllerName,
+		WorkerDepsStorageBucket:     r.WorkerDepsStorageBucket,
+		WorkerDepsStorageEndpoint:   r.WorkerDepsStorageEndpoint,
+		MountAuthType:               r.MountAuthType,
+		MountRoleName:               r.MountRoleName,
 	}
-	spec, err := effectiveWorkerSpecForTarget(w)
+	effectiveSpec, resourceSpec, updateStrategy, err := r.effectiveWorkerSpec(ctx, w, false)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	mctx := r.workerMemberContextWithSpec(w, spec)
+	if err := validateWorkerDeploymentTargetImmutable(w, effectiveSpec); err != nil {
+		return reconcile.Result{}, err
+	}
+	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
 
-	if w.Spec.ModelProvider != "" && r.GatewayClient != nil {
-		info, err := r.GatewayClient.ResolveModelProvider(ctx, w.Spec.ModelProvider)
+	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
+		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
 		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("resolve model provider %q: %w", w.Spec.ModelProvider, err)
+			return reconcile.Result{}, fmt.Errorf("resolve model provider %q: %w", effectiveSpec.ModelProvider, err)
 		}
 		mctx.ModelProviderInfo = info
+	}
+
+	if mctx.DeployMode == v1beta1.DeployModeEdge {
+		// Edge UUID rotation: when the UUID label changes, delete the SA so any
+		// previously issued long-lived tokens are invalidated. The next call to
+		// EdgeHandler.ExchangeToken will recreate the SA and mint a fresh token
+		// bound to the new UUID. Skipped on first issuance (appliedUUID empty).
+		currentUUID := w.Labels[v1beta1.LabelWorkerEdgeUUID]
+		appliedUUID := w.Annotations[v1beta1.AnnotationEdgeAppliedUUID]
+		if currentUUID != "" && appliedUUID != "" && currentUUID != appliedUUID {
+			if err := r.Provisioner.DeleteServiceAccount(ctx, w.Name); err != nil {
+				logger.Error(err, "failed to delete SA during edge UUID rotation")
+				return reconcile.Result{}, err
+			}
+			if r.AuthCache != nil {
+				r.AuthCache.InvalidateCache()
+			}
+			if w.Annotations == nil {
+				w.Annotations = make(map[string]string)
+			}
+			w.Annotations[v1beta1.AnnotationEdgeAppliedUUID] = currentUUID
+			if err := r.Update(ctx, w); err != nil {
+				return reconcile.Result{}, err
+			}
+			logger.Info("edge UUID rotated, SA deleted", "oldUUID", appliedUUID, "newUUID", currentUUID)
+		}
+		// Edge workers run off-cluster: the controller does not manage Pods,
+		// Services, or Expose for them. SA lifecycle is driven on demand by
+		// EdgeHandler.ExchangeToken. The lightweight controller path still
+		// provisions Matrix/gateway credentials and writes runtime.yaml for the
+		// remote-managed local worker.
+		if res, err := ReconcileMemberInfra(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
+			applyMemberStateToWorker(w, state)
+			return res, err
+		}
+		if err := EnsureModelProviderAuth(ctx, deps, mctx, state); err != nil {
+			applyMemberStateToWorker(w, state)
+			return reconcile.Result{}, err
+		}
+		if err := ReconcileMemberConfig(ctx, deps, mctx, state); err != nil {
+			applyMemberStateToWorker(w, state)
+			return reconcile.Result{}, err
+		}
+		applyMemberStateToWorker(w, state)
+		w.Status.SpecHash = mctx.AppliedSpecHash
+		return reconcile.Result{RequeueAfter: edgeReconcileInterval}, nil
 	}
 
 	// Validate cross-cluster deployment fields before entering phases.
@@ -171,29 +276,39 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
-		if err == nil {
-			applyDeploymentTargetStatus(w, mctx)
-		}
 		return res, err
 	}
 	applyDeploymentTargetStatus(w, mctx)
-	if err := ReconcileMemberService(ctx, &mctx, &deps); err != nil {
+	svcName, err := ReconcileMemberService(ctx, &mctx, &deps)
+	if err != nil {
 		applyMemberStateToWorker(w, state)
 		return reconcile.Result{}, err
 	}
+	// Stamp or remove the service-name label on the Worker CR.
+	// IMPORTANT: snapshot base BEFORE mutating w so MergeFrom produces
+	// a non-empty patch — capturing base after the mutation makes the
+	// diff identical and the label change never lands.
+	base := w.DeepCopy()
+	if labelChanged := reconcileWorkerSvcLabel(w, svcName); labelChanged {
+		if err := r.Patch(ctx, w, client.MergeFrom(base)); err != nil {
+			return reconcile.Result{}, fmt.Errorf("patch worker svc label: %w", err)
+		}
+	}
 	_ = ReconcileMemberExpose(ctx, deps, mctx, state)
 	applyMemberStateToWorker(w, state)
+	w.Status.SpecHash = mctx.AppliedSpecHash
+	applyDeploymentTargetStatus(w, mctx)
 
-	r.reconcileLegacy(ctx, w, state)
+	r.reconcileLegacyWithContext(ctx, w, mctx, state)
 
-	logger := log.FromContext(ctx)
 	if w.Status.ObservedGeneration == 0 {
 		logger.Info("worker created", "name", w.Name, "roomID", w.Status.RoomID)
 	} else if w.Generation != w.Status.ObservedGeneration {
 		logger.Info("worker updated", "name", w.Name)
 	}
 
-	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+	requeueAfter := minPositiveDuration(reconcileInterval, state.RequeueAfter)
+	return reconcile.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // reconcileDelete cleans up all infrastructure for the Worker and then removes
@@ -203,16 +318,28 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 	logger.Info("deleting worker", "name", w.Name)
 
 	deps := MemberDeps{
-		Provisioner:    r.Provisioner,
-		Deployer:       r.Deployer,
-		Backend:        r.Backend,
-		EnvBuilder:     r.EnvBuilder,
-		ResourcePrefix: r.ResourcePrefix,
-		DefaultRuntime: r.DefaultRuntime,
-		GatewayClient:  r.GatewayClient,
+		Provisioner:                 r.Provisioner,
+		Deployer:                    r.Deployer,
+		Backend:                     r.Backend,
+		EnvBuilder:                  r.EnvBuilder,
+		ResourcePrefix:              r.ResourcePrefix,
+		DefaultRuntime:              r.DefaultRuntime,
+		GatewayClient:               r.GatewayClient,
+		DynamicClient:               r.DynamicClient,
+		RemoteDynamicClientProvider: r.RemoteDynamicClientProvider,
+		AuthTokenExpirationSeconds:  r.AuthTokenExpirationSeconds,
+		ControllerName:              r.ControllerName,
+		WorkerDepsStorageBucket:     r.WorkerDepsStorageBucket,
+		WorkerDepsStorageEndpoint:   r.WorkerDepsStorageEndpoint,
+		MountAuthType:               r.MountAuthType,
+		MountRoleName:               r.MountRoleName,
 	}
-	spec := workerSpecWithAppliedDeploymentTarget(w.Spec, w.Status)
-	mctx := r.workerMemberContextWithSpec(w, spec)
+	effectiveSpec, resourceSpec, updateStrategy, err := r.effectiveWorkerSpec(ctx, w, true)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	effectiveSpec = workerSpecWithAppliedDeploymentTarget(effectiveSpec, w.Status)
+	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
 
 	_ = ReconcileMemberDelete(ctx, deps, mctx)
 
@@ -239,10 +366,34 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 // reconcileLegacy writes the worker to the legacy workers-registry and grants
 // the standalone worker publish rights into the Manager's group DM room.
 func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worker, state *MemberState) {
+	r.reconcileLegacyWithContext(ctx, w, r.workerMemberContext(w), state)
+}
+
+func (r *WorkerReconciler) reconcileLegacyWithContext(ctx context.Context, w *v1beta1.Worker, mctx MemberContext, state *MemberState) {
 	if r.Legacy == nil || !r.Legacy.Enabled() {
 		return
 	}
 	logger := log.FromContext(ctx)
+	runtimeName := mctx.RuntimeName
+
+	role, inTeam, err := r.decoupledTeamRoleForWorker(ctx, w.Namespace, w.Name)
+	if err != nil {
+		logger.Error(err, "failed to check decoupled Team membership before legacy worker update (non-fatal)", "worker", w.Name)
+	}
+	if inTeam {
+		// Decoupled Team members are still reconciled by WorkerReconciler for
+		// Worker CR lifecycle/config, but TeamReconciler owns legacy
+		// team-scoped artifacts: workers-registry role/team_id rows,
+		// Manager allow-list membership, and member channel policy overlays.
+		// Writing standalone legacy state here races with TeamReconciler and
+		// can make CI/user-visible config oscillate.
+		if role != RoleTeamLeader {
+			if err := r.Legacy.UpdateManagerGroupAllowFrom(r.Legacy.MatrixUserID(runtimeName), false); err != nil {
+				logger.Error(err, "failed to revoke standalone Manager groupAllowFrom for Team worker (non-fatal)", "worker", w.Name, "runtimeName", runtimeName)
+			}
+		}
+		return
+	}
 
 	// WorkerReconciler only handles standalone workers. Grant group-DM
 	// publish rights for the standalone worker.
@@ -252,116 +403,75 @@ func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worke
 		}
 	}
 
-	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
 	if err := r.Legacy.UpdateWorkersRegistry(service.WorkerRegistryEntry{
 		Name:         runtimeName,
 		MatrixUserID: r.Provisioner.MatrixUserID(runtimeName),
 		RoomID:       w.Status.RoomID,
-		Runtime:      w.Spec.Runtime,
+		Runtime:      mctx.Spec.Runtime,
 		Deployment:   "local",
-		Skills:       w.Spec.Skills,
-		Image:        nilIfEmpty(w.Spec.Image),
+		Skills:       mctx.Spec.Skills,
+		Image:        nilIfEmpty(mctx.Spec.Image),
 	}); err != nil {
 		logger.Error(err, "registry update failed (non-fatal)")
 	}
 }
 
-// workerMemberContext translates a Worker CR into a MemberContext for the
-// shared member reconcile helpers. WorkerReconciler always produces a
-// standalone context — team semantics are injected externally by
-// TeamReconciler via Matrix Room invite and MinIO AGENTS.MD, never via
-// Worker CR annotations.
-//
-// PodLabels are built by layering four sources low-to-high: ConfigMap-based
-// pod template (added downstream by ApplyPodTemplate), the CR's
-// metadata.labels, the CR's spec.labels, and the controller-forced system
-// labels (controller name and member role). Controller-forced keys
-// deliberately come last so anything the user writes that collides (e.g.
-// `agentteams.io/controller`) is silently overridden rather than rejected.
-func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
-	return r.workerMemberContextWithSpec(w, w.Spec)
+func (r *WorkerReconciler) decoupledTeamRoleForWorker(ctx context.Context, namespace, workerName string) (MemberRole, bool, error) {
+	if r.Client == nil || workerName == "" {
+		return "", false, nil
+	}
+
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams,
+		client.InNamespace(namespace),
+		client.MatchingFields{TeamWorkerMembersField: workerName},
+	); err != nil {
+		// Unit-test fake clients and older controller setups may not have the
+		// field index registered. Fall back to namespace enumeration so the
+		// safety check still works.
+		if listErr := r.List(ctx, &teams, client.InNamespace(namespace)); listErr != nil {
+			return "", false, fmt.Errorf("list teams by workerMembers index: %w; fallback list: %v", err, listErr)
+		}
+	}
+
+	for _, team := range teams.Items {
+		if len(team.Spec.WorkerMembers) == 0 {
+			continue
+		}
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name != workerName {
+				continue
+			}
+			if ref.Role == RoleTeamLeader.String() {
+				return RoleTeamLeader, true, nil
+			}
+			return RoleTeamWorker, true, nil
+		}
+	}
+	return "", false, nil
 }
 
-func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v1beta1.WorkerSpec) MemberContext {
-	runtimeName := spec.EffectiveWorkerName(w.Name)
-
-	// Cross-cluster deployment fields.
-	deployMode := v1beta1.DeployModeLocal
-	if spec.DeployMode != nil {
-		deployMode = *spec.DeployMode
-	}
-	var targetClusterID, targetNamespace string
-	if spec.TargetCluster != nil {
-		targetClusterID = spec.TargetCluster.ID
-		targetNamespace = spec.TargetCluster.Namespace
-	}
-	var serviceEnabled bool
-	if spec.ServiceEnabled != nil {
-		serviceEnabled = *spec.ServiceEnabled
-	}
-
-	return MemberContext{
-		Name:               w.Name,
-		RuntimeName:        runtimeName,
-		Namespace:          w.Namespace,
-		Role:               RoleStandalone,
-		Spec:               spec,
-		Generation:         w.Generation,
-		ObservedGeneration: w.Status.ObservedGeneration,
-		PodLabels: mergeLabels(
-			w.ObjectMeta.Labels,
-			spec.Labels,
-			map[string]string{
-				v1beta1.LabelController: r.ControllerName,
-				"agentteams.io/role":    RoleStandalone.String(),
-			},
-		),
-		// SpecChanged is gated on ObservedGeneration > 0 so a brand-new
-		// Worker (Generation=1, ObservedGeneration=0) reports
-		// SpecChanged=false. Initial creation then goes through the
-		// StatusNotFound branch in ensureMemberContainerPresent
-		// unambiguously. Without the gate, a second reconcile queued by
-		// the finalizer write can read a stale informer cache
-		// (ObservedGeneration still 0) after the just-created container
-		// is already Running, fall into the spec-change branch, and Delete
-		// the container via force=true (SIGKILL, exit 137).
-		SpecChanged:          w.Status.ObservedGeneration > 0 && w.Generation != w.Status.ObservedGeneration,
-		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
-		ExistingMatrixUserID: w.Status.MatrixUserID,
-		ExistingRoomID:       w.Status.RoomID,
-		CurrentExposedPorts:  w.Status.ExposedPorts,
-		Owner:                w,
-		DeployMode:           deployMode,
-		BackendRuntime:       spec.GetBackendRuntime(),
-		StatusBackendRuntime: w.Status.BackendRuntime,
-		TargetClusterID:      targetClusterID,
-		TargetNamespace:      targetNamespace,
-		ServiceEnabled:       serviceEnabled,
-	}
-}
-
-func effectiveWorkerSpecForTarget(w *v1beta1.Worker) (v1beta1.WorkerSpec, error) {
+func (r *WorkerReconciler) effectiveWorkerSpec(_ context.Context, w *v1beta1.Worker, _ bool) (v1beta1.WorkerSpec, *v1beta1.AgentResourceRequirements, string, error) {
 	spec := *w.Spec.DeepCopy()
+	return spec, spec.Resources, "", nil
+}
+
+func validateWorkerDeploymentTargetImmutable(w *v1beta1.Worker, desired v1beta1.WorkerSpec) error {
 	if w.Status.DeployMode == "" && w.Status.TargetCluster == nil {
-		return spec, nil
+		return nil
 	}
-	statusMode := w.Status.DeployMode
-	if statusMode == "" {
-		statusMode = v1beta1.DeployModeLocal
+	currentMode := w.Status.DeployMode
+	if currentMode == "" {
+		currentMode = v1beta1.DeployModeLocal
 	}
-	desiredMode, desiredTarget := workerSpecDeploymentTarget(spec)
-	if statusMode == desiredMode && sameTargetCluster(w.Status.TargetCluster, desiredTarget) {
-		return spec, nil
-	}
-	if spec.DesiredState() != "Stopped" {
-		return spec, fmt.Errorf("spec.deployMode/spec.targetCluster cannot be changed until the Worker is Stopped; current=%s, desired=%s",
-			deploymentTargetSummary(statusMode, w.Status.TargetCluster),
+	desiredMode, desiredTarget := workerSpecDeploymentTarget(desired)
+	currentTarget := w.Status.TargetCluster
+	if currentMode != desiredMode || !sameTargetCluster(currentTarget, desiredTarget) {
+		return fmt.Errorf("spec.deployMode/spec.targetCluster cannot be changed after the Worker runtime has been provisioned; delete and recreate the Worker to move it (current=%s, desired=%s)",
+			deploymentTargetSummary(currentMode, currentTarget),
 			deploymentTargetSummary(desiredMode, desiredTarget))
 	}
-	if w.Status.Phase != "Stopped" {
-		return workerSpecWithAppliedDeploymentTarget(spec, w.Status), nil
-	}
-	return spec, nil
+	return nil
 }
 
 func workerSpecWithAppliedDeploymentTarget(spec v1beta1.WorkerSpec, status v1beta1.WorkerStatus) v1beta1.WorkerSpec {
@@ -383,9 +493,6 @@ func workerSpecWithAppliedDeploymentTarget(spec v1beta1.WorkerSpec, status v1bet
 
 func applyDeploymentTargetStatus(w *v1beta1.Worker, m MemberContext) {
 	w.Status.DeployMode = m.DeployMode
-	if m.BackendRuntime != "" {
-		w.Status.BackendRuntime = m.BackendRuntime
-	}
 	if m.DeployMode == v1beta1.DeployModeRemote || m.TargetClusterID != "" || m.TargetNamespace != "" {
 		w.Status.TargetCluster = &v1beta1.TargetClusterSpec{
 			ID:        m.TargetClusterID,
@@ -427,6 +534,138 @@ func deploymentTargetSummary(mode string, target *v1beta1.TargetClusterSpec) str
 	return fmt.Sprintf("%s/%s/%s", mode, target.ID, target.Namespace)
 }
 
+func agentResourcesToBackend(resources *v1beta1.AgentResourceRequirements) *backend.ResourceRequirements {
+	if resources == nil ||
+		(resources.Requests.CPU == "" &&
+			resources.Requests.Memory == "" &&
+			resources.Limits.CPU == "" &&
+			resources.Limits.Memory == "") {
+		return nil
+	}
+	return &backend.ResourceRequirements{
+		CPURequest:    resources.Requests.CPU,
+		CPULimit:      resources.Limits.CPU,
+		MemoryRequest: resources.Requests.Memory,
+		MemoryLimit:   resources.Limits.Memory,
+	}
+}
+
+func mergeBackendResourceRequirements(defaults, override *backend.ResourceRequirements) *backend.ResourceRequirements {
+	if override == nil {
+		return defaults
+	}
+	if defaults == nil {
+		return override
+	}
+	merged := *defaults
+	if override.CPURequest != "" {
+		merged.CPURequest = override.CPURequest
+	}
+	if override.CPULimit != "" {
+		merged.CPULimit = override.CPULimit
+	}
+	if override.MemoryRequest != "" {
+		merged.MemoryRequest = override.MemoryRequest
+	}
+	if override.MemoryLimit != "" {
+		merged.MemoryLimit = override.MemoryLimit
+	}
+	return &merged
+}
+
+// workerMemberContext translates a Worker CR into a MemberContext for the
+// shared member reconcile helpers. WorkerReconciler always produces a
+// standalone context — team semantics are injected externally by
+// TeamReconciler via Matrix Room invite and MinIO AGENTS.MD, never via
+// Worker CR annotations.
+//
+// PodLabels are built by layering four sources low-to-high: ConfigMap-based
+// pod template (added downstream by ApplyPodTemplate), the CR's
+// metadata.labels, the CR's spec.labels, and the controller-forced system
+// labels (controller name and member role). Controller-forced keys
+// deliberately come last so anything the user writes that collides (e.g.
+// `agentteams.io/controller`) is silently overridden rather than rejected.
+func (r *WorkerReconciler) workerMemberContext(w *v1beta1.Worker) MemberContext {
+	return r.workerMemberContextWithSpec(w, w.Spec, nil, "")
+}
+
+func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v1beta1.WorkerSpec, resourceSpec *v1beta1.AgentResourceRequirements, updateStrategy string) MemberContext {
+	runtimeName := spec.EffectiveWorkerName(w.Name)
+	effectiveRuntime := backend.ResolveRuntime(spec.Runtime, r.DefaultRuntime)
+	backendRuntime := spec.GetBackendRuntime()
+	if backendRuntime == "" {
+		backendRuntime = r.DefaultBackendRuntime
+	}
+	hashSpec := workerSpecWithEffectiveBackendRuntimeForHash(spec, backendRuntime)
+	appliedSpecHash := hashAppliedWorkerSpecForRuntimeAndResources(hashSpec, effectiveRuntime, resourceSpec)
+	// Hash-based comparison is preferred: only pod-affecting fields trigger
+	// recreation. Fall back to Generation comparison when SpecHash has not
+	// been stored yet (first reconcile after upgrade).
+	var specChanged bool
+	if w.Status.SpecHash != "" {
+		specChanged = w.Status.SpecHash != appliedSpecHash
+	} else {
+		specChanged = w.Status.ObservedGeneration > 0 && w.Generation != w.Status.ObservedGeneration
+	}
+
+	// Cross-cluster deployment fields.
+	deployMode := v1beta1.DeployModeLocal
+	if spec.DeployMode != nil {
+		deployMode = *spec.DeployMode
+	}
+	var targetClusterID, targetNamespace string
+	if spec.TargetCluster != nil {
+		targetClusterID = spec.TargetCluster.ID
+		targetNamespace = spec.TargetCluster.Namespace
+	}
+	var serviceEnabled bool
+	if spec.ServiceEnabled != nil {
+		serviceEnabled = *spec.ServiceEnabled
+	}
+
+	systemLabels := map[string]string{
+		v1beta1.LabelController: r.ControllerName,
+		v1beta1.LabelRole:       RoleStandalone.String(),
+	}
+	return MemberContext{
+		Name:               w.Name,
+		RuntimeName:        runtimeName,
+		Namespace:          w.Namespace,
+		Role:               RoleStandalone,
+		Spec:               spec,
+		Generation:         w.Generation,
+		ObservedGeneration: w.Status.ObservedGeneration,
+		PodLabels: mergeLabels(
+			w.ObjectMeta.Labels,
+			spec.Labels,
+			systemLabels,
+		),
+		// SpecChanged is gated on ObservedGeneration > 0 so brand-new
+		// Workers go through StatusNotFound create instead of a transient
+		// spec-change delete. CurrentSpecHash lets sandbox read legacy live
+		// annotations only when Worker.status.specHash is empty.
+		SpecChanged:          specChanged,
+		AppliedSpecHash:      appliedSpecHash,
+		CurrentSpecHash:      w.Status.SpecHash,
+		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
+		TeamName:             w.Annotations["agentteams.io/team"],
+		TeamLeaderName:       w.Annotations["agentteams.io/team-leader"],
+		TeamAdminName:        w.Annotations["agentteams.io/team-admin"],
+		TeamAdminMatrixID:    w.Annotations["agentteams.io/team-admin-id"],
+		ExistingMatrixUserID: w.Status.MatrixUserID,
+		ExistingRoomID:       w.Status.RoomID,
+		CurrentExposedPorts:  w.Status.ExposedPorts,
+		Owner:                w,
+		DeployMode:           deployMode,
+		TargetClusterID:      targetClusterID,
+		TargetNamespace:      targetNamespace,
+		ServiceEnabled:       serviceEnabled,
+		Resources:            agentResourcesToBackend(resourceSpec),
+		BackendRuntime:       backendRuntime,
+		StatusBackendRuntime: w.Status.BackendRuntime,
+	}
+}
+
 // applyMemberStateToWorker copies runtime state into Worker.Status fields.
 // Phase, ObservedGeneration, Message are owned by the deferred patch in
 // Reconcile; this helper only touches infra/runtime fields.
@@ -443,12 +682,33 @@ func applyMemberStateToWorker(w *v1beta1.Worker, state *MemberState) {
 	if state.ContainerState != "" {
 		w.Status.ContainerState = state.ContainerState
 	}
-	if state.BackendRuntime != "" {
-		w.Status.BackendRuntime = state.BackendRuntime
-	}
 	if state.ExposedPorts != nil || len(w.Spec.Expose) == 0 {
 		w.Status.ExposedPorts = state.ExposedPorts
 	}
+	if state.BackendRuntime != "" {
+		w.Status.BackendRuntime = state.BackendRuntime
+	}
+}
+
+// reconcileWorkerSvcLabel adds or removes the worker Service name
+// label on the Worker CR. Returns true if the label set was modified.
+func reconcileWorkerSvcLabel(w *v1beta1.Worker, svcName string) bool {
+	if svcName != "" {
+		if w.Labels == nil {
+			w.Labels = make(map[string]string)
+		}
+		if w.Labels[v1beta1.LabelWorkerSvcName] == svcName {
+			return false
+		}
+		w.Labels[v1beta1.LabelWorkerSvcName] = svcName
+		return true
+	}
+	// Service disabled/removed — delete label if present.
+	if _, exists := w.Labels[v1beta1.LabelWorkerSvcName]; !exists {
+		return false
+	}
+	delete(w.Labels, v1beta1.LabelWorkerSvcName)
+	return true
 }
 
 // computeWorkerPhase determines the Worker status phase from the reconcile
@@ -457,104 +717,243 @@ func computeWorkerPhase(w *v1beta1.Worker, containerState string, reconcileErr e
 	return computeMemberPhase(w.Status.Phase, w.Status.MatrixUserID, w.Spec.DesiredState(), containerState, reconcileErr)
 }
 
-func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controller, error) {
 	bldr := ctrl.NewControllerManagedBy(mgr).
 		For(&v1beta1.Worker{})
 
 	if r.Backend != nil {
-		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
+		ctx := context.Background()
+		// Watch Pods when the K8s ("pod") backend is registered & available.
+		if wb, _ := r.Backend.GetBackendForType(ctx, v1beta1.BackendRuntimePod); wb != nil {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
-				workerPodEventHandler(""),
-				builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
+				handler.EnqueueRequestsFromMapFunc(WorkerPodMapFunc("")),
+				builder.WithPredicates(PodLifecyclePredicates(v1beta1.LabelWorker, r.ControllerName)),
 			)
 		}
-		if wb, err := r.Backend.GetWorkerBackend(context.Background(), "sandbox"); err == nil {
-			if sb, ok := wb.(*backend.SandboxBackend); ok && sb.Available(context.Background()) {
+		// Watch Sandbox CRs and transient SandboxClaim CRs when the sandbox
+		// backend is registered & available.
+		if wb, _ := r.Backend.GetBackendForType(ctx, v1beta1.BackendRuntimeSandbox); wb != nil {
+			if sb, ok := wb.(*backend.SandboxBackend); ok {
 				bldr = bldr.Watches(
 					sb.WatchObject(),
-					workerPodEventHandler(""),
-					builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
-				).Watches(
+					handler.EnqueueRequestsFromMapFunc(WorkerPodMapFunc("")),
+					builder.WithPredicates(SandboxLifecyclePredicates(v1beta1.LabelWorker, r.ControllerName)),
+				)
+				bldr = bldr.Watches(
 					sb.ClaimWatchObject(),
-					workerPodEventHandler(""),
-					builder.WithPredicates(podLifecyclePredicates("agentteams.io/worker", r.ControllerName)),
+					handler.EnqueueRequestsFromMapFunc(WorkerPodMapFunc("")),
+					builder.WithPredicates(SandboxLifecyclePredicates(v1beta1.LabelWorker, r.ControllerName)),
 				)
 			}
 		}
+		// Docker / embedded mode has no watch source; reconciles for those
+		// deployments are time-driven by RequeueAfter.
 	}
 
-	ctl, err := bldr.Build(r)
+	return bldr.Build(r)
+}
+
+// WorkerPodMapFunc returns a MapFunc for routing Pod events to Worker reconcile
+// requests. If namespace is non-empty, it overrides obj.GetNamespace() — used
+// for remote clusters where Pod namespace != CR namespace.
+func WorkerPodMapFunc(namespace string) handler.MapFunc {
+	return func(_ context.Context, obj client.Object) []reconcile.Request {
+		workerName := obj.GetLabels()[v1beta1.LabelWorker]
+		if workerName == "" {
+			return nil
+		}
+		ns := namespace
+		if ns == "" {
+			ns = obj.GetNamespace()
+		}
+		return []reconcile.Request{
+			{NamespacedName: client.ObjectKey{
+				Name:      workerName,
+				Namespace: ns,
+			}},
+		}
+	}
+}
+
+// hashAppliedWorkerSpec computes a fnv64a hash of the WorkerSpec with selected
+// config-only, lifecycle/policy-only, and service-only fields zeroed out. This
+// captures only spec fields that should trigger container recreation when
+// changed.
+//
+// Current standard-runtime coverage (fnv64a over json.Marshal with excluded
+// fields zeroed):
+//
+//	ModelProvider, Runtime, Image, WorkerName, Identity, Soul,
+//	Agents, Skills, RemoteSkills, Package, ChannelPolicy, ContainerManaged,
+//	DeployMode, TargetCluster, BackendRuntime, Labels, Env, Volumes, Mounts.
+//
+// Excluded (do not trigger pod recreation):
+//
+//	Model, McpServers — config-only (consumed by ReconcileMemberConfig)
+//	AccessEntries — permission-only (resolved by credential issuance)
+//	AgentIdentity, CredentialBindings — runtime credential config
+//	State, IdleTimeout — lifecycle/policy
+//	ServiceEnabled, Expose — service-only (consumed by ReconcileMemberService)
+//
+// Consumed by workerMemberContext to populate MemberContext.AppliedSpecHash,
+// which owning reconcilers write to status.specHash after a successful
+// reconcile. Sandbox resources no longer store this hash.
+func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
+	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
+	spec.McpServers = nil    // config-only: written to mcporter/runtime config
+	spec.AccessEntries = nil // permission-only: resolved when credentials are issued
+	spec.AgentIdentity = nil // config-only: written to runtime.yaml
+	spec.CredentialBindings = nil
+	spec.State = nil          // exclude lifecycle state from hash
+	spec.IdleTimeout = ""     // exclude controller-side autosleep policy from hash
+	spec.ServiceEnabled = nil // service-only: does not affect pod
+	spec.Expose = nil         // service-only: does not affect pod
+	layoutVersion := workerDepsLayoutHashVersion(spec)
+	if layoutVersion == "" {
+		buf, err := json.Marshal(spec)
+		if err != nil {
+			return ""
+		}
+		h := fnv.New64a()
+		_, _ = h.Write(buf)
+		return fmt.Sprintf("%x", h.Sum64())
+	}
+	payload := struct {
+		Spec             v1beta1.WorkerSpec `json:"spec"`
+		WorkerDepsLayout string             `json:"workerDepsLayout,omitempty"`
+	}{
+		Spec:             spec,
+		WorkerDepsLayout: layoutVersion,
+	}
+	buf, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return ""
 	}
-	if r.RemoteWatchRegistrar != nil && r.Backend != nil {
-		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
-			r.RemoteWatchRegistrar.RegisterWatch(
-				ctl,
-				&corev1.Pod{},
-				workerPodEventHandler(r.Namespace),
-				podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
-			)
+	h := fnv.New64a()
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%x", h.Sum64())
+}
+
+func hashAppliedWorkerSpecForRuntime(spec v1beta1.WorkerSpec, runtime string) string {
+	if runtime == backend.RuntimeQwenPaw {
+		if spec.Runtime == "" {
+			spec.Runtime = runtime
 		}
-		if wb, err := r.Backend.GetWorkerBackend(context.Background(), "sandbox"); err == nil {
-			if sb, ok := wb.(*backend.SandboxBackend); ok && sb.Available(context.Background()) {
-				r.RemoteWatchRegistrar.RegisterWatch(
-					ctl,
-					sb.WatchObject(),
-					workerPodEventHandler(r.Namespace),
-					podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
-				)
-				r.RemoteWatchRegistrar.RegisterWatch(
-					ctl,
-					sb.ClaimWatchObject(),
-					workerPodEventHandler(r.Namespace),
-					podLifecyclePredicates("agentteams.io/worker", r.ControllerName),
-				)
-			}
+		return hashQwenPawPodSpec(spec)
+	}
+	return hashAppliedWorkerSpec(spec)
+}
+
+func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtime string, resources *v1beta1.AgentResourceRequirements) string {
+	if runtime == backend.RuntimeQwenPaw {
+		if spec.Runtime == "" {
+			spec.Runtime = runtime
 		}
+		return hashQwenPawPodSpecWithResources(spec, resources)
 	}
-	return nil
+	if resources == nil {
+		return hashAppliedWorkerSpec(spec)
+	}
+	spec.Model = ""           // config-only: written to openclaw.json/runtime.yaml
+	spec.McpServers = nil     // config-only: written to mcporter/runtime config
+	spec.AccessEntries = nil  // permission-only: resolved when credentials are issued
+	spec.State = nil          // exclude lifecycle state from hash
+	spec.IdleTimeout = ""     // exclude controller-side autosleep policy
+	spec.ServiceEnabled = nil // service-only: does not affect pod
+	spec.Expose = nil         // service-only: does not affect pod
+	spec.Resources = nil
+	payload := struct {
+		Spec             v1beta1.WorkerSpec                 `json:"spec"`
+		Resources        *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+		WorkerDepsLayout string                             `json:"workerDepsLayout,omitempty"`
+	}{
+		Spec:             spec,
+		Resources:        resources,
+		WorkerDepsLayout: workerDepsLayoutHashVersion(spec),
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%x", h.Sum64())
 }
 
-type RemoteWatchRegistrar interface {
-	RegisterWatch(ctrlcontroller.Controller, client.Object, handler.EventHandler, ...predicate.Predicate)
+func workerSpecWithEffectiveBackendRuntimeForHash(spec v1beta1.WorkerSpec, backendRuntime string) v1beta1.WorkerSpec {
+	if spec.BackendRuntime == nil && backendRuntime != "" {
+		spec.BackendRuntime = &backendRuntime
+	}
+	return spec
 }
 
-func workerPodEventHandler(localNamespace string) handler.EventHandler {
-	return handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
-		return workerPodRequests(obj, localNamespace)
-	})
+func hashQwenPawPodSpec(spec v1beta1.WorkerSpec) string {
+	return hashQwenPawPodSpecWithResources(spec, nil)
 }
 
-func workerPodRequests(obj client.Object, localNamespace string) []reconcile.Request {
-	workerName := obj.GetLabels()["agentteams.io/worker"]
-	if workerName == "" {
-		return nil
+func hashQwenPawPodSpecWithResources(spec v1beta1.WorkerSpec, resources *v1beta1.AgentResourceRequirements) string {
+	type qwenPawPodSpec struct {
+		Runtime          string                             `json:"runtime,omitempty"`
+		Image            string                             `json:"image,omitempty"`
+		WorkerName       string                             `json:"workerName,omitempty"`
+		ContainerManaged *bool                              `json:"containerManaged,omitempty"`
+		DeployMode       *string                            `json:"deployMode,omitempty"`
+		TargetCluster    *v1beta1.TargetClusterSpec         `json:"targetCluster,omitempty"`
+		BackendRuntime   *string                            `json:"backendRuntime,omitempty"`
+		Resources        *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+		Env              map[string]string                  `json:"env,omitempty"`
+		Labels           map[string]string                  `json:"labels,omitempty"`
+		Volumes          []v1beta1.WorkerVolumeSpec         `json:"volumes,omitempty"`
+		Mounts           []v1beta1.WorkerMountSpec          `json:"mounts,omitempty"`
+		WorkerDepsLayout string                             `json:"workerDepsLayout,omitempty"`
 	}
-	// Skip pods owned by a Team (those are reconciled via
-	// the Team controller's own pod watch).
-	if obj.GetLabels()["agentteams.io/team"] != "" {
-		return nil
+	payload := qwenPawPodSpec{
+		Runtime:          spec.Runtime,
+		Image:            spec.Image,
+		WorkerName:       spec.WorkerName,
+		ContainerManaged: spec.ContainerManaged,
+		DeployMode:       spec.DeployMode,
+		TargetCluster:    spec.TargetCluster,
+		BackendRuntime:   spec.BackendRuntime,
+		Resources:        resources,
+		Env:              spec.Env,
+		Labels:           spec.Labels,
+		Volumes:          spec.Volumes,
+		Mounts:           spec.Mounts,
+		WorkerDepsLayout: workerDepsLayoutHashVersion(spec),
 	}
-	namespace := localNamespace
-	if namespace == "" {
-		namespace = obj.GetNamespace()
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return ""
 	}
-	return []reconcile.Request{
-		{NamespacedName: client.ObjectKey{
-			Name:      workerName,
-			Namespace: namespace,
-		}},
+	h := fnv.New64a()
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%x", h.Sum64())
+}
+
+func workerDepsLayoutHashVersion(spec v1beta1.WorkerSpec) string {
+	if len(spec.Volumes) > 0 || len(spec.Mounts) > 0 {
+		return workerDepsLayoutVersion
+	}
+	return workerDepsLayoutVersionForBackendRuntime(spec.GetBackendRuntime())
+}
+
+func workerDepsLayoutVersionForBackendRuntime(backendRuntime string) string {
+	switch backendRuntime {
+	case v1beta1.BackendRuntimeSandbox:
+		return workerDepsLayoutVersion
+	default:
+		return ""
 	}
 }
 
-// podLifecyclePredicates filters Pod events to only trigger reconciliation on
+// PodLifecyclePredicates filters Pod events to only trigger reconciliation on
 // create, delete, or relevant status transitions. A pod is considered "ours" only when
 // it carries both:
 //
-//   - labelKey (one of "agentteams.io/worker" / "agentteams.io/team" /
-//     "agentteams.io/manager") with a non-empty value — identifying which CR
+//   - labelKey (one of the AgentTeams identity labels) with a non-empty
+//     value — identifying which CR
 //     kind owns the pod.
 //   - agentteams.io/controller == controllerName — identifying which controller
 //     instance owns the pod.
@@ -564,7 +963,7 @@ func workerPodRequests(obj client.Object, localNamespace string) []reconcile.Req
 // If a future watch source is wired without that cache filter, this predicate
 // still prevents cross-instance reconcile when two hiclaw-controller
 // releases share a namespace.
-func podLifecyclePredicates(labelKey, controllerName string) predicate.Predicate {
+func PodLifecyclePredicates(labelKey, controllerName string) predicate.Predicate {
 	matches := func(obj client.Object) bool {
 		l := obj.GetLabels()
 		return l[labelKey] != "" && l[v1beta1.LabelController] == controllerName
@@ -639,6 +1038,98 @@ func podContainerStatusesSignal(statuses []corev1.ContainerStatus) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "\n")
+}
+
+// SandboxLifecyclePredicates filters Sandbox CR events to only trigger
+// reconciliation on create, delete, or .status.phase transitions.
+// A sandbox is considered "ours" only when it carries both the given labelKey
+// with a non-empty value and agentteams.io/controller == controllerName.
+func SandboxLifecyclePredicates(labelKey, controllerName string) predicate.Predicate {
+	matches := func(obj client.Object) bool {
+		l := obj.GetLabels()
+		return l[labelKey] != "" && l[v1beta1.LabelController] == controllerName
+	}
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return matches(e.Object)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return matches(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if !matches(e.ObjectNew) {
+				return false
+			}
+			// For unstructured objects, compare .status.phase string.
+			oldPhase := extractUnstructuredPhase(e.ObjectOld)
+			newPhase := extractUnstructuredPhase(e.ObjectNew)
+			if oldPhase != newPhase {
+				return true
+			}
+			// Also reconcile when the Ready condition status flips, since
+			// remote sandbox backends may surface pod failures via
+			// .status.conditions[type=Ready] without changing .status.phase.
+			oldReady := extractUnstructuredReadyCondition(e.ObjectOld)
+			newReady := extractUnstructuredReadyCondition(e.ObjectNew)
+			return oldReady != newReady
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return false
+		},
+	}
+}
+
+// extractUnstructuredPhase reads .status.phase from an unstructured object.
+func extractUnstructuredPhase(obj client.Object) string {
+	u, ok := obj.(interface {
+		UnstructuredContent() map[string]interface{}
+	})
+	if !ok {
+		return ""
+	}
+	content := u.UnstructuredContent()
+	status, ok := content["status"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	phase, _ := status["phase"].(string)
+	return phase
+}
+
+// extractUnstructuredReadyCondition reads the status value of the
+// .status.conditions[type=Ready] entry from an unstructured object.
+// Returns an empty string when the object is not unstructured, has no
+// conditions, or has no Ready condition. This keeps old/new comparisons
+// stable so missing conditions do not falsely trigger reconciliation.
+func extractUnstructuredReadyCondition(obj client.Object) string {
+	u, ok := obj.(interface {
+		UnstructuredContent() map[string]interface{}
+	})
+	if !ok {
+		return ""
+	}
+	content := u.UnstructuredContent()
+	status, ok := content["status"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	conditions, ok := status["conditions"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, c := range conditions {
+		cond, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		condType, _ := cond["type"].(string)
+		if condType != "Ready" {
+			continue
+		}
+		condStatus, _ := cond["status"].(string)
+		return condStatus
+	}
+	return ""
 }
 
 // --- Package-level helpers ---

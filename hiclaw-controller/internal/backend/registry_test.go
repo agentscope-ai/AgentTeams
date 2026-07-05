@@ -97,32 +97,44 @@ func TestGetWorkerBackend_AutoDetect(t *testing.T) {
 	}
 }
 
-func TestGetBackendForType(t *testing.T) {
-	ctx := context.Background()
-	k8s := &mockWorkerBackend{name: "k8s", available: true}
-	sandbox := &mockWorkerBackend{name: "sandbox", available: true}
-	reg := NewRegistry([]WorkerBackend{k8s, sandbox})
+// mockServiceBackend implements both WorkerBackend and ServiceBackend
+// for FindServiceBackend tests.
+type mockServiceBackend struct {
+	mockWorkerBackend
+}
 
-	podBackend, err := reg.GetBackendForType(ctx, "pod")
-	if err != nil {
-		t.Fatalf("pod backend: %v", err)
-	}
-	if podBackend.Name() != "k8s" {
-		t.Fatalf("pod backend = %q, want k8s", podBackend.Name())
-	}
+func (m *mockServiceBackend) ServiceClient(_ context.Context, _, _, _ string) (K8sServiceClient, string, error) {
+	return nil, "", nil
+}
 
-	sandboxBackend, err := reg.GetBackendForType(ctx, "sandbox")
-	if err != nil {
-		t.Fatalf("sandbox backend: %v", err)
+func TestFindServiceBackend_Found(t *testing.T) {
+	sb := &mockServiceBackend{mockWorkerBackend: mockWorkerBackend{name: "k8s", available: true}}
+
+	reg := NewRegistry([]WorkerBackend{sb})
+	got := reg.FindServiceBackend(context.Background())
+	if got == nil {
+		t.Fatal("expected ServiceBackend, got nil")
 	}
-	if sandboxBackend.Name() != "sandbox" {
-		t.Fatalf("sandbox backend = %q, want sandbox", sandboxBackend.Name())
+	if got != sb {
+		t.Errorf("expected the registered ServiceBackend, got different instance")
 	}
 }
 
-func TestGetBackendForType_Unknown(t *testing.T) {
-	reg := NewRegistry([]WorkerBackend{&mockWorkerBackend{name: "k8s", available: true}})
-	if _, err := reg.GetBackendForType(context.Background(), "edge"); err == nil {
-		t.Fatal("expected error for unknown backendRuntime")
+func TestFindServiceBackend_SkipsNonService(t *testing.T) {
+	// docker only implements WorkerBackend, not ServiceBackend.
+	docker := &mockWorkerBackend{name: "docker", available: true}
+
+	reg := NewRegistry([]WorkerBackend{docker})
+	if got := reg.FindServiceBackend(context.Background()); got != nil {
+		t.Errorf("expected nil when no backend implements ServiceBackend, got %T", got)
+	}
+}
+
+func TestFindServiceBackend_SkipsUnavailable(t *testing.T) {
+	sb := &mockServiceBackend{mockWorkerBackend: mockWorkerBackend{name: "k8s", available: false}}
+
+	reg := NewRegistry([]WorkerBackend{sb})
+	if got := reg.FindServiceBackend(context.Background()); got != nil {
+		t.Errorf("expected nil when ServiceBackend is unavailable, got %T", got)
 	}
 }

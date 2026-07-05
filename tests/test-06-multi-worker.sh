@@ -68,10 +68,14 @@ assert_contains_i "${REPLY}" "bob" "Reply mentions worker name 'bob'"
 
 # Verify Bob's infrastructure. Worker creation is asynchronous, so wait on
 # persisted provisioning state and gateway side effects instead of sleeping.
-if wait_worker_provisioned "bob" 600; then
+BOB_PROVISION_TIMEOUT=60
+if echo "${REPLY}" | grep -qiE "bob.*(accepted|creating|pending)" 2>/dev/null; then
+    BOB_PROVISION_TIMEOUT=180
+fi
+if wait_worker_provisioned "bob" "${BOB_PROVISION_TIMEOUT}"; then
     log_pass "Worker Bob provisioned (roomID + matrixUserID populated)"
 else
-    log_fail "Worker Bob did not reach provisioned state in 600s"
+    log_fail "Worker Bob did not reach provisioned state in ${BOB_PROVISION_TIMEOUT}s"
 fi
 
 BOB_WORKER_JSON=$(exec_in_agent hiclaw get workers bob -o json 2>/dev/null || echo "{}")

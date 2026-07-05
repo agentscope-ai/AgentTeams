@@ -160,6 +160,41 @@ matrix_latest_reply_event() {
         '[.chunk[] | select(.sender | startswith($user)) | select(.type == "m.room.message") | select(.content.body != null) | .event_id] | first // ""' 2>/dev/null
 }
 
+matrix_wait_for_sender_quiet() {
+    local token="$1"
+    local room_id="$2"
+    local from_user="$3"
+    local quiet_seconds="${4:-20}"
+    local timeout="${5:-180}"
+    local poll_seconds=5
+    local elapsed=0
+    local quiet_elapsed=0
+    local last_event
+
+    last_event=$(matrix_latest_reply_event "${token}" "${room_id}" "${from_user}")
+
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        sleep "${poll_seconds}"
+        elapsed=$((elapsed + poll_seconds))
+
+        local latest_event
+        latest_event=$(matrix_latest_reply_event "${token}" "${room_id}" "${from_user}")
+        if [ -n "${latest_event}" ] && [ "${latest_event}" != "${last_event}" ]; then
+            last_event="${latest_event}"
+            quiet_elapsed=0
+            log_info "Manager is still draining earlier DM work; waiting before sending the next request..."
+            continue
+        fi
+
+        quiet_elapsed=$((quiet_elapsed + poll_seconds))
+        if [ "${quiet_elapsed}" -ge "${quiet_seconds}" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 # Wait for a reply from a specific user in a room
 # Usage: matrix_wait_for_reply <access_token> <room_id> <from_user_prefix> [timeout_seconds]
 # Returns: the reply message body, or empty string on timeout

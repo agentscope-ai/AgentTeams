@@ -35,6 +35,16 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
     exit 1
 }
 
+# test-05 can leave CoPaw Manager finishing heartbeat / pending-worker cleanup
+# replies in the admin DM. Let that prior turn go quiet before measuring Bob's
+# create-worker ack/provisioning SLA; the post-request waits below stay strict.
+if ! matrix_wait_for_sender_quiet "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 20 180; then
+    log_fail "Manager DM did not become quiet before Bob create request"
+    test_teardown "06-multi-worker"
+    test_summary
+    exit 1
+fi
+
 # Alice is running from previous tests; bob will be created below (offset=0 is correct for new workers)
 wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice" "bob")

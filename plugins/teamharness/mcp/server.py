@@ -2542,10 +2542,16 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("delegate_task requires leader role")
             project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
             room_id = str(payload.get("roomId") or payload.get("room_id") or "")
             if not room_id:
                 raise ValueError("roomId is required")
             project = _read_json(_project_state_path(arguments, project_id))
+            if not assigned_to:
+                for item in project.get("tasks", []):
+                    if isinstance(item, dict) and item.get("task_id") == task_id:
+                        assigned_to = str(item.get("assigned_to") or item.get("assignedTo") or "").strip()
+                        break
             _validate_assignment_room(project, room_id)
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
@@ -2559,10 +2565,14 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "status": "assigned",
                 "spec_path": f"shared/tasks/{task_id}/spec.md",
             }
+            if assigned_to:
+                task["assigned_to"] = assigned_to
             if source_room_id:
                 task["source_room_id"] = source_room_id
             _write_task(arguments, task)
             project_task_updates: dict[str, Any] = {"status": "assigned"}
+            if assigned_to:
+                project_task_updates["assigned_to"] = assigned_to
             if source_room_id:
                 project_task_updates["source_room_id"] = source_room_id
             _update_project_task(arguments, project_id, task_id, **project_task_updates)

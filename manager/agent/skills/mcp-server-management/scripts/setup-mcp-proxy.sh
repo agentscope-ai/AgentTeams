@@ -329,8 +329,12 @@ if [ -n "${MANAGER_KEY}" ]; then
                 url: ("http://" + $domain + ":8080/mcp-servers/" + $name + "/mcp"),
                 transport: "http",
                 headers: {Authorization: ("Bearer " + $key)}
-            }' "${MANAGER_MCPORTER}" 2>/dev/null)
-        echo "${UPDATED}" | jq . > "${MANAGER_MCPORTER}"
+            }' "${MANAGER_MCPORTER}" 2>/dev/null) || UPDATED=""
+        if [ -n "${UPDATED}" ]; then
+            echo "${UPDATED}" | jq . > "${MANAGER_MCPORTER}"
+        else
+            log "  WARNING: mcporter merge failed — keeping existing config/mcporter.json for Manager"
+        fi
     else
         jq -n --arg name "${MCP_SERVER_NAME}" --arg domain "${AI_GATEWAY_DOMAIN}" --arg key "${MANAGER_KEY}" \
             '{mcpServers: {($name): {
@@ -391,7 +395,7 @@ if [ -f "${REGISTRY_FILE}" ]; then
                     url: ("http://" + $domain + ":8080/mcp-servers/" + $name + "/mcp"),
                     transport: "http",
                     headers: {Authorization: ("Bearer " + $key)}
-                }' "${MCPORTER_FILE}" 2>/dev/null)
+                }' "${MCPORTER_FILE}" 2>/dev/null) || UPDATED=""
             if [ -n "${UPDATED}" ] && [ "${UPDATED}" != "null" ]; then
                 echo "${UPDATED}" | jq . > "${MCPORTER_FILE}"
                 log "  Updated config/mcporter.json for ${wname}"

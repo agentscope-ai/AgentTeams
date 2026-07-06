@@ -234,6 +234,13 @@ func (a *App) Start(ctx context.Context) error {
 // connections and is given ctx to finish in-flight requests, then we wait
 // for every background goroutine launched from Start to exit. Safe to call
 // after Start returns. The caller is expected to bound ctx with a timeout.
+//
+// The wg.Wait() itself is not bounded by ctx (WaitGroup has no cancellation
+// hook), so it runs in its own goroutine and we race it against ctx.Done().
+// If ctx fires first we log which goroutines are still outstanding and
+// return promptly instead of hanging past the caller's deadline; the
+// stragglers keep running in the background and will still complete
+// eventually, they just won't be waited on.
 func (a *App) Stop(ctx context.Context) error {
 	logger := ctrl.Log.WithName("app")
 	var firstErr error
@@ -243,7 +250,21 @@ func (a *App) Stop(ctx context.Context) error {
 			firstErr = err
 		}
 	}
-	a.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		a.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		logger.Error(ctx.Err(), "shutdown deadline exceeded waiting for background goroutines; stragglers may still be running")
+		if firstErr == nil {
+			firstErr = ctx.Err()
+		}
+	}
 	return firstErr
 }
 

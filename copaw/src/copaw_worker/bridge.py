@@ -186,9 +186,12 @@ def _resolve_active_model(cfg: dict[str, Any]) -> dict[str, Any] | None:
 def _resolve_context_window(cfg: dict[str, Any]) -> int | None:
     """Return the contextWindow of the active (or first) model, or None."""
     m = _resolve_active_model(cfg)
-    if m and "contextWindow" in m:
+    if not m or "contextWindow" not in m:
+        return None
+    try:
         return int(m["contextWindow"])
-    return None
+    except (TypeError, ValueError):
+        return None
 
 
 def _resolve_vision_enabled(cfg: dict[str, Any]) -> bool:

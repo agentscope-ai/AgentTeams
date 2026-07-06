@@ -72,7 +72,7 @@ class OutputSanitizer:
         for rule in rules:
             try:
                 self._add_rule(rule)
-            except (re.error, KeyError, TypeError) as exc:
+            except (re.error, KeyError, TypeError, ValueError) as exc:
                 skipped += 1
                 logger.warning("output_sanitizer: invalid rule %r: %s", rule, exc)
         loaded = len(rules) - skipped

@@ -68,6 +68,9 @@ Dir.mktmpdir("teamharness-message-") do |_dir|
         result = call_tool("message", args)
         return json.loads(result["content"][0]["text"])
 
+    def call(args):
+        return call_tool("message", args)
+
     dry = payload({
         "action": "send",
         "channel": "matrix",
@@ -227,14 +230,17 @@ Dir.mktmpdir("teamharness-message-") do |_dir|
     os.environ.pop("COPAW_WORKING_DIR", None)
     os.environ["HOME"] = str(home_dir)
 
-    sent = payload({
+    sent_result = call({
         "action": "send",
         "channel": "matrix",
         "room_id": "!room:example.test",
         "text": "Project is ready.",
     })
+    sent = json.loads(sent_result["content"][0]["text"])
     if not sent.get("ok") or sent.get("messageId") != "$event1":
         raise AssertionError(f"send failed: {sent!r}")
+    if sent_result.get("isError"):
+        raise AssertionError(f"did not expect isError on success: {sent_result!r}")
     if sent.get("sessionRecorded") is not True:
         raise AssertionError(f"session record missing: {sent!r}")
     if captured.get("auth") != "Bearer test-token":
@@ -326,7 +332,7 @@ Dir.mktmpdir("teamharness-message-") do |_dir|
     worker_tools = [tool["name"] for tool in list_tools()]
     if "message" in worker_tools:
         raise AssertionError(f"worker should not see message tool: {worker_tools!r}")
-    blocked = payload({
+    blocked_result = call({
         "action": "send",
         "channel": "matrix",
         "target": "room:!room:example.test",
@@ -334,8 +340,11 @@ Dir.mktmpdir("teamharness-message-") do |_dir|
         "role": "leader",
         "dryRun": True,
     })
+    blocked = json.loads(blocked_result["content"][0]["text"])
     if blocked.get("ok") is not False or blocked.get("error") != "forbidden_tool":
         raise AssertionError(f"worker message call should be blocked: {blocked!r}")
+    if blocked_result.get("isError") is not True:
+        raise AssertionError(f"expected isError True for forbidden tool: {blocked_result!r}")
 
     print(json.dumps({
         "ok": True,

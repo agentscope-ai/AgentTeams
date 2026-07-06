@@ -924,13 +924,74 @@ func TestReconcileTeamNormal_ResolvesTeamWideModelProviderForUnpinnedMember(t *t
 		t.Fatalf("reconcileTeamNormal: %v", err)
 	}
 
-	if len(fakeGateway.resolvedNames) != 2 {
-		t.Fatalf("ResolveModelProvider calls=%v, want 2 (leader+worker) resolved with team-wide-provider", fakeGateway.resolvedNames)
+	// Both leader and worker share the same team-wide provider, so the
+	// memoized resolve loop must call ResolveModelProvider exactly once
+	// (not once per member) and fan the cached result to both.
+	if len(fakeGateway.resolvedNames) != 1 {
+		t.Fatalf("ResolveModelProvider calls=%v, want 1 (memoized across leader+worker sharing team-wide-provider)", fakeGateway.resolvedNames)
 	}
+	if fakeGateway.resolvedNames[0] != "team-wide-provider" {
+		t.Fatalf("ResolveModelProvider called with %q, want team-wide-provider", fakeGateway.resolvedNames[0])
+	}
+}
+
+// TestReconcileTeamNormal_ResolveModelProviderMemoizedAcrossDistinctProviders
+// extends the memoization guard to the mixed case: a team with one member
+// pinned to a distinct provider and two members sharing another provider
+// must call ResolveModelProvider exactly once per distinct provider name
+// (2 calls total for 3 members across 2 distinct providers), never once per
+// member.
+func TestReconcileTeamNormal_ResolveModelProviderMemoizedAcrossDistinctProviders(t *testing.T) {
+	ctx := context.Background()
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			ModelProvider: "team-wide-provider",
+			Leader: v1beta1.LeaderSpec{
+				Name:       "alpha-lead",
+				WorkerName: "leader",
+			},
+			Workers: []v1beta1.TeamWorkerSpec{
+				{Name: "alpha-dev", WorkerName: "dev"},
+				{Name: "alpha-qa", WorkerName: "qa", ModelProvider: "pinned-provider"},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team.DeepCopy()).
+		WithStatusSubresource(&v1beta1.Team{}).
+		Build()
+
+	fakeGateway := &fakeModelProviderGateway{}
+
+	r := &TeamReconciler{
+		Client:        c,
+		Provisioner:   mocks.NewMockProvisioner(),
+		Deployer:      mocks.NewMockDeployer(),
+		Backend:       backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
+		EnvBuilder:    mocks.NewMockEnvBuilder(),
+		AgentFSDir:    t.TempDir(),
+		GatewayClient: fakeGateway,
+	}
+	if _, err := r.reconcileTeamNormal(ctx, team); err != nil {
+		t.Fatalf("reconcileTeamNormal: %v", err)
+	}
+
+	if len(fakeGateway.resolvedNames) != 2 {
+		t.Fatalf("ResolveModelProvider calls=%v, want 2 (one per distinct provider name across 3 members)", fakeGateway.resolvedNames)
+	}
+	seen := map[string]int{}
 	for _, name := range fakeGateway.resolvedNames {
-		if name != "team-wide-provider" {
-			t.Fatalf("ResolveModelProvider called with %q, want team-wide-provider for every unpinned member", name)
-		}
+		seen[name]++
+	}
+	if seen["team-wide-provider"] != 1 || seen["pinned-provider"] != 1 {
+		t.Fatalf("ResolveModelProvider calls=%v, want exactly one call each for team-wide-provider and pinned-provider", fakeGateway.resolvedNames)
 	}
 }
 
@@ -1286,6 +1347,57 @@ func TestBuildDesiredMembers_SystemLabelsOverrideUserLabels(t *testing.T) {
 	}
 	if got := byName["w1"].PodLabels["hiclaw.io/role"]; got != RoleTeamWorker.String() {
 		t.Errorf("w1 role got %q, want %q", got, RoleTeamWorker.String())
+	}
+}
+
+// TestResolveTeamAdminActor_CachesTokenAcrossReconciles guards finding #14:
+// LoginAsHuman issues a fresh Tuwunel device session on every call (no
+// device_id), so calling it on every 5-minute reconcile leaks one device
+// session per tick. resolveTeamAdminActor must cache the token after the
+// first successful login and reuse it on subsequent steady-state calls
+// instead of re-invoking Provisioner.LoginAsHuman.
+func TestResolveTeamAdminActor_CachesTokenAcrossReconciles(t *testing.T) {
+	ctx := context.Background()
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{DisplayName: "Alice"},
+		Status:     v1beta1.HumanStatus{InitialPassword: "s3cret"},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Admin: &v1beta1.TeamAdminSpec{Name: "alice"},
+		},
+	}
+
+	c := newTeamTestClient(t, human.DeepCopy())
+	prov := mocks.NewMockProvisioner()
+	r := &TeamReconciler{Client: c, Provisioner: prov}
+
+	actor1, err := r.resolveTeamAdminActor(ctx, team)
+	if err != nil {
+		t.Fatalf("resolveTeamAdminActor (1st): %v", err)
+	}
+	if actor1.Token == "" {
+		t.Fatalf("expected non-empty token on first resolve")
+	}
+	if calls := len(prov.Calls.LoginAsHuman); calls != 1 {
+		t.Fatalf("LoginAsHuman calls after 1st resolve = %d, want 1", calls)
+	}
+
+	// Simulate subsequent steady-state reconciles (5-minute ticks): the
+	// token must be reused, not re-fetched.
+	for i := 0; i < 3; i++ {
+		actor, err := r.resolveTeamAdminActor(ctx, team)
+		if err != nil {
+			t.Fatalf("resolveTeamAdminActor (steady-state %d): %v", i, err)
+		}
+		if actor.Token != actor1.Token {
+			t.Fatalf("steady-state token %q != first token %q", actor.Token, actor1.Token)
+		}
+	}
+	if calls := len(prov.Calls.LoginAsHuman); calls != 1 {
+		t.Fatalf("LoginAsHuman calls after steady-state reconciles = %d, want 1 (no re-login)", calls)
 	}
 }
 

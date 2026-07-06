@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -64,7 +65,7 @@ func deleteManagerCmd() *cobra.Command {
 
 func deleteResource(kind, name string) error {
 	client := NewAPIClient()
-	if err := client.DoJSON("DELETE", fmt.Sprintf("/api/v1/%ss/%s", kind, name), nil, nil); err != nil {
+	if err := client.DoJSON(context.Background(), "DELETE", fmt.Sprintf("/api/v1/%ss/%s", kind, name), nil, nil); err != nil {
 		return fmt.Errorf("delete %s: %w", kind, err)
 	}
 	fmt.Printf("%s/%s deleted\n", kind, name)

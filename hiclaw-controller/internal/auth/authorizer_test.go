@@ -180,3 +180,93 @@ func TestAuthorizer_NilCaller(t *testing.T) {
 		t.Error("nil caller should be denied")
 	}
 }
+
+// TestAuthorizer_TeamLeaderRequireSameTeamFailsClosed guards the fail-open
+// authz bypass: requireSameTeam must DENY whenever ResourceTeam is empty
+// (unresolved/unknown) rather than treat that as "no team, so allow". A
+// standalone/ownerless worker (whose team could not be resolved) or a
+// worker in another team must both be denied; only a positively-resolved
+// same-team resource is allowed. An empty caller.Team is always denied.
+func TestAuthorizer_TeamLeaderRequireSameTeamFailsClosed(t *testing.T) {
+	az := NewAuthorizer()
+
+	cases := []struct {
+		name    string
+		caller  *CallerIdentity
+		req     AuthzRequest
+		wantErr bool
+	}{
+		{
+			name:    "leader to standalone/ownerless worker (unresolved team) denied",
+			caller:  &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"},
+			req:     AuthzRequest{Action: ActionWake, ResourceKind: "worker", ResourceName: "standalone-worker", ResourceTeam: ""},
+			wantErr: true,
+		},
+		{
+			name:    "leader to own team worker allowed",
+			caller:  &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"},
+			req:     AuthzRequest{Action: ActionWake, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
+			wantErr: false,
+		},
+		{
+			name:    "leader to other team worker denied",
+			caller:  &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"},
+			req:     AuthzRequest{Action: ActionSleep, ResourceKind: "worker", ResourceName: "beta-dev", ResourceTeam: "beta-team"},
+			wantErr: true,
+		},
+		{
+			name:    "leader with empty team denied even against matching empty ResourceTeam",
+			caller:  &CallerIdentity{Role: RoleTeamLeader, Username: "no-team-lead", Team: ""},
+			req:     AuthzRequest{Action: ActionStatus, ResourceKind: "worker", ResourceName: "some-worker", ResourceTeam: ""},
+			wantErr: true,
+		},
+		{
+			name:    "leader ensure-ready on unresolved-team worker denied",
+			caller:  &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"},
+			req:     AuthzRequest{Action: ActionEnsureReady, ResourceKind: "worker", ResourceName: "mystery-worker", ResourceTeam: ""},
+			wantErr: true,
+		},
+		{
+			name:    "leader get on unresolved-team worker denied",
+			caller:  &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"},
+			req:     AuthzRequest{Action: ActionGet, ResourceKind: "worker", ResourceName: "mystery-worker", ResourceTeam: ""},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := az.Authorize(tc.caller, tc.req)
+			if tc.wantErr && err == nil {
+				t.Errorf("%s: expected denial, got allow", tc.name)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("%s: expected allow, got denial: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestAuthorizer_AdminAndManagerUnaffectedByTeamScoping confirms admins and
+// managers never route through requireSameTeam / authorizeTeamLeader at
+// all — they short-circuit to full access in Authorize regardless of
+// ResourceTeam, including against an unresolved ("") ResourceTeam that
+// would deny a team-leader.
+func TestAuthorizer_AdminAndManagerUnaffectedByTeamScoping(t *testing.T) {
+	az := NewAuthorizer()
+
+	reqs := []AuthzRequest{
+		{Action: ActionWake, ResourceKind: "worker", ResourceName: "any-worker", ResourceTeam: ""},
+		{Action: ActionSleep, ResourceKind: "worker", ResourceName: "beta-dev", ResourceTeam: "beta-team"},
+		{Action: ActionUpdate, ResourceKind: "worker", ResourceName: "any-worker", ResourceTeam: ""},
+	}
+
+	for _, role := range []string{RoleAdmin, RoleManager} {
+		caller := &CallerIdentity{Role: role, Username: "op"}
+		for _, req := range reqs {
+			if err := az.Authorize(caller, req); err != nil {
+				t.Errorf("%s should be allowed %s %s (team=%q), got: %v", role, req.Action, req.ResourceKind, req.ResourceTeam, err)
+			}
+		}
+	}
+}

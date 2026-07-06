@@ -241,8 +241,12 @@ update_worker_mcporter() {
                 url: ("http://" + $domain + ":8080/mcp-servers/" + $name + "/mcp"),
                 transport: "http",
                 headers: {Authorization: ("Bearer " + $key)}
-            }' "${mcporter_file}" 2>/dev/null)
-        echo "${UPDATED}" | jq . > "${mcporter_file}"
+            }' "${mcporter_file}" 2>/dev/null) || UPDATED=""
+        if [ -n "${UPDATED}" ]; then
+            echo "${UPDATED}" | jq . > "${mcporter_file}"
+        else
+            log "  WARNING: mcporter merge failed — keeping existing config/mcporter.json for ${WORKER}"
+        fi
     else
         jq -n --arg name "${MCP_SERVER_NAME}" --arg domain "${domain}" --arg key "${worker_key}" \
             '{mcpServers: {($name): {

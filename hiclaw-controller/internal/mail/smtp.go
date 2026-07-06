@@ -48,12 +48,20 @@ Your HiClaw account has been created:
 
 Please log in using Element Web and change your password immediately.
 
-— HiClaw`, displayName, matrixUserID, password, elementURL)
+— HiClaw`, sanitizeHeaderField(displayName), sanitizeHeaderField(matrixUserID), sanitizeHeaderField(password), sanitizeHeaderField(elementURL))
+
+	// to/from/subject are interpolated directly into CRLF-joined header
+	// lines below; a caller-supplied value containing \r or \n could inject
+	// extra headers or SMTP commands. Strip CR/LF from every value that
+	// lands in a header line before building msg.
+	safeTo := sanitizeHeaderField(to)
+	safeFrom := sanitizeHeaderField(cfg.From)
+	safeSubject := sanitizeHeaderField(subject)
 
 	msg := strings.Join([]string{
-		fmt.Sprintf("From: %s", cfg.From),
-		fmt.Sprintf("To: %s", to),
-		fmt.Sprintf("Subject: %s", subject),
+		fmt.Sprintf("From: %s", safeFrom),
+		fmt.Sprintf("To: %s", safeTo),
+		fmt.Sprintf("Subject: %s", safeSubject),
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=UTF-8",
 		"",
@@ -63,7 +71,17 @@ Please log in using Element Web and change your password immediately.
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 	auth := smtp.PlainAuth("", cfg.User, cfg.Pass, cfg.Host)
 
-	return smtp.SendMail(addr, auth, cfg.From, []string{to}, []byte(msg))
+	return smtp.SendMail(addr, auth, cfg.From, []string{safeTo}, []byte(msg))
+}
+
+// sanitizeHeaderField strips CR and LF from a value that will be
+// interpolated into an SMTP header line (or the plain-text body, which sits
+// immediately after the header block), preventing header/SMTP-command
+// injection via a crafted display name, email address, or other field.
+func sanitizeHeaderField(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	return s
 }
 
 func envOrDefault(key, def string) string {

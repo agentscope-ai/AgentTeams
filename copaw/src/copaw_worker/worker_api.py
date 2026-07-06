@@ -10,6 +10,12 @@ from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
+# Bound how long we wait for a client to finish sending the request line and
+# headers. Without this, a slow/stalled client (or a deliberate slowloris
+# attack) can hold a connection open indefinitely since readline() has no
+# built-in timeout.
+_HEADER_READ_TIMEOUT = 5.0
+
 
 class WorkerAPIServer:
     """Small HTTP server for HiClaw worker adapter endpoints."""
@@ -54,12 +60,20 @@ class WorkerAPIServer:
         writer: asyncio.StreamWriter,
     ) -> None:
         try:
-            request_line = await reader.readline()
-            method, path = _parse_request_line(request_line)
-            while True:
-                line = await reader.readline()
-                if not line or line in (b"\r\n", b"\n"):
-                    break
+            try:
+                request_line = await asyncio.wait_for(
+                    reader.readline(), timeout=_HEADER_READ_TIMEOUT
+                )
+                method, path = _parse_request_line(request_line)
+                while True:
+                    line = await asyncio.wait_for(
+                        reader.readline(), timeout=_HEADER_READ_TIMEOUT
+                    )
+                    if not line or line in (b"\r\n", b"\n"):
+                        break
+            except asyncio.TimeoutError:
+                logger.warning("worker API request timed out reading headers")
+                return
 
             if method == "GET" and path == "/worker/livez":
                 payload = await self._liveness_handler()

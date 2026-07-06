@@ -1,7 +1,9 @@
+import asyncio
 import json
 
 import pytest
 
+from copaw_worker import worker_api
 from copaw_worker.worker_api import WorkerAPIServer
 
 
@@ -13,6 +15,13 @@ class _FakeReader:
         if self._lines:
             return self._lines.pop(0)
         return b""
+
+
+class _StallingReader:
+    """Simulates a slowloris client: readline() never completes."""
+
+    async def readline(self):
+        await asyncio.Event().wait()
 
 
 class _FakeWriter:
@@ -188,3 +197,30 @@ async def test_worker_api_returns_404_for_unknown_path():
     assert b"HTTP/1.1 404 Not Found" in headers
     assert writer.closed is True
     assert json.loads(body) == {"message": "not found"}
+
+
+@pytest.mark.anyio
+async def test_worker_api_closes_connection_on_header_read_timeout(monkeypatch):
+    """A stalled client (slowloris) must not hold the connection open forever:
+    the header-read phase is bounded and the socket is closed on timeout."""
+    monkeypatch.setattr(worker_api, "_HEADER_READ_TIMEOUT", 0.05)
+
+    async def liveness_handler():
+        raise AssertionError("liveness handler should not run")
+
+    async def readiness_handler():
+        raise AssertionError("readiness handler should not run")
+
+    server = WorkerAPIServer(
+        host="127.0.0.1",
+        port=0,
+        liveness_handler=liveness_handler,
+        readiness_handler=readiness_handler,
+    )
+    reader = _StallingReader()
+    writer = _FakeWriter()
+
+    await asyncio.wait_for(server._handle(reader, writer), timeout=2)
+
+    assert writer.closed is True
+    assert bytes(writer.body) == b""

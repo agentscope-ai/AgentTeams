@@ -87,14 +87,26 @@ if [ "${HICLAW_RUNTIME}" != "aliyun" ] && [ "${HICLAW_RUNTIME}" != "k8s" ]; then
     # Create symlink for host directory access
     if [ -d "/host-share" ]; then
         ORIGINAL_HOST_HOME="${HOST_ORIGINAL_HOME:-$HOME}"
-        if [ ! -e "${ORIGINAL_HOST_HOME}" ] && [ "${ORIGINAL_HOST_HOME}" != "/" ] && [ "${ORIGINAL_HOST_HOME}" != "/root" ] && [ "${ORIGINAL_HOST_HOME}" != "/data" ] && [ "${ORIGINAL_HOST_HOME}" != "/host-share" ]; then
-            mkdir -p "$(dirname "${ORIGINAL_HOST_HOME}")"
-            ln -sfn /host-share "${ORIGINAL_HOST_HOME}"
-            log "Created symlink: ${ORIGINAL_HOST_HOME} -> /host-share"
-        else
-            ln -sfn /host-share /root/host-home
-            log "Created fallback symlink: /root/host-home -> /host-share"
-        fi
+        case "${ORIGINAL_HOST_HOME}" in
+            /*)
+                if [ ! -e "${ORIGINAL_HOST_HOME}" ] && [ "${ORIGINAL_HOST_HOME}" != "/" ] && [ "${ORIGINAL_HOST_HOME}" != "/root" ] && [ "${ORIGINAL_HOST_HOME}" != "/data" ] && [ "${ORIGINAL_HOST_HOME}" != "/host-share" ]; then
+                    mkdir -p "$(dirname "${ORIGINAL_HOST_HOME}")"
+                    ln -sfn /host-share "${ORIGINAL_HOST_HOME}"
+                    log "Created symlink: ${ORIGINAL_HOST_HOME} -> /host-share"
+                else
+                    ln -sfn /host-share /root/host-home
+                    log "Created fallback symlink: /root/host-home -> /host-share"
+                fi
+                ;;
+            *)
+                # Not an absolute POSIX path (e.g. a raw Windows path like
+                # "C:\Users\foo" leaked through from HOST_ORIGINAL_HOME) — creating
+                # a symlink target from this value would just produce a bogus,
+                # unusable link. Fall back to the standard /root/host-home symlink.
+                ln -sfn /host-share /root/host-home
+                log "HOST_ORIGINAL_HOME ('${ORIGINAL_HOST_HOME}') is not an absolute POSIX path; created fallback symlink: /root/host-home -> /host-share"
+                ;;
+        esac
     fi
 
     # Add local domains to /etc/hosts

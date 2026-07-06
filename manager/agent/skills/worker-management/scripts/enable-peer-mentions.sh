@@ -17,6 +17,7 @@
 
 set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/hiclaw/scripts/lib/container-api.sh
 
 # ============================================================
 # Parse arguments
@@ -143,13 +144,8 @@ for w in "${UPDATED_WORKERS[@]}"; do
         "${REGISTRY_FILE}" 2>/dev/null || true)
     if [ -n "${ROOM_ID}" ]; then
         PEERS=$(printf '%s\n' "${VALIDATED[@]}" | grep -v "^${w}$" | sed "s|^|@|; s|$|:${MATRIX_DOMAIN}|" | tr '\n' ' ' | sed 's/ $//')
-        TXN_ID=$(openssl rand -hex 8)
-        curl -sf -X PUT \
-            "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ID}/send/m.room.message/${TXN_ID}" \
-            -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-            -H 'Content-Type: application/json' \
-            -d "{\"msgtype\":\"m.text\",\"body\":\"@${w}:${MATRIX_DOMAIN} Peer mention enabled: you can now be @mentioned by ${PEERS}. Please run: hiclaw-sync\",\"m.mentions\":{\"user_ids\":[\"@${w}:${MATRIX_DOMAIN}\"]}}" \
-            > /dev/null 2>&1 \
+        MSG="@${w}:${MATRIX_DOMAIN} Peer mention enabled: you can now be @mentioned by ${PEERS}. Please run: hiclaw-sync"
+        send_matrix_message "${HICLAW_MATRIX_URL}" "${MANAGER_MATRIX_TOKEN}" "${ROOM_ID}" "${MSG}" "@${w}:${MATRIX_DOMAIN}" \
             && log "  Notified @${w} to run hiclaw-sync" \
             || log "  WARNING: Failed to notify @${w}"
     fi

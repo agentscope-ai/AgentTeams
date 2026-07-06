@@ -103,8 +103,7 @@ func (c *MinIOClient) GetObject(ctx context.Context, key string) ([]byte, error)
 	}
 	out, err := c.runMC(ctx, "cat", c.fullPath(key))
 	if err != nil {
-		if strings.Contains(err.Error(), "Object does not exist") ||
-			strings.Contains(err.Error(), "exit status") {
+		if isNotExistErr(err) {
 			return nil, os.ErrNotExist
 		}
 		return nil, err
@@ -118,13 +117,21 @@ func (c *MinIOClient) Stat(ctx context.Context, key string) error {
 	}
 	_, err := c.runMC(ctx, "stat", c.fullPath(key))
 	if err != nil {
-		if strings.Contains(err.Error(), "Object does not exist") ||
-			strings.Contains(err.Error(), "exit status") {
+		if isNotExistErr(err) {
 			return os.ErrNotExist
 		}
 		return err
 	}
 	return nil
+}
+
+// isNotExistErr reports whether err represents mc's genuine "object not
+// found" condition. It must NOT match on generic exec failures (e.g. "exit
+// status N", which wraps every non-zero mc exit code including unreachable
+// endpoints, bad/expired credentials, and timeouts) — doing so would
+// collapse real outages into a silently-swallowed os.ErrNotExist.
+func isNotExistErr(err error) bool {
+	return strings.Contains(err.Error(), "Object does not exist")
 }
 
 func (c *MinIOClient) DeleteObject(ctx context.Context, key string) error {

@@ -1,0 +1,43 @@
+{
+  "models": {
+    "default": "claude-sonnet-5"
+  },
+  "gateway": {
+    "url": "https://gateway.example.test"
+  },
+  "channels": {
+    "matrix": {
+      "homeserver": "https://matrix.example.test",
+      "accessToken": "local-fresh-token"
+    },
+    "discord": {
+      "botToken": "local-discord-token"
+    },
+    "slack": {
+      "botToken": "remote-slack-token"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "memory-core": {
+        "enabled": true,
+        "dreamingSchedule": "0 5 * * *"
+      },
+      "web-search": {
+        "enabled": true
+      },
+      "local-only-plugin": {
+        "enabled": true
+      }
+    },
+    "load": {
+      "paths": ["/opt/plugins/local-b", "/opt/plugins/remote-a", "/opt/plugins/shared"]
+    }
+  },
+  "tools": {
+    "localTool": true
+  },
+  "agents": {
+    "localAgent": true
+  }
+}

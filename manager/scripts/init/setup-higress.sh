@@ -12,6 +12,7 @@
 #     upgrades (e.g. switching LLM provider) take effect without a clean reinstall.
 
 source /opt/hiclaw/scripts/lib/base.sh
+source /opt/hiclaw/scripts/lib/gateway-api.sh
 
 MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
 MATRIX_CLIENT_DOMAIN="${HICLAW_MATRIX_CLIENT_DOMAIN:-matrix-client-local.hiclaw.io}"
@@ -36,59 +37,50 @@ CONSOLE_URL="http://127.0.0.1:8001"
 
 # ============================================================
 # Helper: call Higress Console API, log result, never fail.
+#
+# Request/retry/re-login mechanics live in the shared higress_request()
+# (gateway-api.sh) — this is a thin, desc-specific logging wrapper around it
+# (same consolidation as register-provider.sh's higress_api/higress_get).
 # ============================================================
 higress_api() {
     local method="$1"
     local path="$2"
     local desc="$3"
-    shift 3
-    local body="$*"
+    local body="$4"
 
-    local tmpfile
-    tmpfile=$(mktemp)
-    local http_code
-    http_code=$(curl -s -o "${tmpfile}" -w '%{http_code}' -X "${method}" "${CONSOLE_URL}${path}" \
-        -b "${HIGRESS_COOKIE_FILE}" \
-        -H 'Content-Type: application/json' \
-        -d "${body}" 2>/dev/null) || true
-    local response
-    response=$(cat "${tmpfile}" 2>/dev/null)
-    rm -f "${tmpfile}"
+    higress_request "${method}" "${path}" "${body}" || { log "ERROR: ${desc} ... re-login to Higress Console failed"; return 1; }
 
-    if echo "${response}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
-        log "ERROR: ${desc} ... got HTML page (session expired?). Re-login needed."
+    if [ "${HIGRESS_REQUEST_AUTH_FAILED}" = "true" ]; then
+        if echo "${HIGRESS_REQUEST_BODY}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
+            log "ERROR: ${desc} ... got HTML page (session expired?). Re-login needed."
+        else
+            log "ERROR: ${desc} ... HTTP ${HIGRESS_REQUEST_CODE} auth failed"
+        fi
         return 1
     fi
-    if [ "${http_code}" = "401" ] || [ "${http_code}" = "403" ]; then
-        log "ERROR: ${desc} ... HTTP ${http_code} auth failed"
-        return 1
-    fi
-    if echo "${response}" | grep -q '"success":true' 2>/dev/null; then
+
+    if echo "${HIGRESS_REQUEST_BODY}" | grep -q '"success":true' 2>/dev/null; then
         log "${desc} ... OK"
-    elif [ "${http_code}" = "409" ]; then
+    elif [ "${HIGRESS_REQUEST_CODE}" = "409" ]; then
         log "${desc} ... already exists, skipping"
-    elif echo "${response}" | grep -q '"success":false' 2>/dev/null; then
-        log "WARNING: ${desc} ... FAILED (HTTP ${http_code}): ${response}"
-    elif [ "${http_code}" = "200" ] || [ "${http_code}" = "201" ] || [ "${http_code}" = "204" ]; then
-        log "${desc} ... OK (HTTP ${http_code})"
+    elif echo "${HIGRESS_REQUEST_BODY}" | grep -q '"success":false' 2>/dev/null; then
+        log "WARNING: ${desc} ... FAILED (HTTP ${HIGRESS_REQUEST_CODE}): ${HIGRESS_REQUEST_BODY}"
+    elif [ "${HIGRESS_REQUEST_CODE}" = "200" ] || [ "${HIGRESS_REQUEST_CODE}" = "201" ] || [ "${HIGRESS_REQUEST_CODE}" = "204" ]; then
+        log "${desc} ... OK (HTTP ${HIGRESS_REQUEST_CODE})"
     else
-        log "WARNING: ${desc} ... unexpected (HTTP ${http_code}): ${response}"
+        log "WARNING: ${desc} ... unexpected (HTTP ${HIGRESS_REQUEST_CODE}): ${HIGRESS_REQUEST_BODY}"
     fi
 }
 
 # Helper: GET a resource, return body if 200, empty string otherwise.
 higress_get() {
     local path="$1"
-    local tmpfile
-    tmpfile=$(mktemp)
-    local http_code
-    http_code=$(curl -s -o "${tmpfile}" -w '%{http_code}' -X GET "${CONSOLE_URL}${path}" \
-        -b "${HIGRESS_COOKIE_FILE}" 2>/dev/null) || true
-    local body
-    body=$(cat "${tmpfile}" 2>/dev/null)
-    rm -f "${tmpfile}"
-    if [ "${http_code}" = "200" ]; then
-        echo "${body}"
+
+    higress_request GET "${path}" "" || return 1
+    [ "${HIGRESS_REQUEST_AUTH_FAILED}" = "true" ] && return 1
+
+    if [ "${HIGRESS_REQUEST_CODE}" = "200" ]; then
+        echo "${HIGRESS_REQUEST_BODY}"
     fi
 }
 

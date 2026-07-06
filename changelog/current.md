@@ -4,6 +4,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
+- fix(review): code-review remediation across `manager/`, `copaw/`, `hermes/`, `hiclaw-controller/`, `install/`, `plugins/`, and `dashboard/` — Tier 0 (security/data-loss), Tier 1 (correctness), and Tier 2 (cleanup/dedup) findings addressed, including the `systemctl-shim.sh` gateway `status` check now reporting real liveness instead of always exiting 0. Also captures the previously-unrecorded image-affecting changes from `faa8874` (provider-management skill — chat-driven Higress provider onboarding) and `915653d` (fixes for 11 Kilo review findings on PR #2).
 - fix(agent): update file-sharing path guidance for CoPaw and Team Leader agents to use `/root/hiclaw-fs/agents/...` instead of the retired `/root/.hiclaw-worker/...` path.
 - feat(controller): add per-agent `spec.resources` support for Manager, Worker, Team Leader, and Team Worker CRDs.
 

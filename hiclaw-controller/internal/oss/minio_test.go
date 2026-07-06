@@ -1,6 +1,7 @@
 package oss
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -75,5 +76,31 @@ func TestBuildMCHostEnv_NoPercentEncoding(t *testing.T) {
 	}
 	if strings.Contains(got, "%2F") || strings.Contains(got, "%2B") || strings.Contains(got, "%3D") {
 		t.Fatalf("credentials must not be percent-encoded, got %q", got)
+	}
+}
+
+// isNotExistErr must only treat mc's genuine not-found marker as
+// "not exist". Generic exec failures (unreachable endpoint, bad/expired
+// credentials, timeouts) all surface as "exit status N" from runMC and must
+// NOT be collapsed into os.ErrNotExist, or real outages get masked and
+// silently swallowed by callers that treat not-found as a non-error.
+func TestIsNotExistErr_GenuineNotFound(t *testing.T) {
+	err := errors.New(`mc cat hiclaw/bucket/key: exit status 1 (stderr: mc: <ERROR> Object does not exist.)`)
+	if !isNotExistErr(err) {
+		t.Fatalf("expected genuine not-found error to be recognized, got false for %v", err)
+	}
+}
+
+func TestIsNotExistErr_ConnectionFailureNotMasked(t *testing.T) {
+	err := errors.New(`mc cat hiclaw/bucket/key: exit status 1 (stderr: mc: <ERROR> Unable to initialize new alias from the provided credentials.)`)
+	if isNotExistErr(err) {
+		t.Fatalf("connection/auth failure must not be treated as not-exist, got true for %v", err)
+	}
+}
+
+func TestIsNotExistErr_GenericExitStatusNotMasked(t *testing.T) {
+	err := errors.New("exit status 1")
+	if isNotExistErr(err) {
+		t.Fatalf("bare exit status must not be treated as not-exist, got true for %v", err)
 	}
 }

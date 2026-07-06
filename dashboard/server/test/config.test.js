@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { loadConfig, readTokenFile } = require('../src/config');
+const { loadConfig, readTokenFile, invalidateTokenFile } = require('../src/config');
 
 test('loadConfig applies documented defaults when env is empty', () => {
   const cfg = loadConfig({});
@@ -42,4 +42,52 @@ test('readTokenFile trims trailing whitespace/newlines', () => {
   fs.writeFileSync(file, 'abc123\n');
   assert.equal(readTokenFile(file), 'abc123');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Fixed, whole-second timestamps so utimesSync round-trips exactly -- avoids
+// flakiness from sub-millisecond mtime precision differing across
+// filesystems/platforms when comparing before/after stat() results.
+const FIXED_MTIME = new Date('2024-01-01T00:00:00.000Z');
+const LATER_MTIME = new Date('2024-01-01T00:00:05.000Z');
+
+test('readTokenFile caches in memory and does not re-read the file until mtime changes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-test-'));
+  const file = path.join(dir, 'token');
+  try {
+    fs.writeFileSync(file, 'first\n');
+    fs.utimesSync(file, FIXED_MTIME, FIXED_MTIME);
+    assert.equal(readTokenFile(file), 'first');
+
+    // Rewrite the on-disk content but pin mtime back to the same fixed
+    // value: the cache must not notice and must keep returning "first".
+    fs.writeFileSync(file, 'second\n');
+    fs.utimesSync(file, FIXED_MTIME, FIXED_MTIME);
+    assert.equal(readTokenFile(file), 'first');
+
+    // Bump mtime forward -> cache must be invalidated and re-read.
+    fs.utimesSync(file, LATER_MTIME, LATER_MTIME);
+    assert.equal(readTokenFile(file), 'second');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('invalidateTokenFile forces a re-read on the next call even without an mtime change', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-test-'));
+  const file = path.join(dir, 'token');
+  try {
+    fs.writeFileSync(file, 'alpha\n');
+    fs.utimesSync(file, FIXED_MTIME, FIXED_MTIME);
+    assert.equal(readTokenFile(file), 'alpha');
+
+    fs.writeFileSync(file, 'beta\n');
+    fs.utimesSync(file, FIXED_MTIME, FIXED_MTIME); // keep mtime identical
+
+    assert.equal(readTokenFile(file), 'alpha'); // still cached
+
+    invalidateTokenFile(file);
+    assert.equal(readTokenFile(file), 'beta'); // forced re-read
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

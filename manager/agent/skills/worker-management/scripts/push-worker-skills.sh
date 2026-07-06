@@ -13,6 +13,7 @@
 
 set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/hiclaw/scripts/lib/container-api.sh
 
 # ============================================================
 # Parse arguments
@@ -172,15 +173,7 @@ _notify_worker() {
     local msg="@${worker}:${MATRIX_DOMAIN} 我已向你的工作区推送了以下 skills 更新：[${skills_list}]。请使用 file-sync 技能同步最新文件。"
     local worker_id="@${worker}:${MATRIX_DOMAIN}"
 
-    local txn_id
-    txn_id="pws-$(date +%s%N)"
-
-    curl -sf -X PUT \
-        "${matrix_url}/_matrix/client/v3/rooms/${room_id}/send/m.room.message/${txn_id}" \
-        -H "Authorization: Bearer ${token}" \
-        -H 'Content-Type: application/json' \
-        -d "{\"msgtype\":\"m.text\",\"body\":\"${msg}\",\"m.mentions\":{\"user_ids\":[\"${worker_id}\"]}}" \
-        > /dev/null 2>&1 \
+    send_matrix_message "${matrix_url}" "${token}" "${room_id}" "${msg}" "${worker_id}" \
         || log "  WARNING: Failed to send Matrix notification to ${worker}"
     log "  Notified worker '${worker}' via Matrix"
 }

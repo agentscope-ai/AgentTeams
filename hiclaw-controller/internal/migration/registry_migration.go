@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-logr/logr"
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,9 +27,12 @@ const (
 // CRs are created with empty status so that reconcilers run handleCreate normally,
 // re-provisioning infrastructure (idempotent via Ensure* methods) and starting containers.
 //
-// This logic is version-independent: it reconciles registry state with CR state on every
-// startup. Workers/teams/humans in registry files that have no corresponding CR get created.
-// The per-CR Get-before-Create check ensures idempotency — existing CRs are never touched.
+// This logic is version-independent: it reconciles registry state with CR state on
+// startup, repeating on every subsequent startup until a run completes with zero
+// per-CR failures (see the completion marker gate in Run). Workers/teams/humans in
+// registry files that have no corresponding CR get created. The per-CR
+// Get-before-Create check ensures idempotency — existing CRs are never touched, and a
+// partially-failed run safely retries only the still-missing CRs next time.
 type Migrator struct {
 	OSS          oss.StorageClient
 	RestCfg      *rest.Config
@@ -47,6 +51,20 @@ func (m *Migrator) managerName() string {
 
 func (m *Migrator) Run(ctx context.Context) error {
 	logger := ctrl.Log.WithName("migration")
+
+	// Completion gate: once a prior Run has fully succeeded, the marker
+	// object exists in OSS and every subsequent embedded-mode startup can
+	// skip re-loading and re-diffing all registries against the API server.
+	// A Stat error (including a transient OSS outage) is treated as
+	// "not-yet-migrated" so migration still proceeds — Tier-0 already made
+	// minio errors non-masking, so we must not silently skip on a transient
+	// failure here.
+	if m.OSS != nil {
+		if err := m.OSS.Stat(ctx, migrationMarker); err == nil {
+			logger.Info("migration already complete")
+			return nil
+		}
+	}
 
 	dynClient, err := dynamic.NewForConfig(m.RestCfg)
 	if err != nil {
@@ -68,6 +86,7 @@ func (m *Migrator) Run(ctx context.Context) error {
 
 	if len(workersReg) == 0 && len(teamsReg) == 0 && len(humansReg) == 0 {
 		logger.Info("no registry data to reconcile")
+		m.writeMigrationMarker(ctx, logger)
 		return nil
 	}
 
@@ -80,6 +99,8 @@ func (m *Migrator) Run(ctx context.Context) error {
 		}
 	}
 
+	failures := 0
+
 	// Step 1: Create standalone Worker CRs (workers not belonging to any team)
 	workerRes := dynClient.Resource(workerGVR).Namespace(m.Namespace)
 	for name, entry := range workersReg {
@@ -88,6 +109,7 @@ func (m *Migrator) Run(ctx context.Context) error {
 		}
 		if err := m.createStandaloneWorkerCR(ctx, workerRes, name, entry); err != nil {
 			logger.Error(err, "failed to migrate standalone worker (non-fatal)", "worker", name)
+			failures++
 		} else {
 			logger.Info("migrated standalone worker", "name", name)
 		}
@@ -97,6 +119,7 @@ func (m *Migrator) Run(ctx context.Context) error {
 	for teamName, teamEntry := range teamsReg {
 		if err := m.createTeamCR(ctx, dynClient, teamName, teamEntry, workersReg); err != nil {
 			logger.Error(err, "failed to migrate team (non-fatal)", "team", teamName)
+			failures++
 		} else {
 			logger.Info("migrated team", "name", teamName)
 		}
@@ -106,12 +129,38 @@ func (m *Migrator) Run(ctx context.Context) error {
 	for name, entry := range humansReg {
 		if err := m.createHumanCR(ctx, dynClient, name, entry); err != nil {
 			logger.Error(err, "failed to migrate human (non-fatal)", "human", name)
+			failures++
 		} else {
 			logger.Info("migrated human", "name", name)
 		}
 	}
 
+	// Only mark the migration complete when every per-CR create actually
+	// succeeded (or there was nothing to do). If any create failed, skip
+	// writing the marker so the next startup retries the missed CRs — the
+	// per-CR Get-before-Create check keeps this idempotent.
+	if failures > 0 {
+		logger.Info("migration completed with failures; marker not written, will retry on next startup", "failures", failures)
+		return nil
+	}
+
+	m.writeMigrationMarker(ctx, logger)
 	return nil
+}
+
+// writeMigrationMarker persists the completion marker to OSS so that
+// subsequent embedded-mode startups can skip re-loading and re-diffing all
+// registries via the completion gate at the top of Run. Best-effort: a
+// failure to write is logged but does not fail Run — the migration itself
+// already completed (or found nothing to do), and a missing marker only
+// costs a redundant reconcile pass on the next startup, not correctness.
+func (m *Migrator) writeMigrationMarker(ctx context.Context, logger logr.Logger) {
+	if m.OSS == nil {
+		return
+	}
+	if err := m.OSS.PutObject(ctx, migrationMarker, []byte("done")); err != nil {
+		logger.Error(err, "failed to write migration completion marker (non-fatal)")
+	}
 }
 
 // --- Registry types ---

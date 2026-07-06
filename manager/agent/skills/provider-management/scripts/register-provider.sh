@@ -49,6 +49,7 @@
 
 set -uo pipefail
 source /opt/hiclaw/scripts/lib/base.sh
+source /opt/hiclaw/scripts/lib/gateway-api.sh
 
 CONSOLE_URL="http://127.0.0.1:8001"
 AI_GATEWAY_DOMAIN="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
@@ -142,28 +143,13 @@ _ROUTE_NAME="hiclaw-${PROVIDER_NAME}-route"
 
 # ============================================================
 # Session helpers: cookie auth with ONE re-login on stale/expired session.
-# (setup-mcp-proxy.sh:128-180 idiom: HTML response = expired session;
-#  gateway-api.sh:36-50 re-login body shape.)
+# (setup-mcp-proxy.sh:128-180 idiom: HTML response = expired session.)
+#
+# The actual request/retry/re-login mechanics live in the shared
+# higress_request() (gateway-api.sh) — register-provider.sh's higress_api /
+# higress_get / higress_delete are thin, desc-specific logging wrappers
+# around it so each keeps its own success/already-exists/failure messages.
 # ============================================================
-_relogin() {
-    local admin_user="${HICLAW_ADMIN_USER:-}"
-    local admin_password="${HICLAW_ADMIN_PASSWORD:-}"
-
-    if [ -z "${admin_user}" ] || [ -z "${admin_password}" ]; then
-        log "ERROR: Higress session expired and HICLAW_ADMIN_USER/HICLAW_ADMIN_PASSWORD are not set — cannot re-login"
-        return 1
-    fi
-
-    log "Higress session expired, re-logging in..."
-    local body
-    body=$(jq -nc --arg u "${admin_user}" --arg p "${admin_password}" '{username:$u,password:$p}')
-    curl -sf -o /dev/null -X POST "${CONSOLE_URL}/session/login" \
-        -H 'Content-Type: application/json' \
-        -c "${HIGRESS_COOKIE_FILE}" \
-        -d "${body}" 2>/dev/null \
-        || { log "ERROR: re-login to Higress Console failed"; return 1; }
-    return 0
-}
 
 # higress_api <method> <path> <desc> <body>
 # Never echoes <body> (it may carry the provider API key). Retries exactly
@@ -175,82 +161,47 @@ higress_api() {
     local path="$2"
     local desc="$3"
     local body="$4"
-    local attempt
 
-    for attempt in 1 2; do
-        local tmpfile
-        tmpfile=$(mktemp)
-        local http_code
-        http_code=$(curl -s -o "${tmpfile}" -w '%{http_code}' -X "${method}" "${CONSOLE_URL}${path}" \
-            -b "${HIGRESS_COOKIE_FILE}" \
-            -H 'Content-Type: application/json' \
-            -d "${body}" 2>/dev/null) || true
-        local response
-        response=$(cat "${tmpfile}" 2>/dev/null)
-        rm -f "${tmpfile}"
+    higress_request "${method}" "${path}" "${body}" || return 1
 
-        if echo "${response}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
-            if [ "${attempt}" -eq 1 ]; then
-                _relogin || return 1
-                continue
-            fi
+    if [ "${HIGRESS_REQUEST_AUTH_FAILED}" = "true" ]; then
+        if echo "${HIGRESS_REQUEST_BODY}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
             log "ERROR: ${desc} ... got HTML page after re-login (session still invalid)"
-            return 1
-        fi
-
-        if [ "${http_code}" = "401" ] || [ "${http_code}" = "403" ]; then
-            if [ "${attempt}" -eq 1 ]; then
-                _relogin || return 1
-                continue
-            fi
-            log "ERROR: ${desc} ... HTTP ${http_code} auth failed after re-login"
-            return 1
-        fi
-
-        if echo "${response}" | grep -q '"success":true' 2>/dev/null; then
-            log "${desc} ... OK"
-        elif [ "${http_code}" = "409" ]; then
-            log "${desc} ... already exists, skipping"
-        elif echo "${response}" | grep -q '"success":false' 2>/dev/null; then
-            log "WARNING: ${desc} ... FAILED (HTTP ${http_code})"
-        elif [ "${http_code}" = "200" ] || [ "${http_code}" = "201" ] || [ "${http_code}" = "204" ]; then
-            log "${desc} ... OK (HTTP ${http_code})"
         else
-            log "WARNING: ${desc} ... unexpected (HTTP ${http_code})"
+            log "ERROR: ${desc} ... HTTP ${HIGRESS_REQUEST_CODE} auth failed after re-login"
         fi
-        return 0
-    done
+        return 1
+    fi
+
+    if echo "${HIGRESS_REQUEST_BODY}" | grep -q '"success":true' 2>/dev/null; then
+        log "${desc} ... OK"
+    elif [ "${HIGRESS_REQUEST_CODE}" = "409" ]; then
+        log "${desc} ... already exists, skipping"
+    elif echo "${HIGRESS_REQUEST_BODY}" | grep -q '"success":false' 2>/dev/null; then
+        log "WARNING: ${desc} ... FAILED (HTTP ${HIGRESS_REQUEST_CODE})"
+    elif [ "${HIGRESS_REQUEST_CODE}" = "200" ] || [ "${HIGRESS_REQUEST_CODE}" = "201" ] || [ "${HIGRESS_REQUEST_CODE}" = "204" ]; then
+        log "${desc} ... OK (HTTP ${HIGRESS_REQUEST_CODE})"
+    else
+        log "WARNING: ${desc} ... unexpected (HTTP ${HIGRESS_REQUEST_CODE})"
+    fi
+    return 0
 }
 
 # higress_get <path> — returns body if 200, empty otherwise. Re-logins once
 # on an HTML (expired-session) response, same contract as higress_api.
 higress_get() {
     local path="$1"
-    local attempt
 
-    for attempt in 1 2; do
-        local tmpfile
-        tmpfile=$(mktemp)
-        local http_code
-        http_code=$(curl -s -o "${tmpfile}" -w '%{http_code}' -X GET "${CONSOLE_URL}${path}" \
-            -b "${HIGRESS_COOKIE_FILE}" 2>/dev/null) || true
-        local body
-        body=$(cat "${tmpfile}" 2>/dev/null)
-        rm -f "${tmpfile}"
+    higress_request GET "${path}" "" || return 1
 
-        if echo "${body}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
-            if [ "${attempt}" -eq 1 ]; then
-                _relogin || return 1
-                continue
-            fi
-            return 1
-        fi
+    if [ "${HIGRESS_REQUEST_AUTH_FAILED}" = "true" ]; then
+        return 1
+    fi
 
-        if [ "${http_code}" = "200" ]; then
-            echo "${body}"
-        fi
-        return 0
-    done
+    if [ "${HIGRESS_REQUEST_CODE}" = "200" ]; then
+        echo "${HIGRESS_REQUEST_BODY}"
+    fi
+    return 0
 }
 
 # higress_delete <path> <desc> — session-aware DELETE, mirrors higress_api /
@@ -263,49 +214,30 @@ higress_get() {
 higress_delete() {
     local path="$1"
     local desc="$2"
-    local attempt
 
-    for attempt in 1 2; do
-        local tmpfile
-        tmpfile=$(mktemp)
-        local http_code
-        http_code=$(curl -s -o "${tmpfile}" -w '%{http_code}' -X DELETE "${CONSOLE_URL}${path}" \
-            -b "${HIGRESS_COOKIE_FILE}" 2>/dev/null) || true
-        local response
-        response=$(cat "${tmpfile}" 2>/dev/null)
-        rm -f "${tmpfile}"
+    higress_request DELETE "${path}" "" || return 1
 
-        if echo "${response}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
-            if [ "${attempt}" -eq 1 ]; then
-                _relogin || return 1
-                continue
-            fi
+    if [ "${HIGRESS_REQUEST_AUTH_FAILED}" = "true" ]; then
+        if echo "${HIGRESS_REQUEST_BODY}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
             log "ERROR: ${desc} ... got HTML page after re-login (session still invalid)"
-            return 1
+        else
+            log "ERROR: ${desc} ... HTTP ${HIGRESS_REQUEST_CODE} auth failed after re-login"
         fi
-
-        if [ "${http_code}" = "401" ] || [ "${http_code}" = "403" ]; then
-            if [ "${attempt}" -eq 1 ]; then
-                _relogin || return 1
-                continue
-            fi
-            log "ERROR: ${desc} ... HTTP ${http_code} auth failed after re-login"
-            return 1
-        fi
-
-        if [ "${http_code}" = "200" ] || [ "${http_code}" = "204" ]; then
-            log "${desc} ... OK (HTTP ${http_code})"
-            return 0
-        fi
-
-        if [ "${http_code}" = "404" ]; then
-            log "${desc} ... already absent (HTTP 404)"
-            return 0
-        fi
-
-        log "ERROR: ${desc} ... unexpected (HTTP ${http_code})"
         return 1
-    done
+    fi
+
+    if [ "${HIGRESS_REQUEST_CODE}" = "200" ] || [ "${HIGRESS_REQUEST_CODE}" = "204" ]; then
+        log "${desc} ... OK (HTTP ${HIGRESS_REQUEST_CODE})"
+        return 0
+    fi
+
+    if [ "${HIGRESS_REQUEST_CODE}" = "404" ]; then
+        log "${desc} ... already absent (HTTP 404)"
+        return 0
+    fi
+
+    log "ERROR: ${desc} ... unexpected (HTTP ${HIGRESS_REQUEST_CODE})"
+    return 1
 }
 
 # ============================================================

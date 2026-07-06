@@ -571,6 +571,7 @@ if [ -f "${HUMANS_REGISTRY}" ]; then
             log "  Configuring permissions for human: ${_human_name} (${_human_mid})"
 
             # Add human to Leader's groupAllowFrom
+            LEADER_CONFIG="/root/hiclaw-fs/agents/${LEADER_NAME}/openclaw.json"
             if [ -f "${LEADER_CONFIG}" ]; then
                 jq --arg h "${_human_mid}" \
                     'if (.channels.matrix.groupAllowFrom | index($h)) then .

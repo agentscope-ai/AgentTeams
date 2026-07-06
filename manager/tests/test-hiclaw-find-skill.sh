@@ -17,6 +17,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 WORKER_SCRIPT="${PROJECT_ROOT}/manager/agent/worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
 COPAW_SCRIPT="${PROJECT_ROOT}/manager/agent/copaw-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
 HERMES_SCRIPT="${PROJECT_ROOT}/manager/agent/hermes-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
+OPENHUMAN_SCRIPT="${PROJECT_ROOT}/manager/agent/openhuman-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; echo "       expected: $2"; echo "       got:      $3"; FAIL=$((FAIL + 1)); }
@@ -237,7 +238,7 @@ run_case_with_env() {
 
 echo ""
 echo "=== TC1: react performance should still return React skills ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${OPENHUMAN_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-react.log"
@@ -257,7 +258,7 @@ done
 
 echo ""
 echo "=== TC2: pr review should rank code-review skills ahead of postgres matches ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${OPENHUMAN_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-pr-review.log"
@@ -273,7 +274,7 @@ done
 
 echo ""
 echo "=== TC3: nacos backend should derive host/port from SKILLS_API_URL scheme ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${OPENHUMAN_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-nacos-conn.log"
@@ -288,7 +289,7 @@ done
 
 echo ""
 echo "=== TC4: nacos backend should derive namespace from SKILLS_API_URL path ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${OPENHUMAN_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-nacos-namespace.log"
@@ -301,7 +302,7 @@ done
 
 echo ""
 echo "=== TC5: https skills api should use skills CLI backend ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${OPENHUMAN_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-skills-sh.log"
@@ -316,7 +317,7 @@ done
 
 echo ""
 echo "=== TC6: sts-hiclaw nacos backend should request controller STS with cluster header ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${OPENHUMAN_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         mockbin="${TMPDIR_ROOT}/${case_name}-sts-mockbin"

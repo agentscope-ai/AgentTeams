@@ -140,12 +140,30 @@ func (a *Authorizer) authorizeWorkerSelfAction(caller *CallerIdentity, req Authz
 	}
 }
 
+// requireSameTeam fails closed: a team-leader is only granted access when
+// the resource's team was positively resolved AND matches the caller's
+// team. An empty/unresolved ResourceTeam is NOT proof the resource is
+// team-less (see Middleware.resolveResourceTeam) — it just as easily means
+// "the resource exists in another team and we couldn't/didn't look it up",
+// so treating it as "allow" would let a team-leader token reach any
+// resource whose team could not be determined. The one exception is
+// ActionCreate, where there is no existing target resource to resolve a
+// team for — the caller can only be creating a resource in its own team,
+// so ResourceTeam is expected to be pre-populated by the handler/caller of
+// Authorize (never resolved from a lookup) or is inherently self-scoped.
 func (a *Authorizer) requireSameTeam(caller *CallerIdentity, req AuthzRequest) error {
 	if caller.Team == "" {
 		return fmt.Errorf("authorization denied: team-leader %q has no team", caller.Username)
 	}
-	if req.ResourceTeam != "" && req.ResourceTeam != caller.Team {
-		return fmt.Errorf("authorization denied: team-leader %q (team %s) cannot access resource in team %s",
+	if req.Action == ActionCreate {
+		if req.ResourceTeam != "" && req.ResourceTeam != caller.Team {
+			return fmt.Errorf("authorization denied: team-leader %q (team %s) cannot access resource in team %s",
+				caller.Username, caller.Team, req.ResourceTeam)
+		}
+		return nil
+	}
+	if req.ResourceTeam == "" || req.ResourceTeam != caller.Team {
+		return fmt.Errorf("authorization denied: team-leader %q (team %s) cannot access resource in team %q",
 			caller.Username, caller.Team, req.ResourceTeam)
 	}
 	return nil

@@ -1,0 +1,24 @@
+{
+  "tools": {
+    "localTool": true
+  },
+  "models": {
+    "default": "claude-sonnet-5"
+  },
+  "channels": {
+    "matrix": {
+      "homeserver": "https://matrix.example.test",
+      "accessToken": "remote-token"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "web-search": {
+        "enabled": true
+      }
+    },
+    "load": {
+      "paths": ["/opt/plugins/remote-a"]
+    }
+  }
+}

@@ -60,6 +60,56 @@ func TestCreateWorkerRejectsExistingTeamMemberName(t *testing.T) {
 	}
 }
 
+// TestCreateWorkerRejectsInvalidName covers #22: server-side name validation
+// must reject names that don't match ^[a-z0-9][a-z0-9-]*$, mirroring the
+// client-side rule in cmd/hiclaw/create.go so the HTTP API cannot be used to
+// bypass it directly.
+func TestCreateWorkerRejectsInvalidName(t *testing.T) {
+	scheme := newServerTestScheme(t)
+
+	invalidNames := []string{
+		"Worker",      // uppercase
+		"-worker",     // leading hyphen
+		"worker_name", // underscore
+		"worker name", // space
+		"worker.name", // dot
+	}
+
+	for _, name := range invalidNames {
+		k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+		body := []byte(`{"name":"` + name + `","model":"qwen3.5-plus"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.CreateWorker(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("name %q: expected status %d, got %d: %s", name, http.StatusBadRequest, rec.Code, rec.Body.String())
+		}
+
+		var worker v1beta1.Worker
+		if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "default"}, &worker); err == nil {
+			t.Fatalf("name %q: expected worker NOT to be created, but it was", name)
+		}
+	}
+}
+
+func TestCreateWorkerAcceptsValidName(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"name":"valid-worker-1","model":"qwen3.5-plus"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateWorkerPreservesResources(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()

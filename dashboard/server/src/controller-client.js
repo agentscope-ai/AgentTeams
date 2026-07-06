@@ -13,10 +13,13 @@ class ControllerClient {
    * @param {Object} opts
    * @param {string} opts.baseUrl        e.g. "http://127.0.0.1:8080"
    * @param {() => string} opts.getToken function returning the current bearer token
+   * @param {() => void} [opts.onUnauthorized] called when the upstream returns 401,
+   *        so the caller can invalidate a cached token (e.g. after rotation)
    */
   constructor(opts) {
     this.baseUrl = new URL(opts.baseUrl);
     this.getToken = opts.getToken;
+    this.onUnauthorized = opts.onUnauthorized;
   }
 
   _transport() {
@@ -57,6 +60,9 @@ class ControllerClient {
           const chunks = [];
           res.on('data', (c) => chunks.push(c));
           res.on('end', () => {
+            if (res.statusCode === 401 && this.onUnauthorized) {
+              this.onUnauthorized();
+            }
             resolve({
               statusCode: res.statusCode,
               headers: sanitizeResponseHeaders(res.headers),
@@ -74,12 +80,24 @@ class ControllerClient {
 
 // sanitizeResponseHeaders strips anything that could leak the admin token
 // (or hop-by-hop headers we don't want forwarded) before the response is
-// relayed to the browser.
+// relayed to the browser. content-length and content-encoding are also
+// stripped: the body we hand back has already been fully buffered/relayed
+// as-is by the caller, and forwarding a stale content-length (or an encoding
+// that doesn't match what's actually sent) can leave the browser hanging on
+// a mismatched-length response -- Node recomputes content-length itself when
+// it's omitted.
 function sanitizeResponseHeaders(headers) {
   const out = {};
   for (const [k, v] of Object.entries(headers || {})) {
     const lower = k.toLowerCase();
-    if (lower === 'authorization' || lower === 'set-cookie' || lower === 'connection' || lower === 'transfer-encoding') {
+    if (
+      lower === 'authorization' ||
+      lower === 'set-cookie' ||
+      lower === 'connection' ||
+      lower === 'transfer-encoding' ||
+      lower === 'content-length' ||
+      lower === 'content-encoding'
+    ) {
       continue;
     }
     out[lower] = v;

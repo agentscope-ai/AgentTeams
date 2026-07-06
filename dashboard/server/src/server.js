@@ -2,7 +2,7 @@
 
 const http = require('node:http');
 const path = require('node:path');
-const { loadConfig, readTokenFile } = require('./config');
+const { loadConfig, readTokenFile, invalidateTokenFile } = require('./config');
 const { ControllerClient } = require('./controller-client');
 const { MinioClient } = require('./minio-client');
 const { createRequestHandler } = require('./handler');
@@ -15,6 +15,7 @@ function main() {
   const controllerClient = new ControllerClient({
     baseUrl: config.controllerUrl,
     getToken: () => readTokenFile(config.tokenFile),
+    onUnauthorized: () => invalidateTokenFile(config.tokenFile),
   });
 
   const minioClient = new MinioClient({

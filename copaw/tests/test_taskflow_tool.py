@@ -1,4 +1,5 @@
 import json
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -1435,3 +1436,58 @@ async def test_ack_task_missing_spec_does_not_write_in_progress(tmp_path, monkey
     assert "spec" in payload["error"]
     meta = json.loads((task_dir / "meta.json").read_text())
     assert meta["status"] == "assigned"
+
+
+@pytest.mark.asyncio
+async def test_delegate_task_runs_blocking_sync_off_event_loop(tmp_path, monkeypatch):
+    """Regression test for event-loop blocking: push_shared_path must run in a worker thread."""
+    working_dir = tmp_path / "worker" / ".copaw"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    _set_actor(monkeypatch, "@leader:domain")
+
+    main_thread = threading.current_thread()
+    seen = {}
+
+    class FakeSync:
+        def push_shared_path(self, path, exclude=None):
+            seen["thread"] = threading.current_thread()
+            seen["path"] = path
+
+    monkeypatch.setattr(taskflow_tool, "create_sync", lambda: FakeSync())
+
+    response = await projectflow(
+        action="create_project",
+        payload={"projectId": "tp-thread", "title": "Thread test project"},
+    )
+    assert _response_json(response)["ok"] is True
+
+    response = await projectflow(
+        action="plan_dag",
+        payload={
+            "projectId": "tp-thread",
+            "tasks": [
+                {
+                    "taskId": "tp-thread-01",
+                    "title": "Threaded task",
+                    "assignedTo": "@worker:domain",
+                    "dependsOn": [],
+                },
+            ],
+        },
+    )
+    assert _response_json(response)["ok"] is True
+
+    response = await taskflow(
+        action="delegate_task",
+        payload={
+            "projectId": "tp-thread",
+            "taskId": "tp-thread-01",
+            "roomId": "room:!team-room:domain",
+            "spec": "Do the work.",
+        },
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert seen["thread"] is not main_thread
+    assert seen["path"] == "shared/tasks/tp-thread-01/"

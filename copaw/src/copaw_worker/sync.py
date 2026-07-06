@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import os
@@ -250,6 +251,11 @@ class FileSync:
         self._k8s_mode = os.environ.get("HICLAW_RUNTIME") == "k8s"
         self._worker_info: dict[str, Any] | None = None
         self._skipped_local_skills_logged: set[str] = set()
+        # push_local content cache: key -> (mtime, content-hash) as of the
+        # last successful push/skip decision. Lets push_local skip the
+        # remote `mc cat` GET for a file whose mtime hasn't changed since
+        # the last time we confirmed its pushed/remote state.
+        self._push_content_cache: dict[str, tuple[float, str]] = {}
 
     # ------------------------------------------------------------------
     # mc alias management
@@ -732,6 +738,13 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     mtime > `since` (epoch seconds), then content-compares before uploading.
     When since=0 (first run), scans all eligible files.
 
+    A per-``FileSync`` content cache (``sync._push_content_cache``), keyed by
+    object key -> (mtime, content-hash) as of the last successful push/skip
+    decision, lets a file whose mtime is unchanged since that decision skip
+    the remote ``mc cat`` GET entirely. A changed mtime, or a content hash
+    mismatch at the same mtime, always falls through to the remote compare
+    so genuinely changed files still upload.
+
     Excludes Manager-managed files only. AGENTS.md, SOUL.md, .copaw/sessions/
     are Worker-managed and are pushed (including session backup).
     """
@@ -817,12 +830,28 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
 
         key = f"{sync._prefix}/{rel.as_posix()}"
         try:
-            remote = sync._cat(key)
+            mtime = path.stat().st_mtime
             local_content = path.read_text(errors="replace")
+            content_hash = hashlib.sha256(local_content.encode("utf-8", errors="replace")).hexdigest()
+
+            cached = sync._push_content_cache.get(key)
+            if cached is not None and cached[0] == mtime:
+                # mtime unchanged since the last successful push/skip decision
+                # for this file — the remote is known to already match
+                # (either we pushed this exact content, or we previously
+                # confirmed it matched remote), so skip the remote GET.
+                if cached[1] == content_hash:
+                    continue
+                # Same mtime but different content (e.g. same-second edit) —
+                # fall through and re-verify against remote to stay correct.
+
+            remote = sync._cat(key)
             if remote == local_content:
+                sync._push_content_cache[key] = (mtime, content_hash)
                 continue
             dest = sync._object_path(key)
             _mc("cp", str(path), dest, check=True)
+            sync._push_content_cache[key] = (mtime, content_hash)
             pushed.append(str(rel))
             logger.debug("Pushed %s -> %s", rel, dest)
         except Exception as exc:

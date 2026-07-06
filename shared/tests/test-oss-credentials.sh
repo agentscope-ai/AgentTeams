@@ -102,4 +102,37 @@ without_cluster="$(run_refresh without-cluster)"
 assert_not_contains "cluster header should be omitted when HICLAW_CLUSTER_ID is empty" "X-HiClaw-Cluster-ID:" "${without_cluster}"
 assert_contains "bearer token should be sent without cluster id" "Authorization: Bearer controller-token" "${without_cluster}"
 
+echo ""
+echo "=== oss credentials refresh-fails-but-cache-valid fallback ==="
+
+run_refresh_failure_fallback() {
+    local case_name="refresh-fails-but-cache-valid"
+    local mc_env="${TMPDIR_ROOT}/${case_name}-mc.env"
+    local stderr_log="${TMPDIR_ROOT}/${case_name}-stderr.log"
+
+    # Seed a stale-but-not-yet-expired credentials cache.
+    cat > "${mc_env}" <<EOF
+MC_HOST_hiclaw="https://stale-ak:stale-sk:stale-token@oss.example.test"
+_OSS_CRED_EXPIRES_AT=$(( $(date +%s) + 100 ))
+EOF
+
+    (
+        . "${PROJECT_ROOT}/shared/lib/oss-credentials.sh"
+        _OSS_CRED_FILE="${mc_env}"
+        _OSS_CRED_REFRESH_MARGIN=99999999  # force needs_refresh=true regardless of expiry
+
+        _oss_failing_refresh() { return 1; }
+
+        _oss_ensure_refresh _oss_failing_refresh
+        echo "MC_HOST_hiclaw=${MC_HOST_hiclaw:-}"
+    ) 2>"${stderr_log}" 1>"${TMPDIR_ROOT}/${case_name}-stdout.log"
+
+    cat "${TMPDIR_ROOT}/${case_name}-stdout.log"
+    cat "${stderr_log}" >&2
+}
+
+fallback_stdout="$(run_refresh_failure_fallback 2>"${TMPDIR_ROOT}/refresh-fails-but-cache-valid-stderr-captured.log")"
+assert_contains "MC_HOST_hiclaw stays exported when refresh fails but cache is valid" "MC_HOST_hiclaw=https://stale-ak:stale-sk:stale-token@oss.example.test" "${fallback_stdout}"
+assert_contains "a clear fallback warning is surfaced on stderr" "STS refresh failed, using cached credentials" "$(cat "${TMPDIR_ROOT}/refresh-fails-but-cache-valid-stderr-captured.log")"
+
 echo "All oss-credentials tests passed"

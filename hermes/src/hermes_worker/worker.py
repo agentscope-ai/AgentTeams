@@ -50,6 +50,8 @@ class Worker:
         self.sync: Optional[FileSync] = None
         self._hermes_home: Path = config.hermes_home
         self._gateway_task: Optional[asyncio.Task] = None
+        self._sync_task: Optional[asyncio.Task] = None
+        self._push_task: Optional[asyncio.Task] = None
         self._stopping = False
         self._skipped_local_skills_logged: set[str] = set()
 
@@ -78,6 +80,13 @@ class Worker:
                 await self._gateway_task
             except (asyncio.CancelledError, Exception):
                 pass
+        for task in (self._sync_task, self._push_task):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
         console.print("[green]Hermes worker stopped.[/green]")
 
     # ------------------------------------------------------------------
@@ -153,14 +162,14 @@ class Worker:
         self._sync_skills()
         self._copy_mcporter_config()
 
-        asyncio.create_task(
+        self._sync_task = asyncio.create_task(
             sync_loop(
                 self.sync,
                 interval=self.config.sync_interval,
                 on_pull=self._on_files_pulled,
             )
         )
-        asyncio.create_task(push_loop(self.sync, check_interval=5))
+        self._push_task = asyncio.create_task(push_loop(self.sync, check_interval=5))
 
         console.print("[bold green]Hermes worker initialized.[/bold green]")
         return True

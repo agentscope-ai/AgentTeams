@@ -366,7 +366,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
             "reason": "tool behavior is defined by later TeamHarness behavior slices",
             "arguments": args,
         }
-    return {
+    result: dict[str, Any] = {
         "content": [
             {
                 "type": "text",
@@ -374,6 +374,9 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
             }
         ]
     }
+    if payload.get("ok") is False:
+        result["isError"] = True
+    return result
 
 
 def _matrix_target(target: str) -> tuple[str, str]:

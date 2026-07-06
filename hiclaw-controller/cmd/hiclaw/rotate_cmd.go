@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -37,7 +38,7 @@ Secret, then restart the controller for the change to take effect permanently.`,
 				body["hs_token"] = hsToken
 			}
 			var resp map[string]string
-			if err := client.DoJSON("POST", "/api/v1/appservice/rotate-token", body, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "POST", "/api/v1/appservice/rotate-token", body, &resp); err != nil {
 				return fmt.Errorf("rotate appservice token: %w", err)
 			}
 			fmt.Println(resp["message"])

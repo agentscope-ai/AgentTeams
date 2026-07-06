@@ -34,7 +34,17 @@ find_gateway_pid() {
 # Handle openclaw-gateway service operations, or bare 'status' (for assertSystemdAvailable)
 if [[ "$UNIT" == openclaw-gateway* || ( "$SUBCOMMAND" == "status" && -z "$UNIT" ) ]]; then
     case "$SUBCOMMAND" in
-        status|daemon-reload|enable|disable)
+        status)
+            if [[ "$UNIT" == openclaw-gateway* ]]; then
+                if find_gateway_pid > /dev/null 2>&1; then
+                    exit 0
+                fi
+                echo "openclaw-gateway: not running" >&2
+                exit 1
+            fi
+            exit 0
+            ;;
+        daemon-reload|enable|disable)
             exit 0
             ;;
         is-enabled)

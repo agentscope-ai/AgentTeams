@@ -1,0 +1,37 @@
+{
+  "models": {
+    "default": "claude-haiku-4"
+  },
+  "gateway": {
+    "url": "https://gateway.local.test"
+  },
+  "channels": {
+    "matrix": {
+      "homeserver": "https://matrix.example.test",
+      "accessToken": "local-fresh-token"
+    },
+    "discord": {
+      "botToken": "local-discord-token"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "memory-core": {
+        "enabled": true,
+        "dreamingSchedule": "0 5 * * *"
+      },
+      "local-only-plugin": {
+        "enabled": true
+      }
+    },
+    "load": {
+      "paths": ["/opt/plugins/local-b", "/opt/plugins/shared"]
+    }
+  },
+  "tools": {
+    "localTool": true
+  },
+  "agents": {
+    "localAgent": true
+  }
+}

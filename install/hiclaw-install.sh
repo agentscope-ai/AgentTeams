@@ -3443,15 +3443,18 @@ CREDEOF
         case "${_fs_domain}" in *:*) ;; *) _fs_domain="${_fs_domain}:${_internal_gw_port}" ;; esac
 
         # Controller env args
+        #
+        # NOTE: HICLAW_ADMIN_PASSWORD, HICLAW_MANAGER_PASSWORD,
+        # HICLAW_MINIO_PASSWORD and HICLAW_LLM_API_KEY are intentionally NOT
+        # passed here via -e — that would land them in plaintext in
+        # `docker inspect`'s Config.Env. They are already written to
+        # ENV_FILE above and are supplied to the container via --env-file
+        # on the `docker run` below instead.
         local _ctrl_env_args=(
             -e "HICLAW_ADMIN_USER=${HICLAW_ADMIN_USER}"
-            -e "HICLAW_ADMIN_PASSWORD=${HICLAW_ADMIN_PASSWORD}"
-            -e "HICLAW_MANAGER_PASSWORD=${HICLAW_MANAGER_PASSWORD}"
             -e "HICLAW_REGISTRATION_TOKEN=${HICLAW_REGISTRATION_TOKEN}"
             -e "HICLAW_MINIO_USER=${HICLAW_MINIO_USER}"
-            -e "HICLAW_MINIO_PASSWORD=${HICLAW_MINIO_PASSWORD}"
             -e "HICLAW_LLM_PROVIDER=${HICLAW_LLM_PROVIDER}"
-            -e "HICLAW_LLM_API_KEY=${HICLAW_LLM_API_KEY}"
             -e "HICLAW_DEFAULT_MODEL=${HICLAW_DEFAULT_MODEL}"
             -e "HICLAW_MANAGER_GATEWAY_KEY=${HICLAW_MANAGER_GATEWAY_KEY}"
             -e "HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-copaw}"
@@ -3542,6 +3545,7 @@ CREDEOF
             --network-alias matrix-local.hiclaw.io \
             --network-alias aigw-local.hiclaw.io \
             --network-alias fs-local.hiclaw.io \
+            --env-file "${ENV_FILE}" \
             "${_ctrl_env_args[@]}" \
             -v "${CONTAINER_SOCK}:/var/run/docker.sock" \
             --security-opt label=disable \
@@ -3887,8 +3891,20 @@ install_worker() {
     DOCKER_ENV="${DOCKER_ENV} -w /root/hiclaw-fs/agents/${WORKER_NAME}"
     DOCKER_ENV="${DOCKER_ENV} -e HICLAW_WORKER_NAME=${WORKER_NAME}"
     DOCKER_ENV="${DOCKER_ENV} -e HICLAW_FS_ENDPOINT=${FS}"
-    DOCKER_ENV="${DOCKER_ENV} -e HICLAW_FS_ACCESS_KEY=${FS_KEY}"
-    DOCKER_ENV="${DOCKER_ENV} -e HICLAW_FS_SECRET_KEY=${FS_SECRET}"
+
+    # HICLAW_FS_ACCESS_KEY/HICLAW_FS_SECRET_KEY are intentionally NOT passed
+    # via -e — that would land them in plaintext in `docker inspect`'s
+    # Config.Env. Write them to a user-only-readable temp env file instead
+    # and pass it via --env-file, removing it once the container is started.
+    local _worker_env_file
+    _worker_env_file="$(mktemp "${TMPDIR:-/tmp}/hiclaw-worker-env.XXXXXX")"
+    chmod 600 "${_worker_env_file}"
+    {
+        printf 'HICLAW_FS_ACCESS_KEY=%s\n' "${FS_KEY}"
+        printf 'HICLAW_FS_SECRET_KEY=%s\n' "${FS_SECRET}"
+    } > "${_worker_env_file}"
+    # shellcheck disable=SC2064
+    trap "rm -f '${_worker_env_file}'" EXIT INT TERM
 
     if [ -z "${SKILLS_API_URL}" ]; then
         if [ -n "${HICLAW_SKILLS_API_URL:-}" ]; then
@@ -3914,9 +3930,13 @@ install_worker() {
     # shellcheck disable=SC2086
     ${DOCKER_CMD} run -d \
         --name "${CONTAINER_NAME}" \
+        --env-file "${_worker_env_file}" \
         ${DOCKER_ENV} \
         --restart unless-stopped \
         "${WORKER_IMAGE}"
+
+    rm -f "${_worker_env_file}"
+    trap - EXIT INT TERM
 
     log ""
     log "$(msg worker.started "${WORKER_NAME}")"

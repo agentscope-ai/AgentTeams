@@ -50,6 +50,20 @@ python_test = <<~PY
   payload = json.loads(unknown["result"]["content"][0]["text"])
   if payload.get("error") != "unknown_tool":
       raise AssertionError(f"unexpected unknown-tool response: {payload!r}")
+  if unknown["result"].get("isError") is not True:
+      raise AssertionError(f"expected isError True for unknown tool: {unknown!r}")
+
+  healthy = handle_request({
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "tools/call",
+      "params": {"name": "health", "arguments": {}},
+  })
+  health_payload = json.loads(healthy["result"]["content"][0]["text"])
+  if health_payload.get("ok") is not True:
+      raise AssertionError(f"unexpected health response: {health_payload!r}")
+  if "isError" in healthy["result"] and healthy["result"]["isError"]:
+      raise AssertionError(f"did not expect isError on success: {healthy!r}")
 
   print(json.dumps({"ok": True, "tools": names}, ensure_ascii=False))
 PY

@@ -10,6 +10,7 @@ import (
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/httputil"
+	"github.com/hiclaw/hiclaw-controller/internal/validation"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -98,6 +99,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := validation.ValidateResourceName(req.Name); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -384,9 +389,27 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if err := validation.ValidateResourceName(req.Name); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.Leader.Name == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "leader.name is required")
 		return
+	}
+	if err := validation.ValidateResourceName(req.Leader.Name); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "leader.name: "+err.Error())
+		return
+	}
+	for _, tw := range req.Workers {
+		if tw.Name == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "workers[].name is required")
+			return
+		}
+		if err := validation.ValidateResourceName(tw.Name); err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, "workers[].name: "+err.Error())
+			return
+		}
 	}
 
 	team := &v1beta1.Team{
@@ -631,6 +654,10 @@ func (h *ResourceHandler) CreateHuman(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if err := validation.ValidateResourceName(req.Name); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	permissionLevel := req.PermissionLevel
 	if h.soloOperator && permissionLevel == 0 {
@@ -724,6 +751,10 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.Name == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := validation.ValidateResourceName(req.Name); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Model == "" {
@@ -895,6 +926,10 @@ func (h *ResourceHandler) CreateProject(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.Name == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := validation.ValidateResourceName(req.Name); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Team == "" {

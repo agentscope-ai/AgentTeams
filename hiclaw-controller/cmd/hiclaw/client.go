@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,7 +67,7 @@ func discoverToken() string {
 
 // Do sends an HTTP request and returns the raw response.
 // body may be nil for methods that have no request body.
-func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, error) {
+func (c *APIClient) Do(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
 	url := c.BaseURL + path
 
 	var bodyReader io.Reader
@@ -78,7 +79,7 @@ func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, e
 		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -95,8 +96,8 @@ func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, e
 
 // DoJSON sends a request, checks for 2xx, and decodes the response body into result.
 // result may be nil if the caller does not need the response body (e.g. DELETE → 204).
-func (c *APIClient) DoJSON(method, path string, body, result interface{}) error {
-	resp, err := c.Do(method, path, body)
+func (c *APIClient) DoJSON(ctx context.Context, method, path string, body, result interface{}) error {
+	resp, err := c.Do(ctx, method, path, body)
 	if err != nil {
 		return err
 	}
@@ -130,7 +131,7 @@ func (c *APIClient) DoJSON(method, path string, body, result interface{}) error 
 // DoMultipart uploads a file via multipart/form-data.
 // fieldName is the form field name for the file (e.g. "file").
 // Extra string key-value pairs are sent as form fields.
-func (c *APIClient) DoMultipart(path, fieldName, fileName string, fileData []byte, fields map[string]string, result interface{}) error {
+func (c *APIClient) DoMultipart(ctx context.Context, path, fieldName, fileName string, fileData []byte, fields map[string]string, result interface{}) error {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
@@ -152,7 +153,7 @@ func (c *APIClient) DoMultipart(path, fieldName, fileName string, fileData []byt
 	}
 
 	url := c.BaseURL + path
-	req, err := http.NewRequest("POST", url, &buf)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, &buf)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -193,8 +194,8 @@ func (c *APIClient) DoMultipart(path, fieldName, fileName string, fileData []byt
 
 // ResourceExists checks whether a resource exists by issuing a GET request.
 // Returns true on 2xx, false on 404, and an error for other status codes.
-func (c *APIClient) ResourceExists(path string) (bool, error) {
-	resp, err := c.Do("GET", path, nil)
+func (c *APIClient) ResourceExists(ctx context.Context, path string) (bool, error) {
+	resp, err := c.Do(ctx, "GET", path, nil)
 	if err != nil {
 		return false, err
 	}

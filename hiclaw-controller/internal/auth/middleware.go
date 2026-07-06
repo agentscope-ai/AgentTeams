@@ -8,6 +8,7 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/httputil"
+	"k8s.io/apimachinery/pkg/fields"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -117,7 +118,22 @@ func (m *Middleware) RequireAuthz(action Action, kind string, nameFn ResourceNam
 	}
 }
 
-// resolveResourceTeam looks up the target resource's team annotation.
+// resolveResourceTeam resolves the target worker's team from the
+// authoritative source. Post team-refactor, team members (leader and
+// worker) have no Worker CR at all — they exist only as entries in a
+// Team CR's spec — so a Team CR reverse lookup (by leader/worker name,
+// via the same field indexers CREnricher uses) is authoritative and is
+// tried first. A standalone Worker CR's "hiclaw.io/team" annotation is
+// consulted only as a defensive fallback for legacy/pre-refactor
+// resources (see isTeamMemberWorker in resource_handler.go); standalone
+// Workers created via the current /workers API never carry that
+// annotation (CreateWorker rejects team/role fields), so this fallback
+// normally yields "".
+//
+// Returns "" when the resource's team is truly unknown/absent — callers
+// (requireSameTeam) MUST treat "" as "deny for team-leaders", not
+// "allow", since an unresolved team is not proof the resource is
+// team-less.
 func (m *Middleware) resolveResourceTeam(ctx context.Context, kind, name string) string {
 	if name == "" || m.k8s == nil {
 		return ""
@@ -126,12 +142,39 @@ func (m *Middleware) resolveResourceTeam(ctx context.Context, kind, name string)
 		return ""
 	}
 
+	// 1. Authoritative: reverse lookup against Team CRs (leader or worker
+	// member name). This is the only linkage for post-refactor team members.
+	if team, ok, err := m.lookupTeamByField(ctx, teamLeaderNameField, name); err == nil && ok {
+		return team.Name
+	}
+	if team, ok, err := m.lookupTeamByField(ctx, teamWorkerNameField, name); err == nil && ok {
+		return team.Name
+	}
+
+	// 2. Defensive fallback: legacy annotation on a standalone Worker CR.
 	var worker v1beta1.Worker
 	key := client.ObjectKey{Name: name, Namespace: m.namespace}
 	if err := m.k8s.Get(ctx, key, &worker); err != nil {
 		return ""
 	}
 	return worker.Annotations["hiclaw.io/team"]
+}
+
+// lookupTeamByField mirrors CREnricher.lookupTeamByField (duplicated rather
+// than shared to keep resolveResourceTeam self-contained within middleware.go;
+// both use the same teamLeaderNameField/teamWorkerNameField indexers).
+func (m *Middleware) lookupTeamByField(ctx context.Context, field, value string) (*v1beta1.Team, bool, error) {
+	var list v1beta1.TeamList
+	if err := m.k8s.List(ctx, &list,
+		client.InNamespace(m.namespace),
+		client.MatchingFieldsSelector{Selector: fields.OneTermEqualSelector(field, value)},
+	); err != nil {
+		return nil, false, err
+	}
+	if len(list.Items) == 0 {
+		return nil, false, nil
+	}
+	return &list.Items[0], true, nil
 }
 
 func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bool) {

@@ -6,6 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // mockAuthenticator is a test authenticator that returns a fixed identity for a known token.
@@ -191,5 +195,68 @@ func TestCallerFromContext_Empty(t *testing.T) {
 	ctx := context.Background()
 	if CallerFromContext(ctx) != nil {
 		t.Error("expected nil for empty context")
+	}
+}
+
+// TestResolveResourceTeam covers the authoritative worker->team resolution:
+// Team CR reverse lookup (leader or worker member name) takes priority,
+// since post-refactor team members have no Worker CR at all. The legacy
+// "hiclaw.io/team" annotation on a standalone Worker CR is only consulted
+// as a defensive fallback. A worker that resolves to neither returns "".
+func TestResolveResourceTeam(t *testing.T) {
+	scheme := newAuthTestScheme(t)
+
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.Leader = v1beta1.LeaderSpec{Name: "alpha-lead"}
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{{Name: "alpha-dev"}}
+
+	legacyAnnotatedWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "legacy-worker",
+			Namespace:   "default",
+			Annotations: map[string]string{"hiclaw.io/team": "legacy-team"},
+		},
+	}
+
+	standaloneWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "standalone-worker",
+			Namespace: "default",
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, legacyAnnotatedWorker, standaloneWorker).
+		WithIndex(&v1beta1.Team{}, teamLeaderNameField, indexTeamLeaderNames).
+		WithIndex(&v1beta1.Team{}, teamWorkerNameField, indexTeamWorkerNames).
+		Build()
+
+	mw := &Middleware{k8s: k8sClient, namespace: "default"}
+
+	cases := []struct {
+		name string
+		kind string
+		rsrc string
+		want string
+	}{
+		{name: "team leader resolves via Team CR", kind: "worker", rsrc: "alpha-lead", want: "alpha-team"},
+		{name: "team worker resolves via Team CR", kind: "worker", rsrc: "alpha-dev", want: "alpha-team"},
+		{name: "standalone worker with no annotation resolves empty", kind: "worker", rsrc: "standalone-worker", want: ""},
+		{name: "legacy annotated worker falls back to annotation", kind: "worker", rsrc: "legacy-worker", want: "legacy-team"},
+		{name: "unknown worker resolves empty", kind: "worker", rsrc: "does-not-exist", want: ""},
+		{name: "non-worker kind resolves empty", kind: "team", rsrc: "alpha-team", want: ""},
+		{name: "empty name resolves empty", kind: "worker", rsrc: "", want: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mw.resolveResourceTeam(context.Background(), tc.kind, tc.rsrc)
+			if got != tc.want {
+				t.Errorf("resolveResourceTeam(%q, %q) = %q, want %q", tc.kind, tc.rsrc, got, tc.want)
+			}
+		})
 	}
 }

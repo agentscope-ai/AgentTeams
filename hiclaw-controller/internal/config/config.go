@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -219,6 +217,7 @@ type WorkerEnvDefaults struct {
 	CMSLicenseKey     string
 	CMSProject        string
 	CMSWorkspace      string
+	CMSServiceName    string
 
 	// SkillsAPIURL is propagated to workers as SKILLS_API_URL.
 	// Sourced from SKILLS_API_URL, falling back to HICLAW_SKILLS_API_URL.
@@ -383,6 +382,7 @@ func LoadConfig() *Config {
 			CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
 			CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
 			CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
+			CMSServiceName:    os.Getenv("HICLAW_CMS_SERVICE_NAME"),
 			SkillsAPIURL:      envOrDefault("SKILLS_API_URL", os.Getenv("HICLAW_SKILLS_API_URL")),
 			NacosAuthType:     os.Getenv("NACOS_AUTH_TYPE"),
 		},
@@ -541,15 +541,6 @@ func envOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
-}
-
-// generateRandomHex returns a cryptographically random hex string of n bytes (2n hex chars).
-func generateRandomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
-	}
-	return hex.EncodeToString(b)
 }
 
 func envOrDefaultInt(key string, defaultVal int) int {

@@ -1,0 +1,26 @@
+{
+  "models": {
+    "default": "claude-haiku-4"
+  },
+  "gateway": {
+    "url": "https://gateway.local.test"
+  },
+  "channels": {
+    "discord": {
+      "botToken": "local-discord-token"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "local-only-plugin": {
+        "enabled": true
+      }
+    },
+    "load": {
+      "paths": ["/opt/plugins/local-b"]
+    }
+  },
+  "tools": {
+    "localTool": true
+  }
+}

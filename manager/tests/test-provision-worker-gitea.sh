@@ -214,6 +214,29 @@ CURLSHIM
     chmod +x "${sandbox}/bin/curl"
 }
 
+# The jq shim: wraps the REAL jq but forces a parse failure (non-zero exit,
+# no stdout) whenever the target file contains the literal marker "not
+# json" — reproducing exactly what a real jq does on invalid JSON, without
+# needing an actually-corrupt-enough fixture. Every other invocation passes
+# straight through to the real jq on PATH. Used only by TC13 (corrupt
+# mcporter.json) so the rest of the suite keeps exercising real jq.
+write_jq_corrupt_shim() {
+    local sandbox="$1" real_jq
+    real_jq=$(command -v jq) || { echo "SKIP: no real jq on PATH, cannot install corrupt-jq shim" >&2; return 1; }
+    cat > "${sandbox}/bin/jq" << JQSHIM
+#!/bin/bash
+REAL_JQ="${real_jq}"
+for a in "\$@"; do
+    if [ -f "\$a" ] && grep -q "not json" "\$a" 2>/dev/null; then
+        echo "jq: error: parse error (simulated)" >&2
+        exit 5
+    fi
+done
+exec "\${REAL_JQ}" "\$@"
+JQSHIM
+    chmod +x "${sandbox}/bin/jq"
+}
+
 # The mc shim: `cat` reads from the sandbox's fake hiclaw-fs manifest tree
 # (falls back to empty), `cp`/`mirror`/`stat` are no-ops that succeed.
 write_mc_shim() {
@@ -490,6 +513,50 @@ echo "=== TC12: --deprovision — missing/unreadable manifest aborts BEFORE dere
     assert_not_contains "does NOT print Deprovisioning complete" "Deprovisioning complete" "${out}"
     assert_not_contains "no collaborator DELETE ever fires" "/collaborators/worker-alice" "${log}"
     assert_not_contains "never reaches deregistration of the mcp server" "DELETE http://127.0.0.1:8001/v1/mcpServer?name=mcp-gitea-alice" "${log}"
+}
+
+echo ""
+echo "=== TC13: provision — corrupt existing mcporter.json is kept intact, not truncated ==="
+{
+    # update_worker_mcporter() hardcodes /root/hiclaw-fs/agents/<worker> and
+    # /data/worker-creds/<worker>.env (not sandboxable via HOME/PATH), so this
+    # case seeds those real absolute paths for a throwaway worker name, runs
+    # a full do_provision via run_provision (with a jq shim that simulates a
+    # parse failure on the corrupt file, like a real jq would), and cleans up
+    # afterward regardless of outcome.
+    if ! mkdir -p /data/worker-creds 2>/dev/null; then
+        echo "  SKIP: cannot write /data/worker-creds (no permission) — skipping TC13"
+    else
+        s=$(new_sandbox)
+        write_curl_shim "${s}"
+        write_mc_shim "${s}"
+        write_manifest "${s}" "proj1" "${FIXTURE_MANIFEST}"
+
+        tc13_worker="tc13probe$$"
+        tc13_agent_dir="/root/hiclaw-fs/agents/${tc13_worker}"
+        tc13_creds="/data/worker-creds/${tc13_worker}.env"
+        cleanup_tc13() { rm -rf "${tc13_agent_dir}"; rm -f "${tc13_creds}"; }
+
+        mkdir -p "${tc13_agent_dir}/config"
+        CORRUPT_CONTENT='not json { this is deliberately invalid }'
+        printf '%s' "${CORRUPT_CONTENT}" > "${tc13_agent_dir}/config/mcporter.json"
+        printf 'WORKER_GATEWAY_KEY="tc13-fake-key"\n' > "${tc13_creds}"
+
+        if ! write_jq_corrupt_shim "${s}"; then
+            echo "  SKIP: no real jq on PATH to wrap — skipping TC13"
+        else
+            rc=0
+            out=$(run_provision "${s}" "${tc13_worker}" --project proj1) || rc=$?
+
+            assert_eq "provisioning does not abort on corrupt existing mcporter.json" "0" "${rc}"
+            actual_content=$(cat "${tc13_agent_dir}/config/mcporter.json")
+            assert_eq "corrupt mcporter.json left byte-for-byte intact (not truncated)" "${CORRUPT_CONTENT}" "${actual_content}"
+            assert_contains "logs the mcporter-merge-failed WARNING" "WARNING: mcporter merge failed — keeping existing config/mcporter.json for ${tc13_worker}" "${out}"
+            assert_contains "still completes provisioning after the merge failure" "Provisioning complete for worker=${tc13_worker} project=proj1" "${out}"
+        fi
+
+        cleanup_tc13
+    fi
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────

@@ -29,6 +29,67 @@ test('ControllerClient injects the Bearer token and never forwards it back out',
   }
 });
 
+test('ControllerClient strips content-length and content-encoding from the relayed response', async () => {
+  const upstream = await startUpstream((req, res) => {
+    res.writeHead(200, {
+      'content-type': 'application/json',
+      'content-length': '2',
+      'content-encoding': 'gzip',
+    });
+    res.end('{}');
+  });
+  try {
+    const { port } = upstream.address();
+    const client = new ControllerClient({ baseUrl: `http://127.0.0.1:${port}`, getToken: () => 'tok' });
+    const res = await client.request('GET', '/api/v1/workers');
+    assert.equal(res.headers['content-length'], undefined);
+    assert.equal(res.headers['content-encoding'], undefined);
+  } finally {
+    upstream.close();
+  }
+});
+
+test('ControllerClient calls onUnauthorized when the upstream returns 401', async () => {
+  const upstream = await startUpstream((req, res) => {
+    res.writeHead(401, { 'content-type': 'application/json' });
+    res.end('{"error":"unauthorized"}');
+  });
+  try {
+    const { port } = upstream.address();
+    let called = 0;
+    const client = new ControllerClient({
+      baseUrl: `http://127.0.0.1:${port}`,
+      getToken: () => 'stale-token',
+      onUnauthorized: () => called++,
+    });
+    const res = await client.request('GET', '/api/v1/workers');
+    assert.equal(res.statusCode, 401);
+    assert.equal(called, 1);
+  } finally {
+    upstream.close();
+  }
+});
+
+test('ControllerClient does not call onUnauthorized on a non-401 response', async () => {
+  const upstream = await startUpstream((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  try {
+    const { port } = upstream.address();
+    let called = 0;
+    const client = new ControllerClient({
+      baseUrl: `http://127.0.0.1:${port}`,
+      getToken: () => 'tok',
+      onUnauthorized: () => called++,
+    });
+    await client.request('GET', '/api/v1/workers');
+    assert.equal(called, 0);
+  } finally {
+    upstream.close();
+  }
+});
+
 test('ControllerClient forwards a request body for write calls', async () => {
   let receivedBody = '';
   const upstream = await startUpstream((req, res) => {

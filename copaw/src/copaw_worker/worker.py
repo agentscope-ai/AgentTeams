@@ -39,6 +39,7 @@ class Worker:
         self._copaw_working_dir: Optional[Path] = None
         self._runner = None
         self._channel_manager = None
+        self._bg_tasks: list[asyncio.Task] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -56,6 +57,7 @@ class Worker:
 
     async def stop(self) -> None:
         console.print("[yellow]Stopping worker...[/yellow]")
+        await self._stop_bg_tasks()
         if self._channel_manager is not None:
             try:
                 await self._channel_manager.stop_all()
@@ -67,6 +69,39 @@ class Worker:
             except Exception:
                 pass
         console.print("[green]Worker stopped.[/green]")
+
+    # ------------------------------------------------------------------
+    # Background task supervision
+    # ------------------------------------------------------------------
+
+    def _spawn_bg_task(self, coro, *, name: str) -> asyncio.Task:
+        """Create a supervised background task: tracked on self._bg_tasks and
+        logged (not silently swallowed) if it raises."""
+        task = asyncio.create_task(coro, name=name)
+        self._bg_tasks.append(task)
+
+        def _on_done(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                logger.error("background task %r failed", name, exc_info=exc)
+
+        task.add_done_callback(_on_done)
+        return task
+
+    async def _stop_bg_tasks(self) -> None:
+        tasks = [t for t in self._bg_tasks if not t.done()]
+        for t in tasks:
+            t.cancel()
+        for t in tasks:
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("background task %r raised during shutdown", t.get_name())
+        self._bg_tasks.clear()
 
     # ------------------------------------------------------------------
     # Startup
@@ -156,15 +191,16 @@ class Worker:
         self._sync_skills()
 
         # 9. Start background MinIO sync
-        asyncio.create_task(
+        self._spawn_bg_task(
             sync_loop(
                 self.sync,
                 interval=self.config.sync_interval,
                 on_pull=self._on_files_pulled,
-            )
+            ),
+            name="sync_loop",
         )
         # Local -> Remote: change-triggered push (every 5s, mirrors openclaw worker behavior)
-        asyncio.create_task(push_loop(self.sync, check_interval=5))
+        self._spawn_bg_task(push_loop(self.sync, check_interval=5), name="push_loop")
 
         console.print("[bold green]Worker initialized.[/bold green]")
         if self.config.console_port:
@@ -215,11 +251,18 @@ class Worker:
             for comp in ("sync", "bridge", "model"):
                 health_state.update(comp, "healthy", "validated at startup")
 
-            # Probe CoPaw console (TCP reachability — CoPaw has no /health endpoint)
+            # Probe CoPaw console (TCP reachability — CoPaw has no /health endpoint).
+            # Offload the blocking connect to a thread so a stalled console can't
+            # block the event loop (and the Matrix sync loop) during a readiness probe.
             import socket as _socket
-            try:
+
+            def _probe_console() -> None:
                 with _socket.create_connection(("127.0.0.1", port), timeout=3):
-                    health_state.update("copaw", "healthy", f"console reachable on port {port}")
+                    pass
+
+            try:
+                await asyncio.to_thread(_probe_console)
+                health_state.update("copaw", "healthy", f"console reachable on port {port}")
             except Exception as e:
                 health_state.update("copaw", "unhealthy", f"console unreachable: {e}")
 
@@ -234,7 +277,7 @@ class Worker:
                 pass
             homeserver = matrix_cfg.get("homeserver", "")
             if homeserver:
-                mx_health = check_matrix_service(homeserver, timeout=5)
+                mx_health = await asyncio.to_thread(check_matrix_service, homeserver, timeout=5)
                 health_state.update("matrix", mx_health.healthiness, mx_health.message)
 
             snap = health_state.snapshot()
@@ -448,11 +491,14 @@ class Worker:
     # ------------------------------------------------------------------
 
     def _sync_skills(self) -> None:
-        """Pull skills from MinIO and install into CoPaw's active_skills dir.
+        """Seed CoPaw's active_skills dir with built-in skills, and make sure
+        Manager-pushed skills from MinIO are present in the standard-space
+        skills/ dir (already synced there by mirror_all()/pull_all()).
 
-        First seeds all CoPaw built-in skills (pdf, xlsx, docx, etc.) as a base
-        layer, then overlays skills pushed from MinIO by the Manager (which take
-        precedence and can override built-ins).
+        Manager-pushed skills are exposed to CoPaw's agent loop via the
+        `.copaw/workspaces/default/skills` symlink, which points at the
+        standard-space `skills/` directory — not by copying them into the
+        legacy `active_skills/` path (see copaw/AGENTS.md rule 5).
         """
         active_skills_dir = self._copaw_working_dir / "active_skills"
         active_skills_dir.mkdir(parents=True, exist_ok=True)
@@ -477,35 +523,20 @@ class Worker:
         except Exception as exc:
             logger.warning("Failed to seed CoPaw built-in skills: %s", exc)
 
-        # 2. Overlay with Manager-pushed skills from MinIO (higher priority).
+        # 2. Manager-pushed skills from MinIO. These already live on disk at
+        #    self.sync.local_dir / "skills" / <name> (standard space), pulled
+        #    by mirror_all()/pull_all(). CoPaw's agent loop reads them through
+        #    the .copaw/workspaces/default/skills symlink to that directory,
+        #    so no copy into active_skills/ is needed or wanted here.
         skill_names = self.sync.list_skills()
         if not skill_names:
             logger.info("No extra skills in MinIO for worker %s", self.worker_name)
+        else:
+            console.print(f"[green]Skills available: {', '.join(skill_names)}[/green]")
 
-        for skill_name in skill_names:
-            src_skill_dir = self.sync.local_dir / "skills" / skill_name
-            dst_skill_dir = active_skills_dir / skill_name
-            if not src_skill_dir.exists():
-                continue
-            dst_skill_dir.mkdir(parents=True, exist_ok=True)
-            # Mirror the full skill directory (SKILL.md + scripts/ + references/)
-            for src_file in src_skill_dir.rglob("*"):
-                if not src_file.is_file():
-                    continue
-                rel = src_file.relative_to(src_skill_dir)
-                dst_file = dst_skill_dir / rel
-                dst_file.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_file, dst_file)
-                # Restore +x on shell scripts
-                if dst_file.suffix == ".sh":
-                    dst_file.chmod(dst_file.stat().st_mode | 0o111)
-            logger.info("Installed MinIO skill: %s", skill_name)
-
-        if skill_names:
-            console.print(f"[green]Skills installed: {', '.join(skill_names)}[/green]")
-
-        # 3. Remove stale skills from active_skills/ that are no longer in MinIO
-        #    and are not CoPaw builtins.
+        # 3. Remove stale skills from active_skills/ that are not CoPaw
+        #    builtins. Manager-pushed skills are never written here (see
+        #    step 2), so only builtins are eligible to remain.
         try:
             import copaw.agents.skills as _skills_pkg
             builtin_skills_root = Path(_skills_pkg.__file__).resolve().parent
@@ -516,7 +547,7 @@ class Worker:
         except (ImportError, AttributeError):
             builtin_names = set()
 
-        keep_names = builtin_names | set(skill_names) | {"file-sync"}
+        keep_names = builtin_names | {"file-sync"}
         for child in list(active_skills_dir.iterdir()):
             if child.is_dir() and child.name not in keep_names:
                 shutil.rmtree(child)

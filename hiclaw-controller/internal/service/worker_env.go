@@ -79,12 +79,15 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	if cfg.HeartbeatInterval != "" {
 		env["HICLAW_MANAGER_HEARTBEAT_INTERVAL"] = cfg.HeartbeatInterval
 	}
-	if cfg.WorkerIdleTimeout != "" {
-		env["HICLAW_MANAGER_WORKER_IDLE_TIMEOUT"] = cfg.WorkerIdleTimeout
-	}
-	if cfg.NotifyChannel != "" {
-		env["HICLAW_MANAGER_NOTIFY_CHANNEL"] = cfg.NotifyChannel
-	}
+	// Note: cfg.WorkerIdleTimeout and cfg.NotifyChannel are intentionally NOT
+	// propagated as env vars here. No entrypoint or agent script reads
+	// HICLAW_MANAGER_WORKER_IDLE_TIMEOUT or HICLAW_MANAGER_NOTIFY_CHANNEL
+	// (verified via repo-wide search). WorkerIdleTimeout instead reaches the
+	// Manager agent as text baked into its system prompt via
+	// internal/agentconfig/coordination.go (CoordinationContext.WorkerIdleTimeout).
+	// NotifyChannel has no consumer anywhere in the repo beyond the CRD field
+	// definition (v1beta1.ManagerConfig.NotifyChannel) — it appears fully
+	// dead. Re-add an env injection here only if a real consumer is introduced.
 
 	b.applyClusterDefaults(env)
 	return env
@@ -142,6 +145,9 @@ func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	}
 	if b.defaults.CMSWorkspace != "" {
 		env["HICLAW_CMS_WORKSPACE"] = b.defaults.CMSWorkspace
+	}
+	if b.defaults.CMSServiceName != "" {
+		env["HICLAW_CMS_SERVICE_NAME"] = b.defaults.CMSServiceName
 	}
 	if b.defaults.SkillsAPIURL != "" {
 		env["SKILLS_API_URL"] = b.defaults.SkillsAPIURL

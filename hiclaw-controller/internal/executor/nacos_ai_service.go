@@ -227,6 +227,11 @@ func (c *NacosAIClient) GetAgentSpec(ctx context.Context, name, outputDir string
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
+	specDirAbs, err := filepath.Abs(specDir)
+	if err != nil {
+		return err
+	}
+
 	for _, res := range spec.Resource {
 		if res == nil || res.Content == "" {
 			continue
@@ -237,8 +242,21 @@ func (c *NacosAIClient) GetAgentSpec(ctx context.Context, name, outputDir string
 			continue
 		}
 
-		filePath := filepath.Join(specDir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		cleanRel, err := cleanZipEntryName(rel)
+		if err != nil {
+			return fmt.Errorf("unsafe resource path %q: %w", res.Name, err)
+		}
+
+		filePath := filepath.Join(specDir, filepath.FromSlash(cleanRel))
+		filePathAbs, err := filepath.Abs(filePath)
+		if err != nil {
+			return err
+		}
+		if !isPathInside(filePathAbs, specDirAbs) {
+			return fmt.Errorf("unsafe resource path %q: escapes destination", res.Name)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(filePathAbs), 0o755); err != nil {
 			return fmt.Errorf("failed to create resource directory: %w", err)
 		}
 

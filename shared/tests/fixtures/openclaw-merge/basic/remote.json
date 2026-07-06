@@ -1,0 +1,34 @@
+{
+  "models": {
+    "default": "claude-sonnet-5"
+  },
+  "gateway": {
+    "url": "https://gateway.example.test"
+  },
+  "channels": {
+    "matrix": {
+      "homeserver": "https://matrix.example.test",
+      "accessToken": "remote-stale-token"
+    },
+    "slack": {
+      "botToken": "remote-slack-token"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "memory-core": {
+        "enabled": true,
+        "dreamingSchedule": "0 3 * * *"
+      },
+      "web-search": {
+        "enabled": true
+      }
+    },
+    "load": {
+      "paths": ["/opt/plugins/remote-a", "/opt/plugins/shared"]
+    }
+  },
+  "tools": {
+    "shouldNotAppearInMerged": true
+  }
+}

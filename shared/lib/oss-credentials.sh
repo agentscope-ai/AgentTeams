@@ -156,10 +156,21 @@ _oss_ensure_refresh() {
         needs_refresh=true
     fi
 
-    if [ "${needs_refresh}" = true ]; then
-        ${refresh_fn} || return 1
-        . "${_OSS_CRED_FILE}"
-    fi
-
+    # Export the (possibly stale) cached credentials now, before attempting a
+    # refresh. This guarantees that if the refresh fails transiently, mc still
+    # runs with the last-known-good creds instead of none at all.
     export MC_HOST_hiclaw
+
+    if [ "${needs_refresh}" = true ]; then
+        if ! ${refresh_fn}; then
+            if [ -n "${MC_HOST_hiclaw:-}" ]; then
+                echo "[oss-credentials] WARNING: STS refresh failed, using cached credentials" >&2
+                return 0
+            fi
+            echo "[oss-credentials] ERROR: STS refresh failed and no cached credentials are available" >&2
+            return 1
+        fi
+        . "${_OSS_CRED_FILE}"
+        export MC_HOST_hiclaw
+    fi
 }

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import httpx
 import io
 import json
 import logging

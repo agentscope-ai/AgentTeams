@@ -69,12 +69,15 @@ FAKE_ROOT="${TMPDIR_ROOT}/fake-opt-hiclaw"
 mkdir -p "${FAKE_ROOT}/scripts/lib"
 cp "${PROJECT_ROOT}/manager/scripts/lib/base.sh" "${FAKE_ROOT}/scripts/lib/base.sh"
 sed -i 's/\r$//' "${FAKE_ROOT}/scripts/lib/base.sh"
+cp "${PROJECT_ROOT}/manager/scripts/lib/gateway-api.sh" "${FAKE_ROOT}/scripts/lib/gateway-api.sh"
+sed -i 's/\r$//' "${FAKE_ROOT}/scripts/lib/gateway-api.sh"
 
 # Copy the target script under test, strip CRLF (checkout is autocrlf=true),
-# and rewrite the one hardcoded source path so it resolves inside FAKE_ROOT.
+# and rewrite the two hardcoded source paths so they resolve inside FAKE_ROOT.
 RUN_SCRIPT="${TMPDIR_ROOT}/register-provider.sh"
 sed 's/\r$//' "${TARGET_SCRIPT}" > "${RUN_SCRIPT}"
 sed -i "s#source /opt/hiclaw/scripts/lib/base.sh#source ${FAKE_ROOT}/scripts/lib/base.sh#" "${RUN_SCRIPT}"
+sed -i "s#source /opt/hiclaw/scripts/lib/gateway-api.sh#source ${FAKE_ROOT}/scripts/lib/gateway-api.sh#" "${RUN_SCRIPT}"
 chmod +x "${RUN_SCRIPT}"
 
 # bash -n sanity check up front (also covered at the milestone level, but
@@ -126,7 +129,7 @@ while [ $i -lt ${#args[@]} ]; do
         -X) i=$((i+1)); method="${args[$i]}" ;;
         -o) i=$((i+1)); outfile="${args[$i]}" ;;
         -w) i=$((i+1)); write_out="${args[$i]}" ;;
-        -d) i=$((i+1)); body="${args[$i]}" ;;
+        -d|--data) i=$((i+1)); if [ "${args[$i]}" = "@-" ]; then body=$(cat); else body="${args[$i]}"; fi ;;
         http*://*) path="${args[$i]}" ;;
     esac
     i=$((i+1))
@@ -296,7 +299,7 @@ assert_contains "--delete with stale cookie reports final success" "Provider 'ol
 
 echo "=== Test 5c: creds with a double-quote produce valid JSON in the re-login body ==="
 home5c=$(new_home)
-# Force exactly one HTML/stale response so _relogin fires, then capture the
+# Force exactly one HTML/stale response so _higress_relogin fires, then capture the
 # login POST body from the call log and confirm it's valid, correctly-valued
 # JSON even though the password (HICLAW_ADMIN_PASSWORD, sourced from an
 # already-exported env var same as production) contains an embedded double

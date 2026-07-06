@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -81,6 +82,18 @@ type TeamReconciler struct {
 	// org the way they could in a multi-team setup. Sourced from
 	// HICLAW_SOLO_OPERATOR (Config.SoloOperator).
 	SoloOperator bool
+
+	// adminActorTokens caches the Matrix access token obtained for each
+	// team-admin Human, keyed by username. Mirrors the laziness documented
+	// in human_reconcile_infra.go: POST /_matrix/client/v3/login without a
+	// device_id mints a brand-new Tuwunel device session on every call, so
+	// resolveTeamAdminActor must NOT call Provisioner.LoginAsHuman on every
+	// 5-minute reconcile — doing so leaked one device session per Team per
+	// tick. The token is cached in-process for the reconciler's lifetime and
+	// reused across reconciles; it is only re-fetched when absent (e.g.
+	// after controller restart) or explicitly invalidated.
+	adminActorTokensMu sync.Mutex
+	adminActorTokens   map[string]teamAdminActor
 }
 
 type teamAdminActor struct {
@@ -149,15 +162,53 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 			key.Namespace, key.Name)
 	}
 
+	// Steady-state: reuse the cached token instead of calling LoginAsHuman
+	// again. A fresh Login on every reconcile would mint a new Tuwunel
+	// device session every 5-minute tick (unbounded device growth) — see
+	// the adminActorTokens doc comment and human_reconcile_infra.go's
+	// ensureUserToken gating, which this mirrors.
+	if cached, ok := r.cachedAdminActorToken(username); ok {
+		return teamAdminActor{
+			MatrixUserID: matrixUserID,
+			Token:        cached,
+			Username:     username,
+		}, nil
+	}
+
 	token, err := r.Provisioner.LoginAsHuman(ctx, username, human.Status.InitialPassword)
 	if err != nil {
 		return teamAdminActor{}, fmt.Errorf("login as team admin human %s/%s: %w", key.Namespace, key.Name, err)
 	}
-	return teamAdminActor{
+	actor := teamAdminActor{
 		MatrixUserID: matrixUserID,
 		Token:        token,
 		Username:     username,
-	}, nil
+	}
+	r.cacheAdminActorToken(username, actor)
+	return actor, nil
+}
+
+// cachedAdminActorToken returns the previously-cached Matrix access token
+// for the given admin username, if any.
+func (r *TeamReconciler) cachedAdminActorToken(username string) (string, bool) {
+	r.adminActorTokensMu.Lock()
+	defer r.adminActorTokensMu.Unlock()
+	actor, ok := r.adminActorTokens[username]
+	if !ok || actor.Token == "" {
+		return "", false
+	}
+	return actor.Token, true
+}
+
+// cacheAdminActorToken persists a freshly-obtained admin actor token so
+// subsequent reconciles reuse it instead of re-logging in.
+func (r *TeamReconciler) cacheAdminActorToken(username string, actor teamAdminActor) {
+	r.adminActorTokensMu.Lock()
+	defer r.adminActorTokensMu.Unlock()
+	if r.adminActorTokens == nil {
+		r.adminActorTokens = make(map[string]teamAdminActor)
+	}
+	r.adminActorTokens[username] = actor
 }
 
 // reconcileTeamNormal drives one convergence pass over a Team CR:
@@ -236,14 +287,24 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 	// --- Step 3: Stale cleanup ---
 	desiredMembers := buildDesiredMembers(derivedTeam, r.ControllerName)
 	if r.GatewayClient != nil {
+		// Memoize by distinct provider name: multiple members commonly share
+		// the same team-wide (or pinned) ModelProvider, and ResolveModelProvider
+		// is a serial gateway call, so resolving each distinct name once and
+		// fanning the result out avoids duplicate round-trips per reconcile.
+		resolved := make(map[string]*gateway.ModelProviderInfo, len(desiredMembers))
 		for i := range desiredMembers {
 			mp := desiredMembers[i].Spec.ModelProvider
 			if mp == "" {
 				continue
 			}
-			info, err := r.GatewayClient.ResolveModelProvider(ctx, mp)
-			if err != nil {
-				return r.failTeam(ctx, t, patchBase, fmt.Sprintf("resolve model provider %q for %s: %v", mp, desiredMembers[i].Name, err))
+			info, ok := resolved[mp]
+			if !ok {
+				var err error
+				info, err = r.GatewayClient.ResolveModelProvider(ctx, mp)
+				if err != nil {
+					return r.failTeam(ctx, t, patchBase, fmt.Sprintf("resolve model provider %q for %s: %v", mp, desiredMembers[i].Name, err))
+				}
+				resolved[mp] = info
 			}
 			desiredMembers[i].ModelProviderInfo = info
 		}

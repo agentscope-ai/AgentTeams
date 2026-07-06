@@ -2746,7 +2746,7 @@ function Install-Manager {
             "--env-file", $script:HICLAW_ENV_FILE,
             "-e", "HOME=/root/manager-workspace",
             "-w", "/root/manager-workspace",
-            "-e", "HOST_ORIGINAL_HOME=$($config.HOST_SHARE_DIR)",
+            "-e", "HOST_ORIGINAL_HOME=$(ConvertTo-DockerPath -Path $config.HOST_SHARE_DIR)",
             "-e", "HICLAW_MANAGER_RUNTIME=$($config.MANAGER_RUNTIME)"
         )
 
@@ -3099,21 +3099,23 @@ function Install-Manager {
         $fsDomain = if ($config.FS_DOMAIN) { $config.FS_DOMAIN } else { "fs-local.hiclaw.io" }
         if ($fsDomain -notmatch ":") { $fsDomain = "${fsDomain}:${internalGwPort}" }
 
+        # Secrets are passed via --env-file (not `-e`) so they don't land in
+        # plaintext inside `docker inspect`'s Config.Env. We reuse the config env
+        # file already written by New-EnvFile above — it contains these same
+        # values and is the persistent secret store for this install (see the
+        # legacy --env-file usage further up for the same pattern).
         $ctrlArgs = @(
             "run", "-d",
             "--name", "hiclaw-controller",
+            "--env-file", $script:HICLAW_ENV_FILE,
             "--network", "hiclaw-net",
             "--network-alias", "matrix-local.hiclaw.io",
             "--network-alias", "aigw-local.hiclaw.io",
             "--network-alias", "fs-local.hiclaw.io",
             "-e", "HICLAW_ADMIN_USER=$($config.ADMIN_USER)",
-            "-e", "HICLAW_ADMIN_PASSWORD=$($config.ADMIN_PASSWORD)",
-            "-e", "HICLAW_MANAGER_PASSWORD=$($config.MANAGER_PASSWORD)",
             "-e", "HICLAW_REGISTRATION_TOKEN=$($config.REGISTRATION_TOKEN)",
             "-e", "HICLAW_MINIO_USER=$($config.MINIO_USER)",
-            "-e", "HICLAW_MINIO_PASSWORD=$($config.MINIO_PASSWORD)",
             "-e", "HICLAW_LLM_PROVIDER=$($config.LLM_PROVIDER)",
-            "-e", "HICLAW_LLM_API_KEY=$($config.LLM_API_KEY)",
             "-e", "HICLAW_DEFAULT_MODEL=$($config.DEFAULT_MODEL)",
             "-e", "HICLAW_MANAGER_GATEWAY_KEY=$($config.MANAGER_GATEWAY_KEY)",
             "-e", "HICLAW_MANAGER_RUNTIME=$($config.MANAGER_RUNTIME)",
@@ -3133,8 +3135,8 @@ function Install-Manager {
             "-e", "HICLAW_AI_GATEWAY_URL=http://$aigwDomain",
             "-e", "HICLAW_CONTROLLER_URL=http://hiclaw-controller:8090",
             "-e", "HICLAW_DOCKER_NETWORK=hiclaw-net",
-            "-e", "HICLAW_WORKSPACE_DIR=$($config.WORKSPACE_DIR)",
-            "-e", "HICLAW_HOST_SHARE_DIR=$($config.HOST_SHARE_DIR)",
+            "-e", "HICLAW_WORKSPACE_DIR=$(ConvertTo-DockerPath -Path $config.WORKSPACE_DIR)",
+            "-e", "HICLAW_HOST_SHARE_DIR=$(ConvertTo-DockerPath -Path $config.HOST_SHARE_DIR)",
             "-e", "HICLAW_MANAGER_ENABLED=true",
             "-e", "HICLAW_PORT_MANAGER_CONSOLE=$($config.PORT_MANAGER_CONSOLE)"
         )
@@ -3470,42 +3472,55 @@ function Install-Worker {
 
     Write-Log (Get-Msg "worker.starting" -f $Name)
 
-    $dockerArgs = @(
-        "run", "-d",
-        "--name", $containerName,
-        "-e", "HOME=/root/hiclaw-fs/agents/$Name",
-        "-w", "/root/hiclaw-fs/agents/$Name",
-        "-e", "HICLAW_WORKER_NAME=$Name",
-        "-e", "HICLAW_FS_ENDPOINT=$Fs",
-        "-e", "HICLAW_FS_ACCESS_KEY=$FsKey",
-        "-e", "HICLAW_FS_SECRET_KEY=$FsSecret"
-    )
+    # HICLAW_FS_ACCESS_KEY / HICLAW_FS_SECRET_KEY are secrets — pass them via a
+    # user-only temp --env-file instead of `-e` so they don't persist in
+    # plaintext inside `docker inspect`'s Config.Env. The file is removed as
+    # soon as the container has been created.
+    $workerEnvFile = Join-Path ([System.IO.Path]::GetTempPath()) ("hiclaw-worker-" + [Guid]::NewGuid().ToString("n") + ".env")
+    try {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        $workerEnvContent = "HICLAW_FS_ACCESS_KEY=$FsKey`nHICLAW_FS_SECRET_KEY=$FsSecret`n"
+        [System.IO.File]::WriteAllText($workerEnvFile, $workerEnvContent, $utf8NoBom)
+        try { icacls $workerEnvFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" *>$null } catch {}
 
-    if (-not $SkillsApiUrl) {
-        if ($env:HICLAW_SKILLS_API_URL) {
-            $SkillsApiUrl = $env:HICLAW_SKILLS_API_URL
-        } else {
-            $SkillsApiUrl = "nacos://market.hiclaw.io:80/public"
+        $dockerArgs = @(
+            "run", "-d",
+            "--name", $containerName,
+            "--env-file", $workerEnvFile,
+            "-e", "HOME=/root/hiclaw-fs/agents/$Name",
+            "-w", "/root/hiclaw-fs/agents/$Name",
+            "-e", "HICLAW_WORKER_NAME=$Name",
+            "-e", "HICLAW_FS_ENDPOINT=$Fs"
+        )
+
+        if (-not $SkillsApiUrl) {
+            if ($env:HICLAW_SKILLS_API_URL) {
+                $SkillsApiUrl = $env:HICLAW_SKILLS_API_URL
+            } else {
+                $SkillsApiUrl = "nacos://market.hiclaw.io:80/public"
+            }
         }
-    }
 
-    if ($FindSkills -and $SkillsApiUrl) {
-        $dockerArgs += @("-e", "SKILLS_API_URL=$SkillsApiUrl")
-        Write-Log (Get-Msg "worker.skills_url" -f $SkillsApiUrl)
-    }
-    if ($env:HICLAW_NACOS_USERNAME) {
-        $dockerArgs += @("-e", "HICLAW_NACOS_USERNAME=$($env:HICLAW_NACOS_USERNAME)")
-    }
-    if ($env:HICLAW_NACOS_PASSWORD) {
-        $dockerArgs += @("-e", "HICLAW_NACOS_PASSWORD=$($env:HICLAW_NACOS_PASSWORD)")
-    }
-    if ($env:HICLAW_NACOS_TOKEN) {
-        $dockerArgs += @("-e", "HICLAW_NACOS_TOKEN=$($env:HICLAW_NACOS_TOKEN)")
-    }
+        if ($FindSkills -and $SkillsApiUrl) {
+            $dockerArgs += @("-e", "SKILLS_API_URL=$SkillsApiUrl")
+            Write-Log (Get-Msg "worker.skills_url" -f $SkillsApiUrl)
+        }
+        if ($env:HICLAW_NACOS_USERNAME) {
+            $dockerArgs += @("-e", "HICLAW_NACOS_USERNAME=$($env:HICLAW_NACOS_USERNAME)")
+        }
+        if ($env:HICLAW_NACOS_PASSWORD) {
+            $dockerArgs += @("-e", "HICLAW_NACOS_PASSWORD=$($env:HICLAW_NACOS_PASSWORD)")
+        }
+        if ($env:HICLAW_NACOS_TOKEN) {
+            $dockerArgs += @("-e", "HICLAW_NACOS_TOKEN=$($env:HICLAW_NACOS_TOKEN)")
+        }
 
-    $dockerArgs += @("--restart", "unless-stopped", $workerImage)
+        $dockerArgs += @("--restart", "unless-stopped", $workerImage)
 
-    & docker $dockerArgs
+        & docker $dockerArgs
+    } finally {
+        Remove-Item -Path $workerEnvFile -Force -ErrorAction SilentlyContinue
+    }
 
     Write-Log ""
     Write-Log (Get-Msg "worker.started" -f $Name)

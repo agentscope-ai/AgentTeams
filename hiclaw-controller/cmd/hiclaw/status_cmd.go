@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -15,7 +16,7 @@ func statusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := NewAPIClient()
 			var resp clusterStatusResp
-			if err := client.DoJSON("GET", "/api/v1/status", nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "GET", "/api/v1/status", nil, &resp); err != nil {
 				return fmt.Errorf("get status: %w", err)
 			}
 			if output == "json" {
@@ -45,7 +46,7 @@ func versionCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := NewAPIClient()
 			var resp versionResp
-			if err := client.DoJSON("GET", "/api/v1/version", nil, &resp); err != nil {
+			if err := client.DoJSON(context.Background(), "GET", "/api/v1/version", nil, &resp); err != nil {
 				return fmt.Errorf("get version: %w", err)
 			}
 			if output == "json" {

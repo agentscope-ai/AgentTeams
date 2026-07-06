@@ -30,6 +30,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 **Bug Fixes**
 
+- **CI image aliases and Worker CRD schema**: Local image build targets now keep legacy `hiclaw/*` aliases alongside AgentTeams image names so base-branch PR workflows can save/load artifacts, and Worker CRDs again expose existing lifecycle, runtime, credential, and sandbox volume spec fields including `spec.state`.
 - **Manager-disabled controller startup**: Setting `AGENTTEAMS_MANAGER_ENABLED=false` now skips Manager CR informers, reconciliation, and CR-count listing so controller deployments can run in clusters where `managers.agentteams.io` is not installed.
 - **Remote runtime auth routing**: Remote pod Workers keep `AGENTTEAMS_CLUSTER_ID` as the only remote TokenReview routing signal, while Sandbox worker dependency env no longer injects `AGENTTEAMS_CLUSTER_ID` or `AGENTTEAMS_AUTH_MODE`; QwenPaw heartbeat, STS refresh paths, OSS credential helpers, and find-skills scripts now send `X-AgentTeams-Cluster-ID` only when `AGENTTEAMS_CLUSTER_ID` is present.
 - **SandboxClaim completed status**: Sandbox-backed Workers now treat a completed `SandboxClaim` as claim progress only and resolve the actual Sandbox by Worker labels before reporting runtime state, so Remote sandbox Workers no longer remain `containerState=unknown` after the target Sandbox is Running.

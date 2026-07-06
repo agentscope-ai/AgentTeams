@@ -63,6 +63,17 @@ LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
 LOCAL_EMBEDDED       = agentteams/agentteams-embedded:$(VERSION)
 
+# Legacy local aliases kept for pull_request_target workflows that still save
+# PR-built images via hiclaw/* repository filters from the base branch.
+LEGACY_LOCAL_MANAGER        = hiclaw/hiclaw-manager:$(VERSION)
+LEGACY_LOCAL_MANAGER_COPAW  = hiclaw/hiclaw-manager-copaw:$(VERSION)
+LEGACY_LOCAL_WORKER         = hiclaw/worker-agent:$(VERSION)
+LEGACY_LOCAL_COPAW_WORKER   = hiclaw/copaw-worker:$(VERSION)
+LEGACY_LOCAL_HERMES_WORKER  = hiclaw/hermes-worker:$(VERSION)
+LEGACY_LOCAL_OPENCLAW_BASE  = hiclaw/openclaw-base:$(VERSION)
+LEGACY_LOCAL_CONTROLLER     = hiclaw/hiclaw-controller:$(VERSION)
+LEGACY_LOCAL_EMBEDDED       = hiclaw/hiclaw-embedded:$(VERSION)
+
 # Higress base image registry (regional mirrors auto-synced from cn-hangzhou primary)
 #   China (default): higress-registry.cn-hangzhou.cr.aliyuncs.com
 #   North America:   higress-registry.us-west-1.cr.aliyuncs.com
@@ -136,6 +147,7 @@ build-openclaw-base: ## Build OpenClaw base image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_OPENCLAW_BASE) \
 		./openclaw-base/
+	docker tag $(LOCAL_OPENCLAW_BASE) $(LEGACY_LOCAL_OPENCLAW_BASE)
 
 # build targets use the locally-built openclaw-base; push targets use the registry image
 # OPENCLAW_BASE_VERSION controls which base image tag manager/worker builds depend on.
@@ -150,6 +162,7 @@ build-hiclaw-controller: ## Build hiclaw-controller image (prerequisite for Mana
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./hiclaw-controller/
+	docker tag $(LOCAL_CONTROLLER) $(LEGACY_LOCAL_CONTROLLER)
 	@rm -rf ./hiclaw-controller/agent
 
 build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
@@ -159,6 +172,7 @@ build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 		-f manager/Dockerfile \
 		-t $(LOCAL_MANAGER) \
 		.
+	docker tag $(LOCAL_MANAGER) $(LEGACY_LOCAL_MANAGER)
 
 build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Python runtime)
 	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
@@ -167,6 +181,7 @@ build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Pytho
 		-f manager/Dockerfile.copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
 		.
+	docker tag $(LOCAL_MANAGER_COPAW) $(LEGACY_LOCAL_MANAGER_COPAW)
 
 build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
 	@echo "==> Building embedded image: $(LOCAL_EMBEDDED) (registry: $(HIGRESS_REGISTRY))"
@@ -175,24 +190,28 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 		-f hiclaw-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
 		.
+	docker tag $(LOCAL_EMBEDDED) $(LEGACY_LOCAL_EMBEDDED)
 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_WORKER) \
 		./worker/
+	docker tag $(LOCAL_WORKER) $(LEGACY_LOCAL_WORKER)
 
 build-copaw-worker: ## Build CoPaw Worker image
 	@echo "==> Building CoPaw Worker image: $(LOCAL_COPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_COPAW_WORKER) \
 		./copaw/
+	docker tag $(LOCAL_COPAW_WORKER) $(LEGACY_LOCAL_COPAW_WORKER)
 
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_HERMES_WORKER) \
 		./hermes/
+	docker tag $(LOCAL_HERMES_WORKER) $(LEGACY_LOCAL_HERMES_WORKER)
 
 build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
 	@echo "==> Building OpenHuman Worker image: $(LOCAL_OPENHUMAN_WORKER)"

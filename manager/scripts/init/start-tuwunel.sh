@@ -4,12 +4,12 @@
 
 mkdir -p /data/tuwunel
 
-export CONDUWUIT_SERVER_NAME="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+export CONDUWUIT_SERVER_NAME="${AGENTTEAMS_MATRIX_DOMAIN:-${HICLAW_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}}"
 export CONDUWUIT_DATABASE_PATH="/data/tuwunel"
 export CONDUWUIT_ADDRESS="0.0.0.0"
 export CONDUWUIT_PORT=6167
 export CONDUWUIT_ALLOW_REGISTRATION=true
-export CONDUWUIT_REGISTRATION_TOKEN="${AGENTTEAMS_REGISTRATION_TOKEN}"
+export CONDUWUIT_REGISTRATION_TOKEN="${AGENTTEAMS_REGISTRATION_TOKEN:-${HICLAW_REGISTRATION_TOKEN:-}}"
 export CONDUWUIT_ALLOW_LEGACY_MEDIA=true
 export CONDUWUIT_ALLOW_UNSTABLE_ROOM_VERSIONS=true
 export CONDUWUIT_DB_POOL_WORKERS_LIMIT=32
@@ -29,9 +29,7 @@ export CONDUWUIT_FORGET_FORCED_UPON_LEAVE="${CONDUWUIT_FORGET_FORCED_UPON_LEAVE:
 # User creation is handled by start-manager-agent.sh via Registration API
 # (single-step registration, no UIAA flow needed)
 
-export TUWUNEL_CONFIG="${TUWUNEL_CONFIG:-/etc/tuwunel/tuwunel.toml}"
-
-if [[ -f "$TUWUNEL_CONFIG" ]]; then
+if [[ -n "${TUWUNEL_CONFIG:-}" && -f "$TUWUNEL_CONFIG" ]]; then
 	exec tuwunel -c "$TUWUNEL_CONFIG" "$@"
 fi
 

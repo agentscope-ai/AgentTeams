@@ -331,6 +331,13 @@ func TestCreateTeamDecoupled_AcceptsLegacyFormat(t *testing.T) {
 	if len(team.Spec.WorkerMembers) != 2 {
 		t.Fatalf("workerMembers len=%d, want 2: %+v", len(team.Spec.WorkerMembers), team.Spec.WorkerMembers)
 	}
+	var lead v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "leg-lead", Namespace: "default"}, &lead); err != nil {
+		t.Fatalf("get leader: %v", err)
+	}
+	if got := lead.Spec.Runtime; got != "copaw" {
+		t.Fatalf("legacy leader runtime=%q, want copaw", got)
+	}
 }
 
 func TestCreateTeamDecoupled_StampsControllerLabel(t *testing.T) {

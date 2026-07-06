@@ -421,13 +421,18 @@ func normalizeLegacyCreateTeamRequest(req *CreateTeamRequest) {
 		return
 	}
 
+	leaderRuntime := req.Leader.Runtime
+	if strings.TrimSpace(leaderRuntime) == "" {
+		leaderRuntime = backend.RuntimeCopaw
+	}
+
 	req.Members = append(req.Members, TeamMemberRequest{
 		Name:               req.Leader.Name,
 		WorkerName:         req.Leader.WorkerName,
 		Role:               "team_leader",
 		Model:              req.Leader.Model,
 		ModelProvider:      req.Leader.ModelProvider,
-		Runtime:            req.Leader.Runtime,
+		Runtime:            leaderRuntime,
 		Image:              req.Leader.Image,
 		Identity:           req.Leader.Identity,
 		Soul:               req.Leader.Soul,

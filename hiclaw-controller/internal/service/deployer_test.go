@@ -125,6 +125,81 @@ func TestDeployWorkerConfigInlineSoulOverridesPackageSeed(t *testing.T) {
 	}
 }
 
+func TestDeployWorkerConfigTeamLeaderSeedsAgentsBeforeCoordination(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	agentFSDir := filepath.Join(tmp, "agents")
+	workerAgentDir := filepath.Join(tmp, "builtins", "worker-agent")
+	leaderAgentDir := filepath.Join(tmp, "builtins", "team-leader-agent")
+	if err := os.MkdirAll(filepath.Join(agentFSDir, "lead"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(leaderAgentDir, "skills", "team-coordination"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workerAgentDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leaderAgentDir, "AGENTS.md"), []byte("# Team Leader\n\nYou coordinate workers.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leaderAgentDir, "skills", "team-coordination", "SKILL.md"), []byte("# Team Coordination\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	if err := store.PutObject(ctx, "agents/lead/SOUL.md", []byte("# lead\n")); err != nil {
+		t.Fatal(err)
+	}
+	deployer := NewDeployer(DeployerConfig{
+		AgentConfig:    agentconfig.NewGenerator(agentconfig.Config{}),
+		OSS:            store,
+		AgentFSDir:     agentFSDir,
+		WorkerAgentDir: workerAgentDir,
+		MatrixDomain:   "matrix.local",
+	})
+
+	if err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+		Name:        "lead",
+		Role:        "team_leader",
+		MatrixToken: "matrix-token",
+		GatewayKey:  "gateway-key",
+		Spec:        v1beta1.WorkerSpec{Runtime: "copaw", Model: "qwen"},
+	}); err != nil {
+		t.Fatalf("DeployWorkerConfig failed: %v", err)
+	}
+	if err := deployer.InjectCoordinationContext(ctx, CoordinationDeployRequest{
+		LeaderName: "lead",
+		Role:       "team_leader",
+		TeamName:   "team-a",
+		TeamWorkers: []TeamWorkerEntry{{
+			Name:   "dev",
+			RoomID: "!dev:matrix.local",
+		}},
+		TeamAdminID: "@admin:matrix.local",
+	}); err != nil {
+		t.Fatalf("InjectCoordinationContext failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/lead/AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{
+		"hiclaw-builtin-start",
+		"You coordinate workers.",
+		"hiclaw-team-context-start",
+		"@manager:matrix.local",
+		"@dev:matrix.local",
+		"Team Admin",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("AGENTS.md missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestDeployWorkerConfigMergesMcporterConfigPreservingExternalMCP(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()

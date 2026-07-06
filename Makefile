@@ -195,6 +195,7 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LEGACY_LOCAL_CONTROLLER) \
 		-t $(LOCAL_WORKER) \
 		./worker/
 	docker tag $(LOCAL_WORKER) $(LEGACY_LOCAL_WORKER)

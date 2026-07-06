@@ -129,8 +129,14 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// --- AppService management ---
 	ash := NewAppServiceHandler(deps.MatrixConfig)
 	mux.Handle("POST /api/v1/appservice/rotate-token", mw.RequireAuthz(authpkg.ActionUpdate, "appservice", nil)(http.HandlerFunc(ash.RotateToken)))
-	if deps.MatrixConfig.AppServiceEnabled && deps.MatrixConfig.AppServiceHSToken != "" {
-		asEvents := NewAppserviceHandler(deps.MatrixConfig.AppServiceHSToken, deps.Client, deps.Namespace)
+	appserviceEnabled := deps.MatrixConfig.AppServiceEnabled
+	appserviceHSToken := deps.MatrixConfig.AppServiceHSToken
+	if deps.AppserviceCfg != nil {
+		appserviceEnabled = deps.AppserviceCfg.Enabled
+		appserviceHSToken = deps.AppserviceCfg.HSToken
+	}
+	if appserviceEnabled && appserviceHSToken != "" {
+		asEvents := NewAppserviceHandler(appserviceHSToken, deps.Client, deps.Namespace)
 		mux.Handle("PUT /_matrix/app/v1/transactions/{txnId}", http.HandlerFunc(asEvents.HandleTransactions))
 		mux.Handle("GET /_matrix/app/v1/users/{userId}", http.HandlerFunc(asEvents.HandleUserQuery))
 		mux.Handle("GET /_matrix/app/v1/rooms/{roomAlias}", http.HandlerFunc(asEvents.HandleRoomQuery))
@@ -141,14 +147,6 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		validator := proxy.NewSecurityValidator()
 		proxyHandler := proxy.NewHandler(deps.SocketPath, validator)
 		mux.Handle("/docker/", mw.RequireAuthz(authpkg.ActionGateway, "gateway", nil)(http.StripPrefix("/docker", proxyHandler)))
-	}
-
-	// --- Matrix Appservice endpoints (push-based event delivery) ---
-	if deps.AppserviceCfg != nil && deps.AppserviceCfg.Enabled {
-		ash := NewAppserviceHandler(deps.AppserviceCfg.HSToken, deps.Client, deps.Namespace)
-		mux.HandleFunc("PUT /_matrix/app/v1/transactions/{txnId}", ash.HandleTransactions)
-		mux.HandleFunc("GET /_matrix/app/v1/users/{userId}", ash.HandleUserQuery)
-		mux.HandleFunc("GET /_matrix/app/v1/rooms/{roomAlias}", ash.HandleRoomQuery)
 	}
 
 	return s

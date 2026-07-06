@@ -80,6 +80,29 @@ func TestNewHTTPServerRegistersAppserviceTransactionRoute(t *testing.T) {
 	}
 }
 
+func TestNewHTTPServerRegistersResolvedAppserviceTransactionRouteOnce(t *testing.T) {
+	k8s := fake.NewClientBuilder().WithScheme(newAppserviceTestScheme(t)).Build()
+	srv := NewHTTPServer(":0", ServerDeps{
+		Client:       k8s,
+		Namespace:    "default",
+		AuthMw:       authpkg.NewMiddleware(nil, nil, nil, nil, ""),
+		MatrixConfig: matrix.Config{AppServiceEnabled: true, AppServiceHSToken: "legacy-token"},
+		AppserviceCfg: &matrix.AppserviceConfig{
+			Enabled: true,
+			HSToken: "resolved-token",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-from-mux", txnBody(t, nil))
+	req.Header.Set("Authorization", "Bearer resolved-token")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q, want 200 from resolved AppService transaction route", rec.Code, rec.Body.String())
+	}
+}
+
 // --- Standalone Worker Tests ---
 
 func TestAppserviceWakesStandaloneWorkerFromOwnRoom(t *testing.T) {

@@ -307,7 +307,7 @@ func TestCreateTeamDecoupled_ExistingTeamMemberConflict(t *testing.T) {
 	}
 }
 
-func TestCreateTeamDecoupled_RejectsLegacyFormat(t *testing.T) {
+func TestCreateTeamDecoupled_AcceptsLegacyFormat(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	handler := NewResourceHandler(k8sClient, "default", nil, "")
@@ -321,8 +321,15 @@ func TestCreateTeamDecoupled_RejectsLegacyFormat(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.CreateTeam(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var team v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-team", Namespace: "default"}, &team); err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	if len(team.Spec.WorkerMembers) != 2 {
+		t.Fatalf("workerMembers len=%d, want 2: %+v", len(team.Spec.WorkerMembers), team.Spec.WorkerMembers)
 	}
 }
 

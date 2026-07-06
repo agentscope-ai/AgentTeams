@@ -403,10 +403,11 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if createTeamRequestHasLegacyInlineFields(&req) {
-		httputil.WriteError(w, http.StatusBadRequest, "legacy leader/workers fields are not supported; use members")
+	if len(req.Members) > 0 && createTeamRequestHasLegacyInlineFields(&req) {
+		httputil.WriteError(w, http.StatusBadRequest, "legacy leader/workers fields cannot be mixed with members")
 		return
 	}
+	normalizeLegacyCreateTeamRequest(&req)
 
 	if len(req.Members) == 0 {
 		httputil.WriteError(w, http.StatusBadRequest, "members is required")
@@ -415,10 +416,73 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 	h.createTeamDecoupled(w, r, &req)
 }
 
+func normalizeLegacyCreateTeamRequest(req *CreateTeamRequest) {
+	if len(req.Members) > 0 || !createTeamRequestHasLegacyInlineFields(req) {
+		return
+	}
+
+	req.Members = append(req.Members, TeamMemberRequest{
+		Name:               req.Leader.Name,
+		WorkerName:         req.Leader.WorkerName,
+		Role:               "team_leader",
+		Model:              req.Leader.Model,
+		ModelProvider:      req.Leader.ModelProvider,
+		Runtime:            req.Leader.Runtime,
+		Image:              req.Leader.Image,
+		Identity:           req.Leader.Identity,
+		Soul:               req.Leader.Soul,
+		Agents:             req.Leader.Agents,
+		McpServers:         req.Leader.McpServers,
+		Package:            req.Leader.Package,
+		ChannelPolicy:      req.Leader.ChannelPolicy,
+		Resources:          req.Leader.Resources,
+		AgentIdentity:      req.Leader.AgentIdentity,
+		CredentialBindings: req.Leader.CredentialBindings,
+		State:              req.Leader.State,
+	})
+	for _, worker := range req.Workers {
+		req.Members = append(req.Members, TeamMemberRequest{
+			Name:               worker.Name,
+			WorkerName:         worker.WorkerName,
+			Role:               "worker",
+			Model:              worker.Model,
+			ModelProvider:      worker.ModelProvider,
+			Runtime:            worker.Runtime,
+			Image:              worker.Image,
+			Identity:           worker.Identity,
+			Soul:               worker.Soul,
+			Agents:             worker.Agents,
+			Skills:             worker.Skills,
+			McpServers:         worker.McpServers,
+			Package:            worker.Package,
+			Expose:             worker.Expose,
+			ChannelPolicy:      worker.ChannelPolicy,
+			Resources:          worker.Resources,
+			AgentIdentity:      worker.AgentIdentity,
+			CredentialBindings: worker.CredentialBindings,
+			IdleTimeout:        worker.IdleTimeout,
+			State:              worker.State,
+		})
+	}
+	if req.Leader.WorkerIdleTimeout != "" {
+		for i := range req.Members {
+			if req.Members[i].Role == "worker" && req.Members[i].IdleTimeout == "" {
+				req.Members[i].IdleTimeout = req.Leader.WorkerIdleTimeout
+			}
+		}
+	}
+	if req.Leader.Heartbeat != nil && req.HeartbeatEvery == "" {
+		if heartbeat := toHeartbeatSpec(req.Leader.Heartbeat); heartbeat != nil && heartbeat.Enabled {
+			req.HeartbeatEvery = heartbeat.Every
+		}
+	}
+}
+
 func createTeamRequestHasLegacyInlineFields(req *CreateTeamRequest) bool {
 	return req.Leader.Name != "" ||
 		req.Leader.WorkerName != "" ||
 		req.Leader.Model != "" ||
+		req.Leader.ModelProvider != "" ||
 		req.Leader.Runtime != "" ||
 		req.Leader.Image != "" ||
 		req.Leader.Identity != "" ||
@@ -426,6 +490,7 @@ func createTeamRequestHasLegacyInlineFields(req *CreateTeamRequest) bool {
 		req.Leader.Agents != "" ||
 		req.Leader.Package != "" ||
 		len(req.Leader.McpServers) > 0 ||
+		req.Leader.Resources != nil ||
 		req.Leader.AgentIdentity != nil ||
 		len(req.Leader.CredentialBindings) > 0 ||
 		req.Leader.ChannelPolicy != nil ||

@@ -519,6 +519,77 @@ func TestCreateAndUpdateTeamLeaderRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestCreateTeamAcceptsLegacyLeaderWorkersPayload(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{
+		"name":"legacy-team",
+		"teamName":"legacy display",
+		"channelPolicy":{"groupAllowExtra":["test-external-bot"]},
+		"leader":{
+			"name":"legacy-lead",
+			"runtime":"copaw",
+			"model":"qwen3.5-plus",
+			"workerIdleTimeout":"12h",
+			"heartbeat":{"enabled":true,"every":"30m"}
+		},
+		"workers":[
+			{"name":"legacy-dev","model":"qwen3.5-plus"},
+			{"name":"legacy-qa","model":"qwen3.5-plus","idleTimeout":"6h"}
+		]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateTeam(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var team v1beta1.Team
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-team", Namespace: "default"}, &team); err != nil {
+		t.Fatalf("get created team: %v", err)
+	}
+	if team.Spec.TeamName != "legacy display" {
+		t.Fatalf("teamName=%q, want legacy display", team.Spec.TeamName)
+	}
+	if team.Spec.HeartbeatEvery != "30m" {
+		t.Fatalf("heartbeatEvery=%q, want 30m", team.Spec.HeartbeatEvery)
+	}
+	if len(team.Spec.WorkerMembers) != 3 {
+		t.Fatalf("workerMembers len=%d, want 3: %+v", len(team.Spec.WorkerMembers), team.Spec.WorkerMembers)
+	}
+	if team.Spec.WorkerMembers[0].Name != "legacy-lead" || team.Spec.WorkerMembers[0].Role != "team_leader" {
+		t.Fatalf("leader ref = %+v", team.Spec.WorkerMembers[0])
+	}
+
+	var leader v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-lead", Namespace: "default"}, &leader); err != nil {
+		t.Fatalf("get leader worker: %v", err)
+	}
+	if leader.Spec.Runtime != "copaw" {
+		t.Fatalf("leader runtime=%q, want copaw", leader.Spec.Runtime)
+	}
+
+	var dev v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-dev", Namespace: "default"}, &dev); err != nil {
+		t.Fatalf("get dev worker: %v", err)
+	}
+	if dev.Spec.IdleTimeout != "12h" {
+		t.Fatalf("dev idleTimeout=%q, want 12h", dev.Spec.IdleTimeout)
+	}
+
+	var qa v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-qa", Namespace: "default"}, &qa); err != nil {
+		t.Fatalf("get qa worker: %v", err)
+	}
+	if qa.Spec.IdleTimeout != "6h" {
+		t.Fatalf("qa idleTimeout=%q, want 6h", qa.Spec.IdleTimeout)
+	}
+}
+
 func TestCreateTeamRejectsInvalidLeaderRuntime(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()

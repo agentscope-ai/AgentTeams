@@ -36,6 +36,7 @@ _cleanup() {
     done
     exec_in_agent rm -f "/tmp/hiclaw-test-${TEST_WORKER}.yaml" 2>/dev/null || true
     exec_in_manager rm -rf "/tmp/hiclaw-test-${TEST_WORKER_OVERRIDE}" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER_OVERRIDE}*.zip" 2>/dev/null || true
     exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER_OVERRIDE}*.zip" 2>/dev/null || true
 }
 trap _cleanup EXIT
@@ -304,9 +305,16 @@ else
     exec_in_agent hiclaw get workers "${TEST_WORKER_OVERRIDE}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
-# Discover the package URI from MinIO packages directory
-PKG_FILE=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/hiclaw-config/packages/' 2>/dev/null | grep '${TEST_WORKER_OVERRIDE}' | awk '{print \$NF}'" | head -1)
-PKG_URI="oss://hiclaw-config/packages/${PKG_FILE}"
+# Discover the package URI from MinIO packages directory. New uploads use
+# agentteams-config; keep hiclaw-config as a compatibility fallback for older
+# images/artifacts.
+PKG_DIR="agentteams-config"
+PKG_FILE=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/${PKG_DIR}/packages/' 2>/dev/null | grep '${TEST_WORKER_OVERRIDE}' | awk '{print \$NF}'" | head -1)
+if [ -z "${PKG_FILE}" ]; then
+    PKG_DIR="hiclaw-config"
+    PKG_FILE=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/${PKG_DIR}/packages/' 2>/dev/null | grep '${TEST_WORKER_OVERRIDE}' | awk '{print \$NF}'" | head -1)
+fi
+PKG_URI="oss://${PKG_DIR}/packages/${PKG_FILE}"
 assert_not_empty "${PKG_FILE}" "Package file found in MinIO"
 
 # Overwrite the YAML with package + inline soul/agents

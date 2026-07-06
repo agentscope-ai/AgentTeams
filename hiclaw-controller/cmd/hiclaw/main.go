@@ -21,8 +21,7 @@ Environment variables:
   AGENTTEAMS_AUTH_TOKEN_FILE / HICLAW_AUTH_TOKEN_FILE
       Path to a file containing the bearer token (K8s projected volume)
 
-Legacy HICLAW_* names are accepted for compatibility with existing installs.`,
-	}
+Legacy HICLAW_* names are accepted for compatibility with existing installs.`}
 
 	rootCmd.AddCommand(applyCmd())
 	rootCmd.AddCommand(createCmd())

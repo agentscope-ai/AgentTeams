@@ -14,8 +14,8 @@ Use `hiclaw` CLI when available. Do not infer current state from memory, old cha
 Useful commands:
 
 ```bash
-hiclaw get workers "${HICLAW_WORKER_CR_NAME:-$HICLAW_WORKER_NAME}" -o json
-TEAM_CR="$(hiclaw get workers "${HICLAW_WORKER_CR_NAME:-$HICLAW_WORKER_NAME}" -o json | jq -r '.team')"
+hiclaw get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json
+TEAM_CR="$(hiclaw get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json | jq -r '.team')"
 hiclaw get workers --team "$TEAM_CR" -o json
 ```
 

@@ -338,9 +338,9 @@ func (c *Cache) startRemoteCache(ctx context.Context, restCfg *rest.Config, clus
 }
 
 // hasWorkersDeployed checks whether any Worker CR references the given cluster
-// as a remote deployment target.
+// as a remote deployment target. Team members are Worker CRs referenced by
+// Team.spec.workerMembers, so no Team scan is needed.
 func (c *Cache) hasWorkersDeployed(ctx context.Context, clusterID string) (bool, error) {
-	// List Workers with spec.deployMode=Remote and spec.targetCluster.id=clusterID.
 	var workers v1beta1.WorkerList
 	if err := c.ctrlClient.List(ctx, &workers); err != nil {
 		return false, err
@@ -351,7 +351,6 @@ func (c *Cache) hasWorkersDeployed(ctx context.Context, clusterID string) (bool,
 			return true, nil
 		}
 	}
-
 	return false, nil
 }
 
@@ -365,8 +364,7 @@ func (c *Cache) ResolveClient(ctx context.Context, clusterID string) (backend.K8
 	return entry.Client, nil
 }
 
-// ResolveDynamicClient returns a dynamic client for the given remote cluster.
-// Sandbox backends need this for provider CRDs such as SandboxClaim.
+// ResolveDynamicClient returns a dynamic.Interface for the given remote cluster.
 func (c *Cache) ResolveDynamicClient(ctx context.Context, clusterID string) (dynamic.Interface, error) {
 	entry, err := c.GetOrCreate(ctx, clusterID)
 	if err != nil {

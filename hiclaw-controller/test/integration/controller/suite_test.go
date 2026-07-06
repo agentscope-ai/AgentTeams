@@ -141,31 +141,21 @@ func TestMain(m *testing.M) {
 		panic(fmt.Sprintf("failed to setup TeamReconciler: %v", err))
 	}
 
-	if err := mgr.GetFieldIndexer().IndexField(ctx, &v1beta1.Team{}, controller.TeamLeaderNameField,
-		func(obj client.Object) []string {
-			team, ok := obj.(*v1beta1.Team)
-			if !ok || team.Spec.Leader.Name == "" {
-				return nil
-			}
-			return []string{team.Spec.Leader.Name}
-		}); err != nil {
-		panic(fmt.Sprintf("failed to index team leader name: %v", err))
-	}
-	if err := mgr.GetFieldIndexer().IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerNameField,
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerMembersField,
 		func(obj client.Object) []string {
 			team, ok := obj.(*v1beta1.Team)
 			if !ok {
 				return nil
 			}
-			names := make([]string, 0, len(team.Spec.Workers))
-			for _, w := range team.Spec.Workers {
-				if w.Name != "" {
-					names = append(names, w.Name)
+			names := make([]string, 0, len(team.Spec.WorkerMembers))
+			for _, ref := range team.Spec.WorkerMembers {
+				if ref.Name != "" {
+					names = append(names, ref.Name)
 				}
 			}
 			return names
 		}); err != nil {
-		panic(fmt.Sprintf("failed to index team worker names: %v", err))
+		panic(fmt.Sprintf("failed to index team worker member names: %v", err))
 	}
 
 	// Wire up Manager mocks

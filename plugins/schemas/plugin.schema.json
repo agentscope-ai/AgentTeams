@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AgentTeams TeamHarness Plugin",
+  "title": "HiClaw TeamHarness Plugin",
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "prompts", "skills", "mcp", "adapters", "package"],
   "properties": {

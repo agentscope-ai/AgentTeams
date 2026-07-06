@@ -55,11 +55,11 @@ COPY agent/ /opt/hiclaw/agent/
 # Default endpoint + token-file for the bundled `hiclaw` CLI when invoked via
 # `docker exec hiclaw-controller hiclaw …`. The controller process mints a
 # long-lived admin SA token at startup (see internal/app.bootstrapAdminCLIToken)
-# and writes it to HICLAW_AUTH_TOKEN_FILE; the CLI's discoverToken() then
-# auto-loads it so operators don't need to pass `-e HICLAW_AUTH_TOKEN=…` on
+# and writes it to AGENTTEAMS_AUTH_TOKEN_FILE; the CLI's discoverToken() then
+# auto-loads it so operators don't need to pass `-e AGENTTEAMS_AUTH_TOKEN=…` on
 # every exec. Both vars are container-local defaults — `docker exec -e` still
 # overrides them, and the controller binary itself does not read them.
-ENV HICLAW_CONTROLLER_URL=http://127.0.0.1:8090 \
-    HICLAW_AUTH_TOKEN_FILE=/var/run/hiclaw/cli-token
+ENV AGENTTEAMS_CONTROLLER_URL=http://127.0.0.1:8090 \
+    AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/hiclaw/cli-token
 
 ENTRYPOINT ["hiclaw-controller"]

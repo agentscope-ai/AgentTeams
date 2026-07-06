@@ -20,7 +20,7 @@ set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
 # Detect runtime
-MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
 
 _get_max_tokens_param() {
     local model="$1"
@@ -121,11 +121,11 @@ esac
 log "Updating Manager model: ${MODEL_NAME} (ctx=${CTX}, max=${MAX}, reasoning=${REASONING}, input=${INPUT})"
 
 # ── Pre-flight: verify the model is reachable via AI Gateway ──────────────────
-GATEWAY_URL="${HICLAW_AI_GATEWAY_URL}/v1/chat/completions"
-GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-}"
+GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL}/v1/chat/completions"
+GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
 if [ -z "${GATEWAY_KEY}" ] && [ -f "/data/hiclaw-secrets.env" ]; then
     source /data/hiclaw-secrets.env
-    GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-}"
+    GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
 fi
 
 log "Testing model reachability: ${GATEWAY_URL} (model=${MODEL_NAME})..."
@@ -147,7 +147,7 @@ if [ "${HTTP_CODE}" != "200" ]; then
     echo "The model '${MODEL_NAME}' is not reachable via the AI Gateway."
     echo "This most likely means the current default AI Provider does not support this model."
     echo ""
-    if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+    if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
         echo "To fix this, the human admin needs to check the Alibaba Cloud AI Gateway console"
         echo "to confirm the model route is configured for this model."
     else

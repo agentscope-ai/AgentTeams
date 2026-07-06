@@ -110,7 +110,7 @@ Project plans and project metadata are Leader-owned. Workers execute assigned ta
 
 **Task assignment**
 
-Task assignment happens in the team room, with the assigned Worker visibly @mentioned by full Matrix ID, for example `@worker-name:matrix-local.hiclaw.io:18080`.
+Task assignment happens in the team room, with the assigned Worker visibly @mentioned by full Matrix ID, for example `@worker-name:matrix-local.agentteams.io:18080`.
 
 When assigning team work and you need the Worker to report back, explicitly tell the Worker to @mention you by your full Matrix ID when the result is ready.
 

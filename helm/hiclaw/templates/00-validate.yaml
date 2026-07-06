@@ -41,9 +41,15 @@ Validate public values at render time. Supported combinations:
 
 {{- $storageProvider := .Values.storage.provider | default "" -}}
 {{- $storageMode := .Values.storage.mode | default "" -}}
+{{- $sandboxRuntime := eq (.Values.controller.workerBackendRuntime | default "pod") "sandbox" -}}
+{{- $sandboxConfigured := or (eq (.Values.controller.workerBackend | default "") "sandbox") $sandboxRuntime -}}
+{{- $mountAuthType := lower (.Values.controller.mountAuthType | default "RRSA") -}}
 {{- if eq $storageProvider "minio" -}}
   {{- if ne $storageMode "managed" -}}
   {{- fail (printf "storage.provider=minio requires storage.mode=managed (got %q)" $storageMode) -}}
+  {{- end -}}
+  {{- if $sandboxConfigured -}}
+  {{- fail "storage.provider=oss is required when sandbox backend is enabled because built-in worker-deps PVs use OSS CSI" -}}
   {{- end -}}
 {{- else if eq $storageProvider "oss" -}}
   {{- if ne $storageMode "existing" -}}
@@ -52,8 +58,27 @@ Validate public values at render time. Supported combinations:
   {{- if not (.Values.storage.oss.region | default "") -}}
   {{- fail "storage.oss.region is required when storage.provider=oss" -}}
   {{- end -}}
+  {{- if and $sandboxConfigured (not (.Values.storage.oss.endpoint | default "")) -}}
+  {{- fail "storage.oss.endpoint is required when sandbox backend is enabled because built-in worker-deps PVs need a CSI url" -}}
+  {{- end -}}
 {{- else -}}
 {{- fail (printf "unsupported storage.provider %q: expected \"minio\" or \"oss\"" $storageProvider) -}}
+{{- end -}}
+
+{{- if $sandboxConfigured -}}
+  {{- $sandboxPrewarmSize := 1 -}}
+  {{- if hasKey .Values.controller.sandbox "prewarmSize" -}}
+    {{- $sandboxPrewarmSize = int .Values.controller.sandbox.prewarmSize -}}
+  {{- end -}}
+  {{- if lt $sandboxPrewarmSize 0 -}}
+  {{- fail (printf "controller.sandbox.prewarmSize must be >= 0 when sandbox backend is enabled (got %d)" $sandboxPrewarmSize) -}}
+  {{- end -}}
+  {{- if and (ne $mountAuthType "rrsa") (ne $mountAuthType "accesskey") -}}
+  {{- fail (printf "controller.mountAuthType must be RRSA or AccessKey when sandbox backend is enabled (got %q)" (.Values.controller.mountAuthType | default "RRSA")) -}}
+  {{- end -}}
+  {{- if and (eq $mountAuthType "rrsa") (not (.Values.controller.mountRoleName | default "")) -}}
+  {{- fail "controller.mountRoleName is required when sandbox backend uses controller.mountAuthType=RRSA" -}}
+  {{- end -}}
 {{- end -}}
 
 {{- $expectedHigressEnabled := eq (include "hiclaw.gateway.higress.enabled" . | trim) "true" -}}

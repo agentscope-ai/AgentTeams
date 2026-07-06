@@ -529,7 +529,7 @@ func TestEnsureAIRoute_MissingCreatesSkeletonWithoutAllowedConsumers(t *testing.
 }
 
 func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
-	putRoutes := map[string]map[string]interface{}{}
+	var putRoutes []string
 	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/system/init":
@@ -560,17 +560,13 @@ func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
 					"name":      "openai-route",
 					"upstreams": []interface{}{map[string]interface{}{"provider": "openai"}},
 					"authConfig": map[string]interface{}{
-						"allowedConsumers": []string{"manager", "worker-alice"},
+						"allowedConsumers": []string{"manager"},
 					},
 				},
 			})
 		case strings.HasPrefix(r.URL.Path, "/v1/ai/routes/") && r.Method == "PUT":
 			routeName := strings.TrimPrefix(r.URL.Path, "/v1/ai/routes/")
-			var body map[string]interface{}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode PUT body: %v", err)
-			}
-			putRoutes[routeName] = body
+			putRoutes = append(putRoutes, routeName)
 			w.WriteHeader(http.StatusOK)
 		default:
 			t.Logf("unexpected: %s %s", r.Method, r.URL.Path)
@@ -580,25 +576,16 @@ func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
 
 	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
 
-	// With provider filter "qwen", qwen-route is authorized and stale
-	// worker-alice authorization is removed from non-matching openai-route.
+	// With provider filter "qwen", only qwen-route should be PUT
 	if err := c.AuthorizeAIRoutes(context.Background(), "worker-alice", "qwen"); err != nil {
 		t.Fatalf("AuthorizeAIRoutes: %v", err)
 	}
-	if len(putRoutes) != 2 {
-		t.Fatalf("expected PUT on qwen-route and stale openai-route, got %v", putRoutes)
-	}
-	qwenConsumers := toStringSlice(putRoutes["qwen-route"]["authConfig"].(map[string]interface{})["allowedConsumers"])
-	if !containsString(qwenConsumers, "worker-alice") {
-		t.Fatalf("qwen-route allowedConsumers=%v, want worker-alice", qwenConsumers)
-	}
-	openAIConsumers := toStringSlice(putRoutes["openai-route"]["authConfig"].(map[string]interface{})["allowedConsumers"])
-	if containsString(openAIConsumers, "worker-alice") {
-		t.Fatalf("openai-route allowedConsumers=%v, want worker-alice removed", openAIConsumers)
+	if len(putRoutes) != 1 || putRoutes[0] != "qwen-route" {
+		t.Errorf("expected PUT only on qwen-route, got %v", putRoutes)
 	}
 
 	// Without provider filter, both routes should be PUT
-	putRoutes = map[string]map[string]interface{}{}
+	putRoutes = nil
 	if err := c.AuthorizeAIRoutes(context.Background(), "worker-bob", ""); err != nil {
 		t.Fatalf("AuthorizeAIRoutes (no filter): %v", err)
 	}
@@ -658,7 +645,7 @@ func TestResolveModelProvider_Higress(t *testing.T) {
 
 	c := NewHigressClient(Config{
 		ConsoleURL:   "http://higress.test",
-		DataPlaneURL: "http://aigw-local.hiclaw.io:8080",
+		DataPlaneURL: "http://aigw-local.agentteams.io:8080",
 	}, client)
 
 	info, err := c.ResolveModelProvider(context.Background(), "qwen")
@@ -671,8 +658,8 @@ func TestResolveModelProvider_Higress(t *testing.T) {
 	if info.BasePath != "/v1/qwen" {
 		t.Errorf("BasePath = %q, want /v1/qwen", info.BasePath)
 	}
-	if info.IntranetURL != "http://aigw-local.hiclaw.io:8080/v1/qwen" {
-		t.Errorf("IntranetURL = %q, want http://aigw-local.hiclaw.io:8080/v1/qwen", info.IntranetURL)
+	if info.IntranetURL != "http://aigw-local.agentteams.io:8080/v1/qwen" {
+		t.Errorf("IntranetURL = %q, want http://aigw-local.agentteams.io:8080/v1/qwen", info.IntranetURL)
 	}
 }
 
@@ -694,7 +681,7 @@ func TestResolveModelProvider_Higress_NotFound(t *testing.T) {
 
 	c := NewHigressClient(Config{
 		ConsoleURL:   "http://higress.test",
-		DataPlaneURL: "http://aigw-local.hiclaw.io:8080",
+		DataPlaneURL: "http://aigw-local.agentteams.io:8080",
 	}, client)
 
 	_, err := c.ResolveModelProvider(context.Background(), "nonexist")

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/go-logr/logr"
 )
@@ -22,7 +23,7 @@ func mergeUserEnv(sysEnv, userEnv map[string]string, logger logr.Logger, subject
 
 	var ignored []string
 	for k, v := range userEnv {
-		if _, taken := sysEnv[k]; taken {
+		if _, taken := sysEnv[k]; taken || isReservedEnvKey(k) {
 			ignored = append(ignored, k)
 			continue
 		}
@@ -36,4 +37,11 @@ func mergeUserEnv(sysEnv, userEnv map[string]string, logger logr.Logger, subject
 	logger.Info("user-defined env keys ignored (reserved by system)",
 		"subject", subject,
 		"keys", ignored)
+}
+
+func isReservedEnvKey(key string) bool {
+	return key == "HOME" ||
+		strings.HasPrefix(key, "AGENTTEAMS_") ||
+		strings.HasPrefix(key, "AGENTTEAMS_") ||
+		strings.HasPrefix(key, "OPENCLAW_")
 }

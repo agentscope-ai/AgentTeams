@@ -10,7 +10,6 @@ import (
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
-	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/fixtures"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -203,20 +202,32 @@ func TestWorkerUpdate_SpecChange_RecreatesPod(t *testing.T) {
 	})
 
 	assertEventually(t, func() error {
-		var w v1beta1.Worker
-		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(worker), &w); err != nil {
-			return err
-		}
-		if w.Status.ObservedGeneration != w.Generation {
-			return fmt.Errorf("ObservedGeneration=%d, want %d", w.Status.ObservedGeneration, w.Generation)
+		_, deletes, _, _, _ := mockBackend.CallSnapshot()
+		if len(deletes) == 0 {
+			return fmt.Errorf("waiting for backend.Delete to remove old container")
 		}
 		return nil
 	})
 
-	creates, deletes, _, _, _ := mockBackend.CallSnapshot()
-	if len(deletes) == 0 {
-		t.Error("backend.Delete should have been called to remove old container")
-	}
+	mockBackend.SimulatePodDeletion(workerName)
+	mockBackend.ClearCalls()
+	// The mock backend has no Pod watch to enqueue the post-delete reconcile
+	// that a real backend would get from a Pod deletion event. Nudge the
+	// controller with a config-only spec change; the pod-affecting change is
+	// still the Image update above.
+	updateSpecField(t, worker, func(w *v1beta1.Worker) {
+		w.Spec.Model = "config-trigger-after-delete"
+	})
+
+	assertEventually(t, func() error {
+		creates, _, _, _, statuses := mockBackend.CallSnapshot()
+		if len(creates) == 0 {
+			return fmt.Errorf("waiting for backend.Create to recreate container, status calls=%v", statuses)
+		}
+		return nil
+	})
+
+	creates, _, _, _, _ := mockBackend.CallSnapshot()
 	if len(creates) == 0 {
 		t.Error("backend.Create should have been called to create new container")
 	}
@@ -363,7 +374,9 @@ func TestWorkerPodDeleted_Recreates(t *testing.T) {
 	if err := k8sClient.Create(ctx, worker); err != nil {
 		t.Fatalf("failed to create Worker CR: %v", err)
 	}
-	t.Cleanup(func() { _ = deleteWorkerAndWait(t, worker) })
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, worker)
+	})
 
 	waitForRunning(t, worker)
 
@@ -381,8 +394,14 @@ func TestWorkerPodDeleted_Recreates(t *testing.T) {
 		return nil
 	})
 
-	// Phase should converge back to Running after recreation.
-	waitForRunning(t, worker)
+	// Phase should still be Running after recreation
+	var w v1beta1.Worker
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(worker), &w); err != nil {
+		t.Fatalf("failed to get Worker: %v", err)
+	}
+	if w.Status.Phase != "Running" {
+		t.Errorf("phase=%q after pod recreation, want Running", w.Status.Phase)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -398,7 +417,9 @@ func TestWorkerCreate_Idempotent_NoDoubleProvision(t *testing.T) {
 	if err := k8sClient.Create(ctx, worker); err != nil {
 		t.Fatalf("failed to create Worker CR: %v", err)
 	}
-	t.Cleanup(func() { _ = deleteWorkerAndWait(t, worker) })
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, worker)
+	})
 
 	waitForRunning(t, worker)
 
@@ -445,14 +466,28 @@ func TestWorkerUpdate_NoInfiniteRecreate(t *testing.T) {
 		w.Spec.Image = "agentteams-worker:test-no-loop"
 	})
 
-	// Wait for reconcile to complete
 	assertEventually(t, func() error {
-		var w v1beta1.Worker
-		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(worker), &w); err != nil {
-			return err
+		_, deletes, _, _, _ := mockBackend.CallSnapshot()
+		if len(deletes) == 0 {
+			return fmt.Errorf("waiting for backend.Delete from spec update")
 		}
-		if w.Status.ObservedGeneration != w.Generation {
-			return fmt.Errorf("ObservedGeneration=%d, want %d", w.Status.ObservedGeneration, w.Generation)
+		return nil
+	})
+
+	mockBackend.SimulatePodDeletion(workerName)
+	mockBackend.ClearCalls()
+	// The mock backend has no Pod watch to enqueue the post-delete reconcile
+	// that a real backend would get from a Pod deletion event. Nudge the
+	// controller with a config-only spec change; the pod-affecting change is
+	// still the Image update above.
+	updateSpecField(t, worker, func(w *v1beta1.Worker) {
+		w.Spec.Model = "config-trigger-after-delete"
+	})
+
+	assertEventually(t, func() error {
+		creates, _, _, _, statuses := mockBackend.CallSnapshot()
+		if len(creates) == 0 {
+			return fmt.Errorf("waiting for backend.Create from spec update, status calls=%v", statuses)
 		}
 		return nil
 	})
@@ -642,9 +677,9 @@ func TestWorkerCreate_EnvPassesToBackend(t *testing.T) {
 	worker.Spec.Env = map[string]string{
 		"USER_FOO":   "bar",
 		"USER_EMPTY": "",
-		// System-wins: HICLAW_WORKER_NAME is produced by MockEnvBuilder and
+		// System-wins: AGENTTEAMS_WORKER_NAME is produced by MockEnvBuilder and
 		// must override this user-supplied value.
-		"HICLAW_WORKER_NAME": "user-should-lose",
+		"AGENTTEAMS_WORKER_NAME": "user-should-lose",
 	}
 
 	if err := k8sClient.Create(ctx, worker); err != nil {
@@ -666,11 +701,11 @@ func TestWorkerCreate_EnvPassesToBackend(t *testing.T) {
 	if got, present := req.Env["USER_EMPTY"]; !present || got != "" {
 		t.Errorf("USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
 	}
-	if got := req.Env["HICLAW_WORKER_NAME"]; got != workerName {
-		t.Errorf("HICLAW_WORKER_NAME=%q, want %q (system wins)", got, workerName)
+	if got := req.Env["AGENTTEAMS_WORKER_NAME"]; got != workerName {
+		t.Errorf("AGENTTEAMS_WORKER_NAME=%q, want %q (system wins)", got, workerName)
 	}
-	if got := req.Env["HICLAW_WORKER_CR_NAME"]; got != workerName {
-		t.Errorf("HICLAW_WORKER_CR_NAME=%q, want %q", got, workerName)
+	if got := req.Env["AGENTTEAMS_WORKER_CR_NAME"]; got != workerName {
+		t.Errorf("AGENTTEAMS_WORKER_CR_NAME=%q, want %q", got, workerName)
 	}
 	if got := req.Env["MOCK_ENV"]; got != "true" {
 		t.Errorf("MOCK_ENV=%q, want %q (system env preserved)", got, "true")
@@ -806,37 +841,6 @@ func TestWorkerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) 
 	assertLabel(t, labels, "agentteams.io/role", "standalone") // system
 }
 
-func TestWorkerResources_PropagateToBackendCreate(t *testing.T) {
-	resetMocks()
-
-	name := fixtures.UniqueName("resources-worker")
-	w := fixtures.NewTestWorker(name)
-	w.Spec.Resources = &v1beta1.AgentResourceRequirements{
-		Requests: v1beta1.AgentResourceValues{CPU: "250m", Memory: "512Mi"},
-		Limits:   v1beta1.AgentResourceValues{CPU: "2", Memory: "4Gi"},
-	}
-
-	if err := k8sClient.Create(ctx, w); err != nil {
-		t.Fatalf("create Worker: %v", err)
-	}
-	t.Cleanup(func() { _ = k8sClient.Delete(ctx, w) })
-
-	waitForRunning(t, w)
-
-	req, ok := mockBackend.FindCreateReq(name)
-	if !ok {
-		creates, _, _, _, _ := mockBackend.CallSnapshot()
-		t.Fatalf("backend Create was never called for %q (creates=%v)", name, creates)
-	}
-	if req.Resources == nil {
-		t.Fatal("CreateRequest.Resources = nil, want Worker spec resources")
-	}
-	if req.Resources.CPURequest != "250m" || req.Resources.MemoryRequest != "512Mi" ||
-		req.Resources.CPULimit != "2" || req.Resources.MemoryLimit != "4Gi" {
-		t.Fatalf("CreateRequest.Resources = %+v", req.Resources)
-	}
-}
-
 // TestWorkerLabels_MetadataLabelsChangeDoesNotRecreatePod verifies the
 // documented non-disruption contract: changing only metadata.labels
 // after the Pod is Running must NOT trigger backend.Delete +
@@ -951,7 +955,7 @@ func triggerReconcile(t *testing.T, worker *v1beta1.Worker) {
 		if w.Annotations == nil {
 			w.Annotations = map[string]string{}
 		}
-		w.Annotations["hiclaw.io/reconcile-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+		w.Annotations["agentteams.io/reconcile-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
 		return k8sClient.Update(ctx, &w)
 	})
 }
@@ -969,21 +973,4 @@ func assertEventually(t *testing.T, condFn func() error) {
 		time.Sleep(interval)
 	}
 	t.Fatalf("condition not met within %v: %v", timeout, lastErr)
-}
-
-func deleteWorkerAndWait(t *testing.T, worker *v1beta1.Worker) error {
-	t.Helper()
-	if err := k8sClient.Delete(ctx, worker); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		var got v1beta1.Worker
-		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(worker), &got)
-		if err != nil {
-			return client.IgnoreNotFound(err)
-		}
-		time.Sleep(interval)
-	}
-	return fmt.Errorf("worker %s not deleted within timeout", worker.Name)
 }

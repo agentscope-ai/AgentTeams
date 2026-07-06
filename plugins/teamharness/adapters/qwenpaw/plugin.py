@@ -7,14 +7,17 @@ storage or runtime config by itself; the qwenpaw-worker triggers those loops.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+from functools import wraps
 import json
 import logging
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +30,8 @@ TEAMS_PROMPT_FILE = "TEAMS.md"
 MCP_CLIENT_ID = "teamharness"
 REDACTION = "[REDACTED]"
 SENSITIVE_FILE_AUTO_DENY_RULE = "SENSITIVE_FILE_BLOCK"
-TEAMS_CONTEXT_START = "<!-- BEGIN HICLAW RUNTIME TEAM CONTEXT -->"
-TEAMS_CONTEXT_END = "<!-- END HICLAW RUNTIME TEAM CONTEXT -->"
+TEAMS_CONTEXT_START = "<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->"
+TEAMS_CONTEXT_END = "<!-- END AGENTTEAMS RUNTIME TEAM CONTEXT -->"
 _TASK_TRACE_MODULE: Any = None
 _TASK_TRACE_REGISTERED: bool = False
 
@@ -60,6 +63,29 @@ _BUILTIN_SANITIZER_PATTERNS: List[tuple[re.Pattern[str], str]] = [
         r"\1********",
     ),
 ]
+
+_ENV_REF_PATTERN = re.compile(
+    r"""
+    (?<!\\)
+    (?:
+        \$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}
+        |
+        \$(?P<plain>[A-Za-z_][A-Za-z0-9_]*)
+    )
+    """,
+    re.VERBOSE,
+)
+_ENV_ASSIGNMENT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+_SHELL_COMMAND_SEPARATORS = {";", ";;", "&", "&&", "|", "|&", "||", "(", ")"}
+_COMMAND_WRAPPERS = {"builtin", "command", "exec", "nohup"}
+_SUDO_OPTIONS_WITH_VALUE = {"-C", "-g", "-h", "-p", "-T", "-u"}
+_TIME_OPTIONS_WITH_VALUE = {"-f", "-o"}
+_ENV_OPTIONS_WITH_VALUE = {"-u", "--unset"}
+
+_current_env_overlay: ContextVar[Dict[str, str]] = ContextVar(
+    "teamharness_qwenpaw_credential_env_overlay",
+    default={},
+)
 
 
 def _read_yaml(path: Path) -> Dict[str, Any]:
@@ -119,6 +145,160 @@ def _read_json(path: Path) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def referenced_env_names(command: str, candidate_names: set[str]) -> set[str]:
+    names: set[str] = set()
+    if not command or not candidate_names:
+        return names
+    for match in _ENV_REF_PATTERN.finditer(command):
+        name = match.group("braced") or match.group("plain") or ""
+        if name in candidate_names:
+            names.add(name)
+    return names
+
+
+def _shell_tokens(command: str) -> List[str]:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();|&")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        return list(lexer)
+    except ValueError:
+        return []
+
+
+def _skip_prefixed_command_options(tokens: List[str], index: int, options_with_value: set[str]) -> int:
+    while index < len(tokens) and tokens[index].startswith("-"):
+        option = tokens[index]
+        index += 1
+        if option in options_with_value and index < len(tokens):
+            index += 1
+    return index
+
+
+def _simple_command_tool_name(tokens: List[str]) -> str:
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if _ENV_ASSIGNMENT_PATTERN.match(token):
+            index += 1
+            continue
+        name = os.path.basename(token)
+        if name == "env":
+            index += 1
+            while index < len(tokens):
+                if _ENV_ASSIGNMENT_PATTERN.match(tokens[index]):
+                    index += 1
+                    continue
+                if tokens[index].startswith("-"):
+                    index = _skip_prefixed_command_options(tokens, index, _ENV_OPTIONS_WITH_VALUE)
+                    continue
+                break
+            continue
+        if name == "sudo":
+            index = _skip_prefixed_command_options(tokens, index + 1, _SUDO_OPTIONS_WITH_VALUE)
+            continue
+        if name == "time":
+            index = _skip_prefixed_command_options(tokens, index + 1, _TIME_OPTIONS_WITH_VALUE)
+            continue
+        if name in _COMMAND_WRAPPERS:
+            index += 1
+            continue
+        return name
+    return ""
+
+
+def shell_command_tool_names(command: str) -> set[str]:
+    tools: set[str] = set()
+    segment: List[str] = []
+    for token in _shell_tokens(command):
+        if token in _SHELL_COMMAND_SEPARATORS:
+            tool = _simple_command_tool_name(segment)
+            if tool:
+                tools.add(tool)
+            segment = []
+            continue
+        segment.append(token)
+    tool = _simple_command_tool_name(segment)
+    if tool:
+        tools.add(tool)
+    return tools
+
+
+def credential_env_names_for_shell_command(command: str, config: Any) -> set[str]:
+    names = referenced_env_names(command, set(config.credential_binding_env_names))
+    if not command:
+        return names
+    command_tools = shell_command_tool_names(command)
+    env_provider_names = getattr(config, "credential_binding_env_provider_names", {})
+    for binding in config.credential_bindings:
+        credential_ref = binding.get("credentialRef", {}) if isinstance(binding, dict) else {}
+        provider_name = str(credential_ref.get("apiKeyCredentialProviderName") or "").strip()
+        name = next((env_name for env_name, provider in env_provider_names.items() if provider == provider_name), "")
+        if not name:
+            continue
+        tool_whitelist = binding.get("toolWhitelist", []) if isinstance(binding, dict) else []
+        if not isinstance(tool_whitelist, list):
+            continue
+        if any(str(item).strip() and str(item).strip() in command_tools for item in tool_whitelist):
+            names.add(name)
+    return names
+
+
+def credential_env_for_shell_command(command: str, config: Any, data_client: Any) -> Dict[str, str]:
+    from qwenpaw_worker.credentials import AgentIdentityCredentialResolver
+
+    requested_names = credential_env_names_for_shell_command(command, config)
+    if not requested_names:
+        return {}
+    return AgentIdentityCredentialResolver(config, data_client).resolve_env(requested_names)
+
+
+def credential_env_for_shell_command_with_factory(
+    command: str,
+    config: Any,
+    data_client_factory: Callable[[Any], Any],
+) -> Dict[str, str]:
+    from qwenpaw_worker.credentials import AgentIdentityCredentialResolver
+
+    requested_names = credential_env_names_for_shell_command(command, config)
+    if not requested_names:
+        return {}
+    return AgentIdentityCredentialResolver(config, data_client_factory(config)).resolve_env(requested_names)
+
+
+def set_current_credential_env_overlay(env: Dict[str, str]) -> object:
+    return _current_env_overlay.set(dict(env))
+
+
+def clear_current_credential_env_overlay() -> None:
+    _current_env_overlay.set({})
+
+
+def current_credential_env_overlay() -> Dict[str, str]:
+    return dict(_current_env_overlay.get())
+
+
+def current_credential_secret_values() -> List[str]:
+    return [value for value in _current_env_overlay.get().values() if len(value) >= 4]
+
+
+def merge_env_with_credential_overlay(base_env: Dict[str, str] | None) -> Dict[str, str]:
+    env = dict(base_env or {})
+    overlay = _current_env_overlay.get()
+    if overlay:
+        env.update(overlay)
+    return env
+
+
+def _shell_tool_error_response(message: str) -> Any:
+    try:
+        from agentscope.message import TextBlock
+        from agentscope.tool import ToolResponse
+    except ImportError:
+        return {"content": message}
+    return ToolResponse(content=[TextBlock(type="text", text=message)])
+
+
 def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
@@ -127,7 +307,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def _shared_dir() -> Path:
-    raw = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("HICLAW_SHARED_DIR", "").strip()
+    raw = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("AGENTTEAMS_SHARED_DIR", "").strip()
     if raw:
         return Path(raw)
     qwenpaw_dir = os.getenv("QWENPAW_WORKING_DIR", "").strip()
@@ -157,7 +337,7 @@ def render_team_context(config: Dict[str, Any]) -> str:
     channel_policy = _section(desired, "channelPolicy")
     base_prompt = ASSET_DIR / "prompts" / "team" / "TEAMS.md"
     base = base_prompt.read_text(encoding="utf-8").strip() if base_prompt.exists() else ""
-    role = _string(member.get("role") or os.getenv("HICLAW_AGENT_ROLE") or "worker")
+    role = _string(member.get("role") or os.getenv("AGENTTEAMS_AGENT_ROLE") or "worker")
     role_prompt = _role_prompt(role)
     role_text = role_prompt.read_text(encoding="utf-8").strip() if role_prompt and role_prompt.exists() else ""
 
@@ -234,6 +414,7 @@ def _sanitizer_rules() -> List[str]:
     desired = _section(config, "desired")
     policy = _section(desired, "outputSanitize")
     rules = _string_list(policy.get("keywords"))
+    rules.extend(current_credential_secret_values())
     credentials = _section(config, "credentials")
     env_refs = _string_list(policy.get("envRefs"))
     for key in ("matrixTokenEnv", "gatewayKeyEnv", "storageAccessKeyEnv", "storageSecretKeyEnv"):
@@ -265,7 +446,7 @@ def _credagent_paths() -> List[Path]:
     paths: List[Path] = []
     for _agent_id, workspace_dir in _iter_qwenpaw_agents():
         paths.append(workspace_dir / "config" / "credagent.json")
-    for env_name in ("HICLAW_AGENT_HOME", "HICLAW_WORKER_HOME"):
+    for env_name in ("AGENTTEAMS_AGENT_HOME", "AGENTTEAMS_WORKER_HOME"):
         raw = os.getenv(env_name, "").strip()
         if raw:
             paths.append(Path(raw).expanduser() / "config" / "credagent.json")
@@ -595,7 +776,7 @@ def _enable_workspace_skills(workspace_dir: Path, role: str) -> Dict[str, Any]:
 
 def _install_workspace_assets(agent_id: str, workspace_dir: Path, config: Dict[str, Any]) -> Dict[str, Any]:
     member = _section(config, "member")
-    role = _string(member.get("role") or os.getenv("HICLAW_AGENT_ROLE") or "worker")
+    role = _string(member.get("role") or os.getenv("AGENTTEAMS_AGENT_ROLE") or "worker")
     workspace_dir.mkdir(parents=True, exist_ok=True)
     team_context = _write_team_context(workspace_dir, config)
     prompts = _ensure_prompt_files(agent_id, [TEAMS_PROMPT_FILE])
@@ -653,25 +834,25 @@ def _install_skills() -> Dict[str, Any]:
 
 
 def _mcp_client_env() -> Dict[str, str]:
-    env = {"TEAMHARNESS_SHARED_DIR": str(_shared_dir())}
+    env = {
+        "TEAMHARNESS_SHARED_DIR": str(_shared_dir()),
+        "LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS": "false",
+    }
     for name in (
         "TEAMHARNESS_RUNTIME_CONFIG",
-        "HICLAW_MATRIX_URL",
-        "HICLAW_WORKER_MATRIX_TOKEN",
-        "HICLAW_MATRIX_USER_ID",
-        "HICLAW_WORKER_ROLE",
-        "HICLAW_AGENT_ROLE",
-        "HICLAW_WORKER_NAME",
-        "HICLAW_STORAGE_PREFIX",
-        "HICLAW_SHARED_STORAGE_PREFIX",
-        "HICLAW_FS_BUCKET",
-        "HICLAW_CONTROLLER_URL",
-        "HICLAW_AUTH_TOKEN_FILE",
-        "HICLAW_CLUSTER_ID",
-        "HICLAW_FS_ENDPOINT",
-        "HICLAW_FS_ACCESS_KEY",
-        "HICLAW_FS_SECRET_KEY",
-        "MC_HOST_hiclaw",
+        "AGENTTEAMS_MATRIX_URL",
+        "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+        "AGENTTEAMS_MATRIX_USER_ID",
+        "AGENTTEAMS_WORKER_ROLE",
+        "AGENTTEAMS_AGENT_ROLE",
+        "AGENTTEAMS_WORKER_NAME",
+        "AGENTTEAMS_STORAGE_PREFIX",
+        "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+        "AGENTTEAMS_FS_BUCKET",
+        "AGENTTEAMS_CONTROLLER_URL",
+        "AGENTTEAMS_AUTH_TOKEN_FILE",
+        "AGENTTEAMS_CLUSTER_ID",
+        "AGENTTEAMS_FS_ENDPOINT",
         "QWENPAW_WORKING_DIR",
         "COPAW_WORKING_DIR",
     ):
@@ -721,7 +902,7 @@ def apply_teamharness() -> Dict[str, Any]:
     return {"ok": True, "agents": agents, "skills": skills, "mcp": mcp, "credentialGuard": credential_guard}
 
 
-def install_output_sanitizer_wrapper() -> Dict[str, Any]:
+def install_output_sanitizer_wrapper(api: Any = None) -> Dict[str, Any]:
     try:
         from qwenpaw.agents.react_agent import QwenPawAgent
     except ImportError:
@@ -729,9 +910,7 @@ def install_output_sanitizer_wrapper() -> Dict[str, Any]:
     if getattr(QwenPawAgent, "_teamharness_sanitizer_installed", False):
         return {"ok": True, "installed": True, "action": "unchanged"}
 
-    original = getattr(QwenPawAgent, "_acting", None)
-    if not callable(original):
-        return {"ok": True, "installed": False, "reason": "qwenpaw agent _acting hook unavailable"}
+    original = QwenPawAgent._acting
 
     async def _acting_with_sanitizer(self, tool_call):
         result = await original(self, tool_call)
@@ -743,9 +922,148 @@ def install_output_sanitizer_wrapper() -> Dict[str, Any]:
     return {"ok": True, "installed": True, "action": "created"}
 
 
+def _member_runtime_config_for_credentials() -> Any:
+    from qwenpaw_worker.update import MemberRuntimeConfig
+
+    path = _runtime_config_path()
+    if path is not None:
+        return MemberRuntimeConfig.load(path)
+    return MemberRuntimeConfig(path=Path("runtime.yaml"), raw=load_runtime_config())
+
+
+def make_shell_credential_before_hook(
+    *,
+    config_loader: Callable[[], Any],
+    data_client_factory: Callable[[Any], Any],
+) -> Callable[[Dict[str, Any], Any], Awaitable[Dict[str, Any] | None]]:
+    async def before(input_data: Dict[str, Any], _ctx: Any) -> Dict[str, Any] | None:
+        command = str(input_data.get("command") or "")
+        env = credential_env_for_shell_command_with_factory(command, config_loader(), data_client_factory)
+        set_current_credential_env_overlay(env)
+        return input_data
+
+    return before
+
+
+def make_shell_credential_after_hook(
+    result_sanitizer: Callable[[Any], Any] | None = None,
+) -> Callable[[Any, Any], Awaitable[Any | None]]:
+    async def after(response: Any, _ctx: Any) -> Any:
+        if result_sanitizer is not None:
+            result_sanitizer(response)
+        clear_current_credential_env_overlay()
+        return response
+
+    return after
+
+
+def register_agentscope2_shell_credential_hook(
+    coordinator: Any,
+    *,
+    config_loader: Callable[[], Any],
+    data_client_factory: Callable[[Any], Any],
+    result_sanitizer: Callable[[Any], Any] | None = None,
+) -> Dict[str, Any]:
+    hooks = getattr(coordinator, "hooks", None)
+    register = getattr(hooks, "register", None)
+    if not callable(register):
+        return {"ok": True, "installed": False, "reason": "ToolHookRegistry unavailable"}
+    register(
+        "execute_shell_command",
+        before=make_shell_credential_before_hook(
+            config_loader=config_loader,
+            data_client_factory=data_client_factory,
+        ),
+        after=make_shell_credential_after_hook(result_sanitizer=result_sanitizer),
+    )
+    return {"ok": True, "installed": True, "mode": "agentscope2"}
+
+
+def install_legacy_shell_credential_hook(
+    shell_module: Any,
+    *,
+    config_loader: Callable[[], Any],
+    data_client_factory: Callable[[Any], Any],
+    result_sanitizer: Callable[[Any], Any] | None = None,
+    mirror_modules: tuple[Any, ...] = (),
+) -> Dict[str, Any]:
+    if getattr(shell_module, "_agentteams_credential_hook_installed", False):
+        return {"ok": True, "installed": True, "mode": "legacy", "action": "unchanged"}
+
+    original_execute = shell_module.execute_shell_command
+    original_create_subprocess_shell = shell_module.asyncio.create_subprocess_shell
+
+    async def create_subprocess_shell_with_credentials(*args: Any, **kwargs: Any) -> Any:
+        if current_credential_env_overlay():
+            kwargs["env"] = merge_env_with_credential_overlay(kwargs.get("env") or os.environ.copy())
+        return await original_create_subprocess_shell(*args, **kwargs)
+
+    @wraps(original_execute)
+    async def execute_shell_command_with_credentials(command: str, *args: Any, **kwargs: Any) -> Any:
+        try:
+            env = credential_env_for_shell_command_with_factory(command, config_loader(), data_client_factory)
+        except Exception as exc:
+            logger.exception("credential env resolution failed before shell command execution")
+            return _shell_tool_error_response(
+                "Error: Credential resolution failed before shell command execution: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        token = set_current_credential_env_overlay(env)
+        try:
+            result = await original_execute(command, *args, **kwargs)
+            if result_sanitizer is not None:
+                result_sanitizer(result)
+            return result
+        finally:
+            _current_env_overlay.reset(token)  # type: ignore[arg-type]
+
+    shell_module.asyncio.create_subprocess_shell = create_subprocess_shell_with_credentials
+    shell_module.execute_shell_command = execute_shell_command_with_credentials
+    for module in mirror_modules:
+        if hasattr(module, "execute_shell_command"):
+            module.execute_shell_command = execute_shell_command_with_credentials
+    shell_module._agentteams_credential_hook_installed = True
+    return {"ok": True, "installed": True, "mode": "legacy", "action": "created"}
+
+
+def install_credential_shell_hook() -> Dict[str, Any]:
+    try:
+        from qwenpaw_worker.credentials import default_agentidentity_data_client
+        import qwenpaw.agents.tools.shell as shell_module
+    except ImportError as exc:
+        return {"ok": True, "installed": False, "reason": str(exc)}
+
+    mirror_modules = []
+    for module_name in ("qwenpaw.agents.tools", "qwenpaw.agents.react_agent"):
+        try:
+            __import__(module_name)
+            module = sys.modules.get(module_name)
+        except ImportError:
+            module = None
+        if module is not None:
+            mirror_modules.append(module)
+
+    return install_legacy_shell_credential_hook(
+        shell_module,
+        config_loader=_member_runtime_config_for_credentials,
+        data_client_factory=default_agentidentity_data_client,
+        result_sanitizer=sanitize_tool_result,
+        mirror_modules=tuple(mirror_modules),
+    )
+
+
 def _task_trace_module_path() -> Optional[Path]:
-    candidate = PLUGIN_DIR / "task_trace.py"
-    return candidate if candidate.exists() else None
+    candidates = [
+        PLUGIN_DIR / "task_trace.py",
+    ]
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _load_task_trace_module() -> Tuple[Optional[Any], Optional[str]]:
@@ -886,12 +1204,16 @@ def install_task_trace_context_wrapper(trace_module: Any) -> Dict[str, Any]:
         if workspace_dir is None:
             return
         default_ws = workspace_dir / "workspaces" / "default"
+        # Prefer the pending entry span stashed by on_start (the common path:
+        # entry span was created before room context was available).
         tag_pending = getattr(trace_module, "tag_pending_entry_span", None)
         if callable(tag_pending):
             get_pending = getattr(trace_module, "get_pending_entry_span", None)
             if callable(get_pending) and get_pending() is not None:
                 tag_pending(default_ws)
                 return
+        # Fallback: current span might be the entry span (e.g. room was set
+        # before instrumentation created it).
         tag_current = getattr(trace_module, "tag_current_entry_span", None)
         if callable(tag_current):
             tag_current(default_ws)
@@ -981,17 +1303,19 @@ class TeamHarnessPlugin:
     def __init__(self) -> None:
         self.last_apply_result: Dict[str, Any] = {}
         self.sanitizer_result: Dict[str, Any] = {}
+        self.credential_shell_result: Dict[str, Any] = {}
         self.trace_result: Dict[str, Any] = {}
 
-    def _sync_runtime(self) -> Dict[str, Any]:
+    def _sync_runtime(self, api: Any) -> Dict[str, Any]:
         self.last_apply_result = apply_teamharness()
-        self.sanitizer_result = install_output_sanitizer_wrapper()
+        self.sanitizer_result = install_output_sanitizer_wrapper(api=api)
+        self.credential_shell_result = install_credential_shell_hook()
         self.trace_result = install_task_trace_processor()
         return self.last_apply_result
 
     def register(self, api: Any) -> None:
         def sync() -> Dict[str, Any]:
-            return self._sync_runtime()
+            return self._sync_runtime(api)
 
         def shutdown() -> None:
             return None
@@ -1022,7 +1346,7 @@ class TeamHarnessPlugin:
 
         @router.post("/sync")
         def sync_endpoint() -> Dict[str, Any]:
-            return self._sync_runtime()
+            return self._sync_runtime(api)
 
         api.register_http_router(router, prefix="/teamharness", tags=["teamharness"])
 

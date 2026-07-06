@@ -34,7 +34,6 @@ type K8sConfig struct {
 	QwenPawWorkerImage   string
 	WorkerCPU            string
 	WorkerMemory         string
-
 	// ControllerName identifies this controller instance. The agent
 	// PodTemplateSpec overlay (see LoadAgentPodTemplate) is looked up as the
 	// ConfigMap named exactly ControllerName in the controller's own

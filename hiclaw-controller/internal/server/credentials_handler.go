@@ -35,10 +35,11 @@ func (h *CredentialsHandler) RefreshSTS(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	log.Printf("[INFO] STS credential request from %s/%s", caller.Role, caller.Username)
-	token, err := h.stsService.IssueForCaller(r.Context(), caller)
+	purpose := r.URL.Query().Get("purpose")
+	log.Printf("[INFO] STS credential request from %s/%s purpose=%q", caller.Role, caller.Username, purpose)
+	token, err := h.stsService.IssueForCallerPurpose(r.Context(), caller, purpose)
 	if err != nil {
-		log.Printf("[ERROR] issue STS token for %s/%s: %v", caller.Role, caller.Username, err)
+		log.Printf("[ERROR] issue STS token for %s/%s purpose=%q: %v", caller.Role, caller.Username, purpose, err)
 		httputil.WriteError(w, http.StatusInternalServerError, "failed to issue STS token: "+err.Error())
 		return
 	}

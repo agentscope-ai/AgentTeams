@@ -49,14 +49,12 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-alice" {
+	if session != "agentteams-worker-alice" {
 		t.Fatalf("session = %q", session)
 	}
-	// Standalone workers now default to a single object-storage entry
-	// that folds agents/<name>/* + shared/* together, mirroring the
-	// embedded MinIO policy which grants both prefixes RW.
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	// Standalone workers default to workspace RW plus package-source read.
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	e := entries[0]
 	if e.Service != credprovider.ServiceObjectStorage {
@@ -74,6 +72,7 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	if !hasAllPerms(e.Permissions, "read", "write", "list", "delete") {
 		t.Fatalf("expected RW shared/* permissions, got %+v", e.Permissions)
 	}
+	assertPackageSourceReadEntry(t, entries)
 }
 
 func hasPrefix(prefixes []string, want string) bool {
@@ -98,6 +97,19 @@ func hasAllPerms(perms []string, want ...string) bool {
 	return true
 }
 
+func hasAnyPerm(perms []string, want ...string) bool {
+	set := make(map[string]struct{}, len(perms))
+	for _, p := range perms {
+		set[p] = struct{}{}
+	}
+	for _, w := range want {
+		if _, ok := set[w]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func entryForService(entries []credprovider.AccessEntry, service string) *credprovider.AccessEntry {
 	for i := range entries {
 		if entries[i].Service == service {
@@ -105,6 +117,27 @@ func entryForService(entries []credprovider.AccessEntry, service string) *credpr
 		}
 	}
 	return nil
+}
+
+func assertPackageSourceReadEntry(t *testing.T, entries []credprovider.AccessEntry) {
+	t.Helper()
+	for i := range entries {
+		e := entries[i]
+		if e.Service != credprovider.ServiceObjectStorage {
+			continue
+		}
+		if !hasPrefix(e.Scope.Prefixes, "agentteams-config/packages/*") {
+			continue
+		}
+		if e.Scope.Bucket != "hiclaw-test" {
+			t.Fatalf("package source bucket not resolved: %+v", e.Scope)
+		}
+		if !hasAllPerms(e.Permissions, "read", "list") || hasAnyPerm(e.Permissions, "write", "delete") {
+			t.Fatalf("package source entry must be read/list only, got %+v", e.Permissions)
+		}
+		return
+	}
+	t.Fatalf("missing package source read entry in %+v", entries)
 }
 
 func TestResolveWorker_CustomBucketRef(t *testing.T) {
@@ -181,6 +214,69 @@ func TestResolveWorker_ObjectStorageMissingPrefixes(t *testing.T) {
 	}
 }
 
+func TestResolveAgentIdentityDataForWorkerCredentialBindings(t *testing.T) {
+	worker := &v1beta1.Worker{}
+	worker.Name = "cred-bot"
+	worker.Namespace = testNS
+	worker.Spec.AgentIdentity = &v1beta1.AgentIdentitySpec{WorkloadIdentityName: "wi-cred-bot"}
+	worker.Spec.CredentialBindings = []v1beta1.CredentialBinding{{
+		CredentialRef: v1beta1.CredentialRef{
+			TokenVaultName:               "default",
+			APIKeyCredentialProviderName: "GITHUB_TOKEN",
+		},
+	}}
+	c := newFakeClient(t, worker)
+
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	session, entries, err := r.ResolveAgentIdentityDataForCaller(context.Background(), &auth.CallerIdentity{
+		Role: auth.RoleWorker, Username: "cred-bot", WorkerName: "cred-bot",
+	})
+	if err != nil {
+		t.Fatalf("resolve agentidentitydata: %v", err)
+	}
+	if session != "agentteams-worker-cred-bot" {
+		t.Fatalf("session=%q", session)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries len=%d: %#v", len(entries), entries)
+	}
+	got := entries[0]
+	if got.Service != credprovider.ServiceAgentIdentityData {
+		t.Fatalf("service=%q", got.Service)
+	}
+	if !hasAllPerms(got.Permissions, "read") {
+		t.Fatalf("permissions=%#v", got.Permissions)
+	}
+	if len(got.Scope.Resources) != 2 || got.Scope.Resources[0] != "GetWorkloadAccessToken" || got.Scope.Resources[1] != "GetResourceAPIKey" {
+		t.Fatalf("resources=%#v", got.Scope.Resources)
+	}
+
+	_, defaultEntries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role: auth.RoleWorker, Username: "cred-bot", WorkerName: "cred-bot",
+	})
+	if err != nil {
+		t.Fatalf("resolve default entries: %v", err)
+	}
+	if entryForService(defaultEntries, credprovider.ServiceAgentIdentityData) != nil {
+		t.Fatalf("default STS entries must not include agentidentitydata: %#v", defaultEntries)
+	}
+}
+
+func TestResolveAgentIdentityDataForWorkerWithoutBindings(t *testing.T) {
+	worker := &v1beta1.Worker{}
+	worker.Name = "plain-bot"
+	worker.Namespace = testNS
+	c := newFakeClient(t, worker)
+
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	_, _, err := r.ResolveAgentIdentityDataForCaller(context.Background(), &auth.CallerIdentity{
+		Role: auth.RoleWorker, Username: "plain-bot", WorkerName: "plain-bot",
+	})
+	if err == nil || !strings.Contains(err.Error(), "credentialBindings are empty") {
+		t.Fatalf("expected missing credential bindings error, got %v", err)
+	}
+}
+
 func TestResolveManager_Defaults(t *testing.T) {
 	mgr := &v1beta1.Manager{}
 	mgr.Name = "manager"
@@ -194,7 +290,7 @@ func TestResolveManager_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-manager-manager" {
+	if session != "agentteams-manager-manager" {
 		t.Fatalf("session = %q", session)
 	}
 	if len(entries) != 1 {
@@ -235,12 +331,13 @@ func TestResolve_AIGatewayHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 3 {
 		t.Fatalf("got %d entries", len(entries))
 	}
 	if entryForService(entries, credprovider.ServiceObjectStorage) == nil {
 		t.Fatalf("missing default object-storage entry in %+v", entries)
 	}
+	assertPackageSourceReadEntry(t, entries)
 	got := entryForService(entries, credprovider.ServiceAIGateway)
 	if got == nil {
 		t.Fatalf("missing ai-gateway entry in %+v", entries)
@@ -276,12 +373,13 @@ func TestResolve_AIRegistryDefaultResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 3 {
 		t.Fatalf("got %d entries", len(entries))
 	}
 	if entryForService(entries, credprovider.ServiceObjectStorage) == nil {
 		t.Fatalf("missing default object-storage entry in %+v", entries)
 	}
+	assertPackageSourceReadEntry(t, entries)
 	got := entryForService(entries, credprovider.ServiceAIRegistry)
 	if got == nil {
 		t.Fatalf("missing ai-registry entry in %+v", entries)
@@ -457,8 +555,10 @@ func newAlphaTeam() *v1beta1.Team {
 	team := &v1beta1.Team{}
 	team.Name = "alpha"
 	team.Namespace = testNS
-	team.Spec.Leader = v1beta1.LeaderSpec{Name: "lead"}
-	team.Spec.Workers = []v1beta1.TeamWorkerSpec{{Name: "w1"}}
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "lead", Role: "team_leader"},
+		{Name: "w1", Role: "worker"},
+	}
 	return team
 }
 
@@ -570,11 +670,11 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-lead" {
-		t.Fatalf("session = %q, want hiclaw-worker-lead", session)
+	if session != "agentteams-worker-lead" {
+		t.Fatalf("session = %q, want agentteams-worker-lead", session)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	e := entries[0]
 	if e.Scope.Bucket != "hiclaw-test" {
@@ -588,12 +688,16 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	if !hasAllPerms(e.Permissions, "read", "write", "list", "delete") {
 		t.Fatalf("expected RW permissions, got %+v", e.Permissions)
 	}
+	assertPackageSourceReadEntry(t, entries)
 }
 
 func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	team := newAlphaTeam()
-	team.Spec.Leader.WorkerName = "runtime-lead"
-	c := newFakeClient(t, team)
+	worker := &v1beta1.Worker{}
+	worker.Name = "lead"
+	worker.Namespace = testNS
+	worker.Spec.WorkerName = "runtime-lead"
+	c := newFakeClient(t, team, worker)
 
 	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
@@ -605,11 +709,11 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-runtime-lead" {
-		t.Fatalf("session = %q, want hiclaw-worker-runtime-lead", session)
+	if session != "agentteams-worker-runtime-lead" {
+		t.Fatalf("session = %q, want agentteams-worker-runtime-lead", session)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	got := entries[0].Scope.Prefixes
 	if !hasPrefix(got, "agents/runtime-lead/*") {
@@ -658,11 +762,11 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-w1" {
+	if session != "agentteams-worker-w1" {
 		t.Fatalf("session = %q", session)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	e := entries[0]
 	for _, want := range []string{"agents/w1/*", "shared/*", "teams/alpha/*"} {
@@ -676,12 +780,16 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 	if !hasAllPerms(e.Permissions, "read", "write", "list", "delete") {
 		t.Fatalf("expected RW permissions, got %+v", e.Permissions)
 	}
+	assertPackageSourceReadEntry(t, entries)
 }
 
 func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	team := newAlphaTeam()
-	team.Spec.Workers[0].WorkerName = "runtime-w1"
-	c := newFakeClient(t, team)
+	worker := &v1beta1.Worker{}
+	worker.Name = "w1"
+	worker.Namespace = testNS
+	worker.Spec.WorkerName = "runtime-w1"
+	c := newFakeClient(t, team, worker)
 
 	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
@@ -693,11 +801,11 @@ func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-runtime-w1" {
-		t.Fatalf("session = %q, want hiclaw-worker-runtime-w1", session)
+	if session != "agentteams-worker-runtime-w1" {
+		t.Fatalf("session = %q, want agentteams-worker-runtime-w1", session)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	got := entries[0].Scope.Prefixes
 	if !hasPrefix(got, "agents/runtime-w1/*") {
@@ -710,7 +818,10 @@ func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 
 func TestResolveTeamMember_CustomEntries(t *testing.T) {
 	team := newAlphaTeam()
-	team.Spec.Workers[0].AccessEntries = []v1beta1.AccessEntry{
+	worker := &v1beta1.Worker{}
+	worker.Name = "w1"
+	worker.Namespace = testNS
+	worker.Spec.AccessEntries = []v1beta1.AccessEntry{
 		{
 			Service:     credprovider.ServiceObjectStorage,
 			Permissions: []string{"read"},
@@ -720,7 +831,7 @@ func TestResolveTeamMember_CustomEntries(t *testing.T) {
 			}),
 		},
 	}
-	c := newFakeClient(t, team)
+	c := newFakeClient(t, team, worker)
 
 	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
@@ -760,8 +871,8 @@ func TestResolveTeamMember_TeamCRMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	got := entries[0].Scope.Prefixes
 	for _, want := range []string{"agents/ghost-worker/*", "shared/*", "teams/ghost/*"} {
@@ -769,4 +880,5 @@ func TestResolveTeamMember_TeamCRMissing(t *testing.T) {
 			t.Fatalf("missing prefix %q in %+v", want, got)
 		}
 	}
+	assertPackageSourceReadEntry(t, entries)
 }

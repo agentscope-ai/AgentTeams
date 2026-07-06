@@ -1,0 +1,18 @@
+{
+  "id": "agentteams-openclaw-local-runtime",
+  "displayName": "AgentTeams OpenClaw Local Runtime",
+  "deployMode": "plugin-probe",
+  "localWorkerRuntime": "openclaw",
+  "detection": {
+    "paths": [],
+    "commands": []
+  },
+  "pluginProbe": {
+    "source": {
+      "type": "tar",
+      "tarball": "$PILOT_DATA/plugins/agentteams-openclaw-local-runtime-0.0.2.tar.gz",
+      "destDir": "$PILOT_DATA/local-worker-template-cache/agentteams-openclaw-local-runtime"
+    },
+    "mountType": "wrapper"
+  }
+}

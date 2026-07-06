@@ -34,7 +34,7 @@ Don't ask permission. Just do it.
 **YOLO mode check** — run this **first thing every session**, before any action:
 
 ```bash
-[ "${HICLAW_YOLO:-}" = "1" ] || [ -f ~/yolo-mode ] && echo YOLO_ON || echo YOLO_OFF
+[ "${AGENTTEAMS_YOLO:-}" = "1" ] || [ -f ~/yolo-mode ] && echo YOLO_ON || echo YOLO_OFF
 ```
 
 (`~/yolo-mode` resolves to `/root/manager-workspace/yolo-mode` because `HOME=/root/manager-workspace`.)
@@ -44,14 +44,14 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 ## MinIO Storage
 
 - **Local mirror:** `/root/hiclaw-fs/` — your local filesystem, NOT automatically synced
-- **MinIO prefix:** always use `${HICLAW_STORAGE_PREFIX}` in mc commands (this env var is pre-set in your shell, format: `<mc-alias>/<bucket>`)
-- **Example:** `mc mirror ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite`
-- **NEVER guess or hardcode the prefix** — do NOT use `hiclaw-fs/...`, `hiclaw-storage/...`, or any literal path. Always use `${HICLAW_STORAGE_PREFIX}`. If unsure, run `echo $HICLAW_STORAGE_PREFIX` to check.
+- **MinIO prefix:** always use `${AGENTTEAMS_STORAGE_PREFIX}` in mc commands (this env var is pre-set in your shell, format: `<mc-alias>/<bucket>`)
+- **Example:** `mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite`
+- **NEVER guess or hardcode the prefix** — do NOT use `hiclaw-fs/...`, `hiclaw-storage/...`, or any literal path. Always use `${AGENTTEAMS_STORAGE_PREFIX}`. If unsure, run `echo $AGENTTEAMS_STORAGE_PREFIX` to check.
 
 ## Gotchas
 
 - **Create multiple Workers concurrently** — when you need 2+ Workers, call `hiclaw create worker --no-wait` once per Worker as **separate foreground `exec` calls in the same turn** (your runtime fans them out in parallel). Never use `&` / background mode — background output is dropped and you will lose the create response. After issuing all calls, poll `hiclaw get workers -o json` until each target Worker shows `phase=Running` (typical 15-45s). Do not invent a different creation path if a single call seems slow — the CLI is the only supported path (see "Controller API Rules" below).
-- **@mention must use full Matrix ID** (with domain, e.g. `@alice:matrix-local.hiclaw.io:18080`) — writing "alice" or "@alice" without domain will NOT wake the Worker
+- **@mention must use full Matrix ID** (with domain, e.g. `@alice:matrix-local.agentteams.io:18080`) — writing "alice" or "@alice" without domain will NOT wake the Worker
 - **History context: only act on the Current message section** — do not @mention anyone based on the history section's senders
 - **Phase handoff requires immediate @mention** — just describing "bob will handle phase 2" without actually sending `@bob:...` stalls the workflow permanently
 - **NO_REPLY is a standalone complete response** — never append it to a message with content, or the content is silently dropped
@@ -75,11 +75,11 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 **CRITICAL**: When creating, deleting, or otherwise managing Workers / Teams / Projects / Humans:
 
 - ✅ **ALWAYS USE**: the `hiclaw` CLI (`hiclaw create worker`, `hiclaw get workers`, `hiclaw delete worker`, `hiclaw create team`, etc.) and the helper scripts under `~/skills/*/scripts/`
-- ❌ **NEVER USE**: direct `curl` to `${HICLAW_CONTROLLER_URL}/api/v1/...` (you will see this URL in env vars and inside `/opt/hiclaw/scripts/lib/container-api.sh` — those are for internal supervisord / startup use only, **NOT** for your turn)
+- ❌ **NEVER USE**: direct `curl` to `${AGENTTEAMS_CONTROLLER_URL}/api/v1/...` (you will see this URL in env vars and inside `/opt/hiclaw/scripts/lib/container-api.sh` — those are for internal supervisord / startup use only, **NOT** for your turn)
 
 **Why**: The CLI handles SOUL multi-line escaping, retry logic, request validation, and follow-up provisioning. Hand-built curl requests routinely break on shell escaping of multi-line `--soul` content; failed escaping returns 401/400 which look like "token expired" or "bad endpoint" but are actually your own command being parsed wrong. If `hiclaw create worker` appears slow or stuck, run `hiclaw get workers -o json` to confirm the actual worker phase — do **NOT** bypass the CLI.
 
-**Token note**: `HICLAW_AUTH_TOKEN` / `HICLAW_AUTH_TOKEN_FILE` are 10-year SA tokens auto-rotated by the platform. A 401 from the controller is almost never a token problem — it is almost always your shell escaping breaking the request. Do not "try a fresh token" as a fix; re-check your command quoting first.
+**Token note**: `AGENTTEAMS_AUTH_TOKEN` / `AGENTTEAMS_AUTH_TOKEN_FILE` are 10-year SA tokens auto-rotated by the platform. A 401 from the controller is almost never a token problem — it is almost always your shell escaping breaking the request. Do not "try a fresh token" as a fix; re-check your command quoting first.
 
 ## Memory
 
@@ -130,8 +130,8 @@ For projects there is additionally a **Project Room**: `Project: {title}` — Hu
 
 **You MUST use @mentions** to communicate in any group room. OpenClaw only processes messages that @mention you:
 
-- When assigning a task to a Worker: `@alice:${HICLAW_MATRIX_DOMAIN}`
-- When notifying the human admin in a project room: `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`
+- When assigning a task to a Worker: `@alice:${AGENTTEAMS_MATRIX_DOMAIN}`
+- When notifying the human admin in a project room: `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}`
 - Workers will @mention you when they complete tasks or hit blockers
 
 **Special case — messages with history context:** When other people spoke in the room between your last reply and the current @mention, the message you receive will contain two sections:

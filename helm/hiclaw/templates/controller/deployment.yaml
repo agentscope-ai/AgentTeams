@@ -1,5 +1,17 @@
 {{- $comp := dict "root" . "component" "controller" }}
 {{- $tag := include "hiclaw.imageTag" (dict "tag" .Values.controller.image.tag "global" .Values.global "root" $) }}
+{{- $sandboxRuntime := eq (.Values.controller.workerBackendRuntime | default "pod") "sandbox" }}
+{{- $sandboxConfigured := or (eq .Values.controller.workerBackend "sandbox") $sandboxRuntime }}
+{{- $sandboxPrewarmSize := 1 }}
+{{- if hasKey .Values.controller.sandbox "prewarmSize" }}
+{{- $sandboxPrewarmSize = int .Values.controller.sandbox.prewarmSize }}
+{{- end }}
+{{- $controllerRegion := "" }}
+{{- if eq .Values.gateway.provider "ai-gateway" }}
+{{- $controllerRegion = .Values.gateway.aiGateway.region }}
+{{- else if and $sandboxConfigured (eq .Values.storage.provider "oss") }}
+{{- $controllerRegion = .Values.storage.oss.region }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,14 +51,30 @@ spec:
             - secretRef:
                 name: {{ include "hiclaw.secretName" . }}
           env:
-            - name: HICLAW_KUBE_MODE
+            - name: AGENTTEAMS_KUBE_MODE
               value: "incluster"
-            - name: HICLAW_HTTP_ADDR
+            - name: AGENTTEAMS_HTTP_ADDR
               value: {{ printf ":%v" .Values.controller.service.targetPort | quote }}
             - name: AGENTTEAMS_METRICS_BIND_ADDR
               value: {{ ternary .Values.controller.metrics.bindAddress "0" .Values.controller.metrics.enabled | quote }}
-            - name: HICLAW_CONTROLLER_URL
+            - name: AGENTTEAMS_CONTROLLER_URL
               value: {{ include "hiclaw.controller.internalURL" . | quote }}
+            {{- /*
+              Appservice push target advertised to the Matrix homeserver
+              (Tuwunel) when the controller registers itself as an
+              application service. Tuwunel always lives in the same cluster
+              as the controller, so the default in-cluster Service DNS is
+              the only reliably reachable address. AGENTTEAMS_CONTROLLER_URL
+              above doubles as the worker-facing URL and may be overridden
+              to an externally-routable domain in cross-cluster ("半托管")
+              deployments where Workers run in a different cluster — in
+              that case Tuwunel cannot reach the external URL, so this
+              variable stays on the in-cluster Service DNS. Override via
+              controller.matrixURL only if Tuwunel runs outside the
+              cluster.
+            */}}
+            - name: AGENTTEAMS_CONTROLLER_URL_MATRIX
+              value: {{ default (include "hiclaw.controller.internalURL" .) .Values.controller.matrixURL | quote }}
             {{- /*
               Controller instance name. Also doubles as the ConfigMap name the
               controller reads at Create() time for the agent PodTemplateSpec
@@ -56,7 +84,7 @@ spec:
               this exact name. Absent ConfigMap = no overlay (default shape).
               See docs/agent-pod-template.md.
             */}}
-            - name: HICLAW_CONTROLLER_NAME
+            - name: AGENTTEAMS_CONTROLLER_NAME
               value: {{ include "hiclaw.controller.fullname" . | quote }}
             {{- /*
               Tenant-level resource-name prefix. Drives Pod / ServiceAccount
@@ -66,14 +94,27 @@ spec:
               namespace. See internal/auth.ResourcePrefix for the full
               derivation table.
             */}}
-            - name: HICLAW_RESOURCE_PREFIX
-              value: {{ .Values.controller.resourcePrefix | default "hiclaw-" | quote }}
-            - name: HICLAW_RESOURCE_AUTOPREFIX
+            - name: AGENTTEAMS_RESOURCE_PREFIX
+              value: {{ .Values.controller.resourcePrefix | default "agentteams-" | quote }}
+            - name: AGENTTEAMS_RESOURCE_AUTOPREFIX
               value: {{ .Values.controller.resourceAutoPrefix | default true | quote }}
-            - name: HICLAW_WORKER_BACKEND
+            - name: AGENTTEAMS_WORKER_BACKEND
               value: {{ .Values.controller.workerBackend | quote }}
+            - name: AGENTTEAMS_WORKER_BACKEND_RUNTIME
+              value: {{ .Values.controller.workerBackendRuntime | default "pod" | quote }}
+            {{- if $sandboxConfigured }}
+            - name: AGENTTEAMS_MOUNT_AUTH_TYPE
+              value: {{ .Values.controller.mountAuthType | default "RRSA" | quote }}
+            {{- if .Values.controller.mountRoleName }}
+            - name: AGENTTEAMS_MOUNT_ROLE_NAME
+              value: {{ .Values.controller.mountRoleName | quote }}
+            {{- end }}
+            {{- end }}
+            - name: AGENTTEAMS_AUTH_TOKEN_EXPIRATION_SECONDS
+              value: {{ .Values.controller.authTokenExpirationSeconds | default 3600 | quote }}
+            {{- if $sandboxConfigured }}
             - name: AGENTTEAMS_SANDBOX_PROVIDER_TYPE
-              value: {{ .Values.controller.sandbox.providerType | default "openkruise" | quote }}
+              value: {{ .Values.controller.sandbox.providerType | quote }}
             {{- if .Values.controller.sandbox.capabilities }}
             - name: AGENTTEAMS_SANDBOX_CAPABILITIES
               value: {{ .Values.controller.sandbox.capabilities | quote }}
@@ -83,109 +124,116 @@ spec:
               value: {{ .Values.controller.sandbox.agentRuntimeImage | quote }}
             {{- end }}
             - name: AGENTTEAMS_SANDBOX_PREWARM_SIZE
-              value: {{ .Values.controller.sandbox.prewarmSize | default 1 | quote }}
-            - name: HICLAW_K8S_NAMESPACE
+              value: {{ $sandboxPrewarmSize | quote }}
+            {{- end }}
+            - name: AGENTTEAMS_K8S_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: HICLAW_WORKER_IMAGE
+            - name: AGENTTEAMS_WORKER_IMAGE
               value: {{ include "hiclaw.worker.openclawImage" . | quote }}
-            - name: HICLAW_COPAW_WORKER_IMAGE
+            - name: AGENTTEAMS_COPAW_WORKER_IMAGE
               value: {{ include "hiclaw.worker.copawImage" . | quote }}
-            - name: HICLAW_HERMES_WORKER_IMAGE
+            - name: AGENTTEAMS_HERMES_WORKER_IMAGE
               value: {{ include "hiclaw.worker.hermesImage" . | quote }}
-            - name: HICLAW_OPENHUMAN_WORKER_IMAGE
-              value: {{ include "hiclaw.worker.openhumanImage" . | quote }}
-            - name: HICLAW_DEFAULT_WORKER_RUNTIME
+            - name: AGENTTEAMS_QWENPAW_WORKER_IMAGE
+              value: {{ include "hiclaw.worker.qwenpawImage" . | quote }}
+            - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ
               value: {{ .Values.controller.timezone | quote }}
-            - name: HICLAW_STORAGE_PROVIDER
+            - name: AGENTTEAMS_STORAGE_PROVIDER
               value: {{ .Values.storage.provider | quote }}
-            - name: HICLAW_FS_ENDPOINT
+            - name: AGENTTEAMS_FS_ENDPOINT
               value: {{ include "hiclaw.storage.endpoint" . | quote }}
-            - name: HICLAW_FS_BUCKET
+            - name: AGENTTEAMS_FS_BUCKET
               value: {{ include "hiclaw.storage.bucket" . | quote }}
             {{- if eq .Values.storage.provider "minio" }}
-            - name: HICLAW_FS_ACCESS_KEY
+            - name: AGENTTEAMS_FS_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "hiclaw.storage.adminSecretName" . }}
                   key: {{ include "hiclaw.storage.adminAccessKeyKey" . }}
-            - name: HICLAW_FS_SECRET_KEY
+            - name: AGENTTEAMS_FS_SECRET_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "hiclaw.storage.adminSecretName" . }}
                   key: {{ include "hiclaw.storage.adminSecretKeyKey" . }}
             {{- end }}
-            - name: HICLAW_GATEWAY_PROVIDER
+            - name: AGENTTEAMS_GATEWAY_PROVIDER
               value: {{ .Values.gateway.provider | quote }}
             {{- if eq .Values.gateway.provider "higress" }}
-            - name: HICLAW_AI_GATEWAY_ADMIN_URL
+            - name: AGENTTEAMS_AI_GATEWAY_ADMIN_URL
               value: {{ include "hiclaw.gateway.adminURL" . | quote }}
-            - name: HICLAW_AI_GATEWAY_URL
+            - name: AGENTTEAMS_AI_GATEWAY_URL
               value: {{ include "hiclaw.gateway.internalURL" . | quote }}
             {{- else if eq .Values.gateway.provider "ai-gateway" }}
-            - name: HICLAW_AI_GATEWAY_URL
+            - name: AGENTTEAMS_AI_GATEWAY_URL
               value: {{ include "hiclaw.gateway.internalURL" . | quote }}
-            - name: HICLAW_REGION
-              value: {{ .Values.gateway.aiGateway.region | quote }}
-            - name: HICLAW_GW_GATEWAY_ID
+            - name: AGENTTEAMS_GW_GATEWAY_ID
               value: {{ .Values.gateway.aiGateway.gatewayId | quote }}
-            - name: HICLAW_GW_MODEL_API_ID
+            - name: AGENTTEAMS_GW_MODEL_API_ID
               value: {{ .Values.gateway.aiGateway.modelApiId | quote }}
-            - name: HICLAW_GW_ENV_ID
+            - name: AGENTTEAMS_GW_ENV_ID
               value: {{ .Values.gateway.aiGateway.envId | quote }}
             {{- end }}
+            {{- if $controllerRegion }}
+            - name: AGENTTEAMS_REGION
+              value: {{ $controllerRegion | quote }}
+            {{- end }}
+            {{- if .Values.agentIdentityData.endpoint }}
+            - name: AGENTTEAMS_AGENT_IDENTITY_DATA_ENDPOINT
+              value: {{ .Values.agentIdentityData.endpoint | quote }}
+            {{- end }}
             {{- if .Values.credentialProvider.enabled }}
-            - name: HICLAW_CREDENTIAL_PROVIDER_URL
+            - name: AGENTTEAMS_CREDENTIAL_PROVIDER_URL
               value: {{ printf "http://127.0.0.1:%d" (.Values.credentialProvider.port | int) | quote }}
             {{- end }}
             {{- /* Matrix connection (Go MatrixClient) */}}
-            - name: HICLAW_MATRIX_URL
+            - name: AGENTTEAMS_MATRIX_URL
               value: {{ include "hiclaw.matrix.internalURL" . | quote }}
-            - name: HICLAW_MATRIX_DOMAIN
+            - name: AGENTTEAMS_MATRIX_DOMAIN
               value: {{ include "hiclaw.matrix.serverName" . | quote }}
             {{- /* OSS storage prefix */}}
-            - name: HICLAW_STORAGE_PREFIX
+            - name: AGENTTEAMS_STORAGE_PREFIX
               value: {{ include "hiclaw.storage.remoteRoot" . | quote }}
             {{- /* K8s mode runtime */}}
-            - name: HICLAW_RUNTIME
+            - name: AGENTTEAMS_RUNTIME
               value: "k8s"
             {{- /* K8s worker resource defaults */}}
-            - name: HICLAW_K8S_WORKER_CPU
+            - name: AGENTTEAMS_K8S_WORKER_CPU
               value: {{ .Values.worker.resources.limits.cpu | default "1000m" | quote }}
-            - name: HICLAW_K8S_WORKER_MEMORY
+            - name: AGENTTEAMS_K8S_WORKER_MEMORY
               value: {{ .Values.worker.resources.limits.memory | default "2Gi" | quote }}
             {{- /* Manager CRD-driven deployment */}}
-            - name: HICLAW_MANAGER_ENABLED
+            - name: AGENTTEAMS_MANAGER_ENABLED
               value: {{ .Values.manager.enabled | quote }}
-            - name: HICLAW_MANAGER_SPEC
+            - name: AGENTTEAMS_MANAGER_SPEC
               value: {{ include "hiclaw.manager.spec" . | quote }}
             {{- /* Element Web URL (for Gateway route initialization) */}}
             {{- if .Values.elementWeb.enabled }}
-            - name: HICLAW_ELEMENT_WEB_URL
+            - name: AGENTTEAMS_ELEMENT_WEB_URL
               value: {{ printf "http://%s-element-web.%s.svc.cluster.local:%d" (include "hiclaw.fullname" .) (include "hiclaw.namespace" .) (.Values.elementWeb.service.port | int) | quote }}
             {{- end }}
             {{- /* Credential persistence */}}
-            - name: HICLAW_CREDS_DIR
+            - name: AGENTTEAMS_CREDS_DIR
               value: "/data/worker-creds"
             {{- /* CMS observability (propagated to manager + workers by controller) */}}
             {{- if .Values.cms.enabled }}
-            - name: HICLAW_CMS_TRACES_ENABLED
+            - name: AGENTTEAMS_CMS_TRACES_ENABLED
               value: "true"
-            - name: HICLAW_CMS_ENDPOINT
+            - name: AGENTTEAMS_CMS_ENDPOINT
               value: {{ .Values.cms.endpoint | quote }}
-            - name: HICLAW_CMS_LICENSE_KEY
+            - name: AGENTTEAMS_CMS_LICENSE_KEY
               value: {{ .Values.cms.licenseKey | quote }}
-            - name: HICLAW_CMS_PROJECT
+            - name: AGENTTEAMS_CMS_PROJECT
               value: {{ .Values.cms.project | quote }}
-            - name: HICLAW_CMS_WORKSPACE
+            - name: AGENTTEAMS_CMS_WORKSPACE
               value: {{ .Values.cms.workspace | quote }}
-            - name: HICLAW_CMS_SERVICE_NAME
-              value: {{ .Values.cms.serviceName | default "hiclaw-manager" | quote }}
+            - name: AGENTTEAMS_CMS_SERVICE_NAME
+              value: {{ .Values.cms.serviceName | default "agentteams-manager" | quote }}
             {{- if .Values.cms.metricsEnabled }}
-            - name: HICLAW_CMS_METRICS_ENABLED
+            - name: AGENTTEAMS_CMS_METRICS_ENABLED
               value: "true"
             {{- end }}
             {{- end }}

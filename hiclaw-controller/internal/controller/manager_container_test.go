@@ -24,6 +24,7 @@ func captureManagerCreateLabels(t *testing.T, mgr *v1beta1.Manager) map[string]s
 
 func captureManagerCreateRequest(t *testing.T, mgr *v1beta1.Manager, defaults *backend.ResourceRequirements) backend.CreateRequest {
 	t.Helper()
+
 	mockBackend := mocks.NewMockWorkerBackend()
 	var (
 		mu      sync.Mutex
@@ -39,7 +40,7 @@ func captureManagerCreateRequest(t *testing.T, mgr *v1beta1.Manager, defaults *b
 	r := &ManagerReconciler{
 		Provisioner:      mocks.NewMockManagerProvisioner(),
 		EnvBuilder:       mocks.NewMockManagerEnvBuilder(),
-		ResourcePrefix:   auth.ResourcePrefix("hiclaw-"),
+		ResourcePrefix:   auth.ResourcePrefix("agentteams-"),
 		ControllerName:   "real-ctl",
 		DefaultRuntime:   "copaw",
 		ManagerResources: defaults,
@@ -92,7 +93,7 @@ func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 		"agentteams.io/manager": "default",   // system label
 		"agentteams.io/role":    "manager",   // system label
 		"agentteams.io/runtime": "copaw",     // system label
-		"app":                   "hiclaw-manager",
+		"app":                   "agentteams-manager",
 		v1beta1.LabelController: "real-ctl",
 	}
 	for k, want := range cases {
@@ -127,8 +128,8 @@ func TestCreateManagerContainer_SystemLabelsOverrideUserLabels(t *testing.T) {
 	if got := labels[v1beta1.LabelController]; got != "real-ctl" {
 		t.Errorf("controller label got %q, want real-ctl (full=%v)", got, labels)
 	}
-	if got := labels["app"]; got != "hiclaw-manager" {
-		t.Errorf("app label got %q, want hiclaw-manager", got)
+	if got := labels["app"]; got != "agentteams-manager" {
+		t.Errorf("app label got %q, want agentteams-manager", got)
 	}
 	if got := labels["agentteams.io/role"]; got != "manager" {
 		t.Errorf("role label got %q, want manager", got)
@@ -162,52 +163,38 @@ func TestCreateManagerContainer_NilLabelsSafe(t *testing.T) {
 	}
 }
 
-func TestCreateManagerContainerSpecResourcesOverrideDefaults(t *testing.T) {
+func TestCreateManagerContainerStoresStatusSpecHash(t *testing.T) {
+	mockBackend := mocks.NewMockWorkerBackend()
+	r := &ManagerReconciler{
+		Provisioner:    mocks.NewMockManagerProvisioner(),
+		EnvBuilder:     mocks.NewMockManagerEnvBuilder(),
+		ResourcePrefix: auth.ResourcePrefix("hiclaw-"),
+		ControllerName: "real-ctl",
+		DefaultRuntime: "copaw",
+	}
 	m := &v1beta1.Manager{}
 	m.Name = "default"
 	m.Namespace = "hiclaw"
-	m.Spec.Resources = &v1beta1.AgentResourceRequirements{
-		Requests: v1beta1.AgentResourceValues{CPU: "750m", Memory: "1536Mi"},
-		Limits:   v1beta1.AgentResourceValues{CPU: "3", Memory: "5Gi"},
+	m.Spec.Runtime = "copaw"
+	m.Spec.Image = "manager:new"
+	scope := &managerScope{
+		manager: m,
+		provResult: &service.ManagerProvisionResult{
+			MatrixUserID: "@manager:localhost",
+			MatrixToken:  "mock-token",
+			RoomID:       "!room:localhost",
+			GatewayKey:   "gw-key",
+		},
 	}
 
-	req := captureManagerCreateRequest(t, m, &backend.ResourceRequirements{
-		CPURequest:    "100m",
-		MemoryRequest: "256Mi",
-		CPULimit:      "1",
-		MemoryLimit:   "2Gi",
-	})
-
-	if req.Resources == nil {
-		t.Fatal("CreateRequest.Resources = nil, want manager spec resources")
+	if _, err := r.createManagerContainer(context.Background(), scope, mockBackend); err != nil {
+		t.Fatalf("createManagerContainer: %v", err)
 	}
-	if req.Resources.CPURequest != "750m" || req.Resources.MemoryRequest != "1536Mi" ||
-		req.Resources.CPULimit != "3" || req.Resources.MemoryLimit != "5Gi" {
-		t.Fatalf("CreateRequest.Resources = %+v", req.Resources)
+	if _, ok := mockBackend.LastCreateReq(); !ok {
+		t.Fatal("expected backend Create to be called")
 	}
-}
-
-func TestCreateManagerContainerSpecResourcesPartiallyOverrideDefaults(t *testing.T) {
-	m := &v1beta1.Manager{}
-	m.Name = "default"
-	m.Namespace = "hiclaw"
-	m.Spec.Resources = &v1beta1.AgentResourceRequirements{
-		Limits: v1beta1.AgentResourceValues{CPU: "3"},
-	}
-
-	req := captureManagerCreateRequest(t, m, &backend.ResourceRequirements{
-		CPURequest:    "100m",
-		MemoryRequest: "256Mi",
-		CPULimit:      "1",
-		MemoryLimit:   "2Gi",
-	})
-
-	if req.Resources == nil {
-		t.Fatal("CreateRequest.Resources = nil, want merged manager resources")
-	}
-	if req.Resources.CPURequest != "100m" || req.Resources.MemoryRequest != "256Mi" ||
-		req.Resources.CPULimit != "3" || req.Resources.MemoryLimit != "2Gi" {
-		t.Fatalf("CreateRequest.Resources = %+v", req.Resources)
+	if want := hashAppliedManagerSpec(m.Spec); m.Status.SpecHash != want {
+		t.Fatalf("Manager status specHash=%q, want %q", m.Status.SpecHash, want)
 	}
 }
 
@@ -234,7 +221,6 @@ func TestReconcileManagerInfrastructureKeepsModelProviderOutOfProvision(t *testi
 	r := &ManagerReconciler{Provisioner: prov}
 	m := &v1beta1.Manager{}
 	m.Name = "default"
-
 	scope := &managerScope{
 		manager:           m,
 		modelProviderInfo: &gateway.ModelProviderInfo{HttpApiID: "qwen-http-api"},
@@ -256,6 +242,7 @@ func TestReconcileManagerInfrastructureRestoresGatewayAuth(t *testing.T) {
 	r := &ManagerReconciler{Provisioner: prov}
 	m := &v1beta1.Manager{}
 	m.Name = "default"
+	m.Namespace = "hiclaw"
 	m.Status.MatrixUserID = "@manager:localhost"
 
 	scope := &managerScope{
@@ -275,5 +262,72 @@ func TestReconcileManagerInfrastructureRestoresGatewayAuth(t *testing.T) {
 	}
 	if call.GatewayKey == "" {
 		t.Fatal("EnsureManagerGatewayAuth GatewayKey is empty")
+	}
+}
+
+func TestEnsureManagerContainerPresentPrefersStatusSpecHashOverLegacyAnnotation(t *testing.T) {
+	m := &v1beta1.Manager{}
+	m.Name = "default"
+	m.Namespace = "hiclaw"
+	m.Spec.Image = "manager:new"
+	desiredHash := hashAppliedManagerSpec(m.Spec)
+	m.Status.SpecHash = desiredHash
+
+	sandboxBackend := mocks.NewMockWorkerBackend()
+	sandboxBackend.NameOverride = "sandbox"
+	sandboxBackend.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{
+			Name:            "hiclaw-manager",
+			Backend:         "sandbox",
+			Status:          backend.StatusRunning,
+			AppliedSpecHash: "legacy-old-hash",
+		}, nil
+	}
+	r := &ManagerReconciler{
+		Backend:        backend.NewRegistry([]backend.WorkerBackend{sandboxBackend}),
+		ResourcePrefix: auth.ResourcePrefix("hiclaw-"),
+	}
+
+	if _, err := r.ensureManagerContainerPresent(context.Background(), &managerScope{manager: m}); err != nil {
+		t.Fatalf("ensureManagerContainerPresent: %v", err)
+	}
+	if len(sandboxBackend.Calls.Delete) != 0 || len(sandboxBackend.Calls.Create) != 0 {
+		t.Fatalf("status specHash should win over legacy annotation, delete=%v create=%v", sandboxBackend.Calls.Delete, sandboxBackend.Calls.Create)
+	}
+	if m.Status.SpecHash != desiredHash {
+		t.Fatalf("Manager status specHash=%q, want %q", m.Status.SpecHash, desiredHash)
+	}
+}
+
+func TestEnsureManagerContainerPresentSandboxUnknownWaitsWithoutRecreate(t *testing.T) {
+	m := &v1beta1.Manager{}
+	m.Name = "default"
+	m.Namespace = "hiclaw"
+
+	sandboxBackend := mocks.NewMockWorkerBackend()
+	sandboxBackend.NameOverride = "sandbox"
+	sandboxBackend.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{
+			Name:      "hiclaw-manager",
+			Backend:   "sandbox",
+			Status:    backend.StatusUnknown,
+			RawStatus: "multiple_sandboxes",
+			Message:   "multiple sandboxes match",
+		}, nil
+	}
+	r := &ManagerReconciler{
+		Backend:        backend.NewRegistry([]backend.WorkerBackend{sandboxBackend}),
+		ResourcePrefix: auth.ResourcePrefix("hiclaw-"),
+	}
+
+	res, err := r.ensureManagerContainerPresent(context.Background(), &managerScope{manager: m})
+	if err != nil {
+		t.Fatalf("ensureManagerContainerPresent: %v", err)
+	}
+	if res.RequeueAfter != reconcileRetryDelay {
+		t.Fatalf("RequeueAfter=%v, want %v", res.RequeueAfter, reconcileRetryDelay)
+	}
+	if len(sandboxBackend.Calls.Delete) != 0 || len(sandboxBackend.Calls.Create) != 0 {
+		t.Fatalf("sandbox unknown should wait without recreate, delete=%v create=%v", sandboxBackend.Calls.Delete, sandboxBackend.Calls.Create)
 	}
 }

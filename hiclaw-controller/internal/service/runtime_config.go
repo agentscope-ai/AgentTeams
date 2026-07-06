@@ -256,8 +256,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			gatewayURL = d.runtimeProjection.AIGatewayURL
 		}
 		desired.Model = &memberRuntimeConfigModel{
-			ProviderID: "agentteams-gateway",
-			Model:      req.Spec.Model,
+			ProviderID: "agentteams-gateway", Model: req.Spec.Model,
 			GatewayURL: gatewayURL,
 			GatewayKey: strings.TrimSpace(req.GatewayKey),
 		}

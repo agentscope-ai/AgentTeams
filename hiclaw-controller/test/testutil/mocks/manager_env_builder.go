@@ -50,8 +50,8 @@ func (m *MockManagerEnvBuilder) BuildManager(managerName string, prov *service.M
 		return fn(managerName, prov, spec)
 	}
 	return map[string]string{
-		"HICLAW_MANAGER_NAME": managerName,
-		"MOCK_ENV":            "true",
+		"AGENTTEAMS_MANAGER_NAME": managerName,
+		"MOCK_ENV":                "true",
 	}
 }
 

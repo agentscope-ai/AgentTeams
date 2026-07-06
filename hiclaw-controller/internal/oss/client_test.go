@@ -6,11 +6,11 @@ import (
 
 func TestMinIOClient_FullPath(t *testing.T) {
 	c := NewMinIOClient(Config{
-		StoragePrefix: "hiclaw/hiclaw-storage",
+		StoragePrefix: "agentteams/agentteams-storage",
 	})
 
 	got := c.fullPath("agents/worker-1/openclaw.json")
-	want := "hiclaw/hiclaw-storage/agents/worker-1/openclaw.json"
+	want := "agentteams/agentteams-storage/agents/worker-1/openclaw.json"
 	if got != want {
 		t.Errorf("fullPath = %q, want %q", got, want)
 	}
@@ -18,26 +18,26 @@ func TestMinIOClient_FullPath(t *testing.T) {
 
 func TestMinIOClient_FullPathNoLeadingSlash(t *testing.T) {
 	c := NewMinIOClient(Config{
-		StoragePrefix: "hiclaw/hiclaw-storage",
+		StoragePrefix: "agentteams/agentteams-storage",
 	})
 
 	got := c.fullPath("/agents/worker-1/file.txt")
-	want := "hiclaw/hiclaw-storage/agents/worker-1/file.txt"
+	want := "agentteams/agentteams-storage/agents/worker-1/file.txt"
 	if got != want {
 		t.Errorf("fullPath with leading slash = %q, want %q", got, want)
 	}
 }
 
 func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
+	c := NewMinIOAdminClient(Config{Bucket: "agentteams-storage"})
 
-	policy := c.buildWorkerPolicy("worker-1", "hiclaw-storage", "team-dev", false)
+	policy := c.buildWorkerPolicy("worker-1", "agentteams-storage", "team-dev", false)
 
 	if policy.Version != "2012-10-17" {
 		t.Errorf("Version = %q", policy.Version)
 	}
-	if len(policy.Statement) != 2 {
-		t.Fatalf("expected 2 statements, got %d", len(policy.Statement))
+	if len(policy.Statement) != 3 {
+		t.Fatalf("expected 3 statements, got %d", len(policy.Statement))
 	}
 
 	// Verify team prefix is included in list conditions
@@ -45,21 +45,27 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	condition := listStmt.Condition["StringLike"].(map[string]interface{})
 	prefixes := condition["s3:prefix"].([]string)
 	hasTeam := false
+	hasPackagePrefix := false
 	for _, p := range prefixes {
 		if p == "teams/team-dev" || p == "teams/team-dev/*" {
 			hasTeam = true
-			break
+		}
+		if p == "agentteams-config/packages" || p == "agentteams-config/packages/*" {
+			hasPackagePrefix = true
 		}
 	}
 	if !hasTeam {
 		t.Errorf("expected team prefix in list conditions: %v", prefixes)
+	}
+	if !hasPackagePrefix {
+		t.Errorf("expected package source prefix in list conditions: %v", prefixes)
 	}
 
 	// Verify team resource in RW statement
 	rwStmt := policy.Statement[1]
 	hasTeamResource := false
 	for _, r := range rwStmt.Resource {
-		if r == "arn:aws:s3:::hiclaw-storage/teams/team-dev/*" {
+		if r == "arn:aws:s3:::agentteams-storage/teams/team-dev/*" {
 			hasTeamResource = true
 			break
 		}
@@ -67,31 +73,45 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	if !hasTeamResource {
 		t.Errorf("expected team resource in RW statement: %v", rwStmt.Resource)
 	}
+	for _, r := range rwStmt.Resource {
+		if r == "arn:aws:s3:::agentteams-storage/agentteams-config/packages/*" {
+			t.Errorf("package source must not be writable/deletable: %v", rwStmt.Resource)
+		}
+	}
+
+	readOnlyStmt := policy.Statement[2]
+	if len(readOnlyStmt.Action) != 1 || readOnlyStmt.Action[0] != "s3:GetObject" {
+		t.Fatalf("expected package source read-only action, got %+v", readOnlyStmt.Action)
+	}
+	if len(readOnlyStmt.Resource) != 1 ||
+		readOnlyStmt.Resource[0] != "arn:aws:s3:::agentteams-storage/agentteams-config/packages/*" {
+		t.Fatalf("expected package source read-only resource, got %+v", readOnlyStmt.Resource)
+	}
 }
 
 func TestMinIOAdminClient_BuildWorkerPolicyNoTeam(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
+	c := NewMinIOAdminClient(Config{Bucket: "agentteams-storage"})
 
-	policy := c.buildWorkerPolicy("worker-solo", "hiclaw-storage", "", false)
+	policy := c.buildWorkerPolicy("worker-solo", "agentteams-storage", "", false)
 
 	rwStmt := policy.Statement[1]
 	for _, r := range rwStmt.Resource {
-		if r == "arn:aws:s3:::hiclaw-storage/teams/*" {
+		if r == "arn:aws:s3:::agentteams-storage/teams/*" {
 			t.Error("solo worker should not have team resource")
 		}
-		if r == "arn:aws:s3:::hiclaw-storage/manager/*" {
+		if r == "arn:aws:s3:::agentteams-storage/manager/*" {
 			t.Error("non-manager worker should not have manager resource")
 		}
 	}
 }
 
 func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
-	c := NewMinIOAdminClient(Config{Bucket: "hiclaw-storage"})
+	c := NewMinIOAdminClient(Config{Bucket: "agentteams-storage"})
 
-	policy := c.buildWorkerPolicy("default", "hiclaw-storage", "", true)
+	policy := c.buildWorkerPolicy("default", "agentteams-storage", "", true)
 
-	if len(policy.Statement) != 2 {
-		t.Fatalf("expected 2 statements, got %d", len(policy.Statement))
+	if len(policy.Statement) != 3 {
+		t.Fatalf("expected 3 statements, got %d", len(policy.Statement))
 	}
 
 	// Verify manager prefix in list conditions
@@ -113,7 +133,7 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 	rwStmt := policy.Statement[1]
 	hasManagerResource := false
 	for _, r := range rwStmt.Resource {
-		if r == "arn:aws:s3:::hiclaw-storage/manager/*" {
+		if r == "arn:aws:s3:::agentteams-storage/manager/*" {
 			hasManagerResource = true
 			break
 		}
@@ -128,7 +148,21 @@ func TestNewMinIOClient_Defaults(t *testing.T) {
 	if c.config.MCBinary != "mc" {
 		t.Errorf("MCBinary = %q, want mc", c.config.MCBinary)
 	}
-	if c.config.Alias != "hiclaw" {
-		t.Errorf("Alias = %q, want hiclaw", c.config.Alias)
+	if c.config.Alias != "agentteams" {
+		t.Errorf("Alias = %q, want agentteams", c.config.Alias)
+	}
+}
+
+func TestNewMinIOClient_DefaultAliasFromStoragePrefix(t *testing.T) {
+	c := NewMinIOClient(Config{StoragePrefix: "agentteams/agentteams-storage"})
+	if c.config.Alias != "agentteams" {
+		t.Errorf("Alias = %q, want agentteams", c.config.Alias)
+	}
+}
+
+func TestNewMinIOAdminClient_DefaultAliasFromStoragePrefix(t *testing.T) {
+	c := NewMinIOAdminClient(Config{StoragePrefix: "agentteams/agentteams-storage"})
+	if c.config.Alias != "agentteams" {
+		t.Errorf("Alias = %q, want agentteams", c.config.Alias)
 	}
 }

@@ -96,11 +96,9 @@ func TestIssueForCaller_WorkerDefaultEntries(t *testing.T) {
 	if len(fake.lastReq.SessionName) != 36 {
 		t.Fatalf("session length = %d, want 36", len(fake.lastReq.SessionName))
 	}
-	// Standalone workers now default to a single object-storage entry
-	// covering agents/<name>/* + shared/* (both RW), mirroring the
-	// embedded MinIO policy.
-	if len(fake.lastReq.Entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(fake.lastReq.Entries))
+	// Standalone workers default to workspace RW plus package-source read.
+	if len(fake.lastReq.Entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(fake.lastReq.Entries))
 	}
 	got := fake.lastReq.Entries[0]
 	if got.Scope.Bucket != "test-bucket" {
@@ -127,6 +125,19 @@ func TestIssueForCaller_WorkerDefaultEntries(t *testing.T) {
 		if !seen {
 			t.Fatalf("missing permission %q in %+v", perm, got.Permissions)
 		}
+	}
+
+	packageEntry := fake.lastReq.Entries[1]
+	if packageEntry.Scope.Bucket != "test-bucket" {
+		t.Fatalf("package bucket not resolved in %+v", packageEntry.Scope)
+	}
+	if len(packageEntry.Scope.Prefixes) != 1 || packageEntry.Scope.Prefixes[0] != "agentteams-config/packages/*" {
+		t.Fatalf("package prefixes = %+v", packageEntry.Scope.Prefixes)
+	}
+	if len(packageEntry.Permissions) != 2 ||
+		packageEntry.Permissions[0] != "read" ||
+		packageEntry.Permissions[1] != "list" {
+		t.Fatalf("package permissions = %+v, want [read list]", packageEntry.Permissions)
 	}
 }
 
@@ -162,6 +173,46 @@ func TestIssueForCaller_WorkerCustomEntries(t *testing.T) {
 	}
 	if perms := fake.lastReq.Entries[0].Permissions; len(perms) != 1 || perms[0] != "read" {
 		t.Fatalf("permissions not propagated: %+v", perms)
+	}
+}
+
+func TestIssueForCallerPurpose_AgentIdentityDataEntries(t *testing.T) {
+	worker := &v1beta1.Worker{}
+	worker.Name = "cred-bot"
+	worker.Namespace = ns
+	worker.Spec.AgentIdentity = &v1beta1.AgentIdentitySpec{WorkloadIdentityName: "wi-cred-bot"}
+	worker.Spec.CredentialBindings = []v1beta1.CredentialBinding{{
+		CredentialRef: v1beta1.CredentialRef{
+			TokenVaultName:               "default",
+			APIKeyCredentialProviderName: "GITHUB_TOKEN",
+		},
+	}}
+	c := newFakeK8sClient(t, worker)
+	resolver := accessresolver.New(c, ns, "test-bucket", "", auth.DefaultResourcePrefix)
+
+	fake := &fakeProvider{resp: &credprovider.IssueResponse{
+		AccessKeyID: "ak", AccessKeySecret: "sk", ExpiresInSec: 900,
+	}}
+	svc := NewSTSService(STSConfig{OSSBucket: "test-bucket", OSSEndpoint: "oss.example.com"}, resolver, fake)
+
+	tok, err := svc.IssueForCallerPurpose(context.Background(), &auth.CallerIdentity{
+		Role: auth.RoleWorker, Username: "cred-bot", WorkerName: "cred-bot",
+	}, STSPurposeAgentIdentityData)
+	if err != nil {
+		t.Fatalf("IssueForCallerPurpose: %v", err)
+	}
+	if len(fake.lastReq.Entries) != 1 {
+		t.Fatalf("entries len=%d: %#v", len(fake.lastReq.Entries), fake.lastReq.Entries)
+	}
+	entry := fake.lastReq.Entries[0]
+	if entry.Service != credprovider.ServiceAgentIdentityData {
+		t.Fatalf("service=%q", entry.Service)
+	}
+	if len(entry.Scope.Prefixes) != 0 || entry.Scope.Bucket != "" {
+		t.Fatalf("agentidentitydata STS must not carry OSS scope: %#v", entry.Scope)
+	}
+	if tok.OSSBucket != "" || tok.OSSEndpoint != "" {
+		t.Fatalf("agentidentitydata token must not carry OSS metadata: %#v", tok)
 	}
 }
 

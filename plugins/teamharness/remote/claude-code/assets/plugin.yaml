@@ -1,0 +1,65 @@
+apiVersion: hiclaw.agentteam/v1alpha1
+kind: AgentTeamPlugin
+metadata:
+  name: teamharness
+  version: 0.1.0
+prompts:
+  team: prompts/team/TEAMS.md
+  agent:
+    leader: prompts/agent/leader.md
+    worker: prompts/agent/worker.md
+    remoteMember: prompts/agent/remote-member.md
+  manager:
+    agents: prompts/manager/AGENTS.md
+    tools: prompts/manager/TOOLS.md
+    heartbeat: prompts/manager/HEARTBEAT.md
+skills:
+  agent:
+    - id: mcporter
+      path: skills/agent/mcporter
+      roles: [leader, worker, manager, remote-member]
+    - id: find-skills
+      path: skills/agent/find-skills
+      roles: [leader, worker, manager, remote-member]
+  team:
+    - id: communication
+      path: skills/team/communication
+      roles: [leader, worker, manager, remote-member]
+    - id: file-sharing
+      path: skills/team/file-sharing
+      roles: [leader, worker, manager, remote-member]
+    - id: roomflow
+      path: skills/team/roomflow
+      roles: [leader]
+    - id: team-coordination
+      path: skills/team/team-coordination
+      roles: [leader]
+    - id: project-management
+      path: skills/team/project-management
+      roles: [leader]
+    - id: task-delegation
+      path: skills/team/task-delegation
+      roles: [leader]
+    - id: task-execution
+      path: skills/team/task-execution
+      roles: [worker, remote-member]
+mcp:
+  servers:
+    - id: teamharness
+      transport: stdio
+      command: node
+      args:
+        - mcp/server.js
+      tools:
+        - health
+        - message
+        - roomflow
+        - filesync
+        - projectflow
+        - taskflow
+package:
+  include:
+    - plugin.yaml
+    - prompts/
+    - skills/
+    - mcp/

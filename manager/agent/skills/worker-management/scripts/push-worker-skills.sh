@@ -57,7 +57,7 @@ fi
 
 REGISTRY_FILE="${HOME}/workers-registry.json"
 WORKER_SKILLS_DIR="/opt/hiclaw/agent/worker-skills"
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
 
 # ============================================================
 # Load or initialize registry
@@ -103,7 +103,7 @@ _worker_exists() {
 _push_skill_to_worker() {
     local worker="$1"
     local skill="$2"
-    local skill_dst="${HICLAW_STORAGE_PREFIX}/agents/${worker}/skills/${skill}/"
+    local skill_dst="${AGENTTEAMS_STORAGE_PREFIX}/agents/${worker}/skills/${skill}/"
 
     # Runtime-specific skills: check if skill exists in the runtime's agent dir
     # (worker-agent / copaw-worker-agent / hermes-worker-agent)
@@ -168,7 +168,7 @@ _notify_worker() {
         return 0
     fi
 
-    local matrix_url="${HICLAW_MATRIX_URL}"
+    local matrix_url="${AGENTTEAMS_MATRIX_URL}"
     local msg="@${worker}:${MATRIX_DOMAIN} 我已向你的工作区推送了以下 skills 更新：[${skills_list}]。请使用 file-sync 技能同步最新文件。"
     local worker_id="@${worker}:${MATRIX_DOMAIN}"
 
@@ -239,7 +239,7 @@ if [ -n "${REMOVE_SKILL}" ] && [ -n "${WORKER_NAME}" ]; then
     log "Removed skill '${REMOVE_SKILL}' from worker '${WORKER_NAME}'"
     # Actually delete skill files from MinIO
     mc rm --recursive --force \
-        "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/${REMOVE_SKILL}/" \
+        "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/${REMOVE_SKILL}/" \
         2>&1 || log "WARNING: mc rm failed (files may not exist in MinIO)"
     # Notify worker so it picks up the deletion promptly
     if [ "${NOTIFY}" = true ]; then

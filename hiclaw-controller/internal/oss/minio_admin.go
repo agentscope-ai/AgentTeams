@@ -23,7 +23,7 @@ func NewMinIOAdminClient(cfg Config) *MinIOAdminClient {
 		cfg.MCBinary = "mc"
 	}
 	if cfg.Alias == "" {
-		cfg.Alias = "hiclaw"
+		cfg.Alias = defaultStorageAlias(cfg.StoragePrefix)
 	}
 	return &MinIOAdminClient{config: cfg}
 }
@@ -110,14 +110,14 @@ func (c *MinIOAdminClient) DeleteUser(ctx context.Context, username string) erro
 }
 
 type s3Policy struct {
-	Version   string            `json:"Version"`
+	Version   string              `json:"Version"`
 	Statement []s3PolicyStatement `json:"Statement"`
 }
 
 type s3PolicyStatement struct {
-	Effect    string                `json:"Effect"`
-	Action    []string              `json:"Action"`
-	Resource  []string              `json:"Resource"`
+	Effect    string                 `json:"Effect"`
+	Action    []string               `json:"Action"`
+	Resource  []string               `json:"Resource"`
 	Condition map[string]interface{} `json:"Condition,omitempty"`
 }
 
@@ -127,10 +127,15 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 		fmt.Sprintf("agents/%s/*", workerName),
 		"shared",
 		"shared/*",
+		"agentteams-config/packages",
+		"agentteams-config/packages/*",
 	}
 	rwResources := []string{
 		fmt.Sprintf("arn:aws:s3:::%s/agents/%s/*", bucket, workerName),
 		fmt.Sprintf("arn:aws:s3:::%s/shared/*", bucket),
+	}
+	packageResources := []string{
+		fmt.Sprintf("arn:aws:s3:::%s/agentteams-config/packages/*", bucket),
 	}
 
 	if isManager {
@@ -170,6 +175,11 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 				Effect:   "Allow",
 				Action:   []string{"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
 				Resource: rwResources,
+			},
+			{
+				Effect:   "Allow",
+				Action:   []string{"s3:GetObject"},
+				Resource: packageResources,
 			},
 		},
 	}

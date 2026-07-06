@@ -4,7 +4,7 @@
 # Usage:
 #   generate-worker-config.sh <WORKER_NAME> <MATRIX_TOKEN> <GATEWAY_KEY> [MODEL_ID] [TEAM_LEADER_NAME]
 #
-# Reads env vars: HICLAW_MATRIX_URL, HICLAW_MATRIX_DOMAIN, HICLAW_AI_GATEWAY_URL, HICLAW_ADMIN_USER, HICLAW_DEFAULT_MODEL
+# Reads env vars: AGENTTEAMS_MATRIX_URL, AGENTTEAMS_MATRIX_DOMAIN, AGENTTEAMS_AI_GATEWAY_URL, AGENTTEAMS_ADMIN_USER, AGENTTEAMS_DEFAULT_MODEL
 # Output: /root/hiclaw-fs/agents/<WORKER_NAME>/openclaw.json
 #
 # If TEAM_LEADER_NAME is provided, groupAllowFrom and dm.allowFrom will use
@@ -16,7 +16,7 @@ source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 WORKER_NAME="$1"
 WORKER_MATRIX_TOKEN="$2"
 WORKER_GATEWAY_KEY="$3"
-MODEL_NAME="${4:-${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}}"
+MODEL_NAME="${4:-${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}}"
 TEAM_LEADER_NAME="${5:-}"
 # Strip provider prefix if caller passed "hiclaw-gateway/<model>" by mistake
 MODEL_NAME="${MODEL_NAME#hiclaw-gateway/}"
@@ -26,8 +26,8 @@ if [ -z "${WORKER_NAME}" ] || [ -z "${WORKER_MATRIX_TOKEN}" ] || [ -z "${WORKER_
     exit 1
 fi
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 
 # Matrix Domain for user IDs (keep original port like :9080)
 # Matrix Server for connection uses internal port 8080
@@ -54,8 +54,8 @@ case "${MODEL_NAME}" in
 esac
 
 # Override with user-supplied custom model parameters from env (set during install)
-[ -n "${HICLAW_MODEL_CONTEXT_WINDOW:-}" ] && CTX="${HICLAW_MODEL_CONTEXT_WINDOW}"
-[ -n "${HICLAW_MODEL_MAX_TOKENS:-}" ] && MAX="${HICLAW_MODEL_MAX_TOKENS}"
+[ -n "${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}" ] && CTX="${AGENTTEAMS_MODEL_CONTEXT_WINDOW}"
+[ -n "${AGENTTEAMS_MODEL_MAX_TOKENS:-}" ] && MAX="${AGENTTEAMS_MODEL_MAX_TOKENS}"
 
 # Resolve input modalities: only vision-capable models get "image"
 case "${MODEL_NAME}" in
@@ -65,9 +65,9 @@ case "${MODEL_NAME}" in
         INPUT='["text"]' ;;
 esac
 # Override with user-supplied vision setting from env
-if [ "${HICLAW_MODEL_VISION:-}" = "true" ]; then
+if [ "${AGENTTEAMS_MODEL_VISION:-}" = "true" ]; then
     INPUT='["text", "image"]'
-elif [ "${HICLAW_MODEL_VISION:-}" = "false" ]; then
+elif [ "${AGENTTEAMS_MODEL_VISION:-}" = "false" ]; then
     INPUT='["text"]'
 fi
 
@@ -78,35 +78,35 @@ export WORKER_GATEWAY_AUTH_TOKEN="${GATEWAY_AUTH_TOKEN}"
 export WORKER_MATRIX_TOKEN
 export WORKER_GATEWAY_KEY
 # Matrix Server URL:
-#   Cloud mode: Worker connects directly via NLB (HICLAW_MATRIX_URL), not through Higress
-#   K8s mode:   Worker connects via K8s Service URL (HICLAW_MATRIX_URL)
+#   Cloud mode: Worker connects directly via NLB (AGENTTEAMS_MATRIX_URL), not through Higress
+#   K8s mode:   Worker connects via K8s Service URL (AGENTTEAMS_MATRIX_URL)
 #   Local mode: always use fixed internal domain so workers on hiclaw-net can reach Higress
 #   regardless of user-configured Matrix domain (Higress matrix-homeserver route uses domains:[])
-if [ -n "${HICLAW_MATRIX_URL:-}" ] && [ "${HICLAW_RUNTIME}" != "docker" ]; then
-    export HICLAW_MATRIX_URL
+if [ -n "${AGENTTEAMS_MATRIX_URL:-}" ] && [ "${AGENTTEAMS_RUNTIME}" != "docker" ]; then
+    export AGENTTEAMS_MATRIX_URL
 else
-    export HICLAW_MATRIX_URL="http://matrix-local.hiclaw.io:8080"
+    export AGENTTEAMS_MATRIX_URL="http://matrix-local.agentteams.io:8080"
 fi
 # Matrix Domain for user IDs keeps original port (e.g., :9080)
-export HICLAW_MATRIX_DOMAIN="${MATRIX_DOMAIN_FOR_ID}"
-# AI Gateway URL: cloud/k8s uses HICLAW_AI_GATEWAY_URL; local always uses fixed internal domain
+export AGENTTEAMS_MATRIX_DOMAIN="${MATRIX_DOMAIN_FOR_ID}"
+# AI Gateway URL: cloud/k8s uses AGENTTEAMS_AI_GATEWAY_URL; local always uses fixed internal domain
 # so workers on hiclaw-net can reach Higress regardless of user-configured AI gateway domain.
-if [ -n "${HICLAW_AI_GATEWAY_URL:-}" ] && [ "${HICLAW_RUNTIME}" != "docker" ]; then
-    export HICLAW_AI_GATEWAY_URL
+if [ -n "${AGENTTEAMS_AI_GATEWAY_URL:-}" ] && [ "${AGENTTEAMS_RUNTIME}" != "docker" ]; then
+    export AGENTTEAMS_AI_GATEWAY_URL
 else
-    export HICLAW_AI_GATEWAY_URL="http://aigw-local.hiclaw.io:8080"
+    export AGENTTEAMS_AI_GATEWAY_URL="http://aigw-local.agentteams.io:8080"
 fi
-export HICLAW_ADMIN_USER="${ADMIN_USER}"
-export HICLAW_DEFAULT_MODEL="${MODEL_NAME}"
+export AGENTTEAMS_ADMIN_USER="${ADMIN_USER}"
+export AGENTTEAMS_DEFAULT_MODEL="${MODEL_NAME}"
 export MODEL_REASONING=true
 # Override with user-supplied reasoning setting from env
-[ -n "${HICLAW_MODEL_REASONING:-}" ] && export MODEL_REASONING="${HICLAW_MODEL_REASONING}"
+[ -n "${AGENTTEAMS_MODEL_REASONING:-}" ] && export MODEL_REASONING="${AGENTTEAMS_MODEL_REASONING}"
 export MODEL_CONTEXT_WINDOW="${CTX}"
 export MODEL_MAX_TOKENS="${MAX}"
 export MODEL_INPUT="${INPUT}"
 
-# E2EE: convert HICLAW_MATRIX_E2EE to JSON boolean for template substitution
-if [ "${HICLAW_MATRIX_E2EE:-0}" = "1" ] || [ "${HICLAW_MATRIX_E2EE:-}" = "true" ]; then
+# E2EE: convert AGENTTEAMS_MATRIX_E2EE to JSON boolean for template substitution
+if [ "${AGENTTEAMS_MATRIX_E2EE:-0}" = "1" ] || [ "${AGENTTEAMS_MATRIX_E2EE:-}" = "true" ]; then
     export MATRIX_E2EE_ENABLED=true
 else
     export MATRIX_E2EE_ENABLED=false
@@ -120,8 +120,8 @@ envsubst < /opt/hiclaw/agent/skills/worker-management/references/worker-openclaw
 # Post-envsubst injection: memorySearch + custom model (single jq pass when possible)
 if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["hiclaw-gateway"].models | map(.id) | index($model)' "${OUTPUT_DIR}/openclaw.json" > /dev/null 2>&1; then
     log "Custom model '${MODEL_NAME}' not in built-in list, injecting into worker config..."
-    jq --arg emb_model "${HICLAW_EMBEDDING_MODEL}" \
-       --arg aigw "${HICLAW_AI_GATEWAY_URL}" \
+    jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
+       --arg aigw "${AGENTTEAMS_AI_GATEWAY_URL}" \
        --arg key "${WORKER_GATEWAY_KEY}" \
        --arg model "${MODEL_NAME}" \
        --argjson ctx "${CTX}" \
@@ -134,9 +134,9 @@ if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["hiclaw-gateway"].mode
         | .agents.defaults.models += {("hiclaw-gateway/" + $model): {"alias": $model}}
        ' "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp" && \
         mv "${OUTPUT_DIR}/openclaw.json.tmp" "${OUTPUT_DIR}/openclaw.json"
-elif [ -n "${HICLAW_EMBEDDING_MODEL}" ]; then
-    jq --arg emb_model "${HICLAW_EMBEDDING_MODEL}" \
-       --arg aigw "${HICLAW_AI_GATEWAY_URL}" \
+elif [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ]; then
+    jq --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
+       --arg aigw "${AGENTTEAMS_AI_GATEWAY_URL}" \
        --arg key "${WORKER_GATEWAY_KEY}" \
        '.agents.defaults.memorySearch = {"provider":"openai","model":$emb_model,"remote":{"baseUrl":($aigw + "/v1"),"apiKey":$key}}' \
        "${OUTPUT_DIR}/openclaw.json" > "${OUTPUT_DIR}/openclaw.json.tmp" && \
@@ -148,7 +148,7 @@ log "Generated ${OUTPUT_DIR}/openclaw.json (model=${MODEL_NAME}, ctx=${CTX}, max
 # ============================================================
 # Optional: inject openclaw-cms-plugin observability config
 #
-# The HICLAW_CMS_TRACES_ENABLED / HICLAW_CMS_METRICS_ENABLED switches live on
+# The AGENTTEAMS_CMS_TRACES_ENABLED / AGENTTEAMS_CMS_METRICS_ENABLED switches live on
 # the Manager container.  When enabled, ALL Workers created by this Manager
 # will receive matching plugin config in their openclaw.json (stored in MinIO)
 # so that both Manager and Workers report traces/metrics to the same ARMS endpoint.
@@ -156,18 +156,18 @@ log "Generated ${OUTPUT_DIR}/openclaw.json (model=${MODEL_NAME}, ctx=${CTX}, max
 # Worker service name is automatically set to "hiclaw-worker-<WORKER_NAME>"
 # for per-worker observability granularity in ARMS.
 # ============================================================
-_cms_traces_lc="$(echo "${HICLAW_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+_cms_traces_lc="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
 if [ "${_cms_traces_lc}" = "true" ]; then
     _cms_plugin_dir="${OPENCLAW_CMS_PLUGIN_DIR:-/opt/openclaw/extensions/openclaw-cms-plugin}"
     _cms_manifest="${_cms_plugin_dir}/openclaw.plugin.json"
 
     if [ ! -f "${_cms_manifest}" ]; then
         log "WARNING: openclaw-cms-plugin manifest not found at ${_cms_manifest}; skipping CMS config for worker ${WORKER_NAME}. Plugin should be bundled in Worker image by default — verify image build completed successfully."
-    elif [ -z "${HICLAW_CMS_ENDPOINT:-}" ] || [ -z "${HICLAW_CMS_LICENSE_KEY:-}" ] || [ -z "${HICLAW_CMS_WORKSPACE:-}" ]; then
-        log "WARNING: HICLAW_CMS_TRACES_ENABLED=true but HICLAW_CMS_ENDPOINT / HICLAW_CMS_LICENSE_KEY / HICLAW_CMS_WORKSPACE are not all set; skipping CMS config for worker ${WORKER_NAME}"
+    elif [ -z "${AGENTTEAMS_CMS_ENDPOINT:-}" ] || [ -z "${AGENTTEAMS_CMS_LICENSE_KEY:-}" ] || [ -z "${AGENTTEAMS_CMS_WORKSPACE:-}" ]; then
+        log "WARNING: AGENTTEAMS_CMS_TRACES_ENABLED=true but AGENTTEAMS_CMS_ENDPOINT / AGENTTEAMS_CMS_LICENSE_KEY / AGENTTEAMS_CMS_WORKSPACE are not all set; skipping CMS config for worker ${WORKER_NAME}"
     else
         _cms_worker_service="hiclaw-worker-${WORKER_NAME}"
-        _cms_metrics_lc="$(echo "${HICLAW_CMS_METRICS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+        _cms_metrics_lc="$(echo "${AGENTTEAMS_CMS_METRICS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
         _diag_plugin_dir="/opt/openclaw/extensions/diagnostics-otel"
         _diag_available="0"
         if [ "${_cms_metrics_lc}" = "true" ] && [ -f "${_diag_plugin_dir}/package.json" ]; then
@@ -176,10 +176,10 @@ if [ "${_cms_traces_lc}" = "true" ]; then
 
         jq --arg pluginName "openclaw-cms-plugin" \
            --arg pluginDir "${_cms_plugin_dir}" \
-           --arg endpoint "${HICLAW_CMS_ENDPOINT}" \
-           --arg licenseKey "${HICLAW_CMS_LICENSE_KEY}" \
-           --arg armsProject "${HICLAW_CMS_PROJECT:-}" \
-           --arg cmsWorkspace "${HICLAW_CMS_WORKSPACE}" \
+           --arg endpoint "${AGENTTEAMS_CMS_ENDPOINT}" \
+           --arg licenseKey "${AGENTTEAMS_CMS_LICENSE_KEY}" \
+           --arg armsProject "${AGENTTEAMS_CMS_PROJECT:-}" \
+           --arg cmsWorkspace "${AGENTTEAMS_CMS_WORKSPACE}" \
            --arg serviceName "${_cms_worker_service}" \
            --arg diagPluginName "diagnostics-otel" \
            --arg diagPluginDir "${_diag_plugin_dir}" \

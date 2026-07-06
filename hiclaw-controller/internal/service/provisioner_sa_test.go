@@ -145,8 +145,7 @@ func TestEnsureRemoteNamespace(t *testing.T) {
 
 	p := NewProvisioner(ProvisionerConfig{
 		Namespace:      "hiclaw",
-		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
-		RemoteCache:    remoteProvider,
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"), RemoteCache: remoteProvider,
 	})
 
 	if err := p.EnsureRemoteNamespace(context.Background(), "cluster-a", "remote-ns"); err != nil {
@@ -161,8 +160,7 @@ func TestEnsureRemoteNamespace(t *testing.T) {
 
 	p2 := NewProvisioner(ProvisionerConfig{
 		Namespace:      "hiclaw",
-		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
-	})
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-")})
 	if err := p2.EnsureRemoteNamespace(context.Background(), "cluster-a", "remote-ns"); err == nil {
 		t.Fatal("expected error when remoteCache is nil")
 	}

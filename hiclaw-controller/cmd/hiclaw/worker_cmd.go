@@ -18,6 +18,7 @@ func workerCmd() *cobra.Command {
 	cmd.AddCommand(workerEnsureReadyCmd())
 	cmd.AddCommand(workerStatusCmd())
 	cmd.AddCommand(workerReportReadyCmd())
+	cmd.AddCommand(workerHeartbeatCmd())
 	return cmd
 }
 
@@ -215,79 +216,125 @@ func workerStatusCmd() *cobra.Command {
 
 func workerReportReadyCmd() *cobra.Command {
 	var (
-		name     string
-		interval time.Duration
+		name         string
+		lastActiveAt string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "report-ready",
 		Short: "Report worker readiness to controller",
-		Long: `Report this worker as ready to the controller, with optional periodic heartbeat.
+		Long: `Report this worker as ready to the controller (one-shot).
 
   # One-shot ready report
   hiclaw worker report-ready
 
-  # Ready report + periodic heartbeat every 60s (default)
-  hiclaw worker report-ready --heartbeat
+  # Ready report with last-active timestamp
+  hiclaw worker report-ready --last-active-at 2026-05-13T00:00:00Z
 
-  # Custom heartbeat interval
-  hiclaw worker report-ready --heartbeat --interval 30s
-
-Worker name is read from --name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME env var.`,
+Worker name is read from --name, AGENTTEAMS_WORKER_CR_NAME, or AGENTTEAMS_WORKER_NAME env var.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
-				name = os.Getenv("HICLAW_WORKER_CR_NAME")
+				name = os.Getenv("AGENTTEAMS_WORKER_CR_NAME")
 			}
 			if name == "" {
-				name = os.Getenv("HICLAW_WORKER_NAME")
+				name = os.Getenv("AGENTTEAMS_WORKER_NAME")
 			}
 			if name == "" {
-				return fmt.Errorf("--name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME is required")
+				return fmt.Errorf("--name, AGENTTEAMS_WORKER_CR_NAME, or AGENTTEAMS_WORKER_NAME is required")
 			}
-
-			heartbeat := cmd.Flags().Changed("heartbeat") || cmd.Flags().Changed("interval")
 
 			client := NewAPIClient()
 			path := "/api/v1/workers/" + name + "/ready"
 
-			// Initial ready report with retries
+			var body interface{}
+			if lastActiveAt != "" {
+				body = struct {
+					LastActiveAt string `json:"lastActiveAt,omitempty"`
+				}{LastActiveAt: lastActiveAt}
+			}
+
 			var lastErr error
 			for attempt := 1; attempt <= 5; attempt++ {
-				if err := client.DoJSON("POST", path, nil, nil); err != nil {
+				if err := client.DoJSON("POST", path, body, nil); err != nil {
 					lastErr = err
 					fmt.Fprintf(os.Stderr, "report-ready attempt %d/5 failed: %v\n", attempt, err)
 					time.Sleep(time.Duration(attempt) * 2 * time.Second)
-					// Re-read token on retry (projected tokens may rotate)
 					client = NewAPIClient()
 					continue
 				}
 				fmt.Fprintf(os.Stderr, "worker/%s reported ready\n", name)
-				lastErr = nil
-				break
-			}
-			if lastErr != nil {
-				return fmt.Errorf("report-ready failed after 5 attempts: %w", lastErr)
-			}
-
-			if !heartbeat {
 				return nil
 			}
-
-			// Heartbeat loop
-			for {
-				time.Sleep(interval)
-				if err := client.DoJSON("POST", path, nil, nil); err != nil {
-					fmt.Fprintf(os.Stderr, "heartbeat failed: %v (will retry)\n", err)
-					// Re-read token on failure (may have rotated)
-					client = NewAPIClient()
-				}
-			}
+			return fmt.Errorf("report-ready failed after 5 attempts: %w", lastErr)
 		},
 	}
 
-	cmd.Flags().StringVar(&name, "name", "", "Worker name (default: HICLAW_WORKER_CR_NAME or HICLAW_WORKER_NAME env)")
-	cmd.Flags().Bool("heartbeat", false, "Send periodic heartbeat after initial ready report")
-	cmd.Flags().DurationVar(&interval, "interval", 60*time.Second, "Heartbeat interval (requires --heartbeat)")
+	cmd.Flags().StringVar(&name, "name", "", "Worker name (default: AGENTTEAMS_WORKER_CR_NAME or AGENTTEAMS_WORKER_NAME env)")
+	cmd.Flags().StringVar(&lastActiveAt, "last-active-at", "", "Last business activity timestamp (RFC3339)")
+	return cmd
+}
+
+// ---------------------------------------------------------------------------
+// worker heartbeat
+// ---------------------------------------------------------------------------
+
+func workerHeartbeatCmd() *cobra.Command {
+	var (
+		name         string
+		lastActiveAt string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "heartbeat",
+		Short: "Send a heartbeat to the controller",
+		Long: `Report a periodic heartbeat to the controller (one-shot).
+
+  # Simple heartbeat
+  hiclaw worker heartbeat
+
+  # Heartbeat with last-active timestamp
+  hiclaw worker heartbeat --last-active-at 2026-05-13T00:00:00Z
+
+Worker name is read from --name, AGENTTEAMS_WORKER_CR_NAME, or AGENTTEAMS_WORKER_NAME env var.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if name == "" {
+				name = os.Getenv("AGENTTEAMS_WORKER_CR_NAME")
+			}
+			if name == "" {
+				name = os.Getenv("AGENTTEAMS_WORKER_NAME")
+			}
+			if name == "" {
+				return fmt.Errorf("--name, AGENTTEAMS_WORKER_CR_NAME, or AGENTTEAMS_WORKER_NAME is required")
+			}
+
+			client := NewAPIClient()
+			path := "/api/v1/workers/" + name + "/heartbeat"
+
+			var body interface{}
+			if lastActiveAt != "" {
+				body = struct {
+					LastActiveAt string `json:"lastActiveAt,omitempty"`
+				}{LastActiveAt: lastActiveAt}
+			}
+
+			var lastErr error
+			for attempt := 1; attempt <= 5; attempt++ {
+				if err := client.DoJSON("POST", path, body, nil); err != nil {
+					lastErr = err
+					fmt.Fprintf(os.Stderr, "heartbeat attempt %d/5 failed: %v\n", attempt, err)
+					time.Sleep(time.Duration(attempt) * 2 * time.Second)
+					client = NewAPIClient()
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "worker/%s heartbeat sent\n", name)
+				return nil
+			}
+			return fmt.Errorf("heartbeat failed after 5 attempts: %w", lastErr)
+		},
+	}
+
+	cmd.Flags().StringVar(&name, "name", "", "Worker name (default: AGENTTEAMS_WORKER_CR_NAME or AGENTTEAMS_WORKER_NAME env)")
+	cmd.Flags().StringVar(&lastActiveAt, "last-active-at", "", "Last business activity timestamp (RFC3339)")
 	return cmd
 }
 

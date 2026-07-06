@@ -49,17 +49,20 @@ type AccessScope struct {
 	Prefixes []string `json:"prefixes,omitempty"`
 	// ai-gateway
 	GatewayID string `json:"gatewayId,omitempty"`
-	// Resources: ai-gateway API paths; for ai-registry, agentSpec/skill patterns (e.g. agentSpec/*, skill/*).
+	// Resources: ai-gateway API paths; for ai-registry, agentSpec/skill patterns (e.g. agentSpec/*, skill/*);
+	// for schedulerx3, job patterns (e.g. job/*, flow/*).
 	Resources []string `json:"resources,omitempty"`
 	// ai-registry
 	NamespaceID string `json:"namespaceId,omitempty"`
+	// schedulerx3
+	ClusterID string `json:"clusterId,omitempty"`
 }
 
 // IssueResponse is the sidecar's reply to POST /issue.
 //
 // The sidecar returns only the STS triple; OSS endpoint is NOT part of
 // this contract. Endpoint is a deployment-time static configuration
-// (HICLAW_FS_ENDPOINT) and is sourced independently by each caller.
+// (AGENTTEAMS_FS_ENDPOINT) and is sourced independently by each caller.
 type IssueResponse struct {
 	AccessKeyID     string `json:"access_key_id"`
 	AccessKeySecret string `json:"access_key_secret"`
@@ -68,11 +71,14 @@ type IssueResponse struct {
 	ExpiresInSec    int    `json:"expires_in_sec"`
 }
 
-// Supported Service identifiers. Keep in sync with the CRD schema's
-// `spec.accessEntries[].service` enum and with the sidecar's
-// buildInlinePolicy dispatch.
+// Supported Service identifiers. CRD-authored services must stay in sync with
+// the CRD schema's `spec.accessEntries[].service` enum. Controller-derived
+// internal services still need sidecar buildInlinePolicy support, but do not
+// have to be user-authorable in accessEntries.
 const (
-	ServiceObjectStorage = "object-storage"
-	ServiceAIGateway     = "ai-gateway"
-	ServiceAIRegistry    = "ai-registry"
+	ServiceObjectStorage     = "object-storage"
+	ServiceAIGateway         = "ai-gateway"
+	ServiceAIRegistry        = "ai-registry"
+	ServiceSchedulerX3       = "schedulerx3"
+	ServiceAgentIdentityData = "agentidentitydata"
 )

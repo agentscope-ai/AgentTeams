@@ -92,17 +92,18 @@ gateway:
 # provider=minio + mode=managed → MinIO StatefulSet deployed here, static
 #   root credentials, admin API available.
 # provider=oss + mode=existing → external Alibaba Cloud OSS bucket; the
-#   controller obtains STS credentials from hiclaw-credential-provider
+#   controller obtains STS credentials from agentteams-credential-provider
 #   on every mc invocation and does NOT create buckets/users/policies.
 storage:
   provider: minio             # minio | oss
   mode: managed               # managed | existing
-  bucket: "hiclaw"
+  bucket: "agentteams-storage"
   # Required when provider=oss:
   oss:
     region: ""                # e.g. "cn-hangzhou"
-    # Explicit endpoint override. Usually unset — the credential-provider
-    # sidecar returns the correct endpoint as part of each STS response.
+    # Explicit OSS endpoint, e.g. oss-cn-hangzhou-internal.aliyuncs.com.
+    # Required when controller.workerBackendRuntime=sandbox because the
+    # built-in worker-deps PV uses this value as CSI url.
     endpoint: ""
   minio:
     image:
@@ -127,6 +128,12 @@ storage:
     auth:
       rootUser: "minioadmin"
       rootPassword: "minioadmin"
+
+# ── AgentIdentityData ────────────────────────────────────────────────────
+agentIdentityData:
+  # Optional explicit data-plane endpoint. When unset, controller derives
+  # agentidentitydata.${AGENTTEAMS_REGION}.aliyuncs.com from its runtime region.
+  endpoint: ""
 
 # ── Higress subchart values (passed directly to the higress dependency) ───
 # `gateway.higress.enabled` is the materialized condition flag. The actual
@@ -159,7 +166,7 @@ higress:
     admin:
       password: ""   # leave empty — controller initializes via /system/init using credentials.adminPassword
 
-# ── Credential Provider (hiclaw-credential-provider sidecar) ─────────────
+# ── Credential Provider (agentteams-credential-provider sidecar) ─────────────
 # Issues scoped STS tokens to the controller (for APIG/OSS SDK calls) and to
 # workers (via POST /api/v1/credentials/sts). Required when gateway.provider=
 # ai-gateway or storage.provider=oss. No default image is provided: in real
@@ -186,7 +193,7 @@ credentialProvider:
 controller:
   replicaCount: 1               # increase for HA with leader election
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-controller
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-controller
     tag: ""                   # defaults to global.imageTag
     pullPolicy: IfNotPresent
   service:
@@ -210,16 +217,33 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
-  workerBackend: "k8s"        # k8s | sandbox
-  # Sandbox backend configuration. Set Worker.spec.backendRuntime=sandbox to
-  # use this backend for an individual Worker.
-  sandbox:
-    providerType: "openkruise"
-    capabilities: ""          # comma-separated provider capabilities, e.g. "hibernate,pool"
-    agentRuntimeImage: ""     # optional override for the SandboxSet agent runtime image
-    prewarmSize: 1            # SandboxSet warm pool size; 0 disables prewarm replicas
-  resourcePrefix: "hiclaw-"
+  workerBackend: "k8s"            # k8s | sae
+  workerBackendRuntime: "pod"     # pod | sandbox (K8s mode: default backendRuntime for workers without explicit spec.backendRuntime)
+  mountAuthType: "RRSA"           # RRSA | AccessKey; controls the built-in worker-deps PV auth mode for sandbox workers
+  mountRoleName: ""               # required when mountAuthType=RRSA and sandbox workers are enabled
+  authTokenExpirationSeconds: 3600 # SA auth token TTL; values below 600 are clamped by the controller
+  resourcePrefix: "agentteams-"
   resourceAutoPrefix: true
+  # Optional override for the URL the controller registers with Tuwunel as
+  # the appservice push target (AGENTTEAMS_CONTROLLER_URL_MATRIX). Defaults to
+  # the in-cluster Service DNS, which is what you want when Tuwunel runs
+  # in the same cluster as the controller. Only override when Tuwunel runs
+  # outside the controller's cluster. Independent of the worker-facing
+  # controller URL (AGENTTEAMS_CONTROLLER_URL), which may legitimately point at
+  # an externally-routable domain in cross-cluster deployments.
+  matrixURL: ""
+
+  # Sandbox backend configuration (only used when workerBackend == "sandbox")
+  sandbox:
+    providerType: "openkruise"    # currently only "openkruise" is supported
+    agentRuntimeImage: ""         # optional AGENTTEAMS_SANDBOX_AGENT_RUNTIME_IMAGE override; defaults from AGENTTEAMS_REGION
+    prewarmSize: 1                # AGENTTEAMS_SANDBOX_PREWARM_SIZE; SandboxSet warm pool size
+    # Comma-separated capability names to enable. Unknown tokens and empty
+    # string both disable everything (opt-in model). Set to "hibernate" to
+    # enable Hibernate/Resume; leave empty in environments that do not
+    # support hibernate so SandboxBackend.Stop falls back to Delete.
+    capabilities: "hibernate"
+
   serviceAccount:
     create: true
     name: ""
@@ -248,9 +272,9 @@ controller:
 manager:
   enabled: true                 # create Manager CR during cluster initialization
   model: ""                     # LLM model; defaults to credentials.defaultModel
-  runtime: "openclaw"           # openclaw | copaw | hermes
+  runtime: "openclaw"           # openclaw | copaw | hermes | qwenpaw
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-manager
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-manager
     tag: ""                     # defaults to global.imageTag
   resources:
     requests:
@@ -288,20 +312,23 @@ cms:
   licenseKey: ""
   project: ""
   workspace: ""
-  serviceName: "hiclaw-manager"    # Manager service name; Workers auto-derive "hiclaw-worker-<name>"
+  serviceName: "agentteams-manager"    # Manager service name; Workers auto-derive "agentteams-worker-<name>"
   metricsEnabled: false
 
 # ── Worker defaults ───────────────────────────────────────────────────────
 worker:
   defaultImage:
     openclaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-worker
       tag: ""                 # defaults to global.imageTag
     copaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-copaw-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-copaw-worker
       tag: ""                 # defaults to global.imageTag
     hermes:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-hermes-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-hermes-worker
+      tag: ""                 # defaults to global.imageTag
+    qwenpaw:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-qwenpaw-worker
       tag: ""                 # defaults to global.imageTag
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker

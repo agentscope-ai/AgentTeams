@@ -34,8 +34,6 @@ import (
 // consumed by the auth enricher to resolve team membership by worker name
 // without enumerating every Team.
 const (
-	TeamLeaderNameField    = "spec.leader.name"
-	TeamWorkerNameField    = "spec.workerNames"
 	TeamWorkerMembersField = "spec.workerMembers.name"
 	migrationFinalizerName = "agentteams.io/migration-in-flight"
 )
@@ -796,18 +794,12 @@ func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m
 	} else {
 		ms.ExposedPorts = nil
 	}
-	ms.SpecHash = m.AppliedSpecHash
 	return reconcile.Result{}, nil
 }
 
 // summarizeBackendReadiness queries each member's pod/container status from
 // the backend and writes ms.Ready per member. Used instead of reading Worker
-// CR status because team members no longer have Worker CRs.
-//
-// On a backend-unreachable path (Backend == nil or DetectWorkerBackend nil)
-// this preserves any previously-recorded ms.Ready value — callers should NOT
-// treat a false/true gap across reconciles as a transition, since a transient
-// backend outage would otherwise flap Phase=Active back to Pending.
+// CR status because legacy team members no longer have Worker CRs.
 func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1beta1.Team, members []MemberContext) (leaderReady bool, readyWorkers int) {
 	if r.Backend == nil {
 		return false, 0
@@ -817,8 +809,6 @@ func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1bet
 		if err != nil {
 			logger := log.FromContext(ctx)
 			logger.Error(err, "failed to resolve member backend", "member", m.Name, "role", m.Role)
-			// Preserve previously-recorded readiness, consistent with the
-			// nil-backend early-return contract (see function doc).
 			if ms := t.Status.MemberByName(m.Name); ms != nil && ms.Ready {
 				if m.Role == RoleTeamLeader {
 					leaderReady = true
@@ -832,9 +822,6 @@ func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1bet
 		if err != nil {
 			logger := log.FromContext(ctx)
 			logger.Error(err, "failed to query member backend status", "member", m.Name, "role", m.Role)
-			// Preserve previously-recorded readiness in the return values
-			// to avoid phase flapping on transient backend errors, consistent
-			// with the nil-backend early-return contract (see function doc).
 			if ms := t.Status.MemberByName(m.Name); ms != nil && ms.Ready {
 				if m.Role == RoleTeamLeader {
 					leaderReady = true
@@ -860,10 +847,6 @@ func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1bet
 		}
 	}
 	return leaderReady, readyWorkers
-}
-
-func (r *TeamReconciler) writeInlineConfigs(t *v1beta1.Team) error {
-	return nil
 }
 
 func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) error {

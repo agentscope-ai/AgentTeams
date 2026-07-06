@@ -19,8 +19,8 @@
   "channels": {
     "matrix": {
       "enabled": true,
-      "homeserver": "${HICLAW_MATRIX_URL}",
-      "userId": "@manager:${HICLAW_MATRIX_DOMAIN}",
+      "homeserver": "${AGENTTEAMS_MATRIX_URL}",
+      "userId": "@manager:${AGENTTEAMS_MATRIX_DOMAIN}",
       "accessToken": "${MANAGER_MATRIX_TOKEN}",
       "encryption": ${MATRIX_E2EE_ENABLED},
       "network": { "dangerouslyAllowPrivateNetwork": true },
@@ -28,12 +28,12 @@
       "dm": {
         "policy": "allowlist",
         "allowFrom": [
-          "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}"
+          "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}"
         ]
       },
       "groupPolicy": "allowlist",
       "groupAllowFrom": [
-        "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}"
+        "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}"
       ],
       "groups": {
         "*": { "allow": true, "requireMention": true }
@@ -47,7 +47,7 @@
     "mode": "merge",
     "providers": {
       "hiclaw-gateway": {
-        "baseUrl": "${HICLAW_AI_GATEWAY_URL}/v1",
+        "baseUrl": "${AGENTTEAMS_AI_GATEWAY_URL}/v1",
         "apiKey": "${MANAGER_GATEWAY_KEY}",
         "api": "openai-completions",
         "models": [
@@ -76,7 +76,7 @@
       "timeoutSeconds": 1800,
       "workspace": "~",
       "model": {
-        "primary": "hiclaw-gateway/${HICLAW_DEFAULT_MODEL}"
+        "primary": "hiclaw-gateway/${AGENTTEAMS_DEFAULT_MODEL}"
       },
       "models": {
         "hiclaw-gateway/gpt-5.4":           { "alias": "gpt-5.4" },

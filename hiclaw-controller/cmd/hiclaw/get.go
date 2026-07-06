@@ -295,6 +295,8 @@ type workerResp struct {
 	ContainerState string `json:"containerState,omitempty"`
 	MatrixUserID   string `json:"matrixUserID,omitempty"`
 	RoomID         string `json:"roomID,omitempty"`
+	LastActiveAt   string `json:"lastActiveAt,omitempty"`
+	LastHeartbeat  string `json:"lastHeartbeat,omitempty"`
 	Message        string `json:"message,omitempty"`
 	Team           string `json:"team,omitempty"`
 	Role           string `json:"role,omitempty"`
@@ -381,6 +383,8 @@ func workerDetail(w workerResp) []KeyValue {
 		{"Role", w.Role},
 		{"MatrixUserID", w.MatrixUserID},
 		{"RoomID", w.RoomID},
+		{"LastActiveAt", w.LastActiveAt},
+		{"LastHeartbeat", w.LastHeartbeat},
 		{"Message", w.Message},
 	}
 }

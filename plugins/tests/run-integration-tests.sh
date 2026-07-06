@@ -12,6 +12,7 @@ OUT_DIR="$(mktemp -d)" ruby plugins/scripts/package-plugin.rb plugins/teamharnes
 ruby plugins/tests/teamharness/test-contracts.rb
 python3 -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_adapter.py -q
 python3 -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_package.py -q
+python3 -m pytest plugins/tests/workerflow/adapters/qwenpaw/test_workerflow_package.py -q
 ruby plugins/tests/teamharness/mcp/test-server.rb
 ruby plugins/tests/teamharness/mcp/tools/test-message.rb
 ruby plugins/tests/teamharness/mcp/tools/test-filesync.rb

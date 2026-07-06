@@ -20,7 +20,7 @@ import (
 
 // FileWatcher monitors a local directory for YAML changes and syncs them to kine.
 type FileWatcher struct {
-	// WatchDir is the local directory mirrored from MinIO (e.g. /root/hiclaw-fs/hiclaw-config/)
+	// WatchDir is the local directory mirrored from MinIO (e.g. /root/hiclaw-fs/agentteams-config/)
 	WatchDir string
 	Client   client.Client
 
@@ -171,7 +171,7 @@ func (w *FileWatcher) syncFile(ctx context.Context, path string) error {
 	w.hashes[path] = specHash
 	w.mu.Unlock()
 
-	// Determine kind from directory structure: hiclaw-config/{kind}s/{name}.yaml
+	// Determine kind from directory structure: agentteams-config/{kind}s/{name}.yaml
 	kind, name := parsePathKindName(path, w.WatchDir)
 	if kind == "" {
 		return fmt.Errorf("cannot determine resource kind from path: %s", path)
@@ -286,7 +286,7 @@ func (w *FileWatcher) handleDelete(ctx context.Context, path string) error {
 }
 
 // parsePathKindName extracts kind and name from path like:
-// /root/hiclaw-fs/hiclaw-config/workers/alice.yaml → ("worker", "alice")
+// /root/hiclaw-fs/agentteams-config/workers/alice.yaml → ("worker", "alice")
 func parsePathKindName(path, watchDir string) (kind, name string) {
 	rel, err := filepath.Rel(watchDir, path)
 	if err != nil {

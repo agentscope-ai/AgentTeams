@@ -15,10 +15,10 @@ Add `expose` to a Worker's spec to publish container ports. The controller autom
 
 **Auto-generated domain pattern:**
 ```
-worker-{name}-{port}-local.hiclaw.io
+worker-{name}-{port}-local.agentteams.io
 ```
 
-Example: worker `alice` exposing port `8080` → `worker-alice-8080-local.hiclaw.io`
+Example: worker `alice` exposing port `8080` → `worker-alice-8080-local.agentteams.io`
 
 ## Usage
 

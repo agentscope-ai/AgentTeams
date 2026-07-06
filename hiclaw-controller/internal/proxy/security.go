@@ -20,7 +20,7 @@ func isHigressRegistry(image string) bool {
 }
 
 func isLocalImage(image string) bool {
-	// Local images have no dots before the first slash: e.g. "hiclaw/worker-agent:latest"
+	// Local images have no dots before the first slash: e.g. "agentteams/worker-agent:latest"
 	// Registry images have dots: e.g. "registry.example.com/repo/image:tag"
 	slashIdx := strings.Index(image, "/")
 	if slashIdx < 0 {
@@ -68,7 +68,7 @@ func NewSecurityValidator() *SecurityValidator {
 	// Additional allowed image sources — can be a registry (e.g. "ghcr.io")
 	// or registry+path (e.g. "ghcr.io/myorg", "registry.example.com/team/workers")
 	var allowedRegistries []string
-	if env := os.Getenv("HICLAW_PROXY_ALLOWED_REGISTRIES"); env != "" {
+	if env := os.Getenv("AGENTTEAMS_PROXY_ALLOWED_REGISTRIES"); env != "" {
 		for _, r := range strings.Split(env, ",") {
 			r = strings.TrimSpace(r)
 			if r != "" {
@@ -77,21 +77,21 @@ func NewSecurityValidator() *SecurityValidator {
 		}
 	}
 
-	// Container name prefix: HICLAW_PROXY_CONTAINER_PREFIX takes precedence.
-	// If unset and HICLAW_RESOURCE_AUTOPREFIX=true (default), derive from
-	// HICLAW_RESOURCE_PREFIX with fallback "hiclaw-". If auto-prefix is
+	// Container name prefix: AGENTTEAMS_PROXY_CONTAINER_PREFIX takes precedence.
+	// If unset and AGENTTEAMS_RESOURCE_AUTOPREFIX=true (default), derive from
+	// AGENTTEAMS_RESOURCE_PREFIX with fallback "agentteams-". If auto-prefix is
 	// disabled, keep prefix empty and skip prefix enforcement.
 	autoPrefix := true
-	if v := os.Getenv("HICLAW_RESOURCE_AUTOPREFIX"); v != "" {
+	if v := os.Getenv("AGENTTEAMS_RESOURCE_AUTOPREFIX"); v != "" {
 		autoPrefix = v == "1" || v == "true" || v == "True" || v == "TRUE"
 	}
 	prefix := ""
-	if env := os.Getenv("HICLAW_PROXY_CONTAINER_PREFIX"); env != "" {
+	if env := os.Getenv("AGENTTEAMS_PROXY_CONTAINER_PREFIX"); env != "" {
 		prefix = env
 	} else if autoPrefix {
-		rp := os.Getenv("HICLAW_RESOURCE_PREFIX")
+		rp := os.Getenv("AGENTTEAMS_RESOURCE_PREFIX")
 		if rp == "" {
-			rp = "hiclaw-"
+			rp = "agentteams-"
 		}
 		prefix = rp + "worker-"
 	}
@@ -169,7 +169,7 @@ func (v *SecurityValidator) isImageAllowed(image string) bool {
 	if isHigressRegistry(image) {
 		return true
 	}
-	// Allow local images (no registry prefix, e.g. "hiclaw/worker-agent:latest")
+	// Allow local images (no registry prefix, e.g. "agentteams/worker-agent:latest")
 	if isLocalImage(image) {
 		return true
 	}
@@ -184,4 +184,13 @@ func (v *SecurityValidator) isImageAllowed(image string) bool {
 		}
 	}
 	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -91,7 +91,7 @@ spec:
             - -c
             - |
               set -eu
-              echo "[hiclaw-uninstall-cleanup] deleting CRs in namespace ${NS} (timeout per group: ${TIMEOUT})"
+              echo "[agentteams-uninstall-cleanup] deleting CRs in namespace ${NS} (timeout per group: ${TIMEOUT})"
               # Order: Manager first (it owns the admin DM room), then the
               # rest. --ignore-not-found makes reruns idempotent. --wait=true
               # blocks until each finalizer is processed by the controller,
@@ -101,7 +101,7 @@ spec:
               kubectl delete workers.agentteams.io  --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
               kubectl delete teams.agentteams.io    --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
               kubectl delete humans.agentteams.io   --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
-              echo "[hiclaw-uninstall-cleanup] done"
+              echo "[agentteams-uninstall-cleanup] done"
           {{- with .Values.controller.uninstallHook.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

@@ -285,8 +285,7 @@ type MemberDeps struct {
 	// instance name.
 	ControllerName string
 
-	// WorkerDepsStorageBucket/Endpoint identify the main AgentTeams workspace OSS
-	// bucket. Built-in token/env/data worker-deps always use this storage;
+	// WorkerDepsStorageBucket/Endpoint identify the main AgentTeams workspace OSS	// bucket. Built-in token/env/data worker-deps always use this storage;
 	// Worker.spec.volumes is reserved for custom OSS mounts.
 	WorkerDepsStorageBucket   string
 	WorkerDepsStorageEndpoint string

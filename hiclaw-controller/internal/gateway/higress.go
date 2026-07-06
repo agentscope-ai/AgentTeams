@@ -186,11 +186,6 @@ func (c *HigressClient) DeauthorizeAIRoutes(ctx context.Context, consumerName st
 	return c.modifyAIRoutes(ctx, consumerName, modelAPIID, false)
 }
 
-// modifyAIRoutes adds or removes the consumer from AI routes' allowedConsumers.
-// When providerFilter is non-empty, AuthorizeAIRoutes keeps the consumer only
-// on matching routes and removes it from non-matching routes; DeauthorizeAIRoutes
-// removes it only from matching routes. Empty providerFilter keeps the legacy
-// all-route behavior.
 func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string, providerFilter string, add bool) error {
 	c.aiRouteMu.Lock()
 	defer c.aiRouteMu.Unlock()
@@ -262,8 +257,8 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 				break
 			}
 
-			matchesProvider := providerFilter == "" || routeMatchesProvider(route, providerFilter)
-			if providerFilter != "" && !add && !matchesProvider {
+			// When providerFilter is set, skip routes that don't match the provider.
+			if providerFilter != "" && !routeMatchesProvider(route, providerFilter) {
 				break
 			}
 
@@ -274,8 +269,7 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 
 			consumers := toStringSlice(authConfig["allowedConsumers"])
 
-			changed := true
-			if add && matchesProvider {
+			if add {
 				if !containsString(consumers, consumerName) {
 					consumers = append(consumers, consumerName)
 				}
@@ -284,13 +278,7 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 				// so WASM needs to reload credentials even if the name was
 				// already in allowedConsumers.
 			} else {
-				before := len(consumers)
 				consumers = removeString(consumers, consumerName)
-				changed = before != len(consumers)
-			}
-
-			if !changed {
-				break
 			}
 
 			authConfig["allowedConsumers"] = consumers
@@ -345,7 +333,7 @@ func (c *HigressClient) ExposePort(ctx context.Context, req PortExposeRequest) e
 	routeN := svcSrc
 	domain := req.Domain
 	if domain == "" {
-		domain = fmt.Sprintf("worker-%s-%d-local.hiclaw.io", req.WorkerName, req.Port)
+		domain = fmt.Sprintf("worker-%s-%d-local.agentteams.io", req.WorkerName, req.Port)
 	}
 	dnsHost := req.ServiceHost
 	if dnsHost == "" {
@@ -369,7 +357,7 @@ func (c *HigressClient) UnexposePort(ctx context.Context, req PortExposeRequest)
 	routeN := svcSrc
 	domain := req.Domain
 	if domain == "" {
-		domain = fmt.Sprintf("worker-%s-%d-local.hiclaw.io", req.WorkerName, req.Port)
+		domain = fmt.Sprintf("worker-%s-%d-local.agentteams.io", req.WorkerName, req.Port)
 	}
 
 	c.deleteRoute(ctx, routeN)

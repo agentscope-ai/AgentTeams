@@ -457,8 +457,7 @@ func TestSandboxBackend_Create_AlwaysUsesSandboxClaim(t *testing.T) {
 		BackendRuntime: v1beta1.BackendRuntimeSandbox,
 		Labels:         map[string]string{v1beta1.LabelWorker: "alice"},
 		WorkersDeps: &WorkerDepsSpec{
-			InplaceUpdateImage: "agentteams/worker:v2",
-			DynamicVolumeMounts: []WorkerDepsDynamicVolumeMount{
+			InplaceUpdateImage: "agentteams/worker:v2", DynamicVolumeMounts: []WorkerDepsDynamicVolumeMount{
 				{PVName: "agentteams", MountPath: "/var/run/secrets/agentteams", SubPath: "workers-deps/alice/token", ReadOnly: true, Attributes: map[string]string{"credentialProviderName": "agentteams-token"}},
 				{PVName: "agentteams", MountPath: "/mnt/agentteams/env", SubPath: "workers-deps/alice/env", ReadOnly: true, Attributes: map[string]string{"credentialProviderName": "agentteams-env"}},
 				{PVName: "agentteams", MountPath: "/mnt/agentteams/data", SubPath: "workers-deps/alice/data", ReadOnly: false, Attributes: map[string]string{"credentialProviderName": "agentteams-data"}},

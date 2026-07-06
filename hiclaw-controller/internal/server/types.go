@@ -5,27 +5,32 @@ import v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 // --- Worker API types ---
 
 type CreateWorkerRequest struct {
-	Name          string                             `json:"name"`
-	WorkerName    string                             `json:"workerName,omitempty"`
-	Model         string                             `json:"model,omitempty"`
-	ModelProvider string                             `json:"modelProvider,omitempty"`
-	Runtime       string                             `json:"runtime,omitempty"`
-	Image         string                             `json:"image,omitempty"`
-	Identity      string                             `json:"identity,omitempty"`
-	Soul          string                             `json:"soul,omitempty"`
-	Agents        string                             `json:"agents,omitempty"`
-	Skills        []string                           `json:"skills,omitempty"`
-	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                             `json:"package,omitempty"`
-	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
-	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	Name               string                             `json:"name"`
+	WorkerName         string                             `json:"workerName,omitempty"`
+	Model              string                             `json:"model,omitempty"`
+	ModelProvider      string                             `json:"modelProvider,omitempty"`
+	Runtime            string                             `json:"runtime,omitempty"`
+	Image              string                             `json:"image,omitempty"`
+	Identity           string                             `json:"identity,omitempty"`
+	Soul               string                             `json:"soul,omitempty"`
+	Agents             string                             `json:"agents,omitempty"`
+	Skills             []string                           `json:"skills,omitempty"`
+	McpServers         []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
+	Package            string                             `json:"package,omitempty"`
+	Expose             []v1beta1.ExposePort               `json:"expose,omitempty"`
+	ChannelPolicy      *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Resources          *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	AgentIdentity      *v1beta1.AgentIdentitySpec         `json:"agentIdentity,omitempty"`
+	CredentialBindings []v1beta1.CredentialBinding        `json:"credentialBindings,omitempty"`
+	Volumes            []v1beta1.WorkerVolumeSpec         `json:"volumes,omitempty"`
+	Mounts             []v1beta1.WorkerMountSpec          `json:"mounts,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
 	// reconciliation is skipped entirely (for remote/pip workers).
 	// Default is true (controller manages container).
 	ContainerManaged *bool   `json:"containerManaged,omitempty"`
+	IdleTimeout      string  `json:"idleTimeout,omitempty"`
 	State            *string `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 
 	// Team context (set by Team handler or CLI)
@@ -35,26 +40,31 @@ type CreateWorkerRequest struct {
 }
 
 type UpdateWorkerRequest struct {
-	WorkerName    string                             `json:"workerName,omitempty"`
-	Model         string                             `json:"model,omitempty"`
-	ModelProvider string                             `json:"modelProvider,omitempty"`
-	Runtime       string                             `json:"runtime,omitempty"`
-	Image         string                             `json:"image,omitempty"`
-	Identity      string                             `json:"identity,omitempty"`
-	Soul          string                             `json:"soul,omitempty"`
-	Agents        string                             `json:"agents,omitempty"`
-	Skills        []string                           `json:"skills,omitempty"`
-	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                             `json:"package,omitempty"`
-	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
-	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	WorkerName         string                             `json:"workerName,omitempty"`
+	Model              string                             `json:"model,omitempty"`
+	ModelProvider      string                             `json:"modelProvider,omitempty"`
+	Runtime            string                             `json:"runtime,omitempty"`
+	Image              string                             `json:"image,omitempty"`
+	Identity           string                             `json:"identity,omitempty"`
+	Soul               string                             `json:"soul,omitempty"`
+	Agents             string                             `json:"agents,omitempty"`
+	Skills             []string                           `json:"skills,omitempty"`
+	McpServers         []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
+	Package            string                             `json:"package,omitempty"`
+	Expose             []v1beta1.ExposePort               `json:"expose,omitempty"`
+	ChannelPolicy      *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Resources          *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	AgentIdentity      *v1beta1.AgentIdentitySpec         `json:"agentIdentity,omitempty"`
+	CredentialBindings []v1beta1.CredentialBinding        `json:"credentialBindings,omitempty"`
+	Volumes            []v1beta1.WorkerVolumeSpec         `json:"volumes,omitempty"`
+	Mounts             []v1beta1.WorkerMountSpec          `json:"mounts,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
 	// reconciliation is skipped entirely (for remote/pip workers).
 	// Default is true (controller manages container).
 	ContainerManaged *bool   `json:"containerManaged,omitempty"`
+	IdleTimeout      string  `json:"idleTimeout,omitempty"`
 	State            *string `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 }
 
@@ -66,9 +76,12 @@ type WorkerResponse struct {
 	Model            string            `json:"model,omitempty"`
 	Runtime          string            `json:"runtime,omitempty"`
 	Image            string            `json:"image,omitempty"`
+	IdleTimeout      string            `json:"idleTimeout,omitempty"`
 	ContainerState   string            `json:"containerState,omitempty"`
 	MatrixUserID     string            `json:"matrixUserID,omitempty"`
 	RoomID           string            `json:"roomID,omitempty"`
+	LastActiveAt     string            `json:"lastActiveAt,omitempty"`
+	LastHeartbeat    string            `json:"lastHeartbeat,omitempty"`
 	Message          string            `json:"message,omitempty"`
 	ExposedPorts     []ExposedPortInfo `json:"exposedPorts,omitempty"`
 	Team             string            `json:"team,omitempty"`
@@ -97,23 +110,56 @@ type CreateTeamRequest struct {
 	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
 	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+
+	// Decoupled format: independent Worker CRs referenced by the Team.
+	Members        []TeamMemberRequest `json:"members,omitempty"`
+	HeartbeatEvery string              `json:"heartbeatEvery,omitempty"`
+}
+
+// TeamMemberRequest represents a member in the decoupled team creation format.
+type TeamMemberRequest struct {
+	Name               string                             `json:"name"`
+	WorkerName         string                             `json:"workerName,omitempty"`
+	Role               string                             `json:"role"` // "team_leader" or "worker"
+	Model              string                             `json:"model,omitempty"`
+	ModelProvider      string                             `json:"modelProvider,omitempty"`
+	Runtime            string                             `json:"runtime,omitempty"`
+	Image              string                             `json:"image,omitempty"`
+	Identity           string                             `json:"identity,omitempty"`
+	Soul               string                             `json:"soul,omitempty"`
+	Agents             string                             `json:"agents,omitempty"`
+	Skills             []string                           `json:"skills,omitempty"`
+	McpServers         []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
+	Package            string                             `json:"package,omitempty"`
+	Expose             []v1beta1.ExposePort               `json:"expose,omitempty"`
+	ChannelPolicy      *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Resources          *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	AgentIdentity      *v1beta1.AgentIdentitySpec         `json:"agentIdentity,omitempty"`
+	CredentialBindings []v1beta1.CredentialBinding        `json:"credentialBindings,omitempty"`
+	ContainerManaged   *bool                              `json:"containerManaged,omitempty"`
+	IdleTimeout        string                             `json:"idleTimeout,omitempty"`
+	State              *string                            `json:"state,omitempty"`
 }
 
 type TeamLeaderRequest struct {
-	Name              string                             `json:"name"`
-	WorkerName        string                             `json:"workerName,omitempty"`
-	Model             string                             `json:"model,omitempty"`
-	ModelProvider     string                             `json:"modelProvider,omitempty"`
-	Identity          string                             `json:"identity,omitempty"`
-	Soul              string                             `json:"soul,omitempty"`
-	Agents            string                             `json:"agents,omitempty"`
-	Package           string                             `json:"package,omitempty"`
-	McpServers        []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
-	Heartbeat         *TeamLeaderHeartbeatRequest        `json:"heartbeat,omitempty"`
-	WorkerIdleTimeout string                             `json:"workerIdleTimeout,omitempty"`
-	ChannelPolicy     *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	State             *string                            `json:"state,omitempty"` // desired lifecycle state for leader
-	Resources         *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	Name               string                             `json:"name"`
+	WorkerName         string                             `json:"workerName,omitempty"`
+	Model              string                             `json:"model,omitempty"`
+	ModelProvider      string                             `json:"modelProvider,omitempty"`
+	Runtime            string                             `json:"runtime,omitempty"`
+	Image              string                             `json:"image,omitempty"`
+	Identity           string                             `json:"identity,omitempty"`
+	Soul               string                             `json:"soul,omitempty"`
+	Agents             string                             `json:"agents,omitempty"`
+	Package            string                             `json:"package,omitempty"`
+	McpServers         []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
+	Resources          *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	AgentIdentity      *v1beta1.AgentIdentitySpec         `json:"agentIdentity,omitempty"`
+	CredentialBindings []v1beta1.CredentialBinding        `json:"credentialBindings,omitempty"`
+	Heartbeat          *TeamLeaderHeartbeatRequest        `json:"heartbeat,omitempty"`
+	WorkerIdleTimeout  string                             `json:"workerIdleTimeout,omitempty"`
+	ChannelPolicy      *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	State              *string                            `json:"state,omitempty"` // desired lifecycle state for leader
 }
 
 type TeamLeaderHeartbeatRequest struct {
@@ -122,22 +168,25 @@ type TeamLeaderHeartbeatRequest struct {
 }
 
 type TeamWorkerRequest struct {
-	Name          string                             `json:"name"`
-	WorkerName    string                             `json:"workerName,omitempty"`
-	Model         string                             `json:"model,omitempty"`
-	ModelProvider string                             `json:"modelProvider,omitempty"`
-	Runtime       string                             `json:"runtime,omitempty"`
-	Image         string                             `json:"image,omitempty"`
-	Identity      string                             `json:"identity,omitempty"`
-	Soul          string                             `json:"soul,omitempty"`
-	Agents        string                             `json:"agents,omitempty"`
-	Skills        []string                           `json:"skills,omitempty"`
-	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                             `json:"package,omitempty"`
-	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
-	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	State         *string                            `json:"state,omitempty"` // desired lifecycle state for worker
-	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	Name               string                             `json:"name"`
+	WorkerName         string                             `json:"workerName,omitempty"`
+	Model              string                             `json:"model,omitempty"`
+	ModelProvider      string                             `json:"modelProvider,omitempty"`
+	Runtime            string                             `json:"runtime,omitempty"`
+	Image              string                             `json:"image,omitempty"`
+	Identity           string                             `json:"identity,omitempty"`
+	Soul               string                             `json:"soul,omitempty"`
+	Agents             string                             `json:"agents,omitempty"`
+	Skills             []string                           `json:"skills,omitempty"`
+	McpServers         []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
+	Package            string                             `json:"package,omitempty"`
+	Expose             []v1beta1.ExposePort               `json:"expose,omitempty"`
+	ChannelPolicy      *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
+	Resources          *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	AgentIdentity      *v1beta1.AgentIdentitySpec         `json:"agentIdentity,omitempty"`
+	CredentialBindings []v1beta1.CredentialBinding        `json:"credentialBindings,omitempty"`
+	IdleTimeout        string                             `json:"idleTimeout,omitempty"`
+	State              *string                            `json:"state,omitempty"` // desired lifecycle state for worker
 }
 
 type UpdateTeamRequest struct {
@@ -149,6 +198,12 @@ type UpdateTeamRequest struct {
 	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
 	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+}
+
+// TeamMemberRefResponse is the response representation of a team member reference.
+type TeamMemberRefResponse struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
 }
 
 type TeamResponse struct {
@@ -169,6 +224,7 @@ type TeamResponse struct {
 	Message            string                           `json:"message,omitempty"`
 	WorkerNames        []string                         `json:"workerNames,omitempty"`
 	WorkerExposedPorts map[string][]ExposedPortInfo     `json:"workerExposedPorts,omitempty"`
+	Members            []TeamMemberRefResponse          `json:"members,omitempty"`
 }
 
 type TeamListResponse struct {
@@ -217,8 +273,8 @@ type CreateManagerRequest struct {
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Config        *v1beta1.ManagerConfig             `json:"config,omitempty"`
-	State         *string                            `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	State         *string                            `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 }
 
 type UpdateManagerRequest struct {
@@ -232,8 +288,8 @@ type UpdateManagerRequest struct {
 	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
 	Package       string                             `json:"package,omitempty"`
 	Config        *v1beta1.ManagerConfig             `json:"config,omitempty"`
-	State         *string                            `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	State         *string                            `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
 }
 
 type ManagerResponse struct {

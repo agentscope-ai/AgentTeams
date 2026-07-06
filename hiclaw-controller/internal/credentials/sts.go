@@ -23,11 +23,16 @@ type STSConfig struct {
 
 	// OSSEndpoint is the public-facing OSS endpoint returned to worker
 	// callers in STSToken.OSSEndpoint. It is sourced from controller
-	// static config (HICLAW_FS_ENDPOINT / storage.oss.endpoint) and NOT
+	// static config (AGENTTEAMS_FS_ENDPOINT / storage.oss.endpoint) and NOT
 	// from the credential-provider sidecar — endpoint is deployment-time
 	// configuration, orthogonal to the short-lived STS triple.
 	OSSEndpoint string
 }
+
+const (
+	STSPurposeDefault           = ""
+	STSPurposeAgentIdentityData = "agentidentitydata"
+)
 
 // STSService issues scoped STS tokens for Worker/Manager callers.
 //
@@ -66,10 +71,32 @@ func (s *STSService) Configured() bool {
 // IssueForCaller asks the sidecar for an STS triple whose inline
 // policy matches the caller's resolved AccessEntries.
 func (s *STSService) IssueForCaller(ctx context.Context, caller *auth.CallerIdentity) (*STSToken, error) {
+	return s.IssueForCallerPurpose(ctx, caller, STSPurposeDefault)
+}
+
+// IssueForCallerPurpose asks the sidecar for an STS triple scoped to a
+// specific use. The default purpose preserves the existing OSS/registry path;
+// agentidentitydata is isolated so callers cannot accidentally reuse OSS STS
+// exports for AgentIdentityData credential resolution.
+func (s *STSService) IssueForCallerPurpose(ctx context.Context, caller *auth.CallerIdentity, purpose string) (*STSToken, error) {
 	if !s.Configured() {
 		return nil, fmt.Errorf("STS service not configured: no credential provider URL set")
 	}
-	callerSessionName, entries, err := s.resolver.ResolveForCaller(ctx, caller)
+	var (
+		callerSessionName string
+		entries           []credprovider.AccessEntry
+		err               error
+		includeOSS        bool
+	)
+	switch purpose {
+	case STSPurposeDefault:
+		callerSessionName, entries, err = s.resolver.ResolveForCaller(ctx, caller)
+		includeOSS = true
+	case STSPurposeAgentIdentityData:
+		callerSessionName, entries, err = s.resolver.ResolveAgentIdentityDataForCaller(ctx, caller)
+	default:
+		return nil, fmt.Errorf("unsupported STS purpose %q", purpose)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("resolve access entries: %w", err)
 	}
@@ -80,6 +107,7 @@ func (s *STSService) IssueForCaller(ctx context.Context, caller *auth.CallerIden
 		"callerRole", caller.Role,
 		"callerUsername", caller.Username,
 		"callerTeam", caller.Team,
+		"purpose", purpose,
 		"entries", len(entries),
 	)
 	resp, err := s.provider.Issue(ctx, credprovider.IssueRequest{
@@ -89,13 +117,16 @@ func (s *STSService) IssueForCaller(ctx context.Context, caller *auth.CallerIden
 	if err != nil {
 		return nil, err
 	}
-	return &STSToken{
+	out := &STSToken{
 		AccessKeyID:     resp.AccessKeyID,
 		AccessKeySecret: resp.AccessKeySecret,
 		SecurityToken:   resp.SecurityToken,
 		Expiration:      resp.Expiration,
 		ExpiresInSec:    resp.ExpiresInSec,
-		OSSEndpoint:     s.config.OSSEndpoint,
-		OSSBucket:       s.config.OSSBucket,
-	}, nil
+	}
+	if includeOSS {
+		out.OSSEndpoint = s.config.OSSEndpoint
+		out.OSSBucket = s.config.OSSBucket
+	}
+	return out, nil
 }

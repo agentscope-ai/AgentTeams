@@ -55,14 +55,14 @@ Send a `git-request:` message to the Manager.
 
 **First, get your actual Matrix domain:**
 ```bash
-echo $HICLAW_MATRIX_DOMAIN
-# e.g.: matrix-local.hiclaw.io:18080
+echo $AGENTTEAMS_MATRIX_DOMAIN
+# e.g.: matrix-local.agentteams.io:18080
 ```
 
-Then send (substitute the real domain — do NOT write `$HICLAW_MATRIX_DOMAIN` literally):
+Then send (substitute the real domain — do NOT write `$AGENTTEAMS_MATRIX_DOMAIN` literally):
 
 ```
-@manager:matrix-local.hiclaw.io:18080 task-{task-id} git-request:
+@manager:matrix-local.agentteams.io:18080 task-{task-id} git-request:
 workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace/{repo-name}
 operations:
   - git clone https://github.com/org/repo.git
@@ -90,7 +90,7 @@ Before making changes, check if the task directory is being processed:
 
 ```bash
 # Sync from MinIO
-mc mirror "${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
   "/root/hiclaw-fs/shared/tasks/{task-id}/"
 
 # Check for processing marker
@@ -149,7 +149,7 @@ cat src/main.py
 
 # When ready to commit, sync to MinIO first
 mc mirror "/root/hiclaw-fs/shared/tasks/task-20260225/" \
-  "${HICLAW_STORAGE_PREFIX}/shared/tasks/task-20260225/" --overwrite
+  "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/task-20260225/" --overwrite
 ```
 
 ### 5. Commit and Push

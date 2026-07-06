@@ -14,19 +14,21 @@ account tokens.
 Recommended object path:
 
 ```text
-shared/runtime/members/{memberName}/runtime.yaml
+agents/{runtimeName}/runtime/runtime.yaml
 ```
 
 ## Scope
 
 - Controller writes this file whenever the member's non-secret desired state or
   team facts change.
-- QwenPaw worker polls this file and applies changed model, AgentSpec package,
-  MCP, channel and team context configuration inside the runtime.
+- QwenPaw worker uses this file as desired state. The same polling/apply loop
+  handles changed model, AgentSpec package, MCP, channel and team context
+  configuration inside the runtime.
 - Controller does not write runtime-facing `AGENTS.md`, `SOUL.md`, skills,
   `openclaw.json`, or `mcporter-servers.json` for `runtime=qwenpaw`.
-- AgentSpec package version changes update this file and should be applied by
-  QwenPaw without restarting the pod.
+- AgentSpec package version changes are represented as `desired.agentPackage`
+  changes in this file and should be applied by QwenPaw without restarting the
+  pod.
 
 `desired.agentPackage` is a HiClaw AgentSpec package. It is not the
 TeamHarness plugin package. TeamHarness plugin is runtime infrastructure; an
@@ -93,6 +95,14 @@ desired:
     dmAllowExtra: [] # master current: controller merges policies and writes the result to openclaw.json
     dmDenyExtra: [] # master current: controller merges policies and writes the result to openclaw.json
 
+  outputSanitize:
+    keywords: [] # master current: no corresponding worker injection
+    envRefs: [] # master current: no corresponding worker injection
+  # Non-secret policy for QwenPaw adapter tool-output redaction. `keywords`
+  # contains literal non-secret strings to redact. `envRefs` names environment
+  # variables whose runtime values should be redacted locally; the values are
+  # never written into runtime.yaml.
+
   state: Running # master current: controller consumes spec.state to create, stop, or sleep the container; it is not injected to worker
 
 # Object storage location facts. This section has remote storage coordinates
@@ -113,5 +123,5 @@ credentials:
   gatewayKeyEnv: HICLAW_WORKER_GATEWAY_KEY # master current: real gateway key is injected into this env
   storageAccessKeyEnv: HICLAW_FS_ACCESS_KEY # master current: real storage access key is injected into this env
   storageSecretKeyEnv: HICLAW_FS_SECRET_KEY # master current: real storage secret key is injected into this env
-  serviceAccountTokenPath: /var/run/secrets/kubernetes.io/serviceaccount/token # master current: provided by Kubernetes service account mount, not env injection
+  serviceAccountTokenPath: /var/run/secrets/agentteams/token # same path as AGENTTEAMS_AUTH_TOKEN_FILE
 ```

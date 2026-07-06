@@ -65,14 +65,14 @@ EOF
         cat > "$LIFECYCLE_FILE" << EOF
 {
   "version": 1,
-  "idle_timeout_minutes": ${HICLAW_WORKER_IDLE_TIMEOUT:-720},
+  "idle_timeout_minutes": ${AGENTTEAMS_WORKER_IDLE_TIMEOUT:-720},
   "updated_at": "$(_ts)",
   "workers": {}
 }
 EOF
     else
         # File already exists — respect any manual edits.
-        # HICLAW_WORKER_IDLE_TIMEOUT is only used for initial creation (above).
+        # AGENTTEAMS_WORKER_IDLE_TIMEOUT is only used for initial creation (above).
         true
     fi
 
@@ -403,18 +403,18 @@ action_start() {
             --arg name "$worker" \
             --arg fak "$worker" \
             --arg fsk "${WORKER_MINIO_PASSWORD:-}" \
-            --arg fs_domain "${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}" \
-            --arg fs_endpoint "${HICLAW_FS_ENDPOINT:-}" \
-            --arg fs_bucket "${HICLAW_FS_BUCKET:-}" \
-            --arg controller_url "${HICLAW_CONTROLLER_URL:-}" \
+            --arg fs_domain "${AGENTTEAMS_FS_DOMAIN:-fs-local.agentteams.io}" \
+            --arg fs_endpoint "${AGENTTEAMS_FS_ENDPOINT:-}" \
+            --arg fs_bucket "${AGENTTEAMS_FS_BUCKET:-}" \
+            --arg controller_url "${AGENTTEAMS_CONTROLLER_URL:-}" \
             '{
-                "HICLAW_WORKER_NAME": $name,
-                "HICLAW_FS_ENDPOINT": (if $fs_endpoint != "" then $fs_endpoint else ("http://" + ($fs_domain | split(":")[0]) + ":9000") end),
-                "HICLAW_FS_ACCESS_KEY": $fak,
-                "HICLAW_FS_SECRET_KEY": $fsk
+                "AGENTTEAMS_WORKER_NAME": $name,
+                "AGENTTEAMS_FS_ENDPOINT": (if $fs_endpoint != "" then $fs_endpoint else ("http://" + ($fs_domain | split(":")[0]) + ":9000") end),
+                "AGENTTEAMS_FS_ACCESS_KEY": $fak,
+                "AGENTTEAMS_FS_SECRET_KEY": $fsk
             }
-            | if $controller_url != "" then . + {"HICLAW_CONTROLLER_URL": $controller_url} else . end
-            | if $fs_bucket != "" then . + {"HICLAW_FS_BUCKET": $fs_bucket} else . end')
+            | if $controller_url != "" then . + {"AGENTTEAMS_CONTROLLER_URL": $controller_url} else . end
+            | if $fs_bucket != "" then . + {"AGENTTEAMS_FS_BUCKET": $fs_bucket} else . end')
 
         local create_body
         create_body=$(jq -cn \

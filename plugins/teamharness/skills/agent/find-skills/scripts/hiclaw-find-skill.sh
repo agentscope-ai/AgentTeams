@@ -6,8 +6,8 @@
 
 set -eu
 
-MAX_RESULTS="${HICLAW_FIND_SKILL_MAX_RESULTS:-6}"
-PAGE_SIZE="${HICLAW_FIND_SKILL_NACOS_PAGE_SIZE:-100}"
+MAX_RESULTS="${AGENTTEAMS_FIND_SKILL_MAX_RESULTS:-6}"
+PAGE_SIZE="${AGENTTEAMS_FIND_SKILL_NACOS_PAGE_SIZE:-100}"
 
 RESET='[0m'
 DIM='[38;5;102m'
@@ -62,41 +62,41 @@ get_skills_api_url() {
         printf '%s\n' "${SKILLS_API_URL}"
         return
     fi
-    if [ -n "${HICLAW_SKILLS_API_URL:-}" ]; then
-        printf '%s\n' "${HICLAW_SKILLS_API_URL}"
+    if [ -n "${AGENTTEAMS_SKILLS_API_URL:-}" ]; then
+        printf '%s\n' "${AGENTTEAMS_SKILLS_API_URL}"
         return
     fi
     printf '%s\n' "https://skills.sh"
 }
 
 resolve_controller_bearer() {
-    if [ -n "${HICLAW_AUTH_TOKEN:-}" ]; then
-        printf '%s' "${HICLAW_AUTH_TOKEN}"
+    if [ -n "${AGENTTEAMS_AUTH_TOKEN:-}" ]; then
+        printf '%s' "${AGENTTEAMS_AUTH_TOKEN}"
         return
     fi
-    if [ -n "${HICLAW_AUTH_TOKEN_FILE:-}" ] && [ -f "${HICLAW_AUTH_TOKEN_FILE}" ]; then
-        cat "${HICLAW_AUTH_TOKEN_FILE}"
+    if [ -n "${AGENTTEAMS_AUTH_TOKEN_FILE:-}" ] && [ -f "${AGENTTEAMS_AUTH_TOKEN_FILE}" ]; then
+        cat "${AGENTTEAMS_AUTH_TOKEN_FILE}"
         return
     fi
-    if [ -n "${HICLAW_WORKER_API_KEY:-}" ]; then
-        printf '%s' "${HICLAW_WORKER_API_KEY}"
+    if [ -n "${AGENTTEAMS_WORKER_API_KEY:-}" ]; then
+        printf '%s' "${AGENTTEAMS_WORKER_API_KEY}"
     fi
 }
 
 ensure_nacos_sts_credentials() {
-    [ -n "${HICLAW_NACOS_STS_ACCESS_KEY:-}" ] && return 0
+    [ -n "${AGENTTEAMS_NACOS_STS_ACCESS_KEY:-}" ] && return 0
 
-    controller_url="${HICLAW_CONTROLLER_URL:-}"
+    controller_url="${AGENTTEAMS_CONTROLLER_URL:-}"
     bearer="$(resolve_controller_bearer)"
     if [ -z "${controller_url}" ] || [ -z "${bearer}" ]; then
-        echo "error: NACOS_AUTH_TYPE=sts-hiclaw requires HICLAW_CONTROLLER_URL and a controller bearer token" >&2
+        echo "error: NACOS_AUTH_TYPE=sts-agentteams requires AGENTTEAMS_CONTROLLER_URL and a controller bearer token" >&2
         exit 1
     fi
 
-    if [ -n "${HICLAW_CLUSTER_ID:-}" ]; then
+    if [ -n "${AGENTTEAMS_CLUSTER_ID:-}" ]; then
         resp="$(curl -s -w "\n%{http_code}" -X POST "${controller_url%/}/api/v1/credentials/sts" \
             -H "Authorization: Bearer ${bearer}" \
-            -H "X-HiClaw-Cluster-ID: ${HICLAW_CLUSTER_ID}" \
+            -H "X-AgentTeams-Cluster-ID: ${AGENTTEAMS_CLUSTER_ID}" \
             --connect-timeout 10 --max-time 30 2>&1)"
     else
         resp="$(curl -s -w "\n%{http_code}" -X POST "${controller_url%/}/api/v1/credentials/sts" \
@@ -111,10 +111,10 @@ ensure_nacos_sts_credentials() {
         exit 1
     fi
 
-    HICLAW_NACOS_STS_ACCESS_KEY="$(printf '%s\n' "${body}" | jq -r '.access_key_id')"
-    HICLAW_NACOS_STS_SECRET_KEY="$(printf '%s\n' "${body}" | jq -r '.access_key_secret')"
-    HICLAW_NACOS_STS_SECURITY_TOKEN="$(printf '%s\n' "${body}" | jq -r '.security_token')"
-    if [ -z "${HICLAW_NACOS_STS_ACCESS_KEY}" ] || [ "${HICLAW_NACOS_STS_ACCESS_KEY}" = "null" ]; then
+    AGENTTEAMS_NACOS_STS_ACCESS_KEY="$(printf '%s\n' "${body}" | jq -r '.access_key_id')"
+    AGENTTEAMS_NACOS_STS_SECRET_KEY="$(printf '%s\n' "${body}" | jq -r '.access_key_secret')"
+    AGENTTEAMS_NACOS_STS_SECURITY_TOKEN="$(printf '%s\n' "${body}" | jq -r '.security_token')"
+    if [ -z "${AGENTTEAMS_NACOS_STS_ACCESS_KEY}" ] || [ "${AGENTTEAMS_NACOS_STS_ACCESS_KEY}" = "null" ]; then
         echo "error: failed to parse AI registry STS credentials from controller response" >&2
         exit 1
     fi
@@ -178,12 +178,12 @@ run_nacos_install() {
 
 derive_nacos_connection() {
     api_url="$(get_skills_api_url)"
-    host="${HICLAW_NACOS_HOST:-}"
-    port="${HICLAW_NACOS_PORT:-}"
+    host="${AGENTTEAMS_NACOS_HOST:-}"
+    port="${AGENTTEAMS_NACOS_PORT:-}"
     namespace=""
-    username="${HICLAW_NACOS_USERNAME:-}"
-    password="${HICLAW_NACOS_PASSWORD:-}"
-    token="${HICLAW_NACOS_TOKEN:-}"
+    username="${AGENTTEAMS_NACOS_USERNAME:-}"
+    password="${AGENTTEAMS_NACOS_PASSWORD:-}"
+    token="${AGENTTEAMS_NACOS_TOKEN:-}"
 
     if [ -n "${api_url}" ] && [ "${api_url#nacos://}" != "${api_url}" ]; then
         api_url="${api_url#nacos://}"
@@ -255,12 +255,12 @@ run_nacos_cli() {
     [ -n "${host}" ] && set -- "$@" --host "${host}"
     [ -n "${port}" ] && set -- "$@" --port "${port}"
     [ -n "${namespace}" ] && set -- "$@" --namespace "${namespace}"
-    if [ "${NACOS_AUTH_TYPE:-}" = "sts-hiclaw" ]; then
+    if [ "${NACOS_AUTH_TYPE:-}" = "sts-agentteams" ]; then
         ensure_nacos_sts_credentials
-        set -- "$@" --auth-type sts-hiclaw \
-            --access-key "${HICLAW_NACOS_STS_ACCESS_KEY}" \
-            --secret-key "${HICLAW_NACOS_STS_SECRET_KEY}" \
-            --security-token "${HICLAW_NACOS_STS_SECURITY_TOKEN}"
+        set -- "$@" --auth-type sts-agentteams \
+            --access-key "${AGENTTEAMS_NACOS_STS_ACCESS_KEY}" \
+            --secret-key "${AGENTTEAMS_NACOS_STS_SECRET_KEY}" \
+            --security-token "${AGENTTEAMS_NACOS_STS_SECURITY_TOKEN}"
     else
         [ -n "${username}" ] && set -- "$@" --username "${username}"
         [ -n "${password}" ] && set -- "$@" --password "${password}"

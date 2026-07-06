@@ -17,7 +17,7 @@
 #
 # Usage:
 #   update-worker-config.sh --name <NAME> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]
-#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
+#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
 #
 # Prerequisites:
 #   - Worker must already exist (created via create-worker.sh)
@@ -65,7 +65,7 @@ done
 
 if [ -z "${WORKER_NAME}" ]; then
     echo "Usage: update-worker-config.sh --name <NAME> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]"
-    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
+    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
     exit 1
 fi
 
@@ -74,7 +74,7 @@ fi
 #
 # Why: changing runtime requires destroying the old container and
 # starting a new one from a different image (openclaw vs copaw vs
-# hermes vs openhuman). The controller's reconcile loop is the only path that
+# qwenpaw vs hermes). The controller's reconcile loop is the only path that
 # does this correctly — see hiclaw-controller/internal/controller/
 # member_reconcile.go::ensureMemberContainerPresent. Trying to do
 # it in-place from the manager would double-write config files and
@@ -82,8 +82,8 @@ fi
 # ============================================================
 if [ -n "${RUNTIME}" ]; then
     case "${RUNTIME}" in
-        openclaw|copaw|hermes|openhuman) ;;
-        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, hermes, openhuman." ;;
+        openclaw|copaw|qwenpaw|hermes) ;;
+        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, qwenpaw, hermes." ;;
     esac
 
     if [ -n "${PACKAGE_DIR}" ]; then
@@ -158,8 +158,8 @@ if [ -n "${RUNTIME}" ]; then
     exit 0
 fi
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 
 log "=== Updating Worker: ${WORKER_NAME} ==="
 log "  Memory: preserved (not overwritten)"
@@ -176,7 +176,7 @@ fi
 source "${WORKER_CREDS_FILE}"
 
 # Get fresh Matrix token via login
-WORKER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+WORKER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
     -H 'Content-Type: application/json' \
     -d '{
         "type": "m.login.password",
@@ -410,7 +410,7 @@ fi
 log "Step 6: Syncing config to MinIO (memory preserved)..."
 ensure_mc_credentials 2>/dev/null || true
 mc mirror "/root/hiclaw-fs/agents/${WORKER_NAME}/" \
-    "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
+    "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
     --overwrite \
     --exclude "memory/*" \
     --exclude "MEMORY.md" \

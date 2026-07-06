@@ -7,6 +7,6 @@ type STSToken struct {
 	SecurityToken   string `json:"security_token"`
 	Expiration      string `json:"expiration"`
 	ExpiresInSec    int    `json:"expires_in_sec"`
-	OSSEndpoint     string `json:"oss_endpoint"`
-	OSSBucket       string `json:"oss_bucket"`
+	OSSEndpoint     string `json:"oss_endpoint,omitempty"`
+	OSSBucket       string `json:"oss_bucket,omitempty"`
 }

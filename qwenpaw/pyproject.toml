@@ -11,6 +11,8 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
     "qwenpaw==1.1.11",
+    "alibabacloud-agentidentitydata20251127>=2.0.0",
+    "alibabacloud-tea-openapi>=0.3.12",
     "markdown-it-py>=3.0",
     "linkify-it-py>=2.0",
     "pyyaml>=6.0",

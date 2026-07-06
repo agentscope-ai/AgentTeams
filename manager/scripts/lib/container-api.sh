@@ -6,25 +6,25 @@
 # Docker exec/logs operations still use Docker API passthrough.
 #
 # Required:
-#   HICLAW_CONTROLLER_URL  - controller URL (e.g. http://hiclaw-controller:8090)
+#   AGENTTEAMS_CONTROLLER_URL  - controller URL (e.g. http://hiclaw-controller:8090)
 #
 # Usage:
 #   source /opt/hiclaw/scripts/lib/container-api.sh
-#   worker_backend_create '{"name":"alice","image":"hiclaw/worker-agent:latest"}'
+#   worker_backend_create '{"name":"alice","image":"agentteams/worker-agent:latest"}'
 #   worker_backend_status "alice"
 #   worker_backend_delete "alice"
 
-CONTAINER_API_BASE="${HICLAW_CONTROLLER_URL:-http://localhost:8090}"
+CONTAINER_API_BASE="${AGENTTEAMS_CONTROLLER_URL:-http://localhost:8090}"
 WORKER_CONTAINER_PREFIX="hiclaw-worker-"
 
-# Resolve bearer token: HICLAW_AUTH_TOKEN > HICLAW_AUTH_TOKEN_FILE > none
-_HICLAW_CONTROLLER_TOKEN=""
+# Resolve bearer token: AGENTTEAMS_AUTH_TOKEN > AGENTTEAMS_AUTH_TOKEN_FILE > none
+_AGENTTEAMS_CONTROLLER_TOKEN=""
 _resolve_controller_token() {
     # Re-read token each call (projected SA tokens are auto-rotated by kubelet)
-    if [ -n "${HICLAW_AUTH_TOKEN:-}" ]; then
-        _HICLAW_CONTROLLER_TOKEN="${HICLAW_AUTH_TOKEN}"
-    elif [ -n "${HICLAW_AUTH_TOKEN_FILE:-}" ] && [ -f "${HICLAW_AUTH_TOKEN_FILE}" ]; then
-        _HICLAW_CONTROLLER_TOKEN=$(cat "${HICLAW_AUTH_TOKEN_FILE}")
+    if [ -n "${AGENTTEAMS_AUTH_TOKEN:-}" ]; then
+        _AGENTTEAMS_CONTROLLER_TOKEN="${AGENTTEAMS_AUTH_TOKEN}"
+    elif [ -n "${AGENTTEAMS_AUTH_TOKEN_FILE:-}" ] && [ -f "${AGENTTEAMS_AUTH_TOKEN_FILE}" ]; then
+        _AGENTTEAMS_CONTROLLER_TOKEN=$(cat "${AGENTTEAMS_AUTH_TOKEN_FILE}")
     fi
 }
 
@@ -41,8 +41,8 @@ _orch_api() {
     local url="${CONTAINER_API_BASE}${path}"
     _resolve_controller_token
     local auth_args=()
-    if [ -n "${_HICLAW_CONTROLLER_TOKEN}" ]; then
-        auth_args=(-H "Authorization: Bearer ${_HICLAW_CONTROLLER_TOKEN}")
+    if [ -n "${_AGENTTEAMS_CONTROLLER_TOKEN}" ]; then
+        auth_args=(-H "Authorization: Bearer ${_AGENTTEAMS_CONTROLLER_TOKEN}")
     fi
     if [ -n "$body" ]; then
         curl -s -X "$method" "$url" "${auth_args[@]}" \
@@ -57,8 +57,8 @@ _orch_api_code() {
     local url="${CONTAINER_API_BASE}${path}"
     _resolve_controller_token
     local auth_args=()
-    if [ -n "${_HICLAW_CONTROLLER_TOKEN}" ]; then
-        auth_args=(-H "Authorization: Bearer ${_HICLAW_CONTROLLER_TOKEN}")
+    if [ -n "${_AGENTTEAMS_CONTROLLER_TOKEN}" ]; then
+        auth_args=(-H "Authorization: Bearer ${_AGENTTEAMS_CONTROLLER_TOKEN}")
     fi
     if [ -n "$body" ]; then
         curl -s -o /dev/null -w '%{http_code}' -X "$method" "$url" "${auth_args[@]}" \
@@ -75,8 +75,8 @@ _orch_api_full() {
     local url="${CONTAINER_API_BASE}${path}"
     _resolve_controller_token
     local auth_args=()
-    if [ -n "${_HICLAW_CONTROLLER_TOKEN}" ]; then
-        auth_args=(-H "Authorization: Bearer ${_HICLAW_CONTROLLER_TOKEN}")
+    if [ -n "${_AGENTTEAMS_CONTROLLER_TOKEN}" ]; then
+        auth_args=(-H "Authorization: Bearer ${_AGENTTEAMS_CONTROLLER_TOKEN}")
     fi
     if [ -n "$body" ]; then
         curl -s -w $'\n%{http_code}' -X "$method" "$url" "${auth_args[@]}" \

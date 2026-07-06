@@ -77,9 +77,9 @@ func TestGenerateMcporterConfig_SkipsInvalidEntries(t *testing.T) {
 	g := NewGenerator(Config{})
 	data, err := g.GenerateMcporterConfig("key", []v1beta1.MCPServer{
 		{Name: "", URL: "https://x/mcp"},       // empty name
-		{Name: "noUrl", URL: ""},                 // empty url
+		{Name: "noUrl", URL: ""},               // empty url
 		{Name: "  ", URL: "https://x/mcp"},     // whitespace name
-		{Name: "github", URL: "   "},             // whitespace url
+		{Name: "github", URL: "   "},           // whitespace url
 		{Name: "ok", URL: "https://gw/ok/mcp"}, // valid
 	})
 	if err != nil {

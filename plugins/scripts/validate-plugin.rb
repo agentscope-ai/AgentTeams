@@ -31,7 +31,7 @@ end
 assert_file(manifest_path)
 manifest = read_yaml(manifest_path)
 
-fail!("apiVersion must match existing plugin manifest API version hiclaw.agentteam/v1alpha1") unless manifest["apiVersion"] == "hiclaw.agentteam/v1alpha1"
+fail!("apiVersion must be hiclaw.agentteam/v1alpha1") unless manifest["apiVersion"] == "hiclaw.agentteam/v1alpha1"
 fail!("kind must be AgentTeamPlugin") unless manifest["kind"] == "AgentTeamPlugin"
 
 metadata = manifest.fetch("metadata") { fail!("metadata is required") }

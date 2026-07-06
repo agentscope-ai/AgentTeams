@@ -157,7 +157,7 @@ When hard interruption is confirmed:
 
 1. Use `project-management` to pause the Project.
 2. Identify delegated or running tasks from the current plan and task files.
-3. Send each affected Worker a team-room `stop` message using the full Matrix mention.
+3. Send each affected Worker a team-room `/stop` message using the full Matrix mention.
 4. Treat late Worker results as inputs to your acceptance decision; do not accept interrupted work by default.
 5. Do not mutate old submitted tasks. Replan new work instead.
 

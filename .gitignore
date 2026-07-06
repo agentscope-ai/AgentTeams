@@ -38,6 +38,8 @@ manager/copaw-agent/
 # Node.js
 node_modules/
 package.json
+!plugins/teamharness/remote/node-runtime-core/package.json
+plugins/teamharness/remote/openclaw/loongsuite-js/
 pnpm-lock.yaml
 .cursor/
 
@@ -47,6 +49,9 @@ hiclaw-controller/controller
 hiclaw-controller/hiclaw
 hiclaw-controller/bin/
 
+# Alibaba Cloud CLI binary (downloaded locally for dev; built via curl in Dockerfile)
+aliyun
+
 # Build-time agent templates (copied from manager/agent/ during docker build)
 hiclaw-controller/agent/
 
@@ -55,3 +60,18 @@ helm/hiclaw/charts/*.tgz
 
 # GitNexus
 .gitnexus/
+
+# AGENTS
+.agents/
+
+# CODEX
+.codex
+
+# CASES
+cases/
+
+# ECS
+.ecs
+
+# Local demo workspace
+demo/

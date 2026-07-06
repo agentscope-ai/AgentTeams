@@ -13,18 +13,18 @@
 
 source /opt/hiclaw/scripts/lib/base.sh
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-MATRIX_CLIENT_DOMAIN="${HICLAW_MATRIX_CLIENT_DOMAIN:-matrix-client-local.hiclaw.io}"
-AI_GATEWAY_DOMAIN="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
-FS_DOMAIN="${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}"
-CONSOLE_DOMAIN="${HICLAW_CONSOLE_DOMAIN:-console-local.hiclaw.io}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+MATRIX_CLIENT_DOMAIN="${AGENTTEAMS_MATRIX_CLIENT_DOMAIN:-matrix-client-local.agentteams.io}"
+AI_GATEWAY_DOMAIN="${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}"
+FS_DOMAIN="${AGENTTEAMS_FS_DOMAIN:-fs-local.agentteams.io}"
+CONSOLE_DOMAIN="${AGENTTEAMS_CONSOLE_DOMAIN:-console-local.agentteams.io}"
 # Fixed internal domains used by workers inside hiclaw-net, regardless of user-configured domains.
 # Higress routes always include these so workers can reach manager services reliably.
-AI_GATEWAY_LOCAL_DOMAIN="aigw-local.hiclaw.io"
-FS_LOCAL_DOMAIN="fs-local.hiclaw.io"
+AI_GATEWAY_LOCAL_DOMAIN="aigw-local.agentteams.io"
+FS_LOCAL_DOMAIN="fs-local.agentteams.io"
 
-LLM_PROVIDER="${HICLAW_LLM_PROVIDER:-qwen}"
-LLM_API_URL="${HICLAW_LLM_API_URL:-}"
+LLM_PROVIDER="${AGENTTEAMS_LLM_PROVIDER:-qwen}"
+LLM_API_URL="${AGENTTEAMS_LLM_API_URL:-}"
 if [ -z "${LLM_API_URL}" ]; then
     case "${LLM_PROVIDER}" in
         qwen) LLM_API_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" ;;
@@ -125,7 +125,7 @@ if [ ! -f "${SETUP_MARKER}" ]; then
 
     # 2. Manager Consumer
     higress_api POST /v1/consumers "Creating Manager consumer" \
-        '{"name":"manager","credentials":[{"type":"key-auth","source":"BEARER","values":["'"${HICLAW_MANAGER_GATEWAY_KEY}"'"]}]}'
+        '{"name":"manager","credentials":[{"type":"key-auth","source":"BEARER","values":["'"${AGENTTEAMS_MANAGER_GATEWAY_KEY}"'"]}]}'
 
     # 3. Matrix Homeserver Route
     higress_api POST /v1/routes "Creating Matrix Homeserver route" \
@@ -149,7 +149,7 @@ if [ ! -f "${SETUP_MARKER}" ]; then
 
     # 6a. Enable basic-auth on OpenClaw Console route
     higress_api PUT /v1/routes/openclaw-console/plugin-instances/basic-auth "Enabling basic-auth on OpenClaw Console route" \
-        '{"version":null,"scope":"ROUTE","target":"openclaw-console","targets":{"ROUTE":"openclaw-console"},"pluginName":"basic-auth","pluginVersion":null,"internal":false,"enabled":true,"rawConfigurations":"consumers:\n  - name: admin\n    credential: '"${HICLAW_ADMIN_USER:-admin}"':'"${HICLAW_ADMIN_PASSWORD}"'"}'
+        '{"version":null,"scope":"ROUTE","target":"openclaw-console","targets":{"ROUTE":"openclaw-console"},"pluginName":"basic-auth","pluginVersion":null,"internal":false,"enabled":true,"rawConfigurations":"consumers:\n  - name: admin\n    credential: '"${AGENTTEAMS_ADMIN_USER:-admin}"':'"${AGENTTEAMS_ADMIN_PASSWORD}"'"}'
 
     touch "${SETUP_MARKER}"
     log "First-boot setup complete"
@@ -182,12 +182,12 @@ fi
 # ============================================================
 # LLM Provider + AI Gateway Route
 # ============================================================
-if [ -n "${HICLAW_LLM_API_KEY}" ]; then
+if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
 
     # Create/update LLM provider (GET → PUT if exists, POST if not)
     case "${LLM_PROVIDER}" in
         qwen)
-            PROVIDER_BODY='{"type":"qwen","name":"qwen","tokens":["'"${HICLAW_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"hiclawMode":true}}'
+            PROVIDER_BODY='{"type":"qwen","name":"qwen","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"hiclawMode":true}}'
             existing_provider=$(higress_get /v1/ai/providers/qwen)
             if [ -n "${existing_provider}" ]; then
                 higress_api PUT /v1/ai/providers/qwen "Updating LLM provider (qwen)" "${PROVIDER_BODY}"
@@ -196,9 +196,9 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
             fi
             ;;
         openai-compat)
-            OPENAI_BASE_URL="${HICLAW_OPENAI_BASE_URL:-}"
+            OPENAI_BASE_URL="${AGENTTEAMS_OPENAI_BASE_URL:-}"
             if [ -z "${OPENAI_BASE_URL}" ]; then
-                log "WARNING: HICLAW_OPENAI_BASE_URL not set, skipping openai-compat provider setup"
+                log "WARNING: AGENTTEAMS_OPENAI_BASE_URL not set, skipping openai-compat provider setup"
             else
                 # Parse domain, port, protocol from base URL
                 OC_PROTO="https"
@@ -218,7 +218,7 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
                     higress_api POST /v1/service-sources "Registering openai-compat DNS service source" "${SVC_BODY}"
                 fi
 
-                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${HICLAW_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OPENAI_BASE_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"',"hiclawMode":true}}'
+                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OPENAI_BASE_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"',"hiclawMode":true}}'
                 existing_provider=$(higress_get /v1/ai/providers/openai-compat)
                 if [ -n "${existing_provider}" ]; then
                     higress_api PUT /v1/ai/providers/openai-compat "Updating LLM provider (openai-compat)" "${PROVIDER_BODY}"
@@ -228,7 +228,7 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
             fi
             ;;
         *)
-            PROVIDER_BODY='{"name":"'"${LLM_PROVIDER}"'","type":"openai","tokens":["'"${HICLAW_LLM_API_KEY}"'"],"modelMapping":{},"protocol":"openai/v1"'
+            PROVIDER_BODY='{"name":"'"${LLM_PROVIDER}"'","type":"openai","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"modelMapping":{},"protocol":"openai/v1"'
             if [ -n "${LLM_API_URL}" ]; then
                 PROVIDER_BODY="${PROVIDER_BODY}"',"rawConfigs":{"apiUrl":"'"${LLM_API_URL}"'","hiclawMode":true}'
             else
@@ -247,8 +247,8 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
     # 5b. Create or update AI Gateway Route (GET → PUT if exists, POST if not)
     AI_ROUTE_BODY='{"name":"default-ai-route","domains":'"${AI_ROUTE_DOMAINS}"',"pathPredicate":{"matchType":"PRE","matchValue":"/","caseSensitive":false},"upstreams":[{"provider":"'"${LLM_PROVIDER}"'","weight":100,"modelMapping":{}}],"authConfig":{"enabled":true,"allowedCredentialTypes":["key-auth"],"allowedConsumers":["manager"]}}'
 
-    HICLAW_VERSION=$(cat /opt/hiclaw/agent/.builtin-version 2>/dev/null | tr -d '[:space:]')
-    HICLAW_VERSION="${HICLAW_VERSION:-latest}"
+    AGENTTEAMS_VERSION=$(cat /opt/hiclaw/agent/.builtin-version 2>/dev/null | tr -d '[:space:]')
+    AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-latest}"
 
     existing_route_resp=$(higress_get /v1/ai/routes/default-ai-route)
     if [ -n "${existing_route_resp}" ]; then
@@ -262,7 +262,7 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
             | .upstreams[0].provider = "'"${LLM_PROVIDER}"'"
             | .domains = $domains
             | .headerControl.enabled = true
-            | .headerControl.request.add = [{"key":"user-agent","value":"HiClaw/'"${HICLAW_VERSION}"'"}]
+            | .headerControl.request.add = [{"key":"user-agent","value":"HiClaw/'"${AGENTTEAMS_VERSION}"'"}]
             | .headerControl.request.set  //= []
             | .headerControl.request.remove //= []
             | .headerControl.response.add //= []
@@ -270,30 +270,30 @@ if [ -n "${HICLAW_LLM_API_KEY}" ]; then
             | .headerControl.response.remove //= []
         ' 2>/dev/null)
         if [ -n "${patched}" ] && [ "${patched}" != "null" ]; then
-            higress_api PUT /v1/ai/routes/default-ai-route "Updating AI Gateway route (provider=${LLM_PROVIDER}, User-Agent=HiClaw/${HICLAW_VERSION})" "${patched}"
+            higress_api PUT /v1/ai/routes/default-ai-route "Updating AI Gateway route (provider=${LLM_PROVIDER}, User-Agent=HiClaw/${AGENTTEAMS_VERSION})" "${patched}"
         fi
     else
         # Inject headerControl into the initial route body
         AI_ROUTE_BODY=$(echo "${AI_ROUTE_BODY}" | jq '
-            . + {"headerControl":{"enabled":true,"request":{"add":[{"key":"user-agent","value":"HiClaw/'"${HICLAW_VERSION}"'"}],"set":[],"remove":[]},"response":{"add":[],"set":[],"remove":[]}}}
+            . + {"headerControl":{"enabled":true,"request":{"add":[{"key":"user-agent","value":"HiClaw/'"${AGENTTEAMS_VERSION}"'"}],"set":[],"remove":[]},"response":{"add":[],"set":[],"remove":[]}}}
         ' 2>/dev/null)
-        higress_api POST /v1/ai/routes "Creating AI Gateway route (provider=${LLM_PROVIDER}, User-Agent=HiClaw/${HICLAW_VERSION})" "${AI_ROUTE_BODY}"
+        higress_api POST /v1/ai/routes "Creating AI Gateway route (provider=${LLM_PROVIDER}, User-Agent=HiClaw/${AGENTTEAMS_VERSION})" "${AI_ROUTE_BODY}"
     fi
 
 else
-    log "Skipping AI Gateway configuration (no HICLAW_LLM_API_KEY)"
+    log "Skipping AI Gateway configuration (no AGENTTEAMS_LLM_API_KEY)"
 fi
 
 # ============================================================
 # 6. GitHub MCP Server (idempotent via PUT)
 # ============================================================
-if [ -n "${HICLAW_GITHUB_TOKEN}" ]; then
+if [ -n "${AGENTTEAMS_GITHUB_TOKEN}" ]; then
     higress_api POST /v1/service-sources "Registering GitHub API service source" \
         '{"type":"dns","name":"github-api","domain":"api.github.com","port":443,"protocol":"https"}'
 
     MCP_YAML_FILE="/opt/hiclaw/agent/skills/mcp-server-management/references/mcp-github.yaml"
     if [ -f "${MCP_YAML_FILE}" ]; then
-        MCP_YAML=$(sed "s|accessToken: \"\"|accessToken: \"${HICLAW_GITHUB_TOKEN}\"|" "${MCP_YAML_FILE}")
+        MCP_YAML=$(sed "s|accessToken: \"\"|accessToken: \"${AGENTTEAMS_GITHUB_TOKEN}\"|" "${MCP_YAML_FILE}")
         RAW_CONFIG=$(printf '%s' "${MCP_YAML}" | jq -Rs .)
         MCP_BODY=$(cat <<MCPEOF
 {"name":"mcp-github","description":"GitHub MCP Server","type":"OPEN_API","rawConfigurations":${RAW_CONFIG},"mcpServerName":"mcp-github","domains":["${AI_GATEWAY_DOMAIN}"],"services":[{"name":"github-api.dns","port":443,"weight":100}],"consumerAuthInfo":{"type":"key-auth","enable":true,"allowedConsumers":["manager"]}}
@@ -314,7 +314,7 @@ MCPEOF
         log "WARNING: MCP config not found at ${MCP_YAML_FILE}, skipping GitHub MCP Server"
     fi
 else
-    log "Skipping GitHub MCP Server configuration (no HICLAW_GITHUB_TOKEN)"
+    log "Skipping GitHub MCP Server configuration (no AGENTTEAMS_GITHUB_TOKEN)"
 fi
 
 # ============================================================

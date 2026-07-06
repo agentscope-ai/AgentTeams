@@ -1,6 +1,6 @@
 #!/bin/bash
 # start-copaw-manager.sh - Start Manager Agent with CoPaw runtime
-# Called by start-manager-agent.sh when HICLAW_MANAGER_RUNTIME=copaw
+# Called by start-manager-agent.sh when AGENTTEAMS_MANAGER_RUNTIME=copaw
 #
 # This script converts an OpenClaw-style workspace to a CoPaw-style workspace
 # and then launches the CoPaw application.
@@ -157,7 +157,7 @@ rm -f "${DM_ROOMS_FILE}" "${DM_ROOMS_FILE}.tmp"
 # ============================================================
 # 8. Configure CoPaw CMS plugin (LoongSuite observability)
 # ============================================================
-CMS_TRACES_ENABLED="$(echo "${HICLAW_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
 if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
     log "Configuring CoPaw CMS plugin..."
 
@@ -174,11 +174,11 @@ import os
 from pathlib import Path
 
 cfg_path = Path(sys.argv[1])
-endpoint = os.getenv("HICLAW_CMS_ENDPOINT", "")
-license_key = os.getenv("HICLAW_CMS_LICENSE_KEY", "")
-arms_project = os.getenv("HICLAW_CMS_PROJECT", "")
-cms_workspace = os.getenv("HICLAW_CMS_WORKSPACE", "")
-service_name = os.getenv("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager")
+endpoint = os.getenv("AGENTTEAMS_CMS_ENDPOINT", "")
+license_key = os.getenv("AGENTTEAMS_CMS_LICENSE_KEY", "")
+arms_project = os.getenv("AGENTTEAMS_CMS_PROJECT", "")
+cms_workspace = os.getenv("AGENTTEAMS_CMS_WORKSPACE", "")
+service_name = os.getenv("AGENTTEAMS_CMS_SERVICE_NAME", "hiclaw-manager")
 protocol = "http/protobuf"  # Default OTLP protocol
 
 config = {

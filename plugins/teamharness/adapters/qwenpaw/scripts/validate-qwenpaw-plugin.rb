@@ -4,6 +4,7 @@
 require "json"
 require "open3"
 require "pathname"
+require "tmpdir"
 require "yaml"
 
 abort("usage: validate-qwenpaw-plugin.rb <generated-plugin-dir>") if ARGV.empty?
@@ -23,13 +24,27 @@ def assert_dir(path)
   fail!("missing directory: #{path}") unless path.directory?
 end
 
+def py_compile(path)
+  Dir.mktmpdir("teamharness-pycache-") do |cache_dir|
+    Open3.capture3(
+      { "PYTHONPYCACHEPREFIX" => cache_dir },
+      "python3",
+      "-m",
+      "py_compile",
+      path.to_s
+    )
+  end
+end
+
 assert_dir(package_dir)
 plugin_json = package_dir / "plugin.json"
 plugin_py = package_dir / "plugin.py"
+task_trace_py = package_dir / "task_trace.py"
 asset_dir = package_dir / "teamharness"
 
 assert_file(plugin_json)
 assert_file(plugin_py)
+assert_file(task_trace_py)
 assert_dir(asset_dir)
 
 manifest = JSON.parse(plugin_json.read)
@@ -50,12 +65,23 @@ assert_file(asset_dir / "prompts/agent/worker.md")
 assert_file(asset_dir / "prompts/manager/AGENTS.md")
 assert_file(asset_dir / "skills/team/communication/SKILL.md")
 assert_file(asset_dir / "mcp/server.py")
+assert_file(asset_dir / "mcp/message_tool.py")
+assert_file(asset_dir / "mcp/roomflow_tool.py")
 fail!("top-level hooks must not be packaged for qwenpaw") if (asset_dir / "hooks").exist?
 
-stdout, stderr, status = Open3.capture3("python3", "-m", "py_compile", plugin_py.to_s)
+stdout, stderr, status = py_compile(plugin_py)
 fail!("plugin.py syntax check failed: #{stderr}#{stdout}") unless status.success?
 
-stdout, stderr, status = Open3.capture3("python3", "-m", "py_compile", (asset_dir / "mcp/server.py").to_s)
+stdout, stderr, status = py_compile(task_trace_py)
+fail!("task_trace.py syntax check failed: #{stderr}#{stdout}") unless status.success?
+
+stdout, stderr, status = py_compile(asset_dir / "mcp/server.py")
 fail!("teamharness mcp syntax check failed: #{stderr}#{stdout}") unless status.success?
+
+stdout, stderr, status = py_compile(asset_dir / "mcp/message_tool.py")
+fail!("teamharness message tool syntax check failed: #{stderr}#{stdout}") unless status.success?
+
+stdout, stderr, status = py_compile(asset_dir / "mcp/roomflow_tool.py")
+fail!("teamharness roomflow tool syntax check failed: #{stderr}#{stdout}") unless status.success?
 
 puts "ok: qwenpaw teamharness #{version}"

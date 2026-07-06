@@ -16,18 +16,18 @@ type Config struct {
 	From string
 }
 
-// ConfigFromEnv reads SMTP config from HICLAW_SMTP_* environment variables.
+// ConfigFromEnv reads SMTP config from AGENTTEAMS_SMTP_* environment variables.
 func ConfigFromEnv() *Config {
-	host := os.Getenv("HICLAW_SMTP_HOST")
+	host := os.Getenv("AGENTTEAMS_SMTP_HOST")
 	if host == "" {
 		return nil
 	}
 	return &Config{
 		Host: host,
-		Port: envOrDefault("HICLAW_SMTP_PORT", "465"),
-		User: os.Getenv("HICLAW_SMTP_USER"),
-		Pass: os.Getenv("HICLAW_SMTP_PASS"),
-		From: envOrDefault("HICLAW_SMTP_FROM", "HiClaw <noreply@hiclaw.io>"),
+		Port: envOrDefault("AGENTTEAMS_SMTP_PORT", "465"),
+		User: os.Getenv("AGENTTEAMS_SMTP_USER"),
+		Pass: os.Getenv("AGENTTEAMS_SMTP_PASS"),
+		From: envOrDefault("AGENTTEAMS_SMTP_FROM", "HiClaw <noreply@agentteams.io>"),
 	}
 }
 

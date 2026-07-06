@@ -20,7 +20,7 @@ The `active_tasks` field in state.json contains all in-progress tasks (both fini
 **Ensure admin notification channel is available** (used in Step 7):
 
 1. Check `admin_dm_room_id` in state.json. If `null`, discover it now:
-   - List joined rooms, find the DM room with exactly 2 members: you and `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`
+   - List joined rooms, find the DM room with exactly 2 members: you and `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}`
    - Persist it:
      ```bash
      bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
@@ -56,9 +56,9 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   copaw channels send \
     --agent-id default \
     --channel matrix \
-    --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}" \
+    --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
     --target-session "{room_id}" \
-    --text "@{worker}:${HICLAW_MATRIX_DOMAIN} How is your current task {task-id} going? Are you blocked on anything?"
+    --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} How is your current task {task-id} going? Are you blocked on anything?"
   ```
 - Determine if the Worker is making normal progress based on their reply
 - If the Worker has not responded (no response for more than one heartbeat cycle), flag the anomaly in the Room and notify the human admin (see Step 7)
@@ -85,9 +85,9 @@ Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
   copaw channels send \
     --agent-id default \
     --channel matrix \
-    --target-user "@{leader}:${HICLAW_MATRIX_DOMAIN}" \
+    --target-user "@{leader}:${AGENTTEAMS_MATRIX_DOMAIN}" \
     --target-session "{room_id}" \
-    --text "@{leader}:${HICLAW_MATRIX_DOMAIN} How is task {task-id} progressing? Any blockers from your team?"
+    --text "@{leader}:${AGENTTEAMS_MATRIX_DOMAIN} How is task {task-id} progressing? Any blockers from your team?"
   ```
 - **Do NOT contact team workers directly** — the Team Leader handles internal coordination
 - If the Team Leader reports completion, process it the same as a regular worker completion
@@ -122,9 +122,9 @@ If conditions are met:
    copaw channels send \
      --agent-id default \
      --channel matrix \
-     --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}" \
+     --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
      --target-session "{room_id}" \
-     --text "@{worker}:${HICLAW_MATRIX_DOMAIN} It's time to run your scheduled task {task-id} \"{task-title}\". Please execute it now and report back with the keyword \"executed\"."
+     --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} It's time to run your scheduled task {task-id} \"{task-title}\". Please execute it now and report back with the keyword \"executed\"."
    ```
 
 **Note**: Infinite tasks are never removed from active_tasks. After the Worker reports `executed`, **only** update `last_executed_at` and `next_scheduled_at` — do NOT @mention the Worker again:
@@ -154,9 +154,9 @@ done
   copaw channels send \
     --agent-id default \
     --channel matrix \
-    --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}" \
+    --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
     --target-session "{project_room_id}" \
-    --text "@{worker}:${HICLAW_MATRIX_DOMAIN} Any progress on your current task {task-id} \"{title}\"? Please let us know if you're blocked."
+    --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} Any progress on your current task {task-id} \"{title}\"? Please let us know if you're blocked."
   ```
 - If a Worker has reported task completion in the project room but plan.md has not been updated yet, handle it immediately (see the project management section in AGENTS.md)
 
@@ -244,14 +244,14 @@ If the output is `available`, proceed with the following steps:
   ```
   The script outputs JSON with `channel`, `target`, and `via` fields.
 
-  - When `channel` is **`matrix`**: set `--target-session` to the room id from `target` after stripping a leading `room:` prefix if present. Set `--target-user` to the admin's full Matrix id `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`. Run:
+  - When `channel` is **`matrix`**: set `--target-session` to the room id from `target` after stripping a leading `room:` prefix if present. Set `--target-user` to the admin's full Matrix id `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}`. Run:
     ```bash
     copaw channels send \
       --agent-id default \
       --channel matrix \
-      --target-user "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}" \
+      --target-user "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}" \
       --target-session "<room_id_without_room_prefix>" \
-      --text "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN} [Heartbeat Report] <summarize findings and recommended actions, in SOUL.md persona and language>"
+      --text "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN} [Heartbeat Report] <summarize findings and recommended actions, in SOUL.md persona and language>"
     ```
     If the summary contains characters that break double-quoted `--text`, switch to single-quoted `--text` and type the admin Matrix id literally inside the string.
   - When `channel` is **not** `matrix` and not `"none"`: use **`copaw channels send`** with the resolved `channel` and `target` per **channel-management** / **primary-channel** skill references for that channel.

@@ -7,12 +7,12 @@ If the admin asks you to import an existing Worker template, search a registry f
 | Admin says | Runtime | Flags |
 |------------|---------|-------|
 | "copaw", "Python worker", "pip worker", "host worker" | `copaw` | |
+| "qwenpaw", "QwenPaw worker", "plugin-mode worker", "TeamHarness worker" | `qwenpaw` | |
 | "local worker", "local mode", "access my local environment", "run on my machine" | `copaw` | `--remote` |
 | "hermes", "hermes worker", "hermes-agent" | `hermes` | |
-| "openhuman", "OpenHuman worker", "openhuman framework" | `openhuman` | |
-| "openclaw", "container worker", "docker worker", or none of the above | default (uses `${HICLAW_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
+| "openclaw", "container worker", "docker worker", or none of the above | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 
-When in doubt, ask: "Should this be a copaw (Python, ~150MB RAM), openclaw (Node.js, ~500MB RAM), hermes (Python, ~200MB RAM), or openhuman (Rust, ~300MB RAM, native Matrix E2EE) worker?"
+When in doubt, ask: "Should this be a qwenpaw (Python managed Worker, ~150MB RAM), copaw (Python legacy/remote-capable, ~150MB RAM), openclaw (Node.js, ~500MB RAM), or hermes (Python, ~200MB RAM) worker?"
 
 ## Step 0.5: Receive configuration from AGENTS.md
 
@@ -101,7 +101,7 @@ hiclaw create worker \
   [--model <MODEL_ID>] \
   [--mcp-servers s1,s2] \
   [--skills s1,s2] \
-  [--runtime openclaw|copaw|hermes|openhuman] \
+  [--runtime openclaw|copaw|qwenpaw|hermes] \
   -o json
 ```
 
@@ -116,42 +116,14 @@ Escape rules inside the `--soul "..."` string:
 |------|-------------|
 | `--name` | Worker name (required, lowercase, >3 chars) |
 | `--soul` | **Required.** Full SOUL.md content as a single quoted string. Do NOT use `--soul-file` — file-based input is fragile because the upstream file write (heredoc/redirect) may silently produce 0 bytes. |
-| `--model` | Model ID. If not specified, defaults to `$HICLAW_DEFAULT_MODEL` (set at install time and propagated to your container by the controller); falls back to `qwen3.5-plus` only when that env var is also unset. |
+| `--model` | Model ID. If not specified, defaults to `$AGENTTEAMS_DEFAULT_MODEL` (set at install time and propagated to your container by the controller); falls back to `qwen3.5-plus` only when that env var is also unset. |
 | `--skills` | Comma-separated built-in skills to assign |
 | `--mcp-servers` | Comma-separated MCP servers to authorize |
-| `--runtime` | Agent runtime: `openclaw` (default), `copaw`, `hermes`, or `openhuman` |
+| `--runtime` | Agent runtime: `openclaw` (default), `copaw`, `qwenpaw`, or `hermes` |
 | `--no-wait` | **Strongly recommended.** Return as soon as the controller accepts the create request (~1s) instead of blocking up to 3 minutes for `phase=Ready`. Always pair with the Step 2.5 poll. |
 | `-o json` | Output full JSON response from controller |
 
 The controller handles everything: Matrix registration, room creation, Higress consumer, AI/MCP authorization, config generation, MinIO sync, skills push, and container startup.
-
-### CPU and memory resources
-
-If admin asks you to set CPU or memory requests/limits, use a YAML manifest instead of CLI flags:
-
-```yaml
-apiVersion: agentteams.io/v1beta1
-kind: Worker
-metadata:
-  name: <NAME>
-spec:
-  model: <MODEL_ID>
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      cpu: "2"
-      memory: 2Gi
-```
-
-Apply it with:
-
-```bash
-hiclaw apply -f worker.yaml
-```
-
-Changing `spec.resources` recreates the managed container. Confirm the Worker is idle or that admin accepts interruption before changing resources.
 
 ### MCP server short-circuit
 
@@ -181,7 +153,6 @@ This command returns ALL workers with their current `phase`:
 - OpenClaw Worker: 10-30 seconds
 - QwenPaw Worker: 15-45 seconds
 - Hermes Worker: 15-45 seconds
-- OpenHuman Worker: 15-45 seconds
 
 Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after ~90s, report the situation to admin — but do **NOT** abandon the CLI and try to create the Worker again via curl or any other path. The create request was already accepted; a duplicate POST will fail with 409 Conflict and confuse the picture.
 
@@ -189,7 +160,7 @@ Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after
 - ❌ `sleep 30 && hiclaw get workers` — Wastes time. Poll immediately and repeat as needed.
 - ❌ `cat /root/hiclaw-fs/agents/<name>/config.json` — Config is in MinIO, not local filesystem.
 - ❌ `docker ps -a --filter "name=<name>"` — Docker may not be available in the Manager container.
-- ❌ `curl ${HICLAW_CONTROLLER_URL}/api/v1/workers/...` — **Forbidden.** See AGENTS.md "Controller API Rules". The CLI is the only supported path.
+- ❌ `curl ${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/...` — **Forbidden.** See AGENTS.md "Controller API Rules". The CLI is the only supported path.
 - ❌ Re-running `hiclaw create worker` "to retry" while the first call is still `Pending` — that returns 409 Conflict.
 
 **What to do**:
@@ -203,7 +174,7 @@ Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after
 
 ### Choose your post-creation flow
 
-Run `echo "${HICLAW_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matching path below.
+Run `echo "${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matching path below.
 
 **OpenClaw / Hermes Manager** — incremental DM messages are supported, so polling-then-reply within a single turn is fine: → use **Path A**.
 
@@ -239,7 +210,7 @@ Failing to emit this reply is the number-one cause of "Manager replied to create
 
 #### A3. Greet the Worker in the Worker's Room
 
-After Step A2's reply is prepared, greet the Worker via the helper script. It auto-detects your runtime and handles all shell escaping, flag naming, and the `@<name>:${HICLAW_MATRIX_DOMAIN}` mention format:
+After Step A2's reply is prepared, greet the Worker via the helper script. It auto-detects your runtime and handles all shell escaping, flag naming, and the `@<name>:${AGENTTEAMS_MATRIX_DOMAIN}` mention format:
 
 ```bash
 bash /opt/hiclaw/agent/skills/worker-management/scripts/send-worker-greeting.sh \

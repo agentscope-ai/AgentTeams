@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -11,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/credentials"
@@ -32,7 +29,7 @@ type Config struct {
 
 	// ResourcePrefix is the tenant-level prefix used to derive Pod/SA/label/
 	// session names created by this controller. Default "hiclaw-". Set via
-	// HICLAW_RESOURCE_PREFIX to isolate multiple HiClaw instances that share
+	// AGENTTEAMS_RESOURCE_PREFIX to isolate multiple AgentTeams instances that share
 	// a K8s namespace (different Helm releases). Downstream names are all
 	// derived from this value — see internal/auth.ResourcePrefix for the
 	// full list (worker/manager pods, ServiceAccounts, "app" labels, STS
@@ -40,18 +37,18 @@ type Config struct {
 	// CMS service name, or install-script hardcoded names.
 	ResourcePrefix string
 	// ResourceAutoPrefix controls whether controller should auto-derive
-	// resource/container prefixes. When false, default hiclaw-* prefixes are
-	// disabled unless explicit HICLAW_PROXY_CONTAINER_PREFIX is provided.
-	// Set via HICLAW_RESOURCE_AUTOPREFIX. Default true.
+	// resource/container prefixes. When false, default agentteams-* prefixes are
+	// disabled unless explicit AGENTTEAMS_PROXY_CONTAINER_PREFIX is provided.
+	// Set via AGENTTEAMS_RESOURCE_AUTOPREFIX. Default true.
 	ResourceAutoPrefix bool
 
 	// Docker proxy (embedded mode only)
 	SocketPath      string
-	ContainerPrefix string // worker container/pod name prefix; derived from ResourcePrefix when HICLAW_PROXY_CONTAINER_PREFIX is unset
+	ContainerPrefix string // worker container/pod name prefix; derived from ResourcePrefix when AGENTTEAMS_PROXY_CONTAINER_PREFIX is unset
 
 	// Auth
 	AuthAudience               string // SA token audience for TokenReview
-	AuthTokenExpirationSeconds int64
+	AuthTokenExpirationSeconds int64  // projected SA token TTL; default 3600s, minimum 600s
 
 	// Provider selection (driven by Helm values)
 	GatewayProvider string // "higress" | "ai-gateway"
@@ -63,12 +60,19 @@ type Config struct {
 	HigressAdminUser     string
 	HigressAdminPassword string
 
-	// Worker backend selection
-	WorkerBackend        string
-	WorkerBackendRuntime string
+	// Sandbox backend configuration
+	SandboxProviderType string // "openkruise" (default)
+	SandboxCapabilities string // comma-separated opt-in list, e.g. "hibernate"; empty = all disabled
+	SandboxPrewarmSize  int    // AGENTTEAMS_SANDBOX_PREWARM_SIZE; default 1
+	MountAuthType       string // AGENTTEAMS_MOUNT_AUTH_TYPE; RRSA (default) or AccessKey
+	MountRoleName       string // AGENTTEAMS_MOUNT_ROLE_NAME; required when MountAuthType=RRSA
 
 	// Region (used by AI Gateway / OSS, etc.)
 	Region string
+
+	// AgentIdentityDataEndpoint is the data-plane endpoint projected into
+	// Worker runtime.yaml for AgentIdentityData SDK clients.
+	AgentIdentityDataEndpoint string
 
 	// AI Gateway (Alibaba Cloud APIG) — only used when GatewayProvider == "ai-gateway"
 	GWGatewayID  string
@@ -94,18 +98,11 @@ type Config struct {
 	K8sWorkerCPU    string
 	K8sWorkerMemory string
 
-	// Sandbox backend (OpenKruise Agent Sandbox)
-	SandboxProviderType          string
-	SandboxCapabilities          string
-	SandboxPrewarmSize           int
-	SandboxPrewarmSizeConfigured bool
-
 	// Manager deployment (Initializer creates the Manager CR if enabled)
 	ManagerEnabled          bool
 	ManagerModel            string
 	ManagerRuntime          string
 	ManagerImage            string
-	ManagerSpecResources    *v1beta1.AgentResourceRequirements
 	K8sManagerCPURequest    string
 	K8sManagerMemoryRequest string
 	K8sManagerCPU           string
@@ -113,18 +110,39 @@ type Config struct {
 
 	// DefaultWorkerRuntime is applied by the Worker reconciler when a Worker
 	// CR has spec.runtime unset, before falling back to "openclaw". Sourced
-	// from HICLAW_DEFAULT_WORKER_RUNTIME at install time. Manager pods use
+	// from AGENTTEAMS_DEFAULT_WORKER_RUNTIME at install time. Manager pods use
 	// ManagerRuntime instead, since Backend.Create is shared between both
 	// and only the caller knows which env var applies.
 	DefaultWorkerRuntime string
 
+	// WorkerBackend selects the high-level infrastructure backend ("docker" / "k8s").
+	// Read from AGENTTEAMS_WORKER_BACKEND. Controls which backends are registered.
+	WorkerBackend string
+
+	// DefaultWorkerBackendRuntime is the cluster-level default backendRuntime
+	// when a Worker CR's spec.backendRuntime is not explicitly set.
+	// Values: "pod" (default), "sandbox". Only meaningful in incluster mode.
+	// Read from AGENTTEAMS_WORKER_BACKEND_RUNTIME.
+	DefaultWorkerBackendRuntime string
+
 	// Controller URL (advertised to workers for STS refresh etc.)
 	ControllerURL string
 
+	// ControllerMatrixURL is the controller HTTP endpoint registered with
+	// the Matrix homeserver (Tuwunel) as the appservice push target. In
+	// cross-cluster ("半托管") deployments where workers run in a separate
+	// VPC and reach the controller through an externally-routable domain,
+	// ControllerURL must point at that external endpoint, but Tuwunel —
+	// which lives in the same cluster as the controller — needs an
+	// in-cluster Service DNS instead. Sourced from
+	// AGENTTEAMS_CONTROLLER_URL_MATRIX. When empty, AppserviceConfig falls
+	// back to ControllerURL to preserve single-cluster behavior.
+	ControllerMatrixURL string
+
 	// ControllerName identifies this controller instance. When multiple
-	// hiclaw-controller deployments live in the same namespace (e.g. separate
+	// agentteams-controller deployments live in the same namespace (e.g. separate
 	// Helm releases), each must use a distinct LeaderElection lease to avoid
-	// one instance blocking the other. Sourced from HICLAW_CONTROLLER_NAME;
+	// one instance blocking the other. Sourced from AGENTTEAMS_CONTROLLER_NAME;
 	// if empty, leader election falls back to the legacy global lease name.
 	ControllerName string
 
@@ -171,20 +189,26 @@ type Config struct {
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
 	LLMAPIKey                  string
-	OpenAIBaseURL              string // HICLAW_OPENAI_BASE_URL — custom base URL for openai-compat providers
-	AIStreamIdleTimeoutSeconds int    // HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS
+	OpenAIBaseURL              string // AGENTTEAMS_OPENAI_BASE_URL — custom base URL for openai-compat providers
+	AIStreamIdleTimeoutSeconds int    // AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS
 
 	// Element Web URL (for Gateway route initialization)
 	ElementWebURL string
 
 	// Locale used to render the first-boot Manager onboarding prompt
-	// (welcome message). Sourced from the install-time HICLAW_LANGUAGE
+	// (welcome message). Sourced from the install-time AGENTTEAMS_LANGUAGE
 	// (zh / en) and TZ env vars that the install script forwards into
 	// the controller container. Both are advisory hints — the controller
 	// only embeds them as plain text in the welcome prompt; the agent
 	// itself decides how to interpret them when greeting the admin.
 	UserLanguage string
 	UserTimezone string
+
+	// Appservice (global Matrix event push — replaces /sync polling)
+	AppserviceEnabled bool   // AGENTTEAMS_APPSERVICE_ENABLED; default true
+	AppserviceID      string // AGENTTEAMS_APPSERVICE_ID; default "agentteams-watcher"
+	AppserviceASToken string // AGENTTEAMS_APPSERVICE_AS_TOKEN; auto-generated if empty
+	AppserviceHSToken string // AGENTTEAMS_APPSERVICE_HS_TOKEN; auto-generated if empty
 
 	// CMS observability
 	CMSTracesEnabled  bool
@@ -199,21 +223,21 @@ type Config struct {
 	WorkerEnv WorkerEnvDefaults
 }
 
-// WorkerEnvDefaults holds environment variable defaults injected into worker and manager containers.
+// WorkerEnvDefaults holds environment variable defaults injected into worker containers.
 // All values are resolved once at config load time from the controller's own environment.
 type WorkerEnvDefaults struct {
-	MatrixDomain         string
-	FSEndpoint           string
-	FSBucket             string
-	StoragePrefix        string
-	ControllerURL        string
-	AIGatewayURL         string
-	MatrixURL            string
-	AdminUser            string
-	Runtime              string // "docker" for embedded, "k8s" for incluster
-	DefaultWorkerRuntime string
-	YoloMode             bool // HICLAW_YOLO=1 — propagated to managers and workers
-	MatrixDebug          bool // HICLAW_MATRIX_DEBUG=1 — propagated to managers and workers,
+	MatrixDomain    string
+	FSEndpoint      string
+	FSBucket        string
+	StoragePrefix   string
+	StorageProvider string
+	ControllerURL   string
+	AIGatewayURL    string
+	MatrixURL       string
+	AdminUser       string
+	Runtime         string // "docker" for embedded, "k8s" for incluster
+	YoloMode        bool   // AGENTTEAMS_YOLO=1 — propagated to managers and workers
+	MatrixDebug     bool   // AGENTTEAMS_MATRIX_DEBUG=1 — propagated to managers and workers,
 	// translated to OPENCLAW_MATRIX_DEBUG=1 by the container entrypoints to
 	// enable structured INFO-level traces in the openclaw matrix plugin.
 
@@ -226,7 +250,7 @@ type WorkerEnvDefaults struct {
 	CMSWorkspace      string
 
 	// SkillsAPIURL is propagated to workers as SKILLS_API_URL.
-	// Sourced from SKILLS_API_URL, falling back to HICLAW_SKILLS_API_URL.
+	// Sourced from SKILLS_API_URL, falling back to AGENTTEAMS_SKILLS_API_URL.
 	SkillsAPIURL string
 
 	// NacosAuthType is propagated to workers as NACOS_AUTH_TYPE.
@@ -236,15 +260,25 @@ type WorkerEnvDefaults struct {
 }
 
 type managerSpecEnv struct {
-	Model     string                            `json:"model"`
-	Runtime   string                            `json:"runtime"`
-	Image     string                            `json:"image"`
-	Resources v1beta1.AgentResourceRequirements `json:"resources"`
+	Model     string               `json:"model"`
+	Runtime   string               `json:"runtime"`
+	Image     string               `json:"image"`
+	Resources managerSpecResources `json:"resources"`
+}
+
+type managerSpecResources struct {
+	Requests managerSpecResourceValues `json:"requests"`
+	Limits   managerSpecResourceValues `json:"limits"`
+}
+
+type managerSpecResourceValues struct {
+	CPU    string `json:"cpu"`
+	Memory string `json:"memory"`
 }
 
 func LoadConfig() *Config {
-	kubeMode := envOrDefault("HICLAW_KUBE_MODE", "embedded")
-	metricsBindAddr := os.Getenv("AGENTTEAMS_METRICS_BIND_ADDR")
+	kubeMode := envOrDefaultAny("embedded", "AGENTTEAMS_KUBE_MODE")
+	metricsBindAddr := envAny("AGENTTEAMS_METRICS_BIND_ADDR")
 	if metricsBindAddr == "" {
 		if kubeMode == "embedded" {
 			metricsBindAddr = "0"
@@ -253,70 +287,57 @@ func LoadConfig() *Config {
 		}
 	}
 
-	dataDir := envOrDefault("HICLAW_DATA_DIR", "/data/hiclaw-controller")
+	dataDir := envOrDefaultAny("/data/agentteams-controller", "AGENTTEAMS_DATA_DIR")
 	if !filepath.IsAbs(dataDir) {
 		if wd, err := os.Getwd(); err == nil {
 			dataDir = filepath.Join(wd, dataDir)
 		}
 	}
 
-	resourceAutoPrefix := envBoolDefault("HICLAW_RESOURCE_AUTOPREFIX", true)
+	resourceAutoPrefix := envBoolDefaultAny(true, "AGENTTEAMS_RESOURCE_AUTOPREFIX")
 	resourcePrefix := ""
 	if resourceAutoPrefix {
-		resourcePrefix = envOrDefault("HICLAW_RESOURCE_PREFIX", "hiclaw-")
+		resourcePrefix = envOrDefaultAny("agentteams-", "AGENTTEAMS_RESOURCE_PREFIX")
 	}
 	// ContainerPrefix defaults to "${resourcePrefix}worker-" when auto-prefix
-	// is enabled. HICLAW_PROXY_CONTAINER_PREFIX remains an explicit override.
-	containerPrefix := os.Getenv("HICLAW_PROXY_CONTAINER_PREFIX")
+	// is enabled. AGENTTEAMS_PROXY_CONTAINER_PREFIX remains an explicit override.
+	containerPrefix := envAny("AGENTTEAMS_PROXY_CONTAINER_PREFIX")
 	if containerPrefix == "" && resourceAutoPrefix {
 		containerPrefix = resourcePrefix + "worker-"
 	}
+	region := envOrDefaultAny("cn-hangzhou", "AGENTTEAMS_REGION")
 
 	cfg := &Config{
 		KubeMode:        kubeMode,
 		DataDir:         dataDir,
-		HTTPAddr:        envOrDefault("HICLAW_HTTP_ADDR", ":8090"),
+		HTTPAddr:        envOrDefaultAny(":8090", "AGENTTEAMS_HTTP_ADDR"),
 		MetricsBindAddr: metricsBindAddr,
-		ConfigDir:       envOrDefault("HICLAW_CONFIG_DIR", "/root/hiclaw-fs/hiclaw-config"),
-		CRDDir:          envOrDefault("HICLAW_CRD_DIR", "/opt/hiclaw/config/crd"),
-		SkillsDir:       envOrDefault("HICLAW_SKILLS_DIR", "/opt/hiclaw/agent/skills"),
+		ConfigDir:       envOrDefaultAny("/root/hiclaw-fs/agentteams-config", "AGENTTEAMS_CONFIG_DIR"),
+		CRDDir:          envOrDefaultAny("/opt/hiclaw/config/crd", "AGENTTEAMS_CRD_DIR"),
+		SkillsDir:       envOrDefaultAny("/opt/hiclaw/agent/skills", "AGENTTEAMS_SKILLS_DIR"),
 
 		ResourcePrefix:     resourcePrefix,
 		ResourceAutoPrefix: resourceAutoPrefix,
 
-		SocketPath:      envOrDefault("HICLAW_PROXY_SOCKET", "/var/run/docker.sock"),
+		SocketPath:      envOrDefaultAny("/var/run/docker.sock", "AGENTTEAMS_PROXY_SOCKET"),
 		ContainerPrefix: containerPrefix,
 
-		AuthAudience: firstNonEmpty(
-			os.Getenv("AGENTTEAMS_AUTH_AUDIENCE"),
-			envOrDefault("HICLAW_AUTH_AUDIENCE", "hiclaw-controller"),
+		AuthAudience: envOrDefaultAny("agentteams-controller", "AGENTTEAMS_AUTH_AUDIENCE"),
+		AuthTokenExpirationSeconds: backend.NormalizeAuthTokenExpirationSeconds(
+			int64(envOrDefaultIntAny(int(backend.DefaultAuthTokenExpirationSeconds), "AGENTTEAMS_AUTH_TOKEN_EXPIRATION_SECONDS")),
 		),
-		AuthTokenExpirationSeconds: int64(envOrDefaultInt("AGENTTEAMS_AUTH_TOKEN_EXPIRATION_SECONDS", int(backend.DefaultAuthTokenExpirationSeconds))),
 
-		GatewayProvider: envOrDefault("HICLAW_GATEWAY_PROVIDER", "higress"),
-		StorageProvider: envOrDefault("HICLAW_STORAGE_PROVIDER", "minio"),
+		GatewayProvider: envOrDefaultAny("higress", "AGENTTEAMS_GATEWAY_PROVIDER"),
+		StorageProvider: envOrDefaultAny("minio", "AGENTTEAMS_STORAGE_PROVIDER"),
 
-		CredentialProviderURL: os.Getenv("HICLAW_CREDENTIAL_PROVIDER_URL"),
+		CredentialProviderURL: envAny("AGENTTEAMS_CREDENTIAL_PROVIDER_URL"),
 
-		HigressBaseURL:    envOrDefault("HICLAW_AI_GATEWAY_ADMIN_URL", "http://127.0.0.1:8001"),
+		HigressBaseURL:    envOrDefaultAny("http://127.0.0.1:8001", "AGENTTEAMS_AI_GATEWAY_ADMIN_URL"),
 		HigressCookieFile: os.Getenv("HIGRESS_COOKIE_FILE"),
 		// Higress and Matrix share the same admin credentials.
-		HigressAdminUser:     os.Getenv("HICLAW_ADMIN_USER"),
-		HigressAdminPassword: os.Getenv("HICLAW_ADMIN_PASSWORD"),
+		HigressAdminUser:     envAny("AGENTTEAMS_ADMIN_USER"),
+		HigressAdminPassword: envAny("AGENTTEAMS_ADMIN_PASSWORD"),
 
-		WorkerBackend: firstNonEmpty(
-			os.Getenv("HICLAW_WORKER_BACKEND"),
-			os.Getenv("HICLAW_ALIYUN_WORKER_BACKEND"),
-		),
-		WorkerBackendRuntime: os.Getenv("AGENTTEAMS_WORKER_BACKEND_RUNTIME"),
-
-		Region: envOrDefault("HICLAW_REGION", "cn-hangzhou"),
-
-		GWGatewayID:  os.Getenv("HICLAW_GW_GATEWAY_ID"),
-		GWModelAPIID: os.Getenv("HICLAW_GW_MODEL_API_ID"),
-		GWEnvID:      os.Getenv("HICLAW_GW_ENV_ID"),
-
-		OSSBucket: envOrDefault("HICLAW_FS_BUCKET", "hiclaw-storage"),
 		WorkerDepsStorageBucket: firstNonEmpty(
 			os.Getenv("AGENTTEAMS_WORKER_DEPS_STORAGE_BUCKET"),
 			os.Getenv("AGENTTEAMS_FS_BUCKET"),
@@ -331,94 +352,118 @@ func LoadConfig() *Config {
 		WorkerDepsMountAuthType: envOrDefault("AGENTTEAMS_MOUNT_AUTH_TYPE", "RRSA"),
 		WorkerDepsMountRoleName: os.Getenv("AGENTTEAMS_MOUNT_ROLE_NAME"),
 
-		K8sNamespace:    os.Getenv("HICLAW_K8S_NAMESPACE"),
-		K8sWorkerCPU:    envOrDefault("HICLAW_K8S_WORKER_CPU", "1000m"),
-		K8sWorkerMemory: envOrDefault("HICLAW_K8S_WORKER_MEMORY", "2Gi"),
+		SandboxProviderType: envAny("AGENTTEAMS_SANDBOX_PROVIDER_TYPE"),
+		SandboxCapabilities: envAny("AGENTTEAMS_SANDBOX_CAPABILITIES"),
+		SandboxPrewarmSize: backend.NormalizeSandboxPrewarmSize(
+			envOrDefaultIntAny(backend.DefaultSandboxPrewarmSize, "AGENTTEAMS_SANDBOX_PREWARM_SIZE"),
+		),
+		MountAuthType: envOrDefaultAny("RRSA", "AGENTTEAMS_MOUNT_AUTH_TYPE"),
+		MountRoleName: envAny("AGENTTEAMS_MOUNT_ROLE_NAME"),
 
-		SandboxProviderType:          envOrDefault("AGENTTEAMS_SANDBOX_PROVIDER_TYPE", "openkruise"),
-		SandboxCapabilities:          os.Getenv("AGENTTEAMS_SANDBOX_CAPABILITIES"),
-		SandboxPrewarmSize:           envOrDefaultInt("AGENTTEAMS_SANDBOX_PREWARM_SIZE", backend.DefaultSandboxPrewarmSize),
-		SandboxPrewarmSizeConfigured: os.Getenv("AGENTTEAMS_SANDBOX_PREWARM_SIZE") != "",
+		Region:                    region,
+		AgentIdentityDataEndpoint: agentIdentityDataEndpoint(region),
 
-		ManagerEnabled:          envOrDefault("HICLAW_MANAGER_ENABLED", "true") == "true",
-		ManagerModel:            firstNonEmpty(os.Getenv("HICLAW_MANAGER_MODEL"), envOrDefault("HICLAW_DEFAULT_MODEL", "qwen3.6-plus")),
-		ManagerRuntime:          envOrDefault("HICLAW_MANAGER_RUNTIME", "openclaw"),
-		ManagerImage:            os.Getenv("HICLAW_MANAGER_IMAGE"),
-		DefaultWorkerRuntime:    os.Getenv("HICLAW_DEFAULT_WORKER_RUNTIME"),
-		K8sManagerCPURequest:    envOrDefault("HICLAW_K8S_MANAGER_CPU_REQUEST", "500m"),
-		K8sManagerMemoryRequest: envOrDefault("HICLAW_K8S_MANAGER_MEMORY_REQUEST", "1Gi"),
-		K8sManagerCPU:           envOrDefault("HICLAW_K8S_MANAGER_CPU", "2"),
-		K8sManagerMemory:        envOrDefault("HICLAW_K8S_MANAGER_MEMORY", "4Gi"),
+		GWGatewayID:  envAny("AGENTTEAMS_GW_GATEWAY_ID"),
+		GWModelAPIID: envAny("AGENTTEAMS_GW_MODEL_API_ID"),
+		GWEnvID:      envAny("AGENTTEAMS_GW_ENV_ID"),
 
-		ControllerURL:  os.Getenv("HICLAW_CONTROLLER_URL"),
-		ControllerName: os.Getenv("HICLAW_CONTROLLER_NAME"),
+		OSSBucket: envOrDefaultAny("agentteams-storage", "AGENTTEAMS_FS_BUCKET"),
 
-		ManagerWorkspaceDir: os.Getenv("HICLAW_WORKSPACE_DIR"),
-		HostShareDir:        os.Getenv("HICLAW_HOST_SHARE_DIR"),
-		ManagerConsolePort:  envOrDefault("HICLAW_PORT_MANAGER_CONSOLE", "18888"),
-		ManagerPassword:     os.Getenv("HICLAW_MANAGER_PASSWORD"),
-		ManagerGatewayKey:   os.Getenv("HICLAW_MANAGER_GATEWAY_KEY"),
+		K8sNamespace:    envAny("AGENTTEAMS_K8S_NAMESPACE"),
+		K8sWorkerCPU:    envOrDefaultAny("1000m", "AGENTTEAMS_K8S_WORKER_CPU"),
+		K8sWorkerMemory: envOrDefaultAny("2Gi", "AGENTTEAMS_K8S_WORKER_MEMORY"),
 
-		MatrixServerURL:         envOrDefault("HICLAW_MATRIX_URL", "http://matrix-local.hiclaw.io:8080"),
-		MatrixDomain:            envOrDefault("HICLAW_MATRIX_DOMAIN", "matrix-local.hiclaw.io:8080"),
-		MatrixRegistrationToken: envOrDefault("HICLAW_MATRIX_REGISTRATION_TOKEN", os.Getenv("HICLAW_REGISTRATION_TOKEN")),
-		MatrixAdminUser:         os.Getenv("HICLAW_ADMIN_USER"),
-		MatrixAdminPassword:     os.Getenv("HICLAW_ADMIN_PASSWORD"),
-		MatrixE2EE:              os.Getenv("HICLAW_MATRIX_E2EE") == "1" || os.Getenv("HICLAW_MATRIX_E2EE") == "true",
+		ManagerEnabled:          envOrDefaultAny("true", "AGENTTEAMS_MANAGER_ENABLED") == "true",
+		ManagerModel:            firstNonEmpty(envAny("AGENTTEAMS_MANAGER_MODEL"), envOrDefaultAny("qwen3.6-plus", "AGENTTEAMS_DEFAULT_MODEL")),
+		ManagerRuntime:          envOrDefaultAny("openclaw", "AGENTTEAMS_MANAGER_RUNTIME"),
+		ManagerImage:            envAny("AGENTTEAMS_MANAGER_IMAGE"),
+		DefaultWorkerRuntime:    envAny("AGENTTEAMS_DEFAULT_WORKER_RUNTIME"),
+		K8sManagerCPURequest:    envOrDefaultAny("500m", "AGENTTEAMS_K8S_MANAGER_CPU_REQUEST"),
+		K8sManagerMemoryRequest: envOrDefaultAny("1Gi", "AGENTTEAMS_K8S_MANAGER_MEMORY_REQUEST"),
+		K8sManagerCPU:           envOrDefaultAny("2", "AGENTTEAMS_K8S_MANAGER_CPU"),
+		K8sManagerMemory:        envOrDefaultAny("4Gi", "AGENTTEAMS_K8S_MANAGER_MEMORY"),
 
-		MatrixAppServiceEnabled:            os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") != "0" && os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") != "false",
-		MatrixAppServiceID:                 envOrDefault("HICLAW_MATRIX_APPSERVICE_ID", "hiclaw-controller"),
-		MatrixAppServiceASToken:            os.Getenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN"),
-		MatrixAppServiceHSToken:            os.Getenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN"),
-		MatrixAppServiceSenderLocalpart:    envOrDefault("HICLAW_MATRIX_APPSERVICE_SENDER_LOCALPART", "hiclaw-controller"),
-		MatrixAppServiceUserNamespaceRegex: os.Getenv("HICLAW_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX"),
+		WorkerBackend: firstNonEmpty(
+			envAny("AGENTTEAMS_WORKER_BACKEND"),
+			os.Getenv("AGENTTEAMS_ALIYUN_WORKER_BACKEND"),
+		),
+		DefaultWorkerBackendRuntime: envOrDefaultAny("pod", "AGENTTEAMS_WORKER_BACKEND_RUNTIME"),
 
-		OSSStoragePrefix: envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
+		ControllerURL:       envAny("AGENTTEAMS_CONTROLLER_URL"),
+		ControllerMatrixURL: envAny("AGENTTEAMS_CONTROLLER_URL_MATRIX"),
+		ControllerName:      envAny("AGENTTEAMS_CONTROLLER_NAME"),
 
-		DefaultModel:       envOrDefault("HICLAW_DEFAULT_MODEL", "qwen3.6-plus"),
-		EmbeddingModel:     os.Getenv("HICLAW_EMBEDDING_MODEL"),
-		Runtime:            envOrDefault("HICLAW_RUNTIME", "docker"),
-		ModelContextWindow: envOrDefaultInt("HICLAW_MODEL_CONTEXT_WINDOW", 0),
-		ModelMaxTokens:     envOrDefaultInt("HICLAW_MODEL_MAX_TOKENS", 0),
+		ManagerWorkspaceDir: envAny("AGENTTEAMS_WORKSPACE_DIR"),
+		HostShareDir:        envAny("AGENTTEAMS_HOST_SHARE_DIR"),
+		ManagerConsolePort:  envOrDefaultAny("18888", "AGENTTEAMS_PORT_MANAGER_CONSOLE"),
+		ManagerPassword:     envAny("AGENTTEAMS_MANAGER_PASSWORD"),
+		ManagerGatewayKey:   envAny("AGENTTEAMS_MANAGER_GATEWAY_KEY"),
 
-		LLMProvider:                envOrDefault("HICLAW_LLM_PROVIDER", "qwen"),
-		LLMAPIKey:                  os.Getenv("HICLAW_LLM_API_KEY"),
-		OpenAIBaseURL:              os.Getenv("HICLAW_OPENAI_BASE_URL"),
-		AIStreamIdleTimeoutSeconds: envOrDefaultInt("HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS", 900),
-		ElementWebURL:              os.Getenv("HICLAW_ELEMENT_WEB_URL"),
+		MatrixServerURL:         envOrDefaultAny("http://matrix-local.agentteams.io:8080", "AGENTTEAMS_MATRIX_URL"),
+		MatrixDomain:            envOrDefaultAny("matrix-local.agentteams.io:8080", "AGENTTEAMS_MATRIX_DOMAIN"),
+		MatrixRegistrationToken: envOrDefaultAny(envAny("AGENTTEAMS_REGISTRATION_TOKEN"), "AGENTTEAMS_MATRIX_REGISTRATION_TOKEN"),
+		MatrixAdminUser:         envAny("AGENTTEAMS_ADMIN_USER"),
+		MatrixAdminPassword:     envAny("AGENTTEAMS_ADMIN_PASSWORD"),
+		MatrixE2EE:              envBoolAny("AGENTTEAMS_MATRIX_E2EE"),
 
-		UserLanguage: envOrDefault("HICLAW_LANGUAGE", "zh"),
+		OSSStoragePrefix: envOrDefaultAny("agentteams/agentteams-storage", "AGENTTEAMS_STORAGE_PREFIX"),
+
+		DefaultModel:       envOrDefaultAny("qwen3.6-plus", "AGENTTEAMS_DEFAULT_MODEL"),
+		EmbeddingModel:     envAny("AGENTTEAMS_EMBEDDING_MODEL"),
+		Runtime:            envOrDefaultAny("docker", "AGENTTEAMS_RUNTIME"),
+		ModelContextWindow: envOrDefaultIntAny(0, "AGENTTEAMS_MODEL_CONTEXT_WINDOW"),
+		ModelMaxTokens:     envOrDefaultIntAny(0, "AGENTTEAMS_MODEL_MAX_TOKENS"),
+
+		LLMProvider:                envOrDefaultAny("qwen", "AGENTTEAMS_LLM_PROVIDER"),
+		LLMAPIKey:                  envAny("AGENTTEAMS_LLM_API_KEY"),
+		OpenAIBaseURL:              envAny("AGENTTEAMS_OPENAI_BASE_URL"),
+		AIStreamIdleTimeoutSeconds: envOrDefaultIntAny(900, "AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS"),
+		ElementWebURL:              envAny("AGENTTEAMS_ELEMENT_WEB_URL"),
+
+		MatrixAppServiceEnabled:            envBoolDefaultAny(true, "AGENTTEAMS_MATRIX_APPSERVICE_ENABLED"),
+		MatrixAppServiceID:                 envOrDefaultAny("agentteams-controller", "AGENTTEAMS_MATRIX_APPSERVICE_ID"),
+		MatrixAppServiceASToken:            envAny("AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN"),
+		MatrixAppServiceHSToken:            envAny("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN"),
+		MatrixAppServiceSenderLocalpart:    envOrDefaultAny("agentteams-controller", "AGENTTEAMS_MATRIX_APPSERVICE_SENDER_LOCALPART"),
+		MatrixAppServiceUserNamespaceRegex: envAny("AGENTTEAMS_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX"),
+
+		UserLanguage: envOrDefaultAny("zh", "AGENTTEAMS_LANGUAGE"),
 		UserTimezone: envOrDefault("TZ", "Asia/Shanghai"),
 
-		CMSTracesEnabled:  envBool("HICLAW_CMS_TRACES_ENABLED"),
-		CMSMetricsEnabled: envBool("HICLAW_CMS_METRICS_ENABLED"),
-		CMSEndpoint:       os.Getenv("HICLAW_CMS_ENDPOINT"),
-		CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
-		CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
-		CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
-		CMSServiceName:    envOrDefault("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager"),
+		AppserviceEnabled: envBoolDefaultAny(true, "AGENTTEAMS_APPSERVICE_ENABLED"),
+		AppserviceID:      envOrDefaultAny("agentteams-watcher", "AGENTTEAMS_APPSERVICE_ID"),
+		AppserviceASToken: envAny("AGENTTEAMS_APPSERVICE_AS_TOKEN"),
+		AppserviceHSToken: envAny("AGENTTEAMS_APPSERVICE_HS_TOKEN"),
+
+		CMSTracesEnabled:  envBoolAny("AGENTTEAMS_CMS_TRACES_ENABLED"),
+		CMSMetricsEnabled: envBoolAny("AGENTTEAMS_CMS_METRICS_ENABLED"),
+		CMSEndpoint:       envAny("AGENTTEAMS_CMS_ENDPOINT"),
+		CMSLicenseKey:     envAny("AGENTTEAMS_CMS_LICENSE_KEY"),
+		CMSProject:        envAny("AGENTTEAMS_CMS_PROJECT"),
+		CMSWorkspace:      envAny("AGENTTEAMS_CMS_WORKSPACE"),
+		CMSServiceName:    envOrDefaultAny("agentteams-manager", "AGENTTEAMS_CMS_SERVICE_NAME"),
 
 		WorkerEnv: WorkerEnvDefaults{
-			MatrixDomain:         envOrDefault("HICLAW_MATRIX_DOMAIN", "matrix-local.hiclaw.io:8080"),
-			FSEndpoint:           os.Getenv("HICLAW_FS_ENDPOINT"),
-			FSBucket:             envOrDefault("HICLAW_FS_BUCKET", "hiclaw-storage"),
-			StoragePrefix:        envOrDefault("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage"),
-			ControllerURL:        os.Getenv("HICLAW_CONTROLLER_URL"),
-			AIGatewayURL:         envOrDefault("HICLAW_AI_GATEWAY_URL", "http://aigw-local.hiclaw.io:8080"),
-			MatrixURL:            envOrDefault("HICLAW_MATRIX_URL", "http://matrix-local.hiclaw.io:8080"),
-			AdminUser:            os.Getenv("HICLAW_ADMIN_USER"),
-			DefaultWorkerRuntime: os.Getenv("HICLAW_DEFAULT_WORKER_RUNTIME"),
-			YoloMode:             envBool("HICLAW_YOLO"),
-			MatrixDebug:          envBool("HICLAW_MATRIX_DEBUG"),
+			MatrixDomain:    envOrDefaultAny("matrix-local.agentteams.io:8080", "AGENTTEAMS_MATRIX_DOMAIN"),
+			FSEndpoint:      envAny("AGENTTEAMS_FS_ENDPOINT"),
+			FSBucket:        envOrDefaultAny("agentteams-storage", "AGENTTEAMS_FS_BUCKET"),
+			StoragePrefix:   envOrDefaultAny("agentteams/agentteams-storage", "AGENTTEAMS_STORAGE_PREFIX"),
+			StorageProvider: envOrDefaultAny("minio", "AGENTTEAMS_STORAGE_PROVIDER"),
+			ControllerURL:   envAny("AGENTTEAMS_CONTROLLER_URL"),
+			AIGatewayURL:    envOrDefaultAny("http://aigw-local.agentteams.io:8080", "AGENTTEAMS_AI_GATEWAY_URL"),
+			MatrixURL:       envOrDefaultAny("http://matrix-local.agentteams.io:8080", "AGENTTEAMS_MATRIX_URL"),
+			AdminUser:       envAny("AGENTTEAMS_ADMIN_USER"),
+			YoloMode:        envBoolAny("AGENTTEAMS_YOLO"),
+			MatrixDebug:     envBoolAny("AGENTTEAMS_MATRIX_DEBUG"),
 
 			// CMS observability (propagated from controller env to all workers/managers)
-			CMSTracesEnabled:  envBool("HICLAW_CMS_TRACES_ENABLED"),
-			CMSMetricsEnabled: envBool("HICLAW_CMS_METRICS_ENABLED"),
-			CMSEndpoint:       os.Getenv("HICLAW_CMS_ENDPOINT"),
-			CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
-			CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
-			CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
-			SkillsAPIURL:      envOrDefault("SKILLS_API_URL", os.Getenv("HICLAW_SKILLS_API_URL")),
+			CMSTracesEnabled:  envBoolAny("AGENTTEAMS_CMS_TRACES_ENABLED"),
+			CMSMetricsEnabled: envBoolAny("AGENTTEAMS_CMS_METRICS_ENABLED"),
+			CMSEndpoint:       envAny("AGENTTEAMS_CMS_ENDPOINT"),
+			CMSLicenseKey:     envAny("AGENTTEAMS_CMS_LICENSE_KEY"),
+			CMSProject:        envAny("AGENTTEAMS_CMS_PROJECT"),
+			CMSWorkspace:      envAny("AGENTTEAMS_CMS_WORKSPACE"),
+			SkillsAPIURL:      envOrDefault("SKILLS_API_URL", envAny("AGENTTEAMS_SKILLS_API_URL")),
 			NacosAuthType:     os.Getenv("NACOS_AUTH_TYPE"),
 		},
 	}
@@ -434,12 +479,12 @@ func LoadConfig() *Config {
 		}
 	}
 	// S3/MinIO API is never on the Higress HTTP gateway port (8080). Misconfigured
-	// HICLAW_FS_DOMAIN:8080 URLs are rewritten to the MinIO object port.
+	// AGENTTEAMS_FS_DOMAIN:8080 URLs are rewritten to the MinIO object port.
 	cfg.WorkerEnv.FSEndpoint = normalizeMinIOS3Endpoint(cfg.WorkerEnv.FSEndpoint)
 
-	if specJSON := os.Getenv("HICLAW_MANAGER_SPEC"); specJSON != "" {
+	if specJSON := envAny("AGENTTEAMS_MANAGER_SPEC"); specJSON != "" {
 		if err := applyManagerSpec(cfg, specJSON); err != nil {
-			panic(fmt.Sprintf("invalid HICLAW_MANAGER_SPEC: %v", err))
+			panic(fmt.Sprintf("invalid AGENTTEAMS_MANAGER_SPEC: %v", err))
 		}
 	}
 
@@ -447,13 +492,19 @@ func LoadConfig() *Config {
 	// Tokens must be provided via env vars (set by install script or manually).
 	// We do NOT auto-generate at runtime to prevent token drift across restarts.
 	if cfg.MatrixAppServiceEnabled {
+		if cfg.AppserviceASToken == "" {
+			cfg.AppserviceASToken = cfg.MatrixAppServiceASToken
+		}
+		if cfg.AppserviceHSToken == "" {
+			cfg.AppserviceHSToken = cfg.MatrixAppServiceHSToken
+		}
 		matrixControllerURL := firstNonEmpty(os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_CONTROLLER_URL"), cfg.ControllerURL)
 		cfg.MatrixAppServicePushURL = appServicePushURL(matrixControllerURL)
 		if cfg.MatrixAppServiceASToken == "" {
-			panic("HICLAW_MATRIX_APPSERVICE_AS_TOKEN is required when AppService mode is enabled; run install script or set env var")
+			panic("AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN is required when AppService mode is enabled; run install script or set env var")
 		}
 		if cfg.MatrixAppServiceHSToken == "" {
-			panic("HICLAW_MATRIX_APPSERVICE_HS_TOKEN is required when AppService mode is enabled; run install script or set env var")
+			panic("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN is required when AppService mode is enabled; run install script or set env var")
 		}
 	}
 
@@ -475,27 +526,27 @@ func (c *Config) HasMinIOAdmin() bool {
 
 // CredsDir returns the directory for persisted worker credentials (embedded mode).
 func (c *Config) CredsDir() string {
-	return envOrDefault("HICLAW_CREDS_DIR", "/data/worker-creds")
+	return envOrDefaultAny("/data/worker-creds", "AGENTTEAMS_CREDS_DIR")
 }
 
 // AgentFSDir returns the local filesystem root for agent workspaces.
 func (c *Config) AgentFSDir() string {
-	return envOrDefault("HICLAW_AGENT_FS_DIR", "/root/hiclaw-fs/agents")
+	return envOrDefaultAny("/root/hiclaw-fs/agents", "AGENTTEAMS_AGENT_FS_DIR")
 }
 
 // WorkerAgentDir returns the source directory for builtin worker agent files.
 func (c *Config) WorkerAgentDir() string {
-	return envOrDefault("HICLAW_WORKER_AGENT_DIR", "/opt/hiclaw/agent/worker-agent")
+	return envOrDefaultAny("/opt/hiclaw/agent/worker-agent", "AGENTTEAMS_WORKER_AGENT_DIR")
 }
 
 // ManagerConfigPath returns the path to the Manager Agent's openclaw.json (embedded mode).
 func (c *Config) ManagerConfigPath() string {
-	return envOrDefault("HICLAW_MANAGER_CONFIG_PATH", "/root/openclaw.json")
+	return envOrDefaultAny("/root/openclaw.json", "AGENTTEAMS_MANAGER_CONFIG_PATH")
 }
 
 // RegistryPath returns the path to the workers-registry.json (embedded mode).
 func (c *Config) RegistryPath() string {
-	return envOrDefault("HICLAW_REGISTRY_PATH", "/root/workers-registry.json")
+	return envOrDefaultAny("/root/workers-registry.json", "AGENTTEAMS_REGISTRY_PATH")
 }
 
 // ManagerResources returns the resource requirements for the Manager Pod.
@@ -511,18 +562,19 @@ func (c *Config) ManagerResources() *backend.ResourceRequirements {
 func (c *Config) DockerConfig() backend.DockerConfig {
 	return backend.DockerConfig{
 		SocketPath:           c.SocketPath,
-		WorkerImage:          envOrDefault("HICLAW_WORKER_IMAGE", "hiclaw/worker-agent:latest"),
-		CopawWorkerImage:     envOrDefault("HICLAW_COPAW_WORKER_IMAGE", "hiclaw/copaw-worker:latest"),
-		HermesWorkerImage:    envOrDefault("HICLAW_HERMES_WORKER_IMAGE", "hiclaw/hermes-worker:latest"),
-		OpenHumanWorkerImage: envOrDefault("HICLAW_OPENHUMAN_WORKER_IMAGE", "hiclaw/openhuman-worker:latest"),
-		DefaultNetwork:       envOrDefault("HICLAW_DOCKER_NETWORK", "hiclaw-net"),
+		WorkerImage:          envOrDefaultAny("agentteams/worker-agent:latest", "AGENTTEAMS_WORKER_IMAGE"),
+		CopawWorkerImage:     envOrDefaultAny("agentteams/copaw-worker:latest", "AGENTTEAMS_COPAW_WORKER_IMAGE"),
+		HermesWorkerImage:    envOrDefaultAny("agentteams/hermes-worker:latest", "AGENTTEAMS_HERMES_WORKER_IMAGE"),
+		OpenHumanWorkerImage: envOrDefaultAny("agentteams/openhuman-worker:latest", "AGENTTEAMS_OPENHUMAN_WORKER_IMAGE"),
+		QwenPawWorkerImage:   envOrDefaultAny("agentteams/qwenpaw-worker:latest", "AGENTTEAMS_QWENPAW_WORKER_IMAGE"),
+		DefaultNetwork:       envOrDefaultAny("agentteams-net", "AGENTTEAMS_DOCKER_NETWORK"),
 	}
 }
 
 func (c *Config) STSConfig() credentials.STSConfig {
 	return credentials.STSConfig{
 		OSSBucket:   c.OSSBucket,
-		OSSEndpoint: firstNonEmpty(os.Getenv("HICLAW_FS_ENDPOINT"), c.WorkerEnv.FSEndpoint),
+		OSSEndpoint: firstNonEmpty(envAny("AGENTTEAMS_FS_ENDPOINT"), c.WorkerEnv.FSEndpoint),
 	}
 }
 
@@ -552,10 +604,11 @@ func (c *Config) UsesExternalOSS() bool {
 func (c *Config) K8sConfig() backend.K8sConfig {
 	return backend.K8sConfig{
 		Namespace:            c.K8sNamespace,
-		WorkerImage:          envOrDefault("HICLAW_WORKER_IMAGE", "hiclaw/worker-agent:latest"),
-		CopawWorkerImage:     envOrDefault("HICLAW_COPAW_WORKER_IMAGE", "hiclaw/copaw-worker:latest"),
-		HermesWorkerImage:    envOrDefault("HICLAW_HERMES_WORKER_IMAGE", "hiclaw/hermes-worker:latest"),
-		OpenHumanWorkerImage: envOrDefault("HICLAW_OPENHUMAN_WORKER_IMAGE", "hiclaw/openhuman-worker:latest"),
+		WorkerImage:          envOrDefaultAny("agentteams/worker-agent:latest", "AGENTTEAMS_WORKER_IMAGE"),
+		CopawWorkerImage:     envOrDefaultAny("agentteams/copaw-worker:latest", "AGENTTEAMS_COPAW_WORKER_IMAGE"),
+		HermesWorkerImage:    envOrDefaultAny("agentteams/hermes-worker:latest", "AGENTTEAMS_HERMES_WORKER_IMAGE"),
+		OpenHumanWorkerImage: envOrDefaultAny("agentteams/openhuman-worker:latest", "AGENTTEAMS_OPENHUMAN_WORKER_IMAGE"),
+		QwenPawWorkerImage:   envOrDefaultAny("agentteams/qwenpaw-worker:latest", "AGENTTEAMS_QWENPAW_WORKER_IMAGE"),
 		WorkerCPU:            c.K8sWorkerCPU,
 		WorkerMemory:         c.K8sWorkerMemory,
 		ControllerName:       c.ControllerName,
@@ -567,15 +620,16 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 	return backend.SandboxConfig{
 		Namespace:                    c.K8sNamespace,
 		ProviderType:                 c.SandboxProviderType,
-		AgentRuntimeImage:            os.Getenv("AGENTTEAMS_SANDBOX_AGENT_RUNTIME_IMAGE"),
-		WorkerImage:                  envOrDefault("HICLAW_WORKER_IMAGE", "hiclaw/worker-agent:latest"),
-		CopawWorkerImage:             envOrDefault("HICLAW_COPAW_WORKER_IMAGE", "hiclaw/copaw-worker:latest"),
-		HermesWorkerImage:            envOrDefault("HICLAW_HERMES_WORKER_IMAGE", "hiclaw/hermes-worker:latest"),
-		OpenHumanWorkerImage:         envOrDefault("HICLAW_OPENHUMAN_WORKER_IMAGE", "hiclaw/openhuman-worker:latest"),
+		AgentRuntimeImage:            envOrDefaultAny(sandboxAgentRuntimeImage(c.Region), "AGENTTEAMS_SANDBOX_AGENT_RUNTIME_IMAGE"),
+		WorkerImage:                  envOrDefaultAny("agentteams/worker-agent:latest", "AGENTTEAMS_WORKER_IMAGE"),
+		CopawWorkerImage:             envOrDefaultAny("agentteams/copaw-worker:latest", "AGENTTEAMS_COPAW_WORKER_IMAGE"),
+		HermesWorkerImage:            envOrDefaultAny("agentteams/hermes-worker:latest", "AGENTTEAMS_HERMES_WORKER_IMAGE"),
+		OpenHumanWorkerImage:         envOrDefaultAny("agentteams/openhuman-worker:latest", "AGENTTEAMS_OPENHUMAN_WORKER_IMAGE"),
+		QwenPawWorkerImage:           envOrDefaultAny("agentteams/qwenpaw-worker:latest", "AGENTTEAMS_QWENPAW_WORKER_IMAGE"),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,
-		SandboxPrewarmSizeConfigured: c.SandboxPrewarmSizeConfigured,
+		SandboxPrewarmSizeConfigured: true,
 		ControllerName:               c.ControllerName,
 		ResourcePrefix:               c.ResourcePrefix,
 	}
@@ -588,13 +642,20 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
-// generateRandomHex returns a cryptographically random hex string of n bytes (2n hex chars).
-func generateRandomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+func envAny(keys ...string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
 	}
-	return hex.EncodeToString(b)
+	return ""
+}
+
+func envOrDefaultAny(defaultVal string, keys ...string) string {
+	if v := envAny(keys...); v != "" {
+		return v
+	}
+	return defaultVal
 }
 
 func envOrDefaultInt(key string, defaultVal int) int {
@@ -606,9 +667,29 @@ func envOrDefaultInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
+func envOrDefaultIntAny(defaultVal int, keys ...string) int {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				return n
+			}
+		}
+	}
+	return defaultVal
+}
+
 func envBool(key string) bool {
 	v := os.Getenv(key)
 	return v == "1" || v == "true" || v == "True" || v == "TRUE"
+}
+
+func envBoolAny(keys ...string) bool {
+	for _, key := range keys {
+		if envBool(key) {
+			return true
+		}
+	}
+	return false
 }
 
 func envBoolDefault(key string, defaultVal bool) bool {
@@ -619,6 +700,15 @@ func envBoolDefault(key string, defaultVal bool) bool {
 	return v == "1" || v == "true" || v == "True" || v == "TRUE"
 }
 
+func envBoolDefaultAny(defaultVal bool, keys ...string) bool {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v == "1" || v == "true" || v == "True" || v == "TRUE"
+		}
+	}
+	return defaultVal
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -626,6 +716,20 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func agentIdentityDataEndpoint(region string) string {
+	return firstNonEmpty(
+		envAny("AGENTTEAMS_AGENT_IDENTITY_DATA_ENDPOINT"),
+		fmt.Sprintf("agentidentitydata.%s.aliyuncs.com", region),
+	)
+}
+
+func sandboxAgentRuntimeImage(region string) string {
+	if region == "" {
+		region = "cn-hangzhou"
+	}
+	return fmt.Sprintf("registry-%s-vpc.ack.aliyuncs.com/acs/agent-runtime:v0.0.9", region)
 }
 
 func applyManagerSpec(cfg *Config, specJSON string) error {
@@ -643,10 +747,6 @@ func applyManagerSpec(cfg *Config, specJSON string) error {
 	if spec.Image != "" {
 		cfg.ManagerImage = spec.Image
 	}
-	if !agentResourcesEmpty(spec.Resources) {
-		resources := spec.Resources
-		cfg.ManagerSpecResources = &resources
-	}
 	if spec.Resources.Requests.CPU != "" {
 		cfg.K8sManagerCPURequest = spec.Resources.Requests.CPU
 	}
@@ -663,14 +763,7 @@ func applyManagerSpec(cfg *Config, specJSON string) error {
 	return nil
 }
 
-func agentResourcesEmpty(r v1beta1.AgentResourceRequirements) bool {
-	return r.Requests.CPU == "" &&
-		r.Requests.Memory == "" &&
-		r.Limits.CPU == "" &&
-		r.Limits.Memory == ""
-}
-
-// extractHost returns the hostname from a URL (e.g. "http://hiclaw-controller:8090" → "hiclaw-controller").
+// extractHost returns the hostname from a URL (e.g. "http://agentteams-controller:8090" → "agentteams-controller").
 func extractHost(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -697,8 +790,8 @@ func replaceHost(rawURL, newHost string) string {
 }
 
 // normalizeMinIOS3Endpoint rewrites a common misconfiguration: the S3/MinIO API
-// is served on the object store port (9000 in HiClaw), not the Higress HTTP
-// gateway (8080). A URL like http://fs-local.hiclaw.io:8080 breaks mc silently.
+// is served on the object store port (9000 in AgentTeams), not the Higress HTTP
+// gateway (8080). A URL like http://fs-local.agentteams.io:8080 breaks mc silently.
 func normalizeMinIOS3Endpoint(raw string) string {
 	if raw == "" {
 		return raw
@@ -741,6 +834,50 @@ func appServicePushURL(controllerURL string) string {
 	return controllerURL
 }
 
+// AppServicePushURL returns the controller HTTP endpoint registered with
+// Tuwunel for mention-wakeup transaction push. Empty when push is disabled.
+func (c *Config) AppServicePushURL() string {
+	if !c.AppserviceEnabled {
+		return ""
+	}
+	return c.appserviceReachableURL()
+}
+
+func (c *Config) appserviceReachableURL() string {
+	return firstNonEmpty(c.ControllerMatrixURL, c.ControllerURL, "http://127.0.0.1"+c.HTTPAddr)
+}
+
+// AppserviceConfig returns the resolved appservice configuration.
+// Tokens are auto-generated when not provided via env.
+func (c *Config) AppserviceConfig() matrix.AppserviceConfig {
+	// In incluster mode, derive a per-instance Appservice ID from the
+	// controller name so multiple controllers sharing the same homeserver
+	// don't overwrite each other's registration. Embedded mode only runs
+	// a single instance, so the plain default is fine.
+	id := c.AppserviceID
+	if id == "" {
+		id = "agentteams-watcher"
+	}
+	if c.ControllerName != "" && id == "agentteams-watcher" {
+		id = "agentteams-watcher-" + c.ControllerName
+	}
+
+	return matrix.AppserviceConfig{
+		Enabled: c.AppserviceEnabled,
+		ID:      id,
+		ASToken: firstNonEmpty(c.AppserviceASToken, c.MatrixAppServiceASToken),
+		HSToken: firstNonEmpty(c.AppserviceHSToken, c.MatrixAppServiceHSToken),
+		// URL is the controller's own HTTP address reachable from Tuwunel.
+		// Priority: ControllerMatrixURL (cross-cluster — Tuwunel-side
+		// in-cluster Service DNS) > ControllerURL (single-cluster default,
+		// also advertised to workers) > literal HTTPAddr (embedded/local
+		// dev). The split exists because in cross-cluster deployments the
+		// worker-facing URL must be externally routable while Tuwunel only
+		// has the in-cluster route.
+		URL: c.appserviceReachableURL(),
+	}
+}
+
 func (c *Config) GatewayConfig() gateway.Config {
 	return gateway.Config{
 		ConsoleURL:                c.HigressBaseURL,
@@ -752,9 +889,9 @@ func (c *Config) GatewayConfig() gateway.Config {
 }
 
 func (c *Config) OSSConfig() oss.Config {
-	accessKey := firstNonEmpty(os.Getenv("HICLAW_FS_ACCESS_KEY"), os.Getenv("HICLAW_MINIO_USER"))
-	secretKey := firstNonEmpty(os.Getenv("HICLAW_FS_SECRET_KEY"), os.Getenv("HICLAW_MINIO_PASSWORD"))
-	endpoint := firstNonEmpty(os.Getenv("HICLAW_FS_ENDPOINT"), c.WorkerEnv.FSEndpoint)
+	accessKey := firstNonEmpty(envAny("AGENTTEAMS_FS_ACCESS_KEY"), envAny("AGENTTEAMS_MINIO_USER"))
+	secretKey := firstNonEmpty(envAny("AGENTTEAMS_FS_SECRET_KEY"), envAny("AGENTTEAMS_MINIO_PASSWORD"))
+	endpoint := firstNonEmpty(envAny("AGENTTEAMS_FS_ENDPOINT"), c.WorkerEnv.FSEndpoint)
 	return oss.Config{
 		StoragePrefix: c.OSSStoragePrefix,
 		Bucket:        c.OSSBucket,
@@ -774,45 +911,45 @@ func (c *Config) ManagerAgentEnv() map[string]string {
 			env[k] = v
 		}
 	}
-	setIfNonEmpty("HICLAW_MINIO_USER", os.Getenv("HICLAW_MINIO_USER"))
-	setIfNonEmpty("HICLAW_MINIO_PASSWORD", os.Getenv("HICLAW_MINIO_PASSWORD"))
-	setIfNonEmpty("HICLAW_ADMIN_USER", c.MatrixAdminUser)
-	setIfNonEmpty("HICLAW_ADMIN_PASSWORD", c.MatrixAdminPassword)
-	setIfNonEmpty("HICLAW_REGISTRATION_TOKEN", c.MatrixRegistrationToken)
-	setIfNonEmpty("HICLAW_AI_GATEWAY_ADMIN_URL", c.HigressBaseURL)
-	setIfNonEmpty("HICLAW_MATRIX_URL", c.WorkerEnv.MatrixURL)
-	setIfNonEmpty("HICLAW_AI_GATEWAY_URL", c.WorkerEnv.AIGatewayURL)
-	setIfNonEmpty("HICLAW_FS_ENDPOINT", c.WorkerEnv.FSEndpoint)
-	setIfNonEmpty("HICLAW_FS_BUCKET", c.WorkerEnv.FSBucket)
-	setIfNonEmpty("HICLAW_FS_ACCESS_KEY", firstNonEmpty(os.Getenv("HICLAW_FS_ACCESS_KEY"), os.Getenv("HICLAW_MINIO_USER")))
-	setIfNonEmpty("HICLAW_FS_SECRET_KEY", firstNonEmpty(os.Getenv("HICLAW_FS_SECRET_KEY"), os.Getenv("HICLAW_MINIO_PASSWORD")))
-	setIfNonEmpty("HICLAW_STORAGE_PREFIX", c.OSSStoragePrefix)
-	setIfNonEmpty("HICLAW_MATRIX_DOMAIN", c.MatrixDomain)
-	setIfNonEmpty("HICLAW_DEFAULT_MODEL", c.DefaultModel)
-	setIfNonEmpty("HICLAW_EMBEDDING_MODEL", c.EmbeddingModel)
-	setIfNonEmpty("HICLAW_LLM_PROVIDER", c.LLMProvider)
-	setIfNonEmpty("HICLAW_LLM_API_KEY", c.LLMAPIKey)
+	setIfNonEmpty("AGENTTEAMS_MINIO_USER", os.Getenv("AGENTTEAMS_MINIO_USER"))
+	setIfNonEmpty("AGENTTEAMS_MINIO_PASSWORD", os.Getenv("AGENTTEAMS_MINIO_PASSWORD"))
+	setIfNonEmpty("AGENTTEAMS_ADMIN_USER", c.MatrixAdminUser)
+	setIfNonEmpty("AGENTTEAMS_ADMIN_PASSWORD", c.MatrixAdminPassword)
+	setIfNonEmpty("AGENTTEAMS_REGISTRATION_TOKEN", c.MatrixRegistrationToken)
+	setIfNonEmpty("AGENTTEAMS_AI_GATEWAY_ADMIN_URL", c.HigressBaseURL)
+	setIfNonEmpty("AGENTTEAMS_MATRIX_URL", c.WorkerEnv.MatrixURL)
+	setIfNonEmpty("AGENTTEAMS_AI_GATEWAY_URL", c.WorkerEnv.AIGatewayURL)
+	setIfNonEmpty("AGENTTEAMS_FS_ENDPOINT", c.WorkerEnv.FSEndpoint)
+	setIfNonEmpty("AGENTTEAMS_FS_BUCKET", c.WorkerEnv.FSBucket)
+	setIfNonEmpty("AGENTTEAMS_FS_ACCESS_KEY", firstNonEmpty(envAny("AGENTTEAMS_FS_ACCESS_KEY"), envAny("AGENTTEAMS_MINIO_USER")))
+	setIfNonEmpty("AGENTTEAMS_FS_SECRET_KEY", firstNonEmpty(envAny("AGENTTEAMS_FS_SECRET_KEY"), envAny("AGENTTEAMS_MINIO_PASSWORD")))
+	setIfNonEmpty("AGENTTEAMS_STORAGE_PREFIX", c.OSSStoragePrefix)
+	setIfNonEmpty("AGENTTEAMS_MATRIX_DOMAIN", c.MatrixDomain)
+	setIfNonEmpty("AGENTTEAMS_DEFAULT_MODEL", c.DefaultModel)
+	setIfNonEmpty("AGENTTEAMS_EMBEDDING_MODEL", c.EmbeddingModel)
+	setIfNonEmpty("AGENTTEAMS_LLM_PROVIDER", c.LLMProvider)
+	setIfNonEmpty("AGENTTEAMS_LLM_API_KEY", c.LLMAPIKey)
 	if c.AIStreamIdleTimeoutSeconds > 0 {
-		env["HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS"] = strconv.Itoa(c.AIStreamIdleTimeoutSeconds)
+		env["AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS"] = strconv.Itoa(c.AIStreamIdleTimeoutSeconds)
 	}
-	setIfNonEmpty("HICLAW_ELEMENT_WEB_URL", c.ElementWebURL)
+	setIfNonEmpty("AGENTTEAMS_ELEMENT_WEB_URL", c.ElementWebURL)
 	if c.MatrixE2EE {
-		env["HICLAW_MATRIX_E2EE"] = "1"
+		env["AGENTTEAMS_MATRIX_E2EE"] = "1"
 	}
 	if c.WorkerEnv.MatrixDebug {
-		env["HICLAW_MATRIX_DEBUG"] = "1"
+		env["AGENTTEAMS_MATRIX_DEBUG"] = "1"
 	}
 	if c.CMSTracesEnabled {
-		env["HICLAW_CMS_TRACES_ENABLED"] = "1"
+		env["AGENTTEAMS_CMS_TRACES_ENABLED"] = "1"
 	}
 	if c.CMSMetricsEnabled {
-		env["HICLAW_CMS_METRICS_ENABLED"] = "1"
+		env["AGENTTEAMS_CMS_METRICS_ENABLED"] = "1"
 	}
-	setIfNonEmpty("HICLAW_CMS_ENDPOINT", c.CMSEndpoint)
-	setIfNonEmpty("HICLAW_CMS_LICENSE_KEY", c.CMSLicenseKey)
-	setIfNonEmpty("HICLAW_CMS_PROJECT", c.CMSProject)
-	setIfNonEmpty("HICLAW_CMS_WORKSPACE", c.CMSWorkspace)
-	setIfNonEmpty("HICLAW_CMS_SERVICE_NAME", c.CMSServiceName)
+	setIfNonEmpty("AGENTTEAMS_CMS_ENDPOINT", c.CMSEndpoint)
+	setIfNonEmpty("AGENTTEAMS_CMS_LICENSE_KEY", c.CMSLicenseKey)
+	setIfNonEmpty("AGENTTEAMS_CMS_PROJECT", c.CMSProject)
+	setIfNonEmpty("AGENTTEAMS_CMS_WORKSPACE", c.CMSWorkspace)
+	setIfNonEmpty("AGENTTEAMS_CMS_SERVICE_NAME", c.CMSServiceName)
 	return env
 }
 
@@ -820,7 +957,7 @@ func (c *Config) AgentConfig() agentconfig.Config {
 	// Use WorkerEnv URLs (host-replaced in embedded mode) since openclaw.json
 	// is consumed by worker containers, not the controller itself.
 	matrixURL := c.MatrixServerURL
-	aiGatewayURL := envOrDefault("HICLAW_AI_GATEWAY_URL", "http://aigw-local.hiclaw.io:8080")
+	aiGatewayURL := envOrDefaultAny("http://aigw-local.agentteams.io:8080", "AGENTTEAMS_AI_GATEWAY_URL")
 	if c.KubeMode == "embedded" {
 		if c.WorkerEnv.MatrixURL != "" {
 			matrixURL = c.WorkerEnv.MatrixURL

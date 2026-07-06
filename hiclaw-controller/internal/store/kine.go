@@ -29,7 +29,7 @@ type KineServer struct {
 // Returns ETCDConfig that can be used to connect via client-go.
 func StartKine(ctx context.Context, cfg Config) (*KineServer, error) {
 	if cfg.DataDir == "" {
-		cfg.DataDir = "/data/hiclaw-controller"
+		cfg.DataDir = "/data/agentteams-controller"
 	}
 	if cfg.ListenAddress == "" {
 		cfg.ListenAddress = "127.0.0.1:2379"

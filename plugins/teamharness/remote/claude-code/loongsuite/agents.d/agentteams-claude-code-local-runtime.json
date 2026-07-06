@@ -1,0 +1,18 @@
+{
+  "id": "agentteams-claude-code-local-runtime",
+  "displayName": "AgentTeams Claude Code Local Runtime",
+  "deployMode": "plugin-probe",
+  "localWorkerRuntime": "claude-code",
+  "detection": {
+    "paths": [],
+    "commands": []
+  },
+  "pluginProbe": {
+    "source": {
+      "type": "tar",
+      "tarball": "$PILOT_DATA/plugins/agentteams-claude-code-local-runtime-0.0.2.tar.gz",
+      "destDir": "$PILOT_DATA/local-worker-template-cache/agentteams-claude-code-local-runtime"
+    },
+    "mountType": "wrapper"
+  }
+}

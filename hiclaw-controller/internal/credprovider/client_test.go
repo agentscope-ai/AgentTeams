@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	appmetrics "github.com/hiclaw/hiclaw-controller/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func newMockServer(t *testing.T, status int, body string) *httptest.Server {
@@ -40,7 +43,7 @@ func TestHTTPClient_Issue_FullSTS(t *testing.T) {
 
 func sampleReq() IssueRequest {
 	return IssueRequest{
-		SessionName: "hiclaw-controller",
+		SessionName: "agentteams-controller",
 		Entries: []AccessEntry{
 			{
 				Service:     ServiceObjectStorage,
@@ -88,6 +91,9 @@ func TestHTTPClient_Issue_MissingAK(t *testing.T) {
 }
 
 func TestHTTPClient_Issue_Non2xx(t *testing.T) {
+	appmetrics.UpstreamRequests.Reset()
+	appmetrics.UpstreamRequestErrors.Reset()
+
 	srv := newMockServer(t, 502, `{"error":"upstream down"}`)
 	defer srv.Close()
 
@@ -96,5 +102,38 @@ func TestHTTPClient_Issue_Non2xx(t *testing.T) {
 		t.Fatalf("expected non-2xx to surface as an error")
 	} else if !strings.Contains(err.Error(), "502") {
 		t.Fatalf("expected status code in error, got: %v", err)
+	}
+	if got := testutil.ToFloat64(appmetrics.UpstreamRequests.WithLabelValues("sts_provider", "issue_token", "error", "5xx")); got != 1 {
+		t.Fatalf("upstream_requests_total = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(appmetrics.UpstreamRequestErrors.WithLabelValues("sts_provider", "issue_token", "http")); got != 1 {
+		t.Fatalf("upstream_request_errors_total = %v, want 1", got)
+	}
+}
+
+func TestHTTPClient_GetKubeconfig_RecordsMetrics(t *testing.T) {
+	appmetrics.UpstreamRequests.Reset()
+	appmetrics.UpstreamRequestErrors.Reset()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/kubernetes/kubeconfig" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+		  "clusterId":"c1",
+		  "kubeconfig":"apiVersion: v1\nkind: Config\n",
+		  "expiration":"2099-01-01T00:00:00Z"
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient(srv.URL, srv.Client())
+	if _, err := c.GetKubeconfig(context.Background(), "c1"); err != nil {
+		t.Fatalf("GetKubeconfig: %v", err)
+	}
+	if got := testutil.ToFloat64(appmetrics.UpstreamRequests.WithLabelValues("sts_provider", "get_kubeconfig", "success", "2xx")); got != 1 {
+		t.Fatalf("upstream_requests_total = %v, want 1", got)
 	}
 }

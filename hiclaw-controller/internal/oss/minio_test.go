@@ -20,6 +20,20 @@ func TestBuildMCHostEnv_FullURL(t *testing.T) {
 	}
 }
 
+func TestRedactMCArgs_AliasSetHidesCredentials(t *testing.T) {
+	got := redactMCArgs([]string{
+		"alias", "set", "hiclaw", "https://oss-cn-hangzhou.aliyuncs.com",
+		"ACCESS_KEY", "SECRET_KEY", "--api", "S3v4",
+	})
+	if strings.Contains(got, "ACCESS_KEY") || strings.Contains(got, "SECRET_KEY") {
+		t.Fatalf("redacted command leaked credentials: %q", got)
+	}
+	want := "alias set hiclaw https://oss-cn-hangzhou.aliyuncs.com <redacted> <redacted> --api S3v4"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestBuildMCHostEnv_BareHostname(t *testing.T) {
 	got, err := buildMCHostEnv("hiclaw", "oss-cn-hangzhou.aliyuncs.com", Credentials{
 		AccessKeyID:     "AK",

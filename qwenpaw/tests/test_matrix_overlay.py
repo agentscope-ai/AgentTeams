@@ -16,6 +16,13 @@ def _overlay_source() -> str:
     return OVERLAY.read_text(encoding="utf-8")
 
 
+def test_matrix_overlay_is_installed_by_worker_image() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "qwenpaw/src/matrix/" in dockerfile
+    assert "qwenpaw/app/channels/matrix/channel.py" in dockerfile
+
+
 def test_matrix_overlay_preserves_invite_join_and_marks_ready() -> None:
     source = _overlay_source()
 

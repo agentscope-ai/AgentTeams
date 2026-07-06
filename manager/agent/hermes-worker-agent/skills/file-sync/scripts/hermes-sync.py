@@ -7,11 +7,11 @@ sync of config files (openclaw.json, SOUL.md, AGENTS.md, skills) from MinIO,
 then re-bridges them into ``${HERMES_HOME}/{config.yaml,.env,SOUL.md,AGENTS.md}``.
 
 Environment variables (set by the container at startup):
-- ``HICLAW_WORKER_NAME``  worker name
-- ``HICLAW_FS_ENDPOINT``  MinIO endpoint  (e.g. http://fs-local.hiclaw.io:18080)
-- ``HICLAW_FS_ACCESS_KEY`` MinIO access key (= worker name)
-- ``HICLAW_FS_SECRET_KEY`` MinIO secret key
-- ``HICLAW_FS_BUCKET``    MinIO bucket    (default: hiclaw-storage)
+- ``AGENTTEAMS_WORKER_NAME``  worker name
+- ``AGENTTEAMS_FS_ENDPOINT``  MinIO endpoint  (e.g. http://fs-local.agentteams.io:18080)
+- ``AGENTTEAMS_FS_ACCESS_KEY`` MinIO access key (= worker name)
+- ``AGENTTEAMS_FS_SECRET_KEY`` MinIO secret key
+- ``AGENTTEAMS_FS_BUCKET``    MinIO bucket    (default: agentteams-storage)
 - ``HERMES_HOME``         hermes-agent workspace
                           (default: $HOME/.hermes, i.e.
                           /root/hiclaw-fs/agents/<worker_name>/.hermes)
@@ -64,18 +64,18 @@ except ImportError:
 
 
 def main() -> None:
-    worker_name = os.getenv("HICLAW_WORKER_NAME")
-    minio_endpoint = os.getenv("HICLAW_FS_ENDPOINT")
-    minio_access_key = os.getenv("HICLAW_FS_ACCESS_KEY")
-    minio_secret_key = os.getenv("HICLAW_FS_SECRET_KEY")
-    minio_bucket = os.getenv("HICLAW_FS_BUCKET", "hiclaw-storage")
+    worker_name = os.getenv("AGENTTEAMS_WORKER_NAME")
+    minio_endpoint = os.getenv("AGENTTEAMS_FS_ENDPOINT")
+    minio_access_key = os.getenv("AGENTTEAMS_FS_ACCESS_KEY")
+    minio_secret_key = os.getenv("AGENTTEAMS_FS_SECRET_KEY")
+    minio_bucket = os.getenv("AGENTTEAMS_FS_BUCKET", "agentteams-storage")
     hermes_home = os.getenv("HERMES_HOME")
 
     if not all([worker_name, minio_endpoint, minio_access_key, minio_secret_key]):
         print("Error: Missing required environment variables", file=sys.stderr)
         print(
-            "Required: HICLAW_WORKER_NAME, HICLAW_FS_ENDPOINT, "
-            "HICLAW_FS_ACCESS_KEY, HICLAW_FS_SECRET_KEY",
+            "Required: AGENTTEAMS_WORKER_NAME, AGENTTEAMS_FS_ENDPOINT, "
+            "AGENTTEAMS_FS_ACCESS_KEY, AGENTTEAMS_FS_SECRET_KEY",
             file=sys.stderr,
         )
         sys.exit(1)

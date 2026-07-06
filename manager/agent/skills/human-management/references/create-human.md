@@ -7,7 +7,7 @@ Import a real human account into HiClaw. The script registers a Matrix account, 
 ## Prerequisites
 
 - SMTP configured in environment (for email notifications):
-  - `HICLAW_SMTP_HOST`, `HICLAW_SMTP_PORT`, `HICLAW_SMTP_USER`, `HICLAW_SMTP_PASS`, `HICLAW_SMTP_FROM`
+  - `AGENTTEAMS_SMTP_HOST`, `AGENTTEAMS_SMTP_PORT`, `AGENTTEAMS_SMTP_USER`, `AGENTTEAMS_SMTP_PASS`, `AGENTTEAMS_SMTP_FROM`
 - For Level 2: target teams must already exist in `teams-registry.json`
 - For Level 3: target workers must already exist in `workers-registry.json`
 

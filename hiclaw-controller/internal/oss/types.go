@@ -5,12 +5,12 @@ import "context"
 // Config holds connection parameters for object storage.
 type Config struct {
 	MCBinary      string // mc binary path, default "mc"
-	Alias         string // mc alias name, default "hiclaw"
+	Alias         string // mc alias name, default derives from StoragePrefix (agentteams/...)
 	Endpoint      string // MinIO endpoint URL, e.g. "http://minio:9000"
 	AccessKey     string // MinIO root access key
 	SecretKey     string // MinIO root secret key
-	StoragePrefix string // full mc prefix, e.g. "hiclaw/hiclaw-storage"
-	Bucket        string // bucket name for policy generation, e.g. "hiclaw-storage"
+	StoragePrefix string // full mc prefix, e.g. "agentteams/agentteams-storage"
+	Bucket        string // bucket name for policy generation, e.g. "agentteams-storage"
 }
 
 // CredentialSource provides per-invocation credentials for object storage.

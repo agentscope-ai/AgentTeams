@@ -1,10 +1,10 @@
-# AgentTeams Plugins
+# HiClaw Plugins
 
-This directory contains AgentTeams runtime plugin packages and the local fallback
+This directory contains HiClaw runtime plugin packages and the local fallback
 CLI for installing them.
 
 Stage 2 establishes the TeamHarness plugin package contract. The package is
-installed by the AgentTeams `agentteams` CLI by default, and it is also compatible
+installed by the HiClaw `agentteams` CLI by default, and it is also compatible
 with the LoongSuite/Pilot `plugin-probe` convention for local QwenPaw runtime
 deployment.
 
@@ -13,9 +13,9 @@ Remote-managed local workers use runtime-specific packages under
 LoongSuite runtime templates live there so they do not mix with the
 runtime-neutral TeamHarness base package.
 
-## Default Path: AgentTeams CLI
+## Default Path: HiClaw CLI
 
-The default installer is the AgentTeams-owned `agentteams` CLI:
+The default installer is the HiClaw-owned `agentteams` CLI:
 
 ```bash
 agentteams plugin install teamharness --package dist/teamharness.tar.gz
@@ -95,12 +95,12 @@ The lifecycle entrypoints are the shared contract:
 - `scripts/uninstall.sh`: removes the runtime-specific installation through the
   matching adapter when available.
 
-Both the AgentTeams CLI and LoongSuite `plugin-probe` path call the same lifecycle
+Both the HiClaw CLI and LoongSuite `plugin-probe` path call the same lifecycle
 scripts. Runtime-specific details stay inside TeamHarness adapters.
 
 ## Boundaries
 
-- `desired.agentPackage` in the runtime config contract is an AgentTeams AgentSpec
+- `desired.agentPackage` in the runtime config contract is a HiClaw AgentSpec
   package. It is not this TeamHarness plugin package.
 - Cluster QwenPaw workers do not use LoongSuite. They may later reuse the same
   TeamHarness tarball or bundled assets from the worker image.

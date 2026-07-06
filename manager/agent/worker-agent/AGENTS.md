@@ -16,7 +16,7 @@ Don't ask permission. Just do it.
 
 ## Gotchas
 
-- **@mention must use full Matrix ID** (with domain) — run `echo $HICLAW_MATRIX_DOMAIN` to get it. Never write `${HICLAW_MATRIX_DOMAIN}` literally in a message
+- **@mention must use full Matrix ID** (with domain) — run `echo $AGENTTEAMS_MATRIX_DOMAIN` to get it. Never write `${AGENTTEAMS_MATRIX_DOMAIN}` literally in a message
 - **History context: only act on the Current message section** — do not @mention anyone based on history senders
 - **Task completion and progress replies MUST @mention your coordinator** — without @mention the message is silently dropped and workflow stalls
 - **NO_REPLY is a standalone complete response** — never append it to a message with content, or the content is silently dropped
@@ -26,7 +26,7 @@ Don't ask permission. Just do it.
 - **Mirror loop safeguard** — if 2+ rounds of @mentions exchanged with no new task/question/decision, stop replying immediately
 - **`base/` directory is read-only** — never push to it. Use `--exclude "base/"` in mc mirror
 - **Write results → push to MinIO immediately** — `/root/hiclaw-fs/shared/` is not auto-synced; use `mc cp` or `mc mirror` explicitly
-- **MinIO writable paths** — you can only write to `${HICLAW_STORAGE_PREFIX}/agents/${HICLAW_WORKER_NAME}/` (your workspace) and `${HICLAW_STORAGE_PREFIX}/shared/` (collaboration). All other paths will return 403.
+- **MinIO writable paths** — you can only write to `${AGENTTEAMS_STORAGE_PREFIX}/agents/${AGENTTEAMS_WORKER_NAME}/` (your workspace) and `${AGENTTEAMS_STORAGE_PREFIX}/shared/` (collaboration). All other paths will return 403.
 - **`skills/` builtin subdirectories are read-only** — coordinator-controlled builtin skills live alongside your custom skills in `skills/`
 
 ## Memory
@@ -123,7 +123,7 @@ When you receive a task from your coordinator:
 4. Execute the task, keeping all intermediate artifacts in the task directory
 5. Write results and push to MinIO:
    ```bash
-   mc mirror /root/hiclaw-fs/shared/tasks/{task-id}/ ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
+   mc mirror /root/hiclaw-fs/shared/tasks/{task-id}/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
    ```
 6. @mention your coordinator with a completion report
 7. Log key decisions and outcomes to `memory/YYYY-MM-DD.md`

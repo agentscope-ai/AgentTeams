@@ -1,6 +1,6 @@
 ---
 name: teamharness-project-management
-description: "Use only after Project Work mode is selected, before TeamHarness projectflow calls, project DAG or Loop planning, ready-node resolution, iteration recording, project files, result acceptance, or project progress updates."
+description: "Use when a Leader maintains durable TeamHarness project state for Quick Task or Project Work: create_quick_project, create_project, plan_dag, plan_loop, ready_nodes, resolve_project, accept_task_result, project completion, and requester report state. Do not use to create Matrix task rooms or send messages."
 ---
 
 # Project Management
@@ -28,9 +28,11 @@ Use this skill when acting as Leader for:
 - accepting checked Worker results into project progress
 - project-level status reports
 
-Use `teamharness-team-coordination` first to decide task boundaries. Use
-`teamharness-task-delegation` for individual task specs and Worker result
-checks.
+For Project Work, use `teamharness-team-coordination` first to decide task
+boundaries. If no task room exists yet, use `teamharness-roomflow` and
+`teamharness-communication` before this skill. Use
+`teamharness-task-delegation` for individual task specs, assignment messages,
+and Worker result checks.
 
 ## Project Files
 
@@ -52,6 +54,10 @@ Write a final project result, when needed, to:
 ```text
 shared/projects/{project-id}/result.md
 ```
+
+The Leader owns this project result file. Build it from accepted project state
+and accepted task deliverables; do not ask Workers to write or submit it as a
+task deliverable.
 
 Use `projectflow` to change `meta.json` and `plan.md`; do not hand-edit
 project state unless a tool failure leaves no safe alternative.
@@ -113,49 +119,47 @@ cross-session final report. `channel`, `targetUser`, and `targetSession` must
 come from the current message/session metadata or a trusted runtime query. Do
 not guess them.
 
+For Project Work that should proceed in a dedicated task room, do not call
+`create_project` in the requester/source session. Use
+`teamharness-communication` to send a `PROJECT_REQUESTED` self-trigger from the
+current requester/source session to the same Leader in the target Matrix task
+room first. After the task-room Leader session wakes up, call `create_project`
+there and preserve the original requester route: keep the original `source`,
+`requester`, `sourceRoomId`, and `replyRoute` so final reports can return to
+the DingTalk group, Matrix DM, or other source room that made the request.
+
 For DingTalk requester compatibility, `requester` may use
 `dingtalk:{user_id}:{session_id}`; TeamHarness derives `reply_route` from that
 value when `replyRoute` is not provided.
 
 ## Create Quick Project
 
-Use `create_quick_project` only after Project Work mode is selected and the work
-is clearly a single Worker task. It is a shortcut for:
+Use `create_quick_project` only after Quick Task mode is selected and the
+Leader is in the Matrix Task room that received the task request message. It is
+a shortcut for:
 
 ```text
-create_project + plan single-node DAG + delegate_task-compatible task spec
+create_project + plan single-node DAG + assigned task spec
 ```
 
-Determine the assignment `roomId` before calling this action. Use the Team Room
-for Matrix DM-originated work. For DingTalk, Feishu, WeChat, or another
-external requester channel, first call `roomflow` `create_task_room` with
-`source` and the current channel metadata's stable `sourceRoomId`; use the
-returned Matrix room id. The same `source` + `sourceRoomId` must map to one
-assignment room and must be reused for later tasks from that external room.
+Do not call this in the requester/source session. If the current session is
+still a DingTalk group, Matrix DM, Team room, or other source room, return to
+`TEAMS.md`: create or reuse the task room with `teamharness-roomflow`, hand the
+request to that room with `teamharness-communication`, and stop in the source
+session.
 
-Do not invent, transform, suffix, or specialize `sourceRoomId` by task, worker,
-retry, or project. If the current DingTalk group already provided
-`sourceRoomId: "uhrz6g=="`, pass exactly `"uhrz6g=="` for every later task from
-that group. Values such as `"uhrz6g==-qa-task"` or `"uhrz6g==-dev-task"` are
-wrong unless they came directly from trusted current channel metadata.
+Before calling this action in the Task room:
 
-When reusing an external assignment room, call `roomflow` before creating or
-delegating task state and pass the complete `invite` list for the Workers who
-must receive work in that room. `roomflow` will return the existing Matrix room
-and invite missing members.
+1. Use the current Matrix task room as `roomId`.
+2. Preserve the original `source`, `requester`, `sourceRoomId`, and `replyRoute`
+   from the task request message. Do not guess route values.
+3. Choose the one Worker owner from the team roster.
+4. Write a bounded task spec that includes the completion report instruction
+   from `teamharness-task-delegation`.
 
-Example assignment room setup for DingTalk:
-
-```json
-{
-  "action": "create_task_room",
-  "taskId": "demo-project-001",
-  "name": "Demo Project",
-  "source": "dingtalk",
-  "sourceRoomId": "<exact current DingTalk group sourceRoomId>",
-  "invite": ["@worker-a:matrix.local", "@worker-b:matrix.local"]
-}
-```
+`teamharness-roomflow` owns task-room creation, project-scoped reuse, source
+metadata capture, and Worker invites. This skill only creates durable project
+and task state after the Task room is already selected.
 
 Example:
 
@@ -166,13 +170,14 @@ Example:
     "title": "Write readiness note",
     "source": "matrix",
     "requester": "@admin:matrix.local",
+    "sourceRoomId": "!admin-dm:matrix.local",
     "assignedTo": "@worker-a:matrix.local",
-    "roomId": "!team-room:matrix.local",
+    "roomId": "!task-room:matrix.local",
     "spec": "# Task\n\nWrite one concise readiness note.",
     "replyRoute": {
       "channel": "matrix",
       "targetUser": "@admin:matrix.local",
-      "targetSession": "!team-room:matrix.local"
+      "targetSession": "!admin-dm:matrix.local"
     }
   }
 }
@@ -348,6 +353,14 @@ To accept a result, call `accept_task_result`:
 `requester_report.pending` in ProjectMeta. Keep unresolved nodes in their current
 state.
 
+Accepting a completed result does not publish the project artifact by default.
+Write or update `shared/projects/{project-id}/result.md` as the Leader when a
+project-level report file is needed. After the requester report message is sent
+to a Matrix requester room, publish `shared/projects/{project-id}/result.md`
+with `artifact publish_file` and set `parentEventId` to the report message id.
+Use `publishArtifacts: true` only when you intentionally want an immediate
+project artifact before the requester report.
+
 Then call `ready_nodes` and delegate any newly ready downstream node with
 `teamharness-task-delegation`.
 
@@ -359,9 +372,17 @@ After the project state changes, close the loop with requester visibility:
 3. Use `teamharness-communication`
    `## Requester Report Delivery Protocol` to deliver the report to the
    requester recorded on the project.
-4. After successful delivery, call `mark_requester_report_sent`.
+4. If the requester report was sent to a Matrix room and
+   `shared/projects/{project-id}/result.md` exists, call `artifact publish_file`
+   for that file with `parentEventId` set to the report message id.
+5. If the requester report was sent to DingTalk, Feishu, WeChat, or another
+   non-Matrix channel, do not claim that a file was attached or published in
+   that channel. In the report text, list the important `shared/...` artifact
+   paths and say they are available from the shared workspace or platform
+   object-storage view.
+6. After successful delivery, call `mark_requester_report_sent`.
 
-Team Room coordination, Worker completion messages, downstream assignment
+Task room coordination, Worker completion messages, downstream assignment
 messages, and tool-call summaries do not count as the requester report. You may
 batch several accepted task results and downstream delegations into one
 requester report, but do not omit the report when accepted project state
@@ -423,11 +444,24 @@ Keep the report envelope consistent across DAG and Loop:
 **<localized deliverables label>**:
 - `<path>` - <what it contains>
 
+For Matrix requester reports, this section may say the report file or artifact
+was published to the requester room only after `artifact publish_file` succeeds.
+For DingTalk, Feishu, WeChat, or other non-Matrix requester reports, say the
+files are available from the shared workspace or platform object-storage view;
+do not say "attached", "uploaded to this chat", "click the file card", or
+"view the file here".
+
 **<localized next steps label>**:
 1. <next DAG transition, next Loop decision, or requester action>
 
 **<localized notes label>**: <blocker, risk, or decision needed; omit section if none>
 ````
+
+In requester-facing reports, owner or executor cells are descriptive text.
+Use plain Worker display names or role names such as `workeraa`, `workerbb`, or
+`WorkerAA`. Do not prefix them with `@`, do not use full Matrix user ids, and do
+not create Matrix mention links unless the report is intentionally asking that
+member to respond or take action.
 
 Use this execution progress shape for DAG reports:
 
@@ -470,6 +504,45 @@ After the requester report is sent, clear the pending flag:
   }
 }
 ```
+
+## Post-Action Notification
+
+State-mutating `projectflow` and `taskflow` operations return a
+`notificationNeeded` field when they succeed. This field is a hint — the tool
+does not send any message automatically. The Leader must act on it.
+
+When `notificationNeeded` is present in the tool result:
+
+1. Check `notificationNeeded.targetRoom`. If it matches the current session
+   room, a direct reply in the current session is sufficient — no cross-room
+   message is needed.
+2. If `targetRoom` is a different room, use the `message` tool to send a brief
+   status update to that room. Use `m.notice`-style concise format:
+   `[ProjectFlow] {event}: {summary}`.
+3. If `notificationNeeded.replyRoute` is present and the event is
+   `accept_task_result` or `complete_project`, this is the requester report
+   trigger — follow the Requester Report Delivery Protocol in
+   `teamharness-communication`.
+4. Do not send a notification if the tool returned `ok: false`.
+5. Do not send duplicate notifications for the same event within a single
+   Leader turn — one notification per state change is sufficient.
+
+The `notificationNeeded` field contains:
+
+```json
+{
+  "event": "create_project",
+  "projectId": "demo-project-001",
+  "summary": "create_project: Demo Project",
+  "targetRoom": "!task-room:matrix.local",
+  "replyRoute": { "channel": "matrix", "targetSession": "..." }
+}
+```
+
+`targetRoom` and `replyRoute` may be absent when no room context is available
+(for example, a bare `create_project` before any task room exists). In that
+case, skip the notification — the assignment message or requester report will
+carry the project context later.
 
 ## Current Boundary
 

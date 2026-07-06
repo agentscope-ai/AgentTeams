@@ -4,27 +4,27 @@
 # Lightweight Manager container with Python CoPaw runtime.
 # Does NOT include Higress, Tuwunel, MinIO, or Element Web.
 # All infrastructure is provided by the controller (embedded)
-# or K8s Pods (incluster). HICLAW_RUNTIME env var selects mode.
+# or K8s Pods (incluster). AGENTTEAMS_RUNTIME env var selects mode.
 #
 # Build from project root:
-#   docker build -f manager/Dockerfile.copaw -t hiclaw/hiclaw-manager-copaw:latest .
+#   docker build -f manager/Dockerfile.copaw -t agentteams/manager-copaw:latest .
 #
 # Build args:
 #   HIGRESS_REGISTRY        - base image registry (default: cn-hangzhou)
-#   HICLAW_CONTROLLER_IMAGE - pre-built controller image for hiclaw CLI
+#   AGENTTEAMS_CONTROLLER_IMAGE - pre-built controller image for hiclaw CLI
 #   COPAW_VERSION           - CoPaw version to install from PyPI (default: 1.0.0)
 #   PIP_INDEX_URL           - PyPI mirror (default: official pypi.org)
 #   APT_MIRROR              - Debian APT mirror (default: empty; set to mirrors.aliyun.com for China)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: MinIO Client (mc) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
 
 # ============ Final Image: Python 3.11 ============
 FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
@@ -138,5 +138,5 @@ RUN mkdir -p /root/manager-workspace /root/hiclaw-fs /root/.openclaw
 
 WORKDIR /root/manager-workspace
 
-# start-manager-agent.sh branches on HICLAW_RUNTIME and HICLAW_MANAGER_RUNTIME
+# start-manager-agent.sh branches on AGENTTEAMS_RUNTIME and AGENTTEAMS_MANAGER_RUNTIME
 ENTRYPOINT ["/opt/hiclaw/scripts/init/start-manager-agent.sh"]

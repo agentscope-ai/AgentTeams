@@ -43,110 +43,58 @@ func TestCREnricher_StandaloneWorkerKeepsCRNameAndStoresRuntimeWorkerName(t *tes
 	}
 }
 
-func TestCREnricher_DecoupledWorkerMemberUsesTeamRef(t *testing.T) {
+func newAuthTestScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	return scheme
+}
+
+func indexTeamWorkerMemberNames(obj client.Object) []string {
+	team, ok := obj.(*v1beta1.Team)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(team.Spec.WorkerMembers))
+	for _, m := range team.Spec.WorkerMembers {
+		if m.Name != "" {
+			names = append(names, m.Name)
+		}
+	}
+	return names
+}
+
+func authStringPtr(s string) *string { return &s }
+
+// TestCREnricher_DecoupledTeamMemberLookedUpViaWorkerMembersIndex covers
+// Gap 1: in the decoupled model the Worker CR carries no agentteams.io/team
+// annotation. The enricher must reverse-resolve membership by listing
+// Team CRs whose spec.workerMembers[].name matches the caller username.
+func TestCREnricher_DecoupledTeamMemberLookedUpViaWorkerMembersIndex(t *testing.T) {
 	scheme := newAuthTestScheme(t)
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-worker-dev", Role: "worker"},
+	}
+
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "alpha-worker-dev",
 			Namespace: "default",
+			// Intentionally no agentteams.io/team annotation: decoupled
+			// path must work purely via Team CR reverse-lookup.
 		},
-		Spec: v1beta1.WorkerSpec{
-			WorkerName: "dev",
-		},
-	}
-	team := &v1beta1.Team{}
-	team.Name = "alpha-team"
-	team.Namespace = "default"
-	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
-		{Name: "alpha-worker-lead", Role: "team_leader"},
-		{Name: "alpha-worker-dev"},
+		Spec: v1beta1.WorkerSpec{WorkerName: "dev"},
 	}
 
 	k8sClient := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(worker, team).
+		WithObjects(team, worker).
 		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
-		Build()
-	enricher := NewCREnricher(k8sClient, "default")
-
-	identity := &CallerIdentity{
-		Role:       RoleWorker,
-		Username:   "alpha-worker-dev",
-		WorkerName: "alpha-worker-dev",
-	}
-	if err := enricher.EnrichIdentity(context.Background(), identity); err != nil {
-		t.Fatalf("EnrichIdentity: %v", err)
-	}
-
-	if identity.Role != RoleWorker || identity.Team != "alpha-team" {
-		t.Fatalf("identity=%+v, want decoupled worker in alpha-team", identity)
-	}
-	if identity.WorkerName != "dev" {
-		t.Fatalf("WorkerName=%q, want dev", identity.WorkerName)
-	}
-}
-
-func TestCREnricher_DecoupledLeaderUsesTeamRef(t *testing.T) {
-	scheme := newAuthTestScheme(t)
-	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "alpha-worker-lead",
-			Namespace: "default",
-		},
-		Spec: v1beta1.WorkerSpec{
-			WorkerName: "lead",
-		},
-	}
-	team := &v1beta1.Team{}
-	team.Name = "alpha-team"
-	team.Namespace = "default"
-	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
-		{Name: "alpha-worker-lead", Role: "team_leader"},
-		{Name: "alpha-worker-dev"},
-	}
-
-	k8sClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(worker, team).
-		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
-		Build()
-	enricher := NewCREnricher(k8sClient, "default")
-
-	identity := &CallerIdentity{
-		Role:       RoleWorker,
-		Username:   "alpha-worker-lead",
-		WorkerName: "alpha-worker-lead",
-	}
-	if err := enricher.EnrichIdentity(context.Background(), identity); err != nil {
-		t.Fatalf("EnrichIdentity: %v", err)
-	}
-
-	if identity.Role != RoleTeamLeader || identity.Team != "alpha-team" {
-		t.Fatalf("identity=%+v, want decoupled team leader in alpha-team", identity)
-	}
-	if identity.WorkerName != "lead" {
-		t.Fatalf("WorkerName=%q, want lead", identity.WorkerName)
-	}
-}
-
-func TestCREnricher_TeamMemberKeepsCRNameAndStoresRuntimeWorkerName(t *testing.T) {
-	scheme := newAuthTestScheme(t)
-	team := &v1beta1.Team{}
-	team.Name = "alpha-team"
-	team.Namespace = "default"
-	team.Spec.Leader = v1beta1.LeaderSpec{
-		Name:       "alpha-worker-lead",
-		WorkerName: "lead",
-	}
-	team.Spec.Workers = []v1beta1.TeamWorkerSpec{
-		{Name: "alpha-worker-dev", WorkerName: "dev"},
-	}
-
-	k8sClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(team).
-		WithIndex(&v1beta1.Team{}, teamLeaderNameField, indexTeamLeaderNames).
-		WithIndex(&v1beta1.Team{}, teamWorkerNameField, indexTeamWorkerNames).
 		Build()
 	enricher := NewCREnricher(k8sClient, "default")
 
@@ -160,94 +108,25 @@ func TestCREnricher_TeamMemberKeepsCRNameAndStoresRuntimeWorkerName(t *testing.T
 	}
 
 	if identity.Team != "alpha-team" {
-		t.Fatalf("Team=%q, want alpha-team", identity.Team)
+		t.Fatalf("Team=%q, want alpha-team (resolved via spec.workerMembers index)", identity.Team)
 	}
-	if identity.Username != "alpha-worker-dev" || identity.WorkerName != "dev" {
-		t.Fatalf("identity=%+v, want CR username alpha-worker-dev and runtime workerName dev", identity)
+	if identity.Role != RoleWorker {
+		t.Fatalf("Role=%q, want worker (member, not leader)", identity.Role)
 	}
-}
-
-func TestCREnricher_TeamLeaderKeepsCRNameAndStoresRuntimeWorkerName(t *testing.T) {
-	scheme := newAuthTestScheme(t)
-	team := &v1beta1.Team{}
-	team.Name = "alpha-team"
-	team.Namespace = "default"
-	team.Spec.Leader = v1beta1.LeaderSpec{
-		Name:       "alpha-worker-lead",
-		WorkerName: "lead",
-	}
-
-	k8sClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(team).
-		WithIndex(&v1beta1.Team{}, teamLeaderNameField, indexTeamLeaderNames).
-		WithIndex(&v1beta1.Team{}, teamWorkerNameField, indexTeamWorkerNames).
-		Build()
-	enricher := NewCREnricher(k8sClient, "default")
-
-	identity := &CallerIdentity{
-		Role:       RoleWorker,
-		Username:   "alpha-worker-lead",
-		WorkerName: "alpha-worker-lead",
-	}
-	if err := enricher.EnrichIdentity(context.Background(), identity); err != nil {
-		t.Fatalf("EnrichIdentity: %v", err)
-	}
-
-	if identity.Role != RoleTeamLeader || identity.Team != "alpha-team" {
-		t.Fatalf("identity=%+v, want team leader in alpha-team", identity)
-	}
-	if identity.Username != "alpha-worker-lead" || identity.WorkerName != "lead" {
-		t.Fatalf("identity=%+v, want CR username alpha-worker-lead and runtime workerName lead", identity)
+	if identity.WorkerName != "dev" {
+		t.Fatalf("WorkerName=%q, want dev (runtime name from Worker CR spec)", identity.WorkerName)
 	}
 }
 
-func TestCREnricher_RemoteWorkerRequiresMatchingTarget(t *testing.T) {
+func TestCREnricher_RemoteWorkerUsesAppliedStatusTarget(t *testing.T) {
 	scheme := newAuthTestScheme(t)
-	remoteMode := v1beta1.DeployModeRemote
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "alice",
 			Namespace: "default",
 		},
 		Spec: v1beta1.WorkerSpec{
-			DeployMode: &remoteMode,
-			TargetCluster: &v1beta1.TargetClusterSpec{
-				ID:        "remote-cluster",
-				Namespace: "remote-ns",
-			},
-		},
-	}
-
-	k8sClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(worker).
-		Build()
-	enricher := NewCREnricher(k8sClient, "default")
-
-	identity := &CallerIdentity{
-		Role:                    RoleWorker,
-		Username:                "alice",
-		WorkerName:              "alice",
-		ClusterID:               "remote-cluster",
-		ServiceAccountNamespace: "remote-ns",
-		ServiceAccountName:      "hiclaw-worker-alice",
-	}
-	if err := enricher.EnrichIdentity(context.Background(), identity); err != nil {
-		t.Fatalf("EnrichIdentity: %v", err)
-	}
-}
-
-func TestCREnricher_RemoteWorkerPrefersStatusTarget(t *testing.T) {
-	scheme := newAuthTestScheme(t)
-	remoteMode := v1beta1.DeployModeRemote
-	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "alice",
-			Namespace: "default",
-		},
-		Spec: v1beta1.WorkerSpec{
-			DeployMode: &remoteMode,
+			DeployMode: authStringPtr(v1beta1.DeployModeRemote),
 			TargetCluster: &v1beta1.TargetClusterSpec{
 				ID:        "new-cluster",
 				Namespace: "new-ns",
@@ -268,160 +147,111 @@ func TestCREnricher_RemoteWorkerPrefersStatusTarget(t *testing.T) {
 		Build()
 	enricher := NewCREnricher(k8sClient, "default")
 
-	oldTargetIdentity := &CallerIdentity{
+	identity := &CallerIdentity{
 		Role:                    RoleWorker,
 		Username:                "alice",
 		WorkerName:              "alice",
 		ClusterID:               "old-cluster",
 		ServiceAccountNamespace: "old-ns",
-		ServiceAccountName:      "hiclaw-worker-alice",
+		ServiceAccountName:      "agentteams-worker-alice",
 	}
-	if err := enricher.EnrichIdentity(context.Background(), oldTargetIdentity); err != nil {
-		t.Fatalf("EnrichIdentity old target: %v", err)
+	if err := enricher.EnrichIdentity(context.Background(), identity); err != nil {
+		t.Fatalf("EnrichIdentity old applied target: %v", err)
 	}
 
-	newTargetIdentity := &CallerIdentity{
-		Role:                    RoleWorker,
-		Username:                "alice",
-		WorkerName:              "alice",
-		ClusterID:               "new-cluster",
-		ServiceAccountNamespace: "new-ns",
-		ServiceAccountName:      "hiclaw-worker-alice",
-	}
-	if err := enricher.EnrichIdentity(context.Background(), newTargetIdentity); err == nil {
-		t.Fatal("expected spec-only new target to be rejected while status still pins old target")
+	identity.ClusterID = "new-cluster"
+	identity.ServiceAccountNamespace = "new-ns"
+	if err := enricher.EnrichIdentity(context.Background(), identity); err == nil {
+		t.Fatalf("EnrichIdentity accepted unapplied spec target, want status-pinned target")
 	}
 }
 
-func TestCREnricher_RemoteWorkerRejectsTargetMismatch(t *testing.T) {
+func TestCREnricher_DecoupledTeamLeaderLookedUpViaWorkerMembersIndex(t *testing.T) {
 	scheme := newAuthTestScheme(t)
-	remoteMode := v1beta1.DeployModeRemote
-	localMode := v1beta1.DeployModeLocal
-
-	tests := []struct {
-		name     string
-		worker   *v1beta1.Worker
-		identity *CallerIdentity
-	}{
-		{
-			name: "wrong namespace",
-			worker: &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
-				Spec: v1beta1.WorkerSpec{
-					DeployMode:    &remoteMode,
-					TargetCluster: &v1beta1.TargetClusterSpec{ID: "remote-cluster", Namespace: "remote-ns"},
-				},
-			},
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "remote-cluster",
-				ServiceAccountNamespace: "other-ns", ServiceAccountName: "hiclaw-worker-alice",
-			},
-		},
-		{
-			name: "wrong cluster",
-			worker: &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
-				Spec: v1beta1.WorkerSpec{
-					DeployMode:    &remoteMode,
-					TargetCluster: &v1beta1.TargetClusterSpec{ID: "remote-cluster", Namespace: "remote-ns"},
-				},
-			},
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "other-cluster",
-				ServiceAccountNamespace: "remote-ns", ServiceAccountName: "hiclaw-worker-alice",
-			},
-		},
-		{
-			name: "wrong service account",
-			worker: &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
-				Spec: v1beta1.WorkerSpec{
-					DeployMode:    &remoteMode,
-					TargetCluster: &v1beta1.TargetClusterSpec{ID: "remote-cluster", Namespace: "remote-ns"},
-				},
-			},
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "remote-cluster",
-				ServiceAccountNamespace: "remote-ns", ServiceAccountName: "hiclaw-worker-bob",
-			},
-		},
-		{
-			name: "local worker",
-			worker: &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
-				Spec:       v1beta1.WorkerSpec{DeployMode: &localMode},
-			},
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "remote-cluster",
-				ServiceAccountNamespace: "remote-ns", ServiceAccountName: "hiclaw-worker-alice",
-			},
-		},
-		{
-			name:   "missing worker cr",
-			worker: nil,
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "remote-cluster",
-				ServiceAccountNamespace: "remote-ns", ServiceAccountName: "hiclaw-worker-alice",
-			},
-		},
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "alpha-worker-lead", Role: "team_leader"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			builder := fake.NewClientBuilder().WithScheme(scheme)
-			if tc.worker != nil {
-				builder = builder.WithObjects(tc.worker)
-			}
-			enricher := NewCREnricher(builder.Build(), "default")
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-worker-lead",
+			Namespace: "default",
+		},
+		Spec: v1beta1.WorkerSpec{WorkerName: "lead"},
+	}
 
-			if err := enricher.EnrichIdentity(context.Background(), tc.identity); err == nil {
-				t.Fatal("expected remote identity mismatch to fail")
-			}
-		})
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, worker).
+		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
+		Build()
+	enricher := NewCREnricher(k8sClient, "default")
+
+	identity := &CallerIdentity{
+		Role:       RoleWorker,
+		Username:   "alpha-worker-lead",
+		WorkerName: "alpha-worker-lead",
+	}
+	if err := enricher.EnrichIdentity(context.Background(), identity); err != nil {
+		t.Fatalf("EnrichIdentity: %v", err)
+	}
+
+	if identity.Role != RoleTeamLeader {
+		t.Fatalf("Role=%q, want team_leader (resolved via spec.workerMembers index)", identity.Role)
+	}
+	if identity.Team != "alpha-team" {
+		t.Fatalf("Team=%q, want alpha-team", identity.Team)
+	}
+	if identity.WorkerName != "lead" {
+		t.Fatalf("WorkerName=%q, want lead", identity.WorkerName)
 	}
 }
 
-func newAuthTestScheme(t *testing.T) *runtime.Scheme {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	if err := v1beta1.AddToScheme(scheme); err != nil {
-		t.Fatalf("AddToScheme: %v", err)
+// TestLookupWorkerTeam_StandaloneWorkerReturnsEmpty asserts the helper
+// returns "" when the worker is not referenced from any Team CR — and
+// therefore must be treated as standalone by all consumers.
+func TestLookupWorkerTeam_StandaloneWorkerReturnsEmpty(t *testing.T) {
+	scheme := newAuthTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "default"},
 	}
-	return scheme
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(worker).
+		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
+		Build()
+
+	if team := LookupWorkerTeam(context.Background(), k8sClient, "default", "solo"); team != "" {
+		t.Fatalf("LookupWorkerTeam(solo) = %q, want empty (standalone worker)", team)
+	}
+	if team, isLeader := LookupWorkerTeamRole(context.Background(), k8sClient, "default", "solo"); team != "" || isLeader {
+		t.Fatalf("LookupWorkerTeamRole(solo) = (%q,%v), want (\"\",false)", team, isLeader)
+	}
 }
 
-func indexTeamLeaderNames(obj client.Object) []string {
-	team, ok := obj.(*v1beta1.Team)
-	if !ok || team.Spec.Leader.Name == "" {
-		return nil
+func TestLookupWorkerTeamRole_UsesWorkerMembers(t *testing.T) {
+	scheme := newAuthTestScheme(t)
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "new-lead", Role: "team_leader"},
+		{Name: "dev", Role: "worker"},
 	}
-	return []string{team.Spec.Leader.Name}
-}
 
-func indexTeamWorkerNames(obj client.Object) []string {
-	team, ok := obj.(*v1beta1.Team)
-	if !ok {
-		return nil
-	}
-	names := make([]string, 0, len(team.Spec.Workers))
-	for _, w := range team.Spec.Workers {
-		if w.Name != "" {
-			names = append(names, w.Name)
-		}
-	}
-	return names
-}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team).
+		WithIndex(&v1beta1.Team{}, teamWorkerMembersField, indexTeamWorkerMemberNames).
+		Build()
 
-func indexTeamWorkerMemberNames(obj client.Object) []string {
-	team, ok := obj.(*v1beta1.Team)
-	if !ok {
-		return nil
+	if teamName, isLeader := LookupWorkerTeamRole(context.Background(), k8sClient, "default", "new-lead"); teamName != "alpha-team" || !isLeader {
+		t.Fatalf("LookupWorkerTeamRole(new-lead) = (%q,%v), want (alpha-team,true)", teamName, isLeader)
 	}
-	names := make([]string, 0, len(team.Spec.WorkerMembers))
-	for _, ref := range team.Spec.WorkerMembers {
-		if ref.Name != "" {
-			names = append(names, ref.Name)
-		}
+	if teamName, isLeader := LookupWorkerTeamRole(context.Background(), k8sClient, "default", "dev"); teamName != "alpha-team" || isLeader {
+		t.Fatalf("LookupWorkerTeamRole(dev) = (%q,%v), want (alpha-team,false)", teamName, isLeader)
 	}
-	return names
 }

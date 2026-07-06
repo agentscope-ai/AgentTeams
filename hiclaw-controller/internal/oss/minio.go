@@ -34,9 +34,16 @@ func NewMinIOClient(cfg Config) *MinIOClient {
 		cfg.MCBinary = "mc"
 	}
 	if cfg.Alias == "" {
-		cfg.Alias = "hiclaw"
+		cfg.Alias = defaultStorageAlias(cfg.StoragePrefix)
 	}
 	return &MinIOClient{config: cfg}
+}
+
+func defaultStorageAlias(storagePrefix string) string {
+	if alias, _, ok := strings.Cut(strings.TrimPrefix(storagePrefix, "/"), "/"); ok && alias != "" {
+		return alias
+	}
+	return "agentteams"
 }
 
 // WithCredentialSource returns a copy of the client that fetches credentials
@@ -220,9 +227,18 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("mc %s: %w (stderr: %s)",
-			strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+			redactMCArgs(args), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+func redactMCArgs(args []string) string {
+	redacted := append([]string(nil), args...)
+	if len(redacted) >= 6 && redacted[0] == "alias" && redacted[1] == "set" {
+		redacted[4] = "<redacted>"
+		redacted[5] = "<redacted>"
+	}
+	return strings.Join(redacted, " ")
 }
 
 // buildMCHostEnv renders a single MC_HOST_<alias>=<scheme>://<ak>:<sk>[:<token>]@<host>
@@ -231,7 +247,7 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 // honours the security-token component when present.
 //
 // The endpoint is supplied by the caller (normally MinIOClient.config.Endpoint,
-// sourced from HICLAW_FS_ENDPOINT). A bare hostname (e.g.
+// sourced from AGENTTEAMS_FS_ENDPOINT). A bare hostname (e.g.
 // "oss-cn-hangzhou.aliyuncs.com") without a URL scheme is accepted; in
 // that case we default to https.
 //
@@ -244,7 +260,7 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 // alphabet plus "+/=") that Go's url.Parse accepts inside userinfo.
 func buildMCHostEnv(alias string, endpoint string, c Credentials) (string, error) {
 	if endpoint == "" {
-		return "", fmt.Errorf("storage endpoint is not configured (HICLAW_FS_ENDPOINT is empty)")
+		return "", fmt.Errorf("storage endpoint is not configured (AGENTTEAMS_FS_ENDPOINT is empty)")
 	}
 	normalized := endpoint
 	if !strings.HasPrefix(normalized, "http://") && !strings.HasPrefix(normalized, "https://") {

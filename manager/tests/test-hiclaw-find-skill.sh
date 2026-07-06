@@ -213,8 +213,8 @@ run_case() {
     TEST_SKILLS_LOG="${TMPDIR_ROOT}/skills.log" \
     TEST_CURL_LOG="${TMPDIR_ROOT}/curl.log" \
     SKILLS_API_URL="nacos://registry.local:8848" \
-    HICLAW_FIND_SKILL_MAX_RESULTS=3 \
-    HICLAW_FIND_SKILL_NACOS_PAGE_SIZE=50 \
+    AGENTTEAMS_FIND_SKILL_MAX_RESULTS=3 \
+    AGENTTEAMS_FIND_SKILL_NACOS_PAGE_SIZE=50 \
     /bin/sh "${script_path}" find ${query}
 }
 
@@ -230,8 +230,8 @@ run_case_with_env() {
     TEST_SKILLS_LOG="${skills_log_file}" \
     TEST_CURL_LOG="${TMPDIR_ROOT}/curl.log" \
     SKILLS_API_URL="${skills_api_url}" \
-    HICLAW_FIND_SKILL_MAX_RESULTS=3 \
-    HICLAW_FIND_SKILL_NACOS_PAGE_SIZE=50 \
+    AGENTTEAMS_FIND_SKILL_MAX_RESULTS=3 \
+    AGENTTEAMS_FIND_SKILL_NACOS_PAGE_SIZE=50 \
     /bin/sh "${script_path}" find ${query}
 }
 
@@ -333,19 +333,50 @@ for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
             TEST_CURL_LOG="${curl_log}" \
             SKILLS_API_URL="nacos://registry.local:8848/team-a" \
             NACOS_AUTH_TYPE="sts-hiclaw" \
-            HICLAW_CONTROLLER_URL="http://controller:8090" \
-            HICLAW_AUTH_TOKEN="controller-token" \
-            HICLAW_CLUSTER_ID="remote-cluster-a" \
-            HICLAW_FIND_SKILL_MAX_RESULTS=3 \
-            HICLAW_FIND_SKILL_NACOS_PAGE_SIZE=50 \
+            AGENTTEAMS_CONTROLLER_URL="http://controller:8090" \
+            AGENTTEAMS_AUTH_TOKEN="controller-token" \
+            AGENTTEAMS_CLUSTER_ID="remote-cluster-a" \
+            AGENTTEAMS_FIND_SKILL_MAX_RESULTS=3 \
+            AGENTTEAMS_FIND_SKILL_NACOS_PAGE_SIZE=50 \
             /bin/sh "${script_path}" find review | strip_ansi)"
 
         assert_contains "${case_name}: should still return sts-backed results" "requesting-code-review" "${output}"
-        assert_contains "${case_name}: controller STS call should include cluster header" "X-HiClaw-Cluster-ID: remote-cluster-a" "$(cat "${curl_log}")"
+        assert_contains "${case_name}: controller STS call should include cluster header" "X-AgentTeams-Cluster-ID: remote-cluster-a" "$(cat "${curl_log}")"
         assert_contains "${case_name}: controller STS call should include bearer" "Authorization: Bearer controller-token" "$(cat "${curl_log}")"
         assert_contains "${case_name}: nacos cli should use sts auth type" "--auth-type sts-hiclaw" "$(cat "${log_file}")"
         assert_contains "${case_name}: nacos cli should pass sts access key" "--access-key test-ak" "$(cat "${log_file}")"
         assert_contains "${case_name}: nacos cli should pass sts token" "--security-token test-sts" "$(cat "${log_file}")"
+    }
+done
+
+echo ""
+echo "=== TC7: sts-hiclaw without cluster id should skip auth cluster header ==="
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+    {
+        case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
+        mockbin="${TMPDIR_ROOT}/${case_name}-sts-local-mockbin"
+        log_file="${TMPDIR_ROOT}/${case_name}-sts-local-npx.log"
+        curl_log="${TMPDIR_ROOT}/${case_name}-sts-local-curl.log"
+        skills_log="${TMPDIR_ROOT}/${case_name}-sts-local-skills.log"
+        create_mock_npx "${mockbin}"
+        create_mock_skills "${mockbin}"
+        create_mock_curl "${mockbin}"
+
+        output="$(PATH="${mockbin}:${PATH}" \
+            TEST_NPX_LOG="${log_file}" \
+            TEST_SKILLS_LOG="${skills_log}" \
+            TEST_CURL_LOG="${curl_log}" \
+            SKILLS_API_URL="nacos://registry.local:8848/team-a" \
+            NACOS_AUTH_TYPE="sts-hiclaw" \
+            AGENTTEAMS_CONTROLLER_URL="http://controller:8090" \
+            AGENTTEAMS_AUTH_TOKEN="controller-token" \
+            AGENTTEAMS_FIND_SKILL_MAX_RESULTS=3 \
+            AGENTTEAMS_FIND_SKILL_NACOS_PAGE_SIZE=50 \
+            /bin/sh "${script_path}" find review | strip_ansi)"
+
+        assert_contains "${case_name}: should still return sts results without cluster id" "requesting-code-review" "${output}"
+        assert_not_contains "${case_name}: controller STS call should skip auth cluster header" "X-AgentTeams-Cluster-ID" "$(cat "${curl_log}")"
+        assert_contains "${case_name}: controller STS call should include bearer" "Authorization: Bearer controller-token" "$(cat "${curl_log}")"
     }
 done
 

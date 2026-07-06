@@ -81,6 +81,5 @@ const (
 	SoulTemplateHeader = `<!-- agentteams-soul-template-start -->
 > ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically
 > replaced on upgrade. To customize, add your content **after** the
-> ` + "`<!-- agentteams-soul-template-end -->`" + ` marker below.
-`
+> ` + "`<!-- agentteams-soul-template-end -->`" + ` marker below.`
 )

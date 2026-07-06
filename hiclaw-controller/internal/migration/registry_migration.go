@@ -71,25 +71,14 @@ func (m *Migrator) Run(ctx context.Context) error {
 		return nil
 	}
 
-	// Build team lookup: workerName -> teamName
-	teamByWorker := make(map[string]string)
-	for teamName, entry := range teamsReg {
-		teamByWorker[entry.Leader] = teamName
-		for _, w := range entry.Workers {
-			teamByWorker[w] = teamName
-		}
-	}
-
-	// Step 1: Create standalone Worker CRs (workers not belonging to any team)
+	// Step 1: Create Worker CRs. Team members are independent Worker CRs in
+	// the decoupled Team model, so do not skip workers that belong to a Team.
 	workerRes := dynClient.Resource(workerGVR).Namespace(m.Namespace)
 	for name, entry := range workersReg {
-		if _, inTeam := teamByWorker[name]; inTeam {
-			continue
-		}
 		if err := m.createStandaloneWorkerCR(ctx, workerRes, name, entry); err != nil {
-			logger.Error(err, "failed to migrate standalone worker (non-fatal)", "worker", name)
+			logger.Error(err, "failed to migrate worker (non-fatal)", "worker", name)
 		} else {
-			logger.Info("migrated standalone worker", "name", name)
+			logger.Info("migrated worker", "name", name)
 		}
 	}
 
@@ -364,42 +353,25 @@ func (m *Migrator) createTeamCR(ctx context.Context, dynClient dynamic.Interface
 
 	logger := ctrl.Log.WithName("migration")
 
-	leaderModel := m.extractModel(ctx, entry.Leader)
-	leader := map[string]interface{}{
-		"name":  entry.Leader,
-		"model": leaderModel,
+	workerMembers := make([]interface{}, 0, len(entry.Workers)+1)
+	if entry.Leader != "" {
+		workerMembers = append(workerMembers, map[string]interface{}{
+			"name": entry.Leader,
+			"role": "team_leader",
+		})
 	}
-
-	workers := make([]interface{}, 0, len(entry.Workers))
 	for _, wName := range entry.Workers {
-		wModel := m.extractModel(ctx, wName)
-		wSpec := map[string]interface{}{
-			"name":  wName,
-			"model": wModel,
-		}
-		if wEntry, ok := workersReg[wName]; ok {
-			if wEntry.Runtime != "" {
-				wSpec["runtime"] = wEntry.Runtime
-			}
-			if len(wEntry.Skills) > 0 {
-				wSpec["skills"] = toInterfaceSlice(wEntry.Skills)
-			}
-			mcpServers := m.extractMCPServers(ctx, wName)
-			if len(mcpServers) > 0 {
-				wSpec["mcpServers"] = mcpServersToInterfaceSlice(mcpServers)
-			}
-			if wEntry.Image != nil && *wEntry.Image != "" {
-				wSpec["image"] = *wEntry.Image
-			}
-		} else {
+		if _, ok := workersReg[wName]; !ok {
 			logger.Info("team worker not found in workers-registry", "team", teamName, "worker", wName)
 		}
-		workers = append(workers, wSpec)
+		workerMembers = append(workerMembers, map[string]interface{}{
+			"name": wName,
+			"role": "worker",
+		})
 	}
 
 	spec := map[string]interface{}{
-		"leader":  leader,
-		"workers": workers,
+		"workerMembers": workerMembers,
 	}
 	if entry.Admin != nil {
 		admin := map[string]interface{}{

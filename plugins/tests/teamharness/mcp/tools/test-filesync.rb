@@ -23,11 +23,11 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
   (bin_dir / "mc").write(<<~SH)
     #!/usr/bin/env bash
     printf '%s\\n' "$*" >> "#{log_path}"
-    printf 'ENV MC_HOST_hiclaw=%s\\n' "${MC_HOST_hiclaw:-}" >> "#{log_path}"
+    printf 'ENV MC_HOST_agentteams=%s\\n' "${MC_HOST_agentteams:-}" >> "#{log_path}"
     case "$*" in
-      *"hiclaw/hiclaw-storage"*)
-        if [ -z "${MC_HOST_hiclaw:-}" ]; then
-          echo "missing MC_HOST_hiclaw" >&2
+      *"agentteams/hiclaw-storage"*)
+        if [ -z "${MC_HOST_agentteams:-}" ]; then
+          echo "missing MC_HOST_agentteams" >&2
           exit 3
         fi
         ;;
@@ -88,6 +88,20 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
         raise AssertionError(f"remote path mismatch: {dry!r}")
     if dry.get("command") != ["mc", "mirror", "mock/shared/projects/demo/", "#{workspace}/shared/projects/demo", "--overwrite"]:
         raise AssertionError(f"dry-run command mismatch: {dry!r}")
+
+    board_dry = payload({
+        "action": "pull",
+        "path": "shared/board/aone-feed",
+        "dryRun": True,
+    })
+    if not board_dry.get("ok"):
+        raise AssertionError(f"shared board dry-run pull failed: {board_dry!r}")
+    if board_dry.get("path") != "shared/board/aone-feed/":
+        raise AssertionError(f"shared board path was not normalized: {board_dry!r}")
+    if board_dry.get("localPath") != "#{workspace}/shared/board/aone-feed":
+        raise AssertionError(f"shared board local path mismatch: {board_dry!r}")
+    if board_dry.get("remotePath") != "mock/shared/board/aone-feed/":
+        raise AssertionError(f"shared board remote path mismatch: {board_dry!r}")
 
     blocked_global_push = payload({
         "action": "push",
@@ -170,14 +184,14 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
         encoding="utf-8",
     )
     os.environ["TEAMHARNESS_RUNTIME_CONFIG"] = str(runtime_config)
-    os.environ["HICLAW_STORAGE_PREFIX"] = "hiclaw/hiclaw-storage"
+    os.environ["AGENTTEAMS_STORAGE_PREFIX"] = "agentteams/hiclaw-storage"
     from_runtime = payload_without_storage({
         "workspaceDir": "#{workspace}",
         "action": "list",
         "path": "shared/tasks/demo",
         "dryRun": True,
     })
-    if from_runtime.get("remotePath") != "hiclaw/hiclaw-storage/teams/demo-team/shared/tasks/demo/":
+    if from_runtime.get("remotePath") != "agentteams/hiclaw-storage/teams/demo-team/shared/tasks/demo/":
         raise AssertionError(f"runtime storage prefix mismatch: {from_runtime!r}")
 
     runtime_result = pathlib.Path("#{workspace}") / "shared/tasks/runtime-push/result.md"
@@ -190,7 +204,7 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
     })
     if not pushed_runtime.get("ok"):
         raise AssertionError(f"runtime-prefix push failed: {pushed_runtime!r}")
-    if pushed_runtime.get("remotePath") != "hiclaw/hiclaw-storage/teams/demo-team/shared/tasks/runtime-push/":
+    if pushed_runtime.get("remotePath") != "agentteams/hiclaw-storage/teams/demo-team/shared/tasks/runtime-push/":
         raise AssertionError(f"runtime-prefix push remote mismatch: {pushed_runtime!r}")
 
     print(json.dumps({
@@ -208,9 +222,9 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
 
   env = {
     "PATH" => "#{bin_dir}:#{ENV.fetch("PATH", "")}",
-    "HICLAW_FS_ENDPOINT" => "https://oss.example.test",
-    "HICLAW_FS_ACCESS_KEY" => "access-key",
-    "HICLAW_FS_SECRET_KEY" => "secret-key"
+    "AGENTTEAMS_FS_ENDPOINT" => "https://oss.example.test",
+    "AGENTTEAMS_FS_ACCESS_KEY" => "access-key",
+    "AGENTTEAMS_FS_SECRET_KEY" => "secret-key"
   }
   stdout, stderr, status = Open3.capture3(env, "python3", "-", stdin_data: python_test, chdir: repo_root.to_s)
   fail!(["teamharness filesync MCP test failed", stderr, stdout].reject(&:empty?).join("\n")) unless status.success?
@@ -232,10 +246,10 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
     "stat mock/shared/tasks/t-001/result.md"
   )
   fail!("runtime-prefix mc mirror was not called: #{commands.inspect}") unless commands.include?(
-    "mirror #{workspace}/shared/tasks/runtime-push/ hiclaw/hiclaw-storage/teams/demo-team/shared/tasks/runtime-push/ --overwrite"
+    "mirror #{workspace}/shared/tasks/runtime-push/ agentteams/hiclaw-storage/teams/demo-team/shared/tasks/runtime-push/ --overwrite"
   )
-  fail!("runtime-prefix mc mirror did not receive MC_HOST_hiclaw: #{commands.inspect}") unless commands.any? do |line|
-    line.start_with?("ENV MC_HOST_hiclaw=https://access-key:secret-key@oss.example.test")
+  fail!("runtime-prefix mc mirror did not receive MC_HOST_agentteams: #{commands.inspect}") unless commands.any? do |line|
+    line.start_with?("ENV MC_HOST_agentteams=https://access-key:secret-key@oss.example.test")
   end
 
   puts JSON.pretty_generate(JSON.parse(stdout).merge("mcCommands" => commands))

@@ -22,15 +22,15 @@ skills:
       path: skills/agent/find-skills
       roles: [leader, worker, manager, remote-member]
   team:
-    - id: organization
-      path: skills/team/organization
-      roles: [leader, worker, manager, remote-member]
     - id: communication
       path: skills/team/communication
       roles: [leader, worker, manager, remote-member]
     - id: file-sharing
       path: skills/team/file-sharing
       roles: [leader, worker, manager, remote-member]
+    - id: roomflow
+      path: skills/team/roomflow
+      roles: [leader]
     - id: team-coordination
       path: skills/team/team-coordination
       roles: [leader]
@@ -43,6 +43,9 @@ skills:
     - id: task-execution
       path: skills/team/task-execution
       roles: [worker, remote-member]
+    - id: alibabacloud-schedulerx-ai-ops
+      path: skills/team/alibabacloud-schedulerx-ai-ops
+      roles: [leader]
 mcp:
   servers:
     - id: teamharness
@@ -55,13 +58,12 @@ mcp:
         - message
         - roomflow
         - filesync
+        - artifact
         - projectflow
         - taskflow
 adapters:
   - id: qwenpaw
     path: adapters/qwenpaw
-  - id: claude-code
-    path: adapters/claude-code
 package:
   include:
     - plugin.yaml

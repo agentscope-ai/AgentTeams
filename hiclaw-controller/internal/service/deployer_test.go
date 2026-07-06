@@ -712,25 +712,23 @@ func TestDeployMemberRuntimeConfigProjectsRemoteManagedLocalFields(t *testing.T)
 		OSS: store,
 		RuntimeProjection: RuntimeProjectionConfig{
 			StorageProvider: "oss",
-			StorageBucket:   "agentteams-storage",
-			StorageEndpoint: "https://oss.example.com",
-			AIGatewayURL:    "https://default-gateway.example.com/default",
+			StorageBucket:   "agentteams-storage", StorageEndpoint: "https://oss.example.com",
+			AIGatewayURL: "https://default-gateway.example.com/default",
 		},
 	})
 
 	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
-		Name:                  "edge-worker-cr",
-		RuntimeName:           "claude-local",
-		Runtime:               "remote-managed-local",
-		Role:                  "standalone",
-		Generation:            3,
-		MatrixUserID:          "@claude-local:matrix.local",
-		PersonalRoomID:        "!worker-dm:matrix.local",
-		MatrixAccessToken:     "matrix-access-token",
-		GatewayKey:            "gateway-key",
-		AIGatewayURL:          "http://aigw.internal/v1/claude",
-		SkillRegistryURL:      "nacos://market.agentteams.io:80/public",
-		SkillRegistryAuthType: "sts-hiclaw",
+		Name:              "edge-worker-cr",
+		RuntimeName:       "claude-local",
+		Runtime:           "remote-managed-local",
+		Role:              "standalone",
+		Generation:        3,
+		MatrixUserID:      "@claude-local:matrix.local",
+		PersonalRoomID:    "!worker-dm:matrix.local",
+		MatrixAccessToken: "matrix-access-token",
+		GatewayKey:        "gateway-key",
+		AIGatewayURL:      "http://aigw.internal/v1/claude",
+		SkillRegistryURL:  "nacos://market.agentteams.io:80/public", SkillRegistryAuthType: "sts-hiclaw",
 		Spec: v1beta1.WorkerSpec{
 			Model:   "claude-sonnet-4",
 			Package: "oss://agents/claude-local/packages/demo.zip",
@@ -1133,8 +1131,7 @@ func TestPrepareWorkerDepsWritesObjectStorageLayout(t *testing.T) {
 	}
 
 	wantKeys := []string{
-		"instances/alice/data/.agentteams-keep",
-		"instances/alice/env/env",
+		"instances/alice/data/.agentteams-keep", "instances/alice/env/env",
 		"instances/alice/token/token",
 	}
 	gotKeys, err := store.ListObjects(ctx, "instances/alice/")

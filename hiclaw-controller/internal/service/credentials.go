@@ -204,7 +204,7 @@ func (s *SecretCredentialStore) Save(ctx context.Context, workerName string, cre
 			Namespace: s.Namespace,
 			Labels: map[string]string{
 				"app":                   s.ResourcePrefix.WorkerAppLabel(),
-				"agentteams.io/worker":  workerName,
+				v1beta1.LabelWorker:     workerName,
 				v1beta1.LabelController: s.ControllerName,
 			},
 		},
@@ -247,7 +247,7 @@ func (s *SecretCredentialStore) List(ctx context.Context) ([]string, error) {
 	}
 	var names []string
 	for _, sec := range secrets.Items {
-		if name, ok := sec.Labels["agentteams.io/worker"]; ok && name != "" {
+		if name, ok := sec.Labels["hiclaw.io/worker"]; ok && name != "" {
 			names = append(names, name)
 		}
 	}

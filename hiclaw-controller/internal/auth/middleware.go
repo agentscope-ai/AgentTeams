@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/httputil"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -117,7 +116,9 @@ func (m *Middleware) RequireAuthz(action Action, kind string, nameFn ResourceNam
 	}
 }
 
-// resolveResourceTeam looks up the target resource's team annotation.
+// resolveResourceTeam looks up the target worker resource's team membership
+// via the Team CR cache (single source of truth). Returns "" for non-worker
+// kinds or when the worker is standalone.
 func (m *Middleware) resolveResourceTeam(ctx context.Context, kind, name string) string {
 	if name == "" || m.k8s == nil {
 		return ""
@@ -125,35 +126,29 @@ func (m *Middleware) resolveResourceTeam(ctx context.Context, kind, name string)
 	if kind != "worker" {
 		return ""
 	}
-
-	var worker v1beta1.Worker
-	key := client.ObjectKey{Name: name, Namespace: m.namespace}
-	if err := m.k8s.Get(ctx, key, &worker); err != nil {
-		return ""
-	}
-	return worker.Annotations["agentteams.io/team"]
+	return LookupWorkerTeam(ctx, m.k8s, m.namespace, name)
 }
 
 func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bool) {
 	token := extractBearerToken(r)
 	if token == "" {
+		log.Printf("[AUTH] no bearer token in request (path=%s %s)", r.Method, r.URL.Path)
 		return nil, false
 	}
 
-	clusterID := r.Header.Get("X-HiClaw-Cluster-ID")
+	clusterID := r.Header.Get("X-AgentTeams-Cluster-ID")
 
 	identity, err := m.authenticator.Authenticate(r.Context(), token, clusterID)
 	if err != nil {
-		log.Printf("[AUTH] authentication failed: %v", err)
+		// Log key diagnostic context (clusterID empty == local mode, non-empty == remote mode);
+		// only log token length, never the token itself, for security reasons.
+		log.Printf("[AUTH] authentication failed: %v (clusterID=%q, path=%s %s, tokenLen=%d)", err, clusterID, r.Method, r.URL.Path, len(token))
 		return nil, false
 	}
 
 	if m.enricher != nil {
 		if err := m.enricher.EnrichIdentity(r.Context(), identity); err != nil {
 			log.Printf("[AUTH] identity enrichment failed for %s: %v", identity.Username, err)
-			if clusterID != "" || identity.ClusterID != "" {
-				return nil, false
-			}
 		}
 	}
 

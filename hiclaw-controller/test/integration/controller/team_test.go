@@ -66,9 +66,7 @@ func TestTeamCreate_ProvisionsLeaderAndWorkers(t *testing.T) {
 	name := fixtures.UniqueName("t-create")
 	team := fixtures.NewTestTeam(name, name+"-lead", name+"-dev", name+"-qa")
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	waitForTeamPhase(t, team, "Active")
@@ -165,9 +163,7 @@ func TestTeamCreate_WritesWorkersRegistry(t *testing.T) {
 	w2 := name + "-w2"
 	team := fixtures.NewTestTeam(name, leader, w1, w2)
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	waitForTeamPhase(t, team, "Active")
@@ -226,23 +222,18 @@ func TestTeamCreate_WritesWorkersRegistry(t *testing.T) {
 	}
 }
 
-// TestTeamCreate_LeaderOnly guards the "leader-only team" contract: after the
-// CRD dropped `workers` from its required-list and TeamSpec.Workers gained
-// `omitempty`, a Team with just a leader must reconcile to the same terminal
-// state as a team with workers — Active phase, Team/LeaderDM rooms populated,
-// LeaderReady=true, TotalWorkers=0, a single Status.Members entry for the
-// leader with RoomID/MatrixUserID filled in, and exactly one ProvisionWorker
-// call on the backend. This locks in the zero-worker path against future
-// refactors that might assume `t.Spec.Workers[0]` is addressable.
+// TestTeamCreate_LeaderOnly guards the decoupled "leader-only team"
+// contract: a Team whose workerMembers list contains only the leader must
+// reconcile to the same terminal state as a team with non-leader workers.
+// This locks in the zero-worker path without relying on legacy inline
+// workers.
 func TestTeamCreate_LeaderOnly(t *testing.T) {
 	resetMocks()
 
 	name := fixtures.UniqueName("t-leader-only")
 	team := fixtures.NewTestTeam(name, name+"-lead")
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	waitForTeamPhase(t, team, "Active")
@@ -331,9 +322,7 @@ func TestTeamUpdate_RemovesStaleWorker(t *testing.T) {
 	name := fixtures.UniqueName("t-stale")
 	team := fixtures.NewTestTeam(name, name+"-lead", name+"-w1", name+"-w2")
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	waitForTeamPhase(t, team, "Active")
@@ -344,8 +333,9 @@ func TestTeamUpdate_RemovesStaleWorker(t *testing.T) {
 
 	// Drop w2 from the spec.
 	updateTeamSpec(t, team, func(tt *v1beta1.Team) {
-		tt.Spec.Workers = []v1beta1.TeamWorkerSpec{
-			{Name: name + "-w1", Model: "gpt-4o"},
+		tt.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+			{Name: name + "-lead", Role: "team_leader"},
+			{Name: name + "-w1", Role: "worker"},
 		}
 	})
 
@@ -365,20 +355,18 @@ func TestTeamUpdate_RemovesStaleWorker(t *testing.T) {
 		return nil
 	})
 
-	// Stale member should have been deprovisioned.
-	found := false
-	for _, req := range mockProv.Calls.DeprovisionWorker {
-		if req.Name == name+"-w2" {
-			found = true
-			break
-		}
+	assertWorkerExists(t, name+"-w2")
+	if len(mockProv.Calls.DeprovisionWorker) != 0 {
+		t.Errorf("DeprovisionWorker called after decoupled member removal: %+v", mockProv.Calls.DeprovisionWorker)
 	}
-	if !found {
-		t.Errorf("DeprovisionWorker should have been called for stale %s-w2", name)
+	if len(mockDeploy.Calls.CleanupOSSData) != 0 {
+		t.Errorf("CleanupOSSData called after decoupled member removal: %+v", mockDeploy.Calls.CleanupOSSData)
 	}
+	assertRuntimeContextDropped(t, name+"-w2")
 
-	// workers-registry.json must drop the stale entry so manager-side
-	// tooling stops resolving it; the surviving leader + worker stay.
+	// workers-registry.json must drop the stale team member entry so
+	// manager-side tooling stops resolving it as part of this Team; the
+	// surviving leader + worker stay attached.
 	assertEventually(t, func() error {
 		reg := readWorkersRegistry(t)
 		if _, ok := reg.Workers[name+"-w2"]; ok {
@@ -404,9 +392,7 @@ func TestTeamDelete_CleansUpAllMembers(t *testing.T) {
 	name := fixtures.UniqueName("t-delete")
 	team := fixtures.NewTestTeam(name, name+"-lead", name+"-w1")
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 
 	waitForTeamPhase(t, team, "Active")
 
@@ -426,23 +412,19 @@ func TestTeamDelete_CleansUpAllMembers(t *testing.T) {
 		return client.IgnoreNotFound(err)
 	})
 
-	deprovisioned := make(map[string]bool)
-	for _, req := range mockProv.Calls.DeprovisionWorker {
-		deprovisioned[req.Name] = true
+	assertWorkerExists(t, name+"-lead")
+	assertWorkerExists(t, name+"-w1")
+	if len(mockProv.Calls.DeprovisionWorker) != 0 {
+		t.Errorf("DeprovisionWorker called on decoupled Team delete: %+v", mockProv.Calls.DeprovisionWorker)
 	}
-	if !deprovisioned[name+"-lead"] {
-		t.Errorf("DeprovisionWorker should have been called for leader %s-lead", name)
+	if len(mockDeploy.Calls.CleanupOSSData) != 0 {
+		t.Errorf("CleanupOSSData called on decoupled Team delete: %+v", mockDeploy.Calls.CleanupOSSData)
 	}
-	if !deprovisioned[name+"-w1"] {
-		t.Errorf("DeprovisionWorker should have been called for worker %s-w1", name)
-	}
-	if len(mockDeploy.Calls.CleanupOSSData) < 2 {
-		t.Errorf("CleanupOSSData count=%d, want >=2 (leader + worker)", len(mockDeploy.Calls.CleanupOSSData))
-	}
+	assertRuntimeContextDropped(t, name+"-lead")
+	assertRuntimeContextDropped(t, name+"-w1")
 
-	// workers-registry.json must no longer reference either member: a deleted
-	// team must not leave ghost rows that manager-side tooling would keep
-	// trying to contact.
+	// workers-registry.json must no longer reference either member as part of
+	// the deleted Team.
 	assertEventually(t, func() error {
 		reg := readWorkersRegistry(t)
 		if _, ok := reg.Workers[name+"-lead"]; ok {
@@ -469,9 +451,7 @@ func TestTeamCreate_ProvisionRoomsFailure_SetsFailed(t *testing.T) {
 	name := fixtures.UniqueName("t-fail")
 	team := fixtures.NewTestTeam(name, name+"-lead", name+"-w1")
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	assertEventually(t, func() error {
@@ -490,10 +470,10 @@ func TestTeamCreate_ProvisionRoomsFailure_SetsFailed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Team — member-level provision failure marks team Degraded, not Failed
+// Team — member-level provision failure stays on member status
 // ---------------------------------------------------------------------------
 
-func TestTeamCreate_WorkerProvisionFailure_Degraded(t *testing.T) {
+func TestTeamCreate_WorkerProvisionFailure_ActiveWithMemberFailure(t *testing.T) {
 	resetMocks()
 
 	name := fixtures.UniqueName("t-degrade")
@@ -515,9 +495,7 @@ func TestTeamCreate_WorkerProvisionFailure_Degraded(t *testing.T) {
 
 	team := fixtures.NewTestTeam(name, name+"-lead", name+"-ok", badWorker)
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	assertEventually(t, func() error {
@@ -525,18 +503,25 @@ func TestTeamCreate_WorkerProvisionFailure_Degraded(t *testing.T) {
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(team), &got); err != nil {
 			return err
 		}
-		if got.Status.Phase != "Degraded" {
-			return fmt.Errorf("phase=%q, want Degraded", got.Status.Phase)
+		if got.Status.Phase != "Active" {
+			return fmt.Errorf("phase=%q, want Active", got.Status.Phase)
+		}
+		ms := got.Status.MemberByName(badWorker)
+		if ms == nil {
+			return fmt.Errorf("missing failed member status %q", badWorker)
+		}
+		if ms.Ready {
+			return fmt.Errorf("failed member Ready=true")
 		}
 		return nil
 	})
 }
 
 // ---------------------------------------------------------------------------
-// Team — backend readiness dictates Active vs Pending
+// Team — backend readiness is exposed on members
 // ---------------------------------------------------------------------------
 
-func TestTeamCreate_PartialReadiness_RemainsPending(t *testing.T) {
+func TestTeamCreate_PartialReadiness_ActiveWithMemberReadiness(t *testing.T) {
 	resetMocks()
 
 	name := fixtures.UniqueName("t-partial")
@@ -554,9 +539,7 @@ func TestTeamCreate_PartialReadiness_RemainsPending(t *testing.T) {
 
 	team := fixtures.NewTestTeam(name, leaderName, name+"-w1")
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	assertEventually(t, func() error {
@@ -564,14 +547,21 @@ func TestTeamCreate_PartialReadiness_RemainsPending(t *testing.T) {
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(team), &got); err != nil {
 			return err
 		}
-		if got.Status.Phase == "Active" {
-			return fmt.Errorf("team reached Active too early")
+		if got.Status.Phase != "Active" {
+			return fmt.Errorf("phase=%q, want Active", got.Status.Phase)
 		}
 		if !got.Status.LeaderReady {
 			return fmt.Errorf("LeaderReady should be true")
 		}
 		if got.Status.ReadyWorkers != 0 {
 			return fmt.Errorf("ReadyWorkers=%d, want 0 (worker still Starting)", got.Status.ReadyWorkers)
+		}
+		ms := got.Status.MemberByName(name + "-w1")
+		if ms == nil {
+			return fmt.Errorf("missing worker member status")
+		}
+		if ms.Ready {
+			return fmt.Errorf("worker Ready=true, want false")
 		}
 		return nil
 	})
@@ -587,9 +577,7 @@ func TestTeamFinalizer_AddedOnCreate(t *testing.T) {
 	name := fixtures.UniqueName("t-final")
 	team := fixtures.NewTestTeam(name, name+"-lead", name+"-w1")
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	assertEventually(t, func() error {
@@ -627,9 +615,7 @@ func TestTeamUpdate_AddWorker_DoesNotRecreateExisting(t *testing.T) {
 	added := name + "-w2"
 
 	team := fixtures.NewTestTeam(name, leader, existing)
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team)
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	waitForTeamPhase(t, team, "Active")
@@ -647,10 +633,16 @@ func TestTeamUpdate_AddWorker_DoesNotRecreateExisting(t *testing.T) {
 	mockProv.ClearCalls()
 	mockDeploy.ClearCalls()
 
+	addedWorker := fixtures.NewTestWorker(added)
+	addedWorker.Spec.Runtime = "copaw"
+	if err := k8sClient.Create(ctx, addedWorker); err != nil {
+		t.Fatalf("create added member worker %s: %v", added, err)
+	}
+
 	updateTeamSpec(t, team, func(tt *v1beta1.Team) {
-		tt.Spec.Workers = append(tt.Spec.Workers, v1beta1.TeamWorkerSpec{
-			Name:  added,
-			Model: "gpt-4o",
+		tt.Spec.WorkerMembers = append(tt.Spec.WorkerMembers, v1beta1.TeamWorkerRef{
+			Name: added,
+			Role: "worker",
 		})
 	})
 
@@ -721,20 +713,19 @@ func TestTeam_MemberEnv_PassesToBackend(t *testing.T) {
 	leader := name + "-lead"
 	worker := name + "-dev"
 	team := fixtures.NewTestTeam(name, leader, worker)
-	team.Spec.Leader.Env = map[string]string{
-		"USER_LEAD":          "L1",
-		"USER_EMPTY":         "",
-		"HICLAW_WORKER_NAME": "user-should-lose",
-	}
-	team.Spec.Workers[0].Env = map[string]string{
-		"USER_WORK":          "W1",
-		"USER_EMPTY":         "",
-		"HICLAW_WORKER_NAME": "user-should-lose",
-	}
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team, func(workers map[string]*v1beta1.Worker) {
+		workers[leader].Spec.Env = map[string]string{
+			"USER_LEAD":              "L1",
+			"USER_EMPTY":             "",
+			"AGENTTEAMS_WORKER_NAME": "user-should-lose",
+		}
+		workers[worker].Spec.Env = map[string]string{
+			"USER_WORK":              "W1",
+			"USER_EMPTY":             "",
+			"AGENTTEAMS_WORKER_NAME": "user-should-lose",
+		}
+	})
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	waitForTeamPhase(t, team, "Active")
@@ -749,8 +740,8 @@ func TestTeam_MemberEnv_PassesToBackend(t *testing.T) {
 	if got, present := leaderReq.Env["USER_EMPTY"]; !present || got != "" {
 		t.Errorf("leader USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
 	}
-	if got := leaderReq.Env["HICLAW_WORKER_NAME"]; got != leader {
-		t.Errorf("leader HICLAW_WORKER_NAME=%q, want %q (system wins)", got, leader)
+	if got := leaderReq.Env["AGENTTEAMS_WORKER_NAME"]; got != leader {
+		t.Errorf("leader AGENTTEAMS_WORKER_NAME=%q, want %q (system wins)", got, leader)
 	}
 	if got := leaderReq.Env["MOCK_ENV"]; got != "true" {
 		t.Errorf("leader MOCK_ENV=%q, want %q (system env preserved)", got, "true")
@@ -766,8 +757,8 @@ func TestTeam_MemberEnv_PassesToBackend(t *testing.T) {
 	if got, present := workerReq.Env["USER_EMPTY"]; !present || got != "" {
 		t.Errorf("worker USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
 	}
-	if got := workerReq.Env["HICLAW_WORKER_NAME"]; got != worker {
-		t.Errorf("worker HICLAW_WORKER_NAME=%q, want %q (system wins)", got, worker)
+	if got := workerReq.Env["AGENTTEAMS_WORKER_NAME"]; got != worker {
+		t.Errorf("worker AGENTTEAMS_WORKER_NAME=%q, want %q (system wins)", got, worker)
 	}
 	if got := workerReq.Env["MOCK_ENV"]; got != "true" {
 		t.Errorf("worker MOCK_ENV=%q, want %q (system env preserved)", got, "true")
@@ -792,13 +783,12 @@ func TestTeamCreate_LeaderMcpServers_DeployedToConfig(t *testing.T) {
 	name := fixtures.UniqueName("t-lead-mcp")
 	leaderName := name + "-lead"
 	team := fixtures.NewTestTeam(name, leaderName, name+"-dev")
-	team.Spec.Leader.McpServers = []v1beta1.MCPServer{
-		{Name: "github", URL: "https://gw.example.com/mcp-servers/github/mcp"},
-	}
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	createTeamWithMembers(t, team, func(workers map[string]*v1beta1.Worker) {
+		workers[leaderName].Spec.McpServers = []v1beta1.MCPServer{
+			{Name: "github", URL: "https://gw.example.com/mcp-servers/github/mcp"},
+		}
+	})
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	waitForTeamPhase(t, team, "Active")
@@ -821,8 +811,8 @@ func TestTeamCreate_LeaderMcpServers_DeployedToConfig(t *testing.T) {
 
 	clearAllCalls()
 
-	updateTeamSpec(t, team, func(tt *v1beta1.Team) {
-		tt.Spec.Leader.McpServers = []v1beta1.MCPServer{
+	updateWorkerSpec(t, client.ObjectKey{Namespace: team.Namespace, Name: leaderName}, func(worker *v1beta1.Worker) {
+		worker.Spec.McpServers = []v1beta1.MCPServer{
 			{Name: "github", URL: "https://gw.example.com/mcp-servers/github/mcp"},
 			{Name: "jira", URL: "https://gw.example.com/mcp-servers/jira/mcp", Transport: "sse"},
 		}
@@ -849,17 +839,15 @@ func TestTeamCreate_LeaderMcpServers_DeployedToConfig(t *testing.T) {
 // CR Labels → Pod Labels propagation (Team)
 // ---------------------------------------------------------------------------
 
-// TestTeamLabels_PropagateAndIsolatePerMember walks the full Team
-// reconcile pipeline end-to-end and asserts three things at once for
-// the captured backend.CreateRequest.Labels:
-//   - Team.metadata.labels fans out to the leader AND every worker Pod.
-//   - Team.spec.leader.labels lands ONLY on the leader; per-member
-//     workers[i].labels land ONLY on that worker and do not leak to
-//     other workers or the leader.
-//   - Controller-forced system labels (agentteams.io/controller,
-//     agentteams.io/team, agentteams.io/role) always win over user-supplied
-//     values, including reserved keys stuffed into any of the three
-//     user layers (metadata, leader.labels, workers[].labels).
+// TestTeamLabels_PropagateAndIsolatePerMember walks the decoupled Team
+// path end-to-end. Members are pre-existing Worker CRs, so the captured
+// backend.CreateRequest.Labels come from each Worker CR instead of Team
+// metadata:
+//   - Team.metadata.labels do not fan out to member Pods.
+//   - Leader Worker.spec.labels lands ONLY on the leader; per-member Worker
+//     labels land ONLY on that worker and do not leak to other workers or the leader.
+//   - WorkerReconciler system labels (agentteams.io/controller and
+//     agentteams.io/role=standalone) always win over user-supplied values.
 func TestTeamLabels_PropagateAndIsolatePerMember(t *testing.T) {
 	resetMocks()
 
@@ -878,29 +866,22 @@ func TestTeamLabels_PropagateAndIsolatePerMember(t *testing.T) {
 		// Reserved-key attempts at the team-metadata layer.
 		v1beta1.LabelController: "metadata-attacker",
 	}
-	team.Spec.Leader.Labels = map[string]string{
-		"role-hint": "planner",
-		"squad":     "leader-squad", // should beat team metadata for leader
-	}
-	// Per-member labels — each worker gets its own disjoint set so we
-	// can detect cross-member leakage.
-	for i := range team.Spec.Workers {
-		switch team.Spec.Workers[i].Name {
-		case devName:
-			team.Spec.Workers[i].Labels = map[string]string{
-				"skill":              "rust",
-				"agentteams.io/role": "evil", // reserved-key override attempt
-			}
-		case qaName:
-			team.Spec.Workers[i].Labels = map[string]string{
-				"skill": "go",
-			}
-		}
-	}
 
-	if err := k8sClient.Create(ctx, team); err != nil {
-		t.Fatalf("create Team: %v", err)
-	}
+	createTeamWithMembers(t, team, func(workers map[string]*v1beta1.Worker) {
+		workers[leaderName].Spec.Labels = map[string]string{
+			"role-hint": "planner",
+			"squad":     "leader-squad", // should beat team metadata for leader
+		}
+		// Per-member labels — each worker gets its own disjoint set so we
+		// can detect cross-member leakage.
+		workers[devName].Spec.Labels = map[string]string{
+			"skill":              "rust",
+			"agentteams.io/role": "evil", // reserved-key override attempt
+		}
+		workers[qaName].Spec.Labels = map[string]string{
+			"skill": "go",
+		}
+	})
 	t.Cleanup(func() { _ = deleteAndWait(t, team) })
 
 	waitForTeamPhase(t, team, "Active")
@@ -913,7 +894,8 @@ func TestTeamLabels_PropagateAndIsolatePerMember(t *testing.T) {
 			leaderLabels != nil, devLabels != nil, qaLabels != nil, cap.Keys())
 	}
 
-	// Team-wide metadata fans out to every member.
+	// Team metadata does not fan out to decoupled member Pods. Each member
+	// remains a standalone Worker CR with its own metadata/spec label contract.
 	for _, pair := range []struct {
 		who    string
 		labels map[string]string
@@ -922,17 +904,19 @@ func TestTeamLabels_PropagateAndIsolatePerMember(t *testing.T) {
 		{"dev", devLabels},
 		{"qa", qaLabels},
 	} {
-		if got := pair.labels["region"]; got != "us-west" {
-			t.Errorf("%s missing team metadata region=us-west: %v", pair.who, pair.labels)
+		if _, ok := pair.labels["region"]; ok {
+			t.Errorf("%s leaked team metadata region label: %v", pair.who, pair.labels)
 		}
 	}
 
-	// Per-member beats team-wide on collision (leader).
+	// Per-member labels are scoped to the owning Worker CR.
 	assertLabel(t, leaderLabels, "squad", "leader-squad")
-	// Non-leader members inherit team-wide value since they do not
-	// override it.
-	assertLabel(t, devLabels, "squad", "alpha")
-	assertLabel(t, qaLabels, "squad", "alpha")
+	if _, ok := devLabels["squad"]; ok {
+		t.Errorf("dev leaked team metadata squad label: %v", devLabels)
+	}
+	if _, ok := qaLabels["squad"]; ok {
+		t.Errorf("qa leaked team metadata squad label: %v", qaLabels)
+	}
 
 	// Leader-only label does not leak to workers.
 	assertLabel(t, leaderLabels, "role-hint", "planner")
@@ -950,14 +934,14 @@ func TestTeamLabels_PropagateAndIsolatePerMember(t *testing.T) {
 		t.Errorf("leader leaked worker skill label: %v", leaderLabels)
 	}
 
-	// System labels always win on collision.
+	// WorkerReconciler system labels always win on collision.
 	for _, labels := range []map[string]string{leaderLabels, devLabels, qaLabels} {
 		assertLabel(t, labels, v1beta1.LabelController, "test-ctl")
-		assertLabel(t, labels, "agentteams.io/team", name)
+		assertLabel(t, labels, "agentteams.io/role", "standalone")
+		if _, ok := labels["agentteams.io/team"]; ok {
+			t.Errorf("decoupled Worker Pod must not carry agentteams.io/team: %v", labels)
+		}
 	}
-	assertLabel(t, leaderLabels, "agentteams.io/role", "team_leader")
-	assertLabel(t, devLabels, "agentteams.io/role", "worker")
-	assertLabel(t, qaLabels, "agentteams.io/role", "worker")
 }
 
 // ---------------------------------------------------------------------------
@@ -980,6 +964,26 @@ func waitForTeamPhase(t *testing.T, team *v1beta1.Team, phase string) {
 	})
 }
 
+func createTeamWithMembers(t *testing.T, team *v1beta1.Team, mutateWorkers ...func(map[string]*v1beta1.Worker)) {
+	t.Helper()
+	workers := fixtures.NewTestTeamWorkers(team)
+	workerByName := make(map[string]*v1beta1.Worker, len(workers))
+	for _, worker := range workers {
+		workerByName[worker.Name] = worker
+	}
+	for _, mutate := range mutateWorkers {
+		mutate(workerByName)
+	}
+	for _, worker := range workers {
+		if err := k8sClient.Create(ctx, worker); err != nil {
+			t.Fatalf("create member worker %s: %v", worker.Name, err)
+		}
+	}
+	if err := k8sClient.Create(ctx, team); err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+}
+
 func updateTeamSpec(t *testing.T, team *v1beta1.Team, mutate func(*v1beta1.Team)) {
 	t.Helper()
 	assertEventually(t, func() error {
@@ -990,6 +994,36 @@ func updateTeamSpec(t *testing.T, team *v1beta1.Team, mutate func(*v1beta1.Team)
 		mutate(&cur)
 		return k8sClient.Update(ctx, &cur)
 	})
+}
+
+func updateWorkerSpec(t *testing.T, key client.ObjectKey, mutate func(*v1beta1.Worker)) {
+	t.Helper()
+	assertEventually(t, func() error {
+		var cur v1beta1.Worker
+		if err := k8sClient.Get(ctx, key, &cur); err != nil {
+			return err
+		}
+		mutate(&cur)
+		return k8sClient.Update(ctx, &cur)
+	})
+}
+
+func assertWorkerExists(t *testing.T, name string) {
+	t.Helper()
+	var worker v1beta1.Worker
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: fixtures.DefaultNamespace, Name: name}, &worker); err != nil {
+		t.Fatalf("worker %s should still exist: %v", name, err)
+	}
+}
+
+func assertRuntimeContextDropped(t *testing.T, name string) {
+	t.Helper()
+	for _, req := range mockDeploy.Calls.DeployMemberRuntimeConfig {
+		if req.Name == name && req.Role == "standalone" && req.DropTeamContext {
+			return
+		}
+	}
+	t.Errorf("DeployMemberRuntimeConfig did not drop team context for %s: %+v", name, mockDeploy.Calls.DeployMemberRuntimeConfig)
 }
 
 // registryKeys returns the set of member names currently in the registry,

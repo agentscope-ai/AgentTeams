@@ -56,7 +56,6 @@ func createWorkerCmd() *cobra.Command {
   hiclaw create worker --name alice --soul-file /path/to/SOUL.md --skills github-operations
   hiclaw create worker --name charlie --runtime copaw --expose 8080,3000
   hiclaw create worker --name remote-worker --runtime copaw --container-managed=false
-  To configure CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.
   To configure mcpServers, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
@@ -134,8 +133,8 @@ func createWorkerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
-	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $HICLAW_DEFAULT_MODEL, else qwen3.6-plus)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content (inline)")
@@ -227,6 +226,7 @@ func createTeamCmd() *cobra.Command {
 		teamName             string
 		leaderName           string
 		leaderModel          string
+		leaderRuntime        string
 		leaderHeartbeatEvery string
 		workerIdleTimeout    string
 		workers              string
@@ -241,8 +241,7 @@ func createTeamCmd() *cobra.Command {
   hiclaw create team --name alpha --leader-name alpha-lead
   hiclaw create team --name alpha --leader-name alpha-lead --workers alice,bob
   hiclaw create team --name alpha --leader-name alpha-lead --leader-model claude-sonnet-4-6 --description "Frontend team"
-  hiclaw create team --name alpha --leader-name alpha-lead --leader-heartbeat-every 30m --worker-idle-timeout 12h
-  To configure per-member CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f team.yaml'.`,
+  hiclaw create team --name alpha --leader-name alpha-lead --leader-heartbeat-every 30m --worker-idle-timeout 12h`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -250,35 +249,46 @@ func createTeamCmd() *cobra.Command {
 			if leaderName == "" {
 				return fmt.Errorf("--leader-name is required")
 			}
-
-			leader := map[string]interface{}{
-				"name": leaderName,
+			leaderRuntime = strings.TrimSpace(leaderRuntime)
+			if leaderRuntime == "" {
+				leaderRuntime = "qwenpaw"
 			}
-			if leaderModel != "" {
+			if leaderRuntime != "qwenpaw" && leaderRuntime != "copaw" {
+				return fmt.Errorf("--leader-runtime must be qwenpaw or copaw")
+			}
+
+			defaultModel := defaultWorkerModel()
+			leader := map[string]interface{}{
+				"name":    leaderName,
+				"role":    "team_leader",
+				"runtime": leaderRuntime,
+			}
+			if leaderModel == "" {
+				leader["model"] = defaultModel
+			} else {
 				leader["model"] = leaderModel
 			}
-			if leaderHeartbeatEvery != "" {
-				leader["heartbeat"] = map[string]interface{}{
-					"enabled": true,
-					"every":   leaderHeartbeatEvery,
-				}
-			}
-			setIfNotEmpty(leader, "workerIdleTimeout", workerIdleTimeout)
+			memberList := []interface{}{leader}
 
-			workerList := []interface{}{}
 			if workers != "" {
 				for _, w := range splitCSV(workers) {
-					workerList = append(workerList, map[string]interface{}{"name": w})
+					worker := map[string]interface{}{
+						"name":  w,
+						"role":  "worker",
+						"model": defaultModel,
+					}
+					setIfNotEmpty(worker, "idleTimeout", workerIdleTimeout)
+					memberList = append(memberList, worker)
 				}
 			}
 
 			req := map[string]interface{}{
 				"name":    name,
-				"leader":  leader,
-				"workers": workerList,
+				"members": memberList,
 			}
 			setIfNotEmpty(req, "teamName", teamName)
 			setIfNotEmpty(req, "description", description)
+			setIfNotEmpty(req, "heartbeatEvery", leaderHeartbeatEvery)
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
@@ -293,7 +303,8 @@ func createTeamCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Team name (required)")
 	cmd.Flags().StringVar(&teamName, "team-name", "", "Runtime/storage team name (defaults to --name)")
 	cmd.Flags().StringVar(&leaderName, "leader-name", "", "Leader worker name (required)")
-	cmd.Flags().StringVar(&leaderModel, "leader-model", "", "Leader LLM model")
+	cmd.Flags().StringVar(&leaderModel, "leader-model", "", "Leader LLM model (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
+	cmd.Flags().StringVar(&leaderRuntime, "leader-runtime", "qwenpaw", "Leader runtime: qwenpaw or copaw")
 	cmd.Flags().StringVar(&leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")
 	cmd.Flags().StringVar(&workerIdleTimeout, "worker-idle-timeout", "", "Idle timeout before the leader may sleep workers (e.g. 12h)")
 	cmd.Flags().StringVar(&workers, "workers", "", "Comma-separated worker names")
@@ -384,8 +395,7 @@ func createManagerCmd() *cobra.Command {
 		Long: `Create a new Manager resource.
 
   hiclaw create manager --name default --model qwen3.6-plus
-  hiclaw create manager --name default --model claude-sonnet-4-6 --runtime copaw
-  To configure CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f manager.yaml'.`,
+  hiclaw create manager --name default --model claude-sonnet-4-6 --runtime copaw`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -414,7 +424,7 @@ func createManagerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Manager name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (required)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&soul, "soul", "", "Manager SOUL.md content")
 	return cmd
@@ -428,13 +438,14 @@ var workerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // defaultWorkerModel returns the model ID to use when a CLI flag does not
 // specify --model. It prefers the install-time configured model
-// (HICLAW_DEFAULT_MODEL, propagated by the controller into both the manager
+// (AGENTTEAMS_DEFAULT_MODEL, propagated by the controller into both the manager
 // and worker containers via WorkerEnvBuilder); only when the env var is unset
 // does it fall back to the "qwen3.6-plus" default. Without this
-// fallback every `hiclaw create worker` / `hiclaw apply worker` invoked by the
-// Manager Agent would silently override the admin's install-time model choice.
+// fallback every `hiclaw create worker` / `hiclaw apply worker` / `hiclaw
+// create team` invoked by the Manager Agent would silently override or omit
+// the admin's install-time model choice.
 func defaultWorkerModel() string {
-	if m := strings.TrimSpace(os.Getenv("HICLAW_DEFAULT_MODEL")); m != "" {
+	if m := strings.TrimSpace(os.Getenv("AGENTTEAMS_DEFAULT_MODEL")); m != "" {
 		return m
 	}
 	return "qwen3.6-plus"
@@ -457,16 +468,16 @@ func expandPackageURI(raw string) (string, error) {
 		return raw, nil
 	}
 
-	base := strings.TrimSpace(os.Getenv("HICLAW_NACOS_REGISTRY_URI"))
+	base := strings.TrimSpace(os.Getenv("AGENTTEAMS_NACOS_REGISTRY_URI"))
 	if base == "" {
-		base = "nacos://market.hiclaw.io:80/public"
+		base = "nacos://market.agentteams.io:80/public"
 	}
 	if !strings.HasPrefix(base, "nacos://") {
-		return "", fmt.Errorf("invalid HICLAW_NACOS_REGISTRY_URI %q: must start with nacos://", base)
+		return "", fmt.Errorf("invalid AGENTTEAMS_NACOS_REGISTRY_URI %q: must start with nacos://", base)
 	}
 	base = strings.TrimRight(base, "/")
 	if base == "nacos:" || base == "nacos:/" || base == "nacos://" {
-		return "", fmt.Errorf("invalid HICLAW_NACOS_REGISTRY_URI %q: missing host/namespace", base)
+		return "", fmt.Errorf("invalid AGENTTEAMS_NACOS_REGISTRY_URI %q: missing host/namespace", base)
 	}
 
 	parts := strings.Split(raw, "/")

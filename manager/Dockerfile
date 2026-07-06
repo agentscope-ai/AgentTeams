@@ -4,21 +4,21 @@
 # Lightweight Manager container based on openclaw-base.
 # Does NOT include Higress, Tuwunel, MinIO, or Element Web.
 # All infrastructure is provided by the controller (embedded)
-# or K8s Pods (incluster). HICLAW_RUNTIME env var selects mode.
+# or K8s Pods (incluster). AGENTTEAMS_RUNTIME env var selects mode.
 #
 # Build from project root:
-#   docker build -f manager/Dockerfile -t hiclaw/hiclaw-manager:latest .
+#   docker build -f manager/Dockerfile -t agentteams/manager:latest .
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 ARG OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base:20260423-8359cbc
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: MinIO Client (mc) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
 
 # ============ Final Image ============
 FROM ${OPENCLAW_BASE_IMAGE}
@@ -66,7 +66,7 @@ RUN find /opt/hiclaw/scripts -name '*.sh' -exec chmod +x {} + && \
     find /opt/hiclaw/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
     find /opt/hiclaw/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 
-# HICLAW_RUNTIME is NOT hardcoded — injected by Helm (k8s) or SAE (aliyun) at deploy time
+# AGENTTEAMS_RUNTIME is NOT hardcoded — injected by Helm (k8s) or SAE (aliyun) at deploy time
 
 # Workspace directory
 ENV HOME=/root/manager-workspace
@@ -82,5 +82,5 @@ RUN rm -f /usr/bin/lsof && printf '#!/bin/sh\nexit 1\n' > /usr/bin/lsof && chmod
 # OpenClaw gateway port
 EXPOSE 18799
 
-# start-manager-agent.sh branches on HICLAW_RUNTIME env var
+# start-manager-agent.sh branches on AGENTTEAMS_RUNTIME env var
 ENTRYPOINT ["/opt/hiclaw/scripts/init/start-manager-agent.sh"]

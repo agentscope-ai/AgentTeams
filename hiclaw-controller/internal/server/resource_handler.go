@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -19,7 +21,21 @@ import (
 // optimistic locking conflicts when the controller updates status between Get and Update.
 const k8sUpdateMaxRetries = 3
 
-const teamWorkerMembersField = "spec.workerMembers.name"
+func normalizeLeaderRuntimeForCreate(runtime string) (string, error) {
+	value := strings.TrimSpace(runtime)
+	if value == "" {
+		return backend.RuntimeQwenPaw, nil
+	}
+	return normalizeExplicitLeaderRuntime(value)
+}
+
+func normalizeExplicitLeaderRuntime(runtime string) (string, error) {
+	value := strings.TrimSpace(runtime)
+	if value != backend.RuntimeQwenPaw && value != backend.RuntimeCopaw {
+		return "", fmt.Errorf("leader.runtime must be qwenpaw or copaw")
+	}
+	return value, nil
+}
 
 // ResourceHandler handles declarative CRUD operations on CRs.
 //
@@ -105,22 +121,27 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.WorkerSpec{
-			Model:            req.Model,
-			ModelProvider:    req.ModelProvider,
-			WorkerName:       req.WorkerName,
-			Runtime:          req.Runtime,
-			Image:            req.Image,
-			Identity:         req.Identity,
-			Soul:             req.Soul,
-			Agents:           req.Agents,
-			Skills:           req.Skills,
-			McpServers:       req.McpServers,
-			Package:          req.Package,
-			Expose:           req.Expose,
-			ChannelPolicy:    req.ChannelPolicy,
-			Resources:        req.Resources,
-			ContainerManaged: &containerManaged,
-			State:            req.State,
+			Model:              req.Model,
+			ModelProvider:      req.ModelProvider,
+			WorkerName:         req.WorkerName,
+			Runtime:            req.Runtime,
+			Image:              req.Image,
+			Identity:           req.Identity,
+			Soul:               req.Soul,
+			Agents:             req.Agents,
+			Skills:             req.Skills,
+			McpServers:         req.McpServers,
+			Package:            req.Package,
+			Expose:             req.Expose,
+			ChannelPolicy:      req.ChannelPolicy,
+			Resources:          req.Resources,
+			AgentIdentity:      req.AgentIdentity,
+			CredentialBindings: req.CredentialBindings,
+			Volumes:            req.Volumes,
+			Mounts:             req.Mounts,
+			ContainerManaged:   &containerManaged,
+			IdleTimeout:        req.IdleTimeout,
+			State:              req.State,
 		},
 	}
 
@@ -146,7 +167,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, workerToResponse(worker))
+	httputil.WriteJSON(w, http.StatusCreated, workerToResponse(r.Context(), h.client, h.namespace, worker))
 }
 
 func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
@@ -160,14 +181,7 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker)
 	switch {
 	case err == nil:
-		resp := workerToResponse(&worker)
-		if team, member, ok, terr := h.findTeamMember(r.Context(), name); terr != nil {
-			writeK8sError(w, "get worker", terr)
-			return
-		} else if ok {
-			h.applyTeamMember(&resp, team, member)
-		}
-		httputil.WriteJSON(w, http.StatusOK, resp)
+		httputil.WriteJSON(w, http.StatusOK, workerToResponse(r.Context(), h.client, h.namespace, &worker))
 		return
 	case !apierrors.IsNotFound(err):
 		writeK8sError(w, "get worker", err)
@@ -192,29 +206,24 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 
 	workers := make([]WorkerResponse, 0)
 
-	seen := make(map[string]struct{})
-	var list v1beta1.WorkerList
-	if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
-		writeK8sError(w, "list workers", err)
-		return
-	}
-	for i := range list.Items {
-		resp := workerToResponse(&list.Items[i])
-		if team, member, ok, terr := h.findTeamMember(r.Context(), list.Items[i].Name); terr != nil {
-			writeK8sError(w, "list workers: lookup team member", terr)
+	// Standalone workers only when not filtering by team. Decoupled team
+	// members have Worker CRs, but are skipped here and emitted from the
+	// Team loop below so the list has one authoritative team-member view.
+	if teamFilter == "" {
+		var list v1beta1.WorkerList
+		if err := h.client.List(r.Context(), &list, client.InNamespace(h.namespace)); err != nil {
+			writeK8sError(w, "list workers", err)
 			return
-		} else if ok {
-			h.applyTeamMember(&resp, team, member)
-		} else if isTeamMemberWorker(&list.Items[i]) {
-			// Defensive: legacy resource created before the refactor. Skip
-			// to avoid duplicating the synthesized team view.
-			continue
 		}
-		if teamFilter != "" && resp.Team != teamFilter {
-			continue
+		for i := range list.Items {
+			if h.isTeamMemberWorker(r.Context(), &list.Items[i]) {
+				// Worker CR is referenced from a Team's
+				// spec.workerMembers (decoupled) — skip to avoid
+				// duplicating the synthesized team-member view.
+				continue
+			}
+			workers = append(workers, workerToResponse(r.Context(), h.client, h.namespace, &list.Items[i]))
 		}
-		workers = append(workers, resp)
-		seen[resp.Name] = struct{}{}
 	}
 
 	var teams v1beta1.TeamList
@@ -228,41 +237,23 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 		if teamFilter != "" && team.Name != teamFilter {
 			continue
 		}
-		if team.Spec.Leader.Name != "" {
-			if _, ok := seen[team.Spec.Leader.Name]; !ok {
-				workers = append(workers, h.teamMemberToResponse(r.Context(), team, team.Spec.Leader.Name))
-				seen[team.Spec.Leader.Name] = struct{}{}
-			}
-		}
-		for _, worker := range team.Spec.Workers {
-			if _, ok := seen[worker.Name]; ok {
-				continue
-			}
-			workers = append(workers, h.teamMemberToResponse(r.Context(), team, worker.Name))
-			seen[worker.Name] = struct{}{}
-		}
 		for _, ref := range team.Spec.WorkerMembers {
-			if _, ok := seen[ref.Name]; ok {
-				continue
-			}
 			workers = append(workers, h.teamMemberToResponse(r.Context(), team, ref.Name))
-			seen[ref.Name] = struct{}{}
 		}
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, WorkerListResponse{Workers: workers, Total: len(workers)})
 }
 
-// isTeamMemberWorker reports whether a Worker CR was created by the old
-// (pre-refactor) TeamReconciler and should be hidden from the aggregated
-// /workers view.
-func isTeamMemberWorker(w *v1beta1.Worker) bool {
-	if w.Annotations == nil {
+// isTeamMemberWorker reports whether a Worker CR is currently a member of
+// any Team in the namespace, according to Team.spec.workerMembers. Used by
+// ListWorkers to suppress the Worker CR entry when the synthesized team-member
+// entry is already produced from the Team CR loop.
+func (h *ResourceHandler) isTeamMemberWorker(ctx context.Context, w *v1beta1.Worker) bool {
+	if w == nil {
 		return false
 	}
-	return w.Annotations["agentteams.io/team"] != "" ||
-		w.Annotations["agentteams.io/team-leader"] != "" ||
-		w.Annotations["agentteams.io/role"] == "team_leader"
+	return authpkg.LookupWorkerTeam(ctx, h.client, h.namespace, w.Name) != ""
 }
 
 func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
@@ -337,8 +328,23 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.Resources != nil {
 			worker.Spec.Resources = req.Resources
 		}
+		if req.AgentIdentity != nil {
+			worker.Spec.AgentIdentity = req.AgentIdentity
+		}
+		if req.CredentialBindings != nil {
+			worker.Spec.CredentialBindings = req.CredentialBindings
+		}
+		if req.Volumes != nil {
+			worker.Spec.Volumes = req.Volumes
+		}
+		if req.Mounts != nil {
+			worker.Spec.Mounts = req.Mounts
+		}
 		if req.ContainerManaged != nil {
 			worker.Spec.ContainerManaged = req.ContainerManaged
+		}
+		if req.IdleTimeout != "" {
+			worker.Spec.IdleTimeout = req.IdleTimeout
 		}
 		if req.State != nil {
 			worker.Spec.State = req.State
@@ -353,7 +359,7 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
+		httputil.WriteJSON(w, http.StatusOK, workerToResponse(r.Context(), h.client, h.namespace, &worker))
 		return
 	}
 }
@@ -397,71 +403,36 @@ func (h *ResourceHandler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if req.Leader.Name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "leader.name is required")
+	if createTeamRequestHasLegacyInlineFields(&req) {
+		httputil.WriteError(w, http.StatusBadRequest, "legacy leader/workers fields are not supported; use members")
 		return
 	}
 
-	team := &v1beta1.Team{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      req.Name,
-			Namespace: h.namespace,
-		},
-		Spec: v1beta1.TeamSpec{
-			Description:   req.Description,
-			TeamName:      req.TeamName,
-			Admin:         req.Admin,
-			HumanMembers:  req.HumanMembers,
-			PeerMentions:  req.PeerMentions,
-			ChannelPolicy: req.ChannelPolicy,
-			Leader: v1beta1.LeaderSpec{
-				Name:              req.Leader.Name,
-				WorkerName:        req.Leader.WorkerName,
-				Model:             req.Leader.Model,
-				ModelProvider:     req.Leader.ModelProvider,
-				Identity:          req.Leader.Identity,
-				Soul:              req.Leader.Soul,
-				Agents:            req.Leader.Agents,
-				Package:           req.Leader.Package,
-				McpServers:        req.Leader.McpServers,
-				Heartbeat:         toHeartbeatSpec(req.Leader.Heartbeat),
-				WorkerIdleTimeout: req.Leader.WorkerIdleTimeout,
-				ChannelPolicy:     req.Leader.ChannelPolicy,
-				State:             req.Leader.State,
-				Resources:         req.Leader.Resources,
-			},
-		},
-	}
-
-	for _, tw := range req.Workers {
-		team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
-			Name:          tw.Name,
-			WorkerName:    tw.WorkerName,
-			Model:         tw.Model,
-			ModelProvider: tw.ModelProvider,
-			Runtime:       tw.Runtime,
-			Image:         tw.Image,
-			Identity:      tw.Identity,
-			Soul:          tw.Soul,
-			Agents:        tw.Agents,
-			Skills:        tw.Skills,
-			McpServers:    tw.McpServers,
-			Package:       tw.Package,
-			Expose:        tw.Expose,
-			ChannelPolicy: tw.ChannelPolicy,
-			State:         tw.State,
-			Resources:     tw.Resources,
-		})
-	}
-
-	h.stampControllerLabel(&team.ObjectMeta)
-
-	if err := h.client.Create(r.Context(), team); err != nil {
-		writeK8sError(w, "create team", err)
+	if len(req.Members) == 0 {
+		httputil.WriteError(w, http.StatusBadRequest, "members is required")
 		return
 	}
+	h.createTeamDecoupled(w, r, &req)
+}
 
-	httputil.WriteJSON(w, http.StatusCreated, teamToResponse(team))
+func createTeamRequestHasLegacyInlineFields(req *CreateTeamRequest) bool {
+	return req.Leader.Name != "" ||
+		req.Leader.WorkerName != "" ||
+		req.Leader.Model != "" ||
+		req.Leader.Runtime != "" ||
+		req.Leader.Image != "" ||
+		req.Leader.Identity != "" ||
+		req.Leader.Soul != "" ||
+		req.Leader.Agents != "" ||
+		req.Leader.Package != "" ||
+		len(req.Leader.McpServers) > 0 ||
+		req.Leader.AgentIdentity != nil ||
+		len(req.Leader.CredentialBindings) > 0 ||
+		req.Leader.ChannelPolicy != nil ||
+		req.Leader.Heartbeat != nil ||
+		req.Leader.WorkerIdleTimeout != "" ||
+		req.Leader.State != nil ||
+		len(req.Workers) > 0
 }
 
 func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
@@ -507,6 +478,14 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	if req.Leader != nil && strings.TrimSpace(req.Leader.Runtime) != "" {
+		runtime, err := normalizeExplicitLeaderRuntime(req.Leader.Runtime)
+		if err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.Leader.Runtime = runtime
+	}
 
 	ctx := r.Context()
 	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
@@ -525,75 +504,18 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.Admin != nil {
 			team.Spec.Admin = req.Admin
 		}
+		if req.HumanMembers != nil {
+			team.Spec.HumanMembers = req.HumanMembers
+		}
 		if req.PeerMentions != nil {
 			team.Spec.PeerMentions = req.PeerMentions
 		}
 		if req.ChannelPolicy != nil {
 			team.Spec.ChannelPolicy = req.ChannelPolicy
 		}
-		if req.Leader != nil {
-			if req.Leader.WorkerName != "" {
-				team.Spec.Leader.WorkerName = req.Leader.WorkerName
-			}
-			if req.Leader.Model != "" {
-				team.Spec.Leader.Model = req.Leader.Model
-			}
-			if req.Leader.ModelProvider != "" {
-				team.Spec.Leader.ModelProvider = req.Leader.ModelProvider
-			}
-			if req.Leader.Identity != "" {
-				team.Spec.Leader.Identity = req.Leader.Identity
-			}
-			if req.Leader.Soul != "" {
-				team.Spec.Leader.Soul = req.Leader.Soul
-			}
-			if req.Leader.Agents != "" {
-				team.Spec.Leader.Agents = req.Leader.Agents
-			}
-			if req.Leader.Package != "" {
-				team.Spec.Leader.Package = req.Leader.Package
-			}
-			if req.Leader.Heartbeat != nil {
-				team.Spec.Leader.Heartbeat = toHeartbeatSpec(req.Leader.Heartbeat)
-			}
-			if req.Leader.WorkerIdleTimeout != "" {
-				team.Spec.Leader.WorkerIdleTimeout = req.Leader.WorkerIdleTimeout
-			}
-			if req.Leader.McpServers != nil {
-				team.Spec.Leader.McpServers = req.Leader.McpServers
-			}
-			if req.Leader.ChannelPolicy != nil {
-				team.Spec.Leader.ChannelPolicy = req.Leader.ChannelPolicy
-			}
-			if req.Leader.State != nil {
-				team.Spec.Leader.State = req.Leader.State
-			}
-			if req.Leader.Resources != nil {
-				team.Spec.Leader.Resources = req.Leader.Resources
-			}
-		}
-		if req.Workers != nil {
-			team.Spec.Workers = nil
-			for _, tw := range req.Workers {
-				team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
-					Name:          tw.Name,
-					WorkerName:    tw.WorkerName,
-					Model:         tw.Model,
-					ModelProvider: tw.ModelProvider,
-					Runtime:       tw.Runtime,
-					Image:         tw.Image,
-					Identity:      tw.Identity,
-					Soul:          tw.Soul,
-					Agents:        tw.Agents,
-					Skills:        tw.Skills,
-					McpServers:    tw.McpServers,
-					Package:       tw.Package,
-					Expose:        tw.Expose,
-					ChannelPolicy: tw.ChannelPolicy,
-					State:         tw.State,
-					Resources:     tw.Resources,
-				})
-			}
+		if err := h.updateDecoupledTeamMembers(ctx, &team, &req); err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 
 		if err := h.client.Update(ctx, &team); err != nil {
@@ -608,6 +530,196 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, teamToResponse(&team))
 		return
 	}
+}
+
+func (h *ResourceHandler) updateDecoupledTeamMembers(ctx context.Context, team *v1beta1.Team, req *UpdateTeamRequest) error {
+	leaderName, workerNames, err := decoupledTeamMemberIndex(team)
+	if err != nil {
+		return err
+	}
+	if req.Leader != nil {
+		if err := h.updateWorkerCRForTeamLeader(ctx, leaderName, req.Leader); err != nil {
+			return err
+		}
+		if req.Leader.Heartbeat != nil {
+			heartbeat := toHeartbeatSpec(req.Leader.Heartbeat)
+			if heartbeat != nil && heartbeat.Enabled {
+				team.Spec.HeartbeatEvery = heartbeat.Every
+			} else {
+				team.Spec.HeartbeatEvery = ""
+			}
+		}
+		if req.Leader.WorkerIdleTimeout != "" {
+			for workerName := range workerNames {
+				if err := h.updateWorkerCRSpec(ctx, workerName, func(spec *v1beta1.WorkerSpec) {
+					spec.IdleTimeout = req.Leader.WorkerIdleTimeout
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, workerReq := range req.Workers {
+		if workerReq.Name == "" {
+			return fmt.Errorf("workers[].name is required for decoupled team updates")
+		}
+		if _, ok := workerNames[workerReq.Name]; !ok {
+			return fmt.Errorf("worker %q is not a non-leader member of team %q", workerReq.Name, team.Name)
+		}
+		if err := h.updateWorkerCRForTeamWorker(ctx, workerReq); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decoupledTeamMemberIndex(team *v1beta1.Team) (leader string, workers map[string]struct{}, err error) {
+	workers = make(map[string]struct{}, len(team.Spec.WorkerMembers))
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name == "" {
+			continue
+		}
+		if ref.Role == "team_leader" {
+			if leader != "" {
+				return "", nil, fmt.Errorf("team %q has multiple team leaders in workerMembers", team.Name)
+			}
+			leader = ref.Name
+			continue
+		}
+		workers[ref.Name] = struct{}{}
+	}
+	if leader == "" {
+		return "", nil, fmt.Errorf("team %q has no team_leader in workerMembers", team.Name)
+	}
+	return leader, workers, nil
+}
+
+func (h *ResourceHandler) updateWorkerCRForTeamLeader(ctx context.Context, name string, req *TeamLeaderRequest) error {
+	return h.updateWorkerCRSpec(ctx, name, func(spec *v1beta1.WorkerSpec) {
+		if req.WorkerName != "" {
+			spec.WorkerName = req.WorkerName
+		}
+		if req.Model != "" {
+			spec.Model = req.Model
+		}
+		if req.ModelProvider != "" {
+			spec.ModelProvider = req.ModelProvider
+		}
+		if req.Runtime != "" {
+			spec.Runtime = req.Runtime
+		}
+		if req.Image != "" {
+			spec.Image = req.Image
+		}
+		if req.Identity != "" {
+			spec.Identity = req.Identity
+		}
+		if req.Soul != "" {
+			spec.Soul = req.Soul
+		}
+		if req.Agents != "" {
+			spec.Agents = req.Agents
+		}
+		if req.Package != "" {
+			spec.Package = req.Package
+		}
+		if req.McpServers != nil {
+			spec.McpServers = req.McpServers
+		}
+		if req.ChannelPolicy != nil {
+			spec.ChannelPolicy = req.ChannelPolicy
+		}
+		if req.Resources != nil {
+			spec.Resources = req.Resources
+		}
+		if req.AgentIdentity != nil {
+			spec.AgentIdentity = req.AgentIdentity
+		}
+		if req.CredentialBindings != nil {
+			spec.CredentialBindings = req.CredentialBindings
+		}
+		if req.State != nil {
+			spec.State = req.State
+		}
+	})
+}
+
+func (h *ResourceHandler) updateWorkerCRForTeamWorker(ctx context.Context, req TeamWorkerRequest) error {
+	return h.updateWorkerCRSpec(ctx, req.Name, func(spec *v1beta1.WorkerSpec) {
+		if req.WorkerName != "" {
+			spec.WorkerName = req.WorkerName
+		}
+		if req.Model != "" {
+			spec.Model = req.Model
+		}
+		if req.ModelProvider != "" {
+			spec.ModelProvider = req.ModelProvider
+		}
+		if req.Runtime != "" {
+			spec.Runtime = req.Runtime
+		}
+		if req.Image != "" {
+			spec.Image = req.Image
+		}
+		if req.Identity != "" {
+			spec.Identity = req.Identity
+		}
+		if req.Soul != "" {
+			spec.Soul = req.Soul
+		}
+		if req.Agents != "" {
+			spec.Agents = req.Agents
+		}
+		if req.Skills != nil {
+			spec.Skills = req.Skills
+		}
+		if req.McpServers != nil {
+			spec.McpServers = req.McpServers
+		}
+		if req.Package != "" {
+			spec.Package = req.Package
+		}
+		if req.Expose != nil {
+			spec.Expose = req.Expose
+		}
+		if req.ChannelPolicy != nil {
+			spec.ChannelPolicy = req.ChannelPolicy
+		}
+		if req.Resources != nil {
+			spec.Resources = req.Resources
+		}
+		if req.AgentIdentity != nil {
+			spec.AgentIdentity = req.AgentIdentity
+		}
+		if req.CredentialBindings != nil {
+			spec.CredentialBindings = req.CredentialBindings
+		}
+		if req.IdleTimeout != "" {
+			spec.IdleTimeout = req.IdleTimeout
+		}
+		if req.State != nil {
+			spec.State = req.State
+		}
+	})
+}
+
+func (h *ResourceHandler) updateWorkerCRSpec(ctx context.Context, name string, mutate func(*v1beta1.WorkerSpec)) error {
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var worker v1beta1.Worker
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+			return fmt.Errorf("get worker %q for team member update: %w", name, err)
+		}
+		mutate(&worker.Spec)
+		if err := h.client.Update(ctx, &worker); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			return fmt.Errorf("update worker %q for team member update: %w", name, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("update worker %q for team member update exhausted retries", name)
 }
 
 func (h *ResourceHandler) DeleteTeam(w http.ResponseWriter, r *http.Request) {
@@ -747,8 +859,8 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 			Skills:        req.Skills,
 			McpServers:    req.McpServers,
 			Package:       req.Package,
-			State:         req.State,
 			Resources:     req.Resources,
+			State:         req.State,
 		},
 	}
 	if req.Config != nil {
@@ -847,11 +959,11 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		if req.Config != nil {
 			mgr.Spec.Config = *req.Config
 		}
-		if req.State != nil {
-			mgr.Spec.State = req.State
-		}
 		if req.Resources != nil {
 			mgr.Spec.Resources = req.Resources
+		}
+		if req.State != nil {
+			mgr.Spec.State = req.State
 		}
 
 		if err := h.client.Update(ctx, &mgr); err != nil {
@@ -888,7 +1000,7 @@ func (h *ResourceHandler) DeleteManager(w http.ResponseWriter, r *http.Request) 
 
 // --- Conversion helpers ---
 
-func workerToResponse(w *v1beta1.Worker) WorkerResponse {
+func workerToResponse(ctx context.Context, c client.Reader, namespace string, w *v1beta1.Worker) WorkerResponse {
 	resp := WorkerResponse{
 		Name:           w.Name,
 		Phase:          w.Status.Phase,
@@ -896,9 +1008,12 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		Model:          w.Spec.Model,
 		Runtime:        w.Spec.Runtime,
 		Image:          w.Spec.Image,
+		IdleTimeout:    w.Spec.IdleTimeout,
 		ContainerState: w.Status.ContainerState,
 		MatrixUserID:   w.Status.MatrixUserID,
 		RoomID:         w.Status.RoomID,
+		LastActiveAt:   w.Status.LastActiveAt,
+		LastHeartbeat:  w.Status.LastHeartbeat,
 		Message:        w.Status.Message,
 	}
 	if w.Spec.ContainerManaged != nil {
@@ -907,9 +1022,16 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
-	if w.Annotations != nil {
-		resp.Team = w.Annotations["agentteams.io/team"]
-		resp.Role = w.Annotations["agentteams.io/role"]
+	// Team/Role come from the Team CR cache (single source of truth) — never
+	// from Worker annotations, which can drift out of sync with TeamReconciler
+	// in the decoupled model.
+	if teamName, isLeader := authpkg.LookupWorkerTeamRole(ctx, c, namespace, w.Name); teamName != "" {
+		resp.Team = teamName
+		if isLeader {
+			resp.Role = "team_leader"
+		} else {
+			resp.Role = "team_worker"
+		}
 	}
 	for _, ep := range w.Status.ExposedPorts {
 		resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: ep.Port, Domain: ep.Domain})
@@ -919,28 +1041,33 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 
 func teamToResponse(t *v1beta1.Team) TeamResponse {
 	resp := TeamResponse{
-		Name:              t.Name,
-		TeamName:          t.Spec.EffectiveTeamName(t.Name),
-		Phase:             t.Status.Phase,
-		Description:       t.Spec.Description,
-		Admin:             t.Spec.Admin,
-		HumanMembers:      t.Spec.HumanMembers,
-		LeaderName:        t.Spec.Leader.Name,
-		LeaderHeartbeat:   t.Spec.Leader.Heartbeat,
-		WorkerIdleTimeout: t.Spec.Leader.WorkerIdleTimeout,
-		TeamRoomID:        t.Status.TeamRoomID,
-		LeaderDMRoomID:    t.Status.LeaderDMRoomID,
-		LeaderReady:       t.Status.LeaderReady,
-		ReadyWorkers:      t.Status.ReadyWorkers,
-		TotalWorkers:      t.Status.TotalWorkers,
-		Message:           t.Status.Message,
+		Name:            t.Name,
+		TeamName:        t.Spec.EffectiveTeamName(t.Name),
+		Phase:           t.Status.Phase,
+		Description:     t.Spec.Description,
+		Admin:           t.Spec.Admin,
+		HumanMembers:    t.Spec.HumanMembers,
+		LeaderHeartbeat: heartbeatSpecFromEvery(t.Spec.HeartbeatEvery),
+		TeamRoomID:      t.Status.TeamRoomID,
+		LeaderDMRoomID:  t.Status.LeaderDMRoomID,
+		LeaderReady:     t.Status.LeaderReady,
+		ReadyWorkers:    t.Status.ReadyWorkers,
+		TotalWorkers:    t.Status.TotalWorkers,
+		Message:         t.Status.Message,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
 	}
-	for _, w := range t.Spec.Workers {
-		resp.WorkerNames = append(resp.WorkerNames, w.Name)
+
+	for _, ref := range t.Spec.WorkerMembers {
+		resp.Members = append(resp.Members, TeamMemberRefResponse{Name: ref.Name, Role: ref.Role})
+		if ref.Role == "team_leader" {
+			resp.LeaderName = ref.Name
+		} else {
+			resp.WorkerNames = append(resp.WorkerNames, ref.Name)
+		}
 	}
+
 	for _, ms := range t.Status.Members {
 		if len(ms.ExposedPorts) == 0 {
 			continue
@@ -1021,35 +1148,12 @@ func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (s
 // findTeamMember does the same as findTeamForMember but also returns the
 // resolved Team CR and the member's name (for response synthesis).
 func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1beta1.Team, string, bool, error) {
-	var indexed v1beta1.TeamList
-	if err := h.client.List(ctx, &indexed,
-		client.InNamespace(h.namespace),
-		client.MatchingFields{teamWorkerMembersField: name},
-	); err == nil {
-		for i := range indexed.Items {
-			t := &indexed.Items[i]
-			for _, ref := range t.Spec.WorkerMembers {
-				if ref.Name == name {
-					return t, ref.Name, true, nil
-				}
-			}
-		}
-	}
-
 	var list v1beta1.TeamList
 	if err := h.client.List(ctx, &list, client.InNamespace(h.namespace)); err != nil {
 		return nil, "", false, err
 	}
 	for i := range list.Items {
 		t := &list.Items[i]
-		if t.Spec.Leader.Name == name {
-			return t, t.Spec.Leader.Name, true, nil
-		}
-		for _, w := range t.Spec.Workers {
-			if w.Name == name {
-				return t, w.Name, true, nil
-			}
-		}
 		for _, ref := range t.Spec.WorkerMembers {
 			if ref.Name == name {
 				return t, ref.Name, true, nil
@@ -1059,108 +1163,56 @@ func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1b
 	return nil, "", false, nil
 }
 
-func (h *ResourceHandler) applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string) {
-	resp.Team = t.Name
-	resp.Role = teamMemberRole(t, memberName)
-	if ms := t.Status.MemberByName(memberName); ms != nil {
-		if resp.RoomID == "" {
+// teamMemberToResponse synthesizes a team-scoped WorkerResponse from the
+// referenced Worker CR.
+func (h *ResourceHandler) teamMemberToResponse(ctx context.Context, t *v1beta1.Team, memberName string) WorkerResponse {
+	if role, ok := decoupledMemberRole(t, memberName); ok {
+		var worker v1beta1.Worker
+		if err := h.client.Get(ctx, client.ObjectKey{Name: memberName, Namespace: h.namespace}, &worker); err == nil {
+			resp := workerToResponse(ctx, h.client, h.namespace, &worker)
+			resp.Team = t.Name
+			resp.Role = role
+			return resp
+		}
+
+		ms := t.Status.MemberByName(memberName)
+		resp := WorkerResponse{
+			Name:  memberName,
+			Team:  t.Name,
+			Role:  role,
+			Phase: "Pending",
+			State: "Running",
+		}
+		if ms != nil {
 			resp.RoomID = ms.RoomID
-		}
-		if resp.MatrixUserID == "" {
 			resp.MatrixUserID = ms.MatrixUserID
+			for _, p := range ms.ExposedPorts {
+				resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: p.Port, Domain: p.Domain})
+			}
 		}
+		return resp
 	}
+	return WorkerResponse{Name: memberName, Team: t.Name, Phase: "Pending", State: "Running"}
 }
 
-func teamMemberRole(t *v1beta1.Team, memberName string) string {
+func heartbeatSpecFromEvery(every string) *v1beta1.TeamLeaderHeartbeatSpec {
+	if every == "" {
+		return nil
+	}
+	return &v1beta1.TeamLeaderHeartbeatSpec{Enabled: true, Every: every}
+}
+
+func decoupledMemberRole(t *v1beta1.Team, memberName string) (string, bool) {
 	for _, ref := range t.Spec.WorkerMembers {
 		if ref.Name != memberName {
 			continue
 		}
 		if ref.Role == "team_leader" {
-			return "team_leader"
+			return "team_leader", true
 		}
-		return "worker"
+		return "worker", true
 	}
-	if t.Spec.Leader.Name == memberName {
-		return "team_leader"
-	}
-	return "worker"
-}
-
-// teamMemberToResponse synthesizes a WorkerResponse for a Team member without
-// creating a Worker CR. Runtime fields (Phase, ContainerState, ExposedPorts)
-// are populated from Team.Status and the backend so existing consumers of
-// /api/v1/workers see consistent data.
-//
-// Runtime resolution mirrors the response contract of standalone Worker CRs
-// (see ListWorkers/GetWorker at the top of this file, which return
-// w.Spec.Runtime verbatim): leader is hardcoded "copaw" to match the
-// projection in leaderWorkerSpec(); worker is passed through from
-// TeamWorkerSpec.Runtime (possibly empty, meaning "defer to installer
-// default"), so Manager skills and `hiclaw get worker` observe the same
-// value for Team workers as they would for standalone Workers.
-func (h *ResourceHandler) teamMemberToResponse(ctx context.Context, t *v1beta1.Team, memberName string) WorkerResponse {
-	isLeader := teamMemberRole(t, memberName) == "team_leader"
-	ms := t.Status.MemberByName(memberName)
-
-	resp := WorkerResponse{
-		Name:  memberName,
-		Team:  t.Name,
-		Phase: "Pending",
-		State: "Running",
-	}
-	if ms != nil {
-		resp.RoomID = ms.RoomID
-		resp.MatrixUserID = ms.MatrixUserID
-	}
-	if isLeader {
-		resp.Role = "team_leader"
-		resp.Runtime = "copaw"
-		resp.Model = t.Spec.Leader.Model
-		if t.Spec.Leader.State != nil {
-			resp.State = *t.Spec.Leader.State
-		}
-	} else {
-		resp.Role = "worker"
-		for _, wk := range t.Spec.Workers {
-			if wk.Name != memberName {
-				continue
-			}
-			resp.Model = wk.Model
-			resp.Image = wk.Image
-			resp.Runtime = wk.Runtime
-			if wk.State != nil {
-				resp.State = *wk.State
-			}
-			if ms != nil {
-				for _, p := range ms.ExposedPorts {
-					resp.ExposedPorts = append(resp.ExposedPorts, ExposedPortInfo{Port: p.Port, Domain: p.Domain})
-				}
-			}
-			break
-		}
-	}
-
-	if h.backend != nil {
-		if wb := h.backend.DetectWorkerBackend(ctx); wb != nil {
-			if result, err := wb.Status(ctx, memberName); err == nil && result != nil {
-				resp.ContainerState = string(result.Status)
-				switch result.Status {
-				case backend.StatusRunning, backend.StatusReady:
-					resp.Phase = "Running"
-				case backend.StatusStarting:
-					resp.Phase = "Pending"
-				case backend.StatusStopped:
-					resp.Phase = "Stopped"
-				}
-			}
-		}
-	}
-	if isLeader && t.Status.LeaderReady {
-		resp.Phase = "Running"
-	}
-	return resp
+	return "", false
 }
 
 // writeK8sError maps K8s API errors to HTTP status codes.

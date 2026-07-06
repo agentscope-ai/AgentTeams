@@ -12,13 +12,13 @@
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 ARG OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base:20260423-8359cbc
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: mc (MinIO Client) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
 
 # ============ Final Image: Based on openclaw-base ============
 # openclaw-base already includes: all-in-one + Node.js 22 + OpenClaw + mcporter + common tools
@@ -64,7 +64,7 @@ RUN chmod +x /opt/hiclaw/scripts/lib/mc-wrapper.sh && \
 
 # Worker entrypoint and sync scripts
 COPY --chmod=755 scripts/ /opt/hiclaw/scripts/
-RUN printf '#!/bin/bash\nexec "/root/hiclaw-fs/agents/${HICLAW_WORKER_NAME}/skills/file-sync/scripts/hiclaw-sync.sh" "$@"\n' \
+RUN printf '#!/bin/bash\nexec "/root/hiclaw-fs/agents/${AGENTTEAMS_WORKER_NAME}/skills/file-sync/scripts/hiclaw-sync.sh" "$@"\n' \
     > /usr/local/bin/hiclaw-sync && chmod +x /usr/local/bin/hiclaw-sync
 
 # Workaround: lsof hangs in Kind (Docker-in-Docker) when scanning /proc.

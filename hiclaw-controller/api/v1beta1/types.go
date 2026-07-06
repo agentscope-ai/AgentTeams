@@ -262,8 +262,7 @@ type WorkerSpec struct {
 	Labels map[string]string `json:"labels,omitempty"`
 
 	// Volumes declares custom storage providers available to sandbox workers.
-	// Built-in worker-deps token/env/data use the AgentTeams instance-level
-	// workspace OSS volume automatically and are not declared here. Pod workers
+	// Built-in worker-deps token/env/data use the AgentTeams instance-level	// workspace OSS volume automatically and are not declared here. Pod workers
 	// must not set this field.
 	Volumes []WorkerVolumeSpec `json:"volumes,omitempty"`
 
@@ -310,8 +309,7 @@ type WorkerOSSRRSASpec struct {
 type WorkerAccessKeyAuthSpec struct {
 	// SecretRef names the target-cluster Secret used by the CSI driver for
 	// mounting this OSS volume. The controller does not read this Secret when
-	// writing worker-deps objects; those are written through the main AgentTeams
-	// workspace OSS client.
+	// writing worker-deps objects; those are written through the main AgentTeams	// workspace OSS client.
 	SecretRef NamespacedSecretRef `json:"secretRef,omitempty"`
 }
 

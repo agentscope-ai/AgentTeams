@@ -8,7 +8,7 @@ import (
 func newTestValidator() *SecurityValidator {
 	return &SecurityValidator{
 		AllowedRegistries: []string{},
-		ContainerPrefix:   "hiclaw-worker-",
+		ContainerPrefix:   "agentteams-worker-",
 		DangerousCaps: map[string]bool{
 			"SYS_ADMIN":    true,
 			"SYS_PTRACE":   true,
@@ -23,10 +23,10 @@ func newTestValidator() *SecurityValidator {
 func TestValidWorkerCreate(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image:      "hiclaw/worker-agent:latest",
+		Image:      "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-alice"); err != nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-alice"); err != nil {
 		t.Errorf("expected valid request to pass, got: %v", err)
 	}
 }
@@ -34,10 +34,10 @@ func TestValidWorkerCreate(t *testing.T) {
 func TestValidCopawWorkerCreate(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image:      "hiclaw/copaw-worker:latest",
+		Image:      "agentteams/copaw-worker:latest",
 		HostConfig: &HostConfig{},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-bob"); err != nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-bob"); err != nil {
 		t.Errorf("expected valid copaw request to pass, got: %v", err)
 	}
 }
@@ -45,45 +45,45 @@ func TestValidCopawWorkerCreate(t *testing.T) {
 func TestNoHostConfig(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image: "hiclaw/worker-agent:latest",
+		Image: "agentteams/worker-agent:latest",
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-alice"); err != nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-alice"); err != nil {
 		t.Errorf("expected nil HostConfig to pass, got: %v", err)
 	}
 }
 
 func TestNewSecurityValidatorRespectsAutoPrefixDisabled(t *testing.T) {
-	oldAuto := os.Getenv("HICLAW_RESOURCE_AUTOPREFIX")
-	oldContainerPrefix := os.Getenv("HICLAW_PROXY_CONTAINER_PREFIX")
-	oldResourcePrefix := os.Getenv("HICLAW_RESOURCE_PREFIX")
+	oldAuto := os.Getenv("AGENTTEAMS_RESOURCE_AUTOPREFIX")
+	oldContainerPrefix := os.Getenv("AGENTTEAMS_PROXY_CONTAINER_PREFIX")
+	oldResourcePrefix := os.Getenv("AGENTTEAMS_RESOURCE_PREFIX")
 	t.Cleanup(func() {
 		if oldAuto == "" {
-			os.Unsetenv("HICLAW_RESOURCE_AUTOPREFIX")
+			os.Unsetenv("AGENTTEAMS_RESOURCE_AUTOPREFIX")
 		} else {
-			os.Setenv("HICLAW_RESOURCE_AUTOPREFIX", oldAuto)
+			os.Setenv("AGENTTEAMS_RESOURCE_AUTOPREFIX", oldAuto)
 		}
 		if oldContainerPrefix == "" {
-			os.Unsetenv("HICLAW_PROXY_CONTAINER_PREFIX")
+			os.Unsetenv("AGENTTEAMS_PROXY_CONTAINER_PREFIX")
 		} else {
-			os.Setenv("HICLAW_PROXY_CONTAINER_PREFIX", oldContainerPrefix)
+			os.Setenv("AGENTTEAMS_PROXY_CONTAINER_PREFIX", oldContainerPrefix)
 		}
 		if oldResourcePrefix == "" {
-			os.Unsetenv("HICLAW_RESOURCE_PREFIX")
+			os.Unsetenv("AGENTTEAMS_RESOURCE_PREFIX")
 		} else {
-			os.Setenv("HICLAW_RESOURCE_PREFIX", oldResourcePrefix)
+			os.Setenv("AGENTTEAMS_RESOURCE_PREFIX", oldResourcePrefix)
 		}
 	})
 
-	os.Setenv("HICLAW_RESOURCE_AUTOPREFIX", "false")
-	os.Unsetenv("HICLAW_PROXY_CONTAINER_PREFIX")
-	os.Setenv("HICLAW_RESOURCE_PREFIX", "hiclaw-")
+	os.Setenv("AGENTTEAMS_RESOURCE_AUTOPREFIX", "false")
+	os.Unsetenv("AGENTTEAMS_PROXY_CONTAINER_PREFIX")
+	os.Setenv("AGENTTEAMS_RESOURCE_PREFIX", "hiclaw-")
 
 	v := NewSecurityValidator()
 	if v.ContainerPrefix != "" {
 		t.Fatalf("ContainerPrefix = %q, want empty", v.ContainerPrefix)
 	}
 
-	req := ContainerCreateRequest{Image: "hiclaw/worker-agent:latest", HostConfig: &HostConfig{}}
+	req := ContainerCreateRequest{Image: "agentteams/worker-agent:latest", HostConfig: &HostConfig{}}
 	if err := v.ValidateContainerCreate(req, "custom-name"); err != nil {
 		t.Fatalf("expected custom name to pass when prefix is disabled, got: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestNewSecurityValidatorRespectsAutoPrefixDisabled(t *testing.T) {
 func TestEmptyContainerName(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image:      "hiclaw/worker-agent:latest",
+		Image:      "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{},
 	}
 	// Empty name should pass (Docker generates one)
@@ -106,13 +106,13 @@ func TestEmptyContainerName(t *testing.T) {
 func TestRejectBadContainerName(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image:      "hiclaw/worker-agent:latest",
+		Image:      "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{},
 	}
 	cases := []string{
 		"evil-container",
 		"my-worker-alice",
-		"hiclaw-manager-backdoor",
+		"agentteams-manager-backdoor",
 	}
 	for _, name := range cases {
 		if err := v.ValidateContainerCreate(req, name); err == nil {
@@ -124,12 +124,12 @@ func TestRejectBadContainerName(t *testing.T) {
 func TestRejectContainerNameTraversal(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image:      "hiclaw/worker-agent:latest",
+		Image:      "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{},
 	}
 	cases := []string{
-		"hiclaw-worker-../escape",
-		"hiclaw-worker-foo/bar",
+		"agentteams-worker-../escape",
+		"agentteams-worker-foo/bar",
 	}
 	for _, name := range cases {
 		if err := v.ValidateContainerCreate(req, name); err == nil {
@@ -151,7 +151,7 @@ func TestRejectUnallowedImage(t *testing.T) {
 			Image:      img,
 			HostConfig: &HostConfig{},
 		}
-		if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err == nil {
+		if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err == nil {
 			t.Errorf("expected image %q to be rejected", img)
 		}
 	}
@@ -160,9 +160,9 @@ func TestRejectUnallowedImage(t *testing.T) {
 func TestAllowLocalImages(t *testing.T) {
 	v := newTestValidator()
 	cases := []string{
-		"hiclaw/worker-agent:latest",
-		"hiclaw/copaw-worker:latest",
-		"hiclaw/manager-agent:latest",
+		"agentteams/worker-agent:latest",
+		"agentteams/copaw-worker:latest",
+		"agentteams/manager-agent:latest",
 		"myteam/custom-worker:v1",
 		"ubuntu:latest",
 	}
@@ -171,7 +171,7 @@ func TestAllowLocalImages(t *testing.T) {
 			Image:      img,
 			HostConfig: &HostConfig{},
 		}
-		if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err != nil {
+		if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err != nil {
 			t.Errorf("expected local image %q to be allowed, got: %v", img, err)
 		}
 	}
@@ -190,7 +190,7 @@ func TestAllowLocalhostImages(t *testing.T) {
 			Image:      img,
 			HostConfig: &HostConfig{},
 		}
-		if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err != nil {
+		if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err != nil {
 			t.Errorf("expected localhost image %q to be allowed, got: %v", img, err)
 		}
 	}
@@ -199,8 +199,8 @@ func TestAllowLocalhostImages(t *testing.T) {
 func TestAllowHigressRegistryImages(t *testing.T) {
 	v := newTestValidator()
 	cases := []string{
-		"higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-worker:latest",
-		"higress-registry.us-west-1.cr.aliyuncs.com/higress/hiclaw-worker:v1.0",
+		"higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-worker:latest",
+		"higress-registry.us-west-1.cr.aliyuncs.com/higress/agentteams-worker:v1.0",
 		"higress-registry.ap-southeast-7.cr.aliyuncs.com/higress/custom-image:latest",
 	}
 	for _, img := range cases {
@@ -208,7 +208,7 @@ func TestAllowHigressRegistryImages(t *testing.T) {
 			Image:      img,
 			HostConfig: &HostConfig{},
 		}
-		if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err != nil {
+		if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err != nil {
 			t.Errorf("expected higress image %q to be allowed, got: %v", img, err)
 		}
 	}
@@ -228,7 +228,7 @@ func TestAllowConfiguredRegistries(t *testing.T) {
 			Image:      img,
 			HostConfig: &HostConfig{},
 		}
-		if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err != nil {
+		if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err != nil {
 			t.Errorf("expected configured registry image %q to be allowed, got: %v", img, err)
 		}
 	}
@@ -243,7 +243,7 @@ func TestAllowConfiguredRegistries(t *testing.T) {
 			Image:      img,
 			HostConfig: &HostConfig{},
 		}
-		if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err == nil {
+		if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err == nil {
 			t.Errorf("expected image %q to be rejected", img)
 		}
 	}
@@ -252,12 +252,12 @@ func TestAllowConfiguredRegistries(t *testing.T) {
 func TestRejectBindMounts(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image: "hiclaw/worker-agent:latest",
+		Image: "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{
 			Binds: []string{"/root:/hostroot"},
 		},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err == nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err == nil {
 		t.Error("expected bind mount to be rejected")
 	}
 }
@@ -265,12 +265,12 @@ func TestRejectBindMounts(t *testing.T) {
 func TestRejectBindTypeMounts(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image: "hiclaw/worker-agent:latest",
+		Image: "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{
 			Mounts: []Mount{{Type: "bind"}},
 		},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err == nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err == nil {
 		t.Error("expected bind-type mount to be rejected")
 	}
 }
@@ -278,12 +278,12 @@ func TestRejectBindTypeMounts(t *testing.T) {
 func TestRejectPrivileged(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image: "hiclaw/worker-agent:latest",
+		Image: "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{
 			Privileged: true,
 		},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err == nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err == nil {
 		t.Error("expected privileged to be rejected")
 	}
 }
@@ -291,12 +291,12 @@ func TestRejectPrivileged(t *testing.T) {
 func TestRejectHostNetwork(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image: "hiclaw/worker-agent:latest",
+		Image: "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{
 			NetworkMode: "host",
 		},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err == nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err == nil {
 		t.Error("expected host network to be rejected")
 	}
 }
@@ -304,12 +304,12 @@ func TestRejectHostNetwork(t *testing.T) {
 func TestRejectHostPID(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image: "hiclaw/worker-agent:latest",
+		Image: "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{
 			PidMode: "host",
 		},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err == nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err == nil {
 		t.Error("expected host PID to be rejected")
 	}
 }
@@ -319,12 +319,12 @@ func TestRejectDangerousCaps(t *testing.T) {
 	caps := []string{"SYS_ADMIN", "SYS_PTRACE", "DAC_OVERRIDE", "NET_ADMIN", "sys_admin"}
 	for _, cap := range caps {
 		req := ContainerCreateRequest{
-			Image: "hiclaw/worker-agent:latest",
+			Image: "agentteams/worker-agent:latest",
 			HostConfig: &HostConfig{
 				CapAdd: []string{cap},
 			},
 		}
-		if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err == nil {
+		if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err == nil {
 			t.Errorf("expected capability %q to be rejected", cap)
 		}
 	}
@@ -333,12 +333,12 @@ func TestRejectDangerousCaps(t *testing.T) {
 func TestAllowBridgeNetwork(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image: "hiclaw/worker-agent:latest",
+		Image: "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{
 			NetworkMode: "bridge",
 		},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err != nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err != nil {
 		t.Errorf("expected bridge network to pass, got: %v", err)
 	}
 }
@@ -346,12 +346,12 @@ func TestAllowBridgeNetwork(t *testing.T) {
 func TestAllowSafeCaps(t *testing.T) {
 	v := newTestValidator()
 	req := ContainerCreateRequest{
-		Image: "hiclaw/worker-agent:latest",
+		Image: "agentteams/worker-agent:latest",
 		HostConfig: &HostConfig{
 			CapAdd: []string{"NET_BIND_SERVICE"},
 		},
 	}
-	if err := v.ValidateContainerCreate(req, "hiclaw-worker-test"); err != nil {
+	if err := v.ValidateContainerCreate(req, "agentteams-worker-test"); err != nil {
 		t.Errorf("expected safe cap to pass, got: %v", err)
 	}
 }

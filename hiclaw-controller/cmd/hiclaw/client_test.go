@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// TestAPIClient_ClusterIDHeader verifies that the APIClient sends the
-// X-HiClaw-Cluster-ID header when HICLAW_CLUSTER_ID is set.
+// TestAPIClient_ClusterIDHeader verifies that the APIClient sends the auth
+// routing cluster header when set.
 func TestAPIClient_ClusterIDHeader(t *testing.T) {
 	var receivedHeaders http.Header
 
@@ -33,9 +33,9 @@ func TestAPIClient_ClusterIDHeader(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	got := receivedHeaders.Get("X-HiClaw-Cluster-ID")
+	got := receivedHeaders.Get("X-AgentTeams-Cluster-ID")
 	if got != "test-cluster" {
-		t.Fatalf("expected X-HiClaw-Cluster-ID=test-cluster, got %q", got)
+		t.Fatalf("expected X-AgentTeams-Cluster-ID=test-cluster, got %q", got)
 	}
 
 	// Verify Authorization header is also present.
@@ -45,7 +45,7 @@ func TestAPIClient_ClusterIDHeader(t *testing.T) {
 	}
 }
 
-// TestAPIClient_NoClusterIDHeader verifies that the X-HiClaw-Cluster-ID header
+// TestAPIClient_NoClusterIDHeader verifies that the X-AgentTeams-Cluster-ID header
 // is NOT sent when ClusterID is empty.
 func TestAPIClient_NoClusterIDHeader(t *testing.T) {
 	var receivedHeaders http.Header
@@ -70,9 +70,9 @@ func TestAPIClient_NoClusterIDHeader(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	got := receivedHeaders.Get("X-HiClaw-Cluster-ID")
+	got := receivedHeaders.Get("X-AgentTeams-Cluster-ID")
 	if got != "" {
-		t.Fatalf("expected no X-HiClaw-Cluster-ID header, got %q", got)
+		t.Fatalf("expected no X-AgentTeams-Cluster-ID header, got %q", got)
 	}
 }
 

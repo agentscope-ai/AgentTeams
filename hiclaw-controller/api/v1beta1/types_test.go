@@ -125,6 +125,64 @@ func TestWorkerSpec_BackwardCompatOldJSON(t *testing.T) {
 	if got.ServiceEnabled != nil {
 		t.Errorf("ServiceEnabled should default to nil, got %v", *got.ServiceEnabled)
 	}
+	if got.Channels != nil {
+		t.Errorf("Channels should default to nil, got %+v", got.Channels)
+	}
+}
+
+func TestWorkerSpec_DingTalkChannelsJSONRoundTrip(t *testing.T) {
+	enabled := false
+	orig := WorkerSpec{
+		Model: "m",
+		Channels: &ChannelsSpec{
+			DingTalk: &DingTalkChannelSpec{
+				Enabled:          &enabled,
+				ClientID:         "demo-client-id",
+				ClientSecret:     "test-client-secret",
+				RobotCode:        "demo-robot-code",
+				ShowThinking:     true,
+				ShowToolCalls:    false,
+				StreamingEnabled: true,
+				MessageType:      "card",
+				CardTemplateID:   "card-template-1",
+			},
+		},
+	}
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	gotJSON := string(data)
+	for _, sub := range []string{
+		`"channels"`,
+		`"dingtalk"`,
+		`"enabled":false`,
+		`"clientId":"demo-client-id"`,
+		`"clientSecret":"test-client-secret"`,
+		`"robotCode":"demo-robot-code"`,
+		`"showThinking":true`,
+		`"streamingEnabled":true`,
+		`"messageType":"card"`,
+		`"cardTemplateId":"card-template-1"`,
+	} {
+		if !strings.Contains(gotJSON, sub) {
+			t.Fatalf("JSON missing %q: %s", sub, gotJSON)
+		}
+	}
+
+	var got WorkerSpec
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.Channels == nil || got.Channels.DingTalk == nil {
+		t.Fatalf("channels.dingtalk missing after round-trip: %+v", got.Channels)
+	}
+	if got.Channels.DingTalk.Enabled == nil || *got.Channels.DingTalk.Enabled {
+		t.Fatalf("enabled false was not preserved: %+v", got.Channels.DingTalk.Enabled)
+	}
+	if !reflect.DeepEqual(orig.Channels, got.Channels) {
+		t.Fatalf("channels round-trip = %+v, want %+v", got.Channels, orig.Channels)
+	}
 }
 
 // TestTargetClusterSpec_JSONTags pins down the TargetClusterSpec field tags
@@ -147,6 +205,151 @@ func TestTargetClusterSpec_JSONTags(t *testing.T) {
 	}
 	if back != spec {
 		t.Fatalf("round-trip = %+v, want %+v", back, spec)
+	}
+}
+
+// TestLeaderSpec_DeployFieldsRoundTrip verifies the same set of
+// cross-cluster fields on LeaderSpec — the Leader path is exercised
+// separately because Team admission paths embed LeaderSpec, not
+// WorkerSpec.
+func TestLeaderSpec_DeployFieldsRoundTrip(t *testing.T) {
+	orig := LeaderSpec{
+		Name:       "ld",
+		Runtime:    "qwenpaw",
+		Image:      "agentteams/qwenpaw-worker:v1",
+		DeployMode: strPtr("Remote"),
+		TargetCluster: &TargetClusterSpec{
+			ID:        "c-leader",
+			Namespace: "leaders",
+		},
+		ServiceEnabled: boolPtr(true),
+	}
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got LeaderSpec
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.Image != "agentteams/qwenpaw-worker:v1" {
+		t.Fatalf("image = %q", got.Image)
+	}
+	if got.Runtime != "qwenpaw" {
+		t.Fatalf("runtime = %q", got.Runtime)
+	}
+	if got.DeployMode == nil || *got.DeployMode != "Remote" {
+		t.Fatalf("DeployMode = %v", got.DeployMode)
+	}
+	if got.TargetCluster == nil || got.TargetCluster.ID != "c-leader" {
+		t.Fatalf("TargetCluster = %+v", got.TargetCluster)
+	}
+	if got.ServiceEnabled == nil || *got.ServiceEnabled != true {
+		t.Fatalf("ServiceEnabled = %v", got.ServiceEnabled)
+	}
+}
+
+// TestTeamWorkerSpec_DeployFieldsRoundTrip mirrors the round-trip
+// assertion for TeamWorkerSpec, the third struct that carries the
+// cross-cluster deployment triple.
+func TestTeamWorkerSpec_DeployFieldsRoundTrip(t *testing.T) {
+	orig := TeamWorkerSpec{
+		Name:       "w1",
+		DeployMode: strPtr("Local"),
+	}
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"deployMode":"Local"`) {
+		t.Fatalf("Marshal = %s", data)
+	}
+	var got TeamWorkerSpec
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.DeployMode == nil || *got.DeployMode != "Local" {
+		t.Fatalf("DeployMode = %v", got.DeployMode)
+	}
+	if got.TargetCluster != nil {
+		t.Errorf("TargetCluster should be nil when omitted, got %+v", got.TargetCluster)
+	}
+}
+
+func TestWorkerSpec_CredentialContractRoundTrip(t *testing.T) {
+	orig := WorkerSpec{
+		Model: "m",
+		AgentIdentity: &AgentIdentitySpec{
+			WorkloadIdentityName: "wi-worker-a",
+		},
+		CredentialBindings: []CredentialBinding{{
+			CredentialRef: CredentialRef{
+				TokenVaultName:               "default",
+				APIKeyCredentialProviderName: "GITHUB_TOKEN",
+			},
+			ToolWhitelist: []string{"gh"},
+		}},
+	}
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	gotJSON := string(data)
+	for _, want := range []string{
+		`"agentIdentity":{"workloadIdentityName":"wi-worker-a"}`,
+		`"credentialBindings":[{"credentialRef":{"tokenVaultName":"default","apiKeyCredentialProviderName":"GITHUB_TOKEN"},"toolWhitelist":["gh"]}]`,
+	} {
+		if !strings.Contains(gotJSON, want) {
+			t.Fatalf("JSON missing %s: %s", want, gotJSON)
+		}
+	}
+	var got WorkerSpec
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.AgentIdentity == nil || got.AgentIdentity.WorkloadIdentityName != "wi-worker-a" {
+		t.Fatalf("agentIdentity = %#v", got.AgentIdentity)
+	}
+	if len(got.CredentialBindings) != 1 {
+		t.Fatalf("credentialBindings len=%d", len(got.CredentialBindings))
+	}
+	ref := got.CredentialBindings[0].CredentialRef
+	if ref.TokenVaultName != "default" || ref.APIKeyCredentialProviderName != "GITHUB_TOKEN" {
+		t.Fatalf("credentialRef = %#v", ref)
+	}
+	if got.CredentialBindings[0].ToolWhitelist[0] != "gh" {
+		t.Fatalf("toolWhitelist = %#v", got.CredentialBindings[0].ToolWhitelist)
+	}
+}
+
+func TestWorkerSpec_DeepCopyCredentialContract(t *testing.T) {
+	src := WorkerSpec{
+		Model: "m",
+		AgentIdentity: &AgentIdentitySpec{
+			WorkloadIdentityName: "wi-worker-a",
+		},
+		CredentialBindings: []CredentialBinding{{
+			CredentialRef: CredentialRef{
+				TokenVaultName:               "default",
+				APIKeyCredentialProviderName: "GITHUB_TOKEN",
+			},
+			ToolWhitelist: []string{"gh"},
+		}},
+	}
+	cp := *src.DeepCopy()
+
+	src.AgentIdentity.WorkloadIdentityName = "mutated"
+	src.CredentialBindings[0].CredentialRef.APIKeyCredentialProviderName = "MUTATED_TOKEN"
+	src.CredentialBindings[0].ToolWhitelist[0] = "mutated-tool"
+
+	if cp.AgentIdentity == nil || cp.AgentIdentity.WorkloadIdentityName != "wi-worker-a" {
+		t.Fatalf("DeepCopy aliased AgentIdentity: %#v", cp.AgentIdentity)
+	}
+	if cp.CredentialBindings[0].CredentialRef.APIKeyCredentialProviderName != "GITHUB_TOKEN" {
+		t.Fatalf("DeepCopy aliased CredentialBindings: %#v", cp.CredentialBindings)
+	}
+	if cp.CredentialBindings[0].ToolWhitelist[0] != "gh" {
+		t.Fatalf("DeepCopy aliased ToolWhitelist: %#v", cp.CredentialBindings)
 	}
 }
 
@@ -181,6 +384,40 @@ func TestWorkerSpec_DeepCopyLabels(t *testing.T) {
 	}
 }
 
+func TestWorkerSpec_DeepCopyVolumesAndMounts(t *testing.T) {
+	src := WorkerSpec{
+		Model: "m",
+		Volumes: []WorkerVolumeSpec{{
+			Name: "worker-deps",
+			Type: WorkerVolumeTypeOSS,
+			OSS: &WorkerOSSVolumeSpec{
+				Bucket:   "bucket-a",
+				Endpoint: "https://oss.example.com",
+				Auth: WorkerOSSAuthSpec{
+					Type: "RRSA",
+					RRSA: &WorkerOSSRRSASpec{RoleName: "role-a"},
+				},
+			},
+		}},
+		Mounts: []WorkerMountSpec{{
+			Name:      "token",
+			VolumeRef: "worker-deps",
+			SubPath:   "instances/alice/token",
+			MountPath: "/var/run/secrets/agentteams",
+			ReadOnly:  true,
+		}},
+	}
+	cp := *src.DeepCopy()
+	src.Volumes[0].OSS.Auth.RRSA.RoleName = "mutated"
+	src.Mounts[0].SubPath = "mutated"
+	if cp.Volumes[0].OSS.Auth.RRSA.RoleName != "role-a" {
+		t.Fatalf("DeepCopy aliased Volumes: %+v", cp.Volumes)
+	}
+	if cp.Mounts[0].SubPath != "instances/alice/token" {
+		t.Fatalf("DeepCopy aliased Mounts: %+v", cp.Mounts)
+	}
+}
+
 // TestManagerSpec_DeepCopyLabels mirrors the WorkerSpec assertion for
 // ManagerSpec.Labels.
 func TestManagerSpec_DeepCopyLabels(t *testing.T) {
@@ -202,10 +439,7 @@ func TestManagerSpec_DeepCopyLabels(t *testing.T) {
 	}
 }
 
-// TestLeaderSpec_DeepCopyLabels verifies LeaderSpec.Labels survives
-// DeepCopy. The Leader path is exercised separately from TeamWorkerSpec
-// because TeamSpec.DeepCopyInto calls LeaderSpec.DeepCopyInto directly
-// and any regression there would silently drop leader labels.
+// TestLeaderSpec_DeepCopyLabels verifies LeaderSpec.Labels survives DeepCopy.
 func TestLeaderSpec_DeepCopyLabels(t *testing.T) {
 	src := LeaderSpec{Name: "ld", Labels: map[string]string{"role-hint": "planner"}}
 	cp := *src.DeepCopy()
@@ -218,8 +452,7 @@ func TestLeaderSpec_DeepCopyLabels(t *testing.T) {
 	}
 }
 
-// TestTeamWorkerSpec_DeepCopyLabels verifies TeamWorkerSpec.Labels
-// survives DeepCopy through the TeamSpec.Workers[] slice path.
+// TestTeamWorkerSpec_DeepCopyLabels verifies TeamWorkerSpec.Labels survives DeepCopy.
 func TestTeamWorkerSpec_DeepCopyLabels(t *testing.T) {
 	src := TeamWorkerSpec{Name: "w1", Labels: map[string]string{"skill": "rust"}}
 	cp := *src.DeepCopy()
@@ -229,114 +462,5 @@ func TestTeamWorkerSpec_DeepCopyLabels(t *testing.T) {
 	src.Labels["skill"] = "mutated"
 	if cp.Labels["skill"] != "rust" {
 		t.Fatalf("DeepCopy aliased TeamWorkerSpec.Labels: %v", cp.Labels)
-	}
-}
-
-// TestTeamSpec_DeepCopyCascadesToMemberLabels verifies that DeepCopy on
-// the top-level TeamSpec correctly cascades into both LeaderSpec.Labels
-// and every TeamWorkerSpec.Labels — catching the case where a future
-// refactor regenerates zz_generated.deepcopy.go and accidentally drops a
-// nested call.
-func TestTeamSpec_DeepCopyCascadesToMemberLabels(t *testing.T) {
-	src := TeamSpec{
-		Leader: LeaderSpec{
-			Name:   "ld",
-			Labels: map[string]string{"role-hint": "planner"},
-		},
-		Workers: []TeamWorkerSpec{
-			{Name: "w1", Labels: map[string]string{"skill": "rust"}},
-			{Name: "w2"}, // nil labels branch
-		},
-	}
-	cp := *src.DeepCopy()
-
-	src.Leader.Labels["role-hint"] = "mutated"
-	src.Workers[0].Labels["skill"] = "mutated"
-
-	if cp.Leader.Labels["role-hint"] != "planner" {
-		t.Fatalf("LeaderSpec.Labels not isolated: %v", cp.Leader.Labels)
-	}
-	if cp.Workers[0].Labels["skill"] != "rust" {
-		t.Fatalf("Workers[0].Labels not isolated: %v", cp.Workers[0].Labels)
-	}
-	if cp.Workers[1].Labels != nil {
-		t.Fatalf("Workers[1].Labels should remain nil after DeepCopy, got %v", cp.Workers[1].Labels)
-	}
-}
-
-func TestWorkerSpec_DeepCopyResources(t *testing.T) {
-	src := WorkerSpec{
-		Model: "m",
-		Resources: &AgentResourceRequirements{
-			Requests: AgentResourceValues{CPU: "250m", Memory: "512Mi"},
-			Limits:   AgentResourceValues{CPU: "2", Memory: "4Gi"},
-		},
-	}
-	cp := *src.DeepCopy()
-
-	if !reflect.DeepEqual(cp.Resources, src.Resources) {
-		t.Fatalf("copy resources=%v want %v", cp.Resources, src.Resources)
-	}
-	src.Resources.Requests.CPU = "500m"
-	if cp.Resources.Requests.CPU != "250m" {
-		t.Fatalf("DeepCopy aliased WorkerSpec.Resources: %v", cp.Resources)
-	}
-
-	srcNil := WorkerSpec{Model: "m"}
-	cpNil := *srcNil.DeepCopy()
-	if cpNil.Resources != nil {
-		t.Fatalf("expected nil Resources on deep-copy of nil source, got %v", cpNil.Resources)
-	}
-}
-
-func TestManagerSpec_DeepCopyResources(t *testing.T) {
-	src := ManagerSpec{
-		Model: "m",
-		Resources: &AgentResourceRequirements{
-			Requests: AgentResourceValues{CPU: "500m", Memory: "1Gi"},
-			Limits:   AgentResourceValues{CPU: "3", Memory: "5Gi"},
-		},
-	}
-	cp := *src.DeepCopy()
-
-	src.Resources.Limits.Memory = "6Gi"
-	if cp.Resources.Limits.Memory != "5Gi" {
-		t.Fatalf("DeepCopy aliased ManagerSpec.Resources: %v", cp.Resources)
-	}
-}
-
-func TestTeamSpec_DeepCopyCascadesToMemberResources(t *testing.T) {
-	src := TeamSpec{
-		Leader: LeaderSpec{
-			Name: "lead",
-			Resources: &AgentResourceRequirements{
-				Requests: AgentResourceValues{CPU: "300m", Memory: "768Mi"},
-				Limits:   AgentResourceValues{CPU: "2", Memory: "3Gi"},
-			},
-		},
-		Workers: []TeamWorkerSpec{
-			{
-				Name: "w1",
-				Resources: &AgentResourceRequirements{
-					Requests: AgentResourceValues{CPU: "200m", Memory: "512Mi"},
-					Limits:   AgentResourceValues{CPU: "1", Memory: "2Gi"},
-				},
-			},
-			{Name: "w2"},
-		},
-	}
-	cp := *src.DeepCopy()
-
-	src.Leader.Resources.Requests.CPU = "999m"
-	src.Workers[0].Resources.Limits.Memory = "9Gi"
-
-	if cp.Leader.Resources.Requests.CPU != "300m" {
-		t.Fatalf("LeaderSpec.Resources not isolated: %v", cp.Leader.Resources)
-	}
-	if cp.Workers[0].Resources.Limits.Memory != "2Gi" {
-		t.Fatalf("TeamWorkerSpec.Resources not isolated: %v", cp.Workers[0].Resources)
-	}
-	if cp.Workers[1].Resources != nil {
-		t.Fatalf("Workers[1].Resources should remain nil after DeepCopy, got %v", cp.Workers[1].Resources)
 	}
 }

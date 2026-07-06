@@ -250,6 +250,9 @@ func (a *AIGatewayClient) DeauthorizeAIRoutes(_ context.Context, consumerName st
 			continue
 		}
 		if _, err := a.client.DeleteConsumerAuthorizationRule(item.ConsumerAuthorizationRuleId, tea.String(id)); err != nil {
+			if isNotFoundErr(err) {
+				continue
+			}
 			return fmt.Errorf("ai-gateway: delete auth rule %s: %w",
 				tea.StringValue(item.ConsumerAuthorizationRuleId), err)
 		}
@@ -450,4 +453,16 @@ func isDuplicateErr(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "ConsumerNameDuplicate") || strings.Contains(msg, "409")
+}
+
+func isNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var sdkErr *tea.SDKError
+	if errors.As(err, &sdkErr) && sdkErr.StatusCode != nil && *sdkErr.StatusCode == 404 {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "StatusCode: 404") || strings.Contains(msg, "code: 404")
 }

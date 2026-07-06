@@ -8,6 +8,7 @@ import (
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/credentials"
+	"github.com/hiclaw/hiclaw-controller/internal/edgebootstrap"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
@@ -19,18 +20,22 @@ import (
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
-	Client         client.Client
-	Backend        *backend.Registry
-	Gateway        gateway.Client
-	OSS            oss.StorageClient
-	STS            *credentials.STSService
-	AuthMw         *authpkg.Middleware
-	KubeMode       string
-	Namespace      string
-	ControllerName string               // HICLAW_CONTROLLER_NAME; empty in embedded mode
-	SocketPath     string               // Docker proxy (embedded only)
-	MatrixConfig   matrix.Config        // for AppService rotation endpoint
-	Provisioner    *service.Provisioner // for Matrix token refresh
+	Client                client.Client
+	Backend               *backend.Registry
+	Gateway               gateway.Client
+	OSS                   oss.StorageClient
+	STS                   *credentials.STSService
+	AuthMw                *authpkg.Middleware
+	KubeMode              string
+	Namespace             string
+	ControllerName        string                   // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
+	SocketPath            string                   // Docker proxy (embedded only)
+	AppserviceCfg         *matrix.AppserviceConfig // nil = appservice push disabled
+	MatrixConfig          matrix.Config            // for AppService rotation endpoint
+	Provisioner           *service.Provisioner     // for Edge token exchange and Matrix token refresh
+	DefaultBackendRuntime string                   // cluster default backendRuntime ("pod" or "sandbox")
+	EdgeSigner            *edgebootstrap.Service
+	AuthCache             AuthCacheInvalidator
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -56,6 +61,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// --- Status / health (no auth) ---
 	sh := NewStatusHandler(deps.Client, deps.Namespace, deps.KubeMode)
 	mux.HandleFunc("GET /healthz", sh.Healthz)
+
+	// --- Edge token exchange (no auth — signed JWT is the credential) ---
+	eh := NewEdgeHandler(deps.Client, deps.Provisioner, deps.EdgeSigner, deps.Namespace, deps.ControllerName, deps.AuthCache)
+	mux.HandleFunc("POST /api/v1/edge/token", eh.ExchangeToken)
 
 	// --- Status endpoints (authenticated, any role) ---
 	mux.Handle("GET /api/v1/status", mw.RequireAuthz(authpkg.ActionGet, "status", nil)(http.HandlerFunc(sh.ClusterStatus)))
@@ -97,11 +106,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/packages", mw.RequireAuthz(authpkg.ActionCreate, "worker", nil)(http.HandlerFunc(ph.Upload)))
 
 	// --- Imperative lifecycle ---
-	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace)
+	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace, deps.DefaultBackendRuntime)
 	mux.Handle("POST /api/v1/workers/{name}/wake", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Wake)))
 	mux.Handle("POST /api/v1/workers/{name}/sleep", mw.RequireAuthz(authpkg.ActionSleep, "worker", nameFn)(http.HandlerFunc(lh.Sleep)))
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
+	mux.Handle("POST /api/v1/workers/{name}/heartbeat", mw.RequireAuthz(authpkg.ActionHeartbeat, "worker", nameFn)(http.HandlerFunc(lh.Heartbeat)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
 
 	// --- Gateway ---
@@ -131,6 +141,14 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		validator := proxy.NewSecurityValidator()
 		proxyHandler := proxy.NewHandler(deps.SocketPath, validator)
 		mux.Handle("/docker/", mw.RequireAuthz(authpkg.ActionGateway, "gateway", nil)(http.StripPrefix("/docker", proxyHandler)))
+	}
+
+	// --- Matrix Appservice endpoints (push-based event delivery) ---
+	if deps.AppserviceCfg != nil && deps.AppserviceCfg.Enabled {
+		ash := NewAppserviceHandler(deps.AppserviceCfg.HSToken, deps.Client, deps.Namespace)
+		mux.HandleFunc("PUT /_matrix/app/v1/transactions/{txnId}", ash.HandleTransactions)
+		mux.HandleFunc("GET /_matrix/app/v1/users/{userId}", ash.HandleUserQuery)
+		mux.HandleFunc("GET /_matrix/app/v1/rooms/{roomAlias}", ash.HandleRoomQuery)
 	}
 
 	return s

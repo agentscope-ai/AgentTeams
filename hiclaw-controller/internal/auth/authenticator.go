@@ -24,7 +24,7 @@ const (
 
 // DefaultAudience is the SA token audience used by TokenReview when a caller
 // does not specify one explicitly.
-const DefaultAudience = "hiclaw-controller"
+const DefaultAudience = "agentteams-controller"
 
 const (
 	defaultCacheTTL        = 5 * time.Minute
@@ -75,7 +75,7 @@ type cachedResult struct {
 
 // NewTokenReviewAuthenticator creates an authenticator backed by the K8s
 // TokenReview API. audience is the expected token audience (typically
-// "hiclaw-controller"); prefix is the tenant resource prefix used to parse
+// "agentteams-controller"); prefix is the tenant resource prefix used to parse
 // SA usernames back into CallerIdentity.
 func NewTokenReviewAuthenticator(client kubernetes.Interface, audience string, prefix ResourcePrefix, remoteCache backend.RemoteClientProvider) *TokenReviewAuthenticator {
 	if audience == "" {

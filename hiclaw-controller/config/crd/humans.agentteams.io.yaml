@@ -55,7 +55,7 @@ spec:
               properties:
                 phase:
                   type: string
-                  enum: [Pending, Active, Failed]
+                  enum: [Pending, Active, Failed, Degraded]
                 matrixUserID:
                   type: string
                 initialPassword:

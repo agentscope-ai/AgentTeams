@@ -85,15 +85,14 @@ func newWorkerRig(t *testing.T, objs ...client.Object) *workerTestRig {
 		envBuilder:  envBuilder,
 		remote:      remoteDynamic,
 		r: &WorkerReconciler{
-			Client:                      c,
-			Provisioner:                 provisioner,
-			Deployer:                    deployer,
-			Backend:                     backend.NewRegistry([]backend.WorkerBackend{wb}),
-			EnvBuilder:                  envBuilder,
-			ControllerName:              "ctl-x",
-			MountRoleName:               "rrsa-role-a",
-			WorkerDepsStorageBucket:     "agentteams-workers-deps",
-			WorkerDepsStorageEndpoint:   "https://oss-cn-hangzhou.aliyuncs.com",
+			Client:                  c,
+			Provisioner:             provisioner,
+			Deployer:                deployer,
+			Backend:                 backend.NewRegistry([]backend.WorkerBackend{wb}),
+			EnvBuilder:              envBuilder,
+			ControllerName:          "ctl-x",
+			MountRoleName:           "rrsa-role-a",
+			WorkerDepsStorageBucket: "agentteams-workers-deps", WorkerDepsStorageEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
 			DynamicClient:               localDynamic,
 			RemoteDynamicClientProvider: fakeRemoteDynamicProvider{client: remoteDynamic},
 		},
@@ -203,8 +202,7 @@ func testWorkerDepsVolumes() []v1beta1.WorkerVolumeSpec {
 		Name: "agentteams-prod-001",
 		Type: v1beta1.WorkerVolumeTypeOSS,
 		OSS: &v1beta1.WorkerOSSVolumeSpec{
-			Bucket:   "agentteams-workers-deps",
-			Endpoint: "https://oss-cn-hangzhou.aliyuncs.com",
+			Bucket: "agentteams-workers-deps", Endpoint: "https://oss-cn-hangzhou.aliyuncs.com",
 			Auth: v1beta1.WorkerOSSAuthSpec{
 				Type: "AccessKey",
 				AccessKey: &v1beta1.WorkerAccessKeyAuthSpec{
@@ -218,20 +216,17 @@ func testWorkerDepsVolumes() []v1beta1.WorkerVolumeSpec {
 func testWorkerDepsMounts() []v1beta1.WorkerMountSpec {
 	return []v1beta1.WorkerMountSpec{{
 		Name:      "token",
-		VolumeRef: "agentteams-prod-001",
-		SubPath:   "instances/alice/token",
+		VolumeRef: "agentteams-prod-001", SubPath: "instances/alice/token",
 		MountPath: "/var/run/secrets/agentteams",
 		ReadOnly:  true,
 	}, {
 		Name:      "env",
-		VolumeRef: "agentteams-prod-001",
-		SubPath:   "instances/alice/env",
+		VolumeRef: "agentteams-prod-001", SubPath: "instances/alice/env",
 		MountPath: "/mnt/agentteams/env",
 		ReadOnly:  true,
 	}, {
 		Name:      "data",
-		VolumeRef: "agentteams-prod-001",
-		SubPath:   "instances/alice/data",
+		VolumeRef: "agentteams-prod-001", SubPath: "instances/alice/data",
 		MountPath: "/mnt/agentteams/data",
 		ReadOnly:  false,
 	}}
@@ -719,8 +714,7 @@ func TestUpdateWorkerDepsCredentialProviderSkipsNoopUpdate(t *testing.T) {
 		Name: backend.BuiltinSandboxInstanceName,
 		Type: v1beta1.WorkerVolumeTypeOSS,
 		OSS: &v1beta1.WorkerOSSVolumeSpec{
-			Bucket:   "agentteams-workers-deps",
-			Endpoint: "https://oss-cn-hangzhou.aliyuncs.com",
+			Bucket: "agentteams-workers-deps", Endpoint: "https://oss-cn-hangzhou.aliyuncs.com",
 			Auth: v1beta1.WorkerOSSAuthSpec{
 				Type: workerDepsAuthTypeRRSA,
 				RRSA: &v1beta1.WorkerOSSRRSASpec{RoleName: "rrsa-role-a"},
@@ -1057,8 +1051,7 @@ func TestSandboxClaimRefreshesWorkerDepsForRunningWorker(t *testing.T) {
 		AuthTokenExpirationSeconds: 900,
 		ControllerName:             "ctl-x",
 		MountRoleName:              "rrsa-role-a",
-		WorkerDepsStorageBucket:    "agentteams-workers-deps",
-		WorkerDepsStorageEndpoint:  "https://oss-cn-hangzhou.aliyuncs.com",
+		WorkerDepsStorageBucket:    "agentteams-workers-deps", WorkerDepsStorageEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
 	}
 	state := &MemberState{
 		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token", GatewayKey: "gateway-key"},
@@ -1117,15 +1110,14 @@ func TestSandboxClaimRefreshWritesEnvWhenTokenNotDue(t *testing.T) {
 	})
 	defer sandboxSetTokenProjections.Delete(sandboxSetTokenProjectionKey(mctx))
 	deps := MemberDeps{
-		Provisioner:               provisioner,
-		Deployer:                  deployer,
-		EnvBuilder:                mocks.NewMockEnvBuilder(),
-		Backend:                   backend.NewRegistry([]backend.WorkerBackend{sandboxBackend}),
-		DynamicClient:             dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
-		ControllerName:            "ctl-x",
-		MountRoleName:             "rrsa-role-a",
-		WorkerDepsStorageBucket:   "agentteams-workers-deps",
-		WorkerDepsStorageEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
+		Provisioner:             provisioner,
+		Deployer:                deployer,
+		EnvBuilder:              mocks.NewMockEnvBuilder(),
+		Backend:                 backend.NewRegistry([]backend.WorkerBackend{sandboxBackend}),
+		DynamicClient:           dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+		ControllerName:          "ctl-x",
+		MountRoleName:           "rrsa-role-a",
+		WorkerDepsStorageBucket: "agentteams-workers-deps", WorkerDepsStorageEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
 	}
 	state := &MemberState{
 		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token", GatewayKey: "gateway-key"},
@@ -1187,15 +1179,14 @@ func TestSandboxClaimTokenRefreshFailureKeepsValidProjectedToken(t *testing.T) {
 		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token", GatewayKey: "gateway-key"},
 	}
 	deps := MemberDeps{
-		Provisioner:               provisioner,
-		Deployer:                  deployer,
-		EnvBuilder:                mocks.NewMockEnvBuilder(),
-		Backend:                   backend.NewRegistry([]backend.WorkerBackend{sandboxBackend}),
-		DynamicClient:             dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
-		ControllerName:            "ctl-x",
-		MountRoleName:             "rrsa-role-a",
-		WorkerDepsStorageBucket:   "agentteams-workers-deps",
-		WorkerDepsStorageEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
+		Provisioner:             provisioner,
+		Deployer:                deployer,
+		EnvBuilder:              mocks.NewMockEnvBuilder(),
+		Backend:                 backend.NewRegistry([]backend.WorkerBackend{sandboxBackend}),
+		DynamicClient:           dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+		ControllerName:          "ctl-x",
+		MountRoleName:           "rrsa-role-a",
+		WorkerDepsStorageBucket: "agentteams-workers-deps", WorkerDepsStorageEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
 	}
 
 	res, err := ensureMemberContainerPresent(context.Background(), deps, mctx, state)
@@ -1241,15 +1232,14 @@ func TestSandboxWorkerRejectsStoragePrefixWithExtraObjectPath(t *testing.T) {
 	sandboxSetTokenProjections.Delete(sandboxSetTokenProjectionKey(mctx))
 	defer sandboxSetTokenProjections.Delete(sandboxSetTokenProjectionKey(mctx))
 	deps := MemberDeps{
-		Provisioner:               provisioner,
-		Deployer:                  deployer,
-		EnvBuilder:                envBuilder,
-		Backend:                   backend.NewRegistry([]backend.WorkerBackend{sandboxBackend}),
-		DynamicClient:             dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
-		ControllerName:            "ctl-x",
-		MountRoleName:             "rrsa-role-a",
-		WorkerDepsStorageBucket:   "agentteams-workers-deps",
-		WorkerDepsStorageEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
+		Provisioner:             provisioner,
+		Deployer:                deployer,
+		EnvBuilder:              envBuilder,
+		Backend:                 backend.NewRegistry([]backend.WorkerBackend{sandboxBackend}),
+		DynamicClient:           dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+		ControllerName:          "ctl-x",
+		MountRoleName:           "rrsa-role-a",
+		WorkerDepsStorageBucket: "agentteams-workers-deps", WorkerDepsStorageEndpoint: "https://oss-cn-hangzhou.aliyuncs.com",
 	}
 	state := &MemberState{
 		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token", GatewayKey: "gateway-key"},
@@ -1797,8 +1787,7 @@ func TestWorkerReconcileEdgeWritesRuntimeConfigWithoutContainer(t *testing.T) {
 	rig.envBuilder.BuildFn = func(workerName string, prov *service.WorkerProvisionResult) map[string]string {
 		return map[string]string{
 			"HICLAW_WORKER_NAME": workerName,
-			"SKILLS_API_URL":     "nacos://market.agentteams.io:80/public",
-			"NACOS_AUTH_TYPE":    "sts-hiclaw",
+			"SKILLS_API_URL":     "nacos://market.agentteams.io:80/public", "NACOS_AUTH_TYPE": "sts-hiclaw",
 		}
 	}
 	gw := &workerTestGateway{modelInfo: &gateway.ModelProviderInfo{
@@ -1959,8 +1948,7 @@ func TestWorkerReconcileEdgeStaleHeartbeatReturnsPending(t *testing.T) {
 func TestWorkerReconcileConfigOnlyUpdateWritesOSSConfigWithoutRecreate(t *testing.T) {
 	worker := newWorker("solo", v1beta1.WorkerSpec{
 		Runtime: "openclaw",
-		Image:   "agentteams/worker:v1",
-		Model:   "qwen-plus",
+		Image:   "agentteams/worker:v1", Model: "qwen-plus",
 		McpServers: []v1beta1.MCPServer{{
 			Name: "github",
 			URL:  "https://aigw.example.com/mcp/github",
@@ -2110,9 +2098,8 @@ func TestWorkerReconcileQwenPawPodAffectingUpdateRecreatesWorker(t *testing.T) {
 func TestWorkerReconcileSandboxImageUpdateWaitsForDeleteBeforeCreate(t *testing.T) {
 	backendRuntime := v1beta1.BackendRuntimeSandbox
 	worker := newWorker("solo", v1beta1.WorkerSpec{
-		Runtime:        "openclaw",
-		Image:          "agentteams/worker:v1",
-		Model:          "qwen-plus",
+		Runtime: "openclaw",
+		Image:   "agentteams/worker:v1", Model: "qwen-plus",
 		BackendRuntime: &backendRuntime,
 	})
 	worker.Generation = 1

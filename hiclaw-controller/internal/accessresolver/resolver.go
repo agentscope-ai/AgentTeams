@@ -60,12 +60,10 @@ func (r *Resolver) ResolveForCaller(ctx context.Context, caller *auth.CallerIden
 
 	switch caller.Role {
 	case auth.RoleWorker, auth.RoleTeamLeader:
-		// Team leader always carries caller.Team (enriched via the
-		// spec.leader.name field indexer). A team worker carries it
-		// via the spec.workerNames indexer. When caller.Team is set
-		// we route to the team path so the resolver can pick up the
-		// member's AccessEntries on the Team CR and expand
-		// ${self.team}. The empty-team branch also covers standalone
+		// Team members carry caller.Team from spec.workerMembers
+		// enrichment. Route to the team path so ${self.team} expands
+		// correctly and the resolver can read member AccessEntries from
+		// the referenced Worker CR. The empty-team branch covers standalone
 		// workers and any enricher-miss corner case.
 		if caller.Team != "" {
 			return r.resolveTeamMember(ctx, caller.Username, caller.Team)
@@ -76,6 +74,94 @@ func (r *Resolver) ResolveForCaller(ctx context.Context, caller *auth.CallerIden
 	default:
 		return "", nil, fmt.Errorf("accessresolver: role %q is not eligible for STS issuance", caller.Role)
 	}
+}
+
+// ResolveAgentIdentityDataForCaller derives the isolated AgentIdentityData STS
+// scope from the caller's credential binding contract. It is intentionally
+// separate from ResolveForCaller so the default OSS/AIRegistry STS path never
+// receives AgentIdentityData permissions by accident.
+func (r *Resolver) ResolveAgentIdentityDataForCaller(ctx context.Context, caller *auth.CallerIdentity) (sessionName string, entries []credprovider.AccessEntry, err error) {
+	if caller == nil {
+		return "", nil, errors.New("accessresolver: caller is nil")
+	}
+	sessionName, agentIdentity, bindings, err := r.credentialContractForCaller(ctx, caller)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(bindings) == 0 {
+		return "", nil, fmt.Errorf("agentidentitydata: credentialBindings are empty for %s/%s", caller.Role, caller.Username)
+	}
+	if agentIdentity == nil || strings.TrimSpace(agentIdentity.WorkloadIdentityName) == "" {
+		return "", nil, fmt.Errorf("agentidentitydata: agentIdentity.workloadIdentityName is required for %s/%s", caller.Role, caller.Username)
+	}
+	return sessionName, []credprovider.AccessEntry{{
+		Service:     credprovider.ServiceAgentIdentityData,
+		Permissions: []string{"read"},
+		Scope: credprovider.AccessScope{
+			Resources: []string{"GetWorkloadAccessToken", "GetResourceAPIKey"},
+		},
+	}}, nil
+}
+
+func (r *Resolver) credentialContractForCaller(ctx context.Context, caller *auth.CallerIdentity) (string, *v1beta1.AgentIdentitySpec, []v1beta1.CredentialBinding, error) {
+	switch caller.Role {
+	case auth.RoleWorker, auth.RoleTeamLeader:
+		if caller.Team != "" {
+			return r.credentialContractForTeamMember(ctx, caller.Username, caller.Team)
+		}
+		return r.credentialContractForWorker(ctx, caller.Username)
+	default:
+		return "", nil, nil, fmt.Errorf("agentidentitydata: role %q is not eligible for STS issuance", caller.Role)
+	}
+}
+
+func (r *Resolver) credentialContractForWorker(ctx context.Context, name string) (string, *v1beta1.AgentIdentitySpec, []v1beta1.CredentialBinding, error) {
+	if name == "" {
+		return "", nil, nil, errors.New("agentidentitydata: empty worker name")
+	}
+	var w v1beta1.Worker
+	err := r.client.Get(ctx, client.ObjectKey{Name: name, Namespace: r.namespace}, &w)
+	if err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+		return "", nil, nil, fmt.Errorf("get worker %q: %w", name, err)
+	}
+	if w.Name == "" {
+		return r.prefix.WorkerSessionName(name), nil, nil, nil
+	}
+	return r.prefix.WorkerSessionName(name), w.Spec.AgentIdentity, w.Spec.CredentialBindings, nil
+}
+
+func (r *Resolver) credentialContractForTeamMember(ctx context.Context, name, teamName string) (string, *v1beta1.AgentIdentitySpec, []v1beta1.CredentialBinding, error) {
+	if name == "" {
+		return "", nil, nil, errors.New("agentidentitydata: empty team member name")
+	}
+	if teamName == "" {
+		return "", nil, nil, errors.New("agentidentitydata: empty team name")
+	}
+
+	var team v1beta1.Team
+	if err := r.client.Get(ctx, client.ObjectKey{Name: teamName, Namespace: r.namespace}, &team); err != nil {
+		if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+			return "", nil, nil, fmt.Errorf("get team %q: %w", teamName, err)
+		}
+	}
+
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name != name {
+			continue
+		}
+		var w v1beta1.Worker
+		if err := r.client.Get(ctx, client.ObjectKey{Name: name, Namespace: r.namespace}, &w); err != nil {
+			if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+				return "", nil, nil, fmt.Errorf("get team-member worker %q (team %q): %w", name, teamName, err)
+			}
+		}
+		if w.Name == "" {
+			return r.prefix.WorkerSessionName(name), nil, nil, nil
+		}
+		return r.prefix.WorkerSessionName(name), w.Spec.AgentIdentity, w.Spec.CredentialBindings, nil
+	}
+
+	return r.prefix.WorkerSessionName(name), nil, nil, nil
 }
 
 func (r *Resolver) resolveWorker(ctx context.Context, name string) (string, []credprovider.AccessEntry, error) {
@@ -133,41 +219,29 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	var crEntries []v1beta1.AccessEntry
 	kind := "TeamWorker"
 	runtimeName := name
-	if len(team.Spec.WorkerMembers) > 0 {
-		for _, ref := range team.Spec.WorkerMembers {
-			if ref.Name != name {
-				continue
-			}
-			if ref.Role == "team_leader" {
-				kind = "TeamLeader"
-			}
-			var w v1beta1.Worker
-			err := r.client.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: r.namespace}, &w)
-			if err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
-				return "", nil, fmt.Errorf("get worker %q for team %q: %w", ref.Name, teamName, err)
-			}
-			if w.Name != "" {
-				crEntries = w.Spec.AccessEntries
-				runtimeName = w.Spec.EffectiveWorkerName(w.Name)
-			}
-			break
+
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name != name {
+			continue
 		}
-	} else {
-		switch {
-		case leaderMatches(team.Spec.Leader, name):
-			crEntries = team.Spec.Leader.AccessEntries
+		var w v1beta1.Worker
+		if err := r.client.Get(ctx, client.ObjectKey{Name: name, Namespace: r.namespace}, &w); err != nil {
+			if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+				return "", nil, fmt.Errorf("get team-member worker %q (team %q): %w", name, teamName, err)
+			}
+		}
+		if len(w.Spec.AccessEntries) > 0 {
+			crEntries = append([]v1beta1.AccessEntry{}, w.Spec.AccessEntries...)
+		}
+		if w.Name != "" {
+			runtimeName = w.Spec.EffectiveWorkerName(w.Name)
+		}
+		if ref.Role == "team_leader" {
 			kind = "TeamLeader"
-			runtimeName = team.Spec.Leader.EffectiveWorkerName()
-		default:
-			for _, w := range team.Spec.Workers {
-				if teamWorkerMatches(w, name) {
-					crEntries = w.AccessEntries
-					runtimeName = w.EffectiveWorkerName()
-					break
-				}
-			}
 		}
+		break
 	}
+
 	if len(crEntries) == 0 {
 		crEntries = DefaultEntriesForTeamMember()
 	} else if !hasServiceEntry(crEntries, credprovider.ServiceObjectStorage) {
@@ -187,14 +261,6 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	// session-name shape because their ServiceAccount name on the
 	// pod is still hiclaw-worker-<name> (see auth.ResourcePrefix.SAName).
 	return r.prefix.WorkerSessionName(name), resolved, nil
-}
-
-func leaderMatches(leader v1beta1.LeaderSpec, name string) bool {
-	return leader.Name == name || (leader.WorkerName != "" && leader.WorkerName == name)
-}
-
-func teamWorkerMatches(worker v1beta1.TeamWorkerSpec, name string) bool {
-	return worker.Name == name || (worker.WorkerName != "" && worker.WorkerName == name)
 }
 
 func (r *Resolver) resolveManager(ctx context.Context, name string) (string, []credprovider.AccessEntry, error) {
@@ -257,6 +323,12 @@ func (r *Resolver) resolveEntries(in []v1beta1.AccessEntry, tmpl templateCtx) ([
 			out = append(out, entry)
 		case credprovider.ServiceAIRegistry:
 			entry, err := r.resolveAIRegistry(e, tmpl)
+			if err != nil {
+				return nil, fmt.Errorf("entry[%d]: %w", i, err)
+			}
+			out = append(out, entry)
+		case credprovider.ServiceSchedulerX3:
+			entry, err := r.resolveSchedulerX3(e, tmpl)
 			if err != nil {
 				return nil, fmt.Errorf("entry[%d]: %w", i, err)
 			}
@@ -389,6 +461,31 @@ func (r *Resolver) resolveAIRegistry(e v1beta1.AccessEntry, tmpl templateCtx) (c
 		Scope: credprovider.AccessScope{
 			NamespaceID: namespaceID,
 			Resources:   resources,
+		},
+	}, nil
+}
+
+type schedulerX3Scope struct {
+	ClusterID string `json:"clusterId,omitempty"`
+}
+
+func (r *Resolver) resolveSchedulerX3(e v1beta1.AccessEntry, tmpl templateCtx) (credprovider.AccessEntry, error) {
+	var s schedulerX3Scope
+	if err := unmarshalScope(e.Scope, &s); err != nil {
+		return credprovider.AccessEntry{}, fmt.Errorf("schedulerx3: %w", err)
+	}
+
+	clusterID := strings.TrimSpace(tmpl.expand(s.ClusterID))
+	if clusterID == "" {
+		return credprovider.AccessEntry{}, errors.New("schedulerx3: clusterId is required")
+	}
+
+	return credprovider.AccessEntry{
+		Service:     credprovider.ServiceSchedulerX3,
+		Permissions: copyPermissions(e.Permissions),
+		Scope: credprovider.AccessScope{
+			ClusterID: clusterID,
+			Resources: []string{"*"},
 		},
 	}, nil
 }

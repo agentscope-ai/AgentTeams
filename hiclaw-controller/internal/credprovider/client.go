@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	hiclawmetrics "github.com/hiclaw/hiclaw-controller/internal/metrics"
 )
 
 // Client issues STS tokens by calling the hiclaw-credential-provider sidecar.
@@ -44,25 +46,37 @@ func NewHTTPClient(baseURL string, httpClient *http.Client) *HTTPClient {
 
 // Issue implements Client.
 func (c *HTTPClient) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error) {
+	start := time.Now()
+	statusCode := 0
+	var observeErr error
+	defer func() {
+		hiclawmetrics.ObserveUpstream("sts_provider", "issue_token", start, statusCode, observeErr)
+	}()
+
 	if c.baseURL == "" {
-		return nil, errors.New("credprovider: base URL not configured (HICLAW_CREDENTIAL_PROVIDER_URL)")
+		observeErr = errors.New("base URL not configured")
+		return nil, errors.New("credprovider: base URL not configured (AGENTTEAMS_CREDENTIAL_PROVIDER_URL)")
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
+		observeErr = err
 		return nil, fmt.Errorf("marshal issue request: %w", err)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL+"/issue", bytes.NewReader(body))
 	if err != nil {
+		observeErr = err
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
+		observeErr = err
 		return nil, fmt.Errorf("call credential-provider: %w", err)
 	}
 	defer resp.Body.Close()
+	statusCode = resp.StatusCode
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -72,6 +86,7 @@ func (c *HTTPClient) Issue(ctx context.Context, req IssueRequest) (*IssueRespons
 
 	var out IssueResponse
 	if err := json.Unmarshal(respBody, &out); err != nil {
+		observeErr = fmt.Errorf("%w: %w", hiclawmetrics.ErrDecodeResponse, err)
 		return nil, fmt.Errorf("parse issue response: %w", err)
 	}
 	// SecurityToken is optional: the production sidecar always returns
@@ -80,6 +95,7 @@ func (c *HTTPClient) Issue(ctx context.Context, req IssueRequest) (*IssueRespons
 	// with an empty SecurityToken. Downstream callers honour the empty
 	// token by emitting a 2-tuple MC_HOST_* binding (see oss.buildMCHostEnv).
 	if out.AccessKeyID == "" || out.AccessKeySecret == "" {
+		observeErr = hiclawmetrics.ErrInvalidUpstreamResponse
 		return nil, errors.New("credential-provider returned incomplete credentials (missing access_key_id or access_key_secret)")
 	}
 	return &out, nil

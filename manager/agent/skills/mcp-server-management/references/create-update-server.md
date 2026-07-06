@@ -1,6 +1,6 @@
 # Create / Update MCP Server
 
-> **Cloud deployment (SAE) note:** The `setup-mcp-server.sh` script and Higress Console API commands are only available in local deployment mode. In cloud mode (`HICLAW_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
+> **Cloud deployment (SAE) note:** The `setup-mcp-server.sh` script and Higress Console API commands are only available in local deployment mode. In cloud mode (`AGENTTEAMS_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
 
 ## Setup Script
 
@@ -48,7 +48,7 @@ Fully idempotent — safe to re-run for credential rotation or updates.
 - User provides a credential via chat
 - User asks to enable a new integration or rotate a credential
 - User provides a custom YAML config
-- `HICLAW_GITHUB_TOKEN` was empty during install and user provides it later
+- `AGENTTEAMS_GITHUB_TOKEN` was empty during install and user provides it later
 
 ## After running
 

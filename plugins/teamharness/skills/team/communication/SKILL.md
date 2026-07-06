@@ -1,6 +1,6 @@
 ---
 name: teamharness-communication
-description: "Use when TEAMS.md Communication Contract needs detailed routing: Channel / Room Selection Protocol, Requester Report Delivery Protocol, or Message Tool Protocol. It resolves current session vs Team Room vs assignment room vs requester reply_route vs external channel, and explains when to use the message MCP tool. Do not use it to choose Quick Task or Project Work, create rooms, delegate tasks, check results, or accept project state."
+description: "Use for TeamHarness message delivery details after a flow has decided a message must be sent: current-session reply, NO_REPLY, cross-room/cross-channel message tool payloads, PROJECT_REQUESTED task-room handoff, and requester replyRoute reports. Do not use to choose work mode, create rooms, delegate, check, or accept tasks."
 ---
 
 # Communication
@@ -11,9 +11,9 @@ It only handles message delivery protocols. It does not choose Direct Reply,
 Quick Task, or Project Work. It does not create rooms, delegate tasks, check
 Worker results, or accept project state.
 
-For ordinary direct replies and other lightweight one-off answers in the
-current room/session, answer directly. Use the `message` MCP tool only when a
-message must leave the current runtime conversation.
+For ordinary direct replies and lightweight one-off answers in the current
+room/session, answer directly. Use the `message` MCP tool only when a message
+must leave the current runtime conversation.
 
 Use `NO_REPLY` exactly when the current event is a low-information
 acknowledgement, self echo, or non-actionable mention-only message. Do not add
@@ -29,18 +29,19 @@ message should be sent.
 
 1. If the reply belongs in the current runtime session, answer directly.
 2. If a project requester report is needed, prefer the project's `reply_route`.
-3. If the selected destination is the Team Room or assignment room, send there
-   only for team-visible coordination.
+3. Use the Task room for task-visible coordination: task request messages,
+   Worker assignments, Worker completion/blocker reports, and downstream
+   delegation notices.
 4. If the selected destination is an external channel, another Matrix room, or
    another runtime session, use the `message` MCP tool.
 5. If the destination is missing or ambiguous, do not guess. Restore project or
    task state first, or ask for the missing routing detail.
 
-Use the Team Room for normal team-visible coordination. Use the assignment room
-recorded on the task for task-visible coordination. Use a project `reply_route`
-for requester-facing reports.
+Use the Source channel / requester room for direct replies and requester-facing
+reports only when the current session or recorded `reply_route` points there.
+Use a project `reply_route` for requester-facing reports.
 
-Do not treat a Team Room assignment, Worker completion, Worker blocker report,
+Do not treat a Task room assignment, Worker completion, Worker blocker report,
 or downstream delegation as a requester report unless the recorded requester
 route is exactly that current room.
 
@@ -48,10 +49,8 @@ route is exactly that current room.
 
 Use this protocol only after project state says a requester report is needed,
 for example after accepted project progress or a blocker that must be surfaced
-to the requester.
-
-When project state records a pending requester report after an accepted state
-change, delivery is mandatory.
+to the requester. When project state has a pending requester report, delivery
+to that requester route is mandatory.
 
 Prefer `reply_route`:
 
@@ -62,6 +61,21 @@ Prefer `reply_route`:
   "target_session": "aaaaaaaa"
 }
 ```
+
+Matrix DM requester reports use the same route shape, with `targetSession`
+pointing at the original DM room:
+
+```json
+{
+  "channel": "matrix",
+  "target_user": "@admin:matrix.local",
+  "target_session": "!admin-dm:matrix.local"
+}
+```
+
+For Matrix DM-originated projects, `requester=@user` is identity only. It is not
+enough to deliver a requester report after the Leader wakes up in a Task room.
+Use the persisted Matrix `reply_route` and send to its `target_session`.
 
 For legacy projects without `reply_route`, parse `requester` only when it uses a
 known encoding:
@@ -75,14 +89,128 @@ Do not guess missing channel, user, room, or session values. If a legacy Matrix
 requester points at the current room/session, answer directly instead of using
 the `message` tool.
 
-After successful delivery, call `projectflow` `mark_requester_report_sent` when
-the project recorded a pending requester report.
+After successful delivery, return to `teamharness-project-management` to record
+the report as sent; project-management owns project state such as
+`projectflow mark_requester_report_sent`.
 
 ## Message Tool Protocol
 
 Use the `message` MCP tool only for explicit cross-room, cross-channel, or
 cross-session sends. Do not use it for normal replies in the current
 room/session; answer directly instead.
+
+## Task Room Request Message
+
+Use this shape when a Source channel / requester room has created or reused a
+Matrix task room and must hand Quick Task or Project Work to the same Leader in
+that task room.
+
+The message text should be a compact task request, not a Worker assignment and
+not a full project plan. Include enough source context for the task-room Leader
+to create project state and preserve the requester route:
+
+```text
+PROJECT_REQUESTED: <short task or project title>
+
+Requester: <human/source identity>
+Source: <source channel and source session or room>
+ReplyRoute: <recorded requester replyRoute summary>
+TaskRoom: !task-room:matrix.local
+
+Request:
+<1-5 sentence requester ask>
+
+Expected outcome:
+- <deliverable or acceptance point>
+- <report/artifact expectation>
+```
+
+Send it with the `PROJECT_REQUESTED` self-trigger payload below. After the tool
+returns `delivery.sent: "matrix_self_trigger"`, stop in the source session.
+
+### PROJECT_REQUESTED Self Trigger
+
+Use this only for same-agent Quick Task or Project Work handoff from any
+requester/source session, such as DingTalk group, Matrix DM, or another Matrix
+room, into a target Matrix task room. The tool sends a Matrix event with a
+TeamHarness trigger marker; the QwenPaw Matrix channel accepts that marked self
+event as the target room's current event.
+
+Set top-level `channel` to `"matrix"` because the trigger target is the Matrix
+task room. Put the original requester/source channel in `sender.session.channel`.
+
+Pass `message` as a JSON object. Do not serialize it into a JSON string. The
+object form lets the tool attach the TeamHarness trigger marker; a plain Matrix
+send will be ignored by the target room as the Leader's own ordinary message.
+
+```json
+{
+  "action": "send",
+  "channel": "matrix",
+  "sender": {
+    "agent": "leader",
+    "session": {
+      "channel": "dingtalk",
+      "id": "ding-group-session-001"
+    }
+  },
+  "target": "room:!task-room:matrix.local",
+  "message": {
+    "type": "PROJECT_REQUESTED",
+    "text": "PROJECT_REQUESTED: <request summary>\nRequester route: <source session/reply route>\nTask room: !task-room:matrix.local"
+  },
+  "agentId": "leader"
+}
+```
+
+Expected result:
+
+```json
+{
+  "delivery": {"sent": "matrix_self_trigger"},
+  "context": {"via": "matrix_current_event"},
+  "trigger": {"status": "sent"}
+}
+```
+
+After this trigger, stop durable project work in the source session. The target
+task-room Leader session should create the project, plan tasks, and delegate.
+
+## Requester Report Message
+
+Use `teamharness-project-management` to build the requester-facing report
+content from project state. This skill only handles delivery shape and message
+tool payloads.
+
+Deliver the report produced by `teamharness-project-management` with the
+recorded `replyRoute`:
+
+Requester reports are usually informational. Do not use Matrix mention syntax
+for descriptive owners, executors, reviewers, or participants in the report
+body. Use plain names unless the report intentionally asks that member to
+respond or take action.
+
+```json
+{
+  "action": "send",
+  "replyRoute": {
+    "channel": "dingtalk",
+    "targetUser": "sender_001",
+    "targetSession": "aaaaaaaa"
+  },
+  "text": "<project-management requester report markdown>"
+}
+```
+
+Keep the returned Matrix `messageId` when the requester report is sent to a
+Matrix room. Use that id as `parentEventId` for any immediately published
+report files so the files attach to the report message.
+
+For DingTalk, Feishu, WeChat, or other non-Matrix requester reports, do not
+describe workspace files as chat attachments or visible file cards. The
+`artifact` tool publishes Matrix room files only. If report files exist, include
+the important `shared/...` paths in the report text and say they are available
+from the shared workspace or platform object-storage view.
 
 For cross-session requester reports, pass the recorded `replyRoute`:
 
@@ -98,16 +226,52 @@ For cross-session requester reports, pass the recorded `replyRoute`:
 }
 ```
 
-For Matrix room sends, pass a channel target:
+For Matrix DM requester reports, pass the recorded Matrix route:
+
+```json
+{
+  "action": "send",
+  "replyRoute": {
+    "channel": "matrix",
+    "targetUser": "@admin:matrix.local",
+    "targetSession": "!admin-dm:matrix.local"
+  },
+  "text": "Project A is ready."
+}
+```
+
+For DingTalk requester reports that should notify the original sender, add
+`mentionSender: true`. Use this only with the recorded DingTalk requester route;
+the message tool will use stored session metadata to mention the sender when
+available and otherwise fall back to normal delivery.
+
+```json
+{
+  "action": "send",
+  "replyRoute": {
+    "channel": "dingtalk",
+    "targetUser": "sender_001",
+    "targetSession": "aaaaaaaa"
+  },
+  "mentionSender": true,
+  "text": "Project A is ready."
+}
+```
+
+For cross-room Matrix sends, pass a channel target:
 
 ```json
 {
   "action": "send",
   "channel": "matrix",
-  "target": "room:!team-room:matrix.local",
-  "text": "@worker-a:matrix.local TASK_ASSIGNED: task-001 - Please start. Spec: shared/tasks/task-001/spec.md"
+  "target": "room:!source-room:matrix.local",
+  "text": "Project A has moved to the task room. I will report back here when accepted."
 }
 ```
+
+Do not use this for Worker assignment messages in the current Task room. In the
+Task room, send the `TASK_ASSIGNED` line as a normal current-session reply so
+the runtime emits one formatted Matrix event and the Worker is triggered once.
 
 For external channel sends, pass the channel-specific target fields:
 
@@ -121,7 +285,4 @@ For external channel sends, pass the channel-specific target fields:
 }
 ```
 
-Pass a channel target or `replyRoute`, not an object-storage path. Matrix
-mentions are message formatting details: mention a Worker or Leader only when
-the message asks that member to act or records task completion/blocker status.
-Do not send mention-only acknowledgements such as `@worker ok`.
+Pass a channel target or `replyRoute`, not an object-storage path.

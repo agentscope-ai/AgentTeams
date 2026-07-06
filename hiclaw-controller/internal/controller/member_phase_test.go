@@ -116,6 +116,19 @@ func TestComputeMemberPhase(t *testing.T) {
 			reconcileErr: errors.New("transient"),
 			want:         "Running",
 		},
+		// StatusFailed path
+		{
+			name:           "Running + failed = Failed",
+			desiredState:   "Running",
+			containerState: string(backend.StatusFailed),
+			want:           "Failed",
+		},
+		{
+			name:           "Sleeping + failed = Sleeping (not affected)",
+			desiredState:   "Sleeping",
+			containerState: string(backend.StatusFailed),
+			want:           "Sleeping",
+		},
 	}
 
 	for _, tt := range tests {

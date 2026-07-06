@@ -133,7 +133,7 @@ jobs:
 
       - name: Save image
         run: |
-          docker save hiclaw/hiclaw-controller:latest | gzip > /tmp/hiclaw-controller.tar.gz
+          docker save agentteams/agentteams-controller:latest | gzip > /tmp/hiclaw-controller.tar.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v4
@@ -172,7 +172,7 @@ jobs:
 
       - name: Build openclaw-base (local tag)
         run: |
-          # `make build-openclaw-base` always tags as hiclaw/openclaw-base:latest
+          # `make build-openclaw-base` always tags as agentteams/openclaw-base:latest
           # (LOCAL_OPENCLAW_BASE is hardcoded in the Makefile), which is exactly
           # what downstream build-manager/build-worker jobs consume via the
           # OPENCLAW_BASE_IMAGE / OPENCLAW_BASE_VERSION overrides.
@@ -185,7 +185,7 @@ jobs:
 
       - name: Save image
         run: |
-          docker save hiclaw/openclaw-base:latest | gzip > /tmp/hiclaw-openclaw-base.tar.gz
+          docker save agentteams/openclaw-base:latest | gzip > /tmp/hiclaw-openclaw-base.tar.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v4
@@ -253,7 +253,7 @@ jobs:
           EXTRA=""
           if [ "${{ needs.detect-changes.outputs.openclaw_base }}" = "true" ] && \
              { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
-            EXTRA="OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base OPENCLAW_BASE_VERSION=latest"
+            EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
             echo "Using locally-built openclaw-base for ${{ matrix.target }}"
           fi
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
@@ -269,8 +269,9 @@ jobs:
           # each per-target tar only contains its own deltas.
           docker save \
             $(docker images --format '{{.Repository}}:{{.Tag}}' \
-              | grep -E '^hiclaw/' \
+              | grep -E '^agentteams/' \
               | grep -v '<none>' \
+              | grep -v 'agentteams-controller' \
               | grep -v 'hiclaw-controller' \
               | grep -v 'openclaw-base') \
             | gzip > /tmp/hiclaw-${{ matrix.target }}.tar.gz

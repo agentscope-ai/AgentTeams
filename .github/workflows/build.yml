@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base hiclaw-controller embedded manager manager-copaw worker copaw-worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base hiclaw-controller embedded manager manager-copaw worker copaw-worker hermes-worker openhuman-worker qwenpaw-worker'
         required: false
         type: string
         default: 'all'
@@ -118,6 +118,7 @@ jobs:
               contains(format(' {0} ', steps.meta.outputs.targets), ' worker ') ||
               contains(format(' {0} ', steps.meta.outputs.targets), ' copaw-worker ') ||
               contains(format(' {0} ', steps.meta.outputs.targets), ' hermes-worker ') ||
+              contains(format(' {0} ', steps.meta.outputs.targets), ' openhuman-worker ') ||
               contains(format(' {0} ', steps.meta.outputs.targets), ' qwenpaw-worker ') }}
         run: |
           TARGETS="${{ steps.meta.outputs.targets }}"
@@ -128,6 +129,7 @@ jobs:
           if has_target worker; then MAKE_TARGETS="${MAKE_TARGETS} push-worker"; fi
           if has_target copaw-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-copaw-worker"; fi
           if has_target hermes-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-hermes-worker"; fi
+          if has_target openhuman-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-openhuman-worker"; fi
           if has_target qwenpaw-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-qwenpaw-worker"; fi
           make ${MAKE_TARGETS} \
             VERSION=${{ steps.meta.outputs.version }} \
@@ -146,6 +148,7 @@ jobs:
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-worker
           COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-copaw-worker
           HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-hermes-worker
+          OPENHUMAN_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-openhuman-worker
           QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-qwenpaw-worker
           CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-controller
           EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-embedded
@@ -160,6 +163,7 @@ jobs:
           echo "- Worker: \`${WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- OpenHuman Worker: \`${OPENHUMAN_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- QwenPaw Worker: \`${QWENPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Controller: \`${CONTROLLER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Embedded: \`${EMBEDDED_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY

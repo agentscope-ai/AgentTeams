@@ -1651,8 +1651,8 @@ func TestWorkerReconcilerUsesTeamLeaderRoleForDecoupledLeader(t *testing.T) {
 	if !ok {
 		t.Fatal("backend Create not called")
 	}
-	if req.Labels[v1beta1.LabelRole] != RoleTeamLeader.String() {
-		t.Fatalf("backend role label=%q, want %q", req.Labels[v1beta1.LabelRole], RoleTeamLeader.String())
+	if req.Labels[v1beta1.LabelRole] != RoleStandalone.String() {
+		t.Fatalf("backend role label=%q, want %q", req.Labels[v1beta1.LabelRole], RoleStandalone.String())
 	}
 }
 

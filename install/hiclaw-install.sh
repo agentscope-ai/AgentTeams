@@ -3428,6 +3428,10 @@ CREDEOF
         local _fs_domain="${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}"
         case "${_fs_domain}" in *:*) ;; *) _fs_domain="${_fs_domain}:${_internal_gw_port}" ;; esac
 
+        local _manager_runtime="${HICLAW_MANAGER_RUNTIME:-copaw}"
+        local _manager_image="$([ "${_manager_runtime}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
+        local _default_worker_runtime="${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
+
         # Controller env args
         local _ctrl_env_args=(
             -e "HICLAW_ADMIN_USER=${HICLAW_ADMIN_USER}"
@@ -3440,9 +3444,9 @@ CREDEOF
             -e "HICLAW_LLM_API_KEY=${HICLAW_LLM_API_KEY}"
             -e "HICLAW_DEFAULT_MODEL=${HICLAW_DEFAULT_MODEL}"
             -e "HICLAW_MANAGER_GATEWAY_KEY=${HICLAW_MANAGER_GATEWAY_KEY}"
-            -e "HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-copaw}"
-            -e "HICLAW_MANAGER_IMAGE=$([ "${HICLAW_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
-            -e "HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
+            -e "HICLAW_MANAGER_RUNTIME=${_manager_runtime}"
+            -e "HICLAW_MANAGER_IMAGE=${_manager_image}"
+            -e "HICLAW_DEFAULT_WORKER_RUNTIME=${_default_worker_runtime}"
             -e "HICLAW_WORKER_IMAGE=${WORKER_IMAGE}"
             -e "HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
             -e "HICLAW_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
@@ -3464,6 +3468,42 @@ CREDEOF
             -e "HICLAW_HOST_SHARE_DIR=${HICLAW_HOST_SHARE_DIR}"
             -e "HICLAW_MANAGER_ENABLED=true"
             -e "HICLAW_PORT_MANAGER_CONSOLE=${HICLAW_PORT_MANAGER_CONSOLE:-18888}"
+            -e "AGENTTEAMS_ADMIN_USER=${HICLAW_ADMIN_USER}"
+            -e "AGENTTEAMS_ADMIN_PASSWORD=${HICLAW_ADMIN_PASSWORD}"
+            -e "AGENTTEAMS_MANAGER_PASSWORD=${HICLAW_MANAGER_PASSWORD}"
+            -e "AGENTTEAMS_REGISTRATION_TOKEN=${HICLAW_REGISTRATION_TOKEN}"
+            -e "AGENTTEAMS_MINIO_USER=${HICLAW_MINIO_USER}"
+            -e "AGENTTEAMS_MINIO_PASSWORD=${HICLAW_MINIO_PASSWORD}"
+            -e "AGENTTEAMS_LLM_PROVIDER=${HICLAW_LLM_PROVIDER}"
+            -e "AGENTTEAMS_LLM_API_KEY=${HICLAW_LLM_API_KEY}"
+            -e "AGENTTEAMS_DEFAULT_MODEL=${HICLAW_DEFAULT_MODEL}"
+            -e "AGENTTEAMS_MANAGER_GATEWAY_KEY=${HICLAW_MANAGER_GATEWAY_KEY}"
+            -e "AGENTTEAMS_MANAGER_RUNTIME=${_manager_runtime}"
+            -e "AGENTTEAMS_MANAGER_IMAGE=${_manager_image}"
+            -e "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${_default_worker_runtime}"
+            -e "AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}"
+            -e "AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
+            -e "AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
+            -e "AGENTTEAMS_OPENHUMAN_WORKER_IMAGE=${OPENHUMAN_WORKER_IMAGE:-${HICLAW_INSTALL_OPENHUMAN_WORKER_IMAGE:-}}"
+            -e "AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE:-${HICLAW_INSTALL_QWENPAW_WORKER_IMAGE:-}}"
+            -e "AGENTTEAMS_MATRIX_DOMAIN=${_matrix_domain}"
+            -e "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:${HICLAW_PORT_GATEWAY}"
+            -e "AGENTTEAMS_MATRIX_URL=http://127.0.0.1:6167"
+            -e "AGENTTEAMS_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=${HICLAW_MATRIX_APPSERVICE_AS_TOKEN:-}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=${HICLAW_MATRIX_APPSERVICE_HS_TOKEN:-}"
+            -e "AGENTTEAMS_MINIO_ENDPOINT=http://127.0.0.1:9000"
+            -e "AGENTTEAMS_FS_BUCKET=hiclaw-storage"
+            -e "AGENTTEAMS_STORAGE_PREFIX=hiclaw/hiclaw-storage"
+            -e "AGENTTEAMS_FS_ENDPOINT=http://127.0.0.1:9000"
+            -e "AGENTTEAMS_AI_GATEWAY_URL=http://${_aigw_domain}"
+            -e "AGENTTEAMS_CONTROLLER_URL=http://hiclaw-controller:8090"
+            -e "AGENTTEAMS_DOCKER_NETWORK=hiclaw-net"
+            -e "AGENTTEAMS_WORKSPACE_DIR=${HICLAW_WORKSPACE_DIR}"
+            -e "AGENTTEAMS_HOST_SHARE_DIR=${HICLAW_HOST_SHARE_DIR}"
+            -e "AGENTTEAMS_MANAGER_ENABLED=true"
+            -e "AGENTTEAMS_PORT_MANAGER_CONSOLE=${HICLAW_PORT_MANAGER_CONSOLE:-18888}"
         )
 
         # Timezone
@@ -3472,53 +3512,74 @@ CREDEOF
         fi
 
         # Yolo mode
-        if [ "${HICLAW_YOLO:-}" = "1" ]; then
+        if [ "${HICLAW_YOLO:-${AGENTTEAMS_YOLO:-}}" = "1" ]; then
             _ctrl_env_args+=(-e "HICLAW_YOLO=1")
+            _ctrl_env_args+=(-e "AGENTTEAMS_YOLO=1")
         fi
 
         # Matrix-plugin debug tracing — propagated to every manager + worker
         # the controller spawns, then translated to OPENCLAW_MATRIX_DEBUG=1
         # by the container entrypoints. Use this to diagnose
         # "worker did not join" / "manager replied empty" hangs.
-        if [ "${HICLAW_MATRIX_DEBUG:-}" = "1" ]; then
+        if [ "${HICLAW_MATRIX_DEBUG:-${AGENTTEAMS_MATRIX_DEBUG:-}}" = "1" ]; then
             _ctrl_env_args+=(-e "HICLAW_MATRIX_DEBUG=1")
+            _ctrl_env_args+=(-e "AGENTTEAMS_MATRIX_DEBUG=1")
         fi
 
         # Optional: GitHub token
-        if [ -n "${HICLAW_GITHUB_TOKEN:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_GITHUB_TOKEN=${HICLAW_GITHUB_TOKEN}")
+        if [ -n "${HICLAW_GITHUB_TOKEN:-${AGENTTEAMS_GITHUB_TOKEN:-}}" ]; then
+            local _github_token="${HICLAW_GITHUB_TOKEN:-${AGENTTEAMS_GITHUB_TOKEN:-}}"
+            _ctrl_env_args+=(-e "HICLAW_GITHUB_TOKEN=${_github_token}")
+            _ctrl_env_args+=(-e "AGENTTEAMS_GITHUB_TOKEN=${_github_token}")
         fi
 
         # Optional: embedding model
-        if [ -n "${HICLAW_EMBEDDING_MODEL:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_EMBEDDING_MODEL=${HICLAW_EMBEDDING_MODEL}")
+        if [ -n "${HICLAW_EMBEDDING_MODEL:-${AGENTTEAMS_EMBEDDING_MODEL:-}}" ]; then
+            local _embedding_model="${HICLAW_EMBEDDING_MODEL:-${AGENTTEAMS_EMBEDDING_MODEL:-}}"
+            _ctrl_env_args+=(-e "HICLAW_EMBEDDING_MODEL=${_embedding_model}")
+            _ctrl_env_args+=(-e "AGENTTEAMS_EMBEDDING_MODEL=${_embedding_model}")
         fi
 
         # Optional: OpenAI-compatible base URL
-        if [ -n "${HICLAW_OPENAI_BASE_URL:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_OPENAI_BASE_URL=${HICLAW_OPENAI_BASE_URL}")
+        if [ -n "${HICLAW_OPENAI_BASE_URL:-${AGENTTEAMS_OPENAI_BASE_URL:-}}" ]; then
+            local _openai_base_url="${HICLAW_OPENAI_BASE_URL:-${AGENTTEAMS_OPENAI_BASE_URL:-}}"
+            _ctrl_env_args+=(-e "HICLAW_OPENAI_BASE_URL=${_openai_base_url}")
+            _ctrl_env_args+=(-e "AGENTTEAMS_OPENAI_BASE_URL=${_openai_base_url}")
         fi
         # Optional: language
-        if [ -n "${HICLAW_LANGUAGE:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_LANGUAGE=${HICLAW_LANGUAGE}")
+        if [ -n "${HICLAW_LANGUAGE:-${AGENTTEAMS_LANGUAGE:-}}" ]; then
+            local _language="${HICLAW_LANGUAGE:-${AGENTTEAMS_LANGUAGE:-}}"
+            _ctrl_env_args+=(-e "HICLAW_LANGUAGE=${_language}")
+            _ctrl_env_args+=(-e "AGENTTEAMS_LANGUAGE=${_language}")
         fi
 
         # Optional: CMS/ARMS observability. In embedded mode the controller
         # spawns the Manager and Workers, so it must receive these settings.
         _ctrl_env_args+=(-e "HICLAW_CMS_TRACES_ENABLED=${HICLAW_CMS_TRACES_ENABLED:-false}")
+        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_TRACES_ENABLED=${HICLAW_CMS_TRACES_ENABLED:-${AGENTTEAMS_CMS_TRACES_ENABLED:-false}}")
         _ctrl_env_args+=(-e "HICLAW_CMS_SERVICE_NAME=${HICLAW_CMS_SERVICE_NAME:-hiclaw-manager}")
+        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_SERVICE_NAME=${HICLAW_CMS_SERVICE_NAME:-${AGENTTEAMS_CMS_SERVICE_NAME:-agentteams-manager}}")
         _ctrl_env_args+=(-e "HICLAW_CMS_METRICS_ENABLED=${HICLAW_CMS_METRICS_ENABLED:-false}")
-        if [ -n "${HICLAW_CMS_ENDPOINT:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_CMS_ENDPOINT=${HICLAW_CMS_ENDPOINT}")
+        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_METRICS_ENABLED=${HICLAW_CMS_METRICS_ENABLED:-${AGENTTEAMS_CMS_METRICS_ENABLED:-false}}")
+        if [ -n "${HICLAW_CMS_ENDPOINT:-${AGENTTEAMS_CMS_ENDPOINT:-}}" ]; then
+            local _cms_endpoint="${HICLAW_CMS_ENDPOINT:-${AGENTTEAMS_CMS_ENDPOINT:-}}"
+            _ctrl_env_args+=(-e "HICLAW_CMS_ENDPOINT=${_cms_endpoint}")
+            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_ENDPOINT=${_cms_endpoint}")
         fi
-        if [ -n "${HICLAW_CMS_LICENSE_KEY:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_CMS_LICENSE_KEY=${HICLAW_CMS_LICENSE_KEY}")
+        if [ -n "${HICLAW_CMS_LICENSE_KEY:-${AGENTTEAMS_CMS_LICENSE_KEY:-}}" ]; then
+            local _cms_license_key="${HICLAW_CMS_LICENSE_KEY:-${AGENTTEAMS_CMS_LICENSE_KEY:-}}"
+            _ctrl_env_args+=(-e "HICLAW_CMS_LICENSE_KEY=${_cms_license_key}")
+            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_LICENSE_KEY=${_cms_license_key}")
         fi
-        if [ -n "${HICLAW_CMS_PROJECT:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_CMS_PROJECT=${HICLAW_CMS_PROJECT}")
+        if [ -n "${HICLAW_CMS_PROJECT:-${AGENTTEAMS_CMS_PROJECT:-}}" ]; then
+            local _cms_project="${HICLAW_CMS_PROJECT:-${AGENTTEAMS_CMS_PROJECT:-}}"
+            _ctrl_env_args+=(-e "HICLAW_CMS_PROJECT=${_cms_project}")
+            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_PROJECT=${_cms_project}")
         fi
-        if [ -n "${HICLAW_CMS_WORKSPACE:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_CMS_WORKSPACE=${HICLAW_CMS_WORKSPACE}")
+        if [ -n "${HICLAW_CMS_WORKSPACE:-${AGENTTEAMS_CMS_WORKSPACE:-}}" ]; then
+            local _cms_workspace="${HICLAW_CMS_WORKSPACE:-${AGENTTEAMS_CMS_WORKSPACE:-}}"
+            _ctrl_env_args+=(-e "HICLAW_CMS_WORKSPACE=${_cms_workspace}")
+            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_WORKSPACE=${_cms_workspace}")
         fi
 
         # shellcheck disable=SC2086

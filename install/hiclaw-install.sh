@@ -3500,6 +3500,7 @@ CREDEOF
             -e "AGENTTEAMS_AI_GATEWAY_URL=http://${_aigw_domain}"
             -e "AGENTTEAMS_CONTROLLER_URL=http://hiclaw-controller:8090"
             -e "AGENTTEAMS_DOCKER_NETWORK=hiclaw-net"
+            -e "AGENTTEAMS_RESOURCE_PREFIX=${AGENTTEAMS_RESOURCE_PREFIX:-hiclaw-}"
             -e "AGENTTEAMS_WORKSPACE_DIR=${HICLAW_WORKSPACE_DIR}"
             -e "AGENTTEAMS_HOST_SHARE_DIR=${HICLAW_HOST_SHARE_DIR}"
             -e "AGENTTEAMS_MANAGER_ENABLED=true"

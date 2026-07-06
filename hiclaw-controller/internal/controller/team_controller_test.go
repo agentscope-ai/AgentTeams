@@ -1164,6 +1164,74 @@ func TestReconcileTeamDecoupled_RoleAwareChannelPolicy(t *testing.T) {
 	}
 }
 
+func TestReconcileTeamLegacy_DeploysTeamLeaderConfigAndPolicy(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "legacy-team",
+			Namespace: "default",
+		},
+		Spec: v1beta1.TeamSpec{
+			ChannelPolicy: &v1beta1.ChannelPolicySpec{
+				GroupAllowExtra: []string{"external-bot"},
+			},
+			Leader: v1beta1.LeaderSpec{
+				Name:  "lead",
+				Model: "qwen3.5-plus",
+			},
+			Workers: []v1beta1.TeamWorkerSpec{
+				{Name: "dev", Model: "qwen3.5-plus"},
+				{Name: "qa", Model: "qwen3.5-plus"},
+			},
+		},
+	}
+	rig := newTeamReconcileRig(t, team)
+
+	out, _, err := rig.reconcile("legacy-team")
+	if err != nil {
+		t.Fatalf("reconcile legacy team: %v", err)
+	}
+	if out.Status.Phase != "Active" {
+		t.Fatalf("phase=%q, message=%q, want Active", out.Status.Phase, out.Status.Message)
+	}
+
+	var leaderConfig *service.WorkerDeployRequest
+	for i := range rig.deployer.Calls.DeployWorkerConfig {
+		call := &rig.deployer.Calls.DeployWorkerConfig[i]
+		if call.Name == "lead" {
+			leaderConfig = call
+			break
+		}
+	}
+	if leaderConfig == nil {
+		t.Fatalf("DeployWorkerConfig missing for leader; calls=%+v", rig.deployer.Calls.DeployWorkerConfig)
+	}
+	if leaderConfig.Role != RoleTeamLeader.String() {
+		t.Fatalf("leader role=%q, want %q", leaderConfig.Role, RoleTeamLeader.String())
+	}
+	if leaderConfig.Spec.Runtime != backend.RuntimeCopaw {
+		t.Fatalf("leader runtime=%q, want copaw legacy default", leaderConfig.Spec.Runtime)
+	}
+	if len(rig.deployer.Calls.SyncTeamLeaderAssets) != 1 || rig.deployer.Calls.SyncTeamLeaderAssets[0].WorkerName != "lead" {
+		t.Fatalf("SyncTeamLeaderAssets calls=%+v, want leader lead", rig.deployer.Calls.SyncTeamLeaderAssets)
+	}
+
+	policies := map[string]service.InjectChannelPolicyRequest{}
+	for _, call := range rig.deployer.Calls.InjectChannelPolicy {
+		policies[call.WorkerName] = call
+	}
+	leaderPolicy := policies["lead"]
+	if !stringSliceContains(leaderPolicy.GroupAllowFrom, "@manager:localhost") ||
+		!stringSliceContains(leaderPolicy.GroupAllowFrom, "@dev:localhost") ||
+		!stringSliceContains(leaderPolicy.GroupAllowFrom, "@qa:localhost") ||
+		!stringSliceContains(leaderPolicy.GroupAllowFrom, "@external-bot:localhost") {
+		t.Fatalf("leader groupAllowFrom=%v, missing expected legacy team entries", leaderPolicy.GroupAllowFrom)
+	}
+
+	if !stringSliceContains(rig.backend.Calls.Create, "lead") {
+		t.Fatalf("backend Create calls=%v, want lead container", rig.backend.Calls.Create)
+	}
+}
+
 func TestReconcileTeamDecoupled_WorkerNotProvisionedKeepsTeamActive(t *testing.T) {
 	ctx := context.Background()
 

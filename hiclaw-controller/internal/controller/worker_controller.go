@@ -198,6 +198,12 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{}, err
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
+	if role, inTeam, err := r.decoupledTeamRoleForWorker(ctx, w.Namespace, w.Name); err != nil {
+		logger.Error(err, "failed to check decoupled Team membership before worker reconcile", "worker", w.Name)
+	} else if inTeam {
+		mctx.Role = role
+		mctx.PodLabels[v1beta1.LabelRole] = role.String()
+	}
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)

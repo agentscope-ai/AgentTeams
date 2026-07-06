@@ -1620,6 +1620,42 @@ func TestWorkerReconcilerLegacySkipsDecoupledTeamMemberStandaloneState(t *testin
 	}
 }
 
+func TestWorkerReconcilerUsesTeamLeaderRoleForDecoupledLeader(t *testing.T) {
+	worker := newWorker("lead", v1beta1.WorkerSpec{
+		Model:   "qwen3.5-plus",
+		Runtime: backend.RuntimeCopaw,
+	})
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: RoleTeamLeader.String()},
+				{Name: "dev"},
+			},
+		},
+	}
+	rig := newWorkerRig(t, worker, team)
+
+	_, _, err := rig.reconcile("lead")
+	if err != nil {
+		t.Fatalf("reconcile leader worker: %v", err)
+	}
+	if len(rig.deployer.Calls.DeployWorkerConfig) != 1 {
+		t.Fatalf("DeployWorkerConfig calls=%d, want 1", len(rig.deployer.Calls.DeployWorkerConfig))
+	}
+	config := rig.deployer.Calls.DeployWorkerConfig[0]
+	if config.Role != RoleTeamLeader.String() {
+		t.Fatalf("DeployWorkerConfig role=%q, want %q", config.Role, RoleTeamLeader.String())
+	}
+	req, ok := rig.backend.LastCreateReq()
+	if !ok {
+		t.Fatal("backend Create not called")
+	}
+	if req.Labels[v1beta1.LabelRole] != RoleTeamLeader.String() {
+		t.Fatalf("backend role label=%q, want %q", req.Labels[v1beta1.LabelRole], RoleTeamLeader.String())
+	}
+}
+
 func TestWorkerMemberContextQwenPawConfigOnlyChangeDoesNotSetSpecChanged(t *testing.T) {
 	r := &WorkerReconciler{ControllerName: "ctl-x"}
 	baseSpec := v1beta1.WorkerSpec{

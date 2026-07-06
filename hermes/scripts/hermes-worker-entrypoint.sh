@@ -3,11 +3,11 @@
 # Reads config from environment variables and launches hermes-worker.
 #
 # Environment variables (set by controller during worker creation):
-#   HICLAW_WORKER_NAME   - Worker name (required)
-#   HICLAW_FS_ENDPOINT   - MinIO endpoint (required in local mode)
-#   HICLAW_FS_ACCESS_KEY - MinIO access key (required in local mode)
-#   HICLAW_FS_SECRET_KEY - MinIO secret key (required in local mode)
-#   HICLAW_RUNTIME       - "aliyun" for cloud mode (uses RRSA/STS via hiclaw-env.sh)
+#   AGENTTEAMS_WORKER_NAME   - Worker name (required)
+#   AGENTTEAMS_FS_ENDPOINT   - MinIO endpoint (required in local mode)
+#   AGENTTEAMS_FS_ACCESS_KEY - MinIO access key (required in local mode)
+#   AGENTTEAMS_FS_SECRET_KEY - MinIO secret key (required in local mode)
+#   AGENTTEAMS_RUNTIME       - "aliyun" for cloud mode (uses RRSA/STS via hiclaw-env.sh)
 #   TZ                   - Timezone (optional)
 
 set -e
@@ -15,7 +15,8 @@ set -e
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
 
-WORKER_NAME="${HICLAW_WORKER_NAME:?HICLAW_WORKER_NAME is required}"
+WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-${HICLAW_WORKER_NAME:-}}"
+[ -n "${WORKER_NAME}" ] || { echo "AGENTTEAMS_WORKER_NAME is required" >&2; exit 1; }
 # Align with the openclaw worker layout: HOME == workspace == MinIO mirror root.
 # The controller injects HOME=/root/hiclaw-fs/agents/<WORKER_NAME>; we anchor
 # the install dir to its parent so workspace_dir == HOME and ${HERMES_HOME}
@@ -39,19 +40,22 @@ fi
 # Cloud mode: RRSA/STS credentials via MC_HOST_hiclaw (set by ensure_mc_credentials).
 # FileSync._ensure_alias() detects MC_HOST_hiclaw and skips mc alias set.
 # Local mode: explicit FS endpoint/key/secret passed via CLI args.
-if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+if [ "${AGENTTEAMS_RUNTIME:-${HICLAW_RUNTIME:-}}" = "aliyun" ]; then
     log "Cloud mode: configuring OSS credentials via RRSA..."
     ensure_mc_credentials || { log "ERROR: Failed to obtain OSS credentials"; exit 1; }
     FS_ENDPOINT="https://oss-placeholder.aliyuncs.com"
     FS_ACCESS_KEY="rrsa"
     FS_SECRET_KEY="rrsa"
-    FS_BUCKET="${HICLAW_FS_BUCKET:-hiclaw-cloud-storage}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_FS_BUCKET:-hiclaw-cloud-storage}}"
     log "  OSS bucket: ${FS_BUCKET}"
 else
-    FS_ENDPOINT="${HICLAW_FS_ENDPOINT:?HICLAW_FS_ENDPOINT is required}"
-    FS_ACCESS_KEY="${HICLAW_FS_ACCESS_KEY:?HICLAW_FS_ACCESS_KEY is required}"
-    FS_SECRET_KEY="${HICLAW_FS_SECRET_KEY:?HICLAW_FS_SECRET_KEY is required}"
-    FS_BUCKET="${HICLAW_FS_BUCKET:-hiclaw-storage}"
+    FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-${HICLAW_FS_ENDPOINT:-}}"
+    FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-${HICLAW_FS_ACCESS_KEY:-}}"
+    FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-${HICLAW_FS_SECRET_KEY:-}}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-${HICLAW_FS_BUCKET:-hiclaw-storage}}"
+    [ -n "${FS_ENDPOINT}" ] || { log "ERROR: AGENTTEAMS_FS_ENDPOINT is required"; exit 1; }
+    [ -n "${FS_ACCESS_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_ACCESS_KEY is required"; exit 1; }
+    [ -n "${FS_SECRET_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_SECRET_KEY is required"; exit 1; }
 fi
 log "  FS bucket: ${FS_BUCKET}"
 

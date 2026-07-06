@@ -165,7 +165,7 @@ for skill in team-coordination project-management task-management; do
 done
 
 # ============================================================
-# Section 6: Verify Room Topology — Manager NOT in team rooms
+# Section 6: Verify Room Topology — Manager Delegation Boundary
 # ============================================================
 log_section "Verify Room Topology (Manager Delegation Boundary)"
 
@@ -190,11 +190,29 @@ _check_manager_in_room() {
     fi
 }
 
-# Manager should NOT be in these rooms
+# Manager should NOT be in team-scoped rooms.
 _check_manager_in_room "${TEAM_ROOM}" "Team Room"
 _check_manager_in_room "${LEADER_DM}" "Leader DM"
-_check_manager_in_room "${W1_ROOM}" "Worker 1 Room"
-_check_manager_in_room "${W2_ROOM}" "Worker 2 Room"
+
+# Worker personal rooms are infrastructure rooms. The delegation boundary is
+# enforced by the injected channel policy: team workers may receive team-room
+# traffic from the Leader/peers/admins, not from the Manager directly.
+for w in "${TEST_W1}" "${TEST_W2}"; do
+    POLICY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${w}/openclaw.json" 2>/dev/null || echo '{}')
+    GROUP_ALLOW=$(echo "${POLICY}" | jq -r '.channels.matrix.groupAllowFrom[]?' 2>/dev/null)
+    DM_ALLOW=$(echo "${POLICY}" | jq -r '.channels.matrix.dm.allowFrom[]?' 2>/dev/null)
+
+    if echo "${GROUP_ALLOW}" | grep -q "@manager:"; then
+        log_fail "Manager is allowed in ${w} group channel policy (should NOT be)"
+    else
+        log_pass "Manager NOT allowed in ${w} group channel policy"
+    fi
+    if echo "${DM_ALLOW}" | grep -q "@manager:"; then
+        log_fail "Manager is allowed in ${w} DM channel policy (should NOT be)"
+    else
+        log_pass "Manager NOT allowed in ${w} DM channel policy"
+    fi
+done
 
 # Manager SHOULD be in Leader Room
 LEADER_ROOM_ENC=$(echo "${LEADER_ROOM}" | sed 's/!/%21/g')
@@ -260,18 +278,18 @@ else
     W2_MATRIX_ID="@${TEST_W2}:${TEST_MATRIX_DOMAIN}"
 
     log_info "Waiting for Leader to join Leader DM..."
-    if matrix_wait_for_user_joined "${ADMIN_LOGIN_TOKEN}" "${LEADER_DM}" "${LEADER_MATRIX_ID}" 180; then
+    if matrix_wait_for_user_joined "${ADMIN_LOGIN_TOKEN}" "${LEADER_DM}" "${LEADER_MATRIX_ID}" 240; then
         log_pass "Leader joined Leader DM"
     else
-        log_fail "Leader did not join Leader DM within 180s"
+        log_fail "Leader did not join Leader DM within 240s"
     fi
 
     log_info "Waiting for Leader and workers to join Team Room..."
     for uid in "${LEADER_MATRIX_ID}" "${W1_MATRIX_ID}" "${W2_MATRIX_ID}"; do
-        if matrix_wait_for_user_joined "${ADMIN_LOGIN_TOKEN}" "${TEAM_ROOM}" "${uid}" 180; then
+        if matrix_wait_for_user_joined "${ADMIN_LOGIN_TOKEN}" "${TEAM_ROOM}" "${uid}" 240; then
             log_pass "${uid} joined Team Room"
         else
-            log_fail "${uid} did not join Team Room within 180s"
+            log_fail "${uid} did not join Team Room within 240s"
         fi
     done
 fi

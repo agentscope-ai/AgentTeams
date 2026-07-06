@@ -76,6 +76,7 @@ log_section "Create Team"
 CREATE_OUTPUT=$(exec_in_agent hiclaw create team \
     --name "${TEST_TEAM}" \
     --leader-name "${TEST_LEADER}" \
+    --leader-runtime copaw \
     --workers "${TEST_W1},${TEST_W2}" 2>&1)
 
 if echo "${CREATE_OUTPUT}" | grep -q "team/${TEST_TEAM} created"; then

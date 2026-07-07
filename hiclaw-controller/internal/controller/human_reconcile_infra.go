@@ -35,35 +35,50 @@ import (
 func (r *HumanReconciler) reconcileHumanInfra(ctx context.Context, s *humanScope) error {
 	h := s.human
 	username := s.username
-	expectedUserID := r.Provisioner.MatrixUserID(username)
+	expectedUserID := s.identity.MatrixUserID
+	logger := log.FromContext(ctx).WithValues(
+		"name", h.Name,
+		"identitySource", s.identity.Source.Key(),
+		"matrixUserID", expectedUserID,
+		"matrixLocalpart", s.identity.MatrixLocalpart,
+	)
 
-	needsProvision := h.Status.MatrixUserID == "" || h.Status.MatrixUserID != expectedUserID
+	needsProvision := h.Status.MatrixUserID == "" ||
+		(s.identity.ManagesInitialPassword && h.Status.MatrixUserID != expectedUserID)
 	if needsProvision {
-		creds, err := r.Provisioner.EnsureHumanUser(ctx, username)
+		logger.Info("provisioning Matrix account for human",
+			"currentStatusMatrixUserID", h.Status.MatrixUserID,
+			"managesInitialPassword", s.identity.ManagesInitialPassword)
+		creds, err := s.identity.Source.EnsurePrecreated(ctx, &h.Spec, h.Name)
 		if err != nil {
+			logger.Error(err, "matrix account provisioning failed; status.matrixUserID will stay empty")
 			return fmt.Errorf("matrix registration failed: %w", err)
 		}
-		h.Status.MatrixUserID = creds.UserID
-		h.Status.InitialPassword = creds.Password
+		if creds.UserID != "" && creds.UserID != expectedUserID {
+			logger.Error(nil, "matrix registration returned unexpected user id",
+				"registeredUserID", creds.UserID)
+			return fmt.Errorf("matrix registration returned %s, want %s", creds.UserID, expectedUserID)
+		}
+		h.Status.MatrixUserID = expectedUserID
+		if s.identity.ManagesInitialPassword {
+			h.Status.InitialPassword = creds.Password
+		} else {
+			h.Status.InitialPassword = ""
+		}
 		s.userToken = creds.AccessToken
 
-		log.FromContext(ctx).Info("human created",
-			"name", h.Name, "username", username, "matrixUserID", creds.UserID)
+		logger.Info("human Matrix account provisioned; status.matrixUserID set",
+			"username", username,
+			"created", creds.Created,
+			"hasAccessToken", creds.AccessToken != "")
+	} else if !s.identity.ManagesInitialPassword {
+		h.Status.InitialPassword = ""
 	}
 
 	// Sync Matrix profile displayName on first provisioning and when spec changes.
 	shouldSyncDisplayName := needsProvision || h.Status.DisplayNameSyncedGeneration != h.Generation
 	if shouldSyncDisplayName {
-		token := s.userToken
-		if token == "" && h.Status.InitialPassword != "" {
-			if t, err := r.Provisioner.LoginAsHuman(ctx, username, h.Status.InitialPassword); err == nil {
-				token = t
-				s.userToken = t
-			} else {
-				log.FromContext(ctx).Info("human login failed before displayName sync; skipping this cycle",
-					"name", h.Name, "username", username, "err", err.Error())
-			}
-		}
+		token := r.ensureUserToken(ctx, s)
 		if token != "" {
 			if err := r.Provisioner.SetDisplayName(ctx, h.Status.MatrixUserID, token, h.Spec.DisplayName); err != nil {
 				log.FromContext(ctx).Error(err, "failed to sync human displayName (non-fatal)",

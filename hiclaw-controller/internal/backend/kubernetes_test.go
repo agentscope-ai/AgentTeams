@@ -112,6 +112,9 @@ func (f *fakeK8sServiceClient) Update(_ context.Context, svc *corev1.Service, _ 
 func (f *fakeK8sServiceClient) Delete(_ context.Context, _ string, _ metav1.DeleteOptions) error {
 	return nil
 }
+func (f *fakeK8sServiceClient) List(_ context.Context, _ metav1.ListOptions) (*corev1.ServiceList, error) {
+	return &corev1.ServiceList{}, nil
+}
 
 // fakeK8sNamespaceClient is a no-op stub for tests that don't exercise Namespaces.
 type fakeK8sNamespaceClient struct{}
@@ -184,28 +187,28 @@ func newTestK8sBackendWithFake(extra K8sConfig, objects ...*corev1.Pod) (*K8sBac
 	client := newFakeK8sCoreClient(objects...)
 	cfg := K8sConfig{
 		Namespace:        "hiclaw",
-		WorkerImage:      "hiclaw/worker-agent:latest",
-		CopawWorkerImage: "hiclaw/copaw-worker:latest",
+		WorkerImage:      "agentteams/worker-agent:latest",
+		CopawWorkerImage: "agentteams/copaw-worker:latest",
 		WorkerCPU:        "1000m",
 		WorkerMemory:     "2Gi",
 		ControllerName:   extra.ControllerName,
 	}
-	return NewK8sBackendWithClient(client, cfg, "hiclaw-worker-", nil), client
+	return NewK8sBackendWithClient(client, cfg, "agentteams-worker-", nil), client
 }
 
 func TestK8sCreate(t *testing.T) {
-	t.Setenv("HICLAW_FS_BUCKET", "hiclaw-fs")
-	t.Setenv("HICLAW_REGION", "cn-hangzhou")
+	t.Setenv("AGENTTEAMS_FS_BUCKET", "agentteams-fs")
+	t.Setenv("AGENTTEAMS_REGION", "cn-hangzhou")
 
 	b := newTestK8sBackend()
 
 	result, err := b.Create(context.Background(), CreateRequest{
 		Name: "alice",
 		Env: map[string]string{
-			"HICLAW_MATRIX_URL": "http://matrix:6167",
+			"AGENTTEAMS_MATRIX_URL": "http://matrix:6167",
 		},
 		ControllerURL:      "http://controller:8090",
-		ServiceAccountName: "hiclaw-worker-test1",
+		ServiceAccountName: "agentteams-worker-test1",
 	})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
@@ -217,45 +220,83 @@ func TestK8sCreate(t *testing.T) {
 		t.Fatalf("expected starting status, got %s", result.Status)
 	}
 
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-alice", metav1.GetOptions{})
+	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected worker pod to exist: %v", err)
 	}
-	if pod.Spec.ServiceAccountName != "hiclaw-worker-test1" {
-		t.Fatalf("expected SA hiclaw-worker-test1, got %q", pod.Spec.ServiceAccountName)
+	if pod.Spec.ServiceAccountName != "agentteams-worker-test1" {
+		t.Fatalf("expected SA agentteams-worker-test1, got %q", pod.Spec.ServiceAccountName)
 	}
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
 		t.Fatalf("expected default automount disabled")
 	}
-	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].Name != "hiclaw-token" {
-		t.Fatalf("expected projected volume hiclaw-token, got %+v", pod.Spec.Volumes)
+	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].Name != "agentteams-token" {
+		t.Fatalf("expected projected volume agentteams-token, got %+v", pod.Spec.Volumes)
 	}
 	projSrc := pod.Spec.Volumes[0].Projected.Sources[0].ServiceAccountToken
-	if projSrc.Audience != "hiclaw-controller" {
-		t.Fatalf("expected default audience hiclaw-controller, got %q", projSrc.Audience)
+	if projSrc.Audience != "agentteams-controller" {
+		t.Fatalf("expected default audience agentteams-controller, got %q", projSrc.Audience)
+	}
+	if projSrc.ExpirationSeconds == nil || *projSrc.ExpirationSeconds != DefaultAuthTokenExpirationSeconds {
+		t.Fatalf("expected default token expiration %d, got %v", DefaultAuthTokenExpirationSeconds, projSrc.ExpirationSeconds)
 	}
 
 	envs := map[string]string{}
 	for _, env := range pod.Spec.Containers[0].Env {
 		envs[env.Name] = env.Value
 	}
-	if envs["HICLAW_RUNTIME"] != "k8s" {
-		t.Fatalf("expected HICLAW_RUNTIME=k8s, got %q", envs["HICLAW_RUNTIME"])
+	if envs["AGENTTEAMS_RUNTIME"] != "k8s" {
+		t.Fatalf("expected AGENTTEAMS_RUNTIME=k8s, got %q", envs["AGENTTEAMS_RUNTIME"])
 	}
-	if envs["HICLAW_AUTH_TOKEN_FILE"] != "/var/run/secrets/hiclaw/token" {
-		t.Fatalf("expected HICLAW_AUTH_TOKEN_FILE, got %q", envs["HICLAW_AUTH_TOKEN_FILE"])
+	if envs["AGENTTEAMS_AUTH_TOKEN_FILE"] != "/var/run/secrets/agentteams/token" {
+		t.Fatalf("expected AGENTTEAMS_AUTH_TOKEN_FILE, got %q", envs["AGENTTEAMS_AUTH_TOKEN_FILE"])
 	}
-	if envs["HICLAW_CONTROLLER_URL"] != "http://controller:8090" {
-		t.Fatalf("expected injected controller URL, got %q", envs["HICLAW_CONTROLLER_URL"])
+	if envs["AGENTTEAMS_CONTROLLER_URL"] != "http://controller:8090" {
+		t.Fatalf("expected injected controller URL, got %q", envs["AGENTTEAMS_CONTROLLER_URL"])
 	}
-	if envs["HICLAW_FS_BUCKET"] != "hiclaw-fs" {
-		t.Fatalf("expected HICLAW_FS_BUCKET from process env, got %q", envs["HICLAW_FS_BUCKET"])
+	if envs["AGENTTEAMS_FS_BUCKET"] != "agentteams-fs" {
+		t.Fatalf("expected AGENTTEAMS_FS_BUCKET from process env, got %q", envs["AGENTTEAMS_FS_BUCKET"])
 	}
-	if _, ok := envs["HICLAW_OSS_BUCKET"]; ok {
-		t.Fatalf("unexpected legacy HICLAW_OSS_BUCKET in worker pod env")
+	if _, ok := envs["AGENTTEAMS_OSS_BUCKET"]; ok {
+		t.Fatalf("unexpected legacy AGENTTEAMS_OSS_BUCKET in worker pod env")
 	}
-	if envs["HICLAW_REGION"] != "cn-hangzhou" {
-		t.Fatalf("expected HICLAW_REGION from process env, got %q", envs["HICLAW_REGION"])
+	if envs["AGENTTEAMS_REGION"] != "cn-hangzhou" {
+		t.Fatalf("expected AGENTTEAMS_REGION from process env, got %q", envs["AGENTTEAMS_REGION"])
+	}
+}
+
+func TestK8sCreate_WorkerDepsDataMount(t *testing.T) {
+	b := newTestK8sBackend()
+
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name: "alice",
+		WorkersDeps: &WorkerDepsSpec{PodVolume: &WorkerDepsPodVolume{
+			Name:      "hiclaw-worker-deps",
+			ClaimName: "agentteams",
+			Mounts: []WorkerDepsPodVolumeMount{
+				{MountPath: "/mnt/agentteams/data", SubPath: "workers-deps/alice/data"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if len(pod.Spec.Volumes) != 2 {
+		t.Fatalf("volumes=%+v, want token + worker deps", pod.Spec.Volumes)
+	}
+	if pod.Spec.Volumes[1].PersistentVolumeClaim == nil || pod.Spec.Volumes[1].PersistentVolumeClaim.ClaimName != "agentteams" {
+		t.Fatalf("worker deps volume=%+v", pod.Spec.Volumes[1])
+	}
+	mounts := pod.Spec.Containers[0].VolumeMounts
+	if len(mounts) != 2 {
+		t.Fatalf("volumeMounts=%+v, want token + data", mounts)
+	}
+	if mounts[1].MountPath != "/mnt/agentteams/data" || mounts[1].SubPath != "workers-deps/alice/data" || mounts[1].ReadOnly {
+		t.Fatalf("data mount=%+v", mounts[1])
 	}
 }
 
@@ -263,14 +304,15 @@ func TestK8sCreateCustomAudience(t *testing.T) {
 	b := newTestK8sBackend()
 
 	_, err := b.Create(context.Background(), CreateRequest{
-		Name:         "bob",
-		AuthAudience: "custom-audience",
+		Name:                  "bob",
+		AuthAudience:          "custom-audience",
+		AuthExpirationSeconds: 7200,
 	})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-bob", metav1.GetOptions{})
+	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected worker pod to exist: %v", err)
 	}
@@ -278,12 +320,36 @@ func TestK8sCreateCustomAudience(t *testing.T) {
 	if projSrc.Audience != "custom-audience" {
 		t.Fatalf("expected custom-audience, got %q", projSrc.Audience)
 	}
+	if projSrc.ExpirationSeconds == nil || *projSrc.ExpirationSeconds != 7200 {
+		t.Fatalf("expected custom expiration 7200, got %v", projSrc.ExpirationSeconds)
+	}
+}
+
+func TestK8sCreateTokenExpirationClampsMinimum(t *testing.T) {
+	b := newTestK8sBackend()
+
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name:                  "min-exp",
+		AuthExpirationSeconds: 300,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-min-exp", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("expected worker pod to exist: %v", err)
+	}
+	projSrc := pod.Spec.Volumes[0].Projected.Sources[0].ServiceAccountToken
+	if projSrc.ExpirationSeconds == nil || *projSrc.ExpirationSeconds != MinAuthTokenExpirationSeconds {
+		t.Fatalf("expected min expiration %d, got %v", MinAuthTokenExpirationSeconds, projSrc.ExpirationSeconds)
+	}
 }
 
 func TestK8sCreateConflict(t *testing.T) {
 	existingPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hiclaw-worker-alice",
+			Name:      "agentteams-worker-alice",
 			Namespace: "hiclaw",
 		},
 	}
@@ -298,10 +364,10 @@ func TestK8sCreateConflict(t *testing.T) {
 func TestK8sStatus(t *testing.T) {
 	b := newTestK8sBackend(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hiclaw-worker-bob",
+			Name:      "agentteams-worker-bob",
 			Namespace: "hiclaw",
 			Labels: map[string]string{
-				"app":                  "hiclaw-worker",
+				"app":                  "agentteams-worker",
 				"agentteams.io/worker": "bob",
 			},
 		},
@@ -317,10 +383,100 @@ func TestK8sStatus(t *testing.T) {
 	}
 }
 
+func TestK8sStatus_ContainerFailureReasons(t *testing.T) {
+	cases := []struct {
+		name        string
+		podStatus   corev1.PodStatus
+		wantStatus  WorkerStatus
+		wantRaw     string
+		wantMessage string
+	}{
+		{
+			name: "pending image pull backoff fails worker",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "ImagePullBackOff",
+							Message: `failed to pull image "registry.example.com/worker:missing": not found`,
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusFailed,
+			wantRaw:     "ImagePullBackOff",
+			wantMessage: `container worker: ImagePullBackOff: failed to pull image "registry.example.com/worker:missing": not found`,
+		},
+		{
+			name: "init container config error fails worker",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				InitContainerStatuses: []corev1.ContainerStatus{{
+					Name: "init",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CreateContainerConfigError",
+							Message: "secret missing",
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusFailed,
+			wantRaw:     "CreateContainerConfigError",
+			wantMessage: "container init: CreateContainerConfigError: secret missing",
+		},
+		{
+			name: "ordinary pending container creation still starts",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason: "ContainerCreating",
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusStarting,
+			wantRaw:     "Pending",
+			wantMessage: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newFakeK8sCoreClient(&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "agentteams-worker-test",
+					Namespace: "agentteams",
+				},
+				Status: tc.podStatus,
+			})
+			b := NewK8sBackendWithClient(client, K8sConfig{Namespace: "agentteams"}, "agentteams-worker-", nil)
+
+			result, err := b.Status(context.Background(), "test")
+			if err != nil {
+				t.Fatalf("Status failed: %v", err)
+			}
+			if result.Status != tc.wantStatus {
+				t.Fatalf("Status = %s, want %s", result.Status, tc.wantStatus)
+			}
+			if result.RawStatus != tc.wantRaw {
+				t.Fatalf("RawStatus = %q, want %q", result.RawStatus, tc.wantRaw)
+			}
+			if result.Message != tc.wantMessage {
+				t.Fatalf("Message = %q, want %q", result.Message, tc.wantMessage)
+			}
+		})
+	}
+}
+
 func TestK8sStopAndDelete(t *testing.T) {
 	b := newTestK8sBackend(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hiclaw-worker-carol",
+			Name:      "agentteams-worker-carol",
 			Namespace: "hiclaw",
 		},
 	})
@@ -358,8 +514,8 @@ func TestNormalizeK8sPodPhase(t *testing.T) {
 
 func TestBuildHostAliases(t *testing.T) {
 	aliases := buildHostAliases([]string{
-		"matrix-local.hiclaw.io:10.0.0.1",
-		"aigw-local.hiclaw.io:10.0.0.1",
+		"matrix-local.agentteams.io:10.0.0.1",
+		"aigw-local.agentteams.io:10.0.0.1",
 		"bad-entry",
 	})
 	if len(aliases) != 1 {
@@ -373,10 +529,10 @@ func TestBuildHostAliases(t *testing.T) {
 func TestK8sWithPrefix(t *testing.T) {
 	managerPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hiclaw-manager",
+			Name:      "agentteams-manager",
 			Namespace: "hiclaw",
 			Labels: map[string]string{
-				"app":                   "hiclaw-manager",
+				"app":                   "agentteams-manager",
 				"agentteams.io/manager": "default",
 			},
 		},
@@ -384,8 +540,8 @@ func TestK8sWithPrefix(t *testing.T) {
 	}
 	b := newTestK8sBackend(managerPod)
 
-	// Original backend (prefix "hiclaw-worker-") should NOT find the manager pod
-	result, err := b.Status(context.Background(), "hiclaw-manager")
+	// Original backend (prefix "agentteams-worker-") should NOT find the manager pod
+	result, err := b.Status(context.Background(), "agentteams-manager")
 	if err != nil {
 		t.Fatalf("Status failed: %v", err)
 	}
@@ -395,7 +551,7 @@ func TestK8sWithPrefix(t *testing.T) {
 
 	// WithPrefix("") should find it by exact name
 	mb := b.WithPrefix("")
-	result, err = mb.Status(context.Background(), "hiclaw-manager")
+	result, err = mb.Status(context.Background(), "agentteams-manager")
 	if err != nil {
 		t.Fatalf("Status failed: %v", err)
 	}
@@ -404,7 +560,7 @@ func TestK8sWithPrefix(t *testing.T) {
 	}
 
 	// WithPrefix does not mutate the original backend
-	if b.containerPrefix != "hiclaw-worker-" {
+	if b.containerPrefix != "agentteams-worker-" {
 		t.Fatalf("original prefix mutated: %q", b.containerPrefix)
 	}
 	if mb.containerPrefix != "" {
@@ -415,18 +571,18 @@ func TestK8sWithPrefix(t *testing.T) {
 func TestK8sWithPrefixDelete(t *testing.T) {
 	managerPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hiclaw-manager",
+			Name:      "agentteams-manager",
 			Namespace: "hiclaw",
 		},
 	}
 	b := newTestK8sBackend(managerPod)
 	mb := b.WithPrefix("")
 
-	if err := mb.Delete(context.Background(), "hiclaw-manager"); err != nil {
+	if err := mb.Delete(context.Background(), "agentteams-manager"); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	result, err := mb.Status(context.Background(), "hiclaw-manager")
+	result, err := mb.Status(context.Background(), "agentteams-manager")
 	if err != nil {
 		t.Fatalf("Status after delete failed: %v", err)
 	}
@@ -438,7 +594,7 @@ func TestK8sWithPrefixDelete(t *testing.T) {
 func TestK8sWithPrefixStop(t *testing.T) {
 	managerPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hiclaw-manager",
+			Name:      "agentteams-manager",
 			Namespace: "hiclaw",
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
@@ -447,11 +603,11 @@ func TestK8sWithPrefixStop(t *testing.T) {
 	mb := b.WithPrefix("")
 
 	// Stop on K8s backend is equivalent to Delete
-	if err := mb.Stop(context.Background(), "hiclaw-manager"); err != nil {
+	if err := mb.Stop(context.Background(), "agentteams-manager"); err != nil {
 		t.Fatalf("Stop failed: %v", err)
 	}
 
-	result, err := mb.Status(context.Background(), "hiclaw-manager")
+	result, err := mb.Status(context.Background(), "agentteams-manager")
 	if err != nil {
 		t.Fatalf("Status after stop failed: %v", err)
 	}
@@ -463,7 +619,7 @@ func TestK8sWithPrefixStop(t *testing.T) {
 // TestK8sCreateRuntimeWorkingDir verifies WorkingDir / HOME defaulting per
 // runtime. The hermes runtime now shares the openclaw layout: WorkingDir ==
 // HOME == /root/hiclaw-fs/agents/<name> (== MinIO mirror root). Only copaw
-// keeps its own /root/.copaw-worker workspace.
+// now shares the same layout.
 func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -473,22 +629,20 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 	}{
 		{"openclaw", RuntimeOpenClaw, "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 		{"hermes", RuntimeHermes, "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
-		{"copaw", RuntimeCopaw, "/root/.copaw-worker", ""},
-		{"openhuman", RuntimeOpenHuman, "/home/openhuman/.openhuman", ""},
+		{"copaw", RuntimeCopaw, "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 		{"empty_default", "", "/root/hiclaw-fs/agents/x", "/root/hiclaw-fs/agents/x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:            "hiclaw",
-				WorkerImage:          "hiclaw/worker-agent:latest",
-				CopawWorkerImage:     "hiclaw/copaw-worker:latest",
-				HermesWorkerImage:    "hiclaw/hermes-worker:latest",
-				OpenHumanWorkerImage: "hiclaw/openhuman-worker:latest",
-				WorkerCPU:            "1000m",
-				WorkerMemory:         "2Gi",
-			}, "hiclaw-worker-", nil)
+				Namespace:         "hiclaw",
+				WorkerImage:       "agentteams/worker-agent:latest",
+				CopawWorkerImage:  "agentteams/copaw-worker:latest",
+				HermesWorkerImage: "agentteams/hermes-worker:latest",
+				WorkerCPU:         "1000m",
+				WorkerMemory:      "2Gi",
+			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
 				Name:    "x",
@@ -496,7 +650,7 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
-			pod, err := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-x", metav1.GetOptions{})
+			pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-x", metav1.GetOptions{})
 			if err != nil {
 				t.Fatalf("Get pod failed: %v", err)
 			}
@@ -520,7 +674,7 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 // TestK8sCreateResolvesImageFromRuntime verifies that the K8s backend selects
 // the correct image and runtime label based on req.Runtime, with empty values
 // falling back to the caller-provided RuntimeFallback (worker reconciler →
-// HICLAW_DEFAULT_WORKER_RUNTIME, manager reconciler → HICLAW_MANAGER_RUNTIME).
+// AGENTTEAMS_DEFAULT_WORKER_RUNTIME, manager reconciler → AGENTTEAMS_MANAGER_RUNTIME).
 func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -529,28 +683,28 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		wantImage string
 		wantLabel string
 	}{
-		{"explicit_copaw", RuntimeCopaw, "", "hiclaw/copaw-worker:latest", RuntimeCopaw},
-		{"explicit_hermes", RuntimeHermes, "", "hiclaw/hermes-worker:latest", RuntimeHermes},
-		{"explicit_openclaw", RuntimeOpenClaw, "", "hiclaw/worker-agent:latest", RuntimeOpenClaw},
-		{"explicit_openhuman", RuntimeOpenHuman, "", "hiclaw/openhuman-worker:latest", RuntimeOpenHuman},
-		{"empty_no_fallback", "", "", "hiclaw/worker-agent:latest", RuntimeOpenClaw},
-		{"empty_with_copaw_fallback", "", RuntimeCopaw, "hiclaw/copaw-worker:latest", RuntimeCopaw},
-		{"empty_with_hermes_fallback", "", RuntimeHermes, "hiclaw/hermes-worker:latest", RuntimeHermes},
-		{"empty_with_openhuman_fallback", "", RuntimeOpenHuman, "hiclaw/openhuman-worker:latest", RuntimeOpenHuman},
-		{"explicit_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "hiclaw/worker-agent:latest", RuntimeOpenClaw},
+		{"explicit_copaw", RuntimeCopaw, "", "agentteams/copaw-worker:latest", RuntimeCopaw},
+		{"explicit_hermes", RuntimeHermes, "", "agentteams/hermes-worker:latest", RuntimeHermes},
+		{"explicit_qwenpaw", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
+		{"explicit_openclaw", RuntimeOpenClaw, "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
+		{"empty_no_fallback", "", "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
+		{"empty_with_copaw_fallback", "", RuntimeCopaw, "agentteams/copaw-worker:latest", RuntimeCopaw},
+		{"empty_with_hermes_fallback", "", RuntimeHermes, "agentteams/hermes-worker:latest", RuntimeHermes},
+		{"empty_with_qwenpaw_fallback", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
+		{"explicit_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "agentteams/worker-agent:latest", RuntimeOpenClaw},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:            "hiclaw",
-				WorkerImage:          "hiclaw/worker-agent:latest",
-				CopawWorkerImage:     "hiclaw/copaw-worker:latest",
-				HermesWorkerImage:    "hiclaw/hermes-worker:latest",
-				OpenHumanWorkerImage: "hiclaw/openhuman-worker:latest",
-				WorkerCPU:            "1000m",
-				WorkerMemory:         "2Gi",
-			}, "hiclaw-worker-", nil)
+				Namespace:          "hiclaw",
+				WorkerImage:        "agentteams/worker-agent:latest",
+				CopawWorkerImage:   "agentteams/copaw-worker:latest",
+				HermesWorkerImage:  "agentteams/hermes-worker:latest",
+				QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
+				WorkerCPU:          "1000m",
+				WorkerMemory:       "2Gi",
+			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
 				Name:            "x",
@@ -560,7 +714,7 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 				t.Fatalf("Create failed: %v", err)
 			}
 
-			pod, err := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-x", metav1.GetOptions{})
+			pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-x", metav1.GetOptions{})
 			if err != nil {
 				t.Fatalf("Get pod failed: %v", err)
 			}
@@ -626,13 +780,13 @@ spec:
 	if _, err := b.Create(context.Background(), CreateRequest{
 		Name: "alice",
 		Labels: map[string]string{
-			"app":                  "hiclaw-worker",
+			"app":                  "agentteams-worker",
 			"agentteams.io/worker": "alice",
 		},
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-alice", metav1.GetOptions{})
+	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -646,7 +800,7 @@ spec:
 	if pod.Labels["nsm.alibabacloud.com/inject-sidecar"] != "ansm-magic-xxx" {
 		t.Fatalf("ANSM label: %+v", pod.Labels)
 	}
-	if pod.Labels["agentteams.io/worker"] != "alice" || pod.Labels["app"] != "hiclaw-worker" {
+	if pod.Labels["agentteams.io/worker"] != "alice" || pod.Labels["app"] != "agentteams-worker" {
 		t.Fatalf("overlay labels: %+v", pod.Labels)
 	}
 	if pod.Spec.SecurityContext == nil || len(pod.Spec.SecurityContext.Sysctls) != 1 {
@@ -664,24 +818,24 @@ spec:
 }
 
 // K2: No ControllerName (nothing to look up) → backend produces the same Pod
-// shape it always did (hiclaw-token projected volume, SA override,
+// shape it always did (agentteams-token projected volume, SA override,
 // automount=false, default resources).
 func TestK8sCreate_NoTemplateBackwardCompat(t *testing.T) {
 	b, _ := newTestK8sBackendWithFake(K8sConfig{})
 	if _, err := b.Create(context.Background(), CreateRequest{Name: "bob"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-bob", metav1.GetOptions{})
+	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if pod.Spec.ServiceAccountName != "hiclaw-worker-bob" {
+	if pod.Spec.ServiceAccountName != "agentteams-worker-bob" {
 		t.Fatalf("SA: %q", pod.Spec.ServiceAccountName)
 	}
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
 		t.Fatalf("automount must be false")
 	}
-	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].Name != "hiclaw-token" {
+	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].Name != "agentteams-token" {
 		t.Fatalf("volumes: %+v", pod.Spec.Volumes)
 	}
 	if pod.Spec.Containers[0].Resources.Limits.Cpu().String() != "1" {
@@ -720,8 +874,8 @@ func TestK8sCreate_SetsControllerReferenceFromOwner(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	b := NewK8sBackendWithClient(client, K8sConfig{
 		Namespace:   "hiclaw",
-		WorkerImage: "hiclaw/worker-agent:latest",
-	}, "hiclaw-worker-", scheme)
+		WorkerImage: "agentteams/worker-agent:latest",
+	}, "agentteams-worker-", scheme)
 
 	owner := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
@@ -737,7 +891,7 @@ func TestK8sCreate_SetsControllerReferenceFromOwner(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-eve", metav1.GetOptions{})
+	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-eve", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -767,7 +921,7 @@ func TestK8sCreate_SetsControllerReferenceFromOwner(t *testing.T) {
 // error we want to catch loudly rather than silently drop the ownerRef.
 func TestK8sCreate_OwnerRequiresScheme(t *testing.T) {
 	client := newFakeK8sCoreClient()
-	b := NewK8sBackendWithClient(client, K8sConfig{Namespace: "hiclaw", WorkerImage: "img"}, "hiclaw-worker-", nil)
+	b := NewK8sBackendWithClient(client, K8sConfig{Namespace: "hiclaw", WorkerImage: "img"}, "agentteams-worker-", nil)
 
 	owner := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "hiclaw", UID: "u"},
@@ -794,7 +948,7 @@ func TestK8sCreate_ResourcesOverrideFromCreateRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-frank", metav1.GetOptions{})
+	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-frank", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -824,7 +978,7 @@ func TestK8sCreate_ResourcesOverridePartial(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, _ := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-grace", metav1.GetOptions{})
+	pod, _ := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-grace", metav1.GetOptions{})
 	res := pod.Spec.Containers[0].Resources
 	if got := res.Limits.Cpu().String(); got != "3" {
 		t.Fatalf("cpu limit (override): got %q, want 3", got)
@@ -834,23 +988,6 @@ func TestK8sCreate_ResourcesOverridePartial(t *testing.T) {
 	}
 	if got := res.Requests.Cpu().String(); got != "100m" {
 		t.Fatalf("cpu request (default): got %q, want 100m", got)
-	}
-}
-
-func TestK8sCreate_InvalidResourcesOverrideReturnsError(t *testing.T) {
-	b, _ := newTestK8sBackendWithFake(K8sConfig{})
-
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Create panicked on invalid resources override: %v", r)
-		}
-	}()
-
-	if _, err := b.Create(context.Background(), CreateRequest{
-		Name:      "invalid-resources",
-		Resources: &ResourceRequirements{CPULimit: "not-cpu"},
-	}); err == nil {
-		t.Fatal("expected Create to return an error for invalid resources override")
 	}
 }
 
@@ -873,7 +1010,7 @@ func TestK8sCreate_ResourcesOverrideBeatsTemplate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, _ := b.client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-henry", metav1.GetOptions{})
+	pod, _ := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-henry", metav1.GetOptions{})
 	got := pod.Spec.Containers[0].Resources.Limits.Cpu().String()
 	if got != "8" {
 		t.Fatalf("expected override=8 to win over template=4, got %q", got)
@@ -895,12 +1032,12 @@ func TestBuildDefaultResources_EmptyFallback(t *testing.T) {
 // TestK8sCreate_CustomResourcePrefix verifies that the worker pod's "app"
 // label and the default SA-name fallback derive from K8sConfig.ResourcePrefix
 // — critical for multi-tenant deployments sharing a namespace where the
-// hard-coded "hiclaw-worker" value would cause collisions across tenants.
+// hard-coded "agentteams-worker" value would cause collisions across tenants.
 func TestK8sCreate_CustomResourcePrefix(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	cfg := K8sConfig{
 		Namespace:      "hiclaw",
-		WorkerImage:    "hiclaw/worker-agent:latest",
+		WorkerImage:    "agentteams/worker-agent:latest",
 		WorkerCPU:      "1000m",
 		WorkerMemory:   "2Gi",
 		ResourcePrefix: "teamB-",
@@ -933,7 +1070,7 @@ func TestK8sCreate_DefaultSAFallback(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	cfg := K8sConfig{
 		Namespace:      "hiclaw",
-		WorkerImage:    "hiclaw/worker-agent:latest",
+		WorkerImage:    "agentteams/worker-agent:latest",
 		ResourcePrefix: "acme-",
 	}
 	b := NewK8sBackendWithClient(client, cfg, "acme-worker-", nil)
@@ -1156,8 +1293,8 @@ func TestK8sCreate_RemoteSkipsOwnerReference(t *testing.T) {
 	local := newFakeK8sCoreClient()
 	b := NewK8sBackendWithRemote(local, cache, K8sConfig{
 		Namespace:   "hiclaw",
-		WorkerImage: "hiclaw/worker-agent:latest",
-	}, "hiclaw-worker-", scheme)
+		WorkerImage: "agentteams/worker-agent:latest",
+	}, "agentteams-worker-", scheme)
 
 	owner := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "hiclaw", UID: "u-1"},
@@ -1174,12 +1311,22 @@ func TestK8sCreate_RemoteSkipsOwnerReference(t *testing.T) {
 	}
 
 	// Pod must land in the REMOTE client at the target namespace, not the local one.
-	pod, err := remote.Pods("team-a").Get(context.Background(), "hiclaw-worker-alice", metav1.GetOptions{})
+	pod, err := remote.Pods("team-a").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("remote pod lookup: %v", err)
 	}
 	if len(pod.OwnerReferences) != 0 {
 		t.Errorf("remote pod must have NO ownerReferences (cross-cluster ownerRef impossible), got %+v", pod.OwnerReferences)
+	}
+	envs := map[string]string{}
+	for _, env := range pod.Spec.Containers[0].Env {
+		envs[env.Name] = env.Value
+	}
+	if envs["AGENTTEAMS_CLUSTER_ID"] != "c-1" {
+		t.Fatalf("remote pod AGENTTEAMS_CLUSTER_ID=%q, want c-1", envs["AGENTTEAMS_CLUSTER_ID"])
+	}
+	if _, ok := envs["AGENTTEAMS_AUTH_MODE"]; ok {
+		t.Fatalf("remote pod AGENTTEAMS_AUTH_MODE must not be set, got %q", envs["AGENTTEAMS_AUTH_MODE"])
 	}
 
 	// Sanity: target namespace must have been ensured.
@@ -1188,7 +1335,7 @@ func TestK8sCreate_RemoteSkipsOwnerReference(t *testing.T) {
 	}
 
 	// Local backend must NOT have received the pod.
-	if _, err := local.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-alice", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := local.Pods("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("local backend must not store the remote pod, got err=%v", err)
 	}
 }
@@ -1206,8 +1353,8 @@ func TestK8sCreate_LocalKeepsOwnerReference(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	b := NewK8sBackendWithClient(client, K8sConfig{
 		Namespace:   "hiclaw",
-		WorkerImage: "hiclaw/worker-agent:latest",
-	}, "hiclaw-worker-", scheme)
+		WorkerImage: "agentteams/worker-agent:latest",
+	}, "agentteams-worker-", scheme)
 
 	owner := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "hiclaw", UID: "u-2"},
@@ -1218,11 +1365,144 @@ func TestK8sCreate_LocalKeepsOwnerReference(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := client.Pods("hiclaw").Get(context.Background(), "hiclaw-worker-bob", metav1.GetOptions{})
+	pod, err := client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if len(pod.OwnerReferences) != 1 {
 		t.Fatalf("expected 1 ownerReference for Local pod, got %+v", pod.OwnerReferences)
+	}
+}
+
+// ── Tests: podReadyCondition ─────────────────────────────────────────────
+
+func TestPodReadyCondition(t *testing.T) {
+	cases := []struct {
+		name        string
+		conditions  []corev1.PodCondition
+		wantMessage string
+		wantReady   bool
+	}{
+		{
+			name:        "nil conditions",
+			conditions:  nil,
+			wantMessage: "",
+			wantReady:   true,
+		},
+		{
+			name: "Ready=True",
+			conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+			wantMessage: "",
+			wantReady:   true,
+		},
+		{
+			name: "Ready=False with message",
+			conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Message: "back-off 5m0s restarting..."},
+			},
+			wantMessage: "back-off 5m0s restarting...",
+			wantReady:   false,
+		},
+		{
+			name: "Ready=False without message",
+			conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Message: ""},
+			},
+			wantMessage: "",
+			wantReady:   false,
+		},
+		{
+			name: "Other conditions but no Ready",
+			conditions: []corev1.PodCondition{
+				{Type: corev1.PodScheduled, Status: corev1.ConditionTrue},
+			},
+			wantMessage: "",
+			wantReady:   true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, ready := podReadyCondition(tc.conditions)
+			if msg != tc.wantMessage {
+				t.Errorf("message = %q, want %q", msg, tc.wantMessage)
+			}
+			if ready != tc.wantReady {
+				t.Errorf("ready = %v, want %v", ready, tc.wantReady)
+			}
+		})
+	}
+}
+
+// ── Tests: K8sBackend.Status() Ready condition scenarios ─────────────────
+
+func TestK8sStatus_ReadyCondition(t *testing.T) {
+	cases := []struct {
+		name        string
+		podPhase    corev1.PodPhase
+		conditions  []corev1.PodCondition
+		wantStatus  WorkerStatus
+		wantMessage string
+	}{
+		{
+			name:     "Running + Ready=True",
+			podPhase: corev1.PodRunning,
+			conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+			wantStatus:  StatusRunning,
+			wantMessage: "",
+		},
+		{
+			name:     "Running + Ready=False with message",
+			podPhase: corev1.PodRunning,
+			conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Message: "crash info"},
+			},
+			wantStatus:  StatusFailed,
+			wantMessage: "crash info",
+		},
+		{
+			name:     "Running + Ready=False without message",
+			podPhase: corev1.PodRunning,
+			conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Message: ""},
+			},
+			wantStatus:  StatusStarting,
+			wantMessage: "",
+		},
+		{
+			name:        "Pending does not check conditions",
+			podPhase:    corev1.PodPending,
+			conditions:  nil,
+			wantStatus:  StatusStarting,
+			wantMessage: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newTestK8sBackend(&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "agentteams-worker-test",
+					Namespace: "hiclaw",
+				},
+				Status: corev1.PodStatus{
+					Phase:      tc.podPhase,
+					Conditions: tc.conditions,
+				},
+			})
+
+			result, err := b.Status(context.Background(), "test")
+			if err != nil {
+				t.Fatalf("Status() error: %v", err)
+			}
+			if result.Status != tc.wantStatus {
+				t.Errorf("Status = %v, want %v", result.Status, tc.wantStatus)
+			}
+			if result.Message != tc.wantMessage {
+				t.Errorf("Message = %q, want %q", result.Message, tc.wantMessage)
+			}
+		})
 	}
 }

@@ -2,14 +2,105 @@ package controller
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
+	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 )
+
+// mockBackend is a minimal WorkerBackend implementation used to test
+// resolveBackendForMember through a backend.Registry. It always reports
+// Available so the registry resolves it for any backendRuntime via the
+// DetectWorkerBackend fallback path.
+type mockBackend struct{ name string }
+
+func (m *mockBackend) Name() string {
+	if m.name == "" {
+		return "mock"
+	}
+	return m.name
+}
+func (m *mockBackend) DeploymentMode() string           { return "local" }
+func (m *mockBackend) Available(_ context.Context) bool { return true }
+func (m *mockBackend) NeedsCredentialInjection() bool   { return false }
+func (m *mockBackend) Create(_ context.Context, _ backend.CreateRequest) (*backend.WorkerResult, error) {
+	return nil, nil
+}
+func (m *mockBackend) Delete(_ context.Context, _ string) error { return nil }
+func (m *mockBackend) Start(_ context.Context, _ string) error  { return nil }
+func (m *mockBackend) Stop(_ context.Context, _ string) error   { return nil }
+func (m *mockBackend) Status(_ context.Context, _ string) (*backend.WorkerResult, error) {
+	return nil, nil
+}
+
+func TestResolveBackendForMember_LocalMode(t *testing.T) {
+	// When DeployMode is empty or "Local", remote targeting is not applied
+	// and the backend the registry resolves is returned unchanged.
+	mb := &mockBackend{}
+	reg := backend.NewRegistry([]backend.WorkerBackend{mb})
+
+	tests := []struct {
+		name       string
+		deployMode string
+	}{
+		{"empty deploy mode", ""},
+		{"explicit Local mode", v1beta1.DeployModeLocal},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := MemberContext{
+				Name:       "worker-a",
+				DeployMode: tt.deployMode,
+			}
+			got, err := resolveBackendForMember(reg, "", m)
+			if err != nil {
+				t.Fatalf("resolveBackendForMember err = %v", err)
+			}
+			if got != mb {
+				t.Errorf("expected original backend pointer, got a different instance")
+			}
+		})
+	}
+}
+
+func TestResolveBackendForMember_RemoteMode_NonK8s(t *testing.T) {
+	// When DeployMode="Remote" but the resolved backend is neither a
+	// *K8sBackend nor a *SandboxBackend, the original backend is returned
+	// unchanged because remote targeting is K8s/Sandbox-only.
+	mb := &mockBackend{}
+	reg := backend.NewRegistry([]backend.WorkerBackend{mb})
+
+	m := MemberContext{
+		Name:            "worker-c",
+		DeployMode:      v1beta1.DeployModeRemote,
+		TargetClusterID: "cluster-remote-2",
+		TargetNamespace: "remote-ns",
+	}
+
+	got, err := resolveBackendForMember(reg, "", m)
+	if err != nil {
+		t.Fatalf("resolveBackendForMember err = %v", err)
+	}
+	if got != mb {
+		t.Errorf("expected original mock backend, got a different instance")
+	}
+}
+
+func TestResolveBackendForMember_NoBackendAvailable(t *testing.T) {
+	// An empty registry surfaces an error so callers can decide whether
+	// to skip container management or fail loudly.
+	reg := backend.NewRegistry(nil)
+	m := MemberContext{Name: "worker-d"}
+
+	if _, err := resolveBackendForMember(reg, "", m); err == nil {
+		t.Fatal("expected an error when no backend is available")
+	}
+}
 
 func TestCreateMemberContainerAddsDockerHostGateway(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
@@ -65,9 +156,8 @@ func TestCreateMemberContainerDoesNotAddDockerHostGatewayForK8s(t *testing.T) {
 	}
 }
 
-func TestCreateMemberContainerPassesSpecResources(t *testing.T) {
+func TestCreateMemberContainerPassesMemberRoleEnv(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
-	wb.NameOverride = "k8s"
 	state := &MemberState{
 		ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"},
 	}
@@ -76,14 +166,10 @@ func TestCreateMemberContainerPassesSpecResources(t *testing.T) {
 		Provisioner: mocks.NewMockProvisioner(),
 		EnvBuilder:  mocks.NewMockEnvBuilder(),
 	}, MemberContext{
-		Name: "alice",
-		Spec: v1beta1.WorkerSpec{
-			Image: "img:latest",
-			Resources: &v1beta1.AgentResourceRequirements{
-				Requests: v1beta1.AgentResourceValues{CPU: "250m", Memory: "512Mi"},
-				Limits:   v1beta1.AgentResourceValues{CPU: "2", Memory: "4Gi"},
-			},
-		},
+		Name:        "alpha-lead",
+		RuntimeName: "leader-runtime",
+		Role:        RoleTeamLeader,
+		Spec:        v1beta1.WorkerSpec{Image: "img:latest"},
 	}, state, wb)
 	if err != nil {
 		t.Fatalf("createMemberContainer failed: %v", err)
@@ -93,116 +179,446 @@ func TestCreateMemberContainerPassesSpecResources(t *testing.T) {
 	if !ok {
 		t.Fatal("expected backend Create to be called")
 	}
-	if req.Resources == nil {
-		t.Fatal("CreateRequest.Resources = nil, want spec resources")
-	}
-	if req.Resources.CPURequest != "250m" || req.Resources.MemoryRequest != "512Mi" ||
-		req.Resources.CPULimit != "2" || req.Resources.MemoryLimit != "4Gi" {
-		t.Fatalf("CreateRequest.Resources = %+v", req.Resources)
+	if got := req.Env["AGENTTEAMS_WORKER_ROLE"]; got != "team_leader" {
+		t.Fatalf("AGENTTEAMS_WORKER_ROLE=%q, want team_leader", got)
 	}
 }
 
-func TestCreateMemberContainerPassesSandboxWorkerDeps(t *testing.T) {
+func TestMemberRuntimeStalePrefersStatusSpecHashOverLegacySandboxAnnotation(t *testing.T) {
+	member := MemberContext{
+		Name:            "alice",
+		BackendRuntime:  v1beta1.BackendRuntimeSandbox,
+		AppliedSpecHash: "desired-hash",
+		CurrentSpecHash: "desired-hash",
+		SpecChanged:     false,
+	}
+	result := &backend.WorkerResult{
+		Name:            "alice",
+		Backend:         "sandbox",
+		Status:          backend.StatusRunning,
+		AppliedSpecHash: "legacy-old-hash",
+	}
+
+	if memberRuntimeStale(result, member, true) {
+		t.Fatal("status specHash should win over legacy annotation")
+	}
+}
+
+func TestReconcileMemberContainerSpecChangedDeletesRunningSandboxWithoutHash(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
 	wb.NameOverride = "sandbox"
-	materialized := false
-	wb.CreateFn = func(ctx context.Context, req backend.CreateRequest) (*backend.WorkerResult, error) {
-		if !materialized {
-			t.Fatal("backend Create called before sandbox worker deps were materialized")
-		}
-		return &backend.WorkerResult{Name: req.Name, Backend: wb.Name(), Status: backend.StatusStarting}, nil
+	wb.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{
+			Name:    "alice",
+			Backend: "sandbox",
+			Status:  backend.StatusRunning,
+		}, nil
 	}
-	prov := mocks.NewMockProvisioner()
-	prov.RequestSATokenFn = func(ctx context.Context, workerName string) (string, error) {
-		return "sa-token-" + workerName, nil
-	}
-	deployer := mocks.NewMockDeployer()
-	deployer.MaterializeSandboxWorkerDepsFn = func(ctx context.Context, req service.SandboxWorkerDepsRequest) error {
-		materialized = true
-		if req.WorkerName != "alice" {
-			t.Fatalf("SandboxWorkerDepsRequest.WorkerName=%q, want alice", req.WorkerName)
-		}
-		if req.AuthToken != "sa-token-alice" {
-			t.Fatalf("SandboxWorkerDepsRequest.AuthToken=%q, want sa-token-alice", req.AuthToken)
-		}
-		if got := req.Env["AGENTTEAMS_TEST_ENV"]; got != "true" {
-			t.Fatalf("SandboxWorkerDepsRequest.Env[AGENTTEAMS_TEST_ENV]=%q, want true (all=%v)", got, req.Env)
-		}
-		return nil
-	}
-	envBuilder := mocks.NewMockEnvBuilder()
-	envBuilder.BuildFn = func(workerName string, prov *service.WorkerProvisionResult) map[string]string {
-		return map[string]string{
-			"AGENTTEAMS_TEST_ENV": "true",
-		}
-	}
-	state := &MemberState{
-		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"},
+	member := MemberContext{
+		Name:            "alice",
+		BackendRuntime:  v1beta1.BackendRuntimeSandbox,
+		AppliedSpecHash: "desired-hash",
+		SpecChanged:     true,
 	}
 
-	_, err := createMemberContainer(context.Background(), MemberDeps{
-		Provisioner: prov,
-		Deployer:    deployer,
-		EnvBuilder:  envBuilder,
-	}, MemberContext{
-		Name:           "alice",
-		RuntimeName:    "alice",
-		BackendRuntime: v1beta1.BackendRuntimeSandbox,
-		Spec:           v1beta1.WorkerSpec{Image: "img:latest"},
-	}, state, wb)
-	if err != nil {
-		t.Fatalf("createMemberContainer failed: %v", err)
+	state := &MemberState{ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"}}
+	if _, err := ReconcileMemberContainer(context.Background(), MemberDeps{
+		Backend: backend.NewRegistry([]backend.WorkerBackend{wb}),
+	}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberContainer: %v", err)
 	}
-
-	req, ok := wb.LastCreateReq()
-	if !ok {
-		t.Fatal("expected backend Create to be called")
+	if len(wb.Calls.Delete) != 1 || wb.Calls.Delete[0] != "alice" {
+		t.Fatalf("spec-changed sandbox should be deleted before recreate, delete=%v", wb.Calls.Delete)
 	}
-	if req.WorkersDeps == nil {
-		t.Fatal("CreateRequest.WorkersDeps = nil, want sandbox runtime deps")
-	}
-	if req.WorkersDeps.AuthToken != "sa-token-alice" {
-		t.Fatalf("WorkersDeps.AuthToken=%q, want sa-token-alice", req.WorkersDeps.AuthToken)
-	}
-	if got := req.WorkersDeps.Env["AGENTTEAMS_TEST_ENV"]; got != "true" {
-		t.Fatalf("WorkersDeps.Env[AGENTTEAMS_TEST_ENV]=%q, want true (all=%v)", got, req.WorkersDeps.Env)
-	}
-	if !hasDynamicMount(req.WorkersDeps.DynamicVolumeMounts, "/mnt/agentteams/env", "workers-deps/alice/env") {
-		t.Fatalf("missing env dynamic mount: %+v", req.WorkersDeps.DynamicVolumeMounts)
-	}
-	if !hasDynamicMount(req.WorkersDeps.DynamicVolumeMounts, "/var/run/secrets/agentteams", "workers-deps/alice/token") {
-		t.Fatalf("missing token dynamic mount: %+v", req.WorkersDeps.DynamicVolumeMounts)
+	if len(wb.Calls.Create) != 0 {
+		t.Fatalf("sandbox recreate must wait for next reconcile, create=%v", wb.Calls.Create)
 	}
 }
 
-func TestEnsureMemberContainerPresentBlocksLegacyPodToSandboxSwitch(t *testing.T) {
-	podBackend := mocks.NewMockWorkerBackend()
-	podBackend.NameOverride = "k8s"
-	podBackend.StatusFn = func(ctx context.Context, name string) (*backend.WorkerResult, error) {
-		return &backend.WorkerResult{Name: name, Status: backend.StatusRunning}, nil
+func TestReconcileMemberContainerSandboxSpecChangeWaitsAfterDelete(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "sandbox"
+	if _, err := wb.Create(context.Background(), backend.CreateRequest{Name: "alice"}); err != nil {
+		t.Fatalf("seed sandbox backend: %v", err)
 	}
-	sandboxBackend := mocks.NewMockWorkerBackend()
-	sandboxBackend.NameOverride = "sandbox"
-	state := &MemberState{}
+	wb.ClearCalls()
 
-	_, err := ensureMemberContainerPresent(context.Background(), MemberDeps{
+	member := MemberContext{
+		Name:            "alice",
+		BackendRuntime:  v1beta1.BackendRuntimeSandbox,
+		AppliedSpecHash: "new-hash",
+		CurrentSpecHash: "old-hash",
+		SpecChanged:     true,
+	}
+	state := &MemberState{ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"}}
+
+	res, err := ReconcileMemberContainer(context.Background(), MemberDeps{
+		Backend: backend.NewRegistry([]backend.WorkerBackend{wb}),
+	}, member, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberContainer: %v", err)
+	}
+	if res.RequeueAfter != reconcileRetryDelay {
+		t.Fatalf("RequeueAfter=%v, want %v", res.RequeueAfter, reconcileRetryDelay)
+	}
+	if state.ContainerState != "stopping" {
+		t.Fatalf("ContainerState=%q, want stopping", state.ContainerState)
+	}
+	if len(wb.Calls.Delete) != 1 || wb.Calls.Delete[0] != "alice" {
+		t.Fatalf("delete calls=%v, want [alice]", wb.Calls.Delete)
+	}
+	if len(wb.Calls.Create) != 0 {
+		t.Fatalf("sandbox recreate must wait for next reconcile, create calls=%v", wb.Calls.Create)
+	}
+}
+
+func TestReconcileMemberContainerSandboxSpecChangeDeletesAmbiguousSandboxes(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "sandbox"
+	wb.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{
+			Name:      "alice",
+			Backend:   "sandbox",
+			Status:    backend.StatusUnknown,
+			RawStatus: "multiple_sandboxes",
+			Message:   "multiple sandboxes match alice",
+		}, nil
+	}
+	member := MemberContext{
+		Name:            "alice",
+		RuntimeName:     "alice-runtime",
+		BackendRuntime:  v1beta1.BackendRuntimeSandbox,
+		AppliedSpecHash: "new-hash",
+		CurrentSpecHash: "old-hash",
+		SpecChanged:     true,
+	}
+	state := &MemberState{ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"}}
+
+	res, err := ReconcileMemberContainer(context.Background(), MemberDeps{
+		Backend: backend.NewRegistry([]backend.WorkerBackend{wb}),
+	}, member, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberContainer: %v", err)
+	}
+	if res.RequeueAfter != reconcileRetryDelay {
+		t.Fatalf("RequeueAfter=%v, want %v", res.RequeueAfter, reconcileRetryDelay)
+	}
+	if state.ContainerState != "stopping" {
+		t.Fatalf("ContainerState=%q, want stopping", state.ContainerState)
+	}
+	if len(wb.Calls.Delete) != 1 || wb.Calls.Delete[0] != "alice" {
+		t.Fatalf("delete calls=%v, want [alice]", wb.Calls.Delete)
+	}
+	if len(wb.Calls.Create) != 0 {
+		t.Fatalf("sandbox recreate must wait for next reconcile, create calls=%v", wb.Calls.Create)
+	}
+}
+
+func TestReconcileMemberContainerSpecChangeDeletesTransientBackendStates(t *testing.T) {
+	cases := []struct {
+		name      string
+		status    backend.WorkerStatus
+		rawStatus string
+	}{
+		{"claiming", backend.StatusUnknown, "Claiming"},
+		{"multiple sandboxes", backend.StatusUnknown, "multiple_sandboxes"},
+		{"starting", backend.StatusStarting, "Starting"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wb := mocks.NewMockWorkerBackend()
+			wb.NameOverride = "sandbox"
+			wb.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+				return &backend.WorkerResult{
+					Name:      "alice",
+					Backend:   "sandbox",
+					Status:    tc.status,
+					RawStatus: tc.rawStatus,
+				}, nil
+			}
+			member := MemberContext{
+				Name:            "alice",
+				RuntimeName:     "alice-runtime",
+				BackendRuntime:  v1beta1.BackendRuntimeSandbox,
+				AppliedSpecHash: "new-hash",
+				CurrentSpecHash: "old-hash",
+				SpecChanged:     true,
+			}
+			state := &MemberState{ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"}}
+
+			res, err := ReconcileMemberContainer(context.Background(), MemberDeps{
+				Backend: backend.NewRegistry([]backend.WorkerBackend{wb}),
+			}, member, state)
+			if err != nil {
+				t.Fatalf("ReconcileMemberContainer: %v", err)
+			}
+			if res.RequeueAfter != reconcileRetryDelay {
+				t.Fatalf("RequeueAfter=%v, want %v", res.RequeueAfter, reconcileRetryDelay)
+			}
+			if state.ContainerState != "stopping" {
+				t.Fatalf("ContainerState=%q, want stopping", state.ContainerState)
+			}
+			if len(wb.Calls.Delete) != 1 || wb.Calls.Delete[0] != "alice" {
+				t.Fatalf("delete calls=%v, want [alice]", wb.Calls.Delete)
+			}
+			if len(wb.Calls.Create) != 0 {
+				t.Fatalf("create calls=%v, want none before delete settles", wb.Calls.Create)
+			}
+		})
+	}
+}
+
+func TestReconcileMemberContainerSpecChangeCreatesWhenBackendNotFound(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "k8s"
+	wb.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{
+			Name:    "alice",
+			Backend: "k8s",
+			Status:  backend.StatusNotFound,
+		}, nil
+	}
+	member := MemberContext{
+		Name:            "alice",
+		RuntimeName:     "alice-runtime",
+		AppliedSpecHash: "new-hash",
+		CurrentSpecHash: "old-hash",
+		SpecChanged:     true,
+		Spec:            v1beta1.WorkerSpec{Image: "worker:v2"},
+	}
+	state := &MemberState{ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"}}
+
+	_, err := ReconcileMemberContainer(context.Background(), MemberDeps{
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{wb}),
 		Provisioner: mocks.NewMockProvisioner(),
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{podBackend, sandboxBackend}),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+	}, member, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberContainer: %v", err)
+	}
+	if len(wb.Calls.Delete) != 0 {
+		t.Fatalf("not-found backend should not be deleted, delete=%v", wb.Calls.Delete)
+	}
+	if len(wb.Calls.Create) != 1 || wb.Calls.Create[0] != "alice" {
+		t.Fatalf("create calls=%v, want [alice]", wb.Calls.Create)
+	}
+}
+
+func TestReconcileMemberContainerSpecChangeStatusErrorDoesNotDelete(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "sandbox"
+	statusErr := errors.New("status api unavailable")
+	wb.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return nil, statusErr
+	}
+	member := MemberContext{
+		Name:            "alice",
+		RuntimeName:     "alice-runtime",
+		BackendRuntime:  v1beta1.BackendRuntimeSandbox,
+		AppliedSpecHash: "new-hash",
+		CurrentSpecHash: "old-hash",
+		SpecChanged:     true,
+	}
+
+	_, err := ReconcileMemberContainer(context.Background(), MemberDeps{
+		Backend: backend.NewRegistry([]backend.WorkerBackend{wb}),
+	}, member, &MemberState{ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"}})
+	if err == nil {
+		t.Fatal("ReconcileMemberContainer should return status error")
+	}
+	if len(wb.Calls.Delete) != 0 {
+		t.Fatalf("status error must not delete backend resources, delete=%v", wb.Calls.Delete)
+	}
+	if len(wb.Calls.Create) != 0 {
+		t.Fatalf("status error must not create backend resources, create=%v", wb.Calls.Create)
+	}
+}
+
+func TestCreateMemberContainerConflictRequeues(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.CreateFn = func(context.Context, backend.CreateRequest) (*backend.WorkerResult, error) {
+		return nil, backend.ErrConflict
+	}
+	state := &MemberState{ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token"}}
+
+	res, err := createMemberContainer(context.Background(), MemberDeps{
+		Provisioner: mocks.NewMockProvisioner(),
 		EnvBuilder:  mocks.NewMockEnvBuilder(),
 	}, MemberContext{
-		Name:                 "alice",
-		BackendRuntime:       v1beta1.BackendRuntimeSandbox,
-		StatusBackendRuntime: "",
-		Spec:                 v1beta1.WorkerSpec{},
-	}, state)
-	if err == nil {
-		t.Fatal("expected backend switch to be blocked")
+		Name: "alice",
+		Spec: v1beta1.WorkerSpec{Image: "worker:v2"},
+	}, state, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer: %v", err)
 	}
-	if !strings.Contains(err.Error(), "spec.backendRuntime cannot be changed until the Worker is Stopped") {
-		t.Fatalf("error=%v, want backend switch guard", err)
+	if res.RequeueAfter != reconcileRetryDelay {
+		t.Fatalf("RequeueAfter=%v, want %v", res.RequeueAfter, reconcileRetryDelay)
 	}
-	if _, ok := sandboxBackend.LastCreateReq(); ok {
-		t.Fatal("sandbox backend Create was called; want legacy pod switch blocked")
+	if len(wb.Calls.Create) != 1 || wb.Calls.Create[0] != "alice" {
+		t.Fatalf("create calls=%v, want [alice]", wb.Calls.Create)
+	}
+}
+
+func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		MatrixUserID: "@worker-a:matrix.local",
+		RoomID:       "!worker-dm:matrix.local",
+		ProvResult: &service.WorkerProvisionResult{
+			MatrixToken:    "matrix-token",
+			GatewayKey:     "gateway-key",
+			MatrixPassword: "matrix-password",
+		},
+	}
+	member := MemberContext{
+		Name:              "worker-cr-a",
+		RuntimeName:       "worker-a",
+		Role:              RoleTeamWorker,
+		Generation:        7,
+		TeamName:          "demo-team",
+		TeamLeaderName:    "leader-runtime",
+		TeamRoomID:        "!team:matrix.local",
+		LeaderDMRoomID:    "!leader-dm:matrix.local",
+		TeamAdminName:     "admin",
+		TeamAdminMatrixID: "@admin:matrix.local",
+		ModelProviderInfo: &gateway.ModelProviderInfo{
+			IntranetURL: "https://provider-aigw.example.com/default",
+		},
+		TeamMembers: []service.RuntimeConfigTeamMember{{
+			Name:         "leader",
+			RuntimeName:  "leader-runtime",
+			Role:         RoleTeamLeader.String(),
+			MatrixUserID: "@leader-runtime:matrix.local",
+		}, {
+			Name:         "worker-cr-a",
+			RuntimeName:  "worker-a",
+			Role:         RoleTeamWorker.String(),
+			MatrixUserID: "@worker-a:matrix.local",
+		}},
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "qwenpaw",
+			Model:   "qwen-plus",
+			Package: "nacos://registry/ns/dev-worker?version=1.2.0",
+			Skills:  []string{"dev-plan"},
+		},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 1", got)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if req.Name != "worker-cr-a" || req.RuntimeName != "worker-a" || req.Runtime != "qwenpaw" {
+		t.Fatalf("unexpected runtime config request: %#v", req)
+	}
+	if req.MatrixUserID != "@worker-a:matrix.local" || req.PersonalRoomID != "!worker-dm:matrix.local" {
+		t.Fatalf("runtime config missing member room facts: %#v", req)
+	}
+	if req.TeamRoomID != "!team:matrix.local" || req.LeaderRuntimeName != "leader-runtime" || req.LeaderDMRoomID != "!leader-dm:matrix.local" {
+		t.Fatalf("runtime config missing team room facts: %#v", req)
+	}
+	if req.AIGatewayURL != "https://provider-aigw.example.com/default" {
+		t.Fatalf("runtime config ai gateway URL=%q", req.AIGatewayURL)
+	}
+	if len(req.TeamMembers) != 2 || req.TeamMembers[0].RuntimeName != "leader-runtime" || req.TeamMembers[1].RuntimeName != "worker-a" {
+		t.Fatalf("runtime config missing team roster: %#v", req.TeamMembers)
+	}
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
+		t.Fatalf("qwenpaw must skip legacy deploy path, got package=%d inline=%d config=%d skills=%d",
+			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
+func TestReconcileMemberConfigEdgeWritesRemoteManagedRuntimeConfigOnly(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		MatrixUserID: "@claude-local:matrix.local",
+		RoomID:       "!worker-dm:matrix.local",
+		ProvResult: &service.WorkerProvisionResult{
+			MatrixToken:    "matrix-access-token",
+			GatewayKey:     "gateway-key",
+			MatrixPassword: "matrix-password",
+		},
+	}
+	member := MemberContext{
+		Name:        "edge-worker-cr",
+		RuntimeName: "claude-local",
+		Role:        RoleStandalone,
+		Generation:  5,
+		DeployMode:  v1beta1.DeployModeEdge,
+		ModelProviderInfo: &gateway.ModelProviderInfo{
+			IntranetURL: "http://aigw.internal/v1/claude",
+		},
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "openclaw",
+			Model:   "claude-sonnet-4",
+			Package: "oss://agents/claude-local/packages/demo.zip",
+		},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 1", got)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if req.Name != "edge-worker-cr" || req.RuntimeName != "claude-local" {
+		t.Fatalf("unexpected runtime config identity: %#v", req)
+	}
+	if req.Runtime != "remote-managed-local" {
+		t.Fatalf("runtime=%q, want remote-managed-local", req.Runtime)
+	}
+	if req.MatrixAccessToken != "matrix-access-token" {
+		t.Fatalf("MatrixAccessToken=%q", req.MatrixAccessToken)
+	}
+	if req.GatewayKey != "gateway-key" {
+		t.Fatalf("GatewayKey=%q", req.GatewayKey)
+	}
+	if req.AIGatewayURL != "http://aigw.internal/v1/claude" {
+		t.Fatalf("AIGatewayURL=%q", req.AIGatewayURL)
+	}
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
+		t.Fatalf("edge worker must skip legacy deploy path, got package=%d inline=%d config=%d skills=%d",
+			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
+func TestReconcileMemberConfigNonQwenPawKeepsLegacyPath(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{
+			MatrixToken:    "matrix-token",
+			GatewayKey:     "gateway-key",
+			MatrixPassword: "matrix-password",
+		},
+	}
+	member := MemberContext{
+		Name:        "worker-a",
+		RuntimeName: "worker-a",
+		Role:        RoleStandalone,
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "copaw",
+			Package: "file:///tmp/pkg.zip",
+			Skills:  []string{"github-operations"},
+		},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
+		t.Fatalf("non-qwenpaw must not write runtime config, got %d calls", got)
+	}
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 1 || writeInline != 1 || deployConfig != 1 || pushSkills != 1 {
+		t.Fatalf("legacy deploy path call counts package=%d inline=%d config=%d skills=%d, want all 1",
+			deployPkg, writeInline, deployConfig, pushSkills)
 	}
 }
 
@@ -216,121 +632,4 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func hasDynamicMount(mounts []backend.DynamicVolumeMount, mountPath, subPath string) bool {
-	for _, mount := range mounts {
-		if mount.MountPath == mountPath && mount.SubPath == subPath {
-			return true
-		}
-	}
-	return false
-}
-
-// mockBackend is a minimal WorkerBackend implementation used to test
-// resolveBackendForMember when the backend is NOT a *backend.K8sBackend.
-type mockBackend struct{}
-
-func (m *mockBackend) Name() string                     { return "mock" }
-func (m *mockBackend) DeploymentMode() string           { return "local" }
-func (m *mockBackend) Available(_ context.Context) bool { return true }
-func (m *mockBackend) NeedsCredentialInjection() bool   { return false }
-func (m *mockBackend) Create(_ context.Context, _ backend.CreateRequest) (*backend.WorkerResult, error) {
-	return nil, nil
-}
-func (m *mockBackend) Delete(_ context.Context, _ string) error { return nil }
-func (m *mockBackend) Start(_ context.Context, _ string) error  { return nil }
-func (m *mockBackend) Stop(_ context.Context, _ string) error   { return nil }
-func (m *mockBackend) Status(_ context.Context, _ string) (*backend.WorkerResult, error) {
-	return nil, nil
-}
-
-func TestResolveBackendForMember_LocalMode(t *testing.T) {
-	// When DeployMode is empty or "Local", the original backend is returned unchanged.
-	k8sB := backend.NewK8sBackendWithClient(nil, backend.K8sConfig{Namespace: "default"}, "hiclaw-worker-", nil)
-
-	tests := []struct {
-		name       string
-		deployMode string
-	}{
-		{"empty deploy mode", ""},
-		{"explicit Local mode", v1beta1.DeployModeLocal},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := MemberContext{
-				Name:       "worker-a",
-				DeployMode: tt.deployMode,
-			}
-			got := resolveBackendForMember(k8sB, m)
-			if got != k8sB {
-				t.Errorf("expected original backend pointer, got a different instance")
-			}
-		})
-	}
-}
-
-func TestResolveBackendForMember_RemoteMode(t *testing.T) {
-	// When DeployMode="Remote" and TargetClusterID is set with a K8sBackend,
-	// should return a new K8sBackend with remote target configured.
-	k8sB := backend.NewK8sBackendWithClient(nil, backend.K8sConfig{Namespace: "default"}, "hiclaw-worker-", nil)
-
-	m := MemberContext{
-		Name:            "worker-b",
-		DeployMode:      v1beta1.DeployModeRemote,
-		TargetClusterID: "cluster-remote-1",
-		TargetNamespace: "remote-ns",
-	}
-
-	got := resolveBackendForMember(k8sB, m)
-	if got == k8sB {
-		t.Fatal("expected a new backend instance for remote mode, got same pointer")
-	}
-
-	// Verify the returned value is still a *backend.K8sBackend.
-	remoteK8s, ok := got.(*backend.K8sBackend)
-	if !ok {
-		t.Fatalf("expected *backend.K8sBackend, got %T", got)
-	}
-
-	// The remote backend should still report as "k8s".
-	if remoteK8s.Name() != "k8s" {
-		t.Errorf("remote backend Name() = %q, want %q", remoteK8s.Name(), "k8s")
-	}
-}
-
-func TestResolveBackendForMember_NonK8sBackend(t *testing.T) {
-	// When DeployMode="Remote" but the backend is not a *K8sBackend,
-	// should return the original backend unchanged.
-	mb := &mockBackend{}
-	m := MemberContext{
-		Name:            "worker-c",
-		DeployMode:      v1beta1.DeployModeRemote,
-		TargetClusterID: "cluster-remote-2",
-		TargetNamespace: "remote-ns",
-	}
-
-	got := resolveBackendForMember(mb, m)
-	if got != mb {
-		t.Errorf("expected original mock backend, got a different instance")
-	}
-}
-
-func TestResolveBackendForMember_EmptyClusterID(t *testing.T) {
-	// When DeployMode="Remote" but TargetClusterID is empty,
-	// should return the original backend unchanged.
-	k8sB := backend.NewK8sBackendWithClient(nil, backend.K8sConfig{Namespace: "default"}, "hiclaw-worker-", nil)
-
-	m := MemberContext{
-		Name:            "worker-d",
-		DeployMode:      v1beta1.DeployModeRemote,
-		TargetClusterID: "",
-		TargetNamespace: "remote-ns",
-	}
-
-	got := resolveBackendForMember(k8sB, m)
-	if got != k8sB {
-		t.Errorf("expected original backend (empty clusterID), got a different instance")
-	}
 }

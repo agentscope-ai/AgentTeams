@@ -39,11 +39,12 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
 # Alice container should be running from test-02; wait to ensure it's up before snapshot
 wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice")
+MANAGER_BASELINE_EVENT=$(matrix_latest_reply_event "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager")
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Please assign Alice a task: Create a simple README.md for a hello-world project. The README should include project name, description, and usage instructions."
 
 log_info "Waiting for Manager to process task..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
+REPLY=$(matrix_wait_for_reply_since "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${MANAGER_BASELINE_EVENT}" 180 \
     "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the task assignment has been processed.")
 
 assert_not_empty "${REPLY}" "Manager acknowledged task assignment"

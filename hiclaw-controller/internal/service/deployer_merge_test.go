@@ -155,3 +155,91 @@ func TestMergeUserPluginConfig_AddsNewDefaultEntries(t *testing.T) {
 		t.Error("dreaming.enabled should be true for new default entry")
 	}
 }
+
+func TestMergeUserPluginConfig_PreservesTeamChannelPolicy(t *testing.T) {
+	// generated represents what WorkerReconciler emits (always standalone:
+	// [manager, admin]). existing represents what TeamReconciler had
+	// previously injected via InjectChannelPolicy: [leader, admin].
+	generated := `{
+		"channels": {
+			"matrix": {
+				"groupAllowFrom": ["@manager:m.test", "@admin:m.test"],
+				"dm": {"allowFrom": ["@manager:m.test", "@admin:m.test"]}
+			}
+		}
+	}`
+	existing := `{
+		"channels": {
+			"matrix": {
+				"groupAllowFrom": ["@leader:m.test", "@admin:m.test"],
+				"dm": {"allowFrom": ["@leader:m.test", "@admin:m.test"]}
+			}
+		}
+	}`
+
+	merged, err := mergeUserPluginConfig([]byte(generated), []byte(existing))
+	if err != nil {
+		t.Fatalf("merge failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("unmarshal merged: %v", err)
+	}
+
+	matrix := result["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	gaf := matrix["groupAllowFrom"].([]interface{})
+	if len(gaf) != 2 || gaf[0] != "@leader:m.test" {
+		t.Errorf("groupAllowFrom should be preserved as team policy, got %v", gaf)
+	}
+	dm := matrix["dm"].(map[string]interface{})
+	daf := dm["allowFrom"].([]interface{})
+	if len(daf) != 2 || daf[0] != "@leader:m.test" {
+		t.Errorf("dm.allowFrom should be preserved as team policy, got %v", daf)
+	}
+}
+
+func TestPreserveChannelMatrixAllowFrom_NoExistingChannels(t *testing.T) {
+	generated := map[string]interface{}{
+		"channels": map[string]interface{}{
+			"matrix": map[string]interface{}{
+				"groupAllowFrom": []interface{}{"@manager:m.test", "@admin:m.test"},
+			},
+		},
+	}
+	existing := map[string]interface{}{}
+
+	preserveChannelMatrixAllowFrom(generated, existing)
+
+	matrix := generated["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	gaf := matrix["groupAllowFrom"].([]interface{})
+	if len(gaf) != 2 || gaf[0] != "@manager:m.test" {
+		t.Errorf("generated should remain untouched when existing has no channels, got %v", gaf)
+	}
+}
+
+func TestPreserveChannelMatrixAllowFrom_EmptyExistingArrays(t *testing.T) {
+	generated := map[string]interface{}{
+		"channels": map[string]interface{}{
+			"matrix": map[string]interface{}{
+				"groupAllowFrom": []interface{}{"@manager:m.test", "@admin:m.test"},
+			},
+		},
+	}
+	existing := map[string]interface{}{
+		"channels": map[string]interface{}{
+			"matrix": map[string]interface{}{
+				"groupAllowFrom": []interface{}{},
+				"dm":             map[string]interface{}{"allowFrom": []interface{}{}},
+			},
+		},
+	}
+
+	preserveChannelMatrixAllowFrom(generated, existing)
+
+	matrix := generated["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	gaf := matrix["groupAllowFrom"].([]interface{})
+	if len(gaf) != 2 || gaf[0] != "@manager:m.test" {
+		t.Errorf("empty existing arrays should not overwrite generated, got %v", gaf)
+	}
+}

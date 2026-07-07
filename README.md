@@ -170,8 +170,25 @@ helm install hiclaw higress.io/hiclaw \
 | `credentials.llmProvider` | no | LLM provider name, defaults to `openai-compat` |
 | `credentials.defaultModel` | no | Default model, defaults to `gpt-5.4` |
 | `credentials.llmBaseUrl` | no | OpenAI-compatible base URL (e.g. `https://api.deepseek.com/v1`). Leave empty for official OpenAI API |
+| `preflight.llm.enabled` | no | Run an install/upgrade hook that validates the LLM API key, base URL, and model before the controller starts. Defaults to `true` |
+| `preflight.llm.strict` | no | Fail the Helm install/upgrade when the LLM preflight fails. Defaults to `true`; set to `false` to emit a warning and continue |
+| `preflight.llm.timeoutSeconds` | no | Per-request timeout for the LLM preflight HTTP probe. Defaults to `30` |
+| `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
+| `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
+| `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
 | `manager.runtime` | no | Manager agent runtime: `openclaw` (default), `copaw`, or `hermes` |
 | `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, or `hermes` |
+
+Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
+
+```bash
+helm install hiclaw higress.io/hiclaw \
+  -n hiclaw-system --create-namespace \
+  --set credentials.llmApiKey=<your-api-key> \
+  --set credentials.adminPassword=<your-admin-password> \
+  --set gateway.publicURL=http://localhost:18080 \
+  --set preflight.llm.enabled=false
+```
 
 <details>
 <summary>Using alternative runtimes (QwenPaw Manager + Hermes Workers)</summary>

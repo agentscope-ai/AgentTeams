@@ -179,6 +179,26 @@ func TestLoadConfigPrefersAbstractInfraEnv(t *testing.T) {
 	}
 }
 
+func TestMatrixConfigIncludesAppServicePushURL(t *testing.T) {
+	cfg := &Config{
+		MatrixAppServicePushURL: appServicePushURL("http://controller.example.com:8090/"),
+	}
+
+	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://controller.example.com:8090"; got != want {
+		t.Fatalf("AppServicePushURL = %q, want %q", got, want)
+	}
+}
+
+func TestLoadConfigUsesMatrixAppServiceControllerURLOverride(t *testing.T) {
+	t.Setenv("AGENTTEAMS_MATRIX_APPSERVICE_CONTROLLER_URL", "http://matrix-facing-controller:8090/")
+
+	cfg := LoadConfig()
+
+	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://matrix-facing-controller:8090"; got != want {
+		t.Fatalf("AppServicePushURL = %q, want %q", got, want)
+	}
+}
+
 func TestLoadConfigUsesSharedAdminCredentialsForHigress(t *testing.T) {
 	t.Setenv("HICLAW_ADMIN_USER", "shared-admin")
 	t.Setenv("HICLAW_ADMIN_PASSWORD", "shared-secret")

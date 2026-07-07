@@ -1,0 +1,37 @@
+apiVersion: hiclaw.agentteam/v1alpha1
+kind: AgentTeamPlugin
+metadata:
+  name: workerflow
+  version: 0.1.0
+prompts:
+  team: prompts/team/WORKERFLOW.md
+  agent:
+    worker: prompts/agent/worker.md
+  manager:
+    agents: prompts/manager/AGENTS.md
+    tools: prompts/manager/TOOLS.md
+skills:
+  agent:
+    - id: worker-internal-workflow
+      path: skills/agent/worker-internal-workflow
+      roles: [worker]
+mcp:
+  servers:
+    - id: workerflow
+      transport: stdio
+      command: python
+      args:
+        - mcp/server.py
+      tools:
+        - worker_agentflow
+adapters:
+  - id: qwenpaw
+    path: adapters/qwenpaw
+package:
+  include:
+    - plugin.yaml
+    - prompts/
+    - skills/
+    - mcp/
+    - adapters/
+    - scripts/

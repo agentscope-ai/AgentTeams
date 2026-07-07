@@ -2,16 +2,28 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"path"
+	"reflect"
+	"strings"
+	"sync"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/agentconfig"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
+	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -25,7 +37,37 @@ const (
 	RoleTeamWorker MemberRole = "worker"
 )
 
-const dockerHostInternalExtraHost = "host.docker.internal:host-gateway"
+const (
+	runtimeRemoteManagedLocal        = "remote-managed-local"
+	dockerHostInternalExtraHost      = "host.docker.internal:host-gateway"
+	sandboxSetTokenRetryAfter        = 30 * time.Second
+	sandboxSetTokenRefreshJitterMax  = 60 * time.Second
+	defaultWorkerDepsStorageCapacity = "1Pi"
+	accessKeyWorkerDepsPVCapacity    = "50Gi"
+	accessKeyWorkerDepsStorageClass  = "test"
+	accessKeyWorkerDepsOtherOpts     = "-o umask=022 -o allow_other"
+	workerDepsLayoutVersion          = "worker-deps-agentteams-pv-effective-name-v3"
+	ackOSSCSIProvisioner             = "ossplugin.csi.alibabacloud.com"
+	workerDepsAuthTypeRRSA           = "RRSA"
+	workerDepsAuthTypeAccessKey      = "AccessKey"
+)
+
+var (
+	workerDepsStorageClassGVR       = schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}
+	workerDepsPVGVR                 = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"}
+	workerDepsPVCGVR                = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
+	workerDepsCredentialProviderGVR = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "credentialproviders"}
+	workerDepsAgentIdentityGVR      = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "agentidentities"}
+	workerDepsAgentRoleGVR          = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "agentroles"}
+	workerDepsAgentRoleBindingGVR   = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "agentrolebindings"}
+
+	sandboxSetTokenProjections sync.Map
+)
+
+type sandboxSetTokenProjectionState struct {
+	NextRefresh time.Time
+	Expiration  time.Time
+}
 
 // String renders the role as stored in annotations / legacy registries.
 func (r MemberRole) String() string { return string(r) }
@@ -54,14 +96,25 @@ type MemberContext struct {
 	// running/starting container is left alone.
 	//
 	// Callers are responsible for computing this correctly:
-	//   WorkerReconciler: w.Generation != w.Status.ObservedGeneration
-	//   TeamReconciler:   hashOf(spec) != Team.Status.MemberSpecHashes[name]
+	//   WorkerReconciler: desired pod hash != Worker.status.specHash
+	//   TeamReconciler:   desired pod hash != Team.status.members[].specHash
 	//
 	// Using a boolean (instead of reusing Generation != ObservedGeneration)
 	// isolates the "did the spec change" question from the transport that
 	// answers it, so Team members — which have no per-member Generation —
 	// can participate without abusing the int64 fields.
+	//
 	SpecChanged bool
+
+	// AppliedSpecHash is the controller-computed hash of the source spec
+	// (excluding State). Owning reconcilers write this value to their own
+	// status.specHash after all phases succeed.
+	AppliedSpecHash string
+
+	// CurrentSpecHash is the owning CR status hash from the start of this
+	// reconcile. Empty means a brand-new or pre-upgrade status; sandbox live
+	// annotations may be read only as a migration fallback in that case.
+	CurrentSpecHash string
 
 	// IsUpdate indicates the member has been successfully provisioned before;
 	// controls MCP reauthorization and deployer "update" semantics.
@@ -70,8 +123,12 @@ type MemberContext struct {
 	// Team linkage (empty for standalone).
 	TeamName           string
 	TeamLeaderName     string
+	TeamRoomID         string
+	LeaderDMRoomID     string
+	TeamAdminName      string
 	TeamAdminMatrixID  string
 	TeamCoordinatorIDs []string
+	TeamMembers        []service.RuntimeConfigTeamMember
 
 	// Heartbeat config from Team CR leader spec (nil for non-leader members)
 	Heartbeat *agentconfig.HeartbeatConfig
@@ -90,7 +147,7 @@ type MemberContext struct {
 	CurrentExposedPorts []v1beta1.ExposedPortStatus
 
 	// PodLabels are merged into backend.CreateRequest.Labels. Used by Team
-	// members to tag pods with "agentteams.io/team=<teamName>" so the Team
+	// members to tag pods with the team identity label so the Team
 	// reconciler can watch member pod lifecycle events.
 	PodLabels map[string]string
 
@@ -108,12 +165,6 @@ type MemberContext struct {
 	// DeployMode specifies where the member pod runs: "Local" (default) or
 	// "Remote". Sourced from spec.deployMode with a default of "Local".
 	DeployMode string
-	// BackendRuntime selects the concrete infrastructure backend: "pod" or
-	// "sandbox". Empty is treated as "pod".
-	BackendRuntime string
-	// StatusBackendRuntime is the currently recorded backend runtime for
-	// this member's backend resource.
-	StatusBackendRuntime string
 	// TargetClusterID is the remote cluster ID when DeployMode is "Remote".
 	// Sourced from spec.targetCluster.id.
 	TargetClusterID string
@@ -123,6 +174,20 @@ type MemberContext struct {
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the member pod. Sourced from spec.serviceEnabled.
 	ServiceEnabled bool
+
+	// Resources overrides the backend worker resource defaults. The compact
+	// Worker API uses one cpu/memory value for both requests and limits; this
+	// field carries the backend-expanded form.
+	Resources *backend.ResourceRequirements
+
+	// BackendRuntime is the desired backend type from spec.backendRuntime
+	// ("pod" or "sandbox"). Empty means default ("pod").
+	BackendRuntime string
+
+	// StatusBackendRuntime is the currently deployed backend type from
+	// status.backendRuntime. Empty means first reconcile (new worker or
+	// migration from a pre-upgrade controller).
+	StatusBackendRuntime string
 }
 
 // MemberState captures reconcile outputs that the caller writes back to the
@@ -132,36 +197,68 @@ type MemberState struct {
 	RoomID         string
 	ContainerState string
 	ExposedPorts   []v1beta1.ExposedPortStatus
-	BackendRuntime string
 	// ProvResult is the credentials bundle produced by Infra; passed through
 	// Config and Container phases for idempotent reuse within one reconcile.
 	ProvResult *service.WorkerProvisionResult
+
+	// BackendRuntime is set during reconcile when a backend switch occurs
+	// or on first reconcile (migration). Written back to
+	// Worker.Status.BackendRuntime by the owning reconciler.
+	BackendRuntime string
+
+	// Message holds backend-reported status message (e.g. failing condition
+	// detail). Written to Worker.Status.Message when reconcile succeeds but
+	// the container is not fully healthy.
+	Message string
+
+	// RequeueAfter records the next background reconcile needed by member
+	// internals such as sandbox token projection.
+	RequeueAfter time.Duration
 }
 
-// resolveBackendForMember returns a backend configured for the member's
-// deploy target. For remote members using the K8s backend, it applies
-// WithRemoteTarget so that Status/Delete/Stop route to the correct cluster.
-func resolveBackendForMember(wb backend.WorkerBackend, m MemberContext) backend.WorkerBackend {
-	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
-		if k8sBackend, ok := wb.(*backend.K8sBackend); ok {
-			return k8sBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
-		}
-		if sandboxBackend, ok := wb.(*backend.SandboxBackend); ok {
-			return sandboxBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
+// resolveBackendForMember returns the worker backend matching the requested
+// backendRuntime ("pod" or "sandbox"), with remote targeting applied when
+// the member runs in a remote cluster. When the registry does not have a
+// backend for the requested type (e.g. Docker / embedded mode where neither
+// "k8s" nor "sandbox" is registered), it falls back to DetectWorkerBackend
+// so the legacy single-backend deployments keep working.
+func resolveBackendForMember(registry *backend.Registry, backendRuntime string, m MemberContext) (backend.WorkerBackend, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("no backend registry configured for member %s", m.Name)
+	}
+	wb, err := registry.GetBackendForType(context.Background(), backendRuntime)
+	if err != nil {
+		// Fallback: DetectWorkerBackend (covers Docker/embedded mode
+		// where the requested backend type is not registered).
+		wb = registry.DetectWorkerBackend(context.Background())
+		if wb == nil {
+			return nil, fmt.Errorf("no backend available for member %s", m.Name)
 		}
 	}
-	return wb
+
+	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
+		if k8sBackend, ok := wb.(*backend.K8sBackend); ok {
+			return k8sBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace), nil
+		}
+		if sandboxBackend, ok := wb.(*backend.SandboxBackend); ok {
+			wb = sandboxBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
+		}
+	}
+	return wb, nil
 }
 
 // MemberDeps aggregates the service-layer dependencies the member phases
 // invoke. Both WorkerReconciler and TeamReconciler build a MemberDeps once
 // and pass it through each phase.
 type MemberDeps struct {
-	Provisioner   service.WorkerProvisioner
-	Deployer      service.WorkerDeployer
-	Backend       *backend.Registry
-	EnvBuilder    service.WorkerEnvBuilderI
-	GatewayClient gateway.Client
+	Provisioner                 service.WorkerProvisioner
+	Deployer                    service.WorkerDeployer
+	Backend                     *backend.Registry
+	EnvBuilder                  service.WorkerEnvBuilderI
+	GatewayClient               gateway.Client
+	DynamicClient               dynamic.Interface
+	RemoteDynamicClientProvider backend.RemoteDynamicClientProvider
+	AuthTokenExpirationSeconds  int64
 
 	// ResourcePrefix is the tenant-level prefix that scopes ServiceAccount
 	// (and Pod) names for every member this reconciler provisions. Empty
@@ -174,14 +271,27 @@ type MemberDeps struct {
 	// DefaultRuntime is forwarded into backend.CreateRequest.RuntimeFallback
 	// by createMemberContainer when a member leaves spec.runtime empty.
 	// Populated by the owning reconciler (WorkerReconciler / TeamReconciler)
-	// from HICLAW_DEFAULT_WORKER_RUNTIME (Config.DefaultWorkerRuntime). An
+	// from AGENTTEAMS_DEFAULT_WORKER_RUNTIME (Config.DefaultWorkerRuntime). An
 	// empty string means "no operator preference" — backend.ResolveRuntime
 	// will then fall back to RuntimeOpenClaw. ManagerReconciler uses its own
-	// DefaultRuntime field (sourced from HICLAW_MANAGER_RUNTIME) directly on
+	// DefaultRuntime field (sourced from AGENTTEAMS_MANAGER_RUNTIME) directly on
 	// backend.CreateRequest and does not go through MemberDeps, since
 	// Backend.Create is shared between Worker and Manager paths and only the
 	// caller knows which env var applies.
 	DefaultRuntime string
+
+	// ControllerName identifies this controller instance. It remains the
+	// controller identity label/watch filter and is not used as the sandbox
+	// instance name.
+	ControllerName string
+
+	// WorkerDepsStorageBucket/Endpoint identify the main AgentTeams workspace OSS
+	// bucket. Built-in token/env/data worker-deps always use this storage;
+	// Worker.spec.volumes is reserved for custom OSS mounts.
+	WorkerDepsStorageBucket   string
+	WorkerDepsStorageEndpoint string
+	MountAuthType             string
+	MountRoleName             string
 }
 
 // ValidateMemberDeployment checks the cross-cluster deployment fields on a
@@ -235,6 +345,11 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 		TeamLeaderName: m.TeamLeaderName,
 	})
 	if err != nil {
+		if errors.Is(err, matrix.ErrAppServiceNotReady) {
+			log.FromContext(ctx).Info("Matrix AppService not active yet; requeueing member provisioning",
+				"name", m.Name, "runtimeName", m.RuntimeName)
+			return reconcile.Result{RequeueAfter: appServiceNotReadyRequeue}, nil
+		}
 		return reconcile.Result{}, fmt.Errorf("provision worker: %w", err)
 	}
 
@@ -277,6 +392,56 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return nil
 	}
 	logger := log.FromContext(ctx)
+	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
+	var aiGatewayURL string
+	if m.ModelProviderInfo != nil {
+		aiGatewayURL = m.ModelProviderInfo.IntranetURL
+	}
+
+	if effectiveRuntime == backend.RuntimeQwenPaw || m.DeployMode == v1beta1.DeployModeEdge {
+		leaderRuntimeName := m.TeamLeaderName
+		if leaderRuntimeName == "" && m.Role == RoleTeamLeader {
+			leaderRuntimeName = m.RuntimeName
+		}
+		leaderName := leaderRuntimeName
+		if leaderName == "" && m.Role == RoleTeamLeader {
+			leaderName = m.Name
+		}
+		runtime := effectiveRuntime
+		var matrixAccessToken, gatewayKey string
+		skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
+		if m.DeployMode == v1beta1.DeployModeEdge {
+			runtime = runtimeRemoteManagedLocal
+			matrixAccessToken = state.ProvResult.MatrixToken
+			gatewayKey = state.ProvResult.GatewayKey
+		}
+		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
+			Name:                  m.Name,
+			RuntimeName:           m.RuntimeName,
+			Runtime:               runtime,
+			Role:                  m.Role.String(),
+			Generation:            m.Generation,
+			Spec:                  m.Spec,
+			MatrixUserID:          state.MatrixUserID,
+			PersonalRoomID:        state.RoomID,
+			MatrixAccessToken:     matrixAccessToken,
+			GatewayKey:            gatewayKey,
+			AIGatewayURL:          aiGatewayURL,
+			SkillRegistryURL:      skillRegistryURL,
+			SkillRegistryAuthType: skillRegistryAuthType,
+			TeamName:              m.TeamName,
+			TeamRoomID:            m.TeamRoomID,
+			LeaderName:            leaderName,
+			LeaderRuntimeName:     leaderRuntimeName,
+			LeaderDMRoomID:        m.LeaderDMRoomID,
+			TeamAdminName:         m.TeamAdminName,
+			TeamAdminMatrixID:     m.TeamAdminMatrixID,
+			TeamMembers:           m.TeamMembers,
+		}); err != nil {
+			return fmt.Errorf("deploy runtime config: %w", err)
+		}
+		return nil
+	}
 
 	if err := d.Deployer.DeployPackage(ctx, m.RuntimeName, m.Spec.Package, m.IsUpdate); err != nil {
 		return fmt.Errorf("deploy package: %w", err)
@@ -285,10 +450,6 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return fmt.Errorf("write inline configs: %w", err)
 	}
 
-	var aiGatewayURL string
-	if m.ModelProviderInfo != nil {
-		aiGatewayURL = m.ModelProviderInfo.IntranetURL
-	}
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
 		Name:              m.RuntimeName,
 		Spec:              m.Spec,
@@ -311,6 +472,14 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		logger.Info("skill push failed", "error", err)
 	}
 	return nil
+}
+
+func runtimeSkillRegistryConfig(d MemberDeps, m MemberContext, state *MemberState) (string, string) {
+	if d.EnvBuilder == nil || state == nil || state.ProvResult == nil {
+		return "", ""
+	}
+	env := d.EnvBuilder.Build(m.RuntimeName, state.ProvResult)
+	return env["SKILLS_API_URL"], env["NACOS_AUTH_TYPE"]
 }
 
 // ReconcileMemberContainer converges the member's backend pod/container with
@@ -344,103 +513,171 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	if d.Backend == nil {
 		return reconcile.Result{}, nil
 	}
+	logger := log.FromContext(ctx)
+
 	desiredBackend := m.BackendRuntime
 	if desiredBackend == "" {
 		desiredBackend = v1beta1.BackendRuntimePod
 	}
 	currentBackend := m.StatusBackendRuntime
-	if currentBackend == "" {
-		currentBackend = v1beta1.BackendRuntimePod
-	}
-	wb, err := d.Backend.GetBackendForType(ctx, currentBackend)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if wb == nil {
-		log.FromContext(ctx).Info("no worker backend available, member needs manual start", "name", m.Name)
-		return reconcile.Result{}, nil
-	}
-	wb = resolveBackendForMember(wb, m)
 
-	logger := log.FromContext(ctx)
-	result, err := wb.Status(ctx, m.Name)
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("query container status: %w", err)
+	// First reconcile: status is empty, record desired as current directly.
+	if currentBackend == "" {
+		state.BackendRuntime = desiredBackend
+		currentBackend = desiredBackend
 	}
-	if desiredBackend != currentBackend && result.Status != backend.StatusNotFound {
-		return reconcile.Result{}, fmt.Errorf("spec.backendRuntime cannot be changed until the Worker is Stopped; current=%s, desired=%s", currentBackend, desiredBackend)
+
+	var wb backend.WorkerBackend
+	var result *backend.WorkerResult
+
+	// Backend switch: tear down whatever the previous backend created
+	// before provisioning the new backend's resource.
+	if desiredBackend != currentBackend {
+		logger.Info("backend switch detected",
+			"name", m.Name, "current", currentBackend, "desired", desiredBackend)
+		if oldWb, oldErr := resolveBackendForMember(d.Backend, currentBackend, m); oldErr == nil {
+			if delErr := oldWb.Delete(ctx, m.Name); delErr != nil && !errors.Is(delErr, backend.ErrNotFound) {
+				return reconcile.Result{}, fmt.Errorf("delete old backend resource during switch: %w", delErr)
+			}
+		}
+		state.BackendRuntime = desiredBackend
 	}
+
+	if wb == nil {
+		var err error
+		wb, err = resolveBackendForMember(d.Backend, desiredBackend, m)
+		if err != nil {
+			logger.Info("no worker backend available, member needs manual start", "name", m.Name, "error", err.Error())
+			return reconcile.Result{}, nil
+		}
+	}
+
+	if result == nil {
+		var err error
+		result, err = wb.Status(ctx, m.Name)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("query container status: %w", err)
+		}
+	}
+	state.Message = result.Message
 
 	// Spec-change decision is owned by the caller (see MemberContext.SpecChanged
 	// doc). Both Worker and Team paths fill this boolean with their own
 	// equivalence check so this phase stays agnostic of the upstream CR.
 	specChanged := m.SpecChanged
+	if specChanged && result.Status != backend.StatusNotFound {
+		logger.Info("spec changed, deleting stale backend resource before recreate",
+			"name", m.Name,
+			"backend", wb.Name(),
+			"status", result.Status,
+			"rawStatus", result.RawStatus)
+		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+			return reconcile.Result{}, fmt.Errorf("delete stale backend resource before recreate: %w", err)
+		}
+		state.ContainerState = "stopping"
+		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
+	}
 
 	switch result.Status {
 	case backend.StatusRunning, backend.StatusStarting, backend.StatusReady:
 		state.ContainerState = string(result.Status)
-		if !specChanged {
-			return reconcile.Result{}, nil
+		if wb.Name() == "sandbox" && memberUsesSandboxClaim(m) {
+			requeueAfter, tokenMessage, err := refreshSandboxSetWorkerDeps(ctx, d, m, state.ProvResult)
+			state.RequeueAfter = minPositiveDuration(state.RequeueAfter, requeueAfter)
+			if tokenMessage != "" {
+				state.Message = tokenMessage
+			}
+			if err != nil {
+				return reconcile.Result{RequeueAfter: reconcileRetryDelay}, err
+			}
 		}
-		logger.Info("spec changed, recreating container",
-			"name", m.Name,
-			"generation", m.Generation,
-			"observedGeneration", m.ObservedGeneration)
-		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
-			return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
+
+		if wb.Name() == "sandbox" {
+			if result.Status == backend.StatusStarting {
+				return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
+			}
+			if !memberRuntimeStale(result, m, false) {
+				return reconcile.Result{}, nil
+			}
+			logger.Info("sandbox spec hash mismatch, recreating container",
+				"name", m.Name,
+				"currentHash", m.CurrentSpecHash,
+				"legacyAppliedHash", result.AppliedSpecHash,
+				"desiredHash", m.AppliedSpecHash)
+			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+				return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
+			}
+			state.ContainerState = "stopping"
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 		}
-		res, err := createMemberContainer(ctx, d, m, state, wb)
-		if err == nil {
-			state.ContainerState = string(backend.StatusStarting)
-			state.BackendRuntime = desiredBackend
-		}
-		return res, err
+
+		return reconcile.Result{}, nil
 
 	case backend.StatusStopped, backend.StatusSleeping:
 		state.ContainerState = string(result.Status)
-		if wb.Name() == "docker" && !specChanged {
+
+		// Docker has no annotation account; spec changes are handled by
+		// the pre-switch delete path above, so unchanged stopped containers
+		// can be resumed here.
+		if wb.Name() == "docker" {
 			if err := wb.Start(ctx, m.Name); err != nil {
 				return reconcile.Result{}, fmt.Errorf("start container: %w", err)
 			}
 			return reconcile.Result{}, nil
 		}
+
+		if wb.Name() == "sandbox" {
+			if !memberRuntimeStale(result, m, true) {
+				if err := wb.Start(ctx, m.Name); err != nil {
+					return reconcile.Result{}, fmt.Errorf("resume sandbox: %w", err)
+				}
+				return reconcile.Result{}, nil
+			}
+			logger.Info("sandbox stopped with stale or missing hash, recreating",
+				"name", m.Name,
+				"currentHash", m.CurrentSpecHash,
+				"legacyAppliedHash", result.AppliedSpecHash,
+				"desiredHash", m.AppliedSpecHash)
+			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+				return reconcile.Result{}, fmt.Errorf("delete stale sandbox: %w", err)
+			}
+			state.ContainerState = "stopping"
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
+		}
+
+		// Other backends (k8s) keep the historical delete+create path.
 		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete stale container: %w", err)
 		}
 		res, err := createMemberContainer(ctx, d, m, state, wb)
 		if err == nil {
 			state.ContainerState = string(backend.StatusStarting)
-			state.BackendRuntime = desiredBackend
 		}
 		return res, err
 
 	case backend.StatusNotFound:
-		createBackend := desiredBackend
-		if m.Spec.DesiredState() == "Stopped" {
-			createBackend = currentBackend
-		}
-		createWb := wb
-		if createBackend != currentBackend {
-			if altWb, err := d.Backend.GetBackendForType(ctx, createBackend); err == nil {
-				createWb = resolveBackendForMember(altWb, m)
-			} else {
-				return reconcile.Result{}, err
-			}
-		}
-		res, err := createMemberContainer(ctx, d, m, state, createWb)
+		res, err := createMemberContainer(ctx, d, m, state, wb)
 		if err == nil {
 			state.ContainerState = string(backend.StatusStarting)
-			state.BackendRuntime = createBackend
+		} else {
+			state.ContainerState = "create_failed"
 		}
 		return res, err
 
 	default:
+		// Transient / unknown state (e.g. PhaseFailed, provider unreachable).
+		// Historically this branch eagerly called wb.Delete + recreate,
+		// which turned any momentary status blip into a full delete/recreate
+		// cycle — the root cause of "sandbox unexpectedly deleted" reports.
+		// We now only record the observed state and requeue; recovery is
+		// driven by either a watch event on phase transition or the next
+		// periodic reconcile.
 		state.ContainerState = string(result.Status)
-		logger.Info("container in unexpected state, recreating", "name", m.Name, "status", result.Status)
-		if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
-			return reconcile.Result{}, fmt.Errorf("delete container in unknown state: %w", err)
-		}
-		return createMemberContainer(ctx, d, m, state, wb)
+		logger.Info("container in transient state, waiting (no delete)",
+			"name", m.Name,
+			"status", result.Status,
+			"rawStatus", result.RawStatus)
+		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 	}
 }
 
@@ -448,6 +685,10 @@ func ensureMemberContainerAbsent(ctx context.Context, d MemberDeps, m MemberCont
 	if d.Backend == nil {
 		return reconcile.Result{}, nil
 	}
+
+	// Use the recorded status.backendRuntime to address the actual deployed
+	// resource. Falls back to spec when status is empty (first reconcile)
+	// and finally to the default "pod" backend.
 	currentBackend := m.StatusBackendRuntime
 	if currentBackend == "" {
 		currentBackend = m.BackendRuntime
@@ -455,14 +696,11 @@ func ensureMemberContainerAbsent(ctx context.Context, d MemberDeps, m MemberCont
 	if currentBackend == "" {
 		currentBackend = v1beta1.BackendRuntimePod
 	}
-	wb, err := d.Backend.GetBackendForType(ctx, currentBackend)
+
+	wb, err := resolveBackendForMember(d.Backend, currentBackend, m)
 	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if wb == nil {
 		return reconcile.Result{}, nil
 	}
-	wb = resolveBackendForMember(wb, m)
 
 	result, err := wb.Status(ctx, m.Name)
 	if err != nil {
@@ -494,13 +732,23 @@ func ensureMemberContainerAbsent(ctx context.Context, d MemberDeps, m MemberCont
 	return reconcile.Result{}, nil
 }
 
+func memberRuntimeStale(result *backend.WorkerResult, m MemberContext, missingHashMeansStale bool) bool {
+	if m.CurrentSpecHash != "" {
+		return m.SpecChanged
+	}
+	if result != nil && result.AppliedSpecHash != "" {
+		return result.AppliedSpecHash != m.AppliedSpecHash
+	}
+	return m.SpecChanged || missingHashMeansStale
+}
+
 func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState, wb backend.WorkerBackend) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Ensure remote ServiceAccount exists before creating the Pod in a
 	// remote cluster. The SA provides projected-token authentication back
 	// to the local controller via TokenReview routing.
-	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
+	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" && !memberUsesSandboxClaim(m) {
 		if err := d.Provisioner.EnsureRemoteServiceAccount(ctx, m.Name, m.TargetClusterID, m.TargetNamespace); err != nil {
 			return reconcile.Result{}, fmt.Errorf("ensure remote SA for worker %s: %w", m.Name, err)
 		}
@@ -523,77 +771,1049 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		state.ProvResult = prov
 	}
 
-	workerEnv := d.EnvBuilder.Build(m.RuntimeName, prov)
-	workerEnv["HICLAW_WORKER_CR_NAME"] = m.Name
-	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
-		workerEnv["HICLAW_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
+	workerEnv, err := buildMemberWorkerEnv(ctx, d, m, prov)
+	if err != nil {
+		return reconcile.Result{}, err
 	}
-	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
+	workerDeps, tokenRequeueAfter, tokenMessage, err := prepareMemberWorkerDeps(ctx, d, m, workerEnv, true)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	state.RequeueAfter = minPositiveDuration(state.RequeueAfter, tokenRequeueAfter)
+	if tokenMessage != "" {
+		state.Message = tokenMessage
+	}
 	saName := d.ResourcePrefix.SAName(authpkg.RoleWorker, m.Name)
 
 	// Identity labels: callers own the full label set now that the backend
-	// is stateless (see A7). The backend only stamps agentteams.io/runtime.
+	// is stateless (see A7). The backend only stamps the runtime label.
 	labels := make(map[string]string, len(m.PodLabels)+2)
 	for k, v := range m.PodLabels {
 		labels[k] = v
 	}
 	labels["app"] = d.ResourcePrefix.WorkerAppLabel()
-	labels["agentteams.io/worker"] = m.Name
+	labels[v1beta1.LabelWorker] = m.Name
 
 	createReq := backend.CreateRequest{
 		Name:               m.Name,
 		Image:              m.Spec.Image,
 		Runtime:            m.Spec.Runtime,
-		BackendRuntime:     m.BackendRuntime,
 		RuntimeFallback:    d.DefaultRuntime,
 		Env:                workerEnv,
+		BackendRuntime:     m.BackendRuntime,
+		SandboxSetName:     backend.BuiltinSandboxInstanceName,
 		ExtraHosts:         extraHostsForBackend(wb),
 		ServiceAccountName: saName,
-		Resources:          agentResourcesToBackend(m.Spec.Resources),
-		Labels:             labels,
-		Owner:              m.Owner,
+		AuthExpirationSeconds: backend.NormalizeAuthTokenExpirationSeconds(
+			d.AuthTokenExpirationSeconds,
+		),
+		Resources: m.Resources,
+		Labels:    labels,
+		Owner:     m.Owner,
 		// DeployMode / TargetClusterID / TargetNamespace route the Pod to
 		// the correct cluster. Without them, Remote workers would always
 		// be created in the local cluster.
 		DeployMode:      m.DeployMode,
 		TargetClusterID: m.TargetClusterID,
 		TargetNamespace: m.TargetNamespace,
+		WorkersDeps:     workerDeps,
 	}
-	if wb.Name() != "k8s" {
-		token, err := d.Provisioner.RequestSAToken(ctx, m.Name)
+	if wb.Name() != "k8s" && wb.Name() != "sandbox" {
+		token, _, err := d.Provisioner.RequestSAToken(ctx, m.Name)
 		if err != nil {
 			logger.Error(err, "SA token request failed (non-fatal, worker auth will fail)")
 		}
 		createReq.AuthToken = token
 	}
-	if wb.Name() == "sandbox" {
-		createReq.WorkersDeps = backend.BuildSandboxWorkerDeps(m.Name, createReq.Env, createReq.AuthToken, createReq.WorkersDeps)
-		if d.Deployer == nil {
-			return reconcile.Result{}, fmt.Errorf("materialize sandbox worker deps: deployer is required")
-		}
-		if err := d.Deployer.MaterializeSandboxWorkerDeps(ctx, service.SandboxWorkerDepsRequest{
-			WorkerName: m.Name,
-			Env:        createReq.WorkersDeps.Env,
-			AuthToken:  createReq.WorkersDeps.AuthToken,
-		}); err != nil {
-			return reconcile.Result{}, fmt.Errorf("materialize sandbox worker deps: %w", err)
-		}
-	}
 
 	if _, err := wb.Create(ctx, createReq); err != nil {
 		if errors.Is(err, backend.ErrConflict) {
-			return reconcile.Result{}, nil
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("create container: %w", err)
 	}
 	return reconcile.Result{}, nil
 }
 
-func extraHostsForBackend(wb backend.WorkerBackend) []string {
-	if wb != nil && wb.Name() == "docker" {
-		return []string{dockerHostInternalExtraHost}
+func refreshSandboxSetWorkerDeps(ctx context.Context, d MemberDeps, m MemberContext, prov *service.WorkerProvisionResult) (time.Duration, string, error) {
+	workerEnv, err := buildMemberWorkerEnv(ctx, d, m, prov)
+	if err != nil {
+		return 0, "", err
+	}
+	_, requeueAfter, message, err := prepareMemberWorkerDeps(ctx, d, m, workerEnv, false)
+	return requeueAfter, message, err
+}
+
+func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, prov *service.WorkerProvisionResult) (map[string]string, error) {
+	if d.EnvBuilder == nil {
+		return nil, fmt.Errorf("worker env builder is not configured")
+	}
+	if prov == nil {
+		return nil, fmt.Errorf("worker provision result is not available")
+	}
+	logger := log.FromContext(ctx)
+	workerEnv := d.EnvBuilder.Build(m.RuntimeName, prov)
+	workerEnv["AGENTTEAMS_WORKER_CR_NAME"] = m.Name
+	// Legacy runtime scripts still read this fallback while AgentTeams env adoption is in progress.
+	workerEnv["HICLAW_WORKER_CR_NAME"] = m.Name
+	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
+		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
+	}
+	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
+	mergeUserEnv(workerEnv, m.Spec.Env, logger, string(m.Role)+"/"+m.Name)
+	return workerEnv, nil
+}
+
+func memberUsesSandboxClaim(m MemberContext) bool {
+	return m.BackendRuntime == v1beta1.BackendRuntimeSandbox
+}
+
+func prepareMemberWorkerDeps(ctx context.Context, d MemberDeps, m MemberContext, workerEnv map[string]string, forceTokenProjection bool) (*backend.WorkerDepsSpec, time.Duration, string, error) {
+	usesSandboxClaim := memberUsesSandboxClaim(m)
+	if !usesSandboxClaim {
+		if len(m.Spec.Volumes) > 0 || len(m.Spec.Mounts) > 0 {
+			return nil, 0, "", fmt.Errorf("spec.volumes/spec.mounts are only supported when backendRuntime is sandbox")
+		}
+		return nil, 0, "", nil
+	}
+
+	resolved, err := resolveSandboxWorkerDeps(d, m)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
+	if err := ensureRemoteTargetNamespace(ctx, d, m); err != nil {
+		return nil, 0, "", err
+	}
+
+	projection, err := projectSandboxSetWorkerToken(ctx, d, m, forceTokenProjection)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	tokenMount := resolved.Mounts[workerDepsMountToken]
+	envMount := resolved.Mounts[workerDepsMountEnv]
+	workerEnv["AGENTTEAMS_AUTH_TOKEN_FILE"] = strings.TrimRight(tokenMount.MountPath, "/") + "/token"
+	workerEnv["AGENTTEAMS_WORKER_ENV_MOUNT_DIR"] = strings.TrimRight(envMount.MountPath, "/")
+	workerEnv["AGENTTEAMS_WORKER_ENV_MOUNT_REQUIRED"] = "1"
+	if workerEnv["AGENTTEAMS_RUNTIME"] == "" {
+		workerEnv["AGENTTEAMS_RUNTIME"] = "k8s"
+	}
+	if err := validateSandboxWorkerDepsStoragePrefix(workerEnv["AGENTTEAMS_STORAGE_PREFIX"], d.WorkerDepsStorageBucket); err != nil {
+		return nil, 0, "", err
+	}
+
+	if err := ensureWorkerDepsMountResources(ctx, d, m, resolved.BuiltinVolume, true); err != nil {
+		return nil, 0, "", err
+	}
+	for _, volume := range resolved.UniqueCustomVolumes() {
+		if err := ensureWorkerDepsMountResources(ctx, d, m, volume, false); err != nil {
+			return nil, 0, "", err
+		}
+	}
+
+	if err := prepareWorkerDepsObjects(ctx, d, m, resolved, workerEnv, projection.Token, projection.Write); err != nil {
+		return nil, 0, "", err
+	}
+
+	deps := &backend.WorkerDepsSpec{
+		InplaceUpdateImage: m.Spec.Image,
+	}
+	for _, name := range []string{workerDepsMountToken, workerDepsMountEnv, workerDepsMountData} {
+		mount := resolved.Mounts[name]
+		deps.DynamicVolumeMounts = append(deps.DynamicVolumeMounts, backend.WorkerDepsDynamicVolumeMount{
+			PVName:     mount.VolumeRef,
+			MountPath:  mount.MountPath,
+			SubPath:    mount.SubPath,
+			ReadOnly:   mount.ReadOnly,
+			Attributes: workerDepsDynamicMountAttributes(resolved.BuiltinVolume, name),
+		})
+	}
+	for _, mount := range resolved.CustomMounts {
+		deps.DynamicVolumeMounts = append(deps.DynamicVolumeMounts, backend.WorkerDepsDynamicVolumeMount{
+			PVName:    mount.VolumeRef,
+			MountPath: mount.MountPath,
+			SubPath:   mount.SubPath,
+			ReadOnly:  mount.ReadOnly,
+		})
+	}
+	return deps, projection.RequeueAfter, projection.Message, nil
+}
+
+func ensureRemoteTargetNamespace(ctx context.Context, d MemberDeps, m MemberContext) error {
+	if m.DeployMode != v1beta1.DeployModeRemote || m.TargetClusterID == "" {
+		return nil
+	}
+	if err := d.Provisioner.EnsureRemoteNamespace(ctx, m.TargetClusterID, m.TargetNamespace); err != nil {
+		return fmt.Errorf("ensure remote namespace %s in cluster %s: %w", m.TargetNamespace, m.TargetClusterID, err)
 	}
 	return nil
+}
+
+const (
+	workerDepsMountToken = "token"
+	workerDepsMountEnv   = "env"
+	workerDepsMountData  = "data"
+)
+
+var workerDepsMountReadOnly = map[string]bool{
+	workerDepsMountToken: true,
+	workerDepsMountEnv:   true,
+	workerDepsMountData:  false,
+}
+
+type sandboxWorkerDeps struct {
+	Mounts        map[string]v1beta1.WorkerMountSpec
+	CustomMounts  []v1beta1.WorkerMountSpec
+	BuiltinVolume v1beta1.WorkerVolumeSpec
+	Volumes       map[string]v1beta1.WorkerVolumeSpec
+}
+
+func (d sandboxWorkerDeps) UniqueCustomVolumes() []v1beta1.WorkerVolumeSpec {
+	seen := map[string]struct{}{}
+	out := make([]v1beta1.WorkerVolumeSpec, 0, len(d.Volumes))
+	for _, mount := range d.CustomMounts {
+		if _, ok := seen[mount.VolumeRef]; ok {
+			continue
+		}
+		seen[mount.VolumeRef] = struct{}{}
+		out = append(out, d.Volumes[mount.VolumeRef])
+	}
+	return out
+}
+
+func resolveSandboxWorkerDeps(deps MemberDeps, m MemberContext) (sandboxWorkerDeps, error) {
+	instanceName := backend.BuiltinSandboxInstanceName
+	builtinAuth, err := builtinWorkerDepsAuth(deps, instanceName)
+	if err != nil {
+		return sandboxWorkerDeps{}, err
+	}
+	resolved := sandboxWorkerDeps{
+		Mounts: defaultWorkerDepsMounts(instanceName, m.RuntimeName),
+		BuiltinVolume: v1beta1.WorkerVolumeSpec{
+			Name: instanceName,
+			Type: v1beta1.WorkerVolumeTypeOSS,
+			OSS: &v1beta1.WorkerOSSVolumeSpec{
+				Bucket:   deps.WorkerDepsStorageBucket,
+				Endpoint: deps.WorkerDepsStorageEndpoint,
+				Auth:     builtinAuth,
+			},
+		},
+		Volumes: map[string]v1beta1.WorkerVolumeSpec{},
+	}
+	if resolved.BuiltinVolume.OSS.Bucket == "" || resolved.BuiltinVolume.OSS.Endpoint == "" {
+		return resolved, fmt.Errorf("sandbox worker-deps requires main workspace OSS bucket and endpoint")
+	}
+	if err := validateWorkerDepsVolume(-1, resolved.BuiltinVolume); err != nil {
+		return resolved, err
+	}
+	for i, volume := range m.Spec.Volumes {
+		if err := validateWorkerDepsVolume(i, volume); err != nil {
+			return resolved, err
+		}
+		if _, exists := resolved.Volumes[volume.Name]; exists {
+			return resolved, fmt.Errorf("spec.volumes[%d].name %q is duplicated", i, volume.Name)
+		}
+		if volume.Name == instanceName {
+			return resolved, fmt.Errorf("spec.volumes[%d].name %q is reserved for built-in worker-deps PV", i, volume.Name)
+		}
+		resolved.Volumes[volume.Name] = volume
+	}
+	seenMounts := map[string]struct{}{}
+	for i, mount := range m.Spec.Mounts {
+		if _, exists := seenMounts[mount.Name]; exists {
+			return resolved, fmt.Errorf("spec.mounts[%d].name %q is duplicated", i, mount.Name)
+		}
+		seenMounts[mount.Name] = struct{}{}
+		if isWorkerDepsReservedMount(mount.Name) {
+			continue
+		}
+		if err := validateCustomWorkerMount(i, mount, resolved.Volumes); err != nil {
+			return resolved, err
+		}
+		resolved.CustomMounts = append(resolved.CustomMounts, mount)
+	}
+	return resolved, nil
+}
+
+func builtinWorkerDepsAuth(deps MemberDeps, instanceName string) (v1beta1.WorkerOSSAuthSpec, error) {
+	authType, err := normalizeWorkerDepsMountAuthType(deps.MountAuthType)
+	if err != nil {
+		return v1beta1.WorkerOSSAuthSpec{}, err
+	}
+	switch authType {
+	case workerDepsAuthTypeAccessKey:
+		return v1beta1.WorkerOSSAuthSpec{
+			Type: workerDepsAuthTypeAccessKey,
+			AccessKey: &v1beta1.WorkerAccessKeyAuthSpec{
+				SecretRef: v1beta1.NamespacedSecretRef{Name: instanceName},
+			},
+		}, nil
+	case workerDepsAuthTypeRRSA:
+		roleName := strings.TrimSpace(deps.MountRoleName)
+		if roleName == "" {
+			return v1beta1.WorkerOSSAuthSpec{}, fmt.Errorf("AGENTTEAMS_MOUNT_ROLE_NAME is required when AGENTTEAMS_MOUNT_AUTH_TYPE=RRSA")
+		}
+		return v1beta1.WorkerOSSAuthSpec{
+			Type: workerDepsAuthTypeRRSA,
+			RRSA: &v1beta1.WorkerOSSRRSASpec{RoleName: roleName},
+		}, nil
+	default:
+		return v1beta1.WorkerOSSAuthSpec{}, fmt.Errorf("unsupported AGENTTEAMS_MOUNT_AUTH_TYPE %q", deps.MountAuthType)
+	}
+}
+
+func workerDepsDynamicMountAttributes(volume v1beta1.WorkerVolumeSpec, mountName string) map[string]string {
+	if volume.OSS == nil || volume.OSS.Auth.Type != workerDepsAuthTypeRRSA {
+		return nil
+	}
+	return map[string]string{"credentialProviderName": workerDepsCredentialProviderName(mountName)}
+}
+
+func normalizeWorkerDepsMountAuthType(authType string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(authType)) {
+	case "", "rrsa":
+		return workerDepsAuthTypeRRSA, nil
+	case "accesskey", "access-key", "access_key":
+		return workerDepsAuthTypeAccessKey, nil
+	default:
+		return "", fmt.Errorf("AGENTTEAMS_MOUNT_AUTH_TYPE must be RRSA or AccessKey")
+	}
+}
+
+func defaultWorkerDepsMounts(instanceName, workerName string) map[string]v1beta1.WorkerMountSpec {
+	return map[string]v1beta1.WorkerMountSpec{
+		workerDepsMountToken: {
+			Name:      workerDepsMountToken,
+			VolumeRef: instanceName,
+			SubPath:   workerDepsSubPath(workerName, workerDepsMountToken),
+			MountPath: "/var/run/secrets/agentteams",
+			ReadOnly:  true,
+		},
+		workerDepsMountEnv: {
+			Name:      workerDepsMountEnv,
+			VolumeRef: instanceName,
+			SubPath:   workerDepsSubPath(workerName, workerDepsMountEnv),
+			MountPath: "/mnt/agentteams/env",
+			ReadOnly:  true,
+		},
+		workerDepsMountData: {
+			Name:      workerDepsMountData,
+			VolumeRef: instanceName,
+			SubPath:   workerDepsSubPath(workerName, workerDepsMountData),
+			MountPath: "/mnt/agentteams/data",
+			ReadOnly:  false,
+		},
+	}
+}
+
+func workerDepsSubPath(workerName, name string) string {
+	return path.Join("workers-deps", workerName, name)
+}
+
+func validateSandboxWorkerDepsStoragePrefix(storagePrefix, bucket string) error {
+	storagePrefix = strings.Trim(storagePrefix, "/")
+	bucket = strings.TrimSpace(bucket)
+	if storagePrefix == "" || bucket == "" {
+		return nil
+	}
+	parts := strings.Split(storagePrefix, "/")
+	if len(parts) != 2 || parts[1] != bucket {
+		return fmt.Errorf("sandbox built-in worker-deps requires AGENTTEAMS_STORAGE_PREFIX to be <alias>/<bucket> matching AGENTTEAMS_FS_BUCKET; got %q with bucket %q", storagePrefix, bucket)
+	}
+	return nil
+}
+
+func isWorkerDepsReservedMount(name string) bool {
+	_, ok := workerDepsMountReadOnly[name]
+	return ok
+}
+
+func validateWorkerDepsVolume(i int, volume v1beta1.WorkerVolumeSpec) error {
+	prefix := "built-in worker-deps volume"
+	if i >= 0 {
+		prefix = fmt.Sprintf("spec.volumes[%d]", i)
+	}
+	if volume.Name == "" {
+		return fmt.Errorf("%s.name is required", prefix)
+	}
+	if volume.Type != v1beta1.WorkerVolumeTypeOSS {
+		return fmt.Errorf("%s.type must be OSS", prefix)
+	}
+	if volume.OSS == nil {
+		return fmt.Errorf("%s.oss is required when type is OSS", prefix)
+	}
+	if volume.OSS.Bucket == "" || volume.OSS.Endpoint == "" {
+		return fmt.Errorf("%s.oss.bucket and endpoint are required", prefix)
+	}
+	switch volume.OSS.Auth.Type {
+	case "RRSA":
+		if volume.OSS.Auth.RRSA == nil || (volume.OSS.Auth.RRSA.RoleName == "" && volume.OSS.Auth.RRSA.RoleARN == "") {
+			return fmt.Errorf("%s.oss.auth.rrsa.roleName or roleArn is required", prefix)
+		}
+	case "AccessKey":
+		if volume.OSS.Auth.AccessKey == nil || volume.OSS.Auth.AccessKey.SecretRef.Name == "" {
+			return fmt.Errorf("%s.oss.auth.accessKey.secretRef.name is required", prefix)
+		}
+		if volume.OSS.Auth.AccessKey.SecretRef.Namespace != "" {
+			return fmt.Errorf("%s.oss.auth.accessKey.secretRef.namespace must be empty; AccessKey secrets are looked up by CSI in the worker targetNamespace", prefix)
+		}
+	case "":
+		return fmt.Errorf("%s.oss.auth.type is required", prefix)
+	default:
+		return fmt.Errorf("%s.oss.auth.type must be RRSA or AccessKey", prefix)
+	}
+	return nil
+}
+
+func validateCustomWorkerMount(i int, mount v1beta1.WorkerMountSpec, volumes map[string]v1beta1.WorkerVolumeSpec) error {
+	if mount.Name == "" {
+		return fmt.Errorf("spec.mounts[%d].name is required", i)
+	}
+	if mount.VolumeRef == "" {
+		return fmt.Errorf("spec.mounts[%d].volumeRef is required", i)
+	}
+	if _, ok := volumes[mount.VolumeRef]; !ok {
+		return fmt.Errorf("spec.mounts[%d].volumeRef %q does not reference spec.volumes", i, mount.VolumeRef)
+	}
+	if mount.SubPath == "" {
+		return fmt.Errorf("spec.mounts[%d].subPath is required", i)
+	}
+	if mount.MountPath == "" {
+		return fmt.Errorf("spec.mounts[%d].mountPath is required", i)
+	}
+	if isBuiltinWorkerDepsMountPath(mount.MountPath) {
+		return fmt.Errorf("spec.mounts[%d].mountPath %q overlaps built-in worker-deps mount paths", i, mount.MountPath)
+	}
+	return nil
+}
+
+func isBuiltinWorkerDepsMountPath(mountPath string) bool {
+	clean := path.Clean(mountPath)
+	for _, builtin := range []string{"/var/run/secrets/agentteams", "/mnt/agentteams/env", "/mnt/agentteams/data"} {
+		if clean == builtin || strings.HasPrefix(builtin, clean+"/") || strings.HasPrefix(clean, builtin+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func prepareWorkerDepsObjects(ctx context.Context, d MemberDeps, m MemberContext, deps sandboxWorkerDeps, workerEnv map[string]string, token string, writeToken bool) error {
+	req := service.WorkerDepsPrepareRequest{
+		WorkerName:  m.RuntimeName,
+		DataSubPath: deps.Mounts[workerDepsMountData].SubPath,
+		Token:       token,
+		Env:         workerEnv,
+		EnvSubPath:  deps.Mounts[workerDepsMountEnv].SubPath,
+		UseEnv:      true,
+	}
+	if writeToken {
+		req.TokenSubPath = deps.Mounts[workerDepsMountToken].SubPath
+		req.UseToken = true
+	}
+	return d.Deployer.PrepareWorkerDeps(ctx, req)
+}
+
+type sandboxSetTokenProjection struct {
+	Token        string
+	Write        bool
+	RequeueAfter time.Duration
+	Message      string
+}
+
+func projectSandboxSetWorkerToken(ctx context.Context, d MemberDeps, m MemberContext, force bool) (sandboxSetTokenProjection, error) {
+	if d.Provisioner == nil {
+		return sandboxSetTokenProjection{}, fmt.Errorf("sandbox claim token projector requires worker provisioner")
+	}
+	key := sandboxSetTokenProjectionKey(m)
+	now := time.Now()
+	if !force {
+		if cached, ok := sandboxSetTokenProjections.Load(key); ok {
+			state := cached.(sandboxSetTokenProjectionState)
+			if !state.NextRefresh.IsZero() && now.Before(state.NextRefresh) {
+				return sandboxSetTokenProjection{RequeueAfter: time.Until(state.NextRefresh)}, nil
+			}
+		}
+	}
+	expirationSeconds := backend.NormalizeAuthTokenExpirationSeconds(d.AuthTokenExpirationSeconds)
+	projection, err := d.Provisioner.ProjectSAToken(ctx, m.Name, expirationSeconds)
+	if err != nil {
+		if cached, ok := sandboxSetTokenProjections.Load(key); ok {
+			state := cached.(sandboxSetTokenProjectionState)
+			if now.Before(state.Expiration) {
+				message := fmt.Sprintf("Degraded: sandbox claim token refresh failed; existing token is valid until %s and will retry in %s", state.Expiration.Format(time.RFC3339), sandboxSetTokenRetryAfter)
+				log.FromContext(ctx).Error(err, "sandbox claim token projection refresh failed; existing token is still valid",
+					"name", m.Name, "expiration", state.Expiration)
+				return sandboxSetTokenProjection{RequeueAfter: sandboxSetTokenRetryAfter, Message: message}, nil
+			}
+		}
+		return sandboxSetTokenProjection{}, fmt.Errorf("request sandbox claim token for worker %s: %w", m.Name, err)
+	}
+	if projection == nil || projection.Token == "" {
+		return sandboxSetTokenProjection{}, fmt.Errorf("request sandbox claim token for worker %s: empty token", m.Name)
+	}
+	issuedAt := projection.IssuedAt
+	if issuedAt.IsZero() {
+		issuedAt = now
+	}
+	expiresAt := projection.ExpirationTimestamp
+	if expiresAt.IsZero() {
+		expiresAt = issuedAt.Add(time.Duration(projection.ExpirationSeconds) * time.Second)
+	}
+	if expiresAt.IsZero() || !expiresAt.After(now) {
+		return sandboxSetTokenProjection{}, fmt.Errorf("request sandbox claim token for worker %s: invalid expiration %s", m.Name, expiresAt.Format(time.RFC3339))
+	}
+	nextRefresh := sandboxSetTokenNextRefresh(m, issuedAt, expiresAt)
+	sandboxSetTokenProjections.Store(key, sandboxSetTokenProjectionState{
+		NextRefresh: nextRefresh,
+		Expiration:  expiresAt,
+	})
+	return sandboxSetTokenProjection{
+		Token:        projection.Token,
+		Write:        true,
+		RequeueAfter: time.Until(nextRefresh),
+	}, nil
+}
+
+func sandboxSetTokenProjectionKey(m MemberContext) string {
+	return m.Namespace + "/" + m.Name + "/" + m.RuntimeName
+}
+
+func sandboxSetTokenNextRefresh(m MemberContext, issuedAt, expiresAt time.Time) time.Time {
+	ttl := expiresAt.Sub(issuedAt)
+	if ttl <= 0 {
+		return time.Now().Add(sandboxSetTokenRetryAfter)
+	}
+	byAge := issuedAt.Add(ttl * 8 / 10)
+	byDeadline := expiresAt.Add(-10 * time.Minute)
+	next := byAge
+	if byDeadline.Before(next) {
+		next = byDeadline
+	}
+	next = next.Add(tokenRefreshJitter(m.Name))
+	latest := expiresAt.Add(-1 * time.Minute)
+	if next.After(latest) {
+		next = latest
+	}
+	minNext := time.Now().Add(sandboxSetTokenRetryAfter)
+	if next.Before(minNext) {
+		next = minNext
+	}
+	return next
+}
+
+func tokenRefreshJitter(key string) time.Duration {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return time.Duration(h.Sum32()%uint32(sandboxSetTokenRefreshJitterMax/time.Second)) * time.Second
+}
+
+func ensureWorkerDepsMountResources(ctx context.Context, d MemberDeps, m MemberContext, volume v1beta1.WorkerVolumeSpec, builtIn bool) error {
+	dynClient, namespace, err := resolveMemberDynamicClient(ctx, d, m)
+	if err != nil {
+		return err
+	}
+	if dynClient == nil {
+		return fmt.Errorf("workers-deps volume %s requires a dynamic client to create storage resources", volume.Name)
+	}
+	objects := workerDepsMountResourceObjects(volume, namespace, builtIn)
+	for _, obj := range objects {
+		if err := createWorkerDepsObjectIfMissing(ctx, dynClient, obj); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func workerDepsMountResourceObjects(volume v1beta1.WorkerVolumeSpec, namespace string, builtIn bool) []*unstructured.Unstructured {
+	if volume.OSS != nil && volume.OSS.Auth.Type == workerDepsAuthTypeAccessKey {
+		return []*unstructured.Unstructured{buildAccessKeyWorkerDepsPersistentVolume(volume, namespace)}
+	}
+	if builtIn && volume.OSS != nil && volume.OSS.Auth.Type == workerDepsAuthTypeRRSA {
+		return []*unstructured.Unstructured{
+			buildRRSAWorkerDepsPersistentVolume(volume),
+			buildWorkerDepsCredentialProvider(volume, namespace, workerDepsMountEnv),
+			buildWorkerDepsCredentialProvider(volume, namespace, workerDepsMountToken),
+			buildWorkerDepsCredentialProvider(volume, namespace, workerDepsMountData),
+			buildWorkerDepsAgentIdentity(namespace),
+			buildWorkerDepsAgentRole(namespace),
+			buildWorkerDepsAgentRoleBinding(namespace),
+		}
+	}
+	return []*unstructured.Unstructured{
+		buildWorkerDepsStorageClass(volume, namespace),
+		buildWorkerDepsPersistentVolume(volume, namespace),
+		buildWorkerDepsPersistentVolumeClaim(volume, namespace),
+	}
+}
+
+func resolveMemberDynamicClient(ctx context.Context, d MemberDeps, m MemberContext) (dynamic.Interface, string, error) {
+	namespace := m.Namespace
+	if m.TargetNamespace != "" {
+		namespace = m.TargetNamespace
+	}
+	if m.DeployMode == v1beta1.DeployModeRemote {
+		if m.TargetClusterID == "" {
+			return nil, "", fmt.Errorf("remote workers-deps mount requires targetCluster.id")
+		}
+		if d.RemoteDynamicClientProvider == nil {
+			return nil, "", fmt.Errorf("remote dynamic client provider is not configured")
+		}
+		dynClient, err := d.RemoteDynamicClientProvider.ResolveDynamicClient(ctx, m.TargetClusterID)
+		if err != nil {
+			return nil, "", fmt.Errorf("resolve remote dynamic client for cluster %s: %w", m.TargetClusterID, err)
+		}
+		return dynClient, namespace, nil
+	}
+	return d.DynamicClient, namespace, nil
+}
+
+func createWorkerDepsObjectIfMissing(ctx context.Context, dynClient dynamic.Interface, obj *unstructured.Unstructured) error {
+	gvr := workerDepsObjectGVR(obj)
+	name := obj.GetName()
+	ns := obj.GetNamespace()
+	if ns != "" {
+		res := dynClient.Resource(gvr).Namespace(ns)
+		existing, err := res.Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			return updateWorkerDepsObjectIfNeeded(ctx, res, existing, obj)
+		}
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get workers-deps %s %s/%s: %w", obj.GetKind(), ns, name, err)
+		}
+		if _, err := res.Create(ctx, obj, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create workers-deps %s %s/%s: %w", obj.GetKind(), ns, name, err)
+		}
+		return nil
+	}
+	res := dynClient.Resource(gvr)
+	existing, err := res.Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return updateWorkerDepsObjectIfNeeded(ctx, res, existing, obj)
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get workers-deps %s %s/%s: %w", obj.GetKind(), ns, name, err)
+	}
+	if _, err := res.Create(ctx, obj, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create workers-deps %s %s/%s: %w", obj.GetKind(), ns, name, err)
+	}
+	return nil
+}
+
+func updateWorkerDepsObjectIfNeeded(ctx context.Context, res dynamic.ResourceInterface, existing, desired *unstructured.Unstructured) error {
+	switch desired.GetKind() {
+	case "CredentialProvider", "AgentIdentity", "AgentRole", "AgentRoleBinding":
+	default:
+		return nil
+	}
+
+	labels := map[string]string{}
+	for k, v := range existing.GetLabels() {
+		labels[k] = v
+	}
+	for k, v := range desired.GetLabels() {
+		labels[k] = v
+	}
+	desiredSpec, ok, err := unstructured.NestedMap(desired.Object, "spec")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("desired %s spec is missing", desired.GetKind())
+	}
+	existingSpec, _, err := unstructured.NestedMap(existing.Object, "spec")
+	if err != nil {
+		return err
+	}
+	if reflect.DeepEqual(existing.GetLabels(), labels) && reflect.DeepEqual(existingSpec, desiredSpec) {
+		return nil
+	}
+
+	updated := existing.DeepCopy()
+	updated.SetLabels(labels)
+	updated.Object["spec"] = desiredSpec
+	if _, err := res.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update workers-deps %s %s: %w", desired.GetKind(), desired.GetName(), err)
+	}
+	return nil
+}
+
+func workerDepsObjectGVR(obj *unstructured.Unstructured) schema.GroupVersionResource {
+	switch obj.GetKind() {
+	case "StorageClass":
+		return workerDepsStorageClassGVR
+	case "PersistentVolume":
+		return workerDepsPVGVR
+	case "CredentialProvider":
+		return workerDepsCredentialProviderGVR
+	case "AgentIdentity":
+		return workerDepsAgentIdentityGVR
+	case "AgentRole":
+		return workerDepsAgentRoleGVR
+	case "AgentRoleBinding":
+		return workerDepsAgentRoleBindingGVR
+	default:
+		return workerDepsPVCGVR
+	}
+}
+
+func buildWorkerDepsStorageClass(volume v1beta1.WorkerVolumeSpec, namespace string) *unstructured.Unstructured {
+	provisioner := ackOSSCSIProvisioner
+	parameters := map[string]interface{}{}
+	if volume.OSS != nil {
+		parameters["bucket"] = volume.OSS.Bucket
+		parameters["url"] = volume.OSS.Endpoint
+		parameters["path"] = "/"
+		if volume.OSS.Auth.Type == "RRSA" && volume.OSS.Auth.RRSA != nil {
+			parameters["authType"] = "rrsa"
+			if volume.OSS.Auth.RRSA.RoleName != "" {
+				parameters["roleName"] = volume.OSS.Auth.RRSA.RoleName
+			}
+			if volume.OSS.Auth.RRSA.RoleARN != "" {
+				parameters["roleArn"] = volume.OSS.Auth.RRSA.RoleARN
+			}
+		}
+		if volume.OSS.Auth.Type == "AccessKey" && volume.OSS.Auth.AccessKey != nil {
+			parameters["authType"] = "ak"
+			parameters["csi.storage.k8s.io/node-publish-secret-name"] = volume.OSS.Auth.AccessKey.SecretRef.Name
+			parameters["csi.storage.k8s.io/node-publish-secret-namespace"] = defaultSecretNamespace(volume.OSS.Auth.AccessKey.SecretRef.Namespace, namespace)
+		}
+	}
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "storage.k8s.io/v1",
+		"kind":       "StorageClass",
+		"metadata": map[string]interface{}{
+			"name":   volume.Name,
+			"labels": workerDepsObjectLabels(volume),
+		},
+		"provisioner":       provisioner,
+		"reclaimPolicy":     "Retain",
+		"volumeBindingMode": "Immediate",
+		"parameters":        parameters,
+	}}
+}
+
+func buildWorkerDepsPersistentVolume(volume v1beta1.WorkerVolumeSpec, namespace string) *unstructured.Unstructured {
+	driver := ackOSSCSIProvisioner
+	attrs := map[string]interface{}{}
+	var secretRef map[string]interface{}
+	if volume.OSS != nil {
+		attrs["bucket"] = volume.OSS.Bucket
+		attrs["url"] = volume.OSS.Endpoint
+		attrs["path"] = "/"
+		if volume.OSS.Auth.Type == "RRSA" && volume.OSS.Auth.RRSA != nil {
+			attrs["authType"] = "rrsa"
+			if volume.OSS.Auth.RRSA.RoleName != "" {
+				attrs["roleName"] = volume.OSS.Auth.RRSA.RoleName
+			}
+			if volume.OSS.Auth.RRSA.RoleARN != "" {
+				attrs["roleArn"] = volume.OSS.Auth.RRSA.RoleARN
+			}
+		}
+		if volume.OSS.Auth.Type == "AccessKey" && volume.OSS.Auth.AccessKey != nil {
+			secretRef = map[string]interface{}{
+				"name":      volume.OSS.Auth.AccessKey.SecretRef.Name,
+				"namespace": defaultSecretNamespace(volume.OSS.Auth.AccessKey.SecretRef.Namespace, namespace),
+			}
+		}
+	}
+	csi := map[string]interface{}{
+		"driver":           driver,
+		"volumeHandle":     volume.Name,
+		"volumeAttributes": attrs,
+	}
+	if secretRef != nil && secretRef["name"] != "" {
+		csi["nodePublishSecretRef"] = secretRef
+	}
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "PersistentVolume",
+		"metadata": map[string]interface{}{
+			"name":   volume.Name,
+			"labels": workerDepsObjectLabels(volume),
+		},
+		"spec": map[string]interface{}{
+			"capacity": map[string]interface{}{
+				"storage": defaultWorkerDepsStorageCapacity,
+			},
+			"accessModes":                   []interface{}{"ReadWriteMany"},
+			"persistentVolumeReclaimPolicy": "Retain",
+			"storageClassName":              volume.Name,
+			"csi":                           csi,
+		},
+	}}
+}
+
+func buildAccessKeyWorkerDepsPersistentVolume(volume v1beta1.WorkerVolumeSpec, namespace string) *unstructured.Unstructured {
+	attrs := map[string]interface{}{}
+	secretRef := map[string]interface{}{}
+	if volume.OSS != nil {
+		attrs["bucket"] = volume.OSS.Bucket
+		attrs["url"] = volume.OSS.Endpoint
+		attrs["otherOpts"] = accessKeyWorkerDepsOtherOpts
+		if volume.OSS.Auth.AccessKey != nil {
+			secretRef = map[string]interface{}{
+				"name":      volume.OSS.Auth.AccessKey.SecretRef.Name,
+				"namespace": namespace,
+			}
+		}
+	}
+	labels := workerDepsObjectLabels(volume)
+	labels["alicloud-pvname"] = volume.Name
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "PersistentVolume",
+		"metadata": map[string]interface{}{
+			"name":   volume.Name,
+			"labels": labels,
+		},
+		"spec": map[string]interface{}{
+			"capacity": map[string]interface{}{
+				"storage": accessKeyWorkerDepsPVCapacity,
+			},
+			"accessModes":                   []interface{}{"ReadWriteMany"},
+			"persistentVolumeReclaimPolicy": "Retain",
+			"storageClassName":              accessKeyWorkerDepsStorageClass,
+			"volumeMode":                    "Filesystem",
+			"csi": map[string]interface{}{
+				"driver":               ackOSSCSIProvisioner,
+				"nodePublishSecretRef": secretRef,
+				"volumeAttributes":     attrs,
+				"volumeHandle":         volume.Name,
+			},
+		},
+	}}
+}
+
+func buildRRSAWorkerDepsPersistentVolume(volume v1beta1.WorkerVolumeSpec) *unstructured.Unstructured {
+	attrs := map[string]interface{}{}
+	if volume.OSS != nil {
+		attrs["authType"] = "agent-identity"
+		attrs["bucket"] = volume.OSS.Bucket
+		attrs["url"] = volume.OSS.Endpoint
+		attrs["otherOpts"] = accessKeyWorkerDepsOtherOpts
+	}
+	labels := workerDepsObjectLabels(volume)
+	labels["alicloud-pvname"] = volume.Name
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "PersistentVolume",
+		"metadata": map[string]interface{}{
+			"name":   volume.Name,
+			"labels": labels,
+		},
+		"spec": map[string]interface{}{
+			"capacity": map[string]interface{}{
+				"storage": accessKeyWorkerDepsPVCapacity,
+			},
+			"accessModes":                   []interface{}{"ReadWriteMany"},
+			"persistentVolumeReclaimPolicy": "Retain",
+			"storageClassName":              accessKeyWorkerDepsStorageClass,
+			"volumeMode":                    "Filesystem",
+			"csi": map[string]interface{}{
+				"driver":           ackOSSCSIProvisioner,
+				"volumeAttributes": attrs,
+				"volumeHandle":     volume.Name,
+			},
+		},
+	}}
+}
+
+func workerDepsCredentialProviderName(mountName string) string {
+	return backend.BuiltinSandboxInstanceName + "-" + mountName
+}
+
+func buildWorkerDepsCredentialProvider(volume v1beta1.WorkerVolumeSpec, namespace, mountName string) *unstructured.Unstructured {
+	roleName := ""
+	if volume.OSS != nil && volume.OSS.Auth.RRSA != nil {
+		roleName = volume.OSS.Auth.RRSA.RoleName
+	}
+	labels := workerDepsObjectLabels(volume)
+	labels["agentteams.io/sandboxset"] = backend.BuiltinSandboxInstanceName
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "agentidentity.alibabacloud.com/v1alpha1",
+		"kind":       "CredentialProvider",
+		"metadata": map[string]interface{}{
+			"name":      workerDepsCredentialProviderName(mountName),
+			"namespace": namespace,
+			"labels":    labels,
+		},
+		"spec": map[string]interface{}{
+			"type": "RAM",
+			"ram": map[string]interface{}{
+				"source": map[string]interface{}{
+					"provider": "RRSA",
+					"rrsa": map[string]interface{}{
+						"roleName": roleName,
+						"policy":   workerDepsCredentialProviderPolicy(),
+					},
+				},
+			},
+		},
+	}}
+}
+
+func buildWorkerDepsAgentIdentity(namespace string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "agentidentity.alibabacloud.com/v1alpha1",
+		"kind":       "AgentIdentity",
+		"metadata": map[string]interface{}{
+			"name":      backend.BuiltinSandboxInstanceName,
+			"namespace": namespace,
+			"labels":    workerDepsFixedObjectLabels(),
+		},
+		"spec": map[string]interface{}{
+			"description": "this is for agentteams",
+		},
+	}}
+}
+
+func buildWorkerDepsAgentRole(namespace string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "agentidentity.alibabacloud.com/v1alpha1",
+		"kind":       "AgentRole",
+		"metadata": map[string]interface{}{
+			"name":      backend.BuiltinSandboxInstanceName,
+			"namespace": namespace,
+			"labels":    workerDepsFixedObjectLabels(),
+		},
+		"spec": map[string]interface{}{
+			"rules": []interface{}{
+				workerDepsAgentRoleRule(workerDepsCredentialProviderName(workerDepsMountEnv)),
+				workerDepsAgentRoleRule(workerDepsCredentialProviderName(workerDepsMountToken)),
+				workerDepsAgentRoleRule(workerDepsCredentialProviderName(workerDepsMountData)),
+			},
+		},
+	}}
+}
+
+func workerDepsAgentRoleRule(resource string) map[string]interface{} {
+	return map[string]interface{}{
+		"effect":   "Allow",
+		"action":   "GetResourceCredential",
+		"resource": "CredentialProvider/" + resource,
+	}
+}
+
+func buildWorkerDepsAgentRoleBinding(namespace string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "agentidentity.alibabacloud.com/v1alpha1",
+		"kind":       "AgentRoleBinding",
+		"metadata": map[string]interface{}{
+			"name":      backend.BuiltinSandboxInstanceName,
+			"namespace": namespace,
+			"labels":    workerDepsFixedObjectLabels(),
+		},
+		"spec": map[string]interface{}{
+			"agentRoleRef": map[string]interface{}{
+				"apiGroup": "agentidentity.alibabacloud.com",
+				"kind":     "AgentRole",
+				"name":     backend.BuiltinSandboxInstanceName,
+			},
+			"subjects": []interface{}{
+				map[string]interface{}{
+					"authorizationType": "Agent",
+					"agentAuthorizationConfiguration": map[string]interface{}{
+						"agentName": backend.BuiltinSandboxInstanceName,
+					},
+				},
+			},
+		},
+	}}
+}
+
+func workerDepsCredentialProviderPolicy() string {
+	policy := map[string]interface{}{
+		"Version": "1",
+		"Statement": []map[string]interface{}{
+			{
+				"Action": []string{
+					"oss:GetObject",
+					"oss:PutObject",
+					"oss:DeleteObject",
+					"oss:AbortMultipartUpload",
+					"oss:ListMultipartUploads",
+				},
+				"Effect": "Allow",
+				"Resource": []string{
+					"acs:oss:*:*:${ack:agent-identity/storage-auth/bucket-name}/${ack:agent-identity/storage-auth/sub-path}",
+					"acs:oss:*:*:${ack:agent-identity/storage-auth/bucket-name}/${ack:agent-identity/storage-auth/sub-path}/*",
+				},
+			},
+			{
+				"Action": []string{
+					"oss:ListObjects",
+				},
+				"Effect": "Allow",
+				"Resource": []string{
+					"acs:oss:*:*:${ack:agent-identity/storage-auth/bucket-name}",
+				},
+				"Condition": map[string]interface{}{
+					"StringLike": map[string]interface{}{
+						"oss:Prefix": []string{
+							"${ack:agent-identity/storage-auth/sub-path}/*",
+						},
+					},
+				},
+			},
+		},
+	}
+	out, err := json.MarshalIndent(policy, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func defaultSecretNamespace(secretNamespace, fallback string) string {
+	if secretNamespace != "" {
+		return secretNamespace
+	}
+	return fallback
+}
+
+func buildWorkerDepsPersistentVolumeClaim(volume v1beta1.WorkerVolumeSpec, namespace string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "PersistentVolumeClaim",
+		"metadata": map[string]interface{}{
+			"name":      volume.Name,
+			"namespace": namespace,
+			"labels":    workerDepsObjectLabels(volume),
+		},
+		"spec": map[string]interface{}{
+			"accessModes":      []interface{}{"ReadWriteMany"},
+			"storageClassName": volume.Name,
+			"volumeName":       volume.Name,
+			"resources": map[string]interface{}{
+				"requests": map[string]interface{}{
+					"storage": defaultWorkerDepsStorageCapacity,
+				},
+			},
+		},
+	}}
+}
+
+func workerDepsObjectLabels(volume v1beta1.WorkerVolumeSpec) map[string]interface{} {
+	labels := workerDepsFixedObjectLabels()
+	labels["agentteams.io/mount-provider"] = strings.ToLower(volume.Type)
+	return labels
+}
+
+func workerDepsFixedObjectLabels() map[string]interface{} {
+	return map[string]interface{}{
+		"agentteams.io/managed-by":   "agentteams-controller",
+		"agentteams.io/workers-deps": "true",
+	}
+}
+
+func minPositiveDuration(a, b time.Duration) time.Duration {
+	if a <= 0 {
+		return b
+	}
+	if b <= 0 || a < b {
+		return a
+	}
+	return b
 }
 
 // computeMemberPhase derives the lifecycle phase from desired state,
@@ -624,14 +1844,21 @@ func computeMemberPhase(currentPhase, matrixUserID, desiredState, containerState
 		if containerState == string(backend.StatusRunning) || containerState == string(backend.StatusReady) {
 			return "Running"
 		}
-		if containerState == string(backend.StatusFailed) {
-			return "Failed"
-		}
 		if containerState == string(backend.StatusStarting) {
 			return "Starting"
 		}
+		if containerState == string(backend.StatusFailed) {
+			return "Failed"
+		}
 		return "Pending"
 	}
+}
+
+func extraHostsForBackend(wb backend.WorkerBackend) []string {
+	if wb != nil && wb.Name() == "docker" {
+		return []string{dockerHostInternalExtraHost}
+	}
+	return nil
 }
 
 // ReconcileMemberExpose reconciles Higress port exposure for the member.
@@ -659,6 +1886,7 @@ func ReconcileMemberExpose(ctx context.Context, d MemberDeps, m MemberContext, s
 func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) error {
 	logger := log.FromContext(ctx)
 	logger.Info("deleting member", "name", m.Name, "role", m.Role)
+	sandboxSetTokenProjections.Delete(sandboxSetTokenProjectionKey(m))
 
 	if err := d.Provisioner.LeaveAllWorkerRooms(ctx, m.RuntimeName); err != nil {
 		logger.Error(err, "member leave-all-rooms failed (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
@@ -700,17 +1928,21 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		if currentBackend == "" {
 			currentBackend = v1beta1.BackendRuntimePod
 		}
-		if wb, err := d.Backend.GetBackendForType(ctx, currentBackend); err == nil && wb != nil {
-			wb = resolveBackendForMember(wb, m)
-			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
-				logger.Error(err, "failed to delete member container (may already be removed)", "name", m.Name)
+		if wb, err := resolveBackendForMember(d.Backend, currentBackend, m); err == nil {
+			if derr := wb.Delete(ctx, m.Name); derr != nil && !errors.Is(derr, backend.ErrNotFound) {
+				logger.Error(derr, "failed to delete member container (may already be removed)", "name", m.Name)
 			}
-		} else if err != nil {
-			logger.Error(err, "failed to resolve member backend for delete", "name", m.Name, "backendRuntime", currentBackend)
 		}
-	}
-	if err := ensureServiceDeleted(ctx, &m, &d); err != nil {
-		logger.Error(err, "failed to delete member Service (non-fatal)", "name", m.Name)
+		// Safety net: if spec disagrees with status, also try to delete
+		// from the spec-side backend so a partially-completed switch on
+		// the previous reconcile does not leak resources.
+		if m.BackendRuntime != "" && m.BackendRuntime != currentBackend {
+			if altWb, err := resolveBackendForMember(d.Backend, m.BackendRuntime, m); err == nil {
+				if derr := altWb.Delete(ctx, m.Name); derr != nil && !errors.Is(derr, backend.ErrNotFound) {
+					logger.Error(derr, "failed to delete member container on alternate backend (may already be removed)", "name", m.Name)
+				}
+			}
+		}
 	}
 
 	if err := d.Deployer.CleanupOSSData(ctx, m.RuntimeName); err != nil {
@@ -735,6 +1967,14 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	// cleanly — the underlying room is left intact to preserve history.
 	if err := d.Provisioner.DeleteWorkerRoomAlias(ctx, m.RuntimeName); err != nil {
 		logger.Error(err, "failed to delete worker room alias (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)
+	}
+	// Clean up any ClusterIP Services associated with this member.
+	// Uses label-based selection to catch all naming conventions.
+	if d.Backend != nil {
+		svcDeps := &MemberDeps{Backend: d.Backend, ResourcePrefix: d.ResourcePrefix}
+		if err := ensureServiceDeleted(ctx, &m, svcDeps); err != nil {
+			logger.Error(err, "failed to delete member services (non-fatal)", "name", m.Name)
+		}
 	}
 	return nil
 }

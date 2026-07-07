@@ -41,6 +41,7 @@ type Config struct {
 	AppServiceToken           string
 	AppServiceHSToken         string
 	AppServiceSenderLocalpart string
+	AppServicePushURL         string
 	MatrixDomain              string // needed for AS registration YAML
 
 	// Provider selection — drives which initialization steps run.
@@ -221,6 +222,7 @@ func (i *Initializer) registerAppService(ctx context.Context) error {
 		AppServiceToken:           i.Config.AppServiceToken,
 		AppServiceHSToken:         i.Config.AppServiceHSToken,
 		AppServiceSenderLocalpart: i.Config.AppServiceSenderLocalpart,
+		AppServicePushURL:         i.Config.AppServicePushURL,
 	}
 	reg := matrix.RenderAppServiceRegistration(cfg)
 	if err := i.Matrix.RegisterAppService(ctx, reg); err != nil {

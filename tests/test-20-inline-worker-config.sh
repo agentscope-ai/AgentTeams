@@ -339,28 +339,14 @@ else
     log_fail "Failed to apply YAML with package + inline override"
 fi
 
-# Wait for the update reconcile (ZIP import already created the worker; override apply triggers update)
+# Wait for the update reconcile. The durable signal is the generated file
+# content; log text can change across controller versions.
 log_info "Waiting for controller to reconcile override worker update..."
-RECONCILE_TIMEOUT=120
-RECONCILE_ELAPSED=0
-WORKER_UPDATED=false
-
-while [ "${RECONCILE_ELAPSED}" -lt "${RECONCILE_TIMEOUT}" ]; do
-    if exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep -q "worker updated.*${TEST_WORKER_OVERRIDE}"; then
-        WORKER_UPDATED=true
-        break
-    fi
-    sleep 5
-    RECONCILE_ELAPSED=$((RECONCILE_ELAPSED + 5))
-    printf "\r[TEST INFO] Waiting for reconcile... (%ds/%ds)" "${RECONCILE_ELAPSED}" "${RECONCILE_TIMEOUT}"
-done
-echo ""
-
-if [ "${WORKER_UPDATED}" = true ]; then
-    log_pass "Override worker updated (took ~${RECONCILE_ELAPSED}s)"
+if wait_agent_file_contains "${TEST_WORKER_OVERRIDE}" "SOUL.md" "OVERRIDDEN SOUL FROM INLINE" 120; then
+    log_pass "Override worker updated"
 else
-    log_fail "Override worker not updated within ${RECONCILE_TIMEOUT}s"
-    exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep "${TEST_WORKER_OVERRIDE}" | tail -5
+    log_fail "Override worker not updated within 120s"
+    exec_in_agent hiclaw get workers "${TEST_WORKER_OVERRIDE}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Verify SOUL.md has inline content, NOT package content

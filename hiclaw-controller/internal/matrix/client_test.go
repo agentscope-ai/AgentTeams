@@ -8,6 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	appmetrics "github.com/hiclaw/hiclaw-controller/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestEnsureUser_NewRegistration(t *testing.T) {
@@ -50,6 +53,76 @@ func TestEnsureUser_NewRegistration(t *testing.T) {
 	}
 	if creds.Password != "pass123" {
 		t.Errorf("Password = %q, want pass123", creds.Password)
+	}
+}
+
+func TestMatrixOperationUsesBoundedLabels(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		want   string
+	}{
+		{
+			name:   "room state",
+			method: http.MethodPut,
+			path:   "/_matrix/client/v3/rooms/%21abc%3Ad/state/io.hiclaw.meta/",
+			want:   "set_room_state",
+		},
+		{
+			name:   "send message",
+			method: http.MethodPut,
+			path:   "/_matrix/client/v3/rooms/%21abc%3Ad/send/m.room.message/hc-123",
+			want:   "send_message",
+		},
+		{
+			name:   "sync query",
+			method: http.MethodGet,
+			path:   "/_matrix/client/v3/sync?since=s1&timeout=1000",
+			want:   "sync_messages",
+		},
+		{
+			name:   "unknown",
+			method: http.MethodPatch,
+			path:   "/_matrix/client/v3/rooms/%21abc%3Ad/custom",
+			want:   "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := matrixOperation(tt.method, tt.path); got != tt.want {
+				t.Fatalf("matrixOperation() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDoJSONRecordsUpstreamMetrics(t *testing.T) {
+	appmetrics.UpstreamRequestDuration.Reset()
+	appmetrics.UpstreamRequests.Reset()
+	appmetrics.UpstreamRequestErrors.Reset()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"errcode":"M_UNKNOWN","error":"boom"}`, http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{ServerURL: server.URL, Domain: "test.domain"}, server.Client())
+	statusCode, _, err := c.doJSON(context.Background(), http.MethodPost,
+		"/_matrix/client/v3/createRoom", "token", map[string]string{"name": "room"}, nil)
+	if err != nil {
+		t.Fatalf("doJSON: %v", err)
+	}
+	if statusCode != http.StatusInternalServerError {
+		t.Fatalf("statusCode = %d, want 500", statusCode)
+	}
+
+	if got := testutil.ToFloat64(appmetrics.UpstreamRequests.WithLabelValues("matrix", "create_room", "error", "5xx")); got != 1 {
+		t.Fatalf("upstream_requests_total = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(appmetrics.UpstreamRequestErrors.WithLabelValues("matrix", "create_room", "http")); got != 1 {
+		t.Fatalf("upstream_request_errors_total = %v, want 1", got)
 	}
 }
 
@@ -171,6 +244,64 @@ func TestCreateRoom(t *testing.T) {
 	}
 }
 
+func TestCreateRoom_InitialStateAndE2EE(t *testing.T) {
+	var gotBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/_matrix/client/v3/createRoom" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"room_id": "!room123:test.domain"})
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL,
+		Domain:    "test.domain",
+	}, server.Client())
+
+	_, err := c.CreateRoom(context.Background(), CreateRoomRequest{
+		Name: "Team: alpha",
+		InitialState: []StateEvent{{
+			Type:     "room.meta",
+			StateKey: "",
+			Content: map[string]interface{}{
+				"roomKind": "team_room",
+			},
+		}},
+		E2EE:         true,
+		CreatorToken: "creator-token",
+	})
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+
+	initialState, ok := gotBody["initial_state"].([]interface{})
+	if !ok {
+		t.Fatalf("initial_state=%T, want []interface{}", gotBody["initial_state"])
+	}
+	if len(initialState) != 2 {
+		t.Fatalf("initial_state length=%d, want 2", len(initialState))
+	}
+	meta := initialState[0].(map[string]interface{})
+	if meta["type"] != "room.meta" {
+		t.Fatalf("first state type=%v, want room.meta", meta["type"])
+	}
+	content := meta["content"].(map[string]interface{})
+	if content["roomKind"] != "team_room" {
+		t.Fatalf("roomKind=%v, want team_room", content["roomKind"])
+	}
+	encryption := initialState[1].(map[string]interface{})
+	if encryption["type"] != "m.room.encryption" {
+		t.Fatalf("second state type=%v, want m.room.encryption", encryption["type"])
+	}
+}
+
 func TestCreateRoom_WithAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/_matrix/client/v3/createRoom" {
@@ -182,8 +313,8 @@ func TestCreateRoom_WithAlias(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		if body["room_alias_name"] != "hiclaw-worker-alice" {
-			t.Errorf("room_alias_name = %v, want hiclaw-worker-alice", body["room_alias_name"])
+		if body["room_alias_name"] != "agentteams-worker-alice" {
+			t.Errorf("room_alias_name = %v, want agentteams-worker-alice", body["room_alias_name"])
 		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"room_id": "!new:test.domain"})
@@ -193,7 +324,7 @@ func TestCreateRoom_WithAlias(t *testing.T) {
 	c := NewTuwunelClient(Config{ServerURL: server.URL, Domain: "test.domain"}, server.Client())
 	info, err := c.CreateRoom(context.Background(), CreateRoomRequest{
 		Name:          "Worker: alice",
-		RoomAliasName: "hiclaw-worker-alice",
+		RoomAliasName: "agentteams-worker-alice",
 		CreatorToken:  "tok",
 	})
 	if err != nil {
@@ -220,7 +351,7 @@ func TestCreateRoom_AliasInUse_ResolvesExisting(t *testing.T) {
 				"errcode": "M_ROOM_IN_USE",
 				"error":   "Room alias already exists.",
 			})
-		case "/_matrix/client/v3/directory/room/#hiclaw-worker-alice:test.domain":
+		case "/_matrix/client/v3/directory/room/#agentteams-worker-alice:test.domain":
 			resolveCalls++
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -241,7 +372,7 @@ func TestCreateRoom_AliasInUse_ResolvesExisting(t *testing.T) {
 
 	info, err := c.CreateRoom(context.Background(), CreateRoomRequest{
 		Name:          "Worker: alice",
-		RoomAliasName: "hiclaw-worker-alice",
+		RoomAliasName: "agentteams-worker-alice",
 	})
 	if err != nil {
 		t.Fatalf("CreateRoom: %v", err)
@@ -343,6 +474,77 @@ func TestDeleteRoomAlias_Success(t *testing.T) {
 	}, server.Client())
 	if err := c.DeleteRoomAlias(context.Background(), "#live:d"); err != nil {
 		t.Fatalf("DeleteRoomAlias: %v", err)
+	}
+}
+
+func TestSetRoomName(t *testing.T) {
+	var gotBody map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/login":
+			adminLoginHandler(t, w)
+		case "/_matrix/client/v3/rooms/!room:d/state/m.room.name/":
+			if r.Method != http.MethodPut {
+				t.Errorf("method = %s, want PUT", r.Method)
+			}
+			if auth := r.Header.Get("Authorization"); auth != "Bearer admin-token" {
+				t.Errorf("Authorization = %q, want Bearer admin-token", auth)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{}"))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{
+		ServerURL: server.URL, Domain: "d", AdminUser: "a", AdminPassword: "p",
+	}, server.Client())
+	if err := c.SetRoomName(context.Background(), "!room:d", "Team: alpha [deleted]", ""); err != nil {
+		t.Fatalf("SetRoomName: %v", err)
+	}
+	if gotBody["name"] != "Team: alpha [deleted]" {
+		t.Fatalf("name body=%v", gotBody)
+	}
+}
+
+func TestSetRoomState(t *testing.T) {
+	var gotBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_matrix/client/v3/rooms/!room:d/state/room.meta/":
+			if r.Method != http.MethodPut {
+				t.Errorf("method = %s, want PUT", r.Method)
+			}
+			if auth := r.Header.Get("Authorization"); auth != "Bearer user-token" {
+				t.Errorf("Authorization = %q, want Bearer user-token", auth)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{}"))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewTuwunelClient(Config{ServerURL: server.URL, Domain: "d"}, server.Client())
+	err := c.SetRoomState(context.Background(), "!room:d", "room.meta", "", map[string]interface{}{
+		"roomKind": "team_room",
+	}, "user-token")
+	if err != nil {
+		t.Fatalf("SetRoomState: %v", err)
+	}
+	if gotBody["roomKind"] != "team_room" {
+		t.Fatalf("roomKind body=%v", gotBody)
 	}
 }
 

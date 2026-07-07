@@ -24,12 +24,10 @@ const (
 	StatusStopped  WorkerStatus = "stopped"
 	StatusSleeping WorkerStatus = "sleeping"
 	StatusStarting WorkerStatus = "starting"
-	StatusNotFound WorkerStatus = "not_found"
 	StatusFailed   WorkerStatus = "failed"
+	StatusNotFound WorkerStatus = "not_found"
 	StatusUnknown  WorkerStatus = "unknown"
 )
-
-const BuiltinSandboxInstanceName = "agentteams-builtin"
 
 // Supported worker runtimes.
 const (
@@ -37,19 +35,38 @@ const (
 	RuntimeCopaw     = "copaw"
 	RuntimeHermes    = "hermes"
 	RuntimeOpenHuman = "openhuman"
+	RuntimeQwenPaw   = "qwenpaw"
 )
+
+const (
+	// BuiltinSandboxInstanceName is the fixed name for the shared SandboxSet,
+	// built-in worker-deps PV, AgentIdentity resources, and AccessKey Secret.
+	BuiltinSandboxInstanceName        = "agentteams"
+	DefaultAuthTokenExpirationSeconds = int64(3600)
+	MinAuthTokenExpirationSeconds     = int64(600)
+)
+
+func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
+	if seconds <= 0 {
+		return DefaultAuthTokenExpirationSeconds
+	}
+	if seconds < MinAuthTokenExpirationSeconds {
+		return MinAuthTokenExpirationSeconds
+	}
+	return seconds
+}
 
 // ValidRuntime reports whether r is a recognized runtime value.
 // An empty string is valid — backends resolve it via ResolveRuntime.
 func ValidRuntime(r string) bool {
-	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman
+	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw
 }
 
 // ResolveRuntime returns the effective runtime for a backend request.
 // Resolution order:
 //  1. The explicit runtime on the request (req.Runtime).
 //  2. The caller-provided fallback (req.RuntimeFallback) — typically
-//     HICLAW_MANAGER_RUNTIME for Manager pods, HICLAW_DEFAULT_WORKER_RUNTIME
+//     AGENTTEAMS_MANAGER_RUNTIME for Manager pods, AGENTTEAMS_DEFAULT_WORKER_RUNTIME
 //     for Worker pods. The caller (reconciler) is responsible for picking the
 //     right env var since Backend.Create is shared between both.
 //  3. RuntimeOpenClaw — the historical default.
@@ -88,22 +105,33 @@ type VolumeMount struct {
 	ReadOnly      bool
 }
 
-// WorkerDepsSpec describes runtime assets that sandbox backends can mount
-// dynamically without baking them into the warm SandboxSet image.
+// WorkerDepsSpec carries controller-derived workers-deps mount information.
+// User CRs provide logical mount entries; reconcilers pass mountPath/subPath
+// through to SandboxClaim dynamic volume mounts.
 type WorkerDepsSpec struct {
 	InplaceUpdateImage  string
-	Env                 map[string]string
-	AuthToken           string
-	DynamicVolumeMounts []DynamicVolumeMount
+	DynamicVolumeMounts []WorkerDepsDynamicVolumeMount
+	PodVolume           *WorkerDepsPodVolume
 }
 
-// DynamicVolumeMount maps a provider-managed persistent volume into a sandbox.
-type DynamicVolumeMount struct {
+type WorkerDepsDynamicVolumeMount struct {
 	PVName     string
 	MountPath  string
 	SubPath    string
 	ReadOnly   bool
 	Attributes map[string]string
+}
+
+type WorkerDepsPodVolume struct {
+	Name      string
+	ClaimName string
+	Mounts    []WorkerDepsPodVolumeMount
+}
+
+type WorkerDepsPodVolumeMount struct {
+	MountPath string
+	SubPath   string
+	ReadOnly  bool
 }
 
 // PortMapping describes a host-to-container port binding (Docker backend only).
@@ -119,19 +147,23 @@ type CreateRequest struct {
 	Name    string            `json:"name"`
 	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
-	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "openhuman"
-	// BackendRuntime selects the infrastructure backend flavor for this
-	// worker: "pod" (default K8s Pod) or "sandbox" (OpenKruise Sandbox).
-	BackendRuntime string `json:"-"`
+	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "qwenpaw"
 	// RuntimeFallback is the value used by Backend.Create when Runtime is
 	// empty, before falling back to RuntimeOpenClaw. Manager / Worker
-	// reconcilers populate this from HICLAW_MANAGER_RUNTIME /
-	// HICLAW_DEFAULT_WORKER_RUNTIME respectively, since Backend.Create is
+	// reconcilers populate this from AGENTTEAMS_MANAGER_RUNTIME /
+	// AGENTTEAMS_DEFAULT_WORKER_RUNTIME respectively, since Backend.Create is
 	// shared between both and cannot tell which env var to consult on its own.
 	RuntimeFallback string   `json:"-"`
 	Network         string   `json:"network,omitempty"`
 	ExtraHosts      []string `json:"extra_hosts,omitempty"`
 	WorkingDir      string   `json:"working_dir,omitempty"`
+
+	// BackendRuntime is the desired infrastructure backend type that selected
+	// this backend. Most backends ignore it.
+	BackendRuntime string `json:"-"`
+	// SandboxSetName is retained for SandboxClaim provider API shape. SandboxBackend
+	// normalizes it to BuiltinSandboxInstanceName.
+	SandboxSetName string `json:"-"`
 
 	// Controller URL advertised to worker for callbacks.
 	ControllerURL string `json:"-"`
@@ -139,10 +171,14 @@ type CreateRequest struct {
 	// SA-based auth — ServiceAccountName is set on K8s Pods (projected token).
 	// AuthToken is the pre-issued SA token for Docker backend.
 	// AuthAudience is the projected token audience (K8s backend only; defaults to "hiclaw-controller").
-	ServiceAccountName    string `json:"-"`
-	AuthToken             string `json:"-"`
-	AuthAudience          string `json:"-"`
-	AuthExpirationSeconds int64  `json:"-"`
+	ServiceAccountName string `json:"-"`
+	AuthToken          string `json:"-"`
+	AuthAudience       string `json:"-"`
+	// AuthExpirationSeconds controls the projected ServiceAccount token TTL.
+	// Zero means DefaultAuthTokenExpirationSeconds; values below
+	// MinAuthTokenExpirationSeconds are clamped because Kubernetes rejects
+	// shorter TokenRequest expirations.
+	AuthExpirationSeconds int64 `json:"-"`
 
 	// Resources overrides default resource limits for this container.
 	// nil = use backend defaults (e.g. K8sConfig.WorkerCPU/WorkerMemory).
@@ -202,11 +238,8 @@ type CreateRequest struct {
 	// ServiceEnabled indicates whether a Service should be created for the Pod.
 	ServiceEnabled bool `json:"-"`
 
-	// SandboxSetName optionally selects a provider-specific SandboxSet. The
-	// current OpenKruise backend uses the built-in warm pool.
-	SandboxSetName string `json:"-"`
-
-	// WorkersDeps carries sandbox-specific dynamic mount and image update data.
+	// WorkersDeps carries controller-derived sandbox worker-deps and custom
+	// dynamic mounts.
 	WorkersDeps *WorkerDepsSpec `json:"-"`
 }
 
@@ -222,11 +255,18 @@ type RemoteClientProvider interface {
 	ResolveClient(ctx context.Context, clusterID string) (K8sCoreClient, error)
 }
 
-// RemoteClusterClientProvider exposes both typed and dynamic clients for a
-// remote cluster. Sandbox backends use the dynamic client for CRD operations.
+// RemoteDynamicClientProvider abstracts access to remote cluster dynamic clients.
+// The remoteclient.Cache implements this interface.
+type RemoteDynamicClientProvider interface {
+	ResolveDynamicClient(ctx context.Context, clusterID string) (dynamic.Interface, error)
+}
+
+// RemoteClusterClientProvider exposes both typed and dynamic remote clients.
+// SandboxBackend needs typed core clients for namespace convergence and dynamic
+// clients for OpenKruise Sandbox CRDs.
 type RemoteClusterClientProvider interface {
 	RemoteClientProvider
-	ResolveDynamicClient(ctx context.Context, clusterID string) (dynamic.Interface, error)
+	RemoteDynamicClientProvider
 }
 
 // K8sServiceClient is the minimal Service client surface needed by the backend.
@@ -235,6 +275,7 @@ type K8sServiceClient interface {
 	Create(ctx context.Context, svc *corev1.Service, opts metav1.CreateOptions) (*corev1.Service, error)
 	Update(ctx context.Context, svc *corev1.Service, opts metav1.UpdateOptions) (*corev1.Service, error)
 	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
+	List(ctx context.Context, opts metav1.ListOptions) (*corev1.ServiceList, error)
 }
 
 // K8sNamespaceClient is the minimal Namespace client surface needed by the backend.
@@ -259,12 +300,21 @@ type WorkerResult struct {
 	Backend         string       `json:"backend"`
 	DeploymentMode  string       `json:"deployment_mode"`
 	Status          WorkerStatus `json:"status"`
-	Message         string       `json:"message,omitempty"`
 	ContainerID     string       `json:"container_id,omitempty"`
 	AppID           string       `json:"app_id,omitempty"`
 	RawStatus       string       `json:"raw_status,omitempty"`
-	AppliedSpecHash string       `json:"applied_spec_hash,omitempty"`
 	ConsoleHostPort string       `json:"console_host_port,omitempty"`
+
+	// Message carries a human-readable status detail from the backend.
+	// Populated when Ready condition is False with a non-empty message
+	// (e.g. container restart failure). Empty when the container is healthy
+	// or still starting.
+	Message string `json:"message,omitempty"`
+
+	// AppliedSpecHash is a legacy migration fallback read from the underlying
+	// sandbox resource's agentteams.io/last-applied-spec-hash annotation. New
+	// resources no longer write it; owning reconcilers prefer status.specHash.
+	AppliedSpecHash string `json:"applied_spec_hash,omitempty"`
 }
 
 // WorkerBackend defines the interface for worker lifecycle operations.

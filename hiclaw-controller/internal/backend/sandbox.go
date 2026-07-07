@@ -39,6 +39,7 @@ type SandboxConfig struct {
 	CopawWorkerImage             string
 	HermesWorkerImage            string
 	OpenHumanWorkerImage         string
+	QwenPawWorkerImage           string
 	WorkerCPU                    string
 	WorkerMemory                 string
 	SandboxPrewarmSize           int
@@ -207,6 +208,8 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 			workerImage = s.config.HermesWorkerImage
 		case req.Runtime == RuntimeOpenHuman && s.config.OpenHumanWorkerImage != "":
 			workerImage = s.config.OpenHumanWorkerImage
+		case req.Runtime == RuntimeQwenPaw && s.config.QwenPawWorkerImage != "":
+			workerImage = s.config.QwenPawWorkerImage
 		case s.config.WorkerImage != "":
 			workerImage = s.config.WorkerImage
 		}
@@ -214,7 +217,6 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 	if workerImage == "" {
 		return nil, fmt.Errorf("no worker image configured for sandbox backend")
 	}
-	req.WorkersDeps = BuildSandboxWorkerDeps(req.Name, req.Env, req.AuthToken, req.WorkersDeps)
 	if req.WorkersDeps != nil && req.WorkersDeps.InplaceUpdateImage == "" {
 		req.WorkersDeps.InplaceUpdateImage = workerImage
 	}
@@ -223,7 +225,7 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 
 	// Build labels.
 	sandboxLabels := map[string]string{
-		"agentteams.io/runtime": defaultRuntime(req.Runtime),
+		v1beta1.LabelRuntime: defaultRuntime(req.Runtime),
 	}
 	for k, v := range req.Labels {
 		sandboxLabels[k] = v
@@ -679,10 +681,10 @@ func (s *SandboxBackend) listActualSandboxes(ctx context.Context, name string, c
 		return out
 	}
 	queries := []query{
-		{labels: withController("agentteams.io/worker", name)},
+		{labels: withController(v1beta1.LabelWorker, name)},
 	}
 	for _, managerName := range s.managerLabelCandidates(name) {
-		queries = append(queries, query{labels: withController("agentteams.io/manager", managerName)})
+		queries = append(queries, query{labels: withController(v1beta1.LabelManager, managerName)})
 	}
 
 	seen := map[string]struct{}{}
@@ -874,11 +876,11 @@ func (s *SandboxBackend) sandboxClaimName(req CreateRequest) string {
 }
 
 // workerNamePrefix returns the default worker SA name prefix, e.g.
-// "hiclaw-worker-". Used only when a CreateRequest arrives without an
+// "agentteams-worker-". Used only when a CreateRequest arrives without an
 // explicit ServiceAccountName (production callers always set one).
 func (s *SandboxBackend) workerNamePrefix() string {
 	if s.config.ResourcePrefix == "" {
-		return "hiclaw-worker-"
+		return "agentteams-worker-"
 	}
 	return s.config.ResourcePrefix + "worker-"
 }

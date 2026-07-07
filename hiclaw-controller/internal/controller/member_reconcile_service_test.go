@@ -3,12 +3,12 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
-	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,6 +25,7 @@ type fakeServiceClient struct {
 	createCalls int
 	updateCalls int
 	deleteCalls int
+	listCalls   int
 
 	deleteErr error
 }
@@ -68,6 +69,24 @@ func (f *fakeServiceClient) Delete(_ context.Context, name string, _ metav1.Dele
 	}
 	delete(f.store, name)
 	return nil
+}
+
+func (f *fakeServiceClient) List(_ context.Context, opts metav1.ListOptions) (*corev1.ServiceList, error) {
+	f.listCalls++
+	result := &corev1.ServiceList{}
+	for _, svc := range f.store {
+		if opts.LabelSelector != "" {
+			// Simple key=value parsing for test use.
+			parts := strings.SplitN(opts.LabelSelector, "=", 2)
+			if len(parts) == 2 {
+				if svc.Labels[parts[0]] != parts[1] {
+					continue
+				}
+			}
+		}
+		result.Items = append(result.Items, *svc.DeepCopy())
+	}
+	return result, nil
 }
 
 // fakeServiceBackend implements both backend.WorkerBackend and
@@ -139,13 +158,17 @@ func TestReconcileMemberService_CreatesWhenEnabled(t *testing.T) {
 	deps := newServiceTestDeps(svc)
 	mc := newServiceTestMember("alice", true, 8080, 9090)
 
-	if err := ReconcileMemberService(context.Background(), mc, deps); err != nil {
+	svcName, err := ReconcileMemberService(context.Background(), mc, deps)
+	if err != nil {
 		t.Fatalf("ReconcileMemberService: %v", err)
 	}
+	if svcName != "alice" {
+		t.Fatalf("svcName = %q, want alice", svcName)
+	}
 
-	stored, ok := svc.store["hiclaw-worker-alice"]
+	stored, ok := svc.store["alice"]
 	if !ok {
-		t.Fatalf("expected Service hiclaw-worker-alice to be created; got %+v", svc.store)
+		t.Fatalf("expected Service alice to be created; got %+v", svc.store)
 	}
 	if svc.createCalls != 1 {
 		t.Errorf("Create calls = %d, want 1", svc.createCalls)
@@ -166,46 +189,50 @@ func TestReconcileMemberService_SkipsWhenDisabled(t *testing.T) {
 	deps := newServiceTestDeps(svc)
 	mc := newServiceTestMember("bob", false, 8080)
 
-	if err := ReconcileMemberService(context.Background(), mc, deps); err != nil {
+	svcName, err := ReconcileMemberService(context.Background(), mc, deps)
+	if err != nil {
 		t.Fatalf("ReconcileMemberService: %v", err)
+	}
+	if svcName != "" {
+		t.Fatalf("svcName = %q, want empty", svcName)
 	}
 	if svc.createCalls != 0 {
 		t.Errorf("expected no Service.Create calls when disabled, got %d", svc.createCalls)
 	}
 	// ServiceEnabled=false routes through ensureServiceDeleted which
-	// performs a Get first; the Service does not exist so the fake
-	// returns NotFound and the reconciler short-circuits without Delete.
-	if svc.getCalls != 1 {
-		t.Errorf("expected 1 Get attempt for existence check, got %d", svc.getCalls)
+	// performs a label-based List; with an empty store the list
+	// returns no matches and Delete is never called.
+	if svc.listCalls != 1 {
+		t.Errorf("expected 1 List call for label-selector lookup, got %d", svc.listCalls)
+	}
+	if svc.getCalls != 0 {
+		t.Errorf("expected 0 Get calls under label-selector path, got %d", svc.getCalls)
 	}
 	if svc.deleteCalls != 0 {
-		t.Errorf("expected 0 Delete calls (Get returned NotFound), got %d", svc.deleteCalls)
+		t.Errorf("expected 0 Delete calls when no Services match label, got %d", svc.deleteCalls)
 	}
 }
 
-// TestReconcileMemberService_DeletesWhenExposeEmpty covers the edge case
-// where ServiceEnabled is true but the member exposes no ports. A portless
-// Service is useless, and an existing Service from a previous expose config
-// must be removed.
-func TestReconcileMemberService_DeletesWhenExposeEmpty(t *testing.T) {
+// TestReconcileMemberService_SkipsWhenExposeEmpty covers the edge case
+// where ServiceEnabled is true but the member exposes no ports — a
+// portless Service is useless, the reconciler must skip with no error.
+func TestReconcileMemberService_SkipsWhenExposeEmpty(t *testing.T) {
 	svc := newFakeServiceClient()
-	svc.store["hiclaw-worker-carol"] = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "hiclaw-worker-carol", Namespace: "hiclaw"},
-	}
 	deps := newServiceTestDeps(svc)
 	mc := newServiceTestMember("carol", true) // no ports
 
-	if err := ReconcileMemberService(context.Background(), mc, deps); err != nil {
+	svcName, err := ReconcileMemberService(context.Background(), mc, deps)
+	if err != nil {
 		t.Fatalf("ReconcileMemberService: %v", err)
+	}
+	if svcName != "" {
+		t.Fatalf("svcName = %q, want empty", svcName)
 	}
 	if svc.createCalls != 0 {
 		t.Errorf("Create calls = %d, want 0 when expose is empty", svc.createCalls)
 	}
-	if svc.deleteCalls != 1 {
-		t.Errorf("Delete calls = %d, want 1 when expose is empty and Service exists", svc.deleteCalls)
-	}
-	if _, ok := svc.store["hiclaw-worker-carol"]; ok {
-		t.Fatal("expected stale Service to be deleted when expose is empty")
+	if svc.getCalls != 0 {
+		t.Errorf("Get calls = %d, want 0 when expose is empty", svc.getCalls)
 	}
 }
 
@@ -213,8 +240,8 @@ func TestReconcileMemberService_UpdatesWhenPortsDiffer(t *testing.T) {
 	svc := newFakeServiceClient()
 	// Pre-populate a stale Service that selects the right Pod but exposes
 	// the wrong ports.
-	svc.store["hiclaw-worker-dave"] = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "hiclaw-worker-dave", Namespace: "hiclaw"},
+	svc.store["dave"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "dave", Namespace: "hiclaw"},
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
 			Selector: map[string]string{"agentteams.io/worker": "dave"},
@@ -226,8 +253,12 @@ func TestReconcileMemberService_UpdatesWhenPortsDiffer(t *testing.T) {
 	deps := newServiceTestDeps(svc)
 	mc := newServiceTestMember("dave", true, 8080)
 
-	if err := ReconcileMemberService(context.Background(), mc, deps); err != nil {
+	svcName, err := ReconcileMemberService(context.Background(), mc, deps)
+	if err != nil {
 		t.Fatalf("ReconcileMemberService: %v", err)
+	}
+	if svcName != "dave" {
+		t.Fatalf("svcName = %q, want dave", svcName)
 	}
 	if svc.updateCalls != 1 {
 		t.Errorf("Update calls = %d, want 1 (ports differed)", svc.updateCalls)
@@ -239,8 +270,14 @@ func TestReconcileMemberService_UpdatesWhenPortsDiffer(t *testing.T) {
 // is already satisfied.
 func TestEnsureServiceDeleted_NotFoundIsOK(t *testing.T) {
 	svc := newFakeServiceClient()
-	// Configure the fake's Delete to surface NotFound directly.
-	svc.deleteErr = apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "hiclaw-worker-eve")
+	svc.store["eve"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "eve",
+			Namespace: "hiclaw",
+			Labels:    map[string]string{"agentteams.io/worker": "eve"},
+		},
+	}
+	svc.deleteErr = apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "eve")
 	deps := newServiceTestDeps(svc)
 	mc := newServiceTestMember("eve", false)
 
@@ -269,9 +306,13 @@ func TestEnsureServiceDeleted_NoBackendIsTolerated(t *testing.T) {
 // other than NotFound bubble up so reconcile retries them.
 func TestEnsureServiceDeleted_PropagatesUnexpectedError(t *testing.T) {
 	svc := newFakeServiceClient()
-	// Pre-populate so Get succeeds and Delete is actually attempted.
-	svc.store["hiclaw-worker-grace"] = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "hiclaw-worker-grace", Namespace: "hiclaw"},
+	// Pre-populate so List returns the entry and Delete is actually attempted.
+	svc.store["grace"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "grace",
+			Namespace: "hiclaw",
+			Labels:    map[string]string{"agentteams.io/worker": "grace"},
+		},
 	}
 	svc.deleteErr = errors.New("boom")
 	deps := newServiceTestDeps(svc)
@@ -282,27 +323,77 @@ func TestEnsureServiceDeleted_PropagatesUnexpectedError(t *testing.T) {
 	}
 }
 
-func TestReconcileMemberDelete_DeletesService(t *testing.T) {
+// TestEnsureServiceDeleted_DeletesByLabel verifies that ensureServiceDeleted
+// removes every Service tagged with agentteams.io/worker=<name>, regardless of
+// the Service's own naming convention (e.g. legacy agentteams-worker-<name>
+// alongside the current bare-name Service).
+func TestEnsureServiceDeleted_DeletesByLabel(t *testing.T) {
 	svc := newFakeServiceClient()
-	svc.store["hiclaw-worker-heidi"] = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "hiclaw-worker-heidi", Namespace: "hiclaw"},
+	// Both old-format and new-format Services with the same worker label.
+	svc.store["agentteams-worker-alex"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "agentteams-worker-alex",
+			Namespace: "hiclaw",
+			Labels:    map[string]string{"agentteams.io/worker": "alex"},
+		},
+	}
+	svc.store["alex"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alex",
+			Namespace: "hiclaw",
+			Labels:    map[string]string{"agentteams.io/worker": "alex"},
+		},
 	}
 	deps := newServiceTestDeps(svc)
-	deps.Provisioner = mocks.NewMockProvisioner()
-	deps.Deployer = mocks.NewMockDeployer()
-	member := MemberContext{
-		Name:        "heidi",
-		RuntimeName: "heidi",
-		Role:        RoleStandalone,
-	}
+	mc := newServiceTestMember("alex", false)
 
-	if err := ReconcileMemberDelete(context.Background(), *deps, member); err != nil {
-		t.Fatalf("ReconcileMemberDelete: %v", err)
+	_, err := ReconcileMemberService(context.Background(), mc, deps)
+	if err != nil {
+		t.Fatalf("ReconcileMemberService: %v", err)
 	}
-	if svc.deleteCalls != 1 {
-		t.Fatalf("Delete calls = %d, want 1", svc.deleteCalls)
+	if _, ok := svc.store["agentteams-worker-alex"]; ok {
+		t.Fatal("old-format Service should have been deleted")
 	}
-	if _, ok := svc.store["hiclaw-worker-heidi"]; ok {
-		t.Fatal("expected Service to be deleted during member finalizer cleanup")
+	if _, ok := svc.store["alex"]; ok {
+		t.Fatal("new-format Service should have been deleted")
+	}
+	if svc.deleteCalls != 2 {
+		t.Errorf("deleteCalls = %d, want 2", svc.deleteCalls)
+	}
+}
+
+// TestEnsureServiceDeleted_IgnoresOtherWorkerServices ensures the
+// label-based selector targets only the current member and does not
+// disturb Services owned by sibling workers.
+func TestEnsureServiceDeleted_IgnoresOtherWorkerServices(t *testing.T) {
+	svc := newFakeServiceClient()
+	svc.store["alex"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alex",
+			Namespace: "hiclaw",
+			Labels:    map[string]string{"agentteams.io/worker": "alex"},
+		},
+	}
+	svc.store["bob"] = &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bob",
+			Namespace: "hiclaw",
+			Labels:    map[string]string{"agentteams.io/worker": "bob"},
+		},
+	}
+	deps := newServiceTestDeps(svc)
+	mc := newServiceTestMember("alex", false)
+
+	_, err := ReconcileMemberService(context.Background(), mc, deps)
+	if err != nil {
+		t.Fatalf("ReconcileMemberService: %v", err)
+	}
+	// alex's Service should be gone
+	if _, ok := svc.store["alex"]; ok {
+		t.Fatal("alex's Service should have been deleted")
+	}
+	// bob's Service must remain untouched
+	if _, ok := svc.store["bob"]; !ok {
+		t.Fatal("bob's Service should NOT have been deleted")
 	}
 }

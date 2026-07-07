@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentTeams TeamHarness Plugin",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "prompts", "skills", "mcp", "adapters", "package"],
+  "properties": {
+    "apiVersion": { "const": "hiclaw.agentteam/v1alpha1" },
+    "kind": { "const": "AgentTeamPlugin" },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    }
+  },
+  "additionalProperties": true
+}

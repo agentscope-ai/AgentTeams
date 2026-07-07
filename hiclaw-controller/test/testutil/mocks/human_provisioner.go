@@ -15,29 +15,56 @@ import (
 type MockHumanProvisioner struct {
 	mu sync.Mutex
 
+	// Composite shims (kept for the team-admin path and legacy tests).
 	EnsureHumanUserFn func(ctx context.Context, name string) (*service.HumanCredentials, error)
 	LoginAsHumanFn    func(ctx context.Context, name, password string) (string, error)
-	MatrixUserIDFn    func(name string) string
-	InviteToRoomFn    func(ctx context.Context, roomID, userID string) error
-	JoinRoomAsFn      func(ctx context.Context, roomID, userToken string) error
-	KickFromRoomFn    func(ctx context.Context, roomID, userID, reason string) error
-	ForceLeaveRoomFn  func(ctx context.Context, userID, roomID string) error
-	SetDisplayNameFn  func(ctx context.Context, userID, accessToken, displayName string) error
+
+	// Decomposed primitives.
+	RegisterAppServiceUserFn func(ctx context.Context, name string) (*service.HumanCredentials, error)
+	RegisterLegacyUserFn     func(ctx context.Context, name string) (*service.HumanCredentials, error)
+	SetUserPasswordFn        func(ctx context.Context, userID, password string) error
+	LoginAppServiceUserFn    func(ctx context.Context, name string) (string, error)
+	LoginWithPasswordFn      func(ctx context.Context, name, password string) (string, error)
+
+	MatrixUserIDFn        func(name string) string
+	InviteToRoomFn        func(ctx context.Context, roomID, userID string) error
+	JoinRoomAsFn          func(ctx context.Context, roomID, userToken string) error
+	KickFromRoomFn        func(ctx context.Context, roomID, userID, reason string) error
+	ForceLeaveRoomFn      func(ctx context.Context, userID, roomID string) error
+	DeactivateHumanUserFn func(ctx context.Context, userID string) error
+	SetDisplayNameFn      func(ctx context.Context, userID, accessToken, displayName string) error
+
+	// AppServiceEnabled toggles MatrixAppServiceEnabled() — needed by
+	// the legacy_password identity source to choose between AS and
+	// password registration paths in tests.
+	AppServiceEnabled bool
 
 	Calls struct {
-		EnsureHumanUser []string
-		LoginAsHuman    []LoginAsHumanCall
-		SetDisplayName  []SetDisplayNameCall
-		InviteToRoom    []RoomMembershipCall
-		JoinRoomAs      []JoinRoomAsCall
-		KickFromRoom    []KickFromRoomCall
-		ForceLeaveRoom  []ForceLeaveRoomCall
+		EnsureHumanUser        []string
+		LoginAsHuman           []LoginAsHumanCall
+		RegisterAppServiceUser []string
+		RegisterLegacyUser     []string
+		SetUserPassword        []SetUserPasswordCall
+		LoginAppServiceUser    []string
+		LoginWithPassword      []LoginAsHumanCall
+		SetDisplayName         []SetDisplayNameCall
+		InviteToRoom           []RoomMembershipCall
+		JoinRoomAs             []JoinRoomAsCall
+		KickFromRoom           []KickFromRoomCall
+		ForceLeaveRoom         []ForceLeaveRoomCall
+		DeactivateHumanUser    []string
 	}
 }
 
 // LoginAsHumanCall records the (name, password) pair passed to LoginAsHuman.
 type LoginAsHumanCall struct {
 	Name     string
+	Password string
+}
+
+// SetUserPasswordCall records (userID, password) passed to SetUserPassword.
+type SetUserPasswordCall struct {
+	UserID   string
 	Password string
 }
 
@@ -94,12 +121,19 @@ func (m *MockHumanProvisioner) Reset() {
 	m.clearCallsLocked()
 	m.EnsureHumanUserFn = nil
 	m.LoginAsHumanFn = nil
+	m.RegisterAppServiceUserFn = nil
+	m.RegisterLegacyUserFn = nil
+	m.SetUserPasswordFn = nil
+	m.LoginAppServiceUserFn = nil
+	m.LoginWithPasswordFn = nil
 	m.MatrixUserIDFn = nil
 	m.InviteToRoomFn = nil
 	m.JoinRoomAsFn = nil
 	m.KickFromRoomFn = nil
 	m.ForceLeaveRoomFn = nil
+	m.DeactivateHumanUserFn = nil
 	m.SetDisplayNameFn = nil
+	m.AppServiceEnabled = false
 }
 
 // ClearCalls resets call records only, preserving Fn overrides.
@@ -111,13 +145,19 @@ func (m *MockHumanProvisioner) ClearCalls() {
 
 func (m *MockHumanProvisioner) clearCallsLocked() {
 	m.Calls = struct {
-		EnsureHumanUser []string
-		LoginAsHuman    []LoginAsHumanCall
-		SetDisplayName  []SetDisplayNameCall
-		InviteToRoom    []RoomMembershipCall
-		JoinRoomAs      []JoinRoomAsCall
-		KickFromRoom    []KickFromRoomCall
-		ForceLeaveRoom  []ForceLeaveRoomCall
+		EnsureHumanUser        []string
+		LoginAsHuman           []LoginAsHumanCall
+		RegisterAppServiceUser []string
+		RegisterLegacyUser     []string
+		SetUserPassword        []SetUserPasswordCall
+		LoginAppServiceUser    []string
+		LoginWithPassword      []LoginAsHumanCall
+		SetDisplayName         []SetDisplayNameCall
+		InviteToRoom           []RoomMembershipCall
+		JoinRoomAs             []JoinRoomAsCall
+		KickFromRoom           []KickFromRoomCall
+		ForceLeaveRoom         []ForceLeaveRoomCall
+		DeactivateHumanUser    []string
 	}{}
 }
 
@@ -133,6 +173,7 @@ func (m *MockHumanProvisioner) EnsureHumanUser(ctx context.Context, name string)
 		UserID:      "@" + name + ":localhost",
 		AccessToken: "mock-human-token-" + name,
 		Password:    "mock-human-pw-" + name,
+		Created:     true,
 	}, nil
 }
 
@@ -145,6 +186,71 @@ func (m *MockHumanProvisioner) LoginAsHuman(ctx context.Context, name, password 
 		return fn(ctx, name, password)
 	}
 	return "mock-human-token-" + name, nil
+}
+
+func (m *MockHumanProvisioner) RegisterAppServiceUser(ctx context.Context, name string) (*service.HumanCredentials, error) {
+	m.mu.Lock()
+	m.Calls.RegisterAppServiceUser = append(m.Calls.RegisterAppServiceUser, name)
+	fn := m.RegisterAppServiceUserFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, name)
+	}
+	return &service.HumanCredentials{
+		UserID:      "@" + name + ":localhost",
+		AccessToken: "mock-as-token-" + name,
+		Password:    "",
+		Created:     true,
+	}, nil
+}
+
+func (m *MockHumanProvisioner) RegisterLegacyUser(ctx context.Context, name string) (*service.HumanCredentials, error) {
+	m.mu.Lock()
+	m.Calls.RegisterLegacyUser = append(m.Calls.RegisterLegacyUser, name)
+	fn := m.RegisterLegacyUserFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, name)
+	}
+	return &service.HumanCredentials{
+		UserID:      "@" + name + ":localhost",
+		AccessToken: "mock-legacy-token-" + name,
+		Password:    "mock-human-pw-" + name,
+		Created:     true,
+	}, nil
+}
+
+func (m *MockHumanProvisioner) SetUserPassword(ctx context.Context, userID, password string) error {
+	m.mu.Lock()
+	m.Calls.SetUserPassword = append(m.Calls.SetUserPassword, SetUserPasswordCall{UserID: userID, Password: password})
+	fn := m.SetUserPasswordFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, userID, password)
+	}
+	return nil
+}
+
+func (m *MockHumanProvisioner) LoginAppServiceUser(ctx context.Context, name string) (string, error) {
+	m.mu.Lock()
+	m.Calls.LoginAppServiceUser = append(m.Calls.LoginAppServiceUser, name)
+	fn := m.LoginAppServiceUserFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, name)
+	}
+	return "mock-as-token-" + name, nil
+}
+
+func (m *MockHumanProvisioner) LoginWithPassword(ctx context.Context, name, password string) (string, error) {
+	m.mu.Lock()
+	m.Calls.LoginWithPassword = append(m.Calls.LoginWithPassword, LoginAsHumanCall{Name: name, Password: password})
+	fn := m.LoginWithPasswordFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, name, password)
+	}
+	return "mock-pw-token-" + name, nil
 }
 
 func (m *MockHumanProvisioner) MatrixUserID(name string) string {
@@ -212,8 +318,19 @@ func (m *MockHumanProvisioner) ForceLeaveRoom(ctx context.Context, userID, roomI
 	return nil
 }
 
+func (m *MockHumanProvisioner) DeactivateHumanUser(ctx context.Context, userID string) error {
+	m.mu.Lock()
+	m.Calls.DeactivateHumanUser = append(m.Calls.DeactivateHumanUser, userID)
+	fn := m.DeactivateHumanUserFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, userID)
+	}
+	return nil
+}
+
 func (m *MockHumanProvisioner) MatrixAppServiceEnabled() bool {
-	return false
+	return m.AppServiceEnabled
 }
 
 // Compile-time interface satisfaction check.

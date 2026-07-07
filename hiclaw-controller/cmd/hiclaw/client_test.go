@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -74,8 +76,38 @@ func TestAPIClient_NoClusterIDHeader(t *testing.T) {
 	}
 }
 
+func TestNewAPIClientPrefersAgentTeamsControllerURL(t *testing.T) {
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")
+	t.Setenv("HICLAW_CONTROLLER_URL", "http://hiclaw-controller:8090")
+
+	client := NewAPIClient()
+	if client.BaseURL != "http://agentteams-controller:8090" {
+		t.Fatalf("BaseURL=%q, want AgentTeams controller URL", client.BaseURL)
+	}
+}
+
+func TestNewAPIClientUsesLegacyControllerURL(t *testing.T) {
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "")
+	t.Setenv("HICLAW_CONTROLLER_URL", "http://hiclaw-controller:8090")
+
+	client := NewAPIClient()
+	if client.BaseURL != "http://hiclaw-controller:8090" {
+		t.Fatalf("BaseURL=%q, want legacy controller URL", client.BaseURL)
+	}
+}
+
 // TestDiscoverClusterID verifies the discoverClusterID function reads from env.
 func TestDiscoverClusterID(t *testing.T) {
+	t.Setenv("AGENTTEAMS_CLUSTER_ID", "agentteams-cluster")
+	t.Setenv("HICLAW_CLUSTER_ID", "env-cluster")
+	got := discoverClusterID()
+	if got != "agentteams-cluster" {
+		t.Fatalf("expected agentteams-cluster, got %q", got)
+	}
+}
+
+func TestDiscoverClusterIDLegacyFallback(t *testing.T) {
+	t.Setenv("AGENTTEAMS_CLUSTER_ID", "")
 	t.Setenv("HICLAW_CLUSTER_ID", "env-cluster")
 	got := discoverClusterID()
 	if got != "env-cluster" {
@@ -85,9 +117,62 @@ func TestDiscoverClusterID(t *testing.T) {
 
 // TestDiscoverClusterID_Empty verifies empty env returns empty string.
 func TestDiscoverClusterID_Empty(t *testing.T) {
+	t.Setenv("AGENTTEAMS_CLUSTER_ID", "")
 	t.Setenv("HICLAW_CLUSTER_ID", "")
 	got := discoverClusterID()
 	if got != "" {
 		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
+func TestDiscoverTokenPrefersAgentTeamsEnv(t *testing.T) {
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "agentteams-token")
+	t.Setenv("HICLAW_AUTH_TOKEN", "legacy-token")
+
+	if got := discoverToken(); got != "agentteams-token" {
+		t.Fatalf("discoverToken=%q, want AgentTeams env token", got)
+	}
+}
+
+func TestDiscoverTokenLegacyEnvFallback(t *testing.T) {
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "")
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN_FILE", "")
+	t.Setenv("HICLAW_AUTH_TOKEN", "legacy-token")
+
+	if got := discoverToken(); got != "legacy-token" {
+		t.Fatalf("discoverToken=%q, want legacy env token", got)
+	}
+}
+
+func TestDiscoverTokenPrefersAgentTeamsFile(t *testing.T) {
+	dir := t.TempDir()
+	agentTeamsTokenFile := filepath.Join(dir, "agentteams-token")
+	legacyTokenFile := filepath.Join(dir, "legacy-token")
+	if err := os.WriteFile(agentTeamsTokenFile, []byte("agentteams-file-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyTokenFile, []byte("legacy-file-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN_FILE", agentTeamsTokenFile)
+	t.Setenv("HICLAW_AUTH_TOKEN_FILE", legacyTokenFile)
+
+	if got := discoverToken(); got != "agentteams-file-token" {
+		t.Fatalf("discoverToken=%q, want AgentTeams file token", got)
+	}
+}
+
+func TestDiscoverTokenLegacyFileFallback(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("legacy-file-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "")
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN_FILE", "")
+	t.Setenv("HICLAW_AUTH_TOKEN", "")
+	t.Setenv("HICLAW_AUTH_TOKEN_FILE", tokenFile)
+
+	if got := discoverToken(); got != "legacy-file-token" {
+		t.Fatalf("discoverToken=%q, want legacy file token", got)
 	}
 }

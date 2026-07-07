@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,7 +38,7 @@ func (p *Provisioner) EnsureServiceAccount(ctx context.Context, workerName strin
 			Namespace: ns,
 			Labels: map[string]string{
 				"app":                   p.resourcePrefix.WorkerAppLabel(),
-				"agentteams.io/worker":  workerName,
+				v1beta1.LabelWorker:     workerName,
 				v1beta1.LabelController: p.controllerName,
 			},
 		},
@@ -87,7 +89,7 @@ func (p *Provisioner) EnsureManagerServiceAccount(ctx context.Context, managerNa
 			Namespace: ns,
 			Labels: map[string]string{
 				"app":                   p.resourcePrefix.ManagerAppLabel(),
-				"agentteams.io/manager": managerName,
+				v1beta1.LabelManager:    managerName,
 				v1beta1.LabelController: p.controllerName,
 			},
 		},
@@ -179,7 +181,7 @@ func (p *Provisioner) EnsureAdminServiceAccount(ctx context.Context) error {
 			Name:      saName,
 			Namespace: ns,
 			Labels: map[string]string{
-				"agentteams.io/role": authpkg.RoleAdmin,
+				v1beta1.LabelRole: authpkg.RoleAdmin,
 			},
 		},
 	}
@@ -196,7 +198,7 @@ func (p *Provisioner) EnsureAdminServiceAccount(ctx context.Context) error {
 //
 // The token is written by the embedded-mode startup path to a known
 // location (see `internal/app.bootstrapAdminCLIToken`) so that the bundled
-// `hiclaw` CLI can auto-discover it via the `HICLAW_AUTH_TOKEN_FILE`
+// `hiclaw` CLI can auto-discover it via the `AGENTTEAMS_AUTH_TOKEN_FILE`
 // environment variable that the controller image sets by default.
 //
 // Expiration mirrors `RequestManagerSAToken` (~10 years) — the controller
@@ -230,22 +232,43 @@ func (p *Provisioner) RequestAdminSAToken(ctx context.Context) (string, error) {
 	return result.Status.Token, nil
 }
 
-// RequestSAToken issues a short-lived SA token for non-K8s backends (Docker).
-func (p *Provisioner) RequestSAToken(ctx context.Context, workerName string) (string, error) {
+// RequestSAToken issues a short-lived SA token for non-K8s backends (Docker)
+// and remote-managed Edge workers.
+func (p *Provisioner) RequestSAToken(ctx context.Context, workerName string) (string, time.Time, error) {
+	projection, err := p.ProjectSAToken(ctx, workerName, 3600)
+	if err != nil || projection == nil {
+		return "", time.Time{}, err
+	}
+	return projection.Token, projection.ExpirationTimestamp, nil
+}
+
+// RequestSATokenWithExpiration issues an SA token with a caller-controlled TTL.
+func (p *Provisioner) RequestSATokenWithExpiration(ctx context.Context, workerName string, expirationSeconds int64) (string, error) {
+	projection, err := p.ProjectSAToken(ctx, workerName, expirationSeconds)
+	if err != nil || projection == nil {
+		return "", err
+	}
+	return projection.Token, nil
+}
+
+// ProjectSAToken issues an SA token with a caller-controlled TTL and returns
+// the actual expiration timestamp reported by the Kubernetes TokenRequest API.
+func (p *Provisioner) ProjectSAToken(ctx context.Context, workerName string, expirationSeconds int64) (*SATokenProjection, error) {
 	if p.k8sClient == nil {
-		return "", nil
+		return &SATokenProjection{}, nil
 	}
 	saName := p.resourcePrefix.SAName(authpkg.RoleWorker, workerName)
 	audience := p.authAudience
 	if audience == "" {
 		audience = authpkg.DefaultAudience
 	}
-	expSeconds := int64(315360000) // 24h
+	expirationSeconds = backend.NormalizeAuthTokenExpirationSeconds(expirationSeconds)
+	issuedAt := time.Now()
 
 	tokenReq := &authenticationv1.TokenRequest{
 		Spec: authenticationv1.TokenRequestSpec{
 			Audiences:         []string{audience},
-			ExpirationSeconds: &expSeconds,
+			ExpirationSeconds: &expirationSeconds,
 		},
 	}
 
@@ -253,9 +276,44 @@ func (p *Provisioner) RequestSAToken(ctx context.Context, workerName string) (st
 		ctx, saName, tokenReq, metav1.CreateOptions{},
 	)
 	if err != nil {
-		return "", fmt.Errorf("request SA token for %s: %w", workerName, err)
+		return nil, fmt.Errorf("request SA token for %s: %w", workerName, err)
 	}
-	return result.Status.Token, nil
+	return &SATokenProjection{
+		Token:               result.Status.Token,
+		IssuedAt:            issuedAt,
+		ExpirationTimestamp: result.Status.ExpirationTimestamp.Time,
+		ExpirationSeconds:   expirationSeconds,
+	}, nil
+}
+
+// EnsureRemoteNamespace creates the target namespace on the remote cluster if
+// it does not already exist.
+func (p *Provisioner) EnsureRemoteNamespace(ctx context.Context, clusterID, namespace string) error {
+	if p.remoteCache == nil {
+		return fmt.Errorf("remote client provider not configured")
+	}
+
+	cli, err := p.remoteCache.ResolveClient(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("resolve remote client for cluster %s: %w", clusterID, err)
+	}
+
+	return ensureRemoteNamespace(ctx, cli, clusterID, namespace)
+}
+
+func ensureRemoteNamespace(ctx context.Context, cli backend.K8sCoreClient, clusterID, namespace string) error {
+	if _, err := cli.Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check remote namespace %s in cluster %s: %w", namespace, clusterID, err)
+		}
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: namespace},
+		}
+		if _, err := cli.Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create remote namespace %s in cluster %s: %w", namespace, clusterID, err)
+		}
+	}
+	return nil
 }
 
 // EnsureRemoteServiceAccount creates the worker ServiceAccount on the remote
@@ -275,16 +333,8 @@ func (p *Provisioner) EnsureRemoteServiceAccount(
 	}
 
 	// Ensure the target namespace exists on the remote cluster before creating the SA.
-	if _, err := cli.Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("check remote namespace %s in cluster %s: %w", namespace, clusterID, err)
-		}
-		ns := &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: namespace},
-		}
-		if _, err := cli.Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create remote namespace %s in cluster %s: %w", namespace, clusterID, err)
-		}
+	if err := ensureRemoteNamespace(ctx, cli, clusterID, namespace); err != nil {
+		return err
 	}
 
 	saName := p.resourcePrefix.SAName(authpkg.RoleWorker, workerName)
@@ -293,9 +343,9 @@ func (p *Provisioner) EnsureRemoteServiceAccount(
 			Name:      saName,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "hiclaw-controller",
-				"agentteams.io/role":           "worker",
-				"agentteams.io/worker":         workerName,
+				"app.kubernetes.io/managed-by": "agentteams-controller",
+				v1beta1.LabelRole:              "worker",
+				v1beta1.LabelWorker:            workerName,
 			},
 		},
 	}

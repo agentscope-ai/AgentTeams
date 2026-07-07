@@ -5,6 +5,7 @@ package controller_test
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -185,12 +186,20 @@ func TestWorkerUpdate_SpecChange_RecreatesPod(t *testing.T) {
 	// Reset fully: clear state so we can use StatusFn to simulate pre-existing pod.
 	// This test predates stateful mock; keep using StatusFn for explicit control.
 	mockBackend.Reset()
+	var deleted atomic.Bool
+	mockBackend.DeleteFn = func(_ context.Context, _ string) error {
+		deleted.Store(true)
+		return nil
+	}
 	mockBackend.StatusFn = func(_ context.Context, _ string) (*backend.WorkerResult, error) {
+		if deleted.Load() {
+			return &backend.WorkerResult{Status: backend.StatusNotFound}, nil
+		}
 		return &backend.WorkerResult{Status: backend.StatusRunning}, nil
 	}
 
 	updateSpecField(t, worker, func(w *v1beta1.Worker) {
-		w.Spec.Model = "claude-sonnet-4-20250514"
+		w.Spec.Image = "agentteams-worker:test-update"
 	})
 
 	assertEventually(t, func() error {
@@ -433,7 +442,7 @@ func TestWorkerUpdate_NoInfiniteRecreate(t *testing.T) {
 	mockBackend.ClearCalls()
 
 	updateSpecField(t, worker, func(w *v1beta1.Worker) {
-		w.Spec.Model = "gpt-4o-mini"
+		w.Spec.Image = "agentteams-worker:test-no-loop"
 	})
 
 	// Wait for reconcile to complete

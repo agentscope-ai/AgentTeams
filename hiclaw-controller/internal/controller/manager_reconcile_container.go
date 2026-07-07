@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
@@ -35,9 +37,9 @@ func (r *ManagerReconciler) reconcileManagerContainer(ctx context.Context, s *ma
 }
 
 // ensureManagerContainerPresent ensures the manager container is running. If the
-// container does not exist or was deleted, it is (re)created. If the spec has
-// changed (Generation != ObservedGeneration) while the container is running, the
-// old container is deleted and a new one created.
+// container does not exist or was deleted, it is (re)created. Pod-affecting
+// drift is detected from Manager.status.specHash; sandbox annotations are only
+// consulted as a migration fallback when status.specHash is empty.
 func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s *managerScope) (reconcile.Result, error) {
 	m := s.manager
 	wb := r.managerBackend(ctx)
@@ -53,34 +55,41 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		return reconcile.Result{}, fmt.Errorf("query container status: %w", err)
 	}
 
-	// TODO(hot-reload): All spec changes trigger container recreation because
-	// agents only load config at startup (no hot-reload). When agent-side config
-	// hot-reload is implemented (file watcher / Matrix reload command / webhook),
-	// introduce a podSpecHash annotation to distinguish pod-affecting fields
-	// (Image, Runtime, Model) from config-only fields (Skills, McpServers, Soul,
-	// Agents, Package) and skip recreation for config-only changes.
-	specChanged := m.Generation != m.Status.ObservedGeneration
+	desiredHash := hashAppliedManagerSpec(m.Spec)
+	specChanged := managerSpecChanged(m, desiredHash)
 
 	switch result.Status {
 	case backend.StatusRunning, backend.StatusStarting, backend.StatusReady:
-		if !specChanged {
+		if !managerRuntimeStale(result, desiredHash, m.Status.SpecHash, specChanged, false) {
+			m.Status.SpecHash = desiredHash
 			return reconcile.Result{}, nil
 		}
-		logger.Info("spec changed, recreating manager container",
-			"generation", m.Generation,
-			"observedGeneration", m.Status.ObservedGeneration)
+		logger.Info("manager pod-spec hash drift, recreating container",
+			"currentSpecHash", m.Status.SpecHash,
+			"legacyAppliedSpecHash", result.AppliedSpecHash,
+			"desiredSpecHash", desiredHash)
 		if err := wb.Delete(ctx, containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
 		}
 		return r.createManagerContainer(ctx, s, wb)
 
 	case backend.StatusStopped:
-		if wb.Name() == "docker" && !specChanged {
-			if err := wb.Start(ctx, containerName); err != nil {
-				return reconcile.Result{}, fmt.Errorf("start container: %w", err)
+		stale := managerRuntimeStale(result, desiredHash, m.Status.SpecHash, specChanged, true)
+		if !stale {
+			switch wb.Name() {
+			case "docker", "sandbox":
+				if err := wb.Start(ctx, containerName); err != nil {
+					return reconcile.Result{}, fmt.Errorf("start container: %w", err)
+				}
+				m.Status.SpecHash = desiredHash
+				return reconcile.Result{}, nil
 			}
-			return reconcile.Result{}, nil
 		}
+		logger.Info("manager stopped runtime is stale or cannot resume, recreating",
+			"currentSpecHash", m.Status.SpecHash,
+			"legacyAppliedSpecHash", result.AppliedSpecHash,
+			"desiredSpecHash", desiredHash,
+			"backend", wb.Name())
 		if err := wb.Delete(ctx, containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete stale container: %w", err)
 		}
@@ -90,6 +99,13 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		return r.createManagerContainer(ctx, s, wb)
 
 	default:
+		if wb.Name() == "sandbox" && result.Status == backend.StatusUnknown {
+			logger.Info("sandbox manager container in transient state, waiting",
+				"status", result.Status,
+				"rawStatus", result.RawStatus,
+				"message", result.Message)
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
+		}
 		logger.Info("container in unexpected state, recreating", "status", result.Status)
 		if err := wb.Delete(ctx, containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container in unknown state: %w", err)
@@ -147,12 +163,12 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 
 	managerEnv := r.EnvBuilder.BuildManager(m.Name, prov, m.Spec)
 	if s.modelProviderInfo != nil && s.modelProviderInfo.IntranetURL != "" {
-		managerEnv["HICLAW_AI_GATEWAY_URL"] = s.modelProviderInfo.IntranetURL
+		managerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = s.modelProviderInfo.IntranetURL
 	}
 	mergeUserEnv(managerEnv, m.Spec.Env, logger, "manager/"+m.Name)
 	containerName := r.managerContainerName(m.Name)
 	saName := r.ResourcePrefix.SAName(authpkg.RoleManager, m.Name)
-	resources := mergeAgentResourcesWithBackendDefaults(r.ManagerResources, m.Spec.Resources)
+	resources := mergeBackendResourceRequirements(r.ManagerResources, agentResourcesToBackend(m.Spec.Resources))
 	// Pod labels are layered low-to-high: CR metadata.labels, CR
 	// spec.labels, then controller-forced system labels. The last layer
 	// wins on collision so a user-supplied `agentteams.io/controller` (or
@@ -165,15 +181,18 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 		RuntimeFallback:    r.DefaultRuntime,
 		Env:                managerEnv,
 		ServiceAccountName: saName,
-		Resources:          resources,
+		AuthExpirationSeconds: backend.NormalizeAuthTokenExpirationSeconds(
+			r.AuthTokenExpirationSeconds,
+		),
+		Resources: resources,
 		Labels: mergeLabels(
 			m.ObjectMeta.Labels,
 			m.Spec.Labels,
 			map[string]string{
 				"app":                   r.ResourcePrefix.ManagerAppLabel(),
-				"agentteams.io/manager": m.Name,
-				"agentteams.io/role":    "manager",
-				"agentteams.io/runtime": backend.ResolveRuntime(m.Spec.Runtime, r.DefaultRuntime),
+				v1beta1.LabelManager:    m.Name,
+				v1beta1.LabelRole:       "manager",
+				v1beta1.LabelRuntime:    backend.ResolveRuntime(m.Spec.Runtime, r.DefaultRuntime),
 				v1beta1.LabelController: r.ControllerName,
 			},
 		),
@@ -191,11 +210,13 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 
 	if _, err := wb.Create(ctx, createReq); err != nil {
 		if errors.Is(err, backend.ErrConflict) {
+			m.Status.SpecHash = hashAppliedManagerSpec(m.Spec)
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("create container: %w", err)
 	}
 
+	m.Status.SpecHash = hashAppliedManagerSpec(m.Spec)
 	return reconcile.Result{}, nil
 }
 
@@ -238,6 +259,51 @@ func (r *ManagerReconciler) applyEmbeddedConfig(req *backend.CreateRequest, wb b
 	}
 }
 
+func managerSpecChanged(m *v1beta1.Manager, desiredHash string) bool {
+	if m.Status.SpecHash != "" {
+		return m.Status.SpecHash != desiredHash
+	}
+	return m.Status.ObservedGeneration > 0 && m.Generation != m.Status.ObservedGeneration
+}
+
+func managerRuntimeStale(result *backend.WorkerResult, desiredHash, currentHash string, specChanged bool, missingHashMeansStale bool) bool {
+	if currentHash != "" {
+		return specChanged
+	}
+	if result != nil && result.AppliedSpecHash != "" {
+		return result.AppliedSpecHash != desiredHash
+	}
+	return specChanged || missingHashMeansStale
+}
+
+// hashAppliedManagerSpec computes a fnv64a hash of the ManagerSpec with State
+// zeroed out. This captures all spec fields that should trigger sandbox
+// recreation when changed.
+//
+// Current coverage (fnv64a over json.Marshal with State=nil):
+//
+//	Model, Runtime, Image, Soul, Agents, Skills, McpServers, Package, Config,
+//	AccessEntries, Labels, Env.
+//
+// Consumed by ensureManagerContainerPresent / createManagerContainer to update
+// Manager.status.specHash. Sandbox backend annotations are no longer written;
+// old annotation values are only read as a migration fallback while
+// status.specHash is empty.
+//
+// TODO: When Agent-side hot-reload lands, narrow to pod-affecting fields
+// only (Image, Runtime, Model, Env, Labels, AccessEntries) and handle
+// config-only changes via the reload channel.
+func hashAppliedManagerSpec(spec v1beta1.ManagerSpec) string {
+	spec.State = nil // exclude lifecycle state from hash
+	buf, err := json.Marshal(spec)
+	if err != nil {
+		return ""
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%x", h.Sum64())
+}
+
 // managerBackend returns the WorkerBackend with the container prefix cleared.
 // Manager containers use explicit full names (e.g. "hiclaw-manager") rather than
 // the default worker prefix ("hiclaw-worker-"), so we need WithPrefix("") to
@@ -254,6 +320,8 @@ func (r *ManagerReconciler) managerBackend(ctx context.Context) backend.WorkerBa
 	case *backend.DockerBackend:
 		return b.WithPrefix("")
 	case *backend.K8sBackend:
+		return b.WithPrefix("")
+	case *backend.SandboxBackend:
 		return b.WithPrefix("")
 	default:
 		return wb

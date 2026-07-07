@@ -24,14 +24,14 @@ func TestProvisioner_EnsureServiceAccount_StampsControllerLabel(t *testing.T) {
 	p := NewProvisioner(ProvisionerConfig{
 		K8sClient:      client,
 		Namespace:      "hiclaw",
-		ResourcePrefix: authpkg.ResourcePrefix("hiclaw-"),
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 		ControllerName: "ctl-b",
 	})
 
 	if err := p.EnsureServiceAccount(context.Background(), "alice"); err != nil {
 		t.Fatalf("EnsureServiceAccount: %v", err)
 	}
-	sa, err := client.CoreV1().ServiceAccounts("hiclaw").Get(context.Background(), "hiclaw-worker-alice", metav1.GetOptions{})
+	sa, err := client.CoreV1().ServiceAccounts("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get SA: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestProvisioner_EnsureServiceAccount_StampsControllerLabel(t *testing.T) {
 	if err := p.EnsureManagerServiceAccount(context.Background(), "default"); err != nil {
 		t.Fatalf("EnsureManagerServiceAccount: %v", err)
 	}
-	mgrSA, err := client.CoreV1().ServiceAccounts("hiclaw").Get(context.Background(), "hiclaw-manager", metav1.GetOptions{})
+	mgrSA, err := client.CoreV1().ServiceAccounts("hiclaw").Get(context.Background(), "agentteams-manager", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get manager SA: %v", err)
 	}
@@ -136,6 +136,41 @@ func (f *fakeRemoteClientProvider) ResolveClient(_ context.Context, clusterID st
 
 // --- Remote SA tests ---
 
+func TestEnsureRemoteNamespace(t *testing.T) {
+	nsClient := newFakeNamespaceClient()
+	coreClient := &fakeCoreClient{nsClient: nsClient}
+	remoteProvider := &fakeRemoteClientProvider{
+		clients: map[string]backend.K8sCoreClient{"cluster-a": coreClient},
+	}
+
+	p := NewProvisioner(ProvisionerConfig{
+		Namespace:      "hiclaw",
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
+		RemoteCache:    remoteProvider,
+	})
+
+	if err := p.EnsureRemoteNamespace(context.Background(), "cluster-a", "remote-ns"); err != nil {
+		t.Fatalf("EnsureRemoteNamespace: %v", err)
+	}
+	if _, ok := nsClient.created["remote-ns"]; !ok {
+		t.Fatal("expected remote-ns namespace to be created")
+	}
+	if err := p.EnsureRemoteNamespace(context.Background(), "cluster-a", "remote-ns"); err != nil {
+		t.Fatalf("EnsureRemoteNamespace existing: %v", err)
+	}
+
+	p2 := NewProvisioner(ProvisionerConfig{
+		Namespace:      "hiclaw",
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
+	})
+	if err := p2.EnsureRemoteNamespace(context.Background(), "cluster-a", "remote-ns"); err == nil {
+		t.Fatal("expected error when remoteCache is nil")
+	}
+	if err := p.EnsureRemoteNamespace(context.Background(), "unknown-cluster", "remote-ns"); err == nil {
+		t.Fatal("expected error for unknown cluster")
+	}
+}
+
 func TestEnsureRemoteServiceAccount(t *testing.T) {
 	saClient := newFakeServiceAccountClient()
 	coreClient := &fakeCoreClient{saClient: saClient, nsClient: newFakeNamespaceClient()}
@@ -145,7 +180,7 @@ func TestEnsureRemoteServiceAccount(t *testing.T) {
 
 	p := NewProvisioner(ProvisionerConfig{
 		Namespace:      "hiclaw",
-		ResourcePrefix: authpkg.ResourcePrefix("hiclaw-"),
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 		RemoteCache:    remoteProvider,
 	})
 
@@ -153,12 +188,12 @@ func TestEnsureRemoteServiceAccount(t *testing.T) {
 	if err := p.EnsureRemoteServiceAccount(context.Background(), "bob", "cluster-a", "remote-ns"); err != nil {
 		t.Fatalf("EnsureRemoteServiceAccount: %v", err)
 	}
-	if _, ok := saClient.created["hiclaw-worker-bob"]; !ok {
-		t.Fatal("expected SA hiclaw-worker-bob to be created")
+	if _, ok := saClient.created["agentteams-worker-bob"]; !ok {
+		t.Fatal("expected SA agentteams-worker-bob to be created")
 	}
 
 	// Test idempotency: AlreadyExists returns nil.
-	saClient.createErr = apierrors.NewAlreadyExists(schema.GroupResource{Resource: "serviceaccounts"}, "hiclaw-worker-bob")
+	saClient.createErr = apierrors.NewAlreadyExists(schema.GroupResource{Resource: "serviceaccounts"}, "agentteams-worker-bob")
 	if err := p.EnsureRemoteServiceAccount(context.Background(), "bob", "cluster-a", "remote-ns"); err != nil {
 		t.Fatalf("expected nil on AlreadyExists, got: %v", err)
 	}
@@ -166,7 +201,7 @@ func TestEnsureRemoteServiceAccount(t *testing.T) {
 	// Test error when remote cache is nil.
 	p2 := NewProvisioner(ProvisionerConfig{
 		Namespace:      "hiclaw",
-		ResourcePrefix: authpkg.ResourcePrefix("hiclaw-"),
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 	})
 	if err := p2.EnsureRemoteServiceAccount(context.Background(), "bob", "cluster-a", "remote-ns"); err == nil {
 		t.Fatal("expected error when remoteCache is nil")
@@ -180,8 +215,8 @@ func TestEnsureRemoteServiceAccount(t *testing.T) {
 
 func TestDeleteRemoteServiceAccount(t *testing.T) {
 	saClient := newFakeServiceAccountClient()
-	saClient.created["hiclaw-worker-bob"] = &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: "hiclaw-worker-bob"},
+	saClient.created["agentteams-worker-bob"] = &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: "agentteams-worker-bob"},
 	}
 	coreClient := &fakeCoreClient{saClient: saClient}
 	remoteProvider := &fakeRemoteClientProvider{
@@ -190,7 +225,7 @@ func TestDeleteRemoteServiceAccount(t *testing.T) {
 
 	p := NewProvisioner(ProvisionerConfig{
 		Namespace:      "hiclaw",
-		ResourcePrefix: authpkg.ResourcePrefix("hiclaw-"),
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 		RemoteCache:    remoteProvider,
 	})
 
@@ -198,12 +233,12 @@ func TestDeleteRemoteServiceAccount(t *testing.T) {
 	if err := p.DeleteRemoteServiceAccount(context.Background(), "bob", "cluster-a", "remote-ns"); err != nil {
 		t.Fatalf("DeleteRemoteServiceAccount: %v", err)
 	}
-	if len(saClient.deleted) != 1 || saClient.deleted[0] != "hiclaw-worker-bob" {
-		t.Fatalf("expected hiclaw-worker-bob in deleted list, got %v", saClient.deleted)
+	if len(saClient.deleted) != 1 || saClient.deleted[0] != "agentteams-worker-bob" {
+		t.Fatalf("expected agentteams-worker-bob in deleted list, got %v", saClient.deleted)
 	}
 
 	// Test idempotency: NotFound returns nil.
-	saClient.deleteErr = apierrors.NewNotFound(schema.GroupResource{Resource: "serviceaccounts"}, "hiclaw-worker-bob")
+	saClient.deleteErr = apierrors.NewNotFound(schema.GroupResource{Resource: "serviceaccounts"}, "agentteams-worker-bob")
 	if err := p.DeleteRemoteServiceAccount(context.Background(), "bob", "cluster-a", "remote-ns"); err != nil {
 		t.Fatalf("expected nil on NotFound, got: %v", err)
 	}
@@ -211,7 +246,7 @@ func TestDeleteRemoteServiceAccount(t *testing.T) {
 	// Test error when remote cache is nil.
 	p2 := NewProvisioner(ProvisionerConfig{
 		Namespace:      "hiclaw",
-		ResourcePrefix: authpkg.ResourcePrefix("hiclaw-"),
+		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 	})
 	if err := p2.DeleteRemoteServiceAccount(context.Background(), "bob", "cluster-a", "remote-ns"); err == nil {
 		t.Fatal("expected error when remoteCache is nil")

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwenpaw-worker"
+version = "0.1.0"
+description = "AgentTeams Worker runtime based on QwenPaw"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = [
+    "qwenpaw==1.1.11",
+    "markdown-it-py>=3.0",
+    "linkify-it-py>=2.0",
+    "pyyaml>=6.0",
+    "typer>=0.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/agentscope-ai/AgentTeams"
+Repository = "https://github.com/agentscope-ai/AgentTeams"
+
+[project.scripts]
+qwenpaw-worker = "qwenpaw_worker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

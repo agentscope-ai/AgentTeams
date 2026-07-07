@@ -90,6 +90,12 @@ RUN python -m venv /opt/venv/standard \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         /tmp/copaw-worker/
 
+# --- Install QwenPaw (migrate from copaw to qwenpaw) ---
+RUN /opt/venv/standard/bin/pip install --no-cache-dir \
+        --index-url "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        qwenpaw
+
 # --- Patch CoPaw 1.0.2 Matrix channel indentation bug ---
 # _sync_loop method def is indented one level too deep inside
 # _refresh_matrix_token, causing IndentationError that prevents

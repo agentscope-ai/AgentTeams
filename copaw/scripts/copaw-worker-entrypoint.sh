@@ -25,6 +25,10 @@ WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-${HICLAW_WORKER_NAME:-}}"
 INSTALL_DIR="/root/.copaw-worker"
 CONSOLE_PORT="${AGENTTEAMS_CONSOLE_PORT:-${HICLAW_CONSOLE_PORT:-}}"
 
+# QwenPaw uses QWENPAW_WORKING_DIR to locate workspace config files.
+# Align it with bridge.py output path (config.json written to .copaw/).
+export QWENPAW_WORKING_DIR="${INSTALL_DIR}/${WORKER_NAME}/.copaw"
+
 log() {
     echo "[hiclaw-copaw-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
 }

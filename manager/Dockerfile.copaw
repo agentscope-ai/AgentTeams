@@ -115,6 +115,16 @@ RUN SITE=/opt/copaw-venv/lib/python3.11/site-packages \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$SITE/copaw_worker/" \
     && rm -rf /tmp/copaw-worker/
 
+# ---- Install QwenPaw (migrate Manager from copaw to qwenpaw) ----
+# Must be installed AFTER copaw-worker source overlay to prevent
+# copaw-worker's copaw>=1.0.2 dependency from downgrading agentscope.
+# Installed last → qwenpaw's agentscope==1.0.20 wins.
+RUN /opt/copaw-venv/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        qwenpaw \
+    && ln -sf /opt/copaw-venv/bin/qwenpaw /usr/local/bin/qwenpaw
+
 # ---- Copy Manager agent definitions ----
 COPY manager/agent/ /opt/hiclaw/agent/
 COPY manager/configs/ /opt/hiclaw/configs/

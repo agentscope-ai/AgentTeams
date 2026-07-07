@@ -12,7 +12,7 @@ Strategy:
   - Component health detection strategy:
       * copaw:
           Startup health:
-            - check: start uvicorn.Server for "copaw.app._app:app".
+            - check: start uvicorn.Server for "qwenpaw.app._app:app".
             - check: after starting the server, the worker performs one
               bounded startup probe against the native CoPaw health endpoint.
             - healthy: the startup probe gets HTTP 200 from

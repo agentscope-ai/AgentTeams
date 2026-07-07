@@ -118,7 +118,7 @@ case "${MANAGER_RUNTIME}" in
             log_fail "CoPaw agent.json valid"
         fi
 
-        if docker exec "${_AGENT_CTR}" pgrep -f "copaw app" >/dev/null 2>&1; then
+        if docker exec "${_AGENT_CTR}" sh -c 'pgrep -f "copaw app" || pgrep -f "qwenpaw app"' >/dev/null 2>&1; then
             log_pass "CoPaw process running"
         else
             log_fail "CoPaw process running"

@@ -13,6 +13,9 @@ source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 # ============================================================
 OPENCLAW_WORKSPACE="${HOME}"
 COPAW_WORKING_DIR="${HOME}/.copaw"
+# QwenPaw reads config from QWENPAW_WORKING_DIR.
+# Align with bridge.py output path (same as COPAW_WORKING_DIR).
+export QWENPAW_WORKING_DIR="${COPAW_WORKING_DIR}"
 
 # ============================================================
 # 1. Create CoPaw directory structure
@@ -239,5 +242,7 @@ export COPAW_LOG_LEVEL
 # Set PYTHONPATH to include copaw_worker module
 export PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}"
 
-# Use uvicorn to run CoPaw FastAPI app (enables AgentConfigWatcher for hot-reload)
-exec python3 -m copaw app --host 0.0.0.0 --port 18799
+# Launch QwenPaw Manager (copaw→qwenpaw migration).
+# QwenPaw reads config from QWENPAW_WORKING_DIR (set above, same as .copaw/).
+# The qwenpaw CLI is installed by pip (provides the same CLI as copaw).
+exec python3 -m qwenpaw app --host 0.0.0.0 --port 18799

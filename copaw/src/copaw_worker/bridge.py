@@ -261,6 +261,17 @@ def _write_config_json(
             "max_input_length"
         ] = context_window
 
+    # Ensure agents.profiles section exists (required by qwenpaw for
+    # channel routing — maps agent ID to workspace directory).
+    agents = existing.setdefault("agents", {})
+    agents.setdefault("active_agent", "default")
+    agents.setdefault("profiles", {
+        "default": {
+            "id": "default",
+            "workspace_dir": str(working_dir / "workspaces" / "default"),
+        }
+    })
+
     with open(config_path, "w") as f:
         json.dump(existing, f, indent=2, ensure_ascii=False)
 

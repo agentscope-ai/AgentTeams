@@ -263,14 +263,16 @@ def _write_config_json(
 
     # Ensure agents.profiles section exists (required by qwenpaw for
     # channel routing — maps agent ID to workspace directory).
+    # Use nested merge so partially-populated agents/profiles blocks
+    # are completed rather than skipped.
     agents = existing.setdefault("agents", {})
     agents.setdefault("active_agent", "default")
-    agents.setdefault("profiles", {
-        "default": {
-            "id": "default",
-            "workspace_dir": str(working_dir / "workspaces" / "default"),
-        }
-    })
+    profiles = agents.setdefault("profiles", {})
+    default_profile = profiles.setdefault("default", {})
+    default_profile.setdefault("id", "default")
+    default_profile.setdefault(
+        "workspace_dir", str(working_dir / "workspaces" / "default")
+    )
 
     with open(config_path, "w") as f:
         json.dump(existing, f, indent=2, ensure_ascii=False)

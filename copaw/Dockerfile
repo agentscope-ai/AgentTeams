@@ -94,7 +94,8 @@ RUN python -m venv /opt/venv/standard \
 RUN /opt/venv/standard/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        qwenpaw
+        qwenpaw \
+    && ln -sf /opt/venv/standard/bin/qwenpaw /usr/local/bin/qwenpaw
 
 # --- Patch CoPaw 1.0.2 Matrix channel indentation bug ---
 # _sync_loop method def is indented one level too deep inside

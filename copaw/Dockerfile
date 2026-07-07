@@ -117,7 +117,11 @@ RUN python -m venv /opt/venv/lite \
     && /opt/venv/lite/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        /tmp/copaw-worker/
+        /tmp/copaw-worker/ \
+    && /opt/venv/lite/bin/pip install --no-cache-dir \
+        --index-url "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        qwenpaw
 
 # ---------------------------------------------------------------------------
 # Patch installed packages in the lite venv to defer heavyweight modules that

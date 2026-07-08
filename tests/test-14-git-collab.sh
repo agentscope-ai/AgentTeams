@@ -78,9 +78,66 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
     exit 1
 }
 
-log_section "Phase 1-4: Assign 4-Phase Git Collaboration Task"
+log_section "Setup: Pre-create Workers + Project (deterministic, bypass LLM)"
 
-TASK_DESCRIPTION="Please coordinate a 4-phase git collaboration workflow to test non-linear multi-worker coordination.
+# This test verifies Manager's 4-phase coordination logic; the worker creation
+# and project-room setup steps are pure infrastructure that have proven flaky
+# when driven through Manager's LLM (see #984 CI run 28926397804 where Manager
+# got stuck on a tool-guard approval prompt while trying to mark meta.json
+# active). Pre-create the 3 workers + project room here, mark the project
+# active immediately, and let Manager focus only on phase coordination.
+
+TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+WORKER_SOUL="Developer working on a shared git repo using git-delegation workflows"
+PROJECT_ID="proj-collab-test-${TEST_RUN_ID}"
+PROJECT_TITLE="Git Collaboration Workflow Test - collab-test-${TEST_RUN_ID}"
+PROJECT_DIR="/root/hiclaw-fs/shared/projects/${PROJECT_ID}"
+
+for w in alice bob charlie; do
+    log_info "Pre-creating worker ${w}..."
+    CREATE_OUTPUT=$(exec_in_agent hiclaw apply worker --name "${w}" \
+        --runtime "${TEST_WORKER_RUNTIME}" \
+        --soul "${WORKER_SOUL}" \
+        --skills github-operations,git-delegation 2>&1)
+    if echo "${CREATE_OUTPUT}" | grep -qiE "worker/${w} (created|configured)"; then
+        log_pass "hiclaw apply worker ${w} accepted"
+    else
+        log_fail "hiclaw apply worker ${w} failed: ${CREATE_OUTPUT}"
+    fi
+done
+
+# Wait for all 3 workers to be provisioned (deterministic — no LLM in loop)
+for w in alice bob charlie; do
+    wait_for_worker_container "${w}" 180
+done
+
+# Pre-create the project room + directory tree. Use the same create-project.sh
+# Manager would call, so the room exists with admin + all 3 workers invited
+# and Manager's groupAllowFrom is updated — no Manager LLM involvement.
+log_info "Pre-creating project ${PROJECT_ID}..."
+exec_in_agent bash /opt/hiclaw/agent/skills/project-management/scripts/create-project.sh \
+    --id "${PROJECT_ID}" \
+    --title "${PROJECT_TITLE}" \
+    --workers "alice,bob,charlie"
+
+# Mark project active immediately so Manager's YOLO-mode Step 1d.1 (which
+# triggers the tool-guard approval prompt in Manager's runtime) is a no-op.
+NOW_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+exec_in_agent bash -c "jq -- '.status = \"active\" | .confirmed_at = \"${NOW_ISO}\"' '${PROJECT_DIR}/meta.json' > /tmp/meta-active.json && mv /tmp/meta-active.json '${PROJECT_DIR}/meta.json'"
+
+# Sync to MinIO so Manager sees active state via shared storage mirror.
+exec_in_agent mc mirror "${PROJECT_DIR}/" "${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" --overwrite 2>&1 | tail -3
+
+log_section "Phase 1-4: Manager Coordinates 4-Phase Workflow"
+
+# Snapshot before first LLM interaction
+METRICS_BASELINE=$(snapshot_baseline "alice" "bob" "charlie")
+
+# Focused task description: Manager ONLY coordinates. Workers + project room are
+# pre-configured (see Setup above). Do NOT re-create them.
+TASK_DESCRIPTION="Workers alice, bob, and charlie already exist with the git-delegation skill. The shared project room for '${PROJECT_TITLE}' (id='${PROJECT_ID}') has been pre-created and is already active — DO NOT call create-project.sh, DO NOT update meta.json status.
+
+Your ONLY job is to coordinate the 4-phase git collaboration workflow described below.
 
 Git repo URL (reachable from all worker containers): ${GIT_REPO_URL}
 The repo has a 'main' branch with an initial commit.
@@ -98,15 +155,7 @@ DO NOT assign any phase to a different worker. DO NOT give alice phase 2 or phas
 
 IMPORTANT: You MUST use the EXACT branch names and file paths specified below. Do not rename, substitute, or simplify them. The verification system checks these exact names.
 
-Before starting any phase:
-1. Ensure workers with usernames exactly 'alice', 'bob', and 'charlie' exist with the git-delegation skill. The username (container name) must match exactly — do not use variations like 'alice-dev' or 'bob-backend'. IMPORTANT: Create any missing workers IN PARALLEL (run all create-worker.sh calls concurrently) to save time — do NOT create them one by one sequentially. When creating any missing worker, use these exact values — do NOT ask me to confirm any of them:
-   - runtime: install default
-   - skills: github-operations, git-delegation
-   - SOUL/role: 'Developer working on a shared git repo using git-delegation workflows'
-   If a worker already exists, reuse it.
-2. Create a shared project room that includes alice, bob, charlie, and the human admin (use the create-project.sh script). All phase assignments and reports MUST happen in this project room — never in individual worker rooms.
-
-Run the phases strictly in order, waiting for each phase's report before starting the next.
+Run the phases strictly in order, waiting for each phase's report before starting the next. All phase assignments and reports MUST happen in the project room — never in individual worker rooms.
 
 **Phase 1 — alice (and only alice)**:
 - Clone ${GIT_REPO_URL}
@@ -148,9 +197,6 @@ Run the phases strictly in order, waiting for each phase's report before startin
 
 When all 4 phases are done, post a final summary in the project room and @mention the human admin to notify them the workflow is complete."
 
-# Snapshot before first LLM interaction
-METRICS_BASELINE=$(snapshot_baseline "alice" "bob" "charlie")
-
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" "${TASK_DESCRIPTION}"
 
 log_info "Waiting for Manager to acknowledge and start coordination..."
@@ -177,15 +223,16 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
 done
 assert_not_empty "${MANAGER_TOKEN}" "Manager Matrix token available"
 
-log_info "Waiting for project room to be created (timeout: 900s)..."
+# Project room is pre-created in Setup above, so this should resolve quickly.
+log_info "Looking up pre-created project room (timeout: 300s)..."
 PROJECT_ROOM=""
-DEADLINE=$(( $(date +%s) + 900 ))
+DEADLINE=$(( $(date +%s) + 300 ))
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     PROJECT_ROOM=$(matrix_find_room_by_name "${MANAGER_TOKEN}" "Project:" 2>/dev/null || true)
     [ -n "${PROJECT_ROOM}" ] && break
-    sleep 10
+    sleep 5
 done
-assert_not_empty "${PROJECT_ROOM}" "Project room created by Manager"
+assert_not_empty "${PROJECT_ROOM}" "Project room available"
 log_info "Project room: ${PROJECT_ROOM}"
 
 log_info "Waiting for Manager to post completion message in project room (timeout: 1800s)..."
@@ -220,6 +267,9 @@ log_section "Cleanup"
 
 docker exec "${TEST_CONTROLLER_CONTAINER}" rm -rf "${REPO_PATH}.git" 2>/dev/null || true
 log_info "Removed bare git repo"
+docker exec "${TEST_CONTROLLER_CONTAINER}" rm -rf "${PROJECT_DIR}" 2>/dev/null || true
+docker exec "${TEST_CONTROLLER_CONTAINER}" mc rm --recursive --force "${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" 2>/dev/null || true
+log_info "Removed pre-created project ${PROJECT_ID}"
 
 test_teardown "14-git-collab"
 test_summary

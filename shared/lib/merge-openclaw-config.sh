@@ -12,6 +12,7 @@
 #       on shared keys so user customizations (e.g. memory-core dreaming schedule)
 #       survive periodic syncs
 #     - plugins.load.paths: union of both sides
+#     - plugins.allow: union of both sides
 #     - channels: deep merge (remote wins shared keys, local-only keys preserved)
 #     - channels.matrix.accessToken: local wins (Worker re-login)
 #
@@ -56,6 +57,9 @@ merge_openclaw_config() {
                 else . end
               | if ($remote.plugins.load.paths // null) != null or ($local.plugins.load.paths // null) != null then
                   .load = ((.load // {}) | .paths = ([($remote.plugins.load.paths // [])[], ($local.plugins.load.paths // [])[]] | unique))
+                else . end
+              | if ($remote.plugins.allow // null) != null or ($local.plugins.allow // null) != null then
+                  .allow = ([($remote.plugins.allow // [])[], ($local.plugins.allow // [])[]] | unique)
                 else . end
             )
           else . end

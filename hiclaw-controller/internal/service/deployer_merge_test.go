@@ -113,6 +113,76 @@ func TestMergeUserPluginConfig_PreservesUserAddedPlugins(t *testing.T) {
 	}
 }
 
+func TestMergeUserPluginConfig_UnionsPluginAllowList(t *testing.T) {
+	generated := `{
+		"plugins": {
+			"allow": ["matrix", "memory-core"]
+		}
+	}`
+	existing := `{
+		"plugins": {
+			"allow": ["matrix", "active-memory"]
+		}
+	}`
+
+	merged, err := mergeUserPluginConfig([]byte(generated), []byte(existing))
+	if err != nil {
+		t.Fatalf("merge failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("unmarshal merged: %v", err)
+	}
+
+	plugins := result["plugins"].(map[string]interface{})
+	allow := plugins["allow"].([]interface{})
+	allowSet := make(map[string]bool)
+	for _, name := range allow {
+		allowSet[name.(string)] = true
+	}
+	for _, expected := range []string{"matrix", "memory-core", "active-memory"} {
+		if !allowSet[expected] {
+			t.Errorf("plugin allow entry %q was lost (got: %v)", expected, allow)
+		}
+	}
+}
+
+func TestMergeUserPluginConfig_PreservesAllowWhenGeneratedMissing(t *testing.T) {
+	generated := `{
+		"plugins": {
+			"entries": { "matrix": { "enabled": true } }
+		}
+	}`
+	existing := `{
+		"plugins": {
+			"allow": ["matrix", "memory-core", "active-memory"]
+		}
+	}`
+
+	merged, err := mergeUserPluginConfig([]byte(generated), []byte(existing))
+	if err != nil {
+		t.Fatalf("merge failed: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("unmarshal merged: %v", err)
+	}
+
+	plugins, ok := result["plugins"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("plugins missing from merged result: %v", result)
+	}
+	allow, ok := plugins["allow"].([]interface{})
+	if !ok {
+		t.Fatalf("plugins.allow missing when generated has no allow: %v", plugins)
+	}
+	if len(allow) != 3 {
+		t.Errorf("expected 3 allow entries preserved, got %d: %v", len(allow), allow)
+	}
+}
+
 func TestMergeUserPluginConfig_AddsNewDefaultEntries(t *testing.T) {
 	generated := `{
 		"plugins": {

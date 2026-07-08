@@ -1,15 +1,23 @@
 import asyncio
+import io
 import json
 import logging
 import os
 from pathlib import Path
 import sys
+import tarfile
 import types
+import urllib.error
 
 import pytest
 
 from qwenpaw_worker.config import WorkerConfig
-from qwenpaw_worker.update import MemberRuntimeConfig, RuntimeUpdater
+from qwenpaw_worker.update import (
+    MemberRuntimeConfig,
+    QwenPawModelRuntimeSync,
+    RuntimeUpdater,
+    TEAMS_INTERNAL_CONTROL_MARKER,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +42,20 @@ def _config(tmp_path: Path) -> WorkerConfig:
         install_dir=tmp_path / "agents",
         runtime_config_poll_interval=0.01,
     )
+
+
+def _agent_package(tmp_path: Path, version: str, *, include_teams: bool = False) -> Path:
+    source_dir = tmp_path / f"package-src-{version}"
+    config_dir = source_dir / "config"
+    config_dir.mkdir(parents=True)
+    (source_dir / "manifest.json").write_text('{"version":"1.0"}\n', encoding="utf-8")
+    (config_dir / "AGENTS.md").write_text(f"agent package {version}\n", encoding="utf-8")
+    if include_teams:
+        (config_dir / "TEAMS.md").write_text(f"package teams {version}\n", encoding="utf-8")
+    package_path = tmp_path / f"agent-package-{version}.tar.gz"
+    with tarfile.open(package_path, "w:gz") as archive:
+        archive.add(source_dir, arcname=".")
+    return package_path
 
 
 def test_runtime_updater_applies_changed_config_and_reapplies_adapter(tmp_path: Path) -> None:
@@ -490,6 +512,7 @@ old context
 
     text = teams_md.read_text(encoding="utf-8")
     assert "# Static TeamHarness Prompt" in text
+    assert TEAMS_INTERNAL_CONTROL_MARKER in text
     assert "old context" not in text
     assert "## Runtime Team Context" in text
     assert "runtimeName: leader-runtime" in text
@@ -501,6 +524,111 @@ old context
     assert "gatewayKeyEnv" not in text
     assert "AGENTTEAMS_WORKER_MATRIX_TOKEN" not in text
     assert "secret-ish-bucket" not in text
+
+
+def test_runtime_updater_rebuilds_missing_teams_md_with_renderer(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    rendered: list[str] = []
+    adapter_calls: list[str] = []
+
+    def render_team_context(runtime_config: MemberRuntimeConfig) -> str:
+        rendered.append(runtime_config.generation)
+        return """# Full TeamHarness Contract
+
+Use Quick Task and Project Work.
+
+<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->
+old renderer context
+<!-- END AGENTTEAMS RUNTIME TEAM CONTEXT -->
+"""
+
+    updater = RuntimeUpdater(
+        config=config,
+        adapter_apply=lambda: adapter_calls.append("adapter"),
+        package_manager=_NoopPackageManager(),
+        team_context_renderer=render_team_context,
+    )
+
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "team": {"name": "demo-team", "teamRoomId": "!team:matrix.local"},
+                "member": {
+                    "name": "worker-a",
+                    "runtimeName": "worker-a",
+                    "role": "worker",
+                    "runtime": "qwenpaw",
+                },
+            },
+        ),
+        reapply_adapter=False,
+    )
+
+    text = (config.default_workspace_dir / "TEAMS.md").read_text(encoding="utf-8")
+    assert rendered == ["1"]
+    assert adapter_calls == []
+    assert "# Full TeamHarness Contract" in text
+    assert "Use Quick Task and Project Work." in text
+    assert "old renderer context" not in text
+    assert "team.name: demo-team" in text
+    assert TEAMS_INTERNAL_CONTROL_MARKER in text
+
+
+def test_runtime_updater_preserves_teams_md_when_package_changes_without_adapter(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    package_v1 = _agent_package(tmp_path, "1", include_teams=True)
+    package_v2 = _agent_package(tmp_path, "2", include_teams=False)
+    adapter_calls: list[str] = []
+
+    def render_team_context(runtime_config: MemberRuntimeConfig) -> str:
+        return f"""# Full TeamHarness Contract
+
+<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->
+rendered generation {runtime_config.generation}
+<!-- END AGENTTEAMS RUNTIME TEAM CONTEXT -->
+"""
+
+    updater = RuntimeUpdater(
+        config=config,
+        adapter_apply=lambda: adapter_calls.append("adapter"),
+        team_context_renderer=render_team_context,
+    )
+
+    def runtime_config(package_path: Path, version: str, team_name: str) -> MemberRuntimeConfig:
+        return MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": version},
+                "team": {"name": team_name, "teamRoomId": "!team:matrix.local"},
+                "member": {
+                    "name": "worker-a",
+                    "runtimeName": "worker-a",
+                    "role": "worker",
+                    "runtime": "qwenpaw",
+                },
+                "desired": {
+                    "agentPackage": {
+                        "ref": f"file://{package_path}",
+                        "name": "dev-worker",
+                        "version": version,
+                        "digest": f"sha256:{version}",
+                    }
+                },
+            },
+        )
+
+    updater.apply_once(runtime_config=runtime_config(package_v1, "1", "team-one"), reapply_adapter=False)
+    updater.apply_once(runtime_config=runtime_config(package_v2, "2", "team-two"), reapply_adapter=False)
+
+    text = (config.default_workspace_dir / "TEAMS.md").read_text(encoding="utf-8")
+    assert adapter_calls == []
+    assert "# Full TeamHarness Contract" in text
+    assert "team.name: team-two" in text
+    assert "rendered generation" not in text
+    assert "package teams" not in text
+    assert TEAMS_INTERNAL_CONTROL_MARKER in text
 
 
 def test_runtime_updater_applies_desired_model_to_qwenpaw_agent_config(
@@ -638,6 +766,283 @@ def test_runtime_updater_configures_openai_compatible_provider_from_runtime_conf
     assert saved_active["active"].model == "qwen-plus"
     assert saved_agent["default"].active_model.provider_id == "hiclaw-gateway"
     assert saved_agent["default"].active_model.model == "qwen-plus"
+
+
+def test_runtime_updater_syncs_live_qwenpaw_app_only_when_model_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setenv("REAL_MODEL_KEY", "real-model-secret")
+    sync_calls: list[tuple[str, str]] = []
+
+    updater = RuntimeUpdater(
+        config=config,
+        package_manager=_NoopPackageManager(),
+        model_runtime_sync=lambda runtime_config: sync_calls.append(
+            (runtime_config.generation, runtime_config.model["model"])
+        ),
+    )
+
+    base_model = {
+        "providerId": "hiclaw-gateway",
+        "model": "qwen-plus",
+        "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
+        "apiKeyEnv": "REAL_MODEL_KEY",
+    }
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {"model": base_model},
+            },
+        )
+    )
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "2"},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {"model": base_model},
+            },
+        )
+    )
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "3"},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {"model": {**base_model, "model": "qwen-max"}},
+            },
+        )
+    )
+
+    assert sync_calls == [("3", "qwen-max")]
+
+
+def test_runtime_updater_model_runtime_sync_failure_is_safe_and_retriable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setenv("REAL_MODEL_KEY", "real-model-secret")
+    caplog.set_level(logging.WARNING, logger="qwenpaw_worker.update")
+
+    def fail_sync(_runtime_config: MemberRuntimeConfig) -> None:
+        raise RuntimeError("live sync failed with real-model-secret")
+
+    updater = RuntimeUpdater(
+        config=config,
+        package_manager=_NoopPackageManager(),
+        model_runtime_sync=fail_sync,
+    )
+    updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "1"},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "model": {
+                        "providerId": "hiclaw-gateway",
+                        "model": "qwen-plus",
+                        "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
+                        "apiKeyEnv": "REAL_MODEL_KEY",
+                    }
+                },
+            },
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        updater.apply_once(
+            runtime_config=MemberRuntimeConfig(
+                path=config.runtime_config_path,
+                raw={
+                    "metadata": {"generation": "2"},
+                    "member": {"runtime": "qwenpaw"},
+                    "desired": {
+                        "model": {
+                            "providerId": "hiclaw-gateway",
+                            "model": "qwen-max",
+                            "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
+                            "apiKeyEnv": "REAL_MODEL_KEY",
+                        }
+                    },
+                },
+            )
+        )
+
+    assert updater.current_config is not None
+    assert updater.current_config.generation == "1"
+    assert "component=update step=model_runtime_sync event=failed" in caplog.text
+    assert "generation=2" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "safe_error_summary=RuntimeError" in caplog.text
+    assert "real-model-secret" not in caplog.text
+
+
+def test_model_runtime_sync_calls_qwenpaw_models_api_and_verifies_agent_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setenv("REAL_MODEL_KEY", "real-model-secret")
+    caplog.set_level(logging.INFO, logger="qwenpaw_worker.update")
+    calls: list[tuple[str, str, dict]] = []
+
+    class FakeResponse:
+        def __init__(self, status: int, payload):
+            self.status = status
+            self._body = json.dumps(payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self._body
+
+    def fake_urlopen(request, timeout):
+        body = json.loads(request.data.decode("utf-8")) if request.data else {}
+        calls.append((request.get_method(), request.full_url, body))
+        index = len(calls)
+        if index == 1:
+            return FakeResponse(200, [])
+        if index == 2:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"detail":"Provider not found"}'),
+            )
+        if index == 3:
+            return FakeResponse(
+                201,
+                {"id": "hiclaw-gateway", "models": [], "extra_models": []},
+            )
+        if index == 4:
+            return FakeResponse(
+                200,
+                {"id": "hiclaw-gateway", "models": [], "extra_models": []},
+            )
+        if index == 5:
+            return FakeResponse(
+                201,
+                {
+                    "id": "hiclaw-gateway",
+                    "models": [],
+                    "extra_models": [{"id": "qwen-max", "name": "qwen-max"}],
+                },
+            )
+        if index == 6:
+            return FakeResponse(
+                200,
+                {"active_llm": {"provider_id": "hiclaw-gateway", "model": "qwen-max"}},
+            )
+        return FakeResponse(
+            200,
+            {"active_llm": {"provider_id": "hiclaw-gateway", "model": "qwen-max"}},
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    QwenPawModelRuntimeSync(port=8088).sync(
+        MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "2"},
+                "member": {"runtime": "qwenpaw"},
+                "desired": {
+                    "model": {
+                        "providerId": "hiclaw-gateway",
+                        "providerName": "HiClaw Gateway",
+                        "model": "qwen-max",
+                        "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
+                        "apiKeyEnv": "REAL_MODEL_KEY",
+                    }
+                },
+            },
+        )
+    )
+
+    assert [(method, url.split("/api/models", 1)[1].split("?", 1)[0]) for method, url, _ in calls] == [
+        ("GET", ""),
+        ("PUT", "/hiclaw-gateway/config"),
+        ("POST", "/custom-providers"),
+        ("PUT", "/hiclaw-gateway/config"),
+        ("POST", "/hiclaw-gateway/models"),
+        ("PUT", "/active"),
+        ("GET", "/active"),
+    ]
+    assert calls[3][2] == {
+        "api_key": "real-model-secret",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "chat_model": "OpenAIChatModel",
+    }
+    assert calls[5][2] == {
+        "scope": "agent",
+        "agent_id": "default",
+        "provider_id": "hiclaw-gateway",
+        "model": "qwen-max",
+    }
+    assert "component=update step=model_runtime_sync event=complete" in caplog.text
+    assert "generation=2" in caplog.text
+    assert "provider_id=hiclaw-gateway" in caplog.text
+    assert "model=qwen-max" in caplog.text
+    assert "changed=True" in caplog.text
+    assert "real-model-secret" not in caplog.text
+
+
+def test_model_runtime_sync_http_error_does_not_expose_response_body_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setenv("REAL_MODEL_KEY", "real-model-secret")
+
+    def fake_urlopen(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            500,
+            "Server Error",
+            {},
+            io.BytesIO(b'{"detail":"failed with real-model-secret"}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sync = QwenPawModelRuntimeSync(port=8088)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        sync.sync(
+            MemberRuntimeConfig(
+                path=config.runtime_config_path,
+                raw={
+                    "metadata": {"generation": "2"},
+                    "member": {"runtime": "qwenpaw"},
+                    "desired": {
+                        "model": {
+                            "providerId": "hiclaw-gateway",
+                            "model": "qwen-max",
+                            "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
+                            "apiKeyEnv": "REAL_MODEL_KEY",
+                        }
+                    },
+                },
+            )
+        )
+
+    assert "real-model-secret" not in str(excinfo.value)
+    assert "HTTP 500" in str(excinfo.value)
 
 
 def test_runtime_updater_writes_mcporter_config_from_desired_mcp_servers(

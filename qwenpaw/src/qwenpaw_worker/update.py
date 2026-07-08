@@ -21,7 +21,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import yaml
 
@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_AGENT_ID = "default"
 TEAMS_PROMPT_FILE = "TEAMS.md"
 PACKAGE_PROMPT_FILES = ("AGENTS.md", "SOUL.md")
+PACKAGE_RUNTIME_OWNED_CONFIG_FILES = {Path(TEAMS_PROMPT_FILE)}
+TEAMS_INTERNAL_CONTROL_MARKER = (
+    "<!-- AGENTTEAMS_INTERNAL_CONTROL_FILE: TEAMS.md is managed by "
+    "TeamHarness/QwenPaw runtime; agent packages must not overwrite or delete it. -->"
+)
 TEAMS_CONTEXT_START = "<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->"
 TEAMS_CONTEXT_END = "<!-- END AGENTTEAMS RUNTIME TEAM CONTEXT -->"
 AGENT_IDENTITY_DATA_ENDPOINT_FORMAT = "agentidentitydata.{region_id}.aliyuncs.com"
@@ -942,6 +947,8 @@ class AgentPackageManager:
                 rel = child.relative_to(config_dir)
                 if rel == Path("config/mcporter.json"):
                     continue
+                if rel in PACKAGE_RUNTIME_OWNED_CONFIG_FILES:
+                    continue
                 files.append((child, self.workspace_dir / rel))
         return files
 
@@ -1297,6 +1304,235 @@ class ApplyResult:
     agent_package_dir: Optional[Path]
 
 
+@dataclass(frozen=True)
+class _QwenPawApiResponse:
+    status: int
+    payload: Any
+    text: str
+
+
+class QwenPawModelRuntimeSync:
+    """Sync runtime model state into the running QwenPaw app."""
+
+    def __init__(
+        self,
+        port: int,
+        agent_id: str = DEFAULT_AGENT_ID,
+        timeout: float = 10.0,
+    ) -> None:
+        self.api_root = f"http://127.0.0.1:{port}/api/models"
+        self.agent_id = agent_id
+        self.timeout = timeout
+
+    def __call__(self, runtime_config: MemberRuntimeConfig) -> None:
+        self.sync(runtime_config)
+
+    def sync(self, runtime_config: MemberRuntimeConfig) -> None:
+        started_at = time.monotonic()
+        fields = self._model_fields(runtime_config)
+        if fields is None:
+            return
+        provider_id, model_name, provider_name, base_url, api_key, chat_model = fields
+        if not base_url or not api_key:
+            logger.info(
+                "runtime model sync skipped component=update step=model_runtime_sync event=skip "
+                "generation=%s provider_id=%s model=%s reason=missing_provider_config",
+                runtime_config.generation,
+                provider_id,
+                model_name,
+            )
+            return
+
+        provider_count = self._provider_count(self._request("GET", "").payload)
+        provider_info = self._configure_provider(provider_id, provider_name, base_url, api_key, chat_model)
+        if not self._provider_has_model(provider_info, model_name):
+            provider_info = self._add_model(provider_id, model_name)
+        self._set_active_model(provider_id, model_name)
+        self._verify_active_model(provider_id, model_name)
+        logger.info(
+            "runtime model sync complete component=update step=model_runtime_sync event=complete "
+            "generation=%s provider_id=%s model=%s provider_count=%s changed=%s duration_ms=%s",
+            runtime_config.generation,
+            provider_id,
+            model_name,
+            provider_count,
+            True,
+            _duration_ms(started_at),
+        )
+
+    def _model_fields(self, runtime_config: MemberRuntimeConfig) -> Optional[Tuple[str, str, str, str, str, str]]:
+        model = runtime_config.model
+        provider_id = _string(model.get("providerId") or model.get("provider_id") or model.get("provider"))
+        model_name = _string(model.get("model") or model.get("name"))
+        if not provider_id or not model_name:
+            return None
+        base_url = _string(
+            model.get("baseUrl")
+            or model.get("base_url")
+            or model.get("gatewayUrl")
+            or model.get("gateway_url")
+            or model.get("endpoint")
+            or os.getenv("AGENTTEAMS_AI_GATEWAY_URL")
+        )
+        api_key = _string(model.get("apiKey") or model.get("api_key"))
+        api_key_env = _string(
+            model.get("apiKeyEnv")
+            or model.get("api_key_env")
+            or runtime_config.credentials.get("gatewayKeyEnv")
+            or "AGENTTEAMS_WORKER_GATEWAY_KEY"
+        )
+        if not api_key and api_key_env:
+            api_key = _string(os.getenv(api_key_env))
+        return (
+            provider_id,
+            model_name,
+            _string(model.get("providerName") or model.get("provider_name") or provider_id),
+            self._openai_compatible_base_url(base_url) if base_url else "",
+            api_key,
+            _string(model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"),
+        )
+
+    def _configure_provider(
+        self,
+        provider_id: str,
+        provider_name: str,
+        base_url: str,
+        api_key: str,
+        chat_model: str,
+    ) -> Dict[str, Any]:
+        payload = {"api_key": api_key, "base_url": base_url, "chat_model": chat_model}
+        path = f"/{quote(provider_id, safe='')}/config"
+        response = self._request("PUT", path, payload, ok_statuses=(200, 404))
+        if response.status == 404:
+            self._request(
+                "POST",
+                "/custom-providers",
+                {
+                    "id": provider_id,
+                    "name": provider_name,
+                    "default_base_url": base_url,
+                    "api_key_prefix": "",
+                    "chat_model": chat_model,
+                    "models": [],
+                },
+                ok_statuses=(200, 201),
+            )
+            response = self._request("PUT", path, payload)
+        return response.payload if isinstance(response.payload, dict) else {}
+
+    def _add_model(self, provider_id: str, model_name: str) -> Dict[str, Any]:
+        response = self._request(
+            "POST",
+            f"/{quote(provider_id, safe='')}/models",
+            {"id": model_name, "name": model_name},
+            ok_statuses=(200, 201, 400, 404, 409, 422),
+        )
+        if response.status >= 400 and not self._already_exists(response.text):
+            raise RuntimeError(
+                f"qwenpaw model runtime sync request failed: POST provider model HTTP {response.status}"
+            )
+        return response.payload if isinstance(response.payload, dict) else {}
+
+    def _set_active_model(self, provider_id: str, model_name: str) -> None:
+        self._request(
+            "PUT",
+            "/active",
+            {
+                "scope": "agent",
+                "agent_id": self.agent_id,
+                "provider_id": provider_id,
+                "model": model_name,
+            },
+        )
+
+    def _verify_active_model(self, provider_id: str, model_name: str) -> None:
+        response = self._request(
+            "GET",
+            f"/active?{urlencode({'scope': 'effective', 'agent_id': self.agent_id})}",
+        )
+        payload = response.payload if isinstance(response.payload, dict) else {}
+        active = payload.get("active_llm") if isinstance(payload.get("active_llm"), dict) else {}
+        actual_provider = _string(active.get("provider_id") or active.get("providerId"))
+        actual_model = _string(active.get("model"))
+        if actual_provider != provider_id or actual_model != model_name:
+            raise RuntimeError("qwenpaw model runtime sync verification failed")
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: Optional[Dict[str, Any]] = None,
+        ok_statuses: Iterable[int] = (200, 201),
+    ) -> _QwenPawApiResponse:
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(
+            f"{self.api_root}{path}",
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                text = response.read().decode("utf-8", errors="replace")
+                return _QwenPawApiResponse(
+                    status=response.status,
+                    payload=self._json_payload(text, response.status),
+                    text=text,
+                )
+        except urllib.error.HTTPError as exc:
+            text = exc.read().decode("utf-8", errors="replace")
+            if exc.code in ok_statuses:
+                return _QwenPawApiResponse(
+                    status=exc.code,
+                    payload=self._json_payload(text, exc.code),
+                    text=text,
+                )
+            raise RuntimeError(
+                f"qwenpaw model runtime sync request failed: {method} {path.split('?', 1)[0]} HTTP {exc.code}"
+            ) from None
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"qwenpaw model runtime sync request failed: {method} {path.split('?', 1)[0]} "
+                f"{type(exc.reason).__name__}"
+            ) from None
+
+    def _json_payload(self, text: str, status: int) -> Any:
+        if not text:
+            return {}
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            if status >= 400:
+                return {}
+            raise RuntimeError("qwenpaw model runtime sync request failed: invalid JSON response") from exc
+
+    def _provider_count(self, payload: Any) -> int:
+        return len(payload) if isinstance(payload, list) else 0
+
+    def _provider_has_model(self, payload: Dict[str, Any], model_name: str) -> bool:
+        for key in ("models", "extra_models"):
+            value = payload.get(key)
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, dict) and _string(item.get("id")) == model_name:
+                    return True
+        return False
+
+    def _already_exists(self, text: str) -> bool:
+        lower = text.lower()
+        return "already" in lower or "exist" in lower or "duplicate" in lower
+
+    def _openai_compatible_base_url(self, base_url: str) -> str:
+        value = base_url.rstrip("/")
+        if value.endswith("/v1"):
+            return value
+        return f"{value}/v1"
+
+
 class RuntimeUpdater:
     """Apply controller-projected runtime desired state inside one worker pod."""
 
@@ -1306,10 +1542,14 @@ class RuntimeUpdater:
         adapter_apply: Optional[Callable[[], None]] = None,
         package_manager: Optional[AgentPackageManager] = None,
         runtime_config_pull: Optional[Callable[[], None]] = None,
+        model_runtime_sync: Optional[Callable[[MemberRuntimeConfig], None]] = None,
+        team_context_renderer: Optional[Callable[[MemberRuntimeConfig], str]] = None,
     ) -> None:
         self.config = config
         self.adapter_apply = adapter_apply
         self.runtime_config_pull = runtime_config_pull
+        self.model_runtime_sync = model_runtime_sync or QwenPawModelRuntimeSync(config.console_port)
+        self.team_context_renderer = team_context_renderer
         self.package_manager = package_manager or AgentPackageManager(
             config.qwenpaw_working_dir / "agent-packages",
             workspace_dir=config.default_workspace_dir,
@@ -1329,7 +1569,8 @@ class RuntimeUpdater:
     ) -> ApplyResult:
         started_at = time.monotonic()
         config = runtime_config or self.load()
-        changed = force or self.current_config is None or config.changed_from(self.current_config)
+        previous = self.current_config
+        changed = force or previous is None or config.changed_from(previous)
         if not changed:
             logger.info(
                 "runtime config apply skipped component=update worker=%s generation=%s changed=%s "
@@ -1344,9 +1585,15 @@ class RuntimeUpdater:
             )
             return ApplyResult(runtime_config=config, changed=False, agent_package_dir=None)
 
+        adapter_should_apply = (
+            reapply_adapter
+            and self.adapter_apply is not None
+            and not self._adapter_neutral_change(config)
+        )
         logger.info(
             "runtime config apply begin component=update worker=%s generation=%s team=%s member=%s role=%s "
-            "force=%s reapply_adapter=%s mcp_server_count=%s channel_names=%s credential_binding_count=%s",
+            "force=%s reapply_adapter=%s adapter_applied=%s mcp_server_count=%s channel_names=%s "
+            "credential_binding_count=%s duration_ms=%s",
             self.config.worker_name,
             config.generation,
             config.team_name,
@@ -1354,9 +1601,11 @@ class RuntimeUpdater:
             config.member_role,
             force,
             reapply_adapter,
+            adapter_should_apply,
             _count_collection(config.mcp_servers),
             _named_keys(config.channels),
             len(config.credential_bindings),
+            _duration_ms(started_at),
         )
         self._apply_member_identity(config)
         self._apply_model(config)
@@ -1369,14 +1618,11 @@ class RuntimeUpdater:
         applied_package = self.package_manager.apply(config)
 
         adapter_applied = False
-        if (
-            reapply_adapter
-            and self.adapter_apply is not None
-            and not self._adapter_neutral_change(config)
-        ):
+        if adapter_should_apply:
             self.adapter_apply()
             adapter_applied = True
 
+        self._sync_model_runtime_if_needed(previous, config)
         self.current_config = config
         logger.info(
             "runtime config apply complete component=update worker=%s generation=%s changed=%s "
@@ -1393,6 +1639,31 @@ class RuntimeUpdater:
             _duration_ms(started_at),
         )
         return ApplyResult(runtime_config=config, changed=True, agent_package_dir=applied_package)
+
+    def _sync_model_runtime_if_needed(
+        self,
+        previous: Optional[MemberRuntimeConfig],
+        config: MemberRuntimeConfig,
+    ) -> None:
+        if previous is None or self.model_runtime_sync is None:
+            return
+        if _stable_json(config.model) == _stable_json(previous.model):
+            return
+        started_at = time.monotonic()
+        try:
+            self.model_runtime_sync(config)
+        except Exception as exc:
+            logger.warning(
+                "runtime model sync failed component=update step=model_runtime_sync event=failed "
+                "worker=%s generation=%s changed=%s error_type=%s safe_error_summary=%s duration_ms=%s",
+                self.config.worker_name,
+                config.generation,
+                True,
+                type(exc).__name__,
+                type(exc).__name__,
+                _duration_ms(started_at),
+            )
+            raise
 
     def _adapter_neutral_change(self, config: MemberRuntimeConfig) -> bool:
         previous = self.current_config
@@ -1424,7 +1695,17 @@ class RuntimeUpdater:
             return
         path = self.config.default_workspace_dir / TEAMS_PROMPT_FILE
         path.parent.mkdir(parents=True, exist_ok=True)
-        existing = path.read_text(encoding="utf-8") if path.exists() else "# TeamHarness Runtime Context\n"
+        if path.exists():
+            existing = path.read_text(encoding="utf-8")
+        else:
+            existing = self._render_full_team_context_prompt(config)
+            if not existing:
+                logger.warning(
+                    "full TeamHarness TEAMS renderer unavailable component=update worker=%s action=fallback",
+                    self.config.worker_name,
+                )
+                existing = "# TeamHarness Runtime Context\n"
+        existing = self._ensure_teams_internal_marker(existing)
         if TEAMS_CONTEXT_START in existing and TEAMS_CONTEXT_END in existing:
             prefix, rest = existing.split(TEAMS_CONTEXT_START, 1)
             _old, suffix = rest.split(TEAMS_CONTEXT_END, 1)
@@ -1434,6 +1715,26 @@ class RuntimeUpdater:
         tmp = path.with_name(f".{path.name}.tmp")
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(path)
+
+    def _render_full_team_context_prompt(self, config: MemberRuntimeConfig) -> str:
+        if self.team_context_renderer is None:
+            return ""
+        try:
+            text = self.team_context_renderer(config)
+        except Exception as exc:
+            logger.warning(
+                "full TeamHarness TEAMS renderer failed component=update worker=%s error_type=%s",
+                self.config.worker_name,
+                type(exc).__name__,
+            )
+            return ""
+        return text if isinstance(text, str) and text.strip() else ""
+
+    def _ensure_teams_internal_marker(self, text: str) -> str:
+        if TEAMS_INTERNAL_CONTROL_MARKER in text:
+            return text
+        body = text.lstrip("\n")
+        return f"{TEAMS_INTERNAL_CONTROL_MARKER}\n{body}" if body else f"{TEAMS_INTERNAL_CONTROL_MARKER}\n"
 
     def _runtime_team_context_block(self, config: MemberRuntimeConfig) -> str:
         facts = config.team_context_facts

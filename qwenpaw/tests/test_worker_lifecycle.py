@@ -793,6 +793,42 @@ def apply_teamharness():
     assert "prompt" not in caplog.text
 
 
+def test_team_context_renderer_only_calls_render_function(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    plugin_dir = config.qwenpaw_working_dir / "plugins" / "teamharness"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.py").write_text(
+        """
+from pathlib import Path
+
+
+def render_team_context(config):
+    Path(__file__).with_name("rendered.txt").write_text(config["team"]["name"], encoding="utf-8")
+    return "# Rendered TeamHarness Contract\\n" + config["team"]["name"] + "\\n"
+
+
+def apply_teamharness():
+    Path(__file__).with_name("applied.txt").write_text("bad\\n", encoding="utf-8")
+    return {"ok": True}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    runtime_config = MemberRuntimeConfig(
+        path=config.runtime_config_path,
+        raw={
+            "metadata": {"generation": "1"},
+            "team": {"name": "demo-team"},
+            "member": {"runtime": "qwenpaw"},
+        },
+    )
+
+    text = Worker(config)._render_teamharness_context(runtime_config)
+
+    assert text == "# Rendered TeamHarness Contract\ndemo-team\n"
+    assert (plugin_dir / "rendered.txt").read_text(encoding="utf-8") == "demo-team"
+    assert not (plugin_dir / "applied.txt").exists()
+
+
 def test_apply_workerflow_assets_runs_installed_adapter(tmp_path: Path) -> None:
     config = _config(tmp_path)
     plugin_dir = config.qwenpaw_working_dir / "plugins" / "workerflow"

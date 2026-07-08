@@ -1847,7 +1847,7 @@ class MatrixChannel(BaseChannel):
         localpart = self._user_id.split(":")[0].lstrip("@")
         if localpart:
             result = re.sub(
-                rf"^{re.escape(localpart)}\s*:?\s*",
+                rf"^@?{re.escape(localpart)}\s*:?\s*",
                 "",
                 text,
                 flags=re.IGNORECASE,

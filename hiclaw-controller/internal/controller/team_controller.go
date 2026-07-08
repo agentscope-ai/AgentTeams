@@ -223,10 +223,118 @@ func (r *TeamReconciler) deriveTeamWithResolvedIdentities(ctx context.Context, t
 		}
 		derived.Spec.Admin.MatrixUserID = adminActor.MatrixUserID
 	}
+	r.appendAccessibleTeamHumans(ctx, derived)
 	for i := range derived.Spec.HumanMembers {
 		derived.Spec.HumanMembers[i].MatrixUserID = r.resolveHumanMemberMatrixUserID(ctx, t.Namespace, derived.Spec.HumanMembers[i])
 	}
 	return derived
+}
+
+func (r *TeamReconciler) appendAccessibleTeamHumans(ctx context.Context, t *v1beta1.Team) {
+	var humans v1beta1.HumanList
+	if err := r.List(ctx, &humans, client.InNamespace(t.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "failed to list humans for accessibleTeams")
+		return
+	}
+
+	seen := make(map[string]struct{}, len(t.Spec.HumanMembers))
+	for _, member := range t.Spec.HumanMembers {
+		if member.Name != "" {
+			seen[member.Name] = struct{}{}
+		}
+		if member.MatrixUserID != "" {
+			seen[member.MatrixUserID] = struct{}{}
+		}
+	}
+	for i := range humans.Items {
+		human := &humans.Items[i]
+		if !containsString(human.Spec.AccessibleTeams, t.Name) {
+			continue
+		}
+		if _, ok := seen[human.Name]; ok {
+			continue
+		}
+		matrixUserID, err := r.resolveHumanMatrixUserID(human)
+		if err != nil {
+			log.FromContext(ctx).Info("human accessibleTeam member not ready",
+				"team", t.Name, "human", human.Name, "err", err.Error())
+			continue
+		}
+		if _, ok := seen[matrixUserID]; ok {
+			continue
+		}
+		t.Spec.HumanMembers = append(t.Spec.HumanMembers, v1beta1.TeamMemberSpec{
+			Name:         human.Name,
+			Role:         "coordinator",
+			MatrixUserID: matrixUserID,
+		})
+		seen[human.Name] = struct{}{}
+		seen[matrixUserID] = struct{}{}
+	}
+}
+
+func (r *TeamReconciler) syncTeamRoomHumanStatuses(ctx context.Context, namespace, teamName, roomID string, members []v1beta1.TeamMemberSpec) {
+	if roomID == "" {
+		return
+	}
+	var humans v1beta1.HumanList
+	if err := r.List(ctx, &humans, client.InNamespace(namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "failed to list humans for team room status sync",
+			"team", teamName, "room", roomID)
+		return
+	}
+
+	desiredNames := make(map[string]struct{}, len(members))
+	desiredMatrixIDs := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		if member.Name != "" {
+			desiredNames[member.Name] = struct{}{}
+		}
+		if member.MatrixUserID != "" {
+			desiredMatrixIDs[member.MatrixUserID] = struct{}{}
+		}
+	}
+
+	logger := log.FromContext(ctx)
+	for i := range humans.Items {
+		human := &humans.Items[i]
+		_, desiredByName := desiredNames[human.Name]
+		_, desiredByMatrixID := desiredMatrixIDs[human.Status.MatrixUserID]
+		desired := desiredByName || desiredByMatrixID || containsString(human.Spec.AccessibleTeams, teamName)
+		hasRoom := containsString(human.Status.Rooms, roomID)
+		if desired == hasRoom {
+			continue
+		}
+
+		base := human.DeepCopy()
+		if desired {
+			human.Status.Rooms = append(human.Status.Rooms, roomID)
+		} else {
+			human.Status.Rooms = removeString(human.Status.Rooms, roomID)
+		}
+		if err := r.Status().Patch(ctx, human, client.MergeFrom(base)); err != nil {
+			logger.Error(err, "failed to sync human team room status",
+				"team", teamName, "human", human.Name, "room", roomID)
+		}
+	}
+}
+
+func (r *TeamReconciler) resolveHumanMatrixUserID(human *v1beta1.Human) (string, error) {
+	if human.Status.MatrixUserID != "" {
+		return human.Status.MatrixUserID, nil
+	}
+	humanProv, ok := r.Provisioner.(service.HumanProvisioner)
+	if !ok {
+		return "", fmt.Errorf("human %s requires HumanProvisioner support", human.Name)
+	}
+	identity, err := humanidentity.ResolveHuman(&human.Spec, human.Name, humanidentity.Deps{Provisioner: humanProv})
+	if err != nil {
+		return "", err
+	}
+	if human.Spec.IdentitySource != nil {
+		return "", fmt.Errorf("human %s uses an external identity source but is not provisioned yet", human.Name)
+	}
+	return identity.MatrixUserID, nil
 }
 
 // resolveHumanMemberMatrixUserID returns the authoritative Matrix user ID for
@@ -294,6 +402,7 @@ func (r *TeamReconciler) reconcileTeamLegacy(ctx context.Context, t *v1beta1.Tea
 	}
 	t.Status.TeamRoomID = rooms.TeamRoomID
 	t.Status.LeaderDMRoomID = rooms.LeaderDMRoomID
+	r.syncTeamRoomHumanStatuses(ctx, t.Namespace, t.Name, rooms.TeamRoomID, derivedTeam.Spec.HumanMembers)
 
 	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {
 		logger.Error(err, "team shared storage init failed (non-fatal)", "name", t.Name, "teamName", teamRuntimeName)
@@ -1028,6 +1137,7 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 	}
 	t.Status.TeamRoomID = rooms.TeamRoomID
 	t.Status.LeaderDMRoomID = rooms.LeaderDMRoomID
+	r.syncTeamRoomHumanStatuses(ctx, t.Namespace, t.Name, rooms.TeamRoomID, derivedTeam.Spec.HumanMembers)
 
 	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {
 		logger.Error(err, "team shared storage init failed (non-fatal)", "name", t.Name, "teamName", teamRuntimeName)
@@ -1672,6 +1782,7 @@ func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.T
 	logger := log.FromContext(ctx)
 	logger.Info("deleting team (decoupled)", "name", t.Name)
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
+	r.syncTeamRoomHumanStatuses(ctx, t.Namespace, "", t.Status.TeamRoomID, nil)
 
 	// Revert each member's coordination context to standalone.
 	for _, ref := range t.Spec.WorkerMembers {
@@ -1937,6 +2048,25 @@ func pruneMembers(s *v1beta1.TeamStatus, keep map[string]struct{}) {
 		s.Members[i] = v1beta1.TeamMemberStatus{}
 	}
 	s.Members = filtered
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func removeString(values []string, target string) []string {
+	filtered := values[:0]
+	for _, value := range values {
+		if value != target {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 // sortMembers orders Members by Name for stable status patches and

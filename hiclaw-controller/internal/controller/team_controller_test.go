@@ -875,6 +875,83 @@ func TestReconcileTeamDecoupled_QwenPawProjectsRuntimeRoster(t *testing.T) {
 	}
 }
 
+func TestReconcileTeamDecoupled_SyncsAccessibleTeamHumanStatus(t *testing.T) {
+	leaderWorker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "qwenpaw", Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@lead:matrix.local",
+			RoomID:       "!room-lead:matrix.local",
+		},
+	}
+	worker1 := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "qwenpaw", Model: "qwen"},
+		Status: v1beta1.WorkerStatus{
+			Phase:        "Running",
+			MatrixUserID: "@dev:matrix.local",
+			RoomID:       "!room-dev:matrix.local",
+		},
+	}
+	alice := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec:       v1beta1.HumanSpec{AccessibleTeams: []string{"team-a"}},
+		Status: v1beta1.HumanStatus{
+			Phase:        "Active",
+			MatrixUserID: "@alice:matrix.local",
+		},
+	}
+	bob := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "default"},
+		Status: v1beta1.HumanStatus{
+			Phase:        "Active",
+			MatrixUserID: "@bob:matrix.local",
+			Rooms:        []string{"!team-team-a:localhost", "!room-bob:matrix.local"},
+		},
+	}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "lead", Role: "team_leader"},
+				{Name: "dev"},
+			},
+		},
+	}
+	rig := newTeamReconcileRig(t, team, leaderWorker, worker1, alice, bob)
+
+	if _, _, err := rig.reconcile("team-a"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(rig.provisioner.Calls.ProvisionTeamRooms) != 1 {
+		t.Fatalf("ProvisionTeamRooms calls=%d, want 1", len(rig.provisioner.Calls.ProvisionTeamRooms))
+	}
+	members := rig.provisioner.Calls.ProvisionTeamRooms[0].HumanMembers
+	if len(members) != 1 || members[0].Name != "alice" || members[0].MatrixUserID != "@alice:matrix.local" {
+		t.Fatalf("HumanMembers=%+v, want alice from Human.spec.accessibleTeams", members)
+	}
+
+	var aliceOut v1beta1.Human
+	if err := rig.client.Get(context.Background(), types.NamespacedName{Name: "alice", Namespace: "default"}, &aliceOut); err != nil {
+		t.Fatalf("get alice: %v", err)
+	}
+	if !stringSliceContains(aliceOut.Status.Rooms, "!team-team-a:localhost") {
+		t.Fatalf("alice Status.Rooms=%v, want team room", aliceOut.Status.Rooms)
+	}
+
+	var bobOut v1beta1.Human
+	if err := rig.client.Get(context.Background(), types.NamespacedName{Name: "bob", Namespace: "default"}, &bobOut); err != nil {
+		t.Fatalf("get bob: %v", err)
+	}
+	if stringSliceContains(bobOut.Status.Rooms, "!team-team-a:localhost") {
+		t.Fatalf("bob Status.Rooms=%v, want stale team room removed", bobOut.Status.Rooms)
+	}
+	if !stringSliceContains(bobOut.Status.Rooms, "!room-bob:matrix.local") {
+		t.Fatalf("bob Status.Rooms=%v, want unrelated room preserved", bobOut.Status.Rooms)
+	}
+}
+
 func TestReconcileTeamDecoupled_EdgeMergesRuntimeTeamContext(t *testing.T) {
 	ctx := context.Background()
 	edgeMode := v1beta1.DeployModeEdge

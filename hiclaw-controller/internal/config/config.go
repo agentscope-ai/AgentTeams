@@ -71,6 +71,7 @@ type Config struct {
 	Region string
 
 	// AI Gateway (Alibaba Cloud APIG) — only used when GatewayProvider == "ai-gateway"
+	GWEndpoint   string
 	GWGatewayID  string
 	GWModelAPIID string
 	GWEnvID      string
@@ -312,6 +313,7 @@ func LoadConfig() *Config {
 
 		Region: envOrDefault("HICLAW_REGION", "cn-hangzhou"),
 
+		GWEndpoint:   os.Getenv("HICLAW_APIG_ENDPOINT"),
 		GWGatewayID:  os.Getenv("HICLAW_GW_GATEWAY_ID"),
 		GWModelAPIID: os.Getenv("HICLAW_GW_MODEL_API_ID"),
 		GWEnvID:      os.Getenv("HICLAW_GW_ENV_ID"),
@@ -531,6 +533,7 @@ func (c *Config) STSConfig() credentials.STSConfig {
 func (c *Config) AIGatewayConfig() gateway.AIGatewayConfig {
 	return gateway.AIGatewayConfig{
 		Region:     c.Region,
+		Endpoint:   c.GWEndpoint,
 		GatewayID:  c.GWGatewayID,
 		ModelAPIID: c.GWModelAPIID,
 		EnvID:      c.GWEnvID,

@@ -130,6 +130,10 @@ spec:
               value: {{ include "hiclaw.gateway.internalURL" . | quote }}
             - name: HICLAW_REGION
               value: {{ .Values.gateway.aiGateway.region | quote }}
+            {{- if .Values.gateway.aiGateway.endpoint }}
+            - name: HICLAW_APIG_ENDPOINT
+              value: {{ .Values.gateway.aiGateway.endpoint | quote }}
+            {{- end }}
             - name: HICLAW_GW_GATEWAY_ID
               value: {{ .Values.gateway.aiGateway.gatewayId | quote }}
             - name: HICLAW_GW_MODEL_API_ID

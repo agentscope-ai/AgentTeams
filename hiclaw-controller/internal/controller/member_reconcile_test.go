@@ -156,6 +156,26 @@ func TestCreateMemberContainerDoesNotAddDockerHostGatewayForK8s(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberExposeSkipsUnsupportedGatewayProvider(t *testing.T) {
+	current := []v1beta1.ExposedPortStatus{{Port: 8088, Domain: "console.example.com"}}
+	prov := mocks.NewMockProvisioner()
+	prov.ReconcileExposeFn = func(context.Context, string, []v1beta1.ExposePort, []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error) {
+		return nil, gateway.ErrUnsupportedOp
+	}
+	state := &MemberState{}
+
+	if err := ReconcileMemberExpose(context.Background(), MemberDeps{Provisioner: prov}, MemberContext{
+		Name:                "alice",
+		Spec:                v1beta1.WorkerSpec{Expose: []v1beta1.ExposePort{{Port: 8088}}},
+		CurrentExposedPorts: current,
+	}, state); err != nil {
+		t.Fatalf("ReconcileMemberExpose err = %v", err)
+	}
+	if len(state.ExposedPorts) != 1 || state.ExposedPorts[0].Port != 8088 || state.ExposedPorts[0].Domain != "console.example.com" {
+		t.Fatalf("ExposedPorts=%+v, want current exposed ports preserved", state.ExposedPorts)
+	}
+}
+
 func TestCreateMemberContainerPassesMemberRoleEnv(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
 	state := &MemberState{

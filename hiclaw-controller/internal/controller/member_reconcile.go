@@ -1861,7 +1861,7 @@ func extraHostsForBackend(wb backend.WorkerBackend) []string {
 	return nil
 }
 
-// ReconcileMemberExpose reconciles Higress port exposure for the member.
+// ReconcileMemberExpose reconciles gateway port exposure for the member.
 // Non-fatal: logs and returns current state unchanged on failure. The returned
 // slice overwrites state.ExposedPorts on success.
 func ReconcileMemberExpose(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) error {
@@ -1871,6 +1871,11 @@ func ReconcileMemberExpose(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 	exposedPorts, err := d.Provisioner.ReconcileExpose(ctx, m.Name, m.Spec.Expose, m.CurrentExposedPorts)
 	if err != nil {
+		if errors.Is(err, gateway.ErrUnsupportedOp) {
+			log.FromContext(ctx).V(1).Info("gateway provider does not manage exposed ports; skipping", "name", m.Name)
+			state.ExposedPorts = m.CurrentExposedPorts
+			return nil
+		}
 		log.FromContext(ctx).Error(err, "failed to reconcile exposed ports (non-fatal)", "name", m.Name)
 		state.ExposedPorts = m.CurrentExposedPorts
 		return nil

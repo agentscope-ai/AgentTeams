@@ -84,6 +84,7 @@ gateway:
   # Required when provider=ai-gateway:
   aiGateway:
     region: ""                # e.g. "cn-hangzhou"
+    endpoint: ""              # optional APIG OpenAPI endpoint override; empty uses apig.<region>.aliyuncs.com
     gatewayId: ""             # APIG gateway instance id (required)
     modelApiId: ""            # LLM Model API id used for consumer authorization
     envId: ""                 # APIG environment id

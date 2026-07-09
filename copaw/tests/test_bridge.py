@@ -310,6 +310,22 @@ def test_embedding_config_custom_dimensions():
     assert agent["running"]["embedding_config"]["dimensions"] == 768
 
 
+def test_provider_localhost_remaps_inside_container(monkeypatch):
+    """Provider URLs should match container-visible host addresses."""
+    monkeypatch.setattr("copaw_worker.bridge._is_in_container", lambda: True)
+    cfg = _make_openclaw_cfg()
+    cfg["models"]["providers"]["gw"]["baseUrl"] = "http://localhost:11434/v1"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        working_dir = Path(tmpdir) / "agent"
+        _run_bridge(cfg, working_dir)
+        providers = json.loads((working_dir / "providers.json").read_text())
+
+    provider = providers["custom_providers"]["gw"]
+    assert provider["base_url"] == "http://host.docker.internal:11434/v1"
+    assert provider["default_base_url"] == "http://host.docker.internal:11434/v1"
+
+
 # ---------------------------------------------------------------------------
 # Controller-field overlay: union
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ import shutil
 from importlib import resources
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 def _port_remap(url: str, is_container: bool) -> str:
@@ -23,6 +24,28 @@ def _port_remap(url: str, is_container: bool) -> str:
         gateway_port = os.environ.get("HICLAW_PORT_GATEWAY", "18080")
         return url.replace(":8080", f":{gateway_port}")
     return url
+
+
+def _provider_url_remap(url: str, is_container: bool) -> str:
+    """Normalize model provider URLs for the runtime process."""
+    remapped = _port_remap(url, is_container)
+    if not is_container or not remapped:
+        return remapped
+
+    parsed = urlsplit(remapped)
+    host = (parsed.hostname or "").lower()
+    if host not in ("localhost", "127.0.0.1"):
+        return remapped
+
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo = f"{userinfo}:{parsed.password}"
+        userinfo = f"{userinfo}@"
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{userinfo}host.docker.internal{port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def _is_in_container() -> bool:
@@ -419,7 +442,7 @@ def _write_providers_json(
     active_model = ""
 
     for provider_id, provider_cfg in providers_raw.items():
-        base_url = _port_remap(
+        base_url = _provider_url_remap(
             provider_cfg.get("baseUrl", ""), in_container
         )
         api_key = provider_cfg.get("apiKey", "")

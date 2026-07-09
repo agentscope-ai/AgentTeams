@@ -34,6 +34,7 @@ OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/hiclaw-openhuman-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/hiclaw-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/hiclaw-embedded
+DASHBOARD_CONTEXT    ?= ./TaDashboard/
 
 MANAGER_TAG        ?= $(MANAGER_IMAGE):$(VERSION)
 MANAGER_COPAW_TAG  ?= $(MANAGER_COPAW_IMAGE):$(VERSION)
@@ -116,6 +117,7 @@ LINES          ?= 50
         buildx-setup \
         test test-quick test-installed test-embedded \
         install install-embedded uninstall uninstall-embedded replay replay-log \
+        install-dashboard update-dashboard uninstall-dashboard \
         verify wait-ready wait-ready-embedded \
         generate sync-crds check-crd-sync \
         status logs \
@@ -173,6 +175,10 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 		-f hiclaw-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
 		.
+
+build-dashboard: ## Build TaDashboard image
+	@echo "==> Building TaDashboard image"
+	$(MAKE) -C $(DASHBOARD_CONTEXT) build
 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
@@ -331,7 +337,19 @@ else
 		$(if $(PUSH_LATEST),-t $(EMBEDDED_IMAGE):latest) \
 		--push \
 		-f hiclaw-controller/Dockerfile.embedded .
-endif
+	endif
+
+# --- TaDashboard standalone ---
+.PHONY: install-dashboard update-dashboard uninstall-dashboard
+
+install-dashboard: build-dashboard ## Install TaDashboard standalone
+	@bash $(DASHBOARD_CONTEXT)/install/hiclaw-dashboard.sh
+
+update-dashboard: ## Update TaDashboard (pull latest & recreate)
+	@bash $(DASHBOARD_CONTEXT)/install/hiclaw-dashboard.sh update
+
+uninstall-dashboard: ## Uninstall TaDashboard
+	@bash $(DASHBOARD_CONTEXT)/install/hiclaw-dashboard.sh uninstall
 
 push-manager: push-hiclaw-controller buildx-setup ## Build + push multi-arch Manager image (OpenClaw)
 	@echo "==> Building + pushing multi-arch Manager: $(MANAGER_TAG) [$(MULTIARCH_PLATFORMS)]"

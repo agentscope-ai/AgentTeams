@@ -5,7 +5,7 @@
 ## 前置条件
 
 - 已安装并运行 Docker
-- 一个 LLM API Key（如阿里云百炼 Qwen、OpenAI 等）
+- 一个 LLM API Key。快速开始默认使用阿里云百炼/Qwen；如果使用 DeepSeek、自部署模型或其他 OpenAI 兼容服务，请在安装时选择手动配置，并填写对应 Base URL（通常以 `/v1` 结尾）、API Key 和模型 ID。
 - （可选）GitHub 个人访问令牌（PAT），用于 GitHub 协作功能
 
 ---
@@ -22,6 +22,7 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 按照交互提示配置：
 - LLM 提供商和 API Key
+- DeepSeek、自部署模型或其他非默认服务商请选择手动配置；服务商要求 `/v1` 时，Base URL 需要包含该路径。
 - 管理员用户名和密码
 - 域名（直接回车使用默认值）
 - GitHub PAT（可选）

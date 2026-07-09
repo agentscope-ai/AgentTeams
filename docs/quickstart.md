@@ -5,7 +5,7 @@ This guide walks you through installing HiClaw, creating your first Agent team, 
 ## Prerequisites
 
 - Docker installed and running
-- An LLM API key (e.g., Qwen, OpenAI)
+- An LLM API key. Alibaba Bailian/Qwen is the quick-start default, but any OpenAI-compatible provider can be used by choosing manual setup and entering its Base URL (usually ending in `/v1`), API key, and model id.
 - (Optional) A GitHub Personal Access Token for GitHub collaboration features
 
 ---
@@ -24,6 +24,7 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 Follow the interactive prompts to configure:
 - LLM Provider and API Key
+- For DeepSeek, OpenAI-compatible local models, or other non-default providers, choose manual setup and enter the provider Base URL with `/v1` when required.
 - Admin username and password
 - Domain names (press Enter to accept defaults)
 - GitHub PAT (optional)

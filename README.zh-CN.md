@@ -77,7 +77,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 第三步：选择安装模式，快速开始请选择阿里云百炼快速安装。您也可以选择其他模型服务，手动配置。
 
-第四步：选择大模型服务商。选择百炼，您也可以接入其他支持 OpenAPI 协议的模型服务，目前 Anthropic 协议还未支持，排期中。
+第四步：选择大模型服务商。快速开始会默认使用阿里云百炼；如果使用 DeepSeek、OpenAI、Qwen 国际站、自部署模型等服务，请选择手动配置里的 **OpenAI 兼容 API**，并填写对应的 Base URL、API Key 和模型 ID。Base URL 通常需要包含 `/v1`，例如 `https://api.deepseek.com/v1`。
 
 第五步：选择模型接口。百炼 Coding Plan 和百炼通用接口有所不同，这里我们选择 Coding Plan 接口。[购买Coding Plan](https://bailian.console.aliyun.com/cn-beijing/?source_channel=4qjGAvs1Pl&tab=coding-plan#/efm/index)
 
@@ -86,7 +86,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 第七步：开始测试 API 联通性，若测试成功，效果如下。
 ![测试](https://img.alicdn.com/imgextra/i4/O1CN0148wFGG1lYeWKd3Uat_!!6000000004831-2-tps-1752-600.png)
 
-若测试不成功，您需要检查模粘贴的型 API Key是否完整或无空格，若再次尝试仍无法通过，建议像模型服务厂商提交服务工单。
+若测试不成功，您需要检查粘贴的模型 API Key 是否完整或无空格、Base URL 是否包含服务商要求的路径（常见为 `/v1`）、模型 ID 是否正确。再次尝试仍无法通过时，建议向对应模型服务厂商提交服务工单。
 
 第八步：选择网络访问模式。这里我们选择仅本机使用，若允许外部访问，例如和同事建立 Matrix roon，则选择允许外部访问。选择后，按回车键即可，确定端口号、网关主机端口、Higress 控制台主机端口、Maxtrix 域名、Element Web 直接访问的主机端口、文件系统域名等，均采用默认值，无须手动配置。
 

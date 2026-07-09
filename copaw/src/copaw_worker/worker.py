@@ -195,7 +195,9 @@ class Worker:
     async def _run_copaw_with_console(self, port: int) -> None:
         """Run CoPaw's full FastAPI app (runner + channels + web console)."""
         import uvicorn
-        from copaw.app.channels.registry import clear_builtin_channel_cache
+        # Use qwenpaw runtime (copaw→qwenpaw migration).
+        # qwenpaw.app._app:app is the FastAPI ASGI application.
+        from qwenpaw.app.channels.registry import clear_builtin_channel_cache
 
         clear_builtin_channel_cache()
 
@@ -257,7 +259,7 @@ class Worker:
         await api_server.start()
 
         uv_config = uvicorn.Config(
-            "copaw.app._app:app",
+            "qwenpaw.app._app:app",
             host="0.0.0.0",
             port=port,
             log_level="info",
@@ -275,12 +277,13 @@ class Worker:
             await api_server.stop()
 
     async def _run_copaw_headless(self) -> None:
-        """Start CoPaw's AgentRunner + ChannelManager (no HTTP server)."""
-        from copaw.app.runner.runner import AgentRunner
-        from copaw.config.utils import load_config
-        from copaw.app.channels.manager import ChannelManager
-        from copaw.app.channels.utils import make_process_from_runner
-        from copaw.app.channels.registry import clear_builtin_channel_cache
+        """Start QwenPaw's AgentRunner + ChannelManager (no HTTP server)."""
+        # Use qwenpaw runtime (copaw→qwenpaw migration).
+        from qwenpaw.app.runner.runner import AgentRunner
+        from qwenpaw.config.utils import load_config
+        from qwenpaw.app.channels.manager import ChannelManager
+        from qwenpaw.app.channels.utils import make_process_from_runner
+        from qwenpaw.app.channels.registry import clear_builtin_channel_cache
 
         # Force registry reload so newly installed matrix_channel.py is picked up
         clear_builtin_channel_cache()

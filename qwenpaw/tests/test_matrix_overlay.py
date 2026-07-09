@@ -16,6 +16,13 @@ def _overlay_source() -> str:
     return OVERLAY.read_text(encoding="utf-8")
 
 
+def test_matrix_overlay_is_installed_by_worker_image() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "qwenpaw/src/matrix/" in dockerfile
+    assert "qwenpaw/app/channels/matrix/channel.py" in dockerfile
+
+
 def test_matrix_overlay_preserves_invite_join_and_marks_ready() -> None:
     source = _overlay_source()
 
@@ -1191,6 +1198,30 @@ def test_matrix_control_command_strips_mention_before_enqueue() -> None:
     assert _first_text(channel.enqueued[0]) == "/stop"
 
 
+def test_matrix_control_command_strips_at_localpart_mention_before_enqueue() -> None:
+    channel = _make_inbound_channel()
+    channel._user_id = "@worker:at-cn-ojs4upkyq01"
+
+    asyncio.run(
+        channel._on_room_event(
+            _FakeInboundRoom(),
+            _matrix_event_from(
+                "@24774e777ea409f1bc37ea990615d3a5:at-cn-ojs4upkyq01",
+                "@worker /stop",
+                event_id="~!MnRNwPjGJF2BtzpvWe:at-cn-ojs4upkyq01:m1782979172665.54",
+                content_extra={
+                    "m.mentions": {
+                        "user_ids": ["@worker:at-cn-ojs4upkyq01"],
+                    },
+                },
+            ),
+        ),
+    )
+
+    assert len(channel.enqueued) == 1
+    assert _first_text(channel.enqueued[0]) == "/stop"
+
+
 def test_matrix_double_slash_control_command_normalizes_with_mention() -> None:
     channel = _make_inbound_channel()
 
@@ -1245,6 +1276,14 @@ def test_matrix_bare_stop_not_recognized_without_slash() -> None:
 
     assert len(channel.enqueued) == 1
     assert "/stop" not in _first_text(channel.enqueued[0])
+
+
+def test_matrix_stop_command_requires_mention_in_group() -> None:
+    channel = _make_inbound_channel()
+
+    asyncio.run(channel._on_room_event(_FakeInboundRoom(), _matrix_event("/stop")))
+
+    assert len(channel.enqueued) == 0
 
 
 def test_matrix_control_command_requires_mention_in_group() -> None:

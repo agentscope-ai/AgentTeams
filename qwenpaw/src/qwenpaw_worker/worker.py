@@ -19,7 +19,7 @@ from typing import Optional
 from qwenpaw_worker.config import WorkerConfig, _relative_storage_prefix
 from qwenpaw_worker.heartbeat import WorkerHeartbeat, run_worker_heartbeat_loop
 from qwenpaw_worker.sync import FileSync, push_loop
-from qwenpaw_worker.update import RuntimeUpdater
+from qwenpaw_worker.update import MemberRuntimeConfig, RuntimeUpdater
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,11 @@ class Worker:
         self.config = config
         self.sync: Optional[FileSync] = None
         self.heartbeat = WorkerHeartbeat(config.qwenpaw_working_dir / "heartbeat.json")
-        self.updater = RuntimeUpdater(config=config, adapter_apply=self._apply_runtime_adapter)
+        self.updater = RuntimeUpdater(
+            config=config,
+            adapter_apply=self._apply_runtime_adapter,
+            team_context_renderer=self._render_teamharness_context,
+        )
         self._process: Optional[asyncio.subprocess.Process] = None
         self._heartbeat_probe_task: Optional[asyncio.Task] = None
         self._push_task: Optional[asyncio.Task] = None
@@ -670,6 +674,23 @@ class Worker:
             module_name="agentteams_teamharness_qwenpaw_plugin",
             entrypoint_name="apply_teamharness",
         )
+
+    def _render_teamharness_context(self, runtime_config: MemberRuntimeConfig) -> str:
+        plugin_file = self.config.qwenpaw_working_dir / "plugins" / "teamharness" / "plugin.py"
+        if not plugin_file.is_file():
+            return ""
+
+        spec = importlib.util.spec_from_file_location("hiclaw_teamharness_qwenpaw_plugin_renderer", plugin_file)
+        if spec is None or spec.loader is None:
+            return ""
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        render = getattr(module, "render_team_context", None)
+        if not callable(render):
+            return ""
+        text = render(runtime_config.raw)
+        return text if isinstance(text, str) else ""
 
     def _apply_workerflow_assets(self) -> dict:
         return self._apply_plugin_assets(

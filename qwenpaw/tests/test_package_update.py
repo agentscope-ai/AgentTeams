@@ -19,6 +19,7 @@ def _package(
     version: str,
     *,
     materials: bool = False,
+    include_teams: bool = False,
     mcp_servers=None,
     mcp_json=None,
 ) -> Path:
@@ -38,6 +39,8 @@ def _package(
     (config_dir / "AGENTS.md").write_text(f"agent package {version}\n", encoding="utf-8")
     (config_dir / "SOUL.md").write_text(f"soul {version}\n", encoding="utf-8")
     (config_dir / "MEMORY.md").write_text(f"memory {version}\n", encoding="utf-8")
+    if include_teams:
+        (config_dir / "TEAMS.md").write_text(f"teams package {version}\n", encoding="utf-8")
     if materials:
         (config_dir / "BOOTSTRAP.md").write_text(f"bootstrap {version}\n", encoding="utf-8")
         materials_dir = config_dir / "materials"
@@ -903,6 +906,33 @@ def test_agent_package_update_overwrites_runtime_edits_to_package_seed(tmp_path:
 
     assert (workspace_dir / "AGENTS.md").read_text(encoding="utf-8") == "agent package 2\n"
     assert (workspace_dir / "skills" / "code-review" / "SKILL.md").read_text(encoding="utf-8") == "skill 2\n"
+
+
+def test_agent_package_update_does_not_overwrite_runtime_teams_md(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    manager = AgentPackageManager(tmp_path / "packages", workspace_dir=workspace_dir)
+    package_v1 = _package(tmp_path, "1", include_teams=True)
+    teams_md = workspace_dir / "TEAMS.md"
+
+    manager.apply(_runtime_config(tmp_path, package_v1, "1"))
+    teams_md.write_text("runtime managed teams\n", encoding="utf-8")
+    manager.apply(_runtime_config(tmp_path, package_v1, "1"))
+
+    assert teams_md.read_text(encoding="utf-8") == "runtime managed teams\n"
+
+
+def test_agent_package_update_does_not_delete_runtime_teams_md_from_old_package(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    manager = AgentPackageManager(tmp_path / "packages", workspace_dir=workspace_dir)
+    package_v1 = _package(tmp_path, "1", include_teams=True)
+    package_v2 = _empty_package(tmp_path, "2")
+    teams_md = workspace_dir / "TEAMS.md"
+
+    manager.apply(_runtime_config(tmp_path, package_v1, "1"))
+    teams_md.write_text("runtime managed teams\n", encoding="utf-8")
+    manager.apply(_runtime_config(tmp_path, package_v2, "2"))
+
+    assert teams_md.read_text(encoding="utf-8") == "runtime managed teams\n"
 
 
 def test_agent_package_update_clears_prompt_files_missing_from_new_package(tmp_path: Path) -> None:

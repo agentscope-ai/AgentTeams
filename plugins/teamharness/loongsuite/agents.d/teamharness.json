@@ -3,8 +3,8 @@
   "displayName": "TeamHarness",
   "deployMode": "plugin-probe",
   "detection": {
-    "paths": ["~/.qwenpaw", "~/.claude"],
-    "commands": ["qwenpaw", "claude"]
+    "paths": ["~/.qwenpaw"],
+    "commands": ["qwenpaw"]
   },
   "pluginProbe": {
     "source": {

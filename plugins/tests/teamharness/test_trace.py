@@ -2,13 +2,13 @@
 """Tests for AgentTeams Task-Trace correlation (SpanProcessor approach).
 
 Test layers:
-  1. find_active_task        - filesystem scanning + room/worker filtering
-  2. AgentTeamsTaskSpanProcessor - span attribute injection + current meta state
-  3. register integration    - TracerProvider registration
-  4. QwenPaw adapter wiring  - install_task_trace_processor()
-  5. End-to-end scenario     - ack -> tool calls -> submit lifecycle
-  6. Session isolation       - multi-room concurrent task scenarios
-  7. Debug logging control   - AGENTTEAMS_TASK_TRACE_DEBUG toggle
+  1. find_active_task        — filesystem scanning + room/worker filtering
+  2. AgentTeamsTaskSpanProcessor — span attribute injection + current meta state
+  3. register integration    — TracerProvider registration
+  4. QwenPaw adapter wiring  — install_task_trace_processor()
+  5. End-to-end scenario     — ack → tool calls → submit lifecycle
+  6. Session isolation       — multi-room concurrent task scenarios
+  7. Debug logging control   — AGENTTEAMS_TASK_TRACE_DEBUG toggle
 """
 
 from __future__ import annotations
@@ -341,7 +341,7 @@ class TestAgentTeamsTaskSpanProcessor:
         processor = mod.AgentTeamsTaskSpanProcessor(workspace, cache_ttl=0)
         span = _entry_span()
 
-        # No room set -> span stashed but not tagged
+        # No room set → span stashed but not tagged
         processor.on_start(span)
         span.set_attribute.assert_not_called()
 
@@ -800,7 +800,7 @@ class TestAdapterInstallTaskTraceProcessor:
 
 
 class TestEndToEndLifecycle:
-    """Simulates ack -> work -> submit and verifies span attributes at each stage."""
+    """Simulates ack → work → submit and verifies span attributes at each stage."""
 
     def test_full_lifecycle(self, workspace: Path) -> None:
         mod = _load_trace_module()
@@ -899,14 +899,14 @@ class TestSessionIsolation:
         })
         processor = mod.AgentTeamsTaskSpanProcessor(workspace, cache_ttl=0)
 
-        # Turn in room A -> should tag with task-room-a
+        # Turn in room A → should tag with task-room-a
         token_a = mod.set_current_room("!room-A:m.org")
         span_a = _entry_span()
         processor.on_start(span_a)
         span_a.set_attribute.assert_any_call("agentteams.task.id", "task-room-a")
         mod.reset_current_room(token_a)
 
-        # Turn in room B -> should tag with task-room-b
+        # Turn in room B → should tag with task-room-b
         token_b = mod.set_current_room("!room-B:m.org")
         span_b = _entry_span()
         processor.on_start(span_b)
@@ -1015,9 +1015,9 @@ class TestDeferredEntrySpanTagging:
 
     Real-world flow:
       1. Instrumentation creates ``enter_ai_application_system`` span
-         -> on_start fires, room is NOT set yet -> span is stashed
+         → on_start fires, room is NOT set yet → span is stashed
       2. QwenPawAgent.__call__ wrapper sets room context
-      3. Wrapper calls tag_pending_entry_span() -> stashed span gets tagged
+      3. Wrapper calls tag_pending_entry_span() → stashed span gets tagged
     """
 
     def test_on_start_stashes_entry_span_when_room_not_set(self, workspace: Path) -> None:
@@ -1029,7 +1029,7 @@ class TestDeferredEntrySpanTagging:
         processor = mod.AgentTeamsTaskSpanProcessor(workspace, cache_ttl=0)
         span = _entry_span()
 
-        # Room NOT set - span should be stashed, not tagged
+        # Room NOT set — span should be stashed, not tagged
         processor.on_start(span)
         span.set_attribute.assert_not_called()
         assert mod.get_pending_entry_span() is span
@@ -1043,7 +1043,7 @@ class TestDeferredEntrySpanTagging:
         processor = mod.AgentTeamsTaskSpanProcessor(workspace, cache_ttl=0)
         span = _entry_span()
 
-        # on_start without room -> stash
+        # on_start without room → stash
         processor.on_start(span)
         assert mod.get_pending_entry_span() is span
 
@@ -1071,7 +1071,7 @@ class TestDeferredEntrySpanTagging:
         processor = mod.AgentTeamsTaskSpanProcessor(workspace, cache_ttl=0)
         entry = _entry_span()
 
-        # on_start without room -> stash
+        # on_start without room → stash
         processor.on_start(entry)
 
         # Set room, then call tag_current_entry_span (the wrapper's path)

@@ -93,14 +93,15 @@ Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
   end
 
   copy_entry(adapter_root, staging, "plugin.py")
+  copy_entry(adapter_root, staging, "task_trace.py")
 
   qwenpaw_manifest = {
     "id" => "teamharness",
     "name" => "TeamHarness",
     "version" => version,
     "type" => "general",
-    "description" => "HiClaw TeamHarness runtime plugin for QwenPaw.",
-    "author" => "HiClaw",
+    "description" => "AgentTeams TeamHarness runtime plugin for QwenPaw.",
+    "author" => "AgentTeams",
     "entry" => {
       "backend" => "plugin.py"
     },

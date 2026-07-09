@@ -7,17 +7,17 @@ agent turn trace.
 Entry span choice
 -----------------
 LoongSuite/QwenPaw instrumentation creates one trace per user turn with this
-hierarchy (outer -> inner)::
+hierarchy (outer → inner)::
 
-    enter_ai_application_system   <- trace root / GenAI application entry
+    enter_ai_application_system   ← trace root / GenAI application entry
       agent_step
         invoke_agent <name>
           react step
-            chat / execute_tool / ...
+            chat / execute_tool / …
 
 We tag **only** ``enter_ai_application_system`` because:
 
-* It is the trace root - CMS/ARMS filters on root-span attributes efficiently.
+* It is the trace root — CMS/ARMS filters on root-span attributes efficiently.
 * There is exactly one per turn (same cardinality as a "trace" in the product).
 * ``agent_step`` is nested inside it; tagging both would be redundant.
 
@@ -46,7 +46,7 @@ because that can cross-tag unrelated sessions.
 Debug logging
 -------------
 Set ``AGENTTEAMS_TASK_TRACE_DEBUG=1`` to enable verbose processor logs.
-Default is silent - no I/O overhead on the hot span path.
+Default is silent — no I/O overhead on the hot span path.
 """
 
 from __future__ import annotations
@@ -332,7 +332,7 @@ def register_task_trace_processor(
 ) -> dict[str, Any]:
     """Register :class:`AgentTeamsTaskSpanProcessor` on the active TracerProvider.
 
-    Safe to call even when the OTel SDK is not installed - returns a result
+    Safe to call even when the OTel SDK is not installed — returns a result
     dict describing what happened.
     """
     try:
@@ -469,7 +469,7 @@ def tag_pending_entry_span(workspace_dir: Path | str, *, room_id: str = "") -> d
     """Tag the pending entry span (if any) and clear it.
 
     Called by the QwenPawAgent wrapper after ``set_current_room`` so the entry
-    span - which was created *before* the room was known - gets tagged with
+    span — which was created *before* the room was known — gets tagged with
     the correct task attributes.
     """
     span = _pending_entry_span.get()

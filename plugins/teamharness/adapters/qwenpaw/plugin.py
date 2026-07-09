@@ -24,11 +24,15 @@ if not (ASSET_DIR / "plugin.yaml").exists():
     ASSET_DIR = PLUGIN_DIR.parent.parent
 
 TEAMS_PROMPT_FILE = "TEAMS.md"
+TEAMS_INTERNAL_CONTROL_MARKER = (
+    "<!-- AGENTTEAMS_INTERNAL_CONTROL_FILE: TEAMS.md is managed by "
+    "TeamHarness/QwenPaw runtime; agent packages must not overwrite or delete it. -->"
+)
 MCP_CLIENT_ID = "teamharness"
 REDACTION = "[REDACTED]"
 SENSITIVE_FILE_AUTO_DENY_RULE = "SENSITIVE_FILE_BLOCK"
-TEAMS_CONTEXT_START = "<!-- BEGIN HICLAW RUNTIME TEAM CONTEXT -->"
-TEAMS_CONTEXT_END = "<!-- END HICLAW RUNTIME TEAM CONTEXT -->"
+TEAMS_CONTEXT_START = "<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->"
+TEAMS_CONTEXT_END = "<!-- END AGENTTEAMS RUNTIME TEAM CONTEXT -->"
 _TASK_TRACE_MODULE: Any = None
 _TASK_TRACE_REGISTERED: bool = False
 
@@ -60,7 +64,6 @@ _BUILTIN_SANITIZER_PATTERNS: List[tuple[re.Pattern[str], str]] = [
         r"\1********",
     ),
 ]
-
 
 def _read_yaml(path: Path) -> Dict[str, Any]:
     try:
@@ -127,7 +130,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def _shared_dir() -> Path:
-    raw = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("HICLAW_SHARED_DIR", "").strip()
+    raw = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("AGENTTEAMS_SHARED_DIR", "").strip()
     if raw:
         return Path(raw)
     qwenpaw_dir = os.getenv("QWENPAW_WORKING_DIR", "").strip()
@@ -157,11 +160,11 @@ def render_team_context(config: Dict[str, Any]) -> str:
     channel_policy = _section(desired, "channelPolicy")
     base_prompt = ASSET_DIR / "prompts" / "team" / "TEAMS.md"
     base = base_prompt.read_text(encoding="utf-8").strip() if base_prompt.exists() else ""
-    role = _string(member.get("role") or os.getenv("HICLAW_AGENT_ROLE") or "worker")
+    role = _string(member.get("role") or os.getenv("AGENTTEAMS_AGENT_ROLE") or "worker")
     role_prompt = _role_prompt(role)
     role_text = role_prompt.read_text(encoding="utf-8").strip() if role_prompt and role_prompt.exists() else ""
 
-    lines = []
+    lines = [TEAMS_INTERNAL_CONTROL_MARKER, ""]
     if base:
         lines.append(base)
     else:
@@ -265,7 +268,7 @@ def _credagent_paths() -> List[Path]:
     paths: List[Path] = []
     for _agent_id, workspace_dir in _iter_qwenpaw_agents():
         paths.append(workspace_dir / "config" / "credagent.json")
-    for env_name in ("HICLAW_AGENT_HOME", "HICLAW_WORKER_HOME"):
+    for env_name in ("AGENTTEAMS_AGENT_HOME", "AGENTTEAMS_WORKER_HOME"):
         raw = os.getenv(env_name, "").strip()
         if raw:
             paths.append(Path(raw).expanduser() / "config" / "credagent.json")
@@ -595,7 +598,7 @@ def _enable_workspace_skills(workspace_dir: Path, role: str) -> Dict[str, Any]:
 
 def _install_workspace_assets(agent_id: str, workspace_dir: Path, config: Dict[str, Any]) -> Dict[str, Any]:
     member = _section(config, "member")
-    role = _string(member.get("role") or os.getenv("HICLAW_AGENT_ROLE") or "worker")
+    role = _string(member.get("role") or os.getenv("AGENTTEAMS_AGENT_ROLE") or "worker")
     workspace_dir.mkdir(parents=True, exist_ok=True)
     team_context = _write_team_context(workspace_dir, config)
     prompts = _ensure_prompt_files(agent_id, [TEAMS_PROMPT_FILE])
@@ -653,25 +656,25 @@ def _install_skills() -> Dict[str, Any]:
 
 
 def _mcp_client_env() -> Dict[str, str]:
-    env = {"TEAMHARNESS_SHARED_DIR": str(_shared_dir())}
+    env = {
+        "TEAMHARNESS_SHARED_DIR": str(_shared_dir()),
+        "LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS": "false",
+    }
     for name in (
         "TEAMHARNESS_RUNTIME_CONFIG",
-        "HICLAW_MATRIX_URL",
-        "HICLAW_WORKER_MATRIX_TOKEN",
-        "HICLAW_MATRIX_USER_ID",
-        "HICLAW_WORKER_ROLE",
-        "HICLAW_AGENT_ROLE",
-        "HICLAW_WORKER_NAME",
-        "HICLAW_STORAGE_PREFIX",
-        "HICLAW_SHARED_STORAGE_PREFIX",
-        "HICLAW_FS_BUCKET",
-        "HICLAW_CONTROLLER_URL",
-        "HICLAW_AUTH_TOKEN_FILE",
-        "HICLAW_CLUSTER_ID",
-        "HICLAW_FS_ENDPOINT",
-        "HICLAW_FS_ACCESS_KEY",
-        "HICLAW_FS_SECRET_KEY",
-        "MC_HOST_hiclaw",
+        "AGENTTEAMS_MATRIX_URL",
+        "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+        "AGENTTEAMS_MATRIX_USER_ID",
+        "AGENTTEAMS_WORKER_ROLE",
+        "AGENTTEAMS_AGENT_ROLE",
+        "AGENTTEAMS_WORKER_NAME",
+        "AGENTTEAMS_STORAGE_PREFIX",
+        "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+        "AGENTTEAMS_FS_BUCKET",
+        "AGENTTEAMS_CONTROLLER_URL",
+        "AGENTTEAMS_AUTH_TOKEN_FILE",
+        "AGENTTEAMS_CLUSTER_ID",
+        "AGENTTEAMS_FS_ENDPOINT",
         "QWENPAW_WORKING_DIR",
         "COPAW_WORKING_DIR",
     ):
@@ -721,7 +724,7 @@ def apply_teamharness() -> Dict[str, Any]:
     return {"ok": True, "agents": agents, "skills": skills, "mcp": mcp, "credentialGuard": credential_guard}
 
 
-def install_output_sanitizer_wrapper() -> Dict[str, Any]:
+def install_output_sanitizer_wrapper(api: Any = None) -> Dict[str, Any]:
     try:
         from qwenpaw.agents.react_agent import QwenPawAgent
     except ImportError:
@@ -729,9 +732,7 @@ def install_output_sanitizer_wrapper() -> Dict[str, Any]:
     if getattr(QwenPawAgent, "_teamharness_sanitizer_installed", False):
         return {"ok": True, "installed": True, "action": "unchanged"}
 
-    original = getattr(QwenPawAgent, "_acting", None)
-    if not callable(original):
-        return {"ok": True, "installed": False, "reason": "qwenpaw agent _acting hook unavailable"}
+    original = QwenPawAgent._acting
 
     async def _acting_with_sanitizer(self, tool_call):
         result = await original(self, tool_call)
@@ -744,8 +745,17 @@ def install_output_sanitizer_wrapper() -> Dict[str, Any]:
 
 
 def _task_trace_module_path() -> Optional[Path]:
-    candidate = PLUGIN_DIR / "task_trace.py"
-    return candidate if candidate.exists() else None
+    candidates = [
+        PLUGIN_DIR / "task_trace.py",
+    ]
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _load_task_trace_module() -> Tuple[Optional[Any], Optional[str]]:
@@ -886,12 +896,16 @@ def install_task_trace_context_wrapper(trace_module: Any) -> Dict[str, Any]:
         if workspace_dir is None:
             return
         default_ws = workspace_dir / "workspaces" / "default"
+        # Prefer the pending entry span stashed by on_start (the common path:
+        # entry span was created before room context was available).
         tag_pending = getattr(trace_module, "tag_pending_entry_span", None)
         if callable(tag_pending):
             get_pending = getattr(trace_module, "get_pending_entry_span", None)
             if callable(get_pending) and get_pending() is not None:
                 tag_pending(default_ws)
                 return
+        # Fallback: current span might be the entry span (e.g. room was set
+        # before instrumentation created it).
         tag_current = getattr(trace_module, "tag_current_entry_span", None)
         if callable(tag_current):
             tag_current(default_ws)
@@ -983,15 +997,15 @@ class TeamHarnessPlugin:
         self.sanitizer_result: Dict[str, Any] = {}
         self.trace_result: Dict[str, Any] = {}
 
-    def _sync_runtime(self) -> Dict[str, Any]:
+    def _sync_runtime(self, api: Any) -> Dict[str, Any]:
         self.last_apply_result = apply_teamharness()
-        self.sanitizer_result = install_output_sanitizer_wrapper()
+        self.sanitizer_result = install_output_sanitizer_wrapper(api=api)
         self.trace_result = install_task_trace_processor()
         return self.last_apply_result
 
     def register(self, api: Any) -> None:
         def sync() -> Dict[str, Any]:
-            return self._sync_runtime()
+            return self._sync_runtime(api)
 
         def shutdown() -> None:
             return None
@@ -1022,7 +1036,7 @@ class TeamHarnessPlugin:
 
         @router.post("/sync")
         def sync_endpoint() -> Dict[str, Any]:
-            return self._sync_runtime()
+            return self._sync_runtime(api)
 
         api.register_http_router(router, prefix="/teamharness", tags=["teamharness"])
 

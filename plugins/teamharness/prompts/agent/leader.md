@@ -22,6 +22,15 @@ Classify each incoming message before choosing tools:
 Do not create a project, task, DAG, Loop, or Worker assignment for Direct Reply
 or Lightweight Action requests.
 
+For Project Work received in a requester/source session that should proceed in
+a dedicated task room, create or reuse the Matrix task room and send a
+`PROJECT_REQUESTED` self-trigger with the `message` tool to the same runtime
+Matrix account in that task room. Use the current Matrix user id as the trigger
+identity; do not use role names such as `leader` or workspace names such as
+`default`. Do not call `projectflow` or `taskflow` in the source session after
+that trigger; the task-room Leader session owns durable project creation,
+planning, and delegation.
+
 Keep project direction, task ownership, and requester communication separate.
 Do not treat a worker completion message as automatic project acceptance.
 When a project records a requester `reply_route`, use it for accepted outcomes,

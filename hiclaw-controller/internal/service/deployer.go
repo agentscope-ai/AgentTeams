@@ -1323,6 +1323,11 @@ func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 
 	preserveChannelMatrixAllowFrom(generated, existing)
 
+	// ── Preserve non-matrix channels (e.g. dingtalk, feishu, wecom) ──
+	// The controller only generates the matrix channel. Any other channel
+	// added by the user must survive reconcile.
+	preserveNonMatrixChannels(generated, existing)
+
 	genPlugins, _ := generated["plugins"].(map[string]interface{})
 	existPlugins, _ := existing["plugins"].(map[string]interface{})
 	if genPlugins == nil || existPlugins == nil {
@@ -1420,6 +1425,30 @@ func preserveChannelMatrixAllowFrom(generated, existing map[string]interface{}) 
 		}
 		if existDMAllow, ok := existDM["allowFrom"].([]interface{}); ok && len(existDMAllow) > 0 {
 			genDM["allowFrom"] = existDMAllow
+		}
+	}
+}
+
+// preserveNonMatrixChannels copies channels from existing that are NOT in
+// generated (i.e. non-matrix channels like dingtalk, feishu, wecom). The
+// controller only generates the matrix channel; any other channel added
+// by the user must survive reconcile.
+func preserveNonMatrixChannels(generated, existing map[string]interface{}) {
+	existChannels, _ := existing["channels"].(map[string]interface{})
+	if existChannels == nil {
+		return
+	}
+	genChannels, _ := generated["channels"].(map[string]interface{})
+	if genChannels == nil {
+		genChannels = make(map[string]interface{})
+		generated["channels"] = genChannels
+	}
+	for name, cfg := range existChannels {
+		if name == "matrix" {
+			continue // matrix is controller-managed, handled by preserveChannelMatrixAllowFrom
+		}
+		if _, inGen := genChannels[name]; !inGen {
+			genChannels[name] = cfg
 		}
 	}
 }

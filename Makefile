@@ -56,6 +56,7 @@ LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = hiclaw/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = hiclaw/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
+LOCAL_CONTROLLER_LEGACY = hiclaw/hiclaw-controller:$(VERSION)
 LOCAL_EMBEDDED       = agentteams/agentteams-embedded:$(VERSION)
 
 # Higress base image registry (regional mirrors auto-synced from cn-hangzhou primary)
@@ -147,6 +148,7 @@ build-hiclaw-controller: ## Build hiclaw-controller image (prerequisite for Mana
 	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
+		-t $(LOCAL_CONTROLLER_LEGACY) \
 		./hiclaw-controller/
 	@rm -rf ./hiclaw-controller/agent
 

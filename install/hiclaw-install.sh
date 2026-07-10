@@ -1026,12 +1026,12 @@ HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${HICLAW_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
-    MANAGER_IMAGE="${HICLAW_INSTALL_MANAGER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-manager:${HICLAW_VERSION}}"
-    MANAGER_COPAW_IMAGE="${HICLAW_INSTALL_MANAGER_COPAW_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-manager-copaw:${HICLAW_VERSION}}"
-    WORKER_IMAGE="${HICLAW_INSTALL_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-worker:${HICLAW_VERSION}}"
-    COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-copaw-worker:${HICLAW_VERSION}}"
-    HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-hermes-worker:${HICLAW_VERSION}}"
-    EMBEDDED_IMAGE="${HICLAW_INSTALL_EMBEDDED_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-embedded:${HICLAW_VERSION}}"
+    MANAGER_IMAGE="${HICLAW_INSTALL_MANAGER_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-manager:${HICLAW_VERSION}}"
+    MANAGER_COPAW_IMAGE="${HICLAW_INSTALL_MANAGER_COPAW_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-manager-copaw:${HICLAW_VERSION}}"
+    WORKER_IMAGE="${HICLAW_INSTALL_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-worker:${HICLAW_VERSION}}"
+    COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-copaw-worker:${HICLAW_VERSION}}"
+    HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-hermes-worker:${HICLAW_VERSION}}"
+    EMBEDDED_IMAGE="${HICLAW_INSTALL_EMBEDDED_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-embedded:${HICLAW_VERSION}}"
     # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
     if [ -z "${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${HICLAW_VERSION}" "v1.0.4"; then
         COPAW_WORKER_IMAGE=""
@@ -1058,8 +1058,8 @@ resolve_embedded_image() {
         return 0
     fi
 
-    local _versioned="${HICLAW_REGISTRY}/higress/hiclaw-embedded:${HICLAW_VERSION}"
-    local _latest="${HICLAW_REGISTRY}/higress/hiclaw-embedded:latest"
+    local _versioned="${HICLAW_REGISTRY}/higress/agentteams-embedded:${HICLAW_VERSION}"
+    local _latest="${HICLAW_REGISTRY}/higress/agentteams-embedded:latest"
 
     # Skip probe when HICLAW_VERSION is "latest" — no point trying the same tag twice.
     if [ "${HICLAW_VERSION}" = "latest" ]; then

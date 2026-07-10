@@ -12,13 +12,13 @@
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 ARG OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base:20260423-8359cbc
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: mc (MinIO Client) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
 
 # ============ Final Image: Based on openclaw-base ============
 # openclaw-base already includes: all-in-one + Node.js 22 + OpenClaw + mcporter + common tools

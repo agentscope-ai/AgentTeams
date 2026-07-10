@@ -27,7 +27,7 @@
 
 # Top-level build args (must be declared before any FROM that references them).
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ==========================================================================
 # Stage 0: mc (MinIO Client) — pulled from internal image instead of dl.min.io
@@ -38,7 +38,7 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 # ==========================================================================
 # Stage 1: hiclaw CLI (from controller image)
 # ==========================================================================
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
 
 # ==========================================================================
 # Stage 2: Build the Rust binary with channel-matrix enabled

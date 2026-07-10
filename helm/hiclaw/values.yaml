@@ -187,7 +187,7 @@ credentialProvider:
 controller:
   replicaCount: 1               # increase for HA with leader election
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-controller
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-controller
     tag: ""                   # defaults to global.imageTag
     pullPolicy: IfNotPresent
   service:
@@ -251,7 +251,7 @@ manager:
   model: ""                     # LLM model; defaults to credentials.defaultModel
   runtime: "openclaw"           # openclaw | copaw | hermes
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-manager
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-manager
     tag: ""                     # defaults to global.imageTag
   resources:
     requests:
@@ -296,13 +296,13 @@ cms:
 worker:
   defaultImage:
     openclaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-worker
       tag: ""                 # defaults to global.imageTag
     copaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-copaw-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-copaw-worker
       tag: ""                 # defaults to global.imageTag
     hermes:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-hermes-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-hermes-worker
       tag: ""                 # defaults to global.imageTag
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker

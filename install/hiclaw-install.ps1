@@ -751,8 +751,8 @@ function Resolve-EmbeddedImage {
         return
     }
 
-    $versioned = "$($script:HICLAW_REGISTRY)/higress/hiclaw-embedded:$($script:HICLAW_VERSION)"
-    $latestTag = "$($script:HICLAW_REGISTRY)/higress/hiclaw-embedded:latest"
+    $versioned = "$($script:HICLAW_REGISTRY)/higress/agentteams-embedded:$($script:HICLAW_VERSION)"
+    $latestTag = "$($script:HICLAW_REGISTRY)/higress/agentteams-embedded:latest"
 
     if ($script:HICLAW_VERSION -eq "latest") {
         $script:EMBEDDED_IMAGE = $latestTag
@@ -2465,31 +2465,31 @@ function Install-Manager {
     $script:MANAGER_IMAGE = if ($env:HICLAW_INSTALL_MANAGER_IMAGE) {
         $env:HICLAW_INSTALL_MANAGER_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-manager:$($script:HICLAW_VERSION)"
+        "$($script:HICLAW_REGISTRY)/higress/agentteams-manager:$($script:HICLAW_VERSION)"
     }
 
     $script:WORKER_IMAGE = if ($env:HICLAW_INSTALL_WORKER_IMAGE) {
         $env:HICLAW_INSTALL_WORKER_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-worker:$($script:HICLAW_VERSION)"
+        "$($script:HICLAW_REGISTRY)/higress/agentteams-worker:$($script:HICLAW_VERSION)"
     }
 
     $script:COPAW_WORKER_IMAGE = if ($env:HICLAW_INSTALL_COPAW_WORKER_IMAGE) {
         $env:HICLAW_INSTALL_COPAW_WORKER_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-copaw-worker:$($script:HICLAW_VERSION)"
+        "$($script:HICLAW_REGISTRY)/higress/agentteams-copaw-worker:$($script:HICLAW_VERSION)"
     }
 
     $script:HERMES_WORKER_IMAGE = if ($env:HICLAW_INSTALL_HERMES_WORKER_IMAGE) {
         $env:HICLAW_INSTALL_HERMES_WORKER_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-hermes-worker:$($script:HICLAW_VERSION)"
+        "$($script:HICLAW_REGISTRY)/higress/agentteams-hermes-worker:$($script:HICLAW_VERSION)"
     }
 
     $script:MANAGER_COPAW_IMAGE = if ($env:HICLAW_INSTALL_MANAGER_COPAW_IMAGE) {
         $env:HICLAW_INSTALL_MANAGER_COPAW_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-manager-copaw:$($script:HICLAW_VERSION)"
+        "$($script:HICLAW_REGISTRY)/higress/agentteams-manager-copaw:$($script:HICLAW_VERSION)"
     }
 
     # Backward compatibility: accept old env var name from previous versions
@@ -2497,7 +2497,7 @@ function Install-Manager {
     $script:CONTROLLER_IMAGE = if ($controllerImageOverride) {
         $controllerImageOverride
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-controller:$($script:HICLAW_VERSION)"
+        "$($script:HICLAW_REGISTRY)/higress/agentteams-controller:$($script:HICLAW_VERSION)"
     }
 
     # Resolve embedded controller image (sets $script:EMBEDDED_IMAGE and
@@ -3436,7 +3436,7 @@ function Install-Worker {
     $workerImage = if ($env:HICLAW_INSTALL_WORKER_IMAGE) {
         $env:HICLAW_INSTALL_WORKER_IMAGE
     } else {
-        "$registry/higress/hiclaw-worker:$($script:HICLAW_VERSION)"
+        "$registry/higress/agentteams-worker:$($script:HICLAW_VERSION)"
     }
 
     Write-Log (Get-Msg "worker.starting" -f $Name)

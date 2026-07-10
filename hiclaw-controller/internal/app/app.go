@@ -896,10 +896,7 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache
 	}
 
 	switch effectiveBackend {
-	case "k8s", "sandbox":
-		if effectiveBackend == "sandbox" {
-			log.Printf("[WARN] Worker backend %q is not supported in the open-source controller; using k8s", effectiveBackend)
-		}
+	case "k8s":
 		// remoteCache is nil when the credential provider sidecar is not
 		// configured; in that case NewK8sBackendWithCache behaves
 		// identically to NewK8sBackend.
@@ -908,6 +905,8 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache
 		} else {
 			workers = append(workers, k8s)
 		}
+	case "sandbox":
+		log.Printf("[WARN] Worker backend %q is not supported in the open-source controller", effectiveBackend)
 	}
 
 	return workers

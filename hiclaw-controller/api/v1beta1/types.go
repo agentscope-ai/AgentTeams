@@ -148,14 +148,6 @@ const (
 	DeployModeEdge   = "Edge"
 )
 
-// TargetClusterSpec identifies the remote cluster and namespace for deployment.
-type TargetClusterSpec struct {
-	// ID is the ACS/ACK cluster ID.
-	ID string `json:"id"`
-	// Namespace is the target namespace in the remote cluster.
-	Namespace string `json:"namespace"`
-}
-
 // WorkerResourceSpec defines a compact resource shape. CPU and memory are
 // applied as both requests and limits where this helper is used.
 type WorkerResourceSpec struct {
@@ -229,10 +221,6 @@ type WorkerSpec struct {
 	// "Local" (default): created in the controller's own cluster.
 	// "Edge": externally hosted outside the controller's managed pod path.
 	DeployMode *string `json:"deployMode,omitempty"`
-
-	// TargetCluster is deprecated. Remote cluster deployment is not supported
-	// in the open-source controller.
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
 
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the worker pod (same cluster, namespace, name).
@@ -399,11 +387,9 @@ type WorkerStatus struct {
 	// Only meaningful in incluster mode; Docker mode leaves this empty.
 	BackendRuntime string `json:"backendRuntime,omitempty"`
 
-	// DeployMode/TargetCluster record where the current backend resource was
-	// actually provisioned. TargetCluster is deprecated and only remains for
-	// status compatibility with older resources.
-	DeployMode    string             `json:"deployMode,omitempty"`
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
+	// DeployMode records where the current backend resource was actually
+	// provisioned.
+	DeployMode string `json:"deployMode,omitempty"`
 }
 
 // ExposedPortStatus records a port that has been exposed via Higress.
@@ -518,12 +504,8 @@ type LeaderSpec struct {
 
 	// DeployMode specifies where the leader pod runs.
 	// "Local" (default): created in the controller's own cluster.
-	// "Remote": created in the cluster identified by TargetCluster.
+	// "Edge": externally hosted outside the controller's managed pod path.
 	DeployMode *string `json:"deployMode,omitempty"`
-
-	// TargetCluster specifies the remote cluster target for deployment.
-	// Required when DeployMode is "Remote".
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
 
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the leader pod (same cluster, namespace, name).
@@ -573,12 +555,8 @@ type TeamWorkerSpec struct {
 
 	// DeployMode specifies where the team worker pod runs.
 	// "Local" (default): created in the controller's own cluster.
-	// "Remote": created in the cluster identified by TargetCluster.
+	// "Edge": externally hosted outside the controller's managed pod path.
 	DeployMode *string `json:"deployMode,omitempty"`
-
-	// TargetCluster specifies the remote cluster target for deployment.
-	// Required when DeployMode is "Remote".
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
 
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the team worker pod (same cluster, namespace, name).

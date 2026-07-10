@@ -1240,18 +1240,16 @@ func TestSandboxWorkerRejectsStoragePrefixWithExtraObjectPath(t *testing.T) {
 }
 
 func TestWorkerDeploymentTargetImmutable(t *testing.T) {
-	remote := v1beta1.DeployModeRemote
+	edge := v1beta1.DeployModeEdge
 	w := newWorker("alice", v1beta1.WorkerSpec{Model: "qwen-plus"})
-	w.Status.DeployMode = v1beta1.DeployModeRemote
-	w.Status.TargetCluster = &v1beta1.TargetClusterSpec{ID: "c-1", Namespace: "agents"}
+	w.Status.DeployMode = v1beta1.DeployModeLocal
 
 	desired := v1beta1.WorkerSpec{
-		Model:         "qwen-plus",
-		DeployMode:    &remote,
-		TargetCluster: &v1beta1.TargetClusterSpec{ID: "c-2", Namespace: "agents"},
+		Model:      "qwen-plus",
+		DeployMode: &edge,
 	}
 	if err := validateWorkerDeploymentTargetImmutable(w, desired); err == nil {
-		t.Fatal("targetCluster change was allowed, want immutable error")
+		t.Fatal("deployMode change was allowed, want immutable error")
 	}
 }
 

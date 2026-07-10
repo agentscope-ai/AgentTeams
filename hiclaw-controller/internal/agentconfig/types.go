@@ -2,7 +2,7 @@ package agentconfig
 
 // Config holds parameters for generating agent runtime configurations.
 type Config struct {
-	MatrixDomain    string // Matrix domain for user IDs, e.g. "matrix-local.hiclaw.io:8080"
+	MatrixDomain    string // Matrix domain for user IDs, e.g. "matrix-local.agentteams.io:8080"
 	MatrixServerURL string // Matrix CS API URL for agent connections
 	AIGatewayURL    string // AI gateway URL for model API calls
 	AdminUser       string // admin username
@@ -69,8 +69,19 @@ const (
 	BuiltinStart  = "<!-- hiclaw-builtin-start -->"
 	BuiltinEnd    = "<!-- hiclaw-builtin-end -->"
 	BuiltinHeader = `<!-- hiclaw-builtin-start -->
-> ⚠️ **DO NOT EDIT** this section. It is managed by HiClaw and will be automatically
+> ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically
 > replaced on upgrade. To customize, add your content **after** the
 > ` + "`<!-- hiclaw-builtin-end -->`" + ` marker below.
+`
+)
+
+// SoulTemplateMarkers are the delimiters for the template-managed section in SOUL.md.
+const (
+	SoulTemplateStart  = "<!-- agentteams-soul-template-start -->"
+	SoulTemplateEnd    = "<!-- agentteams-soul-template-end -->"
+	SoulTemplateHeader = `<!-- agentteams-soul-template-start -->
+> ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically
+> replaced on upgrade. To customize, add your content **after** the
+> ` + "`<!-- agentteams-soul-template-end -->`" + ` marker below.
 `
 )

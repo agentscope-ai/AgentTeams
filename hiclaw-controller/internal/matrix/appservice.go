@@ -24,7 +24,7 @@ import (
 //	DO NOT enable AppService mode against a shared or pre-existing
 //	homeserver that also hosts non-HiClaw users. Doing so would let the
 //	as_token impersonate those users. Instead set
-//	HICLAW_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX to a restrictive regex
+//	AGENTTEAMS_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX to a restrictive regex
 //	(e.g. "@hiclaw-.*:<domain>") that covers only HiClaw-managed localparts,
 //	and ensure HiClaw-managed users are created under that prefix.
 func RenderAppServiceRegistration(cfg Config) AppServiceRegistration {
@@ -33,9 +33,13 @@ func RenderAppServiceRegistration(cfg Config) AppServiceRegistration {
 	if userRegex == "" {
 		userRegex = fmt.Sprintf("@.*:%s", domain)
 	}
+	var pushURL *string
+	if cfg.AppServicePushURL != "" {
+		pushURL = &cfg.AppServicePushURL
+	}
 	return AppServiceRegistration{
 		ID:              cfg.AppServiceID,
-		URL:             nil, // Phase 1: no push from homeserver
+		URL:             pushURL,
 		ASToken:         cfg.AppServiceToken,
 		HSToken:         cfg.AppServiceHSToken,
 		SenderLocalpart: cfg.AppServiceSenderLocalpart,

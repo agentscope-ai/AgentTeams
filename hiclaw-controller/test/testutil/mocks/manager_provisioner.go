@@ -15,7 +15,7 @@ type MockManagerProvisioner struct {
 	DeprovisionManagerFn          func(ctx context.Context, name string) error
 	RefreshCredentialsFn          func(ctx context.Context, name string) (*service.RefreshResult, error)
 	RefreshManagerCredentialsFn   func(ctx context.Context, managerName string) (*service.RefreshResult, error)
-	EnsureManagerGatewayAuthFn    func(ctx context.Context, managerName, gatewayKey, modelProviderID string) error
+	EnsureManagerGatewayAuthFn    func(ctx context.Context, managerName, gatewayKey string) error
 	EnsureManagerServiceAccountFn func(ctx context.Context, managerName string) error
 	DeleteManagerServiceAccountFn func(ctx context.Context, managerName string) error
 	DeleteCredentialsFn           func(ctx context.Context, name string) error
@@ -51,9 +51,8 @@ func NewMockManagerProvisioner() *MockManagerProvisioner {
 }
 
 type managerGatewayAuthCall struct {
-	Name            string
-	GatewayKey      string
-	ModelProviderID string
+	Name       string
+	GatewayKey string
 }
 
 func (m *MockManagerProvisioner) Reset() {
@@ -164,17 +163,16 @@ func (m *MockManagerProvisioner) RefreshManagerCredentials(ctx context.Context, 
 	}, nil
 }
 
-func (m *MockManagerProvisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey, modelProviderID string) error {
+func (m *MockManagerProvisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey string) error {
 	m.mu.Lock()
 	m.Calls.EnsureManagerGatewayAuth = append(m.Calls.EnsureManagerGatewayAuth, managerGatewayAuthCall{
-		Name:            managerName,
-		GatewayKey:      gatewayKey,
-		ModelProviderID: modelProviderID,
+		Name:       managerName,
+		GatewayKey: gatewayKey,
 	})
 	fn := m.EnsureManagerGatewayAuthFn
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, managerName, gatewayKey, modelProviderID)
+		return fn(ctx, managerName, gatewayKey)
 	}
 	return nil
 }

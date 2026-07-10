@@ -8,12 +8,24 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
+
+	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 )
 
 // AgentPodTemplateConfigMapKey is the data key inside the controller-scoped
 // ConfigMap that carries the PodTemplateSpec YAML. The controller reads this
 // and only this key; any other keys in the same ConfigMap are ignored.
 const AgentPodTemplateConfigMapKey = "pod-template.yaml"
+
+// AgentPodTemplateRemoteConfigMapKey is an optional data key inside the same
+// ConfigMap. When the agent is being created in remote deploy mode
+// (DeployMode=Remote) and this key is present and non-empty, the controller
+// uses it instead of AgentPodTemplateConfigMapKey. This lets operators ship
+// remote-cluster-specific scheduling fields (tolerations, nodeSelector,
+// imagePullSecrets, etc.) without affecting in-cluster Pods. When the key is
+// absent or empty in remote mode, the controller returns a zero-value
+// PodTemplateSpec (no overlay) — it does NOT fall back to pod-template.yaml.
+const AgentPodTemplateRemoteConfigMapKey = "pod-template-remote.yaml"
 
 // PodOverlay carries every controller-computed field that ApplyPodTemplate
 // must force onto the final Pod. Anything NOT in this struct is either copied
@@ -38,20 +50,26 @@ type PodOverlay struct {
 	// ResourcesOverride nor template-container.Resources provides a value.
 	DefaultResources corev1.ResourceRequirements
 
-	// TokenVolume + TokenVolumeMount are always appended to Pod volumes and
-	// the agent container's volumeMounts, regardless of what the template
-	// specifies.
-	TokenVolume      corev1.Volume
-	TokenVolumeMount corev1.VolumeMount
+	// TokenVolume + TokenVolumeMount are appended to Pod volumes and the
+	// agent container's volumeMounts unless DisableTokenProjection is true.
+	TokenVolume            corev1.Volume
+	TokenVolumeMount       corev1.VolumeMount
+	DisableTokenProjection bool
 
 	// HostAliases from CreateRequest.ExtraHosts; appended to any host
 	// aliases the template already declared.
 	HostAliases []corev1.HostAlias
+
+	// ExtraVolumes / ExtraVolumeMounts are controller-derived mounts such as
+	// sandbox worker-deps token/env/data and custom OSS mounts. They are
+	// appended after the token volume.
+	ExtraVolumes      []corev1.Volume
+	ExtraVolumeMounts []corev1.VolumeMount
 }
 
 // LoadAgentPodTemplate fetches the agent PodTemplateSpec overlay from the
 // ConfigMap named `name` (typically the controller's own name, i.e. the
-// HICLAW_CONTROLLER_NAME env var) in `namespace`. The key
+// AGENTTEAMS_CONTROLLER_NAME env var) in `namespace`. The key
 // AgentPodTemplateConfigMapKey ("pod-template.yaml") is expected to carry
 // a YAML document with the two top-level fields of corev1.PodTemplateSpec
 // directly (metadata:, spec:) — NOT a full apiVersion/kind-wrapped
@@ -68,7 +86,14 @@ type PodOverlay struct {
 //   - NotFound: V(1) debug — a common "no overlay configured" state.
 //   - Parse failure: Error — the user's YAML is almost certainly wrong.
 //   - Other API errors: Info — likely transient; next Create retries.
-func LoadAgentPodTemplate(ctx context.Context, client K8sCoreClient, namespace, name string) corev1.PodTemplateSpec {
+//
+// When deployMode == v1beta1.DeployModeRemote, the loader only tries the
+// AgentPodTemplateRemoteConfigMapKey ("pod-template-remote.yaml") within the
+// same ConfigMap. If that key is missing or empty, it returns a zero-value
+// PodTemplateSpec (no overlay) without falling back to pod-template.yaml.
+// Any other deployMode value (including the empty string) only consults the
+// standard key, preserving the original behaviour.
+func LoadAgentPodTemplate(ctx context.Context, client K8sCoreClient, namespace, name, deployMode string) corev1.PodTemplateSpec {
 	logger := log.FromContext(ctx).WithName("agent-pod-template")
 	if client == nil || namespace == "" || name == "" {
 		return corev1.PodTemplateSpec{}
@@ -84,14 +109,33 @@ func LoadAgentPodTemplate(ctx context.Context, client K8sCoreClient, namespace, 
 			"namespace", namespace, "name", name, "err", err.Error())
 		return corev1.PodTemplateSpec{}
 	}
-	raw, ok := cm.Data[AgentPodTemplateConfigMapKey]
-	if !ok || raw == "" {
-		return corev1.PodTemplateSpec{}
+
+	// Resolve which key to consume. Remote deploy mode uses only the remote
+	// key; if absent or empty, no overlay is applied (no fallback to local).
+	var raw string
+	var usedKey string
+	if deployMode == v1beta1.DeployModeRemote {
+		v, ok := cm.Data[AgentPodTemplateRemoteConfigMapKey]
+		if !ok || v == "" {
+			logger.V(1).Info("remote pod template key not found or empty; using empty overlay",
+				"namespace", namespace, "name", name, "key", AgentPodTemplateRemoteConfigMapKey)
+			return corev1.PodTemplateSpec{}
+		}
+		raw = v
+		usedKey = AgentPodTemplateRemoteConfigMapKey
+	} else {
+		v, ok := cm.Data[AgentPodTemplateConfigMapKey]
+		if !ok || v == "" {
+			return corev1.PodTemplateSpec{}
+		}
+		raw = v
+		usedKey = AgentPodTemplateConfigMapKey
 	}
+
 	var tmpl corev1.PodTemplateSpec
 	if err := yaml.Unmarshal([]byte(raw), &tmpl); err != nil {
 		logger.Error(err, "agent pod template YAML parse failed; using empty overlay",
-			"namespace", namespace, "name", name, "key", AgentPodTemplateConfigMapKey)
+			"namespace", namespace, "name", name, "key", usedKey)
 		return corev1.PodTemplateSpec{}
 	}
 	return tmpl
@@ -141,7 +185,10 @@ func ApplyPodTemplate(tmpl corev1.PodTemplateSpec, overlay PodOverlay) *corev1.P
 	agentContainer = overlayAgentContainer(agentContainer, overlay)
 	pod.Spec.Containers = append([]corev1.Container{agentContainer}, sidecars...)
 
-	pod.Spec.Volumes = append(pod.Spec.Volumes, overlay.TokenVolume)
+	if !overlay.DisableTokenProjection {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, overlay.TokenVolume)
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, overlay.ExtraVolumes...)
 
 	pod.Spec.ServiceAccountName = overlay.ServiceAccountName
 	pod.Spec.AutomountServiceAccountToken = boolPtr(false)
@@ -200,7 +247,10 @@ func overlayAgentContainer(base corev1.Container, overlay PodOverlay) corev1.Con
 	if overlay.Container.WorkingDir != "" {
 		out.WorkingDir = overlay.Container.WorkingDir
 	}
-	out.VolumeMounts = append(out.VolumeMounts, overlay.TokenVolumeMount)
+	if !overlay.DisableTokenProjection {
+		out.VolumeMounts = append(out.VolumeMounts, overlay.TokenVolumeMount)
+	}
+	out.VolumeMounts = append(out.VolumeMounts, overlay.ExtraVolumeMounts...)
 
 	switch {
 	case overlay.ResourcesOverride != nil:
@@ -230,4 +280,45 @@ func mergeStringMaps(base, overrides map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// ExtractSchedulingFields extracts scheduling-related fields from a
+// PodTemplateSpec.
+// Returns zero values when the template does not specify these fields.
+func ExtractSchedulingFields(tmpl corev1.PodTemplateSpec) (
+	nodeSelector map[string]string,
+	tolerations []corev1.Toleration,
+	affinity *corev1.Affinity,
+) {
+	nodeSelector = tmpl.Spec.NodeSelector
+	tolerations = tmpl.Spec.Tolerations
+	affinity = tmpl.Spec.Affinity
+	return
+}
+
+// ExtractVolumes extracts volumes and the "worker" container's volumeMounts
+// from a PodTemplateSpec.
+// If no "worker" container exists, volumeMounts is nil.
+func ExtractVolumes(tmpl corev1.PodTemplateSpec) ([]corev1.Volume, []corev1.VolumeMount) {
+	volumes := tmpl.Spec.Volumes
+	var volumeMounts []corev1.VolumeMount
+	for _, c := range tmpl.Spec.Containers {
+		if c.Name == "worker" {
+			volumeMounts = c.VolumeMounts
+			break
+		}
+	}
+	return volumes, volumeMounts
+}
+
+// ExtractEnv extracts environment variables from the "worker" container in a
+// PodTemplateSpec.
+// Returns nil if no "worker" container exists or it has no env vars.
+func ExtractEnv(tmpl corev1.PodTemplateSpec) []corev1.EnvVar {
+	for _, c := range tmpl.Spec.Containers {
+		if c.Name == "worker" {
+			return c.Env
+		}
+	}
+	return nil
 }

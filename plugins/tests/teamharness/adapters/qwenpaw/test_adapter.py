@@ -77,7 +77,7 @@ desired:
     keywords: [internal-token]
     envRefs: [EXTRA_SECRET]
 credentials:
-  matrixTokenEnv: HICLAW_WORKER_MATRIX_TOKEN
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN
 """,
         encoding="utf-8",
     )
@@ -106,26 +106,26 @@ def test_mcp_client_env_includes_sts_refresh_inputs(monkeypatch, tmp_path: Path)
     module = _load_plugin()
     shared_dir = tmp_path / "shared"
     monkeypatch.setenv("TEAMHARNESS_SHARED_DIR", str(shared_dir))
-    monkeypatch.setenv("HICLAW_CONTROLLER_URL", "http://controller.example.test")
-    monkeypatch.setenv("HICLAW_AUTH_TOKEN_FILE", "/var/run/secrets/hiclaw/token")
-    monkeypatch.setenv("HICLAW_CLUSTER_ID", "cluster-a")
-    monkeypatch.setenv("HICLAW_FS_ENDPOINT", "https://oss.example.test")
-    monkeypatch.setenv("HICLAW_FS_ACCESS_KEY", "static-ak")
-    monkeypatch.setenv("HICLAW_FS_SECRET_KEY", "static-sk")
-    monkeypatch.setenv("MC_HOST_hiclaw", "https://temporary@example.test")
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
+    monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN_FILE", "/var/run/secrets/agentteams/token")
+    monkeypatch.setenv("AGENTTEAMS_CLUSTER_ID", "cluster-a")
+    monkeypatch.setenv("AGENTTEAMS_FS_ENDPOINT", "https://oss.example.test")
+    monkeypatch.setenv("AGENTTEAMS_FS_ACCESS_KEY", "static-ak")
+    monkeypatch.setenv("AGENTTEAMS_FS_SECRET_KEY", "static-sk")
+    monkeypatch.setenv("MC_HOST_agentteams", "https://temporary@example.test")
     monkeypatch.setenv("QWENPAW_WORKING_DIR", str(tmp_path / ".qwenpaw"))
 
     env = module._mcp_client_env()
 
     assert env["TEAMHARNESS_SHARED_DIR"] == str(shared_dir)
-    assert env["HICLAW_CONTROLLER_URL"] == "http://controller.example.test"
-    assert env["HICLAW_AUTH_TOKEN_FILE"] == "/var/run/secrets/hiclaw/token"
-    assert env["HICLAW_CLUSTER_ID"] == "cluster-a"
-    assert env["HICLAW_FS_ENDPOINT"] == "https://oss.example.test"
-    assert env["HICLAW_FS_ACCESS_KEY"] == "static-ak"
-    assert env["HICLAW_FS_SECRET_KEY"] == "static-sk"
-    assert env["MC_HOST_hiclaw"] == "https://temporary@example.test"
+    assert env["AGENTTEAMS_CONTROLLER_URL"] == "http://controller.example.test"
+    assert env["AGENTTEAMS_AUTH_TOKEN_FILE"] == "/var/run/secrets/agentteams/token"
+    assert env["AGENTTEAMS_CLUSTER_ID"] == "cluster-a"
+    assert env["AGENTTEAMS_FS_ENDPOINT"] == "https://oss.example.test"
     assert env["QWENPAW_WORKING_DIR"] == str(tmp_path / ".qwenpaw")
+    assert "AGENTTEAMS_FS_ACCESS_KEY" not in env
+    assert "AGENTTEAMS_FS_SECRET_KEY" not in env
+    assert "MC_HOST_agentteams" not in env
 
 
 def test_teamharness_installs_workspace_teams_md_without_overwriting_agentspec(tmp_path: Path, monkeypatch) -> None:
@@ -144,8 +144,8 @@ def test_teamharness_installs_workspace_teams_md_without_overwriting_agentspec(t
     monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(runtime_config))
     monkeypatch.setenv("TEAMHARNESS_SHARED_DIR", str(shared_dir))
     monkeypatch.setenv("QWENPAW_WORKSPACE_DIR", str(workspace_dir))
-    monkeypatch.setenv("HICLAW_AGENT_HOME", str(agent_home))
-    monkeypatch.setenv("HICLAW_WORKER_MATRIX_TOKEN", "matrix-secret-value")
+    monkeypatch.setenv("AGENTTEAMS_AGENT_HOME", str(agent_home))
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-secret-value")
 
     result = module.apply_teamharness()
 
@@ -158,8 +158,14 @@ def test_teamharness_installs_workspace_teams_md_without_overwriting_agentspec(t
     assert "qa-runtime" in text
     assert "!team:matrix.local" in text
     assert "dev-worker" in text
+    assert module.TEAMS_INTERNAL_CONTROL_MARKER in text
     assert "Worker Role" in text
     assert "Matrix Reply Discipline" in text
+    assert "Long Matrix Messages" in text
+    assert "roomflow describe_room" in text
+    assert "TASK：<projectId>" in text
+    assert "Matrix Mentions" in text
+    assert "artifact publish_file" in text
     assert "matrix-secret-value" not in text
     assert not (shared_dir / "TEAMS.md").exists()
     assert (workspace_dir / "AGENTS.md").read_text(encoding="utf-8") == "agentspec agents\n"
@@ -239,6 +245,16 @@ def test_teamharness_enables_role_skills_in_workspace(tmp_path: Path, monkeypatc
     assert (workspace_dir / "skills" / "teamharness-task-execution" / "SKILL.md").is_file()
     assert (workspace_dir / "skills" / "teamharness-communication" / "SKILL.md").is_file()
     assert not (workspace_dir / "skills" / "teamharness-task-delegation").exists()
+    task_execution_text = (
+        workspace_dir / "skills" / "teamharness-task-execution" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "automatically publishes" in task_execution_text
+    assert "publishedArtifacts" in task_execution_text
+    file_sharing_text = (
+        workspace_dir / "skills" / "teamharness-file-sharing" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "artifact publish_file" in file_sharing_text
+    assert "workspace-relative file path" in file_sharing_text
     manifest = json.loads((workspace_dir / "skill.json").read_text(encoding="utf-8"))
     assert manifest["skills"]["teamharness-task-execution"]["enabled"] is True
     assert "teamharness-task-delegation" not in manifest["skills"]
@@ -250,7 +266,7 @@ def test_sanitizer_redacts_keywords_and_env_values(tmp_path: Path, monkeypatch) 
     _runtime_yaml(runtime_config)
 
     monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(runtime_config))
-    monkeypatch.setenv("HICLAW_WORKER_MATRIX_TOKEN", "matrix-secret-value")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-secret-value")
     monkeypatch.setenv("EXTRA_SECRET", "extra-secret-value")
 
     text = module.sanitize_text(
@@ -372,26 +388,61 @@ def test_private_tool_result_wrapper_redacts_text_blocks(tmp_path: Path, monkeyp
     assert result["content"][0]["text"] == "[REDACTED]"
 
 
-def test_output_sanitizer_skips_when_qwenpaw_private_acting_missing(monkeypatch) -> None:
+def test_teamharness_http_sync_reinstalls_runtime_hooks(monkeypatch) -> None:
     module = _load_plugin()
+    calls = []
 
-    class QwenPawAgent:
-        pass
+    monkeypatch.setattr(module, "apply_teamharness", lambda: {"ok": True, "applied": True})
+    monkeypatch.setattr(
+        module,
+        "install_output_sanitizer_wrapper",
+        lambda api=None: calls.append(("sanitizer", api)) or {"ok": True, "installed": True},
+    )
 
-    react_agent_module = types.ModuleType("qwenpaw.agents.react_agent")
-    react_agent_module.QwenPawAgent = QwenPawAgent
-    monkeypatch.setitem(sys.modules, "qwenpaw", types.ModuleType("qwenpaw"))
-    monkeypatch.setitem(sys.modules, "qwenpaw.agents", types.ModuleType("qwenpaw.agents"))
-    monkeypatch.setitem(sys.modules, "qwenpaw.agents.react_agent", react_agent_module)
+    class APIRouter:
+        def __init__(self):
+            self.routes = {}
 
-    result = module.install_output_sanitizer_wrapper()
+        def get(self, path):
+            def decorator(func):
+                self.routes[("GET", path)] = func
+                return func
 
-    assert result == {
-        "ok": True,
-        "installed": False,
-        "reason": "qwenpaw agent _acting hook unavailable",
-    }
-    assert not hasattr(QwenPawAgent, "_teamharness_sanitizer_installed")
+            return decorator
+
+        def post(self, path):
+            def decorator(func):
+                self.routes[("POST", path)] = func
+                return func
+
+            return decorator
+
+    fastapi_module = types.ModuleType("fastapi")
+    fastapi_module.APIRouter = APIRouter
+    monkeypatch.setitem(sys.modules, "fastapi", fastapi_module)
+
+    class Api:
+        def __init__(self):
+            self.routers = {}
+
+        def register_startup_hook(self, *_args, **_kwargs):
+            pass
+
+        def register_shutdown_hook(self, *_args, **_kwargs):
+            pass
+
+        def register_http_router(self, router, prefix, tags):
+            self.routers[prefix] = router
+
+    api = Api()
+    plugin = module.TeamHarnessPlugin()
+    plugin.register(api)
+
+    result = api.routers["/teamharness"].routes[("POST", "/sync")]()
+
+    assert result == {"ok": True, "applied": True}
+    assert calls == [("sanitizer", api)]
+    assert plugin.sanitizer_result == {"ok": True, "installed": True}
 
 
 def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeypatch) -> None:
@@ -434,12 +485,12 @@ def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeyp
     monkeypatch.setitem(sys.modules, "qwenpaw.config.config", config_module)
     monkeypatch.setenv("TEAMHARNESS_SHARED_DIR", str(shared_dir))
     monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", "/root/hiclaw-fs/shared/runtime/members/worker-a/runtime.yaml")
-    monkeypatch.setenv("HICLAW_MATRIX_URL", "http://matrix.local")
-    monkeypatch.setenv("HICLAW_WORKER_MATRIX_TOKEN", "matrix-token")
-    monkeypatch.setenv("HICLAW_WORKER_ROLE", "worker")
-    monkeypatch.setenv("HICLAW_WORKER_NAME", "worker-a")
-    monkeypatch.setenv("HICLAW_STORAGE_PREFIX", "hiclaw/hiclaw-storage")
-    monkeypatch.setenv("HICLAW_FS_BUCKET", "hiclaw-storage")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.local")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_ROLE", "worker")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "worker-a")
+    monkeypatch.setenv("AGENTTEAMS_STORAGE_PREFIX", "hiclaw/hiclaw-storage")
+    monkeypatch.setenv("AGENTTEAMS_FS_BUCKET", "hiclaw-storage")
 
     result = module._ensure_mcp_client("default", workspace_dir)
 
@@ -449,10 +500,11 @@ def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeyp
     client = agent_config.mcp.clients["teamharness"]
     assert client.command == sys.executable
     assert client.env["TEAMHARNESS_SHARED_DIR"] == str(shared_dir)
+    assert client.env["LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS"] == "false"
     assert client.env["TEAMHARNESS_RUNTIME_CONFIG"] == "/root/hiclaw-fs/shared/runtime/members/worker-a/runtime.yaml"
-    assert client.env["HICLAW_MATRIX_URL"] == "http://matrix.local"
-    assert client.env["HICLAW_WORKER_MATRIX_TOKEN"] == "matrix-token"
-    assert client.env["HICLAW_WORKER_ROLE"] == "worker"
-    assert client.env["HICLAW_WORKER_NAME"] == "worker-a"
-    assert client.env["HICLAW_STORAGE_PREFIX"] == "hiclaw/hiclaw-storage"
-    assert client.env["HICLAW_FS_BUCKET"] == "hiclaw-storage"
+    assert client.env["AGENTTEAMS_MATRIX_URL"] == "http://matrix.local"
+    assert client.env["AGENTTEAMS_WORKER_MATRIX_TOKEN"] == "matrix-token"
+    assert client.env["AGENTTEAMS_WORKER_ROLE"] == "worker"
+    assert client.env["AGENTTEAMS_WORKER_NAME"] == "worker-a"
+    assert client.env["AGENTTEAMS_STORAGE_PREFIX"] == "hiclaw/hiclaw-storage"
+    assert client.env["AGENTTEAMS_FS_BUCKET"] == "hiclaw-storage"

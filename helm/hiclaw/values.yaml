@@ -22,6 +22,16 @@ credentials:
   defaultModel: "gpt-5.4"
   llmBaseUrl: ""              # OpenAI-compatible base URL (e.g. https://api.openai.com/v1)
 
+# ── Preflight checks ─────────────────────────────────────────────────────
+preflight:
+  llm:
+    enabled: true              # run a Helm pre-install/pre-upgrade LLM probe
+    strict: true               # fail install/upgrade when the probe fails
+    timeoutSeconds: 30         # per HTTP request timeout
+    retries: 2                 # retry transient network/429/5xx failures
+    activeDeadlineSeconds: 120 # hard ceiling for the hook Job
+    resources: {}
+
 # ── Matrix ────────────────────────────────────────────────────────────────
 matrix:
   provider: tuwunel           # tuwunel | synapse
@@ -74,6 +84,7 @@ gateway:
   # Required when provider=ai-gateway:
   aiGateway:
     region: ""                # e.g. "cn-hangzhou"
+    endpoint: ""              # optional APIG OpenAPI endpoint override; empty uses apig.<region>.aliyuncs.com
     gatewayId: ""             # APIG gateway instance id (required)
     modelApiId: ""            # LLM Model API id used for consumer authorization
     envId: ""                 # APIG environment id
@@ -183,6 +194,16 @@ controller:
     type: ClusterIP
     port: 8090
     targetPort: 8090
+  metrics:
+    enabled: true
+    bindAddress: ":8080"
+    port: 8080
+    targetPort: 8080
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
   resources:
     requests:
       cpu: 100m
@@ -190,7 +211,14 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
-  workerBackend: "k8s"        # k8s | sae
+  workerBackend: "k8s"        # k8s | sandbox
+  # Sandbox backend configuration. Set Worker.spec.backendRuntime=sandbox to
+  # use this backend for an individual Worker.
+  sandbox:
+    providerType: "openkruise"
+    capabilities: ""          # comma-separated provider capabilities, e.g. "hibernate,pool"
+    agentRuntimeImage: ""     # optional override for the SandboxSet agent runtime image
+    prewarmSize: 1            # SandboxSet warm pool size; 0 disables prewarm replicas
   resourcePrefix: "hiclaw-"
   resourceAutoPrefix: true
   serviceAccount:

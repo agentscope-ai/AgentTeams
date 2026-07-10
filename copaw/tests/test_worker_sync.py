@@ -10,7 +10,7 @@ from copaw_worker.sync import FileSync
 def test_ensure_alias_skips_static_alias_in_k8s_mode(monkeypatch, tmp_path):
     calls = []
 
-    monkeypatch.setenv("HICLAW_RUNTIME", "k8s")
+    monkeypatch.setenv("AGENTTEAMS_RUNTIME", "k8s")
     monkeypatch.setattr(sync, "_mc", lambda *args, **_kwargs: calls.append(args))
 
     fs = FileSync(

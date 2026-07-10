@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +24,17 @@ if not (ASSET_DIR / "plugin.yaml").exists():
     ASSET_DIR = PLUGIN_DIR.parent.parent
 
 TEAMS_PROMPT_FILE = "TEAMS.md"
+TEAMS_INTERNAL_CONTROL_MARKER = (
+    "<!-- AGENTTEAMS_INTERNAL_CONTROL_FILE: TEAMS.md is managed by "
+    "TeamHarness/QwenPaw runtime; agent packages must not overwrite or delete it. -->"
+)
 MCP_CLIENT_ID = "teamharness"
 REDACTION = "[REDACTED]"
 SENSITIVE_FILE_AUTO_DENY_RULE = "SENSITIVE_FILE_BLOCK"
-TEAMS_CONTEXT_START = "<!-- BEGIN HICLAW RUNTIME TEAM CONTEXT -->"
-TEAMS_CONTEXT_END = "<!-- END HICLAW RUNTIME TEAM CONTEXT -->"
+TEAMS_CONTEXT_START = "<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->"
+TEAMS_CONTEXT_END = "<!-- END AGENTTEAMS RUNTIME TEAM CONTEXT -->"
+_TASK_TRACE_MODULE: Any = None
+_TASK_TRACE_REGISTERED: bool = False
 
 _BUILTIN_SANITIZER_PATTERNS: List[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(LTAI)[A-Za-z0-9]{12,}"), r"\1****"),
@@ -58,7 +64,6 @@ _BUILTIN_SANITIZER_PATTERNS: List[tuple[re.Pattern[str], str]] = [
         r"\1********",
     ),
 ]
-
 
 def _read_yaml(path: Path) -> Dict[str, Any]:
     try:
@@ -125,7 +130,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def _shared_dir() -> Path:
-    raw = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("HICLAW_SHARED_DIR", "").strip()
+    raw = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("AGENTTEAMS_SHARED_DIR", "").strip()
     if raw:
         return Path(raw)
     qwenpaw_dir = os.getenv("QWENPAW_WORKING_DIR", "").strip()
@@ -155,11 +160,11 @@ def render_team_context(config: Dict[str, Any]) -> str:
     channel_policy = _section(desired, "channelPolicy")
     base_prompt = ASSET_DIR / "prompts" / "team" / "TEAMS.md"
     base = base_prompt.read_text(encoding="utf-8").strip() if base_prompt.exists() else ""
-    role = _string(member.get("role") or os.getenv("HICLAW_AGENT_ROLE") or "worker")
+    role = _string(member.get("role") or os.getenv("AGENTTEAMS_AGENT_ROLE") or "worker")
     role_prompt = _role_prompt(role)
     role_text = role_prompt.read_text(encoding="utf-8").strip() if role_prompt and role_prompt.exists() else ""
 
-    lines = []
+    lines = [TEAMS_INTERNAL_CONTROL_MARKER, ""]
     if base:
         lines.append(base)
     else:
@@ -263,7 +268,7 @@ def _credagent_paths() -> List[Path]:
     paths: List[Path] = []
     for _agent_id, workspace_dir in _iter_qwenpaw_agents():
         paths.append(workspace_dir / "config" / "credagent.json")
-    for env_name in ("HICLAW_AGENT_HOME", "HICLAW_WORKER_HOME"):
+    for env_name in ("AGENTTEAMS_AGENT_HOME", "AGENTTEAMS_WORKER_HOME"):
         raw = os.getenv(env_name, "").strip()
         if raw:
             paths.append(Path(raw).expanduser() / "config" / "credagent.json")
@@ -593,7 +598,7 @@ def _enable_workspace_skills(workspace_dir: Path, role: str) -> Dict[str, Any]:
 
 def _install_workspace_assets(agent_id: str, workspace_dir: Path, config: Dict[str, Any]) -> Dict[str, Any]:
     member = _section(config, "member")
-    role = _string(member.get("role") or os.getenv("HICLAW_AGENT_ROLE") or "worker")
+    role = _string(member.get("role") or os.getenv("AGENTTEAMS_AGENT_ROLE") or "worker")
     workspace_dir.mkdir(parents=True, exist_ok=True)
     team_context = _write_team_context(workspace_dir, config)
     prompts = _ensure_prompt_files(agent_id, [TEAMS_PROMPT_FILE])
@@ -651,25 +656,25 @@ def _install_skills() -> Dict[str, Any]:
 
 
 def _mcp_client_env() -> Dict[str, str]:
-    env = {"TEAMHARNESS_SHARED_DIR": str(_shared_dir())}
+    env = {
+        "TEAMHARNESS_SHARED_DIR": str(_shared_dir()),
+        "LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS": "false",
+    }
     for name in (
         "TEAMHARNESS_RUNTIME_CONFIG",
-        "HICLAW_MATRIX_URL",
-        "HICLAW_WORKER_MATRIX_TOKEN",
-        "HICLAW_MATRIX_USER_ID",
-        "HICLAW_WORKER_ROLE",
-        "HICLAW_AGENT_ROLE",
-        "HICLAW_WORKER_NAME",
-        "HICLAW_STORAGE_PREFIX",
-        "HICLAW_SHARED_STORAGE_PREFIX",
-        "HICLAW_FS_BUCKET",
-        "HICLAW_CONTROLLER_URL",
-        "HICLAW_AUTH_TOKEN_FILE",
-        "HICLAW_CLUSTER_ID",
-        "HICLAW_FS_ENDPOINT",
-        "HICLAW_FS_ACCESS_KEY",
-        "HICLAW_FS_SECRET_KEY",
-        "MC_HOST_hiclaw",
+        "AGENTTEAMS_MATRIX_URL",
+        "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+        "AGENTTEAMS_MATRIX_USER_ID",
+        "AGENTTEAMS_WORKER_ROLE",
+        "AGENTTEAMS_AGENT_ROLE",
+        "AGENTTEAMS_WORKER_NAME",
+        "AGENTTEAMS_STORAGE_PREFIX",
+        "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+        "AGENTTEAMS_FS_BUCKET",
+        "AGENTTEAMS_CONTROLLER_URL",
+        "AGENTTEAMS_AUTH_TOKEN_FILE",
+        "AGENTTEAMS_CLUSTER_ID",
+        "AGENTTEAMS_FS_ENDPOINT",
         "QWENPAW_WORKING_DIR",
         "COPAW_WORKING_DIR",
     ):
@@ -719,7 +724,7 @@ def apply_teamharness() -> Dict[str, Any]:
     return {"ok": True, "agents": agents, "skills": skills, "mcp": mcp, "credentialGuard": credential_guard}
 
 
-def install_output_sanitizer_wrapper() -> Dict[str, Any]:
+def install_output_sanitizer_wrapper(api: Any = None) -> Dict[str, Any]:
     try:
         from qwenpaw.agents.react_agent import QwenPawAgent
     except ImportError:
@@ -727,9 +732,7 @@ def install_output_sanitizer_wrapper() -> Dict[str, Any]:
     if getattr(QwenPawAgent, "_teamharness_sanitizer_installed", False):
         return {"ok": True, "installed": True, "action": "unchanged"}
 
-    original = getattr(QwenPawAgent, "_acting", None)
-    if not callable(original):
-        return {"ok": True, "installed": False, "reason": "qwenpaw agent _acting hook unavailable"}
+    original = QwenPawAgent._acting
 
     async def _acting_with_sanitizer(self, tool_call):
         result = await original(self, tool_call)
@@ -741,16 +744,268 @@ def install_output_sanitizer_wrapper() -> Dict[str, Any]:
     return {"ok": True, "installed": True, "action": "created"}
 
 
+def _task_trace_module_path() -> Optional[Path]:
+    candidates = [
+        PLUGIN_DIR / "task_trace.py",
+    ]
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _load_task_trace_module() -> Tuple[Optional[Any], Optional[str]]:
+    global _TASK_TRACE_MODULE
+    if _TASK_TRACE_MODULE is not None:
+        return _TASK_TRACE_MODULE, None
+
+    trace_module_path = _task_trace_module_path()
+    if trace_module_path is None:
+        return None, "task_trace.py not found"
+
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("teamharness_qwenpaw_task_trace", trace_module_path)
+        if spec is None or spec.loader is None:
+            return None, "cannot load trace module"
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["teamharness_qwenpaw_task_trace"] = module
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        sys.modules.pop("teamharness_qwenpaw_task_trace", None)
+        return None, str(exc)
+
+    _TASK_TRACE_MODULE = module
+    return module, None
+
+
+def _room_id_from_request_context(context: Any) -> str:
+    if not isinstance(context, dict):
+        return ""
+    for key in ("room_id", "roomId"):
+        room_id = _string(context.get(key))
+        if room_id:
+            return room_id
+    meta = context.get("channel_meta")
+    if isinstance(meta, dict):
+        room_id = _string(meta.get("room_id") or meta.get("roomId"))
+        if room_id:
+            return room_id
+    session_id = _string(context.get("session_id"))
+    if session_id.startswith("matrix:"):
+        return session_id[len("matrix:") :]
+    if _string(context.get("channel")) == "matrix":
+        return _string(context.get("user_id"))
+    return ""
+
+
+def _task_trace_debug_enabled() -> bool:
+    return os.getenv("AGENTTEAMS_TASK_TRACE_DEBUG", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _canonical_task_trace_room(trace_module: Any, room_id: str) -> str:
+    canonicalize = getattr(trace_module, "canonical_room_id", None)
+    if callable(canonicalize):
+        try:
+            return str(canonicalize(room_id) or "").strip()
+        except Exception:
+            return _string(room_id)
+    return _string(room_id)
+
+
+def _refresh_shared_tasks_for_task_trace(trace_module: Any, room_id: str) -> Dict[str, Any]:
+    """Best-effort pull of shared task metadata before tagging a turn span."""
+    room = _canonical_task_trace_room(trace_module, room_id)
+    if not room:
+        return {"ok": True, "action": "skipped", "reason": "missing room"}
+
+    qwenpaw_dir = _qwenpaw_working_dir()
+    if qwenpaw_dir is None:
+        return {"ok": False, "reason": "workspace dir unavailable"}
+
+    shared_dir = _shared_dir()
+    shared_prefix = os.getenv("AGENTTEAMS_SHARED_STORAGE_PREFIX", "").strip().strip("/") or "shared"
+    remote_prefix = f"{shared_prefix}/tasks"
+    local_tasks_dir = shared_dir / "tasks"
+    worker_name = (
+        os.getenv("AGENTTEAMS_WORKER_NAME", "").strip()
+        or os.getenv("AGENTTEAMS_AGENT_NAME", "").strip()
+        or "qwenpaw"
+    )
+
+    try:
+        from qwenpaw_worker.sync import FileSync
+
+        sync = FileSync(
+            endpoint=os.getenv("AGENTTEAMS_FS_ENDPOINT", ""),
+            access_key=os.getenv("AGENTTEAMS_FS_ACCESS_KEY", ""),
+            secret_key=os.getenv("AGENTTEAMS_FS_SECRET_KEY", ""),
+            bucket=os.getenv("AGENTTEAMS_FS_BUCKET", "agentteams-storage"),
+            worker_name=worker_name,
+            local_dir=qwenpaw_dir.parent,
+            shared_dir=shared_dir,
+            shared_prefix=shared_prefix,
+        )
+        sync.mirror_prefix(remote_prefix, local_tasks_dir)
+    except Exception as exc:
+        if _task_trace_debug_enabled():
+            logger.warning(
+                "AgentTeamsTaskSpanProcessor shared tasks refresh failed room=%s remote=%s local=%s error_type=%s error=%s",
+                room,
+                remote_prefix,
+                local_tasks_dir,
+                type(exc).__name__,
+                exc,
+            )
+        return {"ok": False, "reason": str(exc), "remote": remote_prefix}
+
+    if _task_trace_debug_enabled():
+        logger.info(
+            "AgentTeamsTaskSpanProcessor shared tasks refreshed room=%s remote=%s local=%s",
+            room,
+            remote_prefix,
+            local_tasks_dir,
+        )
+    return {"ok": True, "action": "refreshed", "remote": remote_prefix, "local": str(local_tasks_dir)}
+
+
+def install_task_trace_context_wrapper(trace_module: Any) -> Dict[str, Any]:
+    try:
+        from qwenpaw.agents.react_agent import QwenPawAgent
+    except ImportError:
+        return {"ok": True, "installed": False, "reason": "qwenpaw agent API unavailable"}
+    if getattr(QwenPawAgent, "_teamharness_trace_context_installed", False):
+        return {"ok": True, "installed": True, "action": "unchanged"}
+
+    original_call = getattr(QwenPawAgent, "__call__", None)
+    original_reply = getattr(QwenPawAgent, "reply", None)
+    if not callable(original_call) or not callable(original_reply):
+        return {"ok": False, "installed": False, "reason": "qwenpaw agent call API unavailable"}
+
+    def _set_room_context(agent: Any):
+        room_id = _room_id_from_request_context(getattr(agent, "_request_context", {}) or {})
+        return (trace_module.set_current_room(room_id) if room_id else None, room_id)
+
+    def _tag_current_entry_span() -> None:
+        workspace_dir = _qwenpaw_working_dir()
+        if workspace_dir is None:
+            return
+        default_ws = workspace_dir / "workspaces" / "default"
+        # Prefer the pending entry span stashed by on_start (the common path:
+        # entry span was created before room context was available).
+        tag_pending = getattr(trace_module, "tag_pending_entry_span", None)
+        if callable(tag_pending):
+            get_pending = getattr(trace_module, "get_pending_entry_span", None)
+            if callable(get_pending) and get_pending() is not None:
+                tag_pending(default_ws)
+                return
+        # Fallback: current span might be the entry span (e.g. room was set
+        # before instrumentation created it).
+        tag_current = getattr(trace_module, "tag_current_entry_span", None)
+        if callable(tag_current):
+            tag_current(default_ws)
+
+    async def _call_with_task_trace_context(self, *args, **kwargs):
+        token, room_id = _set_room_context(self)
+        try:
+            _refresh_shared_tasks_for_task_trace(trace_module, room_id)
+            _tag_current_entry_span()
+            _retry_task_trace_registration(trace_module)
+            return await original_call(self, *args, **kwargs)
+        finally:
+            if token is not None:
+                trace_module.reset_current_room(token)
+
+    async def _reply_with_task_trace_context(self, *args, **kwargs):
+        token, room_id = _set_room_context(self)
+        try:
+            _refresh_shared_tasks_for_task_trace(trace_module, room_id)
+            _tag_current_entry_span()
+            _retry_task_trace_registration(trace_module)
+            return await original_reply(self, *args, **kwargs)
+        finally:
+            if token is not None:
+                trace_module.reset_current_room(token)
+
+    QwenPawAgent.__call__ = _call_with_task_trace_context
+    QwenPawAgent.reply = _reply_with_task_trace_context
+    QwenPawAgent._teamharness_trace_context_installed = True
+    QwenPawAgent._teamharness_trace_original_call = original_call
+    QwenPawAgent._teamharness_trace_original_reply = original_reply
+    return {"ok": True, "installed": True, "action": "created"}
+
+
+def _retry_task_trace_registration(trace_module: Any) -> None:
+    if _TASK_TRACE_REGISTERED:
+        return
+    workspace_dir = _qwenpaw_working_dir()
+    if workspace_dir is None:
+        return
+    result = _register_task_trace_processor(trace_module, workspace_dir / "workspaces" / "default")
+    if result.get("ok"):
+        return
+    reason = str(result.get("reason") or "unknown")
+    logger.info("AgentTeamsTaskSpanProcessor lazy registration skipped: %s", reason)
+
+
+def _register_task_trace_processor(trace_module: Any, workspace_dir: Path) -> Dict[str, Any]:
+    global _TASK_TRACE_REGISTERED
+    if _TASK_TRACE_REGISTERED:
+        return {"ok": True, "processor": "AgentTeamsTaskSpanProcessor", "action": "unchanged"}
+    result = trace_module.register_task_trace_processor(workspace_dir)
+    if isinstance(result, dict) and result.get("ok"):
+        _TASK_TRACE_REGISTERED = True
+    return result if isinstance(result, dict) else {"ok": False, "reason": "invalid registration result"}
+
+
+def install_task_trace_processor() -> Dict[str, Any]:
+    """Register the AgentTeams Task-Trace SpanProcessor on the active TracerProvider."""
+    workspace_dir = _qwenpaw_working_dir()
+    if workspace_dir is None:
+        return {"ok": False, "reason": "workspace dir unavailable"}
+    default_workspace = workspace_dir / "workspaces" / "default"
+
+    module, error = _load_task_trace_module()
+    if module is None:
+        return {"ok": False, "reason": error or "cannot load trace module"}
+
+    try:
+        context_result = install_task_trace_context_wrapper(module)
+        result = _register_task_trace_processor(module, default_workspace)
+        if isinstance(result, dict):
+            result = dict(result)
+            result["context"] = context_result
+            if not result.get("ok"):
+                logger.warning(
+                    "AgentTeamsTaskSpanProcessor not registered: %s",
+                    result.get("reason") or "unknown",
+                )
+        return result
+    except Exception as exc:
+        logger.warning("Failed to register AgentTeamsTaskSpanProcessor: %s", exc)
+        return {"ok": False, "reason": str(exc)}
+
+
 class TeamHarnessPlugin:
     def __init__(self) -> None:
         self.last_apply_result: Dict[str, Any] = {}
         self.sanitizer_result: Dict[str, Any] = {}
+        self.trace_result: Dict[str, Any] = {}
+
+    def _sync_runtime(self, api: Any) -> Dict[str, Any]:
+        self.last_apply_result = apply_teamharness()
+        self.sanitizer_result = install_output_sanitizer_wrapper(api=api)
+        self.trace_result = install_task_trace_processor()
+        return self.last_apply_result
 
     def register(self, api: Any) -> None:
         def sync() -> Dict[str, Any]:
-            self.last_apply_result = apply_teamharness()
-            self.sanitizer_result = install_output_sanitizer_wrapper()
-            return self.last_apply_result
+            return self._sync_runtime(api)
 
         def shutdown() -> None:
             return None
@@ -776,12 +1031,12 @@ class TeamHarnessPlugin:
                 "ok": True,
                 "lastApply": self.last_apply_result,
                 "sanitizer": self.sanitizer_result,
+                "trace": self.trace_result,
             }
 
         @router.post("/sync")
         def sync_endpoint() -> Dict[str, Any]:
-            self.last_apply_result = apply_teamharness()
-            return self.last_apply_result
+            return self._sync_runtime(api)
 
         api.register_http_router(router, prefix="/teamharness", tags=["teamharness"])
 

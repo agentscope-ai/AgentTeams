@@ -194,6 +194,9 @@ func (h *LifecycleHandler) GetWorkerRuntimeStatus(w http.ResponseWriter, r *http
 		result, err := b.Status(r.Context(), name)
 		if err == nil && result != nil {
 			resp.Message = "backend=" + result.Backend + " status=" + string(result.Status)
+			if result.Message != "" {
+				resp.Message += " message=" + result.Message
+			}
 			resp.ContainerState = string(result.Status)
 			if result.Status == backend.StatusRunning && h.isReady(name) {
 				resp.Phase = "Ready"

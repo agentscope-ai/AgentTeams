@@ -25,6 +25,7 @@ var ErrUnsupportedOp = errors.New("operation not supported on ai-gateway provide
 // hiclaw AI Model API.
 type AIGatewayConfig struct {
 	Region     string // e.g. "cn-hangzhou"
+	Endpoint   string // optional APIG OpenAPI endpoint override
 	GatewayID  string // APIG gateway instance id
 	ModelAPIID string // LLM Model API id that consumers are bound to
 	EnvID      string // APIG environment id
@@ -75,13 +76,21 @@ func NewAIGatewayClient(cfg AIGatewayConfig, cred credential.Credential) (*AIGat
 	apiCfg := &openapi.Config{}
 	apiCfg.SetCredential(cred).
 		SetRegionId(cfg.Region).
-		SetEndpoint(fmt.Sprintf("apig.%s.aliyuncs.com", cfg.Region))
+		SetEndpoint(apigEndpoint(cfg.Region, cfg.Endpoint))
 
 	cli, err := apig.NewClient(apiCfg)
 	if err != nil {
 		return nil, fmt.Errorf("ai-gateway: create APIG client: %w", err)
 	}
 	return &AIGatewayClient{config: cfg, client: cli}, nil
+}
+
+func apigEndpoint(region, override string) string {
+	override = strings.TrimSpace(override)
+	if override != "" {
+		return override
+	}
+	return fmt.Sprintf("apig.%s.aliyuncs.com", region)
 }
 
 // NewAIGatewayClientWithClient is the testing constructor: it accepts a

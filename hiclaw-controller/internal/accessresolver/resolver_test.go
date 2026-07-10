@@ -462,6 +462,101 @@ func newAlphaTeam() *v1beta1.Team {
 	return team
 }
 
+// TestResolveTeamMember_DecoupledReadsWorkerCRAccessEntries covers Gap 3:
+// in the decoupled model the Team CR carries spec.workerMembers (a list of
+// refs) without inline AccessEntries. The resolver must Get the standalone
+// Worker CR and use ITS spec.accessEntries instead of falling back to
+// DefaultEntriesForTeamMember.
+func TestResolveTeamMember_DecoupledReadsWorkerCRAccessEntries(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Namespace = testNS
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "w1", Role: "worker"},
+	}
+
+	worker := &v1beta1.Worker{}
+	worker.Name = "w1"
+	worker.Namespace = testNS
+	worker.Spec.AccessEntries = []v1beta1.AccessEntry{
+		{
+			Service:     credprovider.ServiceObjectStorage,
+			Permissions: []string{"read"},
+			Scope: rawJSON(t, map[string]any{
+				"bucketRef": "workspace",
+				"prefixes":  []string{"custom/${self.team}/*", "agents/${self.name}/data/*"},
+			}),
+		},
+	}
+
+	c := newFakeClient(t, team, worker)
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role:       auth.RoleWorker,
+		Username:   "w1",
+		WorkerName: "w1",
+		Team:       "alpha",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1 (Worker CR custom entries must be picked up, defaults must not leak), entries=%+v", len(entries), entries)
+	}
+	got := entries[0].Scope.Prefixes
+	if !hasPrefix(got, "custom/alpha/*") {
+		t.Fatalf("${self.team} not expanded: %+v", got)
+	}
+	if !hasPrefix(got, "agents/w1/data/*") {
+		t.Fatalf("${self.name} not expanded from Worker CR entries: %+v", got)
+	}
+	if len(entries[0].Permissions) != 1 || entries[0].Permissions[0] != "read" {
+		t.Fatalf("permissions must come from Worker CR, got %+v", entries[0].Permissions)
+	}
+}
+
+// TestResolveTeamMember_DecoupledLeaderRoleHonored covers Gap 3 leader
+// branch: when team.spec.workerMembers[].role=="team_leader", the
+// resolved templateCtx.kind must be "TeamLeader" so ${self.kind}
+// expansion matches the leader's runtime identity.
+func TestResolveTeamMember_DecoupledLeaderRoleHonored(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Namespace = testNS
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "lead", Role: "team_leader"},
+	}
+
+	worker := &v1beta1.Worker{}
+	worker.Name = "lead"
+	worker.Namespace = testNS
+	worker.Spec.AccessEntries = []v1beta1.AccessEntry{
+		{
+			Service:     credprovider.ServiceObjectStorage,
+			Permissions: []string{"read"},
+			Scope: rawJSON(t, map[string]any{
+				"bucketRef": "workspace",
+				"prefixes":  []string{"kind/${self.kind}/*"},
+			}),
+		},
+	}
+
+	c := newFakeClient(t, team, worker)
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role:       auth.RoleTeamLeader,
+		Username:   "lead",
+		WorkerName: "lead",
+		Team:       "alpha",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !hasPrefix(entries[0].Scope.Prefixes, "kind/TeamLeader/*") {
+		t.Fatalf("${self.kind} should expand to TeamLeader, got %+v", entries[0].Scope.Prefixes)
+	}
+}
+
 func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	team := newAlphaTeam()
 	c := newFakeClient(t, team)

@@ -27,9 +27,9 @@ type ServerDeps struct {
 	AuthMw         *authpkg.Middleware
 	KubeMode       string
 	Namespace      string
-	ControllerName string // HICLAW_CONTROLLER_NAME; empty in embedded mode
-	SocketPath     string       // Docker proxy (embedded only)
-	MatrixConfig   matrix.Config       // for AppService rotation endpoint
+	ControllerName string               // HICLAW_CONTROLLER_NAME; empty in embedded mode
+	SocketPath     string               // Docker proxy (embedded only)
+	MatrixConfig   matrix.Config        // for AppService rotation endpoint
 	Provisioner    *service.Provisioner // for Matrix token refresh
 }
 
@@ -47,7 +47,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		Mux:  mux,
 		server: &http.Server{
 			Addr:    addr,
-			Handler: mux,
+			Handler: withControllerHTTPMetrics(mux),
 		},
 	}
 
@@ -119,6 +119,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// --- AppService management ---
 	ash := NewAppServiceHandler(deps.MatrixConfig)
 	mux.Handle("POST /api/v1/appservice/rotate-token", mw.RequireAuthz(authpkg.ActionUpdate, "appservice", nil)(http.HandlerFunc(ash.RotateToken)))
+	if deps.MatrixConfig.AppServiceEnabled && deps.MatrixConfig.AppServiceHSToken != "" {
+		asEvents := NewAppserviceHandler(deps.MatrixConfig.AppServiceHSToken, deps.Client, deps.Namespace)
+		mux.Handle("PUT /_matrix/app/v1/transactions/{txnId}", http.HandlerFunc(asEvents.HandleTransactions))
+		mux.Handle("GET /_matrix/app/v1/users/{userId}", http.HandlerFunc(asEvents.HandleUserQuery))
+		mux.Handle("GET /_matrix/app/v1/rooms/{roomAlias}", http.HandlerFunc(asEvents.HandleRoomQuery))
+	}
 
 	// --- Docker API passthrough (embedded mode only) ---
 	if deps.KubeMode == "embedded" && deps.SocketPath != "" {

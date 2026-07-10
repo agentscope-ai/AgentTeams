@@ -29,6 +29,47 @@ func TestNormalizeMinIOS3Endpoint(t *testing.T) {
 	}
 }
 
+func TestLoadConfigMetricsBindAddrDefaultsByMode(t *testing.T) {
+	t.Run("embedded", func(t *testing.T) {
+		t.Setenv("HICLAW_KUBE_MODE", "embedded")
+		t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+		cfg := LoadConfig()
+		if cfg.MetricsBindAddr != "0" {
+			t.Fatalf("MetricsBindAddr = %q, want disabled metrics in embedded mode", cfg.MetricsBindAddr)
+		}
+	})
+
+	t.Run("incluster", func(t *testing.T) {
+		t.Setenv("HICLAW_KUBE_MODE", "incluster")
+		t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+		cfg := LoadConfig()
+		if cfg.MetricsBindAddr != ":8080" {
+			t.Fatalf("MetricsBindAddr = %q, want :8080 in incluster mode", cfg.MetricsBindAddr)
+		}
+	})
+}
+
+func TestLoadConfigMetricsBindAddrPrefersAgentTeamsEnv(t *testing.T) {
+	t.Setenv("HICLAW_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", ":19090")
+
+	cfg := LoadConfig()
+	if cfg.MetricsBindAddr != ":19090" {
+		t.Fatalf("MetricsBindAddr = %q, want AGENTTEAMS_METRICS_BIND_ADDR", cfg.MetricsBindAddr)
+	}
+}
+
+func TestLoadConfigMetricsBindAddrIgnoresLegacyFallback(t *testing.T) {
+	t.Setenv("HICLAW_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+	t.Setenv("HICLAW_METRICS_BIND_ADDR", ":18080")
+
+	cfg := LoadConfig()
+	if cfg.MetricsBindAddr != ":8080" {
+		t.Fatalf("MetricsBindAddr = %q, want default :8080 without HICLAW fallback", cfg.MetricsBindAddr)
+	}
+}
+
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	t.Setenv("HICLAW_MANAGER_SPEC", `{
 		"model":"qwen-max",
@@ -112,6 +153,15 @@ func TestLoadConfigPanicsOnInvalidManagerSpec(t *testing.T) {
 	_ = LoadConfig()
 }
 
+func TestLoadConfigAIGatewayEndpointOverride(t *testing.T) {
+	t.Setenv("HICLAW_APIG_ENDPOINT", "apig-vpc.cn-hangzhou.aliyuncs.com")
+
+	cfg := LoadConfig()
+	if cfg.AIGatewayConfig().Endpoint != "apig-vpc.cn-hangzhou.aliyuncs.com" {
+		t.Fatalf("AIGatewayConfig().Endpoint = %q", cfg.AIGatewayConfig().Endpoint)
+	}
+}
+
 func TestLoadConfigPrefersAbstractInfraEnv(t *testing.T) {
 	t.Setenv("HICLAW_KUBE_MODE", "incluster")
 	t.Setenv("HICLAW_AI_GATEWAY_ADMIN_URL", "http://higress-admin.example.com:8001")
@@ -135,6 +185,26 @@ func TestLoadConfigPrefersAbstractInfraEnv(t *testing.T) {
 	}
 	if cfg.WorkerEnv.FSEndpoint != "http://fs.example.com:9000" {
 		t.Fatalf("WorkerEnv.FSEndpoint = %q, want %q", cfg.WorkerEnv.FSEndpoint, "http://fs.example.com:9000")
+	}
+}
+
+func TestMatrixConfigIncludesAppServicePushURL(t *testing.T) {
+	cfg := &Config{
+		MatrixAppServicePushURL: appServicePushURL("http://controller.example.com:8090/"),
+	}
+
+	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://controller.example.com:8090"; got != want {
+		t.Fatalf("AppServicePushURL = %q, want %q", got, want)
+	}
+}
+
+func TestLoadConfigUsesMatrixAppServiceControllerURLOverride(t *testing.T) {
+	t.Setenv("AGENTTEAMS_MATRIX_APPSERVICE_CONTROLLER_URL", "http://matrix-facing-controller:8090/")
+
+	cfg := LoadConfig()
+
+	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://matrix-facing-controller:8090"; got != want {
+		t.Fatalf("AppServicePushURL = %q, want %q", got, want)
 	}
 }
 

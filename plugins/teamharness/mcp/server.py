@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import html
 import hashlib
+import datetime
 import json
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -14,12 +16,16 @@ import sys
 import threading
 import time
 from typing import Any
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 
+from message_tool import MessageToolDeps, message as _message_impl
+from roomflow_tool import RoomDescribeDeps, describe_room as _describe_room_impl
 
-TOOL_NAMES = ["health", "message", "roomflow", "filesync", "projectflow", "taskflow"]
+
+TOOL_NAMES = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow"]
 MESSAGE_TOOL_BLOCKED_ROLES = {"worker", "remote-member"}
 MATRIX_USER_RE = re.compile(r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?")
 MENTION_LOCAL_CHARS = r"a-zA-Z0-9._=+/\-"
@@ -28,9 +34,34 @@ SHORT_MATRIX_MENTION_RE = re.compile(
 )
 MATRIX_ROOM_RE = re.compile(r"^![^:\s]+:[^\s]+$")
 LOW_INFORMATION_ACKS = {"ack", "acknowledged", "ok", "okay", "done", "received", "收到", "好的", "好"}
-MC_ALIAS = "hiclaw"
+MC_ALIAS = "agentteams"
 UNSAFE_SESSION_FILENAME_RE = re.compile(r'[\\/:*?"<>|]')
 SESSION_WRITE_LOCKS: dict[str, threading.Lock] = {}
+SENSITIVE_ARTIFACT_NAME_RE = re.compile(
+    r"(secret|token|cookie|authorization|private[_-]?key|credential|client[_-]?secret)",
+    re.IGNORECASE,
+)
+SENSITIVE_ARTIFACT_TEXT_RE = [
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE),
+    re.compile(r"\bAuthorization\s*:\s*(?:Bearer|Basic)\s+\S+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:access[_-]?key[_-]?secret|client[_-]?secret|secret[_-]?key|api[_-]?key|token)\b"
+        r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{16,}",
+        re.IGNORECASE,
+    ),
+]
+MATRIX_ATTACHMENT_REL_TYPE = "com.agentteams.attachment"
+MATRIX_ATTACHMENT_CONTEXT_FILE = "teamharness-matrix-context.json"
+MATRIX_ATTACHMENT_CONTEXT_TTL_SECONDS = 30 * 60
+ATTACHMENT_PARENT_EVENT_KEYS = (
+    "parentEventId",
+    "parent_event_id",
+    "attachmentParentEventId",
+    "attachment_parent_event_id",
+    "matrixAttachmentParentEventId",
+    "matrix_attachment_parent_event_id",
+)
+TEXT_ARTIFACT_SAMPLE_BYTES = 256 * 1024
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "health": {
@@ -50,6 +81,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "Send a TeamHarness message only when the output must leave the "
             "current runtime conversation: Matrix cross-room sends, external "
             "cross-channel sends, or requester replyRoute/cross-session reports. "
+            "For same-agent Project Work handoff from any requester/source "
+            "session into a Matrix task room, use the PROJECT_REQUESTED "
+            "self-trigger payload with sender.session and target.session; the "
+            "tool sends a Matrix event with a TeamHarness trigger marker so "
+            "the target task room receives it as the current event. "
             "Do not use this tool for normal replies in the current room/session; "
             "answer directly instead."
         ),
@@ -63,20 +99,59 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "channel": {
                     "type": "string",
-                    "description": "matrix for Matrix room sends, or an external channel such as dingtalk.",
+                    "description": "Delivery target channel: matrix for Matrix room sends and PROJECT_REQUESTED task-room triggers, or an external channel such as dingtalk for external sends.",
+                },
+                "sender": {
+                    "type": "object",
+                    "description": (
+                        "Source Matrix account and requester/source session for "
+                        "same-agent self-trigger handoff. For PROJECT_REQUESTED, "
+                        "sender.agent must be the current runtime Matrix user id "
+                        "such as @leader:matrix.local, not a role name like "
+                        "leader or a workspace name like default."
+                    ),
+                    "additionalProperties": True,
+                    "properties": {
+                        "agent": {
+                            "type": "string",
+                            "description": (
+                                "Current runtime Matrix user id for the sender, "
+                                "for example @leader:matrix.local. Must match "
+                                "agentId for PROJECT_REQUESTED self-trigger."
+                            ),
+                        },
+                        "session": {
+                            "type": "object",
+                            "additionalProperties": True,
+                            "properties": {
+                                "channel": {"type": "string"},
+                                "id": {"type": "string"},
+                            },
+                        },
+                    },
                 },
                 "target": {
                     "type": "string",
-                    "description": "Matrix room target for cross-room sends, for example room:!room:domain.",
+                    "description": (
+                        "Matrix room target for cross-room sends, for example "
+                        "room:!room:domain. For PROJECT_REQUESTED self-trigger, "
+                        "pass the target task room as a room:!room:domain string."
+                    ),
                 },
                 "replyRoute": {
                     "type": "object",
-                    "description": "Preferred requester route for cross-session reports.",
+                    "description": (
+                        "Structured requester route for cross-session reports. "
+                        "Required for PROJECT_REQUESTED; do not put the route "
+                        "only in message text."
+                    ),
                     "additionalProperties": True,
                     "properties": {
                         "channel": {"type": "string"},
+                        "target": {"type": "string"},
                         "targetUser": {"type": "string"},
                         "targetSession": {"type": "string"},
+                        "mentionSender": {"type": "boolean"},
                     },
                 },
                 "targetUser": {
@@ -87,13 +162,58 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "External-channel session id; required for non-Matrix sends.",
                 },
+                "agentId": {
+                    "type": "string",
+                    "description": (
+                        "Current runtime Matrix user id, for example "
+                        "@leader:matrix.local. For PROJECT_REQUESTED, this "
+                        "must match sender.agent; do not pass role names such "
+                        "as leader or workspace names such as default."
+                    ),
+                },
+                "type": {
+                    "type": "string",
+                    "enum": ["PROJECT_REQUESTED"],
+                    "description": "Top-level message type alias for trigger messages. PROJECT_REQUESTED is the v1 allowlisted self-trigger type.",
+                },
+                "message": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "required": ["type", "text"],
+                            "additionalProperties": True,
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["PROJECT_REQUESTED"],
+                                    "description": "Trigger type. v1 only allows PROJECT_REQUESTED.",
+                                },
+                                "text": {
+                                    "type": "string",
+                                    "description": "Synthetic current-event body to enqueue in the target Matrix task room.",
+                                },
+                            },
+                        },
+                        {"type": "string"},
+                    ],
+                    "description": (
+                        "Message body. For PROJECT_REQUESTED handoff, pass a "
+                        "JSON object with type and text, not a serialized JSON "
+                        "string. Serialized JSON object strings are accepted "
+                        "only for compatibility."
+                    ),
+                },
                 "text": {
                     "type": "string",
-                    "description": "Message text. message and body aliases are also accepted.",
+                    "description": "Plain message text for ordinary cross-room or external sends. message and body aliases are also accepted.",
                 },
                 "dryRun": {
                     "type": "boolean",
                     "description": "Return the resolved payload without sending.",
+                },
+                "mentionSender": {
+                    "type": "boolean",
+                    "description": "For DingTalk requester reports, mention the original sender when session metadata has sender_staff_id.",
                 },
             },
             "additionalProperties": True,
@@ -103,32 +223,41 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "description": (
             "Manage Matrix task rooms for TeamHarness execution-channel "
             "isolation: create a dedicated room for a project or quick task, "
-            "list joined rooms, or archive a task room. Task rooms are internal "
-            "Leader/Worker execution channels, not requester reply channels."
+            "list joined rooms, describe one Matrix room by room name/topic/tags, "
+            "or archive a task room. Task rooms are internal Leader/Worker "
+            "execution channels, not requester reply channels."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create_task_room", "list_rooms", "archive_room"],
+                    "enum": ["create_task_room", "list_rooms", "describe_room", "archive_room"],
                     "description": "Room operation to perform.",
                 },
                 "taskId": {
                     "type": "string",
-                    "description": "Safe task or project id used in the room topic.",
+                    "description": "Safe task id or compatibility project id used when projectId is omitted.",
+                },
+                "projectId": {
+                    "type": "string",
+                    "description": "Safe project id. Project task rooms are named TASK：<projectId> and reused only by this id.",
                 },
                 "name": {
                     "type": "string",
-                    "description": "Human-readable Matrix room name for create_task_room.",
+                    "description": "Human-readable title for create_task_room. When projectId is present, Matrix room name uses TASK：<projectId>.",
                 },
                 "source": {
                     "type": "string",
-                    "description": "Optional requester/source label such as matrix, dingtalk, or wechat. Non-Matrix sources require sourceRoomId.",
+                    "description": "Optional requester/source label such as matrix, dingtalk, or wechat. Source metadata is kept for context only and does not decide task-room reuse.",
                 },
                 "sourceRoomId": {
                     "type": "string",
-                    "description": "Stable external requester room/conversation id. Required for non-Matrix sources; the same source+sourceRoomId reuses the same task room.",
+                    "description": "Optional original requester room/conversation id kept as metadata for project/requester routing.",
+                },
+                "sender": {
+                    "type": "string",
+                    "description": "Optional original external sender identity kept as metadata. It does not decide task-room reuse.",
                 },
                 "topic": {
                     "type": "string",
@@ -145,7 +274,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "roomId": {
                     "type": "string",
-                    "description": "Matrix room id for archive_room, with or without room: prefix.",
+                    "description": "Matrix room id for describe_room or archive_room, with or without room: prefix.",
+                },
+                "sessionId": {
+                    "type": "string",
+                    "description": "Matrix session id accepted by describe_room, for example matrix:!room:domain.",
                 },
                 "payload": {
                     "type": "object",
@@ -163,7 +296,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "filesync": {
         "description": (
             "Explicitly list, stat, pull, or push TeamHarness shared artifacts "
-            "under shared/projects, shared/tasks, or read-only global-shared. "
+            "under shared/ or read-only global-shared. "
             "Use this for deliberate shared file operations, not periodic "
             "workspace sync or runtime package updates."
         ),
@@ -177,7 +310,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "path": {
                     "type": "string",
-                    "description": "Relative path beginning with shared/projects/, shared/tasks/, or global-shared/.",
+                    "description": "Relative path beginning with shared/ or global-shared/.",
                 },
                 "workspaceDir": {
                     "type": "string",
@@ -201,12 +334,68 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "additionalProperties": True,
         },
     },
+    "artifact": {
+        "description": (
+            "Publish a workspace file to a Matrix room as a standard m.file event. "
+            "Use this for explicit user-visible room files, not shared storage sync. "
+            "The file path must be relative to workspaceDir and must not escape it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["publish_file"],
+                    "description": "Publish one local workspace file to Matrix media and send an m.file event.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative file path, for example reports/summary.md or shared/tasks/task-001/result.md.",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Optional display filename for the Matrix room file. Defaults to the source basename.",
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Matrix room target, for example room:!room:domain.",
+                },
+                "roomId": {
+                    "type": "string",
+                    "description": "Matrix room id target, with or without room: prefix.",
+                },
+                "parentEventId": {
+                    "type": "string",
+                    "description": "Optional Matrix text event id that this file should attach to.",
+                },
+                "attachmentParentEventId": {
+                    "type": "string",
+                    "description": "Alias for parentEventId.",
+                },
+                "matrixAttachmentParentEventId": {
+                    "type": "string",
+                    "description": "Alias for parentEventId.",
+                },
+                "replyRoute": {
+                    "type": "object",
+                    "description": "Optional Matrix replyRoute whose targetSession identifies the target room.",
+                    "additionalProperties": True,
+                },
+                "workspaceDir": {
+                    "type": "string",
+                    "description": "Runtime workspace containing the file.",
+                },
+            },
+            "additionalProperties": True,
+        },
+    },
     "projectflow": {
         "description": (
-            "Manage durable TeamHarness project state only after Project Work "
-            "mode is selected: create projects, plan or update DAG and Loop "
-            "work, query ready nodes, and record loop iterations. Do not use "
-            "for ordinary direct replies or one-off checks."
+            "Manage durable TeamHarness project state only after Quick Task "
+            "or Project Work mode is selected: create quick projects, create "
+            "projects, plan or update DAG and Loop work, query ready nodes, "
+            "and record loop iterations. Do not use for ordinary direct "
+            "replies or one-off checks."
         ),
         "inputSchema": {
             "type": "object",
@@ -257,6 +446,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "boolean",
                     "description": "For accept_task_result, false records a revision state instead of accepting the result.",
                 },
+                "publishArtifacts": {
+                    "type": "boolean",
+                    "description": "For accept_task_result or complete_project, true explicitly publishes project artifacts immediately. Default is false so callers can publish after the requester report message exists.",
+                },
                 "workspaceDir": {
                     "type": "string",
                     "description": "Runtime workspace containing shared/projects.",
@@ -282,7 +475,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "action": {
                     "type": "string",
-                    "enum": ["delegate_task", "ack_task", "submit_task", "check_task"],
+                    "enum": ["delegate_task", "ack_task", "submit_task", "check_task", "cancel_task"],
                     "description": "Task lifecycle operation.",
                 },
                 "projectId": {
@@ -310,6 +503,18 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "array",
                     "description": "Shared deliverable paths included in submit_task.",
                     "items": {"type": "string"},
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Required cancellation reason for cancel_task.",
+                },
+                "replacementTaskId": {
+                    "type": "string",
+                    "description": "Optional replacement task id for cancel_task.",
+                },
+                "assignedTo": {
+                    "type": "string",
+                    "description": "Worker Matrix id or stable member name assigned to delegate_task.",
                 },
                 "workspaceDir": {
                     "type": "string",
@@ -354,6 +559,8 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
         payload = _roomflow(args)
     elif name == "filesync":
         payload = _filesync(args)
+    elif name == "artifact":
+        payload = _artifact(args)
     elif name == "projectflow":
         payload = _projectflow(args)
     elif name == "taskflow":
@@ -606,10 +813,20 @@ def _route_value(arguments: dict[str, Any], route: dict[str, Any], *names: str) 
     return ""
 
 
+def _route_bool(arguments: dict[str, Any], route: dict[str, Any], *names: str, default: bool = False) -> bool:
+    for name in names:
+        if name in route:
+            return _payload_bool(route.get(name), default)
+        if name in arguments:
+            return _payload_bool(arguments.get(name), default)
+    return default
+
+
 def _qwenpaw_message(arguments: dict[str, Any], route: dict[str, Any], channel: str, message: str) -> dict[str, Any]:
     target_user = _route_value(arguments, route, "targetUser", "target_user", "userId", "user_id")
     target_session = _route_value(arguments, route, "targetSession", "target_session", "sessionId", "session_id")
     agent_id = str(arguments.get("agentId") or arguments.get("agent_id") or arguments.get("accountId") or "default").strip()
+    mention_sender = _route_bool(arguments, route, "mentionSender", "mention_sender", "atSender", "at_sender")
     base: dict[str, Any] = {
         "ok": True,
         "tool": "message",
@@ -621,6 +838,8 @@ def _qwenpaw_message(arguments: dict[str, Any], route: dict[str, Any], channel: 
     }
     if message:
         base["message"] = message
+    if mention_sender:
+        base["mentionSender"] = True
     if not target_user:
         return {"ok": False, "tool": "message", "channel": channel, "error": "targetUser is required for non-Matrix channel sends"}
     if not target_session:
@@ -629,6 +848,45 @@ def _qwenpaw_message(arguments: dict[str, Any], route: dict[str, Any], channel: 
         return {"ok": False, "tool": "message", "channel": channel, "error": "message text is required"}
     if arguments.get("dryRun"):
         base["dryRun"] = True
+        return base
+
+    if channel.strip().lower() == "dingtalk" and mention_sender:
+        mention_result = _send_dingtalk_sender_mention(
+            arguments=arguments,
+            route=route,
+            target_user=target_user,
+            target_session=target_session,
+            account_id=agent_id or "default",
+            message=message,
+        )
+        if mention_result.get("ok"):
+            base["response"] = mention_result.get("response", {})
+            base["senderMentioned"] = True
+            base["mentionedSender"] = mention_result.get("mentionedSender", "")
+            try:
+                base["sessionRecorded"] = _record_outbound_to_session(
+                    channel=channel,
+                    user_id=target_user,
+                    session_id=target_session,
+                    text=message,
+                    message_id=None,
+                    account_id=agent_id or "default",
+                    metadata={
+                        "user_id": target_user,
+                        "session_id": target_session,
+                        "sender_mentioned": True,
+                        "mentioned_sender": mention_result.get("mentionedSender", ""),
+                    },
+                )
+            except Exception:
+                base["sessionRecorded"] = False
+                base["warning"] = "message sent, but local session record failed"
+            return base
+        warning = str(mention_result.get("warning") or mention_result.get("error") or "DingTalk sender mention unavailable")
+        base["ok"] = False
+        base["error"] = warning
+        base["delivery"] = {"failed": "dingtalk_sender_mention_required"}
+        base["senderMentionWarning"] = warning
         return base
 
     api_base = (os.getenv("QWENPAW_API_BASE") or os.getenv("COPAW_API_BASE") or "http://127.0.0.1:8088").rstrip("/")
@@ -672,24 +930,76 @@ def _qwenpaw_message(arguments: dict[str, Any], route: dict[str, Any], channel: 
     return base
 
 
-def _session_safe(name: str) -> str:
-    return UNSAFE_SESSION_FILENAME_RE.sub("--", name)
+def _send_dingtalk_sender_mention(
+    *,
+    arguments: dict[str, Any],
+    route: dict[str, Any],
+    target_user: str,
+    target_session: str,
+    account_id: str,
+    message: str,
+) -> dict[str, Any]:
+    entry = _dingtalk_session_webhook_entry(target_user, target_session, account_id)
+    webhook = str(entry.get("webhook") or "").strip()
+    sender_staff_id = str(entry.get("sender_staff_id") or "").strip()
+    explicit_sender = _route_value(arguments, route, "senderStaffId", "sender_staff_id", "senderUserId", "sender_user_id")
+    conversation_type = str(entry.get("conversation_type") or "").strip().lower()
+
+    if not webhook:
+        return {"ok": False, "warning": "DingTalk session webhook not found; sent without sender mention"}
+    if not sender_staff_id:
+        return {"ok": False, "warning": "DingTalk sender_staff_id not found; sent without sender mention"}
+    if explicit_sender and explicit_sender != sender_staff_id:
+        return {"ok": False, "warning": "DingTalk senderStaffId does not match recorded sender; sent without sender mention"}
+    if conversation_type and conversation_type != "group":
+        return {"ok": False, "warning": "DingTalk sender mention is only applied to group conversations"}
+
+    text = f"@{sender_staff_id}\n{message}"
+    body: dict[str, Any]
+    if len(text) > 3500:
+        body = {
+            "msgtype": "text",
+            "text": {"content": text},
+        }
+    else:
+        body = {
+            "msgtype": "markdown",
+            "markdown": {
+                "title": "TeamHarness report",
+                "text": text,
+            },
+        }
+    body["at"] = {"atUserIds": [sender_staff_id]}
+
+    request = urllib.request.Request(
+        webhook,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+        data = json.loads(response_text or "{}")
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")[:200]
+        return {"ok": False, "error": f"DingTalk session webhook error: HTTP {exc.code}: {body_text}"}
+    except (json.JSONDecodeError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"ok": False, "error": f"DingTalk session webhook error: {exc}"}
+
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "DingTalk session webhook returned a non-object response"}
+    errcode = data.get("errcode")
+    if errcode not in (None, 0, "0"):
+        return {"ok": False, "error": f"DingTalk session webhook rejected message: {data}"}
+    return {
+        "ok": True,
+        "response": data,
+        "mentionedSender": sender_staff_id,
+    }
 
 
-def _qwenpaw_working_dir() -> Path | None:
-    for name in ("QWENPAW_WORKING_DIR", "COPAW_WORKING_DIR"):
-        raw = os.getenv(name, "").strip()
-        if raw:
-            return Path(raw).expanduser()
-    for name in ("HICLAW_AGENT_HOME", "HICLAW_WORKER_HOME", "HOME"):
-        raw = os.getenv(name, "").strip()
-        if raw:
-            home = Path(raw).expanduser()
-            return home / ".qwenpaw"
-    return None
-
-
-def _channel_session_path(channel: str, user_id: str, session_id: str, account_id: str) -> Path | None:
+def _qwenpaw_workspace_dir(account_id: str) -> Path | None:
     working_dir = _qwenpaw_working_dir()
     if working_dir is None:
         return None
@@ -700,6 +1010,57 @@ def _channel_session_path(channel: str, user_id: str, session_id: str, account_i
         default_workspace = working_dir / "workspaces" / "default"
         if default_workspace.exists():
             workspace_dir = default_workspace
+    return workspace_dir
+
+
+def _dingtalk_session_webhook_entry(target_user: str, target_session: str, account_id: str) -> dict[str, Any]:
+    workspace_dir = _qwenpaw_workspace_dir(account_id)
+    if workspace_dir is None:
+        return {}
+
+    store_path = workspace_dir / "dingtalk_session_webhooks.json"
+    try:
+        store = _read_json(store_path)
+    except Exception:
+        return {}
+
+    keys = []
+    if target_user and target_session:
+        keys.append(f"dingtalk:sw:{target_user}_{target_session}")
+    if target_session:
+        keys.append(f"dingtalk:sw:{target_session}")
+        keys.append(target_session)
+
+    for key in keys:
+        value = store.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str):
+            return {"webhook": value}
+    return {}
+
+
+def _session_safe(name: str) -> str:
+    return UNSAFE_SESSION_FILENAME_RE.sub("--", name)
+
+
+def _qwenpaw_working_dir() -> Path | None:
+    for name in ("QWENPAW_WORKING_DIR", "COPAW_WORKING_DIR"):
+        raw = os.getenv(name, "").strip()
+        if raw:
+            return Path(raw).expanduser()
+    for name in ("AGENTTEAMS_AGENT_HOME", "AGENTTEAMS_WORKER_HOME", "HOME"):
+        raw = os.getenv(name, "").strip()
+        if raw:
+            home = Path(raw).expanduser()
+            return home / ".qwenpaw"
+    return None
+
+
+def _channel_session_path(channel: str, user_id: str, session_id: str, account_id: str) -> Path | None:
+    workspace_dir = _qwenpaw_workspace_dir(account_id)
+    if workspace_dir is None:
+        return None
 
     filename = f"{_session_safe(user_id)}_{_session_safe(session_id)}.json" if user_id else f"{_session_safe(session_id)}.json"
     channel_dir = _session_safe(channel.strip().lower() or "default")
@@ -788,7 +1149,7 @@ def _record_outbound_to_session(
 
 
 def _record_matrix_outbound_to_session(room_id: str, text: str, message_id: str | None, account_id: str) -> bool:
-    return _record_outbound_to_session(
+    recorded = _record_outbound_to_session(
         channel="matrix",
         user_id=room_id,
         session_id=f"matrix:{room_id}",
@@ -797,55 +1158,296 @@ def _record_matrix_outbound_to_session(room_id: str, text: str, message_id: str 
         account_id=account_id,
         metadata={"room_id": room_id},
     )
+    _write_matrix_attachment_context_parent_event_id(room_id, message_id)
+    return recorded
 
 
 def _message(arguments: dict[str, Any]) -> dict[str, Any]:
-    action = arguments.get("action") or "send"
-    route = _reply_route(arguments)
-    channel = str(route.get("channel") or arguments.get("channel") or "matrix")
-    if action != "send":
-        return {"ok": False, "tool": "message", "error": f"unsupported action: {action}"}
-    if channel != "matrix":
-        message = str(arguments.get("message") or arguments.get("text") or arguments.get("body") or "")
-        return _qwenpaw_message(arguments, route, channel, message)
+    return _message_impl(
+        arguments,
+        MessageToolDeps(
+            reply_route=_reply_route,
+            qwenpaw_message=_qwenpaw_message,
+            matrix_target=_matrix_target,
+            mentions=_mentions,
+            ping_pong_error=_ping_pong_error,
+            matrix_content=_matrix_content,
+            record_matrix_outbound_to_session=_record_matrix_outbound_to_session,
+        ),
+    )
 
-    message = str(arguments.get("message") or arguments.get("text") or arguments.get("body") or "")
-    try:
-        target = arguments.get("target") or arguments.get("room_id") or arguments.get("roomId") or ""
-        target_kind, target_id = _matrix_target(str(target))
-    except ValueError as exc:
-        return {"ok": False, "tool": "message", "error": str(exc)}
-    if target_kind == "user":
-        return {"ok": False, "tool": "message", "error": "Matrix user targets are not supported yet"}
 
-    mentions = _mentions(message, target_id)
-    blocked = _ping_pong_error(message, mentions)
-    if blocked:
-        return {"ok": False, "tool": "message", "error": blocked}
-
-    content = _matrix_content(message, mentions)
-    base: dict[str, Any] = {
-        "ok": True,
-        "tool": "message",
-        "action": "send",
-        "channel": "matrix",
-        "target": f"room:{target_id}",
-        "targetKind": "room",
-        "mentions": mentions,
-        "content": content,
-    }
-    if arguments.get("dryRun"):
-        base["dryRun"] = True
-        return base
-
-    homeserver = os.getenv("HICLAW_MATRIX_URL", "").rstrip("/")
-    token = os.getenv("HICLAW_WORKER_MATRIX_TOKEN", "")
+def _matrix_env(tool: str) -> tuple[str, str]:
+    homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
+    token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
     if not homeserver or not token:
-        return {"ok": False, "tool": "message", "error": "HICLAW_MATRIX_URL and HICLAW_WORKER_MATRIX_TOKEN are required"}
+        raise ValueError("AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required")
+    return homeserver, token
 
-    room_id = urllib.parse.quote(target_id, safe="")
-    txn_id = f"teamharness-{os.getpid()}-{int(time.time() * 1000)}"
-    url = f"{homeserver}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}"
+
+def _attachment_parent_event_id(*sources: dict[str, Any]) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ATTACHMENT_PARENT_EVENT_KEYS:
+            value = str(source.get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _matrix_attachment_context_path() -> Path | None:
+    raw = os.getenv("TEAMHARNESS_MATRIX_CONTEXT_FILE", "").strip()
+    if raw:
+        return Path(raw)
+    qwenpaw_dir = os.getenv("QWENPAW_WORKING_DIR", "").strip()
+    if qwenpaw_dir:
+        return Path(qwenpaw_dir) / MATRIX_ATTACHMENT_CONTEXT_FILE
+    return None
+
+
+def _matrix_attachment_context_parent_event_id(room_id: str) -> str:
+    path = _matrix_attachment_context_path()
+    if not path or not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    rooms = data.get("rooms")
+    if not isinstance(rooms, dict):
+        return ""
+    record = rooms.get(_canonical_room_id(room_id)) or rooms.get(room_id)
+    if not isinstance(record, dict):
+        return ""
+    try:
+        updated_at = float(record.get("updatedAt") or record.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        updated_at = 0
+    if updated_at and time.time() - updated_at > MATRIX_ATTACHMENT_CONTEXT_TTL_SECONDS:
+        return ""
+    for key in ("attachmentParentEventId", "parentEventId", "eventId", "event_id"):
+        value = str(record.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _write_matrix_attachment_context_parent_event_id(room_id: str, event_id: str | None) -> bool:
+    parent_event_id = str(event_id or "").strip()
+    if not parent_event_id:
+        return False
+    path = _matrix_attachment_context_path()
+    if not path:
+        return False
+    data: dict[str, Any] = {}
+    try:
+        if path.is_file():
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    rooms = data.get("rooms")
+    if not isinstance(rooms, dict):
+        rooms = {}
+        data["rooms"] = rooms
+    rooms[_canonical_room_id(room_id)] = {
+        "attachmentParentEventId": parent_event_id,
+        "eventId": parent_event_id,
+        "updatedAt": time.time(),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        return False
+    return True
+
+
+def _artifact_publish_result(source_path: str, filename: str = "", parent_event_id: str = "") -> dict[str, Any]:
+    return {
+        "sourcePath": source_path,
+        "filename": filename,
+        "size": None,
+        "mimetype": "",
+        "mxcUri": "",
+        "eventId": "",
+        "parentEventId": parent_event_id,
+        "status": "skipped",
+        "error": "",
+    }
+
+
+def _path_is_under(normalized: str, prefix: str) -> bool:
+    return normalized == prefix or normalized.startswith(f"{prefix}/")
+
+
+def _shared_dir_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for env_key in ("TEAMHARNESS_SHARED_DIR", "AGENTTEAMS_SHARED_DIR"):
+        raw = os.getenv(env_key, "").strip()
+        if raw:
+            candidates.append(Path(raw).expanduser())
+    return candidates
+
+
+def _artifact_is_under_runtime_shared(workspace: Path, local_path: Path, normalized: str) -> bool:
+    if not _path_is_under(normalized, "shared"):
+        return False
+    candidates = _shared_dir_candidates()
+    if not candidates:
+        return False
+    try:
+        workspace_shared = (workspace / "shared").resolve()
+        local_resolved = local_path.resolve()
+    except (OSError, RuntimeError):
+        return False
+    for shared_dir in candidates:
+        try:
+            shared_resolved = shared_dir.resolve()
+            local_resolved.relative_to(shared_resolved)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if workspace_shared == shared_resolved:
+            return True
+    return False
+
+
+def _normalize_workspace_artifact_path(raw_path: str) -> tuple[str, bool]:
+    raw = (raw_path or "").strip()
+    if not raw or raw.startswith("/") or "\\" in raw:
+        raise ValueError("artifact path must be a relative workspace path")
+    parts = raw.strip("/").split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("artifact path must be a relative workspace path without '.', '..', or empty segments")
+    is_directory = raw.endswith("/")
+    normalized = "/".join(parts)
+    if is_directory:
+        normalized += "/"
+    return normalized, is_directory
+
+
+def _resolve_workspace_artifact_path(arguments: dict[str, Any], source_path: str, expected_prefix: str) -> tuple[str, Path]:
+    normalized, is_directory = _normalize_workspace_artifact_path(source_path)
+    if is_directory:
+        raise ValueError("artifact path must be a file")
+    if expected_prefix and not _path_is_under(normalized, expected_prefix):
+        raise ValueError(f"artifact path must be under {expected_prefix}/")
+    workspace = _workspace_dir(arguments)
+    parts = normalized.split("/")
+    local_path = workspace / Path(*parts)
+    try:
+        local_path.resolve().relative_to(workspace.resolve())
+    except ValueError as exc:
+        if _artifact_is_under_runtime_shared(workspace, local_path, normalized):
+            return normalized, local_path
+        raise ValueError("artifact path must stay under workspace shared/") from exc
+    return normalized, local_path
+
+
+def _artifact_mimetype(path: Path) -> str:
+    return mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+
+
+def _artifact_is_text(path: Path, mimetype: str) -> bool:
+    if mimetype.startswith("text/"):
+        return True
+    if mimetype in {
+        "application/json",
+        "application/javascript",
+        "application/xml",
+        "application/x-yaml",
+        "application/yaml",
+        "application/toml",
+    }:
+        return True
+    return path.suffix.lower() in {
+        ".cfg",
+        ".conf",
+        ".css",
+        ".csv",
+        ".html",
+        ".ini",
+        ".js",
+        ".json",
+        ".jsx",
+        ".log",
+        ".md",
+        ".py",
+        ".rb",
+        ".sh",
+        ".sql",
+        ".toml",
+        ".ts",
+        ".tsx",
+        ".txt",
+        ".xml",
+        ".yaml",
+        ".yml",
+    }
+
+
+def _artifact_text_has_sensitive_content(path: Path, mimetype: str) -> bool:
+    if not _artifact_is_text(path, mimetype):
+        return False
+    sample = path.read_bytes()[:TEXT_ARTIFACT_SAMPLE_BYTES]
+    if b"\x00" in sample:
+        return False
+    text = sample.decode("utf-8", errors="replace")
+    return any(pattern.search(text) for pattern in SENSITIVE_ARTIFACT_TEXT_RE)
+
+
+def _matrix_upload_artifact(homeserver: str, token: str, path: Path, filename: str, mimetype: str) -> str:
+    url = f"{homeserver}/_matrix/media/v3/upload?filename={urllib.parse.quote(filename)}"
+    request = urllib.request.Request(
+        url,
+        data=path.read_bytes(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": mimetype,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8") or "{}")
+    mxc_uri = str(data.get("content_uri") or "").strip()
+    if not mxc_uri:
+        raise ValueError("Matrix media upload response missing content_uri")
+    return mxc_uri
+
+
+def _matrix_send_file_event(
+    homeserver: str,
+    token: str,
+    room_id: str,
+    filename: str,
+    mxc_uri: str,
+    size: int,
+    mimetype: str,
+    parent_event_id: str = "",
+) -> str:
+    content = {
+        "msgtype": "m.file",
+        "body": filename,
+        "url": mxc_uri,
+        "info": {
+            "size": size,
+            "mimetype": mimetype,
+        },
+    }
+    if parent_event_id:
+        content["m.relates_to"] = {
+            "rel_type": MATRIX_ATTACHMENT_REL_TYPE,
+            "event_id": parent_event_id,
+        }
+    encoded_room_id = urllib.parse.quote(_canonical_room_id(room_id), safe="")
+    txn_id = f"teamharness-file-{os.getpid()}-{int(time.time() * 1000)}-{uuid.uuid4().hex}"
+    url = f"{homeserver}/_matrix/client/v3/rooms/{encoded_room_id}/send/m.room.message/{txn_id}"
     request = urllib.request.Request(
         url,
         data=json.dumps(content).encode("utf-8"),
@@ -855,47 +1457,265 @@ def _message(arguments: dict[str, Any]) -> dict[str, Any]:
         },
         method="PUT",
     )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8") or "{}")
+    event_id = str(data.get("event_id") or "").strip()
+    if not event_id:
+        raise ValueError("Matrix file event response missing event_id")
+    return event_id
+
+
+def _publish_workspace_artifact(
+    arguments: dict[str, Any],
+    *,
+    room_id: str,
+    source_path: str,
+    filename: str,
+    expected_prefix: str,
+    parent_event_id: str = "",
+) -> dict[str, Any]:
+    parent_event_id = str(parent_event_id or "").strip()
+    result = _artifact_publish_result(str(source_path), filename, parent_event_id)
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8") or "{}")
-        base["messageId"] = data.get("event_id")
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:200]
-        return {"ok": False, "tool": "message", "error": f"Matrix API error: HTTP {exc.code}: {body}"}
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return {"ok": False, "tool": "message", "error": f"Matrix API error: {exc}"}
-    account_id = str(arguments.get("agentId") or arguments.get("agent_id") or arguments.get("accountId") or arguments.get("account_id") or "default").strip() or "default"
+        normalized, path = _resolve_workspace_artifact_path(arguments, str(source_path), expected_prefix)
+        result["sourcePath"] = normalized
+    except ValueError as exc:
+        result["status"] = "failed"
+        result["error"] = str(exc)
+        return result
+
+    if not path.exists():
+        result["status"] = "failed"
+        result["error"] = "artifact file not found"
+        return result
+    if path.is_dir():
+        result["status"] = "failed"
+        result["error"] = "artifact path must be a file"
+        return result
+
+    if SENSITIVE_ARTIFACT_NAME_RE.search(result["sourcePath"]) or SENSITIVE_ARTIFACT_NAME_RE.search(filename):
+        result["status"] = "failed"
+        result["error"] = "artifact appears sensitive and was not published"
+        return result
+
+    size = path.stat().st_size
+    mimetype = _artifact_mimetype(path)
+    result["size"] = size
+    result["mimetype"] = mimetype
+
     try:
-        base["sessionRecorded"] = _record_matrix_outbound_to_session(
-            target_id,
-            message,
-            base.get("messageId"),
-            account_id,
+        if _artifact_text_has_sensitive_content(path, mimetype):
+            result["status"] = "failed"
+            result["error"] = "artifact appears sensitive and was not published"
+            return result
+    except OSError:
+        result["status"] = "failed"
+        result["error"] = "artifact file could not be read"
+        return result
+
+    canonical_room_id = _canonical_room_id(room_id)
+    if not canonical_room_id:
+        result["status"] = "skipped"
+        result["error"] = "Matrix room is unavailable"
+        return result
+    if not parent_event_id:
+        parent_event_id = _matrix_attachment_context_parent_event_id(canonical_room_id)
+        result["parentEventId"] = parent_event_id
+
+    try:
+        homeserver, token = _matrix_env("artifact publish")
+    except ValueError as exc:
+        result["status"] = "skipped"
+        result["error"] = str(exc)
+        return result
+
+    try:
+        mxc_uri = _matrix_upload_artifact(homeserver, token, path, filename, mimetype)
+        event_id = _matrix_send_file_event(
+            homeserver,
+            token,
+            canonical_room_id,
+            filename,
+            mxc_uri,
+            size,
+            mimetype,
+            parent_event_id,
         )
-    except Exception:
-        base["sessionRecorded"] = False
-        base["warning"] = "message sent, but local session record failed"
-    return base
+    except urllib.error.HTTPError as exc:
+        result["status"] = "failed"
+        result["error"] = f"Matrix artifact publish failed: HTTP {exc.code}"
+        return result
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        result["status"] = "failed"
+        result["error"] = f"Matrix artifact publish failed: {exc}"
+        return result
+
+    result["mxcUri"] = mxc_uri
+    result["eventId"] = event_id
+    result["status"] = "published"
+    return result
 
 
-def _matrix_env(tool: str) -> tuple[str, str]:
-    homeserver = os.getenv("HICLAW_MATRIX_URL", "").rstrip("/")
-    token = os.getenv("HICLAW_WORKER_MATRIX_TOKEN", "")
-    if not homeserver or not token:
-        raise ValueError("HICLAW_MATRIX_URL and HICLAW_WORKER_MATRIX_TOKEN are required")
-    return homeserver, token
+def _artifact_room_id(arguments: dict[str, Any]) -> str:
+    route = _reply_route(arguments)
+    target = (
+        arguments.get("target")
+        or arguments.get("roomId")
+        or arguments.get("room_id")
+        or route.get("target")
+        or route.get("roomId")
+        or route.get("room_id")
+        or route.get("targetRoom")
+        or route.get("target_room")
+        or route.get("targetSession")
+        or route.get("target_session")
+        or ""
+    )
+    target_kind, target_id = _matrix_target(str(target))
+    if target_kind != "room":
+        raise ValueError("artifact target must be a Matrix room")
+    return target_id
+
+
+def _artifact(arguments: dict[str, Any]) -> dict[str, Any]:
+    action = str(arguments.get("action") or "publish_file").strip()
+    if action != "publish_file":
+        return {"ok": False, "tool": "artifact", "action": action, "error": f"unsupported action: {action}"}
+    source_path = str(
+        arguments.get("path")
+        or arguments.get("sourcePath")
+        or arguments.get("source_path")
+        or arguments.get("file")
+        or ""
+    ).strip()
+    if not source_path:
+        return {"ok": False, "tool": "artifact", "action": action, "error": "path is required"}
+    filename = str(arguments.get("filename") or arguments.get("displayName") or arguments.get("display_name") or "").strip()
+    if not filename:
+        filename = Path(source_path.rstrip("/")).name or "artifact"
+    try:
+        room_id = _artifact_room_id(arguments)
+    except ValueError as exc:
+        return {"ok": False, "tool": "artifact", "action": action, "error": str(exc)}
+    parent_event_id = (
+        _attachment_parent_event_id(arguments)
+        or _matrix_attachment_context_parent_event_id(room_id)
+    )
+    artifact = _publish_workspace_artifact(
+        arguments,
+        room_id=room_id,
+        source_path=source_path,
+        filename=filename,
+        expected_prefix="",
+        parent_event_id=parent_event_id,
+    )
+    return {
+        "ok": artifact.get("status") == "published",
+        "tool": "artifact",
+        "action": action,
+        "artifact": artifact,
+        "error": artifact.get("error") or "",
+    }
+
+
+def _task_artifact_filename(task_id: str, source_path: str, result_artifact: bool = False) -> str:
+    if result_artifact:
+        suffix = Path(source_path).suffix or ".md"
+        return f"{task_id}-result{suffix}"
+    name = Path(str(source_path).rstrip("/")).name or "artifact"
+    return f"{task_id}-{name}"
+
+
+def _publish_task_artifacts(
+    arguments: dict[str, Any],
+    task: dict[str, Any],
+    task_id: str,
+    deliverables: list[Any],
+    parent_event_id: str = "",
+) -> list[dict[str, Any]]:
+    room_id = str(task.get("room_id") or "")
+    expected_prefix = f"shared/tasks/{task_id}"
+    result_source = f"{expected_prefix}/result.md"
+    artifacts: list[tuple[str, str]] = []
+    try:
+        _normalized_result, result_path = _resolve_workspace_artifact_path(arguments, result_source, expected_prefix)
+        if result_path.is_file():
+            artifacts.append((result_source, _task_artifact_filename(task_id, "result.md", result_artifact=True)))
+    except ValueError:
+        pass
+    seen = {source for source, _filename in artifacts}
+    for item in deliverables:
+        source = str(item or "").strip()
+        if not source:
+            continue
+        try:
+            normalized, is_directory = _normalize_shared_path(source, "stat")
+            seen_key = normalized.rstrip("/") + ("/" if is_directory else "")
+        except ValueError:
+            seen_key = source
+        if seen_key in seen:
+            continue
+        seen.add(seen_key)
+        artifacts.append((source, _task_artifact_filename(task_id, source)))
+    return [
+        _publish_workspace_artifact(
+            arguments,
+            room_id=room_id,
+            source_path=source,
+            filename=filename,
+            expected_prefix=expected_prefix,
+            parent_event_id=parent_event_id,
+        )
+        for source, filename in artifacts
+    ]
+
+
+def _project_artifact_room(project: dict[str, Any], task: dict[str, Any]) -> str:
+    reply_route = project.get("reply_route") if isinstance(project.get("reply_route"), dict) else {}
+    if str(reply_route.get("channel") or "").strip().lower() == "matrix":
+        target_session = str(reply_route.get("target_session") or "").strip()
+        if target_session:
+            return target_session
+    room_id = str(task.get("room_id") or "").strip()
+    if room_id:
+        return room_id
+    source_room_id = str(project.get("source_room_id") or "").strip()
+    if MATRIX_ROOM_RE.fullmatch(_canonical_room_id(source_room_id)):
+        return source_room_id
+    return ""
+
+
+def _publish_project_artifacts(
+    arguments: dict[str, Any],
+    project: dict[str, Any],
+    project_id: str,
+    task_id: str,
+    parent_event_id: str = "",
+) -> list[dict[str, Any]]:
+    task = _read_json(_task_state_path(arguments, task_id)) if task_id else {}
+    source_path = f"shared/projects/{project_id}/result.md"
+    return [
+        _publish_workspace_artifact(
+            arguments,
+            room_id=_project_artifact_room(project, task),
+            source_path=source_path,
+            filename=f"{project_id}-project-result.md",
+            expected_prefix=f"shared/projects/{project_id}",
+            parent_event_id=parent_event_id,
+        )
+    ]
 
 
 def _matrix_user_id() -> str:
-    explicit = os.getenv("HICLAW_MATRIX_USER_ID", "").strip()
+    explicit = os.getenv("AGENTTEAMS_MATRIX_USER_ID", "").strip()
     if explicit:
         return explicit
     member = _section(_load_runtime_config(), "member")
     matrix_user_id = str(member.get("matrixUserId") or member.get("matrix_user_id") or "").strip()
     if matrix_user_id:
         return matrix_user_id
-    name = os.getenv("HICLAW_WORKER_NAME", "").strip()
-    domain = os.getenv("HICLAW_MATRIX_DOMAIN", "").strip()
+    name = os.getenv("AGENTTEAMS_WORKER_NAME", "").strip()
+    domain = os.getenv("AGENTTEAMS_MATRIX_DOMAIN", "").strip()
     if name and domain:
         return f"@{name}:{domain}"
     return ""
@@ -918,6 +1738,80 @@ def _string_list(value: Any) -> list[str]:
     return []
 
 
+def _roomflow_room_meta() -> dict[str, Any]:
+    config = _load_runtime_config()
+    team = _section(config, "team")
+    meta: dict[str, Any] = {
+        "schemaVersion": 1,
+        "roomKind": "task_room",
+        "lifecycle": "ephemeral",
+        "createdBy": "teamharness",
+    }
+    team_name = str(team.get("name") or "").strip()
+    if team_name:
+        meta["teamName"] = team_name
+
+    admin = _section(team, "admin")
+    admin_user_id = str(admin.get("matrixUserId") or admin.get("matrix_user_id") or "").strip()
+    if admin_user_id:
+        admin_meta: dict[str, Any] = {"userId": admin_user_id}
+        admin_name = str(admin.get("name") or admin.get("runtimeName") or admin.get("runtime_name") or "").strip()
+        if admin_name:
+            admin_meta["name"] = admin_name
+        meta["teamAdmin"] = admin_meta
+
+    members = team.get("members")
+    if isinstance(members, list):
+        worker_members: list[dict[str, Any]] = []
+        human_members: list[dict[str, Any]] = []
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            user_id = str(member.get("matrixUserId") or member.get("matrix_user_id") or "").strip()
+            if not user_id:
+                continue
+            role = str(member.get("role") or "").strip().lower().replace("_", "-")
+            display_name = str(member.get("name") or member.get("runtimeName") or member.get("runtime_name") or "").strip()
+            if role in {"team-leader", "teamleader", "leader"}:
+                if "leaderWorker" not in meta:
+                    leader_meta: dict[str, Any] = {"userId": user_id}
+                    if display_name:
+                        leader_meta["workerName"] = display_name
+                    meta["leaderWorker"] = leader_meta
+                continue
+            if role == "worker":
+                worker_meta: dict[str, Any] = {"userId": user_id}
+                if display_name:
+                    worker_meta["workerName"] = display_name
+                worker_members.append(worker_meta)
+                continue
+            human_meta: dict[str, Any] = {"userId": user_id}
+            if display_name:
+                human_meta["name"] = display_name
+            human_members.append(human_meta)
+        if worker_members:
+            meta["workerMembers"] = worker_members
+        if human_members:
+            meta["humanMembers"] = human_members
+    return meta
+
+
+def _write_matrix_room_meta(room_id: str, content: dict[str, Any]) -> None:
+    homeserver, token = _matrix_env("roomflow")
+    encoded_room = urllib.parse.quote(room_id, safe="")
+    request = urllib.request.Request(
+        f"{homeserver}/_matrix/client/v3/rooms/{encoded_room}/state/room.meta/",
+        data=json.dumps(content).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        response.read()
+
+
 def _roomflow(arguments: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "create_task_room")
     payload = _payload(arguments)
@@ -925,19 +1819,41 @@ def _roomflow(arguments: dict[str, Any]) -> dict[str, Any]:
         return _create_task_room(arguments, payload)
     if action == "list_rooms":
         return _list_rooms(arguments)
+    if action == "describe_room":
+        return _describe_room_impl(
+            arguments,
+            payload,
+            RoomDescribeDeps(
+                matrix_env=_matrix_env,
+                matrix_user_id=_matrix_user_id,
+                canonical_room_id=_canonical_room_id,
+            ),
+        )
     if action == "archive_room":
         return _archive_room(arguments, payload)
     return {"ok": False, "tool": "roomflow", "action": action, "error": f"unsupported action: {action}"}
 
 
+def _task_room_name(value: Any) -> str:
+    name = str(value or "").strip()
+    lowered = name.lower()
+    for prefix in ("task:", "task\uff1a"):
+        if lowered.startswith(prefix):
+            name = name[len(prefix) :].strip()
+            break
+    return f"TASK\uff1a{name}" if name else ""
+
+
 def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     try:
-        task_id = _safe_id(payload.get("taskId") or payload.get("projectId"), "taskId")
+        raw_project_id = payload.get("projectId") or payload.get("project_id") or payload.get("taskId")
+        project_id = _safe_id(raw_project_id, "projectId")
     except ValueError as exc:
         return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": str(exc)}
-    name = str(payload.get("name") or payload.get("title") or "").strip()
+    task_id = project_id
+    name = _task_room_name(project_id)
     if not name:
-        return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": "name is required"}
+        return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": "projectId is required"}
     source = str(payload.get("source") or "").strip()
     topic = str(payload.get("topic") or "").strip()
     if not topic:
@@ -963,14 +1879,16 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
     }
     if power_users:
         body["power_level_content_override"] = {"users": power_users}
-    binding = _roomflow_source_room_binding(arguments, payload)
+    binding = _roomflow_project_room_binding(arguments, payload, project_id)
     if binding.get("error"):
         return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": binding["error"]}
+    room_meta = _roomflow_room_meta()
 
     base: dict[str, Any] = {
         "ok": True,
         "tool": "roomflow",
         "action": "create_task_room",
+        "projectId": project_id,
         "taskId": task_id,
         "name": name,
         "source": source,
@@ -978,10 +1896,12 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
         "invite": invite,
         "content": body,
     }
-    if binding.get("sourceRoomKey"):
-        base["sourceRoomKey"] = binding["sourceRoomKey"]
+    if binding.get("projectRoomKey"):
+        base["projectRoomKey"] = binding["projectRoomKey"]
     if binding.get("sourceRoomId"):
         base["sourceRoomId"] = binding["sourceRoomId"]
+    if binding.get("sender"):
+        base["sender"] = binding["sender"]
     existing_room_id = _bound_room_id(binding)
     if existing_room_id:
         base["roomId"] = existing_room_id
@@ -992,6 +1912,7 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
             return base
         try:
             _ensure_matrix_room_members(existing_room_id, invite)
+            _write_matrix_room_meta(existing_room_id, room_meta)
         except ValueError as exc:
             return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": str(exc)}
         except urllib.error.HTTPError as exc:
@@ -1031,27 +1952,34 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
         return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": "Matrix createRoom response missing room_id", "response": data}
     base["roomId"] = room_id
     base["target"] = f"room:{room_id}"
-    _write_roomflow_source_room_binding(binding, room_id, base)
+    try:
+        _write_matrix_room_meta(room_id, room_meta)
+    except urllib.error.HTTPError as exc:
+        error = exc.read().decode("utf-8", errors="replace")[:200]
+        return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": f"Matrix API error: HTTP {exc.code}: {error}"}
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": f"Matrix API error: {exc}"}
+    _write_roomflow_project_room_binding(binding, room_id, base)
     return base
 
 
-def _roomflow_source_room_binding(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _roomflow_project_room_binding(arguments: dict[str, Any], payload: dict[str, Any], project_id: str) -> dict[str, Any]:
     source, source_room_id = _external_source_room_ref(payload)
-    if not source:
-        return {}
-    if not source_room_id:
-        return {"error": "sourceRoomId is required for non-Matrix source task rooms"}
-    source_room_key = f"{source}:{source_room_id}"
+    sender = _external_sender_ref(payload)
+    project_room_key = f"project:{project_id}"
     binding: dict[str, Any] = {
+        "projectId": project_id,
         "source": source,
         "sourceRoomId": source_room_id,
-        "sourceRoomKey": source_room_key,
+        "projectRoomKey": project_room_key,
     }
+    if sender:
+        binding["sender"] = sender
     workspace_dir = _optional_workspace_dir(arguments)
     if not workspace_dir:
-        return {"error": "workspaceDir is required to persist external source task room bindings"}
-    digest = hashlib.sha256(source_room_key.encode("utf-8")).hexdigest()[:16]
-    path = workspace_dir / "shared" / "roomflow" / "source-rooms" / f"{source}-{digest}.json"
+        return binding
+    digest = hashlib.sha256(project_room_key.encode("utf-8")).hexdigest()[:16]
+    path = workspace_dir / "shared" / "roomflow" / "project-rooms" / f"{project_id}-{digest}.json"
     record = _read_json(path)
     binding["path"] = path
     binding["record"] = record
@@ -1065,6 +1993,31 @@ def _external_source_room_ref(payload: dict[str, Any]) -> tuple[str, str]:
     return source, str(payload.get("sourceRoomId") or payload.get("source_room_id") or "").strip()
 
 
+def _external_sender_ref(payload: dict[str, Any]) -> str:
+    for key in (
+        "sender",
+        "senderId",
+        "sender_id",
+        "senderUserId",
+        "sender_user_id",
+        "sourceUserId",
+        "source_user_id",
+        "targetUser",
+        "target_user",
+    ):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    route = payload.get("replyRoute") or payload.get("reply_route")
+    if isinstance(route, dict):
+        for key in ("targetUser", "target_user", "sender", "senderId", "sender_id"):
+            value = str(route.get(key) or "").strip()
+            if value:
+                return value
+    requester_route = _reply_route_from_requester(payload.get("requester"))
+    return str(requester_route.get("target_user") or "").strip()
+
+
 def _bound_room_id(binding: dict[str, Any]) -> str:
     record = binding.get("record")
     if not isinstance(record, dict):
@@ -1072,16 +2025,17 @@ def _bound_room_id(binding: dict[str, Any]) -> str:
     return str(record.get("roomId") or record.get("room_id") or "").strip()
 
 
-def _write_roomflow_source_room_binding(binding: dict[str, Any], room_id: str, base: dict[str, Any]) -> None:
+def _write_roomflow_project_room_binding(binding: dict[str, Any], room_id: str, base: dict[str, Any]) -> None:
     path = binding.get("path")
     if not isinstance(path, Path):
         return
     record = dict(binding.get("record") if isinstance(binding.get("record"), dict) else {})
     record.update(
         {
+            "projectId": binding.get("projectId"),
             "source": binding.get("source"),
             "sourceRoomId": binding.get("sourceRoomId"),
-            "sourceRoomKey": binding.get("sourceRoomKey"),
+            "projectRoomKey": binding.get("projectRoomKey"),
             "roomId": room_id,
             "target": f"room:{room_id}",
             "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1089,6 +2043,8 @@ def _write_roomflow_source_room_binding(binding: dict[str, Any], room_id: str, b
             "name": base.get("name"),
         }
     )
+    if binding.get("sender"):
+        record["sender"] = binding.get("sender")
     if "createdAt" not in record:
         record["createdAt"] = record["updatedAt"]
     _write_json(path, record)
@@ -1319,7 +2275,7 @@ def _runtime_team_room_id() -> str:
 
 
 def _storage_root_prefix() -> str:
-    return os.getenv("HICLAW_STORAGE_PREFIX", "").strip().strip("/")
+    return os.getenv("AGENTTEAMS_STORAGE_PREFIX", "").strip().strip("/")
 
 
 def _mc_host_url(endpoint: str, access_key: str, secret_key: str) -> str:
@@ -1366,9 +2322,9 @@ def _filesync_mc_env(remote: str) -> tuple[dict[str, str], str | None]:
     if env.get(alias_env):
         return env, None
 
-    endpoint = env.get("HICLAW_FS_ENDPOINT", "").strip()
-    access_key = env.get("HICLAW_FS_ACCESS_KEY", "").strip()
-    secret_key = env.get("HICLAW_FS_SECRET_KEY", "").strip()
+    endpoint = env.get("AGENTTEAMS_FS_ENDPOINT", "").strip()
+    access_key = env.get("AGENTTEAMS_FS_ACCESS_KEY", "").strip()
+    secret_key = env.get("AGENTTEAMS_FS_SECRET_KEY", "").strip()
     if endpoint and access_key and secret_key:
         env[alias_env] = _mc_host_url(endpoint, access_key, secret_key)
         return env, None
@@ -1377,7 +2333,7 @@ def _filesync_mc_env(remote: str) -> tuple[dict[str, str], str | None]:
         return env, None
     return env, (
         f"storage alias {MC_ALIAS} is not configured; missing "
-        "HICLAW_FS_ENDPOINT/HICLAW_FS_ACCESS_KEY/HICLAW_FS_SECRET_KEY"
+        "AGENTTEAMS_FS_ENDPOINT/AGENTTEAMS_FS_ACCESS_KEY/AGENTTEAMS_FS_SECRET_KEY"
     )
 
 
@@ -1399,7 +2355,7 @@ def _default_workspace_dir() -> str:
         working_dir = os.getenv(env_key, "").strip()
         if working_dir:
             return str(Path(working_dir) / "workspaces" / "default")
-    shared_dir = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("HICLAW_SHARED_DIR", "").strip()
+    shared_dir = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("AGENTTEAMS_SHARED_DIR", "").strip()
     if shared_dir:
         return str(Path(shared_dir).parent)
     return ""
@@ -1407,7 +2363,7 @@ def _default_workspace_dir() -> str:
 
 def _default_shared_prefix() -> str:
     """Derive storage shared prefix from environment or runtime.yaml."""
-    configured = os.getenv("HICLAW_SHARED_STORAGE_PREFIX", "").strip()
+    configured = os.getenv("AGENTTEAMS_SHARED_STORAGE_PREFIX", "").strip()
     if configured:
         return _with_storage_root(configured)
     storage = _section(_load_runtime_config(), "storage")
@@ -1475,11 +2431,8 @@ def _normalize_shared_path(raw_path: str, action: str) -> tuple[str, bool]:
         raise ValueError("path must be a relative shared path without '.', '..', or empty segments")
     if parts[0] not in {"shared", "global-shared"}:
         raise ValueError("path must start with shared/ or global-shared/")
-    # Allow shared/ root for list, but require projects/ or tasks/ for push/pull
-    if parts[0] == "shared" and len(parts) >= 2 and parts[1] not in {"projects", "tasks"}:
-        raise ValueError("shared path must be under shared/projects/ or shared/tasks/")
     if parts[0] == "shared" and action in {"push", "pull"} and len(parts) < 3:
-        raise ValueError("shared push/pull requires a project or task path")
+        raise ValueError("shared push/pull requires a subpath under shared/")
     if parts[0] == "global-shared" and len(parts) < 2:
         raise ValueError("global-shared path must include a subpath")
     is_directory = raw.endswith("/") or (
@@ -1625,8 +2578,10 @@ def _payload(arguments: dict[str, Any]) -> dict[str, Any]:
         "taskId": ("taskId", "task_id"),
         "roomId": ("roomId", "room_id"),
         "sourceRoomId": ("sourceRoomId", "source_room_id"),
+        "sender": ("sender", "senderId", "sender_id", "senderUserId", "sender_user_id", "sourceUserId", "source_user_id"),
         "assignedTo": ("assignedTo", "assigned_to"),
         "dependsOn": ("dependsOn", "depends_on"),
+        "replacementTaskId": ("replacementTaskId", "replacement_task_id"),
     }
     for canonical, keys in aliases.items():
         if any(data.get(key) for key in keys):
@@ -1640,6 +2595,8 @@ def _payload(arguments: dict[str, Any]) -> dict[str, Any]:
     for key in (
         "title", "name", "source", "requester", "spec", "status", "summary", "notes", "topic", "admin",
         "invite", "replyRoute", "reply_route", "accepted", "resultStatus", "result_status", "reason",
+        "cancelReason", "cancel_reason",
+        "targetUser", "target_user",
     ):
         if key not in data and arguments.get(key) is not None:
             data[key] = arguments[key]
@@ -1698,6 +2655,31 @@ def _normalize_reply_route(raw: Any) -> dict[str, str]:
     channel = str(route.get("channel") or "").strip()
     target_user = str(route.get("targetUser") or route.get("target_user") or route.get("userId") or route.get("user_id") or "").strip()
     target_session = str(route.get("targetSession") or route.get("target_session") or route.get("sessionId") or route.get("session_id") or "").strip()
+    if channel.lower() == "matrix":
+        target = str(
+            route.get("target")
+            or route.get("roomId")
+            or route.get("room_id")
+            or route.get("targetRoom")
+            or route.get("target_room")
+            or target_session
+            or ""
+        ).strip()
+        if not target:
+            return {}
+        try:
+            target_kind, target_id = _matrix_target(target)
+        except ValueError:
+            return {}
+        if target_kind != "room":
+            return {}
+        normalized = {
+            "channel": "matrix",
+            "target_session": target_id,
+        }
+        if target_user:
+            normalized["target_user"] = target_user
+        return normalized
     if not (channel and target_user and target_session):
         return {}
     return {
@@ -1709,6 +2691,17 @@ def _normalize_reply_route(raw: Any) -> dict[str, str]:
 
 def _reply_route_from_requester(requester: Any) -> dict[str, str]:
     text = str(requester or "").strip()
+    if text.startswith("matrix:"):
+        try:
+            target_kind, target_id = _matrix_target(text)
+        except ValueError:
+            return {}
+        if target_kind != "room":
+            return {}
+        return {
+            "channel": "matrix",
+            "target_session": target_id,
+        }
     if not text.startswith("dingtalk:"):
         return {}
     parts = text.split(":", 2)
@@ -1728,12 +2721,12 @@ def _source_room_id_from_payload(payload: dict[str, Any], reply_route: dict[str,
 
     route = reply_route if isinstance(reply_route, dict) else {}
     channel = str(route.get("channel") or payload.get("source") or "").strip().lower()
-    if channel and channel != "matrix":
+    if channel:
         return str(route.get("target_session") or "").strip()
 
     requester_route = _reply_route_from_requester(payload.get("requester"))
     channel = str(requester_route.get("channel") or "").strip().lower()
-    if channel and channel != "matrix":
+    if channel:
         return str(requester_route.get("target_session") or "").strip()
     return ""
 
@@ -1767,6 +2760,21 @@ def _validate_assignment_room(project: dict[str, Any], room_id: str) -> None:
             f"{channel} requester tasks require a dedicated task room; "
             "call roomflow create_task_room and pass its roomId"
         )
+
+
+def _validate_task_redelegation(arguments: dict[str, Any], project: dict[str, Any], task_id: str, room_id: str) -> None:
+    if not _external_requester_channel(project):
+        return
+    existing = _read_json(_task_state_path(arguments, task_id))
+    existing_room_id = str(existing.get("room_id") or "").strip()
+    if not existing_room_id:
+        return
+    if _canonical_room_id(existing_room_id) == _canonical_room_id(room_id):
+        return
+    raise ValueError(
+        f"task {task_id} is already delegated to assignment room {existing_room_id}; "
+        f"do not delegate it again to {room_id}"
+    )
 
 
 def _read_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1906,7 +2914,10 @@ def _write_project_plan(project_dir: Path, project: dict[str, Any]) -> None:
         channel = str(reply_route.get("channel") or "").strip()
         target_user = str(reply_route.get("target_user") or "").strip()
         target_session = str(reply_route.get("target_session") or "").strip()
-        if channel and target_user and target_session:
+        if channel == "matrix" and target_session:
+            target = f"{target_user}/{target_session}" if target_user else target_session
+            lines.append(f"- Reply Route: `{channel}/{target}`")
+        elif channel and target_user and target_session:
             lines.append(f"- Reply Route: `{channel}/{target_user}/{target_session}`")
     loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
     if plan_type == "loop":
@@ -2040,6 +3051,13 @@ def _payload_bool(value: Any, default: bool) -> bool:
     return default
 
 
+def _payload_bool_field(payload: dict[str, Any], names: tuple[str, ...], default: bool) -> bool:
+    for name in names:
+        if name in payload:
+            return _payload_bool(payload.get(name), default)
+    return default
+
+
 def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
     task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
@@ -2086,6 +3104,19 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             project["requester_report"] = requester_report
     _write_json(_project_state_path(arguments, project_id), project)
     _write_project_plan(_project_dir(arguments, project_id), project)
+    publish_artifacts = _payload_bool_field(payload, ("publishArtifacts", "publish_artifacts"), False)
+    published_artifacts = (
+        _publish_project_artifacts(
+            arguments,
+            project,
+            project_id,
+            task_id,
+            _attachment_parent_event_id(payload, arguments),
+        )
+        if node_status == "completed" and publish_artifacts else []
+    )
+    requester_report = project.get("requester_report") if isinstance(project.get("requester_report"), dict) else {}
+    requester_report_pending = requester_report.get("pending") is True and requester_report.get("task_id") == task_id
     return {
         "ok": True,
         "tool": "projectflow",
@@ -2094,6 +3125,13 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
         "taskId": task_id,
         "nodeStatus": node_status,
         "accepted": node_status == "completed",
+        "publishedArtifacts": published_artifacts,
+        "notificationNeeded": _notification_needed(
+            "accept_task_result",
+            project,
+            summary=f"accept_task_result: {task_id} -> {node_status}",
+            include_reply_route=requester_report_pending,
+        ),
     }
 
 
@@ -2113,6 +3151,46 @@ def _mark_requester_report_sent(arguments: dict[str, Any], payload: dict[str, An
         "action": "mark_requester_report_sent",
         "project": project,
     }
+
+
+def _notification_needed(
+    action: str,
+    project: dict[str, Any],
+    task: dict[str, Any] | None = None,
+    summary: str = "",
+    include_reply_route: bool = True,
+) -> dict[str, Any]:
+    """Build a notificationNeeded hint for the calling agent.
+
+    This does NOT send any message. It returns structured metadata that tells the
+    agent which room to notify and what changed, so the agent can follow up with
+    a message tool call.
+    """
+    project_id = str(project.get("project_id") or "")
+    title = str(project.get("title") or project_id)
+    # Determine best target room
+    target_room = ""
+    if task and str(task.get("room_id") or ""):
+        target_room = str(task["room_id"])
+    elif str(project.get("source_room_id") or ""):
+        target_room = str(project["source_room_id"])
+    reply_route = project.get("reply_route") if include_reply_route and isinstance(project.get("reply_route"), dict) else {}
+    if not target_room and reply_route:
+        target_session = str(reply_route.get("target_session") or "").strip()
+        if target_session:
+            target_room = target_session
+    if not summary:
+        summary = f"{action}: {title}"
+    result: dict[str, Any] = {
+        "event": action,
+        "projectId": project_id,
+        "summary": summary,
+    }
+    if target_room:
+        result["targetRoom"] = target_room
+    if reply_route:
+        result["replyRoute"] = reply_route
+    return result
 
 
 def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -2140,7 +3218,13 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
-            return {"ok": True, "tool": "projectflow", "action": action, "project": project}
+            return {
+                "ok": True,
+                "tool": "projectflow",
+                "action": action,
+                "project": project,
+                "notificationNeeded": _notification_needed(action, project),
+            }
 
         if action == "create_quick_project":
             project_id = _project_id_from_payload(arguments, payload)
@@ -2199,6 +3283,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "room_id": room_id,
                 "status": "assigned",
                 "spec_path": f"shared/tasks/{task_id}/spec.md",
+                "assigned_to": assigned_to,
             }
             if source_room_id:
                 task["source_room_id"] = source_room_id
@@ -2210,6 +3295,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "project": project,
                 "task": task,
                 "synced": _sync_task(arguments, task_id),
+                "notificationNeeded": _notification_needed(action, project, task),
             }
 
         if action == "resolve_project":
@@ -2246,6 +3332,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "project": project,
                 "readyNodes": _ready_nodes(project),
+                "notificationNeeded": _notification_needed(action, project),
             }
 
         if action == "plan_loop":
@@ -2301,6 +3388,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "project": project,
                 "loop": loop,
                 "readyLoopNodes": _ready_loop_nodes(project),
+                "notificationNeeded": _notification_needed(action, project),
             }
 
         if action == "ready_nodes":
@@ -2371,6 +3459,9 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "project": project,
                 "loop": loop,
                 "readyLoopNodes": _ready_loop_nodes(project),
+                "notificationNeeded": _notification_needed(
+                    action, project, summary=f"record_loop_iteration: iteration {iteration} -> {decision}",
+                ),
             }
 
         if action in {"pause_project", "resume_project", "complete_project"}:
@@ -2392,12 +3483,23 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
-            return {
+            result = {
                 "ok": True,
                 "tool": "projectflow",
                 "action": action,
                 "project": project,
             }
+            publish_artifacts = _payload_bool_field(payload, ("publishArtifacts", "publish_artifacts"), False)
+            if action == "complete_project" and publish_artifacts and (project_dir / "result.md").is_file():
+                result["publishedArtifacts"] = _publish_project_artifacts(
+                    arguments,
+                    project,
+                    project_id,
+                    "",
+                    _attachment_parent_event_id(payload, arguments),
+                )
+            result["notificationNeeded"] = _notification_needed(action, project)
+            return result
     except ValueError as exc:
         return {"ok": False, "tool": "projectflow", "action": action, "error": str(exc)}
 
@@ -2416,7 +3518,7 @@ def _normalize_role(role: str) -> str:
 
 
 def _runtime_role() -> str:
-    role = os.getenv("HICLAW_AGENT_ROLE", "").strip() or os.getenv("HICLAW_WORKER_ROLE", "").strip()
+    role = os.getenv("AGENTTEAMS_AGENT_ROLE", "").strip() or os.getenv("AGENTTEAMS_WORKER_ROLE", "").strip()
     if not role:
         role = str(_section(_load_runtime_config(), "member").get("role") or "").strip()
     return _normalize_role(role)
@@ -2443,47 +3545,175 @@ def _load_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
     task = _read_json(_task_state_path(arguments, task_id))
     if not task:
         raise ValueError("task not found")
+    if not task.get("task_id") and task.get("taskId"):
+        task["task_id"] = str(task["taskId"])
     return task
 
 
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _utc_timestamp() -> str:
+    return (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _project_task_for_meta(arguments: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    project_id = _first_text(task.get("project_id"), task.get("projectId"))
+    task_id = _first_text(task.get("task_id"), task.get("taskId"))
+    if not project_id or not task_id:
+        return {}
+    project = _read_json(_project_state_path(arguments, project_id))
+    tasks = list(project.get("tasks", []) if isinstance(project.get("tasks"), list) else [])
+    loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+    if isinstance(loop.get("tasks"), list):
+        tasks.extend(loop["tasks"])
+    for item in tasks:
+        if isinstance(item, dict) and _first_text(item.get("task_id"), item.get("taskId")) == task_id:
+            return item
+    return {}
+
+
+def _preserve_task_meta_fields(arguments: dict[str, Any], task: dict[str, Any]) -> None:
+    """Keep correlation fields when taskflow writes after a remote pull.
+
+    filesync pull and ack_task can replace local ``meta.json`` with a remote
+    copy that omits ``room_id`` / ``assigned_to``.  Preserve non-empty local
+    values and fall back to the project plan node when still missing.
+    """
+    task_id = _first_text(task.get("task_id"), task.get("taskId"))
+    if not task_id:
+        return
+    existing = _read_json(_task_state_path(arguments, task_id))
+    project_task = _project_task_for_meta(arguments, task)
+    for snake, camel in (
+        ("room_id", "roomId"),
+        ("assigned_to", "assignedTo"),
+        ("project_id", "projectId"),
+    ):
+        if _first_text(task.get(snake), task.get(camel)):
+            continue
+        preserved = _first_text(
+            existing.get(snake),
+            existing.get(camel),
+            project_task.get(snake),
+            project_task.get(camel),
+        )
+        if preserved:
+            task[snake] = preserved
+
+
+def _ensure_console_task_meta(arguments: dict[str, Any], task: dict[str, Any]) -> None:
+    _preserve_task_meta_fields(arguments, task)
+    project_task = _project_task_for_meta(arguments, task)
+    task["task_id"] = _first_text(task.get("task_id"), task.get("taskId"))
+    task["project_id"] = _first_text(task.get("project_id"), task.get("projectId"))
+    task["room_id"] = _first_text(task.get("room_id"), task.get("roomId"))
+    task["spec_path"] = _first_text(task.get("spec_path"), task.get("specPath"))
+    source_room_id = _first_text(task.get("source_room_id"), task.get("sourceRoomId"), project_task.get("source_room_id"))
+    if source_room_id:
+        task["source_room_id"] = source_room_id
+    task["task_title"] = _first_text(
+        task.get("task_title"),
+        task.get("taskTitle"),
+        project_task.get("title"),
+        task.get("title"),
+        task["task_id"],
+    )
+    task["assigned_to"] = _first_text(
+        task.get("assigned_to"),
+        task.get("assignedTo"),
+        project_task.get("assigned_to"),
+        project_task.get("assignedTo"),
+    )
+    task["assigned_at"] = _first_text(
+        task.get("assigned_at"),
+        task.get("assignedAt"),
+        task.get("created_at"),
+        task.get("createdAt"),
+    ) or _utc_timestamp()
+    for snake_key, camel_key in (
+        ("acknowledged_by_role", "acknowledgedByRole"),
+        ("result_status", "resultStatus"),
+        ("result_path", "resultPath"),
+        ("submitted_by_role", "submittedByRole"),
+    ):
+        value = _first_text(task.get(snake_key), task.get(camel_key))
+        if value:
+            task[snake_key] = value
+    for key in (
+        "taskId",
+        "projectId",
+        "roomId",
+        "specPath",
+        "sourceRoomId",
+        "taskTitle",
+        "assignedTo",
+        "assignedAt",
+        "createdAt",
+        "acknowledgedByRole",
+        "resultStatus",
+        "resultPath",
+        "submittedByRole",
+    ):
+        task.pop(key, None)
+
+
 def _write_task(arguments: dict[str, Any], task: dict[str, Any]) -> None:
+    _ensure_console_task_meta(arguments, task)
     _write_json(_task_state_path(arguments, task["task_id"]), task)
 
 
-def _parse_task_result(path: Path) -> tuple[dict[str, Any], list[str]]:
-    result: dict[str, Any] = {"status": "", "summary": "", "deliverables": []}
+ALLOWED_TASK_RESULT_STATUSES = {"SUCCESS", "SUCCESS_WITH_NOTES", "REVISION_NEEDED", "BLOCKED", "FAILED", "PARTIAL"}
+
+
+def _validate_task_deliverables(task_id: str, deliverables: list[Any]) -> list[str]:
+    expected_prefix = f"shared/tasks/{task_id}"
+    normalized_deliverables: list[str] = []
+    for item in deliverables:
+        source = str(item or "").strip()
+        if not source:
+            continue
+        try:
+            normalized, _is_directory = _normalize_workspace_artifact_path(source)
+        except ValueError as exc:
+            raise ValueError(f"deliverables must be workspace-relative paths under {expected_prefix}/") from exc
+        if not _path_is_under(normalized.rstrip("/"), expected_prefix):
+            raise ValueError(f"deliverables must stay under {expected_prefix}/")
+        normalized_deliverables.append(normalized)
+    return normalized_deliverables
+
+
+def _task_result_from_meta(task: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    deliverables = task.get("deliverables")
+    if not isinstance(deliverables, list):
+        deliverables = []
+    result = {
+        "status": str(task.get("result_status") or "").strip(),
+        "summary": str(task.get("summary") or "").strip(),
+        "deliverables": [str(item) for item in deliverables],
+    }
     errors: list[str] = []
-    in_deliverables = False
-    has_deliverables_section = False
-
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        status_match = re.match(r"^(?:-\s*)?Status:\s*`?([^`]+?)`?\s*$", stripped, re.IGNORECASE)
-        if status_match:
-            result["status"] = status_match.group(1).strip()
-            continue
-        summary_match = re.match(r"^(?:-\s*)?Summary:\s*(.+?)\s*$", stripped, re.IGNORECASE)
-        if summary_match:
-            result["summary"] = summary_match.group(1).strip()
-            continue
-        if stripped.lower() in {"## deliverables", "deliverables:"}:
-            in_deliverables = True
-            has_deliverables_section = True
-            continue
-        if in_deliverables and stripped.startswith("- "):
-            item = stripped[2:].strip().strip("`")
-            if item:
-                result["deliverables"].append(item)
-
-    status = str(result.get("status") or "").strip()
+    status = result["status"]
     if not status:
         errors.append("missing result status")
-    elif status not in {"SUCCESS", "SUCCESS_WITH_NOTES", "REVISION_NEEDED", "BLOCKED", "FAILED", "PARTIAL"}:
+    elif status not in ALLOWED_TASK_RESULT_STATUSES:
         errors.append(f"invalid result status: {status}")
-    if not str(result.get("summary") or "").strip():
+    if not result["summary"]:
         errors.append("missing result summary")
-    if not has_deliverables_section:
-        errors.append("missing deliverables section")
+    try:
+        _validate_task_deliverables(str(task.get("task_id") or ""), result["deliverables"])
+    except ValueError as exc:
+        errors.append(str(exc))
     return result, errors
 
 
@@ -2500,13 +3730,54 @@ def _sync_task(arguments: dict[str, Any], task_id: str, exclude: list[str] | Non
 
 
 def _pull_task(arguments: dict[str, Any], task_id: str) -> bool:
+    existing = _read_json(_task_state_path(arguments, task_id))
     sync_args = dict(arguments)
     sync_args.update({
         "action": "pull",
         "path": f"shared/tasks/{task_id}",
     })
     result = _filesync(sync_args)
-    return bool(result.get("ok"))
+    if not result.get("ok"):
+        return False
+    if existing:
+        task = _read_json(_task_state_path(arguments, task_id))
+        if task:
+            for snake, camel in (
+                ("room_id", "roomId"),
+                ("assigned_to", "assignedTo"),
+                ("project_id", "projectId"),
+            ):
+                if _first_text(task.get(snake), task.get(camel)):
+                    continue
+                preserved = _first_text(existing.get(snake), existing.get(camel))
+                if preserved:
+                    task[snake] = preserved
+            _write_task(arguments, task)
+    return True
+
+
+TERMINAL_TASK_STATUSES = {"completed", "revision", "blocked", "cancelled"}
+
+
+def _terminal_task_status(arguments: dict[str, Any], task: dict[str, Any], task_id: str) -> str:
+    project_id = str(task.get("project_id") or "")
+    project = _read_json(_project_state_path(arguments, project_id)) if project_id else {}
+    project_tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
+    loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+    loop_tasks = loop.get("tasks", []) if isinstance(loop.get("tasks"), list) else []
+    for node in project_tasks + loop_tasks:
+        if isinstance(node, dict) and node.get("task_id") == task_id:
+            node_status = str(node.get("status") or "")
+            if node_status in TERMINAL_TASK_STATUSES:
+                return node_status
+    task_status = str(task.get("status") or "")
+    return task_status if task_status in TERMINAL_TASK_STATUSES else ""
+
+
+def _require_task_mutable(arguments: dict[str, Any], task: dict[str, Any], task_id: str, action: str) -> None:
+    terminal_status = _terminal_task_status(arguments, task, task_id)
+    if terminal_status:
+        raise ValueError(f"{action} cannot update terminal task: {terminal_status}")
 
 
 def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: str, **updates: Any) -> None:
@@ -2542,11 +3813,30 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("delegate_task requires leader role")
             project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
             room_id = str(payload.get("roomId") or payload.get("room_id") or "")
             if not room_id:
                 raise ValueError("roomId is required")
             project = _read_json(_project_state_path(arguments, project_id))
+            if not assigned_to:
+                for item in project.get("tasks", []):
+                    if isinstance(item, dict) and item.get("task_id") == task_id:
+                        assigned_to = str(item.get("assigned_to") or item.get("assignedTo") or "").strip()
+                        break
             _validate_assignment_room(project, room_id)
+            _validate_task_redelegation(arguments, project, task_id, room_id)
+            existing_task = _read_json(_task_state_path(arguments, task_id), {"project_id": project_id})
+            _require_task_mutable(arguments, existing_task, task_id, action)
+            assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
+            if not assigned_to:
+                tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
+                loop = project.get("loop") if isinstance(project.get("loop"), dict) else {}
+                if isinstance(loop.get("tasks"), list):
+                    tasks = tasks + loop["tasks"]
+                for item in tasks:
+                    if isinstance(item, dict) and item.get("task_id") == task_id:
+                        assigned_to = str(item.get("assigned_to") or "").strip()
+                        break
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
             spec = str(payload.get("spec") or "")
@@ -2559,12 +3849,20 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "status": "assigned",
                 "spec_path": f"shared/tasks/{task_id}/spec.md",
             }
+            if assigned_to:
+                task["assigned_to"] = assigned_to
             if source_room_id:
                 task["source_room_id"] = source_room_id
+            if assigned_to:
+                task["assigned_to"] = assigned_to
             _write_task(arguments, task)
             project_task_updates: dict[str, Any] = {"status": "assigned"}
+            if assigned_to:
+                project_task_updates["assigned_to"] = assigned_to
             if source_room_id:
                 project_task_updates["source_room_id"] = source_room_id
+            if assigned_to:
+                project_task_updates["assigned_to"] = assigned_to
             _update_project_task(arguments, project_id, task_id, **project_task_updates)
             return {
                 "ok": True,
@@ -2572,6 +3870,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "task": task,
                 "synced": _sync_task(arguments, task_id),
+                "notificationNeeded": _notification_needed(
+                    "delegate_task",
+                    project or {"project_id": project_id},
+                    task,
+                    summary=f"delegate_task: {task_id} assigned to {assigned_to}",
+                ),
             }
 
         if action == "ack_task":
@@ -2580,6 +3884,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             pulled = _pull_task(arguments, task_id)
             task = _load_task(arguments, task_id)
+            _require_task_mutable(arguments, task, task_id, action)
             task["status"] = "in_progress"
             task["acknowledged_by_role"] = role
             _write_task(arguments, task)
@@ -2601,38 +3906,79 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("submit_task requires worker or remote-member role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             task = _load_task(arguments, task_id)
+            _require_task_mutable(arguments, task, task_id, action)
             summary = str(payload.get("summary") or "")
             status = str(payload.get("status") or "SUCCESS")
             deliverables = payload.get("deliverables") or []
             if not isinstance(deliverables, list):
                 raise ValueError("deliverables must be a list")
-            result_lines = [
-                "# Task Result",
-                "",
-                f"- Status: `{status}`",
-                f"- Summary: {summary}",
-                "",
-                "## Deliverables",
-            ]
-            result_lines.extend(f"- `{item}`" for item in deliverables)
+            deliverables = _validate_task_deliverables(task_id, deliverables)
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
-            (task_dir / "result.md").write_text("\n".join(result_lines) + "\n", encoding="utf-8")
             task.update({
                 "status": "submitted",
                 "result_status": status,
                 "summary": summary,
-                "deliverables": [str(item) for item in deliverables],
-                "result_path": f"shared/tasks/{task_id}/result.md",
+                "deliverables": deliverables,
                 "submitted_by_role": role,
             })
+            if (task_dir / "result.md").is_file():
+                task["result_path"] = f"shared/tasks/{task_id}/result.md"
+            else:
+                task.pop("result_path", None)
             _write_task(arguments, task)
             _update_project_task(arguments, task.get("project_id", ""), task_id, status="submitted")
+            published_artifacts = _publish_task_artifacts(
+                arguments,
+                task,
+                task_id,
+                deliverables,
+                _attachment_parent_event_id(payload, arguments),
+            )
             return {
                 "ok": True,
                 "tool": "taskflow",
                 "action": action,
                 "task": task,
+                "publishedArtifacts": published_artifacts,
+                "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
+                "notificationNeeded": _notification_needed(
+                    "submit_task",
+                    {"project_id": task.get("project_id", "")},
+                    task,
+                    summary=f"submit_task: {task_id} ({status})",
+                ),
+            }
+
+        if action == "cancel_task":
+            if role != "leader":
+                raise ValueError("cancel_task requires leader role")
+            task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            task = _load_task(arguments, task_id)
+            project_id = str(task.get("project_id") or "")
+            terminal_status = _terminal_task_status(arguments, task, task_id)
+            if terminal_status:
+                raise ValueError(f"cannot cancel terminal task: {terminal_status}")
+            reason = str(payload.get("reason") or payload.get("cancelReason") or payload.get("cancel_reason") or "").strip()
+            if not reason:
+                raise ValueError("reason is required")
+            replacement_task_id = payload.get("replacementTaskId") or payload.get("replacement_task_id")
+
+            task["status"] = "cancelled"
+            task["cancel_reason"] = reason
+            if replacement_task_id:
+                task["replacement_task_id"] = _safe_id(replacement_task_id, "replacementTaskId")
+            else:
+                task.pop("replacement_task_id", None)
+            _write_task(arguments, task)
+
+            _update_project_task(arguments, project_id, task_id, status="cancelled")
+            return {
+                "ok": True,
+                "tool": "taskflow",
+                "action": action,
+                "task": task,
+                "project": _read_json(_project_state_path(arguments, project_id)) if project_id else {},
                 "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
             }
 
@@ -2642,12 +3988,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             pulled = _pull_task(arguments, task_id)
             task = _load_task(arguments, task_id)
-            result_path = _task_dir(arguments, task_id) / "result.md"
-            if result_path.exists():
-                result, validation_errors = _parse_task_result(result_path)
-            else:
-                result, validation_errors = {}, ["missing result.md"]
-            effective = task.get("status") == "submitted" and result_path.exists() and not validation_errors
+            result, validation_errors = _task_result_from_meta(task)
+            effective = task.get("status") == "submitted" and not validation_errors
             return {
                 "ok": True,
                 "tool": "taskflow",

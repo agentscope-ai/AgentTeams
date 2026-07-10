@@ -45,17 +45,18 @@ type ManagerReconciler struct {
 	GatewayClient    gateway.Client         // gateway client for modelProvider resolution
 
 	// DefaultRuntime is the value passed to backend.CreateRequest.RuntimeFallback
-	// when a Manager CR omits spec.runtime. Sourced from HICLAW_MANAGER_RUNTIME
+	// when a Manager CR omits spec.runtime. Sourced from AGENTTEAMS_MANAGER_RUNTIME
 	// (Config.ManagerRuntime). Distinct from WorkerReconciler.DefaultRuntime
 	// because Backend.Create is shared and cannot tell which env var applies.
 	DefaultRuntime string
 
 	// ControllerName identifies this controller instance. Stamped on every
-	// Manager Pod via hiclaw.io/controller so multi-instance deployments
+	// Manager Pod via agentteams.io/controller so multi-instance deployments
 	// sharing a namespace do not cross-watch each other's resources.
-	ControllerName string
+	ControllerName             string
+	AuthTokenExpirationSeconds int64
 
-	// UserLanguage / UserTimezone are install-time hints (HICLAW_LANGUAGE /
+	// UserLanguage / UserTimezone are install-time hints (AGENTTEAMS_LANGUAGE /
 	// TZ) used only to render the first-boot Manager onboarding prompt
 	// in reconcileManagerWelcome. Empty strings fall back to the same
 	// defaults the legacy `start-manager-agent.sh` welcome heredoc used
@@ -185,11 +186,12 @@ func (r *ManagerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1beta1.Manager{})
 
 	if r.Backend != nil {
-		if wb := r.Backend.DetectWorkerBackend(context.Background()); wb != nil && wb.Name() == "k8s" {
+		// Watch Pods (for pod backend)
+		if wb, _ := r.Backend.GetBackendForType(context.Background(), "pod"); wb != nil {
 			bldr = bldr.Watches(
 				&corev1.Pod{},
 				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
-					managerName := obj.GetLabels()["hiclaw.io/manager"]
+					managerName := obj.GetLabels()[v1beta1.LabelManager]
 					if managerName == "" {
 						return nil
 					}
@@ -200,8 +202,45 @@ func (r *ManagerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 						}},
 					}
 				}),
-				builder.WithPredicates(podLifecyclePredicates("hiclaw.io/manager", r.ControllerName)),
+				builder.WithPredicates(PodLifecyclePredicates(v1beta1.LabelManager, r.ControllerName)),
 			)
+		}
+		// Watch Sandbox CRs and transient SandboxClaim CRs (for sandbox backend)
+		if wb, _ := r.Backend.GetBackendForType(context.Background(), "sandbox"); wb != nil {
+			if sb, ok := wb.(*backend.SandboxBackend); ok {
+				bldr = bldr.Watches(
+					sb.WatchObject(),
+					handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+						managerName := obj.GetLabels()[v1beta1.LabelManager]
+						if managerName == "" {
+							return nil
+						}
+						return []reconcile.Request{
+							{NamespacedName: client.ObjectKey{
+								Name:      managerName,
+								Namespace: obj.GetNamespace(),
+							}},
+						}
+					}),
+					builder.WithPredicates(SandboxLifecyclePredicates(v1beta1.LabelManager, r.ControllerName)),
+				)
+				bldr = bldr.Watches(
+					sb.ClaimWatchObject(),
+					handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+						managerName := obj.GetLabels()[v1beta1.LabelManager]
+						if managerName == "" {
+							return nil
+						}
+						return []reconcile.Request{
+							{NamespacedName: client.ObjectKey{
+								Name:      managerName,
+								Namespace: obj.GetNamespace(),
+							}},
+						}
+					}),
+					builder.WithPredicates(SandboxLifecyclePredicates(v1beta1.LabelManager, r.ControllerName)),
+				)
+			}
 		}
 	}
 

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -98,6 +99,12 @@ func (r *recordingIssueClient) Issue(ctx context.Context, req credprovider.Issue
 		SecurityToken:   "test-sts",
 		ExpiresInSec:    3600,
 	}, nil
+}
+
+// GetKubeconfig is a stub to satisfy the credprovider.Client interface; this
+// test only exercises the STS issue path.
+func (r *recordingIssueClient) GetKubeconfig(_ context.Context, _ string) (*credprovider.KubeconfigResponse, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 func TestNewNacosAIClient_STS_IssueUsesAIRegistryForNamespace(t *testing.T) {

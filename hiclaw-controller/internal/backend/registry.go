@@ -5,11 +5,11 @@ import (
 	"fmt"
 )
 
-// DefaultContainerPrefix is the legacy baked-in worker container/pod prefix.
+// DefaultContainerPrefix is the baked-in worker container/pod prefix.
 // New constructors no longer force this fallback when prefix is empty;
-// LoadConfig controls defaulting through HICLAW_RESOURCE_AUTOPREFIX and
-// HICLAW_RESOURCE_PREFIX.
-const DefaultContainerPrefix = "hiclaw-worker-"
+// LoadConfig controls defaulting through AGENTTEAMS_RESOURCE_AUTOPREFIX and
+// AGENTTEAMS_RESOURCE_PREFIX.
+const DefaultContainerPrefix = "agentteams-worker-"
 
 // Registry holds all available worker backends and provides auto-detection.
 //
@@ -39,6 +39,17 @@ func (r *Registry) DetectWorkerBackend(ctx context.Context) WorkerBackend {
 	return nil
 }
 
+// FindServiceBackend returns the first available backend that implements
+// ServiceBackend, or nil if none qualifies.
+func (r *Registry) FindServiceBackend(ctx context.Context) ServiceBackend {
+	for _, b := range r.workerBackends {
+		if sb, ok := b.(ServiceBackend); ok && b.Available(ctx) {
+			return sb
+		}
+	}
+	return nil
+}
+
 // GetWorkerBackend returns a specific worker backend by name, or auto-detects if name is empty.
 func (r *Registry) GetWorkerBackend(ctx context.Context, name string) (WorkerBackend, error) {
 	if name == "" {
@@ -54,4 +65,20 @@ func (r *Registry) GetWorkerBackend(ctx context.Context, name string) (WorkerBac
 		}
 	}
 	return nil, fmt.Errorf("unknown worker backend: %q", name)
+}
+
+// GetBackendForType returns the backend for the given backendRuntime type.
+// "pod" maps to the "k8s" backend; "sandbox" maps to the "sandbox" backend.
+// Returns nil, error if the requested backend is not registered/available.
+func (r *Registry) GetBackendForType(ctx context.Context, backendRuntime string) (WorkerBackend, error) {
+	targetName := backendRuntime
+	if backendRuntime == "pod" {
+		targetName = "k8s"
+	}
+	for _, b := range r.workerBackends {
+		if b.Name() == targetName && b.Available(ctx) {
+			return b, nil
+		}
+	}
+	return nil, fmt.Errorf("backend %q (backendRuntime=%q) not available", targetName, backendRuntime)
 }

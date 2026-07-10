@@ -133,17 +133,38 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	var crEntries []v1beta1.AccessEntry
 	kind := "TeamWorker"
 	runtimeName := name
-	switch {
-	case leaderMatches(team.Spec.Leader, name):
-		crEntries = team.Spec.Leader.AccessEntries
-		kind = "TeamLeader"
-		runtimeName = team.Spec.Leader.EffectiveWorkerName()
-	default:
-		for _, w := range team.Spec.Workers {
-			if teamWorkerMatches(w, name) {
-				crEntries = w.AccessEntries
-				runtimeName = w.EffectiveWorkerName()
-				break
+	if len(team.Spec.WorkerMembers) > 0 {
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name != name {
+				continue
+			}
+			if ref.Role == "team_leader" {
+				kind = "TeamLeader"
+			}
+			var w v1beta1.Worker
+			err := r.client.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: r.namespace}, &w)
+			if err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+				return "", nil, fmt.Errorf("get worker %q for team %q: %w", ref.Name, teamName, err)
+			}
+			if w.Name != "" {
+				crEntries = w.Spec.AccessEntries
+				runtimeName = w.Spec.EffectiveWorkerName(w.Name)
+			}
+			break
+		}
+	} else {
+		switch {
+		case leaderMatches(team.Spec.Leader, name):
+			crEntries = team.Spec.Leader.AccessEntries
+			kind = "TeamLeader"
+			runtimeName = team.Spec.Leader.EffectiveWorkerName()
+		default:
+			for _, w := range team.Spec.Workers {
+				if teamWorkerMatches(w, name) {
+					crEntries = w.AccessEntries
+					runtimeName = w.EffectiveWorkerName()
+					break
+				}
 			}
 		}
 	}

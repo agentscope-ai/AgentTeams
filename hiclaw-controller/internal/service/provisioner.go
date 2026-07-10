@@ -9,6 +9,7 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
+	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
@@ -20,12 +21,11 @@ import (
 
 // WorkerProvisionRequest describes the infrastructure to provision for a worker.
 type WorkerProvisionRequest struct {
-	Name            string
-	CredentialName  string
-	ModelProviderID string
-	Role            string // "standalone" | "team_leader" | "worker"
-	TeamName        string
-	TeamLeaderName  string
+	Name           string
+	CredentialName string
+	Role           string // "standalone" | "team_leader" | "worker"
+	TeamName       string
+	TeamLeaderName string
 }
 
 // WorkerProvisionResult contains all outputs from a successful provision.
@@ -64,6 +64,16 @@ type TeamRoomResult struct {
 	LeaderDMRoomID string
 }
 
+// TeamRoomArchiveRequest describes Team-owned rooms to mark as deleted while
+// preserving their history.
+type TeamRoomArchiveRequest struct {
+	TeamName       string
+	LeaderName     string
+	TeamRoomID     string
+	LeaderDMRoomID string
+	ActorToken     string
+}
+
 // RefreshResult contains refreshed credentials for update operations.
 type RefreshResult struct {
 	MatrixToken    string
@@ -93,7 +103,7 @@ type ProvisionerConfig struct {
 	ResourcePrefix authpkg.ResourcePrefix
 
 	// ControllerName identifies this controller instance. Stamped on every
-	// ServiceAccount created by the provisioner via hiclaw.io/controller.
+	// ServiceAccount created by the provisioner via agentteams.io/controller.
 	ControllerName string
 
 	// Pre-generated Manager secrets (from install script env).
@@ -102,7 +112,7 @@ type ProvisionerConfig struct {
 	ManagerGatewayKey string
 
 	// AIGatewayURL is the data-plane URL of the AI gateway (e.g.
-	// "http://aigw-local.hiclaw.io:8080"). Used by IsManagerLLMAuthReady to
+	// "http://aigw-local.agentteams.io:8080"). Used by IsManagerLLMAuthReady to
 	// probe whether the gateway can actually serve a chat-completions
 	// request bearing the manager's bearer token — i.e. whether Higress's
 	// WASM key-auth filter has finished syncing the freshly-bound consumer
@@ -121,15 +131,19 @@ type ProvisionerConfig struct {
 	// this model so a 200 response proves the entire path the manager
 	// will exercise (auth filter → route → upstream → model resolution)
 	// is live. Sourced from Config.ManagerModel which already resolves
-	// HICLAW_MANAGER_MODEL → HICLAW_DEFAULT_MODEL → "qwen3.6-plus".
+	// AGENTTEAMS_MANAGER_MODEL → AGENTTEAMS_DEFAULT_MODEL → "qwen3.6-plus".
 	ManagerModel string
 
-	// ManagerEnabled reflects HICLAW_MANAGER_ENABLED. When false, no Manager
+	// ManagerEnabled reflects AGENTTEAMS_MANAGER_ENABLED. When false, no Manager
 	// CR is ever created, so the Matrix user `@manager:<domain>` does not
 	// exist on Tuwunel. Worker room creation must therefore skip inviting
 	// the manager; otherwise Conduwuit/Tuwunel returns HTTP 403 (it rejects
 	// invites to non-existent local users).
 	ManagerEnabled bool
+
+	// RemoteCache resolves remote cluster clients for cross-cluster SA operations.
+	// May be nil when remote mode is not configured.
+	RemoteCache backend.RemoteClientProvider
 }
 
 // Provisioner orchestrates infrastructure provisioning and deprovisioning
@@ -149,6 +163,7 @@ type Provisioner struct {
 	adminUser      string
 	resourcePrefix authpkg.ResourcePrefix
 	controllerName string
+	remoteCache    backend.RemoteClientProvider
 
 	managerPassword   string
 	managerGatewayKey string
@@ -187,6 +202,7 @@ func NewProvisioner(cfg ProvisionerConfig) *Provisioner {
 		managerEnabled:    cfg.ManagerEnabled,
 		aiGatewayURL:      cfg.AIGatewayURL,
 		managerModel:      cfg.ManagerModel,
+		remoteCache:       cfg.RemoteCache,
 	}
 }
 
@@ -204,12 +220,12 @@ func (p *Provisioner) MatrixAppServiceEnabled() bool {
 
 // roomAliasLocalpart is the single source of truth for how controller-managed
 // rooms are named on the Matrix homeserver. The chosen shape
-// "hiclaw-<kind>-<name>" is deliberately verbose to avoid colliding with rooms
+// "agentteams-<kind>-<name>" is deliberately verbose to avoid colliding with rooms
 // created manually or by unrelated tooling. Changing this format in place
 // would orphan every existing room — callers must instead introduce a new
 // kind and handle migration explicitly.
 func roomAliasLocalpart(kind, name string) string {
-	return "hiclaw-" + kind + "-" + name
+	return "agentteams-" + kind + "-" + name
 }
 
 // roomAliasFull builds the full "#localpart:domain" form used by
@@ -317,6 +333,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	if err != nil {
 		return nil, fmt.Errorf("load credentials: %w", err)
 	}
+	generatedCreds := false
 	if creds == nil {
 		creds, err = GenerateCredentials()
 		if err != nil {
@@ -325,6 +342,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		if err := p.creds.Save(ctx, credentialName, creds); err != nil {
 			return nil, fmt.Errorf("save credentials: %w", err)
 		}
+		generatedCreds = true
 	}
 
 	// Step 2: Register Matrix account
@@ -397,15 +415,38 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	}
 	invite = append(invite, workerMatrixID)
 
-	roomInfo, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
-		Name:          fmt.Sprintf("Worker: %s", workerName),
-		Topic:         fmt.Sprintf("Communication channel for %s", workerName),
-		Invite:        invite,
-		PowerLevels:   powerLevels,
+	leaderMatrixID := ""
+	if req.TeamLeaderName != "" {
+		leaderMatrixID = p.matrix.UserID(req.TeamLeaderName)
+	}
+	workerMeta := workerRoomMeta(req, workerMatrixID, leaderMatrixID)
+	roomReq := matrix.CreateRoomRequest{
+		Name:         fmt.Sprintf("Worker: %s", workerName),
+		Topic:        fmt.Sprintf("Communication channel for %s", workerName),
+		Invite:       invite,
+		PowerLevels:  powerLevels,
+		InitialState: roomMetaState(workerMeta),
+
 		RoomAliasName: roomAliasLocalpart("worker", workerName),
-	})
+	}
+	roomInfo, err := p.matrix.CreateRoom(ctx, roomReq)
 	if err != nil {
 		return nil, fmt.Errorf("Matrix room creation failed: %w", err)
+	}
+	if generatedCreds && !roomInfo.Created {
+		alias := p.roomAliasFull(roomReq.RoomAliasName)
+		logger.Info("worker room alias resolved to existing room for fresh credentials; recreating room",
+			"alias", alias, "oldRoomID", roomInfo.RoomID)
+		if err := p.matrix.DeleteRoomAlias(ctx, alias); err != nil {
+			return nil, fmt.Errorf("delete stale worker room alias %s: %w", alias, err)
+		}
+		roomInfo, err = p.matrix.CreateRoom(ctx, roomReq)
+		if err != nil {
+			return nil, fmt.Errorf("Matrix room creation after stale alias cleanup failed: %w", err)
+		}
+		if !roomInfo.Created {
+			return nil, fmt.Errorf("worker room alias %s still resolves to existing room %s after cleanup", alias, roomInfo.RoomID)
+		}
 	}
 	roomID := roomInfo.RoomID
 	logger.Info("Matrix room ready", "roomID", roomID, "created", roomInfo.Created)
@@ -426,6 +467,9 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		if err := p.ReconcileRoomMembership(ctx, roomID, []string{adminMatrixID, authorityID, workerMatrixID}); err != nil {
 			logger.Error(err, "failed to reconcile worker room membership (non-fatal)", "roomID", roomID)
 		}
+	}
+	if err := p.matrix.SetRoomState(ctx, roomID, roomMetaEventType, "", workerMeta, ""); err != nil {
+		return nil, fmt.Errorf("set worker room meta: %w", err)
 	}
 
 	// Step 4b: Have the worker accept the room invite on its behalf.
@@ -467,7 +511,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 		_ = p.creds.Save(ctx, credentialName, creds)
 	}
 
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, req.ModelProviderID); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return nil, fmt.Errorf("AI route authorization failed: %w", err)
 	}
 	// Higress WASM key-auth plugin needs ~1-2s to sync after route update.
@@ -674,7 +718,7 @@ func (p *Provisioner) RefreshManagerCredentials(ctx context.Context, managerName
 // EnsureManagerGatewayAuth ensures the Manager's gateway consumer exists and is
 // authorized on AI routes. Called during container recreation to restore auth
 // that may have been lost (e.g. after upgrade with fresh Higress state).
-func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey, modelProviderID string) error {
+func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName, gatewayKey string) error {
 	consumerName := "manager"
 	_, err := p.gateway.EnsureConsumer(ctx, gateway.ConsumerRequest{
 		Name:          consumerName,
@@ -683,7 +727,7 @@ func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName,
 	if err != nil {
 		return fmt.Errorf("ensure consumer: %w", err)
 	}
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, modelProviderID); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return fmt.Errorf("authorize AI routes: %w", err)
 	}
 	return nil
@@ -694,7 +738,7 @@ func (p *Provisioner) EnsureManagerGatewayAuth(ctx context.Context, managerName,
 // to defensively restore auth that may have been lost (e.g. if the Higress
 // route was rewritten, or after upgrade with fresh Higress state). Mirrors
 // EnsureManagerGatewayAuth but uses the worker-scoped consumer name.
-func (p *Provisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey, modelProviderID string) error {
+func (p *Provisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, gatewayKey string) error {
 	consumerName := "worker-" + workerName
 	_, err := p.gateway.EnsureConsumer(ctx, gateway.ConsumerRequest{
 		Name:          consumerName,
@@ -703,7 +747,7 @@ func (p *Provisioner) EnsureWorkerGatewayAuth(ctx context.Context, workerName, g
 	if err != nil {
 		return fmt.Errorf("ensure consumer: %w", err)
 	}
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, modelProviderID); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return fmt.Errorf("authorize AI routes: %w", err)
 	}
 	return nil
@@ -757,12 +801,14 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		teamRoomPowerLevels[adminMatrixID] = 100
 	}
 
+	teamMeta := teamRoomMeta(req, teamAdminID, leaderMatrixID, p.matrix.UserID)
 	teamRoom, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
 		Name:          fmt.Sprintf("Team: %s", req.TeamName),
 		Topic:         fmt.Sprintf("Team room for %s", req.TeamName),
 		Invite:        teamInvites,
 		PowerLevels:   teamRoomPowerLevels,
 		CreatorToken:  req.TeamAdminActorToken,
+		InitialState:  roomMetaState(teamMeta),
 		RoomAliasName: roomAliasLocalpart("team", req.TeamName),
 	})
 	if err != nil {
@@ -792,6 +838,13 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	} else if err := p.ReconcileRoomMembership(ctx, teamRoom.RoomID, teamDesired); err != nil {
 		return nil, fmt.Errorf("reconcile team room membership: %w", err)
 	}
+	teamMetaToken := ""
+	if hasTeamAdmin {
+		teamMetaToken = req.TeamAdminActorToken
+	}
+	if err := p.matrix.SetRoomState(ctx, teamRoom.RoomID, roomMetaEventType, "", teamMeta, teamMetaToken); err != nil {
+		return nil, fmt.Errorf("set team room meta: %w", err)
+	}
 
 	// Leader DM Room: only Leader + Team Admin when configured; otherwise
 	// fallback to the global Admin for legacy teams.
@@ -805,12 +858,15 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	if hasTeamAdmin {
 		leaderDMInvites = withoutString(leaderDMDesired, teamAdminID)
 	}
+	leaderDMMeta := leaderDMRoomMeta(req, teamAdminID, leaderMatrixID)
 	leaderDMRoom, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
 		Name:          fmt.Sprintf("Leader DM: %s", req.LeaderName),
 		Topic:         fmt.Sprintf("DM channel for team leader %s", req.LeaderName),
 		Invite:        leaderDMInvites,
 		PowerLevels:   p.leaderDMPowerLevels(managerMatrixID, adminMatrixID, leaderMatrixID, teamAdminID, hasTeamAdmin),
 		CreatorToken:  req.TeamAdminActorToken,
+		IsDirect:      true,
+		InitialState:  roomMetaState(leaderDMMeta),
 		RoomAliasName: roomAliasLocalpart("leader-dm", req.LeaderName),
 	})
 	if err != nil {
@@ -835,10 +891,24 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		} else {
 			leaderDMInviteToken = token
 			leaderDMInviteActor = "leader"
+			if err := p.matrix.JoinRoom(ctx, leaderDMRoom.RoomID, token); err != nil {
+				return nil, fmt.Errorf("leader join leader DM room: %w", err)
+			}
 		}
 	}
-	if err := p.ReconcileRoomMembershipWithActorToken(ctx, leaderDMRoom.RoomID, leaderDMDesired, leaderDMInviteToken, leaderDMInviteActor); err != nil {
-		return nil, fmt.Errorf("reconcile leader DM membership: %w", err)
+	if hasTeamAdmin || leaderDMInviteToken != "" {
+		if err := p.ReconcileRoomMembershipWithActorToken(ctx, leaderDMRoom.RoomID, leaderDMDesired, leaderDMInviteToken, leaderDMInviteActor); err != nil {
+			return nil, fmt.Errorf("reconcile leader DM membership: %w", err)
+		}
+	}
+	leaderDMMetaToken := ""
+	if hasTeamAdmin {
+		leaderDMMetaToken = req.TeamAdminActorToken
+	} else if leaderDMInviteToken != "" {
+		leaderDMMetaToken = leaderDMInviteToken
+	}
+	if err := p.matrix.SetRoomState(ctx, leaderDMRoom.RoomID, roomMetaEventType, "", leaderDMMeta, leaderDMMetaToken); err != nil {
+		return nil, fmt.Errorf("set leader DM room meta: %w", err)
 	}
 
 	return &TeamRoomResult{
@@ -1201,6 +1271,25 @@ func (p *Provisioner) DeleteTeamRoomAliases(ctx context.Context, teamName, leade
 	return nil
 }
 
+// ArchiveTeamRooms marks preserved Team rooms with a stable deleted suffix so
+// humans can distinguish them from active rooms after aliases are released.
+func (p *Provisioner) ArchiveTeamRooms(ctx context.Context, req TeamRoomArchiveRequest) error {
+	logger := log.FromContext(ctx)
+	if req.TeamRoomID != "" {
+		name := fmt.Sprintf("Team: %s [deleted]", req.TeamName)
+		if err := p.matrix.SetRoomName(ctx, req.TeamRoomID, name, req.ActorToken); err != nil {
+			logger.Error(err, "failed to archive team room name (non-fatal)", "roomID", req.TeamRoomID, "name", name)
+		}
+	}
+	if req.LeaderDMRoomID != "" {
+		name := fmt.Sprintf("Leader DM: %s [deleted]", req.LeaderName)
+		if err := p.matrix.SetRoomName(ctx, req.LeaderDMRoomID, name, req.ActorToken); err != nil {
+			logger.Error(err, "failed to archive leader DM room name (non-fatal)", "roomID", req.LeaderDMRoomID, "name", name)
+		}
+	}
+	return nil
+}
+
 // DeleteWorkerRoomAlias removes the alias that identifies a worker's comm
 // channel. Same semantics as DeleteTeamRoomAliases — the underlying room is
 // preserved, only the controller's handle to it is released.
@@ -1228,8 +1317,7 @@ func (p *Provisioner) DeleteManagerRoomAlias(ctx context.Context, managerName st
 
 // ManagerProvisionRequest describes the infrastructure to provision for a Manager.
 type ManagerProvisionRequest struct {
-	Name            string
-	ModelProviderID string
+	Name string
 }
 
 // ManagerProvisionResult contains all outputs from a successful Manager provision.
@@ -1321,12 +1409,14 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 		adminMatrixID:   100,
 		managerMatrixID: 100,
 	}
+	managerMeta := managerDMRoomMeta(managerName, managerMatrixID, adminMatrixID, p.adminUser)
 	roomInfo, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
 		Name:          fmt.Sprintf("Manager: %s", managerName),
 		Topic:         fmt.Sprintf("Admin DM channel for Manager %s", managerName),
 		Invite:        []string{adminMatrixID, managerMatrixID},
 		PowerLevels:   powerLevels,
 		IsDirect:      true,
+		InitialState:  roomMetaState(managerMeta),
 		RoomAliasName: roomAliasLocalpart("manager", managerName),
 	})
 	if err != nil {
@@ -1334,6 +1424,10 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 	}
 	roomID := roomInfo.RoomID
 	logger.Info("Manager Admin DM room ready", "roomID", roomID, "created", roomInfo.Created)
+
+	if err := p.matrix.SetRoomState(ctx, roomID, roomMetaEventType, "", managerMeta, ""); err != nil {
+		return nil, fmt.Errorf("set manager admin DM room meta: %w", err)
+	}
 
 	if err := p.creds.Save(ctx, managerName, creds); err != nil {
 		logger.Error(err, "failed to persist credentials (non-fatal)")
@@ -1353,7 +1447,7 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 		_ = p.creds.Save(ctx, managerName, creds)
 	}
 
-	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, req.ModelProviderID); err != nil {
+	if err := p.gateway.AuthorizeAIRoutes(ctx, consumerName, ""); err != nil {
 		return nil, fmt.Errorf("AI route authorization failed: %w", err)
 	}
 	// Higress WASM key-auth plugin needs ~1-2s to sync after route update.
@@ -1376,7 +1470,7 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 type ManagerWelcomeRequest struct {
 	// RoomID is the Admin DM room created by ProvisionManager (Step 4).
 	RoomID string
-	// Language is the install-time HICLAW_LANGUAGE selection ("zh" / "en").
+	// Language is the install-time AGENTTEAMS_LANGUAGE selection ("zh" / "en").
 	// Embedded as plain text in the prompt; the agent decides how to apply.
 	Language string
 	// Timezone is the install-time TZ env (IANA identifier, e.g.
@@ -1390,7 +1484,7 @@ type ManagerWelcomeRequest struct {
 // (name / language / communication style). It is the new-architecture
 // replacement for the legacy in-container welcome flow that lived in
 // `start-manager-agent.sh` (lines 535-608) and only ran when
-// HICLAW_RUNTIME != "k8s".
+// AGENTTEAMS_RUNTIME != "k8s".
 //
 // Idempotency is the caller's responsibility — the controller guards
 // re-send via Manager.Status.WelcomeSent. This method only checks that

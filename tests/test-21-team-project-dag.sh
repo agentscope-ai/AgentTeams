@@ -294,6 +294,8 @@ TEAM_ROOM_ENC=$(echo "${TEAM_ROOM}" | sed 's/!/%21/g')
 LEADER_DM_ENC=$(echo "${LEADER_DM}" | sed 's/!/%21/g')
 
 LEADER_RESPONDED=false
+TEAM_COORDINATED=false
+RUNTIME_ERROR=false
 for i in $(seq 1 20); do
     sleep 30
     log_info "Polling rooms... (${i}/20, elapsed: $((i*30))s)"
@@ -310,11 +312,13 @@ for i in $(seq 1 20); do
     if echo "${TEAM_MSGS}" | grep -q "@${TEST_LEADER}:"; then
         log_info "Leader is active in Team Room"
         LEADER_RESPONDED=true
+        TEAM_COORDINATED=true
     fi
 
     # Check if any worker has responded in Team Room
     if echo "${TEAM_MSGS}" | grep -qi "${TEST_W1}\|${TEST_W2}"; then
         log_info "Workers are responding in Team Room"
+        TEAM_COORDINATED=true
         break
     fi
 
@@ -330,13 +334,18 @@ for i in $(seq 1 20); do
     if [ -n "${DM_MSGS}" ]; then
         log_info "Leader responded in Leader DM"
         LEADER_RESPONDED=true
+        if echo "${DM_MSGS}" | grep -qi "Error:\\|No active model configured"; then
+            RUNTIME_ERROR=true
+        fi
     fi
 done
 
-if [ "${LEADER_RESPONDED}" = "true" ]; then
+if [ "${RUNTIME_ERROR}" = "true" ]; then
+    log_fail "Leader returned a runtime error"
+elif [ "${LEADER_RESPONDED}" = "true" ] && [ "${TEAM_COORDINATED}" = "true" ]; then
     log_pass "Leader received and processed task from Admin via Leader DM"
 else
-    log_fail "Leader did not respond within timeout"
+    log_fail "Leader did not coordinate the task in Team Room within timeout"
 fi
 
 # Final snapshot of all rooms

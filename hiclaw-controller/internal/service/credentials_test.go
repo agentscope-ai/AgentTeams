@@ -12,7 +12,7 @@ import (
 
 // TestSecretCredentialStore_StampsControllerLabel verifies the controller
 // name provided at construction is copied onto every credential Secret
-// under the hiclaw.io/controller key so that multi-instance deployments in
+// under the agentteams.io/controller key so that multi-instance deployments in
 // one namespace can filter their own credential artifacts. Also verifies
 // that the Secret's decorative "app" label is derived from
 // ResourcePrefix.WorkerAppLabel() — historically this was hardcoded to
@@ -42,8 +42,8 @@ func TestSecretCredentialStore_StampsControllerLabel(t *testing.T) {
 	if got := sec.Labels[v1beta1.LabelController]; got != "ctl-a" {
 		t.Fatalf("expected controller label ctl-a, got %q (labels=%v)", got, sec.Labels)
 	}
-	if sec.Labels["hiclaw.io/worker"] != "alice" {
-		t.Fatalf("expected worker label alice, got %q", sec.Labels["hiclaw.io/worker"])
+	if sec.Labels["agentteams.io/worker"] != "alice" {
+		t.Fatalf("expected worker label alice, got %q", sec.Labels["agentteams.io/worker"])
 	}
 	if got, want := sec.Labels["app"], "hiclaw-worker"; got != want {
 		t.Fatalf("expected app label %q (derived from ResourcePrefix.WorkerAppLabel), got %q (labels=%v)", want, got, sec.Labels)

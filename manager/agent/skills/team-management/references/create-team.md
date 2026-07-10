@@ -26,7 +26,7 @@ Notes:
 Use `leader.resources` and `workers[].resources` when admin asks for per-member CPU or memory requests/limits:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: <TEAM_NAME>

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	"github.com/hiclaw/hiclaw-controller/internal/controller/humanidentity"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -15,12 +16,14 @@ type humanScope struct {
 	human     *v1beta1.Human
 	username  string
 	patchBase client.Patch
+	identity  humanidentity.ResolvedIdentity
 
 	// userToken is the Human's own Matrix access token for this reconcile
-	// pass, obtained either from EnsureHumanUser (first-time) or
-	// LoginAsHuman (steady-state). Empty when login failed (e.g. the user
-	// changed their password in Element); rooms phase then degrades to
-	// admin-only invite without /join.
+	// pass, obtained either from the identity source's EnsurePrecreated
+	// (first-time) or EnsureUserToken (steady-state, e.g. LoginWithPassword
+	// for legacy_password). Empty when login failed (e.g. the user changed
+	// their password in Element); rooms phase then degrades to admin-only
+	// invite without /join.
 	userToken string
 }
 
@@ -32,7 +35,13 @@ type humanScope struct {
 //     (reconcile is stuck before it can report a real state), or the
 //     previous Phase otherwise (transient errors keep us in "Active").
 func computeHumanPhase(h *v1beta1.Human, reconcileErr error) string {
+	if h.Status.Phase == "Degraded" && h.Status.Message != "" {
+		return "Degraded"
+	}
 	if reconcileErr != nil {
+		if h.Status.Phase == "Degraded" {
+			return "Degraded"
+		}
 		if h.Status.MatrixUserID == "" {
 			return "Failed"
 		}

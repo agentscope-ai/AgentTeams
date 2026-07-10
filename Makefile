@@ -57,6 +57,14 @@ LOCAL_OPENHUMAN_WORKER = hiclaw/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = hiclaw/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
 LOCAL_CONTROLLER_LEGACY = hiclaw/hiclaw-controller:$(VERSION)
+LOCAL_CONTROLLER_BUILD_IMAGE ?= $(shell \
+	if docker image inspect $(LOCAL_CONTROLLER) >/dev/null 2>&1; then \
+		printf '%s' '$(LOCAL_CONTROLLER)'; \
+	elif docker image inspect $(LOCAL_CONTROLLER_LEGACY) >/dev/null 2>&1; then \
+		printf '%s' '$(LOCAL_CONTROLLER_LEGACY)'; \
+	else \
+		printf '%s' '$(LOCAL_CONTROLLER)'; \
+	fi)
 LOCAL_EMBEDDED       = agentteams/agentteams-embedded:$(VERSION)
 
 # Higress base image registry (regional mirrors auto-synced from cn-hangzhou primary)
@@ -155,7 +163,7 @@ build-hiclaw-controller: ## Build hiclaw-controller image (prerequisite for Mana
 build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile \
 		-t $(LOCAL_MANAGER) \
 		.
@@ -163,7 +171,7 @@ build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Python runtime)
 	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile.copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
 		.
@@ -171,7 +179,7 @@ build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Pytho
 build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
 	@echo "==> Building embedded image: $(LOCAL_EMBEDDED) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f hiclaw-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
 		.
@@ -179,18 +187,21 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_WORKER) \
 		./worker/
 
 build-copaw-worker: ## Build CoPaw Worker image
 	@echo "==> Building CoPaw Worker image: $(LOCAL_COPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_COPAW_WORKER) \
 		./copaw/
 
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
 		./hermes/
 

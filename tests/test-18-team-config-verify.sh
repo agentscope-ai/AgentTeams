@@ -211,6 +211,10 @@ assert_eq "worker" "${W2_ROLE}" "Worker 2 has role=worker"
 # ============================================================
 log_section "Verify Leader AGENTS.md"
 
+# TeamReconciler injects the leader context after member provisioning and room
+# IDs are available. Avoid a single early MinIO read racing that async write.
+wait_agent_file_contains "${TEST_LEADER}" "AGENTS.md" "hiclaw-team-context-start" 120 || true
+
 LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null || echo "")
 assert_not_empty "${LEADER_AGENTS}" "Leader AGENTS.md exists in MinIO"
 

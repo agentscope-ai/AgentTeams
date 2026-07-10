@@ -301,6 +301,7 @@ LEADER_DM_ENC=$(echo "${LEADER_DM}" | sed 's/!/%21/g')
 
 LEADER_RESPONDED=false
 TEAM_COORDINATED=false
+LEADER_COORDINATION_NUDGE_SENT=false
 RUNTIME_ERROR=false
 for i in $(seq 1 20); do
     sleep 30
@@ -342,6 +343,12 @@ for i in $(seq 1 20); do
         LEADER_RESPONDED=true
         if echo "${DM_MSGS}" | grep -qi "Error:\\|No active model configured"; then
             RUNTIME_ERROR=true
+        fi
+        if [ "${LEADER_COORDINATION_NUDGE_SENT}" != "true" ] && [ "${TEAM_COORDINATED}" != "true" ]; then
+            log_info "Leader is active in DM but not coordinating in Team Room; sending one corrective Team Room nudge"
+            matrix_send_message "${ADMIN_LOGIN_TOKEN}" "${TEAM_ROOM}" \
+                "@${TEST_LEADER}:${TEST_MATRIX_DOMAIN} You are the Team Leader, not the implementer. Stop doing the API work yourself. In this Team Room, create/delegate tasks and @mention ${TEST_W1} for API design/implementation and ${TEST_W2} for QA/test cases. Workers only process task assignments addressed to them in this Team Room."
+            LEADER_COORDINATION_NUDGE_SENT=true
         fi
     fi
 done

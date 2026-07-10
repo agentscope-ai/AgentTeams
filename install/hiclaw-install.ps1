@@ -2794,13 +2794,42 @@ function Install-Manager {
 
     # Pull images (skip if already exists locally for local build tags).
     $LocalImagePattern = "^(hiclaw|agentteams)/"
+    function Resolve-LegacyLocalImage {
+        param([string]$Image)
+        switch -Regex ($Image) {
+            '^agentteams/manager:(.+)$' { return "hiclaw/hiclaw-manager:$($Matches[1])" }
+            '^agentteams/manager-copaw:(.+)$' { return "hiclaw/hiclaw-manager-copaw:$($Matches[1])" }
+            '^agentteams/worker-agent:(.+)$' { return "hiclaw/worker-agent:$($Matches[1])" }
+            '^agentteams/copaw-worker:(.+)$' { return "hiclaw/copaw-worker:$($Matches[1])" }
+            '^agentteams/hermes-worker:(.+)$' { return "hiclaw/hermes-worker:$($Matches[1])" }
+            '^agentteams/qwenpaw-worker:(.+)$' { return "hiclaw/qwenpaw-worker:$($Matches[1])" }
+            '^agentteams/agentteams-embedded:(.+)$' { return "hiclaw/hiclaw-embedded:$($Matches[1])" }
+            '^agentteams/agentteams-controller:(.+)$' { return "hiclaw/hiclaw-controller:$($Matches[1])" }
+            default { return $null }
+        }
+    }
+    function Test-OrTagLocalImage {
+        param([string]$Image)
+        $imgExists = docker image inspect $Image 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+        $legacyImage = Resolve-LegacyLocalImage $Image
+        if ($legacyImage) {
+            $legacyExists = docker image inspect $legacyImage 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                docker tag $legacyImage $Image
+                return $true
+            }
+        }
+        return $false
+    }
     if ($script:HICLAW_USE_EMBEDDED -eq "1") {
         # Embedded image was already pulled by Resolve-EmbeddedImage unless overridden;
         # for an explicit override we still need to ensure it is present locally.
         if ($env:HICLAW_INSTALL_EMBEDDED_IMAGE) {
             if ($script:EMBEDDED_IMAGE -match $LocalImagePattern) {
-                $imgExists = docker image inspect $script:EMBEDDED_IMAGE 2>$null
-                if ($LASTEXITCODE -ne 0) {
+                if (-not (Test-OrTagLocalImage $script:EMBEDDED_IMAGE)) {
                     Write-Log "Pulling embedded image: $($script:EMBEDDED_IMAGE)"
                     & docker pull $script:EMBEDDED_IMAGE
                 }
@@ -2812,8 +2841,7 @@ function Install-Manager {
         # Manager image — controller will spawn it inside; pull here so the spawn doesn't
         # have to wait on the network.
         if ($managerImage -match $LocalImagePattern) {
-            $imgExists = docker image inspect $managerImage 2>$null
-            if ($LASTEXITCODE -eq 0) {
+            if (Test-OrTagLocalImage $managerImage) {
                 Write-Log (Get-Msg "install.image.exists" -f $managerImage)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
@@ -2825,8 +2853,7 @@ function Install-Manager {
         }
     } else {
         if ($managerImage -match $LocalImagePattern) {
-            $managerImageExists = docker image inspect $managerImage 2>$null
-            if ($LASTEXITCODE -eq 0) {
+            if (Test-OrTagLocalImage $managerImage) {
                 Write-Log (Get-Msg "install.image.exists" -f $managerImage)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
@@ -2841,8 +2868,7 @@ function Install-Manager {
     # Pull all worker runtime images (workers may use any runtime regardless of the default)
     foreach ($workerImg in @($script:WORKER_IMAGE, $script:COPAW_WORKER_IMAGE, $script:HERMES_WORKER_IMAGE)) {
         if ($workerImg -match $LocalImagePattern) {
-            $imgExists = docker image inspect $workerImg 2>$null
-            if ($LASTEXITCODE -eq 0) {
+            if (Test-OrTagLocalImage $workerImg) {
                 Write-Log (Get-Msg "install.image.worker_exists" -f $workerImg)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_worker" -f $workerImg)

@@ -3192,6 +3192,19 @@ EOF
         esac
     }
 
+    _legacy_local_image_for() {
+        case "$1" in
+            agentteams/manager:*) printf '%s\n' "hiclaw/hiclaw-manager:${1##*:}" ;;
+            agentteams/manager-copaw:*) printf '%s\n' "hiclaw/hiclaw-manager-copaw:${1##*:}" ;;
+            agentteams/worker-agent:*) printf '%s\n' "hiclaw/worker-agent:${1##*:}" ;;
+            agentteams/copaw-worker:*) printf '%s\n' "hiclaw/copaw-worker:${1##*:}" ;;
+            agentteams/hermes-worker:*) printf '%s\n' "hiclaw/hermes-worker:${1##*:}" ;;
+            agentteams/qwenpaw-worker:*) printf '%s\n' "hiclaw/qwenpaw-worker:${1##*:}" ;;
+            agentteams/agentteams-embedded:*) printf '%s\n' "hiclaw/hiclaw-embedded:${1##*:}" ;;
+            agentteams/agentteams-controller:*) printf '%s\n' "hiclaw/hiclaw-controller:${1##*:}" ;;
+        esac
+    }
+
     # Helper: pull or skip a single image
     # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
     _pull_image() {
@@ -3199,6 +3212,13 @@ EOF
         [ -z "${_img}" ] && return 0
         if _is_local_image "${_img}"; then
             if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
+                log "$(msg "${_exists_key}" "${_img}")"
+                return 0
+            fi
+            local _legacy_img
+            _legacy_img="$(_legacy_local_image_for "${_img}")"
+            if [ -n "${_legacy_img}" ] && ${DOCKER_CMD} image inspect "${_legacy_img}" >/dev/null 2>&1; then
+                ${DOCKER_CMD} tag "${_legacy_img}" "${_img}"
                 log "$(msg "${_exists_key}" "${_img}")"
                 return 0
             fi

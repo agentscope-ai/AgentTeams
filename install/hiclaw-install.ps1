@@ -2792,13 +2792,13 @@ function Install-Manager {
         docker volume create $config.DATA_DIR | Out-Null
     }
 
-    # Pull images (skip if already exists locally for `hiclaw/`-prefixed local builds).
-    $LocalImagePrefix = "hiclaw/"
+    # Pull images (skip if already exists locally for local build tags).
+    $LocalImagePattern = "^(hiclaw|agentteams)/"
     if ($script:HICLAW_USE_EMBEDDED -eq "1") {
         # Embedded image was already pulled by Resolve-EmbeddedImage unless overridden;
         # for an explicit override we still need to ensure it is present locally.
         if ($env:HICLAW_INSTALL_EMBEDDED_IMAGE) {
-            if ($script:EMBEDDED_IMAGE.StartsWith($LocalImagePrefix)) {
+            if ($script:EMBEDDED_IMAGE -match $LocalImagePattern) {
                 $imgExists = docker image inspect $script:EMBEDDED_IMAGE 2>$null
                 if ($LASTEXITCODE -ne 0) {
                     Write-Log "Pulling embedded image: $($script:EMBEDDED_IMAGE)"
@@ -2811,7 +2811,7 @@ function Install-Manager {
         }
         # Manager image — controller will spawn it inside; pull here so the spawn doesn't
         # have to wait on the network.
-        if ($managerImage.StartsWith($LocalImagePrefix)) {
+        if ($managerImage -match $LocalImagePattern) {
             $imgExists = docker image inspect $managerImage 2>$null
             if ($LASTEXITCODE -eq 0) {
                 Write-Log (Get-Msg "install.image.exists" -f $managerImage)
@@ -2824,7 +2824,7 @@ function Install-Manager {
             & docker pull $managerImage
         }
     } else {
-        if ($managerImage.StartsWith($LocalImagePrefix)) {
+        if ($managerImage -match $LocalImagePattern) {
             $managerImageExists = docker image inspect $managerImage 2>$null
             if ($LASTEXITCODE -eq 0) {
                 Write-Log (Get-Msg "install.image.exists" -f $managerImage)
@@ -2840,7 +2840,7 @@ function Install-Manager {
 
     # Pull all worker runtime images (workers may use any runtime regardless of the default)
     foreach ($workerImg in @($script:WORKER_IMAGE, $script:COPAW_WORKER_IMAGE, $script:HERMES_WORKER_IMAGE)) {
-        if ($workerImg.StartsWith($LocalImagePrefix)) {
+        if ($workerImg -match $LocalImagePattern) {
             $imgExists = docker image inspect $workerImg 2>$null
             if ($LASTEXITCODE -eq 0) {
                 Write-Log (Get-Msg "install.image.worker_exists" -f $workerImg)

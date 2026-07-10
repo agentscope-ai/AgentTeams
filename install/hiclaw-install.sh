@@ -3185,14 +3185,19 @@ EOF
     # (HICLAW_MATRIX_E2EE is already written to ENV_FILE above via --env-file)
 
     # Pull images (manager based on runtime config; all worker runtimes always pulled)
-    LOCAL_IMAGE_PREFIX="hiclaw/"
+    _is_local_image() {
+        case "$1" in
+            hiclaw/*|agentteams/*) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
 
     # Helper: pull or skip a single image
     # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
     _pull_image() {
         local _img="$1" _exists_key="$2" _pull_key="$3"
         [ -z "${_img}" ] && return 0
-        if echo "${_img}" | grep -q "^${LOCAL_IMAGE_PREFIX}"; then
+        if _is_local_image "${_img}"; then
             if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
                 log "$(msg "${_exists_key}" "${_img}")"
                 return 0

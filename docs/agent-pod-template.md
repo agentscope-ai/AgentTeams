@@ -62,56 +62,6 @@ data:
 
 Find a ready-to-apply example at [`docs/examples/agent-pod-template-cm.yaml`](examples/agent-pod-template-cm.yaml).
 
-## Per-deploy-mode override (Remote)
-
-When a Worker is created with `spec.deployMode: Remote`, the controller
-schedules its Pod into a remote cluster fronted by a virtual-kubelet style
-provider, where node taints, image-pull secrets, and tolerations almost
-always differ from the in-cluster defaults. To avoid forcing those
-remote-only fields onto every local Pod, the same ConfigMap may carry an
-additional key:
-
-| Key | Consumed when |
-|---|---|
-| `pod-template.yaml` | Default and `deployMode: Local` only. NOT used as fallback for Remote mode. |
-| `pod-template-remote.yaml` | Only when `deployMode: Remote` and the key is present and non-empty. |
-
-Resolution rules:
-
-- `deployMode: Remote` → if `pod-template-remote.yaml` is present and
-  non-empty, it is used; otherwise the controller applies the default Pod
-  spec with no overlay (it does **not** fall back to `pod-template.yaml`).
-- Any other deploy mode (default / `Local`) → the remote key is ignored
-  even when present, and only `pod-template.yaml` is consulted.
-- Non-K8s backends never consume the remote key.
-
-This lets you keep one ConfigMap per controller while shipping different
-`tolerations`, `nodeSelector`, `imagePullSecrets`, annotations or sidecars
-to remote-cluster Pods, e.g.:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: <controller-name>
-  namespace: <controller-ns>
-data:
-  pod-template.yaml: |
-    spec:
-      nodeSelector:
-        kubernetes.io/os: linux
-  pod-template-remote.yaml: |
-    spec:
-      nodeSelector:
-        type: virtual-kubelet
-      tolerations:
-        - key: virtual-kubelet.io/provider
-          operator: Exists
-          effect: NoSchedule
-      imagePullSecrets:
-        - name: remote-registry-pull-secret
-```
-
 ## Merge semantics
 
 Fields the **template wins**:

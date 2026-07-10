@@ -217,29 +217,27 @@ spec:
                   description: "Desired lifecycle state (default: Running). The controller reconciles actual state toward this."
                 deployMode:
                   type: string
-                  enum: ["Local", "Remote", "Edge"]
-                  description: "Where the worker pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster; Edge: externally hosted on a remote host outside the controller's cluster."
+                  enum: ["Local", "Edge"]
+                  description: "Where the worker runs. Local (default): controller's own cluster; Edge: externally hosted on a remote host outside the controller's cluster."
                 targetCluster:
                   type: object
-                  description: "Remote cluster target for deployment. Required when deployMode is Remote."
+                  description: "Deprecated. Remote cluster deployment is not supported in the open-source controller."
                   properties:
                     id:
                       type: string
-                      description: "ACS/ACK cluster ID."
+                      description: "Deprecated remote cluster ID."
                     namespace:
                       type: string
-                      description: "Target namespace in the remote cluster."
-                  required: ["id", "namespace"]
+                      description: "Deprecated remote cluster namespace."
                 serviceEnabled:
                   type: boolean
                   description: "Whether to create a ClusterIP Service alongside the worker pod."
                 backendRuntime:
                   type: string
-                  enum: ["pod", "sandbox"]
+                  enum: ["pod"]
                   description: |
                     Container runtime backend for this worker.
                     "pod" (default): standard Kubernetes Pod.
-                    "sandbox": Sandbox CR via configured plugin.
                     Only effective in incluster mode; ignored in embedded (Docker) mode.
                 labels:
                   type: object
@@ -288,11 +286,8 @@ spec:
                 volumes:
                   type: array
                   description: >
-                    Custom external storage volumes available to sandbox workers.
-                    Built-in worker-deps token/env/data use the AgentTeams
-                    instance-level workspace OSS volume automatically and are
-                    not declared here. Currently only OSS is supported, and
-                    these volumes are used only with spec.backendRuntime=sandbox.
+                    Reserved for runtimes that provide custom external storage
+                    mounts. Not supported by the open-source pod backend.
                   items:
                     type: object
                     required: [name, type]
@@ -342,13 +337,8 @@ spec:
                 mounts:
                   type: array
                   description: >
-                    Custom sandbox-only dynamic mounts injected through
-                    SandboxClaim. Reserved names token/env/data are accepted for
-                    compatibility with older CRs but ignored by the controller;
-                    those built-in mounts are generated from the instance-level
-                    worker-deps layout. Non-reserved names reference a custom
-                    spec.volumes[] entry, declare an exact mount path, and pass
-                    subPath through unchanged.
+                    Reserved for runtimes that provide custom dynamic mounts.
+                    Not supported by the open-source pod backend.
                   items:
                     type: object
                     required: [name, volumeRef, mountPath, readOnly]

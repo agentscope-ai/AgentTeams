@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
@@ -68,26 +69,27 @@ func TestResolveBackendForMember_LocalMode(t *testing.T) {
 	}
 }
 
-func TestResolveBackendForMember_RemoteMode_NonK8s(t *testing.T) {
-	// When DeployMode="Remote" but the resolved backend is neither a
-	// *K8sBackend nor a *SandboxBackend, the original backend is returned
-	// unchanged because remote targeting is K8s/Sandbox-only.
-	mb := &mockBackend{}
+func TestResolveBackendForMember_SandboxDoesNotFallbackToPod(t *testing.T) {
+	mb := &mockBackend{name: "k8s"}
 	reg := backend.NewRegistry([]backend.WorkerBackend{mb})
 
-	m := MemberContext{
-		Name:            "worker-c",
-		DeployMode:      v1beta1.DeployModeRemote,
-		TargetClusterID: "cluster-remote-2",
-		TargetNamespace: "remote-ns",
+	_, err := resolveBackendForMember(reg, v1beta1.BackendRuntimeSandbox, MemberContext{Name: "worker-c"})
+	if err == nil {
+		t.Fatal("expected unsupported sandbox backend error")
+	}
+	if !strings.Contains(err.Error(), "backendRuntime \"sandbox\" is not supported") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestValidateMemberDeploymentRejectsRemote(t *testing.T) {
+	if err := ValidateMemberDeployment(MemberContext{Name: "worker-a", DeployMode: v1beta1.DeployModeLocal}); err != nil {
+		t.Fatalf("local deployment should be valid: %v", err)
 	}
 
-	got, err := resolveBackendForMember(reg, "", m)
-	if err != nil {
-		t.Fatalf("resolveBackendForMember err = %v", err)
-	}
-	if got != mb {
-		t.Errorf("expected original mock backend, got a different instance")
+	err := ValidateMemberDeployment(MemberContext{Name: "worker-b", DeployMode: v1beta1.DeployModeRemote})
+	if err == nil || !strings.Contains(err.Error(), "deployMode \"Remote\" is not supported") {
+		t.Fatalf("remote deployment error=%v", err)
 	}
 }
 

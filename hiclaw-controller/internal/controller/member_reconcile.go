@@ -162,14 +162,13 @@ type MemberContext struct {
 	// spec.modelProvider is set. Nil when not set or on non-ai-gateway.
 	ModelProviderInfo *gateway.ModelProviderInfo
 
-	// DeployMode specifies where the member pod runs: "Local" (default) or
-	// "Remote". Sourced from spec.deployMode with a default of "Local".
+	// DeployMode specifies where the member runs: "Local" (default) for
+	// controller-managed pods. "Edge" is handled before pod reconciliation.
 	DeployMode string
-	// TargetClusterID is the remote cluster ID when DeployMode is "Remote".
-	// Sourced from spec.targetCluster.id.
+	// TargetClusterID is deprecated. Remote deployment is not supported in the
+	// open-source controller.
 	TargetClusterID string
-	// TargetNamespace is the namespace in the remote cluster when DeployMode
-	// is "Remote". Sourced from spec.targetCluster.namespace.
+	// TargetNamespace is deprecated with TargetClusterID.
 	TargetNamespace string
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the member pod. Sourced from spec.serviceEnabled.
@@ -180,8 +179,8 @@ type MemberContext struct {
 	// field carries the backend-expanded form.
 	Resources *backend.ResourceRequirements
 
-	// BackendRuntime is the desired backend type from spec.backendRuntime
-	// ("pod" or "sandbox"). Empty means default ("pod").
+	// BackendRuntime is the desired backend type from spec.backendRuntime.
+	// Empty means default ("pod").
 	BackendRuntime string
 
 	// StatusBackendRuntime is the currently deployed backend type from
@@ -217,14 +216,21 @@ type MemberState struct {
 }
 
 // resolveBackendForMember returns the worker backend matching the requested
-// backendRuntime ("pod" or "sandbox"), with remote targeting applied when
-// the member runs in a remote cluster. When the registry does not have a
-// backend for the requested type (e.g. Docker / embedded mode where neither
-// "k8s" nor "sandbox" is registered), it falls back to DetectWorkerBackend
-// so the legacy single-backend deployments keep working.
+// backendRuntime. "pod" remains the only open-source incluster backend. When
+// the registry does not have a pod backend (e.g. Docker / embedded mode), it
+// falls back to DetectWorkerBackend so legacy single-backend deployments keep
+// working. Explicit sandbox requests must resolve to a registered sandbox
+// backend and never silently fall back to pods.
 func resolveBackendForMember(registry *backend.Registry, backendRuntime string, m MemberContext) (backend.WorkerBackend, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("no backend registry configured for member %s", m.Name)
+	}
+	if backendRuntime == v1beta1.BackendRuntimeSandbox {
+		wb, err := registry.GetBackendForType(context.Background(), backendRuntime)
+		if err != nil {
+			return nil, fmt.Errorf("backendRuntime %q is not supported in the open-source controller; use backendRuntime %q", backendRuntime, v1beta1.BackendRuntimePod)
+		}
+		return wb, nil
 	}
 	wb, err := registry.GetBackendForType(context.Background(), backendRuntime)
 	if err != nil {
@@ -239,9 +245,6 @@ func resolveBackendForMember(registry *backend.Registry, backendRuntime string, 
 	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
 		if k8sBackend, ok := wb.(*backend.K8sBackend); ok {
 			return k8sBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace), nil
-		}
-		if sandboxBackend, ok := wb.(*backend.SandboxBackend); ok {
-			wb = sandboxBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
 		}
 	}
 	return wb, nil
@@ -294,22 +297,20 @@ type MemberDeps struct {
 	MountRoleName             string
 }
 
-// ValidateMemberDeployment checks the cross-cluster deployment fields on a
-// MemberContext for consistency. Returns a non-nil error when:
-//   - DeployMode is not "Local" or "Remote"
-//   - DeployMode is "Remote" but TargetClusterID or TargetNamespace is empty
+// ValidateMemberDeployment checks the deployment fields for managed pod
+// reconciliation. Open-source managed workers are local-cluster pods only;
+// Edge workers are handled by the dedicated Edge flow before this validation.
 func ValidateMemberDeployment(m MemberContext) error {
 	switch m.DeployMode {
-	case v1beta1.DeployModeLocal, v1beta1.DeployModeRemote:
+	case "", v1beta1.DeployModeLocal:
+		return nil
+	case v1beta1.DeployModeRemote:
+		return fmt.Errorf("deployMode %q is not supported in the open-source controller; use %q or the Edge worker flow", m.DeployMode, v1beta1.DeployModeLocal)
+	case v1beta1.DeployModeEdge:
+		return fmt.Errorf("deployMode %q must use the Edge worker flow and is not valid for managed pod reconciliation", m.DeployMode)
 	default:
-		return fmt.Errorf("invalid deployMode %q: must be \"Local\" or \"Remote\"", m.DeployMode)
+		return fmt.Errorf("invalid deployMode %q: must be %q or %q", m.DeployMode, v1beta1.DeployModeLocal, v1beta1.DeployModeEdge)
 	}
-	if m.DeployMode == v1beta1.DeployModeRemote {
-		if m.TargetClusterID == "" || m.TargetNamespace == "" {
-			return fmt.Errorf("deployMode \"Remote\" requires targetCluster.id and targetCluster.namespace")
-		}
-	}
-	return nil
 }
 
 // ReconcileMemberInfra ensures Matrix account, Gateway consumer, MinIO user,

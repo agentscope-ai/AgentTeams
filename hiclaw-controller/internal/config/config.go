@@ -95,7 +95,8 @@ type Config struct {
 	K8sWorkerCPU    string
 	K8sWorkerMemory string
 
-	// Sandbox backend (OpenKruise Agent Sandbox)
+	// Legacy sandbox backend knobs. The open-source controller does not
+	// register the OpenKruise sandbox backend.
 	SandboxProviderType          string
 	SandboxCapabilities          string
 	SandboxPrewarmSize           int

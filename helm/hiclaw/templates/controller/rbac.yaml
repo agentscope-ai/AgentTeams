@@ -37,14 +37,6 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- $sandboxRuntime := eq (.Values.controller.workerBackendRuntime | default "pod") "sandbox" }}
-  {{- $sandboxConfigured := or (eq (.Values.controller.workerBackend | default "") "sandbox") $sandboxRuntime }}
-  {{- if $sandboxConfigured }}
-  # OpenKruise Agent Sandbox CRDs (agents.kruise.io/v1alpha1)
-  - apiGroups: ["agents.kruise.io"]
-    resources: ["sandboxes", "sandboxclaims", "sandboxsets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -84,7 +76,7 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- if or .Values.credentialProvider.enabled $sandboxConfigured }}
+  {{- if .Values.credentialProvider.enabled }}
   - apiGroups: ["agentidentity.alibabacloud.com"]
     resources: ["credentialproviders", "agentidentities", "agentroles", "agentrolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

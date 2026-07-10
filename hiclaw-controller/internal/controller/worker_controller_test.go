@@ -363,37 +363,16 @@ func TestWorkerMemberContext_NilLabelsSafe(t *testing.T) {
 }
 
 func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
-	deployMode := v1beta1.DeployModeRemote
 	backendRuntime := v1beta1.BackendRuntimeSandbox
 	worker := newWorker("alice", v1beta1.WorkerSpec{
 		Model:          "qwen-plus",
 		Image:          "worker:set",
 		WorkerName:     "alice-runtime",
 		BackendRuntime: &backendRuntime,
-		DeployMode:     &deployMode,
-		TargetCluster:  &v1beta1.TargetClusterSpec{ID: "c-1", Namespace: "agents"},
 	})
 
 	rig := newWorkerRig(t, worker)
 	rig.backend.NameOverride = "sandbox"
-	remoteWithoutSecret := newWorkerTestDynamicClient()
-	rig.remote = remoteWithoutSecret
-	namespaceReady := false
-	rig.provisioner.EnsureRemoteNamespaceFn = func(_ context.Context, clusterID, namespace string) error {
-		if clusterID != "c-1" || namespace != "agents" {
-			t.Fatalf("EnsureRemoteNamespace(%q, %q), want c-1/agents", clusterID, namespace)
-		}
-		namespaceReady = true
-		return nil
-	}
-	rig.r.RemoteDynamicClientProvider = fakeRemoteDynamicProvider{
-		client: remoteWithoutSecret,
-		onResolve: func() {
-			if !namespaceReady {
-				t.Fatal("remote dynamic client resolved before target namespace was ensured")
-			}
-		},
-	}
 	gotWorker, _, err := rig.reconcile("alice")
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -408,9 +387,8 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 	if len(rig.r.Provisioner.(*mocks.MockProvisioner).Calls.EnsureRemoteSA) != 0 {
 		t.Fatalf("sandbox claim remote path must not create target-cluster SA: %v", rig.r.Provisioner.(*mocks.MockProvisioner).Calls.EnsureRemoteSA)
 	}
-	namespaceCalls := rig.provisioner.Calls.EnsureRemoteNamespace
-	if len(namespaceCalls) != 1 || namespaceCalls[0].ClusterID != "c-1" || namespaceCalls[0].Namespace != "agents" {
-		t.Fatalf("EnsureRemoteNamespace calls=%v, want c-1/agents", namespaceCalls)
+	if len(rig.provisioner.Calls.EnsureRemoteNamespace) != 0 {
+		t.Fatalf("local sandbox path must not ensure remote namespace, calls=%v", rig.provisioner.Calls.EnsureRemoteNamespace)
 	}
 	tokenCalls := rig.r.Provisioner.(*mocks.MockProvisioner).Calls.RequestSATokenWithExpiration
 	if len(tokenCalls) != 1 || tokenCalls[0].WorkerName != "alice" || tokenCalls[0].ExpirationSeconds != 3600 {
@@ -479,7 +457,7 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 	if req.WorkersDeps.InplaceUpdateImage != "worker:set" {
 		t.Fatalf("inplace image=%q", req.WorkersDeps.InplaceUpdateImage)
 	}
-	pv, err := rig.remote.Resource(workerDepsPVGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
+	pv, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get workers-deps PV: %v", err)
 	}
@@ -520,12 +498,12 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 		t.Fatalf("PV authType=%q, want agent-identity", authType)
 	}
 	for _, name := range []string{"agentteams-env", "agentteams-token", "agentteams-data"} {
-		cp, err := rig.remote.Resource(workerDepsCredentialProviderGVR).Namespace("agents").Get(context.Background(), name, metav1.GetOptions{})
+		cp, err := rig.r.DynamicClient.Resource(workerDepsCredentialProviderGVR).Namespace("default").Get(context.Background(), name, metav1.GetOptions{})
 		if err != nil {
 			t.Fatalf("get worker-deps CredentialProvider %s: %v", name, err)
 		}
-		if cp.GetNamespace() != "agents" {
-			t.Fatalf("CredentialProvider %s namespace=%q, want target namespace agents", name, cp.GetNamespace())
+		if cp.GetNamespace() != "default" {
+			t.Fatalf("CredentialProvider %s namespace=%q, want namespace default", name, cp.GetNamespace())
 		}
 		if roleName, _, _ := unstructured.NestedString(cp.Object, "spec", "ram", "source", "rrsa", "roleName"); roleName != "rrsa-role-a" {
 			t.Fatalf("CredentialProvider %s roleName=%q, want rrsa-role-a", name, roleName)
@@ -533,25 +511,22 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 		policy, _, _ := unstructured.NestedString(cp.Object, "spec", "ram", "source", "rrsa", "policy")
 		assertWorkerDepsCredentialProviderPolicy(t, policy)
 	}
-	assertWorkerDepsAgentIdentityResources(t, rig.remote, "agents")
-	if _, err := rig.remote.Resource(workerDepsStorageClassGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	assertWorkerDepsAgentIdentityResources(t, rig.r.DynamicClient, "default")
+	if _, err := rig.r.DynamicClient.Resource(workerDepsStorageClassGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("built-in worker-deps should not create StorageClass, err=%v", err)
 	}
-	if _, err := rig.remote.Resource(workerDepsPVCGVR).Namespace("agents").Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerDepsPVCGVR).Namespace("default").Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("built-in worker-deps should not create PVC, err=%v", err)
 	}
 }
 
 func TestSandboxWorkerAccessKeyMountAuthUsesSecretPV(t *testing.T) {
-	deployMode := v1beta1.DeployModeRemote
 	backendRuntime := v1beta1.BackendRuntimeSandbox
 	worker := newWorker("alice", v1beta1.WorkerSpec{
 		Model:          "qwen-plus",
 		Image:          "worker:set",
 		WorkerName:     "alice-runtime",
 		BackendRuntime: &backendRuntime,
-		DeployMode:     &deployMode,
-		TargetCluster:  &v1beta1.TargetClusterSpec{ID: "c-1", Namespace: "agents"},
 	})
 
 	rig := newWorkerRig(t, worker)
@@ -570,15 +545,15 @@ func TestSandboxWorkerAccessKeyMountAuthUsesSecretPV(t *testing.T) {
 			t.Fatalf("AccessKey dynamic mount should not have attributes: %+v", mount)
 		}
 	}
-	pv, err := rig.remote.Resource(workerDepsPVGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
+	pv, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get workers-deps PV: %v", err)
 	}
 	if pv.GetNamespace() != "" {
 		t.Fatalf("PV namespace=%q, want cluster-scoped resource", pv.GetNamespace())
 	}
-	if secretNamespace, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "nodePublishSecretRef", "namespace"); secretNamespace != "agents" {
-		t.Fatalf("PV secret namespace=%q, want target namespace agents", secretNamespace)
+	if secretNamespace, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "nodePublishSecretRef", "namespace"); secretNamespace != "default" {
+		t.Fatalf("PV secret namespace=%q, want namespace default", secretNamespace)
 	}
 	if secretName, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "nodePublishSecretRef", "name"); secretName != backend.BuiltinSandboxInstanceName {
 		t.Fatalf("PV secret name=%q, want %s", secretName, backend.BuiltinSandboxInstanceName)
@@ -586,10 +561,10 @@ func TestSandboxWorkerAccessKeyMountAuthUsesSecretPV(t *testing.T) {
 	if authType, ok, _ := unstructured.NestedString(pv.Object, "spec", "csi", "volumeAttributes", "authType"); ok || authType != "" {
 		t.Fatalf("AccessKey PV should not set RRSA authType, got %q", authType)
 	}
-	if _, err := rig.remote.Resource(workerDepsCredentialProviderGVR).Namespace("agents").Get(context.Background(), "agentteams-token", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerDepsCredentialProviderGVR).Namespace("default").Get(context.Background(), "agentteams-token", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("AccessKey worker-deps should not create CredentialProvider, err=%v", err)
 	}
-	if _, err := rig.remote.Resource(workerDepsAgentIdentityGVR).Namespace("agents").Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerDepsAgentIdentityGVR).Namespace("default").Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("AccessKey worker-deps should not create AgentIdentity, err=%v", err)
 	}
 }
@@ -886,15 +861,12 @@ func TestSandboxWorkersShareInstancePV(t *testing.T) {
 }
 
 func TestSandboxWorkerAddsCustomOSSMount(t *testing.T) {
-	deployMode := v1beta1.DeployModeRemote
 	backendRuntime := v1beta1.BackendRuntimeSandbox
 	worker := newWorker("alice", v1beta1.WorkerSpec{
 		Model:          "qwen-plus",
 		Image:          "worker:set",
 		WorkerName:     "alice-runtime",
 		BackendRuntime: &backendRuntime,
-		DeployMode:     &deployMode,
-		TargetCluster:  &v1beta1.TargetClusterSpec{ID: "c-1", Namespace: "agents"},
 		Volumes: []v1beta1.WorkerVolumeSpec{{
 			Name: "external-assets",
 			Type: v1beta1.WorkerVolumeTypeOSS,
@@ -945,15 +917,15 @@ func TestSandboxWorkerAddsCustomOSSMount(t *testing.T) {
 	if len(rig.deployer.Calls.PrepareWorkerDeps) != 1 {
 		t.Fatalf("PrepareWorkerDeps calls=%v", rig.deployer.Calls.PrepareWorkerDeps)
 	}
-	pv, err := rig.remote.Resource(workerDepsPVGVR).Get(context.Background(), "external-assets", metav1.GetOptions{})
+	pv, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), "external-assets", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get custom PV: %v", err)
 	}
 	if pv.GetNamespace() != "" {
 		t.Fatalf("custom PV namespace=%q, want cluster-scoped resource", pv.GetNamespace())
 	}
-	if secretNamespace, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "nodePublishSecretRef", "namespace"); secretNamespace != "agents" {
-		t.Fatalf("custom PV secret namespace=%q, want agents", secretNamespace)
+	if secretNamespace, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "nodePublishSecretRef", "namespace"); secretNamespace != "default" {
+		t.Fatalf("custom PV secret namespace=%q, want default", secretNamespace)
 	}
 	if secretName, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "nodePublishSecretRef", "name"); secretName != "external-oss-cred" {
 		t.Fatalf("custom PV secret name=%q", secretName)

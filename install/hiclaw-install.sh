@@ -3205,23 +3205,30 @@ EOF
         esac
     }
 
+    _ensure_local_image_tag() {
+        local _img="$1"
+        [ -z "${_img}" ] && return 1
+        _is_local_image "${_img}" || return 1
+        if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
+            return 0
+        fi
+        local _legacy_img
+        _legacy_img="$(_legacy_local_image_for "${_img}")"
+        if [ -n "${_legacy_img}" ] && ${DOCKER_CMD} image inspect "${_legacy_img}" >/dev/null 2>&1; then
+            ${DOCKER_CMD} tag "${_legacy_img}" "${_img}"
+            return 0
+        fi
+        return 1
+    }
+
     # Helper: pull or skip a single image
     # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
     _pull_image() {
         local _img="$1" _exists_key="$2" _pull_key="$3"
         [ -z "${_img}" ] && return 0
-        if _is_local_image "${_img}"; then
-            if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
-                log "$(msg "${_exists_key}" "${_img}")"
-                return 0
-            fi
-            local _legacy_img
-            _legacy_img="$(_legacy_local_image_for "${_img}")"
-            if [ -n "${_legacy_img}" ] && ${DOCKER_CMD} image inspect "${_legacy_img}" >/dev/null 2>&1; then
-                ${DOCKER_CMD} tag "${_legacy_img}" "${_img}"
-                log "$(msg "${_exists_key}" "${_img}")"
-                return 0
-            fi
+        if _ensure_local_image_tag "${_img}"; then
+            log "$(msg "${_exists_key}" "${_img}")"
+            return 0
         fi
         log "$(msg "${_pull_key}" "${_img}")"
         local _attempt=1
@@ -3241,6 +3248,9 @@ EOF
 
     # Embedded controller image (resolve versioned tag, fallback to latest)
     resolve_embedded_image
+    if [ "${HICLAW_USE_EMBEDDED}" = "1" ]; then
+        _ensure_local_image_tag "${EMBEDDED_IMAGE}" || true
+    fi
 
     # Manager image is always required (select based on runtime)
     if [ "${HICLAW_MANAGER_RUNTIME}" = "copaw" ]; then

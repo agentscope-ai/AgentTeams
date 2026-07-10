@@ -53,6 +53,12 @@ LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
 LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
+LOCAL_MANAGER_LEGACY        = hiclaw/hiclaw-manager:$(VERSION)
+LOCAL_MANAGER_COPAW_LEGACY  = hiclaw/hiclaw-manager-copaw:$(VERSION)
+LOCAL_WORKER_LEGACY         = hiclaw/worker-agent:$(VERSION)
+LOCAL_COPAW_WORKER_LEGACY   = hiclaw/copaw-worker:$(VERSION)
+LOCAL_HERMES_WORKER_LEGACY  = hiclaw/hermes-worker:$(VERSION)
+LOCAL_QWENPAW_WORKER_LEGACY = hiclaw/qwenpaw-worker:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = hiclaw/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = hiclaw/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
@@ -66,6 +72,7 @@ LOCAL_CONTROLLER_BUILD_IMAGE ?= $(shell \
 		printf '%s' '$(LOCAL_CONTROLLER)'; \
 	fi)
 LOCAL_EMBEDDED       = agentteams/agentteams-embedded:$(VERSION)
+LOCAL_EMBEDDED_LEGACY = hiclaw/hiclaw-embedded:$(VERSION)
 
 # Higress base image registry (regional mirrors auto-synced from cn-hangzhou primary)
 #   China (default): higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -166,6 +173,7 @@ build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile \
 		-t $(LOCAL_MANAGER) \
+		-t $(LOCAL_MANAGER_LEGACY) \
 		.
 
 build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Python runtime)
@@ -174,6 +182,7 @@ build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Pytho
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile.copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
+		-t $(LOCAL_MANAGER_COPAW_LEGACY) \
 		.
 
 build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
@@ -182,6 +191,7 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f hiclaw-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
+		-t $(LOCAL_EMBEDDED_LEGACY) \
 		.
 
 build-worker: ## Build Worker image
@@ -189,6 +199,7 @@ build-worker: ## Build Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_WORKER) \
+		-t $(LOCAL_WORKER_LEGACY) \
 		./worker/
 
 build-copaw-worker: ## Build CoPaw Worker image
@@ -196,6 +207,7 @@ build-copaw-worker: ## Build CoPaw Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_COPAW_WORKER) \
+		-t $(LOCAL_COPAW_WORKER_LEGACY) \
 		./copaw/
 
 build-hermes-worker: ## Build Hermes Worker image
@@ -203,6 +215,7 @@ build-hermes-worker: ## Build Hermes Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
+		-t $(LOCAL_HERMES_WORKER_LEGACY) \
 		./hermes/
 
 build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
@@ -218,6 +231,7 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		-f qwenpaw/Dockerfile \
 		-t $(LOCAL_QWENPAW_WORKER) \
+		-t $(LOCAL_QWENPAW_WORKER_LEGACY) \
 		.
 
 # ---------- Tag ----------

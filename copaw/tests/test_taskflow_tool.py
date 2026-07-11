@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,6 +33,19 @@ def _mock_sync(monkeypatch) -> MagicMock:
     mock = MagicMock()
     monkeypatch.setattr(taskflow_tool, "create_sync", lambda: mock)
     return mock
+
+
+def _write_team_leader_runtime_config(base_dir: Path) -> None:
+    runtime_dir = base_dir / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "runtime.yaml").write_text(
+        "kind: MemberRuntimeConfig\n"
+        "member:\n"
+        "  role: team_leader\n"
+        "team:\n"
+        "  teamRoomId: \"!team:domain\"\n"
+        "  leaderDmRoomId: \"!leader-dm:domain\"\n",
+    )
 
 
 @pytest.mark.asyncio
@@ -481,6 +495,99 @@ async def test_delegate_task_requires_room_id(tmp_path, monkeypatch):
 
     assert payload["ok"] is False
     assert payload["error"] == "payload.roomId is required"
+
+
+@pytest.mark.asyncio
+async def test_delegate_task_rejects_team_leader_dm_room(tmp_path, monkeypatch):
+    leader_dir = tmp_path / "leader"
+    working_dir = leader_dir / ".copaw"
+    _write_team_leader_runtime_config(leader_dir)
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    _set_actor(monkeypatch, "@leader:domain")
+
+    assert _response_json(
+        await projectflow(
+            action="create_project",
+            payload={"projectId": "tp-team-room", "title": "Team room project"},
+        )
+    )["ok"] is True
+    assert _response_json(
+        await projectflow(
+            action="plan_dag",
+            payload={
+                "projectId": "tp-team-room",
+                "tasks": [
+                    {
+                        "taskId": "tp-team-room-01",
+                        "title": "Team task",
+                        "assignedTo": "@worker:domain",
+                        "dependsOn": [],
+                    }
+                ],
+            },
+        )
+    )["ok"] is True
+
+    response = await taskflow(
+        action="delegate_task",
+        payload={
+            "projectId": "tp-team-room",
+            "taskId": "tp-team-room-01",
+            "roomId": "room:!leader-dm:domain",
+            "spec": "Do work.",
+        },
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is False
+    assert "must use the Team Room room:!team:domain" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_delegate_task_accepts_team_leader_team_room(tmp_path, monkeypatch):
+    leader_dir = tmp_path / "leader"
+    working_dir = leader_dir / ".copaw"
+    _write_team_leader_runtime_config(leader_dir)
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    _set_actor(monkeypatch, "@leader:domain")
+    _mock_sync(monkeypatch)
+
+    assert _response_json(
+        await projectflow(
+            action="create_project",
+            payload={"projectId": "tp-team-ok", "title": "Team room project"},
+        )
+    )["ok"] is True
+    assert _response_json(
+        await projectflow(
+            action="plan_dag",
+            payload={
+                "projectId": "tp-team-ok",
+                "tasks": [
+                    {
+                        "taskId": "tp-team-ok-01",
+                        "title": "Team task",
+                        "assignedTo": "@worker:domain",
+                        "dependsOn": [],
+                    }
+                ],
+            },
+        )
+    )["ok"] is True
+
+    response = await taskflow(
+        action="delegate_task",
+        payload={
+            "projectId": "tp-team-ok",
+            "taskId": "tp-team-ok-01",
+            "roomId": "room:!team:domain",
+            "spec": "Do work.",
+        },
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert payload["task"]["room_id"] == "room:!team:domain"
 
 
 @pytest.mark.asyncio

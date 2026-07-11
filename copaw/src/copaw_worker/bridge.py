@@ -189,6 +189,39 @@ def _resolve_vision_enabled(cfg: dict[str, Any]) -> bool:
     return "image" in input_types
 
 
+def _resolve_matrix_user_id(
+    matrix_raw: dict[str, Any],
+    *,
+    profile: str = "worker",
+) -> str:
+    """Resolve the Matrix MXID that CoPaw tools use for proactive sends."""
+    explicit = matrix_raw.get("userId") or matrix_raw.get("user_id")
+    if explicit:
+        return str(explicit)
+
+    env_user_id = (
+        os.environ.get("AGENTTEAMS_MATRIX_USER_ID")
+        or os.environ.get("HICLAW_MATRIX_USER_ID")
+        or os.environ.get("COPAW_MATRIX_USER_ID")
+    )
+    if env_user_id:
+        return env_user_id
+
+    matrix_domain = (
+        os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
+        or os.environ.get("HICLAW_MATRIX_DOMAIN")
+    )
+    localpart = (
+        os.environ.get("AGENTTEAMS_WORKER_NAME")
+        or os.environ.get("HICLAW_WORKER_NAME")
+        or ("manager" if profile == "manager" else "")
+    )
+    if matrix_domain and localpart:
+        return f"@{localpart}:{matrix_domain}"
+
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # config.json
 # ---------------------------------------------------------------------------
@@ -203,6 +236,7 @@ def _write_config_json(
         matrix_raw.get("homeserver", ""), in_container
     )
     access_token = matrix_raw.get("accessToken", "")
+    user_id = _resolve_matrix_user_id(matrix_raw)
 
     # DM allowlist
     dm_cfg = matrix_raw.get("dm", {})
@@ -239,6 +273,8 @@ def _write_config_json(
     }
     if history_limit is not None:
         matrix_channel_cfg["history_limit"] = int(history_limit)
+    if user_id:
+        matrix_channel_cfg["user_id"] = user_id
 
     config_path = working_dir / "config.json"
     # Merge with existing config to avoid clobbering other settings
@@ -332,6 +368,7 @@ def _write_agent_json(
     matrix_raw = cfg.get("channels", {}).get("matrix", {})
     homeserver = _port_remap(matrix_raw.get("homeserver", ""), in_container)
     access_token = matrix_raw.get("accessToken", "")
+    user_id = _resolve_matrix_user_id(matrix_raw, profile=profile)
 
     dm_cfg = matrix_raw.get("dm", {})
     dm_allow_from: list[str] = dm_cfg.get("allowFrom", [])
@@ -344,6 +381,8 @@ def _write_agent_json(
         matrix_ch["homeserver"] = homeserver
     if access_token:
         matrix_ch["access_token"] = access_token
+    if user_id:
+        matrix_ch["user_id"] = user_id
     matrix_ch["allow_from"] = dm_allow_from
     matrix_ch["group_allow_from"] = group_allow_from
     matrix_ch["groups"] = groups

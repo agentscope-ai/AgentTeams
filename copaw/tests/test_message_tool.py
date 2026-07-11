@@ -311,3 +311,20 @@ def test_install_tool_hooks_registers_message(monkeypatch):
     assert ("message", "override") in names
     assert ("filesync", "override") in names
     assert ("taskflow", "override") in names
+
+
+def test_run_copaw_app_installs_hooks_before_start(monkeypatch):
+    import copaw_worker.run_copaw_app as app
+
+    calls = []
+
+    monkeypatch.setattr(app, "install_tool_hooks", lambda: calls.append("hooks"))
+
+    def fake_run_module(name, *, run_name, alter_sys):
+        calls.append((name, run_name, alter_sys))
+
+    monkeypatch.setattr(app.runpy, "run_module", fake_run_module)
+
+    app.main()
+
+    assert calls == ["hooks", ("copaw", "__main__", True)]

@@ -226,10 +226,12 @@ assert_contains "${PROJECT_SKILL}" "Project state is tool-owned" "project-manage
 assert_contains "${PROJECT_SKILL}" "ready_nodes" "project-management documents DAG ready nodes"
 assert_contains "${TASK_SKILL}" "taskflow" "task-management documents taskflow"
 assert_contains "${TASK_SKILL}" "Task state is tool-owned" "task-management forbids manual task state mutation"
+assert_contains "${TASK_SKILL}" "delegate_task does not send Matrix messages" "task-management requires explicit Team Room notification"
 assert_contains "${TASK_SKILL}" "delegate_task" "task-management documents task delegation"
 assert_contains "${COORDINATION_SKILL}" "DAG" "team-coordination documents DAG strategy"
 assert_contains "${COORDINATION_SKILL}" "Loop" "team-coordination documents Loop strategy"
 assert_contains "${LEADER_AGENTS}" "Project/tool boundary" "Leader AGENTS documents tool-owned project/task boundary"
+assert_contains "${LEADER_AGENTS}" "taskflow(delegate_task) only creates and publishes task state" "Leader AGENTS requires Team Room assignment after taskflow"
 
 # ============================================================
 # Section 8: End-to-End LLM Test — Admin delegates via Leader DM

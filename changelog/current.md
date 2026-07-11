@@ -4,6 +4,9 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
+- feat(controller): add `AGENTTEAMS_MODEL_VISION` env to override model-level vision capability for custom models not in the built-in presets table (e.g. local multimodal models like `qwen3.6-27b-fp8`).
+- feat(controller): add `AGENTTEAMS_MODEL_REASONING` env to override model-level reasoning capability for custom models not in the built-in presets table.
+
 - feat(qwenpaw): add the QwenPaw worker runtime Python package baseline with runtime config sync, storage sync, heartbeat reporting, Matrix channel overlay, and focused unit tests.
 - fix(controller): surface Kubernetes Pod container failures in Worker backend status and status API responses.
 - feat(controller): expose low-cardinality AgentTeams controller metrics and optional Helm ServiceMonitor.

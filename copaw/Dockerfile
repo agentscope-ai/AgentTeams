@@ -18,13 +18,13 @@
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: mc (MinIO Client) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
 
 # ============ Final Image ============
 FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim

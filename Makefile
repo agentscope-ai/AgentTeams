@@ -24,16 +24,16 @@ VERSION        ?= latest
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= higress
 
-MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/hiclaw-manager
-MANAGER_COPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/hiclaw-manager-copaw
-WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/hiclaw-worker
-COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/hiclaw-copaw-worker
-HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/hiclaw-hermes-worker
-QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/hiclaw-qwenpaw-worker
+MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/agentteams-manager
+MANAGER_COPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-copaw
+WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
+COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/agentteams-copaw-worker
+HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
+QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-qwenpaw-worker
 OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/hiclaw-openhuman-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
-CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/hiclaw-controller
-EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/hiclaw-embedded
+CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
+EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
 
 MANAGER_TAG        ?= $(MANAGER_IMAGE):$(VERSION)
 MANAGER_COPAW_TAG  ?= $(MANAGER_COPAW_IMAGE):$(VERSION)
@@ -47,16 +47,32 @@ CONTROLLER_TAG     ?= $(CONTROLLER_IMAGE):$(VERSION)
 EMBEDDED_TAG       ?= $(EMBEDDED_IMAGE):$(VERSION)
 
 # Local image names (no registry prefix, used by tests and install script)
-LOCAL_MANAGER        = hiclaw/hiclaw-manager:$(VERSION)
-LOCAL_MANAGER_COPAW  = hiclaw/hiclaw-manager-copaw:$(VERSION)
-LOCAL_WORKER         = hiclaw/worker-agent:$(VERSION)
-LOCAL_COPAW_WORKER   = hiclaw/copaw-worker:$(VERSION)
-LOCAL_HERMES_WORKER  = hiclaw/hermes-worker:$(VERSION)
-LOCAL_QWENPAW_WORKER = hiclaw/qwenpaw-worker:$(VERSION)
+LOCAL_MANAGER        = agentteams/manager:$(VERSION)
+LOCAL_MANAGER_COPAW  = agentteams/manager-copaw:$(VERSION)
+LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
+LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
+LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
+LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
+LOCAL_MANAGER_LEGACY        = hiclaw/hiclaw-manager:$(VERSION)
+LOCAL_MANAGER_COPAW_LEGACY  = hiclaw/hiclaw-manager-copaw:$(VERSION)
+LOCAL_WORKER_LEGACY         = hiclaw/worker-agent:$(VERSION)
+LOCAL_COPAW_WORKER_LEGACY   = hiclaw/copaw-worker:$(VERSION)
+LOCAL_HERMES_WORKER_LEGACY  = hiclaw/hermes-worker:$(VERSION)
+LOCAL_QWENPAW_WORKER_LEGACY = hiclaw/qwenpaw-worker:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = hiclaw/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = hiclaw/openclaw-base:$(VERSION)
-LOCAL_CONTROLLER     = hiclaw/hiclaw-controller:$(VERSION)
-LOCAL_EMBEDDED       = hiclaw/hiclaw-embedded:$(VERSION)
+LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
+LOCAL_CONTROLLER_LEGACY = hiclaw/hiclaw-controller:$(VERSION)
+LOCAL_CONTROLLER_BUILD_IMAGE ?= $(shell \
+	if docker image inspect $(LOCAL_CONTROLLER) >/dev/null 2>&1; then \
+		printf '%s' '$(LOCAL_CONTROLLER)'; \
+	elif docker image inspect $(LOCAL_CONTROLLER_LEGACY) >/dev/null 2>&1; then \
+		printf '%s' '$(LOCAL_CONTROLLER_LEGACY)'; \
+	else \
+		printf '%s' '$(LOCAL_CONTROLLER)'; \
+	fi)
+LOCAL_EMBEDDED       = agentteams/agentteams-embedded:$(VERSION)
+LOCAL_EMBEDDED_LEGACY = hiclaw/hiclaw-embedded:$(VERSION)
 
 # Higress base image registry (regional mirrors auto-synced from cn-hangzhou primary)
 #   China (default): higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -147,49 +163,59 @@ build-hiclaw-controller: ## Build hiclaw-controller image (prerequisite for Mana
 	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
+		-t $(LOCAL_CONTROLLER_LEGACY) \
 		./hiclaw-controller/
 	@rm -rf ./hiclaw-controller/agent
 
 build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile \
 		-t $(LOCAL_MANAGER) \
+		-t $(LOCAL_MANAGER_LEGACY) \
 		.
 
 build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Python runtime)
 	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile.copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
+		-t $(LOCAL_MANAGER_COPAW_LEGACY) \
 		.
 
 build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
 	@echo "==> Building embedded image: $(LOCAL_EMBEDDED) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f hiclaw-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
+		-t $(LOCAL_EMBEDDED_LEGACY) \
 		.
 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_WORKER) \
+		-t $(LOCAL_WORKER_LEGACY) \
 		./worker/
 
 build-copaw-worker: ## Build CoPaw Worker image
 	@echo "==> Building CoPaw Worker image: $(LOCAL_COPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_COPAW_WORKER) \
+		-t $(LOCAL_COPAW_WORKER_LEGACY) \
 		./copaw/
 
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
+		-t $(LOCAL_HERMES_WORKER_LEGACY) \
 		./hermes/
 
 build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
@@ -205,6 +231,7 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		-f qwenpaw/Dockerfile \
 		-t $(LOCAL_QWENPAW_WORKER) \
+		-t $(LOCAL_QWENPAW_WORKER_LEGACY) \
 		.
 
 # ---------- Tag ----------
@@ -313,7 +340,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building hiclaw-embedded for $(plat)..." && \
 		podman build --platform $(plat) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 			--manifest $(EMBEDDED_TAG) \
 			-f hiclaw-controller/Dockerfile.embedded . && ) true
@@ -325,7 +352,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(EMBEDDED_TAG) \
 		$(if $(PUSH_LATEST),-t $(EMBEDDED_IMAGE):latest) \
@@ -341,7 +368,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building Manager for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			-f manager/Dockerfile \
 			--manifest $(MANAGER_TAG) \
 			. && ) true
@@ -354,7 +381,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-f manager/Dockerfile \
 		-t $(MANAGER_TAG) \
 		$(if $(PUSH_LATEST),-t $(MANAGER_IMAGE):latest) \
@@ -370,7 +397,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building Manager CoPaw for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			-f manager/Dockerfile.copaw \
 			--manifest $(MANAGER_COPAW_TAG) \
 			. && ) true
@@ -383,7 +410,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-f manager/Dockerfile.copaw \
 		-t $(MANAGER_COPAW_TAG) \
 		$(if $(PUSH_LATEST),-t $(MANAGER_COPAW_IMAGE):latest) \
@@ -400,7 +427,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building Worker for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(WORKER_TAG) \
 			./worker/ && ) true
 	podman manifest push --all $(WORKER_TAG) docker://$(WORKER_TAG)
@@ -412,7 +439,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(WORKER_IMAGE):latest) \
 		--push \
@@ -427,7 +454,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building CoPaw Worker for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(COPAW_WORKER_TAG) \
 			./copaw/ && ) true
 	podman manifest push --all $(COPAW_WORKER_TAG) docker://$(COPAW_WORKER_TAG)
@@ -439,7 +466,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(COPAW_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(COPAW_WORKER_IMAGE):latest) \
 		--push \
@@ -454,7 +481,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building Hermes Worker for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(HERMES_WORKER_TAG) \
 			./hermes/ && ) true
 	podman manifest push --all $(HERMES_WORKER_TAG) docker://$(HERMES_WORKER_TAG)
@@ -466,7 +493,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(HERMES_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
 		--push \

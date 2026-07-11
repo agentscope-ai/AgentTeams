@@ -648,3 +648,25 @@ async def test_worker_marks_copaw_unhealthy_when_app_exits_unexpectedly(tmp_path
     assert copaw["healthiness"] == "unhealthy"
     assert copaw["message"] == "CoPaw app exited unexpectedly"
     assert copaw["details"]["operation"] == "run_copaw"
+
+
+@pytest.mark.anyio
+async def test_worker_installs_hooks_before_copaw_runner(tmp_path, monkeypatch):
+    calls = []
+
+    fake_hooks = types.ModuleType("copaw_worker.hooks")
+    fake_hooks.install_tool_hooks = lambda: calls.append("hooks")
+    monkeypatch.setitem(sys.modules, "copaw_worker.hooks", fake_hooks)
+
+    config = _config(tmp_path)
+    config.console_port = None
+    worker = Worker(config)
+
+    async def fake_headless():
+        calls.append("headless")
+
+    monkeypatch.setattr(worker, "_run_copaw_headless", fake_headless)
+
+    await worker._run_copaw()
+
+    assert calls == ["hooks", "headless"]

@@ -75,6 +75,8 @@ Do not call `check_active_tasks` from heartbeat or routine recovery checks for n
 
 `taskflow` handles file sync internally: `delegate_task` auto-pushes the task directory, `check_task` auto-pulls the task directory. Use `filesync` separately only for project-level files or non-task shared files.
 
+`delegate_task` does not send Matrix messages. A task is not actually assigned to the Worker until you send a visible Team Room message that @mentions the assigned Worker's full Matrix ID. Do not start polling the task, tell the requester that the Worker is working, or wait for results before this Team Room notification has been sent.
+
 ## Task Spec Language
 
 Write task specs in the language selected by `AGENTS.md` Response Language.
@@ -181,7 +183,7 @@ After delegation:
 
 1. `delegate_task` auto-pushes `shared/tasks/{task-id}/`. Do not call `filesync push` for the task directory.
 2. Publish `shared/projects/{project-id}/`, because the plan marker changed.
-3. @mention the assigned Worker in the assignment room.
+3. @mention the assigned Worker in the assignment room. For Team work, this must be the Team Room, not the Leader DM and not the Worker's private room.
 4. Include only the task ID, title, and instruction to start.
 
 Do not prescribe Worker-internal acknowledgement, push, submit, or planning steps.

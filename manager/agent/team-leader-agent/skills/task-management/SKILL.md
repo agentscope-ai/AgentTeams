@@ -54,6 +54,8 @@ Use `taskflow` for Leader task actions:
 - `delegate_task`
 - `check_task`
 
+`taskflow` is a QwenPaw/CoPaw MCP tool exposed in your tool list. It is not a shell command, CLI binary, Python module, or HTTP endpoint. Call the tool directly; do not search for a binary or manually edit task files if the tool is unavailable.
+
 Worker runtimes use their own task actions:
 
 - `ack_task`
@@ -75,7 +77,7 @@ Do not call `check_active_tasks` from heartbeat or routine recovery checks for n
 
 `taskflow` handles file sync internally: `delegate_task` auto-pushes the task directory, `check_task` auto-pulls the task directory. Use `filesync` separately only for project-level files or non-task shared files.
 
-`delegate_task` does not send Matrix messages. A task is not actually assigned to the Worker until you send a visible Team Room message that @mentions the assigned Worker's full Matrix ID. Do not start polling the task, tell the requester that the Worker is working, or wait for results before this Team Room notification has been sent.
+delegate_task does not send Matrix messages. A task is not actually assigned to the Worker until you send a visible Team Room message that @mentions the assigned Worker's full Matrix ID. Do not start polling the task, tell the requester that the Worker is working, or wait for results before this Team Room notification has been sent.
 
 ## Task Spec Language
 

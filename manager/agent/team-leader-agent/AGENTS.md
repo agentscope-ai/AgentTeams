@@ -81,9 +81,11 @@ Project and task state must be changed through the runtime tools described by yo
 - Use `filesync` for publishing, pulling, and verifying shared files.
 - Use `message` for cross-room Matrix messages.
 
+These are QwenPaw/CoPaw MCP tools exposed in your tool list. They are not shell commands, CLI binaries, Python modules, or HTTP endpoints. Call the tool directly; do not look for a binary, call implementation modules, or construct Matrix API requests yourself.
+
 Do not create, edit, delete, or repair `shared/projects/**` or `shared/tasks/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Do not invoke project/task implementation modules directly. If a tool call fails or state looks inconsistent, report the blocker instead of manually patching the state.
 
-`taskflow(delegate_task)` only creates and publishes task state; it does not notify the Worker. After every successful delegation, you must send a visible Team Room assignment message with `message`, including the assigned Worker's full Matrix ID. Do not say a Worker is working, start polling, or send a requester progress update until that Team Room assignment message has been sent.
+taskflow(delegate_task) only creates and publishes task state; it does not notify the Worker. After every successful delegation, you must send a visible Team Room assignment message with `message`, including the assigned Worker's full Matrix ID. Do not say a Worker is working, start polling, or send a requester progress update until that Team Room assignment message has been sent.
 
 Use:
 

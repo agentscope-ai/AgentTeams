@@ -13,8 +13,8 @@ import (
 func strPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool    { return &b }
 
-// TestWorkerSpec_DeployFieldsJSONTags verifies the new cross-cluster
-// deployment fields (DeployMode, TargetCluster, ServiceEnabled) marshal
+// TestWorkerSpec_DeployFieldsJSONTags verifies the deployment fields
+// (DeployMode, ServiceEnabled) marshal
 // with stable, lowerCamelCase JSON keys and omit cleanly when nil.
 func TestWorkerSpec_DeployFieldsJSONTags(t *testing.T) {
 	cases := []struct {
@@ -24,29 +24,21 @@ func TestWorkerSpec_DeployFieldsJSONTags(t *testing.T) {
 		absent  []string // substrings that must NOT appear in JSON
 	}{
 		{
-			name: "local_with_target",
+			name: "local_with_service",
 			spec: WorkerSpec{
-				Model:      "m",
-				DeployMode: strPtr("Local"),
-				TargetCluster: &TargetClusterSpec{
-					ID:        "c-123",
-					Namespace: "agents",
-				},
+				Model:          "m",
+				DeployMode:     strPtr("Local"),
 				ServiceEnabled: boolPtr(true),
 			},
-			wantSub: []string{`"deployMode":"Local"`, `"id":"c-123"`, `"namespace":"agents"`, `"serviceEnabled":true`},
+			wantSub: []string{`"deployMode":"Local"`, `"serviceEnabled":true`},
 		},
 		{
-			name: "remote_with_target",
+			name: "edge_without_service",
 			spec: WorkerSpec{
 				Model:      "m",
-				DeployMode: strPtr("Remote"),
-				TargetCluster: &TargetClusterSpec{
-					ID:        "c-remote",
-					Namespace: "team-a",
-				},
+				DeployMode: strPtr("Edge"),
 			},
-			wantSub: []string{`"deployMode":"Remote"`, `"id":"c-remote"`, `"namespace":"team-a"`},
+			wantSub: []string{`"deployMode":"Edge"`},
 			absent:  []string{`"serviceEnabled"`},
 		},
 		{
@@ -80,12 +72,8 @@ func TestWorkerSpec_DeployFieldsJSONTags(t *testing.T) {
 // JSON marshal/unmarshal cycle without value drift.
 func TestWorkerSpec_DeployFieldsRoundTrip(t *testing.T) {
 	orig := WorkerSpec{
-		Model:      "m",
-		DeployMode: strPtr("Remote"),
-		TargetCluster: &TargetClusterSpec{
-			ID:        "c-xyz",
-			Namespace: "prod",
-		},
+		Model:          "m",
+		DeployMode:     strPtr("Edge"),
 		ServiceEnabled: boolPtr(false),
 	}
 	data, err := json.Marshal(orig)
@@ -96,11 +84,8 @@ func TestWorkerSpec_DeployFieldsRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got.DeployMode == nil || *got.DeployMode != "Remote" {
-		t.Fatalf("DeployMode = %v, want *Remote", got.DeployMode)
-	}
-	if got.TargetCluster == nil || got.TargetCluster.ID != "c-xyz" || got.TargetCluster.Namespace != "prod" {
-		t.Fatalf("TargetCluster = %+v", got.TargetCluster)
+	if got.DeployMode == nil || *got.DeployMode != "Edge" {
+		t.Fatalf("DeployMode = %v, want *Edge", got.DeployMode)
 	}
 	if got.ServiceEnabled == nil || *got.ServiceEnabled != false {
 		t.Fatalf("ServiceEnabled = %v, want *false", got.ServiceEnabled)
@@ -119,34 +104,8 @@ func TestWorkerSpec_BackwardCompatOldJSON(t *testing.T) {
 	if got.DeployMode != nil {
 		t.Errorf("DeployMode should default to nil, got %v", *got.DeployMode)
 	}
-	if got.TargetCluster != nil {
-		t.Errorf("TargetCluster should default to nil, got %+v", got.TargetCluster)
-	}
 	if got.ServiceEnabled != nil {
 		t.Errorf("ServiceEnabled should default to nil, got %v", *got.ServiceEnabled)
-	}
-}
-
-// TestTargetClusterSpec_JSONTags pins down the TargetClusterSpec field tags
-// so a future rename does not silently break stored CRs (the apiserver
-// stores the JSON form in etcd via the structural CRD schema).
-func TestTargetClusterSpec_JSONTags(t *testing.T) {
-	spec := TargetClusterSpec{ID: "c-1", Namespace: "ns-1"}
-	data, err := json.Marshal(spec)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	want := `{"id":"c-1","namespace":"ns-1"}`
-	if string(data) != want {
-		t.Fatalf("Marshal = %s, want %s", data, want)
-	}
-
-	var back TargetClusterSpec
-	if err := json.Unmarshal(data, &back); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if back != spec {
-		t.Fatalf("round-trip = %+v, want %+v", back, spec)
 	}
 }
 

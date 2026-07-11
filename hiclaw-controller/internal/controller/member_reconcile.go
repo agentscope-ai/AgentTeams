@@ -162,15 +162,9 @@ type MemberContext struct {
 	// spec.modelProvider is set. Nil when not set or on non-ai-gateway.
 	ModelProviderInfo *gateway.ModelProviderInfo
 
-	// DeployMode specifies where the member pod runs: "Local" (default) or
-	// "Remote". Sourced from spec.deployMode with a default of "Local".
+	// DeployMode specifies where the member runs: "Local" (default) for
+	// controller-managed pods. "Edge" is handled before pod reconciliation.
 	DeployMode string
-	// TargetClusterID is the remote cluster ID when DeployMode is "Remote".
-	// Sourced from spec.targetCluster.id.
-	TargetClusterID string
-	// TargetNamespace is the namespace in the remote cluster when DeployMode
-	// is "Remote". Sourced from spec.targetCluster.namespace.
-	TargetNamespace string
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the member pod. Sourced from spec.serviceEnabled.
 	ServiceEnabled bool
@@ -180,8 +174,8 @@ type MemberContext struct {
 	// field carries the backend-expanded form.
 	Resources *backend.ResourceRequirements
 
-	// BackendRuntime is the desired backend type from spec.backendRuntime
-	// ("pod" or "sandbox"). Empty means default ("pod").
+	// BackendRuntime is the desired backend type from spec.backendRuntime.
+	// Empty means default ("pod").
 	BackendRuntime string
 
 	// StatusBackendRuntime is the currently deployed backend type from
@@ -217,14 +211,21 @@ type MemberState struct {
 }
 
 // resolveBackendForMember returns the worker backend matching the requested
-// backendRuntime ("pod" or "sandbox"), with remote targeting applied when
-// the member runs in a remote cluster. When the registry does not have a
-// backend for the requested type (e.g. Docker / embedded mode where neither
-// "k8s" nor "sandbox" is registered), it falls back to DetectWorkerBackend
-// so the legacy single-backend deployments keep working.
+// backendRuntime. "pod" remains the only open-source incluster backend. When
+// the registry does not have a pod backend (e.g. Docker / embedded mode), it
+// falls back to DetectWorkerBackend so legacy single-backend deployments keep
+// working. Explicit sandbox requests must resolve to a registered sandbox
+// backend and never silently fall back to pods.
 func resolveBackendForMember(registry *backend.Registry, backendRuntime string, m MemberContext) (backend.WorkerBackend, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("no backend registry configured for member %s", m.Name)
+	}
+	if backendRuntime == v1beta1.BackendRuntimeSandbox {
+		wb, err := registry.GetBackendForType(context.Background(), backendRuntime)
+		if err != nil {
+			return nil, fmt.Errorf("backendRuntime %q is not supported in the open-source controller; use backendRuntime %q", backendRuntime, v1beta1.BackendRuntimePod)
+		}
+		return wb, nil
 	}
 	wb, err := registry.GetBackendForType(context.Background(), backendRuntime)
 	if err != nil {
@@ -236,14 +237,6 @@ func resolveBackendForMember(registry *backend.Registry, backendRuntime string, 
 		}
 	}
 
-	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
-		if k8sBackend, ok := wb.(*backend.K8sBackend); ok {
-			return k8sBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace), nil
-		}
-		if sandboxBackend, ok := wb.(*backend.SandboxBackend); ok {
-			wb = sandboxBackend.WithRemoteTarget(m.DeployMode, m.TargetClusterID, m.TargetNamespace)
-		}
-	}
 	return wb, nil
 }
 
@@ -294,22 +287,20 @@ type MemberDeps struct {
 	MountRoleName             string
 }
 
-// ValidateMemberDeployment checks the cross-cluster deployment fields on a
-// MemberContext for consistency. Returns a non-nil error when:
-//   - DeployMode is not "Local" or "Remote"
-//   - DeployMode is "Remote" but TargetClusterID or TargetNamespace is empty
+// ValidateMemberDeployment checks the deployment fields for managed pod
+// reconciliation. Open-source managed workers are local-cluster pods only;
+// Edge workers are handled by the dedicated Edge flow before this validation.
 func ValidateMemberDeployment(m MemberContext) error {
 	switch m.DeployMode {
-	case v1beta1.DeployModeLocal, v1beta1.DeployModeRemote:
+	case "", v1beta1.DeployModeLocal:
+		return nil
+	case v1beta1.DeployModeRemote:
+		return fmt.Errorf("deployMode %q is not supported in the open-source controller; use %q or the Edge worker flow", m.DeployMode, v1beta1.DeployModeLocal)
+	case v1beta1.DeployModeEdge:
+		return fmt.Errorf("deployMode %q must use the Edge worker flow and is not valid for managed pod reconciliation", m.DeployMode)
 	default:
-		return fmt.Errorf("invalid deployMode %q: must be \"Local\" or \"Remote\"", m.DeployMode)
+		return fmt.Errorf("invalid deployMode %q: must be %q or %q", m.DeployMode, v1beta1.DeployModeLocal, v1beta1.DeployModeEdge)
 	}
-	if m.DeployMode == v1beta1.DeployModeRemote {
-		if m.TargetClusterID == "" || m.TargetNamespace == "" {
-			return fmt.Errorf("deployMode \"Remote\" requires targetCluster.id and targetCluster.namespace")
-		}
-	}
-	return nil
 }
 
 // ReconcileMemberInfra ensures Matrix account, Gateway consumer, MinIO user,
@@ -745,15 +736,6 @@ func memberRuntimeStale(result *backend.WorkerResult, m MemberContext, missingHa
 func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState, wb backend.WorkerBackend) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Ensure remote ServiceAccount exists before creating the Pod in a
-	// remote cluster. The SA provides projected-token authentication back
-	// to the local controller via TokenReview routing.
-	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" && !memberUsesSandboxClaim(m) {
-		if err := d.Provisioner.EnsureRemoteServiceAccount(ctx, m.Name, m.TargetClusterID, m.TargetNamespace); err != nil {
-			return reconcile.Result{}, fmt.Errorf("ensure remote SA for worker %s: %w", m.Name, err)
-		}
-	}
-
 	prov := state.ProvResult
 	if prov == nil || prov.MatrixToken == "" {
 		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName)
@@ -807,16 +789,11 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		AuthExpirationSeconds: backend.NormalizeAuthTokenExpirationSeconds(
 			d.AuthTokenExpirationSeconds,
 		),
-		Resources: m.Resources,
-		Labels:    labels,
-		Owner:     m.Owner,
-		// DeployMode / TargetClusterID / TargetNamespace route the Pod to
-		// the correct cluster. Without them, Remote workers would always
-		// be created in the local cluster.
-		DeployMode:      m.DeployMode,
-		TargetClusterID: m.TargetClusterID,
-		TargetNamespace: m.TargetNamespace,
-		WorkersDeps:     workerDeps,
+		Resources:   m.Resources,
+		Labels:      labels,
+		Owner:       m.Owner,
+		DeployMode:  m.DeployMode,
+		WorkersDeps: workerDeps,
 	}
 	if wb.Name() != "k8s" && wb.Name() != "sandbox" {
 		token, _, err := d.Provisioner.RequestSAToken(ctx, m.Name)
@@ -882,10 +859,6 @@ func prepareMemberWorkerDeps(ctx context.Context, d MemberDeps, m MemberContext,
 		return nil, 0, "", err
 	}
 
-	if err := ensureRemoteTargetNamespace(ctx, d, m); err != nil {
-		return nil, 0, "", err
-	}
-
 	projection, err := projectSandboxSetWorkerToken(ctx, d, m, forceTokenProjection)
 	if err != nil {
 		return nil, 0, "", err
@@ -937,16 +910,6 @@ func prepareMemberWorkerDeps(ctx context.Context, d MemberDeps, m MemberContext,
 		})
 	}
 	return deps, projection.RequeueAfter, projection.Message, nil
-}
-
-func ensureRemoteTargetNamespace(ctx context.Context, d MemberDeps, m MemberContext) error {
-	if m.DeployMode != v1beta1.DeployModeRemote || m.TargetClusterID == "" {
-		return nil
-	}
-	if err := d.Provisioner.EnsureRemoteNamespace(ctx, m.TargetClusterID, m.TargetNamespace); err != nil {
-		return fmt.Errorf("ensure remote namespace %s in cluster %s: %w", m.TargetNamespace, m.TargetClusterID, err)
-	}
-	return nil
 }
 
 const (
@@ -1348,22 +1311,6 @@ func workerDepsMountResourceObjects(volume v1beta1.WorkerVolumeSpec, namespace s
 
 func resolveMemberDynamicClient(ctx context.Context, d MemberDeps, m MemberContext) (dynamic.Interface, string, error) {
 	namespace := m.Namespace
-	if m.TargetNamespace != "" {
-		namespace = m.TargetNamespace
-	}
-	if m.DeployMode == v1beta1.DeployModeRemote {
-		if m.TargetClusterID == "" {
-			return nil, "", fmt.Errorf("remote workers-deps mount requires targetCluster.id")
-		}
-		if d.RemoteDynamicClientProvider == nil {
-			return nil, "", fmt.Errorf("remote dynamic client provider is not configured")
-		}
-		dynClient, err := d.RemoteDynamicClientProvider.ResolveDynamicClient(ctx, m.TargetClusterID)
-		if err != nil {
-			return nil, "", fmt.Errorf("resolve remote dynamic client for cluster %s: %w", m.TargetClusterID, err)
-		}
-		return dynClient, namespace, nil
-	}
 	return d.DynamicClient, namespace, nil
 }
 
@@ -1958,13 +1905,6 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	}
 	if err := d.Provisioner.DeleteServiceAccount(ctx, m.Name); err != nil {
 		logger.Error(err, "failed to delete ServiceAccount (non-fatal)", "name", m.Name)
-	}
-	// Clean up remote ServiceAccount when the member was deployed to a
-	// remote cluster. Non-fatal: log and continue.
-	if m.DeployMode == v1beta1.DeployModeRemote && m.TargetClusterID != "" {
-		if err := d.Provisioner.DeleteRemoteServiceAccount(ctx, m.Name, m.TargetClusterID, m.TargetNamespace); err != nil {
-			logger.Error(err, "failed to delete remote ServiceAccount (non-fatal)", "name", m.Name, "cluster", m.TargetClusterID)
-		}
 	}
 	// Every worker (standalone, team leader, team worker) owns a per-worker
 	// comm room created by ProvisionWorker. Release its alias here so a

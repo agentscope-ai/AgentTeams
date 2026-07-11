@@ -22,7 +22,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/credprovider"
 )
@@ -146,7 +145,7 @@ func (c *Cache) Remove(clusterID string) {
 // StartMaintenanceLoop starts a background goroutine that checks every 15 minutes:
 //   - For each entry where expiration − now > 2h: skip.
 //   - For each entry where expiration − now ≤ 2h:
-//     1. Query if any Worker/Team CR has targetCluster.id pointing to this cluster.
+//     1. Query if any object still references this cluster.
 //     2. If no workers deployed: Remove the entry.
 //     3. If workers deployed: call STS to renew kubeconfig, rebuild client, update expiration.
 func (c *Cache) StartMaintenanceLoop(ctx context.Context) {
@@ -337,21 +336,12 @@ func (c *Cache) startRemoteCache(ctx context.Context, restCfg *rest.Config, clus
 	return nil
 }
 
-// hasWorkersDeployed checks whether any Worker CR references the given cluster
-// as a remote deployment target.
+// hasWorkersDeployed checks whether any Worker CR references the given cluster.
+// The open-source Worker API no longer exposes remote target clusters, so this
+// currently always returns false.
 func (c *Cache) hasWorkersDeployed(ctx context.Context, clusterID string) (bool, error) {
-	// List Workers with spec.deployMode=Remote and spec.targetCluster.id=clusterID.
-	var workers v1beta1.WorkerList
-	if err := c.ctrlClient.List(ctx, &workers); err != nil {
-		return false, err
-	}
-	for _, w := range workers.Items {
-		if w.Spec.DeployMode != nil && *w.Spec.DeployMode == v1beta1.DeployModeRemote &&
-			w.Spec.TargetCluster != nil && w.Spec.TargetCluster.ID == clusterID {
-			return true, nil
-		}
-	}
-
+	_ = ctx
+	_ = clusterID
 	return false, nil
 }
 

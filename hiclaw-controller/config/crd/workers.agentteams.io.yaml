@@ -217,29 +217,17 @@ spec:
                   description: "Desired lifecycle state (default: Running). The controller reconciles actual state toward this."
                 deployMode:
                   type: string
-                  enum: ["Local", "Remote", "Edge"]
-                  description: "Where the worker pod runs. Local (default): controller's own cluster; Remote: cluster identified by targetCluster; Edge: externally hosted on a remote host outside the controller's cluster."
-                targetCluster:
-                  type: object
-                  description: "Remote cluster target for deployment. Required when deployMode is Remote."
-                  properties:
-                    id:
-                      type: string
-                      description: "ACS/ACK cluster ID."
-                    namespace:
-                      type: string
-                      description: "Target namespace in the remote cluster."
-                  required: ["id", "namespace"]
+                  enum: ["Local", "Edge"]
+                  description: "Where the worker runs. Local (default): controller's own cluster; Edge: externally hosted on a remote host outside the controller's cluster."
                 serviceEnabled:
                   type: boolean
                   description: "Whether to create a ClusterIP Service alongside the worker pod."
                 backendRuntime:
                   type: string
-                  enum: ["pod", "sandbox"]
+                  enum: ["pod"]
                   description: |
                     Container runtime backend for this worker.
                     "pod" (default): standard Kubernetes Pod.
-                    "sandbox": Sandbox CR via configured plugin.
                     Only effective in incluster mode; ignored in embedded (Docker) mode.
                 labels:
                   type: object
@@ -285,87 +273,6 @@ spec:
                         type: array
                         items:
                           type: string
-                volumes:
-                  type: array
-                  description: >
-                    Custom external storage volumes available to sandbox workers.
-                    Built-in worker-deps token/env/data use the AgentTeams
-                    instance-level workspace OSS volume automatically and are
-                    not declared here. Currently only OSS is supported, and
-                    these volumes are used only with spec.backendRuntime=sandbox.
-                  items:
-                    type: object
-                    required: [name, type]
-                    properties:
-                      name:
-                        type: string
-                        description: Logical volume name referenced by spec.mounts[].volumeRef.
-                      type:
-                        type: string
-                        enum: ["OSS"]
-                      oss:
-                        type: object
-                        required: [bucket, endpoint, auth]
-                        properties:
-                          bucket:
-                            type: string
-                          endpoint:
-                            type: string
-                          auth:
-                            type: object
-                            required: [type]
-                            properties:
-                              type:
-                                type: string
-                                enum: ["RRSA", "AccessKey"]
-                              rrsa:
-                                type: object
-                                properties:
-                                  roleName:
-                                    type: string
-                                  roleArn:
-                                    type: string
-                              accessKey:
-                                type: object
-                                required: [secretRef]
-                                properties:
-                                  secretRef:
-                                    type: object
-                                    required: [name]
-                                    properties:
-                                      name:
-                                        type: string
-                                      namespace:
-                                        type: string
-                                        maxLength: 0
-                                        description: Must be omitted for AccessKey auth; the CSI mount Secret is resolved in the worker targetNamespace.
-                mounts:
-                  type: array
-                  description: >
-                    Custom sandbox-only dynamic mounts injected through
-                    SandboxClaim. Reserved names token/env/data are accepted for
-                    compatibility with older CRs but ignored by the controller;
-                    those built-in mounts are generated from the instance-level
-                    worker-deps layout. Non-reserved names reference a custom
-                    spec.volumes[] entry, declare an exact mount path, and pass
-                    subPath through unchanged.
-                  items:
-                    type: object
-                    required: [name, volumeRef, mountPath, readOnly]
-                    properties:
-                      name:
-                        type: string
-                      volumeRef:
-                        type: string
-                        description: Name of a spec.volumes[] entry.
-                      subPath:
-                        type: string
-                        description: Object-storage path used as-is for this mount.
-                      mountPath:
-                        type: string
-                        description: Container mount path used as-is.
-                      readOnly:
-                        type: boolean
                 accessEntries:
                   type: array
                   description: >
@@ -416,13 +323,6 @@ spec:
                   type: string
                 deployMode:
                   type: string
-                targetCluster:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    namespace:
-                      type: string
                 lastHeartbeat:
                   type: string
                   format: date-time

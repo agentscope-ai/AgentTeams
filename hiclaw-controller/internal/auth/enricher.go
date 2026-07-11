@@ -162,41 +162,7 @@ func (e *CREnricher) validateRemoteWorkerIdentity(identity *CallerIdentity, work
 	if identity.ClusterID == "" {
 		return nil
 	}
-	deployMode, targetCluster := remoteWorkerAppliedTarget(worker)
-	if deployMode != v1beta1.DeployModeRemote {
-		return fmt.Errorf("remote identity %q is not backed by a remote Worker", identity.Username)
-	}
-	if targetCluster == nil {
-		return fmt.Errorf("remote Worker %q has no targetCluster", worker.Name)
-	}
-	if targetCluster.ID != identity.ClusterID {
-		return fmt.Errorf("remote identity %q cluster %q does not match Worker target cluster %q",
-			identity.Username, identity.ClusterID, targetCluster.ID)
-	}
-	if targetCluster.Namespace != identity.ServiceAccountNamespace {
-		return fmt.Errorf("remote identity %q namespace %q does not match Worker target namespace %q",
-			identity.Username, identity.ServiceAccountNamespace, targetCluster.Namespace)
-	}
-	expectedSA := e.prefix.SAName(RoleWorker, worker.Name)
-	if identity.ServiceAccountName != expectedSA {
-		return fmt.Errorf("remote identity %q serviceAccount %q does not match Worker serviceAccount %q",
-			identity.Username, identity.ServiceAccountName, expectedSA)
-	}
-	return nil
-}
-
-func remoteWorkerAppliedTarget(worker *v1beta1.Worker) (string, *v1beta1.TargetClusterSpec) {
-	if worker.Status.DeployMode != "" || worker.Status.TargetCluster != nil {
-		deployMode := worker.Status.DeployMode
-		if deployMode == "" {
-			deployMode = v1beta1.DeployModeLocal
-		}
-		return deployMode, worker.Status.TargetCluster
-	}
-	if worker.Spec.DeployMode == nil || *worker.Spec.DeployMode == "" {
-		return v1beta1.DeployModeLocal, nil
-	}
-	return *worker.Spec.DeployMode, worker.Spec.TargetCluster
+	return fmt.Errorf("remote identity %q is not supported by open-source Workers", identity.Username)
 }
 
 func (e *CREnricher) lookupTeamByField(ctx context.Context, field, value string) (*v1beta1.Team, bool, error) {

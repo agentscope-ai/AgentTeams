@@ -202,21 +202,14 @@ func TestCREnricher_TeamLeaderKeepsCRNameAndStoresRuntimeWorkerName(t *testing.T
 	}
 }
 
-func TestCREnricher_RemoteWorkerRequiresMatchingTarget(t *testing.T) {
+func TestCREnricher_RemoteWorkerIdentityUnsupported(t *testing.T) {
 	scheme := newAuthTestScheme(t)
-	remoteMode := v1beta1.DeployModeRemote
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "alice",
 			Namespace: "default",
 		},
-		Spec: v1beta1.WorkerSpec{
-			DeployMode: &remoteMode,
-			TargetCluster: &v1beta1.TargetClusterSpec{
-				ID:        "remote-cluster",
-				Namespace: "remote-ns",
-			},
-		},
+		Spec: v1beta1.WorkerSpec{},
 	}
 
 	k8sClient := fake.NewClientBuilder().
@@ -233,151 +226,8 @@ func TestCREnricher_RemoteWorkerRequiresMatchingTarget(t *testing.T) {
 		ServiceAccountNamespace: "remote-ns",
 		ServiceAccountName:      "hiclaw-worker-alice",
 	}
-	if err := enricher.EnrichIdentity(context.Background(), identity); err != nil {
-		t.Fatalf("EnrichIdentity: %v", err)
-	}
-}
-
-func TestCREnricher_RemoteWorkerPrefersStatusTarget(t *testing.T) {
-	scheme := newAuthTestScheme(t)
-	remoteMode := v1beta1.DeployModeRemote
-	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "alice",
-			Namespace: "default",
-		},
-		Spec: v1beta1.WorkerSpec{
-			DeployMode: &remoteMode,
-			TargetCluster: &v1beta1.TargetClusterSpec{
-				ID:        "new-cluster",
-				Namespace: "new-ns",
-			},
-		},
-		Status: v1beta1.WorkerStatus{
-			DeployMode: v1beta1.DeployModeRemote,
-			TargetCluster: &v1beta1.TargetClusterSpec{
-				ID:        "old-cluster",
-				Namespace: "old-ns",
-			},
-		},
-	}
-
-	k8sClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(worker).
-		Build()
-	enricher := NewCREnricher(k8sClient, "default")
-
-	oldTargetIdentity := &CallerIdentity{
-		Role:                    RoleWorker,
-		Username:                "alice",
-		WorkerName:              "alice",
-		ClusterID:               "old-cluster",
-		ServiceAccountNamespace: "old-ns",
-		ServiceAccountName:      "hiclaw-worker-alice",
-	}
-	if err := enricher.EnrichIdentity(context.Background(), oldTargetIdentity); err != nil {
-		t.Fatalf("EnrichIdentity old target: %v", err)
-	}
-
-	newTargetIdentity := &CallerIdentity{
-		Role:                    RoleWorker,
-		Username:                "alice",
-		WorkerName:              "alice",
-		ClusterID:               "new-cluster",
-		ServiceAccountNamespace: "new-ns",
-		ServiceAccountName:      "hiclaw-worker-alice",
-	}
-	if err := enricher.EnrichIdentity(context.Background(), newTargetIdentity); err == nil {
-		t.Fatal("expected spec-only new target to be rejected while status still pins old target")
-	}
-}
-
-func TestCREnricher_RemoteWorkerRejectsTargetMismatch(t *testing.T) {
-	scheme := newAuthTestScheme(t)
-	remoteMode := v1beta1.DeployModeRemote
-	localMode := v1beta1.DeployModeLocal
-
-	tests := []struct {
-		name     string
-		worker   *v1beta1.Worker
-		identity *CallerIdentity
-	}{
-		{
-			name: "wrong namespace",
-			worker: &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
-				Spec: v1beta1.WorkerSpec{
-					DeployMode:    &remoteMode,
-					TargetCluster: &v1beta1.TargetClusterSpec{ID: "remote-cluster", Namespace: "remote-ns"},
-				},
-			},
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "remote-cluster",
-				ServiceAccountNamespace: "other-ns", ServiceAccountName: "hiclaw-worker-alice",
-			},
-		},
-		{
-			name: "wrong cluster",
-			worker: &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
-				Spec: v1beta1.WorkerSpec{
-					DeployMode:    &remoteMode,
-					TargetCluster: &v1beta1.TargetClusterSpec{ID: "remote-cluster", Namespace: "remote-ns"},
-				},
-			},
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "other-cluster",
-				ServiceAccountNamespace: "remote-ns", ServiceAccountName: "hiclaw-worker-alice",
-			},
-		},
-		{
-			name: "wrong service account",
-			worker: &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
-				Spec: v1beta1.WorkerSpec{
-					DeployMode:    &remoteMode,
-					TargetCluster: &v1beta1.TargetClusterSpec{ID: "remote-cluster", Namespace: "remote-ns"},
-				},
-			},
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "remote-cluster",
-				ServiceAccountNamespace: "remote-ns", ServiceAccountName: "hiclaw-worker-bob",
-			},
-		},
-		{
-			name: "local worker",
-			worker: &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
-				Spec:       v1beta1.WorkerSpec{DeployMode: &localMode},
-			},
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "remote-cluster",
-				ServiceAccountNamespace: "remote-ns", ServiceAccountName: "hiclaw-worker-alice",
-			},
-		},
-		{
-			name:   "missing worker cr",
-			worker: nil,
-			identity: &CallerIdentity{
-				Role: RoleWorker, Username: "alice", WorkerName: "alice", ClusterID: "remote-cluster",
-				ServiceAccountNamespace: "remote-ns", ServiceAccountName: "hiclaw-worker-alice",
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			builder := fake.NewClientBuilder().WithScheme(scheme)
-			if tc.worker != nil {
-				builder = builder.WithObjects(tc.worker)
-			}
-			enricher := NewCREnricher(builder.Build(), "default")
-
-			if err := enricher.EnrichIdentity(context.Background(), tc.identity); err == nil {
-				t.Fatal("expected remote identity mismatch to fail")
-			}
-		})
+	if err := enricher.EnrichIdentity(context.Background(), identity); err == nil {
+		t.Fatal("expected remote identity to be rejected")
 	}
 }
 

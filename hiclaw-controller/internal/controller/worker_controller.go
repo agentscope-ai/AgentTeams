@@ -457,25 +457,24 @@ func (r *WorkerReconciler) effectiveWorkerSpec(_ context.Context, w *v1beta1.Wor
 }
 
 func validateWorkerDeploymentTargetImmutable(w *v1beta1.Worker, desired v1beta1.WorkerSpec) error {
-	if w.Status.DeployMode == "" && w.Status.TargetCluster == nil {
+	if w.Status.DeployMode == "" {
 		return nil
 	}
 	currentMode := w.Status.DeployMode
 	if currentMode == "" {
 		currentMode = v1beta1.DeployModeLocal
 	}
-	desiredMode, desiredTarget := workerSpecDeploymentTarget(desired)
-	currentTarget := w.Status.TargetCluster
-	if currentMode != desiredMode || !sameTargetCluster(currentTarget, desiredTarget) {
-		return fmt.Errorf("spec.deployMode/spec.targetCluster cannot be changed after the Worker runtime has been provisioned; delete and recreate the Worker to move it (current=%s, desired=%s)",
-			deploymentTargetSummary(currentMode, currentTarget),
-			deploymentTargetSummary(desiredMode, desiredTarget))
+	desiredMode := workerSpecDeploymentMode(desired)
+	if currentMode != desiredMode {
+		return fmt.Errorf("spec.deployMode cannot be changed after the Worker runtime has been provisioned; delete and recreate the Worker to move it (current=%s, desired=%s)",
+			currentMode,
+			desiredMode)
 	}
 	return nil
 }
 
 func workerSpecWithAppliedDeploymentTarget(spec v1beta1.WorkerSpec, status v1beta1.WorkerStatus) v1beta1.WorkerSpec {
-	if status.DeployMode == "" && status.TargetCluster == nil {
+	if status.DeployMode == "" {
 		return spec
 	}
 	mode := status.DeployMode
@@ -483,55 +482,19 @@ func workerSpecWithAppliedDeploymentTarget(spec v1beta1.WorkerSpec, status v1bet
 		mode = v1beta1.DeployModeLocal
 	}
 	spec.DeployMode = &mode
-	if mode == v1beta1.DeployModeRemote && status.TargetCluster != nil {
-		spec.TargetCluster = status.TargetCluster.DeepCopy()
-	} else if mode == v1beta1.DeployModeLocal {
-		spec.TargetCluster = nil
-	}
 	return spec
 }
 
 func applyDeploymentTargetStatus(w *v1beta1.Worker, m MemberContext) {
 	w.Status.DeployMode = m.DeployMode
-	if m.DeployMode == v1beta1.DeployModeRemote || m.TargetClusterID != "" || m.TargetNamespace != "" {
-		w.Status.TargetCluster = &v1beta1.TargetClusterSpec{
-			ID:        m.TargetClusterID,
-			Namespace: m.TargetNamespace,
-		}
-	} else {
-		w.Status.TargetCluster = nil
-	}
 }
 
-func workerSpecDeploymentTarget(spec v1beta1.WorkerSpec) (string, *v1beta1.TargetClusterSpec) {
+func workerSpecDeploymentMode(spec v1beta1.WorkerSpec) string {
 	mode := v1beta1.DeployModeLocal
 	if spec.DeployMode != nil && *spec.DeployMode != "" {
 		mode = *spec.DeployMode
 	}
-	if mode != v1beta1.DeployModeRemote {
-		return mode, nil
-	}
-	if spec.TargetCluster == nil {
-		return mode, nil
-	}
-	return mode, spec.TargetCluster.DeepCopy()
-}
-
-func sameTargetCluster(a, b *v1beta1.TargetClusterSpec) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.ID == b.ID && a.Namespace == b.Namespace
-}
-
-func deploymentTargetSummary(mode string, target *v1beta1.TargetClusterSpec) string {
-	if mode == "" {
-		mode = v1beta1.DeployModeLocal
-	}
-	if mode != v1beta1.DeployModeRemote || target == nil {
-		return mode
-	}
-	return fmt.Sprintf("%s/%s/%s", mode, target.ID, target.Namespace)
+	return mode
 }
 
 func agentResourcesToBackend(resources *v1beta1.AgentResourceRequirements) *backend.ResourceRequirements {
@@ -613,11 +576,6 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 	if spec.DeployMode != nil {
 		deployMode = *spec.DeployMode
 	}
-	var targetClusterID, targetNamespace string
-	if spec.TargetCluster != nil {
-		targetClusterID = spec.TargetCluster.ID
-		targetNamespace = spec.TargetCluster.Namespace
-	}
 	var serviceEnabled bool
 	if spec.ServiceEnabled != nil {
 		serviceEnabled = *spec.ServiceEnabled
@@ -657,8 +615,6 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		CurrentExposedPorts:  w.Status.ExposedPorts,
 		Owner:                w,
 		DeployMode:           deployMode,
-		TargetClusterID:      targetClusterID,
-		TargetNamespace:      targetNamespace,
 		ServiceEnabled:       serviceEnabled,
 		Resources:            agentResourcesToBackend(resourceSpec),
 		BackendRuntime:       backendRuntime,
@@ -786,7 +742,7 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 //
 //	ModelProvider, Runtime, Image, WorkerName, Identity, Soul,
 //	Agents, Skills, RemoteSkills, Package, ChannelPolicy, ContainerManaged,
-//	DeployMode, TargetCluster, BackendRuntime, Labels, Env, Volumes, Mounts.
+//	DeployMode, BackendRuntime, Labels, Env, Volumes, Mounts.
 //
 // Excluded (do not trigger pod recreation):
 //
@@ -899,7 +855,6 @@ func hashQwenPawPodSpecWithResources(spec v1beta1.WorkerSpec, resources *v1beta1
 		WorkerName       string                             `json:"workerName,omitempty"`
 		ContainerManaged *bool                              `json:"containerManaged,omitempty"`
 		DeployMode       *string                            `json:"deployMode,omitempty"`
-		TargetCluster    *v1beta1.TargetClusterSpec         `json:"targetCluster,omitempty"`
 		BackendRuntime   *string                            `json:"backendRuntime,omitempty"`
 		Resources        *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
 		Env              map[string]string                  `json:"env,omitempty"`
@@ -914,7 +869,6 @@ func hashQwenPawPodSpecWithResources(spec v1beta1.WorkerSpec, resources *v1beta1
 		WorkerName:       spec.WorkerName,
 		ContainerManaged: spec.ContainerManaged,
 		DeployMode:       spec.DeployMode,
-		TargetCluster:    spec.TargetCluster,
 		BackendRuntime:   spec.BackendRuntime,
 		Resources:        resources,
 		Env:              spec.Env,

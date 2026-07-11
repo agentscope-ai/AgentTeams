@@ -7,6 +7,8 @@ description: Use before any Leader taskflow call or task-level workflow involvin
 
 You manage individual Worker task delegation and result checks. Use this skill as the task execution layer. Use `team-coordination` for work organization strategy and `project-management` for Project state, DAG, Loop, lifecycle, and ready-node operations.
 
+Task state is tool-owned. Do not create, edit, delete, or repair `shared/tasks/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Use `taskflow` actions only. If `taskflow` fails or returns inconsistent state, stop and report the blocker instead of manually patching files.
+
 ## Scope
 
 Use this skill for:

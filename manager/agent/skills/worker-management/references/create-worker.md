@@ -294,9 +294,15 @@ This reply mentions the Worker name explicitly so the admin (and the integration
 
 In your **next** heartbeat or self-triggered turn, for each entry in `~/pending-workers.json`:
 
-1. `hiclaw get workers -o json` and check the entry's `phase`. If still `Pending` and queued < 90s ago, leave it for a later heartbeat. If `Failed`, notify admin in DM and remove the entry.
+1. `hiclaw get workers -o json` and check the entry's `phase`. If still `Pending` and queued < 90s ago, leave it for a later heartbeat. If `Failed`, notify admin in DM and remove the entry using the safe rewrite command below.
 2. If `Running`, run `send-worker-greeting.sh --worker <NAME> --room "<ROOM_ID>"` to greet the Worker in their room, then notify admin in DM with: `"<NAME> is now Running and greeted."`
-3. Remove the processed entry from `~/pending-workers.json`.
+3. Remove the processed entry from `~/pending-workers.json` using the safe rewrite command below.
+
+Never run `rm`, `unlink`, or any delete command for `~/pending-workers.json`; Tool Guard may pause the Admin DM session and block later admin requests. Keep the file, even if it becomes empty. To remove a processed entry, use exactly this safe rewrite pattern:
+
+```bash
+jq -c 'select(.name != "<NAME>")' ~/pending-workers.json > ~/pending-workers.json.tmp && mv ~/pending-workers.json.tmp ~/pending-workers.json
+```
 
 If you have HEARTBEAT.md, add a one-line bullet there reminding yourself to drain `~/pending-workers.json` at every heartbeat.
 

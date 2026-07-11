@@ -13,6 +13,7 @@ import logging
 import mimetypes
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
@@ -38,6 +39,10 @@ from nio import (
 from nio.responses import WhoamiResponse
 
 logger = logging.getLogger(__name__)
+
+_MATRIX_USER_ID_RE = re.compile(
+    r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
+)
 
 # Token refresh tunables
 MAX_TOKEN_REFRESH_RETRIES = 3
@@ -177,6 +182,70 @@ def _normalize_user_id(uid: str) -> str:
     if not uid.startswith("@"):
         uid = "@" + uid
     return uid
+
+
+def _strip_yaml_string(value: str) -> str:
+    text = value.strip()
+    if not text or text in {"null", "~"}:
+        return ""
+    if "#" in text:
+        text = text.split("#", 1)[0].strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _runtime_root() -> Path:
+    configured = os.getenv("COPAW_WORKING_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve().parent
+
+    cwd = Path.cwd().resolve()
+    if cwd.name == "default" and cwd.parent.name == "workspaces":
+        copaw_dir = cwd.parent.parent
+        if copaw_dir.name == ".copaw":
+            return copaw_dir.parent
+    return cwd
+
+
+def _runtime_config_field(section: str, key: str) -> str:
+    path = _runtime_root() / "runtime" / "runtime.yaml"
+    if not path.exists():
+        return ""
+
+    in_section = False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for raw_line in lines:
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        if not raw_line.startswith((" ", "\t")):
+            in_section = raw_line.strip() == f"{section}:"
+            continue
+        if not in_section:
+            continue
+        stripped = raw_line.strip()
+        if ":" not in stripped:
+            continue
+        field, value = stripped.split(":", 1)
+        if field.strip() == key:
+            return _strip_yaml_string(value)
+    return ""
+
+
+def _extract_matrix_user_ids(text: str) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for match in _MATRIX_USER_ID_RE.finditer(text or ""):
+        mxid = match.group(0)
+        key = mxid.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(mxid)
+    return result
 
 
 class MatrixChannel(BaseChannel):
@@ -1457,7 +1526,11 @@ class MatrixChannel(BaseChannel):
     # ------------------------------------------------------------------
 
     def _apply_mention(
-        self, content: dict[str, Any], user_id: str, room_id: str
+        self,
+        content: dict[str, Any],
+        room_id: str,
+        explicit_user_ids: list[str] | None = None,
+        fallback_user_id: str | None = None,
     ) -> None:
         """Add a full Matrix mention to an outgoing event content dict.
 
@@ -1465,21 +1538,46 @@ class MatrixChannel(BaseChannel):
         ``formatted_body`` with an HTML pill so clients render the
         mention visually.
         """
-        content["m.mentions"] = {"user_ids": [user_id]}
+        targets = list(explicit_user_ids or _extract_matrix_user_ids(content.get("body", "")))
+        if not targets and fallback_user_id:
+            targets.append(fallback_user_id)
 
-        display_name = self._resolve_display_name(user_id, room_id)
-        pill = (
-            f'<a href="https://matrix.to/#/{user_id}">'
-            f"{display_name}</a>"
-        )
+        visible: list[str] = []
+        seen: set[str] = set()
+        for target in targets:
+            if not target:
+                continue
+            key = target.lower()
+            if key in seen or key == (self._user_id or "").lower():
+                continue
+            seen.add(key)
+            visible.append(target)
+        if not visible:
+            return
+
+        content["m.mentions"] = {"user_ids": visible}
 
         body = content.get("body", "")
-        # Reuse already-converted formatted_body (set by send()) or convert now
         html_body = content.get("formatted_body") or _md_to_html(body)
+
+        for target in reversed(visible):
+            display_name = self._resolve_display_name(target, room_id)
+            encoded_target = urllib.parse.quote(target)
+            pill = (
+                f'<a href="https://matrix.to/#/{encoded_target}">'
+                f"{display_name}</a>"
+            )
+            if target not in body:
+                body = f"{target} {body}" if body else target
+            escaped = html.escape(target)
+            if escaped in html_body:
+                html_body = html_body.replace(escaped, pill, 1)
+            else:
+                html_body = f"{pill} {html_body}" if html_body else pill
+
         content["format"] = "org.matrix.custom.html"
-        content["formatted_body"] = f"{pill} {html_body}" if html_body else pill
-        # Prepend plain-text fallback so non-HTML clients also see the mention
-        content["body"] = f"{display_name} {body}" if body else display_name
+        content["formatted_body"] = html_body
+        content["body"] = body
 
     def _resolve_display_name(self, user_id: str, room_id: str) -> str:
         """Best-effort display name for *user_id* in *room_id*."""
@@ -1493,6 +1591,27 @@ class MatrixChannel(BaseChannel):
                 except Exception:
                     pass
         return user_id.split(":")[0].lstrip("@") or user_id
+
+    def _team_assignment_room(self, current_room_id: str, text: str) -> str:
+        role = _runtime_config_field("member", "role")
+        if role != "team_leader":
+            return current_room_id
+
+        team_room_id = _runtime_config_field("team", "teamRoomId")
+        leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
+        team_name = _runtime_config_field("team", "name")
+        if not team_room_id or not leader_dm_room_id:
+            return current_room_id
+        if current_room_id != leader_dm_room_id:
+            return current_room_id
+
+        for mxid in _extract_matrix_user_ids(text):
+            localpart = mxid.removeprefix("@").split(":", 1)[0]
+            if localpart.endswith("-lead"):
+                continue
+            if not team_name or localpart.startswith(f"{team_name}-"):
+                return team_room_id
+        return current_room_id
 
     # ------------------------------------------------------------------
     # Outgoing send — text
@@ -1516,9 +1635,16 @@ class MatrixChannel(BaseChannel):
             "formatted_body": _md_to_html(text),
         }
 
-        sender_id = (meta or {}).get("sender_id") or (meta or {}).get("user_id")
-        if sender_id:
-            self._apply_mention(content, sender_id, room_id)
+        explicit_mentions = _extract_matrix_user_ids(text)
+        rerouted_room_id = self._team_assignment_room(room_id, text)
+        if rerouted_room_id != room_id:
+            logger.info(
+                "MatrixChannel: rerouting team assignment from Leader DM %s to Team Room %s",
+                room_id,
+                rerouted_room_id,
+            )
+            room_id = rerouted_room_id
+        self._apply_mention(content, room_id, explicit_mentions)
 
         try:
             await self._client.room_send(
@@ -1598,7 +1724,7 @@ class MatrixChannel(BaseChannel):
             }
             sender_id = (meta or {}).get("sender_id") or (meta or {}).get("user_id")
             if sender_id:
-                self._apply_mention(event_content, sender_id, room_id)
+                self._apply_mention(event_content, room_id, fallback_user_id=sender_id)
 
             await self._client.room_send(
                 room_id, "m.room.message", event_content,

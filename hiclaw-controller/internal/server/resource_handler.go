@@ -98,6 +98,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	if req.ContainerManaged != nil {
 		containerManaged = *req.ContainerManaged
 	}
+	runtime := req.Runtime
+	if runtime == "" {
+		runtime = backend.RuntimeOpenClaw
+	}
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
@@ -108,7 +112,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Model:            req.Model,
 			ModelProvider:    req.ModelProvider,
 			WorkerName:       req.WorkerName,
-			Runtime:          req.Runtime,
+			Runtime:          runtime,
 			Image:            req.Image,
 			Identity:         req.Identity,
 			Soul:             req.Soul,

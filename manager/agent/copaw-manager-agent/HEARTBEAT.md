@@ -49,7 +49,7 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   - `ready` — container was already running, proceed normally
   - `started` — container was stopped and has been woken up; **wait 30 seconds** for the Worker to initialize before sending the follow-up message
   - `recreated` — container was missing and has been recreated; **wait 60 seconds** before sending the follow-up message, and flag this anomaly for the admin report (Step 7)
-  - `remote` — Worker is remotely deployed, assumed reachable
+  - `remote` — legacy lifecycle status meaning the container is not managed through the Manager-local container API; assume the controller/backend owns readiness
   - `failed` — could not start/recreate the container; **skip the follow-up message**, flag the anomaly for the admin report (Step 7), and suggest the admin intervene
 - **Use `copaw channels send` via shell** to send a follow-up to that room:
   ```bash

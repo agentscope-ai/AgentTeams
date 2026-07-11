@@ -164,7 +164,7 @@ action_sync_status() {
     _init_lifecycle_file
 
     if ! container_api_available 2>/dev/null; then
-        _log "No worker backend available — marking all workers as remote"
+        _log "No Manager-local worker backend available — marking workers as externally managed"
         local workers
         workers=$(_get_all_workers)
         for worker in $workers; do
@@ -218,7 +218,7 @@ action_check_idle() {
         local container_status
         container_status=$(_get_worker_field "$worker" "container_status")
 
-        # Skip remote workers and non-running containers
+        # Skip workers not managed by the Manager-local container API and non-running containers
         if [ "$container_status" = "remote" ] || [ "$container_status" = "not_found" ]; then
             continue
         fi
@@ -369,12 +369,12 @@ action_start() {
     _init_lifecycle_file
     _ensure_worker_entry "$worker"
 
-    # Skip remote workers — they are not Manager-managed containers
+    # Skip workers that are not managed through the Manager-local container API
     local deployment
     deployment=$(jq -r --arg w "$worker" '.workers[$w].deployment // "local"' "$REGISTRY_FILE" 2>/dev/null)
     if [ "$deployment" = "remote" ]; then
-        _log "Worker $worker is remote — cannot start via container API"
-        _log "The admin should restart this worker on the target machine manually"
+        _log "Worker $worker is not managed through the Manager-local container API"
+        _log "Use the controller/backend lifecycle for this worker"
         return 1
     fi
 
@@ -447,16 +447,17 @@ action_start() {
 # Ensure a specific worker is ready to receive messages.
 # If the container is stopped, start it; if not_found, recreate it.
 # Outputs JSON: {"worker":"<name>","status":"ready|started|recreated|remote|failed","container_status":"..."}
+# status=remote is a legacy lifecycle value for workers not managed through the Manager-local container API.
 # Usage: action_ensure_ready <worker_name>
 action_ensure_ready() {
     local worker="$1"
     _init_lifecycle_file
 
-    # Check deployment type — skip remote workers
+    # Check deployment type — skip workers not managed through the Manager-local container API
     local deployment
     deployment=$(jq -r --arg w "$worker" '.workers[$w].deployment // "local"' "$REGISTRY_FILE" 2>/dev/null)
     if [ "$deployment" = "remote" ]; then
-        _log "Worker $worker is remote — assumed ready"
+        _log "Worker $worker is not Manager-local — assuming controller/backend readiness"
         echo "{\"worker\":\"$worker\",\"status\":\"remote\",\"container_status\":\"remote\"}"
         return 0
     fi

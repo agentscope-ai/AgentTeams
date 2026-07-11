@@ -29,22 +29,21 @@ func createCmd() *cobra.Command {
 
 func createWorkerCmd() *cobra.Command {
 	var (
-		name             string
-		model            string
-		runtime          string
-		image            string
-		identity         string
-		soul             string
-		soulFile         string
-		skills           string
-		packageURI       string
-		expose           string
-		team             string
-		role             string
-		containerManaged bool
-		outputFmt        string
-		waitTimeout      time.Duration
-		noWait           bool
+		name        string
+		model       string
+		runtime     string
+		image       string
+		identity    string
+		soul        string
+		soulFile    string
+		skills      string
+		packageURI  string
+		expose      string
+		team        string
+		role        string
+		outputFmt   string
+		waitTimeout time.Duration
+		noWait      bool
 	)
 
 	cmd := &cobra.Command{
@@ -55,7 +54,6 @@ func createWorkerCmd() *cobra.Command {
   hiclaw create worker --name alice --model qwen3.6-plus
   hiclaw create worker --name alice --soul-file /path/to/SOUL.md --skills github-operations
   hiclaw create worker --name charlie --runtime copaw --expose 8080,3000
-  hiclaw create worker --name remote-worker --runtime copaw --container-managed=false
   To configure CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.
   To configure mcpServers, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -94,9 +92,6 @@ func createWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "package", packageURI)
 			setIfNotEmpty(req, "team", team)
 			setIfNotEmpty(req, "role", role)
-			if !containerManaged {
-				req["containerManaged"] = false
-			}
 			if skills != "" {
 				req["skills"] = splitCSV(skills)
 			}
@@ -145,7 +140,6 @@ func createWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&expose, "expose", "", "Comma-separated ports to expose (e.g. 8080,3000)")
 	cmd.Flags().StringVar(&team, "team", "", "Team name (assigns worker to a team)")
 	cmd.Flags().StringVar(&role, "role", "", "Role within team (team_leader|worker)")
-	cmd.Flags().BoolVar(&containerManaged, "container-managed", true, "Whether controller manages container lifecycle (default true; set false for remote/pip workers)")
 	cmd.Flags().StringVarP(&outputFmt, "output", "o", "", "Output format (json)")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 3*time.Minute, "Maximum time to wait for the Worker to report Ready")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return immediately after the controller accepts the create request, without polling for Ready")

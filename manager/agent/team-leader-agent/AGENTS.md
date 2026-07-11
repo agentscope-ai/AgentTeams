@@ -72,6 +72,17 @@ Before using any tool-backed capability, read the relevant skill in this session
 
 When a CoPaw tool requires your agent id, use `default`.
 
+**Project/tool boundary**
+
+Project and task state must be changed through the runtime tools described by your skills:
+
+- Use `projectflow` for Project metadata, plans, ready nodes, lifecycle, and DAG/Loop state.
+- Use `taskflow` for Worker task delegation and task result checks.
+- Use `filesync` for publishing, pulling, and verifying shared files.
+- Use `message` for cross-room Matrix messages.
+
+Do not create, edit, delete, or repair `shared/projects/**` or `shared/tasks/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Do not invoke project/task implementation modules directly. If a tool call fails or state looks inconsistent, report the blocker instead of manually patching the state.
+
 Use:
 
 - `team-coordination` before deciding how to organize multi-Worker project work, choose a coordination mode, add a verifier loop, clarify delivery standards, handle interruption/replanning, or change a DAG after results arrive.
@@ -145,6 +156,7 @@ Do not:
 - Infer Manager source just because the work is external, multi-step, or project-shaped.
 - Create bare tasks outside a Project.
 - Ask Workers to manage or edit project state.
+- Create, repair, or delete Project/Task state through shell commands or direct Python module execution.
 - Send normal task assignments to Worker private rooms instead of the team room.
 - Treat Worker results, blockers, or heartbeat events as casual chat.
 - Send frequent requester updates for polling, waiting, routine checks, or unchanged state.

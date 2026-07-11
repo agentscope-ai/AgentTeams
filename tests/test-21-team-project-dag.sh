@@ -219,13 +219,17 @@ LEADER_HOME="/root/hiclaw-fs/agents/${TEST_LEADER}"
 PROJECT_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/project-management/SKILL.md" 2>/dev/null)
 TASK_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/task-management/SKILL.md" 2>/dev/null)
 COORDINATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/team-coordination/SKILL.md" 2>/dev/null)
+LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null)
 
 assert_contains "${PROJECT_SKILL}" "projectflow" "project-management documents projectflow"
+assert_contains "${PROJECT_SKILL}" "Project state is tool-owned" "project-management forbids manual project state mutation"
 assert_contains "${PROJECT_SKILL}" "ready_nodes" "project-management documents DAG ready nodes"
 assert_contains "${TASK_SKILL}" "taskflow" "task-management documents taskflow"
+assert_contains "${TASK_SKILL}" "Task state is tool-owned" "task-management forbids manual task state mutation"
 assert_contains "${TASK_SKILL}" "delegate_task" "task-management documents task delegation"
 assert_contains "${COORDINATION_SKILL}" "DAG" "team-coordination documents DAG strategy"
 assert_contains "${COORDINATION_SKILL}" "Loop" "team-coordination documents Loop strategy"
+assert_contains "${LEADER_AGENTS}" "Project/tool boundary" "Leader AGENTS documents tool-owned project/task boundary"
 
 # ============================================================
 # Section 8: End-to-End LLM Test — Admin delegates via Leader DM

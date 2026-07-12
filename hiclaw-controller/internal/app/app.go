@@ -647,30 +647,34 @@ func (a *App) initReconcilers(_ context.Context) error {
 		return fmt.Errorf("setup HumanReconciler: %w", err)
 	}
 
-	mgrReconciler := &controller.ManagerReconciler{
-		Client:           a.mgr.GetClient(),
-		Provisioner:      a.provisioner,
-		Deployer:         a.deployer,
-		Backend:          a.registry,
-		EnvBuilder:       a.envBuilder,
-		ResourcePrefix:   resourcePrefix,
-		ManagerResources: a.cfg.ManagerResources(),
-		DefaultRuntime:   a.cfg.ManagerRuntime,
-		ControllerName:   a.cfg.ControllerName,
-		UserLanguage:     a.cfg.UserLanguage,
-		UserTimezone:     a.cfg.UserTimezone,
-		GatewayClient:    a.gateway,
-	}
-	if a.cfg.KubeMode == "embedded" {
-		mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{
-			WorkspaceDir:       a.cfg.ManagerWorkspaceDir,
-			HostShareDir:       a.cfg.HostShareDir,
-			ExtraEnv:           a.cfg.ManagerAgentEnv(),
-			ManagerConsolePort: a.cfg.ManagerConsolePort,
+	if a.cfg.ManagerEnabled {
+		mgrReconciler := &controller.ManagerReconciler{
+			Client:           a.mgr.GetClient(),
+			Provisioner:      a.provisioner,
+			Deployer:         a.deployer,
+			Backend:          a.registry,
+			EnvBuilder:       a.envBuilder,
+			ResourcePrefix:   resourcePrefix,
+			ManagerResources: a.cfg.ManagerResources(),
+			DefaultRuntime:   a.cfg.ManagerRuntime,
+			ControllerName:   a.cfg.ControllerName,
+			UserLanguage:     a.cfg.UserLanguage,
+			UserTimezone:     a.cfg.UserTimezone,
+			GatewayClient:    a.gateway,
 		}
-	}
-	if err := mgrReconciler.SetupWithManager(a.mgr); err != nil {
-		return fmt.Errorf("setup ManagerReconciler: %w", err)
+		if a.cfg.KubeMode == "embedded" {
+			mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{
+				WorkspaceDir:       a.cfg.ManagerWorkspaceDir,
+				HostShareDir:       a.cfg.HostShareDir,
+				ExtraEnv:           a.cfg.ManagerAgentEnv(),
+				ManagerConsolePort: a.cfg.ManagerConsolePort,
+			}
+		}
+		if err := mgrReconciler.SetupWithManager(a.mgr); err != nil {
+			return fmt.Errorf("setup ManagerReconciler: %w", err)
+		}
+	} else {
+		ctrl.Log.WithName("app").Info("skipping ManagerReconciler because Manager provisioning is disabled")
 	}
 
 	if err := a.mgr.Add(&agentteamsmetrics.CRCountCollector{

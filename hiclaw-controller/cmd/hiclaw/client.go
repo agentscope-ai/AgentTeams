@@ -105,7 +105,7 @@ func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, e
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	if c.ClusterID != "" {
-		req.Header.Set("X-HiClaw-Cluster-ID", c.ClusterID)
+		req.Header.Set("X-AgentTeams-Cluster-ID", c.ClusterID)
 	}
 
 	return c.HTTPClient.Do(req)
@@ -179,7 +179,7 @@ func (c *APIClient) DoMultipart(path, fieldName, fileName string, fileData []byt
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	if c.ClusterID != "" {
-		req.Header.Set("X-HiClaw-Cluster-ID", c.ClusterID)
+		req.Header.Set("X-AgentTeams-Cluster-ID", c.ClusterID)
 	}
 
 	resp, err := c.HTTPClient.Do(req)

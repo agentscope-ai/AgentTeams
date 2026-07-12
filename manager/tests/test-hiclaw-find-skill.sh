@@ -335,13 +335,13 @@ for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
             NACOS_AUTH_TYPE="sts-hiclaw" \
             HICLAW_CONTROLLER_URL="http://controller:8090" \
             HICLAW_AUTH_TOKEN="controller-token" \
-            HICLAW_CLUSTER_ID="remote-cluster-a" \
+            AGENTTEAMS_CLUSTER_ID="remote-cluster-a" \
             HICLAW_FIND_SKILL_MAX_RESULTS=3 \
             HICLAW_FIND_SKILL_NACOS_PAGE_SIZE=50 \
             /bin/sh "${script_path}" find review | strip_ansi)"
 
         assert_contains "${case_name}: should still return sts-backed results" "requesting-code-review" "${output}"
-        assert_contains "${case_name}: controller STS call should include cluster header" "X-HiClaw-Cluster-ID: remote-cluster-a" "$(cat "${curl_log}")"
+        assert_contains "${case_name}: controller STS call should include cluster header" "X-AgentTeams-Cluster-ID: remote-cluster-a" "$(cat "${curl_log}")"
         assert_contains "${case_name}: controller STS call should include bearer" "Authorization: Bearer controller-token" "$(cat "${curl_log}")"
         assert_contains "${case_name}: nacos cli should use sts auth type" "--auth-type sts-hiclaw" "$(cat "${log_file}")"
         assert_contains "${case_name}: nacos cli should pass sts access key" "--access-key test-ak" "$(cat "${log_file}")"

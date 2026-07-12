@@ -140,7 +140,7 @@ func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bo
 		return nil, false
 	}
 
-	clusterID := r.Header.Get("X-HiClaw-Cluster-ID")
+	clusterID := r.Header.Get("X-AgentTeams-Cluster-ID")
 
 	identity, err := m.authenticator.Authenticate(r.Context(), token, clusterID)
 	if err != nil {

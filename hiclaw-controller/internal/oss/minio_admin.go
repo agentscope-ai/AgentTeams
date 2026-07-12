@@ -131,7 +131,9 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 		"shared/*",
 	}
 	rwResources := []string{
+		fmt.Sprintf("arn:aws:s3:::%s/agents/%s/", bucket, workerName),
 		fmt.Sprintf("arn:aws:s3:::%s/agents/%s/*", bucket, workerName),
+		fmt.Sprintf("arn:aws:s3:::%s/shared/", bucket),
 		fmt.Sprintf("arn:aws:s3:::%s/shared/*", bucket),
 	}
 
@@ -142,6 +144,7 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 			"manager/*",
 		)
 		rwResources = append(rwResources,
+			fmt.Sprintf("arn:aws:s3:::%s/manager/", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/manager/*", bucket),
 		)
 	}
@@ -153,6 +156,7 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 			fmt.Sprintf("teams/%s/*", teamName),
 		)
 		rwResources = append(rwResources,
+			fmt.Sprintf("arn:aws:s3:::%s/teams/%s/", bucket, teamName),
 			fmt.Sprintf("arn:aws:s3:::%s/teams/%s/*", bucket, teamName),
 		)
 	}

@@ -53,7 +53,8 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 		t.Fatalf("session = %q", session)
 	}
 	// Standalone workers now default to a single object-storage entry
-	// that folds agents/<name>/* + shared/* together, mirroring the
+	// that folds agents/<name>/ + agents/<name>/* + shared/ + shared/*
+	// together, mirroring the
 	// embedded MinIO policy which grants both prefixes RW.
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
@@ -65,11 +66,10 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	if e.Scope.Bucket != "hiclaw-test" {
 		t.Fatalf("bucket not resolved: %+v", e.Scope)
 	}
-	if !hasPrefix(e.Scope.Prefixes, "agents/alice/*") {
-		t.Fatalf("expected agents/alice/* prefix, got %+v", e.Scope.Prefixes)
-	}
-	if !hasPrefix(e.Scope.Prefixes, "shared/*") {
-		t.Fatalf("expected shared/* prefix, got %+v", e.Scope.Prefixes)
+	for _, want := range []string{"agents/alice/", "agents/alice/*", "shared/", "shared/*"} {
+		if !hasPrefix(e.Scope.Prefixes, want) {
+			t.Fatalf("expected prefix %q, got %+v", want, e.Scope.Prefixes)
+		}
 	}
 	if !hasAllPerms(e.Permissions, "read", "write", "list", "delete") {
 		t.Fatalf("expected RW shared/* permissions, got %+v", e.Permissions)
@@ -580,7 +580,7 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	if e.Scope.Bucket != "hiclaw-test" {
 		t.Fatalf("bucket = %q", e.Scope.Bucket)
 	}
-	for _, want := range []string{"agents/lead/*", "shared/*", "teams/alpha/*"} {
+	for _, want := range []string{"agents/lead/", "agents/lead/*", "shared/", "shared/*", "teams/alpha/", "teams/alpha/*"} {
 		if !hasPrefix(e.Scope.Prefixes, want) {
 			t.Fatalf("missing prefix %q in %+v", want, e.Scope.Prefixes)
 		}
@@ -612,6 +612,9 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
 	}
 	got := entries[0].Scope.Prefixes
+	if !hasPrefix(got, "agents/runtime-lead/") {
+		t.Fatalf("runtime workerName directory prefix not found in %+v", got)
+	}
 	if !hasPrefix(got, "agents/runtime-lead/*") {
 		t.Fatalf("runtime workerName prefix not found in %+v", got)
 	}
@@ -636,6 +639,9 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeTeamName(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	got := entries[0].Scope.Prefixes
+	if !hasPrefix(got, "teams/team001/") {
+		t.Fatalf("runtime teamName directory prefix not found in %+v", got)
+	}
 	if !hasPrefix(got, "teams/team001/*") {
 		t.Fatalf("runtime teamName prefix not found in %+v", got)
 	}
@@ -665,7 +671,7 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
 	}
 	e := entries[0]
-	for _, want := range []string{"agents/w1/*", "shared/*", "teams/alpha/*"} {
+	for _, want := range []string{"agents/w1/", "agents/w1/*", "shared/", "shared/*", "teams/alpha/", "teams/alpha/*"} {
 		if !hasPrefix(e.Scope.Prefixes, want) {
 			t.Fatalf("missing prefix %q in %+v", want, e.Scope.Prefixes)
 		}

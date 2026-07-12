@@ -78,14 +78,34 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	// Verify team resource in RW statement
 	rwStmt := policy.Statement[1]
 	hasTeamResource := false
+	hasWorkerDirResource := false
+	hasSharedDirResource := false
+	hasTeamDirResource := false
 	for _, r := range rwStmt.Resource {
 		if r == "arn:aws:s3:::agentteams-storage/teams/team-dev/*" {
 			hasTeamResource = true
-			break
+		}
+		if r == "arn:aws:s3:::agentteams-storage/agents/worker-1/" {
+			hasWorkerDirResource = true
+		}
+		if r == "arn:aws:s3:::agentteams-storage/shared/" {
+			hasSharedDirResource = true
+		}
+		if r == "arn:aws:s3:::agentteams-storage/teams/team-dev/" {
+			hasTeamDirResource = true
 		}
 	}
 	if !hasTeamResource {
 		t.Errorf("expected team resource in RW statement: %v", rwStmt.Resource)
+	}
+	if !hasWorkerDirResource {
+		t.Errorf("expected worker directory resource in RW statement: %v", rwStmt.Resource)
+	}
+	if !hasSharedDirResource {
+		t.Errorf("expected shared directory resource in RW statement: %v", rwStmt.Resource)
+	}
+	if !hasTeamDirResource {
+		t.Errorf("expected team directory resource in RW statement: %v", rwStmt.Resource)
 	}
 }
 
@@ -138,14 +158,20 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 	// Verify manager resource in RW statement
 	rwStmt := policy.Statement[1]
 	hasManagerResource := false
+	hasManagerDirResource := false
 	for _, r := range rwStmt.Resource {
 		if r == "arn:aws:s3:::agentteams-storage/manager/*" {
 			hasManagerResource = true
-			break
+		}
+		if r == "arn:aws:s3:::agentteams-storage/manager/" {
+			hasManagerDirResource = true
 		}
 	}
 	if !hasManagerResource {
 		t.Errorf("expected manager resource in RW statement: %v", rwStmt.Resource)
+	}
+	if !hasManagerDirResource {
+		t.Errorf("expected manager directory resource in RW statement: %v", rwStmt.Resource)
 	}
 }
 

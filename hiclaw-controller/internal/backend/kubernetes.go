@@ -53,14 +53,8 @@ type K8sConfig struct {
 // K8sBackend manages worker lifecycle via Kubernetes Pods.
 type K8sBackend struct {
 	client          K8sCoreClient
-	remoteCache     RemoteClientProvider // remote cluster client cache (may be nil)
 	config          K8sConfig
 	containerPrefix string
-
-	// Fields for remote routing (set via WithRemoteTarget).
-	deployMode      string
-	targetClusterID string
-	targetNamespace string
 
 	// scheme is used to resolve GVK for CreateRequest.Owner when stamping
 	// the child Pod's controller OwnerReference via
@@ -149,10 +143,9 @@ func NewK8sBackend(config K8sConfig, containerPrefix string, scheme *runtime.Sch
 }
 
 // NewK8sBackendWithCache creates a Kubernetes backend using in-cluster config
-// or kubeconfig, and wires in an optional remote-cluster client cache used
-// to route operations against Workers/Managers deployed to remote clusters.
-// remoteCache may be nil when no remote clusters are configured; in that
-// case the backend behaves identically to NewK8sBackend.
+// or kubeconfig. The remoteCache argument is retained only for call-site
+// compatibility; OSS controllers no longer route backend operations to target
+// clusters.
 func NewK8sBackendWithCache(config K8sConfig, containerPrefix string, scheme *runtime.Scheme, remoteCache RemoteClientProvider) (*K8sBackend, error) {
 	restConfig, err := loadK8sRESTConfig()
 	if err != nil {
@@ -166,7 +159,7 @@ func NewK8sBackendWithCache(config K8sConfig, containerPrefix string, scheme *ru
 	if err != nil {
 		return nil, fmt.Errorf("create authentication client: %w", err)
 	}
-	return NewK8sBackendWithRemote(&k8sCoreClientWrapper{client: clientset, authClient: authClient}, remoteCache, config, containerPrefix, scheme), nil
+	return NewK8sBackendWithClient(&k8sCoreClientWrapper{client: clientset, authClient: authClient}, config, containerPrefix, scheme), nil
 }
 
 // NewK8sBackendWithClient creates a Kubernetes backend with a custom client.
@@ -190,14 +183,6 @@ func NewK8sBackendWithClient(client K8sCoreClient, config K8sConfig, containerPr
 	}
 }
 
-// NewK8sBackendWithRemote creates a Kubernetes backend with remote cluster support.
-// remoteCache may be nil if no remote clusters are configured.
-func NewK8sBackendWithRemote(client K8sCoreClient, remoteCache RemoteClientProvider, config K8sConfig, containerPrefix string, scheme *runtime.Scheme) *K8sBackend {
-	b := NewK8sBackendWithClient(client, config, containerPrefix, scheme)
-	b.remoteCache = remoteCache
-	return b
-}
-
 // WithPrefix returns a shallow copy of the backend with a different container name prefix.
 // The returned backend shares the same client (safe — K8sCoreClient is stateless).
 // Use WithPrefix("") to disable prefix for containers that already have full names
@@ -208,65 +193,17 @@ func (k *K8sBackend) WithPrefix(prefix string) *K8sBackend {
 	return &cp
 }
 
-// WithRemoteTarget returns a shallow copy of the backend configured to route
-// Delete and Status operations to the specified remote cluster/namespace.
-// Use this when the controller needs to operate on a pod in a remote cluster
-// via the interface methods that only accept a name.
-func (k *K8sBackend) WithRemoteTarget(deployMode, clusterID, namespace string) *K8sBackend {
-	cp := *k
-	cp.deployMode = deployMode
-	cp.targetClusterID = clusterID
-	cp.targetNamespace = namespace
-	return &cp
-}
-
-// resolveClient returns the appropriate K8sCoreClient and namespace based on
-// deploy mode. For Remote mode, it fetches the client from remoteCache.
-func (k *K8sBackend) resolveClient(ctx context.Context, deployMode, targetClusterID, targetNamespace string) (K8sCoreClient, string, error) {
-	if deployMode == v1beta1.DeployModeRemote {
-		if k.remoteCache == nil {
-			return nil, "", fmt.Errorf("remote client cache not configured")
-		}
-		client, err := k.remoteCache.ResolveClient(ctx, targetClusterID)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to get remote client for cluster %s: %w", targetClusterID, err)
-		}
-		ns := targetNamespace
-		if ns == "" {
-			ns = k.namespace
-		}
-		return client, ns, nil
-	}
+func (k *K8sBackend) resolveClient(ctx context.Context) (K8sCoreClient, string, error) {
 	return k.client, k.namespace, nil
 }
 
-// ServiceClient implements ServiceBackend. It returns a K8sServiceClient and
-// resolved namespace for the appropriate cluster based on deploy mode.
-func (k *K8sBackend) ServiceClient(ctx context.Context, deployMode, targetClusterID, targetNamespace string) (K8sServiceClient, string, error) {
-	client, ns, err := k.resolveClient(ctx, deployMode, targetClusterID, targetNamespace)
+// ServiceClient implements ServiceBackend.
+func (k *K8sBackend) ServiceClient(ctx context.Context) (K8sServiceClient, string, error) {
+	client, ns, err := k.resolveClient(ctx)
 	if err != nil {
 		return nil, "", err
 	}
 	return client.Services(ns), ns, nil
-}
-
-// ensureRemoteNamespace ensures the target namespace exists in the remote cluster.
-func (k *K8sBackend) ensureRemoteNamespace(ctx context.Context, client K8sCoreClient, namespace string) error {
-	_, err := client.Namespaces().Get(ctx, namespace, metav1.GetOptions{})
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to check namespace %s: %w", namespace, err)
-	}
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: namespace},
-	}
-	_, err = client.Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create namespace %s: %w", namespace, err)
-	}
-	return nil
 }
 
 func (k *K8sBackend) Name() string                   { return "k8s" }
@@ -286,17 +223,9 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	// AGENTTEAMS_DEFAULT_WORKER_RUNTIME for workers).
 	req.Runtime = ResolveRuntime(req.Runtime, req.RuntimeFallback)
 
-	// Resolve the target client and namespace based on deploy mode.
-	targetClient, targetNS, err := k.resolveClient(ctx, req.DeployMode, req.TargetClusterID, req.TargetNamespace)
+	targetClient, targetNS, err := k.resolveClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve client for create: %w", err)
-	}
-
-	// Ensure the remote namespace exists before creating the Pod.
-	if req.DeployMode == v1beta1.DeployModeRemote {
-		if err := k.ensureRemoteNamespace(ctx, targetClient, targetNS); err != nil {
-			return nil, fmt.Errorf("ensure remote namespace: %w", err)
-		}
 	}
 
 	podName := req.ContainerName
@@ -440,9 +369,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		HostAliases:        buildHostAliases(req.ExtraHosts),
 	})
 
-	// Skip controller OwnerReference for remote pods — cross-cluster ownerRef
-	// is not possible. Local pods still get ownerRef for GC cascading.
-	if req.Owner != nil && req.DeployMode != v1beta1.DeployModeRemote {
+	if req.Owner != nil {
 		if k.scheme == nil {
 			return nil, fmt.Errorf("kubernetes backend: scheme is required when CreateRequest.Owner is set")
 		}
@@ -468,7 +395,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 }
 
 func (k *K8sBackend) Delete(ctx context.Context, name string) error {
-	targetClient, targetNS, err := k.resolveClient(ctx, k.deployMode, k.targetClusterID, k.targetNamespace)
+	targetClient, targetNS, err := k.resolveClient(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve client for delete: %w", err)
 	}
@@ -484,7 +411,7 @@ func (k *K8sBackend) Delete(ctx context.Context, name string) error {
 }
 
 func (k *K8sBackend) Start(ctx context.Context, name string) error {
-	targetClient, targetNS, err := k.resolveClient(ctx, k.deployMode, k.targetClusterID, k.targetNamespace)
+	targetClient, targetNS, err := k.resolveClient(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve client for start: %w", err)
 	}
@@ -509,7 +436,7 @@ func (k *K8sBackend) Stop(ctx context.Context, name string) error {
 }
 
 func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, error) {
-	targetClient, targetNS, err := k.resolveClient(ctx, k.deployMode, k.targetClusterID, k.targetNamespace)
+	targetClient, targetNS, err := k.resolveClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve client for status: %w", err)
 	}

@@ -484,7 +484,7 @@ func (a *App) initAuth(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("create kubernetes client: %w", err)
 		}
-		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix), a.remoteClientCache)
+		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix))
 		go authenticator.StartCleanup(ctx)
 		enricher := authpkg.NewCREnricher(a.mgr.GetClient(), a.namespace)
 		authorizer := authpkg.NewAuthorizer()

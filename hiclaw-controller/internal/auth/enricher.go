@@ -59,9 +59,6 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 	err := e.client.Get(ctx, key, &worker)
 	switch {
 	case err == nil:
-		if err := e.validateRemoteWorkerIdentity(identity, &worker); err != nil {
-			return err
-		}
 		runtimeName := worker.Spec.EffectiveWorkerName(worker.Name)
 		identity.WorkerName = runtimeName
 		if role := worker.Annotations["agentteams.io/role"]; role == "team_leader" {
@@ -85,9 +82,6 @@ func (e *CREnricher) EnrichIdentity(ctx context.Context, identity *CallerIdentit
 		return nil
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("enrich identity: get worker %q: %w", identity.Username, err)
-	}
-	if identity.ClusterID != "" {
-		return fmt.Errorf("remote identity %q is not backed by a Worker CR", identity.Username)
 	}
 
 	// 2. Worker CR missing — fall back to Team CR reverse lookup. A worker
@@ -156,13 +150,6 @@ func (e *CREnricher) lookupTeamWorkerMember(ctx context.Context, name string) (*
 		}
 	}
 	return nil, "", false, nil
-}
-
-func (e *CREnricher) validateRemoteWorkerIdentity(identity *CallerIdentity, worker *v1beta1.Worker) error {
-	if identity.ClusterID == "" {
-		return nil
-	}
-	return fmt.Errorf("remote identity %q is not supported by open-source Workers", identity.Username)
 }
 
 func (e *CREnricher) lookupTeamByField(ctx context.Context, field, value string) (*v1beta1.Team, bool, error) {

@@ -56,10 +56,6 @@ type SandboxBackend struct {
 	containerPrefix string
 	scheme          *runtime.Scheme
 	k8sClient       K8sCoreClient
-	// Remote deploy mode fields (set via WithRemoteTarget).
-	deployMode      string
-	targetClusterID string
-	targetNamespace string
 	remoteCache     RemoteClusterClientProvider
 }
 
@@ -124,63 +120,11 @@ func (s *SandboxBackend) WithPrefix(prefix string) *SandboxBackend {
 	return &cp
 }
 
-// WithRemoteTarget returns a shallow copy of the backend configured to route
-// operations to the specified remote cluster/namespace.
-func (s *SandboxBackend) WithRemoteTarget(deployMode, clusterID, namespace string) *SandboxBackend {
-	cp := *s
-	cp.deployMode = deployMode
-	cp.targetClusterID = clusterID
-	cp.targetNamespace = namespace
-	return &cp
-}
-
-// resolveProviderConfig returns the ProviderConfig for the target cluster.
-// For remote mode, it creates a new ProviderConfig with a remote DynamicClient
-// and the target namespace.
 func (s *SandboxBackend) resolveProviderConfig(ctx context.Context) (sandbox.ProviderConfig, error) {
-	if s.deployMode == v1beta1.DeployModeRemote && s.targetClusterID != "" {
-		if s.remoteCache == nil {
-			return sandbox.ProviderConfig{}, fmt.Errorf("remote client cache not configured")
-		}
-		dynClient, err := s.remoteCache.ResolveDynamicClient(ctx, s.targetClusterID)
-		if err != nil {
-			return sandbox.ProviderConfig{}, fmt.Errorf("resolve remote dynamic client for cluster %s: %w", s.targetClusterID, err)
-		}
-		ns := s.targetNamespace
-		if ns == "" {
-			ns = s.providerConfig.Namespace
-		}
-		cfg := s.providerConfig
-		cfg.DynamicClient = dynClient
-		cfg.Namespace = ns
-		return cfg, nil
-	}
 	return s.providerConfig, nil
 }
 
 func (s *SandboxBackend) ensureRemoteNamespace(ctx context.Context, namespace string) error {
-	if s.deployMode != v1beta1.DeployModeRemote || s.targetClusterID == "" {
-		return nil
-	}
-	if s.remoteCache == nil {
-		return fmt.Errorf("remote client cache not configured")
-	}
-	if namespace == "" {
-		return fmt.Errorf("namespace is required")
-	}
-	client, err := s.remoteCache.ResolveClient(ctx, s.targetClusterID)
-	if err != nil {
-		return fmt.Errorf("resolve remote client for cluster %s: %w", s.targetClusterID, err)
-	}
-	if _, err := client.Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err == nil {
-		return nil
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to check namespace %s: %w", namespace, err)
-	}
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
-	if _, err := client.Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create namespace %s: %w", namespace, err)
-	}
 	return nil
 }
 

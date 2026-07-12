@@ -369,10 +369,10 @@ func LoadConfig() *Config {
 		MatrixAdminPassword:     os.Getenv("HICLAW_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("HICLAW_MATRIX_E2EE") == "1" || os.Getenv("HICLAW_MATRIX_E2EE") == "true",
 
-		MatrixAppServiceEnabled:            os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") != "0" && os.Getenv("HICLAW_MATRIX_APPSERVICE_ENABLED") != "false",
-		MatrixAppServiceID:                 envOrDefault("HICLAW_MATRIX_APPSERVICE_ID", "hiclaw-controller"),
-		MatrixAppServiceASToken:            os.Getenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN"),
-		MatrixAppServiceHSToken:            os.Getenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN"),
+		MatrixAppServiceEnabled:            os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "0" && os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "false",
+		MatrixAppServiceID:                 envOrDefault("AGENTTEAMS_MATRIX_APPSERVICE_ID", "hiclaw-controller"),
+		MatrixAppServiceASToken:            os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN"),
+		MatrixAppServiceHSToken:            os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN"),
 		MatrixAppServiceSenderLocalpart:    envOrDefault("HICLAW_MATRIX_APPSERVICE_SENDER_LOCALPART", "hiclaw-controller"),
 		MatrixAppServiceUserNamespaceRegex: os.Getenv("HICLAW_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX"),
 
@@ -453,10 +453,10 @@ func LoadConfig() *Config {
 		matrixControllerURL := firstNonEmpty(os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_CONTROLLER_URL"), cfg.ControllerURL)
 		cfg.MatrixAppServicePushURL = appServicePushURL(matrixControllerURL)
 		if cfg.MatrixAppServiceASToken == "" {
-			panic("HICLAW_MATRIX_APPSERVICE_AS_TOKEN is required when AppService mode is enabled; run install script or set env var")
+			panic("AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN is required when AppService mode is enabled; run install script or set env var")
 		}
 		if cfg.MatrixAppServiceHSToken == "" {
-			panic("HICLAW_MATRIX_APPSERVICE_HS_TOKEN is required when AppService mode is enabled; run install script or set env var")
+			panic("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN is required when AppService mode is enabled; run install script or set env var")
 		}
 	}
 

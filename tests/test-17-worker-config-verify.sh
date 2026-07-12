@@ -16,7 +16,7 @@ source "${SCRIPT_DIR}/lib/minio-client.sh"
 test_setup "17-worker-config-verify"
 
 TEST_WORKER="test-cfg-$$"
-STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"

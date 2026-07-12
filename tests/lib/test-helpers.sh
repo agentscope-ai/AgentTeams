@@ -43,7 +43,7 @@ export TEST_ELEMENT_PORT="${TEST_ELEMENT_PORT:-18088}"
 # Internal container URLs — always fixed; all callers use exec_in_manager
 export TEST_MATRIX_DIRECT_URL="http://127.0.0.1:6167"
 export TEST_MINIO_URL="http://127.0.0.1:9000"
-export TEST_STORAGE_PREFIX="${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}"
+export TEST_STORAGE_PREFIX="${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}"
 
 # Derived external URLs — rebuilt by detect_manager_config() after port detection
 export TEST_CONSOLE_URL="http://${TEST_MANAGER_HOST}:${TEST_CONSOLE_PORT}"

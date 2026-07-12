@@ -20,7 +20,7 @@ source "${SCRIPT_DIR}/lib/minio-client.sh"
 test_setup "24-skills-management"
 
 TEST_WORKER="test-skl-$$"
-STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 REGISTRY_KEY="${STORAGE_PREFIX}/agents/manager/workers-registry.json"
 
 _cleanup() {

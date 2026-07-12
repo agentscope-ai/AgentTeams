@@ -23,7 +23,7 @@ source "${SCRIPT_DIR}/lib/higress-client.sh"
 test_setup "22-delete-worker-cleanup"
 
 TEST_WORKER="test-del-$$"
-STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"

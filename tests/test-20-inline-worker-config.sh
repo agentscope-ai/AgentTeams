@@ -17,7 +17,7 @@ test_setup "20-inline-worker-config"
 
 TEST_WORKER="test-inline-$$"
 TEST_WORKER_OVERRIDE="test-inlover-$$"
-STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ---- Cleanup handler ----
 _cleanup() {

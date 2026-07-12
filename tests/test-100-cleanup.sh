@@ -14,7 +14,7 @@ source "${SCRIPT_DIR}/lib/test-helpers.sh"
 
 test_setup "100-cleanup"
 
-STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ============================================================
 # Section 1: Discover test workers and teams

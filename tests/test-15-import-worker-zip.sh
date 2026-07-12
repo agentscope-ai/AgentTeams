@@ -17,7 +17,7 @@ source "${SCRIPT_DIR}/lib/matrix-client.sh"
 test_setup "15-import-worker-zip"
 
 TEST_WORKER="test-import-$$"
-STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ---- Cleanup handler (only clean up on success) ----
 _cleanup() {

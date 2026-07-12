@@ -132,11 +132,14 @@ def docker_exec(container: str, cmd: str) -> str:
 
 
 def list_hiclaw_containers() -> list[str]:
-    result = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}", "--filter", "name=hiclaw-"],
-        capture_output=True, text=True, timeout=10,
-    )
-    return [n.strip() for n in result.stdout.splitlines() if n.strip()]
+    names: list[str] = []
+    for prefix in ("agentteams-", "hiclaw-"):
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}", "--filter", f"name={prefix}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        names.extend(n.strip() for n in result.stdout.splitlines() if n.strip())
+    return list(dict.fromkeys(names))
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +635,7 @@ def export_agent_sessions(out_dir: Path, since_epoch: float, redact: bool,
         containers = [c for c in containers if container_filter in c]
 
     if not containers:
-        print("  [sessions] No matching hiclaw containers found")
+        print("  [sessions] No matching AgentTeams containers found")
         return 0, 0
 
     total_sessions = 0

@@ -12,17 +12,23 @@
 
 # Auto-detect infrastructure container (embedded controller or legacy manager)
 if [ -z "${TEST_CONTROLLER_CONTAINER}" ]; then
-    export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-controller$' | head -1)"
-    # Fallback: legacy container name
+    export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-controller$' | head -1 || true)"
     if [ -z "${TEST_CONTROLLER_CONTAINER}" ]; then
-        export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager$' | head -1)"
+        export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-controller$' | head -1 || true)"
     fi
-    export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-hiclaw-controller}"
+    if [ -z "${TEST_CONTROLLER_CONTAINER}" ]; then
+        # Fallback: legacy all-in-one manager container name
+        export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager$' | head -1 || true)"
+    fi
+    export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
 fi
 
 # Auto-detect Manager Agent container (separate container in embedded-controller mode)
 if [ -z "${TEST_AGENT_CONTAINER}" ]; then
-    export TEST_AGENT_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager(-|$)' | head -1)"
+    export TEST_AGENT_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)"
+    if [ -z "${TEST_AGENT_CONTAINER}" ]; then
+        export TEST_AGENT_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager(-|$)' | head -1 || true)"
+    fi
     export TEST_AGENT_CONTAINER="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER}}"
 fi
 
@@ -184,16 +190,18 @@ wait_for_manager_agent_ready() {
     local timeout="${1:-300}"
     local room_id="${2:-}"
     local access_token="${3:-}"
-    local infra_container="${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}"
+    local infra_container="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
     local agent_container="${TEST_AGENT_CONTAINER:-${infra_container}}"
     local manager_user="manager"
-    local matrix_domain="${TEST_MATRIX_DOMAIN:-matrix-local.hiclaw.io:${TEST_GATEWAY_PORT}}"
+    local matrix_domain="${TEST_MATRIX_DOMAIN:-matrix-local.agentteams.io:${TEST_GATEWAY_PORT}}"
 
     local elapsed=0
 
     # Detect Manager runtime (check agent container first, then infra)
     local manager_runtime
-    manager_runtime=$(docker exec "${agent_container}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || \
+    manager_runtime=$(docker exec "${agent_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                      docker exec "${infra_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                      docker exec "${agent_container}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || \
                       docker exec "${infra_container}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
 
     # Phase 1: Wait for Manager Agent to be healthy (runtime-specific, on agent container)
@@ -617,10 +625,10 @@ print(json.dumps(ready, ensure_ascii=False, indent=2))
 # ============================================================
 
 # Auto-detect configuration from Manager container
-# This reads HICLAW_* environment variables from the container and sets
+# This reads AgentTeams environment variables from the container and sets
 # TEST_* variables accordingly. Call this after the container is running.
 detect_manager_config() {
-    local container="${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}"
+    local container="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
     
     # Skip if container is not running
     if ! docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
@@ -634,10 +642,14 @@ detect_manager_config() {
     _cenv() { echo "${container_env}" | grep "^${1}=" | cut -d= -f2-; }
 
     local detected_domain detected_gateway_port detected_console_port detected_element_port
-    detected_domain=$(        _cenv HICLAW_MATRIX_DOMAIN)
-    detected_gateway_port=$(  _cenv HICLAW_PORT_GATEWAY)
-    detected_console_port=$(  _cenv HICLAW_PORT_CONSOLE)
-    detected_element_port=$(  _cenv HICLAW_PORT_ELEMENT_WEB)
+    detected_domain=$(        _cenv AGENTTEAMS_MATRIX_DOMAIN)
+    detected_gateway_port=$(  _cenv AGENTTEAMS_PORT_GATEWAY)
+    detected_console_port=$(  _cenv AGENTTEAMS_PORT_CONSOLE)
+    detected_element_port=$(  _cenv AGENTTEAMS_PORT_ELEMENT_WEB)
+    detected_domain="${detected_domain:-$(_cenv HICLAW_MATRIX_DOMAIN)}"
+    detected_gateway_port="${detected_gateway_port:-$(_cenv HICLAW_PORT_GATEWAY)}"
+    detected_console_port="${detected_console_port:-$(_cenv HICLAW_PORT_CONSOLE)}"
+    detected_element_port="${detected_element_port:-$(_cenv HICLAW_PORT_ELEMENT_WEB)}"
 
     [ -n "${detected_gateway_port}" ] && export TEST_GATEWAY_PORT="${detected_gateway_port}"
     [ -n "${detected_console_port}" ] && export TEST_CONSOLE_PORT="${detected_console_port}"
@@ -649,16 +661,23 @@ detect_manager_config() {
     if [ -n "${detected_domain}" ] && [ -z "${TEST_MATRIX_DOMAIN}" ]; then
         export TEST_MATRIX_DOMAIN="${detected_domain}"
     elif [ -z "${TEST_MATRIX_DOMAIN}" ]; then
-        export TEST_MATRIX_DOMAIN="matrix-local.hiclaw.io:${TEST_GATEWAY_PORT}"
+        export TEST_MATRIX_DOMAIN="matrix-local.agentteams.io:${TEST_GATEWAY_PORT}"
     fi
 
     # Load credentials from container env (only if not already set externally)
+    [ -z "${TEST_ADMIN_USER}" ]          && export TEST_ADMIN_USER="$(           _cenv AGENTTEAMS_ADMIN_USER)"
     [ -z "${TEST_ADMIN_USER}" ]          && export TEST_ADMIN_USER="$(           _cenv HICLAW_ADMIN_USER)"
+    [ -z "${TEST_ADMIN_PASSWORD}" ]      && export TEST_ADMIN_PASSWORD="$(        _cenv AGENTTEAMS_ADMIN_PASSWORD)"
     [ -z "${TEST_ADMIN_PASSWORD}" ]      && export TEST_ADMIN_PASSWORD="$(        _cenv HICLAW_ADMIN_PASSWORD)"
+    [ -z "${TEST_MINIO_USER}" ]          && export TEST_MINIO_USER="$(            _cenv AGENTTEAMS_MINIO_USER)"
     [ -z "${TEST_MINIO_USER}" ]          && export TEST_MINIO_USER="$(            _cenv HICLAW_MINIO_USER)"
+    [ -z "${TEST_MINIO_PASSWORD}" ]      && export TEST_MINIO_PASSWORD="$(        _cenv AGENTTEAMS_MINIO_PASSWORD)"
     [ -z "${TEST_MINIO_PASSWORD}" ]      && export TEST_MINIO_PASSWORD="$(        _cenv HICLAW_MINIO_PASSWORD)"
+    [ -z "${TEST_REGISTRATION_TOKEN}" ]  && export TEST_REGISTRATION_TOKEN="$(    _cenv AGENTTEAMS_REGISTRATION_TOKEN)"
     [ -z "${TEST_REGISTRATION_TOKEN}" ]  && export TEST_REGISTRATION_TOKEN="$(    _cenv HICLAW_REGISTRATION_TOKEN)"
+    [ -z "${HICLAW_LLM_API_KEY}" ]       && export HICLAW_LLM_API_KEY="$(         _cenv AGENTTEAMS_LLM_API_KEY)"
     [ -z "${HICLAW_LLM_API_KEY}" ]       && export HICLAW_LLM_API_KEY="$(         _cenv HICLAW_LLM_API_KEY)"
+    [ -z "${TEST_MANAGER_GATEWAY_KEY}" ] && export TEST_MANAGER_GATEWAY_KEY="$(   _cenv AGENTTEAMS_MANAGER_GATEWAY_KEY)"
     [ -z "${TEST_MANAGER_GATEWAY_KEY}" ] && export TEST_MANAGER_GATEWAY_KEY="$(   _cenv HICLAW_MANAGER_GATEWAY_KEY)"
 }
 
@@ -723,14 +742,14 @@ require_llm_key() {
 # Run a command inside the infrastructure container (Matrix, MinIO, Higress, controller).
 # Used by matrix-client.sh and minio-client.sh to avoid exposing Matrix/MinIO ports to host.
 exec_in_manager() {
-    docker exec "${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}" "$@"
+    docker exec "${TEST_CONTROLLER_CONTAINER:-agentteams-controller}" "$@"
 }
 
 # Run a command inside the Manager Agent container.
 # In legacy mode (all-in-one manager), this falls back to the same container.
 # In embedded-controller mode, this targets the separate agent container.
 exec_in_agent() {
-    docker exec "${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}}" "$@"
+    docker exec "${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-agentteams-controller}}" "$@"
 }
 
 # Copy a file between containers via tar pipe (avoids host filesystem symlink issues on macOS).
@@ -795,7 +814,7 @@ stop_worker_container() {
 dump_diagnostics() {
     local kind="$1"
     local name="$2"
-    local controller="${TEST_CONTROLLER_CONTAINER:-hiclaw-controller}"
+    local controller="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
 
     {
         case "${kind}" in

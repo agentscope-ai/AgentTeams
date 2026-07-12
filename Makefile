@@ -741,7 +741,16 @@ ifdef SKIP_INSTALL
 else
 	@echo "==> Installing embedded mode and running tests"
 	$(MAKE) uninstall-embedded 2>/dev/null || true
-	AGENTTEAMS_YOLO=1 $(MAKE) install-embedded
+	# pull_request_target runs the base-branch workflow before this PR's
+	# workflow env rename lands, so map legacy CI env names only at the test
+	# harness boundary. Runtime/install scripts still consume AGENTTEAMS_*.
+	AGENTTEAMS_YOLO=1 \
+		AGENTTEAMS_LLM_API_KEY="$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" \
+		AGENTTEAMS_LLM_PROVIDER="$${AGENTTEAMS_LLM_PROVIDER:-$${HICLAW_LLM_PROVIDER:-}}" \
+		AGENTTEAMS_DEFAULT_MODEL="$${AGENTTEAMS_DEFAULT_MODEL:-$${HICLAW_DEFAULT_MODEL:-}}" \
+		AGENTTEAMS_MANAGER_RUNTIME="$${AGENTTEAMS_MANAGER_RUNTIME:-$${HICLAW_MANAGER_RUNTIME:-}}" \
+		AGENTTEAMS_DEFAULT_WORKER_RUNTIME="$${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-$${HICLAW_DEFAULT_WORKER_RUNTIME:-}}" \
+		$(MAKE) install-embedded
 	$(MAKE) wait-ready-embedded
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 endif

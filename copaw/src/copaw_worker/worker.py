@@ -44,15 +44,16 @@ class Worker:
     # Public API
     # ------------------------------------------------------------------
 
-    async def run(self) -> None:
+    async def run(self) -> bool:
         if not await self.start():
-            return
+            return False
         try:
             await self._run_copaw()
         except asyncio.CancelledError:
             pass
         finally:
             await self.stop()
+        return True
 
     async def stop(self) -> None:
         console.print("[yellow]Stopping worker...[/yellow]")
@@ -97,20 +98,26 @@ class Worker:
 
         # 2. Full mirror from MinIO (restore all state: config, sessions, sync token, etc.)
         #    Mirrors the OpenClaw worker's startup approach: pull everything first,
-        #    then use selective sync during runtime.
-        console.print("[yellow]Pulling all files from MinIO...[/yellow]")
-        try:
-            self.sync.mirror_all()
-        except Exception as exc:
-            console.print(f"[red]Failed to mirror from MinIO: {exc}[/red]")
-            return False
-
-        # 3. Parse openclaw.json (already on disk after mirror_all)
-        try:
-            openclaw_cfg = self.sync.get_config()
-        except Exception as exc:
-            console.print(f"[red]Failed to read config: {exc}[/red]")
-            return False
+        #    then use selective sync during runtime. Controller writes and worker
+        #    container start can be close together, so tolerate a short initial
+        #    storage visibility race before giving up.
+        openclaw_cfg = None
+        for attempt in range(1, 7):
+            console.print("[yellow]Pulling all files from MinIO...[/yellow]")
+            try:
+                self.sync.mirror_all()
+                openclaw_cfg = self.sync.get_config()
+                break
+            except Exception as exc:
+                if attempt >= 6:
+                    console.print(f"[red]Failed to read worker config from MinIO: {exc}[/red]")
+                    return False
+                logger.warning(
+                    "Worker config not ready yet (attempt %s/6): %s",
+                    attempt,
+                    exc,
+                )
+                await asyncio.sleep(2)
 
         # 3b. Re-login to Matrix to get fresh access token + device ID
         #     Under E2EE, reusing the old access token (same device_id) with a

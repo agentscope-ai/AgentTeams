@@ -4,7 +4,7 @@
 # or lite-copaw-worker.
 #
 # Mode selection:
-#   - AGENTTEAMS_CONSOLE_PORT/AGENTTEAMS_CONSOLE_PORT set   → standard mode
+#   - AGENTTEAMS_CONSOLE_PORT set → standard mode
 #   - console port unset → lite mode
 #
 # Environment variables (set by container_create_worker in container-api.sh):
@@ -20,10 +20,10 @@ set -e
 # Source shared environment bootstrap (provides worker-deps env and storage credentials)
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
-WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-${AGENTTEAMS_WORKER_NAME:-}}"
+WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-}"
 [ -n "${WORKER_NAME}" ] || { echo "AGENTTEAMS_WORKER_NAME is required" >&2; exit 1; }
 INSTALL_DIR="/root/.copaw-worker"
-CONSOLE_PORT="${AGENTTEAMS_CONSOLE_PORT:-${AGENTTEAMS_CONSOLE_PORT:-}}"
+CONSOLE_PORT="${AGENTTEAMS_CONSOLE_PORT:-}"
 
 log() {
     echo "[agentteams-copaw-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -52,9 +52,9 @@ else
         log "ERROR: OSS storage requires controller-issued storage credentials, but $(agentteams_mc_host_var) is not configured"
         exit 1
     fi
-    FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-${AGENTTEAMS_FS_ENDPOINT:-}}"
-    FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-${AGENTTEAMS_FS_ACCESS_KEY:-}}"
-    FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-${AGENTTEAMS_FS_SECRET_KEY:-}}"
+    FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-}"
+    FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-}"
+    FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-}"
     FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-agentteams-storage}"
     [ -n "${FS_ENDPOINT}" ] || { log "ERROR: AGENTTEAMS_FS_ENDPOINT is required"; exit 1; }
     [ -n "${FS_ACCESS_KEY}" ] || { log "ERROR: AGENTTEAMS_FS_ACCESS_KEY is required"; exit 1; }

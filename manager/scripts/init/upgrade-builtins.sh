@@ -122,7 +122,7 @@ log "Step 3: Publishing Worker builtins to MinIO..."
 
 WORKER_AGENT_SRC="${AGENT_SRC}/worker-agent"
 
-if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
+if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /dev/null 2>&1; then
     ensure_mc_credentials 2>/dev/null || true
     # Publish AGENTS.md (pure builtin content without markers, for comparison)
     # We publish the marker-wrapped version so Workers can update their copy directly
@@ -162,7 +162,7 @@ fi
 # ============================================================
 log "Step 4: Syncing builtins to registered workers' workspaces..."
 
-if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
+if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /dev/null 2>&1; then
     ensure_mc_credentials 2>/dev/null || true
     # Get list of registered workers
     REGISTERED_WORKERS=""

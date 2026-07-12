@@ -61,7 +61,7 @@ else
 fi
 
 HICLAW_HELP=$(exec_in_agent hiclaw --help 2>&1 | head -1 || echo "")
-if echo "${HICLAW_HELP}" | grep -qi "hiclaw\|declarative\|resource"; then
+if echo "${HICLAW_HELP}" | grep -qi "agentteams\|hiclaw\|declarative\|resource"; then
     log_pass "hiclaw CLI is available (in agent container)"
 else
     log_fail "hiclaw CLI is not available (in agent container)"

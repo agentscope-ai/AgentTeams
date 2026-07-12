@@ -58,7 +58,8 @@ def main() -> None:
             except NotImplementedError:
                 pass
 
-            await worker.run()
+            if not await worker.run():
+                raise typer.Exit(1)
 
         try:
             asyncio.run(_async_run())

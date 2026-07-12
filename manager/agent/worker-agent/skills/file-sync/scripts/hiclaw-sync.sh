@@ -10,7 +10,7 @@ else
     . /opt/hiclaw/scripts/lib/oss-credentials.sh 2>/dev/null || true
     ensure_mc_credentials 2>/dev/null || true
     AGENTTEAMS_FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-agentteams-storage}"
-    AGENTTEAMS_STORAGE_PREFIX="${AGENTTEAMS_STORAGE_PREFIX:-hiclaw/${AGENTTEAMS_FS_BUCKET}}"
+    AGENTTEAMS_STORAGE_PREFIX="${AGENTTEAMS_STORAGE_PREFIX:-agentteams/${AGENTTEAMS_FS_BUCKET}}"
 fi
 
 # Merge helper for openclaw.json (local-first: MinIO overlays models/gateway/channels + plugins rules)

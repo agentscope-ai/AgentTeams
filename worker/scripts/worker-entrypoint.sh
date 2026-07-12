@@ -16,7 +16,7 @@ FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:-}"
 FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:-}"
 
 log() {
-    echo "[hiclaw-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "[agentteams-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
 # ============================================================

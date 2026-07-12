@@ -12,7 +12,7 @@
 
 [English](./README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
-**AgentTeams（原 HiClaw）是一个开源的协作式多智能体运行平台。让多个 Agent 在一个受控、可审计的房间中协作，人类全程可见、随时可介入。 采用 Manager-Workers 架构，Manager 统一调度多个 Workers，专注于企业内的人和 Agent、Agents 之间的协作场景。**
+**AgentTeams（原 AgentTeams）是一个开源的协作式多智能体运行平台。让多个 Agent 在一个受控、可审计的房间中协作，人类全程可见、随时可介入。 采用 Manager-Workers 架构，Manager 统一调度多个 Workers，专注于企业内的人和 Agent、Agents 之间的协作场景。**
 
 AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agent 容器（Manager 和众多 Workers）。
 - 🧑‍💻 **设计了 Manger-Workers 架构**：不用真人去管理每个干活的 Worker Claw，实现由 Agent 管理 Agents。
@@ -31,7 +31,7 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 - **2026-04-03:** [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9 发布：Kubernetes 风格声明式资源管理（YAML 定义 Worker、Team、Human）；上线 Worker 模板市场；支持 Manager QwenPaw 运行时；新增 Nacos Skills 注册中心等。
 - **2026-03-14:** [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — AgentTeams 1.0.6：企业级 MCP Server 管理，凭证零暴露；Worker 经 Higress AI Gateway 安全调用 MCP。
 - **2026-03-10:** [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — AgentTeams 1.0.4：支持 QwenPaw（原 CoPaw）Worker，内存占用降低约 80%，本地模式可操作浏览器。
-- **2026-03-04:** [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams（彼时名为 HiClaw）开源，引入 Manager Agent 与多 Agent 协同平台能力。
+- **2026-03-04:** [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams（彼时名为 AgentTeams）开源，引入 Manager Agent 与多 Agent 协同平台能力。
 
 ## 为什么选 AgentTeams
 
@@ -117,7 +117,7 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-HICLAW_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 ```
 
 
@@ -214,7 +214,7 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各组件镜像会根据运行时自动选择（Manager: `hiclaw-manager` / `hiclaw-manager-copaw`；Worker: `hiclaw-worker` / `hiclaw-copaw-worker` / `hiclaw-hermes-worker`）。
+各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-copaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
 
 </details>
 
@@ -349,12 +349,12 @@ hiclaw update worker --runtime hermes
 
 ```
 ┌───────────────────────────────────────────────┐
-│            hiclaw-controller                  │
+│            agentteams-controller                  │
 │  Higress │ Tuwunel │ MinIO │ Element Web      │
 └──────────────────┬────────────────────────────┘
                    │ Matrix + HTTP Files
 ┌──────────────────┴──────────┐
-│     hiclaw-manager-agent     │
+│     agentteams-manager-agent     │
 │     Manager (OpenClaw/       │
 │       QwenPaw)               │
 └──────────────────┬──────────┘
@@ -368,7 +368,7 @@ Worker Alice    Worker Bob              Worker Charlie
 
 | 组件 | 职责 |
 |------|------|
-| hiclaw-controller | Kubernetes 原生控制平面，协调 Worker/Team/Manager CR |
+| agentteams-controller | Kubernetes 原生控制平面，协调 Worker/Team/Manager CR |
 | Higress AI 网关 | LLM 代理、MCP Server 托管、凭证管理 |
 | Tuwunel (Matrix) | 自建 IM 服务器，承载所有 Agent + 人类通信 |
 | Element Web | 浏览器客户端，零配置 |
@@ -378,7 +378,7 @@ Worker Alice    Worker Bob              Worker Charlie
 如果 Manager 容器启动失败，执行以下命令查看具体原因：
 
 ```bash
-docker exec -it hiclaw-manager cat /var/log/hiclaw/manager-agent.log
+docker exec -it agentteams-manager cat /var/log/hiclaw/manager-agent.log
 ```
 
 更多常见问题（启动超时、局域网访问等）参见 [docs/zh-cn/faq.md](docs/zh-cn/faq.md)。

@@ -23,7 +23,7 @@ type STSConfig struct {
 
 	// OSSEndpoint is the public-facing OSS endpoint returned to worker
 	// callers in STSToken.OSSEndpoint. It is sourced from controller
-	// static config (HICLAW_FS_ENDPOINT / storage.oss.endpoint) and NOT
+	// static config (AGENTTEAMS_FS_ENDPOINT / storage.oss.endpoint) and NOT
 	// from the credential-provider sidecar — endpoint is deployment-time
 	// configuration, orthogonal to the short-lived STS triple.
 	OSSEndpoint string

@@ -51,19 +51,19 @@ def _mock_hiclaw_worker(monkeypatch, payload, expected_name="dag-team-dev"):
 
 def test_create_sync_accepts_legacy_hiclaw_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "worker" / ".copaw"))
-    monkeypatch.setenv("HICLAW_WORKER_NAME", "legacy-worker")
-    monkeypatch.setenv("HICLAW_WORKER_CR_NAME", "legacy-worker-cr")
-    monkeypatch.setenv("HICLAW_FS_ENDPOINT", "http://minio:9000")
-    monkeypatch.setenv("HICLAW_FS_ACCESS_KEY", "minio")
-    monkeypatch.setenv("HICLAW_FS_SECRET_KEY", "password")
-    monkeypatch.setenv("HICLAW_FS_BUCKET", "hiclaw-storage")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "legacy-worker")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_CR_NAME", "legacy-worker-cr")
+    monkeypatch.setenv("AGENTTEAMS_FS_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("AGENTTEAMS_FS_ACCESS_KEY", "minio")
+    monkeypatch.setenv("AGENTTEAMS_FS_SECRET_KEY", "password")
+    monkeypatch.setenv("AGENTTEAMS_FS_BUCKET", "agentteams-storage")
 
     sync = create_sync()
 
     assert sync.worker_name == "legacy-worker"
     assert sync.worker_cr_name == "legacy-worker-cr"
     assert sync.endpoint == "http://minio:9000"
-    assert sync.bucket == "hiclaw-storage"
+    assert sync.bucket == "agentteams-storage"
 
 
 def test_resolve_shared_path_strips_bucket_prefix_from_worker_team(tmp_path, monkeypatch):
@@ -89,7 +89,7 @@ def test_resolve_shared_path_strips_bucket_prefix_from_worker_team(tmp_path, mon
 
 
 def test_team_storage_name_keeps_legacy_team_without_bucket_prefix():
-    assert _team_storage_name_from_worker_team("hiclaw-storage", "dag-team") == "dag-team"
+    assert _team_storage_name_from_worker_team("agentteams-storage", "dag-team") == "dag-team"
 
 
 def test_worker_metadata_query_uses_cr_name_while_storage_uses_runtime_name(tmp_path, monkeypatch):

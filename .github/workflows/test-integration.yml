@@ -122,7 +122,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build hiclaw-controller
+      - name: Build agentteams-controller
         run: |
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
           # cn-hangzhou registry is unreachable from GitHub-hosted runners
@@ -194,7 +194,7 @@ jobs:
           path: /tmp/hiclaw-openclaw-base.tar.gz
           retention-days: 1
 
-  # Step 2: Build downstream images in parallel (all depend on hiclaw-controller;
+  # Step 2: Build downstream images in parallel (all depend on agentteams-controller;
   # manager and worker additionally depend on openclaw-base when it was rebuilt).
   build-images:
     needs: [detect-changes, build-base, build-openclaw-base]
@@ -272,7 +272,7 @@ jobs:
               | grep -E '^(agentteams|hiclaw)/' \
               | grep -v '<none>' \
               | grep -v 'agentteams-controller' \
-              | grep -v 'hiclaw-controller' \
+              | grep -v 'agentteams-controller' \
               | grep -v 'openclaw-base') \
             | gzip > /tmp/hiclaw-${{ matrix.target }}.tar.gz
 
@@ -385,17 +385,17 @@ jobs:
       - name: Run embedded integration tests
         id: tests
         env:
-          HICLAW_LLM_API_KEY: ${{ secrets.HICLAW_LLM_API_KEY }}
-          HICLAW_LLM_PROVIDER: qwen
-          HICLAW_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
-          HICLAW_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
+          AGENTTEAMS_LLM_PROVIDER: qwen
+          AGENTTEAMS_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
+          AGENTTEAMS_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
           # Propagate the worker runtime to worker-creating tests too. Without
           # this the apply-zip path (test-15) silently falls back to openclaw
           # on the copaw and hermes matrix entries because the controller's
           # backend resolves an empty req.Runtime to RuntimeOpenClaw — which
           # would make those dimensions run hidden openclaw workers and
           # invalidate the parallel-runtime coverage we set up above.
-          HICLAW_DEFAULT_WORKER_RUNTIME: ${{ matrix.worker_runtime }}
+          AGENTTEAMS_DEFAULT_WORKER_RUNTIME: ${{ matrix.worker_runtime }}
         run: |
           FILTER="${{ github.event.inputs.test_filter }}"
           if [ -z "$FILTER" ]; then
@@ -661,26 +661,26 @@ jobs:
           docker tag ${REGISTRY}/agentteams-worker:${VERSION} agentteams/worker-agent:${VERSION}
           docker tag ${REGISTRY}/agentteams-controller:${VERSION} agentteams/agentteams-controller:${VERSION}
 
-      - name: Install HiClaw
+      - name: Install AgentTeams
         env:
-          HICLAW_LLM_API_KEY: ${{ secrets.HICLAW_LLM_API_KEY }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          HICLAW_NON_INTERACTIVE=1 \
-          HICLAW_VERSION=$VERSION \
-          HICLAW_MOUNT_SOCKET=1 \
-          HICLAW_MATRIX_E2EE=0 \
-          HICLAW_LLM_PROVIDER=qwen \
-          HICLAW_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
-          HICLAW_INSTALL_WORKER_IMAGE=agentteams/worker-agent:${VERSION} \
-          HICLAW_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
+          AGENTTEAMS_NON_INTERACTIVE=1 \
+          AGENTTEAMS_VERSION=$VERSION \
+          AGENTTEAMS_MOUNT_SOCKET=1 \
+          AGENTTEAMS_MATRIX_E2EE=0 \
+          AGENTTEAMS_LLM_PROVIDER=qwen \
+          AGENTTEAMS_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
+          AGENTTEAMS_INSTALL_WORKER_IMAGE=agentteams/worker-agent:${VERSION} \
+          AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
           bash ./install/hiclaw-install.sh manager
 
       - name: Wait for Manager to be ready
         run: |
           for i in {1..60}; do
-            if docker exec hiclaw-manager curl -sf http://127.0.0.1:8001/ >/dev/null 2>&1; then
-              if docker exec hiclaw-manager curl -sf http://127.0.0.1:6167/_matrix/client/versions >/dev/null 2>&1; then
+            if docker exec agentteams-manager curl -sf http://127.0.0.1:8001/ >/dev/null 2>&1; then
+              if docker exec agentteams-manager curl -sf http://127.0.0.1:6167/_matrix/client/versions >/dev/null 2>&1; then
                 echo "Manager ready, waiting 60s for agent initialization..."
                 sleep 60
                 exit 0
@@ -692,13 +692,13 @@ jobs:
           exit 1
 
       - name: Enable YOLO mode
-        run: docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode
+        run: docker exec agentteams-manager touch /root/manager-workspace/yolo-mode
 
       - name: Run integration tests
         env:
-          HICLAW_LLM_API_KEY: ${{ secrets.HICLAW_LLM_API_KEY }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
         run: |
-          TEST_GATEWAY_PORT=18080 TEST_CONSOLE_PORT=18001 TEST_MANAGER_CONTAINER=hiclaw-manager \
+          TEST_GATEWAY_PORT=18080 TEST_CONSOLE_PORT=18001 TEST_MANAGER_CONTAINER=agentteams-manager \
             ./tests/run-all-tests.sh --skip-build --use-existing --test-filter "$NON_GITHUB_TESTS"
 
       - name: Generate release baseline

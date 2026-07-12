@@ -813,10 +813,10 @@ storage:
   globalSharedPrefix: shared
   memberPrefix: agents/claude-local
 credentials:
-  matrixTokenEnv: HICLAW_WORKER_MATRIX_TOKEN
-  gatewayKeyEnv: HICLAW_WORKER_GATEWAY_KEY
-  storageAccessKeyEnv: HICLAW_FS_ACCESS_KEY
-  storageSecretKeyEnv: HICLAW_FS_SECRET_KEY
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN
+  gatewayKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY
+  storageAccessKeyEnv: AGENTTEAMS_FS_ACCESS_KEY
+  storageSecretKeyEnv: AGENTTEAMS_FS_SECRET_KEY
   serviceAccountTokenPath: /var/run/secrets/kubernetes.io/serviceaccount/token
 `)); err != nil {
 		t.Fatal(err)

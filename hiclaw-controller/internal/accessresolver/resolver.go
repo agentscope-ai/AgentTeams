@@ -185,7 +185,7 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	}
 	// Team members — both leaders and workers — share the Worker
 	// session-name shape because their ServiceAccount name on the
-	// pod is still hiclaw-worker-<name> (see auth.ResourcePrefix.SAName).
+	// pod is still agentteams-worker-<name> (see auth.ResourcePrefix.SAName).
 	return r.prefix.WorkerSessionName(name), resolved, nil
 }
 

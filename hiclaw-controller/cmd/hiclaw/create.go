@@ -129,7 +129,7 @@ func createWorkerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
-	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $HICLAW_DEFAULT_MODEL, else qwen3.6-plus)")
+	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
@@ -422,13 +422,13 @@ var workerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // defaultWorkerModel returns the model ID to use when a CLI flag does not
 // specify --model. It prefers the install-time configured model
-// (HICLAW_DEFAULT_MODEL, propagated by the controller into both the manager
+// (AGENTTEAMS_DEFAULT_MODEL, propagated by the controller into both the manager
 // and worker containers via WorkerEnvBuilder); only when the env var is unset
 // does it fall back to the "qwen3.6-plus" default. Without this
 // fallback every `hiclaw create worker` / `hiclaw apply worker` invoked by the
 // Manager Agent would silently override the admin's install-time model choice.
 func defaultWorkerModel() string {
-	if m := strings.TrimSpace(os.Getenv("HICLAW_DEFAULT_MODEL")); m != "" {
+	if m := strings.TrimSpace(os.Getenv("AGENTTEAMS_DEFAULT_MODEL")); m != "" {
 		return m
 	}
 	return "qwen3.6-plus"
@@ -451,16 +451,16 @@ func expandPackageURI(raw string) (string, error) {
 		return raw, nil
 	}
 
-	base := strings.TrimSpace(os.Getenv("HICLAW_NACOS_REGISTRY_URI"))
+	base := strings.TrimSpace(os.Getenv("AGENTTEAMS_NACOS_REGISTRY_URI"))
 	if base == "" {
-		base = "nacos://market.hiclaw.io:80/public"
+		base = "nacos://market.agentteams.io:80/public"
 	}
 	if !strings.HasPrefix(base, "nacos://") {
-		return "", fmt.Errorf("invalid HICLAW_NACOS_REGISTRY_URI %q: must start with nacos://", base)
+		return "", fmt.Errorf("invalid AGENTTEAMS_NACOS_REGISTRY_URI %q: must start with nacos://", base)
 	}
 	base = strings.TrimRight(base, "/")
 	if base == "nacos:" || base == "nacos:/" || base == "nacos://" {
-		return "", fmt.Errorf("invalid HICLAW_NACOS_REGISTRY_URI %q: missing host/namespace", base)
+		return "", fmt.Errorf("invalid AGENTTEAMS_NACOS_REGISTRY_URI %q: missing host/namespace", base)
 	}
 
 	parts := strings.Split(raw, "/")

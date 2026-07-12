@@ -29,7 +29,7 @@ Before sending, use `hiclaw get workers -o json` for `roomID` and `hiclaw get ma
 - **`openclaw`:** **message** tool with `channel=matrix`, `target=room:<ROOM_ID>`, and body:
   `@{worker}:{domain} Execute recurring task {task-id}: {title}. Report back with "executed" when done.`
 
-- **`copaw`:** `copaw channels send --agent-id default --channel matrix --target-session "<ROOM_ID>" --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}"` with `--text` set to that same body (quoted for the shell).
+- **`copaw`:** `copaw channels send --agent-id default --channel matrix --target-session "<ROOM_ID>" --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}"` with `--text` set to that same body (quoted for the shell).
 
 ## Recording execution completion
 

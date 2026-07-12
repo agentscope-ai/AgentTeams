@@ -10,16 +10,16 @@ description: Use when admin requests hand-creating or resetting a Worker, starti
 Before running `hiclaw create worker`, ask admin for these four inputs in one turn. Do **not** invent defaults or skip options — present runtime as a four-way choice.
 
 1. **Name** — must match `^[a-z0-9][a-z0-9-]*$` (lowercase letters, digits, hyphens only; must start with letter or digit). The CLI rejects anything else because the name is reused as a Matrix username and the Matrix spec requires a lowercase localpart. Tuwunel may also reject very short names at registration.
-2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${HICLAW_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer all four options so admin can switch:
+2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer all four options so admin can switch:
 
    | Runtime      | Language | RAM    | When to pick                                              |
    |--------------|----------|--------|-----------------------------------------------------------|
-   | `openclaw`   | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `HICLAW_DEFAULT_WORKER_RUNTIME` is unset. |
+   | `openclaw`   | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` is unset. |
    | `copaw`      | Python   | ~150MB | Python tasks or AgentScope-based worker behavior. |
    | `hermes`     | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
    | `openhuman`  | Rust     | ~300MB | Admin explicitly asks for OpenHuman / openhuman framework. Native Matrix support with E2EE. |
 
-   In OSS, `hiclaw create worker` creates a controller-managed Local worker. Do not use or suggest Remote/pip worker flags. Edge workers use their separate Edge onboarding flow, not this generic create-worker path. If admin doesn't pass `--runtime` to `hiclaw create worker`, the controller falls back to `HICLAW_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the four options explicitly instead of silently using the fallback.
+   In OSS, `hiclaw create worker` creates a controller-managed Local worker. Do not use or suggest Remote/pip worker flags. Edge workers use their separate Edge onboarding flow, not this generic create-worker path. If admin doesn't pass `--runtime` to `hiclaw create worker`, the controller falls back to `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the four options explicitly instead of silently using the fallback.
 3. **SOUL (role)** — short description of expertise/style. Offer to draft a default if admin has no preference.
 4. **Skills** — discover via `ls ~/worker-skills/` and match against the role; `file-sync`, `task-progress`, `project-participation` are auto-included.
 

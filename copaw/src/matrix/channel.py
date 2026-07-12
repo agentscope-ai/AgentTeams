@@ -692,13 +692,13 @@ class MatrixChannel(BaseChannel):
 
         Returns True if token was refreshed successfully.
         """
-        controller_url = os.environ.get("HICLAW_CONTROLLER_URL", "")
-        auth_token_file = os.environ.get("HICLAW_AUTH_TOKEN_FILE", "")
-        auth_token = os.environ.get("HICLAW_AUTH_TOKEN", "")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "")
+        auth_token_file = os.environ.get("AGENTTEAMS_AUTH_TOKEN_FILE", "")
+        auth_token = os.environ.get("AGENTTEAMS_AUTH_TOKEN", "")
 
         if not controller_url:
             logger.warning(
-                "MatrixChannel: HICLAW_CONTROLLER_URL not set, "
+                "MatrixChannel: AGENTTEAMS_CONTROLLER_URL not set, "
                 "cannot refresh token",
             )
             return False

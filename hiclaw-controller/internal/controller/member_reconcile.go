@@ -256,7 +256,7 @@ type MemberDeps struct {
 	// ResourcePrefix is the tenant-level prefix that scopes ServiceAccount
 	// (and Pod) names for every member this reconciler provisions. Empty
 	// prefix collapses to the pre-multi-tenant naming scheme
-	// (`hiclaw-worker-<name>`), preserving single-tenant deployments. It is
+	// (`agentteams-worker-<name>`), preserving single-tenant deployments. It is
 	// populated by the owning reconciler (WorkerReconciler / TeamReconciler)
 	// from Config.ResourcePrefix.
 	ResourcePrefix authpkg.ResourcePrefix
@@ -832,7 +832,7 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 	workerEnv := d.EnvBuilder.Build(m.RuntimeName, prov)
 	workerEnv["AGENTTEAMS_WORKER_CR_NAME"] = m.Name
 	// Legacy runtime scripts still read this fallback while AgentTeams env adoption is in progress.
-	workerEnv["HICLAW_WORKER_CR_NAME"] = m.Name
+	workerEnv["AGENTTEAMS_WORKER_CR_NAME"] = m.Name
 	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
 	}

@@ -642,9 +642,9 @@ func TestWorkerCreate_EnvPassesToBackend(t *testing.T) {
 	worker.Spec.Env = map[string]string{
 		"USER_FOO":   "bar",
 		"USER_EMPTY": "",
-		// System-wins: HICLAW_WORKER_NAME is produced by MockEnvBuilder and
+		// System-wins: AGENTTEAMS_WORKER_NAME is produced by MockEnvBuilder and
 		// must override this user-supplied value.
-		"HICLAW_WORKER_NAME": "user-should-lose",
+		"AGENTTEAMS_WORKER_NAME": "user-should-lose",
 	}
 
 	if err := k8sClient.Create(ctx, worker); err != nil {
@@ -666,11 +666,11 @@ func TestWorkerCreate_EnvPassesToBackend(t *testing.T) {
 	if got, present := req.Env["USER_EMPTY"]; !present || got != "" {
 		t.Errorf("USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
 	}
-	if got := req.Env["HICLAW_WORKER_NAME"]; got != workerName {
-		t.Errorf("HICLAW_WORKER_NAME=%q, want %q (system wins)", got, workerName)
+	if got := req.Env["AGENTTEAMS_WORKER_NAME"]; got != workerName {
+		t.Errorf("AGENTTEAMS_WORKER_NAME=%q, want %q (system wins)", got, workerName)
 	}
-	if got := req.Env["HICLAW_WORKER_CR_NAME"]; got != workerName {
-		t.Errorf("HICLAW_WORKER_CR_NAME=%q, want %q", got, workerName)
+	if got := req.Env["AGENTTEAMS_WORKER_CR_NAME"]; got != workerName {
+		t.Errorf("AGENTTEAMS_WORKER_CR_NAME=%q, want %q", got, workerName)
 	}
 	if got := req.Env["MOCK_ENV"]; got != "true" {
 		t.Errorf("MOCK_ENV=%q, want %q (system env preserved)", got, "true")
@@ -951,7 +951,7 @@ func triggerReconcile(t *testing.T, worker *v1beta1.Worker) {
 		if w.Annotations == nil {
 			w.Annotations = map[string]string{}
 		}
-		w.Annotations["hiclaw.io/reconcile-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+		w.Annotations["agentteams.io/reconcile-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
 		return k8sClient.Update(ctx, &w)
 	})
 }

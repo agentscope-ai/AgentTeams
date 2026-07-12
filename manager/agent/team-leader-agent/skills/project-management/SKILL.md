@@ -349,7 +349,7 @@ Do not call `check_active_tasks` for now.
 
 Team Leader heartbeat is temporarily disabled. Follow `HEARTBEAT.md`: do not probe Worker runtime, inspect active tasks, or send anomaly reports from scheduled heartbeat runs.
 
-Worker runtime probes are disabled because Kubernetes Team Workers currently have no per-Worker Service. Hostname probes such as `http://hiclaw-worker-<worker>:8088/api/chats` can misreport healthy Workers as unreachable.
+Worker runtime probes are disabled because Kubernetes Team Workers currently have no per-Worker Service. Hostname probes such as `http://agentteams-worker-<worker>:8088/api/chats` can misreport healthy Workers as unreachable.
 
 For recovery, act only on explicit room messages, requester instructions, or Project files you were directly asked to inspect.
 

@@ -26,7 +26,7 @@ member:
 desired:
   model:
     providerId: hiclaw-update-e2e
-    providerName: HiClaw Update E2E
+    providerName: AgentTeams Update E2E
     model: qwen-fake-v1
     baseUrl: https://dashscope.aliyuncs.com/compatible-mode/v1
     apiKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY
@@ -142,7 +142,7 @@ desired:
     digest: sha256:update-e2e-v2
   model:
     providerId: hiclaw-update-e2e
-    providerName: HiClaw Update E2E
+    providerName: AgentTeams Update E2E
     model: qwen-fake-v2
     baseUrl: https://dashscope.aliyuncs.com/compatible-mode/v1
     apiKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY

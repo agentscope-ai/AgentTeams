@@ -19,8 +19,8 @@
   "channels": {
     "matrix": {
       "enabled": true,
-      "homeserver": "${HICLAW_MATRIX_URL}",
-      "userId": "@manager:${HICLAW_MATRIX_DOMAIN}",
+      "homeserver": "${AGENTTEAMS_MATRIX_URL}",
+      "userId": "@manager:${AGENTTEAMS_MATRIX_DOMAIN}",
       "accessToken": "${MANAGER_MATRIX_TOKEN}",
       "encryption": ${MATRIX_E2EE_ENABLED},
       "network": { "dangerouslyAllowPrivateNetwork": true },
@@ -28,12 +28,12 @@
       "dm": {
         "policy": "allowlist",
         "allowFrom": [
-          "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}"
+          "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}"
         ]
       },
       "groupPolicy": "allowlist",
       "groupAllowFrom": [
-        "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}"
+        "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}"
       ],
       "groups": {
         "*": { "allow": true, "requireMention": true }
@@ -46,8 +46,8 @@
   "models": {
     "mode": "merge",
     "providers": {
-      "hiclaw-gateway": {
-        "baseUrl": "${HICLAW_AI_GATEWAY_URL}/v1",
+      "agentteams-gateway": {
+        "baseUrl": "${AGENTTEAMS_AI_GATEWAY_URL}/v1",
         "apiKey": "${MANAGER_GATEWAY_KEY}",
         "api": "openai-completions",
         "models": [
@@ -76,24 +76,24 @@
       "timeoutSeconds": 1800,
       "workspace": "~",
       "model": {
-        "primary": "hiclaw-gateway/${HICLAW_DEFAULT_MODEL}"
+        "primary": "agentteams-gateway/${AGENTTEAMS_DEFAULT_MODEL}"
       },
       "models": {
-        "hiclaw-gateway/gpt-5.4":           { "alias": "gpt-5.4" },
-        "hiclaw-gateway/gpt-5.3-codex":     { "alias": "gpt-5.3-codex" },
-        "hiclaw-gateway/gpt-5-mini":        { "alias": "gpt-5-mini" },
-        "hiclaw-gateway/gpt-5-nano":        { "alias": "gpt-5-nano" },
-        "hiclaw-gateway/claude-opus-4-6":   { "alias": "claude-opus-4-6" },
-        "hiclaw-gateway/claude-sonnet-4-6": { "alias": "claude-sonnet-4-6" },
-        "hiclaw-gateway/claude-haiku-4-5":  { "alias": "claude-haiku-4-5" },
-        "hiclaw-gateway/qwen3.5-plus":      { "alias": "qwen3.5-plus" },
-        "hiclaw-gateway/deepseek-chat":     { "alias": "deepseek-chat" },
-        "hiclaw-gateway/deepseek-reasoner": { "alias": "deepseek-reasoner" },
-        "hiclaw-gateway/kimi-k2.5":         { "alias": "kimi-k2.5" },
-        "hiclaw-gateway/glm-5":             { "alias": "glm-5" },
-        "hiclaw-gateway/MiniMax-M2.7":      { "alias": "MiniMax-M2.7" },
-        "hiclaw-gateway/MiniMax-M2.7-highspeed": { "alias": "MiniMax-M2.7-highspeed" },
-        "hiclaw-gateway/MiniMax-M2.5":      { "alias": "MiniMax-M2.5" }
+        "agentteams-gateway/gpt-5.4":           { "alias": "gpt-5.4" },
+        "agentteams-gateway/gpt-5.3-codex":     { "alias": "gpt-5.3-codex" },
+        "agentteams-gateway/gpt-5-mini":        { "alias": "gpt-5-mini" },
+        "agentteams-gateway/gpt-5-nano":        { "alias": "gpt-5-nano" },
+        "agentteams-gateway/claude-opus-4-6":   { "alias": "claude-opus-4-6" },
+        "agentteams-gateway/claude-sonnet-4-6": { "alias": "claude-sonnet-4-6" },
+        "agentteams-gateway/claude-haiku-4-5":  { "alias": "claude-haiku-4-5" },
+        "agentteams-gateway/qwen3.5-plus":      { "alias": "qwen3.5-plus" },
+        "agentteams-gateway/deepseek-chat":     { "alias": "deepseek-chat" },
+        "agentteams-gateway/deepseek-reasoner": { "alias": "deepseek-reasoner" },
+        "agentteams-gateway/kimi-k2.5":         { "alias": "kimi-k2.5" },
+        "agentteams-gateway/glm-5":             { "alias": "glm-5" },
+        "agentteams-gateway/MiniMax-M2.7":      { "alias": "MiniMax-M2.7" },
+        "agentteams-gateway/MiniMax-M2.7-highspeed": { "alias": "MiniMax-M2.7-highspeed" },
+        "agentteams-gateway/MiniMax-M2.5":      { "alias": "MiniMax-M2.5" }
       },
       "maxConcurrent": 8,
       "subagents": {

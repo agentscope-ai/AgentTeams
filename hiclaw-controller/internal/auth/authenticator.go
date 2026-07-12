@@ -22,7 +22,7 @@ const (
 
 // DefaultAudience is the SA token audience used by TokenReview when a caller
 // does not specify one explicitly.
-const DefaultAudience = "hiclaw-controller"
+const DefaultAudience = "agentteams-controller"
 
 const (
 	defaultCacheTTL        = 5 * time.Minute

@@ -57,7 +57,7 @@ test -n "$FIND_SKILLS_SCRIPT" || { echo "find-skills script not found" >&2; exit
 ## Environment Variables
 
 ```bash
-SKILLS_API_URL  # Skills registry API endpoint (default: nacos://market.hiclaw.io:80/public)
+SKILLS_API_URL  # Skills registry API endpoint (default: nacos://market.agentteams.io:80/public)
 ```
 
 Can be configured by admin to point to an enterprise-private registry.

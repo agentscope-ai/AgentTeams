@@ -33,7 +33,7 @@ type Config struct {
 	Namespace        string
 	IsEmbedded       bool   // embedded mode: use static service sources for local services
 	AgentFSDir       string // local filesystem root for agent workspaces (embedded mode)
-	ControllerName   string // HICLAW_CONTROLLER_NAME; stamped as agentteams.io/controller label on created CRs in incluster mode
+	ControllerName   string // AGENTTEAMS_CONTROLLER_NAME; stamped as agentteams.io/controller label on created CRs in incluster mode
 
 	// Matrix AppService mode
 	AppServiceEnabled         bool
@@ -180,9 +180,9 @@ func (i *Initializer) ensureOSSStructure(ctx context.Context) error {
 		"shared/knowledge/",
 		"shared/tasks/",
 		"workers/",
-		"hiclaw-config/workers/",
-		"hiclaw-config/teams/",
-		"hiclaw-config/humans/",
+		"agentteams-config/workers/",
+		"agentteams-config/teams/",
+		"agentteams-config/humans/",
 		"agents/",
 	}
 	for _, dir := range dirs {
@@ -213,7 +213,7 @@ func (i *Initializer) registerAdmin(ctx context.Context) error {
 	return err
 }
 
-// registerAppService registers the HiClaw controller as a Matrix Application
+// registerAppService registers the AgentTeams controller as a Matrix Application
 // Service via the Tuwunel admin bot, then verifies with a smoke test.
 func (i *Initializer) registerAppService(ctx context.Context) error {
 	cfg := matrix.Config{
@@ -334,7 +334,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 		case "openai-compat":
 			if cfg.OpenAIBaseURL == "" {
 				// No custom base URL — fall back to official OpenAI endpoint
-				logger.Info("HICLAW_OPENAI_BASE_URL not set, using official OpenAI endpoint")
+				logger.Info("AGENTTEAMS_OPENAI_BASE_URL not set, using official OpenAI endpoint")
 				raw := map[string]interface{}{"hiclawMode": true}
 				if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{
 					Name:     "openai-compat",
@@ -349,7 +349,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 				// Parse URL to create DNS service source
 				host, port, err := parseHostPort(cfg.OpenAIBaseURL)
 				if err != nil {
-					logger.Error(err, "failed to parse HICLAW_OPENAI_BASE_URL (non-fatal)")
+					logger.Error(err, "failed to parse AGENTTEAMS_OPENAI_BASE_URL (non-fatal)")
 				} else {
 					proto := "https"
 					if strings.HasPrefix(cfg.OpenAIBaseURL, "http://") {
@@ -384,7 +384,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 				// set up an openai-compatible provider with the custom endpoint.
 				host, port, err := parseHostPort(cfg.OpenAIBaseURL)
 				if err != nil {
-					logger.Error(err, "failed to parse HICLAW_OPENAI_BASE_URL (non-fatal)")
+					logger.Error(err, "failed to parse AGENTTEAMS_OPENAI_BASE_URL (non-fatal)")
 				} else {
 					proto := "https"
 					if strings.HasPrefix(cfg.OpenAIBaseURL, "http://") {

@@ -27,7 +27,7 @@ def main() -> None:
         fs_key: str = typer.Option(..., "--fs-key", help="MinIO access key"),
         fs_secret: str = typer.Option(..., "--fs-secret", help="MinIO secret key"),
         fs_bucket: str = typer.Option(
-            "hiclaw-storage", "--fs-bucket", help="MinIO bucket"
+            "agentteams-storage", "--fs-bucket", help="MinIO bucket"
         ),
         sync_interval: int = typer.Option(
             300, "--sync-interval", help="Sync interval (seconds)"

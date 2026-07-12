@@ -3,9 +3,9 @@
 #
 # Controller-mediated STS (cloud mode):
 #    AGENTTEAMS_CONTROLLER_URL + bearer token (AGENTTEAMS_AUTH_TOKEN or token
-#    file at AGENTTEAMS_AUTH_TOKEN_FILE; legacy HICLAW_* envs are accepted) →
+#    file at AGENTTEAMS_AUTH_TOKEN_FILE) →
 #    call controller /api/v1/credentials/sts. The controller obtains STS
-#    tokens from its hiclaw-credential-provider sidecar.
+#    tokens from its credential-provider sidecar.
 #
 # 2. No controller creds configured → no-op (local mode, mc alias
 #    configured with static credentials against MinIO/self-hosted S3).
@@ -31,20 +31,8 @@ _oss_resolve_bearer() {
         printf '%s' "${AGENTTEAMS_AUTH_TOKEN}"
         return 0
     fi
-    if [ -n "${HICLAW_AUTH_TOKEN:-}" ]; then
-        printf '%s' "${HICLAW_AUTH_TOKEN}"
-        return 0
-    fi
-    if [ -n "${HICLAW_WORKER_API_KEY:-}" ]; then
-        printf '%s' "${HICLAW_WORKER_API_KEY}"
-        return 0
-    fi
     if [ -n "${AGENTTEAMS_AUTH_TOKEN_FILE:-}" ] && [ -f "${AGENTTEAMS_AUTH_TOKEN_FILE}" ]; then
         cat "${AGENTTEAMS_AUTH_TOKEN_FILE}"
-        return 0
-    fi
-    if [ -n "${HICLAW_AUTH_TOKEN_FILE:-}" ] && [ -f "${HICLAW_AUTH_TOKEN_FILE}" ]; then
-        cat "${HICLAW_AUTH_TOKEN_FILE}"
         return 0
     fi
     return 0
@@ -56,11 +44,7 @@ _oss_use_agentteams_env() {
 }
 
 _oss_controller_url() {
-    printf '%s' "${AGENTTEAMS_CONTROLLER_URL:-${HICLAW_CONTROLLER_URL:-}}"
-}
-
-_oss_auth_cluster_id() {
-    printf '%s' "${AGENTTEAMS_CLUSTER_ID:-${HICLAW_CLUSTER_ID:-}}"
+    printf '%s' "${AGENTTEAMS_CONTROLLER_URL:-}"
 }
 
 _oss_storage_alias() {
@@ -69,7 +53,7 @@ _oss_storage_alias() {
         printf '%s' "${AGENTTEAMS_STORAGE_ALIAS}"
         return
     fi
-    prefix="${AGENTTEAMS_STORAGE_PREFIX:-${HICLAW_STORAGE_PREFIX:-}}"
+    prefix="${AGENTTEAMS_STORAGE_PREFIX:-}"
     case "${prefix}" in
         */*) printf '%s' "${prefix%%/*}" ;;
         *) printf '%s' "agentteams" ;;
@@ -77,7 +61,7 @@ _oss_storage_alias() {
 }
 
 _oss_auth_error_vars() {
-    printf '%s' "AGENTTEAMS_AUTH_TOKEN / AGENTTEAMS_AUTH_TOKEN_FILE / HICLAW_AUTH_TOKEN / HICLAW_AUTH_TOKEN_FILE"
+    printf '%s' "AGENTTEAMS_AUTH_TOKEN / AGENTTEAMS_AUTH_TOKEN_FILE"
 }
 
 _oss_export_mc_host() {
@@ -107,19 +91,9 @@ _oss_refresh_sts_via_controller() {
         return 1
     fi
 
-    local auth_cluster_id
-    auth_cluster_id="$(_oss_auth_cluster_id)"
-    if [ -n "${auth_cluster_id:-}" ]; then
-        resp=$(curl -s -w "\n%{http_code}" -X POST "${_controller_url}/api/v1/credentials/sts" \
-            -H "Authorization: Bearer ${bearer}" \
-            -H "X-AgentTeams-Cluster-ID: ${auth_cluster_id}" \
-            -H "X-HiClaw-Cluster-ID: ${auth_cluster_id}" \
-            --connect-timeout 10 --max-time 30 2>&1)
-    else
-        resp=$(curl -s -w "\n%{http_code}" -X POST "${_controller_url}/api/v1/credentials/sts" \
-            -H "Authorization: Bearer ${bearer}" \
-            --connect-timeout 10 --max-time 30 2>&1)
-    fi
+    resp=$(curl -s -w "\n%{http_code}" -X POST "${_controller_url}/api/v1/credentials/sts" \
+        -H "Authorization: Bearer ${bearer}" \
+        --connect-timeout 10 --max-time 30 2>&1)
 
     http_code=$(echo "${resp}" | tail -1)
     resp=$(echo "${resp}" | sed '$d')

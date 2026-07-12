@@ -1,6 +1,6 @@
 # hermes-worker
 
-`hermes-worker` is the HiClaw Worker runtime built on top of
+`hermes-worker` is the AgentTeams Worker runtime built on top of
 [hermes-agent](https://github.com/NousResearch/hermes-agent) (v0.10.0,
 git tag `v2026.4.16`).
 
@@ -8,7 +8,7 @@ It plays the same role as `copaw-worker`:
 
 * Bootstraps a per-worker home directory (`HERMES_HOME`) populated from
   MinIO (`hiclaw://` workspace).
-* Translates the HiClaw common config schema (`openclaw.json`) into
+* Translates the AgentTeams common config schema (`openclaw.json`) into
   hermes-agent's native config (`config.yaml` + `.env`) via a *bridge*.
 * Runs hermes-agent's gateway in Matrix-only mode.
 * Replaces hermes-agent's native `mautrix`-based Matrix adapter with a
@@ -45,10 +45,10 @@ make build-hermes-worker
 
 # Run a worker against the local MinIO/Matrix stack (requires a manager up)
 docker run -it --rm \
-    -e HICLAW_WORKER_NAME=worker-test \
-    -e HICLAW_OSS_ENDPOINT=http://manager:9000 \
-    -e HICLAW_MATRIX_HOMESERVER=http://manager:8008 \
-    hiclaw/hermes-worker:latest
+    -e AGENTTEAMS_WORKER_NAME=worker-test \
+    -e AGENTTEAMS_OSS_ENDPOINT=http://manager:9000 \
+    -e AGENTTEAMS_MATRIX_HOMESERVER=http://manager:8008 \
+    agentteams/hermes-worker:latest
 ```
 
 ## Configuration bridge
@@ -74,7 +74,7 @@ The bridge maps `openclaw.json` to hermes config in the following way:
 
 hermes-agent's stock adapter uses [mautrix](https://github.com/mautrix/python),
 which has a different state model and encryption story than `matrix-nio`. The
-HiClaw stack standardised on `matrix-nio` for the CoPaw worker (room
+AgentTeams stack standardised on `matrix-nio` for the CoPaw worker (room
 allowlists, mention-required policy, free-response rooms, vision-on-image
 support) and the Manager's matrix tooling. Reusing those semantics here keeps
 operator behaviour identical regardless of which runtime a Worker is using,

@@ -70,15 +70,15 @@ test_legacy_hiclaw_env_maps_to_agentteams_contract() {
     output="$(
         env -i \
             PATH="${PATH}" \
-            HICLAW_WORKER_NAME=legacy-worker \
-            HICLAW_AUTH_TOKEN_FILE=/var/run/secrets/hiclaw/token \
-            HICLAW_CONTROLLER_URL=http://controller:8090 \
-            HICLAW_FS_BUCKET=hiclaw-storage \
-            HICLAW_STORAGE_PREFIX=hiclaw/hiclaw-storage \
+            AGENTTEAMS_WORKER_NAME=legacy-worker \
+            AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/secrets/hiclaw/token \
+            AGENTTEAMS_CONTROLLER_URL=http://controller:8090 \
+            AGENTTEAMS_FS_BUCKET=agentteams-storage \
+            AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage \
             bash -c ". '${REPO_ROOT}/shared/lib/hiclaw-env.sh'; printf 'worker=%s token=%s controller=%s alias=%s prefix=%s\n' \"\${AGENTTEAMS_WORKER_NAME:-}\" \"\${AGENTTEAMS_AUTH_TOKEN_FILE:-}\" \"\${AGENTTEAMS_CONTROLLER_URL:-}\" \"\${AGENTTEAMS_STORAGE_ALIAS:-}\" \"\${AGENTTEAMS_STORAGE_PREFIX:-}\""
     )"
 
-    [ "${output}" = "worker=legacy-worker token=/var/run/secrets/hiclaw/token controller=http://controller:8090 alias=hiclaw prefix=hiclaw/hiclaw-storage" ] || \
+    [ "${output}" = "worker=legacy-worker token=/var/run/secrets/hiclaw/token controller=http://controller:8090 alias=agentteams prefix=agentteams/agentteams-storage" ] || \
         fail "legacy HICLAW env did not map to AgentTeams contract: ${output}"
 }
 

@@ -1766,9 +1766,9 @@ func TestWorkerReconcileEdgeWritesRuntimeConfigWithoutContainer(t *testing.T) {
 	rig := newWorkerRig(t, worker)
 	rig.envBuilder.BuildFn = func(workerName string, prov *service.WorkerProvisionResult) map[string]string {
 		return map[string]string{
-			"HICLAW_WORKER_NAME": workerName,
-			"SKILLS_API_URL":     "nacos://market.agentteams.io:80/public",
-			"NACOS_AUTH_TYPE":    "sts-hiclaw",
+			"AGENTTEAMS_WORKER_NAME": workerName,
+			"SKILLS_API_URL":         "nacos://market.agentteams.io:80/public",
+			"NACOS_AUTH_TYPE":        "sts-hiclaw",
 		}
 	}
 	gw := &workerTestGateway{modelInfo: &gateway.ModelProviderInfo{

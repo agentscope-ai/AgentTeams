@@ -19,7 +19,6 @@ func TestAPIClient_DoesNotSendClusterIDHeader(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Test with ClusterID set.
 	client := &APIClient{
 		BaseURL:    ts.URL,
 		Token:      "test-token",
@@ -35,9 +34,6 @@ func TestAPIClient_DoesNotSendClusterIDHeader(t *testing.T) {
 	if got := receivedHeaders.Get("X-AgentTeams-Cluster-ID"); got != "" {
 		t.Fatalf("expected no X-AgentTeams-Cluster-ID header, got %q", got)
 	}
-	if got := receivedHeaders.Get("X-HiClaw-Cluster-ID"); got != "" {
-		t.Fatalf("expected no X-HiClaw-Cluster-ID header, got %q", got)
-	}
 
 	// Verify Authorization header is also present.
 	authHeader := receivedHeaders.Get("Authorization")
@@ -48,7 +44,7 @@ func TestAPIClient_DoesNotSendClusterIDHeader(t *testing.T) {
 
 func TestNewAPIClientPrefersAgentTeamsControllerURL(t *testing.T) {
 	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://agentteams-controller:8090")
-	t.Setenv("HICLAW_CONTROLLER_URL", "http://hiclaw-controller:8090")
+	t.Setenv("HICLAW_CONTROLLER_URL", "http://legacy-controller:8090")
 
 	client := NewAPIClient()
 	if client.BaseURL != "http://agentteams-controller:8090" {
@@ -56,13 +52,13 @@ func TestNewAPIClientPrefersAgentTeamsControllerURL(t *testing.T) {
 	}
 }
 
-func TestNewAPIClientUsesLegacyControllerURL(t *testing.T) {
+func TestNewAPIClientIgnoresLegacyControllerURL(t *testing.T) {
 	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "")
-	t.Setenv("HICLAW_CONTROLLER_URL", "http://hiclaw-controller:8090")
+	t.Setenv("HICLAW_CONTROLLER_URL", "http://legacy-controller:8090")
 
 	client := NewAPIClient()
-	if client.BaseURL != "http://hiclaw-controller:8090" {
-		t.Fatalf("BaseURL=%q, want legacy controller URL", client.BaseURL)
+	if client.BaseURL != "http://localhost:8090" {
+		t.Fatalf("BaseURL=%q, want default without HICLAW fallback", client.BaseURL)
 	}
 }
 
@@ -75,13 +71,13 @@ func TestDiscoverTokenPrefersAgentTeamsEnv(t *testing.T) {
 	}
 }
 
-func TestDiscoverTokenLegacyEnvFallback(t *testing.T) {
+func TestDiscoverTokenIgnoresLegacyEnvFallback(t *testing.T) {
 	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "")
 	t.Setenv("AGENTTEAMS_AUTH_TOKEN_FILE", "")
 	t.Setenv("HICLAW_AUTH_TOKEN", "legacy-token")
 
-	if got := discoverToken(); got != "legacy-token" {
-		t.Fatalf("discoverToken=%q, want legacy env token", got)
+	if got := discoverToken(); got != "" {
+		t.Fatalf("discoverToken=%q, want empty without HICLAW fallback", got)
 	}
 }
 
@@ -103,7 +99,7 @@ func TestDiscoverTokenPrefersAgentTeamsFile(t *testing.T) {
 	}
 }
 
-func TestDiscoverTokenLegacyFileFallback(t *testing.T) {
+func TestDiscoverTokenIgnoresLegacyFileFallback(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenFile, []byte("legacy-file-token\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -113,7 +109,7 @@ func TestDiscoverTokenLegacyFileFallback(t *testing.T) {
 	t.Setenv("HICLAW_AUTH_TOKEN", "")
 	t.Setenv("HICLAW_AUTH_TOKEN_FILE", tokenFile)
 
-	if got := discoverToken(); got != "legacy-file-token" {
-		t.Fatalf("discoverToken=%q, want legacy file token", got)
+	if got := discoverToken(); got != "" {
+		t.Fatalf("discoverToken=%q, want empty without HICLAW file fallback", got)
 	}
 }

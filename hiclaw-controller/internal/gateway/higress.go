@@ -62,7 +62,7 @@ func (c *HigressClient) ensureSession(ctx context.Context) error {
 
 	// Steady state should use the configured password. Embedded all-in-one boot
 	// may briefly win the race and initialize itself with the upstream default
-	// admin/admin before HiClaw reaches /system/init. In that bootstrap-only
+	// admin/admin before AgentTeams reaches /system/init. In that bootstrap-only
 	// case, recover with admin/admin once, converge the password, then re-login
 	// with the configured credentials.
 	if err := c.loginLocked(ctx, c.config.AdminUser, c.config.AdminPassword); err == nil {
@@ -345,7 +345,7 @@ func (c *HigressClient) ExposePort(ctx context.Context, req PortExposeRequest) e
 	routeN := svcSrc
 	domain := req.Domain
 	if domain == "" {
-		domain = fmt.Sprintf("worker-%s-%d-local.hiclaw.io", req.WorkerName, req.Port)
+		domain = fmt.Sprintf("worker-%s-%d-local.agentteams.io", req.WorkerName, req.Port)
 	}
 	dnsHost := req.ServiceHost
 	if dnsHost == "" {
@@ -369,7 +369,7 @@ func (c *HigressClient) UnexposePort(ctx context.Context, req PortExposeRequest)
 	routeN := svcSrc
 	domain := req.Domain
 	if domain == "" {
-		domain = fmt.Sprintf("worker-%s-%d-local.hiclaw.io", req.WorkerName, req.Port)
+		domain = fmt.Sprintf("worker-%s-%d-local.agentteams.io", req.WorkerName, req.Port)
 	}
 
 	c.deleteRoute(ctx, routeN)

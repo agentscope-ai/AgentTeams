@@ -39,7 +39,7 @@ func captureManagerCreateRequest(t *testing.T, mgr *v1beta1.Manager, defaults *b
 	r := &ManagerReconciler{
 		Provisioner:      mocks.NewMockManagerProvisioner(),
 		EnvBuilder:       mocks.NewMockManagerEnvBuilder(),
-		ResourcePrefix:   auth.ResourcePrefix("hiclaw-"),
+		ResourcePrefix:   auth.DefaultResourcePrefix,
 		ControllerName:   "real-ctl",
 		DefaultRuntime:   "copaw",
 		ManagerResources: defaults,
@@ -92,7 +92,7 @@ func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 		"agentteams.io/manager": "default",   // system label
 		"agentteams.io/role":    "manager",   // system label
 		"agentteams.io/runtime": "copaw",     // system label
-		"app":                   "hiclaw-manager",
+		"app":                   "agentteams-manager",
 		v1beta1.LabelController: "real-ctl",
 	}
 	for k, want := range cases {
@@ -127,8 +127,8 @@ func TestCreateManagerContainer_SystemLabelsOverrideUserLabels(t *testing.T) {
 	if got := labels[v1beta1.LabelController]; got != "real-ctl" {
 		t.Errorf("controller label got %q, want real-ctl (full=%v)", got, labels)
 	}
-	if got := labels["app"]; got != "hiclaw-manager" {
-		t.Errorf("app label got %q, want hiclaw-manager", got)
+	if got := labels["app"]; got != "agentteams-manager" {
+		t.Errorf("app label got %q, want agentteams-manager", got)
 	}
 	if got := labels["agentteams.io/role"]; got != "manager" {
 		t.Errorf("role label got %q, want manager", got)

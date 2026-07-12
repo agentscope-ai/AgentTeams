@@ -158,8 +158,8 @@ if [ -n "${RUNTIME}" ]; then
     exit 0
 fi
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 
 log "=== Updating Worker: ${WORKER_NAME} ==="
 log "  Memory: preserved (not overwritten)"
@@ -176,7 +176,7 @@ fi
 source "${WORKER_CREDS_FILE}"
 
 # Get fresh Matrix token via login
-WORKER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+WORKER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
     -H 'Content-Type: application/json' \
     -d '{
         "type": "m.login.password",
@@ -410,7 +410,7 @@ fi
 log "Step 6: Syncing config to MinIO (memory preserved)..."
 ensure_mc_credentials 2>/dev/null || true
 mc mirror "/root/hiclaw-fs/agents/${WORKER_NAME}/" \
-    "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
+    "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
     --overwrite \
     --exclude "memory/*" \
     --exclude "MEMORY.md" \

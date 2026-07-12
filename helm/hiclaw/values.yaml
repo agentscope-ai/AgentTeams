@@ -1,5 +1,5 @@
 # =============================================================================
-# HiClaw Helm Chart — values.yaml
+# AgentTeams Helm Chart — values.yaml
 # =============================================================================
 # Default configuration for local Kubernetes deployment (kind / minikube).
 # Override with values-aliyun.yaml for Alibaba Cloud ACK/ACS deployments.
@@ -282,7 +282,7 @@ cms:
   licenseKey: ""
   project: ""
   workspace: ""
-  serviceName: "hiclaw-manager"    # Manager service name; Workers auto-derive "hiclaw-worker-<name>"
+  serviceName: "agentteams-manager"    # Manager service name; Workers auto-derive "agentteams-worker-<name>"
   metricsEnabled: false
 
 # ── Worker defaults ───────────────────────────────────────────────────────

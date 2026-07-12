@@ -1,4 +1,4 @@
-"""CoPaw-native taskflow tool for HiClaw task state."""
+"""CoPaw-native taskflow tool for AgentTeams task state."""
 
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ def _require_team_leader_assignment_room(room_id: str) -> None:
 def _current_actor() -> str | None:
     configured = (
         os.getenv("AGENTTEAMS_MATRIX_USER_ID")
-        or os.getenv("HICLAW_MATRIX_USER_ID")
+        or os.getenv("AGENTTEAMS_MATRIX_USER_ID")
         or os.getenv("COPAW_MATRIX_USER_ID")
     )
     if configured:
@@ -250,7 +250,7 @@ async def taskflow(
     payload: dict[str, Any] | str | None = None,
     dryRun: bool = False,
 ) -> ToolResponse:
-    """Manage HiClaw task state with action-specific payload fields."""
+    """Manage AgentTeams task state with action-specific payload fields."""
     payload_data: dict[str, Any] = {}
     try:
         store = _store()

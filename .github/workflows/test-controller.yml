@@ -1,4 +1,4 @@
-name: HiClaw Controller Tests
+name: AgentTeams Controller Tests
 
 on:
   pull_request:

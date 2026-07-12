@@ -25,7 +25,7 @@ fi
 command -v docker >/dev/null 2>&1 || fail "docker is required"
 docker info >/dev/null 2>&1 || fail "docker daemon is not reachable"
 
-ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
 
 read_env_file() {
     key="$1"
@@ -149,7 +149,7 @@ member:
 desired:
   model:
     providerId: ${PROVIDER_ID}
-    providerName: HiClaw Real Model E2E
+    providerName: AgentTeams Real Model E2E
     model: ${MODEL}
     baseUrl: ${BASE_URL}
     apiKeyEnv: AGENTTEAMS_QWENPAW_REAL_MODEL_API_KEY

@@ -305,8 +305,8 @@ func hashAppliedManagerSpec(spec v1beta1.ManagerSpec) string {
 }
 
 // managerBackend returns the WorkerBackend with the container prefix cleared.
-// Manager containers use explicit full names (e.g. "hiclaw-manager") rather than
-// the default worker prefix ("hiclaw-worker-"), so we need WithPrefix("") to
+// Manager containers use explicit full names (e.g. "agentteams-manager") rather than
+// the default worker prefix ("agentteams-worker-"), so we need WithPrefix("") to
 // ensure Status/Stop/Delete/Start operate on the correct container/pod name.
 func (r *ManagerReconciler) managerBackend(ctx context.Context) backend.WorkerBackend {
 	if r.Backend == nil {

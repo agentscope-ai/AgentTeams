@@ -11,16 +11,16 @@
 #   ./hiclaw-apply.sh -f resource.yaml --watch      # watch file changes
 #
 # Environment:
-#   HICLAW_CONTAINER_CMD   Override container runtime (docker/podman)
+#   AGENTTEAMS_CONTAINER_CMD   Override container runtime (docker/podman)
 
 set -e
 
 log() {
-    echo -e "\033[36m[HiClaw Apply]\033[0m $1"
+    echo -e "\033[36m[AgentTeams Apply]\033[0m $1"
 }
 
 error() {
-    echo -e "\033[31m[HiClaw Apply ERROR]\033[0m $1" >&2
+    echo -e "\033[31m[AgentTeams Apply ERROR]\033[0m $1" >&2
 }
 
 die() {
@@ -31,7 +31,7 @@ die() {
 # ============================================================
 # Detect container runtime
 # ============================================================
-CONTAINER_CMD="${HICLAW_CONTAINER_CMD:-}"
+CONTAINER_CMD="${AGENTTEAMS_CONTAINER_CMD:-}"
 if [ -z "${CONTAINER_CMD}" ]; then
     if command -v docker > /dev/null 2>&1; then
         CONTAINER_CMD="docker"
@@ -45,12 +45,12 @@ fi
 # ============================================================
 # Verify Manager container is running
 # ============================================================
-if ! ${CONTAINER_CMD} ps --filter name=hiclaw-manager --format '{{.Names}}' 2>/dev/null | grep -q 'hiclaw-manager'; then
-    die "hiclaw-manager container is not running"
+if ! ${CONTAINER_CMD} ps --filter name=agentteams-manager --format '{{.Names}}' 2>/dev/null | grep -q 'agentteams-manager'; then
+    die "agentteams-manager container is not running"
 fi
 
 # Ensure /tmp/import exists before copying files into container
-${CONTAINER_CMD} exec hiclaw-manager mkdir -p /tmp/import 2>/dev/null || true
+${CONTAINER_CMD} exec agentteams-manager mkdir -p /tmp/import 2>/dev/null || true
 
 # ============================================================
 # Copy YAML files and referenced packages into container
@@ -63,7 +63,7 @@ for arg in "$@"; do
         NEXT_IS_FILE=false
         if [ -f "${arg}" ]; then
             BASENAME=$(basename "${arg}")
-            ${CONTAINER_CMD} cp "${arg}" "hiclaw-manager:/tmp/import/${BASENAME}"
+            ${CONTAINER_CMD} cp "${arg}" "agentteams-manager:/tmp/import/${BASENAME}"
             ARGS+=("/tmp/import/${BASENAME}")
             log "Copied ${arg} → container:/tmp/import/${BASENAME}"
         else
@@ -85,4 +85,4 @@ done
 # Forward to hiclaw CLI inside container
 # ============================================================
 log "Forwarding to hiclaw apply..."
-${CONTAINER_CMD} exec hiclaw-manager hiclaw apply "${ARGS[@]}"
+${CONTAINER_CMD} exec agentteams-manager hiclaw apply "${ARGS[@]}"

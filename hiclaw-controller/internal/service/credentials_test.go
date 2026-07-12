@@ -45,7 +45,7 @@ func TestSecretCredentialStore_StampsControllerLabel(t *testing.T) {
 	if sec.Labels["agentteams.io/worker"] != "alice" {
 		t.Fatalf("expected worker label alice, got %q", sec.Labels["agentteams.io/worker"])
 	}
-	if got, want := sec.Labels["app"], "hiclaw-worker"; got != want {
+	if got, want := sec.Labels["app"], "agentteams-worker"; got != want {
 		t.Fatalf("expected app label %q (derived from ResourcePrefix.WorkerAppLabel), got %q (labels=%v)", want, got, sec.Labels)
 	}
 }

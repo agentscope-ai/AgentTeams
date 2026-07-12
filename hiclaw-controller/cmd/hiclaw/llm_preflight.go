@@ -109,16 +109,16 @@ func llmPreflightCmd() *cobra.Command {
 
 func llmPreflightOptionsFromEnv() llmPreflightOptions {
 	return llmPreflightOptions{
-		Provider: envOrDefaultLocal("HICLAW_LLM_PROVIDER", "openai-compat"),
-		APIKey:   os.Getenv("HICLAW_LLM_API_KEY"),
-		BaseURL:  os.Getenv("HICLAW_OPENAI_BASE_URL"),
-		Model:    os.Getenv("HICLAW_DEFAULT_MODEL"),
+		Provider: envOrDefaultLocal("AGENTTEAMS_LLM_PROVIDER", "openai-compat"),
+		APIKey:   os.Getenv("AGENTTEAMS_LLM_API_KEY"),
+		BaseURL:  os.Getenv("AGENTTEAMS_OPENAI_BASE_URL"),
+		Model:    os.Getenv("AGENTTEAMS_DEFAULT_MODEL"),
 		Timeout: time.Duration(envIntDefaultLocal(
-			"HICLAW_LLM_PREFLIGHT_TIMEOUT_SECONDS",
+			"AGENTTEAMS_LLM_PREFLIGHT_TIMEOUT_SECONDS",
 			int(defaultLLMPreflightTimeout.Seconds()),
 		)) * time.Second,
-		Retries: envIntDefaultLocal("HICLAW_LLM_PREFLIGHT_RETRIES", defaultLLMPreflightRetries),
-		Strict:  envBoolDefaultLocal("HICLAW_LLM_PREFLIGHT_STRICT", true),
+		Retries: envIntDefaultLocal("AGENTTEAMS_LLM_PREFLIGHT_RETRIES", defaultLLMPreflightRetries),
+		Strict:  envBoolDefaultLocal("AGENTTEAMS_LLM_PREFLIGHT_STRICT", true),
 	}
 }
 
@@ -136,10 +136,10 @@ func resolveLLMPreflightConfig(opts llmPreflightOptions) (llmPreflightConfig, er
 		cfg.Provider = "openai-compat"
 	}
 	if cfg.APIKey == "" {
-		return cfg, fmt.Errorf("LLM API key is required (set HICLAW_LLM_API_KEY or --api-key)")
+		return cfg, fmt.Errorf("LLM API key is required (set AGENTTEAMS_LLM_API_KEY or --api-key)")
 	}
 	if cfg.Model == "" {
-		return cfg, fmt.Errorf("LLM model is required (set HICLAW_DEFAULT_MODEL or --model)")
+		return cfg, fmt.Errorf("LLM model is required (set AGENTTEAMS_DEFAULT_MODEL or --model)")
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultLLMPreflightTimeout
@@ -172,7 +172,7 @@ func resolveLLMPreflightBaseURL(provider, baseURL string) (string, error) {
 		case "qwen":
 			baseURL = defaultQwenCompatibleBaseURL
 		default:
-			return "", fmt.Errorf("LLM base URL is required for provider %q (set HICLAW_OPENAI_BASE_URL or --base-url)", provider)
+			return "", fmt.Errorf("LLM base URL is required for provider %q (set AGENTTEAMS_OPENAI_BASE_URL or --base-url)", provider)
 		}
 	}
 
@@ -236,7 +236,7 @@ func runLLMPreflightAttempt(ctx context.Context, client *http.Client, cfg llmPre
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "HiClaw/llm-preflight")
+	req.Header.Set("User-Agent", "AgentTeams/llm-preflight")
 
 	resp, err := client.Do(req)
 	if err != nil {

@@ -49,7 +49,7 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-alice" {
+	if session != "agentteams-worker-alice" {
 		t.Fatalf("session = %q", session)
 	}
 	// Standalone workers now default to a single object-storage entry
@@ -194,7 +194,7 @@ func TestResolveManager_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-manager-manager" {
+	if session != "agentteams-manager-manager" {
 		t.Fatalf("session = %q", session)
 	}
 	if len(entries) != 1 {
@@ -411,7 +411,7 @@ func TestControllerDefaults(t *testing.T) {
 
 // TestResolve_CustomPrefix verifies the STS session name carries the tenant
 // prefix so cloud RAM auditing / policy matching can distinguish multiple
-// HiClaw controllers running in the same cluster.
+// AgentTeams controllers running in the same cluster.
 func TestResolve_CustomPrefix(t *testing.T) {
 	worker := &v1beta1.Worker{}
 	worker.Name = "alice"
@@ -570,8 +570,8 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-lead" {
-		t.Fatalf("session = %q, want hiclaw-worker-lead", session)
+	if session != "agentteams-worker-lead" {
+		t.Fatalf("session = %q, want agentteams-worker-lead", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
@@ -605,8 +605,8 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-runtime-lead" {
-		t.Fatalf("session = %q, want hiclaw-worker-runtime-lead", session)
+	if session != "agentteams-worker-runtime-lead" {
+		t.Fatalf("session = %q, want agentteams-worker-runtime-lead", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
@@ -658,7 +658,7 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-w1" {
+	if session != "agentteams-worker-w1" {
 		t.Fatalf("session = %q", session)
 	}
 	if len(entries) != 1 {
@@ -693,8 +693,8 @@ func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-runtime-w1" {
-		t.Fatalf("session = %q, want hiclaw-worker-runtime-w1", session)
+	if session != "agentteams-worker-runtime-w1" {
+		t.Fatalf("session = %q, want agentteams-worker-runtime-w1", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))

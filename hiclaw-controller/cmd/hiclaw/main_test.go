@@ -9,7 +9,7 @@ import (
 )
 
 func TestExpandPackageURI(t *testing.T) {
-	t.Setenv("HICLAW_NACOS_REGISTRY_URI", "nacos://registry.example.com/public")
+	t.Setenv("AGENTTEAMS_NACOS_REGISTRY_URI", "nacos://registry.example.com/public")
 
 	tests := []struct {
 		name    string

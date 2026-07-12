@@ -1,4 +1,4 @@
-# hiclaw-worker-agent
+# agentteams-worker-agent
 
 Lightweight Worker Agent container. Includes:
 
@@ -15,7 +15,7 @@ Workers are **stateless** -- all configuration and memory is stored in the centr
 make build-worker
 
 # Or directly
-docker build -t hiclaw/worker-agent:latest .
+docker build -t agentteams/worker-agent:latest .
 ```
 
 ## Run
@@ -59,4 +59,4 @@ worker/
 | `AGENTTEAMS_FS_ACCESS_KEY` | Yes | MinIO access key |
 | `AGENTTEAMS_FS_SECRET_KEY` | Yes | MinIO secret key |
 
-Runtime scripts use `AGENTTEAMS_MATRIX_URL` and `AGENTTEAMS_AI_GATEWAY_URL` as the main contract. Existing `HICLAW_*` inputs are still accepted by the shared bootstrap for compatibility with older controller/Helm releases.
+Runtime scripts use `AGENTTEAMS_MATRIX_URL` and `AGENTTEAMS_AI_GATEWAY_URL` as the main contract. Existing `AGENTTEAMS_*` inputs are still accepted by the shared bootstrap for compatibility with older controller/Helm releases.

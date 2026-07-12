@@ -215,7 +215,7 @@ spec:
                       description: |
                         User-defined environment variables injected into the leader container.
                         Keys that collide with variables already set by the controller or backend
-                        (HICLAW_*, OPENCLAW_*, HOME, and similar internal keys) are silently
+                        (AGENTTEAMS_*, OPENCLAW_*, HOME, and similar internal keys) are silently
                         ignored with a warning log — the system value always wins.
                       additionalProperties:
                         type: string
@@ -305,7 +305,7 @@ spec:
                           type: string
                           not:
                             pattern: '^nacos://'
-                        description: HiClaw built-in skills to enable (remote registry skills must use remoteSkills)
+                        description: AgentTeams built-in skills to enable (remote registry skills must use remoteSkills)
                       remoteSkills:
                         type: array
                         description: Remote skills fetched from source registries.
@@ -467,7 +467,7 @@ spec:
                         description: |
                           User-defined environment variables injected into this team worker's
                           container. Keys that collide with variables already set by the
-                          controller or backend (HICLAW_*, OPENCLAW_*, HOME, and similar
+                          controller or backend (AGENTTEAMS_*, OPENCLAW_*, HOME, and similar
                           internal keys) are silently ignored with a warning log — the system
                           value always wins.
                         additionalProperties:

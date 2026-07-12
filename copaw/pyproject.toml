@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "copaw-worker"
 version = "1.0.3"
-description = "Lightweight HiClaw Worker runtime based on CoPaw"
+description = "Lightweight AgentTeams Worker runtime based on CoPaw"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"

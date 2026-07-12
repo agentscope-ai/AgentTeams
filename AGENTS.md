@@ -1,10 +1,10 @@
-# HiClaw Codebase Navigation Guide
+# AgentTeams Codebase Navigation Guide
 
 This file helps AI Agents (and human developers) quickly understand the project structure and find relevant code.
 
-## What is HiClaw
+## What is AgentTeams
 
-HiClaw is an open-source Agent Teams system that uses IM (Matrix protocol) for multi-Agent collaboration with human-in-the-loop oversight. It consists of a Manager Agent (coordinator) and Worker Agents (task executors), connected via an AI Gateway (Higress), Matrix Homeserver (Tuwunel), and HTTP file storage (MinIO or cloud OSS). Production-style deployments use the Kubernetes operator and Helm chart; local installs use Docker Compose scripts under `install/`.
+AgentTeams is an open-source Agent Teams system that uses IM (Matrix protocol) for multi-Agent collaboration with human-in-the-loop oversight. It consists of a Manager Agent (coordinator) and Worker Agents (task executors), connected via an AI Gateway (Higress), Matrix Homeserver (Tuwunel), and HTTP file storage (MinIO or cloud OSS). Production-style deployments use the Kubernetes operator and Helm chart; local installs use Docker Compose scripts under `install/`.
 
 ## Project Structure
 
@@ -43,16 +43,16 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `copaw`    | Python / AgentScope via CoPaw | Alternative worker runtime |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
 
-**Manager runtimes** (container env `HICLAW_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
+**Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
 
 | Runtime   | Behavior |
 |-----------|-----------|
-| `openclaw` (default) | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / HiClaw manager config). |
+| `openclaw` (default) | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
 | `copaw` | Python CoPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-copaw-manager.sh`). |
 
 Hermes and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **copaw** only.
 
-**Deployment runtime** (`HICLAW_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
+**Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 
 ## `manager/agent/` layout (built into Manager images)
 
@@ -157,7 +157,7 @@ make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyu
 - [manager/Dockerfile](manager/Dockerfile) — OpenClaw-based Manager (from `openclaw-base`; bundles `hiclaw` CLI from controller image)
 - [manager/Dockerfile.copaw](manager/Dockerfile.copaw) — CoPaw-based Manager (Python venv + CoPaw from PyPI; same agent tree and scripts pattern)
 - [manager/supervisord.conf](manager/supervisord.conf) — process orchestration (local embedded stack)
-- [manager/scripts/init/](manager/scripts/init/) — startup: `start-manager-agent.sh` (runtime + `HICLAW_RUNTIME`), `upgrade-builtins.sh`, Higress/Matrix bootstrap where applicable
+- [manager/scripts/init/](manager/scripts/init/) — startup: `start-manager-agent.sh` (runtime + `AGENTTEAMS_RUNTIME`), `upgrade-builtins.sh`, Higress/Matrix bootstrap where applicable
 - [manager/scripts/lib/](manager/scripts/lib/) — shared libraries (`base.sh`, `container-api.sh`, …)
 - [manager/configs/](manager/configs/) — init-time configuration templates (e.g. `manager-openclaw.json.tmpl`)
 
@@ -215,7 +215,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Kubernetes operator | hiclaw-controller (Go) | Reconciles Worker / Manager / Team / Human CRDs; REST API; worker lifecycle |
+| Kubernetes operator | agentteams-controller (Go) | Reconciles Worker / Manager / Team / Human CRDs; REST API; worker lifecycle |
 | AI Gateway | Higress (chart or external) | LLM proxy, MCP Server hosting, consumer auth, route management |
 | Matrix Server | Tuwunel (conduwuit fork) | IM between Agents and Human |
 | Matrix Client | Element Web (optional) | Browser-based IM interface |
@@ -233,8 +233,8 @@ Any change that affects the content of a built image — i.e. modifications unde
 Format: one bullet per logical change, with a linked commit hash, e.g.:
 
 ```
-- feat(manager): add task-management skill extracted from AGENTS.md ([a1b2c3d](https://github.com/agentscope-ai/HiClaw/commit/a1b2c3d...))
-- fix(manager): fix upgrade-builtins idempotency (duplicate marker insertion) ([e4f5g6h](https://github.com/agentscope-ai/HiClaw/commit/e4f5g6h...))
+- feat(manager): add task-management skill extracted from AGENTS.md ([a1b2c3d](https://github.com/agentscope-ai/AgentTeams/commit/a1b2c3d...))
+- fix(manager): fix upgrade-builtins idempotency (duplicate marker insertion) ([e4f5g6h](https://github.com/agentscope-ai/AgentTeams/commit/e4f5g6h...))
 ```
 
 On release, the workflow automatically renames `current.md` → `vX.Y.Z.md` and creates a fresh `current.md`.
@@ -268,7 +268,7 @@ This convention applies to all files that end up in the Agent's workspace or are
 
 ## Environment Variables
 
-See [manager/scripts/init/start-manager-agent.sh](manager/scripts/init/start-manager-agent.sh) for the full list of `HICLAW_*` environment variables used by the Manager container.
+See [manager/scripts/init/start-manager-agent.sh](manager/scripts/init/start-manager-agent.sh) for the full list of `AGENTTEAMS_*` environment variables used by the Manager container.
 
 ## Verified Technical Details
 

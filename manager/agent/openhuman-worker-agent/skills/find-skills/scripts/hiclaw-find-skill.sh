@@ -6,8 +6,8 @@
 
 set -eu
 
-MAX_RESULTS="${HICLAW_FIND_SKILL_MAX_RESULTS:-6}"
-PAGE_SIZE="${HICLAW_FIND_SKILL_NACOS_PAGE_SIZE:-100}"
+MAX_RESULTS="${AGENTTEAMS_FIND_SKILL_MAX_RESULTS:-6}"
+PAGE_SIZE="${AGENTTEAMS_FIND_SKILL_NACOS_PAGE_SIZE:-100}"
 
 RESET='[0m'
 DIM='[38;5;102m'
@@ -62,8 +62,8 @@ get_skills_api_url() {
         printf '%s\n' "${SKILLS_API_URL}"
         return
     fi
-    if [ -n "${HICLAW_SKILLS_API_URL:-}" ]; then
-        printf '%s\n' "${HICLAW_SKILLS_API_URL}"
+    if [ -n "${AGENTTEAMS_SKILLS_API_URL:-}" ]; then
+        printf '%s\n' "${AGENTTEAMS_SKILLS_API_URL}"
         return
     fi
     printf '%s\n' "https://skills.sh"
@@ -127,12 +127,12 @@ run_nacos_install() {
 
 derive_nacos_connection() {
     api_url="$(get_skills_api_url)"
-    host="${HICLAW_NACOS_HOST:-}"
-    port="${HICLAW_NACOS_PORT:-}"
+    host="${AGENTTEAMS_NACOS_HOST:-}"
+    port="${AGENTTEAMS_NACOS_PORT:-}"
     namespace=""
-    username="${HICLAW_NACOS_USERNAME:-}"
-    password="${HICLAW_NACOS_PASSWORD:-}"
-    token="${HICLAW_NACOS_TOKEN:-}"
+    username="${AGENTTEAMS_NACOS_USERNAME:-}"
+    password="${AGENTTEAMS_NACOS_PASSWORD:-}"
+    token="${AGENTTEAMS_NACOS_TOKEN:-}"
 
     if [ -n "${api_url}" ] && [ "${api_url#nacos://}" != "${api_url}" ]; then
         api_url="${api_url#nacos://}"

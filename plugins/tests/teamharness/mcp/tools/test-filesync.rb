@@ -25,7 +25,7 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
     printf '%s\\n' "$*" >> "#{log_path}"
     printf 'ENV MC_HOST_agentteams=%s\\n' "${MC_HOST_agentteams:-}" >> "#{log_path}"
     case "$*" in
-      *"agentteams/hiclaw-storage"*)
+      *"agentteams/agentteams-storage"*)
         if [ -z "${MC_HOST_agentteams:-}" ]; then
           echo "missing MC_HOST_agentteams" >&2
           exit 3
@@ -184,14 +184,14 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
         encoding="utf-8",
     )
     os.environ["TEAMHARNESS_RUNTIME_CONFIG"] = str(runtime_config)
-    os.environ["AGENTTEAMS_STORAGE_PREFIX"] = "agentteams/hiclaw-storage"
+    os.environ["AGENTTEAMS_STORAGE_PREFIX"] = "agentteams/agentteams-storage"
     from_runtime = payload_without_storage({
         "workspaceDir": "#{workspace}",
         "action": "list",
         "path": "shared/tasks/demo",
         "dryRun": True,
     })
-    if from_runtime.get("remotePath") != "agentteams/hiclaw-storage/teams/demo-team/shared/tasks/demo/":
+    if from_runtime.get("remotePath") != "agentteams/agentteams-storage/teams/demo-team/shared/tasks/demo/":
         raise AssertionError(f"runtime storage prefix mismatch: {from_runtime!r}")
 
     runtime_result = pathlib.Path("#{workspace}") / "shared/tasks/runtime-push/result.md"
@@ -204,7 +204,7 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
     })
     if not pushed_runtime.get("ok"):
         raise AssertionError(f"runtime-prefix push failed: {pushed_runtime!r}")
-    if pushed_runtime.get("remotePath") != "agentteams/hiclaw-storage/teams/demo-team/shared/tasks/runtime-push/":
+    if pushed_runtime.get("remotePath") != "agentteams/agentteams-storage/teams/demo-team/shared/tasks/runtime-push/":
         raise AssertionError(f"runtime-prefix push remote mismatch: {pushed_runtime!r}")
 
     print(json.dumps({
@@ -246,7 +246,7 @@ Dir.mktmpdir("teamharness-filesync-") do |dir|
     "stat mock/shared/tasks/t-001/result.md"
   )
   fail!("runtime-prefix mc mirror was not called: #{commands.inspect}") unless commands.include?(
-    "mirror #{workspace}/shared/tasks/runtime-push/ agentteams/hiclaw-storage/teams/demo-team/shared/tasks/runtime-push/ --overwrite"
+    "mirror #{workspace}/shared/tasks/runtime-push/ agentteams/agentteams-storage/teams/demo-team/shared/tasks/runtime-push/ --overwrite"
   )
   fail!("runtime-prefix mc mirror did not receive MC_HOST_agentteams: #{commands.inspect}") unless commands.any? do |line|
     line.start_with?("ENV MC_HOST_agentteams=https://access-key:secret-key@oss.example.test")

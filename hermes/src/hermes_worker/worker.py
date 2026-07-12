@@ -124,11 +124,11 @@ class Worker:
         # When we run on the host (dev) and the FS endpoint includes a port,
         # use that port as the gateway port as well so the bridge's _port_remap
         # rewrites container-internal :8080 references correctly.
-        if not os.environ.get("HICLAW_PORT_GATEWAY"):
+        if not os.environ.get("AGENTTEAMS_PORT_GATEWAY"):
             from urllib.parse import urlparse
             parsed = urlparse(self.config.minio_endpoint)
             if parsed.port:
-                os.environ["HICLAW_PORT_GATEWAY"] = str(parsed.port)
+                os.environ["AGENTTEAMS_PORT_GATEWAY"] = str(parsed.port)
 
         self._hermes_home.mkdir(parents=True, exist_ok=True)
         os.environ["HERMES_HOME"] = str(self._hermes_home)

@@ -8,7 +8,7 @@ All DM senders are **Human Admin** — OpenClaw allowlist guarantees only the ad
 
 | Sender | How to identify | Action |
 |--------|----------------|--------|
-| **Human Admin** | `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}` | Full trust — execute any request |
+| **Human Admin** | `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}` | Full trust — execute any request |
 | **Team Leader** | Registered in `~/workers-registry.json` with `role: "team_leader"` | Team management interaction — task delegation reports, team status updates, escalations |
 | **Worker** | Registered in `~/workers-registry.json` (with `role: "worker"` or no role field) | Normal Worker interaction (task handoffs, status updates) |
 | **Human (Level 1)** | Registered in `~/humans-registry.json` with `permission_level: 1` | Admin-equivalent — respond to requests, withhold credentials |

@@ -364,8 +364,8 @@ class MatrixChannel(BaseChannel):
     def from_env(cls, process: Callable, on_reply_sent=None) -> "MatrixChannel":
         import os
         cfg = MatrixChannelConfig({
-            "homeserver": os.environ.get("HICLAW_MATRIX_SERVER", ""),
-            "access_token": os.environ.get("HICLAW_MATRIX_TOKEN", ""),
+            "homeserver": os.environ.get("AGENTTEAMS_MATRIX_SERVER", ""),
+            "access_token": os.environ.get("AGENTTEAMS_MATRIX_TOKEN", ""),
         })
         return cls(process=process, config=cfg, on_reply_sent=on_reply_sent)
 
@@ -563,12 +563,12 @@ class MatrixChannel(BaseChannel):
 
     async def _refresh_matrix_token(self) -> bool:
         """Call controller to get a fresh Matrix access token."""
-        controller_url = os.environ.get("HICLAW_CONTROLLER_URL", "")
-        auth_token_file = os.environ.get("HICLAW_AUTH_TOKEN_FILE", "")
-        auth_token = os.environ.get("HICLAW_AUTH_TOKEN", "")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "")
+        auth_token_file = os.environ.get("AGENTTEAMS_AUTH_TOKEN_FILE", "")
+        auth_token = os.environ.get("AGENTTEAMS_AUTH_TOKEN", "")
 
         if not controller_url:
-            logger.warning("MatrixChannel: HICLAW_CONTROLLER_URL not set, cannot refresh token")
+            logger.warning("MatrixChannel: AGENTTEAMS_CONTROLLER_URL not set, cannot refresh token")
             return False
 
         bearer = auth_token

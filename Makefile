@@ -1,5 +1,5 @@
 # ============================================================
-# HiClaw Makefile
+# AgentTeams Makefile
 # ============================================================
 # Unified build, test, and release interface.
 # Used locally and in CI/CD (GitHub Actions).
@@ -30,7 +30,7 @@ WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
 COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/agentteams-copaw-worker
 HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
 QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-qwenpaw-worker
-OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/hiclaw-openhuman-worker
+OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
@@ -59,8 +59,8 @@ LOCAL_WORKER_LEGACY         = hiclaw/worker-agent:$(VERSION)
 LOCAL_COPAW_WORKER_LEGACY   = hiclaw/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER_LEGACY  = hiclaw/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER_LEGACY = hiclaw/qwenpaw-worker:$(VERSION)
-LOCAL_OPENHUMAN_WORKER = hiclaw/openhuman-worker:$(VERSION)
-LOCAL_OPENCLAW_BASE  = hiclaw/openclaw-base:$(VERSION)
+LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
+LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
 LOCAL_CONTROLLER_LEGACY = hiclaw/hiclaw-controller:$(VERSION)
 LOCAL_CONTROLLER_BUILD_IMAGE ?= $(shell \
@@ -105,7 +105,7 @@ COPAW_WORKER_CTX = --build-context copaw-worker=./copaw
 # Platforms for multi-arch builds (comma-separated, no spaces)
 MULTIARCH_PLATFORMS ?= linux/amd64,linux/arm64
 # Buildx builder name (auto-created if not exists)
-BUILDX_BUILDER     ?= hiclaw-multiarch
+BUILDX_BUILDER     ?= agentteams-multiarch
 
 # Pre-release version detection
 # Pre-release versions (containing -rc, -beta, -alpha, etc.) should NOT push :latest tag
@@ -158,8 +158,8 @@ OPENCLAW_BASE_VERSION ?= 20260423-8359cbc
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
-build-hiclaw-controller: ## Build hiclaw-controller image (prerequisite for Manager)
-	@echo "==> Building hiclaw-controller image: $(LOCAL_CONTROLLER)"
+build-hiclaw-controller: ## Build agentteams-controller image (prerequisite for Manager)
+	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
 	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
@@ -306,13 +306,13 @@ else
 		./openclaw-base/
 endif
 
-push-hiclaw-controller: buildx-setup ## Build + push multi-arch hiclaw-controller image
+push-hiclaw-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
 	@echo "==> Building + pushing multi-arch hiclaw-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
 	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(CONTROLLER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
-		echo "  -> Building hiclaw-controller for $(plat)..." && \
+		echo "  -> Building agentteams-controller for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 			--manifest $(CONTROLLER_TAG) \
@@ -586,10 +586,10 @@ push-native-qwenpaw-worker: build-qwenpaw-worker ## Push native-arch QwenPaw Wor
 # Usage: make wait-ready [CONTAINER=name]
 .PHONY: wait-ready
 wait-ready:
-	@echo "==> Waiting for Manager services to be ready (container: $(or $(CONTAINER),hiclaw-controller))..."
+	@echo "==> Waiting for Manager services to be ready (container: $(or $(CONTAINER),agentteams-controller))..."
 	@TIMEOUT=300; ELAPSED=0; \
 	while [ "$$ELAPSED" -lt "$$TIMEOUT" ]; do \
-		RESULT=$$(docker exec $(or $(CONTAINER),hiclaw-controller) bash -c 'curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:6167/_matrix/client/versions" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:9000/minio/health/live" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8001/" 2>/dev/null || echo "000"' 2>/dev/null); \
+		RESULT=$$(docker exec $(or $(CONTAINER),agentteams-controller) bash -c 'curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:6167/_matrix/client/versions" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:9000/minio/health/live" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8001/" 2>/dev/null || echo "000"' 2>/dev/null); \
 		MATRIX=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f1); \
 		MINIO=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f2); \
 		CONSOLE=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f3); \
@@ -610,12 +610,12 @@ wait-ready:
 test: ## Run integration tests (creates test container)
 ifdef SKIP_INSTALL
 	@echo "==> Running tests against existing installation"
-	@docker exec hiclaw-controller touch /root/manager-workspace/yolo-mode 2>/dev/null || true
+	@docker exec agentteams-controller touch /root/manager-workspace/yolo-mode 2>/dev/null || true
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 else
 	@echo "==> Installing test Manager and running tests"
 	$(MAKE) uninstall 2>/dev/null || true
-	HICLAW_YOLO=1 $(MAKE) install
+	AGENTTEAMS_YOLO=1 $(MAKE) install
 	$(MAKE) wait-ready
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 endif
@@ -628,56 +628,56 @@ test-installed: ## Run tests against an already-installed Manager (no container 
 
 # ---------- Install / Uninstall ----------
 
-install: ## Install Manager locally (non-interactive, set HICLAW_LLM_API_KEY)
+install: ## Install Manager locally (non-interactive, set AGENTTEAMS_LLM_API_KEY)
 ifndef SKIP_BUILD
 	$(MAKE) build
 endif
-	@echo "==> Installing HiClaw Manager (non-interactive)..."
-	HICLAW_NON_INTERACTIVE=1 HICLAW_VERSION=$(VERSION) HICLAW_MOUNT_SOCKET=1 \
-		HICLAW_MATRIX_E2EE=0 \
-		HICLAW_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
-		HICLAW_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		HICLAW_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
-		HICLAW_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
-		HICLAW_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
-		HICLAW_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+	@echo "==> Installing AgentTeams Manager (non-interactive)..."
+	AGENTTEAMS_NON_INTERACTIVE=1 AGENTTEAMS_VERSION=$(VERSION) AGENTTEAMS_MOUNT_SOCKET=1 \
+		AGENTTEAMS_MATRIX_E2EE=0 \
+		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
+		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
+		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
+		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
+		AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
 		bash ./install/hiclaw-install.sh manager
 
 install-interactive: ## Install Manager interactively (prompts for config)
 ifndef SKIP_BUILD
 	$(MAKE) build
 endif
-	@echo "==> Installing HiClaw Manager (interactive)..."
-	HICLAW_VERSION=$(VERSION) HICLAW_MOUNT_SOCKET=1 \
-		HICLAW_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
-		HICLAW_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		HICLAW_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
-		HICLAW_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
-		HICLAW_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
+	@echo "==> Installing AgentTeams Manager (interactive)..."
+	AGENTTEAMS_VERSION=$(VERSION) AGENTTEAMS_MOUNT_SOCKET=1 \
+		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
+		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
+		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
+		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		bash ./install/hiclaw-install.sh manager
 
 uninstall: ## Stop and remove Manager + all Worker containers
-	@echo "==> Uninstalling HiClaw..."
-	-docker stop hiclaw-manager 2>/dev/null && docker rm hiclaw-manager 2>/dev/null || true
-	-docker stop hiclaw-controller 2>/dev/null && docker rm hiclaw-controller 2>/dev/null || true
-	@for c in $$(docker ps -a --filter "name=hiclaw-worker-" --format '{{.Names}}' 2>/dev/null); do \
+	@echo "==> Uninstalling AgentTeams..."
+	-docker stop agentteams-manager 2>/dev/null && docker rm agentteams-manager 2>/dev/null || true
+	-docker stop agentteams-controller 2>/dev/null && docker rm agentteams-controller 2>/dev/null || true
+	@for c in $$(docker ps -a --filter "name=agentteams-worker-" --format '{{.Names}}' 2>/dev/null); do \
 		echo "  Removing Worker: $$c"; \
 		docker rm -f "$$c" 2>/dev/null || true; \
 	done
-	-docker volume rm hiclaw-data 2>/dev/null && echo "  Removed volume: hiclaw-data" || true
-	@ENV_FILE="$${HICLAW_ENV_FILE:-$${HOME}/hiclaw-manager.env}"; \
-	[ -f "$$ENV_FILE" ] || ENV_FILE="./hiclaw-manager.env"; \
+	-docker volume rm agentteams-data 2>/dev/null && echo "  Removed volume: agentteams-data" || true
+	@ENV_FILE="$${AGENTTEAMS_ENV_FILE:-$${HOME}/agentteams-manager.env}"; \
+	[ -f "$$ENV_FILE" ] || ENV_FILE="./agentteams-manager.env"; \
 	if [ -f "$$ENV_FILE" ]; then \
-		DATA_DIR=$$(grep '^HICLAW_DATA_DIR=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2-); \
+		DATA_DIR=$$(grep '^AGENTTEAMS_DATA_DIR=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2-); \
 		if [ -n "$$DATA_DIR" ] && [ -d "$$DATA_DIR" ]; then \
 			echo "  External data directory preserved: $$DATA_DIR"; \
 			echo "  To delete: rm -rf $$DATA_DIR"; \
 		fi; \
-		WORKSPACE_DIR=$$(grep '^HICLAW_WORKSPACE_DIR=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2-); \
+		WORKSPACE_DIR=$$(grep '^AGENTTEAMS_WORKSPACE_DIR=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2-); \
 		if [ -n "$$WORKSPACE_DIR" ] && [ -d "$$WORKSPACE_DIR" ]; then \
 			PARENT=$$(dirname "$$WORKSPACE_DIR"); \
 			BASE=$$(basename "$$WORKSPACE_DIR"); \
-			RUNTIME=$$(grep '^HICLAW_MANAGER_RUNTIME=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "openclaw"); \
+			RUNTIME=$$(grep '^AGENTTEAMS_MANAGER_RUNTIME=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "openclaw"); \
 			if [ "$$RUNTIME" = "copaw" ]; then \
 				RM_IMAGE="$(LOCAL_MANAGER_COPAW)"; \
 			else \
@@ -690,7 +690,7 @@ uninstall: ## Stop and remove Manager + all Worker containers
 			fi; \
 		fi; \
 	fi
-	@echo "==> HiClaw uninstalled"
+	@echo "==> AgentTeams uninstalled"
 
 # ---------- Embedded Install / Uninstall / Test ----------
 
@@ -698,27 +698,27 @@ install-embedded: ## Install in embedded mode (dual-container: controller + agen
 ifndef SKIP_BUILD
 	$(MAKE) build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker
 endif
-	@echo "==> Installing HiClaw (embedded mode)..."
-	HICLAW_NON_INTERACTIVE=1 \
-		HICLAW_INSTALL_EMBEDDED_IMAGE=$(LOCAL_EMBEDDED) \
-		HICLAW_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
-		HICLAW_INSTALL_MANAGER_COPAW_IMAGE=$(LOCAL_MANAGER_COPAW) \
-		HICLAW_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		HICLAW_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
-		HICLAW_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
-		HICLAW_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
-		HICLAW_MATRIX_E2EE=0 \
+	@echo "==> Installing AgentTeams (embedded mode)..."
+	AGENTTEAMS_NON_INTERACTIVE=1 \
+		AGENTTEAMS_INSTALL_EMBEDDED_IMAGE=$(LOCAL_EMBEDDED) \
+		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
+		AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE=$(LOCAL_MANAGER_COPAW) \
+		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
+		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
+		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
+		AGENTTEAMS_MATRIX_E2EE=0 \
 		bash ./install/hiclaw-install.sh
 
 wait-ready-embedded: ## Wait for embedded-mode services to be ready
 	@echo "==> Waiting for embedded services..."
 	@TIMEOUT=300; ELAPSED=0; \
 	while [ "$$ELAPSED" -lt "$$TIMEOUT" ]; do \
-		RESULT=$$(docker exec hiclaw-controller bash -c 'curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:6167/_matrix/client/versions" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:9000/minio/health/live" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8001/" 2>/dev/null || echo "000"' 2>/dev/null); \
+		RESULT=$$(docker exec agentteams-controller bash -c 'curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:6167/_matrix/client/versions" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:9000/minio/health/live" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8001/" 2>/dev/null || echo "000"' 2>/dev/null); \
 		MATRIX=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f1); \
 		MINIO=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f2); \
 		CONSOLE=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f3); \
-		AGENT=$$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^hiclaw-manager$$' || echo 0); \
+		AGENT=$$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^agentteams-manager$$' || echo 0); \
 		if [ "$$MATRIX" = "200" ] && [ "$$MINIO" = "200" ] && [ "$$CONSOLE" = "200" ] && [ "$$AGENT" -ge 1 ]; then \
 			echo "==> All services ready (took $${ELAPSED}s)"; \
 			echo "==> Waiting 60s for Manager Agent initialization..."; \
@@ -736,35 +736,35 @@ wait-ready-embedded: ## Wait for embedded-mode services to be ready
 test-embedded: ## Run integration tests in embedded mode
 ifdef SKIP_INSTALL
 	@echo "==> Running tests against existing embedded installation"
-	@docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode 2>/dev/null || true
+	@docker exec agentteams-manager touch /root/manager-workspace/yolo-mode 2>/dev/null || true
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 else
 	@echo "==> Installing embedded mode and running tests"
 	$(MAKE) uninstall-embedded 2>/dev/null || true
-	HICLAW_YOLO=1 $(MAKE) install-embedded
+	AGENTTEAMS_YOLO=1 $(MAKE) install-embedded
 	$(MAKE) wait-ready-embedded
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 endif
 
 uninstall-embedded: ## Stop and remove embedded containers
-	@echo "==> Uninstalling HiClaw (embedded mode)..."
-	-docker stop hiclaw-manager 2>/dev/null && docker rm hiclaw-manager 2>/dev/null || true
-	-docker stop hiclaw-controller 2>/dev/null && docker rm hiclaw-controller 2>/dev/null || true
-	-docker stop hiclaw-manager 2>/dev/null && docker rm hiclaw-manager 2>/dev/null || true
-	@for c in $$(docker ps -a --filter "name=hiclaw-worker-" --format '{{.Names}}' 2>/dev/null); do \
+	@echo "==> Uninstalling AgentTeams (embedded mode)..."
+	-docker stop agentteams-manager 2>/dev/null && docker rm agentteams-manager 2>/dev/null || true
+	-docker stop agentteams-controller 2>/dev/null && docker rm agentteams-controller 2>/dev/null || true
+	-docker stop agentteams-manager 2>/dev/null && docker rm agentteams-manager 2>/dev/null || true
+	@for c in $$(docker ps -a --filter "name=agentteams-worker-" --format '{{.Names}}' 2>/dev/null); do \
 		echo "  Removing Worker: $$c"; \
 		docker rm -f "$$c" 2>/dev/null || true; \
 	done
-	-docker volume rm hiclaw-data 2>/dev/null && echo "  Removed volume: hiclaw-data" || true
-	@if [ -d "$${HOME}/hiclaw-manager" ]; then \
-		rm -rf "$${HOME}/hiclaw-manager" && echo "  Cleaned workspace: ~/hiclaw-manager"; \
+	-docker volume rm agentteams-data 2>/dev/null && echo "  Removed volume: agentteams-data" || true
+	@if [ -d "$${HOME}/agentteams-manager" ]; then \
+		rm -rf "$${HOME}/agentteams-manager" && echo "  Cleaned workspace: ~/agentteams-manager"; \
 	fi
-	@echo "==> HiClaw (embedded) uninstalled"
+	@echo "==> AgentTeams (embedded) uninstalled"
 
 # ---------- Replay ----------
 
 replay: ## Send a task to Manager (TASK="..." or interactive, YOLO mode auto-enabled)
-	@docker exec hiclaw-controller touch /root/manager-workspace/yolo-mode 2>/dev/null || true
+	@docker exec agentteams-controller touch /root/manager-workspace/yolo-mode 2>/dev/null || true
 ifdef TASK
 	REPLAY_USE_DOCKER_EXEC=1 ./scripts/replay-task.sh "$(TASK)"
 else
@@ -784,20 +784,20 @@ replay-log: ## View the latest replay conversation log
 # ---------- Verify ----------
 
 verify: ## Run post-install verification against the running Manager container
-	@bash ./install/hiclaw-verify.sh $(or $(CONTAINER),hiclaw-controller)
+	@bash ./install/hiclaw-verify.sh $(or $(CONTAINER),agentteams-controller)
 
 # ---------- Dev utils ----------
 
 status: ## Show status of Manager and all Worker containers
-	@echo "==> HiClaw container status:"
+	@echo "==> AgentTeams container status:"
 	@docker ps -a --filter "name=hiclaw-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null \
 		|| echo "  (no containers found or Docker not available)"
 
 logs: ## Show recent logs for Manager and all Workers (override with LINES=N, default 50)
 	@echo "==> Controller logs (last $(LINES) lines):"
-	@docker logs hiclaw-controller --tail $(LINES) 2>/dev/null || echo "  (Controller container not found)"
+	@docker logs agentteams-controller --tail $(LINES) 2>/dev/null || echo "  (Controller container not found)"
 	@echo ""
-	@for c in $$(docker ps -a --filter "name=hiclaw-worker-" --format '{{.Names}}' 2>/dev/null); do \
+	@for c in $$(docker ps -a --filter "name=agentteams-worker-" --format '{{.Names}}' 2>/dev/null); do \
 		echo "==> Worker: $$c (last $(LINES) lines):"; \
 		docker logs "$$c" --tail $(LINES) 2>/dev/null || echo "  (container not running)"; \
 		echo ""; \
@@ -824,10 +824,10 @@ clean: ## Remove local images and test containers
 
 # ---------- Local K8s (kind + Helm) ----------
 
-local-k8s-up: ## Create kind cluster and deploy HiClaw via Helm
+local-k8s-up: ## Create kind cluster and deploy AgentTeams via Helm
 	@bash hack/local-k8s-up.sh
 
-local-k8s-down: ## Tear down the local HiClaw kind cluster
+local-k8s-down: ## Tear down the local AgentTeams kind cluster
 	@bash hack/local-k8s-down.sh
 
 generate: ## Regenerate deepcopy functions and sync CRDs to Helm chart
@@ -863,7 +863,7 @@ helm-template: ## Render Helm templates locally (dry-run validation)
 # ---------- Help ----------
 
 help: ## Show this help
-	@echo "HiClaw Makefile targets:"
+	@echo "AgentTeams Makefile targets:"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -876,10 +876,10 @@ help: ## Show this help
 	@echo "  SKIP_BUILD           Skip build in 'install' (set to 1 to skip)"
 	@echo "  SKIP_INSTALL         Skip install in 'test' (set to 1 to test existing)"
 	@echo "  TEST_FILTER          Test numbers to run   (e.g., '01 02 03')"
-	@echo "  TEST_CONTAINER       Test container name   (default: hiclaw-manager-test)"
+	@echo "  TEST_CONTAINER       Test container name   (default: agentteams-manager-test)"
 	@echo "  DOCKER_PLATFORM      Build platform        (e.g., linux/amd64)"
 	@echo "  MULTIARCH_PLATFORMS  Multi-arch platforms   (default: linux/amd64,linux/arm64)"
-	@echo "  BUILDX_BUILDER       Buildx builder name   (default: hiclaw-multiarch)"
+	@echo "  BUILDX_BUILDER       Buildx builder name   (default: agentteams-multiarch)"
 	@echo ""
 	@echo "HIGRESS_REGISTRY regions (mirrors auto-synced from cn-hangzhou):"
 	@echo "  China (default):  higress-registry.cn-hangzhou.cr.aliyuncs.com"
@@ -897,12 +897,12 @@ help: ## Show this help
 	@echo "  make logs LINES=100                             # Show last 100 lines"
 	@echo ""
 	@echo "Install / Uninstall / Replay:"
-	@echo "  HICLAW_LLM_API_KEY=sk-xxx make install          # Build + install Manager (non-interactive)"
-	@echo "  HICLAW_LLM_API_KEY=sk-xxx HICLAW_DATA_DIR=~/hiclaw-data make install  # With external data dir"
+	@echo "  AGENTTEAMS_LLM_API_KEY=sk-xxx make install          # Build + install Manager (non-interactive)"
+	@echo "  AGENTTEAMS_LLM_API_KEY=sk-xxx AGENTTEAMS_DATA_DIR=~/agentteams-data make install  # With external data dir"
 	@echo "  make uninstall                                  # Stop + remove Manager and Workers"
 	@echo ""
 	@echo "Test:"
-	@echo "  HICLAW_LLM_API_KEY=sk-xxx make test             # Install + run all tests (auto cleanup)"
+	@echo "  AGENTTEAMS_LLM_API_KEY=sk-xxx make test             # Install + run all tests (auto cleanup)"
 	@echo "  make test SKIP_BUILD=1                          # Run tests without rebuilding"
 	@echo "  make test TEST_FILTER=\"01 02\"                   # Run specific tests only"
 	@echo "  make test SKIP_INSTALL=1                        # Run tests against existing Manager"
@@ -911,7 +911,7 @@ help: ## Show this help
 	@echo "  make replay                                     # Interactive task input"
 	@echo ""
 	@echo "Local K8s (kind + Helm):"
-	@echo "  HICLAW_LLM_API_KEY=sk-xxx make local-k8s-up    # Create kind cluster + helm install"
+	@echo "  AGENTTEAMS_LLM_API_KEY=sk-xxx make local-k8s-up    # Create kind cluster + helm install"
 	@echo "  make local-k8s-down                             # Tear down kind cluster"
 	@echo "  make helm-template                              # Validate Helm templates"
 	@echo ""

@@ -231,7 +231,7 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 // honours the security-token component when present.
 //
 // The endpoint is supplied by the caller (normally MinIOClient.config.Endpoint,
-// sourced from HICLAW_FS_ENDPOINT). A bare hostname (e.g.
+// sourced from AGENTTEAMS_FS_ENDPOINT). A bare hostname (e.g.
 // "oss-cn-hangzhou.aliyuncs.com") without a URL scheme is accepted; in
 // that case we default to https.
 //
@@ -244,7 +244,7 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 // alphabet plus "+/=") that Go's url.Parse accepts inside userinfo.
 func buildMCHostEnv(alias string, endpoint string, c Credentials) (string, error) {
 	if endpoint == "" {
-		return "", fmt.Errorf("storage endpoint is not configured (HICLAW_FS_ENDPOINT is empty)")
+		return "", fmt.Errorf("storage endpoint is not configured (AGENTTEAMS_FS_ENDPOINT is empty)")
 	}
 	normalized := endpoint
 	if !strings.HasPrefix(normalized, "http://") && !strings.HasPrefix(normalized, "https://") {

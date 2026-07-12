@@ -1,5 +1,5 @@
 """
-Bridge: translate openclaw.json (HiClaw Worker config) into CoPaw's
+Bridge: translate openclaw.json (AgentTeams Worker config) into CoPaw's
 config.json + providers.json, then set COPAW_WORKING_DIR so CoPaw
 picks up the right workspace.
 """
@@ -20,7 +20,7 @@ from typing import Any
 def _port_remap(url: str, is_container: bool) -> str:
     """Remap container-internal :8080 to host-exposed gateway port when needed."""
     if not is_container and url and ":8080" in url:
-        gateway_port = os.environ.get("HICLAW_PORT_GATEWAY", "18080")
+        gateway_port = os.environ.get("AGENTTEAMS_PORT_GATEWAY", "18080")
         return url.replace(":8080", f":{gateway_port}")
     return url
 
@@ -201,7 +201,7 @@ def _resolve_matrix_user_id(
 
     env_user_id = (
         os.environ.get("AGENTTEAMS_MATRIX_USER_ID")
-        or os.environ.get("HICLAW_MATRIX_USER_ID")
+        or os.environ.get("AGENTTEAMS_MATRIX_USER_ID")
         or os.environ.get("COPAW_MATRIX_USER_ID")
     )
     if env_user_id:
@@ -209,11 +209,11 @@ def _resolve_matrix_user_id(
 
     matrix_domain = (
         os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
-        or os.environ.get("HICLAW_MATRIX_DOMAIN")
+        or os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
     )
     localpart = (
         os.environ.get("AGENTTEAMS_WORKER_NAME")
-        or os.environ.get("HICLAW_WORKER_NAME")
+        or os.environ.get("AGENTTEAMS_WORKER_NAME")
         or ("manager" if profile == "manager" else "")
     )
     if matrix_domain and localpart:

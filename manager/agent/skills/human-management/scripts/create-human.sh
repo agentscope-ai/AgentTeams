@@ -1,5 +1,5 @@
 #!/bin/bash
-# create-human.sh - Import a human user into HiClaw
+# create-human.sh - Import a human user into AgentTeams
 #
 # Registers a Matrix account, configures permissions based on level,
 # and optionally sends a welcome email.
@@ -55,8 +55,8 @@ fi
 
 # Extract username from Matrix ID (@username:domain → username)
 HUMAN_USERNAME=$(echo "${MATRIX_ID}" | sed 's/^@//' | cut -d: -f1)
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 
 log "=== Importing Human: ${DISPLAY_NAME} (${MATRIX_ID}) ==="
 log "  Level: ${LEVEL}"
@@ -72,11 +72,11 @@ if [ -f "${SECRETS_FILE}" ]; then
 fi
 
 if [ -z "${MANAGER_MATRIX_TOKEN:-}" ]; then
-    MANAGER_PASSWORD="${HICLAW_MANAGER_PASSWORD:-}"
+    MANAGER_PASSWORD="${AGENTTEAMS_MANAGER_PASSWORD:-}"
     if [ -z "${MANAGER_PASSWORD}" ]; then
         _fail "MANAGER_MATRIX_TOKEN not set"
     fi
-    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
         -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${MANAGER_PASSWORD}"'"}' \
         2>/dev/null | jq -r '.access_token // empty')
@@ -89,14 +89,14 @@ fi
 log "Step 1: Registering Matrix account..."
 HUMAN_PASSWORD=$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)
 
-REG_RESP=$(curl -s -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/register \
+REG_RESP=$(curl -s -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/register \
     -H 'Content-Type: application/json' \
     -d '{
         "username": "'"${HUMAN_USERNAME}"'",
         "password": "'"${HUMAN_PASSWORD}"'",
         "auth": {
             "type": "m.login.registration_token",
-            "token": "'"${HICLAW_REGISTRATION_TOKEN}"'"
+            "token": "'"${AGENTTEAMS_REGISTRATION_TOKEN}"'"
         }
     }' 2>/dev/null) || true
 
@@ -107,7 +107,7 @@ else
     log "  Account may already exist (registration response: ${REG_RESP:0:100})"
     log "  Proceeding with permission configuration..."
     # Try to login to get a token for auto-joining rooms
-    HUMAN_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+    HUMAN_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
         -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${HUMAN_USERNAME}"'"},"password":"'"${HUMAN_PASSWORD}"'"}' \
         2>/dev/null | jq -r '.access_token // empty')
@@ -145,7 +145,7 @@ _add_to_group_allow() {
             '.channels.matrix.groupAllowFrom += [$h]' \
             "${config_path}" > /tmp/human-config-tmp.json
         mv /tmp/human-config-tmp.json "${config_path}"
-        mc cp "${config_path}" "${HICLAW_STORAGE_PREFIX}/agents/${agent_name}/openclaw.json" 2>/dev/null \
+        mc cp "${config_path}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${agent_name}/openclaw.json" 2>/dev/null \
             || log "    WARNING: Failed to push ${agent_name} config to MinIO"
         log "    Added to ${agent_name}'s groupAllowFrom"
     else
@@ -175,7 +175,7 @@ _invite_to_room() {
     local room_id="$1"
     [ -z "${room_id}" ] || [ "${room_id}" = "null" ] && return
 
-    curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${room_id}/invite" \
+    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_id}/invite" \
         -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{"user_id": "'"${MATRIX_ID}"'"}' 2>/dev/null || true
@@ -185,7 +185,7 @@ _invite_to_room() {
     if [ -n "${HUMAN_TOKEN:-}" ]; then
         local _room_enc
         _room_enc=$(echo "${room_id}" | sed 's/!/%21/g')
-        curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${_room_enc}/join" \
+        curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${_room_enc}/join" \
             -H "Authorization: Bearer ${HUMAN_TOKEN}" \
             -H 'Content-Type: application/json' \
             -d '{}' > /dev/null 2>&1 || true
@@ -306,14 +306,14 @@ bash /opt/hiclaw/agent/skills/human-management/scripts/manage-humans-registry.sh
 # Step 4: Send welcome email
 # ============================================================
 EMAIL_SENT=false
-if [ -n "${EMAIL}" ] && [ -n "${HICLAW_SMTP_HOST:-}" ]; then
+if [ -n "${EMAIL}" ] && [ -n "${AGENTTEAMS_SMTP_HOST:-}" ]; then
     log "Step 4: Sending welcome email to ${EMAIL}..."
 
-    ELEMENT_URL="${HICLAW_ELEMENT_URL:-http://localhost:18080}"
+    ELEMENT_URL="${AGENTTEAMS_ELEMENT_URL:-http://localhost:18080}"
 
     EMAIL_BODY="Hi ${DISPLAY_NAME},
 
-Your HiClaw account has been created:
+Your AgentTeams account has been created:
 
   Username: ${MATRIX_ID}
   Password: ${HUMAN_PASSWORD}
@@ -321,17 +321,17 @@ Your HiClaw account has been created:
 
 Please log in using Element Web and change your password immediately.
 
-— HiClaw"
+— AgentTeams"
 
     # Try sending via msmtp or sendmail
     if command -v msmtp > /dev/null 2>&1; then
-        echo -e "Subject: Welcome to HiClaw - Your Account Details\nFrom: ${HICLAW_SMTP_FROM:-noreply@hiclaw.io}\nTo: ${EMAIL}\n\n${EMAIL_BODY}" | \
-            msmtp --host="${HICLAW_SMTP_HOST}" --port="${HICLAW_SMTP_PORT:-465}" \
-                  --auth=on --user="${HICLAW_SMTP_USER}" --password="${HICLAW_SMTP_PASS}" \
-                  --tls=on --from="${HICLAW_SMTP_FROM:-noreply@hiclaw.io}" \
+        echo -e "Subject: Welcome to AgentTeams - Your Account Details\nFrom: ${AGENTTEAMS_SMTP_FROM:-noreply@agentteams.io}\nTo: ${EMAIL}\n\n${EMAIL_BODY}" | \
+            msmtp --host="${AGENTTEAMS_SMTP_HOST}" --port="${AGENTTEAMS_SMTP_PORT:-465}" \
+                  --auth=on --user="${AGENTTEAMS_SMTP_USER}" --password="${AGENTTEAMS_SMTP_PASS}" \
+                  --tls=on --from="${AGENTTEAMS_SMTP_FROM:-noreply@agentteams.io}" \
                   "${EMAIL}" 2>/dev/null && EMAIL_SENT=true
     elif command -v sendmail > /dev/null 2>&1; then
-        echo -e "Subject: Welcome to HiClaw - Your Account Details\nFrom: ${HICLAW_SMTP_FROM:-noreply@hiclaw.io}\nTo: ${EMAIL}\n\n${EMAIL_BODY}" | \
+        echo -e "Subject: Welcome to AgentTeams - Your Account Details\nFrom: ${AGENTTEAMS_SMTP_FROM:-noreply@agentteams.io}\nTo: ${EMAIL}\n\n${EMAIL_BODY}" | \
             sendmail "${EMAIL}" 2>/dev/null && EMAIL_SENT=true
     fi
 
@@ -341,7 +341,7 @@ Please log in using Element Web and change your password immediately.
         log "  WARNING: Failed to send email (SMTP may not be configured)"
     fi
 elif [ -n "${EMAIL}" ]; then
-    log "Step 4: Skipped email (HICLAW_SMTP_HOST not configured)"
+    log "Step 4: Skipped email (AGENTTEAMS_SMTP_HOST not configured)"
 else
     log "Step 4: Skipped email (no --email provided)"
 fi

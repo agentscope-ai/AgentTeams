@@ -1,11 +1,11 @@
 # ============================================================
-# HiClaw Hermes Worker Agent - Python-based Container
+# AgentTeams Hermes Worker Agent - Python-based Container
 # ============================================================
 # Lightweight Python container running hermes-agent v0.10.0 as a
-# HiClaw Worker. Uses the same MinIO-backed config/sync model as the
+# AgentTeams Worker. Uses the same MinIO-backed config/sync model as the
 # OpenClaw / CoPaw workers, with hermes-agent providing the agent loop
 # and tools. The Matrix gateway adapter keeps hermes-agent's native
-# mautrix implementation and overlays only HiClaw-specific policy
+# mautrix implementation and overlays only AgentTeams-specific policy
 # hooks (allowlists, mention enrichment, history, vision gating).
 #
 # Build args:
@@ -27,7 +27,7 @@ ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
 FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
@@ -68,7 +68,7 @@ RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
 # hiclaw CLI — for worker/team/human management via controller REST API
-COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+COPY --from=agentteams-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
 
 # Install Node.js 22 for shared Worker CLIs (mcporter, skills CLI compatibility)
 RUN apt-get update && \
@@ -134,7 +134,7 @@ RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
 # gateway/platforms/matrix.py to _matrix_native.py, then install a shim at
 # the original import path.  The shim re-exports the native module and swaps
 # in hermes_matrix.adapter.MatrixAdapter, a thin subclass that only adds
-# HiClaw policy hooks (mentions, allowlists, history, vision gating).
+# AgentTeams policy hooks (mentions, allowlists, history, vision gating).
 RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
     && mv "$SITE/gateway/platforms/matrix.py" "$SITE/gateway/platforms/_matrix_native.py" \
     && cp "$SITE/hermes_matrix/_shim.py" "$SITE/gateway/platforms/matrix.py"

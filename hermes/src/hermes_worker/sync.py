@@ -32,8 +32,18 @@ from typing import Any, Callable, Coroutine, Optional
 
 logger = logging.getLogger(__name__)
 
+def _storage_alias() -> str:
+    explicit = os.environ.get("AGENTTEAMS_STORAGE_ALIAS")
+    if explicit:
+        return explicit
+    prefix = os.environ.get("AGENTTEAMS_STORAGE_PREFIX") or ""
+    if "/" in prefix:
+        return prefix.split("/", 1)[0]
+    return "agentteams"
+
+
 # mc alias name used for this worker session
-_MC_ALIAS = "hiclaw"
+_MC_ALIAS = _storage_alias()
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -140,7 +150,7 @@ class FileSync:
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self._prefix = f"agents/{worker_name}"
         self._alias_set = False
-        self._cloud_mode = os.environ.get("HICLAW_RUNTIME") == "aliyun"
+        self._cloud_mode = os.environ.get("AGENTTEAMS_RUNTIME") == "aliyun"
 
     # ------------------------------------------------------------------
     # mc alias management
@@ -152,7 +162,7 @@ class FileSync:
             ["bash", "-c",
              "source /opt/hiclaw/scripts/lib/oss-credentials.sh && "
              "ensure_mc_credentials && "
-             "echo $MC_HOST_hiclaw"],
+             f"echo $MC_HOST_{_MC_ALIAS}"],
             capture_output=True, text=True, check=True,
         )
         mc_host = result.stdout.strip()

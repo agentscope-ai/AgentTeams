@@ -10,7 +10,7 @@ description: Sync files with centralized storage. Use when your coordinator or a
 When your coordinator notifies you that your config has been updated (e.g., skill update, model switch), pull the latest from MinIO:
 
 ```bash
-mc mirror --overwrite "${HICLAW_STORAGE_PREFIX}/agents/${HICLAW_WORKER_NAME}/" /home/openhuman/.openhuman/agent-config/
+mc mirror --overwrite "${AGENTTEAMS_STORAGE_PREFIX}/agents/${AGENTTEAMS_WORKER_NAME}/" /home/openhuman/.openhuman/agent-config/
 ```
 
 **Hot reload caveats:**
@@ -53,7 +53,7 @@ Always confirm to the sender after push completes.
 ```bash
 # Coordinator assigns task: "New task [st-01]. Please file-sync and read shared/tasks/st-01/spec.md"
 # Pull latest (if needed)
-mc mirror --overwrite "${HICLAW_STORAGE_PREFIX}/agents/${HICLAW_WORKER_NAME}/" /home/openhuman/.openhuman/agent-config/
+mc mirror --overwrite "${AGENTTEAMS_STORAGE_PREFIX}/agents/${AGENTTEAMS_WORKER_NAME}/" /home/openhuman/.openhuman/agent-config/
 
 # Read the spec
 cat /home/openhuman/.openhuman/shared/tasks/st-01/spec.md

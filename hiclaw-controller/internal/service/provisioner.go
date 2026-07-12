@@ -1637,7 +1637,7 @@ func (p *Provisioner) SendManagerWelcomeMessage(ctx context.Context, req Manager
 // so the resulting agent behavior (greeting + 4-question Q&A + write
 // SOUL.md + touch ~/soul-configured) is unchanged across architectures.
 func renderManagerWelcomeBody(language, timezone string) string {
-	return fmt.Sprintf(`This is an automated message from the HiClaw setup. This is a fresh installation.
+	return fmt.Sprintf(`This is an automated message from the AgentTeams setup. This is a fresh installation.
 
 --- Installation Context ---
 User Language: %s  (zh = Chinese, en = English)

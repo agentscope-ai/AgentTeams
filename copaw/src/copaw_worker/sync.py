@@ -36,10 +36,10 @@ from copaw_worker.bridge import bridge_runtime_to_standard
 logger = logging.getLogger(__name__)
 
 def _storage_alias() -> str:
-    explicit = os.environ.get("AGENTTEAMS_STORAGE_ALIAS") or os.environ.get("HICLAW_STORAGE_ALIAS")
+    explicit = os.environ.get("AGENTTEAMS_STORAGE_ALIAS")
     if explicit:
         return explicit
-    prefix = os.environ.get("AGENTTEAMS_STORAGE_PREFIX") or os.environ.get("HICLAW_STORAGE_PREFIX") or ""
+    prefix = os.environ.get("AGENTTEAMS_STORAGE_PREFIX") or ""
     if "/" in prefix:
         return prefix.split("/", 1)[0]
     return "agentteams"
@@ -256,7 +256,7 @@ class FileSync:
         self.global_shared_dir = global_shared_dir or self.local_dir / "global-shared"
         self._prefix = f"agents/{worker_name}"
         self._alias_set = False
-        runtime = os.environ.get("AGENTTEAMS_RUNTIME") or os.environ.get("HICLAW_RUNTIME")
+        runtime = os.environ.get("AGENTTEAMS_RUNTIME")
         self._cloud_mode = runtime == "aliyun"
         self._k8s_mode = runtime == "k8s"
         self._worker_info: dict[str, Any] | None = None
@@ -293,9 +293,9 @@ class FileSync:
         via the shared shell function (lazy, no-op when token is valid).
         Local mode: set mc alias once with static credentials.
         """
-        runtime = os.environ.get("AGENTTEAMS_RUNTIME") or os.environ.get("HICLAW_RUNTIME", "<unset>")
+        runtime = os.environ.get("AGENTTEAMS_RUNTIME", "<unset>")
         mc_host_set = bool(os.environ.get(f"MC_HOST_{_MC_ALIAS}"))
-        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL") or os.environ.get("HICLAW_CONTROLLER_URL", "<unset>")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "<unset>")
         logger.info(
             "_ensure_alias: runtime=%s cloud_mode=%s k8s_mode=%s endpoint=%s bucket=%s worker_name=%s access_key=%s alias_set=%s mc_host_set=%s controller_url=%s",
             runtime,
@@ -402,8 +402,8 @@ class FileSync:
         After this, runtime Remote -> Local pulls are explicit; background sync
         only pushes eligible local changes via ``push_local``.
         """
-        runtime = os.environ.get("AGENTTEAMS_RUNTIME") or os.environ.get("HICLAW_RUNTIME", "<unset>")
-        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL") or os.environ.get("HICLAW_CONTROLLER_URL", "<unset>")
+        runtime = os.environ.get("AGENTTEAMS_RUNTIME", "<unset>")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "<unset>")
         logger.info(
             "mirror_all: preparing primary mirror runtime=%s cloud_mode=%s k8s_mode=%s endpoint=%s bucket=%s worker_name=%s access_key=%s alias_set=%s mc_host_set=%s controller_url=%s",
             runtime,
@@ -486,7 +486,7 @@ class FileSync:
     # ------------------------------------------------------------------
 
     def _get_worker_info(self) -> dict[str, Any]:
-        """Return authoritative worker metadata from the HiClaw controller."""
+        """Return authoritative worker metadata from the AgentTeams controller."""
         if self._worker_info is not None:
             return self._worker_info
 

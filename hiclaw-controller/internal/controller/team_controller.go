@@ -84,7 +84,7 @@ type TeamReconciler struct {
 	MountRoleName             string
 
 	// ResourcePrefix scopes team-member ServiceAccount and Pod names per
-	// HiClaw tenant instance. Forwarded into MemberDeps.ResourcePrefix so
+	// AgentTeams tenant instance. Forwarded into MemberDeps.ResourcePrefix so
 	// createMemberContainer uses it when computing saName. Empty collapses
 	// to DefaultResourcePrefix ("hiclaw-").
 	ResourcePrefix auth.ResourcePrefix

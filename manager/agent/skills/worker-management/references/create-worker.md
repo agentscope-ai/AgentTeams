@@ -7,10 +7,10 @@ If the admin asks you to import an existing Worker template, search a registry f
 | Admin says | Runtime | Flags |
 |------------|---------|-------|
 | "copaw", "Python worker" | `copaw` | |
-| "local worker", "local mode", "container worker", "docker worker", "access my local environment", or "run on my machine" | default (uses `${HICLAW_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
+| "local worker", "local mode", "container worker", "docker worker", "access my local environment", or "run on my machine" | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 | "hermes", "hermes worker", "hermes-agent" | `hermes` | |
 | "openhuman", "OpenHuman worker", "openhuman framework" | `openhuman` | |
-| "openclaw", or none of the above | default (uses `${HICLAW_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
+| "openclaw", or none of the above | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 
 When in doubt, ask: "Should this be a copaw (Python, ~150MB RAM), openclaw (Node.js, ~500MB RAM), hermes (Python, ~200MB RAM), or openhuman (Rust, ~300MB RAM, native Matrix E2EE) worker?"
 
@@ -116,7 +116,7 @@ Escape rules inside the `--soul "..."` string:
 |------|-------------|
 | `--name` | Worker name (required, lowercase, >3 chars) |
 | `--soul` | **Required.** Full SOUL.md content as a single quoted string. Do NOT use `--soul-file` — file-based input is fragile because the upstream file write (heredoc/redirect) may silently produce 0 bytes. |
-| `--model` | Model ID. If not specified, defaults to `$HICLAW_DEFAULT_MODEL` (set at install time and propagated to your container by the controller); falls back to `qwen3.5-plus` only when that env var is also unset. |
+| `--model` | Model ID. If not specified, defaults to `$AGENTTEAMS_DEFAULT_MODEL` (set at install time and propagated to your container by the controller); falls back to `qwen3.5-plus` only when that env var is also unset. |
 | `--skills` | Comma-separated built-in skills to assign |
 | `--mcp-servers` | Comma-separated MCP servers to authorize |
 | `--runtime` | Agent runtime: `openclaw` (default), `copaw`, `hermes`, or `openhuman` |
@@ -188,7 +188,7 @@ Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after
 - ❌ `sleep 30 && hiclaw get workers` — Wastes time. Poll immediately and repeat as needed.
 - ❌ `cat /root/hiclaw-fs/agents/<name>/config.json` — Config is in MinIO, not local filesystem.
 - ❌ `docker ps -a --filter "name=<name>"` — Docker may not be available in the Manager container.
-- ❌ `curl ${HICLAW_CONTROLLER_URL}/api/v1/workers/...` — **Forbidden.** See AGENTS.md "Controller API Rules". The CLI is the only supported path.
+- ❌ `curl ${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/...` — **Forbidden.** See AGENTS.md "Controller API Rules". The CLI is the only supported path.
 - ❌ Re-running `hiclaw create worker` "to retry" while the first call is still `Pending` — that returns 409 Conflict.
 
 **What to do**:
@@ -202,7 +202,7 @@ Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after
 
 ### Choose your post-creation flow
 
-Run `echo "${HICLAW_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matching path below.
+Run `echo "${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matching path below.
 
 **OpenClaw / Hermes Manager** — incremental DM messages are supported, so polling-then-reply within a single turn is fine: → use **Path A**.
 
@@ -238,7 +238,7 @@ Failing to emit this reply is the number-one cause of "Manager replied to create
 
 #### A3. Greet the Worker in the Worker's Room
 
-After Step A2's reply is prepared, greet the Worker via the helper script. It auto-detects your runtime and handles all shell escaping, flag naming, and the `@<name>:${HICLAW_MATRIX_DOMAIN}` mention format:
+After Step A2's reply is prepared, greet the Worker via the helper script. It auto-detects your runtime and handles all shell escaping, flag naming, and the `@<name>:${AGENTTEAMS_MATRIX_DOMAIN}` mention format:
 
 ```bash
 bash /opt/hiclaw/agent/skills/worker-management/scripts/send-worker-greeting.sh \

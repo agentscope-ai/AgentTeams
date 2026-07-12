@@ -1,15 +1,15 @@
 # CoPaw Subsystem Navigation Guide
 
-This file helps AI Agents (and human developers) quickly understand the CoPaw subsystem of HiClaw and find relevant code. It complements the root [AGENTS.md](../AGENTS.md); read that first for overall project structure.
+This file helps AI Agents (and human developers) quickly understand the CoPaw subsystem of AgentTeams and find relevant code. It complements the root [AGENTS.md](../AGENTS.md); read that first for overall project structure.
 
-## What is CoPaw in HiClaw
+## What is CoPaw in AgentTeams
 
-CoPaw is a Python-based Agent runtime used in HiClaw as an alternative to OpenClaw (Node.js). It appears in two places:
+CoPaw is a Python-based Agent runtime used in AgentTeams as an alternative to OpenClaw (Node.js). It appears in two places:
 
-- **CoPaw Worker** — the Python Worker runtime (always CoPaw, no OpenClaw alternative for this binary). Packaged as `hiclaw/copaw-worker:latest`.
-- **Manager CoPaw runtime** — opt-in via `HICLAW_MANAGER_RUNTIME=copaw`; Manager then runs its own agent loop in CoPaw instead of OpenClaw. Packaged as `hiclaw/hiclaw-manager-copaw:latest`.
+- **CoPaw Worker** — the Python Worker runtime (always CoPaw, no OpenClaw alternative for this binary). Packaged as `agentteams/copaw-worker:latest`.
+- **Manager CoPaw runtime** — opt-in via `AGENTTEAMS_MANAGER_RUNTIME=copaw`; Manager then runs its own agent loop in CoPaw instead of OpenClaw. Packaged as `agentteams/manager-copaw:latest`.
 
-HiClaw does **not** vendor upstream CoPaw — it ships a fork based on the `feat/lite-copaw-worker-v1.0.0` branch. The fork's source lives **outside this repo** as a sibling checkout; its exact path depends on the developer's local setup. A Matrix channel implementation is vendored in-tree (`copaw/src/matrix/`) until the upstream PR lands.
+AgentTeams does **not** vendor upstream CoPaw — it ships a fork based on the `feat/lite-copaw-worker-v1.0.0` branch. The fork's source lives **outside this repo** as a sibling checkout; its exact path depends on the developer's local setup. A Matrix channel implementation is vendored in-tree (`copaw/src/matrix/`) until the upstream PR lands.
 
 ## Scope of this guide
 
@@ -56,13 +56,13 @@ manager/agent/copaw-worker-agent/   # CoPaw Worker builtin content (pushed by Co
 
 This is the single most important thing to understand when hacking on CoPaw. **Every operation in `copaw_worker/` ultimately serves this conversion chain.**
 
-HiClaw stores Agent specs in MinIO using **a runtime-agnostic OpenClaw-style format** (`openclaw.json` + `SOUL.md` + `AGENTS.md` + `skills/` + ...). This is the Controller's single source of truth, identical in shape whether the Worker will run OpenClaw or CoPaw.
+AgentTeams stores Agent specs in MinIO using **a runtime-agnostic OpenClaw-style format** (`openclaw.json` + `SOUL.md` + `AGENTS.md` + `skills/` + ...). This is the Controller's single source of truth, identical in shape whether the Worker will run OpenClaw or CoPaw.
 
 For CoPaw runtime, the Worker must translate this into **CoPaw's native configuration layout** (`config.json` + `providers.json` + `agent.json` + `skill_pool/` + `workspaces/default/`) before the CoPaw agent can start. This translation is what `bridge.py` and the propagate logic in `worker.py` exist for.
 
 ```
 ┌─────────────────────────────┐
-│ MinIO (hiclaw-storage)      │  Controller writes; Worker pulls.
+│ MinIO (agentteams-storage)      │  Controller writes; Worker pulls.
 │ agents/{name}/              │  Runtime-agnostic OpenClaw-style spec.
 │   openclaw.json             │
 │   SOUL.md, AGENTS.md        │
@@ -151,13 +151,13 @@ The authoritative design for the sync/bridge/propagate chain is [`docs/copaw-bri
 
 ### To modify the Manager CoPaw container
 - [manager/Dockerfile.copaw](../manager/Dockerfile.copaw) — Manager image with CoPaw runtime
-- [manager/scripts/init/start-manager-agent.sh](../manager/scripts/init/start-manager-agent.sh) — branches on `HICLAW_MANAGER_RUNTIME`
+- [manager/scripts/init/start-manager-agent.sh](../manager/scripts/init/start-manager-agent.sh) — branches on `AGENTTEAMS_MANAGER_RUNTIME`
 - [manager/scripts/init/upgrade-builtins.sh](../manager/scripts/init/upgrade-builtins.sh) — overlays `copaw-manager-agent/` on top of `manager/agent/` when runtime=copaw
 
 ### To modify the shared Matrix channel
 - [copaw/src/matrix/channel.py](src/matrix/channel.py) — Manager + Worker both use this; behavior diverges through config, not code
 - [copaw/src/matrix/README.md](src/matrix/README.md) — why this is vendored and how to migrate when upstream lands
-- **Rebuild both `copaw-worker` and `hiclaw-manager-copaw` images after any change here** — otherwise the two sides drift
+- **Rebuild both `copaw-worker` and `agentteams-manager-copaw` images after any change here** — otherwise the two sides drift
 
 ### To modify CoPaw agent behavior
 - [manager/agent/copaw-manager-agent/AGENTS.md](../manager/agent/copaw-manager-agent/AGENTS.md) — Manager behavior when runtime=copaw
@@ -173,27 +173,27 @@ The authoritative design for the sync/bridge/propagate chain is [`docs/copaw-bri
 
 ## Build, Install, Test
 
-HiClaw supports two local deployment shapes. Use Embedded for fast agent-behavior iteration; use In-cluster for anything that touches CRs, Controller reconcile, Helm, or PVCs. For log inspection and triage, see the `## Debugging` section below.
+AgentTeams supports two local deployment shapes. Use Embedded for fast agent-behavior iteration; use In-cluster for anything that touches CRs, Controller reconcile, Helm, or PVCs. For log inspection and triage, see the `## Debugging` section below.
 
 ### Common prerequisites
 
 ```bash
-export HICLAW_LLM_API_KEY=<your-llm-api-key>
-export HICLAW_MANAGER_RUNTIME=copaw          # default is openclaw; must be set explicitly for CoPaw
+export AGENTTEAMS_LLM_API_KEY=<your-llm-api-key>
+export AGENTTEAMS_MANAGER_RUNTIME=copaw          # default is openclaw; must be set explicitly for CoPaw
 
 # Optional: CMS tracing (OpenTelemetry → Aliyun CMS)
-export HICLAW_CMS_TRACES_ENABLED=true
-export HICLAW_CMS_ENDPOINT=<cms-endpoint>
-export HICLAW_CMS_LICENSE_KEY=<cms-license-key>
-export HICLAW_CMS_PROJECT=<cms-project>
-export HICLAW_CMS_WORKSPACE=<cms-workspace>
+export AGENTTEAMS_CMS_TRACES_ENABLED=true
+export AGENTTEAMS_CMS_ENDPOINT=<cms-endpoint>
+export AGENTTEAMS_CMS_LICENSE_KEY=<cms-license-key>
+export AGENTTEAMS_CMS_PROJECT=<cms-project>
+export AGENTTEAMS_CMS_WORKSPACE=<cms-workspace>
 ```
 
 ### Embedded mode (local Docker, dual-container)
 
 ```bash
 # Build + install (one shot)
-HICLAW_LLM_API_KEY=<key> HICLAW_MANAGER_RUNTIME=copaw make install-embedded
+AGENTTEAMS_LLM_API_KEY=<key> AGENTTEAMS_MANAGER_RUNTIME=copaw make install-embedded
 
 # The install output prints Element Web URL + admin password — record them.
 
@@ -209,60 +209,60 @@ make uninstall-embedded && \
 
 ```bash
 # First-time full install (build all images + create cluster + deploy)
-HICLAW_LLM_API_KEY=<key> HICLAW_MANAGER_RUNTIME=copaw ./hack/local-k8s-up.sh
+AGENTTEAMS_LLM_API_KEY=<key> AGENTTEAMS_MANAGER_RUNTIME=copaw ./hack/local-k8s-up.sh
 
 # Redeploy without rebuilding (images already loaded into kind)
-HICLAW_LLM_API_KEY=<key> HICLAW_MANAGER_RUNTIME=copaw HICLAW_SKIP_BUILD=1 make local-k8s-up
+AGENTTEAMS_LLM_API_KEY=<key> AGENTTEAMS_MANAGER_RUNTIME=copaw AGENTTEAMS_SKIP_BUILD=1 make local-k8s-up
 
 # Tear down cluster entirely
-kind delete cluster --name hiclaw
+kind delete cluster --name agentteams
 
 # OpenClaw all-in-one variant (for reference / comparison)
-HICLAW_LLM_API_KEY=<key> HICLAW_BUILD_K8S_IMAGE=1 bash hack/local-k8s-up.sh
+AGENTTEAMS_LLM_API_KEY=<key> AGENTTEAMS_BUILD_K8S_IMAGE=1 bash hack/local-k8s-up.sh
 ```
 
 Incremental rebuild of a single image and reload into kind:
 
 ```bash
 make build-manager-copaw
-kind load docker-image hiclaw/hiclaw-manager-copaw:latest --name hiclaw
+kind load docker-image agentteams/manager-copaw:latest --name agentteams
 
 make build-copaw-worker
-kind load docker-image hiclaw/copaw-worker:latest --name hiclaw
+kind load docker-image agentteams/copaw-worker:latest --name agentteams
 
 make build-hiclaw-controller
-kind load docker-image hiclaw/hiclaw-controller:latest --name hiclaw
-kubectl rollout restart deployment/hiclaw-controller -n hiclaw
+kind load docker-image hiclaw/hiclaw-controller:latest --name agentteams
+kubectl rollout restart deployment/hiclaw-controller -n agentteams
 ```
 
 Force Manager/Worker to pick up the new image (Controller reconciles on `status.phase=Pending`):
 
 ```bash
-kubectl delete po -n hiclaw hiclaw-manager
+kubectl delete po -n agentteams agentteams-manager
 
-kubectl patch manager default -n hiclaw --subresource=status --type merge \
+kubectl patch manager default -n agentteams --subresource=status --type merge \
   -p '{"status":{"phase":"Pending","message":"force rebuild"}}'
 
-kubectl patch worker <worker-name> -n hiclaw --subresource=status --type merge \
+kubectl patch worker <worker-name> -n agentteams --subresource=status --type merge \
   -p '{"status":{"phase":"Pending","message":"force rebuild"}}'
 ```
 
 Port-forwards (for browser access / debugging):
 
 ```bash
-kubectl port-forward -n hiclaw svc/higress-gateway    18080:80    &
-kubectl port-forward -n hiclaw svc/hiclaw-element-web 18081:8080  &
-kubectl port-forward -n hiclaw pod/hiclaw-manager     18799:18799 &
-kubectl port-forward -n hiclaw pod/hiclaw-worker-<name> 18112:8088 &
+kubectl port-forward -n agentteams svc/higress-gateway    18080:80    &
+kubectl port-forward -n agentteams svc/hiclaw-element-web 18081:8080  &
+kubectl port-forward -n agentteams pod/agentteams-manager     18799:18799 &
+kubectl port-forward -n agentteams pod/agentteams-worker-<name> 18112:8088 &
 ```
 
 Purge Matrix room history (when the Manager gets stuck replaying a poisoned message):
 
-- `<admin_token>`: read from `/root/.creds/admin_token` inside `hiclaw-manager`, or reuse the token issued during install.
+- `<admin_token>`: read from `/root/.creds/admin_token` inside `agentteams-manager`, or reuse the token issued during install.
 - `<room_id>`: copy from Element Web (Room → Settings → Advanced), or list via `kubectl exec ... -- curl .../_matrix/client/v3/joined_rooms`.
 
 ```bash
-kubectl exec -n hiclaw hiclaw-manager -- curl -s -X POST \
+kubectl exec -n agentteams agentteams-manager -- curl -s -X POST \
   "http://hiclaw-tuwunel.hiclaw.svc.cluster.local:6167/_synapse/admin/v1/purge_history/<room_id>" \
   -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
@@ -300,7 +300,7 @@ CoPaw runs across multiple containers (Manager + N×Worker + Tuwunel + Higress +
 
 Log files are split across containers. These tables tell you *where to look first* for each layer.
 
-**Manager container (`hiclaw-manager`)** — supervisord manages several processes, each with its own log:
+**Manager container (`agentteams-manager`)** — supervisord manages several processes, each with its own log:
 
 | Log file | What it contains | Look here when |
 |---|---|---|
@@ -316,19 +316,19 @@ Log files are split across containers. These tables tell you *where to look firs
 Dump commands:
 
 ```bash
-docker exec hiclaw-manager tail -n 200 /var/log/hiclaw/manager-agent.log
-docker exec hiclaw-manager tail -n 200 /var/log/hiclaw/hiclaw-controller.log
-docker logs hiclaw-manager --tail 200    # supervisord-level + any uncaught stdout
+docker exec agentteams-manager tail -n 200 /var/log/hiclaw/manager-agent.log
+docker exec agentteams-manager tail -n 200 /var/log/hiclaw/hiclaw-controller.log
+docker logs agentteams-manager --tail 200    # supervisord-level + any uncaught stdout
 ```
 
-**Worker container (`hiclaw-worker-<name>`)** — CoPaw Worker emits two log streams:
+**Worker container (`agentteams-worker-<name>`)** — CoPaw Worker emits two log streams:
 
 | Stream | Where |
 |---|---|
 | stdout (via `docker logs`) | INFO / WARNING / ERROR from `copaw.*` loggers |
 | File log | `/root/.hiclaw-worker/logs/<date>_<time>.log` (same content as stdout; created on startup) |
 
-Level is controlled by `COPAW_LOG_LEVEL=debug|info|warning|error` (default `info`). HiClaw Worker containers **do not** set it by default; bounce the container with `-e COPAW_LOG_LEVEL=debug` when you need `_download_mxc` / sync-loop detail.
+Level is controlled by `COPAW_LOG_LEVEL=debug|info|warning|error` (default `info`). AgentTeams Worker containers **do not** set it by default; bounce the container with `-e COPAW_LOG_LEVEL=debug` when you need `_download_mxc` / sync-loop detail.
 
 > ⚠️ Only `copaw.*` and the root logger reach stdout. Any third-party or vendored logger using a different namespace is **silently dropped at INFO level.** The in-tree Matrix channel (`copaw/src/matrix/channel.py`) uses `logging.getLogger("copaw.channels.matrix")` so channel decisions are visible in normal Worker logs.
 
@@ -414,15 +414,15 @@ CoPaw source itself lives outside this repo as a sibling checkout on branch `fea
 | CoPaw agent framework | upstream fork, imported by `copaw_worker` | Python ReAct loop, tool calling, session management |
 | Matrix channel | `copaw/src/matrix/` (vendored) | Agent ↔ Tuwunel communication; identical for Manager and Worker |
 | FileSync | `copaw/src/copaw_worker/sync.py` | MinIO ↔ local mirroring via `mc` CLI |
-| Bridge | `copaw/src/copaw_worker/bridge.py` | Convert HiClaw `openclaw.json` into CoPaw native configs |
+| Bridge | `copaw/src/copaw_worker/bridge.py` | Convert AgentTeams `openclaw.json` into CoPaw native configs |
 | mcporter | installed in Worker image | MCP Server tool invocation for the Agent |
 
 Runtime pairings:
 
 | Role | OpenClaw image | CoPaw image |
 |---|---|---|
-| Manager | `hiclaw/hiclaw-manager` | `hiclaw/hiclaw-manager-copaw` |
-| Worker | `hiclaw/hiclaw-worker` | `hiclaw/copaw-worker` |
+| Manager | `agentteams/manager` | `agentteams/manager-copaw` |
+| Worker | `agentteams/worker-agent` | `agentteams/copaw-worker` |
 
 ## Development Pitfalls
 
@@ -440,7 +440,7 @@ Runtime pairings:
 
 7. **Manager runtime overlays.** `manager/agent/copaw-manager-agent/AGENTS.md` and `HEARTBEAT.md` are overlaid on top of `manager/agent/` at container build time (via `upgrade-builtins.sh`) when runtime=copaw. Changes to the shared versions only take effect for OpenClaw until you mirror them into `copaw-manager-agent/`. `SOUL.md` and `TOOLS.md` are shared across both runtimes — **do not fork them**.
 
-8. **Team Leader runs inside the CoPaw container but loads OpenClaw-style builtins.** `LeaderSpec` has no `runtime` field; `hiclaw-controller` *forces* every Team Leader Worker CR onto `runtime=copaw`, so the Leader pod starts from `hiclaw/copaw-worker` and goes through the full `bridge` / `propagate` chain like any other CoPaw Worker. But `deployer.builtinAgentDir(role="team_leader", runtime=...)` ignores `runtime` and always returns `manager/agent/team-leader-agent/` (OpenClaw-shaped `AGENTS.md` / `SOUL.md.tmpl` / skills). So the Leader is "Python CoPaw process reading OpenClaw-style agent content." Consequences when editing:
+8. **Team Leader runs inside the CoPaw container but loads OpenClaw-style builtins.** `LeaderSpec` has no `runtime` field; `agentteams-controller` *forces* every Team Leader Worker CR onto `runtime=copaw`, so the Leader pod starts from `agentteams/copaw-worker` and goes through the full `bridge` / `propagate` chain like any other CoPaw Worker. But `deployer.builtinAgentDir(role="team_leader", runtime=...)` ignores `runtime` and always returns `manager/agent/team-leader-agent/` (OpenClaw-shaped `AGENTS.md` / `SOUL.md.tmpl` / skills). So the Leader is "Python CoPaw process reading OpenClaw-style agent content." Consequences when editing:
    - Keep `manager/agent/team-leader-agent/**` runtime-agnostic — no Node-only paths, no OpenClaw-only tool invocations, because CoPaw reads it.
    - Python-specific guidance and paths in `manager/agent/copaw-worker-agent/**` do **not** apply to Leaders. Leaders do not pick up that directory.
    - `manager/agent/copaw-manager-agent/**` is the Manager's CoPaw overlay, not the Leader's. Do not mix.

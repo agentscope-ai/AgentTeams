@@ -1,5 +1,5 @@
 # ============================================================
-# HiClaw QwenPaw Worker - Python-based Container
+# AgentTeams QwenPaw Worker - Python-based Container
 # ============================================================
 # Lightweight Python container for running QwenPaw-based Worker Agents.
 # Uses the same MinIO-backed config/sync model as CoPaw workers, but reads
@@ -89,7 +89,7 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g mcporter skills @nacos-group/cli@1.1.2 && \
     rm -rf /root/.npm
 
-# Overlay HiClaw Matrix channel behavior while keeping QwenPaw as the base runtime.
+# Overlay AgentTeams Matrix channel behavior while keeping QwenPaw as the base runtime.
 COPY qwenpaw/src/matrix/ /tmp/qwenpaw-matrix-overlay/
 RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
     cp -a /tmp/qwenpaw-matrix-overlay/channel.py "$SITE/qwenpaw/app/channels/matrix/channel.py" && \

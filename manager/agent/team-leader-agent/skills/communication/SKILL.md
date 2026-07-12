@@ -72,8 +72,8 @@ Resolve the recipient Matrix ID and target room from `hiclaw` CLI immediately be
 {
   "action": "send",
   "channel": "matrix",
-  "target": "room:!roomid:matrix-local.hiclaw.io:18080",
-  "message": "@alice:matrix-local.hiclaw.io:18080 New task [todo-api-20260429-130052-01]: Please read shared/tasks/todo-api-20260429-130052-01/spec.md and follow your Worker task participation skills. Publish shared/tasks/todo-api-20260429-130052-01/result.md when complete, then @mention me with the outcome."
+  "target": "room:!roomid:matrix-local.agentteams.io:18080",
+  "message": "@alice:matrix-local.agentteams.io:18080 New task [todo-api-20260429-130052-01]: Please read shared/tasks/todo-api-20260429-130052-01/spec.md and follow your Worker task participation skills. Publish shared/tasks/todo-api-20260429-130052-01/result.md when complete, then @mention me with the outcome."
 }
 ```
 

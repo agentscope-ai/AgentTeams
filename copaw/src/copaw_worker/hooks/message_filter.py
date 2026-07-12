@@ -1,4 +1,4 @@
-"""Outgoing Matrix message filtering for HiClaw CoPaw agents."""
+"""Outgoing Matrix message filtering for AgentTeams CoPaw agents."""
 
 from __future__ import annotations
 

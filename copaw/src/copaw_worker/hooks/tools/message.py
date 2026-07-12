@@ -1,4 +1,4 @@
-"""OpenClaw-compatible message tool for the HiClaw CoPaw runtime."""
+"""OpenClaw-compatible message tool for the AgentTeams CoPaw runtime."""
 
 from __future__ import annotations
 

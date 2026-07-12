@@ -1,4 +1,4 @@
-# hiclaw-manager-agent
+# agentteams-manager-agent
 
 All-in-one Manager Agent container. Includes:
 
@@ -11,7 +11,7 @@ All-in-one Manager Agent container. Includes:
 
 ## Runtime Selection
 
-Manager Agent supports two runtime modes via `HICLAW_MANAGER_RUNTIME`:
+Manager Agent supports two runtime modes via `AGENTTEAMS_MANAGER_RUNTIME`:
 - `openclaw` (default): Node.js gateway mode
 - `copaw`: Python workspace mode
 
@@ -72,22 +72,22 @@ manager/
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HICLAW_MANAGER_RUNTIME` | No | `openclaw` | Manager runtime: `openclaw` or `copaw` |
-| `HICLAW_ADMIN_USER` | Yes | - | Human admin Matrix username |
-| `HICLAW_ADMIN_PASSWORD` | Yes | - | Human admin password |
-| `HICLAW_MANAGER_PASSWORD` | Yes | - | Manager Agent Matrix password |
-| `HICLAW_REGISTRATION_TOKEN` | Yes | - | Tuwunel registration token |
-| `HICLAW_MATRIX_DOMAIN` | No | `matrix-local.hiclaw.io:8080` | Matrix server domain |
-| `HICLAW_MATRIX_CLIENT_DOMAIN` | No | `matrix-client-local.hiclaw.io` | Element Web domain |
-| `HICLAW_AI_GATEWAY_DOMAIN` | No | `aigw-local.hiclaw.io` | AI Gateway domain (for LLM and MCP) |
-| `HICLAW_FS_DOMAIN` | No | `fs-local.hiclaw.io` | HTTP file system domain |
-| `HICLAW_LLM_PROVIDER` | Yes | - | LLM provider name |
-| `HICLAW_DEFAULT_MODEL` | Yes | - | Default LLM model ID |
-| `HICLAW_LLM_API_KEY` | Yes | - | LLM API key |
-| `HICLAW_MINIO_USER` | Yes | - | MinIO root user |
-| `HICLAW_MINIO_PASSWORD` | Yes | - | MinIO root password |
-| `HICLAW_MANAGER_GATEWAY_KEY` | Yes | - | Manager's Higress consumer key |
-| `HICLAW_GITHUB_TOKEN` | No | - | GitHub PAT for MCP Server |
-| `HICLAW_NACOS_REGISTRY_URI` | No | `nacos://market.hiclaw.io:80/public` | Default Nacos registry URI for Worker template search/import, format `nacos://host[:port]/namespace` |
-| `HICLAW_NACOS_USERNAME` | No | - | Default Nacos username for template search and `nacos://` package imports when URI omits `user:pass@` |
-| `HICLAW_NACOS_PASSWORD` | No | - | Default Nacos password for template search and `nacos://` package imports when URI omits `user:pass@` |
+| `AGENTTEAMS_MANAGER_RUNTIME` | No | `openclaw` | Manager runtime: `openclaw` or `copaw` |
+| `AGENTTEAMS_ADMIN_USER` | Yes | - | Human admin Matrix username |
+| `AGENTTEAMS_ADMIN_PASSWORD` | Yes | - | Human admin password |
+| `AGENTTEAMS_MANAGER_PASSWORD` | Yes | - | Manager Agent Matrix password |
+| `AGENTTEAMS_REGISTRATION_TOKEN` | Yes | - | Tuwunel registration token |
+| `AGENTTEAMS_MATRIX_DOMAIN` | No | `matrix-local.agentteams.io:8080` | Matrix server domain |
+| `AGENTTEAMS_MATRIX_CLIENT_DOMAIN` | No | `matrix-client-local.agentteams.io` | Element Web domain |
+| `AGENTTEAMS_AI_GATEWAY_DOMAIN` | No | `aigw-local.agentteams.io` | AI Gateway domain (for LLM and MCP) |
+| `AGENTTEAMS_FS_DOMAIN` | No | `fs-local.agentteams.io` | HTTP file system domain |
+| `AGENTTEAMS_LLM_PROVIDER` | Yes | - | LLM provider name |
+| `AGENTTEAMS_DEFAULT_MODEL` | Yes | - | Default LLM model ID |
+| `AGENTTEAMS_LLM_API_KEY` | Yes | - | LLM API key |
+| `AGENTTEAMS_MINIO_USER` | Yes | - | MinIO root user |
+| `AGENTTEAMS_MINIO_PASSWORD` | Yes | - | MinIO root password |
+| `AGENTTEAMS_MANAGER_GATEWAY_KEY` | Yes | - | Manager's Higress consumer key |
+| `AGENTTEAMS_GITHUB_TOKEN` | No | - | GitHub PAT for MCP Server |
+| `AGENTTEAMS_NACOS_REGISTRY_URI` | No | `nacos://market.agentteams.io:80/public` | Default Nacos registry URI for Worker template search/import, format `nacos://host[:port]/namespace` |
+| `AGENTTEAMS_NACOS_USERNAME` | No | - | Default Nacos username for template search and `nacos://` package imports when URI omits `user:pass@` |
+| `AGENTTEAMS_NACOS_PASSWORD` | No | - | Default Nacos password for template search and `nacos://` package imports when URI omits `user:pass@` |

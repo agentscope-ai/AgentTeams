@@ -132,11 +132,11 @@ class Worker:
         # 5. Bridge openclaw.json -> CoPaw config.json + providers.json
         #    Infer gateway port from FS endpoint so bridge's _port_remap uses
         #    the correct host port instead of the hardcoded default.
-        if not os.environ.get("HICLAW_PORT_GATEWAY"):
+        if not os.environ.get("AGENTTEAMS_PORT_GATEWAY"):
             from urllib.parse import urlparse
             _parsed = urlparse(self.config.minio_endpoint)
             if _parsed.port:
-                os.environ["HICLAW_PORT_GATEWAY"] = str(_parsed.port)
+                os.environ["AGENTTEAMS_PORT_GATEWAY"] = str(_parsed.port)
 
         console.print("[yellow]Bridging configuration to CoPaw...[/yellow]")
         try:

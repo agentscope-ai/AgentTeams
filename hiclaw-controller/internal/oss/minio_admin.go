@@ -110,22 +110,24 @@ func (c *MinIOAdminClient) DeleteUser(ctx context.Context, username string) erro
 }
 
 type s3Policy struct {
-	Version   string            `json:"Version"`
+	Version   string              `json:"Version"`
 	Statement []s3PolicyStatement `json:"Statement"`
 }
 
 type s3PolicyStatement struct {
-	Effect    string                `json:"Effect"`
-	Action    []string              `json:"Action"`
-	Resource  []string              `json:"Resource"`
+	Effect    string                 `json:"Effect"`
+	Action    []string               `json:"Action"`
+	Resource  []string               `json:"Resource"`
 	Condition map[string]interface{} `json:"Condition,omitempty"`
 }
 
 func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string, isManager bool) s3Policy {
 	listPrefixes := []string{
 		fmt.Sprintf("agents/%s", workerName),
+		fmt.Sprintf("agents/%s/", workerName),
 		fmt.Sprintf("agents/%s/*", workerName),
 		"shared",
+		"shared/",
 		"shared/*",
 	}
 	rwResources := []string{
@@ -136,6 +138,7 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 	if isManager {
 		listPrefixes = append(listPrefixes,
 			"manager",
+			"manager/",
 			"manager/*",
 		)
 		rwResources = append(rwResources,
@@ -146,6 +149,7 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 	if teamName != "" {
 		listPrefixes = append(listPrefixes,
 			fmt.Sprintf("teams/%s", teamName),
+			fmt.Sprintf("teams/%s/", teamName),
 			fmt.Sprintf("teams/%s/*", teamName),
 		)
 		rwResources = append(rwResources,

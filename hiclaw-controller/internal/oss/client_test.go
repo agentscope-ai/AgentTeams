@@ -45,14 +45,34 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	condition := listStmt.Condition["StringLike"].(map[string]interface{})
 	prefixes := condition["s3:prefix"].([]string)
 	hasTeam := false
+	hasWorkerDir := false
+	hasSharedDir := false
+	hasTeamDir := false
 	for _, p := range prefixes {
 		if p == "teams/team-dev" || p == "teams/team-dev/*" {
 			hasTeam = true
-			break
+		}
+		if p == "agents/worker-1/" {
+			hasWorkerDir = true
+		}
+		if p == "shared/" {
+			hasSharedDir = true
+		}
+		if p == "teams/team-dev/" {
+			hasTeamDir = true
 		}
 	}
 	if !hasTeam {
 		t.Errorf("expected team prefix in list conditions: %v", prefixes)
+	}
+	if !hasWorkerDir {
+		t.Errorf("expected worker directory prefix in list conditions: %v", prefixes)
+	}
+	if !hasSharedDir {
+		t.Errorf("expected shared directory prefix in list conditions: %v", prefixes)
+	}
+	if !hasTeamDir {
+		t.Errorf("expected team directory prefix in list conditions: %v", prefixes)
 	}
 
 	// Verify team resource in RW statement
@@ -99,14 +119,20 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 	condition := listStmt.Condition["StringLike"].(map[string]interface{})
 	prefixes := condition["s3:prefix"].([]string)
 	hasManager := false
+	hasManagerDir := false
 	for _, p := range prefixes {
 		if p == "manager" || p == "manager/*" {
 			hasManager = true
-			break
+		}
+		if p == "manager/" {
+			hasManagerDir = true
 		}
 	}
 	if !hasManager {
 		t.Errorf("expected manager prefix in list conditions: %v", prefixes)
+	}
+	if !hasManagerDir {
+		t.Errorf("expected manager directory prefix in list conditions: %v", prefixes)
 	}
 
 	// Verify manager resource in RW statement

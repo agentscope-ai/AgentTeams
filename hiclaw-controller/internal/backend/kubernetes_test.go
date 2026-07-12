@@ -1322,8 +1322,8 @@ func TestK8sCreate_RemoteSkipsOwnerReference(t *testing.T) {
 	for _, env := range pod.Spec.Containers[0].Env {
 		envs[env.Name] = env.Value
 	}
-	if envs["AGENTTEAMS_CLUSTER_ID"] != "c-1" {
-		t.Fatalf("remote pod AGENTTEAMS_CLUSTER_ID=%q, want c-1", envs["AGENTTEAMS_CLUSTER_ID"])
+	if _, ok := envs["AGENTTEAMS_CLUSTER_ID"]; ok {
+		t.Fatalf("remote pod AGENTTEAMS_CLUSTER_ID must not be set, got %q", envs["AGENTTEAMS_CLUSTER_ID"])
 	}
 	if _, ok := envs["AGENTTEAMS_AUTH_MODE"]; ok {
 		t.Fatalf("remote pod AGENTTEAMS_AUTH_MODE must not be set, got %q", envs["AGENTTEAMS_AUTH_MODE"])

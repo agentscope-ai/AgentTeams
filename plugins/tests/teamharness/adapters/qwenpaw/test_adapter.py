@@ -120,7 +120,7 @@ def test_mcp_client_env_includes_sts_refresh_inputs(monkeypatch, tmp_path: Path)
     assert env["TEAMHARNESS_SHARED_DIR"] == str(shared_dir)
     assert env["AGENTTEAMS_CONTROLLER_URL"] == "http://controller.example.test"
     assert env["AGENTTEAMS_AUTH_TOKEN_FILE"] == "/var/run/secrets/agentteams/token"
-    assert env["AGENTTEAMS_CLUSTER_ID"] == "cluster-a"
+    assert "AGENTTEAMS_CLUSTER_ID" not in env
     assert env["AGENTTEAMS_FS_ENDPOINT"] == "https://oss.example.test"
     assert env["QWENPAW_WORKING_DIR"] == str(tmp_path / ".qwenpaw")
     assert "AGENTTEAMS_FS_ACCESS_KEY" not in env

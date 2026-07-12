@@ -324,12 +324,6 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	// SA token is mounted via projected volume; tell the worker where to read it.
 	req.Env["AGENTTEAMS_AUTH_TOKEN_FILE"] = "/var/run/secrets/agentteams/token"
 
-	// Inject cluster ID so the worker CLI sends X-AgentTeams-Cluster-ID for
-	// remote TokenReview routing.
-	if req.DeployMode == v1beta1.DeployModeRemote && req.TargetClusterID != "" {
-		req.Env["AGENTTEAMS_CLUSTER_ID"] = req.TargetClusterID
-	}
-
 	image := req.Image
 	if image == "" {
 		switch {

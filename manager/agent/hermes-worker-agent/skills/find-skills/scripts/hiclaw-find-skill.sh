@@ -83,10 +83,6 @@ resolve_controller_bearer() {
     fi
 }
 
-resolve_auth_cluster_id() {
-    printf '%s' "${AGENTTEAMS_CLUSTER_ID:-${HICLAW_CLUSTER_ID:-}}"
-}
-
 ensure_nacos_sts_credentials() {
     [ -n "${HICLAW_NACOS_STS_ACCESS_KEY:-}" ] && return 0
 
@@ -97,17 +93,9 @@ ensure_nacos_sts_credentials() {
         exit 1
     fi
 
-    auth_cluster_id="$(resolve_auth_cluster_id)"
-    if [ -n "${auth_cluster_id:-}" ]; then
-        resp="$(curl -s -w "\n%{http_code}" -X POST "${controller_url%/}/api/v1/credentials/sts" \
-            -H "Authorization: Bearer ${bearer}" \
-            -H "X-AgentTeams-Cluster-ID: ${auth_cluster_id}" \
-            --connect-timeout 10 --max-time 30 2>&1)"
-    else
-        resp="$(curl -s -w "\n%{http_code}" -X POST "${controller_url%/}/api/v1/credentials/sts" \
-            -H "Authorization: Bearer ${bearer}" \
-            --connect-timeout 10 --max-time 30 2>&1)"
-    fi
+    resp="$(curl -s -w "\n%{http_code}" -X POST "${controller_url%/}/api/v1/credentials/sts" \
+        -H "Authorization: Bearer ${bearer}" \
+        --connect-timeout 10 --max-time 30 2>&1)"
     http_code="$(printf '%s\n' "${resp}" | tail -1)"
     body="$(printf '%s\n' "${resp}" | sed '$d')"
     if [ "${http_code}" != "200" ]; then

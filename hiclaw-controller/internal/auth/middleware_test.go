@@ -95,7 +95,6 @@ func TestAuthenticate_RemoteEnrichmentFailureDenies(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
 	req.Header.Set("Authorization", "Bearer worker-token")
-	req.Header.Set("X-AgentTeams-Cluster-ID", "remote-cluster")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 

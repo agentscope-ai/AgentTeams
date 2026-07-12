@@ -140,9 +140,7 @@ func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bo
 		return nil, false
 	}
 
-	clusterID := r.Header.Get("X-AgentTeams-Cluster-ID")
-
-	identity, err := m.authenticator.Authenticate(r.Context(), token, clusterID)
+	identity, err := m.authenticator.Authenticate(r.Context(), token, "")
 	if err != nil {
 		log.Printf("[AUTH] authentication failed: %v", err)
 		return nil, false
@@ -151,7 +149,7 @@ func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bo
 	if m.enricher != nil {
 		if err := m.enricher.EnrichIdentity(r.Context(), identity); err != nil {
 			log.Printf("[AUTH] identity enrichment failed for %s: %v", identity.Username, err)
-			if clusterID != "" || identity.ClusterID != "" {
+			if identity.ClusterID != "" {
 				return nil, false
 			}
 		}

@@ -17,6 +17,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 WORKER_SCRIPT="${PROJECT_ROOT}/manager/agent/worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
 COPAW_SCRIPT="${PROJECT_ROOT}/manager/agent/copaw-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
 HERMES_SCRIPT="${PROJECT_ROOT}/manager/agent/hermes-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
+TEAMHARNESS_SCRIPT="${PROJECT_ROOT}/plugins/teamharness/skills/agent/find-skills/scripts/hiclaw-find-skill.sh"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; echo "       expected: $2"; echo "       got:      $3"; FAIL=$((FAIL + 1)); }
@@ -237,7 +238,7 @@ run_case_with_env() {
 
 echo ""
 echo "=== TC1: react performance should still return React skills ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TEAMHARNESS_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-react.log"
@@ -257,7 +258,7 @@ done
 
 echo ""
 echo "=== TC2: pr review should rank code-review skills ahead of postgres matches ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TEAMHARNESS_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-pr-review.log"
@@ -273,7 +274,7 @@ done
 
 echo ""
 echo "=== TC3: nacos backend should derive host/port from SKILLS_API_URL scheme ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TEAMHARNESS_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-nacos-conn.log"
@@ -288,7 +289,7 @@ done
 
 echo ""
 echo "=== TC4: nacos backend should derive namespace from SKILLS_API_URL path ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TEAMHARNESS_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-nacos-namespace.log"
@@ -301,7 +302,7 @@ done
 
 echo ""
 echo "=== TC5: https skills api should use skills CLI backend ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TEAMHARNESS_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         log_file="${TMPDIR_ROOT}/${case_name}-skills-sh.log"
@@ -315,8 +316,8 @@ for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
 done
 
 echo ""
-echo "=== TC6: sts-hiclaw nacos backend should request controller STS with cluster header ==="
-for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
+echo "=== TC6: sts-hiclaw nacos backend should request controller STS without cluster header ==="
+for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TEAMHARNESS_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
         mockbin="${TMPDIR_ROOT}/${case_name}-sts-mockbin"
@@ -335,13 +336,15 @@ for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}"; do
             NACOS_AUTH_TYPE="sts-hiclaw" \
             HICLAW_CONTROLLER_URL="http://controller:8090" \
             HICLAW_AUTH_TOKEN="controller-token" \
-            HICLAW_CLUSTER_ID="remote-cluster-a" \
+            AGENTTEAMS_CLUSTER_ID="remote-cluster-a" \
+            HICLAW_CLUSTER_ID="legacy-cluster-a" \
             HICLAW_FIND_SKILL_MAX_RESULTS=3 \
             HICLAW_FIND_SKILL_NACOS_PAGE_SIZE=50 \
             /bin/sh "${script_path}" find review | strip_ansi)"
 
         assert_contains "${case_name}: should still return sts-backed results" "requesting-code-review" "${output}"
-        assert_contains "${case_name}: controller STS call should include cluster header" "X-HiClaw-Cluster-ID: remote-cluster-a" "$(cat "${curl_log}")"
+        assert_not_contains "${case_name}: controller STS call should not include AgentTeams cluster header" "X-AgentTeams-Cluster-ID" "$(cat "${curl_log}")"
+        assert_not_contains "${case_name}: controller STS call should not include legacy cluster header" "X-HiClaw-Cluster-ID" "$(cat "${curl_log}")"
         assert_contains "${case_name}: controller STS call should include bearer" "Authorization: Bearer controller-token" "$(cat "${curl_log}")"
         assert_contains "${case_name}: nacos cli should use sts auth type" "--auth-type sts-hiclaw" "$(cat "${log_file}")"
         assert_contains "${case_name}: nacos cli should pass sts access key" "--access-key test-ak" "$(cat "${log_file}")"

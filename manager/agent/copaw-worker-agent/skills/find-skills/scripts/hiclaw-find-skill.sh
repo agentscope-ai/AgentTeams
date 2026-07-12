@@ -93,16 +93,9 @@ ensure_nacos_sts_credentials() {
         exit 1
     fi
 
-    if [ -n "${HICLAW_CLUSTER_ID:-}" ]; then
-        resp="$(curl -s -w "\n%{http_code}" -X POST "${controller_url%/}/api/v1/credentials/sts" \
-            -H "Authorization: Bearer ${bearer}" \
-            -H "X-HiClaw-Cluster-ID: ${HICLAW_CLUSTER_ID}" \
-            --connect-timeout 10 --max-time 30 2>&1)"
-    else
-        resp="$(curl -s -w "\n%{http_code}" -X POST "${controller_url%/}/api/v1/credentials/sts" \
-            -H "Authorization: Bearer ${bearer}" \
-            --connect-timeout 10 --max-time 30 2>&1)"
-    fi
+    resp="$(curl -s -w "\n%{http_code}" -X POST "${controller_url%/}/api/v1/credentials/sts" \
+        -H "Authorization: Bearer ${bearer}" \
+        --connect-timeout 10 --max-time 30 2>&1)"
     http_code="$(printf '%s\n' "${resp}" | tail -1)"
     body="$(printf '%s\n' "${resp}" | sed '$d')"
     if [ "${http_code}" != "200" ]; then

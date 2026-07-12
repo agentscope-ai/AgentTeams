@@ -12,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
@@ -208,19 +207,6 @@ func assertSandboxSetResources(t *testing.T, container map[string]interface{}, c
 	}
 }
 
-type fakeSandboxRemoteCache struct {
-	core K8sCoreClient
-	dyn  dynamic.Interface
-}
-
-func (f *fakeSandboxRemoteCache) ResolveClient(_ context.Context, _ string) (K8sCoreClient, error) {
-	return f.core, nil
-}
-
-func (f *fakeSandboxRemoteCache) ResolveDynamicClient(_ context.Context, _ string) (dynamic.Interface, error) {
-	return f.dyn, nil
-}
-
 // ── Tests: Create ───────────────────────────────────────────────────────
 
 func TestSandboxBackend_Create_Basic(t *testing.T) {
@@ -414,37 +400,6 @@ func TestSandboxBackend_Create_PreservesManagerIdentityLabel(t *testing.T) {
 	}
 	if plugin.createClaimSpec.Labels[sandboxAgentNameLabel] != BuiltinSandboxInstanceName {
 		t.Fatalf("claim labels=%v, want sandbox agent label", plugin.createClaimSpec.Labels)
-	}
-}
-
-func TestSandboxBackend_Create_RemoteEnsuresTargetNamespace(t *testing.T) {
-	plugin := &fakeSandboxPlugin{}
-	remoteCore := newRemoteFakeClient()
-	remoteCache := &fakeSandboxRemoteCache{
-		core: remoteCore,
-		dyn:  dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
-	}
-	backend := NewSandboxBackend(
-		plugin,
-		sandbox.ProviderConfig{Namespace: "fallback", DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())},
-		SandboxConfig{Namespace: "fallback", WorkerImage: "test/worker:latest"},
-		"agentteams-worker-",
-		nil,
-		newFakeK8sCoreClient(),
-		remoteCache,
-	).WithRemoteTarget(v1beta1.DeployModeRemote, "c-1", "agents")
-
-	if _, err := backend.Create(context.Background(), CreateRequest{Name: "alice"}); err != nil {
-		t.Fatalf("Create() error: %v", err)
-	}
-	if remoteCore.nsClient.createCalls != 1 {
-		t.Fatalf("namespace createCalls=%d, want 1", remoteCore.nsClient.createCalls)
-	}
-	if _, ok := remoteCore.nsClient.store["agents"]; !ok {
-		t.Fatalf("target namespace was not created: %v", remoteCore.nsClient.store)
-	}
-	if plugin.createClaimSpec.Namespace != "agents" {
-		t.Fatalf("claim namespace=%q, want agents", plugin.createClaimSpec.Namespace)
 	}
 }
 

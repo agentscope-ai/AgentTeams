@@ -2,14 +2,12 @@ package auth
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
-	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	authenticationv1 "k8s.io/api/authentication/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	fakeclient "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 )
 
 func TestParseSAUsername_Admin(t *testing.T) {
@@ -169,147 +167,29 @@ func TestResourcePrefix_EmptyFallsBackToDefault(t *testing.T) {
 	}
 }
 
-// --- Mock types for remote TokenReview tests ---
-
-// fakeTokenReviewClient implements backend.K8sTokenReviewClient.
-type fakeTokenReviewClient struct {
-	authenticated bool
-	username      string
-	err           error
-}
-
-func (f *fakeTokenReviewClient) Create(_ context.Context, review *authenticationv1.TokenReview, _ metav1.CreateOptions) (*authenticationv1.TokenReview, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	review.Status = authenticationv1.TokenReviewStatus{
-		Authenticated: f.authenticated,
-		User: authenticationv1.UserInfo{
-			Username: f.username,
-		},
-	}
-	if !f.authenticated {
-		review.Status.Error = "token is invalid"
-	}
-	return review, nil
-}
-
-// fakeRemoteCoreClient implements backend.K8sCoreClient for authenticator test.
-type fakeRemoteCoreClient struct {
-	tokenReviewClient *fakeTokenReviewClient
-}
-
-func (f *fakeRemoteCoreClient) Pods(_ string) backend.K8sPodClient                       { return nil }
-func (f *fakeRemoteCoreClient) ConfigMaps(_ string) backend.K8sConfigMapClient           { return nil }
-func (f *fakeRemoteCoreClient) Services(_ string) backend.K8sServiceClient               { return nil }
-func (f *fakeRemoteCoreClient) Namespaces() backend.K8sNamespaceClient                   { return nil }
-func (f *fakeRemoteCoreClient) ServiceAccounts(_ string) backend.K8sServiceAccountClient { return nil }
-func (f *fakeRemoteCoreClient) TokenReviews() backend.K8sTokenReviewClient {
-	return f.tokenReviewClient
-}
-
-// fakeRemoteProvider implements backend.RemoteClientProvider for authenticator test.
-type fakeRemoteProvider struct {
-	clients map[string]backend.K8sCoreClient
-}
-
-func (f *fakeRemoteProvider) ResolveClient(_ context.Context, clusterID string) (backend.K8sCoreClient, error) {
-	if cli, ok := f.clients[clusterID]; ok {
-		return cli, nil
-	}
-	return nil, fmt.Errorf("cluster %q not found", clusterID)
-}
-
-// --- Remote Authenticate tests ---
-
-func TestAuthenticate_RemoteCluster(t *testing.T) {
-	remoteTR := &fakeTokenReviewClient{
-		authenticated: true,
-		username:      "system:serviceaccount:hiclaw:hiclaw-worker-alice",
-	}
-	remoteCli := &fakeRemoteCoreClient{tokenReviewClient: remoteTR}
-	remoteProvider := &fakeRemoteProvider{
-		clients: map[string]backend.K8sCoreClient{"remote-cluster": remoteCli},
-	}
-
+func TestAuthenticate_UsesLocalTokenReview(t *testing.T) {
 	localClient := fakeclient.NewSimpleClientset()
-	auth := NewTokenReviewAuthenticator(localClient, DefaultAudience, DefaultResourcePrefix, remoteProvider)
+	localClient.Fake.PrependReactor("create", "tokenreviews", func(action ktesting.Action) (bool, runtime.Object, error) {
+		review := action.(ktesting.CreateAction).GetObject().(*authenticationv1.TokenReview)
+		review.Status = authenticationv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authenticationv1.UserInfo{
+				Username: "system:serviceaccount:hiclaw:hiclaw-worker-alice",
+			},
+		}
+		return true, review, nil
+	})
 
-	// Remote cluster path: clusterID != "" uses remote client.
-	id, err := auth.Authenticate(context.Background(), "remote-token", "remote-cluster")
+	auth := NewTokenReviewAuthenticator(localClient, DefaultAudience, DefaultResourcePrefix)
+
+	id, err := auth.Authenticate(context.Background(), "local-token")
 	if err != nil {
-		t.Fatalf("Authenticate remote: %v", err)
+		t.Fatalf("Authenticate local: %v", err)
 	}
 	if id.Role != RoleWorker || id.Username != "alice" {
 		t.Fatalf("expected worker alice, got %+v", id)
 	}
-	if id.ClusterID != "remote-cluster" || id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "hiclaw-worker-alice" {
-		t.Fatalf("unexpected remote identity metadata: %+v", id)
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "hiclaw-worker-alice" {
+		t.Fatalf("unexpected identity metadata: %+v", id)
 	}
 }
-
-func TestAuthenticate_RemoteClusterRejectsAdminAndManager(t *testing.T) {
-	for _, username := range []string{
-		"system:serviceaccount:hiclaw:hiclaw-admin",
-		"system:serviceaccount:hiclaw:hiclaw-manager",
-	} {
-		remoteTR := &fakeTokenReviewClient{
-			authenticated: true,
-			username:      username,
-		}
-		remoteCli := &fakeRemoteCoreClient{tokenReviewClient: remoteTR}
-		remoteProvider := &fakeRemoteProvider{
-			clients: map[string]backend.K8sCoreClient{"remote-cluster": remoteCli},
-		}
-		auth := NewTokenReviewAuthenticator(fakeclient.NewSimpleClientset(), DefaultAudience, DefaultResourcePrefix, remoteProvider)
-
-		if _, err := auth.Authenticate(context.Background(), "remote-token-"+username, "remote-cluster"); err == nil {
-			t.Fatalf("expected remote token for %s to be rejected", username)
-		}
-	}
-}
-
-func TestAuthenticate_RemoteCacheNil(t *testing.T) {
-	// When remoteCache is nil, remote authentication should fail.
-	localClient := fakeclient.NewSimpleClientset()
-	auth := NewTokenReviewAuthenticator(localClient, DefaultAudience, DefaultResourcePrefix, nil)
-
-	_, err := auth.Authenticate(context.Background(), "some-token", "remote-cluster")
-	if err == nil {
-		t.Fatal("expected error when remoteCache is nil and clusterID is non-empty")
-	}
-}
-
-func TestAuthenticate_EmptyClusterID_UsesLocalPath(t *testing.T) {
-	// When clusterID is empty, should use the local k8s client (regression test).
-	// We use the fake k8s client which won't have a proper TokenReview handler,
-	// so this tests that the code path goes through local client, not remote.
-	localClient := fakeclient.NewSimpleClientset()
-
-	remoteTR := &fakeTokenReviewClient{
-		authenticated: true,
-		username:      "system:serviceaccount:hiclaw:hiclaw-worker-remote-only",
-	}
-	remoteCli := &fakeRemoteCoreClient{tokenReviewClient: remoteTR}
-	remoteProvider := &fakeRemoteProvider{
-		clients: map[string]backend.K8sCoreClient{"remote-cluster": remoteCli},
-	}
-
-	auth := NewTokenReviewAuthenticator(localClient, DefaultAudience, DefaultResourcePrefix, remoteProvider)
-
-	// Empty clusterID goes local. fake k8s client returns Authenticated=false
-	// (TokenReview is not supported by fakeclient), so we expect an auth error.
-	_, err := auth.Authenticate(context.Background(), "local-token", "")
-	if err == nil {
-		t.Fatal("expected error from local fake client (no TokenReview support)")
-	}
-	// Confirm it's NOT a "remote cluster authentication not supported" error.
-	if err.Error() == "remote cluster authentication not supported" {
-		t.Fatal("should not take remote path when clusterID is empty")
-	}
-}
-
-// Ensure unused imports are consumed.
-var (
-	_ = corev1.ServiceAccount{}
-)

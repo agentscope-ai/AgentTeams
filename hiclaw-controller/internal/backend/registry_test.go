@@ -103,7 +103,7 @@ type mockServiceBackend struct {
 	mockWorkerBackend
 }
 
-func (m *mockServiceBackend) ServiceClient(_ context.Context, _, _, _ string) (K8sServiceClient, string, error) {
+func (m *mockServiceBackend) ServiceClient(_ context.Context) (K8sServiceClient, string, error) {
 	return nil, "", nil
 }
 

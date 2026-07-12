@@ -202,35 +202,6 @@ func TestCREnricher_TeamLeaderKeepsCRNameAndStoresRuntimeWorkerName(t *testing.T
 	}
 }
 
-func TestCREnricher_RemoteWorkerIdentityUnsupported(t *testing.T) {
-	scheme := newAuthTestScheme(t)
-	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "alice",
-			Namespace: "default",
-		},
-		Spec: v1beta1.WorkerSpec{},
-	}
-
-	k8sClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(worker).
-		Build()
-	enricher := NewCREnricher(k8sClient, "default")
-
-	identity := &CallerIdentity{
-		Role:                    RoleWorker,
-		Username:                "alice",
-		WorkerName:              "alice",
-		ClusterID:               "remote-cluster",
-		ServiceAccountNamespace: "remote-ns",
-		ServiceAccountName:      "hiclaw-worker-alice",
-	}
-	if err := enricher.EnrichIdentity(context.Background(), identity); err == nil {
-		t.Fatal("expected remote identity to be rejected")
-	}
-}
-
 func newAuthTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()

@@ -19,7 +19,8 @@ minio_setup
 TEST_TEAM="test26-qwenpaw-team-$$"
 TEST_LEADER="${TEST_TEAM}-leader"
 TEST_WORKER="${TEST_TEAM}-worker"
-TEST_MODEL="${HICLAW_E2E_MODEL:-${HICLAW_DEFAULT_MODEL:-qwen3.7-max}}"
+TEST_MODEL="${AGENTTEAMS_E2E_MODEL:-${AGENTTEAMS_DEFAULT_MODEL:-${HICLAW_E2E_MODEL:-${HICLAW_DEFAULT_MODEL:-qwen3.7-max}}}}"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
 PROJECT_ID="test26-project-$$"
 TASK_ID="test26-task-$$"
 TEST_RUN_ID="$$_$(date +%s)"
@@ -31,13 +32,13 @@ WORKER_PACKAGE_V1_MARKER="TEST26_WORKER_PACKAGE_V1_${TEST_RUN_ID}"
 LEADER_PACKAGE_V2_MARKER="TEST26_LEADER_PACKAGE_V2_${TEST_RUN_ID}"
 WORKER_PACKAGE_V2_MARKER="TEST26_WORKER_PACKAGE_V2_${TEST_RUN_ID}"
 DONE_LINE="TEST26_TEAMHARNESS_DONE ${TASK_ID} ${MARKER}"
-LEADER_CONTAINER="hiclaw-worker-${TEST_LEADER}"
-WORKER_CONTAINER="hiclaw-worker-${TEST_WORKER}"
-K8S_NAMESPACE="${HICLAW_E2E_NAMESPACE:-default}"
-LEADER_PACKAGE_V1_OBJECT="hiclaw-config/packages/${TEST_LEADER}-v1.tar.gz"
-WORKER_PACKAGE_V1_OBJECT="hiclaw-config/packages/${TEST_WORKER}-v1.tar.gz"
-LEADER_PACKAGE_V2_OBJECT="hiclaw-config/packages/${TEST_LEADER}-v2.tar.gz"
-WORKER_PACKAGE_V2_OBJECT="hiclaw-config/packages/${TEST_WORKER}-v2.tar.gz"
+LEADER_CONTAINER="$(worker_container_name "${TEST_LEADER}")"
+WORKER_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
+K8S_NAMESPACE="${AGENTTEAMS_E2E_NAMESPACE:-${HICLAW_E2E_NAMESPACE:-default}}"
+LEADER_PACKAGE_V1_OBJECT="agentteams-config/packages/${TEST_LEADER}-v1.tar.gz"
+WORKER_PACKAGE_V1_OBJECT="agentteams-config/packages/${TEST_WORKER}-v1.tar.gz"
+LEADER_PACKAGE_V2_OBJECT="agentteams-config/packages/${TEST_LEADER}-v2.tar.gz"
+WORKER_PACKAGE_V2_OBJECT="agentteams-config/packages/${TEST_WORKER}-v2.tar.gz"
 LEADER_PACKAGE_V1_URI="oss://${LEADER_PACKAGE_V1_OBJECT}"
 WORKER_PACKAGE_V1_URI="oss://${WORKER_PACKAGE_V1_OBJECT}"
 LEADER_PACKAGE_V2_URI="oss://${LEADER_PACKAGE_V2_OBJECT}"
@@ -75,27 +76,28 @@ _cleanup() {
     _k8s_delete "workers" "${TEST_LEADER}" >/dev/null 2>&1 || true
     _k8s_delete "workers" "${TEST_WORKER}" >/dev/null 2>&1 || true
     sleep 5
-    docker rm -f "${LEADER_CONTAINER}" "${WORKER_CONTAINER}" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "hiclaw-test/hiclaw-storage/teams/${TEST_TEAM}/" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "hiclaw-test/hiclaw-storage/agents/${TEST_LEADER}/" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "hiclaw-test/hiclaw-storage/agents/${TEST_WORKER}/" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "hiclaw-test/hiclaw-storage/agents/${TEST_LEADER}/runtime/" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "hiclaw-test/hiclaw-storage/agents/${TEST_WORKER}/runtime/" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "hiclaw-test/hiclaw-storage/shared/projects/${PROJECT_ID}/" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "hiclaw-test/hiclaw-storage/shared/tasks/${TASK_ID}/" 2>/dev/null || true
+    remove_worker_container "${TEST_LEADER}"
+    remove_worker_container "${TEST_WORKER}"
+    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/teams/${TEST_TEAM}/" 2>/dev/null || true
+    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_LEADER}/" 2>/dev/null || true
+    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
+    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_LEADER}/runtime/" 2>/dev/null || true
+    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/runtime/" 2>/dev/null || true
+    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" 2>/dev/null || true
+    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/shared/tasks/${TASK_ID}/" 2>/dev/null || true
     for object in \
         "${LEADER_PACKAGE_V1_OBJECT}" \
         "${WORKER_PACKAGE_V1_OBJECT}" \
         "${LEADER_PACKAGE_V2_OBJECT}" \
         "${WORKER_PACKAGE_V2_OBJECT}"; do
-        exec_in_manager mc rm --force "hiclaw-test/hiclaw-storage/${object}" 2>/dev/null || true
+        exec_in_manager mc rm --force "${STORAGE_PREFIX}/${object}" 2>/dev/null || true
     done
 }
 trap _cleanup EXIT
 
 _controller_env() {
     local key="$1"
-    docker exec "${TEST_CONTROLLER_CONTAINER:-hiclaw-controller}" printenv "${key}" 2>/dev/null || true
+    docker exec "${TEST_CONTROLLER_CONTAINER:-agentteams-controller}" printenv "${key}" 2>/dev/null || true
 }
 
 _container_env() {
@@ -111,7 +113,7 @@ _env_value() {
 
 _controller_labels_json() {
     if [ -n "${CONTROLLER_NAME}" ]; then
-        jq -nc --arg controller "${CONTROLLER_NAME}" '{"hiclaw.io/controller":$controller}'
+        jq -nc --arg controller "${CONTROLLER_NAME}" '{"agentteams.io/controller":$controller}'
     else
         printf '{}\n'
     fi
@@ -213,7 +215,7 @@ _agent_api() {
     local method="$2"
     local path="$3"
     docker exec "${container}" sh -c '
-        port="${HICLAW_CONSOLE_PORT:-8088}"
+        port="${AGENTTEAMS_CONSOLE_PORT:-${HICLAW_CONSOLE_PORT:-8088}}"
         curl -sf -X "'"${method}"'" "http://127.0.0.1:${port}'"${path}"'"
     ' 2>/dev/null
 }
@@ -409,7 +411,7 @@ _assert_runtime_yaml_has_no_secret_values() {
     local container="$2"
     local env_text
     env_text="$(_container_env "${container}")"
-    for key in HICLAW_WORKER_MATRIX_TOKEN HICLAW_WORKER_GATEWAY_KEY HICLAW_FS_SECRET_KEY; do
+    for key in AGENTTEAMS_WORKER_MATRIX_TOKEN AGENTTEAMS_WORKER_GATEWAY_KEY AGENTTEAMS_FS_SECRET_KEY; do
         local value
         value="$(_env_value "${env_text}" "${key}")"
         if [ -n "${value}" ] && [ "${#value}" -ge 4 ] && printf '%s' "${yaml}" | grep -Fq "${value}"; then
@@ -440,8 +442,8 @@ _dump_debug_snapshot() {
         matrix_read_messages "${ADMIN_TOKEN}" "${TEAM_ROOM}" 30 2>/dev/null | \
             jq -r '.chunk[] | select(.type == "m.room.message") | "\(.sender): \(.content.body // "")"' || true
     fi
-    exec_in_manager mc ls --recursive "hiclaw-test/hiclaw-storage/shared/projects/${PROJECT_ID}/" 2>/dev/null || true
-    exec_in_manager mc ls --recursive "hiclaw-test/hiclaw-storage/shared/tasks/${TASK_ID}/" 2>/dev/null || true
+    exec_in_manager mc ls --recursive "${STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" 2>/dev/null || true
+    exec_in_manager mc ls --recursive "${STORAGE_PREFIX}/shared/tasks/${TASK_ID}/" 2>/dev/null || true
 }
 
 _create_test_agentspec_package() {
@@ -455,7 +457,7 @@ _create_test_agentspec_package() {
     fi
 
     exec_in_manager bash -c "set -eu
-        work='/tmp/hiclaw-test26-package-${TEST_TEAM}-${role}-${version}'
+        work='/tmp/agentteams-test26-package-${TEST_TEAM}-${role}-${version}'
         archive='/tmp/${TEST_TEAM}-${role}-${version}-agentspec.tar.gz'
         rm -rf \"\${work}\" \"\${archive}\"
         mkdir -p \"\${work}/config/config\" \"\${work}/config/bootstrap\" \"\${work}/config/materials\" \"\${work}/skills/test26-package-skill\"
@@ -517,7 +519,7 @@ EOF
 set -eu
 
 marker='${bootstrap_marker}'
-role=\"\${HICLAW_WORKER_ROLE:-\${HICLAW_AGENT_ROLE:-unknown}}\"
+role=\"\${AGENTTEAMS_WORKER_ROLE:-\${AGENTTEAMS_AGENT_ROLE:-unknown}}\"
 
 mkdir -p bootstrap
 printf '%s\n' \"\${marker}\" > bootstrap/test26-hello-result.txt
@@ -540,7 +542,7 @@ description: Marks that the AgentSpec package skill was installed into the QwenP
 This skill came from the QwenPaw AgentSpec package.
 EOF
         tar -czf \"\${archive}\" -C \"\${work}\" .
-        mc cp \"\${archive}\" 'hiclaw-test/hiclaw-storage/${object}' >/dev/null
+        mc cp \"\${archive}\" '${STORAGE_PREFIX}/${object}' >/dev/null
     "
 }
 
@@ -614,9 +616,9 @@ _patch_worker_package_ref() {
 # ============================================================
 log_section "QwenPaw Image Plugin Package Baseline"
 
-QWENPAW_WORKER_IMAGE="$(_controller_env HICLAW_QWENPAW_WORKER_IMAGE)"
-QWENPAW_WORKER_IMAGE="${HICLAW_E2E_QWENPAW_WORKER_IMAGE:-${QWENPAW_WORKER_IMAGE:-hiclaw/qwenpaw-worker:latest}}"
-CONTROLLER_NAME="$(_controller_env HICLAW_CONTROLLER_NAME)"
+QWENPAW_WORKER_IMAGE="$(_controller_env AGENTTEAMS_QWENPAW_WORKER_IMAGE)"
+QWENPAW_WORKER_IMAGE="${AGENTTEAMS_E2E_QWENPAW_WORKER_IMAGE:-${HICLAW_E2E_QWENPAW_WORKER_IMAGE:-${QWENPAW_WORKER_IMAGE:-agentteams/qwenpaw-worker:latest}}}"
+CONTROLLER_NAME="$(_controller_env AGENTTEAMS_CONTROLLER_NAME)"
 
 if docker image inspect "${QWENPAW_WORKER_IMAGE}" >/dev/null 2>&1; then
     log_pass "QwenPaw worker image exists: ${QWENPAW_WORKER_IMAGE}"
@@ -835,8 +837,8 @@ _assert_runtime_yaml_has_no_secret_values "${LEADER_RUNTIME_YAML}${WORKER_RUNTIM
 
 LEADER_ENV="$(_container_env "${LEADER_CONTAINER}")"
 WORKER_ENV="$(_container_env "${WORKER_CONTAINER}")"
-assert_eq "standalone" "$(_env_value "${LEADER_ENV}" HICLAW_WORKER_ROLE)" "Decoupled leader Worker daemon role remains standalone"
-assert_eq "standalone" "$(_env_value "${WORKER_ENV}" HICLAW_WORKER_ROLE)" "Decoupled worker daemon role remains standalone"
+assert_eq "standalone" "$(_env_value "${LEADER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Decoupled leader Worker daemon role remains standalone"
+assert_eq "standalone" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Decoupled worker daemon role remains standalone"
 
 # ============================================================
 # Section 4: QwenPaw plugin-mode install and TeamHarness assets

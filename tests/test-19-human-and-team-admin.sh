@@ -24,7 +24,7 @@ TEST_TEAM="test-hadm-$$"
 TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_HUMAN="test-human-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
 
 _cleanup() {
     if [ "${TESTS_FAILED}" -gt 0 ]; then
@@ -38,13 +38,13 @@ _cleanup() {
     exec_in_agent hiclaw delete human "${TEST_HUMAN}" 2>/dev/null || true
     sleep 5
     # Fallback: force-remove containers
-    docker rm -f "hiclaw-worker-${TEST_LEADER}" 2>/dev/null || true
-    docker rm -f "hiclaw-worker-${TEST_W1}" 2>/dev/null || true
+    remove_worker_container "${TEST_LEADER}"
+    remove_worker_container "${TEST_W1}"
     for w in "${TEST_LEADER}" "${TEST_W1}"; do
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
         exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
     done
-    exec_in_agent rm -f "/tmp/hiclaw-test-${TEST_HUMAN}.yaml" "/tmp/hiclaw-test-${TEST_TEAM}.yaml" 2>/dev/null || true
+    exec_in_agent rm -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>/dev/null || true
     # Fallback: clean registries
     exec_in_agent bash -c "
         jq 'del(.workers[\"${TEST_LEADER}\"], .workers[\"${TEST_W1}\"])' \
@@ -68,7 +68,7 @@ HUMAN_MATRIX_ID="@${TEST_HUMAN}:${TEST_MATRIX_DOMAIN}"
 # ============================================================
 log_section "Create Human via Declarative YAML (before Team)"
 
-exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_HUMAN}.yaml << 'YAMLEOF'
+exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_HUMAN}.yaml << 'YAMLEOF'
 apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
@@ -82,7 +82,7 @@ spec:
 YAMLEOF
 " 2>/dev/null
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/hiclaw-test-${TEST_HUMAN}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" 2>&1)
 
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Human YAML applied via hiclaw CLI"
@@ -160,7 +160,7 @@ SOUL
     " 2>/dev/null
 done
 
-exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_TEAM}.yaml << YAMLEOF
+exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_TEAM}.yaml << YAMLEOF
 apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
@@ -178,7 +178,7 @@ spec:
 YAMLEOF
 " 2>/dev/null
 
-APPLY_TEAM_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/hiclaw-test-${TEST_TEAM}.yaml" 2>&1)
+APPLY_TEAM_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
 if echo "${APPLY_TEAM_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Team YAML applied via hiclaw CLI"
 else
@@ -311,15 +311,15 @@ log_section "Verify Containers"
 
 WORKERS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
 for w in "${TEST_LEADER}" "${TEST_W1}"; do
-    RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "hiclaw-worker-${w}" || echo "")
+    RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${w}")" || echo "")
     if [ -n "${RUNNING}" ]; then
-        log_pass "Container running: hiclaw-worker-${w}"
+        log_pass "Container running: $(worker_container_name "${w}")"
     else
         DEPLOY=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${w}" '.workers[$w].deployment // empty' 2>/dev/null)
         if [ "${DEPLOY}" = "remote" ]; then
             log_pass "Agent ${w} registered in remote mode"
         else
-            log_fail "Container not running: hiclaw-worker-${w}"
+            log_fail "Container not running: $(worker_container_name "${w}")"
         fi
     fi
 done

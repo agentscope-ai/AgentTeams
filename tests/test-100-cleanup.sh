@@ -14,7 +14,7 @@ source "${SCRIPT_DIR}/lib/test-helpers.sh"
 
 test_setup "100-cleanup"
 
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
 
 # ============================================================
 # Section 1: Discover test workers and teams
@@ -55,7 +55,7 @@ done
 log_section "Pre-Delete State"
 
 # Snapshot which containers exist (running or stopped)
-PRE_CONTAINERS=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep "^hiclaw-worker-test-" || echo "")
+PRE_CONTAINERS=$(list_test_worker_containers)
 PRE_CONTAINER_COUNT=$(echo "${PRE_CONTAINERS}" | grep -c . 2>/dev/null || echo "0")
 log_info "${PRE_CONTAINER_COUNT} test worker container(s) present before cleanup"
 
@@ -108,7 +108,7 @@ if [ -n "${TEST_WORKERS}" ]; then
             log_pass "hiclaw delete worker ${worker} reported success"
         else
             log_info "hiclaw delete worker ${worker} skipped (YAML likely already removed by prior test)"
-            docker rm -f "hiclaw-worker-${worker}" 2>/dev/null || true
+            remove_worker_container "${worker}"
             exec_in_agent bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
                 --action delete --worker "${worker}" 2>/dev/null || true
         fi
@@ -126,7 +126,7 @@ RECONCILE_ELAPSED=0
 
 # Wait until all test worker containers are gone (not just stopped — removed)
 while [ "${RECONCILE_ELAPSED}" -lt "${RECONCILE_TIMEOUT}" ]; do
-    REMAINING=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep "^hiclaw-worker-test-" || echo "")
+    REMAINING=$(list_test_worker_containers)
     if [ -z "${REMAINING}" ]; then
         break
     fi
@@ -140,7 +140,7 @@ echo ""
 if [ "${RECONCILE_ELAPSED}" -lt "${RECONCILE_TIMEOUT}" ]; then
     log_pass "All test containers removed (took ~${RECONCILE_ELAPSED}s)"
 else
-    STILL_PRESENT=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep "^hiclaw-worker-test-" || echo "")
+    STILL_PRESENT=$(list_test_worker_containers)
     if [ -n "${STILL_PRESENT}" ]; then
         log_fail "Some test containers still present after ${RECONCILE_TIMEOUT}s:"
         echo "${STILL_PRESENT}" | while read -r c; do
@@ -154,7 +154,7 @@ fi
 # ============================================================
 log_section "Verify Container Removal"
 
-POST_CONTAINERS=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep "^hiclaw-worker-test-" || echo "")
+POST_CONTAINERS=$(list_test_worker_containers)
 if [ -z "${POST_CONTAINERS}" ]; then
     log_pass "No test worker containers remain (all removed, not just stopped)"
 else
@@ -188,7 +188,7 @@ fi
 log_section "Verify MinIO Cleanup"
 
 for w in ${TEST_WORKERS}; do
-    YAML_EXISTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/hiclaw-config/workers/${w}.yaml" 2>/dev/null || echo "")
+    YAML_EXISTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agentteams-config/workers/${w}.yaml" 2>/dev/null || echo "")
     if [ -z "${YAML_EXISTS}" ]; then
         log_pass "YAML removed from MinIO: ${w}"
     else
@@ -197,7 +197,7 @@ for w in ${TEST_WORKERS}; do
 done
 
 for t in ${TEST_TEAMS}; do
-    YAML_EXISTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/hiclaw-config/teams/${t}.yaml" 2>/dev/null || echo "")
+    YAML_EXISTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agentteams-config/teams/${t}.yaml" 2>/dev/null || echo "")
     if [ -z "${YAML_EXISTS}" ]; then
         log_pass "YAML removed from MinIO: ${t}"
     else

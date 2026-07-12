@@ -17,26 +17,26 @@ source "${SCRIPT_DIR}/lib/matrix-client.sh"
 test_setup "15-import-worker-zip"
 
 TEST_WORKER="test-import-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
 
 # ---- Cleanup handler (only clean up on success) ----
 _cleanup() {
     # Check if all tests passed before cleaning up
     if [ "${TESTS_FAILED}" -gt 0 ]; then
         log_info "Tests failed — preserving worker ${TEST_WORKER} for debugging"
-        log_info "  Container: hiclaw-worker-${TEST_WORKER}"
-        log_info "  MinIO YAML: ${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml"
+        log_info "  Container: $(worker_container_name "${TEST_WORKER}")"
+        log_info "  MinIO YAML: ${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml"
         log_info "  Agent dir: ${STORAGE_PREFIX}/agents/${TEST_WORKER}/"
         return
     fi
     log_info "All tests passed — cleaning up test worker: ${TEST_WORKER}"
     exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER}*.zip" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}*.zip" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
-    exec_in_agent rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
+    exec_in_agent rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager rm -rf "/root/hiclaw-fs/agents/${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
+    exec_in_manager rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
 }
 trap _cleanup EXIT
@@ -72,7 +72,7 @@ fi
 # ============================================================
 log_section "Create Test ZIP Package"
 
-WORK_DIR="/tmp/hiclaw-test-${TEST_WORKER}"
+WORK_DIR="/tmp/agentteams-test-${TEST_WORKER}"
 
 # Track the matrix runtime so the worker we import here matches the runtime
 # being exercised by this CI shard. Without this the apply-zip path always
@@ -172,7 +172,7 @@ assert_not_empty "${WORKER_JSON}" "Worker CR exists (hiclaw get workers)"
 WORKER_NAME_CHK=$(echo "${WORKER_JSON}" | jq -r '.name // empty' 2>/dev/null)
 assert_eq "${TEST_WORKER}" "${WORKER_NAME_CHK}" "Worker CR has correct name"
 
-PKG_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER}.zip' >/dev/null 2>&1 && echo yes || echo no")
+PKG_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}.zip' >/dev/null 2>&1 && echo yes || echo no")
 if [ "${PKG_EXISTS}" = "yes" ]; then
     log_pass "ZIP package uploaded to MinIO"
 else
@@ -257,7 +257,7 @@ fi
 # bumped ResourceVersion (generation 0 -> 1). Poll for up to 60s to absorb that race.
 CONTAINER_RUNNING=""
 for i in $(seq 1 60); do
-    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "hiclaw-worker-${TEST_WORKER}$" || echo "")
+    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${TEST_WORKER}")$" || echo "")
     [ -n "${CONTAINER_RUNNING}" ] && break
     sleep 1
 done

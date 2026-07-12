@@ -43,6 +43,7 @@ export TEST_ELEMENT_PORT="${TEST_ELEMENT_PORT:-18088}"
 # Internal container URLs — always fixed; all callers use exec_in_manager
 export TEST_MATRIX_DIRECT_URL="http://127.0.0.1:6167"
 export TEST_MINIO_URL="http://127.0.0.1:9000"
+export TEST_STORAGE_PREFIX="${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}"
 
 # Derived external URLs — rebuilt by detect_manager_config() after port detection
 export TEST_CONSOLE_URL="http://${TEST_MANAGER_HOST}:${TEST_CONSOLE_PORT}"
@@ -436,17 +437,36 @@ get_worker_room_id() {
     exec_in_agent hiclaw get workers "${worker_name}" -o json 2>/dev/null | jq -r '.roomID // empty'
 }
 
+worker_container_name() {
+    local worker="$1"
+    local container
+    container="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^agentteams-worker-${worker}$" | head -1 || true)"
+    container="${container:-$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^hiclaw-worker-${worker}$" | head -1 || true)}"
+    printf '%s\n' "${container:-agentteams-worker-${worker}}"
+}
+
+remove_worker_container() {
+    local worker="$1"
+    docker rm -f "agentteams-worker-${worker}" "hiclaw-worker-${worker}" >/dev/null 2>&1 || true
+}
+
+list_test_worker_containers() {
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^(agentteams|hiclaw)-worker-test-" || true
+}
+
 # Wait for a Worker container to be running (started by Manager on demand)
 # Usage: wait_for_worker_container <worker_name> [timeout_seconds]
 # Returns 0 when container is running, 1 on timeout
 wait_for_worker_container() {
     local worker="$1"
     local timeout="${2:-120}"
-    local container="hiclaw-worker-${worker}"
+    local container
     local elapsed=0
 
+    container="$(worker_container_name "${worker}")"
     log_info "Waiting for Worker container '${container}' to be running (timeout: ${timeout}s)..."
     while [ "${elapsed}" -lt "${timeout}" ]; do
+        container="$(worker_container_name "${worker}")"
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
             log_info "Worker container '${container}' is running (took ${elapsed}s)"
             return 0
@@ -469,8 +489,9 @@ check_copaw_worker_probes() {
     local worker="$1"
     local expected="${2:-any}"
     local request_timeout="${3:-75}"
-    local container="hiclaw-worker-${worker}"
+    local container
     local worker_port
+    container="$(worker_container_name "${worker}")"
 
     case "${expected}" in
         any|ready|not_ready) ;;
@@ -772,19 +793,19 @@ copy_to_agent() {
 
 start_worker_container() {
     local worker_name="$1"
-    local container_name="hiclaw-test-worker-${worker_name}"
+    local container_name="agentteams-test-worker-${worker_name}"
 
     docker run -d \
         --name "${container_name}" \
         --network host \
-        -e "HICLAW_WORKER_NAME=${worker_name}" \
-        -e "HICLAW_MATRIX_URL=http://${TEST_MANAGER_HOST}:${TEST_GATEWAY_PORT}" \
-        -e "HICLAW_AI_GATEWAY_URL=http://${TEST_MANAGER_HOST}:${TEST_GATEWAY_PORT}" \
-        -e "HICLAW_FS_ENDPOINT=http://${TEST_MANAGER_HOST}:9000" \
-        -e "HICLAW_FS_BUCKET=hiclaw-storage" \
-        -e "HICLAW_FS_ACCESS_KEY=${TEST_MINIO_USER}" \
-        -e "HICLAW_FS_SECRET_KEY=${TEST_MINIO_PASSWORD}" \
-        "hiclaw/worker-agent:${HICLAW_VERSION:-latest}" 2>/dev/null
+        -e "AGENTTEAMS_WORKER_NAME=${worker_name}" \
+        -e "AGENTTEAMS_MATRIX_URL=http://${TEST_MANAGER_HOST}:${TEST_GATEWAY_PORT}" \
+        -e "AGENTTEAMS_AI_GATEWAY_URL=http://${TEST_MANAGER_HOST}:${TEST_GATEWAY_PORT}" \
+        -e "AGENTTEAMS_FS_ENDPOINT=http://${TEST_MANAGER_HOST}:9000" \
+        -e "AGENTTEAMS_FS_BUCKET=agentteams-storage" \
+        -e "AGENTTEAMS_FS_ACCESS_KEY=${TEST_MINIO_USER}" \
+        -e "AGENTTEAMS_FS_SECRET_KEY=${TEST_MINIO_PASSWORD}" \
+        "agentteams/worker-agent:${AGENTTEAMS_VERSION:-latest}" 2>/dev/null
 
     echo "${container_name}"
 }
@@ -819,7 +840,8 @@ dump_diagnostics() {
     {
         case "${kind}" in
             worker)
-                local container="hiclaw-worker-${name}"
+                local container
+                container="$(worker_container_name "${name}")"
                 printf "\n--- docker logs %s (last 100 lines) ---\n" "${container}"
                 docker logs --tail 100 "${container}" 2>&1 || true
                 printf "\n--- container state: %s ---\n" "${container}"

@@ -569,7 +569,8 @@ wait_for_worker_session_stable() {
     local worker="$1"
     local stable_seconds="${2:-5}"
     local max_wait="${3:-120}"
-    local container="hiclaw-worker-${worker}"
+    local container
+    container="$(worker_container_name "${worker}")"
     local session_dir
     session_dir=$(_detect_session_dir "$container" "/root/hiclaw-fs/agents/${worker}")
     local runtime
@@ -726,7 +727,8 @@ snapshot_baseline() {
 
     # Snapshot all Worker session files
     for worker in "${workers[@]}"; do
-        local worker_container="hiclaw-worker-${worker}"
+        local worker_container
+        worker_container="$(worker_container_name "${worker}")"
         local worker_session_dir
         worker_session_dir=$(_detect_session_dir "$worker_container" "/root/hiclaw-fs/agents/${worker}")
         local worker_runtime
@@ -908,7 +910,8 @@ collect_delta_metrics() {
 
     # Collect Worker deltas
     for worker in "${workers[@]}"; do
-        local worker_container="hiclaw-worker-${worker}"
+        local worker_container
+        worker_container="$(worker_container_name "${worker}")"
         local worker_session_dir
         worker_session_dir=$(_detect_session_dir "$worker_container" "/root/hiclaw-fs/agents/${worker}")
         local worker_runtime
@@ -1033,7 +1036,8 @@ EOF
     
     # Collect Worker metrics
     for worker in "${workers[@]}"; do
-        local worker_container="hiclaw-worker-${worker}"
+        local worker_container
+        worker_container="$(worker_container_name "${worker}")"
         local worker_session_dir
         worker_session_dir=$(_detect_session_dir "$worker_container" "/root/hiclaw-fs/agents/${worker}")
         local worker_runtime

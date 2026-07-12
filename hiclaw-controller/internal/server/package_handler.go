@@ -24,7 +24,7 @@ func NewPackageHandler(ossClient oss.StorageClient) *PackageHandler {
 //   - file: ZIP binary
 //   - name: resource name (used in the storage key)
 //
-// Returns {"packageUri": "oss://hiclaw-config/packages/{name}-{hash}.zip"}
+// Returns {"packageUri": "oss://agentteams-config/packages/{name}-{hash}.zip"}
 func (h *PackageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if h.oss == nil {
 		httputil.WriteError(w, http.StatusServiceUnavailable, "OSS client not configured")
@@ -57,7 +57,7 @@ func (h *PackageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256(data))[:16]
-	ossKey := fmt.Sprintf("hiclaw-config/packages/%s-%s.zip", name, hash)
+	ossKey := fmt.Sprintf("agentteams-config/packages/%s-%s.zip", name, hash)
 
 	if err := h.oss.PutObject(r.Context(), ossKey, data); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "upload to OSS: "+err.Error())

@@ -16,17 +16,17 @@ source "${SCRIPT_DIR}/lib/minio-client.sh"
 test_setup "17-worker-config-verify"
 
 TEST_WORKER="test-cfg-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
     exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER}.zip" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}.zip" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
     exec_in_agent rm -rf "/root/hiclaw-fs/agents/${TEST_WORKER}" 2>/dev/null || true
-    exec_in_agent rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
+    exec_in_agent rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
+    exec_in_manager rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
 }
 trap _cleanup EXIT
@@ -36,7 +36,7 @@ trap _cleanup EXIT
 # ============================================================
 log_section "Create and Import Worker"
 
-WORK_DIR="/tmp/hiclaw-test-${TEST_WORKER}"
+WORK_DIR="/tmp/agentteams-test-${TEST_WORKER}"
 
 # Build ZIP in controller container (has zip command), then copy to agent container
 exec_in_manager bash -c "

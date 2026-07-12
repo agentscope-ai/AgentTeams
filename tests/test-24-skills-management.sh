@@ -20,16 +20,16 @@ source "${SCRIPT_DIR}/lib/minio-client.sh"
 test_setup "24-skills-management"
 
 TEST_WORKER="test-skl-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams-test/agentteams-storage}}"
 REGISTRY_KEY="${STORAGE_PREFIX}/agents/manager/workers-registry.json"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
     exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -103,7 +103,7 @@ if wait_for_worker_container "${TEST_WORKER}" 180; then
 else
     log_fail "Worker container not running before skills update"
 fi
-PRE_UPDATE_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null | head -c 12 || echo "")
+PRE_UPDATE_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "$(worker_container_name "${TEST_WORKER}")" 2>/dev/null | head -c 12 || echo "")
 
 # ============================================================
 # Section 3: Update skills via `hiclaw update worker --skills`
@@ -161,7 +161,7 @@ fi
 # Wait here so a slow initial start is not mistaken for an update regression.
 if wait_for_worker_container "${TEST_WORKER}" 120; then
     log_pass "Worker container still running after skills update"
-    POST_UPDATE_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null | head -c 12 || echo "")
+    POST_UPDATE_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "$(worker_container_name "${TEST_WORKER}")" 2>/dev/null | head -c 12 || echo "")
     if [ -n "${PRE_UPDATE_CONTAINER_ID}" ] && [ "${POST_UPDATE_CONTAINER_ID}" = "${PRE_UPDATE_CONTAINER_ID}" ]; then
         log_pass "Worker container survived skills update without recreation"
     else

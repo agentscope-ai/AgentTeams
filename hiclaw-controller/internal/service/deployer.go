@@ -280,6 +280,10 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	agentPrefix := fmt.Sprintf("agents/%s", req.Name)
 	localAgentDir := fmt.Sprintf("%s/%s", d.agentFSDir, req.Name)
 
+	if err := d.ensureDirectoryObject(ctx, agentPrefix+"/"); err != nil {
+		return fmt.Errorf("create worker storage prefix: %w", err)
+	}
+
 	// --- Seed local agent files to storage FIRST (base layer) ---
 	// Local/package files provide defaults only. They must not overwrite
 	// runtime-mutated OSS state during reconcile; authoritative files are
@@ -1030,12 +1034,25 @@ func (d *Deployer) CleanupOSSData(ctx context.Context, workerName string) error 
 // EnsureTeamStorage creates the shared storage directories for a team.
 func (d *Deployer) EnsureTeamStorage(ctx context.Context, teamName string) error {
 	prefix := fmt.Sprintf("teams/%s/", teamName)
+	if err := d.ensureDirectoryObject(ctx, prefix); err != nil {
+		return fmt.Errorf("create %s: %w", prefix, err)
+	}
+	if err := d.ensureDirectoryObject(ctx, prefix+"shared/"); err != nil {
+		return fmt.Errorf("create %sshared/: %w", prefix, err)
+	}
 	for _, subdir := range []string{"shared/tasks/", "shared/projects/", "shared/knowledge/"} {
 		if err := d.oss.PutObject(ctx, prefix+subdir+".keep", []byte("")); err != nil {
 			return fmt.Errorf("create %s%s: %w", prefix, subdir, err)
 		}
 	}
 	return nil
+}
+
+func (d *Deployer) ensureDirectoryObject(ctx context.Context, key string) error {
+	if key == "" || !strings.HasSuffix(key, "/") {
+		return fmt.Errorf("directory object key must end with /: %q", key)
+	}
+	return d.oss.PutObject(ctx, key, []byte(""))
 }
 
 // --- Manager Config Deployment ---

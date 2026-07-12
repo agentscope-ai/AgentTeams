@@ -75,6 +75,40 @@ func TestDeployWorkerConfigSeedsLocalFilesWithoutOverwritingRuntimeState(t *test
 	if !strings.Contains(string(got), "gateway-key") {
 		t.Fatalf("openclaw.json was not overwritten by controller config: %s", got)
 	}
+
+	got, err = store.GetObject(ctx, "agents/alice/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("directory marker should be empty, got %q", got)
+	}
+}
+
+func TestEnsureTeamStorageCreatesMirrorableDirectoryObjects(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	if err := deployer.EnsureTeamStorage(ctx, "alpha"); err != nil {
+		t.Fatalf("EnsureTeamStorage failed: %v", err)
+	}
+
+	for _, key := range []string{
+		"teams/alpha/",
+		"teams/alpha/shared/",
+		"teams/alpha/shared/tasks/.keep",
+		"teams/alpha/shared/projects/.keep",
+		"teams/alpha/shared/knowledge/.keep",
+	} {
+		got, err := store.GetObject(ctx, key)
+		if err != nil {
+			t.Fatalf("missing %s: %v", key, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("%s should be empty, got %q", key, got)
+		}
+	}
 }
 
 func TestDeployWorkerConfigInlineSoulOverridesPackageSeed(t *testing.T) {

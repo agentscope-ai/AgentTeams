@@ -109,6 +109,10 @@ def test_team_leader_dm_internal_preambles_are_suppressed(tmp_path, monkeypatch)
         "Now let me check the team organization and available workers.",
         "I have 2 workers available: a dev worker and a QA worker. "
         "Now let me design the DAG plan and create the project.",
+        "Good. I have the team roster:\n"
+        "- **Dev worker**: `dag-team-1-dev` (`@dag-team-1-dev:hs.local`)\n"
+        "- **QA worker**: `dag-team-1-qa` (`@dag-team-1-qa:hs.local`)\n\n"
+        "Let me plan the project using DAG strategy.",
     ):
         asyncio.run(ch.send("!leader-dm:hs.local", text))
 

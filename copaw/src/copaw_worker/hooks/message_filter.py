@@ -27,6 +27,15 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
     r"team coordination plan"
     r")\b",
 )
+_TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"task\s+assigned|"
+    r"assigned\s+task|"
+    r"you\s+are\s+assigned|"
+    r"please\s+(?:design|implement|write|test|build|handle|review|create|investigate|work)|"
+    r"start\s+(?:by\s+)?(?:designing|implementing|writing|testing|building|handling|reviewing|creating|investigating)"
+    r")\b",
+)
 
 _LOW_INFORMATION_ACKS = {
     "ack",
@@ -160,14 +169,18 @@ def get_team_leader_dm_internal_preamble_reason(
     if not leader_dm_room_id or room_id != leader_dm_room_id:
         return None
 
-    # Text with an explicit Matrix ID may be a cross-room Worker assignment
-    # that the Matrix channel reroutes to the Team Room.
-    if extract_matrix_mentions(text):
-        return None
-
     stripped = (text or "").strip()
     if not stripped or "?" in stripped:
         return None
+
+    # Keep concrete worker assignments so the Matrix channel can reroute them
+    # to the Team Room. Roster/topology planning that happens to mention
+    # workers is still an internal preamble and must stay out of Leader DM.
+    if extract_matrix_mentions(text) and (
+        _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(stripped)
+    ):
+        return None
+
     if not _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped):
         return None
     return "message suppressed: Team Leader internal preamble in Leader DM"

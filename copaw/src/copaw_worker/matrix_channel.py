@@ -58,6 +58,15 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
     r"team coordination plan"
     r")\b",
 )
+_TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"task\s+assigned|"
+    r"assigned\s+task|"
+    r"you\s+are\s+assigned|"
+    r"please\s+(?:design|implement|write|test|build|handle|review|create|investigate|work)|"
+    r"start\s+(?:by\s+)?(?:designing|implementing|writing|testing|building|handling|reviewing|creating|investigating)"
+    r")\b",
+)
 
 # Token refresh tunables
 MAX_TOKEN_REFRESH_RETRIES = 3
@@ -293,9 +302,12 @@ def _is_team_leader_internal_preamble_text(text: str) -> bool:
     if not stripped or "?" in stripped:
         return False
 
-    # Text with an explicit Matrix ID may be a cross-room Worker assignment
-    # that _team_assignment_room will reroute to the Team Room.
-    if _extract_matrix_user_ids(text):
+    # Keep concrete worker assignments so the channel can reroute them to the
+    # Team Room. Roster/topology planning that happens to mention workers is
+    # still an internal preamble and must stay out of Leader DM.
+    if _extract_matrix_user_ids(text) and (
+        _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(stripped)
+    ):
         return False
 
     return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))

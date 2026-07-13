@@ -181,6 +181,23 @@ def test_validate_matrix_message_policy_keeps_team_leader_worker_assignment(
     assert filtered.startswith("@dag-team-1-dev:hs.local Task assigned")
 
 
+def test_validate_matrix_message_policy_blocks_roster_preamble_with_mxids(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    with pytest.raises(ValueError, match="Team Leader internal preamble"):
+        validate_matrix_message_policy(
+            "Good. I have the team roster:\n"
+            "- **Dev worker**: `dag-team-1-dev` (`@dag-team-1-dev:hs.local`)\n"
+            "- **QA worker**: `dag-team-1-qa` (`@dag-team-1-qa:hs.local`)\n\n"
+            "Let me plan the project using DAG strategy.",
+            ["@dag-team-1-dev:hs.local", "@dag-team-1-qa:hs.local"],
+            room_id="!leader-dm:hs.local",
+        )
+
+
 @pytest.mark.asyncio
 async def test_message_tool_dry_run_suppresses_team_leader_dm_preamble(
     tmp_path,

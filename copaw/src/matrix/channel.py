@@ -123,6 +123,15 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
 _TEAM_LEADER_MATRIX_USER_ID_RE = re.compile(
     r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
 )
+_TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"task\s+assigned|"
+    r"assigned\s+task|"
+    r"you\s+are\s+assigned|"
+    r"please\s+(?:design|implement|write|test|build|handle|review|create|investigate|work)|"
+    r"start\s+(?:by\s+)?(?:designing|implementing|writing|testing|building|handling|reviewing|creating|investigating)"
+    r")\b",
+)
 _THREAD_META_ROOT_KEY = "thread_root_event_id"
 _MATRIX_THREAD_META_KEY = "matrix_thread_root_event_id"
 _MATRIX_OWN_THREAD_ROOT_KEY = "matrix_own_thread_root_event_id"
@@ -286,8 +295,12 @@ def _is_team_leader_internal_preamble_text(text: str) -> bool:
     if not stripped or "?" in stripped:
         return False
 
-    # Explicit Matrix IDs may be cross-room Worker assignments; keep those.
-    if _TEAM_LEADER_MATRIX_USER_ID_RE.search(text or ""):
+    # Keep concrete worker assignments so the channel can reroute them to the
+    # Team Room. Roster/topology planning that happens to mention workers is
+    # still an internal preamble and must stay out of Leader DM.
+    if _TEAM_LEADER_MATRIX_USER_ID_RE.search(text or "") and (
+        _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(stripped)
+    ):
         return False
 
     return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))

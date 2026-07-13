@@ -429,6 +429,7 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
         if [ "${DEPLOY}" = "remote" ]; then
             log_pass "Agent ${w} registered in remote mode"
         else
+            dump_diagnostics worker "${w}"
             log_fail "Container not running: $(worker_container_name "${w}")"
         fi
     fi

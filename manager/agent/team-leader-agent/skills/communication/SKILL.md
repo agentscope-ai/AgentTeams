@@ -19,7 +19,9 @@ Hard rule: do not call the `message` tool to send a message back into the curren
 
 ## Task Assignment Room
 
-Send normal task assignment notifications to the team room, not to a Worker's private room. Include the assigned Worker's full Matrix ID as a visible @mention so the Worker is addressed while the assignment context stays visible to the team.
+Send normal task assignment notifications to the team room, not to a Worker's private room, Leader DM, or Leader Room. Include the assigned Worker's full Matrix ID as a visible @mention so the Worker is addressed while the assignment context stays visible to the team.
+
+If the current room is Leader DM or Leader Room, the Team Room assignment is cross-room. Use the `message` tool with `target` set to `room:<Team Room ID>` from your team context. Do not directly reply in the current room for Worker task assignment just because the Worker Matrix ID appears in the message text.
 
 Use a Worker private room only for exceptional follow-up that should not be team-visible, such as sensitive clarification or direct recovery/debugging.
 

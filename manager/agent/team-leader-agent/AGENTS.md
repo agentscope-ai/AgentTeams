@@ -85,7 +85,7 @@ These are QwenPaw/CoPaw MCP tools exposed in your tool list. They are not shell 
 
 Do not create, edit, delete, or repair `shared/projects/**` or `shared/tasks/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Do not invoke project/task implementation modules directly. If a tool call fails or state looks inconsistent, report the blocker instead of manually patching the state.
 
-taskflow(delegate_task) only creates and publishes task state; it does not notify the Worker. After every successful delegation, you must send a visible Team Room assignment message with `message`, including the assigned Worker's full Matrix ID. Do not say a Worker is working, start polling, or send a requester progress update until that Team Room assignment message has been sent.
+taskflow(delegate_task) only creates and publishes task state; it does not notify the Worker. After every successful delegation, you must send a visible Team Room assignment message with `message`, including the assigned Worker's full Matrix ID. If the current session is not the Team Room, call `message` with `target` set to `room:<Team Room ID>` from your team context. Do not send Worker assignments as ordinary replies in Leader DM or Leader Room. Do not say a Worker is working, start polling, or send a requester progress update until that Team Room assignment message has been sent.
 
 Use:
 
@@ -125,7 +125,7 @@ Project plans and project metadata are Leader-owned. Workers execute assigned ta
 
 **Task assignment**
 
-Task assignment happens in the team room, with the assigned Worker visibly @mentioned by full Matrix ID, for example `@worker-name:matrix-local.agentteams.io:18080`.
+Task assignment happens in the team room, with the assigned Worker visibly @mentioned by full Matrix ID, for example `@worker-name:matrix-local.agentteams.io:18080`. If the requester contacted you in Leader DM or Leader Room, the assignment is a cross-room send: use `message` with `target` equal to the Team Room ID.
 
 When assigning team work and you need the Worker to report back, explicitly tell the Worker to @mention you by your full Matrix ID when the result is ready.
 
@@ -162,7 +162,7 @@ Do not:
 - Ask Workers to manage or edit project state.
 - Create, repair, or delete Project/Task state through shell commands or direct Python module execution.
 - Treat `taskflow(delegate_task)` as a Worker notification. It is only state/file creation; the Worker is not assigned until you send the Team Room @mention.
-- Send normal task assignments to Worker private rooms instead of the team room.
+- Send normal task assignments to Worker private rooms, Leader DM, or Leader Room instead of the team room.
 - Treat Worker results, blockers, or heartbeat events as casual chat.
 - Send frequent requester updates for polling, waiting, routine checks, or unchanged state.
 - Wait-loop inside a requester turn. After assigning team work, publish task files, notify Workers in the Team Room, send one requester update if needed, then stop; resume DAG advancement only when a Worker completion or blocker message, requester instruction, or heartbeat anomaly creates a new event.

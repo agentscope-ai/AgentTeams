@@ -221,6 +221,16 @@ def _looks_like_missing_object_error(stderr: str | None) -> bool:
     return "Object does not exist" in text or "The specified key does not exist" in text
 
 
+_STARTUP_SYNC_FILES = (
+    "openclaw.json",
+    "AGENTS.md",
+    "SOUL.md",
+    "HEARTBEAT.md",
+    "config/mcporter.json",
+    "mcporter-servers.json",
+)
+
+
 class FileSync:
     """MinIO file sync using mc CLI."""
 
@@ -394,6 +404,19 @@ class FileSync:
             logger.debug("mc ls error for %s: %s", prefix, exc)
             return []
 
+    def _pull_startup_files(self) -> list[str]:
+        """Pull known startup files when mc mirror cannot stat the prefix."""
+        changed: list[str] = []
+        for rel_path in _STARTUP_SYNC_FILES:
+            content = self._cat(f"{self._prefix}/{rel_path}")
+            if content is None:
+                continue
+            local_path = self.local_dir / rel_path
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_text(content)
+            changed.append(rel_path)
+        return changed
+
     def mirror_all(self) -> None:
         """Full mirror of the worker's MinIO prefix to local_dir.
 
@@ -441,7 +464,16 @@ class FileSync:
                 controller_url,
                 exc.stderr,
             )
-            raise
+            error_text = f"{exc.stderr or ''}\n{exc.stdout or ''}"
+            if not _looks_like_missing_object_error(error_text):
+                raise
+            changed = self._pull_startup_files()
+            if not (self.local_dir / "openclaw.json").exists():
+                raise
+            logger.info(
+                "mirror_all: primary mirror prefix missing; restored startup files: %s",
+                ", ".join(changed),
+            )
 
         # Mirror shared/ — team members use teams/{team}/shared/, others use global shared/
         shared_remote = self._get_shared_remote()

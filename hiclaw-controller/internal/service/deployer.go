@@ -1052,7 +1052,7 @@ func (d *Deployer) ensureDirectoryObject(ctx context.Context, key string) error 
 	if key == "" || !strings.HasSuffix(key, "/") {
 		return fmt.Errorf("directory object key must end with /: %q", key)
 	}
-	return d.oss.PutObject(ctx, key, []byte(""))
+	return d.oss.PutObject(ctx, key+".agentteams-keep", []byte(""))
 }
 
 // --- Manager Config Deployment ---

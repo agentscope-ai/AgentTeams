@@ -3,6 +3,7 @@ package oss
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,33 +31,31 @@ func TestMinIOClient_FullPathNoLeadingSlash(t *testing.T) {
 	}
 }
 
-func TestMinIOClient_PutObjectDirectoryUsesPipe(t *testing.T) {
+func TestMinIOClient_PutObjectUsesCp(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args")
-	stdinPath := filepath.Join(dir, "stdin")
 	mcPath := filepath.Join(dir, "mc")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$MC_ARGS_FILE\"\ncat > \"$MC_STDIN_FILE\"\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$MC_ARGS_FILE\"\n"
 	if err := os.WriteFile(mcPath, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MC_ARGS_FILE", argsPath)
-	t.Setenv("MC_STDIN_FILE", stdinPath)
 
 	c := NewMinIOClient(Config{
 		MCBinary:      mcPath,
 		StoragePrefix: "agentteams/agentteams-storage",
 	})
-	if err := c.PutObject(t.Context(), "agents/worker-1/", []byte("")); err != nil {
-		t.Fatalf("PutObject directory failed: %v", err)
+	if err := c.PutObject(t.Context(), "agents/worker-1/.agentteams-keep", []byte("")); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
 	}
 
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "pipe agentteams/agentteams-storage/agents/worker-1/\n"
-	if string(args) != want {
-		t.Fatalf("mc args = %q, want %q", args, want)
+	if got := string(args); !strings.HasPrefix(got, "cp ") ||
+		!strings.HasSuffix(got, " agentteams/agentteams-storage/agents/worker-1/.agentteams-keep\n") {
+		t.Fatalf("mc args = %q, want cp <tmp> agentteams/agentteams-storage/agents/worker-1/.agentteams-keep", args)
 	}
 }
 

@@ -666,7 +666,7 @@ func TestPutPackageObjectSeedOnlyPreservesExistingStorageObject(t *testing.T) {
 	}
 }
 
-func TestSeedPackageDirectoryObjectCreatesMirrorablePrefix(t *testing.T) {
+func TestSeedPackageDirectoryObjectCreatesMirrorablePrefixMarker(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()
 
@@ -674,12 +674,12 @@ func TestSeedPackageDirectoryObjectCreatesMirrorablePrefix(t *testing.T) {
 		t.Fatalf("seedPackageDirectoryObject failed: %v", err)
 	}
 
-	got, err := store.GetObject(ctx, "agents/alice/")
+	got, err := store.GetObject(ctx, "agents/alice/.agentteams-keep")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("directory object should be empty, got %q", got)
+		t.Fatalf("directory marker should be empty, got %q", got)
 	}
 }
 

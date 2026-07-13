@@ -114,7 +114,7 @@ func (r *HumanReconciler) addHumanToWorkerAllowlist(ctx context.Context, w *v1be
 func (r *HumanReconciler) removeHumanFromWorkerAllowlist(ctx context.Context, w *v1beta1.Worker, humanName, matrixUserID string) error {
 	base := w.DeepCopy()
 	if w.Spec.ChannelPolicy != nil {
-		w.Spec.ChannelPolicy.GroupAllowExtra = removeString(w.Spec.ChannelPolicy.GroupAllowExtra, matrixUserID)
+		w.Spec.ChannelPolicy.GroupAllowExtra = removeAllowlistValue(w.Spec.ChannelPolicy.GroupAllowExtra, matrixUserID)
 	}
 	managed := annotationSet(w.Annotations[humanManagedAllowlistAnnotation])
 	delete(managed, humanName)
@@ -148,7 +148,7 @@ func encodeAnnotationSet(values map[string]struct{}) string {
 	return strings.Join(names, ",")
 }
 
-func removeString(values []string, target string) []string {
+func removeAllowlistValue(values []string, target string) []string {
 	out := values[:0]
 	for _, value := range values {
 		if value != target {

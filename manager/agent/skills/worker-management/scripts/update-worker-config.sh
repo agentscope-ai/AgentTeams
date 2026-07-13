@@ -304,6 +304,7 @@ $([ -n "${_leader_dm_room_id}" ] && echo "- **Leader DM**: ${_leader_dm_room_id}
 $([ -n "${_worker_rooms}" ] && echo "- **Team Workers**:" && echo "${_worker_rooms}")
 - You decompose tasks from Manager or Team Admin and assign sub-tasks to your team workers
 - @mention workers in the Team Room for task assignment
+- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads
 - Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source
 - @mention Manager only for: task completion, blockers, escalations
 <!-- hiclaw-team-context-end -->

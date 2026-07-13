@@ -30,10 +30,11 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
     ROLE_DESC="team member"
     EXTRA_INSTRUCTIONS=""
     [ "${w}" = "${TEST_LEADER}" ] && ROLE_DESC="Team Leader" && EXTRA_INSTRUCTIONS="
-## MANDATORY First Action
+## Mandatory Context Use
 
-When you receive ANY task, your FIRST action MUST be to run: cat ./AGENTS.md
-This gives you Team Room ID, Leader DM, and worker list with room IDs. You CANNOT delegate without this.
+Your AGENTS.md and SOUL.md are already loaded into your current system prompt.
+Use the injected Coordination block there for Team Room ID, Leader DM, and worker Matrix IDs.
+Do not send a message saying you will read AGENTS.md, inspect topology, check worker details, or plan before the first Team Room assignment.
 
 ## Core Principles
 
@@ -41,6 +42,7 @@ This gives you Team Room ID, Leader DM, and worker list with room IDs. You CANNO
 - Read team-coordination, project-management, and task-management before planning and delegating work
 - Use projectflow to manage Project plans and ready nodes
 - Use taskflow delegate_task to create task files for each ready node, then @mention the assigned Worker in the Team Room
+- Use the Team Room ID and Worker Matrix IDs from your loaded AGENTS.md context directly
 - If the request arrived in Leader DM, do not narrate skill reads, planning, or progress in Leader DM before the first Team Room assignment. Reply exactly NO_REPLY while doing internal coordination.
 - Do not send tool preambles such as \"let me read\", \"let me check\", \"I'll coordinate\", or \"now I will plan\". Call tools directly with no visible preamble.
 - Your first visible non-NO_REPLY coordination message must be a Team Room assignment to a Worker.
@@ -238,6 +240,7 @@ assert_contains "${LEADER_AGENTS}" "taskflow(delegate_task) only creates and pub
 assert_contains "${LEADER_AGENTS}" "do not send DAG plans" "Leader AGENTS forbids interim Leader DM planning before Team Room assignment"
 assert_contains "${LEADER_AGENTS}" "first visible non-\`NO_REPLY\` message" "Leader AGENTS requires NO_REPLY before first visible Team Room assignment"
 assert_contains "${LEADER_AGENTS}" "Do not send a natural-language preamble before the tool call" "Leader AGENTS forbids visible tool preambles"
+assert_contains "${LEADER_AGENTS}" "already loaded into your system prompt" "Leader AGENTS uses injected team context without visible topology preamble"
 
 # ============================================================
 # Section 8: End-to-End LLM Test — Admin delegates via Leader DM

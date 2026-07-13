@@ -506,6 +506,7 @@ done
     echo "- **Team Workers**:${_worker_lines}"
     echo "- You decompose tasks from Manager or Team Admin and assign sub-tasks to your team workers"
     echo "- @mention workers in the Team Room for task assignment"
+    echo "- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads"
     echo "- Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source"
     echo "- @mention Manager only for: task completion, blockers, escalations"
     echo "<!-- hiclaw-team-context-end -->"

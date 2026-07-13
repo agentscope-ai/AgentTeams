@@ -283,6 +283,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if err := d.ensureDirectoryObject(ctx, agentPrefix+"/"); err != nil {
 		return fmt.Errorf("create worker storage prefix: %w", err)
 	}
+	logger.Info("worker storage prefix marker ensured", "worker", req.Name, "key", agentPrefix+"/.agentteams-keep")
 
 	// --- Seed local agent files to storage FIRST (base layer) ---
 	// Local/package files provide defaults only. They must not overwrite
@@ -346,9 +347,19 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 	}
 
-	if err := d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", configJSON); err != nil {
+	openclawKey := agentPrefix + "/openclaw.json"
+	if err := d.oss.PutObject(ctx, openclawKey, configJSON); err != nil {
 		return fmt.Errorf("config push to storage failed: %w", err)
 	}
+	logger.Info("worker openclaw.json pushed to storage",
+		"worker", req.Name,
+		"key", openclawKey,
+		"bytes", len(configJSON),
+		"role", req.Role,
+		"runtime", req.Spec.Runtime,
+		"team", req.TeamName,
+		"isUpdate", req.IsUpdate,
+	)
 
 	// --- SOUL.md (seed-only) ---
 	// Written once on first deploy; never overwritten so the agent owns it

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // MinIOAdminClient implements StorageAdminClient for embedded-mode MinIO.
@@ -46,11 +48,14 @@ func (c *MinIOAdminClient) EnsureUser(ctx context.Context, username, password st
 	if err := c.ensureAlias(ctx); err != nil {
 		return err
 	}
+	logger := log.FromContext(ctx)
+	logger.Info("ensuring MinIO user", "user", username, "alias", c.config.Alias)
 	// mc admin user add is idempotent — updates password if user exists
 	_, err := c.runMCAdmin(ctx, "user", "add", c.config.Alias, username, password)
 	if err != nil && !strings.Contains(err.Error(), "already") {
 		return fmt.Errorf("ensure minio user %s: %w", username, err)
 	}
+	logger.Info("MinIO user ensured", "user", username, "alias", c.config.Alias)
 	return nil
 }
 
@@ -65,6 +70,16 @@ func (c *MinIOAdminClient) EnsurePolicy(ctx context.Context, req PolicyRequest) 
 	}
 
 	policy := c.buildWorkerPolicy(req.WorkerName, bucket, req.TeamName, req.IsManager)
+	logger := log.FromContext(ctx)
+	logger.Info("ensuring MinIO worker policy",
+		"worker", req.WorkerName,
+		"policy", policyName,
+		"bucket", bucket,
+		"team", req.TeamName,
+		"isManager", req.IsManager,
+		"listPrefixes", policyListPrefixes(policy),
+		"objectResources", policyObjectResources(policy),
+	)
 	policyJSON, err := json.MarshalIndent(policy, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal policy: %w", err)
@@ -83,14 +98,40 @@ func (c *MinIOAdminClient) EnsurePolicy(ctx context.Context, req PolicyRequest) 
 	policyFile.Close()
 
 	// Remove old policy (ignore errors), create new, then attach
-	c.runMCAdmin(ctx, "policy", "remove", c.config.Alias, policyName)
+	if _, err := c.runMCAdmin(ctx, "policy", "remove", c.config.Alias, policyName); err != nil {
+		logger.V(1).Info("MinIO worker policy remove skipped", "worker", req.WorkerName, "policy", policyName, "error", err.Error())
+	}
 	if _, err := c.runMCAdmin(ctx, "policy", "create", c.config.Alias, policyName, policyFile.Name()); err != nil {
 		return fmt.Errorf("create policy %s: %w", policyName, err)
 	}
+	logger.Info("MinIO worker policy created", "worker", req.WorkerName, "policy", policyName, "bucket", bucket)
 	if _, err := c.runMCAdmin(ctx, "policy", "attach", c.config.Alias, policyName, "--user", req.WorkerName); err != nil {
 		return fmt.Errorf("attach policy %s to user %s: %w", policyName, req.WorkerName, err)
 	}
+	logger.Info("MinIO worker policy attached", "worker", req.WorkerName, "policy", policyName, "bucket", bucket)
 	return nil
+}
+
+func policyListPrefixes(policy s3Policy) []string {
+	if len(policy.Statement) < 2 || policy.Statement[1].Condition == nil {
+		return nil
+	}
+	stringLike, ok := policy.Statement[1].Condition["StringLike"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	prefixes, ok := stringLike["s3:prefix"].([]string)
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), prefixes...)
+}
+
+func policyObjectResources(policy s3Policy) []string {
+	if len(policy.Statement) < 3 {
+		return nil
+	}
+	return append([]string(nil), policy.Statement[2].Resource...)
 }
 
 func (c *MinIOAdminClient) DeleteUser(ctx context.Context, username string) error {

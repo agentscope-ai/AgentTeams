@@ -71,6 +71,24 @@ def test_worker_channel_suppresses_team_leader_dm_internal_preamble(
     assert ch._client.sent == []
 
 
+def test_worker_channel_suppresses_leader_preamble_without_runtime_config(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "missing" / ".copaw"))
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+
+    asyncio.run(
+        ch.send(
+            "!leader-dm:hs.local",
+            "I'll coordinate a team to build this REST API. "
+            "Let me first check my team's organization and then plan the work properly.",
+        ),
+    )
+
+    assert ch._client.sent == []
+
+
 def test_worker_channel_suppression_reads_default_workspace_runtime(
     tmp_path, monkeypatch,
 ):

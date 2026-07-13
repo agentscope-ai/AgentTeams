@@ -115,6 +115,51 @@ def test_team_leader_dm_internal_preambles_are_suppressed(tmp_path, monkeypatch)
     assert client.sent == []
 
 
+def test_team_leader_identity_suppresses_preamble_without_runtime_config(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "missing" / ".copaw"))
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!leader-dm:hs.local",
+            "I'll coordinate a team to build this REST API. "
+            "Let me first check my team's organization and then plan the work properly.",
+        ),
+    )
+
+    assert client.sent == []
+
+
+def test_team_leader_thread_root_edit_suppresses_preamble_without_runtime_config(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "missing" / ".copaw"))
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch._edit_thread_root(
+            "!leader-dm:hs.local",
+            {"matrix_own_thread_root_event_id": "$root"},
+            "Good. I have two workers available. Now let me plan this project.",
+            msgtype="m.text",
+        ),
+    )
+
+    assert client.sent == []
+
+
 def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
     ch = _make_channel()
     content = {

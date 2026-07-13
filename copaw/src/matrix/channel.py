@@ -268,6 +268,31 @@ def _runtime_config_field(section: str, key: str) -> str:
     return ""
 
 
+def _matrix_localpart(user_id: str | None) -> str:
+    text = (user_id or os.getenv("AGENTTEAMS_WORKER_NAME") or "").strip()
+    if text.startswith("@"):
+        return text[1:].split(":", 1)[0]
+    return text.split(":", 1)[0]
+
+
+def _is_team_leader_identity(user_id: str | None) -> bool:
+    localpart = _matrix_localpart(user_id)
+    return localpart.endswith("-lead") or localpart.endswith("-leader")
+
+
+def _is_team_leader_internal_preamble_text(text: str) -> bool:
+    """Return true for visible Team Leader internal planning/tool preambles."""
+    stripped = (text or "").strip()
+    if not stripped or "?" in stripped:
+        return False
+
+    # Explicit Matrix IDs may be cross-room Worker assignments; keep those.
+    if _TEAM_LEADER_MATRIX_USER_ID_RE.search(text or ""):
+        return False
+
+    return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))
+
+
 def _is_team_leader_dm_internal_preamble(current_room_id: str, text: str) -> bool:
     """Suppress visible Team Leader internal planning/tool preambles in Leader DM."""
     if _runtime_config_field("member", "role") != "team_leader":
@@ -277,15 +302,7 @@ def _is_team_leader_dm_internal_preamble(current_room_id: str, text: str) -> boo
     if not leader_dm_room_id or current_room_id != leader_dm_room_id:
         return False
 
-    # Explicit Matrix IDs may be cross-room Worker assignments; keep those.
-    if _TEAM_LEADER_MATRIX_USER_ID_RE.search(text or ""):
-        return False
-
-    stripped = (text or "").strip()
-    if not stripped or "?" in stripped:
-        return False
-
-    return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))
+    return _is_team_leader_internal_preamble_text(text)
 
 
 def _readiness_probe_reply(text: str) -> str | None:
@@ -2505,6 +2522,17 @@ class MatrixChannel(BaseChannel):
                     )
         return user_id.split(":")[0].lstrip("@") or user_id
 
+    def _should_suppress_team_leader_internal_preamble(
+        self,
+        room_id: str,
+        text: str,
+    ) -> bool:
+        if _is_team_leader_dm_internal_preamble(room_id, text):
+            return True
+        if not _is_team_leader_identity(self._user_id):
+            return False
+        return _is_team_leader_internal_preamble_text(text)
+
     def _with_thread_relation_meta(
         self,
         meta: Optional[Dict[str, Any]],
@@ -2766,6 +2794,14 @@ class MatrixChannel(BaseChannel):
         root_event_id = send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY)
         if not root_event_id or not self._client:
             return
+        if self._should_suppress_team_leader_internal_preamble(to_handle, text):
+            logger.info(
+                "MatrixChannel: suppressing Team Leader internal preamble "
+                "thread-root edit in %s",
+                to_handle,
+            )
+            await self._send_typing(to_handle, False)
+            return
         new_content: dict[str, Any] = {"msgtype": msgtype, "body": text}
         if html:
             new_content["format"] = "org.matrix.custom.html"
@@ -2887,10 +2923,10 @@ class MatrixChannel(BaseChannel):
             await self._send_typing(room_id, False)
             return
 
-        if _is_team_leader_dm_internal_preamble(room_id, text):
+        if self._should_suppress_team_leader_internal_preamble(room_id, text):
             logger.info(
                 "MatrixChannel: suppressing Team Leader internal preamble "
-                "in Leader DM %s",
+                "in room %s",
                 room_id,
             )
             await self._send_typing(room_id, False)

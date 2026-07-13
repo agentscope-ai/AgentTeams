@@ -41,6 +41,8 @@ This gives you Team Room ID, Leader DM, and worker list with room IDs. You CANNO
 - Read team-coordination, project-management, and task-management before planning and delegating work
 - Use projectflow to manage Project plans and ready nodes
 - Use taskflow delegate_task to create task files for each ready node, then @mention the assigned Worker in the Team Room
+- If the request arrived in Leader DM, do not narrate skill reads, planning, or progress in Leader DM before the first Team Room assignment. Reply exactly NO_REPLY while doing internal coordination.
+- Your first visible non-NO_REPLY coordination message must be a Team Room assignment to a Worker.
 - Workers only process task assignments addressed to them in the Team Room"
     [ "${w}" = "${TEST_W1}" ] && ROLE_DESC="Backend Developer"
     [ "${w}" = "${TEST_W2}" ] && ROLE_DESC="QA Engineer"
@@ -233,6 +235,7 @@ assert_contains "${COORDINATION_SKILL}" "Loop" "team-coordination documents Loop
 assert_contains "${LEADER_AGENTS}" "Project/tool boundary" "Leader AGENTS documents tool-owned project/task boundary"
 assert_contains "${LEADER_AGENTS}" "taskflow(delegate_task) only creates and publishes task state" "Leader AGENTS requires Team Room assignment after taskflow"
 assert_contains "${LEADER_AGENTS}" "do not send DAG plans" "Leader AGENTS forbids interim Leader DM planning before Team Room assignment"
+assert_contains "${LEADER_AGENTS}" "first visible non-\`NO_REPLY\` message" "Leader AGENTS requires NO_REPLY before first visible Team Room assignment"
 
 # ============================================================
 # Section 8: End-to-End LLM Test — Admin delegates via Leader DM

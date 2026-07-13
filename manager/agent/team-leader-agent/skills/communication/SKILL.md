@@ -46,7 +46,7 @@ After task handling changes Project state, notifying the requester is mandatory.
 
 Do not copy team-room coordination logs into requester DM. Summarize the state.
 
-For project-shaped Team Admin requests received in Leader DM, do not send DAG plans, analysis, "let me..." progress notes, or other interim project narration back to Leader DM before the first Team Room assignment has been posted. Use the project and task tools, send the Team Room assignment, then send one concise requester update if needed.
+For project-shaped Team Admin requests received in Leader DM, do not send DAG plans, analysis, "let me..." progress notes, or other interim project narration back to Leader DM before the first Team Room assignment has been posted. While reading skills, checking organization, planning, creating the Project, or delegating the first task, your same-room Leader DM reply must be exactly `NO_REPLY`. The first visible non-`NO_REPLY` message for that request must be either the Team Room assignment sent with `message target=room:<Team Room ID>`, or a blocker/question to the Team Admin when assignment cannot proceed. After the Team Room assignment, send one concise requester update if needed.
 
 Use `project-management` to determine project report content and the DAG or Loop Project Status Report shape. Use this skill to decide where the report should be delivered and whether to reply directly or use the `message` tool.
 

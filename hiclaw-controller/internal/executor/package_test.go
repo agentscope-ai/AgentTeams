@@ -666,6 +666,23 @@ func TestPutPackageObjectSeedOnlyPreservesExistingStorageObject(t *testing.T) {
 	}
 }
 
+func TestSeedPackageDirectoryObjectCreatesMirrorablePrefix(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+
+	if err := seedPackageDirectoryObject(ctx, store, "agents/alice"); err != nil {
+		t.Fatalf("seedPackageDirectoryObject failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/alice/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("directory object should be empty, got %q", got)
+	}
+}
+
 func TestWriteFileSeedOnlyPreservesExistingLocalFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "credagent.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

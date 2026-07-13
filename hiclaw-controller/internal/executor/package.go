@@ -185,6 +185,9 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 	}
 	minioBase := fmt.Sprintf("%s/agents/%s", storagePrefix, workerName)
 	agentPrefix := fmt.Sprintf("agents/%s", workerName)
+	if err := seedPackageDirectoryObject(ctx, storage, agentPrefix); err != nil {
+		return err
+	}
 
 	// Collect transformed config files and subdirectory names from the package.
 	type fileEntry struct {
@@ -471,6 +474,16 @@ func putPackageFileSeedOnly(ctx context.Context, storage oss.StorageClient, loca
 		return false, err
 	}
 	return true, storage.PutFile(ctx, localPath, target)
+}
+
+func seedPackageDirectoryObject(ctx context.Context, storage oss.StorageClient, agentPrefix string) error {
+	if storage == nil {
+		return nil
+	}
+	if _, err := putPackageObjectSeedOnly(ctx, storage, true, agentPrefix+"/", []byte("")); err != nil {
+		return fmt.Errorf("seed worker directory object: %w", err)
+	}
+	return nil
 }
 
 func seedDirToStorage(ctx context.Context, storage oss.StorageClient, srcDir, dstPrefix string) error {

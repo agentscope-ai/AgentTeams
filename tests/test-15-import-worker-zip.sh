@@ -283,7 +283,7 @@ if ! require_llm_key; then
 else
     if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
         log_info "Waiting for CoPaw Worker readiness probe before messaging..."
-        PROBE_OUTPUT=$(check_copaw_worker_probes "${TEST_WORKER}" "ready" 180)
+        PROBE_OUTPUT=$(check_copaw_worker_probes "${TEST_WORKER}" "ready" 60)
         PROBE_STATUS=$?
         if [ "${PROBE_STATUS}" = "0" ]; then
             log_pass "CoPaw Worker readiness probe is ready"
@@ -343,18 +343,18 @@ else
         # We use a mention because openclaw's monitor requires both
         # `m.mentions.user_ids` metadata AND a visible mention, otherwise the
         # event is dropped with `reason: "no-mention"`.
-        log_info "Sending message and waiting for Worker reply (total timeout: 180s, resend every 30s)..."
+        log_info "Sending message and waiting for Worker reply (total timeout: 60s, resend every 30s)..."
         REPLY=$(matrix_send_and_wait_for_reply \
             "${ADMIN_TOKEN}" \
             "${ROOM_ID}" \
             "${WORKER_MATRIX_ID}" \
             "Readiness check: please reply with the exact text READY." \
-            180 30)
+            60 30)
 
         if [ -n "${REPLY}" ]; then
             log_pass "Worker replied: $(echo "${REPLY}" | head -1 | cut -c1-80)..."
         else
-            log_fail "Worker did not reply within 180s"
+            log_fail "Worker did not reply within 60s"
             # Show recent messages for debugging
             log_info "Recent messages in room:"
             matrix_read_messages "${ADMIN_TOKEN}" "${ROOM_ID}" 5 2>/dev/null | \

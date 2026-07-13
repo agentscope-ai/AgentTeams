@@ -674,7 +674,15 @@ func TestSeedPackageDirectoryObjectCreatesMirrorablePrefixMarker(t *testing.T) {
 		t.Fatalf("seedPackageDirectoryObject failed: %v", err)
 	}
 
-	got, err := store.GetObject(ctx, "agents/alice/.agentteams-keep")
+	got, err := store.GetObject(ctx, "agents/alice/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("directory object should be empty, got %q", got)
+	}
+
+	got, err = store.GetObject(ctx, "agents/alice/.agentteams-keep")
 	if err != nil {
 		t.Fatal(err)
 	}

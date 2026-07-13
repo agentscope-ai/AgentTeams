@@ -59,6 +59,42 @@ func TestMinIOClient_PutObjectUsesCp(t *testing.T) {
 	}
 }
 
+func TestMinIOClient_PutObjectDirectoryUsesPipe(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	stdinPath := filepath.Join(dir, "stdin")
+	mcPath := filepath.Join(dir, "mc")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$MC_ARGS_FILE\"\ncat > \"$MC_STDIN_FILE\"\n"
+	if err := os.WriteFile(mcPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MC_ARGS_FILE", argsPath)
+	t.Setenv("MC_STDIN_FILE", stdinPath)
+
+	c := NewMinIOClient(Config{
+		MCBinary:      mcPath,
+		StoragePrefix: "agentteams/agentteams-storage",
+	})
+	if err := c.PutObject(t.Context(), "agents/worker-1/", []byte("")); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(args); got != "pipe agentteams/agentteams-storage/agents/worker-1/\n" {
+		t.Fatalf("mc args = %q, want pipe directory object", args)
+	}
+	stdin, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stdin) != 0 {
+		t.Fatalf("stdin = %q, want empty directory marker body", stdin)
+	}
+}
+
 func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	c := NewMinIOAdminClient(Config{Bucket: "agentteams-storage"})
 

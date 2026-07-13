@@ -480,7 +480,11 @@ func seedPackageDirectoryObject(ctx context.Context, storage oss.StorageClient, 
 	if storage == nil {
 		return nil
 	}
-	if _, err := putPackageObjectSeedOnly(ctx, storage, true, strings.TrimSuffix(agentPrefix, "/")+"/.agentteams-keep", []byte("")); err != nil {
+	prefix := strings.TrimSuffix(agentPrefix, "/") + "/"
+	if _, err := putPackageObjectSeedOnly(ctx, storage, true, prefix, []byte("")); err != nil {
+		return fmt.Errorf("seed worker directory object: %w", err)
+	}
+	if _, err := putPackageObjectSeedOnly(ctx, storage, true, prefix+".agentteams-keep", []byte("")); err != nil {
 		return fmt.Errorf("seed worker directory marker: %w", err)
 	}
 	return nil

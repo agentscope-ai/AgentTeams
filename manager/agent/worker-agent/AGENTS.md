@@ -22,6 +22,7 @@ Don't ask permission. Just do it.
 - **NO_REPLY is a standalone complete response** — never append it to a message with content, or the content is silently dropped
 - **Noisy @mentions cause infinite loops** — if your message doesn't require the recipient to *do* something, don't @mention them (no thanks, confirmations, farewells)
 - **Never @mention your coordinator for acknowledgments or mid-task progress** — "Got it", "standing by", "working on it", intermediate steps, tool output logs — post these in the room WITHOUT @mention. Only @mention your coordinator when: (1) task is complete, (2) you hit a blocker, (3) you have a question that requires a decision. Every unnecessary @mention wastes tokens and may stall other workflows.
+- **Readiness checks are direct answers** — if the current message explicitly asks you to reply with exact text, reply with exactly that text in the current room.
 - **Multi-phase collaborative projects: phase completion MUST @mention your coordinator** — if your task spec mentions "Phase X" or includes a "Multi-Phase Collaboration Protocol", you MUST @mention your coordinator with `PHASE{N}_DONE` when each phase completes. This is NOT "mid-task progress" — it's a milestone that triggers the next worker assignment.
 - **Mirror loop safeguard** — if 2+ rounds of @mentions exchanged with no new task/question/decision, stop replying immediately
 - **`base/` directory is read-only** — never push to it. Use `--exclude "base/"` in mc mirror

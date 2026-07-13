@@ -109,15 +109,27 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	// Verify team resource in RW statement
 	rwStmt := policy.Statement[1]
 	hasTeamResource := false
+	hasTeamExactResource := false
 	hasWorkerDirResource := false
+	hasWorkerExactResource := false
 	hasSharedDirResource := false
+	hasSharedExactResource := false
 	hasTeamDirResource := false
 	for _, r := range rwStmt.Resource {
 		if r == "arn:aws:s3:::agentteams-storage/teams/team-dev/*" {
 			hasTeamResource = true
 		}
+		if r == "arn:aws:s3:::agentteams-storage/teams/team-dev" {
+			hasTeamExactResource = true
+		}
+		if r == "arn:aws:s3:::agentteams-storage/agents/worker-1" {
+			hasWorkerExactResource = true
+		}
 		if r == "arn:aws:s3:::agentteams-storage/agents/worker-1/" {
 			hasWorkerDirResource = true
+		}
+		if r == "arn:aws:s3:::agentteams-storage/shared" {
+			hasSharedExactResource = true
 		}
 		if r == "arn:aws:s3:::agentteams-storage/shared/" {
 			hasSharedDirResource = true
@@ -129,8 +141,17 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	if !hasTeamResource {
 		t.Errorf("expected team resource in RW statement: %v", rwStmt.Resource)
 	}
+	if !hasTeamExactResource {
+		t.Errorf("expected exact team resource in RW statement: %v", rwStmt.Resource)
+	}
+	if !hasWorkerExactResource {
+		t.Errorf("expected exact worker resource in RW statement: %v", rwStmt.Resource)
+	}
 	if !hasWorkerDirResource {
 		t.Errorf("expected worker directory resource in RW statement: %v", rwStmt.Resource)
+	}
+	if !hasSharedExactResource {
+		t.Errorf("expected exact shared resource in RW statement: %v", rwStmt.Resource)
 	}
 	if !hasSharedDirResource {
 		t.Errorf("expected shared directory resource in RW statement: %v", rwStmt.Resource)

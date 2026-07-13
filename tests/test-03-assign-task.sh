@@ -55,10 +55,12 @@ minio_setup
 
 # Wait for task brief to appear
 log_info "Waiting for task brief in MinIO..."
-sleep 30
-
-# Check if any task directory was created
-TASKS=$(minio_list_dir "shared/tasks/" 2>/dev/null || echo "")
+TASKS=""
+for _ in $(seq 1 18); do
+    TASKS=$(minio_list_dir "shared/tasks/" 2>/dev/null || echo "")
+    [ -n "${TASKS}" ] && break
+    sleep 5
+done
 assert_not_empty "${TASKS}" "Task directory created in MinIO"
 
 log_section "Wait for Worker Completion"

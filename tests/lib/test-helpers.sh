@@ -836,6 +836,7 @@ dump_diagnostics() {
     local kind="$1"
     local name="$2"
     local controller="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
+    local storage_prefix="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
     {
         case "${kind}" in
@@ -846,9 +847,13 @@ dump_diagnostics() {
                 docker logs --tail 100 "${container}" 2>&1 || true
                 printf "\n--- container state: %s ---\n" "${container}"
                 docker inspect --format='status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} startedAt={{.State.StartedAt}} finishedAt={{.State.FinishedAt}} error={{.State.Error}}' "${container}" 2>&1 || true
+                printf "\n--- root MinIO object stat/list: %s/agents/%s ---\n" "${storage_prefix}" "${name}"
+                exec_in_manager sh -lc "mc stat '${storage_prefix}/agents/${name}/openclaw.json' 2>&1 || true; mc ls --recursive '${storage_prefix}/agents/${name}' 2>&1 | head -40 || true" || true
+                printf "\n--- worker scoped MinIO stat: %s ---\n" "${name}"
+                docker exec "${container}" sh -lc "mc stat 'agentteams/${storage_prefix#*/}/agents/${name}/openclaw.json' 2>&1 || true" 2>&1 || true
                 printf "\n--- controller logs (recent, filtered for %s) ---\n" "${name}"
                 docker logs --tail 300 "${controller}" 2>&1 \
-                    | grep -E "${name}|recreating|spec changed" | tail -50 || true
+                    | grep -E "${name}|worker-${name}|MinIO|policy|openclaw.json|recreating|spec changed" | tail -80 || true
                 printf "\n--- hiclaw get worker %s ---\n" "${name}"
                 exec_in_agent hiclaw get workers "${name}" -o json 2>&1 || true
                 ;;

@@ -259,6 +259,51 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 	}
 }
 
+func TestMinIOAdminClient_EnsurePolicyDetachesBeforeReplace(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	mcPath := filepath.Join(dir, "mc")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$MC_ARGS_FILE"
+case "$*" in
+  "admin policy detach "*|"admin policy remove "*) exit 1 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(mcPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MC_ARGS_FILE", argsPath)
+
+	c := NewMinIOAdminClient(Config{
+		MCBinary: mcPath,
+		Bucket:   "agentteams-storage",
+	})
+	if err := c.EnsurePolicy(t.Context(), PolicyRequest{WorkerName: "worker-1"}); err != nil {
+		t.Fatalf("EnsurePolicy failed: %v", err)
+	}
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("mc calls = %v, want detach/remove/create/attach", lines)
+	}
+	wantPrefixes := []string{
+		"admin policy detach hiclaw worker-worker-1 --user worker-1",
+		"admin policy remove hiclaw worker-worker-1",
+		"admin policy create hiclaw worker-worker-1 ",
+		"admin policy attach hiclaw worker-worker-1 --user worker-1",
+	}
+	for i, want := range wantPrefixes {
+		if !strings.HasPrefix(lines[i], want) {
+			t.Fatalf("mc call %d = %q, want prefix %q", i, lines[i], want)
+		}
+	}
+}
+
 func TestNewMinIOClient_Defaults(t *testing.T) {
 	c := NewMinIOClient(Config{})
 	if c.config.MCBinary != "mc" {

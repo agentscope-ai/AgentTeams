@@ -111,7 +111,8 @@ def test_mirror_all_restores_worker_prefix_and_shared_without_credentials(tmp_pa
 
     sync.mirror_all()
 
-    assert commands == [
+    mirror_commands = [cmd for cmd in commands if cmd[0] == "mirror"]
+    assert mirror_commands == [
         (
             "mirror",
             "agentteams/agentteams-storage/agents/dag-team-dev/",
@@ -197,7 +198,8 @@ def test_mirror_all_restores_global_shared_for_team_leader(tmp_path, monkeypatch
 
     sync.mirror_all()
 
-    assert commands == [
+    mirror_commands = [cmd for cmd in commands if cmd[0] == "mirror"]
+    assert mirror_commands == [
         (
             "mirror",
             "agentteams/agentteams-storage/agents/dag-team-dev/",

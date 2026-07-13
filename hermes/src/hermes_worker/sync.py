@@ -267,6 +267,17 @@ class FileSync:
         self._ensure_alias()
         remote = self._object_path(f"{self._prefix}/")
         local = str(self.local_dir) + "/"
+        startup_changed = self._pull_startup_files()
+        if startup_changed:
+            logger.info(
+                "mirror_all: restored startup files before full mirror: %s",
+                ", ".join(startup_changed),
+            )
+        if not (self.local_dir / "openclaw.json").exists():
+            raise RuntimeError(
+                f"openclaw.json not found in MinIO for worker {self.worker_name}"
+            )
+
         try:
             _mc("mirror", remote, local, "--overwrite",
                  "--exclude", "credentials/**", check=True)
@@ -276,12 +287,8 @@ class FileSync:
             error_text = f"{exc.stderr or ''}\n{exc.stdout or ''}"
             if not _looks_like_missing_object_error(error_text):
                 raise
-            changed = self._pull_startup_files()
-            if not (self.local_dir / "openclaw.json").exists():
-                raise
             logger.info(
-                "mirror_all: primary mirror prefix missing; restored startup files: %s",
-                ", ".join(changed),
+                "mirror_all: primary mirror prefix missing; continuing with startup files from direct pulls",
             )
 
         shared_remote = self._get_shared_remote()

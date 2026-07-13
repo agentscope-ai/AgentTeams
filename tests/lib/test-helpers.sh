@@ -816,6 +816,47 @@ stop_worker_container() {
     docker rm "${container_name}" 2>/dev/null || true
 }
 
+docker_env_value() {
+    local container="$1"
+    local key="$2"
+    docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container}" 2>/dev/null \
+        | awk -F= -v k="${key}" '$1 == k {sub(/^[^=]*=/, ""); print; exit}'
+}
+
+worker_scoped_minio_stat() {
+    local container="$1"
+    local worker_name="$2"
+    local storage_prefix="$3"
+    local controller="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
+    local bucket_path="${storage_prefix#*/}"
+    local access_key secret_key endpoint
+
+    access_key="$(docker_env_value "${container}" AGENTTEAMS_FS_ACCESS_KEY)"
+    secret_key="$(docker_env_value "${container}" AGENTTEAMS_FS_SECRET_KEY)"
+    endpoint="$(docker_env_value "${container}" AGENTTEAMS_FS_ENDPOINT)"
+    endpoint="${endpoint:-http://127.0.0.1:9000}"
+
+    if [ -z "${access_key}" ] || [ -z "${secret_key}" ]; then
+        echo "worker scoped stat skipped: AGENTTEAMS_FS_ACCESS_KEY/SECRET_KEY missing in container env"
+        return 0
+    fi
+
+    echo "worker scoped env: access_key_present=yes secret_key_present=yes endpoint=${endpoint} bucket_path=${bucket_path}"
+    docker exec \
+        -e "AGENTTEAMS_DBG_ENDPOINT=${endpoint}" \
+        -e "AGENTTEAMS_DBG_ACCESS_KEY=${access_key}" \
+        -e "AGENTTEAMS_DBG_SECRET_KEY=${secret_key}" \
+        "${controller}" sh -lc '
+            endpoint="${AGENTTEAMS_DBG_ENDPOINT//agentteams-controller/127.0.0.1}"
+            mc alias set workerdebug "${endpoint}" "${AGENTTEAMS_DBG_ACCESS_KEY}" "${AGENTTEAMS_DBG_SECRET_KEY}" >/dev/null 2>&1 || {
+                echo "worker scoped alias set failed"
+                exit 0
+            }
+            mc stat "workerdebug/'"${bucket_path}"'/agents/'"${worker_name}"'/openclaw.json" 2>&1 || true
+            mc alias remove workerdebug >/dev/null 2>&1 || true
+        ' 2>&1 || true
+}
+
 # ============================================================
 # Diagnostics (failure-time dumps)
 # ============================================================
@@ -851,8 +892,10 @@ dump_diagnostics() {
                 exec_in_manager sh -lc "mc stat '${storage_prefix}/agents/${name}/openclaw.json' 2>&1 || true; mc ls --recursive '${storage_prefix}/agents/${name}' 2>&1 | head -40 || true" || true
                 printf "\n--- worker scoped MinIO stat: %s ---\n" "${name}"
                 docker exec "${container}" sh -lc "mc stat 'agentteams/${storage_prefix#*/}/agents/${name}/openclaw.json' 2>&1 || true" 2>&1 || true
+                printf "\n--- worker scoped MinIO stat via captured env: %s ---\n" "${name}"
+                worker_scoped_minio_stat "${container}" "${name}" "${storage_prefix}"
                 printf "\n--- controller logs (recent, filtered for %s) ---\n" "${name}"
-                docker logs --tail 300 "${controller}" 2>&1 \
+                docker logs --tail 1000 "${controller}" 2>&1 \
                     | grep -E "${name}|worker-${name}|MinIO|policy|openclaw.json|recreating|spec changed" | tail -80 || true
                 printf "\n--- hiclaw get worker %s ---\n" "${name}"
                 exec_in_agent hiclaw get workers "${name}" -o json 2>&1 || true

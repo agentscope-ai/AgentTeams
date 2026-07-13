@@ -22,6 +22,9 @@ bash /opt/hiclaw/agent/skills/mcp-server-management/scripts/setup-mcp-server.sh 
 # Built-in template: GitHub — domain auto-extracted
 bash .../setup-mcp-server.sh github "ghp_xxxxxxxxxxxx"
 
+# Built-in template: MiniMax image generation
+bash .../setup-mcp-server.sh minimax-image "your-api-key"
+
 # User-provided YAML: custom service
 bash .../setup-mcp-server.sh weather "my-key" \
     --yaml-file /tmp/mcp-weather.yaml --api-domain "api.weather.com"
@@ -70,5 +73,6 @@ Fully idempotent — safe to re-run for credential rotation or updates.
 | Template | Server Name | Description |
 |---|---|---|
 | `mcp-github.yaml` | `mcp-github` | GitHub: repos, issues, PRs, code search |
+| `mcp-minimax-image.yaml` | `mcp-minimax-image` | MiniMax: text-to-image and image-to-image generation |
 
 All other services require user-provided YAML via `--yaml-file`.

@@ -30,3 +30,4 @@ Read the relevant doc **before** executing. Do not load all of them.
 | List, inspect, delete servers, or manage consumer access manually | `references/api-commands.md` |
 | Proxy an existing MCP server (SSE/HTTP) | `references/setup-mcp-proxy.md` |
 | Need the GitHub MCP tool definitions | `references/mcp-github.yaml` |
+| Need the MiniMax image generation tool definitions | `references/mcp-minimax-image.yaml` |

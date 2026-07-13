@@ -28,6 +28,9 @@ type WorkerDeployRequest struct {
 	Role           string // "standalone" | "team_leader" | "worker"
 	TeamName       string
 	TeamLeaderName string
+	TeamRoomID     string
+	LeaderDMRoomID string
+	TeamMembers    []RuntimeConfigTeamMember
 
 	// From provisioning
 	MatrixToken    string
@@ -430,6 +433,29 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
+	if req.Role == "team_leader" && req.TeamName != "" && req.TeamRoomID != "" {
+		teamWorkers := make([]TeamWorkerEntry, 0, len(req.TeamMembers))
+		for _, member := range req.TeamMembers {
+			if member.Role != "worker" {
+				continue
+			}
+			teamWorkers = append(teamWorkers, TeamWorkerEntry{Name: member.RuntimeName, RoomID: member.PersonalRoomID})
+		}
+		if err := d.InjectCoordinationContext(ctx, CoordinationDeployRequest{
+			LeaderName:         req.Name,
+			Role:               req.Role,
+			TeamName:           req.TeamName,
+			TeamRoomID:         req.TeamRoomID,
+			LeaderDMRoomID:     req.LeaderDMRoomID,
+			HeartbeatEvery:     heartbeatEvery(req.Heartbeat),
+			TeamWorkers:        teamWorkers,
+			TeamAdminID:        req.TeamAdminMatrixID,
+			TeamCoordinatorIDs: req.TeamCoordinatorIDs,
+			LeaderSoul:         req.Spec.Soul,
+		}); err != nil {
+			logger.Error(err, "leader coordination context inject failed (non-fatal)", "worker", req.Name)
+		}
+	}
 
 	// --- Push builtin skills from worker-agent template ---
 	if err := d.pushBuiltinSkills(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime); err != nil {
@@ -437,6 +463,13 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	}
 
 	return nil
+}
+
+func heartbeatEvery(cfg *agentconfig.HeartbeatConfig) string {
+	if cfg == nil || !cfg.Enabled {
+		return ""
+	}
+	return cfg.Every
 }
 
 func (d *Deployer) deployWorkerMcporterConfig(ctx context.Context, agentPrefix, gatewayKey string, mcpServers []v1beta1.MCPServer) {

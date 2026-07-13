@@ -111,6 +111,64 @@ func TestEnsureTeamStorageCreatesPrefixMarkers(t *testing.T) {
 	}
 }
 
+func TestDeployWorkerConfigInjectsTeamLeaderContext(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	agentFSDir := filepath.Join(tmp, "agents")
+	leaderDir := filepath.Join(agentFSDir, "leader")
+	if err := os.MkdirAll(leaderDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+		OSS:         store,
+		AgentFSDir:  agentFSDir,
+	})
+
+	err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+		Name:           "leader",
+		Role:           "team_leader",
+		TeamName:       "demo-team",
+		TeamRoomID:     "!team:matrix.local",
+		LeaderDMRoomID: "!leader:matrix.local",
+		MatrixToken:    "matrix-token",
+		GatewayKey:     "gateway-key",
+		TeamMembers: []RuntimeConfigTeamMember{{
+			Name:           "leader",
+			RuntimeName:    "leader",
+			Role:           "team_leader",
+			PersonalRoomID: "!leader:matrix.local",
+		}, {
+			Name:           "dev",
+			RuntimeName:    "dev",
+			Role:           "worker",
+			PersonalRoomID: "!dev:matrix.local",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("DeployWorkerConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/leader/AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{
+		"hiclaw-team-context-start",
+		"demo-team",
+		"Upstream",
+		"@manager:",
+		"dev",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("leader AGENTS.md missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestDeployWorkerConfigInlineSoulOverridesPackageSeed(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()

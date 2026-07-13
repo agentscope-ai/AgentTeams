@@ -74,10 +74,6 @@ func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) er
 	if err := c.ensureAlias(ctx); err != nil {
 		return err
 	}
-	if strings.HasSuffix(key, "/") {
-		_, err := c.runMCWithInput(ctx, data, "pipe", c.fullPath(key))
-		return err
-	}
 	tmpFile, err := os.CreateTemp("", "hiclaw-oss-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)

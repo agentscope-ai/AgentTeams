@@ -76,14 +76,6 @@ func TestDeployWorkerConfigSeedsLocalFilesWithoutOverwritingRuntimeState(t *test
 		t.Fatalf("openclaw.json was not overwritten by controller config: %s", got)
 	}
 
-	got, err = store.GetObject(ctx, "agents/alice/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("directory object should be empty, got %q", got)
-	}
-
 	got, err = store.GetObject(ctx, "agents/alice/.agentteams-keep")
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +85,7 @@ func TestDeployWorkerConfigSeedsLocalFilesWithoutOverwritingRuntimeState(t *test
 	}
 }
 
-func TestEnsureTeamStorageCreatesMirrorableDirectoryObjects(t *testing.T) {
+func TestEnsureTeamStorageCreatesPrefixMarkers(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()
 	deployer := NewDeployer(DeployerConfig{OSS: store})
@@ -103,9 +95,7 @@ func TestEnsureTeamStorageCreatesMirrorableDirectoryObjects(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		"teams/alpha/",
 		"teams/alpha/.agentteams-keep",
-		"teams/alpha/shared/",
 		"teams/alpha/shared/.agentteams-keep",
 		"teams/alpha/shared/tasks/.keep",
 		"teams/alpha/shared/projects/.keep",

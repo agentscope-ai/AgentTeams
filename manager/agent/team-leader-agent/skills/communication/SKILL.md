@@ -23,6 +23,8 @@ Send normal task assignment notifications to the team room, not to a Worker's pr
 
 If the current room is Leader DM or Leader Room, the Team Room assignment is cross-room. Use the `message` tool with `target` set to `room:<Team Room ID>` from your team context. Do not directly reply in the current room for Worker task assignment just because the Worker Matrix ID appears in the message text.
 
+An assignment intent sentence is not an assignment. Do not send same-room text such as "I need to delegate this", "I will assign this to the dev worker", "now delegate the first ready node", or "the dev worker should start" as a substitute for the Team Room assignment. The Worker is not notified until the `message` tool sends a Team Room message that visibly @mentions the Worker's full Matrix ID and gives a concrete task to start.
+
 Use a Worker private room only for exceptional follow-up that should not be team-visible, such as sensitive clarification or direct recovery/debugging.
 
 ## Requester Reports
@@ -71,6 +73,8 @@ Do not use the `message` tool for same-room replies.
 Use the `message` tool only when the target room is not the current room, or when the workflow must continue in a different room.
 
 Resolve the recipient Matrix ID and target room from `hiclaw` CLI immediately before sending.
+
+For Team work assigned from Leader DM or Leader Room, this cross-room `message` call is mandatory. Do it before any requester progress update, polling, or result wait.
 
 ```json
 {

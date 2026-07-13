@@ -43,6 +43,7 @@ Do not send a message saying you will read AGENTS.md, inspect topology, check wo
 - Use projectflow to manage Project plans and ready nodes
 - Use taskflow delegate_task to create task files for each ready node, then @mention the assigned Worker in the Team Room
 - Use the Team Room ID and Worker Matrix IDs from your loaded AGENTS.md context directly
+- A delegation intent sentence is not a Worker assignment; after taskflow delegate_task, your next externally visible action must be the message tool call to room:<Team Room ID>
 - If the request arrived in Leader DM, do not narrate skill reads, planning, or progress in Leader DM before the first Team Room assignment. Reply exactly NO_REPLY while doing internal coordination.
 - Do not send tool preambles such as \"let me read\", \"let me check\", \"I'll coordinate\", or \"now I will plan\". Call tools directly with no visible preamble.
 - Your first visible non-NO_REPLY coordination message must be a Team Room assignment to a Worker.
@@ -223,6 +224,7 @@ log_section "Verify Canonical Team Leader Skill Guidance"
 LEADER_HOME="/root/hiclaw-fs/agents/${TEST_LEADER}"
 PROJECT_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/project-management/SKILL.md" 2>/dev/null)
 TASK_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/task-management/SKILL.md" 2>/dev/null)
+COMMUNICATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/communication/SKILL.md" 2>/dev/null)
 COORDINATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/team-coordination/SKILL.md" 2>/dev/null)
 LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null)
 
@@ -232,7 +234,10 @@ assert_contains "${PROJECT_SKILL}" "ready_nodes" "project-management documents D
 assert_contains "${TASK_SKILL}" "taskflow" "task-management documents taskflow"
 assert_contains "${TASK_SKILL}" "Task state is tool-owned" "task-management forbids manual task state mutation"
 assert_contains "${TASK_SKILL}" "delegate_task does not send Matrix messages" "task-management requires explicit Team Room notification"
+assert_contains "${TASK_SKILL}" "Mandatory next action after \`delegate_task\`" "task-management requires message after delegate_task"
 assert_contains "${TASK_SKILL}" "delegate_task" "task-management documents task delegation"
+assert_contains "${COMMUNICATION_SKILL}" "An assignment intent sentence is not an assignment" "communication forbids intent-only assignment replies"
+assert_contains "${COMMUNICATION_SKILL}" "this cross-room \`message\` call is mandatory" "communication requires cross-room message for Team work"
 assert_contains "${COORDINATION_SKILL}" "DAG" "team-coordination documents DAG strategy"
 assert_contains "${COORDINATION_SKILL}" "Loop" "team-coordination documents Loop strategy"
 assert_contains "${LEADER_AGENTS}" "Project/tool boundary" "Leader AGENTS documents tool-owned project/task boundary"
@@ -241,6 +246,8 @@ assert_contains "${LEADER_AGENTS}" "do not send DAG plans" "Leader AGENTS forbid
 assert_contains "${LEADER_AGENTS}" "first visible non-\`NO_REPLY\` message" "Leader AGENTS requires NO_REPLY before first visible Team Room assignment"
 assert_contains "${LEADER_AGENTS}" "Do not send a natural-language preamble before the tool call" "Leader AGENTS forbids visible tool preambles"
 assert_contains "${LEADER_AGENTS}" "already loaded into your system prompt" "Leader AGENTS uses injected team context without visible topology preamble"
+assert_contains "${LEADER_AGENTS}" "Delegation send boundary" "Leader AGENTS distinguishes intent from assignment send"
+assert_contains "${LEADER_AGENTS}" "a delegation intent sentence is not a Worker assignment" "Leader AGENTS forbids intent-only delegation replies"
 
 # ============================================================
 # Section 8: End-to-End LLM Test — Admin delegates via Leader DM

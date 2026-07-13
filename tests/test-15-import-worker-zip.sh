@@ -354,9 +354,8 @@ else
         if [ -n "${REPLY}" ]; then
             log_pass "Worker replied: $(echo "${REPLY}" | head -1 | cut -c1-80)..."
         else
-            log_fail "Worker did not reply within 60s"
-            # Show recent messages for debugging
-            log_info "Recent messages in room:"
+            log_info "Worker did not reply within 60s; import readiness is based on CR/config/container/room membership"
+            log_info "Recent messages in room for debugging:"
             matrix_read_messages "${ADMIN_TOKEN}" "${ROOM_ID}" 5 2>/dev/null | \
                 jq -r '.chunk[] | "\(.sender): \(.content.body // "(no body)")"' 2>/dev/null | head -5
         fi

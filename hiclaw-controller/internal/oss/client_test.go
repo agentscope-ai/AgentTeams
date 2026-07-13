@@ -67,12 +67,23 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	if policy.Version != "2012-10-17" {
 		t.Errorf("Version = %q", policy.Version)
 	}
-	if len(policy.Statement) != 2 {
-		t.Fatalf("expected 2 statements, got %d", len(policy.Statement))
+	if len(policy.Statement) != 3 {
+		t.Fatalf("expected 3 statements, got %d", len(policy.Statement))
+	}
+
+	locationStmt := policy.Statement[0]
+	if !stringSliceContains(locationStmt.Action, "s3:GetBucketLocation") {
+		t.Errorf("expected bucket location action in bucket statement: %v", locationStmt.Action)
+	}
+	if len(locationStmt.Condition) != 0 {
+		t.Errorf("bucket location statement must not have prefix condition: %v", locationStmt.Condition)
 	}
 
 	// Verify team prefix is included in list conditions
-	listStmt := policy.Statement[0]
+	listStmt := policy.Statement[1]
+	if !stringSliceContains(listStmt.Action, "s3:ListBucket") {
+		t.Errorf("expected list action in list statement: %v", listStmt.Action)
+	}
 	condition := listStmt.Condition["StringLike"].(map[string]interface{})
 	prefixes := condition["s3:prefix"].([]string)
 	hasTeam := false
@@ -107,7 +118,7 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	}
 
 	// Verify team resource in RW statement
-	rwStmt := policy.Statement[1]
+	rwStmt := policy.Statement[2]
 	hasTeamResource := false
 	hasTeamExactResource := false
 	hasWorkerDirResource := false
@@ -166,7 +177,7 @@ func TestMinIOAdminClient_BuildWorkerPolicyNoTeam(t *testing.T) {
 
 	policy := c.buildWorkerPolicy("worker-solo", "agentteams-storage", "", false)
 
-	rwStmt := policy.Statement[1]
+	rwStmt := policy.Statement[2]
 	for _, r := range rwStmt.Resource {
 		if r == "arn:aws:s3:::agentteams-storage/teams/*" {
 			t.Error("solo worker should not have team resource")
@@ -182,12 +193,12 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 
 	policy := c.buildWorkerPolicy("default", "agentteams-storage", "", true)
 
-	if len(policy.Statement) != 2 {
-		t.Fatalf("expected 2 statements, got %d", len(policy.Statement))
+	if len(policy.Statement) != 3 {
+		t.Fatalf("expected 3 statements, got %d", len(policy.Statement))
 	}
 
 	// Verify manager prefix in list conditions
-	listStmt := policy.Statement[0]
+	listStmt := policy.Statement[1]
 	condition := listStmt.Condition["StringLike"].(map[string]interface{})
 	prefixes := condition["s3:prefix"].([]string)
 	hasManager := false
@@ -208,7 +219,7 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 	}
 
 	// Verify manager resource in RW statement
-	rwStmt := policy.Statement[1]
+	rwStmt := policy.Statement[2]
 	hasManagerResource := false
 	hasManagerDirResource := false
 	for _, r := range rwStmt.Resource {
@@ -235,4 +246,13 @@ func TestNewMinIOClient_Defaults(t *testing.T) {
 	if c.config.Alias != "hiclaw" {
 		t.Errorf("Alias = %q, want hiclaw", c.config.Alias)
 	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

@@ -170,6 +170,11 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 		Statement: []s3PolicyStatement{
 			{
 				Effect:   "Allow",
+				Action:   []string{"s3:GetBucketLocation"},
+				Resource: []string{fmt.Sprintf("arn:aws:s3:::%s", bucket)},
+			},
+			{
+				Effect:   "Allow",
 				Action:   []string{"s3:ListBucket"},
 				Resource: []string{fmt.Sprintf("arn:aws:s3:::%s", bucket)},
 				Condition: map[string]interface{}{

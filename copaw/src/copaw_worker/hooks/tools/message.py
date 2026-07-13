@@ -92,9 +92,14 @@ def parse_matrix_target(target: str) -> MatrixTarget:
     )
 
 
-def validate_matrix_message_policy(text: str, mentions: list[str]) -> str:
+def validate_matrix_message_policy(
+    text: str,
+    mentions: list[str],
+    *,
+    room_id: str | None = None,
+) -> str:
     """Filter outgoing messages and return the sanitized text."""
-    result = filter_outgoing_matrix_message(text, mentions)
+    result = filter_outgoing_matrix_message(text, mentions, room_id=room_id)
     if result.suppressed:
         raise MessageToolError(result.suppress_reason or "message suppressed")
     return result.text
@@ -407,6 +412,9 @@ async def message(
         filtered_message = validate_matrix_message_policy(
             message,
             extract_matrix_mentions(message),
+            room_id=(
+                parsed_target.identifier if parsed_target.kind == "room" else None
+            ),
         )
         mentions = extract_matrix_mentions(filtered_message)
         content = build_matrix_text_content(filtered_message, mentions)

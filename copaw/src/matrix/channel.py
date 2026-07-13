@@ -110,11 +110,14 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
     r"let me|"
     r"i['’]?ll coordinate|"
     r"i will coordinate|"
-    r"i have \d+ workers? available|"
+    r"i have (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
+    r"workers? available|"
     r"now let me|"
     r"no active projects|"
     r"project created\. now|"
-    r"good[,.]? i have"
+    r"good[,.]? i have|"
+    r"solid understanding|"
+    r"team coordination plan"
     r")\b",
 )
 _TEAM_LEADER_MATRIX_USER_ID_RE = re.compile(

@@ -60,6 +60,11 @@ def test_worker_channel_suppresses_team_leader_dm_internal_preamble(
         "Now let me check the team organization and available workers.",
         "I have 2 workers available: a dev worker and a QA worker. "
         "Now let me design the DAG plan and create the project.",
+        "Let me read the relevant skill documentation to understand the "
+        "coordination process.",
+        "Now I have a solid understanding of the workflow. Let me first "
+        "look up the available workers.",
+        "I have two workers available:\n- dev\n- qa\n\n## Team Coordination Plan",
     ):
         asyncio.run(ch.send("!leader-dm:hs.local", text))
 

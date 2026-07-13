@@ -232,6 +232,7 @@ assert_contains "${COORDINATION_SKILL}" "DAG" "team-coordination documents DAG s
 assert_contains "${COORDINATION_SKILL}" "Loop" "team-coordination documents Loop strategy"
 assert_contains "${LEADER_AGENTS}" "Project/tool boundary" "Leader AGENTS documents tool-owned project/task boundary"
 assert_contains "${LEADER_AGENTS}" "taskflow(delegate_task) only creates and publishes task state" "Leader AGENTS requires Team Room assignment after taskflow"
+assert_contains "${LEADER_AGENTS}" "do not send DAG plans" "Leader AGENTS forbids interim Leader DM planning before Team Room assignment"
 
 # ============================================================
 # Section 8: End-to-End LLM Test — Admin delegates via Leader DM

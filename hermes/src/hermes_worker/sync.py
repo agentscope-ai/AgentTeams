@@ -126,6 +126,14 @@ def _looks_like_missing_object_error(stderr: str | None) -> bool:
     return "Object does not exist" in text or "The specified key does not exist" in text
 
 
+def _preview_text(value: str | None, limit: int = 2000) -> str:
+    if not value:
+        return ""
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "...<truncated>"
+
+
 _STARTUP_SYNC_FILES = (
     "openclaw.json",
     "AGENTS.md",

@@ -187,6 +187,9 @@ class Worker:
         """Start CoPaw. If console_port is set, run the full FastAPI app via
         uvicorn (gives access to the web console). Otherwise start the runner
         and channel manager directly (lightweight, no HTTP server)."""
+        from copaw_worker.hooks import install_tool_hooks
+
+        install_tool_hooks()
         if self.config.console_port:
             await self._run_copaw_with_console(self.config.console_port)
         else:

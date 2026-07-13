@@ -240,4 +240,5 @@ export COPAW_LOG_LEVEL
 export PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}"
 
 # Use uvicorn to run CoPaw FastAPI app (enables AgentConfigWatcher for hot-reload)
-exec python3 -m copaw app --host 0.0.0.0 --port 18799
+# The wrapper installs HiClaw-owned tools before CoPaw creates any agents.
+exec python3 -m copaw_worker.run_copaw_app app --host 0.0.0.0 --port 18799

@@ -32,6 +32,12 @@ func (f *fakeProvider) Issue(_ context.Context, req credprovider.IssueRequest) (
 	return f.resp, nil
 }
 
+// GetKubeconfig is a stub to satisfy the credprovider.Client interface; the
+// credentials package tests do not exercise the kubeconfig path.
+func (f *fakeProvider) GetKubeconfig(_ context.Context, _ string) (*credprovider.KubeconfigResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 const ns = "hiclaw"
 
 func newFakeK8sClient(t *testing.T, objs ...client.Object) client.Client {

@@ -93,7 +93,7 @@ log_section "Create Team"
 #   Worker 2 (qa): no per-worker policy (should still have W1 via peer mention)
 
 exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_TEAM}.yaml << 'YAMLEOF'
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: ${TEST_TEAM}
@@ -254,6 +254,14 @@ assert_contains "${W1_AGENTS}" "Do NOT @mention Manager" "Worker 1 told not to @
 # Section 7: Verify groupAllowFrom
 # ============================================================
 log_section "Verify groupAllowFrom Configuration"
+
+# TeamReconciler and WorkerReconciler can run back-to-back during creation.
+# Wait for the Team-owned channel policy overlay to be visible in OSS before
+# taking a single snapshot for assertions.
+wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.groupAllowFrom" "@${TEST_W1}:" 120 || true
+wait_agent_matrix_allow_contains "${TEST_W2}" ".channels.matrix.groupAllowFrom" "@${TEST_W1}:" 120 || true
+wait_agent_matrix_allow_contains "${TEST_W1}" ".channels.matrix.groupAllowFrom" "@test-external-bot:" 120 || true
+wait_agent_matrix_allow_contains "manager" ".channels.matrix.groupAllowFrom" "@${TEST_LEADER}:" 120 || true
 
 # Leader: should have [Manager, Admin, W1, W2]
 LEADER_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)

@@ -20,10 +20,11 @@ import (
 // DockerConfig holds Docker backend configuration.
 type DockerConfig struct {
 	SocketPath           string
-	WorkerImage          string // default worker image (HICLAW_WORKER_IMAGE)
-	CopawWorkerImage     string // default copaw worker image (HICLAW_COPAW_WORKER_IMAGE)
-	HermesWorkerImage    string // default hermes worker image (HICLAW_HERMES_WORKER_IMAGE)
-	OpenHumanWorkerImage string // default openhuman worker image (HICLAW_OPENHUMAN_WORKER_IMAGE)
+	WorkerImage          string // default worker image (AGENTTEAMS_WORKER_IMAGE)
+	CopawWorkerImage     string // default copaw worker image (AGENTTEAMS_COPAW_WORKER_IMAGE)
+	HermesWorkerImage    string // default hermes worker image (AGENTTEAMS_HERMES_WORKER_IMAGE)
+	OpenHumanWorkerImage string // default openhuman worker image (AGENTTEAMS_OPENHUMAN_WORKER_IMAGE)
+	QwenPawWorkerImage   string // default qwenpaw worker image (AGENTTEAMS_QWENPAW_WORKER_IMAGE)
 	DefaultNetwork       string // default Docker network (default "hiclaw-net")
 }
 
@@ -99,8 +100,8 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 	// (image, working dir, labels) see a consistent normalized value. The
 	// CRD intentionally does not pin a default — see ResolveRuntime godoc.
 	// Caller (worker / manager reconciler) is responsible for picking the
-	// right env var for RuntimeFallback (HICLAW_DEFAULT_WORKER_RUNTIME for
-	// workers, HICLAW_MANAGER_RUNTIME for managers).
+	// right env var for RuntimeFallback (AGENTTEAMS_DEFAULT_WORKER_RUNTIME for
+	// workers, AGENTTEAMS_MANAGER_RUNTIME for managers).
 	req.Runtime = ResolveRuntime(req.Runtime, req.RuntimeFallback)
 
 	// Default image fallback
@@ -113,6 +114,8 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			image = d.config.HermesWorkerImage
 		case req.Runtime == RuntimeOpenHuman && d.config.OpenHumanWorkerImage != "":
 			image = d.config.OpenHumanWorkerImage
+		case req.Runtime == RuntimeQwenPaw && d.config.QwenPawWorkerImage != "":
+			image = d.config.QwenPawWorkerImage
 		default:
 			image = d.config.WorkerImage
 		}
@@ -129,51 +132,15 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 		if req.Env == nil {
 			req.Env = make(map[string]string)
 		}
-		req.Env["HICLAW_AUTH_TOKEN"] = req.AuthToken
+		req.Env["AGENTTEAMS_AUTH_TOKEN"] = req.AuthToken
 	}
 	if req.ControllerURL != "" {
-		req.Env["HICLAW_CONTROLLER_URL"] = req.ControllerURL
+		req.Env["AGENTTEAMS_CONTROLLER_URL"] = req.ControllerURL
 	}
 
-	// For OpenHuman runtime, map canonical HICLAW_* env vars to the MATRIX_*
-	// aliases expected by openhuman-worker-entrypoint.sh (fallback path;
-	// primary source is openclaw.json pulled from centralized storage).
-	if req.Runtime == RuntimeOpenHuman && req.Env != nil {
-		if v := req.Env["HICLAW_WORKER_MATRIX_TOKEN"]; v != "" {
-			req.Env["MATRIX_ACCESS_TOKEN"] = v
-		}
-		if v := req.Env["HICLAW_WORKER_ROOM_ID"]; v != "" {
-			req.Env["MATRIX_HOME_ROOM_ID"] = v
-		}
-		if v := req.Env["HICLAW_MATRIX_URL"]; v != "" {
-			req.Env["MATRIX_HOMESERVER_URL"] = v
-		}
-		// Build MATRIX_USER_ID (fallback; primary is openclaw.json channels.matrix.userId).
-		if domain := req.Env["HICLAW_MATRIX_DOMAIN"]; domain != "" && req.Env["HICLAW_WORKER_NAME"] != "" {
-			req.Env["MATRIX_USER_ID"] = fmt.Sprintf("@%s:%s", req.Env["HICLAW_WORKER_NAME"], domain)
-		}
-		// Build MATRIX_ALLOWED_USERS (fallback; primary is openclaw.json dm.allowFrom + groupAllowFrom).
-		var allowedUsers []string
-		if domain := req.Env["HICLAW_MATRIX_DOMAIN"]; domain != "" {
-			if admin := os.Getenv("HICLAW_ADMIN_USER"); admin != "" {
-				allowedUsers = append(allowedUsers, fmt.Sprintf("@%s:%s", admin, domain))
-			}
-			// Manager Matrix username is "manager" by convention (see agentconfig/generator.go).
-			allowedUsers = append(allowedUsers, fmt.Sprintf("@manager:%s", domain))
-		}
-		if len(allowedUsers) > 0 {
-			req.Env["MATRIX_ALLOWED_USERS"] = strings.Join(allowedUsers, ",")
-		}
-	}
-
-	// Infer WorkingDir from HOME env if not set.
-	// OpenHuman uses a dedicated non-root workspace baked into the image;
-	// other runtimes (openclaw / copaw / hermes) derive from HOME, which
-	// the service layer already sets to the per-worker hiclaw-fs path.
+	// Infer WorkingDir from HOME env if not set
 	if req.WorkingDir == "" {
-		if req.Runtime == RuntimeOpenHuman {
-			req.WorkingDir = "/home/openhuman/.openhuman"
-		} else if home, ok := req.Env["HOME"]; ok {
+		if home, ok := req.Env["HOME"]; ok {
 			req.WorkingDir = home
 		}
 	}
@@ -186,7 +153,7 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 	// Detect console port from env (for CoPaw workers)
 	consolePort := ""
 	if req.Env != nil {
-		consolePort = req.Env["HICLAW_CONSOLE_PORT"]
+		consolePort = firstNonEmptyTrimmed(req.Env["AGENTTEAMS_CONSOLE_PORT"])
 	}
 
 	// Pick a random host port for console binding
@@ -404,7 +371,7 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 func (d *DockerBackend) ensureImage(ctx context.Context, image string) error {
 	// Check if image exists locally
 	// Note: Docker Engine API expects unescaped image names in the path
-	// (e.g. /images/hiclaw/worker-agent:latest/json), not PathEscaped.
+	// (e.g. /images/agentteams/worker-agent:latest/json), not PathEscaped.
 	u := "http://localhost/images/" + image + "/json"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

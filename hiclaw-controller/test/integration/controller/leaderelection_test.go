@@ -72,7 +72,7 @@ func TestLeaderElection_SingleInstance_BecomesLeader(t *testing.T) {
 		EnvBuilder:     env,
 		ControllerName: "test-ctl",
 	}
-	if err := reconciler.SetupWithManager(mgr); err != nil {
+	if _, err := reconciler.SetupWithManager(mgr); err != nil {
 		t.Fatalf("failed to setup reconciler: %v", err)
 	}
 
@@ -155,7 +155,7 @@ func TestLeaderElection_TwoInstances_OnlyOneReconciles(t *testing.T) {
 		EnvBuilder:     envA,
 		ControllerName: "test-ctl-a",
 	}
-	if err := recA.SetupWithManager(mgrA); err != nil {
+	if _, err := recA.SetupWithManager(mgrA); err != nil {
 		t.Fatalf("setup reconciler A: %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestLeaderElection_TwoInstances_OnlyOneReconciles(t *testing.T) {
 		EnvBuilder:     envB,
 		ControllerName: "test-ctl-b",
 	}
-	if err := recB.SetupWithManager(mgrB); err != nil {
+	if _, err := recB.SetupWithManager(mgrB); err != nil {
 		t.Fatalf("setup reconciler B: %v", err)
 	}
 

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -71,6 +72,12 @@ type stubTokenIssuer struct {
 
 func (s stubTokenIssuer) Issue(_ context.Context, _ credprovider.IssueRequest) (*credprovider.IssueResponse, error) {
 	return s.out, nil
+}
+
+// GetKubeconfig is a stub to satisfy the credprovider.Client interface; the
+// Nacos credential tests do not need cluster kubeconfigs.
+func (s stubTokenIssuer) GetKubeconfig(context.Context, string) (*credprovider.KubeconfigResponse, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 func stubCredForCredentialTest() credprovider.Client {

@@ -3,8 +3,8 @@
   "name": "TeamHarness",
   "version": "0.1.0",
   "type": "general",
-  "description": "HiClaw TeamHarness runtime plugin for QwenPaw.",
-  "author": "HiClaw",
+  "description": "AgentTeams TeamHarness runtime plugin for QwenPaw.",
+  "author": "AgentTeams",
   "entry": {
     "backend": "plugin.py"
   },

@@ -52,7 +52,7 @@ log "Inspecting container ${CONTAINER_NAME}..."
 INSPECT=$(_api GET "/containers/${CONTAINER_NAME}/json" 2>/dev/null)
 if ! echo "${INSPECT}" | grep -q '"Id"' 2>/dev/null; then
     log "ERROR: Container ${CONTAINER_NAME} not found"
-    jq -n '{"error": "container_not_found", "message": "Worker container does not exist. Is it a remote worker?"}'
+    jq -n '{"error": "container_not_found", "message": "Worker container does not exist in the Manager-local container backend."}'
     exit 1
 fi
 

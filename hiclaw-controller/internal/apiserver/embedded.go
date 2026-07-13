@@ -240,10 +240,10 @@ func registerCRDs(ctx context.Context, cfg *rest.Config, crdDir string) error {
 
 	// Wait for CRDs to be established
 	return waitForCRDsEstablished(ctx, client, []string{
-		"workers.hiclaw.io",
-		"teams.hiclaw.io",
-		"humans.hiclaw.io",
-		"managers.hiclaw.io",
+		"workers.agentteams.io",
+		"teams.agentteams.io",
+		"humans.agentteams.io",
+		"managers.agentteams.io",
 	})
 }
 

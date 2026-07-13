@@ -86,16 +86,16 @@ jobs:
 
           \`\`\`bash
           # Embedded all-in-one (infra + controller; pulled by the installer)
-          docker pull ${REGISTRY}/${REPO}/hiclaw-embedded:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/agentteams-embedded:${VERSION}
 
           # Manager (lightweight; spawned by the embedded controller)
-          docker pull ${REGISTRY}/${REPO}/hiclaw-manager:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/agentteams-manager:${VERSION}
 
           # Worker
-          docker pull ${REGISTRY}/${REPO}/hiclaw-worker:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/agentteams-worker:${VERSION}
 
-          # Controller (used standalone in k8s; bundled inside hiclaw-embedded for docker installs)
-          docker pull ${REGISTRY}/${REPO}/hiclaw-controller:${VERSION}
+          # Controller (used standalone in k8s; bundled inside agentteams-embedded for docker installs)
+          docker pull ${REGISTRY}/${REPO}/agentteams-controller:${VERSION}
           \`\`\`
 
           ---

@@ -1,6 +1,14 @@
 package auth
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	authenticationv1 "k8s.io/api/authentication/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	fakeclient "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
+)
 
 func TestParseSAUsername_Admin(t *testing.T) {
 	id, err := DefaultResourcePrefix.ParseSAUsername("system:serviceaccount:hiclaw:hiclaw-admin")
@@ -9,6 +17,9 @@ func TestParseSAUsername_Admin(t *testing.T) {
 	}
 	if id.Role != RoleAdmin || id.Username != "admin" {
 		t.Errorf("expected admin, got %+v", id)
+	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "hiclaw-admin" {
+		t.Errorf("unexpected service account identity: %+v", id)
 	}
 }
 
@@ -29,6 +40,9 @@ func TestParseSAUsername_Worker(t *testing.T) {
 	}
 	if id.Role != RoleWorker || id.Username != "alice" || id.WorkerName != "alice" {
 		t.Errorf("expected worker alice, got %+v", id)
+	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "hiclaw-worker-alice" {
+		t.Errorf("unexpected service account identity: %+v", id)
 	}
 }
 
@@ -69,6 +83,9 @@ func TestParseSAUsername_CustomPrefix(t *testing.T) {
 	if id.Role != RoleWorker || id.Username != "alice" {
 		t.Errorf("expected worker alice, got %+v", id)
 	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "teamB-worker-alice" {
+		t.Errorf("unexpected service account identity: %+v", id)
+	}
 
 	if _, err := p.ParseSAUsername("system:serviceaccount:hiclaw:hiclaw-worker-alice"); err == nil {
 		t.Errorf("default-prefixed SA must not match the teamB prefix")
@@ -80,6 +97,9 @@ func TestParseSAUsername_CustomPrefix(t *testing.T) {
 	}
 	if id.Role != RoleManager || id.Username != "manager" {
 		t.Errorf("expected manager, got %+v", id)
+	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "teamB-manager" {
+		t.Errorf("unexpected service account identity: %+v", id)
 	}
 }
 
@@ -144,5 +164,32 @@ func TestResourcePrefix_EmptyFallsBackToDefault(t *testing.T) {
 	var p ResourcePrefix
 	if p.WorkerNamePrefix() != "hiclaw-worker-" {
 		t.Errorf("empty prefix should fall back to default, got %q", p.WorkerNamePrefix())
+	}
+}
+
+func TestAuthenticate_UsesLocalTokenReview(t *testing.T) {
+	localClient := fakeclient.NewSimpleClientset()
+	localClient.Fake.PrependReactor("create", "tokenreviews", func(action ktesting.Action) (bool, runtime.Object, error) {
+		review := action.(ktesting.CreateAction).GetObject().(*authenticationv1.TokenReview)
+		review.Status = authenticationv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authenticationv1.UserInfo{
+				Username: "system:serviceaccount:hiclaw:hiclaw-worker-alice",
+			},
+		}
+		return true, review, nil
+	})
+
+	auth := NewTokenReviewAuthenticator(localClient, DefaultAudience, DefaultResourcePrefix)
+
+	id, err := auth.Authenticate(context.Background(), "local-token")
+	if err != nil {
+		t.Fatalf("Authenticate local: %v", err)
+	}
+	if id.Role != RoleWorker || id.Username != "alice" {
+		t.Fatalf("expected worker alice, got %+v", id)
+	}
+	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "hiclaw-worker-alice" {
+		t.Fatalf("unexpected identity metadata: %+v", id)
 	}
 }

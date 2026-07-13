@@ -7,6 +7,8 @@ description: Use before any projectflow call or Team Leader workflow involving P
 
 You manage Project files, Project lifecycle, and Project execution plans. Use this skill as the Project state layer. Use `team-coordination` to decide the strategy, and use `task-management` to delegate or check individual Worker tasks.
 
+Project state is tool-owned. Do not create, edit, delete, or repair `shared/projects/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Use `projectflow` actions only. If `projectflow` fails or returns inconsistent state, stop and report the blocker instead of manually patching files.
+
 ## Scope
 
 Use this skill for:

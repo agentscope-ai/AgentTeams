@@ -6,11 +6,11 @@ If the admin asks you to import an existing Worker template, search a registry f
 
 | Admin says | Runtime | Flags |
 |------------|---------|-------|
-| "copaw", "Python worker", "pip worker", "host worker" | `copaw` | |
-| "local worker", "local mode", "access my local environment", "run on my machine" | `copaw` | `--remote` |
+| "copaw", "Python worker" | `copaw` | |
+| "local worker", "local mode", "container worker", "docker worker", "access my local environment", or "run on my machine" | default (uses `${HICLAW_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 | "hermes", "hermes worker", "hermes-agent" | `hermes` | |
 | "openhuman", "OpenHuman worker", "openhuman framework" | `openhuman` | |
-| "openclaw", "container worker", "docker worker", or none of the above | default (uses `${HICLAW_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
+| "openclaw", or none of the above | default (uses `${HICLAW_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 
 When in doubt, ask: "Should this be a copaw (Python, ~150MB RAM), openclaw (Node.js, ~500MB RAM), hermes (Python, ~200MB RAM), or openhuman (Rust, ~300MB RAM, native Matrix E2EE) worker?"
 
@@ -130,7 +130,7 @@ The controller handles everything: Matrix registration, room creation, Higress c
 If admin asks you to set CPU or memory requests/limits, use a YAML manifest instead of CLI flags:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: <NAME>
@@ -160,9 +160,8 @@ The controller authorizes the Worker on **existing** MCP servers only. If the ad
 ### Result JSON (`-o json` output)
 
 The JSON response contains the worker status. Key fields:
-- `"status"` — `"ready"` (container running), `"starting"` (health check pending), or `"pending_install"` (no container runtime)
+- `"status"` — `"ready"` (container running) or `"starting"` (health check pending)
 - `"room_id"` — Worker's Matrix room ID
-- `"install_cmd"` — (when status is `pending_install`) Provide this **verbatim in a code block** (do NOT redact `--fs-secret`)
 
 ## Step 2.5: Poll for Ready
 
@@ -207,7 +206,7 @@ Run `echo "${HICLAW_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matc
 
 **OpenClaw / Hermes Manager** — incremental DM messages are supported, so polling-then-reply within a single turn is fine: → use **Path A**.
 
-**QwenPaw Manager** — only the final text reply of a turn reaches admin in DM (see `copaw-manager-agent/AGENTS.md` "Message Sending Rules"). Polling for `phase=Running` blocks the reply for 30-60s+ and tends to compound when admin sends a follow-up message during that window (the runtime queues both, then the model conflates them and replies only to the latest). → use **Path B (fast-reply)**.
+**CoPaw / QwenPaw Manager** — only the final text reply of a turn reaches admin in DM (see `copaw-manager-agent/AGENTS.md` "Message Sending Rules"). Polling for `phase=Running` blocks the reply for 30-60s+ and tends to compound when admin sends a follow-up message during that window (the runtime queues both, then the model conflates them and replies only to the latest). → use **Path B (fast-reply)**.
 
 ---
 
@@ -253,9 +252,9 @@ If the helper exits with code 2 instead of sending, it prints the target room, m
 
 ---
 
-### Path B — QwenPaw Manager (fast-reply, deferred greeting)
+### Path B — CoPaw / QwenPaw Manager (fast-reply, deferred greeting)
 
-**Hard rule for QwenPaw**: your create-worker turn MUST emit its final DM reply within ~60s of receiving the admin's request. Polling for `phase=Running` and greeting the Worker happen in **separate later turns**, not in the same turn as the admin reply.
+**Hard rule for CoPaw / QwenPaw**: your create-worker turn MUST emit its final DM reply within ~60s of receiving the admin's request. Polling for `phase=Running` and greeting the Worker happen in **separate later turns**, not in the same turn as the admin reply.
 
 #### B1. Confirm controller accepted the create request
 
@@ -295,9 +294,15 @@ This reply mentions the Worker name explicitly so the admin (and the integration
 
 In your **next** heartbeat or self-triggered turn, for each entry in `~/pending-workers.json`:
 
-1. `hiclaw get workers -o json` and check the entry's `phase`. If still `Pending` and queued < 90s ago, leave it for a later heartbeat. If `Failed`, notify admin in DM and remove the entry.
+1. `hiclaw get workers -o json` and check the entry's `phase`. If still `Pending` and queued < 90s ago, leave it for a later heartbeat. If `Failed`, notify admin in DM and remove the entry using the drain helper below.
 2. If `Running`, run `send-worker-greeting.sh --worker <NAME> --room "<ROOM_ID>"` to greet the Worker in their room, then notify admin in DM with: `"<NAME> is now Running and greeted."`
-3. Remove the processed entry from `~/pending-workers.json`.
+3. Remove the processed entry from `~/pending-workers.json` using the drain helper below.
+
+Never run `rm`, `unlink`, `mv`, or any inline rewrite command for `~/pending-workers.json`; Tool Guard may pause the Admin DM session and block later admin requests. Keep the file, even if it becomes empty. To remove a processed entry, call the helper:
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
+```
 
 If you have HEARTBEAT.md, add a one-line bullet there reminding yourself to drain `~/pending-workers.json` at every heartbeat.
 

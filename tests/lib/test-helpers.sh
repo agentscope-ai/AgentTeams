@@ -203,7 +203,7 @@ wait_for_manager_agent_ready() {
     while [ "${elapsed}" -lt "${timeout}" ]; do
         case "${manager_runtime}" in
             copaw)
-                if docker exec "${agent_container}" pgrep -f "copaw app" >/dev/null 2>&1 && \
+                if docker exec "${agent_container}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 && \
                    docker exec "${agent_container}" curl -sf http://127.0.0.1:18799/ >/dev/null 2>&1; then
                     runtime_ready=true
                     break
@@ -350,6 +350,71 @@ wait_worker_provisioned() {
     done
     echo "wait_worker_provisioned: worker=${worker_name} timed out after ${timeout}s, roomID='${room_id}' matrixUserID='${mxid}'" >&2
     dump_diagnostics worker "${worker_name}"
+    return 1
+}
+
+# wait_worker_model <worker_name> <expected_model> [timeout_seconds]
+# Polls the API until the Worker spec model reflects an update.
+wait_worker_model() {
+    local worker_name="$1"
+    local want="$2"
+    local timeout="${3:-120}"
+    local elapsed=0
+    local last=""
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        last=$(exec_in_agent hiclaw get workers "${worker_name}" -o json 2>/dev/null | jq -r '.model // empty')
+        if [ "${last}" = "${want}" ]; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    echo "wait_worker_model: worker=${worker_name} timed out after ${timeout}s, last_model='${last}', want='${want}'" >&2
+    dump_diagnostics worker "${worker_name}"
+    return 1
+}
+
+# wait_agent_file_contains <agent_name> <relative_path> <needle> [timeout_seconds]
+# Polls MinIO for a generated agent file until it contains the expected text.
+wait_agent_file_contains() {
+    local agent_name="$1"
+    local rel_path="$2"
+    local needle="$3"
+    local timeout="${4:-120}"
+    local elapsed=0
+    local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+    local last=""
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        last=$(exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/${rel_path}" 2>/dev/null || true)
+        if echo "${last}" | grep -Fq "${needle}"; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    echo "wait_agent_file_contains: agent=${agent_name} path=${rel_path} timed out after ${timeout}s, want='${needle}'" >&2
+    return 1
+}
+
+# wait_agent_matrix_allow_contains <agent_name> <jq_array_path> <matrix_id> [timeout_seconds]
+# Polls openclaw.json until channels.matrix allow-lists contain the expected ID.
+wait_agent_matrix_allow_contains() {
+    local agent_name="$1"
+    local jq_path="$2"
+    local matrix_id="$3"
+    local timeout="${4:-120}"
+    local elapsed=0
+    local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+    local last=""
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        last=$(exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/openclaw.json" 2>/dev/null | jq -r "${jq_path}[]?" 2>/dev/null)
+        if echo "${last}" | grep -Fq "${matrix_id}"; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    echo "wait_agent_matrix_allow_contains: agent=${agent_name} path=${jq_path} timed out after ${timeout}s, want='${matrix_id}', last='${last}'" >&2
     return 1
 }
 

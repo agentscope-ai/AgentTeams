@@ -9,11 +9,11 @@
 #
 # Build args:
 #   HIGRESS_REGISTRY            - base image registry
-#   HICLAW_CONTROLLER_IMAGE     - pre-built controller image for COPY --from
+#   AGENTTEAMS_CONTROLLER_IMAGE     - pre-built controller image for COPY --from
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: Tuwunel Matrix Server ============
 FROM ${HIGRESS_REGISTRY}/higress/tuwunel:20260216 AS tuwunel
@@ -28,7 +28,7 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 FROM ${HIGRESS_REGISTRY}/higress/element-web:20260216 AS element-web
 
 # ============ Stage 5: hiclaw-controller (pre-built image) ============
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
 
 # ============ Final Image: Based on Higress all-in-one ============
 FROM ${HIGRESS_REGISTRY}/higress/all-in-one:2.2.1

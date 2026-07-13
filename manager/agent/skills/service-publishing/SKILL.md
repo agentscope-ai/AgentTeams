@@ -42,7 +42,7 @@ hiclaw apply worker --name alice --model qwen3.5-plus
 ### Via YAML
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -63,7 +63,7 @@ hiclaw apply -f worker.yaml
 Team workers also support `expose`:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: dev-team

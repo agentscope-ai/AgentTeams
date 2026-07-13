@@ -12,22 +12,36 @@ import (
 type MockDeployer struct {
 	mu sync.Mutex
 
-	DeployPackageFn             func(ctx context.Context, workerName string, pkg string, isUpdate bool) error
-	WriteInlineConfigsFn        func(workerName string, spec v1beta1.WorkerSpec) error
-	DeployWorkerConfigFn        func(ctx context.Context, req service.WorkerDeployRequest) error
-	PushOnDemandSkillsFn        func(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
-	CleanupOSSDataFn            func(ctx context.Context, workerName string) error
-	InjectCoordinationContextFn func(ctx context.Context, req service.CoordinationDeployRequest) error
-	EnsureTeamStorageFn         func(ctx context.Context, teamName string) error
+	DeployPackageFn                 func(ctx context.Context, workerName string, pkg string, isUpdate bool) error
+	WriteInlineConfigsFn            func(workerName string, spec v1beta1.WorkerSpec) error
+	DeployMemberRuntimeConfigFn     func(ctx context.Context, req service.MemberRuntimeConfigDeployRequest) error
+	MergeMemberRuntimeTeamContextFn func(ctx context.Context, req service.MemberRuntimeConfigDeployRequest) error
+	DeployWorkerConfigFn            func(ctx context.Context, req service.WorkerDeployRequest) error
+	PushOnDemandSkillsFn            func(ctx context.Context, workerName string, skills []string, remoteSkills []v1beta1.RemoteSkillSource) error
+	PrepareWorkerDepsFn             func(ctx context.Context, req service.WorkerDepsPrepareRequest) error
+	CleanupOSSDataFn                func(ctx context.Context, workerName string) error
+	InjectCoordinationContextFn     func(ctx context.Context, req service.CoordinationDeployRequest) error
+	InjectWorkerCoordinationFn      func(ctx context.Context, req service.WorkerCoordinationRequest) error
+	InjectHeartbeatConfigFn         func(ctx context.Context, req service.InjectHeartbeatRequest) error
+	InjectChannelPolicyFn           func(ctx context.Context, req service.InjectChannelPolicyRequest) error
+	SyncTeamLeaderAssetsFn          func(ctx context.Context, req service.SyncTeamLeaderAssetsRequest) error
+	EnsureTeamStorageFn             func(ctx context.Context, teamName string) error
 
 	Calls struct {
-		DeployPackage             []string
-		WriteInlineConfigs        []string
-		DeployWorkerConfig        []service.WorkerDeployRequest
-		PushOnDemandSkills        []string
-		CleanupOSSData            []string
-		InjectCoordinationContext []service.CoordinationDeployRequest
-		EnsureTeamStorage         []string
+		DeployPackage                 []string
+		WriteInlineConfigs            []string
+		DeployMemberRuntimeConfig     []service.MemberRuntimeConfigDeployRequest
+		MergeMemberRuntimeTeamContext []service.MemberRuntimeConfigDeployRequest
+		DeployWorkerConfig            []service.WorkerDeployRequest
+		PushOnDemandSkills            []string
+		PrepareWorkerDeps             []service.WorkerDepsPrepareRequest
+		CleanupOSSData                []string
+		InjectCoordinationContext     []service.CoordinationDeployRequest
+		InjectWorkerCoordination      []service.WorkerCoordinationRequest
+		InjectHeartbeatConfig         []service.InjectHeartbeatRequest
+		InjectChannelPolicy           []service.InjectChannelPolicyRequest
+		SyncTeamLeaderAssets          []service.SyncTeamLeaderAssetsRequest
+		EnsureTeamStorage             []string
 	}
 }
 
@@ -42,10 +56,17 @@ func (m *MockDeployer) Reset() {
 	m.clearCallsLocked()
 	m.DeployPackageFn = nil
 	m.WriteInlineConfigsFn = nil
+	m.DeployMemberRuntimeConfigFn = nil
+	m.MergeMemberRuntimeTeamContextFn = nil
 	m.DeployWorkerConfigFn = nil
 	m.PushOnDemandSkillsFn = nil
+	m.PrepareWorkerDepsFn = nil
 	m.CleanupOSSDataFn = nil
 	m.InjectCoordinationContextFn = nil
+	m.InjectWorkerCoordinationFn = nil
+	m.InjectHeartbeatConfigFn = nil
+	m.InjectChannelPolicyFn = nil
+	m.SyncTeamLeaderAssetsFn = nil
 	m.EnsureTeamStorageFn = nil
 }
 
@@ -58,13 +79,20 @@ func (m *MockDeployer) ClearCalls() {
 
 func (m *MockDeployer) clearCallsLocked() {
 	m.Calls = struct {
-		DeployPackage             []string
-		WriteInlineConfigs        []string
-		DeployWorkerConfig        []service.WorkerDeployRequest
-		PushOnDemandSkills        []string
-		CleanupOSSData            []string
-		InjectCoordinationContext []service.CoordinationDeployRequest
-		EnsureTeamStorage         []string
+		DeployPackage                 []string
+		WriteInlineConfigs            []string
+		DeployMemberRuntimeConfig     []service.MemberRuntimeConfigDeployRequest
+		MergeMemberRuntimeTeamContext []service.MemberRuntimeConfigDeployRequest
+		DeployWorkerConfig            []service.WorkerDeployRequest
+		PushOnDemandSkills            []string
+		PrepareWorkerDeps             []service.WorkerDepsPrepareRequest
+		CleanupOSSData                []string
+		InjectCoordinationContext     []service.CoordinationDeployRequest
+		InjectWorkerCoordination      []service.WorkerCoordinationRequest
+		InjectHeartbeatConfig         []service.InjectHeartbeatRequest
+		InjectChannelPolicy           []service.InjectChannelPolicyRequest
+		SyncTeamLeaderAssets          []service.SyncTeamLeaderAssetsRequest
+		EnsureTeamStorage             []string
 	}{}
 }
 
@@ -90,6 +118,28 @@ func (m *MockDeployer) WriteInlineConfigs(workerName string, spec v1beta1.Worker
 	return nil
 }
 
+func (m *MockDeployer) DeployMemberRuntimeConfig(ctx context.Context, req service.MemberRuntimeConfigDeployRequest) error {
+	m.mu.Lock()
+	m.Calls.DeployMemberRuntimeConfig = append(m.Calls.DeployMemberRuntimeConfig, req)
+	fn := m.DeployMemberRuntimeConfigFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return nil
+}
+
+func (m *MockDeployer) MergeMemberRuntimeTeamContext(ctx context.Context, req service.MemberRuntimeConfigDeployRequest) error {
+	m.mu.Lock()
+	m.Calls.MergeMemberRuntimeTeamContext = append(m.Calls.MergeMemberRuntimeTeamContext, req)
+	fn := m.MergeMemberRuntimeTeamContextFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return nil
+}
+
 func (m *MockDeployer) DeployWorkerConfig(ctx context.Context, req service.WorkerDeployRequest) error {
 	m.mu.Lock()
 	m.Calls.DeployWorkerConfig = append(m.Calls.DeployWorkerConfig, req)
@@ -108,6 +158,17 @@ func (m *MockDeployer) PushOnDemandSkills(ctx context.Context, workerName string
 	m.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, workerName, skills, remoteSkills)
+	}
+	return nil
+}
+
+func (m *MockDeployer) PrepareWorkerDeps(ctx context.Context, req service.WorkerDepsPrepareRequest) error {
+	m.mu.Lock()
+	m.Calls.PrepareWorkerDeps = append(m.Calls.PrepareWorkerDeps, req)
+	fn := m.PrepareWorkerDepsFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
 	}
 	return nil
 }
@@ -141,6 +202,50 @@ func (m *MockDeployer) EnsureTeamStorage(ctx context.Context, teamName string) e
 	m.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, teamName)
+	}
+	return nil
+}
+
+func (m *MockDeployer) InjectWorkerCoordination(ctx context.Context, req service.WorkerCoordinationRequest) error {
+	m.mu.Lock()
+	m.Calls.InjectWorkerCoordination = append(m.Calls.InjectWorkerCoordination, req)
+	fn := m.InjectWorkerCoordinationFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return nil
+}
+
+func (m *MockDeployer) InjectHeartbeatConfig(ctx context.Context, req service.InjectHeartbeatRequest) error {
+	m.mu.Lock()
+	m.Calls.InjectHeartbeatConfig = append(m.Calls.InjectHeartbeatConfig, req)
+	fn := m.InjectHeartbeatConfigFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return nil
+}
+
+func (m *MockDeployer) InjectChannelPolicy(ctx context.Context, req service.InjectChannelPolicyRequest) error {
+	m.mu.Lock()
+	m.Calls.InjectChannelPolicy = append(m.Calls.InjectChannelPolicy, req)
+	fn := m.InjectChannelPolicyFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return nil
+}
+
+func (m *MockDeployer) SyncTeamLeaderAssets(ctx context.Context, req service.SyncTeamLeaderAssetsRequest) error {
+	m.mu.Lock()
+	m.Calls.SyncTeamLeaderAssets = append(m.Calls.SyncTeamLeaderAssets, req)
+	fn := m.SyncTeamLeaderAssetsFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
 	}
 	return nil
 }

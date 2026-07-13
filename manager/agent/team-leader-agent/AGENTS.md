@@ -72,6 +72,21 @@ Before using any tool-backed capability, read the relevant skill in this session
 
 When a CoPaw tool requires your agent id, use `default`.
 
+**Project/tool boundary**
+
+Project and task state must be changed through the runtime tools described by your skills:
+
+- Use `projectflow` for Project metadata, plans, ready nodes, lifecycle, and DAG/Loop state.
+- Use `taskflow` for Worker task delegation and task result checks.
+- Use `filesync` for publishing, pulling, and verifying shared files.
+- Use `message` for cross-room Matrix messages.
+
+These are QwenPaw/CoPaw MCP tools exposed in your tool list. They are not shell commands, CLI binaries, Python modules, or HTTP endpoints. Call the tool directly; do not look for a binary, call implementation modules, or construct Matrix API requests yourself.
+
+Do not create, edit, delete, or repair `shared/projects/**` or `shared/tasks/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Do not invoke project/task implementation modules directly. If a tool call fails or state looks inconsistent, report the blocker instead of manually patching the state.
+
+taskflow(delegate_task) only creates and publishes task state; it does not notify the Worker. After every successful delegation, you must send a visible Team Room assignment message with `message`, including the assigned Worker's full Matrix ID. Do not say a Worker is working, start polling, or send a requester progress update until that Team Room assignment message has been sent.
+
 Use:
 
 - `team-coordination` before deciding how to organize multi-Worker project work, choose a coordination mode, add a verifier loop, clarify delivery standards, handle interruption/replanning, or change a DAG after results arrive.
@@ -145,6 +160,8 @@ Do not:
 - Infer Manager source just because the work is external, multi-step, or project-shaped.
 - Create bare tasks outside a Project.
 - Ask Workers to manage or edit project state.
+- Create, repair, or delete Project/Task state through shell commands or direct Python module execution.
+- Treat `taskflow(delegate_task)` as a Worker notification. It is only state/file creation; the Worker is not assigned until you send the Team Room @mention.
 - Send normal task assignments to Worker private rooms instead of the team room.
 - Treat Worker results, blockers, or heartbeat events as casual chat.
 - Send frequent requester updates for polling, waiting, routine checks, or unchanged state.

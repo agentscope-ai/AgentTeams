@@ -38,7 +38,7 @@ type WorkerDeployRequest struct {
 	AIGatewayURL string
 
 	// MCP servers declared in spec.mcpServers. The deployer translates this into
-	// mcporter-servers.json and injects Authorization: Bearer <GatewayKey>.
+	// config/mcporter.json and injects Authorization: Bearer <GatewayKey>.
 	McpServers []v1beta1.MCPServer
 
 	TeamAdminMatrixID  string
@@ -50,6 +50,76 @@ type WorkerDeployRequest struct {
 	IsUpdate bool
 }
 
+type WorkerDepsPrepareRequest struct {
+	WorkerName   string
+	TokenSubPath string
+	EnvSubPath   string
+	DataSubPath  string
+	Storage      oss.StorageClient
+	Token        string
+	Env          map[string]string
+	UseToken     bool
+	UseEnv       bool
+}
+
+// RuntimeProjectionConfig holds non-secret cluster facts projected into
+// runtime.yaml for managed runtimes such as QwenPaw.
+type RuntimeProjectionConfig struct {
+	StorageProvider           string
+	StorageBucket             string
+	StorageEndpoint           string
+	AIGatewayURL              string
+	AgentIdentityDataEndpoint string
+}
+
+// MemberRuntimeConfigDeployRequest describes one runtime.yaml projection.
+// RuntimeName, not Name, is the object-storage member key.
+type MemberRuntimeConfigDeployRequest struct {
+	Name        string
+	RuntimeName string
+	Runtime     string
+	Role        string
+	Generation  int64
+	Spec        v1beta1.WorkerSpec
+
+	MatrixUserID   string
+	PersonalRoomID string
+	// MatrixAccessToken is projected only for remote-managed local runtimes.
+	MatrixAccessToken string
+
+	// GatewayKey is the worker's gateway API key projected only for
+	// remote-managed local runtimes.
+	GatewayKey string
+	// AIGatewayURL overrides the cluster-wide AI Gateway URL when modelProvider is set.
+	AIGatewayURL string
+	// Skill registry facts are projected for runtime-local skill discovery.
+	SkillRegistryURL      string
+	SkillRegistryAuthType string
+
+	TeamName          string
+	TeamRoomID        string
+	LeaderName        string
+	LeaderRuntimeName string
+	LeaderDMRoomID    string
+	TeamAdminName     string
+	TeamAdminMatrixID string
+	TeamMembers       []RuntimeConfigTeamMember
+
+	// DropTeamContext forces a standalone runtime.yaml even when an older
+	// team-scoped runtime.yaml exists for the same runtime name.
+	DropTeamContext bool
+}
+
+// RuntimeConfigTeamMember is a non-secret roster entry projected into
+// runtime.yaml for worker runtimes that need live team facts.
+type RuntimeConfigTeamMember struct {
+	Name           string `json:"name,omitempty"`
+	RuntimeName    string `json:"runtimeName,omitempty"`
+	Role           string `json:"role,omitempty"`
+	MatrixUserID   string `json:"matrixUserId,omitempty"`
+	PersonalRoomID string `json:"personalRoomId,omitempty"`
+}
+
 // CoordinationDeployRequest describes coordination context injection for a team leader.
 type CoordinationDeployRequest struct {
 	LeaderName         string
@@ -59,24 +129,67 @@ type CoordinationDeployRequest struct {
 	LeaderDMRoomID     string
 	HeartbeatEvery     string
 	WorkerIdleTimeout  string
-	TeamWorkers        []string
+	TeamWorkers        []TeamWorkerEntry
 	TeamAdminID        string
 	TeamCoordinatorIDs []string
 	LeaderSoul         string // from CR spec.leader.soul; used as seed if non-empty
+}
+
+// TeamWorkerEntry carries worker name + room ID for coordination context rendering.
+type TeamWorkerEntry struct {
+	Name   string
+	RoomID string
+}
+
+// WorkerCoordinationRequest describes coordination context injection for a team member worker.
+type WorkerCoordinationRequest struct {
+	WorkerName         string
+	TeamName           string
+	TeamLeaderName     string
+	TeamAdminID        string
+	TeamCoordinatorIDs []string
+}
+
+// InjectHeartbeatRequest describes heartbeat config injection into a leader's openclaw.json.
+type InjectHeartbeatRequest struct {
+	WorkerName string
+	Enabled    bool
+	Every      string // e.g. "30m"
+}
+
+// InjectChannelPolicyRequest describes a channel-policy override applied to a
+// member worker's openclaw.json. Used by TeamReconciler in the decoupled path
+// to switch a Worker's Matrix allow-list from [manager, admin] (standalone
+// default produced by WorkerReconciler) to the role-aware Team allow-list.
+// Reset back to manager-mode on team deletion.
+type InjectChannelPolicyRequest struct {
+	WorkerName     string
+	GroupAllowFrom []string
+	DMAllowFrom    []string
+}
+
+// SyncTeamLeaderAssetsRequest describes the role-specific, non-credential
+// assets that must be overlaid when a standalone Worker is attached as a Team
+// Leader in the decoupled Team path.
+type SyncTeamLeaderAssetsRequest struct {
+	WorkerName string
+	Runtime    string
 }
 
 // --- Deployer ---
 
 // DeployerConfig holds configuration for constructing a Deployer.
 type DeployerConfig struct {
-	AgentConfig        *agentconfig.Generator
-	OSS                oss.StorageClient
-	Executor           *executor.Shell
-	Packages           *executor.PackageResolver
-	Legacy             *LegacyCompat
-	AgentFSDir         string // embedded: /root/hiclaw-fs/agents
-	WorkerAgentDir     string // source for builtin agent files
-	MatrixDomain       string
+	AgentConfig    *agentconfig.Generator
+	OSS            oss.StorageClient
+	Executor       *executor.Shell
+	Packages       *executor.PackageResolver
+	Legacy         *LegacyCompat
+	AgentFSDir     string // embedded: /root/hiclaw-fs/agents
+	WorkerAgentDir string // source for builtin agent files
+	MatrixDomain   string
+
+	RuntimeProjection RuntimeProjectionConfig
 
 	// NacosCredClient is used when remoteSkills use sts-hiclaw (see CRD authType).
 	NacosCredClient credprovider.Client
@@ -86,28 +199,30 @@ type DeployerConfig struct {
 // inline config writes, openclaw.json generation, AGENTS.md merging, skill pushing,
 // and OSS synchronization.
 type Deployer struct {
-	agentConfig         *agentconfig.Generator
-	oss                 oss.StorageClient
-	executor            *executor.Shell
-	packages            *executor.PackageResolver
-	legacy              *LegacyCompat
-	agentFSDir          string
-	workerAgentDir      string
-	matrixDomain        string
-	nacosCredClient     credprovider.Client
+	agentConfig       *agentconfig.Generator
+	oss               oss.StorageClient
+	executor          *executor.Shell
+	packages          *executor.PackageResolver
+	legacy            *LegacyCompat
+	agentFSDir        string
+	workerAgentDir    string
+	matrixDomain      string
+	runtimeProjection RuntimeProjectionConfig
+	nacosCredClient   credprovider.Client
 }
 
 func NewDeployer(cfg DeployerConfig) *Deployer {
 	return &Deployer{
-		agentConfig:         cfg.AgentConfig,
-		oss:                 cfg.OSS,
-		executor:            cfg.Executor,
-		packages:            cfg.Packages,
-		legacy:              cfg.Legacy,
-		agentFSDir:          cfg.AgentFSDir,
-		workerAgentDir:      cfg.WorkerAgentDir,
-		matrixDomain:        cfg.MatrixDomain,
-		nacosCredClient:     cfg.NacosCredClient,
+		agentConfig:       cfg.AgentConfig,
+		oss:               cfg.OSS,
+		executor:          cfg.Executor,
+		packages:          cfg.Packages,
+		legacy:            cfg.Legacy,
+		agentFSDir:        cfg.AgentFSDir,
+		workerAgentDir:    cfg.WorkerAgentDir,
+		matrixDomain:      cfg.MatrixDomain,
+		runtimeProjection: cfg.RuntimeProjection,
+		nacosCredClient:   cfg.NacosCredClient,
 	}
 }
 
@@ -213,17 +328,17 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		return fmt.Errorf("config generation failed: %w", err)
 	}
 
-	// On update, preserve user-customized plugin entries (e.g. memory-core
-	// dreaming schedule) from the existing openclaw.json in storage. The
-	// generated config provides defaults for any new entries; existing
-	// user-modified entries override the generated values.
-	if req.IsUpdate {
-		if existingJSON, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json"); err == nil && len(existingJSON) > 0 {
-			if merged, mergeErr := mergeUserPluginConfig(configJSON, existingJSON); mergeErr != nil {
-				logger.Error(mergeErr, "plugin config merge failed, using generated config")
-			} else {
-				configJSON = merged
-			}
+	// Preserve user-customized plugin entries (e.g. memory-core dreaming
+	// schedule) from the existing openclaw.json in storage. This is not
+	// limited to IsUpdate: during legacy Team migration, Worker CR status is
+	// seeded before WorkerReconciler's first pass, and TeamReconciler may have
+	// already written a team-mode channel policy. Requiring IsUpdate would let
+	// that first standalone Worker pass clobber the Team overlay.
+	if existingJSON, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json"); err == nil && len(existingJSON) > 0 {
+		if merged, mergeErr := mergeUserPluginConfig(configJSON, existingJSON); mergeErr != nil {
+			logger.Error(mergeErr, "plugin config merge failed, using generated config")
+		} else {
+			configJSON = merged
 		}
 	}
 
@@ -279,16 +394,9 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 	}
 
-	// --- mcporter-servers.json ---
+	// --- config/mcporter.json ---
 	if len(req.McpServers) > 0 {
-		mcporterJSON, err := d.agentConfig.GenerateMcporterConfig(req.GatewayKey, req.McpServers)
-		if err != nil {
-			logger.Error(err, "mcporter config generation failed (non-fatal)")
-		} else if mcporterJSON != nil {
-			if err := d.oss.PutObject(ctx, agentPrefix+"/mcporter-servers.json", mcporterJSON); err != nil {
-				logger.Error(err, "mcporter config push failed (non-fatal)")
-			}
-		}
+		d.deployWorkerMcporterConfig(ctx, agentPrefix, req.GatewayKey, req.McpServers)
 	}
 
 	// --- Matrix password to storage for E2EE re-login ---
@@ -316,13 +424,134 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	return nil
 }
 
+func (d *Deployer) deployWorkerMcporterConfig(ctx context.Context, agentPrefix, gatewayKey string, mcpServers []v1beta1.MCPServer) {
+	logger := log.FromContext(ctx)
+	mcporterJSON, err := d.agentConfig.GenerateMcporterConfig(gatewayKey, mcpServers)
+	if err != nil {
+		logger.Error(err, "mcporter config generation failed (non-fatal)")
+		return
+	}
+	if mcporterJSON == nil {
+		return
+	}
+
+	mergedJSON, err := d.mergeExistingWorkerMcporterConfig(ctx, agentPrefix, mcporterJSON)
+	if err != nil {
+		logger.Error(err, "mcporter config merge failed, using generated config")
+		mergedJSON = mcporterJSON
+	}
+
+	key := agentPrefix + "/config/mcporter.json"
+	if err := d.oss.PutObject(ctx, key, mergedJSON); err != nil {
+		logger.Error(err, "mcporter config push failed (non-fatal)", "key", key)
+	}
+}
+
+func (d *Deployer) mergeExistingWorkerMcporterConfig(ctx context.Context, agentPrefix string, desiredJSON []byte) ([]byte, error) {
+	existingJSON, ok := d.readExistingWorkerMcporterConfig(ctx, agentPrefix)
+	if !ok {
+		return desiredJSON, nil
+	}
+	return mergeMcporterConfigPreservingExternal(existingJSON, desiredJSON)
+}
+
+func (d *Deployer) readExistingWorkerMcporterConfig(ctx context.Context, agentPrefix string) ([]byte, bool) {
+	data, err := d.oss.GetObject(ctx, agentPrefix+"/config/mcporter.json")
+	if err == nil && len(data) > 0 {
+		return data, true
+	}
+	return nil, false
+}
+
+type rawMcporterConfig struct {
+	MCPServers map[string]json.RawMessage `json:"mcpServers"`
+}
+
+type rawMcporterServer struct {
+	URL string `json:"url"`
+}
+
+func mergeMcporterConfigPreservingExternal(existingJSON, desiredJSON []byte) ([]byte, error) {
+	var existing rawMcporterConfig
+	if err := json.Unmarshal(existingJSON, &existing); err != nil {
+		return nil, err
+	}
+	var desired rawMcporterConfig
+	if err := json.Unmarshal(desiredJSON, &desired); err != nil {
+		return nil, err
+	}
+	if len(desired.MCPServers) == 0 {
+		return desiredJSON, nil
+	}
+
+	currentGatewayOrigins := mcporterGatewayOrigins(desired.MCPServers)
+	merged := rawMcporterConfig{MCPServers: map[string]json.RawMessage{}}
+	for name, server := range existing.MCPServers {
+		if _, managed := desired.MCPServers[name]; managed {
+			continue
+		}
+		if mcporterServerBelongsToGateway(server, currentGatewayOrigins) {
+			continue
+		}
+		merged.MCPServers[name] = server
+	}
+	for name, server := range desired.MCPServers {
+		merged.MCPServers[name] = server
+	}
+	return json.MarshalIndent(merged, "", "  ")
+}
+
+func mcporterGatewayOrigins(servers map[string]json.RawMessage) map[string]struct{} {
+	origins := map[string]struct{}{}
+	for _, server := range servers {
+		parsed := parseMcporterServerURL(server)
+		if parsed == nil || !strings.Contains(parsed.Path, "/mcp-servers/") {
+			continue
+		}
+		origins[mcporterURLOrigin(parsed)] = struct{}{}
+	}
+	return origins
+}
+
+func mcporterServerBelongsToGateway(server json.RawMessage, gatewayOrigins map[string]struct{}) bool {
+	if len(gatewayOrigins) == 0 {
+		return false
+	}
+	parsed := parseMcporterServerURL(server)
+	if parsed == nil || !strings.Contains(parsed.Path, "/mcp-servers/") {
+		return false
+	}
+	_, ok := gatewayOrigins[mcporterURLOrigin(parsed)]
+	return ok
+}
+
+func parseMcporterServerURL(server json.RawMessage) *url.URL {
+	var decoded rawMcporterServer
+	if err := json.Unmarshal(server, &decoded); err != nil {
+		return nil
+	}
+	rawURL := strings.TrimSpace(decoded.URL)
+	if rawURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil
+	}
+	return parsed
+}
+
+func mcporterURLOrigin(u *url.URL) string {
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
 // InjectCoordinationContext writes team coordination context into the leader's AGENTS.md.
 func (d *Deployer) InjectCoordinationContext(ctx context.Context, req CoordinationDeployRequest) error {
 	leaderAgentPrefix := fmt.Sprintf("agents/%s", req.LeaderName)
 
 	teamWorkers := make([]agentconfig.TeamWorkerInfo, 0, len(req.TeamWorkers))
-	for _, wn := range req.TeamWorkers {
-		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: wn})
+	for _, tw := range req.TeamWorkers {
+		teamWorkers = append(teamWorkers, agentconfig.TeamWorkerInfo{Name: tw.Name, RoomID: tw.RoomID})
 	}
 
 	coordCtx := agentconfig.CoordinationContext{
@@ -353,20 +582,11 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 	return nil
 }
 
-// renderAndPushSoulTemplate seeds the team leader's SOUL.md into OSS.
-// Seed-only: if OSS already has SOUL.md, it is never overwritten -- the agent
-// owns it after first startup. Priority: CR spec.leader.soul > template.
+// renderAndPushSoulTemplate merges the team leader's SOUL.md template into OSS.
+// The rendered template is wrapped in markers; existing content (from package or
+// prior runs) is preserved outside the markers. Priority: CR spec.leader.soul > template.
 func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix string, req CoordinationDeployRequest) error {
 	soulKey := agentPrefix + "/SOUL.md"
-	_, err := d.oss.GetObject(ctx, soulKey)
-	if err == nil {
-		log.FromContext(ctx).Info("SOUL.md: seed-only, keeping existing version", "leader", req.LeaderName)
-		return nil
-	}
-	if !os.IsNotExist(err) {
-		log.FromContext(ctx).Error(err, "SOUL.md: check existing failed, skipping seed", "leader", req.LeaderName)
-		return nil
-	}
 
 	if req.LeaderSoul != "" {
 		return d.oss.PutObject(ctx, soulKey, []byte(req.LeaderSoul))
@@ -376,22 +596,95 @@ func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix st
 	tmplData, err := os.ReadFile(tmplPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // no template, nothing to render
+			return nil
 		}
 		return fmt.Errorf("read SOUL.md.tmpl: %w", err)
 	}
 
 	workerNames := make([]string, 0, len(req.TeamWorkers))
-	for _, wn := range req.TeamWorkers {
-		workerNames = append(workerNames, wn)
+	for _, tw := range req.TeamWorkers {
+		workerNames = append(workerNames, tw.Name)
 	}
 
-	result := string(tmplData)
-	result = strings.ReplaceAll(result, "${TEAM_LEADER_NAME}", req.LeaderName)
-	result = strings.ReplaceAll(result, "${TEAM_NAME}", req.TeamName)
-	result = strings.ReplaceAll(result, "${TEAM_WORKERS}", strings.Join(workerNames, ", "))
+	rendered := string(tmplData)
+	rendered = strings.ReplaceAll(rendered, "${TEAM_LEADER_NAME}", req.LeaderName)
+	rendered = strings.ReplaceAll(rendered, "${TEAM_NAME}", req.TeamName)
+	rendered = strings.ReplaceAll(rendered, "${TEAM_WORKERS}", strings.Join(workerNames, ", "))
 
-	return d.oss.PutObject(ctx, soulKey, []byte(result))
+	existing, err := d.oss.GetObject(ctx, soulKey)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("SOUL.md read existing failed: %w", err)
+	}
+	merged := agentconfig.MergeSoulTemplate(string(existing), rendered)
+
+	return d.oss.PutObject(ctx, soulKey, []byte(merged))
+}
+
+// InjectWorkerCoordination writes team coordination context into a team member
+// worker's AGENTS.md. This is the worker-side counterpart to
+// InjectCoordinationContext, which targets the leader.
+func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoordinationRequest) error {
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md")
+	coordCtx := agentconfig.CoordinationContext{
+		WorkerName:         req.WorkerName,
+		Role:               "worker",
+		MatrixDomain:       d.matrixDomain,
+		TeamName:           req.TeamName,
+		TeamLeaderName:     req.TeamLeaderName,
+		TeamAdminID:        req.TeamAdminID,
+		TeamCoordinatorIDs: req.TeamCoordinatorIDs,
+	}
+	injected := agentconfig.InjectCoordinationContext(string(existing), coordCtx)
+	return d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(injected))
+}
+
+// InjectHeartbeatConfig reads the leader's existing openclaw.json from OSS,
+// injects or updates the heartbeat configuration, and writes it back.
+func (d *Deployer) InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error {
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every)
+	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
+}
+
+// InjectChannelPolicy reads a member worker's existing openclaw.json from OSS,
+// patches channels.matrix.groupAllowFrom and channels.matrix.dm.allowFrom to
+// the caller-computed final allow-lists, and writes it back. WorkerReconciler
+// regenerates openclaw.json with standalone semantics; when a Worker is
+// referenced into a Team via spec.workerMembers, TeamReconciler calls this to
+// apply the role-aware Team policy. On Team deletion, the caller resets the
+// lists to standalone manager/admin semantics.
+func (d *Deployer) InjectChannelPolicy(ctx context.Context, req InjectChannelPolicyRequest) error {
+	if req.WorkerName == "" || len(req.GroupAllowFrom) == 0 || len(req.DMAllowFrom) == 0 {
+		return nil
+	}
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	updated := agentconfig.InjectChannelPolicy(existing, req.GroupAllowFrom, req.DMAllowFrom)
+	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
+}
+
+// SyncTeamLeaderAssets overlays the Team Leader built-in AGENTS.md section,
+// built-in skills, and seed-only top-level files onto an already-provisioned
+// Worker. It intentionally does not rewrite openclaw.json or credentials:
+// decoupled Teams do not own Worker lifecycle/config wholesale.
+func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderAssetsRequest) error {
+	if req.WorkerName == "" {
+		return nil
+	}
+	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
+	role := "team_leader"
+	if err := d.prepareAndPushAgentsMD(ctx, req.WorkerName, agentPrefix, role, req.Runtime, "", "", "", nil, ""); err != nil {
+		return err
+	}
+	if err := d.pushBuiltinSkills(ctx, req.WorkerName, agentPrefix, role, req.Runtime); err != nil {
+		return err
+	}
+	if err := d.pushBuiltinTopLevelFiles(ctx, req.WorkerName, agentPrefix, role, req.Runtime); err != nil {
+		return err
+	}
+	return nil
 }
 
 // PushOnDemandSkills pushes on-demand skills to a worker.
@@ -419,6 +712,102 @@ func (d *Deployer) PushOnDemandSkills(ctx context.Context, workerName string, sk
 	}
 	_, err := d.executor.RunSimple(ctx, scriptPath, "--worker", workerName, "--no-notify")
 	return err
+}
+
+func (d *Deployer) PrepareWorkerDeps(ctx context.Context, req WorkerDepsPrepareRequest) error {
+	if req.WorkerName == "" {
+		return fmt.Errorf("worker deps: workerName is required")
+	}
+	if req.TokenSubPath == "" && req.EnvSubPath == "" && req.DataSubPath == "" {
+		return fmt.Errorf("worker deps: at least one subPath is required")
+	}
+	store := req.Storage
+	if store == nil {
+		store = d.oss
+	}
+	if store == nil {
+		return fmt.Errorf("worker deps: object storage client is required")
+	}
+	objects := map[string][]byte{}
+	if req.DataSubPath != "" {
+		objects[workerDepsObjectKey(req.DataSubPath, ".agentteams-keep")] = nil
+	}
+	if req.UseToken {
+		if req.TokenSubPath == "" {
+			return fmt.Errorf("worker deps: tokenSubPath is required")
+		}
+		if req.Token == "" {
+			return fmt.Errorf("worker deps: token is required")
+		}
+		objects[workerDepsObjectKey(req.TokenSubPath, "token")] = []byte(req.Token)
+	}
+	if req.UseEnv {
+		if req.EnvSubPath == "" {
+			return fmt.Errorf("worker deps: envSubPath is required")
+		}
+		objects[workerDepsObjectKey(req.EnvSubPath, "env")] = []byte(workerDepsEnvFile(req.Env))
+	}
+	keys := make([]string, 0, len(objects))
+	for key := range objects {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := store.PutObject(ctx, key, objects[key]); err != nil {
+			return fmt.Errorf("write worker deps %s: %w", key, err)
+		}
+	}
+	for _, key := range keys {
+		if err := store.Stat(ctx, key); err != nil {
+			return fmt.Errorf("verify worker deps %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func workerDepsObjectKey(subPath, fileName string) string {
+	return strings.Trim(subPath, "/") + "/" + fileName
+}
+
+func workerDepsEnvFile(env map[string]string) string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		if validEnvKey(key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, key := range keys {
+		b.WriteString("export ")
+		b.WriteString(key)
+		b.WriteString("=")
+		b.WriteString(shellSingleQuote(env[key]))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func validEnvKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	first := key[0]
+	if !((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first == '_') {
+		return false
+	}
+	for i := 1; i < len(key); i++ {
+		ch := key[i]
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func (d *Deployer) seedLocalAgentFiles(ctx context.Context, localAgentDir, agentPrefix string, excludedTopLevel map[string]struct{}) error {
@@ -804,6 +1193,14 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 	// Team leaders get their coordination context from TeamReconciler.InjectCoordinationContext
 	// which has the full context (room IDs, worker list). Skip here to avoid overwriting.
 	if role != "team_leader" {
+		if role == "standalone" && hasDecoupledTeamContext(content) {
+			logger.Info("AGENTS.md team coordination context preserved", "worker", workerName, "role", role, "reason", "worker is likely referenced by a decoupled Team")
+			if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(content)); err != nil {
+				return err
+			}
+			logger.Info("AGENTS.md pushed to storage", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(content), "source", source)
+			return nil
+		}
 		coordCtx := agentconfig.CoordinationContext{
 			WorkerName:         workerName,
 			MatrixDomain:       d.matrixDomain,
@@ -828,6 +1225,15 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 	}
 	logger.Info("AGENTS.md pushed to storage", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(content), "source", source)
 	return nil
+}
+
+func hasDecoupledTeamContext(content string) bool {
+	if !strings.Contains(content, "<!-- hiclaw-team-context-start -->") {
+		return false
+	}
+	return strings.Contains(content, "Do NOT @mention Manager") ||
+		strings.Contains(content, "- **Team Workers**:") ||
+		strings.Contains(content, "- **Team Room**:")
 }
 
 // pushBuiltinSkills copies builtin skill directories to the worker's OSS prefix.
@@ -890,8 +1296,6 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 			return filepath.Join(baseDir, "copaw-worker-agent")
 		case "hermes":
 			return filepath.Join(baseDir, "hermes-worker-agent")
-		case "openhuman":
-			return filepath.Join(baseDir, "openhuman-worker-agent")
 		}
 		return d.workerAgentDir
 	}
@@ -902,6 +1306,12 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 // config provides defaults for any new entries; existing user-modified
 // entries override generated values so that customizations (e.g. memory-core
 // dreaming schedule) survive controller reconciles.
+//
+// It also preserves channels.matrix.groupAllowFrom and channels.matrix.dm.allowFrom
+// from the existing config, because TeamReconciler in the decoupled path
+// overrides these to [leader, admin] for team members. WorkerReconciler is
+// team-agnostic and would otherwise revert them to standalone [manager, admin]
+// on every reconcile, breaking team-scoped task delivery.
 func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 	var generated, existing map[string]interface{}
 	if err := json.Unmarshal(generatedJSON, &generated); err != nil {
@@ -911,10 +1321,12 @@ func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 		return generatedJSON, err
 	}
 
+	preserveChannelMatrixAllowFrom(generated, existing)
+
 	genPlugins, _ := generated["plugins"].(map[string]interface{})
 	existPlugins, _ := existing["plugins"].(map[string]interface{})
 	if genPlugins == nil || existPlugins == nil {
-		return generatedJSON, nil
+		return json.MarshalIndent(generated, "", "  ")
 	}
 
 	// Merge plugin entries: generated provides base/defaults, existing
@@ -969,6 +1381,47 @@ func toMap(v interface{}) map[string]interface{} {
 		return m
 	}
 	return nil
+}
+
+// preserveChannelMatrixAllowFrom copies channels.matrix.groupAllowFrom and
+// channels.matrix.dm.allowFrom from existing into generated when the existing
+// values are non-empty. This ensures TeamReconciler-injected team-mode
+// channel policies are not reverted to standalone defaults on every Worker
+// reconcile.
+func preserveChannelMatrixAllowFrom(generated, existing map[string]interface{}) {
+	existChannels, _ := existing["channels"].(map[string]interface{})
+	if existChannels == nil {
+		return
+	}
+	existMatrix, _ := existChannels["matrix"].(map[string]interface{})
+	if existMatrix == nil {
+		return
+	}
+
+	genChannels, _ := generated["channels"].(map[string]interface{})
+	if genChannels == nil {
+		genChannels = make(map[string]interface{})
+		generated["channels"] = genChannels
+	}
+	genMatrix, _ := genChannels["matrix"].(map[string]interface{})
+	if genMatrix == nil {
+		genMatrix = make(map[string]interface{})
+		genChannels["matrix"] = genMatrix
+	}
+
+	if existAllow, ok := existMatrix["groupAllowFrom"].([]interface{}); ok && len(existAllow) > 0 {
+		genMatrix["groupAllowFrom"] = existAllow
+	}
+	if existDM, ok := existMatrix["dm"].(map[string]interface{}); ok {
+		genDM, _ := genMatrix["dm"].(map[string]interface{})
+		if genDM == nil {
+			genDM = make(map[string]interface{})
+			genMatrix["dm"] = genDM
+		}
+		if existDMAllow, ok := existDM["allowFrom"].([]interface{}); ok && len(existDMAllow) > 0 {
+			genDM["allowFrom"] = existDMAllow
+		}
+	}
 }
 
 // deepMergeMap recursively merges override into base; override wins on

@@ -7,18 +7,18 @@
 # or K8s Pods (incluster). HICLAW_RUNTIME env var selects mode.
 #
 # Build from project root:
-#   docker build -f manager/Dockerfile -t hiclaw/hiclaw-manager:latest .
+#   docker build -f manager/Dockerfile -t agentteams/manager:latest .
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 ARG OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base:20260423-8359cbc
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: MinIO Client (mc) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
 
 # ============ Final Image ============
 FROM ${OPENCLAW_BASE_IMAGE}

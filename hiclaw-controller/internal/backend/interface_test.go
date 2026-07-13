@@ -13,9 +13,11 @@ func TestResolveRuntime(t *testing.T) {
 		{"explicit_over_empty_fallback", RuntimeOpenClaw, "", RuntimeOpenClaw},
 		{"empty_uses_fallback_hermes", "", RuntimeHermes, RuntimeHermes},
 		{"empty_uses_fallback_copaw", "", RuntimeCopaw, RuntimeCopaw},
+		{"empty_uses_fallback_qwenpaw", "", RuntimeQwenPaw, RuntimeQwenPaw},
 		{"empty_and_no_fallback_uses_openclaw", "", "", RuntimeOpenClaw},
 		{"explicit_openclaw_preserved", RuntimeOpenClaw, RuntimeHermes, RuntimeOpenClaw},
 		{"explicit_hermes_preserved", RuntimeHermes, RuntimeCopaw, RuntimeHermes},
+		{"explicit_qwenpaw_preserved", RuntimeQwenPaw, RuntimeCopaw, RuntimeQwenPaw},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,6 +38,7 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeOpenClaw, true},
 		{RuntimeCopaw, true},
 		{RuntimeHermes, true},
+		{RuntimeQwenPaw, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {

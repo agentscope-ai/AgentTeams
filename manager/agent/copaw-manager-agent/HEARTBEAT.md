@@ -49,7 +49,7 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   - `ready` — container was already running, proceed normally
   - `started` — container was stopped and has been woken up; **wait 30 seconds** for the Worker to initialize before sending the follow-up message
   - `recreated` — container was missing and has been recreated; **wait 60 seconds** before sending the follow-up message, and flag this anomaly for the admin report (Step 7)
-  - `remote` — Worker is remotely deployed, assumed reachable
+  - `remote` — legacy lifecycle status meaning the container is not managed through the Manager-local container API; assume the controller/backend owns readiness
   - `failed` — could not start/recreate the container; **skip the follow-up message**, flag the anomaly for the admin report (Step 7), and suggest the admin intervene
 - **Use `copaw channels send` via shell** to send a follow-up to that room:
   ```bash
@@ -185,8 +185,8 @@ For each entry (one JSON object per line):
    PHASE=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .phase // "Unknown"')
    ```
 2. **`Pending`** and queued < 90s ago — leave the entry, drain again next heartbeat.
-3. **`Pending`** and queued > 90s ago — flag the anomaly to admin in DM (Step 7) and remove the entry.
-4. **`Failed`** — read the worker's `message` field, notify admin in DM with the failure reason, remove the entry.
+3. **`Pending`** and queued > 90s ago — flag the anomaly to admin in DM (Step 7) and remove the entry using the drain helper below.
+4. **`Failed`** — read the worker's `message` field, notify admin in DM with the failure reason, remove the entry using the drain helper below.
 5. **`Running`** — fetch `roomID` from `hiclaw get workers -o json`, greet the Worker, then notify admin in DM that the Worker is up:
    ```bash
    ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
@@ -195,9 +195,13 @@ For each entry (one JSON object per line):
    # Then notify admin via copaw channels send to the resolved admin DM room:
    #   "<NAME> is now Running and greeted in their Worker room."
    ```
-   Remove the entry from `~/pending-workers.json` after successful greeting + notify.
+   Remove the entry from `~/pending-workers.json` after successful greeting + notify using the drain helper below.
 
-To remove a processed entry, rewrite the file without that line (e.g. `jq -c 'select(.name != "<NAME>")' ~/pending-workers.json > ~/pending-workers.json.tmp && mv ~/pending-workers.json.tmp ~/pending-workers.json`).
+Never run `rm`, `unlink`, `mv`, or any inline rewrite command for `~/pending-workers.json`; Tool Guard may pause the Admin DM session and block later admin requests. Keep the file, even if it becomes empty. To remove a processed entry, call the helper:
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
+```
 
 ---
 

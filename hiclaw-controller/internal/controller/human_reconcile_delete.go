@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -26,12 +27,18 @@ func (r *HumanReconciler) reconcileHumanDelete(ctx context.Context, s *humanScop
 
 	humanUserID := h.Status.MatrixUserID
 	if humanUserID == "" {
-		humanUserID = r.Provisioner.MatrixUserID(s.username)
+		humanUserID = s.identity.MatrixUserID
 	}
 	for _, roomID := range h.Status.Rooms {
 		if err := r.Provisioner.ForceLeaveRoom(ctx, humanUserID, roomID); err != nil {
 			logger.Error(err, "force-leave-room failed (non-fatal)",
 				"user", humanUserID, "roomID", roomID)
+		}
+	}
+
+	if s.identity.Source != nil {
+		if err := s.identity.Source.EnsureDeactivated(ctx, &h.Spec, &h.Status); err != nil {
+			return reconcile.Result{RequeueAfter: reconcileInterval}, err
 		}
 	}
 
@@ -41,8 +48,9 @@ func (r *HumanReconciler) reconcileHumanDelete(ctx context.Context, s *humanScop
 		}
 	}
 
+	base := h.DeepCopy()
 	controllerutil.RemoveFinalizer(h, finalizerName)
-	if err := r.Update(ctx, h); err != nil {
+	if err := r.Patch(ctx, h, client.MergeFrom(base)); err != nil {
 		return reconcile.Result{}, err
 	}
 

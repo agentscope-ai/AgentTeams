@@ -31,15 +31,15 @@ func (e *APIError) Error() string {
 
 // NewAPIClient constructs a client from environment variables.
 func NewAPIClient() *APIClient {
-	baseURL := os.Getenv("HICLAW_CONTROLLER_URL")
+	baseURL := envOrLegacy("AGENTTEAMS_CONTROLLER_URL", "HICLAW_CONTROLLER_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost:8090"
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	return &APIClient{
-		BaseURL: baseURL,
-		Token:   discoverToken(),
+		BaseURL:   baseURL,
+		Token:     discoverToken(),
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -47,14 +47,14 @@ func NewAPIClient() *APIClient {
 }
 
 // discoverToken returns a bearer token using a multi-level fallback:
-//  1. HICLAW_AUTH_TOKEN env var (Docker containers, injected by Reconciler)
-//  2. HICLAW_AUTH_TOKEN_FILE env var pointing to a token file (K8s projected volume)
+//  1. AGENTTEAMS_AUTH_TOKEN / HICLAW_AUTH_TOKEN env var
+//  2. AGENTTEAMS_AUTH_TOKEN_FILE / HICLAW_AUTH_TOKEN_FILE token file
 //  3. empty string (unauthenticated, for controllers with auth disabled)
 func discoverToken() string {
-	if token := os.Getenv("HICLAW_AUTH_TOKEN"); token != "" {
+	if token := envOrLegacy("AGENTTEAMS_AUTH_TOKEN", "HICLAW_AUTH_TOKEN"); token != "" {
 		return token
 	}
-	if path := os.Getenv("HICLAW_AUTH_TOKEN_FILE"); path != "" {
+	if path := envOrLegacy("AGENTTEAMS_AUTH_TOKEN_FILE", "HICLAW_AUTH_TOKEN_FILE"); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if t := strings.TrimSpace(string(data)); t != "" {
 				return t
@@ -62,6 +62,13 @@ func discoverToken() string {
 		}
 	}
 	return ""
+}
+
+func envOrLegacy(primary, legacy string) string {
+	if value := os.Getenv(primary); value != "" {
+		return value
+	}
+	return os.Getenv(legacy)
 }
 
 // Do sends an HTTP request and returns the raw response.

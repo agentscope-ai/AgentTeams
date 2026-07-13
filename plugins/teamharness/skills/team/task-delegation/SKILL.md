@@ -1,11 +1,12 @@
 ---
 name: teamharness-task-delegation
-description: "Use only after Project Work mode is selected, when a TeamHarness Leader delegates ready project nodes, writes task specs, checks Worker results, and routes completion or blocker messages."
+description: "Use when a Leader turns ready Quick Task or Project Work state into Worker task instructions, sends assignment messages, checks submitted results, and defines completion/blocker report contracts. Do not use to create projects, create rooms, or execute Worker tasks."
 ---
 
 # Task Delegation
 
-Use this skill when acting as Leader to create and delegate task specs.
+Use this skill when acting as Leader to create Project Work task specs, send
+assignment messages, and check submitted Worker results.
 
 Each delegated task should have a task id, owner, scope, expected deliverables,
 acceptance criteria, and blocker reporting path. Write task instructions to the
@@ -29,34 +30,34 @@ project progress.
 
 ## Delegate Only Ready Nodes
 
-Within Project Work, do not create bare tasks directly from a user request.
-First create or update a project DAG, then delegate a ready project node
-returned by `projectflow` `readyNodes`, or create/update a Loop and delegate a
-ready project node returned by `readyLoopNodes`.
+Use `delegate_task` only for Project Work nodes that are ready in project
+state. Do not create bare tasks directly from a user request. First create or
+update a project DAG, then delegate a ready project node returned by
+`projectflow` `readyNodes`, or create/update a Loop and delegate a ready
+project node returned by `readyLoopNodes`.
 
-For a single-task Project Work item, `projectflow` `create_quick_project` may be
-used instead. It already writes `shared/tasks/{task-id}/meta.json`,
+For Quick Task, `projectflow` `create_quick_project` is used instead. It
+already writes `shared/tasks/{task-id}/meta.json`,
 `shared/tasks/{task-id}/spec.md`, and marks the task `assigned`; do not call
 `delegate_task` again for that task. After it returns `ok: true`, send the same
 assignment message you would send after `delegate_task`.
 
 Before delegation:
 
-1. Read `TEAMS.md` for the Worker Matrix ID and Team Room ID.
+1. Resolve the Worker Matrix ID or stable member name from the team roster.
 2. Confirm the node came from `readyNodes` or `readyLoopNodes`.
 3. Write a bounded task spec through `taskflow`. The spec must include the
    completion report instruction below.
-4. Mention the assigned Worker in the assignment room only after
-   `delegate_task` succeeds. Use the Team Room for Matrix DM-originated work,
-   or the assignment room returned by `roomflow` for external requester channels.
-   For external channels, `roomflow` must receive the stable `sourceRoomId` from
-   the current channel metadata so repeated tasks from that source room reuse
-   one Matrix assignment room.
-5. Do not create task-specific or worker-specific `sourceRoomId` values. Reuse
-   the exact external `sourceRoomId` from the current requester room. Before
-   sending the assignment message, call `roomflow` with that same `sourceRoomId`
-   and include the assigned Worker in `invite`; include any other Workers who
-   need to observe or work in the same assignment room.
+4. Keep Worker deliverables under `shared/tasks/{task-id}/...`. Do not ask a
+   Worker to write or submit `shared/projects/...`; project reports are Leader
+   owned.
+5. Use the current Matrix Task room for the assignment. Do not fall back to
+   the requester/source session.
+6. Mention the assigned Worker in the Task room only after
+   `delegate_task` succeeds.
+
+`teamharness-roomflow` owns task-room creation, reuse, external source binding,
+and Worker invites before Project Work reaches this skill.
 
 ## Delegate Task
 
@@ -69,8 +70,8 @@ Call `taskflow` with `role: "leader"` and pass `payload` as an object:
   "payload": {
     "projectId": "demo-project-001",
     "taskId": "demo-project-001-01",
-    "roomId": "room:!team-room:matrix.local",
-    "spec": "# Task demo-project-001-01\n\n## Context\nExplain why this task exists.\n\n## Expected Result\nCreate deliverables under shared/tasks/demo-project-001-01/ and submit a result with STATUS, SUMMARY, and DELIVERABLES.\n\n## Acceptance Criteria\n- The result addresses the task scope.\n- Deliverables are listed in result.md.\n\n## Completion Report\nAfter `taskflow submit_task` returns `ok: true`, reply in the current assignment room and mention the Leader Matrix user from `TEAMS.md`:\n\n<Leader Matrix user from TEAMS.md> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md\n\nDo not use `NO_REPLY` after a successful task submission.\n"
+    "roomId": "room:!task-room:matrix.local",
+    "spec": "# Task demo-project-001-01\n\n## Context\nExplain why this task exists.\n\n## Expected Result\nCreate deliverables under shared/tasks/demo-project-001-01/ and submit a result with STATUS, SUMMARY, and DELIVERABLES.\n\n## Acceptance Criteria\n- The result addresses the task scope.\n- Deliverables are listed in result.md.\n\n## Completion Report\nAfter `taskflow submit_task` returns `ok: true`, reply in the current Task room and mention the exact Leader Matrix user from this task context:\n\n<Leader Matrix user> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md\n\nDo not use `NO_REPLY` after a successful task submission.\n"
   }
 }
 ```
@@ -93,9 +94,9 @@ and result path adjusted for the actual task:
 ## Completion Report
 
 After `taskflow submit_task` returns `ok: true`, reply in the current assignment
-room and mention the Leader Matrix user from `TEAMS.md`:
+room and mention the exact Leader Matrix user from this task context:
 
-<Leader Matrix user from TEAMS.md> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md
+<Leader Matrix user> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md
 
 Do not use `NO_REPLY` after a successful task submission.
 ```
@@ -105,12 +106,16 @@ still make the Leader mention requirement explicit.
 
 ## Assignment Message
 
-After `delegate_task` returns `ok: true`, use `teamharness-communication` to
-mention the Worker in the assignment room:
+After `delegate_task` or `create_quick_project` returns `ok: true`, send a
+normal current-session reply in the Task room and mention the Worker:
 
 ```text
 @worker-a:matrix.local TASK_ASSIGNED: demo-project-001-01 - Please start this task. Spec: shared/tasks/demo-project-001-01/spec.md
 ```
+
+Do not use the `message` tool for this same-room assignment. The direct Task
+room reply is the trigger; using `message` plus a direct mention can trigger the
+Worker twice.
 
 Do not ask the Worker to edit project files. Do not ask several Workers to own
 the same task directory.
@@ -147,6 +152,12 @@ DELIVERABLES:
 - shared/tasks/{task-id}/path
 ```
 
+For report-style tasks, the Worker may write the full report directly to
+`shared/tasks/{task-id}/result.md` before calling `submit_task`. The tool
+records structured status in task metadata and does not create or rewrite
+`result.md`. Do not treat `result.md` as only a short envelope when it is the
+expected deliverable.
+
 Accepted statuses are:
 
 - `SUCCESS`
@@ -156,3 +167,23 @@ Accepted statuses are:
 
 Submitting a result ends that Worker task. If more work is needed, create a new
 project node and delegate a new task.
+
+## Post-Action Notification
+
+`delegate_task` and `submit_task` return a `notificationNeeded` field when they
+succeed. This field is a structured hint — the tool does not send any message
+automatically.
+
+For `delegate_task`: the assignment message in the Task room (see Assignment
+Message above) already serves as the notification. No additional cross-room
+notification is needed unless the `notificationNeeded.targetRoom` differs from
+the current Task room.
+
+For `submit_task`: the Worker completion message in the Task room already serves
+as the notification to the Leader. The `notificationNeeded` field confirms the
+target room for this report.
+
+The Leader should check `notificationNeeded` after accepting a task result to
+determine whether a requester report or downstream notification is due. See
+`teamharness-project-management` Post-Action Notification for the full
+protocol.

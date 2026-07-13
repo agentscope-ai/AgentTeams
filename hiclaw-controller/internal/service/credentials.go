@@ -167,7 +167,7 @@ type SecretCredentialStore struct {
 	Client    kubernetes.Interface
 	Namespace string
 	// ControllerName identifies this controller instance. Stamped on the
-	// credential Secret via hiclaw.io/controller so multi-instance
+	// credential Secret via agentteams.io/controller so multi-instance
 	// deployments sharing a namespace can filter by owner.
 	ControllerName string
 	// ResourcePrefix is the tenant prefix used to derive the decorative
@@ -204,7 +204,7 @@ func (s *SecretCredentialStore) Save(ctx context.Context, workerName string, cre
 			Namespace: s.Namespace,
 			Labels: map[string]string{
 				"app":                   s.ResourcePrefix.WorkerAppLabel(),
-				"hiclaw.io/worker":      workerName,
+				"agentteams.io/worker":  workerName,
 				v1beta1.LabelController: s.ControllerName,
 			},
 		},
@@ -247,7 +247,7 @@ func (s *SecretCredentialStore) List(ctx context.Context) ([]string, error) {
 	}
 	var names []string
 	for _, sec := range secrets.Items {
-		if name, ok := sec.Labels["hiclaw.io/worker"]; ok && name != "" {
+		if name, ok := sec.Labels["agentteams.io/worker"]; ok && name != "" {
 			names = append(names, name)
 		}
 	}

@@ -1026,12 +1026,12 @@ HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${HICLAW_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
-    MANAGER_IMAGE="${HICLAW_INSTALL_MANAGER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-manager:${HICLAW_VERSION}}"
-    MANAGER_COPAW_IMAGE="${HICLAW_INSTALL_MANAGER_COPAW_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-manager-copaw:${HICLAW_VERSION}}"
-    WORKER_IMAGE="${HICLAW_INSTALL_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-worker:${HICLAW_VERSION}}"
-    COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-copaw-worker:${HICLAW_VERSION}}"
-    HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-hermes-worker:${HICLAW_VERSION}}"
-    EMBEDDED_IMAGE="${HICLAW_INSTALL_EMBEDDED_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-embedded:${HICLAW_VERSION}}"
+    MANAGER_IMAGE="${HICLAW_INSTALL_MANAGER_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-manager:${HICLAW_VERSION}}"
+    MANAGER_COPAW_IMAGE="${HICLAW_INSTALL_MANAGER_COPAW_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-manager-copaw:${HICLAW_VERSION}}"
+    WORKER_IMAGE="${HICLAW_INSTALL_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-worker:${HICLAW_VERSION}}"
+    COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-copaw-worker:${HICLAW_VERSION}}"
+    HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-hermes-worker:${HICLAW_VERSION}}"
+    EMBEDDED_IMAGE="${HICLAW_INSTALL_EMBEDDED_IMAGE:-${HICLAW_REGISTRY}/higress/agentteams-embedded:${HICLAW_VERSION}}"
     # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
     if [ -z "${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${HICLAW_VERSION}" "v1.0.4"; then
         COPAW_WORKER_IMAGE=""
@@ -1058,8 +1058,8 @@ resolve_embedded_image() {
         return 0
     fi
 
-    local _versioned="${HICLAW_REGISTRY}/higress/hiclaw-embedded:${HICLAW_VERSION}"
-    local _latest="${HICLAW_REGISTRY}/higress/hiclaw-embedded:latest"
+    local _versioned="${HICLAW_REGISTRY}/higress/agentteams-embedded:${HICLAW_VERSION}"
+    local _latest="${HICLAW_REGISTRY}/higress/agentteams-embedded:latest"
 
     # Skip probe when HICLAW_VERSION is "latest" — no point trying the same tag twice.
     if [ "${HICLAW_VERSION}" = "latest" ]; then
@@ -2970,19 +2970,19 @@ install_manager() {
 
     # Matrix AppService tokens — generate once during install/upgrade if not provided.
     # Persisted to env file so they survive controller restarts.
-    HICLAW_MATRIX_APPSERVICE_ENABLED="${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}"
-    export HICLAW_MATRIX_APPSERVICE_ENABLED
-    if [ "${HICLAW_MATRIX_APPSERVICE_ENABLED}" != "false" ] && [ "${HICLAW_MATRIX_APPSERVICE_ENABLED}" != "0" ]; then
-        if [ -z "${HICLAW_MATRIX_APPSERVICE_AS_TOKEN}" ]; then
-            HICLAW_MATRIX_APPSERVICE_AS_TOKEN="$(openssl rand -hex 32)"
+    AGENTTEAMS_MATRIX_APPSERVICE_ENABLED="${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}"
+    export AGENTTEAMS_MATRIX_APPSERVICE_ENABLED
+    if [ "${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED}" != "false" ] && [ "${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED}" != "0" ]; then
+        if [ -z "${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN}" ]; then
+            AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN="$(openssl rand -hex 32)"
             log "  Auto-generated AppService as_token (saved to env file)"
         fi
-        if [ -z "${HICLAW_MATRIX_APPSERVICE_HS_TOKEN}" ]; then
-            HICLAW_MATRIX_APPSERVICE_HS_TOKEN="$(openssl rand -hex 32)"
+        if [ -z "${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN}" ]; then
+            AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN="$(openssl rand -hex 32)"
             log "  Auto-generated AppService hs_token (saved to env file)"
         fi
-        export HICLAW_MATRIX_APPSERVICE_AS_TOKEN
-        export HICLAW_MATRIX_APPSERVICE_HS_TOKEN
+        export AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN
+        export AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN
     fi
 
     # Detect Apple Silicon (M1/M2/M3/M4) - need JVM fix for Higress Console
@@ -3079,9 +3079,9 @@ HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}
 HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}
 
 # Matrix AppService
-HICLAW_MATRIX_APPSERVICE_ENABLED=${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}
-HICLAW_MATRIX_APPSERVICE_AS_TOKEN=${HICLAW_MATRIX_APPSERVICE_AS_TOKEN:-}
-HICLAW_MATRIX_APPSERVICE_HS_TOKEN=${HICLAW_MATRIX_APPSERVICE_HS_TOKEN:-}
+AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}
+AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN:-}
+AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN:-}
 
 # Docker API proxy (0=disabled, 1=enabled; default: 1)
 HICLAW_DOCKER_PROXY=${HICLAW_DOCKER_PROXY:-1}
@@ -3185,18 +3185,50 @@ EOF
     # (HICLAW_MATRIX_E2EE is already written to ENV_FILE above via --env-file)
 
     # Pull images (manager based on runtime config; all worker runtimes always pulled)
-    LOCAL_IMAGE_PREFIX="hiclaw/"
+    _is_local_image() {
+        case "$1" in
+            hiclaw/*|agentteams/*) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+
+    _legacy_local_image_for() {
+        case "$1" in
+            agentteams/manager:*) printf '%s\n' "hiclaw/hiclaw-manager:${1##*:}" ;;
+            agentteams/manager-copaw:*) printf '%s\n' "hiclaw/hiclaw-manager-copaw:${1##*:}" ;;
+            agentteams/worker-agent:*) printf '%s\n' "hiclaw/worker-agent:${1##*:}" ;;
+            agentteams/copaw-worker:*) printf '%s\n' "hiclaw/copaw-worker:${1##*:}" ;;
+            agentteams/hermes-worker:*) printf '%s\n' "hiclaw/hermes-worker:${1##*:}" ;;
+            agentteams/qwenpaw-worker:*) printf '%s\n' "hiclaw/qwenpaw-worker:${1##*:}" ;;
+            agentteams/agentteams-embedded:*) printf '%s\n' "hiclaw/hiclaw-embedded:${1##*:}" ;;
+            agentteams/agentteams-controller:*) printf '%s\n' "hiclaw/hiclaw-controller:${1##*:}" ;;
+        esac
+    }
+
+    _ensure_local_image_tag() {
+        local _img="$1"
+        [ -z "${_img}" ] && return 1
+        _is_local_image "${_img}" || return 1
+        if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
+            return 0
+        fi
+        local _legacy_img
+        _legacy_img="$(_legacy_local_image_for "${_img}")"
+        if [ -n "${_legacy_img}" ] && ${DOCKER_CMD} image inspect "${_legacy_img}" >/dev/null 2>&1; then
+            ${DOCKER_CMD} tag "${_legacy_img}" "${_img}"
+            return 0
+        fi
+        return 1
+    }
 
     # Helper: pull or skip a single image
     # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
     _pull_image() {
         local _img="$1" _exists_key="$2" _pull_key="$3"
         [ -z "${_img}" ] && return 0
-        if echo "${_img}" | grep -q "^${LOCAL_IMAGE_PREFIX}"; then
-            if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
-                log "$(msg "${_exists_key}" "${_img}")"
-                return 0
-            fi
+        if _ensure_local_image_tag "${_img}"; then
+            log "$(msg "${_exists_key}" "${_img}")"
+            return 0
         fi
         log "$(msg "${_pull_key}" "${_img}")"
         local _attempt=1
@@ -3216,6 +3248,9 @@ EOF
 
     # Embedded controller image (resolve versioned tag, fallback to latest)
     resolve_embedded_image
+    if [ "${HICLAW_USE_EMBEDDED}" = "1" ]; then
+        _ensure_local_image_tag "${EMBEDDED_IMAGE}" || true
+    fi
 
     # Manager image is always required (select based on runtime)
     if [ "${HICLAW_MANAGER_RUNTIME}" = "copaw" ]; then
@@ -3450,9 +3485,9 @@ CREDEOF
             -e "HICLAW_ELEMENT_HOMESERVER_URL=http://127.0.0.1:${HICLAW_PORT_GATEWAY}"
             -e "HICLAW_MATRIX_URL=http://127.0.0.1:6167"
             -e "HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}"
-            -e "HICLAW_MATRIX_APPSERVICE_ENABLED=${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}"
-            -e "HICLAW_MATRIX_APPSERVICE_AS_TOKEN=${HICLAW_MATRIX_APPSERVICE_AS_TOKEN:-}"
-            -e "HICLAW_MATRIX_APPSERVICE_HS_TOKEN=${HICLAW_MATRIX_APPSERVICE_HS_TOKEN:-}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN:-}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN:-}"
             -e "HICLAW_MINIO_ENDPOINT=http://127.0.0.1:9000"
             -e "HICLAW_MINIO_BUCKET=hiclaw-storage"
             -e "HICLAW_STORAGE_PREFIX=hiclaw/hiclaw-storage"

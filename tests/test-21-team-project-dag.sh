@@ -219,13 +219,19 @@ LEADER_HOME="/root/hiclaw-fs/agents/${TEST_LEADER}"
 PROJECT_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/project-management/SKILL.md" 2>/dev/null)
 TASK_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/task-management/SKILL.md" 2>/dev/null)
 COORDINATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/team-coordination/SKILL.md" 2>/dev/null)
+LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null)
 
 assert_contains "${PROJECT_SKILL}" "projectflow" "project-management documents projectflow"
+assert_contains "${PROJECT_SKILL}" "Project state is tool-owned" "project-management forbids manual project state mutation"
 assert_contains "${PROJECT_SKILL}" "ready_nodes" "project-management documents DAG ready nodes"
 assert_contains "${TASK_SKILL}" "taskflow" "task-management documents taskflow"
+assert_contains "${TASK_SKILL}" "Task state is tool-owned" "task-management forbids manual task state mutation"
+assert_contains "${TASK_SKILL}" "delegate_task does not send Matrix messages" "task-management requires explicit Team Room notification"
 assert_contains "${TASK_SKILL}" "delegate_task" "task-management documents task delegation"
 assert_contains "${COORDINATION_SKILL}" "DAG" "team-coordination documents DAG strategy"
 assert_contains "${COORDINATION_SKILL}" "Loop" "team-coordination documents Loop strategy"
+assert_contains "${LEADER_AGENTS}" "Project/tool boundary" "Leader AGENTS documents tool-owned project/task boundary"
+assert_contains "${LEADER_AGENTS}" "taskflow(delegate_task) only creates and publishes task state" "Leader AGENTS requires Team Room assignment after taskflow"
 
 # ============================================================
 # Section 8: End-to-End LLM Test — Admin delegates via Leader DM
@@ -294,6 +300,8 @@ TEAM_ROOM_ENC=$(echo "${TEAM_ROOM}" | sed 's/!/%21/g')
 LEADER_DM_ENC=$(echo "${LEADER_DM}" | sed 's/!/%21/g')
 
 LEADER_RESPONDED=false
+TEAM_COORDINATED=false
+RUNTIME_ERROR=false
 for i in $(seq 1 20); do
     sleep 30
     log_info "Polling rooms... (${i}/20, elapsed: $((i*30))s)"
@@ -310,11 +318,13 @@ for i in $(seq 1 20); do
     if echo "${TEAM_MSGS}" | grep -q "@${TEST_LEADER}:"; then
         log_info "Leader is active in Team Room"
         LEADER_RESPONDED=true
+        TEAM_COORDINATED=true
     fi
 
     # Check if any worker has responded in Team Room
     if echo "${TEAM_MSGS}" | grep -qi "${TEST_W1}\|${TEST_W2}"; then
         log_info "Workers are responding in Team Room"
+        TEAM_COORDINATED=true
         break
     fi
 
@@ -330,13 +340,18 @@ for i in $(seq 1 20); do
     if [ -n "${DM_MSGS}" ]; then
         log_info "Leader responded in Leader DM"
         LEADER_RESPONDED=true
+        if echo "${DM_MSGS}" | grep -qi "Error:\\|No active model configured"; then
+            RUNTIME_ERROR=true
+        fi
     fi
 done
 
-if [ "${LEADER_RESPONDED}" = "true" ]; then
+if [ "${RUNTIME_ERROR}" = "true" ]; then
+    log_fail "Leader returned a runtime error"
+elif [ "${LEADER_RESPONDED}" = "true" ] && [ "${TEAM_COORDINATED}" = "true" ]; then
     log_pass "Leader received and processed task from Admin via Leader DM"
 else
-    log_fail "Leader did not respond within timeout"
+    log_fail "Leader did not coordinate the task in Team Room within timeout"
 fi
 
 # Final snapshot of all rooms

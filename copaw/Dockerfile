@@ -139,6 +139,15 @@ RUN STANDARD_SITE=/opt/venv/standard/lib/python3.11/site-packages/copaw_worker \
     && LITE_SITE=/opt/venv/lite/lib/python3.11/site-packages/copaw_worker \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$STANDARD_SITE/" \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$LITE_SITE/" \
+    && for SITE in /opt/venv/standard/lib/python3.11/site-packages /opt/venv/lite/lib/python3.11/site-packages; do \
+         rm -rf "$SITE/copaw/app/channels/matrix"; \
+         mkdir -p "$SITE/copaw/app/channels/matrix"; \
+         cp /tmp/copaw-worker/src/matrix/channel.py /tmp/copaw-worker/src/matrix/__init__.py "$SITE/copaw/app/channels/matrix/"; \
+         if [ -f /tmp/copaw-worker/src/matrix/config.py ]; then \
+           cp /tmp/copaw-worker/src/matrix/config.py "$SITE/copaw/config/config.py"; \
+         fi; \
+         find "$SITE/copaw/app/channels/matrix" -name '__pycache__' -type d -prune -exec rm -rf {} +; \
+       done \
     && rm -rf /tmp/copaw-worker/ /tmp/lite-copaw/
 
 # copaw-sync wrapper

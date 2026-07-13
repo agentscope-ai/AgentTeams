@@ -440,13 +440,26 @@ get_worker_room_id() {
 worker_container_name() {
     local worker="$1"
     local container
+    if [ -n "${TEST_WORKER_CONTAINER_PREFIX:-}" ]; then
+        container="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^${TEST_WORKER_CONTAINER_PREFIX}${worker}$" | head -1 || true)"
+        if [ -n "${container}" ]; then
+            printf '%s\n' "${container}"
+            return
+        fi
+    fi
     container="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^agentteams-worker-${worker}$" | head -1 || true)"
     container="${container:-$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^hiclaw-worker-${worker}$" | head -1 || true)}"
+    if [ -n "${TEST_WORKER_CONTAINER_PREFIX:-}" ]; then
+        container="${container:-${TEST_WORKER_CONTAINER_PREFIX}${worker}}"
+    fi
     printf '%s\n' "${container:-agentteams-worker-${worker}}"
 }
 
 remove_worker_container() {
     local worker="$1"
+    if [ -n "${TEST_WORKER_CONTAINER_PREFIX:-}" ]; then
+        docker rm -f "${TEST_WORKER_CONTAINER_PREFIX}${worker}" >/dev/null 2>&1 || true
+    fi
     docker rm -f "agentteams-worker-${worker}" "hiclaw-worker-${worker}" >/dev/null 2>&1 || true
 }
 
@@ -847,7 +860,7 @@ worker_scoped_minio_stat() {
         -e "AGENTTEAMS_DBG_ACCESS_KEY=${access_key}" \
         -e "AGENTTEAMS_DBG_SECRET_KEY=${secret_key}" \
         "${controller}" sh -lc '
-            endpoint="${AGENTTEAMS_DBG_ENDPOINT//agentteams-controller/127.0.0.1}"
+            endpoint=$(printf "%s" "${AGENTTEAMS_DBG_ENDPOINT}" | sed "s#agentteams-controller#127.0.0.1#g")
             mc alias set workerdebug "${endpoint}" "${AGENTTEAMS_DBG_ACCESS_KEY}" "${AGENTTEAMS_DBG_SECRET_KEY}" >/dev/null 2>&1 || {
                 echo "worker scoped alias set failed"
                 exit 0

@@ -76,6 +76,7 @@ COPY manager/scripts/init/start-tuwunel.sh /opt/hiclaw/scripts/init/start-tuwune
 COPY manager/scripts/init/start-element-web.sh /opt/hiclaw/scripts/init/start-element-web.sh
 COPY manager/scripts/init/start-mc-mirror.sh /opt/hiclaw/scripts/init/start-mc-mirror.sh
 COPY manager/scripts/lib/ /opt/hiclaw/scripts/lib/
+COPY shared/lib/ /opt/hiclaw/scripts/lib/
 RUN chmod +x /opt/hiclaw/scripts/init/*.sh
 
 # Agent templates (builtin AGENTS.md, skills for worker, copaw-worker, hermes-worker, team-leader)

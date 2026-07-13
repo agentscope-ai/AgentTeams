@@ -54,6 +54,28 @@ def test_worker_channel_suppresses_team_leader_dm_internal_preamble(
     )
     ch = _make_channel()
 
+    for text in (
+        "I'll coordinate the team. Let me first check the team organization.",
+        "Good, I have a thorough understanding of all the skills. "
+        "Now let me check the team organization and available workers.",
+        "I have 2 workers available: a dev worker and a QA worker. "
+        "Now let me design the DAG plan and create the project.",
+    ):
+        asyncio.run(ch.send("!leader-dm:hs.local", text))
+
+    assert ch._client.sent == []
+
+
+def test_worker_channel_suppression_reads_default_workspace_runtime(
+    tmp_path, monkeypatch,
+):
+    copaw_root = _write_team_leader_runtime(tmp_path)
+    monkeypatch.setenv(
+        "COPAW_WORKING_DIR",
+        str(copaw_root / "workspaces" / "default"),
+    )
+    ch = _make_channel()
+
     asyncio.run(
         ch.send(
             "!leader-dm:hs.local",

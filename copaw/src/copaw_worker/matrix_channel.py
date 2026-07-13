@@ -48,6 +48,7 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
     r"let me|"
     r"i['’]?ll coordinate|"
     r"i will coordinate|"
+    r"i have \d+ workers? available|"
     r"now let me|"
     r"no active projects|"
     r"project created\. now|"
@@ -209,7 +210,14 @@ def _strip_yaml_string(value: str) -> str:
 def _runtime_root() -> Path:
     configured = os.getenv("COPAW_WORKING_DIR")
     if configured:
-        return Path(configured).expanduser().resolve().parent
+        path = Path(configured).expanduser().resolve()
+        if path.name == "default" and path.parent.name == "workspaces":
+            copaw_dir = path.parent.parent
+            if copaw_dir.name == ".copaw":
+                return copaw_dir.parent
+        if path.name == ".copaw":
+            return path.parent
+        return path.parent
 
     cwd = Path.cwd().resolve()
     if cwd.name == "default" and cwd.parent.name == "workspaces":

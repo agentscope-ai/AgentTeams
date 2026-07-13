@@ -81,6 +81,40 @@ def test_team_leader_assignment_in_dm_routes_to_team_room(tmp_path, monkeypatch)
     assert "admin " not in client.sent[0][2]["body"]
 
 
+def test_team_leader_dm_internal_preambles_are_suppressed(tmp_path, monkeypatch):
+    working_dir = tmp_path / "leader" / ".copaw"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    runtime_dir = tmp_path / "leader" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "runtime.yaml").write_text(
+        "kind: MemberRuntimeConfig\n"
+        "member:\n"
+        "  role: team_leader\n"
+        "team:\n"
+        "  name: dag-team-1\n"
+        "  teamRoomId: \"!team-room:hs.local\"\n"
+        "  leaderDmRoomId: \"!leader-dm:hs.local\"\n",
+        encoding="utf-8",
+    )
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    for text in (
+        "I'll coordinate the team to build a REST API for a todo-list app. "
+        "Let me start by checking the team organization and then plan the project.",
+        "Good, I have a thorough understanding of all the skills. "
+        "Now let me check the team organization and available workers.",
+        "I have 2 workers available: a dev worker and a QA worker. "
+        "Now let me design the DAG plan and create the project.",
+    ):
+        asyncio.run(ch.send("!leader-dm:hs.local", text))
+
+    assert client.sent == []
+
+
 def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
     ch = _make_channel()
     content = {

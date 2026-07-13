@@ -86,23 +86,38 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	}
 	condition := listStmt.Condition["StringLike"].(map[string]interface{})
 	prefixes := condition["s3:prefix"].([]string)
+	hasAgentsParent := false
 	hasTeam := false
 	hasWorkerDir := false
+	hasWorkerConfig := false
 	hasSharedDir := false
+	hasTeamsParent := false
 	hasTeamDir := false
 	for _, p := range prefixes {
+		if p == "agents/" {
+			hasAgentsParent = true
+		}
 		if p == "teams/team-dev" || p == "teams/team-dev/*" {
 			hasTeam = true
 		}
 		if p == "agents/worker-1/" {
 			hasWorkerDir = true
 		}
+		if p == "agents/worker-1/openclaw.json" {
+			hasWorkerConfig = true
+		}
 		if p == "shared/" {
 			hasSharedDir = true
+		}
+		if p == "teams/" {
+			hasTeamsParent = true
 		}
 		if p == "teams/team-dev/" {
 			hasTeamDir = true
 		}
+	}
+	if !hasAgentsParent {
+		t.Errorf("expected agents parent prefix in list conditions: %v", prefixes)
 	}
 	if !hasTeam {
 		t.Errorf("expected team prefix in list conditions: %v", prefixes)
@@ -110,8 +125,14 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	if !hasWorkerDir {
 		t.Errorf("expected worker directory prefix in list conditions: %v", prefixes)
 	}
+	if !hasWorkerConfig {
+		t.Errorf("expected worker config prefix in list conditions: %v", prefixes)
+	}
 	if !hasSharedDir {
 		t.Errorf("expected shared directory prefix in list conditions: %v", prefixes)
+	}
+	if !hasTeamsParent {
+		t.Errorf("expected teams parent prefix in list conditions: %v", prefixes)
 	}
 	if !hasTeamDir {
 		t.Errorf("expected team directory prefix in list conditions: %v", prefixes)

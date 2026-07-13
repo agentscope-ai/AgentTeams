@@ -123,9 +123,18 @@ type s3PolicyStatement struct {
 
 func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string, isManager bool) s3Policy {
 	listPrefixes := []string{
+		"agents",
+		"agents/",
 		fmt.Sprintf("agents/%s", workerName),
 		fmt.Sprintf("agents/%s/", workerName),
 		fmt.Sprintf("agents/%s/*", workerName),
+		fmt.Sprintf("agents/%s/openclaw.json", workerName),
+		fmt.Sprintf("agents/%s/SOUL.md", workerName),
+		fmt.Sprintf("agents/%s/AGENTS.md", workerName),
+		fmt.Sprintf("agents/%s/HEARTBEAT.md", workerName),
+		fmt.Sprintf("agents/%s/config", workerName),
+		fmt.Sprintf("agents/%s/config/", workerName),
+		fmt.Sprintf("agents/%s/config/*", workerName),
 		"shared",
 		"shared/",
 		"shared/*",
@@ -154,6 +163,8 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 
 	if teamName != "" {
 		listPrefixes = append(listPrefixes,
+			"teams",
+			"teams/",
 			fmt.Sprintf("teams/%s", teamName),
 			fmt.Sprintf("teams/%s/", teamName),
 			fmt.Sprintf("teams/%s/*", teamName),

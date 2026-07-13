@@ -43,6 +43,17 @@ logger = logging.getLogger(__name__)
 _MATRIX_USER_ID_RE = re.compile(
     r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
 )
+_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
+    r"(?i)\b("
+    r"let me|"
+    r"i['’]?ll coordinate|"
+    r"i will coordinate|"
+    r"now let me|"
+    r"no active projects|"
+    r"project created\. now|"
+    r"good[,.]? i have"
+    r")\b",
+)
 
 # Token refresh tunables
 MAX_TOKEN_REFRESH_RETRIES = 3
@@ -246,6 +257,32 @@ def _extract_matrix_user_ids(text: str) -> list[str]:
         seen.add(key)
         result.append(mxid)
     return result
+
+
+def _ends_with_no_reply_control(text: str) -> bool:
+    """Return true when the final non-empty output line is NO_REPLY."""
+    return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
+
+
+def _is_team_leader_dm_internal_preamble(current_room_id: str, text: str) -> bool:
+    """Suppress visible Team Leader internal planning/tool preambles in Leader DM."""
+    if _runtime_config_field("member", "role") != "team_leader":
+        return False
+
+    leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
+    if not leader_dm_room_id or current_room_id != leader_dm_room_id:
+        return False
+
+    # Text with an explicit Matrix ID may be a cross-room Worker assignment
+    # that _team_assignment_room will reroute to the Team Room.
+    if _extract_matrix_user_ids(text):
+        return False
+
+    stripped = (text or "").strip()
+    if not stripped or "?" in stripped:
+        return False
+
+    return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))
 
 
 class MatrixChannel(BaseChannel):
@@ -1628,6 +1665,24 @@ class MatrixChannel(BaseChannel):
             return
 
         room_id = to_handle
+
+        if _ends_with_no_reply_control(text):
+            logger.info(
+                "MatrixChannel: suppressing NO_REPLY send to %s",
+                room_id,
+            )
+            await self._send_typing(room_id, False)
+            return
+
+        if _is_team_leader_dm_internal_preamble(room_id, text):
+            logger.info(
+                "MatrixChannel: suppressing Team Leader internal preamble "
+                "in Leader DM %s",
+                room_id,
+            )
+            await self._send_typing(room_id, False)
+            return
+
         content: dict[str, Any] = {
             "msgtype": "m.text",
             "body": text,

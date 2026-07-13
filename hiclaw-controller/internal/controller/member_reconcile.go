@@ -308,7 +308,7 @@ func ValidateMemberDeployment(m MemberContext) error {
 // RoomID, and ProvResult into state.
 func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) (reconcile.Result, error) {
 	if m.ExistingMatrixUserID != "" {
-		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName)
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials: %w", err)
 		}
@@ -738,7 +738,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 	prov := state.ProvResult
 	if prov == nil || prov.MatrixToken == "" {
-		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName)
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials for container: %w", err)
 		}

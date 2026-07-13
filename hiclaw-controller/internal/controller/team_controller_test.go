@@ -264,6 +264,7 @@ func TestReconcileMemberRefreshUsesCRNameCredentialAndRuntimeMatrixName(t *testi
 		Name:                 "alpha-worker-lead",
 		RuntimeName:          "leader",
 		Role:                 RoleTeamLeader,
+		TeamName:             "alpha",
 		ExistingMatrixUserID: "@leader:localhost",
 	}
 
@@ -280,6 +281,9 @@ func TestReconcileMemberRefreshUsesCRNameCredentialAndRuntimeMatrixName(t *testi
 	}
 	if call.WorkerName != "leader" {
 		t.Fatalf("WorkerName=%q, want runtime workerName leader", call.WorkerName)
+	}
+	if call.TeamName != "alpha" {
+		t.Fatalf("TeamName=%q, want alpha", call.TeamName)
 	}
 }
 

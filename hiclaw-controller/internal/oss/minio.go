@@ -74,6 +74,9 @@ func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) er
 	if err := c.ensureAlias(ctx); err != nil {
 		return err
 	}
+	if strings.HasSuffix(key, "/") {
+		return c.pipeObject(ctx, key, data)
+	}
 	tmpFile, err := os.CreateTemp("", "hiclaw-oss-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
@@ -87,6 +90,32 @@ func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) er
 	tmpFile.Close()
 
 	return c.PutFile(ctx, tmpFile.Name(), key)
+}
+
+func (c *MinIOClient) pipeObject(ctx context.Context, key string, data []byte) error {
+	cmd := exec.CommandContext(ctx, c.config.MCBinary, "pipe", c.fullPath(key))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdin = bytes.NewReader(data)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if c.credSource != nil {
+		creds, err := c.credSource.Resolve(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve oss credentials: %w", err)
+		}
+		hostEnv, herr := buildMCHostEnv(c.config.Alias, c.config.Endpoint, creds)
+		if herr != nil {
+			return herr
+		}
+		cmd.Env = append(os.Environ(), hostEnv)
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("mc pipe %s: %w (stderr: %s)",
+			c.fullPath(key), err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 func (c *MinIOClient) PutFile(ctx context.Context, localPath, key string) error {

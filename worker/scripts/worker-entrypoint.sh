@@ -55,8 +55,17 @@ mkdir -p "${WORKSPACE}" "${AGENTTEAMS_ROOT}/shared"
 
 log "Pulling Worker config from centralized storage..."
 ensure_mc_credentials 2>/dev/null || true
-mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
-    --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" --exclude "credentials/**"
+RETRY=0
+until mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/" --overwrite \
+    --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" --exclude "credentials/**"; do
+    RETRY=$((RETRY + 1))
+    if [ "${RETRY}" -gt 6 ]; then
+        log "ERROR: failed to pull Worker config from MinIO after retries"
+        exit 1
+    fi
+    log "Waiting for Worker config prefix in MinIO (attempt ${RETRY}/6)..."
+    sleep 5
+done
 mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${AGENTTEAMS_ROOT}/shared/" --overwrite 2>/dev/null || true
 
 # Mark pull completion — the local→remote sync loop uses this marker to avoid

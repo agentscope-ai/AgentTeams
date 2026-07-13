@@ -102,22 +102,24 @@ class Worker:
         #    container start can be close together, so tolerate a short initial
         #    storage visibility race before giving up.
         openclaw_cfg = None
-        for attempt in range(1, 7):
+        max_attempts = 12
+        for attempt in range(1, max_attempts + 1):
             console.print("[yellow]Pulling all files from MinIO...[/yellow]")
             try:
                 self.sync.mirror_all()
                 openclaw_cfg = self.sync.get_config()
                 break
             except Exception as exc:
-                if attempt >= 6:
+                if attempt >= max_attempts:
                     console.print(f"[red]Failed to read worker config from MinIO: {exc}[/red]")
                     return False
                 logger.warning(
-                    "Worker config not ready yet (attempt %s/6): %s",
+                    "Worker config not ready yet (attempt %s/%s): %s",
                     attempt,
+                    max_attempts,
                     exc,
                 )
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
 
         # 3b. Re-login to Matrix to get fresh access token + device ID
         #     Under E2EE, reusing the old access token (same device_id) with a

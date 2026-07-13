@@ -250,6 +250,23 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
     wait_for_worker_container "${w}" 60 || log_fail "Container ${w} not running"
 done
 
+# Container running only proves Docker accepted the worker process. CoPaw needs
+# a short bootstrap window before its Matrix channel is ready to accept invites.
+if [ "${TEST_WORKER_RUNTIME:-}" = "copaw" ] || [ "${HICLAW_DEFAULT_WORKER_RUNTIME:-}" = "copaw" ] || [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-}" = "copaw" ]; then
+    for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
+        log_info "Waiting for CoPaw Worker readiness probe before room membership checks (${w})..."
+        PROBE_OUTPUT=$(check_copaw_worker_probes "${w}" "ready" 60)
+        PROBE_STATUS=$?
+        if [ "${PROBE_STATUS}" = "0" ]; then
+            log_pass "CoPaw Worker ${w} readiness probe is ready"
+            log_info "${PROBE_OUTPUT}"
+        else
+            log_fail "CoPaw Worker ${w} readiness probe did not become ready"
+            log_info "${PROBE_OUTPUT}"
+        fi
+    done
+fi
+
 # Send task from Admin directly in Leader DM
 assert_not_empty "${LEADER_DM}" "Leader DM room exists"
 

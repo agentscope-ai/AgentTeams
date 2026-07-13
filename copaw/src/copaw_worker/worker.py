@@ -127,6 +127,7 @@ class Worker:
         #     distribution. Re-login creates a new device_id, matching the
         #     Manager's behavior.
         openclaw_cfg = self._matrix_relogin(openclaw_cfg)
+        self._join_pending_matrix_invites(openclaw_cfg)
 
         # 4. Set up CoPaw working directory
         self._copaw_working_dir = self.config.install_dir / self.worker_name / ".copaw"
@@ -405,6 +406,51 @@ class Worker:
             )
 
         return openclaw_cfg
+
+    def _join_pending_matrix_invites(self, openclaw_cfg: dict) -> None:
+        """Accept pending Matrix invites before CoPaw's channel loop starts."""
+        import json
+        import urllib.parse
+        import urllib.request
+
+        matrix_cfg = openclaw_cfg.get("channels", {}).get("matrix", {})
+        access_token = matrix_cfg.get("accessToken", "")
+        from .bridge import _port_remap, _is_in_container
+        homeserver = _port_remap(
+            matrix_cfg.get("homeserver", ""), _is_in_container()
+        )
+        if not homeserver or not access_token:
+            return
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        sync_url = (
+            f"{homeserver}/_matrix/client/v3/sync?"
+            "timeout=0&full_state=true"
+        )
+        try:
+            req = urllib.request.Request(sync_url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+        except Exception as exc:
+            logger.warning("Matrix pending invite sync failed: %s", exc)
+            return
+
+        invites = (data.get("rooms", {}).get("invite") or {}).keys()
+        for room_id in invites:
+            encoded = urllib.parse.quote(room_id, safe="")
+            join_url = f"{homeserver}/_matrix/client/v3/join/{encoded}"
+            try:
+                req = urllib.request.Request(
+                    join_url,
+                    data=b"{}",
+                    headers={**headers, "Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=30):
+                    pass
+                logger.info("Joined pending Matrix invite: %s", room_id)
+            except Exception as exc:
+                logger.warning("Matrix invite join failed for %s: %s", room_id, exc)
 
     # ------------------------------------------------------------------
     # mc (MinIO Client) auto-install

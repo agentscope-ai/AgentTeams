@@ -322,16 +322,23 @@ curl -sf -X PUT "http://127.0.0.1:6167/_matrix/client/v3/rooms/${ROOM_ENC}/send/
 
 log_info "Task sent to Leader via Leader DM. Monitoring rooms..."
 
-# Poll for Leader activity in Team Room (up to 10 minutes)
+# Poll for Leader activity in Team Room.
+#
+# This test validates the routing boundary, not full project completion. Once
+# the Leader is responding in Leader DM but no assignment appears in Team Room,
+# extra waiting only repeats the same misroute and slows CI.
 TEAM_ROOM_ENC=$(echo "${TEAM_ROOM}" | sed 's/!/%21/g')
 LEADER_DM_ENC=$(echo "${LEADER_DM}" | sed 's/!/%21/g')
+MAX_COORDINATION_POLLS="${MAX_COORDINATION_POLLS:-6}"
+MAX_DM_ONLY_POLLS="${MAX_DM_ONLY_POLLS:-3}"
 
 LEADER_RESPONDED=false
 TEAM_COORDINATED=false
 RUNTIME_ERROR=false
-for i in $(seq 1 20); do
+DM_ONLY_POLLS=0
+for i in $(seq 1 "${MAX_COORDINATION_POLLS}"); do
     sleep 30
-    log_info "Polling rooms... (${i}/20, elapsed: $((i*30))s)"
+    log_info "Polling rooms... (${i}/${MAX_COORDINATION_POLLS}, elapsed: $((i*30))s)"
 
     # Check Team Room for Leader messages
     TEAM_MSGS=$(exec_in_manager bash -c '
@@ -369,6 +376,14 @@ for i in $(seq 1 20); do
         LEADER_RESPONDED=true
         if echo "${DM_MSGS}" | grep -qi "Error:\\|No active model configured"; then
             RUNTIME_ERROR=true
+        fi
+    fi
+
+    if [ "${LEADER_RESPONDED}" = "true" ] && [ "${TEAM_COORDINATED}" != "true" ]; then
+        DM_ONLY_POLLS=$((DM_ONLY_POLLS + 1))
+        if [ "${DM_ONLY_POLLS}" -ge "${MAX_DM_ONLY_POLLS}" ]; then
+            log_info "Leader is replying in Leader DM but has not posted a Team Room assignment after ${DM_ONLY_POLLS} polls; failing fast"
+            break
         fi
     fi
 done

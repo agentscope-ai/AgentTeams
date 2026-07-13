@@ -49,6 +49,17 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   - `recreated` — container was missing and has been recreated; **wait 60 seconds** before sending the follow-up message, and flag this anomaly for the admin report (Step 7)
   - `remote` — Worker is remotely deployed, assumed reachable
   - `failed` — could not start/recreate the container; **skip the follow-up message**, flag the anomaly for the admin report (Step 7), and suggest the admin intervene
+- Check whether the task has made file-level progress since the last heartbeat:
+  ```bash
+  bash /opt/hiclaw/agent/skills/task-management/scripts/check-progress-watchdog.sh \
+    --task-id {task-id}
+  ```
+  Read the JSON `status` and `stale_heartbeat_count`:
+  - `normal` — progress changed since the last watchdog check; continue normally
+  - `long_running` — progress says a long step is still running and includes a future `Expected next update`; do not treat it as stuck before that time
+  - `blocked` — the latest progress block explicitly reports a blocker; flag it for the admin report (Step 7) and ask only for missing decision/input if the blocker is actionable
+  - `repeated` — the latest progress block is unchanged; if `stale_heartbeat_count` is 1, ask for a concise status/blocker report; if it is 2, record suspected stale progress but avoid noisy repeat pings; if it is 3 or higher, flag the anomaly for the admin report (Step 7)
+  - `unknown` — no parseable progress signal was found; ask the Worker to write a progress update or report a blocker, and flag it for the admin report if this repeats
 - **Send** the follow-up using the **message** tool with `channel=matrix`, `target=room:<room_id>` (the `room_id` or `project_room_id` you chose), and body @mention `@{worker}:${HICLAW_MATRIX_DOMAIN}`:
   ```
   @{worker}:{domain} How is your current task {task-id} going? Are you blocked on anything?

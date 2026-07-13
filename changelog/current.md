@@ -4,6 +4,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
+- feat(manager): add task progress watchdog state checks for heartbeat-based suspected stale Worker detection, including long-running step grace windows (#947).
 - feat(qwenpaw): add the QwenPaw worker runtime Python package baseline with runtime config sync, storage sync, heartbeat reporting, Matrix channel overlay, and focused unit tests.
 - fix(controller): surface Kubernetes Pod container failures in Worker backend status and status API responses.
 - feat(controller): expose low-cardinality AgentTeams controller metrics and optional Helm ServiceMonitor.

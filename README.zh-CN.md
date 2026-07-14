@@ -243,11 +243,69 @@ helm install hiclaw higress.io/hiclaw \
 
 **访问**
 
+临时从本机管理集群时，可以转发 Higress Gateway：
+
 ```bash
 kubectl port-forward -n hiclaw-system svc/higress-gateway 18080:80
 ```
 
-然后在浏览器中打开 http://localhost:18080 登录 Element Web。生产集群中请通过 Ingress / LoadBalancer / DNS 指向 `svc/higress-gateway`，并相应地修改 `gateway.publicURL`。
+然后在浏览器中打开 http://localhost:18080 登录 Element Web。命令退出后转发即停止，
+因此该方式不适合多人共享。
+
+公司内网或公网访问时，只需通过 HTTPS Ingress 或 LoadBalancer 暴露
+`svc/higress-gateway`。`gateway.publicURL` 会写入 Element Web 配置，作为 Matrix
+Homeserver 地址，因此必须与用户实际打开的公网 Origin 完全一致，例如
+`https://agentteams.example.com`。
+
+1. 将公网域名解析到 Ingress Controller 或负载均衡器。
+2. 在 `hiclaw-system` 命名空间中准备 TLS 证书 Secret。
+3. 在 Helm Release 中设置相同的公网地址：
+
+```bash
+helm upgrade hiclaw higress.io/hiclaw \
+  -n hiclaw-system --reuse-values \
+  --set gateway.publicURL=https://agentteams.example.com
+```
+
+4. 将该域名路由到 Higress Gateway。以下通用示例假设使用 NGINX
+   IngressClass，并已存在 `agentteams-tls` Secret；请按集群实际情况替换：
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentteams
+  namespace: hiclaw-system
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - agentteams.example.com
+      secretName: agentteams-tls
+  rules:
+    - host: agentteams.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: higress-gateway
+                port:
+                  number: 80
+```
+
+DNS 与 TLS 生效后，分别验证 Web 入口和 Matrix 路由：
+
+```bash
+curl -fsSI https://agentteams.example.com/
+curl -fsS https://agentteams.example.com/_matrix/client/versions
+```
+
+Controller API、Tuwunel、MinIO 和 Higress Console 应保持集群内访问；如确需暴露，
+请另行配置身份认证和网络策略。多人共享时必须使用 HTTPS，因为 Matrix 登录凭据和
+Access Token 都会经过该入口。也可以用 `LoadBalancer` Service 代替 Ingress，但 DNS、
+TLS 和 `gateway.publicURL` 的要求不变。
 
 **升级**
 

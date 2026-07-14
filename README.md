@@ -234,11 +234,71 @@ For all configurable values (gateway/storage providers, image tags, resources, p
 
 **Access**
 
+For a temporary local admin session, forward the Higress Gateway:
+
 ```bash
 kubectl port-forward -n hiclaw-system svc/higress-gateway 18080:80
 ```
 
-Then open http://localhost:18080 in your browser and log in to Element Web. For an actual cluster, configure an Ingress / LoadBalancer / DNS record pointing at `svc/higress-gateway` and set `gateway.publicURL` accordingly.
+Then open http://localhost:18080 and log in to Element Web. The port-forward
+ends when the command exits and is not suitable for shared access.
+
+For company or Internet access, expose only `svc/higress-gateway` through an
+HTTPS Ingress or LoadBalancer. `gateway.publicURL` is written into the Element
+Web configuration as its Matrix homeserver URL, so it must exactly match the
+public origin that users open (for example, `https://agentteams.example.com`).
+
+1. Point the public DNS name at your Ingress controller or load balancer.
+2. Provision a TLS certificate Secret in `hiclaw-system`.
+3. Set the same origin on the Helm release:
+
+```bash
+helm upgrade hiclaw higress.io/hiclaw \
+  -n hiclaw-system --reuse-values \
+  --set gateway.publicURL=https://agentteams.example.com
+```
+
+4. Route that host to the Higress Gateway. This generic example assumes an
+   NGINX IngressClass and an existing `agentteams-tls` Secret; replace both to
+   match your cluster:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentteams
+  namespace: hiclaw-system
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - agentteams.example.com
+      secretName: agentteams-tls
+  rules:
+    - host: agentteams.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: higress-gateway
+                port:
+                  number: 80
+```
+
+Verify both the web entry point and Matrix routing after DNS and TLS are ready:
+
+```bash
+curl -fsSI https://agentteams.example.com/
+curl -fsS https://agentteams.example.com/_matrix/client/versions
+```
+
+Keep the controller API, Tuwunel, MinIO, and the Higress Console private unless
+you apply separate authentication and network policy. Use HTTPS for shared
+access because Matrix login credentials and access tokens pass through this
+endpoint. A `LoadBalancer` Service can replace the Ingress, but the DNS, TLS,
+and `gateway.publicURL` requirements remain the same.
 
 **Upgrade**
 

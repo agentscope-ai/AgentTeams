@@ -44,6 +44,126 @@ async def _noop_typing(_room_id, _typing):
     return None
 
 
+def test_team_leader_assignment_in_dm_routes_to_team_room(tmp_path, monkeypatch):
+    working_dir = tmp_path / "leader" / ".copaw"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    runtime_dir = tmp_path / "leader" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "runtime.yaml").write_text(
+        "kind: MemberRuntimeConfig\n"
+        "member:\n"
+        "  role: team_leader\n"
+        "team:\n"
+        "  name: dag-team-1\n"
+        "  teamRoomId: \"!team-room:hs.local\"\n"
+        "  leaderDmRoomId: \"!leader-dm:hs.local\"\n",
+        encoding="utf-8",
+    )
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!leader-dm:hs.local",
+            "@dag-team-1-dev:hs.local Task assigned: implement the API.",
+            {"sender_id": "@admin:hs.local"},
+        ),
+    )
+
+    assert client.sent[0][0] == "!team-room:hs.local"
+    assert client.sent[0][2]["m.mentions"] == {
+        "user_ids": ["@dag-team-1-dev:hs.local"],
+    }
+    assert client.sent[0][2]["body"].startswith("@dag-team-1-dev:hs.local ")
+    assert "admin " not in client.sent[0][2]["body"]
+
+
+def test_team_leader_dm_internal_preambles_are_suppressed(tmp_path, monkeypatch):
+    working_dir = tmp_path / "leader" / ".copaw"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    runtime_dir = tmp_path / "leader" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "runtime.yaml").write_text(
+        "kind: MemberRuntimeConfig\n"
+        "member:\n"
+        "  role: team_leader\n"
+        "team:\n"
+        "  name: dag-team-1\n"
+        "  teamRoomId: \"!team-room:hs.local\"\n"
+        "  leaderDmRoomId: \"!leader-dm:hs.local\"\n",
+        encoding="utf-8",
+    )
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    for text in (
+        "I'll coordinate the team to build a REST API for a todo-list app. "
+        "Let me start by checking the team organization and then plan the project.",
+        "Good, I have a thorough understanding of all the skills. "
+        "Now let me check the team organization and available workers.",
+        "I have 2 workers available: a dev worker and a QA worker. "
+        "Now let me design the DAG plan and create the project.",
+        "Good. I have the team roster:\n"
+        "- **Dev worker**: `dag-team-1-dev` (`@dag-team-1-dev:hs.local`)\n"
+        "- **QA worker**: `dag-team-1-qa` (`@dag-team-1-qa:hs.local`)\n\n"
+        "Let me plan the project using DAG strategy.",
+    ):
+        asyncio.run(ch.send("!leader-dm:hs.local", text))
+
+    assert client.sent == []
+
+
+def test_team_leader_identity_suppresses_preamble_without_runtime_config(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "missing" / ".copaw"))
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!leader-dm:hs.local",
+            "I'll coordinate a team to build this REST API. "
+            "Let me first check my team's organization and then plan the work properly.",
+        ),
+    )
+
+    assert client.sent == []
+
+
+def test_team_leader_thread_root_edit_suppresses_preamble_without_runtime_config(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(tmp_path / "missing" / ".copaw"))
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch._edit_thread_root(
+            "!leader-dm:hs.local",
+            {"matrix_own_thread_root_event_id": "$root"},
+            "Good. I have two workers available. Now let me plan this project.",
+            msgtype="m.text",
+        ),
+    )
+
+    assert client.sent == []
+
+
 def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
     ch = _make_channel()
     content = {

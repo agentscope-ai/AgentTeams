@@ -28,6 +28,9 @@ type WorkerDeployRequest struct {
 	Role           string // "standalone" | "team_leader" | "worker"
 	TeamName       string
 	TeamLeaderName string
+	TeamRoomID     string
+	LeaderDMRoomID string
+	TeamMembers    []RuntimeConfigTeamMember
 
 	// From provisioning
 	MatrixToken    string
@@ -280,6 +283,11 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	agentPrefix := fmt.Sprintf("agents/%s", req.Name)
 	localAgentDir := fmt.Sprintf("%s/%s", d.agentFSDir, req.Name)
 
+	if err := d.ensureDirectoryObject(ctx, agentPrefix+"/"); err != nil {
+		return fmt.Errorf("create worker storage prefix: %w", err)
+	}
+	logger.Info("worker storage prefix marker ensured", "worker", req.Name, "key", agentPrefix+"/.agentteams-keep")
+
 	// --- Seed local agent files to storage FIRST (base layer) ---
 	// Local/package files provide defaults only. They must not overwrite
 	// runtime-mutated OSS state during reconcile; authoritative files are
@@ -342,9 +350,19 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		}
 	}
 
-	if err := d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", configJSON); err != nil {
+	openclawKey := agentPrefix + "/openclaw.json"
+	if err := d.oss.PutObject(ctx, openclawKey, configJSON); err != nil {
 		return fmt.Errorf("config push to storage failed: %w", err)
 	}
+	logger.Info("worker openclaw.json pushed to storage",
+		"worker", req.Name,
+		"key", openclawKey,
+		"bytes", len(configJSON),
+		"role", req.Role,
+		"runtime", req.Spec.Runtime,
+		"team", req.TeamName,
+		"isUpdate", req.IsUpdate,
+	)
 
 	// --- SOUL.md (seed-only) ---
 	// Written once on first deploy; never overwritten so the agent owns it
@@ -415,6 +433,29 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	if err := d.prepareAndPushAgentsMD(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime, req.TeamName, req.TeamLeaderName, req.TeamAdminMatrixID, req.TeamCoordinatorIDs, req.Spec.Agents); err != nil {
 		logger.Error(err, "AGENTS.md prepare failed (non-fatal)")
 	}
+	if req.Role == "team_leader" && req.TeamName != "" && req.TeamRoomID != "" {
+		teamWorkers := make([]TeamWorkerEntry, 0, len(req.TeamMembers))
+		for _, member := range req.TeamMembers {
+			if member.Role != "worker" {
+				continue
+			}
+			teamWorkers = append(teamWorkers, TeamWorkerEntry{Name: member.RuntimeName, RoomID: member.PersonalRoomID})
+		}
+		if err := d.InjectCoordinationContext(ctx, CoordinationDeployRequest{
+			LeaderName:         req.Name,
+			Role:               req.Role,
+			TeamName:           req.TeamName,
+			TeamRoomID:         req.TeamRoomID,
+			LeaderDMRoomID:     req.LeaderDMRoomID,
+			HeartbeatEvery:     heartbeatEvery(req.Heartbeat),
+			TeamWorkers:        teamWorkers,
+			TeamAdminID:        req.TeamAdminMatrixID,
+			TeamCoordinatorIDs: req.TeamCoordinatorIDs,
+			LeaderSoul:         req.Spec.Soul,
+		}); err != nil {
+			logger.Error(err, "leader coordination context inject failed (non-fatal)", "worker", req.Name)
+		}
+	}
 
 	// --- Push builtin skills from worker-agent template ---
 	if err := d.pushBuiltinSkills(ctx, req.Name, agentPrefix, req.Role, req.Spec.Runtime); err != nil {
@@ -422,6 +463,13 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	}
 
 	return nil
+}
+
+func heartbeatEvery(cfg *agentconfig.HeartbeatConfig) string {
+	if cfg == nil || !cfg.Enabled {
+		return ""
+	}
+	return cfg.Every
 }
 
 func (d *Deployer) deployWorkerMcporterConfig(ctx context.Context, agentPrefix, gatewayKey string, mcpServers []v1beta1.MCPServer) {
@@ -1030,12 +1078,25 @@ func (d *Deployer) CleanupOSSData(ctx context.Context, workerName string) error 
 // EnsureTeamStorage creates the shared storage directories for a team.
 func (d *Deployer) EnsureTeamStorage(ctx context.Context, teamName string) error {
 	prefix := fmt.Sprintf("teams/%s/", teamName)
+	if err := d.ensureDirectoryObject(ctx, prefix); err != nil {
+		return fmt.Errorf("create %s: %w", prefix, err)
+	}
+	if err := d.ensureDirectoryObject(ctx, prefix+"shared/"); err != nil {
+		return fmt.Errorf("create %sshared/: %w", prefix, err)
+	}
 	for _, subdir := range []string{"shared/tasks/", "shared/projects/", "shared/knowledge/"} {
 		if err := d.oss.PutObject(ctx, prefix+subdir+".keep", []byte("")); err != nil {
 			return fmt.Errorf("create %s%s: %w", prefix, subdir, err)
 		}
 	}
 	return nil
+}
+
+func (d *Deployer) ensureDirectoryObject(ctx context.Context, key string) error {
+	if key == "" || !strings.HasSuffix(key, "/") {
+		return fmt.Errorf("directory object key must end with /: %q", key)
+	}
+	return d.oss.PutObject(ctx, key+".agentteams-keep", []byte(""))
 }
 
 // --- Manager Config Deployment ---

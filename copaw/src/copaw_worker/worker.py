@@ -44,15 +44,16 @@ class Worker:
     # Public API
     # ------------------------------------------------------------------
 
-    async def run(self) -> None:
+    async def run(self) -> bool:
         if not await self.start():
-            return
+            return False
         try:
             await self._run_copaw()
         except asyncio.CancelledError:
             pass
         finally:
             await self.stop()
+        return True
 
     async def stop(self) -> None:
         console.print("[yellow]Stopping worker...[/yellow]")
@@ -97,20 +98,28 @@ class Worker:
 
         # 2. Full mirror from MinIO (restore all state: config, sessions, sync token, etc.)
         #    Mirrors the OpenClaw worker's startup approach: pull everything first,
-        #    then use selective sync during runtime.
-        console.print("[yellow]Pulling all files from MinIO...[/yellow]")
-        try:
-            self.sync.mirror_all()
-        except Exception as exc:
-            console.print(f"[red]Failed to mirror from MinIO: {exc}[/red]")
-            return False
-
-        # 3. Parse openclaw.json (already on disk after mirror_all)
-        try:
-            openclaw_cfg = self.sync.get_config()
-        except Exception as exc:
-            console.print(f"[red]Failed to read config: {exc}[/red]")
-            return False
+        #    then use selective sync during runtime. Controller writes and worker
+        #    container start can be close together, so tolerate a short initial
+        #    storage visibility race before giving up.
+        openclaw_cfg = None
+        max_attempts = 12
+        for attempt in range(1, max_attempts + 1):
+            console.print("[yellow]Pulling all files from MinIO...[/yellow]")
+            try:
+                self.sync.mirror_all()
+                openclaw_cfg = self.sync.get_config()
+                break
+            except Exception as exc:
+                if attempt >= max_attempts:
+                    console.print(f"[red]Failed to read worker config from MinIO: {exc}[/red]")
+                    return False
+                logger.warning(
+                    "Worker config not ready yet (attempt %s/%s): %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                await asyncio.sleep(5)
 
         # 3b. Re-login to Matrix to get fresh access token + device ID
         #     Under E2EE, reusing the old access token (same device_id) with a
@@ -118,6 +127,7 @@ class Worker:
         #     distribution. Re-login creates a new device_id, matching the
         #     Manager's behavior.
         openclaw_cfg = self._matrix_relogin(openclaw_cfg)
+        self._join_pending_matrix_invites(openclaw_cfg)
 
         # 4. Set up CoPaw working directory
         self._copaw_working_dir = self.config.install_dir / self.worker_name / ".copaw"
@@ -132,11 +142,11 @@ class Worker:
         # 5. Bridge openclaw.json -> CoPaw config.json + providers.json
         #    Infer gateway port from FS endpoint so bridge's _port_remap uses
         #    the correct host port instead of the hardcoded default.
-        if not os.environ.get("HICLAW_PORT_GATEWAY"):
+        if not os.environ.get("AGENTTEAMS_PORT_GATEWAY"):
             from urllib.parse import urlparse
             _parsed = urlparse(self.config.minio_endpoint)
             if _parsed.port:
-                os.environ["HICLAW_PORT_GATEWAY"] = str(_parsed.port)
+                os.environ["AGENTTEAMS_PORT_GATEWAY"] = str(_parsed.port)
 
         console.print("[yellow]Bridging configuration to CoPaw...[/yellow]")
         try:
@@ -187,6 +197,9 @@ class Worker:
         """Start CoPaw. If console_port is set, run the full FastAPI app via
         uvicorn (gives access to the web console). Otherwise start the runner
         and channel manager directly (lightweight, no HTTP server)."""
+        from copaw_worker.hooks import install_tool_hooks
+
+        install_tool_hooks()
         if self.config.console_port:
             await self._run_copaw_with_console(self.config.console_port)
         else:
@@ -393,6 +406,51 @@ class Worker:
             )
 
         return openclaw_cfg
+
+    def _join_pending_matrix_invites(self, openclaw_cfg: dict) -> None:
+        """Accept pending Matrix invites before CoPaw's channel loop starts."""
+        import json
+        import urllib.parse
+        import urllib.request
+
+        matrix_cfg = openclaw_cfg.get("channels", {}).get("matrix", {})
+        access_token = matrix_cfg.get("accessToken", "")
+        from .bridge import _port_remap, _is_in_container
+        homeserver = _port_remap(
+            matrix_cfg.get("homeserver", ""), _is_in_container()
+        )
+        if not homeserver or not access_token:
+            return
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        sync_url = (
+            f"{homeserver}/_matrix/client/v3/sync?"
+            "timeout=0&full_state=true"
+        )
+        try:
+            req = urllib.request.Request(sync_url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
+        except Exception as exc:
+            logger.warning("Matrix pending invite sync failed: %s", exc)
+            return
+
+        invites = (data.get("rooms", {}).get("invite") or {}).keys()
+        for room_id in invites:
+            encoded = urllib.parse.quote(room_id, safe="")
+            join_url = f"{homeserver}/_matrix/client/v3/join/{encoded}"
+            try:
+                req = urllib.request.Request(
+                    join_url,
+                    data=b"{}",
+                    headers={**headers, "Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=30):
+                    pass
+                logger.info("Joined pending Matrix invite: %s", room_id)
+            except Exception as exc:
+                logger.warning("Matrix invite join failed for %s: %s", room_id, exc)
 
     # ------------------------------------------------------------------
     # mc (MinIO Client) auto-install

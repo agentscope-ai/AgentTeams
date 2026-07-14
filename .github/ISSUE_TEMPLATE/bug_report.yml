@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in HiClaw
+description: Report a bug in AgentTeams
 labels: ["bug"]
 body:
   - type: markdown
@@ -7,7 +7,7 @@ body:
       value: |
         ## Before submitting
 
-        Please export your Matrix message logs and use an AI tool to analyze them against the HiClaw codebase. This helps us fix bugs much faster.
+        Please export your Matrix message logs and use an AI tool to analyze them against the AgentTeams codebase. This helps us fix bugs much faster.
 
         ### Step 1: Export debug logs
 
@@ -23,9 +23,9 @@ body:
 
         ### Step 2: AI-assisted analysis
 
-        Open the HiClaw repo in Cursor, Claude Code, or similar AI tool, then ask it to analyze the exported logs:
+        Open the AgentTeams repo in Cursor, Claude Code, or similar AI tool, then ask it to analyze the exported logs:
 
-        > "Read the JSONL files in debug-log/. Analyze the Matrix message logs and agent session logs together. Cross-reference with the HiClaw codebase to identify the root cause of [describe your bug]. Focus on the agent interaction flow, tool call failures, and error patterns."
+        > "Read the JSONL files in debug-log/. Analyze the Matrix message logs and agent session logs together. Cross-reference with the AgentTeams codebase to identify the root cause of [describe your bug]. Focus on the agent interaction flow, tool call failures, and error patterns."
 
         Paste the AI's analysis into the "AI Analysis" field below.
 

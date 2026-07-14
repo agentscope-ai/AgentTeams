@@ -67,7 +67,7 @@ type ManagerReconciler struct {
 }
 
 // managerContainerName returns the container/pod name for a Manager CR.
-// Default Manager ("default") uses ManagerDefaultName (e.g. "hiclaw-manager")
+// Default Manager ("default") uses ManagerDefaultName (e.g. "agentteams-manager")
 // for install-script / CMS service-name compatibility; other Managers use
 // "${prefix}manager-{name}".
 func (r *ManagerReconciler) managerContainerName(name string) string {

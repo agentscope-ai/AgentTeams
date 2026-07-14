@@ -27,7 +27,7 @@ type ServerDeps struct {
 	AuthMw         *authpkg.Middleware
 	KubeMode       string
 	Namespace      string
-	ControllerName string               // HICLAW_CONTROLLER_NAME; empty in embedded mode
+	ControllerName string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
 	SocketPath     string               // Docker proxy (embedded only)
 	MatrixConfig   matrix.Config        // for AppService rotation endpoint
 	Provisioner    *service.Provisioner // for Matrix token refresh

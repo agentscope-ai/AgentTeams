@@ -25,8 +25,8 @@ func TestNewNacosAIClient_UnsupportedAuthType(t *testing.T) {
 }
 
 func TestNewNacosAIClient_ExplicitNacos_RequiresCredsInAddrOrEnv(t *testing.T) {
-	t.Setenv("HICLAW_NACOS_USERNAME", "")
-	t.Setenv("HICLAW_NACOS_PASSWORD", "")
+	t.Setenv("AGENTTEAMS_NACOS_USERNAME", "")
+	t.Setenv("AGENTTEAMS_NACOS_PASSWORD", "")
 
 	_, err := NewNacosAIClient(context.Background(), "127.0.0.1:8848", "public", nacosAuthTypeNacos, nil)
 	if err == nil {

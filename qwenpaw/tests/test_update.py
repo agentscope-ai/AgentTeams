@@ -660,12 +660,12 @@ def test_runtime_updater_applies_desired_model_to_qwenpaw_agent_config(
             raw={
                 "metadata": {"generation": "1"},
                 "member": {"runtime": "qwenpaw"},
-                "desired": {"model": {"providerId": "hiclaw-gateway", "model": "qwen-plus"}},
+                "desired": {"model": {"providerId": "agentteams-gateway", "model": "qwen-plus"}},
             },
         )
     )
 
-    assert saved["default"].active_model.provider_id == "hiclaw-gateway"
+    assert saved["default"].active_model.provider_id == "agentteams-gateway"
     assert saved["default"].active_model.model == "qwen-plus"
 
 
@@ -746,7 +746,7 @@ def test_runtime_updater_configures_openai_compatible_provider_from_runtime_conf
                 "member": {"runtime": "qwenpaw"},
                 "desired": {
                     "model": {
-                        "providerId": "hiclaw-gateway",
+                        "providerId": "agentteams-gateway",
                         "model": "qwen-plus",
                         "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
                         "apiKeyEnv": "REAL_MODEL_KEY",
@@ -756,15 +756,15 @@ def test_runtime_updater_configures_openai_compatible_provider_from_runtime_conf
         )
     )
 
-    provider = saved_provider["hiclaw-gateway"]
+    provider = saved_provider["agentteams-gateway"]
     assert provider.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert provider.api_key == "real-model-secret"
     assert provider.chat_model == "OpenAIChatModel"
     assert provider.models[0].id == "qwen-plus"
-    assert manager.custom_providers["hiclaw-gateway"] is provider
-    assert saved_active["active"].provider_id == "hiclaw-gateway"
+    assert manager.custom_providers["agentteams-gateway"] is provider
+    assert saved_active["active"].provider_id == "agentteams-gateway"
     assert saved_active["active"].model == "qwen-plus"
-    assert saved_agent["default"].active_model.provider_id == "hiclaw-gateway"
+    assert saved_agent["default"].active_model.provider_id == "agentteams-gateway"
     assert saved_agent["default"].active_model.model == "qwen-plus"
 
 
@@ -785,7 +785,7 @@ def test_runtime_updater_syncs_live_qwenpaw_app_only_when_model_changes(
     )
 
     base_model = {
-        "providerId": "hiclaw-gateway",
+        "providerId": "agentteams-gateway",
         "model": "qwen-plus",
         "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
         "apiKeyEnv": "REAL_MODEL_KEY",
@@ -849,7 +849,7 @@ def test_runtime_updater_model_runtime_sync_failure_is_safe_and_retriable(
                 "member": {"runtime": "qwenpaw"},
                 "desired": {
                     "model": {
-                        "providerId": "hiclaw-gateway",
+                        "providerId": "agentteams-gateway",
                         "model": "qwen-plus",
                         "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
                         "apiKeyEnv": "REAL_MODEL_KEY",
@@ -868,7 +868,7 @@ def test_runtime_updater_model_runtime_sync_failure_is_safe_and_retriable(
                     "member": {"runtime": "qwenpaw"},
                     "desired": {
                         "model": {
-                            "providerId": "hiclaw-gateway",
+                            "providerId": "agentteams-gateway",
                             "model": "qwen-max",
                             "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
                             "apiKeyEnv": "REAL_MODEL_KEY",
@@ -928,18 +928,18 @@ def test_model_runtime_sync_calls_qwenpaw_models_api_and_verifies_agent_active(
         if index == 3:
             return FakeResponse(
                 201,
-                {"id": "hiclaw-gateway", "models": [], "extra_models": []},
+                {"id": "agentteams-gateway", "models": [], "extra_models": []},
             )
         if index == 4:
             return FakeResponse(
                 200,
-                {"id": "hiclaw-gateway", "models": [], "extra_models": []},
+                {"id": "agentteams-gateway", "models": [], "extra_models": []},
             )
         if index == 5:
             return FakeResponse(
                 201,
                 {
-                    "id": "hiclaw-gateway",
+                    "id": "agentteams-gateway",
                     "models": [],
                     "extra_models": [{"id": "qwen-max", "name": "qwen-max"}],
                 },
@@ -947,11 +947,11 @@ def test_model_runtime_sync_calls_qwenpaw_models_api_and_verifies_agent_active(
         if index == 6:
             return FakeResponse(
                 200,
-                {"active_llm": {"provider_id": "hiclaw-gateway", "model": "qwen-max"}},
+                {"active_llm": {"provider_id": "agentteams-gateway", "model": "qwen-max"}},
             )
         return FakeResponse(
             200,
-            {"active_llm": {"provider_id": "hiclaw-gateway", "model": "qwen-max"}},
+            {"active_llm": {"provider_id": "agentteams-gateway", "model": "qwen-max"}},
         )
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -964,8 +964,8 @@ def test_model_runtime_sync_calls_qwenpaw_models_api_and_verifies_agent_active(
                 "member": {"runtime": "qwenpaw"},
                 "desired": {
                     "model": {
-                        "providerId": "hiclaw-gateway",
-                        "providerName": "HiClaw Gateway",
+                        "providerId": "agentteams-gateway",
+                        "providerName": "AgentTeams Gateway",
                         "model": "qwen-max",
                         "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
                         "apiKeyEnv": "REAL_MODEL_KEY",
@@ -977,10 +977,10 @@ def test_model_runtime_sync_calls_qwenpaw_models_api_and_verifies_agent_active(
 
     assert [(method, url.split("/api/models", 1)[1].split("?", 1)[0]) for method, url, _ in calls] == [
         ("GET", ""),
-        ("PUT", "/hiclaw-gateway/config"),
+        ("PUT", "/agentteams-gateway/config"),
         ("POST", "/custom-providers"),
-        ("PUT", "/hiclaw-gateway/config"),
-        ("POST", "/hiclaw-gateway/models"),
+        ("PUT", "/agentteams-gateway/config"),
+        ("POST", "/agentteams-gateway/models"),
         ("PUT", "/active"),
         ("GET", "/active"),
     ]
@@ -992,12 +992,12 @@ def test_model_runtime_sync_calls_qwenpaw_models_api_and_verifies_agent_active(
     assert calls[5][2] == {
         "scope": "agent",
         "agent_id": "default",
-        "provider_id": "hiclaw-gateway",
+        "provider_id": "agentteams-gateway",
         "model": "qwen-max",
     }
     assert "component=update step=model_runtime_sync event=complete" in caplog.text
     assert "generation=2" in caplog.text
-    assert "provider_id=hiclaw-gateway" in caplog.text
+    assert "provider_id=agentteams-gateway" in caplog.text
     assert "model=qwen-max" in caplog.text
     assert "changed=True" in caplog.text
     assert "real-model-secret" not in caplog.text
@@ -1031,7 +1031,7 @@ def test_model_runtime_sync_http_error_does_not_expose_response_body_secret(
                     "member": {"runtime": "qwenpaw"},
                     "desired": {
                         "model": {
-                            "providerId": "hiclaw-gateway",
+                            "providerId": "agentteams-gateway",
                             "model": "qwen-max",
                             "gatewayUrl": "https://dashscope.aliyuncs.com/compatible-mode",
                             "apiKeyEnv": "REAL_MODEL_KEY",

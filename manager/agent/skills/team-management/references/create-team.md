@@ -16,7 +16,7 @@ hiclaw create team \
 Notes:
 - `--name` and `--leader-name` are required
 - `--workers` is a comma-separated list of worker names
-- `--leader-model` defaults to the install-time configured model (`$HICLAW_DEFAULT_MODEL` propagated by the controller); falls back to `qwen3.5-plus` only when that is unset
+- `--leader-model` defaults to the install-time configured model (`$AGENTTEAMS_DEFAULT_MODEL` propagated by the controller); falls back to `qwen3.5-plus` only when that is unset
 - Team Admin defaults to Global Admin
 - Controller forces `runtime: copaw` for all team members
 - For CPU/memory requests and limits, use YAML with `hiclaw apply -f`; the simple team CLI flags do not expose per-member resources

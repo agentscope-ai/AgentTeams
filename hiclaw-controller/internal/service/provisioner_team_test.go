@@ -12,6 +12,7 @@ import (
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
+	"github.com/hiclaw/hiclaw-controller/internal/oss"
 )
 
 type fakeTeamMatrix struct {
@@ -261,6 +262,64 @@ func (fakeGateway) ResolveModelProvider(context.Context, string) (*gateway.Model
 	return nil, gateway.ErrUnsupportedOp
 }
 func (fakeGateway) Healthy(context.Context) error { return nil }
+
+type fakeStorageAdmin struct {
+	users    []storageUserCall
+	policies []oss.PolicyRequest
+}
+
+type storageUserCall struct {
+	name     string
+	password string
+}
+
+func (f *fakeStorageAdmin) EnsureUser(_ context.Context, username, password string) error {
+	f.users = append(f.users, storageUserCall{name: username, password: password})
+	return nil
+}
+
+func (f *fakeStorageAdmin) EnsurePolicy(_ context.Context, req oss.PolicyRequest) error {
+	f.policies = append(f.policies, req)
+	return nil
+}
+
+func (f *fakeStorageAdmin) DeleteUser(context.Context, string) error { return nil }
+
+func TestRefreshWorkerCredentialsRestoresMinIOAccess(t *testing.T) {
+	admin := &fakeStorageAdmin{}
+	creds := fakeCredentialStore{
+		"alpha-worker-lead": {
+			MatrixToken:   "leader-token",
+			MinIOPassword: "minio-secret",
+			GatewayKey:    "gateway-key",
+		},
+	}
+	p := NewProvisioner(ProvisionerConfig{
+		Matrix:   newFakeTeamMatrix(),
+		Creds:    creds,
+		OSSAdmin: admin,
+	})
+
+	result, err := p.RefreshWorkerCredentials(context.Background(), "alpha-worker-lead", "leader", "alpha")
+	if err != nil {
+		t.Fatalf("RefreshWorkerCredentials: %v", err)
+	}
+	if result.MinIOPassword != "minio-secret" {
+		t.Fatalf("MinIOPassword=%q, want minio-secret", result.MinIOPassword)
+	}
+	if len(admin.users) != 1 {
+		t.Fatalf("EnsureUser calls=%d, want 1", len(admin.users))
+	}
+	if got := admin.users[0]; got.name != "leader" || got.password != "minio-secret" {
+		t.Fatalf("EnsureUser=%+v, want leader/minio-secret", got)
+	}
+	if len(admin.policies) != 1 {
+		t.Fatalf("EnsurePolicy calls=%d, want 1", len(admin.policies))
+	}
+	if got := admin.policies[0]; got.WorkerName != "leader" || got.TeamName != "alpha" {
+		t.Fatalf("EnsurePolicy=%+v, want worker leader team alpha", got)
+	}
+}
 
 func TestProvisionWorkerFreshCredentialsRecreatesStaleRoomAlias(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()

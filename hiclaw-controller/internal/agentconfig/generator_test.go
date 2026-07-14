@@ -58,8 +58,8 @@ func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	agents := config["agents"].(map[string]interface{})
 	defaults := agents["defaults"].(map[string]interface{})
 	modelCfg := defaults["model"].(map[string]interface{})
-	if modelCfg["primary"] != "hiclaw-gateway/qwen3.5-plus" {
-		t.Errorf("agents.defaults.model.primary = %v, want hiclaw-gateway/qwen3.5-plus", modelCfg["primary"])
+	if modelCfg["primary"] != "agentteams-gateway/qwen3.5-plus" {
+		t.Errorf("agents.defaults.model.primary = %v, want agentteams-gateway/qwen3.5-plus", modelCfg["primary"])
 	}
 }
 
@@ -221,8 +221,8 @@ func TestGenerateOpenClawConfig_CustomModel(t *testing.T) {
 	agents := config["agents"].(map[string]interface{})
 	defaults := agents["defaults"].(map[string]interface{})
 	modelCfg := defaults["model"].(map[string]interface{})
-	if modelCfg["primary"] != "hiclaw-gateway/custom-model-x" {
-		t.Errorf("agents.defaults.model.primary = %v, want hiclaw-gateway/custom-model-x", modelCfg["primary"])
+	if modelCfg["primary"] != "agentteams-gateway/custom-model-x" {
+		t.Errorf("agents.defaults.model.primary = %v, want agentteams-gateway/custom-model-x", modelCfg["primary"])
 	}
 }
 

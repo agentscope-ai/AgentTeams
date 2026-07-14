@@ -138,14 +138,14 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           TARGETS: ${{ steps.meta.outputs.targets }}
           OPENCLAW_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/openclaw-base
-          MANAGER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-manager
-          MANAGER_COPAW_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-manager-copaw
-          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-worker
-          COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-copaw-worker
-          HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-hermes-worker
-          QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-qwenpaw-worker
-          CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-controller
-          EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/hiclaw-embedded
+          MANAGER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager
+          MANAGER_COPAW_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager-copaw
+          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-worker
+          COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-copaw-worker
+          HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-hermes-worker
+          QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-qwenpaw-worker
+          CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-controller
+          EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-embedded
         run: |
           echo "### Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

@@ -40,11 +40,11 @@ spec:
             - -c
             - |
               set -eu
-              echo "[hiclaw-llm-preflight] probing provider=${HICLAW_LLM_PROVIDER:-openai-compat} model=${HICLAW_DEFAULT_MODEL}"
+              echo "[hiclaw-llm-preflight] probing provider=${AGENTTEAMS_LLM_PROVIDER:-openai-compat} model=${AGENTTEAMS_DEFAULT_MODEL}"
               hiclaw llm-preflight \
-                --timeout "${HICLAW_LLM_PREFLIGHT_TIMEOUT_SECONDS}" \
-                --retries "${HICLAW_LLM_PREFLIGHT_RETRIES}" \
-                --strict="${HICLAW_LLM_PREFLIGHT_STRICT}"
+                --timeout "${AGENTTEAMS_LLM_PREFLIGHT_TIMEOUT_SECONDS}" \
+                --retries "${AGENTTEAMS_LLM_PREFLIGHT_RETRIES}" \
+                --strict="${AGENTTEAMS_LLM_PREFLIGHT_STRICT}"
           {{- with .Values.preflight.llm.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

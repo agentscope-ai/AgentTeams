@@ -9,7 +9,6 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/credprovider"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -214,17 +213,8 @@ func TestCache_ResolveClient_DelegatesToGetOrCreate(t *testing.T) {
 }
 
 func TestCache_HasWorkersDeployed_WorkerCR(t *testing.T) {
-	mode := "Remote"
-	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "w1", Namespace: "default"},
-		Spec: v1beta1.WorkerSpec{
-			Model:         "m",
-			DeployMode:    &mode,
-			TargetCluster: &v1beta1.TargetClusterSpec{ID: "c-1", Namespace: "ns"},
-		},
-	}
 	scheme := newTestScheme(t)
-	ctrl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	ctrl := fake.NewClientBuilder().WithScheme(scheme).Build()
 	c := NewCache(CacheConfig{
 		CredClient: &fakeCredClient{},
 		CtrlClient: ctrl,
@@ -235,8 +225,8 @@ func TestCache_HasWorkersDeployed_WorkerCR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hasWorkersDeployed: %v", err)
 	}
-	if !got {
-		t.Error("expected hasWorkersDeployed=true for matching Worker CR")
+	if got {
+		t.Error("expected hasWorkersDeployed=false because OSS Worker CRs do not target remote clusters")
 	}
 
 	got, err = c.hasWorkersDeployed(context.Background(), "c-other")
@@ -278,25 +268,15 @@ func TestCache_Maintain_RemovesUnused(t *testing.T) {
 	}
 }
 
-// TestCache_Maintain_RenewsActive verifies that maintain() calls
-// GetKubeconfig again to refresh entries that are still referenced by a
-// CR but approaching expiration.
-func TestCache_Maintain_RenewsActive(t *testing.T) {
+// TestCache_Maintain_DoesNotRenewWorkerRemoteRefs verifies that worker CRs
+// no longer keep remote cluster credentials alive in the OSS Worker API.
+func TestCache_Maintain_DoesNotRenewWorkerRemoteRefs(t *testing.T) {
 	cred := &fakeCredClient{
 		kubeconfig: testKubeconfig,
 		expiration: futureRFC3339(time.Hour),
 	}
-	mode := "Remote"
-	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "w1", Namespace: "default"},
-		Spec: v1beta1.WorkerSpec{
-			Model:         "m",
-			DeployMode:    &mode,
-			TargetCluster: &v1beta1.TargetClusterSpec{ID: "c-active", Namespace: "ns"},
-		},
-	}
 	scheme := newTestScheme(t)
-	ctrl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	ctrl := fake.NewClientBuilder().WithScheme(scheme).Build()
 	c := NewCache(CacheConfig{
 		CredClient: cred,
 		CtrlClient: ctrl,
@@ -318,15 +298,15 @@ func TestCache_Maintain_RenewsActive(t *testing.T) {
 
 	c.maintain(context.Background())
 
-	if cred.callCount() != beforeCalls+1 {
-		t.Errorf("expected renew to trigger one extra GetKubeconfig call, got %d -> %d",
+	if cred.callCount() != beforeCalls {
+		t.Errorf("remote worker refs should not trigger renewal, got %d -> %d",
 			beforeCalls, cred.callCount())
 	}
 	c.mu.RLock()
 	_, exists := c.entries["c-active"]
 	c.mu.RUnlock()
-	if !exists {
-		t.Error("active entry must remain in the cache after renewal")
+	if exists {
+		t.Error("unreferenced remote entry must be removed instead of renewed")
 	}
 }
 

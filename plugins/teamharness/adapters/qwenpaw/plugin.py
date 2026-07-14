@@ -673,7 +673,6 @@ def _mcp_client_env() -> Dict[str, str]:
         "AGENTTEAMS_FS_BUCKET",
         "AGENTTEAMS_CONTROLLER_URL",
         "AGENTTEAMS_AUTH_TOKEN_FILE",
-        "AGENTTEAMS_CLUSTER_ID",
         "AGENTTEAMS_FS_ENDPOINT",
         "QWENPAW_WORKING_DIR",
         "COPAW_WORKING_DIR",

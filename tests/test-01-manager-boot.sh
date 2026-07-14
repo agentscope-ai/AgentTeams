@@ -29,7 +29,7 @@ assert_http_code "http://${TEST_MANAGER_HOST}:${TEST_ELEMENT_PORT}/" "200" \
     "Element Web port 8088 is accessible"
 
 # Infrastructure checks go to the infra container; workspace checks go to the agent container
-_INFRA_CTR="${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}"
+_INFRA_CTR="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
 _AGENT_CTR="${TEST_AGENT_CONTAINER:-${_INFRA_CTR}}"
 
 MATRIX_CODE=$(docker exec "${_INFRA_CTR}" curl -s -o /dev/null -w '%{http_code}' \
@@ -104,7 +104,9 @@ fi
 # ---- Runtime Detection ----
 log_section "Manager Runtime"
 
-MANAGER_RUNTIME=$(docker exec "${_AGENT_CTR}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || \
+MANAGER_RUNTIME=$(docker exec "${_AGENT_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                   docker exec "${_INFRA_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                   docker exec "${_AGENT_CTR}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || \
                    docker exec "${_INFRA_CTR}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
 log_pass "Manager runtime: ${MANAGER_RUNTIME}"
 
@@ -118,7 +120,7 @@ case "${MANAGER_RUNTIME}" in
             log_fail "CoPaw agent.json valid"
         fi
 
-        if docker exec "${_AGENT_CTR}" pgrep -f "copaw app" >/dev/null 2>&1; then
+        if docker exec "${_AGENT_CTR}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1; then
             log_pass "CoPaw process running"
         else
             log_fail "CoPaw process running"

@@ -23,15 +23,15 @@ source "${SCRIPT_DIR}/lib/higress-client.sh"
 test_setup "22-delete-worker-cleanup"
 
 TEST_WORKER="test-del-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
     exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -60,7 +60,7 @@ _get_higress_consumers_or_fail() {
 }
 
 _worker_container_exists() {
-    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-worker-${TEST_WORKER}$"
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^$(worker_container_name "${TEST_WORKER}")$"
 }
 
 _higress_consumer_exists() {
@@ -73,7 +73,7 @@ _minio_agent_dir_listing() {
 }
 
 _minio_worker_yaml() {
-    exec_in_manager mc cat "${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
+    exec_in_manager mc cat "${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
 }
 
 # ============================================================
@@ -179,7 +179,7 @@ log_section "Verify Cleanup"
 
 # (a) container removed (not just stopped)
 if _worker_container_exists; then
-    STATUS=$(docker inspect --format '{{.State.Status}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || echo unknown)
+    STATUS=$(docker inspect --format '{{.State.Status}}' "$(worker_container_name "${TEST_WORKER}")" 2>/dev/null || echo unknown)
     log_fail "Worker container still present (status: ${STATUS})"
 else
     log_pass "Worker container removed"

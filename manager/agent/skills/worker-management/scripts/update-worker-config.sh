@@ -158,8 +158,8 @@ if [ -n "${RUNTIME}" ]; then
     exit 0
 fi
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 
 log "=== Updating Worker: ${WORKER_NAME} ==="
 log "  Memory: preserved (not overwritten)"
@@ -176,7 +176,7 @@ fi
 source "${WORKER_CREDS_FILE}"
 
 # Get fresh Matrix token via login
-WORKER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+WORKER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
     -H 'Content-Type: application/json' \
     -d '{
         "type": "m.login.password",
@@ -304,6 +304,7 @@ $([ -n "${_leader_dm_room_id}" ] && echo "- **Leader DM**: ${_leader_dm_room_id}
 $([ -n "${_worker_rooms}" ] && echo "- **Team Workers**:" && echo "${_worker_rooms}")
 - You decompose tasks from Manager or Team Admin and assign sub-tasks to your team workers
 - @mention workers in the Team Room for task assignment
+- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads
 - Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source
 - @mention Manager only for: task completion, blockers, escalations
 <!-- hiclaw-team-context-end -->
@@ -410,7 +411,7 @@ fi
 log "Step 6: Syncing config to MinIO (memory preserved)..."
 ensure_mc_credentials 2>/dev/null || true
 mc mirror "/root/hiclaw-fs/agents/${WORKER_NAME}/" \
-    "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
+    "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
     --overwrite \
     --exclude "memory/*" \
     --exclude "MEMORY.md" \

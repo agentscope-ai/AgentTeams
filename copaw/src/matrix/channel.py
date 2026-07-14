@@ -105,6 +105,33 @@ _READINESS_REPLY_RE = re.compile(
     r"\breadiness\s+check\b.*\breply\s+with\s+the\s+exact\s+text\s+READY\b",
     re.IGNORECASE | re.DOTALL,
 )
+_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
+    r"(?i)\b("
+    r"let me|"
+    r"i['’]?ll coordinate|"
+    r"i will coordinate|"
+    r"i have (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
+    r"workers? available|"
+    r"now let me|"
+    r"no active projects|"
+    r"project created\. now|"
+    r"good[,.]? i have|"
+    r"solid understanding|"
+    r"team coordination plan"
+    r")\b",
+)
+_TEAM_LEADER_MATRIX_USER_ID_RE = re.compile(
+    r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
+)
+_TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"task\s+assigned|"
+    r"assigned\s+task|"
+    r"you\s+are\s+assigned|"
+    r"please\s+(?:design|implement|write|test|build|handle|review|create|investigate|work)|"
+    r"start\s+(?:by\s+)?(?:designing|implementing|writing|testing|building|handling|reviewing|creating|investigating)"
+    r")\b",
+)
 _THREAD_META_ROOT_KEY = "thread_root_event_id"
 _MATRIX_THREAD_META_KEY = "matrix_thread_root_event_id"
 _MATRIX_OWN_THREAD_ROOT_KEY = "matrix_own_thread_root_event_id"
@@ -190,6 +217,105 @@ def _clean_control_response_text(text: str) -> str:
 def _ends_with_no_reply_control(text: str) -> bool:
     """Return true when the final non-empty output line is NO_REPLY."""
     return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
+
+
+def _strip_yaml_string(value: str) -> str:
+    text = value.strip()
+    if not text or text in {"null", "~"}:
+        return ""
+    if "#" in text:
+        text = text.split("#", 1)[0].strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _runtime_root() -> Path:
+    configured = os.getenv("COPAW_WORKING_DIR")
+    if configured:
+        path = Path(configured).expanduser().resolve()
+        if path.name == "default" and path.parent.name == "workspaces":
+            copaw_dir = path.parent.parent
+            if copaw_dir.name == ".copaw":
+                return copaw_dir.parent
+        if path.name == ".copaw":
+            return path.parent
+        return path.parent
+
+    cwd = Path.cwd().resolve()
+    if cwd.name == "default" and cwd.parent.name == "workspaces":
+        copaw_dir = cwd.parent.parent
+        if copaw_dir.name == ".copaw":
+            return copaw_dir.parent
+    return cwd
+
+
+def _runtime_config_field(section: str, key: str) -> str:
+    path = _runtime_root() / "runtime" / "runtime.yaml"
+    if not path.exists():
+        return ""
+
+    in_section = False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for raw_line in lines:
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        if not raw_line.startswith((" ", "\t")):
+            in_section = raw_line.strip() == f"{section}:"
+            continue
+        if not in_section:
+            continue
+        stripped = raw_line.strip()
+        if ":" not in stripped:
+            continue
+        field, value = stripped.split(":", 1)
+        if field.strip() == key:
+            return _strip_yaml_string(value)
+    return ""
+
+
+def _matrix_localpart(user_id: str | None) -> str:
+    text = (user_id or os.getenv("AGENTTEAMS_WORKER_NAME") or "").strip()
+    if text.startswith("@"):
+        return text[1:].split(":", 1)[0]
+    return text.split(":", 1)[0]
+
+
+def _is_team_leader_identity(user_id: str | None) -> bool:
+    localpart = _matrix_localpart(user_id)
+    return localpart.endswith("-lead") or localpart.endswith("-leader")
+
+
+def _is_team_leader_internal_preamble_text(text: str) -> bool:
+    """Return true for visible Team Leader internal planning/tool preambles."""
+    stripped = (text or "").strip()
+    if not stripped or "?" in stripped:
+        return False
+
+    # Keep concrete worker assignments so the channel can reroute them to the
+    # Team Room. Roster/topology planning that happens to mention workers is
+    # still an internal preamble and must stay out of Leader DM.
+    if _TEAM_LEADER_MATRIX_USER_ID_RE.search(text or "") and (
+        _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(stripped)
+    ):
+        return False
+
+    return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))
+
+
+def _is_team_leader_dm_internal_preamble(current_room_id: str, text: str) -> bool:
+    """Suppress visible Team Leader internal planning/tool preambles in Leader DM."""
+    if _runtime_config_field("member", "role") != "team_leader":
+        return False
+
+    leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
+    if not leader_dm_room_id or current_room_id != leader_dm_room_id:
+        return False
+
+    return _is_team_leader_internal_preamble_text(text)
 
 
 def _readiness_probe_reply(text: str) -> str | None:
@@ -692,13 +818,13 @@ class MatrixChannel(BaseChannel):
 
         Returns True if token was refreshed successfully.
         """
-        controller_url = os.environ.get("HICLAW_CONTROLLER_URL", "")
-        auth_token_file = os.environ.get("HICLAW_AUTH_TOKEN_FILE", "")
-        auth_token = os.environ.get("HICLAW_AUTH_TOKEN", "")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "")
+        auth_token_file = os.environ.get("AGENTTEAMS_AUTH_TOKEN_FILE", "")
+        auth_token = os.environ.get("AGENTTEAMS_AUTH_TOKEN", "")
 
         if not controller_url:
             logger.warning(
-                "MatrixChannel: HICLAW_CONTROLLER_URL not set, "
+                "MatrixChannel: AGENTTEAMS_CONTROLLER_URL not set, "
                 "cannot refresh token",
             )
             return False
@@ -2409,6 +2535,17 @@ class MatrixChannel(BaseChannel):
                     )
         return user_id.split(":")[0].lstrip("@") or user_id
 
+    def _should_suppress_team_leader_internal_preamble(
+        self,
+        room_id: str,
+        text: str,
+    ) -> bool:
+        if _is_team_leader_dm_internal_preamble(room_id, text):
+            return True
+        if not _is_team_leader_identity(self._user_id):
+            return False
+        return _is_team_leader_internal_preamble_text(text)
+
     def _with_thread_relation_meta(
         self,
         meta: Optional[Dict[str, Any]],
@@ -2670,6 +2807,14 @@ class MatrixChannel(BaseChannel):
         root_event_id = send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY)
         if not root_event_id or not self._client:
             return
+        if self._should_suppress_team_leader_internal_preamble(to_handle, text):
+            logger.info(
+                "MatrixChannel: suppressing Team Leader internal preamble "
+                "thread-root edit in %s",
+                to_handle,
+            )
+            await self._send_typing(to_handle, False)
+            return
         new_content: dict[str, Any] = {"msgtype": msgtype, "body": text}
         if html:
             new_content["format"] = "org.matrix.custom.html"
@@ -2786,6 +2931,15 @@ class MatrixChannel(BaseChannel):
         if _ends_with_no_reply_control(text):
             logger.info(
                 "MatrixChannel: suppressing NO_REPLY send to %s",
+                room_id,
+            )
+            await self._send_typing(room_id, False)
+            return
+
+        if self._should_suppress_team_leader_internal_preamble(room_id, text):
+            logger.info(
+                "MatrixChannel: suppressing Team Leader internal preamble "
+                "in room %s",
                 room_id,
             )
             await self._send_typing(room_id, False)

@@ -1,5 +1,5 @@
 #!/bin/bash
-# hiclaw-install.sh - One-click installation for HiClaw Manager and Worker
+# hiclaw-install.sh - One-click installation for AgentTeams Manager and Worker
 #
 # Usage:
 #   ./hiclaw-install.sh                  # Interactive installation (choose Quick Start or Manual)
@@ -12,45 +12,45 @@
 #   Manual       - Customize each option step by step
 #
 # Environment variables (for automation):
-#   HICLAW_NON_INTERACTIVE    Skip all prompts, use defaults  (default: 0)
-#   HICLAW_LLM_PROVIDER      LLM provider       (default: openai-compat for zh non-interactive Token Plan; qwen for en)
-#   HICLAW_DEFAULT_MODEL      Default model       (default: qwen3.6-plus for zh Token Plan and en non-interactive)
-#   HICLAW_OPENAI_BASE_URL    OpenAI-compatible base URL (default for zh non-interactive: Alibaba Token Plan endpoint)
-#   HICLAW_LLM_API_KEY        LLM API key         (required)
-#   HICLAW_ADMIN_USER         Admin username       (default: admin)
-#   HICLAW_ADMIN_PASSWORD     Admin password       (auto-generated if not set, min 8 chars)
-#   HICLAW_MATRIX_DOMAIN      Matrix domain        (default: matrix-local.hiclaw.io:18080)
-#   HICLAW_MOUNT_SOCKET       Mount container runtime socket (default: 1)
-#   HICLAW_DATA_DIR           Docker volume name for persistent data (default: hiclaw-data)
-#   HICLAW_WORKSPACE_DIR      Host directory for manager workspace (default: ~/hiclaw-manager)
-#   HICLAW_VERSION            Image tag            (default: latest)
-#   HICLAW_REGISTRY           Image registry       (default: auto-detected by timezone)
-#   HICLAW_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
-#   HICLAW_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
-#   HICLAW_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
-#   HICLAW_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
-#   HICLAW_NACOS_REGISTRY_URI          Default Nacos registry URI for Worker market search/import
-#                                      (default: nacos://market.hiclaw.io:80/public)
-#   HICLAW_NACOS_USERNAME              Default Nacos username for nacos:// package imports (optional)
-#   HICLAW_NACOS_PASSWORD              Default Nacos password for nacos:// package imports (optional)
-#   HICLAW_CMS_TRACES_ENABLED          Enable openclaw-cms-plugin traces for Manager AND all Workers (default: false)
-#   HICLAW_CMS_ENDPOINT                ARMS OTLP endpoint (required if traces enabled)
-#   HICLAW_CMS_LICENSE_KEY             CMS license key (required if traces enabled)
-#   HICLAW_CMS_PROJECT                 CMS project name (optional)
-#   HICLAW_CMS_WORKSPACE               CMS workspace ID (required if traces enabled)
-#   HICLAW_CMS_SERVICE_NAME            Manager service name in ARMS (default: hiclaw-manager)
-#                                      Workers always report as hiclaw-worker-<name> automatically
-#   HICLAW_CMS_METRICS_ENABLED         Enable diagnostics-otel metrics for Manager AND all Workers (default: false)
-#   HICLAW_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
-#   HICLAW_PORT_CONSOLE       Host port for Higress console (default: 18001)
-#   HICLAW_PORT_ELEMENT_WEB   Host port for Element Web direct access (default: 18088)
-#   HICLAW_PORT_MANAGER_CONSOLE  Host port for Manager console (default: 18888)
-#   HICLAW_WORKER_IDLE_TIMEOUT  Worker idle timeout in minutes (default: 720, i.e. 12 hours)
+#   AGENTTEAMS_NON_INTERACTIVE    Skip all prompts, use defaults  (default: 0)
+#   AGENTTEAMS_LLM_PROVIDER      LLM provider       (default: openai-compat for zh non-interactive Token Plan; qwen for en)
+#   AGENTTEAMS_DEFAULT_MODEL      Default model       (default: qwen3.6-plus for zh Token Plan and en non-interactive)
+#   AGENTTEAMS_OPENAI_BASE_URL    OpenAI-compatible base URL (default for zh non-interactive: Alibaba Token Plan endpoint)
+#   AGENTTEAMS_LLM_API_KEY        LLM API key         (required)
+#   AGENTTEAMS_ADMIN_USER         Admin username       (default: admin)
+#   AGENTTEAMS_ADMIN_PASSWORD     Admin password       (auto-generated if not set, min 8 chars)
+#   AGENTTEAMS_MATRIX_DOMAIN      Matrix domain        (default: matrix-local.agentteams.io:18080)
+#   AGENTTEAMS_MOUNT_SOCKET       Mount container runtime socket (default: 1)
+#   AGENTTEAMS_DATA_DIR           Docker volume name for persistent data (default: agentteams-data)
+#   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
+#   AGENTTEAMS_VERSION            Image tag            (default: latest)
+#   AGENTTEAMS_REGISTRY           Image registry       (default: auto-detected by timezone)
+#   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
+#   AGENTTEAMS_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
+#   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
+#   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
+#   AGENTTEAMS_NACOS_REGISTRY_URI          Default Nacos registry URI for Worker market search/import
+#                                      (default: nacos://market.agentteams.io:80/public)
+#   AGENTTEAMS_NACOS_USERNAME              Default Nacos username for nacos:// package imports (optional)
+#   AGENTTEAMS_NACOS_PASSWORD              Default Nacos password for nacos:// package imports (optional)
+#   AGENTTEAMS_CMS_TRACES_ENABLED          Enable openclaw-cms-plugin traces for Manager AND all Workers (default: false)
+#   AGENTTEAMS_CMS_ENDPOINT                ARMS OTLP endpoint (required if traces enabled)
+#   AGENTTEAMS_CMS_LICENSE_KEY             CMS license key (required if traces enabled)
+#   AGENTTEAMS_CMS_PROJECT                 CMS project name (optional)
+#   AGENTTEAMS_CMS_WORKSPACE               CMS workspace ID (required if traces enabled)
+#   AGENTTEAMS_CMS_SERVICE_NAME            Manager service name in ARMS (default: agentteams-manager)
+#                                      Workers always report as agentteams-worker-<name> automatically
+#   AGENTTEAMS_CMS_METRICS_ENABLED         Enable diagnostics-otel metrics for Manager AND all Workers (default: false)
+#   AGENTTEAMS_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
+#   AGENTTEAMS_PORT_CONSOLE       Host port for Higress console (default: 18001)
+#   AGENTTEAMS_PORT_ELEMENT_WEB   Host port for Element Web direct access (default: 18088)
+#   AGENTTEAMS_PORT_MANAGER_CONSOLE  Host port for Manager console (default: 18888)
+#   AGENTTEAMS_WORKER_IDLE_TIMEOUT  Worker idle timeout in minutes (default: 720, i.e. 12 hours)
 
 set -e
 
-HICLAW_VERSION="${HICLAW_VERSION:-}"
-HICLAW_KNOWN_STABLE_VERSION="v1.1.2"   # fallback if GitHub API is unreachable
+AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-}"
+AGENTTEAMS_KNOWN_STABLE_VERSION="v1.1.2"   # fallback if GitHub API is unreachable
 
 # Returns 0 (true) if $1 < $2 using semver order; "latest" is treated as greatest
 _ver_lt() {
@@ -59,28 +59,28 @@ _ver_lt() {
     [ "$1" = "$2" ] && return 1
     [ "$(printf '%s\n%s' "$1" "$2" | sort -V | head -1)" = "$1" ]
 }
-HICLAW_NON_INTERACTIVE="${HICLAW_NON_INTERACTIVE:-0}"
-HICLAW_MOUNT_SOCKET="${HICLAW_MOUNT_SOCKET:-1}"
-HICLAW_DOCKER_PROXY="${HICLAW_DOCKER_PROXY:-1}"
+AGENTTEAMS_NON_INTERACTIVE="${AGENTTEAMS_NON_INTERACTIVE:-0}"
+AGENTTEAMS_MOUNT_SOCKET="${AGENTTEAMS_MOUNT_SOCKET:-1}"
+AGENTTEAMS_DOCKER_PROXY="${AGENTTEAMS_DOCKER_PROXY:-1}"
 STEP_RESULT=""  # Used by state machine to signal "back" navigation
 
 # ============================================================
 # Log all output to file
 # ============================================================
 
-HICLAW_LOG_FILE="${HOME}/hiclaw-install.log"
+AGENTTEAMS_LOG_FILE="${HOME}/hiclaw-install.log"
 
 if [ "${1:-}" != "uninstall" ]; then
     # Redirect all output (stdout and stderr) to both terminal and log file
-    exec > >(tee -a "${HICLAW_LOG_FILE}") 2>&1
+    exec > >(tee -a "${AGENTTEAMS_LOG_FILE}") 2>&1
 
     echo ""
     echo "========================================"
-    echo "HiClaw Installation Log"
+    echo "AgentTeams Installation Log"
     echo "Started: $(date)"
     echo "User: $(whoami)"
     echo "System: $(uname -a)"
-    echo "Log file: ${HICLAW_LOG_FILE}"
+    echo "Log file: ${AGENTTEAMS_LOG_FILE}"
     echo "========================================"
     echo ""
 fi
@@ -90,11 +90,11 @@ fi
 # ============================================================
 
 log() {
-    echo -e "\033[36m[HiClaw]\033[0m $1"
+    echo -e "\033[36m[AgentTeams]\033[0m $1"
 }
 
 error() {
-    echo -e "\033[31m[HiClaw ERROR]\033[0m $1" >&2
+    echo -e "\033[31m[AgentTeams ERROR]\033[0m $1" >&2
 }
 
 die() {
@@ -126,13 +126,13 @@ detect_timezone() {
 
     # If still not detected, warn and prompt user. Diagnostics go to stderr —
     # this function returns its value via stdout to `$(detect_timezone)`, so
-    # any echo here would leak into HICLAW_TIMEZONE and downstream image tags.
+    # any echo here would leak into AGENTTEAMS_TIMEZONE and downstream image tags.
     if [ -z "${tz}" ]; then
         echo "" >&2
-        echo -e "\033[33m[HiClaw WARNING]\033[0m Could not detect timezone automatically." >&2
-        echo -e "\033[33m[HiClaw]\033[0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York)." >&2
+        echo -e "\033[33m[AgentTeams WARNING]\033[0m Could not detect timezone automatically." >&2
+        echo -e "\033[33m[AgentTeams]\033[0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York)." >&2
         echo "" >&2
-        if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
             tz="Asia/Shanghai"
             log "Using default timezone: ${tz}" >&2
         else
@@ -145,14 +145,14 @@ detect_timezone() {
 }
 
 # Detect timezone once at startup (used by registry selection and container TZ)
-HICLAW_TIMEZONE="${HICLAW_TIMEZONE:-$(detect_timezone)}"
+AGENTTEAMS_TIMEZONE="${AGENTTEAMS_TIMEZONE:-$(detect_timezone)}"
 
 # ============================================================
 # Language detection based on timezone
 # ============================================================
 
 detect_language() {
-    local tz="${HICLAW_TIMEZONE}"
+    local tz="${AGENTTEAMS_TIMEZONE}"
     case "${tz}" in
         Asia/Shanghai|Asia/Chongqing|Asia/Harbin|Asia/Urumqi|\
         Asia/Taipei|Asia/Hong_Kong|Asia/Macau)
@@ -165,26 +165,26 @@ detect_language() {
 }
 
 # Language priority: env var > existing env file > timezone detection
-if [ -z "${HICLAW_LANGUAGE}" ]; then
+if [ -z "${AGENTTEAMS_LANGUAGE}" ]; then
     # Check existing env file for saved language preference (upgrade scenario)
-    _env_file="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+    _env_file="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     # Migrate from legacy location (current directory) if needed
-    if [ ! -f "${_env_file}" ] && [ -f "./hiclaw-manager.env" ]; then
-        mv "./hiclaw-manager.env" "${_env_file}" 2>/dev/null || true
+    if [ ! -f "${_env_file}" ] && [ -f "./agentteams-manager.env" ]; then
+        mv "./agentteams-manager.env" "${_env_file}" 2>/dev/null || true
     fi
     if [ -f "${_env_file}" ]; then
-        _saved_lang=$(grep '^HICLAW_LANGUAGE=' "${_env_file}" 2>/dev/null | cut -d= -f2-)
+        _saved_lang=$(grep '^AGENTTEAMS_LANGUAGE=' "${_env_file}" 2>/dev/null | cut -d= -f2-)
         if [ -n "${_saved_lang}" ]; then
-            HICLAW_LANGUAGE="${_saved_lang}"
+            AGENTTEAMS_LANGUAGE="${_saved_lang}"
         fi
     fi
     # Fall back to timezone-based detection
-    if [ -z "${HICLAW_LANGUAGE}" ]; then
-        HICLAW_LANGUAGE="$(detect_language)"
+    if [ -z "${AGENTTEAMS_LANGUAGE}" ]; then
+        AGENTTEAMS_LANGUAGE="$(detect_language)"
     fi
     unset _env_file _saved_lang
 fi
-export HICLAW_LANGUAGE
+export AGENTTEAMS_LANGUAGE
 
 # ============================================================
 # Centralized message dictionary and msg() function
@@ -196,7 +196,7 @@ export HICLAW_LANGUAGE
 msg() {
     local key="$1"
     shift
-    local lang="${HICLAW_LANGUAGE:-en}"
+    local lang="${AGENTTEAMS_LANGUAGE:-en}"
     local text=""
     case "${key}.${lang}" in
         # --- Timezone detection messages ---
@@ -209,14 +209,14 @@ msg() {
         "tz.input_prompt.zh") text="时区" ;;
         "tz.input_prompt.en") text="Timezone" ;;
         # --- Installation title and info ---
-        "install.title.zh") text="=== HiClaw Manager 安装 ===" ;;
-        "install.title.en") text="=== HiClaw Manager Installation ===" ;;
+        "install.title.zh") text="=== AgentTeams Manager 安装 ===" ;;
+        "install.title.en") text="=== AgentTeams Manager Installation ===" ;;
         "install.registry.zh") text="镜像仓库: %s" ;;
         "install.registry.en") text="Registry: %s" ;;
         "install.dir.zh") text="安装目录: %s" ;;
         "install.dir.en") text="Installation directory: %s" ;;
-        "install.dir_hint.zh") text="  （env 文件 'hiclaw-manager.env' 将保存到 HOME 目录。）" ;;
-        "install.dir_hint.en") text="  (The env file 'hiclaw-manager.env' will be saved to your HOME directory.)" ;;
+        "install.dir_hint.zh") text="  （env 文件 'agentteams-manager.env' 将保存到 HOME 目录。）" ;;
+        "install.dir_hint.en") text="  (The env file 'agentteams-manager.env' will be saved to your HOME directory.)" ;;
         "install.dir_hint2.zh") text="  （请从您希望管理此安装的目录运行此脚本。）" ;;
         "install.dir_hint2.en") text="  (Run this script from the directory where you want to manage this installation.)" ;;
         # --- Onboarding mode ---
@@ -310,18 +310,18 @@ msg() {
         "install.reinstall.warn_stop.en") text="⚠️  The following running containers will be stopped:" ;;
         "install.reinstall.warn_delete.zh") text="⚠️  警告: 以下内容将被删除:" ;;
         "install.reinstall.warn_delete.en") text="⚠️  WARNING: This will DELETE the following:" ;;
-        "install.reinstall.warn_volume.zh") text="   - Docker 卷: hiclaw-data" ;;
-        "install.reinstall.warn_volume.en") text="   - Docker volume: hiclaw-data" ;;
+        "install.reinstall.warn_volume.zh") text="   - Docker 卷: agentteams-data" ;;
+        "install.reinstall.warn_volume.en") text="   - Docker volume: agentteams-data" ;;
         "install.reinstall.warn_env.zh") text="   - Env 文件: %s" ;;
         "install.reinstall.warn_env.en") text="   - Env file: %s" ;;
         "install.reinstall.warn_workspace.zh") text="   - Manager 工作空间: %s" ;;
         "install.reinstall.warn_workspace.en") text="   - Manager workspace: %s" ;;
         "install.reinstall.warn_workers.zh") text="   - 所有 worker 容器" ;;
         "install.reinstall.warn_workers.en") text="   - All worker containers" ;;
-        "install.reinstall.warn_proxy.zh") text="   - Docker API 代理容器: hiclaw-controller" ;;
-        "install.reinstall.warn_proxy.en") text="   - Docker API proxy container: hiclaw-controller" ;;
-        "install.reinstall.warn_network.zh") text="   - Docker 网络: hiclaw-net" ;;
-        "install.reinstall.warn_network.en") text="   - Docker network: hiclaw-net" ;;
+        "install.reinstall.warn_proxy.zh") text="   - Docker API 代理容器: agentteams-controller" ;;
+        "install.reinstall.warn_proxy.en") text="   - Docker API proxy container: agentteams-controller" ;;
+        "install.reinstall.warn_network.zh") text="   - Docker 网络: agentteams-net" ;;
+        "install.reinstall.warn_network.en") text="   - Docker network: agentteams-net" ;;
         "install.reinstall.confirm_type.zh") text="请输入工作空间路径以确认删除（或按 Ctrl+C 取消）:" ;;
         "install.reinstall.confirm_type.en") text="To confirm deletion, please type the workspace path:" ;;
         "install.reinstall.confirm_path.zh") text="输入路径以确认（或按 Ctrl+C 取消）" ;;
@@ -332,14 +332,14 @@ msg() {
         "install.reinstall.confirmed.en") text="Confirmed. Cleaning up..." ;;
         "install.reinstall.removed_worker.zh") text="  已移除 worker: %s" ;;
         "install.reinstall.removed_worker.en") text="  Removed worker: %s" ;;
-        "install.reinstall.removing_volume.zh") text="正在移除 Docker 卷: hiclaw-data" ;;
-        "install.reinstall.removing_volume.en") text="Removing Docker volume: hiclaw-data" ;;
+        "install.reinstall.removing_volume.zh") text="正在移除 Docker 卷: agentteams-data" ;;
+        "install.reinstall.removing_volume.en") text="Removing Docker volume: agentteams-data" ;;
         "install.reinstall.warn_volume_fail.zh") text="  警告: 无法移除卷（可能有引用）" ;;
         "install.reinstall.warn_volume_fail.en") text="  Warning: Could not remove volume (may have references)" ;;
-        "install.reinstall.removing_proxy.zh") text="正在移除 Docker API 代理容器: hiclaw-controller" ;;
-        "install.reinstall.removing_proxy.en") text="Removing Docker API proxy container: hiclaw-controller" ;;
-        "install.reinstall.removing_network.zh") text="正在移除 Docker 网络: hiclaw-net" ;;
-        "install.reinstall.removing_network.en") text="Removing Docker network: hiclaw-net" ;;
+        "install.reinstall.removing_proxy.zh") text="正在移除 Docker API 代理容器: agentteams-controller" ;;
+        "install.reinstall.removing_proxy.en") text="Removing Docker API proxy container: agentteams-controller" ;;
+        "install.reinstall.removing_network.zh") text="正在移除 Docker 网络: agentteams-net" ;;
+        "install.reinstall.removing_network.en") text="Removing Docker network: agentteams-net" ;;
         "install.reinstall.removing_workspace.zh") text="正在移除工作空间目录: %s" ;;
         "install.reinstall.removing_workspace.en") text="Removing workspace directory: %s" ;;
         "install.reinstall.removing_env.zh") text="正在移除 env 文件: %s" ;;
@@ -532,15 +532,15 @@ msg() {
         "github.token_prompt.zh") text="GitHub 个人访问令牌（可选）" ;;
         "github.token_prompt.en") text="GitHub Personal Access Token (optional)" ;;
         # --- Skills Registry ---
-        "skills.title.zh") text="--- Skills 注册中心（可选，按回车使用默认 nacos://market.hiclaw.io:80/public）---" ;;
-        "skills.title.en") text="--- Skills Registry (optional, press Enter for default nacos://market.hiclaw.io:80/public) ---" ;;
-        "skills.url_prompt.zh") text="Skills 注册中心 URL（留空使用默认 nacos://market.hiclaw.io:80/public）" ;;
-        "skills.url_prompt.en") text="Skills Registry URL (leave empty for default nacos://market.hiclaw.io:80/public)" ;;
+        "skills.title.zh") text="--- Skills 注册中心（可选，按回车使用默认 nacos://market.agentteams.io:80/public）---" ;;
+        "skills.title.en") text="--- Skills Registry (optional, press Enter for default nacos://market.agentteams.io:80/public) ---" ;;
+        "skills.url_prompt.zh") text="Skills 注册中心 URL（留空使用默认 nacos://market.agentteams.io:80/public）" ;;
+        "skills.url_prompt.en") text="Skills Registry URL (leave empty for default nacos://market.agentteams.io:80/public)" ;;
         # --- Data Persistence ---
         "data.title.zh") text="--- 数据持久化 ---" ;;
         "data.title.en") text="--- Data Persistence ---" ;;
-        "data.volume_prompt.zh") text="Docker 卷名称 [hiclaw-data]" ;;
-        "data.volume_prompt.en") text="Docker volume name for persistent data [hiclaw-data]" ;;
+        "data.volume_prompt.zh") text="Docker 卷名称 [agentteams-data]" ;;
+        "data.volume_prompt.en") text="Docker volume name for persistent data [agentteams-data]" ;;
         "data.volume_using.zh") text="  使用 Docker 卷: %s" ;;
         "data.volume_using.en") text="  Using Docker volume: %s" ;;
         # --- Manager Workspace ---
@@ -603,8 +603,8 @@ msg() {
         "install.socket_confirm.cancelled.zh") text="安装已取消。如需启用 Worker 自动创建，请确保 Docker/Podman 正在运行，然后重新运行安装脚本。" ;;
         "install.socket_confirm.cancelled.en") text="Installation cancelled. To enable automatic Worker creation, ensure Docker/Podman is running and re-run the installer." ;;
         # --- Container management ---
-        "install.removing_existing.zh") text="正在移除现有 hiclaw-manager 容器..." ;;
-        "install.removing_existing.en") text="Removing existing hiclaw-manager container..." ;;
+        "install.removing_existing.zh") text="正在移除现有 agentteams-manager 容器..." ;;
+        "install.removing_existing.en") text="Removing existing agentteams-manager container..." ;;
         # --- Matrix E2EE ---
         "matrix_e2ee.title.zh") text="--- Matrix 端到端加密（E2EE）---" ;;
         "matrix_e2ee.title.en") text="--- Matrix End-to-End Encryption (E2EE) ---" ;;
@@ -771,8 +771,8 @@ msg() {
         "llm.embedding.test.ok.en") text="✅ Embedding API connectivity test passed" ;;
         "llm.embedding.test.fail.zh") text="⚠️  Embedding API 测试失败（HTTP %s）。响应: %s" ;;
         "llm.embedding.test.fail.en") text="⚠️  Embedding API test failed (HTTP %s). Response: %s" ;;
-        "llm.embedding.auto_disabled.zh") text="⚠️  Embedding 已自动禁用，记忆搜索将使用关键词匹配。您可以稍后在 hiclaw-manager.env 中设置 HICLAW_EMBEDDING_MODEL 启用。" ;;
-        "llm.embedding.auto_disabled.en") text="⚠️  Embedding auto-disabled. Memory search will use keyword matching. You can enable it later in hiclaw-manager.env by setting HICLAW_EMBEDDING_MODEL." ;;
+        "llm.embedding.auto_disabled.zh") text="⚠️  Embedding 已自动禁用，记忆搜索将使用关键词匹配。您可以稍后在 agentteams-manager.env 中设置 AGENTTEAMS_EMBEDDING_MODEL 启用。" ;;
+        "llm.embedding.auto_disabled.en") text="⚠️  Embedding auto-disabled. Memory search will use keyword matching. You can enable it later in agentteams-manager.env by setting AGENTTEAMS_EMBEDDING_MODEL." ;;
         "llm.embedding.disabled.zh") text="ℹ️  Embedding 已禁用，记忆搜索将使用关键词匹配。" ;;
         "llm.embedding.disabled.en") text="ℹ️  Embedding disabled. Memory search will use keyword matching." ;;
         "llm.openai.test.aborted.zh") text="安装已中止。" ;;
@@ -825,13 +825,13 @@ msg() {
         "install.welcome_msg.timeout.en") text="WARNING: Did not observe the Manager sending its welcome message (status.welcomeSent=true) within %ss. Installation is still successful, all services are up — continue with the Element Web instructions below." ;;
         "install.welcome_msg.timeout_hint.zh") text="手动触发 onboarding: 登录 Element Web → 打开与 Manager 的 DM 房间 → 发送任意一句话（例如 \"hi\"），Manager 会接管对话并开始引导。" ;;
         "install.welcome_msg.timeout_hint.en") text="Manual onboarding: log in to Element Web → open the DM with the Manager → send any message (e.g. \"hi\") and the Manager will take over and start the guided setup." ;;
-        "install.welcome_msg.timeout_inspect.zh") text="排查命令: docker exec hiclaw-controller hiclaw get managers default" ;;
-        "install.welcome_msg.timeout_inspect.en") text="Inspect status: docker exec hiclaw-controller hiclaw get managers default" ;;
-        "install.welcome_msg.poll_unavailable.zh") text="提示: hiclaw-manager 内未找到 hiclaw CLI，跳过 welcome 等待（旧镜像？）" ;;
-        "install.welcome_msg.poll_unavailable.en") text="Note: hiclaw CLI not found inside hiclaw-manager; skipping welcome wait (old image?)" ;;
+        "install.welcome_msg.timeout_inspect.zh") text="排查命令: docker exec agentteams-controller hiclaw get managers default" ;;
+        "install.welcome_msg.timeout_inspect.en") text="Inspect status: docker exec agentteams-controller hiclaw get managers default" ;;
+        "install.welcome_msg.poll_unavailable.zh") text="提示: agentteams-manager 内未找到 hiclaw CLI，跳过 welcome 等待（旧镜像？）" ;;
+        "install.welcome_msg.poll_unavailable.en") text="Note: hiclaw CLI not found inside agentteams-manager; skipping welcome wait (old image?)" ;;
         # --- Final output panel ---
-        "success.title.zh") text="=== HiClaw Manager 已启动！===" ;;
-        "success.title.en") text="=== HiClaw Manager Started! ===" ;;
+        "success.title.zh") text="=== AgentTeams Manager 已启动！===" ;;
+        "success.title.en") text="=== AgentTeams Manager Started! ===" ;;
         "success.domains_configured.zh") text="以下域名已配置解析到 127.0.0.1:" ;;
         "success.domains_configured.en") text="The following domains are configured to resolve to 127.0.0.1:" ;;
         "success.open_url.zh") text="  ★ 在浏览器中打开以下 URL 开始使用:                           ★" ;;
@@ -871,8 +871,8 @@ msg() {
         "success.higress_console.en") text="  Higress Console: http://localhost:%s (Username: %s / Password: %s)" ;;
         "success.manager_console.zh") text="  Manager 控制台（本地）: http://localhost:%s（无需登录）" ;;
         "success.manager_console.en") text="  Manager Console (local): http://localhost:%s (no login required)" ;;
-        "success.manager_console_gateway.zh") text="  Manager 控制台（网关）: http://console-local.hiclaw.io（用户名: %s / 密码: %s）" ;;
-        "success.manager_console_gateway.en") text="  Manager Console (gateway): http://console-local.hiclaw.io (Username: %s / Password: %s)" ;;
+        "success.manager_console_gateway.zh") text="  Manager 控制台（网关）: http://console-local.agentteams.io（用户名: %s / 密码: %s）" ;;
+        "success.manager_console_gateway.en") text="  Manager Console (gateway): http://console-local.agentteams.io (Username: %s / Password: %s)" ;;
         "success.copaw_console.zh") text="  QwenPaw App API: http://localhost:%s（无需登录）" ;;
         "success.copaw_console.en") text="  QwenPaw App API: http://localhost:%s (no login required)" ;;
         "success.switch_llm.title.zh") text="--- 切换 LLM 提供商 ---" ;;
@@ -933,10 +933,10 @@ msg() {
         "lang.prompt.zh") text="请选择 / Enter choice" ;;
         "lang.prompt.en") text="请选择 / Enter choice" ;;
         # --- Uninstall messages ---
-        "uninstall.title.zh") text="正在卸载 HiClaw..." ;;
-        "uninstall.title.en") text="Uninstalling HiClaw..." ;;
-        "uninstall.stopping_manager.zh") text="正在停止并移除 hiclaw-manager..." ;;
-        "uninstall.stopping_manager.en") text="Stopping and removing hiclaw-manager..." ;;
+        "uninstall.title.zh") text="正在卸载 AgentTeams..." ;;
+        "uninstall.title.en") text="Uninstalling AgentTeams..." ;;
+        "uninstall.stopping_manager.zh") text="正在停止并移除 agentteams-manager..." ;;
+        "uninstall.stopping_manager.en") text="Stopping and removing agentteams-manager..." ;;
         "uninstall.stopping_workers.zh") text="正在停止并移除 Worker 容器..." ;;
         "uninstall.stopping_workers.en") text="Stopping and removing worker containers..." ;;
         "uninstall.removed.zh") text="  已移除: %s" ;;
@@ -947,18 +947,18 @@ msg() {
         "uninstall.removing_env.en") text="Removing env file: %s" ;;
         "uninstall.removing_proxy.zh") text="正在停止并移除 Docker API 代理容器: hiclaw-docker-proxy" ;;
         "uninstall.removing_proxy.en") text="Stopping and removing Docker API proxy container: hiclaw-docker-proxy" ;;
-        "uninstall.stopping_controller.zh") text="正在停止并移除 hiclaw-controller (内嵌 Tuwunel/MinIO/Higress)..." ;;
-        "uninstall.stopping_controller.en") text="Stopping and removing hiclaw-controller (embedded Tuwunel/MinIO/Higress)..." ;;
-        "uninstall.removing_network.zh") text="正在移除 Docker 网络: hiclaw-net" ;;
-        "uninstall.removing_network.en") text="Removing Docker network: hiclaw-net" ;;
+        "uninstall.stopping_controller.zh") text="正在停止并移除 agentteams-controller (内嵌 Tuwunel/MinIO/Higress)..." ;;
+        "uninstall.stopping_controller.en") text="Stopping and removing agentteams-controller (embedded Tuwunel/MinIO/Higress)..." ;;
+        "uninstall.removing_network.zh") text="正在移除 Docker 网络: agentteams-net" ;;
+        "uninstall.removing_network.en") text="Removing Docker network: agentteams-net" ;;
         "uninstall.removing_workspace.zh") text="正在移除工作空间目录: %s" ;;
         "uninstall.removing_workspace.en") text="Removing workspace directory: %s" ;;
         "uninstall.removing_workspace_elevated.zh") text="  工作空间包含 root 文件，通过容器清理..." ;;
         "uninstall.removing_workspace_elevated.en") text="  Workspace contains root-owned files, cleaning via container..." ;;
         "uninstall.removing_log.zh") text="正在移除日志文件: %s" ;;
         "uninstall.removing_log.en") text="Removing log file: %s" ;;
-        "uninstall.done.zh") text="HiClaw 已卸载。" ;;
-        "uninstall.done.en") text="HiClaw has been uninstalled." ;;
+        "uninstall.done.zh") text="AgentTeams 已卸载。" ;;
+        "uninstall.done.en") text="AgentTeams has been uninstalled." ;;
         # --- Error messages ---
         "error.name_required.zh") text="--name 是必需的" ;;
         "error.name_required.en") text="--name is required" ;;
@@ -978,7 +978,7 @@ msg() {
         *)
             case "${key}.en" in
                 "tz.warning.title.en") text="Could not detect timezone automatically." ;;
-                "install.title.en") text="=== HiClaw Manager Installation ===" ;;
+                "install.title.en") text="=== AgentTeams Manager Installation ===" ;;
                 *) text="${key}" ;;
             esac
             ;;
@@ -996,7 +996,7 @@ msg() {
 # ============================================================
 
 detect_registry() {
-    local tz="${HICLAW_TIMEZONE}"
+    local tz="${AGENTTEAMS_TIMEZONE}"
 
     case "${tz}" in
         America/*)
@@ -1013,30 +1013,30 @@ detect_registry() {
     esac
 }
 
-HICLAW_REGISTRY="${HICLAW_REGISTRY:-$(detect_registry)}"
+AGENTTEAMS_REGISTRY="${AGENTTEAMS_REGISTRY:-$(detect_registry)}"
 # Backward compatibility: accept old env var names from previous versions
-HICLAW_INSTALL_CONTROLLER_IMAGE="${HICLAW_INSTALL_CONTROLLER_IMAGE:-${HICLAW_INSTALL_DOCKER_PROXY_IMAGE:-}}"
+AGENTTEAMS_INSTALL_CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-${AGENTTEAMS_INSTALL_DOCKER_PROXY_IMAGE:-}}"
 # Image variables are resolved after version selection in step_version().
 # These placeholders allow early code paths to reference them without errors.
-MANAGER_IMAGE="${HICLAW_INSTALL_MANAGER_IMAGE:-}"
-MANAGER_COPAW_IMAGE="${HICLAW_INSTALL_MANAGER_COPAW_IMAGE:-}"
-WORKER_IMAGE="${HICLAW_INSTALL_WORKER_IMAGE:-}"
-COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-}"
-HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-}"
-CONTROLLER_IMAGE="${HICLAW_INSTALL_CONTROLLER_IMAGE:-}"
+MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-}"
+MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-}"
+WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-}"
+COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
+HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
+CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
-    MANAGER_IMAGE="${HICLAW_INSTALL_MANAGER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-manager:${HICLAW_VERSION}}"
-    MANAGER_COPAW_IMAGE="${HICLAW_INSTALL_MANAGER_COPAW_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-manager-copaw:${HICLAW_VERSION}}"
-    WORKER_IMAGE="${HICLAW_INSTALL_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-worker:${HICLAW_VERSION}}"
-    COPAW_WORKER_IMAGE="${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-copaw-worker:${HICLAW_VERSION}}"
-    HERMES_WORKER_IMAGE="${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-hermes-worker:${HICLAW_VERSION}}"
-    EMBEDDED_IMAGE="${HICLAW_INSTALL_EMBEDDED_IMAGE:-${HICLAW_REGISTRY}/higress/hiclaw-embedded:${HICLAW_VERSION}}"
+    MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-manager:${AGENTTEAMS_VERSION}}"
+    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-manager-copaw:${AGENTTEAMS_VERSION}}"
+    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-worker:${AGENTTEAMS_VERSION}}"
+    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-copaw-worker:${AGENTTEAMS_VERSION}}"
+    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
+    EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:${AGENTTEAMS_VERSION}}"
     # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
-    if [ -z "${HICLAW_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${HICLAW_VERSION}" "v1.0.4"; then
+    if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.0.4"; then
         COPAW_WORKER_IMAGE=""
     fi
-    if [ -z "${HICLAW_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+    if [ -z "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
         HERMES_WORKER_IMAGE=""
     fi
 }
@@ -1047,22 +1047,22 @@ resolve_image_tags() {
 # actionable error rather than silently falling back to the legacy single-container
 # path — that path is permanently broken with the slim manager image and would just
 # leave the user with a manager container looping on "Waiting for Higress Gateway".
-# Sets EMBEDDED_IMAGE and HICLAW_USE_EMBEDDED.
+# Sets EMBEDDED_IMAGE and AGENTTEAMS_USE_EMBEDDED.
 resolve_embedded_image() {
-    HICLAW_USE_EMBEDDED=1
+    AGENTTEAMS_USE_EMBEDDED=1
 
     # If the user explicitly overrode the image (e.g. `make install-embedded` passes
     # a locally-built tag), respect it as-is without any registry probe.
-    if [ -n "${HICLAW_INSTALL_EMBEDDED_IMAGE:-}" ]; then
-        EMBEDDED_IMAGE="${HICLAW_INSTALL_EMBEDDED_IMAGE}"
+    if [ -n "${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-}" ]; then
+        EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE}"
         return 0
     fi
 
-    local _versioned="${HICLAW_REGISTRY}/higress/hiclaw-embedded:${HICLAW_VERSION}"
-    local _latest="${HICLAW_REGISTRY}/higress/hiclaw-embedded:latest"
+    local _versioned="${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:${AGENTTEAMS_VERSION}"
+    local _latest="${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:latest"
 
-    # Skip probe when HICLAW_VERSION is "latest" — no point trying the same tag twice.
-    if [ "${HICLAW_VERSION}" = "latest" ]; then
+    # Skip probe when AGENTTEAMS_VERSION is "latest" — no point trying the same tag twice.
+    if [ "${AGENTTEAMS_VERSION}" = "latest" ]; then
         EMBEDDED_IMAGE="${_latest}"
         return 0
     fi
@@ -1076,26 +1076,26 @@ resolve_embedded_image() {
     # bundled all infrastructure.  Falling back to hiclaw-embedded:latest would
     # silently swap in the v1.1.0 architecture (embedded kube-apiserver) which
     # crashes under QEMU on Apple Silicon.  Auto-activate legacy mode instead.
-    if _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
-        log "INFO: ${HICLAW_VERSION} predates hiclaw-embedded; switching to legacy all-in-one manager architecture."
-        log "WARNING: Legacy all-in-one mode requires HICLAW_VERSION <= v1.0.9 (older bundled manager image)."
+    if _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+        log "INFO: ${AGENTTEAMS_VERSION} predates hiclaw-embedded; switching to legacy all-in-one manager architecture."
+        log "WARNING: Legacy all-in-one mode requires AGENTTEAMS_VERSION <= v1.0.9 (older bundled manager image)."
         log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
-        HICLAW_USE_EMBEDDED=0
+        AGENTTEAMS_USE_EMBEDDED=0
         return 0
     fi
 
     if ${DOCKER_CMD} pull "${_latest}" >/dev/null 2>&1; then
-        log "embedded ${HICLAW_VERSION} not found, using latest"
+        log "embedded ${AGENTTEAMS_VERSION} not found, using latest"
         EMBEDDED_IMAGE="${_latest}"
         return 0
     fi
 
     # Explicit escape hatch — still honoured for edge cases.
-    if [ "${HICLAW_FORCE_LEGACY:-0}" = "1" ]; then
-        log "WARNING: HICLAW_FORCE_LEGACY=1 — using legacy all-in-one manager architecture."
-        log "WARNING: This requires HICLAW_VERSION <= v1.0.9 (older bundled manager image)."
+    if [ "${AGENTTEAMS_FORCE_LEGACY:-0}" = "1" ]; then
+        log "WARNING: AGENTTEAMS_FORCE_LEGACY=1 — using legacy all-in-one manager architecture."
+        log "WARNING: This requires AGENTTEAMS_VERSION <= v1.0.9 (older bundled manager image)."
         log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
-        HICLAW_USE_EMBEDDED=0
+        AGENTTEAMS_USE_EMBEDDED=0
         return 0
     fi
 
@@ -1105,11 +1105,11 @@ resolve_embedded_image() {
     error ""
     error "Embedded mode is the only supported architecture since PR #616."
     error "How to resolve:"
-    error "  1) Pin to a HICLAW_VERSION whose embedded image has been published, or"
+    error "  1) Pin to a AGENTTEAMS_VERSION whose embedded image has been published, or"
     error "     wait for the release pipeline to publish it."
     error "  2) For a local build, run:  make install-embedded"
     error "     (builds and uses the local embedded image without touching the registry)."
-    error "  3) Override with a custom image:  HICLAW_INSTALL_EMBEDDED_IMAGE=...  ./hiclaw-install.sh"
+    error "  3) Override with a custom image:  AGENTTEAMS_INSTALL_EMBEDDED_IMAGE=...  ./hiclaw-install.sh"
     exit 1
 }
 
@@ -1127,39 +1127,39 @@ is_known_model() {
 }
 
 # Prompt user for custom model parameters when model is not in the known list.
-# Sets: HICLAW_MODEL_CONTEXT_WINDOW, HICLAW_MODEL_MAX_TOKENS, HICLAW_MODEL_REASONING, HICLAW_MODEL_VISION
+# Sets: AGENTTEAMS_MODEL_CONTEXT_WINDOW, AGENTTEAMS_MODEL_MAX_TOKENS, AGENTTEAMS_MODEL_REASONING, AGENTTEAMS_MODEL_VISION
 prompt_custom_model_params() {
     local model="$1"
     if is_known_model "${model}"; then
         # Clear any stale custom params for known models
-        HICLAW_MODEL_CONTEXT_WINDOW=""
-        HICLAW_MODEL_MAX_TOKENS=""
-        HICLAW_MODEL_REASONING=""
-        HICLAW_MODEL_VISION=""
+        AGENTTEAMS_MODEL_CONTEXT_WINDOW=""
+        AGENTTEAMS_MODEL_MAX_TOKENS=""
+        AGENTTEAMS_MODEL_REASONING=""
+        AGENTTEAMS_MODEL_VISION=""
         return
     fi
     echo ""
     log "$(msg llm.custom_model.detected "${model}")"
     echo ""
-    read -e -p "  $(msg llm.custom_model.context_prompt): " HICLAW_MODEL_CONTEXT_WINDOW
-    if [ "${HICLAW_MODEL_CONTEXT_WINDOW}" = "b" ]; then STEP_RESULT="back"; return 1; fi
-    HICLAW_MODEL_CONTEXT_WINDOW="${HICLAW_MODEL_CONTEXT_WINDOW:-150000}"
-    read -e -p "  $(msg llm.custom_model.max_tokens_prompt): " HICLAW_MODEL_MAX_TOKENS
-    if [ "${HICLAW_MODEL_MAX_TOKENS}" = "b" ]; then STEP_RESULT="back"; return 1; fi
-    HICLAW_MODEL_MAX_TOKENS="${HICLAW_MODEL_MAX_TOKENS:-128000}"
+    read -e -p "  $(msg llm.custom_model.context_prompt): " AGENTTEAMS_MODEL_CONTEXT_WINDOW
+    if [ "${AGENTTEAMS_MODEL_CONTEXT_WINDOW}" = "b" ]; then STEP_RESULT="back"; return 1; fi
+    AGENTTEAMS_MODEL_CONTEXT_WINDOW="${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-150000}"
+    read -e -p "  $(msg llm.custom_model.max_tokens_prompt): " AGENTTEAMS_MODEL_MAX_TOKENS
+    if [ "${AGENTTEAMS_MODEL_MAX_TOKENS}" = "b" ]; then STEP_RESULT="back"; return 1; fi
+    AGENTTEAMS_MODEL_MAX_TOKENS="${AGENTTEAMS_MODEL_MAX_TOKENS:-128000}"
     read -e -p "  $(msg llm.custom_model.reasoning_prompt): " _reasoning
     if [ "${_reasoning}" = "b" ]; then STEP_RESULT="back"; return 1; fi
     case "${_reasoning}" in
-        n|N|no|NO) HICLAW_MODEL_REASONING="false" ;;
-        *) HICLAW_MODEL_REASONING="true" ;;
+        n|N|no|NO) AGENTTEAMS_MODEL_REASONING="false" ;;
+        *) AGENTTEAMS_MODEL_REASONING="true" ;;
     esac
     read -e -p "  $(msg llm.custom_model.vision_prompt): " _vision
     if [ "${_vision}" = "b" ]; then STEP_RESULT="back"; return 1; fi
     case "${_vision}" in
-        y|Y|yes|YES) HICLAW_MODEL_VISION="true" ;;
-        *) HICLAW_MODEL_VISION="false" ;;
+        y|Y|yes|YES) AGENTTEAMS_MODEL_VISION="true" ;;
+        *) AGENTTEAMS_MODEL_VISION="false" ;;
     esac
-    log "$(msg llm.custom_model.summary "${HICLAW_MODEL_CONTEXT_WINDOW}" "${HICLAW_MODEL_MAX_TOKENS}" "${HICLAW_MODEL_REASONING}" "${HICLAW_MODEL_VISION}")"
+    log "$(msg llm.custom_model.summary "${AGENTTEAMS_MODEL_CONTEXT_WINDOW}" "${AGENTTEAMS_MODEL_MAX_TOKENS}" "${AGENTTEAMS_MODEL_REASONING}" "${AGENTTEAMS_MODEL_VISION}")"
 }
 
 # ============================================================
@@ -1168,14 +1168,14 @@ prompt_custom_model_params() {
 # ============================================================
 
 wait_manager_ready() {
-    local timeout="${HICLAW_READY_TIMEOUT:-300}"
+    local timeout="${AGENTTEAMS_READY_TIMEOUT:-300}"
     local elapsed=0
-    local container="${1:-hiclaw-manager}"
+    local container="${1:-agentteams-manager}"
 
     log "$(msg install.wait_ready "${timeout}")"
 
     # Wait for Manager agent to be healthy inside the container
-    local runtime="${HICLAW_MANAGER_RUNTIME:-copaw}"
+    local runtime="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
     while [ "${elapsed}" -lt "${timeout}" ]; do
         case "${runtime}" in
             copaw)
@@ -1193,7 +1193,7 @@ wait_manager_ready() {
         esac
         sleep 5
         elapsed=$((elapsed + 5))
-        printf "\r\033[36m[HiClaw]\033[0m $(msg install.wait_ready.waiting "${elapsed}" "${timeout}")"
+        printf "\r\033[36m[AgentTeams]\033[0m $(msg install.wait_ready.waiting "${elapsed}" "${timeout}")"
     done
 
     echo ""
@@ -1201,9 +1201,9 @@ wait_manager_ready() {
 }
 
 wait_matrix_ready() {
-    local timeout="${HICLAW_READY_TIMEOUT:-300}"
+    local timeout="${AGENTTEAMS_READY_TIMEOUT:-300}"
     local elapsed=0
-    local container="${1:-hiclaw-manager}"
+    local container="${1:-agentteams-manager}"
 
     log "$(msg install.wait_matrix "${timeout}")"
 
@@ -1214,7 +1214,7 @@ wait_matrix_ready() {
         fi
         sleep 5
         elapsed=$((elapsed + 5))
-        printf "\r\033[36m[HiClaw]\033[0m $(msg install.wait_matrix.waiting "${elapsed}" "${timeout}")"
+        printf "\r\033[36m[AgentTeams]\033[0m $(msg install.wait_matrix.waiting "${elapsed}" "${timeout}")"
     done
 
     echo ""
@@ -1284,15 +1284,15 @@ read_secret() {
 
 # Load current parameter values from env file for upgrade mode display
 load_current_params_from_env() {
-    local env_file="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+    local env_file="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     if [ -f "${env_file}" ]; then
-        [ -z "${HICLAW_LLM_PROVIDER:+x}" ] && HICLAW_LLM_PROVIDER="$(grep '^HICLAW_LLM_PROVIDER=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
-        [ -z "${HICLAW_OPENAI_BASE_URL:+x}" ] && HICLAW_OPENAI_BASE_URL="$(grep '^HICLAW_OPENAI_BASE_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
-        [ -z "${HICLAW_DEFAULT_MODEL:+x}" ] && HICLAW_DEFAULT_MODEL="$(grep '^HICLAW_DEFAULT_MODEL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
-        [ -z "${HICLAW_EMBEDDING_MODEL:+x}" ] && HICLAW_EMBEDDING_MODEL="$(grep '^HICLAW_EMBEDDING_MODEL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
-        [ -z "${HICLAW_WORKSPACE_DIR:+x}" ] && HICLAW_WORKSPACE_DIR="$(grep '^HICLAW_WORKSPACE_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
-        [ -z "${HICLAW_HOST_SHARE_DIR:+x}" ] && HICLAW_HOST_SHARE_DIR="$(grep '^HICLAW_HOST_SHARE_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
-        [ -z "${HICLAW_PODMAN_AUTOSTART:+x}" ] && HICLAW_PODMAN_AUTOSTART="$(grep '^HICLAW_PODMAN_AUTOSTART=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_LLM_PROVIDER:+x}" ] && AGENTTEAMS_LLM_PROVIDER="$(grep '^AGENTTEAMS_LLM_PROVIDER=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_OPENAI_BASE_URL:+x}" ] && AGENTTEAMS_OPENAI_BASE_URL="$(grep '^AGENTTEAMS_OPENAI_BASE_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_DEFAULT_MODEL:+x}" ] && AGENTTEAMS_DEFAULT_MODEL="$(grep '^AGENTTEAMS_DEFAULT_MODEL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_EMBEDDING_MODEL:+x}" ] && AGENTTEAMS_EMBEDDING_MODEL="$(grep '^AGENTTEAMS_EMBEDDING_MODEL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_WORKSPACE_DIR:+x}" ] && AGENTTEAMS_WORKSPACE_DIR="$(grep '^AGENTTEAMS_WORKSPACE_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_HOST_SHARE_DIR:+x}" ] && AGENTTEAMS_HOST_SHARE_DIR="$(grep '^AGENTTEAMS_HOST_SHARE_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_PODMAN_AUTOSTART:+x}" ] && AGENTTEAMS_PODMAN_AUTOSTART="$(grep '^AGENTTEAMS_PODMAN_AUTOSTART=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
     fi
 }
 
@@ -1308,7 +1308,7 @@ prompt() {
     # In upgrade mode, show current value and let user change it
     eval "local current_value=\"\${${var_name}}\""
     if [ -n "${current_value}" ]; then
-        if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
+        if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
             # Show masked value for secrets, full value otherwise
             local display_value="${current_value}"
             if [ "${is_secret}" = "true" ]; then
@@ -1338,12 +1338,12 @@ prompt() {
     fi
 
     # Non-interactive or quickstart: use default or error
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ] || [ "${HICLAW_QUICKSTART}" = "1" ]; then
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
         if [ -n "${default_value}" ]; then
             eval "export ${var_name}='${default_value}'"
             log "$(msg prompt.default "${prompt_text}" "${default_value}")"
             return
-        elif [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+        elif [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
             # Only hard-error in fully non-interactive mode, not quickstart
             die "$(msg prompt.required "${prompt_text}")"
         fi
@@ -1384,7 +1384,7 @@ prompt_optional() {
     eval "local _chk=\"\${${var_name}+x}\""
     if [ -n "${_chk}" ]; then
         # In upgrade mode, show current value and let user change it
-        if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
+        if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
             eval "local current_value=\"\${${var_name}}\""
             local display_value="${current_value}"
             if [ "${is_secret}" = "true" ] && [ -n "${current_value}" ]; then
@@ -1422,7 +1422,7 @@ prompt_optional() {
     fi
 
     # Non-interactive or quickstart: skip, leave unset
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ] || [ "${HICLAW_QUICKSTART}" = "1" ]; then
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
         eval "export ${var_name}=''"
         return
     fi
@@ -1594,49 +1594,49 @@ should_skip_step() {
     local step_fn="$1"
     case "${step_fn}" in
         step_lang|step_mode)
-            [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
             ;;
         step_version)
-            [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
             ;;
         step_existing)
-            local _env="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+            local _env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
             [ ! -f "${_env}" ] && return 0
             ;;
         # Keep-All upgrade mode: skip all config steps (step_volume/step_workspace handled separately)
         step_llm|step_admin|step_network|step_ports|step_domains|step_github|step_skills|step_runtime|step_manager_runtime|step_e2ee|step_docker_proxy|step_idle|step_hostshare)
-            [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ] && return 0
+            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_volume|step_workspace)
-            [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
-            [ "${HICLAW_QUICKSTART}" = "1" ] && return 0
-            [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ] && return 0
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && return 0
+            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_e2ee|step_idle)
-            [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
-            [ "${HICLAW_QUICKSTART}" = "1" ] && [ "${HICLAW_UPGRADE}" != "1" ] && return 0
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && [ "${AGENTTEAMS_UPGRADE}" != "1" ] && return 0
             ;;
         step_docker_proxy)
-            [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
-            [ "${HICLAW_QUICKSTART}" = "1" ] && [ "${HICLAW_UPGRADE}" != "1" ] && return 0
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && [ "${AGENTTEAMS_UPGRADE}" != "1" ] && return 0
             # Embedded mode handles docker access natively — skip this step
-            [ "${HICLAW_USE_EMBEDDED:-}" = "1" ] && return 0
+            [ "${AGENTTEAMS_USE_EMBEDDED:-}" = "1" ] && return 0
             ;;
         step_manager_runtime)
-            [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
             ;;
         step_hostshare)
-            [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
-            [ "${HICLAW_QUICKSTART}" = "1" ] && return 0
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && return 0
             ;;
         step_podman_autostart)
             # Only relevant for Podman with systemd
             [ "${DOCKER_CMD}" != "podman" ] && return 0
             ! command -v systemctl >/dev/null 2>&1 && return 0
 
-            [ "${HICLAW_NON_INTERACTIVE}" = "1" ] && return 0
-            [ "${HICLAW_QUICKSTART}" = "1" ] && [ "${HICLAW_UPGRADE}" != "1" ] && return 0
-            [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ] && return 0
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && [ "${AGENTTEAMS_UPGRADE}" != "1" ] && return 0
+            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
     esac
     return 1
@@ -1646,35 +1646,35 @@ should_skip_step() {
 clear_step_vars() {
     local step_fn="$1"
     case "${step_fn}" in
-        step_mode)   unset HICLAW_QUICKSTART ;;
-        step_version) unset HICLAW_VERSION ;;
-        step_existing) unset HICLAW_UPGRADE UPGRADE_EXISTING_WORKERS ;;
+        step_mode)   unset AGENTTEAMS_QUICKSTART ;;
+        step_version) unset AGENTTEAMS_VERSION ;;
+        step_existing) unset AGENTTEAMS_UPGRADE UPGRADE_EXISTING_WORKERS ;;
         step_llm)
-            unset HICLAW_LLM_PROVIDER HICLAW_DEFAULT_MODEL HICLAW_OPENAI_BASE_URL
-            unset HICLAW_LLM_API_KEY HICLAW_MODEL_CONTEXT_WINDOW HICLAW_MODEL_MAX_TOKENS
-            unset HICLAW_MODEL_REASONING HICLAW_MODEL_VISION
+            unset AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_DEFAULT_MODEL AGENTTEAMS_OPENAI_BASE_URL
+            unset AGENTTEAMS_LLM_API_KEY AGENTTEAMS_MODEL_CONTEXT_WINDOW AGENTTEAMS_MODEL_MAX_TOKENS
+            unset AGENTTEAMS_MODEL_REASONING AGENTTEAMS_MODEL_VISION
             ;;
-        step_admin)   unset HICLAW_ADMIN_USER HICLAW_ADMIN_PASSWORD ;;
-        step_network) unset HICLAW_LOCAL_ONLY ;;
+        step_admin)   unset AGENTTEAMS_ADMIN_USER AGENTTEAMS_ADMIN_PASSWORD ;;
+        step_network) unset AGENTTEAMS_LOCAL_ONLY ;;
         step_ports)
-            unset HICLAW_PORT_GATEWAY HICLAW_PORT_CONSOLE
-            unset HICLAW_PORT_ELEMENT_WEB HICLAW_PORT_MANAGER_CONSOLE
+            unset AGENTTEAMS_PORT_GATEWAY AGENTTEAMS_PORT_CONSOLE
+            unset AGENTTEAMS_PORT_ELEMENT_WEB AGENTTEAMS_PORT_MANAGER_CONSOLE
             ;;
         step_domains)
-            unset HICLAW_MATRIX_DOMAIN HICLAW_MATRIX_CLIENT_DOMAIN
-            unset HICLAW_AI_GATEWAY_DOMAIN HICLAW_FS_DOMAIN HICLAW_CONSOLE_DOMAIN
+            unset AGENTTEAMS_MATRIX_DOMAIN AGENTTEAMS_MATRIX_CLIENT_DOMAIN
+            unset AGENTTEAMS_AI_GATEWAY_DOMAIN AGENTTEAMS_FS_DOMAIN AGENTTEAMS_CONSOLE_DOMAIN
             ;;
-        step_github)    unset HICLAW_GITHUB_TOKEN ;;
-        step_skills)    unset HICLAW_SKILLS_API_URL ;;
-        step_volume)    unset HICLAW_DATA_DIR ;;
-        step_workspace) unset HICLAW_WORKSPACE_DIR ;;
-        step_runtime)   unset HICLAW_DEFAULT_WORKER_RUNTIME ;;
-        step_manager_runtime) unset HICLAW_MANAGER_RUNTIME ;;
-        step_e2ee)      unset HICLAW_MATRIX_E2EE ;;
-        step_docker_proxy) unset HICLAW_DOCKER_PROXY; unset HICLAW_PROXY_ALLOWED_REGISTRIES ;;
-        step_idle)      unset HICLAW_WORKER_IDLE_TIMEOUT ;;
-        step_hostshare) unset HICLAW_HOST_SHARE_DIR ;;
-        step_podman_autostart) unset HICLAW_PODMAN_AUTOSTART ;;
+        step_github)    unset AGENTTEAMS_GITHUB_TOKEN ;;
+        step_skills)    unset AGENTTEAMS_SKILLS_API_URL ;;
+        step_volume)    unset AGENTTEAMS_DATA_DIR ;;
+        step_workspace) unset AGENTTEAMS_WORKSPACE_DIR ;;
+        step_runtime)   unset AGENTTEAMS_DEFAULT_WORKER_RUNTIME ;;
+        step_manager_runtime) unset AGENTTEAMS_MANAGER_RUNTIME ;;
+        step_e2ee)      unset AGENTTEAMS_MATRIX_E2EE ;;
+        step_docker_proxy) unset AGENTTEAMS_DOCKER_PROXY; unset AGENTTEAMS_PROXY_ALLOWED_REGISTRIES ;;
+        step_idle)      unset AGENTTEAMS_WORKER_IDLE_TIMEOUT ;;
+        step_hostshare) unset AGENTTEAMS_HOST_SHARE_DIR ;;
+        step_podman_autostart) unset AGENTTEAMS_PODMAN_AUTOSTART ;;
     esac
 }
 
@@ -1684,7 +1684,7 @@ clear_step_vars() {
 
 step_lang() {
     local lang_default_choice="2"
-    [ "${HICLAW_LANGUAGE}" = "zh" ] && lang_default_choice="1"
+    [ "${AGENTTEAMS_LANGUAGE}" = "zh" ] && lang_default_choice="1"
     log "$(msg lang.detected)"
     log "$(msg lang.switch_title)"
     echo "$(msg lang.option_zh)"
@@ -1695,10 +1695,10 @@ step_lang() {
     LANG_CHOICE="${LANG_CHOICE:-${lang_default_choice}}"
     if [ "${LANG_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
     case "${LANG_CHOICE}" in
-        1) HICLAW_LANGUAGE="zh" ;;
-        2) HICLAW_LANGUAGE="en" ;;
+        1) AGENTTEAMS_LANGUAGE="zh" ;;
+        2) AGENTTEAMS_LANGUAGE="en" ;;
     esac
-    export HICLAW_LANGUAGE
+    export AGENTTEAMS_LANGUAGE
     log ""
 }
 
@@ -1716,14 +1716,14 @@ step_mode() {
     case "${ONBOARDING_CHOICE}" in
         1|quick|quickstart)
             log "$(msg install.mode.quickstart_selected)"
-            HICLAW_QUICKSTART=1
+            AGENTTEAMS_QUICKSTART=1
             ;;
         2|manual)
             log "$(msg install.mode.manual_selected)"
             ;;
         *)
             log "$(msg install.mode.invalid)"
-            HICLAW_QUICKSTART=1
+            AGENTTEAMS_QUICKSTART=1
             ;;
     esac
     log ""
@@ -1731,7 +1731,7 @@ step_mode() {
 
 step_version() {
     # Skip if version already provided via env var
-    if [ -n "${HICLAW_VERSION}" ]; then
+    if [ -n "${AGENTTEAMS_VERSION}" ]; then
         resolve_image_tags
         return 0
     fi
@@ -1740,18 +1740,18 @@ step_version() {
     local _fetched
     _fetched=$(curl -sf --max-time 5 \
         -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/agentscope-ai/HiClaw/releases/latest" \
+        "https://api.github.com/repos/agentscope-ai/AgentTeams/releases/latest" \
         2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
     if [ -n "${_fetched}" ]; then
-        HICLAW_KNOWN_STABLE_VERSION="${_fetched}"
+        AGENTTEAMS_KNOWN_STABLE_VERSION="${_fetched}"
     else
-        log "$(msg install.version.fetch_failed "${HICLAW_KNOWN_STABLE_VERSION}")"
+        log "$(msg install.version.fetch_failed "${AGENTTEAMS_KNOWN_STABLE_VERSION}")"
     fi
     log "$(msg install.version.title)"
     echo ""
     echo "$(msg install.version.choose)"
     echo "$(msg install.version.option_latest)"
-    printf "%s\n" "$(msg install.version.option_stable "${HICLAW_KNOWN_STABLE_VERSION}")"
+    printf "%s\n" "$(msg install.version.option_stable "${AGENTTEAMS_KNOWN_STABLE_VERSION}")"
     echo "$(msg install.version.option_custom)"
     echo ""
     local VERSION_CHOICE
@@ -1760,22 +1760,22 @@ step_version() {
     if [ "${VERSION_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
     case "${VERSION_CHOICE}" in
         1|latest)
-            HICLAW_VERSION="latest"
+            AGENTTEAMS_VERSION="latest"
             log "$(msg install.version.selected_latest)"
             ;;
         2|stable)
-            HICLAW_VERSION="${HICLAW_KNOWN_STABLE_VERSION}"
-            log "$(msg install.version.selected_stable "${HICLAW_VERSION}")"
+            AGENTTEAMS_VERSION="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
+            log "$(msg install.version.selected_stable "${AGENTTEAMS_VERSION}")"
             ;;
         3|custom)
             local CUSTOM_VERSION
             read -e -p "$(msg install.version.custom_prompt): " CUSTOM_VERSION
-            HICLAW_VERSION="${CUSTOM_VERSION:-${HICLAW_KNOWN_STABLE_VERSION}}"
-            log "$(msg install.version.selected_custom "${HICLAW_VERSION}")"
+            AGENTTEAMS_VERSION="${CUSTOM_VERSION:-${AGENTTEAMS_KNOWN_STABLE_VERSION}}"
+            log "$(msg install.version.selected_custom "${AGENTTEAMS_VERSION}")"
             ;;
         *)
-            HICLAW_VERSION="${HICLAW_KNOWN_STABLE_VERSION}"
-            log "$(msg install.version.invalid "${HICLAW_VERSION}")"
+            AGENTTEAMS_VERSION="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
+            log "$(msg install.version.invalid "${AGENTTEAMS_VERSION}")"
             ;;
     esac
     log ""
@@ -1783,16 +1783,16 @@ step_version() {
 }
 
 step_existing() {
-    local existing_env="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+    local existing_env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     log "$(msg install.existing.detected "${existing_env}")"
     local running_manager="" running_workers="" existing_workers=""
-    if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -q "^hiclaw-manager$"; then
-        running_manager="hiclaw-manager"
+    if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -q "^agentteams-manager$"; then
+        running_manager="agentteams-manager"
     fi
-    running_workers=$(${DOCKER_CMD} ps --format '{{.Names}}' | grep "^hiclaw-worker-" || true)
-    existing_workers=$(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^hiclaw-worker-" || true)
+    running_workers=$(${DOCKER_CMD} ps --format '{{.Names}}' | grep "^agentteams-worker-" || true)
+    existing_workers=$(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^agentteams-worker-" || true)
     local UPGRADE_CHOICE
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
         log "$(msg install.existing.upgrade_noninteractive)"
         UPGRADE_CHOICE="upgrade"
     else
@@ -1808,10 +1808,10 @@ step_existing() {
     fi
     case "${UPGRADE_CHOICE}" in
         1|upgrade)
-            HICLAW_UPGRADE=1
+            AGENTTEAMS_UPGRADE=1
             log "$(msg install.existing.upgrading)"
             # Show upgrade mode sub-menu (unless already set via env var)
-            if [ "${HICLAW_UPGRADE_KEEP_ALL:-0}" != "1" ]; then
+            if [ "${AGENTTEAMS_UPGRADE_KEEP_ALL:-0}" != "1" ]; then
                 echo ""
                 echo "$(msg upgrade.mode.prompt)"
                 echo "$(msg upgrade.mode.keep_all)"
@@ -1823,17 +1823,17 @@ step_existing() {
                 UPGRADE_MODE_CHOICE="${UPGRADE_MODE_CHOICE:-1}"
                 case "${UPGRADE_MODE_CHOICE}" in
                     1|keep)
-                        HICLAW_UPGRADE_KEEP_ALL=1
+                        AGENTTEAMS_UPGRADE_KEEP_ALL=1
                         ;;
                     2|confirm)
-                        HICLAW_UPGRADE_KEEP_ALL=0
+                        AGENTTEAMS_UPGRADE_KEEP_ALL=0
                         ;;
                     3|b)
                         STEP_RESULT="back"
                         return 0
                         ;;
                     *)
-                        HICLAW_UPGRADE_KEEP_ALL=0
+                        AGENTTEAMS_UPGRADE_KEEP_ALL=0
                         ;;
                 esac
             fi
@@ -1845,7 +1845,7 @@ step_existing() {
                 if [ -n "${existing_workers}" ]; then
                     echo -e "\033[33m$(msg install.existing.warn_worker_recreate)\033[0m"
                 fi
-                if [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
+                if [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
                     echo ""
                     local CONFIRM_STOP
                     read -e -p "$(msg install.existing.continue_prompt): " CONFIRM_STOP
@@ -1862,9 +1862,9 @@ step_existing() {
             log "$(msg install.reinstall.performing)"
             local existing_workspace=""
             if [ -f "${existing_env}" ]; then
-                existing_workspace=$(grep '^HICLAW_WORKSPACE_DIR=' "${existing_env}" 2>/dev/null | cut -d= -f2-)
+                existing_workspace=$(grep '^AGENTTEAMS_WORKSPACE_DIR=' "${existing_env}" 2>/dev/null | cut -d= -f2-)
             fi
-            [ -z "${existing_workspace}" ] && existing_workspace="${HOME}/hiclaw-manager"
+            [ -z "${existing_workspace}" ] && existing_workspace="${HOME}/agentteams-manager"
             echo ""
             echo -e "\033[33m$(msg install.reinstall.warn_stop)\033[0m"
             [ -n "${running_manager}" ] && echo -e "\033[33m   - ${running_manager} (manager)\033[0m"
@@ -1889,25 +1889,25 @@ step_existing() {
                 die "$(msg install.reinstall.path_mismatch "${CONFIRM_PATH}" "${existing_workspace}")"
             fi
             log "$(msg install.reinstall.confirmed)"
-            ${DOCKER_CMD} stop hiclaw-manager 2>/dev/null || true
-            ${DOCKER_CMD} rm hiclaw-manager 2>/dev/null || true
-            for w in $(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^hiclaw-worker-" || true); do
+            ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
+            ${DOCKER_CMD} rm agentteams-manager 2>/dev/null || true
+            for w in $(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^agentteams-worker-" || true); do
                 ${DOCKER_CMD} stop "${w}" 2>/dev/null || true
                 ${DOCKER_CMD} rm "${w}" 2>/dev/null || true
                 log "$(msg install.reinstall.removed_worker "${w}")"
             done
-            if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^hiclaw-controller$"; then
+            if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^agentteams-controller$"; then
                 log "$(msg install.reinstall.removing_proxy)"
-                ${DOCKER_CMD} stop hiclaw-controller 2>/dev/null || true
-                ${DOCKER_CMD} rm hiclaw-controller 2>/dev/null || true
+                ${DOCKER_CMD} stop agentteams-controller 2>/dev/null || true
+                ${DOCKER_CMD} rm agentteams-controller 2>/dev/null || true
             fi
-            if ${DOCKER_CMD} network ls --format '{{.Name}}' | grep -q "^hiclaw-net$"; then
+            if ${DOCKER_CMD} network ls --format '{{.Name}}' | grep -q "^agentteams-net$"; then
                 log "$(msg install.reinstall.removing_network)"
-                ${DOCKER_CMD} network rm hiclaw-net 2>/dev/null || true
+                ${DOCKER_CMD} network rm agentteams-net 2>/dev/null || true
             fi
-            if ${DOCKER_CMD} volume ls -q | grep -q "^hiclaw-data$"; then
+            if ${DOCKER_CMD} volume ls -q | grep -q "^agentteams-data$"; then
                 log "$(msg install.reinstall.removing_volume)"
-                ${DOCKER_CMD} volume rm hiclaw-data 2>/dev/null || log "$(msg install.reinstall.warn_volume_fail)"
+                ${DOCKER_CMD} volume rm agentteams-data 2>/dev/null || log "$(msg install.reinstall.warn_volume_fail)"
             fi
             if [ -d "${existing_workspace}" ]; then
                 log "$(msg install.reinstall.removing_workspace "${existing_workspace}")"
@@ -1918,7 +1918,7 @@ step_existing() {
                 rm -f "${existing_env}"
             fi
             log "$(msg install.reinstall.cleanup_done)"
-            unset HICLAW_WORKSPACE_DIR
+            unset AGENTTEAMS_WORKSPACE_DIR
             return 0
             ;;
         3|cancel|*)
@@ -1942,34 +1942,34 @@ step_existing() {
 
 step_llm() {
     log "$(msg llm.title)"
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        if [ "${HICLAW_LANGUAGE}" = "zh" ]; then
-            HICLAW_LLM_PROVIDER="${HICLAW_LLM_PROVIDER:-openai-compat}"
-            HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}"
-            HICLAW_OPENAI_BASE_URL="${HICLAW_OPENAI_BASE_URL:-https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}"
-            log "$(msg llm.provider.label "${HICLAW_LLM_PROVIDER}")"
-            log "$(msg llm.openai.base_url_label "${HICLAW_OPENAI_BASE_URL}")"
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        if [ "${AGENTTEAMS_LANGUAGE}" = "zh" ]; then
+            AGENTTEAMS_LLM_PROVIDER="${AGENTTEAMS_LLM_PROVIDER:-openai-compat}"
+            AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
+            AGENTTEAMS_OPENAI_BASE_URL="${AGENTTEAMS_OPENAI_BASE_URL:-https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}"
+            log "$(msg llm.provider.label "${AGENTTEAMS_LLM_PROVIDER}")"
+            log "$(msg llm.openai.base_url_label "${AGENTTEAMS_OPENAI_BASE_URL}")"
         else
-            HICLAW_LLM_PROVIDER="${HICLAW_LLM_PROVIDER:-qwen}"
-            HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}"
-            HICLAW_OPENAI_BASE_URL="${HICLAW_OPENAI_BASE_URL:-}"
-            log "$(msg llm.provider.qwen_default "${HICLAW_LLM_PROVIDER}")"
+            AGENTTEAMS_LLM_PROVIDER="${AGENTTEAMS_LLM_PROVIDER:-qwen}"
+            AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
+            AGENTTEAMS_OPENAI_BASE_URL="${AGENTTEAMS_OPENAI_BASE_URL:-}"
+            log "$(msg llm.provider.qwen_default "${AGENTTEAMS_LLM_PROVIDER}")"
         fi
-        log "$(msg llm.model.default "${HICLAW_DEFAULT_MODEL}")"
-        prompt HICLAW_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true"
-        HICLAW_EMBEDDING_MODEL="${HICLAW_EMBEDDING_MODEL-text-embedding-v4}"
-        export HICLAW_LLM_PROVIDER HICLAW_DEFAULT_MODEL HICLAW_EMBEDDING_MODEL
-        [ -n "${HICLAW_OPENAI_BASE_URL+x}" ] && export HICLAW_OPENAI_BASE_URL
+        log "$(msg llm.model.default "${AGENTTEAMS_DEFAULT_MODEL}")"
+        prompt AGENTTEAMS_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true"
+        AGENTTEAMS_EMBEDDING_MODEL="${AGENTTEAMS_EMBEDDING_MODEL-text-embedding-v4}"
+        export AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_DEFAULT_MODEL AGENTTEAMS_EMBEDDING_MODEL
+        [ -n "${AGENTTEAMS_OPENAI_BASE_URL+x}" ] && export AGENTTEAMS_OPENAI_BASE_URL
         return 0
     fi
 
     # Upgrade Keep-All mode: skip provider selection, use loaded values
     local SKIP_TO_EMBEDDING=0
-    if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ] && [ -n "${HICLAW_LLM_PROVIDER}" ]; then
-        log "$(msg llm.provider.label "${HICLAW_LLM_PROVIDER}")"
-        log "$(msg llm.openai.base_url_label "${HICLAW_OPENAI_BASE_URL}")"
-        log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
-        PROVIDER_CHOICE="${HICLAW_LLM_PROVIDER}"
+    if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && [ -n "${AGENTTEAMS_LLM_PROVIDER}" ]; then
+        log "$(msg llm.provider.label "${AGENTTEAMS_LLM_PROVIDER}")"
+        log "$(msg llm.openai.base_url_label "${AGENTTEAMS_OPENAI_BASE_URL}")"
+        log "$(msg llm.model.label "${AGENTTEAMS_DEFAULT_MODEL}")"
+        PROVIDER_CHOICE="${AGENTTEAMS_LLM_PROVIDER}"
         SKIP_TO_EMBEDDING=1
     else
         echo ""
@@ -1979,15 +1979,15 @@ step_llm() {
         echo ""
         local PROVIDER_CHOICE
         # If upgrade mode with loaded provider, show current as default
-        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_LLM_PROVIDER}" ]; then
+        if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_LLM_PROVIDER}" ]; then
             local _prov_display
-            case "${HICLAW_LLM_PROVIDER}" in
+            case "${AGENTTEAMS_LLM_PROVIDER}" in
                 openai-compat) _prov_display="2" ;;
                 *)             _prov_display="1" ;;
             esac
             read -e -p "$(msg llm.provider.select) [${_prov_display}]: " PROVIDER_CHOICE
             PROVIDER_CHOICE="${PROVIDER_CHOICE:-${_prov_display}}"
-        elif [ "${HICLAW_QUICKSTART}" = "1" ]; then
+        elif [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
             read -e -p "$(msg llm.provider.select) [1]: " PROVIDER_CHOICE
             PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
         else
@@ -2000,9 +2000,9 @@ step_llm() {
     local ALIBABA_ACCESS=""
     case "${PROVIDER_CHOICE}" in
         1|alibaba-cloud|openai-compat)
-            if [ "${HICLAW_LANGUAGE}" = "en" ]; then
-                HICLAW_LLM_PROVIDER="openai-compat"
-                HICLAW_OPENAI_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+            if [ "${AGENTTEAMS_LANGUAGE}" = "en" ]; then
+                AGENTTEAMS_LLM_PROVIDER="openai-compat"
+                AGENTTEAMS_OPENAI_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
                 ALIBABA_ACCESS="tokenplan"
                 echo ""
                 echo "$(msg llm.codingplan.models_title)"
@@ -2013,9 +2013,9 @@ step_llm() {
                 echo ""
                 local CODINGPLAN_MODEL_CHOICE
                 # If upgrade with loaded model, show current as default
-                if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_MODEL}" ]; then
+                if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DEFAULT_MODEL}" ]; then
                     local _model_default
-                    case "${HICLAW_DEFAULT_MODEL}" in
+                    case "${AGENTTEAMS_DEFAULT_MODEL}" in
                         qwen3.6-plus) _model_default="1" ;;
                         glm-5)        _model_default="2" ;;
                         kimi-k2.5)    _model_default="3" ;;
@@ -2024,7 +2024,7 @@ step_llm() {
                     esac
                     read -e -p "$(msg llm.codingplan.model.select) [${_model_default}]: " CODINGPLAN_MODEL_CHOICE
                     CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-${_model_default}}"
-                elif [ "${HICLAW_QUICKSTART}" = "1" ]; then
+                elif [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
                     read -e -p "$(msg llm.codingplan.model.select) [1]: " CODINGPLAN_MODEL_CHOICE
                     CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-1}"
                 else
@@ -2033,14 +2033,14 @@ step_llm() {
                 fi
                 if [ "${CODINGPLAN_MODEL_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                 case "${CODINGPLAN_MODEL_CHOICE}" in
-                    1|qwen3.6-plus) HICLAW_DEFAULT_MODEL="qwen3.6-plus" ;;
-                    2|glm-5)        HICLAW_DEFAULT_MODEL="glm-5" ;;
-                    3|kimi-k2.5)    HICLAW_DEFAULT_MODEL="kimi-k2.5" ;;
-                    4|MiniMax-M2.5) HICLAW_DEFAULT_MODEL="MiniMax-M2.5" ;;
-                    *)              HICLAW_DEFAULT_MODEL="qwen3.6-plus" ;;
+                    1|qwen3.6-plus) AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
+                    2|glm-5)        AGENTTEAMS_DEFAULT_MODEL="glm-5" ;;
+                    3|kimi-k2.5)    AGENTTEAMS_DEFAULT_MODEL="kimi-k2.5" ;;
+                    4|MiniMax-M2.5) AGENTTEAMS_DEFAULT_MODEL="MiniMax-M2.5" ;;
+                    *)              AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
                 esac
                 log "$(msg llm.provider.selected_codingplan)"
-                log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
+                log "$(msg llm.model.label "${AGENTTEAMS_DEFAULT_MODEL}")"
             else
                 echo ""
                 echo "$(msg llm.alibaba.models_title)"
@@ -2048,13 +2048,13 @@ step_llm() {
                 echo "$(msg llm.alibaba.model.bailian)"
                 echo "$(msg llm.alibaba.model.codingplan_legacy)"
                 echo ""
-                if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_OPENAI_BASE_URL}" ]; then
+                if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_OPENAI_BASE_URL}" ]; then
                     # Determine alibaba access type from loaded URL
                     local _access_default="1"
-                    if echo "${HICLAW_OPENAI_BASE_URL}" | grep -q "token-plan"; then
+                    if echo "${AGENTTEAMS_OPENAI_BASE_URL}" | grep -q "token-plan"; then
                         _access_default="1"
-                    elif echo "${HICLAW_OPENAI_BASE_URL}" | grep -q "dashscope"; then
-                        if echo "${HICLAW_OPENAI_BASE_URL}" | grep -q "intl"; then
+                    elif echo "${AGENTTEAMS_OPENAI_BASE_URL}" | grep -q "dashscope"; then
+                        if echo "${AGENTTEAMS_OPENAI_BASE_URL}" | grep -q "intl"; then
                             _access_default="3"
                         else
                             _access_default="2"
@@ -2062,7 +2062,7 @@ step_llm() {
                     fi
                     read -e -p "$(msg llm.alibaba.model.select) [${_access_default}]: " ALIBABA_MODEL_CHOICE
                     ALIBABA_MODEL_CHOICE="${ALIBABA_MODEL_CHOICE:-${_access_default}}"
-                elif [ "${HICLAW_QUICKSTART}" = "1" ]; then
+                elif [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
                     read -e -p "$(msg llm.alibaba.model.select) [1]: " ALIBABA_MODEL_CHOICE
                     ALIBABA_MODEL_CHOICE="${ALIBABA_MODEL_CHOICE:-1}"
                 else
@@ -2073,8 +2073,8 @@ step_llm() {
                 case "${ALIBABA_MODEL_CHOICE}" in
                     1|token-plan|tokenplan)
                         ALIBABA_ACCESS="tokenplan"
-                        HICLAW_LLM_PROVIDER="openai-compat"
-                        HICLAW_OPENAI_BASE_URL="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+                        AGENTTEAMS_LLM_PROVIDER="openai-compat"
+                        AGENTTEAMS_OPENAI_BASE_URL="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
                         echo ""
                         echo "$(msg llm.codingplan.models_title)"
                         echo "$(msg llm.codingplan.model.qwen36plus)"
@@ -2084,9 +2084,9 @@ step_llm() {
                         echo ""
                         local CODINGPLAN_MODEL_CHOICE
                         # If upgrade with loaded model, show current as default
-                        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_MODEL}" ]; then
+                        if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DEFAULT_MODEL}" ]; then
                             local _model_default
-                            case "${HICLAW_DEFAULT_MODEL}" in
+                            case "${AGENTTEAMS_DEFAULT_MODEL}" in
                                 qwen3.6-plus) _model_default="1" ;;
                                 glm-5)        _model_default="2" ;;
                                 kimi-k2.5)    _model_default="3" ;;
@@ -2095,7 +2095,7 @@ step_llm() {
                             esac
                             read -e -p "$(msg llm.codingplan.model.select) [${_model_default}]: " CODINGPLAN_MODEL_CHOICE
                             CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-${_model_default}}"
-                        elif [ "${HICLAW_QUICKSTART}" = "1" ]; then
+                        elif [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
                             read -e -p "$(msg llm.codingplan.model.select) [1]: " CODINGPLAN_MODEL_CHOICE
                             CODINGPLAN_MODEL_CHOICE="${CODINGPLAN_MODEL_CHOICE:-1}"
                         else
@@ -2104,46 +2104,46 @@ step_llm() {
                         fi
                         if [ "${CODINGPLAN_MODEL_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                         case "${CODINGPLAN_MODEL_CHOICE}" in
-                            1|qwen3.6-plus) HICLAW_DEFAULT_MODEL="qwen3.6-plus" ;;
-                            2|glm-5)        HICLAW_DEFAULT_MODEL="glm-5" ;;
-                            3|kimi-k2.5)    HICLAW_DEFAULT_MODEL="kimi-k2.5" ;;
-                            4|MiniMax-M2.5) HICLAW_DEFAULT_MODEL="MiniMax-M2.5" ;;
-                            *)              HICLAW_DEFAULT_MODEL="qwen3.6-plus" ;;
+                            1|qwen3.6-plus) AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
+                            2|glm-5)        AGENTTEAMS_DEFAULT_MODEL="glm-5" ;;
+                            3|kimi-k2.5)    AGENTTEAMS_DEFAULT_MODEL="kimi-k2.5" ;;
+                            4|MiniMax-M2.5) AGENTTEAMS_DEFAULT_MODEL="MiniMax-M2.5" ;;
+                            *)              AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
                         esac
                         log "$(msg llm.provider.selected_tokenplan)"
-                        log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
+                        log "$(msg llm.model.label "${AGENTTEAMS_DEFAULT_MODEL}")"
                         ;;
                     2|qwen|bailian)
                         ALIBABA_ACCESS="bailian"
-                        HICLAW_LLM_PROVIDER="qwen"
-                        HICLAW_OPENAI_BASE_URL=""
+                        AGENTTEAMS_LLM_PROVIDER="qwen"
+                        AGENTTEAMS_OPENAI_BASE_URL=""
                         echo ""
-                        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_MODEL}" ]; then
-                            read -e -p "$(msg llm.qwen.model_prompt) [${HICLAW_DEFAULT_MODEL}]: " HICLAW_DEFAULT_MODEL
+                        if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DEFAULT_MODEL}" ]; then
+                            read -e -p "$(msg llm.qwen.model_prompt) [${AGENTTEAMS_DEFAULT_MODEL}]: " AGENTTEAMS_DEFAULT_MODEL
                         else
-                            read -e -p "$(msg llm.qwen.model_prompt) [qwen3.6-plus]: " HICLAW_DEFAULT_MODEL
+                            read -e -p "$(msg llm.qwen.model_prompt) [qwen3.6-plus]: " AGENTTEAMS_DEFAULT_MODEL
                         fi
-                        if [ "${HICLAW_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-                        HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}"
+                        if [ "${AGENTTEAMS_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+                        AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
                         log "$(msg llm.provider.selected_qwen)"
-                        log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
-                        prompt_custom_model_params "${HICLAW_DEFAULT_MODEL}" || return 0
+                        log "$(msg llm.model.label "${AGENTTEAMS_DEFAULT_MODEL}")"
+                        prompt_custom_model_params "${AGENTTEAMS_DEFAULT_MODEL}" || return 0
                         ;;
                     3|coding-plan|codingplan)
                         ALIBABA_ACCESS="codingplan_legacy"
-                        HICLAW_LLM_PROVIDER="openai-compat"
-                        HICLAW_OPENAI_BASE_URL="https://coding.dashscope.aliyuncs.com/v1"
+                        AGENTTEAMS_LLM_PROVIDER="openai-compat"
+                        AGENTTEAMS_OPENAI_BASE_URL="https://coding.dashscope.aliyuncs.com/v1"
                         echo ""
-                        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_MODEL}" ]; then
-                            read -e -p "$(msg llm.qwen.model_prompt) [${HICLAW_DEFAULT_MODEL}]: " HICLAW_DEFAULT_MODEL
+                        if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DEFAULT_MODEL}" ]; then
+                            read -e -p "$(msg llm.qwen.model_prompt) [${AGENTTEAMS_DEFAULT_MODEL}]: " AGENTTEAMS_DEFAULT_MODEL
                         else
-                            read -e -p "$(msg llm.qwen.model_prompt): " HICLAW_DEFAULT_MODEL
+                            read -e -p "$(msg llm.qwen.model_prompt): " AGENTTEAMS_DEFAULT_MODEL
                         fi
-                        if [ "${HICLAW_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-                        HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}"
+                        if [ "${AGENTTEAMS_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+                        AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
                         log "$(msg llm.provider.selected_codingplan_legacy)"
-                        log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
-                        prompt_custom_model_params "${HICLAW_DEFAULT_MODEL}" || return 0
+                        log "$(msg llm.model.label "${AGENTTEAMS_DEFAULT_MODEL}")"
+                        prompt_custom_model_params "${AGENTTEAMS_DEFAULT_MODEL}" || return 0
                         ;;
                     *)
                         die "$(msg llm.alibaba.model.invalid "${ALIBABA_MODEL_CHOICE}")"
@@ -2153,7 +2153,7 @@ step_llm() {
             if [ "${ALIBABA_ACCESS}" = "bailian" ]; then
                 log "$(msg llm.apikey_hint_bailian)"
                 log "$(msg llm.apikey_url_bailian)"
-            elif [ "${HICLAW_LANGUAGE}" = "en" ]; then
+            elif [ "${AGENTTEAMS_LANGUAGE}" = "en" ]; then
                 log "$(msg llm.apikey_hint_qwencloud)"
                 log "$(msg llm.apikey_url_qwencloud)"
             elif [ "${ALIBABA_ACCESS}" = "codingplan_legacy" ]; then
@@ -2164,53 +2164,53 @@ step_llm() {
                 log "$(msg llm.apikey_url_tokenplan)"
             fi
             log ""
-            prompt HICLAW_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true" || return 0
+            prompt AGENTTEAMS_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true" || return 0
             if [ "${ALIBABA_ACCESS}" = "bailian" ]; then
-                test_llm_connectivity "https://dashscope.aliyuncs.com/compatible-mode/v1" "${HICLAW_LLM_API_KEY}" "${HICLAW_DEFAULT_MODEL}" || return 0
+                test_llm_connectivity "https://dashscope.aliyuncs.com/compatible-mode/v1" "${AGENTTEAMS_LLM_API_KEY}" "${AGENTTEAMS_DEFAULT_MODEL}" || return 0
             elif [ "${ALIBABA_ACCESS}" = "codingplan_legacy" ]; then
-                test_llm_connectivity "https://coding.dashscope.aliyuncs.com/v1" "${HICLAW_LLM_API_KEY}" "${HICLAW_DEFAULT_MODEL}" "$(msg llm.openai.test.fail.codingplan_legacy)" || return 0
-            elif [ "${HICLAW_LANGUAGE}" = "en" ]; then
-                test_llm_connectivity "${HICLAW_OPENAI_BASE_URL}" "${HICLAW_LLM_API_KEY}" "${HICLAW_DEFAULT_MODEL}" "$(msg llm.openai.test.fail.codingplan)" || return 0
+                test_llm_connectivity "https://coding.dashscope.aliyuncs.com/v1" "${AGENTTEAMS_LLM_API_KEY}" "${AGENTTEAMS_DEFAULT_MODEL}" "$(msg llm.openai.test.fail.codingplan_legacy)" || return 0
+            elif [ "${AGENTTEAMS_LANGUAGE}" = "en" ]; then
+                test_llm_connectivity "${AGENTTEAMS_OPENAI_BASE_URL}" "${AGENTTEAMS_LLM_API_KEY}" "${AGENTTEAMS_DEFAULT_MODEL}" "$(msg llm.openai.test.fail.codingplan)" || return 0
             else
-                test_llm_connectivity "${HICLAW_OPENAI_BASE_URL}" "${HICLAW_LLM_API_KEY}" "${HICLAW_DEFAULT_MODEL}" "$(msg llm.openai.test.fail.tokenplan)" || return 0
+                test_llm_connectivity "${AGENTTEAMS_OPENAI_BASE_URL}" "${AGENTTEAMS_LLM_API_KEY}" "${AGENTTEAMS_DEFAULT_MODEL}" "$(msg llm.openai.test.fail.tokenplan)" || return 0
             fi
             ;;
         2|openai-compat)
-            HICLAW_LLM_PROVIDER="openai-compat"
-            log "$(msg llm.provider.selected_openai "${HICLAW_LLM_PROVIDER}")"
+            AGENTTEAMS_LLM_PROVIDER="openai-compat"
+            log "$(msg llm.provider.selected_openai "${AGENTTEAMS_LLM_PROVIDER}")"
             echo ""
-            if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ]; then
-                log "$(msg prompt.upgrade_keep "$(msg llm.openai.base_url_prompt)" "${HICLAW_OPENAI_BASE_URL}")"
+            if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ]; then
+                log "$(msg prompt.upgrade_keep "$(msg llm.openai.base_url_prompt)" "${AGENTTEAMS_OPENAI_BASE_URL}")"
             else
-                _current="${HICLAW_OPENAI_BASE_URL}"
+                _current="${AGENTTEAMS_OPENAI_BASE_URL}"
                 if [ -n "${_current}" ]; then
-                    read -e -p "$(msg llm.openai.base_url_prompt) [${_current}]: " HICLAW_OPENAI_BASE_URL
+                    read -e -p "$(msg llm.openai.base_url_prompt) [${_current}]: " AGENTTEAMS_OPENAI_BASE_URL
                 else
-                    read -e -p "$(msg llm.openai.base_url_prompt) [https://api.openai.com/v1]: " HICLAW_OPENAI_BASE_URL
+                    read -e -p "$(msg llm.openai.base_url_prompt) [https://api.openai.com/v1]: " AGENTTEAMS_OPENAI_BASE_URL
                 fi
-                if [ "${HICLAW_OPENAI_BASE_URL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-                HICLAW_OPENAI_BASE_URL="${HICLAW_OPENAI_BASE_URL:-${_current}}"
-                [ -z "${HICLAW_OPENAI_BASE_URL}" ] && HICLAW_OPENAI_BASE_URL="https://api.openai.com/v1"
+                if [ "${AGENTTEAMS_OPENAI_BASE_URL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+                AGENTTEAMS_OPENAI_BASE_URL="${AGENTTEAMS_OPENAI_BASE_URL:-${_current}}"
+                [ -z "${AGENTTEAMS_OPENAI_BASE_URL}" ] && AGENTTEAMS_OPENAI_BASE_URL="https://api.openai.com/v1"
             fi
-            if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ]; then
-                log "$(msg prompt.upgrade_keep "$(msg llm.openai.model_prompt)" "${HICLAW_DEFAULT_MODEL}")"
+            if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ]; then
+                log "$(msg prompt.upgrade_keep "$(msg llm.openai.model_prompt)" "${AGENTTEAMS_DEFAULT_MODEL}")"
             else
-                _current="${HICLAW_DEFAULT_MODEL}"
+                _current="${AGENTTEAMS_DEFAULT_MODEL}"
                 if [ -n "${_current}" ]; then
-                    read -e -p "$(msg llm.openai.model_prompt) [${_current}]: " HICLAW_DEFAULT_MODEL
+                    read -e -p "$(msg llm.openai.model_prompt) [${_current}]: " AGENTTEAMS_DEFAULT_MODEL
                 else
-                    read -e -p "$(msg llm.openai.model_prompt) [gpt-5.4]: " HICLAW_DEFAULT_MODEL
+                    read -e -p "$(msg llm.openai.model_prompt) [gpt-5.4]: " AGENTTEAMS_DEFAULT_MODEL
                 fi
-                if [ "${HICLAW_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-                HICLAW_DEFAULT_MODEL="${HICLAW_DEFAULT_MODEL:-${_current}}"
-                [ -z "${HICLAW_DEFAULT_MODEL}" ] && HICLAW_DEFAULT_MODEL="gpt-5.4"
+                if [ "${AGENTTEAMS_DEFAULT_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+                AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-${_current}}"
+                [ -z "${AGENTTEAMS_DEFAULT_MODEL}" ] && AGENTTEAMS_DEFAULT_MODEL="gpt-5.4"
             fi
-            log "$(msg llm.openai.base_url_label "${HICLAW_OPENAI_BASE_URL}")"
-            log "$(msg llm.model.label "${HICLAW_DEFAULT_MODEL}")"
-            prompt_custom_model_params "${HICLAW_DEFAULT_MODEL}" || return 0
+            log "$(msg llm.openai.base_url_label "${AGENTTEAMS_OPENAI_BASE_URL}")"
+            log "$(msg llm.model.label "${AGENTTEAMS_DEFAULT_MODEL}")"
+            prompt_custom_model_params "${AGENTTEAMS_DEFAULT_MODEL}" || return 0
             log ""
-            prompt HICLAW_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true" || return 0
-            test_llm_connectivity "${HICLAW_OPENAI_BASE_URL}" "${HICLAW_LLM_API_KEY}" "${HICLAW_DEFAULT_MODEL}" || return 0
+            prompt AGENTTEAMS_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true" || return 0
+            test_llm_connectivity "${AGENTTEAMS_OPENAI_BASE_URL}" "${AGENTTEAMS_LLM_API_KEY}" "${AGENTTEAMS_DEFAULT_MODEL}" || return 0
             ;;
         *)
             die "$(msg llm.provider.invalid "${PROVIDER_CHOICE}")"
@@ -2219,9 +2219,9 @@ step_llm() {
 
     # Skip to embedding if Keep-All mode handled LLM params
     if [ "${SKIP_TO_EMBEDDING}" = "1" ]; then
-        if [ -n "${HICLAW_EMBEDDING_MODEL}" ]; then
+        if [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ]; then
             log "$(msg llm.embedding.title)"
-            log "$(msg llm.model.label "${HICLAW_EMBEDDING_MODEL}")"
+            log "$(msg llm.model.label "${AGENTTEAMS_EMBEDDING_MODEL}")"
             log ""
         fi
         return 0
@@ -2243,80 +2243,80 @@ step_llm() {
 
     case "${EMB_CHOICE}" in
         1)
-            HICLAW_EMBEDDING_MODEL="text-embedding-v4"
+            AGENTTEAMS_EMBEDDING_MODEL="text-embedding-v4"
             ;;
         2)
-            if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ]; then
-                log "$(msg prompt.upgrade_keep "$(msg llm.embedding.custom_prompt)" "${HICLAW_EMBEDDING_MODEL}")"
+            if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ]; then
+                log "$(msg prompt.upgrade_keep "$(msg llm.embedding.custom_prompt)" "${AGENTTEAMS_EMBEDDING_MODEL}")"
             else
-                _current="${HICLAW_EMBEDDING_MODEL}"
+                _current="${AGENTTEAMS_EMBEDDING_MODEL}"
                 if [ -n "${_current}" ]; then
-                    read -e -p "$(msg llm.embedding.custom_prompt) [${_current}]: " HICLAW_EMBEDDING_MODEL
+                    read -e -p "$(msg llm.embedding.custom_prompt) [${_current}]: " AGENTTEAMS_EMBEDDING_MODEL
                 else
-                    read -e -p "$(msg llm.embedding.custom_prompt): " HICLAW_EMBEDDING_MODEL
+                    read -e -p "$(msg llm.embedding.custom_prompt): " AGENTTEAMS_EMBEDDING_MODEL
                 fi
-                if [ "${HICLAW_EMBEDDING_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-                HICLAW_EMBEDDING_MODEL="${HICLAW_EMBEDDING_MODEL:-${_current}}"
+                if [ "${AGENTTEAMS_EMBEDDING_MODEL}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+                AGENTTEAMS_EMBEDDING_MODEL="${AGENTTEAMS_EMBEDDING_MODEL:-${_current}}"
             fi
             ;;
         3)
-            HICLAW_EMBEDDING_MODEL=""
+            AGENTTEAMS_EMBEDDING_MODEL=""
             log "$(msg llm.embedding.disabled)"
             ;;
         *)
-            HICLAW_EMBEDDING_MODEL="text-embedding-v4"
+            AGENTTEAMS_EMBEDDING_MODEL="text-embedding-v4"
             ;;
     esac
 
-    if [ -n "${HICLAW_EMBEDDING_MODEL}" ]; then
+    if [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ]; then
         # Qwen provider uses dashscope directly; others use OPENAI_BASE_URL
-        local EMB_BASE_URL="${HICLAW_OPENAI_BASE_URL}"
-        if [ "${HICLAW_LLM_PROVIDER}" = "qwen" ]; then
+        local EMB_BASE_URL="${AGENTTEAMS_OPENAI_BASE_URL}"
+        if [ "${AGENTTEAMS_LLM_PROVIDER}" = "qwen" ]; then
             EMB_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
         fi
-        if ! test_embedding_connectivity "${EMB_BASE_URL}" "${HICLAW_LLM_API_KEY}" "${HICLAW_EMBEDDING_MODEL}"; then
-            HICLAW_EMBEDDING_MODEL=""
+        if ! test_embedding_connectivity "${EMB_BASE_URL}" "${AGENTTEAMS_LLM_API_KEY}" "${AGENTTEAMS_EMBEDDING_MODEL}"; then
+            AGENTTEAMS_EMBEDDING_MODEL=""
             log "$(msg llm.embedding.auto_disabled)"
         fi
     fi
 
-    export HICLAW_LLM_PROVIDER HICLAW_DEFAULT_MODEL
-    [ -n "${HICLAW_OPENAI_BASE_URL+x}" ] && export HICLAW_OPENAI_BASE_URL
+    export AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_DEFAULT_MODEL
+    [ -n "${AGENTTEAMS_OPENAI_BASE_URL+x}" ] && export AGENTTEAMS_OPENAI_BASE_URL
     log ""
 }
 
 step_admin() {
     log "$(msg admin.title)"
-    prompt HICLAW_ADMIN_USER "$(msg admin.username_prompt)" "admin" || return 0
-    HICLAW_ADMIN_USER="$(printf '%s' "${HICLAW_ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
+    prompt AGENTTEAMS_ADMIN_USER "$(msg admin.username_prompt)" "admin" || return 0
+    AGENTTEAMS_ADMIN_USER="$(printf '%s' "${AGENTTEAMS_ADMIN_USER}" | tr '[:upper:]' '[:lower:]')"
 
     # Pre-set via env var: validate; in non-interactive mode fail fast,
     # in interactive mode warn and fall through to the retry prompt.
-    if [ -n "${HICLAW_ADMIN_PASSWORD:-}" ]; then
+    if [ -n "${AGENTTEAMS_ADMIN_PASSWORD:-}" ]; then
         log "  $(msg prompt.preset "$(msg admin.password_prompt)")"
-        if [ ${#HICLAW_ADMIN_PASSWORD} -ge 8 ]; then
+        if [ ${#AGENTTEAMS_ADMIN_PASSWORD} -ge 8 ]; then
             log ""
             return 0
         fi
-        if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-            die "$(msg admin.password_too_short "${#HICLAW_ADMIN_PASSWORD}")"
+        if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+            die "$(msg admin.password_too_short "${#AGENTTEAMS_ADMIN_PASSWORD}")"
         fi
-        error "$(msg admin.password_too_short "${#HICLAW_ADMIN_PASSWORD}")"
-        unset HICLAW_ADMIN_PASSWORD
+        error "$(msg admin.password_too_short "${#AGENTTEAMS_ADMIN_PASSWORD}")"
+        unset AGENTTEAMS_ADMIN_PASSWORD
     fi
 
     while true; do
-        unset HICLAW_ADMIN_PASSWORD
-        prompt_optional HICLAW_ADMIN_PASSWORD "$(msg admin.password_prompt)" "true" || return 0
-        if [ -z "${HICLAW_ADMIN_PASSWORD}" ]; then
-            HICLAW_ADMIN_PASSWORD="admin$(openssl rand -hex 6)"
+        unset AGENTTEAMS_ADMIN_PASSWORD
+        prompt_optional AGENTTEAMS_ADMIN_PASSWORD "$(msg admin.password_prompt)" "true" || return 0
+        if [ -z "${AGENTTEAMS_ADMIN_PASSWORD}" ]; then
+            AGENTTEAMS_ADMIN_PASSWORD="admin$(openssl rand -hex 6)"
             log "$(msg admin.password_generated)"
             break
         fi
-        if [ ${#HICLAW_ADMIN_PASSWORD} -ge 8 ]; then
+        if [ ${#AGENTTEAMS_ADMIN_PASSWORD} -ge 8 ]; then
             break
         fi
-        error "$(msg admin.password_too_short "${#HICLAW_ADMIN_PASSWORD}")"
+        error "$(msg admin.password_too_short "${#AGENTTEAMS_ADMIN_PASSWORD}")"
     done
     log ""
 }
@@ -2327,20 +2327,20 @@ step_network() {
     echo "  1) $(msg port.local_only.hint_yes)"
     echo "  2) $(msg port.local_only.hint_no)"
     echo ""
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_LOCAL_ONLY="${HICLAW_LOCAL_ONLY:-1}"
-    elif [ -z "${HICLAW_LOCAL_ONLY+x}" ]; then
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_LOCAL_ONLY="${AGENTTEAMS_LOCAL_ONLY:-1}"
+    elif [ -z "${AGENTTEAMS_LOCAL_ONLY+x}" ]; then
         local _local_choice
         read -e -p "$(msg port.local_only.choice): " _local_choice
         if [ "${_local_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _local_choice="${_local_choice:-1}"
         case "${_local_choice}" in
-            2|n|N|no|NO) HICLAW_LOCAL_ONLY="0" ;;
-            *)            HICLAW_LOCAL_ONLY="1" ;;
+            2|n|N|no|NO) AGENTTEAMS_LOCAL_ONLY="0" ;;
+            *)            AGENTTEAMS_LOCAL_ONLY="1" ;;
         esac
     fi
-    export HICLAW_LOCAL_ONLY
-    if [ "${HICLAW_LOCAL_ONLY}" = "1" ]; then
+    export AGENTTEAMS_LOCAL_ONLY
+    if [ "${AGENTTEAMS_LOCAL_ONLY}" = "1" ]; then
         log "$(msg port.local_only.selected_local)"
     else
         log "$(msg port.local_only.selected_external)"
@@ -2351,90 +2351,90 @@ step_network() {
 
 step_ports() {
     log "$(msg port.title)"
-    prompt HICLAW_PORT_GATEWAY "$(msg port.gateway_prompt)" "18080" || return 0
-    prompt HICLAW_PORT_CONSOLE "$(msg port.console_prompt)" "18001" || return 0
-    prompt HICLAW_PORT_ELEMENT_WEB "$(msg port.element_prompt)" "18088" || return 0
-    prompt HICLAW_PORT_MANAGER_CONSOLE "$(msg port.manager_console_prompt)" "18888" || return 0
+    prompt AGENTTEAMS_PORT_GATEWAY "$(msg port.gateway_prompt)" "18080" || return 0
+    prompt AGENTTEAMS_PORT_CONSOLE "$(msg port.console_prompt)" "18001" || return 0
+    prompt AGENTTEAMS_PORT_ELEMENT_WEB "$(msg port.element_prompt)" "18088" || return 0
+    prompt AGENTTEAMS_PORT_MANAGER_CONSOLE "$(msg port.manager_console_prompt)" "18888" || return 0
     log ""
 }
 
 step_domains() {
     log "$(msg domain.title)"
     log "$(msg domain.hint)"
-    prompt HICLAW_MATRIX_DOMAIN "$(msg domain.matrix_prompt)" "matrix-local.hiclaw.io:${HICLAW_PORT_GATEWAY}" || return 0
-    prompt HICLAW_MATRIX_CLIENT_DOMAIN "$(msg domain.element_prompt)" "matrix-client-local.hiclaw.io" || return 0
-    prompt HICLAW_AI_GATEWAY_DOMAIN "$(msg domain.gateway_prompt)" "aigw-local.hiclaw.io" || return 0
-    prompt HICLAW_FS_DOMAIN "$(msg domain.fs_prompt)" "fs-local.hiclaw.io" || return 0
-    if [ "${HICLAW_MANAGER_RUNTIME}" != "copaw" ]; then
-        prompt HICLAW_CONSOLE_DOMAIN "$(msg domain.console_prompt)" "console-local.hiclaw.io" || return 0
+    prompt AGENTTEAMS_MATRIX_DOMAIN "$(msg domain.matrix_prompt)" "matrix-local.agentteams.io:${AGENTTEAMS_PORT_GATEWAY}" || return 0
+    prompt AGENTTEAMS_MATRIX_CLIENT_DOMAIN "$(msg domain.element_prompt)" "matrix-client-local.agentteams.io" || return 0
+    prompt AGENTTEAMS_AI_GATEWAY_DOMAIN "$(msg domain.gateway_prompt)" "aigw-local.agentteams.io" || return 0
+    prompt AGENTTEAMS_FS_DOMAIN "$(msg domain.fs_prompt)" "fs-local.agentteams.io" || return 0
+    if [ "${AGENTTEAMS_MANAGER_RUNTIME}" != "copaw" ]; then
+        prompt AGENTTEAMS_CONSOLE_DOMAIN "$(msg domain.console_prompt)" "console-local.agentteams.io" || return 0
     fi
     log ""
 }
 
 step_github() {
     log "$(msg github.title)"
-    prompt_optional HICLAW_GITHUB_TOKEN "$(msg github.token_prompt)" "true" || return 0
+    prompt_optional AGENTTEAMS_GITHUB_TOKEN "$(msg github.token_prompt)" "true" || return 0
 }
 
 step_skills() {
     log ""
     log "$(msg skills.title)"
-    prompt_optional HICLAW_SKILLS_API_URL "$(msg skills.url_prompt)" || return 0
+    prompt_optional AGENTTEAMS_SKILLS_API_URL "$(msg skills.url_prompt)" || return 0
     log ""
 }
 
 step_volume() {
     log "$(msg data.title)"
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_DATA_DIR="${HICLAW_DATA_DIR:-hiclaw-data}"
-        log "  $(msg data.volume_using "${HICLAW_DATA_DIR}") (non-interactive, skipped)"
-        export HICLAW_DATA_DIR
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_DATA_DIR="${AGENTTEAMS_DATA_DIR:-agentteams-data}"
+        log "  $(msg data.volume_using "${AGENTTEAMS_DATA_DIR}") (non-interactive, skipped)"
+        export AGENTTEAMS_DATA_DIR
         return 0
     fi
     # ─────────────────────────────────────────────────────────────────
-    if [ -z "${HICLAW_DATA_DIR+x}" ]; then
+    if [ -z "${AGENTTEAMS_DATA_DIR+x}" ]; then
         local _input
         read -e -p "$(msg data.volume_prompt): " _input
         if [ "${_input}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-        HICLAW_DATA_DIR="${_input:-hiclaw-data}"
-        export HICLAW_DATA_DIR
+        AGENTTEAMS_DATA_DIR="${_input:-agentteams-data}"
+        export AGENTTEAMS_DATA_DIR
     fi
-    HICLAW_DATA_DIR="${HICLAW_DATA_DIR:-hiclaw-data}"
-    log "$(msg data.volume_using "${HICLAW_DATA_DIR}")"
+    AGENTTEAMS_DATA_DIR="${AGENTTEAMS_DATA_DIR:-agentteams-data}"
+    log "$(msg data.volume_using "${AGENTTEAMS_DATA_DIR}")"
 }
 
 step_workspace() {
     log "$(msg workspace.title)"
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_WORKSPACE_DIR="${HICLAW_WORKSPACE_DIR:-${HOME}/hiclaw-manager}"
-        HICLAW_WORKSPACE_DIR="$(cd "${HICLAW_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${HICLAW_WORKSPACE_DIR}")"
-        mkdir -p "${HICLAW_WORKSPACE_DIR}"
-        log "  $(msg workspace.dir_label "${HICLAW_WORKSPACE_DIR}") (non-interactive, skipped)"
-        export HICLAW_WORKSPACE_DIR
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_WORKSPACE_DIR="${AGENTTEAMS_WORKSPACE_DIR:-${HOME}/agentteams-manager}"
+        AGENTTEAMS_WORKSPACE_DIR="$(cd "${AGENTTEAMS_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${AGENTTEAMS_WORKSPACE_DIR}")"
+        mkdir -p "${AGENTTEAMS_WORKSPACE_DIR}"
+        log "  $(msg workspace.dir_label "${AGENTTEAMS_WORKSPACE_DIR}") (non-interactive, skipped)"
+        export AGENTTEAMS_WORKSPACE_DIR
         return 0
     fi
     # ─────────────────────────────────────────────────────────────────
     local _input
-    if [ "${HICLAW_UPGRADE}" = "1" ] && [ "${HICLAW_UPGRADE_KEEP_ALL}" = "1" ]; then
-        log "$(msg prompt.upgrade_keep "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager")" "${HICLAW_WORKSPACE_DIR}")"
-        _input="${HICLAW_WORKSPACE_DIR}"
+    if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ]; then
+        log "$(msg prompt.upgrade_keep "$(msg workspace.dir_prompt "${HOME}/agentteams-manager")" "${AGENTTEAMS_WORKSPACE_DIR}")"
+        _input="${AGENTTEAMS_WORKSPACE_DIR}"
     else
-        local _current="${HICLAW_WORKSPACE_DIR}"
+        local _current="${AGENTTEAMS_WORKSPACE_DIR}"
         if [ -n "${_current}" ]; then
-            read -e -p "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager") [${_current}]: " _input
+            read -e -p "$(msg workspace.dir_prompt "${HOME}/agentteams-manager") [${_current}]: " _input
         else
-            read -e -p "$(msg workspace.dir_prompt "${HOME}/hiclaw-manager"): " _input
+            read -e -p "$(msg workspace.dir_prompt "${HOME}/agentteams-manager"): " _input
         fi
         if [ "${_input}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _input="${_input:-${_current}}"
     fi
-    HICLAW_WORKSPACE_DIR="${_input:-${HOME}/hiclaw-manager}"
-    export HICLAW_WORKSPACE_DIR
-    HICLAW_WORKSPACE_DIR="$(cd "${HICLAW_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${HICLAW_WORKSPACE_DIR}")"
-    mkdir -p "${HICLAW_WORKSPACE_DIR}"
-    log "$(msg workspace.dir_label "${HICLAW_WORKSPACE_DIR}")"
+    AGENTTEAMS_WORKSPACE_DIR="${_input:-${HOME}/agentteams-manager}"
+    export AGENTTEAMS_WORKSPACE_DIR
+    AGENTTEAMS_WORKSPACE_DIR="$(cd "${AGENTTEAMS_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${AGENTTEAMS_WORKSPACE_DIR}")"
+    mkdir -p "${AGENTTEAMS_WORKSPACE_DIR}"
+    log "$(msg workspace.dir_label "${AGENTTEAMS_WORKSPACE_DIR}")"
 }
 
 step_runtime() {
@@ -2442,45 +2442,45 @@ step_runtime() {
     echo ""
     echo "  1) $(msg worker_runtime.copaw)"
     echo "  2) $(msg worker_runtime.openclaw)"
-    if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
+    if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
         echo "  3) $(msg worker_runtime.hermes)"
     fi
     echo ""
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
-    elif [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DEFAULT_WORKER_RUNTIME}" ]; then
-        log "$(msg prompt.upgrade_keep "$(msg worker_runtime.title_short)" "${HICLAW_DEFAULT_WORKER_RUNTIME}")"
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
+    elif [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}" ]; then
+        log "$(msg prompt.upgrade_keep "$(msg worker_runtime.title_short)" "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}")"
         local _runtime_choice
         read -e -p "$(msg worker_runtime.choice): " _runtime_choice
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
-                2) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
-                3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
-                       HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+                2) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="openclaw" ;;
+                3) if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+                       AGENTTEAMS_DEFAULT_WORKER_RUNTIME="hermes"
                    else
-                       HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
+                       AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw"
                    fi ;;
-                *) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+                *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw" ;;
             esac
         fi
-    elif [ -z "${HICLAW_DEFAULT_WORKER_RUNTIME+x}" ]; then
+    elif [ -z "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME+x}" ]; then
         local _runtime_choice
         read -e -p "$(msg worker_runtime.choice): " _runtime_choice
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
-            2) HICLAW_DEFAULT_WORKER_RUNTIME="openclaw" ;;
-            3) if ! _ver_lt "${HICLAW_VERSION}" "v1.1.0"; then
-                   HICLAW_DEFAULT_WORKER_RUNTIME="hermes"
+            2) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="openclaw" ;;
+            3) if ! _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+                   AGENTTEAMS_DEFAULT_WORKER_RUNTIME="hermes"
                else
-                   HICLAW_DEFAULT_WORKER_RUNTIME="copaw"
+                   AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw"
                fi ;;
-            *) HICLAW_DEFAULT_WORKER_RUNTIME="copaw" ;;
+            *) AGENTTEAMS_DEFAULT_WORKER_RUNTIME="copaw" ;;
         esac
     fi
-    export HICLAW_DEFAULT_WORKER_RUNTIME
-    log "$(msg worker_runtime.selected "${HICLAW_DEFAULT_WORKER_RUNTIME}")"
+    export AGENTTEAMS_DEFAULT_WORKER_RUNTIME
+    log "$(msg worker_runtime.selected "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}")"
 }
 
 step_manager_runtime() {
@@ -2489,41 +2489,41 @@ step_manager_runtime() {
     echo "  1) $(msg manager_runtime.copaw)"
     echo "  2) $(msg manager_runtime.openclaw)"
     echo ""
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}"
-    elif [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_MANAGER_RUNTIME}" ]; then
-        log "$(msg prompt.upgrade_keep "$(msg manager_runtime.title_short)" "${HICLAW_MANAGER_RUNTIME}")"
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
+    elif [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_MANAGER_RUNTIME}" ]; then
+        log "$(msg prompt.upgrade_keep "$(msg manager_runtime.title_short)" "${AGENTTEAMS_MANAGER_RUNTIME}")"
         local _runtime_choice
         read -e -p "$(msg manager_runtime.choice): " _runtime_choice
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
-                2) HICLAW_MANAGER_RUNTIME="openclaw" ;;
-                *) HICLAW_MANAGER_RUNTIME="copaw" ;;
+                2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
+                *) AGENTTEAMS_MANAGER_RUNTIME="copaw" ;;
             esac
         fi
-    elif [ -z "${HICLAW_MANAGER_RUNTIME+x}" ]; then
+    elif [ -z "${AGENTTEAMS_MANAGER_RUNTIME+x}" ]; then
         local _runtime_choice
         read -e -p "$(msg manager_runtime.choice): " _runtime_choice
         if [ "${_runtime_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
-            2) HICLAW_MANAGER_RUNTIME="openclaw" ;;
-            *) HICLAW_MANAGER_RUNTIME="copaw" ;;
+            2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
+            *) AGENTTEAMS_MANAGER_RUNTIME="copaw" ;;
         esac
     fi
-    export HICLAW_MANAGER_RUNTIME
-    log "$(msg manager_runtime.selected "${HICLAW_MANAGER_RUNTIME}")"
+    export AGENTTEAMS_MANAGER_RUNTIME
+    log "$(msg manager_runtime.selected "${AGENTTEAMS_MANAGER_RUNTIME}")"
 }
 
 step_e2ee() {
     log ""
     log "$(msg matrix_e2ee.title)"
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_MATRIX_E2EE="${HICLAW_MATRIX_E2EE:-0}"
-        log "  $(msg matrix_e2ee.title_short) = ${HICLAW_MATRIX_E2EE} (non-interactive, skipped)"
-        export HICLAW_MATRIX_E2EE
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_MATRIX_E2EE="${AGENTTEAMS_MATRIX_E2EE:-0}"
+        log "  $(msg matrix_e2ee.title_short) = ${AGENTTEAMS_MATRIX_E2EE} (non-interactive, skipped)"
+        export AGENTTEAMS_MATRIX_E2EE
         return 0
     fi
     # ─────────────────────────────────────────────────────────────────
@@ -2533,31 +2533,31 @@ step_e2ee() {
     echo "  1) $(msg matrix_e2ee.disable)"
     echo "  2) $(msg matrix_e2ee.enable)"
     echo ""
-    if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_MATRIX_E2EE}" ]; then
-        local _e2ee_display; if [ "${HICLAW_MATRIX_E2EE}" = "1" ]; then _e2ee_display="$(msg matrix_e2ee.val_enabled)"; else _e2ee_display="$(msg matrix_e2ee.val_disabled)"; fi
+    if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_MATRIX_E2EE}" ]; then
+        local _e2ee_display; if [ "${AGENTTEAMS_MATRIX_E2EE}" = "1" ]; then _e2ee_display="$(msg matrix_e2ee.val_enabled)"; else _e2ee_display="$(msg matrix_e2ee.val_disabled)"; fi
         log "$(msg prompt.upgrade_keep "$(msg matrix_e2ee.title_short)" "${_e2ee_display}")"
         local _e2ee_choice
         read -e -p "$(msg matrix_e2ee.choice): " _e2ee_choice
         if [ "${_e2ee_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_e2ee_choice}" ]; then
             case "${_e2ee_choice}" in
-                2) HICLAW_MATRIX_E2EE="1" ;;
-                *) HICLAW_MATRIX_E2EE="0" ;;
+                2) AGENTTEAMS_MATRIX_E2EE="1" ;;
+                *) AGENTTEAMS_MATRIX_E2EE="0" ;;
             esac
         fi
-    elif [ -z "${HICLAW_MATRIX_E2EE+x}" ]; then
+    elif [ -z "${AGENTTEAMS_MATRIX_E2EE+x}" ]; then
         local _e2ee_choice
         read -e -p "$(msg matrix_e2ee.choice): " _e2ee_choice
         if [ "${_e2ee_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _e2ee_choice="${_e2ee_choice:-1}"
         case "${_e2ee_choice}" in
-            2) HICLAW_MATRIX_E2EE="1" ;;
-            *) HICLAW_MATRIX_E2EE="0" ;;
+            2) AGENTTEAMS_MATRIX_E2EE="1" ;;
+            *) AGENTTEAMS_MATRIX_E2EE="0" ;;
         esac
     fi
-    HICLAW_MATRIX_E2EE="${HICLAW_MATRIX_E2EE:-0}"
-    export HICLAW_MATRIX_E2EE
-    if [ "${HICLAW_MATRIX_E2EE}" = "1" ]; then
+    AGENTTEAMS_MATRIX_E2EE="${AGENTTEAMS_MATRIX_E2EE:-0}"
+    export AGENTTEAMS_MATRIX_E2EE
+    if [ "${AGENTTEAMS_MATRIX_E2EE}" = "1" ]; then
         log "$(msg matrix_e2ee.selected_enabled)"
     else
         log "$(msg matrix_e2ee.selected_disabled)"
@@ -2566,16 +2566,16 @@ step_e2ee() {
 
 step_docker_proxy() {
     # Only relevant when socket mounting is enabled
-    if [ "${HICLAW_MOUNT_SOCKET}" != "1" ]; then
-        HICLAW_DOCKER_PROXY="0"
+    if [ "${AGENTTEAMS_MOUNT_SOCKET}" != "1" ]; then
+        AGENTTEAMS_DOCKER_PROXY="0"
         return 0
     fi
 
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_DOCKER_PROXY="${HICLAW_DOCKER_PROXY:-0}"
-        log "  $(msg docker_proxy.title_short) = ${HICLAW_DOCKER_PROXY} (non-interactive, skipped)"
-        export HICLAW_DOCKER_PROXY
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_DOCKER_PROXY="${AGENTTEAMS_DOCKER_PROXY:-0}"
+        log "  $(msg docker_proxy.title_short) = ${AGENTTEAMS_DOCKER_PROXY} (non-interactive, skipped)"
+        export AGENTTEAMS_DOCKER_PROXY
         return 0
     fi
     # ─────────────────────────────────────────────────────────────────
@@ -2589,50 +2589,50 @@ step_docker_proxy() {
     echo "  2) $(msg docker_proxy.disable)"
     echo ""
 
-    if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_DOCKER_PROXY}" ]; then
-        local _proxy_display; if [ "${HICLAW_DOCKER_PROXY}" = "1" ]; then _proxy_display="$(msg docker_proxy.val_enabled)"; else _proxy_display="$(msg docker_proxy.val_disabled)"; fi
+    if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DOCKER_PROXY}" ]; then
+        local _proxy_display; if [ "${AGENTTEAMS_DOCKER_PROXY}" = "1" ]; then _proxy_display="$(msg docker_proxy.val_enabled)"; else _proxy_display="$(msg docker_proxy.val_disabled)"; fi
         log "$(msg prompt.upgrade_keep "$(msg docker_proxy.title_short)" "${_proxy_display}")"
         local _choice
         read -e -p "$(msg docker_proxy.choice): " _choice
         if [ "${_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_choice}" ]; then
             case "${_choice}" in
-                2) HICLAW_DOCKER_PROXY="0" ;;
-                *) HICLAW_DOCKER_PROXY="1" ;;
+                2) AGENTTEAMS_DOCKER_PROXY="0" ;;
+                *) AGENTTEAMS_DOCKER_PROXY="1" ;;
             esac
         fi
-    elif [ -z "${HICLAW_DOCKER_PROXY+x}" ]; then
+    elif [ -z "${AGENTTEAMS_DOCKER_PROXY+x}" ]; then
         local _choice
         read -e -p "$(msg docker_proxy.choice): " _choice
         if [ "${_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _choice="${_choice:-1}"
         case "${_choice}" in
-            2) HICLAW_DOCKER_PROXY="0" ;;
-            *) HICLAW_DOCKER_PROXY="1" ;;
+            2) AGENTTEAMS_DOCKER_PROXY="0" ;;
+            *) AGENTTEAMS_DOCKER_PROXY="1" ;;
         esac
     fi
-    HICLAW_DOCKER_PROXY="${HICLAW_DOCKER_PROXY:-1}"
-    export HICLAW_DOCKER_PROXY
-    if [ "${HICLAW_DOCKER_PROXY}" = "1" ]; then
+    AGENTTEAMS_DOCKER_PROXY="${AGENTTEAMS_DOCKER_PROXY:-1}"
+    export AGENTTEAMS_DOCKER_PROXY
+    if [ "${AGENTTEAMS_DOCKER_PROXY}" = "1" ]; then
         log "$(msg docker_proxy.selected_enabled)"
 
         # Prompt for additional allowed image sources
         echo ""
         echo -e "  $(msg docker_proxy.registries_desc)"
         echo ""
-        if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_PROXY_ALLOWED_REGISTRIES}" ]; then
-            log "$(msg prompt.upgrade_keep "$(msg docker_proxy.registries_label)" "${HICLAW_PROXY_ALLOWED_REGISTRIES}")"
+        if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}" ]; then
+            log "$(msg prompt.upgrade_keep "$(msg docker_proxy.registries_label)" "${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}")"
             local _reg_input
             read -e -p "$(msg docker_proxy.registries_prompt): " _reg_input
             if [ "${_reg_input}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-            [ -n "${_reg_input}" ] && HICLAW_PROXY_ALLOWED_REGISTRIES="${_reg_input}"
-        elif [ -z "${HICLAW_PROXY_ALLOWED_REGISTRIES+x}" ]; then
+            [ -n "${_reg_input}" ] && AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${_reg_input}"
+        elif [ -z "${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES+x}" ]; then
             local _reg_input
             read -e -p "$(msg docker_proxy.registries_prompt): " _reg_input
             if [ "${_reg_input}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-            HICLAW_PROXY_ALLOWED_REGISTRIES="${_reg_input:-}"
+            AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${_reg_input:-}"
         fi
-        export HICLAW_PROXY_ALLOWED_REGISTRIES
+        export AGENTTEAMS_PROXY_ALLOWED_REGISTRIES
     else
         log "$(msg docker_proxy.selected_disabled)"
     fi
@@ -2640,40 +2640,40 @@ step_docker_proxy() {
 
 step_idle() {
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_WORKER_IDLE_TIMEOUT="${HICLAW_WORKER_IDLE_TIMEOUT:-720}"
-        log "  $(msg idle_timeout.label) = ${HICLAW_WORKER_IDLE_TIMEOUT} (non-interactive, skipped)"
-        export HICLAW_WORKER_IDLE_TIMEOUT
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_WORKER_IDLE_TIMEOUT="${AGENTTEAMS_WORKER_IDLE_TIMEOUT:-720}"
+        log "  $(msg idle_timeout.label) = ${AGENTTEAMS_WORKER_IDLE_TIMEOUT} (non-interactive, skipped)"
+        export AGENTTEAMS_WORKER_IDLE_TIMEOUT
         return 0
     fi
     # ─────────────────────────────────────────────────────────────────
-    if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_WORKER_IDLE_TIMEOUT}" ]; then
-        log "$(msg prompt.upgrade_keep "$(msg idle_timeout.label)" "${HICLAW_WORKER_IDLE_TIMEOUT}")"
+    if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_WORKER_IDLE_TIMEOUT}" ]; then
+        log "$(msg prompt.upgrade_keep "$(msg idle_timeout.label)" "${AGENTTEAMS_WORKER_IDLE_TIMEOUT}")"
         local _idle_timeout
         read -e -p "$(msg idle_timeout.prompt): " _idle_timeout
         if [ "${_idle_timeout}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-        [ -n "${_idle_timeout}" ] && HICLAW_WORKER_IDLE_TIMEOUT="${_idle_timeout}"
-    elif [ -z "${HICLAW_WORKER_IDLE_TIMEOUT+x}" ]; then
+        [ -n "${_idle_timeout}" ] && AGENTTEAMS_WORKER_IDLE_TIMEOUT="${_idle_timeout}"
+    elif [ -z "${AGENTTEAMS_WORKER_IDLE_TIMEOUT+x}" ]; then
         local _idle_timeout
         read -e -p "$(msg idle_timeout.prompt): " _idle_timeout
         if [ "${_idle_timeout}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-        HICLAW_WORKER_IDLE_TIMEOUT="${_idle_timeout:-720}"
+        AGENTTEAMS_WORKER_IDLE_TIMEOUT="${_idle_timeout:-720}"
     fi
-    HICLAW_WORKER_IDLE_TIMEOUT="${HICLAW_WORKER_IDLE_TIMEOUT:-720}"
-    export HICLAW_WORKER_IDLE_TIMEOUT
-    log "$(msg idle_timeout.selected "${HICLAW_WORKER_IDLE_TIMEOUT}")"
+    AGENTTEAMS_WORKER_IDLE_TIMEOUT="${AGENTTEAMS_WORKER_IDLE_TIMEOUT:-720}"
+    export AGENTTEAMS_WORKER_IDLE_TIMEOUT
+    log "$(msg idle_timeout.selected "${AGENTTEAMS_WORKER_IDLE_TIMEOUT}")"
 }
 
 step_hostshare() {
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_HOST_SHARE_DIR="${HICLAW_HOST_SHARE_DIR:-${HOME}}"
-        log "  $(msg host_share.label) = ${HICLAW_HOST_SHARE_DIR} (non-interactive, skipped)"
-        export HICLAW_HOST_SHARE_DIR
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_HOST_SHARE_DIR="${AGENTTEAMS_HOST_SHARE_DIR:-${HOME}}"
+        log "  $(msg host_share.label) = ${AGENTTEAMS_HOST_SHARE_DIR} (non-interactive, skipped)"
+        export AGENTTEAMS_HOST_SHARE_DIR
         return 0
     fi
     # ─────────────────────────────────────────────────────────────────
-    local _current="${HICLAW_HOST_SHARE_DIR}"
+    local _current="${AGENTTEAMS_HOST_SHARE_DIR}"
     local _share_dir
     if [ -n "${_current}" ]; then
         read -e -p "$(msg host_share.prompt "$HOME") [${_current}]: " _share_dir
@@ -2681,8 +2681,8 @@ step_hostshare() {
         read -e -p "$(msg host_share.prompt "$HOME"): " _share_dir
     fi
     if [ "${_share_dir}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-    HICLAW_HOST_SHARE_DIR="${_share_dir:-${_current:-$HOME}}"
-    export HICLAW_HOST_SHARE_DIR
+    AGENTTEAMS_HOST_SHARE_DIR="${_share_dir:-${_current:-$HOME}}"
+    export AGENTTEAMS_HOST_SHARE_DIR
 }
 
 step_podman_autostart() {
@@ -2695,31 +2695,31 @@ step_podman_autostart() {
     echo "  2) $(msg podman.autostart.disable)"
     echo ""
 
-    if [ "${HICLAW_UPGRADE}" = "1" ] && [ -n "${HICLAW_PODMAN_AUTOSTART}" ]; then
-        local _disp; if [ "${HICLAW_PODMAN_AUTOSTART}" = "1" ]; then _disp="$(msg podman.autostart.val_enabled)"; else _disp="$(msg podman.autostart.val_disabled)"; fi
+    if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_PODMAN_AUTOSTART}" ]; then
+        local _disp; if [ "${AGENTTEAMS_PODMAN_AUTOSTART}" = "1" ]; then _disp="$(msg podman.autostart.val_enabled)"; else _disp="$(msg podman.autostart.val_disabled)"; fi
         log "$(msg prompt.upgrade_keep "$(msg podman.autostart.title_short)" "${_disp}")"
         local _choice
         read -e -p "$(msg podman.autostart.choice): " _choice
         if [ "${_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         if [ -n "${_choice}" ]; then
             case "${_choice}" in
-                2) HICLAW_PODMAN_AUTOSTART="0" ;;
-                *) HICLAW_PODMAN_AUTOSTART="1" ;;
+                2) AGENTTEAMS_PODMAN_AUTOSTART="0" ;;
+                *) AGENTTEAMS_PODMAN_AUTOSTART="1" ;;
             esac
         fi
-    elif [ -z "${HICLAW_PODMAN_AUTOSTART+x}" ]; then
+    elif [ -z "${AGENTTEAMS_PODMAN_AUTOSTART+x}" ]; then
         local _choice
         read -e -p "$(msg podman.autostart.choice) [1]: " _choice
         if [ "${_choice}" = "b" ]; then STEP_RESULT="back"; return 0; fi
         _choice="${_choice:-1}"
         case "${_choice}" in
-            2) HICLAW_PODMAN_AUTOSTART="0" ;;
-            *) HICLAW_PODMAN_AUTOSTART="1" ;;
+            2) AGENTTEAMS_PODMAN_AUTOSTART="0" ;;
+            *) AGENTTEAMS_PODMAN_AUTOSTART="1" ;;
         esac
     fi
-    HICLAW_PODMAN_AUTOSTART="${HICLAW_PODMAN_AUTOSTART:-1}"
-    export HICLAW_PODMAN_AUTOSTART
-    if [ "${HICLAW_PODMAN_AUTOSTART}" = "1" ]; then
+    AGENTTEAMS_PODMAN_AUTOSTART="${AGENTTEAMS_PODMAN_AUTOSTART:-1}"
+    export AGENTTEAMS_PODMAN_AUTOSTART
+    if [ "${AGENTTEAMS_PODMAN_AUTOSTART}" = "1" ]; then
         log "$(msg podman.autostart.selected_enabled)"
     else
         log "$(msg podman.autostart.selected_disabled)"
@@ -2727,11 +2727,11 @@ step_podman_autostart() {
 }
 
 # ============================================================
-# Setup dedicated Podman autostart service for HiClaw
+# Setup dedicated Podman autostart service for AgentTeams
 # ============================================================
 setup_podman_autostart() {
     # Only execute if using podman and autostart is enabled
-    if [ "${DOCKER_CMD:-docker}" != "podman" ] || [ "${HICLAW_PODMAN_AUTOSTART:-0}" != "1" ]; then
+    if [ "${DOCKER_CMD:-docker}" != "podman" ] || [ "${AGENTTEAMS_PODMAN_AUTOSTART:-0}" != "1" ]; then
         return 0
     fi
 
@@ -2740,11 +2740,11 @@ setup_podman_autostart() {
     local current_user
     current_user="$(whoami)"
 
-    # Define the dedicated HiClaw service content
+    # Define the dedicated AgentTeams service content
     # Strict scoping: Only manage containers matching '--filter name=hiclaw'
     local _service_content="[Unit]
-Description=HiClaw Dedicated Podman Autostart Service
-Documentation=https://github.com/agentscope-ai/HiClaw
+Description=AgentTeams Dedicated Podman Autostart Service
+Documentation=https://github.com/agentscope-ai/AgentTeams
 Wants=network-online.target
 After=network-online.target
 
@@ -2797,7 +2797,7 @@ WantedBy=default.target"
                 log "Native linger enablement failed. Distro security policy requires privileges."
                 if command -v sudo >/dev/null 2>&1; then
                     log "Attempting to enable systemd linger via sudo (enter password if prompted)..."
-                    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+                    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
                         sudo -n loginctl enable-linger "${current_user}" 2>/dev/null && _linger_ok=1 || log "$(msg install.podman.linger_warn)"
                     else
                         sudo loginctl enable-linger "${current_user}" && _linger_ok=1 || log "$(msg install.podman.linger_warn)"
@@ -2840,7 +2840,7 @@ WantedBy=default.target"
 
 install_manager() {
     log "$(msg install.title)"
-    log "$(msg install.registry "${HICLAW_REGISTRY}")"
+    log "$(msg install.registry "${AGENTTEAMS_REGISTRY}")"
     log ""
     log "$(msg install.dir "$(pwd)")"
     log "$(msg install.dir_hint)"
@@ -2849,30 +2849,30 @@ install_manager() {
 
     # Non-interactive fallback: resolve version immediately so image tags are available
     # before the step state machine runs. Interactive mode lets step_version handle it.
-    if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
-        HICLAW_VERSION="${HICLAW_VERSION:-${HICLAW_KNOWN_STABLE_VERSION}}"
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-${AGENTTEAMS_KNOWN_STABLE_VERSION}}"
         resolve_image_tags
     fi
 
     # Migrate legacy env file location before checks
-    local existing_env="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
-    if [ ! -f "${existing_env}" ] && [ -f "./hiclaw-manager.env" ]; then
-        log "Migrating hiclaw-manager.env from current directory to ${existing_env}..."
-        mv "./hiclaw-manager.env" "${existing_env}"
+    local existing_env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
+    if [ ! -f "${existing_env}" ] && [ -f "./agentteams-manager.env" ]; then
+        log "Migrating agentteams-manager.env from current directory to ${existing_env}..."
+        mv "./agentteams-manager.env" "${existing_env}"
     fi
 
     # Orphan volume detection (only when no env file — step_existing handles the env-file case)
     if [ ! -f "${existing_env}" ]; then
-        local data_vol="${HICLAW_DATA_DIR:-hiclaw-data}"
+        local data_vol="${AGENTTEAMS_DATA_DIR:-agentteams-data}"
         if ${DOCKER_CMD} volume ls -q | grep -q "^${data_vol}$"; then
             echo ""
             log "$(msg install.orphan_volume.detected "${data_vol}")"
             log "$(msg install.orphan_volume.warn)"
-            if [ "${HICLAW_NON_INTERACTIVE}" = "1" ]; then
+            if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
                 log "$(msg install.orphan_volume.clean_noninteractive)"
-                ${DOCKER_CMD} stop hiclaw-manager 2>/dev/null || true
-                ${DOCKER_CMD} rm hiclaw-manager 2>/dev/null || true
-                for w in $(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^hiclaw-worker-" || true); do
+                ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
+                ${DOCKER_CMD} rm agentteams-manager 2>/dev/null || true
+                for w in $(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^agentteams-worker-" || true); do
                     ${DOCKER_CMD} stop "${w}" 2>/dev/null || true
                     ${DOCKER_CMD} rm "${w}" 2>/dev/null || true
                 done
@@ -2890,9 +2890,9 @@ install_manager() {
                 ORPHAN_CHOICE="${ORPHAN_CHOICE:-1}"
                 case "${ORPHAN_CHOICE}" in
                     1|clean)
-                        ${DOCKER_CMD} stop hiclaw-manager 2>/dev/null || true
-                        ${DOCKER_CMD} rm hiclaw-manager 2>/dev/null || true
-                        for w in $(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^hiclaw-worker-" || true); do
+                        ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
+                        ${DOCKER_CMD} rm agentteams-manager 2>/dev/null || true
+                        for w in $(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^agentteams-worker-" || true); do
                             ${DOCKER_CMD} stop "${w}" 2>/dev/null || true
                             ${DOCKER_CMD} rm "${w}" 2>/dev/null || true
                         done
@@ -2941,172 +2941,172 @@ install_manager() {
     # ── End state machine ──────────────────────────────────────────────────────
 
     # Post-machine defaults for any steps that were skipped
-    HICLAW_DATA_DIR="${HICLAW_DATA_DIR:-hiclaw-data}"
-    if [ -z "${HICLAW_WORKSPACE_DIR+x}" ] || [ -z "${HICLAW_WORKSPACE_DIR}" ]; then
-        HICLAW_WORKSPACE_DIR="${HOME}/hiclaw-manager"
-        export HICLAW_WORKSPACE_DIR
+    AGENTTEAMS_DATA_DIR="${AGENTTEAMS_DATA_DIR:-agentteams-data}"
+    if [ -z "${AGENTTEAMS_WORKSPACE_DIR+x}" ] || [ -z "${AGENTTEAMS_WORKSPACE_DIR}" ]; then
+        AGENTTEAMS_WORKSPACE_DIR="${HOME}/agentteams-manager"
+        export AGENTTEAMS_WORKSPACE_DIR
     fi
-    HICLAW_WORKSPACE_DIR="$(cd "${HICLAW_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${HICLAW_WORKSPACE_DIR}")"
-    mkdir -p "${HICLAW_WORKSPACE_DIR}"
-    HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}"
-    export HICLAW_MANAGER_RUNTIME
-    HICLAW_DEFAULT_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
-    HICLAW_MATRIX_E2EE="${HICLAW_MATRIX_E2EE:-0}"
-    export HICLAW_MATRIX_E2EE
-    HICLAW_WORKER_IDLE_TIMEOUT="${HICLAW_WORKER_IDLE_TIMEOUT:-720}"
-    export HICLAW_WORKER_IDLE_TIMEOUT
-    HICLAW_HOST_SHARE_DIR="${HICLAW_HOST_SHARE_DIR:-$HOME}"
-    export HICLAW_HOST_SHARE_DIR
+    AGENTTEAMS_WORKSPACE_DIR="$(cd "${AGENTTEAMS_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${AGENTTEAMS_WORKSPACE_DIR}")"
+    mkdir -p "${AGENTTEAMS_WORKSPACE_DIR}"
+    AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
+    export AGENTTEAMS_MANAGER_RUNTIME
+    AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
+    AGENTTEAMS_MATRIX_E2EE="${AGENTTEAMS_MATRIX_E2EE:-0}"
+    export AGENTTEAMS_MATRIX_E2EE
+    AGENTTEAMS_WORKER_IDLE_TIMEOUT="${AGENTTEAMS_WORKER_IDLE_TIMEOUT:-720}"
+    export AGENTTEAMS_WORKER_IDLE_TIMEOUT
+    AGENTTEAMS_HOST_SHARE_DIR="${AGENTTEAMS_HOST_SHARE_DIR:-$HOME}"
+    export AGENTTEAMS_HOST_SHARE_DIR
 
     log ""
 
     # Generate secrets (only if not already set)
     log "$(msg install.generating_secrets)"
-    HICLAW_MANAGER_PASSWORD="${HICLAW_MANAGER_PASSWORD:-$(generate_key)}"
-    HICLAW_REGISTRATION_TOKEN="${HICLAW_REGISTRATION_TOKEN:-$(generate_key)}"
-    HICLAW_MINIO_USER="${HICLAW_MINIO_USER:-${HICLAW_ADMIN_USER}}"
-    HICLAW_MINIO_PASSWORD="${HICLAW_MINIO_PASSWORD:-${HICLAW_ADMIN_PASSWORD}}"
-    HICLAW_MANAGER_GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-$(generate_key)}"
+    AGENTTEAMS_MANAGER_PASSWORD="${AGENTTEAMS_MANAGER_PASSWORD:-$(generate_key)}"
+    AGENTTEAMS_REGISTRATION_TOKEN="${AGENTTEAMS_REGISTRATION_TOKEN:-$(generate_key)}"
+    AGENTTEAMS_MINIO_USER="${AGENTTEAMS_MINIO_USER:-${AGENTTEAMS_ADMIN_USER}}"
+    AGENTTEAMS_MINIO_PASSWORD="${AGENTTEAMS_MINIO_PASSWORD:-${AGENTTEAMS_ADMIN_PASSWORD}}"
+    AGENTTEAMS_MANAGER_GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-$(generate_key)}"
 
     # Matrix AppService tokens — generate once during install/upgrade if not provided.
     # Persisted to env file so they survive controller restarts.
-    HICLAW_MATRIX_APPSERVICE_ENABLED="${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}"
-    export HICLAW_MATRIX_APPSERVICE_ENABLED
-    if [ "${HICLAW_MATRIX_APPSERVICE_ENABLED}" != "false" ] && [ "${HICLAW_MATRIX_APPSERVICE_ENABLED}" != "0" ]; then
-        if [ -z "${HICLAW_MATRIX_APPSERVICE_AS_TOKEN}" ]; then
-            HICLAW_MATRIX_APPSERVICE_AS_TOKEN="$(openssl rand -hex 32)"
+    AGENTTEAMS_MATRIX_APPSERVICE_ENABLED="${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}"
+    export AGENTTEAMS_MATRIX_APPSERVICE_ENABLED
+    if [ "${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED}" != "false" ] && [ "${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED}" != "0" ]; then
+        if [ -z "${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN}" ]; then
+            AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN="$(openssl rand -hex 32)"
             log "  Auto-generated AppService as_token (saved to env file)"
         fi
-        if [ -z "${HICLAW_MATRIX_APPSERVICE_HS_TOKEN}" ]; then
-            HICLAW_MATRIX_APPSERVICE_HS_TOKEN="$(openssl rand -hex 32)"
+        if [ -z "${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN}" ]; then
+            AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN="$(openssl rand -hex 32)"
             log "  Auto-generated AppService hs_token (saved to env file)"
         fi
-        export HICLAW_MATRIX_APPSERVICE_AS_TOKEN
-        export HICLAW_MATRIX_APPSERVICE_HS_TOKEN
+        export AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN
+        export AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN
     fi
 
     # Detect Apple Silicon (M1/M2/M3/M4) - need JVM fix for Higress Console
-    # See: https://github.com/agentscope-ai/HiClaw/issues/249
+    # See: https://github.com/agentscope-ai/AgentTeams/issues/249
     if [ -z "${JVM_ARGS:-}" ] && [ "$(uname -m)" = "arm64" ] && [ "$(uname -s)" = "Darwin" ]; then
         log "Apple Silicon detected - setting JVM_ARGS to fix Higress Console SIGILL issue"
         JVM_ARGS="-XX:+UnlockDiagnosticVMOptions -XX:-UseAESCTRIntrinsics -XX:UseSVE=0"
     fi
 
     # Write .env file
-    ENV_FILE="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+    ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     cat > "${ENV_FILE}" << EOF
-# HiClaw Manager Configuration
+# AgentTeams Manager Configuration
 # Generated by hiclaw-install.sh on $(date)
 
 # Language
-HICLAW_LANGUAGE=${HICLAW_LANGUAGE}
+AGENTTEAMS_LANGUAGE=${AGENTTEAMS_LANGUAGE}
 
 # LLM
-HICLAW_LLM_PROVIDER=${HICLAW_LLM_PROVIDER}
-HICLAW_DEFAULT_MODEL=${HICLAW_DEFAULT_MODEL}
-HICLAW_LLM_API_KEY=${HICLAW_LLM_API_KEY}
-HICLAW_OPENAI_BASE_URL=${HICLAW_OPENAI_BASE_URL:-}
-HICLAW_MODEL_CONTEXT_WINDOW=${HICLAW_MODEL_CONTEXT_WINDOW:-}
-HICLAW_MODEL_MAX_TOKENS=${HICLAW_MODEL_MAX_TOKENS:-}
-HICLAW_MODEL_REASONING=${HICLAW_MODEL_REASONING:-}
-HICLAW_MODEL_VISION=${HICLAW_MODEL_VISION:-}
+AGENTTEAMS_LLM_PROVIDER=${AGENTTEAMS_LLM_PROVIDER}
+AGENTTEAMS_DEFAULT_MODEL=${AGENTTEAMS_DEFAULT_MODEL}
+AGENTTEAMS_LLM_API_KEY=${AGENTTEAMS_LLM_API_KEY}
+AGENTTEAMS_OPENAI_BASE_URL=${AGENTTEAMS_OPENAI_BASE_URL:-}
+AGENTTEAMS_MODEL_CONTEXT_WINDOW=${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}
+AGENTTEAMS_MODEL_MAX_TOKENS=${AGENTTEAMS_MODEL_MAX_TOKENS:-}
+AGENTTEAMS_MODEL_REASONING=${AGENTTEAMS_MODEL_REASONING:-}
+AGENTTEAMS_MODEL_VISION=${AGENTTEAMS_MODEL_VISION:-}
 
 # Embedding model (empty = disabled, default: text-embedding-v4)
-HICLAW_EMBEDDING_MODEL=${HICLAW_EMBEDDING_MODEL}
+AGENTTEAMS_EMBEDDING_MODEL=${AGENTTEAMS_EMBEDDING_MODEL}
 
 # Admin
-HICLAW_ADMIN_USER=${HICLAW_ADMIN_USER}
-HICLAW_ADMIN_PASSWORD=${HICLAW_ADMIN_PASSWORD}
+AGENTTEAMS_ADMIN_USER=${AGENTTEAMS_ADMIN_USER}
+AGENTTEAMS_ADMIN_PASSWORD=${AGENTTEAMS_ADMIN_PASSWORD}
 
 # Ports
-HICLAW_LOCAL_ONLY=${HICLAW_LOCAL_ONLY}
-HICLAW_PORT_GATEWAY=${HICLAW_PORT_GATEWAY}
-HICLAW_PORT_CONSOLE=${HICLAW_PORT_CONSOLE}
-HICLAW_PORT_ELEMENT_WEB=${HICLAW_PORT_ELEMENT_WEB}
-HICLAW_PORT_MANAGER_CONSOLE=${HICLAW_PORT_MANAGER_CONSOLE:-18888}
+AGENTTEAMS_LOCAL_ONLY=${AGENTTEAMS_LOCAL_ONLY}
+AGENTTEAMS_PORT_GATEWAY=${AGENTTEAMS_PORT_GATEWAY}
+AGENTTEAMS_PORT_CONSOLE=${AGENTTEAMS_PORT_CONSOLE}
+AGENTTEAMS_PORT_ELEMENT_WEB=${AGENTTEAMS_PORT_ELEMENT_WEB}
+AGENTTEAMS_PORT_MANAGER_CONSOLE=${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}
 
 # Manager runtime (openclaw | copaw)
-HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-copaw}
+AGENTTEAMS_MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-copaw}
 
 # Matrix
-HICLAW_MATRIX_DOMAIN=${HICLAW_MATRIX_DOMAIN}
-HICLAW_MATRIX_CLIENT_DOMAIN=${HICLAW_MATRIX_CLIENT_DOMAIN}
+AGENTTEAMS_MATRIX_DOMAIN=${AGENTTEAMS_MATRIX_DOMAIN}
+AGENTTEAMS_MATRIX_CLIENT_DOMAIN=${AGENTTEAMS_MATRIX_CLIENT_DOMAIN}
 
 # Gateway
-HICLAW_AI_GATEWAY_DOMAIN=${HICLAW_AI_GATEWAY_DOMAIN}
-HICLAW_MANAGER_GATEWAY_KEY=${HICLAW_MANAGER_GATEWAY_KEY}
+AGENTTEAMS_AI_GATEWAY_DOMAIN=${AGENTTEAMS_AI_GATEWAY_DOMAIN}
+AGENTTEAMS_MANAGER_GATEWAY_KEY=${AGENTTEAMS_MANAGER_GATEWAY_KEY}
 
 # File System
-HICLAW_FS_DOMAIN=${HICLAW_FS_DOMAIN}
-HICLAW_CONSOLE_DOMAIN=${HICLAW_CONSOLE_DOMAIN}
-HICLAW_MINIO_USER=${HICLAW_MINIO_USER}
-HICLAW_MINIO_PASSWORD=${HICLAW_MINIO_PASSWORD}
+AGENTTEAMS_FS_DOMAIN=${AGENTTEAMS_FS_DOMAIN}
+AGENTTEAMS_CONSOLE_DOMAIN=${AGENTTEAMS_CONSOLE_DOMAIN}
+AGENTTEAMS_MINIO_USER=${AGENTTEAMS_MINIO_USER}
+AGENTTEAMS_MINIO_PASSWORD=${AGENTTEAMS_MINIO_PASSWORD}
 
 # Internal
-HICLAW_MANAGER_PASSWORD=${HICLAW_MANAGER_PASSWORD}
-HICLAW_REGISTRATION_TOKEN=${HICLAW_REGISTRATION_TOKEN}
+AGENTTEAMS_MANAGER_PASSWORD=${AGENTTEAMS_MANAGER_PASSWORD}
+AGENTTEAMS_REGISTRATION_TOKEN=${AGENTTEAMS_REGISTRATION_TOKEN}
 
 # GitHub (optional)
-HICLAW_GITHUB_TOKEN=${HICLAW_GITHUB_TOKEN:-}
+AGENTTEAMS_GITHUB_TOKEN=${AGENTTEAMS_GITHUB_TOKEN:-}
 
 # Nacos package import defaults
-HICLAW_NACOS_REGISTRY_URI=${HICLAW_NACOS_REGISTRY_URI:-nacos://market.hiclaw.io:80/public}
-HICLAW_NACOS_USERNAME=${HICLAW_NACOS_USERNAME:-}
-HICLAW_NACOS_PASSWORD=${HICLAW_NACOS_PASSWORD:-}
-HICLAW_NACOS_TOKEN=${HICLAW_NACOS_TOKEN:-}
+AGENTTEAMS_NACOS_REGISTRY_URI=${AGENTTEAMS_NACOS_REGISTRY_URI:-nacos://market.agentteams.io:80/public}
+AGENTTEAMS_NACOS_USERNAME=${AGENTTEAMS_NACOS_USERNAME:-}
+AGENTTEAMS_NACOS_PASSWORD=${AGENTTEAMS_NACOS_PASSWORD:-}
+AGENTTEAMS_NACOS_TOKEN=${AGENTTEAMS_NACOS_TOKEN:-}
 
-# Skills Registry (optional, default: nacos://market.hiclaw.io:80/public)
-HICLAW_SKILLS_API_URL=${HICLAW_SKILLS_API_URL:-nacos://market.hiclaw.io:80/public}
+# Skills Registry (optional, default: nacos://market.agentteams.io:80/public)
+AGENTTEAMS_SKILLS_API_URL=${AGENTTEAMS_SKILLS_API_URL:-nacos://market.agentteams.io:80/public}
 
 # OpenClaw CMS plugin (optional)
-HICLAW_CMS_TRACES_ENABLED=${HICLAW_CMS_TRACES_ENABLED:-false}
-HICLAW_CMS_ENDPOINT=${HICLAW_CMS_ENDPOINT:-}
-HICLAW_CMS_LICENSE_KEY=${HICLAW_CMS_LICENSE_KEY:-}
-HICLAW_CMS_PROJECT=${HICLAW_CMS_PROJECT:-}
-HICLAW_CMS_WORKSPACE=${HICLAW_CMS_WORKSPACE:-}
-HICLAW_CMS_SERVICE_NAME=${HICLAW_CMS_SERVICE_NAME:-hiclaw-manager}
-HICLAW_CMS_METRICS_ENABLED=${HICLAW_CMS_METRICS_ENABLED:-false}
+AGENTTEAMS_CMS_TRACES_ENABLED=${AGENTTEAMS_CMS_TRACES_ENABLED:-false}
+AGENTTEAMS_CMS_ENDPOINT=${AGENTTEAMS_CMS_ENDPOINT:-}
+AGENTTEAMS_CMS_LICENSE_KEY=${AGENTTEAMS_CMS_LICENSE_KEY:-}
+AGENTTEAMS_CMS_PROJECT=${AGENTTEAMS_CMS_PROJECT:-}
+AGENTTEAMS_CMS_WORKSPACE=${AGENTTEAMS_CMS_WORKSPACE:-}
+AGENTTEAMS_CMS_SERVICE_NAME=${AGENTTEAMS_CMS_SERVICE_NAME:-agentteams-manager}
+AGENTTEAMS_CMS_METRICS_ENABLED=${AGENTTEAMS_CMS_METRICS_ENABLED:-false}
 
 # Worker images (for direct container creation)
-HICLAW_WORKER_IMAGE=${WORKER_IMAGE}
-HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
-HICLAW_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
+AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}
+AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
+AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
 
 # Default Worker runtime (openclaw | copaw | hermes)
-HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}
+AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
-HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}
+AGENTTEAMS_MATRIX_E2EE=${AGENTTEAMS_MATRIX_E2EE:-0}
 
 # Matrix AppService
-HICLAW_MATRIX_APPSERVICE_ENABLED=${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}
-HICLAW_MATRIX_APPSERVICE_AS_TOKEN=${HICLAW_MATRIX_APPSERVICE_AS_TOKEN:-}
-HICLAW_MATRIX_APPSERVICE_HS_TOKEN=${HICLAW_MATRIX_APPSERVICE_HS_TOKEN:-}
+AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}
+AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN:-}
+AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN:-}
 
 # Docker API proxy (0=disabled, 1=enabled; default: 1)
-HICLAW_DOCKER_PROXY=${HICLAW_DOCKER_PROXY:-1}
+AGENTTEAMS_DOCKER_PROXY=${AGENTTEAMS_DOCKER_PROXY:-1}
 
 # Docker API proxy: additional allowed image sources (comma-separated)
-HICLAW_PROXY_ALLOWED_REGISTRIES=${HICLAW_PROXY_ALLOWED_REGISTRIES:-}
+AGENTTEAMS_PROXY_ALLOWED_REGISTRIES=${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES:-}
 
 # Worker idle timeout in minutes (default: 720 = 12 hours)
-HICLAW_WORKER_IDLE_TIMEOUT=${HICLAW_WORKER_IDLE_TIMEOUT:-720}
+AGENTTEAMS_WORKER_IDLE_TIMEOUT=${AGENTTEAMS_WORKER_IDLE_TIMEOUT:-720}
 
 # Podman autostart via systemd (0=disabled, 1=enabled)
-HICLAW_PODMAN_AUTOSTART=${HICLAW_PODMAN_AUTOSTART:-0}
+AGENTTEAMS_PODMAN_AUTOSTART=${AGENTTEAMS_PODMAN_AUTOSTART:-0}
 
 # JVM Args for Higress Console (fixes SIGILL on Apple Silicon)
 JVM_ARGS=${JVM_ARGS:-}
 
 # Higress WASM plugin image registry (auto-selected by timezone)
-HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${HICLAW_REGISTRY}
+HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${AGENTTEAMS_REGISTRY}
 
 # Data persistence
-HICLAW_DATA_DIR=${HICLAW_DATA_DIR:-hiclaw-data}
+AGENTTEAMS_DATA_DIR=${AGENTTEAMS_DATA_DIR:-agentteams-data}
 # Manager workspace (skills, memory, state — host-editable)
-HICLAW_WORKSPACE_DIR=${HICLAW_WORKSPACE_DIR:-}
+AGENTTEAMS_WORKSPACE_DIR=${AGENTTEAMS_WORKSPACE_DIR:-}
 # Host directory sharing
-HICLAW_HOST_SHARE_DIR=${HICLAW_HOST_SHARE_DIR:-}
+AGENTTEAMS_HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR:-}
 EOF
 
     chmod 600 "${ENV_FILE}"
@@ -3114,7 +3114,7 @@ EOF
 
     # Detect container runtime socket
     SOCKET_MOUNT_ARGS=""
-    if [ "${HICLAW_MOUNT_SOCKET}" = "1" ]; then
+    if [ "${AGENTTEAMS_MOUNT_SOCKET}" = "1" ]; then
         # Actively ensure the API socket is enabled and active before detection.
         if [ "${DOCKER_CMD:-}" = "podman" ]; then
             ensure_podman_socket
@@ -3126,7 +3126,7 @@ EOF
         else
             log "$(msg install.socket_not_found)"
             # Interactive confirmation when socket not found
-            if [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
+            if [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
                 echo ""
                 echo -e "\033[33m$(msg install.socket_confirm.title)\033[0m"
                 echo ""
@@ -3142,61 +3142,93 @@ EOF
     fi
 
     # Create the data volume if it doesn't already exist (reuse on reinstall)
-    if ! ${DOCKER_CMD} volume ls -q | grep -q "^${HICLAW_DATA_DIR}$"; then
-        ${DOCKER_CMD} volume create "${HICLAW_DATA_DIR}" > /dev/null
+    if ! ${DOCKER_CMD} volume ls -q | grep -q "^${AGENTTEAMS_DATA_DIR}$"; then
+        ${DOCKER_CMD} volume create "${AGENTTEAMS_DATA_DIR}" > /dev/null
     fi
 
     # Data mount: Docker volume
-    DATA_MOUNT_ARGS="-v ${HICLAW_DATA_DIR}:/data"
+    DATA_MOUNT_ARGS="-v ${AGENTTEAMS_DATA_DIR}:/data"
 
-    # Manager workspace mount (always a host directory, defaulting to ~/hiclaw-manager)
-    WORKSPACE_MOUNT_ARGS="-v ${HICLAW_WORKSPACE_DIR}:/root/manager-workspace"
+    # Manager workspace mount (always a host directory, defaulting to ~/agentteams-manager)
+    WORKSPACE_MOUNT_ARGS="-v ${AGENTTEAMS_WORKSPACE_DIR}:/root/manager-workspace"
 
     # Pass host timezone to container so date/time commands reflect local time
-    TZ_ARGS="-e TZ=${HICLAW_TIMEZONE}"
+    TZ_ARGS="-e TZ=${AGENTTEAMS_TIMEZONE}"
 
     # Host directory mount
-    if [ -d "${HICLAW_HOST_SHARE_DIR}" ]; then
-        HOST_SHARE_MOUNT_ARGS="-v ${HICLAW_HOST_SHARE_DIR}:/host-share"
-        log "$(msg host_share.sharing "${HICLAW_HOST_SHARE_DIR}")"
+    if [ -d "${AGENTTEAMS_HOST_SHARE_DIR}" ]; then
+        HOST_SHARE_MOUNT_ARGS="-v ${AGENTTEAMS_HOST_SHARE_DIR}:/host-share"
+        log "$(msg host_share.sharing "${AGENTTEAMS_HOST_SHARE_DIR}")"
     else
-        log "$(msg host_share.not_exist "${HICLAW_HOST_SHARE_DIR}")"
-        HOST_SHARE_MOUNT_ARGS="-v ${HICLAW_HOST_SHARE_DIR}:/host-share"
+        log "$(msg host_share.not_exist "${AGENTTEAMS_HOST_SHARE_DIR}")"
+        HOST_SHARE_MOUNT_ARGS="-v ${AGENTTEAMS_HOST_SHARE_DIR}:/host-share"
     fi
 
     # YOLO mode: pass through if set in environment (enables autonomous decisions)
     YOLO_ARGS=""
-    if [ "${HICLAW_YOLO:-}" = "1" ]; then
-        YOLO_ARGS="-e HICLAW_YOLO=1"
+    if [ "${AGENTTEAMS_YOLO:-}" = "1" ]; then
+        YOLO_ARGS="-e AGENTTEAMS_YOLO=1"
         log "$(msg install.yolo)"
     fi
 
-    # Matrix-plugin debug tracing: pass through if HICLAW_MATRIX_DEBUG=1.
+    # Matrix-plugin debug tracing: pass through if AGENTTEAMS_MATRIX_DEBUG=1.
     # The container entrypoints translate this to OPENCLAW_MATRIX_DEBUG=1
     # so the openclaw matrix plugin emits structured INFO-level lifecycle
     # traces (sync state transitions, room.invite/join, message handler
     # arrival + filter outcomes). Used to diagnose worker/manager hangs.
     MATRIX_DEBUG_ARGS=""
-    if [ "${HICLAW_MATRIX_DEBUG:-}" = "1" ]; then
-        MATRIX_DEBUG_ARGS="-e HICLAW_MATRIX_DEBUG=1"
+    if [ "${AGENTTEAMS_MATRIX_DEBUG:-}" = "1" ]; then
+        MATRIX_DEBUG_ARGS="-e AGENTTEAMS_MATRIX_DEBUG=1"
     fi
 
     # E2EE is already in the env file; but also pass explicitly in case env file is not the source
-    # (HICLAW_MATRIX_E2EE is already written to ENV_FILE above via --env-file)
+    # (AGENTTEAMS_MATRIX_E2EE is already written to ENV_FILE above via --env-file)
 
     # Pull images (manager based on runtime config; all worker runtimes always pulled)
-    LOCAL_IMAGE_PREFIX="hiclaw/"
+    _is_local_image() {
+        case "$1" in
+            hiclaw/*|agentteams/*) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+
+    _legacy_local_image_for() {
+        case "$1" in
+            agentteams/manager:*) printf '%s\n' "hiclaw/hiclaw-manager:${1##*:}" ;;
+            agentteams/manager-copaw:*) printf '%s\n' "hiclaw/hiclaw-manager-copaw:${1##*:}" ;;
+            agentteams/worker-agent:*) printf '%s\n' "hiclaw/worker-agent:${1##*:}" ;;
+            agentteams/copaw-worker:*) printf '%s\n' "hiclaw/copaw-worker:${1##*:}" ;;
+            agentteams/hermes-worker:*) printf '%s\n' "hiclaw/hermes-worker:${1##*:}" ;;
+            agentteams/qwenpaw-worker:*) printf '%s\n' "hiclaw/qwenpaw-worker:${1##*:}" ;;
+            agentteams/agentteams-embedded:*) printf '%s\n' "hiclaw/hiclaw-embedded:${1##*:}" ;;
+            agentteams/agentteams-controller:*) printf '%s\n' "hiclaw/hiclaw-controller:${1##*:}" ;;
+        esac
+    }
+
+    _ensure_local_image_tag() {
+        local _img="$1"
+        [ -z "${_img}" ] && return 1
+        _is_local_image "${_img}" || return 1
+        if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
+            return 0
+        fi
+        local _legacy_img
+        _legacy_img="$(_legacy_local_image_for "${_img}")"
+        if [ -n "${_legacy_img}" ] && ${DOCKER_CMD} image inspect "${_legacy_img}" >/dev/null 2>&1; then
+            ${DOCKER_CMD} tag "${_legacy_img}" "${_img}"
+            return 0
+        fi
+        return 1
+    }
 
     # Helper: pull or skip a single image
     # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
     _pull_image() {
         local _img="$1" _exists_key="$2" _pull_key="$3"
         [ -z "${_img}" ] && return 0
-        if echo "${_img}" | grep -q "^${LOCAL_IMAGE_PREFIX}"; then
-            if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
-                log "$(msg "${_exists_key}" "${_img}")"
-                return 0
-            fi
+        if _ensure_local_image_tag "${_img}"; then
+            log "$(msg "${_exists_key}" "${_img}")"
+            return 0
         fi
         log "$(msg "${_pull_key}" "${_img}")"
         local _attempt=1
@@ -3216,9 +3248,12 @@ EOF
 
     # Embedded controller image (resolve versioned tag, fallback to latest)
     resolve_embedded_image
+    if [ "${AGENTTEAMS_USE_EMBEDDED}" = "1" ]; then
+        _ensure_local_image_tag "${EMBEDDED_IMAGE}" || true
+    fi
 
     # Manager image is always required (select based on runtime)
-    if [ "${HICLAW_MANAGER_RUNTIME}" = "copaw" ]; then
+    if [ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ]; then
         _pull_image "${MANAGER_COPAW_IMAGE}" "install.image.exists" "install.image.pulling_manager"
     else
         _pull_image "${MANAGER_IMAGE}" "install.image.exists" "install.image.pulling_manager"
@@ -3234,53 +3269,53 @@ EOF
     # For new-arch-to-new-arch upgrades, credential files already exist with
     # correct room IDs — we must NOT overwrite them.
     _creds_tmp=""
-    if [ "${HICLAW_UPGRADE:-0}" = "1" ] && [ "${HICLAW_USE_EMBEDDED}" = "1" ]; then
-        # Detect if upgrading from old arch: old arch has no hiclaw-controller container
+    if [ "${AGENTTEAMS_UPGRADE:-0}" = "1" ] && [ "${AGENTTEAMS_USE_EMBEDDED}" = "1" ]; then
+        # Detect if upgrading from old arch: old arch has no agentteams-controller container
         # (or has it as a docker-proxy only, not embedded). Check if the existing
-        # hiclaw-controller is an embedded image (has supervisord) or just a proxy.
+        # agentteams-controller is an embedded image (has supervisord) or just a proxy.
         _is_old_arch=0
-        if ! ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-controller$"; then
+        if ! ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^agentteams-controller$"; then
             _is_old_arch=1
-        elif ${DOCKER_CMD} ps -a --format '{{.Names}} {{.Image}}' 2>/dev/null | grep "^hiclaw-controller " | grep -qv "embedded"; then
+        elif ${DOCKER_CMD} ps -a --format '{{.Names}} {{.Image}}' 2>/dev/null | grep "^agentteams-controller " | grep -qv "embedded"; then
             _is_old_arch=1
         fi
 
         if [ "${_is_old_arch}" = "1" ]; then
         _creds_tmp=$(mktemp -d)
 
-        # docker exec for Matrix/minio paths only works while hiclaw-manager is running.
+        # docker exec for Matrix/minio paths only works while agentteams-manager is running.
         _mgr_creds_tempstart=0
-        if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^hiclaw-manager$'; then
-            if ! ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^hiclaw-manager$'; then
-                log "hiclaw-manager is stopped; starting it temporarily to extract Matrix credentials for upgrade..."
-                ${DOCKER_CMD} start hiclaw-manager 2>/dev/null || true
-                wait_matrix_ready "hiclaw-manager"
+        if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^agentteams-manager$'; then
+            if ! ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentteams-manager$'; then
+                log "agentteams-manager is stopped; starting it temporarily to extract Matrix credentials for upgrade..."
+                ${DOCKER_CMD} start agentteams-manager 2>/dev/null || true
+                wait_matrix_ready "agentteams-manager"
                 _mgr_creds_tempstart=1
             fi
         fi
 
         # Manager password (container Config.Env, then secrets file inside running manager, then data volume)
-        _mgr_pw=$(${DOCKER_CMD} inspect hiclaw-manager --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep '^HICLAW_MANAGER_PASSWORD=' | cut -d= -f2-)
-        if [ -z "${_mgr_pw}" ] && ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^hiclaw-manager$'; then
-            _mgr_pw=$(${DOCKER_CMD} exec hiclaw-manager bash -c 'source /data/hiclaw-secrets.env 2>/dev/null && echo "${HICLAW_MANAGER_PASSWORD}"' 2>/dev/null)
+        _mgr_pw=$(${DOCKER_CMD} inspect agentteams-manager --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep '^AGENTTEAMS_MANAGER_PASSWORD=' | cut -d= -f2-)
+        if [ -z "${_mgr_pw}" ] && ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentteams-manager$'; then
+            _mgr_pw=$(${DOCKER_CMD} exec agentteams-manager bash -c 'source /data/hiclaw-secrets.env 2>/dev/null && echo "${AGENTTEAMS_MANAGER_PASSWORD}"' 2>/dev/null)
         fi
-        if [ -z "${_mgr_pw}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${HICLAW_DATA_DIR}$"; then
-            _mgr_pw=$(hiclaw_read_secret_from_data_volume "${HICLAW_DATA_DIR}" HICLAW_MANAGER_PASSWORD)
+        if [ -z "${_mgr_pw}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${AGENTTEAMS_DATA_DIR}$"; then
+            _mgr_pw=$(hiclaw_read_secret_from_data_volume "${AGENTTEAMS_DATA_DIR}" AGENTTEAMS_MANAGER_PASSWORD)
         fi
 
         # Manager admin DM room ID: login as admin, find DM room with @manager
         _mgr_room=""
         if [ -n "${_mgr_pw}" ]; then
-            _admin_pw=$(grep HICLAW_ADMIN_PASSWORD "${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}" 2>/dev/null | cut -d= -f2-)
-            _admin_user=$(grep HICLAW_ADMIN_USER "${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}" 2>/dev/null | cut -d= -f2-)
+            _admin_pw=$(grep AGENTTEAMS_ADMIN_PASSWORD "${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}" 2>/dev/null | cut -d= -f2-)
+            _admin_user=$(grep AGENTTEAMS_ADMIN_USER "${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}" 2>/dev/null | cut -d= -f2-)
             _admin_user="${_admin_user:-admin}"
-            _matrix_domain=$(grep HICLAW_MATRIX_DOMAIN "${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}" 2>/dev/null | cut -d= -f2-)
-            if [ -n "${_admin_pw}" ] && ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^hiclaw-manager$'; then
-                _admin_token=$(${DOCKER_CMD} exec hiclaw-manager curl -sf -X POST http://127.0.0.1:6167/_matrix/client/v3/login \
+            _matrix_domain=$(grep AGENTTEAMS_MATRIX_DOMAIN "${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}" 2>/dev/null | cut -d= -f2-)
+            if [ -n "${_admin_pw}" ] && ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentteams-manager$'; then
+                _admin_token=$(${DOCKER_CMD} exec agentteams-manager curl -sf -X POST http://127.0.0.1:6167/_matrix/client/v3/login \
                     -H "Content-Type: application/json" \
                     -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${_admin_user}"'"},"password":"'"${_admin_pw}"'"}' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || true)
                 if [ -n "${_admin_token}" ]; then
-                    _mgr_room=$(${DOCKER_CMD} exec hiclaw-manager curl -sf -X GET \
+                    _mgr_room=$(${DOCKER_CMD} exec agentteams-manager curl -sf -X GET \
                         -H "Authorization: Bearer ${_admin_token}" \
                         "http://127.0.0.1:6167/_matrix/client/v3/joined_rooms" 2>/dev/null | python3 -c "
 import sys,json,subprocess
@@ -3288,7 +3323,7 @@ rooms = json.load(sys.stdin).get('joined_rooms',[])
 for room_id in rooms:
     enc = room_id.replace('!','%21')
     members = json.loads(subprocess.check_output([
-        'docker','exec','hiclaw-manager','curl','-sf','-X','GET',
+        'docker','exec','agentteams-manager','curl','-sf','-X','GET',
         '-H','Authorization: Bearer ${_admin_token}',
         'http://127.0.0.1:6167/_matrix/client/v3/rooms/'+enc+'/members'
     ]).decode()).get('chunk',[])
@@ -3301,31 +3336,31 @@ for room_id in rooms:
                 fi
             fi
             if [ -z "${_mgr_room}" ]; then
-                _mgr_room=$(hiclaw_read_admin_dm_room_from_workspace "${HICLAW_WORKSPACE_DIR}")
+                _mgr_room=$(hiclaw_read_admin_dm_room_from_workspace "${AGENTTEAMS_WORKSPACE_DIR}")
             fi
             cat > "${_creds_tmp}/default.env" <<CREDEOF
 WORKER_PASSWORD="${_mgr_pw}"
 WORKER_MINIO_PASSWORD="$(openssl rand -hex 24)"
-WORKER_GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY}"
+WORKER_GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY}"
 WORKER_ROOM_ID="${_mgr_room}"
 CREDEOF
             log "Extracted Manager Matrix password${_mgr_room:+ and room ID}"
         fi
 
         # Worker passwords and room IDs from workers-registry.json
-        if [ -f "${HICLAW_WORKSPACE_DIR}/workers-registry.json" ]; then
-            _worker_names=$(python3 -c "import json; d=json.load(open('${HICLAW_WORKSPACE_DIR}/workers-registry.json')); print(' '.join(d.get('workers',{}).keys()))" 2>/dev/null || true)
+        if [ -f "${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json" ]; then
+            _worker_names=$(python3 -c "import json; d=json.load(open('${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json')); print(' '.join(d.get('workers',{}).keys()))" 2>/dev/null || true)
             for _wname in ${_worker_names}; do
                 _wpw=""
-                if ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^hiclaw-manager$'; then
-                    _wpw=$(${DOCKER_CMD} exec hiclaw-manager cat "/root/hiclaw-fs/agents/${_wname}/credentials/matrix/password" 2>/dev/null || true)
+                if ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentteams-manager$'; then
+                    _wpw=$(${DOCKER_CMD} exec agentteams-manager cat "/root/hiclaw-fs/agents/${_wname}/credentials/matrix/password" 2>/dev/null || true)
                 fi
-                if [ -z "${_wpw}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${HICLAW_DATA_DIR}$"; then
-                    _wpw=$(hiclaw_read_worker_creds_value_from_volume "${HICLAW_DATA_DIR}" "${_wname}" WORKER_PASSWORD)
+                if [ -z "${_wpw}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${AGENTTEAMS_DATA_DIR}$"; then
+                    _wpw=$(hiclaw_read_worker_creds_value_from_volume "${AGENTTEAMS_DATA_DIR}" "${_wname}" WORKER_PASSWORD)
                 fi
-                _wroom=$(python3 -c "import json; d=json.load(open('${HICLAW_WORKSPACE_DIR}/workers-registry.json')); print(d.get('workers',{}).get('${_wname}',{}).get('room_id',''))" 2>/dev/null || true)
-                if [ -z "${_wroom}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${HICLAW_DATA_DIR}$"; then
-                    _wroom=$(hiclaw_read_worker_creds_value_from_volume "${HICLAW_DATA_DIR}" "${_wname}" WORKER_ROOM_ID)
+                _wroom=$(python3 -c "import json; d=json.load(open('${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json')); print(d.get('workers',{}).get('${_wname}',{}).get('room_id',''))" 2>/dev/null || true)
+                if [ -z "${_wroom}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${AGENTTEAMS_DATA_DIR}$"; then
+                    _wroom=$(hiclaw_read_worker_creds_value_from_volume "${AGENTTEAMS_DATA_DIR}" "${_wname}" WORKER_ROOM_ID)
                 fi
                 if [ -n "${_wpw}" ]; then
                     cat > "${_creds_tmp}/${_wname}.env" <<CREDEOF
@@ -3340,21 +3375,21 @@ CREDEOF
         fi
 
         if [ "${_mgr_creds_tempstart}" = "1" ]; then
-            log "Stopping hiclaw-manager after credential extraction (upgrade will recreate containers)..."
-            ${DOCKER_CMD} stop hiclaw-manager 2>/dev/null || true
+            log "Stopping agentteams-manager after credential extraction (upgrade will recreate containers)..."
+            ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
         fi
         fi  # _is_old_arch
     fi
 
     # --- Stop and remove existing containers ---
-    if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^hiclaw-controller$"; then
-        ${DOCKER_CMD} stop hiclaw-controller 2>/dev/null || true
-        ${DOCKER_CMD} rm hiclaw-controller 2>/dev/null || true
+    if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^agentteams-controller$"; then
+        ${DOCKER_CMD} stop agentteams-controller 2>/dev/null || true
+        ${DOCKER_CMD} rm agentteams-controller 2>/dev/null || true
     fi
-    if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^hiclaw-manager$"; then
+    if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^agentteams-manager$"; then
         log "$(msg install.removing_existing)"
-        ${DOCKER_CMD} stop hiclaw-manager 2>/dev/null || true
-        ${DOCKER_CMD} rm hiclaw-manager 2>/dev/null || true
+        ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
+        ${DOCKER_CMD} rm agentteams-manager 2>/dev/null || true
     fi
 
     # Stop and remove worker containers (controller will recreate via CR reconciliation)
@@ -3368,7 +3403,7 @@ CREDEOF
     fi
 
     # Clean up legacy containers (e.g. hiclaw-docker-proxy from v1.0.x)
-    for _legacy in $(${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-' | grep -vE "^(hiclaw-controller|hiclaw-manager|hiclaw-worker-)" || true); do
+    for _legacy in $(${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-' | grep -vE "^(agentteams-controller|agentteams-manager|agentteams-worker-)" || true); do
         log "Removing legacy container: ${_legacy}"
         ${DOCKER_CMD} stop "${_legacy}" 2>/dev/null || true
         ${DOCKER_CMD} rm -f "${_legacy}" 2>/dev/null || true
@@ -3381,7 +3416,7 @@ CREDEOF
         ${DOCKER_CMD} rm -f "${_cleanup_ctr}" 2>/dev/null || true
         ${DOCKER_CMD} run --rm --name "${_cleanup_ctr}" \
             --entrypoint sh \
-            -v "${HICLAW_DATA_DIR}:/data" \
+            -v "${AGENTTEAMS_DATA_DIR}:/data" \
             -v "${_creds_tmp}:/creds:ro" \
             "${EMBEDDED_IMAGE}" -c '
                 rm -rf /data/worker-creds
@@ -3396,150 +3431,150 @@ CREDEOF
     log "$(msg install.starting_manager)"
 
     # Build port binding args
-    if [ "${HICLAW_LOCAL_ONLY:-1}" = "1" ]; then
+    if [ "${AGENTTEAMS_LOCAL_ONLY:-1}" = "1" ]; then
         _port_prefix="127.0.0.1:"
     else
         _port_prefix=""
     fi
 
-    # Ensure hiclaw-net Docker network exists
-    ${DOCKER_CMD} network inspect hiclaw-net >/dev/null 2>&1 || ${DOCKER_CMD} network create hiclaw-net
+    # Ensure agentteams-net Docker network exists
+    ${DOCKER_CMD} network inspect agentteams-net >/dev/null 2>&1 || ${DOCKER_CMD} network create agentteams-net
 
-    if [ "${HICLAW_USE_EMBEDDED}" != "1" ] && [ "${HICLAW_UPGRADE:-0}" = "1" ]; then
+    if [ "${AGENTTEAMS_USE_EMBEDDED}" != "1" ] && [ "${AGENTTEAMS_UPGRADE:-0}" = "1" ]; then
         # Check if current installation is embedded — downgrade to legacy is not supported
-        if ${DOCKER_CMD} ps -a --format '{{.Names}} {{.Image}}' 2>/dev/null | grep "^hiclaw-controller " | grep -q "embedded"; then
-            error "Downgrade from embedded architecture to legacy version (${HICLAW_VERSION}) is not supported."
+        if ${DOCKER_CMD} ps -a --format '{{.Names}} {{.Image}}' 2>/dev/null | grep "^agentteams-controller " | grep -q "embedded"; then
+            error "Downgrade from embedded architecture to legacy version (${AGENTTEAMS_VERSION}) is not supported."
             error "Please use 'make uninstall-embedded' first, then do a clean install of the target version."
             exit 1
         fi
     fi
 
-    if [ "${HICLAW_USE_EMBEDDED}" = "1" ]; then
+    if [ "${AGENTTEAMS_USE_EMBEDDED}" = "1" ]; then
         # ============================================================
         # New architecture: embedded controller + auto-created manager
         # ============================================================
 
         # Internal port: 8080 (Higress gateway inside the container).
         local _internal_gw_port=8080
-        local _matrix_domain="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:${HICLAW_PORT_GATEWAY}}"
-        local _aigw_domain="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
+        local _matrix_domain="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:${AGENTTEAMS_PORT_GATEWAY}}"
+        local _aigw_domain="${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}"
         # Ensure internal gateway port is present (container-internal traffic uses 8080)
         case "${_aigw_domain}" in *:*) ;; *) _aigw_domain="${_aigw_domain}:${_internal_gw_port}" ;; esac
-        local _fs_domain="${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}"
+        local _fs_domain="${AGENTTEAMS_FS_DOMAIN:-fs-local.agentteams.io}"
         case "${_fs_domain}" in *:*) ;; *) _fs_domain="${_fs_domain}:${_internal_gw_port}" ;; esac
 
         # Controller env args
         local _ctrl_env_args=(
-            -e "HICLAW_ADMIN_USER=${HICLAW_ADMIN_USER}"
-            -e "HICLAW_ADMIN_PASSWORD=${HICLAW_ADMIN_PASSWORD}"
-            -e "HICLAW_MANAGER_PASSWORD=${HICLAW_MANAGER_PASSWORD}"
-            -e "HICLAW_REGISTRATION_TOKEN=${HICLAW_REGISTRATION_TOKEN}"
-            -e "HICLAW_MINIO_USER=${HICLAW_MINIO_USER}"
-            -e "HICLAW_MINIO_PASSWORD=${HICLAW_MINIO_PASSWORD}"
-            -e "HICLAW_LLM_PROVIDER=${HICLAW_LLM_PROVIDER}"
-            -e "HICLAW_LLM_API_KEY=${HICLAW_LLM_API_KEY}"
-            -e "HICLAW_DEFAULT_MODEL=${HICLAW_DEFAULT_MODEL}"
-            -e "HICLAW_MANAGER_GATEWAY_KEY=${HICLAW_MANAGER_GATEWAY_KEY}"
-            -e "HICLAW_MANAGER_RUNTIME=${HICLAW_MANAGER_RUNTIME:-copaw}"
-            -e "HICLAW_MANAGER_IMAGE=$([ "${HICLAW_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
-            -e "HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-copaw}"
-            -e "HICLAW_WORKER_IMAGE=${WORKER_IMAGE}"
-            -e "HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
-            -e "HICLAW_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
-            -e "HICLAW_MATRIX_DOMAIN=${_matrix_domain}"
-            -e "HICLAW_ELEMENT_HOMESERVER_URL=http://127.0.0.1:${HICLAW_PORT_GATEWAY}"
-            -e "HICLAW_MATRIX_URL=http://127.0.0.1:6167"
-            -e "HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}"
-            -e "HICLAW_MATRIX_APPSERVICE_ENABLED=${HICLAW_MATRIX_APPSERVICE_ENABLED:-true}"
-            -e "HICLAW_MATRIX_APPSERVICE_AS_TOKEN=${HICLAW_MATRIX_APPSERVICE_AS_TOKEN:-}"
-            -e "HICLAW_MATRIX_APPSERVICE_HS_TOKEN=${HICLAW_MATRIX_APPSERVICE_HS_TOKEN:-}"
-            -e "HICLAW_MINIO_ENDPOINT=http://127.0.0.1:9000"
-            -e "HICLAW_MINIO_BUCKET=hiclaw-storage"
-            -e "HICLAW_STORAGE_PREFIX=hiclaw/hiclaw-storage"
-            -e "HICLAW_FS_ENDPOINT=http://127.0.0.1:9000"
-            -e "HICLAW_AI_GATEWAY_URL=http://${_aigw_domain}"
-            -e "HICLAW_CONTROLLER_URL=http://hiclaw-controller:8090"
-            -e "HICLAW_DOCKER_NETWORK=hiclaw-net"
-            -e "HICLAW_WORKSPACE_DIR=${HICLAW_WORKSPACE_DIR}"
-            -e "HICLAW_HOST_SHARE_DIR=${HICLAW_HOST_SHARE_DIR}"
-            -e "HICLAW_MANAGER_ENABLED=true"
-            -e "HICLAW_PORT_MANAGER_CONSOLE=${HICLAW_PORT_MANAGER_CONSOLE:-18888}"
+            -e "AGENTTEAMS_ADMIN_USER=${AGENTTEAMS_ADMIN_USER}"
+            -e "AGENTTEAMS_ADMIN_PASSWORD=${AGENTTEAMS_ADMIN_PASSWORD}"
+            -e "AGENTTEAMS_MANAGER_PASSWORD=${AGENTTEAMS_MANAGER_PASSWORD}"
+            -e "AGENTTEAMS_REGISTRATION_TOKEN=${AGENTTEAMS_REGISTRATION_TOKEN}"
+            -e "AGENTTEAMS_MINIO_USER=${AGENTTEAMS_MINIO_USER}"
+            -e "AGENTTEAMS_MINIO_PASSWORD=${AGENTTEAMS_MINIO_PASSWORD}"
+            -e "AGENTTEAMS_LLM_PROVIDER=${AGENTTEAMS_LLM_PROVIDER}"
+            -e "AGENTTEAMS_LLM_API_KEY=${AGENTTEAMS_LLM_API_KEY}"
+            -e "AGENTTEAMS_DEFAULT_MODEL=${AGENTTEAMS_DEFAULT_MODEL}"
+            -e "AGENTTEAMS_MANAGER_GATEWAY_KEY=${AGENTTEAMS_MANAGER_GATEWAY_KEY}"
+            -e "AGENTTEAMS_MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
+            -e "AGENTTEAMS_MANAGER_IMAGE=$([ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
+            -e "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
+            -e "AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}"
+            -e "AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
+            -e "AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
+            -e "AGENTTEAMS_MATRIX_DOMAIN=${_matrix_domain}"
+            -e "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
+            -e "AGENTTEAMS_MATRIX_URL=http://127.0.0.1:6167"
+            -e "AGENTTEAMS_MATRIX_E2EE=${AGENTTEAMS_MATRIX_E2EE:-0}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN:-}"
+            -e "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN:-}"
+            -e "AGENTTEAMS_MINIO_ENDPOINT=http://127.0.0.1:9000"
+            -e "AGENTTEAMS_MINIO_BUCKET=agentteams-storage"
+            -e "AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage"
+            -e "AGENTTEAMS_FS_ENDPOINT=http://127.0.0.1:9000"
+            -e "AGENTTEAMS_AI_GATEWAY_URL=http://${_aigw_domain}"
+            -e "AGENTTEAMS_CONTROLLER_URL=http://agentteams-controller:8090"
+            -e "AGENTTEAMS_DOCKER_NETWORK=agentteams-net"
+            -e "AGENTTEAMS_WORKSPACE_DIR=${AGENTTEAMS_WORKSPACE_DIR}"
+            -e "AGENTTEAMS_HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR}"
+            -e "AGENTTEAMS_MANAGER_ENABLED=true"
+            -e "AGENTTEAMS_PORT_MANAGER_CONSOLE=${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}"
         )
 
         # Timezone
-        if [ -n "${HICLAW_TIMEZONE:-}" ]; then
-            _ctrl_env_args+=(-e "TZ=${HICLAW_TIMEZONE}")
+        if [ -n "${AGENTTEAMS_TIMEZONE:-}" ]; then
+            _ctrl_env_args+=(-e "TZ=${AGENTTEAMS_TIMEZONE}")
         fi
 
         # Yolo mode
-        if [ "${HICLAW_YOLO:-}" = "1" ]; then
-            _ctrl_env_args+=(-e "HICLAW_YOLO=1")
+        if [ "${AGENTTEAMS_YOLO:-}" = "1" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_YOLO=1")
         fi
 
         # Matrix-plugin debug tracing — propagated to every manager + worker
         # the controller spawns, then translated to OPENCLAW_MATRIX_DEBUG=1
         # by the container entrypoints. Use this to diagnose
         # "worker did not join" / "manager replied empty" hangs.
-        if [ "${HICLAW_MATRIX_DEBUG:-}" = "1" ]; then
-            _ctrl_env_args+=(-e "HICLAW_MATRIX_DEBUG=1")
+        if [ "${AGENTTEAMS_MATRIX_DEBUG:-}" = "1" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_MATRIX_DEBUG=1")
         fi
 
         # Optional: GitHub token
-        if [ -n "${HICLAW_GITHUB_TOKEN:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_GITHUB_TOKEN=${HICLAW_GITHUB_TOKEN}")
+        if [ -n "${AGENTTEAMS_GITHUB_TOKEN:-}" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_GITHUB_TOKEN=${AGENTTEAMS_GITHUB_TOKEN}")
         fi
 
         # Optional: embedding model
-        if [ -n "${HICLAW_EMBEDDING_MODEL:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_EMBEDDING_MODEL=${HICLAW_EMBEDDING_MODEL}")
+        if [ -n "${AGENTTEAMS_EMBEDDING_MODEL:-}" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_EMBEDDING_MODEL=${AGENTTEAMS_EMBEDDING_MODEL}")
         fi
 
         # Optional: OpenAI-compatible base URL
-        if [ -n "${HICLAW_OPENAI_BASE_URL:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_OPENAI_BASE_URL=${HICLAW_OPENAI_BASE_URL}")
+        if [ -n "${AGENTTEAMS_OPENAI_BASE_URL:-}" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_OPENAI_BASE_URL=${AGENTTEAMS_OPENAI_BASE_URL}")
         fi
         # Optional: language
-        if [ -n "${HICLAW_LANGUAGE:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_LANGUAGE=${HICLAW_LANGUAGE}")
+        if [ -n "${AGENTTEAMS_LANGUAGE:-}" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_LANGUAGE=${AGENTTEAMS_LANGUAGE}")
         fi
 
         # Optional: CMS/ARMS observability. In embedded mode the controller
         # spawns the Manager and Workers, so it must receive these settings.
-        _ctrl_env_args+=(-e "HICLAW_CMS_TRACES_ENABLED=${HICLAW_CMS_TRACES_ENABLED:-false}")
-        _ctrl_env_args+=(-e "HICLAW_CMS_SERVICE_NAME=${HICLAW_CMS_SERVICE_NAME:-hiclaw-manager}")
-        _ctrl_env_args+=(-e "HICLAW_CMS_METRICS_ENABLED=${HICLAW_CMS_METRICS_ENABLED:-false}")
-        if [ -n "${HICLAW_CMS_ENDPOINT:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_CMS_ENDPOINT=${HICLAW_CMS_ENDPOINT}")
+        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_TRACES_ENABLED=${AGENTTEAMS_CMS_TRACES_ENABLED:-false}")
+        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_SERVICE_NAME=${AGENTTEAMS_CMS_SERVICE_NAME:-agentteams-manager}")
+        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_METRICS_ENABLED=${AGENTTEAMS_CMS_METRICS_ENABLED:-false}")
+        if [ -n "${AGENTTEAMS_CMS_ENDPOINT:-}" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_ENDPOINT=${AGENTTEAMS_CMS_ENDPOINT}")
         fi
-        if [ -n "${HICLAW_CMS_LICENSE_KEY:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_CMS_LICENSE_KEY=${HICLAW_CMS_LICENSE_KEY}")
+        if [ -n "${AGENTTEAMS_CMS_LICENSE_KEY:-}" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_LICENSE_KEY=${AGENTTEAMS_CMS_LICENSE_KEY}")
         fi
-        if [ -n "${HICLAW_CMS_PROJECT:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_CMS_PROJECT=${HICLAW_CMS_PROJECT}")
+        if [ -n "${AGENTTEAMS_CMS_PROJECT:-}" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_PROJECT=${AGENTTEAMS_CMS_PROJECT}")
         fi
-        if [ -n "${HICLAW_CMS_WORKSPACE:-}" ]; then
-            _ctrl_env_args+=(-e "HICLAW_CMS_WORKSPACE=${HICLAW_CMS_WORKSPACE}")
+        if [ -n "${AGENTTEAMS_CMS_WORKSPACE:-}" ]; then
+            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_WORKSPACE=${AGENTTEAMS_CMS_WORKSPACE}")
         fi
 
         # shellcheck disable=SC2086
         ${DOCKER_CMD} run -d \
-            --name hiclaw-controller \
-            --network hiclaw-net \
-            --network-alias matrix-local.hiclaw.io \
-            --network-alias aigw-local.hiclaw.io \
-            --network-alias fs-local.hiclaw.io \
+            --name agentteams-controller \
+            --network agentteams-net \
+            --network-alias matrix-local.agentteams.io \
+            --network-alias aigw-local.agentteams.io \
+            --network-alias fs-local.agentteams.io \
             "${_ctrl_env_args[@]}" \
             -v "${CONTAINER_SOCK}:/var/run/docker.sock" \
             --security-opt label=disable \
-            -v "${HICLAW_DATA_DIR}:/data" \
-            -v "${HICLAW_WORKSPACE_DIR}:/root/hiclaw-fs/agents/manager" \
-            -p "${_port_prefix}${HICLAW_PORT_GATEWAY}:8080" \
-            -p "${_port_prefix}${HICLAW_PORT_CONSOLE}:8001" \
-            -p "${_port_prefix}${HICLAW_PORT_ELEMENT_WEB:-18088}:8088" \
+            -v "${AGENTTEAMS_DATA_DIR}:/data" \
+            -v "${AGENTTEAMS_WORKSPACE_DIR}:/root/hiclaw-fs/agents/manager" \
+            -p "${_port_prefix}${AGENTTEAMS_PORT_GATEWAY}:8080" \
+            -p "${_port_prefix}${AGENTTEAMS_PORT_CONSOLE}:8001" \
+            -p "${_port_prefix}${AGENTTEAMS_PORT_ELEMENT_WEB:-18088}:8088" \
             --restart unless-stopped \
             "${EMBEDDED_IMAGE}"
 
-        log "Embedded controller started: hiclaw-controller"
+        log "Embedded controller started: agentteams-controller"
 
         # Wait for infrastructure inside the controller container
         _wait_for_url() {
@@ -3558,16 +3593,16 @@ CREDEOF
             return 1
         }
 
-        _wait_for_url "http://127.0.0.1:6167/_tuwunel/server_version" hiclaw-controller 120 "Tuwunel (Matrix)" || exit 1
-        _wait_for_url "http://127.0.0.1:9000/minio/health/live" hiclaw-controller 60 "MinIO" || exit 1
-        _wait_for_url "http://127.0.0.1:8080/status" hiclaw-controller 120 "Higress Gateway" || exit 1
+        _wait_for_url "http://127.0.0.1:6167/_tuwunel/server_version" agentteams-controller 120 "Tuwunel (Matrix)" || exit 1
+        _wait_for_url "http://127.0.0.1:9000/minio/health/live" agentteams-controller 60 "MinIO" || exit 1
+        _wait_for_url "http://127.0.0.1:8080/status" agentteams-controller 120 "Higress Gateway" || exit 1
 
         # Wait for controller to create Manager Agent container
         log "Waiting for Manager Agent container..."
         local _mgr_wait=0
         local _mgr_max=300
         while [ $_mgr_wait -lt $_mgr_max ]; do
-            if ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-manager$"; then
+            if ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q "^agentteams-manager$"; then
                 log "Manager Agent container detected (${_mgr_wait}s)"
                 break
             fi
@@ -3577,7 +3612,7 @@ CREDEOF
         if [ $_mgr_wait -ge $_mgr_max ]; then
             log "ERROR: Manager Agent container not created after ${_mgr_max}s"
             log "Controller logs:"
-            ${DOCKER_CMD} exec hiclaw-controller tail -30 /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null || true
+            ${DOCKER_CMD} exec agentteams-controller tail -30 /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null || true
             exit 1
         fi
 
@@ -3586,7 +3621,7 @@ CREDEOF
         local _agent_wait=0
         while [ $_agent_wait -lt 120 ]; do
             local _state
-            _state=$(${DOCKER_CMD} inspect --format '{{.State.Status}}' hiclaw-manager 2>/dev/null || echo "missing")
+            _state=$(${DOCKER_CMD} inspect --format '{{.State.Status}}' agentteams-manager 2>/dev/null || echo "missing")
             if [ "${_state}" = "running" ]; then
                 log "Manager Agent is running"
                 break
@@ -3596,8 +3631,8 @@ CREDEOF
         done
 
         # Enable yolo mode in agent if requested
-        if [ "${HICLAW_YOLO:-}" = "1" ]; then
-            ${DOCKER_CMD} exec hiclaw-manager touch /root/manager-workspace/yolo-mode 2>/dev/null || true
+        if [ "${AGENTTEAMS_YOLO:-}" = "1" ]; then
+            ${DOCKER_CMD} exec agentteams-manager touch /root/manager-workspace/yolo-mode 2>/dev/null || true
         fi
 
         # Wait for the controller to send the first-boot welcome message.
@@ -3605,30 +3640,30 @@ CREDEOF
         # (b) Higress WASM key-auth propagation actually clearing /v1/chat/completions
         # for the Manager's gateway key — typically ~45-90s on a fresh install.
         # We poll Manager CR Status.WelcomeSent via the in-container hiclaw CLI,
-        # exec'd inside hiclaw-controller (the source-of-truth container — its
+        # exec'd inside agentteams-controller (the source-of-truth container — its
         # bundled CLI binary is always in lockstep with whatever controller
         # binary is currently serving the HTTP API, since they're the same
-        # `go build` output. The hiclaw-manager container's CLI may lag the
+        # `go build` output. The agentteams-manager container's CLI may lag the
         # controller across image upgrades and silently drop the welcomeSent
         # field, leaving this loop hung). The controller container mints a
         # long-lived admin SA token at startup and writes it to
-        # HICLAW_AUTH_TOKEN_FILE=/var/run/hiclaw/cli-token (set as a Dockerfile
-        # ENV default), so a bare `docker exec hiclaw-controller hiclaw …`
+        # AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/hiclaw/cli-token (set as a Dockerfile
+        # ENV default), so a bare `docker exec agentteams-controller hiclaw …`
         # auto-discovers both the endpoint and the token. There is a brief
         # window after container start before bootstrapAdminCLIToken completes
         # where the file may be empty / absent — the loop's silent retry
         # handles that the same way it handles the manager-not-yet-running
         # case below.
-        if ${DOCKER_CMD} exec hiclaw-controller sh -c 'command -v hiclaw' >/dev/null 2>&1; then
+        if ${DOCKER_CMD} exec agentteams-controller sh -c 'command -v hiclaw' >/dev/null 2>&1; then
             log "$(msg install.welcome_msg.waiting)"
             local _welcome_wait=0
-            local _welcome_max="${HICLAW_WELCOME_TIMEOUT:-300}"
+            local _welcome_max="${AGENTTEAMS_WELCOME_TIMEOUT:-300}"
             local _welcome_done=0
             while [ $_welcome_wait -lt $_welcome_max ]; do
                 # `tr -d` strips whitespace/CR so the grep stays robust to
                 # any future change in go-json field ordering or formatting.
                 local _wjson
-                _wjson=$(${DOCKER_CMD} exec hiclaw-controller \
+                _wjson=$(${DOCKER_CMD} exec agentteams-controller \
                     hiclaw get managers default -o json 2>/dev/null || true)
                 if [ -n "${_wjson}" ] && printf '%s' "${_wjson}" | tr -d ' \r\n' | grep -q '"welcomeSent":true'; then
                     log "$(msg install.welcome_msg.confirmed "${_welcome_wait}")"
@@ -3655,22 +3690,22 @@ CREDEOF
         # Legacy architecture: all-in-one manager container
         # ============================================================
 
-        NETWORK_ARGS="--network hiclaw-net"
-        NETWORK_ALIAS_ARGS="--network-alias matrix-local.hiclaw.io --network-alias aigw-local.hiclaw.io --network-alias fs-local.hiclaw.io"
-        for _domain in "${HICLAW_MATRIX_CLIENT_DOMAIN:-}" "${HICLAW_CONSOLE_DOMAIN:-}"; do
-            if [ -n "${_domain}" ] && [[ "${_domain}" == *-local.hiclaw.io ]]; then
+        NETWORK_ARGS="--network agentteams-net"
+        NETWORK_ALIAS_ARGS="--network-alias matrix-local.agentteams.io --network-alias aigw-local.agentteams.io --network-alias fs-local.agentteams.io"
+        for _domain in "${AGENTTEAMS_MATRIX_CLIENT_DOMAIN:-}" "${AGENTTEAMS_CONSOLE_DOMAIN:-}"; do
+            if [ -n "${_domain}" ] && [[ "${_domain}" == *-local.agentteams.io ]]; then
                 NETWORK_ALIAS_ARGS="${NETWORK_ALIAS_ARGS} --network-alias ${_domain}"
             fi
         done
 
         # Start Docker API proxy if enabled (security layer between Manager and Docker daemon)
         PROXY_ARGS=""
-        if [ "${HICLAW_DOCKER_PROXY:-1}" = "1" ] && [ -n "${CONTAINER_SOCK:-}" ]; then
-            local _proxy_image="${HICLAW_REGISTRY}/higress/hiclaw-docker-proxy:${HICLAW_VERSION}"
+        if [ "${AGENTTEAMS_DOCKER_PROXY:-1}" = "1" ] && [ -n "${CONTAINER_SOCK:-}" ]; then
+            local _proxy_image="${AGENTTEAMS_REGISTRY}/higress/hiclaw-docker-proxy:${AGENTTEAMS_VERSION}"
             # Try versioned tag, fallback to latest
             if ! ${DOCKER_CMD} image inspect "${_proxy_image}" >/dev/null 2>&1; then
                 ${DOCKER_CMD} pull "${_proxy_image}" 2>/dev/null || {
-                    _proxy_image="${HICLAW_REGISTRY}/higress/hiclaw-docker-proxy:latest"
+                    _proxy_image="${AGENTTEAMS_REGISTRY}/higress/hiclaw-docker-proxy:latest"
                     ${DOCKER_CMD} pull "${_proxy_image}" 2>/dev/null || true
                 }
             fi
@@ -3678,44 +3713,44 @@ CREDEOF
                 log "Starting Docker API proxy..."
                 ${DOCKER_CMD} run -d \
                     --name hiclaw-docker-proxy \
-                    --network hiclaw-net \
+                    --network agentteams-net \
                     -v "${CONTAINER_SOCK}:/var/run/docker.sock" \
                     --security-opt label=disable \
-                    -e HICLAW_WORKER_IMAGE="${WORKER_IMAGE}" \
-                    -e HICLAW_COPAW_WORKER_IMAGE="${COPAW_WORKER_IMAGE}" \
-                    -e HICLAW_HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE}" \
-                    ${HICLAW_PROXY_ALLOWED_REGISTRIES:+-e HICLAW_PROXY_ALLOWED_REGISTRIES="${HICLAW_PROXY_ALLOWED_REGISTRIES}"} \
+                    -e AGENTTEAMS_WORKER_IMAGE="${WORKER_IMAGE}" \
+                    -e AGENTTEAMS_COPAW_WORKER_IMAGE="${COPAW_WORKER_IMAGE}" \
+                    -e AGENTTEAMS_HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE}" \
+                    ${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES:+-e AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}"} \
                     --restart unless-stopped \
                     "${_proxy_image}"
-                PROXY_ARGS="-e HICLAW_CONTROLLER_URL=http://hiclaw-docker-proxy:2375 -e HICLAW_CONTAINER_API=http://hiclaw-docker-proxy:2375"
+                PROXY_ARGS="-e AGENTTEAMS_CONTROLLER_URL=http://hiclaw-docker-proxy:2375 -e AGENTTEAMS_CONTAINER_API=http://hiclaw-docker-proxy:2375"
                 SOCKET_MOUNT_ARGS=""
             fi
         fi
 
         # Pass host timezone to container
         TZ_ARGS=""
-        if [ -n "${HICLAW_TIMEZONE:-}" ]; then
-            TZ_ARGS="-e TZ=${HICLAW_TIMEZONE}"
+        if [ -n "${AGENTTEAMS_TIMEZONE:-}" ]; then
+            TZ_ARGS="-e TZ=${AGENTTEAMS_TIMEZONE}"
         fi
 
         YOLO_ARGS=""
-        if [ "${HICLAW_YOLO:-}" = "1" ]; then
-            YOLO_ARGS="-e HICLAW_YOLO=1"
+        if [ "${AGENTTEAMS_YOLO:-}" = "1" ]; then
+            YOLO_ARGS="-e AGENTTEAMS_YOLO=1"
         fi
 
         MATRIX_DEBUG_ARGS=""
-        if [ "${HICLAW_MATRIX_DEBUG:-}" = "1" ]; then
-            MATRIX_DEBUG_ARGS="-e HICLAW_MATRIX_DEBUG=1"
+        if [ "${AGENTTEAMS_MATRIX_DEBUG:-}" = "1" ]; then
+            MATRIX_DEBUG_ARGS="-e AGENTTEAMS_MATRIX_DEBUG=1"
         fi
 
         # shellcheck disable=SC2086
         ${DOCKER_CMD} run -d \
-            --name hiclaw-manager \
+            --name agentteams-manager \
             --env-file "${ENV_FILE}" \
             -e HOME=/root/manager-workspace \
             -w /root/manager-workspace \
-            -e HOST_ORIGINAL_HOME="${HICLAW_HOST_SHARE_DIR}" \
-            -e HICLAW_MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-copaw}" \
+            -e HOST_ORIGINAL_HOME="${AGENTTEAMS_HOST_SHARE_DIR}" \
+            -e AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}" \
             ${JVM_ARGS:+-e JVM_ARGS="${JVM_ARGS}"} \
             ${YOLO_ARGS} \
             ${MATRIX_DEBUG_ARGS} \
@@ -3724,27 +3759,27 @@ CREDEOF
             ${NETWORK_ARGS} \
             ${NETWORK_ALIAS_ARGS} \
             ${PROXY_ARGS} \
-            -p "${_port_prefix}${HICLAW_PORT_GATEWAY}:8080" \
-            -p "${_port_prefix}${HICLAW_PORT_CONSOLE}:8001" \
-            -p "${_port_prefix}${HICLAW_PORT_ELEMENT_WEB:-18088}:8088" \
-            -p "127.0.0.1:${HICLAW_PORT_MANAGER_CONSOLE:-18888}:18888" \
+            -p "${_port_prefix}${AGENTTEAMS_PORT_GATEWAY}:8080" \
+            -p "${_port_prefix}${AGENTTEAMS_PORT_CONSOLE}:8001" \
+            -p "${_port_prefix}${AGENTTEAMS_PORT_ELEMENT_WEB:-18088}:8088" \
+            -p "127.0.0.1:${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}:18888" \
             ${DATA_MOUNT_ARGS} \
             ${WORKSPACE_MOUNT_ARGS} \
             ${HOST_SHARE_MOUNT_ARGS} \
             --restart unless-stopped \
-            "$([ "${HICLAW_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
+            "$([ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
 
         # Wait for Manager agent to be ready
-        wait_manager_ready "hiclaw-manager"
+        wait_manager_ready "agentteams-manager"
 
         # Wait for Matrix server to be ready
-        wait_matrix_ready "hiclaw-manager"
+        wait_matrix_ready "agentteams-manager"
 
         # Post-install verification (non-fatal: warnings only)
         local _verify_script
         _verify_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hiclaw-verify.sh"
         if [ -f "${_verify_script}" ]; then
-            bash "${_verify_script}" "hiclaw-manager" || {
+            bash "${_verify_script}" "agentteams-manager" || {
                 log "WARNING: Some post-install checks failed. Re-run: bash install/hiclaw-verify.sh"
             }
         fi
@@ -3752,7 +3787,7 @@ CREDEOF
     unset _port_prefix
 
     # Apply Podman autostart if selected and environment matches
-    if [ "${DOCKER_CMD}" = "podman" ] && [ "${HICLAW_PODMAN_AUTOSTART:-0}" = "1" ]; then
+    if [ "${DOCKER_CMD}" = "podman" ] && [ "${AGENTTEAMS_PODMAN_AUTOSTART:-0}" = "1" ]; then
         setup_podman_autostart
     fi
 
@@ -3760,18 +3795,18 @@ CREDEOF
     log "$(msg success.title)"
     log ""
     log "$(msg success.domains_configured)"
-    log "  ${HICLAW_MATRIX_DOMAIN%%:*} ${HICLAW_MATRIX_CLIENT_DOMAIN} ${HICLAW_AI_GATEWAY_DOMAIN} ${HICLAW_FS_DOMAIN} ${HICLAW_CONSOLE_DOMAIN}"
+    log "  ${AGENTTEAMS_MATRIX_DOMAIN%%:*} ${AGENTTEAMS_MATRIX_CLIENT_DOMAIN} ${AGENTTEAMS_AI_GATEWAY_DOMAIN} ${AGENTTEAMS_FS_DOMAIN} ${AGENTTEAMS_CONSOLE_DOMAIN}"
     log ""
     local lan_ip
     lan_ip=$(detect_lan_ip)
     echo -e "\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
     echo -e "\033[33m  $(msg success.open_url)\033[0m"
     echo -e "\033[33m                                                                                 \033[0m"
-    echo -e "\033[1;36m    http://127.0.0.1:${HICLAW_PORT_ELEMENT_WEB:-18088}/#/login\033[0m"
+    echo -e "\033[1;36m    http://127.0.0.1:${AGENTTEAMS_PORT_ELEMENT_WEB:-18088}/#/login\033[0m"
     echo -e "\033[33m                                                                                 \033[0m"
     echo -e "\033[33m  $(msg success.login_with)\033[0m"
-    echo -e "\033[33m    $(msg success.username "${HICLAW_ADMIN_USER}")\033[0m"
-    echo -e "\033[33m    $(msg success.password "${HICLAW_ADMIN_PASSWORD}")\033[0m"
+    echo -e "\033[33m    $(msg success.username "${AGENTTEAMS_ADMIN_USER}")\033[0m"
+    echo -e "\033[33m    $(msg success.password "${AGENTTEAMS_ADMIN_PASSWORD}")\033[0m"
     echo -e "\033[33m                                                                                 \033[0m"
     echo -e "\033[33m  $(msg success.after_login)\033[0m"
     echo -e "\033[33m    $(msg success.tell_it)\033[0m"
@@ -3782,26 +3817,26 @@ CREDEOF
     echo -e "\033[33m                                                                                 \033[0m"
     if [ -n "${lan_ip}" ]; then
         echo -e "\033[33m    $(msg success.mobile_step1)\033[0m"
-        echo -e "\033[33m    $(msg success.mobile_step2 "http://${lan_ip}:${HICLAW_PORT_GATEWAY}")\033[0m"
+        echo -e "\033[33m    $(msg success.mobile_step2 "http://${lan_ip}:${AGENTTEAMS_PORT_GATEWAY}")\033[0m"
         echo -e "\033[33m    $(msg success.mobile_step3)\033[0m"
-        echo -e "\033[33m         $(msg success.mobile_username "${HICLAW_ADMIN_USER}")\033[0m"
-        echo -e "\033[33m         $(msg success.mobile_password "${HICLAW_ADMIN_PASSWORD}")\033[0m"
+        echo -e "\033[33m         $(msg success.mobile_username "${AGENTTEAMS_ADMIN_USER}")\033[0m"
+        echo -e "\033[33m         $(msg success.mobile_password "${AGENTTEAMS_ADMIN_PASSWORD}")\033[0m"
     else
         echo -e "\033[33m    $(msg success.mobile_step1)\033[0m"
-        echo -e "\033[33m    $(msg success.mobile_step2_noip "${HICLAW_PORT_GATEWAY}")\033[0m"
+        echo -e "\033[33m    $(msg success.mobile_step2_noip "${AGENTTEAMS_PORT_GATEWAY}")\033[0m"
         echo -e "\033[33m    $(msg success.mobile_noip_hint)\033[0m"
         echo -e "\033[33m    $(msg success.mobile_step3)\033[0m"
-        echo -e "\033[33m         $(msg success.mobile_username "${HICLAW_ADMIN_USER}")\033[0m"
-        echo -e "\033[33m         $(msg success.mobile_password "${HICLAW_ADMIN_PASSWORD}")\033[0m"
+        echo -e "\033[33m         $(msg success.mobile_username "${AGENTTEAMS_ADMIN_USER}")\033[0m"
+        echo -e "\033[33m         $(msg success.mobile_password "${AGENTTEAMS_ADMIN_PASSWORD}")\033[0m"
     fi
     echo -e "\033[33m                                                                                 \033[0m"
     echo -e "\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
     log ""
     log "$(msg success.other_consoles)"
-    log "$(msg success.higress_console "${HICLAW_PORT_CONSOLE}" "${HICLAW_ADMIN_USER}" "${HICLAW_ADMIN_PASSWORD}")"
-    if [ "${HICLAW_USE_EMBEDDED}" != "1" ]; then
-        log "$(msg success.manager_console "${HICLAW_PORT_MANAGER_CONSOLE:-18888}")"
-        log "$(msg success.manager_console_gateway "${HICLAW_ADMIN_USER}" "${HICLAW_ADMIN_PASSWORD}")"
+    log "$(msg success.higress_console "${AGENTTEAMS_PORT_CONSOLE}" "${AGENTTEAMS_ADMIN_USER}" "${AGENTTEAMS_ADMIN_PASSWORD}")"
+    if [ "${AGENTTEAMS_USE_EMBEDDED}" != "1" ]; then
+        log "$(msg success.manager_console "${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}")"
+        log "$(msg success.manager_console_gateway "${AGENTTEAMS_ADMIN_USER}" "${AGENTTEAMS_ADMIN_PASSWORD}")"
     fi
     log ""
     log "$(msg success.switch_llm.title)"
@@ -3811,13 +3846,13 @@ CREDEOF
     log ""
     log "$(msg success.tip)"
     log ""
-    if [ "${HICLAW_LOCAL_ONLY:-1}" != "1" ]; then
+    if [ "${AGENTTEAMS_LOCAL_ONLY:-1}" != "1" ]; then
         echo -e "\033[33m$(msg port.local_only.https_hint)\033[0m"
         log ""
     fi
     log "$(msg success.config_file "${ENV_FILE}")"
-    log "$(msg success.data_volume "${HICLAW_DATA_DIR}")"
-    log "$(msg success.workspace "${HICLAW_WORKSPACE_DIR}")"
+    log "$(msg success.data_volume "${AGENTTEAMS_DATA_DIR}")"
+    log "$(msg success.workspace "${AGENTTEAMS_WORKSPACE_DIR}")"
 }
 
 # ============================================================
@@ -3851,7 +3886,7 @@ install_worker() {
     [ -z "${FS_KEY}" ] && die "$(msg error.fs_key_required)"
     [ -z "${FS_SECRET}" ] && die "$(msg error.fs_secret_required)"
 
-    local CONTAINER_NAME="hiclaw-worker-${WORKER_NAME}"
+    local CONTAINER_NAME="agentteams-worker-${WORKER_NAME}"
 
     # Handle reset
     if [ "${RESET}" = true ]; then
@@ -3871,30 +3906,30 @@ install_worker() {
     local DOCKER_ENV=""
     DOCKER_ENV="${DOCKER_ENV} -e HOME=/root/hiclaw-fs/agents/${WORKER_NAME}"
     DOCKER_ENV="${DOCKER_ENV} -w /root/hiclaw-fs/agents/${WORKER_NAME}"
-    DOCKER_ENV="${DOCKER_ENV} -e HICLAW_WORKER_NAME=${WORKER_NAME}"
-    DOCKER_ENV="${DOCKER_ENV} -e HICLAW_FS_ENDPOINT=${FS}"
-    DOCKER_ENV="${DOCKER_ENV} -e HICLAW_FS_ACCESS_KEY=${FS_KEY}"
-    DOCKER_ENV="${DOCKER_ENV} -e HICLAW_FS_SECRET_KEY=${FS_SECRET}"
+    DOCKER_ENV="${DOCKER_ENV} -e AGENTTEAMS_WORKER_NAME=${WORKER_NAME}"
+    DOCKER_ENV="${DOCKER_ENV} -e AGENTTEAMS_FS_ENDPOINT=${FS}"
+    DOCKER_ENV="${DOCKER_ENV} -e AGENTTEAMS_FS_ACCESS_KEY=${FS_KEY}"
+    DOCKER_ENV="${DOCKER_ENV} -e AGENTTEAMS_FS_SECRET_KEY=${FS_SECRET}"
 
     if [ -z "${SKILLS_API_URL}" ]; then
-        if [ -n "${HICLAW_SKILLS_API_URL:-}" ]; then
-            SKILLS_API_URL="${HICLAW_SKILLS_API_URL}"
+        if [ -n "${AGENTTEAMS_SKILLS_API_URL:-}" ]; then
+            SKILLS_API_URL="${AGENTTEAMS_SKILLS_API_URL}"
         else
-            SKILLS_API_URL="nacos://market.hiclaw.io:80/public"
+            SKILLS_API_URL="nacos://market.agentteams.io:80/public"
         fi
     fi
 
     # Add SKILLS_API_URL if specified
     DOCKER_ENV="${DOCKER_ENV} -e SKILLS_API_URL=${SKILLS_API_URL}"
     log "$(msg worker.skills_url "${SKILLS_API_URL}")"
-    if [ -n "${HICLAW_NACOS_USERNAME:-}" ]; then
-        DOCKER_ENV="${DOCKER_ENV} -e HICLAW_NACOS_USERNAME=${HICLAW_NACOS_USERNAME}"
+    if [ -n "${AGENTTEAMS_NACOS_USERNAME:-}" ]; then
+        DOCKER_ENV="${DOCKER_ENV} -e AGENTTEAMS_NACOS_USERNAME=${AGENTTEAMS_NACOS_USERNAME}"
     fi
-    if [ -n "${HICLAW_NACOS_PASSWORD:-}" ]; then
-        DOCKER_ENV="${DOCKER_ENV} -e HICLAW_NACOS_PASSWORD=${HICLAW_NACOS_PASSWORD}"
+    if [ -n "${AGENTTEAMS_NACOS_PASSWORD:-}" ]; then
+        DOCKER_ENV="${DOCKER_ENV} -e AGENTTEAMS_NACOS_PASSWORD=${AGENTTEAMS_NACOS_PASSWORD}"
     fi
-    if [ -n "${HICLAW_NACOS_TOKEN:-}" ]; then
-        DOCKER_ENV="${DOCKER_ENV} -e HICLAW_NACOS_TOKEN=${HICLAW_NACOS_TOKEN}"
+    if [ -n "${AGENTTEAMS_NACOS_TOKEN:-}" ]; then
+        DOCKER_ENV="${DOCKER_ENV} -e AGENTTEAMS_NACOS_TOKEN=${AGENTTEAMS_NACOS_TOKEN}"
     fi
 
     # shellcheck disable=SC2086
@@ -3934,7 +3969,7 @@ test_llm_connectivity() {
         -X POST "${base_url%/}/chat/completions" \
         -H "Authorization: Bearer ${api_key}" \
         -H "Content-Type: application/json" \
-        -H "User-Agent: HiClaw/${HICLAW_VERSION:-latest}" \
+        -H "User-Agent: AgentTeams/${AGENTTEAMS_VERSION:-latest}" \
         --max-time 30 \
         -d "{\"model\":\"${model}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
         2>/dev/null)
@@ -3947,7 +3982,7 @@ test_llm_connectivity() {
         if [ -n "${hint}" ]; then
             echo -e "\033[33m${hint}\033[0m"
         fi
-        if [ "${HICLAW_NON_INTERACTIVE}" != "1" ]; then
+        if [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
             local _confirm
             read -e -p "$(msg llm.openai.test.confirm)" _confirm
             if [ "${_confirm}" = "b" ]; then
@@ -3976,7 +4011,7 @@ test_embedding_connectivity() {
         -X POST "${base_url%/}/embeddings" \
         -H "Authorization: Bearer ${api_key}" \
         -H "Content-Type: application/json" \
-        -H "User-Agent: HiClaw/${HICLAW_VERSION:-latest}" \
+        -H "User-Agent: AgentTeams/${AGENTTEAMS_VERSION:-latest}" \
         --max-time 30 \
         -d "{\"model\":\"${model}\",\"input\":\"test\"}" \
         2>/dev/null)
@@ -3998,7 +4033,7 @@ test_embedding_connectivity() {
 uninstall_hiclaw() {
     log "$(msg uninstall.title)"
 
-    # Safely disable and remove the dedicated HiClaw Podman autostart service
+    # Safely disable and remove the dedicated AgentTeams Podman autostart service
     if [ "${DOCKER_CMD}" = "podman" ] && command -v systemctl >/dev/null 2>&1; then
         local _systemctl_cmd="systemctl"
         local _service_dir="/etc/systemd/system"
@@ -4009,7 +4044,7 @@ uninstall_hiclaw() {
         fi
 
         if [ -f "${_service_dir}/hiclaw-podman-restart.service" ]; then
-            log "Disabling and removing dedicated HiClaw Podman autostart service..."
+            log "Disabling and removing dedicated AgentTeams Podman autostart service..."
             ${_systemctl_cmd} disable --now hiclaw-podman-restart.service 2>/dev/null || true
             rm -f "${_service_dir}/hiclaw-podman-restart.service"
             ${_systemctl_cmd} daemon-reload 2>/dev/null || true
@@ -4019,18 +4054,18 @@ uninstall_hiclaw() {
 
     # Capture manager image before removing (needed for workspace cleanup on Linux)
     local manager_image=""
-    manager_image=$(${DOCKER_CMD} inspect hiclaw-manager --format '{{.Config.Image}}' 2>/dev/null || true)
+    manager_image=$(${DOCKER_CMD} inspect agentteams-manager --format '{{.Config.Image}}' 2>/dev/null || true)
 
     # Stop and remove manager
-    if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-manager$"; then
+    if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^agentteams-manager$"; then
         log "$(msg uninstall.stopping_manager)"
-        ${DOCKER_CMD} stop hiclaw-manager >/dev/null 2>&1 || true
-        ${DOCKER_CMD} rm hiclaw-manager >/dev/null 2>&1 || true
+        ${DOCKER_CMD} stop agentteams-manager >/dev/null 2>&1 || true
+        ${DOCKER_CMD} rm agentteams-manager >/dev/null 2>&1 || true
     fi
 
     # Stop and remove workers
     local workers
-    workers=$(${DOCKER_CMD} ps -a --filter "name=hiclaw-worker-" --format '{{.Names}}' 2>/dev/null || true)
+    workers=$(${DOCKER_CMD} ps -a --filter "name=agentteams-worker-" --format '{{.Names}}' 2>/dev/null || true)
     if [ -n "${workers}" ]; then
         log "$(msg uninstall.stopping_workers)"
         echo "${workers}" | while read -r w; do
@@ -4040,7 +4075,7 @@ uninstall_hiclaw() {
     fi
 
     # Stop and remove docker-proxy (legacy ≤ v1.0.x; current arch uses
-    # hiclaw-controller for the same role)
+    # agentteams-controller for the same role)
     if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-docker-proxy$"; then
         log "$(msg uninstall.removing_proxy)"
         ${DOCKER_CMD} stop hiclaw-docker-proxy >/dev/null 2>&1 || true
@@ -4048,39 +4083,39 @@ uninstall_hiclaw() {
     fi
 
     # Stop and remove the embedded controller container. MUST happen
-    # before the `docker volume rm hiclaw-data` step below — in embedded
-    # mode hiclaw-controller mounts hiclaw-data at /data (Tuwunel DB,
+    # before the `docker volume rm agentteams-data` step below — in embedded
+    # mode agentteams-controller mounts agentteams-data at /data (Tuwunel DB,
     # MinIO state, Higress state, all the room messages), and `volume
     # rm` against an in-use volume fails silently because of the trailing
     # `|| true`. Skipping this used to leave room/message history behind
     # across "uninstall + reinstall" cycles. See PR #692.
-    if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-controller$"; then
+    if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^agentteams-controller$"; then
         log "$(msg uninstall.stopping_controller)"
-        ${DOCKER_CMD} stop hiclaw-controller >/dev/null 2>&1 || true
-        ${DOCKER_CMD} rm hiclaw-controller >/dev/null 2>&1 || true
+        ${DOCKER_CMD} stop agentteams-controller >/dev/null 2>&1 || true
+        ${DOCKER_CMD} rm agentteams-controller >/dev/null 2>&1 || true
     fi
 
     # Read env file for data/workspace info before removing
-    local env_file="${HICLAW_ENV_FILE:-${HOME}/hiclaw-manager.env}"
-    [ ! -f "${env_file}" ] && [ -f "./hiclaw-manager.env" ] && env_file="./hiclaw-manager.env"
+    local env_file="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
+    [ ! -f "${env_file}" ] && [ -f "./agentteams-manager.env" ] && env_file="./agentteams-manager.env"
 
     local data_dir="" workspace_dir=""
     if [ -f "${env_file}" ]; then
-        data_dir=$(grep '^HICLAW_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- || true)
-        workspace_dir=$(grep '^HICLAW_WORKSPACE_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- || true)
+        data_dir=$(grep '^AGENTTEAMS_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- || true)
+        workspace_dir=$(grep '^AGENTTEAMS_WORKSPACE_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- || true)
     fi
 
     # Remove Docker volume
-    local vol="${data_dir:-hiclaw-data}"
+    local vol="${data_dir:-agentteams-data}"
     if ${DOCKER_CMD} volume inspect "${vol}" >/dev/null 2>&1; then
         log "$(msg uninstall.removing_volume "${vol}")"
         ${DOCKER_CMD} volume rm "${vol}" >/dev/null 2>&1 || true
     fi
 
     # Remove Docker network
-    if ${DOCKER_CMD} network ls --format '{{.Name}}' 2>/dev/null | grep -q "^hiclaw-net$"; then
+    if ${DOCKER_CMD} network ls --format '{{.Name}}' 2>/dev/null | grep -q "^agentteams-net$"; then
         log "$(msg uninstall.removing_network)"
-        ${DOCKER_CMD} network rm hiclaw-net >/dev/null 2>&1 || true
+        ${DOCKER_CMD} network rm agentteams-net >/dev/null 2>&1 || true
     fi
 
     # Remove workspace directory
@@ -4134,13 +4169,13 @@ check_container_runtime() {
     elif command -v podman >/dev/null 2>&1; then
         DOCKER_CMD="podman"
     else
-        echo -e "\033[31m[HiClaw ERROR]\033[0m $(msg error.docker_not_found)" >&2
+        echo -e "\033[31m[AgentTeams ERROR]\033[0m $(msg error.docker_not_found)" >&2
         exit 1
     fi
 
     # Unified health check (Validates runtime responsiveness)
     if ! ${DOCKER_CMD} ps >/dev/null 2>&1; then
-        echo -e "\033[31m[HiClaw ERROR]\033[0m $(msg error.docker_not_running)" >&2
+        echo -e "\033[31m[AgentTeams ERROR]\033[0m $(msg error.docker_not_running)" >&2
         exit 1
     fi
 }
@@ -4172,7 +4207,7 @@ case "${1:-}" in
         echo "  # Then select '1' for Quick Start mode"
         echo ""
         echo "Non-interactive (for automation):"
-        echo "  HICLAW_NON_INTERACTIVE=1 HICLAW_LLM_API_KEY=sk-xxx $0"
+        echo "  AGENTTEAMS_NON_INTERACTIVE=1 AGENTTEAMS_LLM_API_KEY=sk-xxx $0"
         echo ""
         echo "Worker Options:"
         echo "  --name <name>        Worker name (required)"

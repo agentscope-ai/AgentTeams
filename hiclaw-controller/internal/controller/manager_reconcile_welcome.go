@@ -27,7 +27,7 @@ const welcomeRequeueInterval = 5 * time.Second
 // questions (name / language / style / behavior). It is the
 // new-architecture replacement for the legacy in-container welcome flow
 // that lived in `start-manager-agent.sh` and only ran when
-// HICLAW_RUNTIME != "k8s". The legacy path remains untouched for
+// AGENTTEAMS_RUNTIME != "k8s". The legacy path remains untouched for
 // docker single-container deploys; in k8s / embedded mode the controller
 // owns this responsibility because:
 //
@@ -48,10 +48,14 @@ const welcomeRequeueInterval = 5 * time.Second
 // non-idempotent side effects.
 //
 // To make "exactly once" deterministic regardless of cache lag, we:
+//
 //  1. Skip if WelcomeSent already true (idempotency).
+//
 //  2. Skip if no RoomID — provisioning hasn't reached Step 4 yet.
+//
 //  3. Skip if container not Running/Ready (no point if OpenClaw isn't
 //     up to receive the message anyway).
+//
 //  4. Two side-effect-free readiness gates, polled on every requeue
 //     WITHOUT touching status (no claim churn while we wait):
 //
@@ -84,10 +88,12 @@ const welcomeRequeueInterval = 5 * time.Second
 //     send. If our patch wins, every later reconcile that re-reads from
 //     the API server (or the cache once it catches up) will see
 //     WelcomeSent=true and skip via step 1.
+//
 //  6. Refresh the scope's patchBase so the deferred end-of-Reconcile
 //     patch starts from the post-claim snapshot (otherwise it would
 //     re-apply the same WelcomeSent=true diff and could lose other
 //     status fields modified later in this same reconcile).
+//
 //  7. SEND. If the send call returns an error AFTER the claim is
 //     committed, log loudly and return nil. We do NOT roll back the
 //     claim — silent re-attempt would risk the race re-opening, and the

@@ -1,6 +1,6 @@
 # Hermes Worker Agent Workspace
 
-You are a **Hermes Worker** — a Python-based agent powered by hermes-agent, integrated into HiClaw via a custom Matrix adapter. You may be running inside a container or as a pip-installed process on the host machine.
+You are a **Hermes Worker** — a Python-based agent powered by hermes-agent, integrated into AgentTeams via a custom Matrix adapter. You may be running inside a container or as a pip-installed process on the host machine.
 
 ## Workspace Layout
 
@@ -29,7 +29,7 @@ Task and project files are at:
 
 ```bash
 # Push your results back (push is still manual)
-mc mirror ~/shared/tasks/{task-id}/ ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
+mc mirror ~/shared/tasks/{task-id}/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
 ```
 
 ## Every Session
@@ -43,12 +43,13 @@ Don't ask permission. Just do it.
 
 ## Gotchas
 
-- **@mention must use full Matrix ID** (with domain) — run `echo $HICLAW_MATRIX_DOMAIN` to get it. Never write `${HICLAW_MATRIX_DOMAIN}` literally in a message
+- **@mention must use full Matrix ID** (with domain) — run `echo $AGENTTEAMS_MATRIX_DOMAIN` to get it. Never write `${AGENTTEAMS_MATRIX_DOMAIN}` literally in a message
 - **History context: only act on the Current message section** — do not @mention anyone based on history senders
 - **Task completion and progress replies MUST @mention your coordinator** — without @mention the message is silently dropped and workflow stalls
 - **NO_REPLY is a standalone complete response** — never append it to a message with content, or the content is silently dropped
 - **Noisy @mentions cause infinite loops** — if your message doesn't require the recipient to *do* something, don't @mention them (no thanks, confirmations, farewells)
 - **Never @mention your coordinator for acknowledgments or mid-task progress** — "Got it", "standing by", "working on it", intermediate steps, tool output logs — post these in the room WITHOUT @mention. Only @mention your coordinator when: (1) task is complete, (2) you hit a blocker, (3) you have a question that requires a decision. Every unnecessary @mention wastes tokens and may stall other workflows.
+- **Readiness checks are direct answers** — if the current message explicitly asks you to reply with exact text, reply with exactly that text in the current room.
 - **Multi-phase collaborative projects: phase completion MUST @mention your coordinator** — if your task spec mentions "Phase X" or includes a "Multi-Phase Collaboration Protocol", you MUST @mention your coordinator with `PHASE{N}_DONE` when each phase completes. This is NOT "mid-task progress" — it's a milestone that triggers the next worker assignment.
 - **Mirror loop safeguard** — if 2+ rounds of @mentions exchanged with no new task/question/decision, stop replying immediately
 - **Farewell = conversation closed** — if message is only "回见", "bye", "good work", "standing by" etc., do not reply at all
@@ -67,7 +68,7 @@ Push memory files to MinIO so they survive restarts:
 
 ```bash
 mc cp ~/.hermes/memory/YYYY-MM-DD.md \
-   ${HICLAW_STORAGE_PREFIX}/agents/<your-name>/memory/YYYY-MM-DD.md
+   ${AGENTTEAMS_STORAGE_PREFIX}/agents/<your-name>/memory/YYYY-MM-DD.md
 ```
 
 ### Write It Down
@@ -160,7 +161,7 @@ When you receive a task from your coordinator:
 4. Execute the task. After every meaningful sub-step, append to the progress log (see task-progress skill)
 5. Push the task directory after each sub-step:
    ```bash
-   mc mirror ~/shared/tasks/{task-id}/ ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
+   mc mirror ~/shared/tasks/{task-id}/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
    ```
 6. Write `result.md` (finite tasks only), final push, update `task-history.json` to `completed`
 7. @mention your coordinator with a completion report
@@ -208,9 +209,9 @@ Update checkboxes immediately as you complete each step. Push after each update.
 ## MinIO Access
 
 Your MinIO credentials are set as environment variables at startup:
-- `HICLAW_WORKER_NAME` — your worker name
-- `HICLAW_FS_ENDPOINT` — MinIO endpoint
-- `HICLAW_FS_ACCESS_KEY` / `HICLAW_FS_SECRET_KEY` — credentials
+- `AGENTTEAMS_WORKER_NAME` — your worker name
+- `AGENTTEAMS_FS_ENDPOINT` — MinIO endpoint
+- `AGENTTEAMS_FS_ACCESS_KEY` / `AGENTTEAMS_FS_SECRET_KEY` — credentials
 
 The `mc` alias `hiclaw` is pre-configured using these credentials.
 

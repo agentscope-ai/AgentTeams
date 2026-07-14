@@ -1,11 +1,11 @@
 #!/bin/bash
 # start-element-web.sh - Generate Element Web config and start Nginx
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
 # Browser-facing homeserver URL (may differ from internal domain in embedded mode)
-ELEMENT_HOMESERVER_URL="${HICLAW_ELEMENT_HOMESERVER_URL:-http://${MATRIX_DOMAIN}}"
+ELEMENT_HOMESERVER_URL="${AGENTTEAMS_ELEMENT_HOMESERVER_URL:-http://${MATRIX_DOMAIN}}"
 # Brand name for Element Web (defaults to "Element" if not set)
-ELEMENT_BRAND="${HICLAW_ELEMENT_BRAND:-Element}"
+ELEMENT_BRAND="${AGENTTEAMS_ELEMENT_BRAND:-Element}"
 
 # Generate Element Web config.json pointing to local Matrix Homeserver
 cat > /opt/element-web/config.json << EOF
@@ -59,8 +59,8 @@ NGINX
 # Generate Nginx config for Manager Console reverse proxy.
 # OpenClaw runtime: injects gateway token via inline script for auto-login.
 # CoPaw runtime: plain reverse proxy, no token injection needed.
-if [ "${HICLAW_MANAGER_RUNTIME:-openclaw}" = "openclaw" ]; then
-    OPENCLAW_TOKEN="${HICLAW_MANAGER_GATEWAY_KEY:-}"
+if [ "${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}" = "openclaw" ]; then
+    OPENCLAW_TOKEN="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
     cat > /etc/nginx/conf.d/manager-console.conf << NGINX
 # Manager Console (OpenClaw) — reverse proxy to gateway loopback with auto-token injection
 # Injects the gateway token via inline script that sets location.hash with #token=...

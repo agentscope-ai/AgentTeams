@@ -32,7 +32,7 @@ For major changes: draft in DM with admin, explain rationale and impact, wait fo
 ### 6a. Add to project room
 
 ```bash
-curl -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ID}/invite" \
+curl -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ID}/invite" \
   -H "Authorization: Bearer ${MANAGER_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"user_id": "@<new-worker>:<matrix_domain>"}'

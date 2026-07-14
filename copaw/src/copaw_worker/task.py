@@ -1,4 +1,4 @@
-"""Local taskflow state machine for HiClaw CoPaw agents."""
+"""Local taskflow state machine for AgentTeams CoPaw agents."""
 
 from __future__ import annotations
 

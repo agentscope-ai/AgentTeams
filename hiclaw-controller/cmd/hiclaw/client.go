@@ -12,11 +12,10 @@ import (
 	"time"
 )
 
-// APIClient is a thin HTTP wrapper for the hiclaw-controller REST API.
+// APIClient is a thin HTTP wrapper for the agentteams-controller REST API.
 type APIClient struct {
 	BaseURL    string
 	Token      string
-	ClusterID  string // remote cluster identifier; empty for local mode
 	HTTPClient *http.Client
 }
 
@@ -32,37 +31,30 @@ func (e *APIError) Error() string {
 
 // NewAPIClient constructs a client from environment variables.
 func NewAPIClient() *APIClient {
-	baseURL := envOrLegacy("AGENTTEAMS_CONTROLLER_URL", "HICLAW_CONTROLLER_URL")
+	baseURL := os.Getenv("AGENTTEAMS_CONTROLLER_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost:8090"
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	return &APIClient{
-		BaseURL:   baseURL,
-		Token:     discoverToken(),
-		ClusterID: discoverClusterID(),
+		BaseURL: baseURL,
+		Token:   discoverToken(),
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
-// discoverClusterID returns the cluster ID injected into the Worker Pod via
-// environment variables. Empty string means local mode.
-func discoverClusterID() string {
-	return envOrLegacy("AGENTTEAMS_CLUSTER_ID", "HICLAW_CLUSTER_ID")
-}
-
-// discoverToken returns a bearer token using a multi-level fallback:
-//  1. AGENTTEAMS_AUTH_TOKEN / HICLAW_AUTH_TOKEN env var
-//  2. AGENTTEAMS_AUTH_TOKEN_FILE / HICLAW_AUTH_TOKEN_FILE token file
+// discoverToken returns a bearer token using the AgentTeams runtime contract:
+//  1. AGENTTEAMS_AUTH_TOKEN env var
+//  2. AGENTTEAMS_AUTH_TOKEN_FILE token file
 //  3. empty string (unauthenticated, for controllers with auth disabled)
 func discoverToken() string {
-	if token := envOrLegacy("AGENTTEAMS_AUTH_TOKEN", "HICLAW_AUTH_TOKEN"); token != "" {
+	if token := os.Getenv("AGENTTEAMS_AUTH_TOKEN"); token != "" {
 		return token
 	}
-	if path := envOrLegacy("AGENTTEAMS_AUTH_TOKEN_FILE", "HICLAW_AUTH_TOKEN_FILE"); path != "" {
+	if path := os.Getenv("AGENTTEAMS_AUTH_TOKEN_FILE"); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if t := strings.TrimSpace(string(data)); t != "" {
 				return t
@@ -70,13 +62,6 @@ func discoverToken() string {
 		}
 	}
 	return ""
-}
-
-func envOrLegacy(primary, legacy string) string {
-	if value := os.Getenv(primary); value != "" {
-		return value
-	}
-	return os.Getenv(legacy)
 }
 
 // Do sends an HTTP request and returns the raw response.
@@ -103,9 +88,6 @@ func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, e
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	if c.ClusterID != "" {
-		req.Header.Set("X-HiClaw-Cluster-ID", c.ClusterID)
 	}
 
 	return c.HTTPClient.Do(req)
@@ -177,9 +159,6 @@ func (c *APIClient) DoMultipart(path, fieldName, fileName string, fileData []byt
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	if c.ClusterID != "" {
-		req.Header.Set("X-HiClaw-Cluster-ID", c.ClusterID)
 	}
 
 	resp, err := c.HTTPClient.Do(req)

@@ -24,8 +24,8 @@ func captureLogger(buf *bytes.Buffer) logr.Logger {
 }
 
 func TestMergeUserEnv_EmptyUserIsNoOp(t *testing.T) {
-	sys := map[string]string{"HICLAW_MATRIX_URL": "http://m"}
-	original := map[string]string{"HICLAW_MATRIX_URL": "http://m"}
+	sys := map[string]string{"AGENTTEAMS_MATRIX_URL": "http://m"}
+	original := map[string]string{"AGENTTEAMS_MATRIX_URL": "http://m"}
 
 	buf := &bytes.Buffer{}
 	mergeUserEnv(sys, nil, captureLogger(buf), "worker/w1")
@@ -40,16 +40,16 @@ func TestMergeUserEnv_EmptyUserIsNoOp(t *testing.T) {
 }
 
 func TestMergeUserEnv_NonConflictingMerge(t *testing.T) {
-	sys := map[string]string{"HICLAW_MATRIX_URL": "http://m"}
+	sys := map[string]string{"AGENTTEAMS_MATRIX_URL": "http://m"}
 	user := map[string]string{"FOO": "bar", "EMPTY": ""}
 
 	buf := &bytes.Buffer{}
 	mergeUserEnv(sys, user, captureLogger(buf), "worker/w1")
 
 	want := map[string]string{
-		"HICLAW_MATRIX_URL": "http://m",
-		"FOO":               "bar",
-		"EMPTY":             "",
+		"AGENTTEAMS_MATRIX_URL": "http://m",
+		"FOO":                   "bar",
+		"EMPTY":                 "",
 	}
 	if !reflect.DeepEqual(sys, want) {
 		t.Errorf("merged sys = %v, want %v", sys, want)
@@ -60,14 +60,14 @@ func TestMergeUserEnv_NonConflictingMerge(t *testing.T) {
 }
 
 func TestMergeUserEnv_ConflictKeepsSystemValue(t *testing.T) {
-	sys := map[string]string{"HICLAW_MATRIX_URL": "http://sys"}
-	user := map[string]string{"HICLAW_MATRIX_URL": "http://user", "FOO": "bar"}
+	sys := map[string]string{"AGENTTEAMS_MATRIX_URL": "http://sys"}
+	user := map[string]string{"AGENTTEAMS_MATRIX_URL": "http://user", "FOO": "bar"}
 
 	buf := &bytes.Buffer{}
 	mergeUserEnv(sys, user, captureLogger(buf), "worker/w1")
 
-	if got := sys["HICLAW_MATRIX_URL"]; got != "http://sys" {
-		t.Errorf("HICLAW_MATRIX_URL = %q, want system value http://sys", got)
+	if got := sys["AGENTTEAMS_MATRIX_URL"]; got != "http://sys" {
+		t.Errorf("AGENTTEAMS_MATRIX_URL = %q, want system value http://sys", got)
 	}
 	if got := sys["FOO"]; got != "bar" {
 		t.Errorf("FOO = %q, want bar", got)

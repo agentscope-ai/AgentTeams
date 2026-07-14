@@ -26,7 +26,7 @@ type KubeconfigResponse struct {
 // GetKubeconfig calls the STS provider to obtain a temporary kubeconfig for the given cluster.
 func (c *HTTPClient) GetKubeconfig(ctx context.Context, clusterID string) (*KubeconfigResponse, error) {
 	if c.baseURL == "" {
-		return nil, errors.New("credprovider: base URL not configured (HICLAW_CREDENTIAL_PROVIDER_URL)")
+		return nil, errors.New("credprovider: base URL not configured (AGENTTEAMS_CREDENTIAL_PROVIDER_URL)")
 	}
 	body, err := json.Marshal(KubeconfigRequest{ClusterID: clusterID})
 	if err != nil {

@@ -15,19 +15,19 @@ type Config struct {
 	// Matrix Application Service, using as_token to register/login users
 	// without passwords. Legacy password-based auth is preserved when disabled.
 	AppServiceEnabled         bool
-	AppServiceID              string // e.g. "hiclaw-controller"
+	AppServiceID              string // e.g. "agentteams-controller"
 	AppServiceToken           string // as_token — never logged or exposed to agents
 	AppServiceHSToken         string // hs_token — reserved for future AS HTTP receiver
-	AppServiceSenderLocalpart string // e.g. "hiclaw-controller"
+	AppServiceSenderLocalpart string // e.g. "agentteams-controller"
 
 	// AppServiceUserNamespaceRegex optionally narrows the exclusive Matrix
 	// user namespace claimed by the AppService. When empty, the controller
 	// claims the broad "@.*:<domain>" namespace, which is ONLY safe when the
-	// homeserver is exclusively HiClaw-managed (the only supported mode —
+	// homeserver is exclusively AgentTeams-managed (the only supported mode —
 	// enforced by Helm's matrix.mode=managed and the embedded Tuwunel
 	// install). Set this to a restrictive regex (e.g. "@hiclaw-.*:<domain>")
 	// when running AppService mode against a shared/existing homeserver so
-	// the as_token cannot impersonate non-HiClaw local users.
+	// the as_token cannot impersonate non-AgentTeams local users.
 	AppServiceUserNamespaceRegex string
 
 	// AppServicePushURL is the controller HTTP endpoint registered with

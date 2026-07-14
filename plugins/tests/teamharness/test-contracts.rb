@@ -45,7 +45,7 @@ doc = read(boundary_doc)
   "TeamHarness v0.1",
   "does not own worker lifecycle",
   "desired.agentPackage",
-  "HiClaw AgentSpec package"
+  "AgentTeams AgentSpec package"
 ].each do |needle|
   assert(doc.include?(needle), "boundary doc must describe #{needle.inspect}")
 end

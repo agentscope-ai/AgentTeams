@@ -166,7 +166,7 @@ def test_check_model_service_reports_unhealthy_for_failed_chat_completion_prefli
         {
             "models": {
                 "providers": {
-                    "hiclaw-gateway": {
+                    "agentteams-gateway": {
                         "api": "openai-completions",
                         "baseUrl": "http://aigw-local.agentteams.io:8080/v1",
                         "apiKey": "secret",
@@ -174,7 +174,7 @@ def test_check_model_service_reports_unhealthy_for_failed_chat_completion_prefli
                     }
                 }
             },
-            "agents": {"defaults": {"model": {"primary": "hiclaw-gateway/qwen3.5-plus"}}},
+            "agents": {"defaults": {"model": {"primary": "agentteams-gateway/qwen3.5-plus"}}},
         },
         timeout=3,
     )
@@ -221,14 +221,14 @@ def test_check_model_service_uses_max_completion_tokens_for_gpt5(monkeypatch):
         {
             "models": {
                 "providers": {
-                    "hiclaw-gateway": {
+                    "agentteams-gateway": {
                         "baseUrl": "http://aigw-local.agentteams.io:8080/v1",
                         "apiKey": "secret",
                         "models": [{"id": "gpt-5.4"}],
                     }
                 }
             },
-            "agents": {"defaults": {"model": {"primary": "hiclaw-gateway/gpt-5.4"}}},
+            "agents": {"defaults": {"model": {"primary": "agentteams-gateway/gpt-5.4"}}},
         },
     )
 

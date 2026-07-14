@@ -233,16 +233,16 @@ func workerReportReadyCmd() *cobra.Command {
   # Custom heartbeat interval
   hiclaw worker report-ready --heartbeat --interval 30s
 
-Worker name is read from --name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME env var.`,
+Worker name is read from --name, AGENTTEAMS_WORKER_CR_NAME, or AGENTTEAMS_WORKER_NAME env var.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
-				name = os.Getenv("HICLAW_WORKER_CR_NAME")
+				name = os.Getenv("AGENTTEAMS_WORKER_CR_NAME")
 			}
 			if name == "" {
-				name = os.Getenv("HICLAW_WORKER_NAME")
+				name = os.Getenv("AGENTTEAMS_WORKER_NAME")
 			}
 			if name == "" {
-				return fmt.Errorf("--name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME is required")
+				return fmt.Errorf("--name, AGENTTEAMS_WORKER_CR_NAME, or AGENTTEAMS_WORKER_NAME is required")
 			}
 
 			heartbeat := cmd.Flags().Changed("heartbeat") || cmd.Flags().Changed("interval")
@@ -285,7 +285,7 @@ Worker name is read from --name, HICLAW_WORKER_CR_NAME, or HICLAW_WORKER_NAME en
 		},
 	}
 
-	cmd.Flags().StringVar(&name, "name", "", "Worker name (default: HICLAW_WORKER_CR_NAME or HICLAW_WORKER_NAME env)")
+	cmd.Flags().StringVar(&name, "name", "", "Worker name (default: AGENTTEAMS_WORKER_CR_NAME or AGENTTEAMS_WORKER_NAME env)")
 	cmd.Flags().Bool("heartbeat", false, "Send periodic heartbeat after initial ready report")
 	cmd.Flags().DurationVar(&interval, "interval", 60*time.Second, "Heartbeat interval (requires --heartbeat)")
 	return cmd

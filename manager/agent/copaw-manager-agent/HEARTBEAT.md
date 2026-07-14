@@ -20,7 +20,7 @@ The `active_tasks` field in state.json contains all in-progress tasks (both fini
 **Ensure admin notification channel is available** (used in Step 7):
 
 1. Check `admin_dm_room_id` in state.json. If `null`, discover it now:
-   - List joined rooms, find the DM room with exactly 2 members: you and `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`
+   - List joined rooms, find the DM room with exactly 2 members: you and `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}`
    - Persist it:
      ```bash
      bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
@@ -49,16 +49,16 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   - `ready` — container was already running, proceed normally
   - `started` — container was stopped and has been woken up; **wait 30 seconds** for the Worker to initialize before sending the follow-up message
   - `recreated` — container was missing and has been recreated; **wait 60 seconds** before sending the follow-up message, and flag this anomaly for the admin report (Step 7)
-  - `remote` — Worker is remotely deployed, assumed reachable
+  - `remote` — legacy lifecycle status meaning the container is not managed through the Manager-local container API; assume the controller/backend owns readiness
   - `failed` — could not start/recreate the container; **skip the follow-up message**, flag the anomaly for the admin report (Step 7), and suggest the admin intervene
 - **Use `copaw channels send` via shell** to send a follow-up to that room:
   ```bash
   copaw channels send \
     --agent-id default \
     --channel matrix \
-    --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}" \
+    --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
     --target-session "{room_id}" \
-    --text "@{worker}:${HICLAW_MATRIX_DOMAIN} How is your current task {task-id} going? Are you blocked on anything?"
+    --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} How is your current task {task-id} going? Are you blocked on anything?"
   ```
 - Determine if the Worker is making normal progress based on their reply
 - If the Worker has not responded (no response for more than one heartbeat cycle), flag the anomaly in the Room and notify the human admin (see Step 7)
@@ -85,9 +85,9 @@ Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
   copaw channels send \
     --agent-id default \
     --channel matrix \
-    --target-user "@{leader}:${HICLAW_MATRIX_DOMAIN}" \
+    --target-user "@{leader}:${AGENTTEAMS_MATRIX_DOMAIN}" \
     --target-session "{room_id}" \
-    --text "@{leader}:${HICLAW_MATRIX_DOMAIN} How is task {task-id} progressing? Any blockers from your team?"
+    --text "@{leader}:${AGENTTEAMS_MATRIX_DOMAIN} How is task {task-id} progressing? Any blockers from your team?"
   ```
 - **Do NOT contact team workers directly** — the Team Leader handles internal coordination
 - If the Team Leader reports completion, process it the same as a regular worker completion
@@ -122,9 +122,9 @@ If conditions are met:
    copaw channels send \
      --agent-id default \
      --channel matrix \
-     --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}" \
+     --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
      --target-session "{room_id}" \
-     --text "@{worker}:${HICLAW_MATRIX_DOMAIN} It's time to run your scheduled task {task-id} \"{task-title}\". Please execute it now and report back with the keyword \"executed\"."
+     --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} It's time to run your scheduled task {task-id} \"{task-title}\". Please execute it now and report back with the keyword \"executed\"."
    ```
 
 **Note**: Infinite tasks are never removed from active_tasks. After the Worker reports `executed`, **only** update `last_executed_at` and `next_scheduled_at` — do NOT @mention the Worker again:
@@ -154,9 +154,9 @@ done
   copaw channels send \
     --agent-id default \
     --channel matrix \
-    --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}" \
+    --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
     --target-session "{project_room_id}" \
-    --text "@{worker}:${HICLAW_MATRIX_DOMAIN} Any progress on your current task {task-id} \"{title}\"? Please let us know if you're blocked."
+    --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} Any progress on your current task {task-id} \"{title}\"? Please let us know if you're blocked."
   ```
 - If a Worker has reported task completion in the project room but plan.md has not been updated yet, handle it immediately (see the project management section in AGENTS.md)
 
@@ -185,8 +185,8 @@ For each entry (one JSON object per line):
    PHASE=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .phase // "Unknown"')
    ```
 2. **`Pending`** and queued < 90s ago — leave the entry, drain again next heartbeat.
-3. **`Pending`** and queued > 90s ago — flag the anomaly to admin in DM (Step 7) and remove the entry.
-4. **`Failed`** — read the worker's `message` field, notify admin in DM with the failure reason, remove the entry.
+3. **`Pending`** and queued > 90s ago — flag the anomaly to admin in DM (Step 7) and remove the entry using the drain helper below.
+4. **`Failed`** — read the worker's `message` field, notify admin in DM with the failure reason, remove the entry using the drain helper below.
 5. **`Running`** — fetch `roomID` from `hiclaw get workers -o json`, greet the Worker, then notify admin in DM that the Worker is up:
    ```bash
    ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
@@ -195,9 +195,13 @@ For each entry (one JSON object per line):
    # Then notify admin via copaw channels send to the resolved admin DM room:
    #   "<NAME> is now Running and greeted in their Worker room."
    ```
-   Remove the entry from `~/pending-workers.json` after successful greeting + notify.
+   Remove the entry from `~/pending-workers.json` after successful greeting + notify using the drain helper below.
 
-To remove a processed entry, rewrite the file without that line (e.g. `jq -c 'select(.name != "<NAME>")' ~/pending-workers.json > ~/pending-workers.json.tmp && mv ~/pending-workers.json.tmp ~/pending-workers.json`).
+Never run `rm`, `unlink`, `mv`, or any inline rewrite command for `~/pending-workers.json`; Tool Guard may pause the Admin DM session and block later admin requests. Keep the file, even if it becomes empty. To remove a processed entry, call the helper:
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
+```
 
 ---
 
@@ -244,14 +248,14 @@ If the output is `available`, proceed with the following steps:
   ```
   The script outputs JSON with `channel`, `target`, and `via` fields.
 
-  - When `channel` is **`matrix`**: set `--target-session` to the room id from `target` after stripping a leading `room:` prefix if present. Set `--target-user` to the admin's full Matrix id `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`. Run:
+  - When `channel` is **`matrix`**: set `--target-session` to the room id from `target` after stripping a leading `room:` prefix if present. Set `--target-user` to the admin's full Matrix id `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}`. Run:
     ```bash
     copaw channels send \
       --agent-id default \
       --channel matrix \
-      --target-user "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}" \
+      --target-user "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}" \
       --target-session "<room_id_without_room_prefix>" \
-      --text "@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN} [Heartbeat Report] <summarize findings and recommended actions, in SOUL.md persona and language>"
+      --text "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN} [Heartbeat Report] <summarize findings and recommended actions, in SOUL.md persona and language>"
     ```
     If the summary contains characters that break double-quoted `--text`, switch to single-quoted `--text` and type the admin Matrix id literally inside the string.
   - When `channel` is **not** `matrix` and not `"none"`: use **`copaw channels send`** with the resolved `channel` and `target` per **channel-management** / **primary-channel** skill references for that channel.

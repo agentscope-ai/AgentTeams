@@ -17,7 +17,7 @@ test_setup "20-inline-worker-config"
 
 TEST_WORKER="test-inline-$$"
 TEST_WORKER_OVERRIDE="test-inlover-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ---- Cleanup handler ----
 _cleanup() {
@@ -29,14 +29,14 @@ _cleanup() {
     for w in "${TEST_WORKER}" "${TEST_WORKER_OVERRIDE}"; do
         exec_in_agent hiclaw delete worker "${w}" 2>/dev/null || true
         sleep 2
-        docker rm -f "hiclaw-worker-${w}" 2>/dev/null || true
-        exec_in_agent rm -rf "/tmp/hiclaw-test-${w}" 2>/dev/null || true
+        remove_worker_container "${w}"
+        exec_in_agent rm -rf "/tmp/agentteams-test-${w}" 2>/dev/null || true
         exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
     done
-    exec_in_agent rm -f "/tmp/hiclaw-test-${TEST_WORKER}.yaml" 2>/dev/null || true
-    exec_in_manager rm -rf "/tmp/hiclaw-test-${TEST_WORKER_OVERRIDE}" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER_OVERRIDE}*.zip" 2>/dev/null || true
+    exec_in_agent rm -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" 2>/dev/null || true
+    exec_in_manager rm -rf "/tmp/agentteams-test-${TEST_WORKER_OVERRIDE}" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER_OVERRIDE}*.zip" 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -79,7 +79,7 @@ AGENTS_CONTENT="# Inline Test Workspace
 - Respond to all messages politely"
 
 # Write YAML with inline soul and agents (in agent container where hiclaw CLI runs)
-exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_WORKER}.yaml << 'YAMLEOF'
+exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_WORKER}.yaml << 'YAMLEOF'
 apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
@@ -93,7 +93,7 @@ $(echo "${AGENTS_CONTENT}" | sed 's/^/    /')
 YAMLEOF
 " 2>/dev/null
 
-YAML_EXISTS=$(exec_in_agent test -f "/tmp/hiclaw-test-${TEST_WORKER}.yaml" && echo "yes" || echo "no")
+YAML_EXISTS=$(exec_in_agent test -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" && echo "yes" || echo "no")
 if [ "${YAML_EXISTS}" = "yes" ]; then
     log_pass "Worker YAML with inline fields created"
 else
@@ -105,7 +105,7 @@ fi
 # ============================================================
 log_section "Apply Worker YAML"
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/hiclaw-test-${TEST_WORKER}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" 2>&1)
 APPLY_EXIT=$?
 
 if [ ${APPLY_EXIT} -eq 0 ]; then
@@ -194,7 +194,7 @@ fi
 # bumped ResourceVersion. Poll for up to 60s to absorb that race.
 CONTAINER_RUNNING=""
 for i in $(seq 1 60); do
-    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "hiclaw-worker-${TEST_WORKER}$" || echo "")
+    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${TEST_WORKER}")$" || echo "")
     [ -n "${CONTAINER_RUNNING}" ] && break
     sleep 1
 done
@@ -245,7 +245,7 @@ fi
 log_section "Package + Inline Override"
 
 # Create a ZIP package with SOUL.md and AGENTS.md
-OVERRIDE_WORK_DIR="/tmp/hiclaw-test-${TEST_WORKER_OVERRIDE}"
+OVERRIDE_WORK_DIR="/tmp/agentteams-test-${TEST_WORKER_OVERRIDE}"
 
 exec_in_manager bash -c "
     mkdir -p ${OVERRIDE_WORK_DIR}/package/config
@@ -305,8 +305,8 @@ else
 fi
 
 # Discover the package URI from MinIO packages directory
-PKG_FILE=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/hiclaw-config/packages/' 2>/dev/null | grep '${TEST_WORKER_OVERRIDE}' | awk '{print \$NF}'" | head -1)
-PKG_URI="oss://hiclaw-config/packages/${PKG_FILE}"
+PKG_FILE=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agentteams-config/packages/' 2>/dev/null | grep '${TEST_WORKER_OVERRIDE}' | awk '{print \$NF}'" | head -1)
+PKG_URI="oss://agentteams-config/packages/${PKG_FILE}"
 assert_not_empty "${PKG_FILE}" "Package file found in MinIO"
 
 # Overwrite the YAML with package + inline soul/agents

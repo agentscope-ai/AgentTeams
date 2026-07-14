@@ -6,7 +6,7 @@ type Config struct {
 	AdminUser                 string // console login username
 	AdminPassword             string // console login password
 	AllowDefaultAdminFallback bool   // embedded bootstrap only: recover from all-in-one default admin/admin
-	DataPlaneURL              string // gateway data plane URL, e.g. http://aigw-local.hiclaw.io:8080
+	DataPlaneURL              string // gateway data plane URL, e.g. http://aigw-local.agentteams.io:8080
 }
 
 // ConsumerRequest describes a gateway consumer to create.

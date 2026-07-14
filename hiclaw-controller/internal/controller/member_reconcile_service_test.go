@@ -109,7 +109,7 @@ func (f *fakeServiceBackend) Stop(_ context.Context, _ string) error   { return 
 func (f *fakeServiceBackend) Status(_ context.Context, _ string) (*backend.WorkerResult, error) {
 	return nil, nil
 }
-func (f *fakeServiceBackend) ServiceClient(_ context.Context, _, _, _ string) (backend.K8sServiceClient, string, error) {
+func (f *fakeServiceBackend) ServiceClient(_ context.Context) (backend.K8sServiceClient, string, error) {
 	return f.svc, f.ns, nil
 }
 

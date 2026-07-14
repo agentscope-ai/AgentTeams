@@ -219,20 +219,14 @@ type CreateRequest struct {
 	// OwnerReference via controllerutil.SetControllerReference, so that
 	// deletion of the owning CR (Worker / Team / Manager) cascades to the
 	// Pod via native K8s garbage collection. Docker backend ignores this
-	// field. Skipped when DeployMode is "Remote" (cross-cluster ownerRef
-	// is not possible).
+	// field.
 	Owner metav1.Object `json:"-"`
 
-	// DeployMode selects local (same cluster) or remote (different cluster)
-	// Pod placement. "Local" (default/empty) uses the backend's own client;
-	// "Remote" routes through RemoteClientProvider.
+	// DeployMode selects local same-cluster Pod placement. Open-source
+	// controllers reject Remote before reaching the backend.
 	DeployMode string `json:"-"`
 
-	// TargetClusterID identifies the remote cluster (Remote mode only).
-	TargetClusterID string `json:"-"`
-
-	// TargetNamespace overrides the namespace in the remote cluster (Remote
-	// mode only). Empty means the backend falls back to its own namespace.
+	// TargetNamespace overrides the namespace used for local K8s Pods.
 	TargetNamespace string `json:"-"`
 
 	// ServiceEnabled indicates whether a Service should be created for the Pod.
@@ -288,10 +282,9 @@ type K8sNamespaceClient interface {
 // provide Kubernetes Service lifecycle operations. Only K8sBackend implements
 // this; Docker backend does not support Service management.
 type ServiceBackend interface {
-	// ServiceClient returns a K8sServiceClient and resolved namespace for the
-	// appropriate cluster based on deploy mode. Callers use this to create,
-	// update, or delete Services alongside member pods.
-	ServiceClient(ctx context.Context, deployMode, targetClusterID, targetNamespace string) (K8sServiceClient, string, error)
+	// ServiceClient returns a K8sServiceClient and resolved namespace for
+	// same-cluster Service management.
+	ServiceClient(ctx context.Context) (K8sServiceClient, string, error)
 }
 
 // WorkerResult holds the result of a worker operation.

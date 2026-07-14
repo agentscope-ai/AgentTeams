@@ -132,8 +132,8 @@ def test_create_installs_worker_agent_json_from_template():
 
 def test_create_installs_manager_agent_json_from_template(monkeypatch):
     """Manager profile seeds agent.json from agent.manager.json."""
-    monkeypatch.setenv("HICLAW_MATRIX_DOMAIN", "matrix.example.org")
-    monkeypatch.setenv("HICLAW_WORKER_NAME", "manager")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DOMAIN", "matrix.example.org")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "manager")
 
     agent = _bridge_and_read_agent(_make_openclaw_cfg(), profile="manager")
 
@@ -387,14 +387,14 @@ def test_deep_merge_groups_preserves_user_override():
 def test_worker_user_id_from_openclaw():
     """Worker carries userId in openclaw.json — bridge writes it verbatim."""
     cfg = _make_openclaw_cfg()
-    cfg["channels"]["matrix"]["userId"] = "@dmd:matrix-local.hiclaw.io:18080"
+    cfg["channels"]["matrix"]["userId"] = "@dmd:matrix-local.agentteams.io:18080"
 
     agent = _bridge_and_read_agent(cfg)
-    assert agent["channels"]["matrix"]["user_id"] == "@dmd:matrix-local.hiclaw.io:18080"
+    assert agent["channels"]["matrix"]["user_id"] == "@dmd:matrix-local.agentteams.io:18080"
 
 
 def test_manager_user_id_from_openclaw_wins_over_env(monkeypatch):
-    monkeypatch.setenv("HICLAW_MATRIX_DOMAIN", "other.example.org")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DOMAIN", "other.example.org")
     cfg = _make_openclaw_cfg()
     cfg["channels"]["matrix"]["userId"] = "@explicit:explicit.example.org"
 
@@ -407,7 +407,7 @@ def test_manager_user_id_from_openclaw_wins_over_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_manager_template_heartbeat_wins_over_openclaw_seed(monkeypatch):
-    monkeypatch.setenv("HICLAW_MATRIX_DOMAIN", "matrix.example.org")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DOMAIN", "matrix.example.org")
 
     cfg = _make_openclaw_cfg()
     cfg["agents"]["defaults"]["heartbeat"] = {
@@ -567,7 +567,7 @@ def test_sync_skills_to_runtime_exposes_standard_skills_via_symlink(tmp_path):
 
 
 def test_sync_skills_to_runtime_reenables_projected_manifest_entries(tmp_path):
-    """HiClaw-projected skills are enabled even after CoPaw reconciled them off."""
+    """AgentTeams-projected skills are enabled even after CoPaw reconciled them off."""
     standard_dir = tmp_path / "standard"
     runtime_dir = standard_dir / ".copaw"
     src_skill = standard_dir / "skills" / "github"

@@ -5,7 +5,7 @@ description: Use before any Leader action that depends on current team topology,
 
 # Organization
 
-Use this skill for current HiClaw topology and runtime state.
+Use this skill for current AgentTeams topology and runtime state.
 
 ## Source Of Truth
 
@@ -14,7 +14,7 @@ Use `hiclaw` CLI. Do not infer organization state from memory, old chat history,
 Resolve the Team CR name before any team-scoped CLI query. The team name in `SOUL.md` may be the runtime/storage `teamName`, not the Kubernetes Team CR name accepted by `hiclaw --team`.
 
 ```bash
-TEAM_CR="$(hiclaw get workers "${HICLAW_WORKER_CR_NAME:-$HICLAW_WORKER_NAME}" -o json | jq -r '.team')"
+TEAM_CR="$(hiclaw get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json | jq -r '.team')"
 hiclaw get teams "$TEAM_CR" -o json
 hiclaw get workers --team "$TEAM_CR" -o json
 hiclaw worker status --team "$TEAM_CR"

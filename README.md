@@ -10,7 +10,7 @@
   <a href="https://discord.com/invite/NVjNA4BAVw"><img src="https://img.shields.io/badge/Discord-Join_Us-blueviolet.svg?logo=discord" alt="Discord"></a>
 </p>
 
-**AgentTeams (formerly HiClaw) is an open-source collaborative multi-agent runtime platform. It enables multiple Agents to collaborate in a controlled and auditable room, with full human visibility and intervention capabilities throughout the process..**
+**AgentTeams (formerly AgentTeams) is an open-source collaborative multi-agent runtime platform. It enables multiple Agents to collaborate in a controlled and auditable room, with full human visibility and intervention capabilities throughout the process..**
 
 Built on a **Manager-Workers architecture**, AgentTeams features a Manager that centrally orchestrates multiple Workers, focusing on collaboration scenarios between humans and Agents, as well as among Agents within enterprise environments.
 
@@ -37,7 +37,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 - **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9: Kubernetes-style declarative resource management (YAML for Worker, Team, Human); Worker Template Marketplace; Manager QwenPaw runtime; Nacos Skills Registry and more.
 - **2026-03-14**: [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — AgentTeams 1.0.6: enterprise-grade MCP Server management, zero credential exposure.
 - **2026-03-10**: [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — AgentTeams 1.0.4: QwenPaw (formerly CoPaw) Worker support, 80% less memory.
-- **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams (then HiClaw) open sourced.
+- **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams (then AgentTeams) open sourced.
 
 ## Why AgentTeams
 
@@ -92,7 +92,7 @@ Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manag
 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 # Upgrade to specific version
-HICLAW_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 ```
 
 ## Uninstall
@@ -205,7 +205,7 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-The image for each component is automatically selected based on the runtime (`hiclaw-manager` / `hiclaw-manager-copaw` for Manager; `hiclaw-worker` / `hiclaw-copaw-worker` / `hiclaw-hermes-worker` for Workers).
+The image for each component is automatically selected based on the runtime (`agentteams-manager` / `agentteams-manager-copaw` for Manager; `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` for Workers).
 
 </details>
 
@@ -325,12 +325,12 @@ hiclaw update worker --runtime hermes
 
 ```
 ┌───────────────────────────────────────────────┐
-│            hiclaw-controller                  │
+│            agentteams-controller                  │
 │  Higress │ Tuwunel │ MinIO │ Element Web      │
 └──────────────────┬────────────────────────────┘
                    │ Matrix + HTTP Files
 ┌──────────────────┴──────────┐
-│     hiclaw-manager-agent     │
+│     agentteams-manager-agent     │
 │     Manager (OpenClaw/       │
 │       QwenPaw)               │
 └──────────────────┬──────────┘
@@ -344,7 +344,7 @@ Worker Alice    Worker Bob              Worker Charlie
 
 | Component | Role |
 |-----------|------|
-| hiclaw-controller | Kubernetes-native control plane, reconciles Worker/Team/Manager CRs |
+| agentteams-controller | Kubernetes-native control plane, reconciles Worker/Team/Manager CRs |
 | Higress AI Gateway | LLM proxy, MCP Server hosting, credential management |
 | Tuwunel (Matrix) | Self-hosted IM server for all Agent + Human communication |
 | Element Web | Browser client, zero setup |
@@ -374,7 +374,7 @@ Worker Alice    Worker Bob              Worker Charlie
 ## Troubleshooting
 
 ```bash
-docker exec -it hiclaw-manager cat /var/log/hiclaw/manager-agent.log
+docker exec -it agentteams-manager cat /var/log/hiclaw/manager-agent.log
 ```
 
 See [docs/zh-cn/faq.md](docs/zh-cn/faq.md) for common issues.

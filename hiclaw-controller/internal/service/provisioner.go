@@ -637,12 +637,12 @@ func (p *Provisioner) ForceRefreshMatrixToken(ctx context.Context, name string) 
 // RefreshCredentials loads persisted credentials and obtains a Matrix token,
 // reusing the cached token when present. Used during update operations.
 func (p *Provisioner) RefreshCredentials(ctx context.Context, workerName string) (*RefreshResult, error) {
-	return p.RefreshWorkerCredentials(ctx, workerName, workerName)
+	return p.RefreshWorkerCredentials(ctx, workerName, workerName, "")
 }
 
 // RefreshWorkerCredentials loads worker credentials by their owning CR key while
 // refreshing the Matrix token for the runtime worker identity.
-func (p *Provisioner) RefreshWorkerCredentials(ctx context.Context, credentialName, workerName string) (*RefreshResult, error) {
+func (p *Provisioner) RefreshWorkerCredentials(ctx context.Context, credentialName, workerName, teamName string) (*RefreshResult, error) {
 	if credentialName == "" {
 		credentialName = workerName
 	}
@@ -659,6 +659,17 @@ func (p *Provisioner) RefreshWorkerCredentials(ctx context.Context, credentialNa
 	if !hadToken {
 		if err := p.creds.Save(ctx, credentialName, creds); err != nil {
 			return nil, fmt.Errorf("persist matrix token: %w", err)
+		}
+	}
+	if p.ossAdmin != nil {
+		if err := p.ossAdmin.EnsureUser(ctx, workerName, creds.MinIOPassword); err != nil {
+			return nil, fmt.Errorf("MinIO user refresh failed: %w", err)
+		}
+		if err := p.ossAdmin.EnsurePolicy(ctx, oss.PolicyRequest{
+			WorkerName: workerName,
+			TeamName:   teamName,
+		}); err != nil {
+			return nil, fmt.Errorf("MinIO policy refresh failed: %w", err)
 		}
 	}
 
@@ -875,7 +886,7 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	logger.Info("leader DM room ready", "roomID", leaderDMRoom.RoomID, "created", leaderDMRoom.Created)
 
 	if hasTeamAdmin {
-		if err := p.ensureTeamAdminJoinedLeaderDM(ctx, leaderDMRoom.RoomID, teamAdminID, req.TeamAdminActorToken, req.LeaderCredentialName, req.LeaderName, leaderDMRoom.Created); err != nil {
+		if err := p.ensureTeamAdminJoinedLeaderDM(ctx, leaderDMRoom.RoomID, teamAdminID, req.TeamAdminActorToken, req.LeaderCredentialName, req.LeaderName, req.TeamName, leaderDMRoom.Created); err != nil {
 			return nil, err
 		}
 	}
@@ -886,7 +897,7 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		leaderDMInviteToken = req.TeamAdminActorToken
 		leaderDMInviteActor = req.TeamAdminActorName
 	} else if !leaderDMRoom.Created {
-		if token, err := p.leaderInviteToken(ctx, req.LeaderCredentialName, req.LeaderName); err != nil {
+		if token, err := p.leaderInviteToken(ctx, req.LeaderCredentialName, req.LeaderName, req.TeamName); err != nil {
 			logger.Error(err, "failed to load leader token for existing leader DM; falling back to admin invite", "leader", req.LeaderName)
 		} else {
 			leaderDMInviteToken = token
@@ -917,14 +928,14 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	}, nil
 }
 
-func (p *Provisioner) ensureTeamAdminJoinedLeaderDM(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName string, created bool) error {
+func (p *Provisioner) ensureTeamAdminJoinedLeaderDM(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName, teamName string, created bool) error {
 	if err := p.matrix.JoinRoom(ctx, roomID, teamAdminToken); err == nil {
 		return nil
 	} else if created {
 		return fmt.Errorf("team admin join leader DM room: %w", err)
 	} else {
 		joinErr := err
-		leaderToken, tokenErr := p.leaderInviteToken(ctx, leaderCredentialName, leaderName)
+		leaderToken, tokenErr := p.leaderInviteToken(ctx, leaderCredentialName, leaderName, teamName)
 		if tokenErr != nil {
 			return fmt.Errorf("team admin join leader DM room: %w", joinErr)
 		}
@@ -1179,14 +1190,14 @@ func (p *Provisioner) ReconcileRoomMembershipWithActorToken(ctx context.Context,
 	return firstErr
 }
 
-func (p *Provisioner) leaderInviteToken(ctx context.Context, credentialName, leaderName string) (string, error) {
+func (p *Provisioner) leaderInviteToken(ctx context.Context, credentialName, leaderName, teamName string) (string, error) {
 	if p.creds == nil {
 		return "", fmt.Errorf("credential store unavailable")
 	}
 	if credentialName == "" {
 		credentialName = leaderName
 	}
-	refresh, err := p.RefreshWorkerCredentials(ctx, credentialName, leaderName)
+	refresh, err := p.RefreshWorkerCredentials(ctx, credentialName, leaderName, teamName)
 	if err != nil {
 		return "", err
 	}
@@ -1637,7 +1648,7 @@ func (p *Provisioner) SendManagerWelcomeMessage(ctx context.Context, req Manager
 // so the resulting agent behavior (greeting + 4-question Q&A + write
 // SOUL.md + touch ~/soul-configured) is unchanged across architectures.
 func renderManagerWelcomeBody(language, timezone string) string {
-	return fmt.Sprintf(`This is an automated message from the HiClaw setup. This is a fresh installation.
+	return fmt.Sprintf(`This is an automated message from the AgentTeams setup. This is a fresh installation.
 
 --- Installation Context ---
 User Language: %s  (zh = Chinese, en = English)

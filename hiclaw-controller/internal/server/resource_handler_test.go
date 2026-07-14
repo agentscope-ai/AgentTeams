@@ -651,6 +651,28 @@ func TestCreateWorkerPersistsRuntimeWorkerName(t *testing.T) {
 	}
 }
 
+func TestCreateWorkerDefaultsRuntime(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"name":"worker-cr"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var stored v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-cr", Namespace: "default"}, &stored); err != nil {
+		t.Fatalf("get created worker: %v", err)
+	}
+	if got := stored.Spec.Runtime; got != "openclaw" {
+		t.Fatalf("worker.spec.runtime = %q, want openclaw", got)
+	}
+}
+
 func TestCreateTeam_StampsControllerLabel(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()

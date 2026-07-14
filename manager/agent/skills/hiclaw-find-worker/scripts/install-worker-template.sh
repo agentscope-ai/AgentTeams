@@ -17,7 +17,7 @@ SKILLS=""
 MCP_SERVERS=""
 RUNTIME=""
 DRY_RUN=false
-NACOS_REGISTRY_URI="${HICLAW_NACOS_REGISTRY_URI:-nacos://market.hiclaw.io:80/public}"
+NACOS_REGISTRY_URI="${AGENTTEAMS_NACOS_REGISTRY_URI:-nacos://market.agentteams.io:80/public}"
 NACOS_HOST=""
 NACOS_PORT=""
 NACOS_NAMESPACE=""
@@ -109,7 +109,7 @@ parse_registry_uri() {
 
 if [[ -z "$PACKAGE_URI" ]]; then
     parse_registry_uri "$NACOS_REGISTRY_URI"
-    NACOS_HOST="${NACOS_HOST:-market.hiclaw.io}"
+    NACOS_HOST="${NACOS_HOST:-market.agentteams.io}"
     NACOS_PORT="${NACOS_PORT:-8848}"
     NACOS_NAMESPACE="${NACOS_NAMESPACE:-public}"
 
@@ -121,21 +121,21 @@ if [[ -z "$PACKAGE_URI" ]]; then
     fi
 fi
 
-HICLAW_ARGS=(apply worker --name "$WORKER_NAME" --package "$PACKAGE_URI")
+AGENTTEAMS_ARGS=(apply worker --name "$WORKER_NAME" --package "$PACKAGE_URI")
 if [[ -n "$MODEL" ]]; then
-    HICLAW_ARGS+=(--model "$MODEL")
+    AGENTTEAMS_ARGS+=(--model "$MODEL")
 fi
 if [[ -n "$SKILLS" ]]; then
-    HICLAW_ARGS+=(--skills "$SKILLS")
+    AGENTTEAMS_ARGS+=(--skills "$SKILLS")
 fi
 if [[ -n "$MCP_SERVERS" ]]; then
-    HICLAW_ARGS+=(--mcp-servers "$MCP_SERVERS")
+    AGENTTEAMS_ARGS+=(--mcp-servers "$MCP_SERVERS")
 fi
 if [[ -n "$RUNTIME" ]]; then
-    HICLAW_ARGS+=(--runtime "$RUNTIME")
+    AGENTTEAMS_ARGS+=(--runtime "$RUNTIME")
 fi
 if [[ "$DRY_RUN" == true ]]; then
-    HICLAW_ARGS+=(--dry-run)
+    AGENTTEAMS_ARGS+=(--dry-run)
 fi
 
 if [[ "$DRY_RUN" == true ]]; then
@@ -147,7 +147,7 @@ if [[ "$DRY_RUN" == true ]]; then
         --arg skills "$SKILLS" \
         --arg mcp_servers "$MCP_SERVERS" \
         --arg runtime "$RUNTIME" \
-        --argjson hiclaw_args "$(printf '%s\n' "${HICLAW_ARGS[@]}" | jq -R . | jq -s .)" \
+        --argjson hiclaw_args "$(printf '%s\n' "${AGENTTEAMS_ARGS[@]}" | jq -R . | jq -s .)" \
         '{
             worker_name: $worker_name,
             template_name: (if $template_name == "" then null else $template_name end),
@@ -163,4 +163,4 @@ if [[ "$DRY_RUN" == true ]]; then
     exit 0
 fi
 
-exec hiclaw "${HICLAW_ARGS[@]}"
+exec hiclaw "${AGENTTEAMS_ARGS[@]}"

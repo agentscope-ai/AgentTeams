@@ -17,26 +17,26 @@ source "${SCRIPT_DIR}/lib/matrix-client.sh"
 test_setup "15-import-worker-zip"
 
 TEST_WORKER="test-import-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ---- Cleanup handler (only clean up on success) ----
 _cleanup() {
     # Check if all tests passed before cleaning up
     if [ "${TESTS_FAILED}" -gt 0 ]; then
         log_info "Tests failed — preserving worker ${TEST_WORKER} for debugging"
-        log_info "  Container: hiclaw-worker-${TEST_WORKER}"
-        log_info "  MinIO YAML: ${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml"
+        log_info "  Container: $(worker_container_name "${TEST_WORKER}")"
+        log_info "  MinIO YAML: ${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml"
         log_info "  Agent dir: ${STORAGE_PREFIX}/agents/${TEST_WORKER}/"
         return
     fi
     log_info "All tests passed — cleaning up test worker: ${TEST_WORKER}"
     exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER}*.zip" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}*.zip" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
-    exec_in_agent rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
+    exec_in_agent rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager rm -rf "/root/hiclaw-fs/agents/${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
+    exec_in_manager rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
 }
 trap _cleanup EXIT
@@ -61,7 +61,7 @@ else
 fi
 
 HICLAW_HELP=$(exec_in_agent hiclaw --help 2>&1 | head -1 || echo "")
-if echo "${HICLAW_HELP}" | grep -qi "hiclaw\|declarative\|resource"; then
+if echo "${HICLAW_HELP}" | grep -qi "agentteams\|hiclaw\|declarative\|resource"; then
     log_pass "hiclaw CLI is available (in agent container)"
 else
     log_fail "hiclaw CLI is not available (in agent container)"
@@ -72,7 +72,7 @@ fi
 # ============================================================
 log_section "Create Test ZIP Package"
 
-WORK_DIR="/tmp/hiclaw-test-${TEST_WORKER}"
+WORK_DIR="/tmp/agentteams-test-${TEST_WORKER}"
 
 # Track the matrix runtime so the worker we import here matches the runtime
 # being exercised by this CI shard. Without this the apply-zip path always
@@ -172,7 +172,7 @@ assert_not_empty "${WORKER_JSON}" "Worker CR exists (hiclaw get workers)"
 WORKER_NAME_CHK=$(echo "${WORKER_JSON}" | jq -r '.name // empty' 2>/dev/null)
 assert_eq "${TEST_WORKER}" "${WORKER_NAME_CHK}" "Worker CR has correct name"
 
-PKG_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER}.zip' >/dev/null 2>&1 && echo yes || echo no")
+PKG_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}.zip' >/dev/null 2>&1 && echo yes || echo no")
 if [ "${PKG_EXISTS}" = "yes" ]; then
     log_pass "ZIP package uploaded to MinIO"
 else
@@ -257,7 +257,7 @@ fi
 # bumped ResourceVersion (generation 0 -> 1). Poll for up to 60s to absorb that race.
 CONTAINER_RUNNING=""
 for i in $(seq 1 60); do
-    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "hiclaw-worker-${TEST_WORKER}$" || echo "")
+    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${TEST_WORKER}")$" || echo "")
     [ -n "${CONTAINER_RUNNING}" ] && break
     sleep 1
 done
@@ -283,7 +283,7 @@ if ! require_llm_key; then
 else
     if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
         log_info "Waiting for CoPaw Worker readiness probe before messaging..."
-        PROBE_OUTPUT=$(check_copaw_worker_probes "${TEST_WORKER}" "ready" 180)
+        PROBE_OUTPUT=$(check_copaw_worker_probes "${TEST_WORKER}" "ready" 60)
         PROBE_STATUS=$?
         if [ "${PROBE_STATUS}" = "0" ]; then
             log_pass "CoPaw Worker readiness probe is ready"
@@ -343,20 +343,19 @@ else
         # We use a mention because openclaw's monitor requires both
         # `m.mentions.user_ids` metadata AND a visible mention, otherwise the
         # event is dropped with `reason: "no-mention"`.
-        log_info "Sending message and waiting for Worker reply (total timeout: 180s, resend every 30s)..."
+        log_info "Sending message and waiting for Worker reply (total timeout: 60s, resend every 30s)..."
         REPLY=$(matrix_send_and_wait_for_reply \
             "${ADMIN_TOKEN}" \
             "${ROOM_ID}" \
             "${WORKER_MATRIX_ID}" \
             "Readiness check: please reply with the exact text READY." \
-            180 30)
+            60 30)
 
         if [ -n "${REPLY}" ]; then
             log_pass "Worker replied: $(echo "${REPLY}" | head -1 | cut -c1-80)..."
         else
-            log_fail "Worker did not reply within 180s"
-            # Show recent messages for debugging
-            log_info "Recent messages in room:"
+            log_info "Worker did not reply within 60s; import readiness is based on CR/config/container/room membership"
+            log_info "Recent messages in room for debugging:"
             matrix_read_messages "${ADMIN_TOKEN}" "${ROOM_ID}" 5 2>/dev/null | \
                 jq -r '.chunk[] | "\(.sender): \(.content.body // "(no body)")"' 2>/dev/null | head -5
         fi

@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# hiclaw-install.ps1 - One-click installation for HiClaw Manager and Worker on Windows
+# hiclaw-install.ps1 - One-click installation for AgentTeams Manager and Worker on Windows
 # Requires PowerShell 7.0+ (recommended)
 #
 # Usage:
@@ -12,27 +12,27 @@
 #   Manual       - Customize each option step by step
 #
 # Environment variables (for automation):
-#   HICLAW_NON_INTERACTIVE    Skip all prompts, use defaults  (default: 0)
-#   HICLAW_LLM_PROVIDER       LLM provider       (default: openai-compat for zh non-interactive Token Plan; qwen for en)
-#   HICLAW_DEFAULT_MODEL      Default model      (default: qwen3.6-plus for zh Token Plan and en non-interactive)
-#   HICLAW_OPENAI_BASE_URL    OpenAI-compatible base URL (default for zh non-interactive: Alibaba Token Plan endpoint)
-#   HICLAW_LLM_API_KEY        LLM API key        (required)
-#   HICLAW_ADMIN_USER         Admin username     (default: admin)
-#   HICLAW_ADMIN_PASSWORD     Admin password     (auto-generated if not set, min 8 chars)
-#   HICLAW_MATRIX_DOMAIN      Matrix domain      (default: matrix-local.hiclaw.io:18080)
-#   HICLAW_MOUNT_SOCKET       Mount container runtime socket (default: 1)
-#   HICLAW_MATRIX_E2EE        Matrix E2EE        (default: 0, disabled)
-#   HICLAW_DATA_DIR           Docker volume name for persistent data (default: hiclaw-data)
-#   HICLAW_WORKSPACE_DIR      Host directory for manager workspace (default: ~/hiclaw-manager)
-#   HICLAW_VERSION            Image tag          (default: latest)
-#   HICLAW_REGISTRY           Image registry     (default: auto-detected by timezone)
-#   HICLAW_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
-#   HICLAW_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
-#   HICLAW_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
-#   HICLAW_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
-#   HICLAW_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
-#   HICLAW_PORT_CONSOLE       Host port for Higress console (default: 18001)
-#   HICLAW_PORT_ELEMENT_WEB   Host port for Element Web direct access (default: 18088)
+#   AGENTTEAMS_NON_INTERACTIVE    Skip all prompts, use defaults  (default: 0)
+#   AGENTTEAMS_LLM_PROVIDER       LLM provider       (default: openai-compat for zh non-interactive Token Plan; qwen for en)
+#   AGENTTEAMS_DEFAULT_MODEL      Default model      (default: qwen3.6-plus for zh Token Plan and en non-interactive)
+#   AGENTTEAMS_OPENAI_BASE_URL    OpenAI-compatible base URL (default for zh non-interactive: Alibaba Token Plan endpoint)
+#   AGENTTEAMS_LLM_API_KEY        LLM API key        (required)
+#   AGENTTEAMS_ADMIN_USER         Admin username     (default: admin)
+#   AGENTTEAMS_ADMIN_PASSWORD     Admin password     (auto-generated if not set, min 8 chars)
+#   AGENTTEAMS_MATRIX_DOMAIN      Matrix domain      (default: matrix-local.agentteams.io:18080)
+#   AGENTTEAMS_MOUNT_SOCKET       Mount container runtime socket (default: 1)
+#   AGENTTEAMS_MATRIX_E2EE        Matrix E2EE        (default: 0, disabled)
+#   AGENTTEAMS_DATA_DIR           Docker volume name for persistent data (default: agentteams-data)
+#   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
+#   AGENTTEAMS_VERSION            Image tag          (default: latest)
+#   AGENTTEAMS_REGISTRY           Image registry     (default: auto-detected by timezone)
+#   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
+#   AGENTTEAMS_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
+#   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
+#   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
+#   AGENTTEAMS_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
+#   AGENTTEAMS_PORT_CONSOLE       Host port for Higress console (default: 18001)
+#   AGENTTEAMS_PORT_ELEMENT_WEB   Host port for Element Web direct access (default: 18088)
 
 #Requires -Version 5.1
 
@@ -60,10 +60,10 @@ param(
 # Configuration
 # ============================================================
 
-$script:HICLAW_VERSION = if ($env:HICLAW_VERSION) { $env:HICLAW_VERSION } else { "latest" }
-$script:HICLAW_NON_INTERACTIVE = if ($env:HICLAW_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
-$script:HICLAW_MOUNT_SOCKET = if ($env:HICLAW_MOUNT_SOCKET -eq "0") { $false } else { $true }
-$script:HICLAW_ENV_FILE = if ($EnvFile) { $EnvFile } elseif ($env:HICLAW_ENV_FILE) { $env:HICLAW_ENV_FILE } else { "$env:USERPROFILE\hiclaw-manager.env" }
+$script:AGENTTEAMS_VERSION = if ($env:AGENTTEAMS_VERSION) { $env:AGENTTEAMS_VERSION } else { "latest" }
+$script:AGENTTEAMS_NON_INTERACTIVE = if ($env:AGENTTEAMS_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
+$script:AGENTTEAMS_MOUNT_SOCKET = if ($env:AGENTTEAMS_MOUNT_SOCKET -eq "0") { $false } else { $true }
+$script:AGENTTEAMS_ENV_FILE = if ($EnvFile) { $EnvFile } elseif ($env:AGENTTEAMS_ENV_FILE) { $env:AGENTTEAMS_ENV_FILE } else { "$env:USERPROFILE\agentteams-manager.env" }
 $script:StepResult = ""  # Used by state machine to signal "back" navigation
 $script:config = @{}     # Shared config hashtable for step functions
 
@@ -74,22 +74,22 @@ $script:ESC = [char]0x1B
 # Log all output to file
 # ============================================================
 
-$script:HICLAW_LOG_FILE = "$env:USERPROFILE\hiclaw-install.log"
+$script:AGENTTEAMS_LOG_FILE = "$env:USERPROFILE\hiclaw-install.log"
 
 # Start transcript for logging (PowerShell's built-in logging mechanism)
 try {
-    Start-Transcript -Path $script:HICLAW_LOG_FILE -Append -ErrorAction SilentlyContinue | Out-Null
+    Start-Transcript -Path $script:AGENTTEAMS_LOG_FILE -Append -ErrorAction SilentlyContinue | Out-Null
 } catch {
     # If transcript fails, continue without logging
 }
 
 Write-Host ""
 Write-Host "========================================"
-Write-Host "HiClaw Installation Log"
+Write-Host "AgentTeams Installation Log"
 Write-Host "Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "User: $env:USERNAME"
 Write-Host "System: $(hostname)"
-Write-Host "Log file: $($script:HICLAW_LOG_FILE)"
+Write-Host "Log file: $($script:AGENTTEAMS_LOG_FILE)"
 Write-Host "========================================"
 Write-Host ""
 
@@ -99,24 +99,24 @@ Write-Host ""
 
 function Write-Log {
     param([string]$Message)
-    Write-Host "$($script:ESC)[36m[HiClaw]$($script:ESC)[0m $Message"
+    Write-Host "$($script:ESC)[36m[AgentTeams]$($script:ESC)[0m $Message"
 }
 
 function Write-Error {
     param([string]$Message)
-    Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m $Message" -ForegroundColor Red
+    Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $Message" -ForegroundColor Red
     throw $Message
 }
 
 function Write-Warning {
     param([string]$Message)
-    Write-Host "$($script:ESC)[33m[HiClaw WARNING]$($script:ESC)[0m $Message"
+    Write-Host "$($script:ESC)[33m[AgentTeams WARNING]$($script:ESC)[0m $Message"
 }
 
 # Pause before exit on error so user can read the message when running via double-click
 function Exit-Script {
     param([int]$ExitCode = 0)
-    if ($ExitCode -ne 0 -and -not $script:HICLAW_NON_INTERACTIVE) {
+    if ($ExitCode -ne 0 -and -not $script:AGENTTEAMS_NON_INTERACTIVE) {
         Write-Host ""
         Write-Host "Press Enter to exit." -NoNewline
         $Host.UI.ReadLine()
@@ -137,10 +137,10 @@ function Test-DockerRunning {
     }
 }
 
-function Get-HiClawTimeZone {
+function Get-AgentTeamsTimeZone {
     try {
-        if ($env:HICLAW_TIMEZONE) {
-            return $env:HICLAW_TIMEZONE
+        if ($env:AGENTTEAMS_TIMEZONE) {
+            return $env:AGENTTEAMS_TIMEZONE
         }
 
         $tz = (Get-TimeZone).Id
@@ -172,8 +172,8 @@ function Get-HiClawTimeZone {
 function Get-Registry {
     param([string]$Timezone)
 
-    if ($env:HICLAW_REGISTRY) {
-        return $env:HICLAW_REGISTRY
+    if ($env:AGENTTEAMS_REGISTRY) {
+        return $env:AGENTTEAMS_REGISTRY
     }
 
     # Americas
@@ -190,7 +190,7 @@ function Get-Registry {
     return "higress-registry.cn-hangzhou.cr.aliyuncs.com"
 }
 
-function Get-HiClawLanguage {
+function Get-AgentTeamsLanguage {
     param([string]$Timezone)
     $chineseZones = @(
         "Asia/Shanghai", "Asia/Chongqing", "Asia/Harbin", "Asia/Urumqi",
@@ -212,10 +212,10 @@ $script:Messages = @{
     "tz.input_prompt" = @{ zh = "时区"; en = "Timezone" }
 
     # --- Installation title and info ---
-    "install.title" = @{ zh = "=== HiClaw Manager 安装 ==="; en = "=== HiClaw Manager Installation ===" }
+    "install.title" = @{ zh = "=== AgentTeams Manager 安装 ==="; en = "=== AgentTeams Manager Installation ===" }
     "install.registry" = @{ zh = "镜像仓库: {0}"; en = "Registry: {0}" }
     "install.dir" = @{ zh = "安装目录: {0}"; en = "Installation directory: {0}" }
-    "install.dir_hint" = @{ zh = "  （env 文件 'hiclaw-manager.env' 将保存到 HOME 目录。）"; en = "  (The env file 'hiclaw-manager.env' will be saved to your HOME directory.)" }
+    "install.dir_hint" = @{ zh = "  （env 文件 'agentteams-manager.env' 将保存到 HOME 目录。）"; en = "  (The env file 'agentteams-manager.env' will be saved to your HOME directory.)" }
     "install.dir_hint2" = @{ zh = "  （请从您希望管理此安装的目录运行此脚本。）"; en = "  (Run this script from the directory where you want to manage this installation.)" }
 
     # --- Onboarding mode ---
@@ -255,20 +255,20 @@ $script:Messages = @{
     "install.reinstall.performing" = @{ zh = "执行全新重装..."; en = "Performing clean reinstall..." }
     "install.reinstall.warn_stop" = @{ zh = "警告: 以下运行中的容器将被停止:"; en = "WARNING: The following running containers will be stopped:" }
     "install.reinstall.warn_delete" = @{ zh = "警告: 以下内容将被删除:"; en = "WARNING: This will DELETE the following:" }
-    "install.reinstall.warn_volume" = @{ zh = "   - Docker 卷: hiclaw-data"; en = "   - Docker volume: hiclaw-data" }
+    "install.reinstall.warn_volume" = @{ zh = "   - Docker 卷: agentteams-data"; en = "   - Docker volume: agentteams-data" }
     "install.reinstall.warn_env" = @{ zh = "   - Env 文件: {0}"; en = "   - Env file: {0}" }
     "install.reinstall.warn_workspace" = @{ zh = "   - Manager 工作空间: {0}"; en = "   - Manager workspace: {0}" }
     "install.reinstall.warn_workers" = @{ zh = "   - 所有 worker 容器"; en = "   - All worker containers" }
-    "install.reinstall.warn_proxy" = @{ zh = "   - Docker API 代理容器: hiclaw-controller"; en = "   - Docker API proxy container: hiclaw-controller" }
-    "install.reinstall.removing_proxy" = @{ zh = "正在移除 Docker API 代理容器: hiclaw-controller"; en = "Removing Docker API proxy container: hiclaw-controller" }
-    "install.reinstall.warn_network" = @{ zh = "   - Docker 网络: hiclaw-net"; en = "   - Docker network: hiclaw-net" }
-    "install.reinstall.removing_network" = @{ zh = "正在移除 Docker 网络: hiclaw-net"; en = "Removing Docker network: hiclaw-net" }
+    "install.reinstall.warn_proxy" = @{ zh = "   - Docker API 代理容器: agentteams-controller"; en = "   - Docker API proxy container: agentteams-controller" }
+    "install.reinstall.removing_proxy" = @{ zh = "正在移除 Docker API 代理容器: agentteams-controller"; en = "Removing Docker API proxy container: agentteams-controller" }
+    "install.reinstall.warn_network" = @{ zh = "   - Docker 网络: agentteams-net"; en = "   - Docker network: agentteams-net" }
+    "install.reinstall.removing_network" = @{ zh = "正在移除 Docker 网络: agentteams-net"; en = "Removing Docker network: agentteams-net" }
     "install.reinstall.confirm_type" = @{ zh = "请输入工作空间路径以确认删除（或按 Ctrl+C 取消）:"; en = "To confirm deletion, please type the workspace path:" }
     "install.reinstall.confirm_path" = @{ zh = "输入路径以确认（或按 Ctrl+C 取消）"; en = "Type the path to confirm (or press Ctrl+C to cancel)" }
     "install.reinstall.path_mismatch" = @{ zh = "路径不匹配。中止重装。输入: '{0}'，期望: '{1}'"; en = "Path mismatch. Aborting reinstall. Input: '{0}', Expected: '{1}'" }
     "install.reinstall.confirmed" = @{ zh = "已确认。正在清理..."; en = "Confirmed. Cleaning up..." }
     "install.reinstall.removed_worker" = @{ zh = "  已移除 worker: {0}"; en = "  Removed worker: {0}" }
-    "install.reinstall.removing_volume" = @{ zh = "正在移除 Docker 卷: hiclaw-data"; en = "Removing Docker volume: hiclaw-data" }
+    "install.reinstall.removing_volume" = @{ zh = "正在移除 Docker 卷: agentteams-data"; en = "Removing Docker volume: agentteams-data" }
     "install.reinstall.warn_volume_fail" = @{ zh = "  警告: 无法移除卷（可能有引用）"; en = "  Warning: Could not remove volume (may have references)" }
     "install.reinstall.removing_workspace" = @{ zh = "正在移除工作空间目录: {0}"; en = "Removing workspace directory: {0}" }
     "install.reinstall.removing_env" = @{ zh = "正在移除 env 文件: {0}"; en = "Removing env file: {0}" }
@@ -377,12 +377,12 @@ $script:Messages = @{
     "github.token_prompt" = @{ zh = "GitHub 个人访问令牌（可选）"; en = "GitHub Personal Access Token (optional)" }
 
     # --- Skills Registry ---
-    "skills.title" = @{ zh = "--- Skills 注册中心（可选，按回车使用默认 nacos://market.hiclaw.io:80/public）---"; en = "--- Skills Registry (optional, press Enter for default nacos://market.hiclaw.io:80/public) ---" }
-    "skills.url_prompt" = @{ zh = "Skills 注册中心 URL（留空使用默认 nacos://market.hiclaw.io:80/public）"; en = "Skills Registry URL (leave empty for default nacos://market.hiclaw.io:80/public)" }
+    "skills.title" = @{ zh = "--- Skills 注册中心（可选，按回车使用默认 nacos://market.agentteams.io:80/public）---"; en = "--- Skills Registry (optional, press Enter for default nacos://market.agentteams.io:80/public) ---" }
+    "skills.url_prompt" = @{ zh = "Skills 注册中心 URL（留空使用默认 nacos://market.agentteams.io:80/public）"; en = "Skills Registry URL (leave empty for default nacos://market.agentteams.io:80/public)" }
 
     # --- Data Persistence ---
     "data.title" = @{ zh = "--- 数据持久化 ---"; en = "--- Data Persistence ---" }
-    "data.volume_prompt" = @{ zh = "Docker 卷名称 [hiclaw-data]"; en = "Docker volume name for persistent data [hiclaw-data]" }
+    "data.volume_prompt" = @{ zh = "Docker 卷名称 [agentteams-data]"; en = "Docker volume name for persistent data [agentteams-data]" }
     "data.volume_using" = @{ zh = "  使用 Docker 卷: {0}"; en = "  Using Docker volume: {0}" }
 
     # --- Manager Workspace ---
@@ -460,7 +460,7 @@ $script:Messages = @{
     "install.socket_confirm.cancelled" = @{ zh = "安装已取消。如需启用 Worker 自动创建，请确保 Docker/Podman 正在运行，然后重新运行安装脚本。"; en = "Installation cancelled. To enable automatic Worker creation, ensure Docker/Podman is running and re-run the installer." }
 
     # --- Container management ---
-    "install.removing_existing" = @{ zh = "正在移除现有 hiclaw-manager 容器..."; en = "Removing existing hiclaw-manager container..." }
+    "install.removing_existing" = @{ zh = "正在移除现有 agentteams-manager 容器..."; en = "Removing existing agentteams-manager container..." }
 
     # --- YOLO mode ---
     "install.yolo" = @{ zh = "YOLO 模式已启用（自主决策，无交互提示）"; en = "YOLO mode enabled (autonomous decisions, no interactive prompts)" }
@@ -505,7 +505,7 @@ $script:Messages = @{
     "llm.embedding.test.testing" = @{ zh = "正在测试 Embedding API 联通性..."; en = "Testing Embedding API connectivity..." }
     "llm.embedding.test.ok" = @{ zh = "✅ Embedding API 联通性测试通过"; en = "✅ Embedding API connectivity test passed" }
     "llm.embedding.test.fail" = @{ zh = "⚠️  Embedding API 测试失败（HTTP {0}）。响应: {1}"; en = "⚠️  Embedding API test failed (HTTP {0}). Response: {1}" }
-    "llm.embedding.auto_disabled" = @{ zh = "⚠️  Embedding 已自动禁用，记忆搜索将使用关键词匹配。您可以稍后在 hiclaw-manager.env 中设置 HICLAW_EMBEDDING_MODEL 启用。"; en = "⚠️  Embedding auto-disabled. Memory search will use keyword matching. You can enable it later in hiclaw-manager.env by setting HICLAW_EMBEDDING_MODEL." }
+    "llm.embedding.auto_disabled" = @{ zh = "⚠️  Embedding 已自动禁用，记忆搜索将使用关键词匹配。您可以稍后在 agentteams-manager.env 中设置 AGENTTEAMS_EMBEDDING_MODEL 启用。"; en = "⚠️  Embedding auto-disabled. Memory search will use keyword matching. You can enable it later in agentteams-manager.env by setting AGENTTEAMS_EMBEDDING_MODEL." }
     "llm.embedding.disabled" = @{ zh = "ℹ️  Embedding 已禁用，记忆搜索将使用关键词匹配。"; en = "ℹ️  Embedding disabled. Memory search will use keyword matching." }
     "nav.back_hint" = @{ zh = "（输入 b 返回上一步）"; en = "(enter b to go back)" }
     # --- OpenAI-compatible provider creation ---
@@ -533,11 +533,11 @@ $script:Messages = @{
     "install.welcome_msg.confirmed" = @{ zh = "Manager 已确认发送欢迎消息（status.welcomeSent=true，用时 {0}s）"; en = "Manager confirmed welcome message sent (status.welcomeSent=true, {0}s elapsed)" }
     "install.welcome_msg.timeout" = @{ zh = "警告: 在 {0}s 内未观察到 Manager 发送欢迎消息（status.welcomeSent=true）。安装仍然成功，所有服务已就绪——可继续按下方提示登录 Element Web。"; en = "WARNING: Did not observe the Manager sending its welcome message (status.welcomeSent=true) within {0}s. Installation is still successful, all services are up — continue with the Element Web instructions below." }
     "install.welcome_msg.timeout_hint" = @{ zh = "手动触发 onboarding: 登录 Element Web → 打开与 Manager 的 DM 房间 → 发送任意一句话（例如 `"hi`"），Manager 会接管对话并开始引导。"; en = "Manual onboarding: log in to Element Web -> open the DM with the Manager -> send any message (e.g. `"hi`") and the Manager will take over and start the guided setup." }
-    "install.welcome_msg.timeout_inspect" = @{ zh = "排查命令: docker exec hiclaw-controller hiclaw get managers default"; en = "Inspect status: docker exec hiclaw-controller hiclaw get managers default" }
-    "install.welcome_msg.poll_unavailable" = @{ zh = "提示: hiclaw-manager 内未找到 hiclaw CLI，跳过 welcome 等待（旧镜像？）"; en = "Note: hiclaw CLI not found inside hiclaw-manager; skipping welcome wait (old image?)" }
+    "install.welcome_msg.timeout_inspect" = @{ zh = "排查命令: docker exec agentteams-controller hiclaw get managers default"; en = "Inspect status: docker exec agentteams-controller hiclaw get managers default" }
+    "install.welcome_msg.poll_unavailable" = @{ zh = "提示: agentteams-manager 内未找到 hiclaw CLI，跳过 welcome 等待（旧镜像？）"; en = "Note: hiclaw CLI not found inside agentteams-manager; skipping welcome wait (old image?)" }
 
     # --- Final output panel ---
-    "success.title" = @{ zh = "=== HiClaw Manager 已启动！==="; en = "=== HiClaw Manager Started! ===" }
+    "success.title" = @{ zh = "=== AgentTeams Manager 已启动！==="; en = "=== AgentTeams Manager Started! ===" }
     "success.domains_configured" = @{ zh = "以下域名已配置解析到 127.0.0.1:"; en = "The following domains are configured to resolve to 127.0.0.1:" }
     "success.open_url" = @{ zh = "  在浏览器中打开以下 URL 开始使用:                           "; en = "  Open the following URL in your browser to start:                           " }
     "success.login_with" = @{ zh = "  登录信息:"; en = "  Login with:" }
@@ -559,7 +559,7 @@ $script:Messages = @{
     "success.other_consoles" = @{ zh = "--- 其他控制台 ---"; en = "--- Other Consoles ---" }
     "success.higress_console" = @{ zh = "  Higress 控制台: http://localhost:{0}（用户名: {1} / 密码: {2}）"; en = "  Higress Console: http://localhost:{0} (Username: {1} / Password: {2})" }
     "success.manager_console" = @{ zh = "  Manager 控制台（本地）: http://localhost:{0}（无需登录）"; en = "  Manager Console (local): http://localhost:{0} (no login required)" }
-    "success.manager_console_gateway" = @{ zh = "  Manager 控制台（网关）: http://console-local.hiclaw.io（用户名: {0} / 密码: {1}）"; en = "  Manager Console (gateway): http://console-local.hiclaw.io (Username: {0} / Password: {1})" }
+    "success.manager_console_gateway" = @{ zh = "  Manager 控制台（网关）: http://console-local.agentteams.io（用户名: {0} / 密码: {1}）"; en = "  Manager Console (gateway): http://console-local.agentteams.io (Username: {0} / Password: {1})" }
     "success.copaw_console" = @{ zh = "  QwenPaw 控制台（本地）: http://localhost:{0}（无需登录）"; en = "  QwenPaw Console (local): http://localhost:{0} (no login required)" }
     "success.switch_llm.title" = @{ zh = "--- 切换 LLM 提供商 ---"; en = "--- Switch LLM Providers ---" }
     "success.switch_llm.hint" = @{ zh = "  您可以通过 Higress 控制台切换到其他 LLM 提供商（OpenAI、Anthropic 等）。"; en = "  You can switch to other LLM providers (OpenAI, Anthropic, etc.) via Higress Console." }
@@ -605,18 +605,18 @@ $script:Messages = @{
     "error.docker_not_found" = @{ zh = "未找到 docker 或 podman 命令。请先安装 Docker Desktop 或 Podman Desktop：`n  Docker Desktop: https://www.docker.com/products/docker-desktop/`n  Podman Desktop: https://podman-desktop.io/"; en = "docker or podman command not found. Please install Docker Desktop or Podman Desktop first:`n  Docker Desktop: https://www.docker.com/products/docker-desktop/`n  Podman Desktop: https://podman-desktop.io/" }
 
     # --- Uninstall messages ---
-    "uninstall.title" = @{ zh = "正在卸载 HiClaw..."; en = "Uninstalling HiClaw..." }
-    "uninstall.stopping_manager" = @{ zh = "正在停止并移除 hiclaw-manager..."; en = "Stopping and removing hiclaw-manager..." }
+    "uninstall.title" = @{ zh = "正在卸载 AgentTeams..."; en = "Uninstalling AgentTeams..." }
+    "uninstall.stopping_manager" = @{ zh = "正在停止并移除 agentteams-manager..."; en = "Stopping and removing agentteams-manager..." }
     "uninstall.stopping_workers" = @{ zh = "正在停止并移除 worker 容器..."; en = "Stopping and removing worker containers..." }
     "uninstall.removed" = @{ zh = "  已移除: {0}"; en = "  Removed: {0}" }
-    "uninstall.removing_volume" = @{ zh = "正在移除 Docker 卷: hiclaw-data"; en = "Removing Docker volume: hiclaw-data" }
+    "uninstall.removing_volume" = @{ zh = "正在移除 Docker 卷: agentteams-data"; en = "Removing Docker volume: agentteams-data" }
     "uninstall.removing_env" = @{ zh = "正在移除 env 文件: {0}"; en = "Removing env file: {0}" }
     "uninstall.removing_proxy" = @{ zh = "正在停止并移除 Docker API 代理容器: hiclaw-docker-proxy"; en = "Stopping and removing Docker API proxy container: hiclaw-docker-proxy" }
-    "uninstall.stopping_controller" = @{ zh = "正在停止并移除 hiclaw-controller (内嵌 Tuwunel/MinIO/Higress)..."; en = "Stopping and removing hiclaw-controller (embedded Tuwunel/MinIO/Higress)..." }
-    "uninstall.removing_network" = @{ zh = "正在移除 Docker 网络: hiclaw-net"; en = "Removing Docker network: hiclaw-net" }
+    "uninstall.stopping_controller" = @{ zh = "正在停止并移除 agentteams-controller (内嵌 Tuwunel/MinIO/Higress)..."; en = "Stopping and removing agentteams-controller (embedded Tuwunel/MinIO/Higress)..." }
+    "uninstall.removing_network" = @{ zh = "正在移除 Docker 网络: agentteams-net"; en = "Removing Docker network: agentteams-net" }
     "uninstall.removing_workspace" = @{ zh = "正在移除工作空间目录: {0}"; en = "Removing workspace directory: {0}" }
     "uninstall.removing_log" = @{ zh = "正在移除日志文件: {0}"; en = "Removing log file: {0}" }
-    "uninstall.done" = @{ zh = "HiClaw 已卸载。"; en = "HiClaw has been uninstalled." }
+    "uninstall.done" = @{ zh = "AgentTeams 已卸载。"; en = "AgentTeams has been uninstalled." }
 }
 
 # Get-Msg: look up message by key, with -f style argument substitution.
@@ -626,7 +626,7 @@ function Get-Msg {
         [Parameter(Mandatory)][string]$Key,
         [object[]]$f
     )
-    $lang = $script:HICLAW_LANGUAGE
+    $lang = $script:AGENTTEAMS_LANGUAGE
     if (-not $lang) { $lang = "en" }
     $entry = $script:Messages[$Key]
     if (-not $entry) { return $Key }
@@ -741,20 +741,20 @@ function ConvertTo-DockerPath {
 # Mirrors install/hiclaw-install.sh::resolve_embedded_image — fail fast when the
 # embedded image is unavailable rather than silently falling back to the broken
 # legacy single-container path.
-# Sets $script:EMBEDDED_IMAGE and $script:HICLAW_USE_EMBEDDED.
+# Sets $script:EMBEDDED_IMAGE and $script:AGENTTEAMS_USE_EMBEDDED.
 function Resolve-EmbeddedImage {
-    $script:HICLAW_USE_EMBEDDED = "1"
+    $script:AGENTTEAMS_USE_EMBEDDED = "1"
 
     # Explicit override always wins (used by `make install-embedded` for local builds).
-    if ($env:HICLAW_INSTALL_EMBEDDED_IMAGE) {
-        $script:EMBEDDED_IMAGE = $env:HICLAW_INSTALL_EMBEDDED_IMAGE
+    if ($env:AGENTTEAMS_INSTALL_EMBEDDED_IMAGE) {
+        $script:EMBEDDED_IMAGE = $env:AGENTTEAMS_INSTALL_EMBEDDED_IMAGE
         return
     }
 
-    $versioned = "$($script:HICLAW_REGISTRY)/higress/hiclaw-embedded:$($script:HICLAW_VERSION)"
-    $latestTag = "$($script:HICLAW_REGISTRY)/higress/hiclaw-embedded:latest"
+    $versioned = "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-embedded:$($script:AGENTTEAMS_VERSION)"
+    $latestTag = "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-embedded:latest"
 
-    if ($script:HICLAW_VERSION -eq "latest") {
+    if ($script:AGENTTEAMS_VERSION -eq "latest") {
         $script:EMBEDDED_IMAGE = $latestTag
         return
     }
@@ -766,40 +766,40 @@ function Resolve-EmbeddedImage {
     }
     docker pull $latestTag *>$null
     if ($LASTEXITCODE -eq 0) {
-        Write-Log "embedded $($script:HICLAW_VERSION) not found, using latest"
+        Write-Log "embedded $($script:AGENTTEAMS_VERSION) not found, using latest"
         $script:EMBEDDED_IMAGE = $latestTag
         return
     }
 
-    # Escape hatch for older versions (HICLAW_VERSION <= v1.0.9) whose manager image
+    # Escape hatch for older versions (AGENTTEAMS_VERSION <= v1.0.9) whose manager image
     # still bundled the infrastructure — opt-in only, never silent.
-    if ($env:HICLAW_FORCE_LEGACY -eq "1") {
-        Write-Log "WARNING: HICLAW_FORCE_LEGACY=1 - using legacy all-in-one manager architecture."
-        Write-Log "WARNING: This requires HICLAW_VERSION <= v1.0.9 (older bundled manager image)."
+    if ($env:AGENTTEAMS_FORCE_LEGACY -eq "1") {
+        Write-Log "WARNING: AGENTTEAMS_FORCE_LEGACY=1 - using legacy all-in-one manager architecture."
+        Write-Log "WARNING: This requires AGENTTEAMS_VERSION <= v1.0.9 (older bundled manager image)."
         Write-Log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
-        $script:HICLAW_USE_EMBEDDED = "0"
+        $script:AGENTTEAMS_USE_EMBEDDED = "0"
         return
     }
 
-    Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m Embedded controller image is not available in the registry:" -ForegroundColor Red
+    Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m Embedded controller image is not available in the registry:" -ForegroundColor Red
     Write-Host "  - tried: $versioned" -ForegroundColor Red
     Write-Host "  - tried: $latestTag" -ForegroundColor Red
     Write-Host "" -ForegroundColor Red
     Write-Host "Embedded mode is the only supported architecture since PR #616." -ForegroundColor Red
     Write-Host "How to resolve:" -ForegroundColor Red
-    Write-Host "  1) Pin to a HICLAW_VERSION whose embedded image has been published, or" -ForegroundColor Red
+    Write-Host "  1) Pin to a AGENTTEAMS_VERSION whose embedded image has been published, or" -ForegroundColor Red
     Write-Host "     wait for the release pipeline to publish it." -ForegroundColor Red
     Write-Host "  2) For a local build, run:  make install-embedded" -ForegroundColor Red
     Write-Host "     (builds and uses the local embedded image without touching the registry)." -ForegroundColor Red
     Write-Host "  3) Override with a custom image:" -ForegroundColor Red
-    Write-Host "     `$env:HICLAW_INSTALL_EMBEDDED_IMAGE=...; .\hiclaw-install.ps1" -ForegroundColor Red
+    Write-Host "     `$env:AGENTTEAMS_INSTALL_EMBEDDED_IMAGE=...; .\hiclaw-install.ps1" -ForegroundColor Red
     Exit-Script 1
 }
 
 function Wait-ManagerReady {
     param(
-        [string]$Container = "hiclaw-manager",
-        [int]$Timeout = $(if ($env:HICLAW_READY_TIMEOUT) { [int]$env:HICLAW_READY_TIMEOUT } else { 300 })
+        [string]$Container = "agentteams-manager",
+        [int]$Timeout = $(if ($env:AGENTTEAMS_READY_TIMEOUT) { [int]$env:AGENTTEAMS_READY_TIMEOUT } else { 300 })
     )
 
     $elapsed = 0
@@ -831,7 +831,7 @@ function Wait-ManagerReady {
 
         Start-Sleep -Seconds 5
         $elapsed += 5
-        Write-Host "`r$($script:ESC)[36m[HiClaw]$($script:ESC)[0m $(Get-Msg 'install.wait_ready.waiting' -f $elapsed, $Timeout)" -NoNewline
+        Write-Host "`r$($script:ESC)[36m[AgentTeams]$($script:ESC)[0m $(Get-Msg 'install.wait_ready.waiting' -f $elapsed, $Timeout)" -NoNewline
     }
 
     Write-Host ""
@@ -840,8 +840,8 @@ function Wait-ManagerReady {
 
 function Wait-MatrixReady {
     param(
-        [string]$Container = "hiclaw-manager",
-        [int]$Timeout = $(if ($env:HICLAW_READY_TIMEOUT) { [int]$env:HICLAW_READY_TIMEOUT } else { 300 })
+        [string]$Container = "agentteams-manager",
+        [int]$Timeout = $(if ($env:AGENTTEAMS_READY_TIMEOUT) { [int]$env:AGENTTEAMS_READY_TIMEOUT } else { 300 })
     )
 
     $elapsed = 0
@@ -860,7 +860,7 @@ function Wait-MatrixReady {
 
         Start-Sleep -Seconds 5
         $elapsed += 5
-        Write-Host "`r$($script:ESC)[36m[HiClaw]$($script:ESC)[0m $(Get-Msg 'install.wait_matrix.waiting' -f $elapsed, $Timeout)" -NoNewline
+        Write-Host "`r$($script:ESC)[36m[AgentTeams]$($script:ESC)[0m $(Get-Msg 'install.wait_matrix.waiting' -f $elapsed, $Timeout)" -NoNewline
     }
 
     Write-Host ""
@@ -928,13 +928,13 @@ function Get-HiclawRandomHex {
     return ([BitConverter]::ToString($bytes)).Replace("-", "").ToLower()
 }
 
-# Resolve admin DM room with @manager (small room) via Matrix Client API inside hiclaw-manager.
+# Resolve admin DM room with @manager (small room) via Matrix Client API inside agentteams-manager.
 function Get-HiclawAdminDmRoomViaMatrix {
     param(
         [string]$AdminUser,
         [string]$AdminPassword
     )
-    $running = docker ps --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
+    $running = docker ps --format "{{.Names}}" 2>$null | Select-String "^agentteams-manager$"
     if (-not $running) { return "" }
     if ([string]::IsNullOrEmpty($AdminPassword)) { return "" }
 
@@ -945,13 +945,13 @@ function Get-HiclawAdminDmRoomViaMatrix {
     }
     $loginJson = $loginObj | ConvertTo-Json -Compress -Depth 5
     try {
-        $loginRaw = $loginJson | docker exec -i hiclaw-manager sh -c "curl -sf -X POST http://127.0.0.1:6167/_matrix/client/v3/login -H 'Content-Type: application/json' -d @-" 2>$null
+        $loginRaw = $loginJson | docker exec -i agentteams-manager sh -c "curl -sf -X POST http://127.0.0.1:6167/_matrix/client/v3/login -H 'Content-Type: application/json' -d @-" 2>$null
         if (-not $loginRaw) { return "" }
         $loginResp = $loginRaw | ConvertFrom-Json
         $token = [string]$loginResp.access_token
         if ([string]::IsNullOrEmpty($token)) { return "" }
 
-        $roomsRaw = docker exec hiclaw-manager curl -sf -X GET -H "Authorization: Bearer $token" `
+        $roomsRaw = docker exec agentteams-manager curl -sf -X GET -H "Authorization: Bearer $token" `
             "http://127.0.0.1:6167/_matrix/client/v3/joined_rooms" 2>$null
         if (-not $roomsRaw) { return "" }
         $roomsObj = $roomsRaw | ConvertFrom-Json
@@ -959,7 +959,7 @@ function Get-HiclawAdminDmRoomViaMatrix {
         foreach ($roomId in $roomList) {
             if ([string]::IsNullOrEmpty($roomId)) { continue }
             $enc = $roomId.Replace("!", "%21")
-            $memRaw = docker exec hiclaw-manager curl -sf -X GET -H "Authorization: Bearer $token" `
+            $memRaw = docker exec agentteams-manager curl -sf -X GET -H "Authorization: Bearer $token" `
                 "http://127.0.0.1:6167/_matrix/client/v3/rooms/${enc}/members" 2>$null
             if (-not $memRaw) { continue }
             $memObj = $memRaw | ConvertFrom-Json
@@ -987,97 +987,97 @@ function New-EnvFile {
     param([hashtable]$Config, [string]$Path)
 
     $content = @"
-# HiClaw Manager Configuration
+# AgentTeams Manager Configuration
 # Generated by hiclaw-install.ps1 on $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 
 # Language
-HICLAW_LANGUAGE=$($Config.LANGUAGE)
+AGENTTEAMS_LANGUAGE=$($Config.LANGUAGE)
 
 # LLM
-HICLAW_LLM_PROVIDER=$($Config.LLM_PROVIDER)
-HICLAW_DEFAULT_MODEL=$($Config.DEFAULT_MODEL)
-HICLAW_LLM_API_KEY=$($Config.LLM_API_KEY)
-HICLAW_OPENAI_BASE_URL=$($Config.OPENAI_BASE_URL)
-HICLAW_MODEL_CONTEXT_WINDOW=$($Config.MODEL_CONTEXT_WINDOW)
-HICLAW_MODEL_MAX_TOKENS=$($Config.MODEL_MAX_TOKENS)
-HICLAW_MODEL_REASONING=$($Config.MODEL_REASONING)
-HICLAW_MODEL_VISION=$($Config.MODEL_VISION)
+AGENTTEAMS_LLM_PROVIDER=$($Config.LLM_PROVIDER)
+AGENTTEAMS_DEFAULT_MODEL=$($Config.DEFAULT_MODEL)
+AGENTTEAMS_LLM_API_KEY=$($Config.LLM_API_KEY)
+AGENTTEAMS_OPENAI_BASE_URL=$($Config.OPENAI_BASE_URL)
+AGENTTEAMS_MODEL_CONTEXT_WINDOW=$($Config.MODEL_CONTEXT_WINDOW)
+AGENTTEAMS_MODEL_MAX_TOKENS=$($Config.MODEL_MAX_TOKENS)
+AGENTTEAMS_MODEL_REASONING=$($Config.MODEL_REASONING)
+AGENTTEAMS_MODEL_VISION=$($Config.MODEL_VISION)
 
 # Embedding model (empty = disabled, default: text-embedding-v4)
-HICLAW_EMBEDDING_MODEL=$($Config.EMBEDDING_MODEL)
+AGENTTEAMS_EMBEDDING_MODEL=$($Config.EMBEDDING_MODEL)
 
 # Admin
-HICLAW_ADMIN_USER=$($Config.ADMIN_USER)
-HICLAW_ADMIN_PASSWORD=$($Config.ADMIN_PASSWORD)
+AGENTTEAMS_ADMIN_USER=$($Config.ADMIN_USER)
+AGENTTEAMS_ADMIN_PASSWORD=$($Config.ADMIN_PASSWORD)
 
 # Ports
-HICLAW_LOCAL_ONLY=$($Config.LOCAL_ONLY)
-HICLAW_PORT_GATEWAY=$($Config.PORT_GATEWAY)
-HICLAW_PORT_CONSOLE=$($Config.PORT_CONSOLE)
-HICLAW_PORT_ELEMENT_WEB=$($Config.PORT_ELEMENT_WEB)
-HICLAW_PORT_MANAGER_CONSOLE=$($Config.PORT_MANAGER_CONSOLE)
+AGENTTEAMS_LOCAL_ONLY=$($Config.LOCAL_ONLY)
+AGENTTEAMS_PORT_GATEWAY=$($Config.PORT_GATEWAY)
+AGENTTEAMS_PORT_CONSOLE=$($Config.PORT_CONSOLE)
+AGENTTEAMS_PORT_ELEMENT_WEB=$($Config.PORT_ELEMENT_WEB)
+AGENTTEAMS_PORT_MANAGER_CONSOLE=$($Config.PORT_MANAGER_CONSOLE)
 
 # Matrix
-HICLAW_MATRIX_DOMAIN=$($Config.MATRIX_DOMAIN)
-HICLAW_MATRIX_CLIENT_DOMAIN=$($Config.MATRIX_CLIENT_DOMAIN)
+AGENTTEAMS_MATRIX_DOMAIN=$($Config.MATRIX_DOMAIN)
+AGENTTEAMS_MATRIX_CLIENT_DOMAIN=$($Config.MATRIX_CLIENT_DOMAIN)
 
 # Gateway
-HICLAW_AI_GATEWAY_DOMAIN=$($Config.AI_GATEWAY_DOMAIN)
-HICLAW_MANAGER_GATEWAY_KEY=$($Config.MANAGER_GATEWAY_KEY)
+AGENTTEAMS_AI_GATEWAY_DOMAIN=$($Config.AI_GATEWAY_DOMAIN)
+AGENTTEAMS_MANAGER_GATEWAY_KEY=$($Config.MANAGER_GATEWAY_KEY)
 
 # File System
-HICLAW_FS_DOMAIN=$($Config.FS_DOMAIN)
-HICLAW_CONSOLE_DOMAIN=$($Config.CONSOLE_DOMAIN)
-HICLAW_MINIO_USER=$($Config.MINIO_USER)
-HICLAW_MINIO_PASSWORD=$($Config.MINIO_PASSWORD)
+AGENTTEAMS_FS_DOMAIN=$($Config.FS_DOMAIN)
+AGENTTEAMS_CONSOLE_DOMAIN=$($Config.CONSOLE_DOMAIN)
+AGENTTEAMS_MINIO_USER=$($Config.MINIO_USER)
+AGENTTEAMS_MINIO_PASSWORD=$($Config.MINIO_PASSWORD)
 
 # Internal
-HICLAW_MANAGER_PASSWORD=$($Config.MANAGER_PASSWORD)
-HICLAW_REGISTRATION_TOKEN=$($Config.REGISTRATION_TOKEN)
+AGENTTEAMS_MANAGER_PASSWORD=$($Config.MANAGER_PASSWORD)
+AGENTTEAMS_REGISTRATION_TOKEN=$($Config.REGISTRATION_TOKEN)
 
 # GitHub (optional)
-HICLAW_GITHUB_TOKEN=$($Config.GITHUB_TOKEN)
+AGENTTEAMS_GITHUB_TOKEN=$($Config.GITHUB_TOKEN)
 
 # Nacos package import defaults
-HICLAW_NACOS_REGISTRY_URI=$(if ($env:HICLAW_NACOS_REGISTRY_URI) { $env:HICLAW_NACOS_REGISTRY_URI } else { "nacos://market.hiclaw.io:80/public" })
-HICLAW_NACOS_USERNAME=$($env:HICLAW_NACOS_USERNAME)
-HICLAW_NACOS_PASSWORD=$($env:HICLAW_NACOS_PASSWORD)
-HICLAW_NACOS_TOKEN=$($env:HICLAW_NACOS_TOKEN)
+AGENTTEAMS_NACOS_REGISTRY_URI=$(if ($env:AGENTTEAMS_NACOS_REGISTRY_URI) { $env:AGENTTEAMS_NACOS_REGISTRY_URI } else { "nacos://market.agentteams.io:80/public" })
+AGENTTEAMS_NACOS_USERNAME=$($env:AGENTTEAMS_NACOS_USERNAME)
+AGENTTEAMS_NACOS_PASSWORD=$($env:AGENTTEAMS_NACOS_PASSWORD)
+AGENTTEAMS_NACOS_TOKEN=$($env:AGENTTEAMS_NACOS_TOKEN)
 
-# Skills Registry (optional, default: nacos://market.hiclaw.io:80/public)
-HICLAW_SKILLS_API_URL=$(if ($Config.SKILLS_API_URL) { $Config.SKILLS_API_URL } else { "nacos://market.hiclaw.io:80/public" })
+# Skills Registry (optional, default: nacos://market.agentteams.io:80/public)
+AGENTTEAMS_SKILLS_API_URL=$(if ($Config.SKILLS_API_URL) { $Config.SKILLS_API_URL } else { "nacos://market.agentteams.io:80/public" })
 
 # OpenClaw CMS plugin (optional)
-HICLAW_CMS_TRACES_ENABLED=$(if ($env:HICLAW_CMS_TRACES_ENABLED) { $env:HICLAW_CMS_TRACES_ENABLED } else { "false" })
-HICLAW_CMS_ENDPOINT=$($env:HICLAW_CMS_ENDPOINT)
-HICLAW_CMS_LICENSE_KEY=$($env:HICLAW_CMS_LICENSE_KEY)
-HICLAW_CMS_PROJECT=$($env:HICLAW_CMS_PROJECT)
-HICLAW_CMS_WORKSPACE=$($env:HICLAW_CMS_WORKSPACE)
-HICLAW_CMS_SERVICE_NAME=$(if ($env:HICLAW_CMS_SERVICE_NAME) { $env:HICLAW_CMS_SERVICE_NAME } else { "hiclaw-manager" })
-HICLAW_CMS_METRICS_ENABLED=$(if ($env:HICLAW_CMS_METRICS_ENABLED) { $env:HICLAW_CMS_METRICS_ENABLED } else { "false" })
+AGENTTEAMS_CMS_TRACES_ENABLED=$(if ($env:AGENTTEAMS_CMS_TRACES_ENABLED) { $env:AGENTTEAMS_CMS_TRACES_ENABLED } else { "false" })
+AGENTTEAMS_CMS_ENDPOINT=$($env:AGENTTEAMS_CMS_ENDPOINT)
+AGENTTEAMS_CMS_LICENSE_KEY=$($env:AGENTTEAMS_CMS_LICENSE_KEY)
+AGENTTEAMS_CMS_PROJECT=$($env:AGENTTEAMS_CMS_PROJECT)
+AGENTTEAMS_CMS_WORKSPACE=$($env:AGENTTEAMS_CMS_WORKSPACE)
+AGENTTEAMS_CMS_SERVICE_NAME=$(if ($env:AGENTTEAMS_CMS_SERVICE_NAME) { $env:AGENTTEAMS_CMS_SERVICE_NAME } else { "agentteams-manager" })
+AGENTTEAMS_CMS_METRICS_ENABLED=$(if ($env:AGENTTEAMS_CMS_METRICS_ENABLED) { $env:AGENTTEAMS_CMS_METRICS_ENABLED } else { "false" })
 
 # Worker images (for direct container creation)
-HICLAW_WORKER_IMAGE=$($Config.WORKER_IMAGE)
-HICLAW_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
-HICLAW_HERMES_WORKER_IMAGE=$($Config.HERMES_WORKER_IMAGE)
+AGENTTEAMS_WORKER_IMAGE=$($Config.WORKER_IMAGE)
+AGENTTEAMS_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
+AGENTTEAMS_HERMES_WORKER_IMAGE=$($Config.HERMES_WORKER_IMAGE)
 
 # Manager runtime (openclaw | copaw)
-HICLAW_MANAGER_RUNTIME=$($Config.MANAGER_RUNTIME)
+AGENTTEAMS_MANAGER_RUNTIME=$($Config.MANAGER_RUNTIME)
 
 # Default Worker runtime (openclaw | copaw | hermes)
-HICLAW_DEFAULT_WORKER_RUNTIME=$($Config.DEFAULT_WORKER_RUNTIME)
+AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($Config.DEFAULT_WORKER_RUNTIME)
 
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
-HICLAW_MATRIX_E2EE=$($Config.MATRIX_E2EE)
+AGENTTEAMS_MATRIX_E2EE=$($Config.MATRIX_E2EE)
 
 # Docker API proxy (0=disabled, 1=enabled; default: 1)
-HICLAW_DOCKER_PROXY=$($Config.DOCKER_PROXY)
+AGENTTEAMS_DOCKER_PROXY=$($Config.DOCKER_PROXY)
 
 # Docker API proxy: additional allowed image sources (comma-separated)
-HICLAW_PROXY_ALLOWED_REGISTRIES=$($Config.PROXY_ALLOWED_REGISTRIES)
+AGENTTEAMS_PROXY_ALLOWED_REGISTRIES=$($Config.PROXY_ALLOWED_REGISTRIES)
 
 # Worker idle timeout in minutes (default: 720 = 12 hours)
-HICLAW_WORKER_IDLE_TIMEOUT=$($Config.WORKER_IDLE_TIMEOUT)
+AGENTTEAMS_WORKER_IDLE_TIMEOUT=$($Config.WORKER_IDLE_TIMEOUT)
 
 # JVM Args for Higress Console
 JVM_ARGS=$($env:JVM_ARGS)
@@ -1086,11 +1086,11 @@ JVM_ARGS=$($env:JVM_ARGS)
 HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($Config.REGISTRY)
 
 # Data persistence
-HICLAW_DATA_DIR=$($Config.DATA_DIR)
+AGENTTEAMS_DATA_DIR=$($Config.DATA_DIR)
 # Manager workspace (skills, memory, state - host-editable)
-HICLAW_WORKSPACE_DIR=$($Config.WORKSPACE_DIR)
+AGENTTEAMS_WORKSPACE_DIR=$($Config.WORKSPACE_DIR)
 # Host directory sharing
-HICLAW_HOST_SHARE_DIR=$($Config.HOST_SHARE_DIR)
+AGENTTEAMS_HOST_SHARE_DIR=$($Config.HOST_SHARE_DIR)
 "@
 
     Set-Content -Path $Path -Value $content -Encoding UTF8
@@ -1113,7 +1113,7 @@ function Read-Prompt {
     # Check if already set in environment
     $envValue = [Environment]::GetEnvironmentVariable($VarName)
     if ($envValue) {
-        if ($script:HICLAW_UPGRADE -and -not $script:HICLAW_NON_INTERACTIVE) {
+        if ($script:AGENTTEAMS_UPGRADE -and -not $script:AGENTTEAMS_NON_INTERACTIVE) {
             # Show current value (masked for secrets) and let user change it
             $displayValue = $envValue
             if ($Secret) {
@@ -1143,7 +1143,7 @@ function Read-Prompt {
         return $envValue
     }
     # Upgrade mode: optional fields with empty value — let user set a new value
-    elseif ($Optional -and $script:HICLAW_UPGRADE -and -not $script:HICLAW_NON_INTERACTIVE) {
+    elseif ($Optional -and $script:AGENTTEAMS_UPGRADE -and -not $script:AGENTTEAMS_NON_INTERACTIVE) {
         Write-Log (Get-Msg "prompt.upgrade_empty" -f $PromptText)
         $prompt = $PromptText
         if ($Secret) {
@@ -1162,7 +1162,7 @@ function Read-Prompt {
     }
 
     # Non-interactive or quickstart mode
-    if ($script:HICLAW_NON_INTERACTIVE -or $script:HICLAW_QUICKSTART) {
+    if ($script:AGENTTEAMS_NON_INTERACTIVE -or $script:AGENTTEAMS_QUICKSTART) {
         if ($Default) {
             Write-Log (Get-Msg "prompt.default" -f $PromptText, $Default)
             return $Default
@@ -1170,7 +1170,7 @@ function Read-Prompt {
         elseif ($Optional) {
             return ""
         }
-        elseif ($script:HICLAW_NON_INTERACTIVE) {
+        elseif ($script:AGENTTEAMS_NON_INTERACTIVE) {
             # Only hard-error in fully non-interactive mode, not quickstart
             Write-Error (Get-Msg "prompt.required" -f $PromptText)
         }
@@ -1204,26 +1204,26 @@ function Read-Prompt {
 
 # Load current parameter values from env file for upgrade mode display
 function Load-CurrentParamsFromEnv {
-    $envFile = $script:HICLAW_ENV_FILE
+    $envFile = $script:AGENTTEAMS_ENV_FILE
     if (Test-Path $envFile) {
         $content = Get-Content $envFile
         $content | ForEach-Object {
-            if ($_ -match "^HICLAW_LLM_PROVIDER=(.*)$") {
+            if ($_ -match "^AGENTTEAMS_LLM_PROVIDER=(.*)$") {
                 $script:config.LLM_PROVIDER = $Matches[1].Trim()
             }
-            if ($_ -match "^HICLAW_OPENAI_BASE_URL=(.*)$") {
+            if ($_ -match "^AGENTTEAMS_OPENAI_BASE_URL=(.*)$") {
                 $script:config.OPENAI_BASE_URL = $Matches[1].Trim()
             }
-            if ($_ -match "^HICLAW_DEFAULT_MODEL=(.*)$") {
+            if ($_ -match "^AGENTTEAMS_DEFAULT_MODEL=(.*)$") {
                 $script:config.DEFAULT_MODEL = $Matches[1].Trim()
             }
-            if ($_ -match "^HICLAW_EMBEDDING_MODEL=(.*)$") {
+            if ($_ -match "^AGENTTEAMS_EMBEDDING_MODEL=(.*)$") {
                 $script:config.EMBEDDING_MODEL = $Matches[1].Trim()
             }
-            if ($_ -match "^HICLAW_WORKSPACE_DIR=(.*)$") {
+            if ($_ -match "^AGENTTEAMS_WORKSPACE_DIR=(.*)$") {
                 $script:config.WORKSPACE_DIR = $Matches[1].Trim()
             }
-            if ($_ -match "^HICLAW_HOST_SHARE_DIR=(.*)$") {
+            if ($_ -match "^AGENTTEAMS_HOST_SHARE_DIR=(.*)$") {
                 $script:config.HOST_SHARE_DIR = $Matches[1].Trim()
             }
         }
@@ -1250,7 +1250,7 @@ function Test-LlmConnectivity {
     $body = $bodyHash | ConvertTo-Json -Compress
     try {
         $response = Invoke-WebRequest -Uri $uri -Method POST `
-            -Headers @{ "Authorization" = "Bearer $ApiKey"; "Content-Type" = "application/json"; "User-Agent" = "HiClaw/$($script:HICLAW_VERSION)" } `
+            -Headers @{ "Authorization" = "Bearer $ApiKey"; "Content-Type" = "application/json"; "User-Agent" = "AgentTeams/$($script:AGENTTEAMS_VERSION)" } `
             -Body $body -TimeoutSec 30 -ErrorAction Stop -UseBasicParsing
         Write-Log (Get-Msg "llm.openai.test.ok")
     } catch {
@@ -1267,7 +1267,7 @@ function Test-LlmConnectivity {
         if ($Hint) {
             Write-Host $Hint -ForegroundColor Yellow
         }
-        if (-not $script:HICLAW_NON_INTERACTIVE) {
+        if (-not $script:AGENTTEAMS_NON_INTERACTIVE) {
             $confirm = Read-Host (Get-Msg "llm.openai.test.confirm")
             if ($confirm -eq "b" -or $confirm -eq "B") {
                 $script:StepResult = "back"
@@ -1296,7 +1296,7 @@ function Test-EmbeddingConnectivity {
     $body = $bodyHash | ConvertTo-Json -Compress
     try {
         $response = Invoke-WebRequest -Uri $uri -Method POST `
-            -Headers @{ "Authorization" = "Bearer $ApiKey"; "Content-Type" = "application/json"; "User-Agent" = "HiClaw/$($script:HICLAW_VERSION)" } `
+            -Headers @{ "Authorization" = "Bearer $ApiKey"; "Content-Type" = "application/json"; "User-Agent" = "AgentTeams/$($script:AGENTTEAMS_VERSION)" } `
             -Body $body -TimeoutSec 30 -ErrorAction Stop -UseBasicParsing
         Write-Log (Get-Msg "llm.embedding.test.ok")
         return $true
@@ -1406,44 +1406,44 @@ function Test-ShouldSkipStep {
     param([string]$StepFn)
     switch ($StepFn) {
         { $_ -in @("Step-Lang", "Step-Mode") } {
-            return $script:HICLAW_NON_INTERACTIVE
+            return $script:AGENTTEAMS_NON_INTERACTIVE
         }
         "Step-Existing" {
-            return (-not (Test-Path $script:HICLAW_ENV_FILE))
+            return (-not (Test-Path $script:AGENTTEAMS_ENV_FILE))
         }
         # Keep-All upgrade mode: skip all config steps, values are already loaded
         { $_ -in @("Step-Llm", "Step-Admin", "Step-Network", "Step-Ports", "Step-Domains",
                     "Step-Github", "Step-Skills",
                     "Step-Runtime", "Step-ManagerRuntime", "Step-E2ee", "Step-DockerProxy",
                     "Step-Idle", "Step-Hostshare") } {
-            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") { return $true }
+            if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_UPGRADE_KEEP_ALL -eq "1") { return $true }
             return $false
         }
         { $_ -in @("Step-Volume", "Step-Workspace") } {
-            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") { return $true }
-            if ($script:HICLAW_NON_INTERACTIVE) { return $true }
-            if ($script:HICLAW_QUICKSTART) { return $true }
+            if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_UPGRADE_KEEP_ALL -eq "1") { return $true }
+            if ($script:AGENTTEAMS_NON_INTERACTIVE) { return $true }
+            if ($script:AGENTTEAMS_QUICKSTART) { return $true }
             return $false
         }
         { $_ -in @("Step-E2ee", "Step-Idle") } {
-            if ($script:HICLAW_NON_INTERACTIVE) { return $true }
-            if ($script:HICLAW_QUICKSTART -and -not $script:HICLAW_UPGRADE) { return $true }
+            if ($script:AGENTTEAMS_NON_INTERACTIVE) { return $true }
+            if ($script:AGENTTEAMS_QUICKSTART -and -not $script:AGENTTEAMS_UPGRADE) { return $true }
             return $false
         }
         "Step-DockerProxy" {
             # Embedded controller IS the proxy/orchestrator — no separate proxy step needed.
-            if ($script:HICLAW_USE_EMBEDDED -eq "1") { return $true }
-            if ($script:HICLAW_NON_INTERACTIVE) { return $true }
-            if ($script:HICLAW_QUICKSTART -and -not $script:HICLAW_UPGRADE) { return $true }
+            if ($script:AGENTTEAMS_USE_EMBEDDED -eq "1") { return $true }
+            if ($script:AGENTTEAMS_NON_INTERACTIVE) { return $true }
+            if ($script:AGENTTEAMS_QUICKSTART -and -not $script:AGENTTEAMS_UPGRADE) { return $true }
             return $false
         }
         "Step-ManagerRuntime" {
-            if ($script:HICLAW_NON_INTERACTIVE) { return $true }
+            if ($script:AGENTTEAMS_NON_INTERACTIVE) { return $true }
             return $false
         }
         "Step-Hostshare" {
-            if ($script:HICLAW_NON_INTERACTIVE) { return $true }
-            if ($script:HICLAW_QUICKSTART) { return $true }
+            if ($script:AGENTTEAMS_NON_INTERACTIVE) { return $true }
+            if ($script:AGENTTEAMS_QUICKSTART) { return $true }
             return $false
         }
         default { return $false }
@@ -1453,65 +1453,65 @@ function Test-ShouldSkipStep {
 function Clear-StepVars {
     param([string]$StepFn)
     switch ($StepFn) {
-        "Step-Mode" { $script:HICLAW_QUICKSTART = $false }
+        "Step-Mode" { $script:AGENTTEAMS_QUICKSTART = $false }
         "Step-Existing" {
-            $script:HICLAW_UPGRADE = $false
+            $script:AGENTTEAMS_UPGRADE = $false
             $script:UPGRADE_EXISTING_WORKERS = $null
         }
         "Step-Llm" {
-            foreach ($k in @("HICLAW_LLM_PROVIDER","HICLAW_DEFAULT_MODEL","HICLAW_OPENAI_BASE_URL",
-                             "HICLAW_LLM_API_KEY","HICLAW_MODEL_CONTEXT_WINDOW","HICLAW_MODEL_MAX_TOKENS",
-                             "HICLAW_MODEL_REASONING","HICLAW_MODEL_VISION")) {
+            foreach ($k in @("AGENTTEAMS_LLM_PROVIDER","AGENTTEAMS_DEFAULT_MODEL","AGENTTEAMS_OPENAI_BASE_URL",
+                             "AGENTTEAMS_LLM_API_KEY","AGENTTEAMS_MODEL_CONTEXT_WINDOW","AGENTTEAMS_MODEL_MAX_TOKENS",
+                             "AGENTTEAMS_MODEL_REASONING","AGENTTEAMS_MODEL_VISION")) {
                 [Environment]::SetEnvironmentVariable($k, $null, "Process")
             }
         }
         "Step-Admin" {
-            [Environment]::SetEnvironmentVariable("HICLAW_ADMIN_USER", $null, "Process")
-            [Environment]::SetEnvironmentVariable("HICLAW_ADMIN_PASSWORD", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_ADMIN_USER", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_ADMIN_PASSWORD", $null, "Process")
         }
         "Step-Network" {
-            [Environment]::SetEnvironmentVariable("HICLAW_LOCAL_ONLY", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_LOCAL_ONLY", $null, "Process")
         }
         "Step-Ports" {
-            foreach ($k in @("HICLAW_PORT_GATEWAY","HICLAW_PORT_CONSOLE","HICLAW_PORT_ELEMENT_WEB","HICLAW_PORT_MANAGER_CONSOLE")) {
+            foreach ($k in @("AGENTTEAMS_PORT_GATEWAY","AGENTTEAMS_PORT_CONSOLE","AGENTTEAMS_PORT_ELEMENT_WEB","AGENTTEAMS_PORT_MANAGER_CONSOLE")) {
                 [Environment]::SetEnvironmentVariable($k, $null, "Process")
             }
         }
         "Step-Domains" {
-            foreach ($k in @("HICLAW_MATRIX_DOMAIN","HICLAW_MATRIX_CLIENT_DOMAIN","HICLAW_AI_GATEWAY_DOMAIN","HICLAW_FS_DOMAIN","HICLAW_CONSOLE_DOMAIN")) {
+            foreach ($k in @("AGENTTEAMS_MATRIX_DOMAIN","AGENTTEAMS_MATRIX_CLIENT_DOMAIN","AGENTTEAMS_AI_GATEWAY_DOMAIN","AGENTTEAMS_FS_DOMAIN","AGENTTEAMS_CONSOLE_DOMAIN")) {
                 [Environment]::SetEnvironmentVariable($k, $null, "Process")
             }
         }
         "Step-Github" {
-            [Environment]::SetEnvironmentVariable("HICLAW_GITHUB_TOKEN", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_GITHUB_TOKEN", $null, "Process")
         }
         "Step-Skills" {
-            [Environment]::SetEnvironmentVariable("HICLAW_SKILLS_API_URL", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_SKILLS_API_URL", $null, "Process")
         }
         "Step-Volume" {
-            [Environment]::SetEnvironmentVariable("HICLAW_DATA_DIR", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_DATA_DIR", $null, "Process")
         }
         "Step-Workspace" {
-            [Environment]::SetEnvironmentVariable("HICLAW_WORKSPACE_DIR", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_WORKSPACE_DIR", $null, "Process")
         }
         "Step-Runtime" {
-            [Environment]::SetEnvironmentVariable("HICLAW_DEFAULT_WORKER_RUNTIME", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_DEFAULT_WORKER_RUNTIME", $null, "Process")
         }
         "Step-ManagerRuntime" {
-            [Environment]::SetEnvironmentVariable("HICLAW_MANAGER_RUNTIME", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_MANAGER_RUNTIME", $null, "Process")
         }
         "Step-E2ee" {
-            [Environment]::SetEnvironmentVariable("HICLAW_MATRIX_E2EE", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_MATRIX_E2EE", $null, "Process")
         }
         "Step-DockerProxy" {
-            [Environment]::SetEnvironmentVariable("HICLAW_DOCKER_PROXY", $null, "Process")
-            [Environment]::SetEnvironmentVariable("HICLAW_PROXY_ALLOWED_REGISTRIES", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_DOCKER_PROXY", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_PROXY_ALLOWED_REGISTRIES", $null, "Process")
         }
         "Step-Idle" {
-            [Environment]::SetEnvironmentVariable("HICLAW_WORKER_IDLE_TIMEOUT", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_WORKER_IDLE_TIMEOUT", $null, "Process")
         }
         "Step-Hostshare" {
-            [Environment]::SetEnvironmentVariable("HICLAW_HOST_SHARE_DIR", $null, "Process")
+            [Environment]::SetEnvironmentVariable("AGENTTEAMS_HOST_SHARE_DIR", $null, "Process")
         }
     }
 }
@@ -1521,8 +1521,8 @@ function Clear-StepVars {
 # ============================================================
 
 function Step-Lang {
-    $langDefaultChoice = if ($script:HICLAW_LANGUAGE -eq "zh") { "1" } else { "2" }
-    $langDetectedKey = "lang.detected.$($script:HICLAW_LANGUAGE)"
+    $langDefaultChoice = if ($script:AGENTTEAMS_LANGUAGE -eq "zh") { "1" } else { "2" }
+    $langDetectedKey = "lang.detected.$($script:AGENTTEAMS_LANGUAGE)"
     Write-Log (Get-Msg $langDetectedKey)
     Write-Log (Get-Msg "lang.switch_title")
     Write-Host (Get-Msg "lang.option_zh")
@@ -1532,10 +1532,10 @@ function Step-Lang {
     if (-not $langChoice) { $langChoice = $langDefaultChoice }
     if ($langChoice -eq "b") { $script:StepResult = "back"; return }
     switch ($langChoice) {
-        "1" { $script:HICLAW_LANGUAGE = "zh" }
-        "2" { $script:HICLAW_LANGUAGE = "en" }
+        "1" { $script:AGENTTEAMS_LANGUAGE = "zh" }
+        "2" { $script:AGENTTEAMS_LANGUAGE = "en" }
     }
-    $env:HICLAW_LANGUAGE = $script:HICLAW_LANGUAGE
+    $env:AGENTTEAMS_LANGUAGE = $script:AGENTTEAMS_LANGUAGE
     Write-Log ""
 }
 
@@ -1552,15 +1552,15 @@ function Step-Mode {
     switch -Regex ($choice) {
         "^(1|quick|quickstart)$" {
             Write-Log (Get-Msg "install.mode.quickstart_selected")
-            $script:HICLAW_QUICKSTART = $true
+            $script:AGENTTEAMS_QUICKSTART = $true
         }
         "^(2|manual)$" {
             Write-Log (Get-Msg "install.mode.manual_selected")
-            $script:HICLAW_QUICKSTART = $false
+            $script:AGENTTEAMS_QUICKSTART = $false
         }
         default {
             Write-Log (Get-Msg "install.mode.invalid")
-            $script:HICLAW_QUICKSTART = $true
+            $script:AGENTTEAMS_QUICKSTART = $true
         }
     }
     Write-Log ""
@@ -1568,13 +1568,13 @@ function Step-Mode {
 
 function Step-Existing {
     # This step is skipped when env file doesn't exist
-    Write-Log (Get-Msg "install.existing.detected" -f $script:HICLAW_ENV_FILE)
+    Write-Log (Get-Msg "install.existing.detected" -f $script:AGENTTEAMS_ENV_FILE)
 
-    $runningManager = docker ps --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
-    $runningWorkers = docker ps --format "{{.Names}}" 2>$null | Select-String "^hiclaw-worker-"
-    $existingWorkers = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-worker-"
+    $runningManager = docker ps --format "{{.Names}}" 2>$null | Select-String "^agentteams-manager$"
+    $runningWorkers = docker ps --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-"
+    $existingWorkers = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-"
 
-    if ($script:HICLAW_NON_INTERACTIVE) {
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
         Write-Log (Get-Msg "install.existing.upgrade_noninteractive")
         $upgradeChoice = "1"
     } else {
@@ -1591,11 +1591,11 @@ function Step-Existing {
 
     switch -Regex ($upgradeChoice) {
         "^(1|upgrade)$" {
-            $script:HICLAW_UPGRADE = $true
+            $script:AGENTTEAMS_UPGRADE = $true
             Write-Log (Get-Msg "install.existing.upgrading")
 
             # Show upgrade mode sub-menu (unless already set via env var)
-            if ($env:HICLAW_UPGRADE_KEEP_ALL -ne "1") {
+            if ($env:AGENTTEAMS_UPGRADE_KEEP_ALL -ne "1") {
                 Write-Host ""
                 Write-Host (Get-Msg "upgrade.mode.prompt")
                 Write-Host (Get-Msg "upgrade.mode.keep_all")
@@ -1606,17 +1606,17 @@ function Step-Existing {
                 $upgradeModeChoice = if ($upgradeModeChoice) { $upgradeModeChoice } else { "1" }
                 switch -Regex ($upgradeModeChoice) {
                     "^(1|keep)$" {
-                        $env:HICLAW_UPGRADE_KEEP_ALL = "1"
+                        $env:AGENTTEAMS_UPGRADE_KEEP_ALL = "1"
                     }
                     "^(2|confirm)$" {
-                        $env:HICLAW_UPGRADE_KEEP_ALL = "0"
+                        $env:AGENTTEAMS_UPGRADE_KEEP_ALL = "0"
                     }
                     "^(3|b)$" {
                         $script:StepResult = "back"
                         return
                     }
                     default {
-                        $env:HICLAW_UPGRADE_KEEP_ALL = "0"
+                        $env:AGENTTEAMS_UPGRADE_KEEP_ALL = "0"
                     }
                 }
             }
@@ -1629,7 +1629,7 @@ function Step-Existing {
                 if ($existingWorkers) {
                     Write-Host "$($script:ESC)[33m$(Get-Msg 'install.existing.warn_worker_recreate')$($script:ESC)[0m"
                 }
-                if (-not $script:HICLAW_NON_INTERACTIVE) {
+                if (-not $script:AGENTTEAMS_NON_INTERACTIVE) {
                     $confirm = Read-Host (Get-Msg "install.existing.continue_prompt")
                     if ($confirm -eq "b" -or $confirm -eq "B") { $script:StepResult = "back"; return }
                     if ($confirm -ne "y" -and $confirm -ne "Y") {
@@ -1642,22 +1642,22 @@ function Step-Existing {
         }
         "^(2|reinstall)$" {
             Write-Log (Get-Msg "install.reinstall.performing")
-            $existingWorkspace = "$env:USERPROFILE\hiclaw-manager"
-            if (Test-Path $script:HICLAW_ENV_FILE) {
-                $envContent = Get-Content $script:HICLAW_ENV_FILE
-                $wsLine = $envContent | Select-String "^HICLAW_WORKSPACE_DIR="
+            $existingWorkspace = "$env:USERPROFILE\agentteams-manager"
+            if (Test-Path $script:AGENTTEAMS_ENV_FILE) {
+                $envContent = Get-Content $script:AGENTTEAMS_ENV_FILE
+                $wsLine = $envContent | Select-String "^AGENTTEAMS_WORKSPACE_DIR="
                 if ($wsLine) {
                     $existingWorkspace = $wsLine.Line.Substring(21)
                 }
             }
             Write-Host ""
             Write-Host "$($script:ESC)[33m$(Get-Msg 'install.reinstall.warn_stop')$($script:ESC)[0m"
-            if ($runningManager) { Write-Host "$($script:ESC)[33m   - hiclaw-manager (manager)$($script:ESC)[0m" }
+            if ($runningManager) { Write-Host "$($script:ESC)[33m   - agentteams-manager (manager)$($script:ESC)[0m" }
             $runningWorkers | ForEach-Object { Write-Host "$($script:ESC)[33m   - $_ (worker)$($script:ESC)[0m" }
             Write-Host ""
             Write-Host "$($script:ESC)[31m$(Get-Msg 'install.reinstall.warn_delete')$($script:ESC)[0m"
             Write-Host "$($script:ESC)[31m$(Get-Msg 'install.reinstall.warn_volume')$($script:ESC)[0m"
-            Write-Host "$($script:ESC)[31m$(Get-Msg 'install.reinstall.warn_env' -f $script:HICLAW_ENV_FILE)$($script:ESC)[0m"
+            Write-Host "$($script:ESC)[31m$(Get-Msg 'install.reinstall.warn_env' -f $script:AGENTTEAMS_ENV_FILE)$($script:ESC)[0m"
             Write-Host "$($script:ESC)[31m$(Get-Msg 'install.reinstall.warn_workspace' -f $existingWorkspace)$($script:ESC)[0m"
             Write-Host "$($script:ESC)[31m$(Get-Msg 'install.reinstall.warn_workers')$($script:ESC)[0m"
             Write-Host "$($script:ESC)[31m$(Get-Msg 'install.reinstall.warn_proxy')$($script:ESC)[0m"
@@ -1671,35 +1671,35 @@ function Step-Existing {
                 Write-Error (Get-Msg "install.reinstall.path_mismatch" -f $confirmPath, $existingWorkspace)
             }
             Write-Log (Get-Msg "install.reinstall.confirmed")
-            docker stop hiclaw-manager *>$null
-            docker rm hiclaw-manager *>$null
-            docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-worker-" | ForEach-Object {
+            docker stop agentteams-manager *>$null
+            docker rm agentteams-manager *>$null
+            docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-" | ForEach-Object {
                 docker stop $_ *>$null
                 docker rm $_ *>$null
                 Write-Log (Get-Msg "install.reinstall.removed_worker" -f $_)
             }
-            $existingController = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-controller$"
+            $existingController = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-controller$"
             if ($existingController) {
                 Write-Log (Get-Msg "install.reinstall.removing_proxy")
-                docker stop hiclaw-controller *>$null
-                docker rm hiclaw-controller *>$null
+                docker stop agentteams-controller *>$null
+                docker rm agentteams-controller *>$null
             }
-            if (docker volume ls -q 2>$null | Select-String "^hiclaw-data$") {
+            if (docker volume ls -q 2>$null | Select-String "^agentteams-data$") {
                 Write-Log (Get-Msg "install.reinstall.removing_volume")
-                docker volume rm hiclaw-data *>$null
+                docker volume rm agentteams-data *>$null
             }
             if (Test-Path $existingWorkspace) {
                 Write-Log (Get-Msg "install.reinstall.removing_workspace" -f $existingWorkspace)
                 Remove-Item -Recurse -Force $existingWorkspace
             }
-            if (Test-Path $script:HICLAW_ENV_FILE) {
-                Write-Log (Get-Msg "install.reinstall.removing_env" -f $script:HICLAW_ENV_FILE)
-                Remove-Item -Force $script:HICLAW_ENV_FILE
+            if (Test-Path $script:AGENTTEAMS_ENV_FILE) {
+                Write-Log (Get-Msg "install.reinstall.removing_env" -f $script:AGENTTEAMS_ENV_FILE)
+                Remove-Item -Force $script:AGENTTEAMS_ENV_FILE
             }
-            $existingNetwork = docker network ls --format "{{.Name}}" 2>$null | Select-String "^hiclaw-net$"
+            $existingNetwork = docker network ls --format "{{.Name}}" 2>$null | Select-String "^agentteams-net$"
             if ($existingNetwork) {
                 Write-Log (Get-Msg "install.reinstall.removing_network")
-                docker network rm hiclaw-net *>$null
+                docker network rm agentteams-net *>$null
             }
             Write-Log (Get-Msg "install.reinstall.cleanup_done")
         }
@@ -1710,9 +1710,9 @@ function Step-Existing {
     }
 
     # Load existing env file (upgrade path)
-    if (Test-Path $script:HICLAW_ENV_FILE) {
-        Write-Log (Get-Msg "install.loading_config" -f $script:HICLAW_ENV_FILE)
-        Get-Content $script:HICLAW_ENV_FILE | ForEach-Object {
+    if (Test-Path $script:AGENTTEAMS_ENV_FILE) {
+        Write-Log (Get-Msg "install.loading_config" -f $script:AGENTTEAMS_ENV_FILE)
+        Get-Content $script:AGENTTEAMS_ENV_FILE | ForEach-Object {
             if ($_ -match "^([^#=][^=]*)=(.*)$") {
                 $key = $Matches[1].Trim()
                 $value = $Matches[2].Split("#")[0].Trim()
@@ -1727,23 +1727,23 @@ function Step-Existing {
 function Step-Llm {
     Write-Log (Get-Msg "llm.title")
 
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        if ($script:HICLAW_LANGUAGE -eq "zh") {
-            $script:config.LLM_PROVIDER = if ($env:HICLAW_LLM_PROVIDER) { $env:HICLAW_LLM_PROVIDER } else { "openai-compat" }
-            $script:config.DEFAULT_MODEL = if ($env:HICLAW_DEFAULT_MODEL) { $env:HICLAW_DEFAULT_MODEL } else { "qwen3.6-plus" }
-            $script:config.OPENAI_BASE_URL = if ($env:HICLAW_OPENAI_BASE_URL) { $env:HICLAW_OPENAI_BASE_URL } else { "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" }
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        if ($script:AGENTTEAMS_LANGUAGE -eq "zh") {
+            $script:config.LLM_PROVIDER = if ($env:AGENTTEAMS_LLM_PROVIDER) { $env:AGENTTEAMS_LLM_PROVIDER } else { "openai-compat" }
+            $script:config.DEFAULT_MODEL = if ($env:AGENTTEAMS_DEFAULT_MODEL) { $env:AGENTTEAMS_DEFAULT_MODEL } else { "qwen3.6-plus" }
+            $script:config.OPENAI_BASE_URL = if ($env:AGENTTEAMS_OPENAI_BASE_URL) { $env:AGENTTEAMS_OPENAI_BASE_URL } else { "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" }
             Write-Log (Get-Msg "llm.provider.label" -f $script:config.LLM_PROVIDER)
             Write-Log (Get-Msg "llm.openai.base_url_label" -f $script:config.OPENAI_BASE_URL)
         } else {
-            $script:config.LLM_PROVIDER = if ($env:HICLAW_LLM_PROVIDER) { $env:HICLAW_LLM_PROVIDER } else { "qwen" }
-            $script:config.DEFAULT_MODEL = if ($env:HICLAW_DEFAULT_MODEL) { $env:HICLAW_DEFAULT_MODEL } else { "qwen3.6-plus" }
-            $script:config.OPENAI_BASE_URL = if ($env:HICLAW_OPENAI_BASE_URL) { $env:HICLAW_OPENAI_BASE_URL } else { "" }
+            $script:config.LLM_PROVIDER = if ($env:AGENTTEAMS_LLM_PROVIDER) { $env:AGENTTEAMS_LLM_PROVIDER } else { "qwen" }
+            $script:config.DEFAULT_MODEL = if ($env:AGENTTEAMS_DEFAULT_MODEL) { $env:AGENTTEAMS_DEFAULT_MODEL } else { "qwen3.6-plus" }
+            $script:config.OPENAI_BASE_URL = if ($env:AGENTTEAMS_OPENAI_BASE_URL) { $env:AGENTTEAMS_OPENAI_BASE_URL } else { "" }
             Write-Log (Get-Msg "llm.provider.qwen_default" -f $script:config.LLM_PROVIDER)
         }
         Write-Log (Get-Msg "llm.model.label" -f $script:config.DEFAULT_MODEL)
         Write-Log ""
-        $script:config.LLM_API_KEY = Read-Prompt -VarName "HICLAW_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
-        $script:config.EMBEDDING_MODEL = if ($null -ne $env:HICLAW_EMBEDDING_MODEL) { $env:HICLAW_EMBEDDING_MODEL } else { "text-embedding-v4" }
+        $script:config.LLM_API_KEY = Read-Prompt -VarName "AGENTTEAMS_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
+        $script:config.EMBEDDING_MODEL = if ($null -ne $env:AGENTTEAMS_EMBEDDING_MODEL) { $env:AGENTTEAMS_EMBEDDING_MODEL } else { "text-embedding-v4" }
         return
     }
 
@@ -1754,11 +1754,11 @@ function Step-Llm {
     Write-Host ""
 
     # If upgrade mode with loaded provider, show current as default
-    if ($script:HICLAW_UPGRADE -and $script:config.LLM_PROVIDER) {
+    if ($script:AGENTTEAMS_UPGRADE -and $script:config.LLM_PROVIDER) {
         $defaultProvider = if ($script:config.LLM_PROVIDER -eq "openai-compat") { "2" } else { "1" }
         $providerChoice = Read-Host "$(Get-Msg 'llm.provider.select') [${defaultProvider}]"
         $providerChoice = if ($providerChoice) { $providerChoice } else { $defaultProvider }
-    } elseif ($script:HICLAW_QUICKSTART) {
+    } elseif ($script:AGENTTEAMS_QUICKSTART) {
         $providerChoice = Read-Host "$(Get-Msg 'llm.provider.select') [1]"
     } else {
         $providerChoice = Read-Host (Get-Msg "llm.provider.select")
@@ -1769,7 +1769,7 @@ function Step-Llm {
     switch -Regex ($providerChoice) {
         "^(1|alibaba-cloud)$" {
             $alibabaAccess = $null
-            if ($script:HICLAW_LANGUAGE -eq "en") {
+            if ($script:AGENTTEAMS_LANGUAGE -eq "en") {
                 $script:config.LLM_PROVIDER = "openai-compat"
                 $script:config.OPENAI_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
                 $alibabaAccess = "tokenplan"
@@ -1781,7 +1781,7 @@ function Step-Llm {
                 Write-Host (Get-Msg "llm.codingplan.model.minimax")
                 Write-Host ""
                 # If upgrade with loaded model, show current as default
-                if ($script:HICLAW_UPGRADE -and $script:config.DEFAULT_MODEL) {
+                if ($script:AGENTTEAMS_UPGRADE -and $script:config.DEFAULT_MODEL) {
                     $defaultModel = switch ($script:config.DEFAULT_MODEL) {
                         "qwen3.6-plus" { "1" }
                         "glm-5"         { "2" }
@@ -1791,7 +1791,7 @@ function Step-Llm {
                     }
                     $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [${defaultModel}]"
                     $codingPlanModelChoice = if ($codingPlanModelChoice) { $codingPlanModelChoice } else { $defaultModel }
-                } elseif ($script:HICLAW_QUICKSTART) {
+                } elseif ($script:AGENTTEAMS_QUICKSTART) {
                     $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [1]"
                 } else {
                     $codingPlanModelChoice = Read-Host (Get-Msg "llm.codingplan.model.select")
@@ -1813,7 +1813,7 @@ function Step-Llm {
                 Write-Host (Get-Msg "llm.alibaba.model.bailian")
                 Write-Host (Get-Msg "llm.alibaba.model.codingplan_legacy")
                 Write-Host ""
-                $modelChoice = if ($script:HICLAW_QUICKSTART) {
+                $modelChoice = if ($script:AGENTTEAMS_QUICKSTART) {
                     Read-Host "$(Get-Msg 'llm.alibaba.model.select') [1]"
                 } else {
                     Read-Host (Get-Msg "llm.alibaba.model.select")
@@ -1833,7 +1833,7 @@ function Step-Llm {
                     Write-Host (Get-Msg "llm.codingplan.model.minimax")
                     Write-Host ""
                     # If upgrade with loaded model, show current as default
-                    if ($script:HICLAW_UPGRADE -and $script:config.DEFAULT_MODEL) {
+                    if ($script:AGENTTEAMS_UPGRADE -and $script:config.DEFAULT_MODEL) {
                         $defaultModel = switch ($script:config.DEFAULT_MODEL) {
                             "qwen3.6-plus" { "1" }
                             "glm-5"         { "2" }
@@ -1843,7 +1843,7 @@ function Step-Llm {
                         }
                         $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [${defaultModel}]"
                         $codingPlanModelChoice = if ($codingPlanModelChoice) { $codingPlanModelChoice } else { $defaultModel }
-                    } elseif ($script:HICLAW_QUICKSTART) {
+                    } elseif ($script:AGENTTEAMS_QUICKSTART) {
                         $codingPlanModelChoice = Read-Host "$(Get-Msg 'llm.codingplan.model.select') [1]"
                     } else {
                         $codingPlanModelChoice = Read-Host (Get-Msg "llm.codingplan.model.select")
@@ -1863,7 +1863,7 @@ function Step-Llm {
                     $script:config.LLM_PROVIDER = "qwen"
                     $script:config.OPENAI_BASE_URL = ""
                     Write-Host ""
-                    if ($script:HICLAW_UPGRADE -and $script:config.DEFAULT_MODEL) {
+                    if ($script:AGENTTEAMS_UPGRADE -and $script:config.DEFAULT_MODEL) {
                         $qwenModelInput = Read-Host "$(Get-Msg 'llm.qwen.model_prompt') [${script:config.DEFAULT_MODEL}]"
                     } else {
                         $qwenModelInput = Read-Host (Get-Msg "llm.qwen.model_prompt")
@@ -1878,7 +1878,7 @@ function Step-Llm {
                     $script:config.LLM_PROVIDER = "openai-compat"
                     $script:config.OPENAI_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1"
                     Write-Host ""
-                    if ($script:HICLAW_UPGRADE -and $script:config.DEFAULT_MODEL) {
+                    if ($script:AGENTTEAMS_UPGRADE -and $script:config.DEFAULT_MODEL) {
                         $codingModelInput = Read-Host "$(Get-Msg 'llm.qwen.model_prompt') [${script:config.DEFAULT_MODEL}]"
                     } else {
                         $codingModelInput = Read-Host (Get-Msg "llm.qwen.model_prompt")
@@ -1898,7 +1898,7 @@ function Step-Llm {
             if ($alibabaAccess -eq "bailian") {
                 Write-Log (Get-Msg "llm.apikey_hint_bailian")
                 Write-Log (Get-Msg "llm.apikey_url_bailian")
-            } elseif ($script:HICLAW_LANGUAGE -eq "en") {
+            } elseif ($script:AGENTTEAMS_LANGUAGE -eq "en") {
                 Write-Log (Get-Msg "llm.apikey_hint_qwencloud")
                 Write-Log (Get-Msg "llm.apikey_url_qwencloud")
             } elseif ($alibabaAccess -eq "codingplan_legacy") {
@@ -1909,13 +1909,13 @@ function Step-Llm {
                 Write-Log (Get-Msg "llm.apikey_url_tokenplan")
             }
             Write-Log ""
-            $script:config.LLM_API_KEY = Read-Prompt -VarName "HICLAW_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
+            $script:config.LLM_API_KEY = Read-Prompt -VarName "AGENTTEAMS_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
             if ($script:StepResult -eq "back") { return }
             if ($alibabaAccess -eq "bailian") {
                 Test-LlmConnectivity -BaseUrl "https://dashscope.aliyuncs.com/compatible-mode/v1" -ApiKey $script:config.LLM_API_KEY -Model $script:config.DEFAULT_MODEL
             } elseif ($alibabaAccess -eq "codingplan_legacy") {
                 Test-LlmConnectivity -BaseUrl "https://coding.dashscope.aliyuncs.com/v1" -ApiKey $script:config.LLM_API_KEY -Model $script:config.DEFAULT_MODEL -Hint (Get-Msg "llm.openai.test.fail.codingplan_legacy")
-            } elseif ($script:HICLAW_LANGUAGE -eq "en") {
+            } elseif ($script:AGENTTEAMS_LANGUAGE -eq "en") {
                 Test-LlmConnectivity -BaseUrl $script:config.OPENAI_BASE_URL -ApiKey $script:config.LLM_API_KEY -Model $script:config.DEFAULT_MODEL -Hint (Get-Msg "llm.openai.test.fail.codingplan")
             } else {
                 Test-LlmConnectivity -BaseUrl $script:config.OPENAI_BASE_URL -ApiKey $script:config.LLM_API_KEY -Model $script:config.DEFAULT_MODEL -Hint (Get-Msg "llm.openai.test.fail.tokenplan")
@@ -1926,7 +1926,7 @@ function Step-Llm {
             $script:config.LLM_PROVIDER = "openai-compat"
             Write-Log (Get-Msg "llm.provider.selected_openai" -f $script:config.LLM_PROVIDER)
             Write-Host ""
-            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") {
+            if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_UPGRADE_KEEP_ALL -eq "1") {
                 Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "llm.openai.base_url_prompt"), $script:config.OPENAI_BASE_URL)
             } else {
                 $currentUrl = $script:config.OPENAI_BASE_URL
@@ -1945,7 +1945,7 @@ function Step-Llm {
                     $script:config.OPENAI_BASE_URL = "https://api.openai.com/v1"
                 }
             }
-            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") {
+            if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_UPGRADE_KEEP_ALL -eq "1") {
                 Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "llm.openai.model_prompt"), $script:config.DEFAULT_MODEL)
             } else {
                 $currentModel = $script:config.DEFAULT_MODEL
@@ -1968,7 +1968,7 @@ function Step-Llm {
             Request-CustomModelParams $script:config.DEFAULT_MODEL
             if ($script:StepResult -eq "back") { return }
             Write-Log ""
-            $script:config.LLM_API_KEY = Read-Prompt -VarName "HICLAW_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
+            $script:config.LLM_API_KEY = Read-Prompt -VarName "AGENTTEAMS_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
             if ($script:StepResult -eq "back") { return }
             Test-LlmConnectivity -BaseUrl $script:config.OPENAI_BASE_URL -ApiKey $script:config.LLM_API_KEY -Model $script:config.DEFAULT_MODEL
             if ($script:StepResult -eq "back") { return }
@@ -2007,7 +2007,7 @@ function Step-Llm {
             $script:config.EMBEDDING_MODEL = "text-embedding-v4"
         }
         "2" {
-            if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") {
+            if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_UPGRADE_KEEP_ALL -eq "1") {
                 Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "llm.embedding.custom_prompt"), $script:config.EMBEDDING_MODEL)
             } else {
                 $currentEmb = $script:config.EMBEDDING_MODEL
@@ -2050,29 +2050,29 @@ function Step-Llm {
 
 function Step-Admin {
     Write-Log (Get-Msg "admin.title")
-    $script:config.ADMIN_USER = Read-Prompt -VarName "HICLAW_ADMIN_USER" -PromptText (Get-Msg "admin.username_prompt") -Default "admin"
+    $script:config.ADMIN_USER = Read-Prompt -VarName "AGENTTEAMS_ADMIN_USER" -PromptText (Get-Msg "admin.username_prompt") -Default "admin"
     if ($script:StepResult -eq "back") { return }
     $script:config.ADMIN_USER = $script:config.ADMIN_USER.ToLowerInvariant()
 
     # Pre-set via env var: validate; non-interactive fails fast,
     # interactive warns and falls through to the retry prompt.
-    if ($env:HICLAW_ADMIN_PASSWORD) {
-        $script:config.ADMIN_PASSWORD = $env:HICLAW_ADMIN_PASSWORD
+    if ($env:AGENTTEAMS_ADMIN_PASSWORD) {
+        $script:config.ADMIN_PASSWORD = $env:AGENTTEAMS_ADMIN_PASSWORD
         Write-Log (Get-Msg "prompt.preset" -f (Get-Msg "admin.password_prompt"))
         if ($script:config.ADMIN_PASSWORD.Length -ge 8) {
             Write-Log ""
             return
         }
-        if ($script:HICLAW_NON_INTERACTIVE) {
+        if ($script:AGENTTEAMS_NON_INTERACTIVE) {
             Write-Error (Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)
         }
-        Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m $(Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)"
-        [Environment]::SetEnvironmentVariable("HICLAW_ADMIN_PASSWORD", $null, "Process")
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)"
+        [Environment]::SetEnvironmentVariable("AGENTTEAMS_ADMIN_PASSWORD", $null, "Process")
     }
 
     while ($true) {
-        [Environment]::SetEnvironmentVariable("HICLAW_ADMIN_PASSWORD", $null, "Process")
-        $script:config.ADMIN_PASSWORD = Read-Prompt -VarName "HICLAW_ADMIN_PASSWORD" -PromptText (Get-Msg "admin.password_prompt") -Secret -Optional
+        [Environment]::SetEnvironmentVariable("AGENTTEAMS_ADMIN_PASSWORD", $null, "Process")
+        $script:config.ADMIN_PASSWORD = Read-Prompt -VarName "AGENTTEAMS_ADMIN_PASSWORD" -PromptText (Get-Msg "admin.password_prompt") -Secret -Optional
         if ($script:StepResult -eq "back") { return }
         if (-not $script:config.ADMIN_PASSWORD) {
             $randomSuffix = (New-RandomKey).Substring(0, 12)
@@ -2083,7 +2083,7 @@ function Step-Admin {
         if ($script:config.ADMIN_PASSWORD.Length -ge 8) {
             break
         }
-        Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m $(Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)"
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg "admin.password_too_short" -f $script:config.ADMIN_PASSWORD.Length)"
     }
 
     Write-Log ""
@@ -2096,10 +2096,10 @@ function Step-Network {
     Write-Host "  2) $(Get-Msg 'port.local_only.hint_no')"
     Write-Host ""
 
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $localOnly = if ($env:HICLAW_LOCAL_ONLY) { $env:HICLAW_LOCAL_ONLY } else { "1" }
-    } elseif ($null -ne $env:HICLAW_LOCAL_ONLY) {
-        $localOnly = $env:HICLAW_LOCAL_ONLY
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $localOnly = if ($env:AGENTTEAMS_LOCAL_ONLY) { $env:AGENTTEAMS_LOCAL_ONLY } else { "1" }
+    } elseif ($null -ne $env:AGENTTEAMS_LOCAL_ONLY) {
+        $localOnly = $env:AGENTTEAMS_LOCAL_ONLY
     } else {
         $localChoice = Read-Host "$(Get-Msg 'port.local_only.choice')"
         if ($localChoice -eq "b") { $script:StepResult = "back"; return }
@@ -2120,13 +2120,13 @@ function Step-Network {
 
 function Step-Ports {
     Write-Log (Get-Msg "port.title")
-    $script:config.PORT_GATEWAY = Read-Prompt -VarName "HICLAW_PORT_GATEWAY" -PromptText (Get-Msg "port.gateway_prompt") -Default "18080"
+    $script:config.PORT_GATEWAY = Read-Prompt -VarName "AGENTTEAMS_PORT_GATEWAY" -PromptText (Get-Msg "port.gateway_prompt") -Default "18080"
     if ($script:StepResult -eq "back") { return }
-    $script:config.PORT_CONSOLE = Read-Prompt -VarName "HICLAW_PORT_CONSOLE" -PromptText (Get-Msg "port.console_prompt") -Default "18001"
+    $script:config.PORT_CONSOLE = Read-Prompt -VarName "AGENTTEAMS_PORT_CONSOLE" -PromptText (Get-Msg "port.console_prompt") -Default "18001"
     if ($script:StepResult -eq "back") { return }
-    $script:config.PORT_ELEMENT_WEB = Read-Prompt -VarName "HICLAW_PORT_ELEMENT_WEB" -PromptText (Get-Msg "port.element_prompt") -Default "18088"
+    $script:config.PORT_ELEMENT_WEB = Read-Prompt -VarName "AGENTTEAMS_PORT_ELEMENT_WEB" -PromptText (Get-Msg "port.element_prompt") -Default "18088"
     if ($script:StepResult -eq "back") { return }
-    $script:config.PORT_MANAGER_CONSOLE = Read-Prompt -VarName "HICLAW_PORT_MANAGER_CONSOLE" -PromptText (Get-Msg "port.manager_console_prompt") -Default "18888"
+    $script:config.PORT_MANAGER_CONSOLE = Read-Prompt -VarName "AGENTTEAMS_PORT_MANAGER_CONSOLE" -PromptText (Get-Msg "port.manager_console_prompt") -Default "18888"
     if ($script:StepResult -eq "back") { return }
     Write-Log ""
 }
@@ -2134,28 +2134,28 @@ function Step-Ports {
 function Step-Domains {
     Write-Log (Get-Msg "domain.title")
     Write-Log (Get-Msg "domain.hint")
-    $script:config.MATRIX_DOMAIN = Read-Prompt -VarName "HICLAW_MATRIX_DOMAIN" -PromptText (Get-Msg "domain.matrix_prompt") -Default "matrix-local.hiclaw.io:$($script:config.PORT_GATEWAY)"
+    $script:config.MATRIX_DOMAIN = Read-Prompt -VarName "AGENTTEAMS_MATRIX_DOMAIN" -PromptText (Get-Msg "domain.matrix_prompt") -Default "matrix-local.agentteams.io:$($script:config.PORT_GATEWAY)"
     if ($script:StepResult -eq "back") { return }
-    $script:config.MATRIX_CLIENT_DOMAIN = Read-Prompt -VarName "HICLAW_MATRIX_CLIENT_DOMAIN" -PromptText (Get-Msg "domain.element_prompt") -Default "matrix-client-local.hiclaw.io"
+    $script:config.MATRIX_CLIENT_DOMAIN = Read-Prompt -VarName "AGENTTEAMS_MATRIX_CLIENT_DOMAIN" -PromptText (Get-Msg "domain.element_prompt") -Default "matrix-client-local.agentteams.io"
     if ($script:StepResult -eq "back") { return }
-    $script:config.AI_GATEWAY_DOMAIN = Read-Prompt -VarName "HICLAW_AI_GATEWAY_DOMAIN" -PromptText (Get-Msg "domain.gateway_prompt") -Default "aigw-local.hiclaw.io"
+    $script:config.AI_GATEWAY_DOMAIN = Read-Prompt -VarName "AGENTTEAMS_AI_GATEWAY_DOMAIN" -PromptText (Get-Msg "domain.gateway_prompt") -Default "aigw-local.agentteams.io"
     if ($script:StepResult -eq "back") { return }
-    $script:config.FS_DOMAIN = Read-Prompt -VarName "HICLAW_FS_DOMAIN" -PromptText (Get-Msg "domain.fs_prompt") -Default "fs-local.hiclaw.io"
+    $script:config.FS_DOMAIN = Read-Prompt -VarName "AGENTTEAMS_FS_DOMAIN" -PromptText (Get-Msg "domain.fs_prompt") -Default "fs-local.agentteams.io"
     if ($script:StepResult -eq "back") { return }
-    $script:config.CONSOLE_DOMAIN = Read-Prompt -VarName "HICLAW_CONSOLE_DOMAIN" -PromptText (Get-Msg "domain.console_prompt") -Default "console-local.hiclaw.io"
+    $script:config.CONSOLE_DOMAIN = Read-Prompt -VarName "AGENTTEAMS_CONSOLE_DOMAIN" -PromptText (Get-Msg "domain.console_prompt") -Default "console-local.agentteams.io"
     if ($script:StepResult -eq "back") { return }
     Write-Log ""
 }
 
 function Step-Github {
     Write-Log (Get-Msg "github.title")
-    $script:config.GITHUB_TOKEN = Read-Prompt -VarName "HICLAW_GITHUB_TOKEN" -PromptText (Get-Msg "github.token_prompt") -Secret -Optional
+    $script:config.GITHUB_TOKEN = Read-Prompt -VarName "AGENTTEAMS_GITHUB_TOKEN" -PromptText (Get-Msg "github.token_prompt") -Secret -Optional
 }
 
 function Step-Skills {
     Write-Log ""
     Write-Log (Get-Msg "skills.title")
-    $script:config.SKILLS_API_URL = Read-Prompt -VarName "HICLAW_SKILLS_API_URL" -PromptText (Get-Msg "skills.url_prompt") -Optional
+    $script:config.SKILLS_API_URL = Read-Prompt -VarName "AGENTTEAMS_SKILLS_API_URL" -PromptText (Get-Msg "skills.url_prompt") -Optional
     if ($script:StepResult -eq "back") { return }
     Write-Log ""
 }
@@ -2163,23 +2163,23 @@ function Step-Skills {
 function Step-Volume {
     Write-Log (Get-Msg "data.title")
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.DATA_DIR = if ($env:HICLAW_DATA_DIR) { $env:HICLAW_DATA_DIR } else { "hiclaw-data" }
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $script:config.DATA_DIR = if ($env:AGENTTEAMS_DATA_DIR) { $env:AGENTTEAMS_DATA_DIR } else { "agentteams-data" }
         Write-Log "  $(Get-Msg 'data.volume_using' -f $script:config.DATA_DIR) (non-interactive, skipped)"
         return
     }
     # ─────────────────────────────────────────────────────────────────
     $dataDirInput = Read-Host (Get-Msg "data.volume_prompt")
     if ($dataDirInput -eq "b") { $script:StepResult = "back"; return }
-    $script:config.DATA_DIR = if ($dataDirInput) { $dataDirInput } else { "hiclaw-data" }
+    $script:config.DATA_DIR = if ($dataDirInput) { $dataDirInput } else { "agentteams-data" }
     Write-Log (Get-Msg "data.volume_using" -f $script:config.DATA_DIR)
 }
 
 function Step-Workspace {
     Write-Log (Get-Msg "workspace.title")
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.WORKSPACE_DIR = if ($env:HICLAW_WORKSPACE_DIR) { $env:HICLAW_WORKSPACE_DIR } else { "$env:USERPROFILE\hiclaw-manager" }
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $script:config.WORKSPACE_DIR = if ($env:AGENTTEAMS_WORKSPACE_DIR) { $env:AGENTTEAMS_WORKSPACE_DIR } else { "$env:USERPROFILE\agentteams-manager" }
         if (-not (Test-Path $script:config.WORKSPACE_DIR)) {
             New-Item -ItemType Directory -Path $script:config.WORKSPACE_DIR -Force | Out-Null
         }
@@ -2187,8 +2187,8 @@ function Step-Workspace {
         return
     }
     # ─────────────────────────────────────────────────────────────────
-    $defaultWorkspace = "$env:USERPROFILE\hiclaw-manager"
-    if ($script:HICLAW_UPGRADE -and $env:HICLAW_UPGRADE_KEEP_ALL -eq "1") {
+    $defaultWorkspace = "$env:USERPROFILE\agentteams-manager"
+    if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_UPGRADE_KEEP_ALL -eq "1") {
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "workspace.dir_prompt" -f $defaultWorkspace), $script:config.WORKSPACE_DIR)
         $wsInput = if ($script:config.WORKSPACE_DIR) { $script:config.WORKSPACE_DIR } else { $defaultWorkspace }
     } else {
@@ -2212,10 +2212,10 @@ function Step-Runtime {
     Write-Host "  3) $(Get-Msg 'worker_runtime.hermes')"
     Write-Host ""
 
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "copaw" }
-    } elseif ($script:HICLAW_UPGRADE -and $env:HICLAW_DEFAULT_WORKER_RUNTIME) {
-        Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "worker_runtime.title_short"), $env:HICLAW_DEFAULT_WORKER_RUNTIME)
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) { $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME } else { "copaw" }
+    } elseif ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) {
+        Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "worker_runtime.title_short"), $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME)
         $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
         if ($rtChoice -eq "b") { $script:StepResult = "back"; return }
         if ($rtChoice) {
@@ -2225,10 +2225,10 @@ function Step-Runtime {
                 default { "copaw" }
             }
         } else {
-            $script:config.DEFAULT_WORKER_RUNTIME = $env:HICLAW_DEFAULT_WORKER_RUNTIME
+            $script:config.DEFAULT_WORKER_RUNTIME = $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME
         }
-    } elseif ($env:HICLAW_DEFAULT_WORKER_RUNTIME) {
-        $script:config.DEFAULT_WORKER_RUNTIME = $env:HICLAW_DEFAULT_WORKER_RUNTIME
+    } elseif ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) {
+        $script:config.DEFAULT_WORKER_RUNTIME = $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME
     } else {
         $rtChoice = Read-Host (Get-Msg "worker_runtime.choice")
         if ($rtChoice -eq "b") { $script:StepResult = "back"; return }
@@ -2249,19 +2249,19 @@ function Step-ManagerRuntime {
     Write-Host "  2) $(Get-Msg 'manager_runtime.openclaw')"
     Write-Host ""
 
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.MANAGER_RUNTIME = if ($env:HICLAW_MANAGER_RUNTIME) { $env:HICLAW_MANAGER_RUNTIME } else { "copaw" }
-    } elseif ($script:HICLAW_UPGRADE -and $env:HICLAW_MANAGER_RUNTIME) {
-        Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "manager_runtime.title_short"), $env:HICLAW_MANAGER_RUNTIME)
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $script:config.MANAGER_RUNTIME = if ($env:AGENTTEAMS_MANAGER_RUNTIME) { $env:AGENTTEAMS_MANAGER_RUNTIME } else { "copaw" }
+    } elseif ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_MANAGER_RUNTIME) {
+        Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "manager_runtime.title_short"), $env:AGENTTEAMS_MANAGER_RUNTIME)
         $mrChoice = Read-Host (Get-Msg "manager_runtime.choice")
         if ($mrChoice -eq "b") { $script:StepResult = "back"; return }
         if ($mrChoice) {
             $script:config.MANAGER_RUNTIME = if ($mrChoice -eq "2") { "openclaw" } else { "copaw" }
         } else {
-            $script:config.MANAGER_RUNTIME = $env:HICLAW_MANAGER_RUNTIME
+            $script:config.MANAGER_RUNTIME = $env:AGENTTEAMS_MANAGER_RUNTIME
         }
-    } elseif ($env:HICLAW_MANAGER_RUNTIME) {
-        $script:config.MANAGER_RUNTIME = $env:HICLAW_MANAGER_RUNTIME
+    } elseif ($env:AGENTTEAMS_MANAGER_RUNTIME) {
+        $script:config.MANAGER_RUNTIME = $env:AGENTTEAMS_MANAGER_RUNTIME
     } else {
         $mrChoice = Read-Host (Get-Msg "manager_runtime.choice")
         if ($mrChoice -eq "b") { $script:StepResult = "back"; return }
@@ -2275,8 +2275,8 @@ function Step-E2ee {
     Write-Host ""
     Write-Log (Get-Msg "matrix_e2ee.title")
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.MATRIX_E2EE = if ($env:HICLAW_MATRIX_E2EE) { $env:HICLAW_MATRIX_E2EE } else { "0" }
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $script:config.MATRIX_E2EE = if ($env:AGENTTEAMS_MATRIX_E2EE) { $env:AGENTTEAMS_MATRIX_E2EE } else { "0" }
         Write-Log "  $(Get-Msg 'matrix_e2ee.title_short') = $($script:config.MATRIX_E2EE) (non-interactive, skipped)"
         return
     }
@@ -2288,23 +2288,23 @@ function Step-E2ee {
     Write-Host "  2) $(Get-Msg 'matrix_e2ee.enable')"
     Write-Host ""
 
-    if ($script:HICLAW_UPGRADE -and $env:HICLAW_MATRIX_E2EE) {
-        $e2eeDisplay = if ($env:HICLAW_MATRIX_E2EE -eq "1") { Get-Msg "matrix_e2ee.val_enabled" } else { Get-Msg "matrix_e2ee.val_disabled" }
+    if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_MATRIX_E2EE) {
+        $e2eeDisplay = if ($env:AGENTTEAMS_MATRIX_E2EE -eq "1") { Get-Msg "matrix_e2ee.val_enabled" } else { Get-Msg "matrix_e2ee.val_disabled" }
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "matrix_e2ee.title_short"), $e2eeDisplay)
         $e2eeChoice = Read-Host (Get-Msg "matrix_e2ee.choice")
         if ($e2eeChoice -eq "b") { $script:StepResult = "back"; return }
         if ($e2eeChoice) {
             $script:config.MATRIX_E2EE = if ($e2eeChoice -eq "2") { "1" } else { "0" }
         } else {
-            $script:config.MATRIX_E2EE = $env:HICLAW_MATRIX_E2EE
+            $script:config.MATRIX_E2EE = $env:AGENTTEAMS_MATRIX_E2EE
         }
-    } elseif (-not $env:HICLAW_MATRIX_E2EE) {
+    } elseif (-not $env:AGENTTEAMS_MATRIX_E2EE) {
         $e2eeChoice = Read-Host (Get-Msg "matrix_e2ee.choice")
         if ($e2eeChoice -eq "b") { $script:StepResult = "back"; return }
         $e2eeChoice = if ($e2eeChoice) { $e2eeChoice } else { "1" }
         $script:config.MATRIX_E2EE = if ($e2eeChoice -eq "2") { "1" } else { "0" }
     } else {
-        $script:config.MATRIX_E2EE = $env:HICLAW_MATRIX_E2EE
+        $script:config.MATRIX_E2EE = $env:AGENTTEAMS_MATRIX_E2EE
     }
 
     if ($script:config.MATRIX_E2EE -eq "1") {
@@ -2315,14 +2315,14 @@ function Step-E2ee {
 }
 
 function Step-DockerProxy {
-    if (-not $script:HICLAW_MOUNT_SOCKET) {
+    if (-not $script:AGENTTEAMS_MOUNT_SOCKET) {
         $script:config.DOCKER_PROXY = "0"
         return
     }
 
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.DOCKER_PROXY = if ($env:HICLAW_DOCKER_PROXY) { $env:HICLAW_DOCKER_PROXY } else { "0" }
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $script:config.DOCKER_PROXY = if ($env:AGENTTEAMS_DOCKER_PROXY) { $env:AGENTTEAMS_DOCKER_PROXY } else { "0" }
         Write-Log "  $(Get-Msg 'docker_proxy.title_short') = $($script:config.DOCKER_PROXY) (non-interactive, skipped)"
         return
     }
@@ -2337,23 +2337,23 @@ function Step-DockerProxy {
     Write-Host "  2) $(Get-Msg 'docker_proxy.disable')"
     Write-Host ""
 
-    if ($script:HICLAW_UPGRADE -and $env:HICLAW_DOCKER_PROXY) {
-        $proxyDisplay = if ($env:HICLAW_DOCKER_PROXY -eq "1") { Get-Msg "docker_proxy.val_enabled" } else { Get-Msg "docker_proxy.val_disabled" }
+    if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_DOCKER_PROXY) {
+        $proxyDisplay = if ($env:AGENTTEAMS_DOCKER_PROXY -eq "1") { Get-Msg "docker_proxy.val_enabled" } else { Get-Msg "docker_proxy.val_disabled" }
         Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "docker_proxy.title_short"), $proxyDisplay)
         $proxyChoice = Read-Host (Get-Msg "docker_proxy.choice")
         if ($proxyChoice -eq "b") { $script:StepResult = "back"; return }
         if ($proxyChoice) {
             $script:config.DOCKER_PROXY = if ($proxyChoice -eq "2") { "0" } else { "1" }
         } else {
-            $script:config.DOCKER_PROXY = $env:HICLAW_DOCKER_PROXY
+            $script:config.DOCKER_PROXY = $env:AGENTTEAMS_DOCKER_PROXY
         }
-    } elseif (-not $env:HICLAW_DOCKER_PROXY) {
+    } elseif (-not $env:AGENTTEAMS_DOCKER_PROXY) {
         $proxyChoice = Read-Host (Get-Msg "docker_proxy.choice")
         if ($proxyChoice -eq "b") { $script:StepResult = "back"; return }
         $proxyChoice = if ($proxyChoice) { $proxyChoice } else { "1" }
         $script:config.DOCKER_PROXY = if ($proxyChoice -eq "2") { "0" } else { "1" }
     } else {
-        $script:config.DOCKER_PROXY = $env:HICLAW_DOCKER_PROXY
+        $script:config.DOCKER_PROXY = $env:AGENTTEAMS_DOCKER_PROXY
     }
 
     if ($script:config.DOCKER_PROXY -eq "1") {
@@ -2363,17 +2363,17 @@ function Step-DockerProxy {
         Write-Host ""
         Write-Host "  $(Get-Msg 'docker_proxy.registries_desc')"
         Write-Host ""
-        if ($script:HICLAW_UPGRADE -and $env:HICLAW_PROXY_ALLOWED_REGISTRIES) {
-            Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "docker_proxy.registries_label"), $env:HICLAW_PROXY_ALLOWED_REGISTRIES)
+        if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_PROXY_ALLOWED_REGISTRIES) {
+            Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "docker_proxy.registries_label"), $env:AGENTTEAMS_PROXY_ALLOWED_REGISTRIES)
             $regInput = Read-Host (Get-Msg "docker_proxy.registries_prompt")
             if ($regInput -eq "b") { $script:StepResult = "back"; return }
-            $script:config.PROXY_ALLOWED_REGISTRIES = if ($regInput) { $regInput } else { $env:HICLAW_PROXY_ALLOWED_REGISTRIES }
-        } elseif (-not $env:HICLAW_PROXY_ALLOWED_REGISTRIES) {
+            $script:config.PROXY_ALLOWED_REGISTRIES = if ($regInput) { $regInput } else { $env:AGENTTEAMS_PROXY_ALLOWED_REGISTRIES }
+        } elseif (-not $env:AGENTTEAMS_PROXY_ALLOWED_REGISTRIES) {
             $regInput = Read-Host (Get-Msg "docker_proxy.registries_prompt")
             if ($regInput -eq "b") { $script:StepResult = "back"; return }
             $script:config.PROXY_ALLOWED_REGISTRIES = if ($regInput) { $regInput } else { "" }
         } else {
-            $script:config.PROXY_ALLOWED_REGISTRIES = $env:HICLAW_PROXY_ALLOWED_REGISTRIES
+            $script:config.PROXY_ALLOWED_REGISTRIES = $env:AGENTTEAMS_PROXY_ALLOWED_REGISTRIES
         }
     } else {
         Write-Log (Get-Msg "docker_proxy.selected_disabled")
@@ -2382,23 +2382,23 @@ function Step-DockerProxy {
 
 function Step-Idle {
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.WORKER_IDLE_TIMEOUT = if ($env:HICLAW_WORKER_IDLE_TIMEOUT) { $env:HICLAW_WORKER_IDLE_TIMEOUT } else { "720" }
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $script:config.WORKER_IDLE_TIMEOUT = if ($env:AGENTTEAMS_WORKER_IDLE_TIMEOUT) { $env:AGENTTEAMS_WORKER_IDLE_TIMEOUT } else { "720" }
         Write-Log "  $(Get-Msg 'idle_timeout.label') = $($script:config.WORKER_IDLE_TIMEOUT) (non-interactive, skipped)"
         return
     }
     # ─────────────────────────────────────────────────────────────────
-    if ($script:HICLAW_UPGRADE -and $env:HICLAW_WORKER_IDLE_TIMEOUT) {
-        Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "idle_timeout.label"), $env:HICLAW_WORKER_IDLE_TIMEOUT)
+    if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_WORKER_IDLE_TIMEOUT) {
+        Write-Log (Get-Msg "prompt.upgrade_keep" -f (Get-Msg "idle_timeout.label"), $env:AGENTTEAMS_WORKER_IDLE_TIMEOUT)
         $idleInput = Read-Host (Get-Msg "idle_timeout.prompt")
         if ($idleInput -eq "b") { $script:StepResult = "back"; return }
-        $script:config.WORKER_IDLE_TIMEOUT = if ($idleInput) { $idleInput } else { $env:HICLAW_WORKER_IDLE_TIMEOUT }
-    } elseif (-not $env:HICLAW_WORKER_IDLE_TIMEOUT) {
+        $script:config.WORKER_IDLE_TIMEOUT = if ($idleInput) { $idleInput } else { $env:AGENTTEAMS_WORKER_IDLE_TIMEOUT }
+    } elseif (-not $env:AGENTTEAMS_WORKER_IDLE_TIMEOUT) {
         $idleInput = Read-Host (Get-Msg "idle_timeout.prompt")
         if ($idleInput -eq "b") { $script:StepResult = "back"; return }
         $script:config.WORKER_IDLE_TIMEOUT = if ($idleInput) { $idleInput } else { "720" }
     } else {
-        $script:config.WORKER_IDLE_TIMEOUT = $env:HICLAW_WORKER_IDLE_TIMEOUT
+        $script:config.WORKER_IDLE_TIMEOUT = $env:AGENTTEAMS_WORKER_IDLE_TIMEOUT
     }
     Write-Log (Get-Msg "idle_timeout.selected" -f $script:config.WORKER_IDLE_TIMEOUT)
     Write-Log ""
@@ -2406,8 +2406,8 @@ function Step-Idle {
 
 function Step-Hostshare {
     # ── Non-interactive guard (deep defense) ──────────────────────────
-    if ($script:HICLAW_NON_INTERACTIVE) {
-        $script:config.HOST_SHARE_DIR = if ($env:HICLAW_HOST_SHARE_DIR) { $env:HICLAW_HOST_SHARE_DIR } else { $env:USERPROFILE }
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+        $script:config.HOST_SHARE_DIR = if ($env:AGENTTEAMS_HOST_SHARE_DIR) { $env:AGENTTEAMS_HOST_SHARE_DIR } else { $env:USERPROFILE }
         Write-Log "  $(Get-Msg 'host_share.label') = $($script:config.HOST_SHARE_DIR) (non-interactive, skipped)"
         return
     }
@@ -2430,82 +2430,82 @@ function Install-Manager {
     Write-Log (Get-Msg "install.title")
 
     # Detect timezone
-    $script:HICLAW_TIMEZONE = Get-HiClawTimeZone
+    $script:AGENTTEAMS_TIMEZONE = Get-AgentTeamsTimeZone
 
     # Language priority: env var > existing env file > timezone detection
-    if ($env:HICLAW_LANGUAGE) {
-        $script:HICLAW_LANGUAGE = $env:HICLAW_LANGUAGE
+    if ($env:AGENTTEAMS_LANGUAGE) {
+        $script:AGENTTEAMS_LANGUAGE = $env:AGENTTEAMS_LANGUAGE
     } else {
         # Check existing env file for saved language preference (upgrade scenario)
-        $_envFile = $script:HICLAW_ENV_FILE
+        $_envFile = $script:AGENTTEAMS_ENV_FILE
         # Migrate from legacy location (current directory) if needed
-        if (-not (Test-Path $_envFile) -and (Test-Path ".\hiclaw-manager.env")) {
-            Write-Log "Migrating hiclaw-manager.env to $_envFile..."
-            Move-Item ".\hiclaw-manager.env" $_envFile -ErrorAction SilentlyContinue
+        if (-not (Test-Path $_envFile) -and (Test-Path ".\agentteams-manager.env")) {
+            Write-Log "Migrating agentteams-manager.env to $_envFile..."
+            Move-Item ".\agentteams-manager.env" $_envFile -ErrorAction SilentlyContinue
         }
         if (Test-Path $_envFile) {
-            $_savedLang = (Get-Content $_envFile | Select-String "^HICLAW_LANGUAGE=" | ForEach-Object {
-                $_.Line -replace '^HICLAW_LANGUAGE=', ''
+            $_savedLang = (Get-Content $_envFile | Select-String "^AGENTTEAMS_LANGUAGE=" | ForEach-Object {
+                $_.Line -replace '^AGENTTEAMS_LANGUAGE=', ''
             } | Select-Object -First 1)
             if ($_savedLang) {
-                $script:HICLAW_LANGUAGE = $_savedLang
+                $script:AGENTTEAMS_LANGUAGE = $_savedLang
             }
         }
         # Fall back to timezone-based detection
-        if (-not $script:HICLAW_LANGUAGE) {
-            $script:HICLAW_LANGUAGE = Get-HiClawLanguage -Timezone $script:HICLAW_TIMEZONE
+        if (-not $script:AGENTTEAMS_LANGUAGE) {
+            $script:AGENTTEAMS_LANGUAGE = Get-AgentTeamsLanguage -Timezone $script:AGENTTEAMS_TIMEZONE
         }
     }
-    $env:HICLAW_LANGUAGE = $script:HICLAW_LANGUAGE
+    $env:AGENTTEAMS_LANGUAGE = $script:AGENTTEAMS_LANGUAGE
 
     # Detect registry
-    $script:HICLAW_REGISTRY = Get-Registry -Timezone $script:HICLAW_TIMEZONE
+    $script:AGENTTEAMS_REGISTRY = Get-Registry -Timezone $script:AGENTTEAMS_TIMEZONE
 
     # Set image names
-    $script:MANAGER_IMAGE = if ($env:HICLAW_INSTALL_MANAGER_IMAGE) {
-        $env:HICLAW_INSTALL_MANAGER_IMAGE
+    $script:MANAGER_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_MANAGER_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-manager:$($script:HICLAW_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-manager:$($script:AGENTTEAMS_VERSION)"
     }
 
-    $script:WORKER_IMAGE = if ($env:HICLAW_INSTALL_WORKER_IMAGE) {
-        $env:HICLAW_INSTALL_WORKER_IMAGE
+    $script:WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_WORKER_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-worker:$($script:HICLAW_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
-    $script:COPAW_WORKER_IMAGE = if ($env:HICLAW_INSTALL_COPAW_WORKER_IMAGE) {
-        $env:HICLAW_INSTALL_COPAW_WORKER_IMAGE
+    $script:COPAW_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-copaw-worker:$($script:HICLAW_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-copaw-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
-    $script:HERMES_WORKER_IMAGE = if ($env:HICLAW_INSTALL_HERMES_WORKER_IMAGE) {
-        $env:HICLAW_INSTALL_HERMES_WORKER_IMAGE
+    $script:HERMES_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-hermes-worker:$($script:HICLAW_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-hermes-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
-    $script:MANAGER_COPAW_IMAGE = if ($env:HICLAW_INSTALL_MANAGER_COPAW_IMAGE) {
-        $env:HICLAW_INSTALL_MANAGER_COPAW_IMAGE
+    $script:MANAGER_COPAW_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-manager-copaw:$($script:HICLAW_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-manager-copaw:$($script:AGENTTEAMS_VERSION)"
     }
 
     # Backward compatibility: accept old env var name from previous versions
-    $controllerImageOverride = if ($env:HICLAW_INSTALL_CONTROLLER_IMAGE) { $env:HICLAW_INSTALL_CONTROLLER_IMAGE } elseif ($env:HICLAW_INSTALL_DOCKER_PROXY_IMAGE) { $env:HICLAW_INSTALL_DOCKER_PROXY_IMAGE } else { $null }
+    $controllerImageOverride = if ($env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE) { $env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE } elseif ($env:AGENTTEAMS_INSTALL_DOCKER_PROXY_IMAGE) { $env:AGENTTEAMS_INSTALL_DOCKER_PROXY_IMAGE } else { $null }
     $script:CONTROLLER_IMAGE = if ($controllerImageOverride) {
         $controllerImageOverride
     } else {
-        "$($script:HICLAW_REGISTRY)/higress/hiclaw-controller:$($script:HICLAW_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
     }
 
     # Resolve embedded controller image (sets $script:EMBEDDED_IMAGE and
-    # $script:HICLAW_USE_EMBEDDED). Errors out fast if no embedded image is available
+    # $script:AGENTTEAMS_USE_EMBEDDED). Errors out fast if no embedded image is available
     # for the requested version (mirrors the bash installer behavior).
     Resolve-EmbeddedImage
 
-    Write-Log (Get-Msg "install.registry" -f $script:HICLAW_REGISTRY)
+    Write-Log (Get-Msg "install.registry" -f $script:AGENTTEAMS_REGISTRY)
     Write-Log ""
     Write-Log (Get-Msg "install.dir" -f (Get-Location))
     Write-Log (Get-Msg "install.dir_hint")
@@ -2515,12 +2515,12 @@ function Install-Manager {
     # Check container runtime (docker or podman)
     if (-not (Get-Command "docker" -ErrorAction SilentlyContinue) -and
         -not (Get-Command "podman" -ErrorAction SilentlyContinue)) {
-        Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_found')" -ForegroundColor Red
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_found')" -ForegroundColor Red
         Exit-Script 1
     }
 
     if (-not (Test-DockerRunning)) {
-        Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_running')" -ForegroundColor Red
+        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_running')" -ForegroundColor Red
         Exit-Script 1
     }
 
@@ -2529,18 +2529,18 @@ function Install-Manager {
     $config = $script:config  # local alias so post-machine code can use $config
 
     # Orphan volume detection (env file gone but volume remains)
-    if (-not (Test-Path $script:HICLAW_ENV_FILE)) {
-        $dataVol = if ($env:HICLAW_DATA_DIR) { $env:HICLAW_DATA_DIR } else { "hiclaw-data" }
+    if (-not (Test-Path $script:AGENTTEAMS_ENV_FILE)) {
+        $dataVol = if ($env:AGENTTEAMS_DATA_DIR) { $env:AGENTTEAMS_DATA_DIR } else { "agentteams-data" }
         $volumeExists = docker volume ls -q 2>$null | Select-String "^${dataVol}$"
         if ($volumeExists) {
             Write-Host ""
             Write-Log (Get-Msg "install.orphan_volume.detected" -f $dataVol)
             Write-Log (Get-Msg "install.orphan_volume.warn")
-            if ($script:HICLAW_NON_INTERACTIVE) {
+            if ($script:AGENTTEAMS_NON_INTERACTIVE) {
                 Write-Log (Get-Msg "install.orphan_volume.clean_noninteractive")
-                docker stop hiclaw-manager *>$null
-                docker rm hiclaw-manager *>$null
-                docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-worker-" | ForEach-Object {
+                docker stop agentteams-manager *>$null
+                docker rm agentteams-manager *>$null
+                docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-" | ForEach-Object {
                     docker stop $_.ToString().Trim() *>$null
                     docker rm $_.ToString().Trim() *>$null
                 }
@@ -2557,9 +2557,9 @@ function Install-Manager {
                 if (-not $orphanChoice) { $orphanChoice = "1" }
                 switch -Regex ($orphanChoice) {
                     "^(1|clean)$" {
-                        docker stop hiclaw-manager *>$null
-                        docker rm hiclaw-manager *>$null
-                        docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-worker-" | ForEach-Object {
+                        docker stop agentteams-manager *>$null
+                        docker rm agentteams-manager *>$null
+                        docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-" | ForEach-Object {
                             docker stop $_.ToString().Trim() *>$null
                             docker rm $_.ToString().Trim() *>$null
                         }
@@ -2609,87 +2609,87 @@ function Install-Manager {
 
     # Post-machine defaults for any steps that were skipped
     if (-not $script:config.DATA_DIR) {
-        $script:config.DATA_DIR = if ($env:HICLAW_DATA_DIR) { $env:HICLAW_DATA_DIR } else { "hiclaw-data" }
+        $script:config.DATA_DIR = if ($env:AGENTTEAMS_DATA_DIR) { $env:AGENTTEAMS_DATA_DIR } else { "agentteams-data" }
     }
     Write-Log (Get-Msg "data.volume_using" -f $script:config.DATA_DIR)
     if (-not $script:config.WORKSPACE_DIR) {
-        $_defaultWs = "$env:USERPROFILE\hiclaw-manager"
-        $script:config.WORKSPACE_DIR = if ($env:HICLAW_WORKSPACE_DIR) { $env:HICLAW_WORKSPACE_DIR } else { $_defaultWs }
+        $_defaultWs = "$env:USERPROFILE\agentteams-manager"
+        $script:config.WORKSPACE_DIR = if ($env:AGENTTEAMS_WORKSPACE_DIR) { $env:AGENTTEAMS_WORKSPACE_DIR } else { $_defaultWs }
         if (-not (Test-Path $script:config.WORKSPACE_DIR)) {
             New-Item -ItemType Directory -Path $script:config.WORKSPACE_DIR -Force | Out-Null
         }
         Write-Log (Get-Msg "workspace.dir_label" -f $script:config.WORKSPACE_DIR)
     }
     if (-not $script:config.DEFAULT_WORKER_RUNTIME) {
-        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:HICLAW_DEFAULT_WORKER_RUNTIME) { $env:HICLAW_DEFAULT_WORKER_RUNTIME } else { "copaw" }
+        $script:config.DEFAULT_WORKER_RUNTIME = if ($env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME) { $env:AGENTTEAMS_DEFAULT_WORKER_RUNTIME } else { "copaw" }
         Write-Log (Get-Msg "worker_runtime.selected" -f $script:config.DEFAULT_WORKER_RUNTIME)
     }
     if (-not $script:config.MATRIX_E2EE) {
-        $script:config.MATRIX_E2EE = if ($env:HICLAW_MATRIX_E2EE) { $env:HICLAW_MATRIX_E2EE } else { "0" }
+        $script:config.MATRIX_E2EE = if ($env:AGENTTEAMS_MATRIX_E2EE) { $env:AGENTTEAMS_MATRIX_E2EE } else { "0" }
     }
     if (-not $script:config.WORKER_IDLE_TIMEOUT) {
-        $script:config.WORKER_IDLE_TIMEOUT = if ($env:HICLAW_WORKER_IDLE_TIMEOUT) { $env:HICLAW_WORKER_IDLE_TIMEOUT } else { "720" }
+        $script:config.WORKER_IDLE_TIMEOUT = if ($env:AGENTTEAMS_WORKER_IDLE_TIMEOUT) { $env:AGENTTEAMS_WORKER_IDLE_TIMEOUT } else { "720" }
     }
     if (-not $script:config.HOST_SHARE_DIR) {
-        $script:config.HOST_SHARE_DIR = if ($env:HICLAW_HOST_SHARE_DIR) { $env:HICLAW_HOST_SHARE_DIR } else { $env:USERPROFILE }
+        $script:config.HOST_SHARE_DIR = if ($env:AGENTTEAMS_HOST_SHARE_DIR) { $env:AGENTTEAMS_HOST_SHARE_DIR } else { $env:USERPROFILE }
     }
     if (-not $script:config.LOCAL_ONLY) {
-        $script:config.LOCAL_ONLY = if ($env:HICLAW_LOCAL_ONLY) { $env:HICLAW_LOCAL_ONLY } else { "1" }
+        $script:config.LOCAL_ONLY = if ($env:AGENTTEAMS_LOCAL_ONLY) { $env:AGENTTEAMS_LOCAL_ONLY } else { "1" }
     }
     if (-not $script:config.MANAGER_RUNTIME) {
-        $script:config.MANAGER_RUNTIME = if ($env:HICLAW_MANAGER_RUNTIME) { $env:HICLAW_MANAGER_RUNTIME } else { "copaw" }
+        $script:config.MANAGER_RUNTIME = if ($env:AGENTTEAMS_MANAGER_RUNTIME) { $env:AGENTTEAMS_MANAGER_RUNTIME } else { "copaw" }
     }
     if (-not $script:config.PORT_GATEWAY) {
-        $script:config.PORT_GATEWAY = if ($env:HICLAW_PORT_GATEWAY) { $env:HICLAW_PORT_GATEWAY } else { "18080" }
-        $script:config.PORT_CONSOLE = if ($env:HICLAW_PORT_CONSOLE) { $env:HICLAW_PORT_CONSOLE } else { "18001" }
-        $script:config.PORT_ELEMENT_WEB = if ($env:HICLAW_PORT_ELEMENT_WEB) { $env:HICLAW_PORT_ELEMENT_WEB } else { "18088" }
-        $script:config.PORT_MANAGER_CONSOLE = if ($env:HICLAW_PORT_MANAGER_CONSOLE) { $env:HICLAW_PORT_MANAGER_CONSOLE } else { "18888" }
+        $script:config.PORT_GATEWAY = if ($env:AGENTTEAMS_PORT_GATEWAY) { $env:AGENTTEAMS_PORT_GATEWAY } else { "18080" }
+        $script:config.PORT_CONSOLE = if ($env:AGENTTEAMS_PORT_CONSOLE) { $env:AGENTTEAMS_PORT_CONSOLE } else { "18001" }
+        $script:config.PORT_ELEMENT_WEB = if ($env:AGENTTEAMS_PORT_ELEMENT_WEB) { $env:AGENTTEAMS_PORT_ELEMENT_WEB } else { "18088" }
+        $script:config.PORT_MANAGER_CONSOLE = if ($env:AGENTTEAMS_PORT_MANAGER_CONSOLE) { $env:AGENTTEAMS_PORT_MANAGER_CONSOLE } else { "18888" }
     }
     if (-not $script:config.MATRIX_DOMAIN) {
-        $script:config.MATRIX_DOMAIN = if ($env:HICLAW_MATRIX_DOMAIN) { $env:HICLAW_MATRIX_DOMAIN } else { "matrix-local.hiclaw.io:$($script:config.PORT_GATEWAY)" }
-        $script:config.MATRIX_CLIENT_DOMAIN = if ($env:HICLAW_MATRIX_CLIENT_DOMAIN) { $env:HICLAW_MATRIX_CLIENT_DOMAIN } else { "matrix-client-local.hiclaw.io" }
-        $script:config.AI_GATEWAY_DOMAIN = if ($env:HICLAW_AI_GATEWAY_DOMAIN) { $env:HICLAW_AI_GATEWAY_DOMAIN } else { "aigw-local.hiclaw.io" }
-        $script:config.FS_DOMAIN = if ($env:HICLAW_FS_DOMAIN) { $env:HICLAW_FS_DOMAIN } else { "fs-local.hiclaw.io" }
-        $script:config.CONSOLE_DOMAIN = if ($env:HICLAW_CONSOLE_DOMAIN) { $env:HICLAW_CONSOLE_DOMAIN } else { "console-local.hiclaw.io" }
+        $script:config.MATRIX_DOMAIN = if ($env:AGENTTEAMS_MATRIX_DOMAIN) { $env:AGENTTEAMS_MATRIX_DOMAIN } else { "matrix-local.agentteams.io:$($script:config.PORT_GATEWAY)" }
+        $script:config.MATRIX_CLIENT_DOMAIN = if ($env:AGENTTEAMS_MATRIX_CLIENT_DOMAIN) { $env:AGENTTEAMS_MATRIX_CLIENT_DOMAIN } else { "matrix-client-local.agentteams.io" }
+        $script:config.AI_GATEWAY_DOMAIN = if ($env:AGENTTEAMS_AI_GATEWAY_DOMAIN) { $env:AGENTTEAMS_AI_GATEWAY_DOMAIN } else { "aigw-local.agentteams.io" }
+        $script:config.FS_DOMAIN = if ($env:AGENTTEAMS_FS_DOMAIN) { $env:AGENTTEAMS_FS_DOMAIN } else { "fs-local.agentteams.io" }
+        $script:config.CONSOLE_DOMAIN = if ($env:AGENTTEAMS_CONSOLE_DOMAIN) { $env:AGENTTEAMS_CONSOLE_DOMAIN } else { "console-local.agentteams.io" }
     }
 
     Write-Log ""
 
     # Generate secrets
     Write-Log (Get-Msg "install.generating_secrets")
-    $config.MANAGER_PASSWORD = if ($env:HICLAW_MANAGER_PASSWORD) { $env:HICLAW_MANAGER_PASSWORD } else { New-RandomKey }
-    $config.REGISTRATION_TOKEN = if ($env:HICLAW_REGISTRATION_TOKEN) { $env:HICLAW_REGISTRATION_TOKEN } else { New-RandomKey }
-    $config.MINIO_USER = if ($env:HICLAW_MINIO_USER) { $env:HICLAW_MINIO_USER } else { $config.ADMIN_USER }
-    $config.MINIO_PASSWORD = if ($env:HICLAW_MINIO_PASSWORD) { $env:HICLAW_MINIO_PASSWORD } else { $config.ADMIN_PASSWORD }
-    $config.MANAGER_GATEWAY_KEY = if ($env:HICLAW_MANAGER_GATEWAY_KEY) { $env:HICLAW_MANAGER_GATEWAY_KEY } else { New-RandomKey }
+    $config.MANAGER_PASSWORD = if ($env:AGENTTEAMS_MANAGER_PASSWORD) { $env:AGENTTEAMS_MANAGER_PASSWORD } else { New-RandomKey }
+    $config.REGISTRATION_TOKEN = if ($env:AGENTTEAMS_REGISTRATION_TOKEN) { $env:AGENTTEAMS_REGISTRATION_TOKEN } else { New-RandomKey }
+    $config.MINIO_USER = if ($env:AGENTTEAMS_MINIO_USER) { $env:AGENTTEAMS_MINIO_USER } else { $config.ADMIN_USER }
+    $config.MINIO_PASSWORD = if ($env:AGENTTEAMS_MINIO_PASSWORD) { $env:AGENTTEAMS_MINIO_PASSWORD } else { $config.ADMIN_PASSWORD }
+    $config.MANAGER_GATEWAY_KEY = if ($env:AGENTTEAMS_MANAGER_GATEWAY_KEY) { $env:AGENTTEAMS_MANAGER_GATEWAY_KEY } else { New-RandomKey }
 
     # Store additional config
-    $config.LANGUAGE = $script:HICLAW_LANGUAGE
-    $config.REGISTRY = $script:HICLAW_REGISTRY
+    $config.LANGUAGE = $script:AGENTTEAMS_LANGUAGE
+    $config.REGISTRY = $script:AGENTTEAMS_REGISTRY
     $config.WORKER_IMAGE = $script:WORKER_IMAGE
     $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
     $config.HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE
     $config.MANAGER_COPAW_IMAGE = $script:MANAGER_COPAW_IMAGE
 
     # Write env file
-    New-EnvFile -Config $config -Path $script:HICLAW_ENV_FILE
+    New-EnvFile -Config $config -Path $script:AGENTTEAMS_ENV_FILE
 
     # Manager image selection (used by both embedded — passed to controller via env —
     # and legacy — used directly as `docker run` target).
     $managerImage = if ($config.MANAGER_RUNTIME -eq "copaw") { $script:MANAGER_COPAW_IMAGE } else { $script:MANAGER_IMAGE }
     $portPrefix = if ($config.LOCAL_ONLY -eq "1") { "127.0.0.1:" } else { "" }
 
-    # Ensure hiclaw-net Docker network exists. Used in both modes — the embedded
+    # Ensure agentteams-net Docker network exists. Used in both modes — the embedded
     # controller and the spawned manager/worker containers all join it and rely on
-    # network aliases for *-local.hiclaw.io DNS resolution.
-    if ($script:HICLAW_MOUNT_SOCKET) {
+    # network aliases for *-local.agentteams.io DNS resolution.
+    if ($script:AGENTTEAMS_MOUNT_SOCKET) {
         $socketAvailable = Test-DockerRunning
         if ($socketAvailable) {
-            docker network inspect hiclaw-net *>$null
-            if ($LASTEXITCODE -ne 0) { docker network create hiclaw-net *>$null }
+            docker network inspect agentteams-net *>$null
+            if ($LASTEXITCODE -ne 0) { docker network create agentteams-net *>$null }
         } else {
             Write-Log (Get-Msg "install.socket_not_found")
-            if (-not $script:HICLAW_NON_INTERACTIVE) {
+            if (-not $script:AGENTTEAMS_NON_INTERACTIVE) {
                 Write-Host ""
                 Write-Host "$($script:ESC)[33m$(Get-Msg 'install.socket_confirm.title')$($script:ESC)[0m"
                 Write-Host ""
@@ -2704,30 +2704,30 @@ function Install-Manager {
         }
     }
 
-    if ($script:HICLAW_USE_EMBEDDED -ne "1") {
+    if ($script:AGENTTEAMS_USE_EMBEDDED -ne "1") {
         # ============================================================
         # Legacy architecture: all-in-one manager container
-        # (only entered when HICLAW_FORCE_LEGACY=1 — broken with the slim manager
-        #  image shipped since PR #616; kept solely for HICLAW_VERSION <= v1.0.9)
+        # (only entered when AGENTTEAMS_FORCE_LEGACY=1 — broken with the slim manager
+        #  image shipped since PR #616; kept solely for AGENTTEAMS_VERSION <= v1.0.9)
         # ============================================================
 
         $dockerArgs = @(
             "run", "-d",
-            "--name", "hiclaw-manager",
-            "--env-file", $script:HICLAW_ENV_FILE,
+            "--name", "agentteams-manager",
+            "--env-file", $script:AGENTTEAMS_ENV_FILE,
             "-e", "HOME=/root/manager-workspace",
             "-w", "/root/manager-workspace",
             "-e", "HOST_ORIGINAL_HOME=$($config.HOST_SHARE_DIR)",
-            "-e", "HICLAW_MANAGER_RUNTIME=$($config.MANAGER_RUNTIME)"
+            "-e", "AGENTTEAMS_MANAGER_RUNTIME=$($config.MANAGER_RUNTIME)"
         )
 
-        $dockerArgs += @("-e", "TZ=$($script:HICLAW_TIMEZONE)")
+        $dockerArgs += @("-e", "TZ=$($script:AGENTTEAMS_TIMEZONE)")
 
-        if ($script:HICLAW_MOUNT_SOCKET -and (Test-DockerRunning)) {
-            $dockerArgs += @("--network", "hiclaw-net")
-            $dockerArgs += @("--network-alias", "matrix-local.hiclaw.io")
-            $dockerArgs += @("--network-alias", "aigw-local.hiclaw.io")
-            $dockerArgs += @("--network-alias", "fs-local.hiclaw.io")
+        if ($script:AGENTTEAMS_MOUNT_SOCKET -and (Test-DockerRunning)) {
+            $dockerArgs += @("--network", "agentteams-net")
+            $dockerArgs += @("--network-alias", "matrix-local.agentteams.io")
+            $dockerArgs += @("--network-alias", "aigw-local.agentteams.io")
+            $dockerArgs += @("--network-alias", "fs-local.agentteams.io")
             foreach ($domain in @($config.MATRIX_CLIENT_DOMAIN, $config.CONSOLE_DOMAIN)) {
                 if ($domain -match '-local\.hiclaw\.io$') {
                     $dockerArgs += @("--network-alias", $domain)
@@ -2737,20 +2737,20 @@ function Install-Manager {
             if ($config.DOCKER_PROXY -eq "1") {
                 $proxyImage = $script:CONTROLLER_IMAGE
                 Write-Log "Starting Docker API proxy..."
-                docker rm -f hiclaw-controller *>$null
-                docker run -d --name hiclaw-controller `
-                    --network hiclaw-net `
+                docker rm -f agentteams-controller *>$null
+                docker run -d --name agentteams-controller `
+                    --network agentteams-net `
                     -v "//var/run/docker.sock:/var/run/docker.sock" `
                     --security-opt label=disable `
-                    -e "HICLAW_WORKER_IMAGE=$($script:WORKER_IMAGE)" `
-                    -e "HICLAW_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)" `
-                    -e "HICLAW_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)" `
-                    -e "HICLAW_DEFAULT_WORKER_RUNTIME=$($script:config.DEFAULT_WORKER_RUNTIME)" `
-                    $(if ($config.PROXY_ALLOWED_REGISTRIES) { @("-e", "HICLAW_PROXY_ALLOWED_REGISTRIES=$($config.PROXY_ALLOWED_REGISTRIES)") }) `
+                    -e "AGENTTEAMS_WORKER_IMAGE=$($script:WORKER_IMAGE)" `
+                    -e "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)" `
+                    -e "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)" `
+                    -e "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($script:config.DEFAULT_WORKER_RUNTIME)" `
+                    $(if ($config.PROXY_ALLOWED_REGISTRIES) { @("-e", "AGENTTEAMS_PROXY_ALLOWED_REGISTRIES=$($config.PROXY_ALLOWED_REGISTRIES)") }) `
                     --restart unless-stopped `
                     $proxyImage
-                $dockerArgs += @("-e", "HICLAW_CONTROLLER_URL=http://hiclaw-controller:8090")
-                $dockerArgs += @("-e", "HICLAW_CONTAINER_API=http://hiclaw-controller:8090")
+                $dockerArgs += @("-e", "AGENTTEAMS_CONTROLLER_URL=http://agentteams-controller:8090")
+                $dockerArgs += @("-e", "AGENTTEAMS_CONTAINER_API=http://agentteams-controller:8090")
                 Write-Log (Get-Msg "docker_proxy.selected_enabled")
             } else {
                 $dockerArgs += @("-v", "//var/run/docker.sock:/var/run/docker.sock")
@@ -2773,13 +2773,13 @@ function Install-Manager {
         $dockerArgs += @("-v", "${shareDockerPath}:/host-share")
         Write-Log (Get-Msg "host_share.sharing" -f $config.HOST_SHARE_DIR)
 
-        if ($env:HICLAW_YOLO -eq "1") {
-            $dockerArgs += @("-e", "HICLAW_YOLO=1")
+        if ($env:AGENTTEAMS_YOLO -eq "1") {
+            $dockerArgs += @("-e", "AGENTTEAMS_YOLO=1")
             Write-Log (Get-Msg "install.yolo")
         }
 
-        if ($env:HICLAW_MATRIX_DEBUG -eq "1") {
-            $dockerArgs += @("-e", "HICLAW_MATRIX_DEBUG=1")
+        if ($env:AGENTTEAMS_MATRIX_DEBUG -eq "1") {
+            $dockerArgs += @("-e", "AGENTTEAMS_MATRIX_DEBUG=1")
         }
 
         $dockerArgs += @("--restart", "unless-stopped")
@@ -2792,15 +2792,44 @@ function Install-Manager {
         docker volume create $config.DATA_DIR | Out-Null
     }
 
-    # Pull images (skip if already exists locally for `hiclaw/`-prefixed local builds).
-    $LocalImagePrefix = "hiclaw/"
-    if ($script:HICLAW_USE_EMBEDDED -eq "1") {
+    # Pull images (skip if already exists locally for local build tags).
+    $LocalImagePattern = "^(hiclaw|agentteams)/"
+    function Resolve-LegacyLocalImage {
+        param([string]$Image)
+        switch -Regex ($Image) {
+            '^agentteams/manager:(.+)$' { return "hiclaw/hiclaw-manager:$($Matches[1])" }
+            '^agentteams/manager-copaw:(.+)$' { return "hiclaw/hiclaw-manager-copaw:$($Matches[1])" }
+            '^agentteams/worker-agent:(.+)$' { return "hiclaw/worker-agent:$($Matches[1])" }
+            '^agentteams/copaw-worker:(.+)$' { return "hiclaw/copaw-worker:$($Matches[1])" }
+            '^agentteams/hermes-worker:(.+)$' { return "hiclaw/hermes-worker:$($Matches[1])" }
+            '^agentteams/qwenpaw-worker:(.+)$' { return "hiclaw/qwenpaw-worker:$($Matches[1])" }
+            '^agentteams/agentteams-embedded:(.+)$' { return "hiclaw/hiclaw-embedded:$($Matches[1])" }
+            '^agentteams/agentteams-controller:(.+)$' { return "hiclaw/hiclaw-controller:$($Matches[1])" }
+            default { return $null }
+        }
+    }
+    function Test-OrTagLocalImage {
+        param([string]$Image)
+        $imgExists = docker image inspect $Image 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+        $legacyImage = Resolve-LegacyLocalImage $Image
+        if ($legacyImage) {
+            $legacyExists = docker image inspect $legacyImage 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                docker tag $legacyImage $Image
+                return $true
+            }
+        }
+        return $false
+    }
+    if ($script:AGENTTEAMS_USE_EMBEDDED -eq "1") {
         # Embedded image was already pulled by Resolve-EmbeddedImage unless overridden;
         # for an explicit override we still need to ensure it is present locally.
-        if ($env:HICLAW_INSTALL_EMBEDDED_IMAGE) {
-            if ($script:EMBEDDED_IMAGE.StartsWith($LocalImagePrefix)) {
-                $imgExists = docker image inspect $script:EMBEDDED_IMAGE 2>$null
-                if ($LASTEXITCODE -ne 0) {
+        if ($env:AGENTTEAMS_INSTALL_EMBEDDED_IMAGE) {
+            if ($script:EMBEDDED_IMAGE -match $LocalImagePattern) {
+                if (-not (Test-OrTagLocalImage $script:EMBEDDED_IMAGE)) {
                     Write-Log "Pulling embedded image: $($script:EMBEDDED_IMAGE)"
                     & docker pull $script:EMBEDDED_IMAGE
                 }
@@ -2811,9 +2840,8 @@ function Install-Manager {
         }
         # Manager image — controller will spawn it inside; pull here so the spawn doesn't
         # have to wait on the network.
-        if ($managerImage.StartsWith($LocalImagePrefix)) {
-            $imgExists = docker image inspect $managerImage 2>$null
-            if ($LASTEXITCODE -eq 0) {
+        if ($managerImage -match $LocalImagePattern) {
+            if (Test-OrTagLocalImage $managerImage) {
                 Write-Log (Get-Msg "install.image.exists" -f $managerImage)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
@@ -2824,9 +2852,8 @@ function Install-Manager {
             & docker pull $managerImage
         }
     } else {
-        if ($managerImage.StartsWith($LocalImagePrefix)) {
-            $managerImageExists = docker image inspect $managerImage 2>$null
-            if ($LASTEXITCODE -eq 0) {
+        if ($managerImage -match $LocalImagePattern) {
+            if (Test-OrTagLocalImage $managerImage) {
                 Write-Log (Get-Msg "install.image.exists" -f $managerImage)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
@@ -2840,9 +2867,8 @@ function Install-Manager {
 
     # Pull all worker runtime images (workers may use any runtime regardless of the default)
     foreach ($workerImg in @($script:WORKER_IMAGE, $script:COPAW_WORKER_IMAGE, $script:HERMES_WORKER_IMAGE)) {
-        if ($workerImg.StartsWith($LocalImagePrefix)) {
-            $imgExists = docker image inspect $workerImg 2>$null
-            if ($LASTEXITCODE -eq 0) {
+        if ($workerImg -match $LocalImagePattern) {
+            if (Test-OrTagLocalImage $workerImg) {
                 Write-Log (Get-Msg "install.image.worker_exists" -f $workerImg)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_worker" -f $workerImg)
@@ -2856,13 +2882,13 @@ function Install-Manager {
 
     # --- Pre-upgrade: extract Matrix passwords from old containers (old-arch -> embedded) ---
     $credsTmp = $null
-    if ($script:HICLAW_UPGRADE -and $script:HICLAW_USE_EMBEDDED -eq "1") {
-        $controllerNameHit = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-controller$"
+    if ($script:AGENTTEAMS_UPGRADE -and $script:AGENTTEAMS_USE_EMBEDDED -eq "1") {
+        $controllerNameHit = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-controller$"
         $isOldArch = $false
         if (-not $controllerNameHit) {
             $isOldArch = $true
         } else {
-            $ctrlImgLine = docker ps -a --format "{{.Names}} {{.Image}}" 2>$null | Where-Object { $_ -match '^hiclaw-controller ' } | Select-Object -First 1
+            $ctrlImgLine = docker ps -a --format "{{.Names}} {{.Image}}" 2>$null | Where-Object { $_ -match '^agentteams-controller ' } | Select-Object -First 1
             if ($ctrlImgLine -and ($ctrlImgLine -notmatch 'embedded')) {
                 $isOldArch = $true
             }
@@ -2874,44 +2900,44 @@ function Install-Manager {
             $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
             $mgrCredsTempStart = $false
-            $mgrExists = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
-            $mgrRunning = docker ps --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
+            $mgrExists = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-manager$"
+            $mgrRunning = docker ps --format "{{.Names}}" 2>$null | Select-String "^agentteams-manager$"
             if ($mgrExists -and -not $mgrRunning) {
-                Write-Log "hiclaw-manager is stopped; starting it temporarily to extract Matrix credentials for upgrade..."
-                docker start hiclaw-manager 2>$null | Out-Null
-                Wait-MatrixReady -Container "hiclaw-manager"
+                Write-Log "agentteams-manager is stopped; starting it temporarily to extract Matrix credentials for upgrade..."
+                docker start agentteams-manager 2>$null | Out-Null
+                Wait-MatrixReady -Container "agentteams-manager"
                 $mgrCredsTempStart = $true
             }
 
-            $inspectLines = docker inspect hiclaw-manager --format "{{range .Config.Env}}{{println .}}{{end}}" 2>$null
+            $inspectLines = docker inspect agentteams-manager --format "{{range .Config.Env}}{{println .}}{{end}}" 2>$null
             $mgrPw = ""
             if ($inspectLines) {
-                $envLine = $inspectLines -split "`n" | Where-Object { $_ -match '^HICLAW_MANAGER_PASSWORD=' } | Select-Object -First 1
+                $envLine = $inspectLines -split "`n" | Where-Object { $_ -match '^AGENTTEAMS_MANAGER_PASSWORD=' } | Select-Object -First 1
                 if ($envLine) {
-                    $mgrPw = ($envLine -replace '^HICLAW_MANAGER_PASSWORD=', "").Trim()
+                    $mgrPw = ($envLine -replace '^AGENTTEAMS_MANAGER_PASSWORD=', "").Trim()
                 }
             }
-            $mgrRunningNow = docker ps --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
+            $mgrRunningNow = docker ps --format "{{.Names}}" 2>$null | Select-String "^agentteams-manager$"
             if ([string]::IsNullOrEmpty($mgrPw) -and $mgrRunningNow) {
-                $mgrPw = docker exec hiclaw-manager bash -c 'source /data/hiclaw-secrets.env 2>/dev/null && echo "${HICLAW_MANAGER_PASSWORD}"' 2>$null
+                $mgrPw = docker exec agentteams-manager bash -c 'source /data/hiclaw-secrets.env 2>/dev/null && echo "${AGENTTEAMS_MANAGER_PASSWORD}"' 2>$null
                 if ($mgrPw) { $mgrPw = $mgrPw.Trim() }
             }
             $dataVolPresent = docker volume ls -q 2>$null | Where-Object { $_ -eq $config.DATA_DIR }
             if ([string]::IsNullOrEmpty($mgrPw) -and $dataVolPresent) {
-                $mgrPw = Read-HiclawSecretFromDataVolume -VolumeName $config.DATA_DIR -Key "HICLAW_MANAGER_PASSWORD"
+                $mgrPw = Read-HiclawSecretFromDataVolume -VolumeName $config.DATA_DIR -Key "AGENTTEAMS_MANAGER_PASSWORD"
             }
 
-            $envFilePath = $script:HICLAW_ENV_FILE
+            $envFilePath = $script:AGENTTEAMS_ENV_FILE
             $mgrRoom = ""
             if (-not [string]::IsNullOrEmpty($mgrPw)) {
                 $adminPw = ""
                 $adminUser = "admin"
                 if (Test-Path $envFilePath) {
-                    $adminLine = Get-Content $envFilePath | Where-Object { $_ -match '^HICLAW_ADMIN_PASSWORD=' } | Select-Object -First 1
-                    if ($adminLine) { $adminPw = ($adminLine -replace '^HICLAW_ADMIN_PASSWORD=', "").Trim() }
-                    $userLine = Get-Content $envFilePath | Where-Object { $_ -match '^HICLAW_ADMIN_USER=' } | Select-Object -First 1
+                    $adminLine = Get-Content $envFilePath | Where-Object { $_ -match '^AGENTTEAMS_ADMIN_PASSWORD=' } | Select-Object -First 1
+                    if ($adminLine) { $adminPw = ($adminLine -replace '^AGENTTEAMS_ADMIN_PASSWORD=', "").Trim() }
+                    $userLine = Get-Content $envFilePath | Where-Object { $_ -match '^AGENTTEAMS_ADMIN_USER=' } | Select-Object -First 1
                     if ($userLine) {
-                        $adminUser = ($userLine -replace '^HICLAW_ADMIN_USER=', "").Trim()
+                        $adminUser = ($userLine -replace '^AGENTTEAMS_ADMIN_USER=', "").Trim()
                         if ([string]::IsNullOrEmpty($adminUser)) { $adminUser = "admin" }
                     }
                 }
@@ -2924,9 +2950,9 @@ function Install-Manager {
                 }
 
                 $gwKeyLine = if (Test-Path $envFilePath) {
-                    Get-Content $envFilePath | Where-Object { $_ -match '^HICLAW_MANAGER_GATEWAY_KEY=' } | Select-Object -First 1
+                    Get-Content $envFilePath | Where-Object { $_ -match '^AGENTTEAMS_MANAGER_GATEWAY_KEY=' } | Select-Object -First 1
                 } else { $null }
-                $gwKeyForDefault = if ($gwKeyLine) { ($gwKeyLine -replace '^HICLAW_MANAGER_GATEWAY_KEY=', "").Trim() } else { $config.MANAGER_GATEWAY_KEY }
+                $gwKeyForDefault = if ($gwKeyLine) { ($gwKeyLine -replace '^AGENTTEAMS_MANAGER_GATEWAY_KEY=', "").Trim() } else { $config.MANAGER_GATEWAY_KEY }
 
                 $defaultEnvPath = Join-Path $credsTmp "default.env"
                 [System.IO.File]::WriteAllLines($defaultEnvPath, @(
@@ -2953,7 +2979,7 @@ function Install-Manager {
                     foreach ($wname in $workerNames) {
                         $wpw = ""
                         if ($mgrRunningNow) {
-                            $wpw = docker exec hiclaw-manager cat "/root/hiclaw-fs/agents/${wname}/credentials/matrix/password" 2>$null
+                            $wpw = docker exec agentteams-manager cat "/root/hiclaw-fs/agents/${wname}/credentials/matrix/password" 2>$null
                             if ($wpw) { $wpw = $wpw.Trim() }
                         }
                         if ([string]::IsNullOrEmpty($wpw) -and $dataVolPresent) {
@@ -2988,24 +3014,24 @@ function Install-Manager {
             }
 
             if ($mgrCredsTempStart) {
-                Write-Log "Stopping hiclaw-manager after credential extraction (upgrade will recreate containers)..."
-                docker stop hiclaw-manager 2>$null | Out-Null
+                Write-Log "Stopping agentteams-manager after credential extraction (upgrade will recreate containers)..."
+                docker stop agentteams-manager 2>$null | Out-Null
             }
         }
     }
 
     # Stop and remove existing containers (deferred until after all
     # configuration is collected and images are pulled successfully)
-    $existingProxy = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-controller$"
+    $existingProxy = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-controller$"
     if ($existingProxy) {
-        docker stop hiclaw-controller *>$null
-        docker rm hiclaw-controller *>$null
+        docker stop agentteams-controller *>$null
+        docker rm agentteams-controller *>$null
     }
-    $existingContainer = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
+    $existingContainer = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-manager$"
     if ($existingContainer) {
         Write-Log (Get-Msg "install.removing_existing")
-        docker stop hiclaw-manager *>$null
-        docker rm hiclaw-manager *>$null
+        docker stop agentteams-manager *>$null
+        docker rm agentteams-manager *>$null
     }
 
     # Stop and remove worker containers (controller will recreate via CR reconciliation)
@@ -3021,7 +3047,7 @@ function Install-Manager {
     # Clean up legacy containers (e.g. hiclaw-docker-proxy from v1.0.x)
     $legacyContainers = docker ps -a --format "{{.Names}}" 2>$null |
         Select-String "^hiclaw-" |
-        Where-Object { $_.Line -notmatch "^(hiclaw-controller|hiclaw-manager|hiclaw-worker-)" }
+        Where-Object { $_.Line -notmatch "^(agentteams-controller|agentteams-manager|agentteams-worker-)" }
     foreach ($legacy in $legacyContainers) {
         Write-Log "Removing legacy container: $($legacy.Line)"
         docker stop $legacy.Line *>$null
@@ -3050,7 +3076,7 @@ function Install-Manager {
         Remove-Item -Path $credsTmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    if ($script:HICLAW_USE_EMBEDDED -eq "1") {
+    if ($script:AGENTTEAMS_USE_EMBEDDED -eq "1") {
         # ============================================================
         # New architecture: embedded controller + auto-created manager
         # (controller container hosts Higress / Tuwunel / MinIO / Element Web /
@@ -3063,97 +3089,97 @@ function Install-Manager {
         $matrixDomain = if ($config.MATRIX_DOMAIN) {
             $config.MATRIX_DOMAIN
         } else {
-            "matrix-local.hiclaw.io:$($config.PORT_GATEWAY)"
+            "matrix-local.agentteams.io:$($config.PORT_GATEWAY)"
         }
-        $aigwDomain = if ($config.AI_GATEWAY_DOMAIN) { $config.AI_GATEWAY_DOMAIN } else { "aigw-local.hiclaw.io" }
+        $aigwDomain = if ($config.AI_GATEWAY_DOMAIN) { $config.AI_GATEWAY_DOMAIN } else { "aigw-local.agentteams.io" }
         if ($aigwDomain -notmatch ":") { $aigwDomain = "${aigwDomain}:${internalGwPort}" }
-        $fsDomain = if ($config.FS_DOMAIN) { $config.FS_DOMAIN } else { "fs-local.hiclaw.io" }
+        $fsDomain = if ($config.FS_DOMAIN) { $config.FS_DOMAIN } else { "fs-local.agentteams.io" }
         if ($fsDomain -notmatch ":") { $fsDomain = "${fsDomain}:${internalGwPort}" }
 
         $ctrlArgs = @(
             "run", "-d",
-            "--name", "hiclaw-controller",
-            "--network", "hiclaw-net",
-            "--network-alias", "matrix-local.hiclaw.io",
-            "--network-alias", "aigw-local.hiclaw.io",
-            "--network-alias", "fs-local.hiclaw.io",
-            "-e", "HICLAW_ADMIN_USER=$($config.ADMIN_USER)",
-            "-e", "HICLAW_ADMIN_PASSWORD=$($config.ADMIN_PASSWORD)",
-            "-e", "HICLAW_MANAGER_PASSWORD=$($config.MANAGER_PASSWORD)",
-            "-e", "HICLAW_REGISTRATION_TOKEN=$($config.REGISTRATION_TOKEN)",
-            "-e", "HICLAW_MINIO_USER=$($config.MINIO_USER)",
-            "-e", "HICLAW_MINIO_PASSWORD=$($config.MINIO_PASSWORD)",
-            "-e", "HICLAW_LLM_PROVIDER=$($config.LLM_PROVIDER)",
-            "-e", "HICLAW_LLM_API_KEY=$($config.LLM_API_KEY)",
-            "-e", "HICLAW_DEFAULT_MODEL=$($config.DEFAULT_MODEL)",
-            "-e", "HICLAW_MANAGER_GATEWAY_KEY=$($config.MANAGER_GATEWAY_KEY)",
-            "-e", "HICLAW_MANAGER_RUNTIME=$($config.MANAGER_RUNTIME)",
-            "-e", "HICLAW_MANAGER_IMAGE=$managerImage",
-            "-e", "HICLAW_DEFAULT_WORKER_RUNTIME=$($config.DEFAULT_WORKER_RUNTIME)",
-            "-e", "HICLAW_WORKER_IMAGE=$($script:WORKER_IMAGE)",
-            "-e", "HICLAW_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)",
-            "-e", "HICLAW_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)",
-            "-e", "HICLAW_MATRIX_DOMAIN=$matrixDomain",
-            "-e", "HICLAW_ELEMENT_HOMESERVER_URL=http://127.0.0.1:$($config.PORT_GATEWAY)",
-            "-e", "HICLAW_MATRIX_URL=http://127.0.0.1:6167",
-            "-e", "HICLAW_MATRIX_E2EE=$($config.MATRIX_E2EE)",
-            "-e", "HICLAW_MINIO_ENDPOINT=http://127.0.0.1:9000",
-            "-e", "HICLAW_MINIO_BUCKET=hiclaw-storage",
-            "-e", "HICLAW_STORAGE_PREFIX=hiclaw/hiclaw-storage",
-            "-e", "HICLAW_FS_ENDPOINT=http://127.0.0.1:9000",
-            "-e", "HICLAW_AI_GATEWAY_URL=http://$aigwDomain",
-            "-e", "HICLAW_CONTROLLER_URL=http://hiclaw-controller:8090",
-            "-e", "HICLAW_DOCKER_NETWORK=hiclaw-net",
-            "-e", "HICLAW_WORKSPACE_DIR=$($config.WORKSPACE_DIR)",
-            "-e", "HICLAW_HOST_SHARE_DIR=$($config.HOST_SHARE_DIR)",
-            "-e", "HICLAW_MANAGER_ENABLED=true",
-            "-e", "HICLAW_PORT_MANAGER_CONSOLE=$($config.PORT_MANAGER_CONSOLE)"
+            "--name", "agentteams-controller",
+            "--network", "agentteams-net",
+            "--network-alias", "matrix-local.agentteams.io",
+            "--network-alias", "aigw-local.agentteams.io",
+            "--network-alias", "fs-local.agentteams.io",
+            "-e", "AGENTTEAMS_ADMIN_USER=$($config.ADMIN_USER)",
+            "-e", "AGENTTEAMS_ADMIN_PASSWORD=$($config.ADMIN_PASSWORD)",
+            "-e", "AGENTTEAMS_MANAGER_PASSWORD=$($config.MANAGER_PASSWORD)",
+            "-e", "AGENTTEAMS_REGISTRATION_TOKEN=$($config.REGISTRATION_TOKEN)",
+            "-e", "AGENTTEAMS_MINIO_USER=$($config.MINIO_USER)",
+            "-e", "AGENTTEAMS_MINIO_PASSWORD=$($config.MINIO_PASSWORD)",
+            "-e", "AGENTTEAMS_LLM_PROVIDER=$($config.LLM_PROVIDER)",
+            "-e", "AGENTTEAMS_LLM_API_KEY=$($config.LLM_API_KEY)",
+            "-e", "AGENTTEAMS_DEFAULT_MODEL=$($config.DEFAULT_MODEL)",
+            "-e", "AGENTTEAMS_MANAGER_GATEWAY_KEY=$($config.MANAGER_GATEWAY_KEY)",
+            "-e", "AGENTTEAMS_MANAGER_RUNTIME=$($config.MANAGER_RUNTIME)",
+            "-e", "AGENTTEAMS_MANAGER_IMAGE=$managerImage",
+            "-e", "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($config.DEFAULT_WORKER_RUNTIME)",
+            "-e", "AGENTTEAMS_WORKER_IMAGE=$($script:WORKER_IMAGE)",
+            "-e", "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)",
+            "-e", "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)",
+            "-e", "AGENTTEAMS_MATRIX_DOMAIN=$matrixDomain",
+            "-e", "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:$($config.PORT_GATEWAY)",
+            "-e", "AGENTTEAMS_MATRIX_URL=http://127.0.0.1:6167",
+            "-e", "AGENTTEAMS_MATRIX_E2EE=$($config.MATRIX_E2EE)",
+            "-e", "AGENTTEAMS_MINIO_ENDPOINT=http://127.0.0.1:9000",
+            "-e", "AGENTTEAMS_MINIO_BUCKET=agentteams-storage",
+            "-e", "AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage",
+            "-e", "AGENTTEAMS_FS_ENDPOINT=http://127.0.0.1:9000",
+            "-e", "AGENTTEAMS_AI_GATEWAY_URL=http://$aigwDomain",
+            "-e", "AGENTTEAMS_CONTROLLER_URL=http://agentteams-controller:8090",
+            "-e", "AGENTTEAMS_DOCKER_NETWORK=agentteams-net",
+            "-e", "AGENTTEAMS_WORKSPACE_DIR=$($config.WORKSPACE_DIR)",
+            "-e", "AGENTTEAMS_HOST_SHARE_DIR=$($config.HOST_SHARE_DIR)",
+            "-e", "AGENTTEAMS_MANAGER_ENABLED=true",
+            "-e", "AGENTTEAMS_PORT_MANAGER_CONSOLE=$($config.PORT_MANAGER_CONSOLE)"
         )
 
-        if ($script:HICLAW_TIMEZONE) {
-            $ctrlArgs += @("-e", "TZ=$($script:HICLAW_TIMEZONE)")
+        if ($script:AGENTTEAMS_TIMEZONE) {
+            $ctrlArgs += @("-e", "TZ=$($script:AGENTTEAMS_TIMEZONE)")
         }
-        if ($env:HICLAW_YOLO -eq "1") {
-            $ctrlArgs += @("-e", "HICLAW_YOLO=1")
+        if ($env:AGENTTEAMS_YOLO -eq "1") {
+            $ctrlArgs += @("-e", "AGENTTEAMS_YOLO=1")
         }
-        if ($env:HICLAW_MATRIX_DEBUG -eq "1") {
-            $ctrlArgs += @("-e", "HICLAW_MATRIX_DEBUG=1")
+        if ($env:AGENTTEAMS_MATRIX_DEBUG -eq "1") {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MATRIX_DEBUG=1")
         }
         if ($config.GITHUB_TOKEN) {
-            $ctrlArgs += @("-e", "HICLAW_GITHUB_TOKEN=$($config.GITHUB_TOKEN)")
+            $ctrlArgs += @("-e", "AGENTTEAMS_GITHUB_TOKEN=$($config.GITHUB_TOKEN)")
         }
         if ($config.EMBEDDING_MODEL) {
-            $ctrlArgs += @("-e", "HICLAW_EMBEDDING_MODEL=$($config.EMBEDDING_MODEL)")
+            $ctrlArgs += @("-e", "AGENTTEAMS_EMBEDDING_MODEL=$($config.EMBEDDING_MODEL)")
         }
         if ($config.OPENAI_BASE_URL) {
-            $ctrlArgs += @("-e", "HICLAW_OPENAI_BASE_URL=$($config.OPENAI_BASE_URL)")
+            $ctrlArgs += @("-e", "AGENTTEAMS_OPENAI_BASE_URL=$($config.OPENAI_BASE_URL)")
         }
-        if ($env:HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS) {
-            $ctrlArgs += @("-e", "HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS=$($env:HICLAW_AI_STREAM_IDLE_TIMEOUT_SECONDS)")
+        if ($env:AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS=$($env:AGENTTEAMS_AI_STREAM_IDLE_TIMEOUT_SECONDS)")
         }
-        if ($script:HICLAW_LANGUAGE) {
-            $ctrlArgs += @("-e", "HICLAW_LANGUAGE=$($script:HICLAW_LANGUAGE)")
+        if ($script:AGENTTEAMS_LANGUAGE) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_LANGUAGE=$($script:AGENTTEAMS_LANGUAGE)")
         }
 
         # Optional: CMS/ARMS observability. In embedded mode the controller
         # spawns the Manager and Workers, so it must receive these settings.
-        $cmsTracesEnabled = if ($env:HICLAW_CMS_TRACES_ENABLED) { $env:HICLAW_CMS_TRACES_ENABLED } else { "false" }
-        $cmsServiceName = if ($env:HICLAW_CMS_SERVICE_NAME) { $env:HICLAW_CMS_SERVICE_NAME } else { "hiclaw-manager" }
-        $cmsMetricsEnabled = if ($env:HICLAW_CMS_METRICS_ENABLED) { $env:HICLAW_CMS_METRICS_ENABLED } else { "false" }
-        $ctrlArgs += @("-e", "HICLAW_CMS_TRACES_ENABLED=$cmsTracesEnabled")
-        $ctrlArgs += @("-e", "HICLAW_CMS_SERVICE_NAME=$cmsServiceName")
-        $ctrlArgs += @("-e", "HICLAW_CMS_METRICS_ENABLED=$cmsMetricsEnabled")
-        if ($env:HICLAW_CMS_ENDPOINT) {
-            $ctrlArgs += @("-e", "HICLAW_CMS_ENDPOINT=$($env:HICLAW_CMS_ENDPOINT)")
+        $cmsTracesEnabled = if ($env:AGENTTEAMS_CMS_TRACES_ENABLED) { $env:AGENTTEAMS_CMS_TRACES_ENABLED } else { "false" }
+        $cmsServiceName = if ($env:AGENTTEAMS_CMS_SERVICE_NAME) { $env:AGENTTEAMS_CMS_SERVICE_NAME } else { "agentteams-manager" }
+        $cmsMetricsEnabled = if ($env:AGENTTEAMS_CMS_METRICS_ENABLED) { $env:AGENTTEAMS_CMS_METRICS_ENABLED } else { "false" }
+        $ctrlArgs += @("-e", "AGENTTEAMS_CMS_TRACES_ENABLED=$cmsTracesEnabled")
+        $ctrlArgs += @("-e", "AGENTTEAMS_CMS_SERVICE_NAME=$cmsServiceName")
+        $ctrlArgs += @("-e", "AGENTTEAMS_CMS_METRICS_ENABLED=$cmsMetricsEnabled")
+        if ($env:AGENTTEAMS_CMS_ENDPOINT) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_CMS_ENDPOINT=$($env:AGENTTEAMS_CMS_ENDPOINT)")
         }
-        if ($env:HICLAW_CMS_LICENSE_KEY) {
-            $ctrlArgs += @("-e", "HICLAW_CMS_LICENSE_KEY=$($env:HICLAW_CMS_LICENSE_KEY)")
+        if ($env:AGENTTEAMS_CMS_LICENSE_KEY) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_CMS_LICENSE_KEY=$($env:AGENTTEAMS_CMS_LICENSE_KEY)")
         }
-        if ($env:HICLAW_CMS_PROJECT) {
-            $ctrlArgs += @("-e", "HICLAW_CMS_PROJECT=$($env:HICLAW_CMS_PROJECT)")
+        if ($env:AGENTTEAMS_CMS_PROJECT) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_CMS_PROJECT=$($env:AGENTTEAMS_CMS_PROJECT)")
         }
-        if ($env:HICLAW_CMS_WORKSPACE) {
-            $ctrlArgs += @("-e", "HICLAW_CMS_WORKSPACE=$($env:HICLAW_CMS_WORKSPACE)")
+        if ($env:AGENTTEAMS_CMS_WORKSPACE) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_CMS_WORKSPACE=$($env:AGENTTEAMS_CMS_WORKSPACE)")
         }
 
         # Mount the docker socket so the controller can spawn manager + workers.
@@ -3180,7 +3206,7 @@ function Install-Manager {
 
         Write-Log (Get-Msg "install.starting_manager")
         & docker $ctrlArgs
-        Write-Log "Embedded controller started: hiclaw-controller"
+        Write-Log "Embedded controller started: agentteams-controller"
 
         # Wait for infra inside the controller container.
         function Wait-EmbeddedUrl {
@@ -3196,20 +3222,20 @@ function Install-Manager {
                 Start-Sleep -Seconds 2
                 $elapsed += 2
             }
-            Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m $Description not ready after ${MaxWait}s" -ForegroundColor Red
+            Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $Description not ready after ${MaxWait}s" -ForegroundColor Red
             return $false
         }
 
-        if (-not (Wait-EmbeddedUrl "http://127.0.0.1:6167/_tuwunel/server_version" "hiclaw-controller" 120 "Tuwunel (Matrix)")) { Exit-Script 1 }
-        if (-not (Wait-EmbeddedUrl "http://127.0.0.1:9000/minio/health/live"        "hiclaw-controller"  60 "MinIO"))             { Exit-Script 1 }
-        if (-not (Wait-EmbeddedUrl "http://127.0.0.1:8080/status"                   "hiclaw-controller" 120 "Higress Gateway"))   { Exit-Script 1 }
+        if (-not (Wait-EmbeddedUrl "http://127.0.0.1:6167/_tuwunel/server_version" "agentteams-controller" 120 "Tuwunel (Matrix)")) { Exit-Script 1 }
+        if (-not (Wait-EmbeddedUrl "http://127.0.0.1:9000/minio/health/live"        "agentteams-controller"  60 "MinIO"))             { Exit-Script 1 }
+        if (-not (Wait-EmbeddedUrl "http://127.0.0.1:8080/status"                   "agentteams-controller" 120 "Higress Gateway"))   { Exit-Script 1 }
 
         # Wait for the controller to spawn the Manager Agent container.
         Write-Log "Waiting for Manager Agent container..."
         $mgrWait = 0
         $mgrMax = 300
         while ($mgrWait -lt $mgrMax) {
-            $found = docker ps --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
+            $found = docker ps --format "{{.Names}}" 2>$null | Select-String "^agentteams-manager$"
             if ($found) {
                 Write-Log "Manager Agent container detected (${mgrWait}s)"
                 break
@@ -3218,9 +3244,9 @@ function Install-Manager {
             $mgrWait += 3
         }
         if ($mgrWait -ge $mgrMax) {
-            Write-Host "$($script:ESC)[31m[HiClaw ERROR]$($script:ESC)[0m Manager Agent container not created after ${mgrMax}s" -ForegroundColor Red
+            Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m Manager Agent container not created after ${mgrMax}s" -ForegroundColor Red
             Write-Log "Controller logs:"
-            docker exec hiclaw-controller tail -30 /var/log/hiclaw/hiclaw-controller-error.log 2>$null
+            docker exec agentteams-controller tail -30 /var/log/hiclaw/hiclaw-controller-error.log 2>$null
             Exit-Script 1
         }
 
@@ -3228,7 +3254,7 @@ function Install-Manager {
         Write-Log "Waiting for Manager Agent to start..."
         $agentWait = 0
         while ($agentWait -lt 120) {
-            $state = docker inspect --format "{{.State.Status}}" hiclaw-manager 2>$null
+            $state = docker inspect --format "{{.State.Status}}" agentteams-manager 2>$null
             if ($state -eq "running") {
                 Write-Log "Manager Agent is running"
                 break
@@ -3237,48 +3263,48 @@ function Install-Manager {
             $agentWait += 2
         }
 
-        if ($env:HICLAW_YOLO -eq "1") {
-            docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode 2>$null
+        if ($env:AGENTTEAMS_YOLO -eq "1") {
+            docker exec agentteams-manager touch /root/manager-workspace/yolo-mode 2>$null
         }
 
         # Wait for the Manager Agent's runtime + Matrix to be reachable. In embedded
-        # mode Tuwunel lives in `hiclaw-controller`, so the Matrix probe must target
+        # mode Tuwunel lives in `agentteams-controller`, so the Matrix probe must target
         # the controller (the manager only exposes the agent runtime).
-        Wait-ManagerReady -Container "hiclaw-manager"
-        Wait-MatrixReady -Container "hiclaw-controller"
+        Wait-ManagerReady -Container "agentteams-manager"
+        Wait-MatrixReady -Container "agentteams-controller"
 
         # Wait for the controller to actually deliver the first-boot welcome
         # message. Gated by the controller on (a) Manager joining the DM room
         # and (b) Higress WASM key-auth propagating to /v1/chat/completions for
         # the Manager's gateway key — typically ~45-90s on a fresh install.
         # We poll Manager CR status.welcomeSent via the in-container hiclaw
-        # CLI, exec'd inside hiclaw-controller (the source-of-truth container
+        # CLI, exec'd inside agentteams-controller (the source-of-truth container
         # — its bundled CLI binary is always in lockstep with the controller
         # binary serving the HTTP API, since they're the same `go build`
-        # output. The hiclaw-manager container's CLI may lag the controller
+        # output. The agentteams-manager container's CLI may lag the controller
         # across image upgrades and silently drop the welcomeSent field,
         # leaving this loop hung). The controller mints a long-lived admin
         # SA token at startup and writes it to
-        # HICLAW_AUTH_TOKEN_FILE=/var/run/hiclaw/cli-token (set as a Dockerfile
-        # ENV default), so a bare `docker exec hiclaw-controller hiclaw …`
+        # AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/hiclaw/cli-token (set as a Dockerfile
+        # ENV default), so a bare `docker exec agentteams-controller hiclaw …`
         # auto-discovers both the endpoint and the token. The brief window
         # after container start before bootstrapAdminCLIToken completes is
         # absorbed by the loop's silent retry.
         $hasHiclawCli = $false
         try {
-            docker exec hiclaw-controller sh -c 'command -v hiclaw' *> $null
+            docker exec agentteams-controller sh -c 'command -v hiclaw' *> $null
             if ($LASTEXITCODE -eq 0) { $hasHiclawCli = $true }
         } catch {}
 
         if ($hasHiclawCli) {
             Write-Log (Get-Msg "install.welcome_msg.waiting")
-            $welcomeMax = if ($env:HICLAW_WELCOME_TIMEOUT) { [int]$env:HICLAW_WELCOME_TIMEOUT } else { 300 }
+            $welcomeMax = if ($env:AGENTTEAMS_WELCOME_TIMEOUT) { [int]$env:AGENTTEAMS_WELCOME_TIMEOUT } else { 300 }
             $welcomeWait = 0
             $welcomeDone = $false
             while ($welcomeWait -lt $welcomeMax) {
                 $wjson = ""
                 try {
-                    $wjson = docker exec hiclaw-controller `
+                    $wjson = docker exec agentteams-controller `
                         hiclaw get managers default -o json 2>$null
                 } catch {}
                 if ($wjson -and ($wjson -replace '\s', '') -match '"welcomeSent":true') {
@@ -3305,8 +3331,8 @@ function Install-Manager {
         Write-Log (Get-Msg "install.starting_manager")
         & docker $dockerArgs
 
-        Wait-ManagerReady -Container "hiclaw-manager"
-        Wait-MatrixReady -Container "hiclaw-manager"
+        Wait-ManagerReady -Container "agentteams-manager"
+        Wait-MatrixReady -Container "agentteams-manager"
     }
 
     # Create OpenAI-compatible provider if needed
@@ -3360,7 +3386,7 @@ function Install-Manager {
     Write-Log ""
     Write-Log (Get-Msg "success.other_consoles")
     Write-Log (Get-Msg "success.higress_console" -f $config.PORT_CONSOLE, $config.ADMIN_USER, $config.ADMIN_PASSWORD)
-    if ($script:HICLAW_USE_EMBEDDED -ne "1") {
+    if ($script:AGENTTEAMS_USE_EMBEDDED -ne "1") {
         # In embedded mode the manager runs in its own auto-spawned container with
         # its own console-port mapping handled by the controller, so don't print a
         # host-side URL/credentials hint here.
@@ -3379,7 +3405,7 @@ function Install-Manager {
         Write-Host (Get-Msg "port.local_only.https_hint") -ForegroundColor Yellow
         Write-Log ""
     }
-    Write-Log (Get-Msg "success.config_file" -f $script:HICLAW_ENV_FILE)
+    Write-Log (Get-Msg "success.config_file" -f $script:AGENTTEAMS_ENV_FILE)
 
     Write-Log (Get-Msg "success.data_volume" -f $config.DATA_DIR)
 
@@ -3415,7 +3441,7 @@ function Install-Worker {
         Write-Error (Get-Msg "error.fs_secret_required")
     }
 
-    $containerName = "hiclaw-worker-$Name"
+    $containerName = "agentteams-worker-$Name"
 
     # Handle reset
     if ($Reset) {
@@ -3431,12 +3457,12 @@ function Install-Worker {
     }
 
     # Detect timezone and registry
-    $timezone = Get-HiClawTimeZone
+    $timezone = Get-AgentTeamsTimeZone
     $registry = Get-Registry -Timezone $timezone
-    $workerImage = if ($env:HICLAW_INSTALL_WORKER_IMAGE) {
-        $env:HICLAW_INSTALL_WORKER_IMAGE
+    $workerImage = if ($env:AGENTTEAMS_INSTALL_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_WORKER_IMAGE
     } else {
-        "$registry/higress/hiclaw-worker:$($script:HICLAW_VERSION)"
+        "$registry/higress/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
     Write-Log (Get-Msg "worker.starting" -f $Name)
@@ -3446,17 +3472,17 @@ function Install-Worker {
         "--name", $containerName,
         "-e", "HOME=/root/hiclaw-fs/agents/$Name",
         "-w", "/root/hiclaw-fs/agents/$Name",
-        "-e", "HICLAW_WORKER_NAME=$Name",
-        "-e", "HICLAW_FS_ENDPOINT=$Fs",
-        "-e", "HICLAW_FS_ACCESS_KEY=$FsKey",
-        "-e", "HICLAW_FS_SECRET_KEY=$FsSecret"
+        "-e", "AGENTTEAMS_WORKER_NAME=$Name",
+        "-e", "AGENTTEAMS_FS_ENDPOINT=$Fs",
+        "-e", "AGENTTEAMS_FS_ACCESS_KEY=$FsKey",
+        "-e", "AGENTTEAMS_FS_SECRET_KEY=$FsSecret"
     )
 
     if (-not $SkillsApiUrl) {
-        if ($env:HICLAW_SKILLS_API_URL) {
-            $SkillsApiUrl = $env:HICLAW_SKILLS_API_URL
+        if ($env:AGENTTEAMS_SKILLS_API_URL) {
+            $SkillsApiUrl = $env:AGENTTEAMS_SKILLS_API_URL
         } else {
-            $SkillsApiUrl = "nacos://market.hiclaw.io:80/public"
+            $SkillsApiUrl = "nacos://market.agentteams.io:80/public"
         }
     }
 
@@ -3464,14 +3490,14 @@ function Install-Worker {
         $dockerArgs += @("-e", "SKILLS_API_URL=$SkillsApiUrl")
         Write-Log (Get-Msg "worker.skills_url" -f $SkillsApiUrl)
     }
-    if ($env:HICLAW_NACOS_USERNAME) {
-        $dockerArgs += @("-e", "HICLAW_NACOS_USERNAME=$($env:HICLAW_NACOS_USERNAME)")
+    if ($env:AGENTTEAMS_NACOS_USERNAME) {
+        $dockerArgs += @("-e", "AGENTTEAMS_NACOS_USERNAME=$($env:AGENTTEAMS_NACOS_USERNAME)")
     }
-    if ($env:HICLAW_NACOS_PASSWORD) {
-        $dockerArgs += @("-e", "HICLAW_NACOS_PASSWORD=$($env:HICLAW_NACOS_PASSWORD)")
+    if ($env:AGENTTEAMS_NACOS_PASSWORD) {
+        $dockerArgs += @("-e", "AGENTTEAMS_NACOS_PASSWORD=$($env:AGENTTEAMS_NACOS_PASSWORD)")
     }
-    if ($env:HICLAW_NACOS_TOKEN) {
-        $dockerArgs += @("-e", "HICLAW_NACOS_TOKEN=$($env:HICLAW_NACOS_TOKEN)")
+    if ($env:AGENTTEAMS_NACOS_TOKEN) {
+        $dockerArgs += @("-e", "AGENTTEAMS_NACOS_TOKEN=$($env:AGENTTEAMS_NACOS_TOKEN)")
     }
 
     $dockerArgs += @("--restart", "unless-stopped", $workerImage)
@@ -3488,19 +3514,19 @@ function Install-Worker {
 # Uninstall
 # ============================================================
 
-function Uninstall-HiClaw {
+function Uninstall-AgentTeams {
     Write-Log (Get-Msg "uninstall.title")
 
     # Stop and remove manager
-    $manager = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-manager$"
+    $manager = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-manager$"
     if ($manager) {
         Write-Log (Get-Msg "uninstall.stopping_manager")
-        docker stop hiclaw-manager *>$null
-        docker rm hiclaw-manager *>$null
+        docker stop agentteams-manager *>$null
+        docker rm agentteams-manager *>$null
     }
 
     # Stop and remove workers
-    $workers = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-worker-"
+    $workers = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-"
     if ($workers) {
         Write-Log (Get-Msg "uninstall.stopping_workers")
         $workers | ForEach-Object {
@@ -3511,7 +3537,7 @@ function Uninstall-HiClaw {
     }
 
     # Stop and remove docker-proxy (legacy <= v1.0.x; current arch uses
-    # hiclaw-controller for the same role)
+    # agentteams-controller for the same role)
     $proxy = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-docker-proxy$"
     if ($proxy) {
         Write-Log (Get-Msg "uninstall.removing_proxy")
@@ -3520,24 +3546,24 @@ function Uninstall-HiClaw {
     }
 
     # Stop and remove the embedded controller container. MUST happen
-    # before the `docker volume rm hiclaw-data` step below -- in embedded
-    # mode hiclaw-controller mounts hiclaw-data at /data (Tuwunel DB,
+    # before the `docker volume rm agentteams-data` step below -- in embedded
+    # mode agentteams-controller mounts agentteams-data at /data (Tuwunel DB,
     # MinIO state, Higress state, all the room messages), and `volume rm`
     # against an in-use volume fails silently. Skipping this used to
     # leave room/message history behind across "uninstall + reinstall"
     # cycles. See PR #692.
-    $controller = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-controller$"
+    $controller = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-controller$"
     if ($controller) {
         Write-Log (Get-Msg "uninstall.stopping_controller")
-        docker stop hiclaw-controller *>$null
-        docker rm hiclaw-controller *>$null
+        docker stop agentteams-controller *>$null
+        docker rm agentteams-controller *>$null
     }
 
     # Remove Docker volume (read custom name from env file if available)
-    $dataVolume = "hiclaw-data"
-    if (Test-Path $script:HICLAW_ENV_FILE) {
-        $envContent = Get-Content $script:HICLAW_ENV_FILE -ErrorAction SilentlyContinue
-        $dataLine = $envContent | Select-String "^HICLAW_DATA_DIR="
+    $dataVolume = "agentteams-data"
+    if (Test-Path $script:AGENTTEAMS_ENV_FILE) {
+        $envContent = Get-Content $script:AGENTTEAMS_ENV_FILE -ErrorAction SilentlyContinue
+        $dataLine = $envContent | Select-String "^AGENTTEAMS_DATA_DIR="
         if ($dataLine) {
             $parsed = ($dataLine -split "=", 2)[1]
             if ($parsed) { $dataVolume = $parsed }
@@ -3550,17 +3576,17 @@ function Uninstall-HiClaw {
     }
 
     # Remove Docker network
-    $network = docker network ls --format "{{.Name}}" 2>$null | Select-String "^hiclaw-net$"
+    $network = docker network ls --format "{{.Name}}" 2>$null | Select-String "^agentteams-net$"
     if ($network) {
         Write-Log (Get-Msg "uninstall.removing_network")
-        docker network rm hiclaw-net *>$null
+        docker network rm agentteams-net *>$null
     }
 
     # Remove workspace directory
-    $workspaceDir = "$env:USERPROFILE\hiclaw-manager"
-    if (Test-Path $script:HICLAW_ENV_FILE) {
-        $envContent = Get-Content $script:HICLAW_ENV_FILE -ErrorAction SilentlyContinue
-        $wsLine = $envContent | Select-String "^HICLAW_WORKSPACE_DIR="
+    $workspaceDir = "$env:USERPROFILE\agentteams-manager"
+    if (Test-Path $script:AGENTTEAMS_ENV_FILE) {
+        $envContent = Get-Content $script:AGENTTEAMS_ENV_FILE -ErrorAction SilentlyContinue
+        $wsLine = $envContent | Select-String "^AGENTTEAMS_WORKSPACE_DIR="
         if ($wsLine) {
             $workspaceDir = ($wsLine -split "=", 2)[1]
         }
@@ -3571,16 +3597,16 @@ function Uninstall-HiClaw {
     }
 
     # Remove env file
-    if (Test-Path $script:HICLAW_ENV_FILE) {
-        Write-Log (Get-Msg "uninstall.removing_env" -f $script:HICLAW_ENV_FILE)
-        Remove-Item -Force $script:HICLAW_ENV_FILE
+    if (Test-Path $script:AGENTTEAMS_ENV_FILE) {
+        Write-Log (Get-Msg "uninstall.removing_env" -f $script:AGENTTEAMS_ENV_FILE)
+        Remove-Item -Force $script:AGENTTEAMS_ENV_FILE
     }
 
     # Remove install log (stop transcript first to release the file)
-    if (Test-Path $script:HICLAW_LOG_FILE) {
-        Write-Log (Get-Msg "uninstall.removing_log" -f $script:HICLAW_LOG_FILE)
+    if (Test-Path $script:AGENTTEAMS_LOG_FILE) {
+        Write-Log (Get-Msg "uninstall.removing_log" -f $script:AGENTTEAMS_LOG_FILE)
         try { Stop-Transcript *>$null } catch {}
-        Remove-Item -Force $script:HICLAW_LOG_FILE -ErrorAction SilentlyContinue
+        Remove-Item -Force $script:AGENTTEAMS_LOG_FILE -ErrorAction SilentlyContinue
     }
 
     Write-Log ""
@@ -3600,7 +3626,7 @@ try {
             Install-Worker -Name $Name -Fs $Fs -FsKey $FsKey -FsSecret $FsSecret -Reset:$Reset -FindSkills:$FindSkills -SkillsApiUrl $SkillsApiUrl
         }
         "uninstall" {
-            Uninstall-HiClaw
+            Uninstall-AgentTeams
         }
     }
 } catch {

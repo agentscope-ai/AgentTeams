@@ -21,7 +21,7 @@ check() {
     fi
 }
 
-echo "=== HiClaw Manager Smoke Test ==="
+echo "=== AgentTeams Manager Smoke Test ==="
 echo ""
 
 # Core services
@@ -45,10 +45,10 @@ check "Element Web (port 8088)" \
 
 # File system
 check "MinIO bucket exists" \
-    "mc alias set smoketest http://127.0.0.1:9000 ${HICLAW_MINIO_USER} ${HICLAW_MINIO_PASSWORD} && mc ls smoketest/hiclaw-storage/"
+    "mc alias set smoketest http://127.0.0.1:9000 ${AGENTTEAMS_MINIO_USER} ${AGENTTEAMS_MINIO_PASSWORD} && mc ls smoketest/agentteams-storage/"
 
 check "Manager SOUL.md in MinIO" \
-    "mc cat smoketest/hiclaw-storage/agents/manager/SOUL.md | head -1"
+    "mc cat smoketest/agentteams-storage/agents/manager/SOUL.md | head -1"
 
 # Processes
 check "supervisord running" \

@@ -75,6 +75,98 @@ func TestDeployWorkerConfigSeedsLocalFilesWithoutOverwritingRuntimeState(t *test
 	if !strings.Contains(string(got), "gateway-key") {
 		t.Fatalf("openclaw.json was not overwritten by controller config: %s", got)
 	}
+
+	got, err = store.GetObject(ctx, "agents/alice/.agentteams-keep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("directory marker should be empty, got %q", got)
+	}
+}
+
+func TestEnsureTeamStorageCreatesPrefixMarkers(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store})
+
+	if err := deployer.EnsureTeamStorage(ctx, "alpha"); err != nil {
+		t.Fatalf("EnsureTeamStorage failed: %v", err)
+	}
+
+	for _, key := range []string{
+		"teams/alpha/.agentteams-keep",
+		"teams/alpha/shared/.agentteams-keep",
+		"teams/alpha/shared/tasks/.keep",
+		"teams/alpha/shared/projects/.keep",
+		"teams/alpha/shared/knowledge/.keep",
+	} {
+		got, err := store.GetObject(ctx, key)
+		if err != nil {
+			t.Fatalf("missing %s: %v", key, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("%s should be empty, got %q", key, got)
+		}
+	}
+}
+
+func TestDeployWorkerConfigInjectsTeamLeaderContext(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	agentFSDir := filepath.Join(tmp, "agents")
+	leaderDir := filepath.Join(agentFSDir, "leader")
+	if err := os.MkdirAll(leaderDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		AgentConfig: agentconfig.NewGenerator(agentconfig.Config{}),
+		OSS:         store,
+		AgentFSDir:  agentFSDir,
+	})
+
+	err := deployer.DeployWorkerConfig(ctx, WorkerDeployRequest{
+		Name:           "leader",
+		Role:           "team_leader",
+		TeamName:       "demo-team",
+		TeamRoomID:     "!team:matrix.local",
+		LeaderDMRoomID: "!leader:matrix.local",
+		MatrixToken:    "matrix-token",
+		GatewayKey:     "gateway-key",
+		TeamMembers: []RuntimeConfigTeamMember{{
+			Name:           "leader",
+			RuntimeName:    "leader",
+			Role:           "team_leader",
+			PersonalRoomID: "!leader:matrix.local",
+		}, {
+			Name:           "dev",
+			RuntimeName:    "dev",
+			Role:           "worker",
+			PersonalRoomID: "!dev:matrix.local",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("DeployWorkerConfig failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/leader/AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{
+		"hiclaw-team-context-start",
+		"demo-team",
+		"Upstream",
+		"@manager:",
+		"dev",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("leader AGENTS.md missing %q:\n%s", want, text)
+		}
+	}
 }
 
 func TestDeployWorkerConfigInlineSoulOverridesPackageSeed(t *testing.T) {
@@ -813,10 +905,10 @@ storage:
   globalSharedPrefix: shared
   memberPrefix: agents/claude-local
 credentials:
-  matrixTokenEnv: HICLAW_WORKER_MATRIX_TOKEN
-  gatewayKeyEnv: HICLAW_WORKER_GATEWAY_KEY
-  storageAccessKeyEnv: HICLAW_FS_ACCESS_KEY
-  storageSecretKeyEnv: HICLAW_FS_SECRET_KEY
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN
+  gatewayKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY
+  storageAccessKeyEnv: AGENTTEAMS_FS_ACCESS_KEY
+  storageSecretKeyEnv: AGENTTEAMS_FS_SECRET_KEY
   serviceAccountTokenPath: /var/run/secrets/kubernetes.io/serviceaccount/token
 `)); err != nil {
 		t.Fatal(err)

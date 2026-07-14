@@ -2,7 +2,7 @@
 
 The image build renames hermes-agent's original Matrix module to
 ``gateway.platforms._matrix_native``.  This shim keeps the module path stable
-for ``gateway.run._create_adapter`` while swapping in HiClaw's subclassed
+for ``gateway.run._create_adapter`` while swapping in AgentTeams's subclassed
 ``MatrixAdapter``.
 """
 from __future__ import annotations

@@ -13,7 +13,7 @@ type mockAuthenticator struct {
 	tokens map[string]*CallerIdentity
 }
 
-func (m *mockAuthenticator) Authenticate(_ context.Context, token string, clusterID string) (*CallerIdentity, error) {
+func (m *mockAuthenticator) Authenticate(_ context.Context, token string) (*CallerIdentity, error) {
 	if id, ok := m.tokens[token]; ok {
 		cp := *id
 		return &cp, nil
@@ -79,32 +79,7 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 	}
 }
 
-func TestAuthenticate_RemoteEnrichmentFailureDenies(t *testing.T) {
-	mw := NewMiddleware(
-		&mockAuthenticator{tokens: map[string]*CallerIdentity{
-			"worker-token": {Role: RoleWorker, Username: "alice", ClusterID: "remote-cluster"},
-		}},
-		&failingEnricher{},
-		NewAuthorizer(),
-		nil, "",
-	)
-
-	handler := mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("handler should not be called")
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
-	req.Header.Set("Authorization", "Bearer worker-token")
-	req.Header.Set("X-HiClaw-Cluster-ID", "remote-cluster")
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", w.Code)
-	}
-}
-
-func TestAuthenticate_LocalEnrichmentFailureKeepsLegacyBehavior(t *testing.T) {
+func TestAuthenticate_EnrichmentFailureKeepsLegacyBehavior(t *testing.T) {
 	mw := NewMiddleware(
 		&mockAuthenticator{tokens: map[string]*CallerIdentity{
 			"worker-token": {Role: RoleWorker, Username: "alice"},

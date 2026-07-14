@@ -92,11 +92,11 @@ func (p *PackageResolver) Resolve(ctx context.Context, uri string) (string, erro
 		// Treat as relative MinIO path (e.g. "packages/alice.zip")
 		// Use content-addressable cache: download to /tmp/import/{md5}.zip
 		// If the same content already exists locally, skip re-download.
-		storagePrefix := os.Getenv("HICLAW_STORAGE_PREFIX")
+		storagePrefix := os.Getenv("AGENTTEAMS_STORAGE_PREFIX")
 		if storagePrefix == "" {
-			storagePrefix = "hiclaw/hiclaw-storage"
+			storagePrefix = "agentteams/agentteams-storage"
 		}
-		minioPath := fmt.Sprintf("%s/hiclaw-config/%s", storagePrefix, uri)
+		minioPath := fmt.Sprintf("%s/agentteams-config/%s", storagePrefix, uri)
 
 		// Get remote file's ETag (MD5) via mc stat
 		etag := getMinIOETag(ctx, minioPath)
@@ -179,12 +179,15 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 		return fmt.Errorf("create agent dir: %w", err)
 	}
 
-	storagePrefix := os.Getenv("HICLAW_STORAGE_PREFIX")
+	storagePrefix := os.Getenv("AGENTTEAMS_STORAGE_PREFIX")
 	if storagePrefix == "" {
-		storagePrefix = "hiclaw/hiclaw-storage"
+		storagePrefix = "agentteams/agentteams-storage"
 	}
 	minioBase := fmt.Sprintf("%s/agents/%s", storagePrefix, workerName)
 	agentPrefix := fmt.Sprintf("agents/%s", workerName)
+	if err := seedPackageDirectoryObject(ctx, storage, agentPrefix); err != nil {
+		return err
+	}
 
 	// Collect transformed config files and subdirectory names from the package.
 	type fileEntry struct {
@@ -473,6 +476,17 @@ func putPackageFileSeedOnly(ctx context.Context, storage oss.StorageClient, loca
 	return true, storage.PutFile(ctx, localPath, target)
 }
 
+func seedPackageDirectoryObject(ctx context.Context, storage oss.StorageClient, agentPrefix string) error {
+	if storage == nil {
+		return nil
+	}
+	prefix := strings.TrimSuffix(agentPrefix, "/") + "/"
+	if _, err := putPackageObjectSeedOnly(ctx, storage, true, prefix+".agentteams-keep", []byte("")); err != nil {
+		return fmt.Errorf("seed worker directory marker: %w", err)
+	}
+	return nil
+}
+
 func seedDirToStorage(ctx context.Context, storage oss.StorageClient, srcDir, dstPrefix string) error {
 	return filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -559,7 +573,7 @@ func wrapWithBuiltinMarkers(data []byte) []byte {
 		wrapped += frontmatter + "\n"
 	}
 	wrapped += "<!-- hiclaw-builtin-start -->\n" +
-		"> ⚠️ **DO NOT EDIT** this section. It is managed by HiClaw and will be automatically\n" +
+		"> ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically\n" +
 		"> replaced on upgrade. To customize, add your content **after** the\n" +
 		"> `<!-- hiclaw-builtin-end -->` marker below.\n" +
 		"\n" +
@@ -707,11 +721,11 @@ func listPackageFiles(root string, limit int) ([]string, int, bool) {
 // --- Private resolve methods ---
 
 // resolveOSS downloads a package from MinIO/OSS storage.
-// URI format: oss://hiclaw-config/packages/{name}-{md5}.zip
+// URI format: oss://agentteams-config/packages/{name}-{md5}.zip
 // The filename contains the content hash, so it's naturally content-addressable:
 // same hash → same content → cache hit.
 func (p *PackageResolver) resolveOSS(ctx context.Context, u *url.URL) (string, error) {
-	// oss://hiclaw-config/packages/alice-abc123.zip → hiclaw-config/packages/alice-abc123.zip
+	// oss://agentteams-config/packages/alice-abc123.zip → agentteams-config/packages/alice-abc123.zip
 	ossPath := strings.TrimPrefix(u.Host+u.Path, "/")
 	filename := filepath.Base(ossPath)
 
@@ -722,9 +736,9 @@ func (p *PackageResolver) resolveOSS(ctx context.Context, u *url.URL) (string, e
 	}
 
 	// Download from MinIO
-	storagePrefix := os.Getenv("HICLAW_STORAGE_PREFIX")
+	storagePrefix := os.Getenv("AGENTTEAMS_STORAGE_PREFIX")
 	if storagePrefix == "" {
-		storagePrefix = "hiclaw/hiclaw-storage"
+		storagePrefix = "agentteams/agentteams-storage"
 	}
 	minioPath := fmt.Sprintf("%s/%s", storagePrefix, ossPath)
 

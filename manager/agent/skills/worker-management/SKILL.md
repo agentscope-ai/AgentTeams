@@ -10,16 +10,16 @@ description: Use when admin requests hand-creating or resetting a Worker, starti
 Before running `hiclaw create worker`, ask admin for these four inputs in one turn. Do **not** invent defaults or skip options — present runtime as a four-way choice.
 
 1. **Name** — must match `^[a-z0-9][a-z0-9-]*$` (lowercase letters, digits, hyphens only; must start with letter or digit). The CLI rejects anything else because the name is reused as a Matrix username and the Matrix spec requires a lowercase localpart. Tuwunel may also reject very short names at registration.
-2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${HICLAW_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer all four options so admin can switch:
+2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer all four options so admin can switch:
 
    | Runtime      | Language | RAM    | When to pick                                              |
    |--------------|----------|--------|-----------------------------------------------------------|
-   | `openclaw`   | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `HICLAW_DEFAULT_WORKER_RUNTIME` is unset. |
-   | `copaw`      | Python   | ~150MB | Python tasks, **or** admin needs `--remote` (host mode).  |
+   | `openclaw`   | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` is unset. |
+   | `copaw`      | Python   | ~150MB | Python tasks or AgentScope-based worker behavior. |
    | `hermes`     | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
    | `openhuman`  | Rust     | ~300MB | Admin explicitly asks for OpenHuman / openhuman framework. Native Matrix support with E2EE. |
 
-   `--remote` mode is **copaw-only** — use it when admin says "local mode" / "run on my machine" (it means "remote from Manager" = LOCAL on admin's machine). If admin doesn't pass `--runtime` to `hiclaw create worker`, the controller falls back to `HICLAW_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the four options explicitly instead of silently using the fallback.
+   In OSS, `hiclaw create worker` creates a controller-managed Local worker. Do not use or suggest Remote/pip worker flags. Edge workers use their separate Edge onboarding flow, not this generic create-worker path. If admin doesn't pass `--runtime` to `hiclaw create worker`, the controller falls back to `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the four options explicitly instead of silently using the fallback.
 3. **SOUL (role)** — short description of expertise/style. Offer to draft a default if admin has no preference.
 4. **Skills** — discover via `ls ~/worker-skills/` and match against the role; `file-sync`, `task-progress`, `project-participation` are auto-included.
 
@@ -55,7 +55,7 @@ hiclaw create worker --name <NAME> --no-wait \
 ## Gotchas
 
 - **Worker name must be lowercase and > 3 characters** — Tuwunel stores usernames in lowercase; short names cause registration failures
-- **`--remote` means "remote from Manager"** — which is actually LOCAL from the admin's perspective. Use it when admin says "local mode" / "run on my machine"
+- **Local means controller-managed** — in OSS, `hiclaw create worker` provisions a Local worker through the controller. Do not map "local mode" to Remote/pip worker flags.
 - **`file-sync`, `task-progress`, `project-participation` are default skills** — always included, cannot be removed
 - **Use `hiclaw-find-worker` only for Nacos-backed market imports or Worker discovery during task assignment** — generic Worker creation and lifecycle changes stay in this skill
 - **Peer mentions cause loops if not briefed** — after enabling, explicitly tell Workers to only @mention peers for blocking info, never for acknowledgments
@@ -76,7 +76,6 @@ Read the relevant doc **before** executing. Do not load all of them.
 | Switch a worker's runtime (openclaw ↔ copaw ↔ hermes ↔ openhuman) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
 | Open/close QwenPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
 | Enable direct @mentions between workers | `references/peer-mentions.md` | `scripts/enable-peer-mentions.sh` |
-| Get remote worker install command | `references/lifecycle.md` | `scripts/get-worker-install-cmd.sh` |
 | Reset a worker | `references/create-worker.md` | `hiclaw delete worker` + `hiclaw create worker` |
 | Delete a worker (remove container) | `references/lifecycle.md` | `scripts/lifecycle-worker.sh` |
 
@@ -100,5 +99,4 @@ What happens behind the scenes:
 Constraints:
 
 - `--package-dir` and `--channel-policy` cannot be combined with `--runtime` — apply those separately after the runtime switch settles
-- For **remote-mode** workers (`--remote` at create time), the container lives on the admin's machine and the controller cannot recreate it. Tell the admin to run `lifecycle-worker.sh --action delete --worker <NAME>` followed by `hiclaw create worker --remote --runtime <NEW>` on their machine
 - The wrapper preserves Matrix account/room/credentials/MinIO data but loses container-local ephemeral state — see the runtime gotcha above

@@ -232,7 +232,7 @@ func (a *App) Start(ctx context.Context) error {
 		// Mint a long-lived admin SA token and write it to a known location
 		// so the bundled `hiclaw` CLI inside this container can authenticate
 		// against the controller's HTTP API out of the box (see Dockerfile
-		// ENV HICLAW_AUTH_TOKEN_FILE / HICLAW_CONTROLLER_URL). Embedded mode
+		// ENV AGENTTEAMS_AUTH_TOKEN_FILE / AGENTTEAMS_CONTROLLER_URL). Embedded mode
 		// only — incluster controllers typically lack the RBAC to mint
 		// arbitrary SA tokens, and operators there have kubectl + their own
 		// credentials anyway.
@@ -242,7 +242,7 @@ func (a *App) Start(ctx context.Context) error {
 			}
 		}
 
-		logger.Info("hiclaw-controller ready",
+		logger.Info("agentteams-controller ready",
 			"kubeMode", a.cfg.KubeMode,
 			"httpAddr", a.cfg.HTTPAddr,
 		)
@@ -306,10 +306,10 @@ func (a *App) initInfraClients(_ context.Context) error {
 	// Gateway client — provider-driven.
 	if cfg.UsesAIGateway() {
 		if a.credProvider == nil {
-			return fmt.Errorf("ai-gateway provider requires HICLAW_CREDENTIAL_PROVIDER_URL to be set")
+			return fmt.Errorf("ai-gateway provider requires AGENTTEAMS_CREDENTIAL_PROVIDER_URL to be set")
 		}
 		tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
-			SessionName: "hiclaw-controller",
+			SessionName: "agentteams-controller",
 			Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, cfg.GWGatewayID),
 		})
 		cred := credprovider.NewAliyunCredential(tm)
@@ -332,17 +332,17 @@ func (a *App) initInfraClients(_ context.Context) error {
 	mcClient := oss.NewMinIOClient(cfg.OSSConfig())
 	if cfg.UsesExternalOSS() {
 		if a.credProvider == nil {
-			return fmt.Errorf("oss provider requires HICLAW_CREDENTIAL_PROVIDER_URL to be set")
+			return fmt.Errorf("oss provider requires AGENTTEAMS_CREDENTIAL_PROVIDER_URL to be set")
 		}
 		if cfg.OSSConfig().Endpoint == "" {
-			return fmt.Errorf("oss provider requires HICLAW_FS_ENDPOINT to be set (endpoint is no longer returned by the credential-provider sidecar)")
+			return fmt.Errorf("oss provider requires AGENTTEAMS_FS_ENDPOINT to be set (endpoint is no longer returned by the credential-provider sidecar)")
 		}
 		gatewayID := ""
 		if cfg.UsesAIGateway() {
 			gatewayID = cfg.GWGatewayID
 		}
 		tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
-			SessionName: "hiclaw-controller",
+			SessionName: "agentteams-controller",
 			Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
 		})
 		mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
@@ -484,7 +484,7 @@ func (a *App) initAuth(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("create kubernetes client: %w", err)
 		}
-		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix), a.remoteClientCache)
+		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix))
 		go authenticator.StartCleanup(ctx)
 		enricher := authpkg.NewCREnricher(a.mgr.GetClient(), a.namespace)
 		authorizer := authpkg.NewAuthorizer()
@@ -647,30 +647,34 @@ func (a *App) initReconcilers(_ context.Context) error {
 		return fmt.Errorf("setup HumanReconciler: %w", err)
 	}
 
-	mgrReconciler := &controller.ManagerReconciler{
-		Client:           a.mgr.GetClient(),
-		Provisioner:      a.provisioner,
-		Deployer:         a.deployer,
-		Backend:          a.registry,
-		EnvBuilder:       a.envBuilder,
-		ResourcePrefix:   resourcePrefix,
-		ManagerResources: a.cfg.ManagerResources(),
-		DefaultRuntime:   a.cfg.ManagerRuntime,
-		ControllerName:   a.cfg.ControllerName,
-		UserLanguage:     a.cfg.UserLanguage,
-		UserTimezone:     a.cfg.UserTimezone,
-		GatewayClient:    a.gateway,
-	}
-	if a.cfg.KubeMode == "embedded" {
-		mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{
-			WorkspaceDir:       a.cfg.ManagerWorkspaceDir,
-			HostShareDir:       a.cfg.HostShareDir,
-			ExtraEnv:           a.cfg.ManagerAgentEnv(),
-			ManagerConsolePort: a.cfg.ManagerConsolePort,
+	if a.cfg.ManagerEnabled {
+		mgrReconciler := &controller.ManagerReconciler{
+			Client:           a.mgr.GetClient(),
+			Provisioner:      a.provisioner,
+			Deployer:         a.deployer,
+			Backend:          a.registry,
+			EnvBuilder:       a.envBuilder,
+			ResourcePrefix:   resourcePrefix,
+			ManagerResources: a.cfg.ManagerResources(),
+			DefaultRuntime:   a.cfg.ManagerRuntime,
+			ControllerName:   a.cfg.ControllerName,
+			UserLanguage:     a.cfg.UserLanguage,
+			UserTimezone:     a.cfg.UserTimezone,
+			GatewayClient:    a.gateway,
 		}
-	}
-	if err := mgrReconciler.SetupWithManager(a.mgr); err != nil {
-		return fmt.Errorf("setup ManagerReconciler: %w", err)
+		if a.cfg.KubeMode == "embedded" {
+			mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{
+				WorkspaceDir:       a.cfg.ManagerWorkspaceDir,
+				HostShareDir:       a.cfg.HostShareDir,
+				ExtraEnv:           a.cfg.ManagerAgentEnv(),
+				ManagerConsolePort: a.cfg.ManagerConsolePort,
+			}
+		}
+		if err := mgrReconciler.SetupWithManager(a.mgr); err != nil {
+			return fmt.Errorf("setup ManagerReconciler: %w", err)
+		}
+	} else {
+		ctrl.Log.WithName("app").Info("skipping ManagerReconciler because Manager provisioning is disabled")
 	}
 
 	if err := a.mgr.Add(&agentteamsmetrics.CRCountCollector{
@@ -760,7 +764,7 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	logger := ctrl.Log.WithName("app")
 	logger.Info("starting in-cluster mode")
 
-	// HICLAW_CONTROLLER_NAME is mandatory in incluster mode: it drives the
+	// AGENTTEAMS_CONTROLLER_NAME is mandatory in incluster mode: it drives the
 	// leader election lease name, the agentteams.io/controller CR label
 	// selector, and the agent pod template ConfigMap name. Running with
 	// an empty value would silently collapse these three scopes onto
@@ -768,7 +772,7 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	// namespace. The Helm chart always sets this; fail fast when a
 	// hand-rolled Deployment forgets it.
 	if a.cfg.ControllerName == "" {
-		return nil, fmt.Errorf("HICLAW_CONTROLLER_NAME is required in incluster mode")
+		return nil, fmt.Errorf("AGENTTEAMS_CONTROLLER_NAME is required in incluster mode")
 	}
 
 	restCfg := ctrl.GetConfigOrDie()
@@ -829,7 +833,7 @@ func (a *App) startInCluster() (*rest.Config, error) {
 
 // adminCLITokenPath is the well-known location where the embedded controller
 // drops a long-lived admin SA token at startup. The path is also baked into
-// the controller image as a default value of the `HICLAW_AUTH_TOKEN_FILE`
+// the controller image as a default value of the `AGENTTEAMS_AUTH_TOKEN_FILE`
 // env var (see Dockerfile / Dockerfile.embedded), so the bundled `hiclaw`
 // CLI auto-discovers it without per-call flags. Lives under /var/run because:
 // (a) it's per-process-instance state that should not survive container
@@ -840,7 +844,7 @@ const adminCLITokenPath = "/var/run/hiclaw/cli-token"
 // bootstrapAdminCLIToken ensures the admin ServiceAccount exists, mints a
 // fresh long-lived token for it, and writes it to adminCLITokenPath so the
 // in-container `hiclaw` CLI can authenticate without the operator having to
-// pass `-e HICLAW_AUTH_TOKEN=…` on every `docker exec`.
+// pass `-e AGENTTEAMS_AUTH_TOKEN=…` on every `docker exec`.
 //
 // Failures here are surfaced to the caller but treated as non-fatal — the
 // controller is still fully functional, only the in-container CLI sugar is
@@ -896,7 +900,7 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache
 	}
 
 	switch effectiveBackend {
-	case "k8s", "sandbox":
+	case "k8s":
 		// remoteCache is nil when the credential provider sidecar is not
 		// configured; in that case NewK8sBackendWithCache behaves
 		// identically to NewK8sBackend.
@@ -905,17 +909,8 @@ func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache
 		} else {
 			workers = append(workers, k8s)
 		}
-		if sandboxBackend, err := backend.NewSandboxBackendFromConfig(
-			cfg.SandboxConfig(),
-			cfg.ContainerPrefix,
-			scheme,
-			cfg.SandboxCapabilities,
-			remoteCache,
-		); err != nil {
-			log.Printf("[WARN] Failed to create Sandbox backend: %v", err)
-		} else {
-			workers = append(workers, sandboxBackend)
-		}
+	case "sandbox":
+		log.Printf("[WARN] Worker backend %q is not supported in the open-source controller", effectiveBackend)
 	}
 
 	return workers

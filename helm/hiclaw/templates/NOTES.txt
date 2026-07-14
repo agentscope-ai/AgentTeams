@@ -1,5 +1,5 @@
 ========================================================================
-HiClaw — {{ .Chart.Name }} / {{ .Release.Name }}
+AgentTeams — {{ .Chart.Name }} / {{ .Release.Name }}
 ========================================================================
 
 Namespace: {{ include "hiclaw.namespace" . }}

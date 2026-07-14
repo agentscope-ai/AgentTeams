@@ -9,19 +9,19 @@ import (
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "hiclaw",
-		Short: "HiClaw resource management CLI",
-		Long: `HiClaw CLI — manages Workers, Teams, Humans, and Managers via the
-hiclaw-controller REST API.
+		Short: "AgentTeams resource management CLI",
+		Long: `AgentTeams CLI — manages Workers, Teams, Humans, and Managers via the
+agentteams-controller REST API.
 
 Environment variables:
-  AGENTTEAMS_CONTROLLER_URL / HICLAW_CONTROLLER_URL
+  AGENTTEAMS_CONTROLLER_URL / AGENTTEAMS_CONTROLLER_URL
       Controller base URL (default: http://localhost:8090)
-  AGENTTEAMS_AUTH_TOKEN / HICLAW_AUTH_TOKEN
+  AGENTTEAMS_AUTH_TOKEN / AGENTTEAMS_AUTH_TOKEN
       Bearer token for authentication
-  AGENTTEAMS_AUTH_TOKEN_FILE / HICLAW_AUTH_TOKEN_FILE
+  AGENTTEAMS_AUTH_TOKEN_FILE / AGENTTEAMS_AUTH_TOKEN_FILE
       Path to a file containing the bearer token (K8s projected volume)
 
-Legacy HICLAW_* names are accepted for compatibility with existing installs.`,
+Legacy AGENTTEAMS_* names are accepted for compatibility with existing installs.`,
 	}
 
 	rootCmd.AddCommand(applyCmd())

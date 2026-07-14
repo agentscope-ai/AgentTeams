@@ -21,15 +21,15 @@ source "${SCRIPT_DIR}/lib/higress-client.sh"
 test_setup "23-runtime-switch"
 
 TEST_WORKER="test-rt-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
     exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -90,8 +90,9 @@ fi
 # ============================================================
 log_section "Snapshot Pre-Switch State"
 
-OLD_IMAGE=$(docker inspect --format '{{.Config.Image}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || echo "")
-OLD_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null | head -c 12 || echo "")
+OLD_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
+OLD_IMAGE=$(docker inspect --format '{{.Config.Image}}' "${OLD_CONTAINER}" 2>/dev/null || echo "")
+OLD_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "${OLD_CONTAINER}" 2>/dev/null | head -c 12 || echo "")
 log_info "Pre-switch image: ${OLD_IMAGE}"
 log_info "Pre-switch container ID (short): ${OLD_CONTAINER_ID}"
 
@@ -144,8 +145,9 @@ DEADLINE=$(( $(date +%s) + 240 ))
 NEW_CONTAINER_ID=""
 NEW_IMAGE=""
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-    NEW_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null | head -c 12 || echo "")
-    NEW_IMAGE=$(docker inspect --format '{{.Config.Image}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || echo "")
+    NEW_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
+    NEW_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "${NEW_CONTAINER}" 2>/dev/null | head -c 12 || echo "")
+    NEW_IMAGE=$(docker inspect --format '{{.Config.Image}}' "${NEW_CONTAINER}" 2>/dev/null || echo "")
     if [ -n "${NEW_CONTAINER_ID}" ] \
         && [ "${NEW_CONTAINER_ID}" != "${OLD_CONTAINER_ID}" ] \
         && [ -n "${NEW_IMAGE}" ]; then

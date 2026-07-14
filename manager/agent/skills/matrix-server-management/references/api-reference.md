@@ -1,6 +1,6 @@
 # Matrix API Reference
 
-All calls use `MATRIX_URL="${HICLAW_MATRIX_URL}"`.
+All calls use `MATRIX_URL="${AGENTTEAMS_MATRIX_URL}"`.
 
 ## User Registration
 
@@ -15,7 +15,7 @@ curl -X POST ${MATRIX_URL}/_matrix/client/v3/register \
     "password": "<PASSWORD>",
     "auth": {
       "type": "m.login.registration_token",
-      "token": "'"${HICLAW_REGISTRATION_TOKEN}"'"
+      "token": "'"${AGENTTEAMS_REGISTRATION_TOKEN}"'"
     }
   }'
 # Response: { "user_id": "...", "access_token": "..." }
@@ -44,15 +44,15 @@ curl -X POST ${MATRIX_URL}/_matrix/client/v3/createRoom \
     "name": "Worker: <NAME>",
     "topic": "Communication channel for <NAME>",
     "invite": [
-      "@'"${HICLAW_ADMIN_USER}"':'"${HICLAW_MATRIX_DOMAIN}"'",
-      "@<NAME>:'"${HICLAW_MATRIX_DOMAIN}"'"
+      "@'"${AGENTTEAMS_ADMIN_USER}"':'"${AGENTTEAMS_MATRIX_DOMAIN}"'",
+      "@<NAME>:'"${AGENTTEAMS_MATRIX_DOMAIN}"'"
     ],
     "preset": "trusted_private_chat",
     "power_level_content_override": {
       "users": {
-        "@manager:'"${HICLAW_MATRIX_DOMAIN}"'": 100,
-        "@'"${HICLAW_ADMIN_USER}"':'"${HICLAW_MATRIX_DOMAIN}"'": 100,
-        "@<NAME>:'"${HICLAW_MATRIX_DOMAIN}"'": 0
+        "@manager:'"${AGENTTEAMS_MATRIX_DOMAIN}"'": 100,
+        "@'"${AGENTTEAMS_ADMIN_USER}"':'"${AGENTTEAMS_MATRIX_DOMAIN}"'": 100,
+        "@<NAME>:'"${AGENTTEAMS_MATRIX_DOMAIN}"'": 0
       }
     }
   }'
@@ -78,9 +78,9 @@ curl -X PUT "${MATRIX_URL}/_matrix/client/v3/rooms/<ROOM_ID>/send/m.room.message
   -H 'Content-Type: application/json' \
   -d '{
     "msgtype": "m.text",
-    "body": "@<WORKER>:'"${HICLAW_MATRIX_DOMAIN}"' Your task: ...",
+    "body": "@<WORKER>:'"${AGENTTEAMS_MATRIX_DOMAIN}"' Your task: ...",
     "m.mentions": {
-      "user_ids": ["@<WORKER>:'"${HICLAW_MATRIX_DOMAIN}"'"]
+      "user_ids": ["@<WORKER>:'"${AGENTTEAMS_MATRIX_DOMAIN}"'"]
     }
   }'
 

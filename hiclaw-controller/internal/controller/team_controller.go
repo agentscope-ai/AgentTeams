@@ -84,7 +84,7 @@ type TeamReconciler struct {
 	MountRoleName             string
 
 	// ResourcePrefix scopes team-member ServiceAccount and Pod names per
-	// HiClaw tenant instance. Forwarded into MemberDeps.ResourcePrefix so
+	// AgentTeams tenant instance. Forwarded into MemberDeps.ResourcePrefix so
 	// createMemberContainer uses it when computing saName. Empty collapses
 	// to DefaultResourcePrefix ("hiclaw-").
 	ResourcePrefix auth.ResourcePrefix
@@ -572,11 +572,6 @@ func (r *TeamReconciler) legacyMemberContext(t *v1beta1.Team, name string, runti
 	if spec.DeployMode != nil {
 		deployMode = *spec.DeployMode
 	}
-	var targetClusterID, targetNamespace string
-	if spec.TargetCluster != nil {
-		targetClusterID = spec.TargetCluster.ID
-		targetNamespace = spec.TargetCluster.Namespace
-	}
 	var serviceEnabled bool
 	if spec.ServiceEnabled != nil {
 		serviceEnabled = *spec.ServiceEnabled
@@ -621,8 +616,6 @@ func (r *TeamReconciler) legacyMemberContext(t *v1beta1.Team, name string, runti
 		),
 		Owner:                t,
 		DeployMode:           deployMode,
-		TargetClusterID:      targetClusterID,
-		TargetNamespace:      targetNamespace,
 		ServiceEnabled:       serviceEnabled,
 		Resources:            agentResourcesToBackend(spec.Resources),
 		BackendRuntime:       backendRuntime,
@@ -651,7 +644,6 @@ func legacyLeaderWorkerSpec(spec v1beta1.LeaderSpec) v1beta1.WorkerSpec {
 		State:          spec.State,
 		AccessEntries:  spec.AccessEntries,
 		DeployMode:     spec.DeployMode,
-		TargetCluster:  spec.TargetCluster,
 		ServiceEnabled: spec.ServiceEnabled,
 		Env:            spec.Env,
 		Labels:         spec.Labels,
@@ -679,7 +671,6 @@ func legacyTeamWorkerSpec(spec v1beta1.TeamWorkerSpec) v1beta1.WorkerSpec {
 		State:          spec.State,
 		AccessEntries:  spec.AccessEntries,
 		DeployMode:     spec.DeployMode,
-		TargetCluster:  spec.TargetCluster,
 		ServiceEnabled: spec.ServiceEnabled,
 		Env:            spec.Env,
 		Labels:         spec.Labels,

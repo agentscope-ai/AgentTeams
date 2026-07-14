@@ -60,7 +60,7 @@ def test_entrypoint_uses_agentteams_mc_host_and_legacy_bucket_contract(tmp_path)
         "CAPTURE_FILE": str(capture),
         "AGENTTEAMS_WORKER_NAME": "alice",
         "AGENTTEAMS_STORAGE_PROVIDER": "oss",
-        "HICLAW_FS_BUCKET": "custom-bucket",
+        "AGENTTEAMS_FS_BUCKET": "custom-bucket",
     }
 
     result = subprocess.run([str(script)], env=env, text=True, capture_output=True)

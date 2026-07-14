@@ -136,7 +136,7 @@ func resolveServiceClient(ctx context.Context, mc *MemberContext, deps *MemberDe
 	if sb == nil {
 		return nil, "", fmt.Errorf("no backend supports Service management")
 	}
-	return sb.ServiceClient(ctx, mc.DeployMode, mc.TargetClusterID, mc.TargetNamespace)
+	return sb.ServiceClient(ctx)
 }
 
 // serviceName returns the K8s Service name for the member. The Service name

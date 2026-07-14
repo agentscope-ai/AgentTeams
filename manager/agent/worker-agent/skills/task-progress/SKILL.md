@@ -33,7 +33,7 @@ Format (append, don't overwrite):
 Push after each update:
 ```bash
 mc cp /root/hiclaw-fs/shared/tasks/{task-id}/progress/YYYY-MM-DD.md \
-      ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/progress/YYYY-MM-DD.md
+      ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/progress/YYYY-MM-DD.md
 ```
 
 ## Task History (LRU Top 10)

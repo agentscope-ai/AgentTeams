@@ -1,4 +1,4 @@
-"""CoPaw-native taskflow tool for HiClaw task state."""
+"""CoPaw-native taskflow tool for AgentTeams task state."""
 
 from __future__ import annotations
 
@@ -64,10 +64,88 @@ def _store() -> FileSystemTaskStore:
     return FileSystemTaskStore(_workspace_dir())
 
 
+def _runtime_root() -> Path:
+    configured = os.getenv("COPAW_WORKING_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve().parent
+
+    workspace = _workspace_dir().resolve()
+    if workspace.name == "default" and workspace.parent.name == "workspaces":
+        copaw_dir = workspace.parent.parent
+        if copaw_dir.name == ".copaw":
+            return copaw_dir.parent
+    return workspace
+
+
+def _strip_yaml_string(value: str) -> str:
+    text = value.strip()
+    if not text or text in {"null", "~"}:
+        return ""
+    if "#" in text:
+        text = text.split("#", 1)[0].strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _runtime_config_field(section: str, key: str) -> str:
+    path = _runtime_root() / "runtime" / "runtime.yaml"
+    if not path.exists():
+        return ""
+
+    in_section = False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for raw_line in lines:
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        if not raw_line.startswith((" ", "\t")):
+            in_section = raw_line.strip() == f"{section}:"
+            continue
+        if not in_section:
+            continue
+        stripped = raw_line.strip()
+        if ":" not in stripped:
+            continue
+        field, value = stripped.split(":", 1)
+        if field.strip() == key:
+            return _strip_yaml_string(value)
+    return ""
+
+
+def _normalize_room_id(room_id: str) -> str:
+    text = (room_id or "").strip()
+    if text.startswith("room:"):
+        text = text[len("room:") :].strip()
+    return text
+
+
+def _room_target(room_id: str) -> str:
+    text = (room_id or "").strip()
+    if text.startswith("room:"):
+        return text
+    return f"room:{text}"
+
+
+def _require_team_leader_assignment_room(room_id: str) -> None:
+    role = _runtime_config_field("member", "role")
+    team_room_id = _runtime_config_field("team", "teamRoomId")
+    if role != "team_leader" or not team_room_id:
+        return
+
+    if _normalize_room_id(room_id) != _normalize_room_id(team_room_id):
+        raise TaskflowError(
+            "team leader task assignments must use the Team Room "
+            f"{_room_target(team_room_id)}, not {room_id}",
+        )
+
+
 def _current_actor() -> str | None:
     configured = (
         os.getenv("AGENTTEAMS_MATRIX_USER_ID")
-        or os.getenv("HICLAW_MATRIX_USER_ID")
+        or os.getenv("AGENTTEAMS_MATRIX_USER_ID")
         or os.getenv("COPAW_MATRIX_USER_ID")
     )
     if configured:
@@ -172,7 +250,7 @@ async def taskflow(
     payload: dict[str, Any] | str | None = None,
     dryRun: bool = False,
 ) -> ToolResponse:
-    """Manage HiClaw task state with action-specific payload fields."""
+    """Manage AgentTeams task state with action-specific payload fields."""
     payload_data: dict[str, Any] = {}
     try:
         store = _store()
@@ -183,6 +261,7 @@ async def taskflow(
             task_id = _required_str(payload_data, "taskId")
             room_id = _required_str(payload_data, "roomId")
             spec = _required_str(payload_data, "spec")
+            _require_team_leader_assignment_room(room_id)
             if dryRun:
                 return _ok(
                     dryRun=True,

@@ -1,5 +1,5 @@
 #!/bin/bash
-# hiclaw-import.sh - Import Worker/Team/Human resources into HiClaw
+# hiclaw-import.sh - Import Worker/Team/Human resources into AgentTeams
 #
 # Thin shell that delegates to the `hiclaw` CLI inside the Manager container.
 # Supports ZIP packages, remote packages (nacos://, http://), and YAML files.
@@ -12,7 +12,7 @@
 #   ./hiclaw-import.sh -f <resource.yaml> [--prune] [--dry-run]
 #
 # Environment variables (for automation):
-#   HICLAW_NON_INTERACTIVE       Skip all prompts (same as --yes)
+#   AGENTTEAMS_NON_INTERACTIVE       Skip all prompts (same as --yes)
 
 set -e
 
@@ -28,28 +28,28 @@ fi
 if [ -z "${CONTAINER_CMD}" ]; then
     echo "ERROR: Neither docker nor podman found." >&2
     echo "" >&2
-    echo "Docker is required to run HiClaw. Install Docker first, then install HiClaw:" >&2
+    echo "Docker is required to run AgentTeams. Install Docker first, then install AgentTeams:" >&2
     echo "  bash <(curl -sSL https://higress.ai/hiclaw/install.sh)" >&2
     exit 1
 fi
 
 # Verify Manager container
-if ! ${CONTAINER_CMD} ps --filter name=hiclaw-manager --format '{{.Names}}' 2>/dev/null | grep -q 'hiclaw-manager'; then
-    echo "ERROR: hiclaw-manager container is not running." >&2
+if ! ${CONTAINER_CMD} ps --filter name=agentteams-manager --format '{{.Names}}' 2>/dev/null | grep -q 'agentteams-manager'; then
+    echo "ERROR: agentteams-manager container is not running." >&2
     echo "" >&2
     # Check if the container exists but is stopped
-    if ${CONTAINER_CMD} ps -a --filter name=hiclaw-manager --format '{{.Names}}' 2>/dev/null | grep -q 'hiclaw-manager'; then
-        echo "The hiclaw-manager container exists but is stopped. Start it with:" >&2
-        echo "  ${CONTAINER_CMD} start hiclaw-manager" >&2
+    if ${CONTAINER_CMD} ps -a --filter name=agentteams-manager --format '{{.Names}}' 2>/dev/null | grep -q 'agentteams-manager'; then
+        echo "The agentteams-manager container exists but is stopped. Start it with:" >&2
+        echo "  ${CONTAINER_CMD} start agentteams-manager" >&2
     else
-        echo "HiClaw does not appear to be installed. Install it first:" >&2
+        echo "AgentTeams does not appear to be installed. Install it first:" >&2
         echo "  bash <(curl -sSL https://higress.ai/hiclaw/install.sh)" >&2
     fi
     exit 1
 fi
 
 # Ensure /tmp/import exists in container
-${CONTAINER_CMD} exec hiclaw-manager mkdir -p /tmp/import 2>/dev/null || true
+${CONTAINER_CMD} exec agentteams-manager mkdir -p /tmp/import 2>/dev/null || true
 
 # ============================================================
 # Parse first argument to determine mode
@@ -68,7 +68,7 @@ shift 2>/dev/null || true
 case "${RESOURCE_TYPE}" in
     worker)
         # Parse worker-specific arguments
-        HICLAW_ARGS=("apply" "worker")
+        AGENTTEAMS_ARGS=("apply" "worker")
         ZIP_FILE=""
         WORKER_NAME=""
         PACKAGE_URI=""
@@ -78,16 +78,16 @@ case "${RESOURCE_TYPE}" in
                     ZIP_FILE="$2"; shift 2 ;;
                 --name)
                     WORKER_NAME="$2"
-                    HICLAW_ARGS+=("$1" "$2")
+                    AGENTTEAMS_ARGS+=("$1" "$2")
                     shift 2 ;;
                 --package)
                     PACKAGE_URI="$2"
-                    HICLAW_ARGS+=("$1" "$2")
+                    AGENTTEAMS_ARGS+=("$1" "$2")
                     shift 2 ;;
                 --model|--skills|--mcp-servers|--runtime)
-                    HICLAW_ARGS+=("$1" "$2"); shift 2 ;;
+                    AGENTTEAMS_ARGS+=("$1" "$2"); shift 2 ;;
                 --dry-run)
-                    HICLAW_ARGS+=("$1"); shift ;;
+                    AGENTTEAMS_ARGS+=("$1"); shift ;;
                 --yes)
                     shift ;;
                 *) echo "Unknown option: $1"; exit 1 ;;
@@ -97,7 +97,7 @@ case "${RESOURCE_TYPE}" in
         # Handle ZIP: download URL if needed, then docker cp into container
         if [ -n "${ZIP_FILE}" ]; then
             if echo "${ZIP_FILE}" | grep -qE '^https?://'; then
-                echo "[HiClaw Import] Downloading ${ZIP_FILE}..."
+                echo "[AgentTeams Import] Downloading ${ZIP_FILE}..."
                 DOWNLOADED_ZIP=$(mktemp /tmp/hiclaw-import-XXXXXX.zip)
                 curl -fSL -o "${DOWNLOADED_ZIP}" "${ZIP_FILE}" || { echo "ERROR: Download failed"; exit 1; }
                 ZIP_FILE="${DOWNLOADED_ZIP}"
@@ -105,19 +105,19 @@ case "${RESOURCE_TYPE}" in
             fi
 
             ZIP_BASENAME=$(basename "${ZIP_FILE}")
-            ${CONTAINER_CMD} cp "${ZIP_FILE}" "hiclaw-manager:/tmp/import/${ZIP_BASENAME}"
-            echo "[HiClaw Import] Copied ${ZIP_BASENAME} → container:/tmp/import/"
-            HICLAW_ARGS+=("--zip" "/tmp/import/${ZIP_BASENAME}")
+            ${CONTAINER_CMD} cp "${ZIP_FILE}" "agentteams-manager:/tmp/import/${ZIP_BASENAME}"
+            echo "[AgentTeams Import] Copied ${ZIP_BASENAME} → container:/tmp/import/"
+            AGENTTEAMS_ARGS+=("--zip" "/tmp/import/${ZIP_BASENAME}")
         fi
 
         if [ -z "${ZIP_FILE}" ] && [ -n "${WORKER_NAME}" ] && [ -z "${PACKAGE_URI}" ]; then
-            HICLAW_ARGS+=("--package" "${WORKER_NAME}")
+            AGENTTEAMS_ARGS+=("--package" "${WORKER_NAME}")
         fi
 
         # `hiclaw-import.sh` accepts `--yes` for backward compatibility, but the
         # container-internal `hiclaw apply worker` CLI does not support it.
         # Swallow the flag here instead of forwarding it and breaking imports.
-        exec ${CONTAINER_CMD} exec hiclaw-manager hiclaw "${HICLAW_ARGS[@]}"
+        exec ${CONTAINER_CMD} exec agentteams-manager hiclaw "${AGENTTEAMS_ARGS[@]}"
         ;;
 
     -h|--help|"")

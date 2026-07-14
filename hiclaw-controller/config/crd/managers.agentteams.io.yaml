@@ -27,7 +27,7 @@ spec:
                   enum: [openclaw, copaw]
                   description: |
                     Manager runtime. When omitted the controller falls back to
-                    HICLAW_MANAGER_RUNTIME (set at install time), and finally
+                    AGENTTEAMS_MANAGER_RUNTIME (set at install time), and finally
                     to "openclaw" if neither is set.
                 image:
                   type: string
@@ -97,7 +97,7 @@ spec:
                   description: |
                     User-defined environment variables injected into the manager container.
                     Keys that collide with variables already set by the controller or backend
-                    (HICLAW_*, OPENCLAW_*, HOME, and similar internal keys) are silently
+                    (AGENTTEAMS_*, OPENCLAW_*, HOME, and similar internal keys) are silently
                     ignored with a warning log — the system value always wins.
                   additionalProperties:
                     type: string

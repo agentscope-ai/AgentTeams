@@ -22,7 +22,7 @@ bash /opt/hiclaw/agent/skills/model-switch/scripts/update-manager-model.sh deeps
 
 ## What the script does
 
-1. Strips any `hiclaw-gateway/` prefix from the model name
+1. Strips any `agentteams-gateway/` prefix from the model name
 2. Tests the model via `POST /v1/chat/completions` on the AI Gateway — exits with error if unreachable
 3. If the model is already in the `models` array: switches `agents.defaults.model.primary`
 4. If the model is new: adds it to the `models` array and switches primary

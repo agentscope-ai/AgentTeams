@@ -1,6 +1,6 @@
 apiVersion: v2
 name: hiclaw
-description: HiClaw - AI Agent Teams with Matrix-based collaboration and human-in-the-loop oversight
+description: AgentTeams - AI Agent Teams with Matrix-based collaboration and human-in-the-loop oversight
 type: application
 version: 1.1.1
 appVersion: "1.1.1"
@@ -12,13 +12,13 @@ keywords:
   - collaboration
   - llm
 
-home: https://github.com/agentscope-ai/HiClaw
+home: https://github.com/agentscope-ai/AgentTeams
 sources:
-  - https://github.com/agentscope-ai/HiClaw
+  - https://github.com/agentscope-ai/AgentTeams
 
 maintainers:
-  - name: HiClaw Team
-    url: https://github.com/agentscope-ai/HiClaw
+  - name: AgentTeams Team
+    url: https://github.com/agentscope-ai/AgentTeams
 
 dependencies:
   - name: higress

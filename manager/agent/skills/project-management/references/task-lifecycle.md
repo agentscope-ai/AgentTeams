@@ -53,8 +53,8 @@ Write `spec.md` with: task title, project context, deliverables, constraints, an
 ### 2c. Sync to MinIO
 
 ```bash
-mc cp /root/hiclaw-fs/shared/tasks/${TASK_ID}/meta.json ${HICLAW_STORAGE_PREFIX}/shared/tasks/${TASK_ID}/meta.json
-mc cp /root/hiclaw-fs/shared/tasks/${TASK_ID}/spec.md ${HICLAW_STORAGE_PREFIX}/shared/tasks/${TASK_ID}/spec.md
+mc cp /root/hiclaw-fs/shared/tasks/${TASK_ID}/meta.json ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${TASK_ID}/meta.json
+mc cp /root/hiclaw-fs/shared/tasks/${TASK_ID}/spec.md ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${TASK_ID}/spec.md
 ```
 
 ### 2d. Update plan.md
@@ -69,7 +69,7 @@ Adapt language to admin's preferred language:
 
 {2-3 sentence summary}
 
-Full spec: ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/spec.md
+Full spec: ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/spec.md
 
 Please file-sync, read the spec, create plan.md before starting. @mention me when complete.
 ```

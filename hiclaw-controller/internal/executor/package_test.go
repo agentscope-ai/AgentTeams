@@ -383,16 +383,16 @@ func TestResolveNacos_AddrExtraction(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error for unreachable server, got nil")
 			}
-			if strings.Contains(err.Error(), "HICLAW_NACOS_ADDR") {
-				t.Errorf("error should not reference HICLAW_NACOS_ADDR, got: %v", err)
+			if strings.Contains(err.Error(), "AGENTTEAMS_NACOS_ADDR") {
+				t.Errorf("error should not reference AGENTTEAMS_NACOS_ADDR, got: %v", err)
 			}
 		})
 	}
 }
 
 func TestParseNacosAddr_UsesEnvCredentialsAsDefault(t *testing.T) {
-	t.Setenv("HICLAW_NACOS_USERNAME", "env-user")
-	t.Setenv("HICLAW_NACOS_PASSWORD", "env-pass")
+	t.Setenv("AGENTTEAMS_NACOS_USERNAME", "env-user")
+	t.Setenv("AGENTTEAMS_NACOS_PASSWORD", "env-pass")
 
 	host, port, username, password, err := parseNacosAddr("nacos.internal:8848")
 	if err != nil {
@@ -410,8 +410,8 @@ func TestParseNacosAddr_UsesEnvCredentialsAsDefault(t *testing.T) {
 }
 
 func TestParseNacosAddr_URIAuthOverridesEnv(t *testing.T) {
-	t.Setenv("HICLAW_NACOS_USERNAME", "env-user")
-	t.Setenv("HICLAW_NACOS_PASSWORD", "env-pass")
+	t.Setenv("AGENTTEAMS_NACOS_USERNAME", "env-user")
+	t.Setenv("AGENTTEAMS_NACOS_PASSWORD", "env-pass")
 
 	host, port, username, password, err := parseNacosAddr("nacos://uri-user:uri-pass@nacos.internal/ns/spec")
 	if err != nil {
@@ -429,8 +429,8 @@ func TestParseNacosAddr_URIAuthOverridesEnv(t *testing.T) {
 }
 
 func TestValidateNacosURI_UsesEnvCredentialsWhenURIHasNoAuth(t *testing.T) {
-	t.Setenv("HICLAW_NACOS_USERNAME", "env-user")
-	t.Setenv("HICLAW_NACOS_PASSWORD", "env-pass")
+	t.Setenv("AGENTTEAMS_NACOS_USERNAME", "env-user")
+	t.Setenv("AGENTTEAMS_NACOS_PASSWORD", "env-pass")
 
 	err := ValidateNacosURI(context.Background(), "nacos://127.0.0.1:19999/ns/my-spec", ValidateNacosURIOptions{})
 	if err == nil {
@@ -447,8 +447,8 @@ func TestValidateNacosURI_UsesEnvCredentialsWhenURIHasNoAuth(t *testing.T) {
 }
 
 func TestValidateNacosURI_PartialEnvCredentialsFail(t *testing.T) {
-	t.Setenv("HICLAW_NACOS_USERNAME", "env-user")
-	t.Setenv("HICLAW_NACOS_PASSWORD", "")
+	t.Setenv("AGENTTEAMS_NACOS_USERNAME", "env-user")
+	t.Setenv("AGENTTEAMS_NACOS_PASSWORD", "")
 
 	err := ValidateNacosURI(context.Background(), "nacos://127.0.0.1:19999/ns/my-spec", ValidateNacosURIOptions{})
 	if err == nil {
@@ -663,6 +663,23 @@ func TestPutPackageObjectSeedOnlyPreservesExistingStorageObject(t *testing.T) {
 	}
 	if string(got) != "template" {
 		t.Fatalf("new seed object = %q", got)
+	}
+}
+
+func TestSeedPackageDirectoryObjectCreatesPrefixMarker(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+
+	if err := seedPackageDirectoryObject(ctx, store, "agents/alice"); err != nil {
+		t.Fatalf("seedPackageDirectoryObject failed: %v", err)
+	}
+
+	got, err := store.GetObject(ctx, "agents/alice/.agentteams-keep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("directory marker should be empty, got %q", got)
 	}
 }
 

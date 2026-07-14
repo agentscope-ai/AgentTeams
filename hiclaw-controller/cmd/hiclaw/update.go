@@ -23,16 +23,15 @@ func updateCmd() *cobra.Command {
 
 func updateWorkerCmd() *cobra.Command {
 	var (
-		name             string
-		model            string
-		runtime          string
-		image            string
-		identity         string
-		soul             string
-		skills           string
-		packageURI       string
-		expose           string
-		containerManaged bool
+		name       string
+		model      string
+		runtime    string
+		image      string
+		identity   string
+		soul       string
+		skills     string
+		packageURI string
+		expose     string
 	)
 
 	cmd := &cobra.Command{
@@ -43,7 +42,6 @@ func updateWorkerCmd() *cobra.Command {
   hiclaw update worker --name alice --model claude-sonnet-4-6
   hiclaw update worker --name alice --image hiclaw/worker-agent:v1.2.0
   hiclaw update worker --name alice --skills github-operations,code-review
-  hiclaw update worker --name remote-worker --container-managed=false
   To update CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.
   To update mcpServers, use a YAML manifest and pass it with 'hiclaw apply -f worker.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,9 +64,6 @@ func updateWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
-			if !containerManaged {
-				req["containerManaged"] = false
-			}
 			if skills != "" {
 				req["skills"] = splitCSV(skills)
 			}
@@ -99,7 +94,6 @@ func updateWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&skills, "skills", "", "Comma-separated built-in skills")
 	cmd.Flags().StringVar(&packageURI, "package", "", "Package URI")
 	cmd.Flags().StringVar(&expose, "expose", "", "Comma-separated ports to expose")
-	cmd.Flags().BoolVar(&containerManaged, "container-managed", true, "Whether controller manages container lifecycle (default true; set false for remote/pip workers)")
 	return cmd
 }
 

@@ -20,8 +20,8 @@ package credprovider
 // IssueRequest is the body sent to the sidecar's POST /issue endpoint.
 //
 // SessionName is propagated into AssumeRole's RoleSessionName and
-// should uniquely identify the calling entity (e.g. "hiclaw-worker-alice",
-// "hiclaw-manager", "hiclaw-controller"). Entries carries the resolved
+// should uniquely identify the calling entity (e.g. "agentteams-worker-alice",
+// "agentteams-manager", "agentteams-controller"). Entries carries the resolved
 // AccessEntry list and must be non-empty; the sidecar rejects empty
 // requests with HTTP 400.
 type IssueRequest struct {
@@ -59,7 +59,7 @@ type AccessScope struct {
 //
 // The sidecar returns only the STS triple; OSS endpoint is NOT part of
 // this contract. Endpoint is a deployment-time static configuration
-// (HICLAW_FS_ENDPOINT) and is sourced independently by each caller.
+// (AGENTTEAMS_FS_ENDPOINT) and is sourced independently by each caller.
 type IssueResponse struct {
 	AccessKeyID     string `json:"access_key_id"`
 	AccessKeySecret string `json:"access_key_secret"`

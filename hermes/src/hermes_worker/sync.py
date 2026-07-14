@@ -32,8 +32,18 @@ from typing import Any, Callable, Coroutine, Optional
 
 logger = logging.getLogger(__name__)
 
+def _storage_alias() -> str:
+    explicit = os.environ.get("AGENTTEAMS_STORAGE_ALIAS")
+    if explicit:
+        return explicit
+    prefix = os.environ.get("AGENTTEAMS_STORAGE_PREFIX") or ""
+    if "/" in prefix:
+        return prefix.split("/", 1)[0]
+    return "agentteams"
+
+
 # mc alias name used for this worker session
-_MC_ALIAS = "hiclaw"
+_MC_ALIAS = _storage_alias()
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -111,6 +121,29 @@ def _mc(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return result
 
 
+def _looks_like_missing_object_error(stderr: str | None) -> bool:
+    text = stderr or ""
+    return "Object does not exist" in text or "The specified key does not exist" in text
+
+
+def _preview_text(value: str | None, limit: int = 2000) -> str:
+    if not value:
+        return ""
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "...<truncated>"
+
+
+_STARTUP_SYNC_FILES = (
+    "openclaw.json",
+    "AGENTS.md",
+    "SOUL.md",
+    "HEARTBEAT.md",
+    "config/mcporter.json",
+    "mcporter-servers.json",
+)
+
+
 class FileSync:
     """MinIO file sync using mc CLI."""
 
@@ -140,7 +173,7 @@ class FileSync:
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self._prefix = f"agents/{worker_name}"
         self._alias_set = False
-        self._cloud_mode = os.environ.get("HICLAW_RUNTIME") == "aliyun"
+        self._cloud_mode = os.environ.get("AGENTTEAMS_RUNTIME") == "aliyun"
 
     # ------------------------------------------------------------------
     # mc alias management
@@ -152,7 +185,7 @@ class FileSync:
             ["bash", "-c",
              "source /opt/hiclaw/scripts/lib/oss-credentials.sh && "
              "ensure_mc_credentials && "
-             "echo $MC_HOST_hiclaw"],
+             f"echo $MC_HOST_{_MC_ALIAS}"],
             capture_output=True, text=True, check=True,
         )
         mc_host = result.stdout.strip()
@@ -194,7 +227,7 @@ class FileSync:
             result = _mc("cat", self._object_path(key), check=True)
             return result.stdout
         except subprocess.CalledProcessError as exc:
-            logger.debug("mc cat failed for %s: %s", key, exc.stderr)
+            logger.info("mc cat failed for %s: %s", key, _preview_text(exc.stderr))
             return None
         except Exception as exc:
             logger.debug("mc cat error for %s: %s", key, exc)
@@ -219,6 +252,19 @@ class FileSync:
             logger.debug("mc ls error for %s: %s", prefix, exc)
             return []
 
+    def _pull_startup_files(self) -> list[str]:
+        """Pull known startup files when mc mirror cannot stat the prefix."""
+        changed: list[str] = []
+        for rel_path in _STARTUP_SYNC_FILES:
+            content = self._cat(f"{self._prefix}/{rel_path}")
+            if content is None:
+                continue
+            local_path = self.local_dir / rel_path
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_text(content)
+            changed.append(rel_path)
+        return changed
+
     def mirror_all(self) -> None:
         """Full mirror of the worker's MinIO prefix to local_dir.
 
@@ -235,7 +281,23 @@ class FileSync:
             logger.info("mirror_all: full mirror completed from %s", remote)
         except subprocess.CalledProcessError as exc:
             logger.warning("mirror_all: mc mirror failed: %s", exc.stderr)
-            raise
+            error_text = f"{exc.stderr or ''}\n{exc.stdout or ''}"
+            if not _looks_like_missing_object_error(error_text):
+                raise
+            logger.info(
+                "mirror_all: primary mirror prefix missing; trying direct startup file pulls",
+            )
+            startup_changed = self._pull_startup_files()
+            if startup_changed:
+                logger.info(
+                    "mirror_all: restored startup files after missing prefix: %s",
+                    ", ".join(startup_changed),
+                )
+
+        if not (self.local_dir / "openclaw.json").exists():
+            raise RuntimeError(
+                f"openclaw.json not found in MinIO for worker {self.worker_name}"
+            )
 
         shared_remote = self._get_shared_remote()
         shared_local = str(self.local_dir / "shared") + "/"

@@ -47,7 +47,7 @@ Before sending the coding-request, push all workspace files so the Manager can a
 
 ```bash
 mc mirror "/root/hiclaw-fs/shared/tasks/{task-id}/workspace/" \
-  ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/
+  ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/
 ```
 
 ### 2b. Check for Processing Marker
@@ -56,7 +56,7 @@ Before modifying the workspace or sending a coding-request, check if the task di
 
 ```bash
 # Sync latest state from MinIO
-mc mirror "${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
   "/root/hiclaw-fs/shared/tasks/{task-id}/"
 
 # Check for processing marker

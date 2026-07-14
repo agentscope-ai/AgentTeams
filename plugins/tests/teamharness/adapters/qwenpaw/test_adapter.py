@@ -108,7 +108,6 @@ def test_mcp_client_env_includes_sts_refresh_inputs(monkeypatch, tmp_path: Path)
     monkeypatch.setenv("TEAMHARNESS_SHARED_DIR", str(shared_dir))
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
     monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN_FILE", "/var/run/secrets/agentteams/token")
-    monkeypatch.setenv("AGENTTEAMS_CLUSTER_ID", "cluster-a")
     monkeypatch.setenv("AGENTTEAMS_FS_ENDPOINT", "https://oss.example.test")
     monkeypatch.setenv("AGENTTEAMS_FS_ACCESS_KEY", "static-ak")
     monkeypatch.setenv("AGENTTEAMS_FS_SECRET_KEY", "static-sk")
@@ -120,7 +119,6 @@ def test_mcp_client_env_includes_sts_refresh_inputs(monkeypatch, tmp_path: Path)
     assert env["TEAMHARNESS_SHARED_DIR"] == str(shared_dir)
     assert env["AGENTTEAMS_CONTROLLER_URL"] == "http://controller.example.test"
     assert env["AGENTTEAMS_AUTH_TOKEN_FILE"] == "/var/run/secrets/agentteams/token"
-    assert env["AGENTTEAMS_CLUSTER_ID"] == "cluster-a"
     assert env["AGENTTEAMS_FS_ENDPOINT"] == "https://oss.example.test"
     assert env["QWENPAW_WORKING_DIR"] == str(tmp_path / ".qwenpaw")
     assert "AGENTTEAMS_FS_ACCESS_KEY" not in env
@@ -489,8 +487,8 @@ def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeyp
     monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
     monkeypatch.setenv("AGENTTEAMS_WORKER_ROLE", "worker")
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "worker-a")
-    monkeypatch.setenv("AGENTTEAMS_STORAGE_PREFIX", "hiclaw/hiclaw-storage")
-    monkeypatch.setenv("AGENTTEAMS_FS_BUCKET", "hiclaw-storage")
+    monkeypatch.setenv("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage")
+    monkeypatch.setenv("AGENTTEAMS_FS_BUCKET", "agentteams-storage")
 
     result = module._ensure_mcp_client("default", workspace_dir)
 
@@ -506,5 +504,5 @@ def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeyp
     assert client.env["AGENTTEAMS_WORKER_MATRIX_TOKEN"] == "matrix-token"
     assert client.env["AGENTTEAMS_WORKER_ROLE"] == "worker"
     assert client.env["AGENTTEAMS_WORKER_NAME"] == "worker-a"
-    assert client.env["AGENTTEAMS_STORAGE_PREFIX"] == "hiclaw/hiclaw-storage"
-    assert client.env["AGENTTEAMS_FS_BUCKET"] == "hiclaw-storage"
+    assert client.env["AGENTTEAMS_STORAGE_PREFIX"] == "agentteams/agentteams-storage"
+    assert client.env["AGENTTEAMS_FS_BUCKET"] == "agentteams-storage"

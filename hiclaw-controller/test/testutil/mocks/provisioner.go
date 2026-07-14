@@ -17,7 +17,7 @@ type MockProvisioner struct {
 	ProvisionWorkerFn              func(ctx context.Context, req service.WorkerProvisionRequest) (*service.WorkerProvisionResult, error)
 	DeprovisionWorkerFn            func(ctx context.Context, req service.WorkerDeprovisionRequest) error
 	RefreshCredentialsFn           func(ctx context.Context, workerName string) (*service.RefreshResult, error)
-	RefreshWorkerCredentialsFn     func(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error)
+	RefreshWorkerCredentialsFn     func(ctx context.Context, credentialName, workerName, teamName string) (*service.RefreshResult, error)
 	EnsureWorkerGatewayAuthFn      func(ctx context.Context, workerName, gatewayKey string) error
 	ReconcileExposeFn              func(ctx context.Context, workerName string, desired []v1beta1.ExposePort, current []v1beta1.ExposedPortStatus) ([]v1beta1.ExposedPortStatus, error)
 	EnsureServiceAccountFn         func(ctx context.Context, workerName string) error
@@ -97,6 +97,7 @@ type MockProvisioner struct {
 type workerCredentialCall struct {
 	CredentialName string
 	WorkerName     string
+	TeamName       string
 }
 
 type gatewayAuthCall struct {
@@ -285,16 +286,17 @@ func (m *MockProvisioner) RefreshCredentials(ctx context.Context, workerName str
 	}, nil
 }
 
-func (m *MockProvisioner) RefreshWorkerCredentials(ctx context.Context, credentialName, workerName string) (*service.RefreshResult, error) {
+func (m *MockProvisioner) RefreshWorkerCredentials(ctx context.Context, credentialName, workerName, teamName string) (*service.RefreshResult, error) {
 	m.mu.Lock()
 	m.Calls.RefreshWorkerCredentials = append(m.Calls.RefreshWorkerCredentials, workerCredentialCall{
 		CredentialName: credentialName,
 		WorkerName:     workerName,
+		TeamName:       teamName,
 	})
 	fn := m.RefreshWorkerCredentialsFn
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, credentialName, workerName)
+		return fn(ctx, credentialName, workerName, teamName)
 	}
 	return &service.RefreshResult{
 		MatrixToken:    "mock-token-" + workerName,

@@ -16,18 +16,18 @@ type Config struct {
 	From string
 }
 
-// ConfigFromEnv reads SMTP config from HICLAW_SMTP_* environment variables.
+// ConfigFromEnv reads SMTP config from AGENTTEAMS_SMTP_* environment variables.
 func ConfigFromEnv() *Config {
-	host := os.Getenv("HICLAW_SMTP_HOST")
+	host := os.Getenv("AGENTTEAMS_SMTP_HOST")
 	if host == "" {
 		return nil
 	}
 	return &Config{
 		Host: host,
-		Port: envOrDefault("HICLAW_SMTP_PORT", "465"),
-		User: os.Getenv("HICLAW_SMTP_USER"),
-		Pass: os.Getenv("HICLAW_SMTP_PASS"),
-		From: envOrDefault("HICLAW_SMTP_FROM", "HiClaw <noreply@hiclaw.io>"),
+		Port: envOrDefault("AGENTTEAMS_SMTP_PORT", "465"),
+		User: os.Getenv("AGENTTEAMS_SMTP_USER"),
+		Pass: os.Getenv("AGENTTEAMS_SMTP_PASS"),
+		From: envOrDefault("AGENTTEAMS_SMTP_FROM", "AgentTeams <noreply@agentteams.io>"),
 	}
 }
 
@@ -37,10 +37,10 @@ func SendWelcome(cfg *Config, to, displayName, matrixUserID, password, elementUR
 		return fmt.Errorf("SMTP not configured")
 	}
 
-	subject := "Welcome to HiClaw - Your Account Details"
+	subject := "Welcome to AgentTeams - Your Account Details"
 	body := fmt.Sprintf(`Hi %s,
 
-Your HiClaw account has been created:
+Your AgentTeams account has been created:
 
   Username: %s
   Password: %s
@@ -48,7 +48,7 @@ Your HiClaw account has been created:
 
 Please log in using Element Web and change your password immediately.
 
-— HiClaw`, displayName, matrixUserID, password, elementURL)
+— AgentTeams`, displayName, matrixUserID, password, elementURL)
 
 	msg := strings.Join([]string{
 		fmt.Sprintf("From: %s", cfg.From),

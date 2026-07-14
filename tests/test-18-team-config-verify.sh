@@ -21,22 +21,22 @@ TEST_TEAM="test-team-$$"
 TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_W2="${TEST_TEAM}-qa"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
     log_info "Cleaning up team: ${TEST_TEAM}"
     exec_in_agent hiclaw delete team "${TEST_TEAM}" 2>/dev/null || true
     sleep 5
     # Stop worker containers (fallback if reconciler didn't clean up)
-    docker rm -f "hiclaw-worker-${TEST_LEADER}" 2>/dev/null || true
-    docker rm -f "hiclaw-worker-${TEST_W1}" 2>/dev/null || true
-    docker rm -f "hiclaw-worker-${TEST_W2}" 2>/dev/null || true
+    remove_worker_container "${TEST_LEADER}"
+    remove_worker_container "${TEST_W1}"
+    remove_worker_container "${TEST_W2}"
     # Clean MinIO
     for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
         exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
     done
-    exec_in_agent rm -f "/tmp/hiclaw-test-${TEST_TEAM}.yaml" 2>/dev/null || true
+    exec_in_agent rm -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>/dev/null || true
     # Clean registries (in agent workspace, fallback)
     exec_in_agent bash -c "
         jq 'del(.workers[\"${TEST_LEADER}\"], .workers[\"${TEST_W1}\"], .workers[\"${TEST_W2}\"])' \
@@ -92,7 +92,7 @@ log_section "Create Team"
 #   Worker 1 (dev): deny Worker 2 (qa) from groupAllowFrom (overrides peer mention)
 #   Worker 2 (qa): no per-worker policy (should still have W1 via peer mention)
 
-exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_TEAM}.yaml << 'YAMLEOF'
+exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_TEAM}.yaml << 'YAMLEOF'
 apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
@@ -115,7 +115,7 @@ spec:
 YAMLEOF
 " 2>/dev/null
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/hiclaw-test-${TEST_TEAM}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Team YAML applied via hiclaw CLI"
 else
@@ -421,15 +421,16 @@ fi
 log_section "Verify Containers"
 
 for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
-    RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "hiclaw-worker-${w}" || echo "")
+    RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${w}")" || echo "")
     if [ -n "${RUNNING}" ]; then
-        log_pass "Container running: hiclaw-worker-${w}"
+        log_pass "Container running: $(worker_container_name "${w}")"
     else
         DEPLOY=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${w}" '.workers[$w].deployment // empty' 2>/dev/null)
         if [ "${DEPLOY}" = "remote" ]; then
             log_pass "Agent ${w} registered in remote mode"
         else
-            log_fail "Container not running: hiclaw-worker-${w}"
+            dump_diagnostics worker "${w}"
+            log_fail "Container not running: $(worker_container_name "${w}")"
         fi
     fi
 done

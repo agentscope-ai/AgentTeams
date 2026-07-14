@@ -28,7 +28,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	if modelName == "" {
 		modelName = g.config.DefaultModel
 	}
-	modelName = strings.TrimPrefix(modelName, "hiclaw-gateway/")
+	modelName = strings.TrimPrefix(modelName, "agentteams-gateway/")
 
 	matrixServerURL := g.config.MatrixServerURL
 	if matrixServerURL == "" {
@@ -125,7 +125,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		"models": map[string]interface{}{
 			"mode": "merge",
 			"providers": map[string]interface{}{
-				"hiclaw-gateway": map[string]interface{}{
+				"agentteams-gateway": map[string]interface{}{
 					"baseUrl": aiGatewayURL + "/v1",
 					"apiKey":  req.GatewayKey,
 					"api":     "openai-completions",
@@ -138,7 +138,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"timeoutSeconds": 1800,
 				"workspace":      "~",
 				"model": map[string]interface{}{
-					"primary": "hiclaw-gateway/" + modelName,
+					"primary": "agentteams-gateway/" + modelName,
 				},
 				"models":        g.allModelAliases(modelName),
 				"maxConcurrent": 4,
@@ -499,11 +499,11 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 
 	aliases := make(map[string]interface{})
 	for _, name := range allModels {
-		aliases["hiclaw-gateway/"+name] = map[string]interface{}{"alias": name}
+		aliases["agentteams-gateway/"+name] = map[string]interface{}{"alias": name}
 	}
 	// Add custom model if not in the built-in list
-	if _, exists := aliases["hiclaw-gateway/"+selectedModel]; !exists {
-		aliases["hiclaw-gateway/"+selectedModel] = map[string]interface{}{"alias": selectedModel}
+	if _, exists := aliases["agentteams-gateway/"+selectedModel]; !exists {
+		aliases["agentteams-gateway/"+selectedModel] = map[string]interface{}{"alias": selectedModel}
 	}
 	return aliases
 }

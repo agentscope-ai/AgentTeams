@@ -124,7 +124,7 @@ func (a *AIGatewayClient) EnsureConsumer(_ context.Context, req ConsumerRequest)
 		SetName(name).
 		SetGatewayType("AI").
 		SetEnable(true).
-		SetDescription(fmt.Sprintf("HiClaw consumer: %s", req.Name)).
+		SetDescription(fmt.Sprintf("AgentTeams consumer: %s", req.Name)).
 		SetApikeyIdentityConfig(&apig.ApiKeyIdentityConfig{
 			Type: tea.String("Apikey"),
 			ApikeySource: &apig.ApiKeyIdentityConfigApikeySource{

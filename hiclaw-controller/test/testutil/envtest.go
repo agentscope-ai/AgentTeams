@@ -5,9 +5,9 @@ import (
 	"runtime"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
@@ -25,7 +25,7 @@ func CRDPath() string {
 	return filepath.Join(filepath.Dir(thisFile), "..", "..", "config", "crd")
 }
 
-// NewTestEnv creates a configured envtest.Environment with HiClaw CRDs loaded.
+// NewTestEnv creates a configured envtest.Environment with AgentTeams CRDs loaded.
 func NewTestEnv() *envtest.Environment {
 	return &envtest.Environment{
 		CRDDirectoryPaths:     []string{CRDPath()},

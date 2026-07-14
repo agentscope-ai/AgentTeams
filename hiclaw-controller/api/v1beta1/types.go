@@ -148,14 +148,6 @@ const (
 	DeployModeEdge   = "Edge"
 )
 
-// TargetClusterSpec identifies the remote cluster and namespace for deployment.
-type TargetClusterSpec struct {
-	// ID is the ACS/ACK cluster ID.
-	ID string `json:"id"`
-	// Namespace is the target namespace in the remote cluster.
-	Namespace string `json:"namespace"`
-}
-
 // WorkerResourceSpec defines a compact resource shape. CPU and memory are
 // applied as both requests and limits where this helper is used.
 type WorkerResourceSpec struct {
@@ -227,12 +219,8 @@ type WorkerSpec struct {
 
 	// DeployMode specifies where the worker pod runs.
 	// "Local" (default): created in the controller's own cluster.
-	// "Remote": created in the cluster identified by TargetCluster.
+	// "Edge": externally hosted outside the controller's managed pod path.
 	DeployMode *string `json:"deployMode,omitempty"`
-
-	// TargetCluster specifies the remote cluster target for deployment.
-	// Required when DeployMode is "Remote".
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
 
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the worker pod (same cluster, namespace, name).
@@ -247,7 +235,6 @@ type WorkerSpec struct {
 
 	// BackendRuntime specifies the container runtime backend for this worker.
 	// "pod" (default): creates a standard Kubernetes Pod.
-	// "sandbox": creates a Sandbox CR via the configured sandbox plugin.
 	// Only effective in incluster mode; ignored in embedded (Docker) mode.
 	BackendRuntime *string `json:"backendRuntime,omitempty"`
 
@@ -261,18 +248,12 @@ type WorkerSpec struct {
 	// field is absent.
 	Labels map[string]string `json:"labels,omitempty"`
 
-	// Volumes declares custom storage providers available to sandbox workers.
-	// Built-in worker-deps token/env/data use the AgentTeams instance-level
-	// workspace OSS volume automatically and are not declared here. Pod workers
-	// must not set this field.
+	// Volumes is reserved for runtimes that provide custom external storage
+	// mounts. It is not supported by the open-source pod backend.
 	Volumes []WorkerVolumeSpec `json:"volumes,omitempty"`
 
-	// Mounts declares custom sandbox claim-time logical mounts. The reserved
-	// names token/env/data are accepted for compatibility with older CRs but
-	// are ignored; controller always generates those three built-in mounts from
-	// the instance-level worker-deps layout. Other names must reference
-	// spec.volumes[].name and are translated to SandboxClaim dynamic mounts.
-	// Pod workers must not set this field.
+	// Mounts is reserved for runtimes that provide custom dynamic mounts. It is
+	// not supported by the open-source pod backend.
 	Mounts []WorkerMountSpec `json:"mounts,omitempty"`
 }
 
@@ -402,16 +383,13 @@ type WorkerStatus struct {
 
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
-	// Values: "pod" (default), "sandbox", or "" (unset = migration, treated as spec default).
+	// Values: "pod" (default), or "" (unset = migration, treated as spec default).
 	// Only meaningful in incluster mode; Docker mode leaves this empty.
 	BackendRuntime string `json:"backendRuntime,omitempty"`
 
-	// DeployMode/TargetCluster record where the current backend resource was
-	// actually provisioned. Once set, changing spec.deployMode or
-	// spec.targetCluster is rejected to avoid orphaning runtime resources in
-	// the previous cluster.
-	DeployMode    string             `json:"deployMode,omitempty"`
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
+	// DeployMode records where the current backend resource was actually
+	// provisioned.
+	DeployMode string `json:"deployMode,omitempty"`
 }
 
 // ExposedPortStatus records a port that has been exposed via Higress.
@@ -526,12 +504,8 @@ type LeaderSpec struct {
 
 	// DeployMode specifies where the leader pod runs.
 	// "Local" (default): created in the controller's own cluster.
-	// "Remote": created in the cluster identified by TargetCluster.
+	// "Edge": externally hosted outside the controller's managed pod path.
 	DeployMode *string `json:"deployMode,omitempty"`
-
-	// TargetCluster specifies the remote cluster target for deployment.
-	// Required when DeployMode is "Remote".
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
 
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the leader pod (same cluster, namespace, name).
@@ -581,12 +555,8 @@ type TeamWorkerSpec struct {
 
 	// DeployMode specifies where the team worker pod runs.
 	// "Local" (default): created in the controller's own cluster.
-	// "Remote": created in the cluster identified by TargetCluster.
+	// "Edge": externally hosted outside the controller's managed pod path.
 	DeployMode *string `json:"deployMode,omitempty"`
-
-	// TargetCluster specifies the remote cluster target for deployment.
-	// Required when DeployMode is "Remote".
-	TargetCluster *TargetClusterSpec `json:"targetCluster,omitempty"`
 
 	// ServiceEnabled controls whether a ClusterIP Service is created
 	// alongside the team worker pod (same cluster, namespace, name).

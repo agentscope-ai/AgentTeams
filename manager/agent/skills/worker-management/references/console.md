@@ -7,7 +7,7 @@ QwenPaw Workers are created **without** the console by default to save ~500MB RA
 ## Constraints
 
 - Only local QwenPaw containers support this
-- Remote workers and openclaw workers do NOT — tell admin to SSH directly
+- Controller-managed workers that do not expose a Manager-local container, and openclaw workers, do NOT support this console
 - Not available on cloud (SAE) — use SAE console or SLS logs instead
 
 ## Commands

@@ -45,7 +45,7 @@ func NewHTTPClient(baseURL string, httpClient *http.Client) *HTTPClient {
 // Issue implements Client.
 func (c *HTTPClient) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error) {
 	if c.baseURL == "" {
-		return nil, errors.New("credprovider: base URL not configured (HICLAW_CREDENTIAL_PROVIDER_URL)")
+		return nil, errors.New("credprovider: base URL not configured (AGENTTEAMS_CREDENTIAL_PROVIDER_URL)")
 	}
 	body, err := json.Marshal(req)
 	if err != nil {

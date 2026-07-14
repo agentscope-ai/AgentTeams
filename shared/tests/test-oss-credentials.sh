@@ -68,7 +68,7 @@ MOCK_JQ
 }
 
 run_refresh() {
-    local case_name="$1" cluster_id="${2:-}"
+    local case_name="$1"
     local mockbin="${TMPDIR_ROOT}/${case_name}-bin"
     local curl_log="${TMPDIR_ROOT}/${case_name}-curl.log"
     create_mock_tools "${mockbin}"
@@ -78,13 +78,8 @@ run_refresh() {
         _OSS_CRED_FILE="${TMPDIR_ROOT}/${case_name}-mc.env"
         export PATH="${mockbin}:${PATH}"
         export TEST_CURL_LOG="${curl_log}"
-        export HICLAW_CONTROLLER_URL="http://controller:8090"
-        export HICLAW_AUTH_TOKEN="controller-token"
-        if [ -n "${cluster_id}" ]; then
-            export HICLAW_CLUSTER_ID="${cluster_id}"
-        else
-            unset HICLAW_CLUSTER_ID
-        fi
+        export AGENTTEAMS_CONTROLLER_URL="http://controller:8090"
+        export AGENTTEAMS_AUTH_TOKEN="controller-token"
         _oss_refresh_sts_via_controller >/dev/null
     )
 
@@ -94,14 +89,8 @@ run_refresh() {
 echo ""
 echo "=== oss credentials STS controller request ==="
 
-with_cluster="$(run_refresh with-cluster remote-cluster-a)"
-assert_contains "cluster id should be sent as controller header" "X-HiClaw-Cluster-ID: remote-cluster-a" "${with_cluster}"
-assert_contains "AgentTeams cluster header should also be sent" "X-AgentTeams-Cluster-ID: remote-cluster-a" "${with_cluster}"
-assert_contains "bearer token should still be sent" "Authorization: Bearer controller-token" "${with_cluster}"
-
-without_cluster="$(run_refresh without-cluster)"
-assert_not_contains "cluster header should be omitted when HICLAW_CLUSTER_ID is empty" "X-HiClaw-Cluster-ID:" "${without_cluster}"
-assert_not_contains "AgentTeams cluster header should be omitted when cluster id is empty" "X-AgentTeams-Cluster-ID:" "${without_cluster}"
-assert_contains "bearer token should be sent without cluster id" "Authorization: Bearer controller-token" "${without_cluster}"
+request="$(run_refresh sts-request)"
+assert_not_contains "cluster header should not be sent" "X-AgentTeams-Cluster-ID:" "${request}"
+assert_contains "bearer token should be sent" "Authorization: Bearer controller-token" "${request}"
 
 echo "All oss-credentials tests passed"

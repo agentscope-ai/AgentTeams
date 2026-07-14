@@ -105,18 +105,25 @@ class Worker:
             local_dir=self.config.workspace_dir,
         )
 
-        console.print("[yellow]Pulling all files from MinIO...[/yellow]")
-        try:
-            self.sync.mirror_all()
-        except Exception as exc:
-            console.print(f"[red]Failed to mirror from MinIO: {exc}[/red]")
-            return False
-
-        try:
-            openclaw_cfg = self.sync.get_config()
-        except Exception as exc:
-            console.print(f"[red]Failed to read openclaw.json: {exc}[/red]")
-            return False
+        openclaw_cfg = None
+        max_attempts = 12
+        for attempt in range(1, max_attempts + 1):
+            console.print("[yellow]Pulling all files from MinIO...[/yellow]")
+            try:
+                self.sync.mirror_all()
+                openclaw_cfg = self.sync.get_config()
+                break
+            except Exception as exc:
+                if attempt >= max_attempts:
+                    console.print(f"[red]Failed to read worker config from MinIO: {exc}[/red]")
+                    return False
+                logger.warning(
+                    "Worker config not ready yet (attempt %s/%s): %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                await asyncio.sleep(5)
 
         # Refresh Matrix credentials (E2EE relies on a fresh device_id).
         openclaw_cfg = self._matrix_relogin(openclaw_cfg)
@@ -124,11 +131,11 @@ class Worker:
         # When we run on the host (dev) and the FS endpoint includes a port,
         # use that port as the gateway port as well so the bridge's _port_remap
         # rewrites container-internal :8080 references correctly.
-        if not os.environ.get("HICLAW_PORT_GATEWAY"):
+        if not os.environ.get("AGENTTEAMS_PORT_GATEWAY"):
             from urllib.parse import urlparse
             parsed = urlparse(self.config.minio_endpoint)
             if parsed.port:
-                os.environ["HICLAW_PORT_GATEWAY"] = str(parsed.port)
+                os.environ["AGENTTEAMS_PORT_GATEWAY"] = str(parsed.port)
 
         self._hermes_home.mkdir(parents=True, exist_ok=True)
         os.environ["HERMES_HOME"] = str(self._hermes_home)

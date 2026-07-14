@@ -385,7 +385,7 @@ jobs:
       - name: Run embedded integration tests
         id: tests
         env:
-          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY || secrets.HICLAW_LLM_API_KEY }}
           AGENTTEAMS_LLM_PROVIDER: qwen
           AGENTTEAMS_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
           AGENTTEAMS_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
@@ -663,7 +663,7 @@ jobs:
 
       - name: Install AgentTeams
         env:
-          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY || secrets.HICLAW_LLM_API_KEY }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
           AGENTTEAMS_NON_INTERACTIVE=1 \
@@ -696,7 +696,7 @@ jobs:
 
       - name: Run integration tests
         env:
-          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY || secrets.HICLAW_LLM_API_KEY }}
         run: |
           TEST_GATEWAY_PORT=18080 TEST_CONSOLE_PORT=18001 TEST_MANAGER_CONTAINER=agentteams-manager \
             ./tests/run-all-tests.sh --skip-build --use-existing --test-filter "$NON_GITHUB_TESTS"

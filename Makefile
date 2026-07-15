@@ -799,7 +799,7 @@ verify: ## Run post-install verification against the running Manager container
 
 status: ## Show status of Manager and all Worker containers
 	@echo "==> AgentTeams container status:"
-	@docker ps -a --filter "name=hiclaw-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null \
+	@docker ps -a --filter "name=agentteams-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null \
 		|| echo "  (no containers found or Docker not available)"
 
 logs: ## Show recent logs for Manager and all Workers (override with LINES=N, default 50)
@@ -823,7 +823,7 @@ clean: ## Remove local images and test containers
 	@echo "==> Stopping and removing test containers..."
 	-docker stop $(TEST_CONTAINER) 2>/dev/null
 	-docker rm $(TEST_CONTAINER) 2>/dev/null
-	-docker ps -a --filter "name=hiclaw-test-worker-" --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null
+	-docker ps -a --filter "name=agentteams-test-worker-" --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null
 	@echo "==> Removing local images..."
 	-docker rmi $(LOCAL_MANAGER) 2>/dev/null
 	-docker rmi $(LOCAL_WORKER) 2>/dev/null

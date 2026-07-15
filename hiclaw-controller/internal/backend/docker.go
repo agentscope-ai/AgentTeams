@@ -140,7 +140,9 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 
 	// Infer WorkingDir from HOME env if not set
 	if req.WorkingDir == "" {
-		if home, ok := req.Env["HOME"]; ok {
+		if req.Runtime == RuntimeOpenHuman {
+			req.WorkingDir = "/home/openhuman/.openhuman"
+		} else if home, ok := req.Env["HOME"]; ok {
 			req.WorkingDir = home
 		}
 	}

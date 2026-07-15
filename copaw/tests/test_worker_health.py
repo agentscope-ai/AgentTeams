@@ -8,7 +8,7 @@ import pytest
 
 from copaw_worker.config import WorkerConfig
 from copaw_worker.health import ComponentHealth
-from copaw_worker.worker import Worker
+from copaw_worker.worker import Worker, _read_prompt_text_stable
 
 
 class _FakeWorkerAPIServer:
@@ -54,6 +54,26 @@ def _config(tmp_path):
 
 def _health_json(tmp_path):
     return json.loads((tmp_path / "alice" / ".copaw" / "health.json").read_text())
+
+
+def test_read_prompt_text_stable_retries_partial_utf8(tmp_path, monkeypatch):
+    prompt = tmp_path / "AGENTS.md"
+    prompt.write_bytes("hello ".encode("utf-8") + "中".encode("utf-8")[:2])
+
+    def finish_write(_delay):
+        prompt.write_text("hello 中", encoding="utf-8")
+
+    monkeypatch.setattr("copaw_worker.worker.time.sleep", finish_write)
+
+    assert _read_prompt_text_stable(prompt, attempts=2, delay=0.01) == "hello 中"
+
+
+def test_read_prompt_text_stable_falls_back_after_retries(tmp_path, monkeypatch):
+    prompt = tmp_path / "SOUL.md"
+    prompt.write_bytes(b"broken \xe4\xb8")
+    monkeypatch.setattr("copaw_worker.worker.time.sleep", lambda _delay: None)
+
+    assert _read_prompt_text_stable(prompt, attempts=2, delay=0.01) == "broken �"
 
 
 def test_worker_port_defaults_to_console_port_plus_one(tmp_path):

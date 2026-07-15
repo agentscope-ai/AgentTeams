@@ -1,5 +1,17 @@
 # Create Team
 
+## Before Creation
+
+Only create a Team when the admin explicitly asks you to create one. If the admin is asking about an existing Team, Leader DM, Team Room, or Worker relationship, use `hiclaw get team <TEAM_NAME> -o json` and explain the current state instead.
+
+Before every create request, check whether the Team already exists:
+
+```bash
+hiclaw get team <TEAM_NAME> -o json
+```
+
+If the Team exists, stop. Do not run `hiclaw create team` again. Summarize the existing Team's Leader, Team Room, Leader DM, and Worker roster, then ask whether the admin wants to update the Team.
+
 ## CLI Usage
 
 ```bash

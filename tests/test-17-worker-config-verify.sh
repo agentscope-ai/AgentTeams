@@ -171,6 +171,13 @@ else
     log_fail "file-sync SKILL.md does not use 'coordinator'"
 fi
 
+FILESYNC_SCRIPT=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}/skills/file-sync/scripts/hiclaw-sync.sh" 2>/dev/null || echo "")
+if echo "${FILESYNC_SCRIPT}" | grep -q -- '--exclude "openclaw.json"'; then
+    log_pass "file-sync script preserves local openclaw.json during mirror"
+else
+    log_fail "file-sync script does not exclude openclaw.json from bulk mirror"
+fi
+
 # ============================================================
 # Section 4: Verify other MinIO artifacts
 # ============================================================

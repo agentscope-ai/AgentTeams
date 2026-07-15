@@ -29,7 +29,7 @@ case "$1" in
         exit 0
         ;;
     ps)
-        echo "hiclaw-manager"
+        echo "agentteams-manager"
         exit 0
         ;;
     cp)
@@ -37,7 +37,7 @@ case "$1" in
         ;;
     exec)
         shift
-        if [ "${1:-}" = "hiclaw-manager" ]; then
+        if [ "${1:-}" = "agentteams-manager" ]; then
             shift
         fi
         case "${1:-}" in

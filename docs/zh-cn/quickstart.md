@@ -59,7 +59,7 @@ YAML 批量管理请使用 `install/hiclaw-apply.sh`（将文件拷入 `agenttea
 
 ### 1.2 登录 Element Web
 
-在浏览器中打开 http://127.0.0.1:18088（直接访问端口）。如果已将域名添加到 `/etc/hosts`，也可通过网关访问 http://matrix-client-local.hiclaw.io:18080。
+在浏览器中打开 http://127.0.0.1:18088（直接访问端口）。如果已将域名添加到 `/etc/hosts`，也可通过网关访问 http://matrix-client-local.agentteams.io:18080。
 
 使用管理员凭据登录。
 
@@ -69,7 +69,7 @@ YAML 批量管理请使用 `install/hiclaw-apply.sh`（将文件拷入 `agenttea
 - [ ] **`agentteams-manager`** 正在运行：`docker ps | grep agentteams-manager`
 - [ ] 浏览器可访问 Element Web：http://127.0.0.1:18088
 - [ ] 使用管理员凭据登录成功
-- [ ] Higress 控制台：http://localhost:18001（网关默认映射到宿主机 **18080**；Matrix / Element 的 `*-local.hiclaw.io` 经该网关访问）
+- [ ] Higress 控制台：http://localhost:18001（网关默认映射到宿主机 **18080**；Matrix / Element 的 `*-local.agentteams.io` 经该网关访问）
 - [ ] MinIO 在 **controller 容器内**可访问（嵌入式安装默认**不**把 MinIO 控制台端口发布到宿主机）：`docker exec agentteams-controller curl -sf http://127.0.0.1:9000/minio/health/live`
 - [ ] （仅 OpenClaw Manager）OpenClaw 控制 UI：http://127.0.0.1:18888
 

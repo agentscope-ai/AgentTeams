@@ -61,7 +61,7 @@ For YAML-driven workflows, use `install/hiclaw-apply.sh` (copies files into `age
 
 ### 1.2 Login to Element Web
 
-Open http://127.0.0.1:18088 in your browser (direct access port). Alternatively, access via the gateway at http://matrix-client-local.hiclaw.io:18080 if you've added the domain to your `/etc/hosts`.
+Open http://127.0.0.1:18088 in your browser (direct access port). Alternatively, access via the gateway at http://matrix-client-local.agentteams.io:18080 if you've added the domain to your `/etc/hosts`.
 
 Login with your admin credentials.
 
@@ -71,7 +71,7 @@ Login with your admin credentials.
 - [ ] **`agentteams-manager`** is running: `docker ps | grep agentteams-manager`
 - [ ] Element Web loads in browser at http://127.0.0.1:18088
 - [ ] Login with admin credentials succeeds
-- [ ] Higress Console at http://localhost:18001 (gateway **host** port defaults to **18080**; Matrix/Element use that gateway for `*-local.hiclaw.io` hostnames)
+- [ ] Higress Console at http://localhost:18001 (gateway **host** port defaults to **18080**; Matrix/Element use that gateway for `*-local.agentteams.io` hostnames)
 - [ ] MinIO is reachable **inside** the controller container (embedded install does **not** publish MinIO console on the host by default): `docker exec agentteams-controller curl -sf http://127.0.0.1:9000/minio/health/live`
 - [ ] (OpenClaw Manager only) OpenClaw control UI at http://127.0.0.1:18888
 

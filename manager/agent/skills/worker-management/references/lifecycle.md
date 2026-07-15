@@ -22,6 +22,18 @@ bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --ac
 bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --action delete --worker <name>
 ```
 
+## Delete Completion Boundary
+
+After a delete, verify with one `hiclaw get workers` or `hiclaw get workers -o json`.
+If the target Worker is absent, the deletion task is complete. Do not continue
+probing Matrix room lists or trying ad hoc room cleanup commands. A room that is
+still visible in Element/Matrix after the Worker is gone is usually client
+history or cache; tell the admin to leave/hide it from the client UI if needed.
+
+If verification is inconclusive, retry the same diagnostic command at most once.
+After two empty, identical, or malformed results, stop running tools and report
+the confirmed state instead of continuing a loop.
+
 ## start vs create
 
 | Situation | Command |

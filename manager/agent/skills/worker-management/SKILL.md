@@ -59,6 +59,7 @@ hiclaw create worker --name <NAME> --no-wait \
 - **`file-sync`, `task-progress`, `project-participation` are default skills** — always included, cannot be removed
 - **Use `hiclaw-find-worker` only for Nacos-backed market imports or Worker discovery during task assignment** — generic Worker creation and lifecycle changes stay in this skill
 - **Peer mentions cause loops if not briefed** — after enabling, explicitly tell Workers to only @mention peers for blocking info, never for acknowledgments
+- **Stop repeated diagnostics** — if the same lifecycle/status command returns empty, identical, or malformed output twice, stop and report what is known. Do not keep retrying `copaw channels list` or similar room probes after Worker deletion.
 - **Always notify Workers to `file-sync` after writing files they need** — the 5-minute periodic sync is fallback only
 - **Workers are stateless** — all state is in centralized storage. Reset = recreate config files
 - **Matrix accounts persist in Tuwunel** (cannot be deleted via API) — reuse same username on reset

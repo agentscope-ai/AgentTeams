@@ -18,8 +18,11 @@ bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --ac
 bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --action stop --worker <name>
 bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --action start --worker <name>
 
-# Delete a worker (stop + remove container + clean up lifecycle state)
-bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --action delete --worker <name>
+# Delete a Worker permanently through the controller
+bash /opt/hiclaw/agent/skills/worker-management/scripts/delete-worker.sh --worker <name>
+
+# Clean local task/lifecycle/registry records after deletion
+bash /opt/hiclaw/agent/skills/worker-management/scripts/delete-worker.sh --worker <name> --records-only
 ```
 
 ## start vs create
@@ -29,7 +32,9 @@ bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --ac
 | Container stopped | `lifecycle-worker.sh --action start` — restarts existing container |
 | Container not found | `create-worker.sh` — full registration flow |
 | Worker needs reset | `create-worker.sh` — removes old, rebuilds |
-| Worker permanently removed | `lifecycle-worker.sh --action delete` — stops, removes container, cleans lifecycle state |
+| Worker permanently removed | `delete-worker.sh --worker <name>` — deletes the Worker CR through `hiclaw delete worker <name>` |
+| Deleted Worker's local records need cleanup | `delete-worker.sh --worker <name> --records-only` — removes local `state.json`, `worker-lifecycle.json`, and `workers-registry.json` entries |
+| Remote worker | Admin runs install command on target machine |
 
 ## Changing Idle Timeout
 
@@ -37,6 +42,14 @@ Default: 720 minutes (12 hours). Change via:
 ```bash
 jq '.idle_timeout_minutes = 60' ~/worker-lifecycle.json > /tmp/lc.json && mv /tmp/lc.json ~/worker-lifecycle.json
 ```
+
+## Get Remote Worker Install Command
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/get-worker-install-cmd.sh --worker <name>
+```
+
+Provide the `install_cmd` **verbatim in a code block** — do NOT redact any values.
 
 ## Heartbeat Check (automated every 15 minutes)
 

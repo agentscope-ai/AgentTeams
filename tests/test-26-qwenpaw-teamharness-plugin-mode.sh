@@ -125,8 +125,8 @@ _k8s_api() {
     local path="$3"
 
     if [ "${method}" = "GET" ] || [ "${method}" = "DELETE" ]; then
-        docker exec "${TEST_CONTROLLER_CONTAINER:-hiclaw-controller}" sh -c '
-            token="$(cut -d, -f1 /data/hiclaw-controller/pki/token.csv)"
+        docker exec "${TEST_CONTROLLER_CONTAINER:-agentteams-controller}" sh -c '
+            token="$(cut -d, -f1 /data/agentteams-controller/pki/token.csv)"
             curl -ksS -X "$1" \
                 -H "Authorization: Bearer ${token}" \
                 "https://127.0.0.1:6443$2"
@@ -134,8 +134,8 @@ _k8s_api() {
         return $?
     fi
 
-    docker exec -i "${TEST_CONTROLLER_CONTAINER:-hiclaw-controller}" sh -c '
-        token="$(cut -d, -f1 /data/hiclaw-controller/pki/token.csv)"
+    docker exec -i "${TEST_CONTROLLER_CONTAINER:-agentteams-controller}" sh -c '
+        token="$(cut -d, -f1 /data/agentteams-controller/pki/token.csv)"
         curl -ksS -X "$1" \
             -H "Authorization: Bearer ${token}" \
             -H "Content-Type: $2" \
@@ -147,7 +147,7 @@ _k8s_api() {
 _k8s_resource_path() {
     local plural="$1"
     local name="${2:-}"
-    local path="/apis/hiclaw.io/v1beta1/namespaces/${K8S_NAMESPACE}/${plural}"
+    local path="/apis/agentteams.io/v1beta1/namespaces/${K8S_NAMESPACE}/${plural}"
     if [ -n "${name}" ]; then
         path="${path}/${name}"
     fi
@@ -564,7 +564,7 @@ _create_qwenpaw_worker_cr() {
         --arg soul "${soul}" \
         --argjson labels "${labels}" \
         '{
-            apiVersion:"hiclaw.io/v1beta1",
+            apiVersion:"agentteams.io/v1beta1",
             kind:"Worker",
             metadata:{name:$name, namespace:$namespace, labels:$labels},
             spec:{
@@ -589,7 +589,7 @@ _create_decoupled_team_cr() {
         --arg worker "${TEST_WORKER}" \
         --argjson labels "${labels}" \
         '{
-            apiVersion:"hiclaw.io/v1beta1",
+            apiVersion:"agentteams.io/v1beta1",
             kind:"Team",
             metadata:{name:$name, namespace:$namespace, labels:$labels},
             spec:{

@@ -1,0 +1,117 @@
+server:
+  name: minimax-image-mcp-server
+  config:
+    accessToken: ""
+
+tools:
+- name: generate_image
+  description: "Generate images from a text prompt."
+  args:
+  - name: model
+    description: "Image generation model. Use image-01."
+    type: string
+    required: true
+  - name: prompt
+    description: "Text description of the image, up to 1500 characters."
+    type: string
+    required: true
+  - name: aspect_ratio
+    description: "Optional aspect ratio. Supported values: 1:1, 16:9, 4:3, 3:2, 2:3, 3:4, 9:16, and 21:9."
+    type: string
+    required: false
+  - name: width
+    description: "Optional width from 512 to 2048, divisible by 8. Set together with height and omit aspect_ratio."
+    type: integer
+    required: false
+  - name: height
+    description: "Optional height from 512 to 2048, divisible by 8. Set together with width and omit aspect_ratio."
+    type: integer
+    required: false
+  - name: response_format
+    description: "Response format: url or base64. Defaults to url; returned URLs expire after 24 hours."
+    type: string
+    required: false
+  - name: seed
+    description: "Optional random seed for reproducible output."
+    type: integer
+    required: false
+  - name: n
+    description: "Number of images to generate, from 1 to 9. Defaults to 1."
+    type: integer
+    required: false
+  - name: prompt_optimizer
+    description: "Whether to optimize the prompt automatically. Defaults to false."
+    type: boolean
+    required: false
+  requestTemplate:
+    url: "https://api.minimax.io/v1/image_generation"
+    method: POST
+    argsToJsonBody: true
+    headers:
+    - key: Authorization
+      value: "Bearer {{.config.accessToken}}"
+    - key: Content-Type
+      value: "application/json"
+
+- name: generate_image_from_reference
+  description: "Generate images from a prompt and one or more character reference images."
+  args:
+  - name: model
+    description: "Image generation model. Use image-01 or image-01-live."
+    type: string
+    required: true
+  - name: prompt
+    description: "Text description of the image, up to 1500 characters."
+    type: string
+    required: true
+  - name: subject_reference
+    description: "Character references. Each item needs type set to character and image_file set to a public image URL or base64 data URL."
+    type: array
+    required: true
+    items:
+      type: object
+      required:
+      - type
+      - image_file
+      properties:
+        type:
+          type: string
+        image_file:
+          type: string
+  - name: aspect_ratio
+    description: "Optional aspect ratio. Supported values: 1:1, 16:9, 4:3, 3:2, 2:3, 3:4, 9:16, and 21:9."
+    type: string
+    required: false
+  - name: width
+    description: "Optional width from 512 to 2048, divisible by 8. Set together with height and omit aspect_ratio; supported by image-01."
+    type: integer
+    required: false
+  - name: height
+    description: "Optional height from 512 to 2048, divisible by 8. Set together with width and omit aspect_ratio; supported by image-01."
+    type: integer
+    required: false
+  - name: response_format
+    description: "Response format: url or base64. Defaults to url; returned URLs expire after 24 hours."
+    type: string
+    required: false
+  - name: seed
+    description: "Optional random seed for reproducible output."
+    type: integer
+    required: false
+  - name: n
+    description: "Number of images to generate, from 1 to 9. Defaults to 1."
+    type: integer
+    required: false
+  - name: prompt_optimizer
+    description: "Whether to optimize the prompt automatically. Defaults to false."
+    type: boolean
+    required: false
+  requestTemplate:
+    url: "https://api.minimax.io/v1/image_generation"
+    method: POST
+    argsToJsonBody: true
+    headers:
+    - key: Authorization
+      value: "Bearer {{.config.accessToken}}"
+    - key: Content-Type
+      value: "application/json"

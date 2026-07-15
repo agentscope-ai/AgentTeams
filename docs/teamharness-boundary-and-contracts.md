@@ -18,7 +18,7 @@ TeamHarness owns:
   projects, task delegation, and task execution.
 - Explicit MCP tools for team messages, shared files, project flow, task flow,
   and plugin health.
-- A single plugin tarball installed through the HiClaw `agentteams` CLI by
+- A single plugin tarball installed through the AgentTeams `agentteams` CLI by
   default and compatible with LoongSuite `plugin-probe` for local runtimes.
 
 TeamHarness does not own:
@@ -64,7 +64,7 @@ Runtime adapter to TeamHarness:
 TeamHarness plugin package to AgentSpec package:
 
 - The TeamHarness plugin package is runtime infrastructure.
-- `desired.agentPackage` in `runtime.yaml` is a HiClaw AgentSpec package and
+- `desired.agentPackage` in `runtime.yaml` is an AgentTeams AgentSpec package and
   belongs to the worker desired-state apply path.
 - Updating an AgentSpec package must not be modeled as updating the TeamHarness
   plugin package.

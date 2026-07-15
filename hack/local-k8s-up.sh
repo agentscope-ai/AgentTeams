@@ -1,54 +1,61 @@
 #!/bin/bash
-# local-k8s-up.sh — Create a kind cluster and deploy HiClaw via Helm.
+# local-k8s-up.sh — Create a kind cluster and deploy AgentTeams via Helm.
 #
 # Prerequisites:
 #   - kind: https://kind.sigs.k8s.io/
 #   - helm: https://helm.sh/
 #   - kubectl
+#   - Docker and GNU Make
 #
 # Required environment variables:
-#   HICLAW_LLM_API_KEY          LLM API key
+#   AGENTTEAMS_LLM_API_KEY          LLM API key
 #
 # Optional environment variables:
-#   HICLAW_REGISTRATION_TOKEN   Matrix registration token (auto-generated if empty)
-#   HICLAW_ADMIN_PASSWORD       Admin password (auto-generated if empty)
-#   HICLAW_CLUSTER_NAME         kind cluster name (default: hiclaw)
-#   HICLAW_NAMESPACE            K8s namespace (default: hiclaw)
-#   HICLAW_SKIP_KIND            Skip kind cluster creation (default: 0)
-#   HICLAW_SKIP_BUILD           Skip local image build (default: 0, set to 1 to use remote images)
-#   HICLAW_BUILD_K8S_IMAGE      Build lightweight k8s manager image instead of all-in-one (default: 0)
+#   AGENTTEAMS_REGISTRATION_TOKEN   Matrix registration token (auto-generated if empty)
+#   AGENTTEAMS_ADMIN_PASSWORD       Admin password (auto-generated if empty)
+#   AGENTTEAMS_CLUSTER_NAME         kind cluster name (default: agentteams)
+#   AGENTTEAMS_NAMESPACE            K8s namespace (default: agentteams)
+#   AGENTTEAMS_SKIP_KIND            Skip kind cluster creation (default: 0)
+#   AGENTTEAMS_SKIP_BUILD           Reuse local images already loaded into kind (default: 0)
+#   AGENTTEAMS_CONTROLLER_REPLICAS  Controller replica count (default: 1)
+#   AGENTTEAMS_MANAGER_RUNTIME      Manager runtime: openclaw or copaw (default: openclaw)
 #
 # Usage:
-#   HICLAW_LLM_API_KEY=sk-xxx ./hack/local-k8s-up.sh
+#   AGENTTEAMS_LLM_API_KEY=sk-xxx ./hack/local-k8s-up.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CLUSTER_NAME="${HICLAW_CLUSTER_NAME:-hiclaw}"
-NAMESPACE="${HICLAW_NAMESPACE:-hiclaw}"
-SKIP_KIND="${HICLAW_SKIP_KIND:-0}"
-SKIP_BUILD="${HICLAW_SKIP_BUILD:-0}"
-BUILD_K8S_IMAGE="${HICLAW_BUILD_K8S_IMAGE:-0}"
-CONTROLLER_REPLICAS="${HICLAW_CONTROLLER_REPLICAS:-1}"
+CLUSTER_NAME="${AGENTTEAMS_CLUSTER_NAME:-agentteams}"
+NAMESPACE="${AGENTTEAMS_NAMESPACE:-agentteams}"
+SKIP_KIND="${AGENTTEAMS_SKIP_KIND:-0}"
+SKIP_BUILD="${AGENTTEAMS_SKIP_BUILD:-0}"
+CONTROLLER_REPLICAS="${AGENTTEAMS_CONTROLLER_REPLICAS:-1}"
+MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
 
-LLM_API_KEY="${HICLAW_LLM_API_KEY:-}"
-REGISTRATION_TOKEN="${HICLAW_REGISTRATION_TOKEN:-}"
-ADMIN_PASSWORD="${HICLAW_ADMIN_PASSWORD:-}"
+LLM_API_KEY="${AGENTTEAMS_LLM_API_KEY:-}"
+REGISTRATION_TOKEN="${AGENTTEAMS_REGISTRATION_TOKEN:-}"
+ADMIN_PASSWORD="${AGENTTEAMS_ADMIN_PASSWORD:-}"
 
-log() { echo -e "\033[36m[HiClaw K8s]\033[0m $1"; }
-error() { echo -e "\033[31m[HiClaw K8s ERROR]\033[0m $1" >&2; exit 1; }
+log() { echo -e "\033[36m[AgentTeams K8s]\033[0m $1"; }
+error() { echo -e "\033[31m[AgentTeams K8s ERROR]\033[0m $1" >&2; exit 1; }
 
 # ── Preflight checks ──────────────────────────────────────────────────────
 
-for cmd in kind helm kubectl docker; do
+for cmd in kind helm kubectl docker make; do
     command -v "$cmd" >/dev/null 2>&1 || error "$cmd is required but not found"
 done
 
 if [ -z "$LLM_API_KEY" ]; then
-    error "HICLAW_LLM_API_KEY is required. Example: HICLAW_LLM_API_KEY=sk-xxx $0"
+    error "AGENTTEAMS_LLM_API_KEY is required. Example: AGENTTEAMS_LLM_API_KEY=sk-xxx $0"
 fi
+
+case "$MANAGER_RUNTIME" in
+    openclaw|copaw) ;;
+    *) error "AGENTTEAMS_MANAGER_RUNTIME must be 'openclaw' or 'copaw'" ;;
+esac
 
 # ── Step 1: Create kind cluster ───────────────────────────────────────────
 
@@ -61,71 +68,24 @@ if [ "$SKIP_KIND" = "0" ]; then
     fi
     kubectl cluster-info --context "kind-${CLUSTER_NAME}"
 else
-    log "Skipping kind cluster creation (HICLAW_SKIP_KIND=1)"
+    log "Skipping kind cluster creation (AGENTTEAMS_SKIP_KIND=1)"
 fi
 
 # ── Step 2: Build & load local images ──────────────────────────────────────
 
-MANAGER_IMAGE="hiclaw/manager:local"
-COPAW_MANAGER_IMAGE="hiclaw/manager-copaw:local"
-CONTROLLER_IMAGE="hiclaw/hiclaw-controller:local"
-WORKER_IMAGE="hiclaw/worker-agent:local"
-COPAW_WORKER_IMAGE="hiclaw/copaw-worker:local"
-HERMES_WORKER_IMAGE="hiclaw/hermes-worker:local"
-OPENHUMAN_WORKER_IMAGE="hiclaw/openhuman-worker:local"
-HELM_IMAGE_OVERRIDES=""
+MANAGER_IMAGE="agentteams/manager:local"
+COPAW_MANAGER_IMAGE="agentteams/manager-copaw:local"
+CONTROLLER_IMAGE="agentteams/agentteams-controller:local"
+WORKER_IMAGE="agentteams/worker-agent:local"
+COPAW_WORKER_IMAGE="agentteams/copaw-worker:local"
+HERMES_WORKER_IMAGE="agentteams/hermes-worker:local"
+OPENHUMAN_WORKER_IMAGE="agentteams/openhuman-worker:local"
 
 if [ "$SKIP_BUILD" = "0" ]; then
     log "Building local images..."
-
-    # Controller
-    log "Building controller image..."
-    docker build -t "$CONTROLLER_IMAGE" -f "${PROJECT_ROOT}/hiclaw-controller/Dockerfile" "${PROJECT_ROOT}/hiclaw-controller"
-
-    # Manager (choose between all-in-one and k8s-lightweight)
-    if [ "$BUILD_K8S_IMAGE" = "1" ]; then
-        log "Building manager image (lightweight k8s)..."
-        docker build -t "$MANAGER_IMAGE" \
-            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base:20260423-8359cbc \
-            --build-arg HICLAW_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-            -f "${PROJECT_ROOT}/manager/Dockerfile.k8s" "${PROJECT_ROOT}"
-    else
-        log "Building manager image (all-in-one)..."
-        docker build -t "$MANAGER_IMAGE" \
-            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base:20260423-8359cbc \
-            --build-arg HICLAW_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-            -f "${PROJECT_ROOT}/manager/Dockerfile" "${PROJECT_ROOT}"
-    fi
-
-    # CoPaw Manager (lightweight Python image with copaw_worker for bridge/sync)
-    log "Building CoPaw manager image..."
-    docker build -t "$COPAW_MANAGER_IMAGE" \
-        --build-arg HICLAW_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-        -f "${PROJECT_ROOT}/manager/Dockerfile.copaw" "${PROJECT_ROOT}"
-
-    # Worker images (openclaw + copaw)
-    log "Building worker image (openclaw)..."
-    docker build -t "$WORKER_IMAGE" \
-        --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base:20260423-8359cbc \
-        --build-arg HICLAW_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-        --build-context shared="${PROJECT_ROOT}/shared/lib" \
-        -f "${PROJECT_ROOT}/worker/Dockerfile" "${PROJECT_ROOT}/worker"
-
-    log "Building worker image (copaw)..."
-    docker build -t "$COPAW_WORKER_IMAGE" \
-        --build-arg HICLAW_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-        --build-context shared="${PROJECT_ROOT}/shared/lib" \
-        -f "${PROJECT_ROOT}/copaw/Dockerfile" "${PROJECT_ROOT}/copaw"
-
-    log "Building worker image (hermes)..."
-    docker build -t "$HERMES_WORKER_IMAGE" \
-        --build-arg HICLAW_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-        --build-context shared="${PROJECT_ROOT}/shared/lib" \
-        -f "${PROJECT_ROOT}/hermes/Dockerfile" "${PROJECT_ROOT}/hermes"
-
-    log "Building worker image (openhuman)..."
-    docker build -t "$OPENHUMAN_WORKER_IMAGE" \
-        -f "${PROJECT_ROOT}/openhuman/Dockerfile" "${PROJECT_ROOT}"
+    make -C "$PROJECT_ROOT" \
+        build-manager build-manager-copaw build-worker build-copaw-worker \
+        build-hermes-worker build-openhuman-worker VERSION=local
 
     log "Loading images into kind cluster..."
     kind load docker-image "$MANAGER_IMAGE" --name "$CLUSTER_NAME"
@@ -160,18 +120,23 @@ if [ "$SKIP_BUILD" = "0" ]; then
         docker save "$img" | docker exec --privileged -i "$CLUSTER_NAME-control-plane" \
             ctr --namespace=k8s.io images import --snapshotter=overlayfs -
     done
-
-    HELM_IMAGE_OVERRIDES="--set manager.image.repository=hiclaw/manager-copaw --set manager.image.tag=local --set manager.image.pullPolicy=Never"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set controller.image.repository=hiclaw/hiclaw-controller --set controller.image.tag=local --set controller.image.pullPolicy=Never"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openclaw.repository=hiclaw/worker-agent --set worker.defaultImage.openclaw.tag=local"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.copaw.repository=hiclaw/copaw-worker --set worker.defaultImage.copaw.tag=local"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.hermes.repository=hiclaw/hermes-worker --set worker.defaultImage.hermes.tag=local"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openhuman.repository=hiclaw/openhuman-worker --set worker.defaultImage.openhuman.tag=local"
-
     log "Local images built and loaded"
 else
-    log "Skipping local build (HICLAW_SKIP_BUILD=1), using remote images"
+    log "Skipping local build (AGENTTEAMS_SKIP_BUILD=1), reusing images already loaded into kind"
 fi
+
+if [ "$MANAGER_RUNTIME" = "copaw" ]; then
+    ACTIVE_MANAGER_IMAGE="$COPAW_MANAGER_IMAGE"
+else
+    ACTIVE_MANAGER_IMAGE="$MANAGER_IMAGE"
+fi
+
+HELM_IMAGE_OVERRIDES="--set manager.image.repository=${ACTIVE_MANAGER_IMAGE%:*} --set manager.image.tag=local --set manager.image.pullPolicy=Never"
+HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set controller.image.repository=${CONTROLLER_IMAGE%:*} --set controller.image.tag=local --set controller.image.pullPolicy=Never"
+HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openclaw.repository=${WORKER_IMAGE%:*} --set worker.defaultImage.openclaw.tag=local"
+HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.copaw.repository=${COPAW_WORKER_IMAGE%:*} --set worker.defaultImage.copaw.tag=local"
+HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.hermes.repository=${HERMES_WORKER_IMAGE%:*} --set worker.defaultImage.hermes.tag=local"
+HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openhuman.repository=${OPENHUMAN_WORKER_IMAGE%:*} --set worker.defaultImage.openhuman.tag=local"
 
 # ── Step 3: Build Helm dependencies ────────────────────────────────────────
 
@@ -182,7 +147,7 @@ helm dependency build "$CHART_DIR"
 
 # ── Step 4: Helm install / upgrade ──────────────────────────────────────────
 
-HELM_SET_OVERRIDES=""
+HELM_SET_OVERRIDES="--set manager.runtime=${MANAGER_RUNTIME}"
 if [ -n "$REGISTRATION_TOKEN" ]; then
     HELM_SET_OVERRIDES="${HELM_SET_OVERRIDES} --set credentials.registrationToken=${REGISTRATION_TOKEN}"
 fi
@@ -193,7 +158,7 @@ if [ "$CONTROLLER_REPLICAS" != "1" ]; then
     HELM_SET_OVERRIDES="${HELM_SET_OVERRIDES} --set controller.replicaCount=${CONTROLLER_REPLICAS}"
 fi
 
-log "Installing HiClaw via Helm..."
+log "Installing AgentTeams via Helm..."
 helm upgrade --install hiclaw "$CHART_DIR" \
     --namespace "$NAMESPACE" --create-namespace \
     --set gateway.publicURL="http://localhost:18080" \
@@ -221,7 +186,7 @@ kubectl wait --for=condition=available deployment -l app.kubernetes.io/component
 
 echo ""
 log "========================================="
-log " HiClaw Local K8s Deployment"
+log " AgentTeams Local K8s Deployment"
 log "========================================="
 echo ""
 log "Cluster:   kind-${CLUSTER_NAME}"
@@ -232,7 +197,7 @@ log "  Username: admin"
 if [ -n "$ADMIN_PASSWORD" ]; then
     log "  Password: ${ADMIN_PASSWORD}"
 else
-    AUTO_ADMIN_PASSWORD=$(kubectl get secret -n "${NAMESPACE}" hiclaw-runtime-env -o jsonpath='{.data.HICLAW_ADMIN_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null)
+    AUTO_ADMIN_PASSWORD=$(kubectl get secret -n "${NAMESPACE}" hiclaw-runtime-env -o jsonpath='{.data.AGENTTEAMS_ADMIN_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null)
     if [ -n "$AUTO_ADMIN_PASSWORD" ]; then
         log "  Password: ${AUTO_ADMIN_PASSWORD}"
     else
@@ -243,7 +208,7 @@ echo ""
 if [ -n "$REGISTRATION_TOKEN" ]; then
     log "Registration token: ${REGISTRATION_TOKEN}"
 else
-    AUTO_REG_TOKEN=$(kubectl get secret -n "${NAMESPACE}" hiclaw-runtime-env -o jsonpath='{.data.HICLAW_REGISTRATION_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null)
+    AUTO_REG_TOKEN=$(kubectl get secret -n "${NAMESPACE}" hiclaw-runtime-env -o jsonpath='{.data.AGENTTEAMS_REGISTRATION_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null)
     if [ -n "$AUTO_REG_TOKEN" ]; then
         log "Registration token: ${AUTO_REG_TOKEN}"
     else

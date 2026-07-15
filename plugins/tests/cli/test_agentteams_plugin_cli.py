@@ -113,8 +113,8 @@ class AgentTeamsPluginCliTest(unittest.TestCase):
             "$PILOT_DATA/plugins/teamharness",
         )
         self.assertEqual(definition["pluginProbe"]["mountType"], "wrapper")
-        self.assertIn("qwenpaw", definition["detection"]["commands"])
-        self.assertIn("claude", definition["detection"]["commands"])
+        self.assertEqual(definition["detection"]["paths"], ["~/.qwenpaw"])
+        self.assertEqual(definition["detection"]["commands"], ["qwenpaw"])
 
     def test_cli_installs_updates_and_uninstalls_same_tarball(self) -> None:
         package = self.package_teamharness()

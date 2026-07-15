@@ -1,12 +1,12 @@
-# HiClaw: Kubernetes-native multi-Agent collaboration orchestration
+# AgentTeams: Kubernetes-native multi-Agent collaboration orchestration
 
 ## 1. Positioning
 
-HiClaw is an open-source **collaborative multi-Agent OS**: a declarative orchestration plane for multiple AI Agents working together.
+AgentTeams is an open-source **collaborative multi-Agent OS**: a declarative orchestration plane for multiple AI Agents working together.
 
-Unlike a single-Agent runtime, HiClaw targets one question: **when autonomous Agents must behave like a real team on complex work, how do you orchestrate organization, communication policy, delegation, and shared state?**
+Unlike a single-Agent runtime, AgentTeams targets one question: **when autonomous Agents must behave like a real team on complex work, how do you orchestrate organization, communication policy, delegation, and shared state?**
 
-HiClaw borrows Kubernetes ideas—declarative APIs, controller reconcile loops, CRD-style extension—and builds a control plane for Agent *teams*. You declare desired structure in YAML; the controller wires infrastructure and communication topology.
+AgentTeams borrows Kubernetes ideas—declarative APIs, controller reconcile loops, CRD-style extension—and builds a control plane for Agent *teams*. You declare desired structure in YAML; the controller wires infrastructure and communication topology.
 
 ## 2. Why multi-Agent collaboration orchestration
 
@@ -18,14 +18,14 @@ The ecosystem is moving from “lone operators” to “team play”:
 |------|-----------------|----------|
 | Single Agent | One Agent completes tasks alone | OpenClaw, Cursor, Claude Code |
 | Multi-Agent orchestration | Many Agents run independently; unified lifecycle | NVIDIA NemoClaw |
-| Multi-Agent **collaboration** | Agents form teams with structure, protocols, shared state | **HiClaw** |
+| Multi-Agent **collaboration** | Agents form teams with structure, protocols, shared state | **AgentTeams** |
 
 Single-Agent ceilings come from context and tooling. Beyond that boundary you need division of labor—but “many Agents running” ≠ “many Agents collaborating”:
 
 - **Orchestration**: lifecycle, resources, isolation—*how to run* many Agents.
 - **Collaboration**: org structure, who may message whom, delegation, shared state—*how they work together*.
 
-HiClaw focuses on collaboration.
+AgentTeams focuses on collaboration.
 
 ### 2.2 Parallels to the Kubernetes journey
 
@@ -33,15 +33,15 @@ HiClaw focuses on collaboration.
 |----------------|------------|-------------------|
 | Docker | OpenClaw / Claude Code | How to run one isolated unit |
 | Docker Compose | NemoClaw (single-Agent sandbox ops) | How to manage lifecycle and config |
-| **Kubernetes** | **HiClaw** | How many units form a coherent system |
+| **Kubernetes** | **AgentTeams** | How many units form a coherent system |
 
-As Kubernetes sits on top of Docker without replacing it, HiClaw sits on top of Agent runtimes and adds collaboration orchestration.
+As Kubernetes sits on top of Docker without replacing it, AgentTeams sits on top of Agent runtimes and adds collaboration orchestration.
 
 ## 3. Core architecture
 
 ### 3.1 Three-tier organization
 
-HiClaw maps enterprise-style structure:
+AgentTeams maps enterprise-style structure:
 
 ```
 Admin (human administrator)
@@ -76,7 +76,7 @@ apiVersion: agentteams.io/v1beta1
 
 #### Worker — execution unit
 
-**Naming:** The Python Worker runtime is **QwenPaw** (image `hiclaw-copaw-worker`). Older materials sometimes used **CoPaw** for the same runtime.
+**Runtime names:** QwenPaw is a separate Worker runtime (`runtime: qwenpaw`) with its own image. CoPaw remains available as the distinct `runtime: copaw` runtime.
 
 ```yaml
 apiVersion: agentteams.io/v1beta1
@@ -85,7 +85,7 @@ metadata:
   name: alice
 spec:
   model: claude-sonnet-4-6           # required: LLM model
-  runtime: copaw                     # openclaw | copaw | hermes (default from install / CR)
+  runtime: copaw                     # openclaw | copaw | hermes | qwenpaw (default from install / CR)
   skills: [github-operations]        # platform built-in skills
   mcpServers:                        # MCP servers callable via mcporter
     - name: github
@@ -102,7 +102,7 @@ spec:
   #   groupAllowExtra: ["@human:domain"]
 ```
 
-Each Worker maps to: a Docker container (or K8s Pod) + Matrix account + MinIO namespace + Gateway Consumer token. If `spec.image` is omitted, defaults come from `HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE` (or chart defaults).
+Each Worker maps to: a Docker container (or K8s Pod) + Matrix account + MinIO namespace + Gateway Consumer token. `spec.image` overrides deployment image defaults; the current Docker/Helm contracts expose `AGENTTEAMS_WORKER_IMAGE`, `AGENTTEAMS_COPAW_WORKER_IMAGE`, and `AGENTTEAMS_HERMES_WORKER_IMAGE` for the OpenClaw, CoPaw, and Hermes defaults.
 
 #### Team — collaboration unit
 
@@ -196,7 +196,7 @@ spec:
 
 ### 3.3 Controller architecture
 
-HiClaw follows the standard Kubernetes controller pattern.
+AgentTeams follows the standard Kubernetes controller pattern.
 
 **Declarative apply**: On the host, `install/hiclaw-apply.sh` copies YAML into the Manager container and runs `hiclaw apply -f`. The CLI issues REST calls **in YAML document order** (`POST`/`PUT` `/api/v1/workers`, `/teams`, `/humans`, `/managers`) and **does not** topologically sort dependencies—put depended-on resources first (e.g. `Team` before `Human` referencing `accessibleTeams`). **`--prune` and `--dry-run` are not implemented** in the current CLI (may differ from comments in some install scripts; trust the CLI).
 
@@ -236,14 +236,14 @@ Deployment modes:
 
 **Embedded vs Helm (packaging):**
 
-- **Embedded** — `install/hiclaw-install.sh` starts **`hiclaw-controller`** (image bundles Higress, Tuwunel, MinIO, Element Web, and the controller binary). The controller then creates **`hiclaw-manager`** and each **Worker** as separate containers on the same Docker/Podman host.
+- **Embedded** — `install/hiclaw-install.sh` starts **`agentteams-controller`** (image bundles Higress, Tuwunel, MinIO, Element Web, and the controller binary). The controller then creates **`agentteams-manager`** and each **`agentteams-worker-*`** container on the same Docker/Podman host.
 - **Helm / in-cluster** — Chart [`helm/hiclaw`](../helm/hiclaw) deploys the same logical components as Kubernetes workloads (gateway, homeserver, storage, controller Deployment, and Manager/Worker Pods from CRs). CRD semantics match embedded; only the backend driver differs.
 
 Both modes share reconcilers; backends mirror how Kubernetes abstracts CRI/CSI/CNI.
 
 ### 3.4 Matrix as the collaboration layer
 
-HiClaw uses Matrix instead of a bespoke RPC bus:
+AgentTeams uses Matrix instead of a bespoke RPC bus:
 
 | Concern | Why Matrix |
 |---------|------------|
@@ -257,7 +257,7 @@ Tuwunel is bundled as a high-performance homeserver for single-container install
 
 ### 3.5 LLM/MCP security via Higress
 
-The security layer is **[Higress](https://github.com/alibaba/higress)**—a **CNCF Sandbox** Envoy-based AI Gateway with LLM proxying, MCP hosting, and per-consumer auth. Together with HiClaw, LLM and MCP access can be policy-driven for every Agent.
+The security layer is **[Higress](https://github.com/alibaba/higress)**—a **CNCF Sandbox** Envoy-based AI Gateway with LLM proxying, MCP hosting, and per-consumer auth. Together with AgentTeams, LLM and MCP access can be policy-driven for every Agent.
 
 #### Principle: real secrets never ship to Agents
 
@@ -284,7 +284,7 @@ For each Worker the controller typically:
 3. Adds that Consumer to AI Routes’ `allowedConsumers`.
 
 ```
-POST https://aigw-local.hiclaw.io/v1/chat/completions
+POST http://aigw-local.agentteams.io:8080/v1/chat/completions
 Authorization: Bearer {GatewayKey}
 ```
 
@@ -293,7 +293,7 @@ The Worker’s `openclaw.json` points at the Gateway, not raw provider URLs.
 #### MCP path
 
 ```
-POST https://aigw-local.hiclaw.io/mcp-servers/github/mcp
+POST http://aigw-local.agentteams.io:8080/mcp-servers/github/mcp
 Authorization: Bearer {GatewayKey}
 ```
 
@@ -312,7 +312,7 @@ Analogous to ServiceAccount + RBAC: Consumer token ≈ SA token; `allowedConsume
 
 #### vs NemoClaw (security angle)
 
-| Capability | NemoClaw | HiClaw + Higress |
+| Capability | NemoClaw | AgentTeams + Higress |
 |------------|----------|------------------|
 | Credential isolation | OpenShell intercepts inference | Gateway proxy; Worker never sees API keys |
 | MCP centralization | Not built-in | Higress-hosted MCP + unified auth |
@@ -394,7 +394,7 @@ No hidden Agent-to-Agent side channels—auditable by design.
 
 ### 5.1 Positioning
 
-| Dimension | NemoClaw | HiClaw |
+| Dimension | NemoClaw | AgentTeams |
 |-----------|----------|--------|
 | Focus | Single-Agent sandbox safety | Multi-Agent **collaboration** orchestration |
 | Problem | Run one Agent safely | Many Agents as a structured team |
@@ -416,10 +416,10 @@ NemoClaw CLI → onboard → OpenShell
 No cross-sandbox chat, no shared coordinator.
 ```
 
-**HiClaw**
+**AgentTeams**
 
 ```
-HiClaw Controller
+AgentTeams Controller
     ↓
 Matrix: Manager ↔ Leaders ↔ Workers; standalone Workers ↔ Manager
 MinIO shared state
@@ -429,7 +429,7 @@ Human tiers in the same rooms
 
 ### 5.3 Capability matrix
 
-| Capability | NemoClaw | HiClaw |
+| Capability | NemoClaw | AgentTeams |
 |------------|----------|--------|
 | Lifecycle | Sandbox CRUD/recover | Reconcile + containers/Pods |
 | OS sandbox | Strong | Docker (NemoClaw optional) |
@@ -441,7 +441,7 @@ Human tiers in the same rooms
 | Teams / Humans | None | Team + Human CRDs |
 | Declarative | Single-Agent blueprint | Worker/Team/Human/Manager |
 | K8s-native deploy | No | Incluster + Helm |
-| Runtimes | OpenClaw, Hermes, … | OpenClaw, QwenPaw, Hermes, ZeroClaw*, NanoClaw* |
+| Runtimes | OpenClaw, Hermes, … | OpenClaw, CoPaw, QwenPaw, Hermes, ZeroClaw*, NanoClaw* |
 
 \* Roadmap / lightweight options (see project README).
 
@@ -449,7 +449,7 @@ Human tiers in the same rooms
 
 ```
 ┌────────────────────────────────────┐
-│ HiClaw — collaboration layer        │
+│ AgentTeams — collaboration layer    │
 │ org / comms / delegation / state  │
 ├────────────────────────────────────┤
 │ NemoClaw — sandbox runtime layer    │
@@ -459,7 +459,7 @@ Human tiers in the same rooms
 └────────────────────────────────────┘
 ```
 
-The Worker backend could one day plug NemoClaw under each Worker—HiClaw orchestrates teams; NemoClaw hardens each unit—like Kubernetes and any CRI runtime.
+The Worker backend could one day plug NemoClaw under each Worker—AgentTeams orchestrates teams; NemoClaw hardens each unit—like Kubernetes and any CRI runtime.
 
 ## 6. Stack
 
@@ -471,13 +471,13 @@ The Worker backend could one day plug NemoClaw under each Worker—HiClaw orches
 | IM UI | Element Web | Browser client |
 | Files | MinIO | S3 API |
 | AI Gateway | Higress (CNCF Sandbox) | LLM + MCP + consumer auth |
-| Runtimes | OpenClaw, QwenPaw, … | From large to lightweight images |
+| Runtimes | OpenClaw, CoPaw, QwenPaw, Hermes, … | From large to lightweight images |
 | Skills | skills.sh ecosystem | Large community catalog |
 | MCP CLI | mcporter | Calls through Gateway |
 
 ## 7. Kubernetes mapping
 
-| Kubernetes | HiClaw | Notes |
+| Kubernetes | AgentTeams | Notes |
 |------------|--------|-------|
 | Pod | Worker | Smallest schedulable unit; replaceable |
 | Deployment | Team | Desired set of collaborating Workers |
@@ -485,7 +485,7 @@ The Worker backend could one day plug NemoClaw under each Worker—HiClaw orches
 | SA + RBAC | Consumer + allowedConsumers | Identity + fine-grained routes |
 | CRD | Worker/Team/Human/Manager | Declarative API |
 | CR short names | `wk` / `tm` / `hm` / `mgr` | After CRD install |
-| Controller | hiclaw-controller | Reconcile loop |
+| Controller | AgentTeams controller | Reconcile loop |
 | kubectl apply | hiclaw apply | `apply -f` walks multi-doc YAML in order |
 
 ## 8. Deployment modes
@@ -498,7 +498,7 @@ See **section 3.3** for how the controller reconciles; this section is only *how
 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 ```
 
-Rough minimum: 2 CPU, 4 GB RAM, Docker/Podman. You get **`hiclaw-controller`** (infra + controller) plus a separate **`hiclaw-manager`** container; Workers appear as additional containers when created.
+Rough minimum: 2 CPU, 4 GB RAM, Docker/Podman. You get **`agentteams-controller`** (infra + controller) plus a separate **`agentteams-manager`** container; Workers appear as **`agentteams-worker-*`** containers when created.
 
 ### 8.2 In-cluster / Helm (enterprise / cloud)
 
@@ -512,12 +512,12 @@ You can also install from a published Helm chart once the repo is added. The cha
 ## 9. Status and roadmap
 
 - **2026-03-04**: Open sourced, Apache 2.0.
-- **Shipped**: OpenClaw/QwenPaw, MCP integration, Team + Human model.
+- **Shipped**: OpenClaw, CoPaw, QwenPaw, and Hermes runtimes; MCP integration; Team + Human model.
 - **In progress**: ZeroClaw (Rust ultra-light), NanoClaw (minimal LOC runtime)—see README for current state.
 - **Planning**: Team admin dashboard, deeper incluster/Helm story, optional NemoClaw-style sandbox under Workers.
 
 ## 10. Community
 
-- GitHub: https://github.com/higress-group/hiclaw
+- GitHub: https://github.com/agentscope-ai/AgentTeams
 - Discord: https://discord.gg/NVjNA4BAVw
 - License: Apache 2.0

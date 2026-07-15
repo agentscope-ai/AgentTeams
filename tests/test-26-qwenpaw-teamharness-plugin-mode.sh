@@ -1030,7 +1030,7 @@ mcp_transport = os.environ["TEST_MCP_TRANSPORT"]
 problems = []
 agent = json.loads((workspace / "agent.json").read_text(encoding="utf-8"))
 active = agent.get("active_model") or {}
-if active.get("provider_id") != "hiclaw-gateway" or active.get("model") != model:
+if active.get("provider_id") != "agentteams-gateway" or active.get("model") != model:
     problems.append("active_model")
 
 for rel in ["mcporter-servers.json", "config/mcporter.json"]:

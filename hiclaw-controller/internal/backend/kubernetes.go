@@ -280,6 +280,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 				req.Env = map[string]string{}
 			}
 			req.Env["HOME"] = req.WorkingDir
+		case req.Runtime == RuntimeOpenHuman:
+			req.WorkingDir = "/home/openhuman/.openhuman"
 		default:
 			// Both openclaw and hermes use the same workspace layout:
 			// HOME == WorkingDir == /root/hiclaw-fs/agents/<name> (== MinIO
@@ -744,6 +746,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeCopaw
 	case RuntimeHermes:
 		return RuntimeHermes
+	case RuntimeOpenHuman:
+		return RuntimeOpenHuman
 	case RuntimeQwenPaw:
 		return RuntimeQwenPaw
 	default:

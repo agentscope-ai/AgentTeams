@@ -243,11 +243,13 @@ func TestDockerCreatePullsImage(t *testing.T) {
 }
 
 // captureCreateImagesServer is a minimal Docker mock that records the Image
-// field of every POST /containers/create request. Other endpoints return the
-// minimum responses required to make DockerBackend.Create succeed.
+// and WorkingDir fields of every POST /containers/create request. Other
+// endpoints return the minimum responses required to make DockerBackend.Create
+// succeed.
 type capturedCreateBodies struct {
-	srv    *httptest.Server
-	images []string
+	srv         *httptest.Server
+	images      []string
+	workingDirs []string
 }
 
 func (c *capturedCreateBodies) lastImage() string {
@@ -255,6 +257,13 @@ func (c *capturedCreateBodies) lastImage() string {
 		return ""
 	}
 	return c.images[len(c.images)-1]
+}
+
+func (c *capturedCreateBodies) lastWorkingDir() string {
+	if len(c.workingDirs) == 0 {
+		return ""
+	}
+	return c.workingDirs[len(c.workingDirs)-1]
 }
 
 func captureCreateImagesServer(t *testing.T) *capturedCreateBodies {
@@ -270,6 +279,11 @@ func captureCreateImagesServer(t *testing.T) *capturedCreateBodies {
 		json.NewDecoder(r.Body).Decode(&body)
 		if img, ok := body["Image"].(string); ok {
 			captured.images = append(captured.images, img)
+		}
+		if workingDir, ok := body["WorkingDir"].(string); ok {
+			captured.workingDirs = append(captured.workingDirs, workingDir)
+		} else {
+			captured.workingDirs = append(captured.workingDirs, "")
 		}
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-test"})
@@ -442,11 +456,13 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 	}{
 		{"explicit_copaw_uses_copaw_image", RuntimeCopaw, "", "agentteams/copaw-worker:latest"},
 		{"explicit_hermes_uses_hermes_image", RuntimeHermes, "", "agentteams/hermes-worker:latest"},
+		{"explicit_openhuman_uses_openhuman_image", RuntimeOpenHuman, "", "agentteams/openhuman-worker:latest"},
 		{"explicit_qwenpaw_uses_qwenpaw_image", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest"},
 		{"explicit_openclaw_uses_worker_image", RuntimeOpenClaw, "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_no_fallback_uses_worker_image", "", "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_copaw_fallback_uses_copaw_image", "", RuntimeCopaw, "agentteams/copaw-worker:latest"},
 		{"empty_runtime_with_hermes_fallback_uses_hermes_image", "", RuntimeHermes, "agentteams/hermes-worker:latest"},
+		{"empty_runtime_with_openhuman_fallback_uses_openhuman_image", "", RuntimeOpenHuman, "agentteams/openhuman-worker:latest"},
 		{"empty_runtime_with_qwenpaw_fallback_uses_qwenpaw_image", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest"},
 		{"explicit_runtime_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "agentteams/worker-agent:latest"},
 	}
@@ -457,11 +473,12 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 
 			b := &DockerBackend{
 				config: DockerConfig{
-					WorkerImage:        "agentteams/worker-agent:latest",
-					CopawWorkerImage:   "agentteams/copaw-worker:latest",
-					HermesWorkerImage:  "agentteams/hermes-worker:latest",
-					QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-					DefaultNetwork:     "hiclaw-net",
+					WorkerImage:          "agentteams/worker-agent:latest",
+					CopawWorkerImage:     "agentteams/copaw-worker:latest",
+					HermesWorkerImage:    "agentteams/hermes-worker:latest",
+					OpenHumanWorkerImage: "agentteams/openhuman-worker:latest",
+					QwenPawWorkerImage:   "agentteams/qwenpaw-worker:latest",
+					DefaultNetwork:       "hiclaw-net",
 				},
 				containerPrefix: "agentteams-worker-",
 				client: &http.Client{
@@ -479,6 +496,55 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 			}
 			if got := capturedImages.lastImage(); got != tc.wantImage {
 				t.Fatalf("create body Image = %q, want %q", got, tc.wantImage)
+			}
+		})
+	}
+}
+
+func TestDockerCreateRuntimeWorkingDir(t *testing.T) {
+	const home = "/root/hiclaw-fs/agents/x"
+	cases := []struct {
+		name           string
+		runtime        string
+		explicit       string
+		wantWorkingDir string
+	}{
+		{"openclaw_uses_home", RuntimeOpenClaw, "", home},
+		{"copaw_uses_home", RuntimeCopaw, "", home},
+		{"hermes_uses_home", RuntimeHermes, "", home},
+		{"openhuman_uses_dedicated_workspace", RuntimeOpenHuman, "", "/home/openhuman/.openhuman"},
+		{"empty_runtime_uses_home", "", "", home},
+		{"explicit_working_dir_wins", RuntimeOpenHuman, "/custom/workspace", "/custom/workspace"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			captured := captureCreateImagesServer(t)
+			defer captured.srv.Close()
+			b := &DockerBackend{
+				config: DockerConfig{
+					WorkerImage:          "agentteams/worker-agent:latest",
+					CopawWorkerImage:     "agentteams/copaw-worker:latest",
+					HermesWorkerImage:    "agentteams/hermes-worker:latest",
+					OpenHumanWorkerImage: "agentteams/openhuman-worker:latest",
+					DefaultNetwork:       "hiclaw-net",
+				},
+				containerPrefix: "agentteams-worker-",
+				client: &http.Client{
+					Transport: &testTransport{serverURL: captured.srv.URL},
+				},
+			}
+
+			_, err := b.Create(context.Background(), CreateRequest{
+				Name:       "x",
+				Runtime:    tc.runtime,
+				WorkingDir: tc.explicit,
+				Env:        map[string]string{"HOME": home},
+			})
+			if err != nil {
+				t.Fatalf("Create failed: %v", err)
+			}
+			if got := captured.lastWorkingDir(); got != tc.wantWorkingDir {
+				t.Fatalf("create body WorkingDir = %q, want %q", got, tc.wantWorkingDir)
 			}
 		})
 	}

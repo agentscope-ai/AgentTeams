@@ -1,11 +1,11 @@
 # ---------------------------------------------------------------------------
-# OpenHuman Worker — HiClaw-integrated multi-stage Docker build
+# OpenHuman Worker - AgentTeams-integrated multi-stage Docker build
 #
 # Based on the upstream OpenHuman Dockerfile with the following changes:
 #   - Enables `channel-matrix` feature flag for native Matrix support
-#   - Installs mc (MinIO Client) for file sync with HiClaw centralized storage
+#   - Installs mc (MinIO Client) for file sync with AgentTeams centralized storage
 #   - Installs jq for JSON processing in entrypoint scripts
-#   - Copies HiClaw shared scripts and OpenHuman worker entrypoint
+#   - Copies AgentTeams shared scripts and OpenHuman worker entrypoint
 #   - Copies OpenHuman worker agent template (AGENTS.md, skills)
 #
 # License notice:
@@ -14,7 +14,7 @@
 #   The GPL-3.0 license text is preserved at /usr/share/licenses/openhuman/LICENSE
 #   inside the built image.
 #
-# Build context: HiClaw repo root (to access shared/lib/ and manager/agent/).
+# Build context: AgentTeams repo root (to access shared/lib/ and manager/agent/).
 # OpenHuman upstream source is fetched via git inside the builder stage —
 # no `openhuman-src/` directory is required in the build context.
 #
@@ -100,7 +100,7 @@ WORKDIR /build/openhuman-src
 RUN cargo build --release --bin openhuman-core --features channel-matrix
 
 # ==========================================================================
-# Stage 3: Minimal runtime image with HiClaw integration
+# Stage 3: Minimal runtime image with AgentTeams integration
 # ==========================================================================
 FROM debian:bookworm-slim AS runtime
 
@@ -149,7 +149,7 @@ RUN mkdir -p /home/openhuman/.openhuman/skills \
              /home/openhuman/.openhuman/agent-config \
  && chown -R openhuman:openhuman /home/openhuman
 
-# Copy HiClaw shared scripts
+# Copy AgentTeams shared scripts
 COPY shared/lib/ /opt/hiclaw/scripts/lib/
 RUN chmod +x /opt/hiclaw/scripts/lib/*.sh 2>/dev/null || true
 

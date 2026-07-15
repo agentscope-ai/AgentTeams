@@ -216,6 +216,27 @@ def _mc(
     return result
 
 
+def _remove_managed_child_dir(parent: Path, child: Path) -> bool:
+    """Remove a direct child directory without following links or path escapes."""
+    try:
+        parent_resolved = parent.resolve(strict=True)
+        child_parent = child.parent.resolve(strict=True)
+    except OSError as exc:
+        logger.warning("Refusing to remove unresolved path %s: %s", child, exc)
+        return False
+
+    if child_parent != parent_resolved or child.is_symlink() or not child.is_dir():
+        logger.warning(
+            "Refusing to remove unmanaged directory: parent=%s child=%s",
+            parent,
+            child,
+        )
+        return False
+
+    shutil.rmtree(child)
+    return True
+
+
 def _looks_like_missing_object_error(stderr: str | None) -> bool:
     text = stderr or ""
     return "Object does not exist" in text or "The specified key does not exist" in text
@@ -762,9 +783,9 @@ class FileSync:
             minio_skill_set = set(minio_skills)
             for child in list(local_skills_dir.iterdir()):
                 if child.is_dir() and child.name not in minio_skill_set:
-                    shutil.rmtree(child)
-                    changed.append(f"skills/{child.name}/ (removed)")
-                    logger.info("Removed local skill no longer in MinIO: %s", child.name)
+                    if _remove_managed_child_dir(local_skills_dir, child):
+                        changed.append(f"skills/{child.name}/ (removed)")
+                        logger.info("Removed local skill no longer in MinIO: %s", child.name)
 
         return changed
 

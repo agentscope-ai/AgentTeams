@@ -1032,7 +1032,8 @@ if container_api_available; then
                 _runtime=$(jq -r --arg w "${_worker_name}" '.workers[$w].runtime // "openclaw"' "${REGISTRY_FILE}" 2>/dev/null)
                 _recreated=false
                 for _attempt in 1 2 3; do
-                    local _env_map _create_body
+                    _env_map=""
+                    _create_body=""
                     _env_map=$(jq -cn \
                         --arg name "${_worker_name}" \
                         --arg fak "${_worker_name}" \

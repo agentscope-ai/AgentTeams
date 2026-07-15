@@ -151,21 +151,10 @@ Each node uses:
 - `assignedTo`
 - `dependsOn`
 
-For `assignedTo`, use the Worker's **Matrix localpart** (the part between `@` and `:` in `matrixUserID`). Extract it mechanically — never guess, strip, or transform.
-
-**Lookup steps (mandatory before every `plan_dag` / `plan_loop` call):**
-1. Run `hiclaw get workers --team "$TEAM_CR" -o json`
-2. For each Worker, extract the localpart from `.matrixUserID`: e.g. `@worker-issue-resolver:domain` → `worker-issue-resolver`
-3. Use that localpart verbatim as `assignedTo`
-
-❌ Do NOT use CLI `.name` field directly (it may include deployment prefixes like `magic-cn-...-worker-issue-resolver`)
-❌ Do NOT strip prefixes yourself — you will incorrectly remove legitimate name components
-❌ Do NOT infer worker names from memory, AGENTS.md, or display names
-
-| CLI `.name` | `matrixUserID` | ✅ `assignedTo` | ❌ Wrong |
-|---|---|---|---|
-| `magic-cn-x0a4t4pr201-worker-issue-resolver` | `@worker-issue-resolver:domain` | `worker-issue-resolver` | `issue-resolver` |
-| `magic-cn-plt4s29va0r-worker-dev-worker` | `@dev-worker:domain` | `dev-worker` | `worker` |
+For `assignedTo`, use the Worker's **Matrix localpart**: the part between
+`@` and `:` in `matrixUserID`. Run `hiclaw get workers --team "$TEAM_CR" -o
+json`, read each Worker's `matrixUserID`, and copy that localpart verbatim.
+Example: `@worker-issue-resolver:domain` -> `worker-issue-resolver`.
 
 Do not use `worker`, `owner`, `dependencies`, or standalone short IDs.
 
@@ -222,7 +211,7 @@ Optional inputs:
 - `status`
 - `tasks`
 
-For every Loop task, `assignedTo` follows the same rule as DAG tasks: extract the Matrix localpart from `hiclaw get workers` output. Never strip or transform.
+For every Loop task, `assignedTo` follows the same Matrix localpart rule as DAG tasks.
 
 Use `ready_loop_nodes` to find pending nodes in the current iteration whose dependencies are satisfied by accepted `[x]` nodes. Delegate returned nodes with `task-management`.
 

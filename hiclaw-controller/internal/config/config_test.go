@@ -115,6 +115,29 @@ func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAppliesModelParameterOverrides(t *testing.T) {
+	t.Setenv("AGENTTEAMS_MODEL_CONTEXT_WINDOW", "150000")
+	t.Setenv("AGENTTEAMS_MODEL_MAX_TOKENS", "128000")
+	t.Setenv("AGENTTEAMS_MODEL_REASONING", "false")
+	t.Setenv("AGENTTEAMS_MODEL_VISION", "true")
+
+	cfg := LoadConfig()
+	agentCfg := cfg.AgentConfig()
+
+	if agentCfg.ModelContextWindow != 150000 {
+		t.Fatalf("ModelContextWindow = %d, want 150000", agentCfg.ModelContextWindow)
+	}
+	if agentCfg.ModelMaxTokens != 128000 {
+		t.Fatalf("ModelMaxTokens = %d, want 128000", agentCfg.ModelMaxTokens)
+	}
+	if agentCfg.ModelReasoning == nil || *agentCfg.ModelReasoning {
+		t.Fatalf("ModelReasoning = %v, want false", agentCfg.ModelReasoning)
+	}
+	if agentCfg.ModelVision == nil || !*agentCfg.ModelVision {
+		t.Fatalf("ModelVision = %v, want true", agentCfg.ModelVision)
+	}
+}
+
 func TestLoadConfigUsesLegacyManagerEnvFallback(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_MODEL", "legacy-model")
 	t.Setenv("AGENTTEAMS_MANAGER_RUNTIME", "openclaw")

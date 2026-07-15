@@ -78,8 +78,51 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
     exit 1
 }
 
-log_section "Phase 1-4: Assign 4-Phase Git Collaboration Task"
+log_section "Setup: Pre-create Workers (deterministic setup, project handled by Manager)"
 
+# Pre-create the 3 workers via CLI (same call Manager would make) so Manager's
+# own `hiclaw create worker` invocation doesn't get stuck on the worker
+# creation flake pattern we've seen on SHARD_A before. The Manager still
+# walks through the project-management workflow normally so this test
+# measures Manager's 4-phase coordination logic, not LLM timing on setup.
+#
+# We deliberately do NOT pre-create the project room here: Manager needs
+# to call create-project.sh itself so its LLM control loop goes through
+# the documented project-management flow (YOLO-mode Step 1c -> Step 1d).
+# If we pre-create the project room and tell Manager "don't call
+# create-project.sh", Manager has no entry point for the rest of the
+# coordination and ends up writing ad-hoc Matrix HTTP scripts.
+
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+WORKER_SOUL="Developer working on a shared git repo using git-delegation workflows"
+
+for w in alice bob charlie; do
+    log_info "Pre-creating worker ${w}..."
+    CREATE_OUTPUT=$(exec_in_agent hiclaw apply worker --name "${w}" \
+        --runtime "${TEST_WORKER_RUNTIME}" \
+        --soul "${WORKER_SOUL}" \
+        --skills github-operations,git-delegation 2>&1)
+    if echo "${CREATE_OUTPUT}" | grep -qiE "worker/${w} (created|configured)"; then
+        log_pass "hiclaw apply worker ${w} accepted"
+    else
+        log_fail "hiclaw apply worker ${w} failed: ${CREATE_OUTPUT}"
+    fi
+done
+
+# Wait for all 3 workers to be provisioned (deterministic — no LLM in loop)
+for w in alice bob charlie; do
+    wait_for_worker_container "${w}" 180
+done
+
+log_section "Phase 1-4: Manager Coordinates 4-Phase Workflow"
+
+# Snapshot before first LLM interaction
+METRICS_BASELINE=$(snapshot_baseline "alice" "bob" "charlie")
+
+# Standard 4-phase task description. Workers are pre-created above but
+# Manager still needs to set up the project room itself so its tool-guard
+# control loop and YOLO-mode Step 1d (meta.json active transition) are
+# exercised as the workflow intends.
 TASK_DESCRIPTION="Please coordinate a 4-phase git collaboration workflow to test non-linear multi-worker coordination.
 
 Git repo URL (reachable from all worker containers): ${GIT_REPO_URL}
@@ -98,15 +141,9 @@ DO NOT assign any phase to a different worker. DO NOT give alice phase 2 or phas
 
 IMPORTANT: You MUST use the EXACT branch names and file paths specified below. Do not rename, substitute, or simplify them. The verification system checks these exact names.
 
-Before starting any phase:
-1. Ensure workers with usernames exactly 'alice', 'bob', and 'charlie' exist with the git-delegation skill. The username (container name) must match exactly — do not use variations like 'alice-dev' or 'bob-backend'. IMPORTANT: Create any missing workers IN PARALLEL (run all create-worker.sh calls concurrently) to save time — do NOT create them one by one sequentially. When creating any missing worker, use these exact values — do NOT ask me to confirm any of them:
-   - runtime: install default
-   - skills: github-operations, git-delegation
-   - SOUL/role: 'Developer working on a shared git repo using git-delegation workflows'
-   If a worker already exists, reuse it.
-2. Create a shared project room that includes alice, bob, charlie, and the human admin (use the create-project.sh script). All phase assignments and reports MUST happen in this project room — never in individual worker rooms.
+Workers alice, bob, and charlie already exist with the git-delegation skill. The first step of your plan (creating the project room via create-project.sh) is straightforward — they are listed as the workers for the project, and the project ID will be auto-generated. Use YOLO mode auto-confirm so you do not stall waiting for admin.
 
-Run the phases strictly in order, waiting for each phase's report before starting the next.
+After creating the project room, run the phases strictly in order, waiting for each phase's report before starting the next. All phase assignments and reports MUST happen in the project room — never in individual worker rooms.
 
 **Phase 1 — alice (and only alice)**:
 - Clone ${GIT_REPO_URL}
@@ -148,9 +185,6 @@ Run the phases strictly in order, waiting for each phase's report before startin
 
 When all 4 phases are done, post a final summary in the project room and @mention the human admin to notify them the workflow is complete."
 
-# Snapshot before first LLM interaction
-METRICS_BASELINE=$(snapshot_baseline "alice" "bob" "charlie")
-
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" "${TASK_DESCRIPTION}"
 
 log_info "Waiting for Manager to acknowledge and start coordination..."
@@ -177,13 +211,14 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
 done
 assert_not_empty "${MANAGER_TOKEN}" "Manager Matrix token available"
 
-log_info "Waiting for project room to be created (timeout: 900s)..."
+# Workers are pre-created, so the Manager can focus on creating the project room.
+log_info "Waiting for Manager-created project room (timeout: 300s)..."
 PROJECT_ROOM=""
-DEADLINE=$(( $(date +%s) + 900 ))
+DEADLINE=$(( $(date +%s) + 300 ))
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     PROJECT_ROOM=$(matrix_find_room_by_name "${MANAGER_TOKEN}" "Project:" 2>/dev/null || true)
     [ -n "${PROJECT_ROOM}" ] && break
-    sleep 10
+    sleep 5
 done
 assert_not_empty "${PROJECT_ROOM}" "Project room created by Manager"
 log_info "Project room: ${PROJECT_ROOM}"

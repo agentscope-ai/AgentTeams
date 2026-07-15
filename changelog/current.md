@@ -5,6 +5,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 ---
 
 - fix(controller): wire the dedicated QwenPaw Worker image through controller backend defaults and Helm deployments ([d9f0876](https://github.com/agentscope-ai/AgentTeams/commit/d9f08763d10e5087c7169f3051a426fb78bb55b1)).
+- fix(install): propagate explicit QwenPaw Worker images through local install targets and Embedded controllers ([1b9bdcb](https://github.com/agentscope-ai/AgentTeams/commit/1b9bdcbae14cf836656cce8a516195af7188359f)).
 - feat(qwenpaw): add the QwenPaw worker runtime Python package baseline with runtime config sync, storage sync, heartbeat reporting, Matrix channel overlay, and focused unit tests.
 - fix(controller): surface Kubernetes Pod container failures in Worker backend status and status API responses.
 - feat(controller): expose low-cardinality AgentTeams controller metrics and optional Helm ServiceMonitor.

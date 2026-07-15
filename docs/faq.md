@@ -325,7 +325,26 @@ The controller starts the Manager container automatically. If the Manager contai
 
 Increase Docker VM memory to at least 4 GB: Docker Desktop → Settings → Resources → Memory. Then re-run the install command.
 
-**Case 3: Stale config data**
+**Case 3: Higress Gateway exits before it becomes ready**
+
+If installation stops at `Higress Gateway not ready after 120s` and the gateway log contains `Fatal error`, `Check failed: 12`, or `trace/breakpoint trap`, check Linux kernel limits used by the Docker VM or host:
+
+```bash
+docker exec agentteams-controller uname -m
+docker exec agentteams-controller cat /proc/sys/fs/inotify/max_user_instances
+docker exec agentteams-controller cat /proc/sys/vm/max_map_count
+docker exec agentteams-controller cat /proc/sys/vm/overcommit_memory
+```
+
+If `fs.inotify.max_user_instances` is lower than `1024`, raise it on the host and restart AgentTeams. This removes one possible file-watch limit, but does not guarantee that an Envoy/V8 crash is fixed:
+
+```bash
+sudo sysctl -w fs.inotify.max_user_instances=1024
+```
+
+On ARM64/aarch64 hosts, the same V8 assertion has been reported even with higher kernel limits. If disabling Wasm plugins makes the gateway start, treat that as evidence of a compatibility problem in the embedded Higress Wasm/V8 runtime, not as a supported workaround. AgentTeams relies on Higress Wasm plugins for gateway authentication and AI routing. Keep them enabled for normal use and include the architecture, kernel values, and gateway log when reporting the failure.
+
+**Case 4: Stale config data**
 
 Re-run the install command and choose **delete and reinstall**:
 
@@ -335,7 +354,7 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 When the installer detects an existing installation, it will ask how to proceed. Choosing delete will wipe the stale data and start fresh.
 
-**Case 4: Mac with Apple Silicon and outdated Docker/Podman**
+**Case 5: Mac with Apple Silicon and outdated Docker/Podman**
 
 If you're using a Mac with Apple Silicon (M1/M2/M3/M4) and Docker Desktop is older than 4.39.0, Manager Agent may fail to start properly.
 
@@ -344,7 +363,7 @@ If you're using a Mac with Apple Silicon (M1/M2/M3/M4) and Docker Desktop is old
 - **Docker Desktop**: Upgrade to 4.39.0 or later
 - **Podman**: Ensure Podman Engine **Server version ≥ 5.7.1** (check with `podman version`)
 
-**Case 5: Linux host with SELinux volume denial**
+**Case 6: Linux host with SELinux volume denial**
 
 If the detailed log, especially `mc-mirror.log`, contains `permission denied`
 for files under the mounted workspace or host-share directory on an SELinux

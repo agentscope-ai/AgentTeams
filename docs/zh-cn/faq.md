@@ -320,7 +320,28 @@ Controller 会自动启动 Manager 容器。如果 `docker ps` 中看不到 Mana
 
 建议将内存调整到 4GB 以上：Docker Desktop → Settings → Resources → Memory。调整后重新执行安装命令。
 
-**情况三：配置脏数据**
+**情况三：Higress Gateway 未 ready 前退出**
+
+如果安装停在 `Higress Gateway not ready after 120s`，并且 gateway 日志中出现
+`Fatal error`、`Check failed: 12` 或 `trace/breakpoint trap`，请检查 Docker VM
+或宿主机的 Linux 内核限制：
+
+```bash
+docker exec agentteams-controller uname -m
+docker exec agentteams-controller cat /proc/sys/fs/inotify/max_user_instances
+docker exec agentteams-controller cat /proc/sys/vm/max_map_count
+docker exec agentteams-controller cat /proc/sys/vm/overcommit_memory
+```
+
+如果 `fs.inotify.max_user_instances` 小于 `1024`，请在宿主机上调高后重启 AgentTeams。这可以排除一种文件监视资源限制，但不能保证修复 Envoy/V8 崩溃：
+
+```bash
+sudo sysctl -w fs.inotify.max_user_instances=1024
+```
+
+在 ARM64/aarch64 主机上，即使内核限制已经调高，也有报告出现相同的 V8 断言。如果禁用 Wasm 插件后 gateway 能启动，应将其视为嵌入式 Higress Wasm/V8 运行时兼容性问题的证据，而不是受支持的解决方式。AgentTeams 依赖 Higress Wasm 插件完成网关鉴权和 AI 路由；正常使用时请保持插件启用，并在报告问题时附上架构、内核参数和 gateway 日志。
+
+**情况四：配置脏数据**
 
 建议到原安装目录重新执行安装命令，选择**删除重装**：
 
@@ -330,7 +351,7 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 安装脚本检测到已有安装时会询问处理方式，选择删除后重装即可清除脏数据。
 
-**情况四：Mac M 系列芯片 + 低版本 Docker/Podman**
+**情况五：Mac M 系列芯片 + 低版本 Docker/Podman**
 
 如果你使用的是搭载 Apple M 系列芯片（M1/M2/M3/M4）的 Mac，且 Docker Desktop 版本低于 4.39.0，Manager Agent 可能无法正常启动。
 
@@ -339,7 +360,7 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 - **Docker Desktop**：升级到 4.39.0 或更高版本
 - **Podman**：确保 Podman Engine **Server 版本 ≥ 5.7.1**（可通过 `podman version` 查看）
 
-**情况五：Linux 主机 SELinux 拦截挂载目录**
+**情况六：Linux 主机 SELinux 拦截挂载目录**
 
 如果详细日志，尤其是 `mc-mirror.log`，在工作目录或共享目录下出现
 `permission denied`，且主机启用了 SELinux，可能是容器没有访问 bind mount 的

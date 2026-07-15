@@ -4,6 +4,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
+- fix(install): report architecture, kernel limits, and ARM64 Wasm/V8 guidance when the embedded Higress Gateway fails to start.
 - feat(qwenpaw): add the QwenPaw worker runtime Python package baseline with runtime config sync, storage sync, heartbeat reporting, Matrix channel overlay, and focused unit tests.
 - fix(controller): surface Kubernetes Pod container failures in Worker backend status and status API responses.
 - feat(controller): expose low-cardinality AgentTeams controller metrics and optional Helm ServiceMonitor.

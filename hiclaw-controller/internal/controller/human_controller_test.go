@@ -341,6 +341,81 @@ func TestHumanReconciler_Update_RevokeRoom(t *testing.T) {
 	}
 }
 
+func TestHumanReconciler_SyncsAccessibleWorkerAllowlist(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	human := newHuman("alice", v1beta1.HumanSpec{
+		AccessibleWorkers: []string{"w1"},
+	})
+	rig := newHumanRig(t, human, worker)
+
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := getWorkerForTest(t, rig.client, "w1")
+	if got.Spec.ChannelPolicy == nil || !containsStringValue(got.Spec.ChannelPolicy.GroupAllowExtra, "@alice:localhost") {
+		t.Fatalf("worker groupAllowExtra=%v, want @alice:localhost",
+			got.Spec.ChannelPolicy)
+	}
+	if got.Annotations[humanManagedAllowlistAnnotation] != "alice" {
+		t.Fatalf("managed annotation=%q, want alice", got.Annotations[humanManagedAllowlistAnnotation])
+	}
+}
+
+func TestHumanReconciler_RevokesManagedWorkerAllowlist(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	worker.Annotations = map[string]string{humanManagedAllowlistAnnotation: "alice"}
+	worker.Spec.ChannelPolicy = &v1beta1.ChannelPolicySpec{
+		GroupAllowExtra: []string{"@alice:localhost", "@manual:localhost"},
+	}
+	human := newHuman("alice", v1beta1.HumanSpec{})
+	human.Status.MatrixUserID = "@alice:localhost"
+	human.Status.InitialPassword = "stored-pw"
+	human.Status.Rooms = []string{"!room-w1:localhost"}
+	human.Status.Phase = "Active"
+	human.Finalizers = []string{finalizerName}
+
+	rig := newHumanRig(t, human, worker)
+
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := getWorkerForTest(t, rig.client, "w1")
+	if got.Spec.ChannelPolicy == nil || containsStringValue(got.Spec.ChannelPolicy.GroupAllowExtra, "@alice:localhost") {
+		t.Fatalf("worker groupAllowExtra=%v, want alice removed", got.Spec.ChannelPolicy)
+	}
+	if !containsStringValue(got.Spec.ChannelPolicy.GroupAllowExtra, "@manual:localhost") {
+		t.Fatalf("worker groupAllowExtra=%v, want manual entry preserved", got.Spec.ChannelPolicy.GroupAllowExtra)
+	}
+	if _, ok := got.Annotations[humanManagedAllowlistAnnotation]; ok {
+		t.Fatalf("managed annotation still present: %v", got.Annotations)
+	}
+}
+
+func TestHumanReconciler_DoesNotOwnManualWorkerAllowlist(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	worker.Spec.ChannelPolicy = &v1beta1.ChannelPolicySpec{
+		GroupAllowExtra: []string{"@alice:localhost"},
+	}
+	human := newHuman("alice", v1beta1.HumanSpec{
+		AccessibleWorkers: []string{"w1"},
+	})
+	rig := newHumanRig(t, human, worker)
+
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := getWorkerForTest(t, rig.client, "w1")
+	if got.Annotations[humanManagedAllowlistAnnotation] != "" {
+		t.Fatalf("manual allowlist should not be marked managed, annotations=%v", got.Annotations)
+	}
+	if !containsStringValue(got.Spec.ChannelPolicy.GroupAllowExtra, "@alice:localhost") {
+		t.Fatalf("manual allowlist entry was lost: %v", got.Spec.ChannelPolicy.GroupAllowExtra)
+	}
+}
+
 // TestHumanReconciler_Update_PendingResource exercises the case where
 // an AccessibleWorker references a Worker CR whose Status.RoomID is not
 // yet populated (still provisioning). The reconciler must not invite
@@ -629,6 +704,15 @@ func sortedCopy(in []string) []string {
 	out := make([]string, len(in))
 	copy(out, in)
 	sort.Strings(out)
+	return out
+}
+
+func getWorkerForTest(t *testing.T, c client.Client, name string) v1beta1.Worker {
+	t.Helper()
+	var out v1beta1.Worker
+	if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "default"}, &out); err != nil {
+		t.Fatalf("get worker %s: %v", name, err)
+	}
 	return out
 }
 

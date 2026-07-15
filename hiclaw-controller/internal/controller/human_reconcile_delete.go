@@ -35,6 +35,7 @@ func (r *HumanReconciler) reconcileHumanDelete(ctx context.Context, s *humanScop
 				"user", humanUserID, "roomID", roomID)
 		}
 	}
+	r.cleanupHumanWorkerAllowlist(ctx, s)
 
 	if s.identity.Source != nil {
 		if err := s.identity.Source.EnsureDeactivated(ctx, &h.Spec, &h.Status); err != nil {

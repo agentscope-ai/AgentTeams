@@ -70,6 +70,22 @@ func TestLoadConfigMetricsBindAddrIgnoresLegacyFallback(t *testing.T) {
 	}
 }
 
+func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "registry.example.com/agentteams-qwenpaw-worker:test")
+
+	cfg := &Config{}
+	tests := map[string]string{
+		"docker":     cfg.DockerConfig().QwenPawWorkerImage,
+		"kubernetes": cfg.K8sConfig().QwenPawWorkerImage,
+		"sandbox":    cfg.SandboxConfig().QwenPawWorkerImage,
+	}
+	for backendName, got := range tests {
+		if want := "registry.example.com/agentteams-qwenpaw-worker:test"; got != want {
+			t.Errorf("%s QwenPawWorkerImage = %q, want %q", backendName, got, want)
+		}
+	}
+}
+
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", `{
 		"model":"qwen-max",

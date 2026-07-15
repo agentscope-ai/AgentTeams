@@ -27,6 +27,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 **Bug Fixes**
 
+- **CoPaw worker skill projection**: CoPaw workers now refresh the runtime workspace skill projection and manifest whenever Manager-pushed skills change, so newly applied skills become visible without a worker restart.
 - **Legacy Team channel policy**: Legacy Team reconciliation now writes final Matrix channel allow-lists to member runtime config and re-adds the Team Leader to the Manager allow-list so controller integration tests observe durable policy state.
 - **Sandbox worker-deps hardening**: Sandbox-backed Workers now prepare controller-owned worker-deps env/token/data material before claim creation, recycle stale SandboxClaims and bound Sandboxes on runtime-affecting changes, and use bounded ServiceAccount token projection for built-in SandboxClaim mounts.
 - **CLI AgentTeams auth env**: The `hiclaw` CLI now discovers `AGENTTEAMS_CONTROLLER_URL`, `AGENTTEAMS_AUTH_TOKEN`, `AGENTTEAMS_AUTH_TOKEN_FILE`, and `AGENTTEAMS_CLUSTER_ID` while preserving legacy `HICLAW_*` fallbacks, so Manager and Worker containers can use the terminal env names for controller calls.

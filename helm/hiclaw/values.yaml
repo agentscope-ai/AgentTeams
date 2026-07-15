@@ -300,6 +300,9 @@ worker:
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker
       tag: ""                 # defaults to global.imageTag
+    qwenpaw:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-qwenpaw-worker
+      tag: ""                 # defaults to global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:

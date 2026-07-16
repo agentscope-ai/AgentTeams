@@ -14,7 +14,6 @@ PACKAGE_URI=""
 VERSION=""
 MODEL=""
 SKILLS=""
-MCP_SERVERS=""
 RUNTIME=""
 DRY_RUN=false
 NACOS_REGISTRY_URI="${AGENTTEAMS_NACOS_REGISTRY_URI:-nacos://market.agentteams.io:80/public}"
@@ -23,7 +22,7 @@ NACOS_PORT=""
 NACOS_NAMESPACE=""
 
 usage() {
-    echo "Usage: $0 (--template <template-name> | --package-uri <nacos://...>) --worker-name <name> [--version <v>] [--model <model>] [--skills s1,s2] [--mcp-servers m1,m2] [--runtime openclaw|copaw] [--dry-run]" >&2
+    echo "Usage: $0 (--template <template-name> | --package-uri <nacos://...>) --worker-name <name> [--version <v>] [--model <model>] [--skills s1,s2] [--runtime openclaw|copaw|hermes|openhuman] [--dry-run]" >&2
     exit 1
 }
 
@@ -51,10 +50,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skills)
             SKILLS="${2:-}"
-            shift 2
-            ;;
-        --mcp-servers)
-            MCP_SERVERS="${2:-}"
             shift 2
             ;;
         --runtime)
@@ -128,14 +123,8 @@ fi
 if [[ -n "$SKILLS" ]]; then
     AGENTTEAMS_ARGS+=(--skills "$SKILLS")
 fi
-if [[ -n "$MCP_SERVERS" ]]; then
-    AGENTTEAMS_ARGS+=(--mcp-servers "$MCP_SERVERS")
-fi
 if [[ -n "$RUNTIME" ]]; then
     AGENTTEAMS_ARGS+=(--runtime "$RUNTIME")
-fi
-if [[ "$DRY_RUN" == true ]]; then
-    AGENTTEAMS_ARGS+=(--dry-run)
 fi
 
 if [[ "$DRY_RUN" == true ]]; then
@@ -145,7 +134,6 @@ if [[ "$DRY_RUN" == true ]]; then
         --arg package_uri "$PACKAGE_URI" \
         --arg model "$MODEL" \
         --arg skills "$SKILLS" \
-        --arg mcp_servers "$MCP_SERVERS" \
         --arg runtime "$RUNTIME" \
         --argjson hiclaw_args "$(printf '%s\n' "${AGENTTEAMS_ARGS[@]}" | jq -R . | jq -s .)" \
         '{
@@ -155,7 +143,6 @@ if [[ "$DRY_RUN" == true ]]; then
             overrides: {
                 model: (if $model == "" then null else $model end),
                 skills: (if $skills == "" then null else ($skills | split(",")) end),
-                mcp_servers: (if $mcp_servers == "" then null else ($mcp_servers | split(",")) end),
                 runtime: (if $runtime == "" then null else $runtime end)
             },
             hiclaw_args: $hiclaw_args

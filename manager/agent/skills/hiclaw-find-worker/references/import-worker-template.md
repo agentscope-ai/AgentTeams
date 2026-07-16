@@ -79,12 +79,13 @@ bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template
   --template <TEMPLATE_NAME> \
   --worker-name <WORKER_NAME> \
   --model <MODEL_ID> \
-  --runtime openclaw|copaw \
-  --skills s1,s2 \
-  --mcp-servers m1,m2
+  --runtime openclaw|copaw|hermes|openhuman \
+  --skills s1,s2
 ```
 
 This script delegates to `hiclaw apply worker --package nacos://...`.
+The current CLI cannot override `mcpServers` from command-line parameters;
+use the servers already defined by the confirmed template package.
 
 If the install command fails:
 

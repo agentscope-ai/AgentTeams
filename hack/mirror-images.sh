@@ -27,6 +27,9 @@
 #
 #   # Override target registry / namespace
 #   TARGET_REGISTRY=my-registry.example.com TARGET_NS=myns ./hack/mirror-images.sh
+#
+#   # Override the persistent auth file used in container mode
+#   SKOPEO_AUTH_FILE=/path/to/auth.json USE_CONTAINER=1 ./hack/mirror-images.sh
 
 set -euo pipefail
 
@@ -42,6 +45,7 @@ DATE_TAG="${DATE_TAG:-$(date +%Y%m%d)}"
 DRY_RUN="${DRY_RUN:-}"
 USE_CONTAINER="${USE_CONTAINER:-}"
 SKOPEO_IMAGE="${SKOPEO_IMAGE:-quay.io/skopeo/stable:latest}"
+SKOPEO_AUTH_FILE="${SKOPEO_AUTH_FILE:-${HOME}/.config/containers/auth.json}"
 
 # ============================================================
 # Image mapping: SOURCE -> TARGET_NAME:TAG
@@ -75,10 +79,24 @@ ok()    { echo -e "${GREEN}[  OK  ]${NC} $1"; }
 fail()  { echo -e "${RED}[ FAIL ]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[ WARN ]${NC} $1"; }
 
+container_auth_dir() {
+    dirname "${SKOPEO_AUTH_FILE}"
+}
+
+container_auth_file() {
+    printf '/auth/%s' "$(basename "${SKOPEO_AUTH_FILE}")"
+}
+
 run_skopeo() {
     if [ -n "${USE_CONTAINER}" ]; then
+        local auth_dir auth_file
+        auth_dir=$(container_auth_dir)
+        auth_file=$(container_auth_file)
+        mkdir -p "${auth_dir}"
+
         docker run --rm \
-            -v "${HOME}/.config/containers:/.config/containers:ro" \
+            -e "REGISTRY_AUTH_FILE=${auth_file}" \
+            -v "${auth_dir}:/auth:ro" \
             "${SKOPEO_IMAGE}" \
             "$@"
     else
@@ -100,7 +118,12 @@ check_login() {
 
     warn "Not authenticated. Please login:"
     if [ -n "${USE_CONTAINER}" ]; then
-        echo "  docker run -it --rm ${SKOPEO_IMAGE} login ${TARGET_REGISTRY}"
+        local auth_dir auth_file
+        auth_dir=$(container_auth_dir)
+        auth_file=$(container_auth_file)
+        mkdir -p "${auth_dir}"
+
+        echo "  docker run -it --rm -e REGISTRY_AUTH_FILE=${auth_file} -v ${auth_dir}:/auth ${SKOPEO_IMAGE} login ${TARGET_REGISTRY}"
         echo ""
         echo "Or set USE_CONTAINER= and login locally:"
         echo "  skopeo login ${TARGET_REGISTRY}"
@@ -113,7 +136,8 @@ check_login() {
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         if [ -n "${USE_CONTAINER}" ]; then
             docker run -it --rm \
-                -v "${HOME}/.config/containers:/.config/containers" \
+                -e "REGISTRY_AUTH_FILE=${auth_file}" \
+                -v "${auth_dir}:/auth" \
                 "${SKOPEO_IMAGE}" \
                 login "${TARGET_REGISTRY}"
         else

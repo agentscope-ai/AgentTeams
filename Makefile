@@ -110,7 +110,7 @@ BUILDX_BUILDER     ?= agentteams-multiarch
 # Pre-release version detection
 # Pre-release versions (containing -rc, -beta, -alpha, etc.) should NOT push :latest tag
 # This allows testing specific versions without affecting the latest stable image
-IS_PRERELEASE := $(shell echo "$(VERSION)" | grep -qiE -- '-(rc|beta|alpha|pre|preview|dev|snapshot)(\.[0-9]+)?$$' && echo 1 || echo 0)
+IS_PRERELEASE := $(shell echo "$(VERSION)" | grep -qiE -- '-(rc|beta|alpha|pre|preview|dev|snapshot)(\.?[0-9]+)?$$' && echo 1 || echo 0)
 # Whether to push :latest tag (push for stable releases, skip for latest and pre-releases)
 PUSH_LATEST := $(if $(filter latest,$(VERSION)),,$(if $(filter 1,$(IS_PRERELEASE)),,yes))
 

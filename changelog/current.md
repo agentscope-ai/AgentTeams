@@ -1,6 +1,6 @@
 # Changelog (Unreleased)
 
-Target release: `v1.2.0-beta1`
+Target release: `v1.2.0-beta.1`
 
 Comparison baseline: `v1.1.2`
 
@@ -16,7 +16,7 @@ Record release-facing changes here before the next release.
 
 - **Fresh-install resource defaults change**: New Helm installations use the `agentteams-` resource prefix, `agentteams-storage` bucket, and `agentteams/` storage root. Selected runtime environment variables and legacy Matrix alias registration retain HiClaw compatibility for migration, but operators should review existing storage and resource names before upgrading.
 
-- **QwenPaw remains a beta runtime**: The QwenPaw package, image, Matrix integration, and WorkerFlow / TeamHarness adapters are included for evaluation. `v1.2.0-beta1` keeps the established runtime defaults rather than switching deployments to QwenPaw automatically.
+- **QwenPaw remains a beta runtime**: The QwenPaw package, image, Matrix integration, and WorkerFlow / TeamHarness adapters are included for evaluation. `v1.2.0-beta.1` keeps the established runtime defaults rather than switching deployments to QwenPaw automatically.
 
 **What's New**
 
@@ -26,7 +26,7 @@ Record release-facing changes here before the next release.
 
 - **Plugin platform, TeamHarness, and WorkerFlow**: A plugin packaging CLI and schemas are introduced together with TeamHarness collaboration tools, QwenPaw task-trace correlation, WorkerFlow integration, MCP services, prompts, skills, and runtime adapters.
 
-- **Remote and sandbox backend groundwork**: Controller-side implementation and tests for Remote and OpenKruise Sandbox / SandboxClaim backends are included as groundwork for later releases. The `v1.2.0-beta1` open-source Helm and CRD surface continues to expose only `Local` / `Edge` deployment with the `pod` backend.
+- **Remote and sandbox backend groundwork**: Controller-side implementation and tests for Remote and OpenKruise Sandbox / SandboxClaim backends are included as groundwork for later releases. The `v1.2.0-beta.1` open-source Helm and CRD surface continues to expose only `Local` / `Edge` deployment with the `pod` backend.
 
 - **Richer Kubernetes resource contracts**: Manager, Worker, Team Leader, and Team Worker resources support per-agent resource requests and limits. Team membership moves to standalone Worker references, with conflict detection and coordination-context injection.
 
@@ -42,13 +42,15 @@ Record release-facing changes here before the next release.
 
 - **Gateway and provider authorization**: AI route authorization is serialized, provider-specific authorization remains controller-owned, unsupported gateway port exposure is skipped, and APIG endpoints can be overridden.
 
-- **Open-source deployment boundary**: Open-source Worker CRDs are restricted to `Local` / `Edge` deployment and the `pod` backend, and obsolete OSS target-cluster routing is removed. Remote and Sandbox code paths are not exposed as supported `v1.2.0-beta1` deployment options.
+- **Open-source deployment boundary**: Open-source Worker CRDs are restricted to `Local` / `Edge` deployment and the `pod` backend, and obsolete OSS target-cluster routing is removed. Remote and Sandbox code paths are not exposed as supported `v1.2.0-beta.1` deployment options.
 
 - **CoPaw reliability**: Runtime path defaults, AgentTeams environment variables, Matrix routing, task assignment name matching, heartbeat defaults, and missing-MinIO-object handling are corrected.
 
 - **Install and local runtime robustness**: Admin usernames are normalized, mounted sockets follow the selected runtime, Podman systemd autostart is supported, Docker Workers receive the host gateway mapping, and manual Worker installation joins the correct network.
 
 - **Helm and CRD compatibility**: Unsupported CRD `propertyNames` fields are removed, AppService environment wiring uses AgentTeams names, and fresh-install storage/resource defaults are aligned with AgentTeams.
+
+- **Pre-release automation**: Release workflows accept SemVer pre-release tags, mark GitHub beta releases as prereleases, and prevent both dotted and compact beta/RC tags from updating stable `latest` image tags.
 
 - **AgentTeams rename follow-ups**: README legacy-name text is corrected to “formerly HiClaw”; Matrix AppService accepts new `#agentteams-*` aliases while retaining legacy aliases; OpenHuman consumes canonical `AGENTTEAMS_*` variables with HiClaw fallbacks.
 
@@ -62,7 +64,7 @@ Record release-facing changes here before the next release.
 
 - **全新安装的资源默认值变化**: Helm 新安装默认使用 `agentteams-` 资源前缀、`agentteams-storage` bucket 和 `agentteams/` 存储根路径。部分运行时环境变量和旧 Matrix alias 仍保留 HiClaw 兼容，但升级前需要确认现有资源名和存储路径。
 
-- **QwenPaw 仍处于 beta 阶段**: 本版本包含 QwenPaw 包、镜像、Matrix 集成以及 WorkerFlow / TeamHarness 适配器，供预览验证；`v1.2.0-beta1` 不会自动把现有部署默认运行时切换到 QwenPaw。
+- **QwenPaw 仍处于 beta 阶段**: 本版本包含 QwenPaw 包、镜像、Matrix 集成以及 WorkerFlow / TeamHarness 适配器，供预览验证；`v1.2.0-beta.1` 不会自动把现有部署默认运行时切换到 QwenPaw。
 
 **新增功能**
 
@@ -72,7 +74,7 @@ Record release-facing changes here before the next release.
 
 - **插件平台、TeamHarness 与 WorkerFlow**: 新增插件打包 CLI 和 Schema，以及 TeamHarness 协作工具、QwenPaw 任务 Trace 关联、WorkerFlow 集成、MCP 服务、提示词、Skills 和运行时适配器。
 
-- **Remote 与 Sandbox 后端能力储备**: 本版本包含 Remote 和 OpenKruise Sandbox / SandboxClaim 的控制器实现与测试，作为后续版本的能力储备；`v1.2.0-beta1` 开源 Helm 与 CRD 仍只开放 `Local` / `Edge` 部署和 `pod` 后端。
+- **Remote 与 Sandbox 后端能力储备**: 本版本包含 Remote 和 OpenKruise Sandbox / SandboxClaim 的控制器实现与测试，作为后续版本的能力储备；`v1.2.0-beta.1` 开源 Helm 与 CRD 仍只开放 `Local` / `Edge` 部署和 `pod` 后端。
 
 - **更完整的 Kubernetes 资源契约**: Manager、Worker、Team Leader 和 Team Worker 支持单 Agent 资源规格；Team 成员改为引用独立 Worker CR，并增加冲突检查和协作上下文注入。
 
@@ -88,13 +90,15 @@ Record release-facing changes here before the next release.
 
 - **网关与模型提供方鉴权**: AI Route 鉴权改为串行执行；provider 专属鉴权保持由控制器 Reconcile 管理；跳过不支持的网关端口暴露；支持覆盖 APIG Endpoint。
 
-- **开源部署边界**: 开源 Worker CRD 限定为 `Local` / `Edge` 部署和 `pod` 后端，并移除无效的 OSS 目标集群路由；Remote 与 Sandbox 代码路径不作为 `v1.2.0-beta1` 的公开支持能力。
+- **开源部署边界**: 开源 Worker CRD 限定为 `Local` / `Edge` 部署和 `pod` 后端，并移除无效的 OSS 目标集群路由；Remote 与 Sandbox 代码路径不作为 `v1.2.0-beta.1` 的公开支持能力。
 
 - **CoPaw 稳定性**: 修复运行时路径默认值、AgentTeams 环境变量、Matrix 路由、任务分配名称匹配、心跳默认值和缺失 MinIO 对象处理。
 
 - **安装与本地运行稳健性**: 管理员用户名统一小写；挂载 Socket 跟随所选容器运行时；支持 Podman systemd 自启动；Docker Worker 注入 host gateway；手动安装 Worker 时加入正确网络。
 
 - **Helm 与 CRD 兼容性**: 移除不受支持的 CRD `propertyNames`；AppService 环境变量切换到 AgentTeams；全新安装的存储和资源默认值完成 AgentTeams 对齐。
+
+- **预发布自动化**: Release 工作流支持 SemVer 预发布 Tag，将 GitHub beta Release 标记为 prerelease，并确保带点号或紧凑格式的 beta / RC Tag 都不会更新稳定版镜像的 `latest`。
 
 - **AgentTeams 改名收尾**: README 中旧名称修正为“原 HiClaw”；Matrix AppService 同时注册新的 `#agentteams-*` 和旧 alias；OpenHuman 优先消费 `AGENTTEAMS_*` 并保留 HiClaw fallback。
 
@@ -116,4 +120,4 @@ Record release-facing changes here before the next release.
 - **Observability and diagnostics / 可观测性与诊断**: Add controller metrics, optional ServiceMonitor support, pod container failure reporting, richer status data, and integration diagnostics. ([6b03ab0](https://github.com/agentscope-ai/AgentTeams/commit/6b03ab037357485d6f65235b27590c1062b09f3b), [295e157](https://github.com/agentscope-ai/AgentTeams/commit/295e157e611f33d673379d7d575fcbe61830db0f))
 - **CoPaw and task-flow reliability / CoPaw 与任务流稳定性**: Correct runtime paths, AgentTeams environment variables, Matrix routing, task assignment matching, heartbeat defaults, and missing-object handling. ([70ee282](https://github.com/agentscope-ai/AgentTeams/commit/70ee2826e2bb7bcc267f8662997ee50a59ac15aa), [2202c8c](https://github.com/agentscope-ai/AgentTeams/commit/2202c8c2edbcd1c6676ca810646aa3bcc26dd008), [03c180f](https://github.com/agentscope-ai/AgentTeams/commit/03c180fd1b533244bbb056e0443a384da0a1de11), [1f5e688](https://github.com/agentscope-ai/AgentTeams/commit/1f5e6887061621f2dbe4d225ccc9294662f72467))
 - **Install, container, and gateway robustness / 安装、容器与网关稳健性**: Normalize users, select the correct socket and network, support Podman autostart, configure Docker host gateway access, serialize route authorization, and handle gateway endpoint differences. ([6797b76](https://github.com/agentscope-ai/AgentTeams/commit/6797b761039a68dcfcca7fe3524bb084ade186ac), [28c34f2](https://github.com/agentscope-ai/AgentTeams/commit/28c34f272c12d614c7f42aaa311ce38515762549), [de07995](https://github.com/agentscope-ai/AgentTeams/commit/de079956fad5ab4c6f6f8e1cb04ebff10660f14c), [428d3a1](https://github.com/agentscope-ai/AgentTeams/commit/428d3a152f31690b772ce8ba8fba683f7b6bfa7d))
-- **Helm, CRD, documentation, tests, and CI / Helm、CRD、文档、测试与 CI**: Remove unsupported CRD fields, align fresh-install defaults, expand deployment and FAQ guidance, strengthen runtime lifecycle coverage, and isolate rename contract checks in CI. ([9552700](https://github.com/agentscope-ai/AgentTeams/commit/955270013407ebce0c3299efa8f9c1912aa05b6b), [06d75c6](https://github.com/agentscope-ai/AgentTeams/commit/06d75c6391ce56c92d0b77d9f3c7004c3c96df03), [c200631](https://github.com/agentscope-ai/AgentTeams/commit/c200631c450e1277edf87bd8e2e0c65038b5496e), [1007e6f](https://github.com/agentscope-ai/AgentTeams/commit/1007e6f434aeca2d5bd9b037e8e0c3673f5566d5))
+- **Helm, CRD, documentation, tests, and CI / Helm、CRD、文档、测试与 CI**: Remove unsupported CRD fields, align fresh-install defaults, expand deployment and FAQ guidance, strengthen runtime lifecycle coverage, isolate rename contract checks, and make beta release/tag handling safe in CI. ([9552700](https://github.com/agentscope-ai/AgentTeams/commit/955270013407ebce0c3299efa8f9c1912aa05b6b), [06d75c6](https://github.com/agentscope-ai/AgentTeams/commit/06d75c6391ce56c92d0b77d9f3c7004c3c96df03), [c200631](https://github.com/agentscope-ai/AgentTeams/commit/c200631c450e1277edf87bd8e2e0c65038b5496e), [1007e6f](https://github.com/agentscope-ai/AgentTeams/commit/1007e6f434aeca2d5bd9b037e8e0c3673f5566d5))

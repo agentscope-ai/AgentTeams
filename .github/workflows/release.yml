@@ -4,10 +4,11 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. v1.2.3)'
+        description: 'Release version (e.g. v1.2.3 or v1.2.3-beta.1)'
         required: true
         type: string
 
@@ -36,12 +37,17 @@ jobs:
           else
             VERSION="${{ github.ref_name }}"
           fi
-          # Validate format
-          if ! echo "${VERSION}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          # Validate stable or pre-release SemVer format.
+          if ! echo "${VERSION}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
             echo "ERROR: invalid version format: ${VERSION}"
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
@@ -130,6 +136,7 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.version }}
           body_path: /tmp/release-body.md
+          prerelease: ${{ steps.version.outputs.prerelease }}
 
       - name: Archive changelog and reset
         run: |

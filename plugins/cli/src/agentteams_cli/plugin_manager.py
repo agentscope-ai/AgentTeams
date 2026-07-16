@@ -67,6 +67,8 @@ def _safe_extract_tar(package: Path, target: Path) -> None:
                     raise ValueError(f"unsafe tar member: {member.name}")
                 if member.name.startswith("/") or ".." in Path(member.name).parts:
                     raise ValueError(f"unsafe tar member: {member.name}")
+                if not (member.isfile() or member.isdir()):
+                    raise ValueError(f"unsafe tar member type: {member.name}")
             archive.extractall(target)
     except tarfile.TarError as exc:
         raise ValueError(f"invalid tar package: {exc}") from exc

@@ -17,7 +17,7 @@
 #
 # Usage:
 #   update-worker-config.sh --name <NAME> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]
-#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
+#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL_ID>] [--skills s1,s2]
 #
 # Prerequisites:
 #   - Worker must already exist (created via create-worker.sh)
@@ -65,7 +65,7 @@ done
 
 if [ -z "${WORKER_NAME}" ]; then
     echo "Usage: update-worker-config.sh --name <NAME> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]"
-    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
+    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|hermes|openhuman> [--model <MODEL>] [--skills s1,s2]"
     exit 1
 fi
 
@@ -92,6 +92,9 @@ if [ -n "${RUNTIME}" ]; then
     if [ -n "${CHANNEL_POLICY_JSON}" ]; then
         _fail "--channel-policy cannot be combined with --runtime. Apply the channel-policy separately (without --runtime) after the runtime switch settles."
     fi
+    if [ -n "${MCP_SERVERS}" ]; then
+        _fail "--mcp-servers cannot be combined with --runtime. Reauthorize MCP servers separately (without --runtime) after the runtime switch settles."
+    fi
 
     log "=== Switching runtime for Worker: ${WORKER_NAME} -> ${RUNTIME} ==="
     log "  WARNING: existing container will be destroyed and recreated."
@@ -101,7 +104,6 @@ if [ -n "${RUNTIME}" ]; then
     CLI_ARGS=(update worker --name "${WORKER_NAME}" --runtime "${RUNTIME}")
     [ -n "${MODEL_ID}" ]      && CLI_ARGS+=(--model "${MODEL_ID}")
     [ -n "${WORKER_SKILLS}" ] && CLI_ARGS+=(--skills "${WORKER_SKILLS}")
-    [ -n "${MCP_SERVERS}" ]   && CLI_ARGS+=(--mcp-servers "${MCP_SERVERS}")
 
     log "Step 1: Calling: hiclaw ${CLI_ARGS[*]}"
     if ! CLI_OUT=$(hiclaw "${CLI_ARGS[@]}" 2>&1); then

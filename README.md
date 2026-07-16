@@ -10,7 +10,7 @@
   <a href="https://discord.com/invite/NVjNA4BAVw"><img src="https://img.shields.io/badge/Discord-Join_Us-blueviolet.svg?logo=discord" alt="Discord"></a>
 </p>
 
-**AgentTeams (formerly AgentTeams) is an open-source collaborative multi-agent runtime platform. It enables multiple Agents to collaborate in a controlled and auditable room, with full human visibility and intervention capabilities throughout the process..**
+**AgentTeams (formerly HiClaw) is an open-source collaborative multi-agent runtime platform. It enables multiple Agents to collaborate in a controlled and auditable room, with full human visibility and intervention capabilities throughout the process.**
 
 Built on a **Manager-Workers architecture**, AgentTeams features a Manager that centrally orchestrates multiple Workers, focusing on collaboration scenarios between humans and Agents, as well as among Agents within enterprise environments.
 
@@ -37,7 +37,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 - **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9: Kubernetes-style declarative resource management (YAML for Worker, Team, Human); Worker Template Marketplace; Manager QwenPaw runtime; Nacos Skills Registry and more.
 - **2026-03-14**: [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — AgentTeams 1.0.6: enterprise-grade MCP Server management, zero credential exposure.
 - **2026-03-10**: [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — AgentTeams 1.0.4: QwenPaw (formerly CoPaw) Worker support, 80% less memory.
-- **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams (then AgentTeams) open sourced.
+- **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams (then HiClaw) open sourced.
 
 ## Why AgentTeams
 

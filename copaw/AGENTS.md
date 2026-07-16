@@ -140,7 +140,7 @@ The authoritative design for the sync/bridge/propagate chain is [`docs/copaw-bri
 ## Key Entry Points
 
 ### To modify the conversion chain
-- [copaw/src/copaw_worker/bridge.py](src/copaw_worker/bridge.py) — `bridge_controller_to_copaw()`; template create + controller-field overlay. Templates live in [copaw/src/copaw_worker/templates/](src/copaw_worker/templates/).
+- [copaw/src/copaw_worker/bridge.py](src/copaw_worker/bridge.py) — `bridge_openclaw_to_copaw()`; template create + controller-field overlay. Templates live in [copaw/src/copaw_worker/templates/](src/copaw_worker/templates/).
 - [copaw/src/copaw_worker/sync.py](src/copaw_worker/sync.py) — `FileSync` class: `mirror_all` / `push_local` / shared-file helpers; `push_loop`
 - [copaw/src/copaw_worker/worker.py](src/copaw_worker/worker.py) — `Worker.start()` orchestrates startup mirror → bridge → runtime push loop
 

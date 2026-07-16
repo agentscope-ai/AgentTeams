@@ -55,4 +55,21 @@ if ! printf '%s\n' "${output}" | grep -Fq "${expected}"; then
     exit 1
 fi
 
-echo "PASS: generated instructions include worker type, name, and ZIP"
+for invalid_name in '!!!' '-worker'; do
+    if invalid_output=$(bash "${GENERATOR}" \
+        --name "${invalid_name}" \
+        --state-dir "${STATE_DIR}" \
+        --analysis "${ANALYSIS_FILE}" \
+        --output "${OUTPUT_DIR}" 2>&1); then
+        echo "FAIL: invalid worker name was accepted: ${invalid_name}" >&2
+        exit 1
+    fi
+
+    if ! printf '%s\n' "${invalid_output}" | grep -Fq 'ERROR: Invalid worker name'; then
+        echo "FAIL: invalid worker name did not produce a clear error: ${invalid_name}" >&2
+        printf '%s\n' "${invalid_output}" >&2
+        exit 1
+    fi
+done
+
+echo "PASS: generated instructions are runnable and invalid worker names are rejected"

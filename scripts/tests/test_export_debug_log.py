@@ -12,6 +12,20 @@ export_debug_log = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(export_debug_log)
 
 
+class RedactJsonStringsTest(unittest.TestCase):
+    def test_redacts_values_of_secret_named_fields(self):
+        data = {
+            "password": "short-secret",
+            "nested": [{"apiKey": "brief", "label": "visible"}],
+        }
+
+        redacted = export_debug_log.redact_json_strings(data)
+
+        self.assertEqual(redacted["password"], "****")
+        self.assertEqual(redacted["nested"][0]["apiKey"], "****")
+        self.assertEqual(redacted["nested"][0]["label"], "visible")
+
+
 class FormatEventTest(unittest.TestCase):
     def test_redacts_all_matrix_event_fields(self):
         event = {

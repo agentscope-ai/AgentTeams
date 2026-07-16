@@ -72,6 +72,14 @@ _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("SSN",           re.compile(r'\b\d{3}-\d{2}-\d{4}\b')),
 ]
 
+_SECRET_FIELD_PATTERN = re.compile(
+    r'(?i)^(?:password|passwd|pwd|secret|token|api[_-]?key'
+    r'|access[_-]?key(?:[_-]?secret)?|secret[_-]?access[_-]?key'
+    r'|secret[_-]?key|private[_-]?key|credential|app[_-]?key'
+    r'|app[_-]?secret|auth[_-]?token|signing[_-]?key'
+    r'|client[_-]?secret|master[_-]?key)$'
+)
+
 
 def redact_pii(text: str) -> str:
     if not text:
@@ -90,7 +98,13 @@ def redact_json_strings(obj):
     if isinstance(obj, list):
         return [redact_json_strings(v) for v in obj]
     if isinstance(obj, dict):
-        return {k: redact_json_strings(v) for k, v in obj.items()}
+        redacted = {}
+        for key, value in obj.items():
+            if isinstance(key, str) and _SECRET_FIELD_PATTERN.fullmatch(key):
+                redacted[key] = "****"
+            else:
+                redacted[key] = redact_json_strings(value)
+        return redacted
     return obj
 
 

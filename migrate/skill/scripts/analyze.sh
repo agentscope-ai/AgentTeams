@@ -249,10 +249,10 @@ fi
 log "Step 7: Generating tool-analysis.json..."
 
 # Build JSON using jq
-APT_JSON=$(printf '%s\n' "${APT_PACKAGES[@]}" 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo '[]')
-PIP_JSON=$(printf '%s\n' "${PIP_PACKAGES[@]}" 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo '[]')
-NPM_JSON=$(printf '%s\n' "${NPM_PACKAGES[@]}" 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo '[]')
-UNKNOWN_JSON=$(printf '%s\n' "${UNKNOWN_BINARIES[@]}" 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo '[]')
+APT_JSON=$(jq -cn --args '$ARGS.positional' "${APT_PACKAGES[@]}" 2>/dev/null || echo '[]')
+PIP_JSON=$(jq -cn --args '$ARGS.positional' "${PIP_PACKAGES[@]}" 2>/dev/null || echo '[]')
+NPM_JSON=$(jq -cn --args '$ARGS.positional' "${NPM_PACKAGES[@]}" 2>/dev/null || echo '[]')
+UNKNOWN_JSON=$(jq -cn --args '$ARGS.positional' "${UNKNOWN_BINARIES[@]}" 2>/dev/null || echo '[]')
 
 # Count commands per source
 SKILL_COUNT=$(wc -l < "${SKILL_CMDS_FILE}" 2>/dev/null | tr -d ' ')

@@ -74,4 +74,22 @@ if ! jq -e '
     exit 1
 fi
 
-echo "PASS: current and legacy cron dependencies are included in the analysis"
+jq -n '{version: 1, jobs: []}' > "${STATE_DIR}/cron/jobs.json"
+
+HOME="${HOME_DIR}" PATH="${BIN_DIR}:${PATH}" bash "${ANALYZER}" \
+    --state-dir "${STATE_DIR}" \
+    --output "${OUTPUT_DIR}" >/dev/null
+
+if ! jq -e '
+    .apt_packages == [] and
+    .pip_packages == [] and
+    .npm_packages == [] and
+    .unknown_binaries == [] and
+    .analysis_sources.cron_payload_commands == 0
+' "${OUTPUT_DIR}/tool-analysis.json" >/dev/null; then
+    echo "FAIL: empty dependency categories were not emitted as empty arrays" >&2
+    cat "${OUTPUT_DIR}/tool-analysis.json" >&2
+    exit 1
+fi
+
+echo "PASS: cron formats and empty dependency arrays are analyzed correctly"

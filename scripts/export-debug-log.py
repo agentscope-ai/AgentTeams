@@ -229,8 +229,7 @@ def format_event(event: dict, redact: bool) -> dict:
     }
     if event.get("type") == "m.room.message":
         record["msgtype"] = content.get("msgtype")
-        body = content.get("body")
-        record["body"] = redact_pii(body) if redact else body
+        record["body"] = content.get("body")
         if content.get("format"):
             record["format"] = content["format"]
         if content.get("url"):
@@ -239,7 +238,7 @@ def format_event(event: dict, redact: bool) -> dict:
             record["relates_to"] = content["m.relates_to"]
     else:
         record["content"] = content
-    return record
+    return redact_json_strings(record) if redact else record
 
 
 def export_matrix_messages(out_dir: Path, since_epoch: float, redact: bool,

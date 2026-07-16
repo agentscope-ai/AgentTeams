@@ -444,7 +444,7 @@ log "  Size: ${ZIP_SIZE}"
 log "  Worker name: ${WORKER_NAME}"
 log ""
 log "Transfer this file to the HiClaw Manager host and run:"
-log "  bash hiclaw-import.sh --zip ${ZIP_NAME}"
+log "  bash hiclaw-import.sh worker --name ${WORKER_NAME} --zip ${ZIP_NAME}"
 log ""
 
 echo "${ZIP_PATH}"

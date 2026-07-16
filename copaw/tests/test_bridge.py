@@ -26,13 +26,8 @@ from pathlib import Path
 import pytest
 
 from copaw_worker.bridge import (
-    bridge_controller_to_copaw,
+    bridge_openclaw_to_copaw,
     bridge_runtime_to_standard,
-    bridge_standard_to_runtime,
-    refresh_standard_to_runtime,
-    sync_mcporter_config_to_runtime,
-    sync_outer_prompt_files_to_inner,
-    sync_skills_to_runtime,
 )
 
 
@@ -79,7 +74,7 @@ def _agent_json_path(working_dir: Path, agent: str = "default") -> Path:
 
 
 def _run_bridge(cfg, working_dir: Path, **kwargs):
-    bridge_controller_to_copaw(cfg, working_dir, **kwargs)
+    bridge_openclaw_to_copaw(cfg, working_dir, **kwargs)
 
 
 def _read_agent(working_dir: Path, agent: str = "default"):

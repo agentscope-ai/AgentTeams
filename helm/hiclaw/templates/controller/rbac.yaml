@@ -73,9 +73,6 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["storage.k8s.io"]
-    resources: ["storageclasses"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   {{- if .Values.credentialProvider.enabled }}
   - apiGroups: ["agentidentity.alibabacloud.com"]
     resources: ["credentialproviders", "agentidentities", "agentroles", "agentrolebindings"]
@@ -92,6 +89,41 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "hiclaw.controller.fullname" . }}-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hiclaw.controller.serviceAccountName" . }}
+    namespace: {{ include "hiclaw.namespace" . }}
+---
+# StorageClass management is intentionally split out of the *-tokenreview
+# ClusterRole: tokenreview is the auth/token-review surface, while
+# StorageClass is a cluster-scoped volume-provisioning resource the OSS-CSI
+# worker-deps path needs to create (member_reconcile.buildWorkerDepsStorageClass).
+# The controller only Get+Create storageclasses (see
+# createWorkerDepsObjectIfMissing); update/patch/list/watch are retained as
+# harmless resilience, but delete is dropped — StorageClass deletion is a
+# cluster-impactful operation the controller never performs and granting it
+# is a privilege-escalation footgun (Kilo #5).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "hiclaw.controller.fullname" . }}-storageclass-mgmt
+  labels:
+    {{- include "hiclaw.component.labels" (dict "root" . "component" "controller") | nindent 4 }}
+rules:
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "hiclaw.controller.fullname" . }}-storageclass-mgmt
+  labels:
+    {{- include "hiclaw.component.labels" (dict "root" . "component" "controller") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "hiclaw.controller.fullname" . }}-storageclass-mgmt
 subjects:
   - kind: ServiceAccount
     name: {{ include "hiclaw.controller.serviceAccountName" . }}

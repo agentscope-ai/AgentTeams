@@ -75,7 +75,7 @@ materialized condition flag.
 {{- end }}
 
 {{- define "hiclaw.storage.remoteRoot" -}}
-{{- printf "hiclaw/%s" (include "hiclaw.storage.bucket" .) -}}
+{{- printf "agentteams/%s" (include "hiclaw.storage.bucket" .) -}}
 {{- end }}
 
 {{- define "hiclaw.storage.adminSecretName" -}}

@@ -98,7 +98,7 @@ gateway:
 storage:
   provider: minio             # minio | oss
   mode: managed               # managed | existing
-  bucket: "hiclaw"
+  bucket: "agentteams-storage"
   # Required when provider=oss:
   oss:
     region: ""                # e.g. "cn-hangzhou"
@@ -212,7 +212,7 @@ controller:
       cpu: 500m
       memory: 512Mi
   workerBackend: "k8s"
-  resourcePrefix: "hiclaw-"
+  resourcePrefix: "agentteams-"
   resourceAutoPrefix: true
   serviceAccount:
     create: true

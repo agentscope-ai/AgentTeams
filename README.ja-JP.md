@@ -10,7 +10,7 @@
   <a href="https://discord.com/invite/NVjNA4BAVw"><img src="https://img.shields.io/badge/Discord-Join_Us-blueviolet.svg?logo=discord" alt="Discord"></a>
 </p>
 
-**AgentTeams（旧称 AgentTeams）は、透明性の高い Human-in-the-Loop のタスク連携を Matrix ルームで実現する、オープンソースの協調型マルチエージェント OS です。**
+**AgentTeams（旧称 HiClaw）は、透明性の高い Human-in-the-Loop のタスク連携を Matrix ルームで実現する、オープンソースの協調型マルチエージェント OS です。**
 
 **Manager-Workers アーキテクチャ**により、Manager Agent を通じて複数の Worker Agent を連携させ、複雑なタスクを完了できます。すべての会話は Matrix ルームで可視化され、いつでも介入できます。
 
@@ -37,7 +37,7 @@
 - **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9：宣言型リソース管理、Worker テンプレートマーケット、Manager QwenPaw、Nacos Skills 登録センターなど。
 - **2026-03-14**: [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — AgentTeams 1.0.6：エンタープライズ MCP Server 管理、認証情報ゼロ露出。
 - **2026-03-10**: [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — AgentTeams 1.0.4：QwenPaw（旧CoPaw）Worker、メモリ約 80% 削減。
-- **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams（当時の名称は AgentTeams）オープンソース化。
+- **2026-03-04**: [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams（当時の名称は HiClaw）オープンソース化。
 
 ## AgentTeams を選ぶ理由
 

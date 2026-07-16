@@ -67,7 +67,7 @@ spec:
               derivation table.
             */}}
             - name: AGENTTEAMS_RESOURCE_PREFIX
-              value: {{ .Values.controller.resourcePrefix | default "hiclaw-" | quote }}
+              value: {{ .Values.controller.resourcePrefix | default "agentteams-" | quote }}
             - name: AGENTTEAMS_RESOURCE_AUTOPREFIX
               value: {{ .Values.controller.resourceAutoPrefix | default true | quote }}
             - name: AGENTTEAMS_WORKER_BACKEND

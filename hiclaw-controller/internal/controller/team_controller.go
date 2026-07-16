@@ -1405,6 +1405,11 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
 	derivedTeam := r.deriveTeamWithResolvedIdentities(ctx, t, adminActor)
+	// Force PeerMentions=true in solo mode on the decoupled path too (mirror
+	// reconcileTeamLegacy) — decoupledChannelPolicy consumes PeerMentions from
+	// derivedTeam, so without this an AGENTTEAMS_SOLO_OPERATOR Team using
+	// spec.workerMembers would never get the forced peer visibility.
+	derivedTeam = forceSoloPeerMentions(derivedTeam, r.SoloOperator)
 
 	// 4. Team-level infrastructure
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)

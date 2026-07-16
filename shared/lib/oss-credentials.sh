@@ -192,7 +192,9 @@ _oss_ensure_refresh() {
         if ! ${refresh_fn}; then
             local _mc_host_var _cached_value
             _mc_host_var="$(_oss_mc_host_var)"
-            eval "_cached_value=\"\${${_mc_host_var}:-}\""
+            # Bash indirect expansion (no eval): safe against any metacharacters
+            # in the alias-derived var name, unlike a re-parsing eval.
+            _cached_value="${!_mc_host_var:-}"
             if [ -n "${_cached_value}" ]; then
                 echo "[oss-credentials] WARNING: STS refresh failed, using cached credentials" >&2
                 return 0

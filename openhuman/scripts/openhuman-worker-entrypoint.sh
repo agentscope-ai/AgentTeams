@@ -6,24 +6,24 @@
 # Config bridging (in priority order):
 #   1. openclaw.json  - channels.matrix.* + models.providers.hiclaw-gateway
 #                       (pulled from MinIO, same source as hermes/copaw)
-#   2. MATRIX_* / HICLAW_AI_GATEWAY_URL env vars  - controller-injected fallback
+#   2. MATRIX_* / AGENTTEAMS_AI_GATEWAY_URL env vars  - controller-injected fallback
 #
 # Generated config.toml sections:
 #   - [channels_config.matrix]
 #       Native Matrix channel for direct human/manager interaction.
 #   - LLM inference settings (via openhuman-core CLI):
-#       Routes LLM traffic to the HiClaw AI gateway (Higress); startup is
+#       Routes LLM traffic to the AgentTeams AI gateway (Higress); startup is
 #       aborted (fail-closed) if the gateway config is missing.
 #
 # Environment variables (set by controller during worker creation):
-#   HICLAW_WORKER_NAME            - Worker name (required)
-#   HICLAW_FS_ENDPOINT            - MinIO endpoint (required in local mode)
-#   HICLAW_FS_ACCESS_KEY          - MinIO access key (required in local mode)
-#   HICLAW_FS_SECRET_KEY          - MinIO secret key (required in local mode)
-#   HICLAW_RUNTIME                - "aliyun" for cloud mode (uses RRSA/STS)
-#   HICLAW_AI_GATEWAY_URL         - HiClaw AI gateway base URL (required)
-#   HICLAW_WORKER_GATEWAY_KEY     - Higress consumer key (required)
-#   HICLAW_DEFAULT_MODEL            - Default model id (default qwen-plus)
+#   AGENTTEAMS_WORKER_NAME        - Worker name (required)
+#   AGENTTEAMS_FS_ENDPOINT        - MinIO endpoint (required in local mode)
+#   AGENTTEAMS_FS_ACCESS_KEY      - MinIO access key (required in local mode)
+#   AGENTTEAMS_FS_SECRET_KEY      - MinIO secret key (required in local mode)
+#   AGENTTEAMS_RUNTIME            - "aliyun" for cloud mode (uses RRSA/STS)
+#   AGENTTEAMS_AI_GATEWAY_URL     - AgentTeams AI gateway base URL (required)
+#   AGENTTEAMS_WORKER_GATEWAY_KEY - Higress consumer key (required)
+#   AGENTTEAMS_DEFAULT_MODEL      - Default model id (default qwen-plus)
 #   MATRIX_HOMESERVER_URL         - Matrix homeserver URL (fallback)
 #   MATRIX_ACCESS_TOKEN           - Matrix access token (fallback)
 #   MATRIX_HOME_ROOM_ID           - Matrix room ID
@@ -37,8 +37,8 @@ set -e
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
 
-WORKER_NAME="${HICLAW_WORKER_NAME:?HICLAW_WORKER_NAME is required}"
-WORKER_CR_NAME="${HICLAW_WORKER_CR_NAME:-${WORKER_NAME}}"
+WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
+WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
 WORKSPACE="${OPENHUMAN_WORKSPACE:-/home/openhuman/.openhuman}"
 
 log() {
@@ -57,15 +57,15 @@ fi
 # ============================================================
 # Step 1: Configure mc alias for centralized file system
 # ============================================================
-if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
     log "Configuring mc alias for cloud (RRSA OIDC)..."
     ensure_mc_credentials || { log "ERROR: Failed to obtain OSS credentials"; exit 1; }
-    FS_BUCKET="${HICLAW_FS_BUCKET:-hiclaw-cloud-storage}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-hiclaw-cloud-storage}"
 else
-    FS_ENDPOINT="${HICLAW_FS_ENDPOINT:?HICLAW_FS_ENDPOINT is required}"
-    FS_ACCESS_KEY="${HICLAW_FS_ACCESS_KEY:?HICLAW_FS_ACCESS_KEY is required}"
-    FS_SECRET_KEY="${HICLAW_FS_SECRET_KEY:?HICLAW_FS_SECRET_KEY is required}"
-    FS_BUCKET="${HICLAW_FS_BUCKET:-hiclaw-storage}"
+    FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:?AGENTTEAMS_FS_ENDPOINT is required}"
+    FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:?AGENTTEAMS_FS_ACCESS_KEY is required}"
+    FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:?AGENTTEAMS_FS_SECRET_KEY is required}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-agentteams-storage}"
     log "Configuring mc alias for local MinIO..."
     mc alias set hiclaw "${FS_ENDPOINT}" "${FS_ACCESS_KEY}" "${FS_SECRET_KEY}"
 fi
@@ -79,9 +79,9 @@ mkdir -p "${WORKSPACE}" "${WORKSPACE}/shared" "${WORKSPACE}/memory" \
 
 log "Pulling Worker config from centralized storage..."
 ensure_mc_credentials 2>/dev/null || true
-mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/agent-config/" \
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/agent-config/" \
     --overwrite 2>/dev/null || true
-mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" "${WORKSPACE}/shared/" \
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${WORKSPACE}/shared/" \
     --overwrite 2>/dev/null || true
 
 # Copy essential files from agent-config to workspace root
@@ -116,7 +116,7 @@ while [ ! -f "${WORKSPACE}/SOUL.md" ] || [ ! -f "${WORKSPACE}/AGENTS.md" ]; do
     fi
     log "Waiting for config files to appear in MinIO (attempt ${RETRY}/6)..."
     sleep 5
-    mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/agent-config/" \
+    mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" "${WORKSPACE}/agent-config/" \
         --overwrite 2>/dev/null || true
     for _f in SOUL.md AGENTS.md; do
         [ -f "${WORKSPACE}/agent-config/${_f}" ] && cp -f "${WORKSPACE}/agent-config/${_f}" "${WORKSPACE}/${_f}"
@@ -183,13 +183,13 @@ BRIDGE_ACCESS_TOKEN="${BRIDGE_ACCESS_TOKEN:-${MATRIX_ACCESS_TOKEN:-}}"
 BRIDGE_ROOM_ID="${BRIDGE_ROOM_ID:-${MATRIX_HOME_ROOM_ID:-}}"
 BRIDGE_USER_ID="${BRIDGE_USER_ID:-${MATRIX_USER_ID:-}}"
 
-# LLM fallback: HICLAW_AI_GATEWAY_URL is the base host (no /v1 suffix);
-# HICLAW_WORKER_GATEWAY_KEY is the Higress consumer key for this worker.
-if [ -z "${BRIDGE_LLM_BASE_URL:-}" ] && [ -n "${HICLAW_AI_GATEWAY_URL:-}" ]; then
-    BRIDGE_LLM_BASE_URL="${HICLAW_AI_GATEWAY_URL%/}/v1"
+# LLM fallback: AGENTTEAMS_AI_GATEWAY_URL is the base host (no /v1 suffix);
+# AGENTTEAMS_WORKER_GATEWAY_KEY is the Higress consumer key for this worker.
+if [ -z "${BRIDGE_LLM_BASE_URL:-}" ] && [ -n "${AGENTTEAMS_AI_GATEWAY_URL:-}" ]; then
+    BRIDGE_LLM_BASE_URL="${AGENTTEAMS_AI_GATEWAY_URL%/}/v1"
 fi
-BRIDGE_LLM_API_KEY="${BRIDGE_LLM_API_KEY:-${HICLAW_WORKER_GATEWAY_KEY:-}}"
-BRIDGE_LLM_PRIMARY="${BRIDGE_LLM_PRIMARY:-${HICLAW_DEFAULT_MODEL:-qwen-plus}}"
+BRIDGE_LLM_API_KEY="${BRIDGE_LLM_API_KEY:-${AGENTTEAMS_WORKER_GATEWAY_KEY:-}}"
+BRIDGE_LLM_PRIMARY="${BRIDGE_LLM_PRIMARY:-${AGENTTEAMS_DEFAULT_MODEL:-qwen-plus}}"
 
 # If bridge didn't yield allowed users, fall back to MATRIX_ALLOWED_USERS env var.
 if [ -z "${BRIDGE_ALLOWED_USERS:-}" ] && [ -n "${MATRIX_ALLOWED_USERS:-}" ]; then
@@ -237,7 +237,7 @@ if [ -n "${BRIDGE_LLM_BASE_URL}" ] && [ -n "${BRIDGE_LLM_API_KEY}" ]; then
         --default_model "${BRIDGE_LLM_PRIMARY}" \
         >/dev/null 2>&1 || log "WARNING: openhuman-core config update_model_settings failed"
 else
-    log "FATAL: LLM gateway not configured (HICLAW_AI_GATEWAY_URL or HICLAW_WORKER_GATEWAY_KEY missing). HiClaw-managed workers must route through the platform AI gateway; refusing to start to prevent silent fallback to external services."
+    log "FATAL: LLM gateway not configured (AGENTTEAMS_AI_GATEWAY_URL or AGENTTEAMS_WORKER_GATEWAY_KEY missing). AgentTeams-managed workers must route through the platform AI gateway; refusing to start to prevent silent fallback to external services."
     exit 1
 fi
 
@@ -260,16 +260,16 @@ export OPENHUMAN_CORE_TOKEN="${OPENHUMAN_CORE_TOKEN:-$(openssl rand -hex 32 2>/d
         if [ -n "${CHANGED}" ]; then
             ensure_mc_credentials 2>/dev/null || true
             mc mirror "${WORKSPACE}/memory/" \
-                "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/memory/" \
+                "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/memory/" \
                 --overwrite 2>/dev/null || true
             mc mirror "${WORKSPACE}/shared/" \
-                "${HICLAW_STORAGE_PREFIX}/shared/" \
+                "${AGENTTEAMS_STORAGE_PREFIX}/shared/" \
                 --overwrite --exclude "spec.md" --exclude "base/" 2>/dev/null || true
             # Push SOUL.md/AGENTS.md only if agent modified them
             for _mf in SOUL.md AGENTS.md MEMORY.md; do
                 if [ -f "${WORKSPACE}/${_mf}" ] && [ "${WORKSPACE}/${_mf}" -nt "${PULL_MARKER}" ]; then
                     mc cp "${WORKSPACE}/${_mf}" \
-                        "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/${_mf}" 2>/dev/null || true
+                        "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/${_mf}" 2>/dev/null || true
                 fi
             done
         fi
@@ -283,10 +283,10 @@ log "Local->Remote sync started (PID: ${SYNC_LOCAL_PID})"
     while true; do
         sleep 300
         ensure_mc_credentials 2>/dev/null || true
-        mc mirror "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" \
+        mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" \
             "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
         find "${WORKSPACE}/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-        mc mirror "${HICLAW_STORAGE_PREFIX}/shared/" "${WORKSPACE}/shared/" \
+        mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${WORKSPACE}/shared/" \
             --overwrite --newer-than "5m" 2>/dev/null || true
         touch "${PULL_MARKER}"
     done
@@ -337,11 +337,11 @@ CORE_PID=$!
     log "OpenHuman Core is healthy"
 
     # Report ready to controller
-    if [ -n "${HICLAW_CONTROLLER_URL:-}" ]; then
+    if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
         hiclaw worker report-ready --name "${WORKER_CR_NAME}" 2>/dev/null || \
-            curl -sf -X POST "${HICLAW_CONTROLLER_URL}/api/v1/workers/${WORKER_CR_NAME}/ready" \
+            curl -sf -X POST "${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/${WORKER_CR_NAME}/ready" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer $(cat ${HICLAW_AUTH_TOKEN_FILE:-/var/run/secrets/hiclaw/token} 2>/dev/null)" 2>/dev/null || \
+                -H "Authorization: Bearer $(cat ${AGENTTEAMS_AUTH_TOKEN_FILE:-/var/run/secrets/agentteams/token} 2>/dev/null)" 2>/dev/null || \
             log "WARNING: Failed to report ready to controller"
     fi
 ) &

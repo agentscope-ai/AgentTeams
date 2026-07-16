@@ -555,7 +555,7 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 		portKey := consolePort + "/tcp"
 		p.ExposedPorts = map[string]struct{}{portKey: {}}
 		hc.PortBindings = map[string][]dockerPortBinding{
-			portKey: {{HostPort: strconv.Itoa(hostPort)}},
+			portKey: {{HostIP: "127.0.0.1", HostPort: strconv.Itoa(hostPort)}},
 		}
 	}
 

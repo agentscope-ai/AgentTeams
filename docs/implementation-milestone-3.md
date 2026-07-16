@@ -1,26 +1,16 @@
 # Milestone 3 — Implementation Plan (dashboard v1.5 message UI + v2 board/DAG, proxy ETag, team-wide modelProvider, provider-onboarding skill)
 
-> **Status:** Approved-pending · **Date:** 2026-07-03 · **Owner:** @nattiini45
+> **Status:** Done · **Date:** 2026-07-03 · **Owner:** @nattiini45
 > Companion to [ai-coworking-reshape-plan.md](ai-coworking-reshape-plan.md) **v2.3** (decisions #1–#18, spikes S1–S10/S-GIT/S-BACKUP).
-> Successor to [implementation-milestone-2.md](implementation-milestone-2.md) — **M1 AND M2 are fully committed**
-> on `impl/m2-projects-dashboard` (19 implementation commits, `35a4412..45727a7`, plus the boundary commit itself).
+> Successor to [implementation-milestone-2.md](implementation-milestone-2.md) — **M1 and M2 are Done** on `main`.
 > Validated 2026-07-03 by 5 per-step seam validators + 1 doc-level validator; their corrections are
 > folded in (Step-1 allowlist branch shape + 405 expectation, Step-2/3 README serialization,
 > task-lifecycle.md cite drift).
-> **M3 is the LAST checkout-buildable milestone** — everything after it is the VPS-gated live/deploy milestone.
+> **M3 was the last checkout-buildable milestone** — everything after it is the VPS-gated live/deploy milestone.
 >
-> **How to resume:** open a Claude Code session in this repo and say
-> *"Implement Milestone 3 from docs/implementation-milestone-3.md, starting at Step 1"* (or any step).
-> **First action on resume: this doc lands on `impl/m2-projects-dashboard`; branch
-> `impl/m3-dashboard-tiers` from `impl/m2-projects-dashboard` before implementing.**
+> **Merged on `main`:** branch `impl/m3-dashboard-tiers`, commits `1c777cb`..`faa8874` (5 implementation commits), PR #2 (`0334776`), then integrated on `main` via PR #4 (`e3427d1`).
 >
-> Every seam below was re-verified against THIS checkout on 2026-07-03 (post-M2 — the dashboard
-> code is new since the M2 doc was written; all `dashboard/` cites are first-time-verified here,
-> and one M2 line-cite drifted: `generator.go` unknown-model default `:400-403` → **`:412`**).
-> Anything that could NOT be verified from this checkout is flagged ⚠️ and listed in the ledger
-> at the end. The M2 ledger (MiMo URL, S5 route ordering, Higress `defaultCredential`, CoPaw
-> `show_tool_details`, Hermes chokepoint, gitea-mcp tool names, ollama base URL, market
-> reachability) **remains open** and transfers to the live milestone unchanged.
+> **How to resume:** M3 is complete. Next work is Phase 0 deploy and live spikes per [ai-coworking-reshape-plan.md](ai-coworking-reshape-plan.md) — not another checkout-only milestone.
 
 ## Orchestration model (MANDATORY, every step)
 

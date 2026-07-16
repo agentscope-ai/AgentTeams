@@ -1,7 +1,10 @@
 # AgentTeams → Personal AI Coworking — Reshape Plan
 
-> **Status:** Draft v2.3 · **Date:** 2026-06-29 (v1) · 2026-06-30 (v2) · 2026-07-02 (v2.2/v2.3) · **Owner:** @nattiini45
+> **Status:** v2.3 — **M1–M3 Done on `main`** (merged via PR #4, `e3427d1`); **live/deploy pending**
+> **Date:** 2026-06-29 (v1) · 2026-06-30 (v2) · 2026-07-02 (v2.2/v2.3) · **Owner:** @nattiini45
 > Authored with Claude Code (Opus 4.8) after a full codebase analysis + live VPS survey.
+>
+> **Implementation milestones:** M1 ([implementation-milestone-1.md](implementation-milestone-1.md), `35a4412`..`ba44fb1`), M2 ([implementation-milestone-2.md](implementation-milestone-2.md), `e9f4377`..`45727a7`), and M3 ([implementation-milestone-3.md](implementation-milestone-3.md), `1c777cb`..`faa8874`) are **Done on `main`**. Remaining work is VPS deploy (Phase 0/0b), live spikes (S1–S10, S-GIT, S-BACKUP), and operator hardening — not further checkout-only milestones.
 >
 > **v2 (home session) added:** multi-provider LLM (Phase 2b), harness enrichment / skills + CLIs on
 > every worker (Phase 4.5), a local Docker Desktop satellite (Phase 0b), and Matrix verbosity control
@@ -20,9 +23,7 @@
 > chat-ops + new Phase 1b task-lifecycle robustness, spikes **S10 + S-BACKUP**, a §7 capacity budget,
 > and the §10.2 table-F shape-contradiction fix.
 >
-> **How to continue at home:** this lives on branch `plan/ai-coworking-reshape`.
-> `git fetch origin && git checkout plan/ai-coworking-reshape` (or merge into `main`).
-> A logged-in **Claude Code instance on the VPS** can execute the on-box steps.
+> **How to continue:** checkout `main`. A logged-in **Claude Code instance on the VPS** can execute the on-box steps (Phase 0 deploy, live spike validation). For deferred security hardening (non-root Manager images, filtered docker socket on shared hosts), see [upstream-integration-migration.md](upstream-integration-migration.md) and [development.md](development.md).
 >
 > Runtime target versions in §6 confirmed via web research on 2026-06-29.
 
@@ -156,7 +157,7 @@ tear-down/rebuild at will.
 4. **Selective data import:** restore only the workspaces/personas you want from
    `/root/backups/hiclaw-snapshot-2026-06-29` (don't blanket-restore the old DB).
 5. **Smoke test:** Manager comes up, joins the admin DM, LLM-auth probe passes, you can chat.
-6. **Backend hardening (v2.3):** make the Docker backend honor the resource limits the CRDs already
+6. **Backend hardening (v2.3):** *(Done on `main` — M1 `35a4412`)* make the Docker backend honor the resource limits the CRDs already
    carry end-to-end — `buildCreatePayload` (`internal/backend/docker.go:517-599`) never reads
    `req.Resources` and `dockerHostConfig` has no Memory/CPU fields; add them, defaulting to the same
    1000m/2Gi the k8s backend uses (`kubernetes.go:433-479`), via new `DockerConfig.{Worker,Manager}{CPU,Memory}`.
@@ -793,6 +794,8 @@ the overlay has no generic inbound-media hook.
   supervisord/PID-1 liveness. Plus a startup pre-flight `PRAGMA integrity_check` on the kine SQLite DB
   before `StartKine` (log loudly and refuse a silent fallback-to-empty on corruption — that file is the
   source of truth for all CRs).
+- **Docker socket (solo-operator, v2.3+):** embedded installs mount `docker.sock` on the controller only (not the Manager). Full Engine API access is an **accepted solo-operator risk**; use a filtered sidecar (`AGENTTEAMS_PROXY_SOCKET`) before shared-host/multi-tenant. Documented in [development.md](development.md). The v1.0.x `hiclaw-docker-proxy` image is removed — uninstall still cleans leftover containers.
+- **Non-root Manager/Worker UIDs (deferred):** default installs run as root. Forcing `USER 1000` without refactoring `manager/Dockerfile.copaw`, `manager/Dockerfile`, and entrypoints (`/data`, `/root/manager-workspace`, volume mounts) will crash CoPaw Manager at startup. A `copaw/Dockerfile` change alone is the wrong target and insufficient. Track as a separate hardening milestone — see [upstream-integration-migration.md](upstream-integration-migration.md).
 - **Capacity budget (v2.3):** worst-case hot-burst RAM — Manager + 4 CoPaw leads at ~150–500 MB each,
   14 Hermes workers at ~150–500 MB each (`windows-deploy.md:50,294-305`) ≈ **3–9.5 GB for agents alone**,
   before the embedded stack (Higress+Tuwunel+MinIO+Element+controller, unmeasured) and the box's other
@@ -1265,8 +1268,7 @@ Uses the exact `oss.StorageClient.PutObject(ctx, key, []byte)` signature (`oss/c
 > are fixed below.
 
 > All shapes below are read from **actual code**, not designed. `file:line` anchors inline.
-> Three are existing (REST `:8090`, `state.json`, MinIO trees); **one endpoint is NET-NEW**
-> (`GET /api/v1/manager-tasks`) and the **same-origin proxy is NET-NEW glue**.
+> Three are existing (REST `:8090`, `state.json`, MinIO trees); **`GET /api/v1/manager-tasks` is implemented** (`d960c68`, M2) and the **same-origin proxy is shipped** (`45727a7` dashboard, M2).
 > ⚠️ **Auth is ON at `:8090` even in embedded mode** (see proxy contract) — the SPA can't call it directly.
 
 #### (1) Source table — what the v1 dashboard consumes
@@ -1276,7 +1278,7 @@ Uses the exact `oss.StorageClient.PutObject(ctx, key, []byte)` signature (`oss/c
 | A | Controller REST | `GET :8090/api/v1/managers` | `ManagerListResponse` | `internal/server/http.go:90`, struct `internal/server/types.go:239-260` |
 | B | Controller REST | `GET :8090/api/v1/teams` | `TeamListResponse` | `http.go:77`, struct `types.go:154-177` |
 | C | Controller REST | `GET :8090/api/v1/workers[?team=NAME]` | `WorkerListResponse` (aggregated: standalone CRs **+** synthesized team members) | `http.go:70`, list logic `resource_handler.go:181-222`, struct `types.go:61-86` |
-| D | Manager `state.json` | **NET-NEW** `GET :8090/api/v1/manager-tasks` (exposes `~/state.json`) | active-task registry — see (2) | file at `manage-state.sh:18` (`${HOME}/state.json`); endpoint does not exist yet |
+| D | Manager `state.json` | `GET :8090/api/v1/manager-tasks` (exposes host-mounted `~/state.json`) | active-task registry — see (2) | implemented `d960c68`; file at `manage-state.sh:24` (`${HOME}/state.json`) |
 | E | MinIO task store | bucket `hiclaw-storage`, prefix `shared/tasks/{id}/` (`meta.json`, `spec.md`, `result.md`, `plan.md`, `progress/YYYY-MM-DD.md`, `base/`) | see (1.E) | layout `task-lifecycle.md:99-109` + `worker-agent/AGENTS.md:138-144`; `meta.json` `task-lifecycle.md:34-45`; `progress/` `task-progress/SKILL.md:18-20` |
 | F | MinIO project store | prefix `shared/projects/{id}/` (`meta.json`, `plan.md`) | see (1.F) | `create-project.sh:57,64-74` |
 | G | Gitea API | `git.pawcommit.com` (repo/PR/issue context per Project) — **v2, out of v1 scope** | upstream Gitea REST | plan §3 |
@@ -1386,12 +1388,12 @@ Sibling files in the same prefix: `spec.md` (Manager-written), `plan.md` (worker
 ```
 Sibling: `plan.md` (the DAG / phase plan; `[ ]`/`[~]`/`[x]` checkboxes, parsed for the v2 DAG render). **Phase 4 note (CORRECTED v2.3 — the earlier "shape unchanged" claim was false):** once the `Project` CRD lands, the CRD's projection is `shared/projects/<id>/manifest.json` with the **§10.1 shape** (`id/team/description/repos/recordedWorkers/updatedAt`) — which shares almost nothing with this chat-flow `meta.json` (`project_room_id/status/workers/confirmed_at`, written by the lead's `projectflow` system, decision #16). The dashboard must **join both**: the CRD manifest for repos/access/provisioning state, and the `projectflow` `meta.json` + `plan.md` for execution status and the DAG render — linked by project id.
 
-#### (2) NET-NEW: `GET /api/v1/manager-tasks` — expose `state.json`
+#### (2) `GET /api/v1/manager-tasks` — expose `state.json` *(implemented `d960c68`, M2)*
 
-**Status: does not exist.** `state.json` lives only on the Manager container's home dir (`~/state.json`, `manage-state.sh:18`), written by the Manager skill — the controller never reads it. ⚠️ **It is documented as `local only … never synced to MinIO`** (`manager/agent/AGENTS.md:3`, `copaw-manager-agent/AGENTS.md:3`), and no `mc cp`/`mirror` of `state.json` exists in the repo. **Default to Option 1.**
+**Status: implemented on `main`.** `state.json` lives on the Manager container's home dir (`~/state.json`, `manage-state.sh:24`), written by the Manager skill — the controller reads it via a host-mounted workspace path. ⚠️ **It is documented as `local only … never synced to MinIO`** (`manager/agent/AGENTS.md:3`, `copaw-manager-agent/AGENTS.md:3`), and no `mc cp`/`mirror` of `state.json` exists in the repo. **Shipped as Option 1 (controller-side endpoint).**
 
-- **Option 1 (default — controller-side endpoint).** Add to `internal/server/` mirroring `resource_handler.go`, reading the Manager's **local/host-mounted** `state.json` (the controller mounts the Manager workspace; see §10.1/§0b mount chain). Register in `http.go` next to the manager routes (`http.go:88-93`), gated by the same `RequireAuthz(ActionGet, "manager", nil)`.
-- **Option 2 (future work, NOT a current toss-up).** Have the same-origin proxy read `state.json` from MinIO **only if** new mirroring code is added to sync `~/state.json` into the bucket — which contradicts the current "never synced to MinIO" design. Treat as a deliberate future change, not a v1 alternative.
+- **Option 1 (shipped — controller-side endpoint).** Implemented in `internal/server/` mirroring `resource_handler.go`, reading the Manager's **local/host-mounted** `state.json` (the controller mounts the Manager workspace; see §10.1/§0b mount chain). Registered in `http.go` next to the manager routes, gated by `RequireAuthz(ActionGet, "manager", nil)` (`d960c68`, M2).
+- **Option 2 (future work, not shipped).** Have the same-origin proxy read `state.json` from MinIO **only if** new mirroring code is added to sync `~/state.json` into the bucket — which contradicts the current "never synced to MinIO" design. Treat as a deliberate future change, not a v1 alternative.
 
 **Request:** `GET /api/v1/manager-tasks` — no params. (Optional `?manager=NAME` if multi-manager; today there is one.)
 
@@ -1426,7 +1428,7 @@ Sibling: `plan.md` (the DAG / phase plan; `[ ]`/`[~]`/`[x]` checkboxes, parsed f
 ```
 This is the **task board's primary feed** (it's the registry the Manager heartbeat itself reads instead of scanning `meta.json` — `state-management.md:5`). Join `active_tasks[].task_id` → MinIO `shared/tasks/{id}/` (E) for detail. **Caveat:** `state.json` holds only *active* tasks — completed tasks are removed (`manage-state.sh:138`); for history the dashboard must list MinIO `shared/tasks/` and read each `meta.json`.
 
-#### (3) Same-origin backend-proxy contract (NET-NEW)
+#### (3) Same-origin backend-proxy contract *(implemented M2 `45727a7`, extended M3 `c1a6549`/`1c777cb`)*
 
 **Rationale (verified):** `:8090` does **no CORS/OPTIONS handling** — there is no `Access-Control-*` header set and no `OPTIONS` handler or CORS middleware in the mux (`http.go:44-130`). (A bare `grep Options` substring-matches Go's `metav1.*Options` types — that's noise, not CORS.) A browser SPA on `hq.pawcommit.com` therefore cannot `fetch()` `:8090` cross-origin. **Second reason, stronger:** `:8090` **requires a Bearer SA token** in *both* modes — embedded mode runs an embedded apiserver (`app.go:367,636`) → `restCfg != nil` → TokenReview auth enabled (`app.go:432-443`); missing/invalid token → `401 "invalid or missing bearer token"` (`internal/auth/middleware.go:62,137-141` — note the package: `auth`, not `server`; `extractBearerToken` `:158-168`). The browser must never hold that token. → the proxy is mandatory, not just a CORS workaround.
 
@@ -1437,7 +1439,7 @@ This is the **task board's primary feed** (it's the registry the Manager heartbe
 | `/api/managers` | `:8090/api/v1/managers` | `Authorization: Bearer <admin-SA-token>` | strip the token before responding |
 | `/api/teams` | `:8090/api/v1/teams` | same | |
 | `/api/workers` | `:8090/api/v1/workers[?team=]` | same | passthrough query string |
-| `/api/manager-tasks` | `:8090/api/v1/manager-tasks` (2) | same | NET-NEW; controller-side (Option 1) |
+| `/api/manager-tasks` | `:8090/api/v1/manager-tasks` (2) | same | implemented `d960c68` (M2) |
 | `/api/tasks`, `/api/tasks/{id}/*` | MinIO `s3://$HICLAW_FS_BUCKET/shared/tasks/...` | MinIO creds | list + read `meta.json`/`result.md`/`progress/*` |
 | `/api/projects`, `/api/projects/{id}/*` | MinIO `s3://$HICLAW_FS_BUCKET/shared/projects/...` | MinIO creds | |
 | `/api/files/*` | MinIO browse/download | MinIO creds | the file browser (Phase 6 overlap) |
@@ -1457,13 +1459,13 @@ No websockets/SSE exist server-side — the v1 SPA **polls** (Phase 5 build step
 | Open task detail panel | `/api/tasks/{id}/meta.json` + `result.md` + latest `progress/*` | **on open + 15s while open** | latest progress = highest `YYYY-MM-DD.md` (`task-progress/SKILL.md:12`) |
 | Project list | `/api/projects` | **30–60s** | changes rarely |
 
-**ETag/caching: none today.** No handler sets `ETag`/`Last-Modified`/`Cache-Control` (the writers are `httputil.WriteJSON`, no cache headers; MinIO objects do carry native `ETag`/`Last-Modified`). Recommendation: the **proxy** adds conditional-GET support for the MinIO routes (pass through MinIO `ETag`, honor `If-None-Match` → `304`) so polling task/progress files is cheap; the controller REST feeds are small enough to fetch fresh each poll. Client-side: diff by `updated_at` (`manager-tasks`) and by `phase`/`containerState`/`message` (cards) to avoid re-render churn.
+**ETag/caching (MinIO routes): implemented `c1a6549` (M3).** The dashboard proxy passes through MinIO `ETag`/`Last-Modified` on task/project/progress routes and honors `If-None-Match` → `304`. Controller REST feeds (`/api/managers`, `/api/teams`, `/api/workers`, `/api/manager-tasks`) remain small enough to poll fresh each cycle. Client-side: diff by `updated_at` (`manager-tasks`) and by `phase`/`containerState`/`message` (cards) to avoid re-render churn.
 
 **Known gaps to design around (unchanged from Phase 5's known-gaps note):** no `%`-complete, no per-subtask status, no live stream. v1 infers progress from `phase` + `meta.json` timestamps + `result.md` Outcome + counting `[x]`/`[~]`/`[ ]` in `plan.md`. Add `shared/events/*.jsonl` only if the inferred view proves insufficient.
 
 #### Open TODOs
 
-- **DECISION**: implement `GET /api/v1/manager-tasks` controller-side (Option 1, reads the local/host-mounted `state.json`) — this is now the default; Option 2 (proxy-reads-MinIO) requires new mirroring code and is future work.
+- **DONE (`d960c68`, M2):** `GET /api/v1/manager-tasks` shipped controller-side (Option 1, reads local/host-mounted `state.json`). Option 2 (proxy-reads-MinIO) remains future work if mirroring is added later.
 - **LIVE-VPS CONFIRM**: the bootstrapped admin SA token location/lifetime the proxy will use (`app.go:211-220`) and whether it auto-renews across controller restarts.
 - **LIVE-VPS CONFIRM (Phase 0b)**: home controller `:8090` reachable from the proxy host (tailnet / `host.docker.internal`) and home MinIO bucket = `hiclaw-storage-home`, for cross-instance fan-out.
 - **DECISION**: per-feed poll intervals — confirm 15s for cards/board is acceptable given `/api/v1/workers` does live backend `Status()` calls; consider 30s for the workers feed.

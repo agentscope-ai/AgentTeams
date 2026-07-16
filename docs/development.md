@@ -300,11 +300,13 @@ HICLAW_LLM_API_KEY="your-key" make test SKIP_BUILD=1
 
 ## Container Runtime Socket (Direct Worker Creation)
 
-When the Manager container is started with the host's container runtime socket mounted, it can create Worker containers directly — no human intervention needed for local deployments.
+When the host runtime socket is available, the **embedded controller** (`agentteams-controller`) mounts it and creates Worker containers via the Docker Engine API — no human intervention needed for local deployments. Legacy all-in-one installs (≤v1.0.9 only) mount the socket on the Manager container instead.
+
+See **Security: solo-operator Docker socket** below for the accepted-risk model and escalation path before shared-host use.
 
 ### How It Works
 
-The Manager detects the socket at startup and sets `HICLAW_CONTAINER_RUNTIME=socket`. The `container-api.sh` script provides functions to create/start/stop Worker containers via the Docker-compatible REST API (works with both Docker and Podman).
+The controller's `DockerBackend` uses `AGENTTEAMS_PROXY_SOCKET` (default `/var/run/docker.sock`). Embedded install scripts mount the socket into `agentteams-controller` only; the spawned Manager agent does not receive `docker.sock`. Legacy `container-api.sh` in the Manager image applied when the Manager held the socket directly (pre-v1.1).
 
 ### Socket Paths
 
@@ -337,9 +339,21 @@ podman run -d --name hiclaw-manager \
 
 The test orchestrator (`tests/run-all-tests.sh`) automatically detects the socket and mounts it when available.
 
-### Security Note
+### Security: solo-operator Docker socket (accepted risk)
 
-Mounting the container runtime socket gives the container full control over the host's container runtime (equivalent to root access). This is acceptable for local development. In production, consider using more restrictive approaches like Podman socket activation with limited API access.
+Embedded installs (v1.1+) mount the host runtime socket into **`agentteams-controller` only** — not the Manager agent container. The controller's `DockerBackend` dials `AGENTTEAMS_PROXY_SOCKET` (default `/var/run/docker.sock`) directly to create Worker containers. HTTP filtering for legacy Manager-side `/docker/` calls lives in `hiclaw-controller/internal/proxy/`, but **`DockerBackend` bypasses that validator** — the controller process has full Docker Engine API access when the socket is mounted.
+
+This is an **accepted solo-operator risk**: a single trusted admin runs AgentTeams on their own machine or VPS, and only the controller (not every agent) holds socket access. That is a meaningful improvement over v1.0.x, where the all-in-one Manager container (or a separate `hiclaw-docker-proxy` sidecar) also sat on the socket path.
+
+**Before shared-host or multi-tenant use**, escalate containment — for example point `AGENTTEAMS_PROXY_SOCKET` at a filtered sidecar (tecnativa/docker-socket-proxy or equivalent) instead of the raw socket, and treat Manager/Worker compromise as host-compromise until then.
+
+The standalone `docker-proxy/` tree was removed in `d029ed2`; do not restore it. Uninstall scripts still stop/remove leftover `hiclaw-docker-proxy` containers from v1.0.x upgrades.
+
+### Non-root Manager/Worker images (deferred hardening)
+
+Default installs run Manager and Worker containers as **root**. Forcing non-root (e.g. `USER 1000`) without a broader refactor will crash CoPaw Manager startup (`start-manager-agent.sh` writes `/data`, `/root/manager-workspace`, `/etc/hosts`, and install-time volume mounts assume root-owned paths). A naive `USER` line in `copaw/Dockerfile` targets the **Worker** image and does not cover `/data` or Manager entrypoints.
+
+Full non-root is **deferred**: primary targets are `manager/Dockerfile.copaw`, `manager/Dockerfile`, and entrypoint scripts refactored away from hard-coded `/data` and `/root/*` paths in embedded mode. Track as a separate hardening milestone if needed; do not ship a partial UID change that fails at first `mkdir`.
 
 ## Key Technical Notes
 

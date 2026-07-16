@@ -632,6 +632,44 @@ func TestDockerBuildCreatePayloadRestartPolicy(t *testing.T) {
 	}
 }
 
+// TestDockerCreateConsolePortBindsLocalhost verifies that when
+// AGENTTEAMS_CONSOLE_PORT is set, the worker console port is bound to
+// 127.0.0.1 only (not 0.0.0.0).
+func TestDockerCreateConsolePortBindsLocalhost(t *testing.T) {
+	captured := capturePayloadServer(t)
+	defer captured.srv.Close()
+
+	b := newCapturingDockerBackend(t, captured.srv.URL, DockerConfig{})
+
+	_, err := b.Create(context.Background(), CreateRequest{
+		Name: "x",
+		Env: map[string]string{
+			"AGENTTEAMS_CONSOLE_PORT": "8088",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	payload := captured.last()
+	if payload.HostConfig == nil {
+		t.Fatal("expected HostConfig to be attached, got nil")
+	}
+	bindings, ok := payload.HostConfig.PortBindings["8088/tcp"]
+	if !ok {
+		t.Fatalf("expected PortBindings for 8088/tcp, got %v", payload.HostConfig.PortBindings)
+	}
+	if len(bindings) != 1 {
+		t.Fatalf("expected 1 port binding, got %d", len(bindings))
+	}
+	if bindings[0].HostIP != "127.0.0.1" {
+		t.Errorf("HostIP = %q, want %q", bindings[0].HostIP, "127.0.0.1")
+	}
+	if bindings[0].HostPort == "" {
+		t.Error("expected non-empty HostPort for console binding")
+	}
+}
+
 func TestMergeDockerResourceOverrides(t *testing.T) {
 	cases := []struct {
 		name         string

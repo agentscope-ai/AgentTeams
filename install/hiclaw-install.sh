@@ -3705,34 +3705,11 @@ CREDEOF
             fi
         done
 
-        # Start Docker API proxy if enabled (security layer between Manager and Docker daemon)
-        PROXY_ARGS=""
-        if [ "${AGENTTEAMS_DOCKER_PROXY:-1}" = "1" ] && [ -n "${CONTAINER_SOCK:-}" ]; then
-            local _proxy_image="${AGENTTEAMS_REGISTRY}/higress/hiclaw-docker-proxy:${AGENTTEAMS_VERSION}"
-            # Try versioned tag, fallback to latest
-            if ! ${DOCKER_CMD} image inspect "${_proxy_image}" >/dev/null 2>&1; then
-                ${DOCKER_CMD} pull "${_proxy_image}" 2>/dev/null || {
-                    _proxy_image="${AGENTTEAMS_REGISTRY}/higress/hiclaw-docker-proxy:latest"
-                    ${DOCKER_CMD} pull "${_proxy_image}" 2>/dev/null || true
-                }
-            fi
-            if ${DOCKER_CMD} image inspect "${_proxy_image}" >/dev/null 2>&1; then
-                log "Starting Docker API proxy..."
-                ${DOCKER_CMD} run -d \
-                    --name hiclaw-docker-proxy \
-                    --network agentteams-net \
-                    -v "${CONTAINER_SOCK}:/var/run/docker.sock" \
-                    --security-opt label=disable \
-                    -e AGENTTEAMS_WORKER_IMAGE="${WORKER_IMAGE}" \
-                    -e AGENTTEAMS_COPAW_WORKER_IMAGE="${COPAW_WORKER_IMAGE}" \
-                    -e AGENTTEAMS_HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE}" \
-                    ${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES:+-e AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}"} \
-                    --restart unless-stopped \
-                    "${_proxy_image}"
-                PROXY_ARGS="-e AGENTTEAMS_CONTROLLER_URL=http://hiclaw-docker-proxy:2375 -e AGENTTEAMS_CONTAINER_API=http://hiclaw-docker-proxy:2375"
-                SOCKET_MOUNT_ARGS=""
-            fi
-        fi
+        # Legacy all-in-one: mount the runtime socket directly on the Manager when
+        # detected above (SOCKET_MOUNT_ARGS). The v1.0.x hiclaw-docker-proxy sidecar
+        # was removed in v1.1+; embedded installs mount the socket on the controller
+        # only (Manager does not hold docker.sock). Uninstall still removes leftover
+        # hiclaw-docker-proxy containers from older installs.
 
         # Pass host timezone to container
         TZ_ARGS=""
@@ -3765,7 +3742,6 @@ CREDEOF
             ${SOCKET_MOUNT_ARGS} \
             ${NETWORK_ARGS} \
             ${NETWORK_ALIAS_ARGS} \
-            ${PROXY_ARGS} \
             -p "${_port_prefix}${AGENTTEAMS_PORT_GATEWAY}:8080" \
             -p "${_port_prefix}${AGENTTEAMS_PORT_CONSOLE}:8001" \
             -p "${_port_prefix}${AGENTTEAMS_PORT_ELEMENT_WEB:-18088}:8088" \

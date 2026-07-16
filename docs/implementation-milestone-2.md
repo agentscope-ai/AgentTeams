@@ -1,20 +1,12 @@
 # Milestone 2 — Implementation Plan (Project CRD, dashboard v1, operator tooling, quiet-rooms plumbing)
 
-> **Status:** Approved-pending · **Date:** 2026-07-03 · **Owner:** @nattiini45
+> **Status:** Done · **Date:** 2026-07-03 · **Owner:** @nattiini45
 > Companion to [ai-coworking-reshape-plan.md](ai-coworking-reshape-plan.md) **v2.3** (decisions #1–#18, spikes S1–S10/S-GIT/S-BACKUP).
-> Successor to [implementation-milestone-1.md](implementation-milestone-1.md) — **M1 is fully committed** on `impl/m1-hardening` (10 commits, `35a4412..ba44fb1`).
+> Successor to [implementation-milestone-1.md](implementation-milestone-1.md) — **M1 is Done** on `main` (`35a4412`..`ba44fb1`).
 >
-> **How to resume:** open a Claude Code session in this repo and say
-> *"Implement Milestone 2 from docs/implementation-milestone-2.md, starting at Step 1"* (or any step).
-> **First action on resume: this doc is committed on `impl/m1-hardening`; branch
-> `impl/m2-projects-dashboard` from `impl/m1-hardening` before implementing.**
+> **Merged on `main`:** branch `impl/m2-projects-dashboard`, commits `e9f4377`..`45727a7` (9 implementation commits), integrated via PR #4 (`e3427d1`).
 >
-> Every seam below was re-verified against THIS checkout on 2026-07-03 (post-M1 — several of the
-> v2.3 plan's line numbers have drifted since M1 landed; the corrected numbers are what's cited here).
-> The full draft was then validated by 9 per-step seam validators + 1 doc-level consistency validator
-> (2026-07-03); their corrections are folded in below (notably: Step 1 gained the Project REST-CRUD
-> layer that Step 8's `hiclaw apply` requires). Anything that could NOT be verified from this
-> checkout is flagged ⚠️ and listed in the ledger at the end.
+> **How to resume:** M2 is complete. M3 (dashboard v1.5/v2, proxy ETag, team `modelProvider`) is also Done — see [implementation-milestone-3.md](implementation-milestone-3.md). Remaining reshape work is VPS-gated (Phase 0 deploy, live spikes).
 
 ## Orchestration model (MANDATORY, every step)
 

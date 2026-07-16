@@ -83,11 +83,31 @@ from the operator cutover steps above.
   web `npm test` + web `npm run build`), and helm (`helm dependency build` +
   `helm lint` + `helm template`). All touched `.sh` pass `bash -n`.
 
-The following are known pre-existing replay gaps in newly-added code, tracked
-as separate follow-ups (not blockers for the rename/replay landing): the
-docker backend does not yet set `RestartPolicy: "unless-stopped"` for
-`createMemberContainer` (`member_reconcile_test.go`); `project_controller`
-records the leader twice in `Status.RecordedWorkers` (once as Name, once as
-RuntimeName) — `project_controller_test.go` (3 tests). These do not affect
-the build or the rename correctness.
+**Fixed on `main` (commit `7a373a8`):** member `RestartPolicy: "unless-stopped"`
+in the Docker backend and deduplicated `Status.RecordedWorkers` for team leaders
+(`resolveProjectWorkers` prefers `Status.Members.RuntimeName` and skips Spec
+aliases already present in Status). No open replay gap remains for these items.
+
+## Deferred hardening: non-root Manager images
+
+Default installs run Manager and Worker containers as **root**. Forcing
+non-root (e.g. `USER 1000` / `--user 1000`) without a broader refactor will
+crash CoPaw Manager startup: `start-manager-agent.sh` writes `/data`,
+`/root/manager-workspace`, and `/etc/hosts`, and install-time volume mounts
+assume root-owned paths.
+
+A naive `USER` line in `copaw/Dockerfile` targets the **Worker** image only
+and does not cover `/data` or Manager entrypoints — it is the wrong target
+and insufficient.
+
+Full non-root is **deferred**. Primary targets when this is taken up:
+
+- `manager/Dockerfile.copaw` and `manager/Dockerfile`
+- Entrypoint scripts refactored away from hard-coded `/data` and `/root/*`
+  paths in embedded mode
+- Matching install / reconcile mount and `HOME` wiring
+
+Do not ship a partial UID change that fails at first `mkdir`. See also
+[development.md](development.md) (Non-root Manager/Worker images) and the
+reshape plan § security notes.
 

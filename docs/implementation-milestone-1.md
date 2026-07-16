@@ -1,16 +1,11 @@
 # Milestone 1 — Implementation Plan (repo-side hardening + chat fixes)
 
-> **Status:** Approved-pending · **Date:** 2026-07-02 · **Owner:** @nattiini45
+> **Status:** Done · **Date:** 2026-07-02 · **Owner:** @nattiini45
 > Companion to [ai-coworking-reshape-plan.md](ai-coworking-reshape-plan.md) **v2.3** (decisions #1–#18, spikes S1–S10/S-GIT/S-BACKUP).
 >
-> **How to resume:** open a Claude Code session in this repo and say
-> *"Implement Milestone 1 from docs/implementation-milestone-1.md, starting at Step 1"* (or any step).
-> Nothing from the v2.3 doc pass or this plan is committed yet — **first action on resume: commit
-> `docs/` on `plan/ai-coworking-reshape`, then branch `impl/m1-hardening`.**
+> **Merged on `main`:** branch `impl/m1-hardening`, commits `35a4412`..`ba44fb1` (10 steps), integrated via PR #4 (`e3427d1`).
 >
-> All 10 steps were validated against the source by a dedicated Plan agent (2026-07-02): every cited
-> seam confirmed; its three scoping refinements (S2 seam simplification, S3 split, S6 dead-env-var
-> reuse + pytest spike) are folded in below. No step needs to move out of this milestone.
+> **How to resume:** M1 is complete. For live/deploy work see [ai-coworking-reshape-plan.md](ai-coworking-reshape-plan.md) Phase 0; M2/M3 implementation plans are also Done ([implementation-milestone-2.md](implementation-milestone-2.md), [implementation-milestone-3.md](implementation-milestone-3.md)).
 
 ## Orchestration model (MANDATORY, every step)
 

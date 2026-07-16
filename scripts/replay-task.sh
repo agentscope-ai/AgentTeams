@@ -205,11 +205,7 @@ wait_for_manager_reply() {
     local timeout="${4:-${REPLY_TIMEOUT}}"
     local elapsed=0
 
-    # Snapshot the latest event_id from manager before we start waiting
-    local baseline_event
-    baseline_event=$(read_messages "${token}" "${room_id}" 5 2>/dev/null | \
-        jq -r --arg user "@${MANAGER_USER}:" \
-        '[.chunk[] | select(.sender | contains($user)) | .event_id] | first // ""' 2>/dev/null)
+    local baseline_event="${after_event}"
 
     echo -e "\033[36m[replay]\033[0m Waiting for Manager reply (timeout: ${timeout}s)..." >&2
 
@@ -362,14 +358,23 @@ if ! echo "${MEMBERS}" | grep -q "${MANAGER_FULL_ID}" 2>/dev/null; then
 fi
 
 # Step 4: Send message
+BASELINE_MANAGER_EVENT=""
+if [ "${WAIT_FOR_REPLY}" = "1" ]; then
+    # Capture the boundary before sending so an immediate reply cannot become the baseline.
+    if ! BASELINE_MANAGER_EVENT=$(read_messages "${ACCESS_TOKEN}" "${ROOM_ID}" 5 2>/dev/null | \
+        jq -r --arg user "@${MANAGER_USER}:" \
+        '[.chunk[] | select(.sender | contains($user)) | .event_id] | first // ""' 2>/dev/null); then
+        error "Failed to read the Manager message boundary before sending the task."
+    fi
+fi
+
 log "Sending task message..."
 send_message "${ACCESS_TOKEN}" "${ROOM_ID}" "${TASK_MSG}"
 log "Message sent"
 
 # Step 5: Wait for reply
 if [ "${WAIT_FOR_REPLY}" = "1" ]; then
-    REPLY=$(wait_for_manager_reply "${ACCESS_TOKEN}" "${ROOM_ID}" "" "${REPLY_TIMEOUT}")
-    REPLY_STATUS=$?
+    REPLY=$(wait_for_manager_reply "${ACCESS_TOKEN}" "${ROOM_ID}" "${BASELINE_MANAGER_EVENT}" "${REPLY_TIMEOUT}")
 
     # ============================================================
     # Collect room messages into the log file

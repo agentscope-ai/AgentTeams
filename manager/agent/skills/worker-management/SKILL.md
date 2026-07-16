@@ -87,7 +87,7 @@ To migrate a Worker between runtimes (e.g. openclaw → copaw, copaw → hermes)
 bash /opt/hiclaw/agent/skills/worker-management/scripts/update-worker-config.sh \
   --name <NAME> \
   --runtime <openclaw|copaw|hermes|openhuman> \
-  [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]
+  [--model <MODEL>] [--skills s1,s2]
 ```
 
 What happens behind the scenes:
@@ -98,5 +98,5 @@ What happens behind the scenes:
 
 Constraints:
 
-- `--package-dir` and `--channel-policy` cannot be combined with `--runtime` — apply those separately after the runtime switch settles
+- `--package-dir`, `--channel-policy`, and `--mcp-servers` cannot be combined with `--runtime` — apply those separately after the runtime switch settles
 - The wrapper preserves Matrix account/room/credentials/MinIO data but loses container-local ephemeral state — see the runtime gotcha above

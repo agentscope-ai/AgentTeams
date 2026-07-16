@@ -1,6 +1,6 @@
 ---
 name: teamharness-team-coordination
-description: "Use before a TeamHarness Leader chooses task boundaries, dependency shape, ownership, acceptance criteria, or follow-up work."
+description: "Use when a Leader must choose Project Work boundaries, owners, dependency shape, DAG vs Loop, acceptance criteria, or follow-up strategy. Do not use for Quick Task execution after the mode is already selected."
 ---
 
 # Team Coordination

@@ -133,6 +133,12 @@ func (m *Memory) DeletePrefix(_ context.Context, prefix string) error {
 	return nil
 }
 
+// MovePrefix performs the same verified, rollback-on-delete-failure move as
+// production storage while retaining the fake's deterministic behavior.
+func (m *Memory) MovePrefix(ctx context.Context, srcPrefix, dstPrefix string) error {
+	return oss.MovePrefixVerified(ctx, m, srcPrefix, dstPrefix)
+}
+
 // EnsureBucket is a no-op for the in-memory fake.
 func (m *Memory) EnsureBucket(_ context.Context) error { return nil }
 

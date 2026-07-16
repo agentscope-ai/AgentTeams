@@ -102,6 +102,10 @@ Shared runtime Secret name.
 {{- printf "%s-element-web" (include "hiclaw.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "hiclaw.dashboard.fullname" -}}
+{{- printf "%s-dashboard" (include "hiclaw.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{/* ── Component label helpers ─────────────────────────────────────────── */}}
 
 {{- define "hiclaw.component.labels" -}}
@@ -162,6 +166,10 @@ app.kubernetes.io/component: {{ .component }}
 {{- else }}
 {{- default "default" .Values.controller.serviceAccount.name }}
 {{- end }}
+{{- end }}
+
+{{- define "hiclaw.dashboard.serviceAccountName" -}}
+{{- default (printf "%sadmin" (.Values.controller.resourcePrefix | default "agentteams-")) .Values.dashboard.serviceAccount.name }}
 {{- end }}
 
 {{/* ── Manager image helper (used by controller to create Manager CR) ──── */}}

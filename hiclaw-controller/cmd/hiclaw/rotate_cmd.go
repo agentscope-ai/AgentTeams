@@ -28,8 +28,8 @@ This command:
   2. Registers a new AppService with the provided token(s)
   3. Verifies the new token works via smoke test
 
-After running this command, you MUST update HICLAW_MATRIX_APPSERVICE_AS_TOKEN
-(and optionally HICLAW_MATRIX_APPSERVICE_HS_TOKEN) in your env file or K8s
+After running this command, you MUST update AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN
+(and optionally AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN) in your env file or K8s
 Secret, then restart the controller for the change to take effect permanently.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := NewAPIClient()
@@ -44,7 +44,7 @@ Secret, then restart the controller for the change to take effect permanently.`,
 			fmt.Println(resp["message"])
 			fmt.Println()
 			fmt.Println("Next steps:")
-			fmt.Println("  1. Update HICLAW_MATRIX_APPSERVICE_AS_TOKEN in your env file or Secret")
+			fmt.Println("  1. Update AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN in your env file or Secret")
 			fmt.Println("  2. Restart the controller")
 			return nil
 		},

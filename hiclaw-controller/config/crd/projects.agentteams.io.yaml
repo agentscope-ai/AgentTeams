@@ -1,0 +1,110 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: projects.agentteams.io
+spec:
+  group: agentteams.io
+  scope: Namespaced
+  names:
+    plural: projects
+    singular: project
+    kind: Project
+    shortNames: [proj]
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [team, repos]
+              properties:
+                team:
+                  type: string
+                  description: Name of the Team this Project is scoped to.
+                description:
+                  type: string
+                projectName:
+                  type: string
+                  maxLength: 253
+                  pattern: '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'
+                  description: Immutable DNS-safe storage identity; defaults to metadata.name.
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: projectName is immutable
+                repos:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [url, access]
+                    properties:
+                      url:
+                        type: string
+                      access:
+                        type: string
+                        enum: [rw, ro]
+                      name:
+                        type: string
+                workers:
+                  type: array
+                  description: Optional Team member CR names or effective runtime names; normalized to runtime names in the manifest.
+                  items:
+                    type: string
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                storageKey:
+                  type: string
+                  description: Immutable resolved object-storage path component.
+                phase:
+                  type: string
+                  enum: [Pending, Provisioning, Ready, Degraded, Failed, Completed, Archived]
+                message:
+                  type: string
+                repoCount:
+                  type: integer
+                recordedWorkers:
+                  type: array
+                  items:
+                    type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type:
+                        type: string
+                        description: StorageIdentityReady | ReposResolved | WorkersRecorded | MinIOProjected | ArchiveProjected | LeaderNotified | DeprovisionPending
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Team
+          type: string
+          jsonPath: .spec.team
+        - name: Repos
+          type: integer
+          jsonPath: .status.repoCount
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

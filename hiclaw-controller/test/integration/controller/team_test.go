@@ -598,7 +598,7 @@ func TestTeamFinalizer_AddedOnCreate(t *testing.T) {
 			return err
 		}
 		for _, f := range got.Finalizers {
-			if f == "hiclaw.io/cleanup" {
+			if f == "agentteams.io/cleanup" {
 				return nil
 			}
 		}
@@ -722,14 +722,14 @@ func TestTeam_MemberEnv_PassesToBackend(t *testing.T) {
 	worker := name + "-dev"
 	team := fixtures.NewTestTeam(name, leader, worker)
 	team.Spec.Leader.Env = map[string]string{
-		"USER_LEAD":          "L1",
-		"USER_EMPTY":         "",
-		"HICLAW_WORKER_NAME": "user-should-lose",
+		"USER_LEAD":              "L1",
+		"USER_EMPTY":             "",
+		"AGENTTEAMS_WORKER_NAME": "user-should-lose",
 	}
 	team.Spec.Workers[0].Env = map[string]string{
-		"USER_WORK":          "W1",
-		"USER_EMPTY":         "",
-		"HICLAW_WORKER_NAME": "user-should-lose",
+		"USER_WORK":              "W1",
+		"USER_EMPTY":             "",
+		"AGENTTEAMS_WORKER_NAME": "user-should-lose",
 	}
 
 	if err := k8sClient.Create(ctx, team); err != nil {
@@ -749,8 +749,8 @@ func TestTeam_MemberEnv_PassesToBackend(t *testing.T) {
 	if got, present := leaderReq.Env["USER_EMPTY"]; !present || got != "" {
 		t.Errorf("leader USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
 	}
-	if got := leaderReq.Env["HICLAW_WORKER_NAME"]; got != leader {
-		t.Errorf("leader HICLAW_WORKER_NAME=%q, want %q (system wins)", got, leader)
+	if got := leaderReq.Env["AGENTTEAMS_WORKER_NAME"]; got != leader {
+		t.Errorf("leader AGENTTEAMS_WORKER_NAME=%q, want %q (system wins)", got, leader)
 	}
 	if got := leaderReq.Env["MOCK_ENV"]; got != "true" {
 		t.Errorf("leader MOCK_ENV=%q, want %q (system env preserved)", got, "true")
@@ -766,8 +766,8 @@ func TestTeam_MemberEnv_PassesToBackend(t *testing.T) {
 	if got, present := workerReq.Env["USER_EMPTY"]; !present || got != "" {
 		t.Errorf("worker USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
 	}
-	if got := workerReq.Env["HICLAW_WORKER_NAME"]; got != worker {
-		t.Errorf("worker HICLAW_WORKER_NAME=%q, want %q (system wins)", got, worker)
+	if got := workerReq.Env["AGENTTEAMS_WORKER_NAME"]; got != worker {
+		t.Errorf("worker AGENTTEAMS_WORKER_NAME=%q, want %q (system wins)", got, worker)
 	}
 	if got := workerReq.Env["MOCK_ENV"]; got != "true" {
 		t.Errorf("worker MOCK_ENV=%q, want %q (system env preserved)", got, "true")
@@ -856,8 +856,8 @@ func TestTeamCreate_LeaderMcpServers_DeployedToConfig(t *testing.T) {
 //   - Team.spec.leader.labels lands ONLY on the leader; per-member
 //     workers[i].labels land ONLY on that worker and do not leak to
 //     other workers or the leader.
-//   - Controller-forced system labels (hiclaw.io/controller,
-//     hiclaw.io/team, hiclaw.io/role) always win over user-supplied
+//   - Controller-forced system labels (agentteams.io/controller,
+//     agentteams.io/team, agentteams.io/role) always win over user-supplied
 //     values, including reserved keys stuffed into any of the three
 //     user layers (metadata, leader.labels, workers[].labels).
 func TestTeamLabels_PropagateAndIsolatePerMember(t *testing.T) {
@@ -888,8 +888,8 @@ func TestTeamLabels_PropagateAndIsolatePerMember(t *testing.T) {
 		switch team.Spec.Workers[i].Name {
 		case devName:
 			team.Spec.Workers[i].Labels = map[string]string{
-				"skill":          "rust",
-				"hiclaw.io/role": "evil", // reserved-key override attempt
+				"skill":              "rust",
+				"agentteams.io/role": "evil", // reserved-key override attempt
 			}
 		case qaName:
 			team.Spec.Workers[i].Labels = map[string]string{
@@ -953,11 +953,11 @@ func TestTeamLabels_PropagateAndIsolatePerMember(t *testing.T) {
 	// System labels always win on collision.
 	for _, labels := range []map[string]string{leaderLabels, devLabels, qaLabels} {
 		assertLabel(t, labels, v1beta1.LabelController, "test-ctl")
-		assertLabel(t, labels, "hiclaw.io/team", name)
+		assertLabel(t, labels, "agentteams.io/team", name)
 	}
-	assertLabel(t, leaderLabels, "hiclaw.io/role", "team_leader")
-	assertLabel(t, devLabels, "hiclaw.io/role", "worker")
-	assertLabel(t, qaLabels, "hiclaw.io/role", "worker")
+	assertLabel(t, leaderLabels, "agentteams.io/role", "team_leader")
+	assertLabel(t, devLabels, "agentteams.io/role", "worker")
+	assertLabel(t, qaLabels, "agentteams.io/role", "worker")
 }
 
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import (
 )
 
 func TestExpandPackageURI(t *testing.T) {
-	t.Setenv("HICLAW_NACOS_REGISTRY_URI", "nacos://registry.example.com/public")
+	t.Setenv("AGENTTEAMS_NACOS_REGISTRY_URI", "nacos://registry.example.com/public")
 
 	tests := []struct {
 		name    string
@@ -126,7 +126,7 @@ func TestValidateWorkerName(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseYAML_SingleWorker(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -147,13 +147,13 @@ spec:
 	if res.Metadata.Name != "alice" {
 		t.Errorf("expected name alice, got %s", res.Metadata.Name)
 	}
-	if res.APIVersion != "hiclaw.io/v1beta1" {
-		t.Errorf("expected apiVersion hiclaw.io/v1beta1, got %s", res.APIVersion)
+	if res.APIVersion != "agentteams.io/v1beta1" {
+		t.Errorf("expected apiVersion agentteams.io/v1beta1, got %s", res.APIVersion)
 	}
 }
 
 func TestBuildApplyBody_PreservesWorkerResources(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -199,7 +199,7 @@ spec:
 }
 
 func TestParseYAML_MultiDocument(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: alpha-team
@@ -207,7 +207,7 @@ spec:
   leader:
     name: alpha-lead
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: john
@@ -215,7 +215,7 @@ spec:
   displayName: John Doe
   permissionLevel: 2
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: bob
@@ -249,7 +249,7 @@ spec:
 func TestParseYAML_SkipsEmptyDocs(t *testing.T) {
 	input := `---
 ---
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -266,7 +266,7 @@ spec:
 }
 
 func TestParseYAML_MissingNameSkipped(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 spec:
   model: test
@@ -286,7 +286,7 @@ spec:
 }
 
 func TestParseYAML_MissingKindSkipped(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 metadata:
   name: alice
 spec:
@@ -307,7 +307,7 @@ spec:
 }
 
 func TestParseYAML_NameInMetadataOnly(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: my-team
@@ -356,7 +356,7 @@ func TestSplitYAMLDocs(t *testing.T) {
 }
 
 func TestParseYAML_WorkerWithInlineFields(t *testing.T) {
-	input := `apiVersion: hiclaw.io/v1beta1
+	input := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -400,7 +400,7 @@ func TestParseYAML_PackageFieldInSpec(t *testing.T) {
 	}{
 		{
 			name: "nacos package",
-			yaml: `apiVersion: hiclaw.io/v1beta1
+			yaml: `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -412,7 +412,7 @@ spec:
 		},
 		{
 			name: "http package",
-			yaml: `apiVersion: hiclaw.io/v1beta1
+			yaml: `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: bob
@@ -424,7 +424,7 @@ spec:
 		},
 		{
 			name: "no package field",
-			yaml: `apiVersion: hiclaw.io/v1beta1
+			yaml: `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: charlie
@@ -456,7 +456,7 @@ spec:
 func TestApplyFromFiles_Integration(t *testing.T) {
 	// Verify applyFromFiles reads and parses a real temp file without panicking.
 	// It will fail on the HTTP call, but we can verify the file-reading + parsing path.
-	content := `apiVersion: hiclaw.io/v1beta1
+	content := `apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice

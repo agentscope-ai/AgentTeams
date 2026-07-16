@@ -43,9 +43,9 @@ func TestApplyFromFiles_ProjectEndToEnd(t *testing.T) {
 	ts := httptest.NewServer(httpServer.Mux)
 	defer ts.Close()
 
-	t.Setenv("HICLAW_CONTROLLER_URL", ts.URL)
-	os.Unsetenv("HICLAW_AUTH_TOKEN")
-	os.Unsetenv("HICLAW_AUTH_TOKEN_FILE")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", ts.URL)
+	os.Unsetenv("AGENTTEAMS_AUTH_TOKEN")
+	os.Unsetenv("AGENTTEAMS_AUTH_TOKEN_FILE")
 
 	content := `apiVersion: hiclaw.io/v1beta1
 kind: Project
@@ -116,9 +116,9 @@ func TestApplyFromFiles_TeamModelProviderRoundTrip(t *testing.T) {
 	ts := httptest.NewServer(httpServer.Mux)
 	defer ts.Close()
 
-	t.Setenv("HICLAW_CONTROLLER_URL", ts.URL)
-	os.Unsetenv("HICLAW_AUTH_TOKEN")
-	os.Unsetenv("HICLAW_AUTH_TOKEN_FILE")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", ts.URL)
+	os.Unsetenv("AGENTTEAMS_AUTH_TOKEN")
+	os.Unsetenv("AGENTTEAMS_AUTH_TOKEN_FILE")
 
 	content := `apiVersion: hiclaw.io/v1beta1
 kind: Team

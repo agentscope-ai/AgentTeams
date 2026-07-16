@@ -58,8 +58,8 @@ func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	agents := config["agents"].(map[string]interface{})
 	defaults := agents["defaults"].(map[string]interface{})
 	modelCfg := defaults["model"].(map[string]interface{})
-	if modelCfg["primary"] != "hiclaw-gateway/qwen3.5-plus" {
-		t.Errorf("agents.defaults.model.primary = %v, want hiclaw-gateway/qwen3.5-plus", modelCfg["primary"])
+	if modelCfg["primary"] != "agentteams-gateway/qwen3.5-plus" {
+		t.Errorf("agents.defaults.model.primary = %v, want agentteams-gateway/qwen3.5-plus", modelCfg["primary"])
 	}
 }
 
@@ -151,8 +151,8 @@ func TestGenerateOpenClawConfig_CustomModel(t *testing.T) {
 	agents := config["agents"].(map[string]interface{})
 	defaults := agents["defaults"].(map[string]interface{})
 	modelCfg := defaults["model"].(map[string]interface{})
-	if modelCfg["primary"] != "hiclaw-gateway/custom-model-x" {
-		t.Errorf("agents.defaults.model.primary = %v, want hiclaw-gateway/custom-model-x", modelCfg["primary"])
+	if modelCfg["primary"] != "agentteams-gateway/custom-model-x" {
+		t.Errorf("agents.defaults.model.primary = %v, want agentteams-gateway/custom-model-x", modelCfg["primary"])
 	}
 }
 
@@ -275,70 +275,147 @@ func TestDefaultModelSpec(t *testing.T) {
 	}
 }
 
-// TestDefaultModelSpec_ExtraProviders covers the provisional Ollama/MiMo
-// catalog entries added for the setup-higress.sh extra-provider loop
-// (plan v2.3 Phase 2b, decision #7; S5/S6 live-gated).
-func TestDefaultModelSpec_ExtraProviders(t *testing.T) {
-	cases := []struct {
-		name        string
-		wantCtx     int
-		wantMax     int
-		wantVisible bool
-	}{
-		{"ollama/gpt-oss:120b-cloud", 128000, 32000, false},
-		{"mimo/MiMo-V2.5", 128000, 32000, false},
-		{"mimo/MiMo-V2.5-Pro", 200000, 64000, false},
+func TestMergeSoulTemplate_NewFile(t *testing.T) {
+	rendered := "# leader - Team Leader\n\nYou are the Team Leader of `my-team`.\n"
+	result := MergeSoulTemplate("", rendered)
+
+	if !strings.Contains(result, SoulTemplateStart) {
+		t.Error("result should contain soul template start marker")
 	}
-	for _, tc := range cases {
-		spec := defaultModelSpec(tc.name)
-		if spec.ContextWindow != tc.wantCtx {
-			t.Errorf("%s ctx = %d, want %d", tc.name, spec.ContextWindow, tc.wantCtx)
-		}
-		if spec.MaxTokens != tc.wantMax {
-			t.Errorf("%s max = %d, want %d", tc.name, spec.MaxTokens, tc.wantMax)
-		}
-		if !spec.Reasoning {
-			t.Errorf("%s should default to reasoning=true", tc.name)
-		}
-		hasImage := len(spec.Input) == 2 && spec.Input[1] == "image"
-		if hasImage != tc.wantVisible {
-			t.Errorf("%s vision = %v, want %v", tc.name, hasImage, tc.wantVisible)
-		}
+	if !strings.Contains(result, SoulTemplateEnd) {
+		t.Error("result should contain soul template end marker")
+	}
+	if !strings.Contains(result, "Team Leader") {
+		t.Error("result should contain rendered template content")
 	}
 }
 
-// TestAllModelSpecsAndAliases_IncludeExtraProviders asserts the new
-// ollama/mimo ids resolve through the same allModelSpecs/allModelAliases
-// paths used to render openclaw.json, and that both slices agree with
-// defaultModelSpec's ctx/max (drift guard across the two in-generator
-// catalog spots).
-func TestAllModelSpecsAndAliases_IncludeExtraProviders(t *testing.T) {
-	g := NewGenerator(Config{DefaultModel: "qwen3.5-plus"})
+func TestMergeSoulTemplate_PreservesPackageContent(t *testing.T) {
+	packageSoul := "# Custom Leader Identity\n\nYou are a specialized leader.\n\n## Domain Knowledge\n\nYou know about finance.\n"
+	rendered := "# leader - Team Leader\n\nYou are the Team Leader of `my-team`.\n"
 
-	wantIDs := []string{"ollama/gpt-oss:120b-cloud", "mimo/MiMo-V2.5", "mimo/MiMo-V2.5-Pro"}
+	result := MergeSoulTemplate(packageSoul, rendered)
 
-	specs := g.allModelSpecs("qwen3.5-plus")
-	specByID := make(map[string]ModelSpec, len(specs))
-	for _, s := range specs {
-		specByID[s.ID] = s
+	if !strings.Contains(result, "Team Leader") {
+		t.Error("result should contain template content")
 	}
-	aliases := g.allModelAliases("qwen3.5-plus")
+	if !strings.Contains(result, "Custom Leader Identity") {
+		t.Error("result should preserve package content")
+	}
+	if !strings.Contains(result, "Domain Knowledge") {
+		t.Error("result should preserve all package sections")
+	}
+}
 
-	for _, id := range wantIDs {
-		spec, ok := specByID[id]
-		if !ok {
-			t.Errorf("allModelSpecs missing %q", id)
-			continue
-		}
-		want := defaultModelSpec(id)
-		if spec.ContextWindow != want.ContextWindow || spec.MaxTokens != want.MaxTokens {
-			t.Errorf("allModelSpecs[%q] = {ctx:%d max:%d}, want {ctx:%d max:%d}",
-				id, spec.ContextWindow, spec.MaxTokens, want.ContextWindow, want.MaxTokens)
-		}
+func TestMergeSoulTemplate_UpdateReplacesTemplateSection(t *testing.T) {
+	existing := SoulTemplateHeader + "\nOld template content\n\n" + SoulTemplateEnd + "\n\n# Package Content\nKeep this.\n"
+	rendered := "# Updated Template\n\nNew team info.\n"
 
-		aliasKey := "hiclaw-gateway/" + id
-		if _, ok := aliases[aliasKey]; !ok {
-			t.Errorf("allModelAliases missing %q", aliasKey)
-		}
+	result := MergeSoulTemplate(existing, rendered)
+
+	if !strings.Contains(result, "New team info") {
+		t.Error("result should contain updated template content")
+	}
+	if strings.Contains(result, "Old template content") {
+		t.Error("result should not contain old template content")
+	}
+	if !strings.Contains(result, "Package Content") {
+		t.Error("result should preserve content outside markers")
+	}
+}
+
+func TestInjectChannelPolicy_FromExisting(t *testing.T) {
+	existing := []byte(`{
+  "channels": {
+    "matrix": {
+      "groupAllowFrom": ["@manager:m.test", "@admin:m.test"],
+      "dm": {"allowFrom": ["@manager:m.test", "@admin:m.test"]}
+    }
+  }
+}`)
+
+	out := InjectChannelPolicy(
+		existing,
+		[]string{"@leader:m.test", "@admin:m.test", "@dev:m.test"},
+		[]string{"@leader:m.test", "@admin:m.test"},
+	)
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	matrix := got["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	gaf := matrix["groupAllowFrom"].([]interface{})
+	if len(gaf) != 3 || gaf[0] != "@leader:m.test" || gaf[1] != "@admin:m.test" || gaf[2] != "@dev:m.test" {
+		t.Errorf("groupAllowFrom = %v, want [@leader:m.test @admin:m.test @dev:m.test]", gaf)
+	}
+	dm := matrix["dm"].(map[string]interface{})
+	daf := dm["allowFrom"].([]interface{})
+	if len(daf) != 2 || daf[0] != "@leader:m.test" || daf[1] != "@admin:m.test" {
+		t.Errorf("dm.allowFrom = %v, want [@leader:m.test @admin:m.test]", daf)
+	}
+}
+
+func TestInjectChannelPolicy_FromEmpty(t *testing.T) {
+	out := InjectChannelPolicy(
+		nil,
+		[]string{"@leader:m.test", "@admin:m.test", "@leader:m.test"},
+		[]string{"@admin:m.test"},
+	)
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	matrix := got["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	if gaf := matrix["groupAllowFrom"].([]interface{}); len(gaf) != 2 {
+		t.Errorf("expected groupAllowFrom of length 2, got %v", gaf)
+	}
+	daf, ok := matrix["dm"].(map[string]interface{})["allowFrom"].([]interface{})
+	if !ok {
+		t.Fatalf("expected dm.allowFrom to be set")
+	}
+	if len(daf) != 1 || daf[0] != "@admin:m.test" {
+		t.Errorf("dm.allowFrom = %v, want [@admin:m.test]", daf)
+	}
+}
+
+func TestInjectChannelPolicy_EmptyInputsAreNoop(t *testing.T) {
+	existing := []byte(`{"channels":{"matrix":{"groupAllowFrom":["@a:x","@b:x"]}}}`)
+
+	if got := InjectChannelPolicy(existing, nil, []string{"@admin:m.test"}); string(got) != string(existing) {
+		t.Errorf("empty group allow should noop, got %s", string(got))
+	}
+	if got := InjectChannelPolicy(existing, []string{"@leader:m.test"}, nil); string(got) != string(existing) {
+		t.Errorf("empty dm allow should noop, got %s", string(got))
+	}
+}
+
+func TestInjectChannelPolicy_PreservesUnrelatedFields(t *testing.T) {
+	existing := []byte(`{
+  "agents": {"defaults": {"model": "qwen-plus"}},
+  "channels": {
+    "matrix": {
+      "homeserver": "http://m.test",
+      "groupAllowFrom": ["@old:m.test"]
+    }
+  },
+  "extras": {"foo": "bar"}
+}`)
+	out := InjectChannelPolicy(existing, []string{"@leader:m.test"}, []string{"@admin:m.test"})
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if model := got["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["model"]; model != "qwen-plus" {
+		t.Errorf("agents.defaults.model lost: %v", model)
+	}
+	matrix := got["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	if hs := matrix["homeserver"]; hs != "http://m.test" {
+		t.Errorf("channels.matrix.homeserver lost: %v", hs)
+	}
+	if extras := got["extras"].(map[string]interface{})["foo"]; extras != "bar" {
+		t.Errorf("extras.foo lost: %v", extras)
 	}
 }

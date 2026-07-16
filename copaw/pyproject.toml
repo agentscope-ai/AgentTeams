@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "copaw-worker"
 version = "1.0.3"
-description = "Lightweight HiClaw Worker runtime based on CoPaw"
+description = "Lightweight AgentTeams Worker runtime based on CoPaw"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
@@ -15,6 +15,13 @@ dependencies = [
     "markdown-it-py>=3.0",
     "linkify-it-py>=2.0",
 ]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
 
 [project.urls]
 Homepage = "https://github.com/higress-group/hiclaw"

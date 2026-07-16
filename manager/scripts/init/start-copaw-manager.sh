@@ -1,6 +1,6 @@
 #!/bin/bash
 # start-copaw-manager.sh - Start Manager Agent with CoPaw runtime
-# Called by start-manager-agent.sh when HICLAW_MANAGER_RUNTIME=copaw
+# Called by start-manager-agent.sh when AGENTTEAMS_MANAGER_RUNTIME=copaw
 #
 # This script converts an OpenClaw-style workspace to a CoPaw-style workspace
 # and then launches the CoPaw application.
@@ -56,7 +56,7 @@ log "Config bridged from openclaw.json"
 # ============================================================
 # 3. Sync prompt files into CoPaw paths
 # ============================================================
-# Canonical HiClaw layout is OPENCLAW_WORKSPACE ($HOME): SOUL.md, memory/, skills/ etc.
+# Canonical AgentTeams layout is OPENCLAW_WORKSPACE ($HOME): SOUL.md, memory/, skills/ etc.
 # CoPaw reads from COPAW_WORKING_DIR/workspaces/default/; we sync into that path only.
 # Use cp -u / cp -ru so we never overwrite newer files already in workspaces/default/.
 # ============================================================
@@ -157,7 +157,7 @@ rm -f "${DM_ROOMS_FILE}" "${DM_ROOMS_FILE}.tmp"
 # ============================================================
 # 8. Configure CoPaw CMS plugin (LoongSuite observability)
 # ============================================================
-CMS_TRACES_ENABLED="$(echo "${HICLAW_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
 if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
     log "Configuring CoPaw CMS plugin..."
 
@@ -174,11 +174,11 @@ import os
 from pathlib import Path
 
 cfg_path = Path(sys.argv[1])
-endpoint = os.getenv("HICLAW_CMS_ENDPOINT", "")
-license_key = os.getenv("HICLAW_CMS_LICENSE_KEY", "")
-arms_project = os.getenv("HICLAW_CMS_PROJECT", "")
-cms_workspace = os.getenv("HICLAW_CMS_WORKSPACE", "")
-service_name = os.getenv("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager")
+endpoint = os.getenv("AGENTTEAMS_CMS_ENDPOINT", "")
+license_key = os.getenv("AGENTTEAMS_CMS_LICENSE_KEY", "")
+arms_project = os.getenv("AGENTTEAMS_CMS_PROJECT", "")
+cms_workspace = os.getenv("AGENTTEAMS_CMS_WORKSPACE", "")
+service_name = os.getenv("AGENTTEAMS_CMS_SERVICE_NAME", "agentteams-manager")
 protocol = "http/protobuf"  # Default OTLP protocol
 
 config = {
@@ -240,4 +240,5 @@ export COPAW_LOG_LEVEL
 export PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}"
 
 # Use uvicorn to run CoPaw FastAPI app (enables AgentConfigWatcher for hot-reload)
-exec python3 -m copaw app --host 0.0.0.0 --port 18799
+# The wrapper installs AgentTeams-owned tools before CoPaw creates any agents.
+exec python3 -m copaw_worker.run_copaw_app app --host 0.0.0.0 --port 18799

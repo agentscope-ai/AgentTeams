@@ -123,7 +123,7 @@ func TestMain(m *testing.M) {
 		Legacy:         testLegacy,
 		ControllerName: "test-ctl",
 	}
-	if err := workerReconciler.SetupWithManager(mgr); err != nil {
+	if _, err := workerReconciler.SetupWithManager(mgr); err != nil {
 		panic(fmt.Sprintf("failed to setup WorkerReconciler: %v", err))
 	}
 
@@ -137,7 +137,7 @@ func TestMain(m *testing.M) {
 		AgentFSDir:     agentFSDir,
 		ControllerName: "test-ctl",
 	}
-	if err := teamReconciler.SetupWithManager(mgr); err != nil {
+	if _, err := teamReconciler.SetupWithManager(mgr); err != nil {
 		panic(fmt.Sprintf("failed to setup TeamReconciler: %v", err))
 	}
 

@@ -173,11 +173,15 @@ func (c *MinIOClient) DeletePrefix(ctx context.Context, prefix string) error {
 	return err
 }
 
+func (c *MinIOClient) MovePrefix(ctx context.Context, srcPrefix, dstPrefix string) error {
+	return MovePrefixVerified(ctx, c, srcPrefix, dstPrefix)
+}
+
 func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	if err := c.ensureAlias(ctx); err != nil {
 		return nil, err
 	}
-	out, err := c.runMC(ctx, "ls", c.fullPath(prefix))
+	out, err := c.runMC(ctx, "find", c.fullPath(prefix), "--type", "f")
 	if err != nil {
 		return nil, err
 	}
@@ -188,11 +192,9 @@ func (c *MinIOClient) ListObjects(ctx context.Context, prefix string) ([]string,
 		if line == "" {
 			continue
 		}
-		// mc ls output format: "[date] [size] filename"
-		parts := strings.Fields(line)
-		if len(parts) > 0 {
-			names = append(names, parts[len(parts)-1])
-		}
+		root := strings.TrimSuffix(c.fullPath(""), "/") + "/"
+		line = strings.TrimPrefix(line, root)
+		names = append(names, line)
 	}
 	return names, nil
 }
@@ -208,10 +210,17 @@ func (c *MinIOClient) EnsureBucket(ctx context.Context) error {
 }
 
 func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error) {
+	return c.runMCWithInput(ctx, nil, args...)
+}
+
+func (c *MinIOClient) runMCWithInput(ctx context.Context, stdin []byte, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.config.MCBinary, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	if c.credSource != nil {
 		creds, err := c.credSource.Resolve(ctx)
@@ -238,7 +247,7 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 // honours the security-token component when present.
 //
 // The endpoint is supplied by the caller (normally MinIOClient.config.Endpoint,
-// sourced from HICLAW_FS_ENDPOINT). A bare hostname (e.g.
+// sourced from AGENTTEAMS_FS_ENDPOINT). A bare hostname (e.g.
 // "oss-cn-hangzhou.aliyuncs.com") without a URL scheme is accepted; in
 // that case we default to https.
 //
@@ -251,7 +260,7 @@ func (c *MinIOClient) runMC(ctx context.Context, args ...string) (string, error)
 // alphabet plus "+/=") that Go's url.Parse accepts inside userinfo.
 func buildMCHostEnv(alias string, endpoint string, c Credentials) (string, error) {
 	if endpoint == "" {
-		return "", fmt.Errorf("storage endpoint is not configured (HICLAW_FS_ENDPOINT is empty)")
+		return "", fmt.Errorf("storage endpoint is not configured (AGENTTEAMS_FS_ENDPOINT is empty)")
 	}
 	normalized := endpoint
 	if !strings.HasPrefix(normalized, "http://") && !strings.HasPrefix(normalized, "https://") {

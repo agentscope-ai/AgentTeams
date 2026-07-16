@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import inspect
 import io
 import json
 import logging
@@ -40,6 +41,16 @@ from nio import (
     UploadResponse,
 )
 from nio.responses import JoinedMembersResponse, WhoamiResponse
+
+from copaw_worker.matrix_relations import (
+    MATRIX_THREAD_ROOT_META_KEY,
+    RecentEventLedger,
+    apply_thread_relation,
+    atomic_write_text,
+    generated_marker,
+    inbound_relation_meta,
+    is_generated_event,
+)
 
 logger = logging.getLogger("copaw.channels.matrix")
 
@@ -76,9 +87,8 @@ TYPING_MAX_DURATION_S = 120
 DM_CACHE_TTL_MS = 30_000
 # Room-membership localpart cache (tier-4 bare-@mention resolution)
 LOCALPART_CACHE_TTL_MS = 60_000
-# Catch-up replay: cap on buffered startup messages (avoid unbounded growth
-# if a room is very chatty while the channel is still starting up)
-STARTUP_REPLAY_BUFFER_CAP = 50
+RECENT_EVENT_LEDGER_CAP = 2048
+ACK_TIMEOUT_S = 3
 
 # Token refresh tunables
 MAX_TOKEN_REFRESH_RETRIES = 3
@@ -102,12 +112,7 @@ _SLASH_COMMANDS = frozenset(
 _SLASH_ALIASES: dict[str, str] = {
     "reset": "clear",
 }
-_CONTROL_COMMAND_ALIASES: dict[str, str] = {
-    "stop": "/stop",
-    "approve": "/approve",
-    "deny": "/deny",
-    "approval": "/approval",
-}
+
 _STOP_RESPONSE_RE = re.compile(
     r"Session\s+`matrix:[^`]+`:\s+(?P<status>[^.]+)\.",
     re.IGNORECASE,
@@ -116,11 +121,40 @@ _READINESS_REPLY_RE = re.compile(
     r"\breadiness\s+check\b.*\breply\s+with\s+the\s+exact\s+text\s+READY\b",
     re.IGNORECASE | re.DOTALL,
 )
+_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
+    r"(?i)\b("
+    r"let me|"
+    r"i['’]?ll coordinate|"
+    r"i will coordinate|"
+    r"i have (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
+    r"workers? available|"
+    r"now let me|"
+    r"no active projects|"
+    r"project created\. now|"
+    r"good[,.]? i have|"
+    r"solid understanding|"
+    r"team coordination plan"
+    r")\b",
+)
+_TEAM_LEADER_MATRIX_USER_ID_RE = re.compile(
+    r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
+)
+_TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"task\s+assigned|"
+    r"assigned\s+task|"
+    r"you\s+are\s+assigned|"
+    r"please\s+(?:design|implement|write|test|build|handle|review|create|investigate|work)|"
+    r"start\s+(?:by\s+)?(?:designing|implementing|writing|testing|building|handling|reviewing|creating|investigating)"
+    r")\b",
+)
 _THREAD_META_ROOT_KEY = "thread_root_event_id"
-_MATRIX_THREAD_META_KEY = "matrix_thread_root_event_id"
+_MATRIX_THREAD_META_KEY = MATRIX_THREAD_ROOT_META_KEY
 _MATRIX_OWN_THREAD_ROOT_KEY = "matrix_own_thread_root_event_id"
 _MATRIX_PENDING_THREAD_PARTS_KEY = "matrix_pending_thread_parts"
 _MATRIX_PENDING_FINAL_MESSAGE_KEY = "matrix_pending_final_message"
+_MATRIX_FORCE_NOTICE_KEY = "matrix_force_notice"
+_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY = "matrix_placeholder_thread_root"
 _TOOL_CALL_MESSAGE_TYPE_NAMES = frozenset(
     {
         "FUNCTION_CALL",
@@ -201,6 +235,105 @@ def _ends_with_no_reply_control(text: str) -> bool:
     return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
 
 
+def _strip_yaml_string(value: str) -> str:
+    text = value.strip()
+    if not text or text in {"null", "~"}:
+        return ""
+    if "#" in text:
+        text = text.split("#", 1)[0].strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _runtime_root() -> Path:
+    configured = os.getenv("COPAW_WORKING_DIR")
+    if configured:
+        path = Path(configured).expanduser().resolve()
+        if path.name == "default" and path.parent.name == "workspaces":
+            copaw_dir = path.parent.parent
+            if copaw_dir.name == ".copaw":
+                return copaw_dir.parent
+        if path.name == ".copaw":
+            return path.parent
+        return path.parent
+
+    cwd = Path.cwd().resolve()
+    if cwd.name == "default" and cwd.parent.name == "workspaces":
+        copaw_dir = cwd.parent.parent
+        if copaw_dir.name == ".copaw":
+            return copaw_dir.parent
+    return cwd
+
+
+def _runtime_config_field(section: str, key: str) -> str:
+    path = _runtime_root() / "runtime" / "runtime.yaml"
+    if not path.exists():
+        return ""
+
+    in_section = False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for raw_line in lines:
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        if not raw_line.startswith((" ", "\t")):
+            in_section = raw_line.strip() == f"{section}:"
+            continue
+        if not in_section:
+            continue
+        stripped = raw_line.strip()
+        if ":" not in stripped:
+            continue
+        field, value = stripped.split(":", 1)
+        if field.strip() == key:
+            return _strip_yaml_string(value)
+    return ""
+
+
+def _matrix_localpart(user_id: str | None) -> str:
+    text = (user_id or os.getenv("AGENTTEAMS_WORKER_NAME") or "").strip()
+    if text.startswith("@"):
+        return text[1:].split(":", 1)[0]
+    return text.split(":", 1)[0]
+
+
+def _is_team_leader_identity(user_id: str | None) -> bool:
+    localpart = _matrix_localpart(user_id)
+    return localpart.endswith("-lead") or localpart.endswith("-leader")
+
+
+def _is_team_leader_internal_preamble_text(text: str) -> bool:
+    """Return true for visible Team Leader internal planning/tool preambles."""
+    stripped = (text or "").strip()
+    if not stripped or "?" in stripped:
+        return False
+
+    # Keep concrete worker assignments so the channel can reroute them to the
+    # Team Room. Roster/topology planning that happens to mention workers is
+    # still an internal preamble and must stay out of Leader DM.
+    if _TEAM_LEADER_MATRIX_USER_ID_RE.search(text or "") and (
+        _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(stripped)
+    ):
+        return False
+
+    return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))
+
+
+def _is_team_leader_dm_internal_preamble(current_room_id: str, text: str) -> bool:
+    """Suppress visible Team Leader internal planning/tool preambles in Leader DM."""
+    if _runtime_config_field("member", "role") != "team_leader":
+        return False
+
+    leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
+    if not leader_dm_room_id or current_room_id != leader_dm_room_id:
+        return False
+
+    return _is_team_leader_internal_preamble_text(text)
+
+
 def _readiness_probe_reply(text: str) -> str | None:
     """Return the direct reply for the Matrix runtime readiness probe."""
     return "READY" if _READINESS_REPLY_RE.search(text or "") else None
@@ -209,10 +342,10 @@ def _readiness_probe_reply(text: str) -> str | None:
 def _chat_ack_enabled() -> bool:
     """Return whether immediate chat acks are enabled (default: on).
 
-    ``HICLAW_CHAT_ACK`` — unset or any of "1"/"true" (case-insensitive) means
+    ``AGENTTEAMS_CHAT_ACK`` — unset or any of "1"/"true" (case-insensitive) means
     on; "0"/"false" means off.
     """
-    raw = os.environ.get("HICLAW_CHAT_ACK")
+    raw = os.environ.get("AGENTTEAMS_CHAT_ACK")
     if raw is None:
         return True
     return raw.strip().lower() not in ("0", "false")
@@ -330,6 +463,9 @@ class MatrixChannel(BaseChannel):
         self._client: Optional[AsyncClient] = None
         self._user_id: Optional[str] = None
         self._sync_task: Optional[asyncio.Task] = None
+        self._last_sync_token: Optional[str] = None
+        self._accepting_events = False
+        self._ack_tasks: set[asyncio.Task] = set()
         self._typing_tasks: Dict[
             str,
             asyncio.Task,
@@ -341,14 +477,18 @@ class MatrixChannel(BaseChannel):
         # DM room cache: room_id -> {"members": [user_ids], "ts": timestamp}
         # Used to reliably detect DM rooms when nio's room.users is unreliable.
         self._dm_room_cache: Dict[str, Dict[str, Any]] = {}
+        self._localpart_cache: Dict[str, Dict[str, Any]] = {}
         # Shared HTTP client for media downloads (created in start())
         self._http_client: Optional[httpx.AsyncClient] = None
-        # Bare-@mention resolution (tier 4): room_id -> {"localparts": {lp:
-        # mxid}, "ts": timestamp}. Built from room members via joined_members.
-        self._localpart_cache: Dict[str, Dict[str, Any]] = {}
-        # Startup replay buffer: events received while callbacks were
-        # suppressed during the initial catch-up sync, replayed once ready.
-        self._startup_replay_buffer: List[Any] = []
+        # Shared send_meta state for proactive sends (cron/scheduled)
+        # Maps room_id → send_meta dict so thread root persists across events
+        self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+        # Track active thread root per room for error handling
+        self._active_thread_roots: Dict[str, str] = {}
+        self._recent_events = RecentEventLedger(
+            self._recent_event_ledger_path(),
+            RECENT_EVENT_LEDGER_CAP,
+        )
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -398,8 +538,8 @@ class MatrixChannel(BaseChannel):
     def from_env(cls, process: Callable, on_reply_sent=None) -> "MatrixChannel":
         import os
         cfg = MatrixChannelConfig({
-            "homeserver": os.environ.get("HICLAW_MATRIX_SERVER", ""),
-            "access_token": os.environ.get("HICLAW_MATRIX_TOKEN", ""),
+            "homeserver": os.environ.get("AGENTTEAMS_MATRIX_SERVER", ""),
+            "access_token": os.environ.get("AGENTTEAMS_MATRIX_TOKEN", ""),
         })
         return cls(process=process, config=cfg, on_reply_sent=on_reply_sent)
 
@@ -590,16 +730,34 @@ class MatrixChannel(BaseChannel):
             timeout=60,
         )
 
+        self._accepting_events = True
         self._sync_task = asyncio.create_task(self._sync_loop())
         logger.info("MatrixChannel: sync loop started")
 
-    async def stop(self) -> None:
+    async def quiesce(self) -> None:
+        """Stop accepting events and persist the latest sync position."""
+        self._accepting_events = False
         if self._sync_task:
             self._sync_task.cancel()
             try:
                 await self._sync_task
             except asyncio.CancelledError:
                 logger.debug("MatrixChannel: sync task cancelled during stop")
+            self._sync_task = None
+        if self._last_sync_token:
+            self._save_sync_token(self._last_sync_token)
+
+    async def stop(self) -> None:
+        await self.quiesce()
+        pending_acks = [task for task in self._ack_tasks if not task.done()]
+        for task in pending_acks:
+            task.cancel()
+        if pending_acks:
+            await asyncio.gather(*pending_acks, return_exceptions=True)
+        self._ack_tasks.clear()
+        for task in list(self._typing_tasks.values()):
+            task.cancel()
+        self._typing_tasks.clear()
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
@@ -623,6 +781,13 @@ class MatrixChannel(BaseChannel):
             return Path(wd) / "matrix_sync_token"
         return None
 
+    @staticmethod
+    def _recent_event_ledger_path() -> Optional[Path]:
+        wd = os.environ.get("COPAW_WORKING_DIR")
+        if wd:
+            return Path(wd) / "matrix_recent_events.json"
+        return None
+
     def _load_sync_token(self) -> Optional[str]:
         """Load persisted next_batch token from disk, or None.
 
@@ -634,6 +799,7 @@ class MatrixChannel(BaseChannel):
             try:
                 token = path.read_text().strip()
                 if token:
+                    self._last_sync_token = token
                     logger.info(
                         "MatrixChannel: restored sync token from %s",
                         path,
@@ -651,8 +817,8 @@ class MatrixChannel(BaseChannel):
         path = self._sync_token_path()
         if path:
             try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(token)
+                atomic_write_text(path, token)
+                self._last_sync_token = token
             except Exception as exc:
                 logger.warning(
                     "MatrixChannel: failed to save sync token: %s",
@@ -661,7 +827,7 @@ class MatrixChannel(BaseChannel):
 
     @staticmethod
     def _ready_marker_path() -> Optional[Path]:
-        marker = os.environ.get("HICLAW_MATRIX_CHANNEL_READY_FILE")
+        marker = os.environ.get("AGENTTEAMS_MATRIX_CHANNEL_READY_FILE")
         if marker:
             return Path(marker)
         return None
@@ -714,13 +880,13 @@ class MatrixChannel(BaseChannel):
 
         Returns True if token was refreshed successfully.
         """
-        controller_url = os.environ.get("HICLAW_CONTROLLER_URL", "")
-        auth_token_file = os.environ.get("HICLAW_AUTH_TOKEN_FILE", "")
-        auth_token = os.environ.get("HICLAW_AUTH_TOKEN", "")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "")
+        auth_token_file = os.environ.get("AGENTTEAMS_AUTH_TOKEN_FILE", "")
+        auth_token = os.environ.get("AGENTTEAMS_AUTH_TOKEN", "")
 
         if not controller_url:
             logger.warning(
-                "MatrixChannel: HICLAW_CONTROLLER_URL not set, "
+                "MatrixChannel: AGENTTEAMS_CONTROLLER_URL not set, "
                 "cannot refresh token",
             )
             return False
@@ -1061,7 +1227,7 @@ class MatrixChannel(BaseChannel):
         Bypasses the enqueue/agent-processing queue entirely (direct
         ``room_send``, same primitive as ``_send_plain_text``) so the sender
         gets fast feedback even if the agent itself is slow to respond.
-        Gated by ``HICLAW_CHAT_ACK`` (default on).
+        Gated by ``AGENTTEAMS_CHAT_ACK`` (default on).
         """
         if not _chat_ack_enabled():
             return
@@ -1293,18 +1459,6 @@ class MatrixChannel(BaseChannel):
         if not allow_bare:
             return None
 
-        parts = stripped.split(None, 1)
-        if not parts:
-            return None
-        command = _CONTROL_COMMAND_ALIASES.get(parts[0].lower())
-        if command is None:
-            return None
-
-        candidate = command
-        if len(parts) > 1:
-            candidate = f"{command} {parts[1]}"
-        if registry.is_control_command(candidate):
-            return candidate
         return None
 
     # ------------------------------------------------------------------
@@ -2013,12 +2167,9 @@ class MatrixChannel(BaseChannel):
         control_text = self._control_command_text(stripped, allow_bare=mentioned)
         is_control_command = control_text is not None
 
-        # Mention check for group rooms. Runtime control commands are allowed
-        # through after mention-prefix stripping so @worker /stop reaches
-        # CoPaw's native control-command path instead of the model.
         if not is_dm:
             requires_mention = self._require_mention(room_id)
-            if requires_mention and not mentioned and not is_control_command:
+            if requires_mention and not mentioned:
                 if is_thread_event:
                     return
                 self._record_history(
@@ -2478,6 +2629,50 @@ class MatrixChannel(BaseChannel):
         return meta.get("room_id", getattr(request, "user_id", ""))
 
     # ------------------------------------------------------------------
+    # Proactive send (cron/scheduled) — thread-aware send_event override
+    # ------------------------------------------------------------------
+
+    async def send_event(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        event: Any,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Route proactive (cron) events through thread-aware logic.
+
+        The base send_event only calls send_message_content, bypassing
+        on_event_message_completed and thread routing. This override uses
+        shared per-room state so the thread root persists across events
+        within one proactive send stream.
+        """
+        obj = getattr(event, "object", None)
+        status = getattr(event, "status", None)
+        to_handle = self.to_handle_from_target(
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+        # Get or create shared send_meta for this proactive send
+        send_meta = self._proactive_send_state.get(to_handle)
+        if send_meta is None:
+            send_meta = dict(meta or {})
+            self._proactive_send_state[to_handle] = send_meta
+
+        if obj == "message" and self._is_completed_status(status):
+            await self.on_event_message_completed(
+                None,
+                to_handle,
+                event,
+                send_meta,
+            )
+        elif obj == "response":
+            # Stream completed — flush deferred final message and clean up
+            await self._on_process_completed(None, to_handle, send_meta)
+            self._proactive_send_state.pop(to_handle, None)
+
+    # ------------------------------------------------------------------
     # Mention helper — MSC3952 m.mentions from body text scan
     # ------------------------------------------------------------------
 
@@ -2580,6 +2775,17 @@ class MatrixChannel(BaseChannel):
                     )
         return user_id.split(":")[0].lstrip("@") or user_id
 
+    def _should_suppress_team_leader_internal_preamble(
+        self,
+        room_id: str,
+        text: str,
+    ) -> bool:
+        if _is_team_leader_dm_internal_preamble(room_id, text):
+            return True
+        if not _is_team_leader_identity(self._user_id):
+            return False
+        return _is_team_leader_internal_preamble_text(text)
+
     def _with_thread_relation_meta(
         self,
         meta: Optional[Dict[str, Any]],
@@ -2657,6 +2863,44 @@ class MatrixChannel(BaseChannel):
             self._with_thread_relation_meta(meta_dict, thread_root),
         )
 
+    async def _ensure_thread_root(
+        self,
+        to_handle: str,
+        send_meta: Dict[str, Any],
+    ) -> None:
+        """Create a placeholder thread-root message if none exists yet.
+
+        Sends "处理中..." to the main room as the thread root so that
+        reasoning/tool_call content can be sent to the thread immediately.
+        The final MESSAGE is sent as a separate new message in the main room.
+        """
+        if send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY):
+            return
+        if not self._client:
+            return
+        content: dict[str, Any] = {
+            "msgtype": "m.notice",
+            "body": "处理中...",
+        }
+        try:
+            resp = await self._client.room_send(
+                to_handle,
+                "m.room.message",
+                content,
+                ignore_unverified_devices=True,
+            )
+            event_id = getattr(resp, "event_id", None)
+            if event_id:
+                send_meta[_MATRIX_OWN_THREAD_ROOT_KEY] = event_id
+                send_meta[_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY] = True
+                self._active_thread_roots[to_handle] = event_id
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: _ensure_thread_root failed for %s: %s",
+                to_handle,
+                exc,
+            )
+
     def _apply_thread_relation(
         self,
         content: Dict[str, Any],
@@ -2680,12 +2924,201 @@ class MatrixChannel(BaseChannel):
             "is_falling_back": False,
         }
 
+    def _is_completed_status(self, status: Any) -> bool:
+        if RunStatus is not None and status == RunStatus.Completed:
+            return True
+        return _enum_name(status) == "COMPLETED"
+
+    def _is_in_progress_status(self, status: Any) -> bool:
+        if RunStatus is not None and status == RunStatus.InProgress:
+            return True
+        return _enum_name(status) == "INPROGRESS"
+
+    def _is_reasoning_message(self, message_type: Any) -> bool:
+        if MessageType is not None and message_type == MessageType.REASONING:
+            return True
+        return _enum_name(message_type) == "REASONING"
+
+    def _is_tool_call_message(self, message_type: Any) -> bool:
+        return _enum_name(message_type) in _TOOL_CALL_MESSAGE_TYPE_NAMES
+
+    def _is_tool_output_message(self, message_type: Any) -> bool:
+        return _enum_name(message_type) in _TOOL_OUTPUT_MESSAGE_TYPE_NAMES
+
+    def _is_message_event(self, message_type: Any) -> bool:
+        if MessageType is not None and message_type == MessageType.MESSAGE:
+            return True
+        return _enum_name(message_type) == "MESSAGE"
+
+    def _thread_content_parts(self, event: Any) -> List[Any]:
+        """Render event for thread display, bypassing filter_tool_messages."""
+        style = replace(self._render_style, filter_tool_messages=False)
+        renderer = self._renderer.__class__(style)
+        return renderer.message_to_parts(event)
+
+    def _tool_output_media_parts(self, event: Any) -> List[Any]:
+        """Render only media/file parts from a tool output message."""
+        style = replace(self._render_style, filter_tool_messages=True)
+        renderer = self._renderer.__class__(style)
+        return renderer.message_to_parts(event)
+
+    async def on_event_content(
+        self,
+        request: Any,
+        to_handle: str,
+        event: Any,
+        send_meta: Dict[str, Any],
+    ) -> bool:
+        """Consume streaming tool progress without sending Matrix noise."""
+        del request
+        if getattr(event, "type", None) != ContentType.DATA:
+            return False
+        if not self._is_in_progress_status(getattr(event, "status", None)):
+            return False
+        data = getattr(event, "data", None) or {}
+        if not isinstance(data, dict) or "output" not in data:
+            return False
+        return True
+
+    async def on_event_message_completed(
+        self,
+        request: Any,
+        to_handle: str,
+        event: Any,
+        send_meta: Dict[str, Any],
+    ) -> None:
+        """Keep final messages in-room and progress summaries in the task thread."""
+        del request
+        message_type = getattr(event, "type", None)
+        if self._is_reasoning_message(
+            message_type,
+        ) or self._is_tool_call_message(message_type):
+            await self._ensure_thread_root(to_handle, send_meta)
+            await self._flush_pending_final_message_to_thread(
+                to_handle,
+                send_meta,
+            )
+            parts = self._message_to_content_parts(event)
+            if not parts:
+                return
+            if self._is_reasoning_message(message_type):
+                send_meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            await self._send_or_queue_thread_parts(
+                to_handle,
+                parts,
+                send_meta,
+            )
+            send_meta.pop(_MATRIX_FORCE_NOTICE_KEY, None)
+            return
+        if self._is_tool_output_message(message_type):
+            await self._flush_pending_final_message_to_thread(
+                to_handle,
+                send_meta,
+            )
+            parts = self._tool_output_media_parts(event)
+            if parts:
+                await self.send_content_parts(to_handle, parts, send_meta)
+            return
+
+        if self._is_message_event(message_type):
+            if not send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY):
+                await self.send_message_content(to_handle, event, send_meta)
+                return
+
+            await self._flush_pending_final_message_to_thread(
+                to_handle,
+                send_meta,
+            )
+            send_meta[_MATRIX_PENDING_FINAL_MESSAGE_KEY] = event
+            return
+
+        await self.send_message_content(to_handle, event, send_meta)
+
+    async def _edit_thread_root(
+        self,
+        to_handle: str,
+        send_meta: Dict[str, Any],
+        text: str,
+        *,
+        msgtype: str = "m.notice",
+        html: Optional[str] = None,
+    ) -> None:
+        """Edit the thread-root placeholder message content."""
+        root_event_id = send_meta.get(_MATRIX_OWN_THREAD_ROOT_KEY)
+        if not root_event_id or not self._client:
+            return
+        if self._should_suppress_team_leader_internal_preamble(to_handle, text):
+            logger.info(
+                "MatrixChannel: suppressing Team Leader internal preamble "
+                "thread-root edit in %s",
+                to_handle,
+            )
+            await self._send_typing(to_handle, False)
+            return
+        new_content: dict[str, Any] = {"msgtype": msgtype, "body": text}
+        if html:
+            new_content["format"] = "org.matrix.custom.html"
+            new_content["formatted_body"] = html
+        content: dict[str, Any] = {
+            "msgtype": msgtype,
+            "body": f"* {text}",
+            "m.new_content": new_content,
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": root_event_id,
+            },
+        }
+        if html:
+            content["format"] = "org.matrix.custom.html"
+            content["formatted_body"] = f"* {html}"
+        try:
+            await self._client.room_send(
+                to_handle,
+                "m.room.message",
+                content,
+                ignore_unverified_devices=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: _edit_thread_root failed: %s", exc,
+            )
+
     async def _on_process_completed(
         self,
         request: Any,
         to_handle: str,
         send_meta: Dict[str, Any],
     ) -> None:
+        """Edit thread root with final reply, or send directly if no thread."""
+        pending = send_meta.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
+        is_placeholder = send_meta.pop(_MATRIX_PLACEHOLDER_THREAD_ROOT_KEY, False)
+        if is_placeholder:
+            if pending is not None:
+                parts = self._message_to_content_parts(pending)
+                text = "\n".join(
+                    getattr(p, "text", "") or getattr(p, "refusal", "") or ""
+                    for p in parts
+                    if getattr(p, "type", None)
+                    in (ContentType.TEXT, ContentType.REFUSAL)
+                ).strip()
+                if text:
+                    html = _md_to_html(text)
+                    await self._edit_thread_root(
+                        to_handle, send_meta, text,
+                        msgtype="m.text", html=html,
+                    )
+                else:
+                    await self._edit_thread_root(
+                        to_handle, send_meta, "已完成",
+                    )
+            else:
+                await self._edit_thread_root(
+                    to_handle, send_meta, "已完成",
+                )
+            self._active_thread_roots.pop(to_handle, None)
+        elif pending is not None:
+            await self.send_message_content(to_handle, pending, send_meta)
+        await self._send_typing(to_handle, False)
         base_completed = getattr(super(), "_on_process_completed", None)
         try:
             if base_completed:
@@ -2699,6 +3132,12 @@ class MatrixChannel(BaseChannel):
         to_handle: str,
         err_text: str,
     ) -> None:
+        """Suppress user-visible cancellation noise after native /stop."""
+        root_id = self._active_thread_roots.pop(to_handle, None)
+        if root_id:
+            fallback_meta = {_MATRIX_OWN_THREAD_ROOT_KEY: root_id}
+            status = "已取消" if "Task has been cancelled" in (err_text or "") else "处理异常"
+            await self._edit_thread_root(to_handle, fallback_meta, status)
         if "Task has been cancelled" in (err_text or ""):
             logger.info(
                 "MatrixChannel: suppressing cancellation error for %s",
@@ -2737,11 +3176,22 @@ class MatrixChannel(BaseChannel):
             await self._send_typing(room_id, False)
             return
 
+        if self._should_suppress_team_leader_internal_preamble(room_id, text):
+            logger.info(
+                "MatrixChannel: suppressing Team Leader internal preamble "
+                "in room %s",
+                room_id,
+            )
+            await self._send_typing(room_id, False)
+            return
+
         text = _clean_control_response_text(text)
 
         html_body = _md_to_html(text)
+        meta_dict = meta if isinstance(meta, dict) else {}
+        msgtype = "m.notice" if meta_dict.pop(_MATRIX_FORCE_NOTICE_KEY, False) else "m.text"
         content: dict[str, Any] = {
-            "msgtype": "m.text",
+            "msgtype": msgtype,
             "body": text,
             "format": "org.matrix.custom.html",
             "formatted_body": html_body,
@@ -2753,7 +3203,6 @@ class MatrixChannel(BaseChannel):
             len(html_body),
         )
 
-        meta_dict = meta if isinstance(meta, dict) else {}
         explicit_ids = meta_dict.get("mention_user_ids") or None
         body_mentions = self._extract_mentions_from_text(text)
         if explicit_ids or body_mentions:

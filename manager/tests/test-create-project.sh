@@ -67,8 +67,8 @@ if [ ! -f "${HICLAW_ENV_STUB_DIR}/hiclaw-env.sh" ]; then
     if mkdir -p "${HICLAW_ENV_STUB_DIR}" 2>/dev/null; then
         cat > "${HICLAW_ENV_STUB_DIR}/hiclaw-env.sh" << 'ENVSTUB'
 # Test-harness stub — real containers ship the actual hiclaw-env.sh.
-: "${HICLAW_STORAGE_PREFIX:=hiclaw/hiclaw-storage}"
-: "${HICLAW_MATRIX_URL:=http://matrix.fake.local}"
+: "${AGENTTEAMS_STORAGE_PREFIX:=agentteams/agentteams-storage}"
+: "${AGENTTEAMS_MATRIX_URL:=http://matrix.fake.local}"
 ensure_mc_credentials() { :; }
 log() { echo "[hiclaw-env-stub] $*" >&2; }
 ENVSTUB
@@ -197,10 +197,10 @@ run_create_project() {
     PATH="${sandbox}/bin:${PATH}" \
     FAKE_CALL_LOG="${sandbox}/calls.log" \
     FAKE_HICLAW_FAIL="${FAKE_HICLAW_FAIL:-0}" \
-    HICLAW_MATRIX_DOMAIN="matrix.fake.local" \
-    HICLAW_ADMIN_USER="admin" \
-    HICLAW_MATRIX_URL="http://matrix.fake.local" \
-    HICLAW_STORAGE_PREFIX="hiclaw/hiclaw-storage" \
+    AGENTTEAMS_MATRIX_DOMAIN="matrix.fake.local" \
+    AGENTTEAMS_ADMIN_USER="admin" \
+    AGENTTEAMS_MATRIX_URL="http://matrix.fake.local" \
+    AGENTTEAMS_STORAGE_PREFIX="agentteams/agentteams-storage" \
     MANAGER_MATRIX_TOKEN="preset-token" \
     bash "${CREATE_PROJECT_SCRIPT}" "$@" 2>&1
 }

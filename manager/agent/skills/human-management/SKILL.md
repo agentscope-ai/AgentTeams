@@ -5,7 +5,7 @@ description: Use when admin requests adding a human user to the system, changing
 
 # Human Management
 
-Import real human accounts into HiClaw with configurable permission levels. Humans use their own Matrix client (Element) to communicate with agents.
+Import real human accounts into AgentTeams with configurable permission levels. Humans use their own Matrix client (Element) to communicate with agents.
 
 ## Permission Levels (inclusive — higher includes all lower)
 

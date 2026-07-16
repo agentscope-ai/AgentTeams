@@ -1,6 +1,6 @@
 """Credential guard: credagent.json → CoPaw File Guard integration.
 
-Reads HiClaw's ``config/credagent.json`` protocol and injects the declared
+Reads AgentTeams's ``config/credagent.json`` protocol and injects the declared
 credential paths into CoPaw's ``security.file_guard.sensitive_files`` config.
 Also installs a monkey-patch hook on ``CoPawAgent._decide_guard_action`` so
 that ``SENSITIVE_FILE_ACCESS`` findings are auto-denied (no user approval).
@@ -153,4 +153,4 @@ def install_credential_guard_hook() -> None:
     _decide_with_credential_block._hiclaw_credential_guard = True  # type: ignore[attr-defined]
     CoPawAgent._decide_guard_action = _decide_with_credential_block  # type: ignore[assignment]
     _GUARD_HOOK_INSTALLED = True
-    logger.info("Installed HiClaw credential guard hook (SENSITIVE_FILE_ACCESS → auto_denied)")
+    logger.info("Installed AgentTeams credential guard hook (SENSITIVE_FILE_ACCESS → auto_denied)")

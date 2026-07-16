@@ -1,0 +1,18 @@
+{{- if .Values.dashboard.enabled }}
+{{- $comp := dict "root" . "component" "dashboard" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hiclaw.dashboard.fullname" . }}
+  namespace: {{ include "hiclaw.namespace" . }}
+  labels:
+    {{- include "hiclaw.component.labels" $comp | nindent 4 }}
+spec:
+  type: {{ .Values.dashboard.service.type }}
+  selector:
+    {{- include "hiclaw.component.selectorLabels" $comp | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.dashboard.service.port }}
+      targetPort: http
+{{- end }}

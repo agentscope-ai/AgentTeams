@@ -14,14 +14,14 @@ import (
 // TestRenderAppServiceRegistration_DefaultBroadNamespace documents and pins
 // the managed-homeserver security model: with no override the AppService
 // claims the exclusive "@.*:<domain>" namespace (safe only for an
-// exclusively HiClaw-managed homeserver).
+// exclusively AgentTeams-managed homeserver).
 func TestRenderAppServiceRegistration_DefaultBroadNamespace(t *testing.T) {
 	cfg := Config{
 		Domain:                    "test.domain",
-		AppServiceID:              "hiclaw-controller",
+		AppServiceID:              "agentteams-controller",
 		AppServiceToken:           "as",
 		AppServiceHSToken:         "hs",
-		AppServiceSenderLocalpart: "hiclaw-controller",
+		AppServiceSenderLocalpart: "agentteams-controller",
 	}
 	reg := RenderAppServiceRegistration(cfg)
 	if len(reg.Namespaces.Users) != 1 {
@@ -35,15 +35,15 @@ func TestRenderAppServiceRegistration_DefaultBroadNamespace(t *testing.T) {
 
 // TestRenderAppServiceRegistration_NarrowedNamespace verifies the operator
 // escape hatch: setting AppServiceUserNamespaceRegex narrows impersonation
-// scope so the as_token cannot act as non-HiClaw local users on a shared
+// scope so the as_token cannot act as non-AgentTeams local users on a shared
 // homeserver.
 func TestRenderAppServiceRegistration_NarrowedNamespace(t *testing.T) {
 	cfg := Config{
 		Domain:                       "test.domain",
-		AppServiceID:                 "hiclaw-controller",
+		AppServiceID:                 "agentteams-controller",
 		AppServiceToken:              "as",
 		AppServiceHSToken:            "hs",
-		AppServiceSenderLocalpart:    "hiclaw-controller",
+		AppServiceSenderLocalpart:    "agentteams-controller",
 		AppServiceUserNamespaceRegex: "@hiclaw-.*:test.domain",
 	}
 	reg := RenderAppServiceRegistration(cfg)
@@ -83,10 +83,10 @@ func newTestASClient(serverURL string, httpClient *http.Client) *TuwunelClient {
 		Domain:                    "test.domain",
 		AdminUser:                 "admin",
 		AdminPassword:             "adminpw",
-		AppServiceID:              "hiclaw-controller",
+		AppServiceID:              "agentteams-controller",
 		AppServiceToken:           "test-as-token",
 		AppServiceHSToken:         "test-hs-token",
-		AppServiceSenderLocalpart: "hiclaw-controller",
+		AppServiceSenderLocalpart: "agentteams-controller",
 	}, httpClient)
 }
 
@@ -96,10 +96,10 @@ func TestUnregisterAppService_SendsCorrectCommand(t *testing.T) {
 	defer server.Close()
 
 	c := newTestASClient(server.URL, server.Client())
-	if err := c.UnregisterAppService(context.Background(), "hiclaw-controller"); err != nil {
+	if err := c.UnregisterAppService(context.Background(), "agentteams-controller"); err != nil {
 		t.Fatalf("UnregisterAppService: %v", err)
 	}
-	want := "!admin appservices unregister hiclaw-controller"
+	want := "!admin appservices unregister agentteams-controller"
 	if gotBody != want {
 		t.Errorf("admin command = %q, want %q", gotBody, want)
 	}
@@ -175,7 +175,7 @@ func TestRegisterAppService_SmokeTestFails_UnregistersThenRegisters(t *testing.T
 
 	c := newTestASClient(server.URL, server.Client())
 	// Reduce smoke test retries for faster test
-	c.config.AppServiceSenderLocalpart = "hiclaw-controller"
+	c.config.AppServiceSenderLocalpart = "agentteams-controller"
 
 	reg := RenderAppServiceRegistration(c.config)
 	// Note: this will take ~10s due to 5 smoke test retries * 2s each.

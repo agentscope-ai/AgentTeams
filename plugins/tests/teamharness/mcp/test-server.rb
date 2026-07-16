@@ -37,7 +37,7 @@ python_test = <<~PY
       "params": {},
   })["result"]["tools"]
   names = [tool["name"] for tool in tools]
-  expected = ["health", "message", "roomflow", "filesync", "projectflow", "taskflow"]
+  expected = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow"]
   if names != expected:
       raise AssertionError(f"unexpected tools: {names!r}")
 

@@ -23,7 +23,7 @@ TeamHarness owns:
 
 TeamHarness does not own:
 
-- Controller generation of `shared/runtime/members/{runtimeName}/runtime.yaml`.
+- Controller generation of `agents/{runtimeName}/runtime/runtime.yaml`.
 - Worker process lifecycle, pod restart, or runtime process supervision.
 - Worker desired-state parsing, polling, apply, or diagnostics.
 - Runtime-neutral top-level hooks.
@@ -40,7 +40,7 @@ TeamHarness does not own:
 Controller to runtime:
 
 - The controller writes non-secret desired state and team facts to
-  `shared/runtime/members/{runtimeName}/runtime.yaml`.
+  `agents/{runtimeName}/runtime/runtime.yaml`.
 - Secrets stay in environment variables, mounted files, or service account
   tokens.
 
@@ -55,8 +55,7 @@ Runtime adapter to TeamHarness:
 
 - The adapter maps TeamHarness prompts, skills, and MCP into a concrete runtime.
 - Runtime-specific hooks live under the adapter implementation, for example
-  `adapters/qwenpaw/hooks/` or `adapters/claude-code/hooks/`, when that runtime
-  integration phase defines them.
+  `adapters/qwenpaw/hooks/`, when that runtime integration phase defines them.
 - Runtime config consumption belongs to the worker/runtime adapter layer, not to
   the TeamHarness plugin package.
 - The adapter should consume controller-written runtime config facts instead of

@@ -123,7 +123,7 @@ func (m *Middleware) RequireAuthz(action Action, kind string, nameFn ResourceNam
 // worker) have no Worker CR at all — they exist only as entries in a
 // Team CR's spec — so a Team CR reverse lookup (by leader/worker name,
 // via the same field indexers CREnricher uses) is authoritative and is
-// tried first. A standalone Worker CR's "hiclaw.io/team" annotation is
+// tried first. A standalone Worker CR's "agentteams.io/team" annotation is
 // consulted only as a defensive fallback for legacy/pre-refactor
 // resources (see isTeamMemberWorker in resource_handler.go); standalone
 // Workers created via the current /workers API never carry that
@@ -157,7 +157,7 @@ func (m *Middleware) resolveResourceTeam(ctx context.Context, kind, name string)
 	if err := m.k8s.Get(ctx, key, &worker); err != nil {
 		return ""
 	}
-	return worker.Annotations["hiclaw.io/team"]
+	return worker.Annotations["agentteams.io/team"]
 }
 
 // lookupTeamByField mirrors CREnricher.lookupTeamByField (duplicated rather

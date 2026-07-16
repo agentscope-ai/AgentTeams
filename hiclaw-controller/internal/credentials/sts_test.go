@@ -32,6 +32,12 @@ func (f *fakeProvider) Issue(_ context.Context, req credprovider.IssueRequest) (
 	return f.resp, nil
 }
 
+// GetKubeconfig is a stub to satisfy the credprovider.Client interface; the
+// credentials package tests do not exercise the kubeconfig path.
+func (f *fakeProvider) GetKubeconfig(_ context.Context, _ string) (*credprovider.KubeconfigResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
 const ns = "hiclaw"
 
 func newFakeK8sClient(t *testing.T, objs ...client.Object) client.Client {
@@ -91,7 +97,8 @@ func TestIssueForCaller_WorkerDefaultEntries(t *testing.T) {
 		t.Fatalf("session length = %d, want 36", len(fake.lastReq.SessionName))
 	}
 	// Standalone workers now default to a single object-storage entry
-	// covering agents/<name>/* + shared/* (both RW), mirroring the
+	// covering agents/<name>/ + agents/<name>/* + shared/ + shared/*
+	// (both RW), mirroring the
 	// embedded MinIO policy.
 	if len(fake.lastReq.Entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(fake.lastReq.Entries))
@@ -100,7 +107,12 @@ func TestIssueForCaller_WorkerDefaultEntries(t *testing.T) {
 	if got.Scope.Bucket != "test-bucket" {
 		t.Fatalf("bucket not resolved in %+v", got.Scope)
 	}
-	wantPrefixes := map[string]bool{"agents/alice/*": false, "shared/*": false}
+	wantPrefixes := map[string]bool{
+		"agents/alice/":  false,
+		"agents/alice/*": false,
+		"shared/":        false,
+		"shared/*":       false,
+	}
 	for _, p := range got.Scope.Prefixes {
 		if _, ok := wantPrefixes[p]; ok {
 			wantPrefixes[p] = true

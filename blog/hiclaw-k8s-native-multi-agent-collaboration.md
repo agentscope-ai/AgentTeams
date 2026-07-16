@@ -21,7 +21,7 @@ Kubernetes addresses the first (how workloads run at scale). HiClaw does not rep
 
 ## 2. The control plane: declarative CRDs and reconcile
 
-HiClaw uses a single API version: `apiVersion: hiclaw.io/v1beta1`. The four core kinds are:
+HiClaw uses a single API version: `apiVersion: agentteams.io/v1beta1`. The four core kinds are:
 
 | Kind | In one line |
 |------|-------------|
@@ -33,7 +33,7 @@ HiClaw uses a single API version: `apiVersion: hiclaw.io/v1beta1`. The four core
 A minimal Worker excerpt (see repo CRDs for the full schema):
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice

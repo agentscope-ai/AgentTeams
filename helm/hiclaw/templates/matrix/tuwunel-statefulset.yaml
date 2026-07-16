@@ -44,7 +44,7 @@ spec:
               value: "true"
             - name: CONDUWUIT_DB_POOL_WORKERS_LIMIT
               value: "32"
-            # Keep Matrix profile display names equal to HiClaw identities by
+            # Keep Matrix profile display names equal to AgentTeams identities by
             # default; Tuwunel otherwise appends its built-in "💕" suffix.
             - name: CONDUWUIT_NEW_USER_DISPLAYNAME_SUFFIX
               value: {{ .Values.matrix.tuwunel.newUserDisplayNameSuffix | default "" | quote }}
@@ -54,7 +54,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "hiclaw.secretName" . }}
-                  key: HICLAW_REGISTRATION_TOKEN
+                  key: AGENTTEAMS_REGISTRATION_TOKEN
             # Increase default cache capacity to prevent RocksDB thrashing
             # (tuwunel#123); matches embedded's start-tuwunel.sh default.
             - name: CONDUWUIT_CACHE_CAPACITY_MODIFIER
@@ -62,7 +62,7 @@ spec:
             # Agent lifecycle cleanup safety net: collapse rooms once
             # their last local member leaves and force a /forget on
             # leave, so a recreated same-named worker/manager/human
-            # starts with no inherited room state. See hiclaw-controller
+            # starts with no inherited room state. See agentteams-controller
             # LeaveAll*Rooms / Delete*Room flows.
             - name: CONDUWUIT_DELETE_ROOMS_AFTER_LEAVE
               value: "true"

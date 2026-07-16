@@ -9,14 +9,14 @@
 #   ./scripts/replay-task.sh                                  # Interactive mode
 #   echo "Create worker bob" | ./scripts/replay-task.sh       # Pipe mode
 #
-# Environment variables (or loaded from ./hiclaw-manager.env):
-#   HICLAW_ADMIN_USER          Admin username       (default: admin)
-#   HICLAW_ADMIN_PASSWORD      Admin password       (required)
-#   HICLAW_MATRIX_DOMAIN       Matrix domain        (default: matrix-local.hiclaw.io:8080)
+# Environment variables (or loaded from ./agentteams-manager.env):
+#   AGENTTEAMS_ADMIN_USER          Admin username       (default: admin)
+#   AGENTTEAMS_ADMIN_PASSWORD      Admin password       (required)
+#   AGENTTEAMS_MATRIX_DOMAIN       Matrix domain        (default: matrix-local.agentteams.io:8080)
 #   REPLAY_WAIT                Wait for reply        (default: 1, set 0 to skip)
 #   REPLAY_TIMEOUT             Reply timeout secs    (default: 300)
 #   REPLAY_READY_TIMEOUT       Manager readiness timeout (default: 300)
-#   REPLAY_MANAGER_CONTAINER   Manager container name    (default: hiclaw-manager)
+#   REPLAY_MANAGER_CONTAINER   Manager container name    (default: agentteams-manager)
 
 set -e
 
@@ -28,10 +28,10 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # ============================================================
 
 # Load env file if present (variables already set in env take precedence)
-# Search order: HICLAW_ENV_FILE > project root > HOME directory
-ENV_FILE="${HICLAW_ENV_FILE:-${PROJECT_ROOT}/hiclaw-manager.env}"
-if [ ! -f "${ENV_FILE}" ] && [ -f "${HOME}/hiclaw-manager.env" ]; then
-    ENV_FILE="${HOME}/hiclaw-manager.env"
+# Search order: AGENTTEAMS_ENV_FILE > project root > HOME directory
+ENV_FILE="${AGENTTEAMS_ENV_FILE:-${PROJECT_ROOT}/agentteams-manager.env}"
+if [ ! -f "${ENV_FILE}" ] && [ -f "${HOME}/agentteams-manager.env" ]; then
+    ENV_FILE="${HOME}/agentteams-manager.env"
 fi
 if [ -f "${ENV_FILE}" ]; then
     # Source the env file but don't override existing env vars
@@ -48,13 +48,13 @@ if [ -f "${ENV_FILE}" ]; then
 fi
 
 # Configuration with defaults
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
-ADMIN_PASSWORD="${HICLAW_ADMIN_PASSWORD:-}"
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:${HICLAW_PORT_GATEWAY:-8080}}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
+ADMIN_PASSWORD="${AGENTTEAMS_ADMIN_PASSWORD:-}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:${AGENTTEAMS_PORT_GATEWAY:-8080}}"
 WAIT_FOR_REPLY="${REPLAY_WAIT:-1}"
 REPLY_TIMEOUT="${REPLAY_TIMEOUT:-300}"
 MANAGER_USER="manager"
-MANAGER_CONTAINER="${REPLAY_MANAGER_CONTAINER:-hiclaw-manager}"
+MANAGER_CONTAINER="${REPLAY_MANAGER_CONTAINER:-agentteams-manager}"
 
 # When REPLAY_USE_DOCKER_EXEC=1, all Matrix API calls go through docker exec
 # inside the container using the internal Tuwunel port. This avoids host proxy
@@ -251,7 +251,7 @@ wait_for_manager_reply() {
 
 # Validate configuration
 if [ -z "${ADMIN_PASSWORD}" ]; then
-    error "HICLAW_ADMIN_PASSWORD is required. Set it via env var or ensure ./hiclaw-manager.env exists."
+    error "AGENTTEAMS_ADMIN_PASSWORD is required. Set it via env var or ensure ./agentteams-manager.env exists."
 fi
 
 # Get task message from CLI arg, stdin, or interactive prompt
@@ -290,7 +290,7 @@ write_log() {
     echo "$1" >> "${LOG_FILE}"
 }
 
-write_log "# HiClaw Replay Log"
+write_log "# AgentTeams Replay Log"
 write_log "# Time: $(date '+%Y-%m-%d %H:%M:%S')"
 write_log "# Task: ${TASK_MSG}"
 write_log ""
@@ -299,7 +299,7 @@ write_log ""
 log "Logging in as '${ADMIN_USER}'..."
 ACCESS_TOKEN=$(do_login)
 if [ -z "${ACCESS_TOKEN}" ]; then
-    error "Login failed. Check HICLAW_ADMIN_USER and HICLAW_ADMIN_PASSWORD."
+    error "Login failed. Check AGENTTEAMS_ADMIN_USER and AGENTTEAMS_ADMIN_PASSWORD."
 fi
 log "Login successful"
 

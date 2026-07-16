@@ -18,7 +18,7 @@ type Result struct {
 	RoomID       string
 }
 
-// Shell executes HiClaw bash scripts and parses their output.
+// Shell executes AgentTeams bash scripts and parses their output.
 type Shell struct {
 	ScriptsDir string // base path, e.g. /opt/hiclaw/agent/skills
 	Timeout    time.Duration

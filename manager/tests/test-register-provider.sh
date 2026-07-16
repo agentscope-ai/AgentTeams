@@ -206,8 +206,8 @@ run_register_provider() {
         export HOME="${home}"
         export HIGRESS_COOKIE_FILE="${home}/cookie"
         touch "${HIGRESS_COOKIE_FILE}"
-        export HICLAW_ADMIN_USER="admin"
-        export HICLAW_ADMIN_PASSWORD="${TEST_ADMIN_PASSWORD:-admin-pass}"
+        export AGENTTEAMS_ADMIN_USER="admin"
+        export AGENTTEAMS_ADMIN_PASSWORD="${TEST_ADMIN_PASSWORD:-admin-pass}"
         export STALE_COUNTER_FILE="${home}/stale-counter"
         echo "${stale_count}" > "${STALE_COUNTER_FILE}"
         bash "${RUN_SCRIPT}" "$@"
@@ -301,7 +301,7 @@ echo "=== Test 5c: creds with a double-quote produce valid JSON in the re-login 
 home5c=$(new_home)
 # Force exactly one HTML/stale response so _higress_relogin fires, then capture the
 # login POST body from the call log and confirm it's valid, correctly-valued
-# JSON even though the password (HICLAW_ADMIN_PASSWORD, sourced from an
+# JSON even though the password (AGENTTEAMS_ADMIN_PASSWORD, sourced from an
 # already-exported env var same as production) contains an embedded double
 # quote.
 export TEST_ADMIN_PASSWORD='p"a"ss'

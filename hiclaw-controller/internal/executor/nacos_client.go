@@ -74,7 +74,7 @@ func NewNacosAIClient(
 		if username != "" && password != "" {
 			authType = nacosAuthTypeNacos
 		} else if username != "" || password != "" {
-			return nil, fmt.Errorf("both username and password are required in nacos URL or env (use nacos://user:pass@host:port or set HICLAW_NACOS_USERNAME/HICLAW_NACOS_PASSWORD)")
+			return nil, fmt.Errorf("both username and password are required in nacos URL or env (use nacos://user:pass@host:port or set AGENTTEAMS_NACOS_USERNAME/AGENTTEAMS_NACOS_PASSWORD)")
 		} else {
 			authType = nacosAuthTypeNone
 		}
@@ -171,8 +171,8 @@ func parseNacosAddr(raw string) (host, port, username, password string, err erro
 	}
 
 	if username == "" && password == "" {
-		username = os.Getenv("HICLAW_NACOS_USERNAME")
-		password = os.Getenv("HICLAW_NACOS_PASSWORD")
+		username = os.Getenv("AGENTTEAMS_NACOS_USERNAME")
+		password = os.Getenv("AGENTTEAMS_NACOS_PASSWORD")
 	}
 
 	return parsed.Hostname(), port, username, password, nil

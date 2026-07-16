@@ -65,6 +65,6 @@ If the admin already gave you a full package URI, skip the search and install it
 
 ## Skills API URL (only when hand-creating a new Worker)
 
-Check registry URL: `echo "${HICLAW_SKILLS_API_URL:-https://skills.sh}"`
+Check registry URL: `echo "${AGENTTEAMS_SKILLS_API_URL:-https://skills.sh}"`
 
 `find-skills` is a builtin skill (always available). You can optionally ask admin for a custom registry URL and pass it to `create-worker.sh` via `--skills-api-url`.

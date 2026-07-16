@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 """
-Export HiClaw debug logs: Matrix messages + agent session logs.
+Export AgentTeams debug logs: Matrix messages + agent session logs.
 
 Usage:
     # Export last 1 hour (default)
@@ -11,7 +11,7 @@ Usage:
     python scripts/export-debug-log.py --range 1d
 
     # Filter by container or room
-    python scripts/export-debug-log.py --range 1h --container hiclaw-manager --room Worker
+    python scripts/export-debug-log.py --range 1h --container agentteams-manager --room Worker
 
     # Disable PII redaction
     python scripts/export-debug-log.py --range 1h --no-redact
@@ -22,9 +22,9 @@ Output structure:
     ├── matrix-messages/
     │   └── RoomName_!roomid.jsonl
     └── agent-sessions/
-        ├── hiclaw-manager/
+        ├── agentteams-manager/
         │   └── {session-id}.jsonl
-        └── hiclaw-worker-xxx/
+        └── agentteams-worker-xxx/
             └── {session-key}.jsonl
 """
 
@@ -132,11 +132,14 @@ def docker_exec(container: str, cmd: str) -> str:
 
 
 def list_hiclaw_containers() -> list[str]:
-    result = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}", "--filter", "name=hiclaw-"],
-        capture_output=True, text=True, timeout=10,
-    )
-    return [n.strip() for n in result.stdout.splitlines() if n.strip()]
+    names: list[str] = []
+    for prefix in ("agentteams-", "hiclaw-"):
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}", "--filter", f"name={prefix}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        names.extend(n.strip() for n in result.stdout.splitlines() if n.strip())
+    return list(dict.fromkeys(names))
 
 
 # ---------------------------------------------------------------------------
@@ -244,19 +247,19 @@ def export_matrix_messages(out_dir: Path, since_epoch: float, redact: bool,
                            homeserver: str, token: str,
                            messages_only: bool) -> tuple[int, int]:
     """Export Matrix messages. Returns (rooms_exported, message_count)."""
-    env_path = env_file or os.path.expanduser("~/hiclaw-manager.env")
+    env_path = env_file or os.path.expanduser("~/agentteams-manager.env")
     hiclaw_env = load_env_file(env_path)
 
     if not homeserver:
         if not hiclaw_env:
             print(f"  [matrix] Cannot find {env_path}, skipping Matrix export")
             return 0, 0
-        port = hiclaw_env.get("HICLAW_PORT_GATEWAY", "18080")
+        port = hiclaw_env.get("AGENTTEAMS_PORT_GATEWAY", "18080")
         homeserver = f"http://127.0.0.1:{port}"
 
     if not token:
         # Use Manager token — Manager is in every room (DM, Worker, Project)
-        manager_password = hiclaw_env.get("HICLAW_MANAGER_PASSWORD", "")
+        manager_password = hiclaw_env.get("AGENTTEAMS_MANAGER_PASSWORD", "")
         if manager_password:
             try:
                 token = matrix_login(homeserver, "manager", manager_password)
@@ -265,8 +268,8 @@ def export_matrix_messages(out_dir: Path, since_epoch: float, redact: bool,
 
         # Fallback to admin token if Manager login failed
         if not token:
-            admin_user = hiclaw_env.get("HICLAW_ADMIN_USER", "admin")
-            admin_password = hiclaw_env.get("HICLAW_ADMIN_PASSWORD", "")
+            admin_user = hiclaw_env.get("AGENTTEAMS_ADMIN_USER", "admin")
+            admin_password = hiclaw_env.get("AGENTTEAMS_ADMIN_PASSWORD", "")
             if not admin_password:
                 print(f"  [matrix] No usable credentials found, skipping Matrix export")
                 return 0, 0
@@ -359,7 +362,7 @@ def detect_runtime(container: str) -> tuple[str, str]:
         ("copaw",    "/root/manager-workspace/.copaw/workspaces/default/sessions"),
     ]
 
-    worker_name = docker_exec(container, "echo $HICLAW_WORKER_NAME").strip()
+    worker_name = docker_exec(container, "echo $AGENTTEAMS_WORKER_NAME").strip()
     if worker_name:
         candidates.extend([
             ("openclaw", f"/root/hiclaw-fs/agents/{worker_name}/.openclaw/agents/main/sessions"),
@@ -632,7 +635,7 @@ def export_agent_sessions(out_dir: Path, since_epoch: float, redact: bool,
         containers = [c for c in containers if container_filter in c]
 
     if not containers:
-        print("  [sessions] No matching hiclaw containers found")
+        print("  [sessions] No matching AgentTeams containers found")
         return 0, 0
 
     total_sessions = 0
@@ -676,7 +679,7 @@ def export_agent_sessions(out_dir: Path, since_epoch: float, redact: bool,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Export HiClaw debug logs (Matrix messages + agent sessions)"
+        description="Export AgentTeams debug logs (Matrix messages + agent sessions)"
     )
     parser.add_argument("--range", "-r", required=True, dest="time_range",
                         help="Time range to export, e.g. 10m, 1h, 1d")
@@ -689,7 +692,7 @@ def main():
     parser.add_argument("--token", "-t", default="",
                         help="Matrix access token (auto-detected from env file)")
     parser.add_argument("--env-file", default=None,
-                        help="Path to hiclaw-manager.env (default: ~/hiclaw-manager.env)")
+                        help="Path to agentteams-manager.env (default: ~/agentteams-manager.env)")
     parser.add_argument("--messages-only", action="store_true",
                         help="Only export m.room.message events (skip state events)")
     parser.add_argument("--no-redact", action="store_true",
@@ -705,7 +708,7 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
     redact = not args.no_redact
 
-    print(f"HiClaw Debug Log Export")
+    print(f"AgentTeams Debug Log Export")
     print(f"  Range: last {args.time_range} (since {since_human})")
     print(f"  Output: {run_dir.resolve()}")
     print(f"  PII redaction: {'on' if redact else 'off'}")
@@ -737,7 +740,7 @@ def main():
 
     # --- Summary ---
     summary = (
-        f"HiClaw Debug Log\n"
+        f"AgentTeams Debug Log\n"
         f"Exported at: {now_str}\n"
         f"Range: last {args.time_range} (since {since_human})\n"
         f"PII redaction: {'on' if redact else 'off'}\n"

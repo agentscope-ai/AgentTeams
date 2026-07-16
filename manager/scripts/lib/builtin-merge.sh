@@ -8,7 +8,7 @@
 BUILTIN_START="<!-- hiclaw-builtin-start -->"
 BUILTIN_END="<!-- hiclaw-builtin-end -->"
 BUILTIN_HEADER='<!-- hiclaw-builtin-start -->
-> ⚠️ **DO NOT EDIT** this section. It is managed by HiClaw and will be automatically
+> ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically
 > replaced on upgrade. To customize, add your content **after** the
 > `<!-- hiclaw-builtin-end -->` marker below.
 '
@@ -129,7 +129,7 @@ update_builtin_section() {
 # If the remote file does not exist yet, creates a new marker-wrapped file
 # and pushes it (same as update_builtin_section with a missing target).
 update_builtin_section_minio() {
-    local minio_path="$1"   # e.g. ${HICLAW_STORAGE_PREFIX}/agents/worker-1/AGENTS.md
+    local minio_path="$1"   # e.g. ${AGENTTEAMS_STORAGE_PREFIX}/agents/worker-1/AGENTS.md
     local source="$2"       # local source file (image builtin)
 
     if [ ! -f "${source}" ]; then

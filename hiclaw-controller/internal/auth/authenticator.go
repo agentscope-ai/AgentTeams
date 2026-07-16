@@ -22,7 +22,7 @@ const (
 
 // DefaultAudience is the SA token audience used by TokenReview when a caller
 // does not specify one explicitly.
-const DefaultAudience = "hiclaw-controller"
+const DefaultAudience = "agentteams-controller"
 
 const (
 	defaultCacheTTL        = 5 * time.Minute
@@ -32,13 +32,16 @@ const (
 
 // CallerIdentity represents the authenticated caller.
 type CallerIdentity struct {
-	Role       string // admin | manager | team-leader | worker
-	Username   string // canonical name (worker name, "manager", or "admin")
-	Team       string // team name (filled by Enricher, empty for standalone)
-	WorkerName string // equals Username when Role is worker or team-leader
+	Role                    string // admin | manager | team-leader | worker
+	Username                string // canonical name (worker name, "manager", or "admin")
+	Team                    string // team name (filled by Enricher, empty for standalone)
+	WorkerName              string // equals Username when Role is worker or team-leader
+	ServiceAccountNamespace string // namespace parsed from TokenReview username
+	ServiceAccountName      string // service account parsed from TokenReview username
 }
 
-// Authenticator validates a bearer token and returns a basic identity.
+// Authenticator validates a bearer token against the local Kubernetes API and
+// returns a basic identity.
 type Authenticator interface {
 	Authenticate(ctx context.Context, token string) (*CallerIdentity, error)
 }
@@ -103,7 +106,10 @@ func (a *TokenReviewAuthenticator) Authenticate(ctx context.Context, token strin
 		},
 	}
 
-	result, err := a.client.AuthenticationV1().TokenReviews().Create(ctx, review, metav1.CreateOptions{})
+	var result *authenticationv1.TokenReview
+	var err error
+
+	result, err = a.client.AuthenticationV1().TokenReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("token review request failed: %w", err)
 	}
@@ -116,7 +122,6 @@ func (a *TokenReviewAuthenticator) Authenticate(ctx context.Context, token strin
 	if err != nil {
 		return nil, err
 	}
-
 	a.putInCache(key, identity)
 	return identity, nil
 }

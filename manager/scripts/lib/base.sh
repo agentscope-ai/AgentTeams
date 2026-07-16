@@ -1,5 +1,5 @@
 #!/bin/bash
-# base.sh - Shared utilities for HiClaw startup scripts
+# base.sh - Shared utilities for AgentTeams startup scripts
 # Source this file: source /opt/hiclaw/scripts/lib/base.sh
 
 set -e

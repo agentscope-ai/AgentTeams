@@ -38,9 +38,9 @@
 # Prerequisites:
 #   - HIGRESS_COOKIE_FILE env var (session cookie for Higress Console;
 #     minted at manager init, start-manager-agent.sh:316,344,382-383)
-#   - HICLAW_ADMIN_USER / HICLAW_ADMIN_PASSWORD env vars (re-login fallback,
+#   - AGENTTEAMS_ADMIN_USER / AGENTTEAMS_ADMIN_PASSWORD env vars (re-login fallback,
 #     injected via hiclaw-controller config.go:727-728 ManagerAgentEnv)
-#   - HICLAW_AI_GATEWAY_DOMAIN env var (falls back to aigw-local.hiclaw.io)
+#   - AGENTTEAMS_AI_GATEWAY_DOMAIN env var (falls back to aigw-local.agentteams.io)
 #
 # Examples:
 #   bash register-provider.sh ollama --url https://ollama.com/v1 --key-env OLLAMA_KEY
@@ -52,8 +52,8 @@ source /opt/hiclaw/scripts/lib/base.sh
 source /opt/hiclaw/scripts/lib/gateway-api.sh
 
 CONSOLE_URL="http://127.0.0.1:8001"
-AI_GATEWAY_DOMAIN="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
-AI_GATEWAY_LOCAL_DOMAIN="aigw-local.hiclaw.io"
+AI_GATEWAY_DOMAIN="${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}"
+AI_GATEWAY_LOCAL_DOMAIN="aigw-local.agentteams.io"
 AI_ROUTE_DOMAINS='["'"${AI_GATEWAY_DOMAIN}"'"]'
 if [ "${AI_GATEWAY_DOMAIN}" != "${AI_GATEWAY_LOCAL_DOMAIN}" ]; then
     AI_ROUTE_DOMAINS='["'"${AI_GATEWAY_DOMAIN}"'","'"${AI_GATEWAY_LOCAL_DOMAIN}"'"]'
@@ -253,7 +253,7 @@ if [ "${DO_DELETE}" = "true" ]; then
     higress_delete "/v1/service-sources/${PROVIDER_NAME}" "Deleting DNS service source ${PROVIDER_NAME}" || _del_failed="true"
 
     if [ "${_del_failed}" = "true" ]; then
-        log "ERROR: one or more deletes failed for provider '${PROVIDER_NAME}' — session/auth issue or unexpected response; provider may NOT be fully removed. Check HIGRESS_COOKIE_FILE / HICLAW_ADMIN_USER / HICLAW_ADMIN_PASSWORD and retry."
+        log "ERROR: one or more deletes failed for provider '${PROVIDER_NAME}' — session/auth issue or unexpected response; provider may NOT be fully removed. Check HIGRESS_COOKIE_FILE / AGENTTEAMS_ADMIN_USER / AGENTTEAMS_ADMIN_PASSWORD and retry."
         exit 1
     fi
 

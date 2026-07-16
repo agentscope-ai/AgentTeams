@@ -1,5 +1,5 @@
 # =============================================================================
-# HiClaw Helm Chart — values.yaml
+# AgentTeams Helm Chart — values.yaml
 # =============================================================================
 # Default configuration for local Kubernetes deployment (kind / minikube).
 # Override with values-aliyun.yaml for Alibaba Cloud ACK/ACS deployments.
@@ -21,6 +21,16 @@ credentials:
   llmProvider: "openai-compat"
   defaultModel: "gpt-5.4"
   llmBaseUrl: ""              # OpenAI-compatible base URL (e.g. https://api.openai.com/v1)
+
+# ── Preflight checks ─────────────────────────────────────────────────────
+preflight:
+  llm:
+    enabled: true              # run a Helm pre-install/pre-upgrade LLM probe
+    strict: true               # fail install/upgrade when the probe fails
+    timeoutSeconds: 30         # per HTTP request timeout
+    retries: 2                 # retry transient network/429/5xx failures
+    activeDeadlineSeconds: 120 # hard ceiling for the hook Job
+    resources: {}
 
 # ── Matrix ────────────────────────────────────────────────────────────────
 matrix:
@@ -74,6 +84,7 @@ gateway:
   # Required when provider=ai-gateway:
   aiGateway:
     region: ""                # e.g. "cn-hangzhou"
+    endpoint: ""              # optional APIG OpenAPI endpoint override; empty uses apig.<region>.aliyuncs.com
     gatewayId: ""             # APIG gateway instance id (required)
     modelApiId: ""            # LLM Model API id used for consumer authorization
     envId: ""                 # APIG environment id
@@ -176,13 +187,23 @@ credentialProvider:
 controller:
   replicaCount: 1               # increase for HA with leader election
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-controller
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-controller
     tag: ""                   # defaults to global.imageTag
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
     port: 8090
     targetPort: 8090
+  metrics:
+    enabled: true
+    bindAddress: ":8080"
+    port: 8080
+    targetPort: 8080
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
   resources:
     requests:
       cpu: 100m
@@ -190,7 +211,7 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
-  workerBackend: "k8s"        # k8s | sae
+  workerBackend: "k8s"
   resourcePrefix: "hiclaw-"
   resourceAutoPrefix: true
   serviceAccount:
@@ -223,7 +244,7 @@ manager:
   model: ""                     # LLM model; defaults to credentials.defaultModel
   runtime: "openclaw"           # openclaw | copaw | hermes
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-manager
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-manager
     tag: ""                     # defaults to global.imageTag
   resources:
     requests:
@@ -255,26 +276,62 @@ elementWeb:
 # ── CMS Observability (optional) ─────────────────────────────────────────
 # Alibaba Cloud CMS 2.0 (ARMS) integration.  Set cms.enabled=true and fill in
 # credentials to enable OTLP trace/metric export from Manager and all Workers.
+
+# ── Operator Dashboard (optional) ────────────────────────────────────────
+dashboard:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-dashboard
+    tag: ""
+    pullPolicy: IfNotPresent
+  bindHost: "0.0.0.0"
+  username: "admin"
+  # Set password, or existingSecret. When both are empty Helm generates and
+  # preserves a random password in the release Secret.
+  password: ""
+  existingSecret: ""
+  existingSecretKey: "password"
+  publicOrigin: ""
+  authDisabled: false
+  serviceAccount:
+    create: true
+    # Must resolve to the controller's admin identity
+    # (<controller.resourcePrefix>admin) unless explicitly overridden.
+    name: ""
+  service:
+    type: ClusterIP
+    port: 8090
+  upstreamTimeoutMs: 15000
+  maxJsonBytes: 2097152
+  maxObjectBytes: 16777216
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
 cms:
   enabled: false
   endpoint: ""
   licenseKey: ""
   project: ""
   workspace: ""
-  serviceName: "hiclaw-manager"    # Manager service name; Workers auto-derive "hiclaw-worker-<name>"
+  serviceName: "agentteams-manager"    # Manager service name; Workers auto-derive "agentteams-worker-<name>"
   metricsEnabled: false
 
 # ── Worker defaults ───────────────────────────────────────────────────────
 worker:
   defaultImage:
     openclaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-worker
       tag: ""                 # defaults to global.imageTag
     copaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-copaw-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-copaw-worker
       tag: ""                 # defaults to global.imageTag
     hermes:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-hermes-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-hermes-worker
       tag: ""                 # defaults to global.imageTag
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker

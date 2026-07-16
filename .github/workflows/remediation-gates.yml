@@ -1,0 +1,83 @@
+name: Remediation gates
+
+on:
+  pull_request:
+    paths:
+      - "hiclaw-controller/**"
+      - "copaw/**"
+      - "hermes/**"
+      - "dashboard/**"
+      - "helm/**"
+      - "install/**"
+      - ".github/workflows/remediation-gates.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: remediation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hiclaw-controller
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: hiclaw-controller/go.mod
+          cache-dependency-path: hiclaw-controller/go.sum
+      - run: go test -timeout=5m ./internal/... ./cmd/...
+
+  python-runtimes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [copaw, hermes]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e "./${{ matrix.runtime }}[test]"
+      - run: python -m pytest -q "${{ matrix.runtime }}/tests"
+
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [server, web]
+    defaults:
+      run:
+        working-directory: dashboard/${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: dashboard/web/package-lock.json
+      - if: matrix.package == 'web'
+        run: npm ci
+      - run: npm test
+      - if: matrix.package == 'web'
+        run: npm run build
+
+  helm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Add dependency repos
+        run: helm repo add higress.io https://higress.io/helm-charts
+      - run: helm dependency build helm/hiclaw
+      - run: helm lint helm/hiclaw --set credentials.llmApiKey=dummy
+      - run: helm template test helm/hiclaw --set credentials.llmApiKey=dummy --set dashboard.enabled=true > /dev/null

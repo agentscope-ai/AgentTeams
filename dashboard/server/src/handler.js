@@ -1,6 +1,7 @@
 'use strict';
 
 const { classify } = require('./allowlist');
+const { createBasicAuth, REALM } = require('./auth');
 
 // Cap on request bodies read for allow-listed writes (plan Milestone 3,
 // Step 1). Message bodies are operator-typed chat instructions -- there is

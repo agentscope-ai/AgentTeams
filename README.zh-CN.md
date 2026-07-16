@@ -12,7 +12,7 @@
 
 [English](./README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
-**AgentTeams（原 HiClaw）是一个开源的协作式多智能体运行平台。让多个 Agent 在一个受控、可审计的房间中协作，人类全程可见、随时可介入。 采用 Manager-Workers 架构，Manager 统一调度多个 Workers，专注于企业内的人和 Agent、Agents 之间的协作场景。**
+**AgentTeams（原 AgentTeams）是一个开源的协作式多智能体运行平台。让多个 Agent 在一个受控、可审计的房间中协作，人类全程可见、随时可介入。 采用 Manager-Workers 架构，Manager 统一调度多个 Workers，专注于企业内的人和 Agent、Agents 之间的协作场景。**
 
 AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agent 容器（Manager 和众多 Workers）。
 - 🧑‍💻 **设计了 Manger-Workers 架构**：不用真人去管理每个干活的 Worker Claw，实现由 Agent 管理 Agents。
@@ -31,7 +31,7 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 - **2026-04-03:** [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9 发布：Kubernetes 风格声明式资源管理（YAML 定义 Worker、Team、Human）；上线 Worker 模板市场；支持 Manager QwenPaw 运行时；新增 Nacos Skills 注册中心等。
 - **2026-03-14:** [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — AgentTeams 1.0.6：企业级 MCP Server 管理，凭证零暴露；Worker 经 Higress AI Gateway 安全调用 MCP。
 - **2026-03-10:** [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — AgentTeams 1.0.4：支持 QwenPaw（原 CoPaw）Worker，内存占用降低约 80%，本地模式可操作浏览器。
-- **2026-03-04:** [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams（彼时名为 HiClaw）开源，引入 Manager Agent 与多 Agent 协同平台能力。
+- **2026-03-04:** [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams（彼时名为 AgentTeams）开源，引入 Manager Agent 与多 Agent 协同平台能力。
 
 ## 为什么选 AgentTeams
 
@@ -117,7 +117,7 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-HICLAW_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 ```
 
 
@@ -214,7 +214,7 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各组件镜像会根据运行时自动选择（Manager: `hiclaw-manager` / `hiclaw-manager-copaw`；Worker: `hiclaw-worker` / `hiclaw-copaw-worker` / `hiclaw-hermes-worker`）。
+各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-copaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
 
 </details>
 
@@ -243,11 +243,69 @@ helm install hiclaw higress.io/hiclaw \
 
 **访问**
 
+临时从本机管理集群时，可以转发 Higress Gateway：
+
 ```bash
 kubectl port-forward -n hiclaw-system svc/higress-gateway 18080:80
 ```
 
-然后在浏览器中打开 http://localhost:18080 登录 Element Web。生产集群中请通过 Ingress / LoadBalancer / DNS 指向 `svc/higress-gateway`，并相应地修改 `gateway.publicURL`。
+然后在浏览器中打开 http://localhost:18080 登录 Element Web。命令退出后转发即停止，
+因此该方式不适合多人共享。
+
+公司内网或公网访问时，只需通过 HTTPS Ingress 或 LoadBalancer 暴露
+`svc/higress-gateway`。`gateway.publicURL` 会写入 Element Web 配置，作为 Matrix
+Homeserver 地址，因此必须与用户实际打开的公网 Origin 完全一致，例如
+`https://agentteams.example.com`。
+
+1. 将公网域名解析到 Ingress Controller 或负载均衡器。
+2. 在 `hiclaw-system` 命名空间中准备 TLS 证书 Secret。
+3. 在 Helm Release 中设置相同的公网地址：
+
+```bash
+helm upgrade hiclaw higress.io/hiclaw \
+  -n hiclaw-system --reuse-values \
+  --set gateway.publicURL=https://agentteams.example.com
+```
+
+4. 将该域名路由到 Higress Gateway。以下通用示例假设使用 NGINX
+   IngressClass，并已存在 `agentteams-tls` Secret；请按集群实际情况替换：
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentteams
+  namespace: hiclaw-system
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - agentteams.example.com
+      secretName: agentteams-tls
+  rules:
+    - host: agentteams.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: higress-gateway
+                port:
+                  number: 80
+```
+
+DNS 与 TLS 生效后，分别验证 Web 入口和 Matrix 路由：
+
+```bash
+curl -fsSI https://agentteams.example.com/
+curl -fsS https://agentteams.example.com/_matrix/client/versions
+```
+
+Controller API、Tuwunel、MinIO 和 Higress Console 应保持集群内访问；如确需暴露，
+请另行配置身份认证和网络策略。多人共享时必须使用 HTTPS，因为 Matrix 登录凭据和
+Access Token 都会经过该入口。也可以用 `LoadBalancer` Service 代替 Ingress，但 DNS、
+TLS 和 `gateway.publicURL` 的要求不变。
 
 **升级**
 
@@ -349,12 +407,12 @@ hiclaw update worker --runtime hermes
 
 ```
 ┌───────────────────────────────────────────────┐
-│            hiclaw-controller                  │
+│            agentteams-controller                  │
 │  Higress │ Tuwunel │ MinIO │ Element Web      │
 └──────────────────┬────────────────────────────┘
                    │ Matrix + HTTP Files
 ┌──────────────────┴──────────┐
-│     hiclaw-manager-agent     │
+│     agentteams-manager-agent     │
 │     Manager (OpenClaw/       │
 │       QwenPaw)               │
 └──────────────────┬──────────┘
@@ -368,7 +426,7 @@ Worker Alice    Worker Bob              Worker Charlie
 
 | 组件 | 职责 |
 |------|------|
-| hiclaw-controller | Kubernetes 原生控制平面，协调 Worker/Team/Manager CR |
+| agentteams-controller | Kubernetes 原生控制平面，协调 Worker/Team/Manager CR |
 | Higress AI 网关 | LLM 代理、MCP Server 托管、凭证管理 |
 | Tuwunel (Matrix) | 自建 IM 服务器，承载所有 Agent + 人类通信 |
 | Element Web | 浏览器客户端，零配置 |
@@ -378,7 +436,7 @@ Worker Alice    Worker Bob              Worker Charlie
 如果 Manager 容器启动失败，执行以下命令查看具体原因：
 
 ```bash
-docker exec -it hiclaw-manager cat /var/log/hiclaw/manager-agent.log
+docker exec -it agentteams-manager cat /var/log/hiclaw/manager-agent.log
 ```
 
 更多常见问题（启动超时、局域网访问等）参见 [docs/zh-cn/faq.md](docs/zh-cn/faq.md)。

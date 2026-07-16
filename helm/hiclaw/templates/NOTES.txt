@@ -1,5 +1,5 @@
 ========================================================================
-HiClaw — {{ .Chart.Name }} / {{ .Release.Name }}
+AgentTeams — {{ .Chart.Name }} / {{ .Release.Name }}
 ========================================================================
 
 Namespace: {{ include "hiclaw.namespace" . }}
@@ -37,20 +37,20 @@ Normal uninstall:
 If you pass --no-hooks (or set controller.uninstallHook.enabled=false),
 delete the CRs manually first (Manager FIRST — it owns the admin DM
 room — then the rest), then uninstall the chart:
-  kubectl delete managers.hiclaw.io --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
-  kubectl delete workers.hiclaw.io  --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
-  kubectl delete teams.hiclaw.io    --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
-  kubectl delete humans.hiclaw.io   --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
+  kubectl delete managers.agentteams.io --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
+  kubectl delete workers.agentteams.io  --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
+  kubectl delete teams.agentteams.io    --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
+  kubectl delete humans.agentteams.io   --all -n {{ include "hiclaw.namespace" . }} --wait=true --ignore-not-found
   helm uninstall {{ .Release.Name }} -n {{ include "hiclaw.namespace" . }}
 
 If the controller is already gone / the hook times out and CRs are
 stuck in Terminating, force-clear the finalizer:
-  kubectl patch managers.hiclaw.io <name> -n {{ include "hiclaw.namespace" . }} \
+  kubectl patch managers.agentteams.io <name> -n {{ include "hiclaw.namespace" . }} \
     --type=merge -p '{"metadata":{"finalizers":[]}}'
   (workers / teams / humans use the same command)
 
 Note: CRDs live under helm/hiclaw/crds/ and are NOT removed by
 helm uninstall (so a reinstall keeps existing CR definitions valid).
 To remove them as well:
-  kubectl delete crd managers.hiclaw.io workers.hiclaw.io \
-    teams.hiclaw.io humans.hiclaw.io
+  kubectl delete crd managers.agentteams.io workers.agentteams.io \
+    teams.agentteams.io humans.agentteams.io

@@ -24,11 +24,11 @@ _cleanup() {
     for bad_name in "${ACCEPTED_INVALID_NAMES[@]}"; do
         log_info "Cleaning up mistakenly accepted invalid worker: ${bad_name}"
         exec_in_agent hiclaw delete worker "${bad_name}" 2>/dev/null || true
-        docker rm -f "hiclaw-worker-${bad_name}" 2>/dev/null || true
+        remove_worker_container "${bad_name}"
     done
     exec_in_agent hiclaw delete worker "${TEST_VALID_NAME}" 2>/dev/null || true
     sleep 3
-    docker rm -f "hiclaw-worker-${TEST_VALID_NAME}" 2>/dev/null || true
+    remove_worker_container "${TEST_VALID_NAME}"
 }
 trap _cleanup EXIT
 
@@ -99,7 +99,7 @@ for case_entry in "${INVALID_CASES[@]}"; do
         if [ -n "${bad_name}" ]; then
             ACCEPTED_INVALID_NAMES+=("${bad_name}")
             exec_in_agent hiclaw delete worker "${bad_name}" 2>/dev/null || true
-            docker rm -f "hiclaw-worker-${bad_name}" 2>/dev/null || true
+            remove_worker_container "${bad_name}"
         fi
     fi
 

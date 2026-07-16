@@ -1,9 +1,113 @@
 package v1beta1
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// strPtr / boolPtr are tiny helpers used by the cross-cluster deployment
+// serialization tests below. Kept package-private to avoid leaking generic
+// helpers from the API package.
+func strPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool    { return &b }
+
+// TestWorkerSpec_DeployFieldsJSONTags verifies the deployment fields
+// (DeployMode, ServiceEnabled) marshal
+// with stable, lowerCamelCase JSON keys and omit cleanly when nil.
+func TestWorkerSpec_DeployFieldsJSONTags(t *testing.T) {
+	cases := []struct {
+		name    string
+		spec    WorkerSpec
+		wantSub []string // substrings expected in JSON
+		absent  []string // substrings that must NOT appear in JSON
+	}{
+		{
+			name: "local_with_service",
+			spec: WorkerSpec{
+				Model:          "m",
+				DeployMode:     strPtr("Local"),
+				ServiceEnabled: boolPtr(true),
+			},
+			wantSub: []string{`"deployMode":"Local"`, `"serviceEnabled":true`},
+		},
+		{
+			name: "edge_without_service",
+			spec: WorkerSpec{
+				Model:      "m",
+				DeployMode: strPtr("Edge"),
+			},
+			wantSub: []string{`"deployMode":"Edge"`},
+			absent:  []string{`"serviceEnabled"`},
+		},
+		{
+			name:   "all_nil_omitted",
+			spec:   WorkerSpec{Model: "m"},
+			absent: []string{`"deployMode"`, `"targetCluster"`, `"serviceEnabled"`},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.spec)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			got := string(data)
+			for _, sub := range tc.wantSub {
+				if !strings.Contains(got, sub) {
+					t.Errorf("JSON missing %q: %s", sub, got)
+				}
+			}
+			for _, sub := range tc.absent {
+				if strings.Contains(got, sub) {
+					t.Errorf("JSON should omit %q: %s", sub, got)
+				}
+			}
+		})
+	}
+}
+
+// TestWorkerSpec_DeployFieldsRoundTrip verifies the new fields survive a
+// JSON marshal/unmarshal cycle without value drift.
+func TestWorkerSpec_DeployFieldsRoundTrip(t *testing.T) {
+	orig := WorkerSpec{
+		Model:          "m",
+		DeployMode:     strPtr("Edge"),
+		ServiceEnabled: boolPtr(false),
+	}
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got WorkerSpec
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.DeployMode == nil || *got.DeployMode != "Edge" {
+		t.Fatalf("DeployMode = %v, want *Edge", got.DeployMode)
+	}
+	if got.ServiceEnabled == nil || *got.ServiceEnabled != false {
+		t.Fatalf("ServiceEnabled = %v, want *false", got.ServiceEnabled)
+	}
+}
+
+// TestWorkerSpec_BackwardCompatOldJSON verifies that JSON payloads written
+// before the cross-cluster fields existed deserialize cleanly with all
+// new pointer fields left nil.
+func TestWorkerSpec_BackwardCompatOldJSON(t *testing.T) {
+	old := []byte(`{"model":"m","runtime":"openclaw"}`)
+	var got WorkerSpec
+	if err := json.Unmarshal(old, &got); err != nil {
+		t.Fatalf("Unmarshal old payload: %v", err)
+	}
+	if got.DeployMode != nil {
+		t.Errorf("DeployMode should default to nil, got %v", *got.DeployMode)
+	}
+	if got.ServiceEnabled != nil {
+		t.Errorf("ServiceEnabled should default to nil, got %v", *got.ServiceEnabled)
+	}
+}
 
 // TestWorkerSpec_DeepCopyLabels verifies WorkerSpec.Labels is deep-copied:
 // mutating the source map after DeepCopy must not mutate the copy. Covers

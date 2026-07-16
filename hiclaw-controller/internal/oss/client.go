@@ -30,6 +30,11 @@ type StorageClient interface {
 
 	// DeletePrefix recursively removes all objects under the given prefix.
 	DeletePrefix(ctx context.Context, prefix string) error
+
+	// MovePrefix copies and verifies every object before removing the source.
+	// Implementations must be idempotent and retain/restore the source when a
+	// copy, verification, or delete operation fails.
+	MovePrefix(ctx context.Context, srcPrefix, dstPrefix string) error
 }
 
 // BucketManager is implemented by StorageClient backends that can create buckets.

@@ -51,8 +51,8 @@ func (m *MockEnvBuilder) Build(workerName string, prov *service.WorkerProvisionR
 		return fn(workerName, prov)
 	}
 	return map[string]string{
-		"HICLAW_WORKER_NAME": workerName,
-		"MOCK_ENV":           "true",
+		"AGENTTEAMS_WORKER_NAME": workerName,
+		"MOCK_ENV":               "true",
 	}
 }
 

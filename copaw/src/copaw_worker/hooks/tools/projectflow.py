@@ -1,4 +1,4 @@
-"""CoPaw-native projectflow tool for HiClaw project/DAG execution."""
+"""CoPaw-native projectflow tool for AgentTeams project/DAG execution."""
 
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ async def _fetch_worker_runtime_status(
             "error": "worker name is empty",
         }
 
-    url = f"http://hiclaw-worker-{safe_worker}:8088/api/chats"
+    url = f"http://agentteams-worker-{safe_worker}:8088/api/chats"
 
     def _fetch() -> dict[str, Any]:
         request = urllib.request.Request(url, headers={"X-Agent-Id": "default"})
@@ -318,7 +318,7 @@ async def projectflow(
     payload: dict[str, Any] | str | None = None,
     dryRun: bool = False,
 ) -> ToolResponse:
-    """Manage HiClaw project execution plans with action-specific payload fields."""
+    """Manage AgentTeams project execution plans with action-specific payload fields."""
     payload_data: dict[str, Any] = {}
     try:
         store = _store()

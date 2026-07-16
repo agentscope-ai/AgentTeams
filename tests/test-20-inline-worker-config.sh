@@ -17,7 +17,7 @@ test_setup "20-inline-worker-config"
 
 TEST_WORKER="test-inline-$$"
 TEST_WORKER_OVERRIDE="test-inlover-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ---- Cleanup handler ----
 _cleanup() {
@@ -29,14 +29,14 @@ _cleanup() {
     for w in "${TEST_WORKER}" "${TEST_WORKER_OVERRIDE}"; do
         exec_in_agent hiclaw delete worker "${w}" 2>/dev/null || true
         sleep 2
-        docker rm -f "hiclaw-worker-${w}" 2>/dev/null || true
-        exec_in_agent rm -rf "/tmp/hiclaw-test-${w}" 2>/dev/null || true
+        remove_worker_container "${w}"
+        exec_in_agent rm -rf "/tmp/agentteams-test-${w}" 2>/dev/null || true
         exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
     done
-    exec_in_agent rm -f "/tmp/hiclaw-test-${TEST_WORKER}.yaml" 2>/dev/null || true
-    exec_in_manager rm -rf "/tmp/hiclaw-test-${TEST_WORKER_OVERRIDE}" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER_OVERRIDE}*.zip" 2>/dev/null || true
+    exec_in_agent rm -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" 2>/dev/null || true
+    exec_in_manager rm -rf "/tmp/agentteams-test-${TEST_WORKER_OVERRIDE}" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER_OVERRIDE}*.zip" 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -79,8 +79,8 @@ AGENTS_CONTENT="# Inline Test Workspace
 - Respond to all messages politely"
 
 # Write YAML with inline soul and agents (in agent container where hiclaw CLI runs)
-exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_WORKER}.yaml << 'YAMLEOF'
-apiVersion: hiclaw.io/v1beta1
+exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_WORKER}.yaml << 'YAMLEOF'
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: ${TEST_WORKER}
@@ -93,7 +93,7 @@ $(echo "${AGENTS_CONTENT}" | sed 's/^/    /')
 YAMLEOF
 " 2>/dev/null
 
-YAML_EXISTS=$(exec_in_agent test -f "/tmp/hiclaw-test-${TEST_WORKER}.yaml" && echo "yes" || echo "no")
+YAML_EXISTS=$(exec_in_agent test -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" && echo "yes" || echo "no")
 if [ "${YAML_EXISTS}" = "yes" ]; then
     log_pass "Worker YAML with inline fields created"
 else
@@ -105,7 +105,7 @@ fi
 # ============================================================
 log_section "Apply Worker YAML"
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/hiclaw-test-${TEST_WORKER}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" 2>&1)
 APPLY_EXIT=$?
 
 if [ ${APPLY_EXIT} -eq 0 ]; then
@@ -194,7 +194,7 @@ fi
 # bumped ResourceVersion. Poll for up to 60s to absorb that race.
 CONTAINER_RUNNING=""
 for i in $(seq 1 60); do
-    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "hiclaw-worker-${TEST_WORKER}$" || echo "")
+    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${TEST_WORKER}")$" || echo "")
     [ -n "${CONTAINER_RUNNING}" ] && break
     sleep 1
 done
@@ -245,7 +245,7 @@ fi
 log_section "Package + Inline Override"
 
 # Create a ZIP package with SOUL.md and AGENTS.md
-OVERRIDE_WORK_DIR="/tmp/hiclaw-test-${TEST_WORKER_OVERRIDE}"
+OVERRIDE_WORK_DIR="/tmp/agentteams-test-${TEST_WORKER_OVERRIDE}"
 
 exec_in_manager bash -c "
     mkdir -p ${OVERRIDE_WORK_DIR}/package/config
@@ -305,8 +305,8 @@ else
 fi
 
 # Discover the package URI from MinIO packages directory
-PKG_FILE=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/hiclaw-config/packages/' 2>/dev/null | grep '${TEST_WORKER_OVERRIDE}' | awk '{print \$NF}'" | head -1)
-PKG_URI="oss://hiclaw-config/packages/${PKG_FILE}"
+PKG_FILE=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agentteams-config/packages/' 2>/dev/null | grep '${TEST_WORKER_OVERRIDE}' | awk '{print \$NF}'" | head -1)
+PKG_URI="oss://agentteams-config/packages/${PKG_FILE}"
 assert_not_empty "${PKG_FILE}" "Package file found in MinIO"
 
 # Overwrite the YAML with package + inline soul/agents
@@ -317,7 +317,7 @@ OVERRIDE_AGENTS="# OVERRIDDEN AGENTS FROM INLINE
 This agents config was set via inline field."
 
 exec_in_agent bash -c "cat > /tmp/hiclaw-override-${TEST_WORKER_OVERRIDE}.yaml << 'YAMLEOF'
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: ${TEST_WORKER_OVERRIDE}
@@ -339,28 +339,14 @@ else
     log_fail "Failed to apply YAML with package + inline override"
 fi
 
-# Wait for the update reconcile (ZIP import already created the worker; override apply triggers update)
+# Wait for the update reconcile. The durable signal is the generated file
+# content; log text can change across controller versions.
 log_info "Waiting for controller to reconcile override worker update..."
-RECONCILE_TIMEOUT=120
-RECONCILE_ELAPSED=0
-WORKER_UPDATED=false
-
-while [ "${RECONCILE_ELAPSED}" -lt "${RECONCILE_TIMEOUT}" ]; do
-    if exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep -q "worker updated.*${TEST_WORKER_OVERRIDE}"; then
-        WORKER_UPDATED=true
-        break
-    fi
-    sleep 5
-    RECONCILE_ELAPSED=$((RECONCILE_ELAPSED + 5))
-    printf "\r[TEST INFO] Waiting for reconcile... (%ds/%ds)" "${RECONCILE_ELAPSED}" "${RECONCILE_TIMEOUT}"
-done
-echo ""
-
-if [ "${WORKER_UPDATED}" = true ]; then
-    log_pass "Override worker updated (took ~${RECONCILE_ELAPSED}s)"
+if wait_agent_file_contains "${TEST_WORKER_OVERRIDE}" "SOUL.md" "OVERRIDDEN SOUL FROM INLINE" 120; then
+    log_pass "Override worker updated"
 else
-    log_fail "Override worker not updated within ${RECONCILE_TIMEOUT}s"
-    exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep "${TEST_WORKER_OVERRIDE}" | tail -5
+    log_fail "Override worker not updated within 120s"
+    exec_in_agent hiclaw get workers "${TEST_WORKER_OVERRIDE}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Verify SOUL.md has inline content, NOT package content

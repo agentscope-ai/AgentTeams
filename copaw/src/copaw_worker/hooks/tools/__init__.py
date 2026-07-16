@@ -1,1 +1,1 @@
-"""HiClaw-owned tools injected into upstream CoPaw."""
+"""AgentTeams-owned tools injected into upstream CoPaw."""

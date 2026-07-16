@@ -20,16 +20,16 @@ func NewWorkerEnvBuilder(defaults config.WorkerEnvDefaults) *WorkerEnvBuilder {
 // credentials with cluster-wide defaults.
 func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult) map[string]string {
 	env := map[string]string{
-		"HICLAW_WORKER_NAME":         workerName,
-		"HICLAW_WORKER_GATEWAY_KEY":  prov.GatewayKey,
-		"HICLAW_WORKER_MATRIX_TOKEN": prov.MatrixToken,
-		"HICLAW_WORKER_ROOM_ID":      prov.RoomID,
-		"HICLAW_FS_ACCESS_KEY":       workerName,
-		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
-		"OPENCLAW_DISABLE_BONJOUR":   "1",
-		"OPENCLAW_MDNS_HOSTNAME":     "hiclaw-w-" + workerName,
-		"HICLAW_CONSOLE_PORT":        "8088",
-		"HOME":                       "/root/hiclaw-fs/agents/" + workerName,
+		"AGENTTEAMS_WORKER_NAME":         workerName,
+		"AGENTTEAMS_WORKER_GATEWAY_KEY":  prov.GatewayKey,
+		"AGENTTEAMS_WORKER_MATRIX_TOKEN": prov.MatrixToken,
+		"AGENTTEAMS_WORKER_ROOM_ID":      prov.RoomID,
+		"AGENTTEAMS_FS_ACCESS_KEY":       workerName,
+		"AGENTTEAMS_FS_SECRET_KEY":       prov.MinIOPassword,
+		"OPENCLAW_DISABLE_BONJOUR":       "1",
+		"OPENCLAW_MDNS_HOSTNAME":         "hiclaw-w-" + workerName,
+		"AGENTTEAMS_CONSOLE_PORT":        "8088",
+		"HOME":                           "/root/hiclaw-fs/agents/" + workerName,
 	}
 
 	b.applyClusterDefaults(env)
@@ -44,50 +44,47 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	}
 
 	env := map[string]string{
-		"HICLAW_MANAGER_NAME":        managerName,
-		"HICLAW_MANAGER_GATEWAY_KEY": prov.GatewayKey,
+		"AGENTTEAMS_MANAGER_NAME":        managerName,
+		"AGENTTEAMS_MANAGER_GATEWAY_KEY": prov.GatewayKey,
 		// In AS mode MatrixPassword is empty; set a placeholder so the
 		// entrypoint's :? validation passes. The password is never used
 		// for login in AS mode (token obtained via AS login instead).
-		"HICLAW_MANAGER_PASSWORD":    valueOrPlaceholder(prov.MatrixPassword),
+		"AGENTTEAMS_MANAGER_PASSWORD": valueOrPlaceholder(prov.MatrixPassword),
 		// Pre-inject the Matrix access token so the Manager entrypoint can
 		// skip password-based login. Required in AppService mode (no password)
 		// and beneficial in legacy mode (avoids a redundant login round-trip).
-		"HICLAW_MANAGER_MATRIX_TOKEN": prov.MatrixToken,
-		"HICLAW_FS_ACCESS_KEY":       managerName,
-		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
-		"OPENCLAW_DISABLE_BONJOUR":   "1",
-		"OPENCLAW_MDNS_HOSTNAME":     "hiclaw-manager",
-		"HOME":                       "/root/manager-workspace",
-		"HICLAW_RUNTIME":             runtime,
+		"AGENTTEAMS_MANAGER_MATRIX_TOKEN": prov.MatrixToken,
+		"AGENTTEAMS_FS_ACCESS_KEY":        managerName,
+		"AGENTTEAMS_FS_SECRET_KEY":        prov.MinIOPassword,
+		"OPENCLAW_DISABLE_BONJOUR":        "1",
+		"OPENCLAW_MDNS_HOSTNAME":          "agentteams-manager",
+		"HOME":                            "/root/manager-workspace",
+		"AGENTTEAMS_RUNTIME":              runtime,
 	}
 
 	if spec.Model != "" {
-		env["HICLAW_DEFAULT_MODEL"] = spec.Model
+		env["AGENTTEAMS_DEFAULT_MODEL"] = spec.Model
 	}
 	if spec.Runtime != "" {
-		env["HICLAW_MANAGER_RUNTIME"] = spec.Runtime
+		env["AGENTTEAMS_MANAGER_RUNTIME"] = spec.Runtime
 	}
 	if b.defaults.AdminUser != "" {
-		env["HICLAW_ADMIN_USER"] = b.defaults.AdminUser
+		env["AGENTTEAMS_ADMIN_USER"] = b.defaults.AdminUser
 	}
 	if b.defaults.DefaultWorkerRuntime != "" {
-		env["HICLAW_DEFAULT_WORKER_RUNTIME"] = b.defaults.DefaultWorkerRuntime
+		env["AGENTTEAMS_DEFAULT_WORKER_RUNTIME"] = b.defaults.DefaultWorkerRuntime
 	}
 
 	cfg := spec.Config
 	if cfg.HeartbeatInterval != "" {
-		env["HICLAW_MANAGER_HEARTBEAT_INTERVAL"] = cfg.HeartbeatInterval
+		env["AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL"] = cfg.HeartbeatInterval
 	}
-	// Note: cfg.WorkerIdleTimeout and cfg.NotifyChannel are intentionally NOT
-	// propagated as env vars here. No entrypoint or agent script reads
-	// HICLAW_MANAGER_WORKER_IDLE_TIMEOUT or HICLAW_MANAGER_NOTIFY_CHANNEL
-	// (verified via repo-wide search). WorkerIdleTimeout instead reaches the
-	// Manager agent as text baked into its system prompt via
-	// internal/agentconfig/coordination.go (CoordinationContext.WorkerIdleTimeout).
-	// NotifyChannel has no consumer anywhere in the repo beyond the CRD field
-	// definition (v1beta1.ManagerConfig.NotifyChannel) — it appears fully
-	// dead. Re-add an env injection here only if a real consumer is introduced.
+	if cfg.WorkerIdleTimeout != "" {
+		env["AGENTTEAMS_MANAGER_WORKER_IDLE_TIMEOUT"] = cfg.WorkerIdleTimeout
+	}
+	if cfg.NotifyChannel != "" {
+		env["AGENTTEAMS_MANAGER_NOTIFY_CHANNEL"] = cfg.NotifyChannel
+	}
 
 	b.applyClusterDefaults(env)
 	return env
@@ -95,56 +92,59 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 
 func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	for k, v := range map[string]string{
-		"HICLAW_MATRIX_DOMAIN":  b.defaults.MatrixDomain,
-		"HICLAW_FS_ENDPOINT":    b.defaults.FSEndpoint,
-		"HICLAW_FS_BUCKET":      b.defaults.FSBucket,
-		"HICLAW_STORAGE_PREFIX": b.defaults.StoragePrefix,
-		"HICLAW_CONTROLLER_URL": b.defaults.ControllerURL,
-		"HICLAW_AI_GATEWAY_URL": b.defaults.AIGatewayURL,
-		"HICLAW_MATRIX_URL":     b.defaults.MatrixURL,
+		"AGENTTEAMS_MATRIX_DOMAIN":  b.defaults.MatrixDomain,
+		"AGENTTEAMS_FS_ENDPOINT":    b.defaults.FSEndpoint,
+		"AGENTTEAMS_FS_BUCKET":      b.defaults.FSBucket,
+		"AGENTTEAMS_STORAGE_PREFIX": b.defaults.StoragePrefix,
+		"AGENTTEAMS_CONTROLLER_URL": b.defaults.ControllerURL,
+		"AGENTTEAMS_AI_GATEWAY_URL": b.defaults.AIGatewayURL,
+		"AGENTTEAMS_MATRIX_URL":     b.defaults.MatrixURL,
 	} {
 		if v != "" {
 			env[k] = v
 		}
 	}
 
-	// YOLO mode: when the controller was started with HICLAW_YOLO=1, propagate
+	// YOLO mode: when the controller was started with AGENTTEAMS_YOLO=1, propagate
 	// it to every manager and worker container it provisions so the agent's
 	// auto-confirm path triggers reliably (otherwise an agent without this
 	// signal will block on confirmation prompts during integration tests).
 	if b.defaults.YoloMode {
-		env["HICLAW_YOLO"] = "1"
+		env["AGENTTEAMS_YOLO"] = "1"
 	}
 
 	// Matrix-plugin trace logging: when the controller was started with
-	// HICLAW_MATRIX_DEBUG=1, propagate it to every manager + worker container.
+	// AGENTTEAMS_MATRIX_DEBUG=1, propagate it to every manager + worker container.
 	// The container entrypoints translate it to OPENCLAW_MATRIX_DEBUG=1, which
 	// makes openclaw's matrix plugin emit structured INFO-level traces (sync
 	// state transitions, room.invite/join, message handler arrival + filter
 	// outcomes). Used to debug "worker never joined" / "manager never replied"
 	// hangs without rebuilding images.
 	if b.defaults.MatrixDebug {
-		env["HICLAW_MATRIX_DEBUG"] = "1"
+		env["AGENTTEAMS_MATRIX_DEBUG"] = "1"
 	}
 
 	// CMS observability configuration
 	if b.defaults.CMSTracesEnabled {
-		env["HICLAW_CMS_TRACES_ENABLED"] = "true"
+		env["AGENTTEAMS_CMS_TRACES_ENABLED"] = "true"
 	}
 	if b.defaults.CMSMetricsEnabled {
-		env["HICLAW_CMS_METRICS_ENABLED"] = "true"
+		env["AGENTTEAMS_CMS_METRICS_ENABLED"] = "true"
 	}
 	if b.defaults.CMSEndpoint != "" {
-		env["HICLAW_CMS_ENDPOINT"] = b.defaults.CMSEndpoint
+		env["AGENTTEAMS_CMS_ENDPOINT"] = b.defaults.CMSEndpoint
 	}
 	if b.defaults.CMSLicenseKey != "" {
-		env["HICLAW_CMS_LICENSE_KEY"] = b.defaults.CMSLicenseKey
+		env["AGENTTEAMS_CMS_LICENSE_KEY"] = b.defaults.CMSLicenseKey
 	}
 	if b.defaults.CMSProject != "" {
-		env["HICLAW_CMS_PROJECT"] = b.defaults.CMSProject
+		env["AGENTTEAMS_CMS_PROJECT"] = b.defaults.CMSProject
 	}
 	if b.defaults.CMSWorkspace != "" {
-		env["HICLAW_CMS_WORKSPACE"] = b.defaults.CMSWorkspace
+		env["AGENTTEAMS_CMS_WORKSPACE"] = b.defaults.CMSWorkspace
+	}
+	if b.defaults.CMSServiceName != "" {
+		env["AGENTTEAMS_CMS_SERVICE_NAME"] = b.defaults.CMSServiceName
 	}
 	if b.defaults.CMSServiceName != "" {
 		env["HICLAW_CMS_SERVICE_NAME"] = b.defaults.CMSServiceName

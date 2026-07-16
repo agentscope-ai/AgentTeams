@@ -15,9 +15,9 @@ These environment variables are pre-configured in the Manager container. Access 
 
 ```bash
 # Core configuration (set by hiclaw-install.sh)
-HICLAW_ADMIN_USER      # Admin username for Higress Console
-HICLAW_ADMIN_PASSWORD  # Admin password for Higress Console
-HICLAW_AI_GATEWAY_DOMAIN  # AI Gateway domain (e.g., aigw-local.hiclaw.io)
+AGENTTEAMS_ADMIN_USER      # Admin username for Higress Console
+AGENTTEAMS_ADMIN_PASSWORD  # Admin password for Higress Console
+AGENTTEAMS_AI_GATEWAY_DOMAIN  # AI Gateway domain (e.g., aigw-local.agentteams.io)
 HIGRESS_COOKIE_FILE    # Path to session cookie file
 ```
 
@@ -33,7 +33,7 @@ If the cookie expires, re-login:
 curl -X POST http://127.0.0.1:8001/session/login \
   -H 'Content-Type: application/json' \
   -c "${HIGRESS_COOKIE_FILE}" \
-  -d '{"name": "'"${HICLAW_ADMIN_USER}"'", "password": "'"${HICLAW_ADMIN_PASSWORD}"'"}'
+  -d '{"name": "'"${AGENTTEAMS_ADMIN_USER}"'", "password": "'"${AGENTTEAMS_ADMIN_PASSWORD}"'"}'
 ```
 
 ## Consumer Management
@@ -106,7 +106,7 @@ curl -X POST http://127.0.0.1:8001/v1/ai/routes \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "deepseek-route",
-    "domains": ["${HICLAW_AI_GATEWAY_DOMAIN}"],
+    "domains": ["${AGENTTEAMS_AI_GATEWAY_DOMAIN}"],
     "pathPredicate": {"matchType": "PRE", "matchValue": "/", "caseSensitive": false},
     "upstreams": [{"provider": "deepseek", "weight": 100, "modelMapping": {}}],
     "modelPredicates": [{"matchType": "PRE", "matchValue": "deepseek"}],
@@ -121,7 +121,7 @@ curl -X POST http://127.0.0.1:8001/v1/ai/routes \
 **Never update `default-ai-route` to add a new provider's `modelPredicates`.** `default-ai-route` is rewritten on every Manager boot (`manager/scripts/init/setup-higress.sh:253-281`), so any manual edit to it would be silently clobbered at the next restart. Instead, keep the new provider entirely on its own route (own name, own `modelPredicate` prefix like `"deepseek/"`) — that alone makes the routes unambiguous, with nothing to touch on `default-ai-route`. This is the same rule `setup-higress.sh`'s extra-provider loop follows (`:288-386`) and what the `provider-management` skill's `register-provider.sh` automates end-to-end (service-source + provider + `hiclaw-<name>-route`) — prefer that skill for adding a provider from chat; use the manual steps here only when the console API needs deeper inspection.
 
 Key fields:
-- **domains**: which domain(s) this AI route serves (e.g. `${HICLAW_AI_GATEWAY_DOMAIN}`)
+- **domains**: which domain(s) this AI route serves (e.g. `${AGENTTEAMS_AI_GATEWAY_DOMAIN}`)
 - **upstreams**: LLM provider(s) with weight and optional model mapping
 - **modelPredicates**: match models by prefix/exact/regex (e.g. `{"matchType":"PRE","matchValue":"deepseek"}` routes all `deepseek*` models). Omit when only one route exists
 - **authConfig**: consumer-level access control

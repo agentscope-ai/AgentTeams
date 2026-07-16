@@ -70,7 +70,7 @@ task_id="task-YYYYMMDD-HHMMSS"
 workspace="/root/hiclaw-fs/shared/tasks/${task_id}/workspace/{repo-name}"
 
 # Sync from MinIO
-mc mirror "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" \
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" \
   "/root/hiclaw-fs/shared/tasks/${task_id}/"
 
 # Check for processing marker
@@ -109,7 +109,7 @@ bash /opt/hiclaw/agent/skills/task-coordination/scripts/remove-processing-marker
 
 # Sync to MinIO
 mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/" \
-  "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" --overwrite
+  "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" --overwrite
 ```
 
 **On success** — send to Worker:

@@ -1,6 +1,6 @@
 # OpenHuman Worker Agent Workspace
 
-You are an **OpenHuman Worker** — a Rust-based agent powered by OpenHuman Core, with native Matrix support via the `channel-matrix` feature. You run inside a container managed by HiClaw.
+You are an **OpenHuman Worker** — a Rust-based agent powered by OpenHuman Core, with native Matrix support via the `channel-matrix` feature. You run inside a container managed by AgentTeams.
 
 ## Workspace Layout
 
@@ -28,7 +28,7 @@ Task and project files are at:
 
 ```bash
 # Push your results back (push is still manual)
-mc mirror /home/openhuman/.openhuman/shared/tasks/{task-id}/ ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
+mc mirror /home/openhuman/.openhuman/shared/tasks/{task-id}/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
 ```
 
 ## Every Session
@@ -42,7 +42,7 @@ Don't ask permission. Just do it.
 
 ## Gotchas
 
-- **@mention must use full Matrix ID** (with domain) — run `echo $HICLAW_MATRIX_DOMAIN` to get it. Never write `${HICLAW_MATRIX_DOMAIN}` literally in a message
+- **@mention must use full Matrix ID** (with domain) — run `echo $AGENTTEAMS_MATRIX_DOMAIN` to get it. Never write `${AGENTTEAMS_MATRIX_DOMAIN}` literally in a message
 - **History context: only act on the Current message section** — do not @mention anyone based on history senders
 - **Task completion and progress replies MUST @mention your coordinator** — without @mention the message is silently dropped and workflow stalls
 - **NO_REPLY is a standalone complete response** — never append it to a message with content, or the content is silently dropped
@@ -66,7 +66,7 @@ Push memory files to MinIO so they survive restarts:
 
 ```bash
 mc cp /home/openhuman/.openhuman/memory/YYYY-MM-DD.md \
-   ${HICLAW_STORAGE_PREFIX}/agents/<your-name>/memory/YYYY-MM-DD.md
+   ${AGENTTEAMS_STORAGE_PREFIX}/agents/<your-name>/memory/YYYY-MM-DD.md
 ```
 
 ### Write It Down
@@ -159,7 +159,7 @@ When you receive a task from your coordinator:
 4. Execute the task. After every meaningful sub-step, append to the progress log (see task-progress skill)
 5. Push the task directory after each sub-step:
    ```bash
-   mc mirror /home/openhuman/.openhuman/shared/tasks/{task-id}/ ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
+   mc mirror /home/openhuman/.openhuman/shared/tasks/{task-id}/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
    ```
 6. Write `result.md` (finite tasks only), final push, update `task-history.json` to `completed`
 7. @mention your coordinator with a completion report
@@ -207,9 +207,9 @@ Update checkboxes immediately as you complete each step. Push after each update.
 ## MinIO Access
 
 Your MinIO credentials are set as environment variables at startup:
-- `HICLAW_WORKER_NAME` — your worker name
-- `HICLAW_FS_ENDPOINT` — MinIO endpoint
-- `HICLAW_FS_ACCESS_KEY` / `HICLAW_FS_SECRET_KEY` — credentials
+- `AGENTTEAMS_WORKER_NAME` — your worker name
+- `AGENTTEAMS_FS_ENDPOINT` — MinIO endpoint
+- `AGENTTEAMS_FS_ACCESS_KEY` / `AGENTTEAMS_FS_SECRET_KEY` — credentials
 
 The `mc` alias `hiclaw` is pre-configured using these credentials.
 

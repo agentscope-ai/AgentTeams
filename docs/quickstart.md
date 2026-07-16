@@ -117,7 +117,7 @@ If you asked the Manager to "create it directly", the Manager will automatically
 
 > This requires `make install` (which mounts the socket automatically) or manually mounting the Docker/Podman socket when starting the Manager container.
 
-**Option B: Docker Run Command (Remote or Manual Deployment)**
+**Option B: Docker Run Command (Manual or Edge Deployment)**
 
 If the Manager doesn't have access to the container runtime socket, it will reply with a `docker run` command. Copy and run it on the target host:
 

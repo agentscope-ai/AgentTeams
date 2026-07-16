@@ -16,17 +16,17 @@ source "${SCRIPT_DIR}/lib/minio-client.sh"
 test_setup "17-worker-config-verify"
 
 TEST_WORKER="test-cfg-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
     exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER}.zip" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}.zip" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
     exec_in_agent rm -rf "/root/hiclaw-fs/agents/${TEST_WORKER}" 2>/dev/null || true
-    exec_in_agent rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
+    exec_in_agent rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
+    exec_in_manager rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
 }
 trap _cleanup EXIT
@@ -36,7 +36,7 @@ trap _cleanup EXIT
 # ============================================================
 log_section "Create and Import Worker"
 
-WORK_DIR="/tmp/hiclaw-test-${TEST_WORKER}"
+WORK_DIR="/tmp/agentteams-test-${TEST_WORKER}"
 
 # Build ZIP in controller container (has zip command), then copy to agent container
 exec_in_manager bash -c "
@@ -259,23 +259,14 @@ EOF
     log_info "---- REIMPORT_OUTPUT end ----"
 fi
 
-# Wait for controller to reconcile the update (poll for "worker updated" in logs)
+# Wait for controller to reconcile the update. The durable signal is the Worker
+# API reflecting the new spec; log text can change across controller versions.
 log_info "Waiting for controller to reconcile update..."
-UPDATE_TIMEOUT=120; UPDATE_ELAPSED=0
-UPDATE_DONE=false
-while [ "${UPDATE_ELAPSED}" -lt "${UPDATE_TIMEOUT}" ]; do
-    if exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep -q "worker updated.*${TEST_WORKER}"; then
-        UPDATE_DONE=true
-        break
-    fi
-    sleep 5; UPDATE_ELAPSED=$((UPDATE_ELAPSED + 5))
-done
-
-if [ "${UPDATE_DONE}" = true ]; then
-    log_pass "Controller reconciled update (took ~${UPDATE_ELAPSED}s)"
+if wait_worker_model "${TEST_WORKER}" "claude-sonnet-4-6" 120; then
+    log_pass "Controller reconciled update"
 else
-    log_fail "Controller did not reconcile update within ${UPDATE_TIMEOUT}s"
-    exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep "${TEST_WORKER}" | tail -5
+    log_fail "Controller did not reconcile update within 120s"
+    exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.model, .phase, .message' | head -5
 fi
 
 # Verify SOUL.md updated

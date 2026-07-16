@@ -12,7 +12,7 @@ import (
 
 // domainForExpose generates the auto domain name for a worker's exposed port.
 func domainForExpose(workerName string, port int) string {
-	return fmt.Sprintf("worker-%s-%d-local.hiclaw.io", workerName, port)
+	return fmt.Sprintf("worker-%s-%d-local.agentteams.io", workerName, port)
 }
 
 // ContainerDNSName returns the FQDN for a worker container that Higress can resolve.

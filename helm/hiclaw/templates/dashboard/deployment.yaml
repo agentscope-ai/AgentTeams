@@ -1,0 +1,109 @@
+{{- if .Values.dashboard.enabled }}
+{{- $comp := dict "root" . "component" "dashboard" }}
+{{- $authSecret := default (printf "%s-auth" (include "hiclaw.dashboard.fullname" .)) .Values.dashboard.existingSecret }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hiclaw.dashboard.fullname" . }}
+  namespace: {{ include "hiclaw.namespace" . }}
+  labels:
+    {{- include "hiclaw.component.labels" $comp | nindent 4 }}
+spec:
+  replicas: {{ .Values.dashboard.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "hiclaw.component.selectorLabels" $comp | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hiclaw.component.selectorLabels" $comp | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "hiclaw.dashboard.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: dashboard-auth
+          secret:
+            secretName: {{ $authSecret }}
+            items:
+              - key: {{ .Values.dashboard.existingSecretKey }}
+                path: password
+        - name: controller-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: agentteams-controller
+                  expirationSeconds: 3600
+                  path: token
+      containers:
+        - name: dashboard
+          image: "{{ .Values.dashboard.image.repository }}:{{ default (include "hiclaw.globalImageTag" .) .Values.dashboard.image.tag }}"
+          imagePullPolicy: {{ .Values.dashboard.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8090
+          env:
+            - name: PORT
+              value: "8090"
+            - name: AGENTTEAMS_DASHBOARD_BIND_HOST
+              value: {{ .Values.dashboard.bindHost | quote }}
+            - name: AGENTTEAMS_DASHBOARD_USERNAME
+              value: {{ .Values.dashboard.username | quote }}
+            - name: AGENTTEAMS_DASHBOARD_PASSWORD_FILE
+              value: /var/run/agentteams-dashboard/password
+            - name: AGENTTEAMS_DASHBOARD_AUTH_DISABLED
+              value: {{ .Values.dashboard.authDisabled | quote }}
+            {{- if .Values.dashboard.publicOrigin }}
+            - name: AGENTTEAMS_DASHBOARD_PUBLIC_ORIGIN
+              value: {{ .Values.dashboard.publicOrigin | quote }}
+            {{- end }}
+            - name: AGENTTEAMS_DASHBOARD_UPSTREAM_TIMEOUT_MS
+              value: {{ .Values.dashboard.upstreamTimeoutMs | quote }}
+            - name: AGENTTEAMS_DASHBOARD_MAX_JSON_BYTES
+              value: {{ .Values.dashboard.maxJsonBytes | quote }}
+            - name: AGENTTEAMS_DASHBOARD_MAX_OBJECT_BYTES
+              value: {{ .Values.dashboard.maxObjectBytes | quote }}
+            - name: AGENTTEAMS_CONTROLLER_URL
+              value: {{ include "hiclaw.controller.internalURL" . | quote }}
+            - name: AGENTTEAMS_AUTH_TOKEN_FILE
+              value: /var/run/secrets/agentteams/token
+            - name: AGENTTEAMS_FS_ENDPOINT
+              value: {{ include "hiclaw.minio.internalURL" . | quote }}
+            - name: AGENTTEAMS_FS_BUCKET
+              value: {{ .Values.storage.bucket | quote }}
+            - name: AGENTTEAMS_FS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hiclaw.minio.fullname" . }}
+                  key: MINIO_ROOT_USER
+            - name: AGENTTEAMS_FS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hiclaw.minio.fullname" . }}
+                  key: MINIO_ROOT_PASSWORD
+          volumeMounts:
+            - name: dashboard-auth
+              mountPath: /var/run/agentteams-dashboard/password
+              subPath: password
+              readOnly: true
+            - name: controller-token
+              mountPath: /var/run/secrets/agentteams
+              readOnly: true
+          resources:
+            {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+{{- end }}

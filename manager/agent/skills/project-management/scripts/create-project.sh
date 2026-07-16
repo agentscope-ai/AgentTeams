@@ -7,15 +7,7 @@
 #
 # Prerequisites:
 #   - Worker SOUL.md files must already exist
-#   - Environment: HICLAW_MATRIX_DOMAIN, HICLAW_ADMIN_USER, MANAGER_MATRIX_TOKEN
-#
-# Federation (decision #16): this script always writes the chat-flow
-# meta.json/plan.md (execution layer, unchanged). When --team is ALSO given,
-# it additionally emits a `Project` CR YAML (hiclaw-controller/api/v1beta1
-# ProjectSpec — see types.go) and applies it via `hiclaw apply -f` — a
-# SECOND, federated document (repo/access provisioning) linked by project id,
-# never merged into meta.json. Omitting --team is a no-op for this layer and
-# the script's output is byte-identical to before this flag existed.
+#   - Environment: AGENTTEAMS_MATRIX_DOMAIN, AGENTTEAMS_ADMIN_USER, MANAGER_MATRIX_TOKEN
 
 set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
@@ -42,8 +34,8 @@ if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || [ -z "${WORKERS_CSV}" 
     exit 1
 fi
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 
 _fail() {
     echo '{"error": "'"$1"'"}'
@@ -102,9 +94,9 @@ if [ -f "${SECRETS_FILE}" ]; then
     source "${SECRETS_FILE}"
 fi
 if [ -z "${MANAGER_MATRIX_TOKEN}" ]; then
-    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
-        -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${HICLAW_MANAGER_PASSWORD}"'"}' \
+        -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${AGENTTEAMS_MANAGER_PASSWORD}"'"}' \
         2>/dev/null | jq -r '.access_token // empty')
     [ -z "${MANAGER_MATRIX_TOKEN}" ] && _fail "Failed to obtain Manager Matrix token"
 fi
@@ -177,7 +169,7 @@ INVITE_LIST="${INVITE_LIST}]"
 
 MANAGER_MATRIX_ID="@manager:${MATRIX_DOMAIN}"
 ADMIN_MATRIX_ID="@${ADMIN_USER}:${MATRIX_DOMAIN}"
-ROOM_RESP=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/createRoom \
+ROOM_RESP=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/createRoom \
     -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
     -H 'Content-Type: application/json' \
     -d '{
@@ -200,7 +192,7 @@ log "  Project room created: ${ROOM_ID}"
 # Update meta.json with room_id
 jq --arg rid "${ROOM_ID}" '.project_room_id = $rid' "${PROJECT_DIR}/meta.json" > /tmp/proj-meta-updated.json
 mv /tmp/proj-meta-updated.json "${PROJECT_DIR}/meta.json"
-curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ID}/invite" \
+curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ID}/invite" \
     -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
     -H 'Content-Type: application/json' \
     -d "{\"user_id\": \"${ADMIN_MATRIX_ID}\"}" > /dev/null 2>&1 || true
@@ -208,15 +200,15 @@ log "  Admin ${ADMIN_MATRIX_ID} invited to project room"
 
 # Auto-join admin into project room
 ADMIN_TOKEN=""
-if [ -n "${HICLAW_ADMIN_PASSWORD:-}" ]; then
-    ADMIN_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+if [ -n "${AGENTTEAMS_ADMIN_PASSWORD:-}" ]; then
+    ADMIN_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
-        -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${ADMIN_USER}"'"},"password":"'"${HICLAW_ADMIN_PASSWORD}"'"}' \
+        -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${ADMIN_USER}"'"},"password":"'"${AGENTTEAMS_ADMIN_PASSWORD}"'"}' \
         2>/dev/null | jq -r '.access_token // empty')
 fi
 if [ -n "${ADMIN_TOKEN}" ]; then
     ROOM_ENC=$(echo "${ROOM_ID}" | sed 's/!/%21/g')
-    if curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ENC}/join" \
+    if curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ENC}/join" \
         -H "Authorization: Bearer ${ADMIN_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{}' > /dev/null 2>&1; then
@@ -247,14 +239,14 @@ _worker_auto_join() {
     fi
 
     if [ -z "${WORKER_PASSWORD}" ]; then
-        WORKER_PASSWORD=$(mc cat "${HICLAW_STORAGE_PREFIX}/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
+        WORKER_PASSWORD=$(mc cat "${AGENTTEAMS_STORAGE_PREFIX}/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
     fi
     if [ -z "${WORKER_PASSWORD}" ] && [ -f "/root/hiclaw-fs/agents/${worker}/credentials/matrix/password" ]; then
         WORKER_PASSWORD=$(cat "/root/hiclaw-fs/agents/${worker}/credentials/matrix/password" 2>/dev/null || true)
     fi
 
     if [ -n "${WORKER_PASSWORD}" ]; then
-        worker_token=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+        worker_token=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
             -H 'Content-Type: application/json' \
             -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${worker}"'"},"password":"'"${WORKER_PASSWORD}"'"}' \
             2>/dev/null | jq -r '.access_token // empty')
@@ -268,7 +260,7 @@ _worker_auto_join() {
     fi
 
     room_enc=$(echo "${room_id}" | sed 's/!/%21/g')
-    if curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
+    if curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/join" \
         -H "Authorization: Bearer ${worker_token}" \
         -H 'Content-Type: application/json' \
         -d '{}' > /dev/null 2>&1; then
@@ -334,7 +326,7 @@ MANAGER_CONFIG="/root/hiclaw-fs/agents/manager/openclaw.json"
 if [ -f "${MANAGER_CONFIG}" ]; then
     _patch_manager_project_room_config "${MANAGER_CONFIG}"
     # Sync updated Manager config to MinIO
-    mc cp "${MANAGER_CONFIG}" "${HICLAW_STORAGE_PREFIX}/agents/manager/openclaw.json" 2>/dev/null || true
+    mc cp "${MANAGER_CONFIG}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/manager/openclaw.json" 2>/dev/null || true
     log "  Manager config synced to MinIO"
 fi
 if [ -f "${HOME}/openclaw.json" ]; then
@@ -348,8 +340,8 @@ log "  CoPaw Manager project room config updated when available"
 # Step 4: Sync project files to MinIO
 # ============================================================
 log "Step 4: Syncing project files to MinIO..."
-mc mirror "${PROJECT_DIR}/" "${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" --overwrite 2>&1 | tail -3
-mc stat "${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/meta.json" > /dev/null 2>&1 \
+mc mirror "${PROJECT_DIR}/" "${AGENTTEAMS_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" --overwrite 2>&1 | tail -3
+mc stat "${AGENTTEAMS_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/meta.json" > /dev/null 2>&1 \
     || _fail "meta.json not found in MinIO after sync"
 log "  MinIO sync verified"
 

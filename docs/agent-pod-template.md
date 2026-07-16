@@ -20,7 +20,7 @@ to produce the final Pod.
 
 > `HICLAW_CONTROLLER_NAME` is also the leader-election lease name and the
 > value the controller stamps on every Worker/Manager/Team/Human CR it
-> creates as the `hiclaw.io/controller` label. The controller's informer
+> creates as the `agentteams.io/controller` label. The controller's informer
 > cache filters CRs by this label, so multiple hiclaw releases in the same
 > namespace never reconcile each other's resources. The Helm chart sets
 > this automatically from the release name; if you deploy by hand, set it

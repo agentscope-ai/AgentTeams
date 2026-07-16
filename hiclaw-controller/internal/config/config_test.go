@@ -7,8 +7,8 @@ import (
 
 func TestMain(m *testing.M) {
 	// Provide AS tokens for all tests so LoadConfig() does not panic.
-	os.Setenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN", "test-as-token")
-	os.Setenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN", "test-hs-token")
+	os.Setenv("AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN", "test-as-token")
+	os.Setenv("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN", "test-hs-token")
 	os.Exit(m.Run())
 }
 
@@ -17,8 +17,8 @@ func TestNormalizeMinIOS3Endpoint(t *testing.T) {
 		in, want string
 	}{
 		{"", ""},
-		{"http://fs-local.hiclaw.io:9000", "http://fs-local.hiclaw.io:9000"},
-		{"http://fs-local.hiclaw.io:8080", "http://fs-local.hiclaw.io:9000"},
+		{"http://fs-local.agentteams.io:9000", "http://fs-local.agentteams.io:9000"},
+		{"http://fs-local.agentteams.io:8080", "http://fs-local.agentteams.io:9000"},
 		{"http://hiclaw-controller:8080", "http://hiclaw-controller:9000"},
 		{"http://example:18080", "http://example:18080"},
 	}
@@ -29,33 +29,49 @@ func TestNormalizeMinIOS3Endpoint(t *testing.T) {
 	}
 }
 
-func TestDockerConfigResourceDefaults(t *testing.T) {
-	cfg := &Config{}
-	dc := cfg.DockerConfig()
-	if dc.WorkerCPU != "1000m" {
-		t.Errorf("WorkerCPU = %q, want %q", dc.WorkerCPU, "1000m")
-	}
-	if dc.WorkerMemory != "2Gi" {
-		t.Errorf("WorkerMemory = %q, want %q", dc.WorkerMemory, "2Gi")
+func TestLoadConfigMetricsBindAddrDefaultsByMode(t *testing.T) {
+	t.Run("embedded", func(t *testing.T) {
+		t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
+		t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+		cfg := LoadConfig()
+		if cfg.MetricsBindAddr != "0" {
+			t.Fatalf("MetricsBindAddr = %q, want disabled metrics in embedded mode", cfg.MetricsBindAddr)
+		}
+	})
+
+	t.Run("incluster", func(t *testing.T) {
+		t.Setenv("AGENTTEAMS_KUBE_MODE", "incluster")
+		t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+		cfg := LoadConfig()
+		if cfg.MetricsBindAddr != ":8080" {
+			t.Fatalf("MetricsBindAddr = %q, want :8080 in incluster mode", cfg.MetricsBindAddr)
+		}
+	})
+}
+
+func TestLoadConfigMetricsBindAddrPrefersAgentTeamsEnv(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", ":19090")
+
+	cfg := LoadConfig()
+	if cfg.MetricsBindAddr != ":19090" {
+		t.Fatalf("MetricsBindAddr = %q, want AGENTTEAMS_METRICS_BIND_ADDR", cfg.MetricsBindAddr)
 	}
 }
 
-func TestDockerConfigResourceEnvOverrides(t *testing.T) {
-	t.Setenv("HICLAW_DOCKER_WORKER_CPU", "500m")
-	t.Setenv("HICLAW_DOCKER_WORKER_MEMORY", "1Gi")
+func TestLoadConfigMetricsBindAddrIgnoresLegacyFallback(t *testing.T) {
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_METRICS_BIND_ADDR", "")
+	t.Setenv("HICLAW_METRICS_BIND_ADDR", ":18080")
 
-	cfg := &Config{}
-	dc := cfg.DockerConfig()
-	if dc.WorkerCPU != "500m" {
-		t.Errorf("WorkerCPU = %q, want %q", dc.WorkerCPU, "500m")
-	}
-	if dc.WorkerMemory != "1Gi" {
-		t.Errorf("WorkerMemory = %q, want %q", dc.WorkerMemory, "1Gi")
+	cfg := LoadConfig()
+	if cfg.MetricsBindAddr != ":8080" {
+		t.Fatalf("MetricsBindAddr = %q, want default :8080 without HICLAW fallback", cfg.MetricsBindAddr)
 	}
 }
 
 func TestLoadConfigAppliesManagerSpec(t *testing.T) {
-	t.Setenv("HICLAW_MANAGER_SPEC", `{
+	t.Setenv("AGENTTEAMS_MANAGER_SPEC", `{
 		"model":"qwen-max",
 		"runtime":"copaw",
 		"image":"hiclaw/manager:test",
@@ -64,9 +80,9 @@ func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 			"limits":{"cpu":"3","memory":"5Gi"}
 		}
 	}`)
-	t.Setenv("HICLAW_DEFAULT_MODEL", "qwen-default")
-	t.Setenv("HICLAW_MATRIX_APPSERVICE_AS_TOKEN", "test-as-token-for-unit-tests")
-	t.Setenv("HICLAW_MATRIX_APPSERVICE_HS_TOKEN", "test-hs-token-for-unit-tests")
+	t.Setenv("AGENTTEAMS_DEFAULT_MODEL", "qwen-default")
+	t.Setenv("AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN", "test-as-token-for-unit-tests")
+	t.Setenv("AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN", "test-hs-token-for-unit-tests")
 
 	cfg := LoadConfig()
 
@@ -92,7 +108,7 @@ func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 		t.Fatalf("K8sManagerMemory = %q, want %q", cfg.K8sManagerMemory, "5Gi")
 	}
 	if cfg.ManagerSpecResources == nil {
-		t.Fatal("ManagerSpecResources = nil, want resources from HICLAW_MANAGER_SPEC")
+		t.Fatal("ManagerSpecResources = nil, want resources from AGENTTEAMS_MANAGER_SPEC")
 	}
 	if cfg.ManagerSpecResources.Requests.CPU != "750m" || cfg.ManagerSpecResources.Limits.Memory != "5Gi" {
 		t.Fatalf("ManagerSpecResources = %+v", cfg.ManagerSpecResources)
@@ -100,11 +116,11 @@ func TestLoadConfigAppliesManagerSpec(t *testing.T) {
 }
 
 func TestLoadConfigUsesLegacyManagerEnvFallback(t *testing.T) {
-	t.Setenv("HICLAW_MANAGER_MODEL", "legacy-model")
-	t.Setenv("HICLAW_MANAGER_RUNTIME", "openclaw")
-	t.Setenv("HICLAW_MANAGER_IMAGE", "hiclaw/manager:legacy")
-	t.Setenv("HICLAW_K8S_MANAGER_CPU", "4")
-	t.Setenv("HICLAW_K8S_MANAGER_MEMORY", "6Gi")
+	t.Setenv("AGENTTEAMS_MANAGER_MODEL", "legacy-model")
+	t.Setenv("AGENTTEAMS_MANAGER_RUNTIME", "openclaw")
+	t.Setenv("AGENTTEAMS_MANAGER_IMAGE", "hiclaw/manager:legacy")
+	t.Setenv("AGENTTEAMS_K8S_MANAGER_CPU", "4")
+	t.Setenv("AGENTTEAMS_K8S_MANAGER_MEMORY", "6Gi")
 
 	cfg := LoadConfig()
 
@@ -126,26 +142,35 @@ func TestLoadConfigUsesLegacyManagerEnvFallback(t *testing.T) {
 }
 
 func TestLoadConfigPanicsOnInvalidManagerSpec(t *testing.T) {
-	t.Setenv("HICLAW_MANAGER_SPEC", "{")
+	t.Setenv("AGENTTEAMS_MANAGER_SPEC", "{")
 
 	defer func() {
 		if recover() == nil {
-			t.Fatal("LoadConfig() did not panic on invalid HICLAW_MANAGER_SPEC")
+			t.Fatal("LoadConfig() did not panic on invalid AGENTTEAMS_MANAGER_SPEC")
 		}
 	}()
 
 	_ = LoadConfig()
 }
 
+func TestLoadConfigAIGatewayEndpointOverride(t *testing.T) {
+	t.Setenv("AGENTTEAMS_APIG_ENDPOINT", "apig-vpc.cn-hangzhou.aliyuncs.com")
+
+	cfg := LoadConfig()
+	if cfg.AIGatewayConfig().Endpoint != "apig-vpc.cn-hangzhou.aliyuncs.com" {
+		t.Fatalf("AIGatewayConfig().Endpoint = %q", cfg.AIGatewayConfig().Endpoint)
+	}
+}
+
 func TestLoadConfigPrefersAbstractInfraEnv(t *testing.T) {
-	t.Setenv("HICLAW_KUBE_MODE", "incluster")
-	t.Setenv("HICLAW_AI_GATEWAY_ADMIN_URL", "http://higress-admin.example.com:8001")
-	t.Setenv("HICLAW_FS_BUCKET", "hiclaw-fs")
-	t.Setenv("HICLAW_FS_ENDPOINT", "http://fs.example.com:9000")
-	t.Setenv("HICLAW_STORAGE_PREFIX", "teams/demo")
-	t.Setenv("HICLAW_CONTROLLER_URL", "http://controller.example.com:8090")
-	t.Setenv("HICLAW_AI_GATEWAY_URL", "http://aigw.example.com:8080")
-	t.Setenv("HICLAW_MATRIX_URL", "http://matrix.example.com:8080")
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_AI_GATEWAY_ADMIN_URL", "http://higress-admin.example.com:8001")
+	t.Setenv("AGENTTEAMS_FS_BUCKET", "hiclaw-fs")
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://fs.example.com:9000")
+	t.Setenv("AGENTTEAMS_STORAGE_PREFIX", "teams/demo")
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.com:8090")
+	t.Setenv("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw.example.com:8080")
+	t.Setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com:8080")
 
 	cfg := LoadConfig()
 
@@ -163,9 +188,29 @@ func TestLoadConfigPrefersAbstractInfraEnv(t *testing.T) {
 	}
 }
 
+func TestMatrixConfigIncludesAppServicePushURL(t *testing.T) {
+	cfg := &Config{
+		MatrixAppServicePushURL: appServicePushURL("http://controller.example.com:8090/"),
+	}
+
+	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://controller.example.com:8090"; got != want {
+		t.Fatalf("AppServicePushURL = %q, want %q", got, want)
+	}
+}
+
+func TestLoadConfigUsesMatrixAppServiceControllerURLOverride(t *testing.T) {
+	t.Setenv("AGENTTEAMS_MATRIX_APPSERVICE_CONTROLLER_URL", "http://matrix-facing-controller:8090/")
+
+	cfg := LoadConfig()
+
+	if got, want := cfg.MatrixConfig().AppServicePushURL, "http://matrix-facing-controller:8090"; got != want {
+		t.Fatalf("AppServicePushURL = %q, want %q", got, want)
+	}
+}
+
 func TestLoadConfigUsesSharedAdminCredentialsForHigress(t *testing.T) {
-	t.Setenv("HICLAW_ADMIN_USER", "shared-admin")
-	t.Setenv("HICLAW_ADMIN_PASSWORD", "shared-secret")
+	t.Setenv("AGENTTEAMS_ADMIN_USER", "shared-admin")
+	t.Setenv("AGENTTEAMS_ADMIN_PASSWORD", "shared-secret")
 
 	cfg := LoadConfig()
 
@@ -179,7 +224,7 @@ func TestLoadConfigUsesSharedAdminCredentialsForHigress(t *testing.T) {
 
 func TestGatewayConfigAllowsDefaultAdminFallbackOnlyInEmbedded(t *testing.T) {
 	t.Run("embedded", func(t *testing.T) {
-		t.Setenv("HICLAW_KUBE_MODE", "embedded")
+		t.Setenv("AGENTTEAMS_KUBE_MODE", "embedded")
 		cfg := LoadConfig()
 		if !cfg.GatewayConfig().AllowDefaultAdminFallback {
 			t.Fatal("expected embedded gateway config to allow default admin fallback")
@@ -187,7 +232,7 @@ func TestGatewayConfigAllowsDefaultAdminFallbackOnlyInEmbedded(t *testing.T) {
 	})
 
 	t.Run("incluster", func(t *testing.T) {
-		t.Setenv("HICLAW_KUBE_MODE", "incluster")
+		t.Setenv("AGENTTEAMS_KUBE_MODE", "incluster")
 		cfg := LoadConfig()
 		if cfg.GatewayConfig().AllowDefaultAdminFallback {
 			t.Fatal("expected incluster gateway config to disable default admin fallback")
@@ -196,28 +241,28 @@ func TestGatewayConfigAllowsDefaultAdminFallbackOnlyInEmbedded(t *testing.T) {
 }
 
 func TestManagerAgentEnvForwardsAbstractInfraEnv(t *testing.T) {
-	t.Setenv("HICLAW_KUBE_MODE", "incluster")
-	t.Setenv("HICLAW_MINIO_USER", "root")
-	t.Setenv("HICLAW_MINIO_PASSWORD", "secret")
-	t.Setenv("HICLAW_AI_GATEWAY_ADMIN_URL", "http://higress-admin.example.com:8001")
-	t.Setenv("HICLAW_FS_BUCKET", "hiclaw-fs")
-	t.Setenv("HICLAW_FS_ENDPOINT", "http://fs.example.com:9000")
-	t.Setenv("HICLAW_STORAGE_PREFIX", "teams/demo")
-	t.Setenv("HICLAW_AI_GATEWAY_URL", "http://aigw.example.com:8080")
-	t.Setenv("HICLAW_MATRIX_URL", "http://matrix.example.com:8080")
+	t.Setenv("AGENTTEAMS_KUBE_MODE", "incluster")
+	t.Setenv("AGENTTEAMS_MINIO_USER", "root")
+	t.Setenv("AGENTTEAMS_MINIO_PASSWORD", "secret")
+	t.Setenv("AGENTTEAMS_AI_GATEWAY_ADMIN_URL", "http://higress-admin.example.com:8001")
+	t.Setenv("AGENTTEAMS_FS_BUCKET", "hiclaw-fs")
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://fs.example.com:9000")
+	t.Setenv("AGENTTEAMS_STORAGE_PREFIX", "teams/demo")
+	t.Setenv("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw.example.com:8080")
+	t.Setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.example.com:8080")
 
 	cfg := LoadConfig()
 	env := cfg.ManagerAgentEnv()
 
 	for key, want := range map[string]string{
-		"HICLAW_AI_GATEWAY_ADMIN_URL": "http://higress-admin.example.com:8001",
-		"HICLAW_MATRIX_URL":           "http://matrix.example.com:8080",
-		"HICLAW_AI_GATEWAY_URL":       "http://aigw.example.com:8080",
-		"HICLAW_FS_ENDPOINT":          "http://fs.example.com:9000",
-		"HICLAW_FS_BUCKET":            "hiclaw-fs",
-		"HICLAW_STORAGE_PREFIX":       "teams/demo",
-		"HICLAW_FS_ACCESS_KEY":        "root",
-		"HICLAW_FS_SECRET_KEY":        "secret",
+		"AGENTTEAMS_AI_GATEWAY_ADMIN_URL": "http://higress-admin.example.com:8001",
+		"AGENTTEAMS_MATRIX_URL":           "http://matrix.example.com:8080",
+		"AGENTTEAMS_AI_GATEWAY_URL":       "http://aigw.example.com:8080",
+		"AGENTTEAMS_FS_ENDPOINT":          "http://fs.example.com:9000",
+		"AGENTTEAMS_FS_BUCKET":            "hiclaw-fs",
+		"AGENTTEAMS_STORAGE_PREFIX":       "teams/demo",
+		"AGENTTEAMS_FS_ACCESS_KEY":        "root",
+		"AGENTTEAMS_FS_SECRET_KEY":        "secret",
 	} {
 		if got := env[key]; got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)
@@ -225,11 +270,10 @@ func TestManagerAgentEnvForwardsAbstractInfraEnv(t *testing.T) {
 	}
 	for _, legacyKey := range []string{
 		"HIGRESS_BASE_URL",
-		"HICLAW_MINIO_ENDPOINT",
-		"HICLAW_MINIO_BUCKET",
-		"HICLAW_OSS_BUCKET",
-		"HICLAW_HIGRESS_ADMIN_USER",
-		"HICLAW_HIGRESS_ADMIN_PASSWORD",
+		"AGENTTEAMS_MINIO_ENDPOINT",
+		"AGENTTEAMS_MINIO_BUCKET",
+		"AGENTTEAMS_HIGRESS_ADMIN_USER",
+		"AGENTTEAMS_HIGRESS_ADMIN_PASSWORD",
 	} {
 		if _, ok := env[legacyKey]; ok {
 			t.Fatalf("unexpected legacy env %s in ManagerAgentEnv", legacyKey)
@@ -238,8 +282,8 @@ func TestManagerAgentEnvForwardsAbstractInfraEnv(t *testing.T) {
 }
 
 func TestLoadConfigDisablesAutoPrefix(t *testing.T) {
-	t.Setenv("HICLAW_RESOURCE_AUTOPREFIX", "false")
-	t.Setenv("HICLAW_RESOURCE_PREFIX", "hiclaw-")
+	t.Setenv("AGENTTEAMS_RESOURCE_AUTOPREFIX", "false")
+	t.Setenv("AGENTTEAMS_RESOURCE_PREFIX", "hiclaw-")
 
 	cfg := LoadConfig()
 
@@ -255,8 +299,8 @@ func TestLoadConfigDisablesAutoPrefix(t *testing.T) {
 }
 
 func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) {
-	t.Setenv("HICLAW_RESOURCE_AUTOPREFIX", "false")
-	t.Setenv("HICLAW_PROXY_CONTAINER_PREFIX", "custom-worker-")
+	t.Setenv("AGENTTEAMS_RESOURCE_AUTOPREFIX", "false")
+	t.Setenv("AGENTTEAMS_PROXY_CONTAINER_PREFIX", "custom-worker-")
 
 	cfg := LoadConfig()
 
@@ -269,26 +313,26 @@ func TestLoadConfigSoloOperatorDefaultsFalse(t *testing.T) {
 	cfg := LoadConfig()
 
 	if cfg.SoloOperator {
-		t.Fatal("SoloOperator = true, want false when HICLAW_SOLO_OPERATOR is unset")
+		t.Fatal("SoloOperator = true, want false when AGENTTEAMS_SOLO_OPERATOR is unset")
 	}
 }
 
 func TestLoadConfigSoloOperatorParsesTruthyValues(t *testing.T) {
 	for _, v := range []string{"1", "true", "True", "TRUE"} {
 		t.Run(v, func(t *testing.T) {
-			t.Setenv("HICLAW_SOLO_OPERATOR", v)
+			t.Setenv("AGENTTEAMS_SOLO_OPERATOR", v)
 			cfg := LoadConfig()
 			if !cfg.SoloOperator {
-				t.Fatalf("SoloOperator = false, want true for HICLAW_SOLO_OPERATOR=%q", v)
+				t.Fatalf("SoloOperator = false, want true for AGENTTEAMS_SOLO_OPERATOR=%q", v)
 			}
 		})
 	}
 }
 
 func TestLoadConfigSoloOperatorFalseForOtherValues(t *testing.T) {
-	t.Setenv("HICLAW_SOLO_OPERATOR", "0")
+	t.Setenv("AGENTTEAMS_SOLO_OPERATOR", "0")
 	cfg := LoadConfig()
 	if cfg.SoloOperator {
-		t.Fatal("SoloOperator = true, want false for HICLAW_SOLO_OPERATOR=0")
+		t.Fatal("SoloOperator = true, want false for AGENTTEAMS_SOLO_OPERATOR=0")
 	}
 }

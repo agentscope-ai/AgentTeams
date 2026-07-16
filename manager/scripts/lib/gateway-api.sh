@@ -11,16 +11,16 @@
 #   higress_request(method, path, body)       — low-level Console call w/ cookie auth + 1 re-login retry
 #
 # Prerequisites:
-#   - source hiclaw-env.sh (for HICLAW_RUNTIME)
+#   - source hiclaw-env.sh (for AGENTTEAMS_RUNTIME)
 #   - source container-api.sh (for _orch_api)
 
 # ── Backend detection ─────────────────────────────────────────────────────────
 
 # Higress Console URL: k8s mode uses cluster-internal service, docker uses localhost
-_HIGRESS_CONSOLE_URL="${HIGRESS_CONSOLE_URL:-${HICLAW_HIGRESS_CONSOLE_URL:-http://127.0.0.1:8001}}"
+_HIGRESS_CONSOLE_URL="${HIGRESS_CONSOLE_URL:-${AGENTTEAMS_HIGRESS_CONSOLE_URL:-http://127.0.0.1:8001}}"
 
 _detect_gateway_backend() {
-    if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+    if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
         echo "aliyun"
     else
         echo "higress"
@@ -36,18 +36,18 @@ _detect_gateway_backend() {
 # retry/detection/status-capture semantics live in exactly one place.
 #
 # _higress_relogin — POST admin credentials to /session/login, refreshing
-# HIGRESS_COOKIE_FILE in place. Requires HICLAW_ADMIN_USER/HICLAW_ADMIN_PASSWORD
+# HIGRESS_COOKIE_FILE in place. Requires AGENTTEAMS_ADMIN_USER/AGENTTEAMS_ADMIN_PASSWORD
 # and a `log` function (base.sh) to already be available to the caller.
 # Uses CONSOLE_URL if the caller has set it (both register-provider.sh and
 # setup-higress.sh hardcode CONSOLE_URL="http://127.0.0.1:8001"), falling
 # back to _HIGRESS_CONSOLE_URL otherwise.
 _higress_relogin() {
     local console_url="${CONSOLE_URL:-${_HIGRESS_CONSOLE_URL}}"
-    local admin_user="${HICLAW_ADMIN_USER:-}"
-    local admin_password="${HICLAW_ADMIN_PASSWORD:-}"
+    local admin_user="${AGENTTEAMS_ADMIN_USER:-}"
+    local admin_password="${AGENTTEAMS_ADMIN_PASSWORD:-}"
 
     if [ -z "${admin_user}" ] || [ -z "${admin_password}" ]; then
-        log "ERROR: Higress session expired and HICLAW_ADMIN_USER/HICLAW_ADMIN_PASSWORD are not set — cannot re-login"
+        log "ERROR: Higress session expired and AGENTTEAMS_ADMIN_USER/AGENTTEAMS_ADMIN_PASSWORD are not set — cannot re-login"
         return 1
     fi
 
@@ -145,8 +145,8 @@ gateway_ensure_session() {
     fi
 
     HIGRESS_COOKIE_FILE="/tmp/higress-session-cookie-gateway"
-    local admin_user="${HICLAW_ADMIN_USER:-admin}"
-    local admin_password="${HICLAW_ADMIN_PASSWORD:-admin}"
+    local admin_user="${AGENTTEAMS_ADMIN_USER:-admin}"
+    local admin_password="${AGENTTEAMS_ADMIN_PASSWORD:-admin}"
 
     curl -sf -o /dev/null -X POST "${_HIGRESS_CONSOLE_URL}/session/login" \
         -H 'Content-Type: application/json' \
@@ -242,14 +242,14 @@ _gateway_cloud_authorize_routes() {
     local consumer_name="$1"
     local consumer_id="${GATEWAY_CONSUMER_ID:-}"
 
-    if [ -n "${consumer_id}" ] && [ -n "${HICLAW_GW_MODEL_API_ID:-}" ] && [ -n "${HICLAW_GW_ENV_ID:-}" ]; then
+    if [ -n "${consumer_id}" ] && [ -n "${AGENTTEAMS_GW_MODEL_API_ID:-}" ] && [ -n "${AGENTTEAMS_GW_ENV_ID:-}" ]; then
         _orch_api POST "/gateway/consumers/${consumer_id}/bind" \
-            "{\"model_api_id\":\"${HICLAW_GW_MODEL_API_ID}\",\"env_id\":\"${HICLAW_GW_ENV_ID}\"}" > /dev/null 2>&1 || true
+            "{\"model_api_id\":\"${AGENTTEAMS_GW_MODEL_API_ID}\",\"env_id\":\"${AGENTTEAMS_GW_ENV_ID}\"}" > /dev/null 2>&1 || true
     else
         local skip_reason=""
         [ -z "${consumer_id}" ] && skip_reason="consumer_id empty"
-        [ -z "${HICLAW_GW_MODEL_API_ID:-}" ] && skip_reason="${skip_reason:+${skip_reason}, }HICLAW_GW_MODEL_API_ID not set"
-        [ -z "${HICLAW_GW_ENV_ID:-}" ] && skip_reason="${skip_reason:+${skip_reason}, }HICLAW_GW_ENV_ID not set"
+        [ -z "${AGENTTEAMS_GW_MODEL_API_ID:-}" ] && skip_reason="${skip_reason:+${skip_reason}, }AGENTTEAMS_GW_MODEL_API_ID not set"
+        [ -z "${AGENTTEAMS_GW_ENV_ID:-}" ] && skip_reason="${skip_reason:+${skip_reason}, }AGENTTEAMS_GW_ENV_ID not set"
         echo "[gateway-api] Skipping cloud route binding (${skip_reason})" >&2
     fi
 }

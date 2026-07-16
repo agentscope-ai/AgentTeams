@@ -49,11 +49,12 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-alice" {
+	if session != "agentteams-worker-alice" {
 		t.Fatalf("session = %q", session)
 	}
 	// Standalone workers now default to a single object-storage entry
-	// that folds agents/<name>/* + shared/* together, mirroring the
+	// that folds agents/<name>/ + agents/<name>/* + shared/ + shared/*
+	// together, mirroring the
 	// embedded MinIO policy which grants both prefixes RW.
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
@@ -65,11 +66,10 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	if e.Scope.Bucket != "hiclaw-test" {
 		t.Fatalf("bucket not resolved: %+v", e.Scope)
 	}
-	if !hasPrefix(e.Scope.Prefixes, "agents/alice/*") {
-		t.Fatalf("expected agents/alice/* prefix, got %+v", e.Scope.Prefixes)
-	}
-	if !hasPrefix(e.Scope.Prefixes, "shared/*") {
-		t.Fatalf("expected shared/* prefix, got %+v", e.Scope.Prefixes)
+	for _, want := range []string{"agents/alice/", "agents/alice/*", "shared/", "shared/*"} {
+		if !hasPrefix(e.Scope.Prefixes, want) {
+			t.Fatalf("expected prefix %q, got %+v", want, e.Scope.Prefixes)
+		}
 	}
 	if !hasAllPerms(e.Permissions, "read", "write", "list", "delete") {
 		t.Fatalf("expected RW shared/* permissions, got %+v", e.Permissions)
@@ -194,7 +194,7 @@ func TestResolveManager_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-manager-manager" {
+	if session != "agentteams-manager-manager" {
 		t.Fatalf("session = %q", session)
 	}
 	if len(entries) != 1 {
@@ -411,7 +411,7 @@ func TestControllerDefaults(t *testing.T) {
 
 // TestResolve_CustomPrefix verifies the STS session name carries the tenant
 // prefix so cloud RAM auditing / policy matching can distinguish multiple
-// HiClaw controllers running in the same cluster.
+// AgentTeams controllers running in the same cluster.
 func TestResolve_CustomPrefix(t *testing.T) {
 	worker := &v1beta1.Worker{}
 	worker.Name = "alice"
@@ -462,6 +462,101 @@ func newAlphaTeam() *v1beta1.Team {
 	return team
 }
 
+// TestResolveTeamMember_DecoupledReadsWorkerCRAccessEntries covers Gap 3:
+// in the decoupled model the Team CR carries spec.workerMembers (a list of
+// refs) without inline AccessEntries. The resolver must Get the standalone
+// Worker CR and use ITS spec.accessEntries instead of falling back to
+// DefaultEntriesForTeamMember.
+func TestResolveTeamMember_DecoupledReadsWorkerCRAccessEntries(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Namespace = testNS
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "w1", Role: "worker"},
+	}
+
+	worker := &v1beta1.Worker{}
+	worker.Name = "w1"
+	worker.Namespace = testNS
+	worker.Spec.AccessEntries = []v1beta1.AccessEntry{
+		{
+			Service:     credprovider.ServiceObjectStorage,
+			Permissions: []string{"read"},
+			Scope: rawJSON(t, map[string]any{
+				"bucketRef": "workspace",
+				"prefixes":  []string{"custom/${self.team}/*", "agents/${self.name}/data/*"},
+			}),
+		},
+	}
+
+	c := newFakeClient(t, team, worker)
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role:       auth.RoleWorker,
+		Username:   "w1",
+		WorkerName: "w1",
+		Team:       "alpha",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1 (Worker CR custom entries must be picked up, defaults must not leak), entries=%+v", len(entries), entries)
+	}
+	got := entries[0].Scope.Prefixes
+	if !hasPrefix(got, "custom/alpha/*") {
+		t.Fatalf("${self.team} not expanded: %+v", got)
+	}
+	if !hasPrefix(got, "agents/w1/data/*") {
+		t.Fatalf("${self.name} not expanded from Worker CR entries: %+v", got)
+	}
+	if len(entries[0].Permissions) != 1 || entries[0].Permissions[0] != "read" {
+		t.Fatalf("permissions must come from Worker CR, got %+v", entries[0].Permissions)
+	}
+}
+
+// TestResolveTeamMember_DecoupledLeaderRoleHonored covers Gap 3 leader
+// branch: when team.spec.workerMembers[].role=="team_leader", the
+// resolved templateCtx.kind must be "TeamLeader" so ${self.kind}
+// expansion matches the leader's runtime identity.
+func TestResolveTeamMember_DecoupledLeaderRoleHonored(t *testing.T) {
+	team := &v1beta1.Team{}
+	team.Name = "alpha"
+	team.Namespace = testNS
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "lead", Role: "team_leader"},
+	}
+
+	worker := &v1beta1.Worker{}
+	worker.Name = "lead"
+	worker.Namespace = testNS
+	worker.Spec.AccessEntries = []v1beta1.AccessEntry{
+		{
+			Service:     credprovider.ServiceObjectStorage,
+			Permissions: []string{"read"},
+			Scope: rawJSON(t, map[string]any{
+				"bucketRef": "workspace",
+				"prefixes":  []string{"kind/${self.kind}/*"},
+			}),
+		},
+	}
+
+	c := newFakeClient(t, team, worker)
+	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
+		Role:       auth.RoleTeamLeader,
+		Username:   "lead",
+		WorkerName: "lead",
+		Team:       "alpha",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !hasPrefix(entries[0].Scope.Prefixes, "kind/TeamLeader/*") {
+		t.Fatalf("${self.kind} should expand to TeamLeader, got %+v", entries[0].Scope.Prefixes)
+	}
+}
+
 func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	team := newAlphaTeam()
 	c := newFakeClient(t, team)
@@ -475,8 +570,8 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-lead" {
-		t.Fatalf("session = %q, want hiclaw-worker-lead", session)
+	if session != "agentteams-worker-lead" {
+		t.Fatalf("session = %q, want agentteams-worker-lead", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
@@ -485,7 +580,7 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	if e.Scope.Bucket != "hiclaw-test" {
 		t.Fatalf("bucket = %q", e.Scope.Bucket)
 	}
-	for _, want := range []string{"agents/lead/*", "shared/*", "teams/alpha/*"} {
+	for _, want := range []string{"agents/lead/", "agents/lead/*", "shared/", "shared/*", "teams/alpha/", "teams/alpha/*"} {
 		if !hasPrefix(e.Scope.Prefixes, want) {
 			t.Fatalf("missing prefix %q in %+v", want, e.Scope.Prefixes)
 		}
@@ -510,13 +605,16 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-runtime-lead" {
-		t.Fatalf("session = %q, want hiclaw-worker-runtime-lead", session)
+	if session != "agentteams-worker-runtime-lead" {
+		t.Fatalf("session = %q, want agentteams-worker-runtime-lead", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
 	}
 	got := entries[0].Scope.Prefixes
+	if !hasPrefix(got, "agents/runtime-lead/") {
+		t.Fatalf("runtime workerName directory prefix not found in %+v", got)
+	}
 	if !hasPrefix(got, "agents/runtime-lead/*") {
 		t.Fatalf("runtime workerName prefix not found in %+v", got)
 	}
@@ -541,6 +639,9 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeTeamName(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	got := entries[0].Scope.Prefixes
+	if !hasPrefix(got, "teams/team001/") {
+		t.Fatalf("runtime teamName directory prefix not found in %+v", got)
+	}
 	if !hasPrefix(got, "teams/team001/*") {
 		t.Fatalf("runtime teamName prefix not found in %+v", got)
 	}
@@ -563,14 +664,14 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-w1" {
+	if session != "agentteams-worker-w1" {
 		t.Fatalf("session = %q", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
 	}
 	e := entries[0]
-	for _, want := range []string{"agents/w1/*", "shared/*", "teams/alpha/*"} {
+	for _, want := range []string{"agents/w1/", "agents/w1/*", "shared/", "shared/*", "teams/alpha/", "teams/alpha/*"} {
 		if !hasPrefix(e.Scope.Prefixes, want) {
 			t.Fatalf("missing prefix %q in %+v", want, e.Scope.Prefixes)
 		}
@@ -598,8 +699,8 @@ func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "hiclaw-worker-runtime-w1" {
-		t.Fatalf("session = %q, want hiclaw-worker-runtime-w1", session)
+	if session != "agentteams-worker-runtime-w1" {
+		t.Fatalf("session = %q, want agentteams-worker-runtime-w1", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))

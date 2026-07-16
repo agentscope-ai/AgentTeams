@@ -1,5 +1,5 @@
 # ============================================================
-# HiClaw Makefile
+# AgentTeams Makefile
 # ============================================================
 # Unified build, test, and release interface.
 # Used locally and in CI/CD (GitHub Actions).
@@ -24,36 +24,55 @@ VERSION        ?= latest
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= higress
 
-MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/hiclaw-manager
-MANAGER_COPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/hiclaw-manager-copaw
-WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/hiclaw-worker
-COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/hiclaw-copaw-worker
-HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/hiclaw-hermes-worker
-OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/hiclaw-openhuman-worker
+MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/agentteams-manager
+MANAGER_COPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-copaw
+WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
+COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/agentteams-copaw-worker
+HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
+QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-qwenpaw-worker
+OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
-CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/hiclaw-controller
-EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/hiclaw-embedded
+CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
+EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
 
 MANAGER_TAG        ?= $(MANAGER_IMAGE):$(VERSION)
 MANAGER_COPAW_TAG  ?= $(MANAGER_COPAW_IMAGE):$(VERSION)
 WORKER_TAG         ?= $(WORKER_IMAGE):$(VERSION)
 COPAW_WORKER_TAG   ?= $(COPAW_WORKER_IMAGE):$(VERSION)
 HERMES_WORKER_TAG  ?= $(HERMES_WORKER_IMAGE):$(VERSION)
+QWENPAW_WORKER_TAG ?= $(QWENPAW_WORKER_IMAGE):$(VERSION)
 OPENHUMAN_WORKER_TAG ?= $(OPENHUMAN_WORKER_IMAGE):$(VERSION)
 OPENCLAW_BASE_TAG  ?= $(OPENCLAW_BASE_IMAGE):$(VERSION)
 CONTROLLER_TAG     ?= $(CONTROLLER_IMAGE):$(VERSION)
 EMBEDDED_TAG       ?= $(EMBEDDED_IMAGE):$(VERSION)
 
 # Local image names (no registry prefix, used by tests and install script)
-LOCAL_MANAGER        = hiclaw/hiclaw-manager:$(VERSION)
-LOCAL_MANAGER_COPAW  = hiclaw/hiclaw-manager-copaw:$(VERSION)
-LOCAL_WORKER         = hiclaw/worker-agent:$(VERSION)
-LOCAL_COPAW_WORKER   = hiclaw/copaw-worker:$(VERSION)
-LOCAL_HERMES_WORKER  = hiclaw/hermes-worker:$(VERSION)
-LOCAL_OPENHUMAN_WORKER = hiclaw/openhuman-worker:$(VERSION)
-LOCAL_OPENCLAW_BASE  = hiclaw/openclaw-base:$(VERSION)
-LOCAL_CONTROLLER     = hiclaw/hiclaw-controller:$(VERSION)
-LOCAL_EMBEDDED       = hiclaw/hiclaw-embedded:$(VERSION)
+LOCAL_MANAGER        = agentteams/manager:$(VERSION)
+LOCAL_MANAGER_COPAW  = agentteams/manager-copaw:$(VERSION)
+LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
+LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
+LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
+LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
+LOCAL_MANAGER_LEGACY        = hiclaw/hiclaw-manager:$(VERSION)
+LOCAL_MANAGER_COPAW_LEGACY  = hiclaw/hiclaw-manager-copaw:$(VERSION)
+LOCAL_WORKER_LEGACY         = hiclaw/worker-agent:$(VERSION)
+LOCAL_COPAW_WORKER_LEGACY   = hiclaw/copaw-worker:$(VERSION)
+LOCAL_HERMES_WORKER_LEGACY  = hiclaw/hermes-worker:$(VERSION)
+LOCAL_QWENPAW_WORKER_LEGACY = hiclaw/qwenpaw-worker:$(VERSION)
+LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
+LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
+LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
+LOCAL_CONTROLLER_LEGACY = hiclaw/hiclaw-controller:$(VERSION)
+LOCAL_CONTROLLER_BUILD_IMAGE ?= $(shell \
+	if docker image inspect $(LOCAL_CONTROLLER) >/dev/null 2>&1; then \
+		printf '%s' '$(LOCAL_CONTROLLER)'; \
+	elif docker image inspect $(LOCAL_CONTROLLER_LEGACY) >/dev/null 2>&1; then \
+		printf '%s' '$(LOCAL_CONTROLLER_LEGACY)'; \
+	else \
+		printf '%s' '$(LOCAL_CONTROLLER)'; \
+	fi)
+LOCAL_EMBEDDED       = agentteams/agentteams-embedded:$(VERSION)
+LOCAL_EMBEDDED_LEGACY = hiclaw/hiclaw-embedded:$(VERSION)
 
 # Higress base image registry (regional mirrors auto-synced from cn-hangzhou primary)
 #   China (default): higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -86,7 +105,7 @@ COPAW_WORKER_CTX = --build-context copaw-worker=./copaw
 # Platforms for multi-arch builds (comma-separated, no spaces)
 MULTIARCH_PLATFORMS ?= linux/amd64,linux/arm64
 # Buildx builder name (auto-created if not exists)
-BUILDX_BUILDER     ?= hiclaw-multiarch
+BUILDX_BUILDER     ?= agentteams-multiarch
 
 # Pre-release version detection
 # Pre-release versions (containing -rc, -beta, -alpha, etc.) should NOT push :latest tag
@@ -105,8 +124,11 @@ LINES          ?= 50
 # ---------- Phony targets ----------
 
 .PHONY: all build build-openclaw-base build-hiclaw-controller build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
+        build-qwenpaw-worker \
         tag push push-openclaw-base push-hiclaw-controller push-embedded push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
+        push-qwenpaw-worker \
         push-native push-native-manager push-native-manager-copaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
+        push-native-qwenpaw-worker \
         buildx-setup \
         test test-quick test-installed test-embedded \
         install install-embedded uninstall uninstall-embedded replay replay-log \
@@ -121,7 +143,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-hiclaw-controller ## Build all images (base image pulled from registry, not rebuilt locally)
+build: build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-hiclaw-controller ## Build all images (base image pulled from registry, not rebuilt locally)
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -136,54 +158,64 @@ OPENCLAW_BASE_VERSION ?= 20260423-8359cbc
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
-build-hiclaw-controller: ## Build hiclaw-controller image (prerequisite for Manager)
-	@echo "==> Building hiclaw-controller image: $(LOCAL_CONTROLLER)"
+build-hiclaw-controller: ## Build agentteams-controller image (prerequisite for Manager)
+	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
 	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
+		-t $(LOCAL_CONTROLLER_LEGACY) \
 		./hiclaw-controller/
 	@rm -rf ./hiclaw-controller/agent
 
 build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile \
 		-t $(LOCAL_MANAGER) \
+		-t $(LOCAL_MANAGER_LEGACY) \
 		.
 
 build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Python runtime)
 	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile.copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
+		-t $(LOCAL_MANAGER_COPAW_LEGACY) \
 		.
 
 build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
 	@echo "==> Building embedded image: $(LOCAL_EMBEDDED) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f hiclaw-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
+		-t $(LOCAL_EMBEDDED_LEGACY) \
 		.
 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_WORKER) \
+		-t $(LOCAL_WORKER_LEGACY) \
 		./worker/
 
 build-copaw-worker: ## Build CoPaw Worker image
 	@echo "==> Building CoPaw Worker image: $(LOCAL_COPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_COPAW_WORKER) \
+		-t $(LOCAL_COPAW_WORKER_LEGACY) \
 		./copaw/
 
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
+		-t $(LOCAL_HERMES_WORKER_LEGACY) \
 		./hermes/
 
 build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
@@ -191,6 +223,16 @@ build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_OPENHUMAN_WORKER) \
 		-f openhuman/Dockerfile .
+
+build-qwenpaw-worker: ## Build QwenPaw Worker image
+	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
+	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
+	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		-f qwenpaw/Dockerfile \
+		-t $(LOCAL_QWENPAW_WORKER) \
+		-t $(LOCAL_QWENPAW_WORKER_LEGACY) \
+		.
 
 # ---------- Tag ----------
 
@@ -200,12 +242,14 @@ tag: build ## Tag images for registry push
 	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_TAG)
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_TAG)
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_TAG)
+	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_TAG)
 ifeq ($(PUSH_LATEST),yes)
 	docker tag $(LOCAL_MANAGER) $(MANAGER_IMAGE):latest
 	docker tag $(LOCAL_WORKER) $(WORKER_IMAGE):latest
 	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_IMAGE):latest
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_IMAGE):latest
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_IMAGE):latest
+	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_IMAGE):latest
 	docker tag $(LOCAL_CONTROLLER) $(CONTROLLER_IMAGE):latest
 	@echo "==> Images tagged as $(VERSION) and latest"
 else
@@ -234,7 +278,7 @@ else
 	fi
 endif
 
-push: push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-hiclaw-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
+push: push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-hiclaw-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
 
 push-openclaw-base: buildx-setup ## Build + push multi-arch OpenClaw base image
 	@echo "==> Building + pushing multi-arch OpenClaw base: $(OPENCLAW_BASE_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -262,13 +306,13 @@ else
 		./openclaw-base/
 endif
 
-push-hiclaw-controller: buildx-setup ## Build + push multi-arch hiclaw-controller image
+push-hiclaw-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
 	@echo "==> Building + pushing multi-arch hiclaw-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
 	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(CONTROLLER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
-		echo "  -> Building hiclaw-controller for $(plat)..." && \
+		echo "  -> Building agentteams-controller for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 			--manifest $(CONTROLLER_TAG) \
@@ -296,7 +340,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building hiclaw-embedded for $(plat)..." && \
 		podman build --platform $(plat) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 			--manifest $(EMBEDDED_TAG) \
 			-f hiclaw-controller/Dockerfile.embedded . && ) true
@@ -308,7 +352,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(EMBEDDED_TAG) \
 		$(if $(PUSH_LATEST),-t $(EMBEDDED_IMAGE):latest) \
@@ -324,7 +368,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building Manager for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			-f manager/Dockerfile \
 			--manifest $(MANAGER_TAG) \
 			. && ) true
@@ -337,7 +381,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-f manager/Dockerfile \
 		-t $(MANAGER_TAG) \
 		$(if $(PUSH_LATEST),-t $(MANAGER_IMAGE):latest) \
@@ -353,7 +397,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building Manager CoPaw for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			-f manager/Dockerfile.copaw \
 			--manifest $(MANAGER_COPAW_TAG) \
 			. && ) true
@@ -366,7 +410,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-f manager/Dockerfile.copaw \
 		-t $(MANAGER_COPAW_TAG) \
 		$(if $(PUSH_LATEST),-t $(MANAGER_COPAW_IMAGE):latest) \
@@ -383,7 +427,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building Worker for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(WORKER_TAG) \
 			./worker/ && ) true
 	podman manifest push --all $(WORKER_TAG) docker://$(WORKER_TAG)
@@ -395,7 +439,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(WORKER_IMAGE):latest) \
 		--push \
@@ -410,7 +454,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building CoPaw Worker for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(COPAW_WORKER_TAG) \
 			./copaw/ && ) true
 	podman manifest push --all $(COPAW_WORKER_TAG) docker://$(COPAW_WORKER_TAG)
@@ -422,7 +466,7 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(COPAW_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(COPAW_WORKER_IMAGE):latest) \
 		--push \
@@ -437,7 +481,7 @@ ifeq ($(IS_PODMAN),1)
 		echo "  -> Building Hermes Worker for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-			--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(HERMES_WORKER_TAG) \
 			./hermes/ && ) true
 	podman manifest push --all $(HERMES_WORKER_TAG) docker://$(HERMES_WORKER_TAG)
@@ -449,11 +493,38 @@ else
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
-		--build-arg HICLAW_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(HERMES_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
 		--push \
 		./hermes/
+endif
+
+push-qwenpaw-worker: buildx-setup ## Build + push multi-arch QwenPaw Worker image
+	@echo "==> Building + pushing multi-arch QwenPaw Worker: $(QWENPAW_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
+	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
+	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
+ifeq ($(IS_PODMAN),1)
+	-podman manifest rm $(QWENPAW_WORKER_TAG) 2>/dev/null
+	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
+		echo "  -> Building QwenPaw Worker for $(plat)..." && \
+		podman build --platform $(plat) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+			--manifest $(QWENPAW_WORKER_TAG) \
+			-f qwenpaw/Dockerfile . && ) true
+	podman manifest push --all $(QWENPAW_WORKER_TAG) docker://$(QWENPAW_WORKER_TAG)
+	$(if $(PUSH_LATEST), \
+		podman manifest push --all $(QWENPAW_WORKER_TAG) docker://$(QWENPAW_WORKER_IMAGE):latest && \
+		echo "  -> Also pushed :latest tag")
+else
+	docker buildx build \
+		--builder $(BUILDX_BUILDER) \
+		--platform $(MULTIARCH_PLATFORMS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		-t $(QWENPAW_WORKER_TAG) \
+		$(if $(PUSH_LATEST),-t $(QWENPAW_WORKER_IMAGE):latest) \
+		--push \
+		-f qwenpaw/Dockerfile .
 endif
 
 # ---------- Push native-arch only (dev use) ----------
@@ -470,11 +541,14 @@ push-native: tag ## Push native-arch images (dev only, overwrites multi-arch!)
 	docker push $(COPAW_WORKER_TAG)
 	@echo "==> Pushing Hermes Worker: $(HERMES_WORKER_TAG)"
 	docker push $(HERMES_WORKER_TAG)
+	@echo "==> Pushing QwenPaw Worker: $(QWENPAW_WORKER_TAG)"
+	docker push $(QWENPAW_WORKER_TAG)
 ifeq ($(PUSH_LATEST),yes)
 	docker push $(MANAGER_IMAGE):latest
 	docker push $(WORKER_IMAGE):latest
 	docker push $(COPAW_WORKER_IMAGE):latest
 	docker push $(HERMES_WORKER_IMAGE):latest
+	docker push $(QWENPAW_WORKER_IMAGE):latest
 endif
 
 push-native-manager: build-manager ## Push native-arch Manager only (dev)
@@ -501,6 +575,10 @@ push-native-openhuman-worker: build-openhuman-worker ## Push native-arch OpenHum
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_TAG)
 	docker push $(OPENHUMAN_WORKER_TAG)
 
+push-native-qwenpaw-worker: build-qwenpaw-worker ## Push native-arch QwenPaw Worker only (dev)
+	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_TAG)
+	docker push $(QWENPAW_WORKER_TAG)
+
 # ---------- Test ----------
 
 # Wait for Manager services to be ready (used internally by test target)
@@ -508,10 +586,10 @@ push-native-openhuman-worker: build-openhuman-worker ## Push native-arch OpenHum
 # Usage: make wait-ready [CONTAINER=name]
 .PHONY: wait-ready
 wait-ready:
-	@echo "==> Waiting for Manager services to be ready (container: $(or $(CONTAINER),hiclaw-controller))..."
+	@echo "==> Waiting for Manager services to be ready (container: $(or $(CONTAINER),agentteams-controller))..."
 	@TIMEOUT=300; ELAPSED=0; \
 	while [ "$$ELAPSED" -lt "$$TIMEOUT" ]; do \
-		RESULT=$$(docker exec $(or $(CONTAINER),hiclaw-controller) bash -c 'curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:6167/_matrix/client/versions" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:9000/minio/health/live" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8001/" 2>/dev/null || echo "000"' 2>/dev/null); \
+		RESULT=$$(docker exec $(or $(CONTAINER),agentteams-controller) bash -c 'curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:6167/_matrix/client/versions" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:9000/minio/health/live" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8001/" 2>/dev/null || echo "000"' 2>/dev/null); \
 		MATRIX=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f1); \
 		MINIO=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f2); \
 		CONSOLE=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f3); \
@@ -532,12 +610,12 @@ wait-ready:
 test: ## Run integration tests (creates test container)
 ifdef SKIP_INSTALL
 	@echo "==> Running tests against existing installation"
-	@docker exec hiclaw-controller touch /root/manager-workspace/yolo-mode 2>/dev/null || true
+	@docker exec agentteams-controller touch /root/manager-workspace/yolo-mode 2>/dev/null || true
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 else
 	@echo "==> Installing test Manager and running tests"
 	$(MAKE) uninstall 2>/dev/null || true
-	HICLAW_YOLO=1 $(MAKE) install
+	AGENTTEAMS_YOLO=1 $(MAKE) install
 	$(MAKE) wait-ready
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 endif
@@ -550,56 +628,56 @@ test-installed: ## Run tests against an already-installed Manager (no container 
 
 # ---------- Install / Uninstall ----------
 
-install: ## Install Manager locally (non-interactive, set HICLAW_LLM_API_KEY)
+install: ## Install Manager locally (non-interactive, set AGENTTEAMS_LLM_API_KEY)
 ifndef SKIP_BUILD
 	$(MAKE) build
 endif
-	@echo "==> Installing HiClaw Manager (non-interactive)..."
-	HICLAW_NON_INTERACTIVE=1 HICLAW_VERSION=$(VERSION) HICLAW_MOUNT_SOCKET=1 \
-		HICLAW_MATRIX_E2EE=0 \
-		HICLAW_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
-		HICLAW_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		HICLAW_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
-		HICLAW_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
-		HICLAW_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
-		HICLAW_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+	@echo "==> Installing AgentTeams Manager (non-interactive)..."
+	AGENTTEAMS_NON_INTERACTIVE=1 AGENTTEAMS_VERSION=$(VERSION) AGENTTEAMS_MOUNT_SOCKET=1 \
+		AGENTTEAMS_MATRIX_E2EE=0 \
+		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
+		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
+		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
+		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
+		AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
 		bash ./install/hiclaw-install.sh manager
 
 install-interactive: ## Install Manager interactively (prompts for config)
 ifndef SKIP_BUILD
 	$(MAKE) build
 endif
-	@echo "==> Installing HiClaw Manager (interactive)..."
-	HICLAW_VERSION=$(VERSION) HICLAW_MOUNT_SOCKET=1 \
-		HICLAW_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
-		HICLAW_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		HICLAW_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
-		HICLAW_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
-		HICLAW_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
+	@echo "==> Installing AgentTeams Manager (interactive)..."
+	AGENTTEAMS_VERSION=$(VERSION) AGENTTEAMS_MOUNT_SOCKET=1 \
+		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
+		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
+		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
+		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		bash ./install/hiclaw-install.sh manager
 
 uninstall: ## Stop and remove Manager + all Worker containers
-	@echo "==> Uninstalling HiClaw..."
-	-docker stop hiclaw-manager 2>/dev/null && docker rm hiclaw-manager 2>/dev/null || true
-	-docker stop hiclaw-controller 2>/dev/null && docker rm hiclaw-controller 2>/dev/null || true
-	@for c in $$(docker ps -a --filter "name=hiclaw-worker-" --format '{{.Names}}' 2>/dev/null); do \
+	@echo "==> Uninstalling AgentTeams..."
+	-docker stop agentteams-manager 2>/dev/null && docker rm agentteams-manager 2>/dev/null || true
+	-docker stop agentteams-controller 2>/dev/null && docker rm agentteams-controller 2>/dev/null || true
+	@for c in $$(docker ps -a --filter "name=agentteams-worker-" --format '{{.Names}}' 2>/dev/null); do \
 		echo "  Removing Worker: $$c"; \
 		docker rm -f "$$c" 2>/dev/null || true; \
 	done
-	-docker volume rm hiclaw-data 2>/dev/null && echo "  Removed volume: hiclaw-data" || true
-	@ENV_FILE="$${HICLAW_ENV_FILE:-$${HOME}/hiclaw-manager.env}"; \
-	[ -f "$$ENV_FILE" ] || ENV_FILE="./hiclaw-manager.env"; \
+	-docker volume rm agentteams-data 2>/dev/null && echo "  Removed volume: agentteams-data" || true
+	@ENV_FILE="$${AGENTTEAMS_ENV_FILE:-$${HOME}/agentteams-manager.env}"; \
+	[ -f "$$ENV_FILE" ] || ENV_FILE="./agentteams-manager.env"; \
 	if [ -f "$$ENV_FILE" ]; then \
-		DATA_DIR=$$(grep '^HICLAW_DATA_DIR=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2-); \
+		DATA_DIR=$$(grep '^AGENTTEAMS_DATA_DIR=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2-); \
 		if [ -n "$$DATA_DIR" ] && [ -d "$$DATA_DIR" ]; then \
 			echo "  External data directory preserved: $$DATA_DIR"; \
 			echo "  To delete: rm -rf $$DATA_DIR"; \
 		fi; \
-		WORKSPACE_DIR=$$(grep '^HICLAW_WORKSPACE_DIR=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2-); \
+		WORKSPACE_DIR=$$(grep '^AGENTTEAMS_WORKSPACE_DIR=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2-); \
 		if [ -n "$$WORKSPACE_DIR" ] && [ -d "$$WORKSPACE_DIR" ]; then \
 			PARENT=$$(dirname "$$WORKSPACE_DIR"); \
 			BASE=$$(basename "$$WORKSPACE_DIR"); \
-			RUNTIME=$$(grep '^HICLAW_MANAGER_RUNTIME=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "openclaw"); \
+			RUNTIME=$$(grep '^AGENTTEAMS_MANAGER_RUNTIME=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "openclaw"); \
 			if [ "$$RUNTIME" = "copaw" ]; then \
 				RM_IMAGE="$(LOCAL_MANAGER_COPAW)"; \
 			else \
@@ -612,7 +690,7 @@ uninstall: ## Stop and remove Manager + all Worker containers
 			fi; \
 		fi; \
 	fi
-	@echo "==> HiClaw uninstalled"
+	@echo "==> AgentTeams uninstalled"
 
 # ---------- Embedded Install / Uninstall / Test ----------
 
@@ -620,27 +698,27 @@ install-embedded: ## Install in embedded mode (dual-container: controller + agen
 ifndef SKIP_BUILD
 	$(MAKE) build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker
 endif
-	@echo "==> Installing HiClaw (embedded mode)..."
-	HICLAW_NON_INTERACTIVE=1 \
-		HICLAW_INSTALL_EMBEDDED_IMAGE=$(LOCAL_EMBEDDED) \
-		HICLAW_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
-		HICLAW_INSTALL_MANAGER_COPAW_IMAGE=$(LOCAL_MANAGER_COPAW) \
-		HICLAW_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
-		HICLAW_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
-		HICLAW_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
-		HICLAW_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
-		HICLAW_MATRIX_E2EE=0 \
+	@echo "==> Installing AgentTeams (embedded mode)..."
+	AGENTTEAMS_NON_INTERACTIVE=1 \
+		AGENTTEAMS_INSTALL_EMBEDDED_IMAGE=$(LOCAL_EMBEDDED) \
+		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
+		AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE=$(LOCAL_MANAGER_COPAW) \
+		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
+		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
+		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
+		AGENTTEAMS_MATRIX_E2EE=0 \
 		bash ./install/hiclaw-install.sh
 
 wait-ready-embedded: ## Wait for embedded-mode services to be ready
 	@echo "==> Waiting for embedded services..."
 	@TIMEOUT=300; ELAPSED=0; \
 	while [ "$$ELAPSED" -lt "$$TIMEOUT" ]; do \
-		RESULT=$$(docker exec hiclaw-controller bash -c 'curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:6167/_matrix/client/versions" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:9000/minio/health/live" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8001/" 2>/dev/null || echo "000"' 2>/dev/null); \
+		RESULT=$$(docker exec agentteams-controller bash -c 'curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:6167/_matrix/client/versions" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code} " "http://127.0.0.1:9000/minio/health/live" 2>/dev/null || echo "000 "; curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8001/" 2>/dev/null || echo "000"' 2>/dev/null); \
 		MATRIX=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f1); \
 		MINIO=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f2); \
 		CONSOLE=$$(echo "$$RESULT" | tr -d '\n' | cut -d' ' -f3); \
-		AGENT=$$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^hiclaw-manager$$' || echo 0); \
+		AGENT=$$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^agentteams-manager$$' || echo 0); \
 		if [ "$$MATRIX" = "200" ] && [ "$$MINIO" = "200" ] && [ "$$CONSOLE" = "200" ] && [ "$$AGENT" -ge 1 ]; then \
 			echo "==> All services ready (took $${ELAPSED}s)"; \
 			echo "==> Waiting 60s for Manager Agent initialization..."; \
@@ -658,35 +736,44 @@ wait-ready-embedded: ## Wait for embedded-mode services to be ready
 test-embedded: ## Run integration tests in embedded mode
 ifdef SKIP_INSTALL
 	@echo "==> Running tests against existing embedded installation"
-	@docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode 2>/dev/null || true
+	@docker exec agentteams-manager touch /root/manager-workspace/yolo-mode 2>/dev/null || true
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 else
 	@echo "==> Installing embedded mode and running tests"
 	$(MAKE) uninstall-embedded 2>/dev/null || true
-	HICLAW_YOLO=1 $(MAKE) install-embedded
+	# pull_request_target runs the base-branch workflow before this PR's
+	# workflow env rename lands, so map legacy CI env names only at the test
+	# harness boundary. Runtime/install scripts still consume AGENTTEAMS_*.
+	AGENTTEAMS_YOLO=1 \
+		AGENTTEAMS_LLM_API_KEY="$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" \
+		AGENTTEAMS_LLM_PROVIDER="$${AGENTTEAMS_LLM_PROVIDER:-$${HICLAW_LLM_PROVIDER:-}}" \
+		AGENTTEAMS_DEFAULT_MODEL="$${AGENTTEAMS_DEFAULT_MODEL:-$${HICLAW_DEFAULT_MODEL:-}}" \
+		AGENTTEAMS_MANAGER_RUNTIME="$${AGENTTEAMS_MANAGER_RUNTIME:-$${HICLAW_MANAGER_RUNTIME:-}}" \
+		AGENTTEAMS_DEFAULT_WORKER_RUNTIME="$${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-$${HICLAW_DEFAULT_WORKER_RUNTIME:-}}" \
+		$(MAKE) install-embedded
 	$(MAKE) wait-ready-embedded
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 endif
 
 uninstall-embedded: ## Stop and remove embedded containers
-	@echo "==> Uninstalling HiClaw (embedded mode)..."
-	-docker stop hiclaw-manager 2>/dev/null && docker rm hiclaw-manager 2>/dev/null || true
-	-docker stop hiclaw-controller 2>/dev/null && docker rm hiclaw-controller 2>/dev/null || true
-	-docker stop hiclaw-manager 2>/dev/null && docker rm hiclaw-manager 2>/dev/null || true
-	@for c in $$(docker ps -a --filter "name=hiclaw-worker-" --format '{{.Names}}' 2>/dev/null); do \
+	@echo "==> Uninstalling AgentTeams (embedded mode)..."
+	-docker stop agentteams-manager 2>/dev/null && docker rm agentteams-manager 2>/dev/null || true
+	-docker stop agentteams-controller 2>/dev/null && docker rm agentteams-controller 2>/dev/null || true
+	-docker stop agentteams-manager 2>/dev/null && docker rm agentteams-manager 2>/dev/null || true
+	@for c in $$(docker ps -a --filter "name=agentteams-worker-" --format '{{.Names}}' 2>/dev/null); do \
 		echo "  Removing Worker: $$c"; \
 		docker rm -f "$$c" 2>/dev/null || true; \
 	done
-	-docker volume rm hiclaw-data 2>/dev/null && echo "  Removed volume: hiclaw-data" || true
-	@if [ -d "$${HOME}/hiclaw-manager" ]; then \
-		rm -rf "$${HOME}/hiclaw-manager" && echo "  Cleaned workspace: ~/hiclaw-manager"; \
+	-docker volume rm agentteams-data 2>/dev/null && echo "  Removed volume: agentteams-data" || true
+	@if [ -d "$${HOME}/agentteams-manager" ]; then \
+		rm -rf "$${HOME}/agentteams-manager" && echo "  Cleaned workspace: ~/agentteams-manager"; \
 	fi
-	@echo "==> HiClaw (embedded) uninstalled"
+	@echo "==> AgentTeams (embedded) uninstalled"
 
 # ---------- Replay ----------
 
 replay: ## Send a task to Manager (TASK="..." or interactive, YOLO mode auto-enabled)
-	@docker exec hiclaw-controller touch /root/manager-workspace/yolo-mode 2>/dev/null || true
+	@docker exec agentteams-controller touch /root/manager-workspace/yolo-mode 2>/dev/null || true
 ifdef TASK
 	REPLAY_USE_DOCKER_EXEC=1 ./scripts/replay-task.sh "$(TASK)"
 else
@@ -706,20 +793,20 @@ replay-log: ## View the latest replay conversation log
 # ---------- Verify ----------
 
 verify: ## Run post-install verification against the running Manager container
-	@bash ./install/hiclaw-verify.sh $(or $(CONTAINER),hiclaw-controller)
+	@bash ./install/hiclaw-verify.sh $(or $(CONTAINER),agentteams-controller)
 
 # ---------- Dev utils ----------
 
 status: ## Show status of Manager and all Worker containers
-	@echo "==> HiClaw container status:"
+	@echo "==> AgentTeams container status:"
 	@docker ps -a --filter "name=hiclaw-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null \
 		|| echo "  (no containers found or Docker not available)"
 
 logs: ## Show recent logs for Manager and all Workers (override with LINES=N, default 50)
 	@echo "==> Controller logs (last $(LINES) lines):"
-	@docker logs hiclaw-controller --tail $(LINES) 2>/dev/null || echo "  (Controller container not found)"
+	@docker logs agentteams-controller --tail $(LINES) 2>/dev/null || echo "  (Controller container not found)"
 	@echo ""
-	@for c in $$(docker ps -a --filter "name=hiclaw-worker-" --format '{{.Names}}' 2>/dev/null); do \
+	@for c in $$(docker ps -a --filter "name=agentteams-worker-" --format '{{.Names}}' 2>/dev/null); do \
 		echo "==> Worker: $$c (last $(LINES) lines):"; \
 		docker logs "$$c" --tail $(LINES) 2>/dev/null || echo "  (container not running)"; \
 		echo ""; \
@@ -746,10 +833,10 @@ clean: ## Remove local images and test containers
 
 # ---------- Local K8s (kind + Helm) ----------
 
-local-k8s-up: ## Create kind cluster and deploy HiClaw via Helm
+local-k8s-up: ## Create kind cluster and deploy AgentTeams via Helm
 	@bash hack/local-k8s-up.sh
 
-local-k8s-down: ## Tear down the local HiClaw kind cluster
+local-k8s-down: ## Tear down the local AgentTeams kind cluster
 	@bash hack/local-k8s-down.sh
 
 generate: ## Regenerate deepcopy functions and sync CRDs to Helm chart
@@ -785,7 +872,7 @@ helm-template: ## Render Helm templates locally (dry-run validation)
 # ---------- Help ----------
 
 help: ## Show this help
-	@echo "HiClaw Makefile targets:"
+	@echo "AgentTeams Makefile targets:"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -798,10 +885,10 @@ help: ## Show this help
 	@echo "  SKIP_BUILD           Skip build in 'install' (set to 1 to skip)"
 	@echo "  SKIP_INSTALL         Skip install in 'test' (set to 1 to test existing)"
 	@echo "  TEST_FILTER          Test numbers to run   (e.g., '01 02 03')"
-	@echo "  TEST_CONTAINER       Test container name   (default: hiclaw-manager-test)"
+	@echo "  TEST_CONTAINER       Test container name   (default: agentteams-manager-test)"
 	@echo "  DOCKER_PLATFORM      Build platform        (e.g., linux/amd64)"
 	@echo "  MULTIARCH_PLATFORMS  Multi-arch platforms   (default: linux/amd64,linux/arm64)"
-	@echo "  BUILDX_BUILDER       Buildx builder name   (default: hiclaw-multiarch)"
+	@echo "  BUILDX_BUILDER       Buildx builder name   (default: agentteams-multiarch)"
 	@echo ""
 	@echo "HIGRESS_REGISTRY regions (mirrors auto-synced from cn-hangzhou):"
 	@echo "  China (default):  higress-registry.cn-hangzhou.cr.aliyuncs.com"
@@ -819,12 +906,12 @@ help: ## Show this help
 	@echo "  make logs LINES=100                             # Show last 100 lines"
 	@echo ""
 	@echo "Install / Uninstall / Replay:"
-	@echo "  HICLAW_LLM_API_KEY=sk-xxx make install          # Build + install Manager (non-interactive)"
-	@echo "  HICLAW_LLM_API_KEY=sk-xxx HICLAW_DATA_DIR=~/hiclaw-data make install  # With external data dir"
+	@echo "  AGENTTEAMS_LLM_API_KEY=sk-xxx make install          # Build + install Manager (non-interactive)"
+	@echo "  AGENTTEAMS_LLM_API_KEY=sk-xxx AGENTTEAMS_DATA_DIR=~/agentteams-data make install  # With external data dir"
 	@echo "  make uninstall                                  # Stop + remove Manager and Workers"
 	@echo ""
 	@echo "Test:"
-	@echo "  HICLAW_LLM_API_KEY=sk-xxx make test             # Install + run all tests (auto cleanup)"
+	@echo "  AGENTTEAMS_LLM_API_KEY=sk-xxx make test             # Install + run all tests (auto cleanup)"
 	@echo "  make test SKIP_BUILD=1                          # Run tests without rebuilding"
 	@echo "  make test TEST_FILTER=\"01 02\"                   # Run specific tests only"
 	@echo "  make test SKIP_INSTALL=1                        # Run tests against existing Manager"
@@ -833,7 +920,7 @@ help: ## Show this help
 	@echo "  make replay                                     # Interactive task input"
 	@echo ""
 	@echo "Local K8s (kind + Helm):"
-	@echo "  HICLAW_LLM_API_KEY=sk-xxx make local-k8s-up    # Create kind cluster + helm install"
+	@echo "  AGENTTEAMS_LLM_API_KEY=sk-xxx make local-k8s-up    # Create kind cluster + helm install"
 	@echo "  make local-k8s-down                             # Tear down kind cluster"
 	@echo "  make helm-template                              # Validate Helm templates"
 	@echo ""

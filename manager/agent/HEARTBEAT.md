@@ -14,7 +14,7 @@ The `active_tasks` field in state.json contains all in-progress tasks (both fini
 **Ensure admin notification channel is available** (used in Step 7):
 
 1. Check `admin_dm_room_id` in state.json. If `null`, discover it now:
-   - List joined rooms, find the DM room with exactly 2 members: you and `@${HICLAW_ADMIN_USER}:${HICLAW_MATRIX_DOMAIN}`
+   - List joined rooms, find the DM room with exactly 2 members: you and `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}`
    - Persist it:
      ```bash
      bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
@@ -49,7 +49,7 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   - `recreated` — container was missing and has been recreated; **wait 60 seconds** before sending the follow-up message, and flag this anomaly for the admin report (Step 7)
   - `remote` — Worker is remotely deployed, assumed reachable
   - `failed` — could not start/recreate the container; **skip the follow-up message**, flag the anomaly for the admin report (Step 7), and suggest the admin intervene
-- **Send** the follow-up using the **message** tool with `channel=matrix`, `target=room:<room_id>` (the `room_id` or `project_room_id` you chose), and body @mention `@{worker}:${HICLAW_MATRIX_DOMAIN}`:
+- **Send** the follow-up using the **message** tool with `channel=matrix`, `target=room:<room_id>` (the `room_id` or `project_room_id` you chose), and body @mention `@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}`:
   ```
   @{worker}:{domain} How is your current task {task-id} going? Are you blocked on anything?
   ```
@@ -73,7 +73,7 @@ Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
     --action ensure-ready --worker {leader}
   ```
-- **Send** using the **message** tool with `channel=matrix`, `target=room:<room_id>` (Leader `room_id`), and body @mention `@{leader}:${HICLAW_MATRIX_DOMAIN}`:
+- **Send** using the **message** tool with `channel=matrix`, `target=room:<room_id>` (Leader `room_id`), and body @mention `@{leader}:${AGENTTEAMS_MATRIX_DOMAIN}`:
   ```
   @{leader}:{domain} How is task {task-id} progressing? Any blockers from your team?
   ```
@@ -105,7 +105,7 @@ If conditions are met:
    ```
    If `status` is `failed`, skip the trigger and flag the anomaly for the admin report (Step 7). If `started` or `recreated`, wait for the Worker to initialize (30s / 60s respectively).
 
-2. Read `room_id` from the entry and **send** using the **message** tool with `channel=matrix`, `target=room:<room_id>` (Worker room) and body @mention `@{worker}:${HICLAW_MATRIX_DOMAIN}`:
+2. Read `room_id` from the entry and **send** using the **message** tool with `channel=matrix`, `target=room:<room_id>` (Worker room) and body @mention `@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}`:
 ```
 @{worker}:{domain} It's time to run your scheduled task {task-id} "{task-title}". Please execute it now and report back with the keyword "executed".
 ```
@@ -132,7 +132,7 @@ done
 
 - Filter projects with `"status": "active"`
 - For each active project, read `project_room_id` from meta.json, then read plan.md and find tasks marked as `[~]` (in progress)
-- If the responsible Worker has had no activity during this heartbeat cycle, **ensure the Worker's container is running first** (`lifecycle-worker.sh --action ensure-ready --worker {worker}`), then **send** using the **message** tool with `channel=matrix`, `target=room:<project_room_id>`, and body @mention `@{worker}:${HICLAW_MATRIX_DOMAIN}`:
+- If the responsible Worker has had no activity during this heartbeat cycle, **ensure the Worker's container is running first** (`lifecycle-worker.sh --action ensure-ready --worker {worker}`), then **send** using the **message** tool with `channel=matrix`, `target=room:<project_room_id>`, and body @mention `@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}`:
   ```
   @{worker}:{domain} Any progress on your current task {task-id} "{title}"? Please let us know if you're blocked.
   ```

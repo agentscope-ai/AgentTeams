@@ -299,7 +299,7 @@ func (m *Migrator) extractModel(ctx context.Context, workerName string) string {
 	if defaultModel == "" {
 		return m.DefaultModel
 	}
-	return strings.TrimPrefix(defaultModel, "hiclaw-gateway/")
+	return strings.TrimPrefix(defaultModel, "agentteams-gateway/")
 }
 
 func (m *Migrator) extractMCPServers(ctx context.Context, workerName string) []map[string]interface{} {

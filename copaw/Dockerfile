@@ -1,12 +1,12 @@
 # ============================================================
-# HiClaw CoPaw Worker Agent - Python-based Container
+# AgentTeams CoPaw Worker Agent - Python-based Container
 # ============================================================
 # Lightweight Python container for running CoPaw-based Worker Agents.
 # Uses the same MinIO-backed config/sync model as OpenClaw workers.
 #
 # Two runtime modes, each with its own isolated venv so they can carry
 # different versions of the copaw package:
-#   - Standard mode (HICLAW_CONSOLE_PORT set): copaw from PyPI + copaw-worker
+#   - Standard mode (AGENTTEAMS_CONSOLE_PORT set): copaw from PyPI + copaw-worker
 #   - Lite mode (default, no console port):    copaw from GitHub fork + lite-copaw-worker
 #
 # Build args:
@@ -18,13 +18,13 @@
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG HICLAW_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: mc (MinIO Client) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
 FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
@@ -60,7 +60,7 @@ RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
 # hiclaw CLI — for worker/team/human management via controller REST API
-COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+COPY --from=agentteams-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
 
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
@@ -165,10 +165,19 @@ RUN STANDARD_SITE=/opt/venv/standard/lib/python3.11/site-packages/copaw_worker \
     && LITE_SITE=/opt/venv/lite/lib/python3.11/site-packages/copaw_worker \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$STANDARD_SITE/" \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$LITE_SITE/" \
+    && for SITE in /opt/venv/standard/lib/python3.11/site-packages /opt/venv/lite/lib/python3.11/site-packages; do \
+         rm -rf "$SITE/copaw/app/channels/matrix"; \
+         mkdir -p "$SITE/copaw/app/channels/matrix"; \
+         cp /tmp/copaw-worker/src/matrix/channel.py /tmp/copaw-worker/src/matrix/__init__.py "$SITE/copaw/app/channels/matrix/"; \
+         if [ -f /tmp/copaw-worker/src/matrix/config.py ]; then \
+           cp /tmp/copaw-worker/src/matrix/config.py "$SITE/copaw/config/config.py"; \
+         fi; \
+         find "$SITE/copaw/app/channels/matrix" -name '__pycache__' -type d -prune -exec rm -rf {} +; \
+       done \
     && rm -rf /tmp/copaw-worker/ /tmp/lite-copaw/
 
 # copaw-sync wrapper
-RUN printf '#!/bin/bash\nexec python3 "/root/.copaw-worker/${HICLAW_WORKER_NAME}/skills/file-sync/scripts/copaw-sync.py" "$@"\n' \
+RUN printf '#!/bin/bash\nexec python3 "/root/.copaw-worker/${AGENTTEAMS_WORKER_NAME}/skills/file-sync/scripts/copaw-sync.py" "$@"\n' \
     > /usr/local/bin/copaw-sync && chmod +x /usr/local/bin/copaw-sync
 
 # Entrypoint script

@@ -16,18 +16,18 @@ type Config struct {
 	From string
 }
 
-// ConfigFromEnv reads SMTP config from HICLAW_SMTP_* environment variables.
+// ConfigFromEnv reads SMTP config from AGENTTEAMS_SMTP_* environment variables.
 func ConfigFromEnv() *Config {
-	host := os.Getenv("HICLAW_SMTP_HOST")
+	host := os.Getenv("AGENTTEAMS_SMTP_HOST")
 	if host == "" {
 		return nil
 	}
 	return &Config{
 		Host: host,
-		Port: envOrDefault("HICLAW_SMTP_PORT", "465"),
-		User: os.Getenv("HICLAW_SMTP_USER"),
-		Pass: os.Getenv("HICLAW_SMTP_PASS"),
-		From: envOrDefault("HICLAW_SMTP_FROM", "HiClaw <noreply@hiclaw.io>"),
+		Port: envOrDefault("AGENTTEAMS_SMTP_PORT", "465"),
+		User: os.Getenv("AGENTTEAMS_SMTP_USER"),
+		Pass: os.Getenv("AGENTTEAMS_SMTP_PASS"),
+		From: envOrDefault("AGENTTEAMS_SMTP_FROM", "AgentTeams <noreply@agentteams.io>"),
 	}
 }
 
@@ -37,10 +37,10 @@ func SendWelcome(cfg *Config, to, displayName, matrixUserID, password, elementUR
 		return fmt.Errorf("SMTP not configured")
 	}
 
-	subject := "Welcome to HiClaw - Your Account Details"
+	subject := "Welcome to AgentTeams - Your Account Details"
 	body := fmt.Sprintf(`Hi %s,
 
-Your HiClaw account has been created:
+Your AgentTeams account has been created:
 
   Username: %s
   Password: %s
@@ -48,14 +48,13 @@ Your HiClaw account has been created:
 
 Please log in using Element Web and change your password immediately.
 
-— HiClaw`, sanitizeHeaderField(displayName), sanitizeHeaderField(matrixUserID), sanitizeHeaderField(password), sanitizeHeaderField(elementURL))
+— AgentTeams`, displayName, matrixUserID, password, elementURL)
 
-	// to/from/subject are interpolated directly into CRLF-joined header
-	// lines below; a caller-supplied value containing \r or \n could inject
-	// extra headers or SMTP commands. Strip CR/LF from every value that
-	// lands in a header line before building msg.
-	safeTo := sanitizeHeaderField(to)
+	// Sanitize every field interpolated into a header line (or preceding the
+	// body) to strip CR/LF, preventing header/SMTP-command injection via a
+	// crafted display name, email address, or subject.
 	safeFrom := sanitizeHeaderField(cfg.From)
+	safeTo := sanitizeHeaderField(to)
 	safeSubject := sanitizeHeaderField(subject)
 
 	msg := strings.Join([]string{

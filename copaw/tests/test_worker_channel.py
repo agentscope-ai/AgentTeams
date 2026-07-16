@@ -311,7 +311,7 @@ def test_matrix_bare_mention_wakes_handler_in_group_room():
 
 
 def test_immediate_ack_sent_before_enqueue_by_default(monkeypatch):
-    monkeypatch.delenv("HICLAW_CHAT_ACK", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_CHAT_ACK", raising=False)
     ch = _make_inbound_channel()
     client = _SendClient()
     ch._client = client
@@ -328,7 +328,7 @@ def test_immediate_ack_sent_before_enqueue_by_default(monkeypatch):
 
 
 def test_immediate_ack_disabled_via_env(monkeypatch):
-    monkeypatch.setenv("HICLAW_CHAT_ACK", "0")
+    monkeypatch.setenv("AGENTTEAMS_CHAT_ACK", "0")
     ch = _make_inbound_channel()
     client = _SendClient()
     ch._client = client
@@ -342,7 +342,7 @@ def test_immediate_ack_disabled_via_env(monkeypatch):
 
 
 def test_immediate_ack_env_false_string_disables(monkeypatch):
-    monkeypatch.setenv("HICLAW_CHAT_ACK", "false")
+    monkeypatch.setenv("AGENTTEAMS_CHAT_ACK", "false")
     ch = _make_inbound_channel()
     client = _SendClient()
     ch._client = client

@@ -19,20 +19,20 @@ import (
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
-	Client           client.Client
-	Backend          *backend.Registry
-	Gateway          gateway.Client
-	OSS              oss.StorageClient
-	STS              *credentials.STSService
-	AuthMw           *authpkg.Middleware
-	KubeMode         string
-	Namespace        string
-	ControllerName   string               // HICLAW_CONTROLLER_NAME; empty in embedded mode
-	SocketPath       string               // Docker proxy (embedded only)
-	MatrixConfig     matrix.Config        // for AppService rotation endpoint
-	Provisioner      *service.Provisioner // for Matrix token refresh
-	SoloOperator     bool                 // HICLAW_SOLO_OPERATOR; defaults the sole Human to Admin
-	ManagerStateFile string               // path to the Manager's state.json (embedded mode only); see config.Config.ManagerStateFile
+	Client         client.Client
+	Backend        *backend.Registry
+	Gateway        gateway.Client
+	OSS            oss.StorageClient
+	STS            *credentials.STSService
+	AuthMw         *authpkg.Middleware
+	KubeMode       string
+	Namespace      string
+	ControllerName string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
+	SocketPath     string               // Docker proxy (embedded only)
+	MatrixConfig   matrix.Config        // for AppService rotation endpoint
+	Provisioner    *service.Provisioner // for Matrix token refresh
+	SoloOperator   bool                 // AGENTTEAMS_SOLO_OPERATOR; forces PeerMentions + solo welcome
+	ManagerStateFile string            // AGENTTEAMS_MANAGER_STATE_FILE; path to Manager state.json
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -49,7 +49,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		Mux:  mux,
 		server: &http.Server{
 			Addr:    addr,
-			Handler: mux,
+			Handler: withControllerHTTPMetrics(mux),
 		},
 	}
 
@@ -138,6 +138,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// --- AppService management ---
 	ash := NewAppServiceHandler(deps.MatrixConfig)
 	mux.Handle("POST /api/v1/appservice/rotate-token", mw.RequireAuthz(authpkg.ActionUpdate, "appservice", nil)(http.HandlerFunc(ash.RotateToken)))
+	if deps.MatrixConfig.AppServiceEnabled && deps.MatrixConfig.AppServiceHSToken != "" {
+		asEvents := NewAppserviceHandler(deps.MatrixConfig.AppServiceHSToken, deps.Client, deps.Namespace)
+		mux.Handle("PUT /_matrix/app/v1/transactions/{txnId}", http.HandlerFunc(asEvents.HandleTransactions))
+		mux.Handle("GET /_matrix/app/v1/users/{userId}", http.HandlerFunc(asEvents.HandleUserQuery))
+		mux.Handle("GET /_matrix/app/v1/rooms/{roomAlias}", http.HandlerFunc(asEvents.HandleRoomQuery))
+	}
 
 	// --- Docker API passthrough (embedded mode only) ---
 	if deps.KubeMode == "embedded" && deps.SocketPath != "" {

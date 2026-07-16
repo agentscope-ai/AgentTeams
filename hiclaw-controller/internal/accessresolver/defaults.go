@@ -39,7 +39,9 @@ func DefaultEntriesForWorker() []v1beta1.AccessEntry {
 			Scope: jsonObj(map[string]any{
 				"bucketRef": "workspace",
 				"prefixes": []any{
+					"agents/${self.name}/",
 					"agents/${self.name}/*",
+					"shared/",
 					"shared/*",
 				},
 			}),
@@ -69,8 +71,11 @@ func DefaultEntriesForTeamMember() []v1beta1.AccessEntry {
 			Scope: jsonObj(map[string]any{
 				"bucketRef": "workspace",
 				"prefixes": []any{
+					"agents/${self.name}/",
 					"agents/${self.name}/*",
+					"shared/",
 					"shared/*",
+					"teams/${self.team}/",
 					"teams/${self.team}/*",
 				},
 			}),
@@ -90,8 +95,11 @@ func DefaultEntriesForManager() []v1beta1.AccessEntry {
 			Scope: jsonObj(map[string]any{
 				"bucketRef": "workspace",
 				"prefixes": []any{
+					"agents/${self.name}/",
 					"agents/${self.name}/*",
+					"shared/",
 					"shared/*",
+					"manager/",
 					"manager/*",
 				},
 			}),

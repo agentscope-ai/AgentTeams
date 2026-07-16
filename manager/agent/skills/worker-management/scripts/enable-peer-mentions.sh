@@ -13,7 +13,7 @@
 #
 # Prerequisites:
 #   - All named Workers must already exist (created via create-worker.sh)
-#   - Environment: HICLAW_MATRIX_DOMAIN, MANAGER_MATRIX_TOKEN
+#   - Environment: AGENTTEAMS_MATRIX_DOMAIN, MANAGER_MATRIX_TOKEN
 
 set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
@@ -36,7 +36,7 @@ if [ -z "${WORKERS_CSV}" ]; then
     exit 1
 fi
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
 REGISTRY_FILE="${HOME}/workers-registry.json"
 
 _fail() {
@@ -53,12 +53,12 @@ if [ -f "${SECRETS_FILE}" ]; then
 fi
 
 if [ -z "${MANAGER_MATRIX_TOKEN}" ]; then
-    if [ -z "${HICLAW_MANAGER_PASSWORD}" ]; then
-        _fail "MANAGER_MATRIX_TOKEN not set and HICLAW_MANAGER_PASSWORD not available"
+    if [ -z "${AGENTTEAMS_MANAGER_PASSWORD}" ]; then
+        _fail "MANAGER_MATRIX_TOKEN not set and AGENTTEAMS_MANAGER_PASSWORD not available"
     fi
-    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
-        -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${HICLAW_MANAGER_PASSWORD}"'"}' \
+        -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${AGENTTEAMS_MANAGER_PASSWORD}"'"}' \
         | jq -r '.access_token // empty')
     if [ -z "${MANAGER_MATRIX_TOKEN}" ]; then
         _fail "Failed to obtain Manager Matrix token"
@@ -93,7 +93,7 @@ UPDATED_WORKERS=()
 
 for target in "${VALIDATED[@]}"; do
     TARGET_CONFIG="/root/hiclaw-fs/agents/${target}/openclaw.json"
-    TARGET_MINIO="${HICLAW_STORAGE_PREFIX}/agents/${target}/openclaw.json"
+    TARGET_MINIO="${AGENTTEAMS_STORAGE_PREFIX}/agents/${target}/openclaw.json"
 
     # Pull latest config from MinIO
     if ! mc cp "${TARGET_MINIO}" "${TARGET_CONFIG}" 2>/dev/null; then
@@ -144,8 +144,13 @@ for w in "${UPDATED_WORKERS[@]}"; do
         "${REGISTRY_FILE}" 2>/dev/null || true)
     if [ -n "${ROOM_ID}" ]; then
         PEERS=$(printf '%s\n' "${VALIDATED[@]}" | grep -v "^${w}$" | sed "s|^|@|; s|$|:${MATRIX_DOMAIN}|" | tr '\n' ' ' | sed 's/ $//')
-        MSG="@${w}:${MATRIX_DOMAIN} Peer mention enabled: you can now be @mentioned by ${PEERS}. Please run: hiclaw-sync"
-        send_matrix_message "${HICLAW_MATRIX_URL}" "${MANAGER_MATRIX_TOKEN}" "${ROOM_ID}" "${MSG}" "@${w}:${MATRIX_DOMAIN}" \
+        TXN_ID=$(openssl rand -hex 8)
+        curl -sf -X PUT \
+            "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ID}/send/m.room.message/${TXN_ID}" \
+            -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"msgtype\":\"m.text\",\"body\":\"@${w}:${MATRIX_DOMAIN} Peer mention enabled: you can now be @mentioned by ${PEERS}. Please run: hiclaw-sync\",\"m.mentions\":{\"user_ids\":[\"@${w}:${MATRIX_DOMAIN}\"]}}" \
+            > /dev/null 2>&1 \
             && log "  Notified @${w} to run hiclaw-sync" \
             || log "  WARNING: Failed to notify @${w}"
     fi

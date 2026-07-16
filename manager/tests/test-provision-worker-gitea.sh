@@ -67,7 +67,7 @@ if [ ! -f "${HICLAW_ENV_STUB_DIR}/hiclaw-env.sh" ]; then
     if mkdir -p "${HICLAW_ENV_STUB_DIR}" 2>/dev/null; then
         cat > "${HICLAW_ENV_STUB_DIR}/hiclaw-env.sh" << 'ENVSTUB'
 # Test-harness stub — real containers ship the actual hiclaw-env.sh.
-: "${HICLAW_STORAGE_PREFIX:=hiclaw/hiclaw-storage}"
+: "${AGENTTEAMS_STORAGE_PREFIX:=agentteams/agentteams-storage}"
 ensure_mc_credentials() { :; }
 log() { echo "[hiclaw-env-stub] $*" >&2; }
 ENVSTUB
@@ -282,8 +282,8 @@ run_provision() {
     GITEA_URL="https://git.fake.local" \
     GITEA_ADMIN_TOKEN="fake-admin-token" \
     HIGRESS_COOKIE_FILE="${sandbox}/higress-cookie" \
-    HICLAW_AI_GATEWAY_DOMAIN="aigw-test.local" \
-    HICLAW_STORAGE_PREFIX="hiclaw/hiclaw-storage" \
+    AGENTTEAMS_AI_GATEWAY_DOMAIN="aigw-test.local" \
+    AGENTTEAMS_STORAGE_PREFIX="agentteams/agentteams-storage" \
     SETUP_MCP_PROXY_SCRIPT="${SETUP_MCP_PROXY_SCRIPT}" \
     bash "${PROVISION_SCRIPT}" "$@" 2>&1 || rc=$?
     : > "${sandbox}/higress-cookie" 2>/dev/null || true
@@ -298,8 +298,8 @@ run_setup_mcp_proxy() {
     PATH="${sandbox}/bin:${PATH}" \
     FAKE_CALL_LOG="${sandbox}/calls.log" \
     HIGRESS_COOKIE_FILE="${sandbox}/higress-cookie" \
-    HICLAW_AI_GATEWAY_DOMAIN="aigw-test.local" \
-    HICLAW_STORAGE_PREFIX="hiclaw/hiclaw-storage" \
+    AGENTTEAMS_AI_GATEWAY_DOMAIN="aigw-test.local" \
+    AGENTTEAMS_STORAGE_PREFIX="agentteams/agentteams-storage" \
     bash "${SETUP_MCP_PROXY_SCRIPT}" "$@" 2>&1
 }
 

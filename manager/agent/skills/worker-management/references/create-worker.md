@@ -6,11 +6,11 @@ If the admin asks you to import an existing Worker template, search a registry f
 
 | Admin says | Runtime | Flags |
 |------------|---------|-------|
-| "copaw", "Python worker", "pip worker", "host worker" | `copaw` | |
-| "local worker", "local mode", "access my local environment", "run on my machine" | `copaw` | `--remote` |
+| "copaw", "Python worker" | `copaw` | |
+| "local worker", "local mode", "container worker", "docker worker", "access my local environment", or "run on my machine" | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 | "hermes", "hermes worker", "hermes-agent" | `hermes` | |
 | "openhuman", "OpenHuman worker", "openhuman framework" | `openhuman` | |
-| "openclaw", "container worker", "docker worker", or none of the above | default (uses `${HICLAW_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
+| "openclaw", or none of the above | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 
 When in doubt, ask: "Should this be a copaw (Python, ~150MB RAM), openclaw (Node.js, ~500MB RAM), hermes (Python, ~200MB RAM), or openhuman (Rust, ~300MB RAM, native Matrix E2EE) worker?"
 
@@ -116,7 +116,7 @@ Escape rules inside the `--soul "..."` string:
 |------|-------------|
 | `--name` | Worker name (required, lowercase, >3 chars) |
 | `--soul` | **Required.** Full SOUL.md content as a single quoted string. Do NOT use `--soul-file` — file-based input is fragile because the upstream file write (heredoc/redirect) may silently produce 0 bytes. |
-| `--model` | Model ID. If not specified, defaults to `$HICLAW_DEFAULT_MODEL` (set at install time and propagated to your container by the controller); falls back to `qwen3.5-plus` only when that env var is also unset. |
+| `--model` | Model ID. If not specified, defaults to `$AGENTTEAMS_DEFAULT_MODEL` (set at install time and propagated to your container by the controller); falls back to `qwen3.5-plus` only when that env var is also unset. |
 | `--skills` | Comma-separated built-in skills to assign |
 | `--mcp-servers` | Comma-separated MCP servers to authorize |
 | `--runtime` | Agent runtime: `openclaw` (default), `copaw`, `hermes`, or `openhuman` |
@@ -130,7 +130,7 @@ The controller handles everything: Matrix registration, room creation, Higress c
 If admin asks you to set CPU or memory requests/limits, use a YAML manifest instead of CLI flags:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: <NAME>
@@ -160,9 +160,8 @@ The controller authorizes the Worker on **existing** MCP servers only. If the ad
 ### Result JSON (`-o json` output)
 
 The JSON response contains the worker status. Key fields:
-- `"status"` — `"ready"` (container running), `"starting"` (health check pending), or `"pending_install"` (no container runtime)
+- `"status"` — `"ready"` (container running) or `"starting"` (health check pending)
 - `"room_id"` — Worker's Matrix room ID
-- `"install_cmd"` — (when status is `pending_install`) Provide this **verbatim in a code block** (do NOT redact `--fs-secret`)
 
 ## Step 2.5: Poll for Ready
 
@@ -189,7 +188,7 @@ Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after
 - ❌ `sleep 30 && hiclaw get workers` — Wastes time. Poll immediately and repeat as needed.
 - ❌ `cat /root/hiclaw-fs/agents/<name>/config.json` — Config is in MinIO, not local filesystem.
 - ❌ `docker ps -a --filter "name=<name>"` — Docker may not be available in the Manager container.
-- ❌ `curl ${HICLAW_CONTROLLER_URL}/api/v1/workers/...` — **Forbidden.** See AGENTS.md "Controller API Rules". The CLI is the only supported path.
+- ❌ `curl ${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/...` — **Forbidden.** See AGENTS.md "Controller API Rules". The CLI is the only supported path.
 - ❌ Re-running `hiclaw create worker` "to retry" while the first call is still `Pending` — that returns 409 Conflict.
 
 **What to do**:
@@ -203,11 +202,11 @@ Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after
 
 ### Choose your post-creation flow
 
-Run `echo "${HICLAW_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matching path below.
+Run `echo "${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matching path below.
 
 **OpenClaw / Hermes Manager** — incremental DM messages are supported, so polling-then-reply within a single turn is fine: → use **Path A**.
 
-**QwenPaw Manager** — only the final text reply of a turn reaches admin in DM (see `copaw-manager-agent/AGENTS.md` "Message Sending Rules"). Polling for `phase=Running` blocks the reply for 30-60s+ and tends to compound when admin sends a follow-up message during that window (the runtime queues both, then the model conflates them and replies only to the latest). → use **Path B (fast-reply)**.
+**CoPaw / QwenPaw Manager** — only the final text reply of a turn reaches admin in DM (see `copaw-manager-agent/AGENTS.md` "Message Sending Rules"). Polling for `phase=Running` blocks the reply for 30-60s+ and tends to compound when admin sends a follow-up message during that window (the runtime queues both, then the model conflates them and replies only to the latest). → use **Path B (fast-reply)**.
 
 ---
 
@@ -239,7 +238,7 @@ Failing to emit this reply is the number-one cause of "Manager replied to create
 
 #### A3. Greet the Worker in the Worker's Room
 
-After Step A2's reply is prepared, greet the Worker via the helper script. It auto-detects your runtime and handles all shell escaping, flag naming, and the `@<name>:${HICLAW_MATRIX_DOMAIN}` mention format:
+After Step A2's reply is prepared, greet the Worker via the helper script. It auto-detects your runtime and handles all shell escaping, flag naming, and the `@<name>:${AGENTTEAMS_MATRIX_DOMAIN}` mention format:
 
 ```bash
 bash /opt/hiclaw/agent/skills/worker-management/scripts/send-worker-greeting.sh \
@@ -253,9 +252,9 @@ If the helper exits with code 2 instead of sending, it prints the target room, m
 
 ---
 
-### Path B — QwenPaw Manager (fast-reply, deferred greeting)
+### Path B — CoPaw / QwenPaw Manager (fast-reply, deferred greeting)
 
-**Hard rule for QwenPaw**: your create-worker turn MUST emit its final DM reply within ~60s of receiving the admin's request. Polling for `phase=Running` and greeting the Worker happen in **separate later turns**, not in the same turn as the admin reply.
+**Hard rule for CoPaw / QwenPaw**: your create-worker turn MUST emit its final DM reply within ~60s of receiving the admin's request. Polling for `phase=Running` and greeting the Worker happen in **separate later turns**, not in the same turn as the admin reply.
 
 #### B1. Confirm controller accepted the create request
 
@@ -295,9 +294,15 @@ This reply mentions the Worker name explicitly so the admin (and the integration
 
 In your **next** heartbeat or self-triggered turn, for each entry in `~/pending-workers.json`:
 
-1. `hiclaw get workers -o json` and check the entry's `phase`. If still `Pending` and queued < 90s ago, leave it for a later heartbeat. If `Failed`, notify admin in DM and remove the entry.
+1. `hiclaw get workers -o json` and check the entry's `phase`. If still `Pending` and queued < 90s ago, leave it for a later heartbeat. If `Failed`, notify admin in DM and remove the entry using the drain helper below.
 2. If `Running`, run `send-worker-greeting.sh --worker <NAME> --room "<ROOM_ID>"` to greet the Worker in their room, then notify admin in DM with: `"<NAME> is now Running and greeted."`
-3. Remove the processed entry from `~/pending-workers.json`.
+3. Remove the processed entry from `~/pending-workers.json` using the drain helper below.
+
+Never run `rm`, `unlink`, `mv`, or any inline rewrite command for `~/pending-workers.json`; Tool Guard may pause the Admin DM session and block later admin requests. Keep the file, even if it becomes empty. To remove a processed entry, call the helper:
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
+```
 
 If you have HEARTBEAT.md, add a one-line bullet there reminding yourself to drain `~/pending-workers.json` at every heartbeat.
 

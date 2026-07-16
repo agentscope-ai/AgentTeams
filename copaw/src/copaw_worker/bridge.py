@@ -1,5 +1,5 @@
 """
-Bridge: translate openclaw.json (HiClaw Worker config) into CoPaw's
+Bridge: translate openclaw.json (AgentTeams Worker config) into CoPaw's
 config.json + providers.json, then set COPAW_WORKING_DIR so CoPaw
 picks up the right workspace.
 """
@@ -20,7 +20,7 @@ from typing import Any
 def _port_remap(url: str, is_container: bool) -> str:
     """Remap container-internal :8080 to host-exposed gateway port when needed."""
     if not is_container and url and ":8080" in url:
-        gateway_port = os.environ.get("HICLAW_PORT_GATEWAY", "18080")
+        gateway_port = os.environ.get("AGENTTEAMS_PORT_GATEWAY", "18080")
         return url.replace(":8080", f":{gateway_port}")
     return url
 
@@ -30,7 +30,7 @@ def _is_in_container() -> bool:
 
 
 def _quiet_rooms_enabled() -> bool:
-    """True if HICLAW_QUIET_ROOMS is set truthily (Phase 5b, default off).
+    """True if AGENTTEAMS_QUIET_ROOMS is set truthily (Phase 5b, default off).
 
     Mechanism-only gate: when enabled, the bridge additionally writes a
     root-level ``show_tool_details: false`` into config.json (the tap
@@ -39,7 +39,7 @@ def _quiet_rooms_enabled() -> bool:
     When unset (default), config.json output is byte-identical to before
     this flag existed.
     """
-    raw = os.environ.get("HICLAW_QUIET_ROOMS")
+    raw = os.environ.get("AGENTTEAMS_QUIET_ROOMS")
     if raw is None:
         return False
     return raw.strip().lower() in ("true", "1", "yes", "on")
@@ -208,6 +208,39 @@ def _resolve_vision_enabled(cfg: dict[str, Any]) -> bool:
     return "image" in input_types
 
 
+def _resolve_matrix_user_id(
+    matrix_raw: dict[str, Any],
+    *,
+    profile: str = "worker",
+) -> str:
+    """Resolve the Matrix MXID that CoPaw tools use for proactive sends."""
+    explicit = matrix_raw.get("userId") or matrix_raw.get("user_id")
+    if explicit:
+        return str(explicit)
+
+    env_user_id = (
+        os.environ.get("AGENTTEAMS_MATRIX_USER_ID")
+        or os.environ.get("HICLAW_MATRIX_USER_ID")
+        or os.environ.get("COPAW_MATRIX_USER_ID")
+    )
+    if env_user_id:
+        return env_user_id
+
+    matrix_domain = (
+        os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
+        or os.environ.get("HICLAW_MATRIX_DOMAIN")
+    )
+    localpart = (
+        os.environ.get("AGENTTEAMS_WORKER_NAME")
+        or os.environ.get("HICLAW_WORKER_NAME")
+        or ("manager" if profile == "manager" else "")
+    )
+    if matrix_domain and localpart:
+        return f"@{localpart}:{matrix_domain}"
+
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # config.json
 # ---------------------------------------------------------------------------
@@ -222,6 +255,7 @@ def _write_config_json(
         matrix_raw.get("homeserver", ""), in_container
     )
     access_token = matrix_raw.get("accessToken", "")
+    user_id = _resolve_matrix_user_id(matrix_raw)
 
     # DM allowlist
     dm_cfg = matrix_raw.get("dm", {})
@@ -258,6 +292,8 @@ def _write_config_json(
     }
     if history_limit is not None:
         matrix_channel_cfg["history_limit"] = int(history_limit)
+    if user_id:
+        matrix_channel_cfg["user_id"] = user_id
 
     config_path = working_dir / "config.json"
     # Merge with existing config to avoid clobbering other settings
@@ -364,6 +400,7 @@ def _write_agent_json(
     matrix_raw = cfg.get("channels", {}).get("matrix", {})
     homeserver = _port_remap(matrix_raw.get("homeserver", ""), in_container)
     access_token = matrix_raw.get("accessToken", "")
+    user_id = _resolve_matrix_user_id(matrix_raw, profile=profile)
 
     dm_cfg = matrix_raw.get("dm", {})
     dm_allow_from: list[str] = dm_cfg.get("allowFrom", [])
@@ -376,6 +413,8 @@ def _write_agent_json(
         matrix_ch["homeserver"] = homeserver
     if access_token:
         matrix_ch["access_token"] = access_token
+    if user_id:
+        matrix_ch["user_id"] = user_id
     matrix_ch["allow_from"] = dm_allow_from
     matrix_ch["group_allow_from"] = group_allow_from
     matrix_ch["groups"] = groups
@@ -390,14 +429,14 @@ def _write_agent_json(
     if context_window is not None:
         agent_cfg.setdefault("running", {})["max_input_length"] = context_window
 
-    # Manager heartbeat interval — HICLAW_MANAGER_HEARTBEAT_INTERVAL flows from
+    # Manager heartbeat interval — AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL flows from
     # the controller (see hiclaw-controller/internal/service/worker_env.go) and
     # overrides the template-seeded heartbeat.every (hardcoded "30m" in
     # templates/agent.manager.json). Only the manager profile reads this env
     # var; the worker template already defaults to 10m on its own.
     if profile == "manager":
         heartbeat_every = os.environ.get(
-            "HICLAW_MANAGER_HEARTBEAT_INTERVAL", "10m"
+            "AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL", "10m"
         ).strip() or "10m"
         agent_cfg.setdefault("heartbeat", {})["every"] = heartbeat_every
 

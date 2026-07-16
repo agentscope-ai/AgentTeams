@@ -5,30 +5,30 @@ Workers push their output to MinIO. Your local `/root/hiclaw-fs/` is NOT automat
 ## Pull task directory (after Worker reports completion)
 
 ```bash
-mc mirror ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
+mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
 cat /root/hiclaw-fs/shared/tasks/{task-id}/result.md
 ```
 
 ## Pull single file (Worker gave you a path)
 
 ```bash
-mc cp ${HICLAW_STORAGE_PREFIX}/<path-worker-gave-you> /root/hiclaw-fs/<same-path>
+mc cp ${AGENTTEAMS_STORAGE_PREFIX}/<path-worker-gave-you> /root/hiclaw-fs/<same-path>
 ```
 
 ## Pull directory
 
 ```bash
-mc mirror ${HICLAW_STORAGE_PREFIX}/<dir>/ /root/hiclaw-fs/<dir>/ --overwrite
+mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/<dir>/ /root/hiclaw-fs/<dir>/ --overwrite
 ```
 
 ## Push after writing files Workers need
 
 ```bash
 # Single file
-mc cp /root/hiclaw-fs/<path> ${HICLAW_STORAGE_PREFIX}/<path>
+mc cp /root/hiclaw-fs/<path> ${AGENTTEAMS_STORAGE_PREFIX}/<path>
 
 # Directory
-mc mirror /root/hiclaw-fs/<dir>/ ${HICLAW_STORAGE_PREFIX}/<dir>/ --overwrite
+mc mirror /root/hiclaw-fs/<dir>/ ${AGENTTEAMS_STORAGE_PREFIX}/<dir>/ --overwrite
 ```
 
 Then notify the target Worker via Matrix @mention to run their file-sync skill.

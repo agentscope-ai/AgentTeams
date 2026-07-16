@@ -1,4 +1,4 @@
-"""HiClaw worker adapter API served beside the CoPaw app."""
+"""AgentTeams worker adapter API served beside the CoPaw app."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ _HEADER_READ_TIMEOUT = 5.0
 
 
 class WorkerAPIServer:
-    """Small HTTP server for HiClaw worker adapter endpoints."""
+    """Small HTTP server for AgentTeams worker adapter endpoints."""
 
     def __init__(
         self,

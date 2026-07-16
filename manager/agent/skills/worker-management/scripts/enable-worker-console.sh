@@ -1,15 +1,15 @@
 #!/bin/bash
 # enable-worker-console.sh - Enable or disable the CoPaw web console
 #
-# Recreates the CoPaw worker container with or without HICLAW_CONSOLE_PORT.
+# Recreates the CoPaw worker container with or without AGENTTEAMS_CONSOLE_PORT.
 # The host port is randomly assigned (10000-20000) to avoid conflicts.
 #
 # Usage:
 #   enable-worker-console.sh --name <worker> [--action enable|disable] [--port <PORT>]
 #
 # Actions:
-#   enable  - add HICLAW_CONSOLE_PORT, map a random host port (default)
-#   disable - remove HICLAW_CONSOLE_PORT, free the host port
+#   enable  - add AGENTTEAMS_CONSOLE_PORT, map a random host port (default)
+#   disable - remove AGENTTEAMS_CONSOLE_PORT, free the host port
 #
 # Output: JSON result after ---RESULT--- with console_host_port
 
@@ -36,7 +36,7 @@ if [ -z "${WORKER_NAME}" ]; then
 fi
 
 # Cloud mode: CoPaw console is only available for local container deployments
-if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
     jq -n '{"error": "console_not_supported", "message": "CoPaw console is only available for local container deployments. On cloud (SAE), use SAE console or SLS logs instead."}'
     exit 1
 fi
@@ -52,7 +52,7 @@ log "Inspecting container ${CONTAINER_NAME}..."
 INSPECT=$(_api GET "/containers/${CONTAINER_NAME}/json" 2>/dev/null)
 if ! echo "${INSPECT}" | grep -q '"Id"' 2>/dev/null; then
     log "ERROR: Container ${CONTAINER_NAME} not found"
-    jq -n '{"error": "container_not_found", "message": "Worker container does not exist. Is it a remote worker?"}'
+    jq -n '{"error": "container_not_found", "message": "Worker container does not exist in the Manager-local container backend."}'
     exit 1
 fi
 
@@ -65,7 +65,7 @@ fi
 
 # --- Check current console status ---
 CURRENT_ENV=$(echo "${INSPECT}" | jq '.Config.Env')
-CURRENT_CONSOLE_PORT=$(echo "${CURRENT_ENV}" | jq -r '.[] | select(startswith("HICLAW_CONSOLE_PORT=")) | split("=")[1]' 2>/dev/null || true)
+CURRENT_CONSOLE_PORT=$(echo "${CURRENT_ENV}" | jq -r '.[] | select(startswith("AGENTTEAMS_CONSOLE_PORT=")) | split("=")[1]' 2>/dev/null || true)
 
 if [ "${ACTION}" = "enable" ] && [ -n "${CURRENT_CONSOLE_PORT}" ]; then
     CURRENT_HOST_PORT=$(echo "${INSPECT}" | jq -r ".HostConfig.PortBindings[\"${CURRENT_CONSOLE_PORT}/tcp\"][0].HostPort // empty" 2>/dev/null)
@@ -81,19 +81,19 @@ if [ "${ACTION}" = "disable" ] && [ -z "${CURRENT_CONSOLE_PORT}" ]; then
 fi
 
 # --- Extract credentials from current env ---
-FS_ACCESS_KEY=$(echo "${CURRENT_ENV}" | jq -r '.[] | select(startswith("HICLAW_FS_ACCESS_KEY=")) | split("=")[1]')
-FS_SECRET_KEY=$(echo "${CURRENT_ENV}" | jq -r '.[] | select(startswith("HICLAW_FS_SECRET_KEY=")) | split("=")[1]')
+FS_ACCESS_KEY=$(echo "${CURRENT_ENV}" | jq -r '.[] | select(startswith("AGENTTEAMS_FS_ACCESS_KEY=")) | split("=")[1]')
+FS_SECRET_KEY=$(echo "${CURRENT_ENV}" | jq -r '.[] | select(startswith("AGENTTEAMS_FS_SECRET_KEY=")) | split("=")[1]')
 
-# Build extra env: keep all non-base vars, add/remove HICLAW_CONSOLE_PORT
+# Build extra env: keep all non-base vars, add/remove AGENTTEAMS_CONSOLE_PORT
 EXTRA_ENV=$(echo "${CURRENT_ENV}" | jq '[.[] | select(
-    (startswith("HICLAW_WORKER_NAME=") or
-     startswith("HICLAW_FS_ENDPOINT=") or
-     startswith("HICLAW_FS_ACCESS_KEY=") or
-     startswith("HICLAW_FS_SECRET_KEY=") or
-     startswith("HICLAW_CONSOLE_PORT=")) | not)]')
+    (startswith("AGENTTEAMS_WORKER_NAME=") or
+     startswith("AGENTTEAMS_FS_ENDPOINT=") or
+     startswith("AGENTTEAMS_FS_ACCESS_KEY=") or
+     startswith("AGENTTEAMS_FS_SECRET_KEY=") or
+     startswith("AGENTTEAMS_CONSOLE_PORT=")) | not)]')
 
 if [ "${ACTION}" = "enable" ]; then
-    EXTRA_ENV=$(echo "${EXTRA_ENV}" | jq --arg port "${CONSOLE_PORT}" '. + ["HICLAW_CONSOLE_PORT=" + $port]')
+    EXTRA_ENV=$(echo "${EXTRA_ENV}" | jq --arg port "${CONSOLE_PORT}" '. + ["AGENTTEAMS_CONSOLE_PORT=" + $port]')
     log "Enabling console (container port: ${CONSOLE_PORT})"
 else
     log "Disabling console"
@@ -111,7 +111,7 @@ ENV_MAP=$(echo "${ENV_MAP}" | jq \
     --arg name "${WORKER_NAME}" \
     --arg fak "${FS_ACCESS_KEY}" \
     --arg fsk "${FS_SECRET_KEY}" \
-    '. + {"HICLAW_WORKER_NAME": $name, "HICLAW_FS_ACCESS_KEY": $fak, "HICLAW_FS_SECRET_KEY": $fsk}')
+    '. + {"AGENTTEAMS_WORKER_NAME": $name, "AGENTTEAMS_FS_ACCESS_KEY": $fak, "AGENTTEAMS_FS_SECRET_KEY": $fsk}')
 
 CREATE_BODY=$(jq -cn \
     --arg name "${WORKER_NAME}" \

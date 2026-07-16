@@ -18,7 +18,7 @@ Directory sync paths must end with `/`. If a directory pull fails, report the fi
 
 Do not use in chat, task outputs, or normal reasoning:
 
-- `hiclaw/hiclaw-storage/...`
+- `agentteams/agentteams-storage/...`
 - `teams/{team}/shared/...`
 - `/root/hiclaw-fs/...`
 - `/root/hiclaw-fs/agents/...`

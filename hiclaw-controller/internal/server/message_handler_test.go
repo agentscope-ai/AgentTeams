@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
@@ -55,9 +56,18 @@ func (s *stubMessengerClient) Login(context.Context, string, string) (string, er
 func (s *stubMessengerClient) SetDisplayName(context.Context, string, string, string) error {
 	return nil
 }
+func (s *stubMessengerClient) SetRoomName(context.Context, string, string, string) error {
+	return nil
+}
+func (s *stubMessengerClient) SetRoomState(context.Context, string, string, string, map[string]interface{}, string) error {
+	return nil
+}
 func (s *stubMessengerClient) AdminCommand(context.Context, string) error { return nil }
 func (s *stubMessengerClient) ListJoinedRooms(context.Context, string) ([]string, error) {
 	return nil, nil
+}
+func (s *stubMessengerClient) SyncMessages(context.Context, string, time.Duration) (*matrix.SyncMessagesResult, error) {
+	return &matrix.SyncMessagesResult{}, nil
 }
 func (s *stubMessengerClient) ListRoomMembers(context.Context, string) ([]matrix.RoomMember, error) {
 	return nil, nil

@@ -168,11 +168,11 @@ func TestManagerFinalizer_AddedOnCreate(t *testing.T) {
 			return err
 		}
 		for _, f := range m.Finalizers {
-			if f == "hiclaw.io/cleanup" {
+			if f == "agentteams.io/cleanup" {
 				return nil
 			}
 		}
-		return fmt.Errorf("finalizer hiclaw.io/cleanup not found in %v", m.Finalizers)
+		return fmt.Errorf("finalizer agentteams.io/cleanup not found in %v", m.Finalizers)
 	})
 }
 
@@ -517,7 +517,7 @@ func TestManagerPodDeleted_Recreates(t *testing.T) {
 	waitForManagerRunning(t, mgr)
 
 	// Simulate external pod deletion via the mock's automatic state tracking.
-	// The ContainerName alias (Issue #1 fix) means "hiclaw-manager" is tracked
+	// The ContainerName alias (Issue #1 fix) means "agentteams-manager" is tracked
 	// alongside req.Name, so SimulatePodDeletion works for Manager now.
 	containerName := managerContainerName(mgrName)
 	mockMgrBackend.SimulatePodDeletion(containerName)
@@ -897,9 +897,9 @@ func TestManagerCreate_EnvPassesToBackend(t *testing.T) {
 	mgr.Spec.Env = map[string]string{
 		"USER_MGR":   "hello",
 		"USER_EMPTY": "",
-		// System-wins: HICLAW_MANAGER_NAME is produced by MockManagerEnvBuilder
+		// System-wins: AGENTTEAMS_MANAGER_NAME is produced by MockManagerEnvBuilder
 		// and must override this user-supplied value.
-		"HICLAW_MANAGER_NAME": "user-should-lose",
+		"AGENTTEAMS_MANAGER_NAME": "user-should-lose",
 	}
 
 	if err := k8sClient.Create(ctx, mgr); err != nil {
@@ -921,8 +921,8 @@ func TestManagerCreate_EnvPassesToBackend(t *testing.T) {
 	if got, present := req.Env["USER_EMPTY"]; !present || got != "" {
 		t.Errorf("USER_EMPTY present=%v value=%q, want present=true value=\"\"", present, got)
 	}
-	if got := req.Env["HICLAW_MANAGER_NAME"]; got != mgrName {
-		t.Errorf("HICLAW_MANAGER_NAME=%q, want %q (system wins)", got, mgrName)
+	if got := req.Env["AGENTTEAMS_MANAGER_NAME"]; got != mgrName {
+		t.Errorf("AGENTTEAMS_MANAGER_NAME=%q, want %q (system wins)", got, mgrName)
 	}
 	if got := req.Env["MOCK_ENV"]; got != "true" {
 		t.Errorf("MOCK_ENV=%q, want %q (system env preserved)", got, "true")
@@ -1161,8 +1161,8 @@ func TestManagerWelcome_LLMAuthNotReady_RequeuesUntilPropagated(t *testing.T) {
 // the Manager reconcile pipeline end-to-end and asserts the labels
 // handed to backend.Create reflect the four-layer merge: CR metadata
 // and spec labels both propagate, spec beats metadata on collision,
-// and controller-forced system labels (app, hiclaw.io/controller,
-// hiclaw.io/manager, hiclaw.io/role, hiclaw.io/runtime) override any
+// and controller-forced system labels (app, agentteams.io/controller,
+// agentteams.io/manager, agentteams.io/role, agentteams.io/runtime) override any
 // reserved keys a user stuffed into either layer.
 func TestManagerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T) {
 	resetManagerMocks()
@@ -1207,12 +1207,12 @@ func TestManagerLabels_PropagateFromMetadataAndSpecToBackendCreate(t *testing.T)
 	assertLabel(t, labels, "env", "prod")
 	assertLabel(t, labels, "tier", "spec-tier")
 	assertLabel(t, labels, v1beta1.LabelController, "test-ctl")
-	assertLabel(t, labels, "hiclaw.io/manager", mgrName)
-	assertLabel(t, labels, "hiclaw.io/role", "manager")
+	assertLabel(t, labels, "agentteams.io/manager", mgrName)
+	assertLabel(t, labels, "agentteams.io/role", "manager")
 	// app label must be the ResourcePrefix-derived value, not the
 	// user-supplied "spoofed-app"; ManagerReconciler wired in suite
 	// construction uses the default (empty) ResourcePrefix which maps
-	// to "hiclaw-manager".
+	// to "agentteams-manager".
 	if got := labels["app"]; got == "spoofed-app" || got == "" {
 		t.Errorf("app label not set by controller (got %q, full=%v)", got, labels)
 	}
@@ -1257,9 +1257,9 @@ func TestManagerLabels_MetadataLabelsChangeDoesNotRecreatePod(t *testing.T) {
 // managerContainerName mirrors the controller's naming logic for tests.
 func managerContainerName(name string) string {
 	if name == "default" {
-		return "hiclaw-manager"
+		return "agentteams-manager"
 	}
-	return "hiclaw-manager-" + name
+	return "agentteams-manager-" + name
 }
 
 func waitForManagerRunning(t *testing.T, mgr *v1beta1.Manager) {
@@ -1299,7 +1299,7 @@ func triggerManagerReconcile(t *testing.T, mgr *v1beta1.Manager) {
 		if m.Annotations == nil {
 			m.Annotations = map[string]string{}
 		}
-		m.Annotations["hiclaw.io/reconcile-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
+		m.Annotations["agentteams.io/reconcile-trigger"] = fmt.Sprintf("%d", time.Now().UnixNano())
 		return k8sClient.Update(ctx, &m)
 	})
 }

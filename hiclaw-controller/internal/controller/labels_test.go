@@ -8,7 +8,7 @@ import (
 // TestMergeLabels_PriorityLowToHigh verifies later layers overwrite
 // earlier ones on key collision. This is the load-bearing invariant for
 // the four-layer Pod-label precedence: reverse the order and reserved
-// keys like hiclaw.io/controller would be forgeable by user CR labels.
+// keys like agentteams.io/controller would be forgeable by user CR labels.
 func TestMergeLabels_PriorityLowToHigh(t *testing.T) {
 	got := mergeLabels(
 		map[string]string{"team": "a", "env": "dev"}, // metadata

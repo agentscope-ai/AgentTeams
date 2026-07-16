@@ -1,7 +1,7 @@
-"""Pure Matrix policy helpers for the HiClaw Hermes overlay.
+"""Pure Matrix policy helpers for the AgentTeams Hermes overlay.
 
 These helpers intentionally avoid importing any Matrix SDK.  They only model
-the policy layer that HiClaw adds on top of hermes-agent's native Matrix
+the policy layer that AgentTeams adds on top of hermes-agent's native Matrix
 adapter: outbound mention enrichment, dual allow-lists, and copaw-style
 history buffering.
 """
@@ -121,7 +121,7 @@ def should_suppress_outbound(
     drops events it can positively identify as tool/thinking chatter.
 
     When both ``filter_tool`` and ``filter_thinking`` are False (the default,
-    matching ``HICLAW_QUIET_ROOMS=false``) this always returns False — the
+    matching ``AGENTTEAMS_QUIET_ROOMS=false``) this always returns False — the
     function is a no-op until the env gate turns it on.
     """
     if not filter_tool and not filter_thinking:

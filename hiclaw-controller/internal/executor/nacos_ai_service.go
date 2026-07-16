@@ -457,7 +457,7 @@ func parseNacosHTTPError(statusCode int, body []byte, operation string) error {
 
 	switch statusCode {
 	case http.StatusUnauthorized:
-		return formatNacosHTTPError(operation, statusCode, serverMessage, "authentication required; check username:password in the nacos URL or set HICLAW_NACOS_USERNAME/HICLAW_NACOS_PASSWORD")
+		return formatNacosHTTPError(operation, statusCode, serverMessage, "authentication required; check username:password in the nacos URL or set AGENTTEAMS_NACOS_USERNAME/AGENTTEAMS_NACOS_PASSWORD")
 	case http.StatusForbidden:
 		return formatNacosHTTPError(operation, statusCode, serverMessage, "access denied; token may be expired or permissions may be missing")
 	case http.StatusNotFound:

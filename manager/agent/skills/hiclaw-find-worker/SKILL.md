@@ -3,7 +3,7 @@ name: hiclaw-find-worker
 description: Use as a helper when the admin is assigning work but has not specified an existing Worker, so you need to search Nacos for a suitable Worker and ask whether to import it; also use when the admin explicitly says to import a Worker from the market or gives a direct nacos package URI.
 ---
 
-# HiClaw Find Worker
+# AgentTeams Find Worker
 
 Use this skill as a helper around Worker discovery and import from Nacos AgentSpecs.
 

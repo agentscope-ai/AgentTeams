@@ -68,7 +68,7 @@ MOCK_JQ
 }
 
 run_refresh() {
-    local case_name="$1" cluster_id="${2:-}"
+    local case_name="$1"
     local mockbin="${TMPDIR_ROOT}/${case_name}-bin"
     local curl_log="${TMPDIR_ROOT}/${case_name}-curl.log"
     create_mock_tools "${mockbin}"
@@ -78,13 +78,8 @@ run_refresh() {
         _OSS_CRED_FILE="${TMPDIR_ROOT}/${case_name}-mc.env"
         export PATH="${mockbin}:${PATH}"
         export TEST_CURL_LOG="${curl_log}"
-        export HICLAW_CONTROLLER_URL="http://controller:8090"
-        export HICLAW_AUTH_TOKEN="controller-token"
-        if [ -n "${cluster_id}" ]; then
-            export HICLAW_CLUSTER_ID="${cluster_id}"
-        else
-            unset HICLAW_CLUSTER_ID
-        fi
+        export AGENTTEAMS_CONTROLLER_URL="http://controller:8090"
+        export AGENTTEAMS_AUTH_TOKEN="controller-token"
         _oss_refresh_sts_via_controller >/dev/null
     )
 
@@ -94,13 +89,9 @@ run_refresh() {
 echo ""
 echo "=== oss credentials STS controller request ==="
 
-with_cluster="$(run_refresh with-cluster remote-cluster-a)"
-assert_contains "cluster id should be sent as controller header" "X-HiClaw-Cluster-ID: remote-cluster-a" "${with_cluster}"
-assert_contains "bearer token should still be sent" "Authorization: Bearer controller-token" "${with_cluster}"
-
-without_cluster="$(run_refresh without-cluster)"
-assert_not_contains "cluster header should be omitted when HICLAW_CLUSTER_ID is empty" "X-HiClaw-Cluster-ID:" "${without_cluster}"
-assert_contains "bearer token should be sent without cluster id" "Authorization: Bearer controller-token" "${without_cluster}"
+request="$(run_refresh sts-request)"
+assert_not_contains "cluster header should not be sent" "X-AgentTeams-Cluster-ID:" "${request}"
+assert_contains "bearer token should be sent" "Authorization: Bearer controller-token" "${request}"
 
 echo ""
 echo "=== oss credentials refresh-fails-but-cache-valid fallback ==="
@@ -110,9 +101,13 @@ run_refresh_failure_fallback() {
     local mc_env="${TMPDIR_ROOT}/${case_name}-mc.env"
     local stderr_log="${TMPDIR_ROOT}/${case_name}-stderr.log"
 
-    # Seed a stale-but-not-yet-expired credentials cache.
+    # Seed a stale-but-not-yet-expired credentials cache. The alias is the
+    # dynamic MC_HOST_<storage-alias> computed by _oss_storage_alias (default
+    # "agentteams" when AGENTTEAMS_STORAGE_PREFIX is unset).
+    local _mc_host_var
+    _mc_host_var="MC_HOST_agentteams"
     cat > "${mc_env}" <<EOF
-MC_HOST_hiclaw="https://stale-ak:stale-sk:stale-token@oss.example.test"
+${_mc_host_var}="https://stale-ak:stale-sk:stale-token@oss.example.test"
 _OSS_CRED_EXPIRES_AT=$(( $(date +%s) + 100 ))
 EOF
 
@@ -124,7 +119,7 @@ EOF
         _oss_failing_refresh() { return 1; }
 
         _oss_ensure_refresh _oss_failing_refresh
-        echo "MC_HOST_hiclaw=${MC_HOST_hiclaw:-}"
+        eval "echo \"${_mc_host_var}=\${${_mc_host_var}:-}\""
     ) 2>"${stderr_log}" 1>"${TMPDIR_ROOT}/${case_name}-stdout.log"
 
     cat "${TMPDIR_ROOT}/${case_name}-stdout.log"
@@ -132,7 +127,7 @@ EOF
 }
 
 fallback_stdout="$(run_refresh_failure_fallback 2>"${TMPDIR_ROOT}/refresh-fails-but-cache-valid-stderr-captured.log")"
-assert_contains "MC_HOST_hiclaw stays exported when refresh fails but cache is valid" "MC_HOST_hiclaw=https://stale-ak:stale-sk:stale-token@oss.example.test" "${fallback_stdout}"
+assert_contains "MC_HOST_agentteams stays exported when refresh fails but cache is valid" "MC_HOST_agentteams=https://stale-ak:stale-sk:stale-token@oss.example.test" "${fallback_stdout}"
 assert_contains "a clear fallback warning is surfaced on stderr" "STS refresh failed, using cached credentials" "$(cat "${TMPDIR_ROOT}/refresh-fails-but-cache-valid-stderr-captured.log")"
 
 echo "All oss-credentials tests passed"

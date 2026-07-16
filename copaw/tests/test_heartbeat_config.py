@@ -1,7 +1,7 @@
-"""Tests for HICLAW_MANAGER_HEARTBEAT_INTERVAL -> agent.json heartbeat.every.
+"""Tests for AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL -> agent.json heartbeat.every.
 
 The controller (hiclaw-controller/internal/service/worker_env.go) sets
-HICLAW_MANAGER_HEARTBEAT_INTERVAL on the Manager container. The CoPaw side
+AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL on the Manager container. The CoPaw side
 of that pipeline is copaw_worker.bridge.bridge_openclaw_to_copaw ->
 _write_agent_json, which materializes workspaces/default/agent.json from
 templates/agent.manager.json (hardcoded "every": "30m") and must apply the
@@ -50,7 +50,7 @@ def _agent_json_path(working_dir: Path) -> dict:
 
 
 def test_manager_heartbeat_defaults_to_10m_when_env_unset(monkeypatch):
-    monkeypatch.delenv("HICLAW_MANAGER_HEARTBEAT_INTERVAL", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL", raising=False)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
@@ -62,7 +62,7 @@ def test_manager_heartbeat_defaults_to_10m_when_env_unset(monkeypatch):
 
 
 def test_manager_heartbeat_honors_env_override(monkeypatch):
-    monkeypatch.setenv("HICLAW_MANAGER_HEARTBEAT_INTERVAL", "5m")
+    monkeypatch.setenv("AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL", "5m")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
@@ -77,19 +77,19 @@ def test_manager_heartbeat_env_wins_over_stale_agent_json(monkeypatch):
     the old hardcoded 30m) must be corrected on the next bridge run, not left
     stale — this is a restart-time overlay, not a create-only seed.
     """
-    monkeypatch.setenv("HICLAW_MANAGER_HEARTBEAT_INTERVAL", "15m")
+    monkeypatch.setenv("AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL", "15m")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
         # First run seeds the file (env unset at this point simulates the old
         # hardcoded-30m template state by asserting the seed, then we flip
         # the env and re-run to prove the overlay updates it).
-        monkeypatch.delenv("HICLAW_MANAGER_HEARTBEAT_INTERVAL", raising=False)
+        monkeypatch.delenv("AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL", raising=False)
         bridge_openclaw_to_copaw(_make_openclaw_cfg(), working_dir, profile="manager")
         seeded = _agent_json_path(working_dir)
         assert seeded["heartbeat"]["every"] == "10m"
 
-        monkeypatch.setenv("HICLAW_MANAGER_HEARTBEAT_INTERVAL", "15m")
+        monkeypatch.setenv("AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL", "15m")
         bridge_openclaw_to_copaw(_make_openclaw_cfg(), working_dir, profile="manager")
         updated = _agent_json_path(working_dir)
 
@@ -99,9 +99,9 @@ def test_manager_heartbeat_env_wins_over_stale_agent_json(monkeypatch):
 def test_worker_profile_unaffected_by_manager_heartbeat_env(monkeypatch):
     """The env var is manager-specific; the worker profile keeps its own
     template default (already 10m in templates/agent.worker.json) regardless
-    of HICLAW_MANAGER_HEARTBEAT_INTERVAL.
+    of AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL.
     """
-    monkeypatch.setenv("HICLAW_MANAGER_HEARTBEAT_INTERVAL", "99m")
+    monkeypatch.setenv("AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL", "99m")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"

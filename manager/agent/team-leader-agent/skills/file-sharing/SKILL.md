@@ -18,7 +18,7 @@ Directory sync paths must end with `/`, especially `shared/projects/{project-id}
 
 Do not write these in chat or task specs:
 
-- `hiclaw/hiclaw-storage/...`
+- `agentteams/agentteams-storage/...`
 - `teams/{team}/shared/...`
 - `/root/hiclaw-fs/...`
 - `/root/hiclaw-fs/agents/...`

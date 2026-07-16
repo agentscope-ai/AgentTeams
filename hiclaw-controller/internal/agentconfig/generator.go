@@ -28,13 +28,13 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	if modelName == "" {
 		modelName = g.config.DefaultModel
 	}
-	modelName = strings.TrimPrefix(modelName, "hiclaw-gateway/")
+	modelName = strings.TrimPrefix(modelName, "agentteams-gateway/")
 
 	matrixServerURL := g.config.MatrixServerURL
 	if matrixServerURL == "" {
-		// K8s deployments must set HICLAW_MATRIX_URL (Helm injects it automatically).
+		// K8s deployments must set AGENTTEAMS_MATRIX_URL (Helm injects it automatically).
 		// This default only applies to docker/embedded mode.
-		matrixServerURL = "http://matrix-local.hiclaw.io:8080"
+		matrixServerURL = "http://matrix-local.agentteams.io:8080"
 	}
 
 	aiGatewayURL := g.config.AIGatewayURL
@@ -42,12 +42,12 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		aiGatewayURL = req.AIGatewayURL
 	}
 	if aiGatewayURL == "" {
-		aiGatewayURL = "http://aigw-local.hiclaw.io:8080"
+		aiGatewayURL = "http://aigw-local.agentteams.io:8080"
 	}
 
 	matrixDomain := g.config.MatrixDomain
 	if matrixDomain == "" {
-		matrixDomain = "matrix-local.hiclaw.io:8080"
+		matrixDomain = "matrix-local.agentteams.io:8080"
 	}
 
 	adminUser := g.config.AdminUser
@@ -58,7 +58,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// gateway.port: 18799 — openclaw 2026.4.x onwards merges the Control UI HTTP
 	// server into the same listener as the gateway WebSocket (older versions ran
 	// the Control UI on a separate 18799 listener). Hiclaw's container port
-	// mapping (host:HICLAW_PORT_MANAGER_CONSOLE → container:18799), Dockerfile
+	// mapping (host:AGENTTEAMS_PORT_MANAGER_CONSOLE → container:18799), Dockerfile
 	// EXPOSE, install/health probes and the legacy nginx reverse proxy all
 	// assume the user-facing console reaches us on 18799. Keep that contract by
 	// pinning the gateway port to 18799 — the alternative (rewiring every
@@ -79,7 +79,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// UI starts demanding device authentication that hiclaw never provisions.
 	//
 	// gateway.controlUi.allowInsecureAuth: true — hiclaw exposes the console
-	// over plain HTTP on the user's host port (HICLAW_PORT_MANAGER_CONSOLE),
+	// over plain HTTP on the user's host port (AGENTTEAMS_PORT_MANAGER_CONSOLE),
 	// so the strict HTTPS-only browser-auth checks introduced in 2026.4.x must
 	// be relaxed.
 	//
@@ -125,7 +125,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		"models": map[string]interface{}{
 			"mode": "merge",
 			"providers": map[string]interface{}{
-				"hiclaw-gateway": map[string]interface{}{
+				"agentteams-gateway": map[string]interface{}{
 					"baseUrl": aiGatewayURL + "/v1",
 					"apiKey":  req.GatewayKey,
 					"api":     "openai-completions",
@@ -138,7 +138,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				"timeoutSeconds": 1800,
 				"workspace":      "~",
 				"model": map[string]interface{}{
-					"primary": "hiclaw-gateway/" + modelName,
+					"primary": "agentteams-gateway/" + modelName,
 				},
 				"models":        g.allModelAliases(modelName),
 				"maxConcurrent": 4,
@@ -239,7 +239,7 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 		"blockStreaming": true,
 		// openclaw 2026.4.x onwards forwards the SSRF policy to the matrix-js-sdk
 		// fetch path. Without this opt-in, /sync to private hosts (the embedded
-		// `matrix-local.hiclaw.io` alias resolves to 127.0.0.1, k8s service DNS
+		// `matrix-local.agentteams.io` alias resolves to 127.0.0.1, k8s service DNS
 		// resolves to ClusterIP) is rejected and the worker never reaches a
 		// PREPARED state — no room joins, no message delivery. The manager
 		// template carries the same flag; mirror it here so every worker the
@@ -498,11 +498,109 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 
 	aliases := make(map[string]interface{})
 	for _, name := range allModels {
-		aliases["hiclaw-gateway/"+name] = map[string]interface{}{"alias": name}
+		aliases["agentteams-gateway/"+name] = map[string]interface{}{"alias": name}
 	}
 	// Add custom model if not in the built-in list
-	if _, exists := aliases["hiclaw-gateway/"+selectedModel]; !exists {
-		aliases["hiclaw-gateway/"+selectedModel] = map[string]interface{}{"alias": selectedModel}
+	if _, exists := aliases["agentteams-gateway/"+selectedModel]; !exists {
+		aliases["agentteams-gateway/"+selectedModel] = map[string]interface{}{"alias": selectedModel}
 	}
 	return aliases
+}
+
+// InjectHeartbeat reads existing openclaw.json bytes, injects or updates the
+// heartbeat configuration under agents.defaults.heartbeat, and returns the
+// updated JSON bytes. If enabled is false or every is empty, the heartbeat
+// key is removed.
+func InjectHeartbeat(existing []byte, enabled bool, every string) []byte {
+	var config map[string]interface{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &config)
+	}
+	if config == nil {
+		config = make(map[string]interface{})
+	}
+	agents, _ := config["agents"].(map[string]interface{})
+	if agents == nil {
+		agents = make(map[string]interface{})
+		config["agents"] = agents
+	}
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	if defaults == nil {
+		defaults = make(map[string]interface{})
+		agents["defaults"] = defaults
+	}
+
+	if enabled && every != "" {
+		defaults["heartbeat"] = map[string]interface{}{"enabled": true, "every": every}
+	} else {
+		delete(defaults, "heartbeat")
+	}
+
+	out, _ := json.MarshalIndent(config, "", "  ")
+	return out
+}
+
+// InjectChannelPolicy patches channels.matrix.groupAllowFrom and
+// channels.matrix.dm.allowFrom in an existing openclaw.json blob with the
+// caller-computed final allow-lists. Empty inputs are treated as no-op to
+// avoid wiping a valid policy on partial information.
+func InjectChannelPolicy(existing []byte, groupAllowFrom, dmAllowFrom []string) []byte {
+	groupAllowFrom = uniqueNonEmptyStrings(groupAllowFrom)
+	dmAllowFrom = uniqueNonEmptyStrings(dmAllowFrom)
+	if len(groupAllowFrom) == 0 || len(dmAllowFrom) == 0 {
+		return existing
+	}
+	var config map[string]interface{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &config)
+	}
+	if config == nil {
+		config = make(map[string]interface{})
+	}
+	channels, _ := config["channels"].(map[string]interface{})
+	if channels == nil {
+		channels = make(map[string]interface{})
+		config["channels"] = channels
+	}
+	matrix, _ := channels["matrix"].(map[string]interface{})
+	if matrix == nil {
+		matrix = make(map[string]interface{})
+		channels["matrix"] = matrix
+	}
+
+	matrix["groupAllowFrom"] = stringSliceToInterfaces(groupAllowFrom)
+
+	dm, _ := matrix["dm"].(map[string]interface{})
+	if dm == nil {
+		dm = make(map[string]interface{})
+		matrix["dm"] = dm
+	}
+	dm["allowFrom"] = stringSliceToInterfaces(dmAllowFrom)
+
+	out, _ := json.MarshalIndent(config, "", "  ")
+	return out
+}
+
+func stringSliceToInterfaces(values []string) []interface{} {
+	out := make([]interface{}, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

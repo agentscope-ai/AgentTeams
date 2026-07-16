@@ -2,12 +2,12 @@
 
 ## Overview
 
-Import a real human account into HiClaw. The script registers a Matrix account, configures permissions based on the specified level, and optionally sends a welcome email.
+Import a real human account into AgentTeams. The script registers a Matrix account, configures permissions based on the specified level, and optionally sends a welcome email.
 
 ## Prerequisites
 
 - SMTP configured in environment (for email notifications):
-  - `HICLAW_SMTP_HOST`, `HICLAW_SMTP_PORT`, `HICLAW_SMTP_USER`, `HICLAW_SMTP_PASS`, `HICLAW_SMTP_FROM`
+  - `AGENTTEAMS_SMTP_HOST`, `AGENTTEAMS_SMTP_PORT`, `AGENTTEAMS_SMTP_USER`, `AGENTTEAMS_SMTP_PASS`, `AGENTTEAMS_SMTP_FROM`
 - For Level 2: target teams must already exist in `teams-registry.json`
 - For Level 3: target workers must already exist in `workers-registry.json`
 
@@ -61,11 +61,11 @@ bash /opt/hiclaw/agent/skills/human-management/scripts/create-human.sh \
 ## Welcome Email Content
 
 ```
-Subject: Welcome to HiClaw - Your Account Details
+Subject: Welcome to AgentTeams - Your Account Details
 
 Hi {display_name},
 
-Your HiClaw account has been created:
+Your AgentTeams account has been created:
 
   Username: {matrix_user_id}
   Password: {generated_password}
@@ -73,7 +73,7 @@ Your HiClaw account has been created:
 
 Please log in and change your password immediately.
 
-— HiClaw
+— AgentTeams
 ```
 
 ## After Creation

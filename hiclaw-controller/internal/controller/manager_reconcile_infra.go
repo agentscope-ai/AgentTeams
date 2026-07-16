@@ -14,10 +14,6 @@ import (
 // provisioned (MatrixUserID set), it refreshes credentials and restores gateway auth.
 func (r *ManagerReconciler) reconcileManagerInfrastructure(ctx context.Context, s *managerScope) (reconcile.Result, error) {
 	m := s.manager
-	modelProviderID := ""
-	if s.modelProviderInfo != nil {
-		modelProviderID = s.modelProviderInfo.HttpApiID
-	}
 
 	if m.Status.MatrixUserID != "" {
 		refreshResult, err := r.Provisioner.RefreshManagerCredentials(ctx, m.Name)
@@ -30,7 +26,7 @@ func (r *ManagerReconciler) reconcileManagerInfrastructure(ctx context.Context, 
 		// "non-fatal", which masked real failures (e.g. Higress Console PUT
 		// returning non-200) and left the data plane stuck with an empty
 		// allowedConsumers list until a subsequent event happened to retry.
-		if err := r.Provisioner.EnsureManagerGatewayAuth(ctx, m.Name, refreshResult.GatewayKey, modelProviderID); err != nil {
+		if err := r.Provisioner.EnsureManagerGatewayAuth(ctx, m.Name, refreshResult.GatewayKey); err != nil {
 			return reconcile.Result{}, fmt.Errorf("restore manager gateway auth: %w", err)
 		}
 
@@ -49,8 +45,7 @@ func (r *ManagerReconciler) reconcileManagerInfrastructure(ctx context.Context, 
 	logger.Info("provisioning manager infrastructure", "name", m.Name)
 
 	provResult, err := r.Provisioner.ProvisionManager(ctx, service.ManagerProvisionRequest{
-		Name:            m.Name,
-		ModelProviderID: modelProviderID,
+		Name: m.Name,
 	})
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("provision manager: %w", err)

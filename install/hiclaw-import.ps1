@@ -1,4 +1,4 @@
-# hiclaw-import.ps1 - Import Worker/Team/Human resources into HiClaw
+# hiclaw-import.ps1 - Import Worker/Team/Human resources into AgentTeams
 #
 # Thin shell that delegates to the `hiclaw` CLI inside the Manager container.
 # Supports ZIP packages, remote packages (nacos://, http://), and YAML files.
@@ -39,32 +39,32 @@ if (-not $ContainerCmd) {
     try { $null = & podman info 2>$null; $ContainerCmd = "podman" } catch {}
 }
 if (-not $ContainerCmd) {
-    Write-Host "[HiClaw Import ERROR] Neither docker nor podman found." -ForegroundColor Red
+    Write-Host "[AgentTeams Import ERROR] Neither docker nor podman found." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Docker is required to run HiClaw. Install Docker Desktop first, then install HiClaw:" -ForegroundColor Yellow
+    Write-Host "Docker is required to run AgentTeams. Install Docker Desktop first, then install AgentTeams:" -ForegroundColor Yellow
     Write-Host "  Set-ExecutionPolicy Bypass -Scope Process -Force; `$wc=New-Object Net.WebClient; `$wc.Encoding=[Text.Encoding]::UTF8; iex `$wc.DownloadString('https://higress.ai/hiclaw/install.ps1')"
     exit 1
 }
 
 # Verify Manager container
-$mgrRunning = & $ContainerCmd ps --filter "name=hiclaw-manager" --format "{{.Names}}" 2>$null
-if ($mgrRunning -notmatch "hiclaw-manager") {
-    Write-Host "[HiClaw Import ERROR] hiclaw-manager container is not running." -ForegroundColor Red
+$mgrRunning = & $ContainerCmd ps --filter "name=agentteams-manager" --format "{{.Names}}" 2>$null
+if ($mgrRunning -notmatch "agentteams-manager") {
+    Write-Host "[AgentTeams Import ERROR] agentteams-manager container is not running." -ForegroundColor Red
     Write-Host ""
     # Check if the container exists but is stopped
-    $mgrExists = & $ContainerCmd ps -a --filter "name=hiclaw-manager" --format "{{.Names}}" 2>$null
-    if ($mgrExists -match "hiclaw-manager") {
-        Write-Host "The hiclaw-manager container exists but is stopped. Start it with:" -ForegroundColor Yellow
-        Write-Host "  $ContainerCmd start hiclaw-manager"
+    $mgrExists = & $ContainerCmd ps -a --filter "name=agentteams-manager" --format "{{.Names}}" 2>$null
+    if ($mgrExists -match "agentteams-manager") {
+        Write-Host "The agentteams-manager container exists but is stopped. Start it with:" -ForegroundColor Yellow
+        Write-Host "  $ContainerCmd start agentteams-manager"
     } else {
-        Write-Host "HiClaw does not appear to be installed. Install it first:" -ForegroundColor Yellow
+        Write-Host "AgentTeams does not appear to be installed. Install it first:" -ForegroundColor Yellow
         Write-Host "  Set-ExecutionPolicy Bypass -Scope Process -Force; `$wc=New-Object Net.WebClient; `$wc.Encoding=[Text.Encoding]::UTF8; iex `$wc.DownloadString('https://higress.ai/hiclaw/install.ps1')"
     }
     exit 1
 }
 
 # Ensure /tmp/import exists in container
-& $ContainerCmd exec hiclaw-manager mkdir -p /tmp/import 2>$null | Out-Null
+& $ContainerCmd exec agentteams-manager mkdir -p /tmp/import 2>$null | Out-Null
 
 # ============================================================
 # YAML mode: -File
@@ -72,13 +72,13 @@ if ($mgrRunning -notmatch "hiclaw-manager") {
 
 if ($File) {
     if (-not (Test-Path $File)) {
-        Write-Host "[HiClaw Import ERROR] File not found: $File" -ForegroundColor Red
+        Write-Host "[AgentTeams Import ERROR] File not found: $File" -ForegroundColor Red
         exit 1
     }
 
     $FileName = Split-Path $File -Leaf
-    & $ContainerCmd cp $File "hiclaw-manager:/tmp/import/$FileName"
-    Write-Host "[HiClaw Import] Copied $FileName -> container:/tmp/import/" -ForegroundColor Cyan
+    & $ContainerCmd cp $File "agentteams-manager:/tmp/import/$FileName"
+    Write-Host "[AgentTeams Import] Copied $FileName -> container:/tmp/import/" -ForegroundColor Cyan
 
     $hiclawArgs = @("apply", "-f", "/tmp/import/$FileName")
     if ($Prune) { $hiclawArgs += "--prune" }
@@ -86,7 +86,7 @@ if ($File) {
     # Accept -Yes for wrapper compatibility, but do not forward it because the
     # container-internal hiclaw CLI does not support --yes.
 
-    & $ContainerCmd exec hiclaw-manager hiclaw @hiclawArgs
+    & $ContainerCmd exec agentteams-manager hiclaw @hiclawArgs
     exit $LASTEXITCODE
 }
 
@@ -97,7 +97,7 @@ if ($File) {
 switch ($ResourceType) {
     "worker" {
         if (-not $Name) {
-            Write-Host "[HiClaw Import ERROR] -Name is required for worker import" -ForegroundColor Red
+            Write-Host "[AgentTeams Import ERROR] -Name is required for worker import" -ForegroundColor Red
             exit 1
         }
 
@@ -107,7 +107,7 @@ switch ($ResourceType) {
         if ($Zip) {
             $DownloadedZip = ""
             if ($Zip -match "^https?://") {
-                Write-Host "[HiClaw Import] Downloading $Zip..." -ForegroundColor Cyan
+                Write-Host "[AgentTeams Import] Downloading $Zip..." -ForegroundColor Cyan
                 $DownloadedZip = Join-Path ([System.IO.Path]::GetTempPath()) "hiclaw-import-$([System.Guid]::NewGuid().ToString('N').Substring(0,8)).zip"
                 try {
                     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
@@ -115,19 +115,19 @@ switch ($ResourceType) {
                     $Zip = $DownloadedZip
                 } catch {
                     if ($DownloadedZip -and (Test-Path $DownloadedZip)) { Remove-Item $DownloadedZip -Force }
-                    Write-Host "[HiClaw Import ERROR] Download failed: $_" -ForegroundColor Red
+                    Write-Host "[AgentTeams Import ERROR] Download failed: $_" -ForegroundColor Red
                     exit 1
                 }
             }
 
             if (-not (Test-Path $Zip)) {
-                Write-Host "[HiClaw Import ERROR] ZIP file not found: $Zip" -ForegroundColor Red
+                Write-Host "[AgentTeams Import ERROR] ZIP file not found: $Zip" -ForegroundColor Red
                 exit 1
             }
 
             $ZipBaseName = Split-Path $Zip -Leaf
-            & $ContainerCmd cp $Zip "hiclaw-manager:/tmp/import/$ZipBaseName"
-            Write-Host "[HiClaw Import] Copied $ZipBaseName -> container:/tmp/import/" -ForegroundColor Cyan
+            & $ContainerCmd cp $Zip "agentteams-manager:/tmp/import/$ZipBaseName"
+            Write-Host "[AgentTeams Import] Copied $ZipBaseName -> container:/tmp/import/" -ForegroundColor Cyan
             $hiclawArgs += @("--zip", "/tmp/import/$ZipBaseName")
 
             # Cleanup downloaded file
@@ -145,7 +145,7 @@ switch ($ResourceType) {
         if ($Runtime) { $hiclawArgs += @("--runtime", $Runtime) }
         if ($DryRun) { $hiclawArgs += "--dry-run" }
 
-        & $ContainerCmd exec hiclaw-manager hiclaw @hiclawArgs
+        & $ContainerCmd exec agentteams-manager hiclaw @hiclawArgs
         exit $LASTEXITCODE
     }
 
@@ -160,7 +160,7 @@ switch ($ResourceType) {
     }
 
     default {
-        Write-Host "[HiClaw Import ERROR] Unknown resource type: $ResourceType" -ForegroundColor Red
+        Write-Host "[AgentTeams Import ERROR] Unknown resource type: $ResourceType" -ForegroundColor Red
         Write-Host "Supported: worker"
         Write-Host "For YAML mode: .\hiclaw-import.ps1 -File <resource.yaml>"
         exit 1

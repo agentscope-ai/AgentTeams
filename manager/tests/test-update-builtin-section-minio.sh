@@ -23,8 +23,8 @@ source "${LIB_DIR}/builtin-merge.sh"
 # ── Mock mc ──────────────────────────────────────────────────────────────────
 # Simulates `mc cp <src> <dst>` using a local directory as fake MinIO.
 # FAKE_MINIO_ROOT must be set before calling update_builtin_section_minio.
-# MinIO paths like "hiclaw/hiclaw-storage/agents/w1/AGENTS.md" are mapped to
-# ${FAKE_MINIO_ROOT}/hiclaw/hiclaw-storage/agents/w1/AGENTS.md
+# MinIO paths like "agentteams/agentteams-storage/agents/w1/AGENTS.md" are mapped to
+# ${FAKE_MINIO_ROOT}/agentteams/agentteams-storage/agents/w1/AGENTS.md
 FAKE_MINIO_ROOT="${TMPDIR_ROOT}/fake-minio"
 mkdir -p "${FAKE_MINIO_ROOT}"
 
@@ -100,7 +100,7 @@ new_workdir() {
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-MINIO_PREFIX="hiclaw/hiclaw-storage/agents/test-worker"
+MINIO_PREFIX="agentteams/agentteams-storage/agents/test-worker"
 
 echo ""
 echo "=== MC1: Remote file does not exist — creates new with markers ==="

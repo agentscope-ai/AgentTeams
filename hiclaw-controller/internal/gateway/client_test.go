@@ -658,7 +658,7 @@ func TestResolveModelProvider_Higress(t *testing.T) {
 
 	c := NewHigressClient(Config{
 		ConsoleURL:   "http://higress.test",
-		DataPlaneURL: "http://aigw-local.hiclaw.io:8080",
+		DataPlaneURL: "http://aigw-local.agentteams.io:8080",
 	}, client)
 
 	info, err := c.ResolveModelProvider(context.Background(), "qwen")
@@ -671,8 +671,8 @@ func TestResolveModelProvider_Higress(t *testing.T) {
 	if info.BasePath != "/v1/qwen" {
 		t.Errorf("BasePath = %q, want /v1/qwen", info.BasePath)
 	}
-	if info.IntranetURL != "http://aigw-local.hiclaw.io:8080/v1/qwen" {
-		t.Errorf("IntranetURL = %q, want http://aigw-local.hiclaw.io:8080/v1/qwen", info.IntranetURL)
+	if info.IntranetURL != "http://aigw-local.agentteams.io:8080/v1/qwen" {
+		t.Errorf("IntranetURL = %q, want http://aigw-local.agentteams.io:8080/v1/qwen", info.IntranetURL)
 	}
 }
 
@@ -694,7 +694,7 @@ func TestResolveModelProvider_Higress_NotFound(t *testing.T) {
 
 	c := NewHigressClient(Config{
 		ConsoleURL:   "http://higress.test",
-		DataPlaneURL: "http://aigw-local.hiclaw.io:8080",
+		DataPlaneURL: "http://aigw-local.agentteams.io:8080",
 	}, client)
 
 	_, err := c.ResolveModelProvider(context.Background(), "nonexist")

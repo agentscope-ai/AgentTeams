@@ -8,32 +8,51 @@ const path = require('node:path');
 const { loadConfig, readTokenFile, invalidateTokenFile } = require('../src/config');
 
 test('loadConfig applies documented defaults when env is empty', () => {
-  const cfg = loadConfig({});
-  assert.equal(cfg.port, 8090);
-  assert.equal(cfg.controllerUrl, 'http://127.0.0.1:8080');
-  assert.equal(cfg.tokenFile, '/var/run/hiclaw/cli-token');
-  assert.equal(cfg.minio.endpoint, 'http://127.0.0.1:9000');
-  assert.equal(cfg.minio.bucket, 'hiclaw-storage');
+  const pwDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-cfg-'));
+  const pwFile = path.join(pwDir, 'pw');
+  fs.writeFileSync(pwFile, 'secret\n');
+  try {
+    const cfg = loadConfig({
+      AGENTTEAMS_DASHBOARD_USERNAME: 'admin',
+      AGENTTEAMS_DASHBOARD_PASSWORD_FILE: pwFile,
+    });
+    assert.equal(cfg.port, 8090);
+    assert.equal(cfg.controllerUrl, 'http://127.0.0.1:8080');
+    assert.equal(cfg.tokenFile, '/var/run/agentteams/cli-token');
+    assert.equal(cfg.minio.endpoint, 'http://127.0.0.1:9000');
+    assert.equal(cfg.minio.bucket, 'agentteams-storage');
+  } finally {
+    fs.rmSync(pwDir, { recursive: true, force: true });
+  }
 });
 
 test('loadConfig reads every documented env var, never hardcoding secrets/bucket', () => {
-  const env = {
-    PORT: '9999',
-    HICLAW_CONTROLLER_URL: 'http://controller.internal:8080',
-    HICLAW_AUTH_TOKEN_FILE: '/tmp/tok',
-    MINIO_ENDPOINT: 'http://minio.internal:9000',
-    MINIO_ACCESS_KEY: 'ak',
-    MINIO_SECRET_KEY: 'sk',
-    HICLAW_FS_BUCKET: 'custom-bucket',
-  };
-  const cfg = loadConfig(env);
-  assert.equal(cfg.port, 9999);
-  assert.equal(cfg.controllerUrl, 'http://controller.internal:8080');
-  assert.equal(cfg.tokenFile, '/tmp/tok');
-  assert.equal(cfg.minio.endpoint, 'http://minio.internal:9000');
-  assert.equal(cfg.minio.accessKey, 'ak');
-  assert.equal(cfg.minio.secretKey, 'sk');
-  assert.equal(cfg.minio.bucket, 'custom-bucket');
+  const pwDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-cfg-'));
+  const pwFile = path.join(pwDir, 'pw');
+  fs.writeFileSync(pwFile, 'secret\n');
+  try {
+    const env = {
+      PORT: '9999',
+      AGENTTEAMS_DASHBOARD_USERNAME: 'admin',
+      AGENTTEAMS_DASHBOARD_PASSWORD_FILE: pwFile,
+      HICLAW_CONTROLLER_URL: 'http://controller.internal:8080',
+      HICLAW_AUTH_TOKEN_FILE: '/tmp/tok',
+      MINIO_ENDPOINT: 'http://minio.internal:9000',
+      MINIO_ACCESS_KEY: 'ak',
+      MINIO_SECRET_KEY: 'sk',
+      HICLAW_FS_BUCKET: 'custom-bucket',
+    };
+    const cfg = loadConfig(env);
+    assert.equal(cfg.port, 9999);
+    assert.equal(cfg.controllerUrl, 'http://controller.internal:8080');
+    assert.equal(cfg.tokenFile, '/tmp/tok');
+    assert.equal(cfg.minio.endpoint, 'http://minio.internal:9000');
+    assert.equal(cfg.minio.accessKey, 'ak');
+    assert.equal(cfg.minio.secretKey, 'sk');
+    assert.equal(cfg.minio.bucket, 'custom-bucket');
+  } finally {
+    fs.rmSync(pwDir, { recursive: true, force: true });
+  }
 });
 
 test('readTokenFile trims trailing whitespace/newlines', () => {

@@ -39,7 +39,7 @@
 #
 # Prerequisites:
 #   - HIGRESS_COOKIE_FILE env var (session cookie for Higress Console)
-#   - HICLAW_AI_GATEWAY_DOMAIN env var
+#   - AGENTTEAMS_AI_GATEWAY_DOMAIN env var
 
 set -euo pipefail
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
@@ -108,8 +108,8 @@ fi
 MCP_SERVER_NAME="mcp-${SERVER_NAME}"
 
 # Cloud mode check
-if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
-    log "ERROR: MCP Server management via this script is not yet supported in cloud mode (HICLAW_RUNTIME=aliyun)."
+if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
+    log "ERROR: MCP Server management via this script is not yet supported in cloud mode (AGENTTEAMS_RUNTIME=aliyun)."
     log "Please manage MCP Servers through the Alibaba Cloud AI Gateway console instead."
     exit 1
 fi
@@ -119,7 +119,7 @@ if [ -z "${HIGRESS_COOKIE_FILE:-}" ]; then
     exit 1
 fi
 
-AI_GATEWAY_DOMAIN="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
+AI_GATEWAY_DOMAIN="${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}"
 CONSOLE_URL="http://127.0.0.1:8001"
 
 # ============================================================
@@ -317,7 +317,7 @@ fi
 # Step 4: Update Manager's own mcporter config
 # ============================================================
 log "Step 4: Updating Manager mcporter config..."
-MANAGER_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-}"
+MANAGER_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
 MANAGER_MCPORTER_DIR="${HOME}/config"
 MANAGER_MCPORTER="${MANAGER_MCPORTER_DIR}/mcporter.json"
 MANAGER_MCPORTER_COMPAT="${HOME}/mcporter-servers.json"
@@ -346,7 +346,7 @@ if [ -n "${MANAGER_KEY}" ]; then
     ln -sfn "${MANAGER_MCPORTER}" "${MANAGER_MCPORTER_COMPAT}"
     log "  Manager config/mcporter.json updated"
 else
-    log "  WARNING: HICLAW_MANAGER_GATEWAY_KEY not set, skipping Manager mcporter update"
+    log "  WARNING: AGENTTEAMS_MANAGER_GATEWAY_KEY not set, skipping Manager mcporter update"
 fi
 
 # ============================================================
@@ -414,7 +414,7 @@ if [ -f "${REGISTRY_FILE}" ]; then
         fi
         ln -sfn "${MCPORTER_FILE}" "${MCPORTER_COMPAT}"
         ensure_mc_credentials 2>/dev/null || true
-        mc cp "${MCPORTER_FILE}" "${HICLAW_STORAGE_PREFIX}/agents/${wname}/config/mcporter.json" 2>/dev/null \
+        mc cp "${MCPORTER_FILE}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${wname}/config/mcporter.json" 2>/dev/null \
             && log "  Pushed config/mcporter.json to MinIO for ${wname}" \
             || log "  WARNING: Failed to push config/mcporter.json to MinIO for ${wname}"
     done

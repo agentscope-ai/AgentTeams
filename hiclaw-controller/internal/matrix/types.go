@@ -5,7 +5,7 @@ import "crypto/rand"
 // Config holds connection parameters for a Matrix homeserver.
 type Config struct {
 	ServerURL         string // internal Matrix CS API URL, e.g. http://tuwunel:6167
-	Domain            string // Matrix domain for user IDs, e.g. matrix-local.hiclaw.io:8080
+	Domain            string // Matrix domain for user IDs, e.g. matrix-local.agentteams.io:8080
 	RegistrationToken string // shared registration secret (m.login.registration_token)
 	AdminUser         string // global admin username
 	AdminPassword     string // global admin password
@@ -15,20 +15,25 @@ type Config struct {
 	// Matrix Application Service, using as_token to register/login users
 	// without passwords. Legacy password-based auth is preserved when disabled.
 	AppServiceEnabled         bool
-	AppServiceID              string // e.g. "hiclaw-controller"
+	AppServiceID              string // e.g. "agentteams-controller"
 	AppServiceToken           string // as_token — never logged or exposed to agents
 	AppServiceHSToken         string // hs_token — reserved for future AS HTTP receiver
-	AppServiceSenderLocalpart string // e.g. "hiclaw-controller"
+	AppServiceSenderLocalpart string // e.g. "agentteams-controller"
 
 	// AppServiceUserNamespaceRegex optionally narrows the exclusive Matrix
 	// user namespace claimed by the AppService. When empty, the controller
 	// claims the broad "@.*:<domain>" namespace, which is ONLY safe when the
-	// homeserver is exclusively HiClaw-managed (the only supported mode —
+	// homeserver is exclusively AgentTeams-managed (the only supported mode —
 	// enforced by Helm's matrix.mode=managed and the embedded Tuwunel
 	// install). Set this to a restrictive regex (e.g. "@hiclaw-.*:<domain>")
 	// when running AppService mode against a shared/existing homeserver so
-	// the as_token cannot impersonate non-HiClaw local users.
+	// the as_token cannot impersonate non-AgentTeams local users.
 	AppServiceUserNamespaceRegex string
+
+	// AppServicePushURL is the controller HTTP endpoint registered with
+	// Tuwunel for homeserver → appservice transaction push (mention wakeup).
+	// When empty, registration omits url (passwordless-only mode).
+	AppServicePushURL string
 }
 
 // EnsureUserRequest describes a user to register or log in.
@@ -45,6 +50,13 @@ type UserCredentials struct {
 	Created     bool   // true if newly registered, false if existing user logged in
 }
 
+// StateEvent describes a Matrix state event included in createRoom.initial_state.
+type StateEvent struct {
+	Type     string                 `json:"type"`
+	StateKey string                 `json:"state_key"`
+	Content  map[string]interface{} `json:"content"`
+}
+
 // CreateRoomRequest describes a new Matrix room.
 type CreateRoomRequest struct {
 	Name         string         // human-readable room name
@@ -53,6 +65,7 @@ type CreateRoomRequest struct {
 	PowerLevels  map[string]int // userID → power level override
 	CreatorToken string         // access token of the room creator
 	E2EE         bool           // add m.room.encryption to initial_state
+	InitialState []StateEvent   // Matrix state events to seed via createRoom.initial_state
 
 	// IsDirect marks the room as a direct message (1:1) room.
 	IsDirect bool

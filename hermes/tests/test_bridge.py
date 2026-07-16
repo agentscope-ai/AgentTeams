@@ -92,7 +92,7 @@ def test_bridge_skips_auxiliary_vision_for_text_only_model(monkeypatch) -> None:
 
 
 def test_bridge_enables_debug_logging_when_matrix_debug_set(monkeypatch) -> None:
-    monkeypatch.setenv("HICLAW_MATRIX_DEBUG", "1")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DEBUG", "1")
 
     config = _bridge_and_read(
         _make_openclaw_cfg(vision=False),

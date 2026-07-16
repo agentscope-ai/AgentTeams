@@ -30,7 +30,6 @@ bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --ac
 | Container not found | `create-worker.sh` — full registration flow |
 | Worker needs reset | `create-worker.sh` — removes old, rebuilds |
 | Worker permanently removed | `lifecycle-worker.sh --action delete` — stops, removes container, cleans lifecycle state |
-| Remote worker | Admin runs install command on target machine |
 
 ## Changing Idle Timeout
 
@@ -38,14 +37,6 @@ Default: 720 minutes (12 hours). Change via:
 ```bash
 jq '.idle_timeout_minutes = 60' ~/worker-lifecycle.json > /tmp/lc.json && mv /tmp/lc.json ~/worker-lifecycle.json
 ```
-
-## Get Remote Worker Install Command
-
-```bash
-bash /opt/hiclaw/agent/skills/worker-management/scripts/get-worker-install-cmd.sh --worker <name>
-```
-
-Provide the `install_cmd` **verbatim in a code block** — do NOT redact any values.
 
 ## Heartbeat Check (automated every 15 minutes)
 

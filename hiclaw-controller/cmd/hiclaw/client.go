@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// APIClient is a thin HTTP wrapper for the hiclaw-controller REST API.
+// APIClient is a thin HTTP wrapper for the agentteams-controller REST API.
 type APIClient struct {
 	BaseURL    string
 	Token      string
@@ -32,7 +32,7 @@ func (e *APIError) Error() string {
 
 // NewAPIClient constructs a client from environment variables.
 func NewAPIClient() *APIClient {
-	baseURL := os.Getenv("HICLAW_CONTROLLER_URL")
+	baseURL := os.Getenv("AGENTTEAMS_CONTROLLER_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost:8090"
 	}
@@ -47,15 +47,15 @@ func NewAPIClient() *APIClient {
 	}
 }
 
-// discoverToken returns a bearer token using a multi-level fallback:
-//  1. HICLAW_AUTH_TOKEN env var (Docker containers, injected by Reconciler)
-//  2. HICLAW_AUTH_TOKEN_FILE env var pointing to a token file (K8s projected volume)
+// discoverToken returns a bearer token using the AgentTeams runtime contract:
+//  1. AGENTTEAMS_AUTH_TOKEN env var
+//  2. AGENTTEAMS_AUTH_TOKEN_FILE token file
 //  3. empty string (unauthenticated, for controllers with auth disabled)
 func discoverToken() string {
-	if token := os.Getenv("HICLAW_AUTH_TOKEN"); token != "" {
+	if token := os.Getenv("AGENTTEAMS_AUTH_TOKEN"); token != "" {
 		return token
 	}
-	if path := os.Getenv("HICLAW_AUTH_TOKEN_FILE"); path != "" {
+	if path := os.Getenv("AGENTTEAMS_AUTH_TOKEN_FILE"); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if t := strings.TrimSpace(string(data)); t != "" {
 				return t

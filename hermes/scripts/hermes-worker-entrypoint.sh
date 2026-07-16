@@ -3,11 +3,11 @@
 # Reads config from environment variables and launches hermes-worker.
 #
 # Environment variables (set by controller during worker creation):
-#   HICLAW_WORKER_NAME   - Worker name (required)
-#   HICLAW_FS_ENDPOINT   - MinIO endpoint (required in local mode)
-#   HICLAW_FS_ACCESS_KEY - MinIO access key (required in local mode)
-#   HICLAW_FS_SECRET_KEY - MinIO secret key (required in local mode)
-#   HICLAW_RUNTIME       - "aliyun" for cloud mode (uses RRSA/STS via hiclaw-env.sh)
+#   AGENTTEAMS_WORKER_NAME   - Worker name (required)
+#   AGENTTEAMS_FS_ENDPOINT   - MinIO endpoint (required in local mode)
+#   AGENTTEAMS_FS_ACCESS_KEY - MinIO access key (required in local mode)
+#   AGENTTEAMS_FS_SECRET_KEY - MinIO secret key (required in local mode)
+#   AGENTTEAMS_RUNTIME       - "aliyun" for cloud mode (uses RRSA/STS via hiclaw-env.sh)
 #   TZ                   - Timezone (optional)
 
 set -e
@@ -15,7 +15,7 @@ set -e
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
 
-WORKER_NAME="${HICLAW_WORKER_NAME:?HICLAW_WORKER_NAME is required}"
+WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 # Align with the openclaw worker layout: HOME == workspace == MinIO mirror root.
 # The controller injects HOME=/root/hiclaw-fs/agents/<WORKER_NAME>; we anchor
 # the install dir to its parent so workspace_dir == HOME and ${HERMES_HOME}
@@ -25,7 +25,7 @@ INSTALL_DIR="/root/hiclaw-fs/agents"
 WORKSPACE="${INSTALL_DIR}/${WORKER_NAME}"
 
 log() {
-    echo "[hiclaw-hermes-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "[agentteams-hermes-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
 # Set timezone from TZ env var
@@ -36,22 +36,22 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 # ── Credential setup ─────────────────────────────────────────────────────────
-# Cloud mode: RRSA/STS credentials via MC_HOST_hiclaw (set by ensure_mc_credentials).
-# FileSync._ensure_alias() detects MC_HOST_hiclaw and skips mc alias set.
+# Cloud mode: RRSA/STS credentials via MC_HOST_agentteams (set by ensure_mc_credentials).
+# FileSync._ensure_alias() detects MC_HOST_agentteams and skips mc alias set.
 # Local mode: explicit FS endpoint/key/secret passed via CLI args.
-if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
     log "Cloud mode: configuring OSS credentials via RRSA..."
     ensure_mc_credentials || { log "ERROR: Failed to obtain OSS credentials"; exit 1; }
     FS_ENDPOINT="https://oss-placeholder.aliyuncs.com"
     FS_ACCESS_KEY="rrsa"
     FS_SECRET_KEY="rrsa"
-    FS_BUCKET="${HICLAW_FS_BUCKET:-hiclaw-cloud-storage}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-hiclaw-cloud-storage}"
     log "  OSS bucket: ${FS_BUCKET}"
 else
-    FS_ENDPOINT="${HICLAW_FS_ENDPOINT:?HICLAW_FS_ENDPOINT is required}"
-    FS_ACCESS_KEY="${HICLAW_FS_ACCESS_KEY:?HICLAW_FS_ACCESS_KEY is required}"
-    FS_SECRET_KEY="${HICLAW_FS_SECRET_KEY:?HICLAW_FS_SECRET_KEY is required}"
-    FS_BUCKET="${HICLAW_FS_BUCKET:-hiclaw-storage}"
+    FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:?AGENTTEAMS_FS_ENDPOINT is required}"
+    FS_ACCESS_KEY="${AGENTTEAMS_FS_ACCESS_KEY:?AGENTTEAMS_FS_ACCESS_KEY is required}"
+    FS_SECRET_KEY="${AGENTTEAMS_FS_SECRET_KEY:?AGENTTEAMS_FS_SECRET_KEY is required}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-agentteams-storage}"
 fi
 log "  FS bucket: ${FS_BUCKET}"
 
@@ -66,7 +66,7 @@ ln -sfn "${WORKSPACE}/skills" "${HOME}/.agents/skills"
 # Background readiness reporter — report ready once the bridge has produced
 # the gateway's config.yaml (i.e. the worker can actually serve traffic).
 _start_readiness_reporter() {
-    [ -z "${HICLAW_CONTROLLER_URL:-}" ] && return 0
+    [ -z "${AGENTTEAMS_CONTROLLER_URL:-}" ] && return 0
 
     (
         TIMEOUT=120; ELAPSED=0
@@ -123,23 +123,23 @@ mkdir -p "${HERMES_HOME}"
 export HERMES_YOLO_MODE MATRIX_HOME_CHANNEL
 
 # Hermes does not expose a dedicated Matrix trace env knob like OpenClaw's
-# OPENCLAW_MATRIX_DEBUG. When HiClaw asks for Matrix debug logs, the bridge
+# OPENCLAW_MATRIX_DEBUG. When AgentTeams asks for Matrix debug logs, the bridge
 # upgrades Hermes' config.yaml logging.level to DEBUG before the gateway starts.
-if [ "${HICLAW_MATRIX_DEBUG:-}" = "1" ]; then
-    log "HICLAW_MATRIX_DEBUG=1 detected; Hermes bridge will set logging.level=DEBUG for Matrix/gateway tracing"
+if [ "${AGENTTEAMS_MATRIX_DEBUG:-}" = "1" ]; then
+    log "AGENTTEAMS_MATRIX_DEBUG=1 detected; Hermes bridge will set logging.level=DEBUG for Matrix/gateway tracing"
 fi
 
 # ── Hermes CMS Plugin Configuration ──────────────────────────────────────────
 # Pass observability env through to hermes-agent. Hermes uses standard OTel
 # environment variables, so no per-app bootstrap file is required.
-CMS_TRACES_ENABLED="$(echo "${HICLAW_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
 if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
-    export OTEL_EXPORTER_OTLP_ENDPOINT="${HICLAW_CMS_ENDPOINT}"
+    export OTEL_EXPORTER_OTLP_ENDPOINT="${AGENTTEAMS_CMS_ENDPOINT}"
     export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
-    export OTEL_EXPORTER_OTLP_HEADERS="x-arms-license-key=${HICLAW_CMS_LICENSE_KEY},x-arms-project=${HICLAW_CMS_PROJECT},x-cms-workspace=${HICLAW_CMS_WORKSPACE}"
-    export OTEL_SERVICE_NAME="${HICLAW_CMS_SERVICE_NAME:-hiclaw-worker-${WORKER_NAME}}"
+    export OTEL_EXPORTER_OTLP_HEADERS="x-arms-license-key=${AGENTTEAMS_CMS_LICENSE_KEY},x-arms-project=${AGENTTEAMS_CMS_PROJECT},x-cms-workspace=${AGENTTEAMS_CMS_WORKSPACE}"
+    export OTEL_SERVICE_NAME="${AGENTTEAMS_CMS_SERVICE_NAME:-agentteams-worker-${WORKER_NAME}}"
     export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="true"
-    log "OTel exporter configured (endpoint=${HICLAW_CMS_ENDPOINT})"
+    log "OTel exporter configured (endpoint=${AGENTTEAMS_CMS_ENDPOINT})"
 fi
 
 CMD_ARGS=(

@@ -1,5 +1,5 @@
 """
-Bridge: translate openclaw.json (HiClaw Worker config) into hermes-agent's
+Bridge: translate openclaw.json (AgentTeams Worker config) into hermes-agent's
 ``~/.hermes/`` layout.
 
 Hermes-agent reads its configuration from two main sources, in this order:
@@ -17,7 +17,7 @@ Bridge-owned env keys (always rewritten):
 Bridge-owned YAML blocks:
   ``model.{default,provider,base_url,context_length}``,
   ``auxiliary.vision.{provider,model,base_url,api_key}``,
-  ``logging.level`` (when ``HICLAW_MATRIX_DEBUG=1``),
+  ``logging.level`` (when ``AGENTTEAMS_MATRIX_DEBUG=1``),
   ``platforms.matrix.enabled`` / ``platforms.matrix.reply_to_mode``,
   top-level ``matrix.{require_mention,free_response_rooms,auto_thread,…}``.
 
@@ -60,7 +60,7 @@ def _port_remap(url: str, is_container: bool) -> str:
     (dev) we redirect to the published Higress port (default 18080).
     """
     if not is_container and url and ":8080" in url:
-        gateway_port = os.environ.get("HICLAW_PORT_GATEWAY", "18080")
+        gateway_port = os.environ.get("AGENTTEAMS_PORT_GATEWAY", "18080")
         return url.replace(":8080", f":{gateway_port}")
     return url
 
@@ -258,15 +258,15 @@ def _matrix_env(cfg: Dict[str, Any]) -> Dict[str, str]:
         # hermes_matrix.overlay_adapter.MatrixAdapter directly (constructor +
         # _wrap_send_message_event / _handle_media_message).
         "MATRIX_VISION_ENABLED": "true" if _resolve_vision_enabled(cfg) else "false",
-        # Phase 5b "quiet rooms": derived from HICLAW_QUIET_ROOMS, default
-        # false. Mechanism-only, env-gated — flipping HICLAW_QUIET_ROOMS on
+        # Phase 5b "quiet rooms": derived from AGENTTEAMS_QUIET_ROOMS, default
+        # false. Mechanism-only, env-gated — flipping AGENTTEAMS_QUIET_ROOMS on
         # is what makes should_suppress_outbound() actually drop tool-call /
         # thinking chatter in the overlay's send_message_event wrapper.
         "MATRIX_FILTER_TOOL_MESSAGES": (
-            "true" if _truthy_env("HICLAW_QUIET_ROOMS") else "false"
+            "true" if _truthy_env("AGENTTEAMS_QUIET_ROOMS") else "false"
         ),
         "MATRIX_FILTER_THINKING": (
-            "true" if _truthy_env("HICLAW_QUIET_ROOMS") else "false"
+            "true" if _truthy_env("AGENTTEAMS_QUIET_ROOMS") else "false"
         ),
     }
 
@@ -377,7 +377,7 @@ def _auxiliary_vision_yaml_block(cfg: Dict[str, Any]) -> Dict[str, Any]:
     Hermes routes image understanding through ``vision_analyze_tool`` which
     reads its own auxiliary vision config rather than inheriting the main
     model's runtime env. To keep worker-side image handling aligned with the
-    active HiClaw model, explicitly point auxiliary vision at the same
+    active AgentTeams model, explicitly point auxiliary vision at the same
     OpenAI-compatible endpoint and token.
     """
     if not _resolve_vision_enabled(cfg):
@@ -398,14 +398,14 @@ def _auxiliary_vision_yaml_block(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _logging_yaml_block() -> Dict[str, Any]:
-    """Raise Hermes log verbosity when HiClaw Matrix debugging is enabled.
+    """Raise Hermes log verbosity when AgentTeams Matrix debugging is enabled.
 
     Hermes' native Matrix plugin logs through the normal Python logging tree.
     Unlike OpenClaw there is no dedicated ``*_MATRIX_DEBUG`` env toggle, so we
-    bridge HiClaw's runtime-wide ``HICLAW_MATRIX_DEBUG=1`` flag to
+    bridge AgentTeams's runtime-wide ``AGENTTEAMS_MATRIX_DEBUG=1`` flag to
     ``config.yaml -> logging.level: DEBUG``.
     """
-    if os.environ.get("HICLAW_MATRIX_DEBUG") != "1":
+    if os.environ.get("AGENTTEAMS_MATRIX_DEBUG") != "1":
         return {}
     return {"level": "DEBUG"}
 
@@ -430,7 +430,7 @@ def bridge_openclaw_to_hermes(
 
       ``<hermes_home>/config.yaml``
           ``model:`` block, ``auxiliary.vision:`` bridge block, optional
-          ``logging.level: DEBUG`` (when ``HICLAW_MATRIX_DEBUG=1``), top-level
+          ``logging.level: DEBUG`` (when ``AGENTTEAMS_MATRIX_DEBUG=1``), top-level
           ``matrix:`` block, and
           ``platforms.matrix.enabled = true``. Other YAML keys (terminal,
           memory, mcp_servers, skills, …) are preserved.

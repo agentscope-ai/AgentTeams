@@ -19,7 +19,11 @@ Hard rule: do not call the `message` tool to send a message back into the curren
 
 ## Task Assignment Room
 
-Send normal task assignment notifications to the team room, not to a Worker's private room. Include the assigned Worker's full Matrix ID as a visible @mention so the Worker is addressed while the assignment context stays visible to the team.
+Send normal task assignment notifications to the team room, not to a Worker's private room, Leader DM, or Leader Room. Include the assigned Worker's full Matrix ID as a visible @mention so the Worker is addressed while the assignment context stays visible to the team.
+
+If the current room is Leader DM or Leader Room, the Team Room assignment is cross-room. Use the `message` tool with `target` set to `room:<Team Room ID>` from your team context. Do not directly reply in the current room for Worker task assignment just because the Worker Matrix ID appears in the message text.
+
+An assignment intent sentence is not an assignment. Do not send same-room text such as "I need to delegate this", "I will assign this to the dev worker", "now delegate the first ready node", or "the dev worker should start" as a substitute for the Team Room assignment. The Worker is not notified until the `message` tool sends a Team Room message that visibly @mentions the Worker's full Matrix ID and gives a concrete task to start.
 
 Use a Worker private room only for exceptional follow-up that should not be team-visible, such as sensitive clarification or direct recovery/debugging.
 
@@ -43,6 +47,8 @@ Only use the `message` tool for a requester report when the target room is not t
 After task handling changes Project state, notifying the requester is mandatory. If the requester is Team Admin, this means a Leader DM report to the DM admin. Team Room coordination, Worker assignment messages, and downstream task notices do not count as the requester report.
 
 Do not copy team-room coordination logs into requester DM. Summarize the state.
+
+For project-shaped Team Admin requests received in Leader DM, do not send DAG plans, analysis, "let me..." progress notes, tool preambles, or other interim project narration back to Leader DM before the first Team Room assignment has been posted. While reading skills, checking organization, planning, creating the Project, or delegating the first task, your same-room Leader DM reply must be exactly `NO_REPLY`. The first visible non-`NO_REPLY` message for that request must be either the Team Room assignment sent with `message target=room:<Team Room ID>`, or a blocker/question to the Team Admin when assignment cannot proceed. After the Team Room assignment, send one concise requester update if needed.
 
 Use `project-management` to determine project report content and the DAG or Loop Project Status Report shape. Use this skill to decide where the report should be delivered and whether to reply directly or use the `message` tool.
 
@@ -81,12 +87,14 @@ Use the `message` tool only when the target room is not the current room, or whe
 
 Resolve the recipient Matrix ID and target room from `hiclaw` CLI immediately before sending.
 
+For Team work assigned from Leader DM or Leader Room, this cross-room `message` call is mandatory. Do it before any requester progress update, polling, or result wait.
+
 ```json
 {
   "action": "send",
   "channel": "matrix",
-  "target": "room:!roomid:matrix-local.hiclaw.io:18080",
-  "message": "@alice:matrix-local.hiclaw.io:18080 New task [todo-api-20260429-130052-01]: Please read shared/tasks/todo-api-20260429-130052-01/spec.md and follow your Worker task participation skills. Publish shared/tasks/todo-api-20260429-130052-01/result.md when complete, then @mention me with the outcome."
+  "target": "room:!roomid:matrix-local.agentteams.io:18080",
+  "message": "@alice:matrix-local.agentteams.io:18080 New task [todo-api-20260429-130052-01]: Please read shared/tasks/todo-api-20260429-130052-01/spec.md and follow your Worker task participation skills. Publish shared/tasks/todo-api-20260429-130052-01/result.md when complete, then @mention me with the outcome."
 }
 ```
 

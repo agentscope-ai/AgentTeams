@@ -20,7 +20,7 @@ set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 
 # Detect runtime
-MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
 
 _get_max_tokens_param() {
     local model="$1"
@@ -40,8 +40,8 @@ if [ -z "${MODEL_NAME}" ]; then
     exit 1
 fi
 shift
-# Strip provider prefix if caller passed "hiclaw-gateway/<model>" by mistake
-MODEL_NAME="${MODEL_NAME#hiclaw-gateway/}"
+# Strip provider prefix if caller passed "agentteams-gateway/<model>" by mistake
+MODEL_NAME="${MODEL_NAME#agentteams-gateway/}"
 
 CTX_OVERRIDE=""
 REASONING="true"
@@ -129,11 +129,11 @@ esac
 log "Updating Manager model: ${MODEL_NAME} (ctx=${CTX}, max=${MAX}, reasoning=${REASONING}, input=${INPUT})"
 
 # ── Pre-flight: verify the model is reachable via AI Gateway ──────────────────
-GATEWAY_URL="${HICLAW_AI_GATEWAY_URL}/v1/chat/completions"
-GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-}"
+GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL}/v1/chat/completions"
+GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
 if [ -z "${GATEWAY_KEY}" ] && [ -f "/data/hiclaw-secrets.env" ]; then
     source /data/hiclaw-secrets.env
-    GATEWAY_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-}"
+    GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
 fi
 
 log "Testing model reachability: ${GATEWAY_URL} (model=${MODEL_NAME})..."
@@ -155,7 +155,7 @@ if [ "${HTTP_CODE}" != "200" ]; then
     echo "The model '${MODEL_NAME}' is not reachable via the AI Gateway."
     echo "This most likely means the current default AI Provider does not support this model."
     echo ""
-    if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
+    if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
         echo "To fix this, the human admin needs to check the Alibaba Cloud AI Gateway console"
         echo "to confirm the model route is configured for this model."
     else
@@ -179,10 +179,10 @@ TMP=$(mktemp)
 
 if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
     # ── CoPaw: update providers.json (model list) + config.json (context window) ──
-    # providers.json: .custom_providers["hiclaw-gateway"].models + .active_llm.model
+    # providers.json: .custom_providers["agentteams-gateway"].models + .active_llm.model
     # config.json: .agents.running.max_input_length
     jq --arg model "${MODEL_NAME}" \
-       '.custom_providers["hiclaw-gateway"].models = [{"id": $model, "name": $model}]
+       '.custom_providers["agentteams-gateway"].models = [{"id": $model, "name": $model}]
         | .active_llm.model = $model' \
        "${PROVIDERS_FILE}" > "${TMP}" && mv "${TMP}" "${PROVIDERS_FILE}"
     cp "${PROVIDERS_FILE}" "${HOME}/.copaw/providers.json"
@@ -197,15 +197,15 @@ if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
 else
     # ── OpenClaw: update openclaw.json ──
     MODEL_EXISTS=$(jq --arg model "${MODEL_NAME}" \
-        '[.models.providers["hiclaw-gateway"].models[] | select(.id == $model)] | length' \
+        '[.models.providers["agentteams-gateway"].models[] | select(.id == $model)] | length' \
         "${CONFIG_FILE}" 2>/dev/null || echo "0")
 
     if [ "${MODEL_EXISTS}" -gt 0 ]; then
         jq --arg model "${MODEL_NAME}" \
            --argjson reasoning "${REASONING}" \
-           '(.models.providers["hiclaw-gateway"].models[] | select(.id == $model)).reasoning = $reasoning
-            | .agents.defaults.model.primary = ("hiclaw-gateway/" + $model)
-            | .agents.defaults.models["hiclaw-gateway/" + $model] = { "alias": $model }' \
+           '(.models.providers["agentteams-gateway"].models[] | select(.id == $model)).reasoning = $reasoning
+            | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
+            | .agents.defaults.models["agentteams-gateway/" + $model] = { "alias": $model }' \
            "${CONFIG_FILE}" > "${TMP}" && mv "${TMP}" "${CONFIG_FILE}"
         log "Done. Model is now: ${MODEL_NAME}"
     else
@@ -214,7 +214,7 @@ else
            --argjson max "${MAX}" \
            --argjson reasoning "${REASONING}" \
            --argjson input "${INPUT}" \
-           '.models.providers["hiclaw-gateway"].models += [{
+           '.models.providers["agentteams-gateway"].models += [{
                "id": $model,
                "name": $model,
                "reasoning": $reasoning,
@@ -222,8 +222,8 @@ else
                "maxTokens": $max,
                "input": $input
              }]
-            | .agents.defaults.model.primary = ("hiclaw-gateway/" + $model)
-            | .agents.defaults.models["hiclaw-gateway/" + $model] = { "alias": $model }' \
+            | .agents.defaults.model.primary = ("agentteams-gateway/" + $model)
+            | .agents.defaults.models["agentteams-gateway/" + $model] = { "alias": $model }' \
            "${CONFIG_FILE}" > "${TMP}" && mv "${TMP}" "${CONFIG_FILE}"
         log "Done. Model '${MODEL_NAME}' has been added to the models list."
     fi

@@ -15,10 +15,10 @@ Add `expose` to a Worker's spec to publish container ports. The controller autom
 
 **Auto-generated domain pattern:**
 ```
-worker-{name}-{port}-local.hiclaw.io
+worker-{name}-{port}-local.agentteams.io
 ```
 
-Example: worker `alice` exposing port `8080` → `worker-alice-8080-local.hiclaw.io`
+Example: worker `alice` exposing port `8080` → `worker-alice-8080-local.agentteams.io`
 
 ## Usage
 
@@ -42,7 +42,7 @@ hiclaw apply worker --name alice --model qwen3.5-plus
 ### Via YAML
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -63,7 +63,7 @@ hiclaw apply -f worker.yaml
 Team workers also support `expose`:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: dev-team
@@ -87,5 +87,5 @@ spec:
 - The worker container must be running and the service must be listening on the specified port before it can be accessed
 - Domains are auto-generated; custom domains are not yet supported
 - No authentication is configured on exposed routes (public access)
-- Docker DNS resolves the worker container name (`hiclaw-worker-{name}`) automatically within `hiclaw-net`
+- Docker DNS resolves the worker container name (`agentteams-worker-{name}`) automatically within `agentteams-net`
 - To stop exposing a port, remove it from the `expose` list and re-apply

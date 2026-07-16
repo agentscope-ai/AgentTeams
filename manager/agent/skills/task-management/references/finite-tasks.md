@@ -36,8 +36,8 @@ Rules:
 
 3. Push to MinIO **immediately** — Worker cannot file-sync until files are in MinIO:
    ```bash
-   mc cp /root/hiclaw-fs/shared/tasks/{task-id}/meta.json ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/meta.json
-   mc cp /root/hiclaw-fs/shared/tasks/{task-id}/spec.md ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/spec.md
+   mc cp /root/hiclaw-fs/shared/tasks/{task-id}/meta.json ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/meta.json
+   mc cp /root/hiclaw-fs/shared/tasks/{task-id}/spec.md ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/spec.md
    ```
    **Verify the push succeeded** (non-zero exit = retry). Do NOT proceed to step 4 until files are confirmed in MinIO.
 
@@ -70,7 +70,7 @@ Rules:
      --agent-id default \
      --channel matrix \
      --target-session "<ROOM_ID>" \
-     --target-user "@{worker}:${HICLAW_MATRIX_DOMAIN}" \
+     --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
      --text '@{worker}:{domain} New task [{task-id}]: {title}. Use your file-sync skill to pull the spec: shared/tasks/{task-id}/spec.md. @mention me when complete.'
    ```
    (Quote `--text` so the shell preserves spaces and @mentions.)
@@ -88,7 +88,7 @@ Rules:
 
 1. Pull task directory from MinIO (Worker has pushed results):
    ```bash
-   mc mirror ${HICLAW_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
+   mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
    ```
 2. Update `meta.json`: status=completed, fill completed_at. Push back to MinIO.
 3. Remove from state.json:

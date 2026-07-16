@@ -15,3 +15,9 @@ spec:
       port: {{ .Values.controller.service.port }}
       targetPort: http
       protocol: TCP
+    {{- if .Values.controller.metrics.enabled }}
+    - name: metrics
+      port: {{ .Values.controller.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}

@@ -16,7 +16,7 @@ data:
           "base_url": {{ $matrixUrl | quote }}
         }
       },
-      "brand": "HiClaw",
+      "brand": "AgentTeams",
       "disable_guests": true,
       "disable_custom_urls": false
     }

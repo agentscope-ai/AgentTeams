@@ -1,0 +1,577 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: teams.agentteams.io
+spec:
+  group: agentteams.io
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                description:
+                  type: string
+                teamName:
+                  type: string
+                  description: Runtime/storage team identity. Defaults to metadata.name.
+                workerMembers:
+                  type: array
+                  description: >
+                    References to existing Worker CRs as team members. When
+                    non-empty, the TeamReconciler uses the new decoupled path
+                    (membership validation, Matrix invite, MinIO inject, status
+                    aggregation) and ignores the deprecated leader/workers fields.
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: "metadata.name of the referenced Worker CR."
+                      role:
+                        type: string
+                        enum: [team_leader, worker]
+                        description: "Role within the team. Empty defaults to worker. Exactly one member must have role=team_leader."
+                peerMentions:
+                  type: boolean
+                  description: "Whether team workers can @mention each other in group rooms (default: true)"
+                modelProvider:
+                  type: string
+                  description: "APIG Model API name for the team-level LLM provider override. Empty means use the default provider."
+                channelPolicy:
+                  type: object
+                  description: "Team-wide communication policy overrides (applied to all members)"
+                  properties:
+                    groupAllowExtra:
+                      type: array
+                      items:
+                        type: string
+                    groupDenyExtra:
+                      type: array
+                      items:
+                        type: string
+                    dmAllowExtra:
+                      type: array
+                      items:
+                        type: string
+                    dmDenyExtra:
+                      type: array
+                      items:
+                        type: string
+                heartbeatEvery:
+                  type: string
+                  description: >
+                    Configures the Team Leader agent's periodic heartbeat check interval.
+                    The TeamReconciler writes this into the leader Worker's openclaw.json
+                    and coordination context. Example: "30m". Empty disables leader heartbeat.
+                admin:
+                  type: object
+                  description: "Team-specific admin (human). Has admin authority within this team."
+                  properties:
+                    name:
+                      type: string
+                      description: "Human name (must exist in humans-registry)"
+                    matrixUserId:
+                      type: string
+                      description: "Matrix user ID (e.g. @john:domain)"
+                humanMembers:
+                  type: array
+                  description: "Additional human members of this Team. In this version, role=coordinator joins the Team Room and can assign work there like the Team admin."
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: "Human name / Matrix localpart"
+                      matrixUserId:
+                        type: string
+                        description: "Matrix user ID (e.g. @john:domain)"
+                      role:
+                        type: string
+                        enum: [coordinator]
+                        description: "Human member role. coordinator can @mention the leader/workers in the Team Room; Leader DM remains limited to the Team admin and leader."
+                leader:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                    workerName:
+                      type: string
+                      description: Runtime identity for leader (Matrix localpart, OSS path key). Defaults to leader.name.
+                    model:
+                      type: string
+                    modelProvider:
+                      type: string
+                      description: Name of the AI gateway Model API to use as the LLM provider.
+                    identity:
+                      type: string
+                    soul:
+                      type: string
+                    agents:
+                      type: string
+                    package:
+                      type: string
+                    remoteSkills:
+                      type: array
+                      description: Remote skills fetched from source registries.
+                      items:
+                        type: object
+                        required: [source, skills]
+                        properties:
+                          source:
+                            type: string
+                            pattern: '^nacos://[^/]+/[^/?#]+$'
+                            description: Remote source in nacos://host[:port]/namespace-id format.
+                          authType:
+                            type: string
+                            enum: [sts-hiclaw, nacos, none]
+                            description: "Authentication mode for remote source access. Empty auto-detects: embedded username/password selects nacos; otherwise none. nacos: username/password embedded in source URL; sts-hiclaw: STS credential provider; none: unauthenticated."
+                          skills:
+                            type: array
+                            minItems: 1
+                            description: Skills to fetch from the remote source.
+                            items:
+                              type: object
+                              required: [name]
+                              properties:
+                                name:
+                                  type: string
+                                version:
+                                  type: string
+                                label:
+                                  type: string
+                    mcpServers:
+                      type: array
+                      description: MCP servers callable via mcporter. url is the full endpoint; transport defaults to http.
+                      items:
+                        type: object
+                        required: [name, url]
+                        properties:
+                          name:
+                            type: string
+                            description: Key in mcporter-servers.json; used by tool calls as <name>.<tool>.
+                          url:
+                            type: string
+                            description: Full MCP endpoint URL (gateway-side path included).
+                          transport:
+                            type: string
+                            enum: [http, sse]
+                    heartbeat:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                        every:
+                          type: string
+                    workerIdleTimeout:
+                      type: string
+                    state:
+                      type: string
+                      enum: [Running, Sleeping, Stopped]
+                      description: "Desired lifecycle state for the team leader (default: Running)"
+                    resources:
+                      type: object
+                      description: >
+                        CPU and memory requests/limits for the Team Leader Pod.
+                        Empty fields fall back to controller/backend defaults.
+                      properties:
+                        requests:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              description: Kubernetes CPU quantity, e.g. 300m
+                            memory:
+                              type: string
+                              description: Kubernetes memory quantity, e.g. 768Mi
+                        limits:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              description: Kubernetes CPU quantity, e.g. "2"
+                            memory:
+                              type: string
+                              description: Kubernetes memory quantity, e.g. 3Gi
+                    serviceEnabled:
+                      type: boolean
+                      description: "Whether to create a ClusterIP Service alongside the leader pod."
+                    labels:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: >
+                        User-defined Pod labels stamped onto the team leader Pod.
+                        Merged on top of Team.metadata.labels and below controller
+                        system labels. Entries whose keys collide with system labels
+                        are silently overridden.
+                    env:
+                      type: object
+                      description: |
+                        User-defined environment variables injected into the leader container.
+                        Keys that collide with variables already set by the controller or backend
+                        (AGENTTEAMS_*, OPENCLAW_*, HOME, and similar internal keys) are silently
+                        ignored with a warning log — the system value always wins.
+                      additionalProperties:
+                        type: string
+                    channelPolicy:
+                      type: object
+                      properties:
+                        groupAllowExtra:
+                          type: array
+                          items:
+                            type: string
+                        groupDenyExtra:
+                          type: array
+                          items:
+                            type: string
+                        dmAllowExtra:
+                          type: array
+                          items:
+                            type: string
+                        dmDenyExtra:
+                          type: array
+                          items:
+                            type: string
+                    accessEntries:
+                      type: array
+                      description: >
+                        Cloud credential scope declarations for the team leader.
+                        Only honored when the controller runs with a credential-
+                        provider sidecar. Ignored in local higress+minio
+                        deployments. When empty the controller applies team-
+                        member defaults (agents/<name>/* + shared/* +
+                        teams/<team>/* on the configured bucket). Leader and
+                        team workers share the same default scope.
+                      items:
+                        type: object
+                        required: [service]
+                        properties:
+                          service:
+                            type: string
+                            enum: [object-storage, ai-gateway, ai-registry]
+                            description: Logical cloud service identifier
+                          permissions:
+                            type: array
+                            items:
+                              type: string
+                              enum: [read, write, list, delete]
+                          scope:
+                            type: object
+                            description: >
+                              Schema-less scope blob. For object-storage use keys
+                              bucketRef|bucket and prefixes (list of strings). For
+                              ai-gateway use keys gatewayRef|gatewayId and
+                              resources (list of strings). Template vars
+                              ${self.name} / ${self.kind} / ${self.namespace} /
+                              ${self.team} are expanded by the controller before
+                              the request reaches the provider.
+                            x-kubernetes-preserve-unknown-fields: true
+                workers:
+                  type: array
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                      workerName:
+                        type: string
+                        description: Runtime identity for worker (Matrix localpart, OSS path key). Defaults to worker.name.
+                      model:
+                        type: string
+                      modelProvider:
+                        type: string
+                        description: Name of the AI gateway Model API to use as the LLM provider.
+                      runtime:
+                        type: string
+                        enum: [openclaw, copaw, hermes, openhuman]
+                      image:
+                        type: string
+                      identity:
+                        type: string
+                      soul:
+                        type: string
+                      agents:
+                        type: string
+                      skills:
+                        type: array
+                        items:
+                          type: string
+                          not:
+                            pattern: '^nacos://'
+                        description: AgentTeams built-in skills to enable (remote registry skills must use remoteSkills)
+                      remoteSkills:
+                        type: array
+                        description: Remote skills fetched from source registries.
+                        items:
+                          type: object
+                          required: [source, skills]
+                          properties:
+                            source:
+                              type: string
+                              pattern: '^nacos://[^/]+/[^/?#]+$'
+                              description: Remote source in nacos://host[:port]/namespace-id format.
+                            authType:
+                              type: string
+                              enum: [sts-hiclaw, nacos, none]
+                              description: "Authentication mode for remote source access. Empty auto-detects: embedded username/password selects nacos; otherwise none. nacos: username/password embedded in source URL; sts-hiclaw: STS credential provider; none: unauthenticated."
+                            skills:
+                              type: array
+                              minItems: 1
+                              description: Skills to fetch from the remote source.
+                              items:
+                                type: object
+                                required: [name]
+                                properties:
+                                  name:
+                                    type: string
+                                  version:
+                                    type: string
+                                  label:
+                                    type: string
+                      mcpServers:
+                        type: array
+                        description: MCP servers callable via mcporter. url is the full endpoint; transport defaults to http.
+                        items:
+                          type: object
+                          required: [name, url]
+                          properties:
+                            name:
+                              type: string
+                              description: Key in mcporter-servers.json; used by tool calls as <name>.<tool>.
+                            url:
+                              type: string
+                              description: Full MCP endpoint URL (gateway-side path included).
+                            transport:
+                              type: string
+                              enum: [http, sse]
+                              default: http
+                              description: Transport protocol (http=Streamable HTTP, sse=Server-Sent Events).
+                      package:
+                        type: string
+                      expose:
+                        type: array
+                        description: Ports to expose via Higress gateway
+                        items:
+                          type: object
+                          required: [port]
+                          properties:
+                            port:
+                              type: integer
+                            protocol:
+                              type: string
+                              enum: [http, grpc]
+                              default: http
+                      channelPolicy:
+                        type: object
+                        properties:
+                          groupAllowExtra:
+                            type: array
+                            items:
+                              type: string
+                          groupDenyExtra:
+                            type: array
+                            items:
+                              type: string
+                          dmAllowExtra:
+                            type: array
+                            items:
+                              type: string
+                          dmDenyExtra:
+                            type: array
+                            items:
+                              type: string
+                      state:
+                        type: string
+                        enum: [Running, Sleeping, Stopped]
+                        description: "Desired lifecycle state for this team worker (default: Running)"
+                      resources:
+                        type: object
+                        description: >
+                          CPU and memory requests/limits for this Team Worker
+                          Pod. Empty fields fall back to controller/backend
+                          defaults.
+                        properties:
+                          requests:
+                            type: object
+                            properties:
+                              cpu:
+                                type: string
+                                description: Kubernetes CPU quantity, e.g. 200m
+                              memory:
+                                type: string
+                                description: Kubernetes memory quantity, e.g. 512Mi
+                          limits:
+                            type: object
+                            properties:
+                              cpu:
+                                type: string
+                                description: Kubernetes CPU quantity, e.g. "1"
+                              memory:
+                                type: string
+                                description: Kubernetes memory quantity, e.g. 2Gi
+                      serviceEnabled:
+                        type: boolean
+                        description: "Whether to create a ClusterIP Service alongside this team worker pod."
+                      accessEntries:
+                        type: array
+                        description: >
+                          Cloud credential scope declarations for this team
+                          worker. Only honored when the controller runs with a
+                          credential-provider sidecar. Ignored in local higress+
+                          minio deployments. When empty the controller applies
+                          team-member defaults (agents/<name>/* + shared/* +
+                          teams/<team>/* on the configured bucket).
+                        items:
+                          type: object
+                          required: [service]
+                          properties:
+                            service:
+                              type: string
+                              enum: [object-storage, ai-gateway, ai-registry]
+                              description: Logical cloud service identifier
+                            permissions:
+                              type: array
+                              items:
+                                type: string
+                                enum: [read, write, list, delete]
+                            scope:
+                              type: object
+                              description: >
+                                Schema-less scope blob. For object-storage use
+                                keys bucketRef|bucket and prefixes (list of
+                                strings). For ai-gateway use keys gatewayRef|
+                                gatewayId and resources (list of strings).
+                                Template vars ${self.name} / ${self.kind} /
+                                ${self.namespace} / ${self.team} are expanded by
+                                the controller before the request reaches the
+                                provider.
+                              x-kubernetes-preserve-unknown-fields: true
+                      labels:
+                        type: object
+                        additionalProperties:
+                          type: string
+                        description: >
+                          User-defined Pod labels stamped onto this team worker Pod.
+                          Merged on top of Team.metadata.labels and below controller
+                          system labels. Entries whose keys collide with system labels
+                          are silently overridden.
+                      env:
+                        type: object
+                        description: |
+                          User-defined environment variables injected into this team worker's
+                          container. Keys that collide with variables already set by the
+                          controller or backend (AGENTTEAMS_*, OPENCLAW_*, HOME, and similar
+                          internal keys) are silently ignored with a warning log — the system
+                          value always wins.
+                        additionalProperties:
+                          type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Active, Degraded, Failed]
+                teamRoomID:
+                  type: string
+                leaderDMRoomID:
+                  type: string
+                leaderReady:
+                  type: boolean
+                readyWorkers:
+                  type: integer
+                totalWorkers:
+                  type: integer
+                message:
+                  type: string
+                members:
+                  type: array
+                  description: "Per-member state (leader + workers). Consolidates all per-member fields (observed, spec hash, roomID, matrixUserID, exposedPorts) into a single sorted-by-name slice."
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: "Member's canonical name (matches spec.leader.name or spec.workers[i].name)."
+                      runtimeName:
+                        type: string
+                        description: "Member runtime identity key (Matrix localpart, OSS path key). Empty falls back to name."
+                      role:
+                        type: string
+                        enum: [team_leader, worker]
+                        description: "Role of this member."
+                      roomID:
+                        type: string
+                        description: "Member's personal communication room with the Manager."
+                      matrixUserID:
+                        type: string
+                        description: "Member's Matrix MXID."
+                      specHash:
+                        type: string
+                        description: "fnv64a hash of the last fully-reconciled WorkerSpec for this member. Empty means never fully reconciled."
+                      observed:
+                        type: boolean
+                        description: "True once ReconcileMemberInfra has succeeded at least once; stays true across post-infra failures to avoid Matrix access token rotation."
+                      ready:
+                        type: boolean
+                        description: "Mirrors backend.Status Running/Ready. Aggregates into leaderReady and readyWorkers."
+                      phase:
+                        type: string
+                        enum: [Pending, Starting, Running, Updating, Stopping, Sleeping, Stopped, Failed]
+                      containerState:
+                        type: string
+                      message:
+                        type: string
+                      lastActiveAt:
+                        type: string
+                        format: date-time
+                        description: "Latest runtime-reported business activity time for this member."
+                      lastHeartbeat:
+                        type: string
+                        format: date-time
+                        description: "Latest heartbeat timestamp for this member."
+                      exposedPorts:
+                        type: array
+                        description: "Ports currently exposed via Higress for this member (workers only)."
+                        items:
+                          type: object
+                          required: [port, domain]
+                          properties:
+                            port:
+                              type: integer
+                            domain:
+                              type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Leader
+          type: string
+          jsonPath: .spec.leader.name
+        - name: Workers
+          type: integer
+          jsonPath: .status.totalWorkers
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyWorkers
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: teams
+    singular: team
+    kind: Team
+    shortNames: [tm]

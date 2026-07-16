@@ -6,9 +6,9 @@
 # Step 5). Shims curl/jq on PATH to record every Higress Console API call
 # setup-higress.sh makes, then asserts:
 #
-#   1. HICLAW_EXTRA_LLM_PROVIDERS unset -> byte-identical call sequence to the
+#   1. AGENTTEAMS_EXTRA_LLM_PROVIDERS unset -> byte-identical call sequence to the
 #      pre-existing (no-env) baseline (proves the new loop is a true no-op).
-#   2. HICLAW_EXTRA_LLM_PROVIDERS set -> each provider gets its own DNS
+#   2. AGENTTEAMS_EXTRA_LLM_PROVIDERS set -> each provider gets its own DNS
 #      service-source, its own `openai`-type provider, and its own AI route
 #      named `hiclaw-<provider>-route` with a model-prefix match.
 #   3. The new loop never reads or writes `default-ai-route` (grep-assert +
@@ -161,7 +161,7 @@ run_setup_higress() {
         export HOME="${home}"
         export HIGRESS_COOKIE_FILE="${home}/cookie"
         touch "${HIGRESS_COOKIE_FILE}"
-        export HICLAW_MANAGER_GATEWAY_KEY="test-gw-key"
+        export AGENTTEAMS_MANAGER_GATEWAY_KEY="test-gw-key"
         for assignment in "$@"; do
             export "${assignment?}"
         done
@@ -171,7 +171,7 @@ run_setup_higress() {
 
 new_home() { mktemp -d "${TMPDIR_ROOT}/home-XXXXXX"; }
 
-echo "=== Test 1: HICLAW_EXTRA_LLM_PROVIDERS unset -> no extra-provider calls ==="
+echo "=== Test 1: AGENTTEAMS_EXTRA_LLM_PROVIDERS unset -> no extra-provider calls ==="
 home1=$(new_home)
 touch "${home1}/.higress-setup-done"  # pre-mark first-boot done for a focused diff
 run_setup_higress "${home1}"
@@ -188,13 +188,13 @@ rerun_log=$(cat "${CALL_LOG}")
 # Normalize away nothing (no timestamps in the curl call log) and compare.
 assert_eq "env-unset call log is byte-identical run-to-run" "${baseline_log}" "${rerun_log}"
 
-echo "=== Test 2: HICLAW_EXTRA_LLM_PROVIDERS set -> per-provider registration ==="
+echo "=== Test 2: AGENTTEAMS_EXTRA_LLM_PROVIDERS set -> per-provider registration ==="
 home2=$(new_home)
 touch "${home2}/.higress-setup-done"
 run_setup_higress "${home2}" \
-    'HICLAW_EXTRA_LLM_PROVIDERS=ollama=https://ollama.com/v1;mimo=https://platform.xiaomimimo.com/v1' \
-    'HICLAW_OLLAMA_API_KEY=ollama-test-key' \
-    'HICLAW_MIMO_API_KEY=mimo-test-key'
+    'AGENTTEAMS_EXTRA_LLM_PROVIDERS=ollama=https://ollama.com/v1;mimo=https://platform.xiaomimimo.com/v1' \
+    'AGENTTEAMS_OLLAMA_API_KEY=ollama-test-key' \
+    'AGENTTEAMS_MIMO_API_KEY=mimo-test-key'
 extra_log=$(cat "${CALL_LOG}")
 
 assert_contains "ollama DNS service-source registered" 'path=http://127.0.0.1:8001/v1/service-sources' "${extra_log}"
@@ -212,21 +212,21 @@ echo "=== Test 3: malformed entry is skipped, not fatal ==="
 home3=$(new_home)
 touch "${home3}/.higress-setup-done"
 run_setup_higress "${home3}" \
-    'HICLAW_EXTRA_LLM_PROVIDERS=badentry-no-equals;ollama=https://ollama.com/v1' \
-    'HICLAW_OLLAMA_API_KEY=ollama-test-key'
+    'AGENTTEAMS_EXTRA_LLM_PROVIDERS=badentry-no-equals;ollama=https://ollama.com/v1' \
+    'AGENTTEAMS_OLLAMA_API_KEY=ollama-test-key'
 malformed_stdout=$(cat "${home3}/stdout.log")
 malformed_log=$(cat "${CALL_LOG}")
-assert_contains "malformed entry logs a warning" "malformed HICLAW_EXTRA_LLM_PROVIDERS entry" "${malformed_stdout}"
+assert_contains "malformed entry logs a warning" "malformed AGENTTEAMS_EXTRA_LLM_PROVIDERS entry" "${malformed_stdout}"
 assert_contains "well-formed entry after a malformed one still registers" '"name":"ollama"' "${malformed_log}"
 
 echo "=== Test 4: missing per-provider API key is skipped, not fatal ==="
 home4=$(new_home)
 touch "${home4}/.higress-setup-done"
 run_setup_higress "${home4}" \
-    'HICLAW_EXTRA_LLM_PROVIDERS=mimo=https://platform.xiaomimimo.com/v1'
+    'AGENTTEAMS_EXTRA_LLM_PROVIDERS=mimo=https://platform.xiaomimimo.com/v1'
 missing_key_stdout=$(cat "${home4}/stdout.log")
 missing_key_log=$(cat "${CALL_LOG}")
-assert_contains "missing API key logs a warning naming the expected env var" "HICLAW_MIMO_API_KEY not set" "${missing_key_stdout}"
+assert_contains "missing API key logs a warning naming the expected env var" "AGENTTEAMS_MIMO_API_KEY not set" "${missing_key_stdout}"
 assert_not_contains "no provider call fires without the API key" '"name":"mimo"' "${missing_key_log}"
 
 echo "=== Test 5: grep-assert — default-ai-route is not referenced in CODE by the new loop ==="
@@ -238,7 +238,7 @@ block=$(awk '/^# 5c\. Extra LLM providers/,/^# 6\. GitHub MCP Server/' "${TARGET
 code_only=$(printf '%s\n' "${block}" | grep -v '^[[:space:]]*#')
 assert_not_contains "extra-provider CODE lines never reference default-ai-route" "default-ai-route" "${code_only}"
 assert_contains "extra-provider source block documents why default-ai-route is excluded" "default-ai-route" "${block}"
-assert_contains "extra-provider source block is gated on HICLAW_EXTRA_LLM_PROVIDERS" 'HICLAW_EXTRA_LLM_PROVIDERS' "${block}"
+assert_contains "extra-provider source block is gated on AGENTTEAMS_EXTRA_LLM_PROVIDERS" 'AGENTTEAMS_EXTRA_LLM_PROVIDERS' "${block}"
 
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed ==="

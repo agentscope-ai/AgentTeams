@@ -1,8 +1,8 @@
 #!/bin/bash
-# hiclaw-verify.sh - Post-install shallow verification for HiClaw
+# hiclaw-verify.sh - Post-install shallow verification for AgentTeams
 #
 # Usage:
-#   bash install/hiclaw-verify.sh [container_name]   # default: hiclaw-manager
+#   bash install/hiclaw-verify.sh [container_name]   # default: agentteams-manager
 #
 # Runs 6 read-only reachability checks and prints PASS/FAIL per check.
 # Exit code: 0 if all pass, 1 if any fail.
@@ -19,7 +19,7 @@
 #        podman  → EXEC_CMD="podman exec ${CONTAINER}"
 #        kubectl → EXEC_CMD="kubectl exec <pod-name> --namespace <ns> --"
 #      Pod name is dynamic; discover it with:
-#        kubectl get pod -l app=hiclaw-manager -o jsonpath='{.items[0].metadata.name}'
+#        kubectl get pod -l app=agentteams-manager -o jsonpath='{.items[0].metadata.name}'
 #
 #   2. Internal service checks (checks #2, #3, #6)
 #      These use `docker exec ... curl 127.0.0.1:PORT` which works because all
@@ -32,14 +32,14 @@
 #      Currently reads PORT_GATEWAY / PORT_CONSOLE from container env (host port
 #      mappings). In K8s these become NodePort / Ingress / LoadBalancer addresses.
 #      Replace printenv-based detection with:
-#        kubectl get svc hiclaw-gateway -o jsonpath='{.spec.ports[0].nodePort}'
+#        kubectl get svc agentteams-gateway -o jsonpath='{.spec.ports[0].nodePort}'
 #      or accept GATEWAY_URL / CONSOLE_URL as environment variables for flexibility.
 #
 # ───────────────────────────────────────────────────────────────────────────────
 
 # No set -e: each check is independent; failures do not abort subsequent checks.
 
-CONTAINER="${1:-hiclaw-manager}"
+CONTAINER="${1:-agentteams-manager}"
 
 # ---------- Docker/Podman detection ----------
 # TODO(k8s): extend to three-way detection (docker / podman / kubectl)
@@ -57,8 +57,8 @@ fi
 #   discovery, or accept GATEWAY_URL / CONSOLE_URL env vars directly.
 
 container_env=$("${DOCKER_CMD}" exec "${CONTAINER}" printenv 2>/dev/null) || container_env=""
-PORT_GATEWAY=$(echo "$container_env" | grep ^HICLAW_PORT_GATEWAY= | cut -d= -f2-)
-PORT_CONSOLE=$(echo "$container_env" | grep ^HICLAW_PORT_CONSOLE= | cut -d= -f2-)
+PORT_GATEWAY=$(echo "$container_env" | grep ^AGENTTEAMS_PORT_GATEWAY= | cut -d= -f2-)
+PORT_CONSOLE=$(echo "$container_env" | grep ^AGENTTEAMS_PORT_CONSOLE= | cut -d= -f2-)
 PORT_GATEWAY="${PORT_GATEWAY:-18080}"
 PORT_CONSOLE="${PORT_CONSOLE:-18001}"
 
@@ -80,10 +80,10 @@ check_fail() {
 # ---------- Checks ----------
 
 echo ""
-echo "==> HiClaw Post-Install Verification"
+echo "==> AgentTeams Post-Install Verification"
 
 # 1. Manager container running
-# TODO(k8s): replace with `kubectl get pod -l app=hiclaw-manager` and check
+# TODO(k8s): replace with `kubectl get pod -l app=agentteams-manager` and check
 #   that at least one pod is in Running phase (not just Pending/CrashLoopBackOff).
 if "${DOCKER_CMD}" ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER}$"; then
     check_pass "Manager container running"
@@ -116,7 +116,7 @@ fi
 
 # 4. Higress Gateway reachable (external host port, any non-000 response is ok)
 # TODO(k8s): replace 127.0.0.1:PORT with the Ingress/NodePort/LoadBalancer address.
-#   Suggested: accept HICLAW_VERIFY_GATEWAY_URL env var as override, fall back to
+#   Suggested: accept AGENTTEAMS_VERIFY_GATEWAY_URL env var as override, fall back to
 #   auto-detected NodePort via `kubectl get svc`.
 gateway_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
     "http://127.0.0.1:${PORT_GATEWAY}/" 2>/dev/null) || gateway_status="000"
@@ -127,7 +127,7 @@ else
 fi
 
 # 5. Higress Console reachable (external host port, HTTP 200)
-# TODO(k8s): same as check #4 — use Ingress/NodePort address or HICLAW_VERIFY_CONSOLE_URL override.
+# TODO(k8s): same as check #4 — use Ingress/NodePort address or AGENTTEAMS_VERIFY_CONSOLE_URL override.
 console_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
     "http://127.0.0.1:${PORT_CONSOLE}/" 2>/dev/null) || console_status="000"
 if [ "${console_status}" = "200" ]; then
@@ -139,7 +139,7 @@ fi
 # 6. Manager Agent healthy (runtime-aware check)
 # TODO(k8s): replace with `kubectl exec <manager-pod> -- <health-check-command>`
 #   Pod name must be resolved dynamically before this call.
-MANAGER_RUNTIME=$(echo "$container_env" | grep ^HICLAW_MANAGER_RUNTIME= | cut -d= -f2-)
+MANAGER_RUNTIME=$(echo "$container_env" | grep ^AGENTTEAMS_MANAGER_RUNTIME= | cut -d= -f2-)
 MANAGER_RUNTIME="${MANAGER_RUNTIME:-openclaw}"
 
 if [ "${MANAGER_RUNTIME}" = "copaw" ]; then

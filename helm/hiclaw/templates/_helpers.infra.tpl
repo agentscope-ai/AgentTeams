@@ -45,7 +45,7 @@ materialized condition flag.
 {{/* APIG does not expose a console URL from within the cluster: the
      controller talks to it via the regional Aliyun OpenAPI endpoint, so
      no admin URL is meaningful here. Leave empty to mean "unset" and let
-     callers decide whether to guard emission of HICLAW_AI_GATEWAY_ADMIN_URL. */ -}}
+     callers decide whether to guard emission of AGENTTEAMS_AI_GATEWAY_ADMIN_URL. */ -}}
 {{- else -}}
 {{- fail (printf "unsupported gateway admin combination %s/%s" .Values.gateway.provider .Values.gateway.mode) -}}
 {{- end -}}

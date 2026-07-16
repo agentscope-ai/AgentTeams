@@ -181,7 +181,7 @@ hiclaw apply -f worker-alice.yaml
 Use YAML for fields not exposed by direct CLI flags, such as `spec.mcpServers`:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -250,7 +250,7 @@ generates Manager-side `mcporter` configuration automatically. After that,
 declare the GitHub MCP capability in the Worker manifest:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice
@@ -588,7 +588,7 @@ hiclaw create worker --name alice --runtime hermes
 Or via YAML:
 
 ```yaml
-apiVersion: hiclaw.io/v1beta1
+apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: alice

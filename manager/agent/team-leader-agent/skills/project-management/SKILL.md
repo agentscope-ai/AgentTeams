@@ -7,6 +7,8 @@ description: Use before any projectflow call or Team Leader workflow involving P
 
 You manage Project files, Project lifecycle, and Project execution plans. Use this skill as the Project state layer. Use `team-coordination` to decide the strategy, and use `task-management` to delegate or check individual Worker tasks.
 
+Project state is tool-owned. Do not create, edit, delete, or repair `shared/projects/**` with shell commands, heredocs, direct file writes, `rm`, `mkdir`, `cp`, or Python module execution. Use `projectflow` actions only. If `projectflow` fails or returns inconsistent state, stop and report the blocker instead of manually patching files.
+
 ## Scope
 
 Use this skill for:
@@ -347,7 +349,7 @@ Do not call `check_active_tasks` for now.
 
 Team Leader heartbeat is temporarily disabled. Follow `HEARTBEAT.md`: do not probe Worker runtime, inspect active tasks, or send anomaly reports from scheduled heartbeat runs.
 
-Worker runtime probes are disabled because Kubernetes Team Workers currently have no per-Worker Service. Hostname probes such as `http://hiclaw-worker-<worker>:8088/api/chats` can misreport healthy Workers as unreachable.
+Worker runtime probes are disabled because Kubernetes Team Workers currently have no per-Worker Service. Hostname probes such as `http://agentteams-worker-<worker>:8088/api/chats` can misreport healthy Workers as unreachable.
 
 For recovery, act only on explicit room messages, requester instructions, or Project files you were directly asked to inspect.
 

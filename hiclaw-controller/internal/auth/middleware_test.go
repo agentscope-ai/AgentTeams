@@ -30,6 +30,12 @@ type noopEnricher struct{}
 
 func (n *noopEnricher) EnrichIdentity(_ context.Context, _ *CallerIdentity) error { return nil }
 
+type failingEnricher struct{}
+
+func (f *failingEnricher) EnrichIdentity(_ context.Context, _ *CallerIdentity) error {
+	return fmt.Errorf("enrich failed")
+}
+
 func newTestMiddleware(tokens map[string]*CallerIdentity) *Middleware {
 	return NewMiddleware(
 		&mockAuthenticator{tokens: tokens},
@@ -74,6 +80,32 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestAuthenticate_EnrichmentFailureKeepsLegacyBehavior(t *testing.T) {
+	mw := NewMiddleware(
+		&mockAuthenticator{tokens: map[string]*CallerIdentity{
+			"worker-token": {Role: RoleWorker, Username: "alice"},
+		}},
+		&failingEnricher{},
+		NewAuthorizer(),
+		nil, "",
+	)
+
+	called := false
+	handler := mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers", nil)
+	req.Header.Set("Authorization", "Bearer worker-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if !called || w.Code != http.StatusOK {
+		t.Errorf("expected local legacy path to continue, called=%v code=%d", called, w.Code)
 	}
 }
 
@@ -201,7 +233,7 @@ func TestCallerFromContext_Empty(t *testing.T) {
 // TestResolveResourceTeam covers the authoritative worker->team resolution:
 // Team CR reverse lookup (leader or worker member name) takes priority,
 // since post-refactor team members have no Worker CR at all. The legacy
-// "hiclaw.io/team" annotation on a standalone Worker CR is only consulted
+// "agentteams.io/team" annotation on a standalone Worker CR is only consulted
 // as a defensive fallback. A worker that resolves to neither returns "".
 func TestResolveResourceTeam(t *testing.T) {
 	scheme := newAuthTestScheme(t)
@@ -216,7 +248,7 @@ func TestResolveResourceTeam(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "legacy-worker",
 			Namespace:   "default",
-			Annotations: map[string]string{"hiclaw.io/team": "legacy-team"},
+			Annotations: map[string]string{"agentteams.io/team": "legacy-team"},
 		},
 	}
 

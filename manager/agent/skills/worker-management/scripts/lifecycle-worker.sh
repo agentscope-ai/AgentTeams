@@ -65,14 +65,14 @@ EOF
         cat > "$LIFECYCLE_FILE" << EOF
 {
   "version": 1,
-  "idle_timeout_minutes": ${HICLAW_WORKER_IDLE_TIMEOUT:-720},
+  "idle_timeout_minutes": ${AGENTTEAMS_WORKER_IDLE_TIMEOUT:-720},
   "updated_at": "$(_ts)",
   "workers": {}
 }
 EOF
     else
         # File already exists — respect any manual edits.
-        # HICLAW_WORKER_IDLE_TIMEOUT is only used for initial creation (above).
+        # AGENTTEAMS_WORKER_IDLE_TIMEOUT is only used for initial creation (above).
         true
     fi
 
@@ -164,7 +164,7 @@ action_sync_status() {
     _init_lifecycle_file
 
     if ! container_api_available 2>/dev/null; then
-        _log "No worker backend available — marking all workers as remote"
+        _log "No Manager-local worker backend available — marking workers as externally managed"
         local workers
         workers=$(_get_all_workers)
         for worker in $workers; do
@@ -218,7 +218,7 @@ action_check_idle() {
         local container_status
         container_status=$(_get_worker_field "$worker" "container_status")
 
-        # Skip remote workers and non-running containers
+        # Skip workers not managed by the Manager-local container API and non-running containers
         if [ "$container_status" = "remote" ] || [ "$container_status" = "not_found" ]; then
             continue
         fi
@@ -369,12 +369,12 @@ action_start() {
     _init_lifecycle_file
     _ensure_worker_entry "$worker"
 
-    # Skip remote workers — they are not Manager-managed containers
+    # Skip workers that are not managed through the Manager-local container API
     local deployment
     deployment=$(jq -r --arg w "$worker" '.workers[$w].deployment // "local"' "$REGISTRY_FILE" 2>/dev/null)
     if [ "$deployment" = "remote" ]; then
-        _log "Worker $worker is remote — cannot start via container API"
-        _log "The admin should restart this worker on the target machine manually"
+        _log "Worker $worker is not managed through the Manager-local container API"
+        _log "Use the controller/backend lifecycle for this worker"
         return 1
     fi
 
@@ -403,18 +403,18 @@ action_start() {
             --arg name "$worker" \
             --arg fak "$worker" \
             --arg fsk "${WORKER_MINIO_PASSWORD:-}" \
-            --arg fs_domain "${HICLAW_FS_DOMAIN:-fs-local.hiclaw.io}" \
-            --arg fs_endpoint "${HICLAW_FS_ENDPOINT:-}" \
-            --arg fs_bucket "${HICLAW_FS_BUCKET:-}" \
-            --arg controller_url "${HICLAW_CONTROLLER_URL:-}" \
+            --arg fs_domain "${AGENTTEAMS_FS_DOMAIN:-fs-local.agentteams.io}" \
+            --arg fs_endpoint "${AGENTTEAMS_FS_ENDPOINT:-}" \
+            --arg fs_bucket "${AGENTTEAMS_FS_BUCKET:-}" \
+            --arg controller_url "${AGENTTEAMS_CONTROLLER_URL:-}" \
             '{
-                "HICLAW_WORKER_NAME": $name,
-                "HICLAW_FS_ENDPOINT": (if $fs_endpoint != "" then $fs_endpoint else ("http://" + ($fs_domain | split(":")[0]) + ":9000") end),
-                "HICLAW_FS_ACCESS_KEY": $fak,
-                "HICLAW_FS_SECRET_KEY": $fsk
+                "AGENTTEAMS_WORKER_NAME": $name,
+                "AGENTTEAMS_FS_ENDPOINT": (if $fs_endpoint != "" then $fs_endpoint else ("http://" + ($fs_domain | split(":")[0]) + ":9000") end),
+                "AGENTTEAMS_FS_ACCESS_KEY": $fak,
+                "AGENTTEAMS_FS_SECRET_KEY": $fsk
             }
-            | if $controller_url != "" then . + {"HICLAW_CONTROLLER_URL": $controller_url} else . end
-            | if $fs_bucket != "" then . + {"HICLAW_FS_BUCKET": $fs_bucket} else . end')
+            | if $controller_url != "" then . + {"AGENTTEAMS_CONTROLLER_URL": $controller_url} else . end
+            | if $fs_bucket != "" then . + {"AGENTTEAMS_FS_BUCKET": $fs_bucket} else . end')
 
         local create_body
         create_body=$(jq -cn \
@@ -447,16 +447,17 @@ action_start() {
 # Ensure a specific worker is ready to receive messages.
 # If the container is stopped, start it; if not_found, recreate it.
 # Outputs JSON: {"worker":"<name>","status":"ready|started|recreated|remote|failed","container_status":"..."}
+# status=remote is a legacy lifecycle value for workers not managed through the Manager-local container API.
 # Usage: action_ensure_ready <worker_name>
 action_ensure_ready() {
     local worker="$1"
     _init_lifecycle_file
 
-    # Check deployment type — skip remote workers
+    # Check deployment type — skip workers not managed through the Manager-local container API
     local deployment
     deployment=$(jq -r --arg w "$worker" '.workers[$w].deployment // "local"' "$REGISTRY_FILE" 2>/dev/null)
     if [ "$deployment" = "remote" ]; then
-        _log "Worker $worker is remote — assumed ready"
+        _log "Worker $worker is not Manager-local — assuming controller/backend readiness"
         echo "{\"worker\":\"$worker\",\"status\":\"remote\",\"container_status\":\"remote\"}"
         return 0
     fi

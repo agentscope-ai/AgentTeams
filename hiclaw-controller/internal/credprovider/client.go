@@ -18,6 +18,8 @@ type Client interface {
 	// A non-nil error means either the HTTP call failed or the sidecar
 	// returned a non-2xx status.
 	Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error)
+	// GetKubeconfig obtains a temporary kubeconfig for the given cluster.
+	GetKubeconfig(ctx context.Context, clusterID string) (*KubeconfigResponse, error)
 }
 
 // HTTPClient is an HTTP implementation of Client that talks to the sidecar
@@ -43,7 +45,7 @@ func NewHTTPClient(baseURL string, httpClient *http.Client) *HTTPClient {
 // Issue implements Client.
 func (c *HTTPClient) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error) {
 	if c.baseURL == "" {
-		return nil, errors.New("credprovider: base URL not configured (HICLAW_CREDENTIAL_PROVIDER_URL)")
+		return nil, errors.New("credprovider: base URL not configured (AGENTTEAMS_CREDENTIAL_PROVIDER_URL)")
 	}
 	body, err := json.Marshal(req)
 	if err != nil {

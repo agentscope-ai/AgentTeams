@@ -24,7 +24,7 @@ TEST_TEAM="test-hadm-$$"
 TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_HUMAN="test-human-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
     if [ "${TESTS_FAILED}" -gt 0 ]; then
@@ -38,13 +38,13 @@ _cleanup() {
     exec_in_agent hiclaw delete human "${TEST_HUMAN}" 2>/dev/null || true
     sleep 5
     # Fallback: force-remove containers
-    docker rm -f "hiclaw-worker-${TEST_LEADER}" 2>/dev/null || true
-    docker rm -f "hiclaw-worker-${TEST_W1}" 2>/dev/null || true
+    remove_worker_container "${TEST_LEADER}"
+    remove_worker_container "${TEST_W1}"
     for w in "${TEST_LEADER}" "${TEST_W1}"; do
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
         exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
     done
-    exec_in_agent rm -f "/tmp/hiclaw-test-${TEST_HUMAN}.yaml" "/tmp/hiclaw-test-${TEST_TEAM}.yaml" 2>/dev/null || true
+    exec_in_agent rm -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>/dev/null || true
     # Fallback: clean registries
     exec_in_agent bash -c "
         jq 'del(.workers[\"${TEST_LEADER}\"], .workers[\"${TEST_W1}\"])' \
@@ -68,8 +68,8 @@ HUMAN_MATRIX_ID="@${TEST_HUMAN}:${TEST_MATRIX_DOMAIN}"
 # ============================================================
 log_section "Create Human via Declarative YAML (before Team)"
 
-exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_HUMAN}.yaml << 'YAMLEOF'
-apiVersion: hiclaw.io/v1beta1
+exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_HUMAN}.yaml << 'YAMLEOF'
+apiVersion: agentteams.io/v1beta1
 kind: Human
 metadata:
   name: ${TEST_HUMAN}
@@ -82,7 +82,7 @@ spec:
 YAMLEOF
 " 2>/dev/null
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/hiclaw-test-${TEST_HUMAN}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" 2>&1)
 
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Human YAML applied via hiclaw CLI"
@@ -99,8 +99,13 @@ assert_eq "${TEST_HUMAN}" "${HUMAN_NAME_CHK}" "Human CR has correct name"
 log_info "Waiting for controller to reconcile Human..."
 HUMAN_TIMEOUT=90; HUMAN_ELAPSED=0
 HUMAN_CREATED=false
+HUMAN_PHASE=""
+HUMAN_STATUS_MXID=""
 while [ "${HUMAN_ELAPSED}" -lt "${HUMAN_TIMEOUT}" ]; do
-    if exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep -q "human created.*${TEST_HUMAN}"; then
+    HUMAN_STATUS=$(exec_in_agent hiclaw get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "{}")
+    HUMAN_PHASE=$(echo "${HUMAN_STATUS}" | jq -r '.phase // empty' 2>/dev/null)
+    HUMAN_STATUS_MXID=$(echo "${HUMAN_STATUS}" | jq -r '.matrixUserID // empty' 2>/dev/null)
+    if [ "${HUMAN_PHASE}" = "Active" ] && [ -n "${HUMAN_STATUS_MXID}" ]; then
         HUMAN_CREATED=true
         break
     fi
@@ -111,6 +116,7 @@ if [ "${HUMAN_CREATED}" = true ]; then
     log_pass "HumanReconciler created human (took ~${HUMAN_ELAPSED}s)"
 else
     log_fail "HumanReconciler did not create human within ${HUMAN_TIMEOUT}s"
+    log_info "Last Human status: phase='${HUMAN_PHASE}' matrixUserID='${HUMAN_STATUS_MXID}'"
     exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep "${TEST_HUMAN}" | tail -5
 fi
 
@@ -154,8 +160,8 @@ SOUL
     " 2>/dev/null
 done
 
-exec_in_agent bash -c "cat > /tmp/hiclaw-test-${TEST_TEAM}.yaml << YAMLEOF
-apiVersion: hiclaw.io/v1beta1
+exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_TEAM}.yaml << YAMLEOF
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: ${TEST_TEAM}
@@ -172,7 +178,7 @@ spec:
 YAMLEOF
 " 2>/dev/null
 
-APPLY_TEAM_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/hiclaw-test-${TEST_TEAM}.yaml" 2>&1)
+APPLY_TEAM_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
 if echo "${APPLY_TEAM_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Team YAML applied via hiclaw CLI"
 else
@@ -223,6 +229,10 @@ assert_not_empty "${TEAM_ROOM_ID}" "Team Room ID exists: ${TEAM_ROOM_ID}"
 # Section 5: Verify backfill — Human in groupAllowFrom
 # ============================================================
 log_section "Verify groupAllowFrom (backfill result)"
+
+wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.groupAllowFrom" "${HUMAN_MATRIX_ID}" 120 || true
+wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.dm.allowFrom" "${HUMAN_MATRIX_ID}" 120 || true
+wait_agent_matrix_allow_contains "${TEST_W1}" ".channels.matrix.groupAllowFrom" "${HUMAN_MATRIX_ID}" 120 || true
 
 LEADER_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
 if echo "${LEADER_GAF}" | grep -q "${HUMAN_MATRIX_ID}"; then
@@ -301,15 +311,16 @@ log_section "Verify Containers"
 
 WORKERS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
 for w in "${TEST_LEADER}" "${TEST_W1}"; do
-    RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "hiclaw-worker-${w}" || echo "")
+    RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${w}")" || echo "")
     if [ -n "${RUNNING}" ]; then
-        log_pass "Container running: hiclaw-worker-${w}"
+        log_pass "Container running: $(worker_container_name "${w}")"
     else
         DEPLOY=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${w}" '.workers[$w].deployment // empty' 2>/dev/null)
         if [ "${DEPLOY}" = "remote" ]; then
             log_pass "Agent ${w} registered in remote mode"
         else
-            log_fail "Container not running: hiclaw-worker-${w}"
+            dump_diagnostics worker "${w}"
+            log_fail "Container not running: $(worker_container_name "${w}")"
         fi
     fi
 done

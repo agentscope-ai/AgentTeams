@@ -75,8 +75,8 @@ IFS=':' read -ra WORKER_MCP_ARR <<< "${WORKER_MCP_SERVERS_CSV:-}"
 # Per-worker comm policies use | as separator (: would break JSON)
 IFS='|' read -ra WORKER_CHANNEL_POLICIES_ARR <<< "${WORKER_CHANNEL_POLICIES_CSV:-}"
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 
 log "=== Creating Team: ${TEAM_NAME} ==="
 log "  Leader: ${LEADER_NAME}"
@@ -92,11 +92,11 @@ if [ -f "${SECRETS_FILE}" ]; then
 fi
 
 if [ -z "${MANAGER_MATRIX_TOKEN:-}" ]; then
-    MANAGER_PASSWORD="${HICLAW_MANAGER_PASSWORD:-}"
+    MANAGER_PASSWORD="${AGENTTEAMS_MANAGER_PASSWORD:-}"
     if [ -z "${MANAGER_PASSWORD}" ]; then
-        _fail "MANAGER_MATRIX_TOKEN not set and HICLAW_MANAGER_PASSWORD not available"
+        _fail "MANAGER_MATRIX_TOKEN not set and AGENTTEAMS_MANAGER_PASSWORD not available"
     fi
-    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
         -H 'Content-Type: application/json' \
         -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${MANAGER_PASSWORD}"'"}' \
         2>/dev/null | jq -r '.access_token // empty')
@@ -110,10 +110,10 @@ fi
 TEAM_ADMIN_TOKEN=""
 _obtain_team_admin_token() {
     local _admin_name="${1:-${ADMIN_USER}}"
-    if [ "${_admin_name}" = "${ADMIN_USER}" ] && [ -n "${HICLAW_ADMIN_PASSWORD:-}" ]; then
-        TEAM_ADMIN_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+    if [ "${_admin_name}" = "${ADMIN_USER}" ] && [ -n "${AGENTTEAMS_ADMIN_PASSWORD:-}" ]; then
+        TEAM_ADMIN_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
             -H 'Content-Type: application/json' \
-            -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${_admin_name}"'"},"password":"'"${HICLAW_ADMIN_PASSWORD}"'"}' \
+            -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${_admin_name}"'"},"password":"'"${AGENTTEAMS_ADMIN_PASSWORD}"'"}' \
             2>/dev/null | jq -r '.access_token // empty')
         if [ -n "${TEAM_ADMIN_TOKEN}" ]; then
             log "  Obtained Team Admin token for auto-join"
@@ -133,7 +133,7 @@ _admin_auto_join() {
     fi
     local _room_enc
     _room_enc=$(echo "${_room_id}" | sed 's/!/%21/g')
-    if curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${_room_enc}/join" \
+    if curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${_room_enc}/join" \
         -H "Authorization: Bearer ${TEAM_ADMIN_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{}' > /dev/null 2>&1; then
@@ -174,12 +174,12 @@ LEADER_MATRIX_ID="@${LEADER_NAME}:${MATRIX_DOMAIN}"
 
 # E2EE
 ROOM_E2EE_INITIAL_STATE=""
-if [ "${HICLAW_MATRIX_E2EE:-0}" = "1" ] || [ "${HICLAW_MATRIX_E2EE:-}" = "true" ]; then
+if [ "${AGENTTEAMS_MATRIX_E2EE:-0}" = "1" ] || [ "${AGENTTEAMS_MATRIX_E2EE:-}" = "true" ]; then
     ROOM_E2EE_INITIAL_STATE=',"initial_state":[{"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}}]'
 fi
 
 # Create Team Room (Manager-only, members invited in Step 4)
-TEAM_ROOM_RESP=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/createRoom \
+TEAM_ROOM_RESP=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/createRoom \
     -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
     -H 'Content-Type: application/json' \
     -d '{
@@ -202,7 +202,7 @@ log "  Team Room created: ${TEAM_ROOM_ID}"
 # Create Leader DM (Manager-only, members invited in Step 4)
 LEADER_DM_ROOM_ID=""
 if [ -n "${TEAM_ADMIN_MID}" ]; then
-    LEADER_DM_RESP=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/createRoom \
+    LEADER_DM_RESP=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/createRoom \
         -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{
@@ -374,7 +374,7 @@ POWER_USERS_JSON=$(echo "${POWER_USERS_JSON}" | jq --arg m "${MANAGER_MATRIX_ID}
 
 # Update Team Room power levels
 TEAM_ROOM_ENC=$(echo "${TEAM_ROOM_ID}" | sed 's/!/%21/g')
-curl -sf -X PUT "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/state/m.room.power_levels/" \
+curl -sf -X PUT "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/state/m.room.power_levels/" \
     -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
     -H 'Content-Type: application/json' \
     -d '{"users": '"${POWER_USERS_JSON}"'}' > /dev/null 2>&1 \
@@ -382,7 +382,7 @@ curl -sf -X PUT "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/s
 
 # Invite Leader + Team Admin + Workers into Team Room
 for _invite_id in "${LEADER_MATRIX_ID}" ${TEAM_ADMIN_MID:+"${TEAM_ADMIN_MID}"}; do
-    curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/invite" \
+    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/invite" \
         -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{"user_id": "'"${_invite_id}"'"}' > /dev/null 2>&1 || true
@@ -390,7 +390,7 @@ done
 for w_name in "${WORKER_NAMES[@]}"; do
     w_name=$(echo "${w_name}" | tr -d ' ')
     [ -z "${w_name}" ] && continue
-    curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/invite" \
+    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/invite" \
         -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{"user_id": "@'"${w_name}"':'"${MATRIX_DOMAIN}"'"}' > /dev/null 2>&1 || true
@@ -398,7 +398,7 @@ done
 log "  Members invited to Team Room"
 
 # Manager leaves Team Room (delegation boundary)
-curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/leave" \
+curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/leave" \
     -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
     -H 'Content-Type: application/json' -d '{}' > /dev/null 2>&1 \
     && log "  Manager left Team Room (delegation boundary)" \
@@ -411,22 +411,22 @@ _admin_auto_join "${TEAM_ROOM_ID}"
 if [ -n "${LEADER_DM_ROOM_ID}" ]; then
     LEADER_DM_ENC=$(echo "${LEADER_DM_ROOM_ID}" | sed 's/!/%21/g')
     # Update power levels
-    curl -sf -X PUT "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/state/m.room.power_levels/" \
+    curl -sf -X PUT "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/state/m.room.power_levels/" \
         -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{"users": {"'"${MANAGER_MATRIX_ID}"'": 100, "'"${TEAM_ADMIN_MID}"'": 100, "'"${LEADER_MATRIX_ID}"'": 0}}' > /dev/null 2>&1 || true
     # Invite
-    curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/invite" \
+    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/invite" \
         -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{"user_id": "'"${TEAM_ADMIN_MID}"'"}' > /dev/null 2>&1 || true
-    curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/invite" \
+    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/invite" \
         -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
         -H 'Content-Type: application/json' \
         -d '{"user_id": "'"${LEADER_MATRIX_ID}"'"}' > /dev/null 2>&1 || true
     log "  Members invited to Leader DM"
     # Manager leaves
-    curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/leave" \
+    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/leave" \
         -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
         -H 'Content-Type: application/json' -d '{}' > /dev/null 2>&1 \
         && log "  Manager left Leader DM" \
@@ -447,8 +447,8 @@ touch "${TEAM_STORAGE_DIR}/shared/tasks/.keep"
 touch "${TEAM_STORAGE_DIR}/shared/projects/.keep"
 touch "${TEAM_STORAGE_DIR}/shared/knowledge/.keep"
 ensure_mc_credentials 2>/dev/null || true
-mc mirror "${TEAM_STORAGE_DIR}/" "${HICLAW_STORAGE_PREFIX}/teams/${TEAM_NAME}/" --overwrite 2>&1 | tail -3
-log "  Team storage initialized at ${HICLAW_STORAGE_PREFIX}/teams/${TEAM_NAME}/"
+mc mirror "${TEAM_STORAGE_DIR}/" "${AGENTTEAMS_STORAGE_PREFIX}/teams/${TEAM_NAME}/" --overwrite 2>&1 | tail -3
+log "  Team storage initialized at ${AGENTTEAMS_STORAGE_PREFIX}/teams/${TEAM_NAME}/"
 
 # ============================================================
 # Step 6: Update teams-registry.json
@@ -479,7 +479,7 @@ bash /opt/hiclaw/agent/skills/team-management/scripts/manage-teams-registry.sh "
 # re-inject the full context.
 # ============================================================
 log "Step 6b: Re-injecting Leader team-context with worker room IDs..."
-_leader_agents_minio="${HICLAW_STORAGE_PREFIX}/agents/${LEADER_NAME}/AGENTS.md"
+_leader_agents_minio="${AGENTTEAMS_STORAGE_PREFIX}/agents/${LEADER_NAME}/AGENTS.md"
 _leader_agents_tmp=$(mktemp /tmp/leader-agents-XXXXXX.md)
 _leader_ctx_tmp=$(mktemp /tmp/leader-ctx-XXXXXX.md)
 
@@ -506,6 +506,7 @@ done
     echo "- **Team Workers**:${_worker_lines}"
     echo "- You decompose tasks from Manager or Team Admin and assign sub-tasks to your team workers"
     echo "- @mention workers in the Team Room for task assignment"
+    echo "- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads"
     echo "- Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source"
     echo "- @mention Manager only for: task completion, blockers, escalations"
     echo "<!-- hiclaw-team-context-end -->"
@@ -534,7 +535,7 @@ if mc cp "${_leader_agents_minio}" "${_leader_agents_tmp}" 2>/dev/null; then
         || log "  WARNING: Failed to update Leader team-context in MinIO"
 
     # Also push directly into the running Leader container (FileSync won't pull AGENTS.md)
-    LEADER_CONTAINER="hiclaw-worker-${LEADER_NAME}"
+    LEADER_CONTAINER="agentteams-worker-${LEADER_NAME}"
     LEADER_COPAW_DIR="/root/.copaw-worker/${LEADER_NAME}"
     if docker exec "${LEADER_CONTAINER}" true 2>/dev/null; then
         docker cp "${_leader_final}" "${LEADER_CONTAINER}:${LEADER_COPAW_DIR}/AGENTS.md" 2>/dev/null \
@@ -579,7 +580,7 @@ if [ -f "${HUMANS_REGISTRY}" ]; then
                      end' \
                     "${LEADER_CONFIG}" > /tmp/leader-human-tmp.json
                 mv /tmp/leader-human-tmp.json "${LEADER_CONFIG}"
-                mc cp "${LEADER_CONFIG}" "${HICLAW_STORAGE_PREFIX}/agents/${LEADER_NAME}/openclaw.json" 2>/dev/null || true
+                mc cp "${LEADER_CONFIG}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${LEADER_NAME}/openclaw.json" 2>/dev/null || true
             fi
 
             # Add human to each Worker's groupAllowFrom
@@ -594,14 +595,14 @@ if [ -f "${HUMANS_REGISTRY}" ]; then
                          end' \
                         "${W_CONFIG}" > /tmp/worker-human-tmp.json
                     mv /tmp/worker-human-tmp.json "${W_CONFIG}"
-                    mc cp "${W_CONFIG}" "${HICLAW_STORAGE_PREFIX}/agents/${w_name}/openclaw.json" 2>/dev/null || true
+                    mc cp "${W_CONFIG}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${w_name}/openclaw.json" 2>/dev/null || true
                 fi
             done
 
             # Invite human to Team Room
             if [ -n "${TEAM_ROOM_ID}" ]; then
                 ROOM_ENC=$(echo "${TEAM_ROOM_ID}" | sed 's/!/%21/g')
-                curl -sf -X POST "${HICLAW_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ENC}/invite" \
+                curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ENC}/invite" \
                     -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
                     -H 'Content-Type: application/json' \
                     -d '{"user_id": "'"${_human_mid}"'"}' 2>/dev/null || true

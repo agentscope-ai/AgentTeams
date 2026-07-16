@@ -28,7 +28,7 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
 rules:
-  - apiGroups: ["hiclaw.io"]
+  - apiGroups: ["agentteams.io"]
     resources: ["managers", "workers", "teams", "humans"]
     verbs: ["get", "list", "watch", "delete"]
 ---
@@ -97,10 +97,10 @@ spec:
               # blocks until each finalizer is processed by the controller,
               # which is why this Job MUST run before the controller is
               # deleted by the rest of the helm uninstall.
-              kubectl delete managers.hiclaw.io --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
-              kubectl delete workers.hiclaw.io  --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
-              kubectl delete teams.hiclaw.io    --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
-              kubectl delete humans.hiclaw.io   --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              kubectl delete managers.agentteams.io --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              kubectl delete workers.agentteams.io  --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              kubectl delete teams.agentteams.io    --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              kubectl delete humans.agentteams.io   --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
               echo "[hiclaw-uninstall-cleanup] done"
           {{- with .Values.controller.uninstallHook.resources }}
           resources:

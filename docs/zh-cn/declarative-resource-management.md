@@ -653,7 +653,7 @@ bash install/hiclaw-import.sh worker --name alice --package nacos://host:8848/ns
 
 # 不带包，直接创建
 bash install/hiclaw-import.sh worker --name bob --model claude-sonnet-4-6 \
-    --skills github-operations,git-delegation --mcp-servers github
+    --skills github-operations,git-delegation
 ```
 
 ### hiclaw CLI — 容器内管理

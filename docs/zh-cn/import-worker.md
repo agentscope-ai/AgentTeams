@@ -296,8 +296,7 @@ bash hiclaw-import.sh worker --name devops-alice --package nacos://host:8848/nam
 
 ```bash
 bash hiclaw-import.sh worker --name bob --model claude-sonnet-4-6 \
-    --skills github-operations,git-delegation \
-    --mcp-servers github
+    --skills github-operations,git-delegation
 ```
 
 或通过 YAML（推荐用于可重复部署）：
@@ -377,7 +376,6 @@ bash hiclaw-import.sh -f <resource.yaml>   # 转发到 hiclaw-apply.sh（与 app
 | `--package <URI>` | 远程包 URI（`nacos://`、`http://`、`oss://`） | — |
 | `--model <模型>` | LLM 模型 ID | `qwen3.5-plus` |
 | `--skills <s1,s2>` | 逗号分隔的内置技能 | — |
-| `--mcp-servers <m1,m2>` | 逗号分隔的 MCP Server | — |
 | `--runtime <运行时>` | Agent 运行时（`openclaw`\|`copaw`\|`hermes`） | `openclaw` |
 | `--yes` | 跳过交互确认（包装脚本可能在底层吞掉） | 关闭 |
 
@@ -386,23 +384,25 @@ bash hiclaw-import.sh -f <resource.yaml>   # 转发到 hiclaw-apply.sh（与 app
 ### hiclaw-import.ps1（PowerShell — Windows）
 
 ```powershell
-.\hiclaw-import.ps1 worker -Name <名称> [-Zip <路径或URL>] [-Package <URI>] [-Model 模型] [-Skills s1,s2] [-McpServers m1,m2] [-Runtime rt] [-Yes]
+.\hiclaw-import.ps1 worker -Name <名称> [-Zip <路径或URL>] [-Package <URI>] [-Model 模型] [-Skills s1,s2] [-Runtime rt] [-Yes]
 .\hiclaw-import.ps1 -File <resource.yaml>
 ```
 
-参数与 Bash 版本一致（YAML 路径无 `-Prune`/`-DryRun`）。
+参数与 Bash 版本一致（YAML 路径无 `-Prune`/`-DryRun`）。`mcpServers` 的每个
+条目都需要结构化的 `name`、`url` 和 `transport` 字段，因此请通过 YAML 清单配置。
 
 ### hiclaw-apply.sh（Bash — macOS/Linux）
 
 ```bash
-bash hiclaw-apply.sh -f <resource.yaml> [-- 其余参数原样传给 hiclaw apply]
+bash hiclaw-apply.sh -f <resource.yaml>
 ```
 
 | 选项 | 说明 | 默认值 |
 |------|------|--------|
 | `-f <路径>` | YAML 资源文件（必需） | — |
 
-安装脚本头部若仍提到 **`--prune` / `--dry-run` / `--watch`**，请以当前 **`hiclaw apply` 实现为准**（未实现上述开关），改用显式 `hiclaw delete`。
+包装脚本只公开 `-f`/`--file`。当前 **`hiclaw apply`** 未实现
+**`--prune`**、**`--dry-run`** 或 **`--watch`**，请改用显式 `hiclaw delete`。
 
 ## 故障排查
 

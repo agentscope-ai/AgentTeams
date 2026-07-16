@@ -6,9 +6,9 @@
 #
 # Usage:
 #   ./hiclaw-apply.sh -f resource.yaml              # incremental apply
-#   ./hiclaw-apply.sh -f resource.yaml --prune      # full sync (delete extras)
-#   ./hiclaw-apply.sh -f resource.yaml --dry-run    # show diff only
-#   ./hiclaw-apply.sh -f resource.yaml --watch      # watch file changes
+#
+# The current `hiclaw apply` command supports -f/--file only. Delete stale
+# resources explicitly with `hiclaw delete`.
 #
 # Environment:
 #   AGENTTEAMS_CONTAINER_CMD   Override container runtime (docker/podman)

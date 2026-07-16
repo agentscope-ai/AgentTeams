@@ -49,6 +49,7 @@ func RenderAppServiceRegistration(cfg Config) AppServiceRegistration {
 				{Exclusive: true, Regex: userRegex},
 			},
 			Aliases: []AppServiceNamespace{
+				{Exclusive: false, Regex: fmt.Sprintf("#agentteams-.*:%s", domain)},
 				{Exclusive: false, Regex: fmt.Sprintf("#hiclaw-.*:%s", domain)},
 			},
 			Rooms: []AppServiceNamespace{},

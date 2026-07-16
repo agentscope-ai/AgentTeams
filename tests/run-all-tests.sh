@@ -31,6 +31,7 @@ export TEST_REGISTRATION_TOKEN="${TEST_REGISTRATION_TOKEN:-test-reg-token-$(open
 export TEST_MATRIX_DOMAIN="${TEST_MATRIX_DOMAIN:-matrix-local.agentteams.io:18080}"
 export TEST_MANAGER_HOST="${TEST_MANAGER_HOST:-127.0.0.1}"
 export HICLAW_LLM_API_KEY="${HICLAW_LLM_API_KEY:-${AGENTTEAMS_LLM_API_KEY:-}}"
+export TEST_GITHUB_TOKEN="${TEST_GITHUB_TOKEN:-${AGENTTEAMS_GITHUB_TOKEN:-${HICLAW_GITHUB_TOKEN:-}}}"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -60,6 +61,7 @@ load_env_file() {
                 AGENTTEAMS_REGISTRATION_TOKEN)  export TEST_REGISTRATION_TOKEN="${value}" ;;
                 AGENTTEAMS_MATRIX_DOMAIN)       export TEST_MATRIX_DOMAIN="${value}" ;;
                 AGENTTEAMS_LLM_API_KEY)         [ -z "${HICLAW_LLM_API_KEY}" ] && export HICLAW_LLM_API_KEY="${value}" ;;
+                AGENTTEAMS_GITHUB_TOKEN)        [ -z "${TEST_GITHUB_TOKEN}" ] && export TEST_GITHUB_TOKEN="${value}" ;;
                 AGENTTEAMS_PORT_GATEWAY)        export TEST_GATEWAY_PORT="${value}" ;;
                 AGENTTEAMS_PORT_CONSOLE)        export TEST_CONSOLE_PORT="${value}" ;;
                 HICLAW_ADMIN_USER)          export TEST_ADMIN_USER="${value}" ;;
@@ -69,6 +71,7 @@ load_env_file() {
                 HICLAW_REGISTRATION_TOKEN)  export TEST_REGISTRATION_TOKEN="${value}" ;;
                 HICLAW_MATRIX_DOMAIN)       export TEST_MATRIX_DOMAIN="${value}" ;;
                 HICLAW_LLM_API_KEY)         [ -z "${HICLAW_LLM_API_KEY}" ] && export HICLAW_LLM_API_KEY="${value}" ;;
+                HICLAW_GITHUB_TOKEN)        [ -z "${TEST_GITHUB_TOKEN}" ] && export TEST_GITHUB_TOKEN="${value}" ;;
                 HICLAW_PORT_GATEWAY)        export TEST_GATEWAY_PORT="${value}" ;;
                 HICLAW_PORT_CONSOLE)        export TEST_CONSOLE_PORT="${value}" ;;
             esac

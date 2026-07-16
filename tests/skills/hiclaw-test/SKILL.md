@@ -48,7 +48,7 @@ Test cases:
 - **test-04**: Human intervention with additional instructions
 - **test-05**: Heartbeat query mechanism
 - **test-06**: Multi-Worker collaboration
-- **test-08~14**: GitHub/MCP related tests (requires HICLAW_GITHUB_TOKEN)
+- **test-08~14**: GitHub/MCP related tests (requires `AGENTTEAMS_GITHUB_TOKEN`)
 
 ### Step 3: Individual Install/Uninstall
 
@@ -165,7 +165,7 @@ timeout 1200 ./tests/run-all-tests.sh --skip-build --use-existing
 [36m[TEST INFO][0m SKIP: No GitHub token configured
 ```
 
-Requires `HICLAW_GITHUB_TOKEN` environment variable.
+Set `AGENTTEAMS_GITHUB_TOKEN` before running these tests. The legacy `HICLAW_GITHUB_TOKEN` variable remains supported.
 
 ### Metrics Files
 

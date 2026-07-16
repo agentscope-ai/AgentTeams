@@ -67,7 +67,7 @@ type ManagerReconciler struct {
 
 	// SoloOperator, when true, is forwarded into ManagerWelcomeRequest so
 	// reconcileManagerWelcome sends the non-interview welcome variant.
-	// Sourced from HICLAW_SOLO_OPERATOR (Config.SoloOperator).
+	// Sourced from AGENTTEAMS_SOLO_OPERATOR (Config.SoloOperator).
 	SoloOperator bool
 }
 

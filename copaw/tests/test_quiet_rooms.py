@@ -1,7 +1,7 @@
-"""Tests for HICLAW_QUIET_ROOMS -> config.json root show_tool_details.
+"""Tests for AGENTTEAMS_QUIET_ROOMS -> config.json root show_tool_details.
 
 Phase 5b "quiet rooms" (mechanism only, env-gated default-off): when
-HICLAW_QUIET_ROOMS is truthy, copaw_worker.bridge._write_config_json (via
+AGENTTEAMS_QUIET_ROOMS is truthy, copaw_worker.bridge._write_config_json (via
 bridge_openclaw_to_copaw) additionally writes a root-level
 "show_tool_details": false into config.json — the tap onto
 copaw/src/matrix/config.py:1164 (default True, never set anywhere today).
@@ -52,7 +52,7 @@ def _config_json_path(working_dir: Path) -> dict:
 
 
 def test_quiet_rooms_unset_leaves_show_tool_details_absent(monkeypatch):
-    monkeypatch.delenv("HICLAW_QUIET_ROOMS", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_QUIET_ROOMS", raising=False)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
@@ -65,7 +65,7 @@ def test_quiet_rooms_unset_leaves_show_tool_details_absent(monkeypatch):
 
 
 def test_quiet_rooms_false_leaves_show_tool_details_absent(monkeypatch):
-    monkeypatch.setenv("HICLAW_QUIET_ROOMS", "false")
+    monkeypatch.setenv("AGENTTEAMS_QUIET_ROOMS", "false")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
@@ -76,7 +76,7 @@ def test_quiet_rooms_false_leaves_show_tool_details_absent(monkeypatch):
 
 
 def test_quiet_rooms_truthy_sets_root_show_tool_details_false(monkeypatch):
-    monkeypatch.setenv("HICLAW_QUIET_ROOMS", "true")
+    monkeypatch.setenv("AGENTTEAMS_QUIET_ROOMS", "true")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
@@ -91,7 +91,7 @@ def test_quiet_rooms_truthy_sets_root_show_tool_details_false(monkeypatch):
 
 def test_quiet_rooms_accepts_common_truthy_spellings(monkeypatch):
     for value in ("1", "yes", "on", "TRUE", "True"):
-        monkeypatch.setenv("HICLAW_QUIET_ROOMS", value)
+        monkeypatch.setenv("AGENTTEAMS_QUIET_ROOMS", value)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             working_dir = Path(tmpdir) / "agent"
@@ -108,7 +108,7 @@ def test_quiet_rooms_env_unset_output_byte_identical_across_runs(monkeypatch):
     overlay) must not introduce show_tool_details or otherwise change the
     matrix channel block shape from before this flag existed.
     """
-    monkeypatch.delenv("HICLAW_QUIET_ROOMS", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_QUIET_ROOMS", raising=False)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
@@ -123,17 +123,17 @@ def test_quiet_rooms_env_unset_output_byte_identical_across_runs(monkeypatch):
 
 
 def test_quiet_rooms_toggling_off_after_on_removes_root_flag(monkeypatch):
-    """If an operator flips HICLAW_QUIET_ROOMS back off, the next bridge run
+    """If an operator flips AGENTTEAMS_QUIET_ROOMS back off, the next bridge run
     must not leave a stale show_tool_details: false behind."""
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
 
-        monkeypatch.setenv("HICLAW_QUIET_ROOMS", "true")
+        monkeypatch.setenv("AGENTTEAMS_QUIET_ROOMS", "true")
         bridge_openclaw_to_copaw(_make_openclaw_cfg(), working_dir, profile="manager")
         enabled = _config_json_path(working_dir)
         assert enabled["show_tool_details"] is False
 
-        monkeypatch.delenv("HICLAW_QUIET_ROOMS", raising=False)
+        monkeypatch.delenv("AGENTTEAMS_QUIET_ROOMS", raising=False)
         bridge_openclaw_to_copaw(_make_openclaw_cfg(), working_dir, profile="manager")
         disabled = _config_json_path(working_dir)
 

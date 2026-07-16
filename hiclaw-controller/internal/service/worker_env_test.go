@@ -109,7 +109,7 @@ func TestWorkerEnvBuilderBuildManagerUsesConfiguredRuntimeAndBucket(t *testing.T
 	}
 }
 
-// TestWorkerEnvBuilderBuildEmitsCMSServiceName covers #23: HICLAW_CMS_SERVICE_NAME
+// TestWorkerEnvBuilderBuildEmitsCMSServiceName covers #23: AGENTTEAMS_CMS_SERVICE_NAME
 // must be propagated to worker containers (mirroring CMSProject/CMSWorkspace),
 // since worker entrypoints (e.g. hermes-worker-entrypoint.sh) read it for
 // OTEL_SERVICE_NAME.
@@ -122,8 +122,8 @@ func TestWorkerEnvBuilderBuildEmitsCMSServiceName(t *testing.T) {
 
 	env := builder.Build("alice", &WorkerProvisionResult{})
 
-	if got, want := env["HICLAW_CMS_SERVICE_NAME"], "hiclaw-worker-alice"; got != want {
-		t.Fatalf("HICLAW_CMS_SERVICE_NAME = %q, want %q", got, want)
+	if got, want := env["AGENTTEAMS_CMS_SERVICE_NAME"], "hiclaw-worker-alice"; got != want {
+		t.Fatalf("AGENTTEAMS_CMS_SERVICE_NAME = %q, want %q", got, want)
 	}
 }
 
@@ -135,7 +135,7 @@ func TestWorkerEnvBuilderBuildOmitsCMSServiceNameWhenEmpty(t *testing.T) {
 
 	env := builder.Build("alice", &WorkerProvisionResult{})
 
-	if _, ok := env["HICLAW_CMS_SERVICE_NAME"]; ok {
-		t.Fatalf("expected HICLAW_CMS_SERVICE_NAME to be absent when default is empty, got %q", env["HICLAW_CMS_SERVICE_NAME"])
+	if _, ok := env["AGENTTEAMS_CMS_SERVICE_NAME"]; ok {
+		t.Fatalf("expected AGENTTEAMS_CMS_SERVICE_NAME to be absent when default is empty, got %q", env["AGENTTEAMS_CMS_SERVICE_NAME"])
 	}
 }

@@ -342,10 +342,10 @@ def _readiness_probe_reply(text: str) -> str | None:
 def _chat_ack_enabled() -> bool:
     """Return whether immediate chat acks are enabled (default: on).
 
-    ``HICLAW_CHAT_ACK`` — unset or any of "1"/"true" (case-insensitive) means
+    ``AGENTTEAMS_CHAT_ACK`` — unset or any of "1"/"true" (case-insensitive) means
     on; "0"/"false" means off.
     """
-    raw = os.environ.get("HICLAW_CHAT_ACK")
+    raw = os.environ.get("AGENTTEAMS_CHAT_ACK")
     if raw is None:
         return True
     return raw.strip().lower() not in ("0", "false")
@@ -1227,7 +1227,7 @@ class MatrixChannel(BaseChannel):
         Bypasses the enqueue/agent-processing queue entirely (direct
         ``room_send``, same primitive as ``_send_plain_text``) so the sender
         gets fast feedback even if the agent itself is slow to respond.
-        Gated by ``HICLAW_CHAT_ACK`` (default on).
+        Gated by ``AGENTTEAMS_CHAT_ACK`` (default on).
         """
         if not _chat_ack_enabled():
             return

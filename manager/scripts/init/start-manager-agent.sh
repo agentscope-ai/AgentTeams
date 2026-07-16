@@ -705,7 +705,7 @@ if [ -f /root/manager-workspace/openclaw.json ]; then
        --arg emb_model "${AGENTTEAMS_EMBEDDING_MODEL}" \
        --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
        --arg matrix_user_id "@manager:${MATRIX_DOMAIN}" \
-       --arg heartbeat_every "${HICLAW_MANAGER_HEARTBEAT_INTERVAL}" \
+       --arg heartbeat_every "${AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL}" \
        --argjson e2ee "${MATRIX_E2EE_ENABLED}" \
        --argjson known_models "${KNOWN_MODELS}" \
        --argjson ctx "${MODEL_CONTEXT_WINDOW}" \
@@ -772,7 +772,7 @@ else
            --arg aigw_domain "${AI_GATEWAY_DOMAIN}" \
            --arg key "${AGENTTEAMS_MANAGER_GATEWAY_KEY}" \
            --arg model "${MODEL_NAME}" \
-           --arg heartbeat_every "${HICLAW_MANAGER_HEARTBEAT_INTERVAL}" \
+           --arg heartbeat_every "${AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL}" \
            --argjson ctx "${MODEL_CONTEXT_WINDOW}" \
            --argjson max "${MODEL_MAX_TOKENS}" \
            --argjson reasoning "${MODEL_REASONING}" \

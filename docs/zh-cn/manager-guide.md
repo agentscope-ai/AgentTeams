@@ -14,34 +14,34 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 
 | 变量 | 是否必填 | 默认值 | 说明 |
 |------|----------|--------|------|
-| `HICLAW_LLM_API_KEY` | 是 | - | LLM API Key |
-| `HICLAW_LLM_PROVIDER` | 否 | `qwen` | LLM 提供商（`qwen` 为阿里云百炼，`openai-compat` 为 OpenAI 兼容 API） |
-| `HICLAW_DEFAULT_MODEL` | 否 | `qwen3.5-plus` | 默认模型 ID |
-| `HICLAW_ADMIN_USER` | 否 | `admin` | 人工管理员的 Matrix 用户名 |
-| `HICLAW_ADMIN_PASSWORD` | 否 | （自动生成） | 管理员密码（最少 8 位，MinIO 要求） |
-| `HICLAW_MATRIX_DOMAIN` | 否 | `matrix-local.hiclaw.io:18080` | Matrix 服务器域名（容器内使用） |
-| `HICLAW_MATRIX_CLIENT_DOMAIN` | 否 | `matrix-client-local.hiclaw.io` | Element Web 域名 |
-| `HICLAW_AI_GATEWAY_DOMAIN` | 否 | `aigw-local.hiclaw.io` | AI 网关域名（用于 LLM 和 MCP） |
-| `HICLAW_FS_DOMAIN` | 否 | `fs-local.hiclaw.io` | 文件系统域名 |
-| `HICLAW_PORT_GATEWAY` | 否 | `18080` | Higress 网关的宿主机端口 |
-| `HICLAW_PORT_CONSOLE` | 否 | `18001` | Higress 控制台的宿主机端口 |
-| `HICLAW_PORT_ELEMENT_WEB` | 否 | `18088` | Element Web 直接访问的宿主机端口 |
-| `HICLAW_GITHUB_TOKEN` | 否 | - | GitHub PAT，用于 MCP Server |
-| `HICLAW_WORKER_IMAGE` | 否 | `hiclaw/worker-agent:latest` | 直接创建 Worker 时使用的 Docker 镜像 |
-| `HICLAW_WORKSPACE_DIR` | 否 | `~/hiclaw-manager` | Manager 工作空间的宿主机目录（bind mount 到 `/root/manager-workspace`） |
-| `HICLAW_DATA_DIR` | 否 | `hiclaw-data` | 持久化数据的 Docker 卷名称 |
-| `HICLAW_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
-| `HICLAW_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
-| `HICLAW_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`hiclaw-manager` 镜像）或 **`copaw`**（`hiclaw-manager-copaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
-| `HICLAW_SOLO_OPERATOR` | 否 | - | 当只有一位用户独自使用 HiClaw（无多人组织）时设为 `1`/`true`。会跳过 Manager 的 4 项入职访谈问题、强制所有 Team 的 `peerMentions` 为 `true`，并在未指定时将唯一的 Human 的 `permissionLevel` 默认设为 Admin。 |
+| `AGENTTEAMS_LLM_API_KEY` | 是 | - | LLM API Key |
+| `AGENTTEAMS_LLM_PROVIDER` | 否 | `qwen` | LLM 提供商（`qwen` 为阿里云百炼，`openai-compat` 为 OpenAI 兼容 API） |
+| `AGENTTEAMS_DEFAULT_MODEL` | 否 | `qwen3.6-plus` | 默认模型 ID |
+| `AGENTTEAMS_ADMIN_USER` | 否 | `admin` | 人工管理员的 Matrix 用户名 |
+| `AGENTTEAMS_ADMIN_PASSWORD` | 否 | （自动生成） | 管理员密码（最少 8 位，MinIO 要求） |
+| `AGENTTEAMS_MATRIX_DOMAIN` | 否 | `matrix-local.agentteams.io:18080` | Matrix 服务器域名（容器内使用） |
+| `AGENTTEAMS_MATRIX_CLIENT_DOMAIN` | 否 | `matrix-client-local.agentteams.io` | Element Web 域名 |
+| `AGENTTEAMS_AI_GATEWAY_DOMAIN` | 否 | `aigw-local.agentteams.io` | AI 网关域名（用于 LLM 和 MCP） |
+| `AGENTTEAMS_FS_DOMAIN` | 否 | `fs-local.agentteams.io` | 文件系统域名 |
+| `AGENTTEAMS_PORT_GATEWAY` | 否 | `18080` | Higress 网关的宿主机端口 |
+| `AGENTTEAMS_PORT_CONSOLE` | 否 | `18001` | Higress 控制台的宿主机端口 |
+| `AGENTTEAMS_PORT_ELEMENT_WEB` | 否 | `18088` | Element Web 直接访问的宿主机端口 |
+| `AGENTTEAMS_GITHUB_TOKEN` | 否 | - | GitHub PAT，用于 MCP Server |
+| `AGENTTEAMS_WORKER_IMAGE` | 否 | `agentteams/worker-agent:latest` | 直接创建 Worker 时使用的 Docker 镜像 |
+| `AGENTTEAMS_WORKSPACE_DIR` | 否 | `~/agentteams-manager` | Manager 工作空间的宿主机目录（bind mount 到 `/root/manager-workspace`） |
+| `AGENTTEAMS_DATA_DIR` | 否 | `agentteams-data` | 持久化数据的 Docker 卷名称 |
+| `AGENTTEAMS_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
+| `AGENTTEAMS_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
+| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`agentteams-manager` 镜像）或 **`copaw`**（`agentteams-manager-copaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
+| `AGENTTEAMS_SOLO_OPERATOR` | 否 | - | 当只有一位用户独自使用 AgentTeams（无多人组织）时设为 `1`/`true`。会跳过 Manager 的 4 项入职访谈问题、强制所有 Team 的 `peerMentions` 为 `true`，并在未指定时将唯一的 Human 的 `permissionLevel` 默认设为 Admin。 |
 
-### QwenPaw Manager（原 CoPaw，`HICLAW_MANAGER_RUNTIME=copaw`）
+### QwenPaw Manager（原 CoPaw，`AGENTTEAMS_MANAGER_RUNTIME=copaw`）
 
-安装时若选择 QwenPaw Manager，controller 会拉起 **`hiclaw-manager-copaw`** 镜像而非基于 OpenClaw 的 **`hiclaw-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
+安装时若选择 QwenPaw Manager，controller 会拉起 **`agentteams-manager-copaw`** 镜像而非基于 OpenClaw 的 **`agentteams-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
 
 ### 自定义 Manager Agent
 
-以下三个文件存放在 MinIO **`hiclaw-storage`** 桶中（对象前缀 `agents/manager/`）。安装脚本将宿主机工作区 bind mount 到 Manager 容器的 **`/root/manager-workspace`**，并与该桶保持同步——既可在 MinIO 控制台/API 中编辑，也可直接编辑宿主机 `HICLAW_WORKSPACE_DIR`（默认 `~/hiclaw-manager`）下的对应文件。
+以下三个文件存放在 MinIO **`agentteams-storage`** 桶中（对象前缀 `agents/manager/`）。安装脚本将宿主机工作区 bind mount 到 Manager 容器的 **`/root/manager-workspace`**，并与该桶保持同步——既可在 MinIO 控制台/API 中编辑，也可直接编辑宿主机 `AGENTTEAMS_WORKSPACE_DIR`（默认 `~/agentteams-manager`）下的对应文件。
 
 1. **SOUL.md** - Agent 身份、安全规则、通信模型
 2. **HEARTBEAT.md** - 定期检查例程（随运行时为 OpenClaw 心跳或 QwenPaw 等价机制）
@@ -248,7 +248,7 @@ YOLO 模式让 Manager 完全自主运行——跳过所有交互式管理员提
 
 ```bash
 # 方式 1：容器启动时通过环境变量
-docker run -e HICLAW_YOLO=1 ... hiclaw/manager-agent:latest
+docker run -e AGENTTEAMS_YOLO=1 ... agentteams/manager-agent:latest
 
 # 方式 2：在工作空间中创建文件（立即生效，无需重启）
 docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode

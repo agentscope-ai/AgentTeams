@@ -258,15 +258,15 @@ def _matrix_env(cfg: Dict[str, Any]) -> Dict[str, str]:
         # hermes_matrix.overlay_adapter.MatrixAdapter directly (constructor +
         # _wrap_send_message_event / _handle_media_message).
         "MATRIX_VISION_ENABLED": "true" if _resolve_vision_enabled(cfg) else "false",
-        # Phase 5b "quiet rooms": derived from HICLAW_QUIET_ROOMS, default
-        # false. Mechanism-only, env-gated — flipping HICLAW_QUIET_ROOMS on
+        # Phase 5b "quiet rooms": derived from AGENTTEAMS_QUIET_ROOMS, default
+        # false. Mechanism-only, env-gated — flipping AGENTTEAMS_QUIET_ROOMS on
         # is what makes should_suppress_outbound() actually drop tool-call /
         # thinking chatter in the overlay's send_message_event wrapper.
         "MATRIX_FILTER_TOOL_MESSAGES": (
-            "true" if _truthy_env("HICLAW_QUIET_ROOMS") else "false"
+            "true" if _truthy_env("AGENTTEAMS_QUIET_ROOMS") else "false"
         ),
         "MATRIX_FILTER_THINKING": (
-            "true" if _truthy_env("HICLAW_QUIET_ROOMS") else "false"
+            "true" if _truthy_env("AGENTTEAMS_QUIET_ROOMS") else "false"
         ),
     }
 

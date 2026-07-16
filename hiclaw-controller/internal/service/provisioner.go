@@ -1499,7 +1499,7 @@ type ManagerWelcomeRequest struct {
 	// SoloOperator, when true, renders the non-interview welcome variant
 	// (renderManagerWelcomeBodySolo) instead of the normal 4-question
 	// onboarding interview. Sourced from Config.SoloOperator /
-	// HICLAW_SOLO_OPERATOR.
+	// AGENTTEAMS_SOLO_OPERATOR.
 	SoloOperator bool
 }
 

@@ -206,7 +206,7 @@ type Config struct {
 	// human to loop in, so cross-mentions can't leak to strangers), and
 	// the sole Human created via the HTTP API defaults to Admin
 	// (PermissionLevel=1) when the request omits one. Sourced from
-	// HICLAW_SOLO_OPERATOR. Default false (unchanged multi-user behavior).
+	// AGENTTEAMS_SOLO_OPERATOR. Default false (unchanged multi-user behavior).
 	SoloOperator bool
 }
 
@@ -410,6 +410,7 @@ func LoadConfig() *Config {
 		CMSProject:        os.Getenv("AGENTTEAMS_CMS_PROJECT"),
 		CMSWorkspace:      os.Getenv("AGENTTEAMS_CMS_WORKSPACE"),
 		CMSServiceName:    envOrDefault("AGENTTEAMS_CMS_SERVICE_NAME", "agentteams-manager"),
+		SoloOperator:      envBool("AGENTTEAMS_SOLO_OPERATOR"),
 
 		WorkerEnv: WorkerEnvDefaults{
 			MatrixDomain:         envOrDefault("AGENTTEAMS_MATRIX_DOMAIN", "matrix-local.agentteams.io:8080"),
@@ -498,10 +499,10 @@ func (c *Config) AgentFSDir() string {
 
 // ManagerStateFile returns the path to the Manager Agent's task-tracking
 // state.json (embedded mode), defaulting to "<AgentFSDir>/manager/state.json".
-// HICLAW_MANAGER_STATE_FILE overrides the default for testing/non-standard
+// AGENTTEAMS_MANAGER_STATE_FILE overrides the default for testing/non-standard
 // layouts.
 func (c *Config) ManagerStateFile() string {
-	return envOrDefault("HICLAW_MANAGER_STATE_FILE", filepath.Join(c.AgentFSDir(), "manager", "state.json"))
+	return envOrDefault("AGENTTEAMS_MANAGER_STATE_FILE", filepath.Join(c.AgentFSDir(), "manager", "state.json"))
 }
 
 // WorkerAgentDir returns the source directory for builtin worker agent files.

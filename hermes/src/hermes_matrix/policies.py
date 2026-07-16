@@ -121,7 +121,7 @@ def should_suppress_outbound(
     drops events it can positively identify as tool/thinking chatter.
 
     When both ``filter_tool`` and ``filter_thinking`` are False (the default,
-    matching ``HICLAW_QUIET_ROOMS=false``) this always returns False — the
+    matching ``AGENTTEAMS_QUIET_ROOMS=false``) this always returns False — the
     function is a no-op until the env gate turns it on.
     """
     if not filter_tool and not filter_thinking:

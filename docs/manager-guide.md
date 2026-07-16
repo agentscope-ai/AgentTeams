@@ -14,34 +14,34 @@ The Manager is configured via environment variables set during installation. The
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HICLAW_LLM_API_KEY` | Yes | - | LLM API key |
-| `HICLAW_LLM_PROVIDER` | No | `qwen` | LLM provider (`qwen` for Alibaba Cloud, `openai-compat` for OpenAI-compatible APIs) |
-| `HICLAW_DEFAULT_MODEL` | No | `qwen3.5-plus` | Default model ID |
-| `HICLAW_ADMIN_USER` | No | `admin` | Human admin Matrix username |
-| `HICLAW_ADMIN_PASSWORD` | No | (auto-generated) | Human admin password (min 8 chars, MinIO requirement) |
-| `HICLAW_MATRIX_DOMAIN` | No | `matrix-local.hiclaw.io:18080` | Matrix server domain (used inside container) |
-| `HICLAW_MATRIX_CLIENT_DOMAIN` | No | `matrix-client-local.hiclaw.io` | Element Web domain |
-| `HICLAW_AI_GATEWAY_DOMAIN` | No | `aigw-local.hiclaw.io` | AI Gateway domain (for LLM and MCP) |
-| `HICLAW_FS_DOMAIN` | No | `fs-local.hiclaw.io` | File system domain |
-| `HICLAW_PORT_GATEWAY` | No | `18080` | Host port for Higress gateway |
-| `HICLAW_PORT_CONSOLE` | No | `18001` | Host port for Higress console |
-| `HICLAW_PORT_ELEMENT_WEB` | No | `18088` | Host port for Element Web direct access |
-| `HICLAW_GITHUB_TOKEN` | No | - | GitHub PAT for MCP Server |
-| `HICLAW_WORKER_IMAGE` | No | `hiclaw/worker-agent:latest` | Worker Docker image for direct creation |
-| `HICLAW_WORKSPACE_DIR` | No | `~/hiclaw-manager` | Host directory for Manager workspace (bind-mounted to `/root/manager-workspace`) |
-| `HICLAW_DATA_DIR` | No | `hiclaw-data` | Docker volume name for persistent data |
-| `HICLAW_MOUNT_SOCKET` | No | `1` | Mount container runtime socket for direct Worker creation |
-| `HICLAW_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
-| `HICLAW_MANAGER_RUNTIME` | No | `openclaw` | Manager engine: **`openclaw`** (default, `hiclaw-manager` image) or **`copaw`** (`hiclaw-manager-copaw` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
-| `HICLAW_SOLO_OPERATOR` | No | - | Set to `1`/`true` when a single human runs HiClaw alone (no multi-person org). Skips the Manager's 4-question onboarding interview, forces every Team's `peerMentions` to `true`, and defaults the sole Human's `permissionLevel` to Admin when unset. |
+| `AGENTTEAMS_LLM_API_KEY` | Yes | - | LLM API key |
+| `AGENTTEAMS_LLM_PROVIDER` | No | `qwen` | LLM provider (`qwen` for Alibaba Cloud, `openai-compat` for OpenAI-compatible APIs) |
+| `AGENTTEAMS_DEFAULT_MODEL` | No | `qwen3.6-plus` | Default model ID |
+| `AGENTTEAMS_ADMIN_USER` | No | `admin` | Human admin Matrix username |
+| `AGENTTEAMS_ADMIN_PASSWORD` | No | (auto-generated) | Human admin password (min 8 chars, MinIO requirement) |
+| `AGENTTEAMS_MATRIX_DOMAIN` | No | `matrix-local.agentteams.io:18080` | Matrix server domain (used inside container) |
+| `AGENTTEAMS_MATRIX_CLIENT_DOMAIN` | No | `matrix-client-local.agentteams.io` | Element Web domain |
+| `AGENTTEAMS_AI_GATEWAY_DOMAIN` | No | `aigw-local.agentteams.io` | AI Gateway domain (for LLM and MCP) |
+| `AGENTTEAMS_FS_DOMAIN` | No | `fs-local.agentteams.io` | File system domain |
+| `AGENTTEAMS_PORT_GATEWAY` | No | `18080` | Host port for Higress gateway |
+| `AGENTTEAMS_PORT_CONSOLE` | No | `18001` | Host port for Higress console |
+| `AGENTTEAMS_PORT_ELEMENT_WEB` | No | `18088` | Host port for Element Web direct access |
+| `AGENTTEAMS_GITHUB_TOKEN` | No | - | GitHub PAT for MCP Server |
+| `AGENTTEAMS_WORKER_IMAGE` | No | `agentteams/worker-agent:latest` | Worker Docker image for direct creation |
+| `AGENTTEAMS_WORKSPACE_DIR` | No | `~/agentteams-manager` | Host directory for Manager workspace (bind-mounted to `/root/manager-workspace`) |
+| `AGENTTEAMS_DATA_DIR` | No | `agentteams-data` | Docker volume name for persistent data |
+| `AGENTTEAMS_MOUNT_SOCKET` | No | `1` | Mount container runtime socket for direct Worker creation |
+| `AGENTTEAMS_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
+| `AGENTTEAMS_MANAGER_RUNTIME` | No | `openclaw` | Manager engine: **`openclaw`** (default, `agentteams-manager` image) or **`copaw`** (`agentteams-manager-copaw` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
+| `AGENTTEAMS_SOLO_OPERATOR` | No | - | Set to `1`/`true` when a single human runs AgentTeams alone (no multi-person org). Skips the Manager's 4-question onboarding interview, forces every Team's `peerMentions` to `true`, and defaults the sole Human's `permissionLevel` to Admin when unset. |
 
-### QwenPaw Manager (formerly CoPaw, `HICLAW_MANAGER_RUNTIME=copaw`)
+### QwenPaw Manager (formerly CoPaw, `AGENTTEAMS_MANAGER_RUNTIME=copaw`)
 
 When you choose the QwenPaw Manager at install time, the controller runs the **`hiclaw-manager-copaw`** image instead of the OpenClaw-based **`hiclaw-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python QwenPaw vs Node OpenClaw). Multi-channel setup and skills follow the QwenPaw workspace conventions under `/root/manager-workspace`.
 
 ### Customizing the Manager Agent
 
-The Manager Agent's behavior is defined by three files stored in the **`hiclaw-storage`** MinIO bucket (S3 path prefix `agents/manager/`). The installer bind-mounts the host workspace to **`/root/manager-workspace`** in the Manager container, which is kept in sync with that bucket — edit either via MinIO UI/API or by editing files on the host under `HICLAW_WORKSPACE_DIR` (default `~/hiclaw-manager`).
+The Manager Agent's behavior is defined by three files stored in the **`agentteams-storage`** MinIO bucket (S3 path prefix `agents/manager/`). The installer bind-mounts the host workspace to **`/root/manager-workspace`** in the Manager container, which is kept in sync with that bucket — edit either via MinIO UI/API or by editing files on the host under `AGENTTEAMS_WORKSPACE_DIR` (default `~/agentteams-manager`).
 
 1. **SOUL.md** - Agent identity, security rules, communication model
 2. **HEARTBEAT.md** - Periodic check routine (OpenClaw heartbeat or QwenPaw equivalent, depending on runtime)
@@ -254,7 +254,7 @@ facilitating file transfer and processing workflows with path consistency.
 
 ```bash
 # Example 1: Install with home directory sharing (recommended)
-HICLAW_LLM_API_KEY=your-key-here ./install/hiclaw-install.sh manager
+AGENTTEAMS_LLM_API_KEY=your-key-here ./install/hiclaw-install.sh manager
 
 # Example 2: Place files in home directory for agent access
 mkdir -p ~/project-inputs/
@@ -280,7 +280,7 @@ Two ways to activate (either one is sufficient):
 
 ```bash
 # Option 1: environment variable at container start
-docker run -e HICLAW_YOLO=1 ... hiclaw/manager-agent:latest
+docker run -e AGENTTEAMS_YOLO=1 ... agentteams/manager-agent:latest
 
 # Option 2: touch a file in the workspace (takes effect immediately, no restart needed)
 docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode

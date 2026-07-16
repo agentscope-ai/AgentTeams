@@ -313,26 +313,26 @@ func TestLoadConfigSoloOperatorDefaultsFalse(t *testing.T) {
 	cfg := LoadConfig()
 
 	if cfg.SoloOperator {
-		t.Fatal("SoloOperator = true, want false when HICLAW_SOLO_OPERATOR is unset")
+		t.Fatal("SoloOperator = true, want false when AGENTTEAMS_SOLO_OPERATOR is unset")
 	}
 }
 
 func TestLoadConfigSoloOperatorParsesTruthyValues(t *testing.T) {
 	for _, v := range []string{"1", "true", "True", "TRUE"} {
 		t.Run(v, func(t *testing.T) {
-			t.Setenv("HICLAW_SOLO_OPERATOR", v)
+			t.Setenv("AGENTTEAMS_SOLO_OPERATOR", v)
 			cfg := LoadConfig()
 			if !cfg.SoloOperator {
-				t.Fatalf("SoloOperator = false, want true for HICLAW_SOLO_OPERATOR=%q", v)
+				t.Fatalf("SoloOperator = false, want true for AGENTTEAMS_SOLO_OPERATOR=%q", v)
 			}
 		})
 	}
 }
 
 func TestLoadConfigSoloOperatorFalseForOtherValues(t *testing.T) {
-	t.Setenv("HICLAW_SOLO_OPERATOR", "0")
+	t.Setenv("AGENTTEAMS_SOLO_OPERATOR", "0")
 	cfg := LoadConfig()
 	if cfg.SoloOperator {
-		t.Fatal("SoloOperator = true, want false for HICLAW_SOLO_OPERATOR=0")
+		t.Fatal("SoloOperator = true, want false for AGENTTEAMS_SOLO_OPERATOR=0")
 	}
 }

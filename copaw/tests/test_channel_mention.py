@@ -836,7 +836,7 @@ def test_matrix_bare_mention_wakes_handler_in_group_room():
 
 
 def test_immediate_ack_sent_before_enqueue_by_default(monkeypatch):
-    monkeypatch.delenv("HICLAW_CHAT_ACK", raising=False)
+    monkeypatch.delenv("AGENTTEAMS_CHAT_ACK", raising=False)
     ch = _make_inbound_channel()
     client = _SendClient()
     ch._client = client
@@ -858,7 +858,7 @@ def test_immediate_ack_sent_before_enqueue_by_default(monkeypatch):
 
 
 def test_immediate_ack_disabled_via_env(monkeypatch):
-    monkeypatch.setenv("HICLAW_CHAT_ACK", "0")
+    monkeypatch.setenv("AGENTTEAMS_CHAT_ACK", "0")
     ch = _make_inbound_channel()
     client = _SendClient()
     ch._client = client
@@ -877,8 +877,8 @@ def test_immediate_ack_disabled_via_env(monkeypatch):
 def test_immediate_ack_env_false_string_disables():
     import os
 
-    prev = os.environ.pop("HICLAW_CHAT_ACK", None)
-    os.environ["HICLAW_CHAT_ACK"] = "false"
+    prev = os.environ.pop("AGENTTEAMS_CHAT_ACK", None)
+    os.environ["AGENTTEAMS_CHAT_ACK"] = "false"
     try:
         ch = _make_inbound_channel()
         client = _SendClient()
@@ -894,9 +894,9 @@ def test_immediate_ack_env_false_string_disables():
         assert client.sent == []
     finally:
         if prev is None:
-            os.environ.pop("HICLAW_CHAT_ACK", None)
+            os.environ.pop("AGENTTEAMS_CHAT_ACK", None)
         else:
-            os.environ["HICLAW_CHAT_ACK"] = prev
+            os.environ["AGENTTEAMS_CHAT_ACK"] = prev
 
 
 def test_immediate_ack_not_sent_for_readiness_probe():

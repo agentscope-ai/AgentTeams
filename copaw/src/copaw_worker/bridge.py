@@ -30,7 +30,7 @@ def _is_in_container() -> bool:
 
 
 def _quiet_rooms_enabled() -> bool:
-    """True if HICLAW_QUIET_ROOMS is set truthily (Phase 5b, default off).
+    """True if AGENTTEAMS_QUIET_ROOMS is set truthily (Phase 5b, default off).
 
     Mechanism-only gate: when enabled, the bridge additionally writes a
     root-level ``show_tool_details: false`` into config.json (the tap
@@ -39,7 +39,7 @@ def _quiet_rooms_enabled() -> bool:
     When unset (default), config.json output is byte-identical to before
     this flag existed.
     """
-    raw = os.environ.get("HICLAW_QUIET_ROOMS")
+    raw = os.environ.get("AGENTTEAMS_QUIET_ROOMS")
     if raw is None:
         return False
     return raw.strip().lower() in ("true", "1", "yes", "on")
@@ -429,14 +429,14 @@ def _write_agent_json(
     if context_window is not None:
         agent_cfg.setdefault("running", {})["max_input_length"] = context_window
 
-    # Manager heartbeat interval — HICLAW_MANAGER_HEARTBEAT_INTERVAL flows from
+    # Manager heartbeat interval — AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL flows from
     # the controller (see hiclaw-controller/internal/service/worker_env.go) and
     # overrides the template-seeded heartbeat.every (hardcoded "30m" in
     # templates/agent.manager.json). Only the manager profile reads this env
     # var; the worker template already defaults to 10m on its own.
     if profile == "manager":
         heartbeat_every = os.environ.get(
-            "HICLAW_MANAGER_HEARTBEAT_INTERVAL", "10m"
+            "AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL", "10m"
         ).strip() or "10m"
         agent_cfg.setdefault("heartbeat", {})["every"] = heartbeat_every
 

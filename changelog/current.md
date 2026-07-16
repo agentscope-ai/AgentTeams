@@ -4,6 +4,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
+- fix(manager): reject unsupported MCP overrides during Worker runtime switches and document the separate authorization step ([8241cf7](https://github.com/agentscope-ai/AgentTeams/commit/8241cf7bb1cefc6c10748dd5dfd83e966083e77b)).
 - feat(qwenpaw): add the QwenPaw worker runtime Python package baseline with runtime config sync, storage sync, heartbeat reporting, Matrix channel overlay, and focused unit tests.
 - fix(controller): surface Kubernetes Pod container failures in Worker backend status and status API responses.
 - feat(controller): expose low-cardinality AgentTeams controller metrics and optional Helm ServiceMonitor.

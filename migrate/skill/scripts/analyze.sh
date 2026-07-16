@@ -134,9 +134,9 @@ CRON_CMDS_FILE="${OUTPUT_DIR}/cron-commands.txt"
 CRON_FILE="${STATE_DIR}/cron/jobs.json"
 if [ -f "${CRON_FILE}" ] && command -v jq &>/dev/null; then
     # Extract text from agentTurn payloads and scan for command references
-    jq -r '.[].payload.agentTurn.parts[]?.text // empty' "${CRON_FILE}" 2>/dev/null | \
+    jq -r '(if type == "object" then (.jobs // []) else . end)[] | .payload.agentTurn.parts[]?.text // empty' "${CRON_FILE}" 2>/dev/null | \
         grep -oE '`[a-zA-Z_][a-zA-Z0-9_-]*`' | tr -d '`' >> "${CRON_CMDS_FILE}" || true
-    jq -r '.[].payload.agentTurn.parts[]?.text // empty' "${CRON_FILE}" 2>/dev/null | \
+    jq -r '(if type == "object" then (.jobs // []) else . end)[] | .payload.agentTurn.parts[]?.text // empty' "${CRON_FILE}" 2>/dev/null | \
         grep -oE '^\s*[a-zA-Z_][a-zA-Z0-9_-]*' | sed 's/^[[:space:]]*//' >> "${CRON_CMDS_FILE}" || true
 fi
 

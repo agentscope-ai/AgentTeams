@@ -20,6 +20,13 @@ set -euo pipefail
 printf '%s\n' "$*" >> "${DOCKER_LOG}"
 
 case " $* " in
+    *" login --get-login "*)
+        if [ -f "${HOME}/.config/containers/auth.json" ]; then
+            echo "test-user"
+            exit 0
+        fi
+        exit 1
+        ;;
     *" inspect "*)
         exit 1
         ;;
@@ -31,15 +38,19 @@ esac
 STUB
 chmod +x "${BIN_DIR}/docker"
 
-HOME="${HOME_DIR}" \
-PATH="${BIN_DIR}:${PATH}" \
-DOCKER_LOG="${DOCKER_LOG}" \
-USE_CONTAINER=1 \
-SKOPEO_IMAGE="quay.io/skopeo/stable:test" \
-TARGET_REGISTRY="registry.example.com" \
-TARGET_NS="example" \
-DATE_TAG="20260716" \
-bash "${MIRROR_SCRIPT}" tuwunel <<< "y" >/dev/null
+run_mirror() {
+    HOME="${HOME_DIR}" \
+    PATH="${BIN_DIR}:${PATH}" \
+    DOCKER_LOG="${DOCKER_LOG}" \
+    USE_CONTAINER=1 \
+    SKOPEO_IMAGE="quay.io/skopeo/stable:test" \
+    TARGET_REGISTRY="registry.example.com" \
+    TARGET_NS="example" \
+    DATE_TAG="20260716" \
+    bash "${MIRROR_SCRIPT}" tuwunel <<< "${1}" >/dev/null
+}
+
+run_mirror "y"
 
 AUTH_DIR="${HOME_DIR}/.config/containers"
 AUTH_FILE="${AUTH_DIR}/auth.json"
@@ -67,4 +78,25 @@ if ! grep -Fq -- "-v ${AUTH_DIR}:/auth quay.io/skopeo/stable:test login registry
     exit 1
 fi
 
-echo "PASS: containerized skopeo reuses persistent login credentials"
+: > "${DOCKER_LOG}"
+run_mirror "n"
+
+if [ "$(grep -c 'REGISTRY_AUTH_FILE=/auth/auth.json' "${DOCKER_LOG}")" -ne 2 ]; then
+    echo "FAIL: authenticated check and copy did not share the auth file" >&2
+    cat "${DOCKER_LOG}" >&2
+    exit 1
+fi
+
+if ! grep -Fq -- "login --get-login registry.example.com" "${DOCKER_LOG}"; then
+    echo "FAIL: authentication was not checked from the persisted credentials" >&2
+    cat "${DOCKER_LOG}" >&2
+    exit 1
+fi
+
+if grep -Fq -- "run -it" "${DOCKER_LOG}"; then
+    echo "FAIL: valid persisted credentials triggered another interactive login" >&2
+    cat "${DOCKER_LOG}" >&2
+    exit 1
+fi
+
+echo "PASS: containerized skopeo persists and reuses login credentials"

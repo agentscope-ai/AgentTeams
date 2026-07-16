@@ -111,7 +111,7 @@ run_skopeo() {
 check_login() {
     log "Checking authentication to ${TARGET_REGISTRY}..."
 
-    if run_skopeo inspect "docker://${TARGET_REGISTRY}/${TARGET_NS}/all-in-one:latest" > /dev/null 2>&1; then
+    if run_skopeo login --get-login "${TARGET_REGISTRY}" > /dev/null 2>&1; then
         ok "Already authenticated to ${TARGET_REGISTRY}"
         return 0
     fi

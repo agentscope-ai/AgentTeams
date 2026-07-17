@@ -1,0 +1,9 @@
+{
+  "projectId": "example-project-20260717-120000",
+  "title": "Example project",
+  "status": "active",
+  "source": "team-admin",
+  "requester": "@admin:matrix-local.agentteams.io:18080",
+  "parentTaskId": null,
+  "createdAt": "2026-07-17T10:00:00+00:00"
+}

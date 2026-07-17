@@ -22,6 +22,8 @@ dependencies = [
     "rich>=13.0",
     "httpx>=0.25",
     "pyyaml>=6.0",
+    "agentteams-openclaw-merge>=0.1.0",
+    "agentteams-sync>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -40,3 +42,11 @@ hermes-worker = "hermes_worker.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["hermes_worker*", "hermes_matrix*"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "src",
+    "../shared/python/agentteams_openclaw_merge/src",
+    "../shared/python/agentteams_sync/src",
+    "../shared/python/agentteams_matrix_policies/src",
+]

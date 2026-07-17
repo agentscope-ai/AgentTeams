@@ -323,6 +323,10 @@ func (a *AIGatewayClient) Healthy(_ context.Context) error {
 	return nil
 }
 
+func (a *AIGatewayClient) ListMCPServers(_ context.Context) ([]MCPServerInfo, error) {
+	return nil, ErrUnsupportedOp
+}
+
 // ResolveModelProvider looks up a named APIG Model API (HttpApi of type LLM)
 // and returns its basePath, Intranet subdomain URL, and httpApiId.
 func (a *AIGatewayClient) ResolveModelProvider(_ context.Context, name string) (*ModelProviderInfo, error) {

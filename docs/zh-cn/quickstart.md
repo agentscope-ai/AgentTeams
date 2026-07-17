@@ -119,12 +119,14 @@ Manager Agent 将会：
 
 ```bash
 docker run -d --name hiclaw-worker-alice \
-  -e HICLAW_WORKER_NAME=alice \
+  -e AGENTTEAMS_WORKER_NAME=alice \
   -e HICLAW_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
   -e HICLAW_FS_ACCESS_KEY=<ACCESS_KEY> \
   -e HICLAW_FS_SECRET_KEY=<SECRET_KEY> \
   hiclaw/worker-agent:latest
 ```
+
+`AGENTTEAMS_WORKER_NAME` 为必填。仅当 Worker CR 名称与运行时身份不同时，才设置 `AGENTTEAMS_WORKER_CR_NAME`。
 
 Manager 的回复中会提供所有具体参数值。
 

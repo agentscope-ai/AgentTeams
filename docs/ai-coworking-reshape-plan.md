@@ -467,7 +467,7 @@ one Team** (✓ decided #2).
 controller, consistent with the Worker/Team/Manager CRs (not the original storage-only path).
 
 **Steps**
-1. **Define the `Project` CRD** — `hiclaw-controller/api/v1beta1/` + `config/crd/projects.hiclaw.io.yaml`
+1. **Define the `Project` CRD** — `hiclaw-controller/api/v1beta1/` + `config/crd/projects.agentteams.io.yaml`
    **and the Helm copy `helm/hiclaw/crds/` (keep both in sync** — the multi-provider track flagged Helm/CRD
    drift). Spec: `team` (required — team-scoped), `repos[] { url, access: rw|ro }`, optional `workers[]`.
 2. **Add a reconciler** `internal/controller/project_controller.go` mirroring the worker/team controllers
@@ -891,8 +891,8 @@ the Aliyun CN one; mirror or build locally).
 
 **v2.1 net-new (from §10.1 Project CRD):** `hiclaw-controller/internal/controller/project_controller.go` ·
 `hiclaw-controller/internal/service/project_provisioner.go` (MinIO projection **only** — **no** Gitea client,
-**no** gateway calls) · `config/crd/projects.hiclaw.io.yaml` +
-the Helm copy `helm/hiclaw/crds/projects.hiclaw.io.yaml` · `api/v1beta1/types.go` (append `Project*` types) +
+**no** gateway calls) · `config/crd/projects.agentteams.io.yaml` +
+the Helm copy `helm/hiclaw/crds/projects.agentteams.io.yaml` · `api/v1beta1/types.go` (append `Project*` types) +
 `internal/config/config.go` (additions).
 
 **v2.1 net-new (operator-side, NOT controller — decisions #12/#13):**
@@ -953,7 +953,7 @@ left uncertain is fixed or clearly marked ⚠️ rather than asserted as fact.
 > Builds decision #6 (real CRD, not a JSON manifest) + #2 (team-scoped) + #4 (per-worker Gitea identity via
 > the existing gitea-mcp — no controller Gitea client) + #12/#13 (operator helper, enforced RW/RO).
 > Mirrors the Worker/Team controllers. New files:
-> `api/v1beta1/types.go` (append), `config/crd/projects.hiclaw.io.yaml` **+ `helm/hiclaw/crds/projects.hiclaw.io.yaml` (keep in sync)**,
+> `api/v1beta1/types.go` (append), `config/crd/projects.agentteams.io.yaml` **+ `helm/hiclaw/crds/projects.agentteams.io.yaml` (keep in sync)**,
 > `internal/controller/project_controller.go`,
 > `internal/service/project_provisioner.go` (MinIO projection only — **no** Gitea client, **no** gateway calls; the per-worker Gitea identity / `mcp-gitea-<worker>` registration / collaborator role are applied by the operator helper #12).
 > Register in `api/v1beta1/register.go:19-29` (the unexported `addKnownTypes`, which calls `scheme.AddKnownTypes`) and `internal/app/app.go:530-597`.
@@ -970,15 +970,15 @@ left uncertain is fixed or clearly marked ⚠️ rather than asserted as fact.
 
 ---
 
-#### 1. `config/crd/projects.hiclaw.io.yaml`
+#### 1. `config/crd/projects.agentteams.io.yaml`
 
 ```yaml
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: projects.hiclaw.io
+  name: projects.agentteams.io
 spec:
-  group: hiclaw.io
+  group: agentteams.io
   versions:
     - name: v1beta1
       served: true
@@ -1254,7 +1254,7 @@ Uses the exact `oss.StorageClient.PutObject(ctx, key, []byte)` signature (`oss/c
 - **✓ NET-NEW OPERATOR HELPER (#12)**: `scripts/provision-worker-gitea.sh` is net-new and **owns all Gitea-admin + per-worker-mcp-registration work** — it creates each worker's Gitea user + scoped PAT (`POST /users`, `POST /users/:name/tokens`), registers the per-worker `mcp-gitea-<worker>` Higress server (via `setup-mcp-proxy.sh`), and sets repo-collaborator membership from the manifest. **Keeps the controller Gitea-free** (no Gitea client, no PAT handling, no gateway calls for the Gitea leg).
 - **BUILD**: construct `ProjectReconciler` in `initReconcilers` (`app.go:530-597`); the reconciler needs no gitea-mcp route config (it makes no gateway calls — the operator helper owns the `mcp-gitea-<worker>` registrations).
 - **BUILD**: add `&Project{}/&ProjectList{}` to the `scheme.AddKnownTypes` call inside `addKnownTypes` (`register.go:19-29`) and run `make generate` for `zz_generated.deepcopy.go`.
-- **BUILD**: write `projects.hiclaw.io.yaml` to `config/crd/` and run `make generate` — it deepcopies AND syncs `config/crd/*.yaml` → `helm/hiclaw/crds/` (`Makefile:50-53`), preventing drift by construction; add the `status.repoCount` field that backs the Repos printer column (the `.length` jsonPath is invalid).
+- **BUILD**: write `projects.agentteams.io.yaml` to `config/crd/` and run `make generate` — it deepcopies AND syncs `config/crd/*.yaml` → `helm/hiclaw/crds/` (`Makefile:50-53`), preventing drift by construction; add the `status.repoCount` field that backs the Repos printer column (the `.length` jsonPath is invalid).
 - **BUILD**: `project_provisioner.go` does **only** MinIO projection — no Gitea client, no gateway calls. Update the `gitea-operations` skill to read repo URLs + access from the Project manifest (not inline paths) per Phase 4 step 4.
 
 ---

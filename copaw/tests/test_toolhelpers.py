@@ -63,8 +63,10 @@ def test_workspace_dir_and_store_use_configured_working_dir(tmp_path, monkeypatc
 @pytest.mark.parametrize(
     "module, names",
     [
-        (taskflow_tool, ("_response", "_ok", "_error", "_workspace_dir", "_store", "_required_str", "_optional_str")),
-        (projectflow_tool, ("_response", "_ok", "_error", "_workspace_dir", "_store", "_required_str", "_optional_str")),
+        # taskflow/projectflow import the helpers they use; _response/_workspace_dir
+        # stay private to _toolhelpers (called only via _ok/_error/_store).
+        (taskflow_tool, ("_ok", "_error", "_store", "_required_str", "_optional_str")),
+        (projectflow_tool, ("_ok", "_error", "_store", "_required_str", "_optional_str")),
         (message_tool, ("_ok", "_error")),
         (filesync_tool, ("_ok", "_error")),
     ],

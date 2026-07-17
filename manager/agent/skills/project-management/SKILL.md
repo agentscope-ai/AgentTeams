@@ -40,6 +40,7 @@ routes; the Manager container bundles the `hiclaw` CLI.
 - **Always adapt language to admin's preferred language** when posting in rooms or DMs
 - **Always read SOUL.md before composing notifications** — use the persona and language defined there
 - **`--team`/`--repo` only add the Project CRD, never replace chat-flow tracking** — `plan.md`/`meta.json` remain the source of truth for task status regardless; the CRD is repo/access provisioning only, not a second place to track phases
+- **Cross-project CRD dependencies block assignment** — when a Project CR lists `spec.dependsOn`, check `status.dependencies` (via `GET /api/v1/projects/{name}` or list) before assigning the first task or advancing phases. Do not assign work while any dependency has `satisfied: false`. Satisfied means the dependency project phase is `Ready`, `Completed`, or `Archived`. This is CRD-level visibility only — it does not auto-wire into `plan.md` task DAGs.
 
 ## Operation Reference
 

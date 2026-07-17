@@ -9,6 +9,7 @@ on:
       - "dashboard/**"
       - "helm/**"
       - "install/**"
+      - "shared/**"
       - ".github/workflows/remediation-gates.yml"
   workflow_dispatch:
 
@@ -44,6 +45,14 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Install local shared Python packages
+        if: matrix.runtime == 'hermes'
+        run: |
+          set -euo pipefail
+          for pkg in shared/python/agentteams_*; do
+            [ -f "${pkg}/pyproject.toml" ] || continue
+            python -m pip install -e "./${pkg}"
+          done
       - run: python -m pip install -e "./${{ matrix.runtime }}[test]"
       - run: python -m pytest -q "${{ matrix.runtime }}/tests"
 
@@ -79,5 +88,22 @@ jobs:
       - name: Add dependency repos
         run: helm repo add higress.io https://higress.io/helm-charts
       - run: helm dependency build helm/hiclaw
-      - run: helm lint helm/hiclaw --set credentials.llmApiKey=dummy
-      - run: helm template test helm/hiclaw --set credentials.llmApiKey=dummy --set dashboard.enabled=true > /dev/null
+      - run: helm lint helm/hiclaw --set credentials.llmApiKey=dummy --set gateway.publicURL=http://localhost:18080
+      - run: >
+          helm template test helm/hiclaw
+          --set credentials.llmApiKey=dummy
+          --set gateway.publicURL=http://localhost:18080
+          --set dashboard.enabled=true > /dev/null
+
+  shared-shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shared shell unit tests
+        run: |
+          set -euo pipefail
+          for t in shared/tests/test-*.sh; do
+            echo "=== ${t} ==="
+            bash "${t}"
+          done

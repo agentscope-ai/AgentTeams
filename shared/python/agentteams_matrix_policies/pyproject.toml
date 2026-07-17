@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentteams-matrix-policies"
+version = "0.1.0"
+description = "Shared Matrix policy helpers for AgentTeams worker runtimes"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]

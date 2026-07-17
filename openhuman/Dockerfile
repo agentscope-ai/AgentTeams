@@ -128,6 +128,8 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     openssl \
     gosu \
     bash \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install mc (MinIO Client) — pulled from the internal mc stage so the
@@ -156,6 +158,12 @@ RUN chmod +x /opt/hiclaw/scripts/lib/*.sh 2>/dev/null || true
 # Install mc-wrapper as /usr/local/bin/mc (STS credential refresh proxy)
 RUN cp /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc \
  && chmod +x /usr/local/bin/mc
+
+# OpenHuman Worker Python bridge (openclaw.json → config.toml)
+COPY openhuman/pyproject.toml /tmp/openhuman-worker/
+COPY openhuman/src/ /tmp/openhuman-worker/src/
+RUN pip3 install --no-cache-dir --break-system-packages /tmp/openhuman-worker/ \
+    && rm -rf /tmp/openhuman-worker
 
 # Copy OpenHuman worker entrypoint
 COPY openhuman/scripts/openhuman-worker-entrypoint.sh /usr/local/bin/

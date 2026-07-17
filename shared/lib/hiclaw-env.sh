@@ -38,6 +38,21 @@ _agentteams_fail_source() {
     exit 1
 }
 
+# _agentteams_validate_env_file rejects a controller env file before it is
+# sourced if it contains shell command substitution ('$(' or backticks), which
+# is the code-execution vector when the file is dot-sourced. The file is
+# expected to be KEY=VALUE export syntax; legitimate controller output never
+# needs command substitution. Other metacharacters (';', '&&', '|') are left
+# alone because they are inert inside quoted values and rejecting them would
+# break valid multiline/quoted controller output.
+_agentteams_validate_env_file() {
+    local file="$1"
+    if grep -qE '[$]\(|`' "${file}"; then
+        return 1
+    fi
+    return 0
+}
+
 _agentteams_wait_for_file() {
     local file="$1"
     local label="$2"
@@ -65,7 +80,16 @@ _agentteams_source_env_file() {
     esac
 
     set -a
-    # The file is controller-generated shell export syntax.
+    # The file is controller-generated shell export syntax. Reject it before
+    # sourcing if it smuggles command substitution (defense-in-depth against a
+    # tampered mount).
+    if ! _agentteams_validate_env_file "${file}"; then
+        if [ "${had_errexit}" = "true" ]; then
+            set -e
+        fi
+        set +a
+        _agentteams_fail_source "refusing to source ${file}: contains shell command substitution"
+    fi
     # shellcheck disable=SC1090
     . "${file}"
     local rc=$?
@@ -151,6 +175,18 @@ if [ -z "${AGENTTEAMS_RUNTIME:-}" ]; then
         AGENTTEAMS_RUNTIME="none"
     fi
 fi
+
+# ── Runtime helpers ───────────────────────────────────────────────────────────
+is_cloud_runtime() {
+    case "${AGENTTEAMS_RUNTIME}" in
+        aliyun|k8s) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_local_runtime() {
+    ! is_cloud_runtime
+}
 
 # ── Normalized variables ──────────────────────────────────────────────────────
 # AgentTeams runtime contract with local defaults.

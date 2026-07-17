@@ -97,6 +97,11 @@ BUILTIN_VERSION_ARG = --build-arg BUILTIN_VERSION=$(VERSION)
 
 # Named build context for shared libraries (requires BuildKit / Docker 23+)
 SHARED_LIB_CTX = --build-context shared=./shared/lib
+AGENTTEAMS_PROTOCOL_CTX = --build-context agentteams-protocol=./shared/python/agentteams_protocol
+AGENTTEAMS_OPENCLAW_MERGE_CTX = --build-context agentteams-openclaw-merge=./shared/python/agentteams_openclaw_merge
+AGENTTEAMS_SYNC_CTX = --build-context agentteams-sync=./shared/python/agentteams_sync
+AGENTTEAMS_MATRIX_FORMAT_CTX = --build-context agentteams-matrix-format=./shared/python/agentteams_matrix_format
+AGENTTEAMS_MATRIX_POLICIES_CTX = --build-context agentteams-matrix-policies=./shared/python/agentteams_matrix_policies
 
 # Named build context for local copaw_worker extension
 COPAW_WORKER_CTX = --build-context copaw-worker=./copaw
@@ -130,7 +135,7 @@ LINES          ?= 50
         push-native push-native-manager push-native-manager-copaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
         push-native-qwenpaw-worker \
         buildx-setup \
-        test test-quick test-installed test-embedded \
+        test test-quick test-installed test-embedded test-shared \
         install install-embedded uninstall uninstall-embedded replay replay-log \
         verify wait-ready wait-ready-embedded \
         generate sync-crds check-crd-sync \
@@ -169,7 +174,7 @@ build-hiclaw-controller: ## Build agentteams-controller image (prerequisite for 
 
 build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile \
 		-t $(LOCAL_MANAGER) \
@@ -178,9 +183,10 @@ build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 
 build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Python runtime)
 	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_PROTOCOL_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
-		-f manager/Dockerfile.copaw \
+		-f manager/Dockerfile \
+		--target manager-copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
 		-t $(LOCAL_MANAGER_COPAW_LEGACY) \
 		.
@@ -196,7 +202,7 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_WORKER) \
 		-t $(LOCAL_WORKER_LEGACY) \
@@ -204,7 +210,7 @@ build-worker: ## Build Worker image
 
 build-copaw-worker: ## Build CoPaw Worker image
 	@echo "==> Building CoPaw Worker image: $(LOCAL_COPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_PROTOCOL_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_COPAW_WORKER) \
 		-t $(LOCAL_COPAW_WORKER_LEGACY) \
@@ -212,7 +218,7 @@ build-copaw-worker: ## Build CoPaw Worker image
 
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_PROTOCOL_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(AGENTTEAMS_MATRIX_POLICIES_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
 		-t $(LOCAL_HERMES_WORKER_LEGACY) \
@@ -228,7 +234,7 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_PROTOCOL_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(AGENTTEAMS_MATRIX_FORMAT_CTX) $(DOCKER_BUILD_ARGS) \
 		-f qwenpaw/Dockerfile \
 		-t $(LOCAL_QWENPAW_WORKER) \
 		-t $(LOCAL_QWENPAW_WORKER_LEGACY) \
@@ -626,6 +632,9 @@ test-quick: ## Run test-01 only (quick smoke test)
 test-installed: ## Run tests against an already-installed Manager (no container lifecycle)
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 
+test-shared: ## Run shared/lib shell unit tests
+	@set -e; for t in shared/tests/test-*.sh; do echo "=== $$t ==="; bash "$$t"; done
+
 # ---------- Install / Uninstall ----------
 
 install: ## Install Manager locally (non-interactive, set AGENTTEAMS_LLM_API_KEY)
@@ -639,6 +648,7 @@ endif
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
 		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE=$(LOCAL_QWENPAW_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
 		bash ./install/hiclaw-install.sh manager
@@ -653,6 +663,7 @@ endif
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
 		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE=$(LOCAL_QWENPAW_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		bash ./install/hiclaw-install.sh manager
 
@@ -696,7 +707,7 @@ uninstall: ## Stop and remove Manager + all Worker containers
 
 install-embedded: ## Install in embedded mode (dual-container: controller + agent)
 ifndef SKIP_BUILD
-	$(MAKE) build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker
+	$(MAKE) build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-qwenpaw-worker
 endif
 	@echo "==> Installing AgentTeams (embedded mode)..."
 	AGENTTEAMS_NON_INTERACTIVE=1 \
@@ -706,6 +717,7 @@ endif
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
 		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
+		AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE=$(LOCAL_QWENPAW_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_MATRIX_E2EE=0 \
 		bash ./install/hiclaw-install.sh
@@ -744,15 +756,22 @@ else
 	# pull_request_target runs the base-branch workflow before this PR's
 	# workflow env rename lands, so map legacy CI env names only at the test
 	# harness boundary. Runtime/install scripts still consume AGENTTEAMS_*.
-	AGENTTEAMS_YOLO=1 \
-		AGENTTEAMS_LLM_API_KEY="$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" \
-		AGENTTEAMS_LLM_PROVIDER="$${AGENTTEAMS_LLM_PROVIDER:-$${HICLAW_LLM_PROVIDER:-}}" \
-		AGENTTEAMS_DEFAULT_MODEL="$${AGENTTEAMS_DEFAULT_MODEL:-$${HICLAW_DEFAULT_MODEL:-}}" \
-		AGENTTEAMS_MANAGER_RUNTIME="$${AGENTTEAMS_MANAGER_RUNTIME:-$${HICLAW_MANAGER_RUNTIME:-}}" \
-		AGENTTEAMS_DEFAULT_WORKER_RUNTIME="$${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-$${HICLAW_DEFAULT_WORKER_RUNTIME:-}}" \
-		$(MAKE) install-embedded
-	$(MAKE) wait-ready-embedded
-	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
+	# Keep skip + install/test in ONE recipe shell: Make runs each line in a
+	# fresh shell, so a bare `exit 0` after the if would not stop later lines.
+	@if [ -z "$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" ]; then \
+		echo "==> Skipping embedded integration tests: AGENTTEAMS_LLM_API_KEY is unset"; \
+		echo "    Configure the repo secret to enable these shards."; \
+	else \
+		AGENTTEAMS_YOLO=1 \
+			AGENTTEAMS_LLM_API_KEY="$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" \
+			AGENTTEAMS_LLM_PROVIDER="$${AGENTTEAMS_LLM_PROVIDER:-$${HICLAW_LLM_PROVIDER:-}}" \
+			AGENTTEAMS_DEFAULT_MODEL="$${AGENTTEAMS_DEFAULT_MODEL:-$${HICLAW_DEFAULT_MODEL:-}}" \
+			AGENTTEAMS_MANAGER_RUNTIME="$${AGENTTEAMS_MANAGER_RUNTIME:-$${HICLAW_MANAGER_RUNTIME:-}}" \
+			AGENTTEAMS_DEFAULT_WORKER_RUNTIME="$${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-$${HICLAW_DEFAULT_WORKER_RUNTIME:-}}" \
+			$(MAKE) install-embedded && \
+		$(MAKE) wait-ready-embedded && \
+		./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)"); \
+	fi
 endif
 
 uninstall-embedded: ## Stop and remove embedded containers

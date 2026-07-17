@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hiclaw/hiclaw-controller/internal/slicesx"
 )
 
 // HigressClient implements Client for self-hosted Higress gateway.
@@ -276,7 +278,7 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 
 			changed := true
 			if add && matchesProvider {
-				if !containsString(consumers, consumerName) {
+				if !slicesx.Contains(consumers, consumerName) {
 					consumers = append(consumers, consumerName)
 				}
 				// Always PUT to trigger WASM key-auth resync — the consumer
@@ -653,6 +655,42 @@ func (c *HigressClient) Healthy(ctx context.Context) error {
 	return nil
 }
 
+// ListMCPServers returns MCP servers registered in the Higress console.
+func (c *HigressClient) ListMCPServers(ctx context.Context) ([]MCPServerInfo, error) {
+	respBody, statusCode, err := c.doJSON(ctx, http.MethodGet, "/v1/mcpServer", nil)
+	if err != nil {
+		return nil, fmt.Errorf("list MCP servers: %w", err)
+	}
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("list MCP servers: HTTP %d", statusCode)
+	}
+
+	var listResp struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &listResp); err != nil {
+		return nil, fmt.Errorf("decode MCP server list: %w", err)
+	}
+
+	servers := make([]MCPServerInfo, 0, len(listResp.Data))
+	for _, raw := range listResp.Data {
+		var entry struct {
+			Name             string `json:"name"`
+			ConsumerAuthInfo struct {
+				AllowedConsumers []string `json:"allowedConsumers"`
+			} `json:"consumerAuthInfo"`
+		}
+		if err := json.Unmarshal(raw, &entry); err != nil || entry.Name == "" {
+			continue
+		}
+		servers = append(servers, MCPServerInfo{
+			Name:             entry.Name,
+			AllowedConsumers: entry.ConsumerAuthInfo.AllowedConsumers,
+		})
+	}
+	return servers, nil
+}
+
 // ── Higress Console primitives (migrated from controller/higress_client.go) ──
 
 func (c *HigressClient) ensureDomain(ctx context.Context, name string) error {
@@ -803,15 +841,6 @@ func toStringSlice(v interface{}) []string {
 		return arr
 	}
 	return nil
-}
-
-func containsString(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
 }
 
 func removeString(slice []string, s string) []string {

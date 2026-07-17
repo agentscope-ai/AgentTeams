@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -117,6 +118,8 @@ async def test_taskflow_project_assignment_and_completion(tmp_path, monkeypatch)
         "DELIVERABLES:\n"
         "- shared/tasks/st-01/sources.md\n",
     )
+    sources_path = workspace / "shared" / "tasks" / "st-01" / "sources.md"
+    sources_path.write_text("source list\n", encoding="utf-8")
 
     response = await taskflow(action="submit_task", payload={"taskId": "st-01"})
     payload = _response_json(response)
@@ -613,6 +616,9 @@ async def test_submit_task_writes_structured_result(tmp_path, monkeypatch):
             },
         ),
     )
+    deliverable_path = task_dir / "workspace" / "api-design.md"
+    deliverable_path.parent.mkdir(parents=True, exist_ok=True)
+    deliverable_path.write_text("api design\n", encoding="utf-8")
 
     response = await taskflow(
         action="submit_task",
@@ -1000,6 +1006,11 @@ async def test_loop_task_submission_waits_for_leader_acceptance(tmp_path, monkey
 
     response = await taskflow(action="ack_task", payload={"taskId": "tp-loop-delegate-i001-01"})
     assert _response_json(response)["ok"] is True
+    draft_path = (
+        workspace / "shared" / "tasks" / "tp-loop-delegate-i001-01" / "workspace" / "draft.md"
+    )
+    draft_path.parent.mkdir(parents=True, exist_ok=True)
+    draft_path.write_text("draft content\n", encoding="utf-8")
     response = await taskflow(
         action="submit_task",
         payload={
@@ -1402,6 +1413,9 @@ async def test_submit_task_calls_sync_and_stat(tmp_path, monkeypatch):
             },
         ),
     )
+    deliverable_path = task_dir / "workspace" / "output.md"
+    deliverable_path.parent.mkdir(parents=True, exist_ok=True)
+    deliverable_path.write_text("output artifact\n", encoding="utf-8")
 
     response = await taskflow(
         action="submit_task",
@@ -1421,7 +1435,51 @@ async def test_submit_task_calls_sync_and_stat(tmp_path, monkeypatch):
     mock.push_shared_path.assert_called_once_with(
         "shared/tasks/st-01/", exclude=["spec.md", "base/"],
     )
-    mock.stat_shared_path.assert_called_once_with("shared/tasks/st-01/result.md")
+    assert mock.stat_shared_path.call_count == 2
+    mock.stat_shared_path.assert_any_call("shared/tasks/st-01/result.md")
+    mock.stat_shared_path.assert_any_call("shared/tasks/st-01/workspace/output.md")
+
+
+@pytest.mark.asyncio
+async def test_submit_task_fails_when_deliverable_missing_locally(tmp_path, monkeypatch):
+    working_dir = tmp_path / "worker" / ".copaw"
+    workspace = working_dir / "workspaces" / "default"
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    _set_actor(monkeypatch, "@worker:domain")
+    mock = _mock_sync(monkeypatch)
+
+    task_dir = workspace / "shared" / "tasks" / "st-01"
+    task_dir.mkdir(parents=True)
+    (task_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "task_id": "st-01",
+                "project_id": "tp-01",
+                "task_title": "Task",
+                "assigned_to": "@worker:domain",
+                "room_id": "room:!team-room:domain",
+                "status": "in_progress",
+                "depends_on": [],
+            },
+        ),
+    )
+
+    response = await taskflow(
+        action="submit_task",
+        payload={
+            "taskId": "st-01",
+            "status": "SUCCESS",
+            "summary": "Done.",
+            "deliverables": ["shared/tasks/st-01/workspace/missing.md"],
+        },
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is False
+    assert "artifact verification failed" in payload["error"]
+    meta = json.loads((task_dir / "meta.json").read_text())
+    assert meta["status"] == "in_progress"
+    mock.push_shared_path.assert_not_called()
 
 
 @pytest.mark.asyncio

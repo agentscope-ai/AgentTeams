@@ -721,10 +721,11 @@ func (a *App) initReconcilers(_ context.Context) error {
 
 func (a *App) initHTTPServer(_ context.Context) error {
 	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
-		Client:           a.mgr.GetClient(),
-		Backend:          a.registry,
-		Gateway:          a.gateway,
-		OSS:              a.oss,
+		Client:              a.mgr.GetClient(),
+		Backend:             a.registry,
+		Gateway:             a.gateway,
+		GatewayDataPlaneURL: a.cfg.GatewayConfig().DataPlaneURL,
+		OSS:                 a.oss,
 		STS:              a.stsService,
 		AuthMw:           a.authMw,
 		KubeMode:         a.cfg.KubeMode,

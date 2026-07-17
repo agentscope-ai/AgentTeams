@@ -50,8 +50,11 @@ bash /opt/hiclaw/agent/skills/project-management/scripts/create-project.sh \
   --workers "worker1,worker2,worker3" \
   --team "<TEAM_NAME>" \
   --repo "https://git.pawcommit.com/team/repo-a.git:rw" \
-  --repo "https://git.pawcommit.com/team/repo-b.git:ro"
+  --repo "https://git.pawcommit.com/team/repo-b.git:ro" \
+  --depends-on "upstream-project-id"
 ```
+
+Repeat `--depends-on` for each upstream Project CR metadata name in the same namespace. Dependencies are recorded on the Project CR only; they do not modify `plan.md`.
 
 This additionally emits a `Project` CR YAML (`apiVersion: hiclaw.io/v1beta1`, `kind: Project` —
 see `hiclaw-controller/api/v1beta1/types.go` `ProjectSpec` for the exact schema) and runs

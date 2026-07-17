@@ -384,7 +384,7 @@ if [ -n "${AGENTTEAMS_GITHUB_TOKEN}" ]; then
     higress_api POST /v1/service-sources "Registering GitHub API service source" \
         '{"type":"dns","name":"github-api","domain":"api.github.com","port":443,"protocol":"https"}'
 
-    MCP_YAML_FILE="/opt/hiclaw/agent/skills/mcp-server-management/references/mcp-github.yaml"
+    MCP_YAML_FILE="/opt/hiclaw/configs/mcp-templates/mcp-github.yaml"
     if [ -f "${MCP_YAML_FILE}" ]; then
         MCP_YAML=$(sed "s|accessToken: \"\"|accessToken: \"${AGENTTEAMS_GITHUB_TOKEN}\"|" "${MCP_YAML_FILE}")
         RAW_CONFIG=$(printf '%s' "${MCP_YAML}" | jq -Rs .)

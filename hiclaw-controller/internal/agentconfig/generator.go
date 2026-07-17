@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/hiclaw/hiclaw-controller/internal/slicesx"
 )
 
 // Generator produces worker runtime configuration files in pure Go.
@@ -288,7 +290,7 @@ func (g *Generator) applyChannelPolicy(config map[string]interface{}, policy *Ch
 		existing := toStringSlice(matrixCfg["groupAllowFrom"])
 		for _, u := range policy.GroupAllowExtra {
 			id := resolveID(u)
-			if !containsString(existing, id) {
+			if !slicesx.Contains(existing, id) {
 				existing = append(existing, id)
 			}
 		}
@@ -302,7 +304,7 @@ func (g *Generator) applyChannelPolicy(config map[string]interface{}, policy *Ch
 			existing := toStringSlice(dm["allowFrom"])
 			for _, u := range policy.DMAllowExtra {
 				id := resolveID(u)
-				if !containsString(existing, id) {
+				if !slicesx.Contains(existing, id) {
 					existing = append(existing, id)
 				}
 			}
@@ -448,15 +450,6 @@ func toStringSlice(v interface{}) []string {
 	return nil
 }
 
-func containsString(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
-}
-
 // allModelSpecs returns all known model specs for the openclaw.json models list.
 func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
 	allModels := []string{
@@ -545,8 +538,8 @@ func InjectHeartbeat(existing []byte, enabled bool, every string) []byte {
 // caller-computed final allow-lists. Empty inputs are treated as no-op to
 // avoid wiping a valid policy on partial information.
 func InjectChannelPolicy(existing []byte, groupAllowFrom, dmAllowFrom []string) []byte {
-	groupAllowFrom = uniqueNonEmptyStrings(groupAllowFrom)
-	dmAllowFrom = uniqueNonEmptyStrings(dmAllowFrom)
+	groupAllowFrom = slicesx.UniqueNonEmpty(groupAllowFrom)
+	dmAllowFrom = slicesx.UniqueNonEmpty(dmAllowFrom)
 	if len(groupAllowFrom) == 0 || len(dmAllowFrom) == 0 {
 		return existing
 	}
@@ -584,22 +577,6 @@ func InjectChannelPolicy(existing []byte, groupAllowFrom, dmAllowFrom []string) 
 func stringSliceToInterfaces(values []string) []interface{} {
 	out := make([]interface{}, 0, len(values))
 	for _, value := range values {
-		out = append(out, value)
-	}
-	return out
-}
-
-func uniqueNonEmptyStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
 		out = append(out, value)
 	}
 	return out

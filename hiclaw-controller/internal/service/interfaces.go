@@ -79,9 +79,8 @@ type WorkerEnvBuilderI interface {
 // ManagerProvisioner defines the provisioning operations used by ManagerReconciler.
 // Implemented by *Provisioner; extracted for testability.
 //
-// NOTE: RefreshCredentials is included because the current handleUpdate calls it
-// (likely a bug — should be RefreshManagerCredentials). Phase 2 reconciler rewrite
-// will unify to RefreshManagerCredentials only.
+// Prefer RefreshManagerCredentials for Manager CR updates. RefreshCredentials
+// remains as a legacy alias that delegates to RefreshManagerCredentials.
 type ManagerProvisioner interface {
 	ProvisionManager(ctx context.Context, req ManagerProvisionRequest) (*ManagerProvisionResult, error)
 	DeprovisionManager(ctx context.Context, name string) error

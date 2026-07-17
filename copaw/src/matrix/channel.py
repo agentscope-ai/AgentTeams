@@ -20,6 +20,17 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .outbound_policy import OutboundFilterPolicy
+from .relations import (
+    MATRIX_THREAD_ROOT_META_KEY,
+    RecentEventLedger,
+    apply_thread_relation,
+    atomic_write_text,
+    generated_marker,
+    inbound_relation_meta,
+    is_generated_event,
+)
+
 import httpx
 
 from nio import (
@@ -41,16 +52,6 @@ from nio import (
     UploadResponse,
 )
 from nio.responses import JoinedMembersResponse, WhoamiResponse
-
-from copaw_worker.matrix_relations import (
-    MATRIX_THREAD_ROOT_META_KEY,
-    RecentEventLedger,
-    apply_thread_relation,
-    atomic_write_text,
-    generated_marker,
-    inbound_relation_meta,
-    is_generated_event,
-)
 
 logger = logging.getLogger("copaw.channels.matrix")
 
@@ -80,7 +81,9 @@ except ImportError:  # pragma: no cover
 CHANNEL_KEY = "matrix"
 
 # Tunables: sync / typing / DM membership cache TTL
-SYNC_TIMEOUT_MS = 30000
+DEFAULT_SYNC_TIMEOUT_MS = 30000
+SYNC_TIMEOUT_MS = DEFAULT_SYNC_TIMEOUT_MS
+STARTUP_REPLAY_BUFFER_CAP = 50
 TYPING_SERVER_TIMEOUT_MS = 30000
 TYPING_RENEWAL_INTERVAL_S = 25
 TYPING_MAX_DURATION_S = 120
@@ -120,33 +123,6 @@ _STOP_RESPONSE_RE = re.compile(
 _READINESS_REPLY_RE = re.compile(
     r"\breadiness\s+check\b.*\breply\s+with\s+the\s+exact\s+text\s+READY\b",
     re.IGNORECASE | re.DOTALL,
-)
-_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
-    r"(?i)\b("
-    r"let me|"
-    r"i['’]?ll coordinate|"
-    r"i will coordinate|"
-    r"i have (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
-    r"workers? available|"
-    r"now let me|"
-    r"no active projects|"
-    r"project created\. now|"
-    r"good[,.]? i have|"
-    r"solid understanding|"
-    r"team coordination plan"
-    r")\b",
-)
-_TEAM_LEADER_MATRIX_USER_ID_RE = re.compile(
-    r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
-)
-_TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b("
-    r"task\s+assigned|"
-    r"assigned\s+task|"
-    r"you\s+are\s+assigned|"
-    r"please\s+(?:design|implement|write|test|build|handle|review|create|investigate|work)|"
-    r"start\s+(?:by\s+)?(?:designing|implementing|writing|testing|building|handling|reviewing|creating|investigating)"
-    r")\b",
 )
 _THREAD_META_ROOT_KEY = "thread_root_event_id"
 _MATRIX_THREAD_META_KEY = MATRIX_THREAD_ROOT_META_KEY
@@ -228,110 +204,6 @@ def _clean_control_response_text(text: str) -> str:
     status = match.group("status").strip()
     status = status[:1].upper() + status[1:] if status else "Task stopped"
     return _STOP_RESPONSE_RE.sub(status + ".", text)
-
-
-def _ends_with_no_reply_control(text: str) -> bool:
-    """Return true when the final non-empty output line is NO_REPLY."""
-    return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
-
-
-def _strip_yaml_string(value: str) -> str:
-    text = value.strip()
-    if not text or text in {"null", "~"}:
-        return ""
-    if "#" in text:
-        text = text.split("#", 1)[0].strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
-        return text[1:-1]
-    return text
-
-
-def _runtime_root() -> Path:
-    configured = os.getenv("COPAW_WORKING_DIR")
-    if configured:
-        path = Path(configured).expanduser().resolve()
-        if path.name == "default" and path.parent.name == "workspaces":
-            copaw_dir = path.parent.parent
-            if copaw_dir.name == ".copaw":
-                return copaw_dir.parent
-        if path.name == ".copaw":
-            return path.parent
-        return path.parent
-
-    cwd = Path.cwd().resolve()
-    if cwd.name == "default" and cwd.parent.name == "workspaces":
-        copaw_dir = cwd.parent.parent
-        if copaw_dir.name == ".copaw":
-            return copaw_dir.parent
-    return cwd
-
-
-def _runtime_config_field(section: str, key: str) -> str:
-    path = _runtime_root() / "runtime" / "runtime.yaml"
-    if not path.exists():
-        return ""
-
-    in_section = False
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return ""
-    for raw_line in lines:
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
-        if not raw_line.startswith((" ", "\t")):
-            in_section = raw_line.strip() == f"{section}:"
-            continue
-        if not in_section:
-            continue
-        stripped = raw_line.strip()
-        if ":" not in stripped:
-            continue
-        field, value = stripped.split(":", 1)
-        if field.strip() == key:
-            return _strip_yaml_string(value)
-    return ""
-
-
-def _matrix_localpart(user_id: str | None) -> str:
-    text = (user_id or os.getenv("AGENTTEAMS_WORKER_NAME") or "").strip()
-    if text.startswith("@"):
-        return text[1:].split(":", 1)[0]
-    return text.split(":", 1)[0]
-
-
-def _is_team_leader_identity(user_id: str | None) -> bool:
-    localpart = _matrix_localpart(user_id)
-    return localpart.endswith("-lead") or localpart.endswith("-leader")
-
-
-def _is_team_leader_internal_preamble_text(text: str) -> bool:
-    """Return true for visible Team Leader internal planning/tool preambles."""
-    stripped = (text or "").strip()
-    if not stripped or "?" in stripped:
-        return False
-
-    # Keep concrete worker assignments so the channel can reroute them to the
-    # Team Room. Roster/topology planning that happens to mention workers is
-    # still an internal preamble and must stay out of Leader DM.
-    if _TEAM_LEADER_MATRIX_USER_ID_RE.search(text or "") and (
-        _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(stripped)
-    ):
-        return False
-
-    return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))
-
-
-def _is_team_leader_dm_internal_preamble(current_room_id: str, text: str) -> bool:
-    """Suppress visible Team Leader internal planning/tool preambles in Leader DM."""
-    if _runtime_config_field("member", "role") != "team_leader":
-        return False
-
-    leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
-    if not leader_dm_room_id or current_room_id != leader_dm_room_id:
-        return False
-
-    return _is_team_leader_internal_preamble_text(text)
 
 
 def _readiness_probe_reply(text: str) -> str | None:
@@ -426,7 +298,10 @@ class MatrixChannelConfig:
             raw.get("history_limit", DEFAULT_HISTORY_LIMIT),
         )
         # matrix-nio sync long-poll timeout (ms); typical 30s
-        self.sync_timeout_ms: int = raw.get("sync_timeout_ms", 30000)
+        self.sync_timeout_ms: int = raw.get(
+            "sync_timeout_ms",
+            DEFAULT_SYNC_TIMEOUT_MS,
+        )
 
 
 def _normalize_user_id(uid: str) -> str:
@@ -489,6 +364,17 @@ class MatrixChannel(BaseChannel):
             self._recent_event_ledger_path(),
             RECENT_EVENT_LEDGER_CAP,
         )
+        self._outbound_policy = OutboundFilterPolicy()
+
+    def _get_outbound_policy(self) -> OutboundFilterPolicy:
+        """Return outbound send policy, lazily initialized for test doubles."""
+        policy = getattr(self, "_outbound_policy", None)
+        if policy is None:
+            policy = OutboundFilterPolicy(self._user_id)
+            self._outbound_policy = policy
+        elif self._user_id is not None:
+            policy.user_id = self._user_id
+        return policy
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -524,15 +410,46 @@ class MatrixChannel(BaseChannel):
         else:
             # SimpleNamespace or other object — convert to dict via __dict__
             cfg = MatrixChannelConfig(vars(config))
+
+        resolved_show_tool_details = cls._resolve_show_tool_details(show_tool_details)
+
         return cls(
             process=process,
             config=cfg,
             on_reply_sent=on_reply_sent,
-            show_tool_details=show_tool_details,
+            show_tool_details=resolved_show_tool_details,
             filter_tool_messages=filter_tool_messages
             or cfg.filter_tool_messages,
             filter_thinking=filter_thinking or cfg.filter_thinking,
         )
+
+    @staticmethod
+    def _resolve_show_tool_details(default: bool) -> bool:
+        """Honor config.json root show_tool_details (AGENTTEAMS_QUIET_ROOMS bridge)."""
+        import json
+        import os
+        from pathlib import Path
+
+        working_dir = os.environ.get("COPAW_WORKING_DIR")
+        if working_dir:
+            cfg_path = Path(working_dir) / "config.json"
+            if cfg_path.is_file():
+                try:
+                    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+                    if "show_tool_details" in data:
+                        return bool(data["show_tool_details"])
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+        try:
+            from copaw_worker.bridge import quiet_rooms_enabled
+
+            if quiet_rooms_enabled():
+                return False
+        except ImportError:
+            pass
+
+        return default
 
     @classmethod
     def from_env(cls, process: Callable, on_reply_sent=None) -> "MatrixChannel":
@@ -600,6 +517,7 @@ class MatrixChannel(BaseChannel):
             whoami = await self._client.whoami()
             if isinstance(whoami, WhoamiResponse):
                 self._user_id = whoami.user_id
+                self._get_outbound_policy().user_id = whoami.user_id
                 self._client.user_id = whoami.user_id
                 self._client.user = whoami.user_id
                 # E2EE requires device_id to associate Olm keys with this
@@ -637,6 +555,7 @@ class MatrixChannel(BaseChannel):
                     whoami = await self._client.whoami()
                     if isinstance(whoami, WhoamiResponse):
                         self._user_id = whoami.user_id
+                        self._get_outbound_policy().user_id = whoami.user_id
                         self._client.user_id = whoami.user_id
                         self._client.user = whoami.user_id
                         if whoami.device_id:
@@ -672,6 +591,7 @@ class MatrixChannel(BaseChannel):
             )
             if isinstance(resp, LoginResponse):
                 self._user_id = resp.user_id
+                self._get_outbound_policy().user_id = resp.user_id
                 logger.info(
                     "MatrixChannel: logged in as %s (password)",
                     self._user_id,
@@ -2780,11 +2700,10 @@ class MatrixChannel(BaseChannel):
         room_id: str,
         text: str,
     ) -> bool:
-        if _is_team_leader_dm_internal_preamble(room_id, text):
-            return True
-        if not _is_team_leader_identity(self._user_id):
-            return False
-        return _is_team_leader_internal_preamble_text(text)
+        return self._get_outbound_policy().should_suppress_team_leader_preamble(
+            room_id,
+            text,
+        )
 
     def _with_thread_relation_meta(
         self,
@@ -3168,7 +3087,8 @@ class MatrixChannel(BaseChannel):
         # NO_REPLY protocol: agent decided it has nothing to say.
         # Suppress the outgoing message entirely to avoid triggering the
         # recipient (which would cause an infinite NO_REPLY ping-pong).
-        if _ends_with_no_reply_control(text):
+        policy = self._get_outbound_policy()
+        if policy.should_suppress_no_reply(text):
             logger.info(
                 "MatrixChannel: suppressing NO_REPLY send to %s",
                 room_id,
@@ -3184,6 +3104,16 @@ class MatrixChannel(BaseChannel):
             )
             await self._send_typing(room_id, False)
             return
+
+        rerouted_room_id = policy.resolve_destination_room(room_id, text)
+        if rerouted_room_id != room_id:
+            logger.info(
+                "MatrixChannel: rerouting team assignment from Leader DM %s "
+                "to Team Room %s",
+                room_id,
+                rerouted_room_id,
+            )
+            room_id = rerouted_room_id
 
         text = _clean_control_response_text(text)
 

@@ -196,8 +196,8 @@ helm install hiclaw higress.io/hiclaw \
 | `credentials.llmProvider` | 可选 | LLM 服务商名，默认 `openai-compat` |
 | `credentials.defaultModel` | 可选 | 默认模型，默认 `gpt-5.4` |
 | `credentials.llmBaseUrl` | 可选 | OpenAI 兼容的 Base URL（例如 `https://api.deepseek.com/v1`）。使用官方 OpenAI API 时留空 |
-| `manager.runtime` | 可选 | Manager Agent 运行时：`openclaw`（默认）、`copaw` 或 `hermes` |
-| `worker.defaultRuntime` | 可选 | Worker 默认运行时：`openclaw`（默认）、`copaw` 或 `hermes` |
+| `manager.runtime` | 可选 | Manager Agent 运行时：`openclaw`（默认）或 `copaw` |
+| `worker.defaultRuntime` | 可选 | Worker 默认运行时：`openclaw`（默认）、`copaw`、`hermes`、`openhuman` 或 `qwenpaw` |
 
 <details>
 <summary>使用其他运行时（QwenPaw Manager + Hermes Workers）</summary>
@@ -214,7 +214,7 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-copaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
+各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-copaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` / `hiclaw-openhuman-worker` / `agentteams-qwenpaw-worker`）。
 
 </details>
 
@@ -390,11 +390,13 @@ Alice：前端校验也更新了。
 
 ## 多运行时协作
 
-AgentTeams 支持三种 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
+AgentTeams 支持多种 Worker 运行时，可以**在同一个 IM 房间中共存协作**：
 
 - **OpenClaw**（Node.js）— 通用 Agent 运行时，拥有丰富的 Skills 生态，擅长任务编排和工具调用
-- **QwenPaw**（Python）— 轻量级运行时，适合浏览器自动化和快速任务
+- **QwenPaw / CoPaw**（Python，`runtime=copaw`）— 轻量级运行时，适合浏览器自动化和快速任务
 - **Hermes**（[hermes-agent](https://github.com/NousResearch/hermes-agent)）— 自主编程 Agent，具备终端沙箱、自我进化的 Skill 和持久化记忆
+- **OpenHuman**（Rust）— 原生 Matrix Worker 运行时（`runtime=openhuman`）
+- **QwenPaw / TeamHarness**（`runtime=qwenpaw`）— 通过 `runtime.yaml` 做 desired-state 的 Worker（与 `runtime=copaw` 不同）
 
 每种运行时各有擅长。推荐模式：用确定性更高的 Agent（OpenClaw/QwenPaw）做 Leader 负责任务分解和调度，用 Hermes Worker 执行自主编程任务。所有运行时通过 Matrix `m.mentions` 在同一个房间内通信——完全可见、随时可干预。
 

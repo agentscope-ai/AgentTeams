@@ -383,6 +383,84 @@ func TestProjectReconcile_CompletedRaisesDeprovisionPending(t *testing.T) {
 	}
 }
 
+func TestProjectReconcile_DependenciesSatisfiedWhenUpstreamReady(t *testing.T) {
+	team := teamWithMembers("alpha-team", v1beta1.TeamMemberStatus{Name: "lead", RuntimeName: "lead-runtime", Role: "team_leader"})
+	upstream := baseProject("upstream", "alpha-team")
+	upstream.Status.Phase = "Ready"
+	downstream := baseProject("downstream", "alpha-team")
+	downstream.Spec.DependsOn = []string{"upstream"}
+	rig := newProjectRig(t, team, upstream, downstream)
+
+	if _, err := rig.reconcile(t, "downstream"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := rig.getProject(t, "downstream")
+	if len(got.Status.Dependencies) != 1 {
+		t.Fatalf("dependencies = %+v, want 1 entry", got.Status.Dependencies)
+	}
+	dep := got.Status.Dependencies[0]
+	if dep.Project != "upstream" || dep.Phase != "Ready" || !dep.Satisfied {
+		t.Fatalf("dependency = %+v, want upstream Ready satisfied", dep)
+	}
+}
+
+func TestProjectReconcile_DependenciesUnsatisfiedWhenUpstreamProvisioning(t *testing.T) {
+	team := teamWithMembers("alpha-team", v1beta1.TeamMemberStatus{Name: "lead", RuntimeName: "lead-runtime", Role: "team_leader"})
+	upstream := baseProject("upstream", "alpha-team")
+	upstream.Status.Phase = "Provisioning"
+	downstream := baseProject("downstream", "alpha-team")
+	downstream.Spec.DependsOn = []string{"upstream"}
+	rig := newProjectRig(t, team, upstream, downstream)
+
+	if _, err := rig.reconcile(t, "downstream"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := rig.getProject(t, "downstream")
+	if len(got.Status.Dependencies) != 1 || got.Status.Dependencies[0].Satisfied {
+		t.Fatalf("dependencies = %+v, want unsatisfied upstream", got.Status.Dependencies)
+	}
+}
+
+func TestProjectReconcile_DependenciesSatisfiedForCompletedAndArchived(t *testing.T) {
+	for _, phase := range []string{"Completed", "Archived"} {
+		t.Run(phase, func(t *testing.T) {
+			team := teamWithMembers("alpha-team", v1beta1.TeamMemberStatus{Name: "lead", RuntimeName: "lead-runtime", Role: "team_leader"})
+			upstream := baseProject("upstream", "alpha-team")
+			upstream.Status.Phase = phase
+			downstream := baseProject("downstream", "alpha-team")
+			downstream.Spec.DependsOn = []string{"upstream"}
+			rig := newProjectRig(t, team, upstream, downstream)
+
+			if _, err := rig.reconcile(t, "downstream"); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			got := rig.getProject(t, "downstream")
+			if len(got.Status.Dependencies) != 1 || !got.Status.Dependencies[0].Satisfied || got.Status.Dependencies[0].Phase != phase {
+				t.Fatalf("dependencies = %+v, want satisfied %s", got.Status.Dependencies, phase)
+			}
+		})
+	}
+}
+
+func TestProjectReconcile_DependenciesMissingUpstream(t *testing.T) {
+	team := teamWithMembers("alpha-team", v1beta1.TeamMemberStatus{Name: "lead", RuntimeName: "lead-runtime", Role: "team_leader"})
+	downstream := baseProject("downstream", "alpha-team")
+	downstream.Spec.DependsOn = []string{"missing-upstream"}
+	rig := newProjectRig(t, team, downstream)
+
+	if _, err := rig.reconcile(t, "downstream"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := rig.getProject(t, "downstream")
+	if len(got.Status.Dependencies) != 1 {
+		t.Fatalf("dependencies = %+v, want 1 entry", got.Status.Dependencies)
+	}
+	dep := got.Status.Dependencies[0]
+	if dep.Project != "missing-upstream" || dep.Phase != "Missing" || dep.Satisfied {
+		t.Fatalf("dependency = %+v, want Missing unsatisfied", dep)
+	}
+}
+
 // erroringOSS wraps ossfake.Memory but fails every DeletePrefix call, used to
 // prove reconcileDelete removes the finalizer even when the projection
 // cleanup fails (non-fatal contract, mirrors human_reconcile_delete.go).

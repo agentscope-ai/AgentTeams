@@ -17,6 +17,7 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/gateway"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
+	"github.com/hiclaw/hiclaw-controller/internal/workerdeps"
 	"github.com/hiclaw/hiclaw-controller/test/testutil/mocks"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -144,6 +145,9 @@ func (g *workerTestGateway) ResolveModelProvider(context.Context, string) (*gate
 	return g.modelInfo, g.modelErr
 }
 func (g *workerTestGateway) Healthy(context.Context) error { return nil }
+func (g *workerTestGateway) ListMCPServers(context.Context) ([]gateway.MCPServerInfo, error) {
+	return nil, gateway.ErrUnsupportedOp
+}
 
 type workerTestAuthCacheInvalidator struct {
 	calls int
@@ -170,13 +174,13 @@ func testWorkerDepsSecret(namespace string) *unstructured.Unstructured {
 
 func newWorkerTestDynamicClient(objs ...runtime.Object) dynamic.Interface {
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		workerDepsCredentialProviderGVR: "CredentialProviderList",
-		workerDepsAgentIdentityGVR:      "AgentIdentityList",
-		workerDepsAgentRoleGVR:          "AgentRoleList",
-		workerDepsAgentRoleBindingGVR:   "AgentRoleBindingList",
-		workerDepsPVGVR:                 "PersistentVolumeList",
-		workerDepsPVCGVR:                "PersistentVolumeClaimList",
-		workerDepsStorageClassGVR:       "StorageClassList",
+		workerdeps.CredentialProviderGVR: "CredentialProviderList",
+		workerdeps.AgentIdentityGVR:      "AgentIdentityList",
+		workerdeps.AgentRoleGVR:          "AgentRoleList",
+		workerdeps.AgentRoleBindingGVR:   "AgentRoleBindingList",
+		workerdeps.PersistentVolumeGVR:                 "PersistentVolumeList",
+		workerdeps.PersistentVolumeClaimGVR:                "PersistentVolumeClaimList",
+		workerdeps.StorageClassGVR:       "StorageClassList",
 	}, objs...)
 }
 
@@ -457,7 +461,7 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 	if req.WorkersDeps.InplaceUpdateImage != "worker:set" {
 		t.Fatalf("inplace image=%q", req.WorkersDeps.InplaceUpdateImage)
 	}
-	pv, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
+	pv, err := rig.r.DynamicClient.Resource(workerdeps.PersistentVolumeGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get workers-deps PV: %v", err)
 	}
@@ -479,8 +483,8 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 	if _, ok, _ := unstructured.NestedMap(pv.Object, "spec", "csi", "nodePublishSecretRef"); ok {
 		t.Fatalf("RRSA PV should not set nodePublishSecretRef: %+v", pv.Object["spec"])
 	}
-	if driver, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "driver"); driver != ackOSSCSIProvisioner {
-		t.Fatalf("PV csi.driver=%q, want %s", driver, ackOSSCSIProvisioner)
+	if driver, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "driver"); driver != workerdeps.CSIProvisioner {
+		t.Fatalf("PV csi.driver=%q, want %s", driver, workerdeps.CSIProvisioner)
 	}
 	if handle, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "volumeHandle"); handle != backend.BuiltinSandboxInstanceName {
 		t.Fatalf("PV volumeHandle=%q, want volume name", handle)
@@ -498,7 +502,7 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 		t.Fatalf("PV authType=%q, want agent-identity", authType)
 	}
 	for _, name := range []string{"agentteams-env", "agentteams-token", "agentteams-data"} {
-		cp, err := rig.r.DynamicClient.Resource(workerDepsCredentialProviderGVR).Namespace("default").Get(context.Background(), name, metav1.GetOptions{})
+		cp, err := rig.r.DynamicClient.Resource(workerdeps.CredentialProviderGVR).Namespace("default").Get(context.Background(), name, metav1.GetOptions{})
 		if err != nil {
 			t.Fatalf("get worker-deps CredentialProvider %s: %v", name, err)
 		}
@@ -512,10 +516,10 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 		assertWorkerDepsCredentialProviderPolicy(t, policy)
 	}
 	assertWorkerDepsAgentIdentityResources(t, rig.r.DynamicClient, "default")
-	if _, err := rig.r.DynamicClient.Resource(workerDepsStorageClassGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerdeps.StorageClassGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("built-in worker-deps should not create StorageClass, err=%v", err)
 	}
-	if _, err := rig.r.DynamicClient.Resource(workerDepsPVCGVR).Namespace("default").Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerdeps.PersistentVolumeClaimGVR).Namespace("default").Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("built-in worker-deps should not create PVC, err=%v", err)
 	}
 }
@@ -545,7 +549,7 @@ func TestSandboxWorkerAccessKeyMountAuthUsesSecretPV(t *testing.T) {
 			t.Fatalf("AccessKey dynamic mount should not have attributes: %+v", mount)
 		}
 	}
-	pv, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
+	pv, err := rig.r.DynamicClient.Resource(workerdeps.PersistentVolumeGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get workers-deps PV: %v", err)
 	}
@@ -561,10 +565,10 @@ func TestSandboxWorkerAccessKeyMountAuthUsesSecretPV(t *testing.T) {
 	if authType, ok, _ := unstructured.NestedString(pv.Object, "spec", "csi", "volumeAttributes", "authType"); ok || authType != "" {
 		t.Fatalf("AccessKey PV should not set RRSA authType, got %q", authType)
 	}
-	if _, err := rig.r.DynamicClient.Resource(workerDepsCredentialProviderGVR).Namespace("default").Get(context.Background(), "agentteams-token", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerdeps.CredentialProviderGVR).Namespace("default").Get(context.Background(), "agentteams-token", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("AccessKey worker-deps should not create CredentialProvider, err=%v", err)
 	}
-	if _, err := rig.r.DynamicClient.Resource(workerDepsAgentIdentityGVR).Namespace("default").Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerdeps.AgentIdentityGVR).Namespace("default").Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("AccessKey worker-deps should not create AgentIdentity, err=%v", err)
 	}
 }
@@ -637,14 +641,14 @@ func pathBase(p string) string {
 
 func assertWorkerDepsAgentIdentityResources(t *testing.T, dyn dynamic.Interface, namespace string) {
 	t.Helper()
-	identity, err := dyn.Resource(workerDepsAgentIdentityGVR).Namespace(namespace).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
+	identity, err := dyn.Resource(workerdeps.AgentIdentityGVR).Namespace(namespace).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get AgentIdentity: %v", err)
 	}
 	if desc, _, _ := unstructured.NestedString(identity.Object, "spec", "description"); desc != "this is for agentteams" {
 		t.Fatalf("AgentIdentity description=%q", desc)
 	}
-	role, err := dyn.Resource(workerDepsAgentRoleGVR).Namespace(namespace).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
+	role, err := dyn.Resource(workerdeps.AgentRoleGVR).Namespace(namespace).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get AgentRole: %v", err)
 	}
@@ -668,7 +672,7 @@ func assertWorkerDepsAgentIdentityResources(t *testing.T, dyn dynamic.Interface,
 	}) {
 		t.Fatalf("AgentRole resources=%v", gotResources)
 	}
-	binding, err := dyn.Resource(workerDepsAgentRoleBindingGVR).Namespace(namespace).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
+	binding, err := dyn.Resource(workerdeps.AgentRoleBindingGVR).Namespace(namespace).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get AgentRoleBinding: %v", err)
 	}
@@ -703,17 +707,17 @@ func TestUpdateWorkerDepsCredentialProviderSkipsNoopUpdate(t *testing.T) {
 		},
 	}
 	namespace := "agents"
-	desired := buildWorkerDepsCredentialProvider(volume, namespace, workerDepsMountToken)
+	desired := workerdeps.BuildCredentialProvider(volume, namespace, workerdeps.MountToken)
 	fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), desired.DeepCopy())
-	res := fakeClient.Resource(workerDepsCredentialProviderGVR).Namespace(namespace)
+	res := fakeClient.Resource(workerdeps.CredentialProviderGVR).Namespace(namespace)
 	existing, err := res.Get(context.Background(), desired.GetName(), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get existing CredentialProvider: %v", err)
 	}
 
 	fakeClient.ClearActions()
-	if err := updateWorkerDepsObjectIfNeeded(context.Background(), res, existing, desired); err != nil {
-		t.Fatalf("updateWorkerDepsObjectIfNeeded noop: %v", err)
+	if err := workerdeps.UpdateObjectIfNeeded(context.Background(), res, existing, desired); err != nil {
+		t.Fatalf("UpdateObjectIfNeeded noop: %v", err)
 	}
 	if actions := fakeClient.Actions(); len(actions) != 0 {
 		t.Fatalf("noop update recorded actions=%v", actions)
@@ -723,17 +727,17 @@ func TestUpdateWorkerDepsCredentialProviderSkipsNoopUpdate(t *testing.T) {
 	changedVolume.OSS = volume.OSS.DeepCopy()
 	changedVolume.OSS.Auth.RRSA = volume.OSS.Auth.RRSA.DeepCopy()
 	changedVolume.OSS.Auth.RRSA.RoleName = "rrsa-role-b"
-	changedDesired := buildWorkerDepsCredentialProvider(changedVolume, namespace, workerDepsMountToken)
+	changedDesired := workerdeps.BuildCredentialProvider(changedVolume, namespace, workerdeps.MountToken)
 	existing, err = res.Get(context.Background(), desired.GetName(), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get existing CredentialProvider after noop: %v", err)
 	}
 	fakeClient.ClearActions()
-	if err := updateWorkerDepsObjectIfNeeded(context.Background(), res, existing, changedDesired); err != nil {
-		t.Fatalf("updateWorkerDepsObjectIfNeeded changed: %v", err)
+	if err := workerdeps.UpdateObjectIfNeeded(context.Background(), res, existing, changedDesired); err != nil {
+		t.Fatalf("UpdateObjectIfNeeded changed: %v", err)
 	}
 	actions := fakeClient.Actions()
-	if len(actions) != 1 || actions[0].GetVerb() != "update" || actions[0].GetResource() != workerDepsCredentialProviderGVR {
+	if len(actions) != 1 || actions[0].GetVerb() != "update" || actions[0].GetResource() != workerdeps.CredentialProviderGVR {
 		t.Fatalf("changed update actions=%v", actions)
 	}
 }
@@ -793,7 +797,7 @@ func TestSandboxWorkerIgnoresLegacyWorkerDepsMountEntries(t *testing.T) {
 		depsReq.DataSubPath != "workers-deps/alice-runtime/data" {
 		t.Fatalf("PrepareWorkerDeps subPaths=%+v", depsReq)
 	}
-	if _, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), "agentteams-prod-001", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerdeps.PersistentVolumeGVR).Get(context.Background(), "agentteams-prod-001", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("legacy per-worker PV should not be created, err=%v", err)
 	}
 }
@@ -821,13 +825,13 @@ func TestSandboxWorkersShareInstancePV(t *testing.T) {
 	if _, _, err := rig.reconcile("bob"); err != nil {
 		t.Fatalf("reconcile bob: %v", err)
 	}
-	if _, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); err != nil {
+	if _, err := rig.r.DynamicClient.Resource(workerdeps.PersistentVolumeGVR).Get(context.Background(), backend.BuiltinSandboxInstanceName, metav1.GetOptions{}); err != nil {
 		t.Fatalf("get shared workers-deps PV: %v", err)
 	}
-	if _, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), "bob", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := rig.r.DynamicClient.Resource(workerdeps.PersistentVolumeGVR).Get(context.Background(), "bob", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("per-worker PV should not be created, err=%v", err)
 	}
-	cps, err := rig.r.DynamicClient.Resource(workerDepsCredentialProviderGVR).Namespace("default").List(context.Background(), metav1.ListOptions{})
+	cps, err := rig.r.DynamicClient.Resource(workerdeps.CredentialProviderGVR).Namespace("default").List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		t.Fatalf("list CredentialProviders: %v", err)
 	}
@@ -917,7 +921,7 @@ func TestSandboxWorkerAddsCustomOSSMount(t *testing.T) {
 	if len(rig.deployer.Calls.PrepareWorkerDeps) != 1 {
 		t.Fatalf("PrepareWorkerDeps calls=%v", rig.deployer.Calls.PrepareWorkerDeps)
 	}
-	pv, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), "external-assets", metav1.GetOptions{})
+	pv, err := rig.r.DynamicClient.Resource(workerdeps.PersistentVolumeGVR).Get(context.Background(), "external-assets", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get custom PV: %v", err)
 	}

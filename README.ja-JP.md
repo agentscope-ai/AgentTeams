@@ -170,7 +170,7 @@ helm install hiclaw higress.io/hiclaw \
 | `credentials.llmProvider` | 任意 | LLM プロバイダー名、デフォルトは `openai-compat` |
 | `credentials.defaultModel` | 任意 | デフォルトモデル、デフォルトは `gpt-5.4` |
 | `credentials.llmBaseUrl` | 任意 | OpenAI 互換のベース URL（例: `https://api.deepseek.com/v1`）。公式 OpenAI API を使用する場合は空のまま |
-| `manager.runtime` | 任意 | Manager エージェントランタイム: `openclaw`（デフォルト）、`copaw`、または `hermes` |
+| `manager.runtime` | 任意 | Manager エージェントランタイム: `openclaw`（デフォルト）または `copaw` |
 | `worker.defaultRuntime` | 任意 | Worker デフォルトランタイム: `openclaw`（デフォルト）、`copaw`、または `hermes` |
 
 <details>

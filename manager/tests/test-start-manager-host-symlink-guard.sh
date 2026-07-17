@@ -23,7 +23,7 @@ trap 'rm -rf "${TMPDIR_ROOT}"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-TARGET_SCRIPT="${PROJECT_ROOT}/manager/scripts/init/start-manager-agent.sh"
+TARGET_SCRIPT="${PROJECT_ROOT}/manager/scripts/lib/bootstrap/local.sh"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; echo "       expected: $2"; echo "       got:      $3"; FAIL=$((FAIL + 1)); }
@@ -45,7 +45,7 @@ if ! grep -q '# Not an absolute POSIX path' "${TARGET_SCRIPT}"; then
 fi
 
 # Reimplementation of the guarded symlink decision from
-# start-manager-agent.sh (local mode block). Returns, via global
+# start-manager-agent.sh (local mode block in bootstrap/local.sh). Returns, via global
 # RESULT_SYMLINK_TARGET, which path the real script would symlink to,
 # without actually touching /root or /host-share.
 run_guard() {

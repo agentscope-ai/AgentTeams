@@ -35,17 +35,12 @@ Workers are created by the Manager Agent. The Manager provides the installation 
 ```
 worker/
 ├── Dockerfile
-├── scripts/
-│   └── worker-entrypoint.sh        # Startup: sync config, configure mcporter, launch OpenClaw
-└── agent/
-    └── skills/
-        ├── file-sync/
-        │   ├── SKILL.md             # File sync skill (config, credentials, collaboration)
-        │   └── scripts/
-        │       └── hiclaw-sync.sh   # Pull files from centralized storage
-        └── github-operations/
-            └── SKILL.md             # GitHub MCP operations skill
+├── README.md
+└── scripts/
+    └── worker-entrypoint.sh        # Startup: sync config, configure mcporter, launch OpenClaw
 ```
+
+Worker agent templates (AGENTS.md, skills) live under `manager/agent/worker-agent/` and are pushed to MinIO by the controller — not under `worker/`.
 
 ## Environment Variables
 

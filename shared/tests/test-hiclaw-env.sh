@@ -82,8 +82,53 @@ test_legacy_hiclaw_env_maps_to_agentteams_contract() {
         fail "legacy HICLAW env did not map to AgentTeams contract: ${output}"
 }
 
+# The controller-generated env file is dot-sourced, so a tampered mount could
+# smuggle shell command substitution. The validation gate must refuse such a
+# file BEFORE sourcing (defense-in-depth). A well-formed export file must still
+# load normally.
+test_rejects_env_file_with_command_substitution() {
+    local tmpdir mount sentinel output rc
+    tmpdir="$(mktemp -d)"
+    mount="${tmpdir}/env"
+    sentinel="${tmpdir}/pwned"
+    mkdir -p "${mount}"
+    # If this file were sourced, the command substitution would create the
+    # sentinel. The gate must reject it and never run it.
+    printf 'export AGENTTEAMS_WORKER_NAME="x$(touch %s)"\n' "${sentinel}" > "${mount}/env"
+    printf 'export AGENTTEAMS_AUTH_TOKEN_FILE="/tmp/token"\n' >> "${mount}/env"
+
+    set +e
+    output="$(run_env_source "${mount}" 2 2>&1)"
+    rc=$?
+    set -e
+
+    [ "${rc}" -ne 0 ] || { rm -rf "${tmpdir}"; fail "expected rejection of env file with command substitution"; }
+    [ ! -e "${sentinel}" ] || { rm -rf "${tmpdir}"; fail "command substitution executed despite validation gate"; }
+    grep -q "command substitution" <<<"${output}" || { rm -rf "${tmpdir}"; fail "rejection did not explain command substitution: ${output}"; }
+    rm -rf "${tmpdir}"
+}
+
+test_accepts_valid_controller_env_file() {
+    local tmpdir mount token output
+    tmpdir="$(mktemp -d)"
+    mount="${tmpdir}/env"
+    token="${tmpdir}/token"
+    mkdir -p "${mount}"
+    printf 'token\n' > "${token}"
+    {
+        printf "export AGENTTEAMS_AUTH_TOKEN_FILE='%s'\n" "${token}"
+        printf "export AGENTTEAMS_WORKER_NAME='alice'\n"
+    } > "${mount}/env"
+
+    output="$(run_env_source "${mount}" 2)"
+    rm -rf "${tmpdir}"
+    [ "${output}" = "worker=alice token=${token}" ] || fail "valid controller env file did not load: ${output}"
+}
+
 test_waits_for_required_worker_env_values
 test_times_out_when_required_worker_env_values_never_arrive
 test_legacy_hiclaw_env_maps_to_agentteams_contract
+test_rejects_env_file_with_command_substitution
+test_accepts_valid_controller_env_file
 
 echo "PASS: hiclaw-env sandbox worker env loading"

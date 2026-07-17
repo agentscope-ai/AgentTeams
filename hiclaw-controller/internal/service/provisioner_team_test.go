@@ -266,6 +266,9 @@ func (fakeGateway) ResolveModelProvider(context.Context, string) (*gateway.Model
 	return nil, gateway.ErrUnsupportedOp
 }
 func (fakeGateway) Healthy(context.Context) error { return nil }
+func (fakeGateway) ListMCPServers(context.Context) ([]gateway.MCPServerInfo, error) {
+	return nil, gateway.ErrUnsupportedOp
+}
 
 type fakeStorageAdmin struct {
 	users    []storageUserCall

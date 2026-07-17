@@ -250,6 +250,7 @@ func (r *ProjectReconciler) reconcileNormal(ctx context.Context, proj *v1beta1.P
 	} else {
 		proj.Status.Phase = "Provisioning"
 	}
+	r.resolveProjectDependencies(ctx, proj)
 	logger.Info("project reconciled", "name", proj.Name, "phase", proj.Status.Phase, "workers", len(workers))
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
 }
@@ -365,6 +366,7 @@ func (r *ProjectReconciler) notifyLeaderOnce(ctx context.Context, proj *v1beta1.
 }
 
 func (r *ProjectReconciler) reconcileCompleted(ctx context.Context, proj *v1beta1.Project, projectID string) (reconcile.Result, error) {
+	r.resolveProjectDependencies(ctx, proj)
 	if existing := proj.Status.ConditionByType(ConditionDeprovisionPending); existing == nil || existing.Status != conditionTrue {
 		proj.Status.SetCondition(ConditionDeprovisionPending, conditionTrue, proj.Status.Phase,
 			"project marked "+proj.Status.Phase+"; run provision-worker-gitea.sh --deprovision "+projectID)
@@ -423,12 +425,76 @@ func (r *ProjectReconciler) reconcileDelete(ctx context.Context, proj *v1beta1.P
 	return reconcile.Result{}, nil
 }
 
+func projectDependencySatisfied(phase string) bool {
+	switch phase {
+	case "Completed", "Ready", "Archived":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *ProjectReconciler) resolveProjectDependencies(ctx context.Context, proj *v1beta1.Project) {
+	if len(proj.Spec.DependsOn) == 0 {
+		proj.Status.Dependencies = nil
+		return
+	}
+	deps := make([]v1beta1.ProjectDependency, 0, len(proj.Spec.DependsOn))
+	for _, depName := range proj.Spec.DependsOn {
+		depName = strings.TrimSpace(depName)
+		if depName == "" {
+			continue
+		}
+		entry := v1beta1.ProjectDependency{Project: depName}
+		if depName == proj.Name {
+			entry.Phase = "Invalid"
+			deps = append(deps, entry)
+			continue
+		}
+		var dep v1beta1.Project
+		if err := r.Get(ctx, client.ObjectKey{Namespace: proj.Namespace, Name: depName}, &dep); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				entry.Phase = "Missing"
+			}
+			deps = append(deps, entry)
+			continue
+		}
+		phase := dep.Status.Phase
+		if phase == "" {
+			phase = "Pending"
+		}
+		entry.Phase = phase
+		entry.Satisfied = projectDependencySatisfied(phase)
+		deps = append(deps, entry)
+	}
+	proj.Status.Dependencies = deps
+}
+
 func (r *ProjectReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1beta1.Project{}).
 		Watches(&v1beta1.Team{}, handler.EnqueueRequestsFromMapFunc(r.projectsForTeam)).
 		Watches(&v1beta1.Worker{}, handler.EnqueueRequestsFromMapFunc(r.projectsForWorker)).
+		Watches(&v1beta1.Project{}, handler.EnqueueRequestsFromMapFunc(r.projectsForDependency)).
 		Complete(r)
+}
+
+func (r *ProjectReconciler) projectsForDependency(ctx context.Context, obj client.Object) []reconcile.Request {
+	changed, ok := obj.(*v1beta1.Project)
+	if !ok {
+		return nil
+	}
+	return r.projectRequests(ctx, changed.Namespace, func(p *v1beta1.Project) bool {
+		if p.Name == changed.Name {
+			return false
+		}
+		for _, dep := range p.Spec.DependsOn {
+			if strings.TrimSpace(dep) == changed.Name {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func (r *ProjectReconciler) projectsForTeam(ctx context.Context, obj client.Object) []reconcile.Request {

@@ -5,11 +5,9 @@
 # shared/tests/fixtures/openclaw-merge/<case>/{remote,local,expected}.json
 # through merge_openclaw_config() and asserts the output is JSON-equal to
 # expected.json. The SAME fixtures are also consumed by
-# test_merge_openclaw_config_parity.py (Python impls) — see
+# test_merge_openclaw_config_parity.py — see
 # shared/tests/fixtures/openclaw-merge/README.md for the shared-fixture
-# contract. Keep this file's merge semantics in lockstep with:
-#   - copaw/src/copaw_worker/sync.py (_merge_openclaw_config)
-#   - hermes/src/hermes_worker/sync.py (_merge_openclaw_config)
+# contract. The shell script delegates to agentteams_openclaw_merge.
 
 set -euo pipefail
 
@@ -20,10 +18,22 @@ TMPDIR_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_ROOT}"' EXIT
 
 if ! command -v jq >/dev/null 2>&1; then
-    echo "SKIP: jq not found on PATH; cannot exercise merge-openclaw-config.sh" >&2
+    echo "SKIP: jq not found on PATH; cannot compare merge output" >&2
     exit 0
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "SKIP: python3 not found on PATH; cannot exercise merge-openclaw-config.sh" >&2
+    exit 0
+fi
+
+MERGE_SRC="${PROJECT_ROOT}/shared/python/agentteams_openclaw_merge/src"
+if ! PYTHONPATH="${MERGE_SRC}${PYTHONPATH:+:${PYTHONPATH}}" python3 -c "import agentteams_openclaw_merge" 2>/dev/null; then
+    echo "SKIP: agentteams_openclaw_merge not importable; pip install shared/python/agentteams_openclaw_merge" >&2
+    exit 0
+fi
+
+export PYTHONPATH="${MERGE_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
 source "${PROJECT_ROOT}/shared/lib/merge-openclaw-config.sh"
 
 pass() { echo "  PASS: $1"; }
@@ -43,7 +53,8 @@ for case_dir in "${FIXTURES_DIR}"/*/; do
 
     merge_openclaw_config "${remote}" "${work_local}" "${work_local}.out"
 
-    if ! jq -e --argfile a "${work_local}.out" --argfile b "${expected}" -n '$a == $b' >/dev/null; then
+    # Prefer --slurpfile: --argfile was removed in modern jq (GitHub runners).
+    if ! jq -e --slurpfile a "${work_local}.out" --slurpfile b "${expected}" -n '$a[0] == $b[0]' >/dev/null; then
         echo "  FAIL: ${case_name} merged output does not match expected.json" >&2
         echo "    got:      $(jq -c . "${work_local}.out")" >&2
         echo "    expected: $(jq -c . "${expected}")" >&2

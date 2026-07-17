@@ -80,7 +80,7 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Worker 名称，全局唯一 |
 | `spec.model` | string | 是 | — | LLM 模型 ID，如 `claude-sonnet-4-6`、`qwen3.5-plus` |
-| `spec.runtime` | string | 否 | `openclaw` | Agent 运行时：`openclaw`、`copaw` 或 `hermes` |
+| `spec.runtime` | string | 否 | `openclaw` | Agent 运行时：`openclaw`、`copaw`、`hermes`、`openhuman` 或 `qwenpaw` |
 | `spec.image` | string | 否 | — | 自定义镜像；留空则使用 `HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE`（默认 `hiclaw/worker-agent:latest` / `hiclaw/copaw-worker:latest` / `hiclaw-hermes-worker:latest`） |
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
@@ -241,7 +241,7 @@ spec:
 |------|------|------|------|
 | `workers[].name` | string | 是 | Worker 名称 |
 | `workers[].model` | string | 否 | LLM 模型 |
-| `workers[].runtime` | string | 否 | Agent 运行时（`openclaw`、`copaw` 或 `hermes`） |
+| `workers[].runtime` | string | 否 | Agent 运行时（`openclaw`、`copaw`、`hermes`、`openhuman` 或 `qwenpaw`） |
 | `workers[].image` | string | 否 | 自定义 Docker 镜像 |
 | `workers[].identity` | string | 否 | Worker 公开身份信息（生成 IDENTITY.md） |
 | `workers[].soul` | string | 否 | Worker 人格与价值观设定（生成 SOUL.md） |
@@ -613,7 +613,7 @@ Nacos URI 格式：`nacos://[user:pass@]host:port/{namespace}/{agentspec-name}[/
 }
 ```
 
-`worker.runtime`（`openclaw`、`copaw` 或 `hermes`）会被 `hiclaw apply worker --zip` 读取，
+`worker.runtime`（`openclaw`、`copaw`、`hermes`、`openhuman` 或 `qwenpaw`）会被 `hiclaw apply worker --zip` 读取，
 显式 `--runtime` 优先级更高。
 
 ## 操作方式

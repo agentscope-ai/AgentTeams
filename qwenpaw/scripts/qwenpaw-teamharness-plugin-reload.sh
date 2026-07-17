@@ -126,32 +126,10 @@ is_qwenpaw_native_package() {
 extract_qwenpaw_package() {
   local zip_path="$1"
   local target_dir="$2"
-  python3 - "$zip_path" "$target_dir" <<'PY'
-from pathlib import Path
-import sys
-import zipfile
-
-zip_path = Path(sys.argv[1])
-target_dir = Path(sys.argv[2])
-target_root = target_dir.resolve()
-
-with zipfile.ZipFile(zip_path) as archive:
-    for name in archive.namelist():
-        resolved = (target_dir / name).resolve()
-        try:
-            resolved.relative_to(target_root)
-        except ValueError:
-            raise SystemExit(f"unsafe qwenpaw plugin package path: {name}")
-    archive.extractall(target_dir)
-
-packages = [
-    path for path in target_dir.iterdir()
-    if path.is_dir() and (path / "plugin.json").is_file()
-]
-if len(packages) != 1:
-    raise SystemExit(f"expected one qwenpaw plugin package in {zip_path}")
-print(packages[0])
-PY
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  PYTHONPATH="${repo_root}/qwenpaw/src:${PYTHONPATH:-}" \
+    python3 -m qwenpaw_worker.plugin_install extract "$zip_path" "$target_dir"
 }
 
 install_with_qwenpaw() {

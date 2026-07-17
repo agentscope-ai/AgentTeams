@@ -130,4 +130,39 @@ fallback_stdout="$(run_refresh_failure_fallback 2>"${TMPDIR_ROOT}/refresh-fails-
 assert_contains "MC_HOST_agentteams stays exported when refresh fails but cache is valid" "MC_HOST_agentteams=https://stale-ak:stale-sk:stale-token@oss.example.test" "${fallback_stdout}"
 assert_contains "a clear fallback warning is surfaced on stderr" "STS refresh failed, using cached credentials" "$(cat "${TMPDIR_ROOT}/refresh-fails-but-cache-valid-stderr-captured.log")"
 
+echo ""
+echo "=== oss credentials cred-file parsed, never executed ==="
+
+run_cred_file_parse_no_exec() {
+    local case_name="cred-parse-no-exec"
+    local mc_env="${TMPDIR_ROOT}/${case_name}-mc.env"
+    local sentinel="${TMPDIR_ROOT}/${case_name}-pwned"
+
+    # Craft a credential file whose extra lines would run shell if the loader
+    # dot-sourced the file. The targeted parser must extract only the two known
+    # keys and never execute anything.
+    cat > "${mc_env}" <<EOF
+MC_HOST_agentteams="https://ak:sk:tok@oss.example.test"
+_OSS_CRED_EXPIRES_AT=$(( $(date +%s) + 3600 ))
+INJECT="\$(touch ${sentinel})"
+\$(touch ${sentinel})
+EOF
+
+    (
+        . "${PROJECT_ROOT}/shared/lib/oss-credentials.sh"
+        _OSS_CRED_FILE="${mc_env}"
+        _oss_load_cred_file "${mc_env}"
+        printf 'host=%s expires=%s\n' "${MC_HOST_agentteams:-}" "${_OSS_CRED_EXPIRES_AT:-}"
+    )
+}
+
+cred_parse_out="$(run_cred_file_parse_no_exec)"
+assert_contains "MC_HOST value is parsed verbatim" "host=https://ak:sk:tok@oss.example.test" "${cred_parse_out}"
+assert_contains "expiry is parsed" "expires=" "${cred_parse_out}"
+if [ -e "${TMPDIR_ROOT}/cred-parse-no-exec-pwned" ]; then
+    echo "  FAIL: credential file was executed (sentinel created)" >&2
+    exit 1
+fi
+pass "credential file parsed without executing embedded shell"
+
 echo "All oss-credentials tests passed"

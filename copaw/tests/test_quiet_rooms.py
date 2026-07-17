@@ -138,3 +138,16 @@ def test_quiet_rooms_toggling_off_after_on_removes_root_flag(monkeypatch):
         disabled = _config_json_path(working_dir)
 
     assert "show_tool_details" not in disabled
+
+
+def test_quiet_rooms_matrix_channel_reads_config_json(monkeypatch, tmp_path):
+    """W8.6: show_tool_details in config.json reaches MatrixChannel.from_config."""
+    from matrix.channel import MatrixChannel
+
+    working_dir = tmp_path / "agent"
+    working_dir.mkdir()
+    monkeypatch.setenv("AGENTTEAMS_QUIET_ROOMS", "true")
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    bridge_openclaw_to_copaw(_make_openclaw_cfg(), working_dir, profile="manager")
+
+    assert MatrixChannel._resolve_show_tool_details(default=True) is False

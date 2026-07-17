@@ -72,6 +72,34 @@ _oss_mc_host_var() {
     printf 'MC_HOST_%s' "$(_oss_storage_alias)"
 }
 
+# _oss_load_cred_file parses the self-written credential file WITHOUT executing
+# it (no dot-source, so a tampered file cannot run arbitrary shell). The file
+# format is fixed and script-controlled (see _oss_refresh_sts_via_controller):
+#   MC_HOST_<alias>="<url>"
+#   _OSS_CRED_EXPIRES_AT=<int>
+# Only those two keys are extracted; anything else is ignored. Values are read
+# with the remainder of the line intact so base64 '=' padding in STS tokens is
+# preserved.
+_oss_load_cred_file() {
+    local file="$1"
+    local mc_host_var key val
+    [ -f "${file}" ] || return 0
+    mc_host_var="$(_oss_mc_host_var)"
+    while IFS='=' read -r key val || [ -n "${key}" ]; do
+        case "${key}" in
+            _OSS_CRED_EXPIRES_AT)
+                val="${val%\"}"; val="${val#\"}"
+                printf -v _OSS_CRED_EXPIRES_AT '%s' "${val}"
+                ;;
+            "${mc_host_var}")
+                val="${val%\"}"; val="${val#\"}"
+                printf -v "${mc_host_var}" '%s' "${val}"
+                export "${mc_host_var}"
+                ;;
+        esac
+    done < "${file}"
+}
+
 _oss_has_controller_url() {
     [ -n "$(_oss_controller_url)" ]
 }
@@ -174,7 +202,7 @@ _oss_ensure_refresh() {
     now=$(date +%s)
 
     if [ -f "${_OSS_CRED_FILE}" ]; then
-        . "${_OSS_CRED_FILE}"
+        _oss_load_cred_file "${_OSS_CRED_FILE}"
         if [ -z "${_OSS_CRED_EXPIRES_AT:-}" ] || [ $(( _OSS_CRED_EXPIRES_AT - now )) -lt ${_OSS_CRED_REFRESH_MARGIN} ]; then
             needs_refresh=true
         fi
@@ -202,7 +230,7 @@ _oss_ensure_refresh() {
             echo "[oss-credentials] ERROR: STS refresh failed and no cached credentials are available" >&2
             return 1
         fi
-        . "${_OSS_CRED_FILE}"
+        _oss_load_cred_file "${_OSS_CRED_FILE}"
         _oss_export_mc_host
     fi
 }

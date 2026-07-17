@@ -19,7 +19,7 @@
     "matrix": {
       "enabled": true,
       "require_mention": true,
-      "filter_tool_messages": false,
+      "filter_tool_messages": true,
       "filter_thinking": true,
       "allow_from": [],
       "group_allow_from": [],

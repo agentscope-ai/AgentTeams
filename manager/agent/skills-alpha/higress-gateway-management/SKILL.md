@@ -5,6 +5,8 @@ description: Manage the Higress AI Gateway via its Console API (consumers, route
 
 # Higress AI Gateway Management
 
+> Full Higress Console OpenAPI reference (large JSON) lives in the repo at `design/higress-api-doc.json`. It is **not** copied into the Manager agent workspace (to save context). This skill covers the common operations; open that file in the repo only when you need exhaustive endpoint coverage.
+
 ## Overview
 
 This skill allows you to manage the Higress AI Gateway via its Console API. The Console API runs at `http://127.0.0.1:8001` and uses **Session Cookie** authentication (NOT Basic Auth).

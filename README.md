@@ -176,8 +176,8 @@ helm install hiclaw higress.io/hiclaw \
 | `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
-| `manager.runtime` | no | Manager agent runtime: `openclaw` (default), `copaw`, or `hermes` |
-| `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, or `hermes` |
+| `manager.runtime` | no | Manager agent runtime: `openclaw` (default) or `copaw` |
+| `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, `hermes`, `openhuman`, or `qwenpaw` |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -205,7 +205,7 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-The image for each component is automatically selected based on the runtime (`agentteams-manager` / `agentteams-manager-copaw` for Manager; `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` for Workers).
+The image for each component is automatically selected based on the runtime (`agentteams-manager` / `agentteams-manager-copaw` for Manager; `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` / `hiclaw-openhuman-worker` / `agentteams-qwenpaw-worker` for Workers).
 
 </details>
 
@@ -368,11 +368,13 @@ No hidden agent-to-agent calls. Everything is visible and intervenable.
 
 ## Multi-Runtime Collaboration
 
-AgentTeams supports three Worker runtimes that can **coexist in the same IM room**, collaborating on tasks together:
+AgentTeams supports multiple Worker runtimes that can **coexist in the same IM room**, collaborating on tasks together:
 
 - **OpenClaw** (Node.js) — General-purpose agent with rich skills ecosystem, ideal for task orchestration and tool calling
-- **QwenPaw** (Python) — Lightweight runtime, suited for browser automation and quick tasks
+- **QwenPaw / CoPaw** (Python, `runtime=copaw`) — Lightweight runtime, suited for browser automation and quick tasks
 - **Hermes** ([hermes-agent](https://github.com/NousResearch/hermes-agent)) — Autonomous coding agent with terminal sandbox, self-improving skills, and persistent memory
+- **OpenHuman** (Rust) — Native Matrix worker runtime (`runtime=openhuman`)
+- **QwenPaw / TeamHarness** (`runtime=qwenpaw`) — Desired-state worker via `runtime.yaml` (distinct from `runtime=copaw`)
 
 Each runtime excels at different tasks. A common pattern: use deterministic agents (OpenClaw/QwenPaw) as Leaders to decompose and assign work, and Hermes Workers for autonomous code execution. All runtimes communicate via Matrix `m.mentions` in the same room — fully visible, fully intervenable.
 

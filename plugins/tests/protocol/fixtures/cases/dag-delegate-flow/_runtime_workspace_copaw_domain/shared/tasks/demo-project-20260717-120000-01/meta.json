@@ -1,0 +1,12 @@
+{
+  "task_id": "demo-project-20260717-120000-01",
+  "project_id": "demo-project-20260717-120000",
+  "task_title": "First task",
+  "assigned_to": "worker-a",
+  "room_id": "!team:matrix-local.agentteams.io:18080",
+  "status": "submitted",
+  "depends_on": [],
+  "assigned_at": "2026-07-17T10:10:33Z",
+  "acknowledged_at": "2026-07-17T10:10:33Z",
+  "submitted_at": "2026-07-17T10:10:33Z"
+}

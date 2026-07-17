@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentteams-sync"
+version = "0.1.0"
+description = "Shared MinIO file sync for AgentTeams worker runtimes (Phase 6)"
+requires-python = ">=3.10"
+dependencies = [
+    "agentteams-openclaw-merge>=0.1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

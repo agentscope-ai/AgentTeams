@@ -62,10 +62,32 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   ```
 - Determine if the Worker is making normal progress based on their reply
 - If the Worker has not responded (no response for more than one heartbeat cycle), flag the anomaly in the Room and notify the human admin (see Step 7)
-- If the Worker has replied that the task is complete but meta.json has not been updated, proactively update meta.json (status → completed, fill in completed_at), and remove the entry from `active_tasks`:
-  ```bash
-  bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
-  ```
+- If the Worker has replied that the task is complete but meta.json has not been updated:
+  1. Pull the task directory from MinIO if you have not already:
+     ```bash
+     mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
+     ```
+  2. **Verify deliverables before completing:**
+     ```bash
+     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action verify --task-id {task-id}
+     ```
+  3. If `verified` is **true**: update `meta.json` (status → completed, fill in `completed_at`), push to MinIO, and remove the entry from `active_tasks`:
+     ```bash
+     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
+     ```
+  4. If `verified` is **false**: do **not** complete. Mark blocked, nudge the Worker via `copaw channels send` with failed claim details, and flag in Step 7:
+     ```bash
+     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+       --action mark-blocked --task-id {task-id} --reason "output verification failed: {failed claims}"
+     ```
+     ```bash
+     copaw channels send \
+       --agent-id default \
+       --channel matrix \
+       --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
+       --target-session "{room_id}" \
+       --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} Task {task-id} verification failed: {list failed required claims from verify JSON}. Please fix deliverables, push to storage, and @mention me when ready."
+     ```
 - **Blocked-age nudge:** if the entry has `"status": "blocked"`, compare `blocked_since` to the current UTC time. When it is older than **~24h**, this is a **finding** — escalate it now in the Step 7 report (do not wait for the daily digest gate) using the `[task-id] blocker text` envelope, e.g. `[{task-id}] blocked since {blocked_since} — {blocked_reason}; still unresolved after 24h`. Re-raise once per 24h of continued blockage (don't re-nudge every heartbeat cycle) — after sending, note the nudge time so the next cycle can tell whether another 24h has elapsed.
 
 ---
@@ -112,7 +134,17 @@ Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
     --text "@{leader}:${AGENTTEAMS_MATRIX_DOMAIN} How is task {task-id} progressing? Any blockers from your team?"
   ```
 - **Do NOT contact team workers directly** — the Team Leader handles internal coordination
-- If the Team Leader reports completion, process it the same as a regular worker completion
+- If the Team Leader reports completion but `meta.json` is not yet completed, run the **same verify gate as Step 2** before completing:
+  1. Pull the task directory from MinIO if you have not already:
+     ```bash
+     mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
+     ```
+  2. **Verify deliverables before completing:**
+     ```bash
+     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action verify --task-id {task-id}
+     ```
+  3. If `verified` is **true**: update `meta.json`, push to MinIO, and remove from `active_tasks` via `--action complete`.
+  4. If `verified` is **false**: do **not** complete. Mark blocked, nudge the Team Leader via `copaw channels send` with failed claim details, and flag in Step 7.
 - If the Team Leader reports a blocker, escalate to admin (Step 7)
 
 ---
@@ -170,6 +202,7 @@ done
 ```
 
 - Filter projects with `"status": "active"`
+- For each active project whose federated Project CR has unsatisfied cross-project dependencies (`curl -s -H "Authorization: Bearer ${AGENTTEAMS_AUTH_TOKEN}" "${AGENTTEAMS_CONTROLLER_URL}/api/v1/projects/{id}"` → any `dependencies[]` with `"satisfied": false`), **do not assign new tasks**; include blocking upstream project(s) in the Step 7 admin report
 - For each active project, read `project_room_id` from meta.json, then read plan.md and find tasks marked as `[~]` (in progress)
 - If the responsible Worker has had no activity during this heartbeat cycle, **ensure the Worker's container is running first** (`lifecycle-worker.sh --action ensure-ready --worker {worker}`), then **use `copaw channels send` via shell** to send a follow-up to the project room:
   ```bash

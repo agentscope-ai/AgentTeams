@@ -1,0 +1,33 @@
+{
+  "project_meta": {
+    "plan_type": "dag",
+    "project_id": "demo-project-20260717-120000",
+    "requester": "@admin:matrix-local.agentteams.io:18080",
+    "source": "characterization-fixture",
+    "status": "active",
+    "tasks": [
+      {
+        "assigned_to": "@worker-a:matrix-local.agentteams.io:18080",
+        "depends_on": [],
+        "status": "in_progress",
+        "task_id": "demo-project-20260717-120000-01",
+        "title": "First task"
+      }
+    ],
+    "title": "Demo DAG project"
+  },
+  "project_plan": "# Demo DAG project\n\n- Project ID: `demo-project-20260717-120000`\n- Status: `active`\n- Plan Type: `dag`\n- Requester: `@admin:matrix-local.agentteams.io:18080`\n\n## Tasks\n- `demo-project-20260717-120000-01` First task -> @worker-a:matrix-local.agentteams.io:18080; deps: none; status: in_progress\n",
+  "task_meta": {
+    "acknowledged_by_role": "worker",
+    "assigned_at": "<ISO8601>",
+    "assigned_to": "@worker-a:matrix-local.agentteams.io:18080",
+    "project_id": "demo-project-20260717-120000",
+    "room_id": "!team:matrix-local.agentteams.io:18080",
+    "spec_path": "shared/tasks/demo-project-20260717-120000-01/spec.md",
+    "status": "in_progress",
+    "task_id": "demo-project-20260717-120000-01",
+    "task_title": "First task"
+  },
+  "task_spec": "# Task: First task\n\nDeliver a short summary artifact.\n\n",
+  "task_result": null
+}

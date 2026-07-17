@@ -1,6 +1,9 @@
 #!/bin/bash
 # manage-state.sh - Atomic state.json operations for task tracking
 #
+# Prefer the hiclaw CLI implementation when available (Phase 14 I14.4).
+# The shell body below remains as a fallback for environments without hiclaw.
+#
 # Replaces manual jq edits by the LLM Agent with deterministic script calls.
 # All writes use tmp+mv for atomicity.
 #
@@ -18,8 +21,29 @@
 #   manage-state.sh --action reassign      --task-id T --assigned-to W --room-id R
 #   manage-state.sh --action last-digest   get
 #   manage-state.sh --action last-digest   set --at ISO
+#   manage-state.sh --action verify        --task-id T   (shell-only; delegates to verify-output.sh)
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERIFY_SCRIPT="${SCRIPT_DIR}/verify-output.sh"
+
+_pre_action=""
+_prev=""
+for _arg in "$@"; do
+    if [ "$_prev" = "--action" ]; then
+        _pre_action="$_arg"
+        break
+    fi
+    _prev="$_arg"
+done
+
+# verify stays in shell — it does not mutate state.json and is not implemented in hiclaw manager-state.
+if [ "${HICLAW_MANAGER_STATE_IMPL:-auto}" != "shell" ] && [ "$_pre_action" != "verify" ]; then
+    if command -v hiclaw >/dev/null 2>&1; then
+        exec hiclaw manager-state "$@"
+    fi
+fi
 
 STATE_FILE="${HOME}/state.json"
 
@@ -334,6 +358,14 @@ action_last_digest() {
     esac
 }
 
+action_verify() {
+    if [ ! -x "$VERIFY_SCRIPT" ] && [ ! -f "$VERIFY_SCRIPT" ]; then
+        echo "ERROR: verify-output.sh not found at $VERIFY_SCRIPT" >&2
+        exit 1
+    fi
+    bash "$VERIFY_SCRIPT" --task-id "$TASK_ID"
+}
+
 action_list() {
     _ensure_state_file
 
@@ -422,7 +454,7 @@ if [ "$ACTION" = "add" ]; then
 fi
 
 if [ -z "$ACTION" ]; then
-    echo "Usage: $0 --action <init|add-finite|add-infinite|complete|executed|set-admin-dm|list|mark-blocked|unblock|cancel|reassign|last-digest> [options]" >&2
+    echo "Usage: $0 --action <init|add-finite|add-infinite|complete|executed|set-admin-dm|list|mark-blocked|unblock|cancel|reassign|last-digest|verify> [options]" >&2
     echo "" >&2
     echo "Actions:" >&2
     echo "  init          Ensure state.json exists (no-op if already present)" >&2
@@ -437,6 +469,7 @@ if [ -z "$ACTION" ]; then
     echo "  cancel        --task-id T --reason \"...\"   (removes task, records reason in cancelled_tasks)" >&2
     echo "  reassign      --task-id T --assigned-to W --room-id R   (swaps assignee/room)" >&2
     echo "  last-digest   get | set --at ISO   (reads/writes last_digest_sent_at)" >&2
+    echo "  verify        --task-id T   (checks local task deliverables; JSON stdout; shell-only)" >&2
     exit 1
 fi
 
@@ -500,8 +533,12 @@ case "$ACTION" in
     last-digest)
         action_last_digest
         ;;
+    verify)
+        _validate_required TASK_ID
+        action_verify
+        ;;
     *)
-        echo "ERROR: Unknown action '$ACTION'. Use: init, add-finite, add-infinite, complete, executed, set-admin-dm, list, mark-blocked, unblock, cancel, reassign, last-digest" >&2
+        echo "ERROR: Unknown action '$ACTION'. Use: init, add-finite, add-infinite, complete, executed, set-admin-dm, list, mark-blocked, unblock, cancel, reassign, last-digest, verify" >&2
         exit 1
         ;;
 esac

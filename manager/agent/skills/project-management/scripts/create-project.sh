@@ -3,7 +3,7 @@
 #
 # Usage:
 #   create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...> \
-#     [--team <TEAM_NAME>] [--repo <URL>:<rw|ro> ...]
+#     [--team <TEAM_NAME>] [--repo <URL>:<rw|ro> ...] [--depends-on <PROJECT_NAME> ...]
 #
 # Prerequisites:
 #   - Worker SOUL.md files must already exist
@@ -17,6 +17,7 @@ PROJECT_TITLE=""
 WORKERS_CSV=""
 PROJECT_TEAM=""
 declare -a PROJECT_REPOS=()
+declare -a PROJECT_DEPENDS_ON=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -25,12 +26,13 @@ while [ $# -gt 0 ]; do
         --workers) WORKERS_CSV="$2"; shift 2 ;;
         --team)    PROJECT_TEAM="$2"; shift 2 ;;
         --repo)    PROJECT_REPOS+=("$2"); shift 2 ;;
+        --depends-on) PROJECT_DEPENDS_ON+=("$2"); shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
 if [ -z "${PROJECT_ID}" ] || [ -z "${PROJECT_TITLE}" ] || [ -z "${WORKERS_CSV}" ]; then
-    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...> [--team <TEAM_NAME>] [--repo <URL>:<rw|ro> ...]"
+    echo "Usage: create-project.sh --id <PROJECT_ID> --title <TITLE> --workers <w1,w2,...> [--team <TEAM_NAME>] [--repo <URL>:<rw|ro> ...] [--depends-on <PROJECT_NAME> ...]"
     exit 1
 fi
 
@@ -68,6 +70,9 @@ if [ -n "${PROJECT_TEAM}" ] && [ "${#PROJECT_REPOS[@]}" -eq 0 ]; then
 fi
 if [ "${#PROJECT_REPOS[@]}" -gt 0 ] && [ -z "${PROJECT_TEAM}" ]; then
     _fail "--repo requires --team"
+fi
+if [ "${#PROJECT_DEPENDS_ON[@]}" -gt 0 ] && [ -z "${PROJECT_TEAM}" ]; then
+    _fail "--depends-on requires --team (Project CR layer)"
 fi
 for _repo_spec in "${PROJECT_REPOS[@]+"${PROJECT_REPOS[@]}"}"; do
     _repo_access="${_repo_spec##*:}"
@@ -378,6 +383,14 @@ if [ -n "${PROJECT_TEAM}" ]; then
                 w=$(echo "${w}" | tr -d ' ')
                 [ -z "${w}" ] && continue
                 echo "    - $(yaml_dq "${w}")"
+            done
+        fi
+        if [ "${#PROJECT_DEPENDS_ON[@]}" -gt 0 ]; then
+            echo "  dependsOn:"
+            for _dep in "${PROJECT_DEPENDS_ON[@]}"; do
+                _dep=$(echo "${_dep}" | tr -d ' ')
+                [ -z "${_dep}" ] && continue
+                echo "    - $(yaml_dq "${_dep}")"
             done
         fi
     } > "${PROJECT_CR_FILE}"

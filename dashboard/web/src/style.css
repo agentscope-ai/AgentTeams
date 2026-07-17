@@ -144,6 +144,42 @@ body {
   color: var(--text-dim);
 }
 
+.health-strip-label {
+  margin-right: 6px;
+}
+
+.health-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+
+.health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.health-dot-healthy {
+  background: var(--ok);
+}
+
+.health-dot-degraded {
+  background: var(--warn);
+}
+
+.health-dot-down {
+  background: var(--bad);
+}
+
+.health-dot-unknown {
+  background: var(--text-dim);
+  opacity: 0.55;
+}
+
 .card-meta {
   margin-top: 8px;
   color: var(--text-dim);
@@ -491,6 +527,62 @@ dialog::backdrop {
 
 .dag-task:last-child {
   border-bottom: none;
+}
+
+.cross-project-section {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+}
+
+.cross-project-section summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cross-project-note {
+  font-size: 12px;
+  margin: 8px 0 10px;
+}
+
+.cross-project-graph {
+  display: grid;
+  gap: 12px;
+}
+
+.cross-project-nodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cross-project-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.cross-project-node-ghost {
+  opacity: 0.65;
+  border-style: dashed;
+}
+
+.cross-project-edges {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cross-project-edge {
+  font-size: 12.5px;
+  padding: 4px 0;
 }
 
 /* v2: task-detail drawer */

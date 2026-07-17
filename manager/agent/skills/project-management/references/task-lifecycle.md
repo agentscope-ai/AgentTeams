@@ -2,6 +2,17 @@
 
 ## Assign a Task (Step 2)
 
+### 2a-pre. Check cross-project CRD dependencies
+
+If this project has a federated Project CR with `spec.dependsOn`, fetch it before any assignment:
+
+```bash
+curl -s -H "Authorization: Bearer ${AGENTTEAMS_AUTH_TOKEN}" \
+  "${AGENTTEAMS_CONTROLLER_URL}/api/v1/projects/${PROJECT_ID}"
+```
+
+When `dependencies` contains any entry with `"satisfied": false`, **do not assign tasks** — notify admin in DM which upstream project is still blocking (include `project` + `phase`). Retry after the dependency reaches `Ready`, `Completed`, or `Archived`. Skip this gate when the project has no CR or no `dependsOn`.
+
 ### 2a. Determine if Multi-Phase Collaboration
 
 Before creating task files, check if this is a **multi-phase collaborative project**:

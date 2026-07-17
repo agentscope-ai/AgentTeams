@@ -89,8 +89,8 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Worker name, globally unique |
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
-| `spec.runtime` | string | No | `openclaw` | Agent runtime: `openclaw`, `copaw`, or `hermes` |
-| `spec.image` | string | No | — | Custom Docker image; if empty, the controller uses `HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE` (defaults `hiclaw/worker-agent:latest` / `hiclaw/copaw-worker:latest` / `hiclaw-hermes-worker:latest`) |
+| `spec.runtime` | string | No | `openclaw` | Agent runtime: `openclaw`, `copaw`, `hermes`, `openhuman`, or `qwenpaw` |
+| `spec.image` | string | No | — | Custom Docker image; if empty, the controller uses the image for the selected runtime (`HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE` / OpenHuman / QwenPaw image env vars; defaults include `hiclaw/worker-agent:latest`, `hiclaw/copaw-worker:latest`, `hiclaw-hermes-worker:latest`, openhuman-worker, qwenpaw-worker) |
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
@@ -268,7 +268,7 @@ spec:
 |-------|------|----------|-------------|
 | `workers[].name` | string | Yes | Worker name |
 | `workers[].model` | string | No | LLM model |
-| `workers[].runtime` | string | No | Agent runtime (`openclaw`, `copaw`, or `hermes`) |
+| `workers[].runtime` | string | No | Agent runtime (`openclaw`, `copaw`, `hermes`, `openhuman`, or `qwenpaw`) |
 | `workers[].image` | string | No | Custom Docker image |
 | `workers[].identity` | string | No | Worker public identity (generates IDENTITY.md) |
 | `workers[].soul` | string | No | Worker personality and values (generates SOUL.md) |
@@ -652,7 +652,7 @@ Regardless of URI format, the extracted package follows a unified structure:
 }
 ```
 
-`worker.runtime` (`openclaw`, `copaw`, or `hermes`) is honored by `hiclaw apply worker --zip`
+`worker.runtime` (`openclaw`, `copaw`, `hermes`, `openhuman`, or `qwenpaw`) is honored by `hiclaw apply worker --zip`
 and overridden by an explicit `--runtime` flag.
 
 ## Operations

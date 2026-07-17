@@ -1,16 +1,34 @@
 #!/bin/bash
 # create-team.sh - Create a Team (Leader + Workers + Team Room)
 #
-# Usage:
-#   create-team.sh --name <TEAM_NAME> --leader <LEADER_NAME> --workers <w1,w2,...> \
-#     [--leader-model <MODEL>] [--worker-models <m1,m2,...>]
+# Default path: delegate to `hiclaw create team` (controller-owned provisioning).
+# Set HICLAW_TEAM_CREATE_IMPL=shell to force the legacy Manager-side script
+# (create-team-legacy.sh) for Matrix room pre-creation and direct create-worker.sh.
 #
-# Prerequisites:
-#   - SOUL.md must exist for leader and each worker at /root/hiclaw-fs/agents/<NAME>/SOUL.md
+# Manager-side-only post-hooks (after hiclaw create team):
+#   - Backfill groupAllowFrom + Team Room invites for Humans in ~/humans-registry.json
+#     that list this team in accessible_teams but were registered before the team existed.
+#
+# Usage (same flags as before; --leader is an alias for hiclaw --leader-name):
+#   create-team.sh --name <TEAM> --leader <LEADER> --workers <w1,w2,...> \
+#     [--description DESC] [--team-name NAME] [--model-provider PROVIDER] \
+#     [--leader-model MODEL] [--leader-heartbeat-every 30m] [--worker-idle-timeout 12h] \
+#     [--leader-mcp-servers m1,m2] [--worker-models m1,m2,...] [--worker-runtimes r1,r2,...] \
+#     [--worker-skills s1:s2] [--worker-mcp-servers m1:m2] \
+#     [--team-admin NAME] [--team-admin-matrix-id @user:domain] [--peer-mentions true|false] \
+#     [--team-channel-policy JSON] [--team-channel-policy-file PATH] \
+#     [--leader-channel-policy JSON] [--leader-channel-policy-file PATH] \
+#     [--worker-channel-policies JSON|JSON]
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ "${HICLAW_TEAM_CREATE_IMPL:-auto}" = "shell" ]; then
+    exec bash "${SCRIPT_DIR}/create-team-legacy.sh" "$@"
+fi
+
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
-source /opt/hiclaw/scripts/lib/gateway-api.sh
 
 log() {
     local msg="[hiclaw $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -20,633 +38,327 @@ log() {
     fi
 }
 
-_fail() {
-    echo '{"error": "'"$1"'"}'
-    exit 1
-}
-
-# ============================================================
-# Parse arguments
-# ============================================================
 TEAM_NAME=""
 LEADER_NAME=""
 WORKERS_CSV=""
+DESCRIPTION=""
+DISPLAY_TEAM_NAME=""
+MODEL_PROVIDER=""
 LEADER_MODEL=""
+LEADER_HEARTBEAT_EVERY=""
+WORKER_IDLE_TIMEOUT=""
+LEADER_MCP_SERVERS=""
 WORKER_MODELS_CSV=""
+WORKER_RUNTIMES_CSV=""
 WORKER_SKILLS_CSV=""
 WORKER_MCP_SERVERS_CSV=""
 TEAM_ADMIN=""
 TEAM_ADMIN_MATRIX_ID=""
-PEER_MENTIONS="true"            # default: team workers can @mention each other
-TEAM_CHANNEL_POLICY_JSON=""     # team-level ChannelPolicySpec JSON
-LEADER_CHANNEL_POLICY_JSON=""   # leader-specific ChannelPolicySpec JSON
-WORKER_CHANNEL_POLICIES_CSV=""  # per-worker ChannelPolicySpec JSONs, ":" separated
+PEER_MENTIONS=""
+TEAM_CHANNEL_POLICY_JSON=""
+TEAM_CHANNEL_POLICY_FILE=""
+LEADER_CHANNEL_POLICY_JSON=""
+LEADER_CHANNEL_POLICY_FILE=""
+WORKER_CHANNEL_POLICIES_CSV=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --name)           TEAM_NAME="$2"; shift 2 ;;
-        --leader)         LEADER_NAME="$2"; shift 2 ;;
+        --leader|--leader-name) LEADER_NAME="$2"; shift 2 ;;
         --workers)        WORKERS_CSV="$2"; shift 2 ;;
+        --description)    DESCRIPTION="$2"; shift 2 ;;
+        --team-name)      DISPLAY_TEAM_NAME="$2"; shift 2 ;;
+        --model-provider) MODEL_PROVIDER="$2"; shift 2 ;;
         --leader-model)   LEADER_MODEL="$2"; shift 2 ;;
+        --leader-heartbeat-every) LEADER_HEARTBEAT_EVERY="$2"; shift 2 ;;
+        --worker-idle-timeout) WORKER_IDLE_TIMEOUT="$2"; shift 2 ;;
+        --leader-mcp-servers) LEADER_MCP_SERVERS="$2"; shift 2 ;;
         --worker-models)  WORKER_MODELS_CSV="$2"; shift 2 ;;
+        --worker-runtimes) WORKER_RUNTIMES_CSV="$2"; shift 2 ;;
         --worker-skills)  WORKER_SKILLS_CSV="$2"; shift 2 ;;
         --worker-mcp-servers) WORKER_MCP_SERVERS_CSV="$2"; shift 2 ;;
         --team-admin)     TEAM_ADMIN="$2"; shift 2 ;;
         --team-admin-matrix-id) TEAM_ADMIN_MATRIX_ID="$2"; shift 2 ;;
         --peer-mentions)  PEER_MENTIONS="$2"; shift 2 ;;
         --team-channel-policy) TEAM_CHANNEL_POLICY_JSON="$2"; shift 2 ;;
+        --team-channel-policy-file) TEAM_CHANNEL_POLICY_FILE="$2"; shift 2 ;;
         --leader-channel-policy) LEADER_CHANNEL_POLICY_JSON="$2"; shift 2 ;;
+        --leader-channel-policy-file) LEADER_CHANNEL_POLICY_FILE="$2"; shift 2 ;;
         --worker-channel-policies) WORKER_CHANNEL_POLICIES_CSV="$2"; shift 2 ;;
-        *) echo "Unknown option: $1"; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
 if [ -z "${TEAM_NAME}" ] || [ -z "${LEADER_NAME}" ] || [ -z "${WORKERS_CSV}" ]; then
-    echo "Usage: create-team.sh --name <TEAM> --leader <LEADER> --workers <w1,w2,...> [--leader-model MODEL] [--worker-models m1,m2,...] [--team-admin NAME] [--team-admin-matrix-id @user:domain]"
+    echo "Usage: create-team.sh --name <TEAM> --leader <LEADER> --workers <w1,w2,...> [options]" >&2
+    echo "Prefer: hiclaw create team --name ... --leader-name ... --workers ..." >&2
     exit 1
 fi
 
-# Parse workers list
-IFS=',' read -ra WORKER_NAMES <<< "${WORKERS_CSV}"
-IFS=',' read -ra WORKER_MODELS <<< "${WORKER_MODELS_CSV:-}"
-# Per-worker skills/mcpServers use : as separator between workers
-IFS=':' read -ra WORKER_SKILLS_ARR <<< "${WORKER_SKILLS_CSV:-}"
-IFS=':' read -ra WORKER_MCP_ARR <<< "${WORKER_MCP_SERVERS_CSV:-}"
-# Per-worker comm policies use | as separator (: would break JSON)
-IFS='|' read -ra WORKER_CHANNEL_POLICIES_ARR <<< "${WORKER_CHANNEL_POLICIES_CSV:-}"
-
-MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
-ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
-
-log "=== Creating Team: ${TEAM_NAME} ==="
-log "  Leader: ${LEADER_NAME}"
-log "  Workers: ${WORKERS_CSV}"
-log "  Team Admin: ${TEAM_ADMIN:-none}"
-
-# ============================================================
-# Ensure credentials
-# ============================================================
-SECRETS_FILE="/data/hiclaw-secrets.env"
-if [ -f "${SECRETS_FILE}" ]; then
-    source "${SECRETS_FILE}"
+if ! command -v hiclaw >/dev/null 2>&1; then
+    echo "ERROR: hiclaw not found; set HICLAW_TEAM_CREATE_IMPL=shell for legacy path" >&2
+    exit 1
 fi
 
-if [ -z "${MANAGER_MATRIX_TOKEN:-}" ]; then
-    MANAGER_PASSWORD="${AGENTTEAMS_MANAGER_PASSWORD:-}"
-    if [ -z "${MANAGER_PASSWORD}" ]; then
-        _fail "MANAGER_MATRIX_TOKEN not set and AGENTTEAMS_MANAGER_PASSWORD not available"
-    fi
-    MANAGER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
-        -H 'Content-Type: application/json' \
-        -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${MANAGER_PASSWORD}"'"}' \
-        2>/dev/null | jq -r '.access_token // empty')
-    if [ -z "${MANAGER_MATRIX_TOKEN}" ]; then
-        _fail "Failed to obtain Manager Matrix token"
-    fi
-fi
-
-# Obtain Team Admin's Matrix token so we can auto-join rooms on their behalf.
-# This only works when Team Admin is the Global Admin (we have the password).
-TEAM_ADMIN_TOKEN=""
-_obtain_team_admin_token() {
-    local _admin_name="${1:-${ADMIN_USER}}"
-    if [ "${_admin_name}" = "${ADMIN_USER}" ] && [ -n "${AGENTTEAMS_ADMIN_PASSWORD:-}" ]; then
-        TEAM_ADMIN_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
-            -H 'Content-Type: application/json' \
-            -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"'"${_admin_name}"'"},"password":"'"${AGENTTEAMS_ADMIN_PASSWORD}"'"}' \
-            2>/dev/null | jq -r '.access_token // empty')
-        if [ -n "${TEAM_ADMIN_TOKEN}" ]; then
-            log "  Obtained Team Admin token for auto-join"
-        else
-            log "  WARNING: Failed to obtain Team Admin token — admin will need to accept invites manually"
-        fi
-    else
-        log "  WARNING: Custom Team Admin (${_admin_name}) — cannot auto-join, admin will need to accept invites manually"
+_append_flag() {
+    local -n _arr=$1
+    local flag="$2"
+    local value="$3"
+    if [ -n "${value}" ]; then
+        _arr+=("${flag}" "${value}")
     fi
 }
 
-# Auto-join a room on behalf of Team Admin
-_admin_auto_join() {
-    local _room_id="$1"
-    if [ -z "${TEAM_ADMIN_TOKEN}" ] || [ -z "${_room_id}" ]; then
+HICLAW_ARGS=(create team --name "${TEAM_NAME}" --leader-name "${LEADER_NAME}" --workers "${WORKERS_CSV}")
+_append_flag HICLAW_ARGS --description "${DESCRIPTION}"
+_append_flag HICLAW_ARGS --team-name "${DISPLAY_TEAM_NAME}"
+_append_flag HICLAW_ARGS --model-provider "${MODEL_PROVIDER}"
+_append_flag HICLAW_ARGS --leader-model "${LEADER_MODEL}"
+_append_flag HICLAW_ARGS --leader-heartbeat-every "${LEADER_HEARTBEAT_EVERY}"
+_append_flag HICLAW_ARGS --worker-idle-timeout "${WORKER_IDLE_TIMEOUT}"
+_append_flag HICLAW_ARGS --leader-mcp-servers "${LEADER_MCP_SERVERS}"
+_append_flag HICLAW_ARGS --worker-models "${WORKER_MODELS_CSV}"
+_append_flag HICLAW_ARGS --worker-runtimes "${WORKER_RUNTIMES_CSV}"
+_append_flag HICLAW_ARGS --worker-skills "${WORKER_SKILLS_CSV}"
+_append_flag HICLAW_ARGS --worker-mcp-servers "${WORKER_MCP_SERVERS_CSV}"
+_append_flag HICLAW_ARGS --team-admin "${TEAM_ADMIN}"
+_append_flag HICLAW_ARGS --team-admin-matrix-id "${TEAM_ADMIN_MATRIX_ID}"
+_append_flag HICLAW_ARGS --peer-mentions "${PEER_MENTIONS}"
+_append_flag HICLAW_ARGS --team-channel-policy "${TEAM_CHANNEL_POLICY_JSON}"
+_append_flag HICLAW_ARGS --team-channel-policy-file "${TEAM_CHANNEL_POLICY_FILE}"
+_append_flag HICLAW_ARGS --leader-channel-policy "${LEADER_CHANNEL_POLICY_JSON}"
+_append_flag HICLAW_ARGS --leader-channel-policy-file "${LEADER_CHANNEL_POLICY_FILE}"
+_append_flag HICLAW_ARGS --worker-channel-policies "${WORKER_CHANNEL_POLICIES_CSV}"
+
+log "=== Creating Team via hiclaw: ${TEAM_NAME} ==="
+if ! hiclaw "${HICLAW_ARGS[@]}"; then
+    echo '{"error": "hiclaw create team failed"}'
+    exit 1
+fi
+
+_poll_team_provision() {
+    local team_name="$1"
+    local leader_name="$2"
+    local workers_csv="$3"
+    local timeout_secs="${4:-120}"
+
+    local deadline=$(( $(date +%s) + timeout_secs ))
+    local team_room leader_dm all_ready=false
+
+    log "Polling team provision (timeout ${timeout_secs}s)..."
+    while [ "$(date +%s)" -lt "${deadline}" ]; do
+        local team_json workers_json
+        team_json=$(hiclaw get teams "${team_name}" -o json 2>/dev/null || echo '{}')
+        workers_json=$(hiclaw get workers --team "${team_name}" -o json 2>/dev/null || echo '{"workers":[]}')
+
+        team_room=$(echo "${team_json}" | jq -r '.teamRoomID // empty')
+        leader_dm=$(echo "${team_json}" | jq -r '.leaderDMRoomID // empty')
+
+        all_ready=true
+        local leader_phase leader_room
+        leader_phase=$(echo "${workers_json}" | jq -r --arg n "${leader_name}" '.workers[]? | select(.name == $n) | .phase // empty' | head -n 1)
+        leader_room=$(echo "${workers_json}" | jq -r --arg n "${leader_name}" '.workers[]? | select(.name == $n) | .roomID // empty' | head -n 1)
+        if [ -z "${leader_room}" ] || [ "${leader_phase}" != "Running" ]; then
+            all_ready=false
+        fi
+
+        IFS=',' read -ra _poll_workers <<< "${workers_csv}"
+        for w_name in "${_poll_workers[@]}"; do
+            w_name=$(echo "${w_name}" | tr -d ' ')
+            [ -z "${w_name}" ] && continue
+            local w_phase w_room
+            w_phase=$(echo "${workers_json}" | jq -r --arg n "${w_name}" '.workers[]? | select(.name == $n) | .phase // empty' | head -n 1)
+            w_room=$(echo "${workers_json}" | jq -r --arg n "${w_name}" '.workers[]? | select(.name == $n) | .roomID // empty' | head -n 1)
+            if [ -z "${w_room}" ] || [ "${w_phase}" != "Running" ]; then
+                all_ready=false
+                break
+            fi
+        done
+
+        if [ -n "${team_room}" ] && [ "${all_ready}" = true ]; then
+            log "Team provision ready (team room + Running members)"
+            return 0
+        fi
+        sleep 5
+    done
+
+    log "WARNING: Team provision poll timed out after ${timeout_secs}s (best-effort continue)"
+    return 0
+}
+
+_update_teams_registry() {
+    local team_name="$1"
+    local leader_name="$2"
+    local workers_csv="$3"
+    local team_room_id="$4"
+    local leader_dm_room_id="$5"
+    local team_admin_name="$6"
+    local team_admin_mid="$7"
+
+    local registry_script="/opt/hiclaw/agent/skills/team-management/scripts/manage-teams-registry.sh"
+    if [ ! -x "${registry_script}" ] && [ ! -f "${registry_script}" ]; then
+        log "WARNING: manage-teams-registry.sh not found; skipping registry update"
         return 0
     fi
-    local _room_enc
-    _room_enc=$(echo "${_room_id}" | sed 's/!/%21/g')
-    if curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${_room_enc}/join" \
-        -H "Authorization: Bearer ${TEAM_ADMIN_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{}' > /dev/null 2>&1; then
-        log "  Team Admin auto-joined room ${_room_id}"
-    else
-        log "  WARNING: Team Admin failed to auto-join room ${_room_id}"
-    fi
+
+    local registry_args=(
+        --action add
+        --team-name "${team_name}"
+        --leader "${leader_name}"
+        --workers "${workers_csv}"
+    )
+    [ -n "${team_room_id}" ] && registry_args+=(--team-room-id "${team_room_id}")
+    [ -n "${team_admin_name}" ] && registry_args+=(--team-admin "${team_admin_name}")
+    [ -n "${team_admin_mid}" ] && registry_args+=(--team-admin-matrix-id "${team_admin_mid}")
+    [ -n "${leader_dm_room_id}" ] && registry_args+=(--leader-dm-room-id "${leader_dm_room_id}")
+
+    log "Updating teams-registry.json for ${team_name}..."
+    bash "${registry_script}" "${registry_args[@]}"
 }
 
-# ============================================================
-# Resolve Team Admin Matrix ID (before creating workers so they get it)
-# ============================================================
-TEAM_ADMIN_MID=""
-if [ -n "${TEAM_ADMIN}" ]; then
-    if [ -n "${TEAM_ADMIN_MATRIX_ID}" ]; then
-        TEAM_ADMIN_MID="${TEAM_ADMIN_MATRIX_ID}"
-    else
-        TEAM_ADMIN_MID="@${TEAM_ADMIN}:${MATRIX_DOMAIN}"
-    fi
-else
-    # Default: use Global Admin as Team Admin
-    TEAM_ADMIN="${ADMIN_USER}"
-    TEAM_ADMIN_MID="@${ADMIN_USER}:${MATRIX_DOMAIN}"
-    log "  No --team-admin specified, defaulting to Global Admin (${ADMIN_USER})"
-fi
+_backfill_human_permissions() {
+    local team_name="$1"
+    local leader_name="$2"
+    local team_room_id="$3"
+    shift 3
+    local -a worker_names=("$@")
 
-_obtain_team_admin_token "${TEAM_ADMIN}"
-
-# ============================================================
-# Step 1: Create Team Room and Leader DM (empty — members invited later)
-# Rooms are created first so room IDs can be passed to create-worker.sh,
-# ensuring Leader's AGENTS.md has full team-context from the start.
-# ============================================================
-log "Step 1: Creating Team Room and Leader DM..."
-MANAGER_MATRIX_ID="@manager:${MATRIX_DOMAIN}"
-ADMIN_MATRIX_ID="@${ADMIN_USER}:${MATRIX_DOMAIN}"
-LEADER_MATRIX_ID="@${LEADER_NAME}:${MATRIX_DOMAIN}"
-
-# E2EE
-ROOM_E2EE_INITIAL_STATE=""
-if [ "${AGENTTEAMS_MATRIX_E2EE:-0}" = "1" ] || [ "${AGENTTEAMS_MATRIX_E2EE:-}" = "true" ]; then
-    ROOM_E2EE_INITIAL_STATE=',"initial_state":[{"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}}]'
-fi
-
-# Create Team Room (Manager-only, members invited in Step 4)
-TEAM_ROOM_RESP=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/createRoom \
-    -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-    -H 'Content-Type: application/json' \
-    -d '{
-        "name": "Team: '"${TEAM_NAME}"'",
-        "topic": "Team room for '"${TEAM_NAME}"' — Leader + Workers coordination",
-        "preset": "trusted_private_chat",
-        "power_level_content_override": {
-            "users": {
-                "'"${MANAGER_MATRIX_ID}"'": 100
-            }
-        }'"${ROOM_E2EE_INITIAL_STATE}"'
-    }' 2>/dev/null) || _fail "Failed to create Team Room"
-
-TEAM_ROOM_ID=$(echo "${TEAM_ROOM_RESP}" | jq -r '.room_id // empty')
-if [ -z "${TEAM_ROOM_ID}" ]; then
-    _fail "Failed to create Team Room: ${TEAM_ROOM_RESP}"
-fi
-log "  Team Room created: ${TEAM_ROOM_ID}"
-
-# Create Leader DM (Manager-only, members invited in Step 4)
-LEADER_DM_ROOM_ID=""
-if [ -n "${TEAM_ADMIN_MID}" ]; then
-    LEADER_DM_RESP=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/createRoom \
-        -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{
-            "name": "Team Admin DM: '"${TEAM_NAME}"'",
-            "topic": "Direct channel between Team Admin and Leader of '"${TEAM_NAME}"'",
-            "preset": "trusted_private_chat",
-            "power_level_content_override": {
-                "users": {
-                    "'"${MANAGER_MATRIX_ID}"'": 100
-                }
-            }'"${ROOM_E2EE_INITIAL_STATE}"'
-        }' 2>/dev/null) || log "  WARNING: Failed to create Leader DM room"
-
-    LEADER_DM_ROOM_ID=$(echo "${LEADER_DM_RESP}" | jq -r '.room_id // empty')
-    if [ -n "${LEADER_DM_ROOM_ID}" ]; then
-        log "  Leader DM room created: ${LEADER_DM_ROOM_ID}"
-    else
-        log "  WARNING: Could not extract Leader DM room_id"
-    fi
-else
-    log "  No Team Admin specified, skipping Leader DM room"
-fi
-
-# ============================================================
-# Step 2: Create Team Leader (with room IDs for AGENTS.md team-context)
-# ============================================================
-log "Step 2: Creating Team Leader (${LEADER_NAME})..."
-LEADER_ARGS=(--name "${LEADER_NAME}" --role team_leader --team "${TEAM_NAME}" --runtime copaw)
-if [ -n "${LEADER_MODEL}" ]; then
-    LEADER_ARGS+=(--model "${LEADER_MODEL}")
-fi
-if [ -n "${TEAM_ADMIN_MID}" ]; then
-    LEADER_ARGS+=(--team-admin-matrix-id "${TEAM_ADMIN_MID}")
-fi
-# Pass pre-created room IDs so Leader's AGENTS.md gets full team-context
-if [ -n "${TEAM_ROOM_ID}" ]; then
-    LEADER_ARGS+=(--team-room-id "${TEAM_ROOM_ID}")
-fi
-if [ -n "${LEADER_DM_ROOM_ID}" ]; then
-    LEADER_ARGS+=(--leader-dm-room-id "${LEADER_DM_ROOM_ID}")
-fi
-# Build channel policy: include all workers + Team Admin in groupAllowExtra
-# so Leader's groupAllowFrom is correct from the start (no post-hoc patching)
-LEADER_GROUP_ALLOW_EXTRA="[]"
-for w_name in "${WORKER_NAMES[@]}"; do
-    w_name=$(echo "${w_name}" | tr -d ' ')
-    [ -z "${w_name}" ] && continue
-    LEADER_GROUP_ALLOW_EXTRA=$(echo "${LEADER_GROUP_ALLOW_EXTRA}" | jq --arg w "${w_name}" '. += [$w]')
-done
-if [ -n "${TEAM_ADMIN_MID}" ]; then
-    LEADER_GROUP_ALLOW_EXTRA=$(echo "${LEADER_GROUP_ALLOW_EXTRA}" | jq --arg a "${TEAM_ADMIN_MID}" '. += [$a]')
-fi
-# Merge with team-level + leader-specific comm policy
-LEADER_MERGED_POLICY=$(jq -n \
-    --argjson team "${TEAM_CHANNEL_POLICY_JSON:-null}" \
-    --argjson member "${LEADER_CHANNEL_POLICY_JSON:-null}" \
-    --argjson workers "${LEADER_GROUP_ALLOW_EXTRA}" \
-    '{
-        groupAllowExtra: ((($team.groupAllowExtra // []) + ($member.groupAllowExtra // []) + $workers) | unique),
-        groupDenyExtra:  ((($team.groupDenyExtra // [])  + ($member.groupDenyExtra // []))  | unique),
-        dmAllowExtra:    ((($team.dmAllowExtra // [])    + ($member.dmAllowExtra // []))    | unique),
-        dmDenyExtra:     ((($team.dmDenyExtra // [])     + ($member.dmDenyExtra // []))     | unique)
-    } | with_entries(select(.value | length > 0))')
-if [ -n "${LEADER_MERGED_POLICY}" ] && [ "${LEADER_MERGED_POLICY}" != "{}" ]; then
-    # Add Team Admin to dm.allowFrom
-    if [ -n "${TEAM_ADMIN_MID}" ]; then
-        LEADER_MERGED_POLICY=$(echo "${LEADER_MERGED_POLICY}" | jq --arg a "${TEAM_ADMIN_MID}" \
-            '.dmAllowExtra = ((.dmAllowExtra // []) + [$a] | unique)')
-    fi
-    LEADER_ARGS+=(--channel-policy "${LEADER_MERGED_POLICY}")
-fi
-
-log "  Leader channel-policy: ${LEADER_MERGED_POLICY:-none}"
-LEADER_RESULT=$(bash /opt/hiclaw/agent/skills/worker-management/scripts/create-worker.sh "${LEADER_ARGS[@]}" 2>&1)
-LEADER_JSON=$(echo "${LEADER_RESULT}" | sed -n '/---RESULT---/,$ p' | tail -n +2)
-LEADER_ROOM_ID=$(echo "${LEADER_JSON}" | jq -r '.room_id // empty')
-
-if [ -z "${LEADER_ROOM_ID}" ]; then
-    log "  WARNING: Could not extract leader room_id from result"
-    log "  Result: ${LEADER_RESULT}"
-fi
-log "  Leader created: room=${LEADER_ROOM_ID}"
-
-# ============================================================
-# Step 3: Create Team Workers
-# ============================================================
-log "Step 3: Creating team workers..."
-WORKER_ROOM_IDS=()
-
-for i in "${!WORKER_NAMES[@]}"; do
-    w_name=$(echo "${WORKER_NAMES[$i]}" | tr -d ' ')
-    [ -z "${w_name}" ] && continue
-
-    w_model="${WORKER_MODELS[$i]:-}"
-    w_skills="${WORKER_SKILLS_ARR[$i]:-}"
-    w_mcp="${WORKER_MCP_ARR[$i]:-}"
-    log "  Creating worker: ${w_name}..."
-
-    W_ARGS=(--name "${w_name}" --role worker --team "${TEAM_NAME}" --team-leader "${LEADER_NAME}" --runtime copaw)
-    if [ -n "${w_model}" ]; then
-        W_ARGS+=(--model "${w_model}")
-    fi
-    if [ -n "${w_skills}" ]; then
-        W_ARGS+=(--skills "${w_skills}")
-    fi
-    if [ -n "${w_mcp}" ]; then
-        W_ARGS+=(--mcp-servers "${w_mcp}")
-    fi
-    if [ -n "${TEAM_ADMIN_MID}" ]; then
-        W_ARGS+=(--team-admin-matrix-id "${TEAM_ADMIN_MID}")
-    fi
-    # Build channel policy: include Team Admin + peer workers in groupAllowExtra
-    # so worker's groupAllowFrom is correct from the start
-    W_GROUP_ALLOW_EXTRA="[]"
-    # Add Team Admin
-    if [ -n "${TEAM_ADMIN_MID}" ]; then
-        W_GROUP_ALLOW_EXTRA=$(echo "${W_GROUP_ALLOW_EXTRA}" | jq --arg a "${TEAM_ADMIN_MID}" '. += [$a]')
-    fi
-    # Add peer workers (if peer mentions enabled)
-    if [ "${PEER_MENTIONS}" = "true" ]; then
-        for j in "${!WORKER_NAMES[@]}"; do
-            peer=$(echo "${WORKER_NAMES[$j]}" | tr -d ' ')
-            [ -z "${peer}" ] && continue
-            [ "${peer}" = "${w_name}" ] && continue
-            W_GROUP_ALLOW_EXTRA=$(echo "${W_GROUP_ALLOW_EXTRA}" | jq --arg w "${peer}" '. += [$w]')
-        done
-    fi
-    # Merge with team-level + per-worker comm policy
-    w_channel_policy="${WORKER_CHANNEL_POLICIES_ARR[$i]:-}"
-    W_MERGED_POLICY=$(jq -n \
-        --argjson team "${TEAM_CHANNEL_POLICY_JSON:-null}" \
-        --argjson member "${w_channel_policy:-null}" \
-        --argjson extra "${W_GROUP_ALLOW_EXTRA}" \
-        '{
-            groupAllowExtra: ((($team.groupAllowExtra // []) + ($member.groupAllowExtra // []) + $extra) | unique),
-            groupDenyExtra:  ((($team.groupDenyExtra // [])  + ($member.groupDenyExtra // []))  | unique),
-            dmAllowExtra:    ((($team.dmAllowExtra // [])    + ($member.dmAllowExtra // []))    | unique),
-            dmDenyExtra:     ((($team.dmDenyExtra // [])     + ($member.dmDenyExtra // []))     | unique)
-        } | with_entries(select(.value | length > 0))')
-    if [ -n "${W_MERGED_POLICY}" ] && [ "${W_MERGED_POLICY}" != "{}" ]; then
-        W_ARGS+=(--channel-policy "${W_MERGED_POLICY}")
+    local humans_registry="${HOME}/humans-registry.json"
+    if [ ! -f "${humans_registry}" ]; then
+        log "No humans-registry.json (skipped human backfill)"
+        return 0
     fi
 
-    W_RESULT=$(bash /opt/hiclaw/agent/skills/worker-management/scripts/create-worker.sh "${W_ARGS[@]}" 2>&1)
-    W_JSON=$(echo "${W_RESULT}" | sed -n '/---RESULT---/,$ p' | tail -n +2)
-    W_ROOM_ID=$(echo "${W_JSON}" | jq -r '.room_id // empty')
-    WORKER_ROOM_IDS+=("${W_ROOM_ID}")
-    log "  Worker ${w_name} created: room=${W_ROOM_ID}"
-done
-
-# ============================================================
-# Step 4: Invite members into Team Room + Leader DM, then Manager leaves
-# Rooms were created empty in Step 1. Now that all workers exist, invite them.
-# ============================================================
-log "Step 4: Inviting members into Team Room and Leader DM..."
-
-# Set power levels for Team Room: Leader=100, Team Admin=100, Workers=0
-POWER_USERS_JSON=$(jq -n --arg leader "${LEADER_MATRIX_ID}" '{($leader): 100}')
-if [ -n "${TEAM_ADMIN_MID}" ]; then
-    POWER_USERS_JSON=$(echo "${POWER_USERS_JSON}" | jq --arg a "${TEAM_ADMIN_MID}" '. + {($a): 100}')
-fi
-for w_name in "${WORKER_NAMES[@]}"; do
-    w_name=$(echo "${w_name}" | tr -d ' ')
-    [ -z "${w_name}" ] && continue
-    POWER_USERS_JSON=$(echo "${POWER_USERS_JSON}" | jq --arg w "@${w_name}:${MATRIX_DOMAIN}" '. + {($w): 0}')
-done
-# Keep Manager at 100 (creator) — will leave after invites
-POWER_USERS_JSON=$(echo "${POWER_USERS_JSON}" | jq --arg m "${MANAGER_MATRIX_ID}" '. + {($m): 100}')
-
-# Update Team Room power levels
-TEAM_ROOM_ENC=$(echo "${TEAM_ROOM_ID}" | sed 's/!/%21/g')
-curl -sf -X PUT "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/state/m.room.power_levels/" \
-    -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-    -H 'Content-Type: application/json' \
-    -d '{"users": '"${POWER_USERS_JSON}"'}' > /dev/null 2>&1 \
-    || log "  WARNING: Failed to update Team Room power levels"
-
-# Invite Leader + Team Admin + Workers into Team Room
-for _invite_id in "${LEADER_MATRIX_ID}" ${TEAM_ADMIN_MID:+"${TEAM_ADMIN_MID}"}; do
-    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/invite" \
-        -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{"user_id": "'"${_invite_id}"'"}' > /dev/null 2>&1 || true
-done
-for w_name in "${WORKER_NAMES[@]}"; do
-    w_name=$(echo "${w_name}" | tr -d ' ')
-    [ -z "${w_name}" ] && continue
-    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/invite" \
-        -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{"user_id": "@'"${w_name}"':'"${MATRIX_DOMAIN}"'"}' > /dev/null 2>&1 || true
-done
-log "  Members invited to Team Room"
-
-# Manager leaves Team Room (delegation boundary)
-curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${TEAM_ROOM_ENC}/leave" \
-    -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-    -H 'Content-Type: application/json' -d '{}' > /dev/null 2>&1 \
-    && log "  Manager left Team Room (delegation boundary)" \
-    || log "  WARNING: Manager failed to leave Team Room"
-
-# Auto-join Team Admin into Team Room
-_admin_auto_join "${TEAM_ROOM_ID}"
-
-# Invite Leader + Team Admin into Leader DM, then Manager leaves
-if [ -n "${LEADER_DM_ROOM_ID}" ]; then
-    LEADER_DM_ENC=$(echo "${LEADER_DM_ROOM_ID}" | sed 's/!/%21/g')
-    # Update power levels
-    curl -sf -X PUT "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/state/m.room.power_levels/" \
-        -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{"users": {"'"${MANAGER_MATRIX_ID}"'": 100, "'"${TEAM_ADMIN_MID}"'": 100, "'"${LEADER_MATRIX_ID}"'": 0}}' > /dev/null 2>&1 || true
-    # Invite
-    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/invite" \
-        -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{"user_id": "'"${TEAM_ADMIN_MID}"'"}' > /dev/null 2>&1 || true
-    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/invite" \
-        -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d '{"user_id": "'"${LEADER_MATRIX_ID}"'"}' > /dev/null 2>&1 || true
-    log "  Members invited to Leader DM"
-    # Manager leaves
-    curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${LEADER_DM_ENC}/leave" \
-        -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-        -H 'Content-Type: application/json' -d '{}' > /dev/null 2>&1 \
-        && log "  Manager left Leader DM" \
-        || log "  WARNING: Manager failed to leave Leader DM"
-    _admin_auto_join "${LEADER_DM_ROOM_ID}"
-fi
-
-# ============================================================
-# Step 5: Initialize team storage space in MinIO
-# Each team gets an isolated storage prefix: teams/{team-name}/
-# ============================================================
-log "Step 5: Initializing team storage space..."
-TEAM_STORAGE_DIR="/root/hiclaw-fs/teams/${TEAM_NAME}"
-mkdir -p "${TEAM_STORAGE_DIR}/shared/tasks"
-mkdir -p "${TEAM_STORAGE_DIR}/shared/projects"
-mkdir -p "${TEAM_STORAGE_DIR}/shared/knowledge"
-touch "${TEAM_STORAGE_DIR}/shared/tasks/.keep"
-touch "${TEAM_STORAGE_DIR}/shared/projects/.keep"
-touch "${TEAM_STORAGE_DIR}/shared/knowledge/.keep"
-ensure_mc_credentials 2>/dev/null || true
-mc mirror "${TEAM_STORAGE_DIR}/" "${AGENTTEAMS_STORAGE_PREFIX}/teams/${TEAM_NAME}/" --overwrite 2>&1 | tail -3
-log "  Team storage initialized at ${AGENTTEAMS_STORAGE_PREFIX}/teams/${TEAM_NAME}/"
-
-# ============================================================
-# Step 6: Update teams-registry.json
-# ============================================================
-log "Step 6: Updating teams-registry.json..."
-REGISTRY_ARGS=(
-    --action add
-    --team-name "${TEAM_NAME}"
-    --leader "${LEADER_NAME}"
-    --workers "${WORKERS_CSV}"
-    --team-room-id "${TEAM_ROOM_ID}"
-)
-if [ -n "${TEAM_ADMIN}" ]; then
-    REGISTRY_ARGS+=(--team-admin "${TEAM_ADMIN}")
-fi
-if [ -n "${TEAM_ADMIN_MID}" ]; then
-    REGISTRY_ARGS+=(--team-admin-matrix-id "${TEAM_ADMIN_MID}")
-fi
-if [ -n "${LEADER_DM_ROOM_ID}" ]; then
-    REGISTRY_ARGS+=(--leader-dm-room-id "${LEADER_DM_ROOM_ID}")
-fi
-bash /opt/hiclaw/agent/skills/team-management/scripts/manage-teams-registry.sh "${REGISTRY_ARGS[@]}"
-
-# ============================================================
-# Step 6b: Re-inject Leader's team-context with worker room IDs
-# Leader was created before workers, so its AGENTS.md team-context
-# is missing worker room IDs. Now that all workers are registered,
-# re-inject the full context.
-# ============================================================
-log "Step 6b: Re-injecting Leader team-context with worker room IDs..."
-_leader_agents_minio="${AGENTTEAMS_STORAGE_PREFIX}/agents/${LEADER_NAME}/AGENTS.md"
-_leader_agents_tmp=$(mktemp /tmp/leader-agents-XXXXXX.md)
-_leader_ctx_tmp=$(mktemp /tmp/leader-ctx-XXXXXX.md)
-
-# Build worker list with room IDs
-_worker_lines=""
-for i in "${!WORKER_NAMES[@]}"; do
-    _wn=$(echo "${WORKER_NAMES[$i]}" | tr -d ' ')
-    [ -z "${_wn}" ] && continue
-    _wr="${WORKER_ROOM_IDS[$i]:-unknown}"
-    _worker_lines="${_worker_lines}
-  - @${_wn}:${MATRIX_DOMAIN} — Room: ${_wr}"
-done
-
-{
-    echo ""
-    echo "<!-- hiclaw-team-context-start -->"
-    echo "## Coordination"
-    echo ""
-    echo "- **Upstream coordinator**: @manager:${MATRIX_DOMAIN} (Manager) — you receive tasks from Manager"
-    [ -n "${TEAM_ADMIN_MID}" ] && echo "- **Team Admin**: ${TEAM_ADMIN_MID} — can assign tasks and make decisions within the team"
-    echo "- **Team**: ${TEAM_NAME}"
-    echo "- **Team Room**: ${TEAM_ROOM_ID} — @mention workers here for task assignment"
-    [ -n "${LEADER_DM_ROOM_ID}" ] && echo "- **Leader DM**: ${LEADER_DM_ROOM_ID} — Team Admin communicates with you here"
-    echo "- **Team Workers**:${_worker_lines}"
-    echo "- You decompose tasks from Manager or Team Admin and assign sub-tasks to your team workers"
-    echo "- @mention workers in the Team Room for task assignment"
-    echo "- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads"
-    echo "- Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source"
-    echo "- @mention Manager only for: task completion, blockers, escalations"
-    echo "<!-- hiclaw-team-context-end -->"
-} > "${_leader_ctx_tmp}"
-
-if mc cp "${_leader_agents_minio}" "${_leader_agents_tmp}" 2>/dev/null; then
-    _leader_clean=$(mktemp /tmp/leader-clean-XXXXXX.md)
-    awk '/<!-- hiclaw-team-context-start -->/{skip=1; next} /<!-- hiclaw-team-context-end -->/{skip=0; next} !skip' \
-        "${_leader_agents_tmp}" > "${_leader_clean}"
-
-    _leader_final=$(mktemp /tmp/leader-final-XXXXXX.md)
-    if grep -q '^<!-- hiclaw-builtin-end -->' "${_leader_clean}"; then
-        awk -v ctx_file="${_leader_ctx_tmp}" '
-            {print}
-            /^<!-- hiclaw-builtin-end -->$/ {
-                while ((getline line < ctx_file) > 0) print line
-                close(ctx_file)
-            }
-        ' "${_leader_clean}" > "${_leader_final}"
-    else
-        cat "${_leader_clean}" "${_leader_ctx_tmp}" > "${_leader_final}"
-    fi
-
-    mc cp "${_leader_final}" "${_leader_agents_minio}" 2>/dev/null \
-        && log "  Leader team-context updated with room IDs in MinIO" \
-        || log "  WARNING: Failed to update Leader team-context in MinIO"
-
-    # Also push directly into the running Leader container (FileSync won't pull AGENTS.md)
-    LEADER_CONTAINER="agentteams-worker-${LEADER_NAME}"
-    LEADER_COPAW_DIR="/root/.copaw-worker/${LEADER_NAME}"
-    if docker exec "${LEADER_CONTAINER}" true 2>/dev/null; then
-        docker cp "${_leader_final}" "${LEADER_CONTAINER}:${LEADER_COPAW_DIR}/AGENTS.md" 2>/dev/null \
-            && log "  Leader AGENTS.md pushed to container working dir" \
-            || log "  WARNING: Failed to push AGENTS.md to Leader container"
-        docker cp "${_leader_final}" "${LEADER_CONTAINER}:${LEADER_COPAW_DIR}/.copaw/AGENTS.md" 2>/dev/null \
-            || true  # .copaw/ copy is best-effort
-    else
-        log "  WARNING: Leader container not running, skipping direct push"
-    fi
-
-    rm -f "${_leader_clean}" "${_leader_final}"
-fi
-rm -f "${_leader_agents_tmp}" "${_leader_ctx_tmp}"
-
-# ============================================================
-# Step 7: Backfill permissions for humans that reference this team
-# If a Human was created before this team, their permissions were
-# skipped. Now that the team exists, configure them.
-# ============================================================
-HUMANS_REGISTRY="${HOME}/humans-registry.json"
-if [ -f "${HUMANS_REGISTRY}" ]; then
-    PENDING_HUMANS=$(jq -r --arg t "${TEAM_NAME}" \
+    local pending_humans
+    pending_humans=$(jq -r --arg t "${team_name}" \
         '.humans | to_entries[] | select(.value.accessible_teams // [] | index($t)) | .key' \
-        "${HUMANS_REGISTRY}" 2>/dev/null)
+        "${humans_registry}" 2>/dev/null || true)
+    if [ -z "${pending_humans}" ]; then
+        log "No pending humans for ${team_name} (skipped human backfill)"
+        return 0
+    fi
 
-    if [ -n "${PENDING_HUMANS}" ]; then
-        log "Step 7: Backfilling permissions for humans referencing ${TEAM_NAME}..."
-        ensure_mc_credentials 2>/dev/null || true
+    log "Backfilling permissions for humans referencing ${team_name}..."
+    ensure_mc_credentials 2>/dev/null || true
 
-        for _human_name in ${PENDING_HUMANS}; do
-            _human_mid=$(jq -r --arg h "${_human_name}" '.humans[$h].matrix_user_id // empty' "${HUMANS_REGISTRY}" 2>/dev/null)
-            [ -z "${_human_mid}" ] && continue
-            log "  Configuring permissions for human: ${_human_name} (${_human_mid})"
+    if [ -z "${MANAGER_MATRIX_TOKEN:-}" ] && [ -f /data/hiclaw-secrets.env ]; then
+        # shellcheck disable=SC1091
+        source /data/hiclaw-secrets.env
+    fi
+    if [ -z "${MANAGER_MATRIX_TOKEN:-}" ] && [ -n "${AGENTTEAMS_MANAGER_PASSWORD:-}" ]; then
+        MANAGER_MATRIX_TOKEN=$(curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"manager"},"password":"'"${AGENTTEAMS_MANAGER_PASSWORD}"'"}' \
+            2>/dev/null | jq -r '.access_token // empty') || true
+    fi
 
-            # Add human to Leader's groupAllowFrom
-            LEADER_CONFIG="/root/hiclaw-fs/agents/${LEADER_NAME}/openclaw.json"
-            if [ -f "${LEADER_CONFIG}" ]; then
+    for _human_name in ${pending_humans}; do
+        local _human_mid
+        _human_mid=$(jq -r --arg h "${_human_name}" '.humans[$h].matrix_user_id // empty' "${humans_registry}" 2>/dev/null)
+        [ -z "${_human_mid}" ] && continue
+        log "  Configuring permissions for human: ${_human_name} (${_human_mid})"
+
+        local leader_config="/root/hiclaw-fs/agents/${leader_name}/openclaw.json"
+        if [ -f "${leader_config}" ]; then
+            jq --arg h "${_human_mid}" \
+                'if (.channels.matrix.groupAllowFrom | index($h)) then .
+                 else .channels.matrix.groupAllowFrom += [$h]
+                 end' \
+                "${leader_config}" > /tmp/leader-human-tmp.json
+            mv /tmp/leader-human-tmp.json "${leader_config}"
+            mc cp "${leader_config}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${leader_name}/openclaw.json" 2>/dev/null || true
+        fi
+
+        for w_name in "${worker_names[@]}"; do
+            w_name=$(echo "${w_name}" | tr -d ' ')
+            [ -z "${w_name}" ] && continue
+            local w_config="/root/hiclaw-fs/agents/${w_name}/openclaw.json"
+            if [ -f "${w_config}" ]; then
                 jq --arg h "${_human_mid}" \
                     'if (.channels.matrix.groupAllowFrom | index($h)) then .
                      else .channels.matrix.groupAllowFrom += [$h]
                      end' \
-                    "${LEADER_CONFIG}" > /tmp/leader-human-tmp.json
-                mv /tmp/leader-human-tmp.json "${LEADER_CONFIG}"
-                mc cp "${LEADER_CONFIG}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${LEADER_NAME}/openclaw.json" 2>/dev/null || true
+                    "${w_config}" > /tmp/worker-human-tmp.json
+                mv /tmp/worker-human-tmp.json "${w_config}"
+                mc cp "${w_config}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${w_name}/openclaw.json" 2>/dev/null || true
             fi
-
-            # Add human to each Worker's groupAllowFrom
-            for w_name in "${WORKER_NAMES[@]}"; do
-                w_name=$(echo "${w_name}" | tr -d ' ')
-                [ -z "${w_name}" ] && continue
-                W_CONFIG="/root/hiclaw-fs/agents/${w_name}/openclaw.json"
-                if [ -f "${W_CONFIG}" ]; then
-                    jq --arg h "${_human_mid}" \
-                        'if (.channels.matrix.groupAllowFrom | index($h)) then .
-                         else .channels.matrix.groupAllowFrom += [$h]
-                         end' \
-                        "${W_CONFIG}" > /tmp/worker-human-tmp.json
-                    mv /tmp/worker-human-tmp.json "${W_CONFIG}"
-                    mc cp "${W_CONFIG}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${w_name}/openclaw.json" 2>/dev/null || true
-                fi
-            done
-
-            # Invite human to Team Room
-            if [ -n "${TEAM_ROOM_ID}" ]; then
-                ROOM_ENC=$(echo "${TEAM_ROOM_ID}" | sed 's/!/%21/g')
-                curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ENC}/invite" \
-                    -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
-                    -H 'Content-Type: application/json' \
-                    -d '{"user_id": "'"${_human_mid}"'"}' 2>/dev/null || true
-            fi
-
-            log "    Permissions configured for ${_human_name}"
         done
-    else
-        log "Step 7: No pending humans for ${TEAM_NAME} (skipped)"
-    fi
-else
-    log "Step 7: No humans-registry.json found (skipped)"
-fi
 
-# ============================================================
-# Output JSON result
-# ============================================================
-WORKERS_JSON="[]"
-for i in "${!WORKER_NAMES[@]}"; do
-    w_name=$(echo "${WORKER_NAMES[$i]}" | tr -d ' ')
-    [ -z "${w_name}" ] && continue
-    w_room="${WORKER_ROOM_IDS[$i]:-}"
-    WORKERS_JSON=$(echo "${WORKERS_JSON}" | jq --arg n "${w_name}" --arg r "${w_room}" '. += [{name: $n, room_id: $r}]')
-done
+        if [ -n "${team_room_id}" ] && [ -n "${MANAGER_MATRIX_TOKEN:-}" ]; then
+            local room_enc
+            room_enc=$(echo "${team_room_id}" | sed 's/!/%21/g')
+            curl -sf -X POST "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${room_enc}/invite" \
+                -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
+                -H 'Content-Type: application/json' \
+                -d '{"user_id": "'"${_human_mid}"'"}' 2>/dev/null || true
+        fi
+    done
+}
 
-RESULT=$(jq -n \
-    --arg team "${TEAM_NAME}" \
-    --arg leader "${LEADER_NAME}" \
-    --arg leader_room "${LEADER_ROOM_ID}" \
-    --arg team_room "${TEAM_ROOM_ID}" \
-    --arg leader_dm_room "${LEADER_DM_ROOM_ID:-}" \
-    --arg team_admin "${TEAM_ADMIN:-}" \
-    --arg team_admin_mid "${TEAM_ADMIN_MID:-}" \
-    --argjson workers "${WORKERS_JSON}" \
-    '{
-        team_name: $team,
-        leader: $leader,
-        leader_room_id: $leader_room,
-        team_room_id: $team_room,
-        leader_dm_room_id: (if $leader_dm_room == "" then null else $leader_dm_room end),
-        team_admin: (if $team_admin == "" then null else $team_admin end),
-        team_admin_matrix_id: (if $team_admin_mid == "" then null else $team_admin_mid end),
-        workers: $workers
-    }')
+_emit_result_json() {
+    local team_json workers_json
+    team_json=$(hiclaw get teams "${TEAM_NAME}" -o json 2>/dev/null || echo '{}')
+    workers_json=$(hiclaw get workers --team "${TEAM_NAME}" -o json 2>/dev/null || echo '{"workers":[]}')
+
+    local team_room leader_dm team_admin team_admin_mid leader_room
+    team_room=$(echo "${team_json}" | jq -r '.teamRoomID // empty')
+    leader_dm=$(echo "${team_json}" | jq -r '.leaderDMRoomID // empty')
+    team_admin=$(echo "${team_json}" | jq -r '.admin.name // empty')
+    team_admin_mid=$(echo "${team_json}" | jq -r '.admin.matrixUserId // empty')
+    leader_room=$(echo "${workers_json}" | jq -r --arg n "${LEADER_NAME}" '.workers[] | select(.name == $n) | .roomID // empty' | head -n 1)
+
+    local workers_result="[]"
+    IFS=',' read -ra WORKER_NAMES <<< "${WORKERS_CSV}"
+    for w_name in "${WORKER_NAMES[@]}"; do
+        w_name=$(echo "${w_name}" | tr -d ' ')
+        [ -z "${w_name}" ] && continue
+        local w_room
+        w_room=$(echo "${workers_json}" | jq -r --arg n "${w_name}" '.workers[] | select(.name == $n) | .roomID // empty' | head -n 1)
+        workers_result=$(echo "${workers_result}" | jq --arg n "${w_name}" --arg r "${w_room}" '. += [{name: $n, room_id: $r}]')
+    done
+
+    jq -n \
+        --arg team "${TEAM_NAME}" \
+        --arg leader "${LEADER_NAME}" \
+        --arg leader_room "${leader_room}" \
+        --arg team_room "${team_room}" \
+        --arg leader_dm_room "${leader_dm}" \
+        --arg team_admin "${team_admin}" \
+        --arg team_admin_mid "${team_admin_mid}" \
+        --argjson workers "${workers_result}" \
+        '{
+            team_name: $team,
+            leader: $leader,
+            leader_room_id: $leader_room,
+            team_room_id: $team_room,
+            leader_dm_room_id: (if $leader_dm_room == "" then null else $leader_dm_room end),
+            team_admin: (if $team_admin == "" then null else $team_admin end),
+            team_admin_matrix_id: (if $team_admin_mid == "" then null else $team_admin_mid end),
+            workers: $workers
+        }'
+}
+
+IFS=',' read -ra WORKER_NAMES <<< "${WORKERS_CSV}"
+_poll_team_provision "${TEAM_NAME}" "${LEADER_NAME}" "${WORKERS_CSV}" 120
+
+TEAM_JSON=$(hiclaw get teams "${TEAM_NAME}" -o json 2>/dev/null || echo '{}')
+TEAM_ROOM_ID=$(echo "${TEAM_JSON}" | jq -r '.teamRoomID // empty')
+LEADER_DM_ROOM_ID=$(echo "${TEAM_JSON}" | jq -r '.leaderDMRoomID // empty')
+TEAM_ADMIN_NAME=$(echo "${TEAM_JSON}" | jq -r '.admin.name // empty')
+TEAM_ADMIN_MID=$(echo "${TEAM_JSON}" | jq -r '.admin.matrixUserId // empty')
+[ -n "${TEAM_ADMIN}" ] && TEAM_ADMIN_NAME="${TEAM_ADMIN}"
+[ -n "${TEAM_ADMIN_MATRIX_ID}" ] && TEAM_ADMIN_MID="${TEAM_ADMIN_MATRIX_ID}"
+
+_update_teams_registry \
+    "${TEAM_NAME}" \
+    "${LEADER_NAME}" \
+    "${WORKERS_CSV}" \
+    "${TEAM_ROOM_ID}" \
+    "${LEADER_DM_ROOM_ID}" \
+    "${TEAM_ADMIN_NAME}" \
+    "${TEAM_ADMIN_MID}"
+
+_backfill_human_permissions "${TEAM_NAME}" "${LEADER_NAME}" "${TEAM_ROOM_ID}" "${WORKER_NAMES[@]}"
 
 echo "---RESULT---"
-echo "${RESULT}"
+_emit_result_json

@@ -40,8 +40,10 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | Runtime   | Stack | Role |
 |-----------|--------|------|
 | `openclaw` | Node.js / OpenClaw (default) | Primary worker agent runtime |
-| `copaw`    | Python / AgentScope via CoPaw | Alternative worker runtime |
+| `copaw`    | Python / AgentScope via CoPaw | Alternative worker runtime (`copaw-worker-agent/` builtins) |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
+| `openhuman` | Rust / OpenHuman Core | Alternative worker runtime with native Matrix (`openhuman-worker-agent/`) |
+| `qwenpaw`  | QwenPaw / TeamHarness | Alternative worker runtime (`qwenpaw-worker-agent/` builtins — **not** the same tree as `copaw`) |
 
 **Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
 
@@ -50,7 +52,7 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `openclaw` (default) | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
 | `copaw` | Python CoPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-copaw-manager.sh`). |
 
-Hermes and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **copaw** only.
+Hermes, OpenHuman, and QwenPaw are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **copaw** only.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
 
@@ -71,8 +73,10 @@ manager/agent/
 │   ├── AGENTS.md                # Replaces workspace AGENTS.md for CoPaw Manager
 │   └── HEARTBEAT.md             # Replaces workspace HEARTBEAT.md for CoPaw Manager
 ├── worker-agent/                # Builtin OpenClaw Worker workspace template
-├── copaw-worker-agent/          # Builtin CoPaw Worker workspace template
+├── copaw-worker-agent/          # Builtin CoPaw Worker workspace template (`runtime=copaw`)
 ├── hermes-worker-agent/         # Builtin Hermes Worker workspace template
+├── openhuman-worker-agent/      # Builtin OpenHuman Worker workspace template
+├── qwenpaw-worker-agent/        # Builtin QwenPaw/TeamHarness Worker workspace template (`runtime=qwenpaw`)
 ├── team-leader-agent/           # Team Leader agent template (Teams feature)
 └── worker-skills/               # Extra worker skill templates (e.g. GitHub) pushed on demand
 ```
@@ -82,6 +86,7 @@ manager/agent/
 - **OpenClaw Manager**: workspace copies of `AGENTS.md`, `HEARTBEAT.md`, `SOUL.md`, plus everything under `skills/` (from image builtins).
 - **CoPaw Manager**: `copaw-manager-agent/AGENTS.md` and `copaw-manager-agent/HEARTBEAT.md` are merged into the workspace copies during `upgrade-builtins.sh` when `MANAGER_RUNTIME=copaw`; **skills/** stay shared with OpenClaw Manager.
 - **Workers**: the controller (or local registry) records `runtime` per worker; init scripts materialize the matching `*-worker-agent/` tree into that worker’s storage.
+- **`copaw` vs `qwenpaw`**: these are **different** builtin trees (`copaw-worker-agent/` vs `qwenpaw-worker-agent/`). Do not conflate them even when agent-facing headers mention “QwenPaw” — `runtime=copaw` uses the CoPaw bridge path; `runtime=qwenpaw` uses TeamHarness / `runtime.yaml`.
 
 **Template rendering**: `shared/lib/render-skills.sh` runs from `start-manager-agent.sh` over workspace and image paths so known `${VAR}` placeholders become literal text before agents read them.
 
@@ -90,8 +95,8 @@ manager/agent/
 ### To understand the architecture
 
 - Read [docs/architecture.md](docs/architecture.md) for system overview and component diagram
-- Read [design/design.md](design/design.md) for full product design (Chinese)
-- Read [design/poc-design.md](design/poc-design.md) for detailed implementation specs
+- Read [docs/k8s-native-agent-orch.md](docs/k8s-native-agent-orch.md) for the Kubernetes-native agent orchestration design
+- Browse [docs/design/](docs/design/) for detailed design docs (controller refactor, Matrix appservice, team/worker proposal)
 
 ### Kubernetes deployment
 
@@ -209,7 +214,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 ### To modify Higress routing and initialization
 
 - [manager/scripts/init/setup-higress.sh](manager/scripts/init/setup-higress.sh) — route, consumer, MCP server setup (local / full console mode)
-- [design/higress-console-api.yaml](design/higress-console-api.yaml) — Higress Console API spec (OpenAPI 3.0)
+- [design/higress-api-doc.json](design/higress-api-doc.json) — Higress Console API spec (OpenAPI 3.0)
 
 ## Technology Stack
 
@@ -263,6 +268,8 @@ This convention applies to all files that end up in the Agent's workspace or are
 - `manager/agent/worker-agent/**` (OpenClaw Worker Agent config, builtin skills)
 - `manager/agent/copaw-worker-agent/**` (CoPaw Worker Agent config, builtin skills)
 - `manager/agent/hermes-worker-agent/**` (Hermes Worker Agent config, builtin skills)
+- `manager/agent/openhuman-worker-agent/**` (OpenHuman Worker Agent config, builtin skills)
+- `manager/agent/qwenpaw-worker-agent/**` (QwenPaw/TeamHarness Worker Agent config, builtin skills)
 - `manager/agent/team-leader-agent/**` (Team Leader Agent config and skills)
 - `manager/agent/worker-skills/**` (on-demand skill definitions pushed to Workers)
 

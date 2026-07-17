@@ -2,9 +2,8 @@ package gateway
 
 import "context"
 
-// Client abstracts AI gateway operations (consumer management, route authorization).
-// Implementations: HigressClient (self-hosted), future APigClient (Alibaba Cloud).
-type Client interface {
+// ConsumerClient manages gateway consumer credentials and AI-route authorization.
+type ConsumerClient interface {
 	// EnsureConsumer creates a consumer or returns existing.
 	// Idempotent: repeated calls with the same name are safe.
 	EnsureConsumer(ctx context.Context, req ConsumerRequest) (*ConsumerResult, error)
@@ -21,15 +20,20 @@ type Client interface {
 	// DeauthorizeAIRoutes removes the consumer from AI routes' allowedConsumers.
 	// When modelAPIID is non-empty, only that provider route is modified.
 	DeauthorizeAIRoutes(ctx context.Context, consumerName string, modelAPIID string) error
+}
 
+// PortExposeClient manages per-worker port exposure through the gateway.
+type PortExposeClient interface {
 	// ExposePort creates gateway resources to expose a worker port.
 	ExposePort(ctx context.Context, req PortExposeRequest) error
 
 	// UnexposePort removes gateway resources for a worker port.
 	UnexposePort(ctx context.Context, req PortExposeRequest) error
+}
 
-	// --- Infrastructure initialization (used by Initializer) ---
-
+// InfrastructureClient manages gateway bootstrap resources (routes, providers, service sources).
+// On ai-gateway provider deployments these operations return ErrUnsupportedOp.
+type InfrastructureClient interface {
 	// EnsureServiceSource registers a DNS-type service source.
 	EnsureServiceSource(ctx context.Context, name, domain string, port int, protocol string) error
 
@@ -52,12 +56,45 @@ type Client interface {
 
 	// EnsureAIRoute creates an AI route with consumer auth.
 	EnsureAIRoute(ctx context.Context, req AIRouteRequest) error
+}
 
+// ModelProviderClient resolves cloud model-provider metadata.
+type ModelProviderClient interface {
 	// ResolveModelProvider looks up a named APIG Model API (HttpApi) and returns
 	// its basePath, Intranet subdomain URL, and httpApiId. Only meaningful for
 	// the ai-gateway provider; Higress returns ErrUnsupportedOp.
 	ResolveModelProvider(ctx context.Context, name string) (*ModelProviderInfo, error)
+}
 
+// HealthClient reports gateway control-plane reachability.
+type HealthClient interface {
 	// Healthy returns nil if the gateway console is reachable and authenticated.
 	Healthy(ctx context.Context) error
+}
+
+// MCPAdminClient lists MCP servers registered in the gateway console.
+type MCPAdminClient interface {
+	// ListMCPServers returns MCP server inventory for health probes.
+	// Returns ErrUnsupportedOp on providers without a console MCP API.
+	ListMCPServers(ctx context.Context) ([]MCPServerInfo, error)
+}
+
+// MCPServerInfo describes one MCP server entry from the gateway console.
+type MCPServerInfo struct {
+	Name             string
+	AllowedConsumers []string
+}
+
+// Client abstracts AI gateway operations (consumer management, route authorization).
+// Implementations: HigressClient (self-hosted), AIGatewayClient (Alibaba Cloud).
+//
+// Phase C10.9: split into focused interfaces for compile-time clarity; Client
+// remains the union type wired through Provisioner and Initializer.
+type Client interface {
+	ConsumerClient
+	PortExposeClient
+	InfrastructureClient
+	ModelProviderClient
+	HealthClient
+	MCPAdminClient
 }

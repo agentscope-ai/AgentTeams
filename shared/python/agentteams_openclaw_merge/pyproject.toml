@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentteams-openclaw-merge"
+version = "0.1.0"
+description = "Shared openclaw.json merge rules for AgentTeams workers (Phase 4)"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]

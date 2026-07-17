@@ -1,14 +1,18 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	"github.com/hiclaw/hiclaw-controller/internal/backend"
 	"github.com/hiclaw/hiclaw-controller/internal/httputil"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -17,16 +21,18 @@ type LifecycleHandler struct {
 	k8s       client.Client
 	registry  *backend.Registry
 	namespace string
+	health    *WorkerHealthProber
 
 	readyMu sync.RWMutex
 	ready   map[string]bool
 }
 
-func NewLifecycleHandler(k8s client.Client, registry *backend.Registry, namespace string) *LifecycleHandler {
+func NewLifecycleHandler(k8s client.Client, registry *backend.Registry, namespace string, health *WorkerHealthProber) *LifecycleHandler {
 	return &LifecycleHandler{
 		k8s:       k8s,
 		registry:  registry,
 		namespace: namespace,
+		health:    health,
 		ready:     make(map[string]bool),
 	}
 }
@@ -167,8 +173,43 @@ func (h *LifecycleHandler) Ready(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var reqBody workerReadyRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil && !errors.Is(err, io.EOF) {
+			log.Printf("[WARN] ready worker %s: decode body: %v", name, err)
+		}
+	}
+
 	// Authorization (self-only for workers) is enforced by RequireAuthz middleware.
 	h.setReady(name, true)
+
+	const readyStatusMaxAttempts = 3 // initial + 2 conflict retries
+	for attempt := 0; attempt < readyStatusMaxAttempts; attempt++ {
+		var worker v1beta1.Worker
+		if err := h.k8s.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+			log.Printf("[WARN] ready worker %s: get worker: %v", name, err)
+			break
+		}
+		worker.Status.LastHeartbeat = time.Now().UTC().Format(time.RFC3339)
+		if reqBody.LLMCallsSinceLastHeartbeat != nil {
+			calls := *reqBody.LLMCallsSinceLastHeartbeat
+			if calls < 0 {
+				log.Printf("[WARN] ready worker %s: negative llmCallsSinceLastHeartbeat %d, ignoring LLM update", name, calls)
+			} else {
+				worker.Status.LLMCallsLastHeartbeat = calls
+				worker.Status.LLMCallsTotal += calls
+			}
+		}
+		if err := h.k8s.Status().Update(r.Context(), &worker); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < readyStatusMaxAttempts {
+				continue
+			}
+			log.Printf("[WARN] ready worker %s: update lastHeartbeat: %v", name, err)
+			break
+		}
+		break
+	}
+
 	log.Printf("[READY] Worker %s reported ready", name)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -203,6 +244,8 @@ func (h *LifecycleHandler) GetWorkerRuntimeStatus(w http.ResponseWriter, r *http
 			}
 		}
 	}
+
+	h.health.AttachHealthChecks(r.Context(), &resp, &worker)
 
 	httputil.WriteJSON(w, http.StatusOK, resp)
 }

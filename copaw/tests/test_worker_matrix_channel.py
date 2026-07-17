@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from copaw_worker.matrix_channel import MatrixChannel
+from matrix.channel import MatrixChannel
 
 
 class _FakeClient:

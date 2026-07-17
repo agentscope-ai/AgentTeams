@@ -34,6 +34,7 @@ Legacy AGENTTEAMS_* names are accepted for compatibility with existing installs.
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(llmPreflightCmd())
 	rootCmd.AddCommand(rotateCmd())
+	rootCmd.AddCommand(managerStateCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

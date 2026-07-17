@@ -22,6 +22,7 @@ type ServerDeps struct {
 	Client         client.Client
 	Backend        *backend.Registry
 	Gateway        gateway.Client
+	GatewayDataPlaneURL string
 	OSS            oss.StorageClient
 	STS            *credentials.STSService
 	AuthMw         *authpkg.Middleware
@@ -64,7 +65,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/version", mw.Authenticate(http.HandlerFunc(sh.Version)))
 
 	// --- Declarative resource CRUD ---
+	workerHealth := NewWorkerHealthProber(deps.Client, deps.Namespace, deps.Gateway, deps.GatewayDataPlaneURL)
 	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName)
+	rh.SetWorkerHealthProber(workerHealth)
 	rh.SetSoloOperator(deps.SoloOperator)
 	nameFn := authpkg.NameFromPath
 
@@ -116,7 +119,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/packages", mw.RequireAuthz(authpkg.ActionCreate, "worker", nil)(http.HandlerFunc(ph.Upload)))
 
 	// --- Imperative lifecycle ---
-	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace)
+	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace, workerHealth)
 	mux.Handle("POST /api/v1/workers/{name}/wake", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Wake)))
 	mux.Handle("POST /api/v1/workers/{name}/sleep", mw.RequireAuthz(authpkg.ActionSleep, "worker", nameFn)(http.HandlerFunc(lh.Sleep)))
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))

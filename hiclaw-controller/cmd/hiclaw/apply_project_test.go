@@ -47,7 +47,7 @@ func TestApplyFromFiles_ProjectEndToEnd(t *testing.T) {
 	os.Unsetenv("AGENTTEAMS_AUTH_TOKEN")
 	os.Unsetenv("AGENTTEAMS_AUTH_TOKEN_FILE")
 
-	content := `apiVersion: hiclaw.io/v1beta1
+	content := `apiVersion: agentteams.io/v1beta1
 kind: Project
 metadata:
   name: proj-e2e
@@ -120,7 +120,7 @@ func TestApplyFromFiles_TeamModelProviderRoundTrip(t *testing.T) {
 	os.Unsetenv("AGENTTEAMS_AUTH_TOKEN")
 	os.Unsetenv("AGENTTEAMS_AUTH_TOKEN_FILE")
 
-	content := `apiVersion: hiclaw.io/v1beta1
+	content := `apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: team-modelprovider-e2e
@@ -153,7 +153,7 @@ spec:
 	}
 
 	// Second apply with a changed value: existence-check GET (200) -> PUT update.
-	content2 := `apiVersion: hiclaw.io/v1beta1
+	content2 := `apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: team-modelprovider-e2e

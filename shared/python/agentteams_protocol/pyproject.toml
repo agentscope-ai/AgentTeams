@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentteams-protocol"
+version = "0.1.0"
+description = "Shared AgentTeams task/project protocol domain (Phase 5)"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]

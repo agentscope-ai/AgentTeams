@@ -10,7 +10,7 @@ HiClaw is an **Agent Teams** platform: a **Manager** coordinates **Workers** (an
 |--------|------|------------------|
 | **hiclaw-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `hiclaw-controller` (Kubernetes) or **`hiclaw-controller-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
 | **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `hiclaw-manager` (OpenClaw / Node) or `hiclaw-manager-copaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
-| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `hiclaw-worker`, `hiclaw-copaw-worker`, or `hiclaw-hermes-worker` |
+| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `hiclaw-worker`, `hiclaw-copaw-worker`, `hiclaw-hermes-worker`, `hiclaw-openhuman-worker`, or `agentteams-qwenpaw-worker` |
 
 The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 22**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
 
@@ -111,7 +111,7 @@ flowchart TB
 
 ### 2. Kubernetes — `helm/hiclaw`
 
-- **`helm/hiclaw/values.yaml`** defines **matrix** (Tuwunel managed or existing Synapse), **gateway** (managed Higress or external Alibaba **ai-gateway**), **storage** (managed MinIO or external OSS), optional **credentialProvider**, **controller**, **manager** (bootstrap **Manager** CR), **elementWeb**, **worker** defaults (images per **openclaw** / **copaw** / **hermes** runtime).
+- **`helm/hiclaw/values.yaml`** defines **matrix** (Tuwunel managed or existing Synapse), **gateway** (managed Higress or external Alibaba **ai-gateway**), **storage** (managed MinIO or external OSS), optional **credentialProvider**, **controller**, **manager** (bootstrap **Manager** CR), **elementWeb**, **worker** defaults (images per **openclaw** / **copaw** / **hermes** / **openhuman** / **qwenpaw** runtime).
 - The **controller** Pod reconciles CRs against **in-cluster** Matrix, Higress, and MinIO endpoints; **Manager** runs with `HICLAW_RUNTIME=k8s`, syncing workspace from cluster MinIO via `mc` and consuming credentials injected by the operator.
 
 ---
@@ -146,6 +146,8 @@ flowchart TB
 | **openclaw** (default) | Node.js / OpenClaw gateway in **openclaw-base**-derived image | Primary worker path; **mcporter** for MCP tool calls through Higress |
 | **copaw** | Python / **QwenPaw** (`copaw-worker` patterns) | Alternative agent loop; Matrix via QwenPaw channels; skills layout under `copaw-worker-agent/` |
 | **hermes** | Python / **`hermes-worker`** | Matrix worker runtime with Hermes policy/config tree under `hermes-worker-agent/` |
+| **openhuman** | Rust / **OpenHuman** Core | Native Matrix (`channel-matrix`); skills under `openhuman-worker-agent/` |
+| **qwenpaw** | **QwenPaw** / TeamHarness | Desired-state via `runtime.yaml`; skills under `qwenpaw-worker-agent/` (distinct from `copaw-worker-agent/`) |
 
 Helm **`worker.defaultImage`** supplies distinct repository defaults for each runtime. The controller resolves the effective runtime and image when creating Pods or Docker containers.
 
@@ -158,7 +160,7 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 | **OpenClaw** | `openclaw` (default) | Node/OpenClaw gateway; Matrix “message tool” style integration |
 | **QwenPaw** | `copaw` | Python QwenPaw workspace; Matrix via **`copaw channels send`** (`start-copaw-manager.sh`) |
 
-**Hermes** is a **Worker** runtime in the API and charts; Manager images today boot **OpenClaw** or **QwenPaw** only (see comments in `start-manager-agent.sh`).
+**Hermes**, **OpenHuman**, and **QwenPaw** (`runtime=qwenpaw`) are **Worker** runtimes in the API and charts; Manager images today boot **OpenClaw** or **QwenPaw-via-`copaw`** only (see comments in `start-manager-agent.sh`).
 
 ---
 
@@ -206,7 +208,7 @@ These are shared by **OpenClaw** and **QwenPaw** Managers (QwenPaw-specific prom
 
 ### Worker skills
 
-- **Per-runtime builtins** — templates under **`manager/agent/worker-agent/`** (OpenClaw), **`copaw-worker-agent/`**, and **`hermes-worker-agent/`** include a small **core** set (e.g. **file-sync**, **mcporter**, **find-skills**, **project-participation**, **task-progress**) materialized into each worker workspace on provision.
+- **Per-runtime builtins** — templates under **`manager/agent/worker-agent/`** (OpenClaw), **`copaw-worker-agent/`**, **`hermes-worker-agent/`**, **`openhuman-worker-agent/`**, and **`qwenpaw-worker-agent/`** include a small **core** set (e.g. **file-sync**, **mcporter**, **find-skills**, **project-participation**, **task-progress**) materialized into each worker workspace on provision.
 - **On-demand / distributable** — **`manager/agent/worker-skills/`** (e.g. **github-operations**, **git-delegation**): the Manager can push selected packages to workers when `spec.skills` references them.
 
 ### Team Leader skills

@@ -8,17 +8,20 @@ This directory contains AgentTeams-enhanced files that replace CoPaw's built-in 
 
 ## Files
 
-### `channel.py` + `__init__.py`
+### `channel.py` + `__init__.py` + `relations.py` + `outbound_policy.py` + `paths.py`
 Replaces `copaw/app/channels/matrix/` with enhanced Matrix channel:
 
+- **Unified implementation (Phase 7):** Manager and Worker load the same overlay; Worker installs a thin `custom_channels` shim pointing at `copaw.app.channels.matrix.channel`.
 - **E2EE Support**: End-to-end encryption via matrix-nio + libolm
 - **History Buffering**: Accumulates non-mentioned messages in group rooms for context
 - **Smart Mention Handling**: Strips @mention prefix for slash commands, supports display names
 - **Markdown Rendering**: Converts Markdown to HTML using markdown-it-py
 - **DM Detection**: Reliable DM vs group room detection via Matrix API
 - **Typing Indicators**: Auto-renewal during long-running operations
+- **Threads + ledger**: MSC3440 thread relations and persisted recent-event ledger
+- **OutboundFilterPolicy**: Team Leader DM preamble suppression, NO_REPLY, assignment reroute
 
-### `config.py`
+### `config.py` (**frozen**, X7.4)
 Replaces `copaw/config/config.py` with enhanced configuration system:
 
 - **OneBot v11 Support**: `OneBotConfig` for NapCat/go-cqhttp/Lagrange

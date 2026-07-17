@@ -40,6 +40,10 @@ const (
 	// controller's Matrix AppService token has not been registered/verified
 	// with the homeserver yet (transient startup race, M_UNKNOWN_TOKEN).
 	appServiceNotReadyRequeue = 5 * time.Second
+	// scopedConfigRetryAfter is the requeue cadence used while a worker's scoped
+	// storage config (agents/<name>/openclaw.json) is not yet readable. Matches
+	// the original in-goroutine poll interval, but without blocking the reconcile.
+	scopedConfigRetryAfter = 5 * time.Second
 )
 
 // WorkerReconciler reconciles standalone Worker resources. Team members are
@@ -150,6 +154,11 @@ func (r *WorkerReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 		}
 	}
 
+	// Refresh the status patch base after the finalizer add so the deferred
+	// Status().Patch diffs against in-sync metadata. Status is still pristine
+	// here, so every status mutation made by reconcileNormal remains in the diff.
+	patchBase = client.MergeFrom(worker.DeepCopy())
+
 	return r.reconcileNormal(ctx, &worker, state)
 }
 
@@ -173,23 +182,7 @@ func edgeHeartbeatStale(lastHeartbeat string, timeout time.Duration) bool {
 func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker, state *MemberState) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
-	deps := MemberDeps{
-		Provisioner:                 r.Provisioner,
-		Deployer:                    r.Deployer,
-		Backend:                     r.Backend,
-		EnvBuilder:                  r.EnvBuilder,
-		ResourcePrefix:              r.ResourcePrefix,
-		DefaultRuntime:              r.DefaultRuntime,
-		GatewayClient:               r.GatewayClient,
-		DynamicClient:               r.DynamicClient,
-		RemoteDynamicClientProvider: r.RemoteDynamicClientProvider,
-		AuthTokenExpirationSeconds:  r.AuthTokenExpirationSeconds,
-		ControllerName:              r.ControllerName,
-		WorkerDepsStorageBucket:     r.WorkerDepsStorageBucket,
-		WorkerDepsStorageEndpoint:   r.WorkerDepsStorageEndpoint,
-		MountAuthType:               r.MountAuthType,
-		MountRoleName:               r.MountRoleName,
-	}
+	deps := r.memberDeps()
 	effectiveSpec, resourceSpec, updateStrategy, err := r.effectiveWorkerSpec(ctx, w, false)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -317,23 +310,7 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 	logger := log.FromContext(ctx)
 	logger.Info("deleting worker", "name", w.Name)
 
-	deps := MemberDeps{
-		Provisioner:                 r.Provisioner,
-		Deployer:                    r.Deployer,
-		Backend:                     r.Backend,
-		EnvBuilder:                  r.EnvBuilder,
-		ResourcePrefix:              r.ResourcePrefix,
-		DefaultRuntime:              r.DefaultRuntime,
-		GatewayClient:               r.GatewayClient,
-		DynamicClient:               r.DynamicClient,
-		RemoteDynamicClientProvider: r.RemoteDynamicClientProvider,
-		AuthTokenExpirationSeconds:  r.AuthTokenExpirationSeconds,
-		ControllerName:              r.ControllerName,
-		WorkerDepsStorageBucket:     r.WorkerDepsStorageBucket,
-		WorkerDepsStorageEndpoint:   r.WorkerDepsStorageEndpoint,
-		MountAuthType:               r.MountAuthType,
-		MountRoleName:               r.MountRoleName,
-	}
+	deps := r.memberDeps()
 	effectiveSpec, resourceSpec, updateStrategy, err := r.effectiveWorkerSpec(ctx, w, true)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -755,6 +732,9 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 // Consumed by workerMemberContext to populate MemberContext.AppliedSpecHash,
 // which owning reconcilers write to status.specHash after a successful
 // reconcile. Sandbox resources no longer store this hash.
+//
+// hashAppliedWorkerSpec computes the standard-runtime pod-recreate hash.
+// Prefer desiredPodRevision.Hash() at call sites that know runtime/resources.
 func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
 	spec.McpServers = nil    // config-only: written to mcporter/runtime config
@@ -792,25 +772,22 @@ func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 }
 
 func hashAppliedWorkerSpecForRuntime(spec v1beta1.WorkerSpec, runtime string) string {
-	if runtime == backend.RuntimeQwenPaw {
-		if spec.Runtime == "" {
-			spec.Runtime = runtime
-		}
-		return hashQwenPawPodSpec(spec)
-	}
-	return hashAppliedWorkerSpec(spec)
+	return desiredPodRevision{Spec: spec, Runtime: runtime}.Hash()
 }
 
 func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtime string, resources *v1beta1.AgentResourceRequirements) string {
-	if runtime == backend.RuntimeQwenPaw {
-		if spec.Runtime == "" {
-			spec.Runtime = runtime
-		}
-		return hashQwenPawPodSpecWithResources(spec, resources)
+	return desiredPodRevision{Spec: spec, Runtime: runtime, Resources: resources}.Hash()
+}
+
+func workerSpecWithEffectiveRuntime(spec v1beta1.WorkerSpec, runtime string) v1beta1.WorkerSpec {
+	if runtime != "" {
+		spec.Runtime = runtime
 	}
-	if resources == nil {
-		return hashAppliedWorkerSpec(spec)
-	}
+	return spec
+}
+
+func hashAppliedWorkerSpecWithResources(spec v1beta1.WorkerSpec, runtime string, resources *v1beta1.AgentResourceRequirements) string {
+	spec = workerSpecWithEffectiveRuntime(spec, runtime)
 	spec.Model = ""           // config-only: written to openclaw.json/runtime.yaml
 	spec.McpServers = nil     // config-only: written to mcporter/runtime config
 	spec.AccessEntries = nil  // permission-only: resolved when credentials are issued

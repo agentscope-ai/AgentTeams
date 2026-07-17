@@ -10,6 +10,7 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -258,6 +259,72 @@ func TestGetWorkerSynthesizesTeamMember(t *testing.T) {
 	}
 	if resp.MatrixUserID != "@alpha-dev:example.com" {
 		t.Errorf("MatrixUserID=%q, want %q", resp.MatrixUserID, "@alpha-dev:example.com")
+	}
+}
+
+func TestGetWorkerSynthesizedTeamMemberIncludesHealthChecks(t *testing.T) {
+	modelsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(modelsServer.Close)
+
+	scheme := newServerTestScheme(t)
+	_ = corev1.AddToScheme(scheme)
+
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{{Name: "alpha-dev", Model: "qwen3.5-plus"}}
+	team.Status.Members = []v1beta1.TeamMemberStatus{{
+		Name:         "alpha-dev",
+		Role:         "worker",
+		RoomID:       "!dev-room:example.com",
+		MatrixUserID: "@alpha-dev:example.com",
+	}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	handler.SetWorkerHealthProber(NewWorkerHealthProber(k8sClient, "default", &healthTestGateway{}, modelsServer.URL))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workers/alpha-dev", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+	handler.GetWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var resp WorkerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.HealthChecks == nil {
+		t.Fatal("expected healthChecks on synthesized GetWorker response")
+	}
+}
+
+func TestTeamMemberToResponseCopiesHeartbeatTimestamps(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	team := &v1beta1.Team{}
+	team.Name = "alpha-team"
+	team.Namespace = "default"
+	team.Spec.Workers = []v1beta1.TeamWorkerSpec{{Name: "alpha-dev", Model: "qwen3.5-plus"}}
+	team.Status.Members = []v1beta1.TeamMemberStatus{{
+		Name:          "alpha-dev",
+		Role:          "worker",
+		LastHeartbeat: "2026-07-17T10:00:00Z",
+		LastActiveAt:  "2026-07-17T09:30:00Z",
+	}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(team).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	resp := handler.teamMemberToResponse(context.Background(), team, "alpha-dev")
+	if resp.LastHeartbeat != "2026-07-17T10:00:00Z" {
+		t.Fatalf("lastHeartbeat = %q, want 2026-07-17T10:00:00Z", resp.LastHeartbeat)
+	}
+	if resp.LastActiveAt != "2026-07-17T09:30:00Z" {
+		t.Fatalf("lastActiveAt = %q, want 2026-07-17T09:30:00Z", resp.LastActiveAt)
 	}
 }
 
@@ -991,6 +1058,36 @@ func TestCreateProject_HappyPath(t *testing.T) {
 	}
 	if resp.Phase != "Pending" {
 		t.Fatalf("response phase = %q, want Pending (default)", resp.Phase)
+	}
+}
+
+func TestCreateProject_WithDependsOn(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"name":"proj-2","team":"alpha-team","dependsOn":["upstream-a","upstream-b"],"repos":[{"url":"https://git.pawcommit.com/org/repo.git","access":"rw"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.CreateProject(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var stored v1beta1.Project
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "proj-2", Namespace: "default"}, &stored); err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if len(stored.Spec.DependsOn) != 2 || stored.Spec.DependsOn[0] != "upstream-a" {
+		t.Fatalf("dependsOn = %+v", stored.Spec.DependsOn)
+	}
+
+	var resp ProjectResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.DependsOn) != 2 {
+		t.Fatalf("response dependsOn = %+v", resp.DependsOn)
 	}
 }
 

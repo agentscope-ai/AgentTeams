@@ -1,0 +1,54 @@
+{
+  "description": "Documented behavioral differences between CoPaw domain (task.py / hooks) and TeamHarness MCP (server.py). Phase 0 records current state; Phase 5 resolves via shared protocol + adapters.",
+    "engines": {
+    "copaw_domain": "copaw/src/copaw_worker/task.py",
+    "copaw_hooks": "copaw/src/copaw_worker/hooks/tools/taskflow.py, projectflow.py",
+    "teamharness_mcp": "plugins/teamharness/mcp/tools/{projectflow,taskflow}.py"
+  },
+  "diffs": [
+    {
+      "id": "actions-mcp-only",
+      "summary": "TeamHarness MCP exposes project/task actions not present on CoPaw hooks",
+      "copaw_hooks": "delegate_task, check_task, ack_task, submit_task; projectflow: create_project, plan_dag, plan_loop, ready_*, pause/resume/complete, record_loop_iteration, check_active_tasks",
+      "teamharness_mcp": "Additional: create_quick_project, resolve_project, accept_task_result, mark_requester_report_sent, cancel_task",
+      "resolution_phase": "P5.3 — shared core + thin MCP adapter keeps JSON shape"
+    },
+    {
+      "id": "role-gating",
+      "summary": "MCP enforces runtime role on taskflow actions; CoPaw hooks use Matrix actor + Team Room checks",
+      "copaw_hooks": "taskflow._require_team_leader_assignment_room for delegate; worker identity from AGENTTEAMS_MATRIX_USER_ID",
+      "teamharness_mcp": "_role / _runtime_role gates leader vs worker vs remote-member per action",
+      "resolution_phase": "P5.2/P5.3 — policy in adapter, domain stays role-agnostic"
+    },
+    {
+      "id": "filesync-coupling",
+      "summary": "CoPaw hooks push/pull MinIO around ack/submit/delegate; MCP uses _filesync mc subprocess",
+      "copaw_hooks": "create_sync() from filesync.py; push excludes spec.md and base/",
+      "teamharness_mcp": "_sync_task / _pull_task via filesync tool → agentteams_sync.FileSync",
+      "resolution_phase": "P5.7 — MCP filesync delegates to agentteams_sync.FileSync with explicit storage prefixes; global-shared push remains read-only"
+    },
+    {
+      "id": "artifact-publish",
+      "summary": "MCP submit_task may publish artifacts to Matrix; CoPaw domain writes result.md only",
+      "copaw_domain": "submit_task validates result.md on disk",
+      "teamharness_mcp": "_publish_task_artifacts after submit_task",
+      "resolution_phase": "P5.3 adapter layer"
+    },
+    {
+      "id": "accept-task-result",
+      "summary": "DAG node completion in MCP uses accept_task_result; CoPaw projectflow uses plan marker updates via separate flows",
+      "copaw_domain": "check_task reads result; plan completion markers updated outside submit_task in Leader workflows",
+      "teamharness_mcp": "accept_task_result mutates project plan node status and may publish project result",
+      "resolution_phase": "P5.1 — unify in agentteams_protocol"
+    }
+  ],
+  "comparison_tests": {
+    "copaw_domain_characterization": "plugins/tests/protocol/test_characterization.py",
+    "teamharness_mcp_characterization": "plugins/tests/protocol/run_characterization.py --engine teamharness-mcp",
+    "copaw_hooks_unit": "copaw/tests/test_taskflow_tool.py",
+    "teamharness_mcp_integration": [
+      "plugins/tests/teamharness/mcp/tools/test-taskflow.rb",
+      "plugins/tests/teamharness/mcp/tools/test-projectflow.rb"
+    ]
+  }
+}

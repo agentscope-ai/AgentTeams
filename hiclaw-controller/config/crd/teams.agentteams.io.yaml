@@ -293,7 +293,7 @@ spec:
                         description: Name of the AI gateway Model API to use as the LLM provider.
                       runtime:
                         type: string
-                        enum: [openclaw, copaw, hermes, openhuman]
+                        enum: [openclaw, copaw, hermes, openhuman, qwenpaw]
                       image:
                         type: string
                       identity:

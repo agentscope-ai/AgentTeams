@@ -49,12 +49,14 @@ If the Manager doesn't have socket access, it will reply with a `docker run` com
 
 ```bash
 docker run -d --name hiclaw-worker-alice \
-  -e HICLAW_WORKER_NAME=alice \
+  -e AGENTTEAMS_WORKER_NAME=alice \
   -e HICLAW_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
   -e HICLAW_FS_ACCESS_KEY=<ACCESS_KEY> \
   -e HICLAW_FS_SECRET_KEY=<SECRET_KEY> \
   hiclaw/worker-agent:latest
 ```
+
+`AGENTTEAMS_WORKER_NAME` is required (runtime identity / storage path). Set `AGENTTEAMS_WORKER_CR_NAME` only when the Worker CR name differs from that runtime identity.
 
 The Manager will provide all the specific values in its reply.
 
@@ -161,7 +163,8 @@ When Manager updates Worker's config in MinIO:
 
 | Variable | Description |
 |----------|-------------|
-| `HICLAW_WORKER_NAME` | Worker identifier (e.g., `alice`) |
+| `AGENTTEAMS_WORKER_NAME` | Required worker runtime identity (e.g., `alice`) |
+| `AGENTTEAMS_WORKER_CR_NAME` | Optional Worker CR name override when it differs from `AGENTTEAMS_WORKER_NAME` |
 | `HICLAW_MATRIX_URL` | Matrix Homeserver URL (e.g., `http://matrix-local.hiclaw.io:18080`) |
 | `HICLAW_AI_GATEWAY_URL` | AI Gateway URL (e.g., `http://aigw-local.hiclaw.io:18080`) |
 | `HICLAW_FS_ENDPOINT` | MinIO endpoint URL (e.g., `http://<MANAGER_HOST>:9000`) |

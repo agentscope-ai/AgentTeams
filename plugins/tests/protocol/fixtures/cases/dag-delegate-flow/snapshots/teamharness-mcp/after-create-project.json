@@ -1,0 +1,14 @@
+{
+  "project_meta": {
+    "project_id": "demo-project-20260717-120000",
+    "requester": "@admin:matrix-local.agentteams.io:18080",
+    "source": "characterization-fixture",
+    "status": "active",
+    "tasks": [],
+    "title": "Demo DAG project"
+  },
+  "project_plan": "# Demo DAG project\n\n- Project ID: `demo-project-20260717-120000`\n- Status: `active`\n- Requester: `@admin:matrix-local.agentteams.io:18080`\n\n## Tasks\n",
+  "task_meta": null,
+  "task_spec": null,
+  "task_result": null
+}

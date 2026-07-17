@@ -42,8 +42,71 @@ async function renderList(body, projects) {
     return;
   }
 
+  const crossProject = renderCrossProjectGraph(projects);
   const cards = await Promise.all(projects.map((p) => buildCard(p)));
-  body.innerHTML = `<div class="card-grid">${cards.join('')}</div>`;
+  body.innerHTML = `${crossProject}<div class="card-grid">${cards.join('')}</div>`;
+}
+
+/**
+ * renderCrossProjectGraph shows CRD-level dependsOn edges from
+ * status.dependencies — separate from intra-plan plan.md DAG inside each card.
+ */
+function renderCrossProjectGraph(projects) {
+  const byName = new Map(projects.map((p) => [p.name, p]));
+  const edges = [];
+  for (const project of projects) {
+    const deps = project.dependencies || [];
+    for (const dep of deps) {
+      edges.push({ from: dep.project, to: project.name, dep });
+    }
+    if (deps.length === 0 && (project.dependsOn || []).length > 0) {
+      for (const depName of project.dependsOn) {
+        edges.push({
+          from: depName,
+          to: project.name,
+          dep: { project: depName, phase: 'Pending', satisfied: false },
+        });
+      }
+    }
+  }
+  if (edges.length === 0) {
+    return '';
+  }
+
+  const nodeNames = new Set();
+  for (const edge of edges) {
+    nodeNames.add(edge.from);
+    nodeNames.add(edge.to);
+  }
+
+  const nodeBlocks = [...nodeNames]
+    .sort()
+    .map((name) => {
+      const project = byName.get(name);
+      const phase = project?.phase || 'unknown';
+      const ghost = project ? '' : ' cross-project-node-ghost';
+      return `<div class="cross-project-node${ghost}"><span class="card-name">${escapeHtml(name)}</span> <span class="badge ${badgeClass(phase)}">${escapeHtml(phase)}</span></div>`;
+    })
+    .join('');
+
+  const edgeRows = edges
+    .map(({ from, to, dep }) => {
+      const status = dep.satisfied ? 'satisfied' : 'blocked';
+      const phase = dep.phase || 'unknown';
+      return `<li class="cross-project-edge cross-project-edge-${status}"><span class="muted">${escapeHtml(from)}</span> → <span class="muted">${escapeHtml(to)}</span> <span class="badge ${dep.satisfied ? 'badge-ready' : 'badge-pending'}">${escapeHtml(phase)}</span></li>`;
+    })
+    .join('');
+
+  return `
+    <details class="cross-project-section" open>
+      <summary>Cross-project dependencies (Project CRD)</summary>
+      <p class="muted cross-project-note">Edges come from <code>spec.dependsOn</code> / <code>status.dependencies</code> on Project CRs — not from chat-flow <code>plan.md</code> task DAGs.</p>
+      <div class="cross-project-graph">
+        <div class="cross-project-nodes">${nodeBlocks}</div>
+        <ul class="cross-project-edges">${edgeRows}</ul>
+      </div>
+    </details>
+  `;
 }
 
 async function buildCard(project) {
@@ -82,9 +145,25 @@ async function buildCard(project) {
         ${planCounts ? renderProgress(planCounts) : '<span class="muted">plan.md not yet available</span>'}
       </div>
       ${repoLines ? `<ul class="card-meta">${repoLines}</ul>` : ''}
+      ${renderProjectDependencies(project)}
       ${planText !== null ? renderPlanExpander(id, planText) : ''}
     </div>
   `;
+}
+
+function renderProjectDependencies(project) {
+  const deps = project.dependencies || [];
+  if (deps.length === 0) {
+    return '';
+  }
+  const rows = deps
+    .map((dep) => {
+      const cls = dep.satisfied ? 'badge-ready' : 'badge-pending';
+      const label = dep.satisfied ? 'satisfied' : 'waiting';
+      return `<li>${escapeHtml(dep.project)} <span class="badge ${cls}">${escapeHtml(dep.phase || 'unknown')}</span> <span class="muted">(${label})</span></li>`;
+    })
+    .join('');
+  return `<div class="card-meta"><strong>CRD dependencies</strong><ul>${rows}</ul></div>`;
 }
 
 /**

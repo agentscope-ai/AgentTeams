@@ -10,7 +10,8 @@ description: Use when admin gives a task to delegate to a Worker, when a Worker 
 - **Don't let Workers hallucinate on unfamiliar domains** — when a task involves niche frameworks, complex APIs, or domain-specific workflows that the Worker likely lacks knowledge about, include a suggestion to use `find-skills` to search for relevant skills first. Skipping this leads to hallucinated code and wasted iterations
 - **Delegation-first** — always prefer assigning to a Worker over doing it yourself. Only self-execute when admin explicitly says "do it yourself" or the task is within your management skills
 - **Never @mention a Worker after recording infinite task execution** — this creates a rapid-fire loop (execute → report → trigger → execute → ...) that burns tokens continuously. Triggering happens only during heartbeat
-- **Always use `manage-state.sh` to modify state.json** — never edit manually with jq. The script handles atomicity, deduplication, and initialization
+- **Always use `manage-state.sh` to modify state.json** — never edit manually with jq. The script handles atomicity, deduplication, and initialization. When `hiclaw` is installed it delegates to `hiclaw manager-state`; set `HICLAW_MANAGER_STATE_IMPL=shell` to force the legacy shell implementation.
+- **OpenClaw Manager task tracking** uses `manage-state.sh` / `hiclaw manager-state` exclusively; CoPaw/TeamHarness Leaders use `taskflow`/`projectflow` MCP tools instead.
 - **Every task assigned to a Worker MUST be registered in state.json** — this includes coordination, research, review, and management tasks, not just coding tasks. If a task is missing from state.json, the Worker's container will be auto-stopped by idle timeout while still working
 - **Always push task files to MinIO before notifying Worker** — Worker needs to file-sync to get the spec
 - **Always pull task directory from MinIO before reading results** — Worker pushes results there

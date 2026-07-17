@@ -84,6 +84,8 @@ spec:
               value: {{ include "hiclaw.worker.hermesImage" . | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE
               value: {{ include "hiclaw.worker.openhumanImage" . | quote }}
+            - name: AGENTTEAMS_QWENPAW_WORKER_IMAGE
+              value: {{ include "hiclaw.worker.qwenpawImage" . | quote }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ

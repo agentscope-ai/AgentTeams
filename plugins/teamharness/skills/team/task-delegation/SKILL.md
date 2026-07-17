@@ -134,8 +134,20 @@ When a Worker reports completion or blocker status, call:
 }
 ```
 
-If `effective` is false, do not accept the task. Tell the Worker what is
-missing and wait for a corrected result.
+`check_task` auto-pulls the task directory, validates result metadata, and runs
+artifact verification (`verification.verified`, `failedClaims`). A `SUCCESS`
+status alone is not enough to accept a task.
+
+**Deliverable sources (TeamHarness vs Manager):** `check_task` verifies paths
+stored in task metadata from `submit_task` (`deliverables` / `verifiable_claims`).
+It does not parse the `result.md` `DELIVERABLES:` or `## Deliverables` section.
+OpenClaw/CoPaw Managers instead use `verify-output.sh`, which reads those headings
+from `result.md`. Workers should still list deliverables in `result.md` for human
+readability, but TeamHarness acceptance follows metadata, not a re-parse of that
+section.
+
+If `effective` is false, do not accept the task. Inspect `validationErrors` and
+`failedClaims`, tell the Worker what is missing, and wait for a corrected result.
 
 If `effective` is true, return to `teamharness-project-management` and decide
 whether to accept the result into project progress.

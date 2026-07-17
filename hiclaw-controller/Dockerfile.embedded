@@ -79,10 +79,12 @@ COPY manager/scripts/lib/ /opt/hiclaw/scripts/lib/
 COPY shared/lib/ /opt/hiclaw/scripts/lib/
 RUN chmod +x /opt/hiclaw/scripts/init/*.sh
 
-# Agent templates (builtin AGENTS.md, skills for worker, copaw-worker, hermes-worker, team-leader)
+# Agent templates (builtin AGENTS.md, skills for worker, copaw-worker, hermes-worker, openhuman-worker, qwenpaw-worker, team-leader)
 COPY manager/agent/worker-agent/ /opt/hiclaw/agent/worker-agent/
 COPY manager/agent/copaw-worker-agent/ /opt/hiclaw/agent/copaw-worker-agent/
 COPY manager/agent/hermes-worker-agent/ /opt/hiclaw/agent/hermes-worker-agent/
+COPY manager/agent/openhuman-worker-agent/ /opt/hiclaw/agent/openhuman-worker-agent/
+COPY manager/agent/qwenpaw-worker-agent/ /opt/hiclaw/agent/qwenpaw-worker-agent/
 COPY manager/agent/team-leader-agent/ /opt/hiclaw/agent/team-leader-agent/
 COPY manager/agent/skills/ /opt/hiclaw/agent/skills/
 

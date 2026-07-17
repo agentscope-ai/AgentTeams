@@ -1,0 +1,15 @@
+{
+  "project_meta": {
+    "project_id": "demo-project-20260717-120000",
+    "title": "Demo DAG project",
+    "status": "active",
+    "source": "characterization-fixture",
+    "requester": "@admin:matrix-local.agentteams.io:18080",
+    "parent_task_id": null,
+    "created_at": "<ISO8601>"
+  },
+  "project_plan": "# Team Project: Demo DAG project\n\n**ID**: demo-project-20260717-120000\n**Created**: <ISO8601>\n\n## DAG Task Plan\n\n**Plan Type**: dag\n",
+  "task_meta": null,
+  "task_spec": null,
+  "task_result": null
+}

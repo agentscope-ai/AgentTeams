@@ -60,7 +60,10 @@ param(
 # Configuration
 # ============================================================
 
+. "$PSScriptRoot/load-defaults.ps1"
+
 $script:AGENTTEAMS_VERSION = if ($env:AGENTTEAMS_VERSION) { $env:AGENTTEAMS_VERSION } else { "latest" }
+$script:AGENTTEAMS_KNOWN_STABLE_VERSION = $env:AGENTTEAMS_KNOWN_STABLE_VERSION
 $script:AGENTTEAMS_NON_INTERACTIVE = if ($env:AGENTTEAMS_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
 $script:AGENTTEAMS_MOUNT_SOCKET = if ($env:AGENTTEAMS_MOUNT_SOCKET -eq "0") { $false } else { $true }
 $script:AGENTTEAMS_ENV_FILE = if ($EnvFile) { $EnvFile } elseif ($env:AGENTTEAMS_ENV_FILE) { $env:AGENTTEAMS_ENV_FILE } else { "$env:USERPROFILE\agentteams-manager.env" }
@@ -774,8 +777,8 @@ function Resolve-EmbeddedImage {
         return
     }
 
-    $versioned = "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-embedded:$($script:AGENTTEAMS_VERSION)"
-    $latestTag = "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-embedded:latest"
+    $versioned = "$($script:AGENTTEAMS_REGISTRY)/higress/$($env:AGENTTEAMS_IMAGE_EMBEDDED):$($script:AGENTTEAMS_VERSION)"
+    $latestTag = "$($script:AGENTTEAMS_REGISTRY)/higress/$($env:AGENTTEAMS_IMAGE_EMBEDDED):latest"
 
     if ($script:AGENTTEAMS_VERSION -eq "latest") {
         $script:EMBEDDED_IMAGE = $latestTag
@@ -2143,13 +2146,13 @@ function Step-Network {
 
 function Step-Ports {
     Write-Log (Get-Msg "port.title")
-    $script:config.PORT_GATEWAY = Read-Prompt -VarName "AGENTTEAMS_PORT_GATEWAY" -PromptText (Get-Msg "port.gateway_prompt") -Default "18080"
+    $script:config.PORT_GATEWAY = Read-Prompt -VarName "AGENTTEAMS_PORT_GATEWAY" -PromptText (Get-Msg "port.gateway_prompt") -Default $env:AGENTTEAMS_PORT_GATEWAY
     if ($script:StepResult -eq "back") { return }
-    $script:config.PORT_CONSOLE = Read-Prompt -VarName "AGENTTEAMS_PORT_CONSOLE" -PromptText (Get-Msg "port.console_prompt") -Default "18001"
+    $script:config.PORT_CONSOLE = Read-Prompt -VarName "AGENTTEAMS_PORT_CONSOLE" -PromptText (Get-Msg "port.console_prompt") -Default $env:AGENTTEAMS_PORT_CONSOLE
     if ($script:StepResult -eq "back") { return }
-    $script:config.PORT_ELEMENT_WEB = Read-Prompt -VarName "AGENTTEAMS_PORT_ELEMENT_WEB" -PromptText (Get-Msg "port.element_prompt") -Default "18088"
+    $script:config.PORT_ELEMENT_WEB = Read-Prompt -VarName "AGENTTEAMS_PORT_ELEMENT_WEB" -PromptText (Get-Msg "port.element_prompt") -Default $env:AGENTTEAMS_PORT_ELEMENT_WEB
     if ($script:StepResult -eq "back") { return }
-    $script:config.PORT_MANAGER_CONSOLE = Read-Prompt -VarName "AGENTTEAMS_PORT_MANAGER_CONSOLE" -PromptText (Get-Msg "port.manager_console_prompt") -Default "18888"
+    $script:config.PORT_MANAGER_CONSOLE = Read-Prompt -VarName "AGENTTEAMS_PORT_MANAGER_CONSOLE" -PromptText (Get-Msg "port.manager_console_prompt") -Default $env:AGENTTEAMS_PORT_MANAGER_CONSOLE
     if ($script:StepResult -eq "back") { return }
     Write-Log ""
 }
@@ -2157,7 +2160,7 @@ function Step-Ports {
 function Step-Domains {
     Write-Log (Get-Msg "domain.title")
     Write-Log (Get-Msg "domain.hint")
-    $script:config.MATRIX_DOMAIN = Read-Prompt -VarName "AGENTTEAMS_MATRIX_DOMAIN" -PromptText (Get-Msg "domain.matrix_prompt") -Default "matrix-local.agentteams.io:$($script:config.PORT_GATEWAY)"
+    $script:config.MATRIX_DOMAIN = Read-Prompt -VarName "AGENTTEAMS_MATRIX_DOMAIN" -PromptText (Get-Msg "domain.matrix_prompt") -Default "$($env:AGENTTEAMS_MATRIX_DOMAIN_HOST_SUFFIX):$($script:config.PORT_GATEWAY)"
     if ($script:StepResult -eq "back") { return }
     $script:config.MATRIX_CLIENT_DOMAIN = Read-Prompt -VarName "AGENTTEAMS_MATRIX_CLIENT_DOMAIN" -PromptText (Get-Msg "domain.element_prompt") -Default "matrix-client-local.agentteams.io"
     if ($script:StepResult -eq "back") { return }
@@ -2491,31 +2494,31 @@ function Install-Manager {
     $script:MANAGER_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_MANAGER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-manager:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/$($env:AGENTTEAMS_IMAGE_MANAGER):$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/$($env:AGENTTEAMS_IMAGE_WORKER):$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:COPAW_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-copaw-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/$($env:AGENTTEAMS_IMAGE_COPAW_WORKER):$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:HERMES_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-hermes-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/$($env:AGENTTEAMS_IMAGE_HERMES_WORKER):$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:MANAGER_COPAW_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE) {
         $env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-manager-copaw:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/$($env:AGENTTEAMS_IMAGE_MANAGER_COPAW):$($script:AGENTTEAMS_VERSION)"
     }
 
     # Backward compatibility: accept old env var name from previous versions
@@ -2523,7 +2526,7 @@ function Install-Manager {
     $script:CONTROLLER_IMAGE = if ($controllerImageOverride) {
         $controllerImageOverride
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/higress/$($env:AGENTTEAMS_IMAGE_CONTROLLER):$($script:AGENTTEAMS_VERSION)"
     }
 
     # Resolve embedded controller image (sets $script:EMBEDDED_IMAGE and
@@ -2666,13 +2669,13 @@ function Install-Manager {
         $script:config.MANAGER_RUNTIME = if ($env:AGENTTEAMS_MANAGER_RUNTIME) { $env:AGENTTEAMS_MANAGER_RUNTIME } else { "copaw" }
     }
     if (-not $script:config.PORT_GATEWAY) {
-        $script:config.PORT_GATEWAY = if ($env:AGENTTEAMS_PORT_GATEWAY) { $env:AGENTTEAMS_PORT_GATEWAY } else { "18080" }
-        $script:config.PORT_CONSOLE = if ($env:AGENTTEAMS_PORT_CONSOLE) { $env:AGENTTEAMS_PORT_CONSOLE } else { "18001" }
-        $script:config.PORT_ELEMENT_WEB = if ($env:AGENTTEAMS_PORT_ELEMENT_WEB) { $env:AGENTTEAMS_PORT_ELEMENT_WEB } else { "18088" }
-        $script:config.PORT_MANAGER_CONSOLE = if ($env:AGENTTEAMS_PORT_MANAGER_CONSOLE) { $env:AGENTTEAMS_PORT_MANAGER_CONSOLE } else { "18888" }
+        $script:config.PORT_GATEWAY = $env:AGENTTEAMS_PORT_GATEWAY
+        $script:config.PORT_CONSOLE = $env:AGENTTEAMS_PORT_CONSOLE
+        $script:config.PORT_ELEMENT_WEB = $env:AGENTTEAMS_PORT_ELEMENT_WEB
+        $script:config.PORT_MANAGER_CONSOLE = $env:AGENTTEAMS_PORT_MANAGER_CONSOLE
     }
     if (-not $script:config.MATRIX_DOMAIN) {
-        $script:config.MATRIX_DOMAIN = if ($env:AGENTTEAMS_MATRIX_DOMAIN) { $env:AGENTTEAMS_MATRIX_DOMAIN } else { "matrix-local.agentteams.io:$($script:config.PORT_GATEWAY)" }
+        $script:config.MATRIX_DOMAIN = if ($env:AGENTTEAMS_MATRIX_DOMAIN) { $env:AGENTTEAMS_MATRIX_DOMAIN } else { "$($env:AGENTTEAMS_MATRIX_DOMAIN_HOST_SUFFIX):$($script:config.PORT_GATEWAY)" }
         $script:config.MATRIX_CLIENT_DOMAIN = if ($env:AGENTTEAMS_MATRIX_CLIENT_DOMAIN) { $env:AGENTTEAMS_MATRIX_CLIENT_DOMAIN } else { "matrix-client-local.agentteams.io" }
         $script:config.AI_GATEWAY_DOMAIN = if ($env:AGENTTEAMS_AI_GATEWAY_DOMAIN) { $env:AGENTTEAMS_AI_GATEWAY_DOMAIN } else { "aigw-local.agentteams.io" }
         $script:config.FS_DOMAIN = if ($env:AGENTTEAMS_FS_DOMAIN) { $env:AGENTTEAMS_FS_DOMAIN } else { "fs-local.agentteams.io" }

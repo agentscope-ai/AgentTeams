@@ -43,40 +43,28 @@ Rules:
 
 4. Notify Worker in their Room (never in admin DM):
 
-   **HARD RULE:** Do **not** put @worker task-assignment text in your admin DM reply. Workers cannot read the admin DM. The admin DM reply must only confirm to the admin (for example: assigned `{task-id}` to `{worker}`). The full dispatch with @mention MUST go to the Worker's Matrix room using the protocol below.
+   **HARD RULE:** Do **not** put @worker task-assignment text in your admin DM reply. Workers cannot read the admin DM. The admin DM reply must only confirm to the admin (for example: assigned `{task-id}` to `{worker}`). The full dispatch with @mention MUST go to the Worker's Matrix room using the helper below.
 
-   a) Get the Worker's `room_id` (and Matrix ID if needed):
-   ```bash
-   hiclaw get workers -o json
-   ```
+   a) Get the Worker's `room_id` from `hiclaw get workers -o json` (`.roomID` / room field for that worker).
 
-   b) Get your Manager runtime from the controller (source of truth):
-   ```bash
-   hiclaw get managers -o json | jq -r '.managers[0].runtime'
-   ```
-
-   c) Compose the body the Worker must receive (full Matrix @mention so they wake):
+   b) Compose the body the Worker must receive (full Matrix @mention so they wake):
    ```
    @{worker}:{domain} New task [{task-id}]: {title}. Use your file-sync skill to pull the spec: shared/tasks/{task-id}/spec.md. @mention me when complete.
    ```
 
-   d) Send that body to the Worker's room, branching on runtime from step (b):
-
-   - **`openclaw`** — use the **message** tool with `channel=matrix` and `target=room:<ROOM_ID>` (the literal `room_id` value from step (a), prefixed with `room:`). Do not rely on the implicit current room when you are in an admin DM.
-
-   - **`copaw`** — use the shell tool:
+   c) Send via the task dispatch helper (handles OpenClaw vs CoPaw automatically — do **not** call `hiclaw get managers` for runtime):
    ```bash
-   copaw channels send \
-     --agent-id default \
-     --channel matrix \
-     --target-session "<ROOM_ID>" \
-     --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
+   bash /opt/hiclaw/agent/skills/task-management/scripts/send-task-message.sh \
+     --room "<ROOM_ID>" \
+     --worker "{worker}" \
      --text '@{worker}:{domain} New task [{task-id}]: {title}. Use your file-sync skill to pull the spec: shared/tasks/{task-id}/spec.md. @mention me when complete.'
    ```
-   (Quote `--text` so the shell preserves spaces and @mentions.)
+   - **CoPaw:** the script runs `copaw channels send` and exits 0.
+   - **OpenClaw:** the script prints the target room + body and exits 2 — deliver that text with the **message** tool (`channel=matrix`, `target=room:<ROOM_ID>`).
 
 5. **MANDATORY — Add to state.json** (this step is NOT optional, even for coordination, research, or management tasks):
    ```bash
+   # manage-state.sh delegates to hiclaw manager-state when available
    bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
      --action add-finite --task-id {task-id} --title "{title}" \
      --assigned-to {worker} --room-id {room-id}
@@ -90,6 +78,25 @@ Rules:
    ```bash
    mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
    ```
+
+1.5. **VERIFY** — before you mark the task complete, check that claimed deliverables exist locally:
+   ```bash
+   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+     --action verify --task-id {task-id}
+   ```
+   The command prints JSON with `verified` and per-claim results. Exit code `0` means all **required** claims passed.
+
+   - If `verified` is **true**: continue to step 2.
+   - If `verified` is **false**: do **not** set `meta.json` to completed and do **not** call `--action complete`. Instead:
+     1. Mark the task blocked:
+        ```bash
+        bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+          --action mark-blocked --task-id {task-id} \
+          --reason "output verification failed: {summarize failed required claims from JSON}"
+        ```
+     2. @mention the Worker in their room (or project room) with the failed claim paths/details and ask them to fix deliverables and push again.
+     3. Stop the completion flow until verification passes on a later pull.
+
 2. Update `meta.json`: status=completed, fill completed_at. Push back to MinIO.
 3. Remove from state.json:
    ```bash
@@ -101,11 +108,9 @@ Rules:
    ```bash
    bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
    ```
-   Re-read runtime if needed: `hiclaw get managers -o json | jq -r '.managers[0].runtime'`.
-
-   - **`openclaw`:** If `channel` is not `"none"`, use the **message** tool with the resolved `channel` and `target` (same mapping as channel-management / primary-channel docs). Send `[Task Completed] {task-id}: {title} — assigned to {worker}. {summary}`.
-
-   - **`copaw`:** If `channel` is not `"none"`, use **`copaw channels send`** with the resolved channel and target (Matrix: `--channel matrix`, `--target-session` = room id without `room:` prefix when the script returns `room:!...`, `--target-user` = admin Matrix ID). If you are **in an admin DM session** for this turn, do **not** CLI-send to the admin DM — put `[Task Completed] ...` in your **final reply only** (avoids duplicate messages; see copaw-manager-agent AGENTS.md). If you are in a Worker or project room session, use `copaw channels send` per the resolved JSON.
+   Then send admin notification using `resolve-notify-channel.sh` output:
+   - **`openclaw`:** If `channel` is not `"none"`, use the **message** tool with the resolved `channel` and `target`.
+   - **`copaw`:** If `channel` is not `"none"`, use **`copaw channels send`** with the resolved channel and target. If you are **in an admin DM session** for this turn, put the completion text in your **final reply only** (see copaw-manager-agent AGENTS.md).
 
    - If `channel` is `"none"`: the admin DM room is not yet cached. Discover it now — list joined rooms, find the DM room with exactly 2 members (you and admin), then persist:
      ```bash
@@ -118,10 +123,45 @@ Rules:
 
 ```
 shared/tasks/{task-id}/
-├── meta.json     # Manager-maintained
+├── meta.json     # Manager-maintained (optional verifiable_claims — see below)
 ├── spec.md       # Manager-written
 ├── base/         # Manager-maintained reference files (Workers must not overwrite)
 ├── plan.md       # Worker-written execution plan
 ├── result.md     # Worker-written final result
 └── *             # Intermediate artifacts
 ```
+
+### verifiable_claims (optional, in meta.json)
+
+When you assign a task, you may add `verifiable_claims` to `meta.json` to extend or override default verification checks. If omitted, verification still requires a non-empty `result.md` and every path listed in the `Deliverables` section of `result.md` (protocol `DELIVERABLES:` block or `## Deliverables` heading).
+
+Each claim:
+
+| Field | Required | Values | Meaning |
+|-------|----------|--------|---------|
+| `path` | yes | string | Path under the task, e.g. `shared/tasks/{task-id}/auth.py` or a filename relative to the task directory |
+| `check` | no (default `nonempty`) | `nonempty`, `exists` | `nonempty` = regular file exists with size &gt; 0 (directories fail); `exists` = path exists (file or directory) |
+| `required` | no (default `true`) | boolean | When `false`, a failed check is reported but does **not** fail verification overall |
+
+Example:
+
+```json
+{
+  "task_id": "task-20260716-143022",
+  "type": "finite",
+  "status": "assigned",
+  "verifiable_claims": [
+    {"path": "shared/tasks/task-20260716-143022/result.md", "check": "nonempty"},
+    {"path": "shared/tasks/task-20260716-143022/auth.py", "check": "exists"},
+    {"path": "shared/tasks/task-20260716-143022/BUILD_VERIFICATION.md", "check": "nonempty", "required": false}
+  ]
+}
+```
+
+Run verification after pulling the task directory:
+
+```bash
+bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action verify --task-id {task-id}
+```
+
+This action is **shell-only** (sibling to `hiclaw manager-state`); it does not mutate `state.json`.

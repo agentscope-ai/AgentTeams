@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { startPolling } from '../poll.js';
 import { escapeHtml, showToast, confirmAction, promptMessage, badgeClass } from '../ui.js';
+import { freshnessFromAge, healthDotClass } from './overview-health.js';
 
 const POLL_MANAGERS_TEAMS_MS = 15000;
 const POLL_WORKERS_MS = 30000; // workers list does a live backend Status() call per member -- slower cadence
@@ -145,7 +146,11 @@ function renderWorkerCards(el, workers) {
       <div class="card-meta">
         ${w.team ? `Team: ${escapeHtml(w.team)}<br/>` : ''}
         State: ${escapeHtml(w.state || 'unknown')}<br/>
-        Container: ${escapeHtml(w.containerState || 'unknown')}
+        Container: ${escapeHtml(w.containerState || 'unknown')}<br/>
+        ${renderFreshnessLine('Heartbeat', w.lastHeartbeat)}<br/>
+        ${renderFreshnessLine('Last active', w.lastActiveAt)}<br/>
+        ${renderLLMUsageLine(w.llmCallsLastHeartbeat, w.llmCallsTotal)}<br/>
+        ${renderHealthStrip(w.healthChecks)}
       </div>
       <div class="card-actions">
         <button class="action-btn" data-action="wake" data-name="${escapeHtml(w.name)}">Wake</button>
@@ -159,6 +164,43 @@ function renderWorkerCards(el, workers) {
   el.querySelectorAll('button.action-btn').forEach((btn) => {
     btn.addEventListener('click', () => onWorkerAction(btn));
   });
+}
+
+function renderFreshnessLine(label, ts) {
+  const health = freshnessFromAge(ts);
+  const ageText = health.age ?? 'never';
+  return `${label}: ${ageText} <span class="badge ${health.cls}">${health.label}</span>`;
+}
+
+function renderLLMUsageLine(lastWindow, total) {
+  if (lastWindow == null && (total == null || total === 0)) {
+    return 'LLM calls: <span class="muted">unknown</span>';
+  }
+  const windowText = lastWindow == null ? 'unknown' : String(lastWindow);
+  const totalText = total == null || total === 0 ? '' : ` (total ${total})`;
+  return `LLM calls (last window): ${windowText}${totalText}`;
+}
+
+const HEALTH_PROBE_ORDER = [
+  ['container', 'Container'],
+  ['heartbeat', 'Heartbeat'],
+  ['llm', 'LLM'],
+  ['git', 'Git'],
+  ['sync', 'Sync'],
+];
+
+function renderHealthStrip(checks) {
+  if (!checks) {
+    return 'Health: <span class="muted">unknown</span>';
+  }
+  const dots = HEALTH_PROBE_ORDER.map(([key, label]) => {
+    const check = checks[key] || {};
+    const status = check.status || 'unknown';
+    const detail = check.detail ? ` — ${escapeHtml(check.detail)}` : '';
+    const title = `${label}: ${status}${detail}`.replace(/"/g, '&quot;');
+    return `<span class="health-dot ${healthDotClass(status)}" title="${title}" aria-label="${label} ${status}"></span>`;
+  }).join('');
+  return `<span class="health-strip-label">Health</span><span class="health-strip" aria-label="Worker health probes">${dots}</span>`;
 }
 
 async function onMessageAction(btn) {

@@ -21,7 +21,13 @@ class WorkerConfig:
         worker_cr_name: str | None = None,
     ) -> None:
         self.worker_name = worker_name
-        self.worker_cr_name = worker_cr_name or worker_name
+        self.worker_cr_name = (
+            worker_cr_name
+            or os.environ.get("AGENTTEAMS_WORKER_CR_NAME")
+            or os.environ.get("HICLAW_WORKER_CR_NAME")
+            or os.environ.get("COPAW_WORKER_CR_NAME")
+            or worker_name
+        )
         self.minio_endpoint = minio_endpoint
         self.minio_access_key = minio_access_key
         self.minio_secret_key = minio_secret_key

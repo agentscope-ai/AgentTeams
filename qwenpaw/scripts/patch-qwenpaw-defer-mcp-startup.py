@@ -6,6 +6,12 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from qwenpaw_site_packages_gate import assert_pinned_qwenpaw_version
+
 
 MULTI_AGENT_MANAGER_PATCHES = (
     (
@@ -92,6 +98,7 @@ def _patch_file(target: Path, patcher) -> None:
 
 
 def main() -> int:
+    assert_pinned_qwenpaw_version()
     app_dir = (
         Path(sys.prefix)
         / "lib"

@@ -29,6 +29,11 @@
 #   AGENTTEAMS_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
 #   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
+#   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override qwenpaw worker image (e.g., local build)
+#   OpenHuman runtime: not supported by this installer — use Kubernetes/Helm with
+#   `make build-openhuman-worker` and Worker CR `spec.runtime=openhuman` (see docs/quickstart.md).
+#   QwenPaw is not on the interactive runtime menu; set AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE
+#   (or rely on the default registry tag) so `hiclaw create worker --runtime qwenpaw` can pull it.
 #   AGENTTEAMS_NACOS_REGISTRY_URI          Default Nacos registry URI for Worker market search/import
 #                                      (default: nacos://market.agentteams.io:80/public)
 #   AGENTTEAMS_NACOS_USERNAME              Default Nacos username for nacos:// package imports (optional)
@@ -49,8 +54,11 @@
 
 set -e
 
+_INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=defaults.env
+source "${_INSTALL_DIR}/defaults.env"
+
 AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-}"
-AGENTTEAMS_KNOWN_STABLE_VERSION="v1.1.2"   # fallback if GitHub API is unreachable
 
 # Returns 0 (true) if $1 < $2 using semver order; "latest" is treated as greatest
 _ver_lt() {
@@ -59,9 +67,6 @@ _ver_lt() {
     [ "$1" = "$2" ] && return 1
     [ "$(printf '%s\n%s' "$1" "$2" | sort -V | head -1)" = "$1" ]
 }
-AGENTTEAMS_NON_INTERACTIVE="${AGENTTEAMS_NON_INTERACTIVE:-0}"
-AGENTTEAMS_MOUNT_SOCKET="${AGENTTEAMS_MOUNT_SOCKET:-1}"
-AGENTTEAMS_DOCKER_PROXY="${AGENTTEAMS_DOCKER_PROXY:-1}"
 STEP_RESULT=""  # Used by state machine to signal "back" navigation
 
 # ============================================================
@@ -1023,21 +1028,25 @@ MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-}"
 WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-}"
 COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
 HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
+QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
-    MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-manager:${AGENTTEAMS_VERSION}}"
-    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-manager-copaw:${AGENTTEAMS_VERSION}}"
-    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-worker:${AGENTTEAMS_VERSION}}"
-    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-copaw-worker:${AGENTTEAMS_VERSION}}"
-    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
-    EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:${AGENTTEAMS_VERSION}}"
-    # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
-    if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.0.4"; then
+    MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_MANAGER}:${AGENTTEAMS_VERSION}}"
+    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_MANAGER_COPAW}:${AGENTTEAMS_VERSION}}"
+    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_WORKER}:${AGENTTEAMS_VERSION}}"
+    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_COPAW_WORKER}:${AGENTTEAMS_VERSION}}"
+    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_HERMES_WORKER}:${AGENTTEAMS_VERSION}}"
+    QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_QWENPAW_WORKER}:${AGENTTEAMS_VERSION}}"
+    EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_EMBEDDED}:${AGENTTEAMS_VERSION}}"
+    if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "${AGENTTEAMS_COPAW_WORKER_MIN_VERSION}"; then
         COPAW_WORKER_IMAGE=""
     fi
-    if [ -z "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+    if [ -z "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "${AGENTTEAMS_HERMES_WORKER_MIN_VERSION}"; then
         HERMES_WORKER_IMAGE=""
+    fi
+    if [ -z "${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "${AGENTTEAMS_QWENPAW_WORKER_MIN_VERSION}"; then
+        QWENPAW_WORKER_IMAGE=""
     fi
 }
 
@@ -1058,8 +1067,8 @@ resolve_embedded_image() {
         return 0
     fi
 
-    local _versioned="${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:${AGENTTEAMS_VERSION}"
-    local _latest="${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:latest"
+    local _versioned="${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_EMBEDDED}:${AGENTTEAMS_VERSION}"
+    local _latest="${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_EMBEDDED}:latest"
 
     # Skip probe when AGENTTEAMS_VERSION is "latest" — no point trying the same tag twice.
     if [ "${AGENTTEAMS_VERSION}" = "latest" ]; then
@@ -1076,7 +1085,7 @@ resolve_embedded_image() {
     # bundled all infrastructure.  Falling back to hiclaw-embedded:latest would
     # silently swap in the v1.1.0 architecture (embedded kube-apiserver) which
     # crashes under QEMU on Apple Silicon.  Auto-activate legacy mode instead.
-    if _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+    if _ver_lt "${AGENTTEAMS_VERSION}" "${AGENTTEAMS_EMBEDDED_MIN_VERSION}"; then
         log "INFO: ${AGENTTEAMS_VERSION} predates hiclaw-embedded; switching to legacy all-in-one manager architecture."
         log "WARNING: Legacy all-in-one mode requires AGENTTEAMS_VERSION <= v1.0.9 (older bundled manager image)."
         log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
@@ -1306,7 +1315,7 @@ prompt() {
 
     # If the variable is already set in the environment, use it silently
     # In upgrade mode, show current value and let user change it
-    eval "local current_value=\"\${${var_name}}\""
+    local current_value="${!var_name}"
     if [ -n "${current_value}" ]; then
         if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
             # Show masked value for secrets, full value otherwise
@@ -1329,7 +1338,7 @@ prompt() {
                 if [ "${new_value}" = "b" ]; then STEP_RESULT="back"; return 1; fi
             fi
             if [ -n "${new_value}" ]; then
-                eval "export ${var_name}='${new_value}'"
+                printf -v "${var_name}" '%s' "${new_value}"; export "${var_name}"
             fi
             return
         fi
@@ -1340,7 +1349,7 @@ prompt() {
     # Non-interactive or quickstart: use default or error
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
         if [ -n "${default_value}" ]; then
-            eval "export ${var_name}='${default_value}'"
+            printf -v "${var_name}" '%s' "${default_value}"; export "${var_name}"
             log "$(msg prompt.default "${prompt_text}" "${default_value}")"
             return
         elif [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
@@ -1368,7 +1377,7 @@ prompt() {
         die "$(msg prompt.required_empty "${prompt_text}")"
     fi
 
-    eval "export ${var_name}='${value}'"
+    printf -v "${var_name}" '%s' "${value}"; export "${var_name}"
 }
 
 # Prompt for an optional value (empty string is acceptable)
@@ -1381,11 +1390,11 @@ prompt_optional() {
     local is_secret="${3:-false}"
 
     # Check if variable is defined (even if set to empty string)
-    eval "local _chk=\"\${${var_name}+x}\""
+    local _chk="${!var_name+x}"
     if [ -n "${_chk}" ]; then
         # In upgrade mode, show current value and let user change it
         if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
-            eval "local current_value=\"\${${var_name}}\""
+            local current_value="${!var_name}"
             local display_value="${current_value}"
             if [ "${is_secret}" = "true" ] && [ -n "${current_value}" ]; then
                 local len=${#current_value}
@@ -1413,7 +1422,7 @@ prompt_optional() {
                 if [ "${new_value}" = "b" ]; then STEP_RESULT="back"; return 1; fi
             fi
             if [ -n "${new_value}" ]; then
-                eval "export ${var_name}='${new_value}'"
+                printf -v "${var_name}" '%s' "${new_value}"; export "${var_name}"
             fi
             return
         fi
@@ -1423,7 +1432,7 @@ prompt_optional() {
 
     # Non-interactive or quickstart: skip, leave unset
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
-        eval "export ${var_name}=''"
+        printf -v "${var_name}" '%s' ''; export "${var_name}"
         return
     fi
 
@@ -1436,7 +1445,7 @@ prompt_optional() {
         if [ "${value}" = "b" ]; then STEP_RESULT="back"; return 1; fi
     fi
 
-    eval "export ${var_name}='${value}'"
+    printf -v "${var_name}" '%s' "${value}"; export "${var_name}"
 }
 
 generate_key() {
@@ -1934,7 +1943,7 @@ step_existing() {
             value="${value%%#*}"
             value="${value#"${value%%[![:space:]]*}"}"
             value="${value%"${value##*[![:space:]]}"}"
-            eval "_existing_val=\"\${${key}+x}\""
+            local _existing_val="${!key+x}"
             if [ -z "${_existing_val}" ]; then export "${key}=${value}"; fi
         done < "${existing_env}"
     fi
@@ -2351,17 +2360,17 @@ step_network() {
 
 step_ports() {
     log "$(msg port.title)"
-    prompt AGENTTEAMS_PORT_GATEWAY "$(msg port.gateway_prompt)" "18080" || return 0
-    prompt AGENTTEAMS_PORT_CONSOLE "$(msg port.console_prompt)" "18001" || return 0
-    prompt AGENTTEAMS_PORT_ELEMENT_WEB "$(msg port.element_prompt)" "18088" || return 0
-    prompt AGENTTEAMS_PORT_MANAGER_CONSOLE "$(msg port.manager_console_prompt)" "18888" || return 0
+    prompt AGENTTEAMS_PORT_GATEWAY "$(msg port.gateway_prompt)" "${AGENTTEAMS_PORT_GATEWAY}" || return 0
+    prompt AGENTTEAMS_PORT_CONSOLE "$(msg port.console_prompt)" "${AGENTTEAMS_PORT_CONSOLE}" || return 0
+    prompt AGENTTEAMS_PORT_ELEMENT_WEB "$(msg port.element_prompt)" "${AGENTTEAMS_PORT_ELEMENT_WEB}" || return 0
+    prompt AGENTTEAMS_PORT_MANAGER_CONSOLE "$(msg port.manager_console_prompt)" "${AGENTTEAMS_PORT_MANAGER_CONSOLE}" || return 0
     log ""
 }
 
 step_domains() {
     log "$(msg domain.title)"
     log "$(msg domain.hint)"
-    prompt AGENTTEAMS_MATRIX_DOMAIN "$(msg domain.matrix_prompt)" "matrix-local.agentteams.io:${AGENTTEAMS_PORT_GATEWAY}" || return 0
+    prompt AGENTTEAMS_MATRIX_DOMAIN "$(msg domain.matrix_prompt)" "${AGENTTEAMS_MATRIX_DOMAIN_HOST_SUFFIX}:${AGENTTEAMS_PORT_GATEWAY}" || return 0
     prompt AGENTTEAMS_MATRIX_CLIENT_DOMAIN "$(msg domain.element_prompt)" "matrix-client-local.agentteams.io" || return 0
     prompt AGENTTEAMS_AI_GATEWAY_DOMAIN "$(msg domain.gateway_prompt)" "aigw-local.agentteams.io" || return 0
     prompt AGENTTEAMS_FS_DOMAIN "$(msg domain.fs_prompt)" "fs-local.agentteams.io" || return 0
@@ -3071,6 +3080,7 @@ AGENTTEAMS_CMS_METRICS_ENABLED=${AGENTTEAMS_CMS_METRICS_ENABLED:-false}
 AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}
 AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
 AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
+AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}
 
 # Default Worker runtime (openclaw | copaw | hermes)
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}
@@ -3263,6 +3273,7 @@ EOF
     _pull_image "${WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${COPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${HERMES_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
+    _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
 
     # --- Pre-upgrade: extract Matrix passwords from running old containers ---
     # Only needed when upgrading FROM old architecture (v1.0.9) TO embedded.
@@ -3488,6 +3499,7 @@ CREDEOF
             -e "AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}"
             -e "AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
             -e "AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
+            -e "AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}"
             -e "AGENTTEAMS_MATRIX_DOMAIN=${_matrix_domain}"
             -e "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
             -e "AGENTTEAMS_MATRIX_URL=http://127.0.0.1:6167"

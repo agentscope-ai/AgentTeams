@@ -1,0 +1,17 @@
+{
+  "acknowledged_by_role": "worker",
+  "assigned_at": "2026-07-17T10:10:33Z",
+  "assigned_to": "@worker-a:matrix-local.agentteams.io:18080",
+  "deliverables": [
+    "shared/tasks/demo-project-20260717-120000-01/deliverable.md"
+  ],
+  "project_id": "demo-project-20260717-120000",
+  "result_status": "SUCCESS",
+  "room_id": "!team:matrix-local.agentteams.io:18080",
+  "spec_path": "shared/tasks/demo-project-20260717-120000-01/spec.md",
+  "status": "submitted",
+  "submitted_by_role": "worker",
+  "summary": "Completed first task for characterization fixture.",
+  "task_id": "demo-project-20260717-120000-01",
+  "task_title": "First task"
+}

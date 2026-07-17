@@ -54,6 +54,11 @@ spec:
                   description: Optional Team member CR names or effective runtime names; normalized to runtime names in the manifest.
                   items:
                     type: string
+                dependsOn:
+                  type: array
+                  description: Other Project metadata names in the same namespace that must reach a satisfied phase before operators assign work on this project.
+                  items:
+                    type: string
             status:
               type: object
               properties:
@@ -74,6 +79,20 @@ spec:
                   type: array
                   items:
                     type: string
+                dependencies:
+                  type: array
+                  description: Resolved cross-project dependency state from spec.dependsOn.
+                  items:
+                    type: object
+                    required: [project, satisfied]
+                    properties:
+                      project:
+                        type: string
+                      phase:
+                        type: string
+                      satisfied:
+                        type: boolean
+                        description: True when dependency phase is Ready, Completed, or Archived.
                 conditions:
                   type: array
                   items:

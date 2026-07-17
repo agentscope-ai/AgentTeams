@@ -55,10 +55,24 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   ```
 - Determine if the Worker is making normal progress based on their reply
 - If the Worker has not responded (no response for more than one heartbeat cycle), flag the anomaly in the Room and notify the human admin (see Step 7)
-- If the Worker has replied that the task is complete but meta.json has not been updated, proactively update meta.json (status → completed, fill in completed_at), and remove the entry from `active_tasks`:
-  ```bash
-  bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
-  ```
+- If the Worker has replied that the task is complete but meta.json has not been updated:
+  1. Pull the task directory from MinIO if you have not already:
+     ```bash
+     mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
+     ```
+  2. **Verify deliverables before completing:**
+     ```bash
+     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action verify --task-id {task-id}
+     ```
+  3. If `verified` is **true**: update `meta.json` (status → completed, fill in `completed_at`), push to MinIO, and remove the entry from `active_tasks`:
+     ```bash
+     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
+     ```
+  4. If `verified` is **false**: do **not** complete. Mark blocked, @mention the Worker with failed claim details, and flag in Step 7:
+     ```bash
+     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+       --action mark-blocked --task-id {task-id} --reason "output verification failed: {failed claims}"
+     ```
 
 ---
 
@@ -78,7 +92,17 @@ Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
   @{leader}:{domain} How is task {task-id} progressing? Any blockers from your team?
   ```
 - **Do NOT contact team workers directly** — the Team Leader handles internal coordination
-- If the Team Leader reports completion, process it the same as a regular worker completion
+- If the Team Leader reports completion but `meta.json` is not yet completed, run the **same verify gate as Step 2** before completing:
+  1. Pull the task directory from MinIO if you have not already:
+     ```bash
+     mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
+     ```
+  2. **Verify deliverables before completing:**
+     ```bash
+     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action verify --task-id {task-id}
+     ```
+  3. If `verified` is **true**: update `meta.json`, push to MinIO, and remove from `active_tasks` via `--action complete`.
+  4. If `verified` is **false**: do **not** complete. Mark blocked, @mention the Team Leader with failed claim details, and flag in Step 7.
 - If the Team Leader reports a blocker, escalate to admin (Step 7)
 
 ---
@@ -131,6 +155,7 @@ done
 ```
 
 - Filter projects with `"status": "active"`
+- For each active project whose federated Project CR has unsatisfied cross-project dependencies (`GET ${AGENTTEAMS_CONTROLLER_URL}/api/v1/projects/{id}` → any `dependencies[]` with `satisfied: false`), **do not assign new tasks**; include the blocking upstream project(s) in the Step 7 admin report
 - For each active project, read `project_room_id` from meta.json, then read plan.md and find tasks marked as `[~]` (in progress)
 - If the responsible Worker has had no activity during this heartbeat cycle, **ensure the Worker's container is running first** (`lifecycle-worker.sh --action ensure-ready --worker {worker}`), then **send** using the **message** tool with `channel=matrix`, `target=room:<project_room_id>`, and body @mention `@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}`:
   ```

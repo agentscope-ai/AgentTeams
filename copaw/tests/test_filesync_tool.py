@@ -2,6 +2,7 @@ import json
 import shutil
 import subprocess
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -103,6 +104,9 @@ def test_worker_metadata_query_uses_cr_name_while_storage_uses_runtime_name(tmp_
         worker_cr_name="nov-worker-cr",
         local_dir=tmp_path / "worker",
     )
+    sync.local_dir.mkdir(parents=True, exist_ok=True)
+    # mirror_all requires openclaw.json after the primary mirror succeeds.
+    (sync.local_dir / "openclaw.json").write_text("{}")
     _mock_hiclaw_worker(
         monkeypatch,
         {"name": "nov-worker-cr", "workerName": "novworker02", "team": "dag-team"},
@@ -198,7 +202,9 @@ async def test_filesync_dry_run_returns_resolved_local_path(tmp_path, monkeypatc
     assert payload["dryRun"] is True
     assert payload["action"] == "pull"
     assert payload["kind"] == "shared"
-    assert payload["localPath"].endswith(".copaw/workspaces/default/shared/tasks/st-01")
+    assert Path(payload["localPath"]) == (
+        working_dir / "workspaces" / "default" / "shared" / "tasks" / "st-01"
+    )
 
 
 @pytest.mark.asyncio
@@ -223,8 +229,13 @@ async def test_filesync_normalizes_project_directory_without_trailing_slash(
 
     assert payload["ok"] is True
     assert payload["path"] == "shared/projects/project-20260512-001122/"
-    assert payload["localPath"].endswith(
-        ".copaw/workspaces/default/shared/projects/project-20260512-001122"
+    assert Path(payload["localPath"]) == (
+        working_dir
+        / "workspaces"
+        / "default"
+        / "shared"
+        / "projects"
+        / "project-20260512-001122"
     )
 
 

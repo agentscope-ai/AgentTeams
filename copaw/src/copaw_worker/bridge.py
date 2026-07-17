@@ -157,6 +157,9 @@ def bridge_config(
     profile: str = "manager",
 ) -> None:
     """Write CoPaw JSON artifacts from openclaw.json (no runtime side effects)."""
+    if profile not in ("worker", "manager"):
+        raise ValueError(f"unknown bridge profile: {profile!r}")
+
     working_dir.mkdir(parents=True, exist_ok=True)
     in_container = _is_in_container()
 

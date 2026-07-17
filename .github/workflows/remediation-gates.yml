@@ -46,6 +46,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install local shared Python packages
+        if: matrix.runtime == 'hermes'
         run: |
           set -euo pipefail
           for pkg in shared/python/agentteams_*; do

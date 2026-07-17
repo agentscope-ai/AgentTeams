@@ -103,6 +103,7 @@ def test_team_leader_dm_internal_preambles_are_suppressed(tmp_path, monkeypatch)
     ch._send_typing = _noop_typing
 
     for text in (
+        "Now I need to notify the dev worker in the team room.",
         "I'll coordinate the team to build a REST API for a todo-list app. "
         "Let me start by checking the team organization and then plan the project.",
         "Good, I have a thorough understanding of all the skills. "

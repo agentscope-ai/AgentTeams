@@ -20,6 +20,7 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
     r"i have (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
     r"workers? available|"
     r"now let me|"
+    r"i need to notify|"
     r"no active projects|"
     r"project created\. now|"
     r"good[,.]? i have|"

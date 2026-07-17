@@ -55,6 +55,7 @@ def test_worker_channel_suppresses_team_leader_dm_internal_preamble(
     ch = _make_channel()
 
     for text in (
+        "Now I need to notify the dev worker in the team room.",
         "I'll coordinate the team. Let me first check the team organization.",
         "Good, I have a thorough understanding of all the skills. "
         "Now let me check the team organization and available workers.",

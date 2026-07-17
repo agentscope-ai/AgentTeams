@@ -6,6 +6,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 - fix(copaw): validate bridge profiles (`worker`|`manager`) and align CoPaw unit tests with current Worker/bridge/toolhelper APIs
 - fix(ci): install shared `agentteams_*` Python packages only for the hermes remediation-gates matrix entry
+- ci: skip embedded integration-test shards when `AGENTTEAMS_LLM_API_KEY` secret is unset (forks without the secret)
 - fix(worker,manager): pass `--break-system-packages` when pip-installing shared merge/sync packages into OpenClaw images (PEP 668)
 - fix(copaw): tolerate current PyPI Matrix `sync_loop()` shape in the legacy `_sync_loop` indentation patch so the worker image builds
 - fix(controller): populate `QwenPawWorkerImage` across Docker/K8s/Sandbox config builders and wire `AGENTTEAMS_QWENPAW_WORKER_IMAGE` through the Helm chart (values/helpers/controller env)

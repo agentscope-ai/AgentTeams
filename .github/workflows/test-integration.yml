@@ -286,7 +286,12 @@ jobs:
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
   integration-tests:
     needs: build-images
-    if: always() && needs.build-images.result == 'success'
+    # Skip when the repo has no LLM key (common on forks). Empty key makes
+    # install-embedded fail immediately with a red herring Error 1.
+    if: >-
+      always()
+      && needs.build-images.result == 'success'
+      && secrets.AGENTTEAMS_LLM_API_KEY != ''
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:

@@ -22,7 +22,6 @@ test = [
     "pytest-asyncio>=0.21",
 ]
 
-
 [project.urls]
 Homepage = "https://github.com/higress-group/hiclaw"
 Repository = "https://github.com/higress-group/hiclaw"
@@ -32,6 +31,14 @@ copaw-worker = "copaw_worker.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "src",
+    "../shared/python/agentteams_protocol/src",
+    "../shared/python/agentteams_openclaw_merge/src",
+    "../shared/python/agentteams_sync/src",
+]
 
 [tool.setuptools.package-data]
 copaw_worker = ["templates/*.json"]

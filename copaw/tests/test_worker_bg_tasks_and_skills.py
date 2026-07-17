@@ -8,13 +8,15 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 
 import pytest
 
 from copaw_worker.config import WorkerConfig
 from copaw_worker.worker import Worker
+from copaw_worker.workspace_layout import (
+    WorkspaceLayout,
+    install_fake_copaw_skills_modules,
+)
 
 
 @pytest.fixture
@@ -113,21 +115,7 @@ async def test_stop_is_safe_without_prior_start(tmp_path):
 
 
 def _install_fake_copaw_skills_modules(monkeypatch, tmp_path):
-    """Provide minimal copaw.agents.skills / copaw.agents.skills_manager
-    stand-ins so _sync_skills() can run without the real upstream package."""
-    builtin_root = tmp_path / "builtin_skills_pkg"
-    (builtin_root / "pdf").mkdir(parents=True)
-
-    skills_pkg = types.ModuleType("copaw.agents.skills")
-    skills_pkg.__file__ = str(builtin_root / "__init__.py")
-
-    skills_manager = types.ModuleType("copaw.agents.skills_manager")
-    skills_manager.sync_skills_to_working_dir = lambda skill_names=None, force=False: (0, 0)
-
-    monkeypatch.setitem(sys.modules, "copaw", types.ModuleType("copaw"))
-    monkeypatch.setitem(sys.modules, "copaw.agents", types.ModuleType("copaw.agents"))
-    monkeypatch.setitem(sys.modules, "copaw.agents.skills", skills_pkg)
-    monkeypatch.setitem(sys.modules, "copaw.agents.skills_manager", skills_manager)
+    install_fake_copaw_skills_modules(monkeypatch, tmp_path)
 
 
 class _FakeSync:
@@ -143,19 +131,17 @@ def test_sync_skills_does_not_copy_manager_pushed_skills_into_active_skills(
 ):
     _install_fake_copaw_skills_modules(monkeypatch, tmp_path)
 
-    worker = Worker(_config(tmp_path))
-    worker._copaw_working_dir = tmp_path / "alice" / ".copaw"
-    worker._copaw_working_dir.mkdir(parents=True)
+    local_dir = tmp_path / "alice"
+    layout = WorkspaceLayout(local_dir, tmp_path / "alice" / ".copaw")
+    layout.copaw_working_dir.mkdir(parents=True)
 
-    standard_skill_dir = tmp_path / "alice" / "skills" / "github"
+    standard_skill_dir = local_dir / "skills" / "github"
     standard_skill_dir.mkdir(parents=True)
     (standard_skill_dir / "SKILL.md").write_text("Use GitHub.")
 
-    worker.sync = _FakeSync(local_dir=tmp_path / "alice")
+    layout.sync_skills(list_skills=lambda: ["github"], worker_name="alice")
 
-    worker._sync_skills()
-
-    active_skills_dir = worker._copaw_working_dir / "active_skills"
+    active_skills_dir = layout.copaw_working_dir / "active_skills"
     # Manager-pushed skill must NOT be copied into the legacy active_skills/ path.
     assert not (active_skills_dir / "github").exists()
     # Standard-space copy (already pulled by mirror_all/pull_all) is untouched.
@@ -169,15 +155,13 @@ def test_sync_skills_removes_stale_manager_skill_left_in_active_skills(
     active_skills/ from before this fix."""
     _install_fake_copaw_skills_modules(monkeypatch, tmp_path)
 
-    worker = Worker(_config(tmp_path))
-    worker._copaw_working_dir = tmp_path / "alice" / ".copaw"
-    active_skills_dir = worker._copaw_working_dir / "active_skills"
+    local_dir = tmp_path / "alice"
+    layout = WorkspaceLayout(local_dir, tmp_path / "alice" / ".copaw")
+    active_skills_dir = layout.copaw_working_dir / "active_skills"
     stale_dir = active_skills_dir / "github"
     stale_dir.mkdir(parents=True)
     (stale_dir / "SKILL.md").write_text("stale copy")
 
-    worker.sync = _FakeSync(local_dir=tmp_path / "alice")
-
-    worker._sync_skills()
+    layout.sync_skills(list_skills=lambda: ["github"], worker_name="alice")
 
     assert not stale_dir.exists()

@@ -4,12 +4,14 @@ Path: `~/state.json`
 
 Single source of truth for active tasks. Heartbeat reads this instead of scanning all meta.json files.
 
-**Always use `manage-state.sh` to modify** — never edit manually. The script handles initialization, deduplication, and atomic writes.
+**Always use `manage-state.sh` or `hiclaw manager-state` to modify** — never edit manually. The script delegates to `hiclaw manager-state` when the CLI is available; set `HICLAW_MANAGER_STATE_IMPL=shell` to force the shell fallback.
 
 ## Script reference
 
 ```bash
 STATE_SCRIPT=/opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh
+# Preferred (same actions, shared implementation):
+# hiclaw manager-state --action list
 ```
 
 | When | Command |

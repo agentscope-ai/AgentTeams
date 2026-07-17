@@ -93,15 +93,14 @@ RUN python -m venv /opt/venv/standard \
         /tmp/copaw-worker/
 
 # --- Patch CoPaw 1.0.2 Matrix channel indentation bug ---
-# _sync_loop method def is indented one level too deep inside
-# _refresh_matrix_token, causing IndentationError that prevents
-# the Matrix channel from loading. Fixed upstream but not yet released.
-RUN MATRIX_CH=/opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels/matrix/channel.py \
-    && if [ -f "$MATRIX_CH" ]; then \
-         sed -i '750s/^        async def _sync_loop/    async def _sync_loop/' "$MATRIX_CH"; \
-         find /opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels/matrix/__pycache__ -name 'channel*' -delete 2>/dev/null || true; \
-         echo 'Patched Matrix channel _sync_loop indentation'; \
-       fi
+# _sync_loop was nested inside _refresh_matrix_token (IndentationError).
+# Fixed upstream but not yet released; use fail-fast Python patch instead of sed.
+COPY scripts/patch_copaw_matrix_sync_loop.py /tmp/
+RUN /opt/venv/standard/bin/python /tmp/patch_copaw_matrix_sync_loop.py \
+        /opt/venv/standard/lib/python3.11/site-packages \
+    && grep -q '    async def _sync_loop' \
+        /opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels/matrix/channel.py \
+    && rm /tmp/patch_copaw_matrix_sync_loop.py
 
 # --- Patch CoPaw stream-error classification (standard venv) ---
 # Upstream classifies mid-stream disconnects (RemoteProtocolError, "peer closed
@@ -157,6 +156,17 @@ RUN SITE=/opt/venv/lite/lib/python3.11/site-packages \
     && grep -q 'install_lazy_loader(' "$SITE/agentscope_runtime/engine/__init__.py" \
     && rm /tmp/patch_*_lazy.py
 
+# --- CoPaw worker image: install shared protocol + merge + sync packages ---
+COPY --from=agentteams-protocol . /tmp/agentteams-protocol/
+COPY --from=agentteams-openclaw-merge . /tmp/agentteams-openclaw-merge/
+COPY --from=agentteams-sync . /tmp/agentteams-sync/
+RUN /opt/venv/standard/bin/pip install --no-cache-dir /tmp/agentteams-protocol/ \
+    && /opt/venv/lite/bin/pip install --no-cache-dir /tmp/agentteams-protocol/ \
+    && /opt/venv/standard/bin/pip install --no-cache-dir /tmp/agentteams-openclaw-merge/ \
+    && /opt/venv/lite/bin/pip install --no-cache-dir /tmp/agentteams-openclaw-merge/ \
+    && /opt/venv/standard/bin/pip install --no-cache-dir /tmp/agentteams-sync/ \
+    && /opt/venv/lite/bin/pip install --no-cache-dir /tmp/agentteams-sync/
+
 # --- Overlay real copaw-worker source (high-frequency changes, ~128KB) ---
 # This layer is rebuilt on every src/ change but does NOT invalidate the
 # heavy venv layers above, saving ~2 GB of re-download on typical upgrades.
@@ -168,11 +178,14 @@ RUN STANDARD_SITE=/opt/venv/standard/lib/python3.11/site-packages/copaw_worker \
     && for SITE in /opt/venv/standard/lib/python3.11/site-packages /opt/venv/lite/lib/python3.11/site-packages; do \
          rm -rf "$SITE/copaw/app/channels/matrix"; \
          mkdir -p "$SITE/copaw/app/channels/matrix"; \
-         cp /tmp/copaw-worker/src/matrix/channel.py /tmp/copaw-worker/src/matrix/__init__.py "$SITE/copaw/app/channels/matrix/"; \
+         cp /tmp/copaw-worker/src/matrix/*.py "$SITE/copaw/app/channels/matrix/"; \
+         rm -rf "$SITE/matrix"; \
+         mkdir -p "$SITE/matrix"; \
+         cp /tmp/copaw-worker/src/matrix/*.py "$SITE/matrix/"; \
          if [ -f /tmp/copaw-worker/src/matrix/config.py ]; then \
            cp /tmp/copaw-worker/src/matrix/config.py "$SITE/copaw/config/config.py"; \
          fi; \
-         find "$SITE/copaw/app/channels/matrix" -name '__pycache__' -type d -prune -exec rm -rf {} +; \
+         find "$SITE/copaw/app/channels/matrix" "$SITE/matrix" -name '__pycache__' -type d -prune -exec rm -rf {} +; \
        done \
     && rm -rf /tmp/copaw-worker/ /tmp/lite-copaw/
 

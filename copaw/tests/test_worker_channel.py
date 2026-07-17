@@ -17,8 +17,8 @@ import asyncio
 import os
 from types import SimpleNamespace
 
-from copaw_worker import matrix_channel
-from copaw_worker.matrix_channel import MatrixChannel
+import matrix.channel as matrix_channel
+from matrix.channel import MatrixChannel
 
 
 class _SendClient:
@@ -53,6 +53,16 @@ class _FakeCfg:
     history_limit = 50
 
 
+class _FakeContentType:
+    TEXT = "text"
+
+
+class _FakeTextContent:
+    def __init__(self, type, text):
+        self.type = type
+        self.text = text
+
+
 class _FakeRoom:
     room_id = "!room:hs.local"
     users = {"@alice:hs.local": object(), "@worker:hs.local": object()}
@@ -79,9 +89,13 @@ def _make_channel(user_id: str = "@worker:hs.local") -> MatrixChannel:
 
 
 def _make_inbound_channel() -> MatrixChannel:
+    if not hasattr(matrix_channel, "TextContent"):
+        matrix_channel.TextContent = _FakeTextContent
+        matrix_channel.ContentType = _FakeContentType
     ch = _make_channel(user_id="@worker:hs.local")
     ch._cfg = _FakeCfg()
     ch._room_histories = {}
+    ch._dm_room_cache = {}
     ch._check_allowed = lambda *_args: True
     ch._require_mention = lambda _room_id: True
     ch._send_read_receipt = _noop_read_receipt
@@ -116,7 +130,10 @@ class _GroupRoom(_FakeRoom):
 
 
 def _first_text(payload):
-    return payload["content_parts"][0]["text"]
+    part = payload["content_parts"][0]
+    if isinstance(part, dict):
+        return part["text"]
+    return part.text
 
 
 # ---------------------------------------------------------------------------

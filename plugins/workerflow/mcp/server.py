@@ -18,6 +18,12 @@ import urllib.parse
 import urllib.request
 import uuid
 
+_PLUGINS_DIR = Path(__file__).resolve().parents[2]
+if str(_PLUGINS_DIR) not in sys.path:
+    sys.path.insert(0, str(_PLUGINS_DIR))
+
+from common.runtime_config import load_runtime_config, section as _runtime_section
+
 
 TOOL_NAMES = ["worker_agentflow"]
 
@@ -329,82 +335,14 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _load_runtime_config() -> dict[str, Any]:
-    runtime_config = os.getenv("TEAMHARNESS_RUNTIME_CONFIG", "").strip()
-    if not runtime_config:
-        runtime_config = os.getenv("AGENTTEAMS_MEMBER_RUNTIME_CONFIG", "").strip()
-    if not runtime_config:
-        return {}
-    path = Path(runtime_config).expanduser()
-    if not path.exists():
-        return {}
-    text = path.read_text(encoding="utf-8")
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        data = None
-    if isinstance(data, dict):
-        return data
-    try:
-        import yaml
-
-        data = yaml.safe_load(text) or {}
-    except Exception:
-        data = _simple_yaml_sections(text)
-    return data if isinstance(data, dict) else {}
-
-
-def _simple_yaml_sections(text: str) -> dict[str, Any]:
-    data: dict[str, Any] = {}
-    section: str | None = None
-    nested_section: str | None = None
-    for line in text.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        top = re.match(r"^([A-Za-z0-9_]+):\s*(.*)$", line)
-        if top:
-            key, value = top.group(1), top.group(2).strip()
-            if value:
-                data[key] = _yaml_scalar(value)
-                section = None
-                nested_section = None
-            else:
-                data[key] = {}
-                section = key
-                nested_section = None
-            continue
-        nested = re.match(r"^\s{2}([A-Za-z0-9_]+):\s*(.*)$", line)
-        if nested and section and isinstance(data.get(section), dict):
-            key, value = nested.group(1), nested.group(2).strip()
-            if value:
-                data[section][key] = _yaml_scalar(value)
-                nested_section = None
-            else:
-                data[section][key] = {}
-                nested_section = key
-            continue
-        deep = re.match(r"^\s{4}([A-Za-z0-9_]+):\s*(.*)$", line)
-        if deep and section and nested_section and isinstance(data.get(section), dict):
-            parent = data[section].get(nested_section)
-            if isinstance(parent, dict):
-                parent[deep.group(1)] = _yaml_scalar(deep.group(2).strip())
-    return data
-
-
-def _yaml_scalar(value: str) -> Any:
-    if value in {"", "null", "Null", "NULL", "~"}:
-        return ""
-    if value in {"true", "True", "TRUE"}:
-        return True
-    if value in {"false", "False", "FALSE"}:
-        return False
-    if (value.startswith("'") and value.endswith("'")) or (value.startswith('"') and value.endswith('"')):
-        return value[1:-1]
-    return value
+    return load_runtime_config(
+        primary_env="TEAMHARNESS_RUNTIME_CONFIG",
+        fallback_env="AGENTTEAMS_MEMBER_RUNTIME_CONFIG",
+    )
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
-    value = data.get(name)
-    return value if isinstance(value, dict) else {}
+    return _runtime_section(data, name)
 
 
 def _matrix_user_id() -> str:

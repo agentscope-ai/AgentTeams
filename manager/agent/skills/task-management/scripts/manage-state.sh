@@ -1,6 +1,9 @@
 #!/bin/bash
 # manage-state.sh - Atomic state.json operations for task tracking
 #
+# Prefer the hiclaw CLI implementation when available (Phase 14 I14.4).
+# The shell body below remains as a fallback for environments without hiclaw.
+#
 # Replaces manual jq edits by the LLM Agent with deterministic script calls.
 # All writes use tmp+mv for atomicity.
 #
@@ -20,6 +23,12 @@
 #   manage-state.sh --action last-digest   set --at ISO
 
 set -euo pipefail
+
+if [ "${HICLAW_MANAGER_STATE_IMPL:-auto}" != "shell" ]; then
+    if command -v hiclaw >/dev/null 2>&1; then
+        exec hiclaw manager-state "$@"
+    fi
+fi
 
 STATE_FILE="${HOME}/state.json"
 

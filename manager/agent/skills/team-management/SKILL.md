@@ -36,7 +36,8 @@ If admin asks for CPU or memory requests/limits, use a YAML Team manifest with `
 - **Leader DM is Team Admin ↔ Leader** — for team-level management
 - **Team Admin defaults to Global Admin** — if `--team-admin` not specified
 - **Delegated tasks use `--delegated-to-team`** — so heartbeat knows to check with Leader, not workers
-- **Controller forces `runtime: copaw` for all team members** — omit runtime from team creation
+- **Team Leader runtime is always `copaw`** — controller default; use `--worker-runtimes` / YAML `workers[].runtime` for mixed worker runtimes
+- **`create-team.sh` delegates to `hiclaw create team`** — set `HICLAW_TEAM_CREATE_IMPL=shell` only for legacy Manager-side provisioning
 
 ## Operation Reference
 

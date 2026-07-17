@@ -1,0 +1,22 @@
+{
+  "qwenpaw_version": "1.1.11",
+  "files": {
+    "qwenpaw/app/channels/matrix/channel.py": {
+      "required_markers": [
+        "class MatrixChannel",
+        "async def _sync_loop"
+      ]
+    },
+    "qwenpaw/app/multi_agent_manager.py": {
+      "required_markers": [
+        "instance = Workspace(",
+        "workspace_dir=agent_ref.workspace_dir,"
+      ]
+    },
+    "qwenpaw/app/workspace/service_factories.py": {
+      "required_markers": [
+        "mcp.init_from_config_background(ws._config.mcp)"
+      ]
+    }
+  }
+}

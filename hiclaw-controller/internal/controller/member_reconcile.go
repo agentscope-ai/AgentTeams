@@ -1,14 +1,24 @@
 package controller
 
+// Member reconcile helpers in this package intentionally log several
+// agent-adjacent failures as non-fatal (C10.11): registry updates, legacy
+// allowlist patches, and delete-time cleanup should not block the primary
+// reconcile loop. Future work may surface Degraded conditions for failures
+// that affect agent-visible config; that would be a deliberate status-semantics
+// change and is out of scope for Phase 10.
+//
+// Team member Observed flips true immediately after ReconcileMemberInfra
+// succeeds (C10.12). Post-infra config/container failures must not clear
+// Observed — see team_members_shared.go and team_members_legacy.go. Splitting
+// InfraReady vs ConfigReady in status is deferred to Phase 11.
+
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
 	"path"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -21,10 +31,8 @@ import (
 	"github.com/hiclaw/hiclaw-controller/internal/matrix"
 	"github.com/hiclaw/hiclaw-controller/internal/oss"
 	"github.com/hiclaw/hiclaw-controller/internal/service"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"github.com/hiclaw/hiclaw-controller/internal/workerdeps"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -40,29 +48,16 @@ const (
 )
 
 const (
-	runtimeRemoteManagedLocal        = "remote-managed-local"
-	dockerHostInternalExtraHost      = "host.docker.internal:host-gateway"
-	sandboxSetTokenRetryAfter        = 30 * time.Second
-	sandboxSetTokenRefreshJitterMax  = 60 * time.Second
-	defaultWorkerDepsStorageCapacity = "1Pi"
-	accessKeyWorkerDepsPVCapacity    = "50Gi"
-	accessKeyWorkerDepsStorageClass  = "test"
-	accessKeyWorkerDepsOtherOpts     = "-o umask=022 -o allow_other"
-	workerDepsLayoutVersion          = "worker-deps-agentteams-pv-effective-name-v3"
-	ackOSSCSIProvisioner             = "ossplugin.csi.alibabacloud.com"
-	workerDepsAuthTypeRRSA           = "RRSA"
-	workerDepsAuthTypeAccessKey      = "AccessKey"
+	runtimeRemoteManagedLocal       = "remote-managed-local"
+	dockerHostInternalExtraHost     = "host.docker.internal:host-gateway"
+	sandboxSetTokenRetryAfter       = 30 * time.Second
+	sandboxSetTokenRefreshJitterMax = 60 * time.Second
+	workerDepsLayoutVersion         = "worker-deps-agentteams-pv-effective-name-v3"
+	workerDepsAuthTypeRRSA          = "RRSA"
+	workerDepsAuthTypeAccessKey     = "AccessKey"
 )
 
 var (
-	workerDepsStorageClassGVR       = schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}
-	workerDepsPVGVR                 = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"}
-	workerDepsPVCGVR                = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
-	workerDepsCredentialProviderGVR = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "credentialproviders"}
-	workerDepsAgentIdentityGVR      = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "agentidentities"}
-	workerDepsAgentRoleGVR          = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "agentroles"}
-	workerDepsAgentRoleBindingGVR   = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "agentrolebindings"}
-
 	sandboxSetTokenProjections sync.Map
 )
 
@@ -928,8 +923,8 @@ func prepareMemberWorkerDeps(ctx context.Context, d MemberDeps, m MemberContext,
 	if err != nil {
 		return nil, 0, "", err
 	}
-	tokenMount := resolved.Mounts[workerDepsMountToken]
-	envMount := resolved.Mounts[workerDepsMountEnv]
+	tokenMount := resolved.Mounts[workerdeps.MountToken]
+	envMount := resolved.Mounts[workerdeps.MountEnv]
 	workerEnv["AGENTTEAMS_AUTH_TOKEN_FILE"] = strings.TrimRight(tokenMount.MountPath, "/") + "/token"
 	workerEnv["AGENTTEAMS_WORKER_ENV_MOUNT_DIR"] = strings.TrimRight(envMount.MountPath, "/")
 	workerEnv["AGENTTEAMS_WORKER_ENV_MOUNT_REQUIRED"] = "1"
@@ -956,7 +951,7 @@ func prepareMemberWorkerDeps(ctx context.Context, d MemberDeps, m MemberContext,
 	deps := &backend.WorkerDepsSpec{
 		InplaceUpdateImage: m.Spec.Image,
 	}
-	for _, name := range []string{workerDepsMountToken, workerDepsMountEnv, workerDepsMountData} {
+	for _, name := range []string{workerdeps.MountToken, workerdeps.MountEnv, workerdeps.MountData} {
 		mount := resolved.Mounts[name]
 		deps.DynamicVolumeMounts = append(deps.DynamicVolumeMounts, backend.WorkerDepsDynamicVolumeMount{
 			PVName:     mount.VolumeRef,
@@ -977,16 +972,10 @@ func prepareMemberWorkerDeps(ctx context.Context, d MemberDeps, m MemberContext,
 	return deps, projection.RequeueAfter, projection.Message, nil
 }
 
-const (
-	workerDepsMountToken = "token"
-	workerDepsMountEnv   = "env"
-	workerDepsMountData  = "data"
-)
-
 var workerDepsMountReadOnly = map[string]bool{
-	workerDepsMountToken: true,
-	workerDepsMountEnv:   true,
-	workerDepsMountData:  false,
+	workerdeps.MountToken: true,
+	workerdeps.MountEnv:   true,
+	workerdeps.MountData:  false,
 }
 
 type sandboxWorkerDeps struct {
@@ -1094,7 +1083,7 @@ func workerDepsDynamicMountAttributes(volume v1beta1.WorkerVolumeSpec, mountName
 	if volume.OSS == nil || volume.OSS.Auth.Type != workerDepsAuthTypeRRSA {
 		return nil
 	}
-	return map[string]string{"credentialProviderName": workerDepsCredentialProviderName(mountName)}
+	return map[string]string{"credentialProviderName": workerdeps.CredentialProviderName(mountName)}
 }
 
 func normalizeWorkerDepsMountAuthType(authType string) (string, error) {
@@ -1110,24 +1099,24 @@ func normalizeWorkerDepsMountAuthType(authType string) (string, error) {
 
 func defaultWorkerDepsMounts(instanceName, workerName string) map[string]v1beta1.WorkerMountSpec {
 	return map[string]v1beta1.WorkerMountSpec{
-		workerDepsMountToken: {
-			Name:      workerDepsMountToken,
+		workerdeps.MountToken: {
+			Name:      workerdeps.MountToken,
 			VolumeRef: instanceName,
-			SubPath:   workerDepsSubPath(workerName, workerDepsMountToken),
+			SubPath:   workerDepsSubPath(workerName, workerdeps.MountToken),
 			MountPath: "/var/run/secrets/agentteams",
 			ReadOnly:  true,
 		},
-		workerDepsMountEnv: {
-			Name:      workerDepsMountEnv,
+		workerdeps.MountEnv: {
+			Name:      workerdeps.MountEnv,
 			VolumeRef: instanceName,
-			SubPath:   workerDepsSubPath(workerName, workerDepsMountEnv),
+			SubPath:   workerDepsSubPath(workerName, workerdeps.MountEnv),
 			MountPath: "/mnt/agentteams/env",
 			ReadOnly:  true,
 		},
-		workerDepsMountData: {
-			Name:      workerDepsMountData,
+		workerdeps.MountData: {
+			Name:      workerdeps.MountData,
 			VolumeRef: instanceName,
-			SubPath:   workerDepsSubPath(workerName, workerDepsMountData),
+			SubPath:   workerDepsSubPath(workerName, workerdeps.MountData),
 			MountPath: "/mnt/agentteams/data",
 			ReadOnly:  false,
 		},
@@ -1228,14 +1217,14 @@ func isBuiltinWorkerDepsMountPath(mountPath string) bool {
 func prepareWorkerDepsObjects(ctx context.Context, d MemberDeps, m MemberContext, deps sandboxWorkerDeps, workerEnv map[string]string, token string, writeToken bool) error {
 	req := service.WorkerDepsPrepareRequest{
 		WorkerName:  m.RuntimeName,
-		DataSubPath: deps.Mounts[workerDepsMountData].SubPath,
+		DataSubPath: deps.Mounts[workerdeps.MountData].SubPath,
 		Token:       token,
 		Env:         workerEnv,
-		EnvSubPath:  deps.Mounts[workerDepsMountEnv].SubPath,
+		EnvSubPath:  deps.Mounts[workerdeps.MountEnv].SubPath,
 		UseEnv:      true,
 	}
 	if writeToken {
-		req.TokenSubPath = deps.Mounts[workerDepsMountToken].SubPath
+		req.TokenSubPath = deps.Mounts[workerdeps.MountToken].SubPath
 		req.UseToken = true
 	}
 	return d.Deployer.PrepareWorkerDeps(ctx, req)
@@ -1343,479 +1332,18 @@ func ensureWorkerDepsMountResources(ctx context.Context, d MemberDeps, m MemberC
 	if dynClient == nil {
 		return fmt.Errorf("workers-deps volume %s requires a dynamic client to create storage resources", volume.Name)
 	}
-	objects := workerDepsMountResourceObjects(volume, namespace, builtIn)
+	objects := workerdeps.MountResourceObjects(volume, namespace, builtIn)
 	for _, obj := range objects {
-		if err := createWorkerDepsObjectIfMissing(ctx, dynClient, obj); err != nil {
+		if err := workerdeps.CreateObjectIfMissing(ctx, dynClient, obj); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func workerDepsMountResourceObjects(volume v1beta1.WorkerVolumeSpec, namespace string, builtIn bool) []*unstructured.Unstructured {
-	if volume.OSS != nil && volume.OSS.Auth.Type == workerDepsAuthTypeAccessKey {
-		return []*unstructured.Unstructured{buildAccessKeyWorkerDepsPersistentVolume(volume, namespace)}
-	}
-	if builtIn && volume.OSS != nil && volume.OSS.Auth.Type == workerDepsAuthTypeRRSA {
-		return []*unstructured.Unstructured{
-			buildRRSAWorkerDepsPersistentVolume(volume),
-			buildWorkerDepsCredentialProvider(volume, namespace, workerDepsMountEnv),
-			buildWorkerDepsCredentialProvider(volume, namespace, workerDepsMountToken),
-			buildWorkerDepsCredentialProvider(volume, namespace, workerDepsMountData),
-			buildWorkerDepsAgentIdentity(namespace),
-			buildWorkerDepsAgentRole(namespace),
-			buildWorkerDepsAgentRoleBinding(namespace),
-		}
-	}
-	return []*unstructured.Unstructured{
-		buildWorkerDepsStorageClass(volume, namespace),
-		buildWorkerDepsPersistentVolume(volume, namespace),
-		buildWorkerDepsPersistentVolumeClaim(volume, namespace),
-	}
-}
-
 func resolveMemberDynamicClient(ctx context.Context, d MemberDeps, m MemberContext) (dynamic.Interface, string, error) {
 	namespace := m.Namespace
 	return d.DynamicClient, namespace, nil
-}
-
-func createWorkerDepsObjectIfMissing(ctx context.Context, dynClient dynamic.Interface, obj *unstructured.Unstructured) error {
-	gvr := workerDepsObjectGVR(obj)
-	name := obj.GetName()
-	ns := obj.GetNamespace()
-	if ns != "" {
-		res := dynClient.Resource(gvr).Namespace(ns)
-		existing, err := res.Get(ctx, name, metav1.GetOptions{})
-		if err == nil {
-			return updateWorkerDepsObjectIfNeeded(ctx, res, existing, obj)
-		}
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("get workers-deps %s %s/%s: %w", obj.GetKind(), ns, name, err)
-		}
-		if _, err := res.Create(ctx, obj, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create workers-deps %s %s/%s: %w", obj.GetKind(), ns, name, err)
-		}
-		return nil
-	}
-	res := dynClient.Resource(gvr)
-	existing, err := res.Get(ctx, name, metav1.GetOptions{})
-	if err == nil {
-		return updateWorkerDepsObjectIfNeeded(ctx, res, existing, obj)
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get workers-deps %s %s/%s: %w", obj.GetKind(), ns, name, err)
-	}
-	if _, err := res.Create(ctx, obj, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create workers-deps %s %s/%s: %w", obj.GetKind(), ns, name, err)
-	}
-	return nil
-}
-
-func updateWorkerDepsObjectIfNeeded(ctx context.Context, res dynamic.ResourceInterface, existing, desired *unstructured.Unstructured) error {
-	switch desired.GetKind() {
-	case "CredentialProvider", "AgentIdentity", "AgentRole", "AgentRoleBinding":
-	default:
-		return nil
-	}
-
-	labels := map[string]string{}
-	for k, v := range existing.GetLabels() {
-		labels[k] = v
-	}
-	for k, v := range desired.GetLabels() {
-		labels[k] = v
-	}
-	desiredSpec, ok, err := unstructured.NestedMap(desired.Object, "spec")
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("desired %s spec is missing", desired.GetKind())
-	}
-	existingSpec, _, err := unstructured.NestedMap(existing.Object, "spec")
-	if err != nil {
-		return err
-	}
-	if reflect.DeepEqual(existing.GetLabels(), labels) && reflect.DeepEqual(existingSpec, desiredSpec) {
-		return nil
-	}
-
-	updated := existing.DeepCopy()
-	updated.SetLabels(labels)
-	updated.Object["spec"] = desiredSpec
-	if _, err := res.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update workers-deps %s %s: %w", desired.GetKind(), desired.GetName(), err)
-	}
-	return nil
-}
-
-func workerDepsObjectGVR(obj *unstructured.Unstructured) schema.GroupVersionResource {
-	switch obj.GetKind() {
-	case "StorageClass":
-		return workerDepsStorageClassGVR
-	case "PersistentVolume":
-		return workerDepsPVGVR
-	case "CredentialProvider":
-		return workerDepsCredentialProviderGVR
-	case "AgentIdentity":
-		return workerDepsAgentIdentityGVR
-	case "AgentRole":
-		return workerDepsAgentRoleGVR
-	case "AgentRoleBinding":
-		return workerDepsAgentRoleBindingGVR
-	default:
-		return workerDepsPVCGVR
-	}
-}
-
-func buildWorkerDepsStorageClass(volume v1beta1.WorkerVolumeSpec, namespace string) *unstructured.Unstructured {
-	provisioner := ackOSSCSIProvisioner
-	parameters := map[string]interface{}{}
-	if volume.OSS != nil {
-		parameters["bucket"] = volume.OSS.Bucket
-		parameters["url"] = volume.OSS.Endpoint
-		parameters["path"] = "/"
-		if volume.OSS.Auth.Type == "RRSA" && volume.OSS.Auth.RRSA != nil {
-			parameters["authType"] = "rrsa"
-			if volume.OSS.Auth.RRSA.RoleName != "" {
-				parameters["roleName"] = volume.OSS.Auth.RRSA.RoleName
-			}
-			if volume.OSS.Auth.RRSA.RoleARN != "" {
-				parameters["roleArn"] = volume.OSS.Auth.RRSA.RoleARN
-			}
-		}
-		if volume.OSS.Auth.Type == "AccessKey" && volume.OSS.Auth.AccessKey != nil {
-			parameters["authType"] = "ak"
-			parameters["csi.storage.k8s.io/node-publish-secret-name"] = volume.OSS.Auth.AccessKey.SecretRef.Name
-			parameters["csi.storage.k8s.io/node-publish-secret-namespace"] = defaultSecretNamespace(volume.OSS.Auth.AccessKey.SecretRef.Namespace, namespace)
-		}
-	}
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "storage.k8s.io/v1",
-		"kind":       "StorageClass",
-		"metadata": map[string]interface{}{
-			"name":   volume.Name,
-			"labels": workerDepsObjectLabels(volume),
-		},
-		"provisioner":       provisioner,
-		"reclaimPolicy":     "Retain",
-		"volumeBindingMode": "Immediate",
-		"parameters":        parameters,
-	}}
-}
-
-func buildWorkerDepsPersistentVolume(volume v1beta1.WorkerVolumeSpec, namespace string) *unstructured.Unstructured {
-	driver := ackOSSCSIProvisioner
-	attrs := map[string]interface{}{}
-	var secretRef map[string]interface{}
-	if volume.OSS != nil {
-		attrs["bucket"] = volume.OSS.Bucket
-		attrs["url"] = volume.OSS.Endpoint
-		attrs["path"] = "/"
-		if volume.OSS.Auth.Type == "RRSA" && volume.OSS.Auth.RRSA != nil {
-			attrs["authType"] = "rrsa"
-			if volume.OSS.Auth.RRSA.RoleName != "" {
-				attrs["roleName"] = volume.OSS.Auth.RRSA.RoleName
-			}
-			if volume.OSS.Auth.RRSA.RoleARN != "" {
-				attrs["roleArn"] = volume.OSS.Auth.RRSA.RoleARN
-			}
-		}
-		if volume.OSS.Auth.Type == "AccessKey" && volume.OSS.Auth.AccessKey != nil {
-			secretRef = map[string]interface{}{
-				"name":      volume.OSS.Auth.AccessKey.SecretRef.Name,
-				"namespace": defaultSecretNamespace(volume.OSS.Auth.AccessKey.SecretRef.Namespace, namespace),
-			}
-		}
-	}
-	csi := map[string]interface{}{
-		"driver":           driver,
-		"volumeHandle":     volume.Name,
-		"volumeAttributes": attrs,
-	}
-	if secretRef != nil && secretRef["name"] != "" {
-		csi["nodePublishSecretRef"] = secretRef
-	}
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "PersistentVolume",
-		"metadata": map[string]interface{}{
-			"name":   volume.Name,
-			"labels": workerDepsObjectLabels(volume),
-		},
-		"spec": map[string]interface{}{
-			"capacity": map[string]interface{}{
-				"storage": defaultWorkerDepsStorageCapacity,
-			},
-			"accessModes":                   []interface{}{"ReadWriteMany"},
-			"persistentVolumeReclaimPolicy": "Retain",
-			"storageClassName":              volume.Name,
-			"csi":                           csi,
-		},
-	}}
-}
-
-func buildAccessKeyWorkerDepsPersistentVolume(volume v1beta1.WorkerVolumeSpec, namespace string) *unstructured.Unstructured {
-	attrs := map[string]interface{}{}
-	secretRef := map[string]interface{}{}
-	if volume.OSS != nil {
-		attrs["bucket"] = volume.OSS.Bucket
-		attrs["url"] = volume.OSS.Endpoint
-		attrs["otherOpts"] = accessKeyWorkerDepsOtherOpts
-		if volume.OSS.Auth.AccessKey != nil {
-			secretRef = map[string]interface{}{
-				"name":      volume.OSS.Auth.AccessKey.SecretRef.Name,
-				"namespace": namespace,
-			}
-		}
-	}
-	labels := workerDepsObjectLabels(volume)
-	labels["alicloud-pvname"] = volume.Name
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "PersistentVolume",
-		"metadata": map[string]interface{}{
-			"name":   volume.Name,
-			"labels": labels,
-		},
-		"spec": map[string]interface{}{
-			"capacity": map[string]interface{}{
-				"storage": accessKeyWorkerDepsPVCapacity,
-			},
-			"accessModes":                   []interface{}{"ReadWriteMany"},
-			"persistentVolumeReclaimPolicy": "Retain",
-			"storageClassName":              accessKeyWorkerDepsStorageClass,
-			"volumeMode":                    "Filesystem",
-			"csi": map[string]interface{}{
-				"driver":               ackOSSCSIProvisioner,
-				"nodePublishSecretRef": secretRef,
-				"volumeAttributes":     attrs,
-				"volumeHandle":         volume.Name,
-			},
-		},
-	}}
-}
-
-func buildRRSAWorkerDepsPersistentVolume(volume v1beta1.WorkerVolumeSpec) *unstructured.Unstructured {
-	attrs := map[string]interface{}{}
-	if volume.OSS != nil {
-		attrs["authType"] = "agent-identity"
-		attrs["bucket"] = volume.OSS.Bucket
-		attrs["url"] = volume.OSS.Endpoint
-		attrs["otherOpts"] = accessKeyWorkerDepsOtherOpts
-	}
-	labels := workerDepsObjectLabels(volume)
-	labels["alicloud-pvname"] = volume.Name
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "PersistentVolume",
-		"metadata": map[string]interface{}{
-			"name":   volume.Name,
-			"labels": labels,
-		},
-		"spec": map[string]interface{}{
-			"capacity": map[string]interface{}{
-				"storage": accessKeyWorkerDepsPVCapacity,
-			},
-			"accessModes":                   []interface{}{"ReadWriteMany"},
-			"persistentVolumeReclaimPolicy": "Retain",
-			"storageClassName":              accessKeyWorkerDepsStorageClass,
-			"volumeMode":                    "Filesystem",
-			"csi": map[string]interface{}{
-				"driver":           ackOSSCSIProvisioner,
-				"volumeAttributes": attrs,
-				"volumeHandle":     volume.Name,
-			},
-		},
-	}}
-}
-
-func workerDepsCredentialProviderName(mountName string) string {
-	return backend.BuiltinSandboxInstanceName + "-" + mountName
-}
-
-func buildWorkerDepsCredentialProvider(volume v1beta1.WorkerVolumeSpec, namespace, mountName string) *unstructured.Unstructured {
-	roleName := ""
-	if volume.OSS != nil && volume.OSS.Auth.RRSA != nil {
-		roleName = volume.OSS.Auth.RRSA.RoleName
-	}
-	labels := workerDepsObjectLabels(volume)
-	labels["agentteams.io/sandboxset"] = backend.BuiltinSandboxInstanceName
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "agentidentity.alibabacloud.com/v1alpha1",
-		"kind":       "CredentialProvider",
-		"metadata": map[string]interface{}{
-			"name":      workerDepsCredentialProviderName(mountName),
-			"namespace": namespace,
-			"labels":    labels,
-		},
-		"spec": map[string]interface{}{
-			"type": "RAM",
-			"ram": map[string]interface{}{
-				"source": map[string]interface{}{
-					"provider": "RRSA",
-					"rrsa": map[string]interface{}{
-						"roleName": roleName,
-						"policy":   workerDepsCredentialProviderPolicy(),
-					},
-				},
-			},
-		},
-	}}
-}
-
-func buildWorkerDepsAgentIdentity(namespace string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "agentidentity.alibabacloud.com/v1alpha1",
-		"kind":       "AgentIdentity",
-		"metadata": map[string]interface{}{
-			"name":      backend.BuiltinSandboxInstanceName,
-			"namespace": namespace,
-			"labels":    workerDepsFixedObjectLabels(),
-		},
-		"spec": map[string]interface{}{
-			"description": "this is for agentteams",
-		},
-	}}
-}
-
-func buildWorkerDepsAgentRole(namespace string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "agentidentity.alibabacloud.com/v1alpha1",
-		"kind":       "AgentRole",
-		"metadata": map[string]interface{}{
-			"name":      backend.BuiltinSandboxInstanceName,
-			"namespace": namespace,
-			"labels":    workerDepsFixedObjectLabels(),
-		},
-		"spec": map[string]interface{}{
-			"rules": []interface{}{
-				workerDepsAgentRoleRule(workerDepsCredentialProviderName(workerDepsMountEnv)),
-				workerDepsAgentRoleRule(workerDepsCredentialProviderName(workerDepsMountToken)),
-				workerDepsAgentRoleRule(workerDepsCredentialProviderName(workerDepsMountData)),
-			},
-		},
-	}}
-}
-
-func workerDepsAgentRoleRule(resource string) map[string]interface{} {
-	return map[string]interface{}{
-		"effect":   "Allow",
-		"action":   "GetResourceCredential",
-		"resource": "CredentialProvider/" + resource,
-	}
-}
-
-func buildWorkerDepsAgentRoleBinding(namespace string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "agentidentity.alibabacloud.com/v1alpha1",
-		"kind":       "AgentRoleBinding",
-		"metadata": map[string]interface{}{
-			"name":      backend.BuiltinSandboxInstanceName,
-			"namespace": namespace,
-			"labels":    workerDepsFixedObjectLabels(),
-		},
-		"spec": map[string]interface{}{
-			"agentRoleRef": map[string]interface{}{
-				"apiGroup": "agentidentity.alibabacloud.com",
-				"kind":     "AgentRole",
-				"name":     backend.BuiltinSandboxInstanceName,
-			},
-			"subjects": []interface{}{
-				map[string]interface{}{
-					"authorizationType": "Agent",
-					"agentAuthorizationConfiguration": map[string]interface{}{
-						"agentName": backend.BuiltinSandboxInstanceName,
-					},
-				},
-			},
-		},
-	}}
-}
-
-func workerDepsCredentialProviderPolicy() string {
-	policy := map[string]interface{}{
-		"Version": "1",
-		"Statement": []map[string]interface{}{
-			{
-				"Action": []string{
-					"oss:GetObject",
-					"oss:PutObject",
-					"oss:DeleteObject",
-					"oss:AbortMultipartUpload",
-					"oss:ListMultipartUploads",
-				},
-				"Effect": "Allow",
-				"Resource": []string{
-					"acs:oss:*:*:${ack:agent-identity/storage-auth/bucket-name}/${ack:agent-identity/storage-auth/sub-path}",
-					"acs:oss:*:*:${ack:agent-identity/storage-auth/bucket-name}/${ack:agent-identity/storage-auth/sub-path}/*",
-				},
-			},
-			{
-				"Action": []string{
-					"oss:ListObjects",
-				},
-				"Effect": "Allow",
-				"Resource": []string{
-					"acs:oss:*:*:${ack:agent-identity/storage-auth/bucket-name}",
-				},
-				"Condition": map[string]interface{}{
-					"StringLike": map[string]interface{}{
-						"oss:Prefix": []string{
-							"${ack:agent-identity/storage-auth/sub-path}/*",
-						},
-					},
-				},
-			},
-		},
-	}
-	out, err := json.MarshalIndent(policy, "", "  ")
-	if err != nil {
-		return ""
-	}
-	return string(out)
-}
-
-func defaultSecretNamespace(secretNamespace, fallback string) string {
-	if secretNamespace != "" {
-		return secretNamespace
-	}
-	return fallback
-}
-
-func buildWorkerDepsPersistentVolumeClaim(volume v1beta1.WorkerVolumeSpec, namespace string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "PersistentVolumeClaim",
-		"metadata": map[string]interface{}{
-			"name":      volume.Name,
-			"namespace": namespace,
-			"labels":    workerDepsObjectLabels(volume),
-		},
-		"spec": map[string]interface{}{
-			"accessModes":      []interface{}{"ReadWriteMany"},
-			"storageClassName": volume.Name,
-			"volumeName":       volume.Name,
-			"resources": map[string]interface{}{
-				"requests": map[string]interface{}{
-					"storage": defaultWorkerDepsStorageCapacity,
-				},
-			},
-		},
-	}}
-}
-
-func workerDepsObjectLabels(volume v1beta1.WorkerVolumeSpec) map[string]interface{} {
-	labels := workerDepsFixedObjectLabels()
-	labels["agentteams.io/mount-provider"] = strings.ToLower(volume.Type)
-	return labels
-}
-
-func workerDepsFixedObjectLabels() map[string]interface{} {
-	return map[string]interface{}{
-		"agentteams.io/managed-by":   "agentteams-controller",
-		"agentteams.io/workers-deps": "true",
-	}
 }
 
 func minPositiveDuration(a, b time.Duration) time.Duration {

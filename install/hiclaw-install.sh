@@ -29,6 +29,8 @@
 #   AGENTTEAMS_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
 #   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
+#   OpenHuman runtime: not supported by this installer — use Kubernetes/Helm with
+#   `make build-openhuman-worker` and Worker CR `spec.runtime=openhuman` (see docs/quickstart.md).
 #   AGENTTEAMS_NACOS_REGISTRY_URI          Default Nacos registry URI for Worker market search/import
 #                                      (default: nacos://market.agentteams.io:80/public)
 #   AGENTTEAMS_NACOS_USERNAME              Default Nacos username for nacos:// package imports (optional)
@@ -49,8 +51,11 @@
 
 set -e
 
+_INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=defaults.env
+source "${_INSTALL_DIR}/defaults.env"
+
 AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-}"
-AGENTTEAMS_KNOWN_STABLE_VERSION="v1.1.2"   # fallback if GitHub API is unreachable
 
 # Returns 0 (true) if $1 < $2 using semver order; "latest" is treated as greatest
 _ver_lt() {
@@ -59,9 +64,6 @@ _ver_lt() {
     [ "$1" = "$2" ] && return 1
     [ "$(printf '%s\n%s' "$1" "$2" | sort -V | head -1)" = "$1" ]
 }
-AGENTTEAMS_NON_INTERACTIVE="${AGENTTEAMS_NON_INTERACTIVE:-0}"
-AGENTTEAMS_MOUNT_SOCKET="${AGENTTEAMS_MOUNT_SOCKET:-1}"
-AGENTTEAMS_DOCKER_PROXY="${AGENTTEAMS_DOCKER_PROXY:-1}"
 STEP_RESULT=""  # Used by state machine to signal "back" navigation
 
 # ============================================================
@@ -1026,17 +1028,16 @@ HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
-    MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-manager:${AGENTTEAMS_VERSION}}"
-    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-manager-copaw:${AGENTTEAMS_VERSION}}"
-    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-worker:${AGENTTEAMS_VERSION}}"
-    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-copaw-worker:${AGENTTEAMS_VERSION}}"
-    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
-    EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:${AGENTTEAMS_VERSION}}"
-    # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
-    if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.0.4"; then
+    MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_MANAGER}:${AGENTTEAMS_VERSION}}"
+    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_MANAGER_COPAW}:${AGENTTEAMS_VERSION}}"
+    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_WORKER}:${AGENTTEAMS_VERSION}}"
+    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_COPAW_WORKER}:${AGENTTEAMS_VERSION}}"
+    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_HERMES_WORKER}:${AGENTTEAMS_VERSION}}"
+    EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_EMBEDDED}:${AGENTTEAMS_VERSION}}"
+    if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "${AGENTTEAMS_COPAW_WORKER_MIN_VERSION}"; then
         COPAW_WORKER_IMAGE=""
     fi
-    if [ -z "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+    if [ -z "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "${AGENTTEAMS_HERMES_WORKER_MIN_VERSION}"; then
         HERMES_WORKER_IMAGE=""
     fi
 }
@@ -1058,8 +1059,8 @@ resolve_embedded_image() {
         return 0
     fi
 
-    local _versioned="${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:${AGENTTEAMS_VERSION}"
-    local _latest="${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:latest"
+    local _versioned="${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_EMBEDDED}:${AGENTTEAMS_VERSION}"
+    local _latest="${AGENTTEAMS_REGISTRY}/higress/${AGENTTEAMS_IMAGE_EMBEDDED}:latest"
 
     # Skip probe when AGENTTEAMS_VERSION is "latest" — no point trying the same tag twice.
     if [ "${AGENTTEAMS_VERSION}" = "latest" ]; then
@@ -1076,7 +1077,7 @@ resolve_embedded_image() {
     # bundled all infrastructure.  Falling back to hiclaw-embedded:latest would
     # silently swap in the v1.1.0 architecture (embedded kube-apiserver) which
     # crashes under QEMU on Apple Silicon.  Auto-activate legacy mode instead.
-    if _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
+    if _ver_lt "${AGENTTEAMS_VERSION}" "${AGENTTEAMS_EMBEDDED_MIN_VERSION}"; then
         log "INFO: ${AGENTTEAMS_VERSION} predates hiclaw-embedded; switching to legacy all-in-one manager architecture."
         log "WARNING: Legacy all-in-one mode requires AGENTTEAMS_VERSION <= v1.0.9 (older bundled manager image)."
         log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
@@ -2351,17 +2352,17 @@ step_network() {
 
 step_ports() {
     log "$(msg port.title)"
-    prompt AGENTTEAMS_PORT_GATEWAY "$(msg port.gateway_prompt)" "18080" || return 0
-    prompt AGENTTEAMS_PORT_CONSOLE "$(msg port.console_prompt)" "18001" || return 0
-    prompt AGENTTEAMS_PORT_ELEMENT_WEB "$(msg port.element_prompt)" "18088" || return 0
-    prompt AGENTTEAMS_PORT_MANAGER_CONSOLE "$(msg port.manager_console_prompt)" "18888" || return 0
+    prompt AGENTTEAMS_PORT_GATEWAY "$(msg port.gateway_prompt)" "${AGENTTEAMS_PORT_GATEWAY}" || return 0
+    prompt AGENTTEAMS_PORT_CONSOLE "$(msg port.console_prompt)" "${AGENTTEAMS_PORT_CONSOLE}" || return 0
+    prompt AGENTTEAMS_PORT_ELEMENT_WEB "$(msg port.element_prompt)" "${AGENTTEAMS_PORT_ELEMENT_WEB}" || return 0
+    prompt AGENTTEAMS_PORT_MANAGER_CONSOLE "$(msg port.manager_console_prompt)" "${AGENTTEAMS_PORT_MANAGER_CONSOLE}" || return 0
     log ""
 }
 
 step_domains() {
     log "$(msg domain.title)"
     log "$(msg domain.hint)"
-    prompt AGENTTEAMS_MATRIX_DOMAIN "$(msg domain.matrix_prompt)" "matrix-local.agentteams.io:${AGENTTEAMS_PORT_GATEWAY}" || return 0
+    prompt AGENTTEAMS_MATRIX_DOMAIN "$(msg domain.matrix_prompt)" "${AGENTTEAMS_MATRIX_DOMAIN_HOST_SUFFIX}:${AGENTTEAMS_PORT_GATEWAY}" || return 0
     prompt AGENTTEAMS_MATRIX_CLIENT_DOMAIN "$(msg domain.element_prompt)" "matrix-client-local.agentteams.io" || return 0
     prompt AGENTTEAMS_AI_GATEWAY_DOMAIN "$(msg domain.gateway_prompt)" "aigw-local.agentteams.io" || return 0
     prompt AGENTTEAMS_FS_DOMAIN "$(msg domain.fs_prompt)" "fs-local.agentteams.io" || return 0

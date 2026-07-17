@@ -1,0 +1,23 @@
+{
+  "project_meta": {
+    "plan_type": "dag",
+    "project_id": "demo-project-20260717-120000",
+    "requester": "@admin:matrix-local.agentteams.io:18080",
+    "source": "characterization-fixture",
+    "status": "active",
+    "tasks": [
+      {
+        "assigned_to": "@worker-a:matrix-local.agentteams.io:18080",
+        "depends_on": [],
+        "status": "planned",
+        "task_id": "demo-project-20260717-120000-01",
+        "title": "First task"
+      }
+    ],
+    "title": "Demo DAG project"
+  },
+  "project_plan": "# Demo DAG project\n\n- Project ID: `demo-project-20260717-120000`\n- Status: `active`\n- Plan Type: `dag`\n- Requester: `@admin:matrix-local.agentteams.io:18080`\n\n## Tasks\n- `demo-project-20260717-120000-01` First task -> @worker-a:matrix-local.agentteams.io:18080; deps: none; status: planned\n",
+  "task_meta": null,
+  "task_spec": null,
+  "task_result": null
+}

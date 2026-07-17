@@ -8,7 +8,6 @@
 
 set -e
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
-source /opt/hiclaw/scripts/lib/merge-openclaw-config.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-}"
@@ -152,89 +151,10 @@ ln -sfn "${WORKSPACE}/skills" /opt/hiclaw/agent/skills
 log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 
 # ============================================================
-# Step 3: Start file sync
+# Step 3: Start file sync (background daemon)
 # ============================================================
-#
-# ── File Sync Design Principle ──────────────────────────────────────────────
-#
-#   The party that writes a file is responsible for:
-#     1. Pushing it to MinIO immediately (Local -> Remote)
-#     2. Notifying the other side via Matrix @mention so they can pull on demand
-#
-#   Local -> Remote: change-triggered push of Worker-managed content
-#     - Uses find to detect files modified after the last pull; only runs mc mirror when needed
-#     - Avoids mc mirror --watch TOCTOU bug (crashes on atomic ops like npm install)
-#     - The bulk mirror excludes openclaw.json (local-first field merge; see merge-openclaw-config.sh),
-#       SOUL.md/AGENTS.md/HEARTBEAT.md (handled by the per-file loop below
-#       with an mtime guard), and various caches.
-#     - The per-file `mc cp`-if-newer loop pushes SOUL.md/AGENTS.md/HEARTBEAT.md
-#       only when the local copy was modified after the last pull. This lets
-#       the agent persist its own self-edits (HEARTBEAT.md checklist tweaks,
-#       SOUL.md "personality evolution") without pushing back the unmodified
-#       package content that was just pulled. mc mirror is run before the
-#       touch ${PULL_MARKER} on every pull path, so package content always
-#       has mtime <= PULL_MARKER and the -nt check stays false until the
-#       agent itself writes.
-#
-#   Remote -> Local: on-demand pull via file-sync skill (triggered by Manager @mention)
-#     + 5-minute fallback pull of Manager-managed paths as safety net
-#       The fallback refreshes ${PULL_MARKER} so the change-triggered loop
-#       does not misinterpret freshly-pulled openclaw.json/skills mtimes as
-#       agent edits and spin forever on no-op pushes.
-#
-# ────────────────────────────────────────────────────────────────────────────
-(
-    while true; do
-        # Only push files modified AFTER the last pull (avoids pushing back freshly-pulled files)
-        CHANGED=$(find "${WORKSPACE}/" -type f -newer "${PULL_MARKER}" 2>/dev/null | head -1)
-        if [ -n "${CHANGED}" ]; then
-            ensure_mc_credentials 2>/dev/null || true
-            if ! mc mirror "${WORKSPACE}/" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" --overwrite \
-                --exclude "openclaw.json" \
-                --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
-                --exclude "credentials/**" \
-                --exclude ".cache/**" --exclude ".npm/**" \
-                --exclude ".local/**" --exclude ".mc/**" --exclude "*.lock" \
-                --exclude ".last-pull" \
-                --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**" \
-                --exclude "SOUL.md" --exclude "AGENTS.md" --exclude "HEARTBEAT.md" 2>&1; then
-                log "WARNING: Local->Remote sync failed"
-            fi
-            # Per-file push for agent-self-modifiable files: only when locally
-            # modified after the last pull. See block comment above for design.
-            for _mf in SOUL.md AGENTS.md HEARTBEAT.md; do
-                if [ -f "${WORKSPACE}/${_mf}" ] && [ "${WORKSPACE}/${_mf}" -nt "${PULL_MARKER}" ]; then
-                    mc cp "${WORKSPACE}/${_mf}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/${_mf}" 2>/dev/null || true
-                fi
-            done
-        fi
-        sleep 5
-    done
-) &
-log "Local->Remote change-triggered sync started (PID: $!)"
-
-# Remote -> Local: fallback pull of Manager-managed files (safety net, every 5m)
-# Normal operation relies on on-demand pulls via file-sync skill when Manager @mentions.
-# openclaw.json uses local-first merge (see merge-openclaw-config.sh): existing
-# workspace config is the base; MinIO only overlays models, gateway, channels, plugins rules.
-(
-    while true; do
-        sleep 300
-        ensure_mc_credentials 2>/dev/null || true
-        mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" /tmp/openclaw-remote.json 2>/dev/null || true
-        merge_openclaw_config /tmp/openclaw-remote.json "${WORKSPACE}/openclaw.json"
-        rm -f /tmp/openclaw-remote.json
-        mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/config/mcporter.json" "${WORKSPACE}/config/mcporter.json" 2>/dev/null || true
-        mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
-        find "${WORKSPACE}/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-        mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${AGENTTEAMS_ROOT}/shared/" --overwrite --newer-than "5m" 2>/dev/null || true
-        # Refresh PULL_MARKER so the change-triggered push loop doesn't
-        # re-trigger forever on freshly-pulled openclaw.json/skills mtimes,
-        # and so the per-file -nt guard correctly classifies post-pull edits.
-        touch "${PULL_MARKER}"
-    done
-) &
-log "Remote->Local fallback sync started (Manager-managed files only, every 5m, PID: $!)"
+python3 -m agentteams_sync daemon --contract=openclaw &
+log "Background sync daemon started (PID: $!, contract=openclaw)"
 
 # ============================================================
 # Step 4: Configure mcporter (MCP tool CLI)
@@ -272,55 +192,8 @@ cd "${WORKSPACE}"
 find "${HOME}/.openclaw/agents" -name "*.jsonl.lock" -delete 2>/dev/null || true
 log "Cleaned up any orphaned session write locks"
 
-# Clean Matrix crypto storage (SQLite WAL may be corrupted after unclean shutdown)
-# Crypto state is re-negotiated on startup; losing it only means re-establishing E2EE sessions
-rm -rf "${HOME}/.openclaw/matrix" 2>/dev/null || true
-log "Cleaned Matrix crypto storage (will re-establish E2EE sessions)"
-
-# ============================================================
-# Step 5b: Re-login to Matrix to get fresh access token + device ID
-# ============================================================
-# Under E2EE, reusing the old access token (same device_id) with a new
-# identity key (crypto storage was just wiped) causes other clients to
-# reject key distribution. Re-login creates a new device_id, matching
-# the Manager's behavior and allowing clean E2EE session establishment.
-MATRIX_PASSWORD_FILE="${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/credentials/matrix/password"
-MATRIX_PASSWORD=$(mc cat "${MATRIX_PASSWORD_FILE}" 2>/dev/null) || true
-if [ -n "${MATRIX_PASSWORD}" ]; then
-    # Read homeserver URL from openclaw.json (already pulled from MinIO)
-    MATRIX_SERVER=$(jq -r '.channels.matrix.homeserver // empty' "${WORKSPACE}/openclaw.json" 2>/dev/null)
-
-    if [ -n "${MATRIX_SERVER}" ]; then
-        log "Re-logging into Matrix to get fresh access token and device ID..."
-        LOGIN_RESP=$(curl -sf -X POST "${MATRIX_SERVER}/_matrix/client/v3/login" \
-            -H 'Content-Type: application/json' \
-            -d '{
-                "type": "m.login.password",
-                "identifier": {"type": "m.id.user", "user": "'"${WORKER_NAME}"'"},
-                "password": "'"${MATRIX_PASSWORD}"'"
-            }' 2>/dev/null) || true
-
-        NEW_TOKEN=$(echo "${LOGIN_RESP}" | jq -r '.access_token // empty' 2>/dev/null)
-        NEW_DEVICE=$(echo "${LOGIN_RESP}" | jq -r '.device_id // empty' 2>/dev/null)
-
-        if [ -n "${NEW_TOKEN}" ] && [ "${NEW_TOKEN}" != "null" ]; then
-            # Update openclaw.json with the fresh token
-            jq --arg token "${NEW_TOKEN}" '.channels.matrix.accessToken = $token' \
-                "${WORKSPACE}/openclaw.json" > /tmp/openclaw-relogin.json \
-                && mv /tmp/openclaw-relogin.json "${WORKSPACE}/openclaw.json"
-            log "Matrix re-login successful (new device: ${NEW_DEVICE}, token prefix: ${NEW_TOKEN:0:10}...)"
-        else
-            log "WARNING: Matrix re-login failed, using existing access token (E2EE may not work with Element Web)"
-            log "  Response: ${LOGIN_RESP}"
-        fi
-    else
-        log "WARNING: Missing homeserver URL in openclaw.json, skipping Matrix re-login"
-    fi
-    # Clear password from memory
-    MATRIX_PASSWORD=""
-else
-    log "No Matrix password found in MinIO, skipping re-login (E2EE may not work after restart)"
-fi
+# Matrix E2EE crypto wipe + re-login (O13.5 — agentteams_sync openclaw-matrix CLI)
+python3 -m agentteams_sync openclaw-matrix --contract=openclaw
 
 # Disable full-process respawn so the CLI uses its internal restart loop.
 # Without this, config reload spawns a detached child and exits, killing the container.

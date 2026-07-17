@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" = mirror ] || [ "$1" = cp ] || [ "$1" = ls ] || [ "$1" = stat ]; then
+  if [ "$1" = mirror ] && [ -d "${3:-}" ]; then mkdir -p "${3}"; fi
+  exit 0
+fi
+exit 0

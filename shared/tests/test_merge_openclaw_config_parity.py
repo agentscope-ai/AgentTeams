@@ -1,22 +1,20 @@
-"""Golden/parity test for the openclaw.json merge, Python side.
+"""Golden/parity test for the openclaw.json merge implementations.
+
+**Phase 4 acceptance suite (remediation S0.3 / M4.1):** Do not change merge
+rules without updating fixtures and explicit Phase 4 review. The canonical
+implementation is ``agentteams_openclaw_merge``; ``copaw_worker.sync`` and
+``hermes_worker.sync`` delegate to it.
 
 Feeds the shared fixture pairs under
 ``shared/tests/fixtures/openclaw-merge/<case>/{remote,local,expected}.json``
-through ``_merge_openclaw_config`` in BOTH Python implementations and asserts
-the merged output is JSON-equal to ``expected.json``. The SAME fixtures are
-also consumed by ``shared/tests/test-merge-openclaw-config.sh`` (shell impl,
-jq-based) — see ``shared/tests/fixtures/openclaw-merge/README.md`` for the
-shared-fixture contract.
-
-Both packages' ``src`` roots are added to ``sys.path`` for the duration of
-this module's import (rather than requiring ``pip install -e`` for both
-simultaneously) — ``copaw_worker.sync`` needs its sibling
-``copaw_worker.bridge`` importable, so isolated file-path loading isn't
-enough. ``hermes_worker.sync`` has no such intra-package import but is
-loaded the same way for consistency.
+through the merge function and asserts the merged output is JSON-equal to
+``expected.json``. The SAME fixtures are consumed by
+``shared/tests/test-merge-openclaw-config.sh`` (shell wrapper calling
+``python3 -m agentteams_openclaw_merge``) — see
+``shared/tests/fixtures/openclaw-merge/README.md`` for the shared-fixture
+contract.
 
 Run with: python -m pytest shared/tests/test_merge_openclaw_config_parity.py
-(no external PYTHONPATH needed; both package roots are added here.)
 """
 from __future__ import annotations
 
@@ -33,6 +31,7 @@ FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "openclaw-merge"
 
 COPAW_SRC = REPO_ROOT / "copaw" / "src"
 HERMES_SRC = REPO_ROOT / "hermes" / "src"
+MERGE_SRC = REPO_ROOT / "shared" / "python" / "agentteams_openclaw_merge" / "src"
 
 
 def _load_package_module(src_root: Path, module_name: str) -> ModuleType:
@@ -41,8 +40,6 @@ def _load_package_module(src_root: Path, module_name: str) -> ModuleType:
     if inserted:
         sys.path.insert(0, src_str)
     try:
-        # Force a fresh import bound to this src_root even if a module of the
-        # same name was already imported from a different path earlier.
         sys.modules.pop(module_name, None)
         top_level = module_name.split(".", 1)[0]
         sys.modules.pop(top_level, None)
@@ -60,6 +57,11 @@ def _fixture_cases() -> list[Path]:
 
 
 @pytest.fixture(scope="module")
+def merge_module():
+    return _load_package_module(MERGE_SRC, "agentteams_openclaw_merge.merge")
+
+
+@pytest.fixture(scope="module")
 def copaw_sync():
     return _load_package_module(COPAW_SRC, "copaw_worker.sync")
 
@@ -69,31 +71,31 @@ def hermes_sync():
     return _load_package_module(HERMES_SRC, "hermes_worker.sync")
 
 
-@pytest.mark.parametrize("case_dir", _fixture_cases(), ids=lambda p: p.name)
-def test_copaw_merge_matches_golden(copaw_sync, case_dir: Path):
+def _merge_case(merge_fn, case_dir: Path) -> None:
     remote_text = (case_dir / "remote.json").read_text(encoding="utf-8")
     local_text = (case_dir / "local.json").read_text(encoding="utf-8")
     expected = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
-
-    merged_text = copaw_sync._merge_openclaw_config(remote_text, local_text)
-
+    merged_text = merge_fn(remote_text, local_text)
     assert json.loads(merged_text) == expected
+
+
+@pytest.mark.parametrize("case_dir", _fixture_cases(), ids=lambda p: p.name)
+def test_shared_merge_matches_golden(merge_module, case_dir: Path):
+    _merge_case(merge_module.merge_openclaw_config, case_dir)
+
+
+@pytest.mark.parametrize("case_dir", _fixture_cases(), ids=lambda p: p.name)
+def test_copaw_merge_matches_golden(copaw_sync, case_dir: Path):
+    _merge_case(copaw_sync._merge_openclaw_config, case_dir)
 
 
 @pytest.mark.parametrize("case_dir", _fixture_cases(), ids=lambda p: p.name)
 def test_hermes_merge_matches_golden(hermes_sync, case_dir: Path):
-    remote_text = (case_dir / "remote.json").read_text(encoding="utf-8")
-    local_text = (case_dir / "local.json").read_text(encoding="utf-8")
-    expected = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
-
-    merged_text = hermes_sync._merge_openclaw_config(remote_text, local_text)
-
-    assert json.loads(merged_text) == expected
+    _merge_case(hermes_sync._merge_openclaw_config, case_dir)
 
 
 @pytest.mark.parametrize("case_dir", _fixture_cases(), ids=lambda p: p.name)
 def test_copaw_and_hermes_agree(copaw_sync, hermes_sync, case_dir: Path):
-    """Belt-and-braces: the two Python impls must also agree with each other."""
     remote_text = (case_dir / "remote.json").read_text(encoding="utf-8")
     local_text = (case_dir / "local.json").read_text(encoding="utf-8")
 

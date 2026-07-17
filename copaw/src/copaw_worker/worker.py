@@ -23,7 +23,8 @@ from rich.panel import Panel
 
 from copaw_worker.config import WorkerConfig
 from copaw_worker.sync import FileSync, sync_loop, push_loop
-from copaw_worker.bridge import bridge_openclaw_to_copaw
+from copaw_worker.matrix_bootstrap import MatrixBootstrapClient
+from copaw_worker.workspace_layout import WorkspaceLayout
 from copaw_worker.worker_api import WorkerAPIServer
 from copaw_worker.health import HealthState, check_matrix_service
 
@@ -36,10 +37,14 @@ class Worker:
         self.config = config
         self.worker_name = config.worker_name
         self.sync: Optional[FileSync] = None
-        self._copaw_working_dir: Optional[Path] = None
+        self._layout: Optional[WorkspaceLayout] = None
         self._runner = None
         self._channel_manager = None
         self._bg_tasks: list[asyncio.Task] = []
+
+    @property
+    def _copaw_working_dir(self) -> Optional[Path]:
+        return self._layout.copaw_working_dir if self._layout else None
 
     # ------------------------------------------------------------------
     # Public API
@@ -117,90 +122,42 @@ class Worker:
             )
         )
 
-        # 1. Ensure mc (MinIO Client) is available
         self._ensure_mc()
 
-        # 2. Init file sync
         self.sync = FileSync(
             endpoint=self.config.minio_endpoint,
             access_key=self.config.minio_access_key,
             secret_key=self.config.minio_secret_key,
             bucket=self.config.minio_bucket,
             worker_name=self.worker_name,
+            worker_cr_name=self.config.worker_cr_name,
             secure=self.config.minio_secure,
             local_dir=self.config.install_dir / self.worker_name,
         )
 
-        # 2. Full mirror from MinIO (restore all state: config, sessions, sync token, etc.)
-        #    Mirrors the OpenClaw worker's startup approach: pull everything first,
-        #    then use selective sync during runtime. Controller writes and worker
-        #    container start can be close together, so tolerate a short initial
-        #    storage visibility race before giving up.
-        openclaw_cfg = None
-        max_attempts = 12
-        for attempt in range(1, max_attempts + 1):
-            console.print("[yellow]Pulling all files from MinIO...[/yellow]")
-            try:
-                self.sync.mirror_all()
-                openclaw_cfg = self.sync.get_config()
-                break
-            except Exception as exc:
-                if attempt >= max_attempts:
-                    console.print(f"[red]Failed to read worker config from MinIO: {exc}[/red]")
-                    return False
-                logger.warning(
-                    "Worker config not ready yet (attempt %s/%s): %s",
-                    attempt,
-                    max_attempts,
-                    exc,
-                )
-                await asyncio.sleep(5)
+        openclaw_cfg = await self._mirror_until_config_ready()
+        if openclaw_cfg is None:
+            return False
 
-        # 3b. Re-login to Matrix to get fresh access token + device ID
-        #     Under E2EE, reusing the old access token (same device_id) with a
-        #     regenerated identity key causes other clients to reject key
-        #     distribution. Re-login creates a new device_id, matching the
-        #     Manager's behavior.
-        openclaw_cfg = self._matrix_relogin(openclaw_cfg)
-        self._join_pending_matrix_invites(openclaw_cfg)
+        matrix_bootstrap = MatrixBootstrapClient(
+            self.sync, worker_name=self.worker_name
+        )
+        openclaw_cfg = matrix_bootstrap.relogin(openclaw_cfg)
+        matrix_bootstrap.join_pending_invites(openclaw_cfg)
 
-        # 4. Set up CoPaw working directory
-        self._copaw_working_dir = self.config.install_dir / self.worker_name / ".copaw"
-        self._copaw_working_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write SOUL.md / AGENTS.md into CoPaw working dir (read from local copies pulled by mirror_all)
-        for name in ("SOUL.md", "AGENTS.md"):
-            src = self.sync.local_dir / name
-            if src.exists():
-                (self._copaw_working_dir / name).write_text(src.read_text())
-
-        # 5. Bridge openclaw.json -> CoPaw config.json + providers.json
-        #    Infer gateway port from FS endpoint so bridge's _port_remap uses
-        #    the correct host port instead of the hardcoded default.
-        if not os.environ.get("AGENTTEAMS_PORT_GATEWAY"):
-            from urllib.parse import urlparse
-            _parsed = urlparse(self.config.minio_endpoint)
-            if _parsed.port:
-                os.environ["AGENTTEAMS_PORT_GATEWAY"] = str(_parsed.port)
+        self._layout = WorkspaceLayout.for_sync(self.sync, profile="worker")
 
         console.print("[yellow]Bridging configuration to CoPaw...[/yellow]")
         try:
-            bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
+            self._layout.materialize(openclaw_cfg, bootstrap=True)
+            self._layout.sync_skills(
+                list_skills=self.sync.list_skills,
+                worker_name=self.worker_name,
+            )
         except Exception as exc:
             console.print(f"[red]Config bridge failed: {exc}[/red]")
             return False
 
-        # 6. Copy mcporter config into CoPaw working dir so mcporter finds
-        #    ./config/mcporter.json when running from COPAW_WORKING_DIR
-        self._copy_mcporter_config()
-
-        # 7. Install MatrixChannel into CoPaw's custom_channels dir
-        self._install_matrix_channel()
-
-        # 8. Sync skills from MinIO into CoPaw's active_skills dir
-        self._sync_skills()
-
-        # 9. Start background MinIO sync
         self._spawn_bg_task(
             sync_loop(
                 self.sync,
@@ -209,7 +166,6 @@ class Worker:
             ),
             name="sync_loop",
         )
-        # Local -> Remote: change-triggered push (every 5s, mirrors openclaw worker behavior)
         self._spawn_bg_task(push_loop(self.sync, check_interval=5), name="push_loop")
 
         console.print("[bold green]Worker initialized.[/bold green]")
@@ -224,6 +180,28 @@ class Worker:
                 "(costs ~500MB extra RAM).[/dim]"
             )
         return True
+
+    async def _mirror_until_config_ready(self) -> Optional[dict]:
+        max_attempts = 12
+        for attempt in range(1, max_attempts + 1):
+            console.print("[yellow]Pulling all files from MinIO...[/yellow]")
+            try:
+                self.sync.mirror_all()
+                return self.sync.get_config()
+            except Exception as exc:
+                if attempt >= max_attempts:
+                    console.print(
+                        f"[red]Failed to read worker config from MinIO: {exc}[/red]"
+                    )
+                    return None
+                logger.warning(
+                    "Worker config not ready yet (attempt %s/%s): %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                await asyncio.sleep(5)
+        return None
 
     # ------------------------------------------------------------------
     # CoPaw runner
@@ -248,7 +226,6 @@ class Worker:
 
         clear_builtin_channel_cache()
 
-        # --- Worker API server (liveness/readiness probes) ---
         worker_port = self.config.worker_port or (port + 1)
         health_state = HealthState(
             self._copaw_working_dir / "health.json"
@@ -259,14 +236,9 @@ class Worker:
             return {"liveness": "alive", "healthiness": snap.healthiness}
 
         async def _readiness():
-            # Mark startup-only components as healthy — they were validated
-            # during _initialize() and don't need runtime re-checking.
             for comp in ("sync", "bridge", "model"):
                 health_state.update(comp, "healthy", "validated at startup")
 
-            # Probe CoPaw console (TCP reachability — CoPaw has no /health endpoint).
-            # Offload the blocking connect to a thread so a stalled console can't
-            # block the event loop (and the Matrix sync loop) during a readiness probe.
             import socket as _socket
 
             def _probe_console() -> None:
@@ -279,7 +251,6 @@ class Worker:
             except Exception as e:
                 health_state.update("copaw", "unhealthy", f"console unreachable: {e}")
 
-            # Probe Matrix homeserver
             matrix_cfg = {}
             try:
                 cfg_path = self.sync.local_dir / "openclaw.json"
@@ -338,13 +309,11 @@ class Worker:
         from copaw.app.channels.utils import make_process_from_runner
         from copaw.app.channels.registry import clear_builtin_channel_cache
 
-        # Force registry reload so newly installed matrix_channel.py is picked up
         clear_builtin_channel_cache()
 
         self._runner = AgentRunner()
         await self._runner.start()
 
-        # load_config reads COPAW_WORKING_DIR/config.json (set by bridge.py)
         config = load_config()
         self._channel_manager = ChannelManager.from_config(
             process=make_process_from_runner(self._runner),
@@ -363,154 +332,21 @@ class Worker:
         finally:
             await self._channel_manager.stop_all()
             await self._runner.stop()
-            # Clear refs so stop() doesn't double-call
             self._channel_manager = None
             self._runner = None
-
-    # ------------------------------------------------------------------
-    # Matrix re-login (E2EE device_id refresh)
-    # ------------------------------------------------------------------
-
-    def _matrix_relogin(self, openclaw_cfg: dict) -> dict:
-        """Re-login to Matrix to get a fresh access token and device ID.
-
-        Under E2EE, crypto state is not persisted across restarts. Reusing
-        the old access token keeps the same device_id but with a new identity
-        key, which causes other clients (Element Web) to reject key
-        distribution. A fresh login creates a new device_id, matching the
-        Manager's restart behavior.
-
-        The password is read directly from MinIO (never written to disk).
-        """
-        import json
-        import urllib.request
-        import urllib.error
-
-        # Read password directly from MinIO via mc cat (no disk I/O)
-        password_key = f"{self.sync._prefix}/credentials/matrix/password"
-        matrix_password = self.sync._cat(password_key)
-
-        if not matrix_password:
-            console.print(
-                "[dim]No Matrix password found in MinIO, skipping re-login "
-                "(E2EE may not work after restart)[/dim]"
-            )
-            return openclaw_cfg
-
-        matrix_password = matrix_password.strip()
-        matrix_cfg = openclaw_cfg.get("channels", {}).get("matrix", {})
-        from .bridge import _port_remap, _is_in_container
-        homeserver = _port_remap(
-            matrix_cfg.get("homeserver", ""), _is_in_container()
-        )
-
-        if not homeserver or not matrix_password:
-            return openclaw_cfg
-
-        login_url = f"{homeserver}/_matrix/client/v3/login"
-        login_body = json.dumps({
-            "type": "m.login.password",
-            "identifier": {"type": "m.id.user", "user": self.worker_name},
-            "password": matrix_password,
-        }).encode()
-
-        try:
-            req = urllib.request.Request(
-                login_url,
-                data=login_body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                login_resp = json.loads(resp.read())
-
-            new_token = login_resp.get("access_token", "")
-            new_device = login_resp.get("device_id", "")
-
-            if new_token:
-                openclaw_cfg["channels"]["matrix"]["accessToken"] = new_token
-                # Write updated config back to disk so bridge reads the new token
-                config_path = self.sync.local_dir / "openclaw.json"
-                with open(config_path, "w") as f:
-                    json.dump(openclaw_cfg, f, indent=2, ensure_ascii=False)
-                console.print(
-                    f"[green]Matrix re-login OK[/green] "
-                    f"(device: {new_device}, token: {new_token[:10]}...)"
-                )
-            else:
-                console.print(
-                    "[yellow]Matrix re-login returned no token, "
-                    "using existing access token[/yellow]"
-                )
-        except Exception as exc:
-            console.print(
-                f"[yellow]Matrix re-login failed: {exc} — "
-                f"using existing access token (E2EE may not work)[/yellow]"
-            )
-
-        return openclaw_cfg
-
-    def _join_pending_matrix_invites(self, openclaw_cfg: dict) -> None:
-        """Accept pending Matrix invites before CoPaw's channel loop starts."""
-        import json
-        import urllib.parse
-        import urllib.request
-
-        matrix_cfg = openclaw_cfg.get("channels", {}).get("matrix", {})
-        access_token = matrix_cfg.get("accessToken", "")
-        from .bridge import _port_remap, _is_in_container
-        homeserver = _port_remap(
-            matrix_cfg.get("homeserver", ""), _is_in_container()
-        )
-        if not homeserver or not access_token:
-            return
-
-        headers = {"Authorization": f"Bearer {access_token}"}
-        sync_url = (
-            f"{homeserver}/_matrix/client/v3/sync?"
-            "timeout=0&full_state=true"
-        )
-        try:
-            req = urllib.request.Request(sync_url, headers=headers, method="GET")
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read())
-        except Exception as exc:
-            logger.warning("Matrix pending invite sync failed: %s", exc)
-            return
-
-        invites = (data.get("rooms", {}).get("invite") or {}).keys()
-        for room_id in invites:
-            encoded = urllib.parse.quote(room_id, safe="")
-            join_url = f"{homeserver}/_matrix/client/v3/join/{encoded}"
-            try:
-                req = urllib.request.Request(
-                    join_url,
-                    data=b"{}",
-                    headers={**headers, "Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=30):
-                    pass
-                logger.info("Joined pending Matrix invite: %s", room_id)
-            except Exception as exc:
-                logger.warning("Matrix invite join failed for %s: %s", room_id, exc)
 
     # ------------------------------------------------------------------
     # mc (MinIO Client) auto-install
     # ------------------------------------------------------------------
 
     def _ensure_mc(self) -> None:
-        """Ensure mc (MinIO Client) binary is available on PATH.
-
-        If not found, downloads the latest release from dl.min.io and installs
-        it to ~/.local/bin/mc (created if needed, added to PATH for this process).
-        """
+        """Ensure mc (MinIO Client) binary is available on PATH."""
         if shutil.which("mc"):
             logger.debug("mc already available")
             return
 
-        system = platform.system().lower()   # linux / darwin
-        machine = platform.machine().lower() # x86_64 / aarch64 / arm64
+        system = platform.system().lower()
+        machine = platform.machine().lower()
 
         arch_map = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
         arch = arch_map.get(machine, machine)
@@ -526,7 +362,10 @@ class Worker:
             install_dir.mkdir(parents=True, exist_ok=True)
             dest = install_dir / "mc"
         else:
-            console.print(f"[yellow]mc auto-install not supported on {system}, please install mc manually[/yellow]")
+            console.print(
+                f"[yellow]mc auto-install not supported on {system}, "
+                f"please install mc manually[/yellow]"
+            )
             return
 
         console.print(f"[yellow]mc not found, downloading from {url}...[/yellow]")
@@ -542,186 +381,36 @@ class Worker:
             os.environ["PATH"] = str(install_dir) + os.pathsep + os.environ.get("PATH", "")
             console.print(f"[green]mc installed to {dest}[/green]")
         except Exception as exc:
-            console.print(f"[yellow]mc auto-install failed: {exc}. Please install mc manually.[/yellow]")
-
-    # ------------------------------------------------------------------
-    # Skills sync
-    # ------------------------------------------------------------------
-
-    def _sync_skills(self) -> None:
-        """Seed CoPaw's active_skills dir with built-in skills, and make sure
-        Manager-pushed skills from MinIO are present in the standard-space
-        skills/ dir (already synced there by mirror_all()/pull_all()).
-
-        Manager-pushed skills are exposed to CoPaw's agent loop via the
-        `.copaw/workspaces/default/skills` symlink, which points at the
-        standard-space `skills/` directory — not by copying them into the
-        legacy `active_skills/` path (see copaw/AGENTS.md rule 5).
-        """
-        active_skills_dir = self._copaw_working_dir / "active_skills"
-        active_skills_dir.mkdir(parents=True, exist_ok=True)
-
-        # 0. Remove stale customized_skills that duplicate builtins.
-        #    After an upgrade the new CoPaw image may ship builtins (pdf, pptx …)
-        #    that were previously only available as customized copies.  If the old
-        #    customized_skills/ directory persists on disk, CoPaw loads both the
-        #    builtin AND the customized copy, causing duplicates in the UI.
-        self._dedup_customized_skills()
-
-        # 1. Seed CoPaw built-in skills as base layer.
-        # bridge.py has already patched copaw.constant.ACTIVE_SKILLS_DIR to point
-        # here, so sync_skills_to_working_dir() writes to the correct directory.
-        try:
-            from copaw.agents.skills_manager import sync_skills_to_working_dir
-            synced, skipped = sync_skills_to_working_dir(skill_names=None, force=False)
-            logger.info(
-                "Seeded CoPaw built-in skills: %d installed, %d already existed",
-                synced, skipped,
+            console.print(
+                f"[yellow]mc auto-install failed: {exc}. "
+                f"Please install mc manually.[/yellow]"
             )
-        except Exception as exc:
-            logger.warning("Failed to seed CoPaw built-in skills: %s", exc)
-
-        # 2. Manager-pushed skills from MinIO. These already live on disk at
-        #    self.sync.local_dir / "skills" / <name> (standard space), pulled
-        #    by mirror_all()/pull_all(). CoPaw's agent loop reads them through
-        #    the .copaw/workspaces/default/skills symlink to that directory,
-        #    so no copy into active_skills/ is needed or wanted here.
-        skill_names = self.sync.list_skills()
-        if not skill_names:
-            logger.info("No extra skills in MinIO for worker %s", self.worker_name)
-        else:
-            console.print(f"[green]Skills available: {', '.join(skill_names)}[/green]")
-
-        # 3. Remove stale skills from active_skills/ that are not CoPaw
-        #    builtins. Manager-pushed skills are never written here (see
-        #    step 2), so only builtins are eligible to remain.
-        try:
-            import copaw.agents.skills as _skills_pkg
-            builtin_skills_root = Path(_skills_pkg.__file__).resolve().parent
-            builtin_names = {
-                c.name for c in builtin_skills_root.iterdir()
-                if c.is_dir() and not c.name.startswith("_")
-            }
-        except (ImportError, AttributeError):
-            builtin_names = set()
-
-        keep_names = builtin_names | {"file-sync"}
-        for child in list(active_skills_dir.iterdir()):
-            if child.is_dir() and child.name not in keep_names:
-                shutil.rmtree(child)
-                logger.info("Removed stale active skill: %s", child.name)
-
-    def _dedup_customized_skills(self) -> None:
-        """Remove customized skills that shadow CoPaw builtins.
-
-        CoPaw discovers skills from two independent directories:
-          - builtin:     <site-packages>/copaw/agents/skills/<name>/
-          - customized:  <working_dir>/customized_skills/<name>/
-
-        After an upgrade, new builtins may overlap with stale customized copies
-        left over from a previous version.  This method detects the overlap and
-        removes the customized copy so only the (newer) builtin is loaded.
-        """
-        customized_dir = self._copaw_working_dir / "customized_skills"
-        if not customized_dir.is_dir():
-            return
-
-        # Collect builtin skill names from the installed copaw package
-        try:
-            import copaw.agents.skills as _skills_pkg
-            builtin_skills_root = Path(_skills_pkg.__file__).resolve().parent
-        except (ImportError, AttributeError):
-            return
-
-        builtin_names: set[str] = set()
-        if builtin_skills_root.is_dir():
-            for child in builtin_skills_root.iterdir():
-                if child.is_dir() and not child.name.startswith("_"):
-                    builtin_names.add(child.name)
-
-        if not builtin_names:
-            return
-
-        # Remove customized copies that duplicate a builtin
-        import shutil
-        for child in list(customized_dir.iterdir()):
-            if child.is_dir() and child.name in builtin_names:
-                shutil.rmtree(child)
-                logger.info(
-                    "Removed stale customized skill '%s' (now a builtin)",
-                    child.name,
-                )
-
-    # ------------------------------------------------------------------
-    # MatrixChannel installation
-    # ------------------------------------------------------------------
-
-    def _install_matrix_channel(self) -> None:
-        """Copy matrix_channel.py into COPAW_WORKING_DIR/custom_channels/.
-
-        CoPaw's CUSTOM_CHANNELS_DIR = WORKING_DIR / "custom_channels", and
-        WORKING_DIR is read from COPAW_WORKING_DIR env var at import time.
-        We set COPAW_WORKING_DIR in bridge.py before this runs, so the
-        directory is already correct.
-        """
-        custom_channels_dir = self._copaw_working_dir / "custom_channels"
-        custom_channels_dir.mkdir(parents=True, exist_ok=True)
-        src = Path(__file__).parent / "matrix_channel.py"
-        dst = custom_channels_dir / "matrix_channel.py"
-        shutil.copy2(src, dst)
-        logger.debug("MatrixChannel installed to %s", dst)
-
-    # ------------------------------------------------------------------
-    # mcporter config
-    # ------------------------------------------------------------------
-
-    def _copy_mcporter_config(self) -> None:
-        """Copy mcporter config from workspace root into CoPaw working dir.
-
-        pull_all writes to <local_dir>/config/mcporter.json (workspace root),
-        but mcporter looks for ./config/mcporter.json relative to cwd, which
-        is COPAW_WORKING_DIR (.copaw/). Copy it there so mcporter finds it.
-        """
-        src = self.sync.local_dir / "config" / "mcporter.json"
-        if not src.exists():
-            return
-        dst = self._copaw_working_dir / "config" / "mcporter.json"
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-        logger.info("mcporter config copied to %s", dst)
 
     # ------------------------------------------------------------------
     # File sync callback
     # ------------------------------------------------------------------
 
     async def _on_files_pulled(self, pulled_files: list[str]) -> None:
-        """Re-bridge config when Manager-managed files change (openclaw.json).
-        SOUL.md, AGENTS.md are Worker-managed and not pulled; use local copies."""
-        # Re-sync skills if any skill file changed
+        """Re-bridge config when Manager-managed files change (openclaw.json)."""
+        if self._layout is None:
+            return
+
         if any(f.startswith("skills/") for f in pulled_files):
-            self._sync_skills()
+            self._layout.sync_skills(
+                list_skills=self.sync.list_skills,
+                worker_name=self.worker_name,
+            )
 
-        # Copy mcporter config into CoPaw working dir when it changes
         if "config/mcporter.json" in pulled_files:
-            self._copy_mcporter_config()
+            self._layout.copy_mcporter_config()
 
-        needs_rebridge = "openclaw.json" in pulled_files
-        if not needs_rebridge:
+        if "openclaw.json" not in pulled_files:
             return
 
         console.print("[yellow]Config changed, re-bridging...[/yellow]")
         try:
             openclaw_cfg = self.sync.get_config()
-            # Use local Worker-managed files; fallback to MinIO for initial bootstrap
-            soul = (self.sync.local_dir / "SOUL.md").read_text() if (self.sync.local_dir / "SOUL.md").exists() else self.sync.get_soul()
-            agents = (self.sync.local_dir / "AGENTS.md").read_text() if (self.sync.local_dir / "AGENTS.md").exists() else self.sync.get_agents_md()
-
-            if soul:
-                (self._copaw_working_dir / "SOUL.md").write_text(soul)
-            if agents:
-                (self._copaw_working_dir / "AGENTS.md").write_text(agents)
-
-            bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
+            self._layout.rebridge(openclaw_cfg)
             console.print("[green]Config re-bridged.[/green]")
         except Exception as exc:
             console.print(f"[red]Re-bridge failed: {exc}[/red]")

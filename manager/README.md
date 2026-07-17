@@ -59,7 +59,7 @@ manager/
 │       │   └── references/ # worker-openclaw.json.tmpl
 │       ├── mcp-server-management/
 │       │   ├── SKILL.md
-│       │   └── references/ # mcp-github.yaml
+│       │   └── references/ # workflow docs (MCP YAML templates moved to manager/configs/mcp-templates/)
 │       └── matrix-server-management/
 │           └── SKILL.md
 ├── configs/

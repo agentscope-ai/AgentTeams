@@ -1,0 +1,26 @@
+{
+  "project_meta": {
+    "project_id": "demo-project-20260717-120000",
+    "title": "Demo DAG project",
+    "status": "active",
+    "source": "characterization-fixture",
+    "requester": "@admin:matrix-local.agentteams.io:18080",
+    "parent_task_id": null,
+    "created_at": "<ISO8601>"
+  },
+  "project_plan": "# Team Project: Demo DAG project\n\n**ID**: demo-project-20260717-120000\n**Created**: <ISO8601>\n\n## DAG Task Plan\n\n**Plan Type**: dag\n\n- [~] demo-project-20260717-120000-01 — First task (assigned: @worker-a:matrix-local.agentteams.io:18080)\n",
+  "task_meta": {
+    "task_id": "demo-project-20260717-120000-01",
+    "project_id": "demo-project-20260717-120000",
+    "task_title": "First task",
+    "assigned_to": "worker-a",
+    "room_id": "!team:matrix-local.agentteams.io:18080",
+    "status": "submitted",
+    "depends_on": [],
+    "assigned_at": "<ISO8601>",
+    "acknowledged_at": "<ISO8601>",
+    "submitted_at": "<ISO8601>"
+  },
+  "task_spec": "# Task: First task\n\nDeliver a short summary artifact.\n",
+  "task_result": "STATUS: SUCCESS\nSUMMARY: Completed first task for characterization fixture.\n\nDELIVERABLES:\n- shared/tasks/demo-project-20260717-120000-01/deliverable.md\n"
+}

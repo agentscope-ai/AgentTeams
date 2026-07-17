@@ -16,11 +16,20 @@ import (
 // embedded mode: Manager Agent openclaw.json manipulation, workers/teams/humans
 // registry JSON files.
 //
+// Phase C10.10: this package is on a deprecation path. It remains on the hot
+// reconcile path only for embedded installs (Manager allowlists and JSON
+// registries). Do not add new writers; prefer CR status and runtime config.
+// Removal is gated on Phase C11.4 after migration tooling drains legacy Teams.
+//
 // All state is persisted to OSS (MinIO) so that the Manager Agent container
 // can access it via mc mirror — this avoids cross-container filesystem issues.
 //
 // In incluster mode, construct with nil OSS — Enabled() will return false
 // and all methods become no-ops.
+//
+// Expiry: do not add new hot-path writers here. New coordination state belongs
+// in CR status, runtime config, or explicit migration tooling until Phase 11
+// removes registry read-modify-write from reconcile loops.
 type LegacyCompat struct {
 	OSS          oss.StorageClient
 	MatrixDomain string

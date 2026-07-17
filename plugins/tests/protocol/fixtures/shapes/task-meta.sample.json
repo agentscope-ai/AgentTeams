@@ -1,0 +1,12 @@
+{
+  "taskId": "example-task-20260717-120000-01",
+  "projectId": "example-project-20260717-120000",
+  "taskTitle": "Implement API endpoint",
+  "assignedTo": "@worker-a:matrix-local.agentteams.io:18080",
+  "roomId": "!room:matrix-local.agentteams.io:18080",
+  "status": "assigned",
+  "dependsOn": [],
+  "assignedAt": "2026-07-17T10:00:00+00:00",
+  "acknowledgedAt": null,
+  "submittedAt": null
+}

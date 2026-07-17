@@ -27,6 +27,19 @@ _detect_gateway_backend() {
     fi
 }
 
+# gateway_require_local_mcp_management — shared guard for MCP setup scripts.
+# Cloud (SAE) deployments must use the Alibaba Cloud AI Gateway console instead.
+# Returns 0 when local script-based MCP management is allowed; 1 otherwise.
+gateway_require_local_mcp_management() {
+    if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
+        echo "[gateway-api] ERROR: MCP Server management via script is not yet supported in cloud mode (AGENTTEAMS_RUNTIME=aliyun)." >&2
+        echo "[gateway-api] Please manage MCP Servers through the Alibaba Cloud AI Gateway console instead." >&2
+        echo "[gateway-api] Cloud MCP Server support will be added in a future release." >&2
+        return 1
+    fi
+    return 0
+}
+
 # ── Low-level request primitive (cookie auth + 1 re-login retry) ─────────────
 #
 # Shared by register-provider.sh's higress_api/higress_get/higress_delete and

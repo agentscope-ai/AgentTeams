@@ -152,6 +152,18 @@ if [ -z "${AGENTTEAMS_RUNTIME:-}" ]; then
     fi
 fi
 
+# ── Runtime helpers ───────────────────────────────────────────────────────────
+is_cloud_runtime() {
+    case "${AGENTTEAMS_RUNTIME}" in
+        aliyun|k8s) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_local_runtime() {
+    ! is_cloud_runtime
+}
+
 # ── Normalized variables ──────────────────────────────────────────────────────
 # AgentTeams runtime contract with local defaults.
 AGENTTEAMS_MATRIX_URL="${AGENTTEAMS_MATRIX_URL:-http://127.0.0.1:6167}"

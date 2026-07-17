@@ -97,6 +97,11 @@ BUILTIN_VERSION_ARG = --build-arg BUILTIN_VERSION=$(VERSION)
 
 # Named build context for shared libraries (requires BuildKit / Docker 23+)
 SHARED_LIB_CTX = --build-context shared=./shared/lib
+AGENTTEAMS_PROTOCOL_CTX = --build-context agentteams-protocol=./shared/python/agentteams_protocol
+AGENTTEAMS_OPENCLAW_MERGE_CTX = --build-context agentteams-openclaw-merge=./shared/python/agentteams_openclaw_merge
+AGENTTEAMS_SYNC_CTX = --build-context agentteams-sync=./shared/python/agentteams_sync
+AGENTTEAMS_MATRIX_FORMAT_CTX = --build-context agentteams-matrix-format=./shared/python/agentteams_matrix_format
+AGENTTEAMS_MATRIX_POLICIES_CTX = --build-context agentteams-matrix-policies=./shared/python/agentteams_matrix_policies
 
 # Named build context for local copaw_worker extension
 COPAW_WORKER_CTX = --build-context copaw-worker=./copaw
@@ -169,7 +174,7 @@ build-hiclaw-controller: ## Build agentteams-controller image (prerequisite for 
 
 build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile \
 		-t $(LOCAL_MANAGER) \
@@ -178,9 +183,10 @@ build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 
 build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Python runtime)
 	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_PROTOCOL_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
-		-f manager/Dockerfile.copaw \
+		-f manager/Dockerfile \
+		--target manager-copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
 		-t $(LOCAL_MANAGER_COPAW_LEGACY) \
 		.
@@ -196,7 +202,7 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_WORKER) \
 		-t $(LOCAL_WORKER_LEGACY) \
@@ -204,7 +210,7 @@ build-worker: ## Build Worker image
 
 build-copaw-worker: ## Build CoPaw Worker image
 	@echo "==> Building CoPaw Worker image: $(LOCAL_COPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_PROTOCOL_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_COPAW_WORKER) \
 		-t $(LOCAL_COPAW_WORKER_LEGACY) \
@@ -212,7 +218,7 @@ build-copaw-worker: ## Build CoPaw Worker image
 
 build-hermes-worker: ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_PROTOCOL_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(AGENTTEAMS_MATRIX_POLICIES_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
 		-t $(LOCAL_HERMES_WORKER_LEGACY) \
@@ -228,7 +234,7 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(AGENTTEAMS_PROTOCOL_CTX) $(AGENTTEAMS_OPENCLAW_MERGE_CTX) $(AGENTTEAMS_SYNC_CTX) $(AGENTTEAMS_MATRIX_FORMAT_CTX) $(DOCKER_BUILD_ARGS) \
 		-f qwenpaw/Dockerfile \
 		-t $(LOCAL_QWENPAW_WORKER) \
 		-t $(LOCAL_QWENPAW_WORKER_LEGACY) \

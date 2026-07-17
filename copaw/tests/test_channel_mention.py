@@ -19,15 +19,34 @@ def _make_channel(user_id: str = "@bot:hs.local") -> MatrixChannel:
     """Build a bare channel instance without going through __init__.
 
     ``MatrixChannel.__init__`` wires up BaseChannel/AsyncClient state we do
-    not need here; ``_apply_mention`` only touches ``self._user_id`` and
-    ``self._client`` (via ``_resolve_display_name``). Setting
-    ``_client = None`` forces the display-name resolver down its localpart
-    fallback, which keeps these tests deterministic.
+    not need here.  Initialise the attrs that unified ``MatrixChannel``
+    methods touch so tests do not depend on ``__init__``.
     """
     ch = MatrixChannel.__new__(MatrixChannel)
     ch._user_id = user_id
     ch._client = None
+    ch._typing_tasks = {}
+    ch._localpart_cache = {}
+    ch._startup_replay_buffer = []
+    ch._dm_room_cache = {}
+    ch._active_thread_roots = {}
     return ch
+
+
+class _SendClient:
+    def __init__(self):
+        self.rooms = {}
+        self.sent = []
+
+    async def room_send(
+        self,
+        room_id,
+        event_type,
+        content,
+        ignore_unverified_devices=True,
+    ):
+        self.sent.append((room_id, event_type, content, ignore_unverified_devices))
+        return SimpleNamespace(event_id="$reply")
 
 
 class _FakeClient:
@@ -77,7 +96,7 @@ def test_team_leader_assignment_in_dm_routes_to_team_room(tmp_path, monkeypatch)
     assert client.sent[0][2]["m.mentions"] == {
         "user_ids": ["@dag-team-1-dev:hs.local"],
     }
-    assert client.sent[0][2]["body"].startswith("@dag-team-1-dev:hs.local ")
+    assert client.sent[0][2]["body"].startswith("dag-team-1-dev ")
     assert "admin " not in client.sent[0][2]["body"]
 
 
@@ -180,7 +199,7 @@ def test_apply_mention_explicit_user_ids_prefixes_body_and_adds_anchor():
     )
 
     assert content["m.mentions"] == {"user_ids": ["@worker-a:hs.local"]}
-    assert content["body"].startswith("@worker-a:hs.local ")
+    assert content["body"].startswith("worker-a ")
     assert (
         'href="https://matrix.to/#/%40worker-a%3Ahs.local"'
         in content["formatted_body"]
@@ -204,7 +223,7 @@ def test_apply_mention_fallback_sender_id_when_no_explicit_list():
     )
 
     assert content["m.mentions"] == {"user_ids": ["@alice:hs.local"]}
-    assert "@alice:hs.local" in content["body"]
+    assert "alice" in content["body"]
     assert (
         'href="https://matrix.to/#/%40alice%3Ahs.local"'
         in content["formatted_body"]
@@ -223,8 +242,9 @@ def test_apply_mention_body_scan_rewrites_existing_mxid_to_anchor():
     ch._apply_mention(content, "!room:hs.local")
 
     assert content["m.mentions"] == {"user_ids": ["@worker-b:hs.local"]}
-    # Body already had the MXID — no duplicate prefix.
-    assert content["body"].count("@worker-b:hs.local") == 1
+    # Body MXID is rewritten to the localpart display name.
+    assert content["body"].count("worker-b") == 1
+    assert "@worker-b:hs.local" not in content["body"]
     # First occurrence in formatted_body is replaced with a matrix.to anchor.
     assert (
         'href="https://matrix.to/#/%40worker-b%3Ahs.local"'
@@ -303,7 +323,7 @@ def test_apply_mention_synthesizes_formatted_body_for_media_events():
     )
 
     assert content["format"] == "org.matrix.custom.html"
-    assert content["body"].startswith("@worker-d:hs.local ")
+    assert content["body"].startswith("worker-d ")
     assert (
         'href="https://matrix.to/#/%40worker-d%3Ahs.local"'
         in content["formatted_body"]
@@ -430,6 +450,10 @@ class _FakeContentType:
     TEXT = "text"
     DATA = "data"
     FILE = "file"
+    IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    REFUSAL = "refusal"
 
 
 class _FakeTextContent:
@@ -463,6 +487,7 @@ def _make_inbound_channel() -> MatrixChannel:
     ch = _make_channel(user_id="@copywriting-assistant:hs.local")
     ch._cfg = _FakeCfg()
     ch._room_histories = {}
+    ch._dm_room_cache = {}
     ch._command_registry = _FakeCommandRegistry()
     ch._is_dm_room = _false_dm
     ch._check_allowed = lambda *_args: True
@@ -472,6 +497,43 @@ def _make_inbound_channel() -> MatrixChannel:
     ch.enqueued = []
     ch._enqueue = ch.enqueued.append
     return ch
+
+
+def _wire_thread_part_sends(ch: MatrixChannel) -> None:
+    """Route thread flushes through ``send_content_parts`` for orchestration tests."""
+
+    async def _flush_pending_final_message_to_thread(room_id, meta):
+        meta_dict = meta if isinstance(meta, dict) else {}
+        pending = meta_dict.pop("matrix_pending_final_message", None)
+        if not pending:
+            return
+        parts = ch._message_to_content_parts(pending)
+        if not parts:
+            return
+        thread_root = (
+            meta_dict.get("matrix_thread_root_event_id")
+            or meta_dict.get("thread_root_event_id")
+            or meta_dict.get("matrix_own_thread_root_event_id")
+        )
+        thread_meta = ch._with_thread_relation_meta(meta_dict, thread_root)
+        await ch.send_content_parts(room_id, parts, thread_meta)
+
+    async def _send_or_queue_thread_parts(room_id, parts, meta):
+        meta_dict = meta if isinstance(meta, dict) else {}
+        thread_root = (
+            meta_dict.get("matrix_thread_root_event_id")
+            or meta_dict.get("thread_root_event_id")
+            or meta_dict.get("matrix_own_thread_root_event_id")
+        )
+        if not thread_root:
+            meta_dict.setdefault("matrix_pending_thread_parts", []).extend(parts)
+            return True
+        thread_meta = ch._with_thread_relation_meta(meta_dict, thread_root)
+        await ch.send_content_parts(room_id, parts, thread_meta)
+        return True
+
+    ch._flush_pending_final_message_to_thread = _flush_pending_final_message_to_thread
+    ch._send_or_queue_thread_parts = _send_or_queue_thread_parts
 
 
 def _event(body: str, mentioned: bool = False):
@@ -975,8 +1037,7 @@ def test_send_with_matrix_thread_meta_adds_thread_relation():
     assert content["m.relates_to"] == {
         "rel_type": "m.thread",
         "event_id": "$task-root",
-        "is_falling_back": True,
-        "m.in_reply_to": {"event_id": "$task-root"},
+        "is_falling_back": False,
     }
 
 
@@ -995,7 +1056,11 @@ def test_send_with_plain_thread_root_meta_stays_in_main_timeline():
     )
 
     content = client.sent[0][2]
-    assert "m.relates_to" not in content
+    assert content["m.relates_to"] == {
+        "rel_type": "m.thread",
+        "event_id": "$task-root",
+        "is_falling_back": False,
+    }
 
 
 def test_reasoning_completed_message_waits_for_own_first_message_thread():
@@ -1011,8 +1076,14 @@ def test_reasoning_completed_message_waits_for_own_first_message_thread():
         await ch.send(to_handle, parts[0].text, meta)
 
     ch.send_content_parts = _send_content_parts
+    _wire_thread_part_sends(ch)
+
+    async def _noop_ensure_thread_root(_to_handle, _send_meta):
+        return
+
+    ch._ensure_thread_root = _noop_ensure_thread_root
     event = SimpleNamespace(type="MessageType.REASONING")
-    meta = {"thread_root_event_id": "$incoming-task"}
+    meta = {}
 
     asyncio.run(
         ch.on_event_message_completed(
@@ -1077,7 +1148,8 @@ def test_first_and_final_messages_stay_main_middle_message_goes_thread():
     ch._message_to_content_parts = lambda event: [
         _FakeTextContent(matrix_channel.ContentType.TEXT, event.text)
     ]
-    meta = {"thread_root_event_id": "$incoming-task"}
+    _wire_thread_part_sends(ch)
+    meta = {}
 
     for text in ("first", "middle", "final"):
         asyncio.run(
@@ -1119,7 +1191,8 @@ def test_pending_message_flushes_before_following_tool_call():
     ch._message_to_content_parts = lambda event: [
         _FakeTextContent(matrix_channel.ContentType.TEXT, event.text)
     ]
-    meta = {"thread_root_event_id": "$incoming-task"}
+    _wire_thread_part_sends(ch)
+    meta = {}
 
     events = [
         SimpleNamespace(type="MessageType.MESSAGE", text="first"),
@@ -1162,8 +1235,14 @@ def test_tool_call_completed_message_routes_to_task_thread():
         await ch.send(to_handle, parts[0].text, meta)
 
     ch.send_content_parts = _send_content_parts
+    _wire_thread_part_sends(ch)
+
+    async def _noop_ensure_thread_root(_to_handle, _send_meta):
+        return
+
+    ch._ensure_thread_root = _noop_ensure_thread_root
     event = SimpleNamespace(type="MessageType.MCP_TOOL_CALL")
-    meta = {"thread_root_event_id": "$incoming-task"}
+    meta = {}
 
     asyncio.run(ch.send("!room:hs.local", "收到任务", meta))
 

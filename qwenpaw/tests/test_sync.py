@@ -2,6 +2,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from agentteams_sync.policy import PushPolicy
 from qwenpaw_worker.sync import FileSync, push_local
 
 
@@ -152,7 +153,7 @@ def test_push_local_uploads_worker_files_but_skips_controller_owned_state(tmp_pa
             uploads.append(args[2])
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(sync, "_mc", fake_mc)
+    monkeypatch.setattr("qwenpaw_worker.sync._mc", fake_mc)
 
     pushed = push_local(sync, since=0)
 
@@ -197,11 +198,42 @@ def test_push_local_does_not_remove_remote_files_missing_from_local_state(tmp_pa
         commands.append(args)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(sync, "_mc", fake_mc)
+    monkeypatch.setattr("qwenpaw_worker.sync._mc", fake_mc)
 
     assert push_local(sync, since=0) == []
     assert not any(args[0] == "rm" for args in commands)
     assert not any(args[0] == "find" for args in commands)
+
+
+def test_push_policy_qwenpaw_matches_contract_excludes() -> None:
+    policy = PushPolicy.qwenpaw()
+    skipped = {
+        "credentials/token",
+        "runtime/runtime.yaml",
+        "shared/tasks/t-1/result.md",
+        "global-shared/reference.md",
+        ".qwenpaw/workspaces/default/tool_result/result.json",
+        ".qwenpaw/workspaces/default/file_store/a.bin",
+        ".qwenpaw/workspaces/default/media/voice.wav",
+        ".qwenpaw/workspaces/default/embedding_cache/item.bin",
+        ".qwenpaw/logs/qwenpaw-worker.log",
+        ".qwenpaw/qwenpaw.log",
+        "heartbeat.json",
+        "token_usage.json",
+        "nested/.cache/tmp",
+        "nested/__pycache__/mod.pyc",
+        "file.lock",
+    }
+    allowed = {
+        "SOUL.md",
+        ".qwenpaw/workspaces/default/AGENTS.md",
+        ".qwenpaw/workspaces/default/skills/custom/SKILL.md",
+        ".qwenpaw/agent-packages/current/AGENTS.md",
+    }
+    for rel in skipped:
+        assert policy.should_skip(Path(rel)), rel
+    for rel in allowed:
+        assert not policy.should_skip(Path(rel)), rel
 
 
 def test_push_local_skips_older_and_unchanged_files(tmp_path: Path, monkeypatch) -> None:
@@ -227,7 +259,7 @@ def test_push_local_skips_older_and_unchanged_files(tmp_path: Path, monkeypatch)
             uploads.append(args[2])
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(sync, "_mc", fake_mc)
+    monkeypatch.setattr("qwenpaw_worker.sync._mc", fake_mc)
 
     assert push_local(sync, since=100) == ["changed.txt"]
     assert uploads == ["agentteams/agentteams-storage/agents/worker-a/changed.txt"]
@@ -260,7 +292,7 @@ def test_push_local_compares_small_binary_files_as_bytes(tmp_path: Path, monkeyp
             uploads.append(args[2])
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(sync, "_mc", fake_mc)
+    monkeypatch.setattr("qwenpaw_worker.sync._mc", fake_mc)
 
     assert push_local(sync, since=0) == ["changed.bin"]
     assert uploads == ["agentteams/agentteams-storage/agents/worker-a/changed.bin"]
@@ -286,7 +318,7 @@ def test_push_local_uploads_large_files_without_remote_content_compare(tmp_path:
             uploads.append(args[2])
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(sync, "_mc", fake_mc)
+    monkeypatch.setattr("qwenpaw_worker.sync._mc", fake_mc)
 
     assert push_local(sync, since=0) == ["large.zip"]
     assert uploads == ["agentteams/agentteams-storage/agents/worker-a/large.zip"]

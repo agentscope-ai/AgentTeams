@@ -109,15 +109,15 @@ def test_create_installs_config_json_from_template():
 
 def test_create_installs_worker_agent_json_from_template():
     """Worker profile seeds agent.json from agent.worker.json."""
-    agent = _bridge_and_read_agent(_make_openclaw_cfg())
+    agent = _bridge_and_read_agent(_make_openclaw_cfg(), profile="worker")
 
     assert agent["id"] == "default"
     assert agent["name"] == "Default Agent"
     assert agent["language"] == "zh"
     assert agent["system_prompt_files"] == ["AGENTS.md", "SOUL.md", "PROFILE.md"]
-    # Console on by default, from template.
-    assert agent["channels"]["console"]["enabled"] is True
-    assert agent["channels"]["matrix"]["filter_tool_messages"] is False
+    # Bridge overlay disables console (Matrix-only workers).
+    assert agent["channels"]["console"]["enabled"] is False
+    assert agent["channels"]["matrix"]["filter_tool_messages"] is True
     assert agent["channels"]["matrix"]["filter_thinking"] is True
     # Manager-only fields absent.
     assert "require_mention" not in agent["channels"]["matrix"]
@@ -136,7 +136,7 @@ def test_create_installs_manager_agent_json_from_template(monkeypatch):
         "AGENTS.md", "SOUL.md", "PROFILE.md", "TOOLS.md",
     ]
     assert agent["channels"]["matrix"]["require_mention"] is True
-    assert agent["channels"]["matrix"]["filter_tool_messages"] is False
+    assert agent["channels"]["matrix"]["filter_tool_messages"] is True
     assert agent["channels"]["matrix"]["filter_thinking"] is True
     assert "require_approval" not in agent.get("running", {})
     assert agent["channels"]["matrix"]["user_id"] == "@manager:matrix.example.org"
@@ -232,23 +232,23 @@ def test_remote_wins_access_token_refreshes():
 
 
 def test_remote_wins_matrix_stream_filters_use_defaults():
-    """Bridge applies default Matrix stream filter policy when unset."""
+    """Bridge refresh reapplies AgentTeams Matrix stream filter defaults."""
     cfg = _make_openclaw_cfg()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         working_dir = Path(tmpdir) / "agent"
-        _run_bridge(cfg, working_dir)
+        _run_bridge(cfg, working_dir, profile="worker")
 
         agent_path = _agent_json_path(working_dir)
         agent = json.loads(agent_path.read_text())
-        agent["channels"]["matrix"]["filter_tool_messages"] = True
-        agent["channels"]["matrix"]["filter_thinking"] = True
+        agent["channels"]["matrix"]["filter_tool_messages"] = False
+        agent["channels"]["matrix"]["filter_thinking"] = False
         agent_path.write_text(json.dumps(agent))
 
-        _run_bridge(cfg, working_dir)
+        _run_bridge(cfg, working_dir, profile="worker")
 
         matrix = _read_agent(working_dir)["channels"]["matrix"]
-        assert matrix["filter_tool_messages"] is False
+        assert matrix["filter_tool_messages"] is True
         assert matrix["filter_thinking"] is True
 
 
@@ -415,7 +415,7 @@ def test_manager_template_heartbeat_wins_over_openclaw_seed(monkeypatch):
 
 
 def test_worker_template_seeds_default_heartbeat_when_openclaw_silent():
-    agent = _bridge_and_read_agent(_make_openclaw_cfg())
+    agent = _bridge_and_read_agent(_make_openclaw_cfg(), profile="worker")
     assert agent["heartbeat"] == {"enabled": True, "every": "10m"}
 
 

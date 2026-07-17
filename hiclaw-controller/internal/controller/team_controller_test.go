@@ -183,7 +183,6 @@ func TestForceSoloPeerMentions_SoloForcesTrueWhenNil(t *testing.T) {
 	}
 }
 
-
 func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
 	prov := mocks.NewMockProvisioner()
 	state := &MemberState{}

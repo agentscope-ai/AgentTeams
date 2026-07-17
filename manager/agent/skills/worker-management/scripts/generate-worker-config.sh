@@ -34,6 +34,7 @@ ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 MATRIX_DOMAIN_FOR_ID="${MATRIX_DOMAIN}"
 MATRIX_SERVER_PORT="8080"
 
+# TODO(H3.4): migrate to resolve-model-params.sh (see update-manager-model.sh)
 case "${MODEL_NAME}" in
     gpt-5.3-codex|gpt-5-mini|gpt-5-nano)
         CTX=400000; MAX=128000 ;;

@@ -52,6 +52,8 @@ COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
 # Stage qwenpaw-worker dependency metadata only (src/ copied later for layer caching).
 COPY qwenpaw/pyproject.toml qwenpaw/README.md /tmp/qwenpaw-worker/
+COPY --from=agentteams-sync . /tmp/agentteams-sync/
+COPY --from=agentteams-matrix-format . /tmp/agentteams-matrix-format/
 RUN mkdir -p /tmp/qwenpaw-worker/src/qwenpaw_worker && \
     echo '__version__ = "0.0.0"' > /tmp/qwenpaw-worker/src/qwenpaw_worker/__init__.py
 
@@ -67,6 +69,13 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     && /opt/venv/qwenpaw/bin/pip install \
         --retries 5 \
         --timeout "${PIP_TIMEOUT}" \
+        --index-url "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed -E 's|^https?://||;s|/.*||')" \
+        /tmp/agentteams-sync/ /tmp/agentteams-matrix-format/ \
+    && /opt/venv/qwenpaw/bin/pip install \
+        --retries 5 \
+        --timeout "${PIP_TIMEOUT}" \
+        --no-deps \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed -E 's|^https?://||;s|/.*||')" \
         /tmp/qwenpaw-worker/
@@ -90,16 +99,20 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     rm -rf /root/.npm
 
 # Overlay AgentTeams Matrix channel behavior while keeping QwenPaw as the base runtime.
+COPY qwenpaw/scripts/qwenpaw_site_packages_gate.py \
+     qwenpaw/scripts/qwenpaw_upstream_manifest.json \
+     /tmp/qwenpaw-gate/
+RUN /opt/venv/qwenpaw/bin/python /tmp/qwenpaw-gate/qwenpaw_site_packages_gate.py verify
 COPY qwenpaw/src/matrix/ /tmp/qwenpaw-matrix-overlay/
-RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
-    cp -a /tmp/qwenpaw-matrix-overlay/channel.py "$SITE/qwenpaw/app/channels/matrix/channel.py" && \
-    rm -rf /tmp/qwenpaw-matrix-overlay
+RUN /opt/venv/qwenpaw/bin/python /tmp/qwenpaw-gate/qwenpaw_site_packages_gate.py \
+        apply-matrix-overlay /tmp/qwenpaw-matrix-overlay \
+    && rm -rf /tmp/qwenpaw-matrix-overlay
 
 # Overlay real qwenpaw-worker source without rebuilding the dependency-heavy venv.
 COPY qwenpaw/src/ /tmp/qwenpaw-worker/src/
-RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
-    cp -a /tmp/qwenpaw-worker/src/qwenpaw_worker/* "$SITE/qwenpaw_worker/" && \
-    rm -rf /tmp/qwenpaw-worker
+RUN /opt/venv/qwenpaw/bin/python /tmp/qwenpaw-gate/qwenpaw_site_packages_gate.py \
+        apply-worker-overlay /tmp/qwenpaw-worker/src \
+    && rm -rf /tmp/qwenpaw-worker
 
 # Opaque QwenPaw plugin artifacts. Each plugin build owns its contents.
 RUN mkdir -p /opt/hiclaw/plugins
@@ -113,9 +126,12 @@ RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py
 
 # Enable QwenPaw's native deferred MCP startup for app workspaces.
-COPY qwenpaw/scripts/patch-qwenpaw-defer-mcp-startup.py /tmp/patch-qwenpaw-defer-mcp-startup.py
-RUN /opt/venv/qwenpaw/bin/python /tmp/patch-qwenpaw-defer-mcp-startup.py && \
-    rm -f /tmp/patch-qwenpaw-defer-mcp-startup.py
+COPY qwenpaw/scripts/patch-qwenpaw-defer-mcp-startup.py \
+     qwenpaw/scripts/qwenpaw_site_packages_gate.py \
+     qwenpaw/scripts/qwenpaw_upstream_manifest.json \
+     /tmp/qwenpaw-gate/
+RUN /opt/venv/qwenpaw/bin/python /tmp/qwenpaw-gate/patch-qwenpaw-defer-mcp-startup.py && \
+    rm -f /tmp/qwenpaw-gate/patch-qwenpaw-defer-mcp-startup.py
 
 COPY --chmod=755 qwenpaw/scripts/qwenpaw-worker-entrypoint.sh /opt/hiclaw/scripts/qwenpaw-worker-entrypoint.sh
 COPY --chmod=755 qwenpaw/scripts/qwenpaw-teamharness-plugin-reload.sh /opt/hiclaw/scripts/qwenpaw-teamharness-plugin-reload.sh

@@ -4,6 +4,83 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
+- fix(controller): desiredPodRevision applies resolved runtime in standard pod hash path; dedupe team-member lookup via WorkerResourceService; hiclaw manager-state rejects unknown flags; create team accepts --leader alias
+- fix(manager): create-team.sh removes duplicate hiclaw create call
+
+- fix(copaw): manager DM room bootstrap uses `AGENTTEAMS_MATRIX_URL`/bridged homeserver and env token fallback; deferred refresh after Matrix auto-join (`manager_bootstrap`, `run_manager_app`)
+- fix(manager): CoPaw worker builtin notify waits for runtime via `--wait-runtime` in bootstrap `workers.sh`
+- fix(manager): `create-team.sh` passthrough hiclaw flags, poll Running/room IDs, update `teams-registry.json` after controller create
+- fix(manager): drop stale `PYTHONPATH=/opt/hiclaw/copaw/src` from `start-copaw-manager.sh` (copaw_worker installed via site-packages)
+
+- refactor(manager): Phase 9 G9.6 — thin `start-copaw-manager.sh`; CoPaw Manager bootstrap via `copaw_worker.run_manager_app` + `manager_bootstrap` (WorkspaceLayout, skills symlink, DM auto-reply, CMS, openclaw.json watcher)
+- refactor(manager): Phase 9 G9.7 — unified `manager/Dockerfile` multi-target build (`manager-agent-bundle`, `manager-copaw`, `manager-openclaw`); Makefile `build-manager-copaw` uses `--target manager-copaw`
+- refactor(manager): Phase 9 G9.8 — shared AGENTS/HEARTBEAT fragments under `manager/agent/fragments/`; `render-manager-prompts.sh` + upgrade-builtins Step 0; CoPaw fast-reply / pending-workers rules preserved in copaw overlays
+
+- refactor(hermes): Phase 6 Y6.3 — migrate Hermes sync onto `agentteams_sync` via `hermes_worker.sync` shim (300s pull, shared-in-pull_all, Hermes PushPolicy + inner→outer bridge); hermes-worker image installs agentteams-sync
+- refactor(qwenpaw): Phase 6 Y6.6 — migrate QwenPaw push allowlist onto `agentteams_sync` via `qwenpaw_worker.sync` shim (`PushPolicy.qwenpaw`, byte-accurate compare ≤20 MiB); qwenpaw-worker image installs agentteams-sync
+- fix(openhuman): Phase 6 Y6.5 — align shared/ push excludes with SyncContract (`*/spec.md`, `*/base/*`); document bash sync semantics in entrypoint
+- refactor(worker): Phase 6 Y6.4 — thin OpenClaw background sync via `python -m agentteams_sync daemon --contract=openclaw`; preserve startup mirror, Matrix re-login, and E2EE crypto wipe in `worker-entrypoint.sh`; worker image installs agentteams-sync
+- refactor(worker): O13.5 — extract OpenClaw Matrix crypto wipe + re-login from `worker-entrypoint.sh` into `python -m agentteams_sync openclaw-matrix --contract=openclaw`; add focused unit tests
+- refactor(agentteams_sync): add OpenClaw daemon (`openclaw.py`, `PushPolicy.openclaw`, PULL_MARKER push guard, 300s fallback pull with shared `--newer-than 5m`)
+- refactor(agentteams_sync): add `team_resolver=agents_md`, `pull_includes_shared`, Hermes byte-accurate push, QwenPaw `_cat_bytes`/`max_compare_bytes` push hooks, and `PushPolicy.openhuman()` preset
+
+- feat(openhuman): Phase 13 — add Python `openhuman_worker` bridge (openclaw.json → config.toml) with unit tests; thin entrypoint delegates to `openhuman-worker bridge`; fix mc alias to use `AGENTTEAMS_STORAGE_ALIAS` from hiclaw-env
+- docs(openhuman): document OpenHuman as Kubernetes-only in quickstart and install script header (not in embedded install worker-runtime menu)
+- fix(worker): correct README directory layout — agent templates live under `manager/agent/worker-agent/`, not `worker/agent/`
+- refactor(hermes): extract shared `agentteams_matrix_policies` package; Hermes re-exports via compatibility shim (O13.4)
+- docs(sync): Phase 6 Y6.1 — `design/sync-contract.md` + `agentteams_sync.contract` presets document per-runtime sync semantics (preserve Hermes 300s vs CoPaw 60s, shared-in-pull_all divergence)
+- refactor(copaw): Phase 8 bridge/workspace — add WorkspaceLayout (materialize/rebridge/persist_edits), split bridge_config vs bootstrap_copaw_runtime, extract MatrixBootstrapClient, ensure skills symlink, wire quiet_rooms to MatrixChannel, replace Dockerfile sed with fail-fast matrix sync_loop patch script
+
+- fix(copaw): Phase 1 latent bug fixes — remove broken re-bridge `get_soul`/`get_agents_md` fallbacks; stop deriving `AGENTTEAMS_PORT_GATEWAY` from MinIO endpoint; wire `worker_cr_name` into `FileSync`; propagate prompts to `workspaces/default/`; align `filter_tool_messages` defaults via bridge SSOT; fail bridge when `agent.json` cannot be materialized; use `profile=worker` on worker startup bridge.
+- refactor(controller): Phase 10 soft refactors — split team reconciler by concern; unify `buildMemberRuntimeConfigReq`, channel policy builder, and `NewMemberDeps`; extract `ProvisionWorker` phases and `RoomMembershipOptions` room-membership API
+- refactor(controller): Phase 10 continued — split `gateway.Client` into focused interfaces; extract deployer openclaw merge helpers to `deployer_merge.go`; move worker-deps manifest builders to `internal/workerdeps`; add `WorkerResourceService` for standalone worker create domain rules; golden spec-hash vector test (DesiredPodRevision deferred); clarify Manager `RefreshManagerCredentials` vs legacy `RefreshCredentials`
+- refactor(controller): Phase 10 soft items — consolidate pod-recreate hashing behind `desiredPodRevision` with locked golden vectors; mechanical splits for `provisioner`/`deployer`/`matrix` client, `config` load/types, and `api/v1beta1` types by kind; document LegacyCompat deprecation path and member reconcile non-fatal/Observed semantics (C10.10–12 docs only)
+- refactor(copaw): Phase 7 matrix unification — move `matrix_relations` to `matrix/relations.py`; extract `OutboundFilterPolicy` to `matrix/outbound_policy.py`; Worker loads unified overlay via custom_channels shim (threads/ledger preserved); delete divergent `copaw_worker/matrix_channel.py` implementation; freeze vendored `matrix/config.py` (X7.4) and QwenPaw overlay growth (X7.5)
+- refactor(copaw): share Team Leader DM preamble detection between `message_filter` hook and `matrix/outbound_policy` (dedupe regex/runtime.yaml parsing)
+
+- refactor(protocol): Phase 5 P5.3/P5.4 — move TeamHarness MCP projectflow/taskflow into `plugins/teamharness/mcp/tools/*.py` with shared `mcp_common.py`; server.py registry-only for those tools; `AGENTTEAMS_REFACTOR_PROTOCOL_CORE=1` enables extra DAG validation dual-run
+- test(protocol): add `snapshots/teamharness-mcp/` characterization for overlapping dag-delegate-flow actions; document P5.7 filesync deferral to Phase 6 SyncContract
+- refactor(teamharness): Phase 5 P5.7 — MCP `filesync` delegates pull/push/stat/list to `agentteams_sync.FileSync` with explicit `storage.sharedPrefix` / `globalSharedPrefix` roots; preserve workspaceDir layout and global-shared read-only push; add `TEAMHARNESS_MCP` SyncContract preset
+
+- refactor(protocol): extract agentteams_protocol shared domain from copaw_worker.task; CoPaw re-exports via copaw_worker.task shim; TeamHarness MCP uses protocol_bridge for DAG validation and shared runtime_config with WorkerFlow; MCP matrix formatting extracted to tools/matrix_format.py; tool dispatch modules for projectflow/taskflow/filesync/artifact; copaw-worker image installs agentteams-protocol package
+
+- refactor(shared): extract agentteams_openclaw_merge as canonical openclaw.json merge library (MERGE_RULES docstring); merge-openclaw-config.sh becomes python3 -m wrapper; copaw_worker and hermes_worker sync import shared module; worker/manager/copaw/hermes images install agentteams-openclaw-merge package
+
+
+- fix(manager): remove unreachable k8s Higress inner block from start-manager-agent.sh (k8s leaves console URL empty; controller owns Higress setup)
+- fix(manager): drop redundant shared/builtins/worker/ MinIO publish from upgrade-builtins.sh; per-agent Step 3 sync remains the sole worker builtin path
+- fix(manager): correct create-worker.md post-creation paths to openclaw vs copaw Manager runtimes only (Hermes is Worker-only)
+
+- refactor(shared): add is_cloud_runtime/is_local_runtime helpers to hiclaw-env.sh; use them in start-manager-agent.sh
+- refactor(manager): add resolve-model-params.sh sourced from known-models.json; migrate update-manager-model.sh
+- refactor(manager): dedupe find-skills script via shared-worker-skills/ and sync-shared-worker-skills.sh (upgrade-builtins + image build)
+- refactor(qwenpaw): Phase 12 — split monolithic `update.py` into `qwenpaw_worker/update/` package (runtime_config, agent_package, model_sync, channel_writers, teams_prompt, runtime_updater); re-export via `qwenpaw_worker.update`
+- refactor(qwenpaw): extract worker orchestration helpers (`plugin_bootstrap.py`, `runtime_configurator.py`, `security_bootstrap.py`); reuse `plugin_install.py` for zip install/digest
+- refactor(teamharness): move QwenPaw Matrix trigger/task-room helpers to `plugins/teamharness/adapters/qwenpaw/matrix_channel.py`; overlay delegates via runtime loader
+- feat(qwenpaw): Phase 12 Q12.4 — pin `qwenpaw==1.1.11`, add `qwenpaw_site_packages_gate.py` (version gate, upstream marker/checksum manifest, Python overlay apply); Dockerfile uses gate instead of raw `cp`
+- refactor(qwenpaw): Phase 12 Q12.5 — extract shared `agentteams_matrix_format` package; QwenPaw Matrix overlay and TeamHarness MCP `matrix_format` delegate markdown-it rendering
+- test(qwenpaw): Phase 12 Q12.6 — replace Matrix overlay AST/source-lock tests with behavior tests (streaming config, ready marker, mentions); extract overlay harness; add gate unit tests
+- chore(qwenpaw): defer full thin Matrix overlay rewrite, upstream sha256 manifest population in CI, and runtime monkeypatch replacement for defer-MCP site-packages patch (still build-time Python patch)
+- refactor(plugins): shared plugins/adapters/qwenpaw/install-plugin.sh for TeamHarness and WorkerFlow adapters
+
+- refactor(install): extract shared defaults to install/defaults.env; bash and PowerShell installers source/read it (ports, image names, version gates)
+- refactor(manager): move MCP YAML templates to manager/configs/mcp-templates/; setup-mcp-server.sh accepts --template; setup-higress.sh uses configs path
+- refactor(design): move higress-api-doc.json out of agent skills-alpha to design/ (developer reference, not agent workspace)
+- refactor(manager): consolidate MCP aliyun guard in gateway-api.sh (gateway_require_local_mcp_management)
+- docs(install): document embedded vs legacy Docker/supervisord layout (docs/embedded-docker-layout.md, manager/docker-legacy/README.md)
+- docs(manager): defer hiclaw create team CLI thickening and shared state module; document CLI-first team create and manage-state.sh-only OpenClaw state
+- feat(hiclaw): thicken `hiclaw create team` with team-admin, peer-mentions, channel-policy, and per-worker model/skills/MCP flags (Phase 14 I14.3)
+- feat(hiclaw): add `hiclaw manager-state` shared state CLI; manage-state.sh delegates to it with shell fallback (Phase 14 I14.4)
+- refactor(manager): thin `create-team.sh` to `hiclaw create team` wrapper; legacy shell path in `create-team-legacy.sh` (`HICLAW_TEAM_CREATE_IMPL=shell`)
+- feat(hiclaw): add `--worker-runtimes` to `hiclaw create team` (CreateTeamRequest already supports per-worker runtime)
+- docs(manager): document create-team wrapper vs Manager-only human backfill; mention `hiclaw manager-state` in task-management and controller-api skill docs
+
+- refactor(manager): Phase 9 bootstrap — split start-manager-agent.sh into lib/bootstrap/* modules; thin entrypoint sources secrets/matrix/higress/openclaw-config/workers/cloud-sync helpers
+- refactor(manager): unify aliyun/k8s workspace sync in bootstrap/cloud-sync.sh with runtime-aware .openclaw/.copaw excludes
+- feat(manager): add send-manager-message.sh for bootstrap Matrix sends (CoPaw channels send vs OpenClaw curl); wire welcome DM and worker builtin notify
+- feat(manager): add send-task-message.sh; task-management finite/infinite docs use helper instead of hiclaw runtime lookup
+- fix(manager): skip openclaw-cms-plugin and config-health cleanup on CoPaw Manager runtime path
+
 - fix(integration): integrate fork code-review remediation (Tier 0–2C) onto the renamed AgentTeams upstream baseline. Replays the `manager/` / `copaw/` / `hermes/` / `hiclaw-controller/` / `install/` / `plugins/` / `dashboard/` remediation (security/data-loss, correctness, cleanup/dedup) onto `upstream/main` @ `06d75c6` including the `a7b707e` hard-cut AgentTeams contracts rename. Reconciles the `AGENTTEAMS_*` env-var rename end-to-end: fixes the dead Manager heartbeat override (controller emitted `AGENTTEAMS_MANAGER_HEARTBEAT_INTERVAL` but CoPaw/OpenClaw read `HICLAW_`), the dead `CMS_SERVICE_NAME` worker propagation, and the unwired `AGENTTEAMS_SOLO_OPERATOR` config field; renames the fork-internal `MANAGER_HEARTBEAT_INTERVAL`/`CMS_SERVICE_NAME`/`MANAGER_STATE_FILE`/`QUIET_ROOMS`/`CHAT_ACK`/`SOLO_OPERATOR` stragglers. Ports the Tier 0 #8 `oss-credentials.sh` cached-cred-before-refresh fallback onto the dynamic `MC_HOST_*` alias machinery, the Tier 1D openhuman `find-skill` test coverage, and the `buildDesiredMembers` team-controller member builder + helpers. Adds `.gitattributes` (LF hygiene), `.github/workflows/remediation-gates.yml` (CI: go test + pytest + dashboard npm + helm lint), and the `docs/upstream-integration-migration.md` operator cutover runbook. Also captures previously-unrecorded image-affecting changes from `faa8874` (provider-management skill) and `915653d` (11 Kilo review fixes on PR #2).
 - feat(qwenpaw): add the QwenPaw worker runtime Python package baseline with runtime config sync, storage sync, heartbeat reporting, Matrix channel overlay, and focused unit tests.
 - fix(controller): surface Kubernetes Pod container failures in Worker backend status and status API responses.
@@ -45,3 +122,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 - **Remote Worker lifecycle boundary**: Workers now record the applied deployment target in status, reject running target changes until the Worker is Stopped, clean up using the applied target, and register remote Pod watches for Worker/Team status updates.
 - **Team Worker CR decoupling**: Worker identity enrichment and Worker REST APIs now resolve `spec.workerMembers` references, and Teams reject sharing the same referenced Worker CR before injecting coordination context.
 - **Matrix AppService integration**: SSO Human Team admins now resolve through the Human identity source, Matrix AppService transaction push routes are wired into the controller registration path, and registration keeps the homeserver-facing controller URL as the endpoint base.
+
+- fix(copaw): install vendored `matrix` overlay as top-level site-packages package (alongside `copaw.app.channels.matrix`) so `from matrix.*` imports resolve in Worker and Manager CoPaw images
+- fix(manager): install `agentteams-protocol`, `agentteams-openclaw-merge`, and `agentteams-sync` in manager-copaw images; pass shared-package build contexts from `make build-manager-copaw`
+- fix(hermes): install unpublished `agentteams-*` shared wheels before `hermes-worker` (`--no-deps`) so clean PyPI builds do not fail
+- fix(qwenpaw): install `agentteams-sync` and `agentteams-matrix-format` before `qwenpaw-worker` (`--no-deps`); add Makefile build contexts for matrix-format/policies packages

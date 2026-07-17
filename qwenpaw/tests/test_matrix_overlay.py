@@ -1,182 +1,79 @@
 from pathlib import Path
-import ast
 import asyncio
-import importlib.util
 import json
 import sys
-import types
 from types import SimpleNamespace
+
+from matrix_overlay_harness import OVERLAY, load_overlay_module
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OVERLAY = ROOT / "src" / "matrix" / "channel.py"
-
-
-def _overlay_source() -> str:
-    return OVERLAY.read_text(encoding="utf-8")
 
 
 def test_matrix_overlay_is_installed_by_worker_image() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "qwenpaw/src/matrix/" in dockerfile
-    assert "qwenpaw/app/channels/matrix/channel.py" in dockerfile
+    assert "qwenpaw/scripts/qwenpaw_site_packages_gate.py" in dockerfile
+    assert "apply-matrix-overlay" in dockerfile
+    assert "QWENPAW_PIP_SPEC=qwenpaw==1.1.11" in dockerfile or 'qwenpaw==1.1.11' in dockerfile
 
 
-def test_matrix_overlay_preserves_invite_join_and_marks_ready() -> None:
-    source = _overlay_source()
-
-    assert "for room_id in resp.rooms.invite" in source
-    assert "await self._client.join(room_id)" in source
-    assert "AGENTTEAMS_MATRIX_CHANNEL_READY_FILE" in source
-    assert "self._mark_channel_ready()" in source
-    assert "timeout=0" in source
+def test_matrix_from_config_streaming_enabled_defaults_true() -> None:
+    module = load_overlay_module()
+    channel = module.MatrixChannel.from_config(lambda *_args, **_kwargs: None, {})
+    assert channel.streaming_enabled is True
 
 
-def test_matrix_overlay_writes_visible_structured_mentions() -> None:
-    source = _overlay_source()
-
-    assert "mention_user_ids" in source
-    assert "https://matrix.to/#/" in source
-    assert 'content["formatted_body"]' in source
-    assert 'content["m.mentions"]' in source
-
-
-def test_matrix_overlay_is_valid_python() -> None:
-    ast.parse(_overlay_source(), filename=str(OVERLAY))
-
-
-def test_matrix_overlay_supports_streaming_reasoning_hooks() -> None:
-    source = _overlay_source()
-
-    assert "streaming_enabled: bool = True" in source
-    assert 'streaming_enabled=bool(raw.get("streaming_enabled", True))' in source
-    assert "async def on_streaming_start" in source
-    assert "async def on_streaming_delta" in source
-    assert "async def on_streaming_end" in source
-
-
-def _install_module(name: str, **attrs):
-    module = types.ModuleType(name)
-    module.__dict__.update(attrs)
-    sys.modules[name] = module
-    return module
-
-
-def _load_overlay_module():
-    root = "_qwenpaw_overlay_test"
-
-    class _Dummy:
-        pass
-
-    class _BaseChannel:
-        async def _on_consume_error(self, _request, _to_handle, _err_text):
-            return None
-
-    class _ContentType:
-        TEXT = "text"
-        REFUSAL = "refusal"
-        DATA = "data"
-        IMAGE = "image"
-        VIDEO = "video"
-        AUDIO = "audio"
-        FILE = "file"
-
-    class _MessageType:
-        MESSAGE = "MESSAGE"
-        REASONING = "REASONING"
-
-    class _RunStatus:
-        Completed = "COMPLETED"
-        InProgress = "INPROGRESS"
-
-    def _content_init(self, **kwargs):
-        self.__dict__.update(kwargs)
-
-    content_class = type("_Content", (), {"__init__": _content_init})
-
-    _install_module(root)
-    _install_module(f"{root}.app")
-    _install_module(f"{root}.app.channels")
-    _install_module(f"{root}.app.channels.matrix")
-    _install_module(f"{root}.app.channels.base", BaseChannel=_BaseChannel)
-    _install_module(
-        f"{root}.app.channels.utils",
-        file_url_to_local_path=lambda value: value,
+def test_matrix_from_config_streaming_enabled_honors_override() -> None:
+    module = load_overlay_module()
+    channel = module.MatrixChannel.from_config(
+        lambda *_args, **_kwargs: None,
+        {"streaming_enabled": False},
     )
-    _install_module(f"{root}.constant", WORKING_DIR="/tmp")
+    assert channel.streaming_enabled is False
 
-    _install_module(
-        "nio",
-        **{
-            name: _Dummy
-            for name in (
-                "AsyncClient",
-                "AsyncClientConfig",
-                "KeysUploadResponse",
-                "LoginResponse",
-                "KeyVerificationCancel",
-                "KeyVerificationEvent",
-                "KeyVerificationKey",
-                "KeyVerificationMac",
-                "KeyVerificationStart",
-                "LocalProtocolError",
-                "MatrixRoom",
-                "MegolmEvent",
-                "RoomEncryptedAudio",
-                "RoomEncryptedFile",
-                "RoomEncryptedImage",
-                "RoomEncryptedVideo",
-                "RoomMessageAudio",
-                "RoomMessageFile",
-                "RoomMessageImage",
-                "RoomMessageText",
-                "RoomMessageVideo",
-                "SyncResponse",
-                "ToDeviceEvent",
-                "ToDeviceError",
-                "UploadResponse",
-            )
-        },
-    )
-    _install_module("nio.event_builders")
-    _install_module("nio.event_builders.direct_messages", ToDeviceMessage=_Dummy)
-    _install_module("nio.events")
-    _install_module(
-        "nio.events.to_device",
-        RoomKeyRequest=_Dummy,
-        RoomKeyRequestCancellation=_Dummy,
-    )
-    _install_module(
-        "nio.responses",
-        JoinedMembersResponse=_Dummy,
-        RoomGetStateEventResponse=_Dummy,
-        RoomSendError=_Dummy,
-        SyncError=_Dummy,
-        WhoamiResponse=_Dummy,
-    )
-    _install_module("agentscope_runtime")
-    _install_module("agentscope_runtime.engine")
-    _install_module("agentscope_runtime.engine.schemas")
-    _install_module(
-        "agentscope_runtime.engine.schemas.agent_schemas",
-        AudioContent=content_class,
-        ContentType=_ContentType,
-        FileContent=content_class,
-        ImageContent=content_class,
-        MessageType=_MessageType,
-        RunStatus=_RunStatus,
-        TextContent=content_class,
-        VideoContent=content_class,
+
+def test_matrix_mark_channel_ready_writes_marker(tmp_path, monkeypatch) -> None:
+    module = load_overlay_module()
+    marker = tmp_path / "matrix-ready.txt"
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_CHANNEL_READY_FILE", str(marker))
+    channel = module.MatrixChannel.__new__(module.MatrixChannel)
+    channel._mark_channel_ready()
+    assert marker.read_text(encoding="utf-8") == "ready\n"
+
+
+def test_matrix_text_content_applies_structured_mentions() -> None:
+    module = load_overlay_module()
+    channel = module.MatrixChannel.__new__(module.MatrixChannel)
+    channel._user_id = "@bot:hs.local"
+    channel._resolve_display_name = lambda user_id, _room_id: user_id
+
+    content = channel._matrix_text_content(
+        "!room:hs.local",
+        "hello @alice:hs.local",
+        {},
+        "m.text",
     )
 
-    module_name = f"{root}.app.channels.matrix.channel"
-    spec = importlib.util.spec_from_file_location(module_name, OVERLAY)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    assert content["format"] == "org.matrix.custom.html"
+    assert "https://matrix.to/#/" in content["formatted_body"]
+    assert content["m.mentions"] == {"user_ids": ["@alice:hs.local"]}
+
+
+def test_matrix_text_content_honors_explicit_mention_user_ids() -> None:
+    module = load_overlay_module()
+    channel = module.MatrixChannel.__new__(module.MatrixChannel)
+    channel._user_id = "@bot:hs.local"
+    channel._resolve_display_name = lambda user_id, _room_id: user_id
+
+    content = channel._matrix_text_content(
+        "!room:hs.local",
+        "task assigned",
+        {"mention_user_ids": ["@worker:hs.local"]},
+        "m.text",
+    )
+
+    assert content["m.mentions"] == {"user_ids": ["@worker:hs.local"]}
 
 
 class _FakeClient:
@@ -198,7 +95,7 @@ async def _noop_prepare(_room_id):
 
 
 def _make_thread_channel():
-    module = _load_overlay_module()
+    module = load_overlay_module()
     channel = module.MatrixChannel.__new__(module.MatrixChannel)
     channel._client = _FakeClient()
     channel._user_id = "@bot:hs.local"
@@ -903,7 +800,7 @@ async def _noop_read_receipt(_room_id, _event_id):
 
 
 def _make_inbound_channel(command_registry=True):
-    module = _load_overlay_module()
+    module = load_overlay_module()
     channel = module.MatrixChannel.__new__(module.MatrixChannel)
     channel._user_id = "@copywriting-assistant:hs.local"
     channel._client = _FakeClient()
@@ -912,6 +809,8 @@ def _make_inbound_channel(command_registry=True):
     channel.groups = {}
     channel.history_limit = 50
     channel._room_histories = {}
+    channel._teamharness_task_room_cache = {}
+    channel._dm_room_cache = {}
     if command_registry:
         channel._command_registry = _FakeCommandRegistry()
     channel._is_dm_room = _false_dm

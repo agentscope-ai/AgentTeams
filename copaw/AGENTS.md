@@ -382,8 +382,8 @@ Use this ladder for *any* "agent didn't respond" symptom. Each step narrows wher
 
 These make healthy runs look broken or sick runs look healthy — learn them before chasing false positives.
 
-1. **Runtime config changes require a Worker restart.**
-   CoPaw worker no longer runs a background Remote -> Local config pull loop. Startup `mirror_all()` restores MinIO state, and runtime Local -> Remote preservation is handled by `push_loop`. Shared data can still be pulled explicitly through the filesync tool, but `openclaw.json`, skills, and mcporter config are refreshed by restarting the Worker.
+1. **Runtime config pull vs shared data (see `design/sync-contract.md`).**
+   CoPaw runs a background **`sync_loop`** (default **60s**) that pulls controller-managed worker files: `openclaw.json` (field merge), mcporter config, and skills. Startup `mirror_all()` also restores full MinIO state once. **`shared/` and `global-shared/` are not** in runtime `pull_all` — pull them explicitly via the filesync hook/MCP, or restart for startup mirror. Runtime Local → Remote preservation is handled by `push_loop`. Some remote prompt/config edits still require restart when they are not covered by the pull loop paths above.
 
 2. **Team Leader startup always logs `authorization denied: team-leader "<name>" cannot ready worker`.** `hiclaw-controller/internal/auth/authorizer.go :: authorizeTeamLeaderWorkerAction` does not list `ActionReady` — the Leader's `hiclaw worker report-ready` call inside `copaw-worker-entrypoint.sh` gets a 403. The Worker process keeps running fine; only the readiness self-report is lost. Ignore it while debugging non-response issues — it is *not* the cause.
    > Remove this gotcha once `authorizeTeamLeaderWorkerAction` accepts `ActionReady` for the Leader's own team.

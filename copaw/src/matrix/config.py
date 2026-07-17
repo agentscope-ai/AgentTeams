@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+"""
+Vendored CoPaw configuration overlay for AgentTeams.
+
+**Freeze (Phase 7 / X7.4):** Do not add AgentTeams-specific channel configs
+here until upstream CoPaw v1.1+ lands or a product decision explicitly
+requires a delta.  Matrix send/policy behavior belongs in ``matrix.channel``
+and ``matrix.outbound_policy``; keep this file aligned with upstream shape.
+"""
 import os
 import json
 from pathlib import Path

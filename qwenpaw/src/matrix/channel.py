@@ -5,6 +5,11 @@ AgentTeams overlay for QwenPaw MatrixChannel.
 The base implementation comes from QwenPaw. AgentTeams keeps a small overlay for
 runtime behavior that is not a TeamHarness concern: startup readiness, first
 sync stability, and Matrix mention compatibility.
+
+**Freeze (Phase 7 / X7.5, Phase 12 / Q12.2):** Do not add new TeamHarness coordination
+logic here — use ``plugins/teamharness/adapters/qwenpaw/matrix_channel.py`` and
+TeamHarness MCP/tools instead. Shared markdown formatting lives in
+``agentteams_matrix_format`` (Phase 12 Q12.5); full thin-overlay rewrite remains deferred.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import html
 import importlib
+import importlib.util
 import inspect
 import io
 import json
@@ -20,6 +26,7 @@ import mimetypes
 import os
 import random
 import re
+import sys
 import time
 import urllib.parse
 from uuid import uuid4
@@ -66,6 +73,9 @@ from nio.responses import (
     WhoamiResponse,
 )
 
+from agentteams_matrix_format import edit_fallback_html as _edit_fallback_html
+from agentteams_matrix_format import md_to_html as _md_to_html
+
 from agentscope_runtime.engine.schemas.agent_schemas import (
     AudioContent,
     ContentType,
@@ -92,16 +102,10 @@ TYPING_SERVER_TIMEOUT_MS = 30000
 TYPING_RENEWAL_INTERVAL_S = 25
 TYPING_MAX_DURATION_S = 120
 DM_CACHE_TTL_MS = 30_000
-TASK_ROOM_CACHE_TTL_MS = 30_000
 MATRIX_EVENT_PROTOCOL_LIMIT_BYTES = 64 * 1024
 MATRIX_TEXT_EVENT_SAFE_BYTES = (MATRIX_EVENT_PROTOCOL_LIMIT_BYTES * 3) // 4
 MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES = MATRIX_TEXT_EVENT_SAFE_BYTES - 1024
 MATRIX_LONG_MESSAGE_METADATA_KEY = "com.agentteams.long_message"
-TEAMHARNESS_TRIGGER_CONTENT_KEY = "m.teamharness.trigger"
-TEAMHARNESS_SELF_TRIGGER_TYPES = frozenset({"PROJECT_REQUESTED"})
-TEAMHARNESS_TOOL_DISPLAY_RE = re.compile(
-    r"^\s*(?:[^\n:]{1,80}:\s*)?🔧\s+(?:\*\*)?[A-Za-z0-9_.-]+(?:\*\*)?",
-)
 MATRIX_LONG_MESSAGE_MIMETYPE = "text/markdown; charset=utf-8"
 MATRIX_ATTACHMENT_REL_TYPE = "com.agentteams.attachment"
 MATRIX_ATTACHMENT_CONTEXT_FILE = "teamharness-matrix-context.json"
@@ -182,8 +186,44 @@ def _ends_with_no_reply_control(text: str) -> bool:
     return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
 
 
+_TEAMHARNESS_MATRIX_HELPERS: Any = None
+
+
+def _teamharness_matrix_helpers() -> Any:
+    global _TEAMHARNESS_MATRIX_HELPERS
+    if _TEAMHARNESS_MATRIX_HELPERS is not None:
+        return _TEAMHARNESS_MATRIX_HELPERS
+
+    module_name = "agentteams_teamharness_qwenpaw_matrix_channel"
+    candidates: list[Path] = []
+    adapter_dir = os.environ.get("AGENTTEAMS_TEAMHARNESS_QWENPAW_ADAPTER_DIR", "").strip()
+    if adapter_dir:
+        candidates.append(Path(adapter_dir).expanduser() / "matrix_channel.py")
+    candidates.append(
+        Path(__file__).resolve().parents[3]
+        / "plugins"
+        / "teamharness"
+        / "adapters"
+        / "qwenpaw"
+        / "matrix_channel.py"
+    )
+    for path in candidates:
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        _TEAMHARNESS_MATRIX_HELPERS = module
+        return module
+
+    raise ImportError("TeamHarness QwenPaw matrix_channel helpers not found")
+
+
 def _is_teamharness_tool_display(text: str) -> bool:
-    return bool(text and TEAMHARNESS_TOOL_DISPLAY_RE.match(text))
+    return _teamharness_matrix_helpers().is_teamharness_tool_display(text)
 
 
 def _readiness_probe_reply(text: str) -> str | None:
@@ -208,58 +248,6 @@ def _dedupe_nonempty(values: List[str]) -> List[str]:
             result.append(text)
             seen.add(text)
     return result
-
-
-def _md_to_html(text: str) -> str:
-    """Convert Markdown text to HTML for Matrix ``formatted_body``.
-
-    Uses ``markdown-it-py`` (the Python port of markdown-it) with the same
-    configuration as OpenClaw's Matrix extension so rendering is consistent
-    across both runtimes:
-
-    - html disabled (raw HTML is escaped)
-    - linkify enabled (bare URLs become clickable links)
-    - breaks enabled (single newlines become ``<br>``)
-    - strikethrough enabled (``~~text~~``)
-
-    Falls back to simple HTML-escape + ``<br>`` if the library is missing.
-    """
-    try:
-        from markdown_it import MarkdownIt
-
-        md = MarkdownIt(
-            "commonmark",
-            {
-                "html": False,
-                "linkify": True,
-                "breaks": True,
-                "typographer": False,
-            },
-        )
-        md.enable("strikethrough")
-        md.enable("table")
-
-        # linkify support requires linkify-it-py
-        try:
-            from linkify_it import LinkifyIt
-
-            md.linkify = LinkifyIt()
-        except ImportError:
-            logger.debug(
-                "linkify-it-py not installed; bare URLs may not be linkified",
-            )
-
-        return md.render(text).rstrip("\n")
-    except ImportError:
-        logger.warning(
-            "markdown-it-py not installed; formatted_body will be plain text",
-        )
-        return html.escape(text).replace("\n", "<br>\n")
-
-
-def _edit_fallback_html(text: str) -> str:
-    escaped = html.escape(text).replace("\n", "<br>\n")
-    return f"<p>* {escaped}</p>"
 
 
 def _matrix_event_payload_size(content: Dict[str, Any]) -> int:
@@ -1784,25 +1772,7 @@ class MatrixChannel(BaseChannel):
         return False
 
     def _teamharness_self_trigger(self, room_id: str, event: Any) -> dict[str, Any] | None:
-        content = getattr(event, "source", {}).get("content", {})
-        if not isinstance(content, dict):
-            return None
-        trigger = content.get(TEAMHARNESS_TRIGGER_CONTENT_KEY)
-        if not isinstance(trigger, dict):
-            return None
-        if trigger.get("kind") != "self_cross_session":
-            return None
-        if trigger.get("type") not in TEAMHARNESS_SELF_TRIGGER_TYPES:
-            return None
-        target_room_id = str(trigger.get("targetRoomId") or "").strip()
-        target_session = str(trigger.get("targetSession") or "").strip()
-        if target_session.startswith("matrix:"):
-            target_session = target_session[len("matrix:") :]
-        if target_session.startswith("room:"):
-            target_session = target_session[len("room:") :]
-        if room_id not in {target_room_id, target_session}:
-            return None
-        return trigger
+        return _teamharness_matrix_helpers().parse_self_cross_session_trigger(room_id, event)
 
     def _strip_mention_prefix(self, text: str, room: Any = None) -> str:
         """Strip leading @mention prefix so slash commands can be detected.
@@ -2484,64 +2454,31 @@ class MatrixChannel(BaseChannel):
         room: Optional[MatrixRoom],
     ) -> bool:
         """Return True when room state looks like a TeamHarness task room."""
-        if not room:
-            return False
-        for attr in ("topic", "name", "display_name"):
-            value = getattr(room, attr, "")
-            if callable(value):
-                continue
-            text = str(value or "").strip()
-            if text.startswith("Task room for ") or "Task room for " in text:
-                return True
-        return False
+        return _teamharness_matrix_helpers().room_has_task_marker(room)
 
     def _is_known_teamharness_task_room(self, room_id: str) -> bool:
         """Check local TeamHarness task metadata for an assignment room id."""
-        if not room_id:
-            return False
-        now = int(time.time() * 1000)
-        cache = getattr(self, "_teamharness_task_room_cache", None)
-        if cache is None:
-            cache = {}
-            self._teamharness_task_room_cache = cache
-        cached = cache.get(room_id)
-        if cached and (now - cached["ts"]) < TASK_ROOM_CACHE_TTL_MS:
-            return bool(cached["is_task_room"])
-
-        is_task_room = False
         root = getattr(self, "_workspace_dir", None)
         workspace_dir = Path(root).expanduser() if root else Path(WORKING_DIR)
-        tasks_dir = workspace_dir / "shared" / "tasks"
-        if tasks_dir.is_dir():
-            for meta_path in tasks_dir.glob("*/meta.json"):
-                try:
-                    task = json.loads(meta_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError) as exc:
-                    logger.debug(
-                        "MatrixChannel: failed to read task room metadata "
-                        "%s: %s",
-                        meta_path,
-                        exc,
-                    )
-                    continue
-                task_room_id = str(
-                    task.get("room_id") or task.get("roomId") or "",
-                ).strip()
-                if task_room_id == room_id:
-                    is_task_room = True
-                    break
-
-        cache[room_id] = {"is_task_room": is_task_room, "ts": now}
-        return is_task_room
+        return _teamharness_matrix_helpers().is_known_task_room(
+            room_id,
+            workspace_dir=workspace_dir,
+            cache=self._teamharness_task_room_cache,
+        )
 
     def _looks_like_teamharness_task_room(
         self,
         room_id: str,
         room: Optional[MatrixRoom] = None,
     ) -> bool:
-        if self._room_has_teamharness_task_marker(room):
-            return True
-        return self._is_known_teamharness_task_room(room_id)
+        root = getattr(self, "_workspace_dir", None)
+        workspace_dir = Path(root).expanduser() if root else Path(WORKING_DIR)
+        return _teamharness_matrix_helpers().looks_like_task_room(
+            room_id,
+            room,
+            workspace_dir=workspace_dir,
+            cache=self._teamharness_task_room_cache,
+        )
 
     async def _is_dm_room(
         self,

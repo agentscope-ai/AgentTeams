@@ -6,7 +6,7 @@
 
 ```bash
 bash /opt/hiclaw/agent/skills/mcp-server-management/scripts/setup-mcp-server.sh \
-  <server-name> <credential-value> [--yaml-file <path>] [--api-domain <domain>]
+  <server-name> <credential-value> [--template <path>] [--yaml-file <path>] [--api-domain <domain>]
 ```
 
 | Argument | Required | Description |
@@ -14,6 +14,7 @@ bash /opt/hiclaw/agent/skills/mcp-server-management/scripts/setup-mcp-server.sh 
 | `server-name` | yes | Without `mcp-` prefix (e.g., `github`, `weather`) |
 | `credential-value` | yes | The credential (GitHub PAT, API key, etc.) |
 | `--yaml-file` | no | User-provided YAML config. Required when no built-in template exists |
+| `--template` | no | Explicit built-in template path (default: `/opt/hiclaw/configs/mcp-templates/mcp-<server-name>.yaml`) |
 | `--api-domain` | no | Explicit API domain. Required when YAML URLs use variables instead of literal domains |
 
 ### Examples
@@ -40,8 +41,9 @@ Fully idempotent — safe to re-run for credential rotation or updates.
 ### YAML resolution order
 
 1. `--yaml-file` flag (highest priority)
-2. Built-in template at `references/mcp-<server-name>.yaml`
-3. Error with list of available templates
+2. `--template` flag
+3. Built-in template at `/opt/hiclaw/configs/mcp-templates/mcp-<server-name>.yaml`
+4. Error with list of available templates
 
 ### When to use
 
@@ -67,8 +69,8 @@ Fully idempotent — safe to re-run for credential rotation or updates.
 
 ## Built-in templates
 
-| Template | Server Name | Description |
-|---|---|---|
-| `mcp-github.yaml` | `mcp-github` | GitHub: repos, issues, PRs, code search |
+| Template | Server Name | Location | Description |
+|---|---|---|---|
+| `mcp-github.yaml` | `mcp-github` | `/opt/hiclaw/configs/mcp-templates/mcp-github.yaml` | GitHub: repos, issues, PRs, code search |
 
 All other services require user-provided YAML via `--yaml-file`.

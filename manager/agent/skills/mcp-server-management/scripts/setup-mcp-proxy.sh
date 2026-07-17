@@ -43,6 +43,7 @@
 
 set -euo pipefail
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/hiclaw/scripts/lib/gateway-api.sh
 
 # ============================================================
 # Parse arguments
@@ -107,12 +108,7 @@ fi
 
 MCP_SERVER_NAME="mcp-${SERVER_NAME}"
 
-# Cloud mode check
-if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
-    log "ERROR: MCP Server management via this script is not yet supported in cloud mode (AGENTTEAMS_RUNTIME=aliyun)."
-    log "Please manage MCP Servers through the Alibaba Cloud AI Gateway console instead."
-    exit 1
-fi
+gateway_require_local_mcp_management || exit 1
 
 if [ -z "${HIGRESS_COOKIE_FILE:-}" ]; then
     log "ERROR: HIGRESS_COOKIE_FILE not set"

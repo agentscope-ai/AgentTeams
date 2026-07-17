@@ -204,13 +204,13 @@ Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after
 
 Run `echo "${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"` if unsure. Then follow the matching path below.
 
-**OpenClaw / Hermes Manager** — incremental DM messages are supported, so polling-then-reply within a single turn is fine: → use **Path A**.
+**OpenClaw Manager** — incremental DM messages are supported, so polling-then-reply within a single turn is fine: → use **Path A**.
 
 **CoPaw / QwenPaw Manager** — only the final text reply of a turn reaches admin in DM (see `copaw-manager-agent/AGENTS.md` "Message Sending Rules"). Polling for `phase=Running` blocks the reply for 30-60s+ and tends to compound when admin sends a follow-up message during that window (the runtime queues both, then the model conflates them and replies only to the latest). → use **Path B (fast-reply)**.
 
 ---
 
-### Path A — OpenClaw / Hermes Manager (poll-then-reply)
+### Path A — OpenClaw Manager (poll-then-reply)
 
 Complete all three steps in this exact order. Do not skip Step 2 — it is the reply the admin DM has been waiting on since they asked you to create the Worker.
 

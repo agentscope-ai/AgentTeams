@@ -1,0 +1,69 @@
+{
+  "case": "dag-delegate-flow",
+  "description": "Minimal DAG: create project, plan one task, delegate, worker ack + submit with SUCCESS result.",
+  "projectId": "demo-project-20260717-120000",
+  "taskId": "demo-project-20260717-120000-01",
+  "worker": "@worker-a:matrix-local.agentteams.io:18080",
+  "roomId": "!team:matrix-local.agentteams.io:18080",
+  "steps": [
+    {
+      "name": "after-create-project",
+      "op": "create_project",
+      "args": {
+        "projectId": "demo-project-20260717-120000",
+        "title": "Demo DAG project",
+        "source": "characterization-fixture",
+        "requester": "@admin:matrix-local.agentteams.io:18080"
+      }
+    },
+    {
+      "name": "after-plan-dag",
+      "op": "plan_dag",
+      "args": {
+        "projectId": "demo-project-20260717-120000",
+        "tasks": [
+          {
+            "taskId": "demo-project-20260717-120000-01",
+            "title": "First task",
+            "assignedTo": "@worker-a:matrix-local.agentteams.io:18080",
+            "dependsOn": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "after-delegate",
+      "op": "delegate_task",
+      "args": {
+        "projectId": "demo-project-20260717-120000",
+        "taskId": "demo-project-20260717-120000-01",
+        "spec": "# Task: First task\n\nDeliver a short summary artifact.\n",
+        "roomId": "!team:matrix-local.agentteams.io:18080"
+      }
+    },
+    {
+      "name": "after-ack",
+      "op": "ack_task",
+      "args": {
+        "taskId": "demo-project-20260717-120000-01",
+        "actor": "@worker-a:matrix-local.agentteams.io:18080"
+      }
+    },
+    {
+      "name": "after-submit",
+      "op": "submit_task",
+      "args": {
+        "taskId": "demo-project-20260717-120000-01",
+        "actor": "@worker-a:matrix-local.agentteams.io:18080",
+        "result": {
+          "status": "SUCCESS",
+          "summary": "Completed first task for characterization fixture.",
+          "deliverables": [
+            "shared/tasks/demo-project-20260717-120000-01/deliverable.md"
+          ],
+          "notes": []
+        }
+      }
+    }
+  ]
+}

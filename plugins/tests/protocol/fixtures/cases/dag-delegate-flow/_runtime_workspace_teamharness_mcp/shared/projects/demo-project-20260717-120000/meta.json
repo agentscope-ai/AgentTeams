@@ -1,0 +1,17 @@
+{
+  "plan_type": "dag",
+  "project_id": "demo-project-20260717-120000",
+  "requester": "@admin:matrix-local.agentteams.io:18080",
+  "source": "characterization-fixture",
+  "status": "active",
+  "tasks": [
+    {
+      "assigned_to": "@worker-a:matrix-local.agentteams.io:18080",
+      "depends_on": [],
+      "status": "submitted",
+      "task_id": "demo-project-20260717-120000-01",
+      "title": "First task"
+    }
+  ],
+  "title": "Demo DAG project"
+}

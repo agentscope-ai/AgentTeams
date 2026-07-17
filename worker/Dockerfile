@@ -58,6 +58,13 @@ ENV PATH="/opt/openclaw/packages/clawdbot/node_modules/.bin:${PATH}"
 # Shared environment bootstrap and credential management
 COPY --from=shared . /opt/hiclaw/scripts/lib/
 
+# Shared openclaw.json merge (merge-openclaw-config.sh wrapper)
+COPY --from=agentteams-openclaw-merge . /tmp/agentteams-openclaw-merge/
+COPY --from=agentteams-sync . /tmp/agentteams-sync/
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
+    && python3 -m pip install --no-cache-dir /tmp/agentteams-openclaw-merge/ /tmp/agentteams-sync/ \
+    && rm -rf /tmp/agentteams-openclaw-merge /tmp/agentteams-sync /var/lib/apt/lists/*
+
 # mc wrapper: auto-refreshes STS credentials before every mc invocation (no-op in local mode)
 RUN chmod +x /opt/hiclaw/scripts/lib/mc-wrapper.sh && \
     ln -sf /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc

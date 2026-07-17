@@ -1,0 +1,21 @@
+## Gotchas
+
+- **Create multiple Workers concurrently** — when you need 2+ Workers, call `hiclaw create worker --no-wait` once per Worker as **separate foreground `exec` calls in the same turn** (your runtime fans them out in parallel). Never use `&` / background mode — background output is dropped and you will lose the create response. After issuing all calls, poll `hiclaw get workers -o json` until each target Worker shows `phase=Running` (typical 15-45s). Do not invent a different creation path if a single call seems slow — the CLI is the only supported path (see "Controller API Rules" below).
+- **@mention must use full Matrix ID** (with domain, e.g. `@alice:matrix-local.agentteams.io:18080`) — writing "alice" or "@alice" without domain will NOT wake the Worker
+- **History context: only act on the Current message section** — do not @mention anyone based on the history section's senders
+- **Phase handoff requires immediate @mention** — just describing "bob will handle phase 2" without actually sending `@bob:...` stalls the workflow permanently
+- **NO_REPLY is a standalone complete response** — never append it to a message with content, or the content is silently dropped
+- **Noisy @mentions cause infinite loops** — if your message doesn't require the recipient to *do* something, don't @mention them (no thanks, confirmations, farewells)
+- **Mirror loop safeguard** — if 2+ rounds of @mentions exchanged with no new task/question/decision, stop replying immediately
+- **Never run heartbeat from a Worker message** — heartbeat polls come from the OpenClaw runtime, not from Workers. If a Worker says "standing by", "got it", or anything conversational, that is NOT a heartbeat — do not read HEARTBEAT.md or run any checklist in response
+- **Worker 30-minute timeout** — Workers may be processing complex tasks; don't assume unresponsive too early
+- **Host files need explicit authorization** — never scan/search/read host files without admin permission
+- **Peer mentions default off** — only Manager/Admin can @mention Workers. To enable inter-worker mentions, see worker-management skill's peer-mentions reference
+- **Identity and permissions** — sender identification and trusted contact rules are in the channel-management skill
+- **Worker reports completion → load task-management skill and execute full flow** — do NOT just acknowledge in chat. You MUST: (1) pull task directory from MinIO, (2) read result, (3) update meta.json + state.json, (4) write memory, (5) notify admin. Skipping any step leaves stale state and missing results.
+- **Every task delegated to a Worker MUST be registered in state.json** — no exceptions for "simple", "coordination", or "non-coding" tasks. Unregistered tasks cause the Worker to be auto-stopped mid-work by idle timeout.
+- **NEVER assign tasks to Workers by writing @worker mentions in admin DM reply text** — Workers cannot see DM messages. When delegating work, you MUST send the task notification to the Worker's Room using the `message` tool with `channel=matrix` and `target=room:<room_id>` (get `roomID` from `hiclaw get workers -o json` — use `.roomID` in `jq`). The admin DM reply should only confirm to admin that the task was assigned.
+- **Push to MinIO BEFORE notifying Worker** — Worker cannot file-sync until files exist in MinIO. Always verify `mc cp` succeeds before sending @mention. If you notify first, Worker gets an empty sync.
+- **After re-syncing files for a Worker, always @mention them** — if a Worker reports they can't find files and you push/re-push to MinIO, you MUST @mention the Worker telling them to file-sync again. Without the @mention, the Worker never knows the files are ready.
+- **Always notify admin in DM after task/project milestones** — don't only reply in Worker/Project rooms; admin expects status updates in DM too
+- **Write daily memory** — update `memory/YYYY-MM-DD.md` after every significant event (task assigned, completed, Worker created, decisions made); without this, next session has no context

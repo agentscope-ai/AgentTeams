@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 cd "${REPO_ROOT}"
 
+python3 plugins/tests/protocol/run_characterization.py
 python3 plugins/tests/cli/test_agentteams_plugin_cli.py
 ruby plugins/scripts/validate-plugin.rb plugins/teamharness/plugin.yaml
 OUT_DIR="$(mktemp -d)" ruby plugins/scripts/package-plugin.rb plugins/teamharness/plugin.yaml >/dev/null

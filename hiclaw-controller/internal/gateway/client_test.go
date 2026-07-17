@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hiclaw/hiclaw-controller/internal/slicesx"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -120,7 +122,7 @@ func TestAuthorizeAIRoutes(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(&body)
 			authConfig, _ := body["authConfig"].(map[string]interface{})
 			consumers := toStringSlice(authConfig["allowedConsumers"])
-			if !containsString(consumers, "worker-alice") {
+			if !slicesx.Contains(consumers, "worker-alice") {
 				t.Errorf("expected worker-alice in allowedConsumers, got %v", consumers)
 			}
 			w.WriteHeader(http.StatusOK)
@@ -589,11 +591,11 @@ func TestAuthorizeAIRoutes_ProviderFilter(t *testing.T) {
 		t.Fatalf("expected PUT on qwen-route and stale openai-route, got %v", putRoutes)
 	}
 	qwenConsumers := toStringSlice(putRoutes["qwen-route"]["authConfig"].(map[string]interface{})["allowedConsumers"])
-	if !containsString(qwenConsumers, "worker-alice") {
+	if !slicesx.Contains(qwenConsumers, "worker-alice") {
 		t.Fatalf("qwen-route allowedConsumers=%v, want worker-alice", qwenConsumers)
 	}
 	openAIConsumers := toStringSlice(putRoutes["openai-route"]["authConfig"].(map[string]interface{})["allowedConsumers"])
-	if containsString(openAIConsumers, "worker-alice") {
+	if slicesx.Contains(openAIConsumers, "worker-alice") {
 		t.Fatalf("openai-route allowedConsumers=%v, want worker-alice removed", openAIConsumers)
 	}
 
@@ -705,3 +707,20 @@ func TestResolveModelProvider_Higress_NotFound(t *testing.T) {
 		t.Errorf("error = %q, want it to contain 'not found'", err.Error())
 	}
 }
+
+// Compile-time interface splits (C10.9).
+var (
+	_ ConsumerClient        = (*HigressClient)(nil)
+	_ PortExposeClient      = (*HigressClient)(nil)
+	_ InfrastructureClient  = (*HigressClient)(nil)
+	_ ModelProviderClient   = (*HigressClient)(nil)
+	_ HealthClient          = (*HigressClient)(nil)
+	_ Client                = (*HigressClient)(nil)
+
+	_ ConsumerClient       = (*AIGatewayClient)(nil)
+	_ PortExposeClient     = (*AIGatewayClient)(nil)
+	_ InfrastructureClient = (*AIGatewayClient)(nil)
+	_ ModelProviderClient  = (*AIGatewayClient)(nil)
+	_ HealthClient         = (*AIGatewayClient)(nil)
+	_ Client               = (*AIGatewayClient)(nil)
+)

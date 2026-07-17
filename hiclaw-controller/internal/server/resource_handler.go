@@ -36,6 +36,7 @@ type ResourceHandler struct {
 	client    client.Client
 	namespace string
 	backend   *backend.Registry
+	workers   *WorkerResourceService
 
 	// controllerName is stamped as agentteams.io/controller on every CR this
 	// handler creates, overwriting any value supplied by the client. This
@@ -74,6 +75,7 @@ func NewResourceHandler(c client.Client, namespace string, b *backend.Registry, 
 		client:         c,
 		namespace:      namespace,
 		backend:        b,
+		workers:        NewWorkerResourceService(c, namespace),
 		controllerName: controllerName,
 	}
 }
@@ -99,71 +101,15 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if req.Name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	if err := validation.ValidateResourceName(req.Name); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 
-	if team, ok, err := h.findTeamForMember(r.Context(), req.Name); err != nil {
-		writeK8sError(w, "create worker", err)
-		return
-	} else if ok {
-		httputil.WriteError(w, http.StatusConflict,
-			"worker name is a member of team "+team+"; manage via PUT /api/v1/teams/"+team)
-		return
-	}
-
-	// containerManaged default is true (controller manages container).
-	containerManaged := true
-	if req.ContainerManaged != nil {
-		containerManaged = *req.ContainerManaged
-	}
-	runtime := req.Runtime
-	if runtime == "" {
-		runtime = backend.RuntimeOpenClaw
-	}
-
-	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      req.Name,
-			Namespace: h.namespace,
-		},
-		Spec: v1beta1.WorkerSpec{
-			Model:            req.Model,
-			ModelProvider:    req.ModelProvider,
-			WorkerName:       req.WorkerName,
-			Runtime:          runtime,
-			Image:            req.Image,
-			Identity:         req.Identity,
-			Soul:             req.Soul,
-			Agents:           req.Agents,
-			Skills:           req.Skills,
-			McpServers:       req.McpServers,
-			Package:          req.Package,
-			Expose:           req.Expose,
-			ChannelPolicy:    req.ChannelPolicy,
-			Resources:        req.Resources,
-			ContainerManaged: &containerManaged,
-			State:            req.State,
-		},
-	}
-
-	// Team leaders managing team members must use /api/v1/teams — they can no
-	// longer back-door-create team workers through the standalone /workers
-	// API. (Historical annotation-forcing path removed in the team-refactor.)
 	caller := authpkg.CallerFromContext(r.Context())
-	if caller != nil && caller.Role == authpkg.RoleTeamLeader {
-		httputil.WriteError(w, http.StatusConflict,
-			"team leaders must manage members via PUT /api/v1/teams/"+caller.Team)
-		return
-	}
-	if req.Team != "" || req.Role != "" || req.TeamLeader != "" {
-		httputil.WriteError(w, http.StatusBadRequest,
-			"worker.team / worker.role / worker.teamLeader are reserved for team members; use /api/v1/teams")
+	worker, derr := h.workers.ValidateCreateStandaloneWorker(r.Context(), req, caller)
+	if derr != nil {
+		if derr.K8sErr != nil {
+			writeK8sError(w, "create worker", derr.K8sErr)
+			return
+		}
+		httputil.WriteError(w, derr.Status, derr.Message)
 		return
 	}
 
@@ -189,7 +135,7 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		resp := workerToResponse(&worker)
-		if team, member, ok, terr := h.findTeamMember(r.Context(), name); terr != nil {
+		if team, member, ok, terr := h.workers.findTeamMember(r.Context(), name); terr != nil {
 			writeK8sError(w, "get worker", terr)
 			return
 		} else if ok {
@@ -203,7 +149,7 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fall back to synthesizing a response from the Team CR.
-	team, member, ok, terr := h.findTeamMember(r.Context(), name)
+	team, member, ok, terr := h.workers.findTeamMember(r.Context(), name)
 	if terr != nil {
 		writeK8sError(w, "get worker", terr)
 		return
@@ -228,7 +174,7 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
-		if team, member, ok, terr := h.findTeamMember(r.Context(), list.Items[i].Name); terr != nil {
+		if team, member, ok, terr := h.workers.findTeamMember(r.Context(), list.Items[i].Name); terr != nil {
 			writeK8sError(w, "list workers: lookup team member", terr)
 			return
 		} else if ok {
@@ -306,7 +252,7 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if team, ok, err := h.findTeamForMember(r.Context(), name); err != nil {
+	if team, ok, err := h.workers.findTeamForMember(r.Context(), name); err != nil {
 		writeK8sError(w, "update worker", err)
 		return
 	} else if ok {
@@ -393,7 +339,7 @@ func (h *ResourceHandler) DeleteWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if team, ok, err := h.findTeamForMember(r.Context(), name); err != nil {
+	if team, ok, err := h.workers.findTeamForMember(r.Context(), name); err != nil {
 		writeK8sError(w, "delete worker", err)
 		return
 	} else if ok {
@@ -1283,57 +1229,6 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		resp.Phase = "Pending"
 	}
 	return resp
-}
-
-// findTeamForMember reports whether the given worker name is a member
-// (leader or worker) of any Team in the current namespace.
-func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (string, bool, error) {
-	team, _, ok, err := h.findTeamMember(ctx, name)
-	if err != nil || !ok {
-		return "", false, err
-	}
-	return team.Name, true, nil
-}
-
-// findTeamMember does the same as findTeamForMember but also returns the
-// resolved Team CR and the member's name (for response synthesis).
-func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1beta1.Team, string, bool, error) {
-	var indexed v1beta1.TeamList
-	if err := h.client.List(ctx, &indexed,
-		client.InNamespace(h.namespace),
-		client.MatchingFields{teamWorkerMembersField: name},
-	); err == nil {
-		for i := range indexed.Items {
-			t := &indexed.Items[i]
-			for _, ref := range t.Spec.WorkerMembers {
-				if ref.Name == name {
-					return t, ref.Name, true, nil
-				}
-			}
-		}
-	}
-
-	var list v1beta1.TeamList
-	if err := h.client.List(ctx, &list, client.InNamespace(h.namespace)); err != nil {
-		return nil, "", false, err
-	}
-	for i := range list.Items {
-		t := &list.Items[i]
-		if t.Spec.Leader.Name == name {
-			return t, t.Spec.Leader.Name, true, nil
-		}
-		for _, w := range t.Spec.Workers {
-			if w.Name == name {
-				return t, w.Name, true, nil
-			}
-		}
-		for _, ref := range t.Spec.WorkerMembers {
-			if ref.Name == name {
-				return t, ref.Name, true, nil
-			}
-		}
-	}
-	return nil, "", false, nil
 }
 
 func (h *ResourceHandler) applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string) {

@@ -6,7 +6,6 @@
 #   - .md files: merge (replace builtin section, preserve user content below end marker)
 #   - scripts/ and references/ dirs: always overwrite from image
 #   - Worker builtins: sync directly to each registered worker's MinIO workspace
-#   - Workers no longer need to pull from shared/builtins/worker/ on startup
 
 set -e
 
@@ -19,9 +18,19 @@ MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
 source /opt/hiclaw/scripts/lib/builtin-merge.sh
 
+bash /opt/hiclaw/scripts/lib/sync-shared-worker-skills.sh "${AGENT_SRC}"
+
 log() {
     echo "[upgrade-builtins $(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
+
+# ============================================================
+# Step 0: Render manager prompts from fragments (when present)
+# ============================================================
+if [ -d "${AGENT_SRC}/fragments/AGENTS" ] && [ -f /opt/hiclaw/scripts/lib/render-manager-prompts.sh ]; then
+    log "Step 0: Rendering manager prompts from fragments..."
+    bash /opt/hiclaw/scripts/lib/render-manager-prompts.sh all "${AGENT_SRC}"
+fi
 
 # ============================================================
 # Step 1: Upgrade Manager workspace .md files (14 files)
@@ -116,51 +125,11 @@ if [ ! -f "${WORKSPACE}/state.json" ]; then
 fi
 
 # ============================================================
-# Step 3: Publish Worker builtin templates to MinIO shared/builtins/worker/
+# Step 3: Sync builtins to all registered workers' MinIO workspaces
 # ============================================================
-log "Step 3: Publishing Worker builtins to MinIO..."
+log "Step 3: Syncing builtins to registered workers' workspaces..."
 
 WORKER_AGENT_SRC="${AGENT_SRC}/worker-agent"
-
-if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /dev/null 2>&1; then
-    ensure_mc_credentials 2>/dev/null || true
-    # Publish AGENTS.md (pure builtin content without markers, for comparison)
-    # We publish the marker-wrapped version so Workers can update their copy directly
-    mc cp "${WORKER_AGENT_SRC}/AGENTS.md" \
-        "${AGENTTEAMS_STORAGE_PREFIX}/shared/builtins/worker/AGENTS.md" 2>/dev/null \
-        && log "  Published: shared/builtins/worker/AGENTS.md" \
-        || log "  WARNING: Failed to publish AGENTS.md to MinIO (MinIO may not be ready yet)"
-
-    # Publish all builtin skills from worker-agent/skills/
-    if [ -d "${WORKER_AGENT_SRC}/skills" ]; then
-        for _skill_dir in "${WORKER_AGENT_SRC}/skills"/*/; do
-            [ ! -d "${_skill_dir}" ] && continue
-            _skill_name=$(basename "${_skill_dir}")
-            mc mirror "${_skill_dir}" \
-                "${AGENTTEAMS_STORAGE_PREFIX}/shared/builtins/worker/skills/${_skill_name}/" --overwrite 2>/dev/null \
-                && log "  Published: shared/builtins/worker/skills/${_skill_name}/" \
-                || log "  WARNING: Failed to publish builtin skill ${_skill_name} to MinIO"
-        done
-    fi
-
-    # Publish all worker-skills directories to builtins so Workers can refresh assigned skills
-    for _skill_dir in "${AGENT_SRC}/worker-skills"/*/; do
-        _skill_name=$(basename "${_skill_dir}")
-        mc mirror "${_skill_dir}" \
-            "${AGENTTEAMS_STORAGE_PREFIX}/shared/builtins/worker/skills/${_skill_name}/" --overwrite 2>/dev/null \
-            && log "  Published: shared/builtins/worker/skills/${_skill_name}/" \
-            || log "  WARNING: Failed to publish worker-skill ${_skill_name} to MinIO"
-    done
-else
-    log "  Skipping MinIO publish (worker-agent dir not found or mc not configured)"
-fi
-
-# ============================================================
-# Step 4: Sync builtins to all registered workers' MinIO workspaces
-# This ensures workers get builtin updates directly in their workspace,
-# eliminating the need for workers to pull from shared/builtins/worker/ on startup.
-# ============================================================
-log "Step 4: Syncing builtins to registered workers' workspaces..."
 
 if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /dev/null 2>&1; then
     ensure_mc_credentials 2>/dev/null || true
@@ -239,20 +208,20 @@ else
 fi
 
 # ============================================================
-# Step 5: Write installed version
+# Step 4: Write installed version
 # ============================================================
 echo "${IMAGE_VERSION}" > "${WORKSPACE}/.builtin-version"
-log "Step 5: Installed version: ${IMAGE_VERSION}"
+log "Step 4: Installed version: ${IMAGE_VERSION}"
 
 # ============================================================
-# Step 6: Mark that workers need builtin update notification
+# Step 5: Mark that workers need builtin update notification
 # ============================================================
 # Check if any workers are registered; if so, mark for post-startup notification
 if [ -f "${REGISTRY}" ] && jq -e '.workers | length > 0' "${REGISTRY}" > /dev/null 2>&1; then
     touch "${WORKSPACE}/.upgrade-pending-worker-notify"
-    log "Step 6: Marked for worker skill notification (workers registered)"
+    log "Step 5: Marked for worker skill notification (workers registered)"
 else
-    log "Step 6: No workers registered, skipping notification mark"
+    log "Step 5: No workers registered, skipping notification mark"
 fi
 
 log "Upgrade complete (version: ${IMAGE_VERSION})"

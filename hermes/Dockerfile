@@ -85,6 +85,10 @@ RUN npm config set registry ${NPM_REGISTRY} && \
 # Stage hermes-worker dependency metadata for layer caching: pyproject.toml
 # changes invalidate the heavy install layer below; src/ changes don't.
 COPY pyproject.toml README.md /tmp/hermes-worker/
+COPY --from=agentteams-matrix-policies . /tmp/agentteams-matrix-policies/
+COPY --from=agentteams-protocol . /tmp/agentteams-protocol/
+COPY --from=agentteams-openclaw-merge . /tmp/agentteams-openclaw-merge/
+COPY --from=agentteams-sync . /tmp/agentteams-sync/
 RUN mkdir -p /tmp/hermes-worker/src/hermes_worker \
     && mkdir -p /tmp/hermes-worker/src/hermes_matrix \
     && echo '__version__ = "0.0.0"' > /tmp/hermes-worker/src/hermes_worker/__init__.py \
@@ -102,6 +106,10 @@ RUN python -m venv /opt/venv/hermes \
     && /opt/venv/hermes/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        /tmp/agentteams-protocol/ /tmp/agentteams-openclaw-merge/ /tmp/agentteams-sync/ /tmp/agentteams-matrix-policies/ \
+    && /opt/venv/hermes/bin/pip install --no-cache-dir \
+        --index-url "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         /opt/hermes-src \
     && /opt/venv/hermes/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
@@ -115,7 +123,7 @@ RUN python -m venv /opt/venv/hermes \
         "rich>=13.0" \
         "httpx>=0.25" \
         "pyyaml>=6.0" \
-    && /opt/venv/hermes/bin/pip install --no-cache-dir \
+    && /opt/venv/hermes/bin/pip install --no-cache-dir --no-deps \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         /tmp/hermes-worker/

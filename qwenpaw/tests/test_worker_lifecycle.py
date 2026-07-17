@@ -534,7 +534,7 @@ def test_install_teamharness_plugin_unpacks_zip_before_qwenpaw_install(
     zip_path = _write_plugin_zip(tmp_path, "teamharness", "teamharness-qwenpaw-0.1.0", "teamharness-qwenpaw.zip")
     calls: list[list[str]] = []
 
-    def fake_run(command, check):
+    def fake_run(command, check=True, **_kwargs):
         assert check is True
         plugin_dir = Path(command[3])
         assert plugin_dir.is_dir()
@@ -542,8 +542,8 @@ def test_install_teamharness_plugin_unpacks_zip_before_qwenpaw_install(
         calls.append(command)
 
     monkeypatch.setenv("AGENTTEAMS_TEAMHARNESS_QWENPAW_PLUGIN_PACKAGE", str(zip_path))
-    monkeypatch.setattr("qwenpaw_worker.worker.shutil.which", lambda _name: "/usr/bin/qwenpaw")
-    monkeypatch.setattr("qwenpaw_worker.worker.subprocess.run", fake_run)
+    monkeypatch.setattr("qwenpaw_worker.plugin_bootstrap.shutil.which", lambda _name: "/usr/bin/qwenpaw")
+    monkeypatch.setattr("qwenpaw_worker.plugin_install.subprocess.run", fake_run)
 
     Worker(_config(tmp_path))._install_teamharness_plugin()
 
@@ -561,12 +561,12 @@ def test_plugin_install_logs_package_summary_without_sensitive_values(
     config = _config(tmp_path)
     config.fs_secret_key = "credential-secret-value"
 
-    def fake_run(command, check):
+    def fake_run(command, check=True, **_kwargs):
         assert check is True
 
     monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN", "worker-auth-token")
-    monkeypatch.setattr("qwenpaw_worker.worker.shutil.which", lambda _name: "/usr/bin/qwenpaw")
-    monkeypatch.setattr("qwenpaw_worker.worker.subprocess.run", fake_run)
+    monkeypatch.setattr("qwenpaw_worker.plugin_bootstrap.shutil.which", lambda _name: "/usr/bin/qwenpaw")
+    monkeypatch.setattr("qwenpaw_worker.plugin_install.subprocess.run", fake_run)
     caplog.set_level(logging.INFO, logger="qwenpaw_worker.worker")
 
     Worker(config)._install_qwenpaw_plugin_package("teamharness", zip_path, "teamharness-qwenpaw-plugin-")
@@ -597,7 +597,7 @@ def test_install_default_plugins_installs_teamharness_and_workerflow(
     )
     installed: list[str] = []
 
-    def fake_run(command, check):
+    def fake_run(command, check=True, **_kwargs):
         assert check is True
         plugin_dir = Path(command[3])
         manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
@@ -605,8 +605,8 @@ def test_install_default_plugins_installs_teamharness_and_workerflow(
 
     monkeypatch.setenv("AGENTTEAMS_TEAMHARNESS_QWENPAW_PLUGIN_PACKAGE", str(teamharness_zip))
     monkeypatch.setenv("AGENTTEAMS_WORKERFLOW_QWENPAW_PLUGIN_PACKAGE", str(workerflow_zip))
-    monkeypatch.setattr("qwenpaw_worker.worker.shutil.which", lambda _name: "/usr/bin/qwenpaw")
-    monkeypatch.setattr("qwenpaw_worker.worker.subprocess.run", fake_run)
+    monkeypatch.setattr("qwenpaw_worker.plugin_bootstrap.shutil.which", lambda _name: "/usr/bin/qwenpaw")
+    monkeypatch.setattr("qwenpaw_worker.plugin_install.subprocess.run", fake_run)
 
     Worker(_config(tmp_path))._install_default_plugins()
 
@@ -637,15 +637,15 @@ async def test_start_uses_image_builtin_plugins_without_runtime_install(
     )
     install_commands: list[list[str]] = []
 
-    def fake_run(command, check):
+    def fake_run(command, check=True, **_kwargs):
         assert check is True
         install_commands.append(command)
 
     monkeypatch.setenv("AGENTTEAMS_BUILTIN_QWENPAW_PLUGINS_DIR", str(builtin_plugins))
     monkeypatch.setenv("AGENTTEAMS_TEAMHARNESS_QWENPAW_PLUGIN_PACKAGE", str(teamharness_zip))
     monkeypatch.setenv("AGENTTEAMS_WORKERFLOW_QWENPAW_PLUGIN_PACKAGE", str(workerflow_zip))
-    monkeypatch.setattr("qwenpaw_worker.worker.shutil.which", lambda _name: "/usr/bin/qwenpaw")
-    monkeypatch.setattr("qwenpaw_worker.worker.subprocess.run", fake_run)
+    monkeypatch.setattr("qwenpaw_worker.plugin_bootstrap.shutil.which", lambda _name: "/usr/bin/qwenpaw")
+    monkeypatch.setattr("qwenpaw_worker.plugin_install.subprocess.run", fake_run)
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.mirror_all", lambda _self: None)
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.pull_runtime_config", lambda _self, _path: True)
     monkeypatch.setattr("qwenpaw_worker.worker.Worker._configure_qwenpaw_runtime", lambda _self: None)
@@ -703,12 +703,12 @@ def test_runtime_adapter_reapplies_builtin_assets_without_runtime_install(
     install_commands: list[list[str]] = []
     applied: list[str] = []
 
-    def fake_run(command, check):
+    def fake_run(command, check=True, **_kwargs):
         assert check is True
         install_commands.append(command)
 
     monkeypatch.setenv("AGENTTEAMS_BUILTIN_QWENPAW_PLUGINS_DIR", str(builtin_plugins))
-    monkeypatch.setattr("qwenpaw_worker.worker.subprocess.run", fake_run)
+    monkeypatch.setattr("qwenpaw_worker.plugin_install.subprocess.run", fake_run)
     monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_teamharness_assets", lambda _self: applied.append("teamharness"))
     monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_workerflow_assets", lambda _self: applied.append("workerflow"))
 

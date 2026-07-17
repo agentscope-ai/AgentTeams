@@ -1,0 +1,272 @@
+---
+
+### 2. Check Status of Finite Tasks
+
+Iterate over entries in `active_tasks` with `"type": "finite"`:
+
+- Read `assigned_to`, `room_id`, and `project_room_id` (if present) from the entry
+- Determine the target room: use `project_room_id` if available, otherwise use `room_id`
+- **Before sending any message**, ensure the Worker's container is running:
+  ```bash
+  bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+    --action ensure-ready --worker {worker}
+  ```
+  The script outputs JSON with a `status` field:
+  - `ready` — container was already running, proceed normally
+  - `started` — container was stopped and has been woken up; **wait 30 seconds** for the Worker to initialize before sending the follow-up message
+  - `recreated` — container was missing and has been recreated; **wait 60 seconds** before sending the follow-up message, and flag this anomaly for the admin report (Step 7)
+  - `remote` — legacy lifecycle status meaning the container is not managed through the Manager-local container API; assume the controller/backend owns readiness
+  - `failed` — could not start/recreate the container; **skip the follow-up message**, flag the anomaly for the admin report (Step 7), and suggest the admin intervene
+- **Use `copaw channels send` via shell** to send a follow-up to that room:
+  ```bash
+  copaw channels send \
+    --agent-id default \
+    --channel matrix \
+    --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
+    --target-session "{room_id}" \
+    --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} How is your current task {task-id} going? Are you blocked on anything?"
+  ```
+- Determine if the Worker is making normal progress based on their reply
+- If the Worker has not responded (no response for more than one heartbeat cycle), flag the anomaly in the Room and notify the human admin (see Step 7)
+- If the Worker has replied that the task is complete but meta.json has not been updated, proactively update meta.json (status → completed, fill in completed_at), and remove the entry from `active_tasks`:
+  ```bash
+  bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
+  ```
+- **Blocked-age nudge:** if the entry has `"status": "blocked"`, compare `blocked_since` to the current UTC time. When it is older than **~24h**, this is a **finding** — escalate it now in the Step 7 report (do not wait for the daily digest gate) using the `[task-id] blocker text` envelope, e.g. `[{task-id}] blocked since {blocked_since} — {blocked_reason}; still unresolved after 24h`. Re-raise once per 24h of continued blockage (don't re-nudge every heartbeat cycle) — after sending, note the nudge time so the next cycle can tell whether another 24h has elapsed.
+
+---
+
+### 2a. Orphaned-Task Sweep
+
+Container delete+recreate on any spec change (`member_reconcile.go` — "spec changed, recreating container" → delete → recreate) strands whatever task the Worker had in flight: the entry stays in `active_tasks` forever unless something notices. For each **finite** active task (this includes team-delegated ones, keyed on the Team Leader):
+
+1. Check the assigned worker's container status:
+   ```bash
+   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+     --action ensure-ready --worker {worker}
+   ```
+   `recreated` or `failed` is a strong orphan signal — the container backing this task's context is gone or unreachable.
+2. Cross-check task-dir recency: look at the task's `shared/tasks/{task-id}/progress/` prefix and find the latest `YYYY-MM-DD.md` by filename. If there has been **no new progress entry across N heartbeat cycles** (use the same "no response for more than one cycle" threshold as Step 2), treat it as stalled.
+3. If **either** signal fires (worker gone/recreated/failed, **or** no progress across N cycles): do **not** silently drop the entry and do **not** delete it — mark it blocked instead:
+   ```bash
+   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+     --action mark-blocked --task-id {task-id} --reason "orphaned: container recreated/stalled"
+   ```
+   then flag it in the Step 7 report immediately (same `[task-id]` envelope as the blocked-age nudge above — this is itself a fresh `mark-blocked`, so it will also be picked up by the blocked-age check on future cycles once `blocked_since` ages past 24h).
+4. Cancelling the task stays a human decision — the sweep only ever calls `mark-blocked`, never `cancel`. The admin (or the Worker, once it resurfaces) can `unblock`, `reassign`, or `cancel` explicitly.
+
+---
+
+### 2b. Check Team-Delegated Tasks
+
+Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
+
+- These tasks are managed by Team Leaders, NOT individual workers
+- Read `assigned_to` (the Team Leader name) and `room_id` (the Leader Room)
+- **Ensure the Team Leader's container is running**:
+  ```bash
+  bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+    --action ensure-ready --worker {leader}
+  ```
+- **Use `copaw channels send` via shell** to send a follow-up to the Leader room:
+  ```bash
+  copaw channels send \
+    --agent-id default \
+    --channel matrix \
+    --target-user "@{leader}:${AGENTTEAMS_MATRIX_DOMAIN}" \
+    --target-session "{room_id}" \
+    --text "@{leader}:${AGENTTEAMS_MATRIX_DOMAIN} How is task {task-id} progressing? Any blockers from your team?"
+  ```
+- **Do NOT contact team workers directly** — the Team Leader handles internal coordination
+- If the Team Leader reports completion, process it the same as a regular worker completion
+- If the Team Leader reports a blocker, escalate to admin (Step 7)
+
+---
+
+### 3. Check Infinite Task Timeouts
+
+Iterate over entries in `active_tasks` with `"type": "infinite"`. For each entry:
+
+```
+Current UTC time = now
+
+Conditions (both must be met):
+  1. last_executed_at < next_scheduled_at (not yet executed this cycle)
+     OR last_executed_at is null (never executed)
+  2. now > next_scheduled_at + 30 minutes (overdue)
+```
+
+If conditions are met:
+
+1. **Ensure the Worker's container is running** before triggering:
+   ```bash
+   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+     --action ensure-ready --worker {worker}
+   ```
+   If `status` is `failed`, skip the trigger and flag the anomaly for the admin report (Step 7). If `started` or `recreated`, wait for the Worker to initialize (30s / 60s respectively).
+
+2. Read `room_id` from the entry and **use `copaw channels send` via shell** to trigger execution:
+   ```bash
+   copaw channels send \
+     --agent-id default \
+     --channel matrix \
+     --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
+     --target-session "{room_id}" \
+     --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} It's time to run your scheduled task {task-id} \"{task-title}\". Please execute it now and report back with the keyword \"executed\"."
+   ```
+
+**Note**: Infinite tasks are never removed from active_tasks. After the Worker reports `executed`, **only** update `last_executed_at` and `next_scheduled_at` — do NOT @mention the Worker again:
+```bash
+bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+  --action executed --task-id {task-id} --next-scheduled-at "{new-ISO-8601}"
+```
+
+**CRITICAL**: Triggering and recording are independent actions. Heartbeat triggers execution when the schedule says it's time. Recording happens when the Worker reports back. Never re-trigger a Worker immediately after recording — the next execution will be triggered by a future heartbeat when `next_scheduled_at` is due.
+
+---
+
+### 4. Project Progress Monitoring
+
+Scan plan.md for all active projects under /root/hiclaw-fs/shared/projects/:
+
+```bash
+for meta in /root/hiclaw-fs/shared/projects/*/meta.json; do
+  cat "$meta"
+done
+```
+
+- Filter projects with `"status": "active"`
+- For each active project, read `project_room_id` from meta.json, then read plan.md and find tasks marked as `[~]` (in progress)
+- If the responsible Worker has had no activity during this heartbeat cycle, **ensure the Worker's container is running first** (`lifecycle-worker.sh --action ensure-ready --worker {worker}`), then **use `copaw channels send` via shell** to send a follow-up to the project room:
+  ```bash
+  copaw channels send \
+    --agent-id default \
+    --channel matrix \
+    --target-user "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}" \
+    --target-session "{project_room_id}" \
+    --text "@{worker}:${AGENTTEAMS_MATRIX_DOMAIN} Any progress on your current task {task-id} \"{title}\"? Please let us know if you're blocked."
+  ```
+- If a Worker has reported task completion in the project room but plan.md has not been updated yet, handle it immediately (see the project management section in AGENTS.md)
+
+---
+
+### 5. Capacity Assessment
+
+- Count the number of `type=finite` entries in state.json (finite tasks in progress) and identify idle Workers with no assigned tasks (neither finite nor infinite)
+- If Workers are insufficient, check in with the human admin about whether new Workers need to be created
+- If Workers are idle, suggest reassigning tasks
+
+---
+
+### 5b. Drain Pending Worker Greetings
+
+If `~/pending-workers.json` exists, the previous admin DM turn(s) finished early after `hiclaw create worker --no-wait` and deferred the post-creation polling/greeting to you. Process every entry:
+
+```bash
+test -s ~/pending-workers.json || true
+```
+
+For each entry (one JSON object per line):
+
+1. Look up current status:
+   ```bash
+   PHASE=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .phase // "Unknown"')
+   ```
+2. **`Pending`** and queued < 90s ago — leave the entry, drain again next heartbeat.
+3. **`Pending`** and queued > 90s ago — flag the anomaly to admin in DM (Step 7) and remove the entry using the drain helper below.
+4. **`Failed`** — read the worker's `message` field, notify admin in DM with the failure reason, remove the entry using the drain helper below.
+5. **`Running`** — fetch `roomID` from `hiclaw get workers -o json`, greet the Worker, then notify admin in DM that the Worker is up:
+   ```bash
+   ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
+   bash /opt/hiclaw/agent/skills/worker-management/scripts/send-worker-greeting.sh \
+     --worker "<NAME>" --room "${ROOM_ID}"
+   # Then notify admin via copaw channels send to the resolved admin DM room:
+   #   "<NAME> is now Running and greeted in their Worker room."
+   ```
+   Remove the entry from `~/pending-workers.json` after successful greeting + notify using the drain helper below.
+
+Never run `rm`, `unlink`, `mv`, or any inline rewrite command for `~/pending-workers.json`; Tool Guard may pause the Admin DM session and block later admin requests. Keep the file, even if it becomes empty. To remove a processed entry, call the helper:
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
+```
+
+---
+
+### 6. Worker Container Lifecycle Management
+
+Only execute when the container API is available (check first):
+
+```bash
+bash -c 'source /opt/hiclaw/scripts/lib/container-api.sh && container_api_available && echo available'
+```
+
+If the output is `available`, proceed with the following steps:
+
+1. Sync status:
+   ```bash
+   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --action sync-status
+   ```
+
+2. Detect idle Workers and auto-stop those that have exceeded the timeout:
+   ```bash
+   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --action check-idle
+   ```
+   For each Worker that was auto-stopped, look up the Worker's `room_id` from `workers-registry.json` and **use `copaw channels send` via shell** to log:
+   ```bash
+   copaw channels send \
+     --agent-id default \
+     --channel matrix \
+     --target-user "" \
+     --target-session "{worker_room_id}" \
+     --text "Worker {name} container has been automatically paused due to idle timeout. It will be automatically resumed when a task is assigned."
+   ```
+
+---
+
+### 7. Report to Admin
+
+**All heartbeat findings MUST be sent to the admin via `copaw channels send`** (not as a reply in the current heartbeat context).
+
+- If all Workers are healthy and there are no pending items: HEARTBEAT_OK, then fall through to the **daily digest gate** below instead of staying silent.
+- Otherwise, **read SOUL.md first** — use the identity, personality, and **user's preferred language** defined there when composing the report. Report in that language and tone.
+- Resolve the notification channel:
+  ```bash
+  bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
+  ```
+  The script outputs JSON with `channel`, `target`, and `via` fields.
+
+  - When `channel` is **`matrix`**: set `--target-session` to the room id from `target` after stripping a leading `room:` prefix if present. Set `--target-user` to the admin's full Matrix id `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}`. Run:
+    ```bash
+    copaw channels send \
+      --agent-id default \
+      --channel matrix \
+      --target-user "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}" \
+      --target-session "<room_id_without_room_prefix>" \
+      --text "@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN} [Heartbeat Report] <summarize findings and recommended actions, in SOUL.md persona and language>"
+    ```
+    If the summary contains characters that break double-quoted `--text`, switch to single-quoted `--text` and type the admin Matrix id literally inside the string.
+  - When `channel` is **not** `matrix` and not `"none"`: use **`copaw channels send`** with the resolved `channel` and `target` per **channel-management** / **primary-channel** skill references for that channel.
+  - If `channel` is **`"none"`**: admin DM room has not been discovered yet — attempt discovery now (see Step 1), then retry.
+
+#### Daily digest (quiet-day gate)
+
+Findings (anomalies, blockers, capacity asks, blocked-age nudges from Step 2, orphan-sweep flags from Step 2a) always go out immediately via the reporting flow above — the digest never replaces that. The digest exists only to break silence on days where the healthy-branch above would otherwise send nothing.
+
+Time-gate this against `last_digest_sent_at` in state.json so it fires **at most once per 24h**:
+
+1. Read the current value:
+   ```bash
+   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action last-digest get
+   ```
+2. If the returned timestamp is `null`, or is more than 24 hours before the current UTC time, send the digest; otherwise skip it (already sent within the last day).
+3. Digest content — a cross-team summary, not per-tool-call detail: per-team active task counts, idle workers, blocked items (from `mark-blocked`/`blocked_since`), and prior-day completions.
+4. Send it to the admin using the **same channel-resolution steps as the rest of Step 7** (`resolve-notify-channel.sh` → `copaw channels send`, in SOUL.md persona/language) — the digest is a Manager→admin report, addressed to the admin DM/notification channel, never posted into a Worker/Leader/project room.
+5. On successful send, record the timestamp so the gate holds for the next 24h:
+   ```bash
+   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action last-digest set --at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+   ```
+
+**Interaction with quiet rooms (Phase 5b):** quiet-rooms suppression targets **Worker** per-tool-call chatter inside Worker/Leader/project rooms — it never touches the Manager's own admin-facing sends. The digest is a Manager→admin event-level report, so it always goes out over the admin channel regardless of any room's quiet-rooms setting. Do not attempt to satisfy the digest by posting into a team/project room instead of the admin channel — a quiet-suppressed room is not an acceptable substitute delivery path.
+
+---

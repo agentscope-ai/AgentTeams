@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openhuman-worker"
+version = "0.1.0"
+description = "AgentTeams OpenHuman Worker bridge (openclaw.json → config.toml)"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+openhuman-worker = "openhuman_worker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

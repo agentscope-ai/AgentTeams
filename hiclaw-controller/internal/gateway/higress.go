@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hiclaw/hiclaw-controller/internal/slicesx"
 )
 
 // HigressClient implements Client for self-hosted Higress gateway.
@@ -276,7 +278,7 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 
 			changed := true
 			if add && matchesProvider {
-				if !containsString(consumers, consumerName) {
+				if !slicesx.Contains(consumers, consumerName) {
 					consumers = append(consumers, consumerName)
 				}
 				// Always PUT to trigger WASM key-auth resync — the consumer
@@ -803,15 +805,6 @@ func toStringSlice(v interface{}) []string {
 		return arr
 	}
 	return nil
-}
-
-func containsString(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
 }
 
 func removeString(slice []string, s string) []string {

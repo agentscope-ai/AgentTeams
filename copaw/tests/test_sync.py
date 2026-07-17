@@ -106,6 +106,8 @@ def test_mirror_all_restores_worker_prefix_and_shared_without_credentials(tmp_pa
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
+        if args[0] == "mirror" and args[2] == f"{sync.local_dir}/":
+            (sync.local_dir / "openclaw.json").write_text("{}")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr("copaw_worker.sync._mc", fake_mc)
@@ -136,6 +138,8 @@ def test_mirror_all_falls_back_to_startup_files_when_prefix_missing(tmp_path, mo
     commands = []
 
     monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_get_team_id", lambda: "dag-team")
+    monkeypatch.setattr(sync, "_is_team_leader", lambda: False)
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
@@ -193,6 +197,8 @@ def test_mirror_all_restores_global_shared_for_team_leader(tmp_path, monkeypatch
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
+        if args[0] == "mirror" and args[2] == f"{sync.local_dir}/":
+            (sync.local_dir / "openclaw.json").write_text("{}")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr("copaw_worker.sync._mc", fake_mc)
@@ -237,6 +243,8 @@ def test_pull_and_push_shared_paths_are_explicit_minio_operations(tmp_path, monk
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
+        if args[0] == "mirror" and args[2] == f"{sync.local_dir}/":
+            (sync.local_dir / "openclaw.json").write_text("{}")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr("copaw_worker.sync._mc", fake_mc)
@@ -344,6 +352,8 @@ def test_pull_all_refreshes_config_mcporter_and_skills_without_shared(tmp_path, 
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
+        if args[0] == "mirror" and args[2] == f"{sync.local_dir}/":
+            (sync.local_dir / "openclaw.json").write_text("{}")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(sync, "_cat", fake_cat)

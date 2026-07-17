@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/hiclaw/hiclaw-controller/internal/slicesx"
 )
 
 func TestGenerateOpenClawConfig_Basic(t *testing.T) {
@@ -47,10 +49,10 @@ func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 
 	// Verify default allowFrom includes manager and admin
 	groupAllow := toStringSlice(matrixCfg["groupAllowFrom"])
-	if !containsString(groupAllow, "@manager:matrix.test:8080") {
+	if !slicesx.Contains(groupAllow, "@manager:matrix.test:8080") {
 		t.Errorf("groupAllowFrom missing manager: %v", groupAllow)
 	}
-	if !containsString(groupAllow, "@admin:matrix.test:8080") {
+	if !slicesx.Contains(groupAllow, "@admin:matrix.test:8080") {
 		t.Errorf("groupAllowFrom missing admin: %v", groupAllow)
 	}
 
@@ -86,10 +88,10 @@ func TestGenerateOpenClawConfig_TeamWorker(t *testing.T) {
 	matrixCfg := config["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
 	groupAllow := toStringSlice(matrixCfg["groupAllowFrom"])
 
-	if containsString(groupAllow, "@manager:matrix.test:8080") {
+	if slicesx.Contains(groupAllow, "@manager:matrix.test:8080") {
 		t.Error("team worker should not have manager in groupAllowFrom")
 	}
-	if !containsString(groupAllow, "@team-lead-dev:matrix.test:8080") {
+	if !slicesx.Contains(groupAllow, "@team-lead-dev:matrix.test:8080") {
 		t.Errorf("team worker groupAllowFrom should include leader: %v", groupAllow)
 	}
 }
@@ -120,10 +122,10 @@ func TestGenerateOpenClawConfig_ChannelPolicy(t *testing.T) {
 	matrixCfg := config["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
 	groupAllow := toStringSlice(matrixCfg["groupAllowFrom"])
 
-	if containsString(groupAllow, "@manager:d") {
+	if slicesx.Contains(groupAllow, "@manager:d") {
 		t.Error("manager should be denied by policy")
 	}
-	if !containsString(groupAllow, "@extra-user:d") {
+	if !slicesx.Contains(groupAllow, "@extra-user:d") {
 		t.Errorf("extra-user should be allowed: %v", groupAllow)
 	}
 }

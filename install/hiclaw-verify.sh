@@ -39,6 +39,10 @@
 
 # No set -e: each check is independent; failures do not abort subsequent checks.
 
+_INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=defaults.env
+source "${_INSTALL_DIR}/defaults.env"
+
 CONTAINER="${1:-agentteams-manager}"
 
 # ---------- Docker/Podman detection ----------
@@ -59,8 +63,8 @@ fi
 container_env=$("${DOCKER_CMD}" exec "${CONTAINER}" printenv 2>/dev/null) || container_env=""
 PORT_GATEWAY=$(echo "$container_env" | grep ^AGENTTEAMS_PORT_GATEWAY= | cut -d= -f2-)
 PORT_CONSOLE=$(echo "$container_env" | grep ^AGENTTEAMS_PORT_CONSOLE= | cut -d= -f2-)
-PORT_GATEWAY="${PORT_GATEWAY:-18080}"
-PORT_CONSOLE="${PORT_CONSOLE:-18001}"
+PORT_GATEWAY="${PORT_GATEWAY:-${AGENTTEAMS_PORT_GATEWAY}}"
+PORT_CONSOLE="${PORT_CONSOLE:-${AGENTTEAMS_PORT_CONSOLE}}"
 
 # ---------- Result tracking ----------
 

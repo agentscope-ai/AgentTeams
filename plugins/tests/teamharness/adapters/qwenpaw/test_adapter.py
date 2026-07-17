@@ -506,3 +506,57 @@ def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeyp
     assert client.env["AGENTTEAMS_WORKER_NAME"] == "worker-a"
     assert client.env["AGENTTEAMS_STORAGE_PREFIX"] == "agentteams/agentteams-storage"
     assert client.env["AGENTTEAMS_FS_BUCKET"] == "agentteams-storage"
+
+
+MATRIX_CHANNEL = REPO_ROOT / "plugins" / "teamharness" / "adapters" / "qwenpaw" / "matrix_channel.py"
+
+
+def _load_matrix_channel():
+    spec = importlib.util.spec_from_file_location("teamharness_qwenpaw_matrix_channel_test", MATRIX_CHANNEL)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_matrix_channel_tool_display_detection() -> None:
+    module = _load_matrix_channel()
+    assert module.is_teamharness_tool_display("🔧 taskflow(action=ack_task)")
+    assert not module.is_teamharness_tool_display("hello team")
+
+
+def test_matrix_channel_self_trigger_matches_target_room() -> None:
+    module = _load_matrix_channel()
+    event = type(
+        "Event",
+        (),
+        {
+            "source": {
+                "content": {
+                    module.TEAMHARNESS_TRIGGER_CONTENT_KEY: {
+                        "kind": "self_cross_session",
+                        "type": "PROJECT_REQUESTED",
+                        "targetRoomId": "!room:example",
+                        "targetSession": "matrix:!room:example",
+                    }
+                }
+            }
+        },
+    )()
+    trigger = module.parse_self_cross_session_trigger("!room:example", event)
+    assert trigger is not None
+    assert trigger["type"] == "PROJECT_REQUESTED"
+
+
+def test_matrix_channel_task_room_from_shared_metadata(tmp_path: Path) -> None:
+    module = _load_matrix_channel()
+    task_dir = tmp_path / "shared" / "tasks" / "demo-20260717-120000-01"
+    task_dir.mkdir(parents=True)
+    (task_dir / "meta.json").write_text('{"room_id": "!taskroom:example"}\n', encoding="utf-8")
+    cache: dict[str, dict[str, object]] = {}
+    assert module.looks_like_task_room(
+        "!taskroom:example",
+        None,
+        workspace_dir=tmp_path,
+        cache=cache,
+    )

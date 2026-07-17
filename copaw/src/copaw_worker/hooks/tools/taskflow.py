@@ -19,8 +19,8 @@ from copaw_worker.hooks.tools._toolhelpers import (
     _store,
 )
 from copaw_worker.hooks.tools.filesync import create_sync
+from copaw_worker.paths import runtime_root
 from copaw_worker.task import (
-    FileSystemTaskStore,
     RESULT_STATUSES,
     TaskMeta,
     TaskResult,
@@ -35,55 +35,6 @@ from copaw_worker.task import (
 )
 
 
-def _response(payload: dict[str, Any]) -> ToolResponse:
-    return ToolResponse(
-        content=[
-            TextBlock(
-                type="text",
-                text=json.dumps(payload, ensure_ascii=False),
-            ),
-        ],
-    )
-
-
-def _ok(**payload: Any) -> ToolResponse:
-    return _response({"ok": True, **payload})
-
-
-def _error(message: str, **payload: Any) -> ToolResponse:
-    return _response({"ok": False, "error": message, **payload})
-
-
-def _workspace_dir() -> Path:
-    configured = os.getenv("COPAW_WORKING_DIR")
-    if configured:
-        return Path(configured) / "workspaces" / "default"
-
-    cwd = Path.cwd()
-    if cwd.name == "default" and cwd.parent.name == "workspaces":
-        return cwd
-    if cwd.name == ".copaw":
-        return cwd / "workspaces" / "default"
-    return cwd
-
-
-def _store() -> FileSystemTaskStore:
-    return FileSystemTaskStore(_workspace_dir())
-
-
-def _runtime_root() -> Path:
-    configured = os.getenv("COPAW_WORKING_DIR")
-    if configured:
-        return Path(configured).expanduser().resolve().parent
-
-    workspace = _workspace_dir().resolve()
-    if workspace.name == "default" and workspace.parent.name == "workspaces":
-        copaw_dir = workspace.parent.parent
-        if copaw_dir.name == ".copaw":
-            return copaw_dir.parent
-    return workspace
-
-
 def _strip_yaml_string(value: str) -> str:
     text = value.strip()
     if not text or text in {"null", "~"}:
@@ -96,7 +47,7 @@ def _strip_yaml_string(value: str) -> str:
 
 
 def _runtime_config_field(section: str, key: str) -> str:
-    path = _runtime_root() / "runtime" / "runtime.yaml"
+    path = runtime_root() / "runtime" / "runtime.yaml"
     if not path.exists():
         return ""
 

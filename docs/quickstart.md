@@ -50,6 +50,17 @@ The default **embedded** install starts two main containers (see [architecture.m
 
 Worker containers (`hiclaw-worker-*`, `hiclaw-copaw-worker-*`, `hiclaw-hermes-worker-*`) are created when you add Workers.
 
+### Worker runtimes (embedded vs Kubernetes)
+
+| Runtime | Embedded `make install` | Kubernetes / Helm |
+|---------|-------------------------|-------------------|
+| **openclaw** (default) | Yes — selectable in install prompts | Yes |
+| **copaw** (QwenPaw) | Yes — selectable in install prompts | Yes |
+| **hermes** | Yes — selectable in install prompts | Yes |
+| **openhuman** | **No** — not in `install/hiclaw-install.sh` worker-runtime menu | Yes — `make build-openhuman-worker` + Worker CR `spec.runtime=openhuman` |
+
+OpenHuman Workers require the `agentteams/openhuman-worker` image and controller-managed provisioning (same pattern as other runtimes in cluster mode). Build the image with `make build-openhuman-worker`, load it into your cluster, then create Workers via `hiclaw create worker --runtime openhuman` or a Worker CR. Embedded local installs use openclaw, copaw, or hermes only.
+
 **Declarative CLI (no chat required):** The `hiclaw` binary is available **inside** `hiclaw-controller` and `hiclaw-manager`. For quick checks and provisioning from the host:
 
 ```bash

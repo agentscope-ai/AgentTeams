@@ -15,6 +15,8 @@ dependencies = [
     "linkify-it-py>=2.0",
     "pyyaml>=6.0",
     "typer>=0.9",
+    "agentteams-sync>=0.1.0",
+    "agentteams-matrix-format>=0.1.0",
 ]
 
 [project.urls]
@@ -26,3 +28,11 @@ qwenpaw-worker = "qwenpaw_worker.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "src",
+    "../shared/python/agentteams_sync/src",
+    "../shared/python/agentteams_matrix_format/src",
+    "scripts",
+]

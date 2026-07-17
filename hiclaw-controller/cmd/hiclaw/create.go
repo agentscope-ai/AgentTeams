@@ -217,16 +217,7 @@ func renderWorkerStatusSummary(resp *workerResp) string {
 // ---------------------------------------------------------------------------
 
 func createTeamCmd() *cobra.Command {
-	var (
-		name                 string
-		teamName             string
-		leaderName           string
-		leaderModel          string
-		leaderHeartbeatEvery string
-		workerIdleTimeout    string
-		workers              string
-		description          string
-	)
+	opts := createTeamOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "team",
@@ -237,62 +228,56 @@ func createTeamCmd() *cobra.Command {
   hiclaw create team --name alpha --leader-name alpha-lead --workers alice,bob
   hiclaw create team --name alpha --leader-name alpha-lead --leader-model claude-sonnet-4-6 --description "Frontend team"
   hiclaw create team --name alpha --leader-name alpha-lead --leader-heartbeat-every 30m --worker-idle-timeout 12h
-  To configure per-member CPU/memory resources, use a YAML manifest and pass it with 'hiclaw apply -f team.yaml'.`,
+  hiclaw create team --name alpha --leader-name alpha-lead --workers dev,qa --worker-models qwen3.6-plus,qwen3.6-plus --worker-skills github-operations:file-sync
+  hiclaw create team --name alpha --leader-name alpha-lead --workers dev,qa --worker-runtimes copaw,hermes
+  hiclaw create team --name alpha --leader-name alpha-lead --team-admin alice --peer-mentions false
+  To configure per-member CPU/memory resources, custom worker images, or full MCP server URLs, use a YAML manifest and pass it with 'hiclaw apply -f team.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if name == "" {
+			if opts.name == "" {
 				return fmt.Errorf("--name is required")
 			}
-			if leaderName == "" {
+			if opts.leaderName == "" {
 				return fmt.Errorf("--leader-name is required")
 			}
 
-			leader := map[string]interface{}{
-				"name": leaderName,
+			req, err := buildCreateTeamRequest(opts)
+			if err != nil {
+				return err
 			}
-			if leaderModel != "" {
-				leader["model"] = leaderModel
-			}
-			if leaderHeartbeatEvery != "" {
-				leader["heartbeat"] = map[string]interface{}{
-					"enabled": true,
-					"every":   leaderHeartbeatEvery,
-				}
-			}
-			setIfNotEmpty(leader, "workerIdleTimeout", workerIdleTimeout)
-
-			workerList := []interface{}{}
-			if workers != "" {
-				for _, w := range splitCSV(workers) {
-					workerList = append(workerList, map[string]interface{}{"name": w})
-				}
-			}
-
-			req := map[string]interface{}{
-				"name":    name,
-				"leader":  leader,
-				"workers": workerList,
-			}
-			setIfNotEmpty(req, "teamName", teamName)
-			setIfNotEmpty(req, "description", description)
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
 			if err := client.DoJSON(context.Background(), "POST", "/api/v1/teams", req, &resp); err != nil {
 				return fmt.Errorf("create team: %w", err)
 			}
-			fmt.Printf("team/%s created\n", name)
+			fmt.Printf("team/%s created\n", opts.name)
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&name, "name", "", "Team name (required)")
-	cmd.Flags().StringVar(&teamName, "team-name", "", "Runtime/storage team name (defaults to --name)")
-	cmd.Flags().StringVar(&leaderName, "leader-name", "", "Leader worker name (required)")
-	cmd.Flags().StringVar(&leaderModel, "leader-model", "", "Leader LLM model")
-	cmd.Flags().StringVar(&leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")
-	cmd.Flags().StringVar(&workerIdleTimeout, "worker-idle-timeout", "", "Idle timeout before the leader may sleep workers (e.g. 12h)")
-	cmd.Flags().StringVar(&workers, "workers", "", "Comma-separated worker names")
-	cmd.Flags().StringVar(&description, "description", "", "Team description")
+	cmd.Flags().StringVar(&opts.name, "name", "", "Team name (required)")
+	cmd.Flags().StringVar(&opts.teamName, "team-name", "", "Runtime/storage team name (defaults to --name)")
+	cmd.Flags().StringVar(&opts.leaderName, "leader-name", "", "Leader worker name (required)")
+	cmd.Flags().StringVar(&opts.leaderName, "leader", "", "Alias for --leader-name")
+	cmd.Flags().StringVar(&opts.leaderModel, "leader-model", "", "Leader LLM model")
+	cmd.Flags().StringVar(&opts.leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")
+	cmd.Flags().StringVar(&opts.workerIdleTimeout, "worker-idle-timeout", "", "Idle timeout before the leader may sleep workers (e.g. 12h)")
+	cmd.Flags().StringVar(&opts.workers, "workers", "", "Comma-separated worker names")
+	cmd.Flags().StringVar(&opts.description, "description", "", "Team description")
+	cmd.Flags().StringVar(&opts.teamAdmin, "team-admin", "", "Team Admin username (defaults to Global Admin)")
+	cmd.Flags().StringVar(&opts.teamAdminMatrixID, "team-admin-matrix-id", "", "Team Admin full Matrix user ID")
+	cmd.Flags().StringVar(&opts.peerMentions, "peer-mentions", "", "Allow team workers to @mention each other (true|false, default true)")
+	cmd.Flags().StringVar(&opts.teamChannelPolicy, "team-channel-policy", "", "Team-wide ChannelPolicySpec JSON")
+	cmd.Flags().StringVar(&opts.teamChannelPolicyFile, "team-channel-policy-file", "", "Path to team ChannelPolicySpec JSON")
+	cmd.Flags().StringVar(&opts.leaderChannelPolicy, "leader-channel-policy", "", "Leader ChannelPolicySpec JSON")
+	cmd.Flags().StringVar(&opts.leaderChannelPolicyFile, "leader-channel-policy-file", "", "Path to leader ChannelPolicySpec JSON")
+	cmd.Flags().StringVar(&opts.workerModels, "worker-models", "", "Comma-separated models aligned with --workers order")
+	cmd.Flags().StringVar(&opts.workerRuntimes, "worker-runtimes", "", "Comma-separated runtimes aligned with --workers order (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&opts.workerSkills, "worker-skills", "", "Per-worker skills, colon-separated (skills within a worker are comma-separated)")
+	cmd.Flags().StringVar(&opts.workerMcpServers, "worker-mcp-servers", "", "Per-worker MCP server names, colon-separated (names within a worker are comma-separated)")
+	cmd.Flags().StringVar(&opts.workerChannelPolicies, "worker-channel-policies", "", "Per-worker ChannelPolicySpec JSON, pipe-separated")
+	cmd.Flags().StringVar(&opts.leaderMcpServers, "leader-mcp-servers", "", "Comma-separated MCP server names for the Leader")
+	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "Shared model provider override for team members")
 	return cmd
 }
 

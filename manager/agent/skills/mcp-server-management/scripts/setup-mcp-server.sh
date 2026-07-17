@@ -9,7 +9,7 @@
 #   5. Worker consumer authorization + config/mcporter.json update/creation
 #
 # Usage:
-#   bash setup-mcp-server.sh <server-name> <credential-value> [--yaml-file <path>] [--api-domain <domain>]
+#   bash setup-mcp-server.sh <server-name> <credential-value> [--template <path>] [--yaml-file <path>] [--api-domain <domain>]
 #
 # Arguments:
 #   server-name       MCP server name (e.g., "github", "weather").
@@ -18,6 +18,7 @@
 #   credential-value  The credential value (e.g., GitHub PAT, API key)
 #
 # Options:
+#   --template <path>       Built-in MCP YAML template (default: configs/mcp-templates/mcp-<server-name>.yaml)
 #   --yaml-file <path>      Path to a user-provided YAML config file. Required when no
 #                           built-in template exists for the given server-name.
 #   --api-domain <domain>   Explicit API domain for DNS service source (e.g., "api.github.com").
@@ -38,6 +39,7 @@
 
 set -euo pipefail
 source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/hiclaw/scripts/lib/gateway-api.sh
 
 # ============================================================
 # Parse arguments
@@ -46,6 +48,8 @@ SERVER_NAME=""
 CREDENTIAL_VALUE=""
 EXPLICIT_API_DOMAIN=""
 EXPLICIT_YAML_FILE=""
+EXPLICIT_TEMPLATE_FILE=""
+MCP_TEMPLATES_DIR="${AGENTTEAMS_MCP_TEMPLATES_DIR:-/opt/hiclaw/configs/mcp-templates}"
 
 # Parse positional args and options
 POSITIONAL=()
@@ -57,6 +61,10 @@ while [ $# -gt 0 ]; do
             ;;
         --yaml-file)
             EXPLICIT_YAML_FILE="${2:-}"
+            shift 2
+            ;;
+        --template)
+            EXPLICIT_TEMPLATE_FILE="${2:-}"
             shift 2
             ;;
         *)
@@ -80,23 +88,16 @@ if [ -z "${SERVER_NAME}" ] || [ -z "${CREDENTIAL_VALUE}" ]; then
 fi
 
 MCP_SERVER_NAME="mcp-${SERVER_NAME}"
-REFERENCES_DIR="/opt/hiclaw/agent/skills/mcp-server-management/references"
-BUILTIN_YAML="${REFERENCES_DIR}/mcp-${SERVER_NAME}.yaml"
+DEFAULT_TEMPLATE="${MCP_TEMPLATES_DIR}/mcp-${SERVER_NAME}.yaml"
 
-# Cloud mode: MCP Server management via script is not yet supported
-if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
-    log "ERROR: MCP Server management via this script is not yet supported in cloud mode (AGENTTEAMS_RUNTIME=aliyun)."
-    log "Please manage MCP Servers through the Alibaba Cloud AI Gateway console instead."
-    log "Cloud MCP Server support will be added in a future release."
-    exit 1
-fi
+gateway_require_local_mcp_management || exit 1
 
 if [ -z "${HIGRESS_COOKIE_FILE:-}" ]; then
     log "ERROR: HIGRESS_COOKIE_FILE not set"
     exit 1
 fi
 
-# Resolve YAML file: --yaml-file > built-in template
+# Resolve YAML file: --yaml-file > --template > built-in template
 MCP_YAML_FILE=""
 if [ -n "${EXPLICIT_YAML_FILE}" ]; then
     if [ ! -f "${EXPLICIT_YAML_FILE}" ]; then
@@ -105,17 +106,25 @@ if [ -n "${EXPLICIT_YAML_FILE}" ]; then
     fi
     MCP_YAML_FILE="${EXPLICIT_YAML_FILE}"
     log "Using user-provided YAML: ${MCP_YAML_FILE}"
-elif [ -f "${BUILTIN_YAML}" ]; then
-    MCP_YAML_FILE="${BUILTIN_YAML}"
+elif [ -n "${EXPLICIT_TEMPLATE_FILE}" ]; then
+    if [ ! -f "${EXPLICIT_TEMPLATE_FILE}" ]; then
+        log "ERROR: Specified template not found: ${EXPLICIT_TEMPLATE_FILE}"
+        exit 1
+    fi
+    MCP_YAML_FILE="${EXPLICIT_TEMPLATE_FILE}"
+    log "Using template: ${MCP_YAML_FILE}"
+elif [ -f "${DEFAULT_TEMPLATE}" ]; then
+    MCP_YAML_FILE="${DEFAULT_TEMPLATE}"
     log "Using built-in template: ${MCP_YAML_FILE}"
 else
-    log "ERROR: No built-in template found for '${SERVER_NAME}' (looked for ${BUILTIN_YAML})"
-    log "For custom MCP services, provide the YAML config via --yaml-file:"
+    log "ERROR: No built-in template found for '${SERVER_NAME}' (looked for ${DEFAULT_TEMPLATE})"
+    log "For custom MCP services, provide the YAML config via --yaml-file or --template:"
     log ""
     log "  bash $0 ${SERVER_NAME} <credential> --yaml-file <path> [--api-domain <domain>]"
+    log "  bash $0 ${SERVER_NAME} <credential> --template /opt/hiclaw/configs/mcp-templates/mcp-${SERVER_NAME}.yaml"
     log ""
     log "Available built-in templates:"
-    ls "${REFERENCES_DIR}"/mcp-*.yaml 2>/dev/null | sed 's|.*/mcp-||;s|\.yaml||;s|^|  |' || echo "  (none)"
+    ls "${MCP_TEMPLATES_DIR}"/mcp-*.yaml 2>/dev/null | sed 's|.*/mcp-||;s|\.yaml||;s|^|  |' || echo "  (none)"
     exit 1
 fi
 

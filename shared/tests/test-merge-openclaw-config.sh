@@ -53,7 +53,8 @@ for case_dir in "${FIXTURES_DIR}"/*/; do
 
     merge_openclaw_config "${remote}" "${work_local}" "${work_local}.out"
 
-    if ! jq -e --argfile a "${work_local}.out" --argfile b "${expected}" -n '$a == $b' >/dev/null; then
+    # Prefer --slurpfile: --argfile was removed in modern jq (GitHub runners).
+    if ! jq -e --slurpfile a "${work_local}.out" --slurpfile b "${expected}" -n '$a[0] == $b[0]' >/dev/null; then
         echo "  FAIL: ${case_name} merged output does not match expected.json" >&2
         echo "    got:      $(jq -c . "${work_local}.out")" >&2
         echo "    expected: $(jq -c . "${expected}")" >&2

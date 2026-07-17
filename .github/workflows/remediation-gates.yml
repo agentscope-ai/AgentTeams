@@ -45,6 +45,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Install local shared Python packages
+        run: |
+          python -m pip install -e "./shared/python/agentteams_openclaw_merge" \
+            -e "./shared/python/agentteams_sync"
       - run: python -m pip install -e "./${{ matrix.runtime }}[test]"
       - run: python -m pytest -q "${{ matrix.runtime }}/tests"
 
@@ -80,8 +84,12 @@ jobs:
       - name: Add dependency repos
         run: helm repo add higress.io https://higress.io/helm-charts
       - run: helm dependency build helm/hiclaw
-      - run: helm lint helm/hiclaw --set credentials.llmApiKey=dummy
-      - run: helm template test helm/hiclaw --set credentials.llmApiKey=dummy --set dashboard.enabled=true > /dev/null
+      - run: helm lint helm/hiclaw --set credentials.llmApiKey=dummy --set gateway.publicURL=http://localhost:18080
+      - run: >
+          helm template test helm/hiclaw
+          --set credentials.llmApiKey=dummy
+          --set gateway.publicURL=http://localhost:18080
+          --set dashboard.enabled=true > /dev/null
 
   shared-shell:
     runs-on: ubuntu-latest

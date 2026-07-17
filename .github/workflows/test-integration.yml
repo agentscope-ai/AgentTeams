@@ -255,6 +255,11 @@ jobs:
              { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
             EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
             echo "Using locally-built openclaw-base for ${{ matrix.target }}"
+          elif [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; then
+            # The pinned base predates the AgentTeams registry namespace. Keep
+            # using its existing location until a release seeds the new repo.
+            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base OPENCLAW_BASE_VERSION=20260423-8359cbc"
+            echo "Using published migration base for ${{ matrix.target }}"
           fi
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
           # cn-hangzhou registry is unreachable from GitHub-hosted runners.

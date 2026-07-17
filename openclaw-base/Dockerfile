@@ -1,5 +1,5 @@
 # ============================================================
-# OpenClaw Base Image - Shared base for Manager and Worker
+# AgentTeams OpenClaw Base Image - Shared base for Manager and Worker
 # ============================================================
 # Based on a plain Ubuntu 24.04 image (mirrored from the higress
 # registry for in-China pull speed). The previous all-in-one base

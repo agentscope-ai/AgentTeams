@@ -172,7 +172,7 @@ jobs:
 
       - name: Build openclaw-base (local tag)
         run: |
-          # `make build-openclaw-base` always tags as hiclaw/openclaw-base:latest
+          # `make build-openclaw-base` always tags as agentteams/openclaw-base:latest
           # (LOCAL_OPENCLAW_BASE is hardcoded in the Makefile), which is exactly
           # what downstream build-manager/build-worker jobs consume via the
           # OPENCLAW_BASE_IMAGE / OPENCLAW_BASE_VERSION overrides.
@@ -185,13 +185,13 @@ jobs:
 
       - name: Save image
         run: |
-          docker save hiclaw/openclaw-base:latest | gzip > /tmp/hiclaw-openclaw-base.tar.gz
+          docker save agentteams/openclaw-base:latest | gzip > /tmp/agentteams-openclaw-base.tar.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
           name: image-openclaw-base
-          path: /tmp/hiclaw-openclaw-base.tar.gz
+          path: /tmp/agentteams-openclaw-base.tar.gz
           retention-days: 1
 
   # Step 2: Build downstream images in parallel (all depend on agentteams-controller;
@@ -241,7 +241,7 @@ jobs:
         if: |
           needs.detect-changes.outputs.openclaw_base == 'true' &&
           (matrix.target == 'manager' || matrix.target == 'worker')
-        run: gunzip -c /tmp/hiclaw-openclaw-base.tar.gz | docker load
+        run: gunzip -c /tmp/agentteams-openclaw-base.tar.gz | docker load
 
       - name: Build image
         run: |
@@ -253,8 +253,13 @@ jobs:
           EXTRA=""
           if [ "${{ needs.detect-changes.outputs.openclaw_base }}" = "true" ] && \
              { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
-            EXTRA="OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base OPENCLAW_BASE_VERSION=latest"
+            EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
             echo "Using locally-built openclaw-base for ${{ matrix.target }}"
+          elif [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; then
+            # The pinned base predates the AgentTeams registry namespace. Keep
+            # using its existing location until a release seeds the new repo.
+            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base OPENCLAW_BASE_VERSION=20260423-8359cbc"
+            echo "Using published migration base for ${{ matrix.target }}"
           fi
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
           # cn-hangzhou registry is unreachable from GitHub-hosted runners.
@@ -653,7 +658,7 @@ jobs:
           # Use the us-west mirror — the cn-hangzhou registry is unreachable
           # from GitHub-hosted runners (frequently times out on `docker pull`).
           # Published images are auto-mirrored from cn-hangzhou to us-west-1.
-          REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com/higress
+          REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com/agentteams
           docker pull ${REGISTRY}/agentteams-manager:${VERSION}
           docker pull ${REGISTRY}/agentteams-worker:${VERSION}
           docker pull ${REGISTRY}/agentteams-controller:${VERSION}

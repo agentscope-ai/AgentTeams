@@ -158,12 +158,16 @@ def test_validate_matrix_message_policy_blocks_team_leader_dm_preamble(
 ):
     monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
 
-    with pytest.raises(ValueError, match="Team Leader internal preamble"):
-        validate_matrix_message_policy(
-            "Let me read the relevant skill documentation.",
-            [],
-            room_id="!leader-dm:hs.local",
-        )
+    for text in (
+        "Let me read the relevant skill documentation.",
+        "Now I need to notify the dev worker in the team room.",
+    ):
+        with pytest.raises(ValueError, match="Team Leader internal preamble"):
+            validate_matrix_message_policy(
+                text,
+                [],
+                room_id="!leader-dm:hs.local",
+            )
 
 
 def test_validate_matrix_message_policy_keeps_team_leader_worker_assignment(

@@ -19,7 +19,7 @@ on:
 
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
-  REPO: higress
+  REPO: agentteams
 
 jobs:
   build:
@@ -62,7 +62,9 @@ jobs:
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "targets=all" >> $GITHUB_OUTPUT
+            # Keep QwenPaw available for explicit workflow_dispatch builds, but
+            # defer publishing it as part of the automatic release set.
+            echo "targets=openclaw-base hiclaw-controller embedded manager manager-copaw worker copaw-worker hermes-worker" >> $GITHUB_OUTPUT
           else
             # workflow_dispatch: use inputs
             VERSION="${{ inputs.version }}"
@@ -107,6 +109,7 @@ jobs:
         run: |
           make push-manager push-manager-copaw \
             VERSION=${{ steps.meta.outputs.version }} \
+            OPENCLAW_BASE_VERSION=${{ steps.meta.outputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
             REPO=${{ env.REPO }} \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
@@ -114,11 +117,11 @@ jobs:
 
       - name: Build and push worker images
         if: |
-          ${{ steps.meta.outputs.targets == 'all' ||
-              contains(steps.meta.outputs.targets, 'worker') ||
-              contains(steps.meta.outputs.targets, 'copaw-worker') ||
-              contains(steps.meta.outputs.targets, 'hermes-worker') ||
-              contains(steps.meta.outputs.targets, 'qwenpaw-worker') }}
+          steps.meta.outputs.targets == 'all' ||
+          contains(steps.meta.outputs.targets, 'worker') ||
+          contains(steps.meta.outputs.targets, 'copaw-worker') ||
+          contains(steps.meta.outputs.targets, 'hermes-worker') ||
+          contains(steps.meta.outputs.targets, 'qwenpaw-worker')
         run: |
           TARGETS="${{ steps.meta.outputs.targets }}"
           MAKE_TARGETS=""
@@ -128,6 +131,7 @@ jobs:
           if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw qwenpaw-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-qwenpaw-worker"; fi
           make ${MAKE_TARGETS} \
             VERSION=${{ steps.meta.outputs.version }} \
+            OPENCLAW_BASE_VERSION=${{ steps.meta.outputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
             REPO=${{ env.REPO }} \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
@@ -143,7 +147,6 @@ jobs:
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-worker
           COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-copaw-worker
           HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-hermes-worker
-          QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-qwenpaw-worker
           CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-controller
           EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-embedded
         run: |
@@ -157,7 +160,6 @@ jobs:
           echo "- Worker: \`${WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- QwenPaw Worker: \`${QWENPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Controller: \`${CONTROLLER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Embedded: \`${EMBEDDED_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Base: \`${OPENCLAW_BASE_IMAGE}:latest\` (pre-built, not rebuilt here)" >> $GITHUB_STEP_SUMMARY

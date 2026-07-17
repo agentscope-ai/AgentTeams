@@ -343,10 +343,10 @@ log_info "Task sent to Leader via Leader DM. Monitoring rooms..."
 # This test validates the routing boundary, not full project completion. If the
 # Leader responds in Leader DM while no assignment appears in Team Room, the
 # route is wrong and extra waiting only slows CI. If there is no response at
-# all, keep a short 90s ceiling for startup jitter.
+# all, keep a short 120s ceiling for startup jitter.
 TEAM_ROOM_ENC=$(echo "${TEAM_ROOM}" | sed 's/!/%21/g')
 LEADER_DM_ENC=$(echo "${LEADER_DM}" | sed 's/!/%21/g')
-MAX_COORDINATION_POLLS="${MAX_COORDINATION_POLLS:-3}"
+MAX_COORDINATION_POLLS="${MAX_COORDINATION_POLLS:-4}"
 MAX_DM_ONLY_POLLS="${MAX_DM_ONLY_POLLS:-1}"
 
 LEADER_RESPONDED=false

@@ -112,7 +112,7 @@ manager/agent/
 
 The image dependency chain is: `openclaw-base` → `manager` / `worker`. CoPaw and Hermes worker images and the controller image are additional build targets; see the `Makefile` for current image names.
 
-By default, `OPENCLAW_BASE_IMAGE` points to the remote registry (`higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base`). When building locally from a modified `openclaw-base`, you **must** override it to the local image name so that manager/worker actually use your local base:
+By default, `OPENCLAW_BASE_IMAGE` points to the remote registry (`higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base`). When building locally from a modified `openclaw-base`, you **must** override it to the local image name so that manager/worker actually use your local base:
 
 ```bash
 # Step 1: Build openclaw-base

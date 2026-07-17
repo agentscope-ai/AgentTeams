@@ -14,7 +14,7 @@ on:
 
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
-  REPO: higress
+  REPO: agentteams
 
 jobs:
   release:

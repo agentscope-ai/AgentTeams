@@ -22,7 +22,7 @@
 
 VERSION        ?= latest
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
-REPO           ?= higress
+REPO           ?= agentteams
 
 MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/agentteams-manager
 MANAGER_COPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-copaw
@@ -880,7 +880,7 @@ help: ## Show this help
 	@echo "Variables:"
 	@echo "  VERSION              Image tag             (default: latest)"
 	@echo "  REGISTRY             Container registry    (default: higress-registry.cn-hangzhou.cr.aliyuncs.com)"
-	@echo "  REPO                 Repository path       (default: higress/hiclaw)"
+	@echo "  REPO                 Repository namespace  (default: agentteams)"
 	@echo "  HIGRESS_REGISTRY     Base image registry   (default: cn-hangzhou, see below)"
 	@echo "  SKIP_BUILD           Skip build in 'install' (set to 1 to skip)"
 	@echo "  SKIP_INSTALL         Skip install in 'test' (set to 1 to test existing)"

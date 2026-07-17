@@ -653,7 +653,7 @@ jobs:
           # Use the us-west mirror — the cn-hangzhou registry is unreachable
           # from GitHub-hosted runners (frequently times out on `docker pull`).
           # Published images are auto-mirrored from cn-hangzhou to us-west-1.
-          REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com/higress
+          REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com/agentteams
           docker pull ${REGISTRY}/agentteams-manager:${VERSION}
           docker pull ${REGISTRY}/agentteams-worker:${VERSION}
           docker pull ${REGISTRY}/agentteams-controller:${VERSION}

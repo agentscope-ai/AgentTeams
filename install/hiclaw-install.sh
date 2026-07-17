@@ -1026,12 +1026,12 @@ HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
-    MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-manager:${AGENTTEAMS_VERSION}}"
-    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-manager-copaw:${AGENTTEAMS_VERSION}}"
-    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-worker:${AGENTTEAMS_VERSION}}"
-    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-copaw-worker:${AGENTTEAMS_VERSION}}"
-    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
-    EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:${AGENTTEAMS_VERSION}}"
+    MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager:${AGENTTEAMS_VERSION}}"
+    MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-copaw:${AGENTTEAMS_VERSION}}"
+    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-worker:${AGENTTEAMS_VERSION}}"
+    COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-copaw-worker:${AGENTTEAMS_VERSION}}"
+    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
+    EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:${AGENTTEAMS_VERSION}}"
     # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
     if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.0.4"; then
         COPAW_WORKER_IMAGE=""
@@ -1058,8 +1058,8 @@ resolve_embedded_image() {
         return 0
     fi
 
-    local _versioned="${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:${AGENTTEAMS_VERSION}"
-    local _latest="${AGENTTEAMS_REGISTRY}/higress/agentteams-embedded:latest"
+    local _versioned="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:${AGENTTEAMS_VERSION}"
+    local _latest="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:latest"
 
     # Skip probe when AGENTTEAMS_VERSION is "latest" — no point trying the same tag twice.
     if [ "${AGENTTEAMS_VERSION}" = "latest" ]; then

@@ -751,8 +751,8 @@ function Resolve-EmbeddedImage {
         return
     }
 
-    $versioned = "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-embedded:$($script:AGENTTEAMS_VERSION)"
-    $latestTag = "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-embedded:latest"
+    $versioned = "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-embedded:$($script:AGENTTEAMS_VERSION)"
+    $latestTag = "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-embedded:latest"
 
     if ($script:AGENTTEAMS_VERSION -eq "latest") {
         $script:EMBEDDED_IMAGE = $latestTag
@@ -2465,31 +2465,31 @@ function Install-Manager {
     $script:MANAGER_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_MANAGER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-manager:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-manager:$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:COPAW_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-copaw-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-copaw-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:HERMES_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-hermes-worker:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-hermes-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
     $script:MANAGER_COPAW_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE) {
         $env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-manager-copaw:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-manager-copaw:$($script:AGENTTEAMS_VERSION)"
     }
 
     # Backward compatibility: accept old env var name from previous versions
@@ -2497,7 +2497,7 @@ function Install-Manager {
     $script:CONTROLLER_IMAGE = if ($controllerImageOverride) {
         $controllerImageOverride
     } else {
-        "$($script:AGENTTEAMS_REGISTRY)/higress/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
     }
 
     # Resolve embedded controller image (sets $script:EMBEDDED_IMAGE and
@@ -3462,7 +3462,7 @@ function Install-Worker {
     $workerImage = if ($env:AGENTTEAMS_INSTALL_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_WORKER_IMAGE
     } else {
-        "$registry/higress/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
+        "$registry/agentteams/agentteams-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
     Write-Log (Get-Msg "worker.starting" -f $Name)

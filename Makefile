@@ -756,20 +756,22 @@ else
 	# pull_request_target runs the base-branch workflow before this PR's
 	# workflow env rename lands, so map legacy CI env names only at the test
 	# harness boundary. Runtime/install scripts still consume AGENTTEAMS_*.
+	# Keep skip + install/test in ONE recipe shell: Make runs each line in a
+	# fresh shell, so a bare `exit 0` after the if would not stop later lines.
 	@if [ -z "$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" ]; then \
 		echo "==> Skipping embedded integration tests: AGENTTEAMS_LLM_API_KEY is unset"; \
 		echo "    Configure the repo secret to enable these shards."; \
-		exit 0; \
+	else \
+		AGENTTEAMS_YOLO=1 \
+			AGENTTEAMS_LLM_API_KEY="$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" \
+			AGENTTEAMS_LLM_PROVIDER="$${AGENTTEAMS_LLM_PROVIDER:-$${HICLAW_LLM_PROVIDER:-}}" \
+			AGENTTEAMS_DEFAULT_MODEL="$${AGENTTEAMS_DEFAULT_MODEL:-$${HICLAW_DEFAULT_MODEL:-}}" \
+			AGENTTEAMS_MANAGER_RUNTIME="$${AGENTTEAMS_MANAGER_RUNTIME:-$${HICLAW_MANAGER_RUNTIME:-}}" \
+			AGENTTEAMS_DEFAULT_WORKER_RUNTIME="$${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-$${HICLAW_DEFAULT_WORKER_RUNTIME:-}}" \
+			$(MAKE) install-embedded && \
+		$(MAKE) wait-ready-embedded && \
+		./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)"); \
 	fi
-	AGENTTEAMS_YOLO=1 \
-		AGENTTEAMS_LLM_API_KEY="$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" \
-		AGENTTEAMS_LLM_PROVIDER="$${AGENTTEAMS_LLM_PROVIDER:-$${HICLAW_LLM_PROVIDER:-}}" \
-		AGENTTEAMS_DEFAULT_MODEL="$${AGENTTEAMS_DEFAULT_MODEL:-$${HICLAW_DEFAULT_MODEL:-}}" \
-		AGENTTEAMS_MANAGER_RUNTIME="$${AGENTTEAMS_MANAGER_RUNTIME:-$${HICLAW_MANAGER_RUNTIME:-}}" \
-		AGENTTEAMS_DEFAULT_WORKER_RUNTIME="$${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-$${HICLAW_DEFAULT_WORKER_RUNTIME:-}}" \
-		$(MAKE) install-embedded
-	$(MAKE) wait-ready-embedded
-	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
 endif
 
 uninstall-embedded: ## Stop and remove embedded containers

@@ -38,6 +38,11 @@ fi
 # Normalize name
 WORKER_NAME=$(echo "${WORKER_NAME}" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9-')
 
+if [[ ! "${WORKER_NAME}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    echo "ERROR: Invalid worker name: must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens"
+    exit 1
+fi
+
 mkdir -p "${OUTPUT_DIR}"
 
 log() { echo "[hiclaw-import $(date '+%H:%M:%S')] $1"; }
@@ -444,7 +449,7 @@ log "  Size: ${ZIP_SIZE}"
 log "  Worker name: ${WORKER_NAME}"
 log ""
 log "Transfer this file to the HiClaw Manager host and run:"
-log "  bash hiclaw-import.sh --zip ${ZIP_NAME}"
+log "  bash hiclaw-import.sh worker --name ${WORKER_NAME} --zip ${ZIP_NAME}"
 log ""
 
 echo "${ZIP_PATH}"

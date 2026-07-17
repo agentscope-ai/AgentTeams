@@ -4,6 +4,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
+- fix(worker,manager): pass `--break-system-packages` when pip-installing shared merge/sync packages into OpenClaw images (PEP 668)
+- fix(copaw): tolerate current PyPI Matrix `sync_loop()` shape in the legacy `_sync_loop` indentation patch so the worker image builds
 - fix(controller): populate `QwenPawWorkerImage` across Docker/K8s/Sandbox config builders and wire `AGENTTEAMS_QWENPAW_WORKER_IMAGE` through the Helm chart (values/helpers/controller env)
 - feat(install): wire `AGENTTEAMS_QWENPAW_WORKER_IMAGE` through embedded install (override/default/pull/env-file/controller `-e`), mirroring Hermes
 - feat(manager): add `qwenpaw-worker-agent` template (incl. find-skills parity); embed `openhuman-worker-agent` and `qwenpaw-worker-agent` templates in the controller image and route their builtin agent dirs; sync shared worker skills into the qwenpaw runtime tree

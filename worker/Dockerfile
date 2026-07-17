@@ -62,7 +62,8 @@ COPY --from=shared . /opt/hiclaw/scripts/lib/
 COPY --from=agentteams-openclaw-merge . /tmp/agentteams-openclaw-merge/
 COPY --from=agentteams-sync . /tmp/agentteams-sync/
 RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
-    && python3 -m pip install --no-cache-dir /tmp/agentteams-openclaw-merge/ /tmp/agentteams-sync/ \
+    && python3 -m pip install --no-cache-dir --break-system-packages \
+        /tmp/agentteams-openclaw-merge/ /tmp/agentteams-sync/ \
     && rm -rf /tmp/agentteams-openclaw-merge /tmp/agentteams-sync /var/lib/apt/lists/*
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation (no-op in local mode)

@@ -92,13 +92,13 @@ RUN python -m venv /opt/venv/standard \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         /tmp/copaw-worker/
 
-# --- Patch CoPaw 1.0.2 Matrix channel indentation bug ---
-# _sync_loop was nested inside _refresh_matrix_token (IndentationError).
-# Fixed upstream but not yet released; use fail-fast Python patch instead of sed.
+# --- Patch CoPaw Matrix channel indentation bug when present ---
+# Older wheels nested ``async def _sync_loop`` incorrectly; current PyPI 1.0.2
+# uses a valid nested ``sync_loop()``. The patch no-ops on known-good shapes.
 COPY scripts/patch_copaw_matrix_sync_loop.py /tmp/
 RUN /opt/venv/standard/bin/python /tmp/patch_copaw_matrix_sync_loop.py \
         /opt/venv/standard/lib/python3.11/site-packages \
-    && grep -q '    async def _sync_loop' \
+    && grep -Eq 'async def (_)?sync_loop' \
         /opt/venv/standard/lib/python3.11/site-packages/copaw/app/channels/matrix/channel.py \
     && rm /tmp/patch_copaw_matrix_sync_loop.py
 

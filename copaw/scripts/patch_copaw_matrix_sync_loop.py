@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Patch CoPaw 1.0.2 Matrix channel _sync_loop indentation bug.
+"""Patch CoPaw Matrix channel _sync_loop indentation bug when present.
 
-Upstream nests ``async def _sync_loop`` inside ``_refresh_matrix_token``;
-fail the build loudly if the marker moves so the patch cannot silently no-op.
+Older CoPaw 1.0.2 builds nested ``async def _sync_loop`` inside
+``_refresh_matrix_token`` (IndentationError). Current PyPI 1.0.2 uses a
+valid nested local ``async def sync_loop()`` inside ``start()`` instead.
+Treat that (and a module-level ``_sync_loop``) as already healthy and
+no-op so the image build stays green across both wheel shapes.
 """
 
 from __future__ import annotations
@@ -28,11 +31,17 @@ def patch(site_packages: pathlib.Path) -> None:
             break
 
     if not patched:
-        if any("    async def _sync_loop" in line for line in lines):
-            print("Matrix channel _sync_loop already at module level; skipping")
+        # Module-level method (already patched or fixed upstream).
+        if any(line.startswith("    async def _sync_loop") for line in lines):
+            print("Matrix channel _sync_loop already at class level; skipping")
+            return
+        # Current PyPI shape: nested local sync_loop() inside start().
+        if any("async def sync_loop(" in line for line in lines):
+            print("Matrix channel uses nested sync_loop(); skipping legacy patch")
             return
         raise RuntimeError(
-            "could not find mis-indented _sync_loop marker in copaw Matrix channel"
+            "could not find mis-indented _sync_loop marker or known-good "
+            "sync_loop shape in copaw Matrix channel"
         )
 
     target.write_text("".join(lines), encoding="utf-8")

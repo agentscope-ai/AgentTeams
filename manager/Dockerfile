@@ -181,7 +181,8 @@ COPY --from=manager-agent-bundle /opt/hiclaw/scripts /opt/hiclaw/scripts
 
 COPY --from=agentteams-openclaw-merge . /tmp/agentteams-openclaw-merge/
 RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
-    && python3 -m pip install --no-cache-dir /tmp/agentteams-openclaw-merge/ \
+    && python3 -m pip install --no-cache-dir --break-system-packages \
+        /tmp/agentteams-openclaw-merge/ \
     && rm -rf /tmp/agentteams-openclaw-merge /var/lib/apt/lists/*
 
 RUN bash /opt/hiclaw/scripts/lib/sync-shared-worker-skills.sh /opt/hiclaw/agent && \

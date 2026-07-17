@@ -16,7 +16,12 @@
   { "id": "MiniMax-M2.7-highspeed", "name": "MiniMax-M2.7-highspeed", "reasoning": true, "contextWindow": 200000, "maxTokens": 128000, "input": ["text"] },
   { "id": "MiniMax-M2.5",      "name": "MiniMax-M2.5",      "reasoning": true,  "contextWindow": 200000,  "maxTokens": 128000, "input": ["text"] },
 
-  { "id": "ollama/gpt-oss:120b-cloud", "name": "ollama/gpt-oss:120b-cloud", "reasoning": true, "contextWindow": 128000, "maxTokens": 32000, "input": ["text"] },
-  { "id": "mimo/MiMo-V2.5",           "name": "mimo/MiMo-V2.5",           "reasoning": true, "contextWindow": 128000, "maxTokens": 32000, "input": ["text"] },
-  { "id": "mimo/MiMo-V2.5-Pro",       "name": "mimo/MiMo-V2.5-Pro",       "reasoning": true, "contextWindow": 200000, "maxTokens": 64000, "input": ["text"] }
+  { "id": "ollama/gpt-oss:120b",     "name": "ollama/gpt-oss:120b",     "reasoning": true,  "contextWindow": 128000, "maxTokens": 32000, "input": ["text"] },
+  { "id": "ollama/glm-5.2",          "name": "ollama/glm-5.2",          "reasoning": true,  "contextWindow": 200000, "maxTokens": 128000, "input": ["text"] },
+  { "id": "ollama/glm-5.1",          "name": "ollama/glm-5.1",          "reasoning": true,  "contextWindow": 200000, "maxTokens": 128000, "input": ["text"] },
+  { "id": "ollama/kimi-k2.7-code",   "name": "ollama/kimi-k2.7-code",   "reasoning": true,  "contextWindow": 256000, "maxTokens": 128000, "input": ["text"] },
+  { "id": "mimo/mimo-v2.5",          "name": "mimo/mimo-v2.5",          "reasoning": true,  "contextWindow": 128000, "maxTokens": 32000, "input": ["text"] },
+  { "id": "mimo/mimo-v2.5-pro",      "name": "mimo/mimo-v2.5-pro",      "reasoning": true,  "contextWindow": 200000, "maxTokens": 64000, "input": ["text"] },
+  { "id": "vanchin/kat-coder-pro-v2",   "name": "vanchin/kat-coder-pro-v2",   "reasoning": false, "contextWindow": 256000, "maxTokens": 32000, "input": ["text"] },
+  { "id": "vanchin/kat-coder-pro-v2.5", "name": "vanchin/kat-coder-pro-v2.5", "reasoning": false, "contextWindow": 256000, "maxTokens": 64000, "input": ["text"] }
 ]

@@ -357,13 +357,22 @@ if [ -n "${AGENTTEAMS_EXTRA_LLM_PROVIDERS:-}" ]; then
         # path-only catch-all; keeping these on separate route names/model
         # matches avoids touching its boot-time rewrite at all).
         _route_name="hiclaw-${_provider_name}-route"
-        EXTRA_ROUTE_BODY='{"name":"'"${_route_name}"'","domains":'"${AI_ROUTE_DOMAINS}"',"pathPredicate":{"matchType":"PRE","matchValue":"/","caseSensitive":false},"modelPredicate":{"matchType":"PRE","matchValue":"'"${_provider_name}"'/"},"upstreams":[{"provider":"'"${_provider_name}"'","weight":100,"modelMapping":{}}],"authConfig":{"enabled":true,"allowedCredentialTypes":["key-auth"],"allowedConsumers":["manager"]}}'
+        # modelMapping strips the "<provider>/" prefix before forwarding upstream.
+        # OpenAI-compatible upstreams (Ollama Cloud, MiMo, Vanchin/StreamLake) reject
+        # prefixed model names like "ollama/gpt-oss:120b" with a 404 — they expect the
+        # bare name. The Higress ai-proxy plugin supports regex keys (prefixed with ~)
+        # with capture-group backreferences in the target, so "~^<provider>/(.+)$":"$1"
+        # rewrites "ollama/gpt-oss:120b" → "gpt-oss:120b" for the upstream call while
+        # the route still matches on the prefixed name for routing. See
+        # provider.go:getMappedModel (~regex branch, re.ReplaceAllString).
+        EXTRA_ROUTE_BODY='{"name":"'"${_route_name}"'","domains":'"${AI_ROUTE_DOMAINS}"',"pathPredicate":{"matchType":"PRE","matchValue":"/","caseSensitive":false},"modelPredicate":{"matchType":"PRE","matchValue":"'"${_provider_name}"'/"},"upstreams":[{"provider":"'"${_provider_name}"'","weight":100,"modelMapping":{"~^'"${_provider_name}"'/(.+)$":"$1"}}],"authConfig":{"enabled":true,"allowedCredentialTypes":["key-auth"],"allowedConsumers":["manager"]}}'
 
         existing_extra_route=$(higress_get "/v1/ai/routes/${_route_name}")
         if [ -n "${existing_extra_route}" ]; then
-            patched_extra_route=$(echo "${existing_extra_route}" | jq --argjson domains "${AI_ROUTE_DOMAINS}" '
+            patched_extra_route=$(echo "${existing_extra_route}" | jq --argjson domains "${AI_ROUTE_DOMAINS}" --arg mmkey "~^${_provider_name}/(.+)\$" --arg mmval '$1' '
                 .data
                 | .upstreams[0].provider = "'"${_provider_name}"'"
+                | .upstreams[0].modelMapping = {($mmkey): $mmval}
                 | .domains = $domains
             ' 2>/dev/null)
             if [ -n "${patched_extra_route}" ] && [ "${patched_extra_route}" != "null" ]; then

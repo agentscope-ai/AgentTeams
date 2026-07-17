@@ -403,10 +403,17 @@ func defaultModelSpec(modelName string) ModelSpec {
 		// hosted base URL (MiMo) and current model catalog (both) are unverified
 		// from this checkout — confirm at deploy and update all 4 catalog spots
 		// together (this file, known-models.json, manager-openclaw.json.tmpl,
-		// update-manager-model.sh) if they change.
-		"ollama/gpt-oss:120b-cloud": {128000, 32000, false, true},
-		"mimo/MiMo-V2.5":            {128000, 32000, false, true},
-		"mimo/MiMo-V2.5-Pro":        {200000, 64000, false, true},
+		// update-manager-model.sh) if they change. Model IDs use the
+		// "<provider>/<model>" form; the provider prefix is stripped by the
+		// Higress route modelMapping before reaching the upstream.
+		"ollama/gpt-oss:120b":        {128000, 32000, false, true},
+		"ollama/glm-5.2":             {200000, 128000, false, true},
+		"ollama/glm-5.1":             {200000, 128000, false, true},
+		"ollama/kimi-k2.7-code":      {256000, 128000, false, true},
+		"mimo/mimo-v2.5":             {128000, 32000, false, true},
+		"mimo/mimo-v2.5-pro":         {200000, 64000, false, true},
+		"vanchin/kat-coder-pro-v2":   {256000, 32000, false, false},
+		"vanchin/kat-coder-pro-v2.5": {256000, 64000, false, false},
 	}
 
 	p, found := presets[modelName]
@@ -460,7 +467,7 @@ func (g *Generator) allModelSpecs(selectedModel string) []ModelSpec {
 		"kimi-k2.5", "glm-5",
 		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
 		// ⚠️ Provisional (S5/S6) — see defaultModelSpec comment above.
-		"ollama/gpt-oss:120b-cloud", "mimo/MiMo-V2.5", "mimo/MiMo-V2.5-Pro",
+		"ollama/gpt-oss:120b", "ollama/glm-5.2", "ollama/glm-5.1", "ollama/kimi-k2.7-code", "mimo/mimo-v2.5", "mimo/mimo-v2.5-pro", "vanchin/kat-coder-pro-v2", "vanchin/kat-coder-pro-v2.5",
 	}
 
 	specs := make([]ModelSpec, 0, len(allModels)+1)
@@ -486,7 +493,7 @@ func (g *Generator) allModelAliases(selectedModel string) map[string]interface{}
 		"kimi-k2.5", "glm-5",
 		"MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5",
 		// ⚠️ Provisional (S5/S6) — see defaultModelSpec comment above.
-		"ollama/gpt-oss:120b-cloud", "mimo/MiMo-V2.5", "mimo/MiMo-V2.5-Pro",
+		"ollama/gpt-oss:120b", "ollama/glm-5.2", "ollama/glm-5.1", "ollama/kimi-k2.7-code", "mimo/mimo-v2.5", "mimo/mimo-v2.5-pro", "vanchin/kat-coder-pro-v2", "vanchin/kat-coder-pro-v2.5",
 	}
 
 	aliases := make(map[string]interface{})

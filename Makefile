@@ -61,6 +61,7 @@ LOCAL_HERMES_WORKER_LEGACY  = hiclaw/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER_LEGACY = hiclaw/qwenpaw-worker:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
+LOCAL_OPENCLAW_BASE_LEGACY = hiclaw/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
 LOCAL_CONTROLLER_LEGACY = hiclaw/hiclaw-controller:$(VERSION)
 LOCAL_CONTROLLER_BUILD_IMAGE ?= $(shell \
@@ -149,6 +150,7 @@ build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_OPENCLAW_BASE) \
+		-t $(LOCAL_OPENCLAW_BASE_LEGACY) \
 		./openclaw-base/
 
 # build targets use the locally-built openclaw-base; push targets use the registry image

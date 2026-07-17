@@ -48,4 +48,5 @@ pythonpath = [
     "src",
     "../shared/python/agentteams_openclaw_merge/src",
     "../shared/python/agentteams_sync/src",
+    "../shared/python/agentteams_matrix_policies/src",
 ]

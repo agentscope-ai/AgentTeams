@@ -47,8 +47,11 @@ jobs:
           cache: pip
       - name: Install local shared Python packages
         run: |
-          python -m pip install -e "./shared/python/agentteams_openclaw_merge" \
-            -e "./shared/python/agentteams_sync"
+          set -euo pipefail
+          for pkg in shared/python/agentteams_*; do
+            [ -f "${pkg}/pyproject.toml" ] || continue
+            python -m pip install -e "./${pkg}"
+          done
       - run: python -m pip install -e "./${{ matrix.runtime }}[test]"
       - run: python -m pytest -q "${{ matrix.runtime }}/tests"
 

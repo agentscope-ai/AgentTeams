@@ -79,6 +79,51 @@ jobs:
             -f tag_name="${VERSION}" \
             --jq '.body' 2>/dev/null || echo "")
 
+          if [[ "${VERSION}" == *-* ]]; then
+            STABLE_VERSION=$(gh api "repos/${REPOSITORY}/releases/latest" --jq '.tag_name')
+          else
+            STABLE_VERSION="${VERSION}"
+          fi
+
+          cat > /tmp/quick-start.md << EOF
+          ## Quick Start
+
+          ### Latest stable (\`${STABLE_VERSION}\`)
+
+          #### macOS / Linux
+
+          \`\`\`bash
+          bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/${STABLE_VERSION}/install/hiclaw-install.sh)
+          \`\`\`
+
+          #### Windows (PowerShell 7+)
+
+          \`\`\`powershell
+          Set-ExecutionPolicy Bypass -Scope Process -Force; \$wc=New-Object Net.WebClient; \$wc.Encoding=[Text.Encoding]::UTF8; iex \$wc.DownloadString('https://raw.githubusercontent.com/${REPOSITORY}/${STABLE_VERSION}/install/hiclaw-install.ps1')
+          \`\`\`
+          EOF
+
+          if [[ "${VERSION}" == *-* ]]; then
+            cat >> /tmp/quick-start.md << EOF
+
+          ### Beta preview (\`${VERSION}\`, explicit opt-in)
+
+          #### macOS / Linux
+
+          \`\`\`bash
+          AGENTTEAMS_VERSION=${VERSION} bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/${VERSION}/install/hiclaw-install.sh)
+          \`\`\`
+
+          #### Windows (PowerShell 7+)
+
+          \`\`\`powershell
+          \$env:AGENTTEAMS_VERSION='${VERSION}'; Set-ExecutionPolicy Bypass -Scope Process -Force; \$wc=New-Object Net.WebClient; \$wc.Encoding=[Text.Encoding]::UTF8; iex \$wc.DownloadString('https://raw.githubusercontent.com/${REPOSITORY}/${VERSION}/install/hiclaw-install.ps1')
+          \`\`\`
+          EOF
+          fi
+
+          quick_start=$(cat /tmp/quick-start.md)
+
           cat > /tmp/release-body.md << EOF
           ## Highlights
 
@@ -106,19 +151,7 @@ jobs:
 
           ---
 
-          ## Quick Start
-
-          ### macOS / Linux
-
-          \`\`\`bash
-          bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/main/install/hiclaw-install.sh)
-          \`\`\`
-
-          ### Windows (PowerShell 7+)
-
-          \`\`\`powershell
-          Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
-          \`\`\`
+          ${quick_start}
 
           ---
 
@@ -132,7 +165,7 @@ jobs:
           EOF
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
           body_path: /tmp/release-body.md

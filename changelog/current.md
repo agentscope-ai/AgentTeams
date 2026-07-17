@@ -50,7 +50,7 @@ Record release-facing changes here before the next release.
 
 - **Helm and CRD compatibility**: Unsupported CRD `propertyNames` fields are removed, AppService environment wiring uses AgentTeams names, and fresh-install storage/resource defaults are aligned with AgentTeams.
 
-- **Pre-release automation**: Release workflows accept SemVer pre-release tags, mark GitHub beta releases as prereleases, and prevent both dotted and compact beta/RC tags from updating stable `latest` image tags.
+- **Pre-release automation**: Release workflows accept SemVer pre-release tags, mark GitHub beta releases as prereleases, prevent beta/RC tags from updating stable `latest` images, skip automatic CoPaw PyPI publishing for prereleases, pin CoPaw 1.0.2 for reproducible beta images, require explicit beta opt-in while keeping Quick Start on the latest stable release, and use the renamed local OpenClaw base image correctly in integration CI.
 
 - **AgentTeams rename follow-ups**: README legacy-name text is corrected to “formerly HiClaw”; Matrix AppService accepts new `#agentteams-*` aliases while retaining legacy aliases; OpenHuman consumes canonical `AGENTTEAMS_*` variables with HiClaw fallbacks.
 
@@ -98,7 +98,7 @@ Record release-facing changes here before the next release.
 
 - **Helm 与 CRD 兼容性**: 移除不受支持的 CRD `propertyNames`；AppService 环境变量切换到 AgentTeams；全新安装的存储和资源默认值完成 AgentTeams 对齐。
 
-- **预发布自动化**: Release 工作流支持 SemVer 预发布 Tag，将 GitHub beta Release 标记为 prerelease，并确保带点号或紧凑格式的 beta / RC Tag 都不会更新稳定版镜像的 `latest`。
+- **预发布自动化**: Release 工作流支持 SemVer 预发布 Tag，将 GitHub beta Release 标记为 prerelease，确保 beta / RC Tag 不更新稳定版镜像的 `latest`，预发布版本跳过 CoPaw PyPI 自动发布，固定 CoPaw 1.0.2 以保证 beta 镜像可复现，保持 Quick Start 默认安装最新稳定版、beta 仅允许显式选择，并修复集成 CI 对改名后本地 OpenClaw 基础镜像的引用。
 
 - **AgentTeams 改名收尾**: README 中旧名称修正为“原 HiClaw”；Matrix AppService 同时注册新的 `#agentteams-*` 和旧 alias；OpenHuman 优先消费 `AGENTTEAMS_*` 并保留 HiClaw fallback。
 

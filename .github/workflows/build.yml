@@ -114,11 +114,11 @@ jobs:
 
       - name: Build and push worker images
         if: |
-          ${{ steps.meta.outputs.targets == 'all' ||
-              contains(steps.meta.outputs.targets, 'worker') ||
-              contains(steps.meta.outputs.targets, 'copaw-worker') ||
-              contains(steps.meta.outputs.targets, 'hermes-worker') ||
-              contains(steps.meta.outputs.targets, 'qwenpaw-worker') }}
+          steps.meta.outputs.targets == 'all' ||
+          contains(steps.meta.outputs.targets, 'worker') ||
+          contains(steps.meta.outputs.targets, 'copaw-worker') ||
+          contains(steps.meta.outputs.targets, 'hermes-worker') ||
+          contains(steps.meta.outputs.targets, 'qwenpaw-worker')
         run: |
           TARGETS="${{ steps.meta.outputs.targets }}"
           MAKE_TARGETS=""

@@ -212,11 +212,11 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 	groupAllowFrom := []string{managerMatrixID, adminMatrixID}
 	dmAllowFrom := []string{managerMatrixID, adminMatrixID}
 
-	// Team worker: use Leader + Admin instead
+	// Team worker: use Leader + Manager + Admin
 	if req.TeamLeaderName != "" {
 		leaderMatrixID := fmt.Sprintf("@%s:%s", req.TeamLeaderName, domain)
-		groupAllowFrom = []string{leaderMatrixID, adminMatrixID}
-		dmAllowFrom = []string{leaderMatrixID, adminMatrixID}
+		groupAllowFrom = []string{leaderMatrixID, managerMatrixID, adminMatrixID}
+		dmAllowFrom = []string{leaderMatrixID, managerMatrixID, adminMatrixID}
 	}
 
 	cfg := map[string]interface{}{

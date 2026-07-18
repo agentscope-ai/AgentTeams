@@ -8,8 +8,8 @@
 #   ./hiclaw-import.sh worker --name <name> --zip <path-or-url> [--yes]
 #   ./hiclaw-import.sh worker --name <name> --package <nacos://...> [--model MODEL]
 #   ./hiclaw-import.sh worker --name <name>                         # auto-imports package <name>
-#   ./hiclaw-import.sh worker --name <name> --model MODEL [--skills s1,s2] [--mcp-servers m1,m2]
-#   ./hiclaw-import.sh -f <resource.yaml> [--prune] [--dry-run]
+#   ./hiclaw-import.sh worker --name <name> --model MODEL [--skills s1,s2] [--runtime RUNTIME]
+#   ./hiclaw-import.sh -f <resource.yaml>
 #
 # Environment variables (for automation):
 #   AGENTTEAMS_NON_INTERACTIVE       Skip all prompts (same as --yes)
@@ -84,10 +84,8 @@ case "${RESOURCE_TYPE}" in
                     PACKAGE_URI="$2"
                     AGENTTEAMS_ARGS+=("$1" "$2")
                     shift 2 ;;
-                --model|--skills|--mcp-servers|--runtime)
+                --model|--skills|--runtime)
                     AGENTTEAMS_ARGS+=("$1" "$2"); shift 2 ;;
-                --dry-run)
-                    AGENTTEAMS_ARGS+=("$1"); shift ;;
                 --yes)
                     shift ;;
                 *) echo "Unknown option: $1"; exit 1 ;;
@@ -125,8 +123,8 @@ case "${RESOURCE_TYPE}" in
         echo "  $0 worker --name <name> --zip <path-or-url>"
         echo "  $0 worker --name <name> --package <nacos://...> [--model MODEL]"
         echo "  $0 worker --name <name>                         # auto-import package <name>"
-        echo "  $0 worker --name <name> --model MODEL [--skills s1,s2] [--mcp-servers m1,m2]"
-        echo "  $0 -f <resource.yaml> [--prune] [--dry-run]"
+        echo "  $0 worker --name <name> --model MODEL [--skills s1,s2] [--runtime RUNTIME]"
+        echo "  $0 -f <resource.yaml>"
         exit 0
         ;;
 

@@ -37,10 +37,10 @@ mc() {
     local src="$2"
     local dst="$3"
 
-    # Determine which arg is a "minio path" (contains "hiclaw/") vs local path
+    # Determine which arg is a MinIO path (starts with "agentteams/") vs local path.
     _resolve() {
         local p="$1"
-        if [[ "${p}" == hiclaw/* ]]; then
+        if [[ "${p}" == agentteams/* ]]; then
             echo "${FAKE_MINIO_ROOT}/${p}"
         else
             echo "${p}"

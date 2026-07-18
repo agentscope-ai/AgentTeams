@@ -185,6 +185,47 @@ def test_validate_matrix_message_policy_keeps_team_leader_worker_assignment(
     assert filtered.startswith("@dag-team-1-dev:hs.local Task assigned")
 
 
+@pytest.mark.asyncio
+async def test_message_tool_routes_team_leader_assignment_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    sent_room_ids = []
+
+    async def fake_send_matrix_room_message(*, room_id, content, account_id):
+        sent_room_ids.append(room_id)
+        return "$assignment"
+
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+    monkeypatch.setattr(
+        "copaw_worker.hooks.tools.message._send_matrix_room_message",
+        fake_send_matrix_room_message,
+    )
+
+    response = await message(
+        action="send",
+        channel="matrix",
+        target="room:!leader-dm:hs.local",
+        message=(
+            "@dag-team-1-dev:hs.local You have been assigned task "
+            "**todo-rest-api-001-01**: Design REST API endpoints."
+        ),
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert payload["roomId"] == "!team-room:hs.local"
+    assert sent_room_ids == ["!team-room:hs.local"]
+    session_path = _matrix_session_path(
+        working_dir=tmp_path / "leader" / ".copaw",
+        room_id="!team-room:hs.local",
+        account_id="default",
+    )
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    recorded_msg, _ = session["agent"]["memory"]["content"][-1]
+    assert recorded_msg["metadata"]["room_id"] == "!team-room:hs.local"
+
+
 def test_validate_matrix_message_policy_blocks_roster_preamble_with_mxids(
     tmp_path,
     monkeypatch,

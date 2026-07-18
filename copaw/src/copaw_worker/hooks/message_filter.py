@@ -72,6 +72,28 @@ def extract_matrix_mentions(text: str) -> list[str]:
     return list(dict.fromkeys(_MATRIX_USER_ID_RE.findall(text or "")))
 
 
+def resolve_team_leader_assignment_room(text: str, room_id: str) -> str:
+    """Route Team Leader worker assignments from Leader DM to Team Room."""
+    if _runtime_config_field("member", "role") != "team_leader":
+        return room_id
+
+    team_room_id = _runtime_config_field("team", "teamRoomId")
+    leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
+    team_name = _runtime_config_field("team", "name")
+    if not team_room_id or room_id != leader_dm_room_id:
+        return room_id
+    if not _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(text or ""):
+        return room_id
+
+    for mxid in extract_matrix_mentions(text):
+        localpart = mxid.removeprefix("@").split(":", 1)[0]
+        if localpart.endswith("-lead"):
+            continue
+        if not team_name or localpart.startswith(f"{team_name}-"):
+            return team_room_id
+    return room_id
+
+
 def _low_information_key(text: str) -> str:
     """Normalize short ACK text by dropping punctuation, emoji, and spacing."""
     return "".join(

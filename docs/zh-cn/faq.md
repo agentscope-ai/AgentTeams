@@ -11,6 +11,7 @@
 - [安装失败：embedded 镜像 "manifest unknown"](#安装失败embedded-镜像-manifest-unknown)
 - [Manager Agent 启动超时或失败](#manager-agent-启动超时或失败)
 - [局域网其他电脑如何访问 Web 端](#局域网其他电脑如何访问-web-端)
+- [Element 提示 homeserver 不是有效的 Matrix 服务器](#element-提示-homeserver-不是有效的-matrix-服务器)
 - [本地访问 Matrix 服务器不通](#本地访问-matrix-服务器不通)
 - [如何主动指挥 Worker](#如何主动指挥-worker)
 - [如何接入第三方、本地或多供应商模型](#如何接入第三方本地或多供应商模型)
@@ -378,6 +379,17 @@ http://<局域网IP>:18080
 
 如果通过 Tailscale 使用 FluffyChat 或 Element Mobile，规则相同：homeserver 填
 `http://<tailscale-ip>:18080`，并确认手机和 HiClaw 所在机器在 Tailscale 网络内互通。
+
+---
+
+## Element 提示 homeserver 不是有效的 Matrix 服务器
+
+Element 要求填写自定义 homeserver 时，不要填写 Element Web UI 的地址或端口。这两个地址对应不同组件：
+
+- Element Web UI：`http://<host>:18088`
+- Matrix/Higress gateway homeserver：`http://<host>:18080`
+
+如果看到“homeserver 不是有效的 Matrix 服务器”一类提示，请将 `:18088` 改成 `:18080` 后重新登录。局域网或 Tailscale 访问时，使用客户端能访问到的主机 IP，例如 `http://192.168.1.100:18080`。
 
 ---
 

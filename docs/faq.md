@@ -11,6 +11,7 @@
 - [Installation fails: "manifest unknown" for embedded image](#installation-fails-manifest-unknown-for-embedded-image)
 - [Manager Agent startup timeout or failure](#manager-agent-startup-timeout-or-failure)
 - [Accessing the web UI from other devices on the LAN](#accessing-the-web-ui-from-other-devices-on-the-lan)
+- [Element says the homeserver URL is not a valid Matrix server](#element-says-the-homeserver-url-is-not-a-valid-matrix-server)
 - [Cannot connect to Matrix server locally](#cannot-connect-to-matrix-server-locally)
 - [How to talk to a Worker directly](#how-to-talk-to-a-worker-directly)
 - [How to connect third-party, local, or multi-provider models](#how-to-connect-third-party-local-or-multi-provider-models)
@@ -389,6 +390,20 @@ If the login page still reports a homeserver error:
 For FluffyChat or Element Mobile over Tailscale, use the same rule: set the
 homeserver to `http://<tailscale-ip>:18080` and make sure the phone and the
 HiClaw host can reach each other in the Tailscale network.
+
+---
+
+## Element says the homeserver URL is not a valid Matrix server
+
+When Element asks for a custom homeserver, do not enter the Element Web UI URL
+or port. These two URLs serve different components:
+
+- Element Web UI: `http://<host>:18088`
+- Matrix/Higress gateway homeserver: `http://<host>:18080`
+
+If you see "homeserver URL is not a valid Matrix server", replace `:18088` with
+`:18080`, then retry login. For LAN or Tailscale access, use the reachable host
+IP in the same format, for example `http://192.168.1.100:18080`.
 
 ---
 

@@ -1603,8 +1603,9 @@ should_skip_step() {
             local _env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
             [ ! -f "${_env}" ] && return 0
             ;;
-        # Keep-All upgrade mode: skip all config steps (step_volume/step_workspace handled separately)
-        step_llm|step_admin|step_network|step_ports|step_domains|step_github|step_skills|step_runtime|step_manager_runtime|step_e2ee|step_docker_proxy|step_idle|step_hostshare)
+        # Keep-All upgrade mode: skip base config steps. Steps with additional
+        # mode-specific rules are handled by their dedicated cases below.
+        step_llm|step_admin|step_network|step_ports|step_domains|step_github|step_skills|step_runtime)
             [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_volume|step_workspace)
@@ -1615,19 +1616,23 @@ should_skip_step() {
         step_e2ee|step_idle)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
             [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && [ "${AGENTTEAMS_UPGRADE}" != "1" ] && return 0
+            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_docker_proxy)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
             [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && [ "${AGENTTEAMS_UPGRADE}" != "1" ] && return 0
             # Embedded mode handles docker access natively — skip this step
             [ "${AGENTTEAMS_USE_EMBEDDED:-}" = "1" ] && return 0
+            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_manager_runtime)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_hostshare)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
             [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && return 0
+            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_podman_autostart)
             # Only relevant for Podman with systemd

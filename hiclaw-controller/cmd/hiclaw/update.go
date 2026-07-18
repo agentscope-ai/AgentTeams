@@ -14,6 +14,7 @@ func updateCmd() *cobra.Command {
 	cmd.AddCommand(updateWorkerCmd())
 	cmd.AddCommand(updateTeamCmd())
 	cmd.AddCommand(updateManagerCmd())
+	cmd.AddCommand(updateHumanCmd())
 	return cmd
 }
 
@@ -215,5 +216,79 @@ func updateManagerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&soul, "soul", "", "Manager SOUL.md content")
+	return cmd
+}
+
+// ---------------------------------------------------------------------------
+// update human
+// ---------------------------------------------------------------------------
+
+func updateHumanCmd() *cobra.Command {
+	var (
+		name              string
+		displayName       string
+		email             string
+		permissionLevel   int
+		accessibleTeams   string
+		accessibleWorkers string
+		note              string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "human",
+		Short: "Update a Human",
+		Long: `Update an existing Human resource. Only specified fields are changed.
+
+  hiclaw update human --name alice --display-name "Alice Smith"
+  hiclaw update human --name alice --permission-level 2
+  hiclaw update human --name alice --accessible-teams alpha,beta
+  hiclaw update human --name alice --accessible-workers worker-1,worker-2
+
+To CLEAR accessibleTeams / accessibleWorkers (revoke all access), use a
+YAML manifest with empty arrays and 'hiclaw apply -f human.yaml'. The
+nil-vs-[] semantic is preserved at the REST layer.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if name == "" {
+				return fmt.Errorf("--name is required")
+			}
+
+			req := map[string]interface{}{}
+			setIfNotEmpty(req, "displayName", displayName)
+			setIfNotEmpty(req, "email", email)
+			setIfNotEmpty(req, "note", note)
+			// Pointer wrap so 0-valued permissionLevel is distinguishable
+			// from "field absent". --permission-level 0 means "send 0" if
+			// the flag was explicitly passed.
+			if cmd.Flags().Changed("permission-level") {
+				req["permissionLevel"] = permissionLevel
+			}
+			if accessibleTeams != "" {
+				req["accessibleTeams"] = splitCSV(accessibleTeams)
+			}
+			if accessibleWorkers != "" {
+				req["accessibleWorkers"] = splitCSV(accessibleWorkers)
+			}
+
+			if len(req) == 0 {
+				return fmt.Errorf("at least one field must be specified for update")
+			}
+
+			client := NewAPIClient()
+			var resp map[string]interface{}
+			if err := client.DoJSON("PUT", "/api/v1/humans/"+name, req, &resp); err != nil {
+				return fmt.Errorf("update human: %w", err)
+			}
+			fmt.Printf("human/%s configured\n", name)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&name, "name", "", "Human name (required)")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "User-visible display name")
+	cmd.Flags().StringVar(&email, "email", "", "Email address")
+	cmd.Flags().IntVar(&permissionLevel, "permission-level", 0, "Permission tier (1=Admin, 2=Team, 3=Worker)")
+	cmd.Flags().StringVar(&accessibleTeams, "accessible-teams", "", "Comma-separated team names")
+	cmd.Flags().StringVar(&accessibleWorkers, "accessible-workers", "", "Comma-separated worker names")
+	cmd.Flags().StringVar(&note, "note", "", "Free-form note")
 	return cmd
 }

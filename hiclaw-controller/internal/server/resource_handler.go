@@ -701,6 +701,69 @@ func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, HumanListResponse{Humans: humans, Total: len(humans)})
 }
 
+// UpdateHuman serves PUT /api/v1/humans/{name}. Pattern matches
+// UpdateWorker / UpdateTeam: partial spec patching via UpdateHumanRequest,
+// optimistic-lock retry on apierrors.IsConflict, humanToResponse on
+// success. Fixes #729 (Human PUT/PATCH was missing at the REST layer
+// pre-this-PR; HumanReconciler internally already supported declarative
+// reconcile via buildDesiredHumanRooms but no transport surface invoked
+// it on spec changes — `hiclaw apply -f` on an existing Human returned
+// 405).
+func (h *ResourceHandler) UpdateHuman(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "human name is required")
+		return
+	}
+
+	var req UpdateHumanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
+		var human v1beta1.Human
+		if err := h.client.Get(ctx, client.ObjectKey{Name: name, Namespace: h.namespace}, &human); err != nil {
+			writeK8sError(w, "get human for update", err)
+			return
+		}
+
+		if req.DisplayName != "" {
+			human.Spec.DisplayName = req.DisplayName
+		}
+		if req.Email != "" {
+			human.Spec.Email = req.Email
+		}
+		if req.PermissionLevel != nil {
+			human.Spec.PermissionLevel = *req.PermissionLevel
+		}
+		// nil = field absent (preserve); non-nil (even empty slice) = explicit set.
+		if req.AccessibleTeams != nil {
+			human.Spec.AccessibleTeams = req.AccessibleTeams
+		}
+		if req.AccessibleWorkers != nil {
+			human.Spec.AccessibleWorkers = req.AccessibleWorkers
+		}
+		if req.Note != "" {
+			human.Spec.Note = req.Note
+		}
+
+		if err := h.client.Update(ctx, &human); err != nil {
+			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			writeK8sError(w, "update human", err)
+			return
+		}
+
+		httputil.WriteJSON(w, http.StatusOK, humanToResponse(&human))
+		return
+	}
+}
+
 func (h *ResourceHandler) DeleteHuman(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
@@ -1005,6 +1068,13 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 		InitialPassword: h.Status.InitialPassword,
 		Rooms:           h.Status.Rooms,
 		Message:         h.Status.Message,
+
+		// Spec echo (#729 PUT route support — see HumanResponse godoc).
+		Email:             h.Spec.Email,
+		PermissionLevel:   h.Spec.PermissionLevel,
+		AccessibleTeams:   h.Spec.AccessibleTeams,
+		AccessibleWorkers: h.Spec.AccessibleWorkers,
+		Note:              h.Spec.Note,
 	}
 	if resp.Phase == "" {
 		resp.Phase = "Pending"

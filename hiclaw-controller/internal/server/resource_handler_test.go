@@ -10,6 +10,7 @@ import (
 
 	v1beta1 "github.com/hiclaw/hiclaw-controller/api/v1beta1"
 	authpkg "github.com/hiclaw/hiclaw-controller/internal/auth"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -736,6 +737,210 @@ func TestCreateManager_StampsControllerLabel(t *testing.T) {
 	}
 	if got := mgr.Labels[v1beta1.LabelController]; got != "ctrl-a" {
 		t.Fatalf("expected controller label ctrl-a, got %q", got)
+	}
+}
+
+// TestUpdateHumanAccessibleTeams verifies the PUT /api/v1/humans/{name}
+// route (issue #729 closure proof). Before this PR, the REST API exposed
+// only POST/GET/DELETE for Humans; HiClawReconciler internally supported
+// declarative reconcile but no transport layer surface invoked it on
+// spec changes. `hiclaw apply -f` on an existing Human returned HTTP 405.
+//
+// This test asserts the symmetric pattern matching UpdateWorker /
+// UpdateTeam handlers: PUT body replaces / patches spec fields, controller
+// retries on optimistic-lock conflict, response shape is humanToResponse.
+func TestUpdateHumanAccessibleTeams(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	existing := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:     "Alice",
+			PermissionLevel: 2,
+			AccessibleTeams: []string{"team-1"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).WithObjects(existing).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	// PUT with new accessibleTeams; PermissionLevel + DisplayName unchanged.
+	body := []byte(`{"accessibleTeams":["team-1","team-2"]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/alice", bytes.NewReader(body))
+	req.SetPathValue("name", "alice")
+	rec := httptest.NewRecorder()
+	handler.UpdateHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var updated v1beta1.Human
+	if err := k8sClient.Get(context.Background(),
+		client.ObjectKey{Name: "alice", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated human: %v", err)
+	}
+	if got := updated.Spec.AccessibleTeams; len(got) != 2 || got[0] != "team-1" || got[1] != "team-2" {
+		t.Fatalf("expected accessibleTeams=[team-1,team-2], got %v", got)
+	}
+	// Unchanged fields preserved.
+	if updated.Spec.DisplayName != "Alice" {
+		t.Fatalf("DisplayName must be preserved on partial update, got %q", updated.Spec.DisplayName)
+	}
+	if updated.Spec.PermissionLevel != 2 {
+		t.Fatalf("PermissionLevel must be preserved on partial update, got %d", updated.Spec.PermissionLevel)
+	}
+}
+
+// TestUpdateHumanRemoveAccessibleTeams verifies that an explicit empty
+// slice removes all team accesses (vs nil which preserves). JSON
+// {"accessibleTeams": []} → []string{} non-nil; the handler writes
+// it back so the user no longer has access to any team.
+//
+// This is the haopaw dismiss flow's prod-quality path: revoking a
+// Team Room from a user without recreating the Human CR.
+func TestUpdateHumanRemoveAccessibleTeams(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	existing := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:     "Bob",
+			AccessibleTeams: []string{"team-1", "team-2"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).WithObjects(existing).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"accessibleTeams":[]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/bob", bytes.NewReader(body))
+	req.SetPathValue("name", "bob")
+	rec := httptest.NewRecorder()
+	handler.UpdateHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var updated v1beta1.Human
+	if err := k8sClient.Get(context.Background(),
+		client.ObjectKey{Name: "bob", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated human: %v", err)
+	}
+	if len(updated.Spec.AccessibleTeams) != 0 {
+		t.Fatalf("expected accessibleTeams=[], got %v", updated.Spec.AccessibleTeams)
+	}
+}
+
+// TestUpdateHumanPermissionLevel verifies the optional *int pointer
+// pattern: only update PermissionLevel when explicitly sent. JSON
+// {"permissionLevel": 1} sets to admin tier; absent field preserves.
+//
+// Note: PermissionLevel = 0 is technically valid per Kubernetes
+// validation but is outside the semantic enum (1=Admin, 2=Team,
+// 3=Worker per types.go:372 comment) and indistinguishable from "field
+// absent" if we used plain int. Pointer disambiguates.
+func TestUpdateHumanPermissionLevel(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	existing := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "carol", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:     "Carol",
+			PermissionLevel: 3,
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).WithObjects(existing).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"permissionLevel":2}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/carol", bytes.NewReader(body))
+	req.SetPathValue("name", "carol")
+	rec := httptest.NewRecorder()
+	handler.UpdateHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var updated v1beta1.Human
+	if err := k8sClient.Get(context.Background(),
+		client.ObjectKey{Name: "carol", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated human: %v", err)
+	}
+	if updated.Spec.PermissionLevel != 2 {
+		t.Fatalf("expected permissionLevel=2, got %d", updated.Spec.PermissionLevel)
+	}
+}
+
+// TestGetHumanEchoesSpecFields verifies the response shape carries the
+// spec-level fields needed for read-modify-write callers (downstream
+// dependents like haopaw BFF that need to add/remove a single team from
+// accessibleTeams without overwriting other spec state). Before this PR,
+// HumanResponse only echoed DisplayName + Status fields; spec fields like
+// AccessibleTeams / Email / PermissionLevel were invisible, forcing
+// callers to use raw kubectl or DELETE+CREATE workarounds.
+func TestGetHumanEchoesSpecFields(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	existing := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "dave", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:       "Dave",
+			Email:             "dave@example.com",
+			PermissionLevel:   2,
+			AccessibleTeams:   []string{"alpha", "beta"},
+			AccessibleWorkers: []string{"w1"},
+			Note:              "team admin for alpha",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).WithObjects(existing).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/humans/dave", nil)
+	req.SetPathValue("name", "dave")
+	rec := httptest.NewRecorder()
+	handler.GetHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var resp HumanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Email != "dave@example.com" {
+		t.Fatalf("Email not echoed: got %q", resp.Email)
+	}
+	if resp.PermissionLevel != 2 {
+		t.Fatalf("PermissionLevel not echoed: got %d", resp.PermissionLevel)
+	}
+	if len(resp.AccessibleTeams) != 2 || resp.AccessibleTeams[0] != "alpha" || resp.AccessibleTeams[1] != "beta" {
+		t.Fatalf("AccessibleTeams not echoed: got %v", resp.AccessibleTeams)
+	}
+	if len(resp.AccessibleWorkers) != 1 || resp.AccessibleWorkers[0] != "w1" {
+		t.Fatalf("AccessibleWorkers not echoed: got %v", resp.AccessibleWorkers)
+	}
+	if resp.Note != "team admin for alpha" {
+		t.Fatalf("Note not echoed: got %q", resp.Note)
+	}
+}
+
+// TestUpdateHumanNotFound verifies the same writeK8sError flow as
+// UpdateWorker / UpdateTeam: missing resource → 404, not 500.
+func TestUpdateHumanNotFound(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"accessibleTeams":["team-1"]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/ghost", bytes.NewReader(body))
+	req.SetPathValue("name", "ghost")
+	rec := httptest.NewRecorder()
+	handler.UpdateHuman(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNotFound, rec.Code, rec.Body.String())
 	}
 }
 

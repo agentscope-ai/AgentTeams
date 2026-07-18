@@ -340,6 +340,16 @@ type humanResp struct {
 	InitialPassword string   `json:"initialPassword,omitempty"`
 	Rooms           []string `json:"rooms,omitempty"`
 	Message         string   `json:"message,omitempty"`
+
+	// Spec echo (mirror server HumanResponse — added with #729 PUT route).
+	// CLI must include these so `hiclaw get humans <name> -o json` doesn't
+	// strip them on round-trip parse → read-modify-write callers (BFF
+	// merging accessibleTeams) see the current state.
+	Email             string   `json:"email,omitempty"`
+	PermissionLevel   int      `json:"permissionLevel,omitempty"`
+	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	Note              string   `json:"note,omitempty"`
 }
 
 type humanListResp struct {

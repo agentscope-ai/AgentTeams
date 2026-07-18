@@ -188,6 +188,32 @@ type CreateHumanRequest struct {
 	Note              string   `json:"note,omitempty"`
 }
 
+// UpdateHumanRequest is the body for PUT /api/v1/humans/{name}.
+//
+// Partial-update semantics mirror UpdateWorkerRequest / UpdateTeamRequest:
+//
+//   - Plain string fields (DisplayName / Email / Note): empty string =
+//     "field absent in JSON", preserves existing value. To clear a string
+//     to empty, callers send DELETE+CREATE instead.
+//   - PermissionLevel uses *int so the request can disambiguate "field
+//     absent" from "set to 0" — the comment on v1beta1.HumanSpec
+//     PermissionLevel reads "1=Admin, 2=Team, 3=Worker" and 0 is outside
+//     the documented enum, but we still allow the round-trip rather than
+//     re-encoding type semantics in the REST surface.
+//   - AccessibleTeams / AccessibleWorkers use the nil-vs-[]-distinct
+//     pattern: nil (field absent) preserves existing; []string{}
+//     (explicit empty slice) clears the list. JSON's standard
+//     unmarshaling honors this — `"accessibleTeams":[]` decodes to a
+//     non-nil empty slice.
+type UpdateHumanRequest struct {
+	DisplayName       string   `json:"displayName,omitempty"`
+	Email             string   `json:"email,omitempty"`
+	PermissionLevel   *int     `json:"permissionLevel,omitempty"`
+	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	Note              string   `json:"note,omitempty"`
+}
+
 type HumanResponse struct {
 	Name            string   `json:"name"`
 	Phase           string   `json:"phase"`
@@ -196,6 +222,17 @@ type HumanResponse struct {
 	InitialPassword string   `json:"initialPassword,omitempty"`
 	Rooms           []string `json:"rooms,omitempty"`
 	Message         string   `json:"message,omitempty"`
+
+	// Spec echo (added 2026-05 with PUT /humans/{name} route — fixes #729).
+	// Surfacing these fields lets callers do read-modify-write without a
+	// separate kubectl/raw-CR fetch. Useful for the upcoming UpdateHuman
+	// flow where caller adds/removes one entry from accessibleTeams
+	// without overwriting other spec state.
+	Email             string   `json:"email,omitempty"`
+	PermissionLevel   int      `json:"permissionLevel,omitempty"`
+	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	Note              string   `json:"note,omitempty"`
 }
 
 type HumanListResponse struct {

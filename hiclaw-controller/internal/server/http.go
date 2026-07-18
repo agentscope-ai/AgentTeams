@@ -83,6 +83,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/humans", mw.RequireAuthz(authpkg.ActionCreate, "human", nil)(http.HandlerFunc(rh.CreateHuman)))
 	mux.Handle("GET /api/v1/humans", mw.RequireAuthz(authpkg.ActionList, "human", nil)(http.HandlerFunc(rh.ListHumans)))
 	mux.Handle("GET /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionGet, "human", nameFn)(http.HandlerFunc(rh.GetHuman)))
+	mux.Handle("PUT /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "human", nameFn)(http.HandlerFunc(rh.UpdateHuman)))
 	mux.Handle("DELETE /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionDelete, "human", nameFn)(http.HandlerFunc(rh.DeleteHuman)))
 
 	// Managers

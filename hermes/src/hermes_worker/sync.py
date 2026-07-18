@@ -65,7 +65,8 @@ def _merge_openclaw_config(remote_text: str, local_text: str) -> str:
       - models, gateway: replaced from remote when present.
       - channels: deep merge with remote winning leaf conflicts; local-only keys kept.
       - channels.matrix.accessToken: local wins (Worker re-login after restart).
-      - plugins.entries: deep merge with local winning on shared keys; load.paths union.
+      - plugins.entries: deep merge with local winning on shared keys.
+      - plugins.load.paths, plugins.allow: union of remote and local values.
     """
     remote = json.loads(remote_text)
     local = json.loads(local_text)
@@ -102,6 +103,10 @@ def _merge_openclaw_config(remote_text: str, local_text: str) -> str:
             out_load = dict(l_plugins.get("load") or {})
             out_load["paths"] = sorted(set((r_paths or []) + (l_paths or [])))
             out_plugins["load"] = out_load
+        r_allow = r_plugins.get("allow")
+        l_allow = l_plugins.get("allow")
+        if r_allow is not None or l_allow is not None:
+            out_plugins["allow"] = sorted(set((r_allow or []) + (l_allow or [])))
         merged["plugins"] = out_plugins
 
     return json.dumps(merged, indent=2)

@@ -1373,6 +1373,11 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 // overrides these to [leader, admin] for team members. WorkerReconciler is
 // team-agnostic and would otherwise revert them to standalone [manager, admin]
 // on every reconcile, breaking team-scoped task delivery.
+//
+// plugins.allow and plugins.load.paths are unioned across the two configs so
+// user-added plugin allow-list entries and extension directories survive
+// reconciles; existing user modifications still win on shared keys because
+// the generated config provides the base.
 func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 	var generated, existing map[string]interface{}
 	if err := json.Unmarshal(generatedJSON, &generated); err != nil {
@@ -1417,21 +1422,15 @@ func mergeUserPluginConfig(generatedJSON, existingJSON []byte) ([]byte, error) {
 	if genLoad != nil && existLoad != nil {
 		genPaths := toStringSliceCompat(genLoad["paths"])
 		existPaths := toStringSliceCompat(existLoad["paths"])
-		seen := make(map[string]bool, len(genPaths)+len(existPaths))
-		var unionPaths []string
-		for _, p := range genPaths {
-			if !seen[p] {
-				seen[p] = true
-				unionPaths = append(unionPaths, p)
-			}
-		}
-		for _, p := range existPaths {
-			if !seen[p] {
-				seen[p] = true
-				unionPaths = append(unionPaths, p)
-			}
-		}
-		genLoad["paths"] = unionPaths
+		genLoad["paths"] = unionStringSlices(genPaths, existPaths)
+	}
+
+	// Union plugin allow entries so user-added plugin allow-list entries
+	// (e.g. memory-core dreaming schedule) survive reconciles.
+	genAllow := toStringSliceCompat(genPlugins["allow"])
+	existAllow := toStringSliceCompat(existPlugins["allow"])
+	if len(genAllow) > 0 || len(existAllow) > 0 {
+		genPlugins["allow"] = unionStringSlices(genAllow, existAllow)
 	}
 
 	return json.MarshalIndent(generated, "", "  ")
@@ -1532,4 +1531,22 @@ func toStringSliceCompat(v interface{}) []string {
 		return arr
 	}
 	return nil
+}
+
+func unionStringSlices(first, second []string) []string {
+	seen := make(map[string]bool, len(first)+len(second))
+	var result []string
+	for _, item := range first {
+		if !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+	for _, item := range second {
+		if !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+	return result
 }

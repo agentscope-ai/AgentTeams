@@ -102,6 +102,7 @@ type WorkerResponse struct {
 	LLMCallsLastHeartbeat int          `json:"llmCallsLastHeartbeat,omitempty"`
 	LLMCallsTotal         int          `json:"llmCallsTotal,omitempty"`
 	HealthChecks          *WorkerHealthChecks `json:"healthChecks,omitempty"`
+	HealthState           string              `json:"healthState,omitempty"` // controller-derived health classification
 }
 
 type ExposedPortInfo struct {

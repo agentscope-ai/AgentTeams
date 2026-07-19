@@ -707,6 +707,15 @@ func (a *App) initReconcilers(_ context.Context) error {
 		return fmt.Errorf("setup CR count collector: %w", err)
 	}
 
+	// HealthMonitorController classifies worker health states based on
+	// heartbeat and activity staleness.
+	if err := a.mgr.Add(&controller.HealthMonitorController{
+		Client:    a.mgr.GetClient(),
+		Namespace: a.namespace,
+	}); err != nil {
+		return fmt.Errorf("setup HealthMonitorController: %w", err)
+	}
+
 	if err := (&controller.ProjectReconciler{
 		Client:         a.mgr.GetClient(),
 		OSS:            a.oss,

@@ -616,3 +616,86 @@ dialog::backdrop {
 .task-detail-header button:hover {
   color: var(--text);
 }
+
+/* Health state badges */
+.badge-health-healthy {
+  background: rgba(62, 207, 142, 0.15);
+  color: var(--ok);
+}
+
+.badge-health-idle {
+  background: rgba(151, 162, 178, 0.15);
+  color: var(--text-dim);
+}
+
+.badge-health-stalled {
+  background: rgba(224, 166, 62, 0.15);
+  color: var(--warn);
+}
+
+.badge-health-zombie {
+  background: rgba(224, 85, 62, 0.15);
+  color: var(--bad);
+}
+
+/* Health Board (Kanban) */
+.health-board {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  min-height: 300px;
+}
+
+.health-column {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+}
+
+.health-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-top: 3px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.health-column-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.health-column-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.health-column-body {
+  padding: 8px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.health-card {
+  padding: 10px 12px;
+}
+
+.health-uncategorized {
+  margin-top: 16px;
+}
+
+@media (max-width: 800px) {
+  .health-board {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

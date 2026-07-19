@@ -1138,6 +1138,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		LastActiveAt:   w.Status.LastActiveAt,
 		LLMCallsLastHeartbeat: w.Status.LLMCallsLastHeartbeat,
 		LLMCallsTotal:         w.Status.LLMCallsTotal,
+		HealthState:           w.Status.HealthState,
 	}
 	if w.Spec.ContainerManaged != nil {
 		resp.ContainerManaged = *w.Spec.ContainerManaged

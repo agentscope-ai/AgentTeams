@@ -3,6 +3,7 @@ import { renderTasks } from './panels/tasks.js';
 import { renderBoard } from './panels/board.js';
 import { renderProjects } from './panels/projects.js';
 import { renderFiles } from './panels/files.js';
+import { renderHealth } from './panels/health.js';
 
 const panels = {
   overview: renderOverview,
@@ -10,6 +11,7 @@ const panels = {
   board: renderBoard,
   projects: renderProjects,
   files: renderFiles,
+  health: renderHealth,
 };
 
 const main = document.getElementById('main');

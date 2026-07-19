@@ -142,6 +142,7 @@ function renderWorkerCards(el, workers) {
       <div class="card-header">
         <span class="card-name">${escapeHtml(w.name)}</span>
         <span class="badge ${badgeClass(w.phase)}">${escapeHtml(w.phase)}</span>
+        ${w.healthState ? `<span class="badge badge-health-${escapeHtml(w.healthState)}">${escapeHtml(w.healthState)}</span>` : ''}
       </div>
       <div class="card-meta">
         ${w.team ? `Team: ${escapeHtml(w.team)}<br/>` : ''}

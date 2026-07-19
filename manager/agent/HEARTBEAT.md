@@ -55,24 +55,10 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
   ```
 - Determine if the Worker is making normal progress based on their reply
 - If the Worker has not responded (no response for more than one heartbeat cycle), flag the anomaly in the Room and notify the human admin (see Step 7)
-- If the Worker has replied that the task is complete but meta.json has not been updated:
-  1. Pull the task directory from MinIO if you have not already:
-     ```bash
-     mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
-     ```
-  2. **Verify deliverables before completing:**
-     ```bash
-     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action verify --task-id {task-id}
-     ```
-  3. If `verified` is **true**: update `meta.json` (status → completed, fill in `completed_at`), push to MinIO, and remove the entry from `active_tasks`:
-     ```bash
-     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
-     ```
-  4. If `verified` is **false**: do **not** complete. Mark blocked, @mention the Worker with failed claim details, and flag in Step 7:
-     ```bash
-     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
-       --action mark-blocked --task-id {task-id} --reason "output verification failed: {failed claims}"
-     ```
+- If the Worker has replied that the task is complete but meta.json has not been updated, proactively update meta.json (status → completed, fill in completed_at), and remove the entry from `active_tasks`:
+  ```bash
+  bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
+  ```
 
 ---
 
@@ -92,18 +78,27 @@ Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
   @{leader}:{domain} How is task {task-id} progressing? Any blockers from your team?
   ```
 - **Do NOT contact team workers directly** — the Team Leader handles internal coordination
-- If the Team Leader reports completion but `meta.json` is not yet completed, run the **same verify gate as Step 2** before completing:
-  1. Pull the task directory from MinIO if you have not already:
-     ```bash
-     mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
-     ```
-  2. **Verify deliverables before completing:**
-     ```bash
-     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action verify --task-id {task-id}
-     ```
-  3. If `verified` is **true**: update `meta.json`, push to MinIO, and remove from `active_tasks` via `--action complete`.
-  4. If `verified` is **false**: do **not** complete. Mark blocked, @mention the Team Leader with failed claim details, and flag in Step 7.
+- If the Team Leader reports completion, process it the same as a regular worker completion
 - If the Team Leader reports a blocker, escalate to admin (Step 7)
+
+---
+
+### 2c. Check Escalation Staleness
+
+Run the escalation staleness check:
+
+```bash
+bash /opt/hiclaw/agent/skills/escalation-management/scripts/manage-escalations.sh --action check-stale
+```
+
+- For each stale item with `stale_reason: "threshold_exceeded"`: re-notify admin with `[RE-ESCALATION] [{severity}] {summary}` using the resolved notification channel
+- For each stale item with `stale_reason: "max_re_escalations_reached"`: flag as critical finding for Step 7 report
+- Scan Step 2 Worker replies for `[BLOCKED:...]` patterns — if a Worker reported a blocker but no escalation exists for that task, raise one now:
+  ```bash
+  bash /opt/hiclaw/agent/skills/escalation-management/scripts/manage-escalations.sh \
+    --action raise --task-id {task-id} --severity {parsed-severity} \
+    --category {infer} --worker {worker} --summary "{from reply}"
+  ```
 
 ---
 
@@ -155,7 +150,6 @@ done
 ```
 
 - Filter projects with `"status": "active"`
-- For each active project whose federated Project CR has unsatisfied cross-project dependencies (`GET ${AGENTTEAMS_CONTROLLER_URL}/api/v1/projects/{id}` → any `dependencies[]` with `satisfied: false`), **do not assign new tasks**; include the blocking upstream project(s) in the Step 7 admin report
 - For each active project, read `project_room_id` from meta.json, then read plan.md and find tasks marked as `[~]` (in progress)
 - If the responsible Worker has had no activity during this heartbeat cycle, **ensure the Worker's container is running first** (`lifecycle-worker.sh --action ensure-ready --worker {worker}`), then **send** using the **message** tool with `channel=matrix`, `target=room:<project_room_id>`, and body @mention `@{worker}:${AGENTTEAMS_MATRIX_DOMAIN}`:
   ```
@@ -170,6 +164,38 @@ done
 - Count the number of `type=finite` entries in state.json (finite tasks in progress) and identify idle Workers with no assigned tasks (neither finite nor infinite)
 - If Workers are insufficient, check in with the human admin about whether new Workers need to be created
 - If Workers are idle, suggest reassigning tasks
+
+---
+
+### 5b. Worker Health Classification
+
+Run the health classification script:
+
+```bash
+bash /opt/hiclaw/agent/skills/worker-management/scripts/worker-health-report.sh
+```
+
+Parse the JSON output and act on each health state:
+
+- **stalled** workers: Ensure container is running (`lifecycle-worker.sh --action ensure-ready`), then send nudge message to their room asking for progress. Only nudge once per heartbeat cycle.
+- **zombie** workers: Attempt `ensure-ready`. If status is `recreated` or `failed`, flag for admin in Step 7 report. Do NOT assign new tasks to zombie workers.
+- **blocked** workers: Check if an escalation exists for the blocked task. If not, raise one (see escalation-management skill).
+
+Include the health summary in the Step 7 report when any worker is stalled, zombie, or blocked.
+
+---
+
+### 5c. Deferred Dispatch Drain
+
+If any tasks were deferred due to dispatch gating (Step 0 in finite-tasks workflow), check if they can now be dispatched:
+
+1. For each deferred task, run the dispatch gate check:
+   ```bash
+   bash /opt/hiclaw/agent/skills/task-management/scripts/dispatch-gate.sh \
+     --action check --worker {worker}
+   ```
+2. If `allowed: true`, proceed with the original assignment flow (notify Worker, update state.json)
+3. If still denied, keep deferred and check again next heartbeat
 
 ---
 
@@ -214,3 +240,11 @@ If the output is `available`, proceed with the following steps:
   Then:
   - If `channel` is not `"none"`: send `[Heartbeat Report] <summarize findings and recommended actions, in SOUL.md persona and language>`.
   - If `channel` is `"none"`: admin DM room has not been discovered yet — attempt discovery now (see Step 1), then retry.
+
+**Include escalation summary** — before composing the report, get the escalation state:
+
+```bash
+bash /opt/hiclaw/agent/skills/escalation-management/scripts/manage-escalations.sh --action summary
+```
+
+If `open > 0`, include in the report: `[Escalations: {open} open, highest: {highest_severity}]`. List CRITICAL escalations individually with their summary and question.

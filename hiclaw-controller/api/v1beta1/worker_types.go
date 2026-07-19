@@ -191,6 +191,14 @@ type WorkerStatus struct {
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
+	// HealthState is the controller-derived health classification for this worker.
+	// Values: "" (unknown), "healthy", "stalled", "zombie", "idle".
+	// Set by the HealthMonitorController based on heartbeat/activity staleness.
+	HealthState string `json:"healthState,omitempty"`
+
+	// LastHealthTransition records when HealthState last changed (RFC3339).
+	LastHealthTransition string `json:"lastHealthTransition,omitempty"`
+
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
 	// Values: "pod" (default), or "" (unset = migration, treated as spec default).

@@ -362,7 +362,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					time.Sleep(2 * time.Second)
 					raw := map[string]interface{}{
 						"hiclawMode":              true,
-						"openaiCustomUrl":         cfg.OpenAIBaseURL,
+						"openaiCustomUrl":         customOpenAIURL(cfg.OpenAIBaseURL),
 						"openaiCustomServiceName": "openai-compat.dns",
 						"openaiCustomServicePort": port,
 					}
@@ -396,7 +396,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					time.Sleep(2 * time.Second)
 					raw := map[string]interface{}{
 						"hiclawMode":              true,
-						"openaiCustomUrl":         cfg.OpenAIBaseURL,
+						"openaiCustomUrl":         customOpenAIURL(cfg.OpenAIBaseURL),
 						"openaiCustomServiceName": provider + ".dns",
 						"openaiCustomServicePort": port,
 					}
@@ -446,6 +446,19 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// customOpenAIURL returns the base URL with any port stripped, preserving
+// scheme, hostname and path. Higress derives the upstream host domain from
+// openaiCustomUrl, so an embedded port would be treated as part of the host
+// and break DNS resolution. The port is supplied separately via
+// openaiCustomServicePort.
+func customOpenAIURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return rawURL
+	}
+	return fmt.Sprintf("%s://%s%s", u.Scheme, u.Hostname(), u.Path)
 }
 
 // parseHostPort extracts host and port from a URL like "http://host:port".

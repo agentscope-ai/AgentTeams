@@ -269,6 +269,16 @@ func TestDefaultModelSpec(t *testing.T) {
 		t.Errorf("claude-opus-4-6 should have vision: %v", spec.Input)
 	}
 
+	minimaxM27 := defaultModelSpec("MiniMax-M2.7")
+	if minimaxM27.ContextWindow != 204800 || len(minimaxM27.Input) != 1 {
+		t.Errorf("MiniMax-M2.7 spec = %+v, want 204800 context and text input", minimaxM27)
+	}
+
+	minimaxM3 := defaultModelSpec("MiniMax-M3")
+	if minimaxM3.ContextWindow != 1000000 || len(minimaxM3.Input) != 2 || minimaxM3.Input[1] != "image" {
+		t.Errorf("MiniMax-M3 spec = %+v, want 1000000 context and vision input", minimaxM3)
+	}
+
 	unknown := defaultModelSpec("unknown-model-xyz")
 	if unknown.ContextWindow != 150000 {
 		t.Errorf("unknown model ctx = %d, want 150000", unknown.ContextWindow)

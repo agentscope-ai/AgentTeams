@@ -99,8 +99,12 @@ case "${MODEL_NAME}" in
         CTX=200000; MAX=64000 ;;
     deepseek-chat|deepseek-reasoner|kimi-k2.5)
         CTX=256000; MAX=128000 ;;
-    glm-5|MiniMax-M2.7|MiniMax-M2.7-highspeed|MiniMax-M2.5)
+    MiniMax-M3)
+        CTX=1000000; MAX=128000 ;;
+    glm-5|MiniMax-M2.5)
         CTX=200000; MAX=128000 ;;
+    MiniMax-M2.7|MiniMax-M2.7-highspeed)
+        CTX=204800; MAX=128000 ;;
     *)
         CTX=150000; MAX=128000 ;;
 esac
@@ -112,7 +116,7 @@ fi
 
 # Resolve input modalities: only vision-capable models get "image"
 case "${MODEL_NAME}" in
-    gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5)
+    gpt-5.4|gpt-5.3-codex|gpt-5-mini|gpt-5-nano|claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|qwen3.6-plus|qwen3.5-plus|kimi-k2.5|MiniMax-M3)
         INPUT='["text", "image"]' ;;
     *)
         INPUT='["text"]' ;;

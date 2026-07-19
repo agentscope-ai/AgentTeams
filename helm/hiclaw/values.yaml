@@ -220,6 +220,10 @@ controller:
     annotations: {}
   env: {}
   timezone: "Asia/Shanghai"
+  # DM policy for worker Matrix channels.
+  # "allowlist" (default): only Manager/Admin (or team leader) can DM workers.
+  # "open": any Matrix user can DM workers (per-room session isolation).
+  dmPolicy: ""                # empty = controller default ("allowlist")
   uninstallHook:
     # When enabled, helm uninstall first runs a Job that deletes all
     # Manager/Worker/Team/Human CRs while the controller is still alive,

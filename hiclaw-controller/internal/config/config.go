@@ -146,6 +146,7 @@ type Config struct {
 	MatrixAdminUser         string
 	MatrixAdminPassword     string
 	MatrixE2EE              bool
+	DMPolicy                string // HICLAW_DM_POLICY — dm.policy: "allowlist" (default) or "open"
 
 	// Matrix AppService mode
 	MatrixAppServiceEnabled            bool
@@ -368,6 +369,7 @@ func LoadConfig() *Config {
 		MatrixAdminUser:         os.Getenv("AGENTTEAMS_ADMIN_USER"),
 		MatrixAdminPassword:     os.Getenv("AGENTTEAMS_ADMIN_PASSWORD"),
 		MatrixE2EE:              os.Getenv("AGENTTEAMS_MATRIX_E2EE") == "1" || os.Getenv("AGENTTEAMS_MATRIX_E2EE") == "true",
+		DMPolicy:                envOrDefault("HICLAW_DM_POLICY", "allowlist"),
 
 		MatrixAppServiceEnabled:            os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "0" && os.Getenv("AGENTTEAMS_MATRIX_APPSERVICE_ENABLED") != "false",
 		MatrixAppServiceID:                 envOrDefault("AGENTTEAMS_MATRIX_APPSERVICE_ID", "agentteams-controller"),
@@ -842,6 +844,7 @@ func (c *Config) AgentConfig() agentconfig.Config {
 		EmbeddingModel:     c.EmbeddingModel,
 		Runtime:            c.Runtime,
 		E2EEEnabled:        c.MatrixE2EE,
+		DMPolicy:           c.DMPolicy,
 		ModelContextWindow: c.ModelContextWindow,
 		ModelMaxTokens:     c.ModelMaxTokens,
 		CMSTracesEnabled:   c.CMSTracesEnabled,

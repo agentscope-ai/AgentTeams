@@ -7,6 +7,7 @@
 # Since v0.2: includes merged worker lifecycle, auth, credentials, and proxy.
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
+ARG BUILDPLATFORM=linux/amd64
 
 # ============ Stage 1: Build Go binaries ============
 FROM ${HIGRESS_REGISTRY}/higress/golang:1.25-alpine AS builder
@@ -62,4 +63,4 @@ COPY agent/ /opt/hiclaw/agent/
 ENV AGENTTEAMS_CONTROLLER_URL=http://127.0.0.1:8090 \
     AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/hiclaw/cli-token
 
-ENTRYPOINT ["agentteams-controller"]
+ENTRYPOINT ["hiclaw-controller"]

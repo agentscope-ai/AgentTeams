@@ -308,3 +308,26 @@ func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) 
 		t.Fatalf("ContainerPrefix = %q, want %q", cfg.ContainerPrefix, "custom-worker-")
 	}
 }
+
+func TestLoadConfigDMPolicyDefault(t *testing.T) {
+	cfg := LoadConfig()
+	if cfg.DMPolicy != "allowlist" {
+		t.Fatalf("DMPolicy = %q, want %q", cfg.DMPolicy, "allowlist")
+	}
+	ac := cfg.AgentConfig()
+	if ac.DMPolicy != "allowlist" {
+		t.Fatalf("AgentConfig().DMPolicy = %q, want %q", ac.DMPolicy, "allowlist")
+	}
+}
+
+func TestLoadConfigDMPolicyOpen(t *testing.T) {
+	t.Setenv("HICLAW_DM_POLICY", "open")
+	cfg := LoadConfig()
+	if cfg.DMPolicy != "open" {
+		t.Fatalf("DMPolicy = %q, want %q", cfg.DMPolicy, "open")
+	}
+	ac := cfg.AgentConfig()
+	if ac.DMPolicy != "open" {
+		t.Fatalf("AgentConfig().DMPolicy = %q, want %q", ac.DMPolicy, "open")
+	}
+}

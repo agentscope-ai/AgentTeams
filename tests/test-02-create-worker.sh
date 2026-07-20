@@ -54,7 +54,7 @@ wait_for_session_stable 5 60
 
 # Snapshot metrics baseline before sending message (to calculate delta later)
 METRICS_BASELINE=$(snapshot_baseline)
-TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}}"
 
 # Send create worker request.
 #

@@ -79,7 +79,7 @@ WORK_DIR="/tmp/agentteams-test-${TEST_WORKER}"
 # defaults to openclaw on the controller side (defaultRuntime("") returns
 # RuntimeOpenClaw), which makes the "copaw shard" run a hidden openclaw
 # worker -- defeating the point of the matrix expansion.
-TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}}"
 
 exec_in_manager bash -c "
     mkdir -p ${WORK_DIR}/package/config ${WORK_DIR}/package/skills/test-skill

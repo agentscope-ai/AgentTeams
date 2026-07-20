@@ -76,7 +76,7 @@ make test SKIP_INSTALL=1
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `HICLAW_LLM_API_KEY` | Yes | LLM API key for Agent behavior |
-| `HICLAW_GITHUB_TOKEN` | No | GitHub PAT for tests 08-11 |
+| `AGENTTEAMS_GITHUB_TOKEN` | No | GitHub PAT for tests 08-13 (`HICLAW_GITHUB_TOKEN` remains supported) |
 
 ## Helper Libraries
 

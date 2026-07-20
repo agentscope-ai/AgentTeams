@@ -37,6 +37,9 @@ export TEST_GATEWAY_PORT="${TEST_GATEWAY_PORT:-18080}"
 export TEST_CONSOLE_PORT="${TEST_CONSOLE_PORT:-18001}"
 export TEST_ELEMENT_PORT="${TEST_ELEMENT_PORT:-18088}"
 
+# Prefer the current installer contract while retaining test and legacy overrides.
+export TEST_GITHUB_TOKEN="${TEST_GITHUB_TOKEN:-${AGENTTEAMS_GITHUB_TOKEN:-${HICLAW_GITHUB_TOKEN:-}}}"
+
 # Internal container URLs — always fixed; all callers use exec_in_manager
 export TEST_MATRIX_DIRECT_URL="http://127.0.0.1:6167"
 export TEST_MINIO_URL="http://127.0.0.1:9000"

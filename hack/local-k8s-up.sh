@@ -68,7 +68,7 @@ fi
 
 MANAGER_IMAGE="hiclaw/manager:local"
 COPAW_MANAGER_IMAGE="hiclaw/manager-copaw:local"
-CONTROLLER_IMAGE="hiclaw/hiclaw-controller:local"
+CONTROLLER_IMAGE="agentteams/agentteams-controller:local"
 WORKER_IMAGE="hiclaw/worker-agent:local"
 COPAW_WORKER_IMAGE="hiclaw/copaw-worker:local"
 HERMES_WORKER_IMAGE="hiclaw/hermes-worker:local"
@@ -80,7 +80,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
     # Controller
     log "Building controller image..."
-    docker build -t "$CONTROLLER_IMAGE" -f "${PROJECT_ROOT}/hiclaw-controller/Dockerfile" "${PROJECT_ROOT}/hiclaw-controller"
+    docker build -t "$CONTROLLER_IMAGE" -f "${PROJECT_ROOT}/agentteams-controller/Dockerfile" "${PROJECT_ROOT}/agentteams-controller"
 
     # Manager (choose between all-in-one and k8s-lightweight)
     if [ "$BUILD_K8S_IMAGE" = "1" ]; then
@@ -162,7 +162,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
     done
 
     HELM_IMAGE_OVERRIDES="--set manager.image.repository=hiclaw/manager-copaw --set manager.image.tag=local --set manager.image.pullPolicy=Never"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set controller.image.repository=hiclaw/hiclaw-controller --set controller.image.tag=local --set controller.image.pullPolicy=Never"
+    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set controller.image.repository=agentteams/agentteams-controller --set controller.image.tag=local --set controller.image.pullPolicy=Never"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openclaw.repository=hiclaw/worker-agent --set worker.defaultImage.openclaw.tag=local"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.copaw.repository=hiclaw/copaw-worker --set worker.defaultImage.copaw.tag=local"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.hermes.repository=hiclaw/hermes-worker --set worker.defaultImage.hermes.tag=local"
@@ -175,7 +175,7 @@ fi
 
 # ── Step 3: Build Helm dependencies ────────────────────────────────────────
 
-CHART_DIR="${PROJECT_ROOT}/helm/hiclaw"
+CHART_DIR="${PROJECT_ROOT}/helm/agentteams"
 
 log "Building Helm dependencies..."
 helm dependency build "$CHART_DIR"
@@ -255,7 +255,7 @@ log "Access Element Web:"
 log "  Then open: http://localhost:18080"
 echo ""
 log "View Controller logs:"
-log "  kubectl logs -f deployment/hiclaw-controller -n ${NAMESPACE}"
+log "  kubectl logs -f deployment/agentteams-controller -n ${NAMESPACE}"
 echo ""
 log "View Manager logs (created by controller via Manager CRD):"
 log "  kubectl get managers -n ${NAMESPACE}"

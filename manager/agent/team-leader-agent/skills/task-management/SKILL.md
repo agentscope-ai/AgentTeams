@@ -117,10 +117,10 @@ Keep machine-facing identifiers and protocol tokens unchanged:
 
 ```bash
 # 1. Resolve team CR name
-TEAM_CR="$(hiclaw get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json | jq -r '.team')"
+TEAM_CR="$(agt get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json | jq -r '.team')"
 
 # 2. Get all team workers
-hiclaw get workers --team "$TEAM_CR" -o json
+agt get workers --team "$TEAM_CR" -o json
 
 # 3. Extract localpart from matrixUserID for each worker
 #    @worker-issue-resolver:domain → worker-issue-resolver

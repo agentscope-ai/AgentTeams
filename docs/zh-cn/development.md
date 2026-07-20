@@ -1,6 +1,6 @@
 # 开发指南
 
-为 HiClaw 贡献代码、本地构建镜像和运行测试的指南。
+为 AgentTeams 贡献代码、本地构建镜像和运行测试的指南。
 
 ## 前置条件
 
@@ -28,7 +28,7 @@ make build-manager
 make build-worker
 
 # Controller + 嵌入式一体化镜像（基础设施 + controller，不含 Manager Agent）
-make build-hiclaw-controller
+make build-agentteams-controller
 make build-embedded
 
 # 其他 Manager / Worker 运行时
@@ -45,14 +45,14 @@ make build DOCKER_PLATFORM=linux/amd64
 
 运行 `make help` 查看所有可用目标。
 
-### Helm Chart（`helm/hiclaw`）
+### Helm Chart（`helm/agentteams`）
 
-生产环境 Kubernetes 安装定义在 **`helm/hiclaw/`**（网关、Homeserver、存储等子 Chart）。常用 Makefile 目标：
+生产环境 Kubernetes 安装定义在 **`helm/agentteams/`**（网关、Homeserver、存储等子 Chart）。常用 Makefile 目标：
 
 ```bash
 make helm-lint      # helm dependency build + helm lint
 make helm-template  # 本地渲染模板（校验）
-make sync-crds      # 将 hiclaw-controller/config/crd/ 同步到 Chart 的 crds/
+make sync-crds      # 将 agentteams-controller/config/crd/ 同步到 Chart 的 crds/
 ```
 
 ### 推送镜像（默认多架构）
@@ -61,7 +61,7 @@ make sync-crds      # 将 hiclaw-controller/config/crd/ 同步到 Chart 的 crds
 
 ```bash
 # 构建 amd64 + arm64 并推送到镜像仓库
-make push VERSION=0.1.0 REGISTRY=ghcr.io REPO=higress-group/hiclaw
+make push VERSION=0.1.0 REGISTRY=ghcr.io REPO=agentscope-ai/AgentTeams
 
 # 仅推送 Manager（多架构）
 make push-manager VERSION=latest
@@ -87,43 +87,43 @@ make push MULTIARCH_PLATFORMS=linux/amd64,linux/arm64,linux/arm/v7
 或直接传给 Docker：
 
 ```bash
-docker build --build-arg HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com -t hiclaw/manager-agent:latest ./manager/
+docker build --build-arg HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com -t agentteams/manager:latest ./manager/
 ```
 
 ## 安装 / 卸载 / Replay
 
 ### 快速安装（最简）
 
-只需 `HICLAW_LLM_API_KEY`，其余均使用合理默认值：
+只需 `AGENTTEAMS_LLM_API_KEY`，其余均使用合理默认值：
 
 ```bash
 # 一条命令完成镜像构建 + Manager 安装
-HICLAW_LLM_API_KEY="sk-xxx" make install
+AGENTTEAMS_LLM_API_KEY="sk-xxx" make install
 ```
 
 此命令将：
 1. 构建 Manager 和 Worker 镜像（`make build`）
-2. 运行安装脚本（`install/hiclaw-install.sh manager`）
+2. 运行安装脚本（`install/agentteams-install.sh manager`）
 3. 挂载容器运行时 socket 以支持直接创建 Worker
-4. 将配置保存到 `./hiclaw-manager.env`
+4. 将配置保存到 `./agentteams-manager.env`
 
 ### 自定义安装
 
 通过环境变量覆盖任意配置：
 
 ```bash
-HICLAW_LLM_API_KEY="sk-xxx" \
-HICLAW_LLM_PROVIDER="openai" \
-HICLAW_DEFAULT_MODEL="gpt-4o" \
-HICLAW_ADMIN_USER="myadmin" \
-HICLAW_ADMIN_PASSWORD="mypassword" \
+AGENTTEAMS_LLM_API_KEY="sk-xxx" \
+AGENTTEAMS_LLM_PROVIDER="openai" \
+AGENTTEAMS_DEFAULT_MODEL="gpt-4o" \
+AGENTTEAMS_ADMIN_USER="myadmin" \
+AGENTTEAMS_ADMIN_PASSWORD="mypassword" \
 make install
 ```
 
 ### 卸载
 
 ```bash
-make uninstall   # 调用 install/hiclaw-install.sh uninstall（v1.1+：controller、manager、workers、数据卷、env 等）
+make uninstall   # 调用 install/agentteams-install.sh uninstall（v1.1+：controller、manager、workers、数据卷、env 等）
 ```
 
 ### Replay（向 Manager 发送任务）
@@ -142,7 +142,7 @@ echo "创建 Worker bob" | ./scripts/replay-task.sh
 ```
 
 replay 脚本会：
-- 从 `./hiclaw-manager.env` 读取凭据
+- 从 `./agentteams-manager.env` 读取凭据
 - 以管理员身份登录 Matrix
 - 查找（或自动创建）与 Manager 的私信房间
 - 发送任务消息
@@ -160,7 +160,7 @@ make test-installed
 make test-installed TEST_FILTER="01 02"
 ```
 
-此命令从 `./hiclaw-manager.env` 读取凭据，跳过容器生命周期管理（启动/停止）。
+此命令从 `./agentteams-manager.env` 读取凭据，跳过容器生命周期管理（启动/停止）。
 
 ## 运行测试
 
@@ -168,7 +168,7 @@ make test-installed TEST_FILTER="01 02"
 
 ```bash
 # 构建镜像 + 运行全部 10 个测试用例
-export HICLAW_LLM_API_KEY="your-api-key"
+export AGENTTEAMS_LLM_API_KEY="your-api-key"
 make test
 ```
 
@@ -198,7 +198,7 @@ make test-quick
 测试 08-10 需要 GitHub 个人访问令牌：
 
 ```bash
-export HICLAW_GITHUB_TOKEN="ghp_..."
+export AGENTTEAMS_GITHUB_TOKEN="ghp_..."
 make test TEST_FILTER="08 09 10"
 ```
 
@@ -220,7 +220,7 @@ Agent 行为由 Markdown 文件定义，而非代码：
 
 ### 修改 Higress 配置
 
-**嵌入式**栈的网关路由、Consumer 与 MCP 引导由 **controller 镜像**（`hiclaw-controller` / `Dockerfile.embedded` 编排）负责。传统的 **`manager/scripts/init/setup-higress.sh`** 仍适用于 **≤v1.0.9 的单容器 Manager** 镜像，以及仍由 Manager 侧执行的逻辑——修改前请先确认你的安装形态。
+**嵌入式**栈的网关路由、Consumer 与 MCP 引导由 **controller 镜像**（`agentteams-controller` / `Dockerfile.embedded` 编排）负责。传统的 **`manager/scripts/init/setup-higress.sh`** 仍适用于 **≤v1.0.9 的单容器 Manager** 镜像，以及仍由 Manager 侧执行的逻辑——修改前请先确认你的安装形态。
 
 ### 添加新的 MCP Server
 
@@ -246,19 +246,19 @@ Agent 行为由 Markdown 文件定义，而非代码：
 
 | Secret | 用途 |
 |--------|------|
-| `HICLAW_LLM_API_KEY` | Agent 行为测试的 LLM 访问 |
-| `HICLAW_GITHUB_TOKEN` | 测试 08-10 的 GitHub 操作 |
+| `AGENTTEAMS_LLM_API_KEY` | Agent 行为测试的 LLM 访问 |
+| `AGENTTEAMS_GITHUB_TOKEN` | 测试 08-10 的 GitHub 操作 |
 
 ### 本地 CI 模拟
 
 ```bash
 # 与 CI 相同的流程，但在本地运行（单架构）
-export HICLAW_LLM_API_KEY="your-key"
+export AGENTTEAMS_LLM_API_KEY="your-key"
 make test
 
 # 像 CI 在 main 分支上那样进行多架构构建
 docker login ghcr.io
-make push VERSION=latest REGISTRY=ghcr.io REPO=higress-group/hiclaw
+make push VERSION=latest REGISTRY=ghcr.io REPO=agentscope-ai/AgentTeams
 ```
 
 ## 网络代理配置（中国大陆）
@@ -295,7 +295,7 @@ make build-manager DOCKER_BUILD_ARGS="--build-arg http_proxy=http://host.docker.
 
 ```bash
 export no_proxy="localhost,127.0.0.1,::1,local,169.254/16"
-HICLAW_LLM_API_KEY="your-key" make test SKIP_BUILD=1
+AGENTTEAMS_LLM_API_KEY="your-key" make test SKIP_BUILD=1
 ```
 
 ## 容器运行时 Socket（直接创建 Worker）
@@ -304,7 +304,7 @@ HICLAW_LLM_API_KEY="your-key" make test SKIP_BUILD=1
 
 ### 工作原理
 
-Manager 在启动时检测 socket 并设置 `HICLAW_CONTAINER_RUNTIME=socket`。`container-api.sh` 脚本通过 Docker 兼容的 REST API 提供创建/启动/停止 Worker 容器的函数（同时支持 Docker 和 Podman）。
+Manager 在启动时检测 socket 并设置 `AGENTTEAMS_CONTAINER_RUNTIME=socket`。`container-api.sh` 脚本通过 Docker 兼容的 REST API 提供创建/启动/停止 Worker 容器的函数（同时支持 Docker 和 Podman）。
 
 ### Socket 路径
 
@@ -318,19 +318,19 @@ Manager 在启动时检测 socket 并设置 `HICLAW_CONTAINER_RUNTIME=socket`。
 
 ```bash
 # Docker
-docker run -d --name hiclaw-manager \
+docker run -d --name agentteams-manager \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e HICLAW_WORKER_IMAGE=hiclaw/worker-agent:latest \
+  -e AGENTTEAMS_WORKER_IMAGE=agentteams/worker-agent:latest \
   ... \
-  hiclaw/manager-agent:latest
+  agentteams/manager:latest
 
 # Podman
-podman run -d --name hiclaw-manager \
+podman run -d --name agentteams-manager \
   -v /run/podman/podman.sock:/var/run/docker.sock \
   --security-opt label=disable \
-  -e HICLAW_WORKER_IMAGE=hiclaw/worker-agent:latest \
+  -e AGENTTEAMS_WORKER_IMAGE=agentteams/worker-agent:latest \
   ... \
-  hiclaw/manager-agent:latest
+  agentteams/manager:latest
 ```
 
 ### 测试集成
@@ -413,19 +413,19 @@ description: 该技能的用途和使用时机
 
 ### 查看 Manager 日志
 
-容器名称为 `hiclaw-manager`（通过 `make install`）或 `hiclaw-manager-test`（通过 `make test`）。
+容器名称为 `agentteams-manager`（通过 `make install`）或 `agentteams-manager-test`（通过 `make test`）。
 
-**v1.1.0+ 嵌入式安装：** 基础设施日志在 **`hiclaw-controller`**，不在 Manager 容器内。
+**v1.1.0+ 嵌入式安装：** 基础设施日志在 **`agentteams-controller`**，不在 Manager 容器内。
 
 ```bash
 # Manager Agent
-docker exec hiclaw-manager cat /var/log/hiclaw/manager-agent.log
-docker exec hiclaw-manager cat /var/log/hiclaw/manager-agent-error.log  # OpenClaw 网关 stderr（OpenClaw Manager）
-docker exec hiclaw-manager bash -c 'cat /tmp/openclaw/openclaw-*.log' | jq .
+docker exec agentteams-manager cat /var/log/agentteams/manager-agent.log
+docker exec agentteams-manager cat /var/log/agentteams/manager-agent-error.log  # OpenClaw 网关 stderr（OpenClaw Manager）
+docker exec agentteams-manager bash -c 'cat /tmp/openclaw/openclaw-*.log' | jq .
 
 # Higress / Homeserver（嵌入式 controller）
-docker exec hiclaw-controller cat /var/log/hiclaw/higress-console.log
-docker exec hiclaw-controller cat /var/log/hiclaw/tuwunel.log
+docker exec agentteams-controller cat /var/log/agentteams/higress-console.log
+docker exec agentteams-controller cat /var/log/agentteams/tuwunel.log
 ```
 
 ### 查看 Replay 对话日志
@@ -440,7 +440,7 @@ make replay-log
 ### 检查 OpenClaw 技能加载情况
 
 ```bash
-docker exec hiclaw-manager bash -c \
+docker exec agentteams-manager bash -c \
   'OPENCLAW_CONFIG_PATH=/root/manager-workspace/openclaw.json openclaw skills list --json' \
   | jq '.skills[] | select(.source == "openclaw-workspace") | {name, eligible, description}'
 ```
@@ -448,7 +448,7 @@ docker exec hiclaw-manager bash -c \
 ### 进入容器交互式 Shell
 
 ```bash
-docker exec -it hiclaw-manager bash
+docker exec -it agentteams-manager bash
 ```
 
 ### 检查 Higress 状态
@@ -477,7 +477,7 @@ curl -s http://localhost:18001/v1/ai/routes -b /tmp/cookie | jq
 
 ```bash
 mc alias set test http://localhost:9000 <user> <password>
-mc ls test/hiclaw-storage/ --recursive
+mc ls test/agentteams-storage/ --recursive
 ```
 
 ### 常见问题

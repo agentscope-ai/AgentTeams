@@ -1,12 +1,12 @@
 # Declarative Resource Management
 
-HiClaw uses Kubernetes CRD-style declarative YAML to manage platform resources — **Worker**, **Team**, **Human**, and **Manager**. You describe the desired state, and the HiClaw Controller handles creation, updates, and deletion automatically.
+AgentTeams uses Kubernetes CRD-style declarative YAML to manage platform resources — **Worker**, **Team**, **Human**, and **Manager**. You describe the desired state, and the AgentTeams Controller handles creation, updates, and deletion automatically.
 
 ## Core Concepts
 
 ### Organization Structure
 
-HiClaw uses a three-tier organization that maps to real enterprise team structures:
+AgentTeams uses a three-tier organization that maps to real enterprise team structures:
 
 ```
 Admin (Human administrator)
@@ -40,7 +40,7 @@ All resources share a unified API version: `apiVersion: agentteams.io/v1beta1`.
 
 ## Worker
 
-A Worker is the basic execution unit in HiClaw — an AI Agent running in a Docker container with its own Matrix communication account and MinIO storage space.
+A Worker is the basic execution unit in AgentTeams — an AI Agent running in a Docker container with its own Matrix communication account and MinIO storage space.
 
 ### Basic Configuration
 
@@ -67,7 +67,7 @@ spec:
     ## Behavior
     - Monitor CI/CD pipelines proactively
     - Alert on failures immediately
-  skills:                          # HiClaw built-in skills
+  skills:                          # AgentTeams built-in skills
     - github-operations
     - git-delegation
   mcpServers:                      # MCP servers callable via mcporter (url = full gateway endpoint)
@@ -90,7 +90,7 @@ spec:
 | `metadata.name` | string | Yes | — | Worker name, globally unique |
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
 | `spec.runtime` | string | No | `openclaw` | Agent runtime: `openclaw`, `copaw`, or `hermes` |
-| `spec.image` | string | No | — | Custom Docker image; if empty, the controller uses `HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE` (defaults `hiclaw/worker-agent:latest` / `hiclaw/copaw-worker:latest` / `hiclaw-hermes-worker:latest`) |
+| `spec.image` | string | No | — | Custom Docker image; if empty, the controller uses `AGENTTEAMS_WORKER_IMAGE` / `AGENTTEAMS_COPAW_WORKER_IMAGE` / `AGENTTEAMS_HERMES_WORKER_IMAGE` (defaults `agentteams/agentteams-worker:latest` / `agentteams/agentteams-copaw-worker:latest` / `agentteams/agentteams-hermes-worker:latest`) |
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
@@ -115,7 +115,7 @@ When both are set, inline fields override the corresponding files in the package
 
 ### Built-in Skills vs Custom Skills
 
-`spec.skills` refers to HiClaw platform built-in capabilities, distributed by the Manager via `push-worker-skills.sh` to the Worker's MinIO space.
+`spec.skills` refers to AgentTeams platform built-in capabilities, distributed by the Manager via `push-worker-skills.sh` to the Worker's MinIO space.
 
 For custom skills, use `spec.package` to provide a ZIP containing a `skills/` directory. Built-in and custom skills are merged without conflict.
 
@@ -163,7 +163,7 @@ When the Controller receives a Worker resource, it executes:
 
 ## Team
 
-A Team is HiClaw's collaboration unit, consisting of one Team Leader and one or more Team Workers. The Manager delegates tasks to the Team Leader, who handles decomposition, assignment, and aggregation — achieving team-level autonomy.
+A Team is AgentTeams's collaboration unit, consisting of one Team Leader and one or more Team Workers. The Manager delegates tasks to the Team Leader, who handles decomposition, assignment, and aggregation — achieving team-level autonomy.
 
 ### Basic Configuration
 
@@ -314,7 +314,7 @@ The Team Leader's AGENTS.md is assembled in three layers, each managed independe
 [User-provided content from spec.agents (if any)]
 ```
 
-- The builtin section is auto-managed by HiClaw and updated on upgrades
+- The builtin section is auto-managed by AgentTeams and updated on upgrades
 - The team context is auto-injected with the team name, members, coordinator info, heartbeat interval, and worker idle timeout
 - User-provided `spec.agents` content is placed after both sections and preserved across updates
 
@@ -396,7 +396,7 @@ spec:
 
 ## Manager
 
-The **Manager** resource describes the HiClaw Manager Agent — the coordinator that receives instructions from Admin and orchestrates Workers and Teams. It uses the same API group/version as other resources and is reconciled by `hiclaw-controller` (update image, SOUL/AGENTS, skills, MCP authorization, optional package, and desired `state`).
+The **Manager** resource describes the AgentTeams Manager Agent — the coordinator that receives instructions from Admin and orchestrates Workers and Teams. It uses the same API group/version as other resources and is reconciled by `agentteams-controller` (update image, SOUL/AGENTS, skills, MCP authorization, optional package, and desired `state`).
 
 ### Basic configuration
 
@@ -562,11 +562,11 @@ Human permissions are enforced through two mechanisms:
 When `spec.email` is set and SMTP is configured, a welcome email is automatically sent after the Human account is created, containing all the information needed to log in:
 
 ```
-Subject: Welcome to HiClaw - Your Account Details
+Subject: Welcome to AgentTeams - Your Account Details
 
 Hi {displayName},
 
-Your HiClaw account has been created:
+Your AgentTeams account has been created:
 
   Username: {matrix_user_id}
   Password: {generated_password}
@@ -574,20 +574,20 @@ Your HiClaw account has been created:
 
 Please log in and change your password immediately.
 
-— HiClaw
+— AgentTeams
 ```
 
 SMTP is configured via environment variables in the Manager container:
 
 | Variable | Description |
 |----------|-------------|
-| `HICLAW_SMTP_HOST` | SMTP server address |
-| `HICLAW_SMTP_PORT` | SMTP port |
-| `HICLAW_SMTP_USER` | SMTP username |
-| `HICLAW_SMTP_PASS` | SMTP password |
-| `HICLAW_SMTP_FROM` | Sender address |
+| `AGENTTEAMS_SMTP_HOST` | SMTP server address |
+| `AGENTTEAMS_SMTP_PORT` | SMTP port |
+| `AGENTTEAMS_SMTP_USER` | SMTP username |
+| `AGENTTEAMS_SMTP_PASS` | SMTP password |
+| `AGENTTEAMS_SMTP_FROM` | Sender address |
 
-If SMTP is not configured or `spec.email` is empty, email sending is skipped without affecting account creation. The initial password is still recorded in `status.initialPassword` and can be retrieved via `hiclaw get human <name>`.
+If SMTP is not configured or `spec.email` is empty, email sending is skipped without affecting account creation. The initial password is still recorded in `status.initialPassword` and can be retrieved via `agt get human <name>`.
 
 ### Notes
 
@@ -644,7 +644,7 @@ Regardless of URI format, the extracted package follows a unified structure:
     "suggested_name": "my-worker",
     "model": "qwen3.5-plus",
     "runtime": "openclaw",
-    "base_image": "hiclaw/worker-agent:latest",
+    "base_image": "agentteams/worker-agent:latest",
     "apt_packages": ["ffmpeg"],
     "pip_packages": [],
     "npm_packages": []
@@ -652,46 +652,46 @@ Regardless of URI format, the extracted package follows a unified structure:
 }
 ```
 
-`worker.runtime` (`openclaw`, `copaw`, or `hermes`) is honored by `hiclaw apply worker --zip`
+`worker.runtime` (`openclaw`, `copaw`, or `hermes`) is honored by `agt apply worker --zip`
 and overridden by an explicit `--runtime` flag.
 
 ## Operations
 
-### hiclaw-apply.sh — Declarative Apply (Recommended)
+### agentteams-apply.sh — Declarative Apply (Recommended)
 
-Runs on the host, copying YAML into the Manager container and invoking `hiclaw apply -f …`:
+Runs on the host, copying YAML into the Manager container and invoking `agt apply -f …`:
 
 ```bash
 # Create/update resources (each document is POST or PUT in order)
-bash install/hiclaw-apply.sh -f worker.yaml
+bash install/agentteams-apply.sh -f worker.yaml
 
 # Multi-document file (use --- separators)
-bash install/hiclaw-apply.sh -f company-setup.yaml
+bash install/agentteams-apply.sh -f company-setup.yaml
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-f <path>` | YAML resource file (required); multiple `-f` flags allowed |
 
-`hiclaw apply -f` walks YAML documents **in file order** and calls the REST API per kind (`Worker` → `/api/v1/workers`, `Team` → `/api/v1/teams`, `Human` → `/api/v1/humans`, `Manager` → `/api/v1/managers`). Put dependencies first yourself (e.g. define Teams before Humans that reference `accessibleTeams`). **`--prune` and `--dry-run` are not implemented** in the current CLI — remove extras with `hiclaw delete …` or equivalent APIs.
+`agt apply -f` walks YAML documents **in file order** and calls the REST API per kind (`Worker` → `/api/v1/workers`, `Team` → `/api/v1/teams`, `Human` → `/api/v1/humans`, `Manager` → `/api/v1/managers`). Put dependencies first yourself (e.g. define Teams before Humans that reference `accessibleTeams`). **`--prune` and `--dry-run` are not implemented** in the current CLI — remove extras with `agt delete …` or equivalent APIs.
 
-### hiclaw-import.sh — Imperative Import
+### agentteams-import.sh — Imperative Import
 
 For importing Workers from ZIP packages:
 
 ```bash
 # Import from local ZIP
-bash install/hiclaw-import.sh worker --name alice --zip ./alice.zip
+bash install/agentteams-import.sh worker --name alice --zip ./alice.zip
 
 # Import from URL
-bash install/hiclaw-import.sh worker --name alice --zip https://example.com/alice.zip
+bash install/agentteams-import.sh worker --name alice --zip https://example.com/alice.zip
 
 # Import from Nacos
-bash install/hiclaw-import.sh worker --name alice --package nacos://host:8848/ns/alice/v1
-bash install/hiclaw-import.sh worker --name alice --package nacos://host:8848/ns/alice/label:latest
+bash install/agentteams-import.sh worker --name alice --package nacos://host:8848/ns/alice/v1
+bash install/agentteams-import.sh worker --name alice --package nacos://host:8848/ns/alice/label:latest
 
 # Create without a package
-bash install/hiclaw-import.sh worker --name bob --model claude-sonnet-4-6 \
+bash install/agentteams-import.sh worker --name bob --model claude-sonnet-4-6 \
     --skills github-operations,git-delegation
 
 # Note: mcpServers must be configured via YAML manifest (see Worker spec above).
@@ -699,30 +699,30 @@ bash install/hiclaw-import.sh worker --name bob --model claude-sonnet-4-6 \
 #       {name, url, transport} per server and is not expressible as a CSV string.
 ```
 
-### hiclaw CLI — In-Container Management
+### agt CLI — In-Container Management
 
 Operate directly inside the Manager container (or via `docker exec`):
 
 ```bash
 # List all resources
-docker exec hiclaw-manager hiclaw get workers
-docker exec hiclaw-manager hiclaw get teams
-docker exec hiclaw-manager hiclaw get humans
-docker exec hiclaw-manager hiclaw get managers
+docker exec agentteams-manager agt get workers
+docker exec agentteams-manager agt get teams
+docker exec agentteams-manager agt get humans
+docker exec agentteams-manager agt get managers
 
 # View a single resource
-docker exec hiclaw-manager hiclaw get worker alice
+docker exec agentteams-manager agt get worker alice
 
 # Delete a resource
-docker exec hiclaw-manager hiclaw delete worker alice
-docker exec hiclaw-manager hiclaw delete team alpha-team
-docker exec hiclaw-manager hiclaw delete human john
-docker exec hiclaw-manager hiclaw delete manager default
+docker exec agentteams-manager agt delete worker alice
+docker exec agentteams-manager agt delete team alpha-team
+docker exec agentteams-manager agt delete human john
+docker exec agentteams-manager agt delete manager default
 ```
 
 ### HTTP API — Cloud Management
 
-The `hiclaw-controller` exposes a REST API (default `:8090`) used by the `hiclaw` CLI. Typical resources:
+The `agentteams-controller` exposes a REST API (default `:8090`) used by the `agt` CLI. Typical resources:
 
 ```
 GET    /api/v1/workers
@@ -740,13 +740,13 @@ PUT    /api/v1/managers/{name}
 DELETE /api/v1/managers/{name}
 ```
 
-> **Note:** In typical embedded deployments, port 8090 is reachable from inside the Manager container (`localhost:8090`). In Kubernetes (`HICLAW_KUBE_MODE=incluster`), expose the controller via a Service as needed.
+> **Note:** In typical embedded deployments, port 8090 is reachable from inside the Manager container (`localhost:8090`). In Kubernetes (`AGENTTEAMS_KUBE_MODE=incluster`), expose the controller via a Service as needed.
 
 ## Batch Deployment
 
-Use `---` separators to define multiple resources in one file. **`hiclaw apply -f` applies documents sequentially in the order they appear** — it does not sort by kind. Put Teams before Humans that list `accessibleTeams`, and create standalone Workers before Humans that list `accessibleWorkers`.
+Use `---` separators to define multiple resources in one file. **`agt apply -f` applies documents sequentially in the order they appear** — it does not sort by kind. Put Teams before Humans that list `accessibleTeams`, and create standalone Workers before Humans that list `accessibleWorkers`.
 
-Deletion order is not automatic: use `hiclaw delete` per resource (respect dependencies: e.g. delete Humans before Teams they reference, if your deployment requires it).
+Deletion order is not automatic: use `agt delete` per resource (respect dependencies: e.g. delete Humans before Teams they reference, if your deployment requires it).
 
 ```yaml
 # company-setup.yaml
@@ -833,19 +833,19 @@ spec:
 One-command deployment:
 
 ```bash
-bash install/hiclaw-apply.sh -f company-setup.yaml
+bash install/agentteams-apply.sh -f company-setup.yaml
 ```
 
-For subsequent changes, edit the YAML and re-apply. To remove a resource, use `hiclaw delete <kind> <name>` (or the REST API).
+For subsequent changes, edit the YAML and re-apply. To remove a resource, use `agt delete <kind> <name>` (or the REST API).
 
 ## Controller Architecture
 
 ### Processing Flow
 
 ```
-Entry point (hiclaw-apply.sh / HTTP API / hiclaw CLI)
+Entry point (agentteams-apply.sh / HTTP API / agt CLI)
   ↓
-YAML written to MinIO hiclaw-config/{kind}/{name}.yaml
+YAML written to MinIO agentteams-config/{kind}/{name}.yaml
   ↓
 mc mirror syncs to local filesystem (10-second interval)
   ↓
@@ -876,13 +876,13 @@ Workers can expose HTTP services running inside their containers to the outside 
 Each exposed port gets an auto-generated domain:
 
 ```
-worker-{name}-{port}-local.hiclaw.io
+worker-{name}-{port}-local.agentteams.io
 ```
 
-For example, worker `alice` exposing port `8080` becomes accessible at `worker-alice-8080-local.hiclaw.io`.
+For example, worker `alice` exposing port `8080` becomes accessible at `worker-alice-8080-local.agentteams.io`.
 
 The Controller creates three Higress resources per exposed port:
-1. **Domain**: `worker-{name}-{port}-local.hiclaw.io`
+1. **Domain**: `worker-{name}-{port}-local.agentteams.io`
 2. **DNS Service Source**: points to the worker container via network alias `{name}.local`
 3. **Route**: forwards all requests on the domain to the worker's port
 
@@ -937,10 +937,10 @@ spec:
 
 ```bash
 # Expose ports via CLI flag
-hiclaw apply worker --name alice --model qwen3.5-plus --expose 8080,3000
+agt apply worker --name alice --model qwen3.5-plus --expose 8080,3000
 
 # Remove exposed ports (re-apply without --expose)
-hiclaw apply worker --name alice --model qwen3.5-plus
+agt apply worker --name alice --model qwen3.5-plus
 ```
 
 ### Use Cases
@@ -960,9 +960,9 @@ hiclaw apply worker --name alice --model qwen3.5-plus
 
 | Dimension | embedded (default) | incluster (K8s) |
 |-----------|--------------------|-----------------|
-| Config storage | MinIO `hiclaw-config/` | K8s etcd (CRDs stored directly in K8s) |
+| Config storage | MinIO `agentteams-config/` | K8s etcd (CRDs stored directly in K8s) |
 | Controller detection | fsnotify → kine → informer | controller-runtime watches K8s API directly |
-| Switch via | `HICLAW_KUBE_MODE=embedded` | `HICLAW_KUBE_MODE=incluster` |
+| Switch via | `AGENTTEAMS_KUBE_MODE=embedded` | `AGENTTEAMS_KUBE_MODE=incluster` |
 
 ## Channel policy (Worker and Team)
 
@@ -979,7 +979,7 @@ Set `spec.channelPolicy` on a standalone Worker, or `spec.channelPolicy` / `spec
 
 ## Communication Permission Matrix
 
-HiClaw uses the `groupAllowFrom` field in `openclaw.json` to control which @mentions each Agent accepts, enabling fine-grained communication permissions.
+AgentTeams uses the `groupAllowFrom` field in `openclaw.json` to control which @mentions each Agent accepts, enabling fine-grained communication permissions.
 
 | Role | groupAllowFrom includes |
 |------|------------------------|
@@ -998,7 +998,7 @@ Key rules:
 
 **Q: Can Teams and standalone Workers coexist?**
 
-Yes. Teams and standalone Workers coexist in the same HiClaw instance. The Manager decides whether to delegate to a Team Leader or assign directly to a standalone Worker based on the task domain.
+Yes. Teams and standalone Workers coexist in the same AgentTeams instance. The Manager decides whether to delegate to a Team Leader or assign directly to a standalone Worker based on the task domain.
 
 **Q: What happens when a Human's permissionLevel is changed?**
 
@@ -1014,4 +1014,4 @@ The Controller marks the Human as Pending and automatically backfills permission
 
 **Q: Is there a `--prune` mode for declarative apply?**
 
-Not in the current `hiclaw apply` CLI. List resources with `hiclaw get …` and delete explicitly, or automate against the REST API.
+Not in the current `agt apply` CLI. List resources with `agt get …` and delete explicitly, or automate against the REST API.

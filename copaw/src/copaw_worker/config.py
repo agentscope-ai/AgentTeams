@@ -27,9 +27,19 @@ class WorkerConfig:
         self.minio_secret_key = minio_secret_key
         self.minio_bucket = minio_bucket
         self.minio_secure = minio_secure
-        self.install_dir = install_dir or Path(
-            os.environ.get("COPAW_INSTALL_DIR", Path.home() / ".hiclaw-worker")
-        )
+        self.install_dir = install_dir or _default_install_dir()
         self.console_port = console_port
         self.worker_port = worker_port or (console_port + 1)
         self.sync_interval = sync_interval
+
+
+def _default_install_dir() -> Path:
+    if configured := os.environ.get("COPAW_INSTALL_DIR"):
+        return Path(configured)
+
+    current = Path.home() / ".agentteams-worker"
+    legacy = Path.home() / ".hiclaw-worker"
+    if legacy.exists() and not current.exists():
+        legacy.rename(current)
+        legacy.symlink_to(current, target_is_directory=True)
+    return current

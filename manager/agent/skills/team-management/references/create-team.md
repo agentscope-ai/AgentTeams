@@ -3,7 +3,7 @@
 ## CLI Usage
 
 ```bash
-hiclaw create team \
+agt create team \
   --name <TEAM_NAME> \
   --leader-name <LEADER_NAME> \
   --leader-model <MODEL_ID> \
@@ -19,7 +19,7 @@ Notes:
 - `--leader-model` defaults to the install-time configured model (`$AGENTTEAMS_DEFAULT_MODEL` propagated by the controller); falls back to `qwen3.5-plus` only when that is unset
 - Team Admin defaults to Global Admin
 - Controller forces `runtime: copaw` for all team members
-- For CPU/memory requests and limits, use YAML with `hiclaw apply -f`; the simple team CLI flags do not expose per-member resources
+- For CPU/memory requests and limits, use YAML with `agt apply -f`; the simple team CLI flags do not expose per-member resources
 
 ## CPU and memory resources
 
@@ -55,7 +55,7 @@ Changing resources recreates the affected member container. Confirm the team is 
 
 ## What the Controller Does
 
-After `hiclaw create team`, the controller's Team reconciler handles:
+After `agt create team`, the controller's Team reconciler handles:
 
 1. Creates Matrix rooms: Team Room (Leader + Team Admin + all workers) and Leader DM (Team Admin ↔ Leader)
 2. Creates the Team Leader Worker CR with team-leader-agent skills
@@ -64,10 +64,10 @@ After `hiclaw create team`, the controller's Team reconciler handles:
 5. Sets up shared team storage in MinIO
 6. Updates legacy teams registry
 
-> The legacy `scripts/create-team.sh` is deprecated. Use `hiclaw create team` instead.
+> The legacy `scripts/create-team.sh` is deprecated. Use `agt create team` instead.
 
 ## After Creation
 
-1. Verify team created: `hiclaw get team <TEAM_NAME>`
+1. Verify team created: `agt get team <TEAM_NAME>`
 2. @mention the Leader in the Leader Room to assign the task
 3. The Leader will handle coordination with team workers from there

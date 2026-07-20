@@ -4,7 +4,7 @@
 # This test runs LAST and verifies that the delete flow properly cleans up
 # container resources (not just stops them). It:
 #   1. Discovers all test-* workers and teams from registries
-#   2. Deletes them via hiclaw delete
+#   2. Deletes them via agt delete
 #   3. Waits for controller reconcile (which now calls lifecycle-worker.sh --action delete)
 #   4. Verifies containers are removed (not just stopped)
 #   5. Verifies worker-lifecycle.json entries are cleaned up
@@ -72,11 +72,11 @@ if [ -n "${TEST_TEAMS}" ]; then
 
     for team in ${TEST_TEAMS}; do
         log_info "Deleting team: ${team}"
-        DELETE_OUTPUT=$(exec_in_agent hiclaw delete team "${team}" 2>&1)
+        DELETE_OUTPUT=$(exec_in_agent agt delete team "${team}" 2>&1)
         if echo "${DELETE_OUTPUT}" | grep -q "deleted"; then
-            log_pass "hiclaw delete team ${team} reported success"
+            log_pass "agt delete team ${team} reported success"
         else
-            log_info "hiclaw delete team ${team} failed (YAML likely already removed by prior test cleanup)"
+            log_info "agt delete team ${team} failed (YAML likely already removed by prior test cleanup)"
         fi
     done
 fi
@@ -103,13 +103,13 @@ if [ -n "${TEST_WORKERS}" ]; then
         fi
 
         log_info "Deleting worker: ${worker}"
-        DELETE_OUTPUT=$(exec_in_agent hiclaw delete worker "${worker}" 2>&1)
+        DELETE_OUTPUT=$(exec_in_agent agt delete worker "${worker}" 2>&1)
         if echo "${DELETE_OUTPUT}" | grep -q "deleted"; then
-            log_pass "hiclaw delete worker ${worker} reported success"
+            log_pass "agt delete worker ${worker} reported success"
         else
-            log_info "hiclaw delete worker ${worker} skipped (YAML likely already removed by prior test)"
+            log_info "agt delete worker ${worker} skipped (YAML likely already removed by prior test)"
             remove_worker_container "${worker}"
-            exec_in_agent bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+            exec_in_agent bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh \
                 --action delete --worker "${worker}" 2>/dev/null || true
         fi
     done

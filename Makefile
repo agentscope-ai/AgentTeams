@@ -124,9 +124,9 @@ LINES          ?= 50
 
 # ---------- Phony targets ----------
 
-.PHONY: all build build-openclaw-base build-hiclaw-controller build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
+.PHONY: all build build-openclaw-base build-agentteams-controller build-hiclaw-controller build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
         build-qwenpaw-worker \
-        tag push push-openclaw-base push-hiclaw-controller push-embedded push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
+        tag push push-openclaw-base push-agentteams-controller push-hiclaw-controller push-embedded push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
         push-qwenpaw-worker \
         push-native push-native-manager push-native-manager-copaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
         push-native-qwenpaw-worker \
@@ -144,7 +144,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-hiclaw-controller ## Build all images (base image pulled from registry, not rebuilt locally)
+build: build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build all images (base image pulled from registry, not rebuilt locally)
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -160,16 +160,18 @@ OPENCLAW_BASE_VERSION ?= 20260423-8359cbc
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
-build-hiclaw-controller: ## Build agentteams-controller image (prerequisite for Manager)
+build-agentteams-controller: ## Build agentteams-controller image (prerequisite for Manager)
 	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
-	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
+	@rm -rf ./agentteams-controller/agent && cp -r ./manager/agent ./agentteams-controller/agent
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		-t $(LOCAL_CONTROLLER_LEGACY) \
-		./hiclaw-controller/
-	@rm -rf ./hiclaw-controller/agent
+		./agentteams-controller/
+	@rm -rf ./agentteams-controller/agent
 
-build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
+build-hiclaw-controller: build-agentteams-controller ## Deprecated compatibility alias
+
+build-manager: build-agentteams-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
@@ -178,7 +180,7 @@ build-manager: build-hiclaw-controller ## Build Manager image (OpenClaw runtime)
 		-t $(LOCAL_MANAGER_LEGACY) \
 		.
 
-build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Python runtime)
+build-manager-copaw: build-agentteams-controller ## Build Manager CoPaw image (Python runtime)
 	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
@@ -187,11 +189,11 @@ build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Pytho
 		-t $(LOCAL_MANAGER_COPAW_LEGACY) \
 		.
 
-build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
+build-embedded: build-agentteams-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
 	@echo "==> Building embedded image: $(LOCAL_EMBEDDED) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
-		-f hiclaw-controller/Dockerfile.embedded \
+		-f agentteams-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
 		-t $(LOCAL_EMBEDDED_LEGACY) \
 		.
@@ -280,7 +282,7 @@ else
 	fi
 endif
 
-push: push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-hiclaw-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
+push: push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
 
 push-openclaw-base: buildx-setup ## Build + push multi-arch OpenClaw base image
 	@echo "==> Building + pushing multi-arch OpenClaw base: $(OPENCLAW_BASE_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -308,9 +310,9 @@ else
 		./openclaw-base/
 endif
 
-push-hiclaw-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
-	@echo "==> Building + pushing multi-arch hiclaw-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
-	@rm -rf ./hiclaw-controller/agent && cp -r ./manager/agent ./hiclaw-controller/agent
+push-agentteams-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
+	@echo "==> Building + pushing multi-arch agentteams-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
+	@rm -rf ./agentteams-controller/agent && cp -r ./manager/agent ./agentteams-controller/agent
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(CONTROLLER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
@@ -318,7 +320,7 @@ ifeq ($(IS_PODMAN),1)
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 			--manifest $(CONTROLLER_TAG) \
-			./hiclaw-controller/ && ) true
+			./agentteams-controller/ && ) true
 	podman manifest push --all $(CONTROLLER_TAG) docker://$(CONTROLLER_TAG)
 	$(if $(PUSH_LATEST), \
 		podman manifest push --all $(CONTROLLER_TAG) docker://$(CONTROLLER_IMAGE):latest && \
@@ -331,21 +333,23 @@ else
 		-t $(CONTROLLER_TAG) \
 		$(if $(PUSH_LATEST),-t $(CONTROLLER_IMAGE):latest) \
 		--push \
-		./hiclaw-controller/
+		./agentteams-controller/
 endif
-	@rm -rf ./hiclaw-controller/agent
+	@rm -rf ./agentteams-controller/agent
 
-push-embedded: push-hiclaw-controller buildx-setup ## Build + push multi-arch embedded all-in-one image
-	@echo "==> Building + pushing multi-arch hiclaw-embedded: $(EMBEDDED_TAG) [$(MULTIARCH_PLATFORMS)]"
+push-hiclaw-controller: push-agentteams-controller ## Deprecated compatibility alias
+
+push-embedded: push-agentteams-controller buildx-setup ## Build + push multi-arch embedded all-in-one image
+	@echo "==> Building + pushing multi-arch agentteams-embedded: $(EMBEDDED_TAG) [$(MULTIARCH_PLATFORMS)]"
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(EMBEDDED_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
-		echo "  -> Building hiclaw-embedded for $(plat)..." && \
+		echo "  -> Building agentteams-embedded for $(plat)..." && \
 		podman build --platform $(plat) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 			--manifest $(EMBEDDED_TAG) \
-			-f hiclaw-controller/Dockerfile.embedded . && ) true
+			-f agentteams-controller/Dockerfile.embedded . && ) true
 	podman manifest push --all $(EMBEDDED_TAG) docker://$(EMBEDDED_TAG)
 	$(if $(PUSH_LATEST), \
 		podman manifest push --all $(EMBEDDED_TAG) docker://$(EMBEDDED_IMAGE):latest && \
@@ -359,10 +363,10 @@ else
 		-t $(EMBEDDED_TAG) \
 		$(if $(PUSH_LATEST),-t $(EMBEDDED_IMAGE):latest) \
 		--push \
-		-f hiclaw-controller/Dockerfile.embedded .
+		-f agentteams-controller/Dockerfile.embedded .
 endif
 
-push-manager: push-hiclaw-controller buildx-setup ## Build + push multi-arch Manager image (OpenClaw)
+push-manager: push-agentteams-controller buildx-setup ## Build + push multi-arch Manager image (OpenClaw)
 	@echo "==> Building + pushing multi-arch Manager: $(MANAGER_TAG) [$(MULTIARCH_PLATFORMS)]"
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(MANAGER_TAG) 2>/dev/null
@@ -643,7 +647,7 @@ endif
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
-		bash ./install/hiclaw-install.sh manager
+		bash ./install/agentteams-install.sh manager
 
 install-interactive: ## Install Manager interactively (prompts for config)
 ifndef SKIP_BUILD
@@ -656,7 +660,7 @@ endif
 		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
-		bash ./install/hiclaw-install.sh manager
+		bash ./install/agentteams-install.sh manager
 
 uninstall: ## Stop and remove Manager + all Worker containers
 	@echo "==> Uninstalling AgentTeams..."
@@ -710,7 +714,7 @@ endif
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_MATRIX_E2EE=0 \
-		bash ./install/hiclaw-install.sh
+		bash ./install/agentteams-install.sh
 
 wait-ready-embedded: ## Wait for embedded-mode services to be ready
 	@echo "==> Waiting for embedded services..."
@@ -795,13 +799,13 @@ replay-log: ## View the latest replay conversation log
 # ---------- Verify ----------
 
 verify: ## Run post-install verification against the running Manager container
-	@bash ./install/hiclaw-verify.sh $(or $(CONTAINER),agentteams-controller)
+	@bash ./install/agentteams-verify.sh $(or $(CONTAINER),agentteams-controller)
 
 # ---------- Dev utils ----------
 
 status: ## Show status of Manager and all Worker containers
 	@echo "==> AgentTeams container status:"
-	@docker ps -a --filter "name=hiclaw-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null \
+	@docker ps -a --filter "name=agentteams-" --filter "name=hiclaw-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null \
 		|| echo "  (no containers found or Docker not available)"
 
 logs: ## Show recent logs for Manager and all Workers (override with LINES=N, default 50)
@@ -825,7 +829,7 @@ clean: ## Remove local images and test containers
 	@echo "==> Stopping and removing test containers..."
 	-docker stop $(TEST_CONTAINER) 2>/dev/null
 	-docker rm $(TEST_CONTAINER) 2>/dev/null
-	-docker ps -a --filter "name=hiclaw-test-worker-" --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null
+	-docker ps -a --filter "name=agentteams-test-worker-" --filter "name=hiclaw-test-worker-" --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null
 	@echo "==> Removing local images..."
 	-docker rmi $(LOCAL_MANAGER) 2>/dev/null
 	-docker rmi $(LOCAL_WORKER) 2>/dev/null
@@ -842,34 +846,30 @@ local-k8s-down: ## Tear down the local AgentTeams kind cluster
 	@bash hack/local-k8s-down.sh
 
 generate: ## Regenerate deepcopy functions and sync CRDs to Helm chart
-	$(MAKE) -C hiclaw-controller generate
+	$(MAKE) -C agentteams-controller generate
 
-sync-crds: ## Sync CRDs from hiclaw-controller/config/crd/ to helm/hiclaw/crds/
+sync-crds: ## Sync CRDs from agentteams-controller/config/crd/ to helm/agentteams/crds/
 	@echo "==> Syncing CRDs to Helm chart..."
-	@cp hiclaw-controller/config/crd/*.yaml helm/hiclaw/crds/
+	@cp agentteams-controller/config/crd/*.yaml helm/agentteams/crds/
 	@echo "==> CRDs synced"
 
 check-crd-sync: ## Verify CRDs are in sync between controller and Helm chart
-	@if ! diff -r hiclaw-controller/config/crd/ helm/hiclaw/crds/ >/dev/null 2>&1; then \
+	@if ! diff -r agentteams-controller/config/crd/ helm/agentteams/crds/ >/dev/null 2>&1; then \
 		echo "ERROR: CRD files are out of sync."; \
-		echo "Source of truth: hiclaw-controller/config/crd/"; \
+		echo "Source of truth: agentteams-controller/config/crd/"; \
 		echo "Run 'make sync-crds' to fix."; \
-		diff -r hiclaw-controller/config/crd/ helm/hiclaw/crds/; \
+		diff -r agentteams-controller/config/crd/ helm/agentteams/crds/; \
 		exit 1; \
 	fi
 	@echo "==> CRDs are in sync"
 
 helm-lint: ## Lint Helm chart
-	@helm dependency build helm/hiclaw/
-	@helm lint helm/hiclaw/
+	@helm dependency build helm/agentteams/
+	@helm lint helm/agentteams/
 
 helm-template: ## Render Helm templates locally (dry-run validation)
-	@helm dependency build helm/hiclaw/
-	@helm template hiclaw helm/hiclaw/ \
-		--set credentials.registrationToken=test \
-		--set credentials.adminPassword=test \
-		--set credentials.llmApiKey=test \
-		--set gateway.publicURL=http://localhost:18080
+	@helm dependency build helm/agentteams/
+	@bash tests/check-helm-rename-compat.sh
 
 # ---------- Help ----------
 
@@ -903,7 +903,7 @@ help: ## Show this help
 	@echo "  make push-native VERSION=dev        # Push native-arch only (dev, overwrites multi-arch!)"
 	@echo ""
 	@echo "Dev utils:"
-	@echo "  make status                                     # Show all hiclaw container statuses"
+	@echo "  make status                                     # Show all AgentTeams container statuses"
 	@echo "  make logs                                       # Show last 50 lines of Manager + Worker logs"
 	@echo "  make logs LINES=100                             # Show last 100 lines"
 	@echo ""

@@ -1,6 +1,6 @@
 # Worker Guide
 
-Guide for deploying, managing, and troubleshooting HiClaw Worker Agents.
+Guide for deploying, managing, and troubleshooting AgentTeams Worker Agents.
 
 ## Overview
 
@@ -14,8 +14,8 @@ Workers are lightweight, stateless containers that:
 
 Workers are **CRD-backed**. Besides asking the Manager in Matrix, you can:
 
-- Run **`hiclaw create worker` / `hiclaw update worker`** inside `hiclaw-controller` or `hiclaw-manager` (see [faq.md](faq.md)).
-- Apply YAML with **`install/hiclaw-apply.sh`** (forwards to `hiclaw apply -f` in the Manager container).
+- Run **`agt create worker` / `agt update worker`** inside `agentteams-controller` or `agentteams-manager` (see [faq.md](faq.md)).
+- Apply YAML with **`install/agentteams-apply.sh`** (forwards to `agt apply -f` in the Manager container).
 
 Full field reference: [Declarative Resource Management](declarative-resource-management.md).
 
@@ -23,9 +23,9 @@ Full field reference: [Declarative Resource Management](declarative-resource-man
 
 | Runtime | Primary workspace | Notes |
 |---------|-------------------|--------|
-| **openclaw** | `/root/hiclaw-fs/agents/<worker-name>/` (`HOME` points here) | `openclaw.json`, `SOUL.md`, `AGENTS.md`, skills, `.openclaw/` live under this tree. Shared data: `/root/hiclaw-fs/shared/`. |
-| **copaw** | `/root/.hiclaw-worker/<worker-name>/` (QwenPaw config in `.copaw/`) | A symlink **`/root/hiclaw-fs`** → the per-worker tree keeps scripts that assume OpenClaw-style paths working. |
-| **hermes** | `/root/hiclaw-fs/agents/<worker-name>/` (`HOME` equals workspace, same mirror root as OpenClaw) | Hermes policy/state under **`.hermes/`** inside that directory (e.g. `.hermes/config.yaml`, `state.db`). |
+| **openclaw** | `/root/agentteams-fs/agents/<worker-name>/` (`HOME` points here) | `openclaw.json`, `SOUL.md`, `AGENTS.md`, skills, `.openclaw/` live under this tree. Shared data: `/root/agentteams-fs/shared/`. |
+| **copaw** | `/root/.agentteams-worker/<worker-name>/` (QwenPaw config in `.copaw/`) | A symlink **`/root/agentteams-fs`** → the per-worker tree keeps scripts that assume OpenClaw-style paths working. |
+| **hermes** | `/root/agentteams-fs/agents/<worker-name>/` (`HOME` equals workspace, same mirror root as OpenClaw) | Hermes policy/state under **`.hermes/`** inside that directory (e.g. `.hermes/config.yaml`, `state.db`). |
 
 ## Installation
 
@@ -48,12 +48,12 @@ If the Manager doesn't have socket access, it will reply with a `docker run` com
 3. Copy and run the command on the target host:
 
 ```bash
-docker run -d --name hiclaw-worker-alice \
-  -e HICLAW_WORKER_NAME=alice \
-  -e HICLAW_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
-  -e HICLAW_FS_ACCESS_KEY=<ACCESS_KEY> \
-  -e HICLAW_FS_SECRET_KEY=<SECRET_KEY> \
-  hiclaw/worker-agent:latest
+docker run -d --name agentteams-worker-alice \
+  -e AGENTTEAMS_WORKER_NAME=alice \
+  -e AGENTTEAMS_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
+  -e AGENTTEAMS_FS_ACCESS_KEY=<ACCESS_KEY> \
+  -e AGENTTEAMS_FS_SECRET_KEY=<SECRET_KEY> \
+  agentteams/worker-agent:latest
 ```
 
 The Manager will provide all the specific values in its reply.
@@ -64,7 +64,7 @@ The Manager will provide all the specific values in its reply.
 
 ```bash
 # Check container logs
-docker logs hiclaw-worker-alice
+docker logs agentteams-worker-alice
 
 # Common issues:
 # - "openclaw.json not found": Manager hasn't created config yet
@@ -76,10 +76,10 @@ docker logs hiclaw-worker-alice
 
 ```bash
 # Verify Matrix server is reachable from Worker (via gateway port)
-docker exec hiclaw-worker-alice curl -sf http://matrix-local.hiclaw.io:18080/_matrix/client/versions
+docker exec agentteams-worker-alice curl -sf http://matrix-local.agentteams.io:18080/_matrix/client/versions
 
 # Check Worker's openclaw.json for correct Matrix config
-docker exec hiclaw-worker-alice cat /root/hiclaw-fs/agents/alice/openclaw.json | jq '.channels.matrix'
+docker exec agentteams-worker-alice cat /root/agentteams-fs/agents/alice/openclaw.json | jq '.channels.matrix'
 ```
 
 ### Worker can't access LLM
@@ -87,9 +87,9 @@ docker exec hiclaw-worker-alice cat /root/hiclaw-fs/agents/alice/openclaw.json |
 ```bash
 # Test AI Gateway access with Worker's key
 # Note: these commands run inside the Worker container where domain names resolve to Manager's internal IP
-docker exec hiclaw-worker-alice curl -sf \
-  -H "Authorization: Bearer $(jq -r '.models.providers."hiclaw-gateway".apiKey' /root/hiclaw-fs/agents/alice/openclaw.json)" \
-  http://aigw-local.hiclaw.io:8080/v1/models
+docker exec agentteams-worker-alice curl -sf \
+  -H "Authorization: Bearer $(jq -r '.models.providers."hiclaw-gateway".apiKey' /root/agentteams-fs/agents/alice/openclaw.json)" \
+  http://aigw-local.agentteams.io:8080/v1/models
 
 # If 401: Check that Worker's consumer key in openclaw.json matches the one in Higress.
 # If 403: Worker may not be authorized for the AI route. Ask Manager to add.
@@ -99,8 +99,8 @@ docker exec hiclaw-worker-alice curl -sf \
 
 ```bash
 # Test mcporter connectivity (run inside Worker container)
-docker exec hiclaw-worker-alice mcporter --transport http \
-  --server-url "http://aigw-local.hiclaw.io:8080/mcp-servers/mcp-github/mcp" \
+docker exec agentteams-worker-alice mcporter --transport http \
+  --server-url "http://aigw-local.agentteams.io:8080/mcp-servers/mcp-github/mcp" \
   --header "Authorization=Bearer <WORKER_KEY>" \
   call list_repos '{"owner": "test"}'
 
@@ -111,8 +111,8 @@ docker exec hiclaw-worker-alice mcporter --transport http \
 
 ```bash
 # Stop and remove the container
-docker stop hiclaw-worker-alice
-docker rm hiclaw-worker-alice
+docker stop agentteams-worker-alice
+docker rm agentteams-worker-alice
 
 # Then ask Manager to recreate the Worker:
 # "Please recreate the alice worker container"
@@ -161,24 +161,24 @@ When Manager updates Worker's config in MinIO:
 
 | Variable | Description |
 |----------|-------------|
-| `HICLAW_WORKER_NAME` | Worker identifier (e.g., `alice`) |
-| `HICLAW_MATRIX_URL` | Matrix Homeserver URL (e.g., `http://matrix-local.hiclaw.io:18080`) |
-| `HICLAW_AI_GATEWAY_URL` | AI Gateway URL (e.g., `http://aigw-local.hiclaw.io:18080`) |
-| `HICLAW_FS_ENDPOINT` | MinIO endpoint URL (e.g., `http://<MANAGER_HOST>:9000`) |
-| `HICLAW_FS_BUCKET` | Bucket name for non-default storage layouts |
-| `HICLAW_FS_ACCESS_KEY` | MinIO access key (Worker-specific, generated by Manager) |
-| `HICLAW_FS_SECRET_KEY` | MinIO secret key (Worker-specific, generated by Manager) |
+| `AGENTTEAMS_WORKER_NAME` | Worker identifier (e.g., `alice`) |
+| `AGENTTEAMS_MATRIX_URL` | Matrix Homeserver URL (e.g., `http://matrix-local.agentteams.io:18080`) |
+| `AGENTTEAMS_AI_GATEWAY_URL` | AI Gateway URL (e.g., `http://aigw-local.agentteams.io:18080`) |
+| `AGENTTEAMS_FS_ENDPOINT` | MinIO endpoint URL (e.g., `http://<MANAGER_HOST>:9000`) |
+| `AGENTTEAMS_FS_BUCKET` | Bucket name for non-default storage layouts |
+| `AGENTTEAMS_FS_ACCESS_KEY` | MinIO access key (Worker-specific, generated by Manager) |
+| `AGENTTEAMS_FS_SECRET_KEY` | MinIO secret key (Worker-specific, generated by Manager) |
 
 > All values are generated by the Manager and provided in the `docker run` command or set automatically during direct creation. You should not need to set these manually.
 >
-> Runtime scripts now use `HICLAW_MATRIX_URL` and `HICLAW_AI_GATEWAY_URL` directly; legacy aliases are no longer part of the main contract.
+> Runtime scripts now use `AGENTTEAMS_MATRIX_URL` and `AGENTTEAMS_AI_GATEWAY_URL` directly; legacy aliases are no longer part of the main contract.
 
 ### Syncing Files Manually
 
-Inside the Worker container, run `hiclaw-sync` to pull the latest config and skill files from MinIO:
+Inside the Worker container, run `agentteams-sync` to pull the latest config and skill files from MinIO:
 
 ```bash
-docker exec hiclaw-worker-alice hiclaw-sync
+docker exec agentteams-worker-alice agentteams-sync
 ```
 
 This is useful after the Manager pushes updated skills or config to MinIO and you want to apply them immediately without waiting for the next sync cycle.

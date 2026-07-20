@@ -11,7 +11,7 @@
 #     These reflect current env config and must be updated on every boot so that
 #     upgrades (e.g. switching LLM provider) take effect without a clean reinstall.
 
-source /opt/hiclaw/scripts/lib/base.sh
+source /opt/agentteams/scripts/lib/base.sh
 
 MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
 MATRIX_CLIENT_DOMAIN="${AGENTTEAMS_MATRIX_CLIENT_DOMAIN:-matrix-client-local.agentteams.io}"
@@ -247,7 +247,7 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
     # 5b. Create or update AI Gateway Route (GET → PUT if exists, POST if not)
     AI_ROUTE_BODY='{"name":"default-ai-route","domains":'"${AI_ROUTE_DOMAINS}"',"pathPredicate":{"matchType":"PRE","matchValue":"/","caseSensitive":false},"upstreams":[{"provider":"'"${LLM_PROVIDER}"'","weight":100,"modelMapping":{}}],"authConfig":{"enabled":true,"allowedCredentialTypes":["key-auth"],"allowedConsumers":["manager"]}}'
 
-    AGENTTEAMS_VERSION=$(cat /opt/hiclaw/agent/.builtin-version 2>/dev/null | tr -d '[:space:]')
+    AGENTTEAMS_VERSION=$(cat /opt/agentteams/agent/.builtin-version 2>/dev/null | tr -d '[:space:]')
     AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-latest}"
 
     existing_route_resp=$(higress_get /v1/ai/routes/default-ai-route)
@@ -291,7 +291,7 @@ if [ -n "${AGENTTEAMS_GITHUB_TOKEN}" ]; then
     higress_api POST /v1/service-sources "Registering GitHub API service source" \
         '{"type":"dns","name":"github-api","domain":"api.github.com","port":443,"protocol":"https"}'
 
-    MCP_YAML_FILE="/opt/hiclaw/agent/skills/mcp-server-management/references/mcp-github.yaml"
+    MCP_YAML_FILE="/opt/agentteams/agent/skills/mcp-server-management/references/mcp-github.yaml"
     if [ -f "${MCP_YAML_FILE}" ]; then
         MCP_YAML=$(sed "s|accessToken: \"\"|accessToken: \"${AGENTTEAMS_GITHUB_TOKEN}\"|" "${MCP_YAML_FILE}")
         RAW_CONFIG=$(printf '%s' "${MCP_YAML}" | jq -Rs .)

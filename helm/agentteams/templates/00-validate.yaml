@@ -1,0 +1,74 @@
+{{- /*
+Validate public values at render time. Supported combinations:
+
+  matrix.provider=tuwunel     matrix.mode=managed
+  gateway.provider=higress    gateway.mode=managed    → deploy Higress subchart
+  gateway.provider=ai-gateway gateway.mode=existing   → external APIG, consumers only
+  storage.provider=minio      storage.mode=managed    → deploy MinIO StatefulSet
+  storage.provider=oss        storage.mode=existing   → external OSS bucket
+*/ -}}
+
+{{- $matrixProvider := .Values.matrix.provider | default "" -}}
+{{- if ne $matrixProvider "tuwunel" -}}
+{{- fail (printf "unsupported matrix.provider %q: only \"tuwunel\" is supported" $matrixProvider) -}}
+{{- end -}}
+{{- if ne (.Values.matrix.mode | default "") "managed" -}}
+{{- fail (printf "unsupported matrix.mode %q: only \"managed\" is supported" (.Values.matrix.mode | default "")) -}}
+{{- end -}}
+
+{{- $gatewayProvider := .Values.gateway.provider | default "" -}}
+{{- $gatewayMode := .Values.gateway.mode | default "" -}}
+{{- if eq $gatewayProvider "higress" -}}
+  {{- if ne $gatewayMode "managed" -}}
+  {{- fail (printf "gateway.provider=higress requires gateway.mode=managed (got %q)" $gatewayMode) -}}
+  {{- end -}}
+{{- else if eq $gatewayProvider "ai-gateway" -}}
+  {{- if ne $gatewayMode "existing" -}}
+  {{- fail (printf "gateway.provider=ai-gateway requires gateway.mode=existing (got %q)" $gatewayMode) -}}
+  {{- end -}}
+  {{- if not (.Values.gateway.aiGateway.gatewayId | default "") -}}
+  {{- fail "gateway.aiGateway.gatewayId is required when gateway.provider=ai-gateway" -}}
+  {{- end -}}
+  {{- if not (.Values.gateway.aiGateway.region | default "") -}}
+  {{- fail "gateway.aiGateway.region is required when gateway.provider=ai-gateway" -}}
+  {{- end -}}
+{{- else -}}
+{{- fail (printf "unsupported gateway.provider %q: expected \"higress\" or \"ai-gateway\"" $gatewayProvider) -}}
+{{- end -}}
+{{- if not (.Values.gateway.publicURL | default "") -}}
+{{- fail "gateway.publicURL is required" -}}
+{{- end -}}
+
+{{- $storageProvider := .Values.storage.provider | default "" -}}
+{{- $storageMode := .Values.storage.mode | default "" -}}
+{{- if eq $storageProvider "minio" -}}
+  {{- if ne $storageMode "managed" -}}
+  {{- fail (printf "storage.provider=minio requires storage.mode=managed (got %q)" $storageMode) -}}
+  {{- end -}}
+{{- else if eq $storageProvider "oss" -}}
+  {{- if ne $storageMode "existing" -}}
+  {{- fail (printf "storage.provider=oss requires storage.mode=existing (got %q)" $storageMode) -}}
+  {{- end -}}
+  {{- if not (.Values.storage.oss.region | default "") -}}
+  {{- fail "storage.oss.region is required when storage.provider=oss" -}}
+  {{- end -}}
+{{- else -}}
+{{- fail (printf "unsupported storage.provider %q: expected \"minio\" or \"oss\"" $storageProvider) -}}
+{{- end -}}
+
+{{- $expectedHigressEnabled := eq (include "agentteams.gateway.higress.enabled" . | trim) "true" -}}
+{{- $actualHigressEnabled := .Values.gateway.higress.enabled | default false -}}
+{{- if ne $actualHigressEnabled $expectedHigressEnabled -}}
+{{- fail (printf "gateway.higress.enabled=%t is inconsistent with gateway.provider=%q and gateway.mode=%q; expected %t" $actualHigressEnabled $gatewayProvider $gatewayMode $expectedHigressEnabled) -}}
+{{- end -}}
+
+{{- /* credential-provider sidecar: required for any cloud provider */ -}}
+{{- $needsSidecar := or (eq $gatewayProvider "ai-gateway") (eq $storageProvider "oss") -}}
+{{- if $needsSidecar -}}
+  {{- if not .Values.credentialProvider.enabled -}}
+  {{- fail (printf "credentialProvider.enabled must be true when gateway.provider=%q or storage.provider=%q" $gatewayProvider $storageProvider) -}}
+  {{- end -}}
+  {{- if not (.Values.credentialProvider.image.repository | default "") -}}
+  {{- fail "credentialProvider.image.repository is required when the sidecar is enabled" -}}
+  {{- end -}}
+{{- end -}}

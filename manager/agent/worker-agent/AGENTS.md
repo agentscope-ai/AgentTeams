@@ -1,9 +1,9 @@
 # Worker Agent Workspace
 
-Your home directory (`~/`) is your agent workspace — SOUL.md, openclaw.json, memory/, skills/ all live here. Shared files live at `/root/hiclaw-fs/shared/`.
+Your home directory (`~/`) is your agent workspace — SOUL.md, openclaw.json, memory/, skills/ all live here. Shared files live at `/root/agentteams-fs/shared/`.
 
 - **Your agent files:** `~/` (SOUL.md, openclaw.json, memory/, skills/)
-- **Shared space:** `/root/hiclaw-fs/shared/` (tasks, knowledge, collaboration data)
+- **Shared space:** `/root/agentteams-fs/shared/` (tasks, knowledge, collaboration data)
 
 ## Every Session
 
@@ -26,7 +26,7 @@ Don't ask permission. Just do it.
 - **Multi-phase collaborative projects: phase completion MUST @mention your coordinator** — if your task spec mentions "Phase X" or includes a "Multi-Phase Collaboration Protocol", you MUST @mention your coordinator with `PHASE{N}_DONE` when each phase completes. This is NOT "mid-task progress" — it's a milestone that triggers the next worker assignment.
 - **Mirror loop safeguard** — if 2+ rounds of @mentions exchanged with no new task/question/decision, stop replying immediately
 - **`base/` directory is read-only** — never push to it. Use `--exclude "base/"` in mc mirror
-- **Write results → push to MinIO immediately** — `/root/hiclaw-fs/shared/` is not auto-synced; use `mc cp` or `mc mirror` explicitly
+- **Write results → push to MinIO immediately** — `/root/agentteams-fs/shared/` is not auto-synced; use `mc cp` or `mc mirror` explicitly
 - **MinIO writable paths** — you can only write to `${AGENTTEAMS_STORAGE_PREFIX}/agents/${AGENTTEAMS_WORKER_NAME}/` (your workspace) and `${AGENTTEAMS_STORAGE_PREFIX}/shared/` (collaboration). All other paths will return 403.
 - **`skills/` builtin subdirectories are read-only** — coordinator-controlled builtin skills live alongside your custom skills in `skills/`
 
@@ -119,12 +119,12 @@ History messages are context only. Always identify the sender from the Current m
 When you receive a task from your coordinator:
 
 1. Sync files first: `hiclaw-sync` to pull the task directory
-2. Read the task spec (usually `/root/hiclaw-fs/shared/tasks/{task-id}/spec.md`)
+2. Read the task spec (usually `/root/agentteams-fs/shared/tasks/{task-id}/spec.md`)
 3. Create `plan.md` in the task directory before starting work
 4. Execute the task, keeping all intermediate artifacts in the task directory
 5. Write results and push to MinIO:
    ```bash
-   mc mirror /root/hiclaw-fs/shared/tasks/{task-id}/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
+   mc mirror /root/agentteams-fs/shared/tasks/{task-id}/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ --overwrite --exclude "spec.md" --exclude "base/"
    ```
 6. @mention your coordinator with a completion report
 7. Log key decisions and outcomes to `memory/YYYY-MM-DD.md`

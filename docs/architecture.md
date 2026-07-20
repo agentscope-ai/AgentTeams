@@ -1,6 +1,6 @@
-# HiClaw Architecture (v1.1.0)
+# AgentTeams Architecture (v1.1.0)
 
-HiClaw is an **Agent Teams** platform: a **Manager** coordinates **Workers** (and optional **Teams** with a **Team Leader**) while a **Human** participates over **Matrix**. Version **1.1.0** splits the system into **multiple containers**: infrastructure runs in a **dedicated controller stack** (embedded on a single machine or as separate Kubernetes workloads), while **Manager** and **Worker** images stay **lightweight**—they bundle the agent runtime, `hiclaw` CLI, and skills, but **not** Higress, Tuwunel, MinIO, or Element Web.
+AgentTeams is an **Agent Teams** platform: a **Manager** coordinates **Workers** (and optional **Teams** with a **Team Leader**) while a **Human** participates over **Matrix**. Version **1.1.0** splits the system into **multiple containers**: infrastructure runs in a **dedicated controller stack** (embedded on a single machine or as separate Kubernetes workloads), while **Manager** and **Worker** images stay **lightweight**—they bundle the agent runtime, `agt` CLI, and skills, but **not** Higress, Tuwunel, MinIO, or Element Web.
 
 ---
 
@@ -8,9 +8,9 @@ HiClaw is an **Agent Teams** platform: a **Manager** coordinates **Workers** (an
 
 | Layer | Role | Typical images |
 |--------|------|------------------|
-| **hiclaw-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `hiclaw-controller` (Kubernetes) or **`hiclaw-controller-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
-| **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `hiclaw-manager` (OpenClaw / Node) or `hiclaw-manager-copaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
-| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `hiclaw-worker`, `hiclaw-copaw-worker`, or `hiclaw-hermes-worker` |
+| **agentteams-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `agentteams-controller` (Kubernetes) or **`agentteams-controller-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
+| **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-copaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
+| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, or `agentteams-hermes-worker` |
 
 The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 22**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
 
@@ -33,7 +33,7 @@ flowchart TB
     EW[Element Web UI]
   end
 
-  subgraph Control["hiclaw-controller"]
+  subgraph Control["agentteams-controller"]
     API[REST API :8090]
     REC[Reconcilers: Worker Manager Team Human]
   end
@@ -86,18 +86,18 @@ flowchart TB
 **Local single host (`install/`)** — one **embedded** controller container holds Higress, Tuwunel, MinIO, Element Web, and the controller process; it creates **separate** Manager and Worker containers via the Docker/Podman API:
 
 ```
-+--------------------------- hiclaw-controller (embedded) --------------------------+
++--------------------------- agentteams-controller (embedded) --------------------------+
 |  Higress (:8080/...)   Tuwunel (:6167)   MinIO (:9000)   Element+nginx   controller |
-|                              hiclaw-controller :8090 (REST)                        |
+|                              agentteams-controller :8090 (REST)                        |
 +-------------------------------+--------------+-------------------------------------+
                                 | API / Docker |
               +-----------------+----------------+------------------+
               |                                  |
-       hiclaw-manager                     hiclaw-worker-*
+       agentteams-manager                     agentteams-worker-*
        (lightweight)                      (lightweight)
 ```
 
-**Kubernetes (`helm/hiclaw`)** — each major piece is its own **Pod** (or chart dependency): Higress subchart, Tuwunel StatefulSet, MinIO, Element Web, **controller** Deployment, plus **Manager** and **Worker** Pods created from CRs (no static Manager Deployment when CR-driven install is used).
+**Kubernetes (`helm/agentteams`)** — each major piece is its own **Pod** (or chart dependency): Higress subchart, Tuwunel StatefulSet, MinIO, Element Web, **controller** Deployment, plus **Manager** and **Worker** Pods created from CRs (no static Manager Deployment when CR-driven install is used).
 
 ---
 
@@ -105,14 +105,14 @@ flowchart TB
 
 ### 1. Local single machine — `install/`
 
-- **`install/hiclaw-install.sh`** pulls the **embedded controller** image (`Dockerfile.embedded`): Higress **all-in-one** base, plus **Tuwunel**, **MinIO**, **mc**, **Element Web**, **`hiclaw-controller`**, **`hiclaw`**, and **supervisord** wiring (`supervisord.embedded.conf`).
-- The installer starts **`hiclaw-controller`**, waits for internal Higress / Tuwunel / MinIO health, then the **ManagerReconciler** creates the **`hiclaw-manager`** container (and Workers when you add **Worker** CRs or use the CLI).
-- **Manager** uses `HICLAW_RUNTIME` outside `aliyun`/`k8s`: it waits on **localhost** ports inside the **host** network namespace only where documented—when co-located, the install script maps host ports (e.g. gateway **18080**) into the controller container; the Manager container receives `HICLAW_CONTROLLER_URL` and optional **Docker socket** for Worker lifecycle.
+- **`install/agentteams-install.sh`** pulls the **embedded controller** image (`Dockerfile.embedded`): Higress **all-in-one** base, plus **Tuwunel**, **MinIO**, **mc**, **Element Web**, **`agentteams-controller`**, **`agt`**, and **supervisord** wiring (`supervisord.embedded.conf`).
+- The installer starts **`agentteams-controller`**, waits for internal Higress / Tuwunel / MinIO health, then the **ManagerReconciler** creates the **`agentteams-manager`** container (and Workers when you add **Worker** CRs or use the CLI).
+- **Manager** uses `AGENTTEAMS_RUNTIME` outside `aliyun`/`k8s`: it waits on **localhost** ports inside the **host** network namespace only where documented—when co-located, the install script maps host ports (e.g. gateway **18080**) into the controller container; the Manager container receives `AGENTTEAMS_CONTROLLER_URL` and optional **Docker socket** for Worker lifecycle.
 
-### 2. Kubernetes — `helm/hiclaw`
+### 2. Kubernetes — `helm/agentteams`
 
-- **`helm/hiclaw/values.yaml`** defines **matrix** (Tuwunel managed or existing Synapse), **gateway** (managed Higress or external Alibaba **ai-gateway**), **storage** (managed MinIO or external OSS), optional **credentialProvider**, **controller**, **manager** (bootstrap **Manager** CR), **elementWeb**, **worker** defaults (images per **openclaw** / **copaw** / **hermes** runtime).
-- The **controller** Pod reconciles CRs against **in-cluster** Matrix, Higress, and MinIO endpoints; **Manager** runs with `HICLAW_RUNTIME=k8s`, syncing workspace from cluster MinIO via `mc` and consuming credentials injected by the operator.
+- **`helm/agentteams/values.yaml`** defines **matrix** (Tuwunel managed or existing Synapse), **gateway** (managed Higress or external Alibaba **ai-gateway**), **storage** (managed MinIO or external OSS), optional **credentialProvider**, **controller**, **manager** (bootstrap **Manager** CR), **elementWeb**, **worker** defaults (images per **openclaw** / **copaw** / **hermes** runtime).
+- The **controller** Pod reconciles CRs against **in-cluster** Matrix, Higress, and MinIO endpoints; **Manager** runs with `AGENTTEAMS_RUNTIME=k8s`, syncing workspace from cluster MinIO via `mc` and consuming credentials injected by the operator.
 
 ---
 
@@ -153,7 +153,7 @@ Helm **`worker.defaultImage`** supplies distinct repository defaults for each ru
 
 The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 
-| Mode | `HICLAW_MANAGER_RUNTIME` | Behavior |
+| Mode | `AGENTTEAMS_MANAGER_RUNTIME` | Behavior |
 |------|---------------------------|----------|
 | **OpenClaw** | `openclaw` (default) | Node/OpenClaw gateway; Matrix “message tool” style integration |
 | **QwenPaw** | `copaw` | Python QwenPaw workspace; Matrix via **`copaw channels send`** (`start-copaw-manager.sh`) |
@@ -162,18 +162,18 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 
 ---
 
-## Declarative resources and `hiclaw` CLI
+## Declarative resources and `agt` CLI
 
-### CRDs (`hiclaw.io/v1beta1`)
+### CRDs (`agentteams.io/v1beta1`)
 
 1. **Worker** — model, runtime, image, skills, MCP servers, optional **expose** ports, **channelPolicy**, **state** (`Running` / `Sleeping` / `Stopped`), **accessEntries** (cloud credential scoping when provider sidecar is used).
 2. **Manager** — model, runtime, image, soul/agents overrides, skills, MCP servers, **config** (heartbeat interval, worker idle timeout, notify channel), **state**, **accessEntries**.
 3. **Team** — **Leader** + **Workers** specs, optional **admin**, **peerMentions**, team **channelPolicy**; status aggregates member readiness and rooms (**team room**, **leader DM**, per-member **RoomID** with Manager).
 4. **Human** — display name, email, **permissionLevel**, accessible teams/workers; status includes Matrix user, initial password (once), rooms.
 
-### `hiclaw` CLI
+### `agt` CLI
 
-The **`hiclaw`** binary is built from **`hiclaw-controller`** and copied into **Manager**, **Worker**, and **embedded controller** images. It talks to the controller **REST API** (e.g. create/get workers, teams, humans, managers) and is the primary **operator-facing** tool inside containers and docs examples (`hiclaw get managers default`, etc.).
+The **`agt`** binary is built from **`agentteams-controller`** and copied into **Manager**, **Worker**, and **embedded controller** images. It talks to the controller **REST API** (e.g. create/get workers, teams, humans, managers) and is the primary **operator-facing** tool inside containers and docs examples (`agt get managers default`, etc.). A deprecated `hiclaw` command alias remains for upgrades.
 
 ---
 

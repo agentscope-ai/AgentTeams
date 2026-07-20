@@ -3,8 +3,8 @@ name: Check CRD Sync
 on:
   pull_request:
     paths:
-      - 'hiclaw-controller/config/crd/**'
-      - 'helm/hiclaw/crds/**'
+      - 'agentteams-controller/config/crd/**'
+      - 'helm/agentteams/crds/**'
   workflow_dispatch: ~
 
 jobs:
@@ -16,11 +16,11 @@ jobs:
 
       - name: Verify CRDs are in sync
         run: |
-          if ! diff -r hiclaw-controller/config/crd/ helm/hiclaw/crds/; then
+          if ! diff -r agentteams-controller/config/crd/ helm/agentteams/crds/; then
             echo ""
-            echo "ERROR: CRD files are out of sync between hiclaw-controller/config/crd/ and helm/hiclaw/crds/"
-            echo "The source of truth is hiclaw-controller/config/crd/."
-            echo "Run 'make sync-crds' to copy them to helm/hiclaw/crds/."
+            echo "ERROR: CRD files are out of sync between agentteams-controller/config/crd/ and helm/agentteams/crds/"
+            echo "The source of truth is agentteams-controller/config/crd/."
+            echo "Run 'make sync-crds' to copy them to helm/agentteams/crds/."
             exit 1
           fi
           echo "CRDs are in sync."

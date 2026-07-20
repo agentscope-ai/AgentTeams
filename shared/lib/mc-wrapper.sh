@@ -6,7 +6,7 @@
 # In local mode, ensure_mc_credentials is a no-op — near-zero overhead.
 
 # Source credential management (provides ensure_mc_credentials)
-. /opt/hiclaw/scripts/lib/oss-credentials.sh 2>/dev/null
+. /opt/agentteams/scripts/lib/oss-credentials.sh 2>/dev/null
 
 # Refresh STS credentials if needed (no-op in local mode)
 ensure_mc_credentials 2>/dev/null || true

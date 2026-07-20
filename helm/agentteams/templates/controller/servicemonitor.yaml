@@ -1,0 +1,22 @@
+{{- if and .Values.controller.metrics.enabled .Values.controller.metrics.serviceMonitor.enabled }}
+{{- $comp := dict "root" . "component" "controller" }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "agentteams.controller.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+    {{- with .Values.controller.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "agentteams.component.selectorLabels" $comp | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.controller.metrics.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.controller.metrics.serviceMonitor.scrapeTimeout | quote }}
+{{- end }}

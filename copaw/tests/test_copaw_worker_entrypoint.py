@@ -10,7 +10,7 @@ def _render_entrypoint(tmp_path: Path, *, mc_host: bool) -> Path:
     install_dir = tmp_path / "copaw-worker"
     script = (
         source.read_text()
-        .replace("/opt/hiclaw", str(fake_root))
+        .replace("/opt/agentteams", str(fake_root))
         .replace("/opt/venv", str(fake_venv))
         .replace('INSTALL_DIR="/root/.copaw-worker"', f'INSTALL_DIR="{install_dir}"')
     )
@@ -22,7 +22,7 @@ def _render_entrypoint(tmp_path: Path, *, mc_host: bool) -> Path:
         if mc_host
         else ""
     )
-    (lib_dir / "hiclaw-env.sh").write_text(
+    (lib_dir / "agentteams-env.sh").write_text(
         "#!/bin/sh\n"
         "AGENTTEAMS_STORAGE_ALIAS=\"${AGENTTEAMS_STORAGE_ALIAS:-agentteams}\"\n"
         "ensure_mc_credentials() {\n"

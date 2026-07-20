@@ -21,9 +21,9 @@ Use heartbeat as a periodic team check and anomaly notifier. Do not do domain wo
 Refresh current topology before relying on Worker, room, or requester state:
 
 ```bash
-hiclaw get teams <team-name> -o json
-hiclaw get workers --team <team-name> -o json
-hiclaw worker status --team <team-name>
+agt get teams <team-name> -o json
+agt get workers --team <team-name> -o json
+agt worker status --team <team-name>
 ```
 
 Check:
@@ -36,7 +36,7 @@ Check:
 If a Worker with active `[~]` work is sleeping, run:
 
 ```bash
-hiclaw worker ensure-ready --name <worker> --team <team-name>
+agt worker ensure-ready --name <worker> --team <team-name>
 ```
 
 If required Worker metadata is missing, or the Worker cannot be made reachable, do not guess. Treat it as an anomaly and report it through the communication rules.

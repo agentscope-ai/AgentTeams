@@ -1,8 +1,8 @@
 # Member Runtime Config Contract
 
-This document defines the YAML config snapshot that the HiClaw controller writes
+This document defines the YAML config snapshot that the AgentTeams controller writes
 to object storage for a managed runtime member. Managed runtime workers and
-TeamHarness plugin adapters read this file instead of querying `hiclaw` CLI for
+TeamHarness plugin adapters read this file instead of querying the `agt` CLI for
 team and member facts.
 
 The config is for runtime consumption only. It carries non-secret desired state
@@ -28,7 +28,7 @@ shared/runtime/members/{memberName}/runtime.yaml
 - AgentSpec package version changes update this file and should be applied by
   QwenPaw without restarting the pod.
 
-`desired.agentPackage` is a HiClaw AgentSpec package. It is not the
+`desired.agentPackage` is an AgentTeams AgentSpec package. It is not the
 TeamHarness plugin package. TeamHarness plugin is runtime infrastructure; an
 AgentSpec package is the user-deployed agent template and business capability
 bundle.
@@ -46,7 +46,7 @@ metadata:
   updatedAt: "2026-06-03T12:00:00Z" # master current: no corresponding worker injection
 
 # Team facts. This replaces runtime/plugin calls that would otherwise query
-# team information through hiclaw CLI.
+# team information through the agt CLI.
 team:
   name: demo-team # master current: controller derives this from Team.spec.teamName or Team.metadata.name, but does not inject it to worker
   storageId: demo-team # master current: no independent field
@@ -62,7 +62,7 @@ team:
 # adapter should be applied.
 member:
   name: worker-a # master current: controller management name, not injected as a field
-  runtimeName: worker-a # master current: injected through HICLAW_WORKER_NAME
+  runtimeName: worker-a # master current: injected through AGENTTEAMS_WORKER_NAME
   role: worker # master current: controller knows the member role internally, but does not inject it to worker
   runtime: qwenpaw # master current: comes from spec.runtime and is passed to backend runtime/image selection, not injected as env
   matrixUserId: "@worker-a:matrix.local" # master current: stored in Worker or Team member status; worker receives token but not user id
@@ -74,7 +74,7 @@ desired:
   model:
     providerId: hiclaw-gateway # master current: implicit in generated openclaw.json
     model: qwen-plus # master current: comes from spec.model and is written to openclaw.json, not directly injected to worker
-    gatewayUrl: http://aigw-local.hiclaw.io:8080 # master current: injected through HICLAW_AI_GATEWAY_URL
+    gatewayUrl: http://aigw-local.agentteams.io:8080 # master current: injected through AGENTTEAMS_AI_GATEWAY_URL
 
   agentPackage:
     ref: nacos://market.hiclaw.io:80/public/dev-worker?version=1.2.0 # master current: comes from spec.package; controller resolves and deploys it directly to OSS
@@ -99,8 +99,8 @@ desired:
 # only. It does not contain access keys or local runtime paths.
 storage:
   provider: oss # master current: worker infers provider from env and available CLI, no independent field
-  bucket: hiclaw-storage # master current: injected through HICLAW_FS_BUCKET
-  endpoint: http://minio:9000 # master current: injected through HICLAW_FS_ENDPOINT
+  bucket: agentteams-storage # master current: injected through AGENTTEAMS_FS_BUCKET
+  endpoint: http://minio:9000 # master current: injected through AGENTTEAMS_FS_ENDPOINT
   teamPrefix: teams/demo-team # master current: no standard field
   sharedPrefix: teams/demo-team/shared # master current: no standard field
   globalSharedPrefix: shared # master current: no standard field
@@ -109,9 +109,9 @@ storage:
 # Secret locations. The YAML stores where to read secrets, never the secret
 # values themselves.
 credentials:
-  matrixTokenEnv: HICLAW_WORKER_MATRIX_TOKEN # master current: real token is injected into this env
-  gatewayKeyEnv: HICLAW_WORKER_GATEWAY_KEY # master current: real gateway key is injected into this env
-  storageAccessKeyEnv: HICLAW_FS_ACCESS_KEY # master current: real storage access key is injected into this env
-  storageSecretKeyEnv: HICLAW_FS_SECRET_KEY # master current: real storage secret key is injected into this env
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN # master current: real token is injected into this env
+  gatewayKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY # master current: real gateway key is injected into this env
+  storageAccessKeyEnv: AGENTTEAMS_FS_ACCESS_KEY # master current: real storage access key is injected into this env
+  storageSecretKeyEnv: AGENTTEAMS_FS_SECRET_KEY # master current: real storage secret key is injected into this env
   serviceAccountTokenPath: /var/run/secrets/kubernetes.io/serviceaccount/token # master current: provided by Kubernetes service account mount, not env injection
 ```

@@ -102,14 +102,14 @@ RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
     rm -rf /tmp/qwenpaw-worker
 
 # Opaque QwenPaw plugin artifacts. Each plugin build owns its contents.
-RUN mkdir -p /opt/hiclaw/plugins
-COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/hiclaw/plugins/teamharness-qwenpaw.zip
-COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/hiclaw/plugins/workerflow-qwenpaw.zip
+RUN mkdir -p /opt/agentteams/plugins
+COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamharness-qwenpaw.zip
+COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/agentteams/plugins/workerflow-qwenpaw.zip
 COPY qwenpaw/scripts/install-builtin-qwenpaw-plugins.py /tmp/install-builtin-qwenpaw-plugins.py
 RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
-        --working-dir /opt/hiclaw/qwenpaw-builtin \
-        /opt/hiclaw/plugins/teamharness-qwenpaw.zip \
-        /opt/hiclaw/plugins/workerflow-qwenpaw.zip \
+        --working-dir /opt/agentteams/qwenpaw-builtin \
+        /opt/agentteams/plugins/teamharness-qwenpaw.zip \
+        /opt/agentteams/plugins/workerflow-qwenpaw.zip \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py
 
 # Enable QwenPaw's native deferred MCP startup for app workspaces.
@@ -117,18 +117,18 @@ COPY qwenpaw/scripts/patch-qwenpaw-defer-mcp-startup.py /tmp/patch-qwenpaw-defer
 RUN /opt/venv/qwenpaw/bin/python /tmp/patch-qwenpaw-defer-mcp-startup.py && \
     rm -f /tmp/patch-qwenpaw-defer-mcp-startup.py
 
-COPY --chmod=755 qwenpaw/scripts/qwenpaw-worker-entrypoint.sh /opt/hiclaw/scripts/qwenpaw-worker-entrypoint.sh
-COPY --chmod=755 qwenpaw/scripts/qwenpaw-teamharness-plugin-reload.sh /opt/hiclaw/scripts/qwenpaw-teamharness-plugin-reload.sh
-COPY --from=shared . /opt/hiclaw/scripts/lib/
+COPY --chmod=755 qwenpaw/scripts/qwenpaw-worker-entrypoint.sh /opt/agentteams/scripts/qwenpaw-worker-entrypoint.sh
+COPY --chmod=755 qwenpaw/scripts/qwenpaw-teamharness-plugin-reload.sh /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh
+COPY --from=shared . /opt/agentteams/scripts/lib/
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation.
-RUN chmod +x /opt/hiclaw/scripts/lib/mc-wrapper.sh && \
-    ln -sf /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc && \
+RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
+    ln -sf /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc && \
     ln -sf /opt/venv/qwenpaw/bin/qwenpaw /usr/local/bin/qwenpaw && \
     ln -sf /opt/venv/qwenpaw/bin/qwenpaw-worker /usr/local/bin/qwenpaw-worker && \
-    ln -sf /opt/hiclaw/scripts/qwenpaw-teamharness-plugin-reload.sh /usr/local/bin/qwenpaw-teamharness-plugin-reload && \
-    mkdir -p /root/hiclaw-fs/agents
+    ln -sf /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh /usr/local/bin/qwenpaw-teamharness-plugin-reload && \
+    mkdir -p /root/agentteams-fs/agents
 
-WORKDIR /root/hiclaw-fs/agents
+WORKDIR /root/agentteams-fs/agents
 
-ENTRYPOINT ["/opt/hiclaw/scripts/qwenpaw-worker-entrypoint.sh"]
+ENTRYPOINT ["/opt/agentteams/scripts/qwenpaw-worker-entrypoint.sh"]

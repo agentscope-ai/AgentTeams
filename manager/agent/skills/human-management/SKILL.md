@@ -18,7 +18,7 @@ Import real human accounts into AgentTeams with configurable permission levels. 
 ## Quick Create
 
 ```bash
-bash /opt/hiclaw/agent/skills/human-management/scripts/create-human.sh \
+bash /opt/agentteams/agent/skills/human-management/scripts/create-human.sh \
   --matrix-id "@john:domain" --name "John Doe" \
   --level 2 --teams alpha-team --workers standalone-dev \
   --email john@example.com

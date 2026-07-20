@@ -18,7 +18,7 @@ not backed by a structured Team filter.
 ```
 Manager receives task from Admin
   ↓
-Manager checks team info via `hiclaw get team <TEAM_NAME>` and chooses a matching team
+Manager checks team info via `agt get team <TEAM_NAME>` and chooses a matching team
   ↓
 Manager creates task: shared/tasks/{task-id}/
   - meta.json: assigned_to = leader name

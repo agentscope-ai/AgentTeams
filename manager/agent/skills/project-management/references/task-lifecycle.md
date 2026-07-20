@@ -27,7 +27,7 @@ This ensures workers in collaborative projects @mention Manager on phase complet
 
 ```bash
 TASK_ID="task-$(date +%Y%m%d-%H%M%S)"
-mkdir -p /root/hiclaw-fs/shared/tasks/${TASK_ID}
+mkdir -p /root/agentteams-fs/shared/tasks/${TASK_ID}
 ```
 
 Write `meta.json`:
@@ -53,8 +53,8 @@ Write `spec.md` with: task title, project context, deliverables, constraints, an
 ### 2c. Sync to MinIO
 
 ```bash
-mc cp /root/hiclaw-fs/shared/tasks/${TASK_ID}/meta.json ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${TASK_ID}/meta.json
-mc cp /root/hiclaw-fs/shared/tasks/${TASK_ID}/spec.md ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${TASK_ID}/spec.md
+mc cp /root/agentteams-fs/shared/tasks/${TASK_ID}/meta.json ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${TASK_ID}/meta.json
+mc cp /root/agentteams-fs/shared/tasks/${TASK_ID}/spec.md ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${TASK_ID}/spec.md
 ```
 
 ### 2d. Update plan.md
@@ -103,7 +103,7 @@ See `references/plan-changes.md` Step 4.
 4. If `SUCCESS_WITH_NOTES`, record notes for reference
 5. Notify admin about completion:
    ```bash
-   bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
+   bash /opt/agentteams/agent/skills/task-management/scripts/resolve-notify-channel.sh
    ```
    Send `[Project Task Completed] {project-title} — {task-id}: {task title} by {worker}. {summary}` to resolved channel. Read SOUL.md first for persona and language.
 6. Proceed to find next tasks (3e)

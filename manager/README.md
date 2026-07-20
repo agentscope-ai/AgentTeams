@@ -32,7 +32,7 @@ docker build -t hiclaw/manager-agent:latest .
 Use the installation script instead of running directly:
 
 ```bash
-../install/hiclaw-install.sh manager
+../install/agentteams-install.sh manager
 ```
 
 ## Directory Structure

@@ -1,6 +1,6 @@
-# HiClaw/OpenClaw 钉钉机器人配置教程
+# AgentTeams/OpenClaw 钉钉机器人配置教程
 
-本文档详细介绍如何在 HiClaw/OpenClaw 中配置钉钉（DingTalk）机器人插件，实现企业内部 AI 助手功能。
+本文档详细介绍如何在 AgentTeams/OpenClaw 中配置钉钉（DingTalk）机器人插件，实现企业内部 AI 助手功能。
 
 ---
 
@@ -21,7 +21,7 @@
 
 ### 基本要求
 
-- 已安装 HiClaw/OpenClaw
+- 已安装 AgentTeams/OpenClaw
 - 钉钉企业账号（需有应用开发权限）
 
 ---
@@ -89,9 +89,9 @@ appCode, appKey, appSecret, 钉CorpId, 钉AgentId等
 ### 本地源码安装（推荐）
 
 ```bash
-# 1. 克隆插件仓库（以给 HiClaw Worker 配置钉钉机器人为例）
+# 1. 克隆插件仓库（以给 AgentTeams Worker 配置钉钉机器人为例）
 docker exec -it <你想配置钉钉机器人的容器> /bin/bash
-cd /root/hiclaw-fs/agents/<你的hiclaw worker名>
+cd /root/agentteams-fs/agents/<你的agt worker名>
 
 # 创建插件代码存储目录
 mkdir plugins
@@ -124,7 +124,7 @@ openclaw plugins install -l .
 
 **预期结果**：
 ```
-Linked plugin path: /root/hiclaw-fs/agents/xxxxxx/plugins/openclaw-channel-dingtalk
+Linked plugin path: /root/agentteams-fs/agents/xxxxxx/plugins/openclaw-channel-dingtalk
 Restart the gateway to load plugins.
 ```
 
@@ -144,15 +144,15 @@ openclaw plugins list
 
 ### 1. 在manager容器中找到worker OpenClaw的配置文件
 
-注意hiclaw worker的配置文件需要从manager的容器内进行修改。否则修改后worker容器重启后配置会被恢复。
+注意agt worker的配置文件需要从manager的容器内进行修改。否则修改后worker容器重启后配置会被恢复。
 
 ```bash
 # 进入manager容器编辑（manager容器中有worker配置文件,通过minio映射）
-docker exec -it hiclaw-manager /bin/bash 
+docker exec -it agentteams-manager /bin/bash
 # 找到你的worker配置文件, 其中fbi-claw替换为你实际的worker名
-ls -l /root/hiclaw-fs/agents/fbi-claw/openclaw.json
+ls -l /root/agentteams-fs/agents/fbi-claw/openclaw.json
 # 使用vim进行修改(如vi命令不可用, 使用 apt update&apt-get install vim 安装)
-vi /root/hiclaw-fs/agents/fbi-claw/openclaw.json
+vi /root/agentteams-fs/agents/fbi-claw/openclaw.json
 ```
 
 ### 2. 添加插件配置
@@ -164,7 +164,7 @@ vi /root/hiclaw-fs/agents/fbi-claw/openclaw.json
   "load": {
     "paths": [
       "/opt/openclaw/extensions/matrix",
-      "/root/hiclaw-fs/agents/fbi-claw/plugins/openclaw-channel-dingtalk"
+      "/root/agentteams-fs/agents/fbi-claw/plugins/openclaw-channel-dingtalk"
     ]
   },
   "entries": {
@@ -216,14 +216,14 @@ vi /root/hiclaw-fs/agents/fbi-claw/openclaw.json
   "channels": {
     "matrix": {
       "enabled": true,
-      "homeserver": "http://matrix-local.hiclaw.io:8080",
+      "homeserver": "http://matrix-local.agentteams.io:8080",
       "accessToken": "your-matrix-token",
       "dm": {
         "policy": "allowlist",
-        "allowFrom": ["@admin:matrix-local.hiclaw.io:18080"]
+        "allowFrom": ["@admin:matrix-local.agentteams.io:18080"]
       },
       "groupPolicy": "allowlist",
-      "groupAllowFrom": ["@admin:matrix-local.hiclaw.io:18080"],
+      "groupAllowFrom": ["@admin:matrix-local.agentteams.io:18080"],
       "groups": {
         "*": { "allow": true, "requireMention": true }
       }
@@ -244,7 +244,7 @@ vi /root/hiclaw-fs/agents/fbi-claw/openclaw.json
     "load": {
       "paths": [
         "/opt/openclaw/extensions/matrix",
-        "/root/hiclaw-fs/agents/fbi-claw/plugins/openclaw-channel-dingtalk"
+        "/root/agentteams-fs/agents/fbi-claw/plugins/openclaw-channel-dingtalk"
       ]
     },
     "entries": {
@@ -256,7 +256,7 @@ vi /root/hiclaw-fs/agents/fbi-claw/openclaw.json
     "mode": "merge",
     "providers": {
       "hiclaw-gateway": {
-        "baseUrl": "http://aigw-local.hiclaw.io:8080/v1",
+        "baseUrl": "http://aigw-local.agentteams.io:8080/v1",
         "apiKey": "your-api-key",
         "api": "openai-completions",
         "models": [
@@ -279,11 +279,11 @@ vi /root/hiclaw-fs/agents/fbi-claw/openclaw.json
 ### 5. 重启 Gateway
 
 ```bash
-docker restart <你的hiclaw worker 容器id>
+docker restart <你的agt worker 容器id>
 ```
 使用docker ps -a查看容器信息，例如 docker ps -a 输出如下：
-799c1ca06455  <镜像>  <时间>   8001/tcp, 8080/tcp, 8443/tcp hiclaw-worker-fbi-claw
-则docker restart hiclaw-worker-fbi-claw 重启这个worker容器
+799c1ca06455  <镜像>  <时间>   8001/tcp, 8080/tcp, 8443/tcp agentteams-worker-fbi-claw
+则docker restart agentteams-worker-fbi-claw 重启这个worker容器
 
 ---
 
@@ -293,7 +293,7 @@ docker restart <你的hiclaw worker 容器id>
 
 ```bash
 # 进入worker容器
-docker exec -it <你的hiclaw worker 容器id> /bin/bash
+docker exec -it <你的agt worker 容器id> /bin/bash
 
 # 查看插件是否加载成功
 openclaw plugins list| grep dingtalk

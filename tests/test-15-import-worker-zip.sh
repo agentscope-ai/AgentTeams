@@ -3,7 +3,7 @@
 #
 # End-to-end test covering the complete declarative import flow:
 #   1. Create a test ZIP package (manifest.json + SOUL.md + custom skill)
-#   2. hiclaw apply worker --zip uploads ZIP + YAML to MinIO
+#   2. agt apply worker --zip uploads ZIP + YAML to MinIO
 #   3. Controller reconcile: mc mirror → fsnotify → kine → kube-apiserver → WorkerReconciler
 #   4. create-worker.sh runs: Matrix account + Room + Higress consumer + container
 #   5. Worker container is running
@@ -30,12 +30,12 @@ _cleanup() {
         return
     fi
     log_info "All tests passed — cleaning up test worker: ${TEST_WORKER}"
-    exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}*.zip" 2>/dev/null || true
     sleep 5
     remove_worker_container "${TEST_WORKER}"
     exec_in_agent rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager rm -rf "/root/hiclaw-fs/agents/${TEST_WORKER}" 2>/dev/null || true
+    exec_in_manager rm -rf "/root/agentteams-fs/agents/${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
 }
@@ -46,11 +46,11 @@ trap _cleanup EXIT
 # ============================================================
 log_section "Controller Infrastructure"
 
-CTRL_PID=$(exec_in_manager pgrep -f hiclaw-controller 2>/dev/null || echo "")
+CTRL_PID=$(exec_in_manager pgrep -f agentteams-controller 2>/dev/null || echo "")
 if [ -n "${CTRL_PID}" ]; then
-    log_pass "hiclaw-controller process is running (PID: ${CTRL_PID})"
+    log_pass "agentteams-controller process is running (PID: ${CTRL_PID})"
 else
-    log_fail "hiclaw-controller process is not running"
+    log_fail "agentteams-controller process is not running"
 fi
 
 KAPI_PID=$(exec_in_manager pgrep -f kube-apiserver 2>/dev/null || echo "")
@@ -140,23 +140,23 @@ fi
 copy_to_agent "${WORK_DIR}/${TEST_WORKER}.zip" "${WORK_DIR}/${TEST_WORKER}.zip"
 
 # ============================================================
-# Section 3: Import via hiclaw apply worker --zip
+# Section 3: Import via agt apply worker --zip
 # ============================================================
-log_section "Import Worker via hiclaw apply worker --zip"
+log_section "Import Worker via agt apply worker --zip"
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply worker --zip "${WORK_DIR}/${TEST_WORKER}.zip" --name "${TEST_WORKER}" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent agt apply worker --zip "${WORK_DIR}/${TEST_WORKER}.zip" --name "${TEST_WORKER}" 2>&1)
 APPLY_EXIT=$?
 
 if [ ${APPLY_EXIT} -eq 0 ]; then
-    log_pass "hiclaw apply worker --zip exited successfully"
+    log_pass "agt apply worker --zip exited successfully"
 else
-    log_fail "hiclaw apply worker --zip failed (exit: ${APPLY_EXIT})"
+    log_fail "agt apply worker --zip failed (exit: ${APPLY_EXIT})"
 fi
 
 if echo "${APPLY_OUTPUT}" | grep -q "created\|applied\|configured"; then
-    log_pass "hiclaw apply worker --zip reports resource created"
+    log_pass "agt apply worker --zip reports resource created"
 else
-    log_fail "hiclaw apply worker --zip did not report creation"
+    log_fail "agt apply worker --zip did not report creation"
 fi
 
 # ============================================================
@@ -167,8 +167,8 @@ log_section "Verify Resource State"
 # Brief pause for CR to propagate through kube-apiserver
 sleep 2
 
-WORKER_JSON=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null || echo "")
-assert_not_empty "${WORKER_JSON}" "Worker CR exists (hiclaw get workers)"
+WORKER_JSON=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null || echo "")
+assert_not_empty "${WORKER_JSON}" "Worker CR exists (agt get workers)"
 WORKER_NAME_CHK=$(echo "${WORKER_JSON}" | jq -r '.name // empty' 2>/dev/null)
 assert_eq "${TEST_WORKER}" "${WORKER_NAME_CHK}" "Worker CR has correct name"
 
@@ -180,19 +180,19 @@ else
 fi
 
 # ============================================================
-# Section 5: Verify hiclaw get (CLI reads from MinIO)
+# Section 5: Verify agt get (CLI reads from MinIO)
 # ============================================================
-log_section "Verify hiclaw get"
+log_section "Verify agt get"
 
-GET_LIST=$(exec_in_agent hiclaw get workers 2>&1)
-assert_contains "${GET_LIST}" "${TEST_WORKER}" "Worker visible in 'hiclaw get workers'"
+GET_LIST=$(exec_in_agent agt get workers 2>&1)
+assert_contains "${GET_LIST}" "${TEST_WORKER}" "Worker visible in 'agt get workers'"
 
 # ============================================================
 # Section 6: Idempotency
 # ============================================================
 log_section "Idempotency"
 
-REIMPORT_OUTPUT=$(exec_in_agent hiclaw apply worker --zip "${WORK_DIR}/${TEST_WORKER}.zip" --name "${TEST_WORKER}" 2>&1)
+REIMPORT_OUTPUT=$(exec_in_agent agt apply worker --zip "${WORK_DIR}/${TEST_WORKER}.zip" --name "${TEST_WORKER}" 2>&1)
 if echo "${REIMPORT_OUTPUT}" | grep -q "updated\|configured"; then
     log_pass "Re-import correctly reports 'updated' (idempotent)"
 else
@@ -210,14 +210,14 @@ if wait_worker_provisioned "${TEST_WORKER}" 120; then
     log_pass "WorkerReconciler provisioned worker"
 else
     log_fail "WorkerReconciler did not provision worker within 120s"
-    exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
+    exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Verify the API surface confirms the worker is present with credentials
 # (roomID + matrixUserID). Older iteration of this test grepped a
 # "worker created" log line; polling the CR status is both more stable
 # and independent of log-rotation.
-WORKER_API_JSON=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null)
+WORKER_API_JSON=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null)
 WORKER_API_ROOM=$(echo "${WORKER_API_JSON}" | jq -r '.roomID // empty')
 assert_not_empty "${WORKER_API_ROOM}" "Worker API response contains roomID"
 
@@ -232,7 +232,7 @@ REGISTRY_ENTRY=$(echo "${REGISTRY_JSON}" | jq -r --arg w "${TEST_WORKER}" '.work
 assert_not_empty "${REGISTRY_ENTRY}" "Worker registered in workers-registry.json"
 
 # Matrix Room (from CRD status)
-WORKER_JSON_AFTER_RECONCILE=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null)
+WORKER_JSON_AFTER_RECONCILE=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null)
 ROOM_ID=$(echo "${WORKER_JSON_AFTER_RECONCILE}" | jq -r '.roomID // empty')
 assert_not_empty "${ROOM_ID}" "Matrix Room created: ${ROOM_ID}"
 
@@ -369,17 +369,17 @@ fi
 # ============================================================
 log_section "Delete Worker"
 
-DELETE_OUTPUT=$(exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>&1)
+DELETE_OUTPUT=$(exec_in_agent agt delete worker "${TEST_WORKER}" 2>&1)
 if echo "${DELETE_OUTPUT}" | grep -q "deleted"; then
-    log_pass "hiclaw delete reported success"
+    log_pass "agt delete reported success"
 else
-    log_fail "hiclaw delete did not report success"
+    log_fail "agt delete did not report success"
 fi
 
 # Wait for CR to be fully removed (finalizer runs container teardown which can take ~10s)
 WORKER_GONE=false
 for i in $(seq 1 60); do
-    WORKER_AFTER=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>&1 || echo "")
+    WORKER_AFTER=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>&1 || echo "")
     if echo "${WORKER_AFTER}" | grep -q "not found\|error\|Error" || [ -z "${WORKER_AFTER}" ]; then
         WORKER_GONE=true
         break

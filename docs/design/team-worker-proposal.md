@@ -28,7 +28,7 @@ Human (Admin)
 1. Manager 只管人力和顶层任务下发，不介入 Team 内部协调
 2. Team Leader 作为特殊 Worker，自主管理团队内任务分解和分配
 3. 真人用户按权限级别接入，与对应角色直接对话
-4. 统一声明式 YAML 配置，支持 `hiclaw apply` 一键管理所有资源
+4. 统一声明式 YAML 配置，支持 `agt apply` 一键管理所有资源
 5. 基于 kine + client-go 实现 K8s 风格的 controller reconcile，未来可无缝切换到原生 K8s
 
 ## 2. 核心概念
@@ -366,10 +366,10 @@ MinIO `hiclaw-config/` 目录是声明式配置的 single source of truth。hicl
 ┌─────────────────────────────────────────────────────────────────┐
 │  入口层                                                         │
 │                                                                 │
-│  容器外: hiclaw-apply.sh -f resource.yaml                       │
-│    → docker exec hiclaw-manager hiclaw apply -f resource.yaml   │
+│  容器外: agentteams-apply.sh -f resource.yaml                       │
+│    → docker exec hiclaw-manager agt apply -f resource.yaml   │
 │                                                                 │
-│  容器内: hiclaw apply -f resource.yaml                          │
+│  容器内: agt apply -f resource.yaml                          │
 │    → 解析 YAML → mc cp 到 MinIO hiclaw-config/{kind}/{name}.yaml│
 │                                                                 │
 │  云上: POST /api/v1/apply (HTTP body → mc cp 到 MinIO)          │
@@ -397,9 +397,9 @@ MinIO `hiclaw-config/` 目录是声明式配置的 single source of truth。hicl
 | 维度 | embedded（非 K8s，默认） | incluster（K8s） |
 |------|------------------------|-----------------|
 | 配置存储 | MinIO `hiclaw-config/` | K8s etcd（CRD 直接落 K8s，不经过 MinIO） |
-| `hiclaw apply` | mc cp 到 MinIO → mirror → fsnotify → kine → reconcile | ⚠️ 待实现（CLI 层尚未对接） |
-| `hiclaw get` | mc ls/cat MinIO 文件 | ⚠️ 待实现 |
-| `hiclaw delete` | mc rm MinIO 文件 | ⚠️ 待实现 |
+| `agt apply` | mc cp 到 MinIO → mirror → fsnotify → kine → reconcile | ⚠️ 待实现（CLI 层尚未对接） |
+| `agt get` | mc ls/cat MinIO 文件 | ⚠️ 待实现 |
+| `agt delete` | mc rm MinIO 文件 | ⚠️ 待实现 |
 | Controller 感知 | fsnotify 监听本地目录 | controller-runtime informer 监听 API（已支持） |
 | MinIO 角色 | 配置存储 + 运行时数据 | 仅运行时数据（agents/、shared/） |
 
@@ -485,7 +485,7 @@ hiclaw-controller/
 | `generate-worker-config.sh` | 第 5 个参数传入 team-leader 名，覆盖 groupAllowFrom 为 `[Leader, Admin]` |
 | `find-worker.sh` | 新增 `--team` 过滤；输出增加 `worker_role`/`team_id` |
 | `manage-state.sh` | `add-finite` 支持 `--delegated-to-team` |
-| `hiclaw-import.sh` | 从 856 行精简为 90 行薄壳，`--zip` 和 `-f` 都转发到容器内 `hiclaw` CLI |
+| `agentteams-import.sh` | 从 856 行精简为 90 行薄壳，`--zip` 和 `-f` 都转发到容器内 `hiclaw` CLI |
 | `start-mc-mirror.sh` | 新增 hiclaw-config 路径的 10 秒间隔 mirror loop |
 | `SOUL.md` (Manager) | 职责增加 Team/Human 管理 |
 | `HEARTBEAT.md` | 新增 Step 2b 检查团队委派任务 |
@@ -563,7 +563,7 @@ manager/agent/team-leader-agent/
     └─ ←→ 行政人员郑十 (Human L3)
 ```
 
-一键部署：`./hiclaw-apply.sh -f company-setup.yaml`
+一键部署：`./agentteams-apply.sh -f company-setup.yaml`
 
 ## 11. 实施状态
 
@@ -574,7 +574,7 @@ manager/agent/team-leader-agent/
 | 3 | Team Leader Agent（模板 + team-task-management skill） | ✅ |
 | 4 | Human 管理（human-management skill + scripts） | ✅ |
 | 5 | Go Controller + kine 引擎（CRD + Reconciler + file watcher + HTTP API） | ✅ |
-| 6 | 容器外入口脚本（hiclaw-apply.sh, hiclaw-import.sh 薄壳改造） | ✅ |
+| 6 | 容器外入口脚本（agentteams-apply.sh, agentteams-import.sh 薄壳改造） | ✅ |
 | 7 | 文档与协议更新 | ✅ |
 
 ### 后续规划

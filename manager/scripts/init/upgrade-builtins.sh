@@ -10,14 +10,14 @@
 
 set -e
 
-AGENT_SRC="/opt/hiclaw/agent"
+AGENT_SRC="/opt/agentteams/agent"
 WORKSPACE="/root/manager-workspace"
 REGISTRY="${WORKSPACE}/workers-registry.json"
 IMAGE_VERSION=$(cat "${AGENT_SRC}/.builtin-version" 2>/dev/null || echo "unknown")
 MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
 
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
-source /opt/hiclaw/scripts/lib/builtin-merge.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
+source /opt/agentteams/scripts/lib/builtin-merge.sh
 
 log() {
     echo "[upgrade-builtins $(date '+%Y-%m-%d %H:%M:%S')] $1"

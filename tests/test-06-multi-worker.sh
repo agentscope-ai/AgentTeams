@@ -50,7 +50,7 @@ wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice" "bob")
 TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
 # worker-management/SKILL.md tells Manager to ask admin for FOUR inputs
-# (name / runtime / SOUL / skills) before running `hiclaw create worker`
+# (name / runtime / SOUL / skills) before running `agt create worker`
 # and not to invent defaults. A vague prompt that only names the worker is
 # therefore a coin flip — sometimes Manager replies with a confirmation
 # request, never calls the CLI, and the consumer/SOUL.md polls below
@@ -88,7 +88,7 @@ else
     log_fail "Worker Bob did not reach provisioned state in ${BOB_PROVISION_TIMEOUT}s"
 fi
 
-BOB_WORKER_JSON=$(exec_in_agent hiclaw get workers bob -o json 2>/dev/null || echo "{}")
+BOB_WORKER_JSON=$(exec_in_agent agt get workers bob -o json 2>/dev/null || echo "{}")
 BOB_RUNTIME=$(echo "${BOB_WORKER_JSON}" | jq -r '.runtime // empty')
 assert_eq "${TEST_WORKER_RUNTIME}" "${BOB_RUNTIME}" \
     "Worker Bob runtime matches test matrix (got: '${BOB_RUNTIME}', want: '${TEST_WORKER_RUNTIME}')"

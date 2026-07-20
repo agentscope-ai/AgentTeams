@@ -31,7 +31,7 @@ Path: `~/coding-cli-config.json`
 Run when `~/coding-cli-config.json` does not exist:
 
 ```bash
-bash /opt/hiclaw/agent/skills/coding-cli-management/scripts/detect-available-cli.sh
+bash /opt/agentteams/agent/skills/coding-cli-management/scripts/detect-available-cli.sh
 ```
 
 **If no CLIs are available** (`available` array is empty):
@@ -68,7 +68,7 @@ When `coding-cli-config.json` has `enabled: true`:
    ```
    If `coding-cli` is missing, distribute it:
    ```bash
-   bash /opt/hiclaw/agent/skills/worker-management/scripts/push-worker-skills.sh \
+   bash /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
      --worker <worker-name> --skill coding-cli
    ```
 
@@ -83,7 +83,7 @@ When a Worker sends a message containing `coding-request:` (in their Worker Room
 **Parse the message:**
 ```
 task-{task-id} coding-request:
-workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace
+workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace
 ---PROMPT---
 {prompt content}
 ---END---
@@ -94,11 +94,11 @@ workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace
 ```bash
 # 1. Sync workspace from MinIO
 task_id="task-YYYYMMDD-HHMMSS"
-workspace="/root/hiclaw-fs/shared/tasks/${task_id}/workspace"
-mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" "/root/hiclaw-fs/shared/tasks/${task_id}/"
+workspace="/root/agentteams-fs/shared/tasks/${task_id}/workspace"
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" "/root/agentteams-fs/shared/tasks/${task_id}/"
 
 # 2. Check for processing marker (task coordination)
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/check-processing-marker.sh "$task_id"
+bash /opt/agentteams/agent/skills/task-coordination/scripts/check-processing-marker.sh "$task_id"
 if [ $? -ne 0 ]; then
     # Another process is working on this task
     echo "Task ${task_id} is being processed by another operation. Retry later."
@@ -106,11 +106,11 @@ if [ $? -ne 0 ]; then
 fi
 
 # 3. Create processing marker
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/create-processing-marker.sh "$task_id" "manager" 15
+bash /opt/agentteams/agent/skills/task-coordination/scripts/create-processing-marker.sh "$task_id" "manager" 15
 
 # 4. Save prompt to file
 timestamp=$(date +%Y%m%d-%H%M%S)
-prompt_dir="/root/hiclaw-fs/shared/tasks/${task_id}/coding-prompts"
+prompt_dir="/root/agentteams-fs/shared/tasks/${task_id}/coding-prompts"
 mkdir -p "$prompt_dir"
 prompt_file="$prompt_dir/${timestamp}.txt"
 cat > "$prompt_file" << 'PROMPT_EOF'
@@ -121,7 +121,7 @@ PROMPT_EOF
 cli=$(jq -r '.cli' ~/coding-cli-config.json)
 
 # 6. Run CLI
-bash /opt/hiclaw/agent/skills/coding-cli-management/scripts/run-coding-cli.sh \
+bash /opt/agentteams/agent/skills/coding-cli-management/scripts/run-coding-cli.sh \
   --cli "$cli" \
   --workspace "$workspace" \
   --prompt-file "$prompt_file" \
@@ -129,11 +129,11 @@ bash /opt/hiclaw/agent/skills/coding-cli-management/scripts/run-coding-cli.sh \
 exit_code=$?
 
 # 7. Remove processing marker
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/remove-processing-marker.sh "$task_id"
+bash /opt/agentteams/agent/skills/task-coordination/scripts/remove-processing-marker.sh "$task_id"
 
 # 8. On success (exit 0): push changes to MinIO
 if [ "$exit_code" -eq 0 ]; then
-    mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/workspace/" "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/workspace/" --overwrite
+    mc mirror "/root/agentteams-fs/shared/tasks/${task_id}/workspace/" "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/workspace/" --overwrite
 fi
 ```
 
@@ -142,7 +142,7 @@ fi
 @{worker}:DOMAIN task-{task-id} coding-result:
 CLI 工具已完成编码。请同步工作目录并 review 变更：
   hiclaw-sync
-变更记录：/root/hiclaw-fs/shared/tasks/{task-id}/workspace/coding-cli-logs/
+变更记录：/root/agentteams-fs/shared/tasks/{task-id}/workspace/coding-cli-logs/
 ```
 
 **On failure** (exit ≠ 0 or timeout) — see Step 4.
@@ -155,7 +155,7 @@ CLI 工具已完成编码。请同步工作目录并 review 变更：
 ```
 @{worker}:DOMAIN task-{task-id} coding-failed:
 CLI 工具执行失败（exit code: {code}）。请自行完成编码任务。
-你生成的提示词已保存于：/root/hiclaw-fs/shared/tasks/{task-id}/coding-prompts/
+你生成的提示词已保存于：/root/agentteams-fs/shared/tasks/{task-id}/coding-prompts/
 ```
 
 **Notify Human Admin** via primary channel (see channel-management skill "Sending Messages to Primary Channel"):
@@ -189,8 +189,8 @@ Append to the end of spec.md when CLI mode is enabled:
 
 本任务涉及代码修改。请使用 **Coding CLI 委托模式** 完成：
 
-1. 克隆/准备代码到工作目录：`/root/hiclaw-fs/shared/tasks/{task-id}/workspace/`
-2. 推送到 MinIO：`mc mirror /root/hiclaw-fs/shared/tasks/{task-id}/workspace/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/`
+1. 克隆/准备代码到工作目录：`/root/agentteams-fs/shared/tasks/{task-id}/workspace/`
+2. 推送到 MinIO：`mc mirror /root/agentteams-fs/shared/tasks/{task-id}/workspace/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/`
 3. 根据你的理解和 `coding-cli` skill 生成编码提示词，发送给我
 4. 等待我执行 CLI 工具并返回结果
 5. Sync 拉取变更：`hiclaw-sync`

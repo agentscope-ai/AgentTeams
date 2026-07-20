@@ -8,17 +8,17 @@
 
 1. Check if Manager is waiting for a signal:
 ```bash
-docker exec hiclaw-manager grep "Waiting for" /var/log/hiclaw/manager-agent.log | tail -10
+docker exec agentteams-manager grep "Waiting for" /var/log/agentteams/manager-agent.log | tail -10
 ```
 
 2. Check if Worker messages are being processed:
 ```bash
-docker exec hiclaw-manager grep -E "PHASE[0-9]_DONE|REVISION_NEEDED" /var/log/hiclaw/manager-agent.log
+docker exec agentteams-manager grep -E "PHASE[0-9]_DONE|REVISION_NEEDED" /var/log/agentteams/manager-agent.log
 ```
 
 3. Key: Check `wasMentioned` status:
 ```bash
-docker exec hiclaw-manager grep "resolveMentions (inbound)" /var/log/hiclaw/manager-agent.log | tail -20
+docker exec agentteams-manager grep "resolveMentions (inbound)" /var/log/agentteams/manager-agent.log | tail -20
 ```
 
 ### Common Causes
@@ -60,7 +60,7 @@ OOMKilled
 
 ```bash
 # Check container logs
-docker logs hiclaw-manager
+docker logs agentteams-manager
 
 # Check port conflicts
 netstat -tlnp | grep -E "18080|18088|18001"
@@ -90,7 +90,7 @@ docker run --rm -it hiclaw/worker-agent:latest /bin/bash
 
 ```bash
 # Check Worker's Matrix credentials (container path is fixed)
-docker exec hiclaw-worker-alice cat /root/.openclaw/channels/matrix/credentials.json
+docker exec agentteams-worker-alice cat /root/.openclaw/channels/matrix/credentials.json
 ```
 
 ## Test Skip Issues
@@ -136,5 +136,5 @@ cat tests/output/metrics-*.json | jq '.totals.tokens'
 docker ps --filter "name=hiclaw"
 
 # Quick view recent errors
-docker exec hiclaw-manager tail -50 /var/log/hiclaw/manager-agent-error.log
+docker exec agentteams-manager tail -50 /var/log/agentteams/manager-agent-error.log
 ```

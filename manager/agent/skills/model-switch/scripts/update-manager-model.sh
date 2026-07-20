@@ -17,7 +17,7 @@
 #   update-manager-model.sh deepseek-chat --no-reasoning
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # Detect runtime
 MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
@@ -123,8 +123,8 @@ log "Updating Manager model: ${MODEL_NAME} (ctx=${CTX}, max=${MAX}, reasoning=${
 # ── Pre-flight: verify the model is reachable via AI Gateway ──────────────────
 GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL}/v1/chat/completions"
 GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
-if [ -z "${GATEWAY_KEY}" ] && [ -f "/data/hiclaw-secrets.env" ]; then
-    source /data/hiclaw-secrets.env
+if [ -z "${GATEWAY_KEY}" ] && [ -f "/data/agentteams-secrets.env" ]; then
+    source /data/agentteams-secrets.env
     GATEWAY_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
 fi
 

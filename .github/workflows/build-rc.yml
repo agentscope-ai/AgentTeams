@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base hiclaw-controller embedded manager manager-copaw worker copaw-worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-copaw worker copaw-worker hermes-worker qwenpaw-worker'
         required: false
         type: string
         default: 'all'
@@ -83,7 +83,7 @@ jobs:
 
       - name: Build and push multi-arch images
         run: |
-          make push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-qwenpaw-worker push-hiclaw-controller push-embedded \
+          make push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-qwenpaw-worker push-agentteams-controller push-embedded \
             VERSION=${{ inputs.version }} \
             OPENCLAW_BASE_VERSION=${{ inputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \

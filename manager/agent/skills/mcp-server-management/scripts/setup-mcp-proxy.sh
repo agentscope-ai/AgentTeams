@@ -29,7 +29,7 @@
 #   - AGENTTEAMS_AI_GATEWAY_DOMAIN env var
 
 set -euo pipefail
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Parse arguments
@@ -339,7 +339,7 @@ if [ -f "${REGISTRY_FILE}" ]; then
         '{"mcpServerName":"'"${MCP_SERVER_NAME}"'","consumers":'"${CONSUMER_LIST}"'}'
 
     for wname in ${WORKER_NAMES}; do
-        WORKER_AGENT_DIR="/root/hiclaw-fs/agents/${wname}"
+        WORKER_AGENT_DIR="/root/agentteams-fs/agents/${wname}"
         MCPORTER_DIR="${WORKER_AGENT_DIR}/config"
         MCPORTER_FILE="${MCPORTER_DIR}/mcporter.json"
         MCPORTER_COMPAT="${WORKER_AGENT_DIR}/mcporter-servers.json"

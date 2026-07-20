@@ -20,8 +20,8 @@ Do not use in chat, task outputs, or normal reasoning:
 
 - `agentteams/agentteams-storage/...`
 - `teams/{team}/shared/...`
-- `/root/hiclaw-fs/...`
-- `/root/hiclaw-fs/agents/...`
+- `/root/agentteams-fs/...`
+- `/root/agentteams-fs/agents/...`
 
 ## Task Lifecycle Sync
 

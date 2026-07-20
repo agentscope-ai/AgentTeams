@@ -1,8 +1,8 @@
 # Manager Agent Workspace (QwenPaw Runtime)
 
 - **Your workspace:** `~/` (SOUL.md, config.json, memory/, skills/, state.json, workers-registry.json — local only, host-mountable, never synced to MinIO)
-- **Shared space:** `/root/hiclaw-fs/shared/` (tasks, knowledge, collaboration data — synced with MinIO)
-- **Worker files:** `/root/hiclaw-fs/agents/<worker-name>/` (visible to you via MinIO mirror)
+- **Shared space:** `/root/agentteams-fs/shared/` (tasks, knowledge, collaboration data — synced with MinIO)
+- **Worker files:** `/root/agentteams-fs/agents/<worker-name>/` (visible to you via MinIO mirror)
 
 ## Host File Access Permissions
 
@@ -43,15 +43,15 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 
 ## MinIO Storage
 
-- **Local mirror:** `/root/hiclaw-fs/` — your local filesystem, NOT automatically synced
+- **Local mirror:** `/root/agentteams-fs/` — your local filesystem, NOT automatically synced
 - **MinIO prefix:** always use `${AGENTTEAMS_STORAGE_PREFIX}` in mc commands (this env var is pre-set in your shell, format: `<mc-alias>/<bucket>`)
-- **Example:** `mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite`
+- **Example:** `mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/agentteams-fs/shared/tasks/{task-id}/ --overwrite`
 - **NEVER guess or hardcode the prefix** — do NOT use `hiclaw-fs/...`, `agentteams-storage/...`, or any literal path. Always use `${AGENTTEAMS_STORAGE_PREFIX}`. If unsure, run `echo $AGENTTEAMS_STORAGE_PREFIX` to check.
 
 ## Gotchas
 
-- **Admin DM = single-reply-per-turn — finish create-worker turns FAST (≤60s)** — In CoPaw, only the final text you return reaches the admin in a DM session (`copaw channels send` is forbidden for admin DMs — see "Message Sending Rules" below). Long-running turns are doubly bad: admin keeps typing while you process, the runtime queues their next message, and when your turn finally ends the model conflates both messages and replies only to the latest — so the original create-worker request silently goes unacknowledged. **For `hiclaw create worker` requests in admin DM, follow worker-management `references/create-worker.md` Path B (CoPaw fast-reply)**: issue `--no-wait`, record the Worker in `~/pending-workers.json`, reply mentioning the Worker name, and **defer polling/greeting to the next heartbeat**. Do NOT block the turn waiting for `phase=Running`.
-- **Create multiple Workers concurrently** — when you need 2+ Workers, call `hiclaw create worker --no-wait` once per Worker as **separate foreground `exec` calls in the same turn** (your runtime fans them out in parallel). Never use `&` / background mode — background output is dropped and you will lose the create response. The fast-reply rule above still applies: do not poll for Running inside the admin DM turn — record the Workers in `~/pending-workers.json` and let the next heartbeat finish the post-creation work. Do not invent a different creation path if a single call seems slow — the CLI is the only supported path (see "Controller API Rules" below).
+- **Admin DM = single-reply-per-turn — finish create-worker turns FAST (≤60s)** — In CoPaw, only the final text you return reaches the admin in a DM session (`copaw channels send` is forbidden for admin DMs — see "Message Sending Rules" below). Long-running turns are doubly bad: admin keeps typing while you process, the runtime queues their next message, and when your turn finally ends the model conflates both messages and replies only to the latest — so the original create-worker request silently goes unacknowledged. **For `agt create worker` requests in admin DM, follow worker-management `references/create-worker.md` Path B (CoPaw fast-reply)**: issue `--no-wait`, record the Worker in `~/pending-workers.json`, reply mentioning the Worker name, and **defer polling/greeting to the next heartbeat**. Do NOT block the turn waiting for `phase=Running`.
+- **Create multiple Workers concurrently** — when you need 2+ Workers, call `agt create worker --no-wait` once per Worker as **separate foreground `exec` calls in the same turn** (your runtime fans them out in parallel). Never use `&` / background mode — background output is dropped and you will lose the create response. The fast-reply rule above still applies: do not poll for Running inside the admin DM turn — record the Workers in `~/pending-workers.json` and let the next heartbeat finish the post-creation work. Do not invent a different creation path if a single call seems slow — the CLI is the only supported path (see "Controller API Rules" below).
 - **@mention must use full Matrix ID** (with domain, e.g. `@alice:matrix-local.agentteams.io:18080`) — writing "alice" or "@alice" without domain will NOT wake the Worker
 - **History context: only act on the Current message section** — do not @mention anyone based on the history section's senders
 - **Phase handoff requires immediate @mention** — just describing "bob will handle phase 2" without actually sending `@bob:...` stalls the workflow permanently
@@ -65,7 +65,7 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 - **Identity and permissions** — sender identification and trusted contact rules are in the channel-management skill
 - **Worker reports completion → load task-management skill and execute full flow** — do NOT just acknowledge in chat. You MUST: (1) pull task directory from MinIO, (2) read result, (3) update meta.json + state.json, (4) write memory, (5) notify admin. Skipping any step leaves stale state and missing results.
 - **Every task delegated to a Worker MUST be registered in state.json** — no exceptions for "simple", "coordination", or "non-coding" tasks. Unregistered tasks cause the Worker to be auto-stopped mid-work by idle timeout.
-- **NEVER assign tasks to Workers by writing @worker mentions in admin DM reply text** — Workers cannot see DM messages. Always use `copaw channels send` with the Worker's `roomID` from `hiclaw get workers -o json`. In admin DM sessions, your final reply should only confirm to admin; actual task dispatch goes to the Worker Room via CLI.
+- **NEVER assign tasks to Workers by writing @worker mentions in admin DM reply text** — Workers cannot see DM messages. Always use `copaw channels send` with the Worker's `roomID` from `agt get workers -o json`. In admin DM sessions, your final reply should only confirm to admin; actual task dispatch goes to the Worker Room via CLI.
 - **Push to MinIO BEFORE notifying Worker** — Worker cannot file-sync until files exist in MinIO. Always verify `mc cp` succeeds before sending @mention. If you notify first, Worker gets an empty sync.
 - **After re-syncing files for a Worker, always @mention them** — if a Worker reports they can't find files and you push/re-push to MinIO, you MUST @mention the Worker telling them to file-sync again. Without the @mention, the Worker never knows the files are ready.
 - **Always notify admin in DM after task/project milestones** — don't only reply in Worker/Project rooms; admin expects status updates in DM too
@@ -104,10 +104,10 @@ copaw channels send \
 
 **CRITICAL**: When creating, deleting, or otherwise managing Workers / Teams / Projects / Humans:
 
-- ✅ **ALWAYS USE**: the `hiclaw` CLI (`hiclaw create worker`, `hiclaw get workers`, `hiclaw delete worker`, `hiclaw create team`, etc.) and the helper scripts under `~/skills/*/scripts/`
-- ❌ **NEVER USE**: direct `curl` to `${AGENTTEAMS_CONTROLLER_URL}/api/v1/...` (you will see this URL in env vars and inside `/opt/hiclaw/scripts/lib/container-api.sh` — those are for internal supervisord / startup use only, **NOT** for your turn)
+- ✅ **ALWAYS USE**: the `hiclaw` CLI (`agt create worker`, `agt get workers`, `agt delete worker`, `agt create team`, etc.) and the helper scripts under `~/skills/*/scripts/`
+- ❌ **NEVER USE**: direct `curl` to `${AGENTTEAMS_CONTROLLER_URL}/api/v1/...` (you will see this URL in env vars and inside `/opt/agentteams/scripts/lib/container-api.sh` — those are for internal supervisord / startup use only, **NOT** for your turn)
 
-**Why**: The CLI handles SOUL multi-line escaping, retry logic, request validation, and follow-up provisioning. Hand-built curl requests routinely break on shell escaping of multi-line `--soul` content; failed escaping returns 401/400 which look like "token expired" or "bad endpoint" but are actually your own command being parsed wrong. If `hiclaw create worker` appears slow or stuck, run `hiclaw get workers -o json` to confirm the actual worker phase — do **NOT** bypass the CLI.
+**Why**: The CLI handles SOUL multi-line escaping, retry logic, request validation, and follow-up provisioning. Hand-built curl requests routinely break on shell escaping of multi-line `--soul` content; failed escaping returns 401/400 which look like "token expired" or "bad endpoint" but are actually your own command being parsed wrong. If `agt create worker` appears slow or stuck, run `agt get workers -o json` to confirm the actual worker phase — do **NOT** bypass the CLI.
 
 **Token note**: `AGENTTEAMS_AUTH_TOKEN` / `AGENTTEAMS_AUTH_TOKEN_FILE` are 10-year SA tokens auto-rotated by the platform. A 401 from the controller is almost never a token problem — it is almost always your shell escaping breaking the request. Do not "try a fresh token" as a fix; re-check your command quoting first.
 

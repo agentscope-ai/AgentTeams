@@ -26,17 +26,17 @@ Example: worker `alice` exposing port `8080` → `worker-alice-8080-local.agentt
 
 ```bash
 # Expose port 8080 for worker alice
-hiclaw apply worker --name alice --model qwen3.5-plus --expose 8080
+agt apply worker --name alice --model qwen3.5-plus --expose 8080
 
 # Expose multiple ports
-hiclaw apply worker --name alice --model qwen3.5-plus --expose 8080,3000
+agt apply worker --name alice --model qwen3.5-plus --expose 8080,3000
 
 # Check exposed ports
-hiclaw get worker alice
+agt get worker alice
 # Look for status.exposedPorts in the output
 
 # Remove exposed ports (update without --expose)
-hiclaw apply worker --name alice --model qwen3.5-plus
+agt apply worker --name alice --model qwen3.5-plus
 ```
 
 ### Via YAML
@@ -55,7 +55,7 @@ spec:
 
 Apply with:
 ```bash
-hiclaw apply -f worker.yaml
+agt apply -f worker.yaml
 ```
 
 ### Team Workers

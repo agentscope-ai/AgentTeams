@@ -17,7 +17,7 @@ File: `~/primary-channel.json`
 ### Script commands
 
 ```bash
-SCRIPT=/opt/hiclaw/agent/skills/channel-management/scripts/manage-primary-channel.sh
+SCRIPT=/opt/agentteams/agent/skills/channel-management/scripts/manage-primary-channel.sh
 
 # Show current state
 bash $SCRIPT --action show
@@ -62,7 +62,7 @@ When blocked on an admin decision while working in a Matrix room:
 
 1. Resolve notification channel:
    ```bash
-   bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
+   bash /opt/agentteams/agent/skills/task-management/scripts/resolve-notify-channel.sh
    ```
 2. If non-Matrix primary channel confirmed, use `message` tool to send the question
 3. Note the pending escalation in memory to connect the reply back when it arrives

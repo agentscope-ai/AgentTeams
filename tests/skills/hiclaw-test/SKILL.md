@@ -14,11 +14,11 @@ Complete HiClaw testing workflow including installation verification, functional
 git clone https://github.com/alibaba/hiclaw.git && cd hiclaw
 
 # 2. Create config file (first time)
-cp hiclaw-manager.env.example ~/hiclaw-manager.env
-# Edit ~/hiclaw-manager.env and set HICLAW_LLM_API_KEY, etc.
+cp agentteams-manager.env.example ~/agentteams-manager.env
+# Edit ~/agentteams-manager.env and set AGENTTEAMS_LLM_API_KEY, etc.
 
 # 3. Run full test
-set -a && . ~/hiclaw-manager.env && set +a && make test
+set -a && . ~/agentteams-manager.env && set +a && make test
 ```
 
 ## Full Test Cycle
@@ -31,14 +31,14 @@ git clone https://github.com/alibaba/hiclaw.git
 cd hiclaw
 
 # Check if config file exists
-ls ~/hiclaw-manager.env
+ls ~/agentteams-manager.env
 ```
 
 ### Step 2: Run Full Test
 
 ```bash
 # Load config and run tests (automatically executes install → test → uninstall)
-set -a && . ~/hiclaw-manager.env && set +a && make test
+set -a && . ~/agentteams-manager.env && set +a && make test
 ```
 
 Test cases:
@@ -54,13 +54,13 @@ Test cases:
 
 ```bash
 # Install only
-set -a && . ~/hiclaw-manager.env && set +a && HICLAW_YOLO=1 make install
+set -a && . ~/agentteams-manager.env && set +a && AGENTTEAMS_YOLO=1 make install
 
 # Uninstall only
 make uninstall
 
 # Run tests using existing installation (skip reinstall)
-set -a && . ~/hiclaw-manager.env && set +a
+set -a && . ~/agentteams-manager.env && set +a
 ./tests/run-all-tests.sh --skip-build --use-existing
 ```
 
@@ -80,17 +80,17 @@ When tests fail or hang, use `hiclaw-debug.sh` to export logs:
 
 ```bash
 # Manager container logs
-docker logs --tail 100 hiclaw-manager 2>&1
+docker logs --tail 100 agentteams-manager 2>&1
 
 # Manager Agent logs
-docker exec hiclaw-manager tail -100 /var/log/hiclaw/manager-agent.log
+docker exec agentteams-manager tail -100 /var/log/agentteams/manager-agent.log
 
 # Manager Agent error logs
-docker exec hiclaw-manager tail -50 /var/log/hiclaw/manager-agent-error.log
+docker exec agentteams-manager tail -50 /var/log/agentteams/manager-agent-error.log
 
 # Worker container logs
-docker ps --filter "name=hiclaw-worker" --format "table {{.Names}}\t{{.Status}}"
-docker logs --tail 50 hiclaw-worker-alice 2>&1
+docker ps --filter "name=agentteams-worker" --format "table {{.Names}}\t{{.Status}}"
+docker logs --tail 50 agentteams-worker-alice 2>&1
 
 # Test output files
 ls tests/output/
@@ -123,17 +123,17 @@ python3 scripts/export-debug-log.py --range 1h
 
 ```bash
 # Check if Worker container is running
-docker ps --filter "name=hiclaw-worker"
+docker ps --filter "name=agentteams-worker"
 
 # Check Worker Agent process
-docker exec hiclaw-worker-alice ps aux | grep openclaw
+docker exec agentteams-worker-alice ps aux | grep openclaw
 ```
 
 ### 3. LLM Call Failures
 
 ```bash
 # Check error logs
-docker exec hiclaw-manager grep -i "error\|fail" /var/log/hiclaw/manager-agent-error.log
+docker exec agentteams-manager grep -i "error\|fail" /var/log/agentteams/manager-agent-error.log
 ```
 
 ### 4. Test Timeout
@@ -182,7 +182,7 @@ Each test generates `metrics-XX-testname.json` containing:
 make uninstall
 
 # Delete all Worker containers
-docker rm -f $(docker ps -aq --filter "name=hiclaw-worker")
+docker rm -f $(docker ps -aq --filter "name=agentteams-worker")
 
 # Delete test code
 rm -rf ./hiclaw

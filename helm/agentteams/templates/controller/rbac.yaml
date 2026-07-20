@@ -1,0 +1,99 @@
+{{- if .Values.controller.serviceAccount.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agentteams.controller.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "controller") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["agentteams.io"]
+    resources: ["workers", "teams", "humans", "managers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["agentteams.io"]
+    resources: ["workers/status", "teams/status", "humans/status", "managers/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agentteams.controller.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "controller") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "agentteams.controller.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agentteams.controller.serviceAccountName" . }}
+    namespace: {{ include "agentteams.namespace" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agentteams.controller.fullname" . }}-tokenreview
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "controller") | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if .Values.credentialProvider.enabled }}
+  - apiGroups: ["agentidentity.alibabacloud.com"]
+    resources: ["credentialproviders", "agentidentities", "agentroles", "agentrolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "agentteams.controller.fullname" . }}-tokenreview
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "controller") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "agentteams.controller.fullname" . }}-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agentteams.controller.serviceAccountName" . }}
+    namespace: {{ include "agentteams.namespace" . }}
+{{- end }}

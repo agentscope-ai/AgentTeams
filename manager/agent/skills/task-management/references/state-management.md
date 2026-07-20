@@ -9,7 +9,7 @@ Single source of truth for active tasks. Heartbeat reads this instead of scannin
 ## Script reference
 
 ```bash
-STATE_SCRIPT=/opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh
+STATE_SCRIPT=/opt/agentteams/agent/skills/task-management/scripts/manage-state.sh
 ```
 
 | When | Command |
@@ -27,7 +27,7 @@ STATE_SCRIPT=/opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh
 ## Notification channel resolution
 
 ```bash
-bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
+bash /opt/agentteams/agent/skills/task-management/scripts/resolve-notify-channel.sh
 ```
 
 Output: `{"channel": "dingtalk|matrix|none", "target": "...", "via": "primary-channel|admin-dm|none"}`

@@ -1,6 +1,6 @@
-# HiClaw Windows 部署手册
+# AgentTeams Windows 部署手册
 
-本文介绍如何在 Windows 系统上部署 HiClaw 多智能体协作平台。即使你是第一次接触 Docker 和 Agent 系统，也能按照本手册顺利完成安装。
+本文介绍如何在 Windows 系统上部署 AgentTeams 多智能体协作平台。即使你是第一次接触 Docker 和 Agent 系统，也能按照本手册顺利完成安装。
 
 ---
 
@@ -60,7 +60,7 @@
 
 ### 获取 API Key
 
-HiClaw 需要一个大模型 API Key 来驱动 Agent 的智能行为。推荐使用阿里云百炼：
+AgentTeams 需要一个大模型 API Key 来驱动 Agent 的智能行为。推荐使用阿里云百炼：
 
 1. 访问 [阿里云百炼](https://www.aliyun.com/product/bailian)，注册/登录阿里云账号
 2. 开通百炼服务，获取 API Key
@@ -109,12 +109,12 @@ HiClaw 需要一个大模型 API Key 来驱动 Agent 的智能行为。推荐使
 2. 在 PowerShell 窗口中，复制并粘贴以下命令，按回车执行：
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
-> **说明**：此命令会临时允许当前 PowerShell 窗口执行脚本（不影响系统安全策略），然后从网络下载并运行 HiClaw 安装脚本。
+> **说明**：此命令会临时允许当前 PowerShell 窗口执行脚本（不影响系统安全策略），然后从网络下载并运行 AgentTeams 安装脚本。
 
-安装脚本启动后，你会看到 HiClaw 的安装引导界面。接下来按照终端提示逐步操作即可。
+安装脚本启动后，你会看到 AgentTeams 的安装引导界面。接下来按照终端提示逐步操作即可。
 
 ![PowerShell 运行安装脚本 - 显示安装日志和语言选择](images/windows-deploy/powershell-install-start.png)
 
@@ -227,7 +227,7 @@ LLM API Key: ****
 脚本随后会自动测试 API 联通性。若测试成功，你会看到：
 
 ```
-[HiClaw] API 联通性测试通过
+[AgentTeams] API 联通性测试通过
 ```
 
 ![LLM 配置和 API 联通性测试通过](images/windows-deploy/powershell-llm-config-apikey.png)
@@ -268,11 +268,11 @@ LLM API Key: ****
 | Higress 控制台端口 | 18001 | 管理控制台 |
 | Element Web 端口 | 18088 | IM 客户端访问端口 |
 | OpenClaw 控制台端口 | 18888 | Agent 控制台 |
-| Matrix 域名 | matrix-local.hiclaw.io:18080 | Matrix 服务器域名 |
-| Element Web 域名 | matrix-client-local.hiclaw.io | IM 客户端域名 |
-| AI 网关域名 | aigw-local.hiclaw.io | AI 网关域名 |
-| 文件系统域名 | fs-local.hiclaw.io | MinIO 文件系统域名 |
-| OpenClaw 控制台域名 | console-local.hiclaw.io | Agent 控制台域名 |
+| Matrix 域名 | matrix-local.agentteams.io:18080 | Matrix 服务器域名 |
+| Element Web 域名 | matrix-client-local.agentteams.io | IM 客户端域名 |
+| AI 网关域名 | aigw-local.agentteams.io | AI 网关域名 |
+| 文件系统域名 | fs-local.agentteams.io | MinIO 文件系统域名 |
+| OpenClaw 控制台域名 | console-local.agentteams.io | Agent 控制台域名 |
 
 > **说明**：以上域名在本机部署时会自动解析到 `127.0.0.1`，无需手动配置 DNS 或 hosts 文件。
 
@@ -286,8 +286,8 @@ LLM API Key: ****
 |--------|------|--------|
 | GitHub 个人访问令牌 | 用于 Worker 执行 GitHub 操作（PR、Issue 等） | 留空跳过 |
 | Skills 注册中心 URL | Worker 获取技能的来源 | https://skills.sh |
-| Docker 卷名称 | 持久化数据存储 | hiclaw-data |
-| Manager 工作空间目录 | 存放 Agent 配置和状态 | `%USERPROFILE%\hiclaw-manager` |
+| Docker 卷名称 | 持久化数据存储 | agentteams-data |
+| Manager 工作空间目录 | 存放 Agent 配置和状态 | `%USERPROFILE%\agentteams-manager` |
 
 
 ---
@@ -320,21 +320,21 @@ LLM API Key: ****
 
 1. 生成配置文件和密钥
 2. 拉取 **嵌入式 controller**、**Manager** 与默认 **Worker** 镜像（首次安装体积取决于网络，通常为数 GB 级）
-3. 创建并启动 **`hiclaw-controller`**（基础设施 + controller）
-4. 等待 controller 创建 **`hiclaw-manager`**
+3. 创建并启动 **`agentteams-controller`**（基础设施 + controller）
+4. 等待 controller 创建 **`agentteams-manager`**
 5. 等待 Manager Agent 就绪
 6. 等待 Matrix 服务就绪
 7. 发送初始化消息
 
 ```
-[HiClaw] 正在拉取嵌入式 controller 镜像: .../hiclaw-embedded:...
-[HiClaw] 正在拉取 Manager 镜像: .../hiclaw-manager:latest
-[HiClaw] 正在拉取 Worker 镜像: .../hiclaw-worker:latest
-[HiClaw] 正在启动 controller 容器...
-[HiClaw] 等待 Manager Agent 容器...
-[HiClaw] Manager Agent 已就绪！
-[HiClaw] 等待 Matrix 服务就绪（超时: 300s）...
-[HiClaw] Matrix 服务已就绪！
+[AgentTeams] 正在拉取嵌入式 controller 镜像: .../agentteams-embedded:...
+[AgentTeams] 正在拉取 Manager 镜像: .../agentteams-manager:latest
+[AgentTeams] 正在拉取 Worker 镜像: .../agentteams-worker:latest
+[AgentTeams] 正在启动 controller 容器...
+[AgentTeams] 等待 Manager Agent 容器...
+[AgentTeams] Manager Agent 已就绪！
+[AgentTeams] 等待 Matrix 服务就绪（超时: 300s）...
+[AgentTeams] Matrix 服务已就绪！
 ```
 
 安装成功后，你会看到包含登录信息的面板：
@@ -355,7 +355,7 @@ LLM API Key: ****
 ===============================================================
 ```
 
-> **请务必记录用户名和密码**，密码是自动生成的随机字符串。配置信息保存在 `%USERPROFILE%\hiclaw-manager.env` 文件中，可随时查看。
+> **请务必记录用户名和密码**，密码是自动生成的随机字符串。配置信息保存在 `%USERPROFILE%\agentteams-manager.env` 文件中，可随时查看。
 
 ![安装成功 - 显示登录 URL 和凭据信息](images/windows-deploy/powershell-install-success.png)
 
@@ -402,7 +402,7 @@ Manager 会自动完成以下工作：
 每次有新版本发布时，在 PowerShell 中重新执行安装命令即可原地升级：
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
 安装脚本检测到已有安装时，会提示选择：
@@ -410,27 +410,27 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 - **就地升级**（推荐）：保留所有数据、配置和工作空间，仅更新容器镜像
 - **全新重装**：删除所有数据，从零开始
 
-> 升级过程中，**`hiclaw-controller`**、**`hiclaw-manager`** 与 Worker 容器可能被重新创建。Worker 无状态，MinIO / Docker 卷中的数据是否保留取决于你选择的升级选项。
+> 升级过程中，**`agentteams-controller`**、**`agentteams-manager`** 与 Worker 容器可能被重新创建。Worker 无状态，MinIO / Docker 卷中的数据是否保留取决于你选择的升级选项。
 
 如需升级到指定版本：
 
 ```powershell
-$env:HICLAW_VERSION="v1.0.5"; Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+$env:AGENTTEAMS_VERSION="v1.0.5"; Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
 ---
 
 ## 卸载
 
-在 PowerShell 中执行以下命令，将停止并删除所有 HiClaw 容器、Docker 卷和配置文件：
+在 PowerShell 中执行以下命令，将停止并删除所有 AgentTeams 容器、Docker 卷和配置文件：
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invoke-WebRequest -Uri 'https://higress.ai/hiclaw/install.ps1' -UseBasicParsing).Content } uninstall"
+Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1' -UseBasicParsing).Content } uninstall"
 ```
 
-> 与 `install/hiclaw-install.sh uninstall` 一致：会移除 **`hiclaw-controller`**、**`hiclaw-manager`**、Worker 容器、可选 **`hiclaw-docker-proxy`**、数据卷、env、网络等。
+> 与 `install/agentteams-install.sh uninstall` 一致：会移除 **`agentteams-controller`**、**`agentteams-manager`**、Worker 容器、可选 **`hiclaw-docker-proxy`**、数据卷、env、网络等。
 >
-> **说明**：部分版本卸载会保留 Manager 工作空间目录（`%USERPROFILE%\hiclaw-manager`），如需彻底清理请手动删除。
+> **说明**：部分版本卸载会保留 Manager 工作空间目录（`%USERPROFILE%\agentteams-manager`），如需彻底清理请手动删除。
 
 ---
 
@@ -444,7 +444,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invok
 1. 确认 Docker Desktop 已安装并完全启动（左下角显示绿色图标）
 2. 右键点击开始菜单 → 打开 **Windows PowerShell**（不是 CMD 命令提示符）
 3. 先手动执行 `docker info` 确认 Docker 可用
-4. 再执行 HiClaw 安装命令
+4. 再执行 AgentTeams 安装命令
 
 ### Docker Desktop 未运行
 
@@ -478,15 +478,15 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invok
 1. 检查 WSL 2 可用内存是否不足。新版 Docker Desktop 使用 WSL 2 后端，内存由 Windows 管理。在 PowerShell 中执行 `wsl --status` 查看配置。如需调大，编辑 `%USERPROFILE%\.wslconfig`，设置 `memory=8GB`，保存后重启 Docker Desktop
 2. 查看 **controller** 日志（v1.1+ 由 controller 拉起 Manager）：
    ```powershell
-   docker logs hiclaw-controller
+   docker logs agentteams-controller
    ```
 3. 查看 Manager 容器日志：
    ```powershell
-   docker logs hiclaw-manager
+   docker logs agentteams-manager
    ```
 4. 查看 Agent 详细日志：
    ```powershell
-   docker exec hiclaw-manager cat /var/log/hiclaw/manager-agent.log
+   docker exec agentteams-manager cat /var/log/agentteams/manager-agent.log
    ```
 
 ### 端口被占用
@@ -506,14 +506,14 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invok
 
 | 文件 | 位置 | 说明 |
 |------|------|------|
-| 环境变量配置 | `%USERPROFILE%\hiclaw-manager.env` | 所有安装配置（含密码） |
-| Manager 工作空间 | `%USERPROFILE%\hiclaw-manager\` | Agent 配置、技能、记忆 |
-| 安装日志 | `%USERPROFILE%\hiclaw-install.log` | 安装过程完整日志 |
+| 环境变量配置 | `%USERPROFILE%\agentteams-manager.env` | 所有安装配置（含密码） |
+| Manager 工作空间 | `%USERPROFILE%\agentteams-manager\` | Agent 配置、技能、记忆 |
+| 安装日志 | `%USERPROFILE%\agentteams-install.log` | 安装过程完整日志 |
 
 在 PowerShell 中查看密码：
 
 ```powershell
-Select-String "HICLAW_ADMIN_PASSWORD" "$env:USERPROFILE\hiclaw-manager.env"
+Select-String "AGENTTEAMS_ADMIN_PASSWORD" "$env:USERPROFILE\agentteams-manager.env"
 ```
 
 ---

@@ -26,7 +26,7 @@ class WorkerConfig:
         # Default to the openclaw-style layout: workspace == HOME (== MinIO
         # mirror root). The entrypoint passes --install-dir explicitly, so this
         # default only matters for direct `hermes-worker` invocations (CI / dev).
-        self.install_dir = install_dir or Path("/root/hiclaw-fs/agents")
+        self.install_dir = install_dir or Path("/root/agentteams-fs/agents")
 
     @property
     def workspace_dir(self) -> Path:

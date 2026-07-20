@@ -5,7 +5,7 @@
 ## Setup Script
 
 ```bash
-bash /opt/hiclaw/agent/skills/mcp-server-management/scripts/setup-mcp-server.sh \
+bash /opt/agentteams/agent/skills/mcp-server-management/scripts/setup-mcp-server.sh \
   <server-name> <credential-value> [--yaml-file <path>] [--api-domain <domain>]
 ```
 

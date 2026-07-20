@@ -17,7 +17,7 @@ ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 # ============ Stage 1: mc (MinIO Client) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
-# ============ Stage 2: hiclaw CLI (from controller image) ============
+# ============ Stage 2: AgentTeams CLI (from controller image) ============
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image: Based on openclaw-base ============
@@ -27,8 +27,9 @@ FROM ${OPENCLAW_BASE_IMAGE}
 # mc (MinIO Client) — real binary; wrapper installed after shared libs are copied
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
-# hiclaw CLI — for worker/team/human management via controller REST API
-COPY --from=agentteams-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+# AgentTeams CLI — for worker/team/human management via controller REST API
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 # ---- Built-in observability plugin (bundled unconditionally, enabled at runtime) ----
 # Placed before scripts/lib COPY so that code changes do not invalidate this layer.
@@ -56,25 +57,26 @@ RUN tmp_dir="$(mktemp -d)" && \
 ENV PATH="/opt/openclaw/packages/clawdbot/node_modules/.bin:${PATH}"
 
 # Shared environment bootstrap and credential management
-COPY --from=shared . /opt/hiclaw/scripts/lib/
+COPY --from=shared . /opt/agentteams/scripts/lib/
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation (no-op in local mode)
-RUN chmod +x /opt/hiclaw/scripts/lib/mc-wrapper.sh && \
-    ln -sf /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc
+RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
+    ln -sf /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc
 
 # Worker entrypoint and sync scripts
-COPY --chmod=755 scripts/ /opt/hiclaw/scripts/
-RUN printf '#!/bin/bash\nexec "/root/hiclaw-fs/agents/${AGENTTEAMS_WORKER_NAME}/skills/file-sync/scripts/hiclaw-sync.sh" "$@"\n' \
-    > /usr/local/bin/hiclaw-sync && chmod +x /usr/local/bin/hiclaw-sync
+COPY --chmod=755 scripts/ /opt/agentteams/scripts/
+RUN printf '#!/bin/bash\nexec "/root/agentteams-fs/agents/${AGENTTEAMS_WORKER_NAME}/skills/file-sync/scripts/agentteams-sync.sh" "$@"\n' \
+    > /usr/local/bin/agentteams-sync && chmod +x /usr/local/bin/agentteams-sync && \
+    ln -sf /usr/local/bin/agentteams-sync /usr/local/bin/hiclaw-sync
 
 # Workaround: lsof hangs in Kind (Docker-in-Docker) when scanning /proc.
 # OpenClaw Gateway uses lsof to check port availability before binding;
 # replace with a stub that always reports "port not in use" (exit 1).
 RUN rm -f /usr/bin/lsof && printf '#!/bin/sh\nexit 1\n' > /usr/bin/lsof && chmod +x /usr/bin/lsof
 
-# hiclaw-fs root (mirrors Manager's ~/hiclaw-fs/ layout)
-RUN mkdir -p /root/hiclaw-fs /root/.openclaw
+# AgentTeams filesystem root (mirrors the Manager layout)
+RUN mkdir -p /root/agentteams-fs /root/.openclaw
 
-WORKDIR /root/hiclaw-fs
+WORKDIR /root/agentteams-fs
 
-ENTRYPOINT ["/opt/hiclaw/scripts/worker-entrypoint.sh"]
+ENTRYPOINT ["/opt/agentteams/scripts/worker-entrypoint.sh"]

@@ -8,7 +8,7 @@ on:
       - 'manager/**'
       - 'worker/**'
       - 'openclaw-base/**'
-      - 'hiclaw-controller/**'
+      - 'agentteams-controller/**'
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
@@ -25,7 +25,7 @@ on:
       - 'manager/**'
       - 'worker/**'
       - 'openclaw-base/**'
-      - 'hiclaw-controller/**'
+      - 'agentteams-controller/**'
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
@@ -127,7 +127,7 @@ jobs:
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
           # cn-hangzhou registry is unreachable from GitHub-hosted runners
           # (frequently times out on `docker pull`).
-          make build-hiclaw-controller \
+          make build-agentteams-controller \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
             DOCKER_BUILD_ARGS="--build-arg APT_MIRROR="
 
@@ -279,13 +279,13 @@ jobs:
               | grep -v 'agentteams-controller' \
               | grep -v 'agentteams-controller' \
               | grep -v 'openclaw-base') \
-            | gzip > /tmp/hiclaw-${{ matrix.target }}.tar.gz
+            | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
           name: image-${{ matrix.target }}
-          path: /tmp/hiclaw-${{ matrix.target }}.tar.gz
+          path: /tmp/agentteams-${{ matrix.target }}.tar.gz
           retention-days: 1
 
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
@@ -679,7 +679,7 @@ jobs:
           AGENTTEAMS_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
           AGENTTEAMS_INSTALL_WORKER_IMAGE=agentteams/worker-agent:${VERSION} \
           AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
-          bash ./install/hiclaw-install.sh manager
+          bash ./install/agentteams-install.sh manager
 
       - name: Wait for Manager to be ready
         run: |

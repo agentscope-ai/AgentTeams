@@ -1,10 +1,10 @@
 # FAQ
 
-> **Using HiClaw v1.0.9 or earlier?** The architecture changed significantly in v1.1.0. For the legacy single-container architecture, see [FAQ (Legacy Architecture)](faq-legacy.md).
+> **Using AgentTeams v1.0.9 or earlier?** The architecture changed significantly in v1.1.0. For the legacy single-container architecture, see [FAQ (Legacy Architecture)](faq-legacy.md).
 
-- [How to check the current HiClaw version](#how-to-check-the-current-hiclaw-version)
+- [How to check the current AgentTeams version](#how-to-check-the-current-agentteams-version)
 - [Understanding the new architecture (v1.1.0+)](#understanding-the-new-architecture-v110)
-- [How to use the hiclaw CLI to manage resources](#how-to-use-the-hiclaw-cli-to-manage-resources)
+- [How to use the agt CLI to manage resources](#how-to-use-the-agt-cli-to-manage-resources)
 - [How to configure GitHub credentials for Workers](#how-to-configure-github-credentials-for-workers)
 - [How to connect Feishu/DingTalk/WeCom/Discord/Telegram](#how-to-connect-feishudingtalkwecomdiscordtelegram)
 - [Installation script exits immediately on Windows](#installation-script-exits-immediately-on-windows)
@@ -22,9 +22,9 @@
 - [How to switch a Worker's runtime](#how-to-switch-a-workers-runtime)
 - [Why does QwenPaw still use `copaw` in runtime values or image names](#why-does-qwenpaw-still-use-copaw-in-runtime-values-or-image-names)
 - [Can I connect my own agent implementation as a Worker](#can-i-connect-my-own-agent-implementation-as-a-worker)
-- [Can HiClaw connect to an existing Higress instance](#can-hiclaw-connect-to-an-existing-higress-instance)
+- [Can AgentTeams connect to an existing Higress instance](#can-agentteams-connect-to-an-existing-higress-instance)
 - [How to use the Worker Template Marketplace](#how-to-use-the-worker-template-marketplace)
-- [Does HiClaw support sending and receiving files](#does-hiclaw-support-sending-and-receiving-files)
+- [Does AgentTeams support sending and receiving files](#does-agentteams-support-sending-and-receiving-files)
 - [Why does Manager/Worker keep showing "typing"](#why-does-managerworker-keep-showing-typing)
 - [Manager/Worker not responding to messages](#managerworker-not-responding-to-messages)
 - [Manager not responding or returning error status codes](#manager-not-responding-or-returning-error-status-codes)
@@ -34,42 +34,42 @@
 
 ---
 
-## How to check the current HiClaw version
+## How to check the current AgentTeams version
 
 Run the following command to see the installed version:
 
 ```bash
-docker exec hiclaw-manager cat /opt/hiclaw/agent/.builtin-version
+docker exec agentteams-manager cat /opt/agentteams/agent/.builtin-version
 ```
 
 In v1.1.0+ installs, you can also query the controller-side CLI:
 
 ```bash
-docker exec hiclaw-controller hiclaw version
+docker exec agentteams-controller agt version
 ```
 
 Older `latest` images may print a commit hash instead of a semantic version if
 that image was rebuilt before version metadata was standardized. In that case,
 match the hash against the release or commit history, or upgrade with an
-explicit `HICLAW_VERSION`.
+explicit `AGENTTEAMS_VERSION`.
 
-To install a specific version, use the `HICLAW_VERSION` environment variable during installation:
+To install a specific version, use the `AGENTTEAMS_VERSION` environment variable during installation:
 
 ```bash
-HICLAW_VERSION=v1.1.0 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.1.0 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ---
 
 ## Understanding the new architecture (v1.1.0+)
 
-Starting from v1.1.0, HiClaw switched from a **single all-in-one container** to a **multi-container architecture** managed by `hiclaw-controller`:
+Starting from v1.1.0, AgentTeams switched from a **single all-in-one container** to a **multi-container architecture** managed by `agentteams-controller`:
 
 | Component | Old (≤v1.0.9) | New (v1.1.0+) |
 |-----------|---------------|---------------|
-| Infrastructure (Higress, Tuwunel, MinIO, Element Web) | Bundled inside `hiclaw-manager` | Runs in `hiclaw-controller` container (from the `hiclaw-embedded` image) |
-| Manager Agent | Inside `hiclaw-manager` | Separate `hiclaw-manager` container (lightweight, agent only) |
-| Worker management | Shell scripts (`create-worker.sh`) + `workers-registry.json` | Declarative CRDs via `hiclaw` CLI (`hiclaw create worker`, `hiclaw apply`) |
+| Infrastructure (Higress, Tuwunel, MinIO, Element Web) | Bundled inside `agentteams-manager` | Runs in `agentteams-controller` container (from the `agentteams-embedded` image) |
+| Manager Agent | Inside `agentteams-manager` | Separate `agentteams-manager` container (lightweight, agent only) |
+| Worker management | Shell scripts (`create-worker.sh`) + `workers-registry.json` | Declarative CRDs via `agt` CLI (`agt create worker`, `agt apply`) |
 | Worker runtimes | OpenClaw only | OpenClaw, **QwenPaw** (Python; formerly **CoPaw**), or Hermes |
 
 **Key benefits:**
@@ -83,101 +83,101 @@ Starting from v1.1.0, HiClaw switched from a **single all-in-one container** to 
 
 ```bash
 docker ps
-# hiclaw-controller    -- Controller + all infrastructure services
-# hiclaw-manager       -- Manager Agent (lightweight)
-# hiclaw-worker-alice  -- Worker containers (created on demand)
+# agentteams-controller    -- Controller + all infrastructure services
+# agentteams-manager       -- Manager Agent (lightweight)
+# agentteams-worker-alice  -- Worker containers (created on demand)
 ```
 
 ---
 
-## How to use the hiclaw CLI to manage resources
+## How to use the agt CLI to manage resources
 
-The `hiclaw` CLI ships in **`hiclaw-controller`**, **`hiclaw-manager`**, and Worker images (same binary, talks to the controller REST API). **`install/hiclaw-apply.sh`** runs `hiclaw apply` **inside `hiclaw-manager`** because it copies YAML into that container. For ad-hoc operator commands, `docker exec hiclaw-controller hiclaw …` is often convenient.
+The `agt` CLI ships in **`agentteams-controller`**, **`agentteams-manager`**, and Worker images (same binary, talks to the controller REST API). **`install/agentteams-apply.sh`** runs `agt apply` **inside `agentteams-manager`** because it copies YAML into that container. For ad-hoc operator commands, `docker exec agentteams-controller agt …` is often convenient.
 
 **Enter the controller container (one option):**
 
 ```bash
-docker exec -it hiclaw-controller sh
+docker exec -it agentteams-controller sh
 ```
 
 ### Query resources
 
 ```bash
 # Cluster overview
-hiclaw status
+agt status
 
 # List all workers (table format)
-hiclaw get workers
+agt get workers
 
 # List workers as JSON (useful for scripting)
-hiclaw get workers -o json
+agt get workers -o json
 
 # Get details of a specific worker
-hiclaw get workers alice
-hiclaw get workers alice -o json
+agt get workers alice
+agt get workers alice -o json
 
 # List workers in a specific team
-hiclaw get workers --team dev-team
+agt get workers --team dev-team
 
 # List all teams
-hiclaw get teams
+agt get teams
 
 # List all humans
-hiclaw get humans
+agt get humans
 
 # List managers
-hiclaw get managers
+agt get managers
 
 # Check controller version
-hiclaw version
+agt version
 ```
 
 ### Create resources
 
 ```bash
 # Create a worker with default model and runtime
-hiclaw create worker --name alice
+agt create worker --name alice
 
 # Create a worker with specific model and runtime
-hiclaw create worker --name bob --model claude-sonnet-4-6 --runtime hermes
+agt create worker --name bob --model claude-sonnet-4-6 --runtime hermes
 
 # Create a worker with skills
-hiclaw create worker --name charlie --skills github-operations
+agt create worker --name charlie --skills github-operations
 
 # Create a worker with a custom SOUL.md
-hiclaw create worker --name diana --soul-file /path/to/SOUL.md
+agt create worker --name diana --soul-file /path/to/SOUL.md
 
 # Create a worker without waiting for it to be ready
-hiclaw create worker --name eve --no-wait
+agt create worker --name eve --no-wait
 
 # Create a team
-hiclaw create team --name dev-team --goal "Full-stack web development"
+agt create team --name dev-team --goal "Full-stack web development"
 
 # Create a human
-hiclaw create human --name john --level 1
+agt create human --name john --level 1
 
 # Create a manager
-hiclaw create manager --name default --model qwen3.5-plus
+agt create manager --name default --model qwen3.5-plus
 ```
 
 ### Update resources
 
 ```bash
 # Switch a worker's model
-hiclaw update worker --name alice --model claude-sonnet-4-6
+agt update worker --name alice --model claude-sonnet-4-6
 
 # Switch a worker's runtime (triggers container recreation)
-hiclaw update worker --name alice --runtime hermes
+agt update worker --name alice --runtime hermes
 
 # Update a worker's skills
-hiclaw update worker --name alice --skills github-operations,code-review
+agt update worker --name alice --skills github-operations,code-review
 ```
 
 ### Apply YAML definitions
 
 ```bash
 # Apply a single YAML resource
-hiclaw apply -f worker-alice.yaml
+agt apply -f worker-alice.yaml
 ```
 
 Use YAML for fields not exposed by direct CLI flags, such as `spec.mcpServers`:
@@ -199,36 +199,36 @@ spec:
 
 ```bash
 # Import a worker from a zip package
-hiclaw apply worker --name alice --zip worker-package.zip
+agt apply worker --name alice --zip worker-package.zip
 ```
 
 ### Worker lifecycle
 
 ```bash
 # Stop (sleep) a worker
-hiclaw worker sleep --name alice
+agt worker sleep --name alice
 
 # Wake a sleeping worker
-hiclaw worker wake --name alice
+agt worker wake --name alice
 
 # Check a worker's status
-hiclaw worker status --name alice
+agt worker status --name alice
 ```
 
 ### Delete resources
 
 ```bash
 # Delete a worker (stops container, cleans up Matrix account and gateway consumer)
-hiclaw delete worker alice
+agt delete worker alice
 
 # Delete a team
-hiclaw delete team dev-team
+agt delete team dev-team
 
 # Delete a human
-hiclaw delete human john
+agt delete human john
 ```
 
-> **Tip:** Most Manager Agent operations (creating workers, switching models, assigning tasks) ultimately call the same `hiclaw` CLI under the hood. Using the CLI directly is useful for debugging, bulk operations, or automation scripts.
+> **Tip:** Most Manager Agent operations (creating workers, switching models, assigning tasks) ultimately call the same `agt` CLI under the hood. Using the CLI directly is useful for debugging, bulk operations, or automation scripts.
 
 For declarative YAML resource definitions, see [Declarative Resource Management](declarative-resource-management.md).
 
@@ -240,14 +240,14 @@ GitHub credentials are configured as an MCP Server credential, not copied into
 Worker containers. Workers call GitHub through `mcporter` and the AI Gateway;
 the real GitHub PAT stays in the gateway-side MCP configuration.
 
-During installation, set or enter `HICLAW_GITHUB_TOKEN` when the installer asks
+During installation, set or enter `AGENTTEAMS_GITHUB_TOKEN` when the installer asks
 for the optional GitHub Personal Access Token:
 
 ```bash
-HICLAW_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
-When this variable is present, HiClaw configures the GitHub MCP Server and
+When this variable is present, AgentTeams configures the GitHub MCP Server and
 generates Manager-side `mcporter` configuration automatically. After that,
 declare the GitHub MCP capability in the Worker manifest:
 
@@ -269,11 +269,11 @@ spec:
 Apply it with the supported YAML path:
 
 ```bash
-hiclaw apply -f worker-alice.yaml
+agt apply -f worker-alice.yaml
 ```
 
 For an existing installation that skipped the token, re-run the installer from
-the original workspace and provide `HICLAW_GITHUB_TOKEN`, or configure the
+the original workspace and provide `AGENTTEAMS_GITHUB_TOKEN`, or configure the
 GitHub MCP Server in the gateway manually and then authorize the target
 Manager/Worker consumer. Do not paste a PAT into a Worker prompt or
 container-local config.
@@ -291,17 +291,17 @@ If the PowerShell installation script closes immediately after launching, first 
 If the installer fails with an error like:
 
 ```
-ERROR: Failed to pull hiclaw-embedded image.
-Attempted: higress/hiclaw-embedded:v1.1.0 and higress/hiclaw-embedded:latest
+ERROR: Failed to pull agentteams-embedded image.
+Attempted: higress/agentteams-embedded:v1.1.0 and higress/agentteams-embedded:latest
 ```
 
 This means the embedded image is not available in the registry for your requested version. Three options:
 
-1. **Pin to a version that has the embedded image**: Check the [releases page](https://github.com/higress-group/hiclaw/releases) for available versions.
+1. **Pin to a version that has the embedded image**: Check the [releases page](https://github.com/agentscope-ai/AgentTeams/releases) for available versions.
 2. **Build locally from source**: Clone the repo and run `make install-embedded`.
-3. **Override the image**: Set `HICLAW_INSTALL_EMBEDDED_IMAGE` to a custom image.
+3. **Override the image**: Set `AGENTTEAMS_INSTALL_EMBEDDED_IMAGE` to a custom image.
 
-> If you intentionally want to use the legacy single-container architecture (v1.0.9 or earlier), set `HICLAW_FORCE_LEGACY=1`. Note this only works with images that bundle the infrastructure services.
+> If you intentionally want to use the legacy single-container architecture (v1.0.9 or earlier), set `AGENTTEAMS_FORCE_LEGACY=1`. Note this only works with images that bundle the infrastructure services.
 
 ---
 
@@ -313,10 +313,10 @@ If the Manager Agent is unresponsive after installation, check the logs.
 
 ```bash
 # Controller (infrastructure) logs
-docker logs hiclaw-controller
+docker logs agentteams-controller
 
 # Manager Agent logs
-docker logs hiclaw-manager
+docker logs agentteams-manager
 ```
 
 **Case 1: Controller is healthy but Manager container won't start**
@@ -332,7 +332,7 @@ Increase Docker VM memory to at least 4 GB: Docker Desktop → Settings → Reso
 Re-run the install command and choose **delete and reinstall**:
 
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 When the installer detects an existing installation, it will ask how to proceed. Choosing delete will wipe the stale data and start fresh.
@@ -385,12 +385,12 @@ If the login page still reports a homeserver error:
    binds services to `127.0.0.1`, so other devices cannot reach them.
 2. Make sure the machine firewall allows ports `18080` (Matrix/Higress gateway)
    and `18088` (Element Web).
-3. Do not use the default `matrix-local.hiclaw.io` address from another device;
+3. Do not use the default `matrix-local.agentteams.io` address from another device;
    that name resolves to the client machine's loopback address.
 
 For FluffyChat or Element Mobile over Tailscale, use the same rule: set the
 homeserver to `http://<tailscale-ip>:18080` and make sure the phone and the
-HiClaw host can reach each other in the Tailscale network.
+AgentTeams host can reach each other in the Tailscale network.
 
 ---
 
@@ -410,9 +410,9 @@ IP in the same format, for example `http://192.168.1.100:18080`.
 
 ## Cannot connect to Matrix server locally
 
-If the Matrix server is unreachable even on the local machine, check whether a proxy is enabled in your browser or system. The `*-local.hiclaw.io` domain resolves to `127.0.0.1` by default — if traffic is routed through a proxy, requests will never reach the local server.
+If the Matrix server is unreachable even on the local machine, check whether a proxy is enabled in your browser or system. The `*-local.agentteams.io` domain resolves to `127.0.0.1` by default — if traffic is routed through a proxy, requests will never reach the local server.
 
-Disable the proxy, or add `*-local.hiclaw.io` / `127.0.0.1` to your proxy bypass list.
+Disable the proxy, or add `*-local.agentteams.io` / `127.0.0.1` to your proxy bypass list.
 
 ---
 
@@ -428,8 +428,8 @@ Alternatively, you can click the Worker's avatar and open a **direct message** (
 
 ## How to connect third-party, local, or multi-provider models
 
-HiClaw does not read your `~/.openclaw/openclaw.json` provider definitions
-directly. Model traffic goes through the HiClaw AI Gateway. OpenClaw/QwenPaw
+AgentTeams does not read your `~/.openclaw/openclaw.json` provider definitions
+directly. Model traffic goes through the AgentTeams AI Gateway. OpenClaw/QwenPaw
 usually sees one provider named `hiclaw-gateway`; Higress then routes each
 requested model name to the real upstream provider.
 
@@ -450,7 +450,7 @@ defined in Higress.
 ### Local models such as Ollama or LM Studio
 
 Local models are supported when the service exposes an OpenAI-compatible API
-that the HiClaw containers can reach. From inside Docker, `localhost` means the
+that the AgentTeams containers can reach. From inside Docker, `localhost` means the
 container itself, not your Mac or host machine. Use a reachable host address,
 for example `http://host.docker.internal:<port>/v1` on Docker Desktop, or the
 host LAN IP on Linux/Podman when `host.docker.internal` is not available.
@@ -459,7 +459,7 @@ host LAN IP on Linux/Podman when `host.docker.internal` is not available.
 
 Configure separate Higress AI routes with prefix or regex model matching rules,
 for example one rule for `qwen*` and another for `claude*`. Then assign the
-desired model explicitly to the Manager or a Worker. HiClaw can use different
+desired model explicitly to the Manager or a Worker. AgentTeams can use different
 models for different Workers, but automatic model selection by task type is not
 a built-in policy; express that policy through Worker roles or switch the model
 explicitly.
@@ -468,7 +468,7 @@ explicitly.
 
 ## Why does my custom Higress AI route never match
 
-HiClaw creates a `default-ai-route` during setup. When that route has no
+AgentTeams creates a `default-ai-route` during setup. When that route has no
 `modelPredicates`, it can match all model requests, so a later custom route may
 look like it has lower priority.
 
@@ -485,7 +485,7 @@ For multiple AI routes, make the model matching rules unambiguous:
 
 ## How to switch the Manager's model
 
-HiClaw supports two ways to switch models: **switch the current session model** (instant, non-persistent) and **switch the primary model** (persistent, requires restart).
+AgentTeams supports two ways to switch models: **switch the current session model** (instant, non-persistent) and **switch the primary model** (persistent, requires restart).
 
 ### Option 1: Switch the current session model (instant, non-persistent)
 
@@ -505,7 +505,7 @@ Use Manager's built-in **model-switch skill** to persistently change the primary
 
 **Why use Manager instead of manual config?**
 
-OpenClaw requires setting the model's context window size (`contextWindow`) in its config. HiClaw defaults to qwen3.5-plus's 200K token window. If you switch to a model with a different window without updating this setting, the session may fail when approaching the window limit — OpenClaw won't know when to compress context.
+OpenClaw requires setting the model's context window size (`contextWindow`) in its config. AgentTeams defaults to qwen3.5-plus's 200K token window. If you switch to a model with a different window without updating this setting, the session may fail when approaching the window limit — OpenClaw won't know when to compress context.
 
 The model-switch skill:
 1. Looks up the correct `contextWindow` and `maxTokens` for the target model
@@ -602,7 +602,7 @@ Higress select the matching provider route.
 
 ## How to switch a Worker's runtime
 
-HiClaw v1.1.0+ supports three Worker runtimes:
+AgentTeams v1.1.0+ supports three Worker runtimes:
 
 | Runtime | Language | Best For |
 |---------|----------|----------|
@@ -615,7 +615,7 @@ HiClaw v1.1.0+ supports three Worker runtimes:
 Specify the runtime when creating a Worker:
 
 ```
-hiclaw create worker --name alice --runtime hermes
+agt create worker --name alice --runtime hermes
 ```
 
 Or via YAML:
@@ -630,7 +630,7 @@ spec:
   model: qwen3.5-plus
 ```
 
-If no runtime is specified, the default set during installation (`HICLAW_DEFAULT_WORKER_RUNTIME`) is used, falling back to `openclaw`.
+If no runtime is specified, the default set during installation (`AGENTTEAMS_DEFAULT_WORKER_RUNTIME`) is used, falling back to `openclaw`.
 
 ### After creation
 
@@ -646,8 +646,8 @@ Manager will use the worker-management skill to trigger a container recreation. 
 `QwenPaw` is the user-facing name of the Python runtime that was previously
 called `CoPaw`. Some internal compatibility names intentionally remain `copaw`,
 including the Worker CRD runtime value, image names such as
-`hiclaw-copaw-worker`, and environment values such as
-`HICLAW_MANAGER_RUNTIME=copaw`.
+`agentteams-copaw-worker`, and environment values such as
+`AGENTTEAMS_MANAGER_RUNTIME=copaw`.
 
 Do not change these internal values to `qwenpaw` unless the chart, controller,
 and images explicitly support that new value. They are kept stable to avoid
@@ -672,20 +672,20 @@ a configuration-only operation.
 
 ---
 
-## Can HiClaw connect to an existing Higress instance
+## Can AgentTeams connect to an existing Higress instance
 
 Not with `gateway.provider=higress` today. The Helm chart validates that
-`gateway.provider=higress` uses `gateway.mode=managed`, which means HiClaw
+`gateway.provider=higress` uses `gateway.mode=managed`, which means AgentTeams
 deploys and owns the Higress instance it uses.
 
-Do not copy an existing Higress configuration directory into the HiClaw-managed
-Higress instance. HiClaw reconciles the AI routes, consumers, and gateway
+Do not copy an existing Higress configuration directory into the AgentTeams-managed
+Higress instance. AgentTeams reconciles the AI routes, consumers, and gateway
 resources it needs, so copied resources can conflict with or be overwritten by
-HiClaw-managed state.
+AgentTeams-managed state.
 
 The supported paths are:
 
-- use the Higress instance managed by HiClaw for HiClaw traffic
+- use the Higress instance managed by AgentTeams for AgentTeams traffic
 - use the external `ai-gateway` provider path where applicable
 
 Connecting to an existing self-managed Higress instance would require a separate
@@ -696,7 +696,7 @@ naming isolation, and safeguards around existing routes and consumers.
 
 ## How to use the Worker Template Marketplace
 
-HiClaw v1.1.0+ includes a Worker Template Marketplace backed by Nacos. Instead of configuring Workers from scratch, you can import pre-built templates:
+AgentTeams v1.1.0+ includes a Worker Template Marketplace backed by Nacos. Instead of configuring Workers from scratch, you can import pre-built templates:
 
 **Via Manager conversation:**
 
@@ -708,14 +708,14 @@ Manager will search the marketplace, recommend matching templates, and import af
 **Via CLI:**
 
 ```bash
-hiclaw apply -f my-worker.yaml
+agt apply -f my-worker.yaml
 ```
 
 With a `package` reference in the YAML pointing to a marketplace template.
 
 ---
 
-## Does HiClaw support sending and receiving files
+## Does AgentTeams support sending and receiving files
 
 **Receiving files from you**: Yes. You can upload a file directly in Element Web (the attachment button), and Manager or Worker will receive it as a Matrix media message and can read its content.
 
@@ -730,13 +730,13 @@ container path.
 
 ## Why does Manager/Worker keep showing "typing"
 
-This is normal — it means the underlying Agent engine is actively executing. HiClaw sets a 30-minute timeout per task, so an agent can stay in this state for up to 30 minutes while working.
+This is normal — it means the underlying Agent engine is actively executing. AgentTeams sets a 30-minute timeout per task, so an agent can stay in this state for up to 30 minutes while working.
 
 To see what the agent is actually doing, exec into the Manager or Worker container and check the session logs:
 
 ```bash
 # For Manager
-docker exec -it hiclaw-manager ls .openclaw/agents/main/sessions/
+docker exec -it agentteams-manager ls .openclaw/agents/main/sessions/
 
 # For a Worker (replace <worker-name> with the actual container name)
 docker exec -it <worker-name> ls .openclaw/agents/main/sessions/
@@ -775,7 +775,7 @@ The session might be corrupted. Enter the Manager or Worker container and use th
 
 ```bash
 # Manager
-docker exec -it hiclaw-manager openclaw tui
+docker exec -it agentteams-manager openclaw tui
 
 # Worker (replace <worker-name> with actual container name)
 docker exec -it <worker-name> openclaw tui
@@ -799,13 +799,13 @@ If Manager stops responding or you see error codes like 404 or 503, check these 
 In the new architecture, verify both the controller and Manager containers are running:
 
 ```bash
-docker ps | grep -E "hiclaw-controller|hiclaw-manager"
+docker ps | grep -E "agentteams-controller|agentteams-manager"
 ```
 
-If `hiclaw-manager` is not running, check the controller logs:
+If `agentteams-manager` is not running, check the controller logs:
 
 ```bash
-docker logs hiclaw-controller
+docker logs agentteams-controller
 ```
 
 ### 2. Check session status
@@ -813,7 +813,7 @@ docker logs hiclaw-controller
 The session might be corrupted. Enter the Manager container and use the OpenClaw TUI to investigate:
 
 ```bash
-docker exec -it hiclaw-manager openclaw tui
+docker exec -it agentteams-manager openclaw tui
 ```
 
 In the TUI:
@@ -828,7 +828,7 @@ If the session is corrupted, try sending `/new` as a standalone message in the c
 If resetting the session doesn't help, check the Higress AI Gateway log. In the new architecture, Higress runs inside the controller container:
 
 ```bash
-docker exec -it hiclaw-controller cat /var/log/hiclaw/higress-gateway.log
+docker exec -it agentteams-controller cat /var/log/agentteams/higress-gateway.log
 ```
 
 Search the log for the relevant status code. Common causes:
@@ -875,19 +875,19 @@ In the new architecture (v1.1.0+), the Manager runs as a separate container:
 
 ```bash
 # Manager Agent logs (stdout/stderr)
-docker logs hiclaw-manager
+docker logs agentteams-manager
 
 # Manager Agent session logs (detailed execution trace)
-docker exec -it hiclaw-manager ls .openclaw/agents/main/sessions/
+docker exec -it agentteams-manager ls .openclaw/agents/main/sessions/
 
 # Controller / infrastructure logs
-docker logs hiclaw-controller
+docker logs agentteams-controller
 
 # Higress Gateway log (inside the controller container)
-docker exec -it hiclaw-controller cat /var/log/hiclaw/higress-gateway.log
+docker exec -it agentteams-controller cat /var/log/agentteams/higress-gateway.log
 
 # Higress Console API / UI backend log (v1.1.0+ embedded — also on the controller)
-docker exec -it hiclaw-controller cat /var/log/hiclaw/higress-console.log
+docker exec -it agentteams-controller cat /var/log/agentteams/higress-console.log
 ```
 
 For OpenClaw Control UI (visual session inspection), open:
@@ -900,16 +900,16 @@ http://localhost:18888
 
 ## How to connect Feishu/DingTalk/WeCom/Discord/Telegram
 
-HiClaw Manager is built on OpenClaw, which supports multiple messaging channels out of the box. To connect additional channels:
+AgentTeams Manager is built on OpenClaw, which supports multiple messaging channels out of the box. To connect additional channels:
 
 **Method 1: Edit config directly**
 
-The Manager's working directory is `~/hiclaw-manager` (on your host). Edit `openclaw.json` in that directory to add channel configuration. Refer to [OpenClaw channel documentation](https://docs.openclaw.ai) for the specific config format for each platform.
+The Manager's working directory is `~/agentteams-manager` (on your host). Edit `openclaw.json` in that directory to add channel configuration. Refer to [OpenClaw channel documentation](https://docs.openclaw.ai) for the specific config format for each platform.
 
 After editing, restart the Manager container for changes to take effect:
 
 ```bash
-docker restart hiclaw-manager
+docker restart agentteams-manager
 ```
 
 **Method 2: Let Manager learn from your existing OpenClaw config**
@@ -925,7 +925,7 @@ Then ask Manager to help configure the same channels in its own config.
 
 ## Session management via IM
 
-HiClaw uses OpenClaw with the Matrix channel (Element Web). OpenClaw supports **slash commands** that you can send directly in the chat as standalone messages. These commands are processed by the Gateway before the model sees them.
+AgentTeams uses OpenClaw with the Matrix channel (Element Web). OpenClaw supports **slash commands** that you can send directly in the chat as standalone messages. These commands are processed by the Gateway before the model sees them.
 
 **Important:** Most commands must be sent as a **standalone** message that starts with `/`. Do not mix them with other text in the same message.
 

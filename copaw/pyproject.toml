@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/higress-group/hiclaw"
-Repository = "https://github.com/higress-group/hiclaw"
+Homepage = "https://github.com/agentscope-ai/AgentTeams"
+Repository = "https://github.com/agentscope-ai/AgentTeams"
 
 [project.scripts]
 copaw-worker = "copaw_worker.cli:main"

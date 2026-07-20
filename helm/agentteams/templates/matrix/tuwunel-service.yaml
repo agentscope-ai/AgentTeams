@@ -1,0 +1,20 @@
+{{- if eq .Values.matrix.provider "tuwunel" }}
+{{- $comp := dict "root" . "component" "tuwunel" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentteams.tuwunel.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "agentteams.component.selectorLabels" $comp | nindent 4 }}
+  ports:
+    - name: matrix
+      port: {{ .Values.matrix.tuwunel.service.port }}
+      targetPort: matrix
+      protocol: TCP
+{{- end }}

@@ -102,7 +102,7 @@
       "elevatedDefault": "full",
       "heartbeat": {
         "every": "1h",
-        "prompt": "Read ~/HEARTBEAT.md and follow the checklist. Scan ~/hiclaw-fs/shared/tasks/*/meta.json to find tasks with status=assigned. For each, read assigned_to and room_id, then ask the Worker for progress in their Room (the human admin can see the inquiry). If a Worker confirms completion, update meta.json to status=completed with completed_at. Also scan ~/hiclaw-fs/shared/projects/*/meta.json for active projects — for each, read plan.md and check if any in-progress ([~]) tasks have stalled (no recent @mention from the assigned Worker); if stalled, @mention the Worker in the project room asking for a status update. Assess capacity vs pending tasks. Reply HEARTBEAT_OK if nothing needs attention."
+        "prompt": "Read ~/HEARTBEAT.md and follow the checklist. Scan ~/agentteams-fs/shared/tasks/*/meta.json to find tasks with status=assigned. For each, read assigned_to and room_id, then ask the Worker for progress in their Room (the human admin can see the inquiry). If a Worker confirms completion, update meta.json to status=completed with completed_at. Also scan ~/agentteams-fs/shared/projects/*/meta.json for active projects — for each, read plan.md and check if any in-progress ([~]) tasks have stalled (no recent @mention from the assigned Worker); if stalled, @mention the Worker in the project room asking for a status update. Assess capacity vs pending tasks. Reply HEARTBEAT_OK if nothing needs attention."
       }
     }
   },

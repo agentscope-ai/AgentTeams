@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base hiclaw-controller embedded manager manager-copaw worker copaw-worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-copaw worker copaw-worker hermes-worker qwenpaw-worker'
         required: false
         type: string
         default: 'all'
@@ -64,7 +64,7 @@ jobs:
             echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
             # Keep QwenPaw available for explicit workflow_dispatch builds, but
             # defer publishing it as part of the automatic release set.
-            echo "targets=openclaw-base hiclaw-controller embedded manager manager-copaw worker copaw-worker hermes-worker" >> $GITHUB_OUTPUT
+            echo "targets=openclaw-base agentteams-controller embedded manager manager-copaw worker copaw-worker hermes-worker" >> $GITHUB_OUTPUT
           else
             # workflow_dispatch: use inputs
             VERSION="${{ inputs.version }}"
@@ -84,10 +84,10 @@ jobs:
             REPO=${{ env.REPO }} \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
 
-      - name: Build and push hiclaw-controller
-        if: ${{ steps.meta.outputs.targets == 'all' || contains(steps.meta.outputs.targets, 'hiclaw-controller') }}
+      - name: Build and push agentteams-controller
+        if: ${{ steps.meta.outputs.targets == 'all' || contains(steps.meta.outputs.targets, 'agentteams-controller') }}
         run: |
-          make push-hiclaw-controller \
+          make push-agentteams-controller \
             VERSION=${{ steps.meta.outputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
             REPO=${{ env.REPO }} \

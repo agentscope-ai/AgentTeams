@@ -1,8 +1,8 @@
 #!/bin/bash
 # test-24-skills-management.sh - Case 24: Worker skills round-trip via CLI
 #
-# Verifies the `--skills` flag on `hiclaw create worker` and
-# `hiclaw update worker` flows through the controller and is reflected in
+# Verifies the `--skills` flag on `agt create worker` and
+# `agt update worker` flows through the controller and is reflected in
 # the source-of-truth registry at agents/manager/workers-registry.json,
 # and that the corresponding skill files land in agents/<name>/skills/.
 #
@@ -25,7 +25,7 @@ REGISTRY_KEY="${STORAGE_PREFIX}/agents/manager/workers-registry.json"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
-    exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
     remove_worker_container "${TEST_WORKER}"
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
@@ -47,13 +47,13 @@ _worker_skills_in_registry() {
 # ============================================================
 log_section "Create Worker with --skills github-operations"
 
-CREATE_OUTPUT=$(exec_in_agent hiclaw create worker --name "${TEST_WORKER}" \
+CREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" \
     --skills github-operations --no-wait 2>&1)
 CREATE_EXIT=$?
 if [ "${CREATE_EXIT}" -eq 0 ]; then
-    log_pass "hiclaw create worker --skills github-operations accepted"
+    log_pass "agt create worker --skills github-operations accepted"
 else
-    log_fail "hiclaw create failed: ${CREATE_OUTPUT}"
+    log_fail "agt create failed: ${CREATE_OUTPUT}"
     test_teardown "24-skills-management"; test_summary; exit 1
 fi
 
@@ -106,17 +106,17 @@ fi
 PRE_UPDATE_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "$(worker_container_name "${TEST_WORKER}")" 2>/dev/null | head -c 12 || echo "")
 
 # ============================================================
-# Section 3: Update skills via `hiclaw update worker --skills`
+# Section 3: Update skills via `agt update worker --skills`
 # ============================================================
 log_section "Update Skills (github-operations → git-delegation)"
 
-UPDATE_OUTPUT=$(exec_in_agent hiclaw update worker --name "${TEST_WORKER}" \
+UPDATE_OUTPUT=$(exec_in_agent agt update worker --name "${TEST_WORKER}" \
     --skills git-delegation 2>&1)
 UPDATE_EXIT=$?
 if [ "${UPDATE_EXIT}" -eq 0 ]; then
-    log_pass "hiclaw update worker --skills git-delegation accepted"
+    log_pass "agt update worker --skills git-delegation accepted"
 else
-    log_fail "hiclaw update failed (exit=${UPDATE_EXIT}): ${UPDATE_OUTPUT}"
+    log_fail "agt update failed (exit=${UPDATE_EXIT}): ${UPDATE_OUTPUT}"
 fi
 
 # Wait for the controller to re-reconcile and rewrite the registry

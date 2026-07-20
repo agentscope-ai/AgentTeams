@@ -13,7 +13,7 @@
 # STS tokens expire after 1 hour. Credentials are cached and lazy-refreshed.
 #
 # Usage:
-#   source /opt/hiclaw/scripts/lib/oss-credentials.sh
+#   source /opt/agentteams/scripts/lib/oss-credentials.sh
 #   ensure_mc_credentials   # call before any mc command
 
 _OSS_CRED_FILE="/tmp/mc-oss-credentials.env"

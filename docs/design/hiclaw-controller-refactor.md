@@ -396,7 +396,7 @@ Manager Agent 当前承担的所有职责及其去向：
 bash ./skills/worker-management/scripts/create-worker.sh --name alice --model qwen3.5-plus
 
 # 新方式：通过 hiclaw CLI 下发声明式配置
-hiclaw apply worker --name alice --model qwen3.5-plus --skills github-operations
+agt apply worker --name alice --model qwen3.5-plus --skills github-operations
 ```
 
 hiclaw CLI 的双模式支持：
@@ -517,7 +517,7 @@ Team Leader 的 HEARTBEAT.md 检查清单：
 - For tasks with no progress in 30+ minutes, @mention assigned worker in Team Room
 
 ### Step 2: Worker Lifecycle Check
-- Run `hiclaw worker status --team alpha-team` to get all team workers' status
+- Run `agt worker status --team alpha-team` to get all team workers' status
 - For each worker:
   - If has active tasks but container stopped → wake up (ensure-ready)
   - If no active tasks and no cron jobs → mark idle_since if not set
@@ -535,20 +535,20 @@ Team Leader 通过 hiclaw CLI 管理本 Team 内 Worker 的生命周期，contro
 
 ```bash
 # Team Leader 查看本 Team Worker 状态
-hiclaw worker status --team alpha-team
+agt worker status --team alpha-team
 
 # Team Leader 唤醒 Worker（仅限本 Team）
-hiclaw worker wake --name alpha-dev --team alpha-team
+agt worker wake --name alpha-dev --team alpha-team
 
 # Team Leader 休眠 Worker（仅限本 Team）
-hiclaw worker sleep --name alpha-dev --team alpha-team
+agt worker sleep --name alpha-dev --team alpha-team
 
 # Team Leader 创建临时 Worker（受 maxWorkers 限制）
-hiclaw apply worker --name alpha-temp-1 --model qwen3.5-plus \
+agt apply worker --name alpha-temp-1 --model qwen3.5-plus \
   --team alpha-team --ephemeral
 
 # Team Leader 切换 Worker 模型（受 allowedModels 限制）
-hiclaw apply worker --name alpha-dev --model claude-sonnet-4-6
+agt apply worker --name alpha-dev --model claude-sonnet-4-6
 ```
 
 权限隔离设计：
@@ -609,11 +609,11 @@ Team Leader 的 lifecycle-worker skill 脚本（通过 hiclaw CLI 实现）：
 
 | 操作 | CLI 命令 | Controller 行为 |
 |------|---------|----------------|
-| 查看状态 | `hiclaw worker status --team T` | 列出 Team 内所有 Worker 的 phase + containerState |
-| 唤醒 | `hiclaw worker wake --name W --team T` | Backend.Start(W)，设置 phase=Running |
-| 休眠 | `hiclaw worker sleep --name W --team T` | Backend.Stop(W)，设置 phase=Sleeping |
-| 确保就绪 | `hiclaw worker ensure-ready --name W --team T` | 如果 Sleeping 则 Start，等待就绪后返回 |
-| 空闲检查 | `hiclaw worker check-idle --team T` | 返回每个 Worker 的 idle_since 和剩余超时时间 |
+| 查看状态 | `agt worker status --team T` | 列出 Team 内所有 Worker 的 phase + containerState |
+| 唤醒 | `agt worker wake --name W --team T` | Backend.Start(W)，设置 phase=Running |
+| 休眠 | `agt worker sleep --name W --team T` | Backend.Stop(W)，设置 phase=Sleeping |
+| 确保就绪 | `agt worker ensure-ready --name W --team T` | 如果 Sleeping 则 Start，等待就绪后返回 |
+| 空闲检查 | `agt worker check-idle --team T` | 返回每个 Worker 的 idle_since 和剩余超时时间 |
 
 ### 5.4 Quota 执行机制
 
@@ -1265,13 +1265,13 @@ spec:
 
 ```bash
 # 升级单个独立 Worker 的镜像
-hiclaw apply worker --name alice --image hiclaw/worker-agent:v1.2.0
+agt apply worker --name alice --image hiclaw/worker-agent:v1.2.0
 
 # 升级整个 Team（Leader + 所有 Workers）
-hiclaw apply team --name alpha-team --image hiclaw/worker-agent:v1.2.0
+agt apply team --name alpha-team --image hiclaw/worker-agent:v1.2.0
 
 # 升级 Team 中某个特定 Worker
-hiclaw apply worker --name alpha-qa --team alpha-team --image hiclaw/worker-agent:v1.2.0
+agt apply worker --name alpha-qa --team alpha-team --image hiclaw/worker-agent:v1.2.0
 ```
 
 滚动升级流程：
@@ -1474,18 +1474,18 @@ GET    /healthz                          # 健康检查
 
 ```bash
 # 资源管理（已有，扩展 incluster 支持）
-hiclaw apply -f resource.yaml          # 创建/更新资源
-hiclaw apply worker --name alice --model qwen3.5-plus  # 命令式创建
-hiclaw apply team --name alpha-team --image hiclaw/worker-agent:v1.2.0  # 指定镜像
-hiclaw get workers|teams|humans        # 查看资源
-hiclaw delete worker alice             # 删除资源
+agt apply -f resource.yaml          # 创建/更新资源
+agt apply worker --name alice --model qwen3.5-plus  # 命令式创建
+agt apply team --name alpha-team --image hiclaw/worker-agent:v1.2.0  # 指定镜像
+agt get workers|teams|humans        # 查看资源
+agt delete worker alice             # 删除资源
 
 # Runtime 镜像升级（per-worker / per-team）
-hiclaw apply worker --name alice --image hiclaw/worker-agent:v1.2.0
+agt apply worker --name alice --image hiclaw/worker-agent:v1.2.0
   # 升级独立 Worker 的基础镜像（触发滚动替换）
-hiclaw apply team --name alpha-team --image hiclaw/worker-agent:v1.2.0
+agt apply team --name alpha-team --image hiclaw/worker-agent:v1.2.0
   # 升级整个 Team 的基础镜像（Leader + 所有 Workers）
-hiclaw apply worker --name alpha-qa --team alpha-team --image hiclaw/worker-agent:v1.2.0
+agt apply worker --name alpha-qa --team alpha-team --image hiclaw/worker-agent:v1.2.0
   # 升级 Team 中某个特定 Worker 的镜像
 
 # 配置/技能推送（从 OSS system/ 同步到 Worker 工作目录）
@@ -1498,11 +1498,11 @@ hiclaw config push --apply-to-all
   # 更新所有 Worker 和 Team 的配置和技能
 
 # Worker 生命周期管理（Team Leader 也可使用，受权限隔离）
-hiclaw worker status --team alpha-team  # 查看 Team 内 Worker 状态
-hiclaw worker wake --name alice         # 唤醒 Worker
-hiclaw worker sleep --name alice        # 休眠 Worker
-hiclaw worker ensure-ready --name alice # 确保 Worker 就绪
-hiclaw worker check-idle --team alpha-team  # 检查空闲状态
+agt worker status --team alpha-team  # 查看 Team 内 Worker 状态
+agt worker wake --name alice         # 唤醒 Worker
+agt worker sleep --name alice        # 休眠 Worker
+agt worker ensure-ready --name alice # 确保 Worker 就绪
+agt worker check-idle --team alpha-team  # 检查空闲状态
 
 # Debug 相关
 hiclaw debug create --target team/alpha-team  # 创建 DebugWorker
@@ -1511,10 +1511,10 @@ hiclaw debug list                             # 列出所有 DebugWorker
 hiclaw debug delete --name debug-alpha-team   # 删除 DebugWorker
 
 # 状态查看
-hiclaw status                       # 集群整体状态
-hiclaw status workers               # 所有 Worker 状态
-hiclaw status teams                 # 所有 Team 状态
-hiclaw version                      # 各组件版本信息
+agt status                       # 集群整体状态
+agt status workers               # 所有 Worker 状态
+agt status teams                 # 所有 Team 状态
+agt version                      # 各组件版本信息
 ```
 
 ## 10. 实施计划

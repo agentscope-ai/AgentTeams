@@ -38,7 +38,7 @@ FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 # ==========================================================================
 # Stage 1: hiclaw CLI (from controller image)
 # ==========================================================================
-FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ==========================================================================
 # Stage 2: Build the Rust binary with channel-matrix enabled
@@ -150,11 +150,11 @@ RUN mkdir -p /home/openhuman/.openhuman/skills \
  && chown -R openhuman:openhuman /home/openhuman
 
 # Copy HiClaw shared scripts
-COPY shared/lib/ /opt/hiclaw/scripts/lib/
-RUN chmod +x /opt/hiclaw/scripts/lib/*.sh 2>/dev/null || true
+COPY shared/lib/ /opt/agentteams/scripts/lib/
+RUN chmod +x /opt/agentteams/scripts/lib/*.sh 2>/dev/null || true
 
 # Install mc-wrapper as /usr/local/bin/mc (STS credential refresh proxy)
-RUN cp /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc \
+RUN cp /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc \
  && chmod +x /usr/local/bin/mc
 
 # Copy OpenHuman worker entrypoint
@@ -162,10 +162,11 @@ COPY openhuman/scripts/openhuman-worker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/openhuman-worker-entrypoint.sh
 
 # Copy OpenHuman worker agent template (AGENTS.md + skills)
-COPY manager/agent/openhuman-worker-agent/ /opt/hiclaw/agent/openhuman-worker-agent/
+COPY manager/agent/openhuman-worker-agent/ /opt/agentteams/agent/openhuman-worker-agent/
 
-# hiclaw CLI — for worker lifecycle management via controller REST API
-COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+# AgentTeams CLI — for worker lifecycle management via controller REST API
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 # Copy the built binary and upstream license (GPL-3.0 compliance: recipients
 # must be able to identify the license of the included GPL component).

@@ -1,0 +1,52 @@
+{{- if .Values.preflight.llm.enabled }}
+{{- $name := printf "%s-llm-preflight" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- $ctrlTag := include "agentteams.imageTag" (dict "tag" .Values.controller.image.tag "global" .Values.global "root" $) }}
+{{- $hookImage := printf "%s:%s" .Values.controller.image.repository $ctrlTag }}
+{{- $hookPullPolicy := default "IfNotPresent" .Values.controller.image.pullPolicy }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "llm-preflight") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.preflight.llm.activeDeadlineSeconds | default 120 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentteams.component.selectorLabels" (dict "root" . "component" "llm-preflight") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: llm-preflight
+          image: {{ $hookImage | quote }}
+          imagePullPolicy: {{ $hookPullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ $name }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              echo "[agentteams-llm-preflight] probing provider=${AGENTTEAMS_LLM_PROVIDER:-openai-compat} model=${AGENTTEAMS_DEFAULT_MODEL}"
+              agt llm-preflight \
+                --timeout "${AGENTTEAMS_LLM_PREFLIGHT_TIMEOUT_SECONDS}" \
+                --retries "${AGENTTEAMS_LLM_PREFLIGHT_RETRIES}" \
+                --strict="${AGENTTEAMS_LLM_PREFLIGHT_STRICT}"
+          {{- with .Values.preflight.llm.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

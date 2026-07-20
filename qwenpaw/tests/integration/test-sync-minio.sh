@@ -36,9 +36,9 @@ qwenpaw_e2e_wait_worker_http /api/version 240
 
 qwenpaw_e2e_exec sh -lc '
     grep -q "from-storage" "$HOME/remote-start.txt"
-    test -f "/root/hiclaw-fs/shared/team-note.md"
+    test -f "/root/agentteams-fs/shared/team-note.md"
     test -L "$HOME/.qwenpaw/workspaces/default/shared"
-    python -c '"'"'from pathlib import Path; import os; p = Path(os.environ["HOME"]) / ".qwenpaw/workspaces/default/shared"; assert p.resolve() == Path("/root/hiclaw-fs/shared").resolve()'"'"'
+    python -c '"'"'from pathlib import Path; import os; p = Path(os.environ["HOME"]) / ".qwenpaw/workspaces/default/shared"; assert p.resolve() == Path("/root/agentteams-fs/shared").resolve()'"'"'
     test ! -e "$HOME/credentials/bootstrap-token"
 '
 
@@ -56,7 +56,7 @@ qwenpaw_e2e_exec sh -lc '
     printf "{}\n" > "$HOME/.qwenpaw/workspaces/default/tool_result/result.json"
     printf "file\n" > "$HOME/.qwenpaw/workspaces/default/file_store/a.txt"
     printf "workspace shared\n" > "$HOME/.qwenpaw/workspaces/default/shared/tasks/t-2/workspace/result.md"
-    grep -q "workspace shared" "/root/hiclaw-fs/shared/tasks/t-2/workspace/result.md"
+    grep -q "workspace shared" "/root/agentteams-fs/shared/tasks/t-2/workspace/result.md"
     printf "team shared\n" > "$HOME/shared/tasks/t-1/result.md"
 '
 

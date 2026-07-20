@@ -7,8 +7,8 @@ description: Use when you need to push files to MinIO for Workers to access, pul
 
 ## Gotchas
 
-- **Local `/root/hiclaw-fs/` is NOT real-time synced** — you must explicitly pull from MinIO
-- **After writing to `/root/hiclaw-fs/`, immediately push to MinIO** + notify Worker to file-sync via @mention
+- **Local `/root/agentteams-fs/` is NOT real-time synced** — you must explicitly pull from MinIO
+- **After writing to `/root/agentteams-fs/`, immediately push to MinIO** + notify Worker to file-sync via @mention
 - **When Worker says they pushed files, pull before reading** — never assume local copy is current
 - **`mc mirror` uses `--overwrite`; single file uses `mc cp`**
 

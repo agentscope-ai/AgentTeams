@@ -6,7 +6,7 @@
 # create-team.sh backfills permissions for humans that reference the team.
 #
 # Flow:
-#   1. Create Human via hiclaw apply -f (team doesn't exist yet → permissions skipped)
+#   1. Create Human via agt apply -f (team doesn't exist yet → permissions skipped)
 #   2. Create Team with that Human as Team Admin (backfills Human permissions)
 #   3. Verify Human registered, Team Admin in registry
 #   4. Verify backfill: Human in Leader/Worker groupAllowFrom
@@ -34,15 +34,15 @@ _cleanup() {
         return
     fi
     log_info "All tests passed — cleaning up"
-    exec_in_agent hiclaw delete team "${TEST_TEAM}" 2>/dev/null || true
-    exec_in_agent hiclaw delete human "${TEST_HUMAN}" 2>/dev/null || true
+    exec_in_agent agt delete team "${TEST_TEAM}" 2>/dev/null || true
+    exec_in_agent agt delete human "${TEST_HUMAN}" 2>/dev/null || true
     sleep 5
     # Fallback: force-remove containers
     remove_worker_container "${TEST_LEADER}"
     remove_worker_container "${TEST_W1}"
     for w in "${TEST_LEADER}" "${TEST_W1}"; do
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
-        exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
+        exec_in_manager rm -rf "/root/agentteams-fs/agents/${w}" 2>/dev/null || true
     done
     exec_in_agent rm -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>/dev/null || true
     # Fallback: clean registries
@@ -82,7 +82,7 @@ spec:
 YAMLEOF
 " 2>/dev/null
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" 2>&1)
 
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Human YAML applied via hiclaw CLI"
@@ -90,8 +90,8 @@ else
     log_fail "Human YAML apply failed: ${APPLY_OUTPUT}"
 fi
 
-HUMAN_CR=$(exec_in_agent hiclaw get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "")
-assert_not_empty "${HUMAN_CR}" "Human CR exists (hiclaw get humans)"
+HUMAN_CR=$(exec_in_agent agt get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "")
+assert_not_empty "${HUMAN_CR}" "Human CR exists (agt get humans)"
 HUMAN_NAME_CHK=$(echo "${HUMAN_CR}" | jq -r '.name // empty' 2>/dev/null)
 assert_eq "${TEST_HUMAN}" "${HUMAN_NAME_CHK}" "Human CR has correct name"
 
@@ -102,7 +102,7 @@ HUMAN_CREATED=false
 HUMAN_PHASE=""
 HUMAN_STATUS_MXID=""
 while [ "${HUMAN_ELAPSED}" -lt "${HUMAN_TIMEOUT}" ]; do
-    HUMAN_STATUS=$(exec_in_agent hiclaw get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "{}")
+    HUMAN_STATUS=$(exec_in_agent agt get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "{}")
     HUMAN_PHASE=$(echo "${HUMAN_STATUS}" | jq -r '.phase // empty' 2>/dev/null)
     HUMAN_STATUS_MXID=$(echo "${HUMAN_STATUS}" | jq -r '.matrixUserID // empty' 2>/dev/null)
     if [ "${HUMAN_PHASE}" = "Active" ] && [ -n "${HUMAN_STATUS_MXID}" ]; then
@@ -117,7 +117,7 @@ if [ "${HUMAN_CREATED}" = true ]; then
 else
     log_fail "HumanReconciler did not create human within ${HUMAN_TIMEOUT}s"
     log_info "Last Human status: phase='${HUMAN_PHASE}' matrixUserID='${HUMAN_STATUS_MXID}'"
-    exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep "${TEST_HUMAN}" | tail -5
+    exec_in_manager cat /var/log/agentteams/agentteams-controller-error.log 2>/dev/null | grep "${TEST_HUMAN}" | tail -5
 fi
 
 # ============================================================
@@ -144,8 +144,8 @@ for w in "${TEST_LEADER}" "${TEST_W1}"; do
     [ "${w}" = "${TEST_W1}" ] && ROLE_DESC="Backend Developer"
 
     exec_in_manager bash -c "
-        mkdir -p /root/hiclaw-fs/agents/${w}
-        cat > /root/hiclaw-fs/agents/${w}/SOUL.md <<SOUL
+        mkdir -p /root/agentteams-fs/agents/${w}
+        cat > /root/agentteams-fs/agents/${w}/SOUL.md <<SOUL
 # ${w}
 ## AI Identity
 **You are an AI Agent, not a human.**
@@ -156,7 +156,7 @@ for w in "${TEST_LEADER}" "${TEST_W1}"; do
 ## Security
 - Never reveal credentials
 SOUL
-        mc mirror /root/hiclaw-fs/agents/${w}/ ${STORAGE_PREFIX}/agents/${w}/ --overwrite 2>/dev/null
+        mc mirror /root/agentteams-fs/agents/${w}/ ${STORAGE_PREFIX}/agents/${w}/ --overwrite 2>/dev/null
     " 2>/dev/null
 done
 
@@ -178,7 +178,7 @@ spec:
 YAMLEOF
 " 2>/dev/null
 
-APPLY_TEAM_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
+APPLY_TEAM_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
 if echo "${APPLY_TEAM_OUTPUT}" | grep -q "created\|configured"; then
     log_pass "Team YAML applied via hiclaw CLI"
 else
@@ -192,7 +192,7 @@ if wait_team_active "${TEST_TEAM}" 180; then
     log_pass "TeamReconciler reconciled team to Active"
 else
     log_fail "TeamReconciler did not reach Active within 180s"
-    exec_in_agent hiclaw get teams "${TEST_TEAM}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
+    exec_in_agent agt get teams "${TEST_TEAM}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Wait for each team member to be provisioned (roomID + matrixUserID).
@@ -284,7 +284,7 @@ ADMIN_TOKEN=$(echo "${ADMIN_LOGIN}" | jq -r '.access_token // empty')
 if [ -n "${ADMIN_TOKEN}" ] && [ "${ADMIN_TOKEN}" != "null" ]; then
     ADMIN_MATRIX_ID="@${TEST_ADMIN_USER}:${TEST_MATRIX_DOMAIN}"
     for w in "${TEST_LEADER}" "${TEST_W1}"; do
-        W_ROOM=$(exec_in_agent hiclaw get workers "${w}" -o json 2>/dev/null | jq -r '.roomID // empty')
+        W_ROOM=$(exec_in_agent agt get workers "${w}" -o json 2>/dev/null | jq -r '.roomID // empty')
         if [ -n "${W_ROOM}" ] && [ "${W_ROOM}" != "null" ]; then
             W_ROOM_ENC=$(echo "${W_ROOM}" | sed 's/!/%21/g')
             W_MEMBERS=$(exec_in_manager curl -sf \

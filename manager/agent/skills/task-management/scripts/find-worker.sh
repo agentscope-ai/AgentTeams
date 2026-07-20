@@ -5,7 +5,7 @@
 #   - ~/workers-registry.json   (skills, runtime, deployment, room_id)
 #   - ~/state.json              (active tasks per worker)
 #   - ~/worker-lifecycle.json   (container status, idle time)
-#   - /root/hiclaw-fs/agents/<name>/SOUL.md  (role description)
+#   - /root/agentteams-fs/agents/<name>/SOUL.md  (role description)
 #
 # Usage:
 #   find-worker.sh                          # list all workers with availability
@@ -21,7 +21,7 @@ set -euo pipefail
 REGISTRY_FILE="${HOME}/workers-registry.json"
 STATE_FILE="${HOME}/state.json"
 LIFECYCLE_FILE="${HOME}/worker-lifecycle.json"
-AGENTS_DIR="/root/hiclaw-fs/agents"
+AGENTS_DIR="/root/agentteams-fs/agents"
 
 # ─── Parse arguments ──────────────────────────────────────────────────────────
 

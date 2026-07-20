@@ -13,14 +13,14 @@
 #
 # Build args:
 #   HIGRESS_REGISTRY        - base image registry (default: cn-hangzhou)
-#   AGENTTEAMS_CONTROLLER_IMAGE - pre-built controller image (default: hiclaw/hiclaw-controller:latest)
+#   AGENTTEAMS_CONTROLLER_IMAGE - pre-built controller image (default: agentteams/agentteams-controller:latest)
 #   COPAW_VERSION           - CoPaw version to install from PyPI (default: 1.0.0)
 #   PIP_INDEX_URL           - PyPI mirror (default: official pypi.org)
 #   APT_MIRROR              - Debian APT mirror (default: empty; set to mirrors.aliyun.com for China)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG AGENTTEAMS_CONTROLLER_IMAGE=hiclaw/hiclaw-controller:latest
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: Tuwunel Matrix Server ============
 FROM ${HIGRESS_REGISTRY}/higress/tuwunel:20260216 AS tuwunel
@@ -68,18 +68,19 @@ RUN npm config set registry ${NPM_REGISTRY} && \
 
 # ---- Stable binaries from build stages (~355MB, rarely change) ----
 
-RUN mkdir -p /var/log/hiclaw
+RUN mkdir -p /var/log/agentteams
 
 COPY --from=tuwunel /usr/bin/tuwunel /usr/local/bin/tuwunel
 COPY --from=minio /usr/bin/minio /usr/local/bin/minio
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc
 COPY --from=element-web /app /opt/element-web
 
-# agentteams-controller + hiclaw CLI + kube-apiserver (from pre-built image)
-COPY --from=agentteams-controller /usr/local/bin/hiclaw-controller /usr/local/bin/hiclaw-controller
-COPY --from=agentteams-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+# agentteams-controller + AgentTeams CLI + kube-apiserver (from pre-built image)
+COPY --from=agentteams-controller /usr/local/bin/agentteams-controller /usr/local/bin/agentteams-controller
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 COPY --from=agentteams-controller /usr/local/bin/kube-apiserver /usr/local/bin/kube-apiserver
-COPY --from=agentteams-controller /opt/hiclaw/config/crd/ /opt/hiclaw/config/crd/
+COPY --from=agentteams-controller /opt/agentteams/config/crd/ /opt/agentteams/config/crd/
 
 # zip/unzip needed by hiclaw CLI for --zip package handling
 RUN apt-get update -qq && apt-get install -y -qq zip unzip > /dev/null 2>&1 && rm -rf /var/lib/apt/lists/*
@@ -109,29 +110,29 @@ RUN if [ -d /tmp/copaw-delta ] && [ "$(ls -A /tmp/copaw-delta 2>/dev/null)" ]; t
 ENV OPENCLAW_CONFIG_PATH="/root/manager-workspace/openclaw.json"
 
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY configs/ /opt/hiclaw/configs/
+COPY configs/ /opt/agentteams/configs/
 
 # ---- Shared lib (low-frequency changes, ~8KB) ----
 
-COPY --from=shared . /opt/hiclaw/scripts/lib/
+COPY --from=shared . /opt/agentteams/scripts/lib/
 
 # ---- Scripts (high-frequency changes, ~168KB) ----
 
-COPY --chmod=755 scripts/ /opt/hiclaw/scripts/
-RUN cp /opt/hiclaw/scripts/systemctl-shim.sh /usr/local/bin/systemctl
+COPY --chmod=755 scripts/ /opt/agentteams/scripts/
+RUN cp /opt/agentteams/scripts/systemctl-shim.sh /usr/local/bin/systemctl
 
 # ---- Agent definitions (highest-frequency changes, ~740KB) ----
 
-COPY agent/ /opt/hiclaw/agent/
+COPY agent/ /opt/agentteams/agent/
 
 ARG BUILTIN_VERSION=latest
-RUN echo "${BUILTIN_VERSION}" > /opt/hiclaw/agent/.builtin-version \
-    && find /opt/hiclaw/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true \
-    && find /opt/hiclaw/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true \
-    && find /opt/hiclaw/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+RUN echo "${BUILTIN_VERSION}" > /opt/agentteams/agent/.builtin-version \
+    && find /opt/agentteams/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true \
+    && find /opt/agentteams/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true \
+    && find /opt/agentteams/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 
 # ---- CoPaw worker source (for runtime access) ----
-COPY --from=copaw-worker src/copaw_worker/ /opt/hiclaw/copaw/src/copaw_worker/
+COPY --from=copaw-worker src/copaw_worker/ /opt/agentteams/copaw/src/copaw_worker/
 
 # ---- Ports ----
 # 8080: Higress Gateway (unified entry point)

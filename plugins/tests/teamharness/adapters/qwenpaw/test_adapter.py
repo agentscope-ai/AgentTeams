@@ -482,7 +482,7 @@ def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeyp
     monkeypatch.setitem(sys.modules, "qwenpaw.config", types.ModuleType("qwenpaw.config"))
     monkeypatch.setitem(sys.modules, "qwenpaw.config.config", config_module)
     monkeypatch.setenv("TEAMHARNESS_SHARED_DIR", str(shared_dir))
-    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", "/root/hiclaw-fs/shared/runtime/members/worker-a/runtime.yaml")
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", "/root/agentteams-fs/shared/runtime/members/worker-a/runtime.yaml")
     monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.local")
     monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "matrix-token")
     monkeypatch.setenv("AGENTTEAMS_WORKER_ROLE", "worker")
@@ -499,7 +499,7 @@ def test_mcp_client_receives_matrix_env_for_message_tool(tmp_path: Path, monkeyp
     assert client.command == sys.executable
     assert client.env["TEAMHARNESS_SHARED_DIR"] == str(shared_dir)
     assert client.env["LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS"] == "false"
-    assert client.env["TEAMHARNESS_RUNTIME_CONFIG"] == "/root/hiclaw-fs/shared/runtime/members/worker-a/runtime.yaml"
+    assert client.env["TEAMHARNESS_RUNTIME_CONFIG"] == "/root/agentteams-fs/shared/runtime/members/worker-a/runtime.yaml"
     assert client.env["AGENTTEAMS_MATRIX_URL"] == "http://matrix.local"
     assert client.env["AGENTTEAMS_WORKER_MATRIX_TOKEN"] == "matrix-token"
     assert client.env["AGENTTEAMS_WORKER_ROLE"] == "worker"

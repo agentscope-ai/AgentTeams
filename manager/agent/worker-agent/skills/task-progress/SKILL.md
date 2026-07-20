@@ -16,7 +16,7 @@ description: Use when executing a task (progress logging, plan updates), when re
 After every meaningful action (completing a sub-step, hitting a problem, making a decision), append to:
 
 ```
-/root/hiclaw-fs/shared/tasks/{task-id}/progress/YYYY-MM-DD.md
+/root/agentteams-fs/shared/tasks/{task-id}/progress/YYYY-MM-DD.md
 ```
 
 Format (append, don't overwrite):
@@ -32,7 +32,7 @@ Format (append, don't overwrite):
 
 Push after each update:
 ```bash
-mc cp /root/hiclaw-fs/shared/tasks/{task-id}/progress/YYYY-MM-DD.md \
+mc cp /root/agentteams-fs/shared/tasks/{task-id}/progress/YYYY-MM-DD.md \
       ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/progress/YYYY-MM-DD.md
 ```
 
@@ -48,7 +48,7 @@ File: `~/task-history.json`
       "task_id": "task-20260221-100000",
       "brief": "One-line description of the task",
       "status": "in_progress",
-      "task_dir": "/root/hiclaw-fs/shared/tasks/task-20260221-100000",
+      "task_dir": "/root/agentteams-fs/shared/tasks/task-20260221-100000",
       "last_worked_on": "2026-02-21T15:00:00Z"
     }
   ]

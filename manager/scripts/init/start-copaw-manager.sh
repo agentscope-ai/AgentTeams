@@ -5,7 +5,7 @@
 # This script converts an OpenClaw-style workspace to a CoPaw-style workspace
 # and then launches the CoPaw application.
 
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Path definitions
@@ -46,7 +46,7 @@ if [ -f "${COPAW_WORKING_DIR}/config.json" ]; then
 fi
 
 log "Bridging openclaw.json -> CoPaw config (manager)..."
-PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}" \
+PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}" \
     python3 -m copaw_worker.bridge \
         --profile manager \
         --openclaw-json "${OPENCLAW_JSON}" \
@@ -211,7 +211,7 @@ fi
         _curr_hash=$(md5sum "${OPENCLAW_JSON}" 2>/dev/null | awk '{print $1}')
         if [ -n "${_curr_hash}" ] && [ "${_curr_hash}" != "${_prev_hash}" ]; then
             log "openclaw.json changed, re-bridging..."
-            _bridge_out=$(PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}" \
+            _bridge_out=$(PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}" \
                 python3 -m copaw_worker.bridge \
                     --profile manager \
                     --openclaw-json "${OPENCLAW_JSON}" \
@@ -237,7 +237,7 @@ COPAW_LOG_LEVEL="${COPAW_LOG_LEVEL:-info}"
 export COPAW_LOG_LEVEL
 
 # Set PYTHONPATH to include copaw_worker module
-export PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}"
+export PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}"
 
 # Use uvicorn to run CoPaw FastAPI app (enables AgentConfigWatcher for hot-reload)
 # The wrapper installs AgentTeams-owned tools before CoPaw creates any agents.

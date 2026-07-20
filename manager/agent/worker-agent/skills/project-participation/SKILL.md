@@ -16,7 +16,7 @@ description: Use when you are invited to a Project Room or assigned a task withi
 When invited to a Project Room, the project plan is at:
 
 ```
-/root/hiclaw-fs/shared/projects/{project-id}/plan.md
+/root/agentteams-fs/shared/projects/{project-id}/plan.md
 ```
 
 Sync first:

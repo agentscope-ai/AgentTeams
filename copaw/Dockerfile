@@ -23,7 +23,7 @@ ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 # ============ Stage 1: mc (MinIO Client) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
-# ============ Stage 2: hiclaw CLI (from controller image) ============
+# ============ Stage 2: AgentTeams CLI (from controller image) ============
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
@@ -57,8 +57,9 @@ RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
 # mc (MinIO Client) — real binary; wrapper installed after shared libs are copied
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
-# hiclaw CLI — for worker/team/human management via controller REST API
-COPY --from=agentteams-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+# AgentTeams CLI — for worker/team/human management via controller REST API
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
@@ -155,18 +156,18 @@ RUN printf '#!/bin/bash\nexec python3 "/root/.copaw-worker/${AGENTTEAMS_WORKER_N
     > /usr/local/bin/copaw-sync && chmod +x /usr/local/bin/copaw-sync
 
 # Entrypoint script
-COPY --chmod=755 scripts/copaw-worker-entrypoint.sh /opt/hiclaw/scripts/copaw-worker-entrypoint.sh
+COPY --chmod=755 scripts/copaw-worker-entrypoint.sh /opt/agentteams/scripts/copaw-worker-entrypoint.sh
 
-# Shared environment bootstrap and credential management (hiclaw-env.sh, oss-credentials.sh)
-COPY --from=shared . /opt/hiclaw/scripts/lib/
+# Shared environment bootstrap and credential management (agentteams-env.sh, oss-credentials.sh)
+COPY --from=shared . /opt/agentteams/scripts/lib/
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation (no-op in local mode)
-RUN chmod +x /opt/hiclaw/scripts/lib/mc-wrapper.sh && \
-    ln -sf /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc
+RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
+    ln -sf /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc
 
 # Create workspace directories for both modes
 RUN mkdir -p /root/.copaw-worker
 
 WORKDIR /root/.copaw-worker
 
-ENTRYPOINT ["/opt/hiclaw/scripts/copaw-worker-entrypoint.sh"]
+ENTRYPOINT ["/opt/agentteams/scripts/copaw-worker-entrypoint.sh"]

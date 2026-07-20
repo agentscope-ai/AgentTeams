@@ -59,8 +59,10 @@ fi
 container_env=$("${DOCKER_CMD}" exec "${CONTAINER}" printenv 2>/dev/null) || container_env=""
 PORT_GATEWAY=$(echo "$container_env" | grep ^AGENTTEAMS_PORT_GATEWAY= | cut -d= -f2-)
 PORT_CONSOLE=$(echo "$container_env" | grep ^AGENTTEAMS_PORT_CONSOLE= | cut -d= -f2-)
+PORT_DASHBOARD=$(echo "$container_env" | grep ^AGENTTEAMS_PORT_DASHBOARD= | cut -d= -f2-)
 PORT_GATEWAY="${PORT_GATEWAY:-18080}"
 PORT_CONSOLE="${PORT_CONSOLE:-18001}"
+PORT_DASHBOARD="${PORT_DASHBOARD:-13000}"
 
 # ---------- Result tracking ----------
 
@@ -161,6 +163,21 @@ else
     else
         check_fail "OpenClaw Agent healthy (output: ${agent_output:-<empty>})"
     fi
+fi
+
+# 7. Dashboard accessible (if enabled)
+DASHBOARD_ENABLED=$(echo "$container_env" | grep ^AGENTTEAMS_DASHBOARD= | cut -d= -f2-)
+DASHBOARD_ENABLED="${DASHBOARD_ENABLED:-1}"
+if [ "${DASHBOARD_ENABLED}" = "1" ]; then
+    dash_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+        "http://127.0.0.1:${PORT_DASHBOARD}/" 2>/dev/null) || dash_status="000"
+    if [ "${dash_status}" = "200" ]; then
+        check_pass "Dashboard accessible on port ${PORT_DASHBOARD}"
+    else
+        check_fail "Dashboard accessible on port ${PORT_DASHBOARD} (HTTP ${dash_status})"
+    fi
+else
+    echo "  [SKIP] Dashboard disabled"
 fi
 
 # ---------- Summary ----------

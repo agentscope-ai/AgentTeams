@@ -34,6 +34,7 @@ OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
+DASHBOARD_CONTEXT    ?= ./agentteams-dashboard/
 
 MANAGER_TAG        ?= $(MANAGER_IMAGE):$(VERSION)
 MANAGER_COPAW_TAG  ?= $(MANAGER_COPAW_IMAGE):$(VERSION)
@@ -133,6 +134,7 @@ LINES          ?= 50
         buildx-setup \
         test test-quick test-installed test-embedded \
         install install-embedded uninstall uninstall-embedded replay replay-log \
+        install-dashboard update-dashboard uninstall-dashboard \
         verify wait-ready wait-ready-embedded \
         generate sync-crds check-crd-sync \
         status logs \
@@ -195,6 +197,10 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 		-t $(LOCAL_EMBEDDED) \
 		-t $(LOCAL_EMBEDDED_LEGACY) \
 		.
+
+build-dashboard: ## Build agentteams-dashboard image
+	@echo "==> Building agentteams-dashboard image"
+	$(MAKE) -C $(DASHBOARD_CONTEXT) build
 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
@@ -361,6 +367,18 @@ else
 		--push \
 		-f hiclaw-controller/Dockerfile.embedded .
 endif
+
+# --- agentteams-dashboard standalone ---
+.PHONY: install-dashboard update-dashboard uninstall-dashboard
+
+install-dashboard: build-dashboard ## Install agentteams-dashboard standalone
+	@bash $(DASHBOARD_CONTEXT)/install/agentteams-dashboard.sh
+
+update-dashboard: ## Update agentteams-dashboard (pull latest & recreate)
+	@bash $(DASHBOARD_CONTEXT)/install/agentteams-dashboard.sh update
+
+uninstall-dashboard: ## Uninstall agentteams-dashboard
+	@bash $(DASHBOARD_CONTEXT)/install/agentteams-dashboard.sh uninstall
 
 push-manager: push-hiclaw-controller buildx-setup ## Build + push multi-arch Manager image (OpenClaw)
 	@echo "==> Building + pushing multi-arch Manager: $(MANAGER_TAG) [$(MULTIARCH_PLATFORMS)]"

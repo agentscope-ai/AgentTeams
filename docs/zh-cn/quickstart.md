@@ -1,6 +1,6 @@
-# HiClaw 快速入门指南
+# AgentTeams 快速入门指南
 
-本指南带你完成 HiClaw 的安装、创建第一个 Agent 团队，并完成第一个协作任务。每个步骤都包含验证检查点，确认一切正常运行。
+本指南带你完成 AgentTeams 的安装、创建第一个 Agent 团队，并完成第一个协作任务。每个步骤都包含验证检查点，确认一切正常运行。
 
 ## 前置条件
 
@@ -17,7 +17,7 @@
 **方式 A：一键安装**
 
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 按照交互提示配置：
@@ -31,12 +31,12 @@ bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 ```bash
 # 最简安装 —— 只需 LLM Key，其余全部使用默认值
-HICLAW_LLM_API_KEY="sk-xxx" make install
+AGENTTEAMS_LLM_API_KEY="sk-xxx" make install
 ```
 
-此命令会在本地构建镜像、挂载容器运行时 socket（用于直接创建 Worker），并将配置保存到 `./hiclaw-manager.env`。
+此命令会在本地构建镜像、挂载容器运行时 socket（用于直接创建 Worker），并将配置保存到 `./agentteams-manager.env`。
 
-两种方式均支持通过环境变量覆盖所有配置项，完整列表见 `install/hiclaw-install.sh` 文件头部注释。
+两种方式均支持通过环境变量覆盖所有配置项，完整列表见 `install/agentteams-install.sh` 文件头部注释。
 
 ### 1.1a 多容器架构（v1.1.0+ 嵌入式安装）
 
@@ -44,34 +44,34 @@ HICLAW_LLM_API_KEY="sk-xxx" make install
 
 | 容器 | 职责 |
 |------|------|
-| **`hiclaw-controller`** | 内嵌 Higress、Tuwunel、MinIO、Element Web 与 Go controller（REST API 在容器网络内 **8090** 端口）。 |
-| **`hiclaw-manager`** | 仅运行 Manager Agent（默认 OpenClaw；若安装时选择 `HICLAW_MANAGER_RUNTIME=copaw` 则为 QwenPaw Manager 镜像）。 |
+| **`agentteams-controller`** | 内嵌 Higress、Tuwunel、MinIO、Element Web 与 Go controller（REST API 在容器网络内 **8090** 端口）。 |
+| **`agentteams-manager`** | 仅运行 Manager Agent（默认 OpenClaw；若安装时选择 `AGENTTEAMS_MANAGER_RUNTIME=copaw` 则为 QwenPaw Manager 镜像）。 |
 
-创建 Worker 后会出现 `hiclaw-worker-*`、`hiclaw-copaw-worker-*`、`hiclaw-hermes-worker-*` 等容器。
+创建 Worker 后会出现 `agentteams-worker-*`、`agentteams-copaw-worker-*`、`agentteams-hermes-worker-*` 等容器。
 
-**声明式 CLI（无需在 IM 里打字）：** `hiclaw` 在 **`hiclaw-controller`** 与 **`hiclaw-manager`** 内均可用。宿主机上快速示例：
+**声明式 CLI（无需在 IM 里打字）：** `agt` 在 **`agentteams-controller`** 与 **`agentteams-manager`** 内均可用。宿主机上快速示例：
 
 ```bash
-docker exec hiclaw-controller hiclaw create worker --name alice --model qwen3.5-plus
-docker exec hiclaw-controller hiclaw get workers
+docker exec agentteams-controller agt create worker --name alice --model qwen3.5-plus
+docker exec agentteams-controller agt get workers
 ```
 
-YAML 批量管理请使用 `install/hiclaw-apply.sh`（将文件拷入 `hiclaw-manager` 后执行 `hiclaw apply -f`）。详见 [Declarative Resource Management](../declarative-resource-management.md)。
+YAML 批量管理请使用 `install/agentteams-apply.sh`（将文件拷入 `agentteams-manager` 后执行 `agt apply -f`）。详见 [Declarative Resource Management](../declarative-resource-management.md)。
 
 ### 1.2 登录 Element Web
 
-在浏览器中打开 http://127.0.0.1:18088（直接访问端口）。如果已将域名添加到 `/etc/hosts`，也可通过网关访问 http://matrix-client-local.hiclaw.io:18080。
+在浏览器中打开 http://127.0.0.1:18088（直接访问端口）。如果已将域名添加到 `/etc/hosts`，也可通过网关访问 http://matrix-client-local.agentteams.io:18080。
 
 使用管理员凭据登录。
 
 ### 验证清单
 
-- [ ] **`hiclaw-controller`** 正在运行：`docker ps | grep hiclaw-controller`
-- [ ] **`hiclaw-manager`** 正在运行：`docker ps | grep hiclaw-manager`
+- [ ] **`agentteams-controller`** 正在运行：`docker ps | grep agentteams-controller`
+- [ ] **`agentteams-manager`** 正在运行：`docker ps | grep agentteams-manager`
 - [ ] 浏览器可访问 Element Web：http://127.0.0.1:18088
 - [ ] 使用管理员凭据登录成功
-- [ ] Higress 控制台：http://localhost:18001（网关默认映射到宿主机 **18080**；Matrix / Element 的 `*-local.hiclaw.io` 经该网关访问）
-- [ ] MinIO 在 **controller 容器内**可访问（嵌入式安装默认**不**把 MinIO 控制台端口发布到宿主机）：`docker exec hiclaw-controller curl -sf http://127.0.0.1:9000/minio/health/live`
+- [ ] Higress 控制台：http://localhost:18001（网关默认映射到宿主机 **18080**；Matrix / Element 的 `*-local.agentteams.io` 经该网关访问）
+- [ ] MinIO 在 **controller 容器内**可访问（嵌入式安装默认**不**把 MinIO 控制台端口发布到宿主机）：`docker exec agentteams-controller curl -sf http://127.0.0.1:9000/minio/health/live`
 - [ ] （仅 OpenClaw Manager）OpenClaw 控制 UI：http://127.0.0.1:18888
 
 ---
@@ -119,12 +119,12 @@ Manager Agent 将会：
 如果 Manager 没有容器运行时 socket 访问权限，它会回复一条 `docker run` 命令。将其复制到目标主机上运行：
 
 ```bash
-docker run -d --name hiclaw-worker-alice \
-  -e HICLAW_WORKER_NAME=alice \
-  -e HICLAW_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
-  -e HICLAW_FS_ACCESS_KEY=<ACCESS_KEY> \
-  -e HICLAW_FS_SECRET_KEY=<SECRET_KEY> \
-  hiclaw/worker-agent:latest
+docker run -d --name agentteams-worker-alice \
+  -e AGENTTEAMS_WORKER_NAME=alice \
+  -e AGENTTEAMS_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
+  -e AGENTTEAMS_FS_ACCESS_KEY=<ACCESS_KEY> \
+  -e AGENTTEAMS_FS_SECRET_KEY=<SECRET_KEY> \
+  agentteams/worker-agent:latest
 ```
 
 Manager 的回复中会提供所有具体参数值。
@@ -134,7 +134,7 @@ Manager 的回复中会提供所有具体参数值。
 - [ ] Alice 的房间出现在 Element Web 中（3 名成员：你、manager、alice）
 - [ ] Higress 控制台显示 `worker-alice` Consumer（http://localhost:18001）
 - [ ] MinIO 中存在 `agents/alice/SOUL.md` 文件（可通过 MinIO 控制台或 `mc ls` 查看）
-- [ ] Worker 容器正在运行：`docker ps | grep hiclaw-worker-alice`
+- [ ] Worker 容器正在运行：`docker ps | grep agentteams-worker-alice`
 
 ---
 
@@ -316,7 +316,7 @@ Alice 使用 `mcporter` 调用 Higress 托管的 GitHub MCP Server。MCP Server 
 
 ## 恭喜！
 
-你已成功完成 HiClaw 的全部验证步骤。你的 Agent 团队已完全就绪，具备以下能力：
+你已成功完成 AgentTeams 的全部验证步骤。你的 Agent 团队已完全就绪，具备以下能力：
 
 - 基于 IM 的通信（Matrix 协议）
 - 人工监督（Human-in-the-Loop）
@@ -329,10 +329,10 @@ Alice 使用 `mcporter` 调用 Higress 托管的 GitHub MCP Server。MCP Server 
 
 ## 卸载
 
-彻底移除 HiClaw 及其数据：
+彻底移除 AgentTeams 及其数据：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.sh) uninstall
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
 
-与 `install/hiclaw-install.sh uninstall` 行为一致：停止并删除 **`hiclaw-manager`**、所有 **`hiclaw-worker-*`**（及其他 Worker）容器、**`hiclaw-controller`**（内嵌 Higress / Tuwunel / MinIO / Element Web）、可选 **`hiclaw-docker-proxy`**、**`hiclaw-data`** 数据卷、**`hiclaw-manager.env`**、工作空间目录、**`hiclaw-net`** 网络及安装日志。
+与 `install/agentteams-install.sh uninstall` 行为一致：停止并删除 **`agentteams-manager`**、所有 **`agentteams-worker-*`**（及其他 Worker）容器、**`agentteams-controller`**（内嵌 Higress / Tuwunel / MinIO / Element Web）、可选 **`hiclaw-docker-proxy`**、**`agentteams-data`** 数据卷、**`agentteams-manager.env`**、工作空间目录、**`agentteams-net`** 网络及安装日志。

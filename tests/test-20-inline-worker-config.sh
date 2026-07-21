@@ -3,7 +3,7 @@
 #
 # End-to-end test covering inline config fields (no ZIP package):
 #   1. Create a Worker YAML with spec.soul and spec.agents inline
-#   2. hiclaw apply -f uploads YAML to MinIO
+#   2. agt apply -f uploads YAML to MinIO
 #   3. Controller reconcile: mc mirror → fsnotify → kine → WorkerReconciler
 #   4. WriteInlineConfigs generates SOUL.md + AGENTS.md
 #   5. create-worker.sh runs: Matrix account + Room + container
@@ -27,11 +27,11 @@ _cleanup() {
     fi
     log_info "All tests passed — cleaning up test workers"
     for w in "${TEST_WORKER}" "${TEST_WORKER_OVERRIDE}"; do
-        exec_in_agent hiclaw delete worker "${w}" 2>/dev/null || true
+        exec_in_agent agt delete worker "${w}" 2>/dev/null || true
         sleep 2
         remove_worker_container "${w}"
         exec_in_agent rm -rf "/tmp/agentteams-test-${w}" 2>/dev/null || true
-        exec_in_manager rm -rf "/root/hiclaw-fs/agents/${w}" 2>/dev/null || true
+        exec_in_manager rm -rf "/root/agentteams-fs/agents/${w}" 2>/dev/null || true
         exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${w}/" 2>/dev/null || true
     done
     exec_in_agent rm -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" 2>/dev/null || true
@@ -45,11 +45,11 @@ trap _cleanup EXIT
 # ============================================================
 log_section "Controller Infrastructure"
 
-CTRL_PID=$(exec_in_manager pgrep -f hiclaw-controller 2>/dev/null || echo "")
+CTRL_PID=$(exec_in_manager pgrep -f agentteams-controller 2>/dev/null || echo "")
 if [ -n "${CTRL_PID}" ]; then
-    log_pass "hiclaw-controller process is running (PID: ${CTRL_PID})"
+    log_pass "agentteams-controller process is running (PID: ${CTRL_PID})"
 else
-    log_fail "hiclaw-controller process is not running"
+    log_fail "agentteams-controller process is not running"
 fi
 
 # ============================================================
@@ -101,23 +101,23 @@ else
 fi
 
 # ============================================================
-# Section 3: Apply YAML via hiclaw apply -f
+# Section 3: Apply YAML via agt apply -f
 # ============================================================
 log_section "Apply Worker YAML"
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_WORKER}.yaml" 2>&1)
 APPLY_EXIT=$?
 
 if [ ${APPLY_EXIT} -eq 0 ]; then
-    log_pass "hiclaw apply -f exited successfully"
+    log_pass "agt apply -f exited successfully"
 else
-    log_fail "hiclaw apply -f failed (exit: ${APPLY_EXIT})"
+    log_fail "agt apply -f failed (exit: ${APPLY_EXIT})"
 fi
 
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
-    log_pass "hiclaw apply reports resource created"
+    log_pass "agt apply reports resource created"
 else
-    log_fail "hiclaw apply did not report creation"
+    log_fail "agt apply did not report creation"
 fi
 
 # ============================================================
@@ -125,8 +125,8 @@ fi
 # ============================================================
 log_section "Verify Resource State"
 
-WORKER_JSON=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null || echo "")
-assert_not_empty "${WORKER_JSON}" "Worker CR exists (hiclaw get workers)"
+WORKER_JSON=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null || echo "")
+assert_not_empty "${WORKER_JSON}" "Worker CR exists (agt get workers)"
 WORKER_NAME_CHK=$(echo "${WORKER_JSON}" | jq -r '.name // empty' 2>/dev/null)
 assert_eq "${TEST_WORKER}" "${WORKER_NAME_CHK}" "Worker CR has correct name"
 
@@ -141,11 +141,11 @@ if wait_worker_provisioned "${TEST_WORKER}" 120; then
     log_pass "WorkerReconciler provisioned worker"
 else
     log_fail "WorkerReconciler did not provision worker within 120s"
-    exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
+    exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Verify inline configs were written
-INLINE_LOG=$(exec_in_manager cat /var/log/hiclaw/hiclaw-controller-error.log 2>/dev/null | grep "inline configs written.*${TEST_WORKER}" || echo "")
+INLINE_LOG=$(exec_in_manager cat /var/log/agentteams/agentteams-controller-error.log 2>/dev/null | grep "inline configs written.*${TEST_WORKER}" || echo "")
 assert_not_empty "${INLINE_LOG}" "Controller logged inline configs written"
 
 # ============================================================
@@ -177,7 +177,7 @@ REGISTRY_ENTRY=$(echo "${REGISTRY_JSON}" | jq -r --arg w "${TEST_WORKER}" '.work
 assert_not_empty "${REGISTRY_ENTRY}" "Worker registered in workers-registry.json"
 
 # Matrix Room (from CRD status)
-ROOM_ID=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.roomID // empty')
+ROOM_ID=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.roomID // empty')
 assert_not_empty "${ROOM_ID}" "Matrix Room created: ${ROOM_ID}"
 
 # openclaw.json in MinIO
@@ -214,17 +214,17 @@ fi
 # ============================================================
 log_section "Delete Worker"
 
-DELETE_OUTPUT=$(exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>&1)
+DELETE_OUTPUT=$(exec_in_agent agt delete worker "${TEST_WORKER}" 2>&1)
 if echo "${DELETE_OUTPUT}" | grep -q "deleted"; then
-    log_pass "hiclaw delete reported success"
+    log_pass "agt delete reported success"
 else
-    log_fail "hiclaw delete did not report success"
+    log_fail "agt delete did not report success"
 fi
 
 # Wait for CR to be fully removed (finalizer may take time; container teardown ~10s)
 WORKER_GONE=false
 for i in $(seq 1 60); do
-    WORKER_AFTER=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>&1 || echo "")
+    WORKER_AFTER=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>&1 || echo "")
     if echo "${WORKER_AFTER}" | grep -q "not found\|error\|Error" || [ -z "${WORKER_AFTER}" ]; then
         WORKER_GONE=true
         break
@@ -288,7 +288,7 @@ fi
 copy_to_agent "${OVERRIDE_WORK_DIR}/${TEST_WORKER_OVERRIDE}.zip" "${OVERRIDE_WORK_DIR}/${TEST_WORKER_OVERRIDE}.zip"
 
 # Import ZIP first to get it into MinIO
-APPLY_ZIP_OUTPUT=$(exec_in_agent hiclaw apply worker --zip "${OVERRIDE_WORK_DIR}/${TEST_WORKER_OVERRIDE}.zip" --name "${TEST_WORKER_OVERRIDE}" 2>&1)
+APPLY_ZIP_OUTPUT=$(exec_in_agent agt apply worker --zip "${OVERRIDE_WORK_DIR}/${TEST_WORKER_OVERRIDE}.zip" --name "${TEST_WORKER_OVERRIDE}" 2>&1)
 if [ $? -eq 0 ]; then
     log_pass "ZIP imported for override test"
 else
@@ -301,7 +301,7 @@ if wait_worker_provisioned "${TEST_WORKER_OVERRIDE}" 120; then
     log_pass "ZIP worker created"
 else
     log_fail "ZIP worker not created within 120s"
-    exec_in_agent hiclaw get workers "${TEST_WORKER_OVERRIDE}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
+    exec_in_agent agt get workers "${TEST_WORKER_OVERRIDE}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Discover the package URI from MinIO packages directory
@@ -332,7 +332,7 @@ YAMLEOF
 " 2>/dev/null
 
 # Apply the YAML with both package and inline fields
-APPLY_OVERRIDE=$(exec_in_agent hiclaw apply -f "/tmp/hiclaw-override-${TEST_WORKER_OVERRIDE}.yaml" 2>&1)
+APPLY_OVERRIDE=$(exec_in_agent agt apply -f "/tmp/hiclaw-override-${TEST_WORKER_OVERRIDE}.yaml" 2>&1)
 if echo "${APPLY_OVERRIDE}" | grep -q "created\|configured"; then
     log_pass "Applied YAML with package + inline override"
 else
@@ -346,7 +346,7 @@ if wait_agent_file_contains "${TEST_WORKER_OVERRIDE}" "SOUL.md" "OVERRIDDEN SOUL
     log_pass "Override worker updated"
 else
     log_fail "Override worker not updated within 120s"
-    exec_in_agent hiclaw get workers "${TEST_WORKER_OVERRIDE}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
+    exec_in_agent agt get workers "${TEST_WORKER_OVERRIDE}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Verify SOUL.md has inline content, NOT package content
@@ -373,7 +373,7 @@ else
 fi
 
 # Clean up override worker
-exec_in_agent hiclaw delete worker "${TEST_WORKER_OVERRIDE}" 2>/dev/null
+exec_in_agent agt delete worker "${TEST_WORKER_OVERRIDE}" 2>/dev/null
 log_pass "Override worker deleted"
 
 # ============================================================

@@ -26,11 +26,11 @@ Use the template search script:
 
 ```bash
 # Exact template name
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
   --name <TEMPLATE_NAME> --json
 
 # Requirement-based search
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
   --query "<admin requirement>" --limit 3 --json
 ```
 
@@ -67,7 +67,7 @@ This fallback is only allowed before any template has been confirmed for install
 After the admin confirms the template and Worker name, run:
 
 ```bash
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
   --template <TEMPLATE_NAME> \
   --worker-name <WORKER_NAME>
 ```
@@ -75,7 +75,7 @@ bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template
 Optional overrides:
 
 ```bash
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
   --template <TEMPLATE_NAME> \
   --worker-name <WORKER_NAME> \
   --model <MODEL_ID> \
@@ -84,7 +84,7 @@ bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template
   --mcp-servers m1,m2
 ```
 
-This script delegates to `hiclaw apply worker --package nacos://...`.
+This script delegates to `agt apply worker --package nacos://...`.
 
 If the install command fails:
 
@@ -97,7 +97,7 @@ If the install command fails:
 If the admin already gave you a full package URI, run:
 
 ```bash
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
   --package-uri <PACKAGE_URI> \
   --worker-name <WORKER_NAME>
 ```

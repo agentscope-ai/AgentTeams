@@ -18,7 +18,7 @@
 set -e
 
 # Source shared environment bootstrap (provides worker-deps env and storage credentials)
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:-}"
 [ -n "${WORKER_NAME}" ] || { echo "AGENTTEAMS_WORKER_NAME is required" >&2; exit 1; }

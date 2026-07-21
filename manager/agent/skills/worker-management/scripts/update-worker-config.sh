@@ -8,7 +8,7 @@
 #    files and picks up live. Memory preserved.
 #
 # 2. Runtime switch (when --runtime is provided): delegates to
-#    `hiclaw update worker --runtime <RUNTIME> ...` and polls until
+#    `agt update worker --runtime <RUNTIME> ...` and polls until
 #    phase=Running. Controller's reconcile destroys the old container and
 #    creates a new one with the new runtime image; agent config files are
 #    regenerated from the new runtime's templates. Matrix account, room,
@@ -24,7 +24,7 @@
 #   - Credentials at /data/worker-creds/<NAME>.env (in-place mode only)
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 log() {
     local msg="[hiclaw $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -70,12 +70,12 @@ if [ -z "${WORKER_NAME}" ]; then
 fi
 
 # ============================================================
-# Runtime switch mode: delegate to `hiclaw update worker` and poll.
+# Runtime switch mode: delegate to `agt update worker` and poll.
 #
 # Why: changing runtime requires destroying the old container and
 # starting a new one from a different image (openclaw vs copaw vs
 # hermes vs openhuman). The controller's reconcile loop is the only path that
-# does this correctly — see hiclaw-controller/internal/controller/
+# does this correctly — see agentteams-controller/internal/controller/
 # member_reconcile.go::ensureMemberContainerPresent. Trying to do
 # it in-place from the manager would double-write config files and
 # leave the running container on the old runtime.
@@ -105,7 +105,7 @@ if [ -n "${RUNTIME}" ]; then
 
     log "Step 1: Calling: hiclaw ${CLI_ARGS[*]}"
     if ! CLI_OUT=$(hiclaw "${CLI_ARGS[@]}" 2>&1); then
-        _fail "hiclaw update worker failed: ${CLI_OUT}"
+        _fail "agt update worker failed: ${CLI_OUT}"
     fi
     log "  ${CLI_OUT}"
 
@@ -119,7 +119,7 @@ if [ -n "${RUNTIME}" ]; then
     MESSAGE=""
     CURRENT_RUNTIME=""
     while [ "$(date +%s)" -lt "${POLL_DEADLINE}" ]; do
-        WORKER_JSON=$(hiclaw get workers -o json 2>/dev/null \
+        WORKER_JSON=$(agt get workers -o json 2>/dev/null \
             | jq -c --arg n "${WORKER_NAME}" '.workers[]? | select(.name == $n)')
         if [ -n "${WORKER_JSON}" ]; then
             PHASE=$(echo "${WORKER_JSON}" | jq -r '.phase // ""')
@@ -197,7 +197,7 @@ log "  Credentials loaded"
 # ============================================================
 if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     log "Step 2: Deploying package contents..."
-    AGENT_DIR="/root/hiclaw-fs/agents/${WORKER_NAME}"
+    AGENT_DIR="/root/agentteams-fs/agents/${WORKER_NAME}"
 
     # Copy config/ contents (SOUL.md, etc.) — overwrites existing
     # AGENTS.md is handled specially: user content wrapped with builtin markers
@@ -207,7 +207,7 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
             FNAME=$(basename "$f")
             if [ "${FNAME}" = "AGENTS.md" ]; then
                 # Wrap user AGENTS.md with builtin markers so merge logic works
-                source /opt/hiclaw/scripts/lib/builtin-merge.sh
+                source /opt/agentteams/scripts/lib/builtin-merge.sh
                 if ! grep -q 'hiclaw-builtin-start' "$f" 2>/dev/null; then
                     {
                         printf '%s\n' "${BUILTIN_HEADER}"
@@ -238,20 +238,20 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
 
     # Re-merge builtin section into AGENTS.md
     log "  Re-merging builtin AGENTS.md section..."
-    source /opt/hiclaw/scripts/lib/builtin-merge.sh
+    source /opt/agentteams/scripts/lib/builtin-merge.sh
 
     # Determine correct agent source for builtin content
     REGISTRY_FILE="${HOME}/workers-registry.json"
     _role=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].role // "worker"' "${REGISTRY_FILE}" 2>/dev/null || echo "worker")
     _runtime=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].runtime // "openclaw"' "${REGISTRY_FILE}" 2>/dev/null || echo "openclaw")
-    if [ "${_role}" = "team_leader" ] && [ -d "/opt/hiclaw/agent/team-leader-agent" ]; then
-        _agent_src="/opt/hiclaw/agent/team-leader-agent"
+    if [ "${_role}" = "team_leader" ] && [ -d "/opt/agentteams/agent/team-leader-agent" ]; then
+        _agent_src="/opt/agentteams/agent/team-leader-agent"
     elif [ "${_runtime}" = "copaw" ]; then
-        _agent_src="/opt/hiclaw/agent/copaw-worker-agent"
+        _agent_src="/opt/agentteams/agent/copaw-worker-agent"
     elif [ "${_runtime}" = "hermes" ]; then
-        _agent_src="/opt/hiclaw/agent/hermes-worker-agent"
+        _agent_src="/opt/agentteams/agent/hermes-worker-agent"
     else
-        _agent_src="/opt/hiclaw/agent/worker-agent"
+        _agent_src="/opt/agentteams/agent/worker-agent"
     fi
 
     if [ -f "${_agent_src}/AGENTS.md" ]; then
@@ -362,7 +362,7 @@ if [ -n "${MODEL_ID}" ]; then
     fi
 
     # Persist new comm policy if provided, then export for generate-worker-config.sh
-    AGENT_DIR="/root/hiclaw-fs/agents/${WORKER_NAME}"
+    AGENT_DIR="/root/agentteams-fs/agents/${WORKER_NAME}"
     POLICY_FILE="${AGENT_DIR}/channel-policy.json"
     if [ -n "${CHANNEL_POLICY_JSON}" ]; then
         echo "${CHANNEL_POLICY_JSON}" > "${POLICY_FILE}"
@@ -371,7 +371,7 @@ if [ -n "${MODEL_ID}" ]; then
         export WORKER_CHANNEL_POLICY=$(cat "${POLICY_FILE}")
     fi
 
-    bash /opt/hiclaw/agent/skills/worker-management/scripts/generate-worker-config.sh "${GEN_ARGS[@]}"
+    bash /opt/agentteams/agent/skills/worker-management/scripts/generate-worker-config.sh "${GEN_ARGS[@]}"
     log "  openclaw.json regenerated"
 else
     log "Step 3: No model change (skipped)"
@@ -382,7 +382,7 @@ fi
 # ============================================================
 if [ -n "${WORKER_SKILLS}" ]; then
     log "Step 4: Pushing skills..."
-    bash /opt/hiclaw/agent/skills/worker-management/scripts/push-worker-skills.sh \
+    bash /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
         --worker "${WORKER_NAME}" --no-notify \
         || log "  WARNING: push-worker-skills.sh returned non-zero"
     log "  Skills pushed"
@@ -395,7 +395,7 @@ fi
 # ============================================================
 if [ -n "${MCP_SERVERS}" ]; then
     log "Step 5: Reauthorizing MCP servers..."
-    source /opt/hiclaw/scripts/lib/gateway-api.sh
+    source /opt/agentteams/scripts/lib/gateway-api.sh
     gateway_ensure_session || log "  WARNING: Failed to establish gateway session"
     CONSUMER_NAME="worker-${WORKER_NAME}"
     gateway_authorize_mcp "${CONSUMER_NAME}" "${MCP_SERVERS}" \
@@ -410,7 +410,7 @@ fi
 # ============================================================
 log "Step 6: Syncing config to MinIO (memory preserved)..."
 ensure_mc_credentials 2>/dev/null || true
-mc mirror "/root/hiclaw-fs/agents/${WORKER_NAME}/" \
+mc mirror "/root/agentteams-fs/agents/${WORKER_NAME}/" \
     "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
     --overwrite \
     --exclude "memory/*" \

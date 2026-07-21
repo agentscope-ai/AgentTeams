@@ -44,29 +44,29 @@ RUN tmp_dir="$(mktemp -d)" && \
 ENV PATH="/opt/openclaw/packages/clawdbot/node_modules/.bin:${PATH}"
 
 # ---- Copy Manager agent definitions ----
-COPY manager/agent/ /opt/hiclaw/agent/
-COPY manager/configs/ /opt/hiclaw/configs/
+COPY manager/agent/ /opt/agentteams/agent/
+COPY manager/configs/ /opt/agentteams/configs/
 
 # ---- Copy scripts: shared libs first, then manager scripts ----
-COPY shared/lib/ /opt/hiclaw/scripts/lib/
-COPY manager/scripts/ /opt/hiclaw/scripts/
+COPY shared/lib/ /opt/agentteams/scripts/lib/
+COPY manager/scripts/ /opt/agentteams/scripts/
 
 ARG BUILTIN_VERSION=latest
-RUN echo "${BUILTIN_VERSION}" > /opt/hiclaw/agent/.builtin-version
+RUN echo "${BUILTIN_VERSION}" > /opt/agentteams/agent/.builtin-version
 
 # Make all scripts executable (includes mc-wrapper.sh from shared/lib/)
-RUN find /opt/hiclaw/scripts -name '*.sh' -exec chmod +x {} + && \
-    ln -sf /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc && \
-    find /opt/hiclaw/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
-    find /opt/hiclaw/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
-    find /opt/hiclaw/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+RUN find /opt/agentteams/scripts -name '*.sh' -exec chmod +x {} + && \
+    ln -sf /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc && \
+    find /opt/agentteams/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/agentteams/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/agentteams/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 
 # Explicitly mark as cloud deployment (don't rely on OIDC file detection)
 ENV AGENTTEAMS_RUNTIME=aliyun
 
 # Workspace directory
 ENV HOME=/root/manager-workspace
-RUN mkdir -p /root/manager-workspace /root/hiclaw-fs /root/.openclaw
+RUN mkdir -p /root/manager-workspace /root/agentteams-fs /root/.openclaw
 
 WORKDIR /root/manager-workspace
 
@@ -75,4 +75,4 @@ EXPOSE 9000
 
 # Cloud mode set via ENV AGENTTEAMS_RUNTIME=aliyun above;
 # start-manager-agent.sh branches accordingly (no supervisord needed for cloud)
-ENTRYPOINT ["/opt/hiclaw/scripts/init/start-manager-agent.sh"]
+ENTRYPOINT ["/opt/agentteams/scripts/init/start-manager-agent.sh"]

@@ -15,7 +15,7 @@
 
 set -eo pipefail
 
-source /opt/hiclaw/scripts/lib/container-api.sh
+source /opt/agentteams/scripts/lib/container-api.sh
 
 WORKER_NAME=""
 ACTION="enable"

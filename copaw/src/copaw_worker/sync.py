@@ -284,7 +284,7 @@ class FileSync:
         """
         result = subprocess.run(
             ["bash", "-c",
-             "source /opt/hiclaw/scripts/lib/hiclaw-env.sh && "
+             "source /opt/agentteams/scripts/lib/agentteams-env.sh && "
              "ensure_mc_credentials && "
              f"_mc_host_var=MC_HOST_{_MC_ALIAS} && "
              "printf '%s' \"${!_mc_host_var}\""],
@@ -529,13 +529,13 @@ class FileSync:
         if self._worker_info is not None:
             return self._worker_info
 
-        hiclaw_bin = shutil.which("hiclaw")
-        if not hiclaw_bin:
-            raise RuntimeError("hiclaw CLI not found; cannot resolve worker storage scope")
+        agentteams_bin = shutil.which("agt") or shutil.which("hiclaw")
+        if not agentteams_bin:
+            raise RuntimeError("AgentTeams CLI not found; cannot resolve worker storage scope")
 
         try:
             result = subprocess.run(
-                [hiclaw_bin, "get", "workers", self.worker_cr_name, "-o", "json"],
+                [agentteams_bin, "get", "workers", self.worker_cr_name, "-o", "json"],
                 capture_output=True,
                 text=True,
                 check=True,

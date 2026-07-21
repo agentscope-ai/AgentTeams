@@ -1,6 +1,6 @@
-# HiClaw Quickstart Guide
+# AgentTeams Quickstart Guide
 
-This guide walks you through installing HiClaw, creating your first Agent team, and completing your first collaborative task. Each step includes verification checkpoints to confirm everything is working correctly.
+This guide walks you through installing AgentTeams, creating your first Agent team, and completing your first collaborative task. Each step includes verification checkpoints to confirm everything is working correctly.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ This guide walks you through installing HiClaw, creating your first Agent team, 
 **Option A: One-line install**
 
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 Follow the interactive prompts to configure:
@@ -33,12 +33,12 @@ Follow the interactive prompts to configure:
 
 ```bash
 # Minimal install — only LLM key required, all defaults applied
-HICLAW_LLM_API_KEY="sk-xxx" make install
+AGENTTEAMS_LLM_API_KEY="sk-xxx" make install
 ```
 
-This builds images locally, mounts the container runtime socket (for direct Worker creation), and saves config to `./hiclaw-manager.env`.
+This builds images locally, mounts the container runtime socket (for direct Worker creation), and saves config to `./agentteams-manager.env`.
 
-Both methods support environment variable overrides for all settings. See `install/hiclaw-install.sh` header for the full list.
+Both methods support environment variable overrides for all settings. See `install/agentteams-install.sh` header for the full list.
 
 ### 1.1a Multi-container layout (v1.1.0+ embedded install)
 
@@ -46,34 +46,34 @@ The default **embedded** install starts two main containers (see [architecture.m
 
 | Container | Role |
 |-----------|------|
-| **`hiclaw-controller`** | Bundles Higress, Tuwunel, MinIO, Element Web, and the Go controller (REST API on port **8090** inside the Docker network). |
-| **`hiclaw-manager`** | Lightweight Manager Agent only (OpenClaw **or** QwenPaw when `HICLAW_MANAGER_RUNTIME=copaw`). |
+| **`agentteams-controller`** | Bundles Higress, Tuwunel, MinIO, Element Web, and the Go controller (REST API on port **8090** inside the Docker network). |
+| **`agentteams-manager`** | Lightweight Manager Agent only (OpenClaw **or** QwenPaw when `AGENTTEAMS_MANAGER_RUNTIME=copaw`). |
 
-Worker containers (`hiclaw-worker-*`, `hiclaw-copaw-worker-*`, `hiclaw-hermes-worker-*`) are created when you add Workers.
+Worker containers (`agentteams-worker-*`, `agentteams-copaw-worker-*`, `agentteams-hermes-worker-*`) are created when you add Workers.
 
-**Declarative CLI (no chat required):** The `hiclaw` binary is available **inside** `hiclaw-controller` and `hiclaw-manager`. For quick checks and provisioning from the host:
+**Declarative CLI (no chat required):** The `agt` binary is available **inside** `agentteams-controller` and `agentteams-manager`. For quick checks and provisioning from the host:
 
 ```bash
-docker exec hiclaw-controller hiclaw create worker --name alice --model qwen3.5-plus
-docker exec hiclaw-controller hiclaw get workers
+docker exec agentteams-controller agt create worker --name alice --model qwen3.5-plus
+docker exec agentteams-controller agt get workers
 ```
 
-For YAML-driven workflows, use `install/hiclaw-apply.sh` (copies files into `hiclaw-manager` and runs `hiclaw apply -f`). Details: [Declarative Resource Management](declarative-resource-management.md).
+For YAML-driven workflows, use `install/agentteams-apply.sh` (copies files into `agentteams-manager` and runs `agt apply -f`). Details: [Declarative Resource Management](declarative-resource-management.md).
 
 ### 1.2 Login to Element Web
 
-Open http://127.0.0.1:18088 in your browser (direct access port). Alternatively, access via the gateway at http://matrix-client-local.hiclaw.io:18080 if you've added the domain to your `/etc/hosts`.
+Open http://127.0.0.1:18088 in your browser (direct access port). Alternatively, access via the gateway at http://matrix-client-local.agentteams.io:18080 if you've added the domain to your `/etc/hosts`.
 
 Login with your admin credentials.
 
 ### Verification Checklist
 
-- [ ] **`hiclaw-controller`** is running (embedded stack): `docker ps | grep hiclaw-controller`
-- [ ] **`hiclaw-manager`** is running: `docker ps | grep hiclaw-manager`
+- [ ] **`agentteams-controller`** is running (embedded stack): `docker ps | grep agentteams-controller`
+- [ ] **`agentteams-manager`** is running: `docker ps | grep agentteams-manager`
 - [ ] Element Web loads in browser at http://127.0.0.1:18088
 - [ ] Login with admin credentials succeeds
-- [ ] Higress Console at http://localhost:18001 (gateway **host** port defaults to **18080**; Matrix/Element use that gateway for `*-local.hiclaw.io` hostnames)
-- [ ] MinIO is reachable **inside** the controller container (embedded install does **not** publish MinIO console on the host by default): `docker exec hiclaw-controller curl -sf http://127.0.0.1:9000/minio/health/live`
+- [ ] Higress Console at http://localhost:18001 (gateway **host** port defaults to **18080**; Matrix/Element use that gateway for `*-local.agentteams.io` hostnames)
+- [ ] MinIO is reachable **inside** the controller container (embedded install does **not** publish MinIO console on the host by default): `docker exec agentteams-controller curl -sf http://127.0.0.1:9000/minio/health/live`
 - [ ] (OpenClaw Manager only) OpenClaw control UI at http://127.0.0.1:18888
 
 ---
@@ -123,12 +123,12 @@ If you asked the Manager to "create it directly", the Manager will automatically
 If the Manager doesn't have access to the container runtime socket, it will reply with a `docker run` command. Copy and run it on the target host:
 
 ```bash
-docker run -d --name hiclaw-worker-alice \
-  -e HICLAW_WORKER_NAME=alice \
-  -e HICLAW_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
-  -e HICLAW_FS_ACCESS_KEY=<ACCESS_KEY> \
-  -e HICLAW_FS_SECRET_KEY=<SECRET_KEY> \
-  hiclaw/worker-agent:latest
+docker run -d --name agentteams-worker-alice \
+  -e AGENTTEAMS_WORKER_NAME=alice \
+  -e AGENTTEAMS_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
+  -e AGENTTEAMS_FS_ACCESS_KEY=<ACCESS_KEY> \
+  -e AGENTTEAMS_FS_SECRET_KEY=<SECRET_KEY> \
+  agentteams/worker-agent:latest
 ```
 
 The Manager will provide all the specific values in its reply.
@@ -138,7 +138,7 @@ The Manager will provide all the specific values in its reply.
 - [ ] Alice's Room appears in Element Web (3 members: you, manager, alice)
 - [ ] Higress Console shows `worker-alice` consumer (http://localhost:18001)
 - [ ] MinIO has `agents/alice/SOUL.md` file (accessible via MinIO Console or `mc ls`)
-- [ ] Worker container running: `docker ps | grep hiclaw-worker-alice`
+- [ ] Worker container running: `docker ps | grep agentteams-worker-alice`
 
 ---
 
@@ -334,7 +334,7 @@ Ask Alice to perform a GitHub operation again. It should succeed.
 
 ## Congratulations!
 
-You have successfully completed all 10 verification steps for HiClaw. Your Agent team is fully operational with:
+You have successfully completed all 10 verification steps for AgentTeams. Your Agent team is fully operational with:
 
 - IM-based communication (Matrix)
 - Human-in-the-loop oversight
@@ -347,10 +347,10 @@ You have successfully completed all 10 verification steps for HiClaw. Your Agent
 
 ## Uninstall
 
-To completely remove HiClaw and all its data:
+To completely remove AgentTeams and all its data:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.sh) uninstall
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
 
-This matches `install/hiclaw-install.sh uninstall`: it stops and removes **`hiclaw-manager`**, all **`hiclaw-worker-*`** (and other worker) containers, **`hiclaw-controller`** (embedded Higress / Tuwunel / MinIO / Element Web), optional **`hiclaw-docker-proxy`**, the **`hiclaw-data`** Docker volume, your **`hiclaw-manager.env`** file, the workspace directory, the **`hiclaw-net`** network, and the install log.
+This matches `install/agentteams-install.sh uninstall`: it stops and removes **`agentteams-manager`**, all **`agentteams-worker-*`** (and other worker) containers, **`agentteams-controller`** (embedded Higress / Tuwunel / MinIO / Element Web), optional **`hiclaw-docker-proxy`**, the **`agentteams-data`** Docker volume, your **`agentteams-manager.env`** file, the workspace directory, the **`agentteams-net`** network, and the install log.

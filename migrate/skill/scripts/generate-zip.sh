@@ -2,7 +2,7 @@
 # generate-zip.sh - Generate a HiClaw migration ZIP package
 #
 # Takes the analysis results and OpenClaw config, produces a ZIP file
-# that can be fed to hiclaw-import.sh on the HiClaw host.
+# that can be fed to agentteams-import.sh on the HiClaw host.
 #
 # Usage:
 #   generate-zip.sh --name <worker-name> [--state-dir <path>] [--analysis <path>] [--output <dir>] [--base-image <image>]
@@ -449,7 +449,7 @@ log "  Size: ${ZIP_SIZE}"
 log "  Worker name: ${WORKER_NAME}"
 log ""
 log "Transfer this file to the HiClaw Manager host and run:"
-log "  bash hiclaw-import.sh worker --name ${WORKER_NAME} --zip ${ZIP_NAME}"
+log "  bash agentteams-import.sh worker --name ${WORKER_NAME} --zip ${ZIP_NAME}"
 log ""
 
 echo "${ZIP_PATH}"

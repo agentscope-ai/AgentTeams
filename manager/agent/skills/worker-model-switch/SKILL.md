@@ -10,13 +10,13 @@ Switch a Worker's LLM model using the hiclaw CLI. The controller handles all det
 ## Usage
 
 ```bash
-hiclaw update worker --name <WORKER_NAME> --model <MODEL_ID>
+agt update worker --name <WORKER_NAME> --model <MODEL_ID>
 ```
 
 Examples:
 ```bash
-hiclaw update worker --name alice --model claude-sonnet-4-6
-hiclaw update worker --name alice --model deepseek-chat
+agt update worker --name alice --model claude-sonnet-4-6
+agt update worker --name alice --model deepseek-chat
 ```
 
 ## What happens

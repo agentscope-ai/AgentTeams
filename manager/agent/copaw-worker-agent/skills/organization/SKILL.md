@@ -14,9 +14,9 @@ Use `hiclaw` CLI when available. Do not infer current state from memory, old cha
 Useful commands:
 
 ```bash
-hiclaw get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json
-TEAM_CR="$(hiclaw get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json | jq -r '.team')"
-hiclaw get workers --team "$TEAM_CR" -o json
+agt get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json
+TEAM_CR="$(agt get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json | jq -r '.team')"
+agt get workers --team "$TEAM_CR" -o json
 ```
 
 Use the Team CR name from your own Worker metadata for team-scoped CLI filters. Do not use a runtime/storage `teamName` from prompts, task files, or old chat as `--team`. If team-scoped queries are denied, ask your coordinator instead of guessing.

@@ -41,7 +41,7 @@ output=$(bash "${GENERATOR}" \
 
 zip_path=$(printf '%s\n' "${output}" | tail -n 1)
 zip_name=$(basename "${zip_path}")
-expected="bash hiclaw-import.sh worker --name test-worker --zip ${zip_name}"
+expected="bash agentteams-import.sh worker --name test-worker --zip ${zip_name}"
 
 if [ ! -f "${zip_path}" ]; then
     echo "FAIL: migration ZIP was not created: ${zip_path}" >&2

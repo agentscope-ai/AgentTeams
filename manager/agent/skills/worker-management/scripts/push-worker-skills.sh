@@ -12,7 +12,7 @@
 #   [--no-notify]  Skip Matrix notification
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Parse arguments
@@ -56,7 +56,7 @@ if [ -n "${SKILL_NAME}" ] && ([ -n "${ADD_SKILL}" ] || [ -n "${REMOVE_SKILL}" ])
 fi
 
 REGISTRY_FILE="${HOME}/workers-registry.json"
-WORKER_SKILLS_DIR="/opt/hiclaw/agent/worker-skills"
+WORKER_SKILLS_DIR="/opt/agentteams/agent/worker-skills"
 MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
 
 # ============================================================
@@ -111,11 +111,11 @@ _push_skill_to_worker() {
     worker_runtime=$(echo "${REGISTRY}" | jq -r --arg w "${worker}" '.workers[$w].runtime // "openclaw"')
     local _rt_src
     if [ "${worker_runtime}" = "copaw" ]; then
-        _rt_src="/opt/hiclaw/agent/copaw-worker-agent/skills/${skill}"
+        _rt_src="/opt/agentteams/agent/copaw-worker-agent/skills/${skill}"
     elif [ "${worker_runtime}" = "hermes" ]; then
-        _rt_src="/opt/hiclaw/agent/hermes-worker-agent/skills/${skill}"
+        _rt_src="/opt/agentteams/agent/hermes-worker-agent/skills/${skill}"
     else
-        _rt_src="/opt/hiclaw/agent/worker-agent/skills/${skill}"
+        _rt_src="/opt/agentteams/agent/worker-agent/skills/${skill}"
     fi
     if [ -d "${_rt_src}" ]; then
         log "  Pushing skill '${skill}' (runtime=${worker_runtime}) to worker '${worker}'..."
@@ -159,7 +159,7 @@ _notify_worker() {
     # Ensure we have a Manager Matrix token
     local token="${MANAGER_MATRIX_TOKEN:-}"
     if [ -z "${token}" ]; then
-        local secrets_file="/data/hiclaw-secrets.env"
+        local secrets_file="/data/agentteams-secrets.env"
         [ -f "${secrets_file}" ] && source "${secrets_file}"
         token="${MANAGER_MATRIX_TOKEN:-}"
     fi

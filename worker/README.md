@@ -23,7 +23,7 @@ docker build -t agentteams/worker-agent:latest .
 Workers are created by the Manager Agent. The Manager provides the installation command:
 
 ```bash
-../install/hiclaw-install.sh worker \
+../install/agentteams-install.sh worker \
   --name alice \
   --fs http://<MANAGER_IP>:9000 \
   --fs-key <ACCESS_KEY> \
@@ -42,7 +42,7 @@ worker/
         ├── file-sync/
         │   ├── SKILL.md             # File sync skill (config, credentials, collaboration)
         │   └── scripts/
-        │       └── hiclaw-sync.sh   # Pull files from centralized storage
+        │       └── agentteams-sync.sh   # Pull files from centralized storage
         └── github-operations/
             └── SKILL.md             # GitHub MCP operations skill
 ```

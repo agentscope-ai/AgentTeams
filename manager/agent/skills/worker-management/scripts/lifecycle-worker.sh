@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-source /opt/hiclaw/scripts/lib/container-api.sh
+source /opt/agentteams/scripts/lib/container-api.sh
 
 LIFECYCLE_FILE="${HOME}/worker-lifecycle.json"
 REGISTRY_FILE="${HOME}/workers-registry.json"
@@ -147,7 +147,7 @@ _worker_has_any_tasks() {
 # Returns 0 if worker has enabled cron jobs, 1 otherwise
 _worker_has_cron_jobs() {
     local worker="$1"
-    local cron_file="/root/hiclaw-fs/agents/${worker}/.openclaw/cron/jobs.json"
+    local cron_file="/root/agentteams-fs/agents/${worker}/.openclaw/cron/jobs.json"
     if [ ! -f "$cron_file" ]; then
         return 1
     fi

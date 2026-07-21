@@ -4,7 +4,7 @@
 #
 # Options:
 #   --repo-dir <path>     HiClaw repository directory (default: current dir or /tmp/hiclaw)
-#   --env-file <path>     Environment config file (default: ~/hiclaw-manager.env)
+#   --env-file <path>     Environment config file (default: ~/agentteams-manager.env)
 #   --skip-pull           Skip git pull
 #   existing              Run tests using existing installation
 #
@@ -18,7 +18,8 @@ set -e
 
 # Default values (can be overridden by environment variables)
 REPO_DIR="${HICLAW_REPO_DIR:-}"
-ENV_FILE="${HICLAW_ENV_FILE:-$HOME/hiclaw-manager.env}"
+ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HICLAW_ENV_FILE:-$HOME/agentteams-manager.env}}"
+[ -f "${ENV_FILE}" ] || ENV_FILE="$HOME/hiclaw-manager.env"
 SKIP_PULL=false
 TEST_FILTER=""
 
@@ -86,7 +87,7 @@ detect_repo_dir() {
 check_prerequisites() {
     if [ ! -f "$ENV_FILE" ]; then
         log_error "Config file not found: $ENV_FILE"
-        log_info "Please create hiclaw-manager.env first or set HICLAW_ENV_FILE"
+        log_info "Please create agentteams-manager.env first or set AGENTTEAMS_ENV_FILE"
         exit 1
     fi
     

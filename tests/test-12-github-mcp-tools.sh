@@ -23,7 +23,7 @@ TEST_OWNER="${TEST_GITHUB_OWNER:-higress-group}"
 TEST_REPO="${TEST_GITHUB_REPO:-hiclaw}"
 
 # Manager container name
-MANAGER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}"
+MANAGER_CONTAINER="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-agentteams-manager}}"
 
 # Helper function to call mcporter inside Manager container
 mcporter_call() {

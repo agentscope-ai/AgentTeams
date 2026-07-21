@@ -17,7 +17,7 @@ ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 # ============ Stage 1: MinIO Client (mc) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
-# ============ Stage 2: hiclaw CLI (from controller image) ============
+# ============ Stage 2: AgentTeams CLI (from controller image) ============
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
@@ -26,8 +26,9 @@ FROM ${OPENCLAW_BASE_IMAGE}
 # mc (MinIO Client) — direct binary, no STS wrapper needed in K8s mode
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc
 
-# hiclaw CLI — for worker/team/human management via controller REST API
-COPY --from=agentteams-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+# AgentTeams CLI — for worker/team/human management via controller REST API
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 # ---- Built-in observability plugin (bundled unconditionally, enabled at runtime) ----
 # Placed before agent/configs COPY so that code changes do not invalidate this layer.
@@ -50,27 +51,27 @@ RUN tmp_dir="$(mktemp -d)" && \
 ENV PATH="/opt/openclaw/packages/clawdbot/node_modules/.bin:${PATH}"
 
 # ---- Copy Manager agent definitions ----
-COPY manager/agent/ /opt/hiclaw/agent/
-COPY manager/configs/ /opt/hiclaw/configs/
+COPY manager/agent/ /opt/agentteams/agent/
+COPY manager/configs/ /opt/agentteams/configs/
 
 # ---- Copy scripts: shared libs first, then manager scripts ----
-COPY shared/lib/ /opt/hiclaw/scripts/lib/
-COPY manager/scripts/ /opt/hiclaw/scripts/
+COPY shared/lib/ /opt/agentteams/scripts/lib/
+COPY manager/scripts/ /opt/agentteams/scripts/
 
 ARG BUILTIN_VERSION=latest
-RUN echo "${BUILTIN_VERSION}" > /opt/hiclaw/agent/.builtin-version
+RUN echo "${BUILTIN_VERSION}" > /opt/agentteams/agent/.builtin-version
 
 # Make all scripts executable
-RUN find /opt/hiclaw/scripts -name '*.sh' -exec chmod +x {} + && \
-    find /opt/hiclaw/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
-    find /opt/hiclaw/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
-    find /opt/hiclaw/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+RUN find /opt/agentteams/scripts -name '*.sh' -exec chmod +x {} + && \
+    find /opt/agentteams/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/agentteams/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/agentteams/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 
 # AGENTTEAMS_RUNTIME is NOT hardcoded — injected by Helm (k8s) or SAE (aliyun) at deploy time
 
 # Workspace directory
 ENV HOME=/root/manager-workspace
-RUN mkdir -p /root/manager-workspace /root/hiclaw-fs /root/.openclaw
+RUN mkdir -p /root/manager-workspace /root/agentteams-fs /root/.openclaw
 
 WORKDIR /root/manager-workspace
 
@@ -83,4 +84,4 @@ RUN rm -f /usr/bin/lsof && printf '#!/bin/sh\nexit 1\n' > /usr/bin/lsof && chmod
 EXPOSE 18799
 
 # start-manager-agent.sh branches on AGENTTEAMS_RUNTIME env var
-ENTRYPOINT ["/opt/hiclaw/scripts/init/start-manager-agent.sh"]
+ENTRYPOINT ["/opt/agentteams/scripts/init/start-manager-agent.sh"]

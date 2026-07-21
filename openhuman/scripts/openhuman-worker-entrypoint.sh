@@ -52,7 +52,7 @@ AGENTTEAMS_CONTROLLER_URL="${AGENTTEAMS_CONTROLLER_URL:-${HICLAW_CONTROLLER_URL:
 AGENTTEAMS_AUTH_TOKEN_FILE="${AGENTTEAMS_AUTH_TOKEN_FILE:-${HICLAW_AUTH_TOKEN_FILE:-}}"
 
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
+source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
@@ -355,7 +355,7 @@ CORE_PID=$!
 
     # Report ready to controller
     if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
-        hiclaw worker report-ready --name "${WORKER_CR_NAME}" 2>/dev/null || \
+        agt worker report-ready --name "${WORKER_CR_NAME}" 2>/dev/null || \
             curl -sf -X POST "${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/${WORKER_CR_NAME}/ready" \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer $(cat ${AGENTTEAMS_AUTH_TOKEN_FILE:-/var/run/secrets/agentteams/token} 2>/dev/null)" 2>/dev/null || \

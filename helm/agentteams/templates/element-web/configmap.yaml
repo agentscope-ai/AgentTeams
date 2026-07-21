@@ -1,0 +1,23 @@
+{{- if .Values.elementWeb.enabled }}
+{{- $matrixUrl := include "agentteams.gateway.publicURL" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentteams.elementWeb.fullname" . }}-config
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- $comp := dict "root" . "component" "element-web" }}
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+data:
+  config.json: |
+    {
+      "default_server_config": {
+        "m.homeserver": {
+          "base_url": {{ $matrixUrl | quote }}
+        }
+      },
+      "brand": "AgentTeams",
+      "disable_guests": true,
+      "disable_custom_urls": false
+    }
+{{- end }}

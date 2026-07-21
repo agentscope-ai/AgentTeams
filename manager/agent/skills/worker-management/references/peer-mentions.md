@@ -7,7 +7,7 @@ Only enable when admin **explicitly** requests Workers to trigger each other dir
 ## Command
 
 ```bash
-bash /opt/hiclaw/agent/skills/worker-management/scripts/enable-peer-mentions.sh \
+bash /opt/agentteams/agent/skills/worker-management/scripts/enable-peer-mentions.sh \
     --workers alice,bob,charlie
 ```
 

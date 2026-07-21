@@ -360,14 +360,14 @@ def detect_runtime(container: str) -> tuple[str, str]:
         hermes   -> /root/manager-workspace/.hermes/sessions
         copaw    -> /root/manager-workspace/.copaw/workspaces/default/sessions
 
-      OpenClaw / Hermes Worker (HOME=/root/hiclaw-fs/agents/<name>):
-        openclaw -> /root/hiclaw-fs/agents/<name>/.openclaw/agents/main/sessions
-        hermes   -> /root/hiclaw-fs/agents/<name>/.hermes/sessions
+      OpenClaw / Hermes Worker (HOME=/root/agentteams-fs/agents/<name>):
+        openclaw -> /root/agentteams-fs/agents/<name>/.openclaw/agents/main/sessions
+        hermes   -> /root/agentteams-fs/agents/<name>/.hermes/sessions
 
-      CoPaw Worker (HOME=/root/.hiclaw-worker/<name>, also reachable via
-      /root/hiclaw-fs symlink that points to that same dir):
-        copaw    -> /root/.hiclaw-worker/<name>/.copaw/workspaces/default/sessions
-        copaw    -> /root/hiclaw-fs/.copaw/workspaces/default/sessions  (alt)
+      CoPaw Worker (HOME=/root/.agentteams-worker/<name>, also reachable via
+      /root/agentteams-fs symlink that points to that same dir):
+        copaw    -> /root/.agentteams-worker/<name>/.copaw/workspaces/default/sessions
+        copaw    -> /root/agentteams-fs/.copaw/workspaces/default/sessions  (alt)
     """
     candidates: list[tuple[str, str]] = [
         ("openclaw", "/root/manager-workspace/.openclaw/agents/main/sessions"),
@@ -378,10 +378,10 @@ def detect_runtime(container: str) -> tuple[str, str]:
     worker_name = docker_exec(container, "echo $AGENTTEAMS_WORKER_NAME").strip()
     if worker_name:
         candidates.extend([
-            ("openclaw", f"/root/hiclaw-fs/agents/{worker_name}/.openclaw/agents/main/sessions"),
-            ("hermes",   f"/root/hiclaw-fs/agents/{worker_name}/.hermes/sessions"),
-            ("copaw",    f"/root/.hiclaw-worker/{worker_name}/.copaw/workspaces/default/sessions"),
-            ("copaw",    "/root/hiclaw-fs/.copaw/workspaces/default/sessions"),
+            ("openclaw", f"/root/agentteams-fs/agents/{worker_name}/.openclaw/agents/main/sessions"),
+            ("hermes",   f"/root/agentteams-fs/agents/{worker_name}/.hermes/sessions"),
+            ("copaw",    f"/root/.agentteams-worker/{worker_name}/.copaw/workspaces/default/sessions"),
+            ("copaw",    "/root/agentteams-fs/.copaw/workspaces/default/sessions"),
         ])
 
     for runtime, path in candidates:

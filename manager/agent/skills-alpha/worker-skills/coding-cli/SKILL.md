@@ -29,7 +29,7 @@ Check `spec.md` for the task. If it contains `## Coding CLI Mode`, use this skil
 Set up the workspace directory under the shared filesystem:
 
 ```bash
-workspace="/root/hiclaw-fs/shared/tasks/{task-id}/workspace"
+workspace="/root/agentteams-fs/shared/tasks/{task-id}/workspace"
 mkdir -p "$workspace"
 
 # Clone a repo (example)
@@ -39,14 +39,14 @@ git clone <repo-url> "$workspace"
 cp -r /path/to/source "$workspace/"
 ```
 
-**Constraint**: The workspace path **must** be under `/root/hiclaw-fs/`. The Manager accesses the same path via MinIO mirror.
+**Constraint**: The workspace path **must** be under `/root/agentteams-fs/`. The Manager accesses the same path via MinIO mirror.
 
 ### 2. Push Workspace to MinIO
 
 Before sending the coding-request, push all workspace files so the Manager can access them:
 
 ```bash
-mc mirror "/root/hiclaw-fs/shared/tasks/{task-id}/workspace/" \
+mc mirror "/root/agentteams-fs/shared/tasks/{task-id}/workspace/" \
   ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/
 ```
 
@@ -57,10 +57,10 @@ Before modifying the workspace or sending a coding-request, check if the task di
 ```bash
 # Sync latest state from MinIO
 mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/" \
-  "/root/hiclaw-fs/shared/tasks/{task-id}/"
+  "/root/agentteams-fs/shared/tasks/{task-id}/"
 
 # Check for processing marker
-if [ -f "/root/hiclaw-fs/shared/tasks/{task-id}/.processing" ]; then
+if [ -f "/root/agentteams-fs/shared/tasks/{task-id}/.processing" ]; then
     echo "Task directory is being processed. Wait for manager to complete."
     # Do NOT send coding-request yet; wait and retry
 fi
@@ -103,15 +103,15 @@ Send in your Worker Room (or Project Room, wherever the task was assigned):
 
 ```
 @manager:DOMAIN task-{task-id} coding-request:
-workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace
+workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace
 ---PROMPT---
 {your detailed coding prompt here}
 ---END---
 ```
 
-Note: `workspace` can be any subdirectory under `/root/hiclaw-fs/`, e.g. a cloned git repo:
+Note: `workspace` can be any subdirectory under `/root/agentteams-fs/`, e.g. a cloned git repo:
 ```
-workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace/my-repo
+workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace/my-repo
 ```
 
 ### 5. Wait for Manager's Response
@@ -127,7 +127,7 @@ CLI 工具已完成编码。请同步工作目录并 review 变更...
 **Failure** — `coding-failed:`
 ```
 @{your-name}:DOMAIN task-{task-id} coding-failed:
-CLI 工具执行失败...你生成的提示词已保存于：/root/hiclaw-fs/shared/tasks/{task-id}/coding-prompts/
+CLI 工具执行失败...你生成的提示词已保存于：/root/agentteams-fs/shared/tasks/{task-id}/coding-prompts/
 ```
 
 ### 6a. On `coding-result:`
@@ -137,7 +137,7 @@ CLI 工具执行失败...你生成的提示词已保存于：/root/hiclaw-fs/sha
 hiclaw-sync
 
 # Review what changed
-cd /root/hiclaw-fs/shared/tasks/{task-id}/workspace
+cd /root/agentteams-fs/shared/tasks/{task-id}/workspace
 git diff  # if it's a git repo
 # or: check coding-cli-logs/ for CLI output
 ```

@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-22-delete-worker-cleanup.sh - Case 22: Delete worker releases resources
 #
-# Verifies that `hiclaw delete worker <name>` actually releases the worker's
+# Verifies that `agt delete worker <name>` actually releases the worker's
 # infrastructure side-effects, not just the CR. test-100 covers bulk cleanup
 # of N test workers and checks containers + lifecycle.json + YAML, but it
 # does NOT assert that the Higress consumer or the MinIO agents/<name>/
@@ -27,7 +27,7 @@ STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-s
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
-    exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
     remove_worker_container "${TEST_WORKER}"
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
@@ -81,12 +81,12 @@ _minio_worker_yaml() {
 # ============================================================
 log_section "Create Worker ${TEST_WORKER}"
 
-CREATE_OUTPUT=$(exec_in_agent hiclaw create worker --name "${TEST_WORKER}" --no-wait 2>&1)
+CREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" --no-wait 2>&1)
 CREATE_EXIT=$?
 if [ "${CREATE_EXIT}" -eq 0 ]; then
-    log_pass "hiclaw create worker accepted"
+    log_pass "agt create worker accepted"
 else
-    log_fail "hiclaw create worker failed: ${CREATE_OUTPUT}"
+    log_fail "agt create worker failed: ${CREATE_OUTPUT}"
     test_teardown "22-delete-worker-cleanup"
     test_summary
     exit 1
@@ -142,12 +142,12 @@ fi
 # ============================================================
 log_section "Delete Worker"
 
-DELETE_OUTPUT=$(exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>&1)
+DELETE_OUTPUT=$(exec_in_agent agt delete worker "${TEST_WORKER}" 2>&1)
 DELETE_EXIT=$?
 if [ "${DELETE_EXIT}" -eq 0 ] && echo "${DELETE_OUTPUT}" | grep -qi "deleted"; then
-    log_pass "hiclaw delete reports success: ${DELETE_OUTPUT}"
+    log_pass "agt delete reports success: ${DELETE_OUTPUT}"
 else
-    log_fail "hiclaw delete failed (exit=${DELETE_EXIT}): ${DELETE_OUTPUT}"
+    log_fail "agt delete failed (exit=${DELETE_EXIT}): ${DELETE_OUTPUT}"
 fi
 
 # Wait for controller to release resources
@@ -227,7 +227,7 @@ fi
 # ============================================================
 log_section "Reuse Name After Delete"
 
-RECREATE_OUTPUT=$(exec_in_agent hiclaw create worker --name "${TEST_WORKER}" --no-wait 2>&1)
+RECREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" --no-wait 2>&1)
 RECREATE_EXIT=$?
 if [ "${RECREATE_EXIT}" -eq 0 ]; then
     log_pass "Recreate with same name accepted"

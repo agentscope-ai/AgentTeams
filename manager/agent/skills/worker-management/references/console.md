@@ -14,10 +14,10 @@ QwenPaw Workers are created **without** the console by default to save ~500MB RA
 
 ```bash
 # Enable — recreates container with console; result JSON contains console_host_port
-bash /opt/hiclaw/agent/skills/worker-management/scripts/enable-worker-console.sh --name <NAME>
+bash /opt/agentteams/agent/skills/worker-management/scripts/enable-worker-console.sh --name <NAME>
 
 # Disable — recreates container without console, frees ~500MB RAM
-bash /opt/hiclaw/agent/skills/worker-management/scripts/enable-worker-console.sh --name <NAME> --action disable
+bash /opt/agentteams/agent/skills/worker-management/scripts/enable-worker-console.sh --name <NAME> --action disable
 ```
 
 After enabling, read `console_host_port` from the JSON result and report: `http://<manager-host>:<port>`. Remind admin to disable when done to reclaim memory.

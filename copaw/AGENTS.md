@@ -74,7 +74,7 @@ For CoPaw runtime, the Worker must translate this into **CoPaw's native configur
                │ push: FileSync.push_local                  (sync.py)
                ▼
 ┌─────────────────────────────┐
-│ Local workspace             │  /root/.hiclaw-worker/{name}/
+│ Local workspace             │  /root/.agentteams-worker/{name}/
 │ (OpenClaw-style, verbatim)  │  Same layout as MinIO. For OpenClaw Worker, this
 │                             │  is the final workspace; for CoPaw, it's the
 │                             │  persistence layer, not what the agent reads.
@@ -230,9 +230,9 @@ kind load docker-image agentteams/manager-copaw:latest --name agentteams
 make build-copaw-worker
 kind load docker-image agentteams/copaw-worker:latest --name agentteams
 
-make build-hiclaw-controller
-kind load docker-image hiclaw/hiclaw-controller:latest --name agentteams
-kubectl rollout restart deployment/hiclaw-controller -n agentteams
+make build-agentteams-controller
+kind load docker-image agentteams/agentteams-controller:latest --name agentteams
+kubectl rollout restart deployment/agentteams-controller -n agentteams
 ```
 
 Force Manager/Worker to pick up the new image (Controller reconciles on `status.phase=Pending`):
@@ -304,20 +304,20 @@ Log files are split across containers. These tables tell you *where to look firs
 
 | Log file | What it contains | Look here when |
 |---|---|---|
-| `/var/log/hiclaw/manager-agent.log` | Manager agent stdout (OpenClaw or CoPaw runtime) | Manager didn't react to your message / skill error |
-| `/var/log/hiclaw/manager-agent-error.log` | Manager agent stderr | Manager crashed or a tool call threw |
-| `/var/log/hiclaw/hiclaw-controller.log` | Controller reconcile loop | Worker creation / deletion / CR status issues |
-| `/var/log/hiclaw/hiclaw-controller-error.log` | Controller errors (stderr) | Worker create failed, Docker/K8s API errors, authorizer denials |
-| `/var/log/hiclaw/tuwunel.log` | Matrix homeserver | Missing events, room join failures, device/token errors |
-| `/var/log/hiclaw/higress-gateway.log` | AI Gateway request log | LLM timeouts, routing errors, rate-limit hits |
-| `/var/log/hiclaw/higress-controller.log` | Higress control plane | Consumer / route config drift |
-| `/var/log/hiclaw/mc-mirror.log` | `mc mirror` output for Manager's workspace | `agents/…` files not propagating to/from MinIO |
+| `/var/log/agentteams/manager-agent.log` | Manager agent stdout (OpenClaw or CoPaw runtime) | Manager didn't react to your message / skill error |
+| `/var/log/agentteams/manager-agent-error.log` | Manager agent stderr | Manager crashed or a tool call threw |
+| `/var/log/agentteams/agentteams-controller.log` | Controller reconcile loop | Worker creation / deletion / CR status issues |
+| `/var/log/agentteams/agentteams-controller-error.log` | Controller errors (stderr) | Worker create failed, Docker/K8s API errors, authorizer denials |
+| `/var/log/agentteams/tuwunel.log` | Matrix homeserver | Missing events, room join failures, device/token errors |
+| `/var/log/agentteams/higress-gateway.log` | AI Gateway request log | LLM timeouts, routing errors, rate-limit hits |
+| `/var/log/agentteams/higress-controller.log` | Higress control plane | Consumer / route config drift |
+| `/var/log/agentteams/mc-mirror.log` | `mc mirror` output for Manager's workspace | `agents/…` files not propagating to/from MinIO |
 
 Dump commands:
 
 ```bash
-docker exec agentteams-manager tail -n 200 /var/log/hiclaw/manager-agent.log
-docker exec agentteams-manager tail -n 200 /var/log/hiclaw/hiclaw-controller.log
+docker exec agentteams-manager tail -n 200 /var/log/agentteams/manager-agent.log
+docker exec agentteams-manager tail -n 200 /var/log/agentteams/agentteams-controller.log
 docker logs agentteams-manager --tail 200    # supervisord-level + any uncaught stdout
 ```
 
@@ -326,7 +326,7 @@ docker logs agentteams-manager --tail 200    # supervisord-level + any uncaught 
 | Stream | Where |
 |---|---|
 | stdout (via `docker logs`) | INFO / WARNING / ERROR from `copaw.*` loggers |
-| File log | `/root/.hiclaw-worker/logs/<date>_<time>.log` (same content as stdout; created on startup) |
+| File log | `/root/.agentteams-worker/logs/<date>_<time>.log` (same content as stdout; created on startup) |
 
 Level is controlled by `COPAW_LOG_LEVEL=debug|info|warning|error` (default `info`). AgentTeams Worker containers **do not** set it by default; bounce the container with `-e COPAW_LOG_LEVEL=debug` when you need `_download_mxc` / sync-loop detail.
 
@@ -338,7 +338,7 @@ Level is controlled by `COPAW_LOG_LEVEL=debug|info|warning|error` (default `info
 |---|---|---|
 | OpenClaw Manager | `/root/manager-workspace/.openclaw/agents/main/sessions/` | `.jsonl` — one message per line |
 | CoPaw Manager | `/root/manager-workspace/.copaw/workspaces/default/sessions/` | `.json` — one file per session |
-| CoPaw Worker | `/root/.hiclaw-worker/<name>/.copaw/workspaces/default/sessions/` | `.json` — one file per session |
+| CoPaw Worker | `/root/.agentteams-worker/<name>/.copaw/workspaces/default/sessions/` | `.json` — one file per session |
 
 The two formats are **not** cross-compatible.
 
@@ -346,10 +346,10 @@ The two formats are **not** cross-compatible.
 
 | File | Owner | Use when |
 |---|---|---|
-| `/root/.hiclaw-worker/<name>/openclaw.json` | Controller (via MinIO) | verify Matrix allowlist / provider config that the Manager *intends* |
-| `/root/.hiclaw-worker/<name>/.copaw/config.json` | `bridge()` output | verify what CoPaw actually sees for channels / security |
-| `/root/.hiclaw-worker/<name>/.copaw/workspaces/default/agent.json` | `bridge()` output | verify what the agent loop uses at runtime |
-| `/root/.hiclaw-worker/<name>/.copaw/workspaces/default/matrix_sync_token` | Channel state | reset to force full re-sync |
+| `/root/.agentteams-worker/<name>/openclaw.json` | Controller (via MinIO) | verify Matrix allowlist / provider config that the Manager *intends* |
+| `/root/.agentteams-worker/<name>/.copaw/config.json` | `bridge()` output | verify what CoPaw actually sees for channels / security |
+| `/root/.agentteams-worker/<name>/.copaw/workspaces/default/agent.json` | `bridge()` output | verify what the agent loop uses at runtime |
+| `/root/.agentteams-worker/<name>/.copaw/workspaces/default/matrix_sync_token` | Channel state | reset to force full re-sync |
 
 ### Standard triage path
 
@@ -385,7 +385,7 @@ These make healthy runs look broken or sick runs look healthy — learn them bef
 1. **Runtime config changes require a Worker restart.**
    CoPaw worker no longer runs a background Remote -> Local config pull loop. Startup `mirror_all()` restores MinIO state, and runtime Local -> Remote preservation is handled by `push_loop`. Shared data can still be pulled explicitly through the filesync tool, but `openclaw.json`, skills, and mcporter config are refreshed by restarting the Worker.
 
-2. **Team Leader startup always logs `authorization denied: team-leader "<name>" cannot ready worker`.** `hiclaw-controller/internal/auth/authorizer.go :: authorizeTeamLeaderWorkerAction` does not list `ActionReady` — the Leader's `hiclaw worker report-ready` call inside `copaw-worker-entrypoint.sh` gets a 403. The Worker process keeps running fine; only the readiness self-report is lost. Ignore it while debugging non-response issues — it is *not* the cause.
+2. **Team Leader startup always logs `authorization denied: team-leader "<name>" cannot ready worker`.** `agentteams-controller/internal/auth/authorizer.go :: authorizeTeamLeaderWorkerAction` does not list `ActionReady` — the Leader's `agt worker report-ready` call inside `copaw-worker-entrypoint.sh` gets a 403. The Worker process keeps running fine; only the readiness self-report is lost. Ignore it while debugging non-response issues — it is *not* the cause.
    > Remove this gotcha once `authorizeTeamLeaderWorkerAction` accepts `ActionReady` for the Leader's own team.
 
 3. **Manager-side MCP server re-setup can touch MinIO `openclaw.json`.** If you re-run `setup-mcp-server.sh` (or Manager triggers it on heartbeat), MinIO objects are rewritten even when content matches, bumping mtime. Combined with gotcha 1 this can show as a storm of re-bridges; check Manager logs around the reload moments.

@@ -3,7 +3,7 @@
 This checklist is for the QwenPaw Manager runtime. Every send into a Matrix **group** room (Worker room, Leader room, project room) or admin notification **must** go through **`copaw channels send`** via the shell tool (see **QwenPaw Message CLI Reference** at the end).
 
 **Hard rules (heartbeat sends — same intent as AGENTS.md Gotchas):**
-- **Workers do not see admin DMs.** Status pings, overdue triggers, and task follow-ups belong in the correct Matrix room via `copaw channels send`, using the room id from the task entry, project `meta.json`, or `hiclaw get workers -o json`. Do not rely on admin-facing text alone.
+- **Workers do not see admin DMs.** Status pings, overdue triggers, and task follow-ups belong in the correct Matrix room via `copaw channels send`, using the room id from the task entry, project `meta.json`, or `agt get workers -o json`. Do not rely on admin-facing text alone.
 - **`--target-session`** is the literal Matrix room id (no `room:` prefix). **`--target-user`** is the full Matrix id of the Worker or Team Leader you @mention in `--text`. Use single-quoted `--text '...'` so `@` mentions survive the shell.
 
 ### 1. Read state.json
@@ -11,7 +11,7 @@ This checklist is for the QwenPaw Manager runtime. Every send into a Matrix **gr
 Read state.json (local only, no sync needed). If the file does not exist, initialize it first:
 
 ```bash
-bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action init
+bash /opt/agentteams/agent/skills/task-management/scripts/manage-state.sh --action init
 cat ~/state.json
 ```
 
@@ -23,12 +23,12 @@ The `active_tasks` field in state.json contains all in-progress tasks (both fini
    - List joined rooms, find the DM room with exactly 2 members: you and `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}`
    - Persist it:
      ```bash
-     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+     bash /opt/agentteams/agent/skills/task-management/scripts/manage-state.sh \
        --action set-admin-dm --room-id "<discovered-room-id>"
      ```
 2. Verify the channel is resolvable:
    ```bash
-   bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
+   bash /opt/agentteams/agent/skills/task-management/scripts/resolve-notify-channel.sh
    ```
    If the output shows `"channel": "none"`, the admin DM room discovery above may have failed — retry or log a warning.
 
@@ -42,7 +42,7 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
 - Determine the target room: use `project_room_id` if available, otherwise use `room_id`
 - **Before sending any message**, ensure the Worker's container is running:
   ```bash
-  bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+  bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh \
     --action ensure-ready --worker {worker}
   ```
   The script outputs JSON with a `status` field:
@@ -64,7 +64,7 @@ Iterate over entries in `active_tasks` with `"type": "finite"`:
 - If the Worker has not responded (no response for more than one heartbeat cycle), flag the anomaly in the Room and notify the human admin (see Step 7)
 - If the Worker has replied that the task is complete but meta.json has not been updated, proactively update meta.json (status → completed, fill in completed_at), and remove the entry from `active_tasks`:
   ```bash
-  bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
+  bash /opt/agentteams/agent/skills/task-management/scripts/manage-state.sh --action complete --task-id {task-id}
   ```
 
 ---
@@ -77,7 +77,7 @@ Iterate over entries in `active_tasks` that have a `delegated_to_team` field:
 - Read `assigned_to` (the Team Leader name) and `room_id` (the Leader Room)
 - **Ensure the Team Leader's container is running**:
   ```bash
-  bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+  bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh \
     --action ensure-ready --worker {leader}
   ```
 - **Use `copaw channels send` via shell** to send a follow-up to the Leader room:
@@ -112,7 +112,7 @@ If conditions are met:
 
 1. **Ensure the Worker's container is running** before triggering:
    ```bash
-   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh \
+   bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh \
      --action ensure-ready --worker {worker}
    ```
    If `status` is `failed`, skip the trigger and flag the anomaly for the admin report (Step 7). If `started` or `recreated`, wait for the Worker to initialize (30s / 60s respectively).
@@ -129,7 +129,7 @@ If conditions are met:
 
 **Note**: Infinite tasks are never removed from active_tasks. After the Worker reports `executed`, **only** update `last_executed_at` and `next_scheduled_at` — do NOT @mention the Worker again:
 ```bash
-bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+bash /opt/agentteams/agent/skills/task-management/scripts/manage-state.sh \
   --action executed --task-id {task-id} --next-scheduled-at "{new-ISO-8601}"
 ```
 
@@ -139,10 +139,10 @@ bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
 
 ### 4. Project Progress Monitoring
 
-Scan plan.md for all active projects under /root/hiclaw-fs/shared/projects/:
+Scan plan.md for all active projects under /root/agentteams-fs/shared/projects/:
 
 ```bash
-for meta in /root/hiclaw-fs/shared/projects/*/meta.json; do
+for meta in /root/agentteams-fs/shared/projects/*/meta.json; do
   cat "$meta"
 done
 ```
@@ -172,7 +172,7 @@ done
 
 ### 5b. Drain Pending Worker Greetings
 
-If `~/pending-workers.json` exists, the previous admin DM turn(s) finished early after `hiclaw create worker --no-wait` and deferred the post-creation polling/greeting to you. Process every entry:
+If `~/pending-workers.json` exists, the previous admin DM turn(s) finished early after `agt create worker --no-wait` and deferred the post-creation polling/greeting to you. Process every entry:
 
 ```bash
 test -s ~/pending-workers.json || true
@@ -182,15 +182,15 @@ For each entry (one JSON object per line):
 
 1. Look up current status:
    ```bash
-   PHASE=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .phase // "Unknown"')
+   PHASE=$(agt get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .phase // "Unknown"')
    ```
 2. **`Pending`** and queued < 90s ago — leave the entry, drain again next heartbeat.
 3. **`Pending`** and queued > 90s ago — flag the anomaly to admin in DM (Step 7) and remove the entry using the drain helper below.
 4. **`Failed`** — read the worker's `message` field, notify admin in DM with the failure reason, remove the entry using the drain helper below.
-5. **`Running`** — fetch `roomID` from `hiclaw get workers -o json`, greet the Worker, then notify admin in DM that the Worker is up:
+5. **`Running`** — fetch `roomID` from `agt get workers -o json`, greet the Worker, then notify admin in DM that the Worker is up:
    ```bash
-   ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
-   bash /opt/hiclaw/agent/skills/worker-management/scripts/send-worker-greeting.sh \
+   ROOM_ID=$(agt get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
+   bash /opt/agentteams/agent/skills/worker-management/scripts/send-worker-greeting.sh \
      --worker "<NAME>" --room "${ROOM_ID}"
    # Then notify admin via copaw channels send to the resolved admin DM room:
    #   "<NAME> is now Running and greeted in their Worker room."
@@ -200,7 +200,7 @@ For each entry (one JSON object per line):
 Never run `rm`, `unlink`, `mv`, or any inline rewrite command for `~/pending-workers.json`; Tool Guard may pause the Admin DM session and block later admin requests. Keep the file, even if it becomes empty. To remove a processed entry, call the helper:
 
 ```bash
-bash /opt/hiclaw/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
+bash /opt/agentteams/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
 ```
 
 ---
@@ -210,19 +210,19 @@ bash /opt/hiclaw/agent/skills/worker-management/scripts/drain-pending-worker.sh 
 Only execute when the container API is available (check first):
 
 ```bash
-bash -c 'source /opt/hiclaw/scripts/lib/container-api.sh && container_api_available && echo available'
+bash -c 'source /opt/agentteams/scripts/lib/container-api.sh && container_api_available && echo available'
 ```
 
 If the output is `available`, proceed with the following steps:
 
 1. Sync status:
    ```bash
-   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --action sync-status
+   bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh --action sync-status
    ```
 
 2. Detect idle Workers and auto-stop those that have exceeded the timeout:
    ```bash
-   bash /opt/hiclaw/agent/skills/worker-management/scripts/lifecycle-worker.sh --action check-idle
+   bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh --action check-idle
    ```
    For each Worker that was auto-stopped, look up the Worker's `room_id` from `workers-registry.json` and **use `copaw channels send` via shell** to log:
    ```bash
@@ -244,7 +244,7 @@ If the output is `available`, proceed with the following steps:
 - Otherwise, **read SOUL.md first** — use the identity, personality, and **user's preferred language** defined there when composing the report. Report in that language and tone.
 - Resolve the notification channel:
   ```bash
-  bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
+  bash /opt/agentteams/agent/skills/task-management/scripts/resolve-notify-channel.sh
   ```
   The script outputs JSON with `channel`, `target`, and `via` fields.
 

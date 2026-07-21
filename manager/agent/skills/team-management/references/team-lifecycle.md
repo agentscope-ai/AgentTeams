@@ -6,21 +6,21 @@
 - **Degraded**: Some workers stopped or unavailable, Leader still running
 - **Stopped**: All containers stopped (can be restarted)
 
-Check status: `hiclaw get team <TEAM_NAME>`
+Check status: `agt get team <TEAM_NAME>`
 
 ## Adding a Worker to an Existing Team
 
-1. Update the team via `hiclaw apply -f` with the new worker added to the workers list
+1. Update the team via `agt apply -f` with the new worker added to the workers list
 2. Controller handles: creates Worker CR, joins Team Room, updates Leader's coordination context
 
 ## Removing a Worker from a Team
 
-1. Update the team via `hiclaw apply -f` with the worker removed from the workers list
+1. Update the team via `agt apply -f` with the worker removed from the workers list
 2. Controller handles: removes Worker CR, updates Leader's coordination context
 
 ## Deleting a Team
 
-1. Delete the team: `hiclaw delete team <TEAM_NAME>`
+1. Delete the team: `agt delete team <TEAM_NAME>`
 2. Controller handles: deletes all worker containers, cleans up rooms, removes storage
 
 ## Task Delegation to Teams

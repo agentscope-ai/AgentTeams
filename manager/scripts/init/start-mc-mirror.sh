@@ -2,7 +2,7 @@
 # start-mc-mirror.sh - Initialize MinIO storage and start periodic Remote->Local sync
 #
 # Manager's own workspace (/root/manager-workspace/) is LOCAL ONLY and not synced to MinIO.
-# MinIO only stores shared data and worker configs (/root/hiclaw-fs/).
+# MinIO only stores shared data and worker configs (/root/agentteams-fs/).
 #
 # ── File Sync Design Principle ──────────────────────────────────────────────
 #
@@ -24,7 +24,7 @@
 #
 # ────────────────────────────────────────────────────────────────────────────
 
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # MinIO S3: use explicit URL, or cluster FS endpoint, or in-process minio (embedded controller)
 # (Port 8080 is Higress, not the S3 API; never use it for mc.)
@@ -64,7 +64,7 @@ done
 
 # Create local mirror directory (for shared + worker data only)
 # Use absolute path because HOME may point to manager-workspace
-AGENTTEAMS_FS_ROOT="/root/hiclaw-fs"
+AGENTTEAMS_FS_ROOT="/root/agentteams-fs"
 mkdir -p "${AGENTTEAMS_FS_ROOT}"
 mkdir -p "${AGENTTEAMS_FS_ROOT}/agentteams-config"
 

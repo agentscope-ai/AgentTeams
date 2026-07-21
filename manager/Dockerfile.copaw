@@ -23,7 +23,7 @@ ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 # ============ Stage 1: MinIO Client (mc) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
-# ============ Stage 2: hiclaw CLI (from controller image) ============
+# ============ Stage 2: AgentTeams CLI (from controller image) ============
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image: Python 3.11 ============
@@ -53,8 +53,9 @@ RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
 # ---- Stable binaries from build stages ----
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc
 
-# hiclaw CLI — for worker/team/human management via controller REST API
-COPY --from=agentteams-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+# AgentTeams CLI — for worker/team/human management via controller REST API
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g mcporter skills @nacos-group/cli && \
@@ -116,27 +117,27 @@ RUN SITE=/opt/copaw-venv/lib/python3.11/site-packages \
     && rm -rf /tmp/copaw-worker/
 
 # ---- Copy Manager agent definitions ----
-COPY manager/agent/ /opt/hiclaw/agent/
-COPY manager/configs/ /opt/hiclaw/configs/
+COPY manager/agent/ /opt/agentteams/agent/
+COPY manager/configs/ /opt/agentteams/configs/
 
 # ---- Copy scripts: shared libs first, then manager scripts ----
-COPY shared/lib/ /opt/hiclaw/scripts/lib/
-COPY manager/scripts/ /opt/hiclaw/scripts/
+COPY shared/lib/ /opt/agentteams/scripts/lib/
+COPY manager/scripts/ /opt/agentteams/scripts/
 
 ARG BUILTIN_VERSION=latest
-RUN echo "${BUILTIN_VERSION}" > /opt/hiclaw/agent/.builtin-version
+RUN echo "${BUILTIN_VERSION}" > /opt/agentteams/agent/.builtin-version
 
 # Make all scripts executable
-RUN find /opt/hiclaw/scripts -name '*.sh' -exec chmod +x {} + && \
-    find /opt/hiclaw/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
-    find /opt/hiclaw/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
-    find /opt/hiclaw/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+RUN find /opt/agentteams/scripts -name '*.sh' -exec chmod +x {} + && \
+    find /opt/agentteams/agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/agentteams/agent/worker-skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true && \
+    find /opt/agentteams/agent/worker-agent/skills/*/scripts -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 
 # Workspace directory
 ENV HOME=/root/manager-workspace
-RUN mkdir -p /root/manager-workspace /root/hiclaw-fs /root/.openclaw
+RUN mkdir -p /root/manager-workspace /root/agentteams-fs /root/.openclaw
 
 WORKDIR /root/manager-workspace
 
 # start-manager-agent.sh branches on AGENTTEAMS_RUNTIME and AGENTTEAMS_MANAGER_RUNTIME
-ENTRYPOINT ["/opt/hiclaw/scripts/init/start-manager-agent.sh"]
+ENTRYPOINT ["/opt/agentteams/scripts/init/start-manager-agent.sh"]

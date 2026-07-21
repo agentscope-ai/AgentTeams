@@ -16,7 +16,7 @@
 #     - channels.matrix.accessToken: local wins (Worker re-login)
 #
 # Usage (as sourced function):
-#   source /opt/hiclaw/scripts/lib/merge-openclaw-config.sh
+#   source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
 #   merge_openclaw_config <remote_path> <local_path> [<output_path>]
 #
 # If output_path is omitted, writes merged result to local_path.

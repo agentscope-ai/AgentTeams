@@ -93,7 +93,7 @@ Read your current AGENTS.md (at `~/.openclaw/workspace/AGENTS.md` or your config
    - **Task Progress & History** — progress logs, task-history.json, resume flow
    - **Safety** — credential protection, destructive operation rules, MCP scope
 3. **REMOVE**: Any references to Discord, Slack, or other non-Matrix channels
-4. **ADAPT**: If you reference specific file paths, note that your workspace will be at `~/` (which maps to `/root/hiclaw-fs/agents/<worker-name>/`) and shared files at `/root/hiclaw-fs/shared/`
+4. **ADAPT**: If you reference specific file paths, note that your workspace will be at `~/` (which maps to `/root/agentteams-fs/agents/<worker-name>/`) and shared files at `/root/agentteams-fs/shared/`
 5. **ADD**: A note listing the custom tools installed in your image (from Step 1), so future-you knows what's available
 
 Structure the output as:
@@ -184,20 +184,20 @@ Tell the user the ZIP path. They will download the import script on the HiClaw h
 **Linux/macOS:**
 ```bash
 # Download the import script
-curl -sSL https://higress.ai/hiclaw/import.sh -o hiclaw-import.sh
-chmod +x hiclaw-import.sh
+curl -sSL https://higress.ai/hiclaw/import.sh -o agentteams-import.sh
+chmod +x agentteams-import.sh
 
 # Import the worker
-./hiclaw-import.sh worker --name <worker-name> --zip <path-to-zip>
+./agentteams-import.sh worker --name <worker-name> --zip <path-to-zip>
 ```
 
 **Windows (PowerShell):**
 ```powershell
 # Download the import script
-Invoke-WebRequest -Uri https://higress.ai/hiclaw/import.ps1 -OutFile hiclaw-import.ps1
+Invoke-WebRequest -Uri https://higress.ai/hiclaw/import.ps1 -OutFile agentteams-import.ps1
 
 # Import the worker
-.\hiclaw-import.ps1 worker --name <worker-name> --zip <path-to-zip>
+.\agentteams-import.ps1 worker --name <worker-name> --zip <path-to-zip>
 ```
 
 ## Script Reference

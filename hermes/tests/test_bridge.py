@@ -16,7 +16,7 @@ def _make_openclaw_cfg(*, vision: bool) -> dict:
     return {
         "channels": {
             "matrix": {
-                "homeserver": "http://hiclaw-controller:6167",
+                "homeserver": "http://agentteams-controller:6167",
                 "accessToken": "tok",
                 "userId": "@alice:matrix.local",
             }

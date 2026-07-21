@@ -75,7 +75,6 @@ load_env_file() {
         done < "${env_file}"
     fi
     export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-controller$' | head -1 || true)}"
-    export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-controller$' | head -1 || true)}"
     export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager$' | head -1 || true)}"
     export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
     export TEST_AGENT_CONTAINER="${TEST_AGENT_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)}"
@@ -157,8 +156,6 @@ cleanup() {
     docker rm agentteams-controller 2>/dev/null || true
     docker stop agentteams-manager 2>/dev/null || true
     docker rm agentteams-manager 2>/dev/null || true
-    docker stop hiclaw-controller 2>/dev/null || true
-    docker rm hiclaw-controller 2>/dev/null || true
     # Legacy container name
     docker stop hiclaw-manager 2>/dev/null || true
     docker rm hiclaw-manager 2>/dev/null || true
@@ -212,7 +209,7 @@ if [ "${USE_EXISTING}" = true ]; then
 else
     log "Installing Manager via install script..."
 
-    # Clean up any existing installation, then install fresh using hiclaw-install.sh.
+    # Clean up any existing installation, then install fresh using agentteams-install.sh.
     # This ensures ports, domains, and all initialization (Higress routes, Matrix users)
     # match exactly what users get in production.
     make -C "${PROJECT_ROOT}" uninstall 2>/dev/null || true

@@ -15,18 +15,18 @@ Import a real human account into AgentTeams. The script registers a Matrix accou
 
 ```bash
 # Level 1: Admin-equivalent access
-bash /opt/hiclaw/agent/skills/human-management/scripts/create-human.sh \
+bash /opt/agentteams/agent/skills/human-management/scripts/create-human.sh \
   --matrix-id "@john:domain" --name "John Doe" --level 1 \
   --email john@example.com
 
 # Level 2: Team-scoped access
-bash /opt/hiclaw/agent/skills/human-management/scripts/create-human.sh \
+bash /opt/agentteams/agent/skills/human-management/scripts/create-human.sh \
   --matrix-id "@jane:domain" --name "Jane Smith" --level 2 \
   --teams alpha-team,beta-team --workers standalone-dev \
   --email jane@example.com
 
 # Level 3: Worker-only access
-bash /opt/hiclaw/agent/skills/human-management/scripts/create-human.sh \
+bash /opt/agentteams/agent/skills/human-management/scripts/create-human.sh \
   --matrix-id "@bob:domain" --name "Bob" --level 3 \
   --workers alice,charlie \
   --email bob@example.com

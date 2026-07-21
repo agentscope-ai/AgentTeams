@@ -20,7 +20,7 @@ By the time you reach this skill, the admin has already confirmed worker name, r
 
 ## Step 1: Prepare SOUL content
 
-Prepare the Worker's SOUL text in memory — you will pass it inline to `hiclaw create worker --soul` in Step 2. **Do NOT** write it to a file first with `cat << EOF`, `echo >`, or any other heredoc/redirect. Heredoc-based file writes are unreliable across runtimes and frequently produce a silent 0-byte file, which causes the controller to fall back to a generic placeholder SOUL.md.
+Prepare the Worker's SOUL text in memory — you will pass it inline to `agt create worker --soul` in Step 2. **Do NOT** write it to a file first with `cat << EOF`, `echo >`, or any other heredoc/redirect. Heredoc-based file writes are unreliable across runtimes and frequently produce a silent 0-byte file, which causes the controller to fall back to a generic placeholder SOUL.md.
 
 The SOUL content must include these three sections, filled in for the Worker being created:
 
@@ -74,7 +74,7 @@ Pass the SOUL text from Step 1 **inline** via `--soul`, as a single double-quote
 Always use `--no-wait` so the call returns in ~1s instead of blocking up to 3 minutes waiting for `phase=Ready`. You will poll status separately in Step 2.5.
 
 ```bash
-hiclaw create worker \
+agt create worker \
   --name <NAME> \
   --no-wait \
   --soul "# Worker Agent - <NAME>
@@ -148,7 +148,7 @@ spec:
 Apply it with:
 
 ```bash
-hiclaw apply -f worker.yaml
+agt apply -f worker.yaml
 ```
 
 Changing `spec.resources` recreates the managed container. Confirm the Worker is idle or that admin accepts interruption before changing resources.
@@ -168,7 +168,7 @@ The JSON response contains the worker status. Key fields:
 With `--no-wait`, the create call returns in ~1s with the controller's accept response — the Worker is **still being provisioned** at that point (Matrix registration, Higress config, container startup all happen asynchronously). Immediately poll status:
 
 ```bash
-hiclaw get workers -o json
+agt get workers -o json
 ```
 
 This command returns ALL workers with their current `phase`:
@@ -185,20 +185,20 @@ This command returns ALL workers with their current `phase`:
 Repeat the poll once every 5-10s while still `Pending`. If still `Pending` after ~90s, report the situation to admin — but do **NOT** abandon the CLI and try to create the Worker again via curl or any other path. The create request was already accepted; a duplicate POST will fail with 409 Conflict and confuse the picture.
 
 **What NOT to do**:
-- ❌ `sleep 30 && hiclaw get workers` — Wastes time. Poll immediately and repeat as needed.
-- ❌ `cat /root/hiclaw-fs/agents/<name>/config.json` — Config is in MinIO, not local filesystem.
+- ❌ `sleep 30 && agt get workers` — Wastes time. Poll immediately and repeat as needed.
+- ❌ `cat /root/agentteams-fs/agents/<name>/config.json` — Config is in MinIO, not local filesystem.
 - ❌ `docker ps -a --filter "name=<name>"` — Docker may not be available in the Manager container.
 - ❌ `curl ${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/...` — **Forbidden.** See AGENTS.md "Controller API Rules". The CLI is the only supported path.
-- ❌ Re-running `hiclaw create worker` "to retry" while the first call is still `Pending` — that returns 409 Conflict.
+- ❌ Re-running `agt create worker` "to retry" while the first call is still `Pending` — that returns 409 Conflict.
 
 **What to do**:
-- ✅ `hiclaw get workers -o json` — Direct status check. Repeat every 5-10s if still `Pending`.
+- ✅ `agt get workers -o json` — Direct status check. Repeat every 5-10s if still `Pending`.
 - ✅ If `phase` is `"Running"`, proceed to Post-creation.
 - ✅ If `phase` is `"Failed"`, read the `message` field and report the error to admin.
 
 ## Post-creation
 
-`hiclaw create worker` alone does **not** notify the admin. The post-creation flow differs by **your own runtime** (the runtime running the Manager Agent), because that determines whether you can send incremental DM messages or only one final reply per turn.
+`agt create worker` alone does **not** notify the admin. The post-creation flow differs by **your own runtime** (the runtime running the Manager Agent), because that determines whether you can send incremental DM messages or only one final reply per turn.
 
 ### Choose your post-creation flow
 
@@ -217,7 +217,7 @@ Complete all three steps in this exact order. Do not skip Step 2 — it is the r
 #### A1. Verify Worker is Running
 
 ```bash
-hiclaw get workers -o json
+agt get workers -o json
 ```
 
 Confirm the target Worker's `phase` is `"Running"`. If `"Pending"`, check again shortly. If `"Failed"`, report the `message` field to admin and stop.
@@ -241,12 +241,12 @@ Failing to emit this reply is the number-one cause of "Manager replied to create
 After Step A2's reply is prepared, greet the Worker via the helper script. It auto-detects your runtime and handles all shell escaping, flag naming, and the `@<name>:${AGENTTEAMS_MATRIX_DOMAIN}` mention format:
 
 ```bash
-bash /opt/hiclaw/agent/skills/worker-management/scripts/send-worker-greeting.sh \
+bash /opt/agentteams/agent/skills/worker-management/scripts/send-worker-greeting.sh \
   --worker <NAME> \
   --room "<ROOM_ID>"
 ```
 
-`<ROOM_ID>` is the `roomID` field from the `hiclaw create worker -o json` response. Pass `--text "<custom message>"` to personalize the greeting.
+`<ROOM_ID>` is the `roomID` field from the `agt create worker -o json` response. Pass `--text "<custom message>"` to personalize the greeting.
 
 If the helper exits with code 2 instead of sending, it prints the target room, mention, and message text — deliver that greeting via your native message channel to the printed room.
 
@@ -258,7 +258,7 @@ If the helper exits with code 2 instead of sending, it prints the target room, m
 
 #### B1. Confirm controller accepted the create request
 
-You already ran `hiclaw create worker ... --no-wait -o json` in Step 2 above. The JSON response should contain `"phase": "Pending"` (or similar acceptance fields like `"name"`, `"roomID"`). That is enough — **do NOT** loop on `hiclaw get workers -o json` here.
+You already ran `agt create worker ... --no-wait -o json` in Step 2 above. The JSON response should contain `"phase": "Pending"` (or similar acceptance fields like `"name"`, `"roomID"`). That is enough — **do NOT** loop on `agt get workers -o json` here.
 
 If the create call returned an error or the response is missing the expected fields, report the error to admin in your final text reply and stop. Do not retry the create call (that returns 409 Conflict).
 
@@ -267,7 +267,7 @@ If the create call returned an error or the response is missing the expected fie
 Append a one-line entry to `~/pending-workers.json` (create the file if missing) so your next heartbeat knows to poll status and send the greeting:
 
 ```bash
-ROOM_ID=$(hiclaw get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
+ROOM_ID=$(agt get workers -o json | jq -r --arg n "<NAME>" '.[] | select(.name==$n) | .roomID // empty')
 mkdir -p ~/ && touch ~/pending-workers.json
 jq -n --arg name "<NAME>" --arg room "${ROOM_ID}" --arg ts "$(date -Iseconds)" \
   '{name:$name, room_id:$room, queued_at:$ts}' \
@@ -294,18 +294,18 @@ This reply mentions the Worker name explicitly so the admin (and the integration
 
 In your **next** heartbeat or self-triggered turn, for each entry in `~/pending-workers.json`:
 
-1. `hiclaw get workers -o json` and check the entry's `phase`. If still `Pending` and queued < 90s ago, leave it for a later heartbeat. If `Failed`, notify admin in DM and remove the entry using the drain helper below.
+1. `agt get workers -o json` and check the entry's `phase`. If still `Pending` and queued < 90s ago, leave it for a later heartbeat. If `Failed`, notify admin in DM and remove the entry using the drain helper below.
 2. If `Running`, run `send-worker-greeting.sh --worker <NAME> --room "<ROOM_ID>"` to greet the Worker in their room, then notify admin in DM with: `"<NAME> is now Running and greeted."`
 3. Remove the processed entry from `~/pending-workers.json` using the drain helper below.
 
 Never run `rm`, `unlink`, `mv`, or any inline rewrite command for `~/pending-workers.json`; Tool Guard may pause the Admin DM session and block later admin requests. Keep the file, even if it becomes empty. To remove a processed entry, call the helper:
 
 ```bash
-bash /opt/hiclaw/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
+bash /opt/agentteams/agent/skills/worker-management/scripts/drain-pending-worker.sh --worker "<NAME>"
 ```
 
 If you have HEARTBEAT.md, add a one-line bullet there reminding yourself to drain `~/pending-workers.json` at every heartbeat.
 
 ## Imported Worker Pull-Up
 
-When a template import finishes and sends a message to start an imported Worker, all config is already in place. **Do NOT run `hiclaw create worker`** — just start the container following the message instructions.
+When a template import finishes and sends a message to start an imported Worker, all config is already in place. **Do NOT run `agt create worker`** — just start the container following the message instructions.

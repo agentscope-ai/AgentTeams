@@ -127,12 +127,12 @@ MinIO: `agents/{worker_name}/config/credagent.json`
 
 1. Worker 启动时，`bridge_standard_to_runtime()` 读取 `config/credagent.json`，将所有 `credentials[].path` 注入到 CoPaw 的 `config.json` → `security.file_guard.sensitive_files`
 2. CoPaw 的 `FilePathToolGuardian` 在每次工具调用前检查路径是否匹配 `sensitive_files`
-3. HiClaw 的 credential guard hook 将 `SENSITIVE_FILE_ACCESS` finding 强制设为 `auto_denied`，Agent 无法绕过
+3. AgentTeams 的 credential guard hook 将 `SENSITIVE_FILE_ACCESS` finding 强制设为 `auto_denied`，Agent 无法绕过
 
 ### 输出脱敏
 
 1. Worker 启动时，从 `credagent.json` 的 `output_sanitize` 加载用户自定义规则，与内置规则合并
-2. HiClaw 通过 CoPaw Toolkit middleware 机制注册脱敏中间件
+2. AgentTeams 通过 CoPaw Toolkit middleware 机制注册脱敏中间件
 3. 每次工具执行完成后，中间件在输出到达 Agent 内存和用户展示之前，对 TextBlock 内容执行正则替换
 
 ### 热重载

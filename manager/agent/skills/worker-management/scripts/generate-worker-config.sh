@@ -5,13 +5,13 @@
 #   generate-worker-config.sh <WORKER_NAME> <MATRIX_TOKEN> <GATEWAY_KEY> [MODEL_ID] [TEAM_LEADER_NAME]
 #
 # Reads env vars: AGENTTEAMS_MATRIX_URL, AGENTTEAMS_MATRIX_DOMAIN, AGENTTEAMS_AI_GATEWAY_URL, AGENTTEAMS_ADMIN_USER, AGENTTEAMS_DEFAULT_MODEL
-# Output: /root/hiclaw-fs/agents/<WORKER_NAME>/openclaw.json
+# Output: /root/agentteams-fs/agents/<WORKER_NAME>/openclaw.json
 #
 # If TEAM_LEADER_NAME is provided, groupAllowFrom and dm.allowFrom will use
 # [Leader, Admin] instead of [Manager, Admin].
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 WORKER_NAME="$1"
 WORKER_MATRIX_TOKEN="$2"
@@ -112,10 +112,10 @@ else
     export MATRIX_E2EE_ENABLED=false
 fi
 
-OUTPUT_DIR="/root/hiclaw-fs/agents/${WORKER_NAME}"
+OUTPUT_DIR="/root/agentteams-fs/agents/${WORKER_NAME}"
 mkdir -p "${OUTPUT_DIR}"
 
-envsubst < /opt/hiclaw/agent/skills/worker-management/references/worker-openclaw.json.tmpl > "${OUTPUT_DIR}/openclaw.json"
+envsubst < /opt/agentteams/agent/skills/worker-management/references/worker-openclaw.json.tmpl > "${OUTPUT_DIR}/openclaw.json"
 
 # Post-envsubst injection: memorySearch + custom model (single jq pass when possible)
 if ! jq -e --arg model "${MODEL_NAME}" '.models.providers["agentteams-gateway"].models | map(.id) | index($model)' "${OUTPUT_DIR}/openclaw.json" > /dev/null 2>&1; then

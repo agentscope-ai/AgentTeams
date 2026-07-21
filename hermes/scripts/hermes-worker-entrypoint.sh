@@ -7,21 +7,21 @@
 #   AGENTTEAMS_FS_ENDPOINT   - MinIO endpoint (required in local mode)
 #   AGENTTEAMS_FS_ACCESS_KEY - MinIO access key (required in local mode)
 #   AGENTTEAMS_FS_SECRET_KEY - MinIO secret key (required in local mode)
-#   AGENTTEAMS_RUNTIME       - "aliyun" for cloud mode (uses RRSA/STS via hiclaw-env.sh)
+#   AGENTTEAMS_RUNTIME       - "aliyun" for cloud mode (uses RRSA/STS via agentteams-env.sh)
 #   TZ                   - Timezone (optional)
 
 set -e
 
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
+source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 # Align with the openclaw worker layout: HOME == workspace == MinIO mirror root.
-# The controller injects HOME=/root/hiclaw-fs/agents/<WORKER_NAME>; we anchor
+# The controller injects HOME=/root/agentteams-fs/agents/<WORKER_NAME>; we anchor
 # the install dir to its parent so workspace_dir == HOME and ${HERMES_HOME}
 # == ${HOME}/.hermes/. This makes `cd ~ && ls` show openclaw.json / AGENTS.md /
 # SOUL.md / skills / .hermes just like the openclaw worker.
-INSTALL_DIR="/root/hiclaw-fs/agents"
+INSTALL_DIR="/root/agentteams-fs/agents"
 WORKSPACE="${INSTALL_DIR}/${WORKER_NAME}"
 
 log() {
@@ -83,7 +83,7 @@ _start_readiness_reporter() {
             exit 1
         fi
 
-        hiclaw worker report-ready
+        agt worker report-ready
     ) &
     log "Background readiness reporter started (PID: $!)"
 }

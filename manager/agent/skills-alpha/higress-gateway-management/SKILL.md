@@ -14,7 +14,7 @@ This skill allows you to manage the Higress AI Gateway via its Console API. The 
 These environment variables are pre-configured in the Manager container. Access them directly in bash:
 
 ```bash
-# Core configuration (set by hiclaw-install.sh)
+# Core configuration (set by agentteams-install.sh)
 AGENTTEAMS_ADMIN_USER      # Admin username for Higress Console
 AGENTTEAMS_ADMIN_PASSWORD  # Admin password for Higress Console
 AGENTTEAMS_AI_GATEWAY_DOMAIN  # AI Gateway domain (e.g., aigw-local.agentteams.io)

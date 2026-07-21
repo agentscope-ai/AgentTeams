@@ -12,14 +12,14 @@
 1. Generate task ID: `task-YYYYMMDD-HHMMSS`
 2. Create task directory and files:
    ```bash
-   mkdir -p /root/hiclaw-fs/shared/tasks/{task-id}
+   mkdir -p /root/agentteams-fs/shared/tasks/{task-id}
    ```
    Write `meta.json` (type: "finite", status: "assigned") and `spec.md` (requirements, acceptance criteria, context).
 
 3. Push to MinIO **immediately** — Worker cannot file-sync until files are in MinIO:
    ```bash
-   mc cp /root/hiclaw-fs/shared/tasks/{task-id}/meta.json ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/meta.json
-   mc cp /root/hiclaw-fs/shared/tasks/{task-id}/spec.md ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/spec.md
+   mc cp /root/agentteams-fs/shared/tasks/{task-id}/meta.json ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/meta.json
+   mc cp /root/agentteams-fs/shared/tasks/{task-id}/spec.md ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/spec.md
    ```
    **Verify the push succeeded** (non-zero exit = retry). Do NOT proceed to step 4 until files are confirmed in MinIO.
 
@@ -29,12 +29,12 @@
 
    a) Get the Worker's `room_id` (and Matrix ID if needed):
    ```bash
-   hiclaw get workers -o json
+   agt get workers -o json
    ```
 
    b) Get your Manager runtime from the controller (source of truth):
    ```bash
-   hiclaw get managers -o json | jq -r '.managers[0].runtime'
+   agt get managers -o json | jq -r '.managers[0].runtime'
    ```
 
    c) Compose the body the Worker must receive (full Matrix @mention so they wake):
@@ -59,7 +59,7 @@
 
 5. **MANDATORY — Add to state.json** (this step is NOT optional, even for coordination, research, or management tasks):
    ```bash
-   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+   bash /opt/agentteams/agent/skills/task-management/scripts/manage-state.sh \
      --action add-finite --task-id {task-id} --title "{title}" \
      --assigned-to {worker} --room-id {room-id}
    ```
@@ -70,20 +70,20 @@
 
 1. Pull task directory from MinIO (Worker has pushed results):
    ```bash
-   mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/hiclaw-fs/shared/tasks/{task-id}/ --overwrite
+   mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/agentteams-fs/shared/tasks/{task-id}/ --overwrite
    ```
 2. Update `meta.json`: status=completed, fill completed_at. Push back to MinIO.
 3. Remove from state.json:
    ```bash
-   bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+   bash /opt/agentteams/agent/skills/task-management/scripts/manage-state.sh \
      --action complete --task-id {task-id}
    ```
 4. Log to `memory/YYYY-MM-DD.md`.
 5. Notify admin — read SOUL.md first for persona/language, then resolve channel:
    ```bash
-   bash /opt/hiclaw/agent/skills/task-management/scripts/resolve-notify-channel.sh
+   bash /opt/agentteams/agent/skills/task-management/scripts/resolve-notify-channel.sh
    ```
-   Re-read runtime if needed: `hiclaw get managers -o json | jq -r '.managers[0].runtime'`.
+   Re-read runtime if needed: `agt get managers -o json | jq -r '.managers[0].runtime'`.
 
    - **`openclaw`:** If `channel` is not `"none"`, use the **message** tool with the resolved `channel` and `target` (same mapping as channel-management / primary-channel docs). Send `[Task Completed] {task-id}: {title} — assigned to {worker}. {summary}`.
 
@@ -91,7 +91,7 @@
 
    - If `channel` is `"none"`: the admin DM room is not yet cached. Discover it now — list joined rooms, find the DM room with exactly 2 members (you and admin), then persist:
      ```bash
-     bash /opt/hiclaw/agent/skills/task-management/scripts/manage-state.sh \
+     bash /opt/agentteams/agent/skills/task-management/scripts/manage-state.sh \
        --action set-admin-dm --room-id "<discovered-room-id>"
      ```
      After persisting, retry `resolve-notify-channel.sh` and send the notification. If discovery fails, log a warning and move on — heartbeat will catch up.

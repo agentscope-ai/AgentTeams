@@ -37,7 +37,7 @@
 #   - Higress Console running at http://127.0.0.1:8001
 
 set -euo pipefail
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Parse arguments
@@ -80,7 +80,7 @@ if [ -z "${SERVER_NAME}" ] || [ -z "${CREDENTIAL_VALUE}" ]; then
 fi
 
 MCP_SERVER_NAME="mcp-${SERVER_NAME}"
-REFERENCES_DIR="/opt/hiclaw/agent/skills/mcp-server-management/references"
+REFERENCES_DIR="/opt/agentteams/agent/skills/mcp-server-management/references"
 BUILTIN_YAML="${REFERENCES_DIR}/mcp-${SERVER_NAME}.yaml"
 
 # Cloud mode: MCP Server management via script is not yet supported
@@ -336,7 +336,7 @@ if [ -f "${REGISTRY_FILE}" ]; then
         '{"mcpServerName":"'"${MCP_SERVER_NAME}"'","consumers":'"${CONSUMER_LIST}"'}'
 
     for wname in ${WORKER_NAMES}; do
-        WORKER_AGENT_DIR="/root/hiclaw-fs/agents/${wname}"
+        WORKER_AGENT_DIR="/root/agentteams-fs/agents/${wname}"
         MCPORTER_DIR="${WORKER_AGENT_DIR}/config"
         MCPORTER_FILE="${MCPORTER_DIR}/mcporter.json"
         MCPORTER_COMPAT="${WORKER_AGENT_DIR}/mcporter-servers.json"

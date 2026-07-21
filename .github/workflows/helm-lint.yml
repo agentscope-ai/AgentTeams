@@ -6,6 +6,7 @@ on:
       - 'helm/**'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
+      - 'tests/check-helm-rename-compat.sh'
   workflow_dispatch: ~
 
 jobs:
@@ -27,15 +28,11 @@ jobs:
         run: helm repo add higress.io https://higress.io/helm-charts
 
       - name: Build dependencies
-        run: helm dependency build helm/hiclaw/
+        run: helm dependency build helm/agentteams/
 
       - name: Lint
-        run: helm lint helm/hiclaw/
+        run: helm lint helm/agentteams/
 
       - name: Template dry-run
         run: |
-          helm template hiclaw helm/hiclaw/ \
-            --set credentials.registrationToken=test \
-            --set credentials.adminPassword=test \
-            --set credentials.llmApiKey=test \
-            --set gateway.publicURL=http://localhost:18080
+          bash tests/check-helm-rename-compat.sh

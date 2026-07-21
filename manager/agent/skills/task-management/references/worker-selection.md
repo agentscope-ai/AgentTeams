@@ -6,7 +6,7 @@
 
 ```bash
 # List all teams
-bash /opt/hiclaw/agent/skills/team-management/scripts/manage-teams-registry.sh --action list
+bash /opt/agentteams/agent/skills/team-management/scripts/manage-teams-registry.sh --action list
 ```
 
 If the task matches a Team's domain/expertise, delegate to the Team Leader instead of an individual Worker. See `team-management/references/team-task-delegation.md`.
@@ -15,13 +15,13 @@ If the task matches a Team's domain/expertise, delegate to the Team Leader inste
 
 ```bash
 # All workers with full availability info
-bash /opt/hiclaw/agent/skills/task-management/scripts/find-worker.sh
+bash /opt/agentteams/agent/skills/task-management/scripts/find-worker.sh
 
 # Filter by required skills
-bash /opt/hiclaw/agent/skills/task-management/scripts/find-worker.sh --skills github-operations,git-delegation
+bash /opt/agentteams/agent/skills/task-management/scripts/find-worker.sh --skills github-operations,git-delegation
 
 # Filter by team membership
-bash /opt/hiclaw/agent/skills/task-management/scripts/find-worker.sh --team alpha-team
+bash /opt/agentteams/agent/skills/task-management/scripts/find-worker.sh --team alpha-team
 ```
 
 Output includes `summary` (idle/busy/stopped/unavailable counts) and `workers` array with: `availability`, `role` (from SOUL.md), `worker_role` (worker/team_leader), `team_id`, `skills`, `finite_tasks`, `infinite_tasks`, `active_tasks`, `container_status`.
@@ -57,7 +57,7 @@ If you already ran `find-worker.sh`, do NOT run a separate container check. Only
 If the admin's requirement sounds reusable, or they explicitly mention templates, import, registry, or a direct package URI such as `nacos://...`, use `hiclaw-find-worker` before hand-creating a Worker:
 
 ```bash
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
   --query "<admin requirement>" --limit 3 --json
 ```
 

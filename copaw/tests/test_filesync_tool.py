@@ -33,11 +33,11 @@ def _mock_hiclaw_worker(monkeypatch, payload, expected_name="dag-team-dev"):
     original_which = shutil.which
     monkeypatch.setattr(
         "shutil.which",
-        lambda name: "/usr/local/bin/hiclaw" if name == "hiclaw" else original_which(name),
+        lambda name: "/usr/local/bin/agt" if name == "agt" else original_which(name),
     )
 
     def fake_run(cmd, **kwargs):
-        if cmd == ["/usr/local/bin/hiclaw", "get", "workers", expected_name, "-o", "json"]:
+        if cmd == ["/usr/local/bin/agt", "get", "workers", expected_name, "-o", "json"]:
             return subprocess.CompletedProcess(
                 cmd,
                 0,

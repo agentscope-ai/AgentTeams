@@ -168,7 +168,7 @@ class FileSync:
         # (config.workspace_dir), so this default only kicks in for direct
         # ``FileSync(...)`` callers in tests / dev scripts.
         self.local_dir = (
-            local_dir or Path("/root/hiclaw-fs/agents") / worker_name
+            local_dir or Path("/root/agentteams-fs/agents") / worker_name
         )
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self._prefix = f"agents/{worker_name}"
@@ -183,7 +183,7 @@ class FileSync:
         """Refresh STS credentials via the shared shell function (lazy)."""
         result = subprocess.run(
             ["bash", "-c",
-             "source /opt/hiclaw/scripts/lib/oss-credentials.sh && "
+             "source /opt/agentteams/scripts/lib/oss-credentials.sh && "
              "ensure_mc_credentials && "
              f"echo $MC_HOST_{_MC_ALIAS}"],
             capture_output=True, text=True, check=True,

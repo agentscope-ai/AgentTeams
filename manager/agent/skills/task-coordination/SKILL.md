@@ -67,31 +67,31 @@ The marker auto-expires after 15 minutes (configurable). This prevents deadlocks
 
 1. **Sync from MinIO first**:
    ```bash
-   mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" "/root/hiclaw-fs/shared/tasks/${task_id}/"
+   mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" "/root/agentteams-fs/shared/tasks/${task_id}/"
    ```
 
 2. **Check for `.processing`**:
    ```bash
-   bash /opt/hiclaw/agent/skills/task-coordination/scripts/check-processing-marker.sh "$task_id"
+   bash /opt/agentteams/agent/skills/task-coordination/scripts/check-processing-marker.sh "$task_id"
    ```
    - Exit code 0: Safe to proceed (no marker or expired)
    - Exit code 1: Processing in progress, do NOT modify
 
 3. **If safe, create marker**:
    ```bash
-   bash /opt/hiclaw/agent/skills/task-coordination/scripts/create-processing-marker.sh "$task_id" "manager"
+   bash /opt/agentteams/agent/skills/task-coordination/scripts/create-processing-marker.sh "$task_id" "manager"
    ```
 
 4. **Perform modifications**
 
 5. **Remove marker**:
    ```bash
-   bash /opt/hiclaw/agent/skills/task-coordination/scripts/remove-processing-marker.sh "$task_id"
+   bash /opt/agentteams/agent/skills/task-coordination/scripts/remove-processing-marker.sh "$task_id"
    ```
 
 6. **Sync to MinIO**:
    ```bash
-   mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/" "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" --overwrite
+   mc mirror "/root/agentteams-fs/shared/tasks/${task_id}/" "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" --overwrite
    ```
 
 ---
@@ -103,7 +103,7 @@ The marker auto-expires after 15 minutes (configurable). This prevents deadlocks
 Check if a task directory is being processed.
 
 ```bash
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/check-processing-marker.sh <task-id>
+bash /opt/agentteams/agent/skills/task-coordination/scripts/check-processing-marker.sh <task-id>
 ```
 
 **Exit codes:**
@@ -115,7 +115,7 @@ bash /opt/hiclaw/agent/skills/task-coordination/scripts/check-processing-marker.
 Create a processing marker for a task.
 
 ```bash
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/create-processing-marker.sh <task-id> <processor-name> [timeout-mins]
+bash /opt/agentteams/agent/skills/task-coordination/scripts/create-processing-marker.sh <task-id> <processor-name> [timeout-mins]
 ```
 
 **Parameters:**
@@ -128,7 +128,7 @@ bash /opt/hiclaw/agent/skills/task-coordination/scripts/create-processing-marker
 Remove the processing marker after work is done.
 
 ```bash
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/remove-processing-marker.sh <task-id>
+bash /opt/agentteams/agent/skills/task-coordination/scripts/remove-processing-marker.sh <task-id>
 ```
 
 ---

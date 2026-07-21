@@ -14,9 +14,6 @@
 if [ -z "${TEST_CONTROLLER_CONTAINER}" ]; then
     export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-controller$' | head -1 || true)"
     if [ -z "${TEST_CONTROLLER_CONTAINER}" ]; then
-        export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-controller$' | head -1 || true)"
-    fi
-    if [ -z "${TEST_CONTROLLER_CONTAINER}" ]; then
         # Fallback: legacy all-in-one manager container name
         export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager$' | head -1 || true)"
     fi
@@ -280,12 +277,12 @@ wait_for_manager_agent_ready() {
 # per-creation `worker created` log line, and the team reconciler now logs
 # `team reconciled` (repeated) instead of a one-shot `team created`. The
 # canonical readiness signal is the CR's `.status` subresource, which the
-# CLI surfaces via `hiclaw get`. Using the status means tests stay correct
+# CLI surfaces via `agt get`. Using the status means tests stay correct
 # across logging refactors and work regardless of log rotation.
 # ------------------------------------------------------------
 
 # wait_team_active <team_name> [timeout_seconds] [expected_phase]
-# Polls `hiclaw get teams <name> -o json` until .phase matches expected_phase
+# Polls `agt get teams <name> -o json` until .phase matches expected_phase
 # (default "Active"). Emits no log_pass/log_fail so the caller chooses how
 # to assert (typically followed by `assert_eq` on the resulting phase).
 # Returns 0 on match, 1 on timeout (and prints last-seen phase to stderr).
@@ -296,7 +293,7 @@ wait_team_active() {
     local elapsed=0
     local last=""
     while [ "${elapsed}" -lt "${timeout}" ]; do
-        last=$(exec_in_agent hiclaw get teams "${team_name}" -o json 2>/dev/null | jq -r '.phase // empty')
+        last=$(exec_in_agent agt get teams "${team_name}" -o json 2>/dev/null | jq -r '.phase // empty')
         if [ "${last}" = "${want}" ]; then
             return 0
         fi
@@ -309,7 +306,7 @@ wait_team_active() {
 }
 
 # wait_worker_phase <worker_name> [timeout_seconds] [expected_phase]
-# Polls `hiclaw get workers <name>` (works for standalone Workers AND
+# Polls `agt get workers <name>` (works for standalone Workers AND
 # synthesized team members, since ResourceHandler.teamMemberToResponse
 # serves both under one endpoint) until .phase matches expected_phase
 # (default "Running").
@@ -320,7 +317,7 @@ wait_worker_phase() {
     local elapsed=0
     local last=""
     while [ "${elapsed}" -lt "${timeout}" ]; do
-        last=$(exec_in_agent hiclaw get workers "${worker_name}" -o json 2>/dev/null | jq -r '.phase // empty')
+        last=$(exec_in_agent agt get workers "${worker_name}" -o json 2>/dev/null | jq -r '.phase // empty')
         if [ "${last}" = "${want}" ]; then
             return 0
         fi
@@ -348,7 +345,7 @@ wait_worker_provisioned() {
     local mxid=""
     while [ "${elapsed}" -lt "${timeout}" ]; do
         local json
-        json=$(exec_in_agent hiclaw get workers "${worker_name}" -o json 2>/dev/null)
+        json=$(exec_in_agent agt get workers "${worker_name}" -o json 2>/dev/null)
         room_id=$(echo "${json}" | jq -r '.roomID // empty')
         mxid=$(echo "${json}" | jq -r '.matrixUserID // empty')
         if [ -n "${room_id}" ] && [ -n "${mxid}" ]; then
@@ -371,7 +368,7 @@ wait_worker_model() {
     local elapsed=0
     local last=""
     while [ "${elapsed}" -lt "${timeout}" ]; do
-        last=$(exec_in_agent hiclaw get workers "${worker_name}" -o json 2>/dev/null | jq -r '.model // empty')
+        last=$(exec_in_agent agt get workers "${worker_name}" -o json 2>/dev/null | jq -r '.model // empty')
         if [ "${last}" = "${want}" ]; then
             return 0
         fi
@@ -434,7 +431,7 @@ wait_agent_matrix_allow_contains() {
 # Team.Status.Members.
 get_worker_room_id() {
     local worker_name="$1"
-    exec_in_agent hiclaw get workers "${worker_name}" -o json 2>/dev/null | jq -r '.roomID // empty'
+    exec_in_agent agt get workers "${worker_name}" -o json 2>/dev/null | jq -r '.roomID // empty'
 }
 
 worker_container_name() {
@@ -910,15 +907,15 @@ dump_diagnostics() {
                 printf "\n--- controller logs (recent, filtered for %s) ---\n" "${name}"
                 docker logs --tail 1000 "${controller}" 2>&1 \
                     | grep -E "${name}|worker-${name}|MinIO|policy|openclaw.json|recreating|spec changed" | tail -80 || true
-                printf "\n--- hiclaw get worker %s ---\n" "${name}"
-                exec_in_agent hiclaw get workers "${name}" -o json 2>&1 || true
+                printf "\n--- agt get worker %s ---\n" "${name}"
+                exec_in_agent agt get workers "${name}" -o json 2>&1 || true
                 ;;
             team)
                 printf "\n--- controller logs (recent, filtered for %s) ---\n" "${name}"
                 docker logs --tail 300 "${controller}" 2>&1 \
                     | grep -E "${name}|team reconciled|member" | tail -80 || true
-                printf "\n--- hiclaw get team %s ---\n" "${name}"
-                exec_in_agent hiclaw get teams "${name}" -o json 2>&1 || true
+                printf "\n--- agt get team %s ---\n" "${name}"
+                exec_in_agent agt get teams "${name}" -o json 2>&1 || true
                 ;;
             *)
                 printf "dump_diagnostics: unknown kind '%s' (name=%s)\n" "${kind}" "${name}"

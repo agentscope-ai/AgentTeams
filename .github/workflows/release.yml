@@ -93,13 +93,13 @@ jobs:
           #### macOS / Linux
 
           \`\`\`bash
-          bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/${STABLE_VERSION}/install/hiclaw-install.sh)
+          bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/${STABLE_VERSION}/install/agentteams-install.sh)
           \`\`\`
 
           #### Windows (PowerShell 7+)
 
           \`\`\`powershell
-          Set-ExecutionPolicy Bypass -Scope Process -Force; \$wc=New-Object Net.WebClient; \$wc.Encoding=[Text.Encoding]::UTF8; iex \$wc.DownloadString('https://raw.githubusercontent.com/${REPOSITORY}/${STABLE_VERSION}/install/hiclaw-install.ps1')
+          Set-ExecutionPolicy Bypass -Scope Process -Force; \$wc=New-Object Net.WebClient; \$wc.Encoding=[Text.Encoding]::UTF8; iex \$wc.DownloadString('https://raw.githubusercontent.com/${REPOSITORY}/${STABLE_VERSION}/install/agentteams-install.ps1')
           \`\`\`
           EOF
 
@@ -111,13 +111,13 @@ jobs:
           #### macOS / Linux
 
           \`\`\`bash
-          AGENTTEAMS_VERSION=${VERSION} bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/${VERSION}/install/hiclaw-install.sh)
+          AGENTTEAMS_VERSION=${VERSION} bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/${VERSION}/install/agentteams-install.sh)
           \`\`\`
 
           #### Windows (PowerShell 7+)
 
           \`\`\`powershell
-          \$env:AGENTTEAMS_VERSION='${VERSION}'; Set-ExecutionPolicy Bypass -Scope Process -Force; \$wc=New-Object Net.WebClient; \$wc.Encoding=[Text.Encoding]::UTF8; iex \$wc.DownloadString('https://raw.githubusercontent.com/${REPOSITORY}/${VERSION}/install/hiclaw-install.ps1')
+          \$env:AGENTTEAMS_VERSION='${VERSION}'; Set-ExecutionPolicy Bypass -Scope Process -Force; \$wc=New-Object Net.WebClient; \$wc.Encoding=[Text.Encoding]::UTF8; iex \$wc.DownloadString('https://raw.githubusercontent.com/${REPOSITORY}/${VERSION}/install/agentteams-install.ps1')
           \`\`\`
           EOF
           fi

@@ -60,7 +60,7 @@ case "${MANAGER_RUNTIME}" in
     *)
         # OpenClaw: trigger via system event
         docker exec "${MANAGER_CONTAINER}" bash -c \
-            "cd ~/hiclaw-fs/agents/manager && openclaw system event --mode now" 2>/dev/null || \
+            "cd ~/agentteams-fs/agents/manager && openclaw system event --mode now" 2>/dev/null || \
             log_info "Could not trigger OpenClaw heartbeat via system event"
         ;;
 esac

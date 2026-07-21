@@ -9,7 +9,7 @@
 #     [--teams t1,t2] [--workers w1,w2] [--email user@example.com] [--note "..."]
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 log() {
     local msg="[hiclaw $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -66,7 +66,7 @@ log "  Workers: ${WORKERS_CSV:-none}"
 # ============================================================
 # Ensure credentials
 # ============================================================
-SECRETS_FILE="/data/hiclaw-secrets.env"
+SECRETS_FILE="/data/agentteams-secrets.env"
 if [ -f "${SECRETS_FILE}" ]; then
     source "${SECRETS_FILE}"
 fi
@@ -128,7 +128,7 @@ ensure_mc_credentials 2>/dev/null || true
 # Helper: add human to an agent's groupAllowFrom and push to MinIO
 _add_to_group_allow() {
     local agent_name="$1"
-    local config_path="/root/hiclaw-fs/agents/${agent_name}/openclaw.json"
+    local config_path="/root/agentteams-fs/agents/${agent_name}/openclaw.json"
 
     if [ ! -f "${config_path}" ]; then
         log "    WARNING: ${config_path} not found, skipping"
@@ -292,7 +292,7 @@ fi
 # Step 3: Update humans-registry.json
 # ============================================================
 log "Step 3: Updating humans-registry.json..."
-bash /opt/hiclaw/agent/skills/human-management/scripts/manage-humans-registry.sh \
+bash /opt/agentteams/agent/skills/human-management/scripts/manage-humans-registry.sh \
     --action add \
     --name "${HUMAN_USERNAME}" \
     --matrix-id "${MATRIX_ID}" \

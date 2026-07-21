@@ -3,12 +3,12 @@
 # Pulls config from centralized file system, starts file sync, launches OpenClaw.
 #
 # HOME is set to the Worker workspace so all agent-generated files are synced to MinIO:
-#   ~/ = /root/hiclaw-fs/agents/<WORKER_NAME>/  (SOUL.md, openclaw.json, memory/)
-#   /root/hiclaw-fs/shared/                     = Shared tasks, knowledge, collaboration data
+#   ~/ = /root/agentteams-fs/agents/<WORKER_NAME>/  (SOUL.md, openclaw.json, memory/)
+#   /root/agentteams-fs/shared/                     = Shared tasks, knowledge, collaboration data
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
-source /opt/hiclaw/scripts/lib/merge-openclaw-config.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
+source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:-}"
@@ -29,7 +29,7 @@ if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 # Use absolute path because HOME is set to the workspace directory via docker run
-AGENTTEAMS_ROOT="/root/hiclaw-fs"
+AGENTTEAMS_ROOT="/root/agentteams-fs"
 WORKSPACE="${AGENTTEAMS_ROOT}/agents/${WORKER_NAME}"
 
 # ============================================================
@@ -141,13 +141,14 @@ fi
 # Ensure hiclaw-sync wrapper is functional
 # Use /bin/sh to invoke the script so it works even without +x permission
 # (MinIO object storage does not preserve Unix permission bits)
-printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/hiclaw-sync.sh" "$@"\n' \
-    "${WORKSPACE}" > /usr/local/bin/hiclaw-sync
-chmod +x /usr/local/bin/hiclaw-sync
+printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/agentteams-sync.sh" "$@"\n' \
+    "${WORKSPACE}" > /usr/local/bin/agentteams-sync
+chmod +x /usr/local/bin/agentteams-sync
+ln -sf /usr/local/bin/agentteams-sync /usr/local/bin/hiclaw-sync
 
-# Defensive symlink: /opt/hiclaw/agent/skills -> actual skills directory
-mkdir -p /opt/hiclaw/agent
-ln -sfn "${WORKSPACE}/skills" /opt/hiclaw/agent/skills
+# Defensive symlink: /opt/agentteams/agent/skills -> actual skills directory
+mkdir -p /opt/agentteams/agent
+ln -sfn "${WORKSPACE}/skills" /opt/agentteams/agent/skills
 
 log "HOME set to ${HOME} (workspace files will be synced to MinIO)"
 
@@ -358,7 +359,7 @@ if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
         fi
 
         # Report ready to controller via hiclaw CLI
-        hiclaw worker report-ready --name "${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
+        agt worker report-ready --name "${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
     ) &
     log "Background readiness reporter started (PID: $!)"
 fi

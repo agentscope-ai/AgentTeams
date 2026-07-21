@@ -18,15 +18,15 @@ Do not use this skill for generic hand-created Worker creation. This skill only 
 
 ```bash
 # Search by requirement
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
   --query "<admin requirement>" --limit 3 --json
 
 # Install after the admin confirms
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
   --template <TEMPLATE_NAME> --worker-name <NAME>
 
 # Or import a direct package URI after the admin confirms
-bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
   --package-uri <PACKAGE_URI> --worker-name <NAME>
 ```
 
@@ -36,10 +36,10 @@ bash /opt/hiclaw/agent/skills/hiclaw-find-worker/scripts/install-worker-template
 
 - **Always confirm before importing search results** — when you searched by task/requirement, recommend candidates first and wait for the admin to choose one.
 - **This skill only imports from Nacos** — do not stretch it to zip files or other package formats.
-- **Do not run `create-worker.sh` for Nacos imports** — imports use `hiclaw apply worker --package ...`.
+- **Do not run `create-worker.sh` for Nacos imports** — imports use `agt apply worker --package ...`.
 - **If the admin gives you `nacos://...` directly, stay in this skill** — treat it as an explicit package import, confirm the Worker name, then install without searching.
 - **Only fall back before installation** — you may switch to `worker-management` only when search proves there is no usable Nacos candidate. Once the admin confirms a specific Worker/package URI, stay in this skill until install succeeds or fails.
-- **Report install failures directly** — if `install-worker-template.sh` or `hiclaw apply worker` fails, stop there and tell the admin the import failed. Include the key error from the command output. Do not hand-create a Worker after a confirmed import fails unless the admin explicitly asks for that fallback.
+- **Report install failures directly** — if `install-worker-template.sh` or `agt apply worker` fails, stop there and tell the admin the import failed. Include the key error from the command output. Do not hand-create a Worker after a confirmed import fails unless the admin explicitly asks for that fallback.
 - **`package_uri` is the handoff contract** — use the `package_uri` from the search output as the package to install.
 
 ## Operation Reference

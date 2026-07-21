@@ -125,8 +125,8 @@ _k8s_api() {
     local path="$3"
 
     if [ "${method}" = "GET" ] || [ "${method}" = "DELETE" ]; then
-        docker exec "${TEST_CONTROLLER_CONTAINER:-hiclaw-controller}" sh -c '
-            token="$(cut -d, -f1 /data/hiclaw-controller/pki/token.csv)"
+        docker exec "${TEST_CONTROLLER_CONTAINER:-agentteams-controller}" sh -c '
+            token="$(cut -d, -f1 /data/agentteams-controller/pki/token.csv)"
             curl -ksS -X "$1" \
                 -H "Authorization: Bearer ${token}" \
                 "https://127.0.0.1:6443$2"
@@ -134,8 +134,8 @@ _k8s_api() {
         return $?
     fi
 
-    docker exec -i "${TEST_CONTROLLER_CONTAINER:-hiclaw-controller}" sh -c '
-        token="$(cut -d, -f1 /data/hiclaw-controller/pki/token.csv)"
+    docker exec -i "${TEST_CONTROLLER_CONTAINER:-agentteams-controller}" sh -c '
+        token="$(cut -d, -f1 /data/agentteams-controller/pki/token.csv)"
         curl -ksS -X "$1" \
             -H "Authorization: Bearer ${token}" \
             -H "Content-Type: $2" \
@@ -643,7 +643,7 @@ IMAGE_PACKAGE_CHECK=$(docker run --rm -i --entrypoint /opt/venv/qwenpaw/bin/pyth
 from pathlib import Path
 import zipfile
 
-zip_path = Path("/opt/hiclaw/plugins/teamharness-qwenpaw.zip")
+zip_path = Path("/opt/agentteams/plugins/teamharness-qwenpaw.zip")
 assert zip_path.is_file(), zip_path
 with zipfile.ZipFile(zip_path) as archive:
     names = set(archive.namelist())
@@ -863,10 +863,10 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
     fi
 done
 
-WORKER_HOME="/root/hiclaw-fs/agents/${TEST_WORKER}"
+WORKER_HOME="/root/agentteams-fs/agents/${TEST_WORKER}"
 WORKER_QWENPAW_DIR="${WORKER_HOME}/.qwenpaw"
 WORKER_DEFAULT_WS="${WORKER_QWENPAW_DIR}/workspaces/default"
-LEADER_HOME="/root/hiclaw-fs/agents/${TEST_LEADER}"
+LEADER_HOME="/root/agentteams-fs/agents/${TEST_LEADER}"
 LEADER_QWENPAW_DIR="${LEADER_HOME}/.qwenpaw"
 LEADER_DEFAULT_WS="${LEADER_QWENPAW_DIR}/workspaces/default"
 

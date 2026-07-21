@@ -63,12 +63,12 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 **macOS / Linux:**
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 **Windows (PowerShell 7+ recommended):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
 The installer walks you through:
@@ -89,22 +89,22 @@ Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manag
 
 ```bash
 # Upgrade to latest (preserves all data)
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 
 # Upgrade to specific version
-AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ## Uninstall
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.sh) uninstall
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 This removes all AgentTeams containers (Manager, Workers, docker-proxy), Docker volume, network, env file, workspace directory, and install log.
@@ -125,8 +125,8 @@ For shared / production deployments you can install AgentTeams on any Kubernetes
 helm repo add higress.io https://higress.io/helm-charts
 helm repo update
 
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.adminPassword=<your-admin-password> \
@@ -136,8 +136,8 @@ helm install hiclaw higress.io/hiclaw \
 For non-OpenAI providers that expose an OpenAI-compatible API, also set `llmBaseUrl`:
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -150,8 +150,8 @@ helm install hiclaw higress.io/hiclaw \
 <summary>Using Qwen (通义千问) instead</summary>
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<your-qwen-api-key> \
   --set credentials.llmProvider=qwen \
@@ -182,8 +182,8 @@ helm install hiclaw higress.io/hiclaw \
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.adminPassword=<your-admin-password> \
   --set gateway.publicURL=http://localhost:18080 \
@@ -194,8 +194,8 @@ helm install hiclaw higress.io/hiclaw \
 <summary>Using alternative runtimes (QwenPaw Manager + Hermes Workers)</summary>
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace --devel \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace --devel \
   --set manager.runtime=copaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
@@ -221,8 +221,8 @@ The default `global.imageRegistry` points to the China region (`higress-registry
 
 ```bash
 # Example: deploy from the North America registry
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set global.imageRegistry=higress-registry.us-west-1.cr.aliyuncs.com/higress \
   --set credentials.llmApiKey=<your-api-key> \
@@ -230,14 +230,14 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-For all configurable values (gateway/storage providers, image tags, resources, persistence, etc.) see [`helm/hiclaw/values.yaml`](helm/hiclaw/values.yaml).
+For all configurable values (gateway/storage providers, image tags, resources, persistence, etc.) see [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml).
 
 **Access**
 
 For a temporary local admin session, forward the Higress Gateway:
 
 ```bash
-kubectl port-forward -n hiclaw-system svc/higress-gateway 18080:80
+kubectl port-forward -n agentteams-system svc/higress-gateway 18080:80
 ```
 
 Then open http://localhost:18080 and log in to Element Web. The port-forward
@@ -249,12 +249,12 @@ Web configuration as its Matrix homeserver URL, so it must exactly match the
 public origin that users open (for example, `https://agentteams.example.com`).
 
 1. Point the public DNS name at your Ingress controller or load balancer.
-2. Provision a TLS certificate Secret in `hiclaw-system`.
+2. Provision a TLS certificate Secret in `agentteams-system`.
 3. Set the same origin on the Helm release:
 
 ```bash
-helm upgrade hiclaw higress.io/hiclaw \
-  -n hiclaw-system --reuse-values \
+helm upgrade agentteams higress.io/agentteams \
+  -n agentteams-system --reuse-values \
   --set gateway.publicURL=https://agentteams.example.com
 ```
 
@@ -267,7 +267,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: agentteams
-  namespace: hiclaw-system
+  namespace: agentteams-system
 spec:
   ingressClassName: nginx
   tls:
@@ -304,14 +304,20 @@ and `gateway.publicURL` requirements remain the same.
 
 ```bash
 helm repo update
-helm upgrade hiclaw higress.io/hiclaw -n hiclaw-system --reuse-values
+helm upgrade agentteams higress.io/agentteams -n agentteams-system --reuse-values
+```
+
+For a release originally installed with the legacy `hiclaw` release and namespace names, keep those names during the chart migration so Kubernetes resource names and immutable selectors remain unchanged:
+
+```bash
+helm upgrade hiclaw higress.io/agentteams -n hiclaw-system --reuse-values
 ```
 
 **Uninstall**
 
 ```bash
-helm uninstall hiclaw -n hiclaw-system
-kubectl delete namespace hiclaw-system
+helm uninstall agentteams -n agentteams-system
+kubectl delete namespace agentteams-system
 ```
 
 For the Kubernetes-native architecture (CRDs, controller, declarative `Worker` / `Team` / `Human` resources), see [docs/k8s-native-agent-orch.md](docs/k8s-native-agent-orch.md).
@@ -378,7 +384,7 @@ Each runtime excels at different tasks. A common pattern: use deterministic agen
 
 ```bash
 # Switch any worker's runtime in place
-hiclaw update worker --runtime hermes
+agt update worker --runtime hermes
 ```
 
 ## Architecture
@@ -434,7 +440,7 @@ Worker Alice    Worker Bob              Worker Charlie
 ## Troubleshooting
 
 ```bash
-docker exec -it agentteams-manager cat /var/log/hiclaw/manager-agent.log
+docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
 See [docs/zh-cn/faq.md](docs/zh-cn/faq.md) for common issues.

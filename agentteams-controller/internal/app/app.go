@@ -1,0 +1,917 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sync"
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/accessresolver"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/apiserver"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/config"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/controller"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credentials"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/executor"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/initializer"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
+	agentteamsmetrics "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/remoteclient"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/server"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/store"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/watcher"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+)
+
+// App is the top-level application container. It centralizes dependency
+// construction, wiring, and lifecycle management so that main.go stays minimal.
+type App struct {
+	cfg *config.Config
+	mgr ctrl.Manager
+
+	httpServer *server.HTTPServer
+
+	// wg tracks all background goroutines launched from Start so Stop can
+	// wait for them to drain before returning.
+	wg sync.WaitGroup
+
+	// --- Build-time intermediates (populated during init*, consumed by later init* steps) ---
+	scheme    *runtime.Scheme
+	restCfg   *rest.Config
+	k8sClient kubernetes.Interface
+	authMw    *authpkg.Middleware
+	namespace string
+
+	// Executors
+	shell    *executor.Shell
+	packages *executor.PackageResolver
+
+	// STS (optional, only when the credential-provider sidecar is configured)
+	stsService *credentials.STSService
+
+	// Credential provider sidecar client (nil when not configured)
+	credProvider credprovider.Client
+
+	// Infrastructure clients
+	matrix   matrix.Client
+	gateway  gateway.Client
+	oss      oss.StorageClient
+	ossAdmin oss.StorageAdminClient
+	agentGen *agentconfig.Generator
+	registry *backend.Registry
+
+	// Remote-cluster k8s client cache. Non-nil only when the credential
+	// provider sidecar is configured; consumed by the K8s worker backend
+	// to route operations against Workers/Managers deployed to remote
+	// clusters and refreshed by a background maintenance loop.
+	remoteClientCache *remoteclient.Cache
+
+	// Service layer
+	provisioner *service.Provisioner
+	deployer    *service.Deployer
+	envBuilder  *service.WorkerEnvBuilder
+	legacy      *service.LegacyCompat
+}
+
+// New constructs the entire application dependency graph and wires everything
+// together. It does NOT start any long-running goroutines — call Start for that.
+func New(ctx context.Context, cfg *config.Config) (*App, error) {
+	a := &App{cfg: cfg, namespace: cfg.Namespace()}
+
+	steps := []struct {
+		name string
+		fn   func(context.Context) error
+	}{
+		{"scheme", a.initScheme},
+		{"infra-clients", a.initInfraClients},
+		// controller-manager must be initialized before backends so that
+		// initBackends can construct the remote-client cache with
+		// mgr.GetClient() (only used by the maintenance loop, not yet at
+		// construction time).
+		{"controller-manager", a.initControllerManager},
+		{"backends", a.initBackends},
+		{"field-indexers", a.initFieldIndexers},
+		{"auth", a.initAuth},
+		{"service-layer", a.initServiceLayer},
+		{"reconcilers", a.initReconcilers},
+		{"http-server", a.initHTTPServer},
+	}
+
+	for _, s := range steps {
+		if err := s.fn(ctx); err != nil {
+			return nil, fmt.Errorf("%s: %w", s.name, err)
+		}
+	}
+
+	return a, nil
+}
+
+// Start runs the HTTP server and controller manager. Blocks until ctx is cancelled.
+// Call Stop afterwards to drain background goroutines and shut the HTTP server
+// down gracefully.
+func (a *App) Start(ctx context.Context) error {
+	logger := ctrl.Log.WithName("app")
+
+	// Log AppService configuration at startup so operators can see
+	// auto-generated tokens for registration with the homeserver.
+	if a.cfg.MatrixAppServiceEnabled {
+		fields := []interface{}{
+			"id", a.cfg.MatrixAppServiceID,
+			"sender", a.cfg.MatrixAppServiceSenderLocalpart,
+		}
+		if a.cfg.MatrixAppServiceASTokenAutoGenerated {
+			fields = append(fields, "as_token", a.cfg.MatrixAppServiceASToken, "as_token_auto_generated", true)
+		} else {
+			fields = append(fields, "as_token_source", "env")
+		}
+		if a.cfg.MatrixAppServiceHSTokenAutoGenerated {
+			fields = append(fields, "hs_token", a.cfg.MatrixAppServiceHSToken, "hs_token_auto_generated", true)
+		} else {
+			fields = append(fields, "hs_token_source", "env")
+		}
+		logger.Info("Matrix AppService mode enabled", fields...)
+	}
+
+	a.wg.Go(func() {
+		if err := a.httpServer.Start(); err != nil {
+			logger.Error(err, "HTTP server failed")
+		}
+	})
+
+	// Launch the remote-client cache maintenance loop. StartMaintenanceLoop
+	// internally spawns its own goroutine and returns immediately; it
+	// runs until ctx is cancelled.
+	if a.remoteClientCache != nil {
+		a.remoteClientCache.StartMaintenanceLoop(ctx)
+	}
+
+	// Run cluster initialization only after this instance becomes the leader.
+	// In embedded mode (no leader election) Elected() closes immediately.
+	a.wg.Go(func() {
+		<-a.mgr.Elected()
+		logger.Info("elected as leader, running cluster initialization")
+
+		init := &initializer.Initializer{
+			OSS:     a.oss,
+			Matrix:  a.matrix,
+			Gateway: a.gateway,
+			RestCfg: a.restCfg,
+			Config: initializer.Config{
+				ManagerEnabled:             a.cfg.ManagerEnabled,
+				ManagerModel:               a.cfg.ManagerModel,
+				ManagerRuntime:             a.cfg.ManagerRuntime,
+				ManagerImage:               a.cfg.ManagerImage,
+				ManagerResources:           a.cfg.ManagerSpecResources,
+				AdminUser:                  a.cfg.MatrixAdminUser,
+				AdminPassword:              a.cfg.MatrixAdminPassword,
+				Namespace:                  a.namespace,
+				IsEmbedded:                 a.cfg.KubeMode == "embedded",
+				AgentFSDir:                 a.cfg.AgentFSDir(),
+				GatewayProvider:            a.cfg.GatewayProvider,
+				StorageProvider:            a.cfg.StorageProvider,
+				LLMProvider:                a.cfg.LLMProvider,
+				LLMAPIKey:                  a.cfg.LLMAPIKey,
+				OpenAIBaseURL:              a.cfg.OpenAIBaseURL,
+				AIStreamIdleTimeoutSeconds: a.cfg.AIStreamIdleTimeoutSeconds,
+				TuwunelURL:                 a.cfg.MatrixServerURL,
+				ElementWebURL:              a.cfg.ElementWebURL,
+				ControllerName:             a.cfg.ControllerName,
+				AppServiceEnabled:          a.cfg.MatrixAppServiceEnabled,
+				AppServiceID:               a.cfg.MatrixAppServiceID,
+				AppServiceToken:            a.cfg.MatrixAppServiceASToken,
+				AppServiceHSToken:          a.cfg.MatrixAppServiceHSToken,
+				AppServiceSenderLocalpart:  a.cfg.MatrixAppServiceSenderLocalpart,
+				AppServicePushURL:          a.cfg.MatrixAppServicePushURL,
+				MatrixDomain:               a.cfg.MatrixDomain,
+			},
+		}
+		if err := init.Run(ctx); err != nil {
+			logger.Error(err, "cluster initialization failed (non-fatal, continuing)")
+		}
+
+		// When switching from AppService mode to legacy password mode,
+		// automatically backfill passwords for workers/managers that were
+		// created without passwords in AS mode. This enables seamless
+		// rollback without manual intervention.
+		if !a.cfg.MatrixAppServiceEnabled {
+			// Legacy mode: backfill passwords for AS-created accounts.
+			if err := a.provisioner.BackfillLegacyPasswords(ctx); err != nil {
+				logger.Error(err, "legacy password backfill had errors (non-fatal)")
+			}
+		} else {
+			// AS mode: clean up stale password files from previous legacy mode.
+			names, listErr := a.provisioner.CredentialNames(ctx)
+			if listErr != nil {
+				logger.Error(listErr, "failed to list credentials for password cleanup (non-fatal)")
+			} else if len(names) > 0 {
+				if err := a.deployer.CleanLegacyPasswordFiles(ctx, names); err != nil {
+					logger.Error(err, "legacy password cleanup had errors (non-fatal)")
+				}
+			}
+		}
+
+		// Mint a long-lived admin SA token and write it to a known location
+		// so the bundled `agt` CLI inside this container can authenticate
+		// against the controller's HTTP API out of the box (see Dockerfile
+		// ENV AGENTTEAMS_AUTH_TOKEN_FILE / AGENTTEAMS_CONTROLLER_URL). Embedded mode
+		// only — incluster controllers typically lack the RBAC to mint
+		// arbitrary SA tokens, and operators there have kubectl + their own
+		// credentials anyway.
+		if a.cfg.KubeMode == "embedded" {
+			if err := bootstrapAdminCLIToken(ctx, a.provisioner); err != nil {
+				logger.Error(err, "admin CLI token bootstrap failed (non-fatal, in-container `agt` CLI may return 401 until next reconcile)")
+			}
+		}
+
+		logger.Info("agentteams-controller ready",
+			"kubeMode", a.cfg.KubeMode,
+			"httpAddr", a.cfg.HTTPAddr,
+		)
+	})
+
+	return a.mgr.Start(ctx)
+}
+
+// Stop performs a graceful shutdown: the HTTP server stops accepting new
+// connections and is given ctx to finish in-flight requests, then we wait
+// for every background goroutine launched from Start to exit. Safe to call
+// after Start returns. The caller is expected to bound ctx with a timeout.
+func (a *App) Stop(ctx context.Context) error {
+	logger := ctrl.Log.WithName("app")
+	var firstErr error
+	if a.httpServer != nil {
+		if err := a.httpServer.Shutdown(ctx); err != nil {
+			logger.Error(err, "HTTP server shutdown")
+			firstErr = err
+		}
+	}
+	a.wg.Wait()
+	return firstErr
+}
+
+// =========================================================================
+// Initialization steps — called sequentially by New()
+// =========================================================================
+
+func (a *App) initScheme(_ context.Context) error {
+	a.scheme = runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(a.scheme)
+	if err := v1beta1.AddToScheme(a.scheme); err != nil {
+		return fmt.Errorf("register CRD scheme: %w", err)
+	}
+	return nil
+}
+
+func (a *App) initInfraClients(_ context.Context) error {
+	cfg := a.cfg
+	logger := ctrl.Log.WithName("app")
+
+	a.matrix = matrix.NewTuwunelClient(cfg.MatrixConfig(), nil)
+	a.agentGen = agentconfig.NewGenerator(cfg.AgentConfig())
+	a.shell = executor.NewShell(cfg.SkillsDir)
+	a.packages = executor.NewPackageResolver("/tmp/import")
+
+	// Credential provider sidecar — required for ai-gateway / external OSS /
+	// worker STS issuance, optional otherwise.
+	if cfg.CredentialProviderURL != "" {
+		a.credProvider = credprovider.NewHTTPClient(cfg.CredentialProviderURL, nil)
+		// Note: a.stsService is constructed in initServiceLayer, after the
+		// controller-runtime Manager (and its client.Client) is built, since
+		// the accessresolver needs to read Worker/Manager CRs.
+		logger.Info("credential-provider sidecar configured", "url", cfg.CredentialProviderURL)
+	}
+	if a.credProvider != nil {
+		a.packages.CredClient = a.credProvider
+	}
+
+	// Gateway client — provider-driven.
+	if cfg.UsesAIGateway() {
+		if a.credProvider == nil {
+			return fmt.Errorf("ai-gateway provider requires AGENTTEAMS_CREDENTIAL_PROVIDER_URL to be set")
+		}
+		tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
+			SessionName: "agentteams-controller",
+			Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, cfg.GWGatewayID),
+		})
+		cred := credprovider.NewAliyunCredential(tm)
+		cli, err := gateway.NewAIGatewayClient(cfg.AIGatewayConfig(), cred)
+		if err != nil {
+			return fmt.Errorf("create ai-gateway client: %w", err)
+		}
+		a.gateway = cli
+		logger.Info("gateway provider: ai-gateway (APIG)", "region", cfg.Region, "gatewayId", cfg.GWGatewayID)
+	} else {
+		a.gateway = gateway.NewHigressClient(cfg.GatewayConfig(), nil)
+		logger.Info("gateway provider: higress", "url", cfg.HigressBaseURL)
+	}
+
+	// Storage client — provider-driven. The OSS client reuses the MinIO
+	// implementation (both speak the mc CLI); when talking to external
+	// OSS the mc credentials are sourced per-invocation from the
+	// credential-provider sidecar via a CredentialSource, and the admin
+	// API is unavailable (buckets/users/policies are provisioned externally).
+	mcClient := oss.NewMinIOClient(cfg.OSSConfig())
+	if cfg.UsesExternalOSS() {
+		if a.credProvider == nil {
+			return fmt.Errorf("oss provider requires AGENTTEAMS_CREDENTIAL_PROVIDER_URL to be set")
+		}
+		if cfg.OSSConfig().Endpoint == "" {
+			return fmt.Errorf("oss provider requires AGENTTEAMS_FS_ENDPOINT to be set (endpoint is no longer returned by the credential-provider sidecar)")
+		}
+		gatewayID := ""
+		if cfg.UsesAIGateway() {
+			gatewayID = cfg.GWGatewayID
+		}
+		tm := credprovider.NewTokenManager(a.credProvider, credprovider.IssueRequest{
+			SessionName: "agentteams-controller",
+			Entries:     accessresolver.ControllerDefaults(cfg.OSSBucket, gatewayID),
+		})
+		mcClient = mcClient.WithCredentialSource(&ossControllerCredSource{tm: tm})
+		a.oss = mcClient
+		logger.Info("storage provider: oss (external)", "bucket", cfg.OSSBucket)
+	} else {
+		a.oss = mcClient
+		logger.Info("storage provider: minio (embedded)", "bucket", cfg.OSSBucket)
+		if cfg.HasMinIOAdmin() {
+			a.ossAdmin = oss.NewMinIOAdminClient(cfg.OSSConfig())
+		}
+	}
+	return nil
+}
+
+// ossControllerCredSource is an oss.CredentialSource that pulls fresh
+// controller-scoped STS triples from a credprovider.TokenManager.
+type ossControllerCredSource struct {
+	tm *credprovider.TokenManager
+}
+
+func (s *ossControllerCredSource) Resolve(ctx context.Context) (oss.Credentials, error) {
+	t, err := s.tm.Token(ctx)
+	if err != nil {
+		return oss.Credentials{}, err
+	}
+	return oss.Credentials{
+		AccessKeyID:     t.AccessKeyID,
+		AccessKeySecret: t.AccessKeySecret,
+		SecurityToken:   t.SecurityToken,
+	}, nil
+}
+
+func (a *App) initBackends(_ context.Context) error {
+	// Initialize the remote-cluster k8s client cache when the credential
+	// provider sidecar is configured. The cache holds references to
+	// mgr.GetClient() and the credential client; actual List calls happen
+	// later from the maintenance loop and from GetOrCreate, by which time
+	// the manager's cache will be running.
+	if a.credProvider != nil {
+		a.remoteClientCache = remoteclient.NewCache(remoteclient.CacheConfig{
+			CredClient:     a.credProvider,
+			CtrlClient:     a.mgr.GetClient(),
+			Scheme:         a.scheme,
+			ControllerName: a.cfg.ControllerName,
+		})
+	}
+	workerBackends := buildWorkerBackends(a.cfg, a.scheme, a.remoteClientCache)
+	a.registry = backend.NewRegistry(workerBackends)
+	return nil
+}
+
+func (a *App) initControllerManager(ctx context.Context) error {
+	var err error
+	if a.cfg.KubeMode == "embedded" {
+		a.restCfg, err = a.startEmbedded(ctx)
+	} else {
+		a.restCfg, err = a.startInCluster()
+	}
+	return err
+}
+
+// initFieldIndexers registers cache field indexers used for efficient reverse
+// lookups by auth enrichment and, in the future, admission/validation.
+//
+//   - teams.spec.leader.name  -> list Team by leader name or runtime workerName
+//   - teams.spec.workerNames  -> list Team by any worker name or runtime workerName
+func (a *App) initFieldIndexers(ctx context.Context) error {
+	if a.mgr == nil {
+		return nil
+	}
+	idx := a.mgr.GetFieldIndexer()
+	if err := idx.IndexField(ctx, &v1beta1.Team{}, controller.TeamLeaderNameField, func(obj crclient.Object) []string {
+		team, ok := obj.(*v1beta1.Team)
+		if !ok {
+			return nil
+		}
+		names := uniqueNonEmpty(team.Spec.Leader.Name, team.Spec.Leader.WorkerName)
+		if len(names) == 0 {
+			return nil
+		}
+		return names
+	}); err != nil {
+		return fmt.Errorf("index team leader name: %w", err)
+	}
+	if err := idx.IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerNameField, func(obj crclient.Object) []string {
+		team, ok := obj.(*v1beta1.Team)
+		if !ok {
+			return nil
+		}
+		names := make([]string, 0, len(team.Spec.Workers)*2)
+		for _, w := range team.Spec.Workers {
+			names = append(names, uniqueNonEmpty(w.Name, w.WorkerName)...)
+		}
+		return names
+	}); err != nil {
+		return fmt.Errorf("index team worker names: %w", err)
+	}
+	if err := idx.IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerMembersField, func(obj crclient.Object) []string {
+		team, ok := obj.(*v1beta1.Team)
+		if !ok {
+			return nil
+		}
+		names := make([]string, 0, len(team.Spec.WorkerMembers))
+		for _, ref := range team.Spec.WorkerMembers {
+			if ref.Name != "" {
+				names = append(names, ref.Name)
+			}
+		}
+		return names
+	}); err != nil {
+		return fmt.Errorf("index team workerMembers name: %w", err)
+	}
+	return nil
+}
+
+func uniqueNonEmpty(values ...string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func (a *App) initAuth(ctx context.Context) error {
+	logger := ctrl.Log.WithName("app")
+
+	if a.restCfg != nil {
+		var err error
+		a.k8sClient, err = kubernetes.NewForConfig(a.restCfg)
+		if err != nil {
+			return fmt.Errorf("create kubernetes client: %w", err)
+		}
+		authenticator := authpkg.NewTokenReviewAuthenticator(a.k8sClient, a.cfg.AuthAudience, authpkg.ResourcePrefix(a.cfg.ResourcePrefix))
+		go authenticator.StartCleanup(ctx)
+		enricher := authpkg.NewCREnricher(a.mgr.GetClient(), a.namespace)
+		authorizer := authpkg.NewAuthorizer()
+		a.authMw = authpkg.NewMiddleware(authenticator, enricher, authorizer, a.mgr.GetClient(), a.namespace)
+		logger.Info("K8s SA token authentication enabled", "audience", a.cfg.AuthAudience)
+	} else {
+		a.authMw = authpkg.NewMiddleware(nil, nil, authpkg.NewAuthorizer(), nil, a.namespace)
+		logger.Info("authentication disabled (no REST config)")
+	}
+	return nil
+}
+
+func (a *App) initServiceLayer(_ context.Context) error {
+	cfg := a.cfg
+
+	// Build the STS service now that the controller-runtime Manager (and
+	// thus client.Client) is available. The resolver reads Worker/Manager
+	// CRs to translate CR-layer AccessEntries into the resolved form
+	// expected by the credential-provider sidecar. In local higress+minio
+	// deployments CredentialProviderURL is empty and the service stays nil.
+	if a.credProvider != nil {
+		gatewayID := ""
+		if cfg.UsesAIGateway() {
+			gatewayID = cfg.GWGatewayID
+		}
+		resolver := accessresolver.New(a.mgr.GetClient(), a.namespace, cfg.OSSBucket, gatewayID, authpkg.ResourcePrefix(cfg.ResourcePrefix))
+		a.stsService = credentials.NewSTSService(cfg.STSConfig(), resolver, a.credProvider)
+	}
+
+	var credStore service.CredentialStore
+	if cfg.KubeMode == "incluster" && a.k8sClient != nil {
+		credStore = &service.SecretCredentialStore{
+			Client:         a.k8sClient,
+			Namespace:      a.namespace,
+			ControllerName: cfg.ControllerName,
+			ResourcePrefix: authpkg.ResourcePrefix(cfg.ResourcePrefix),
+		}
+	} else {
+		credStore = &service.FileCredentialStore{Dir: cfg.CredsDir()}
+	}
+
+	a.provisioner = service.NewProvisioner(service.ProvisionerConfig{
+		Matrix:            a.matrix,
+		Gateway:           a.gateway,
+		OSSAdmin:          a.ossAdmin,
+		Creds:             credStore,
+		K8sClient:         a.k8sClient,
+		KubeMode:          cfg.KubeMode,
+		Namespace:         a.namespace,
+		AuthAudience:      cfg.AuthAudience,
+		MatrixDomain:      cfg.MatrixDomain,
+		AdminUser:         cfg.MatrixAdminUser,
+		ResourcePrefix:    authpkg.ResourcePrefix(cfg.ResourcePrefix),
+		ControllerName:    cfg.ControllerName,
+		ManagerPassword:   cfg.ManagerPassword,
+		ManagerGatewayKey: cfg.ManagerGatewayKey,
+		ManagerEnabled:    cfg.ManagerEnabled,
+		AIGatewayURL:      cfg.WorkerEnv.AIGatewayURL,
+		ManagerModel:      cfg.ManagerModel,
+		MatrixConfig:      cfg.MatrixConfig(),
+		RemoteCache:       a.remoteClientCache,
+	})
+
+	a.envBuilder = service.NewWorkerEnvBuilder(cfg.WorkerEnv)
+
+	if a.oss != nil {
+		agentFSDir := ""
+		if cfg.KubeMode == "embedded" {
+			agentFSDir = cfg.AgentFSDir()
+		}
+		a.legacy = service.NewLegacyCompat(service.LegacyConfig{
+			OSS:          a.oss,
+			MatrixDomain: cfg.MatrixDomain,
+			AgentFSDir:   agentFSDir,
+		})
+	}
+
+	a.deployer = service.NewDeployer(service.DeployerConfig{
+		AgentConfig:     a.agentGen,
+		OSS:             a.oss,
+		Executor:        a.shell,
+		Packages:        a.packages,
+		Legacy:          a.legacy,
+		AgentFSDir:      cfg.AgentFSDir(),
+		WorkerAgentDir:  cfg.WorkerAgentDir(),
+		MatrixDomain:    cfg.MatrixDomain,
+		NacosCredClient: a.credProvider,
+	})
+
+	return nil
+}
+
+func (a *App) initReconcilers(_ context.Context) error {
+	resourcePrefix := authpkg.ResourcePrefix(a.cfg.ResourcePrefix)
+	var dynamicClient dynamic.Interface
+	if a.restCfg != nil {
+		var err error
+		dynamicClient, err = dynamic.NewForConfig(a.restCfg)
+		if err != nil {
+			return fmt.Errorf("create dynamic client: %w", err)
+		}
+	}
+	var remoteDynamicClientProvider backend.RemoteDynamicClientProvider
+	if a.remoteClientCache != nil {
+		remoteDynamicClientProvider = a.remoteClientCache
+	}
+	if _, err := (&controller.WorkerReconciler{
+		Client:                      a.mgr.GetClient(),
+		Provisioner:                 a.provisioner,
+		Deployer:                    a.deployer,
+		Backend:                     a.registry,
+		EnvBuilder:                  a.envBuilder,
+		ResourcePrefix:              resourcePrefix,
+		Legacy:                      a.legacy,
+		DefaultRuntime:              a.cfg.DefaultWorkerRuntime,
+		DefaultBackendRuntime:       a.cfg.WorkerBackendRuntime,
+		ControllerName:              a.cfg.ControllerName,
+		GatewayClient:               a.gateway,
+		DynamicClient:               dynamicClient,
+		RemoteDynamicClientProvider: remoteDynamicClientProvider,
+		AuthTokenExpirationSeconds:  a.cfg.AuthTokenExpirationSeconds,
+		WorkerDepsStorageBucket:     a.cfg.WorkerDepsStorageBucket,
+		WorkerDepsStorageEndpoint:   a.cfg.WorkerDepsStorageEndpoint,
+		MountAuthType:               a.cfg.WorkerDepsMountAuthType,
+		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
+	}).SetupWithManager(a.mgr); err != nil {
+		return fmt.Errorf("setup WorkerReconciler: %w", err)
+	}
+
+	if _, err := (&controller.TeamReconciler{
+		Client:                      a.mgr.GetClient(),
+		Provisioner:                 a.provisioner,
+		Deployer:                    a.deployer,
+		Backend:                     a.registry,
+		EnvBuilder:                  a.envBuilder,
+		Legacy:                      a.legacy,
+		DefaultRuntime:              a.cfg.DefaultWorkerRuntime,
+		DefaultBackendRuntime:       a.cfg.WorkerBackendRuntime,
+		AgentFSDir:                  a.cfg.AgentFSDir(),
+		ControllerName:              a.cfg.ControllerName,
+		ResourcePrefix:              resourcePrefix,
+		GatewayClient:               a.gateway,
+		DynamicClient:               dynamicClient,
+		RemoteDynamicClientProvider: remoteDynamicClientProvider,
+		AuthTokenExpirationSeconds:  a.cfg.AuthTokenExpirationSeconds,
+		WorkerDepsStorageBucket:     a.cfg.WorkerDepsStorageBucket,
+		WorkerDepsStorageEndpoint:   a.cfg.WorkerDepsStorageEndpoint,
+		MountAuthType:               a.cfg.WorkerDepsMountAuthType,
+		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
+		SystemAdminUser:             a.cfg.MatrixAdminUser,
+	}).SetupWithManager(a.mgr); err != nil {
+		return fmt.Errorf("setup TeamReconciler: %w", err)
+	}
+
+	if err := (&controller.HumanReconciler{
+		Client:      a.mgr.GetClient(),
+		Provisioner: a.provisioner,
+		Legacy:      a.legacy,
+	}).SetupWithManager(a.mgr); err != nil {
+		return fmt.Errorf("setup HumanReconciler: %w", err)
+	}
+
+	if a.cfg.ManagerEnabled {
+		mgrReconciler := &controller.ManagerReconciler{
+			Client:           a.mgr.GetClient(),
+			Provisioner:      a.provisioner,
+			Deployer:         a.deployer,
+			Backend:          a.registry,
+			EnvBuilder:       a.envBuilder,
+			ResourcePrefix:   resourcePrefix,
+			ManagerResources: a.cfg.ManagerResources(),
+			DefaultRuntime:   a.cfg.ManagerRuntime,
+			ControllerName:   a.cfg.ControllerName,
+			UserLanguage:     a.cfg.UserLanguage,
+			UserTimezone:     a.cfg.UserTimezone,
+			GatewayClient:    a.gateway,
+		}
+		if a.cfg.KubeMode == "embedded" {
+			mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{
+				WorkspaceDir:       a.cfg.ManagerWorkspaceDir,
+				HostShareDir:       a.cfg.HostShareDir,
+				ExtraEnv:           a.cfg.ManagerAgentEnv(),
+				ManagerConsolePort: a.cfg.ManagerConsolePort,
+			}
+		}
+		if err := mgrReconciler.SetupWithManager(a.mgr); err != nil {
+			return fmt.Errorf("setup ManagerReconciler: %w", err)
+		}
+	} else {
+		ctrl.Log.WithName("app").Info("skipping ManagerReconciler because Manager provisioning is disabled")
+	}
+
+	if err := a.mgr.Add(&agentteamsmetrics.CRCountCollector{
+		Client:       a.mgr.GetClient(),
+		Namespace:    a.namespace,
+		SkipManagers: !a.cfg.ManagerEnabled,
+	}); err != nil {
+		return fmt.Errorf("setup CR count collector: %w", err)
+	}
+
+	return nil
+}
+
+func (a *App) initHTTPServer(_ context.Context) error {
+	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
+		Client:         a.mgr.GetClient(),
+		Backend:        a.registry,
+		Gateway:        a.gateway,
+		OSS:            a.oss,
+		STS:            a.stsService,
+		AuthMw:         a.authMw,
+		KubeMode:       a.cfg.KubeMode,
+		Namespace:      a.namespace,
+		ControllerName: a.cfg.ControllerName,
+		SocketPath:     a.cfg.SocketPath,
+		MatrixConfig:   a.cfg.MatrixConfig(),
+		Provisioner:    a.provisioner,
+	})
+	return nil
+}
+
+// =========================================================================
+// Controller-manager bootstrapping (embedded vs incluster)
+// =========================================================================
+
+func (a *App) startEmbedded(ctx context.Context) (*rest.Config, error) {
+	logger := ctrl.Log.WithName("app")
+	cfg := a.cfg
+	logger.Info("starting embedded mode", "dataDir", cfg.DataDir, "configDir", cfg.ConfigDir)
+
+	kineServer, err := store.StartKine(ctx, store.Config{
+		DataDir:       cfg.DataDir,
+		ListenAddress: "127.0.0.1:2379",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start kine: %w", err)
+	}
+	logger.Info("kine started", "endpoints", kineServer.ETCDConfig.Endpoints)
+
+	restCfg, err := apiserver.Start(ctx, apiserver.Config{
+		DataDir:    cfg.DataDir,
+		EtcdURL:    "http://127.0.0.1:2379",
+		BindAddr:   "127.0.0.1",
+		SecurePort: "6443",
+		CRDDir:     cfg.CRDDir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start embedded kube-apiserver: %w", err)
+	}
+	logger.Info("embedded kube-apiserver ready")
+
+	a.mgr, err = ctrl.NewManager(restCfg, ctrl.Options{
+		Scheme: a.scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: a.cfg.MetricsBindAddr,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create controller manager: %w", err)
+	}
+
+	fw := watcher.New(cfg.ConfigDir, a.mgr.GetClient())
+	if err := fw.InitialSync(ctx); err != nil {
+		logger.Error(err, "initial sync failed (non-fatal)")
+	}
+	a.wg.Go(func() {
+		if err := fw.Watch(ctx); err != nil && ctx.Err() == nil {
+			logger.Error(err, "file watcher stopped unexpectedly")
+		}
+	})
+	logger.Info("file watcher started", "dir", cfg.ConfigDir)
+
+	return restCfg, nil
+}
+
+func (a *App) startInCluster() (*rest.Config, error) {
+	logger := ctrl.Log.WithName("app")
+	logger.Info("starting in-cluster mode")
+
+	// AGENTTEAMS_CONTROLLER_NAME is mandatory in incluster mode: it drives the
+	// leader election lease name, the agentteams.io/controller CR label
+	// selector, and the agent pod template ConfigMap name. Running with
+	// an empty value would silently collapse these three scopes onto
+	// global defaults, causing cross-instance interference in the same
+	// namespace. The Helm chart always sets this; fail fast when a
+	// hand-rolled Deployment forgets it.
+	if a.cfg.ControllerName == "" {
+		return nil, fmt.Errorf("AGENTTEAMS_CONTROLLER_NAME is required in incluster mode")
+	}
+
+	restCfg := ctrl.GetConfigOrDie()
+	leaseID := a.cfg.ControllerName + "-leader"
+	opts := ctrl.Options{
+		Scheme: a.scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: a.cfg.MetricsBindAddr,
+		},
+		LeaderElection:                true,
+		LeaderElectionID:              leaseID,
+		LeaderElectionReleaseOnCancel: true,
+	}
+	if a.cfg.K8sNamespace != "" {
+		opts.Cache.DefaultNamespaces = map[string]cache.Config{
+			a.cfg.K8sNamespace: {},
+		}
+		opts.LeaderElectionNamespace = a.cfg.K8sNamespace
+	}
+
+	// Scope the informer cache to objects owned by this controller instance.
+	// Cross-instance Worker/Manager/Team/Human CRs and their Pods become
+	// invisible to the reconcilers, preventing double-reconcile when two
+	// AgentTeams releases share a namespace. Writers (initializer, HTTP API,
+	// team reconciler, file watcher) stamp the same label on create, so
+	// this is closed loop.
+	//
+	// Note: production Pod CRUD in K8sBackend still goes through the direct
+	// kubernetes.Interface client (see internal/backend/kubernetes.go), not
+	// the manager cache, so narrowing the cache only scopes the event
+	// stream feeding the Pod .Watches source — it does not affect Get/
+	// Create/Delete by exact name.
+	sel := labels.SelectorFromSet(labels.Set{v1beta1.LabelController: a.cfg.ControllerName})
+	opts.Cache.ByObject = map[crclient.Object]cache.ByObject{
+		&v1beta1.Worker{}:  {Label: sel},
+		&v1beta1.Manager{}: {Label: sel},
+		&v1beta1.Team{}:    {Label: sel},
+		&v1beta1.Human{}:   {Label: sel},
+		&corev1.Pod{}:      {Label: sel},
+	}
+
+	logger.Info("leader election configured",
+		"leaseID", leaseID,
+		"namespace", opts.LeaderElectionNamespace,
+		"controllerName", a.cfg.ControllerName,
+		"cacheLabelSelector", sel.String())
+	var err error
+	a.mgr, err = ctrl.NewManager(restCfg, opts)
+	if err != nil {
+		return nil, fmt.Errorf("create controller manager: %w", err)
+	}
+	return restCfg, nil
+}
+
+// =========================================================================
+// In-container `agt` CLI bootstrap (embedded mode only)
+// =========================================================================
+
+// adminCLITokenPath is the well-known location where the embedded controller
+// drops a long-lived admin SA token at startup. The path is also baked into
+// the controller image as a default value of the `AGENTTEAMS_AUTH_TOKEN_FILE`
+// env var (see Dockerfile / Dockerfile.embedded), so the bundled `agt`
+// CLI auto-discovers it without per-call flags. Lives under /var/run because:
+// (a) it's per-process-instance state that should not survive container
+// removal, and (b) /var/run is tmpfs on most container runtimes which gives
+// us free token rotation on every container start.
+const adminCLITokenPath = "/var/run/agentteams/cli-token"
+
+// bootstrapAdminCLIToken ensures the admin ServiceAccount exists, mints a
+// fresh long-lived token for it, and writes it to adminCLITokenPath so the
+// in-container `agt` CLI can authenticate without the operator having to
+// pass `-e AGENTTEAMS_AUTH_TOKEN=…` on every `docker exec`.
+//
+// Failures here are surfaced to the caller but treated as non-fatal — the
+// controller is still fully functional, only the in-container CLI sugar is
+// degraded (operator can still hit the HTTP API directly with their own
+// SA token, or re-run after a controller restart).
+func bootstrapAdminCLIToken(ctx context.Context, prov *service.Provisioner) error {
+	if prov == nil {
+		return nil
+	}
+	if err := prov.EnsureAdminServiceAccount(ctx); err != nil {
+		return fmt.Errorf("ensure admin SA: %w", err)
+	}
+	token, err := prov.RequestAdminSAToken(ctx)
+	if err != nil {
+		return fmt.Errorf("mint admin SA token: %w", err)
+	}
+	if token == "" {
+		// k8sClient was nil — embedded mode without an apiserver should
+		// never happen in practice, but this keeps the function safe to
+		// call from unit-test wiring.
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(adminCLITokenPath), 0700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(adminCLITokenPath), err)
+	}
+	if err := os.WriteFile(adminCLITokenPath, []byte(token+"\n"), 0600); err != nil {
+		return fmt.Errorf("write %s: %w", adminCLITokenPath, err)
+	}
+	ctrl.Log.WithName("app").Info("admin CLI token written", "path", adminCLITokenPath)
+	return nil
+}
+
+// =========================================================================
+// Backend construction
+// =========================================================================
+
+// buildWorkerBackends selects the worker backend(s) based on kube mode.
+// The scheme is threaded into the k8s backend so it can stamp CR-to-Pod
+// controller OwnerReferences (see backend.CreateRequest.Owner); docker
+// backend doesn't need it.
+// Gateway selection is handled in initInfraClients via gateway.Client,
+// so this function only cares about worker runtimes (docker vs k8s).
+func buildWorkerBackends(cfg *config.Config, scheme *runtime.Scheme, remoteCache backend.RemoteClusterClientProvider) []backend.WorkerBackend {
+	var workers []backend.WorkerBackend
+
+	if cfg.KubeMode == "embedded" {
+		workers = append(workers, backend.NewDockerBackend(cfg.DockerConfig(), cfg.ContainerPrefix))
+	}
+
+	effectiveBackend := cfg.WorkerBackend
+	if effectiveBackend == "" && cfg.KubeMode == "incluster" {
+		effectiveBackend = "k8s"
+	}
+
+	switch effectiveBackend {
+	case "k8s":
+		// remoteCache is nil when the credential provider sidecar is not
+		// configured; in that case NewK8sBackendWithCache behaves
+		// identically to NewK8sBackend.
+		if k8s, err := backend.NewK8sBackendWithCache(cfg.K8sConfig(), cfg.ContainerPrefix, scheme, remoteCache); err != nil {
+			log.Printf("[WARN] Failed to create K8s backend: %v", err)
+		} else {
+			workers = append(workers, k8s)
+		}
+	case "sandbox":
+		log.Printf("[WARN] Worker backend %q is not supported in the open-source controller", effectiveBackend)
+	}
+
+	return workers
+}

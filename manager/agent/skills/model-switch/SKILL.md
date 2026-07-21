@@ -10,14 +10,14 @@ Switch the Manager's own LLM model. The script tests connectivity first, then pa
 ## Usage
 
 ```bash
-bash /opt/hiclaw/agent/skills/model-switch/scripts/update-manager-model.sh <MODEL_ID> [--context-window <SIZE>] [--no-reasoning]
+bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh <MODEL_ID> [--context-window <SIZE>] [--no-reasoning]
 ```
 
 Examples:
 ```bash
-bash /opt/hiclaw/agent/skills/model-switch/scripts/update-manager-model.sh claude-sonnet-4-6
-bash /opt/hiclaw/agent/skills/model-switch/scripts/update-manager-model.sh my-custom-model --context-window 300000
-bash /opt/hiclaw/agent/skills/model-switch/scripts/update-manager-model.sh deepseek-chat --no-reasoning
+bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh claude-sonnet-4-6
+bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh my-custom-model --context-window 300000
+bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh deepseek-chat --no-reasoning
 ```
 
 ## What the script does
@@ -63,7 +63,7 @@ When the human admin requests switching to a model you don't recognize, you MUST
    - "Does this model support reasoning (extended thinking)?"
 2. Run the script with the appropriate flags:
    ```bash
-   bash /opt/hiclaw/agent/skills/model-switch/scripts/update-manager-model.sh <MODEL_ID> --context-window <SIZE> [--no-reasoning]
+   bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh <MODEL_ID> --context-window <SIZE> [--no-reasoning]
    ```
 3. If the admin does not know the context window, use the default (150,000) by omitting `--context-window`.
 4. If the model does not support reasoning, add `--no-reasoning`.

@@ -437,6 +437,28 @@ Higress 里定义的全部路由。
 Docker Desktop 下的 `http://host.docker.internal:<port>/v1`，或在 Linux/Podman 下使用
 宿主机局域网 IP。
 
+### 预检通过但对话仍然超时
+
+安装脚本的 API 连通性测试只发送很小的请求。后续真实对话仍可能超时，常见原因是
+Manager/Worker 容器实际访问不到同一个地址、Higress 路由到了不同上游，或本地模型响应
+时间超过运行时 timeout。
+
+使用 Xinference 等自部署服务时，先在 controller 或 Manager 容器内用同一个 base URL 和
+API key 验证：
+
+```bash
+docker exec -it agentteams-controller sh
+curl -sS -m 90 "$BASE_URL/chat/completions" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<MODEL>","messages":[{"role":"user","content":"ping"}]}'
+```
+
+如果日志里出现 `MODEL_TIMEOUT` 且包含 `timeout limit: 60 seconds`，确认使用的是当前官方
+QwenPaw/CoPaw 镜像；旧镜像或手动安装的 CoPaw 包可能没有包含 AgentTeams 的长 timeout 补丁。
+如果容器内 `curl` 也超时，请优先修复上游模型服务、局域网路由、防火墙或供应商延迟问题，
+再调整 AgentTeams 配置。
+
 ### 多供应商和按任务使用不同模型
 
 在 Higress 中配置多条 AI 路由，每条路由使用不同的前缀或正则匹配规则，例如一条匹配

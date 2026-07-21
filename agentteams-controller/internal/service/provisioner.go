@@ -99,7 +99,7 @@ type ProvisionerConfig struct {
 	AdminUser    string
 
 	// ResourcePrefix is the tenant prefix used when creating SAs and their
-	// labels. Empty falls back to auth.DefaultResourcePrefix ("hiclaw-").
+	// labels. Empty falls back to auth.DefaultResourcePrefix ("agentteams-").
 	ResourcePrefix authpkg.ResourcePrefix
 
 	// ControllerName identifies this controller instance. Stamped on every

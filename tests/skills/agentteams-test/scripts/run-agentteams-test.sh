@@ -1,25 +1,25 @@
 #!/bin/bash
-# run-hiclaw-test.sh - Quick HiClaw test runner
-# Usage: run-hiclaw-test.sh [options] [test-filter]
+# run-agentteams-test.sh - Quick AgentTeams test runner
+# Usage: run-agentteams-test.sh [options] [test-filter]
 #
 # Options:
-#   --repo-dir <path>     HiClaw repository directory (default: current dir or /tmp/hiclaw)
+#   --repo-dir <path>     AgentTeams repository directory (default: current dir or /tmp/agentteams)
 #   --env-file <path>     Environment config file (default: ~/agentteams-manager.env)
 #   --skip-pull           Skip git pull
 #   existing              Run tests using existing installation
 #
 # Examples:
-#   run-hiclaw-test.sh                        # Run all tests
-#   run-hiclaw-test.sh "01 02 03"             # Run tests 01, 02, 03 only
-#   run-hiclaw-test.sh existing               # Run with existing installation
-#   run-hiclaw-test.sh --repo-dir ~/hiclaw   # Specify repository directory
+#   run-agentteams-test.sh                        # Run all tests
+#   run-agentteams-test.sh "01 02 03"             # Run tests 01, 02, 03 only
+#   run-agentteams-test.sh existing               # Run with existing installation
+#   run-agentteams-test.sh --repo-dir ~/agentteams   # Specify repository directory
 
 set -e
 
 # Default values (can be overridden by environment variables)
-REPO_DIR="${HICLAW_REPO_DIR:-}"
-ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HICLAW_ENV_FILE:-$HOME/agentteams-manager.env}}"
-[ -f "${ENV_FILE}" ] || ENV_FILE="$HOME/hiclaw-manager.env"
+REPO_DIR="${AGENTTEAMS_REPO_DIR:-}"
+ENV_FILE="${AGENTTEAMS_ENV_FILE:-$HOME/agentteams-manager.env}"
+[ -f "${ENV_FILE}" ] || ENV_FILE="$HOME/agentteams-manager.env"
 SKIP_PULL=false
 TEST_FILTER=""
 
@@ -66,21 +66,21 @@ detect_repo_dir() {
     fi
     
     # Check current directory
-    if [ -f "./Makefile" ] && grep -q "hiclaw" ./Makefile 2>/dev/null; then
+    if [ -f "./Makefile" ] && grep -q "agentteams" ./Makefile 2>/dev/null; then
         REPO_DIR="$(pwd)"
         return
     fi
     
     # Check standard locations
-    for dir in "./hiclaw" "../hiclaw" "/tmp/hiclaw" "$HOME/hiclaw"; do
+    for dir in "./agentteams" "../agentteams" "/tmp/agentteams" "$HOME/agentteams"; do
         if [ -d "$dir" ] && [ -f "$dir/Makefile" ]; then
             REPO_DIR="$dir"
             return
         fi
     done
     
-    # Default to /tmp/hiclaw
-    REPO_DIR="/tmp/hiclaw"
+    # Default to /tmp/agentteams
+    REPO_DIR="/tmp/agentteams"
 }
 
 # Check prerequisites
@@ -100,14 +100,14 @@ check_prerequisites() {
 # Clone/update repository
 update_repo() {
     if [ ! -d "$REPO_DIR" ]; then
-        log_info "Cloning HiClaw repository to $REPO_DIR..."
-        git clone https://github.com/alibaba/hiclaw.git "$REPO_DIR"
+        log_info "Cloning AgentTeams repository to $REPO_DIR..."
+        git clone https://github.com/alibaba/agentteams.git "$REPO_DIR"
         cd "$REPO_DIR"
     elif [ "$SKIP_PULL" = true ]; then
         log_info "Skipping git pull (--skip-pull)"
         cd "$REPO_DIR"
     else
-        log_info "Updating HiClaw repository at $REPO_DIR..."
+        log_info "Updating AgentTeams repository at $REPO_DIR..."
         cd "$REPO_DIR"
         git fetch origin
         git reset --hard origin/main
@@ -125,7 +125,7 @@ run_tests() {
     source "$ENV_FILE"
     set +a
     
-    export HICLAW_YOLO=1
+    export AGENTTEAMS_YOLO=1
     
     if [ "$TEST_FILTER" = "existing" ]; then
         # Use existing installation
@@ -154,12 +154,12 @@ show_results() {
     
     echo ""
     echo "To debug issues, run:"
-    echo "  hiclaw-debug.sh analyze"
+    echo "  agentteams-debug.sh analyze"
 }
 
 # Main flow
 main() {
-    log_info "=== HiClaw Test Runner ==="
+    log_info "=== AgentTeams Test Runner ==="
     
     detect_repo_dir
     log_info "Using repository: $REPO_DIR"

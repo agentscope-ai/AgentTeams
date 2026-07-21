@@ -1,17 +1,17 @@
 ---
-name: hiclaw-test
-description: "Complete HiClaw test cycle including installation, uninstallation, running tests, and exporting debug logs for analysis. Use for (1) verifying HiClaw functionality (2) CI/CD test validation (3) issue diagnosis and debugging (4) pre-merge testing. Trigger words: test HiClaw, run HiClaw tests, hiclaw test, make test, verify HiClaw installation."
+name: agentteams-test
+description: "Complete AgentTeams test cycle including installation, uninstallation, running tests, and exporting debug logs for analysis. Use for (1) verifying AgentTeams functionality (2) CI/CD test validation (3) issue diagnosis and debugging (4) pre-merge testing. Trigger words: test AgentTeams, run AgentTeams tests, agentteams test, make test, verify AgentTeams installation."
 ---
 
-# HiClaw Test Cycle
+# AgentTeams Test Cycle
 
-Complete HiClaw testing workflow including installation verification, functional tests, and issue diagnosis.
+Complete AgentTeams testing workflow including installation verification, functional tests, and issue diagnosis.
 
 ## Quick Start
 
 ```bash
 # 1. Clone/update code
-git clone https://github.com/alibaba/hiclaw.git && cd hiclaw
+git clone https://github.com/alibaba/agentteams.git && cd agentteams
 
 # 2. Create config file (first time)
 cp agentteams-manager.env.example ~/agentteams-manager.env
@@ -27,8 +27,8 @@ set -a && . ~/agentteams-manager.env && set +a && make test
 
 ```bash
 # Clone latest code
-git clone https://github.com/alibaba/hiclaw.git
-cd hiclaw
+git clone https://github.com/alibaba/agentteams.git
+cd agentteams
 
 # Check if config file exists
 ls ~/agentteams-manager.env
@@ -48,7 +48,7 @@ Test cases:
 - **test-04**: Human intervention with additional instructions
 - **test-05**: Heartbeat query mechanism
 - **test-06**: Multi-Worker collaboration
-- **test-08~14**: GitHub/MCP related tests (requires HICLAW_GITHUB_TOKEN)
+- **test-08~14**: GitHub/MCP related tests (requires AGENTTEAMS_GITHUB_TOKEN)
 
 ### Step 3: Individual Install/Uninstall
 
@@ -66,14 +66,14 @@ set -a && . ~/agentteams-manager.env && set +a
 
 ## Export Debug Logs
 
-When tests fail or hang, use `hiclaw-debug.sh` to export logs:
+When tests fail or hang, use `agentteams-debug.sh` to export logs:
 
 ```bash
-# In hiclaw repository directory
-./tests/skills/hiclaw-test/scripts/hiclaw-debug.sh all
+# In agentteams repository directory
+./tests/skills/agentteams-test/scripts/agentteams-debug.sh all
 
 # Analyze hang issues only
-./tests/skills/hiclaw-test/scripts/hiclaw-debug.sh analyze
+./tests/skills/agentteams-test/scripts/agentteams-debug.sh analyze
 ```
 
 ### Manual Log Export
@@ -101,17 +101,17 @@ cat tests/output/metrics-*.json
 
 ### 1. Test Hangs
 
-Use `hiclaw-debug.sh` to analyze PHASE_DONE messages for mention issues:
+Use `agentteams-debug.sh` to analyze PHASE_DONE messages for mention issues:
 
 ```bash
-# Run in HiClaw repository directory
-./tests/skills/hiclaw-test/scripts/hiclaw-debug.sh analyze 1h
+# Run in AgentTeams repository directory
+./tests/skills/agentteams-test/scripts/agentteams-debug.sh analyze 1h
 
 # Or use export-debug-log.py directly
 python3 scripts/export-debug-log.py --range 1h
 ```
 
-`hiclaw-debug.sh` checks if Worker's PHASE_DONE messages include `@manager`:
+`agentteams-debug.sh` checks if Worker's PHASE_DONE messages include `@manager`:
 - ✅ Includes `@manager` → Message will be processed by Manager
 - ⚠️ Missing `@manager` → Message ignored, may cause hang
 
@@ -165,7 +165,7 @@ timeout 1200 ./tests/run-all-tests.sh --skip-build --use-existing
 [36m[TEST INFO][0m SKIP: No GitHub token configured
 ```
 
-Requires `HICLAW_GITHUB_TOKEN` environment variable.
+Requires `AGENTTEAMS_GITHUB_TOKEN` environment variable.
 
 ### Metrics Files
 
@@ -185,11 +185,11 @@ make uninstall
 docker rm -f $(docker ps -aq --filter "name=agentteams-worker")
 
 # Delete test code
-rm -rf ./hiclaw
+rm -rf ./agentteams
 ```
 
 ## References
 
-- [tests/README.md](https://github.com/alibaba/hiclaw/blob/main/tests/README.md) - Test framework documentation
-- [install/README.md](https://github.com/alibaba/hiclaw/blob/main/install/README.md) - Installation guide
+- [tests/README.md](https://github.com/alibaba/agentteams/blob/main/tests/README.md) - Test framework documentation
+- [install/README.md](https://github.com/alibaba/agentteams/blob/main/install/README.md) - Installation guide
 - [references/troubleshooting.md](references/troubleshooting.md) - Detailed troubleshooting

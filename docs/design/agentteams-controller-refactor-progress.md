@@ -1,6 +1,6 @@
-# HiClaw Controller 重构进度跟踪
+# AgentTeams Controller 重构进度跟踪
 
-> 基于 `hiclaw-controller-refactor.md` 设计文档，对照 `hiclaw-controller-refactor` 分支实际实现情况。
+> 基于 `agentteams-controller-refactor.md` 设计文档，对照 `agentteams-controller-refactor` 分支实际实现情况。
 >
 > 更新时间：2026-04-10
 
@@ -73,7 +73,7 @@
 | versions.json 管理 | OSS `system/versions.json` | ❌ 未实现 |
 | Skill 热更新（UpgradeSkills） | — | ❌ 未实现 |
 | Runtime 滚动升级（UpgradeRuntime） | — | ❌ 未实现 |
-| `hiclaw config push` 命令 | CLI | ❌ 未实现 |
+| `agt config push` 命令 | CLI | ❌ 未实现 |
 
 ### 1.6 项目结构对比
 
@@ -115,24 +115,24 @@
 | Pod 健康检查 & 就绪探针 | ⚠️ 需确认 | 就绪检测在早期 commit 中实现 |
 | Service 创建（端口暴露） | ✅ 完成 | `internal/service/provisioner_expose.go` |
 
-### 2.2 hiclaw CLI REST API 客户端改造
+### 2.2 agt CLI REST API 客户端改造
 
-CLI 已完全重写为 REST API 客户端，不再直接操作 MinIO。所有命令通过 `HICLAW_CONTROLLER_URL`（默认 `http://localhost:8090`）调用 controller REST API，Token 通过 `HICLAW_AUTH_TOKEN` 或 SA token 文件自动发现。
+CLI 已完全重写为 REST API 客户端，不再直接操作 MinIO。所有命令通过 `AGENTTEAMS_CONTROLLER_URL`（默认 `http://localhost:8090`）调用 controller REST API，Token 通过 `AGENTTEAMS_AUTH_TOKEN` 或 SA token 文件自动发现。
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
-| CLI 重写为 REST API 客户端 | ✅ 完成 | `cmd/hiclaw/client.go` — HTTP client + token/URL 发现 |
-| create worker/team/human/manager | ✅ 完成 | `cmd/hiclaw/create.go` — POST /api/v1/{resource}s |
-| get workers/teams/humans/managers | ✅ 完成 | `cmd/hiclaw/get.go` — GET (list/detail/--team 过滤/-o json) |
-| update worker/team/manager | ✅ 完成 | `cmd/hiclaw/update.go` — PUT /api/v1/{resource}s/{name} |
-| delete worker/team/human/manager | ✅ 完成 | `cmd/hiclaw/delete.go` — DELETE /api/v1/{resource}s/{name} |
-| worker wake/sleep/ensure-ready | ✅ 完成 | `cmd/hiclaw/worker_cmd.go` — POST lifecycle endpoints |
-| worker status (--name / --team) | ✅ 完成 | `cmd/hiclaw/worker_cmd.go` — GET status endpoint |
-| status / version | ✅ 完成 | `cmd/hiclaw/status_cmd.go` |
-| 表格/详情/JSON 输出格式化 | ✅ 完成 | `cmd/hiclaw/output.go` |
-| apply -f resource.yaml | ✅ 完成 | `cmd/hiclaw/apply.go` — 声明式 YAML apply（解析 YAML → REST API upsert） |
-| apply worker --zip | ✅ 完成 | `cmd/hiclaw/apply.go` — ZIP 上传 → POST /api/v1/packages → upsert Worker |
-| apply worker --params | ✅ 完成 | `cmd/hiclaw/apply.go` — 支持 --model/--soul-file/--skills/--mcp-servers 等参数 |
+| CLI 重写为 REST API 客户端 | ✅ 完成 | `cmd/agt/client.go` — HTTP client + token/URL 发现 |
+| create worker/team/human/manager | ✅ 完成 | `cmd/agt/create.go` — POST /api/v1/{resource}s |
+| get workers/teams/humans/managers | ✅ 完成 | `cmd/agt/get.go` — GET (list/detail/--team 过滤/-o json) |
+| update worker/team/manager | ✅ 完成 | `cmd/agt/update.go` — PUT /api/v1/{resource}s/{name} |
+| delete worker/team/human/manager | ✅ 完成 | `cmd/agt/delete.go` — DELETE /api/v1/{resource}s/{name} |
+| worker wake/sleep/ensure-ready | ✅ 完成 | `cmd/agt/worker_cmd.go` — POST lifecycle endpoints |
+| worker status (--name / --team) | ✅ 完成 | `cmd/agt/worker_cmd.go` — GET status endpoint |
+| status / version | ✅ 完成 | `cmd/agt/status_cmd.go` |
+| 表格/详情/JSON 输出格式化 | ✅ 完成 | `cmd/agt/output.go` |
+| apply -f resource.yaml | ✅ 完成 | `cmd/agt/apply.go` — 声明式 YAML apply（解析 YAML → REST API upsert） |
+| apply worker --zip | ✅ 完成 | `cmd/agt/apply.go` — ZIP 上传 → POST /api/v1/packages → upsert Worker |
+| apply worker --params | ✅ 完成 | `cmd/agt/apply.go` — 支持 --model/--soul-file/--skills/--mcp-servers 等参数 |
 | apply --prune | ❌ TODO | 全量同步（LIST + DELETE 多余资源） |
 | config push 命令 | ❌ 未实现 | — |
 | debug 命令 | ❌ 未实现 | — |
@@ -141,7 +141,7 @@ CLI 已完全重写为 REST API 客户端，不再直接操作 MinIO。所有命
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
-| Chart 结构 | ✅ 完成 | `helm/hiclaw/` |
+| Chart 结构 | ✅ 完成 | `helm/agentteams/` |
 | Controller Deployment | ✅ 完成 | `templates/controller/deployment.yaml` |
 | Controller Service | ✅ 完成 | `templates/controller/service.yaml` |
 | Controller RBAC | ✅ 完成 | `templates/controller/rbac.yaml` |
@@ -182,7 +182,7 @@ CLI 已完全重写为 REST API 客户端，不再直接操作 MinIO。所有命
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
-| Manager Skill 改造（调用 hiclaw CLI 替代直接脚本） | ⚠️ 部分完成 | `container-api.sh` 已改为 controller REST API 薄封装；`create-worker.sh` 已删除（+1042 行），由 hiclaw CLI 替代 |
+| Manager Skill 改造（调用 agt CLI 替代直接脚本） | ⚠️ 部分完成 | `container-api.sh` 已改为 controller REST API 薄封装；`create-worker.sh` 已删除（+1042 行），由 agt CLI 替代 |
 | Manager 无状态化（state.json → OSS） | ❌ 未实现 | — |
 | Manager CRD 驱动部署 | ✅ 完成 | Manager CRD + ManagerReconciler + 自动创建 Manager 容器 |
 | Team Leader Heartbeat 机制 | ✅ 完成 | `4870b26` — heartbeat、worker idle timeout、sleep lifecycle |
@@ -229,10 +229,10 @@ CLI 已完全重写为 REST API 客户端，不再直接操作 MinIO。所有命
 | `53a28ad` | local-k8s-up.sh 更新 + Worker 管理增强 |
 | `3c17fe1` ~ `2c0ddc3` | Manager CRD + ManagerReconciler + Go Initializer |
 | `20fcb7b` ~ `cdb4016` | Manager REST API（CRUD）+ RBAC 配置 |
-| `7361df1` | hiclaw CLI 重写为 REST API 客户端（去 mcExec，纯 HTTP client） |
+| `7361df1` | agt CLI 重写为 REST API 客户端（去 mcExec，纯 HTTP client） |
 | `563cc9c` | Embedded Controller 支持：Dockerfile.embedded + supervisord + ManagerReconciler embedded 模式 |
 | `0431b79` | 测试脚本适配双容器模式（exec_in_manager / exec_in_agent） |
-| `f6dbba3` | hiclaw CLI 增强 + install-embedded.sh 安装脚本 |
+| `f6dbba3` | agt CLI 增强 + install-embedded.sh 安装脚本 |
 | `7aaab59` | Makefile 统一 + apply 命令 + PackageHandler（ZIP 上传） |
 | `4870b26` | Team Leader heartbeat、worker idle timeout、sleep lifecycle |
 | `5208729` | AI route 认证修复 + 测试脚本执行上下文修正 |

@@ -76,7 +76,7 @@ func TestNewSecurityValidatorRespectsAutoPrefixDisabled(t *testing.T) {
 
 	os.Setenv("AGENTTEAMS_RESOURCE_AUTOPREFIX", "false")
 	os.Unsetenv("AGENTTEAMS_PROXY_CONTAINER_PREFIX")
-	os.Setenv("AGENTTEAMS_RESOURCE_PREFIX", "hiclaw-")
+	os.Setenv("AGENTTEAMS_RESOURCE_PREFIX", "agentteams-")
 
 	v := NewSecurityValidator()
 	if v.ContainerPrefix != "" {

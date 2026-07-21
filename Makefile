@@ -53,27 +53,11 @@ LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
 LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
 LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
-LOCAL_MANAGER_LEGACY        = hiclaw/hiclaw-manager:$(VERSION)
-LOCAL_MANAGER_COPAW_LEGACY  = hiclaw/hiclaw-manager-copaw:$(VERSION)
-LOCAL_WORKER_LEGACY         = hiclaw/worker-agent:$(VERSION)
-LOCAL_COPAW_WORKER_LEGACY   = hiclaw/copaw-worker:$(VERSION)
-LOCAL_HERMES_WORKER_LEGACY  = hiclaw/hermes-worker:$(VERSION)
-LOCAL_QWENPAW_WORKER_LEGACY = hiclaw/qwenpaw-worker:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
-LOCAL_OPENCLAW_BASE_LEGACY = hiclaw/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
-LOCAL_CONTROLLER_LEGACY = hiclaw/hiclaw-controller:$(VERSION)
-LOCAL_CONTROLLER_BUILD_IMAGE ?= $(shell \
-	if docker image inspect $(LOCAL_CONTROLLER) >/dev/null 2>&1; then \
-		printf '%s' '$(LOCAL_CONTROLLER)'; \
-	elif docker image inspect $(LOCAL_CONTROLLER_LEGACY) >/dev/null 2>&1; then \
-		printf '%s' '$(LOCAL_CONTROLLER_LEGACY)'; \
-	else \
-		printf '%s' '$(LOCAL_CONTROLLER)'; \
-	fi)
+LOCAL_CONTROLLER_BUILD_IMAGE ?= $(LOCAL_CONTROLLER)
 LOCAL_EMBEDDED       = agentteams/agentteams-embedded:$(VERSION)
-LOCAL_EMBEDDED_LEGACY = hiclaw/hiclaw-embedded:$(VERSION)
 
 # Higress base image registry (regional mirrors auto-synced from cn-hangzhou primary)
 #   China (default): higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -124,9 +108,9 @@ LINES          ?= 50
 
 # ---------- Phony targets ----------
 
-.PHONY: all build build-openclaw-base build-agentteams-controller build-hiclaw-controller build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
+.PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
         build-qwenpaw-worker \
-        tag push push-openclaw-base push-agentteams-controller push-hiclaw-controller push-embedded push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
+        tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
         push-qwenpaw-worker \
         push-native push-native-manager push-native-manager-copaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
         push-native-qwenpaw-worker \
@@ -150,7 +134,6 @@ build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_OPENCLAW_BASE) \
-		-t $(LOCAL_OPENCLAW_BASE_LEGACY) \
 		./openclaw-base/
 
 # build targets use the locally-built openclaw-base; push targets use the registry image
@@ -165,11 +148,8 @@ build-agentteams-controller: ## Build agentteams-controller image (prerequisite 
 	@rm -rf ./agentteams-controller/agent && cp -r ./manager/agent ./agentteams-controller/agent
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
-		-t $(LOCAL_CONTROLLER_LEGACY) \
 		./agentteams-controller/
 	@rm -rf ./agentteams-controller/agent
-
-build-hiclaw-controller: build-agentteams-controller ## Deprecated compatibility alias
 
 build-manager: build-agentteams-controller ## Build Manager image (OpenClaw runtime)
 	@echo "==> Building Manager image: $(LOCAL_MANAGER) (registry: $(HIGRESS_REGISTRY))"
@@ -177,7 +157,6 @@ build-manager: build-agentteams-controller ## Build Manager image (OpenClaw runt
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile \
 		-t $(LOCAL_MANAGER) \
-		-t $(LOCAL_MANAGER_LEGACY) \
 		.
 
 build-manager-copaw: build-agentteams-controller ## Build Manager CoPaw image (Python runtime)
@@ -186,7 +165,6 @@ build-manager-copaw: build-agentteams-controller ## Build Manager CoPaw image (P
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f manager/Dockerfile.copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
-		-t $(LOCAL_MANAGER_COPAW_LEGACY) \
 		.
 
 build-embedded: build-agentteams-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
@@ -195,7 +173,6 @@ build-embedded: build-agentteams-controller ## Build embedded all-in-one control
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-f agentteams-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
-		-t $(LOCAL_EMBEDDED_LEGACY) \
 		.
 
 build-worker: ## Build Worker image
@@ -203,7 +180,6 @@ build-worker: ## Build Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_WORKER) \
-		-t $(LOCAL_WORKER_LEGACY) \
 		./worker/
 
 build-copaw-worker: ## Build CoPaw Worker image
@@ -211,7 +187,6 @@ build-copaw-worker: ## Build CoPaw Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_COPAW_WORKER) \
-		-t $(LOCAL_COPAW_WORKER_LEGACY) \
 		./copaw/
 
 build-hermes-worker: ## Build Hermes Worker image
@@ -219,7 +194,6 @@ build-hermes-worker: ## Build Hermes Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
-		-t $(LOCAL_HERMES_WORKER_LEGACY) \
 		./hermes/
 
 build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
@@ -235,7 +209,6 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
 		-f qwenpaw/Dockerfile \
 		-t $(LOCAL_QWENPAW_WORKER) \
-		-t $(LOCAL_QWENPAW_WORKER_LEGACY) \
 		.
 
 # ---------- Tag ----------
@@ -336,8 +309,6 @@ else
 		./agentteams-controller/
 endif
 	@rm -rf ./agentteams-controller/agent
-
-push-hiclaw-controller: push-agentteams-controller ## Deprecated compatibility alias
 
 push-embedded: push-agentteams-controller buildx-setup ## Build + push multi-arch embedded all-in-one image
 	@echo "==> Building + pushing multi-arch agentteams-embedded: $(EMBEDDED_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -747,15 +718,7 @@ ifdef SKIP_INSTALL
 else
 	@echo "==> Installing embedded mode and running tests"
 	$(MAKE) uninstall-embedded 2>/dev/null || true
-	# pull_request_target runs the base-branch workflow before this PR's
-	# workflow env rename lands, so map legacy CI env names only at the test
-	# harness boundary. Runtime/install scripts still consume AGENTTEAMS_*.
 	AGENTTEAMS_YOLO=1 \
-		AGENTTEAMS_LLM_API_KEY="$${AGENTTEAMS_LLM_API_KEY:-$${HICLAW_LLM_API_KEY:-}}" \
-		AGENTTEAMS_LLM_PROVIDER="$${AGENTTEAMS_LLM_PROVIDER:-$${HICLAW_LLM_PROVIDER:-}}" \
-		AGENTTEAMS_DEFAULT_MODEL="$${AGENTTEAMS_DEFAULT_MODEL:-$${HICLAW_DEFAULT_MODEL:-}}" \
-		AGENTTEAMS_MANAGER_RUNTIME="$${AGENTTEAMS_MANAGER_RUNTIME:-$${HICLAW_MANAGER_RUNTIME:-}}" \
-		AGENTTEAMS_DEFAULT_WORKER_RUNTIME="$${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-$${HICLAW_DEFAULT_WORKER_RUNTIME:-}}" \
 		$(MAKE) install-embedded
 	$(MAKE) wait-ready-embedded
 	./tests/run-all-tests.sh --skip-build --use-existing $(if $(TEST_FILTER),--test-filter "$(TEST_FILTER)")
@@ -765,7 +728,6 @@ uninstall-embedded: ## Stop and remove embedded containers
 	@echo "==> Uninstalling AgentTeams (embedded mode)..."
 	-docker stop agentteams-manager 2>/dev/null && docker rm agentteams-manager 2>/dev/null || true
 	-docker stop agentteams-controller 2>/dev/null && docker rm agentteams-controller 2>/dev/null || true
-	-docker stop agentteams-manager 2>/dev/null && docker rm agentteams-manager 2>/dev/null || true
 	@for c in $$(docker ps -a --filter "name=agentteams-worker-" --format '{{.Names}}' 2>/dev/null); do \
 		echo "  Removing Worker: $$c"; \
 		docker rm -f "$$c" 2>/dev/null || true; \
@@ -805,7 +767,7 @@ verify: ## Run post-install verification against the running Manager container
 
 status: ## Show status of Manager and all Worker containers
 	@echo "==> AgentTeams container status:"
-	@docker ps -a --filter "name=agentteams-" --filter "name=hiclaw-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null \
+	@docker ps -a --filter "name=agentteams-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null \
 		|| echo "  (no containers found or Docker not available)"
 
 logs: ## Show recent logs for Manager and all Workers (override with LINES=N, default 50)
@@ -829,7 +791,7 @@ clean: ## Remove local images and test containers
 	@echo "==> Stopping and removing test containers..."
 	-docker stop $(TEST_CONTAINER) 2>/dev/null
 	-docker rm $(TEST_CONTAINER) 2>/dev/null
-	-docker ps -a --filter "name=agentteams-test-worker-" --filter "name=hiclaw-test-worker-" --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null
+	-docker ps -a --filter "name=agentteams-test-worker-" --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null
 	@echo "==> Removing local images..."
 	-docker rmi $(LOCAL_MANAGER) 2>/dev/null
 	-docker rmi $(LOCAL_WORKER) 2>/dev/null
@@ -869,7 +831,7 @@ helm-lint: ## Lint Helm chart
 
 helm-template: ## Render Helm templates locally (dry-run validation)
 	@helm dependency build helm/agentteams/
-	@bash tests/check-helm-rename-compat.sh
+	@bash tests/check-helm-agentteams.sh
 
 # ---------- Help ----------
 

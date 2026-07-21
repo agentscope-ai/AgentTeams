@@ -8,7 +8,7 @@ description: Sync files with centralized storage. Use when your coordinator or a
 When your coordinator or another Worker notifies you that files have been updated in centralized storage (e.g., config changes, task briefs, shared data, collaboration artifacts), run:
 
 ```bash
-hiclaw-sync
+agentteams-sync
 ```
 
 This pulls the latest files from centralized storage to your local workspace. OpenClaw automatically detects config changes and hot-reloads within ~300ms.

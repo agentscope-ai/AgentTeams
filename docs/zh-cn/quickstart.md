@@ -335,4 +335,4 @@ Alice 使用 `mcporter` 调用 Higress 托管的 GitHub MCP Server。MCP Server 
 bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
 
-与 `install/agentteams-install.sh uninstall` 行为一致：停止并删除 **`agentteams-manager`**、所有 **`agentteams-worker-*`**（及其他 Worker）容器、**`agentteams-controller`**（内嵌 Higress / Tuwunel / MinIO / Element Web）、可选 **`hiclaw-docker-proxy`**、**`agentteams-data`** 数据卷、**`agentteams-manager.env`**、工作空间目录、**`agentteams-net`** 网络及安装日志。
+与 `install/agentteams-install.sh uninstall` 行为一致：停止并删除 **`agentteams-manager`**、所有 **`agentteams-worker-*`**（及其他 Worker）容器、**`agentteams-controller`**（内嵌 Higress / Tuwunel / MinIO / Element Web）、可选 **`agentteams-docker-proxy`**、**`agentteams-data`** 数据卷、**`agentteams-manager.env`**、工作空间目录、**`agentteams-net`** 网络及安装日志。

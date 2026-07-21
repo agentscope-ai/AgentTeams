@@ -67,10 +67,10 @@ echo "=== TC1: First time — target does not exist ==="
     echo "# Hello World" > "${src}"
     update_builtin_section "${tgt}" "${src}"
     content=$(cat "${tgt}")
-    assert_contains "has builtin-start marker"   "hiclaw-builtin-start" "${content}"
-    assert_contains "has builtin-end marker"     "hiclaw-builtin-end"   "${content}"
+    assert_contains "has builtin-start marker"   "agentteams-builtin-start" "${content}"
+    assert_contains "has builtin-end marker"     "agentteams-builtin-end"   "${content}"
     assert_contains "has source content"         "# Hello World"        "${content}"
-    assert_eq       "exactly 1 start marker"     "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
+    assert_eq       "exactly 1 start marker"     "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
 }
 
 echo ""
@@ -95,8 +95,8 @@ echo "=== TC3: Idempotent — run 5 times, still only 1 start marker ==="
     for i in 1 2 3 4 5; do
         update_builtin_section "${tgt}" "${src}"
     done
-    assert_eq "exactly 1 start marker after 5 runs" "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
-    assert_eq "exactly 1 end marker after 5 runs"   "1" "$(awk '$0 == "<!-- hiclaw-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
+    assert_eq "exactly 1 start marker after 5 runs" "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
+    assert_eq "exactly 1 end marker after 5 runs"   "1" "$(awk '$0 == "<!-- agentteams-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
 }
 
 echo ""
@@ -111,7 +111,7 @@ echo "=== TC4: Content update — new source replaces builtin section ==="
     content=$(cat "${tgt}")
     assert_contains     "has new content"     "# Version 2" "${content}"
     assert_not_contains "no old content"      "# Version 1" "${content}"
-    assert_eq           "exactly 1 start marker" "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
+    assert_eq           "exactly 1 start marker" "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
 }
 
 echo ""
@@ -128,7 +128,7 @@ echo "=== TC5: User content preserved below end marker ==="
     content=$(cat "${tgt}")
     assert_contains "user content preserved" "## My Custom Section" "${content}"
     assert_contains "builtin still present"  "# Builtin"            "${content}"
-    assert_eq       "exactly 1 start marker" "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
+    assert_eq       "exactly 1 start marker" "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
 }
 
 echo ""
@@ -145,7 +145,7 @@ echo "=== TC6: User content preserved when builtin content changes ==="
     assert_contains     "new builtin content"    "# Version 2"   "${content}"
     assert_not_contains "old builtin gone"       "# Version 1"   "${content}"
     assert_contains     "user content preserved" "## User Notes"  "${content}"
-    assert_eq           "exactly 1 start marker" "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
+    assert_eq           "exactly 1 start marker" "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
 }
 
 echo ""
@@ -156,23 +156,23 @@ echo "=== TC7: Corrupted file (2 start markers) — auto-repair ==="
     echo "# Clean Content" > "${src}"
     # Simulate a corrupted file with duplicate builtin sections
     cat > "${tgt}" << 'EOF'
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-start -->
 > ⚠️ DO NOT EDIT
 > ...
 
 # Old Content
-<!-- hiclaw-builtin-end -->
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-end -->
+<!-- agentteams-builtin-start -->
 > ⚠️ DO NOT EDIT
 > ...
 
 # Old Content
-<!-- hiclaw-builtin-end -->
+<!-- agentteams-builtin-end -->
 EOF
     update_builtin_section "${tgt}" "${src}"
     content=$(cat "${tgt}")
-    assert_eq       "repaired to 1 start marker" "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
-    assert_eq       "repaired to 1 end marker"   "1" "$(awk '$0 == "<!-- hiclaw-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
+    assert_eq       "repaired to 1 start marker" "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
+    assert_eq       "repaired to 1 end marker"   "1" "$(awk '$0 == "<!-- agentteams-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
     assert_contains "has new source content"      "# Clean Content" "${content}"
 }
 
@@ -183,24 +183,24 @@ echo "=== TC8: Corrupted file (2 start markers) — force rewrite, no user conte
     src="${d}/source.md"; tgt="${d}/target.md"
     echo "# New Builtin" > "${src}"
     cat > "${tgt}" << 'EOF'
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-start -->
 > ⚠️ DO NOT EDIT
 
 # Builtin v1
-<!-- hiclaw-builtin-end -->
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-end -->
+<!-- agentteams-builtin-start -->
 > ⚠️ DO NOT EDIT
 
 # Builtin v1
-<!-- hiclaw-builtin-end -->
+<!-- agentteams-builtin-end -->
 ## Real User Content
 user wrote this
 EOF
     update_builtin_section "${tgt}" "${src}"
     content=$(cat "${tgt}")
     assert_contains "has new builtin content" "# New Builtin" "${content}"
-    assert_eq       "exactly 1 start marker after repair" "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
-    assert_eq       "exactly 1 end marker after repair"   "1" "$(awk '$0 == "<!-- hiclaw-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
+    assert_eq       "exactly 1 start marker after repair" "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
+    assert_eq       "exactly 1 end marker after repair"   "1" "$(awk '$0 == "<!-- agentteams-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
 }
 
 echo ""
@@ -212,7 +212,7 @@ echo "=== TC9: Legacy file (no markers) — overwrite with markers ==="
     echo "# Old Legacy Content" > "${tgt}"
     update_builtin_section "${tgt}" "${src}"
     content=$(cat "${tgt}")
-    assert_contains     "has start marker"       "hiclaw-builtin-start" "${content}"
+    assert_contains     "has start marker"       "agentteams-builtin-start" "${content}"
     assert_contains     "has new content"        "# New Builtin"        "${content}"
     assert_not_contains "legacy content gone"    "# Old Legacy Content" "${content}"
 }
@@ -236,7 +236,7 @@ echo "=== TC11: Corrupted — end marker missing (start=1, end=0) — force rewr
     echo "# Fresh Content" > "${src}"
     # File has start marker but end marker was deleted
     cat > "${tgt}" << 'EOF'
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-start -->
 > ⚠️ DO NOT EDIT
 
 # Old Builtin
@@ -246,8 +246,8 @@ EOF
     content=$(cat "${tgt}")
     assert_contains     "has new content after repair"  "# Fresh Content" "${content}"
     assert_not_contains "old content gone"              "# Old Builtin"   "${content}"
-    assert_eq           "exactly 1 start marker"        "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
-    assert_eq           "exactly 1 end marker"          "1" "$(awk '$0 == "<!-- hiclaw-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
+    assert_eq           "exactly 1 start marker"        "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
+    assert_eq           "exactly 1 end marker"          "1" "$(awk '$0 == "<!-- agentteams-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
 }
 
 echo ""
@@ -259,15 +259,15 @@ echo "=== TC12: Corrupted — start marker missing (start=0, end=1) — treated 
     # File has end marker but start marker was deleted (very broken)
     cat > "${tgt}" << 'EOF'
 some content without start marker
-<!-- hiclaw-builtin-end -->
+<!-- agentteams-builtin-end -->
 ## User Notes
 keep this
 EOF
     update_builtin_section "${tgt}" "${src}"
     content=$(cat "${tgt}")
-    assert_contains "has start marker after repair" "hiclaw-builtin-start" "${content}"
+    assert_contains "has start marker after repair" "agentteams-builtin-start" "${content}"
     assert_contains "has new content"               "# Fresh Content"      "${content}"
-    assert_eq       "exactly 1 start marker"        "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
+    assert_eq       "exactly 1 start marker"        "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
 }
 
 echo ""
@@ -277,16 +277,16 @@ echo "=== TC13: Bloated after-end content (builtin leaked into user area) — fo
     src="${d}/source.md"; tgt="${d}/target.md"
     printf '# Manager Agent Workspace\n\nsome content\nmore content\neven more\n' > "${src}"
     {
-        printf '<!-- hiclaw-builtin-start -->\n'
+        printf '<!-- agentteams-builtin-start -->\n'
         printf '> ⚠️ DO NOT EDIT\n\n'
         printf '# Manager Agent Workspace\n\nsome content\n'
-        printf '<!-- hiclaw-builtin-end -->\n'
+        printf '<!-- agentteams-builtin-end -->\n'
         for i in $(seq 1 200); do printf '# Manager Agent Workspace\nsome content\n'; done
     } > "${tgt}"
     update_builtin_section "${tgt}" "${src}"
-    after_end=$(awk '$0 == "<!-- hiclaw-builtin-end -->" {found=1; next} found{c++} END {print c+0}' "${tgt}")
-    assert_eq "exactly 1 start marker" "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
-    assert_eq "exactly 1 end marker"   "1" "$(awk '$0 == "<!-- hiclaw-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
+    after_end=$(awk '$0 == "<!-- agentteams-builtin-end -->" {found=1; next} found{c++} END {print c+0}' "${tgt}")
+    assert_eq "exactly 1 start marker" "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
+    assert_eq "exactly 1 end marker"   "1" "$(awk '$0 == "<!-- agentteams-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
     [ "${after_end}" -lt 20 ] && pass "after-end lines clean (${after_end})" || fail "after-end lines too many" "<20" "${after_end}"
 }
 
@@ -297,20 +297,20 @@ echo "=== TC14: Duplicate heading after end marker — force rewrite ==="
     src="${d}/source.md"; tgt="${d}/target.md"
     printf '# Manager Agent Workspace\nsome builtin content\n' > "${src}"
     cat > "${tgt}" << 'EOF'
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-start -->
 > ⚠️ DO NOT EDIT
 
 # Manager Agent Workspace
 some builtin content
-<!-- hiclaw-builtin-end -->
+<!-- agentteams-builtin-end -->
 # Manager Agent Workspace
 some builtin content
 EOF
     update_builtin_section "${tgt}" "${src}"
-    leaked=$(awk '$0 == "<!-- hiclaw-builtin-end -->" {found=1; next} found && /^# Manager Agent Workspace/ {c++} END {print c+0}' "${tgt}")
+    leaked=$(awk '$0 == "<!-- agentteams-builtin-end -->" {found=1; next} found && /^# Manager Agent Workspace/ {c++} END {print c+0}' "${tgt}")
     assert_eq "no leaked heading after end marker" "0" "${leaked}"
-    assert_eq "exactly 1 start marker" "1" "$(count_occurrences 'hiclaw-builtin-start' "${tgt}")"
-    assert_eq "exactly 1 end marker"   "1" "$(awk '$0 == "<!-- hiclaw-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
+    assert_eq "exactly 1 start marker" "1" "$(count_occurrences 'agentteams-builtin-start' "${tgt}")"
+    assert_eq "exactly 1 end marker"   "1" "$(awk '$0 == "<!-- agentteams-builtin-end -->" {c++} END {print c+0}' "${tgt}")"
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────

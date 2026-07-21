@@ -72,12 +72,12 @@ member:
 # QwenPaw runtime applies it to local QwenPaw/TeamHarness configuration.
 desired:
   model:
-    providerId: hiclaw-gateway # master current: implicit in generated openclaw.json
+    providerId: agentteams-gateway # master current: implicit in generated openclaw.json
     model: qwen-plus # master current: comes from spec.model and is written to openclaw.json, not directly injected to worker
     gatewayUrl: http://aigw-local.agentteams.io:8080 # master current: injected through AGENTTEAMS_AI_GATEWAY_URL
 
   agentPackage:
-    ref: nacos://market.hiclaw.io:80/public/dev-worker?version=1.2.0 # master current: comes from spec.package; controller resolves and deploys it directly to OSS
+    ref: nacos://market.agentteams.io:80/public/dev-worker?version=1.2.0 # master current: comes from spec.package; controller resolves and deploys it directly to OSS
     name: dev-worker # master current: not written to worker
     version: 1.2.0 # master current: not written to worker
     digest: "sha256:..." # master current: not written to worker

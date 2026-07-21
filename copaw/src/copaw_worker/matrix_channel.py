@@ -173,7 +173,7 @@ class MatrixChannelConfig:
         self.enabled: bool = raw.get("enabled", True)
         self.homeserver: str = raw.get("homeserver", "")
         self.access_token: str = raw.get("access_token", "")
-        # username/password fallback (rarely used in hiclaw)
+        # username/password fallback (rarely used in agentteams)
         self.username: str = raw.get("username", "")
         self.password: str = raw.get("password", "")
         self.device_name: str = raw.get("device_name", "copaw-worker")

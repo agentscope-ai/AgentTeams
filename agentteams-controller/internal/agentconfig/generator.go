@@ -57,7 +57,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	//
 	// gateway.port: 18799 — openclaw 2026.4.x onwards merges the Control UI HTTP
 	// server into the same listener as the gateway WebSocket (older versions ran
-	// the Control UI on a separate 18799 listener). Hiclaw's container port
+	// the Control UI on a separate 18799 listener). AgentTeams's container port
 	// mapping (host:AGENTTEAMS_PORT_MANAGER_CONSOLE → container:18799), Dockerfile
 	// EXPOSE, install/health probes and the legacy nginx reverse proxy all
 	// assume the user-facing console reaches us on 18799. Keep that contract by
@@ -65,7 +65,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// downstream consumer) is far more invasive.
 	//
 	// gateway.bind: "lan" — openclaw 2026.4.x defaults to loopback (127.0.0.1)
-	// binding for the gateway/Control UI server. In hiclaw's embedded dual-
+	// binding for the gateway/Control UI server. In agentteams's embedded dual-
 	// container topology the manager runs in its own container and the Control
 	// UI is reached via a host port mapping (host:18888 → manager:18799), which
 	// requires the listener to be reachable from outside the container's loop-
@@ -76,16 +76,16 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 	// console access uses the shared gateway token (no per-device pairing). The
 	// manager template carries this flag; the controller-pushed config must
 	// preserve it too, otherwise the mc-mirror sync strips it and the Control
-	// UI starts demanding device authentication that hiclaw never provisions.
+	// UI starts demanding device authentication that agentteams never provisions.
 	//
-	// gateway.controlUi.allowInsecureAuth: true — hiclaw exposes the console
+	// gateway.controlUi.allowInsecureAuth: true — agentteams exposes the console
 	// over plain HTTP on the user's host port (AGENTTEAMS_PORT_MANAGER_CONSOLE),
 	// so the strict HTTPS-only browser-auth checks introduced in 2026.4.x must
 	// be relaxed.
 	//
 	// gateway.controlUi.allowedOrigins: ["*"] — the user picks the console host
 	// port at install time and may reach it via 127.0.0.1, the host's LAN IP,
-	// or a custom hostname; hiclaw cannot enumerate every legitimate origin
+	// or a custom hostname; agentteams cannot enumerate every legitimate origin
 	// upfront. Token auth on the gateway remains the actual access boundary.
 	//
 	// gateway.auth.token / gateway.remote.token: req.GatewayKey — these used to
@@ -249,7 +249,7 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 		},
 		// openclaw 2026.4.x defaults the matrix invite-handler policy to "off",
 		// meaning agents *ignore* room invites — they stay in `membership:invite`
-		// forever instead of becoming `join`. Hiclaw's provisioning flow always
+		// forever instead of becoming `join`. AgentTeams's provisioning flow always
 		// invites the agent (manager or worker) into its dedicated room and then
 		// expects the agent's matrix client to accept the invite on its own; if
 		// it never joins, /sync delivers no room events, the agent is silent in

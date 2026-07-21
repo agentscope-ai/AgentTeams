@@ -46,7 +46,7 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 - **Local mirror:** `/root/agentteams-fs/` — your local filesystem, NOT automatically synced
 - **MinIO prefix:** always use `${AGENTTEAMS_STORAGE_PREFIX}` in mc commands (this env var is pre-set in your shell, format: `<mc-alias>/<bucket>`)
 - **Example:** `mc mirror ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/ /root/agentteams-fs/shared/tasks/{task-id}/ --overwrite`
-- **NEVER guess or hardcode the prefix** — do NOT use `hiclaw-fs/...`, `agentteams-storage/...`, or any literal path. Always use `${AGENTTEAMS_STORAGE_PREFIX}`. If unsure, run `echo $AGENTTEAMS_STORAGE_PREFIX` to check.
+- **NEVER guess or hardcode the prefix** — do NOT use `agentteams-fs/...`, `agentteams-storage/...`, or any literal path. Always use `${AGENTTEAMS_STORAGE_PREFIX}`. If unsure, run `echo $AGENTTEAMS_STORAGE_PREFIX` to check.
 
 ## Gotchas
 
@@ -104,7 +104,7 @@ copaw channels send \
 
 **CRITICAL**: When creating, deleting, or otherwise managing Workers / Teams / Projects / Humans:
 
-- ✅ **ALWAYS USE**: the `hiclaw` CLI (`agt create worker`, `agt get workers`, `agt delete worker`, `agt create team`, etc.) and the helper scripts under `~/skills/*/scripts/`
+- ✅ **ALWAYS USE**: the `agt` CLI (`agt create worker`, `agt get workers`, `agt delete worker`, `agt create team`, etc.) and the helper scripts under `~/skills/*/scripts/`
 - ❌ **NEVER USE**: direct `curl` to `${AGENTTEAMS_CONTROLLER_URL}/api/v1/...` (you will see this URL in env vars and inside `/opt/agentteams/scripts/lib/container-api.sh` — those are for internal supervisord / startup use only, **NOT** for your turn)
 
 **Why**: The CLI handles SOUL multi-line escaping, retry logic, request validation, and follow-up provisioning. Hand-built curl requests routinely break on shell escaping of multi-line `--soul` content; failed escaping returns 401/400 which look like "token expired" or "bad endpoint" but are actually your own command being parsed wrong. If `agt create worker` appears slow or stuck, run `agt get workers -o json` to confirm the actual worker phase — do **NOT** bypass the CLI.

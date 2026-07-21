@@ -173,7 +173,7 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 
 ### `agt` CLI
 
-The **`agt`** binary is built from **`agentteams-controller`** and copied into **Manager**, **Worker**, and **embedded controller** images. It talks to the controller **REST API** (e.g. create/get workers, teams, humans, managers) and is the primary **operator-facing** tool inside containers and docs examples (`agt get managers default`, etc.). A deprecated `hiclaw` command alias remains for upgrades.
+The **`agt`** binary is built from **`agentteams-controller`** and copied into **Manager**, **Worker**, and **embedded controller** images. It talks to the controller **REST API** (e.g. create/get workers, teams, humans, managers) and is the primary **operator-facing** tool inside containers and docs examples (`agt get managers default`, etc.).
 
 ---
 
@@ -188,7 +188,7 @@ Under **`manager/agent/skills/`**, each top-level directory is one skill:
 1. `channel-management`  
 2. `file-sync-management`  
 3. `git-delegation-management`  
-4. `hiclaw-find-worker`  
+4. `agentteams-find-worker`
 5. `human-management`  
 6. `matrix-server-management`  
 7. `mcporter`  

@@ -353,4 +353,4 @@ To completely remove AgentTeams and all its data:
 bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
 
-This matches `install/agentteams-install.sh uninstall`: it stops and removes **`agentteams-manager`**, all **`agentteams-worker-*`** (and other worker) containers, **`agentteams-controller`** (embedded Higress / Tuwunel / MinIO / Element Web), optional **`hiclaw-docker-proxy`**, the **`agentteams-data`** Docker volume, your **`agentteams-manager.env`** file, the workspace directory, the **`agentteams-net`** network, and the install log.
+This matches `install/agentteams-install.sh uninstall`: it stops and removes **`agentteams-manager`**, all **`agentteams-worker-*`** (and other worker) containers, **`agentteams-controller`** (embedded Higress / Tuwunel / MinIO / Element Web), optional **`agentteams-docker-proxy`**, the **`agentteams-data`** Docker volume, your **`agentteams-manager.env`** file, the workspace directory, the **`agentteams-net`** network, and the install log.

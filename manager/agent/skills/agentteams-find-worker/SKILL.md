@@ -1,5 +1,5 @@
 ---
-name: hiclaw-find-worker
+name: agentteams-find-worker
 description: Use as a helper when the admin is assigning work but has not specified an existing Worker, so you need to search Nacos for a suitable Worker and ask whether to import it; also use when the admin explicitly says to import a Worker from the market or gives a direct nacos package URI.
 ---
 
@@ -18,15 +18,15 @@ Do not use this skill for generic hand-created Worker creation. This skill only 
 
 ```bash
 # Search by requirement
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/agentteams-find-worker.sh \
   --query "<admin requirement>" --limit 3 --json
 
 # Install after the admin confirms
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/install-worker-template.sh \
   --template <TEMPLATE_NAME> --worker-name <NAME>
 
 # Or import a direct package URI after the admin confirms
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/install-worker-template.sh \
   --package-uri <PACKAGE_URI> --worker-name <NAME>
 ```
 
@@ -46,6 +46,6 @@ bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-temp
 
 | Admin wants to... | Read | Key script |
 |---|---|---|
-| Search Nacos Workers by requirement or exact name | `references/import-worker-template.md` | `scripts/hiclaw-find-worker.sh` |
+| Search Nacos Workers by requirement or exact name | `references/import-worker-template.md` | `scripts/agentteams-find-worker.sh` |
 | Import a direct `nacos://...` package URI | `references/import-worker-template.md` | `scripts/install-worker-template.sh` |
 | Install a confirmed Worker from Nacos | `references/import-worker-template.md` | `scripts/install-worker-template.sh` |

@@ -88,7 +88,7 @@ docker exec agentteams-worker-alice cat /root/agentteams-fs/agents/alice/opencla
 # Test AI Gateway access with Worker's key
 # Note: these commands run inside the Worker container where domain names resolve to Manager's internal IP
 docker exec agentteams-worker-alice curl -sf \
-  -H "Authorization: Bearer $(jq -r '.models.providers."hiclaw-gateway".apiKey' /root/agentteams-fs/agents/alice/openclaw.json)" \
+  -H "Authorization: Bearer $(jq -r '.models.providers."agentteams-gateway".apiKey' /root/agentteams-fs/agents/alice/openclaw.json)" \
   http://aigw-local.agentteams.io:8080/v1/models
 
 # If 401: Check that Worker's consumer key in openclaw.json matches the one in Higress.

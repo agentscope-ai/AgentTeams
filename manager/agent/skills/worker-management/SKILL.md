@@ -1,6 +1,6 @@
 ---
 name: worker-management
-description: Use when admin requests hand-creating or resetting a Worker, starting/stopping a Worker, managing Worker skills, enabling peer mentions, or opening a QwenPaw console. Use hiclaw-find-worker only as a helper for Nacos-backed market import or when task assignment needs you to discover a suitable Worker.
+description: Use when admin requests hand-creating or resetting a Worker, starting/stopping a Worker, managing Worker skills, enabling peer mentions, or opening a QwenPaw console. Use agentteams-find-worker only as a helper for Nacos-backed market import or when task assignment needs you to discover a suitable Worker.
 ---
 
 # Worker Management
@@ -57,7 +57,7 @@ agt create worker --name <NAME> --no-wait \
 - **Worker name must be lowercase and > 3 characters** — Tuwunel stores usernames in lowercase; short names cause registration failures
 - **Local means controller-managed** — in OSS, `agt create worker` provisions a Local worker through the controller. Do not map "local mode" to Remote/pip worker flags.
 - **`file-sync`, `task-progress`, `project-participation` are default skills** — always included, cannot be removed
-- **Use `hiclaw-find-worker` only for Nacos-backed market imports or Worker discovery during task assignment** — generic Worker creation and lifecycle changes stay in this skill
+- **Use `agentteams-find-worker` only for Nacos-backed market imports or Worker discovery during task assignment** — generic Worker creation and lifecycle changes stay in this skill
 - **Peer mentions cause loops if not briefed** — after enabling, explicitly tell Workers to only @mention peers for blocking info, never for acknowledgments
 - **Always notify Workers to `file-sync` after writing files they need** — the 5-minute periodic sync is fallback only
 - **Workers are stateless** — all state is in centralized storage. Reset = recreate config files

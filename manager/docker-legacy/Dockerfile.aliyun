@@ -8,11 +8,11 @@
 # All infrastructure is external (SAE + AI Gateway + OSS).
 #
 # Build from project root:
-#   docker build -f manager/Dockerfile.aliyun -t hiclaw/cloud-manager:latest .
+#   docker build -f manager/Dockerfile.aliyun -t agentteams/cloud-manager:latest .
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base:20260423-8359cbc
+ARG OPENCLAW_BASE_IMAGE=agentteams/openclaw-base:20260423-8359cbc
 
 # ============ Stage 1: MinIO Client (mc) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc

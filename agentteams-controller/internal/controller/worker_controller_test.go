@@ -269,7 +269,7 @@ func TestWorkerMemberContext_StampsControllerAndRoleLabels(t *testing.T) {
 	r := &WorkerReconciler{ControllerName: "ctl-x"}
 	w := &v1beta1.Worker{}
 	w.Name = "solo"
-	w.Namespace = "hiclaw"
+	w.Namespace = "agentteams"
 
 	mctx := r.workerMemberContext(w)
 
@@ -293,7 +293,7 @@ func TestWorkerMemberContext_MergesMetadataAndSpecLabels(t *testing.T) {
 	r := &WorkerReconciler{ControllerName: "ctl-x"}
 	w := &v1beta1.Worker{}
 	w.Name = "solo"
-	w.Namespace = "hiclaw"
+	w.Namespace = "agentteams"
 	w.ObjectMeta.Labels = map[string]string{
 		"owner": "alice",
 		"team":  "a",
@@ -1768,7 +1768,7 @@ func TestWorkerReconcileEdgeWritesRuntimeConfigWithoutContainer(t *testing.T) {
 		return map[string]string{
 			"AGENTTEAMS_WORKER_NAME": workerName,
 			"SKILLS_API_URL":         "nacos://market.agentteams.io:80/public",
-			"NACOS_AUTH_TYPE":        "sts-hiclaw",
+			"NACOS_AUTH_TYPE":        "sts-agentteams",
 		}
 	}
 	gw := &workerTestGateway{modelInfo: &gateway.ModelProviderInfo{
@@ -1815,7 +1815,7 @@ func TestWorkerReconcileEdgeWritesRuntimeConfigWithoutContainer(t *testing.T) {
 	if req.SkillRegistryURL != "nacos://market.agentteams.io:80/public" {
 		t.Fatalf("SkillRegistryURL=%q", req.SkillRegistryURL)
 	}
-	if req.SkillRegistryAuthType != "sts-hiclaw" {
+	if req.SkillRegistryAuthType != "sts-agentteams" {
 		t.Fatalf("SkillRegistryAuthType=%q", req.SkillRegistryAuthType)
 	}
 	if len(gw.authorized) != 1 || gw.authorized[0] != "worker-claude-local" || gw.authorizedAPIs[0] != "model-api-1" {

@@ -1178,9 +1178,9 @@ func TestSandboxBackend_Status_UsesManagerLabelCandidateForManagerPodName(t *tes
 		}},
 	}
 	backend := newTestSandboxBackend(plugin)
-	backend.config.ResourcePrefix = "hiclaw-"
+	backend.config.ResourcePrefix = "agentteams-"
 
-	result, err := backend.Status(context.Background(), "hiclaw-manager")
+	result, err := backend.Status(context.Background(), "agentteams-manager")
 	if err != nil {
 		t.Fatalf("Status() error: %v", err)
 	}

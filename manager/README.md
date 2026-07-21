@@ -24,7 +24,7 @@ Both runtimes share the same skills and workspace structure.
 make build-manager
 
 # Or directly
-docker build -t hiclaw/manager-agent:latest .
+docker build -t agentteams/manager-agent:latest .
 ```
 
 ## Run

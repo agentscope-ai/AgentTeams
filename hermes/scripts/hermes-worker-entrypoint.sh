@@ -45,7 +45,7 @@ if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
     FS_ENDPOINT="https://oss-placeholder.aliyuncs.com"
     FS_ACCESS_KEY="rrsa"
     FS_SECRET_KEY="rrsa"
-    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-hiclaw-cloud-storage}"
+    FS_BUCKET="${AGENTTEAMS_FS_BUCKET:-agentteams-cloud-storage}"
     log "  OSS bucket: ${FS_BUCKET}"
 else
     FS_ENDPOINT="${AGENTTEAMS_FS_ENDPOINT:?AGENTTEAMS_FS_ENDPOINT is required}"

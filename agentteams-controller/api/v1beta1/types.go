@@ -51,7 +51,7 @@ const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 // logical names (bucketRef: workspace, gatewayRef: default) and
 // template variables (${self.name}, ${self.kind}, ${self.namespace}).
 // The agentteams-controller resolves it to real resource values before
-// calling hiclaw-credential-provider; the provider never sees the
+// calling agentteams-credential-provider; the provider never sees the
 // CR-layer form.
 //
 // AccessEntry is only honored when the controller runs with a
@@ -112,7 +112,7 @@ type RemoteSkill struct {
 // RemoteSkillSource groups remote skills by source and auth mode.
 // Source format: nacos://host:port/{namespace-id}
 // AuthType values: "nacos" (username:password embedded in source URL as nacos://user:pass@host:port/namespace),
-// "sts-hiclaw" (STS credential provider), "none" (unauthenticated). Empty auto-detects:
+// "sts-agentteams" (STS credential provider), "none" (unauthenticated). Empty auto-detects:
 // embedded username/password selects "nacos"; otherwise "none".
 type RemoteSkillSource struct {
 	Source   string        `json:"source"`
@@ -184,7 +184,7 @@ type WorkerSpec struct {
 	Skills        []string                   `json:"skills,omitempty"`       // built-in skills only
 	RemoteSkills  []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
 	McpServers    []MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-hiclaw|none
+	Package       string                     `json:"package,omitempty"` // file://, http(s)://, or nacos://[user:pass@]host:port/...; optional ?authType=nacos|sts-agentteams|none
 	Expose        []ExposePort               `json:"expose,omitempty"`  // ports to expose via Higress gateway
 	ChannelPolicy *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Channels      *ChannelsSpec              `json:"channels,omitempty"`
@@ -203,7 +203,7 @@ type WorkerSpec struct {
 	State *string `json:"state,omitempty"`
 
 	// AccessEntries declares the cloud permissions this worker should be
-	// granted via hiclaw-credential-provider. See AccessEntry for semantics.
+	// granted via agentteams-credential-provider. See AccessEntry for semantics.
 	// When empty the controller applies a sensible default (object-storage
 	// scoped to agents/<name>/* and shared/*).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
@@ -497,7 +497,7 @@ type LeaderSpec struct {
 	Resources         *AgentResourceRequirements `json:"resources,omitempty"`
 
 	// AccessEntries declares the cloud permissions this leader should be
-	// granted via hiclaw-credential-provider. See AccessEntry for semantics.
+	// granted via agentteams-credential-provider. See AccessEntry for semantics.
 	// When empty the controller applies team-member defaults (agents/<name>/*
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
@@ -548,7 +548,7 @@ type TeamWorkerSpec struct {
 	Resources     *AgentResourceRequirements `json:"resources,omitempty"`
 
 	// AccessEntries declares the cloud permissions this team worker should be
-	// granted via hiclaw-credential-provider. See AccessEntry for semantics.
+	// granted via agentteams-credential-provider. See AccessEntry for semantics.
 	// When empty the controller applies team-member defaults (agents/<name>/*
 	// + shared/* + teams/<team>/* on the configured bucket).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
@@ -745,7 +745,7 @@ type HumanList struct {
 
 // Manager represents the AgentTeams Manager Agent — the coordinator that receives
 // natural-language instructions from Admin and orchestrates Workers/Teams via
-// the hiclaw CLI / Controller REST API.
+// the agt CLI / Controller REST API.
 type Manager struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -772,7 +772,7 @@ type ManagerSpec struct {
 	State *string `json:"state,omitempty"`
 
 	// AccessEntries declares the cloud permissions this manager should be
-	// granted via hiclaw-credential-provider. See AccessEntry for semantics.
+	// granted via agentteams-credential-provider. See AccessEntry for semantics.
 	// When empty the controller applies a sensible default (object-storage
 	// scoped to agents/<name>/*, shared/*, and manager/*).
 	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`

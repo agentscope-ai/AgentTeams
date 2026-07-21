@@ -20,7 +20,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SKIP_BUILD=false
 USE_EXISTING=false
 TEST_FILTER=""
-HICLAW_VERSION="${HICLAW_VERSION:-latest}"
+AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-latest}"
 
 # Test environment variables
 export TEST_ADMIN_USER="${TEST_ADMIN_USER:-admin}"
@@ -30,7 +30,7 @@ export TEST_MINIO_PASSWORD="${TEST_MINIO_PASSWORD:-${TEST_ADMIN_PASSWORD}}"
 export TEST_REGISTRATION_TOKEN="${TEST_REGISTRATION_TOKEN:-test-reg-token-$(openssl rand -hex 8)}"
 export TEST_MATRIX_DOMAIN="${TEST_MATRIX_DOMAIN:-matrix-local.agentteams.io:18080}"
 export TEST_MANAGER_HOST="${TEST_MANAGER_HOST:-127.0.0.1}"
-export HICLAW_LLM_API_KEY="${HICLAW_LLM_API_KEY:-${AGENTTEAMS_LLM_API_KEY:-}}"
+export AGENTTEAMS_LLM_API_KEY="${AGENTTEAMS_LLM_API_KEY:-}"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -44,10 +44,10 @@ done
 
 # Load credentials from agentteams-manager.env into TEST_* variables
 load_env_file() {
-    local env_file="${AGENTTEAMS_ENV_FILE:-${HICLAW_ENV_FILE:-${HOME}/agentteams-manager.env}}"
+    local env_file="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     [ -f "${env_file}" ] || env_file="${PROJECT_ROOT}/agentteams-manager.env"
-    [ -f "${env_file}" ] || env_file="${HOME}/hiclaw-manager.env"
-    [ -f "${env_file}" ] || env_file="${PROJECT_ROOT}/hiclaw-manager.env"
+    [ -f "${env_file}" ] || env_file="${HOME}/agentteams-manager.env"
+    [ -f "${env_file}" ] || env_file="${PROJECT_ROOT}/agentteams-manager.env"
     if [ -f "${env_file}" ]; then
         while IFS='=' read -r key value; do
             [[ "${key}" =~ ^#.*$ || -z "${key}" ]] && continue
@@ -59,26 +59,26 @@ load_env_file() {
                 AGENTTEAMS_MINIO_PASSWORD)      export TEST_MINIO_PASSWORD="${value}" ;;
                 AGENTTEAMS_REGISTRATION_TOKEN)  export TEST_REGISTRATION_TOKEN="${value}" ;;
                 AGENTTEAMS_MATRIX_DOMAIN)       export TEST_MATRIX_DOMAIN="${value}" ;;
-                AGENTTEAMS_LLM_API_KEY)         [ -z "${HICLAW_LLM_API_KEY}" ] && export HICLAW_LLM_API_KEY="${value}" ;;
+                AGENTTEAMS_LLM_API_KEY)         [ -z "${AGENTTEAMS_LLM_API_KEY}" ] && export AGENTTEAMS_LLM_API_KEY="${value}" ;;
                 AGENTTEAMS_PORT_GATEWAY)        export TEST_GATEWAY_PORT="${value}" ;;
                 AGENTTEAMS_PORT_CONSOLE)        export TEST_CONSOLE_PORT="${value}" ;;
-                HICLAW_ADMIN_USER)          export TEST_ADMIN_USER="${value}" ;;
-                HICLAW_ADMIN_PASSWORD)      export TEST_ADMIN_PASSWORD="${value}" ;;
-                HICLAW_MINIO_USER)          export TEST_MINIO_USER="${value}" ;;
-                HICLAW_MINIO_PASSWORD)      export TEST_MINIO_PASSWORD="${value}" ;;
-                HICLAW_REGISTRATION_TOKEN)  export TEST_REGISTRATION_TOKEN="${value}" ;;
-                HICLAW_MATRIX_DOMAIN)       export TEST_MATRIX_DOMAIN="${value}" ;;
-                HICLAW_LLM_API_KEY)         [ -z "${HICLAW_LLM_API_KEY}" ] && export HICLAW_LLM_API_KEY="${value}" ;;
-                HICLAW_PORT_GATEWAY)        export TEST_GATEWAY_PORT="${value}" ;;
-                HICLAW_PORT_CONSOLE)        export TEST_CONSOLE_PORT="${value}" ;;
+                AGENTTEAMS_ADMIN_USER)          export TEST_ADMIN_USER="${value}" ;;
+                AGENTTEAMS_ADMIN_PASSWORD)      export TEST_ADMIN_PASSWORD="${value}" ;;
+                AGENTTEAMS_MINIO_USER)          export TEST_MINIO_USER="${value}" ;;
+                AGENTTEAMS_MINIO_PASSWORD)      export TEST_MINIO_PASSWORD="${value}" ;;
+                AGENTTEAMS_REGISTRATION_TOKEN)  export TEST_REGISTRATION_TOKEN="${value}" ;;
+                AGENTTEAMS_MATRIX_DOMAIN)       export TEST_MATRIX_DOMAIN="${value}" ;;
+                AGENTTEAMS_LLM_API_KEY)         [ -z "${AGENTTEAMS_LLM_API_KEY}" ] && export AGENTTEAMS_LLM_API_KEY="${value}" ;;
+                AGENTTEAMS_PORT_GATEWAY)        export TEST_GATEWAY_PORT="${value}" ;;
+                AGENTTEAMS_PORT_CONSOLE)        export TEST_CONSOLE_PORT="${value}" ;;
             esac
         done < "${env_file}"
     fi
     export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-controller$' | head -1 || true)}"
-    export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager$' | head -1 || true)}"
+    export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager$' | head -1 || true)}"
     export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
     export TEST_AGENT_CONTAINER="${TEST_AGENT_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)}"
-    export TEST_AGENT_CONTAINER="${TEST_AGENT_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager(-|$)' | head -1 || true)}"
+    export TEST_AGENT_CONTAINER="${TEST_AGENT_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)}"
     export TEST_AGENT_CONTAINER="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER}}"
 }
 
@@ -145,7 +145,7 @@ cleanup() {
     if [ "${USE_EXISTING}" = true ]; then
         log "Using existing installation — skipping container cleanup"
         # Still clean up test worker containers
-        for c in $(docker ps -a --filter "name=agentteams-test-worker-" --format '{{.Names}}' 2>/dev/null; docker ps -a --filter "name=hiclaw-test-worker-" --format '{{.Names}}' 2>/dev/null); do
+        for c in $(docker ps -a --filter "name=agentteams-test-worker-" --format '{{.Names}}' 2>/dev/null; docker ps -a --filter "name=agentteams-test-worker-" --format '{{.Names}}' 2>/dev/null); do
             docker rm -f "$c" 2>/dev/null || true
         done
         return
@@ -157,11 +157,11 @@ cleanup() {
     docker stop agentteams-manager 2>/dev/null || true
     docker rm agentteams-manager 2>/dev/null || true
     # Legacy container name
-    docker stop hiclaw-manager 2>/dev/null || true
-    docker rm hiclaw-manager 2>/dev/null || true
+    docker stop agentteams-manager 2>/dev/null || true
+    docker rm agentteams-manager 2>/dev/null || true
 
     # Cleanup worker containers
-    for c in $(docker ps -a --filter "name=agentteams-test-worker-" --format '{{.Names}}' 2>/dev/null; docker ps -a --filter "name=hiclaw-test-worker-" --format '{{.Names}}' 2>/dev/null); do
+    for c in $(docker ps -a --filter "name=agentteams-test-worker-" --format '{{.Names}}' 2>/dev/null; docker ps -a --filter "name=agentteams-test-worker-" --format '{{.Names}}' 2>/dev/null); do
         docker rm -f "$c" 2>/dev/null || true
     done
 
@@ -176,7 +176,7 @@ trap cleanup EXIT
 
 if [ "${SKIP_BUILD}" = false ]; then
     log "Building images via Makefile..."
-    make -C "${PROJECT_ROOT}" build VERSION="${HICLAW_VERSION}"
+    make -C "${PROJECT_ROOT}" build VERSION="${AGENTTEAMS_VERSION}"
     log "Images built successfully"
 else
     log "Skipping image build (--skip-build)"
@@ -201,7 +201,7 @@ if [ "${USE_EXISTING}" = true ]; then
     # Enable YOLO mode for test run (auto-decision, no interactive prompts)
     # Try agent container first (embedded mode), fall back to manager container (legacy mode)
     agent_container="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)"
-    agent_container="${agent_container:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager(-|$)' | head -1 || true)}"
+    agent_container="${agent_container:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)}"
     agent_container="${agent_container:-${TEST_CONTROLLER_CONTAINER}}"
     docker exec "${agent_container}" touch /root/manager-workspace/yolo-mode 2>/dev/null && \
         log "YOLO mode enabled (${agent_container})" || \
@@ -214,8 +214,8 @@ else
     # match exactly what users get in production.
     make -C "${PROJECT_ROOT}" uninstall 2>/dev/null || true
     AGENTTEAMS_NON_INTERACTIVE=1 AGENTTEAMS_YOLO=1 AGENTTEAMS_MOUNT_SOCKET=1 \
-        AGENTTEAMS_INSTALL_MANAGER_IMAGE="agentteams/manager:${HICLAW_VERSION}" \
-        AGENTTEAMS_INSTALL_WORKER_IMAGE="agentteams/worker-agent:${HICLAW_VERSION}" \
+        AGENTTEAMS_INSTALL_MANAGER_IMAGE="agentteams/manager:${AGENTTEAMS_VERSION}" \
+        AGENTTEAMS_INSTALL_WORKER_IMAGE="agentteams/worker-agent:${AGENTTEAMS_VERSION}" \
         make -C "${PROJECT_ROOT}" install SKIP_BUILD=1
 
     # ============================================================
@@ -233,7 +233,7 @@ else
 
     # Enable YOLO mode for test run
     agent_container="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)"
-    agent_container="${agent_container:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager(-|$)' | head -1 || true)}"
+    agent_container="${agent_container:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)}"
     agent_container="${agent_container:-${TEST_CONTROLLER_CONTAINER}}"
     docker exec "${agent_container}" touch /root/manager-workspace/yolo-mode 2>/dev/null && \
         log "YOLO mode enabled (${agent_container})" || true
@@ -269,7 +269,7 @@ _setup_manager_identity() {
     # Check in agent container (embedded mode) or manager container (legacy mode)
     local _agent
     _agent="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)"
-    _agent="${_agent:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager(-|$)' | head -1 || true)}"
+    _agent="${_agent:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)}"
     _agent="${_agent:-${TEST_CONTROLLER_CONTAINER}}"
 
     if docker exec "${_agent}" test -f /root/manager-workspace/soul-configured 2>/dev/null; then
@@ -290,9 +290,9 @@ _setup_manager_identity() {
     local _gw_url="http://${TEST_MANAGER_HOST}:${TEST_GATEWAY_PORT:-18080}"
     local _cookie_file="/tmp/higress-test-cookie-$$"
     local _mgr_key
-    local _env_file="${AGENTTEAMS_ENV_FILE:-${HICLAW_ENV_FILE:-${HOME}/agentteams-manager.env}}"
-    [ -f "${_env_file}" ] || _env_file="${HOME}/hiclaw-manager.env"
-    _mgr_key=$(grep -E '^(AGENTTEAMS|HICLAW)_MANAGER_GATEWAY_KEY=' "${_env_file}" 2>/dev/null | tail -1 | cut -d= -f2-)
+    local _env_file="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
+    [ -f "${_env_file}" ] || _env_file="${HOME}/agentteams-manager.env"
+    _mgr_key=$(grep '^AGENTTEAMS_MANAGER_GATEWAY_KEY=' "${_env_file}" 2>/dev/null | tail -1 | cut -d= -f2-)
     while [ "${_gw_elapsed}" -lt 60 ]; do
         # Login to Higress console and check manager consumer
         curl -sf -X POST "${_console_url}/session/login" \
@@ -307,7 +307,7 @@ _setup_manager_identity() {
                     -X POST "${_gw_url}/v1/chat/completions" \
                     -H "Authorization: Bearer ${_mgr_key}" \
                     -H "Content-Type: application/json" \
-                    -d '{"model":"'"${AGENTTEAMS_DEFAULT_MODEL:-${HICLAW_DEFAULT_MODEL:-qwen3.6-plus}}"'","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' 2>/dev/null || echo -e "\n000")
+                    -d '{"model":"'"${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"'","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' 2>/dev/null || echo -e "\n000")
                 _gw_code=$(echo "${_gw_resp}" | tail -1)
                 if [ "${_gw_code}" = "200" ]; then
                     _gw_ready=true

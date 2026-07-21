@@ -170,9 +170,9 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
         self.assertEqual(first["roomId"], "!dm:example.test")
         first_body = first["content"]
         self.assertEqual(first_body["msgtype"], "m.notice")
-        self.assertEqual(first_body["hiclaw.workflow"]["coordinator"], "@worker:example.test")
-        self.assertEqual(first_body["hiclaw.workflow"]["subagents"][0]["agentId"], "tmp-a")
-        self.assertNotIn("helpers", first_body["hiclaw.workflow"])
+        self.assertEqual(first_body["agentteams.workflow"]["coordinator"], "@worker:example.test")
+        self.assertEqual(first_body["agentteams.workflow"]["subagents"][0]["agentId"], "tmp-a")
+        self.assertNotIn("helpers", first_body["agentteams.workflow"])
         self.assertIn("<table>", first_body["formatted_body"])
 
         state_path = Path(started["statePath"])
@@ -198,8 +198,8 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
         second_body = captured[1]["content"]
         self.assertEqual(second_body["m.relates_to"]["rel_type"], "m.replace")
         self.assertEqual(second_body["m.relates_to"]["event_id"], "$event1")
-        self.assertEqual(second_body["m.new_content"]["hiclaw.workflow"]["status"], "merging")
-        self.assertNotIn("helpers", second_body["m.new_content"]["hiclaw.workflow"])
+        self.assertEqual(second_body["m.new_content"]["agentteams.workflow"]["status"], "merging")
+        self.assertNotIn("helpers", second_body["m.new_content"]["agentteams.workflow"])
         updated_state = json.loads(state_path.read_text(encoding="utf-8"))
         self.assertEqual(updated_state["lastEditEventId"], "$event2")
 
@@ -265,7 +265,7 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
         )
 
         self.assertTrue(updated["ok"])
-        workflow = captured[1]["content"]["m.new_content"]["hiclaw.workflow"]
+        workflow = captured[1]["content"]["m.new_content"]["agentteams.workflow"]
         self.assertEqual(workflow["subagents"][0]["status"], "done")
         self.assertEqual(workflow["subagents"][0]["summary"], "风险HIGH")
         self.assertNotIn("helpers", workflow)
@@ -329,8 +329,8 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
         self.assertNotIn("helpers", result)
 
         self.assertEqual(captured_matrix[0]["roomId"], "!dm:example.test")
-        self.assertEqual(captured_matrix[0]["content"]["hiclaw.workflow"]["status"], "spawning")
-        workflow = captured_matrix[1]["content"]["m.new_content"]["hiclaw.workflow"]
+        self.assertEqual(captured_matrix[0]["content"]["agentteams.workflow"]["status"], "spawning")
+        workflow = captured_matrix[1]["content"]["m.new_content"]["agentteams.workflow"]
         self.assertEqual(workflow["status"], "ready")
         self.assertEqual(workflow["subagents"][0]["agentId"], "tmp-workerflow-run-dyn-security")
         self.assertNotIn("helpers", workflow)
@@ -414,7 +414,7 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
         self.assertEqual([item["cleanup"]["reason"] for item in cleanup["agents"]], ["cleanup_disabled", "cleanup_disabled"])
         state = json.loads(Path(finished["statePath"]).read_text(encoding="utf-8"))
         self.assertEqual(state["cleanupTempAgents"]["deleted"], 2)
-        self.assertEqual(captured_matrix[-1]["content"]["m.new_content"]["hiclaw.workflow"]["status"], "done")
+        self.assertEqual(captured_matrix[-1]["content"]["m.new_content"]["agentteams.workflow"]["status"], "done")
 
     def test_workflow_fail_deletes_workflow_temp_agents(self) -> None:
         shared_dir = self.server._resolve_shared_dir("", "run-fail-cleanup", "run-fail-cleanup")
@@ -518,8 +518,8 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
 
         deleted_paths = [request["path"] for request in requests if request["method"] == "DELETE"]
         self.assertEqual(deleted_paths, ["/agents/tmp-workerflow-run-spawn-fail-base_info"])
-        self.assertEqual(captured_matrix[0]["content"]["hiclaw.workflow"]["status"], "spawning")
-        failed_workflow = captured_matrix[-1]["content"]["m.new_content"]["hiclaw.workflow"]
+        self.assertEqual(captured_matrix[0]["content"]["agentteams.workflow"]["status"], "spawning")
+        failed_workflow = captured_matrix[-1]["content"]["m.new_content"]["agentteams.workflow"]
         self.assertEqual(failed_workflow["status"], "failed")
         self.assertEqual(failed_workflow["subagents"][0]["agentId"], "tmp-workerflow-run-spawn-fail-base_info")
         state_path = self.server._workflow_state_path(
@@ -577,7 +577,7 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
 
         deleted_paths = [request["path"] for request in requests if request["method"] == "DELETE"]
         self.assertEqual(deleted_paths, ["/agents/tmp-workerflow-run-init-fail-base_info"])
-        failed_workflow = captured_matrix[-1]["content"]["m.new_content"]["hiclaw.workflow"]
+        failed_workflow = captured_matrix[-1]["content"]["m.new_content"]["agentteams.workflow"]
         self.assertEqual(failed_workflow["status"], "failed")
         self.assertEqual(failed_workflow["subagents"][0]["agentId"], "tmp-workerflow-run-init-fail-base_info")
         state_path = self.server._workflow_state_path(
@@ -663,7 +663,7 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
         self.assertIn("base_info", waiting_prompt)
         self.assertIn("pathogen", waiting_prompt)
 
-        workflow = captured_matrix[1]["content"]["m.new_content"]["hiclaw.workflow"]
+        workflow = captured_matrix[1]["content"]["m.new_content"]["agentteams.workflow"]
         self.assertEqual(workflow["subagents"][0]["name"], "基础信息梳理")
         self.assertEqual(workflow["subagents"][0]["role"], "基础信息梳理")
         self.assertEqual(workflow["subagents"][2]["status"], "waiting")
@@ -748,7 +748,7 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
         self.assertIn("base_info: 基础信息完成", ready_prompt)
         self.assertIn("pathogen: 病原分析完成", ready_prompt)
 
-        workflow = captured_matrix[2]["content"]["m.new_content"]["hiclaw.workflow"]
+        workflow = captured_matrix[2]["content"]["m.new_content"]["agentteams.workflow"]
         self.assertEqual(workflow["subagents"][2]["status"], "ready")
         self.assertEqual(workflow["subagents"][2]["summary"], "dependencies done; ready for submit")
 
@@ -838,7 +838,7 @@ class WorkerFlowSharedDirTest(unittest.TestCase):
         self.assertTrue(dry["dryRun"])
         self.assertEqual(dry["content"]["msgtype"], "m.notice")
         self.assertEqual(dry["content"]["m.relates_to"]["event_id"], "$original")
-        self.assertEqual(dry["content"]["m.new_content"]["hiclaw.workflow"]["runId"], "run-dry")
+        self.assertEqual(dry["content"]["m.new_content"]["agentteams.workflow"]["runId"], "run-dry")
 
     def test_matrix_env_aliases_and_runtime_token_env(self) -> None:
         runtime = self.root / "runtime-token.yaml"

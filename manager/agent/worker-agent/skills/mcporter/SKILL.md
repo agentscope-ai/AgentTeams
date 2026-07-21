@@ -34,7 +34,7 @@ When your coordinator @mentions you saying a new MCP server has been configured,
 Run your file-sync skill to get the latest config:
 
 ```bash
-hiclaw-sync
+agentteams-sync
 ```
 
 ### Step 2: Discover the new server and its tools
@@ -106,4 +106,4 @@ After generating the skill, reply to your coordinator confirming:
 - **Transport**: MCP Servers use HTTP transport (configured in config/mcporter.json)
 - **Auth**: Authorization header with Bearer token is auto-configured — you don't need to manage credentials
 - **Permissions**: Your MCP access is controlled by your coordinator. If you get 403 from the MCP Server, ask your coordinator to re-authorize your access
-- **Config not found**: If `./config/mcporter.json` doesn't exist yet, run `hiclaw-sync` first — your coordinator pushes the config to MinIO after setting up MCP servers
+- **Config not found**: If `./config/mcporter.json` doesn't exist yet, run `agentteams-sync` first — your coordinator pushes the config to MinIO after setting up MCP servers

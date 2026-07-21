@@ -157,7 +157,7 @@ func TestDeployWorkerConfigInjectsTeamLeaderContext(t *testing.T) {
 	}
 	text := string(got)
 	for _, want := range []string{
-		"hiclaw-team-context-start",
+		"agentteams-team-context-start",
 		"demo-team",
 		"Upstream",
 		"@manager:",
@@ -822,7 +822,7 @@ func TestDeployMemberRuntimeConfigProjectsRemoteManagedLocalFields(t *testing.T)
 		GatewayKey:            "gateway-key",
 		AIGatewayURL:          "http://aigw.internal/v1/claude",
 		SkillRegistryURL:      "nacos://market.agentteams.io:80/public",
-		SkillRegistryAuthType: "sts-hiclaw",
+		SkillRegistryAuthType: "sts-agentteams",
 		Spec: v1beta1.WorkerSpec{
 			Model:   "claude-sonnet-4",
 			Package: "oss://agents/claude-local/packages/demo.zip",
@@ -863,7 +863,7 @@ func TestDeployMemberRuntimeConfigProjectsRemoteManagedLocalFields(t *testing.T)
 	if got := fmt.Sprint(skillRegistry["url"]); got != "nacos://market.agentteams.io:80/public" {
 		t.Fatalf("desired.skillRegistry.url=%q", got)
 	}
-	if got := fmt.Sprint(skillRegistry["authType"]); got != "sts-hiclaw" {
+	if got := fmt.Sprint(skillRegistry["authType"]); got != "sts-agentteams" {
 		t.Fatalf("desired.skillRegistry.authType=%q", got)
 	}
 }

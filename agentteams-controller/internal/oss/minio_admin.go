@@ -85,7 +85,7 @@ func (c *MinIOAdminClient) EnsurePolicy(ctx context.Context, req PolicyRequest) 
 		return fmt.Errorf("marshal policy: %w", err)
 	}
 
-	policyFile, err := os.CreateTemp("", "hiclaw-policy-*.json")
+	policyFile, err := os.CreateTemp("", "agentteams-policy-*.json")
 	if err != nil {
 		return fmt.Errorf("create policy temp file: %w", err)
 	}

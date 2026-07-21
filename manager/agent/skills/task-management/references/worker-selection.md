@@ -54,14 +54,14 @@ If you already ran `find-worker.sh`, do NOT run a separate container check. Only
 
 ## When Option B means "import a template"
 
-If the admin's requirement sounds reusable, or they explicitly mention templates, import, registry, or a direct package URI such as `nacos://...`, use `hiclaw-find-worker` before hand-creating a Worker:
+If the admin's requirement sounds reusable, or they explicitly mention templates, import, registry, or a direct package URI such as `nacos://...`, use `agentteams-find-worker` before hand-creating a Worker:
 
 ```bash
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/agentteams-find-worker.sh \
   --query "<admin requirement>" --limit 3 --json
 ```
 
-If the admin already gave you a full package URI, skip the search and install it through `hiclaw-find-worker` after confirmation. Otherwise, recommend the best 1-3 matches, wait for confirmation, then install the chosen template via `hiclaw-find-worker`.
+If the admin already gave you a full package URI, skip the search and install it through `agentteams-find-worker` after confirmation. Otherwise, recommend the best 1-3 matches, wait for confirmation, then install the chosen template via `agentteams-find-worker`.
 
 ## Skills API URL (only when hand-creating a new Worker)
 

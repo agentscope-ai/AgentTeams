@@ -430,7 +430,7 @@ Alternatively, you can click the Worker's avatar and open a **direct message** (
 
 AgentTeams does not read your `~/.openclaw/openclaw.json` provider definitions
 directly. Model traffic goes through the AgentTeams AI Gateway. OpenClaw/QwenPaw
-usually sees one provider named `hiclaw-gateway`; Higress then routes each
+usually sees one provider named `agentteams-gateway`; Higress then routes each
 requested model name to the real upstream provider.
 
 ### Third-party OpenAI-compatible APIs

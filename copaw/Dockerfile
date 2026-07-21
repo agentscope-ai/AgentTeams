@@ -59,7 +59,6 @@ COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
 # AgentTeams CLI — for worker/team/human management via controller REST API
 COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
-RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 

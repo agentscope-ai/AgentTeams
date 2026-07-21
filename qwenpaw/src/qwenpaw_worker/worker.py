@@ -680,7 +680,7 @@ class Worker:
         if not plugin_file.is_file():
             return ""
 
-        spec = importlib.util.spec_from_file_location("hiclaw_teamharness_qwenpaw_plugin_renderer", plugin_file)
+        spec = importlib.util.spec_from_file_location("agentteams_teamharness_qwenpaw_plugin_renderer", plugin_file)
         if spec is None or spec.loader is None:
             return ""
 

@@ -110,7 +110,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         """Inject MSC3952 ``m.mentions`` into every outgoing Matrix event."""
         if self._client is None:
             return
-        if getattr(self._client, "_hiclaw_mentions_wrapped", False):
+        if getattr(self._client, "_agentteams_mentions_wrapped", False):
             return
 
         original = self._client.send_message_event
@@ -128,7 +128,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return await original(room_id, event_type, content, *args, **kwargs)
 
         self._client.send_message_event = types.MethodType(wrapped, self._client)
-        self._client._hiclaw_mentions_wrapped = True  # type: ignore[attr-defined]
+        self._client._agentteams_mentions_wrapped = True  # type: ignore[attr-defined]
         logger.debug("Matrix: wrapped send_message_event for outbound mentions")
 
     async def _resolve_message_context(

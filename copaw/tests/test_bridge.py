@@ -463,17 +463,6 @@ def test_bridge_rejects_unknown_profile():
             bridge_controller_to_copaw(_make_openclaw_cfg(), working_dir, profile="leader")
 
 
-def test_bridge_openclaw_to_copaw_alias_still_works():
-    """Deprecated alias must still dispatch to the new entry point."""
-    from copaw_worker.bridge import bridge_openclaw_to_copaw
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        working_dir = Path(tmpdir) / "agent"
-        bridge_openclaw_to_copaw(_make_openclaw_cfg(), working_dir)
-        assert _agent_json_path(working_dir).exists()
-        assert (working_dir / "config.json").exists()
-
-
 # ---------------------------------------------------------------------------
 # Standard/runtime file materialization
 # ---------------------------------------------------------------------------

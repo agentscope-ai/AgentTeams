@@ -116,15 +116,15 @@ AGENTS_CONTENT=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}
 assert_not_empty "${AGENTS_CONTENT}" "AGENTS.md exists in MinIO"
 
 # Builtin markers present
-assert_contains "${AGENTS_CONTENT}" "hiclaw-builtin-start" "AGENTS.md has builtin-start marker"
-assert_contains "${AGENTS_CONTENT}" "hiclaw-builtin-end" "AGENTS.md has builtin-end marker"
+assert_contains "${AGENTS_CONTENT}" "agentteams-builtin-start" "AGENTS.md has builtin-start marker"
+assert_contains "${AGENTS_CONTENT}" "agentteams-builtin-end" "AGENTS.md has builtin-end marker"
 
 # Builtin content filled (not empty between markers)
 assert_contains "${AGENTS_CONTENT}" "Every Session" "AGENTS.md builtin section has content (not empty)"
 
 # Team-context coordination block present
-assert_contains "${AGENTS_CONTENT}" "hiclaw-team-context-start" "AGENTS.md has team-context-start marker"
-assert_contains "${AGENTS_CONTENT}" "hiclaw-team-context-end" "AGENTS.md has team-context-end marker"
+assert_contains "${AGENTS_CONTENT}" "agentteams-team-context-start" "AGENTS.md has team-context-start marker"
+assert_contains "${AGENTS_CONTENT}" "agentteams-team-context-end" "AGENTS.md has team-context-end marker"
 
 # Standalone worker: coordinator should be Manager
 assert_contains "${AGENTS_CONTENT}" "@manager:" "Coordination block references Manager as coordinator"
@@ -133,7 +133,7 @@ assert_contains "${AGENTS_CONTENT}" "@manager:" "Coordination block references M
 assert_contains "${AGENTS_CONTENT}" "My Custom Agent Instructions" "User-provided AGENTS.md content preserved"
 
 # No hardcoded "Manager" in builtin section (should use "coordinator")
-BUILTIN_SECTION=$(echo "${AGENTS_CONTENT}" | sed -n '/hiclaw-builtin-start/,/hiclaw-builtin-end/p')
+BUILTIN_SECTION=$(echo "${AGENTS_CONTENT}" | sed -n '/agentteams-builtin-start/,/agentteams-builtin-end/p')
 if echo "${BUILTIN_SECTION}" | grep -q "Manager"; then
     log_fail "Builtin section still contains hardcoded 'Manager' (should use 'coordinator')"
 else
@@ -291,8 +291,8 @@ fi
 
 # Verify AGENTS.md still has all sections
 AGENTS_AFTER=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}/AGENTS.md" 2>/dev/null || echo "")
-assert_contains "${AGENTS_AFTER}" "hiclaw-builtin-start" "AGENTS.md still has builtin markers after update"
-assert_contains "${AGENTS_AFTER}" "hiclaw-team-context-start" "AGENTS.md still has team-context after update"
+assert_contains "${AGENTS_AFTER}" "agentteams-builtin-start" "AGENTS.md still has builtin markers after update"
+assert_contains "${AGENTS_AFTER}" "agentteams-team-context-start" "AGENTS.md still has team-context after update"
 assert_contains "${AGENTS_AFTER}" "My Custom Agent Instructions" "User content still preserved after update"
 
 # ============================================================

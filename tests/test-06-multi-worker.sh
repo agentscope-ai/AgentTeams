@@ -48,7 +48,7 @@ fi
 # Alice is running from previous tests; bob will be created below (offset=0 is correct for new workers)
 wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice" "bob")
-TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 # worker-management/SKILL.md tells Manager to ask admin for FOUR inputs
 # (name / runtime / SOUL / skills) before running `agt create worker`
 # and not to invent defaults. A vague prompt that only names the worker is

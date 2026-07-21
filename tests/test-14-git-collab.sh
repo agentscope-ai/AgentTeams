@@ -42,7 +42,7 @@ docker exec "${TEST_CONTROLLER_CONTAINER}" bash -c "
     git -C \"\$tmpdir\" remote add origin '${REPO_PATH}.git'
     echo '# Collab Test Project' > \"\$tmpdir/README.md\"
     git -C \"\$tmpdir\" add .
-    git -C \"\$tmpdir\" -c user.email='setup@hiclaw.io' -c user.name='Setup' -c core.hooksPath=/dev/null commit -m 'Initial commit'
+    git -C \"\$tmpdir\" -c user.email='setup@agentteams.io' -c user.name='Setup' -c core.hooksPath=/dev/null commit -m 'Initial commit'
     git -C \"\$tmpdir\" push origin HEAD:main
     rm -rf \"\$tmpdir\"
 " || {

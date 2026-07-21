@@ -11,7 +11,7 @@
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base:20260423-8359cbc
+ARG OPENCLAW_BASE_IMAGE=agentteams/openclaw-base:20260423-8359cbc
 ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: MinIO Client (mc) ============
@@ -28,7 +28,6 @@ COPY --from=mc /usr/bin/mc /usr/local/bin/mc
 
 # AgentTeams CLI — for worker/team/human management via controller REST API
 COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
-RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 # ---- Built-in observability plugin (bundled unconditionally, enabled at runtime) ----
 # Placed before agent/configs COPY so that code changes do not invalidate this layer.

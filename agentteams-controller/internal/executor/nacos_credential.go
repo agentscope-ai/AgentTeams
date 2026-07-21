@@ -24,7 +24,7 @@ import (
 const (
 	nacosAuthTypeNone  = "none"
 	nacosAuthTypeNacos = "nacos"
-	nacosAuthTypeSTS   = "sts-hiclaw"
+	nacosAuthTypeSTS   = "sts-agentteams"
 )
 
 var defaultNacosSTSResources = []string{"agentSpec/*", "skill/*"}
@@ -196,7 +196,7 @@ func newNacosSTSCredential(namespace string, client credprovider.Client, resourc
 func (c *nacosSTSCredential) Refresh(ctx context.Context) error {
 	log.FromContext(ctx).Info("refreshing Nacos STS token",
 		"sessionName", c.sessionName,
-		"callerSessionName", "hiclaw-nacos-"+c.namespace,
+		"callerSessionName", "agentteams-nacos-"+c.namespace,
 		"namespace", c.namespace,
 	)
 	tok, err := c.tm.Token(ctx)

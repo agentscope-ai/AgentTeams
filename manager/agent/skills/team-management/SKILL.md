@@ -10,7 +10,7 @@ A Team consists of 1 Team Leader + N Workers. The Team Leader is a special Worke
 ## Quick Create (2 steps)
 
 ```bash
-# 1. Create team via hiclaw CLI
+# 1. Create team via agt CLI
 agt create team \
   --name <TEAM_NAME> \
   --leader-name <LEADER_NAME> \

@@ -173,7 +173,7 @@ Helm **`worker.defaultImage`** 会为不同 runtime 提供不同的默认 reposi
 
 ### `agt` CLI
 
-**`agt`** binary 由 **`agentteams-controller`** 构建，并复制到 **Manager**、**Worker** 和**嵌入式 controller** 镜像中。它通过 controller **REST API** 执行 create/get workers、teams、humans、managers 等操作，是容器内和文档示例中的主要**面向操作者**工具（例如 `agt get managers default`）。升级场景仍保留已弃用的 `hiclaw` 命令别名。
+**`agt`** binary 由 **`agentteams-controller`** 构建，并复制到 **Manager**、**Worker** 和**嵌入式 controller** 镜像中。它通过 controller **REST API** 执行 create/get workers、teams、humans、managers 等操作，是容器内和文档示例中的主要**面向操作者**工具（例如 `agt get managers default`）。
 
 ---
 
@@ -188,7 +188,7 @@ Skills 是面向 Agent 的 **Markdown**（`SKILL.md`），可带可选的 `scrip
 1. `channel-management`
 2. `file-sync-management`
 3. `git-delegation-management`
-4. `hiclaw-find-worker`
+4. `agentteams-find-worker`
 5. `human-management`
 6. `matrix-server-management`
 7. `mcporter`

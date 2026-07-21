@@ -197,13 +197,13 @@ If you have an existing OpenClaw instance running on a server and want to bring 
 Copy the `migrate/skill/` directory to your OpenClaw's skills folder:
 
 ```bash
-cp -r migrate/skill/ ~/.openclaw/workspace/skills/hiclaw-migrate/
+cp -r migrate/skill/ ~/.openclaw/workspace/skills/agentteams-migrate/
 ```
 
 Or ask your OpenClaw to install it:
 
 ```
-Install the hiclaw-migrate skill from /path/to/hiclaw/migrate/skill/
+Install the agentteams-migrate skill from /path/to/agentteams/migrate/skill/
 ```
 
 ### Step 2: Generate the Migration Package
@@ -229,7 +229,7 @@ This step requires the OpenClaw AI to be involved — the scripts alone cannot i
 Before importing, review the generated files:
 
 ```bash
-unzip -l /tmp/hiclaw-migration/migration-my-worker-*.zip
+unzip -l /tmp/agentteams-migration/migration-my-worker-*.zip
 ```
 
 Check `tool-analysis.json` to verify the detected dependencies are correct. Edit the Dockerfile if needed.

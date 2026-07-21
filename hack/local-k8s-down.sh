@@ -1,20 +1,20 @@
 #!/bin/bash
-# local-k8s-down.sh — Tear down the local HiClaw kind cluster.
+# local-k8s-down.sh — Tear down the local AgentTeams kind cluster.
 #
 # Usage:
 #   ./hack/local-k8s-down.sh
 
 set -euo pipefail
 
-CLUSTER_NAME="${HICLAW_CLUSTER_NAME:-hiclaw}"
-NAMESPACE="${HICLAW_NAMESPACE:-hiclaw}"
+CLUSTER_NAME="${AGENTTEAMS_CLUSTER_NAME:-agentteams}"
+NAMESPACE="${AGENTTEAMS_NAMESPACE:-agentteams}"
 
-log() { echo -e "\033[36m[HiClaw K8s]\033[0m $1"; }
+log() { echo -e "\033[36m[AgentTeams K8s]\033[0m $1"; }
 
 # Uninstall Helm release (if exists)
-if helm list -n "$NAMESPACE" 2>/dev/null | grep -q hiclaw; then
-    log "Uninstalling Helm release 'hiclaw'..."
-    helm uninstall hiclaw -n "$NAMESPACE" 2>/dev/null || true
+if helm list -n "$NAMESPACE" 2>/dev/null | grep -q agentteams; then
+    log "Uninstalling Helm release 'agentteams'..."
+    helm uninstall agentteams -n "$NAMESPACE" 2>/dev/null || true
 fi
 
 # Delete kind cluster

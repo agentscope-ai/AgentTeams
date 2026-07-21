@@ -135,7 +135,7 @@ func (n *noopWorkerBackend) Status(_ context.Context, _ string) (*backend.Worker
 func newServiceTestDeps(svc *fakeServiceClient) *MemberDeps {
 	return &MemberDeps{
 		Backend: backend.NewRegistry([]backend.WorkerBackend{
-			&fakeServiceBackend{svc: svc, ns: "hiclaw"},
+			&fakeServiceBackend{svc: svc, ns: "agentteams"},
 		}),
 		ResourcePrefix: authpkg.DefaultResourcePrefix,
 	}
@@ -241,7 +241,7 @@ func TestReconcileMemberService_UpdatesWhenPortsDiffer(t *testing.T) {
 	// Pre-populate a stale Service that selects the right Pod but exposes
 	// the wrong ports.
 	svc.store["dave"] = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "dave", Namespace: "hiclaw"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dave", Namespace: "agentteams"},
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
 			Selector: map[string]string{"agentteams.io/worker": "dave"},
@@ -273,7 +273,7 @@ func TestEnsureServiceDeleted_NotFoundIsOK(t *testing.T) {
 	svc.store["eve"] = &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "eve",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			Labels:    map[string]string{"agentteams.io/worker": "eve"},
 		},
 	}
@@ -310,7 +310,7 @@ func TestEnsureServiceDeleted_PropagatesUnexpectedError(t *testing.T) {
 	svc.store["grace"] = &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "grace",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			Labels:    map[string]string{"agentteams.io/worker": "grace"},
 		},
 	}
@@ -333,14 +333,14 @@ func TestEnsureServiceDeleted_DeletesByLabel(t *testing.T) {
 	svc.store["agentteams-worker-alex"] = &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agentteams-worker-alex",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			Labels:    map[string]string{"agentteams.io/worker": "alex"},
 		},
 	}
 	svc.store["alex"] = &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "alex",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			Labels:    map[string]string{"agentteams.io/worker": "alex"},
 		},
 	}
@@ -370,14 +370,14 @@ func TestEnsureServiceDeleted_IgnoresOtherWorkerServices(t *testing.T) {
 	svc.store["alex"] = &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "alex",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			Labels:    map[string]string{"agentteams.io/worker": "alex"},
 		},
 	}
 	svc.store["bob"] = &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "bob",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			Labels:    map[string]string{"agentteams.io/worker": "bob"},
 		},
 	}

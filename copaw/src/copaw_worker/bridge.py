@@ -94,7 +94,7 @@ def _patch_copaw_paths(working_dir: Path) -> None:
         pass
 
 
-def bridge_openclaw_to_copaw(
+def bridge_controller_to_copaw(
     openclaw_cfg: dict[str, Any],
     working_dir: Path,
     *,
@@ -201,19 +201,14 @@ def _resolve_matrix_user_id(
 
     env_user_id = (
         os.environ.get("AGENTTEAMS_MATRIX_USER_ID")
-        or os.environ.get("AGENTTEAMS_MATRIX_USER_ID")
         or os.environ.get("COPAW_MATRIX_USER_ID")
     )
     if env_user_id:
         return env_user_id
 
-    matrix_domain = (
-        os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
-        or os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
-    )
+    matrix_domain = os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
     localpart = (
         os.environ.get("AGENTTEAMS_WORKER_NAME")
-        or os.environ.get("AGENTTEAMS_WORKER_NAME")
         or ("manager" if profile == "manager" else "")
     )
     if matrix_domain and localpart:
@@ -544,7 +539,7 @@ def _main_cli(argv=None):
     with open(openclaw_path) as f:
         controller_config = _json.load(f)
 
-    bridge_openclaw_to_copaw(
+    bridge_controller_to_copaw(
         controller_config,
         working_dir,
         profile=args.profile,

@@ -16,11 +16,6 @@
 # Usage:
 #   source /opt/agentteams/scripts/lib/agentteams-env.sh
 
-# ── Optional dependencies ─────────────────────────────────────────────────────
-# Prepare canonical AgentTeams paths and legacy aliases before other scripts use them.
-source /opt/agentteams/scripts/lib/agentteams-paths.sh 2>/dev/null || true
-agentteams_prepare_paths 2>/dev/null || true
-
 # base.sh provides log(), waitForService(), generateKey() — Manager-only.
 # Worker images don't ship base.sh; the silent fallback is intentional.
 source /opt/agentteams/scripts/lib/base.sh 2>/dev/null || true

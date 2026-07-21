@@ -81,7 +81,7 @@ func TestNewNacosAIClient_STS_RequiresCredClient(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "sts-hiclaw auth requires a credprovider.Client") {
+	if !strings.Contains(err.Error(), "sts-agentteams auth requires a credprovider.Client") {
 		t.Fatalf("got: %v", err)
 	}
 }

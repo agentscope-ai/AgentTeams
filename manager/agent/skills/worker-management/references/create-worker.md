@@ -1,6 +1,6 @@
 # Create a Worker
 
-If the admin asks you to import an existing Worker template, search a registry for a matching template, or install a direct package URI such as `nacos://...`, stop here and use the `hiclaw-find-worker` skill. This document is only for hand-authored Workers.
+If the admin asks you to import an existing Worker template, search a registry for a matching template, or install a direct package URI such as `nacos://...`, stop here and use the `agentteams-find-worker` skill. This document is only for hand-authored Workers.
 
 ## Step 0: Determine runtime
 
@@ -67,7 +67,7 @@ Quick lookup:
 | Data / Analysis | _(default)_ |
 | General Purpose | _(default)_ |
 
-## Step 2: Create worker via hiclaw CLI
+## Step 2: Create worker via agt CLI
 
 Pass the SOUL text from Step 1 **inline** via `--soul`, as a single double-quoted multi-line argument. Everything travels in argv — no file write, no stdin heredoc, no silent 0-byte trap.
 

@@ -52,7 +52,6 @@ COPY --from=element-web /app /opt/element-web
 # agentteams-controller + AgentTeams CLI + kube-apiserver
 COPY --from=agentteams-controller /usr/local/bin/agentteams-controller /usr/local/bin/agentteams-controller
 COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
-RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 COPY --from=agentteams-controller /usr/local/bin/kube-apiserver /usr/local/bin/kube-apiserver
 COPY --from=agentteams-controller /opt/agentteams/config/crd/ /opt/agentteams/config/crd/
 

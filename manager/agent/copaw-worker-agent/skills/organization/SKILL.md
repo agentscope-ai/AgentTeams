@@ -9,7 +9,7 @@ Use this skill for current AgentTeams topology and runtime state.
 
 ## Source Of Truth
 
-Use `hiclaw` CLI when available. Do not infer current state from memory, old chat history, or old task files.
+Use `agt` CLI when available. Do not infer current state from memory, old chat history, or old task files.
 
 Useful commands:
 

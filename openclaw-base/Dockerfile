@@ -65,7 +65,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 # 1. Clone with single branch to minimize .git size
 # 2. Install dependencies and build
 # 3. Remove unnecessary files (tests, .git, etc.) - keep all node_modules for extensions
-RUN git clone --depth 1 --single-branch -b hiclaw-2026.4.14 \
+RUN git clone --depth 1 --single-branch -b agentteams-2026.4.14 \
         ${OPENCLAW_REPO_URL} /opt/openclaw && \
     cd /opt/openclaw && \
     git fetch --depth 1 origin 2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0 && \

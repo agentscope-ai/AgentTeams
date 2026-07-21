@@ -66,7 +66,7 @@ func TestBuildSandboxClaimSpec_InplaceUpdateAndDynamicVolumes(t *testing.T) {
 	p := &OpenKruisePlugin{}
 	result := p.buildSandboxClaimSpec(SandboxClaimSpec{
 		SandboxSetName: "warm",
-		InplaceUpdate:  &SandboxClaimInplaceUpdateSpec{Image: "hiclaw/worker:v2"},
+		InplaceUpdate:  &SandboxClaimInplaceUpdateSpec{Image: "agentteams/worker:v2"},
 		DynamicVolumesMount: []SandboxClaimDynamicVolumeMount{
 			{
 				PVName:     "agentteams",
@@ -94,7 +94,7 @@ func TestBuildSandboxClaimSpec_InplaceUpdateAndDynamicVolumes(t *testing.T) {
 	if !ok {
 		t.Fatalf("inplaceUpdate missing: %v", result)
 	}
-	if inplace["image"] != "hiclaw/worker:v2" {
+	if inplace["image"] != "agentteams/worker:v2" {
 		t.Fatalf("inplaceUpdate.image=%v", inplace["image"])
 	}
 	mounts, ok := result["dynamicVolumesMount"].([]interface{})

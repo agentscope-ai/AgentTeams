@@ -51,8 +51,6 @@ COPY --from=builder /agt /usr/local/bin/agt
 COPY --from=kube-bin /kube-apiserver /usr/local/bin/kube-apiserver
 COPY config/crd/ /opt/agentteams/config/crd/
 COPY agent/ /opt/agentteams/agent/
-RUN ln -s /usr/local/bin/agt /usr/local/bin/hiclaw && \
-    ln -s /opt/agentteams /opt/hiclaw
 
 # Default endpoint + token-file for the bundled `agt` CLI. The controller process mints a
 # long-lived admin SA token at startup (see internal/app.bootstrapAdminCLIToken)

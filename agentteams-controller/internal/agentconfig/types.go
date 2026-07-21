@@ -65,12 +65,12 @@ type ModelSpec struct {
 
 // BuiltinMarkers are the delimiters for merge-managed sections in AGENTS.md.
 const (
-	BuiltinStart  = "<!-- hiclaw-builtin-start -->"
-	BuiltinEnd    = "<!-- hiclaw-builtin-end -->"
-	BuiltinHeader = `<!-- hiclaw-builtin-start -->
+	BuiltinStart  = "<!-- agentteams-builtin-start -->"
+	BuiltinEnd    = "<!-- agentteams-builtin-end -->"
+	BuiltinHeader = `<!-- agentteams-builtin-start -->
 > ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically
 > replaced on upgrade. To customize, add your content **after** the
-> ` + "`<!-- hiclaw-builtin-end -->`" + ` marker below.
+> ` + "`<!-- agentteams-builtin-end -->`" + ` marker below.
 `
 )
 

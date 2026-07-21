@@ -86,7 +86,7 @@ type TeamReconciler struct {
 	// ResourcePrefix scopes team-member ServiceAccount and Pod names per
 	// AgentTeams tenant instance. Forwarded into MemberDeps.ResourcePrefix so
 	// createMemberContainer uses it when computing saName. Empty collapses
-	// to DefaultResourcePrefix ("hiclaw-").
+	// to DefaultResourcePrefix ("agentteams-").
 	ResourcePrefix auth.ResourcePrefix
 
 	GatewayClient               gateway.Client // gateway client for modelProvider resolution

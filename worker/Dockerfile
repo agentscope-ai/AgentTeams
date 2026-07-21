@@ -6,12 +6,12 @@
 #
 # Build args:
 #   HIGRESS_REGISTRY           - base image registry (default: cn-hangzhou)
-#   OPENCLAW_BASE_IMAGE        - openclaw-base image (default: hiclaw/openclaw-base:20260423-8359cbc)
+#   OPENCLAW_BASE_IMAGE        - openclaw-base image (default: agentteams/openclaw-base:20260423-8359cbc)
 #   OPENCLAW_CMS_PLUGIN_URL    - observability plugin tarball URL (bundled unconditionally)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
-ARG OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base:20260423-8359cbc
+ARG OPENCLAW_BASE_IMAGE=agentteams/openclaw-base:20260423-8359cbc
 ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: mc (MinIO Client) ============
@@ -29,7 +29,6 @@ COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
 # AgentTeams CLI — for worker/team/human management via controller REST API
 COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
-RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 # ---- Built-in observability plugin (bundled unconditionally, enabled at runtime) ----
 # Placed before scripts/lib COPY so that code changes do not invalidate this layer.
@@ -66,8 +65,7 @@ RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
 # Worker entrypoint and sync scripts
 COPY --chmod=755 scripts/ /opt/agentteams/scripts/
 RUN printf '#!/bin/bash\nexec "/root/agentteams-fs/agents/${AGENTTEAMS_WORKER_NAME}/skills/file-sync/scripts/agentteams-sync.sh" "$@"\n' \
-    > /usr/local/bin/agentteams-sync && chmod +x /usr/local/bin/agentteams-sync && \
-    ln -sf /usr/local/bin/agentteams-sync /usr/local/bin/hiclaw-sync
+    > /usr/local/bin/agentteams-sync && chmod +x /usr/local/bin/agentteams-sync
 
 # Workaround: lsof hangs in Kind (Docker-in-Docker) when scanning /proc.
 # OpenClaw Gateway uses lsof to check port availability before binding;

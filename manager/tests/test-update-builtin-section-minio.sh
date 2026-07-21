@@ -40,7 +40,7 @@ mc() {
     # Determine which arg is a MinIO path (canonical or legacy alias) vs local path.
     _resolve() {
         local p="$1"
-        if [[ "${p}" == agentteams/* || "${p}" == hiclaw/* ]]; then
+        if [[ "${p}" == agentteams/* ]]; then
             echo "${FAKE_MINIO_ROOT}/${p}"
         else
             echo "${p}"
@@ -115,8 +115,8 @@ echo "=== MC1: Remote file does not exist — creates new with markers ==="
     update_builtin_section_minio "${minio_path}" "${src}"
 
     content=$(minio_cat "${minio_path}")
-    assert_contains "has builtin-start marker"   "hiclaw-builtin-start" "${content}"
-    assert_contains "has builtin-end marker"     "hiclaw-builtin-end"   "${content}"
+    assert_contains "has builtin-start marker"   "agentteams-builtin-start" "${content}"
+    assert_contains "has builtin-end marker"     "agentteams-builtin-end"   "${content}"
     assert_contains "has source content"         "# Worker Agent Workspace" "${content}"
 }
 
@@ -133,7 +133,7 @@ echo "=== MC2: Remote file exists without markers (legacy) — overwrite with ma
     update_builtin_section_minio "${minio_path}" "${src}"
 
     content=$(minio_cat "${minio_path}")
-    assert_contains     "has markers"        "hiclaw-builtin-start" "${content}"
+    assert_contains     "has markers"        "agentteams-builtin-start" "${content}"
     assert_contains     "has new content"    "# Worker Agent Workspace v2" "${content}"
     assert_not_contains "old content gone"   "v1 (old)" "${content}"
 }
@@ -147,10 +147,10 @@ echo "=== MC3: Remote file has markers + user content — preserves user content
     minio_path="${MINIO_PREFIX}/AGENTS-mc3.md"
     # Simulate existing file with markers and user content
     {
-        printf '<!-- hiclaw-builtin-start -->\n'
+        printf '<!-- agentteams-builtin-start -->\n'
         printf '> ⚠️ **DO NOT EDIT** this section.\n\n'
         printf '# Worker Agent Workspace v1\n'
-        printf '\n<!-- hiclaw-builtin-end -->\n'
+        printf '\n<!-- agentteams-builtin-end -->\n'
         printf '\n## My Custom Notes\nWorker added this\n'
     } | minio_put "${minio_path}"
 
@@ -204,22 +204,22 @@ echo "=== MC6: Corrupted remote (2 start markers) — auto-repair ==="
     echo "# Clean Content" > "${src}"
     minio_path="${MINIO_PREFIX}/AGENTS-mc6.md"
     {
-        printf '<!-- hiclaw-builtin-start -->\n'
+        printf '<!-- agentteams-builtin-start -->\n'
         printf '> ⚠️ DO NOT EDIT\n\n'
         printf '# Old Content\n'
-        printf '<!-- hiclaw-builtin-end -->\n'
-        printf '<!-- hiclaw-builtin-start -->\n'
+        printf '<!-- agentteams-builtin-end -->\n'
+        printf '<!-- agentteams-builtin-start -->\n'
         printf '> ⚠️ DO NOT EDIT\n\n'
         printf '# Old Content\n'
-        printf '<!-- hiclaw-builtin-end -->\n'
+        printf '<!-- agentteams-builtin-end -->\n'
     } | minio_put "${minio_path}"
 
     update_builtin_section_minio "${minio_path}" "${src}"
 
     remote_file="${FAKE_MINIO_ROOT}/${minio_path}"
     content=$(cat "${remote_file}")
-    assert_eq       "repaired to 1 start marker" "1" "$(awk '$0 == "<!-- hiclaw-builtin-start -->" {c++} END {print c+0}' "${remote_file}")"
-    assert_eq       "repaired to 1 end marker"   "1" "$(awk '$0 == "<!-- hiclaw-builtin-end -->" {c++} END {print c+0}' "${remote_file}")"
+    assert_eq       "repaired to 1 start marker" "1" "$(awk '$0 == "<!-- agentteams-builtin-start -->" {c++} END {print c+0}' "${remote_file}")"
+    assert_eq       "repaired to 1 end marker"   "1" "$(awk '$0 == "<!-- agentteams-builtin-end -->" {c++} END {print c+0}' "${remote_file}")"
     assert_contains "has new content"             "# Clean Content" "${content}"
 }
 
@@ -233,10 +233,10 @@ echo "=== MC7: Multiple workers — each gets independent merge ==="
     # Worker A: has markers + user content
     minio_a="${MINIO_PREFIX}-a/AGENTS.md"
     {
-        printf '<!-- hiclaw-builtin-start -->\n'
+        printf '<!-- agentteams-builtin-start -->\n'
         printf '> ⚠️ **DO NOT EDIT**\n\n'
         printf '# Worker AGENTS v1\n'
-        printf '\n<!-- hiclaw-builtin-end -->\n'
+        printf '\n<!-- agentteams-builtin-end -->\n'
         printf '\n## Worker A Notes\nmy custom stuff\n'
     } | minio_put "${minio_a}"
 
@@ -254,7 +254,7 @@ echo "=== MC7: Multiple workers — each gets independent merge ==="
     assert_contains     "A: user content kept"   "## Worker A Notes"  "${content_a}"
     assert_contains     "B: new builtin"         "# Worker AGENTS v2" "${content_b}"
     assert_not_contains "B: legacy content gone" "legacy"             "${content_b}"
-    assert_contains     "B: has markers now"     "hiclaw-builtin-start" "${content_b}"
+    assert_contains     "B: has markers now"     "agentteams-builtin-start" "${content_b}"
 }
 
 # ── Summary ───────────────────────────────────────────────────────────────────

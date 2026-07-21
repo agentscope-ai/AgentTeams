@@ -17,8 +17,8 @@ if ! require_llm_key; then
 fi
 
 # This test requires GitHub MCP Server to be configured
-if [ -z "${HICLAW_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
-    log_info "SKIP: No GitHub token configured (set HICLAW_GITHUB_TOKEN or TEST_GITHUB_TOKEN). MCP permission tests require GitHub MCP Server."
+if [ -z "${AGENTTEAMS_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
+    log_info "SKIP: No GitHub token configured (set AGENTTEAMS_GITHUB_TOKEN or TEST_GITHUB_TOKEN). MCP permission tests require GitHub MCP Server."
     test_teardown "10-mcp-permission"
     test_summary
     exit 0

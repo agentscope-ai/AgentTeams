@@ -25,7 +25,7 @@ type Config struct {
 	// claims the broad "@.*:<domain>" namespace, which is ONLY safe when the
 	// homeserver is exclusively AgentTeams-managed (the only supported mode —
 	// enforced by Helm's matrix.mode=managed and the embedded Tuwunel
-	// install). Set this to a restrictive regex (e.g. "@hiclaw-.*:<domain>")
+	// install). Set this to a restrictive regex (e.g. "@agentteams-.*:<domain>")
 	// when running AppService mode against a shared/existing homeserver so
 	// the as_token cannot impersonate non-AgentTeams local users.
 	AppServiceUserNamespaceRegex string

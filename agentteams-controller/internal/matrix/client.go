@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	hiclawmetrics "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
+	agentteamsmetrics "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -1068,7 +1068,7 @@ func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, 
 	statusCode := 0
 	var observeErr error
 	defer func() {
-		hiclawmetrics.ObserveUpstream("matrix", operation, start, statusCode, observeErr)
+		agentteamsmetrics.ObserveUpstream("matrix", operation, start, statusCode, observeErr)
 	}()
 
 	var bodyReader io.Reader
@@ -1111,7 +1111,7 @@ func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, 
 
 	if respOut != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, respOut); err != nil {
-			observeErr = fmt.Errorf("%w: %w", hiclawmetrics.ErrDecodeResponse, err)
+			observeErr = fmt.Errorf("%w: %w", agentteamsmetrics.ErrDecodeResponse, err)
 			return resp.StatusCode, respBody, fmt.Errorf("decode response: %w (body: %s)", err, truncate(respBody, 200))
 		}
 	}

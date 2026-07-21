@@ -186,7 +186,7 @@ func newTestK8sBackend(objects ...*corev1.Pod) *K8sBackend {
 func newTestK8sBackendWithFake(extra K8sConfig, objects ...*corev1.Pod) (*K8sBackend, *fakeK8sCoreClient) {
 	client := newFakeK8sCoreClient(objects...)
 	cfg := K8sConfig{
-		Namespace:        "hiclaw",
+		Namespace:        "agentteams",
 		WorkerImage:      "agentteams/worker-agent:latest",
 		CopawWorkerImage: "agentteams/copaw-worker:latest",
 		WorkerCPU:        "1000m",
@@ -220,7 +220,7 @@ func TestK8sCreate(t *testing.T) {
 		t.Fatalf("expected starting status, got %s", result.Status)
 	}
 
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected worker pod to exist: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestK8sCreate_WorkerDepsDataMount(t *testing.T) {
 	_, err := b.Create(context.Background(), CreateRequest{
 		Name: "alice",
 		WorkersDeps: &WorkerDepsSpec{PodVolume: &WorkerDepsPodVolume{
-			Name:      "hiclaw-worker-deps",
+			Name:      "agentteams-worker-deps",
 			ClaimName: "agentteams",
 			Mounts: []WorkerDepsPodVolumeMount{
 				{MountPath: "/mnt/agentteams/data", SubPath: "workers-deps/alice/data"},
@@ -281,7 +281,7 @@ func TestK8sCreate_WorkerDepsDataMount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get pod: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestK8sCreateCustomAudience(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected worker pod to exist: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestK8sCreateTokenExpirationClampsMinimum(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-min-exp", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-min-exp", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected worker pod to exist: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestK8sCreateConflict(t *testing.T) {
 	existingPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agentteams-worker-alice",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 		},
 	}
 	b := newTestK8sBackend(existingPod)
@@ -365,7 +365,7 @@ func TestK8sStatus(t *testing.T) {
 	b := newTestK8sBackend(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agentteams-worker-bob",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			Labels: map[string]string{
 				"app":                  "agentteams-worker",
 				"agentteams.io/worker": "bob",
@@ -477,7 +477,7 @@ func TestK8sStopAndDelete(t *testing.T) {
 	b := newTestK8sBackend(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agentteams-worker-carol",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 		},
 	})
 
@@ -530,7 +530,7 @@ func TestK8sWithPrefix(t *testing.T) {
 	managerPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agentteams-manager",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			Labels: map[string]string{
 				"app":                   "agentteams-manager",
 				"agentteams.io/manager": "default",
@@ -572,7 +572,7 @@ func TestK8sWithPrefixDelete(t *testing.T) {
 	managerPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agentteams-manager",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 		},
 	}
 	b := newTestK8sBackend(managerPod)
@@ -595,7 +595,7 @@ func TestK8sWithPrefixStop(t *testing.T) {
 	managerPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "agentteams-manager",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
@@ -636,7 +636,7 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:         "hiclaw",
+				Namespace:         "agentteams",
 				WorkerImage:       "agentteams/worker-agent:latest",
 				CopawWorkerImage:  "agentteams/copaw-worker:latest",
 				HermesWorkerImage: "agentteams/hermes-worker:latest",
@@ -650,7 +650,7 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
-			pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-x", metav1.GetOptions{})
+			pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-x", metav1.GetOptions{})
 			if err != nil {
 				t.Fatalf("Get pod failed: %v", err)
 			}
@@ -697,7 +697,7 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:          "hiclaw",
+				Namespace:          "agentteams",
 				WorkerImage:        "agentteams/worker-agent:latest",
 				CopawWorkerImage:   "agentteams/copaw-worker:latest",
 				HermesWorkerImage:  "agentteams/hermes-worker:latest",
@@ -714,7 +714,7 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 				t.Fatalf("Create failed: %v", err)
 			}
 
-			pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-x", metav1.GetOptions{})
+			pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-x", metav1.GetOptions{})
 			if err != nil {
 				t.Fatalf("Get pod failed: %v", err)
 			}
@@ -732,17 +732,17 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 
 // testControllerName is the canonical ControllerName used across integration
 // tests that exercise the agent PodTemplate ConfigMap lookup path.
-const testControllerName = "hiclaw-ctl"
+const testControllerName = "agentteams-ctl"
 
 // injectTemplateConfigMap installs a ConfigMap named testControllerName in
-// the "hiclaw" namespace with the PodTemplateSpec YAML under the canonical
+// the "agentteams" namespace with the PodTemplateSpec YAML under the canonical
 // data key, mirroring what a real user's `kubectl apply -f cm.yaml` does.
 func injectTemplateConfigMap(t *testing.T, fake *fakeK8sCoreClient, content string) {
 	t.Helper()
 	fake.injectConfigMap(&corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      testControllerName,
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 		},
 		Data: map[string]string{AgentPodTemplateConfigMapKey: content},
 	})
@@ -786,7 +786,7 @@ spec:
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -825,7 +825,7 @@ func TestK8sCreate_NoTemplateBackwardCompat(t *testing.T) {
 	if _, err := b.Create(context.Background(), CreateRequest{Name: "bob"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -873,14 +873,14 @@ func TestK8sCreate_SetsControllerReferenceFromOwner(t *testing.T) {
 
 	client := newFakeK8sCoreClient()
 	b := NewK8sBackendWithClient(client, K8sConfig{
-		Namespace:   "hiclaw",
+		Namespace:   "agentteams",
 		WorkerImage: "agentteams/worker-agent:latest",
 	}, "agentteams-worker-", scheme)
 
 	owner := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "eve",
-			Namespace: "hiclaw",
+			Namespace: "agentteams",
 			UID:       "worker-uid-123",
 		},
 	}
@@ -891,7 +891,7 @@ func TestK8sCreate_SetsControllerReferenceFromOwner(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-eve", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-eve", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -921,10 +921,10 @@ func TestK8sCreate_SetsControllerReferenceFromOwner(t *testing.T) {
 // error we want to catch loudly rather than silently drop the ownerRef.
 func TestK8sCreate_OwnerRequiresScheme(t *testing.T) {
 	client := newFakeK8sCoreClient()
-	b := NewK8sBackendWithClient(client, K8sConfig{Namespace: "hiclaw", WorkerImage: "img"}, "agentteams-worker-", nil)
+	b := NewK8sBackendWithClient(client, K8sConfig{Namespace: "agentteams", WorkerImage: "img"}, "agentteams-worker-", nil)
 
 	owner := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "hiclaw", UID: "u"},
+		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "agentteams", UID: "u"},
 	}
 	if _, err := b.Create(context.Background(), CreateRequest{Name: "a", Owner: owner}); err == nil {
 		t.Fatal("expected Create to fail when Owner is set but scheme is nil")
@@ -948,7 +948,7 @@ func TestK8sCreate_ResourcesOverrideFromCreateRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-frank", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-frank", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -978,7 +978,7 @@ func TestK8sCreate_ResourcesOverridePartial(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, _ := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-grace", metav1.GetOptions{})
+	pod, _ := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-grace", metav1.GetOptions{})
 	res := pod.Spec.Containers[0].Resources
 	if got := res.Limits.Cpu().String(); got != "3" {
 		t.Fatalf("cpu limit (override): got %q, want 3", got)
@@ -1010,7 +1010,7 @@ func TestK8sCreate_ResourcesOverrideBeatsTemplate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, _ := b.client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-henry", metav1.GetOptions{})
+	pod, _ := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-henry", metav1.GetOptions{})
 	got := pod.Spec.Containers[0].Resources.Limits.Cpu().String()
 	if got != "8" {
 		t.Fatalf("expected override=8 to win over template=4, got %q", got)
@@ -1036,7 +1036,7 @@ func TestBuildDefaultResources_EmptyFallback(t *testing.T) {
 func TestK8sCreate_CustomResourcePrefix(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	cfg := K8sConfig{
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		WorkerImage:    "agentteams/worker-agent:latest",
 		WorkerCPU:      "1000m",
 		WorkerMemory:   "2Gi",
@@ -1055,7 +1055,7 @@ func TestK8sCreate_CustomResourcePrefix(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "teamB-worker-alice", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "teamB-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("pod lookup: %v", err)
 	}
@@ -1069,7 +1069,7 @@ func TestK8sCreate_CustomResourcePrefix(t *testing.T) {
 func TestK8sCreate_DefaultSAFallback(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	cfg := K8sConfig{
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		WorkerImage:    "agentteams/worker-agent:latest",
 		ResourcePrefix: "acme-",
 	}
@@ -1078,7 +1078,7 @@ func TestK8sCreate_DefaultSAFallback(t *testing.T) {
 	if _, err := b.Create(context.Background(), CreateRequest{Name: "bob"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := b.client.Pods("hiclaw").Get(context.Background(), "acme-worker-bob", metav1.GetOptions{})
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "acme-worker-bob", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("pod lookup: %v", err)
 	}
@@ -1112,12 +1112,12 @@ func TestK8sCreate_LocalKeepsOwnerReference(t *testing.T) {
 
 	client := newFakeK8sCoreClient()
 	b := NewK8sBackendWithClient(client, K8sConfig{
-		Namespace:   "hiclaw",
+		Namespace:   "agentteams",
 		WorkerImage: "agentteams/worker-agent:latest",
 	}, "agentteams-worker-", scheme)
 
 	owner := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "hiclaw", UID: "u-2"},
+		ObjectMeta: metav1.ObjectMeta{Name: "bob", Namespace: "agentteams", UID: "u-2"},
 	}
 	if _, err := b.Create(context.Background(), CreateRequest{
 		Name:  "bob",
@@ -1125,7 +1125,7 @@ func TestK8sCreate_LocalKeepsOwnerReference(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pod, err := client.Pods("hiclaw").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
+	pod, err := client.Pods("agentteams").Get(context.Background(), "agentteams-worker-bob", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -1245,7 +1245,7 @@ func TestK8sStatus_ReadyCondition(t *testing.T) {
 			b := newTestK8sBackend(&corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "agentteams-worker-test",
-					Namespace: "hiclaw",
+					Namespace: "agentteams",
 				},
 				Status: corev1.PodStatus{
 					Phase:      tc.podPhase,

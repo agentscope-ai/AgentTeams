@@ -422,7 +422,7 @@ Run the following command in PowerShell to stop and remove all AgentTeams contai
 Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1' -UseBasicParsing).Content } uninstall"
 ```
 
-This mirrors `install/agentteams-install.sh uninstall`: **`agentteams-controller`**, **`agentteams-manager`**, Worker containers, optional **`hiclaw-docker-proxy`**, the data volume, env file, network, etc.
+This mirrors `install/agentteams-install.sh uninstall`: **`agentteams-controller`**, **`agentteams-manager`**, Worker containers, optional **`agentteams-docker-proxy`**, the data volume, env file, network, etc.
 
 > **Note**: Uninstallation may preserve the Manager workspace directory (`%USERPROFILE%\agentteams-manager`) depending on script version — delete it manually if you want every host-side file removed.
 

@@ -1,4 +1,4 @@
-apiVersion: hiclaw.agentteam/v1alpha1
+apiVersion: agentteams.agentteam/v1alpha1
 kind: AgentTeamPlugin
 metadata:
   name: workerflow

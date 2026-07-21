@@ -17,12 +17,12 @@ import (
 // make sense on a self-hosted gateway (route / service-source / AI
 // provider management). On Alibaba Cloud AI Gateway these resources are
 // provisioned out-of-band through the APIG console or Terraform and the
-// hiclaw control plane must not try to create them itself.
+// agentteams control plane must not try to create them itself.
 var ErrUnsupportedOp = errors.New("operation not supported on ai-gateway provider")
 
 // AIGatewayConfig holds the Alibaba Cloud APIG parameters that
 // AIGatewayClient needs in order to manage consumers and bind them to the
-// hiclaw AI Model API.
+// agentteams AI Model API.
 type AIGatewayConfig struct {
 	Region     string // e.g. "cn-hangzhou"
 	Endpoint   string // optional APIG OpenAPI endpoint override
@@ -50,7 +50,7 @@ type apigClient interface {
 // Only the consumer-oriented operations (EnsureConsumer, DeleteConsumer,
 // AuthorizeAIRoutes, DeauthorizeAIRoutes) are functional. Route and
 // provider initialization is the responsibility of the APIG platform:
-// they are expected to exist before hiclaw is installed, and the
+// they are expected to exist before agentteams is installed, and the
 // corresponding methods on this client return ErrUnsupportedOp so that
 // accidental invocations fail fast (per K4 decision: cloud failures
 // should not silently degrade).
@@ -267,7 +267,7 @@ func (a *AIGatewayClient) DeauthorizeAIRoutes(_ context.Context, consumerName st
 }
 
 // ExposePort / UnexposePort: cloud-platform ingress is expected to be
-// provisioned out-of-band. The hiclaw control plane does not manage APIG
+// provisioned out-of-band. The agentteams control plane does not manage APIG
 // routes, so requesting port exposure through this client is an error.
 func (a *AIGatewayClient) ExposePort(_ context.Context, _ PortExposeRequest) error {
 	return ErrUnsupportedOp

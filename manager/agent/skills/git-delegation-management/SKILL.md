@@ -99,7 +99,7 @@ mc mirror "/root/agentteams-fs/shared/tasks/${task_id}/" \
 @{worker}:DOMAIN task-{task-id} git-result:
 Git operations completed successfully.
 {Summary of what was done - commits, pushes, branches created, etc.}
-Run `hiclaw-sync` to sync.
+Run `agentteams-sync` to sync.
 ```
 
 **On failure** — send to Worker:

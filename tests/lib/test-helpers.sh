@@ -15,7 +15,7 @@ if [ -z "${TEST_CONTROLLER_CONTAINER}" ]; then
     export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-controller$' | head -1 || true)"
     if [ -z "${TEST_CONTROLLER_CONTAINER}" ]; then
         # Fallback: legacy all-in-one manager container name
-        export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager$' | head -1 || true)"
+        export TEST_CONTROLLER_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager$' | head -1 || true)"
     fi
     export TEST_CONTROLLER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
 fi
@@ -24,7 +24,7 @@ fi
 if [ -z "${TEST_AGENT_CONTAINER}" ]; then
     export TEST_AGENT_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)"
     if [ -z "${TEST_AGENT_CONTAINER}" ]; then
-        export TEST_AGENT_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-manager(-|$)' | head -1 || true)"
+        export TEST_AGENT_CONTAINER="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^agentteams-manager(-|$)' | head -1 || true)"
     fi
     export TEST_AGENT_CONTAINER="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER}}"
 fi
@@ -199,8 +199,8 @@ wait_for_manager_agent_ready() {
     local manager_runtime
     manager_runtime=$(docker exec "${agent_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
                       docker exec "${infra_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
-                      docker exec "${agent_container}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || \
-                      docker exec "${infra_container}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+                      docker exec "${agent_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                      docker exec "${infra_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
 
     # Phase 1: Wait for Manager Agent to be healthy (runtime-specific, on agent container)
     log_info "Waiting for Manager ${manager_runtime} runtime to be healthy (container: ${agent_container})..."
@@ -445,7 +445,6 @@ worker_container_name() {
         fi
     fi
     container="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^agentteams-worker-${worker}$" | head -1 || true)"
-    container="${container:-$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^hiclaw-worker-${worker}$" | head -1 || true)}"
     if [ -n "${TEST_WORKER_CONTAINER_PREFIX:-}" ]; then
         container="${container:-${TEST_WORKER_CONTAINER_PREFIX}${worker}}"
     fi
@@ -457,11 +456,11 @@ remove_worker_container() {
     if [ -n "${TEST_WORKER_CONTAINER_PREFIX:-}" ]; then
         docker rm -f "${TEST_WORKER_CONTAINER_PREFIX}${worker}" >/dev/null 2>&1 || true
     fi
-    docker rm -f "agentteams-worker-${worker}" "hiclaw-worker-${worker}" >/dev/null 2>&1 || true
+    docker rm -f "agentteams-worker-${worker}" >/dev/null 2>&1 || true
 }
 
 list_test_worker_containers() {
-    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^(agentteams|hiclaw)-worker-test-" || true
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^agentteams-worker-test-" || true
 }
 
 # Wait for a Worker container to be running (started by Manager on demand)
@@ -518,10 +517,10 @@ check_copaw_worker_probes() {
 
     worker_port="$(
         docker exec "${container}" sh -lc '
-            if [ -n "${HICLAW_WORKER_PORT:-}" ]; then
-                printf "%s" "${HICLAW_WORKER_PORT}"
+            if [ -n "${AGENTTEAMS_WORKER_PORT:-}" ]; then
+                printf "%s" "${AGENTTEAMS_WORKER_PORT}"
             else
-                console_port="${HICLAW_CONSOLE_PORT:-8088}"
+                console_port="${AGENTTEAMS_CONSOLE_PORT:-8088}"
                 printf "%s" "$((console_port + 1))"
             fi
         ' 2>/dev/null
@@ -531,9 +530,9 @@ check_copaw_worker_probes() {
     local probe_output probe_status
     probe_output="$(
         docker exec \
-            -e HICLAW_WORKER_PORT="${worker_port}" \
-            -e HICLAW_EXPECT_READINESS="${expected}" \
-            -e HICLAW_PROBE_REQUEST_TIMEOUT="${request_timeout}" \
+            -e AGENTTEAMS_WORKER_PORT="${worker_port}" \
+            -e AGENTTEAMS_EXPECT_READINESS="${expected}" \
+            -e AGENTTEAMS_PROBE_REQUEST_TIMEOUT="${request_timeout}" \
             "${container}" \
             python3 -c '
 import json
@@ -543,9 +542,9 @@ import time
 import urllib.error
 import urllib.request
 
-port = os.environ["HICLAW_WORKER_PORT"]
-expected = os.environ.get("HICLAW_EXPECT_READINESS", "any")
-request_timeout = float(os.environ.get("HICLAW_PROBE_REQUEST_TIMEOUT", "75"))
+port = os.environ["AGENTTEAMS_WORKER_PORT"]
+expected = os.environ.get("AGENTTEAMS_EXPECT_READINESS", "any")
+request_timeout = float(os.environ.get("AGENTTEAMS_PROBE_REQUEST_TIMEOUT", "75"))
 base_url = f"http://127.0.0.1:{port}"
 required_components = {"copaw", "sync", "bridge", "model", "matrix"}
 
@@ -677,10 +676,10 @@ detect_manager_config() {
     detected_gateway_port=$(  _cenv AGENTTEAMS_PORT_GATEWAY)
     detected_console_port=$(  _cenv AGENTTEAMS_PORT_CONSOLE)
     detected_element_port=$(  _cenv AGENTTEAMS_PORT_ELEMENT_WEB)
-    detected_domain="${detected_domain:-$(_cenv HICLAW_MATRIX_DOMAIN)}"
-    detected_gateway_port="${detected_gateway_port:-$(_cenv HICLAW_PORT_GATEWAY)}"
-    detected_console_port="${detected_console_port:-$(_cenv HICLAW_PORT_CONSOLE)}"
-    detected_element_port="${detected_element_port:-$(_cenv HICLAW_PORT_ELEMENT_WEB)}"
+    detected_domain="${detected_domain:-$(_cenv AGENTTEAMS_MATRIX_DOMAIN)}"
+    detected_gateway_port="${detected_gateway_port:-$(_cenv AGENTTEAMS_PORT_GATEWAY)}"
+    detected_console_port="${detected_console_port:-$(_cenv AGENTTEAMS_PORT_CONSOLE)}"
+    detected_element_port="${detected_element_port:-$(_cenv AGENTTEAMS_PORT_ELEMENT_WEB)}"
 
     [ -n "${detected_gateway_port}" ] && export TEST_GATEWAY_PORT="${detected_gateway_port}"
     [ -n "${detected_console_port}" ] && export TEST_CONSOLE_PORT="${detected_console_port}"
@@ -697,19 +696,12 @@ detect_manager_config() {
 
     # Load credentials from container env (only if not already set externally)
     [ -z "${TEST_ADMIN_USER}" ]          && export TEST_ADMIN_USER="$(           _cenv AGENTTEAMS_ADMIN_USER)"
-    [ -z "${TEST_ADMIN_USER}" ]          && export TEST_ADMIN_USER="$(           _cenv HICLAW_ADMIN_USER)"
     [ -z "${TEST_ADMIN_PASSWORD}" ]      && export TEST_ADMIN_PASSWORD="$(        _cenv AGENTTEAMS_ADMIN_PASSWORD)"
-    [ -z "${TEST_ADMIN_PASSWORD}" ]      && export TEST_ADMIN_PASSWORD="$(        _cenv HICLAW_ADMIN_PASSWORD)"
     [ -z "${TEST_MINIO_USER}" ]          && export TEST_MINIO_USER="$(            _cenv AGENTTEAMS_MINIO_USER)"
-    [ -z "${TEST_MINIO_USER}" ]          && export TEST_MINIO_USER="$(            _cenv HICLAW_MINIO_USER)"
     [ -z "${TEST_MINIO_PASSWORD}" ]      && export TEST_MINIO_PASSWORD="$(        _cenv AGENTTEAMS_MINIO_PASSWORD)"
-    [ -z "${TEST_MINIO_PASSWORD}" ]      && export TEST_MINIO_PASSWORD="$(        _cenv HICLAW_MINIO_PASSWORD)"
     [ -z "${TEST_REGISTRATION_TOKEN}" ]  && export TEST_REGISTRATION_TOKEN="$(    _cenv AGENTTEAMS_REGISTRATION_TOKEN)"
-    [ -z "${TEST_REGISTRATION_TOKEN}" ]  && export TEST_REGISTRATION_TOKEN="$(    _cenv HICLAW_REGISTRATION_TOKEN)"
-    [ -z "${HICLAW_LLM_API_KEY}" ]       && export HICLAW_LLM_API_KEY="$(         _cenv AGENTTEAMS_LLM_API_KEY)"
-    [ -z "${HICLAW_LLM_API_KEY}" ]       && export HICLAW_LLM_API_KEY="$(         _cenv HICLAW_LLM_API_KEY)"
+    [ -z "${AGENTTEAMS_LLM_API_KEY}" ]       && export AGENTTEAMS_LLM_API_KEY="$(         _cenv AGENTTEAMS_LLM_API_KEY)"
     [ -z "${TEST_MANAGER_GATEWAY_KEY}" ] && export TEST_MANAGER_GATEWAY_KEY="$(   _cenv AGENTTEAMS_MANAGER_GATEWAY_KEY)"
-    [ -z "${TEST_MANAGER_GATEWAY_KEY}" ] && export TEST_MANAGER_GATEWAY_KEY="$(   _cenv HICLAW_MANAGER_GATEWAY_KEY)"
 }
 
 # ============================================================
@@ -759,8 +751,8 @@ test_summary() {
 
 # Check if LLM API key is configured (required for tests that need Manager Agent responses)
 require_llm_key() {
-    if [ -z "${HICLAW_LLM_API_KEY}" ]; then
-        log_info "SKIP: No LLM API key configured (set HICLAW_LLM_API_KEY). This test requires Manager Agent LLM responses."
+    if [ -z "${AGENTTEAMS_LLM_API_KEY}" ]; then
+        log_info "SKIP: No LLM API key configured (set AGENTTEAMS_LLM_API_KEY). This test requires Manager Agent LLM responses."
         return 1
     fi
     return 0
@@ -794,7 +786,7 @@ copy_to_agent() {
     dst_dir=$(dirname "${dst_path}")
     exec_in_agent mkdir -p "${dst_dir}" 2>/dev/null
     # Use docker cp via host temp dir for reliability (tar pipe can truncate)
-    local tmp_host="/tmp/.hiclaw-copy-$$"
+    local tmp_host="/tmp/.agentteams-copy-$$"
     mkdir -p "${tmp_host}"
     docker cp "${TEST_CONTROLLER_CONTAINER}:${src_path}" "${tmp_host}/${src_file}" 2>/dev/null
     docker cp "${tmp_host}/${src_file}" "${TEST_AGENT_CONTAINER}:${dst_path}" 2>/dev/null

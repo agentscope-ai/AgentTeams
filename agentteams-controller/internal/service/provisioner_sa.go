@@ -151,7 +151,7 @@ func (p *Provisioner) RequestManagerSAToken(ctx context.Context, managerName str
 // The admin SA exists primarily so the bundled `agt` CLI inside the
 // agentteams-controller container (and any other operator tooling that runs in
 // the same trust boundary, e.g. install-time `docker exec agentteams-controller
-// hiclaw …`) can authenticate against the controller's HTTP API with
+// agentteams …`) can authenticate against the controller's HTTP API with
 // admin-role privileges via the standard TokenReview path. Without it the
 // only paths to call the API would be (a) reusing a Manager- or Worker-scoped
 // SA token (wrong privilege scope, and not always available locally) or

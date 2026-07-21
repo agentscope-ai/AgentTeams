@@ -67,25 +67,6 @@ $script:AGENTTEAMS_ENV_FILE = if ($EnvFile) { $EnvFile } elseif ($env:AGENTTEAMS
 $script:StepResult = ""  # Used by state machine to signal "back" navigation
 $script:config = @{}     # Shared config hashtable for step functions
 
-function Move-LegacyAgentTeamsEnv {
-    if ($EnvFile -or $env:AGENTTEAMS_ENV_FILE -or (Test-Path $script:AGENTTEAMS_ENV_FILE)) {
-        return
-    }
-
-    $legacyCandidates = @(
-        "$env:USERPROFILE\hiclaw-manager.env",
-        ".\hiclaw-manager.env",
-        ".\agentteams-manager.env"
-    )
-    foreach ($legacy in $legacyCandidates) {
-        if (Test-Path $legacy) {
-            Write-Log "Migrating legacy env file $legacy to $script:AGENTTEAMS_ENV_FILE..."
-            Move-Item $legacy $script:AGENTTEAMS_ENV_FILE -ErrorAction Stop
-            return
-        }
-    }
-}
-
 # ANSI escape character for terminal colors
 $script:ESC = [char]0x1B
 
@@ -630,7 +611,7 @@ $script:Messages = @{
     "uninstall.removed" = @{ zh = "  已移除: {0}"; en = "  Removed: {0}" }
     "uninstall.removing_volume" = @{ zh = "正在移除 Docker 卷: agentteams-data"; en = "Removing Docker volume: agentteams-data" }
     "uninstall.removing_env" = @{ zh = "正在移除 env 文件: {0}"; en = "Removing env file: {0}" }
-    "uninstall.removing_proxy" = @{ zh = "正在停止并移除 Docker API 代理容器: hiclaw-docker-proxy"; en = "Stopping and removing Docker API proxy container: hiclaw-docker-proxy" }
+    "uninstall.removing_proxy" = @{ zh = "正在停止并移除 Docker API 代理容器: agentteams-docker-proxy"; en = "Stopping and removing Docker API proxy container: agentteams-docker-proxy" }
     "uninstall.stopping_controller" = @{ zh = "正在停止并移除 agentteams-controller (内嵌 Tuwunel/MinIO/Higress)..."; en = "Stopping and removing agentteams-controller (embedded Tuwunel/MinIO/Higress)..." }
     "uninstall.removing_network" = @{ zh = "正在移除 Docker 网络: agentteams-net"; en = "Removing Docker network: agentteams-net" }
     "uninstall.removing_workspace" = @{ zh = "正在移除工作空间目录: {0}"; en = "Removing workspace directory: {0}" }
@@ -897,7 +878,7 @@ function Read-AgentTeamsSecretFromDataVolume {
         return ""
     }
     $grepKey = [regex]::Escape($Key)
-    $shCmd = "grep ""^${grepKey}="" /data/agentteams-secrets.env /data/hiclaw-secrets.env 2>/dev/null | cut -d= -f2- | head -1 | tr -d '\r'"
+    $shCmd = "grep ""^${grepKey}="" /data/agentteams-secrets.env 2>/dev/null | cut -d= -f2- | head -1 | tr -d '\r'"
     $out = docker run --rm --entrypoint sh -v "${VolumeName}:/data:ro" $script:EMBEDDED_IMAGE -c $shCmd 2>$null
     if ($null -eq $out) { return "" }
     return ($out | Out-String).Trim()
@@ -2448,8 +2429,6 @@ function Step-Hostshare {
 function Install-Manager {
     Write-Log (Get-Msg "install.title")
 
-    Move-LegacyAgentTeamsEnv
-
     # Detect timezone
     $script:AGENTTEAMS_TIMEZONE = Get-AgentTeamsTimeZone
 
@@ -2513,10 +2492,8 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-manager-copaw:$($script:AGENTTEAMS_VERSION)"
     }
 
-    # Backward compatibility: accept old env var name from previous versions
-    $controllerImageOverride = if ($env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE) { $env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE } elseif ($env:AGENTTEAMS_INSTALL_DOCKER_PROXY_IMAGE) { $env:AGENTTEAMS_INSTALL_DOCKER_PROXY_IMAGE } else { $null }
-    $script:CONTROLLER_IMAGE = if ($controllerImageOverride) {
-        $controllerImageOverride
+    $script:CONTROLLER_IMAGE = if ($env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE
     } else {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
     }
@@ -2750,7 +2727,7 @@ function Install-Manager {
             $dockerArgs += @("--network-alias", "aigw-local.agentteams.io")
             $dockerArgs += @("--network-alias", "fs-local.agentteams.io")
             foreach ($domain in @($config.MATRIX_CLIENT_DOMAIN, $config.CONSOLE_DOMAIN)) {
-                if ($domain -match '-local\.hiclaw\.io$') {
+                if ($domain -match '-local\.agentteams\.io$') {
                     $dockerArgs += @("--network-alias", $domain)
                 }
             }
@@ -2814,43 +2791,18 @@ function Install-Manager {
     }
 
     # Pull images (skip if already exists locally for local build tags).
-    $LocalImagePattern = "^(hiclaw|agentteams)/"
-    function Resolve-LegacyLocalImage {
-        param([string]$Image)
-        switch -Regex ($Image) {
-            '^agentteams/manager:(.+)$' { return "hiclaw/hiclaw-manager:$($Matches[1])" }
-            '^agentteams/manager-copaw:(.+)$' { return "hiclaw/hiclaw-manager-copaw:$($Matches[1])" }
-            '^agentteams/worker-agent:(.+)$' { return "hiclaw/worker-agent:$($Matches[1])" }
-            '^agentteams/copaw-worker:(.+)$' { return "hiclaw/copaw-worker:$($Matches[1])" }
-            '^agentteams/hermes-worker:(.+)$' { return "hiclaw/hermes-worker:$($Matches[1])" }
-            '^agentteams/qwenpaw-worker:(.+)$' { return "hiclaw/qwenpaw-worker:$($Matches[1])" }
-            '^agentteams/agentteams-embedded:(.+)$' { return "hiclaw/hiclaw-embedded:$($Matches[1])" }
-            '^agentteams/agentteams-controller:(.+)$' { return "hiclaw/hiclaw-controller:$($Matches[1])" }
-            default { return $null }
-        }
-    }
-    function Test-OrTagLocalImage {
+    $LocalImagePattern = "^agentteams/"
+    function Test-LocalImage {
         param([string]$Image)
         $imgExists = docker image inspect $Image 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            return $true
-        }
-        $legacyImage = Resolve-LegacyLocalImage $Image
-        if ($legacyImage) {
-            $legacyExists = docker image inspect $legacyImage 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                docker tag $legacyImage $Image
-                return $true
-            }
-        }
-        return $false
+        return $LASTEXITCODE -eq 0
     }
     if ($script:AGENTTEAMS_USE_EMBEDDED -eq "1") {
         # Embedded image was already pulled by Resolve-EmbeddedImage unless overridden;
         # for an explicit override we still need to ensure it is present locally.
         if ($env:AGENTTEAMS_INSTALL_EMBEDDED_IMAGE) {
             if ($script:EMBEDDED_IMAGE -match $LocalImagePattern) {
-                if (-not (Test-OrTagLocalImage $script:EMBEDDED_IMAGE)) {
+                if (-not (Test-LocalImage $script:EMBEDDED_IMAGE)) {
                     Write-Log "Pulling embedded image: $($script:EMBEDDED_IMAGE)"
                     & docker pull $script:EMBEDDED_IMAGE
                 }
@@ -2862,7 +2814,7 @@ function Install-Manager {
         # Manager image — controller will spawn it inside; pull here so the spawn doesn't
         # have to wait on the network.
         if ($managerImage -match $LocalImagePattern) {
-            if (Test-OrTagLocalImage $managerImage) {
+            if (Test-LocalImage $managerImage) {
                 Write-Log (Get-Msg "install.image.exists" -f $managerImage)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
@@ -2874,7 +2826,7 @@ function Install-Manager {
         }
     } else {
         if ($managerImage -match $LocalImagePattern) {
-            if (Test-OrTagLocalImage $managerImage) {
+            if (Test-LocalImage $managerImage) {
                 Write-Log (Get-Msg "install.image.exists" -f $managerImage)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
@@ -2889,7 +2841,7 @@ function Install-Manager {
     # Pull all worker runtime images (workers may use any runtime regardless of the default)
     foreach ($workerImg in @($script:WORKER_IMAGE, $script:COPAW_WORKER_IMAGE, $script:HERMES_WORKER_IMAGE)) {
         if ($workerImg -match $LocalImagePattern) {
-            if (Test-OrTagLocalImage $workerImg) {
+            if (Test-LocalImage $workerImg) {
                 Write-Log (Get-Msg "install.image.worker_exists" -f $workerImg)
             } else {
                 Write-Log (Get-Msg "install.image.pulling_worker" -f $workerImg)
@@ -3063,16 +3015,6 @@ function Install-Manager {
             docker rm $_ *>$null
             Write-Log (Get-Msg "install.existing.removed" -f $_)
         }
-    }
-
-    # Clean up legacy containers (e.g. hiclaw-docker-proxy from v1.0.x)
-    $legacyContainers = docker ps -a --format "{{.Names}}" 2>$null |
-        Select-String "^hiclaw-" |
-        Where-Object { $_.Line -notmatch "^(agentteams-controller|agentteams-manager|agentteams-worker-)" }
-    foreach ($legacy in $legacyContainers) {
-        Write-Log "Removing legacy container: $($legacy.Line)"
-        docker stop $legacy.Line *>$null
-        docker rm -f $legacy.Line *>$null
     }
 
     # --- Upgrade: inject extracted credentials into data volume (old-arch -> embedded) ---
@@ -3559,11 +3501,11 @@ function Uninstall-AgentTeams {
 
     # Stop and remove docker-proxy (legacy <= v1.0.x; current arch uses
     # agentteams-controller for the same role)
-    $proxy = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^hiclaw-docker-proxy$"
+    $proxy = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-docker-proxy$"
     if ($proxy) {
         Write-Log (Get-Msg "uninstall.removing_proxy")
-        docker stop hiclaw-docker-proxy *>$null
-        docker rm hiclaw-docker-proxy *>$null
+        docker stop agentteams-docker-proxy *>$null
+        docker rm agentteams-docker-proxy *>$null
     }
 
     # Stop and remove the embedded controller container. MUST happen

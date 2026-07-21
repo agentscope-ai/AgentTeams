@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Client issues STS tokens by calling the hiclaw-credential-provider sidecar.
+// Client issues STS tokens by calling the agentteams-credential-provider sidecar.
 type Client interface {
 	// Issue asks the sidecar for an STS triple matching req.
 	// A non-nil error means either the HTTP call failed or the sidecar

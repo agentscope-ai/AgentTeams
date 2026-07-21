@@ -152,7 +152,7 @@ func newTestDockerBackend(t *testing.T, serverURL string) *DockerBackend {
 		config: DockerConfig{
 			WorkerImage:      "agentteams/worker-agent:latest",
 			CopawWorkerImage: "agentteams/copaw-worker:latest",
-			DefaultNetwork:   "hiclaw-net",
+			DefaultNetwork:   "agentteams-net",
 		},
 		containerPrefix: "agentteams-worker-",
 		client: &http.Client{
@@ -181,7 +181,7 @@ func TestDockerCreate(t *testing.T) {
 	result, err := b.Create(context.Background(), CreateRequest{
 		Name:    "alice",
 		Image:   "agentteams/worker-agent:latest",
-		Network: "hiclaw-net",
+		Network: "agentteams-net",
 		Env:     map[string]string{"AGENTTEAMS_WORKER_NAME": "alice"},
 	})
 	if err != nil {
@@ -461,7 +461,7 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 					CopawWorkerImage:   "agentteams/copaw-worker:latest",
 					HermesWorkerImage:  "agentteams/hermes-worker:latest",
 					QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-					DefaultNetwork:     "hiclaw-net",
+					DefaultNetwork:     "agentteams-net",
 				},
 				containerPrefix: "agentteams-worker-",
 				client: &http.Client{

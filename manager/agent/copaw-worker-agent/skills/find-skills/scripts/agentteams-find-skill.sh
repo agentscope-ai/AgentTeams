@@ -1,5 +1,5 @@
 #!/bin/sh
-# hiclaw-find-skill.sh - Unified skill discovery wrapper for Workers
+# agentteams-find-skill.sh - Unified skill discovery wrapper for Workers
 # Backends:
 #   - skills_sh: delegate to `skills find`
 #   - nacos: query local/default Nacos CLI profile and render skills-style output
@@ -14,7 +14,7 @@ DIM='[38;5;102m'
 TEXT='[38;5;145m'
 
 get_script_path() {
-    raw_path="${0:-hiclaw-find-skill.sh}"
+    raw_path="${0:-agentteams-find-skill.sh}"
 
     case "${raw_path}" in
         /*)
@@ -89,7 +89,7 @@ ensure_nacos_sts_credentials() {
     controller_url="${AGENTTEAMS_CONTROLLER_URL:-}"
     bearer="$(resolve_controller_bearer)"
     if [ -z "${controller_url}" ] || [ -z "${bearer}" ]; then
-        echo "error: NACOS_AUTH_TYPE=sts-hiclaw requires AGENTTEAMS_CONTROLLER_URL and a controller bearer token" >&2
+        echo "error: NACOS_AUTH_TYPE=sts-agentteams requires AGENTTEAMS_CONTROLLER_URL and a controller bearer token" >&2
         exit 1
     fi
 
@@ -248,9 +248,9 @@ run_nacos_cli() {
     [ -n "${host}" ] && set -- "$@" --host "${host}"
     [ -n "${port}" ] && set -- "$@" --port "${port}"
     [ -n "${namespace}" ] && set -- "$@" --namespace "${namespace}"
-    if [ "${NACOS_AUTH_TYPE:-}" = "sts-hiclaw" ]; then
+    if [ "${NACOS_AUTH_TYPE:-}" = "sts-agentteams" ]; then
         ensure_nacos_sts_credentials
-        set -- "$@" --auth-type sts-hiclaw \
+        set -- "$@" --auth-type sts-agentteams \
             --access-key "${AGENTTEAMS_NACOS_STS_ACCESS_KEY}" \
             --secret-key "${AGENTTEAMS_NACOS_STS_SECRET_KEY}" \
             --security-token "${AGENTTEAMS_NACOS_STS_SECURITY_TOKEN}"

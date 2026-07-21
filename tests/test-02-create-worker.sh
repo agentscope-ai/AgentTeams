@@ -54,7 +54,7 @@ wait_for_session_stable 5 60
 
 # Snapshot metrics baseline before sending message (to calculate delta later)
 METRICS_BASELINE=$(snapshot_baseline)
-TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 # Send create worker request.
 #
@@ -113,7 +113,7 @@ log_section "Verify Infrastructure"
 minio_setup
 ALICE_OPENCLAW=$(minio_read_file "agents/alice/openclaw.json" 2>/dev/null || echo "{}")
 MEMORY_SEARCH_MODEL=$(echo "${ALICE_OPENCLAW}" | jq -r '.agents.defaults.memorySearch.model // empty' 2>/dev/null)
-if [ -n "${HICLAW_EMBEDDING_MODEL}" ] && [ -n "${ALICE_OPENCLAW}" ] && [ "${ALICE_OPENCLAW}" != "{}" ]; then
+if [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ] && [ -n "${ALICE_OPENCLAW}" ] && [ "${ALICE_OPENCLAW}" != "{}" ]; then
     assert_not_empty "${MEMORY_SEARCH_MODEL}" "Worker openclaw.json has memorySearch.model configured"
     log_info "Worker embedding model: ${MEMORY_SEARCH_MODEL}"
 fi

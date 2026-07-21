@@ -72,7 +72,7 @@ Do not use the `message` tool for same-room replies.
 
 Use the `message` tool only when the target room is not the current room, or when the workflow must continue in a different room.
 
-Resolve the recipient Matrix ID and target room from `hiclaw` CLI immediately before sending.
+Resolve the recipient Matrix ID and target room from `agt` CLI immediately before sending.
 
 For Team work assigned from Leader DM or Leader Room, this cross-room `message` call is mandatory. Do it before any requester progress update, polling, or result wait.
 

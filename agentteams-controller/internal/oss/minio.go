@@ -74,7 +74,7 @@ func (c *MinIOClient) PutObject(ctx context.Context, key string, data []byte) er
 	if err := c.ensureAlias(ctx); err != nil {
 		return err
 	}
-	tmpFile, err := os.CreateTemp("", "hiclaw-oss-*.tmp")
+	tmpFile, err := os.CreateTemp("", "agentteams-oss-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}

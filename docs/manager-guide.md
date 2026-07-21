@@ -54,6 +54,8 @@ The repo ships **16** built-in Manager skills under `manager/agent/skills/` (syn
 
 Place additional self-contained `SKILL.md` files under `agents/manager/skills/<skill-name>/`. The Manager runtime auto-discovers skills from that directory.
 
+For the expected directory layout, frontmatter, and agent-facing writing rules, see [Skill Format and Contribution Guide](skill-format.md).
+
 To add a new skill:
 1. Create directory: `agents/manager/skills/<your-skill-name>/`
 2. Write `SKILL.md` with complete API reference and examples

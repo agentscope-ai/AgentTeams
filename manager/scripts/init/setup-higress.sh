@@ -209,6 +209,15 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
                 OC_DOMAIN="${OC_URL_STRIP%%/*}"
                 echo "${OC_DOMAIN}" | grep -q ':' && { OC_PORT="${OC_DOMAIN##*:}"; OC_DOMAIN="${OC_DOMAIN%:*}"; }
 
+                # Build openaiCustomUrl WITHOUT the port: Higress derives the
+                # host domain from this URL, so an embedded port would break
+                # DNS resolution. The port is supplied via openaiCustomServicePort.
+                OC_PATH=""
+                case "${OC_URL_STRIP}" in
+                    */*) OC_PATH="/${OC_URL_STRIP#*/}" ;;
+                esac
+                OC_CUSTOM_URL="${OC_PROTO}://${OC_DOMAIN}${OC_PATH}"
+
                 # Service source: GET → PUT if exists, POST if not
                 existing_svc=$(higress_get /v1/service-sources/openai-compat)
                 SVC_BODY='{"type":"dns","name":"openai-compat","port":'"${OC_PORT}"',"protocol":"'"${OC_PROTO}"'","proxyName":"","domain":"'"${OC_DOMAIN}"'"}'
@@ -218,7 +227,7 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
                     higress_api POST /v1/service-sources "Registering openai-compat DNS service source" "${SVC_BODY}"
                 fi
 
-                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OPENAI_BASE_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"',"hiclawMode":true}}'
+                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OC_CUSTOM_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"',"hiclawMode":true}}'
                 existing_provider=$(higress_get /v1/ai/providers/openai-compat)
                 if [ -n "${existing_provider}" ]; then
                     higress_api PUT /v1/ai/providers/openai-compat "Updating LLM provider (openai-compat)" "${PROVIDER_BODY}"

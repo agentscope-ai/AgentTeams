@@ -78,7 +78,7 @@ AGENTS_CONTENT="# Inline Test Workspace
 - This is a test worker created via inline YAML fields
 - Respond to all messages politely"
 
-# Write YAML with inline soul and agents (in agent container where hiclaw CLI runs)
+# Write YAML with inline soul and agents (in agent container where agt CLI runs)
 exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_WORKER}.yaml << 'YAMLEOF'
 apiVersion: agentteams.io/v1beta1
 kind: Worker
@@ -163,8 +163,8 @@ assert_contains "${SOUL_IN_MINIO}" "AI Identity" "SOUL.md contains AI Identity s
 AGENTS_IN_MINIO=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}/AGENTS.md" 2>/dev/null || echo "")
 assert_not_empty "${AGENTS_IN_MINIO}" "AGENTS.md exists in MinIO agent space"
 assert_contains "${AGENTS_IN_MINIO}" "Inline Test Workspace" "AGENTS.md contains expected content"
-assert_contains "${AGENTS_IN_MINIO}" "hiclaw-builtin-start" "AGENTS.md has builtin markers"
-assert_contains "${AGENTS_IN_MINIO}" "hiclaw-builtin-end" "AGENTS.md has builtin end marker"
+assert_contains "${AGENTS_IN_MINIO}" "agentteams-builtin-start" "AGENTS.md has builtin markers"
+assert_contains "${AGENTS_IN_MINIO}" "agentteams-builtin-end" "AGENTS.md has builtin end marker"
 
 # ============================================================
 # Section 7: Verify Worker infrastructure
@@ -316,7 +316,7 @@ This soul was set via inline field and should replace the package version."
 OVERRIDE_AGENTS="# OVERRIDDEN AGENTS FROM INLINE
 This agents config was set via inline field."
 
-exec_in_agent bash -c "cat > /tmp/hiclaw-override-${TEST_WORKER_OVERRIDE}.yaml << 'YAMLEOF'
+exec_in_agent bash -c "cat > /tmp/agentteams-override-${TEST_WORKER_OVERRIDE}.yaml << 'YAMLEOF'
 apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
@@ -332,7 +332,7 @@ YAMLEOF
 " 2>/dev/null
 
 # Apply the YAML with both package and inline fields
-APPLY_OVERRIDE=$(exec_in_agent agt apply -f "/tmp/hiclaw-override-${TEST_WORKER_OVERRIDE}.yaml" 2>&1)
+APPLY_OVERRIDE=$(exec_in_agent agt apply -f "/tmp/agentteams-override-${TEST_WORKER_OVERRIDE}.yaml" 2>&1)
 if echo "${APPLY_OVERRIDE}" | grep -q "created\|configured"; then
     log_pass "Applied YAML with package + inline override"
 else

@@ -194,7 +194,7 @@ type DeployerConfig struct {
 
 	RuntimeProjection RuntimeProjectionConfig
 
-	// NacosCredClient is used when remoteSkills use sts-hiclaw (see CRD authType).
+	// NacosCredClient is used when remoteSkills use sts-agentteams (see CRD authType).
 	NacosCredClient credprovider.Client
 }
 
@@ -955,7 +955,7 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 		stsResources := remoteSkillSTSResources(source.Skills)
 		key := nacosClientKey{nacosAddr: nacosAddr, namespace: namespace, authType: authType}
 		var opts []executor.NacosAIClientOption
-		if authType == "sts-hiclaw" {
+		if authType == "sts-agentteams" {
 			key.resources = strings.Join(stsResources, ",")
 			opts = append(opts, executor.WithNacosSTSResources(stsResources))
 		}
@@ -1006,7 +1006,7 @@ func (d *Deployer) pushRemoteSkills(ctx context.Context, workerName, agentPrefix
 func mapRemoteSkillAuthType(raw string) (string, error) {
 	authType := strings.TrimSpace(raw)
 	switch authType {
-	case "", "sts-hiclaw", "nacos", "none":
+	case "", "sts-agentteams", "nacos", "none":
 		return authType, nil
 	default:
 		return "", fmt.Errorf("unsupported authType %q", raw)
@@ -1240,11 +1240,11 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 				logger.Error(err, "AGENTS.md package/OSS source read failed; continuing with empty content", "worker", workerName, "key", agentPrefix+"/AGENTS.md")
 			}
 		} else {
-			logger.Info("AGENTS.md package/OSS source loaded", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(existing), "hasBuiltinMarkers", strings.Contains(string(existing), "<!-- hiclaw-builtin-start -->"))
+			logger.Info("AGENTS.md package/OSS source loaded", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(existing), "hasBuiltinMarkers", strings.Contains(string(existing), "<!-- agentteams-builtin-start -->"))
 		}
 		content = string(existing)
 	}
-	logger.Info("AGENTS.md source selected", "worker", workerName, "source", source, "bytes", len(content), "hasBuiltinMarkers", strings.Contains(content, "<!-- hiclaw-builtin-start -->"))
+	logger.Info("AGENTS.md source selected", "worker", workerName, "source", source, "bytes", len(content), "hasBuiltinMarkers", strings.Contains(content, "<!-- agentteams-builtin-start -->"))
 	if len(builtinContent) > 0 {
 		sourceBytes := len(content)
 		content = agentconfig.MergeBuiltinSection(content, string(builtinContent))
@@ -1289,7 +1289,7 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 }
 
 func hasDecoupledTeamContext(content string) bool {
-	if !strings.Contains(content, "<!-- hiclaw-team-context-start -->") {
+	if !strings.Contains(content, "<!-- agentteams-team-context-start -->") {
 		return false
 	}
 	return strings.Contains(content, "Do NOT @mention Manager") ||

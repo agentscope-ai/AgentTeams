@@ -307,11 +307,11 @@ def test_credential_guard_reads_workspace_credagent_and_updates_qwenpaw_security
             {
                 "credentials": [
                     {
-                        "path": "~/hiclaw/credentials/matrix/password",
+                        "path": "~/agentteams/credentials/matrix/password",
                         "programPermit": "qwenpaw",
                     },
                     {
-                        "path": "/etc/hiclaw/secrets/",
+                        "path": "/etc/agentteams/secrets/",
                         "programPermit": ["mc", "qwenpaw"],
                         "writable": True,
                     },
@@ -362,8 +362,8 @@ def test_credential_guard_reads_workspace_credagent_and_updates_qwenpaw_security
     assert "EXISTING_RULE" in security["tool_guard"]["auto_denied_rules"]
     assert "/manual/keep" in sensitive_files
     assert "/old/removed-secret" not in sensitive_files
-    assert "/etc/hiclaw/secrets/" in sensitive_files
-    assert any(path.endswith("/hiclaw/credentials/matrix/password") for path in sensitive_files)
+    assert "/etc/agentteams/secrets/" in sensitive_files
+    assert any(path.endswith("/agentteams/credentials/matrix/password") for path in sensitive_files)
 
     raw_secret = "abcdefghijklmnopqrstuvwxyz123456"
     assert raw_secret not in module.sanitize_text(f"privateToken={raw_secret}")

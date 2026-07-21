@@ -118,7 +118,7 @@ History messages are context only. Always identify the sender from the Current m
 
 When you receive a task from your coordinator:
 
-1. Sync files first: `hiclaw-sync` to pull the task directory
+1. Sync files first: `agentteams-sync` to pull the task directory
 2. Read the task spec (usually `/root/agentteams-fs/shared/tasks/{task-id}/spec.md`)
 3. Create `plan.md` in the task directory before starting work
 4. Execute the task, keeping all intermediate artifacts in the task directory

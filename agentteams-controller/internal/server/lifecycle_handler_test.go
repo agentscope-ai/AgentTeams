@@ -141,7 +141,7 @@ func newLifecycleTestScheme(t *testing.T) *runtime.Scheme {
 
 	scheme := runtime.NewScheme()
 	if err := v1beta1.AddToScheme(scheme); err != nil {
-		t.Fatalf("add hiclaw scheme: %v", err)
+		t.Fatalf("add agentteams scheme: %v", err)
 	}
 	return scheme
 }

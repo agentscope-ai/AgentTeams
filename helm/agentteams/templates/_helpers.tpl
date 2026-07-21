@@ -2,11 +2,7 @@
 Chart name.
 */}}
 {{- define "agentteams.name" -}}
-{{- if and (eq .Release.Name "hiclaw") (not .Values.nameOverride) -}}
-{{- "hiclaw" -}}
-{{- else -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
 {{- end }}
 
 {{/*
@@ -15,8 +11,6 @@ Fully qualified app name.
 {{- define "agentteams.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- else if and (eq .Release.Name "hiclaw") (not .Values.nameOverride) }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- else }}
 {{- $name := default .Chart.Name .Values.nameOverride }}
 {{- if contains $name .Release.Name }}

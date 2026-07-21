@@ -269,17 +269,17 @@ Team Leader 本质上是一个 Worker 容器，但有以下区别：
 Team Leader 的 AGENTS.md 由三层内容组装而成，各自独立管理：
 
 ```
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-start -->
 [内置：Team Leader 工作空间规则、任务流程、skills 参考]
-<!-- hiclaw-builtin-end -->
+<!-- agentteams-builtin-end -->
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 - Upstream coordinator: @manager:{domain}
 - Team Admin: @admin:{domain}
 - Team: alpha-team
 - Team members: alpha-dev, alpha-qa
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 
 [用户通过 spec.agents 提供的自定义内容（如有）]
 ```

@@ -1,10 +1,10 @@
 #!/bin/bash
-# hiclaw-find-worker.sh - Search Worker templates stored as Nacos AgentSpecs
+# agentteams-find-worker.sh - Search Worker templates stored as Nacos AgentSpecs
 #
 # Usage:
-#   hiclaw-find-worker.sh --name <template-name> --json
-#   hiclaw-find-worker.sh --query "frontend performance" --limit 3 --json
-#   hiclaw-find-worker.sh --limit 10
+#   agentteams-find-worker.sh --name <template-name> --json
+#   agentteams-find-worker.sh --query "frontend performance" --limit 3 --json
+#   agentteams-find-worker.sh --limit 10
 
 set -euo pipefail
 

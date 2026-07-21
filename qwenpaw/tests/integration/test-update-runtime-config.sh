@@ -25,7 +25,7 @@ member:
   role: worker
 desired:
   model:
-    providerId: hiclaw-update-e2e
+    providerId: agentteams-update-e2e
     providerName: AgentTeams Update E2E
     model: qwen-fake-v1
     baseUrl: https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -73,9 +73,9 @@ from qwenpaw.providers.provider_manager import ProviderManager
 workspace = Path(os.environ["QWENPAW_WORKING_DIR"]) / "workspaces" / "default"
 
 manager = ProviderManager.get_instance()
-assert manager.active_model.provider_id == "hiclaw-update-e2e", manager.active_model
+assert manager.active_model.provider_id == "agentteams-update-e2e", manager.active_model
 assert manager.active_model.model == "qwen-fake-v1", manager.active_model
-provider = manager.custom_providers["hiclaw-update-e2e"]
+provider = manager.custom_providers["agentteams-update-e2e"]
 assert provider.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1", provider.base_url
 assert provider.api_key == "fake-gateway-key"
 
@@ -141,7 +141,7 @@ desired:
     version: 2.0.0
     digest: sha256:update-e2e-v2
   model:
-    providerId: hiclaw-update-e2e
+    providerId: agentteams-update-e2e
     providerName: AgentTeams Update E2E
     model: qwen-fake-v2
     baseUrl: https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -180,7 +180,7 @@ workspace = Path(os.environ["QWENPAW_WORKING_DIR"]) / "workspaces" / "default"
 package_root = Path(os.environ["QWENPAW_WORKING_DIR"]) / "agent-packages"
 
 manager = ProviderManager.get_instance()
-assert manager.active_model.provider_id == "hiclaw-update-e2e", manager.active_model
+assert manager.active_model.provider_id == "agentteams-update-e2e", manager.active_model
 assert manager.active_model.model == "qwen-fake-v2", manager.active_model
 
 mcp = json.loads((workspace / "config" / "mcporter.json").read_text(encoding="utf-8"))

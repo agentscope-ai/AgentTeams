@@ -16,12 +16,12 @@ import (
 // one namespace can filter their own credential artifacts. Also verifies
 // that the Secret's decorative "app" label is derived from
 // ResourcePrefix.WorkerAppLabel() — historically this was hardcoded to
-// "hiclaw" and drifted from the Pod / SA "app" value.
+// "agentteams" and drifted from the Pod / SA "app" value.
 func TestSecretCredentialStore_StampsControllerLabel(t *testing.T) {
 	client := fakeclient.NewSimpleClientset()
 	store := &SecretCredentialStore{
 		Client:         client,
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ControllerName: "ctl-a",
 		ResourcePrefix: auth.DefaultResourcePrefix,
 	}
@@ -35,7 +35,7 @@ func TestSecretCredentialStore_StampsControllerLabel(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	sec, err := client.CoreV1().Secrets("hiclaw").Get(context.Background(), "hiclaw-creds-alice", metav1.GetOptions{})
+	sec, err := client.CoreV1().Secrets("agentteams").Get(context.Background(), "agentteams-creds-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestSecretCredentialStore_AppLabelHonorsResourcePrefix(t *testing.T) {
 	client := fakeclient.NewSimpleClientset()
 	store := &SecretCredentialStore{
 		Client:         client,
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ControllerName: "ctl-a",
 		ResourcePrefix: auth.ResourcePrefix("acme-"),
 	}
@@ -67,7 +67,7 @@ func TestSecretCredentialStore_AppLabelHonorsResourcePrefix(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	sec, err := client.CoreV1().Secrets("hiclaw").Get(context.Background(), "hiclaw-creds-bob", metav1.GetOptions{})
+	sec, err := client.CoreV1().Secrets("agentteams").Get(context.Background(), "agentteams-creds-bob", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestProvisionerLoadWorkerCredentialsMigratesLegacyRuntimeSecret(t *testing.
 	client := fakeclient.NewSimpleClientset()
 	store := &SecretCredentialStore{
 		Client:         client,
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ControllerName: "ctl-a",
 		ResourcePrefix: auth.DefaultResourcePrefix,
 	}
@@ -103,10 +103,10 @@ func TestProvisionerLoadWorkerCredentialsMigratesLegacyRuntimeSecret(t *testing.
 		t.Fatalf("migrated creds=%+v, want gateway key gw", creds)
 	}
 
-	if _, err := client.CoreV1().Secrets("hiclaw").Get(context.Background(), "hiclaw-creds-team-a-worker-leader", metav1.GetOptions{}); err != nil {
+	if _, err := client.CoreV1().Secrets("agentteams").Get(context.Background(), "agentteams-creds-team-a-worker-leader", metav1.GetOptions{}); err != nil {
 		t.Fatalf("expected CR-name credential secret after migration: %v", err)
 	}
-	if _, err := client.CoreV1().Secrets("hiclaw").Get(context.Background(), "hiclaw-creds-leader", metav1.GetOptions{}); err != nil {
+	if _, err := client.CoreV1().Secrets("agentteams").Get(context.Background(), "agentteams-creds-leader", metav1.GetOptions{}); err != nil {
 		t.Fatalf("legacy runtime-name credential secret should remain untouched: %v", err)
 	}
 }

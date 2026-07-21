@@ -1,7 +1,7 @@
 // Package accessresolver converts CR-layer AccessEntry declarations
 // (with logical refs like bucketRef and template variables like
 // ${self.name}) into the fully-resolved form that
-// hiclaw-credential-provider expects.
+// agentteams-credential-provider expects.
 //
 // It is the single place that knows the workspace-local vocabulary:
 //

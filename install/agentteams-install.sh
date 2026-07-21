@@ -102,28 +102,6 @@ die() {
     exit 1
 }
 
-migrate_legacy_env_file() {
-    [ -n "${AGENTTEAMS_ENV_FILE:-}" ] && return 0
-
-    local current="${HOME}/agentteams-manager.env"
-    local legacy=""
-    for candidate in "${HOME}/hiclaw-manager.env" "./hiclaw-manager.env" "./agentteams-manager.env"; do
-        if [ ! -f "${current}" ] && [ -f "${candidate}" ]; then
-            legacy="${candidate}"
-            break
-        fi
-    done
-
-    if [ -n "${legacy}" ]; then
-        log "Migrating legacy env file ${legacy} to ${current}..."
-        if mv "${legacy}" "${current}"; then
-            case "${legacy}" in
-                "${HOME}/hiclaw-manager.env") ln -s "${current}" "${legacy}" 2>/dev/null || true ;;
-            esac
-        fi
-    fi
-}
-
 # ============================================================
 # Timezone detection (compatible with Linux and macOS)
 # ============================================================
@@ -187,7 +165,6 @@ detect_language() {
 }
 
 # Language priority: env var > existing env file > timezone detection
-migrate_legacy_env_file
 if [ -z "${AGENTTEAMS_LANGUAGE}" ]; then
     # Check existing env file for saved language preference (upgrade scenario)
     _env_file="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
@@ -968,8 +945,8 @@ msg() {
         "uninstall.removing_volume.en") text="Removing Docker volume: %s" ;;
         "uninstall.removing_env.zh") text="正在移除 env 文件: %s" ;;
         "uninstall.removing_env.en") text="Removing env file: %s" ;;
-        "uninstall.removing_proxy.zh") text="正在停止并移除 Docker API 代理容器: hiclaw-docker-proxy" ;;
-        "uninstall.removing_proxy.en") text="Stopping and removing Docker API proxy container: hiclaw-docker-proxy" ;;
+        "uninstall.removing_proxy.zh") text="正在停止并移除 Docker API 代理容器: agentteams-docker-proxy" ;;
+        "uninstall.removing_proxy.en") text="Stopping and removing Docker API proxy container: agentteams-docker-proxy" ;;
         "uninstall.stopping_controller.zh") text="正在停止并移除 agentteams-controller (内嵌 Tuwunel/MinIO/Higress)..." ;;
         "uninstall.stopping_controller.en") text="Stopping and removing agentteams-controller (embedded Tuwunel/MinIO/Higress)..." ;;
         "uninstall.removing_network.zh") text="正在移除 Docker 网络: agentteams-net" ;;
@@ -1037,8 +1014,6 @@ detect_registry() {
 }
 
 AGENTTEAMS_REGISTRY="${AGENTTEAMS_REGISTRY:-$(detect_registry)}"
-# Backward compatibility: accept old env var names from previous versions
-AGENTTEAMS_INSTALL_CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-${AGENTTEAMS_INSTALL_DOCKER_PROXY_IMAGE:-}}"
 # Image variables are resolved after version selection in step_version().
 # These placeholders allow early code paths to reference them without errors.
 MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-}"
@@ -1095,12 +1070,12 @@ resolve_embedded_image() {
         return 0
     fi
 
-    # Versions before v1.1.0 predate hiclaw-embedded entirely — their manager image
-    # bundled all infrastructure.  Falling back to hiclaw-embedded:latest would
+    # Versions before v1.1.0 predate agentteams-embedded entirely — their manager image
+    # bundled all infrastructure.  Falling back to agentteams-embedded:latest would
     # silently swap in the v1.1.0 architecture (embedded kube-apiserver) which
     # crashes under QEMU on Apple Silicon.  Auto-activate legacy mode instead.
     if _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.0"; then
-        log "INFO: ${AGENTTEAMS_VERSION} predates hiclaw-embedded; switching to legacy all-in-one manager architecture."
+        log "INFO: ${AGENTTEAMS_VERSION} predates agentteams-embedded; switching to legacy all-in-one manager architecture."
         log "WARNING: Legacy all-in-one mode requires AGENTTEAMS_VERSION <= v1.0.9 (older bundled manager image)."
         log "WARNING: Newer slim manager images will hang on 'Waiting for Higress Gateway'."
         AGENTTEAMS_USE_EMBEDDED=0
@@ -1254,7 +1229,7 @@ agentteams_read_secret_from_data_volume() {
     fi
     ${DOCKER_CMD} run --rm --entrypoint sh \
         -v "${_vol}:/data:ro" \
-        "${EMBEDDED_IMAGE}" -c "grep \"^${_key}=\" /data/agentteams-secrets.env /data/hiclaw-secrets.env 2>/dev/null | cut -d= -f2- | head -1 | tr -d '\r'" 2>/dev/null
+        "${EMBEDDED_IMAGE}" -c "grep \"^${_key}=\" /data/agentteams-secrets.env 2>/dev/null | cut -d= -f2- | head -1 | tr -d '\r'" 2>/dev/null
 }
 
 # Read KEY=value from /data/worker-creds/<worker>.env on a Docker volume.
@@ -3212,38 +3187,16 @@ EOF
     # Pull images (manager based on runtime config; all worker runtimes always pulled)
     _is_local_image() {
         case "$1" in
-            hiclaw/*|agentteams/*) return 0 ;;
+            agentteams/*) return 0 ;;
             *) return 1 ;;
         esac
     }
 
-    _legacy_local_image_for() {
-        case "$1" in
-            agentteams/manager:*) printf '%s\n' "hiclaw/hiclaw-manager:${1##*:}" ;;
-            agentteams/manager-copaw:*) printf '%s\n' "hiclaw/hiclaw-manager-copaw:${1##*:}" ;;
-            agentteams/worker-agent:*) printf '%s\n' "hiclaw/worker-agent:${1##*:}" ;;
-            agentteams/copaw-worker:*) printf '%s\n' "hiclaw/copaw-worker:${1##*:}" ;;
-            agentteams/hermes-worker:*) printf '%s\n' "hiclaw/hermes-worker:${1##*:}" ;;
-            agentteams/qwenpaw-worker:*) printf '%s\n' "hiclaw/qwenpaw-worker:${1##*:}" ;;
-            agentteams/agentteams-embedded:*) printf '%s\n' "hiclaw/hiclaw-embedded:${1##*:}" ;;
-            agentteams/agentteams-controller:*) printf '%s\n' "hiclaw/hiclaw-controller:${1##*:}" ;;
-        esac
-    }
-
-    _ensure_local_image_tag() {
+    _local_image_exists() {
         local _img="$1"
         [ -z "${_img}" ] && return 1
         _is_local_image "${_img}" || return 1
-        if ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1; then
-            return 0
-        fi
-        local _legacy_img
-        _legacy_img="$(_legacy_local_image_for "${_img}")"
-        if [ -n "${_legacy_img}" ] && ${DOCKER_CMD} image inspect "${_legacy_img}" >/dev/null 2>&1; then
-            ${DOCKER_CMD} tag "${_legacy_img}" "${_img}"
-            return 0
-        fi
-        return 1
+        ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1
     }
 
     # Helper: pull or skip a single image
@@ -3251,7 +3204,7 @@ EOF
     _pull_image() {
         local _img="$1" _exists_key="$2" _pull_key="$3"
         [ -z "${_img}" ] && return 0
-        if _ensure_local_image_tag "${_img}"; then
+        if _local_image_exists "${_img}"; then
             log "$(msg "${_exists_key}" "${_img}")"
             return 0
         fi
@@ -3274,7 +3227,7 @@ EOF
     # Embedded controller image (resolve versioned tag, fallback to latest)
     resolve_embedded_image
     if [ "${AGENTTEAMS_USE_EMBEDDED}" = "1" ]; then
-        _ensure_local_image_tag "${EMBEDDED_IMAGE}" || true
+        _local_image_exists "${EMBEDDED_IMAGE}" || true
     fi
 
     # Manager image is always required (select based on runtime)
@@ -3426,13 +3379,6 @@ CREDEOF
             log "$(msg install.existing.removed "${w}")"
         done
     fi
-
-    # Clean up legacy containers (e.g. hiclaw-docker-proxy from v1.0.x)
-    for _legacy in $(${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^hiclaw-' | grep -vE "^(agentteams-controller|agentteams-manager|agentteams-worker-)" || true); do
-        log "Removing legacy container: ${_legacy}"
-        ${DOCKER_CMD} stop "${_legacy}" 2>/dev/null || true
-        ${DOCKER_CMD} rm -f "${_legacy}" 2>/dev/null || true
-    done
 
     # --- Upgrade: inject extracted credentials into data volume ---
     # Only needed for old-arch upgrades (credential files were extracted above).
@@ -3726,18 +3672,18 @@ CREDEOF
         # Start Docker API proxy if enabled (security layer between Manager and Docker daemon)
         PROXY_ARGS=""
         if [ "${AGENTTEAMS_DOCKER_PROXY:-1}" = "1" ] && [ -n "${CONTAINER_SOCK:-}" ]; then
-            local _proxy_image="${AGENTTEAMS_REGISTRY}/higress/hiclaw-docker-proxy:${AGENTTEAMS_VERSION}"
+            local _proxy_image="${AGENTTEAMS_REGISTRY}/higress/agentteams-docker-proxy:${AGENTTEAMS_VERSION}"
             # Try versioned tag, fallback to latest
             if ! ${DOCKER_CMD} image inspect "${_proxy_image}" >/dev/null 2>&1; then
                 ${DOCKER_CMD} pull "${_proxy_image}" 2>/dev/null || {
-                    _proxy_image="${AGENTTEAMS_REGISTRY}/higress/hiclaw-docker-proxy:latest"
+                    _proxy_image="${AGENTTEAMS_REGISTRY}/higress/agentteams-docker-proxy:latest"
                     ${DOCKER_CMD} pull "${_proxy_image}" 2>/dev/null || true
                 }
             fi
             if ${DOCKER_CMD} image inspect "${_proxy_image}" >/dev/null 2>&1; then
                 log "Starting Docker API proxy..."
                 ${DOCKER_CMD} run -d \
-                    --name hiclaw-docker-proxy \
+                    --name agentteams-docker-proxy \
                     --network agentteams-net \
                     -v "${CONTAINER_SOCK}:/var/run/docker.sock" \
                     --security-opt label=disable \
@@ -3747,7 +3693,7 @@ CREDEOF
                     ${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES:+-e AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}"} \
                     --restart unless-stopped \
                     "${_proxy_image}"
-                PROXY_ARGS="-e AGENTTEAMS_CONTROLLER_URL=http://hiclaw-docker-proxy:2375 -e AGENTTEAMS_CONTAINER_API=http://hiclaw-docker-proxy:2375"
+                PROXY_ARGS="-e AGENTTEAMS_CONTROLLER_URL=http://agentteams-docker-proxy:2375 -e AGENTTEAMS_CONTAINER_API=http://agentteams-docker-proxy:2375"
                 SOCKET_MOUNT_ARGS=""
             fi
         fi
@@ -4074,9 +4020,9 @@ uninstall_agentteams() {
             rm -f "${_service_dir}/agentteams-podman-restart.service"
             ${_systemctl_cmd} daemon-reload 2>/dev/null || true
         fi
-        if [ -f "${_service_dir}/hiclaw-podman-restart.service" ]; then
-            ${_systemctl_cmd} disable --now hiclaw-podman-restart.service 2>/dev/null || true
-            rm -f "${_service_dir}/hiclaw-podman-restart.service"
+        if [ -f "${_service_dir}/agentteams-podman-restart.service" ]; then
+            ${_systemctl_cmd} disable --now agentteams-podman-restart.service 2>/dev/null || true
+            rm -f "${_service_dir}/agentteams-podman-restart.service"
             ${_systemctl_cmd} daemon-reload 2>/dev/null || true
         fi
         # Note: Native podman-restart.service is strictly untouched per maintainer review.
@@ -4106,10 +4052,10 @@ uninstall_agentteams() {
 
     # Stop and remove docker-proxy (legacy ≤ v1.0.x; current arch uses
     # agentteams-controller for the same role)
-    if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^hiclaw-docker-proxy$"; then
+    if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^agentteams-docker-proxy$"; then
         log "$(msg uninstall.removing_proxy)"
-        ${DOCKER_CMD} stop hiclaw-docker-proxy >/dev/null 2>&1 || true
-        ${DOCKER_CMD} rm hiclaw-docker-proxy >/dev/null 2>&1 || true
+        ${DOCKER_CMD} stop agentteams-docker-proxy >/dev/null 2>&1 || true
+        ${DOCKER_CMD} rm agentteams-docker-proxy >/dev/null 2>&1 || true
     fi
 
     # Stop and remove the embedded controller container. MUST happen

@@ -9,9 +9,9 @@ Use this skill for current AgentTeams topology and runtime state.
 
 ## Source Of Truth
 
-Use `hiclaw` CLI. Do not infer organization state from memory, old chat history, `SOUL.md`, or `AGENTS.md`.
+Use `agt` CLI. Do not infer organization state from memory, old chat history, `SOUL.md`, or `AGENTS.md`.
 
-Resolve the Team CR name before any team-scoped CLI query. The team name in `SOUL.md` may be the runtime/storage `teamName`, not the Kubernetes Team CR name accepted by `hiclaw --team`.
+Resolve the Team CR name before any team-scoped CLI query. The team name in `SOUL.md` may be the runtime/storage `teamName`, not the Kubernetes Team CR name accepted by `agentteams --team`.
 
 ```bash
 TEAM_CR="$(agt get workers "${AGENTTEAMS_WORKER_CR_NAME:-$AGENTTEAMS_WORKER_NAME}" -o json | jq -r '.team')"

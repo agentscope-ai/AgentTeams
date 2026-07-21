@@ -23,7 +23,7 @@ from rich.panel import Panel
 
 from copaw_worker.config import WorkerConfig
 from copaw_worker.sync import FileSync, sync_loop, push_loop
-from copaw_worker.bridge import bridge_openclaw_to_copaw
+from copaw_worker.bridge import bridge_controller_to_copaw
 from copaw_worker.worker_api import WorkerAPIServer
 from copaw_worker.health import HealthState, check_matrix_service
 
@@ -150,7 +150,7 @@ class Worker:
 
         console.print("[yellow]Bridging configuration to CoPaw...[/yellow]")
         try:
-            bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
+            bridge_controller_to_copaw(openclaw_cfg, self._copaw_working_dir)
         except Exception as exc:
             console.print(f"[red]Config bridge failed: {exc}[/red]")
             return False
@@ -690,7 +690,7 @@ class Worker:
             if agents:
                 (self._copaw_working_dir / "AGENTS.md").write_text(agents)
 
-            bridge_openclaw_to_copaw(openclaw_cfg, self._copaw_working_dir)
+            bridge_controller_to_copaw(openclaw_cfg, self._copaw_working_dir)
             console.print("[green]Config re-bridged.[/green]")
         except Exception as exc:
             console.print(f"[red]Re-bridge failed: {exc}[/red]")

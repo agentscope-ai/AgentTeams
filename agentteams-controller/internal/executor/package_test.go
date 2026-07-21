@@ -111,10 +111,10 @@ func TestWriteInlineConfigs_AgentsWrappedWithMarkers(t *testing.T) {
 		t.Fatalf("failed to read AGENTS.md: %v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "<!-- hiclaw-builtin-start -->") {
+	if !strings.Contains(content, "<!-- agentteams-builtin-start -->") {
 		t.Error("AGENTS.md should contain builtin-start marker")
 	}
-	if !strings.Contains(content, "<!-- hiclaw-builtin-end -->") {
+	if !strings.Contains(content, "<!-- agentteams-builtin-end -->") {
 		t.Error("AGENTS.md should contain builtin-end marker")
 	}
 	if !strings.Contains(content, "custom agents rules") {
@@ -598,18 +598,18 @@ func TestResolveAndExtract_ZipWithoutSoulmd_Succeeds(t *testing.T) {
 	}
 }
 
-func TestValidateNacosURI_STSHiclaw_RequiresCredClient(t *testing.T) {
-	uri := "nacos://127.0.0.1:19999/public/my-spec?authType=sts-hiclaw"
+func TestValidateNacosURI_STSAgentTeams_RequiresCredClient(t *testing.T) {
+	uri := "nacos://127.0.0.1:19999/public/my-spec?authType=sts-agentteams"
 	err := ValidateNacosURI(context.Background(), uri, ValidateNacosURIOptions{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "sts-hiclaw auth requires a credprovider.Client") {
+	if !strings.Contains(err.Error(), "sts-agentteams auth requires a credprovider.Client") {
 		t.Fatalf("expected credprovider requirement error, got: %v", err)
 	}
 }
 
-func TestValidateNacosURI_STSHiclaw_SucceedsWithCredClient(t *testing.T) {
+func TestValidateNacosURI_STSAgentTeams_SucceedsWithCredClient(t *testing.T) {
 	server := newNacosAgentSpecCheckTestServer(t,
 		http.StatusOK,
 		`{"code":0,"message":"success","data":{"totalCount":1,"pageItems":[{"namespaceId":"public","name":"sts-spec","description":"demo","enable":true,"onlineCnt":1,"labels":{"latest":"v1"}}]}}`,
@@ -619,7 +619,7 @@ func TestValidateNacosURI_STSHiclaw_SucceedsWithCredClient(t *testing.T) {
 	defer server.Close()
 
 	stub := stubCredClient{}
-	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/sts-spec?authType=sts-hiclaw", ValidateNacosURIOptions{
+	err := ValidateNacosURI(context.Background(), "nacos://"+server.Listener.Addr().String()+"/public/sts-spec?authType=sts-agentteams", ValidateNacosURIOptions{
 		CredClient: stub,
 	})
 	if err != nil {

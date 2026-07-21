@@ -23,7 +23,7 @@ func TestProvisioner_EnsureServiceAccount_StampsControllerLabel(t *testing.T) {
 	client := fakeclient.NewSimpleClientset()
 	p := NewProvisioner(ProvisionerConfig{
 		K8sClient:      client,
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 		ControllerName: "ctl-b",
 	})
@@ -31,7 +31,7 @@ func TestProvisioner_EnsureServiceAccount_StampsControllerLabel(t *testing.T) {
 	if err := p.EnsureServiceAccount(context.Background(), "alice"); err != nil {
 		t.Fatalf("EnsureServiceAccount: %v", err)
 	}
-	sa, err := client.CoreV1().ServiceAccounts("hiclaw").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
+	sa, err := client.CoreV1().ServiceAccounts("agentteams").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get SA: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestProvisioner_EnsureServiceAccount_StampsControllerLabel(t *testing.T) {
 	if err := p.EnsureManagerServiceAccount(context.Background(), "default"); err != nil {
 		t.Fatalf("EnsureManagerServiceAccount: %v", err)
 	}
-	mgrSA, err := client.CoreV1().ServiceAccounts("hiclaw").Get(context.Background(), "agentteams-manager", metav1.GetOptions{})
+	mgrSA, err := client.CoreV1().ServiceAccounts("agentteams").Get(context.Background(), "agentteams-manager", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get manager SA: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestEnsureRemoteNamespace(t *testing.T) {
 	}
 
 	p := NewProvisioner(ProvisionerConfig{
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 		RemoteCache:    remoteProvider,
 	})
@@ -160,7 +160,7 @@ func TestEnsureRemoteNamespace(t *testing.T) {
 	}
 
 	p2 := NewProvisioner(ProvisionerConfig{
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 	})
 	if err := p2.EnsureRemoteNamespace(context.Background(), "cluster-a", "remote-ns"); err == nil {
@@ -179,7 +179,7 @@ func TestEnsureRemoteServiceAccount(t *testing.T) {
 	}
 
 	p := NewProvisioner(ProvisionerConfig{
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 		RemoteCache:    remoteProvider,
 	})
@@ -200,7 +200,7 @@ func TestEnsureRemoteServiceAccount(t *testing.T) {
 
 	// Test error when remote cache is nil.
 	p2 := NewProvisioner(ProvisionerConfig{
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 	})
 	if err := p2.EnsureRemoteServiceAccount(context.Background(), "bob", "cluster-a", "remote-ns"); err == nil {
@@ -224,7 +224,7 @@ func TestDeleteRemoteServiceAccount(t *testing.T) {
 	}
 
 	p := NewProvisioner(ProvisionerConfig{
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 		RemoteCache:    remoteProvider,
 	})
@@ -245,7 +245,7 @@ func TestDeleteRemoteServiceAccount(t *testing.T) {
 
 	// Test error when remote cache is nil.
 	p2 := NewProvisioner(ProvisionerConfig{
-		Namespace:      "hiclaw",
+		Namespace:      "agentteams",
 		ResourcePrefix: authpkg.ResourcePrefix("agentteams-"),
 	})
 	if err := p2.DeleteRemoteServiceAccount(context.Background(), "bob", "cluster-a", "remote-ns"); err == nil {

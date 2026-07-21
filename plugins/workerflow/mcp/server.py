@@ -750,7 +750,7 @@ def _workflow_content(state: dict[str, Any]) -> dict[str, Any]:
         "body": "\n".join(lines),
         "format": "org.matrix.custom.html",
         "formatted_body": "\n".join(html_parts),
-        "hiclaw.workflow": {
+        "agentteams.workflow": {
             "type": "workerflow",
             "runId": run_id,
             "status": status,

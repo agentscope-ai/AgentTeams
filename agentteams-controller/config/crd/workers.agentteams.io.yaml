@@ -64,8 +64,8 @@ spec:
                         description: Remote source in nacos://host[:port]/namespace-id format.
                       authType:
                         type: string
-                        enum: [sts-hiclaw, nacos, none]
-                        description: "Authentication mode for remote source access. Empty auto-detects: embedded username/password selects nacos; otherwise none. nacos: username/password embedded in source URL; sts-hiclaw: STS credential provider; none: unauthenticated."
+                        enum: [sts-agentteams, nacos, none]
+                        description: "Authentication mode for remote source access. Empty auto-detects: embedded username/password selects nacos; otherwise none. nacos: username/password embedded in source URL; sts-agentteams: STS credential provider; none: unauthenticated."
                       skills:
                         type: array
                         minItems: 1

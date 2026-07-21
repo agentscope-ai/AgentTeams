@@ -37,9 +37,4 @@ def _default_install_dir() -> Path:
     if configured := os.environ.get("COPAW_INSTALL_DIR"):
         return Path(configured)
 
-    current = Path.home() / ".agentteams-worker"
-    legacy = Path.home() / ".hiclaw-worker"
-    if legacy.exists() and not current.exists():
-        legacy.rename(current)
-        legacy.symlink_to(current, target_is_directory=True)
-    return current
+    return Path.home() / ".agentteams-worker"

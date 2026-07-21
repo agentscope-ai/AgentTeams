@@ -27,9 +27,7 @@ Environment variables:
   AGENTTEAMS_AUTH_TOKEN
       Bearer token for authentication
   AGENTTEAMS_AUTH_TOKEN_FILE
-      Path to a file containing the bearer token (K8s projected volume)
-
-The legacy "hiclaw" command remains available as a compatibility alias.`,
+      Path to a file containing the bearer token (K8s projected volume)`,
 	}
 
 	rootCmd.AddCommand(applyCmd())

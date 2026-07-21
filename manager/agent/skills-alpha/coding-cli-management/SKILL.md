@@ -141,7 +141,7 @@ fi
 ```
 @{worker}:DOMAIN task-{task-id} coding-result:
 CLI 工具已完成编码。请同步工作目录并 review 变更：
-  hiclaw-sync
+  agentteams-sync
 变更记录：/root/agentteams-fs/shared/tasks/{task-id}/workspace/coding-cli-logs/
 ```
 
@@ -193,7 +193,7 @@ Append to the end of spec.md when CLI mode is enabled:
 2. 推送到 MinIO：`mc mirror /root/agentteams-fs/shared/tasks/{task-id}/workspace/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/{task-id}/workspace/`
 3. 根据你的理解和 `coding-cli` skill 生成编码提示词，发送给我
 4. 等待我执行 CLI 工具并返回结果
-5. Sync 拉取变更：`hiclaw-sync`
+5. Sync 拉取变更：`agentteams-sync`
 6. Review 变更并报告完成
 
 如收到 `coding-failed:`，请自行完成编码工作。

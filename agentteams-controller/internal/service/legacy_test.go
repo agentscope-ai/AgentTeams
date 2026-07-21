@@ -15,7 +15,7 @@ func TestPutManagerConfig_PreservesUserPluginEntries(t *testing.T) {
 	// Seed OSS with an existing manager openclaw.json that has user customizations:
 	// memory-core dreaming schedule + an extra plugin load path.
 	existing := []byte(`{
-		"channels": {"matrix": {"groupAllowFrom": ["@worker1:hiclaw.local"]}},
+		"channels": {"matrix": {"groupAllowFrom": ["@worker1:agentteams.local"]}},
 		"plugins": {
 			"load": {"paths": ["/opt/openclaw/extensions/matrix", "/home/user/my-plugins"]},
 			"entries": {
@@ -32,7 +32,7 @@ func TestPutManagerConfig_PreservesUserPluginEntries(t *testing.T) {
 
 	lc := NewLegacyCompat(LegacyConfig{
 		OSS:          fake,
-		MatrixDomain: "hiclaw.local",
+		MatrixDomain: "agentteams.local",
 		ManagerName:  "manager",
 		// AgentFSDir intentionally empty — writeManagerLocalConfig becomes a no-op.
 	})
@@ -93,7 +93,7 @@ func TestPutManagerConfig_PreservesUserPluginEntries(t *testing.T) {
 	channels := got["channels"].(map[string]interface{})
 	matrix := channels["matrix"].(map[string]interface{})
 	allow := matrix["groupAllowFrom"].([]interface{})
-	if len(allow) != 1 || allow[0] != "@worker1:hiclaw.local" {
+	if len(allow) != 1 || allow[0] != "@worker1:agentteams.local" {
 		t.Errorf("groupAllowFrom merge broken: got %v", allow)
 	}
 }
@@ -102,7 +102,7 @@ func TestPutManagerConfig_NoExistingOSSObject(t *testing.T) {
 	fake := ossfake.NewMemory()
 	lc := NewLegacyCompat(LegacyConfig{
 		OSS:          fake,
-		MatrixDomain: "hiclaw.local",
+		MatrixDomain: "agentteams.local",
 		ManagerName:  "manager",
 	})
 
@@ -136,7 +136,7 @@ func TestPutManagerConfig_MalformedExistingJSON_FallsBackToGenerated(t *testing.
 
 	lc := NewLegacyCompat(LegacyConfig{
 		OSS:          fake,
-		MatrixDomain: "hiclaw.local",
+		MatrixDomain: "agentteams.local",
 		ManagerName:  "manager",
 	})
 

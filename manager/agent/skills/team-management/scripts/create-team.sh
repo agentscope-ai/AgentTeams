@@ -13,7 +13,7 @@ source /opt/agentteams/scripts/lib/agentteams-env.sh
 source /opt/agentteams/scripts/lib/gateway-api.sh
 
 log() {
-    local msg="[hiclaw $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    local msg="[agentteams $(date '+%Y-%m-%d %H:%M:%S')] $1"
     echo "${msg}"
     if [ -w /proc/1/fd/1 ]; then
         echo "${msg}" > /proc/1/fd/1
@@ -495,7 +495,7 @@ done
 
 {
     echo ""
-    echo "<!-- hiclaw-team-context-start -->"
+    echo "<!-- agentteams-team-context-start -->"
     echo "## Coordination"
     echo ""
     echo "- **Upstream coordinator**: @manager:${MATRIX_DOMAIN} (Manager) — you receive tasks from Manager"
@@ -509,19 +509,19 @@ done
     echo "- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads"
     echo "- Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source"
     echo "- @mention Manager only for: task completion, blockers, escalations"
-    echo "<!-- hiclaw-team-context-end -->"
+    echo "<!-- agentteams-team-context-end -->"
 } > "${_leader_ctx_tmp}"
 
 if mc cp "${_leader_agents_minio}" "${_leader_agents_tmp}" 2>/dev/null; then
     _leader_clean=$(mktemp /tmp/leader-clean-XXXXXX.md)
-    awk '/<!-- hiclaw-team-context-start -->/{skip=1; next} /<!-- hiclaw-team-context-end -->/{skip=0; next} !skip' \
+    awk '/<!-- agentteams-team-context-start -->/{skip=1; next} /<!-- agentteams-team-context-end -->/{skip=0; next} !skip' \
         "${_leader_agents_tmp}" > "${_leader_clean}"
 
     _leader_final=$(mktemp /tmp/leader-final-XXXXXX.md)
-    if grep -q '^<!-- hiclaw-builtin-end -->' "${_leader_clean}"; then
+    if grep -q '^<!-- agentteams-builtin-end -->' "${_leader_clean}"; then
         awk -v ctx_file="${_leader_ctx_tmp}" '
             {print}
-            /^<!-- hiclaw-builtin-end -->$/ {
+            /^<!-- agentteams-builtin-end -->$/ {
                 while ((getline line < ctx_file) > 0) print line
                 close(ctx_file)
             }

@@ -134,7 +134,7 @@ CLI 工具执行失败...你生成的提示词已保存于：/root/agentteams-fs
 
 ```bash
 # Sync changes from MinIO
-hiclaw-sync
+agentteams-sync
 
 # Review what changed
 cd /root/agentteams-fs/shared/tasks/{task-id}/workspace

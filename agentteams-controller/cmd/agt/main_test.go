@@ -9,10 +9,8 @@ import (
 )
 
 func TestRootCommandUsesInvokedBinaryName(t *testing.T) {
-	for _, name := range []string{"agt", "hiclaw"} {
-		if got := newRootCommand(name).Use; got != name {
-			t.Fatalf("newRootCommand(%q).Use = %q", name, got)
-		}
+	if got := newRootCommand("agt").Use; got != "agt" {
+		t.Fatalf("newRootCommand(%q).Use = %q", "agt", got)
 	}
 }
 
@@ -471,7 +469,7 @@ metadata:
 spec:
   model: test
 `
-	tmpFile, err := os.CreateTemp("", "hiclaw-test-*.yaml")
+	tmpFile, err := os.CreateTemp("", "agentteams-test-*.yaml")
 	if err != nil {
 		t.Fatalf("create temp file: %v", err)
 	}

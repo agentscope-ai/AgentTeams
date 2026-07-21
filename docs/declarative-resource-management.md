@@ -299,17 +299,17 @@ A Team Leader is essentially a Worker container, but with key differences:
 The Team Leader's AGENTS.md is assembled in three layers, each managed independently:
 
 ```
-<!-- hiclaw-builtin-start -->
+<!-- agentteams-builtin-start -->
 [Builtin: Team Leader workspace rules, task flow, skills reference]
-<!-- hiclaw-builtin-end -->
+<!-- agentteams-builtin-end -->
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 - Upstream coordinator: @manager:{domain}
 - Team Admin: @admin:{domain}
 - Team: alpha-team
 - Team members: alpha-dev, alpha-qa
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 
 [User-provided content from spec.agents (if any)]
 ```

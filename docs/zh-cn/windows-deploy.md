@@ -428,7 +428,7 @@ $env:AGENTTEAMS_VERSION="v1.0.5"; Set-ExecutionPolicy Bypass -Scope Process -For
 Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1' -UseBasicParsing).Content } uninstall"
 ```
 
-> 与 `install/agentteams-install.sh uninstall` 一致：会移除 **`agentteams-controller`**、**`agentteams-manager`**、Worker 容器、可选 **`hiclaw-docker-proxy`**、数据卷、env、网络等。
+> 与 `install/agentteams-install.sh uninstall` 一致：会移除 **`agentteams-controller`**、**`agentteams-manager`**、Worker 容器、可选 **`agentteams-docker-proxy`**、数据卷、env、网络等。
 >
 > **说明**：部分版本卸载会保留 Manager 工作空间目录（`%USERPROFILE%\agentteams-manager`），如需彻底清理请手动删除。
 

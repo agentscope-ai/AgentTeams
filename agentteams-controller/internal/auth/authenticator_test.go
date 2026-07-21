@@ -11,20 +11,20 @@ import (
 )
 
 func TestParseSAUsername_Admin(t *testing.T) {
-	id, err := DefaultResourcePrefix.ParseSAUsername("system:serviceaccount:hiclaw:agentteams-admin")
+	id, err := DefaultResourcePrefix.ParseSAUsername("system:serviceaccount:agentteams:agentteams-admin")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id.Role != RoleAdmin || id.Username != "admin" {
 		t.Errorf("expected admin, got %+v", id)
 	}
-	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "agentteams-admin" {
+	if id.ServiceAccountNamespace != "agentteams" || id.ServiceAccountName != "agentteams-admin" {
 		t.Errorf("unexpected service account identity: %+v", id)
 	}
 }
 
 func TestParseSAUsername_Manager(t *testing.T) {
-	id, err := DefaultResourcePrefix.ParseSAUsername("system:serviceaccount:hiclaw:agentteams-manager")
+	id, err := DefaultResourcePrefix.ParseSAUsername("system:serviceaccount:agentteams:agentteams-manager")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,14 +34,14 @@ func TestParseSAUsername_Manager(t *testing.T) {
 }
 
 func TestParseSAUsername_Worker(t *testing.T) {
-	id, err := DefaultResourcePrefix.ParseSAUsername("system:serviceaccount:hiclaw:agentteams-worker-alice")
+	id, err := DefaultResourcePrefix.ParseSAUsername("system:serviceaccount:agentteams:agentteams-worker-alice")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id.Role != RoleWorker || id.Username != "alice" || id.WorkerName != "alice" {
 		t.Errorf("expected worker alice, got %+v", id)
 	}
-	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "agentteams-worker-alice" {
+	if id.ServiceAccountNamespace != "agentteams" || id.ServiceAccountName != "agentteams-worker-alice" {
 		t.Errorf("unexpected service account identity: %+v", id)
 	}
 }
@@ -60,8 +60,8 @@ func TestParseSAUsername_InvalidFormat(t *testing.T) {
 	for _, input := range []string{
 		"",
 		"admin",
-		"system:serviceaccount:hiclaw",
-		"system:serviceaccount:hiclaw:unknown-sa",
+		"system:serviceaccount:agentteams",
+		"system:serviceaccount:agentteams:unknown-sa",
 	} {
 		if _, err := DefaultResourcePrefix.ParseSAUsername(input); err == nil {
 			t.Errorf("expected error for %q", input)
@@ -76,29 +76,29 @@ func TestParseSAUsername_InvalidFormat(t *testing.T) {
 func TestParseSAUsername_CustomPrefix(t *testing.T) {
 	p := ResourcePrefix("teamB-")
 
-	id, err := p.ParseSAUsername("system:serviceaccount:hiclaw:teamB-worker-alice")
+	id, err := p.ParseSAUsername("system:serviceaccount:agentteams:teamB-worker-alice")
 	if err != nil {
 		t.Fatalf("expected teamB-worker-alice to parse: %v", err)
 	}
 	if id.Role != RoleWorker || id.Username != "alice" {
 		t.Errorf("expected worker alice, got %+v", id)
 	}
-	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "teamB-worker-alice" {
+	if id.ServiceAccountNamespace != "agentteams" || id.ServiceAccountName != "teamB-worker-alice" {
 		t.Errorf("unexpected service account identity: %+v", id)
 	}
 
-	if _, err := p.ParseSAUsername("system:serviceaccount:hiclaw:agentteams-worker-alice"); err == nil {
+	if _, err := p.ParseSAUsername("system:serviceaccount:agentteams:agentteams-worker-alice"); err == nil {
 		t.Errorf("default-prefixed SA must not match the teamB prefix")
 	}
 
-	id, err = p.ParseSAUsername("system:serviceaccount:hiclaw:teamB-manager")
+	id, err = p.ParseSAUsername("system:serviceaccount:agentteams:teamB-manager")
 	if err != nil {
 		t.Fatalf("expected teamB-manager to parse: %v", err)
 	}
 	if id.Role != RoleManager || id.Username != "manager" {
 		t.Errorf("expected manager, got %+v", id)
 	}
-	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "teamB-manager" {
+	if id.ServiceAccountNamespace != "agentteams" || id.ServiceAccountName != "teamB-manager" {
 		t.Errorf("unexpected service account identity: %+v", id)
 	}
 }
@@ -174,7 +174,7 @@ func TestAuthenticate_UsesLocalTokenReview(t *testing.T) {
 		review.Status = authenticationv1.TokenReviewStatus{
 			Authenticated: true,
 			User: authenticationv1.UserInfo{
-				Username: "system:serviceaccount:hiclaw:agentteams-worker-alice",
+				Username: "system:serviceaccount:agentteams:agentteams-worker-alice",
 			},
 		}
 		return true, review, nil
@@ -189,7 +189,7 @@ func TestAuthenticate_UsesLocalTokenReview(t *testing.T) {
 	if id.Role != RoleWorker || id.Username != "alice" {
 		t.Fatalf("expected worker alice, got %+v", id)
 	}
-	if id.ServiceAccountNamespace != "hiclaw" || id.ServiceAccountName != "agentteams-worker-alice" {
+	if id.ServiceAccountNamespace != "agentteams" || id.ServiceAccountName != "agentteams-worker-alice" {
 		t.Fatalf("unexpected identity metadata: %+v", id)
 	}
 }

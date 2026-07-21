@@ -35,7 +35,7 @@ type STSConfig struct {
 // accessresolver to turn the caller's CR-declared (or defaulted)
 // AccessEntries into a fully-resolved credprovider.IssueRequest, and
 // delegates to the credprovider.Client which forwards the request to
-// the hiclaw-credential-provider sidecar.
+// the agentteams-credential-provider sidecar.
 //
 // The service is agnostic to how the sidecar actually produces the
 // tokens: the production sidecar calls AssumeRoleWithOIDC, the

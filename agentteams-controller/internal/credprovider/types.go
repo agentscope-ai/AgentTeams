@@ -1,4 +1,4 @@
-// Package credprovider talks to the hiclaw-credential-provider sidecar to
+// Package credprovider talks to the agentteams-credential-provider sidecar to
 // obtain short-lived Alibaba Cloud STS tokens.
 //
 // The sidecar is the only component in the controller that is allowed to
@@ -10,7 +10,7 @@
 // triple via this package.
 //
 // The request contract matches the accessEntries model documented in
-// docs/design/hiclaw-credential-provider-arch.md §6.3: the caller sends
+// docs/design/agentteams-credential-provider-arch.md §6.3: the caller sends
 // an array of AccessEntry items whose scope is already fully resolved
 // (no bucketRef / gatewayRef, no ${self.*} templates). The sidecar
 // translates the entries into a provider-native inline policy and

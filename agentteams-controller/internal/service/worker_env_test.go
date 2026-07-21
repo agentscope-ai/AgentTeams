@@ -11,14 +11,14 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 	builder := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
 		MatrixDomain:  "matrix.example.com",
 		FSEndpoint:    "http://fs.example.com:9000",
-		FSBucket:      "hiclaw-fs",
+		FSBucket:      "agentteams-fs",
 		StoragePrefix: "teams/demo",
 		ControllerURL: "http://controller.example.com:8090",
 		AIGatewayURL:  "http://aigw.example.com:8080",
 		MatrixURL:     "http://matrix.example.com:8080",
 		Runtime:       "docker",
 		SkillsAPIURL:  "nacos://skills.example.com:8848/public",
-		NacosAuthType: "sts-hiclaw",
+		NacosAuthType: "sts-agentteams",
 	})
 
 	env := builder.Build("alice", &WorkerProvisionResult{
@@ -33,20 +33,20 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 		"AGENTTEAMS_FS_ACCESS_KEY":       "alice",
 		"AGENTTEAMS_FS_SECRET_KEY":       "secret",
 		"AGENTTEAMS_FS_ENDPOINT":         "http://fs.example.com:9000",
-		"AGENTTEAMS_FS_BUCKET":           "hiclaw-fs",
+		"AGENTTEAMS_FS_BUCKET":           "agentteams-fs",
 		"AGENTTEAMS_STORAGE_PREFIX":      "teams/demo",
 		"AGENTTEAMS_CONTROLLER_URL":      "http://controller.example.com:8090",
 		"AGENTTEAMS_AI_GATEWAY_URL":      "http://aigw.example.com:8080",
 		"AGENTTEAMS_MATRIX_URL":          "http://matrix.example.com:8080",
 		"AGENTTEAMS_MATRIX_DOMAIN":       "matrix.example.com",
 		"OPENCLAW_DISABLE_BONJOUR":       "1",
-		"OPENCLAW_MDNS_HOSTNAME":         "hiclaw-w-alice",
+		"OPENCLAW_MDNS_HOSTNAME":         "agentteams-w-alice",
 		"HOME":                           "/root/agentteams-fs/agents/alice",
 		"AGENTTEAMS_WORKER_GATEWAY_KEY":  "gateway-key",
 		"AGENTTEAMS_WORKER_MATRIX_TOKEN": "matrix-token",
 		"AGENTTEAMS_WORKER_ROOM_ID":      "!room123:matrix.example.com",
 		"SKILLS_API_URL":                 "nacos://skills.example.com:8848/public",
-		"NACOS_AUTH_TYPE":                "sts-hiclaw",
+		"NACOS_AUTH_TYPE":                "sts-agentteams",
 	} {
 		if got := env[key]; got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)
@@ -63,7 +63,7 @@ func TestWorkerEnvBuilderBuildManagerUsesConfiguredRuntimeAndBucket(t *testing.T
 	builder := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
 		MatrixDomain:         "matrix.example.com",
 		FSEndpoint:           "http://fs.example.com:9000",
-		FSBucket:             "hiclaw-fs",
+		FSBucket:             "agentteams-fs",
 		StoragePrefix:        "teams/demo",
 		ControllerURL:        "http://controller.example.com:8090",
 		AIGatewayURL:         "http://aigw.example.com:8080",
@@ -86,7 +86,7 @@ func TestWorkerEnvBuilderBuildManagerUsesConfiguredRuntimeAndBucket(t *testing.T
 		"AGENTTEAMS_MANAGER_PASSWORD":       "matrix-password",
 		"AGENTTEAMS_FS_ACCESS_KEY":          "manager",
 		"AGENTTEAMS_FS_SECRET_KEY":          "secret",
-		"AGENTTEAMS_FS_BUCKET":              "hiclaw-fs",
+		"AGENTTEAMS_FS_BUCKET":              "agentteams-fs",
 		"AGENTTEAMS_RUNTIME":                "docker",
 		"AGENTTEAMS_DEFAULT_WORKER_RUNTIME": "copaw",
 		"AGENTTEAMS_ADMIN_USER":             "admin",

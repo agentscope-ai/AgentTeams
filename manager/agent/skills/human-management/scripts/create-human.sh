@@ -12,7 +12,7 @@ set -e
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 log() {
-    local msg="[hiclaw $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    local msg="[agentteams $(date '+%Y-%m-%d %H:%M:%S')] $1"
     echo "${msg}"
     if [ -w /proc/1/fd/1 ]; then
         echo "${msg}" > /proc/1/fd/1

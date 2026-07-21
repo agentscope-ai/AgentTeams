@@ -202,7 +202,7 @@ make uninstall-embedded
 
 # Full wipe (uninstall + delete volumes)
 make uninstall-embedded && \
-  docker volume ls | grep hiclaw | awk '{print $2}' | xargs -r docker volume rm
+  docker volume ls | grep agentteams | awk '{print $2}' | xargs -r docker volume rm
 ```
 
 ### In-cluster mode (kind + Helm)
@@ -251,7 +251,7 @@ Port-forwards (for browser access / debugging):
 
 ```bash
 kubectl port-forward -n agentteams svc/higress-gateway    18080:80    &
-kubectl port-forward -n agentteams svc/hiclaw-element-web 18081:8080  &
+kubectl port-forward -n agentteams svc/agentteams-element-web 18081:8080  &
 kubectl port-forward -n agentteams pod/agentteams-manager     18799:18799 &
 kubectl port-forward -n agentteams pod/agentteams-worker-<name> 18112:8088 &
 ```
@@ -263,7 +263,7 @@ Purge Matrix room history (when the Manager gets stuck replaying a poisoned mess
 
 ```bash
 kubectl exec -n agentteams agentteams-manager -- curl -s -X POST \
-  "http://hiclaw-tuwunel.hiclaw.svc.cluster.local:6167/_synapse/admin/v1/purge_history/<room_id>" \
+  "http://agentteams-tuwunel.agentteams.svc.cluster.local:6167/_synapse/admin/v1/purge_history/<room_id>" \
   -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
   -d '{"delete_local_events": true}'
@@ -271,14 +271,14 @@ kubectl exec -n agentteams agentteams-manager -- curl -s -X POST \
 
 ### Code hot-reload (both modes)
 
-The `hiclaw-debug` skill provides scripts for fast iteration without rebuilding images:
+The `agentteams-debug` skill provides scripts for fast iteration without rebuilding images:
 
 | Change | Script | Effect |
 |---|---|---|
-| `copaw/src/copaw_worker/*.py` | `.claude/skills/hiclaw-debug/scripts/dev-sync-copaw.sh` | syncs Python source into running container |
-| `manager/agent/**` (SOUL.md, skills, etc.) | `.claude/skills/hiclaw-debug/scripts/dev-sync-agent.sh` | syncs agent content |
+| `copaw/src/copaw_worker/*.py` | `.claude/skills/agentteams-debug/scripts/dev-sync-copaw.sh` | syncs Python source into running container |
+| `manager/agent/**` (SOUL.md, skills, etc.) | `.claude/skills/agentteams-debug/scripts/dev-sync-agent.sh` | syncs agent content |
 
-Full workflow: [`.claude/skills/hiclaw-debug/SKILL.md`](../.claude/skills/hiclaw-debug/SKILL.md).
+Full workflow: [`.claude/skills/agentteams-debug/SKILL.md`](../.claude/skills/agentteams-debug/SKILL.md).
 
 **Image rebuild is required when changing:** `copaw/Dockerfile`, `copaw/pyproject.toml`, `copaw/scripts/`, `manager/Dockerfile.copaw`, `manager/scripts/init/`, `copaw/src/matrix/` (**both images**), or `openclaw-base/`.
 
@@ -394,16 +394,16 @@ These make healthy runs look broken or sick runs look healthy — learn them bef
 
 ### Dev tooling
 
-The `hiclaw-debug` skill (`.claude/skills/hiclaw-debug/`) bundles the scripts that match this layout:
+The `agentteams-debug` skill (`.claude/skills/agentteams-debug/`) bundles the scripts that match this layout:
 
 | Task | Script / doc |
 |---|---|
-| Sync Python edits into a running Worker without rebuilding | `.claude/skills/hiclaw-debug/scripts/dev-sync-copaw.sh` |
-| Sync `manager/agent/**` edits into a running Manager | `.claude/skills/hiclaw-debug/scripts/dev-sync-agent.sh` |
-| List / inspect CoPaw sessions | `.claude/skills/hiclaw-debug/scripts/copaw-session-viewer.py --list` |
+| Sync Python edits into a running Worker without rebuilding | `.claude/skills/agentteams-debug/scripts/dev-sync-copaw.sh` |
+| Sync `manager/agent/**` edits into a running Manager | `.claude/skills/agentteams-debug/scripts/dev-sync-agent.sh` |
+| List / inspect CoPaw sessions | `.claude/skills/agentteams-debug/scripts/copaw-session-viewer.py --list` |
 | Show only thinking blocks from recent turns | `copaw-session-viewer.py --thinking --last 20` |
-| Worker workspace layout reference | `.claude/skills/hiclaw-debug/references/worker-directory-structure.md` |
-| End-to-end workflow | `.claude/skills/hiclaw-debug/SKILL.md` |
+| Worker workspace layout reference | `.claude/skills/agentteams-debug/references/worker-directory-structure.md` |
+| End-to-end workflow | `.claude/skills/agentteams-debug/SKILL.md` |
 
 CoPaw source itself lives outside this repo as a sibling checkout on branch `feat/lite-copaw-worker-v1.0.0` (clone path depends on developer setup). Read its `AGENTS.md` before assuming upstream APIs — the fork has diverged from the public release.
 
@@ -428,7 +428,7 @@ Runtime pairings:
 
 1. **Every edit under `copaw/src/matrix/` requires rebuilding both the Worker and the Manager-CoPaw image** — the channel is vendored into both. Rebuilding only one causes silent behavior drift between Manager and Worker.
 
-2. **Local base image variables must be set in pairs.** When building from a locally-modified `openclaw-base`, always set both `OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base` and `OPENCLAW_BASE_VERSION=latest`. Setting only one pulls the remote registry's `:latest` tag and silently uses the wrong base.
+2. **Local base image variables must be set in pairs.** When building from a locally-modified `openclaw-base`, always set both `OPENCLAW_BASE_IMAGE=agentteams/openclaw-base` and `OPENCLAW_BASE_VERSION=latest`. Setting only one pulls the remote registry's `:latest` tag and silently uses the wrong base.
 
 3. **`bridge()` has runtime-level side effects.** Beyond writing three JSON files it sets env vars and monkey-patches upstream CoPaw modules. Calling it twice in the same process works (it is idempotent by design), but tests that simulate multiple workers in-process must reset `COPAW_WORKING_DIR` and reload `copaw.constant` / `copaw.providers.store` between runs.
 
@@ -456,7 +456,7 @@ Runtime pairings:
 Any change that affects the contents of a built image — i.e. modifications under `copaw/` or `manager/Dockerfile.copaw` (or anything it `COPY`s in) — **must** be recorded in [`changelog/current.md`](../changelog/current.md) before committing. Format:
 
 ```
-- type(scope): description ([commit_hash](https://github.com/higress-group/hiclaw/commit/commit_hash))
+- type(scope): description ([commit_hash](https://github.com/agentscope-ai/AgentTeams/commit/commit_hash))
 ```
 
 This matches the repo-wide policy in the root AGENTS.md.

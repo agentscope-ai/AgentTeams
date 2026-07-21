@@ -59,4 +59,4 @@ worker/
 | `AGENTTEAMS_FS_ACCESS_KEY` | Yes | MinIO access key |
 | `AGENTTEAMS_FS_SECRET_KEY` | Yes | MinIO secret key |
 
-Runtime scripts use `AGENTTEAMS_MATRIX_URL` and `AGENTTEAMS_AI_GATEWAY_URL` as the main contract. Existing `AGENTTEAMS_*` inputs are still accepted by the shared bootstrap for compatibility with older controller/Helm releases.
+Runtime scripts use the `AGENTTEAMS_*` variables above as their only platform environment contract.

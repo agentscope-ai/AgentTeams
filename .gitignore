@@ -1,5 +1,5 @@
 # Environment and secrets
-hiclaw-manager.env
+agentteams-manager.env
 *.env
 
 # Replay logs (contain conversation data, may include secrets)
@@ -44,7 +44,7 @@ pnpm-lock.yaml
 # Compiled binaries (build outputs of `make build` in agentteams-controller/);
 # the multi-stage Dockerfiles build from source, so never commit these.
 agentteams-controller/controller
-agentteams-controller/hiclaw
+agentteams-controller/agt
 agentteams-controller/bin/
 
 # Build-time agent templates (copied from manager/agent/ during docker build)

@@ -60,11 +60,11 @@ else
     log_fail "kube-apiserver process is not running"
 fi
 
-HICLAW_HELP=$(exec_in_agent hiclaw --help 2>&1 | head -1 || echo "")
-if echo "${HICLAW_HELP}" | grep -qi "agentteams\|hiclaw\|declarative\|resource"; then
-    log_pass "hiclaw CLI is available (in agent container)"
+AGENTTEAMS_HELP=$(exec_in_agent agt --help 2>&1 | head -1 || echo "")
+if echo "${AGENTTEAMS_HELP}" | grep -qi "agentteams\|declarative\|resource"; then
+    log_pass "agt CLI is available (in agent container)"
 else
-    log_fail "hiclaw CLI is not available (in agent container)"
+    log_fail "agt CLI is not available (in agent container)"
 fi
 
 # ============================================================
@@ -79,7 +79,7 @@ WORK_DIR="/tmp/agentteams-test-${TEST_WORKER}"
 # defaults to openclaw on the controller side (defaultRuntime("") returns
 # RuntimeOpenClaw), which makes the "copaw shard" run a hidden openclaw
 # worker -- defeating the point of the matrix expansion.
-TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 exec_in_manager bash -c "
     mkdir -p ${WORK_DIR}/package/config ${WORK_DIR}/package/skills/test-skill

@@ -145,9 +145,9 @@ def docker_exec(container: str, cmd: str) -> str:
     return result.stdout
 
 
-def list_hiclaw_containers() -> list[str]:
+def list_agentteams_containers() -> list[str]:
     names: list[str] = []
-    for prefix in ("agentteams-", "hiclaw-"):
+    for prefix in ("agentteams-",):
         result = subprocess.run(
             ["docker", "ps", "--format", "{{.Names}}", "--filter", f"name={prefix}"],
             capture_output=True, text=True, timeout=10,
@@ -261,18 +261,18 @@ def export_matrix_messages(out_dir: Path, since_epoch: float, redact: bool,
                            messages_only: bool) -> tuple[int, int]:
     """Export Matrix messages. Returns (rooms_exported, message_count)."""
     env_path = env_file or os.path.expanduser("~/agentteams-manager.env")
-    hiclaw_env = load_env_file(env_path)
+    agentteams_env = load_env_file(env_path)
 
     if not homeserver:
-        if not hiclaw_env:
+        if not agentteams_env:
             print(f"  [matrix] Cannot find {env_path}, skipping Matrix export")
             return 0, 0
-        port = hiclaw_env.get("AGENTTEAMS_PORT_GATEWAY", "18080")
+        port = agentteams_env.get("AGENTTEAMS_PORT_GATEWAY", "18080")
         homeserver = f"http://127.0.0.1:{port}"
 
     if not token:
         # Use Manager token — Manager is in every room (DM, Worker, Project)
-        manager_password = hiclaw_env.get("AGENTTEAMS_MANAGER_PASSWORD", "")
+        manager_password = agentteams_env.get("AGENTTEAMS_MANAGER_PASSWORD", "")
         if manager_password:
             try:
                 token = matrix_login(homeserver, "manager", manager_password)
@@ -281,8 +281,8 @@ def export_matrix_messages(out_dir: Path, since_epoch: float, redact: bool,
 
         # Fallback to admin token if Manager login failed
         if not token:
-            admin_user = hiclaw_env.get("AGENTTEAMS_ADMIN_USER", "admin")
-            admin_password = hiclaw_env.get("AGENTTEAMS_ADMIN_PASSWORD", "")
+            admin_user = agentteams_env.get("AGENTTEAMS_ADMIN_USER", "admin")
+            admin_password = agentteams_env.get("AGENTTEAMS_ADMIN_PASSWORD", "")
             if not admin_password:
                 print(f"  [matrix] No usable credentials found, skipping Matrix export")
                 return 0, 0
@@ -643,7 +643,7 @@ def export_hermes_sessions(container: str, sessions_dir: str, since_epoch: float
 def export_agent_sessions(out_dir: Path, since_epoch: float, redact: bool,
                           container_filter: str | None) -> tuple[int, int]:
     """Export agent sessions from all containers. Returns (session_count, event_count)."""
-    containers = list_hiclaw_containers()
+    containers = list_agentteams_containers()
     if container_filter:
         containers = [c for c in containers if container_filter in c]
 

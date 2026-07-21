@@ -30,7 +30,7 @@ The Skills CLI (`skills`) is the package manager for the open agent skills ecosy
 Always use this fixed script path for this skill. Do not rely on a relative `scripts/` path from your current directory:
 
 ```bash
-FIND_SKILLS_SCRIPT="$HOME/skills/find-skills/scripts/hiclaw-find-skill.sh"
+FIND_SKILLS_SCRIPT="$HOME/skills/find-skills/scripts/agentteams-find-skill.sh"
 ```
 
 **Key commands:**
@@ -77,7 +77,7 @@ For example:
 The command will return results like:
 
 ```
-Install with /root/skills/find-skills/scripts/hiclaw-find-skill.sh install <skill>
+Install with /root/skills/find-skills/scripts/agentteams-find-skill.sh install <skill>
 
 vercel-react-best-practices
 └ React and Next.js performance guidance
@@ -169,4 +169,4 @@ skills init my-xyz-skill
 
 ## Skill Resources
 
-`$HOME/skills/find-skills/scripts/hiclaw-find-skill.sh` is the resource that belongs to this skill. Always invoke that exact path (or the `FIND_SKILLS_SCRIPT` variable above) instead of `scripts/hiclaw-find-skill.sh`, so your command does not depend on the current directory.
+`$HOME/skills/find-skills/scripts/agentteams-find-skill.sh` is the resource that belongs to this skill. Always invoke that exact path (or the `FIND_SKILLS_SCRIPT` variable above) instead of `scripts/agentteams-find-skill.sh`, so your command does not depend on the current directory.

@@ -85,7 +85,7 @@ YAMLEOF
 APPLY_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" 2>&1)
 
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
-    log_pass "Human YAML applied via hiclaw CLI"
+    log_pass "Human YAML applied via agt CLI"
 else
     log_fail "Human YAML apply failed: ${APPLY_OUTPUT}"
 fi
@@ -180,7 +180,7 @@ YAMLEOF
 
 APPLY_TEAM_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
 if echo "${APPLY_TEAM_OUTPUT}" | grep -q "created\|configured"; then
-    log_pass "Team YAML applied via hiclaw CLI"
+    log_pass "Team YAML applied via agt CLI"
 else
     log_fail "Team YAML apply failed: ${APPLY_TEAM_OUTPUT}"
 fi
@@ -267,11 +267,11 @@ fi
 log_section "Verify Team Context Block"
 
 W1_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/AGENTS.md" 2>/dev/null || echo "")
-W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/hiclaw-team-context-start/,/hiclaw-team-context-end/p')
+W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
 assert_contains "${W1_CTX}" "Team Admin" "Worker team-context mentions Team Admin"
 
 LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null || echo "")
-LEADER_CTX=$(echo "${LEADER_AGENTS}" | sed -n '/hiclaw-team-context-start/,/hiclaw-team-context-end/p')
+LEADER_CTX=$(echo "${LEADER_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
 assert_contains "${LEADER_CTX}" "Team Admin" "Leader team-context mentions Team Admin"
 
 # ============================================================

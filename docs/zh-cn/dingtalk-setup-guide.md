@@ -255,7 +255,7 @@ vi /root/agentteams-fs/agents/fbi-claw/openclaw.json
   "models": {
     "mode": "merge",
     "providers": {
-      "hiclaw-gateway": {
+      "agentteams-gateway": {
         "baseUrl": "http://aigw-local.agentteams.io:8080/v1",
         "apiKey": "your-api-key",
         "api": "openai-completions",

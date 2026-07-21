@@ -73,7 +73,6 @@ func TestMetricsEndpointIncludesAgentTeamsAndRuntimeMetrics(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"hiclaw_reconcile_total",
 		"agentteams_team_migration_phase_total",
 		"agentteams_team_migration_failures_total",
 		"team=\"",

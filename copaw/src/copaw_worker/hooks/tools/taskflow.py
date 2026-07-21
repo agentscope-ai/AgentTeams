@@ -145,7 +145,6 @@ def _require_team_leader_assignment_room(room_id: str) -> None:
 def _current_actor() -> str | None:
     configured = (
         os.getenv("AGENTTEAMS_MATRIX_USER_ID")
-        or os.getenv("AGENTTEAMS_MATRIX_USER_ID")
         or os.getenv("COPAW_MATRIX_USER_ID")
     )
     if configured:

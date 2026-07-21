@@ -117,7 +117,7 @@ YAMLEOF
 
 APPLY_OUTPUT=$(exec_in_agent agt apply -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>&1)
 if echo "${APPLY_OUTPUT}" | grep -q "created\|configured"; then
-    log_pass "Team YAML applied via hiclaw CLI"
+    log_pass "Team YAML applied via agt CLI"
 else
     log_fail "Team YAML apply failed: ${APPLY_OUTPUT}"
 fi
@@ -215,11 +215,11 @@ LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/
 assert_not_empty "${LEADER_AGENTS}" "Leader AGENTS.md exists in MinIO"
 
 # Builtin markers
-assert_contains "${LEADER_AGENTS}" "hiclaw-builtin-start" "Leader AGENTS.md has builtin-start"
-assert_contains "${LEADER_AGENTS}" "hiclaw-builtin-end" "Leader AGENTS.md has builtin-end"
+assert_contains "${LEADER_AGENTS}" "agentteams-builtin-start" "Leader AGENTS.md has builtin-start"
+assert_contains "${LEADER_AGENTS}" "agentteams-builtin-end" "Leader AGENTS.md has builtin-end"
 
 # Team-context: upstream = Manager
-assert_contains "${LEADER_AGENTS}" "hiclaw-team-context-start" "Leader has team-context block"
+assert_contains "${LEADER_AGENTS}" "agentteams-team-context-start" "Leader has team-context block"
 assert_contains "${LEADER_AGENTS}" "@manager:" "Leader coordination: upstream is Manager"
 assert_contains "${LEADER_AGENTS}" "Upstream" "Leader coordination: has Upstream label"
 assert_contains "${LEADER_AGENTS}" "${TEST_TEAM}" "Leader coordination: references team name"
@@ -233,15 +233,15 @@ W1_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/AGENTS.m
 assert_not_empty "${W1_AGENTS}" "Worker 1 AGENTS.md exists in MinIO"
 
 # Builtin markers
-assert_contains "${W1_AGENTS}" "hiclaw-builtin-start" "Worker 1 AGENTS.md has builtin-start"
-assert_contains "${W1_AGENTS}" "hiclaw-builtin-end" "Worker 1 AGENTS.md has builtin-end"
+assert_contains "${W1_AGENTS}" "agentteams-builtin-start" "Worker 1 AGENTS.md has builtin-start"
+assert_contains "${W1_AGENTS}" "agentteams-builtin-end" "Worker 1 AGENTS.md has builtin-end"
 
 # Team-context: coordinator = Leader (NOT Manager)
-assert_contains "${W1_AGENTS}" "hiclaw-team-context-start" "Worker 1 has team-context block"
+assert_contains "${W1_AGENTS}" "agentteams-team-context-start" "Worker 1 has team-context block"
 assert_contains "${W1_AGENTS}" "@${TEST_LEADER}:" "Worker 1 coordinator is Team Leader"
 
 # Should NOT reference Manager as coordinator
-W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/hiclaw-team-context-start/,/hiclaw-team-context-end/p')
+W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
 if echo "${W1_CTX}" | grep -q "@manager:"; then
     log_fail "Worker 1 team-context references Manager (should only reference Leader)"
 else

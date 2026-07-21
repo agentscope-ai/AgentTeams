@@ -6,7 +6,7 @@ on:
       - 'helm/**'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
-      - 'tests/check-helm-rename-compat.sh'
+      - 'tests/check-helm-agentteams.sh'
   workflow_dispatch: ~
 
 jobs:
@@ -35,4 +35,4 @@ jobs:
 
       - name: Template dry-run
         run: |
-          bash tests/check-helm-rename-compat.sh
+          bash tests/check-helm-agentteams.sh

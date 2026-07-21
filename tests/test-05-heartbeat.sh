@@ -47,7 +47,7 @@ log_section "Trigger Heartbeat"
 
 MANAGER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
 MANAGER_RUNTIME=$(docker exec "${MANAGER_CONTAINER}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
-                  docker exec "${MANAGER_CONTAINER}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+                  docker exec "${MANAGER_CONTAINER}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
 log_info "Triggering heartbeat (runtime=${MANAGER_RUNTIME})..."
 
 case "${MANAGER_RUNTIME}" in

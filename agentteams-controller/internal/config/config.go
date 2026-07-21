@@ -31,7 +31,7 @@ type Config struct {
 	SkillsDir       string
 
 	// ResourcePrefix is the tenant-level prefix used to derive Pod/SA/label/
-	// session names created by this controller. Default "hiclaw-". Set via
+	// session names created by this controller. Default "agentteams-". Set via
 	// AGENTTEAMS_RESOURCE_PREFIX to isolate multiple AgentTeams instances that share
 	// a K8s namespace (different Helm releases). Downstream names are all
 	// derived from this value — see internal/auth.ResourcePrefix for the
@@ -40,7 +40,7 @@ type Config struct {
 	// CMS service name, or install-script hardcoded names.
 	ResourcePrefix string
 	// ResourceAutoPrefix controls whether controller should auto-derive
-	// resource/container prefixes. When false, default hiclaw-* prefixes are
+	// resource/container prefixes. When false, default agentteams-* prefixes are
 	// disabled unless explicit AGENTTEAMS_PROXY_CONTAINER_PREFIX is provided.
 	// Set via AGENTTEAMS_RESOURCE_AUTOPREFIX. Default true.
 	ResourceAutoPrefix bool
@@ -84,7 +84,7 @@ type Config struct {
 	WorkerDepsMountAuthType   string
 	WorkerDepsMountRoleName   string
 
-	// Credential provider sidecar (hiclaw-credential-provider) used by the
+	// Credential provider sidecar (agentteams-credential-provider) used by the
 	// controller to obtain STS tokens for its own cloud SDK clients (APIG,
 	// OSS) and for downstream worker credential issuance. Empty when the
 	// sidecar is not deployed (e.g. self-hosted higress+minio stack).
@@ -233,7 +233,7 @@ type WorkerEnvDefaults struct {
 
 	// NacosAuthType is propagated to workers as NACOS_AUTH_TYPE.
 	// Sourced from NACOS_AUTH_TYPE.
-	// Typical value: "sts-hiclaw".
+	// Typical value: "sts-agentteams".
 	NacosAuthType string
 }
 

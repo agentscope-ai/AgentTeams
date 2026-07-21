@@ -1,17 +1,17 @@
 ---
-name: hiclaw-migrate
-description: Analyze current OpenClaw setup and generate a migration package (ZIP) for importing into HiClaw as a managed Worker
+name: agentteams-migrate
+description: Analyze current OpenClaw setup and generate a migration package (ZIP) for importing into AgentTeams as a managed Worker
 ---
 
-# HiClaw Migration Skill
+# AgentTeams Migration Skill
 
-This skill guides you through migrating your current OpenClaw instance into a HiClaw managed Worker. You need to understand HiClaw's architecture to produce a correct migration package.
+This skill guides you through migrating your current OpenClaw instance into a AgentTeams managed Worker. You need to understand AgentTeams's architecture to produce a correct migration package.
 
-## HiClaw Worker Architecture (Read This First)
+## AgentTeams Worker Architecture (Read This First)
 
-HiClaw is a multi-agent system where a **Manager** orchestrates multiple **Workers**:
+AgentTeams is a multi-agent system where a **Manager** orchestrates multiple **Workers**:
 
-- Workers run in Docker containers based on `hiclaw/worker-agent` image (Ubuntu 22.04 + Node.js 22 + OpenClaw + mcporter + mc)
+- Workers run in Docker containers based on `agentteams/worker-agent` image (Ubuntu 22.04 + Node.js 22 + OpenClaw + mcporter + mc)
 - Workers communicate via **Matrix** (not Discord/Slack) — each Worker has a dedicated 3-party room (Human + Manager + Worker)
 - All configuration is stored in **MinIO** (S3-compatible), not local filesystem
 - Workers are **stateless** — containers can be recreated at any time, all state lives in MinIO
@@ -19,16 +19,16 @@ HiClaw is a multi-agent system where a **Manager** orchestrates multiple **Worke
 
 ### AGENTS.md Builtin-Merge System
 
-HiClaw uses a marker system in AGENTS.md to separate managed content from user content:
+AgentTeams uses a marker system in AGENTS.md to separate managed content from user content:
 
 ```markdown
-<!-- hiclaw-builtin-start -->
-> ⚠️ **DO NOT EDIT** this section. It is managed by HiClaw and will be automatically
+<!-- agentteams-builtin-start -->
+> ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically
 > replaced on upgrade.
 
-(HiClaw's Worker workspace rules, communication protocol, task execution rules, etc.)
+(AgentTeams's Worker workspace rules, communication protocol, task execution rules, etc.)
 
-<!-- hiclaw-builtin-end -->
+<!-- agentteams-builtin-end -->
 
 (Your custom content goes here — this part survives upgrades)
 ```
@@ -39,7 +39,7 @@ The builtin section (between the markers) is injected by the import script and c
 - Task execution workflow
 - Memory and session management rules
 
-**Your migrated AGENTS.md content must go AFTER the `<!-- hiclaw-builtin-end -->` marker.** The import script handles the marker injection — you only need to produce the user content portion.
+**Your migrated AGENTS.md content must go AFTER the `<!-- agentteams-builtin-end -->` marker.** The import script handles the marker injection — you only need to produce the user content portion.
 
 ### What the Worker Base Image Already Has
 
@@ -48,11 +48,11 @@ These tools are pre-installed — do NOT include them in the Dockerfile:
 
 ### What Changes for Your OpenClaw
 
-| Before (standalone) | After (HiClaw Worker) |
+| Before (standalone) | After (AgentTeams Worker) |
 |---------------------|----------------------|
 | Discord/Slack channels | Matrix rooms |
 | Local `~/.openclaw/` config | MinIO-synced config |
-| Self-managed API keys | HiClaw AI Gateway with per-worker credentials |
+| Self-managed API keys | AgentTeams AI Gateway with per-worker credentials |
 | Self-managed cron jobs | Manager-coordinated scheduled tasks |
 | Full system access | Scoped MinIO permissions, sandboxed container |
 | Self-managed skills | Manager-controlled builtin skills + your custom skills in `skills/` |
@@ -64,7 +64,7 @@ These tools are pre-installed — do NOT include them in the Dockerfile:
 Run the analysis script to detect what system tools your setup depends on:
 
 ```bash
-bash <SKILL_DIR>/scripts/analyze.sh --state-dir ~/.openclaw --output /tmp/hiclaw-migration
+bash <SKILL_DIR>/scripts/analyze.sh --state-dir ~/.openclaw --output /tmp/agentteams-migration
 ```
 
 Review the output `tool-analysis.json`. It lists:
@@ -82,11 +82,11 @@ This is the most important step and requires your intelligence — it cannot be 
 Read your current AGENTS.md (at `~/.openclaw/workspace/AGENTS.md` or your configured workspace). Then produce a new version that:
 
 1. **KEEP**: Your role definition, domain expertise, behavioral guidelines, custom workflows, tool usage patterns
-2. **REMOVE or DO NOT DUPLICATE**: The following topics are already covered in HiClaw's builtin section (injected automatically by the import script). If your AGENTS.md has similar content, **remove it** to avoid conflicts and redundancy:
+2. **REMOVE or DO NOT DUPLICATE**: The following topics are already covered in AgentTeams's builtin section (injected automatically by the import script). If your AGENTS.md has similar content, **remove it** to avoid conflicts and redundancy:
    - **Every Session** — session startup routine (read SOUL.md, read memory)
    - **Memory** — daily notes (`memory/YYYY-MM-DD.md`), long-term memory (`MEMORY.md`), "write it down" rules
    - **Skills** — builtin skills and custom skills coexist in `skills/`, MCP tools via mcporter
-   - **Communication** — Matrix room structure, @mention protocol, when to speak, NO_REPLY usage, file sync via `hiclaw-sync`
+   - **Communication** — Matrix room structure, @mention protocol, when to speak, NO_REPLY usage, file sync via `agentteams-sync`
    - **Task Execution** — task workflow (sync → read spec → create plan → execute → write results → push to MinIO → @mention Manager)
    - **Task Directory Rules** — `spec.md`, `plan.md`, `result.md`, intermediate artifacts, `base/` directory
    - **Project Participation** — project rooms, project plan, git commit conventions
@@ -114,12 +114,12 @@ Structure the output as:
 (list of custom tools available in your image, usage notes)
 
 ## Additional Instructions
-(any other behavioral guidelines that don't conflict with HiClaw's builtin rules)
+(any other behavioral guidelines that don't conflict with AgentTeams's builtin rules)
 ```
 
 ### Step 3: Adapt SOUL.md
 
-Your SOUL.md needs the HiClaw AI Identity section. Produce:
+Your SOUL.md needs the AgentTeams AI Identity section. Produce:
 
 ```markdown
 # <worker-name> - Worker Agent
@@ -147,7 +147,7 @@ Your SOUL.md needs the HiClaw AI Identity section. Produce:
 If you have cron jobs (`~/.openclaw/cron/jobs.json`), they need adaptation:
 - Remove `delivery` configuration (Discord channel targets, etc.)
 - Keep `schedule` (cron expression + timezone) and `payload.agentTurn` content (the actual task description)
-- These will NOT run as OpenClaw cron jobs in the Worker. Instead, the import script includes them in the DM message to the Manager, who will create corresponding HiClaw **scheduled tasks** — the Manager periodically checks and @mentions the Worker to execute them
+- These will NOT run as OpenClaw cron jobs in the Worker. Instead, the import script includes them in the DM message to the Manager, who will create corresponding AgentTeams **scheduled tasks** — the Manager periodically checks and @mentions the Worker to execute them
 
 ### Step 5: Generate the ZIP Package
 
@@ -157,7 +157,7 @@ Once you have reviewed and adapted all content, run:
 bash <SKILL_DIR>/scripts/generate-zip.sh \
     --name <suggested-worker-name> \
     --state-dir ~/.openclaw \
-    --output /tmp/hiclaw-migration
+    --output /tmp/agentteams-migration
 ```
 
 **Before running**, make sure your adapted files are in place:
@@ -169,8 +169,8 @@ bash <SKILL_DIR>/scripts/generate-zip.sh \
 Check the generated ZIP:
 
 ```bash
-ls -la /tmp/hiclaw-migration/migration-*.zip
-unzip -l /tmp/hiclaw-migration/migration-*.zip
+ls -la /tmp/agentteams-migration/migration-*.zip
+unzip -l /tmp/agentteams-migration/migration-*.zip
 ```
 
 Verify:
@@ -179,12 +179,12 @@ Verify:
 - `config/AGENTS.md` contains only your custom content (no Discord/Slack references, no communication protocol rules)
 - `config/SOUL.md` has the AI Identity section
 
-Tell the user the ZIP path. They will download the import script on the HiClaw host and run:
+Tell the user the ZIP path. They will download the import script on the AgentTeams host and run:
 
 **Linux/macOS:**
 ```bash
 # Download the import script
-curl -sSL https://higress.ai/hiclaw/import.sh -o agentteams-import.sh
+curl -sSL https://higress.ai/agentteams/import.sh -o agentteams-import.sh
 chmod +x agentteams-import.sh
 
 # Import the worker
@@ -194,7 +194,7 @@ chmod +x agentteams-import.sh
 **Windows (PowerShell):**
 ```powershell
 # Download the import script
-Invoke-WebRequest -Uri https://higress.ai/hiclaw/import.ps1 -OutFile agentteams-import.ps1
+Invoke-WebRequest -Uri https://higress.ai/agentteams/import.ps1 -OutFile agentteams-import.ps1
 
 # Import the worker
 .\agentteams-import.ps1 worker --name <worker-name> --zip <path-to-zip>
@@ -211,7 +211,7 @@ bash <SKILL_DIR>/scripts/analyze.sh [--state-dir <path>] [--output <dir>]
 ```
 
 - `--state-dir`: OpenClaw state directory (default: `~/.openclaw`)
-- `--output`: Output directory (default: `/tmp/hiclaw-migration`)
+- `--output`: Output directory (default: `/tmp/agentteams-migration`)
 
 ### generate-zip.sh
 
@@ -224,14 +224,14 @@ bash <SKILL_DIR>/scripts/generate-zip.sh --name <name> [--state-dir <path>] [--o
 - `--name`: Suggested worker name (default: hostname)
 - `--state-dir`: OpenClaw state directory (default: `~/.openclaw`)
 - `--analysis`: Path to tool-analysis.json (default: auto-detected in output dir)
-- `--output`: Output directory (default: `/tmp/hiclaw-migration`)
-- `--base-image`: HiClaw Worker base image (default: `hiclaw/worker-agent:latest`)
+- `--output`: Output directory (default: `/tmp/agentteams-migration`)
+- `--base-image`: AgentTeams Worker base image (default: `agentteams/worker-agent:latest`)
 
 ## What Is NOT Migrated
 
-- **openclaw.json**: Entirely regenerated by the import script from HiClaw's template. Your current channel config (Discord, Slack, etc.), auth profiles, model providers, gateway settings are all discarded. The new openclaw.json is pre-configured for Matrix, HiClaw AI Gateway, and per-worker credentials
-- **Auth profiles / API keys**: HiClaw uses its own AI Gateway with per-worker credentials
+- **openclaw.json**: Entirely regenerated by the import script from AgentTeams's template. Your current channel config (Discord, Slack, etc.), auth profiles, model providers, gateway settings are all discarded. The new openclaw.json is pre-configured for Matrix, AgentTeams AI Gateway, and per-worker credentials
+- **Auth profiles / API keys**: AgentTeams uses its own AI Gateway with per-worker credentials
 - **Device identity**: New identity is generated during Worker creation
-- **Sessions**: Conversation history is not transferred (sessions reset daily in HiClaw)
-- **Extensions/Plugins**: HiClaw Workers use a different plugin system; only custom skills are migrated
-- **Discord/Slack channel config**: HiClaw uses Matrix for all communication (handled by the new openclaw.json)
+- **Sessions**: Conversation history is not transferred (sessions reset daily in AgentTeams)
+- **Extensions/Plugins**: AgentTeams Workers use a different plugin system; only custom skills are migrated
+- **Discord/Slack channel config**: AgentTeams uses Matrix for all communication (handled by the new openclaw.json)

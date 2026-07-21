@@ -28,8 +28,8 @@ type TeamWorkerInfo struct {
 }
 
 const (
-	teamCtxStart = "<!-- hiclaw-team-context-start -->"
-	teamCtxEnd   = "<!-- hiclaw-team-context-end -->"
+	teamCtxStart = "<!-- agentteams-team-context-start -->"
+	teamCtxEnd   = "<!-- agentteams-team-context-end -->"
 )
 
 // InjectCoordinationContext inserts the team-context block into AGENTS.md content.

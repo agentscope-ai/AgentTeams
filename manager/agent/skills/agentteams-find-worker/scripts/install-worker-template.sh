@@ -147,7 +147,7 @@ if [[ "$DRY_RUN" == true ]]; then
         --arg skills "$SKILLS" \
         --arg mcp_servers "$MCP_SERVERS" \
         --arg runtime "$RUNTIME" \
-        --argjson hiclaw_args "$(printf '%s\n' "${AGENTTEAMS_ARGS[@]}" | jq -R . | jq -s .)" \
+        --argjson agentteams_args "$(printf '%s\n' "${AGENTTEAMS_ARGS[@]}" | jq -R . | jq -s .)" \
         '{
             worker_name: $worker_name,
             template_name: (if $template_name == "" then null else $template_name end),
@@ -158,9 +158,9 @@ if [[ "$DRY_RUN" == true ]]; then
                 mcp_servers: (if $mcp_servers == "" then null else ($mcp_servers | split(",")) end),
                 runtime: (if $runtime == "" then null else $runtime end)
             },
-            hiclaw_args: $hiclaw_args
+            agentteams_args: $agentteams_args
         }'
     exit 0
 fi
 
-exec hiclaw "${AGENTTEAMS_ARGS[@]}"
+exec agentteams "${AGENTTEAMS_ARGS[@]}"

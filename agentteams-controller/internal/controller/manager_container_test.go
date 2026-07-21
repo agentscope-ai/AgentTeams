@@ -72,7 +72,7 @@ func captureManagerCreateRequest(t *testing.T, mgr *v1beta1.Manager, defaults *b
 func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 	m := &v1beta1.Manager{}
 	m.Name = "default"
-	m.Namespace = "hiclaw"
+	m.Namespace = "agentteams"
 	m.ObjectMeta.Labels = map[string]string{
 		"owner": "alice",
 		"tier":  "metadata-tier",
@@ -110,7 +110,7 @@ func TestCreateManagerContainer_MergesMetadataAndSpecLabels(t *testing.T) {
 func TestCreateManagerContainer_SystemLabelsOverrideUserLabels(t *testing.T) {
 	m := &v1beta1.Manager{}
 	m.Name = "default"
-	m.Namespace = "hiclaw"
+	m.Namespace = "agentteams"
 	m.ObjectMeta.Labels = map[string]string{
 		v1beta1.LabelController: "metadata-attacker",
 		"app":                   "evil-app",
@@ -144,7 +144,7 @@ func TestCreateManagerContainer_SystemLabelsOverrideUserLabels(t *testing.T) {
 func TestCreateManagerContainer_NilLabelsSafe(t *testing.T) {
 	m := &v1beta1.Manager{}
 	m.Name = "default"
-	m.Namespace = "hiclaw"
+	m.Namespace = "agentteams"
 	m.Spec.Runtime = "copaw"
 
 	labels := captureManagerCreateLabels(t, m)
@@ -165,7 +165,7 @@ func TestCreateManagerContainer_NilLabelsSafe(t *testing.T) {
 func TestCreateManagerContainerSpecResourcesOverrideDefaults(t *testing.T) {
 	m := &v1beta1.Manager{}
 	m.Name = "default"
-	m.Namespace = "hiclaw"
+	m.Namespace = "agentteams"
 	m.Spec.Resources = &v1beta1.AgentResourceRequirements{
 		Requests: v1beta1.AgentResourceValues{CPU: "750m", Memory: "1536Mi"},
 		Limits:   v1beta1.AgentResourceValues{CPU: "3", Memory: "5Gi"},
@@ -190,7 +190,7 @@ func TestCreateManagerContainerSpecResourcesOverrideDefaults(t *testing.T) {
 func TestCreateManagerContainerSpecResourcesPartiallyOverrideDefaults(t *testing.T) {
 	m := &v1beta1.Manager{}
 	m.Name = "default"
-	m.Namespace = "hiclaw"
+	m.Namespace = "agentteams"
 	m.Spec.Resources = &v1beta1.AgentResourceRequirements{
 		Limits: v1beta1.AgentResourceValues{CPU: "3"},
 	}
@@ -214,7 +214,7 @@ func TestCreateManagerContainerSpecResourcesPartiallyOverrideDefaults(t *testing
 func TestCreateManagerContainerUsesDefaultResourcesWhenSpecResourcesUnset(t *testing.T) {
 	m := &v1beta1.Manager{}
 	m.Name = "default"
-	m.Namespace = "hiclaw"
+	m.Namespace = "agentteams"
 	defaults := &backend.ResourceRequirements{
 		CPURequest:    "100m",
 		MemoryRequest: "256Mi",

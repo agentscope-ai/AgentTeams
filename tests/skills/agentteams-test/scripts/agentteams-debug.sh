@@ -1,6 +1,6 @@
 #!/bin/bash
-# hiclaw-debug.sh - Export HiClaw debug logs for analysis
-# Usage: hiclaw-debug.sh [command] [time_range]
+# agentteams-debug.sh - Export AgentTeams debug logs for analysis
+# Usage: agentteams-debug.sh [command] [time_range]
 #
 # Commands:
 #   export   - Export debug logs (default)
@@ -17,7 +17,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMMAND="${1:-all}"
 TIME_RANGE="${2:-1h}"
 
-# Auto-detect HiClaw repository directory
+# Auto-detect AgentTeams repository directory
 detect_repo_dir() {
     if [ -f "$PROJECT_ROOT/scripts/export-debug-log.py" ]; then
         echo "$PROJECT_ROOT"
@@ -25,21 +25,21 @@ detect_repo_dir() {
     fi
     
     # Check common locations
-    for dir in "/tmp/hiclaw" "$HOME/hiclaw" "$HOME/workspace/hiclaw"; do
+    for dir in "/tmp/agentteams" "$HOME/agentteams" "$HOME/workspace/agentteams"; do
         if [ -f "$dir/scripts/export-debug-log.py" ]; then
             echo "$dir"
             return
         fi
     done
     
-    echo "ERROR: Cannot find HiClaw repository (export-debug-log.py not found)" >&2
+    echo "ERROR: Cannot find AgentTeams repository (export-debug-log.py not found)" >&2
     exit 1
 }
 
-HICLAW_REPO="$(detect_repo_dir)"
+AGENTTEAMS_REPO="$(detect_repo_dir)"
 
-echo "=== HiClaw Debug Log Exporter ==="
-echo "Repository: $HICLAW_REPO"
+echo "=== AgentTeams Debug Log Exporter ==="
+echo "Repository: $AGENTTEAMS_REPO"
 echo "Time range: $TIME_RANGE"
 
 # Export debug logs
@@ -47,11 +47,11 @@ export_logs() {
     echo ""
     echo "[1/2] Exporting debug logs..."
     
-    cd "$HICLAW_REPO"
+    cd "$AGENTTEAMS_REPO"
     python3 scripts/export-debug-log.py --range "$TIME_RANGE" 2>&1
     
     # Get the latest output directory
-    OUTPUT_DIR=$(ls -td "$HICLAW_REPO/debug-log"/* 2>/dev/null | head -1)
+    OUTPUT_DIR=$(ls -td "$AGENTTEAMS_REPO/debug-log"/* 2>/dev/null | head -1)
     
     if [ -z "$OUTPUT_DIR" ] || [ ! -d "$OUTPUT_DIR" ]; then
         echo "ERROR: Failed to find output directory" >&2
@@ -67,7 +67,7 @@ analyze_hang() {
     echo ""
     echo "[2/2] Analyzing potential hang issues..."
     
-    OUTPUT_DIR="${OUTPUT_DIR:-$(ls -td "$HICLAW_REPO/debug-log"/* 2>/dev/null | head -1)}"
+    OUTPUT_DIR="${OUTPUT_DIR:-$(ls -td "$AGENTTEAMS_REPO/debug-log"/* 2>/dev/null | head -1)}"
     
     if [ -z "$OUTPUT_DIR" ] || [ ! -d "$OUTPUT_DIR" ]; then
         echo "ERROR: No debug log found. Run 'export' first." >&2
@@ -83,7 +83,7 @@ analyze_hang() {
     fi
     
     {
-        echo "=== HiClaw Hang Analysis ==="
+        echo "=== AgentTeams Hang Analysis ==="
         echo "Generated: $(date)"
         echo "Time range: last $TIME_RANGE"
         echo "Source: export-debug-log.py"

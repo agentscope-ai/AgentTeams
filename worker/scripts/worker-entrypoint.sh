@@ -121,10 +121,10 @@ if [ -f "${_diag_plugin_dir}/package.json" ] && \
         "${WORKSPACE}/openclaw.json" > /dev/null 2>&1; then
     if [ ! -d "${_diag_plugin_dir}/node_modules" ]; then
         log "diagnostics-otel: installing npm dependencies (required for metrics)..."
-        if (cd "${_diag_plugin_dir}" && npm install --omit=dev --ignore-scripts >/tmp/hiclaw-diag-install.log 2>&1); then
+        if (cd "${_diag_plugin_dir}" && npm install --omit=dev --ignore-scripts >/tmp/agentteams-diag-install.log 2>&1); then
             log "diagnostics-otel dependencies installed"
         else
-            log "WARNING: diagnostics-otel npm install failed; metrics may not be reported (see /tmp/hiclaw-diag-install.log)"
+            log "WARNING: diagnostics-otel npm install failed; metrics may not be reported (see /tmp/agentteams-diag-install.log)"
         fi
     else
         log "diagnostics-otel dependencies already present"
@@ -138,13 +138,12 @@ if [ -f "${WORKSPACE}/skills-lock.json" ] && [ -z "$(ls -A ${WORKSPACE}/skills 2
     cd "${WORKSPACE}" && skills experimental_install -y 2>/dev/null || log "Warning: skills restore failed, will need to reinstall"
 fi
 
-# Ensure hiclaw-sync wrapper is functional
+# Ensure agentteams-sync is functional
 # Use /bin/sh to invoke the script so it works even without +x permission
 # (MinIO object storage does not preserve Unix permission bits)
 printf '#!/bin/bash\nexec /bin/sh "%s/skills/file-sync/scripts/agentteams-sync.sh" "$@"\n' \
     "${WORKSPACE}" > /usr/local/bin/agentteams-sync
 chmod +x /usr/local/bin/agentteams-sync
-ln -sf /usr/local/bin/agentteams-sync /usr/local/bin/hiclaw-sync
 
 # Defensive symlink: /opt/agentteams/agent/skills -> actual skills directory
 mkdir -p /opt/agentteams/agent
@@ -341,7 +340,7 @@ fi
 # ============================================================
 # Step 5c: Background readiness reporter
 # ============================================================
-# Wait for local gateway health, then report ready via hiclaw CLI.
+# Wait for local gateway health, then report ready via agt CLI.
 if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
 (
         # Phase 1: Wait for gateway to be healthy (with timeout)
@@ -358,7 +357,7 @@ if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
             exit 1
         fi
 
-        # Report ready to controller via hiclaw CLI
+        # Report ready to controller via agt CLI
         agt worker report-ready --name "${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
     ) &
     log "Background readiness reporter started (PID: $!)"

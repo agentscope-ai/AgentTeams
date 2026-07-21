@@ -31,14 +31,11 @@ func TestRenderAppServiceRegistration_DefaultBroadNamespace(t *testing.T) {
 	if !u.Exclusive || u.Regex != "@.*:test.domain" {
 		t.Errorf("user namespace = {Exclusive:%v, Regex:%q}, want {true, @.*:test.domain}", u.Exclusive, u.Regex)
 	}
-	if len(reg.Namespaces.Aliases) != 2 {
-		t.Fatalf("want AgentTeams and legacy HiClaw alias namespaces, got %d", len(reg.Namespaces.Aliases))
+	if len(reg.Namespaces.Aliases) != 1 {
+		t.Fatalf("want one AgentTeams alias namespace, got %d", len(reg.Namespaces.Aliases))
 	}
 	if got, want := reg.Namespaces.Aliases[0].Regex, "#agentteams-.*:test.domain"; got != want {
 		t.Errorf("primary alias namespace = %q, want %q", got, want)
-	}
-	if got, want := reg.Namespaces.Aliases[1].Regex, "#hiclaw-.*:test.domain"; got != want {
-		t.Errorf("legacy alias namespace = %q, want %q", got, want)
 	}
 }
 
@@ -53,12 +50,12 @@ func TestRenderAppServiceRegistration_NarrowedNamespace(t *testing.T) {
 		AppServiceToken:              "as",
 		AppServiceHSToken:            "hs",
 		AppServiceSenderLocalpart:    "agentteams-controller",
-		AppServiceUserNamespaceRegex: "@hiclaw-.*:test.domain",
+		AppServiceUserNamespaceRegex: "@agentteams-.*:test.domain",
 	}
 	reg := RenderAppServiceRegistration(cfg)
 	u := reg.Namespaces.Users[0]
-	if !u.Exclusive || u.Regex != "@hiclaw-.*:test.domain" {
-		t.Errorf("narrowed user namespace = {Exclusive:%v, Regex:%q}, want {true, @hiclaw-.*:test.domain}", u.Exclusive, u.Regex)
+	if !u.Exclusive || u.Regex != "@agentteams-.*:test.domain" {
+		t.Errorf("narrowed user namespace = {Exclusive:%v, Regex:%q}, want {true, @agentteams-.*:test.domain}", u.Exclusive, u.Regex)
 	}
 }
 

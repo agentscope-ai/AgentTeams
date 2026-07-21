@@ -42,8 +42,8 @@ func WithNacosSTSResources(resources []string) NacosAIClientOption {
 //
 //   - rawAddr: host:port, optionally prefixed with user:pass@ or nacos://
 //   - namespace: Nacos namespace ID (empty → "public")
-//   - authType: "nacos" | "sts-hiclaw" | "none" | "" (auto-detect from addr)
-//   - credClient: required only for "sts-hiclaw"; pass nil otherwise
+//   - authType: "nacos" | "sts-agentteams" | "none" | "" (auto-detect from addr)
+//   - credClient: required only for "sts-agentteams"; pass nil otherwise
 func NewNacosAIClient(
 	ctx context.Context,
 	rawAddr string,
@@ -94,7 +94,7 @@ func NewNacosAIClient(
 		}
 	case nacosAuthTypeSTS:
 		if credClient == nil {
-			return nil, fmt.Errorf("sts-hiclaw auth requires a credprovider.Client")
+			return nil, fmt.Errorf("sts-agentteams auth requires a credprovider.Client")
 		}
 		cred = newNacosSTSCredential(namespace, credClient, opts.stsResources)
 	case nacosAuthTypeNone, "":

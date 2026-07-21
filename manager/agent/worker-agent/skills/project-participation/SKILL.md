@@ -7,7 +7,7 @@ description: Use when you are invited to a Project Room or assigned a task withi
 
 ## Gotchas
 
-- **Always sync before reading project plan** — `hiclaw-sync` first, then read `plan.md`
+- **Always sync before reading project plan** — `agentteams-sync` first, then read `plan.md`
 - **Git author must be your worker name** — set `git config user.name` and `user.email` before any commits
 - **Report completion via @mention to your coordinator** — this is what advances the project to the next task
 
@@ -21,7 +21,7 @@ When invited to a Project Room, the project plan is at:
 
 Sync first:
 ```bash
-hiclaw-sync
+agentteams-sync
 ```
 
 The plan.md shows:
@@ -41,5 +41,5 @@ Use your worker name as Git author so contributions are identifiable:
 
 ```bash
 git config user.name "<your-worker-name>"
-git config user.email "<your-worker-name>@hiclaw.local"
+git config user.email "<your-worker-name>@agentteams.local"
 ```

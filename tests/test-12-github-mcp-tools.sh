@@ -11,16 +11,16 @@ source "${SCRIPT_DIR}/lib/test-helpers.sh"
 test_setup "12-github-mcp-tools"
 
 # Check prerequisites
-if [ -z "${HICLAW_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
-    log_info "SKIP: No GitHub token configured (set HICLAW_GITHUB_TOKEN or TEST_GITHUB_TOKEN)"
+if [ -z "${AGENTTEAMS_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
+    log_info "SKIP: No GitHub token configured (set AGENTTEAMS_GITHUB_TOKEN or TEST_GITHUB_TOKEN)"
     test_teardown "12-github-mcp-tools"
     test_summary
     exit 0
 fi
 
-# Test repository (use hiclaw repo for read-only tests)
+# Test repository (use agentteams repo for read-only tests)
 TEST_OWNER="${TEST_GITHUB_OWNER:-higress-group}"
-TEST_REPO="${TEST_GITHUB_REPO:-hiclaw}"
+TEST_REPO="${TEST_GITHUB_REPO:-agentteams}"
 
 # Manager container name
 MANAGER_CONTAINER="${TEST_AGENT_CONTAINER:-${TEST_CONTROLLER_CONTAINER:-agentteams-manager}}"
@@ -219,7 +219,7 @@ log_section "Testing Search Tools (regression)"
 
 # Test 17: search_code
 log_info "Testing search_code..."
-RESULT=$(mcporter_call "search_code" 'q="README repo:higress-group/hiclaw"')
+RESULT=$(mcporter_call "search_code" 'q="README repo:agentscope-ai/AgentTeams"')
 if echo "${RESULT}" | jq -e '.items or .[0]' >/dev/null 2>&1; then
     log_pass "search_code works"
 else
@@ -228,7 +228,7 @@ fi
 
 # Test 18: search_repositories
 log_info "Testing search_repositories..."
-RESULT=$(mcporter_call "search_repositories" 'query="hiclaw"')
+RESULT=$(mcporter_call "search_repositories" 'query="agentteams"')
 if echo "${RESULT}" | jq -e '.items or .[0]' >/dev/null 2>&1; then
     log_pass "search_repositories works"
 else

@@ -44,7 +44,7 @@ type K8sConfig struct {
 	ControllerName string
 
 	// ResourcePrefix is the tenant prefix used to derive worker "app" label
-	// values and default SA names. Empty falls back to "hiclaw-" for tests
+	// values and default SA names. Empty falls back to "agentteams-" for tests
 	// and out-of-cluster callers. See internal/auth.ResourcePrefix for
 	// semantics.
 	ResourcePrefix string

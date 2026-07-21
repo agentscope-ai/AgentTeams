@@ -45,7 +45,7 @@ func sampleReq() IssueRequest {
 			{
 				Service:     ServiceObjectStorage,
 				Permissions: []string{"read", "write", "list"},
-				Scope:       AccessScope{Bucket: "hiclaw-test", Prefixes: []string{"*"}},
+				Scope:       AccessScope{Bucket: "agentteams-test", Prefixes: []string{"*"}},
 			},
 		},
 	}

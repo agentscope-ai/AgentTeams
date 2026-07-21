@@ -88,7 +88,7 @@ docker exec agentteams-worker-alice cat /root/agentteams-fs/agents/alice/opencla
 # 使用 Worker 的 key 测试 AI 网关访问
 # 注意：以下命令在 Worker 容器内执行，域名会解析到 Manager 的内部 IP
 docker exec agentteams-worker-alice curl -sf \
-  -H "Authorization: Bearer $(jq -r '.models.providers."hiclaw-gateway".apiKey' /root/agentteams-fs/agents/alice/openclaw.json)" \
+  -H "Authorization: Bearer $(jq -r '.models.providers."agentteams-gateway".apiKey' /root/agentteams-fs/agents/alice/openclaw.json)" \
   http://aigw-local.agentteams.io:8080/v1/models
 
 # 401：检查 openclaw.json 中的 Consumer key 是否与 Higress 中的一致

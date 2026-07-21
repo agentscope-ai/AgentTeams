@@ -5,7 +5,7 @@ import subprocess
 
 def _render_entrypoint(tmp_path: Path, *, mc_host: bool) -> Path:
     source = Path(__file__).resolve().parents[1] / "scripts" / "copaw-worker-entrypoint.sh"
-    fake_root = tmp_path / "opt" / "hiclaw"
+    fake_root = tmp_path / "opt" / "agentteams"
     fake_venv = tmp_path / "opt" / "venv"
     install_dir = tmp_path / "copaw-worker"
     script = (
@@ -51,7 +51,7 @@ def _render_entrypoint(tmp_path: Path, *, mc_host: bool) -> Path:
     return rendered
 
 
-def test_entrypoint_uses_agentteams_mc_host_and_legacy_bucket_contract(tmp_path):
+def test_entrypoint_uses_agentteams_mc_host_and_fs_bucket_contract(tmp_path):
     script = _render_entrypoint(tmp_path, mc_host=True)
     capture = tmp_path / "args.txt"
     env = {

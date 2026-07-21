@@ -66,7 +66,7 @@ func TestMatrixOperationUsesBoundedLabels(t *testing.T) {
 		{
 			name:   "room state",
 			method: http.MethodPut,
-			path:   "/_matrix/client/v3/rooms/%21abc%3Ad/state/io.hiclaw.meta/",
+			path:   "/_matrix/client/v3/rooms/%21abc%3Ad/state/io.agentteams.meta/",
 			want:   "set_room_state",
 		},
 		{

@@ -167,7 +167,7 @@ if [ "${AGENTTEAMS_RUNTIME}" = "aliyun" ]; then
     mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/" "${AGENTTEAMS_FS}/agents/" --overwrite 2>/dev/null || true
     # Keep the canonical filesystem link in the Manager workspace.
     ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/agentteams-fs
-    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/hiclaw-fs
+    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/agentteams-fs
 fi
 
 # K8s mode: sync workspace from cluster-internal MinIO
@@ -180,7 +180,7 @@ if [ "${AGENTTEAMS_RUNTIME}" = "k8s" ]; then
     mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/manager/" /root/manager-workspace/ --overwrite 2>/dev/null || true
     mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/" "${AGENTTEAMS_FS}/" --overwrite 2>/dev/null || true
     ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/agentteams-fs
-    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/hiclaw-fs
+    ln -sfn "${AGENTTEAMS_FS}" /root/manager-workspace/agentteams-fs
     touch "${AGENTTEAMS_FS}/.initialized"
 fi
 
@@ -437,10 +437,10 @@ if [ -n "${_HIGRESS_CONSOLE_URL}" ]; then
         case "${_LLM_PROVIDER}" in
             qwen)
                 _k8s_higress_api POST /v1/ai/providers "Creating LLM provider (qwen)" \
-                    '{"type":"qwen","name":"qwen","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"hiclawMode":true}}'
+                    '{"type":"qwen","name":"qwen","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"agentteamsMode":true}}'
                 ;;
             *)
-                _BODY='{"name":"'"${_LLM_PROVIDER}"'","type":"openai","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"modelMapping":{},"protocol":"openai/v1","rawConfigs":{"hiclawMode":true}}'
+                _BODY='{"name":"'"${_LLM_PROVIDER}"'","type":"openai","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"modelMapping":{},"protocol":"openai/v1","rawConfigs":{"agentteamsMode":true}}'
                 _k8s_higress_api POST /v1/ai/providers "Creating LLM provider (${_LLM_PROVIDER})" "${_BODY}"
                 ;;
         esac
@@ -832,7 +832,7 @@ if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
                     DIAG_AVAILABLE="1"
                     if [ ! -d "${DIAG_PLUGIN_DIR}/node_modules" ]; then
                         log "diagnostics-otel dependencies missing, installing..."
-                        if (cd "${DIAG_PLUGIN_DIR}" && npm install --omit=dev --ignore-scripts >/tmp/hiclaw-diag-install.log 2>&1); then
+                        if (cd "${DIAG_PLUGIN_DIR}" && npm install --omit=dev --ignore-scripts >/tmp/agentteams-diag-install.log 2>&1); then
                             log "diagnostics-otel dependencies installed"
                         else
                             log "WARNING: diagnostics-otel npm install failed, metrics plugin may not load"

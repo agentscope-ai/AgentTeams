@@ -1,4 +1,4 @@
-# HiClaw Troubleshooting Guide
+# AgentTeams Troubleshooting Guide
 
 ## Test Hang Issues
 
@@ -80,10 +80,10 @@ make build
 
 ```bash
 # Check Worker image
-docker images | grep hiclaw
+docker images | grep agentteams
 
 # Manual startup test
-docker run --rm -it hiclaw/worker-agent:latest /bin/bash
+docker run --rm -it agentteams/worker-agent:latest /bin/bash
 ```
 
 ### Worker Cannot Connect to Matrix
@@ -97,9 +97,9 @@ docker exec agentteams-worker-alice cat /root/.openclaw/channels/matrix/credenti
 
 ### GitHub Tests Skipped
 
-Need to set `HICLAW_GITHUB_TOKEN`:
+Need to set `AGENTTEAMS_GITHUB_TOKEN`:
 ```bash
-export HICLAW_GITHUB_TOKEN="ghp_xxx"
+export AGENTTEAMS_GITHUB_TOKEN="ghp_xxx"
 make test
 ```
 
@@ -127,13 +127,13 @@ cat tests/output/metrics-*.json | jq '.totals.tokens'
 
 ```bash
 # Export all logs (run from skill directory)
-./tests/skills/hiclaw-test/scripts/hiclaw-debug.sh all
+./tests/skills/agentteams-test/scripts/agentteams-debug.sh all
 
 # Analyze hang issues only
-./tests/skills/hiclaw-test/scripts/hiclaw-debug.sh analyze
+./tests/skills/agentteams-test/scripts/agentteams-debug.sh analyze
 
 # View Manager container status
-docker ps --filter "name=hiclaw"
+docker ps --filter "name=agentteams"
 
 # Quick view recent errors
 docker exec agentteams-manager tail -50 /var/log/agentteams/manager-agent-error.log

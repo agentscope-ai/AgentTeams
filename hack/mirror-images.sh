@@ -186,7 +186,7 @@ copy_image() {
 main() {
     echo ""
     echo "============================================"
-    echo "  HiClaw Image Mirror (skopeo multi-arch)"
+    echo "  AgentTeams Image Mirror (skopeo multi-arch)"
     echo "============================================"
     echo "  Target:  ${TARGET_REGISTRY}/${TARGET_NS}/"
     echo "  Date tag: ${DATE_TAG}"

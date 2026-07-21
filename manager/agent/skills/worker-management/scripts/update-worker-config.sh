@@ -27,7 +27,7 @@ set -e
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 log() {
-    local msg="[hiclaw $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    local msg="[agentteams $(date '+%Y-%m-%d %H:%M:%S')] $1"
     echo "${msg}"
     if [ -w /proc/1/fd/1 ]; then
         echo "${msg}" > /proc/1/fd/1
@@ -103,8 +103,8 @@ if [ -n "${RUNTIME}" ]; then
     [ -n "${WORKER_SKILLS}" ] && CLI_ARGS+=(--skills "${WORKER_SKILLS}")
     [ -n "${MCP_SERVERS}" ]   && CLI_ARGS+=(--mcp-servers "${MCP_SERVERS}")
 
-    log "Step 1: Calling: hiclaw ${CLI_ARGS[*]}"
-    if ! CLI_OUT=$(hiclaw "${CLI_ARGS[@]}" 2>&1); then
+    log "Step 1: Calling: agentteams ${CLI_ARGS[*]}"
+    if ! CLI_OUT=$(agentteams "${CLI_ARGS[@]}" 2>&1); then
         _fail "agt update worker failed: ${CLI_OUT}"
     fi
     log "  ${CLI_OUT}"
@@ -208,7 +208,7 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
             if [ "${FNAME}" = "AGENTS.md" ]; then
                 # Wrap user AGENTS.md with builtin markers so merge logic works
                 source /opt/agentteams/scripts/lib/builtin-merge.sh
-                if ! grep -q 'hiclaw-builtin-start' "$f" 2>/dev/null; then
+                if ! grep -q 'agentteams-builtin-start' "$f" 2>/dev/null; then
                     {
                         printf '%s\n' "${BUILTIN_HEADER}"
                         printf '%s\n' "${BUILTIN_END}"
@@ -273,14 +273,14 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     if [ -n "${_team_leader}" ]; then
         cat > "${_ctx_tmp}" <<TEAMCTX
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 
 - **Coordinator**: @${_team_leader}:${MATRIX_DOMAIN} (Team Leader of ${_team_id})
 - Report task completion, blockers, and questions to your coordinator
 - Only respond to @mentions from your coordinator and Admin
 - Do NOT @mention Manager directly — all communication goes through your Team Leader
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 TEAMCTX
     elif [ "${_role}" = "team_leader" ]; then
         _team_workers=$(jq -r --arg t "${_team_id}" '.teams[$t].workers // [] | join(", ")' "${HOME}/teams-registry.json" 2>/dev/null)
@@ -293,7 +293,7 @@ TEAMCTX
         _worker_rooms=$(echo "${_worker_rooms}" | sed "s/__DOMAIN__/${MATRIX_DOMAIN}/g")
         cat > "${_ctx_tmp}" <<LEADERCTX
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 
 - **Upstream coordinator**: @manager:${MATRIX_DOMAIN} (Manager) — you receive tasks from Manager
@@ -307,25 +307,25 @@ $([ -n "${_worker_rooms}" ] && echo "- **Team Workers**:" && echo "${_worker_roo
 - This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads
 - Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source
 - @mention Manager only for: task completion, blockers, escalations
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 LEADERCTX
     else
         cat > "${_ctx_tmp}" <<STDCTX
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 
 - **Coordinator**: @manager:${MATRIX_DOMAIN} (Manager)
 - Report task completion, blockers, and questions to your coordinator
 - Only respond to @mentions from your coordinator and Admin
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 STDCTX
     fi
 
     # Remove existing team-context, insert after builtin-end
-    sed -i '/<!-- hiclaw-team-context-start -->/,/<!-- hiclaw-team-context-end -->/d' "${AGENT_DIR}/AGENTS.md" 2>/dev/null || true
-    if grep -q 'hiclaw-builtin-end' "${AGENT_DIR}/AGENTS.md"; then
-        sed -i "/<!-- hiclaw-builtin-end -->/r ${_ctx_tmp}" "${AGENT_DIR}/AGENTS.md"
+    sed -i '/<!-- agentteams-team-context-start -->/,/<!-- agentteams-team-context-end -->/d' "${AGENT_DIR}/AGENTS.md" 2>/dev/null || true
+    if grep -q 'agentteams-builtin-end' "${AGENT_DIR}/AGENTS.md"; then
+        sed -i "/<!-- agentteams-builtin-end -->/r ${_ctx_tmp}" "${AGENT_DIR}/AGENTS.md"
     else
         cat "${_ctx_tmp}" >> "${AGENT_DIR}/AGENTS.md"
     fi

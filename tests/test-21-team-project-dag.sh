@@ -75,7 +75,7 @@ done
 log_pass "SOUL.md files prepared for all team members"
 
 # ============================================================
-# Section 2: Create Team (via hiclaw CLI → controller REST API)
+# Section 2: Create Team (via agt CLI → controller REST API)
 # ============================================================
 log_section "Create Team"
 
@@ -268,7 +268,7 @@ done
 
 # Container running only proves Docker accepted the worker process. CoPaw needs
 # a short bootstrap window before its Matrix channel is ready to accept invites.
-if [ "${TEST_WORKER_RUNTIME:-}" = "copaw" ] || [ "${HICLAW_DEFAULT_WORKER_RUNTIME:-}" = "copaw" ] || [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-}" = "copaw" ]; then
+if [ "${TEST_WORKER_RUNTIME:-}" = "copaw" ] || [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-}" = "copaw" ]; then
     for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
         log_info "Waiting for CoPaw Worker readiness probe before room membership checks (${w})..."
         PROBE_OUTPUT=$(check_copaw_worker_probes "${w}" "ready" 60)

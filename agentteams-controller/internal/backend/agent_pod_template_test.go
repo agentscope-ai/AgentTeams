@@ -18,13 +18,13 @@ import (
 func baseOverlay() PodOverlay {
 	return PodOverlay{
 		Name:               "agentteams-worker-alice",
-		Namespace:          "hiclaw",
+		Namespace:          "agentteams",
 		Labels:             map[string]string{"app": "agentteams-worker", "agentteams.io/worker": "alice"},
 		Annotations:        map[string]string{"agentteams.io/test-overlay": "controller"},
 		ServiceAccountName: "agentteams-worker-alice",
 		Container: corev1.Container{
 			Name:            "worker",
-			Image:           "hiclaw/worker:latest",
+			Image:           "agentteams/worker:latest",
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Env:             []corev1.EnvVar{{Name: "AGENTTEAMS_RUNTIME", Value: "k8s"}},
 			WorkingDir:      "/root/agentteams-fs/agents/alice",
@@ -89,7 +89,7 @@ func findVolumeMount(mounts []corev1.VolumeMount, name string) *corev1.VolumeMou
 
 func TestApplyPodTemplate_EmptyTemplate(t *testing.T) {
 	pod := ApplyPodTemplate(corev1.PodTemplateSpec{}, baseOverlay())
-	if pod.Name != "agentteams-worker-alice" || pod.Namespace != "hiclaw" {
+	if pod.Name != "agentteams-worker-alice" || pod.Namespace != "agentteams" {
 		t.Fatalf("name/ns: %+v", pod.ObjectMeta)
 	}
 	if pod.Spec.ServiceAccountName != "agentteams-worker-alice" {
@@ -104,7 +104,7 @@ func TestApplyPodTemplate_EmptyTemplate(t *testing.T) {
 	if len(pod.Spec.Containers) != 1 || pod.Spec.Containers[0].Name != "worker" {
 		t.Fatalf("containers: %+v", pod.Spec.Containers)
 	}
-	if pod.Spec.Containers[0].Image != "hiclaw/worker:latest" {
+	if pod.Spec.Containers[0].Image != "agentteams/worker:latest" {
 		t.Fatalf("image: %q", pod.Spec.Containers[0].Image)
 	}
 	if v := findVolume(pod.Spec.Volumes, "agentteams-token"); v == nil {
@@ -338,7 +338,7 @@ func TestApplyPodTemplate_SidecarContainersPreserved(t *testing.T) {
 	if pod.Spec.Containers[0].Name != "worker" {
 		t.Fatalf("agent container must be first, got %q", pod.Spec.Containers[0].Name)
 	}
-	if pod.Spec.Containers[0].Image != "hiclaw/worker:latest" {
+	if pod.Spec.Containers[0].Image != "agentteams/worker:latest" {
 		t.Fatalf("worker image must come from overlay, got %q", pod.Spec.Containers[0].Image)
 	}
 	log := findContainer(pod.Spec.Containers, "logagent")
@@ -393,8 +393,8 @@ func TestApplyPodTemplate_AutomountDisabled(t *testing.T) {
 
 // ── LoadAgentPodTemplate tests ───────────────────────────────────────────
 
-const loaderTestNS = "hiclaw"
-const loaderTestName = "hiclaw-ctl"
+const loaderTestNS = "agentteams"
+const loaderTestName = "agentteams-ctl"
 
 // injectLoaderCM is a test-local helper; the integration-style helper in
 // kubernetes_test.go uses fixed names that don't match the parameterized

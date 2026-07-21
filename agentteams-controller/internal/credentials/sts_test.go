@@ -38,7 +38,7 @@ func (f *fakeProvider) GetKubeconfig(_ context.Context, _ string) (*credprovider
 	return nil, errors.New("not implemented")
 }
 
-const ns = "hiclaw"
+const ns = "agentteams"
 
 func newFakeK8sClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()

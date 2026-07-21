@@ -26,11 +26,11 @@ Use the template search script:
 
 ```bash
 # Exact template name
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/agentteams-find-worker.sh \
   --name <TEMPLATE_NAME> --json
 
 # Requirement-based search
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/hiclaw-find-worker.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/agentteams-find-worker.sh \
   --query "<admin requirement>" --limit 3 --json
 ```
 
@@ -67,7 +67,7 @@ This fallback is only allowed before any template has been confirmed for install
 After the admin confirms the template and Worker name, run:
 
 ```bash
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/install-worker-template.sh \
   --template <TEMPLATE_NAME> \
   --worker-name <WORKER_NAME>
 ```
@@ -75,7 +75,7 @@ bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-temp
 Optional overrides:
 
 ```bash
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/install-worker-template.sh \
   --template <TEMPLATE_NAME> \
   --worker-name <WORKER_NAME> \
   --model <MODEL_ID> \
@@ -97,7 +97,7 @@ If the install command fails:
 If the admin already gave you a full package URI, run:
 
 ```bash
-bash /opt/agentteams/agent/skills/hiclaw-find-worker/scripts/install-worker-template.sh \
+bash /opt/agentteams/agent/skills/agentteams-find-worker/scripts/install-worker-template.sh \
   --package-uri <PACKAGE_URI> \
   --worker-name <WORKER_NAME>
 ```

@@ -25,8 +25,8 @@ type PackageResolver struct {
 	ImportDir  string // e.g. /tmp/import
 	ExtractDir string // e.g. /tmp/import/extracted
 
-	// CredClient is used when a nacos:// package URI includes ?authType=sts-hiclaw
-	// (STS via hiclaw-credential-provider). Optional for user/password or none.
+	// CredClient is used when a nacos:// package URI includes ?authType=sts-agentteams
+	// (STS via agentteams-credential-provider). Optional for user/password or none.
 	CredClient credprovider.Client
 }
 
@@ -220,9 +220,9 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 				if info, err := e.Info(); err == nil {
 					fileSize = info.Size()
 				}
-				logger.Info("package AGENTS.md detected", "worker", workerName, "path", src, "fileSizeBytes", fileSize, "loadedBytes", len(data), "hasBuiltinMarkers", strings.Contains(string(data), "<!-- hiclaw-builtin-start -->"), "willWrapBuiltinMarkers", !strings.Contains(string(data), "<!-- hiclaw-builtin-start -->"))
+				logger.Info("package AGENTS.md detected", "worker", workerName, "path", src, "fileSizeBytes", fileSize, "loadedBytes", len(data), "hasBuiltinMarkers", strings.Contains(string(data), "<!-- agentteams-builtin-start -->"), "willWrapBuiltinMarkers", !strings.Contains(string(data), "<!-- agentteams-builtin-start -->"))
 				data = wrapWithBuiltinMarkers(data)
-				logger.Info("package AGENTS.md prepared for storage", "worker", workerName, "path", src, "bytes", len(data), "hasBuiltinMarkers", strings.Contains(string(data), "<!-- hiclaw-builtin-start -->"))
+				logger.Info("package AGENTS.md prepared for storage", "worker", workerName, "path", src, "bytes", len(data), "hasBuiltinMarkers", strings.Contains(string(data), "<!-- agentteams-builtin-start -->"))
 			}
 			configFiles = append(configFiles, fileEntry{name: e.Name(), data: data})
 		}
@@ -435,7 +435,7 @@ func (p *PackageResolver) DeployToMinIO(ctx context.Context, extractedDir, worke
 
 // mcPut writes data to a MinIO path via temp file + mc cp.
 func mcPut(ctx context.Context, minioPath string, data []byte) error {
-	tmpFile, err := os.CreateTemp("", "hiclaw-deploy-*")
+	tmpFile, err := os.CreateTemp("", "agentteams-deploy-*")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
@@ -542,14 +542,14 @@ func copyDirSeedOnly(srcDir, dstDir string) error {
 	})
 }
 
-// wrapWithBuiltinMarkers wraps user AGENTS.md content with hiclaw-builtin markers.
+// wrapWithBuiltinMarkers wraps user AGENTS.md content with agentteams-builtin markers.
 // Uses the same format as builtin-merge.sh (BUILTIN_HEADER + BUILTIN_END) so that
 // upgrade-builtins.sh can fill the builtin section without destroying user content.
 // If markers already exist, the content is returned as-is.
 // YAML frontmatter (---...---) is preserved before the markers.
 func wrapWithBuiltinMarkers(data []byte) []byte {
 	content := string(data)
-	if strings.Contains(content, "<!-- hiclaw-builtin-start -->") {
+	if strings.Contains(content, "<!-- agentteams-builtin-start -->") {
 		return data // already has markers
 	}
 
@@ -572,12 +572,12 @@ func wrapWithBuiltinMarkers(data []byte) []byte {
 	if frontmatter != "" {
 		wrapped += frontmatter + "\n"
 	}
-	wrapped += "<!-- hiclaw-builtin-start -->\n" +
+	wrapped += "<!-- agentteams-builtin-start -->\n" +
 		"> ⚠️ **DO NOT EDIT** this section. It is managed by AgentTeams and will be automatically\n" +
 		"> replaced on upgrade. To customize, add your content **after** the\n" +
-		"> `<!-- hiclaw-builtin-end -->` marker below.\n" +
+		"> `<!-- agentteams-builtin-end -->` marker below.\n" +
 		"\n" +
-		"<!-- hiclaw-builtin-end -->\n\n" +
+		"<!-- agentteams-builtin-end -->\n\n" +
 		body
 	return []byte(wrapped)
 }
@@ -805,7 +805,7 @@ func (p *PackageResolver) resolveHTTP(ctx context.Context, uri string) (string, 
 
 // resolveNacos downloads a Worker template from Nacos via the AgentSpec client API.
 // URI format: nacos://[user:pass@]host:port/{namespace}/{agentspec-name}[/{version}][?authType=...]
-// Optional query: authType=nacos|sts-hiclaw|none (empty = auto from userinfo, same as NewNacosAIClient).
+// Optional query: authType=nacos|sts-agentteams|none (empty = auto from userinfo, same as NewNacosAIClient).
 // The Nacos server address (and optional credentials) are extracted from the URI authority.
 func (p *PackageResolver) resolveNacos(ctx context.Context, u *url.URL) (string, error) {
 	// Parse URI path segments: /{namespace}/{agentspec-name}/{version}
@@ -866,13 +866,13 @@ func (p *PackageResolver) resolveNacos(ctx context.Context, u *url.URL) (string,
 // ValidateNacosURIOptions configures Nacos preflight so it matches runtime
 // PackageResolver behavior. The auth type is read from the nacos:// URI query:
 //
-//	?authType=nacos|sts-hiclaw|none
+//	?authType=nacos|sts-agentteams|none
 //
 // or omitted for the same auto-detection as NewNacosAIClient.
 type ValidateNacosURIOptions struct {
-	// CredClient is required when the URI includes authType=sts-hiclaw; it
+	// CredClient is required when the URI includes authType=sts-agentteams; it
 	// should be the same credprovider.Client wired into PackageResolver
-	// (HTTP client to hiclaw-credential-provider /issue).
+	// (HTTP client to agentteams-credential-provider /issue).
 	CredClient credprovider.Client
 }
 

@@ -316,7 +316,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 		switch provider {
 		case "qwen":
 			raw := map[string]interface{}{
-				"hiclawMode":           true,
+				"agentteamsMode":       true,
 				"qwenEnableSearch":     false,
 				"qwenEnableCompatible": true,
 				"qwenFileIds":          []interface{}{},
@@ -335,7 +335,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 			if cfg.OpenAIBaseURL == "" {
 				// No custom base URL — fall back to official OpenAI endpoint
 				logger.Info("AGENTTEAMS_OPENAI_BASE_URL not set, using official OpenAI endpoint")
-				raw := map[string]interface{}{"hiclawMode": true}
+				raw := map[string]interface{}{"agentteamsMode": true}
 				if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{
 					Name:     "openai-compat",
 					Type:     "openai",
@@ -361,7 +361,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					// Wait for DNS service source to propagate before creating provider
 					time.Sleep(2 * time.Second)
 					raw := map[string]interface{}{
-						"hiclawMode":              true,
+						"agentteamsMode":          true,
 						"openaiCustomUrl":         cfg.OpenAIBaseURL,
 						"openaiCustomServiceName": "openai-compat.dns",
 						"openaiCustomServicePort": port,
@@ -395,7 +395,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					}
 					time.Sleep(2 * time.Second)
 					raw := map[string]interface{}{
-						"hiclawMode":              true,
+						"agentteamsMode":          true,
 						"openaiCustomUrl":         cfg.OpenAIBaseURL,
 						"openaiCustomServiceName": provider + ".dns",
 						"openaiCustomServicePort": port,
@@ -411,7 +411,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					}
 				}
 			} else {
-				raw := map[string]interface{}{"hiclawMode": true}
+				raw := map[string]interface{}{"agentteamsMode": true}
 				if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{
 					Name:     provider,
 					Type:     "openai",

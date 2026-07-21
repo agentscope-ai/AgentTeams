@@ -1,8 +1,8 @@
 #!/bin/bash
-# test-hiclaw-find-skill.sh
-# Regression tests for the Worker hiclaw-find-skill wrapper.
+# test-agentteams-find-skill.sh
+# Regression tests for the Worker agentteams-find-skill wrapper.
 #
-# Usage: bash manager/tests/test-hiclaw-find-skill.sh
+# Usage: bash manager/tests/test-agentteams-find-skill.sh
 
 set -uo pipefail
 
@@ -14,10 +14,10 @@ trap 'rm -rf "${TMPDIR_ROOT}"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-WORKER_SCRIPT="${PROJECT_ROOT}/manager/agent/worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
-COPAW_SCRIPT="${PROJECT_ROOT}/manager/agent/copaw-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
-HERMES_SCRIPT="${PROJECT_ROOT}/manager/agent/hermes-worker-agent/skills/find-skills/scripts/hiclaw-find-skill.sh"
-TEAMHARNESS_SCRIPT="${PROJECT_ROOT}/plugins/teamharness/skills/agent/find-skills/scripts/hiclaw-find-skill.sh"
+WORKER_SCRIPT="${PROJECT_ROOT}/manager/agent/worker-agent/skills/find-skills/scripts/agentteams-find-skill.sh"
+COPAW_SCRIPT="${PROJECT_ROOT}/manager/agent/copaw-worker-agent/skills/find-skills/scripts/agentteams-find-skill.sh"
+HERMES_SCRIPT="${PROJECT_ROOT}/manager/agent/hermes-worker-agent/skills/find-skills/scripts/agentteams-find-skill.sh"
+TEAMHARNESS_SCRIPT="${PROJECT_ROOT}/plugins/teamharness/skills/agent/find-skills/scripts/agentteams-find-skill.sh"
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; echo "       expected: $2"; echo "       got:      $3"; FAIL=$((FAIL + 1)); }
@@ -316,7 +316,7 @@ for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TE
 done
 
 echo ""
-echo "=== TC6: sts-hiclaw nacos backend should request controller STS without cluster header ==="
+echo "=== TC6: sts-agentteams nacos backend should request controller STS without cluster header ==="
 for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TEAMHARNESS_SCRIPT}"; do
     {
         case_name="$(basename "$(dirname "$(dirname "${script_path}")")")"
@@ -333,7 +333,7 @@ for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TE
             TEST_SKILLS_LOG="${skills_log}" \
             TEST_CURL_LOG="${curl_log}" \
             SKILLS_API_URL="nacos://registry.local:8848/team-a" \
-            NACOS_AUTH_TYPE="sts-hiclaw" \
+            NACOS_AUTH_TYPE="sts-agentteams" \
             AGENTTEAMS_CONTROLLER_URL="http://controller:8090" \
             AGENTTEAMS_AUTH_TOKEN="controller-token" \
             AGENTTEAMS_FIND_SKILL_MAX_RESULTS=3 \
@@ -343,7 +343,7 @@ for script_path in "${WORKER_SCRIPT}" "${COPAW_SCRIPT}" "${HERMES_SCRIPT}" "${TE
         assert_contains "${case_name}: should still return sts-backed results" "requesting-code-review" "${output}"
         assert_not_contains "${case_name}: controller STS call should not include cluster header" "X-AgentTeams-Cluster-ID" "$(cat "${curl_log}")"
         assert_contains "${case_name}: controller STS call should include bearer" "Authorization: Bearer controller-token" "$(cat "${curl_log}")"
-        assert_contains "${case_name}: nacos cli should use sts auth type" "--auth-type sts-hiclaw" "$(cat "${log_file}")"
+        assert_contains "${case_name}: nacos cli should use sts auth type" "--auth-type sts-agentteams" "$(cat "${log_file}")"
         assert_contains "${case_name}: nacos cli should pass sts access key" "--access-key test-ak" "$(cat "${log_file}")"
         assert_contains "${case_name}: nacos cli should pass sts token" "--security-token test-sts" "$(cat "${log_file}")"
     }

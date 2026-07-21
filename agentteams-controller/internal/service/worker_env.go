@@ -27,7 +27,7 @@ func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult)
 		"AGENTTEAMS_FS_ACCESS_KEY":       workerName,
 		"AGENTTEAMS_FS_SECRET_KEY":       prov.MinIOPassword,
 		"OPENCLAW_DISABLE_BONJOUR":       "1",
-		"OPENCLAW_MDNS_HOSTNAME":         "hiclaw-w-" + workerName,
+		"OPENCLAW_MDNS_HOSTNAME":         "agentteams-w-" + workerName,
 		"AGENTTEAMS_CONSOLE_PORT":        "8088",
 		"HOME":                           "/root/agentteams-fs/agents/" + workerName,
 	}

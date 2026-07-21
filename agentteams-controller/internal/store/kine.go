@@ -39,10 +39,7 @@ func StartKine(ctx context.Context, cfg Config) (*KineServer, error) {
 		return nil, fmt.Errorf("failed to create data dir %s: %w", cfg.DataDir, err)
 	}
 
-	dbPath, err := agentTeamsDBPath(cfg.DataDir)
-	if err != nil {
-		return nil, err
-	}
+	dbPath := filepath.Join(cfg.DataDir, "agentteams.db")
 	dsn := fmt.Sprintf("sqlite://%s?_journal=WAL&cache=shared&_busy_timeout=30000", dbPath)
 
 	etcdCfg, err := endpoint.Listen(ctx, endpoint.Config{
@@ -55,29 +52,4 @@ func StartKine(ctx context.Context, cfg Config) (*KineServer, error) {
 	}
 
 	return &KineServer{ETCDConfig: etcdCfg}, nil
-}
-
-func agentTeamsDBPath(dataDir string) (string, error) {
-	current := filepath.Join(dataDir, "agentteams.db")
-	legacy := filepath.Join(dataDir, "hiclaw.db")
-
-	if _, err := os.Stat(current); err == nil {
-		return current, nil
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat AgentTeams database: %w", err)
-	}
-
-	if _, err := os.Stat(legacy); err == nil {
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			oldPath := legacy + suffix
-			newPath := current + suffix
-			if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
-				return "", fmt.Errorf("migrate legacy database %s: %w", oldPath, err)
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat legacy database: %w", err)
-	}
-
-	return current, nil
 }

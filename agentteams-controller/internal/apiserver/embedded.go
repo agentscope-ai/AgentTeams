@@ -106,7 +106,7 @@ func Start(ctx context.Context, cfg Config) (*rest.Config, error) {
 		"--client-ca-file=" + caCertFile,
 		"--service-account-key-file=" + saPubFile,
 		"--service-account-signing-key-file=" + saKeyFile,
-		"--service-account-issuer=https://hiclaw.local",
+		"--service-account-issuer=https://agentteams.local",
 		"--token-auth-file=" + tokenFile,
 		"--authorization-mode=AlwaysAllow",
 		"--anonymous-auth=true",
@@ -280,7 +280,7 @@ func generateCerts(certDir, bindAddr string) error {
 	caTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			CommonName: "hiclaw-ca",
+			CommonName: "agentteams-ca",
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),

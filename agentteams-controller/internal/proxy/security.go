@@ -79,7 +79,7 @@ func NewSecurityValidator() *SecurityValidator {
 
 	// Container name prefix: AGENTTEAMS_PROXY_CONTAINER_PREFIX takes precedence.
 	// If unset and AGENTTEAMS_RESOURCE_AUTOPREFIX=true (default), derive from
-	// AGENTTEAMS_RESOURCE_PREFIX with fallback "hiclaw-". If auto-prefix is
+	// AGENTTEAMS_RESOURCE_PREFIX with fallback "agentteams-". If auto-prefix is
 	// disabled, keep prefix empty and skip prefix enforcement.
 	autoPrefix := true
 	if v := os.Getenv("AGENTTEAMS_RESOURCE_AUTOPREFIX"); v != "" {
@@ -91,7 +91,7 @@ func NewSecurityValidator() *SecurityValidator {
 	} else if autoPrefix {
 		rp := os.Getenv("AGENTTEAMS_RESOURCE_PREFIX")
 		if rp == "" {
-			rp = "hiclaw-"
+			rp = "agentteams-"
 		}
 		prefix = rp + "worker-"
 	}

@@ -32,7 +32,7 @@ If `skills` command is not found, install it: `npm install -g skills`
 Always use this fixed script path for this skill. Do not rely on a relative `scripts/` path from your current directory:
 
 ```bash
-FIND_SKILLS_SCRIPT="/home/openhuman/.openhuman/skills/find-skills/scripts/hiclaw-find-skill.sh"
+FIND_SKILLS_SCRIPT="/home/openhuman/.openhuman/skills/find-skills/scripts/agentteams-find-skill.sh"
 ```
 
 **Key commands:**
@@ -105,4 +105,4 @@ If the user wants to proceed, you can install the skill for them:
 
 ## Skill Resources
 
-`/home/openhuman/.openhuman/skills/find-skills/scripts/hiclaw-find-skill.sh` is the resource that belongs to this skill. Always invoke that exact path (or the `FIND_SKILLS_SCRIPT` variable above) instead of `scripts/hiclaw-find-skill.sh`, so your command does not depend on the current directory.
+`/home/openhuman/.openhuman/skills/find-skills/scripts/agentteams-find-skill.sh` is the resource that belongs to this skill. Always invoke that exact path (or the `FIND_SKILLS_SCRIPT` variable above) instead of `scripts/agentteams-find-skill.sh`, so your command does not depend on the current directory.

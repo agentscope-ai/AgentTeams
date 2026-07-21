@@ -29,7 +29,7 @@ _resolve_controller_token() {
 }
 
 _log() {
-    echo "[hiclaw-container $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "[agentteams-container $(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
 # ============================================================

@@ -14,7 +14,7 @@ bash /opt/agentteams/agent/skills/worker-management/scripts/enable-peer-mentions
 The script:
 1. Adds each Worker to every other Worker's `groupAllowFrom`
 2. Pushes updated `openclaw.json` to MinIO
-3. Sends Matrix @mention to each Worker to run `hiclaw-sync`
+3. Sends Matrix @mention to each Worker to run `agentteams-sync`
 
 ## Critical: Brief Workers afterward
 

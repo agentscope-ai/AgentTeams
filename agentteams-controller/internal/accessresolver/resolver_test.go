@@ -16,7 +16,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 )
 
-const testNS = "hiclaw"
+const testNS = "agentteams"
 
 func newFakeClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
@@ -42,7 +42,7 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	worker.Namespace = testNS
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "alice", WorkerName: "alice",
 	})
@@ -63,7 +63,7 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	if e.Service != credprovider.ServiceObjectStorage {
 		t.Fatalf("service = %q", e.Service)
 	}
-	if e.Scope.Bucket != "hiclaw-test" {
+	if e.Scope.Bucket != "agentteams-test" {
 		t.Fatalf("bucket not resolved: %+v", e.Scope)
 	}
 	for _, want := range []string{"agents/alice/", "agents/alice/*", "shared/", "shared/*"} {
@@ -123,7 +123,7 @@ func TestResolveWorker_CustomBucketRef(t *testing.T) {
 	}
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "bob", WorkerName: "bob",
 	})
@@ -134,7 +134,7 @@ func TestResolveWorker_CustomBucketRef(t *testing.T) {
 		t.Fatalf("got %d entries", len(entries))
 	}
 	got := entries[0]
-	if got.Scope.Bucket != "hiclaw-test" {
+	if got.Scope.Bucket != "agentteams-test" {
 		t.Fatalf("bucket = %q", got.Scope.Bucket)
 	}
 	if got.Scope.Prefixes[0] != "custom/bob/*" {
@@ -151,7 +151,7 @@ func TestResolveWorker_UnknownService(t *testing.T) {
 	}
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, _, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "eve", WorkerName: "eve",
 	})
@@ -172,7 +172,7 @@ func TestResolveWorker_ObjectStorageMissingPrefixes(t *testing.T) {
 	}
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, _, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "dave", WorkerName: "dave",
 	})
@@ -187,7 +187,7 @@ func TestResolveManager_Defaults(t *testing.T) {
 	mgr.Namespace = testNS
 	c := newFakeClient(t, mgr)
 
-	r := New(c, testNS, "hiclaw-test", "gw-1", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "gw-1", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleManager, Username: "manager",
 	})
@@ -228,7 +228,7 @@ func TestResolve_AIGatewayHappyPath(t *testing.T) {
 	}
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "gw-abc123", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "gw-abc123", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "gw-bot", WorkerName: "gw-bot",
 	})
@@ -269,7 +269,7 @@ func TestResolve_AIRegistryDefaultResources(t *testing.T) {
 	}
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "nacos-w", WorkerName: "nacos-w",
 	})
@@ -312,7 +312,7 @@ func TestResolve_AIRegistryCustomResources(t *testing.T) {
 	}
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "nacos-w2", WorkerName: "nacos-w2",
 	})
@@ -340,7 +340,7 @@ func TestResolve_DefaultObjectStorageUsesRuntimeWorkerName(t *testing.T) {
 	worker.Spec.AccessEntries = nil
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "worker-cr-name", WorkerName: "worker-runtime-name",
 	})
@@ -385,7 +385,7 @@ func TestResolve_AIGatewayNoDefault(t *testing.T) {
 	}
 	c := newFakeClient(t, worker)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, _, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role: auth.RoleWorker, Username: "gw-bot2", WorkerName: "gw-bot2",
 	})
@@ -490,7 +490,7 @@ func TestResolveTeamMember_DecoupledReadsWorkerCRAccessEntries(t *testing.T) {
 	}
 
 	c := newFakeClient(t, team, worker)
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleWorker,
 		Username:   "w1",
@@ -542,7 +542,7 @@ func TestResolveTeamMember_DecoupledLeaderRoleHonored(t *testing.T) {
 	}
 
 	c := newFakeClient(t, team, worker)
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleTeamLeader,
 		Username:   "lead",
@@ -561,7 +561,7 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	team := newAlphaTeam()
 	c := newFakeClient(t, team)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:     auth.RoleTeamLeader,
 		Username: "lead",
@@ -577,7 +577,7 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
 	}
 	e := entries[0]
-	if e.Scope.Bucket != "hiclaw-test" {
+	if e.Scope.Bucket != "agentteams-test" {
 		t.Fatalf("bucket = %q", e.Scope.Bucket)
 	}
 	for _, want := range []string{"agents/lead/", "agents/lead/*", "shared/", "shared/*", "teams/alpha/", "teams/alpha/*"} {
@@ -595,7 +595,7 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	team.Spec.Leader.WorkerName = "runtime-lead"
 	c := newFakeClient(t, team)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleTeamLeader,
 		Username:   "runtime-lead",
@@ -629,7 +629,7 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeTeamName(t *testing.T) {
 	team.Spec.TeamName = "team001"
 	c := newFakeClient(t, team)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:     auth.RoleTeamLeader,
 		Username: "lead",
@@ -654,7 +654,7 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 	team := newAlphaTeam()
 	c := newFakeClient(t, team)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleWorker,
 		Username:   "w1",
@@ -689,7 +689,7 @@ func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	team.Spec.Workers[0].WorkerName = "runtime-w1"
 	c := newFakeClient(t, team)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleWorker,
 		Username:   "runtime-w1",
@@ -728,7 +728,7 @@ func TestResolveTeamMember_CustomEntries(t *testing.T) {
 	}
 	c := newFakeClient(t, team)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleWorker,
 		Username:   "w1",
@@ -756,7 +756,7 @@ func TestResolveTeamMember_CustomEntries(t *testing.T) {
 func TestResolveTeamMember_TeamCRMissing(t *testing.T) {
 	c := newFakeClient(t)
 
-	r := New(c, testNS, "hiclaw-test", "", auth.DefaultResourcePrefix)
+	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleWorker,
 		Username:   "ghost-worker",

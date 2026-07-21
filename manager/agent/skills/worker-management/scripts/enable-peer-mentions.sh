@@ -148,9 +148,9 @@ for w in "${UPDATED_WORKERS[@]}"; do
             "${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/rooms/${ROOM_ID}/send/m.room.message/${TXN_ID}" \
             -H "Authorization: Bearer ${MANAGER_MATRIX_TOKEN}" \
             -H 'Content-Type: application/json' \
-            -d "{\"msgtype\":\"m.text\",\"body\":\"@${w}:${MATRIX_DOMAIN} Peer mention enabled: you can now be @mentioned by ${PEERS}. Please run: hiclaw-sync\",\"m.mentions\":{\"user_ids\":[\"@${w}:${MATRIX_DOMAIN}\"]}}" \
+            -d "{\"msgtype\":\"m.text\",\"body\":\"@${w}:${MATRIX_DOMAIN} Peer mention enabled: you can now be @mentioned by ${PEERS}. Please run: agentteams-sync\",\"m.mentions\":{\"user_ids\":[\"@${w}:${MATRIX_DOMAIN}\"]}}" \
             > /dev/null 2>&1 \
-            && log "  Notified @${w} to run hiclaw-sync" \
+            && log "  Notified @${w} to run agentteams-sync" \
             || log "  WARNING: Failed to notify @${w}"
     fi
 done

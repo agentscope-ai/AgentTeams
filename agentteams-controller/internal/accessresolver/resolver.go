@@ -34,7 +34,7 @@ type Resolver struct {
 // `bucketRef: workspace`. defaultGatewayID is used to resolve
 // `gatewayRef: default`; pass "" when the cluster has no AI Gateway.
 // prefix drives the STS session-name output; empty falls back to
-// auth.DefaultResourcePrefix ("hiclaw-").
+// auth.DefaultResourcePrefix ("agentteams-").
 func New(c client.Client, namespace, defaultBucket, defaultGatewayID string, prefix auth.ResourcePrefix) *Resolver {
 	return &Resolver{
 		client:           c,

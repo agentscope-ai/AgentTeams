@@ -162,7 +162,7 @@ func generateRandomHex(n int) (string, error) {
 }
 
 // SecretCredentialStore persists credentials as K8s Secrets (incluster mode).
-// Secret name: hiclaw-creds-{workerName}
+// Secret name: agentteams-creds-{workerName}
 type SecretCredentialStore struct {
 	Client    kubernetes.Interface
 	Namespace string
@@ -178,7 +178,7 @@ type SecretCredentialStore struct {
 }
 
 func (s *SecretCredentialStore) secretName(workerName string) string {
-	return "hiclaw-creds-" + workerName
+	return "agentteams-creds-" + workerName
 }
 
 func (s *SecretCredentialStore) Load(ctx context.Context, workerName string) (*WorkerCredentials, error) {

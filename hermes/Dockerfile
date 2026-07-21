@@ -10,7 +10,7 @@
 #
 # Build args:
 #   HIGRESS_REGISTRY        - base image registry for mc + python
-#   AGENTTEAMS_CONTROLLER_IMAGE - source for the hiclaw CLI binary
+#   AGENTTEAMS_CONTROLLER_IMAGE - source for the agt CLI binary
 #   APT_MIRROR              - Debian mirror (default: empty / official)
 #   PIP_INDEX_URL           - PyPI mirror (default: official PyPI)
 #   NPM_REGISTRY            - npm registry (default: official)
@@ -69,7 +69,6 @@ COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
 # AgentTeams CLI — for worker/team/human management via controller REST API
 COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
-RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 
 # Install Node.js 22 for shared Worker CLIs (mcporter, skills CLI compatibility)
 RUN apt-get update && \

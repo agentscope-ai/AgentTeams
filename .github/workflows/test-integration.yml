@@ -274,9 +274,8 @@ jobs:
           # each per-target tar only contains its own deltas.
           docker save \
             $(docker images --format '{{.Repository}}:{{.Tag}}' \
-              | grep -E '^(agentteams|hiclaw)/' \
+              | grep -E '^agentteams/' \
               | grep -v '<none>' \
-              | grep -v 'agentteams-controller' \
               | grep -v 'agentteams-controller' \
               | grep -v 'openclaw-base') \
             | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz

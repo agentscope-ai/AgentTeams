@@ -106,8 +106,8 @@ log_section "Manager Runtime"
 
 MANAGER_RUNTIME=$(docker exec "${_AGENT_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
                    docker exec "${_INFRA_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
-                   docker exec "${_AGENT_CTR}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || \
-                   docker exec "${_INFRA_CTR}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+                   docker exec "${_AGENT_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                   docker exec "${_INFRA_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
 log_pass "Manager runtime: ${MANAGER_RUNTIME}"
 
 # Runtime-specific config verification (agent container)

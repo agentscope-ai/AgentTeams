@@ -174,8 +174,8 @@ def _team_storage_name_from_worker_team(bucket: str, team_ref: str) -> str:
     team_name = team_ref.strip()
     bucket_name = (bucket or "").strip()
     prefixes = [bucket_name]
-    if bucket_name.startswith("hiclaw-"):
-        prefixes.append(bucket_name.removeprefix("hiclaw-"))
+    if bucket_name.startswith("agentteams-"):
+        prefixes.append(bucket_name.removeprefix("agentteams-"))
 
     for prefix in prefixes:
         if prefix and team_name.startswith(f"{prefix}-"):
@@ -529,7 +529,7 @@ class FileSync:
         if self._worker_info is not None:
             return self._worker_info
 
-        agentteams_bin = shutil.which("agt") or shutil.which("hiclaw")
+        agentteams_bin = shutil.which("agt")
         if not agentteams_bin:
             raise RuntimeError("AgentTeams CLI not found; cannot resolve worker storage scope")
 

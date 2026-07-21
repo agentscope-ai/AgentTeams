@@ -78,11 +78,10 @@ COPY --from=element-web /app /opt/element-web
 # agentteams-controller + AgentTeams CLI + kube-apiserver (from pre-built image)
 COPY --from=agentteams-controller /usr/local/bin/agentteams-controller /usr/local/bin/agentteams-controller
 COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
-RUN ln -sf /usr/local/bin/agt /usr/local/bin/hiclaw
 COPY --from=agentteams-controller /usr/local/bin/kube-apiserver /usr/local/bin/kube-apiserver
 COPY --from=agentteams-controller /opt/agentteams/config/crd/ /opt/agentteams/config/crd/
 
-# zip/unzip needed by hiclaw CLI for --zip package handling
+# zip/unzip needed by agt CLI for --zip package handling
 RUN apt-get update -qq && apt-get install -y -qq zip unzip > /dev/null 2>&1 && rm -rf /var/lib/apt/lists/*
 
 # ---- Python virtual environment ----

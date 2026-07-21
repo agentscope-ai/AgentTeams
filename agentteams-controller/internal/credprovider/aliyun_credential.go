@@ -76,7 +76,7 @@ func (a *aliyunCredential) GetCredential() (*credential.CredentialModel, error) 
 		return nil, err
 	}
 	typ := credentialType
-	provider := "hiclaw-credential-provider"
+	provider := "agentteams-credential-provider"
 	return &credential.CredentialModel{
 		AccessKeyId:     strPtr(t.AccessKeyID),
 		AccessKeySecret: strPtr(t.AccessKeySecret),

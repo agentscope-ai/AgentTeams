@@ -19,7 +19,7 @@ minio_setup
 TEST_TEAM="test26-qwenpaw-team-$$"
 TEST_LEADER="${TEST_TEAM}-leader"
 TEST_WORKER="${TEST_TEAM}-worker"
-TEST_MODEL="${AGENTTEAMS_E2E_MODEL:-${AGENTTEAMS_DEFAULT_MODEL:-${HICLAW_E2E_MODEL:-${HICLAW_DEFAULT_MODEL:-qwen3.7-max}}}}"
+TEST_MODEL="${AGENTTEAMS_E2E_MODEL:-${AGENTTEAMS_DEFAULT_MODEL:-qwen3.7-max}}"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 PROJECT_ID="test26-project-$$"
 TASK_ID="test26-task-$$"
@@ -34,7 +34,7 @@ WORKER_PACKAGE_V2_MARKER="TEST26_WORKER_PACKAGE_V2_${TEST_RUN_ID}"
 DONE_LINE="TEST26_TEAMHARNESS_DONE ${TASK_ID} ${MARKER}"
 LEADER_CONTAINER="$(worker_container_name "${TEST_LEADER}")"
 WORKER_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
-K8S_NAMESPACE="${AGENTTEAMS_E2E_NAMESPACE:-${HICLAW_E2E_NAMESPACE:-default}}"
+K8S_NAMESPACE="${AGENTTEAMS_E2E_NAMESPACE:-default}"
 LEADER_PACKAGE_V1_OBJECT="agentteams-config/packages/${TEST_LEADER}-v1.tar.gz"
 WORKER_PACKAGE_V1_OBJECT="agentteams-config/packages/${TEST_WORKER}-v1.tar.gz"
 LEADER_PACKAGE_V2_OBJECT="agentteams-config/packages/${TEST_LEADER}-v2.tar.gz"
@@ -147,7 +147,7 @@ _k8s_api() {
 _k8s_resource_path() {
     local plural="$1"
     local name="${2:-}"
-    local path="/apis/hiclaw.io/v1beta1/namespaces/${K8S_NAMESPACE}/${plural}"
+    local path="/apis/agentteams.io/v1beta1/namespaces/${K8S_NAMESPACE}/${plural}"
     if [ -n "${name}" ]; then
         path="${path}/${name}"
     fi
@@ -215,7 +215,7 @@ _agent_api() {
     local method="$2"
     local path="$3"
     docker exec "${container}" sh -c '
-        port="${AGENTTEAMS_CONSOLE_PORT:-${HICLAW_CONSOLE_PORT:-8088}}"
+        port="${AGENTTEAMS_CONSOLE_PORT:-8088}"
         curl -sf -X "'"${method}"'" "http://127.0.0.1:${port}'"${path}"'"
     ' 2>/dev/null
 }
@@ -564,7 +564,7 @@ _create_qwenpaw_worker_cr() {
         --arg soul "${soul}" \
         --argjson labels "${labels}" \
         '{
-            apiVersion:"hiclaw.io/v1beta1",
+            apiVersion:"agentteams.io/v1beta1",
             kind:"Worker",
             metadata:{name:$name, namespace:$namespace, labels:$labels},
             spec:{
@@ -589,7 +589,7 @@ _create_decoupled_team_cr() {
         --arg worker "${TEST_WORKER}" \
         --argjson labels "${labels}" \
         '{
-            apiVersion:"hiclaw.io/v1beta1",
+            apiVersion:"agentteams.io/v1beta1",
             kind:"Team",
             metadata:{name:$name, namespace:$namespace, labels:$labels},
             spec:{
@@ -617,7 +617,7 @@ _patch_worker_package_ref() {
 log_section "QwenPaw Image Plugin Package Baseline"
 
 QWENPAW_WORKER_IMAGE="$(_controller_env AGENTTEAMS_QWENPAW_WORKER_IMAGE)"
-QWENPAW_WORKER_IMAGE="${AGENTTEAMS_E2E_QWENPAW_WORKER_IMAGE:-${HICLAW_E2E_QWENPAW_WORKER_IMAGE:-${QWENPAW_WORKER_IMAGE:-agentteams/qwenpaw-worker:latest}}}"
+QWENPAW_WORKER_IMAGE="${AGENTTEAMS_E2E_QWENPAW_WORKER_IMAGE:-${QWENPAW_WORKER_IMAGE:-agentteams/qwenpaw-worker:latest}}"
 CONTROLLER_NAME="$(_controller_env AGENTTEAMS_CONTROLLER_NAME)"
 
 if docker image inspect "${QWENPAW_WORKER_IMAGE}" >/dev/null 2>&1; then
@@ -917,7 +917,7 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} TEAMS.md missing ${role} team context"
     fi
 
-    if docker exec "${container}" sh -c "grep -Fq '<!-- BEGIN HICLAW RUNTIME TEAM CONTEXT -->' '${workspace}/TEAMS.md' && grep -Fq 'runtimeName: ${TEST_LEADER}' '${workspace}/TEAMS.md' && grep -Fq 'runtimeName: ${TEST_WORKER}' '${workspace}/TEAMS.md' && grep -Fq 'matrixUserId: ${WORKER_MXID}' '${workspace}/TEAMS.md' && test ! -e '${qwenpaw_dir}/teamharness/team-context.json'" >/dev/null 2>&1; then
+    if docker exec "${container}" sh -c "grep -Fq '<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->' '${workspace}/TEAMS.md' && grep -Fq 'runtimeName: ${TEST_LEADER}' '${workspace}/TEAMS.md' && grep -Fq 'runtimeName: ${TEST_WORKER}' '${workspace}/TEAMS.md' && grep -Fq 'matrixUserId: ${WORKER_MXID}' '${workspace}/TEAMS.md' && test ! -e '${qwenpaw_dir}/teamharness/team-context.json'" >/dev/null 2>&1; then
         log_pass "${container} TEAMS.md contains runtime roster facts without intermediate cache"
     else
         log_fail "${container} TEAMS.md missing runtime roster facts or created intermediate cache"
@@ -1030,7 +1030,7 @@ mcp_transport = os.environ["TEST_MCP_TRANSPORT"]
 problems = []
 agent = json.loads((workspace / "agent.json").read_text(encoding="utf-8"))
 active = agent.get("active_model") or {}
-if active.get("provider_id") != "hiclaw-gateway" or active.get("model") != model:
+if active.get("provider_id") != "agentteams-gateway" or active.get("model") != model:
     problems.append("active_model")
 
 for rel in ["mcporter-servers.json", "config/mcporter.json"]:

@@ -61,7 +61,7 @@ var (
 const (
 	testManagerName   = "manager"
 	testMatrixDomain  = "localhost"
-	testAgentFSSubdir = "hiclaw-envtest"
+	testAgentFSSubdir = "agentteams-envtest"
 )
 
 func TestMain(m *testing.M) {

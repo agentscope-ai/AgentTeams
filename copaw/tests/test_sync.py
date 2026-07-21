@@ -42,7 +42,7 @@ def test_mc_failure_redacts_alias_credentials_and_logs_stderr(monkeypatch, caplo
     caplog.set_level(logging.INFO)
 
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        _mc("alias", "set", "hiclaw", "https://oss.example.com", raw_access, raw_secret)
+        _mc("alias", "set", "agentteams", "https://oss.example.com", raw_access, raw_secret)
 
     assert raw_access not in caplog.text
     assert raw_secret not in caplog.text

@@ -81,7 +81,7 @@ func baseRoomMeta(kind string) map[string]interface{} {
 		"schemaVersion": 1,
 		"roomKind":      kind,
 		"lifecycle":     "persistent",
-		"createdBy":     "hiclaw",
+		"createdBy":     "agentteams",
 	}
 }
 

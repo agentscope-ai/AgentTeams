@@ -93,7 +93,7 @@ gateway:
 # provider=minio + mode=managed → MinIO StatefulSet deployed here, static
 #   root credentials, admin API available.
 # provider=oss + mode=existing → external Alibaba Cloud OSS bucket; the
-#   controller obtains STS credentials from hiclaw-credential-provider
+#   controller obtains STS credentials from agentteams-credential-provider
 #   on every mc invocation and does NOT create buckets/users/policies.
 storage:
   provider: minio             # minio | oss
@@ -160,16 +160,16 @@ higress:
     admin:
       password: ""   # leave empty — controller initializes via /system/init using credentials.adminPassword
 
-# ── Credential Provider (hiclaw-credential-provider sidecar) ─────────────
+# ── Credential Provider (agentteams-credential-provider sidecar) ─────────────
 # Issues scoped STS tokens to the controller (for APIG/OSS SDK calls) and to
 # workers (via POST /api/v1/credentials/sts). Required when gateway.provider=
 # ai-gateway or storage.provider=oss. No default image is provided: in real
 # deployments this is a customer-specific RAM-role-issuing service.
-# For local development, see github.com/hiclaw/mock-credential-provider.
+# For local development, provide a mock implementation of the same API.
 credentialProvider:
   enabled: false                # auto-forced to true when any cloud provider is selected
   image:
-    repository: ""              # e.g. registry.example.com/hiclaw/credential-provider
+    repository: ""              # e.g. registry.example.com/agentteams/credential-provider
     tag: ""
     pullPolicy: IfNotPresent
   port: 17070
@@ -298,7 +298,7 @@ worker:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker
       tag: ""                 # defaults to global.imageTag
     openhuman:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-openhuman-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
   defaultRuntime: "openclaw"
   resources:

@@ -107,8 +107,8 @@ Write out the git commands you want executed:
 @manager:DOMAIN task-20260225 git-request:
 workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace
 operations:
-  - git clone https://github.com/higress-group/hiclaw.git
-  - cd hiclaw && git checkout -b feature-xyz
+  - git clone https://github.com/agentscope-ai/AgentTeams.git
+  - cd agentteams && git checkout -b feature-xyz
 ---CONTEXT---
 Starting work on feature XYZ
 ---END---
@@ -120,9 +120,9 @@ Starting work on feature XYZ
 ```
 @alice:DOMAIN task-20260225 git-result:
 Git operations completed successfully.
-Cloned to: /root/agentteams-fs/shared/tasks/task-20260225/workspace/hiclaw
+Cloned to: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 Created branch: feature-xyz
-Run `hiclaw-sync` to sync.
+Run `agentteams-sync` to sync.
 ```
 
 **Failure** — `git-failed:`
@@ -138,10 +138,10 @@ After receiving `git-result:`:
 
 ```bash
 # Sync from MinIO
-hiclaw-sync
+agentteams-sync
 
 # Now you can work locally
-cd /root/agentteams-fs/shared/tasks/task-20260225/workspace/hiclaw
+cd /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 
 # Read files, modify files, etc.
 cat src/main.py
@@ -158,7 +158,7 @@ After making local changes:
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/hiclaw
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 operations:
   - git add .
   - git commit -m "feat: implement feature XYZ"
@@ -197,7 +197,7 @@ git pull
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/hiclaw
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 operations:
   - git rebase -i HEAD~3
 ---CONTEXT---
@@ -209,7 +209,7 @@ Squashing the last 3 commits into one
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/hiclaw
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 operations:
   - git cherry-pick abc123def
 ---CONTEXT---
@@ -221,7 +221,7 @@ Cherry-picking fix from main branch
 
 ```
 @manager:DOMAIN task-20260225 git-request:
-workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/hiclaw
+workspace: /root/agentteams-fs/shared/tasks/task-20260225/workspace/agentteams
 operations:
   - git merge feature-xyz --no-ff -m "Merge feature XYZ"
 ---CONTEXT---
@@ -254,7 +254,7 @@ workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace
 operations:
   - git clone /path/to/repo.git
   - cd repo && git config user.name "alice"
-  - cd repo && git config user.email "alice@hiclaw.local"
+  - cd repo && git config user.email "alice@agentteams.local"
   - cd repo && git checkout -b feature/my-branch
   - mkdir -p repo/docs
   - 'cat > repo/docs/file.md << "EOF"

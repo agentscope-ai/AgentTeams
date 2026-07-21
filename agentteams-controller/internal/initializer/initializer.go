@@ -448,17 +448,23 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 	return nil
 }
 
-// customOpenAIURL returns the base URL with any port stripped, preserving
-// scheme, hostname and path. Higress derives the upstream host domain from
-// openaiCustomUrl, so an embedded port would be treated as part of the host
-// and break DNS resolution. The port is supplied separately via
-// openaiCustomServicePort.
+// customOpenAIURL returns the base URL with any port stripped while preserving
+// everything else (escaped path, query string, fragment). Higress derives the
+// upstream host domain from openaiCustomUrl, so an embedded port would be
+// treated as part of the host and break DNS resolution. The port is supplied
+// separately via openaiCustomServicePort.
 func customOpenAIURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Hostname() == "" {
 		return rawURL
 	}
-	return fmt.Sprintf("%s://%s%s", u.Scheme, u.Hostname(), u.Path)
+	host := u.Hostname()
+	if strings.Contains(host, ":") {
+		// Re-bracket IPv6 literals so the reconstructed URL stays valid.
+		host = "[" + host + "]"
+	}
+	u.Host = host
+	return u.String()
 }
 
 // parseHostPort extracts host and port from a URL like "http://host:port".

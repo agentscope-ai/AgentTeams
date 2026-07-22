@@ -6,6 +6,8 @@ on:
       - "hiclaw-controller/**"
       - "copaw/**"
       - "hermes/**"
+      - "qwenpaw/**"
+      - "openhuman/**"
       - "dashboard/**"
       - "helm/**"
       - "install/**"
@@ -38,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [copaw, hermes]
+        runtime: [copaw, hermes, qwenpaw, openhuman]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,7 +48,6 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install local shared Python packages
-        if: matrix.runtime == 'hermes'
         run: |
           set -euo pipefail
           for pkg in shared/python/agentteams_*; do
@@ -55,6 +56,31 @@ jobs:
           done
       - run: python -m pip install -e "./${{ matrix.runtime }}[test]"
       - run: python -m pytest -q "${{ matrix.runtime }}/tests"
+
+  shared-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install shared Python packages
+        run: |
+          set -euo pipefail
+          for pkg in shared/python/agentteams_*; do
+            [ -f "${pkg}/pyproject.toml" ] || continue
+            python -m pip install -e "./${pkg}[test]" 2>/dev/null || python -m pip install -e "./${pkg}"
+          done
+      - name: Run shared Python tests
+        run: |
+          set -euo pipefail
+          for pkg in shared/python/agentteams_*; do
+            [ -d "${pkg}/tests" ] || continue
+            echo "=== ${pkg} ==="
+            python -m pytest -q "${pkg}/tests"
+          done
 
   dashboard:
     runs-on: ubuntu-latest

@@ -105,6 +105,7 @@ manager/agent/
 ### Controller (operator) development
 
 - [hiclaw-controller/](hiclaw-controller/) — Go operator: CRD definitions under `api/v1beta1/`, reconcilers, `hiclaw` CLI baked into Manager/Worker images
+- [hiclaw-controller/internal/AGENTS.md](hiclaw-controller/internal/AGENTS.md) — package-level routing and ownership map for the 29 internal subdirectories
 
 ### To build and run
 
@@ -210,6 +211,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 
 - [.github/workflows/](.github/workflows/) — GitHub Actions workflows
 - [tests/](tests/) — integration test suite
+- [.pre-commit-config.yaml](.pre-commit-config.yaml) — local pre-commit hooks (install with `pre-commit install`)
 
 ### To modify Higress routing and initialization
 

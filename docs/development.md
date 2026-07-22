@@ -509,3 +509,31 @@ mc ls test/hiclaw-storage/ --recursive
 | Skills not loaded by OpenClaw | Missing YAML front matter in SKILL.md | Add `---\nname: ...\ndescription: ...\n---` |
 | `setup-higress.sh` crashes on restart | `set -e` + `curl -sf` on "already exists" errors | Use `higress_api()` helper which handles this gracefully |
 | Higress setup runs again on restart, resets consumers | Missing setup marker | Check `/data/.higress-setup-done`; delete it only to force re-setup |
+
+## Branch Protection (Recommended)
+
+The following branch protection settings are recommended for the `main` branch to ensure changes pass validation before acceptance. Configure these in **GitHub Settings → Branches → Branch protection rules → main**:
+
+- **Require status checks to pass before merging:**
+  - `controller` (from `remediation-gates.yml`)
+  - `python-runtimes` (all matrix entries)
+  - `shared-python`
+  - `dashboard` (server + web)
+  - `helm`
+  - `shared-shell`
+  - `test` (from `test-controller.yml`)
+- **Require branches to be up to date before merging**
+- **Require conversation resolution before merging**
+
+> **Note:** Branch protection cannot be codified in-repo without a GitHub App or Terraform provider. A repository admin must configure these settings manually.
+
+### Local Pre-commit Hooks
+
+Complementary local checks are available via [pre-commit](https://pre-commit.com/):
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+This enables fast format/syntax checks (trailing whitespace, YAML/JSON validity, Go formatting) before each commit. These are opt-in and do not replace CI gates.

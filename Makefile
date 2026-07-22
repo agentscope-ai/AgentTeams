@@ -135,7 +135,7 @@ LINES          ?= 50
         push-native push-native-manager push-native-manager-copaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
         push-native-qwenpaw-worker \
         buildx-setup \
-        test test-quick test-installed test-embedded test-shared \
+        test test-quick test-installed test-embedded test-shared test-python \
         install install-embedded uninstall uninstall-embedded replay replay-log \
         verify wait-ready wait-ready-embedded \
         generate sync-crds check-crd-sync \
@@ -634,6 +634,23 @@ test-installed: ## Run tests against an already-installed Manager (no container 
 
 test-shared: ## Run shared/lib shell unit tests
 	@set -e; for t in shared/tests/test-*.sh; do echo "=== $$t ==="; bash "$$t"; done
+
+test-python: ## Run all Python unit tests (shared libs + worker runtimes)
+	@set -e; \
+	echo "==> Installing shared Python packages..."; \
+	for pkg in shared/python/agentteams_*; do \
+		[ -f "$$pkg/pyproject.toml" ] || continue; \
+		echo "  pip install -e $$pkg"; \
+		python -m pip install -q -e "./$$pkg"; \
+	done; \
+	echo ""; \
+	for rt in copaw hermes qwenpaw openhuman; do \
+		echo "==> Testing $$rt..."; \
+		python -m pip install -q -e "./$$rt[test]"; \
+		python -m pytest -q "$$rt/tests"; \
+		echo ""; \
+	done; \
+	echo "==> All Python tests passed"
 
 # ---------- Install / Uninstall ----------
 

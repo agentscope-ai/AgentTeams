@@ -4,6 +4,15 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-bas
 
 ---
 
+- docs(controller): add internal/AGENTS.md routing guide for 29 internal packages
+- feat(makefile): add test-python target for unified Python validation
+- ci(remediation-gates): expand Python matrix to cover qwenpaw and openhuman runtimes
+- ci(remediation-gates): add shared-python job for shared library test coverage
+- chore: add .pre-commit-config.yaml with fast local hooks
+- docs(development): document recommended branch protection settings
+
+- feat(hiclaw): rewrite `hiclaw status` as a one-screen cluster overview (phase breakdown per resource type, sort with non-Ready first, `--watch` redraw, `--output json`); CLI-only, no controller API changes
+
 - fix(copaw): validate bridge profiles (`worker`|`manager`) and align CoPaw unit tests with current Worker/bridge/toolhelper APIs
 - fix(ci): install shared `agentteams_*` Python packages only for the hermes remediation-gates matrix entry
 - ci: skip embedded integration tests when `AGENTTEAMS_LLM_API_KEY` is unset (Makefile + workflow); forks without the secret no longer fail every shard at install-embedded

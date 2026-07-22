@@ -20,6 +20,12 @@ CLAUDE.md
 # OS files
 .DS_Store
 
+# Forgie (AI agent dev tool) — local checkpoints, code/knowledge DBs
+.forgie/
+
+# Qoder IDE workspace cache (better-loop reports, repowiki)
+.qoder/
+
 # Design docs
 design/
 poc-verification/
@@ -46,8 +52,12 @@ pnpm-lock.yaml
 
 # Compiled binaries (build outputs of `make build` in hiclaw-controller/);
 # the multi-stage Dockerfiles build from source, so never commit these.
+# Cover both Linux and Windows builds (`go build` produces `hiclaw`/`controller`
+# on Linux and `hiclaw.exe`/`controller.exe` on Windows).
 hiclaw-controller/controller
+hiclaw-controller/controller.exe
 hiclaw-controller/hiclaw
+hiclaw-controller/hiclaw.exe
 hiclaw-controller/bin/
 
 # Build-time agent templates (copied from manager/agent/ during docker build)

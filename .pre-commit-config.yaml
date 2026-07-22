@@ -1,0 +1,21 @@
+# Local pre-commit hooks for AgentTeams.
+# Install with: pre-commit install
+# These are opt-in complementary checks; CI (remediation-gates) is the authoritative gate.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(manager/agent/|\.qoder/)
+      - id: end-of-file-fixer
+        exclude: ^(manager/agent/|\.qoder/)
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        exclude: ^helm/hiclaw/templates/
+      - id: check-json
+      - id: check-merge-conflict
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-fmt
+        files: ^hiclaw-controller/

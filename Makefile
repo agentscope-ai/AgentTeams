@@ -892,3 +892,39 @@ help: ## Show this help
 	@echo "  DATE_TAG         Tag for date-pinned images  (default: YYYYMMDD)"
 	@echo "  DRY_RUN          Show commands only           (set to 1)"
 	@echo "  USE_CONTAINER    Use skopeo container         (set to 1)"
+
+# ---- AgentTeams Dashboard targets ----
+DASHBOARD_CONTEXT ?= ../agentteams-dashboard
+
+.PHONY: build-dashboard
+build-dashboard:
+	@if [ ! -d "$(DASHBOARD_CONTEXT)" ]; then \
+		echo "Error: DASHBOARD_CONTEXT=$(DASHBOARD_CONTEXT) does not exist"; \
+		exit 1; \
+	fi
+	$(MAKE) -C $(DASHBOARD_CONTEXT) image
+
+.PHONY: install-dashboard
+install-dashboard: build-dashboard wait-dashboard-ready
+
+.PHONY: update-dashboard
+update-dashboard: build-dashboard
+	bash $(DASHBOARD_CONTEXT)/install/agentteams-dashboard.sh update
+
+.PHONY: uninstall-dashboard
+uninstall-dashboard:
+	bash $(DASHBOARD_CONTEXT)/install/agentteams-dashboard.sh uninstall
+
+.PHONY: wait-dashboard-ready
+wait-dashboard-ready:
+	@echo "Waiting for Dashboard to be ready..."
+	@PORT=$${AGENTTEAMS_PORT_DASHBOARD:-13000}; \
+	for i in $$(seq 1 30); do \
+		if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$$PORT/" 2>/dev/null | grep -qE "200|301|302"; then \
+			echo "Dashboard ready on port $$PORT"; \
+			exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "Dashboard startup timed out"; \
+	exit 1

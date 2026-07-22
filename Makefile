@@ -34,6 +34,7 @@ OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
+DASHBOARD_CONTEXT    ?= ./agentteams-dashboard/
 
 MANAGER_TAG        ?= $(MANAGER_IMAGE):$(VERSION)
 MANAGER_COPAW_TAG  ?= $(MANAGER_COPAW_IMAGE):$(VERSION)
@@ -116,7 +117,7 @@ LINES          ?= 50
         push-native-qwenpaw-worker \
         buildx-setup \
         test test-quick test-installed test-embedded \
-        install install-embedded uninstall uninstall-embedded replay replay-log \
+        install install-embedded uninstall uninstall-embedded replay replay-log install-dashboard update-dashboard uninstall-dashboard wait-dashboard-ready \
         verify wait-ready wait-ready-embedded \
         generate sync-crds check-crd-sync \
         status logs \
@@ -174,6 +175,15 @@ build-embedded: build-agentteams-controller ## Build embedded all-in-one control
 		-f agentteams-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
 		.
+
+build-dashboard: ## Build agentteams-dashboard image
+	@if [ ! -d "$(DASHBOARD_CONTEXT)" ]; then \
+		echo "ERROR: DASHBOARD_CONTEXT directory not found: $(DASHBOARD_CONTEXT)"; \
+		echo "Set DASHBOARD_CONTEXT to the agentteams-dashboard source directory."; \
+		exit 1; \
+	fi
+	@echo "==> Building agentteams-dashboard image"
+	$(MAKE) -C $(DASHBOARD_CONTEXT) build
 
 build-worker: ## Build Worker image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
@@ -737,6 +747,40 @@ uninstall-embedded: ## Stop and remove embedded containers
 		rm -rf "$${HOME}/agentteams-manager" && echo "  Cleaned workspace: ~/agentteams-manager"; \
 	fi
 	@echo "==> AgentTeams (embedded) uninstalled"
+
+# --- agentteams-dashboard standalone management ---
+.PHONY: install-dashboard update-dashboard uninstall-dashboard wait-dashboard-ready
+
+install-dashboard: ## Install agentteams-dashboard standalone
+	@if [ ! -d "$(DASHBOARD_CONTEXT)" ]; then \
+		echo "ERROR: DASHBOARD_CONTEXT not found: $(DASHBOARD_CONTEXT)"; exit 1; \
+	fi
+	@bash $(DASHBOARD_CONTEXT)/install/agentteams-dashboard.sh
+	@$(MAKE) wait-dashboard-ready
+
+update-dashboard: ## Update agentteams-dashboard (pull latest & recreate)
+	@if [ ! -d "$(DASHBOARD_CONTEXT)" ]; then \
+		echo "ERROR: DASHBOARD_CONTEXT not found: $(DASHBOARD_CONTEXT)"; exit 1; \
+	fi
+	@bash $(DASHBOARD_CONTEXT)/install/agentteams-dashboard.sh update
+	@$(MAKE) wait-dashboard-ready
+
+uninstall-dashboard: ## Uninstall agentteams-dashboard
+	@if [ ! -d "$(DASHBOARD_CONTEXT)" ]; then \
+		echo "ERROR: DASHBOARD_CONTEXT not found: $(DASHBOARD_CONTEXT)"; exit 1; \
+	fi
+	@bash $(DASHBOARD_CONTEXT)/install/agentteams-dashboard.sh uninstall
+
+wait-dashboard-ready: ## Wait for dashboard HTTP endpoint to respond
+	@echo "Waiting for agentteams-dashboard to be ready..."
+	@PORT=$${AGENTTEAMS_PORT_DASHBOARD:-13000}; \
+	for i in $$(seq 1 30); do \
+		if curl -sf -o /dev/null --max-time 3 http://127.0.0.1:$$PORT/ 2>/dev/null; then \
+			echo "Dashboard is ready!"; exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "ERROR: Dashboard did not respond within 60s"; exit 1
 
 # ---------- Replay ----------
 

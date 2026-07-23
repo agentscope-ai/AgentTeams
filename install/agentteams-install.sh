@@ -4011,42 +4011,16 @@ install_worker() {
 }
 
 _start_dashboard() {
-    local ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     if [ "${AGENTTEAMS_DASHBOARD}" != "1" ]; then
         log "$(msg dash.skip)"
         return 0
-    fi
-
-    # Detect running manager container for MinIO and LLM env vars
-    local MANAGER_CTR=""
-    if command -v docker >/dev/null 2>&1; then
-        MANAGER_CTR=$(docker ps --filter "name=agentteams-manager" --format '{{.Names}}' 2>/dev/null | head -1)
-    elif command -v podman >/dev/null 2>&1; then
-        MANAGER_CTR=$(podman ps --filter "name=agentteams-manager" --format '{{.Names}}' 2>/dev/null | head -1)
-    fi
-
-    local MINIO_ENV_ARGS=()
-    local LLM_ENV_ARGS=()
-    if [ -n "${MANAGER_CTR}" ]; then
-        local _rt="docker"; command -v podman >/dev/null 2>&1 && [ "$($_rt ps --filter name=agentteams-manager -q 2>/dev/null | wc -l)" -eq 0 ] && _rt="podman"
-        for key in AGENTTEAMS_FS_ENDPOINT AGENTTEAMS_FS_ACCESS_KEY AGENTTEAMS_FS_SECRET_KEY AGENTTEAMS_FS_BUCKET; do
-            local val=$($_rt inspect -f "{{range .Config.Env}}{{println .}}{{end}}" "${MANAGER_CTR}" 2>/dev/null | grep "^${key}=" | cut -d= -f2-)
-            if [ -n "${val}" ]; then
-                MINIO_ENV_ARGS+=(-e "${key}=${val}")
-            fi
-        done
-        for key in AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_LLM_API_KEY AGENTTEAMS_OPENAI_BASE_URL AGENTTEAMS_DEFAULT_MODEL; do
-            local val=$($_rt inspect -f "{{range .Config.Env}}{{println .}}{{end}}" "${MANAGER_CTR}" 2>/dev/null | grep "^${key}=" | cut -d= -f2-)
-            if [ -n "${val}" ]; then
-                LLM_ENV_ARGS+=(-e "${key}=${val}")
-            fi
-        done
     fi
 
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
     AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.0.0}"
     AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
     local DASHBOARD_CONTAINER="agentteams-dashboard"
+    local CTRL_CONTAINER="agentteams-controller"
 
     log ""
     log "$(msg dash.title)"
@@ -4056,26 +4030,85 @@ _start_dashboard() {
         BIND_ADDR="0.0.0.0"
     fi
 
+    # Build env args from controller container (MinIO/LLM/auth).
+    local env_args=()
+    env_args+=(-e AGENTTEAMS_CONTROLLER_URL="http://${CTRL_CONTAINER}:8090")
+    env_args+=(-e NEXT_PUBLIC_MATRIX_API_URL="http://${CTRL_CONTAINER}:6167")
+    env_args+=(-e MATRIX_HOMESERVER_ALLOWLIST="${CTRL_CONTAINER},matrix-local.agentteams.io,matrix.org")
+    env_args+=(-e DATABASE_URL="file:/app/db/dashboard.db")
+
+    if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -qx "${CTRL_CONTAINER}"; then
+        local env_out
+        env_out=$(${DOCKER_CMD} inspect "${CTRL_CONTAINER}" --format='{{range .Config.Env}}{{.}}{{"\n"}}{{end}}')
+
+        _env() { echo "${env_out}" | sed -n "s|^${1}=||p" | head -n1; }
+
+        local fs_endpoint; fs_endpoint=$(_env AGENTTEAMS_FS_ENDPOINT)
+        [ -z "${fs_endpoint}" ] && fs_endpoint=$(_env AGENTTEAMS_MINIO_ENDPOINT)
+        if [ -n "${fs_endpoint}" ]; then
+            fs_endpoint=$(echo "${fs_endpoint}" | sed -e "s|127\.0\.0\.1|${CTRL_CONTAINER}|" -e "s|localhost|${CTRL_CONTAINER}|")
+            env_args+=(-e AGENTTEAMS_FS_ENDPOINT="${fs_endpoint}")
+        else
+            env_args+=(-e AGENTTEAMS_FS_ENDPOINT="http://${CTRL_CONTAINER}:9000")
+        fi
+
+        local fs_bucket; fs_bucket=$(_env AGENTTEAMS_FS_BUCKET)
+        [ -z "${fs_bucket}" ] && fs_bucket=$(_env AGENTTEAMS_MINIO_BUCKET)
+        [ -n "${fs_bucket}" ] && env_args+=(-e AGENTTEAMS_FS_BUCKET="${fs_bucket}")
+
+        local fs_user; fs_user=$(_env AGENTTEAMS_FS_ACCESS_KEY)
+        [ -z "${fs_user}" ] && fs_user=$(_env AGENTTEAMS_MINIO_USER)
+        [ -n "${fs_user}" ] && env_args+=(-e AGENTTEAMS_FS_ACCESS_KEY="${fs_user}")
+
+        local fs_pass; fs_pass=$(_env AGENTTEAMS_FS_SECRET_KEY)
+        [ -z "${fs_pass}" ] && fs_pass=$(_env AGENTTEAMS_MINIO_PASSWORD)
+        [ -n "${fs_pass}" ] && env_args+=(-e AGENTTEAMS_FS_SECRET_KEY="${fs_pass}")
+
+        for k in AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_LLM_API_KEY AGENTTEAMS_OPENAI_BASE_URL AGENTTEAMS_DEFAULT_MODEL; do
+            local v; v=$(_env "${k}")
+            [ -n "${v}" ] && env_args+=(-e "${k}=${v}")
+        done
+
+        # The controller writes the CLI SA token to /var/run/hiclaw/cli-token.
+        local auth_token
+        auth_token=$(${DOCKER_CMD} exec "${CTRL_CONTAINER}" sh -c 'cat /var/run/hiclaw/cli-token 2>/dev/null' | tr -d '\n' || true)
+        if [ -n "${auth_token}" ]; then
+            env_args+=(-e AGENTTEAMS_AUTH_TOKEN="${auth_token}")
+        else
+            log "WARN: could not read controller SA token — Dashboard will be unauthenticated to Controller."
+        fi
+
+        local admin_user; admin_user=$(_env AGENTTEAMS_ADMIN_USER)
+        local admin_pass; admin_pass=$(_env AGENTTEAMS_ADMIN_PASSWORD)
+        [ -n "${admin_user}" ] && env_args+=(-e AGENTTEAMS_ADMIN_USER="${admin_user}")
+        [ -n "${admin_pass}" ] && env_args+=(-e AGENTTEAMS_ADMIN_PASSWORD="${admin_pass}")
+
+        # In embedded topology the Higress Console lives inside the controller on port 8001.
+        if ${DOCKER_CMD} exec "${CTRL_CONTAINER}" wget -q -O- --timeout=2 http://127.0.0.1:8001/ >/dev/null 2>&1; then
+            env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="http://${CTRL_CONTAINER}:8001")
+        fi
+    else
+        log "WARN: ${CTRL_CONTAINER} not running; launching Dashboard without Controller/MinIO/LLM env."
+        env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="http://${CTRL_CONTAINER}:8001")
+    fi
+
     # Remove existing container
     ${DOCKER_CMD} rm -f "${DASHBOARD_CONTAINER}" >/dev/null 2>&1 || true
+    ${DOCKER_CMD} volume create agentteams-dashboard-data >/dev/null 2>&1 || true
     ${DOCKER_CMD} run -d \
         --name "${DASHBOARD_CONTAINER}" \
         --restart unless-stopped \
         --network "${AGENTTEAMS_NETWORK:-agentteams-net}" \
         -p "${BIND_ADDR}:${AGENTTEAMS_PORT_DASHBOARD}:3000" \
-        -v agentteams-dashboard-data:/data \
-        -e AGENTTEAMS_CONTROLLER_URL=http://agentteams-controller:8080 \
-        -e HIGRESS_CONSOLE_URL=http://higress-console:8080 \
-        -e DATABASE_URL=file:/data/dashboard.db \
-        "${MINIO_ENV_ARGS[@]}" \
-        "${LLM_ENV_ARGS[@]}" \
+        "${env_args[@]}" \
+        -v agentteams-dashboard-data:/app/db \
         "${AGENTTEAMS_DASHBOARD_IMAGE}"
 
     # Wait for dashboard to be ready
     local max_wait=60
     local waited=0
     while [ $waited -lt $max_wait ]; do
-        if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD}/" 2>/dev/null | grep -q "200\|301\|302"; then
+        if curl -sf "http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD}/" >/dev/null 2>&1; then
             log "$(msg dash.ready ${AGENTTEAMS_PORT_DASHBOARD})"
             return 0
         fi

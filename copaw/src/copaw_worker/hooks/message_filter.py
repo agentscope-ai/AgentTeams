@@ -12,6 +12,7 @@ NO_REPLY_TOKEN = "NO_REPLY"
 _MATRIX_USER_ID_RE = re.compile(
     r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
 )
+_MATRIX_LOCALPART_MENTION_RE = re.compile(r"@[a-zA-Z0-9._=+/\-]+")
 _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
     r"(?i)\b("
     r"let me|"
@@ -85,8 +86,8 @@ def resolve_team_leader_assignment_room(text: str, room_id: str) -> str:
     if not _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(text or ""):
         return room_id
 
-    for mxid in extract_matrix_mentions(text):
-        localpart = mxid.removeprefix("@").split(":", 1)[0]
+    for mention in _MATRIX_LOCALPART_MENTION_RE.findall(text or ""):
+        localpart = mention.removeprefix("@")
         if localpart.endswith("-lead"):
             continue
         if not team_name or localpart.startswith(f"{team_name}-"):

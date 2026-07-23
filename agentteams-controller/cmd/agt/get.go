@@ -316,6 +316,8 @@ type teamResp struct {
 	TeamName          string              `json:"teamName,omitempty"`
 	Phase             string              `json:"phase"`
 	Description       string              `json:"description,omitempty"`
+	Admin             *teamAdminResp      `json:"admin,omitempty"`
+	HumanMembers      []teamHumanResp     `json:"humanMembers,omitempty"`
 	LeaderName        string              `json:"leaderName"`
 	LeaderHeartbeat   *teamHeartbeatResp  `json:"leaderHeartbeat,omitempty"`
 	WorkerIdleTimeout string              `json:"workerIdleTimeout,omitempty"`
@@ -327,6 +329,17 @@ type teamResp struct {
 	Message           string              `json:"message,omitempty"`
 	WorkerNames       []string            `json:"workerNames,omitempty"`
 	WorkerMembers     []map[string]string `json:"workerMembers"`
+}
+
+type teamAdminResp struct {
+	Name         string `json:"name"`
+	MatrixUserID string `json:"matrixUserId,omitempty"`
+}
+
+type teamHumanResp struct {
+	Name         string `json:"name"`
+	MatrixUserID string `json:"matrixUserId,omitempty"`
+	Role         string `json:"role,omitempty"`
 }
 
 type teamHeartbeatResp struct {

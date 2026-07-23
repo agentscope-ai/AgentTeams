@@ -29,8 +29,8 @@ TEST_WORKERS=$(echo "${WORKERS_RESOURCE}" | jq -r '.workers[].name | select(star
 TEAMS_RESOURCE=$(exec_in_agent agt get teams -o json 2>/dev/null || echo '{"teams":[]}')
 TEST_TEAMS=$(echo "${TEAMS_RESOURCE}" | jq -r '.teams[].name | select(startswith("test-"))' 2>/dev/null || echo "")
 
-WORKER_COUNT=$(echo "${TEST_WORKERS}" | grep -c . 2>/dev/null || echo "0")
-TEAM_COUNT=$(echo "${TEST_TEAMS}" | grep -c . 2>/dev/null || echo "0")
+WORKER_COUNT=$(echo "${TEST_WORKERS}" | awk 'NF { count++ } END { print count + 0 }')
+TEAM_COUNT=$(echo "${TEST_TEAMS}" | awk 'NF { count++ } END { print count + 0 }')
 
 log_info "Found ${WORKER_COUNT} test worker(s) and ${TEAM_COUNT} test team(s) to clean up"
 
@@ -56,12 +56,12 @@ log_section "Pre-Delete State"
 
 # Snapshot which containers exist (running or stopped)
 PRE_CONTAINERS=$(list_test_worker_containers)
-PRE_CONTAINER_COUNT=$(echo "${PRE_CONTAINERS}" | grep -c . 2>/dev/null || echo "0")
+PRE_CONTAINER_COUNT=$(echo "${PRE_CONTAINERS}" | awk 'NF { count++ } END { print count + 0 }')
 log_info "${PRE_CONTAINER_COUNT} test worker container(s) present before cleanup"
 
 # Snapshot lifecycle entries
 PRE_LIFECYCLE_WORKERS=$(exec_in_agent jq -r '.workers | keys[] | select(startswith("test-"))' ~/worker-lifecycle.json 2>/dev/null || echo "")
-PRE_LIFECYCLE_COUNT=$(echo "${PRE_LIFECYCLE_WORKERS}" | grep -c . 2>/dev/null || echo "0")
+PRE_LIFECYCLE_COUNT=$(echo "${PRE_LIFECYCLE_WORKERS}" | awk 'NF { count++ } END { print count + 0 }')
 log_info "${PRE_LIFECYCLE_COUNT} test worker(s) in worker-lifecycle.json before cleanup"
 
 # ============================================================
@@ -82,26 +82,12 @@ if [ -n "${TEST_TEAMS}" ]; then
 fi
 
 # ============================================================
-# Section 4: Delete standalone workers (not part of a team)
+# Section 4: Delete workers after their Team references are gone
 # ============================================================
 if [ -n "${TEST_WORKERS}" ]; then
     log_section "Delete Workers"
 
-    # Collect team member names to skip (already handled by team delete)
-    TEAM_MEMBERS=""
-    for team in ${TEST_TEAMS}; do
-        MEMBERS=$(echo "${TEAMS_REGISTRY}" | jq -r --arg t "${team}" \
-            '(.teams[$t].leader // empty), (.teams[$t].workers[]? // empty)' 2>/dev/null || echo "")
-        TEAM_MEMBERS="${TEAM_MEMBERS} ${MEMBERS}"
-    done
-
     for worker in ${TEST_WORKERS}; do
-        # Skip if this worker was part of a team (already deleted above)
-        if echo "${TEAM_MEMBERS}" | grep -qw "${worker}"; then
-            log_info "Skipping ${worker} (part of a deleted team)"
-            continue
-        fi
-
         log_info "Deleting worker: ${worker}"
         DELETE_OUTPUT=$(exec_in_agent agt delete worker "${worker}" 2>&1)
         if echo "${DELETE_OUTPUT}" | grep -q "deleted"; then
@@ -132,7 +118,7 @@ while [ "${RECONCILE_ELAPSED}" -lt "${RECONCILE_TIMEOUT}" ]; do
     fi
     sleep 5
     RECONCILE_ELAPSED=$((RECONCILE_ELAPSED + 5))
-    REMAINING_COUNT=$(echo "${REMAINING}" | grep -c . 2>/dev/null || echo "0")
+    REMAINING_COUNT=$(echo "${REMAINING}" | awk 'NF { count++ } END { print count + 0 }')
     printf "\r[TEST INFO] Waiting for containers to be removed... (%d remaining, %ds/%ds)" "${REMAINING_COUNT}" "${RECONCILE_ELAPSED}" "${RECONCILE_TIMEOUT}"
 done
 echo ""

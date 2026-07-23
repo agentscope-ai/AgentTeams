@@ -1,12 +1,41 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
 	sigyaml "sigs.k8s.io/yaml"
 )
+
+func TestTeamRespJSONPreservesAdmin(t *testing.T) {
+	input := []byte(`{"name":"team-a","phase":"Active","admin":{"name":"alice","matrixUserId":"@alice:example.com"},"workerMembers":[{"name":"leader","role":"team_leader"}]}`)
+	var resp teamResp
+	if err := json.Unmarshal(input, &resp); err != nil {
+		t.Fatalf("unmarshal team response: %v", err)
+	}
+	output, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal team response: %v", err)
+	}
+
+	var got struct {
+		Admin *struct {
+			Name         string `json:"name"`
+			MatrixUserID string `json:"matrixUserId"`
+		} `json:"admin"`
+	}
+	if err := json.Unmarshal(output, &got); err != nil {
+		t.Fatalf("unmarshal projected team response: %v", err)
+	}
+	if got.Admin == nil {
+		t.Fatal("projected team response dropped admin")
+	}
+	if got.Admin.Name != "alice" || got.Admin.MatrixUserID != "@alice:example.com" {
+		t.Fatalf("projected admin = %#v", got.Admin)
+	}
+}
 
 func TestRootCommandUsesInvokedBinaryName(t *testing.T) {
 	if got := newRootCommand("agt").Use; got != "agt" {

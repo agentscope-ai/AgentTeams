@@ -6,6 +6,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug Fixes**
 
+- **Team Worker room membership**: Force Manager out of regular Team Worker personal rooms when equal Matrix power levels prevent a normal kick. ([43545c2](https://github.com/agentscope-ai/AgentTeams/commit/43545c2))
 - **CoPaw Team assignment localparts**: Route Team Leader assignments that mention a Team Worker by Matrix localpart from Leader DM to Team Room. ([973e291](https://github.com/agentscope-ai/AgentTeams/commit/973e291))
 - **CoPaw Team coordination routing**: Route Team Leader worker assignments sent through the `message` tool from Leader DM to Team Room, matching the Matrix channel send path. ([92c8145](https://github.com/agentscope-ai/AgentTeams/commit/92c8145))
 - **Pinned OpenClaw source fetch**: Fetch the pinned OpenClaw commit directly so the base image build does not depend on a retired-brand external branch name. ([b0081c2](https://github.com/agentscope-ai/AgentTeams/commit/b0081c2))

@@ -463,12 +463,24 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 
 	// 6. Channel authorization
 	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
+		managerMatrixID := r.ManagerConfig.MatrixUserID("manager")
 		leaderMatrixID := r.ManagerConfig.MatrixUserID(leaderRuntimeName)
 		if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(leaderMatrixID, true); err != nil {
 			logger.Error(err, "failed to update Manager groupAllowFrom for team leader (non-fatal)")
 		}
 		for _, rm := range members {
 			if rm.ref.Name != leaderRef.Name {
+				if rm.worker.Status.RoomID != "" {
+					if err := r.Provisioner.KickFromRoom(
+						ctx,
+						rm.worker.Status.RoomID,
+						managerMatrixID,
+						"Team workers communicate through the Team Room",
+					); err != nil {
+						return r.failTeam(ctx, t, patchBase,
+							fmt.Sprintf("remove Manager from Worker %q personal room: %v", rm.ref.Name, err))
+					}
+				}
 				if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(rm.runtimeName), false); err != nil {
 					logger.Error(err, "failed to revoke Manager groupAllowFrom for team worker (non-fatal)", "worker", rm.runtimeName)
 				}
@@ -493,7 +505,9 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	}
 
 	// 7. Status aggregation
-	r.cleanupStaleTeamMembers(ctx, derivedTeam, members)
+	if err := r.cleanupStaleTeamMembers(ctx, derivedTeam, members); err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
+	}
 	leaderReady, readyWorkers := aggregateTeamStatus(t, members, leaderRef.Name, len(workerRefs))
 
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
@@ -701,7 +715,7 @@ func syncTeamMemberStatus(ms *v1beta1.TeamMemberStatus, member teamWorkerMember)
 	ms.ExposedPorts = member.worker.Status.ExposedPorts
 }
 
-func (r *TeamReconciler) cleanupStaleTeamMembers(ctx context.Context, t *v1beta1.Team, members []teamWorkerMember) {
+func (r *TeamReconciler) cleanupStaleTeamMembers(ctx context.Context, t *v1beta1.Team, members []teamWorkerMember) error {
 	desired := make(map[string]struct{}, len(members))
 	for _, member := range members {
 		desired[member.ref.Name] = struct{}{}
@@ -713,13 +727,16 @@ func (r *TeamReconciler) cleanupStaleTeamMembers(ctx context.Context, t *v1beta1
 		var w v1beta1.Worker
 		key := client.ObjectKey{Name: ms.Name, Namespace: t.Namespace}
 		if err := r.Get(ctx, key, &w); err == nil {
-			r.detachTeamMember(ctx, t, &w)
+			if err := r.detachTeamMember(ctx, t, &w); err != nil {
+				return fmt.Errorf("detach stale Team member %q: %w", ms.Name, err)
+			}
 			continue
 		}
 	}
+	return nil
 }
 
-func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, w *v1beta1.Worker) {
+func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, w *v1beta1.Worker) error {
 	logger := log.FromContext(ctx)
 	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
 	runtime := backend.ResolveRuntime(w.Spec.Runtime, r.DefaultRuntime)
@@ -754,13 +771,21 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		logger.Error(err, "failed to drop worker runtime team context (non-fatal)", "worker", runtimeName)
 	}
 
-	if r.ManagerConfig == nil || !r.ManagerConfig.Enabled() || runtime == backend.RuntimeQwenPaw {
-		return
+	if r.ManagerConfig == nil || !r.ManagerConfig.Enabled() {
+		return nil
+	}
+	managerMatrixID := r.ManagerConfig.MatrixUserID("manager")
+	if w.Status.RoomID != "" {
+		if err := r.Provisioner.InviteToRoom(ctx, w.Status.RoomID, managerMatrixID); err != nil {
+			return fmt.Errorf("restore Manager to Worker %q personal room: %w", w.Name, err)
+		}
+	}
+	if runtime == backend.RuntimeQwenPaw {
+		return nil
 	}
 	if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
 		logger.Error(err, "failed to revoke Manager groupAllowFrom for detached member (non-fatal)", "worker", runtimeName)
 	}
-	managerMatrixID := r.ManagerConfig.MatrixUserID("manager")
 	var systemAdminID string
 	if r.SystemAdminUser != "" {
 		systemAdminID = r.ManagerConfig.MatrixUserID(r.SystemAdminUser)
@@ -773,6 +798,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	}); err != nil {
 		logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", runtimeName)
 	}
+	return nil
 }
 
 func (r *TeamReconciler) teamChannelPolicy(t *v1beta1.Team, members []teamWorkerMember, leaderName string, current teamWorkerMember, role MemberRole) teamChannelAllowLists {
@@ -927,7 +953,9 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 			// Worker already deleted or not found — nothing to revert.
 			continue
 		}
-		r.detachTeamMember(ctx, t, &w)
+		if err := r.detachTeamMember(ctx, t, &w); err != nil {
+			return fmt.Errorf("detach Team member %q: %w", ref.Name, err)
+		}
 	}
 
 	// Remove heartbeat config from the leader.

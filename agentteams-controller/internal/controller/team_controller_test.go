@@ -854,6 +854,23 @@ func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 		t.Fatalf("SyncTeamLeaderAssets WorkerName=%q, want lead", got)
 	}
 
+	if got := provisioner.Calls.KickFromRoom; len(got) != 2 {
+		t.Fatalf("KickFromRoom calls=%+v, want regular worker personal rooms only", got)
+	} else {
+		kickedRooms := map[string]string{}
+		for _, call := range got {
+			kickedRooms[call.RoomID] = call.UserID
+		}
+		for _, roomID := range []string{"!room-dev:matrix.local", "!room-qa:matrix.local"} {
+			if kickedRooms[roomID] != "@manager:matrix.local" {
+				t.Errorf("KickFromRoom[%q]=%q, want @manager:matrix.local", roomID, kickedRooms[roomID])
+			}
+		}
+		if _, kicked := kickedRooms["!room-lead:matrix.local"]; kicked {
+			t.Errorf("Team Leader personal room must retain Manager membership")
+		}
+	}
+
 	policies := map[string]service.InjectChannelPolicyRequest{}
 	for _, call := range deployer.Calls.InjectChannelPolicy {
 		policies[call.WorkerName] = call
@@ -1093,10 +1110,12 @@ func TestHandleDeleteTeamReferencesResetsChannelPolicyAndArchivesRoomsWithTeamAd
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
 		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status:     v1beta1.WorkerStatus{RoomID: "!room-lead:matrix.local"},
 	}
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
 		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Status:     v1beta1.WorkerStatus{RoomID: "!room-dev:matrix.local"},
 	}
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
@@ -1157,6 +1176,20 @@ func TestHandleDeleteTeamReferencesResetsChannelPolicyAndArchivesRoomsWithTeamAd
 		}
 		if req.Role != RoleStandalone.String() {
 			t.Fatalf("%s role=%q, want standalone", workerName, req.Role)
+		}
+	}
+
+	if got := provisioner.Calls.InviteToRoom; len(got) != 2 {
+		t.Fatalf("InviteToRoom calls=%+v, want Manager restored to both standalone worker rooms", got)
+	} else {
+		invitedRooms := map[string]string{}
+		for _, call := range got {
+			invitedRooms[call.RoomID] = call.UserID
+		}
+		for _, roomID := range []string{"!room-lead:matrix.local", "!room-dev:matrix.local"} {
+			if invitedRooms[roomID] != "@manager:matrix.local" {
+				t.Errorf("InviteToRoom[%q]=%q, want @manager:matrix.local", roomID, invitedRooms[roomID])
+			}
 		}
 	}
 

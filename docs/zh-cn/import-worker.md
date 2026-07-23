@@ -38,7 +38,7 @@ bash agentteams-apply.sh -f worker.yaml
 
 ### 创建 Team
 
-Team 由一个 Leader 和若干 Worker 组成。Leader 接收 Manager 下发的任务，并在团队内部进行协调。
+Team 引用已经存在的 Worker CR，其中必须且只能有一个引用的角色为 `team_leader`。请先创建或导入所有 Worker，再创建 Team。
 
 ```yaml
 # team.yaml
@@ -48,15 +48,13 @@ metadata:
   name: alpha-team
 spec:
   description: 全栈开发团队
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
+      role: worker
     - name: alpha-qa
-      model: claude-sonnet-4-6
+      role: worker
 ```
 
 ```bash
@@ -97,16 +95,29 @@ bash agentteams-apply.sh -f human.yaml
 
 ```yaml
 apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alpha-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alpha-dev
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: alpha-team
 spec:
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
+      role: worker
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Human
@@ -246,8 +257,8 @@ bash agentteams-import.sh worker --name my-worker --zip migration-my-worker-2026
 4. 创建 MinIO 用户并配置权限策略
 5. 配置 Higress Gateway Consumer 和路由授权
 6. 生成 openclaw.json 并推送所有配置到 MinIO
-7. 更新 Manager 的 workers-registry.json
-8. 发送消息通知 Manager 启动 Worker 容器
+7. 创建或更新 Worker CR
+8. 由 Controller 协调 Worker 容器
 
 ### 第 5 步：验证
 
@@ -426,5 +437,5 @@ docker start agentteams-manager
 
 1. 查看 Worker 容器日志：`docker logs agentteams-worker-<name>`
 2. 在 Element Web 中确认 Worker 出现在其专属 Room 中
-3. 确认 Manager 的 `workers-registry.json` 中有正确的条目
+3. 运行 `agt get workers <name> -o json` 检查 Worker CR 状态
 4. 尝试在 Worker 的 Room 中发送 `@<worker-name>:<matrix-domain> hello`

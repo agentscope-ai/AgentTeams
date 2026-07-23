@@ -14,7 +14,7 @@ bash /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.s
 # Add a new skill to a worker and push
 bash /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh --worker <name> --add-skill <skill-name>
 
-# Remove a skill (registry only; MinIO files remain until manually removed)
+# Remove a skill from Worker.spec.skills
 bash /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh --worker <name> --remove-skill <skill-name>
 
 # Skip Matrix notification (e.g., worker not yet running)

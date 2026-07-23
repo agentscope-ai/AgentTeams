@@ -115,30 +115,22 @@ spec:
   description: "Frontend development team"
   peerMentions: true                  # default true: Workers may @mention each other in team rooms
   # channelPolicy: …                  # optional team-wide overrides (same shape as Worker)
-  # admin:                             # optional human Team Admin (name from humans-registry)
+  # admin:                             # optional Human resource used as Team Admin
   #   name: pm-zhang
   #   matrixUserId: "@pm:domain"
-  leader:
-    name: frontend-lead
-    model: claude-sonnet-4-6
-    heartbeat:
-      enabled: true
-      every: 10m
-    workerIdleTimeout: 720m
-    # state: Running                  # optional desired lifecycle for Leader
-  workers:
+  heartbeatEvery: 10m
+  workerMembers:
+    - name: frontend-lead
+      role: team_leader
     - name: alice
-      model: claude-sonnet-4-6
-      skills: [github-operations]
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
+      role: worker
     - name: bob
-      model: qwen3.5-plus
-      runtime: copaw
-      skills: [github-operations]
-      # expose / channelPolicy / state etc. align with standalone Worker fields
+      role: worker
 ```
+
+`frontend-lead`, `alice`, and `bob` are existing Worker CRs. Their model,
+runtime, skills, MCP, image, resources, channel policy, and lifecycle settings
+remain in `Worker.spec`; Team only owns membership and collaboration context.
 
 When a Team is created, the controller wires this topology (if `spec.admin` is set, “Admin” means **Team Admin**; otherwise **global Admin**):
 

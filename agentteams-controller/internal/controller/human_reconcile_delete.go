@@ -11,8 +11,7 @@ import (
 
 // reconcileHumanDelete cleans up best-effort external state before
 // removing the finalizer. The human has no container, no gateway
-// consumer, and no MinIO account — only Matrix room memberships and
-// (in embedded mode) a humans-registry entry. We can't log in as the
+// consumer, and no MinIO account — only Matrix room memberships. We can't log in as the
 // human to /leave (password may be stale), so we rely on the Tuwunel
 // admin bot's force-leave-room command instead.
 //
@@ -39,12 +38,6 @@ func (r *HumanReconciler) reconcileHumanDelete(ctx context.Context, s *humanScop
 	if s.identity.Source != nil {
 		if err := s.identity.Source.EnsureDeactivated(ctx, &h.Spec, &h.Status); err != nil {
 			return reconcile.Result{RequeueAfter: reconcileInterval}, err
-		}
-	}
-
-	if r.Legacy != nil {
-		if err := r.Legacy.RemoveFromHumansRegistry(ctx, h.Name); err != nil {
-			logger.Error(err, "failed to remove human from registry (non-fatal)")
 		}
 	}
 

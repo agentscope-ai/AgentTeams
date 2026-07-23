@@ -39,8 +39,6 @@ func createWorkerCmd() *cobra.Command {
 		skills      string
 		packageURI  string
 		expose      string
-		team        string
-		role        string
 		outputFmt   string
 		waitTimeout time.Duration
 		noWait      bool
@@ -90,8 +88,6 @@ func createWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
-			setIfNotEmpty(req, "team", team)
-			setIfNotEmpty(req, "role", role)
 			if skills != "" {
 				req["skills"] = splitCSV(skills)
 			}
@@ -138,8 +134,6 @@ func createWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&skills, "skills", "", "Comma-separated built-in skills")
 	cmd.Flags().StringVar(&packageURI, "package", "", "Package URI (nacos://[?authType=...], http://, oss://) or shorthand")
 	cmd.Flags().StringVar(&expose, "expose", "", "Comma-separated ports to expose (e.g. 8080,3000)")
-	cmd.Flags().StringVar(&team, "team", "", "Team name (assigns worker to a team)")
-	cmd.Flags().StringVar(&role, "role", "", "Role within team (team_leader|worker)")
 	cmd.Flags().StringVarP(&outputFmt, "output", "o", "", "Output format (json)")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 3*time.Minute, "Maximum time to wait for the Worker to report Ready")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return immediately after the controller accepts the create request, without polling for Ready")
@@ -220,23 +214,24 @@ func createTeamCmd() *cobra.Command {
 		name                 string
 		teamName             string
 		leaderName           string
-		leaderModel          string
 		leaderHeartbeatEvery string
-		workerIdleTimeout    string
 		workers              string
 		description          string
+		adminName            string
+		adminMatrixID        string
+		peerMentions         bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "team",
 		Short: "Create a Team",
-		Long: `Create a new Team resource with a leader and optional workers.
+		Long: `Create a new Team resource that references existing Worker resources.
 
   agt create team --name alpha --leader-name alpha-lead
   agt create team --name alpha --leader-name alpha-lead --workers alice,bob
-  agt create team --name alpha --leader-name alpha-lead --leader-model claude-sonnet-4-6 --description "Frontend team"
-  agt create team --name alpha --leader-name alpha-lead --leader-heartbeat-every 30m --worker-idle-timeout 12h
-  To configure per-member CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f team.yaml'.`,
+
+Create or update each Worker separately to configure its model, runtime, image,
+resources, skills, and lifecycle state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -245,34 +240,26 @@ func createTeamCmd() *cobra.Command {
 				return fmt.Errorf("--leader-name is required")
 			}
 
-			leader := map[string]interface{}{
-				"name": leaderName,
+			workerMembers := []interface{}{
+				map[string]interface{}{"name": leaderName, "role": "team_leader"},
 			}
-			if leaderModel != "" {
-				leader["model"] = leaderModel
-			}
-			if leaderHeartbeatEvery != "" {
-				leader["heartbeat"] = map[string]interface{}{
-					"enabled": true,
-					"every":   leaderHeartbeatEvery,
-				}
-			}
-			setIfNotEmpty(leader, "workerIdleTimeout", workerIdleTimeout)
-
-			workerList := []interface{}{}
 			if workers != "" {
 				for _, w := range splitCSV(workers) {
-					workerList = append(workerList, map[string]interface{}{"name": w})
+					workerMembers = append(workerMembers, map[string]interface{}{"name": w, "role": "worker"})
 				}
 			}
 
 			req := map[string]interface{}{
-				"name":    name,
-				"leader":  leader,
-				"workers": workerList,
+				"name":          name,
+				"workerMembers": workerMembers,
 			}
 			setIfNotEmpty(req, "teamName", teamName)
 			setIfNotEmpty(req, "description", description)
+			setIfNotEmpty(req, "heartbeatEvery", leaderHeartbeatEvery)
+			if adminName != "" {
+				req["admin"] = map[string]interface{}{"name": adminName, "matrixUserId": adminMatrixID}
+			}
+			req["peerMentions"] = peerMentions
 
 			client := NewAPIClient()
 			var resp map[string]interface{}
@@ -287,11 +274,12 @@ func createTeamCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Team name (required)")
 	cmd.Flags().StringVar(&teamName, "team-name", "", "Runtime/storage team name (defaults to --name)")
 	cmd.Flags().StringVar(&leaderName, "leader-name", "", "Leader worker name (required)")
-	cmd.Flags().StringVar(&leaderModel, "leader-model", "", "Leader LLM model")
 	cmd.Flags().StringVar(&leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")
-	cmd.Flags().StringVar(&workerIdleTimeout, "worker-idle-timeout", "", "Idle timeout before the leader may sleep workers (e.g. 12h)")
-	cmd.Flags().StringVar(&workers, "workers", "", "Comma-separated worker names")
+	cmd.Flags().StringVar(&workers, "workers", "", "Comma-separated existing Worker resource names")
 	cmd.Flags().StringVar(&description, "description", "", "Team description")
+	cmd.Flags().StringVar(&adminName, "admin", "", "Existing Human resource used as Team Admin")
+	cmd.Flags().StringVar(&adminMatrixID, "admin-matrix-id", "", "Expected Matrix user ID for the Team Admin")
+	cmd.Flags().BoolVar(&peerMentions, "peer-mentions", true, "Allow Team Workers to mention peers")
 	return cmd
 }
 

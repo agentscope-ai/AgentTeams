@@ -26,23 +26,18 @@ func workerCmd() *cobra.Command {
 // ---------------------------------------------------------------------------
 
 func workerWakeCmd() *cobra.Command {
-	var (
-		name string
-		team string
-	)
+	var name string
 
 	cmd := &cobra.Command{
 		Use:   "wake",
 		Short: "Wake a sleeping Worker",
 		Long: `Start a stopped/sleeping Worker container.
 
-  agt worker wake --name alice
-  agt worker wake --name alpha-dev --team alpha-team`,
+  agt worker wake --name alice`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
 			}
-			_ = team
 			client := NewAPIClient()
 			var resp lifecycleResp
 			if err := client.DoJSON("POST", "/api/v1/workers/"+name+"/wake", nil, &resp); err != nil {
@@ -54,7 +49,6 @@ func workerWakeCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
-	cmd.Flags().StringVar(&team, "team", "", "Team name context (optional)")
 	return cmd
 }
 
@@ -63,23 +57,18 @@ func workerWakeCmd() *cobra.Command {
 // ---------------------------------------------------------------------------
 
 func workerSleepCmd() *cobra.Command {
-	var (
-		name string
-		team string
-	)
+	var name string
 
 	cmd := &cobra.Command{
 		Use:   "sleep",
 		Short: "Put a Worker to sleep",
 		Long: `Stop a running Worker container (preserves state).
 
-  agt worker sleep --name alice
-  agt worker sleep --name alpha-dev --team alpha-team`,
+  agt worker sleep --name alice`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
 			}
-			_ = team
 			client := NewAPIClient()
 			var resp lifecycleResp
 			if err := client.DoJSON("POST", "/api/v1/workers/"+name+"/sleep", nil, &resp); err != nil {
@@ -91,7 +80,6 @@ func workerSleepCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
-	cmd.Flags().StringVar(&team, "team", "", "Team name context (optional)")
 	return cmd
 }
 
@@ -100,23 +88,18 @@ func workerSleepCmd() *cobra.Command {
 // ---------------------------------------------------------------------------
 
 func workerEnsureReadyCmd() *cobra.Command {
-	var (
-		name string
-		team string
-	)
+	var name string
 
 	cmd := &cobra.Command{
 		Use:   "ensure-ready",
 		Short: "Ensure a Worker is running and ready",
 		Long: `Start the Worker if sleeping, then report current phase.
 
-  agt worker ensure-ready --name alice
-  agt worker ensure-ready --name alpha-dev --team alpha-team`,
+  agt worker ensure-ready --name alice`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
 			}
-			_ = team
 			client := NewAPIClient()
 			var resp lifecycleResp
 			if err := client.DoJSON("POST", "/api/v1/workers/"+name+"/ensure-ready", nil, &resp); err != nil {
@@ -128,7 +111,6 @@ func workerEnsureReadyCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
-	cmd.Flags().StringVar(&team, "team", "", "Team name context (optional)")
 	return cmd
 }
 

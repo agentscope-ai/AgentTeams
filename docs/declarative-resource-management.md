@@ -30,7 +30,7 @@ Admin (Human administrator)
 | Resource | Description | Underlying Entity |
 |----------|-------------|-------------------|
 | Worker | AI Agent execution unit | Docker container + Matrix account + MinIO space |
-| Team | Collaboration group with Leader + N Workers | A set of Worker containers + Team Room |
+| Team | Collaboration group referencing one Leader Worker and N member Workers | Worker references + Team Room |
 | Human | Real human user | Matrix account + Room permissions |
 | Manager | Coordinator Agent (task routing, Worker/Team orchestration) | Manager Agent runtime (same stack as Workers; reconciled like other CRs) |
 
@@ -145,8 +145,8 @@ When the Controller receives a Worker resource, it executes:
 3. Create a MinIO user and bucket, configure Higress gateway authorization
 4. Generate `openclaw.json` config (including `groupAllowFrom` permission matrix)
 5. Push all config files (SOUL.md, skills, crons, etc.) to MinIO
-6. Update `workers-registry.json`
-7. Start the Worker container
+6. Update Worker status
+7. Reconcile the Worker container
 
 ### Worker Status
 
@@ -174,61 +174,17 @@ metadata:
   name: alpha-team
 spec:
   description: Full-stack development team
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-    heartbeat:
-      enabled: true
-      every: 30m
-    workerIdleTimeout: 12h
-    resources:
-      requests:
-        cpu: 300m
-        memory: 768Mi
-      limits:
-        cpu: "2"
-        memory: 3Gi
-    soul: |
-      # Alpha Lead - Team Leader
-      ## Personality
-      - Calm and organized, keeps the team focused on priorities
-      - Patient with team members, encourages open communication
-      ## Values
-      - Clarity: every task must have clear acceptance criteria before assignment
-      - Trust: delegate fully, don't micromanage
-  workers:
+  heartbeatEvery: 30m
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
-      resources:
-        requests:
-          cpu: 200m
-          memory: 512Mi
-        limits:
-          cpu: "1"
-          memory: 2Gi
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
-      soul: |
-        # Alpha Dev - Backend Developer
-        ## Personality
-        - Pragmatic problem-solver, favors simple solutions over clever ones
-        - Thorough code reviewer, catches edge cases early
-        ## Values
-        - Code quality: write tests before shipping
-        - Keep it simple: avoid premature abstraction
+      role: worker
     - name: alpha-qa
-      model: claude-sonnet-4-6
-      soul: |
-        # Alpha QA - QA Engineer
-        ## Personality
-        - Skeptical by nature, always asks "what could go wrong?"
-        - Meticulous about reproducing and documenting issues
-        ## Values
-        - User experience first: test from the user's perspective
-        - No silent failures: every bug gets a clear report
+      role: worker
 ```
+
+Create `alpha-lead`, `alpha-dev`, and `alpha-qa` as Worker resources first. Model, runtime, image, resources, identity, skills, MCP servers, package, channel policy, and lifecycle state belong only to each Worker CR.
 
 ### Field Reference
 
@@ -242,46 +198,10 @@ spec:
 | `spec.channelPolicy` | object | No | Team-wide overrides for group/DM allow-deny lists (same shape as Worker `channelPolicy`) |
 | `spec.admin` | object | No | Team-specific human admin (`name` required; `matrixUserId` optional). Defaults to global Admin when omitted |
 | `spec.humanMembers` | []object | No | Additional human Team members. In this version, `role: coordinator` members join the Team Room and can assign work there like the Team Admin |
-| `spec.leader` | object | Yes | Team Leader configuration |
-| `spec.workers` | []object | Yes | Team Worker list |
-
-**Leader fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `leader.name` | string | Yes | Leader name |
-| `leader.model` | string | No | LLM model |
-| `leader.identity` | string | No | Leader public identity (generates IDENTITY.md) |
-| `leader.soul` | string | No | Leader personality and values (generates SOUL.md) |
-| `leader.agents` | string | No | Custom behavior rules (appended after builtin AGENTS.md) |
-| `leader.package` | string | No | Custom package URI |
-| `leader.heartbeat.enabled` | bool | No | Whether the Team Leader should use heartbeat turns for periodic checks |
-| `leader.heartbeat.every` | string | No | Heartbeat interval hint injected into the Team Leader workspace |
-| `leader.workerIdleTimeout` | string | No | Idle timeout the Team Leader uses when deciding whether to sleep team workers |
-| `leader.state` | string | No | `Running` (default), `Sleeping`, or `Stopped` — desired lifecycle for the Leader container |
-| `leader.resources` | object | No | CPU/memory requests and limits for the Team Leader Pod |
-| `leader.channelPolicy` | object | No | Per-leader overrides on top of team defaults |
-
-**Worker fields (same as standalone Worker spec):**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `workers[].name` | string | Yes | Worker name |
-| `workers[].model` | string | No | LLM model |
-| `workers[].runtime` | string | No | Agent runtime (`openclaw`, `copaw`, or `hermes`) |
-| `workers[].image` | string | No | Custom Docker image |
-| `workers[].identity` | string | No | Worker public identity (generates IDENTITY.md) |
-| `workers[].soul` | string | No | Worker personality and values (generates SOUL.md) |
-| `workers[].agents` | string | No | Custom behavior rules (appended after builtin AGENTS.md) |
-| `workers[].skills` | []string | No | Built-in skills |
-| `workers[].mcpServers` | []object | No | MCP servers (see Worker's `spec.mcpServers` schema) |
-| `workers[].package` | string | No | Custom package URI |
-| `workers[].expose` | []object | No | Ports to expose via Higress gateway (see [Service Publishing](#service-publishing)) |
-| `workers[].channelPolicy` | object | No | Per-worker communication policy overrides |
-| `workers[].state` | string | No | `Running` (default), `Sleeping`, or `Stopped` — desired lifecycle for this team Worker |
-| `workers[].resources` | object | No | CPU/memory requests and limits for this Team Worker Pod |
-
-Changing Team member `resources` updates the Team spec hash and recreates the affected member container/Pod.
+| `spec.workerMembers` | []object | Yes | References to existing Worker resources; exactly one entry must have `role: team_leader` |
+| `spec.workerMembers[].name` | string | Yes | Referenced Worker resource name |
+| `spec.workerMembers[].role` | string | Yes | `team_leader` or `worker` |
+| `spec.heartbeatEvery` | string | No | Team Leader heartbeat interval hint |
 
 ### What Makes Team Leader Special
 
@@ -291,7 +211,7 @@ A Team Leader is essentially a Worker container, but with key differences:
 - Has canonical Team Leader skills: `team-coordination` for strategy, `project-management` for Project state and ready-node resolution, and `task-management` for Worker task delegation
 - Does not install the older `team-project-management`, `team-task-coordination`, or `team-task-management` compatibility aliases into new Team Leader workspaces; existing workspaces that already copied those aliases keep their local files until explicitly upgraded or recreated
 - Does NOT have Manager-exclusive skills like `worker-management` or `mcp-server-management`
-- Marked as `role: "team_leader"` in `workers-registry.json`
+- Referenced with `role: "team_leader"` in `Team.spec.workerMembers`
 - Follows a delegation-first principle — always assigns tasks to team Workers, never executes domain tasks itself
 
 ### Team Leader AGENTS.md Assembly
@@ -553,8 +473,8 @@ Human permissions are enforced through two mechanisms:
 2. Calculate which Agents need modification based on permissionLevel
 3. Update `groupAllowFrom` in each affected Agent's `openclaw.json`
 4. Invite the Human to the corresponding Rooms
-5. Update `humans-registry.json`
-6. Push updated configs to MinIO, notify Agents to `file-sync`
+5. Update Human status
+6. Push updated configs to MinIO
 7. Send a welcome email (if SMTP and email are configured)
 
 ### Automatic Welcome Email
@@ -744,13 +664,68 @@ DELETE /api/v1/managers/{name}
 
 ## Batch Deployment
 
-Use `---` separators to define multiple resources in one file. **`agt apply -f` applies documents sequentially in the order they appear** — it does not sort by kind. Put Teams before Humans that list `accessibleTeams`, and create standalone Workers before Humans that list `accessibleWorkers`.
+Use `---` separators to define multiple resources in one file. **`agt apply -f` applies documents sequentially in the order they appear** — it does not sort by kind. Create every referenced Worker before its Team, then put Teams before Humans that list `accessibleTeams`.
 
 Deletion order is not automatic: use `agt delete` per resource (respect dependencies: e.g. delete Humans before Teams they reference, if your deployment requires it).
 
 ```yaml
 # company-setup.yaml
 
+# --- Workers ---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: product-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations, git-delegation]
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: frontend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations]
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: qa-engineer
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ops-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: monitor
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: admin-assistant
+spec:
+  model: claude-sonnet-4-6
+---
 # --- Team definitions ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -758,21 +733,15 @@ metadata:
   name: product-team
 spec:
   description: Product development team
-  leader:
-    name: product-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: product-lead
+      role: team_leader
     - name: backend-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations, git-delegation]
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
+      role: worker
     - name: frontend-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
+      role: worker
     - name: qa-engineer
-      model: claude-sonnet-4-6
+      role: worker
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -780,20 +749,11 @@ metadata:
   name: ops-team
 spec:
   description: Operations team
-  leader:
-    name: ops-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: ops-lead
+      role: team_leader
     - name: monitor
-      model: claude-sonnet-4-6
----
-# --- Standalone Worker ---
-apiVersion: agentteams.io/v1beta1
-kind: Worker
-metadata:
-  name: admin-assistant
-spec:
-  model: claude-sonnet-4-6
+      role: worker
 ---
 # --- Human users ---
 apiVersion: agentteams.io/v1beta1
@@ -861,7 +821,7 @@ Reconciler executes scripts (create-worker.sh / create-team.sh / create-human.sh
 | Reconciler | CREATE | UPDATE | DELETE |
 |-----------|--------|--------|--------|
 | Worker | Create container + Matrix account + MinIO space | model change → regenerate config; skills change → re-push | Stop container + clean up resources |
-| Team | Create Leader + Workers + Team Room | workers list change → add/remove Workers | Delete Workers → Leader → Team Room |
+| Team | Validate and link existing Workers + create Team Room | `workerMembers` change → update membership and coordination context | Remove Team Room and coordination context; preserve Worker CRs and runtimes |
 | Human | Register Matrix account + configure permissions + send email | permissionLevel change → recalculate groupAllowFrom | Remove from all groupAllowFrom → kick from Rooms |
 | Manager | Provision/update Manager Agent config + runtime | model/skills/package/state → reconcile | Tear down managed Manager resources per backend |
 
@@ -909,28 +869,37 @@ spec:
 | `expose[].port` | int | Yes | — | Container port to expose |
 | `expose[].protocol` | string | No | `http` | Protocol: `http` or `grpc` |
 
-### Team Workers
+### Workers referenced by a Team
 
-Team Workers also support `expose`:
+`expose` remains Worker-owned. Configure it on the Worker CRs, then reference those Workers from the Team:
 
 ```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: lead
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+---
 apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: dev-team
 spec:
-  leader:
-    name: lead
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: lead
+      role: team_leader
     - name: backend
-      model: qwen3.5-plus
-      expose:
-        - port: 8080
-    - name: frontend
-      model: qwen3.5-plus
-      expose:
-        - port: 3000
+      role: worker
 ```
 
 ### CLI Usage
@@ -975,7 +944,7 @@ agt apply worker --name alice --model qwen3.5-plus
 | `dmAllowExtra` | Extra IDs allowed for direct messages |
 | `dmDenyExtra` | Deny list for DMs |
 
-Set `spec.channelPolicy` on a standalone Worker, or `spec.channelPolicy` / `spec.leader.channelPolicy` / `workers[].channelPolicy` on a Team for finer control per member.
+Set `spec.channelPolicy` on a Worker for per-member policy, and `spec.channelPolicy` on a Team for Team-wide policy.
 
 ## Communication Permission Matrix
 

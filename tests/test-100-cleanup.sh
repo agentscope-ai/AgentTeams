@@ -3,7 +3,7 @@
 #
 # This test runs LAST and verifies that the delete flow properly cleans up
 # container resources (not just stops them). It:
-#   1. Discovers all test-* workers and teams from registries
+#   1. Discovers all test-* Worker and Team resources from the Controller API
 #   2. Deletes them via agt delete
 #   3. Waits for controller reconcile (which now calls lifecycle-worker.sh --action delete)
 #   4. Verifies containers are removed (not just stopped)
@@ -21,13 +21,13 @@ STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-s
 # ============================================================
 log_section "Discover Test Resources"
 
-# Find all test-* workers in workers-registry.json (from MinIO)
-WORKERS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
-TEST_WORKERS=$(echo "${WORKERS_REGISTRY}" | jq -r '.workers | keys[] | select(startswith("test-"))' 2>/dev/null || echo "")
+# Find all test-* Worker resources.
+WORKERS_RESOURCE=$(exec_in_agent agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
+TEST_WORKERS=$(echo "${WORKERS_RESOURCE}" | jq -r '.workers[].name | select(startswith("test-"))' 2>/dev/null || echo "")
 
-# Find all test-* teams in teams-registry.json (from MinIO)
-TEAMS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/teams-registry.json" 2>/dev/null || echo "{}")
-TEST_TEAMS=$(echo "${TEAMS_REGISTRY}" | jq -r '.teams | keys[] | select(startswith("test-"))' 2>/dev/null || echo "")
+# Find all test-* Team resources.
+TEAMS_RESOURCE=$(exec_in_agent agt get teams -o json 2>/dev/null || echo '{"teams":[]}')
+TEST_TEAMS=$(echo "${TEAMS_RESOURCE}" | jq -r '.teams[].name | select(startswith("test-"))' 2>/dev/null || echo "")
 
 WORKER_COUNT=$(echo "${TEST_WORKERS}" | grep -c . 2>/dev/null || echo "0")
 TEAM_COUNT=$(echo "${TEST_TEAMS}" | grep -c . 2>/dev/null || echo "0")
@@ -206,27 +206,23 @@ for t in ${TEST_TEAMS}; do
 done
 
 # ============================================================
-# Section 9: Verify registries cleaned
+# Section 9: Verify resources deleted
 # ============================================================
-log_section "Verify Registry Cleanup"
+log_section "Verify Resource Cleanup"
 
-POST_WORKERS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
 for w in ${TEST_WORKERS}; do
-    REG_ENTRY=$(echo "${POST_WORKERS_REGISTRY}" | jq -r --arg w "${w}" '.workers[$w] // empty' 2>/dev/null)
-    if [ -z "${REG_ENTRY}" ]; then
-        log_pass "Worker removed from workers-registry.json: ${w}"
+    if exec_in_agent agt get workers "${w}" -o json >/dev/null 2>&1; then
+        log_fail "Worker resource still exists: ${w}"
     else
-        log_info "Worker still in workers-registry.json: ${w} (expected — registry cleanup is separate)"
+        log_pass "Worker resource deleted: ${w}"
     fi
 done
 
-POST_TEAMS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/teams-registry.json" 2>/dev/null || echo "{}")
 for t in ${TEST_TEAMS}; do
-    REG_ENTRY=$(echo "${POST_TEAMS_REGISTRY}" | jq -r --arg t "${t}" '.teams[$t] // empty' 2>/dev/null)
-    if [ -z "${REG_ENTRY}" ]; then
-        log_pass "Team removed from teams-registry.json: ${t}"
+    if exec_in_agent agt get teams "${t}" -o json >/dev/null 2>&1; then
+        log_fail "Team resource still exists: ${t}"
     else
-        log_info "Team still in teams-registry.json: ${t} (expected — registry cleanup is separate)"
+        log_pass "Team resource deleted: ${t}"
     fi
 done
 

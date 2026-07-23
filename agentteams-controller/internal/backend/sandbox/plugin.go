@@ -134,12 +134,6 @@ type SandboxStatus struct {
 
 	// Raw carries the full unstructured status for debugging.
 	Raw map[string]any
-
-	// AppliedSpecHash is a legacy migration fallback read from the
-	// AnnotationLastAppliedSpecHash annotation on the underlying CR at the
-	// time GetStatus was called. Empty when the annotation is missing.
-	AppliedSpecHash string
-
 	// ReadyConditionStatus reflects the "Ready" type condition's status.
 	// True when Ready condition is True or when no Ready condition exists
 	// (backward compatible with CRs that don't report conditions).

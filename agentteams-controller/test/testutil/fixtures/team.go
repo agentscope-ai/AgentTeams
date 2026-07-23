@@ -5,9 +5,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// NewTestTeam builds a Team CR with the given leader name and worker names.
-// The team is placed in the default test namespace with a leader running the
-// copaw runtime (matching TeamReconciler's fixed runtime for leaders).
+// NewTestTeam builds a Team CR that references the given Worker CR names.
 func NewTestTeam(name, leaderName string, workerNames ...string) *v1beta1.Team {
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{
@@ -15,27 +13,18 @@ func NewTestTeam(name, leaderName string, workerNames ...string) *v1beta1.Team {
 			Namespace: DefaultNamespace,
 		},
 		Spec: v1beta1.TeamSpec{
-			Leader: v1beta1.LeaderSpec{
-				Name:  leaderName,
-				Model: "gpt-4o",
-			},
+			WorkerMembers: []v1beta1.TeamWorkerRef{{Name: leaderName, Role: "team_leader"}},
 		},
 	}
 	for _, wn := range workerNames {
-		team.Spec.Workers = append(team.Spec.Workers, v1beta1.TeamWorkerSpec{
-			Name:  wn,
-			Model: "gpt-4o",
-		})
+		team.Spec.WorkerMembers = append(team.Spec.WorkerMembers, v1beta1.TeamWorkerRef{Name: wn, Role: "worker"})
 	}
 	return team
 }
 
-// WithTeamHeartbeat configures the leader's heartbeat on a Team CR.
+// WithTeamHeartbeat configures the Team Leader heartbeat interval.
 func WithTeamHeartbeat(team *v1beta1.Team, every string) *v1beta1.Team {
-	team.Spec.Leader.Heartbeat = &v1beta1.TeamLeaderHeartbeatSpec{
-		Enabled: true,
-		Every:   every,
-	}
+	team.Spec.HeartbeatEvery = every
 	return team
 }
 
@@ -45,20 +34,6 @@ func WithTeamAdmin(team *v1beta1.Team, name, matrixUserID string) *v1beta1.Team 
 	team.Spec.Admin = &v1beta1.TeamAdminSpec{
 		Name:         name,
 		MatrixUserID: matrixUserID,
-	}
-	return team
-}
-
-// WithTeamWorkerExpose adds an expose port to a specific team worker (by name).
-func WithTeamWorkerExpose(team *v1beta1.Team, workerName string, port int) *v1beta1.Team {
-	for i := range team.Spec.Workers {
-		if team.Spec.Workers[i].Name == workerName {
-			team.Spec.Workers[i].Expose = append(team.Spec.Workers[i].Expose, v1beta1.ExposePort{
-				Port:     port,
-				Protocol: "http",
-			})
-			return team
-		}
 	}
 	return team
 }

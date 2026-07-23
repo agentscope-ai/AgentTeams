@@ -206,26 +206,6 @@ func TestCreateMemberContainerPassesMemberRoleEnv(t *testing.T) {
 	}
 }
 
-func TestMemberRuntimeStalePrefersStatusSpecHashOverLegacySandboxAnnotation(t *testing.T) {
-	member := MemberContext{
-		Name:            "alice",
-		BackendRuntime:  v1beta1.BackendRuntimeSandbox,
-		AppliedSpecHash: "desired-hash",
-		CurrentSpecHash: "desired-hash",
-		SpecChanged:     false,
-	}
-	result := &backend.WorkerResult{
-		Name:            "alice",
-		Backend:         "sandbox",
-		Status:          backend.StatusRunning,
-		AppliedSpecHash: "legacy-old-hash",
-	}
-
-	if memberRuntimeStale(result, member, true) {
-		t.Fatal("status specHash should win over legacy annotation")
-	}
-}
-
 func TestReconcileMemberContainerSpecChangedDeletesRunningSandboxWithoutHash(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
 	wb.NameOverride = "sandbox"
@@ -494,30 +474,13 @@ func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
 		},
 	}
 	member := MemberContext{
-		Name:              "worker-cr-a",
-		RuntimeName:       "worker-a",
-		Role:              RoleTeamWorker,
-		Generation:        7,
-		TeamName:          "demo-team",
-		TeamLeaderName:    "leader-runtime",
-		TeamRoomID:        "!team:matrix.local",
-		LeaderDMRoomID:    "!leader-dm:matrix.local",
-		TeamAdminName:     "admin",
-		TeamAdminMatrixID: "@admin:matrix.local",
+		Name:        "worker-cr-a",
+		RuntimeName: "worker-a",
+		Role:        RoleStandalone,
+		Generation:  7,
 		ModelProviderInfo: &gateway.ModelProviderInfo{
 			IntranetURL: "https://provider-aigw.example.com/default",
 		},
-		TeamMembers: []service.RuntimeConfigTeamMember{{
-			Name:         "leader",
-			RuntimeName:  "leader-runtime",
-			Role:         RoleTeamLeader.String(),
-			MatrixUserID: "@leader-runtime:matrix.local",
-		}, {
-			Name:         "worker-cr-a",
-			RuntimeName:  "worker-a",
-			Role:         RoleTeamWorker.String(),
-			MatrixUserID: "@worker-a:matrix.local",
-		}},
 		Spec: v1beta1.WorkerSpec{
 			Runtime: "qwenpaw",
 			Model:   "qwen-plus",
@@ -540,17 +503,14 @@ func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
 	if req.MatrixUserID != "@worker-a:matrix.local" || req.PersonalRoomID != "!worker-dm:matrix.local" {
 		t.Fatalf("runtime config missing member room facts: %#v", req)
 	}
-	if req.TeamRoomID != "!team:matrix.local" || req.LeaderRuntimeName != "leader-runtime" || req.LeaderDMRoomID != "!leader-dm:matrix.local" {
-		t.Fatalf("runtime config missing team room facts: %#v", req)
-	}
 	if req.AIGatewayURL != "https://provider-aigw.example.com/default" {
 		t.Fatalf("runtime config ai gateway URL=%q", req.AIGatewayURL)
 	}
-	if len(req.TeamMembers) != 2 || req.TeamMembers[0].RuntimeName != "leader-runtime" || req.TeamMembers[1].RuntimeName != "worker-a" {
-		t.Fatalf("runtime config missing team roster: %#v", req.TeamMembers)
+	if req.TeamName != "" || req.TeamRoomID != "" || len(req.TeamMembers) != 0 {
+		t.Fatalf("Worker reconciliation must not inject Team-owned context: %#v", req)
 	}
 	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
-		t.Fatalf("qwenpaw must skip legacy deploy path, got package=%d inline=%d config=%d skills=%d",
+		t.Fatalf("qwenpaw must skip file-based deploy path, got package=%d inline=%d config=%d skills=%d",
 			deployPkg, writeInline, deployConfig, pushSkills)
 	}
 }
@@ -606,12 +566,12 @@ func TestReconcileMemberConfigEdgeWritesRemoteManagedRuntimeConfigOnly(t *testin
 		t.Fatalf("AIGatewayURL=%q", req.AIGatewayURL)
 	}
 	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
-		t.Fatalf("edge worker must skip legacy deploy path, got package=%d inline=%d config=%d skills=%d",
+		t.Fatalf("edge worker must skip file-based deploy path, got package=%d inline=%d config=%d skills=%d",
 			deployPkg, writeInline, deployConfig, pushSkills)
 	}
 }
 
-func TestReconcileMemberConfigNonQwenPawKeepsLegacyPath(t *testing.T) {
+func TestReconcileMemberConfigNonQwenPawKeepsFileBasedPath(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	state := &MemberState{
 		ProvResult: &service.WorkerProvisionResult{
@@ -639,7 +599,7 @@ func TestReconcileMemberConfigNonQwenPawKeepsLegacyPath(t *testing.T) {
 		t.Fatalf("non-qwenpaw must not write runtime config, got %d calls", got)
 	}
 	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 1 || writeInline != 1 || deployConfig != 1 || pushSkills != 1 {
-		t.Fatalf("legacy deploy path call counts package=%d inline=%d config=%d skills=%d, want all 1",
+		t.Fatalf("file-based deploy path call counts package=%d inline=%d config=%d skills=%d, want all 1",
 			deployPkg, writeInline, deployConfig, pushSkills)
 	}
 }

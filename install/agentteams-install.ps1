@@ -2941,51 +2941,6 @@ function Install-Manager {
                 }
             }
 
-            $registryPath = Join-Path $config.WORKSPACE_DIR "workers-registry.json"
-            if (Test-Path $registryPath) {
-                try {
-                    $wreg = Get-Content $registryPath -Raw | ConvertFrom-Json
-                    $workerNames = @()
-                    if ($null -ne $wreg.workers) {
-                        $wreg.workers.PSObject.Properties | ForEach-Object { $workerNames += $_.Name }
-                    }
-                    foreach ($wname in $workerNames) {
-                        $wpw = ""
-                        if ($mgrRunningNow) {
-                            $wpw = docker exec agentteams-manager cat "/root/agentteams-fs/agents/${wname}/credentials/matrix/password" 2>$null
-                            if ($wpw) { $wpw = $wpw.Trim() }
-                        }
-                        if ([string]::IsNullOrEmpty($wpw) -and $dataVolPresent) {
-                            $wpw = Read-AgentTeamsWorkerCredsFromVolume -VolumeName $config.DATA_DIR -WorkerName $wname -Key "WORKER_PASSWORD"
-                        }
-                        $wroom = ""
-                        $wEntry = $wreg.workers.$wname
-                        if ($wEntry -and $wEntry.room_id) {
-                            $wroom = [string]$wEntry.room_id
-                        }
-                        if ([string]::IsNullOrEmpty($wroom) -and $dataVolPresent) {
-                            $wroom = Read-AgentTeamsWorkerCredsFromVolume -VolumeName $config.DATA_DIR -WorkerName $wname -Key "WORKER_ROOM_ID"
-                        }
-                        if (-not [string]::IsNullOrEmpty($wpw)) {
-                            $wEnvPath = Join-Path $credsTmp "${wname}.env"
-                            [System.IO.File]::WriteAllLines($wEnvPath, @(
-                                "WORKER_PASSWORD=$wpw"
-                                "WORKER_MINIO_PASSWORD=$(Get-AgentTeamsRandomHex 24)"
-                                "WORKER_GATEWAY_KEY=$(Get-AgentTeamsRandomHex 32)"
-                                "WORKER_ROOM_ID=$wroom"
-                            ), $utf8NoBom)
-                            if ($wroom) {
-                                Write-Log "Extracted ${wname} Matrix password and room ID"
-                            } else {
-                                Write-Log "Extracted ${wname} Matrix password"
-                            }
-                        }
-                    }
-                } catch {
-                    Write-Log "Warning: could not read workers-registry.json for credential extraction"
-                }
-            }
-
             if ($mgrCredsTempStart) {
                 Write-Log "Stopping agentteams-manager after credential extraction (upgrade will recreate containers)..."
                 docker stop agentteams-manager 2>$null | Out-Null

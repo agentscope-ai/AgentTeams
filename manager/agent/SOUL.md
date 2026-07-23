@@ -41,7 +41,7 @@ You only do things yourself when it falls within your management skills — the 
 
 - Only respond in Rooms to messages from the human admin, registered Worker accounts, Team Leaders, or authorized Human users (`groupAllowFrom` is pre-configured)
 - The human admin may also reach you via DM (DM allowlist is pre-configured)
-- Authorized Human users (Level 1 in `~/humans-registry.json`) may also DM you
+- Authorized Human resources with administrative permission may also DM you
 - Never reveal API keys, passwords, or other secrets in any message
 - Worker credentials are delivered through a secure channel (encrypted files via HTTP file system), never over IM
 - External API credentials (GitHub PAT, GitLab Token, etc.) are stored centrally in the AI gateway's MCP Server config — Workers cannot access these directly

@@ -8,16 +8,11 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/controller/humanidentity"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,10 +29,7 @@ import (
 // consumed by the auth enricher to resolve team membership by worker name
 // without enumerating every Team.
 const (
-	TeamLeaderNameField    = "spec.leader.name"
-	TeamWorkerNameField    = "spec.workerNames"
 	TeamWorkerMembersField = "spec.workerMembers.name"
-	migrationFinalizerName = "agentteams.io/migration-in-flight"
 )
 
 // TeamReconciler reconciles Team resources that reference existing Worker CRs
@@ -45,11 +37,9 @@ const (
 type TeamReconciler struct {
 	client.Client
 
-	Provisioner service.WorkerProvisioner
-	Deployer    service.WorkerDeployer
-	Backend     *backend.Registry
-	EnvBuilder  service.WorkerEnvBuilderI
-	Legacy      *service.LegacyCompat // nil in incluster mode
+	Provisioner   service.WorkerProvisioner
+	Deployer      service.WorkerDeployer
+	ManagerConfig *service.ManagerConfigStore // nil in incluster mode
 
 	// DefaultRuntime is forwarded into MemberDeps.DefaultRuntime for every
 	// team member this reconciler converges. Sourced from
@@ -60,39 +50,7 @@ type TeamReconciler struct {
 	// back to RuntimeOpenClaw.
 	DefaultRuntime string
 
-	// DefaultBackendRuntime is the cluster-level default backendRuntime ("pod" or "sandbox").
-	// Used for inline team members and as fallback for decoupled members without spec.backendRuntime.
-	// Sourced from AGENTTEAMS_WORKER_BACKEND_RUNTIME env var.
-	DefaultBackendRuntime string
-
-	AgentFSDir string // for writing inline configs to the local agent FS
-
-	// ControllerName, when non-empty, is merged as agentteams.io/controller
-	// into the PodLabels of every team member MemberContext this reconciler
-	// builds, so the resulting Pods match the owning controller instance's
-	// label-scoped cache. Post-refactor (PR #666) Teams no longer create
-	// child Worker CRs, so the label is applied directly to Pods via
-	// MemberContext.PodLabels → backend.CreateRequest.Labels. Empty in
-	// embedded mode.
-	ControllerName string
-
-	// WorkerDepsStorageBucket/Endpoint identify the main workspace OSS bucket
-	// used for the built-in sandbox token/env/data mounts.
-	WorkerDepsStorageBucket   string
-	WorkerDepsStorageEndpoint string
-	MountAuthType             string
-	MountRoleName             string
-
-	// ResourcePrefix scopes team-member ServiceAccount and Pod names per
-	// AgentTeams tenant instance. Forwarded into MemberDeps.ResourcePrefix so
-	// createMemberContainer uses it when computing saName. Empty collapses
-	// to DefaultResourcePrefix ("agentteams-").
-	ResourcePrefix auth.ResourcePrefix
-
-	GatewayClient               gateway.Client // gateway client for modelProvider resolution
-	DynamicClient               dynamic.Interface
-	RemoteDynamicClientProvider backend.RemoteDynamicClientProvider
-	AuthTokenExpirationSeconds  int64
+	GatewayClient gateway.Client // gateway client for modelProvider resolution
 
 	// SystemAdminUser is the global system admin username (from
 	// AGENTTEAMS_ADMIN_USER). Resolved to a full Matrix user ID and always
@@ -126,10 +84,6 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 				return reconcile.Result{RequeueAfter: 30 * time.Second}, err
 			}
 			controllerutil.RemoveFinalizer(&team, finalizerName)
-			changed = true
-		}
-		if controllerutil.ContainsFinalizer(&team, migrationFinalizerName) {
-			controllerutil.RemoveFinalizer(&team, migrationFinalizerName)
 			changed = true
 		}
 		if changed {
@@ -211,8 +165,8 @@ func (r *TeamReconciler) resolveTeamAdminActor(ctx context.Context, t *v1beta1.T
 // admin and every human member's MatrixUserID populated from the
 // authoritative Human-CR identity. This makes the rest of the reconcile —
 // room invites, coordinator power levels, channel policies, runtime roster —
-// operate on the real Matrix identity for both legacy-password and SSO
-// Humans instead of the legacy "localpart == name" derivation. The
+// operate on the real Matrix identity for both managerConfig-password and SSO
+// Humans instead of the managerConfig "localpart == name" derivation. The
 // spec-provided matrixUserId is only kept when the referenced Human CR is
 // missing or not yet provisioned.
 func (r *TeamReconciler) deriveTeamWithResolvedIdentities(ctx context.Context, t *v1beta1.Team, adminActor teamAdminActor) *v1beta1.Team {
@@ -340,7 +294,7 @@ func (r *TeamReconciler) resolveHumanMatrixUserID(human *v1beta1.Human) (string,
 // resolveHumanMemberMatrixUserID returns the authoritative Matrix user ID for
 // a team human member, preferring the referenced Human CR's provisioned
 // identity over the spec-provided hint. Falls back to the spec value when the
-// Human CR is missing or not yet provisioned, so legacy behavior (and callers
+// Human CR is missing or not yet provisioned, so managerConfig behavior (and callers
 // that pass an explicit matrixUserId without a backing Human CR) is preserved.
 func (r *TeamReconciler) resolveHumanMemberMatrixUserID(ctx context.Context, namespace string, member v1beta1.TeamMemberSpec) string {
 	if strings.TrimSpace(member.Name) != "" {
@@ -363,724 +317,30 @@ func (r *TeamReconciler) reconcileTeamNormal(ctx context.Context, t *v1beta1.Tea
 		patchBase = client.MergeFrom(t.DeepCopy())
 	}
 
-	if len(t.Spec.WorkerMembers) == 0 && (t.Spec.Leader.Name != "" || len(t.Spec.Workers) > 0) {
-		return r.reconcileTeamLegacy(ctx, t, patchBase)
-	}
-	return r.reconcileTeamDecoupled(ctx, t, patchBase)
-}
-
-func (r *TeamReconciler) reconcileTeamLegacy(ctx context.Context, t *v1beta1.Team, patchBase client.Patch) (reconcile.Result, error) {
-	logger := log.FromContext(ctx)
-	if t.Spec.Leader.Name == "" {
-		return r.failTeam(ctx, t, patchBase, "leader.name is required")
-	}
-
-	adminActor, err := r.resolveTeamAdminActor(ctx, t)
-	if err != nil {
-		return r.failTeam(ctx, t, patchBase, err.Error())
-	}
-	derivedTeam := r.deriveTeamWithResolvedIdentities(ctx, t, adminActor)
-	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
-	leaderRuntimeName := t.Spec.Leader.EffectiveWorkerName()
-	workerRuntimeNames := make([]string, 0, len(t.Spec.Workers))
-	for _, worker := range t.Spec.Workers {
-		workerRuntimeNames = append(workerRuntimeNames, worker.EffectiveWorkerName())
-	}
-
-	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
-		TeamName:             teamRuntimeName,
-		LeaderName:           leaderRuntimeName,
-		LeaderCredentialName: t.Spec.Leader.Name,
-		WorkerNames:          workerRuntimeNames,
-		AdminSpec:            derivedTeam.Spec.Admin,
-		HumanMembers:         derivedTeam.Spec.HumanMembers,
-		TeamAdminActorToken:  adminActor.Token,
-		TeamAdminActorName:   adminActor.Username,
-	})
-	if err != nil {
-		return r.failTeam(ctx, t, patchBase, fmt.Sprintf("provision team rooms: %v", err))
-	}
-	t.Status.TeamRoomID = rooms.TeamRoomID
-	t.Status.LeaderDMRoomID = rooms.LeaderDMRoomID
-	r.syncTeamRoomHumanStatuses(ctx, t.Namespace, t.Name, rooms.TeamRoomID, derivedTeam.Spec.HumanMembers)
-
-	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {
-		logger.Error(err, "team shared storage init failed (non-fatal)", "name", t.Name, "teamName", teamRuntimeName)
-	}
-
-	members := r.legacyTeamMembers(derivedTeam, rooms, teamRuntimeName, leaderRuntimeName)
-	keep := make(map[string]struct{}, len(members))
-	for _, member := range members {
-		keep[member.Name] = struct{}{}
-	}
-	r.cleanupStaleLegacyMembers(ctx, t, keep)
-	pruneMembers(&t.Status, keep)
-	roster := r.runtimeConfigTeamMembers(derivedTeam, members)
-
-	deps := MemberDeps{
-		Provisioner:                 r.Provisioner,
-		Deployer:                    r.Deployer,
-		Backend:                     r.Backend,
-		EnvBuilder:                  r.EnvBuilder,
-		ResourcePrefix:              r.ResourcePrefix,
-		DefaultRuntime:              r.DefaultRuntime,
-		GatewayClient:               r.GatewayClient,
-		DynamicClient:               r.DynamicClient,
-		RemoteDynamicClientProvider: r.RemoteDynamicClientProvider,
-		AuthTokenExpirationSeconds:  r.AuthTokenExpirationSeconds,
-		ControllerName:              r.ControllerName,
-		WorkerDepsStorageBucket:     r.WorkerDepsStorageBucket,
-		WorkerDepsStorageEndpoint:   r.WorkerDepsStorageEndpoint,
-		MountAuthType:               r.MountAuthType,
-		MountRoleName:               r.MountRoleName,
-	}
-
-	var requeueAfter time.Duration
-	var degradedMessages []string
-	for i := range members {
-		members[i].TeamMembers = roster
-		if members[i].Spec.ModelProvider != "" && r.GatewayClient != nil {
-			info, err := r.GatewayClient.ResolveModelProvider(ctx, members[i].Spec.ModelProvider)
-			if err != nil {
-				return r.failTeam(ctx, t, patchBase, fmt.Sprintf("resolve model provider %q: %v", members[i].Spec.ModelProvider, err))
-			}
-			members[i].ModelProviderInfo = info
-		}
-		ms := memberStatus(&t.Status, members[i].Name, members[i].Role)
-		res, err := r.reconcileMember(ctx, deps, members[i], ms)
-		r.reconcileLegacyMember(ctx, derivedTeam, members[i], ms)
-		if err != nil {
-			ms.Phase = "Failed"
-			ms.Message = err.Error()
-			degradedMessages = append(degradedMessages, fmt.Sprintf("%s: %v", members[i].Name, err))
-			requeueAfter = minPositiveDuration(requeueAfter, reconcileRetryDelay)
-			continue
-		}
-		requeueAfter = minPositiveDuration(requeueAfter, res.RequeueAfter)
-	}
-
-	if err := r.injectLegacyTeamContext(ctx, derivedTeam, members, rooms, roster); err != nil {
-		logger.Error(err, "legacy team context injection failed (non-fatal)")
-	}
-	if r.Legacy != nil && r.Legacy.Enabled() {
-		if err := r.Legacy.UpdateManagerGroupAllowFrom(r.Legacy.MatrixUserID(leaderRuntimeName), true); err != nil {
-			logger.Error(err, "failed to update Manager groupAllowFrom for team leader (non-fatal)")
-		}
-		if err := r.Legacy.UpdateTeamsRegistry(service.TeamRegistryEntry{
-			Name:           teamRuntimeName,
-			Leader:         t.Spec.Leader.Name,
-			Workers:        legacyTeamWorkerNames(t.Spec.Workers),
-			TeamRoomID:     rooms.TeamRoomID,
-			LeaderDMRoomID: rooms.LeaderDMRoomID,
-			Admin:          teamAdminRegistryEntry(derivedTeam.Spec.Admin),
-			Members:        teamMemberRegistryEntries(derivedTeam.Spec.HumanMembers),
-		}); err != nil {
-			logger.Error(err, "teams-registry update failed (non-fatal)")
-		}
-	}
-
-	leaderReady, readyWorkers := r.summarizeBackendReadiness(ctx, t, members)
-	sortMembers(&t.Status)
-	t.Status.TotalWorkers = len(t.Spec.Workers)
-	t.Status.LeaderReady = leaderReady
-	t.Status.ReadyWorkers = readyWorkers
-	if len(degradedMessages) > 0 {
-		t.Status.Phase = "Degraded"
-		t.Status.Message = strings.Join(degradedMessages, "; ")
-	} else if leaderReady && readyWorkers == len(t.Spec.Workers) {
-		t.Status.Phase = "Active"
-		t.Status.Message = ""
-	} else {
-		t.Status.Phase = "Pending"
-		t.Status.Message = ""
-	}
-	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
-		logger.Error(err, "failed to patch team status (non-fatal)")
-	}
-
-	logger.Info("team reconciled",
-		"name", t.Name,
-		"phase", t.Status.Phase,
-		"leaderReady", leaderReady,
-		"readyWorkers", readyWorkers,
-		"totalWorkers", t.Status.TotalWorkers,
-		"members", observedMemberNames(&t.Status))
-	return reconcile.Result{RequeueAfter: minPositiveDuration(reconcileInterval, requeueAfter)}, nil
-}
-
-func (r *TeamReconciler) legacyTeamMembers(t *v1beta1.Team, rooms *service.TeamRoomResult, teamRuntimeName, leaderRuntimeName string) []MemberContext {
-	members := make([]MemberContext, 0, 1+len(t.Spec.Workers))
-	leaderSpec := legacyLeaderWorkerSpec(t.Spec.Leader)
-	leader := r.legacyMemberContext(t, t.Spec.Leader.Name, leaderRuntimeName, RoleTeamLeader, leaderSpec, teamRuntimeName, "", rooms)
-	switch {
-	case t.Spec.Leader.Heartbeat != nil:
-		leader.Heartbeat = &agentconfig.HeartbeatConfig{
-			Enabled: t.Spec.Leader.Heartbeat.Enabled,
-			Every:   t.Spec.Leader.Heartbeat.Every,
-		}
-	case t.Spec.HeartbeatEvery != "":
-		leader.Heartbeat = &agentconfig.HeartbeatConfig{Enabled: true, Every: t.Spec.HeartbeatEvery}
-	}
-	members = append(members, leader)
-
-	for _, worker := range t.Spec.Workers {
-		members = append(members, r.legacyMemberContext(
-			t,
-			worker.Name,
-			worker.EffectiveWorkerName(),
-			RoleTeamWorker,
-			legacyTeamWorkerSpec(worker),
-			teamRuntimeName,
-			leaderRuntimeName,
-			rooms,
-		))
-	}
-	return members
-}
-
-func (r *TeamReconciler) legacyMemberContext(t *v1beta1.Team, name string, runtimeName string, role MemberRole, spec v1beta1.WorkerSpec, teamRuntimeName string, leaderRuntimeName string, rooms *service.TeamRoomResult) MemberContext {
-	if runtimeName == "" {
-		runtimeName = name
-	}
-	effectiveRuntime := backend.ResolveRuntime(spec.Runtime, r.DefaultRuntime)
-	backendRuntime := spec.GetBackendRuntime()
-	if backendRuntime == "" {
-		backendRuntime = r.DefaultBackendRuntime
-	}
-	appliedSpecHash := hashAppliedWorkerSpecForRuntimeAndResources(
-		workerSpecWithEffectiveBackendRuntimeForHash(spec, backendRuntime),
-		effectiveRuntime,
-		spec.Resources,
-	)
-
-	var currentHash, existingMatrixUserID, existingRoomID string
-	var observedGeneration int64
-	var currentExposedPorts []v1beta1.ExposedPortStatus
-	var isUpdate bool
-	if ms := t.Status.MemberByName(name); ms != nil {
-		currentHash = ms.SpecHash
-		existingMatrixUserID = ms.MatrixUserID
-		existingRoomID = ms.RoomID
-		currentExposedPorts = ms.ExposedPorts
-		isUpdate = ms.Observed
-		if ms.Observed {
-			observedGeneration = t.Generation
-		}
-	}
-
-	deployMode := v1beta1.DeployModeLocal
-	if spec.DeployMode != nil {
-		deployMode = *spec.DeployMode
-	}
-	var serviceEnabled bool
-	if spec.ServiceEnabled != nil {
-		serviceEnabled = *spec.ServiceEnabled
-	}
-
-	teamLeaderName := ""
-	if role == RoleTeamWorker {
-		teamLeaderName = leaderRuntimeName
-	}
-	systemLabels := map[string]string{
-		v1beta1.LabelController: r.ControllerName,
-		v1beta1.LabelRole:       role.String(),
-		v1beta1.LabelTeam:       t.Name,
-	}
-
-	return MemberContext{
-		Name:                 name,
-		RuntimeName:          runtimeName,
-		Namespace:            t.Namespace,
-		Role:                 role,
-		Spec:                 spec,
-		Generation:           t.Generation,
-		ObservedGeneration:   observedGeneration,
-		SpecChanged:          currentHash != "" && currentHash != appliedSpecHash,
-		AppliedSpecHash:      appliedSpecHash,
-		CurrentSpecHash:      currentHash,
-		IsUpdate:             isUpdate,
-		TeamName:             teamRuntimeName,
-		TeamLeaderName:       teamLeaderName,
-		TeamRoomID:           rooms.TeamRoomID,
-		LeaderDMRoomID:       rooms.LeaderDMRoomID,
-		TeamAdminName:        teamAdminName(t),
-		TeamAdminMatrixID:    teamAdminMatrixID(t),
-		TeamCoordinatorIDs:   teamCoordinatorIDs(t),
-		ExistingMatrixUserID: existingMatrixUserID,
-		ExistingRoomID:       existingRoomID,
-		CurrentExposedPorts:  currentExposedPorts,
-		PodLabels: mergeLabels(
-			t.ObjectMeta.Labels,
-			spec.Labels,
-			systemLabels,
-		),
-		Owner:                t,
-		DeployMode:           deployMode,
-		ServiceEnabled:       serviceEnabled,
-		Resources:            agentResourcesToBackend(spec.Resources),
-		BackendRuntime:       backendRuntime,
-		StatusBackendRuntime: "",
-	}
-}
-
-func legacyLeaderWorkerSpec(spec v1beta1.LeaderSpec) v1beta1.WorkerSpec {
-	runtime := spec.Runtime
-	if runtime == "" {
-		runtime = backend.RuntimeCopaw
-	}
-	return v1beta1.WorkerSpec{
-		Model:          spec.Model,
-		ModelProvider:  spec.ModelProvider,
-		Runtime:        runtime,
-		Image:          spec.Image,
-		WorkerName:     spec.WorkerName,
-		Identity:       spec.Identity,
-		Soul:           spec.Soul,
-		Agents:         spec.Agents,
-		RemoteSkills:   spec.RemoteSkills,
-		McpServers:     spec.McpServers,
-		Package:        spec.Package,
-		ChannelPolicy:  spec.ChannelPolicy,
-		State:          spec.State,
-		AccessEntries:  spec.AccessEntries,
-		DeployMode:     spec.DeployMode,
-		ServiceEnabled: spec.ServiceEnabled,
-		Env:            spec.Env,
-		Labels:         spec.Labels,
-		Resources:      spec.Resources,
-	}
-}
-
-func legacyTeamWorkerSpec(spec v1beta1.TeamWorkerSpec) v1beta1.WorkerSpec {
-	return v1beta1.WorkerSpec{
-		Model:          spec.Model,
-		ModelProvider:  spec.ModelProvider,
-		Runtime:        spec.Runtime,
-		Image:          spec.Image,
-		WorkerName:     spec.WorkerName,
-		Identity:       spec.Identity,
-		Soul:           spec.Soul,
-		Agents:         spec.Agents,
-		Skills:         spec.Skills,
-		RemoteSkills:   spec.RemoteSkills,
-		McpServers:     spec.McpServers,
-		Package:        spec.Package,
-		Expose:         spec.Expose,
-		ChannelPolicy:  spec.ChannelPolicy,
-		IdleTimeout:    spec.IdleTimeout,
-		State:          spec.State,
-		AccessEntries:  spec.AccessEntries,
-		DeployMode:     spec.DeployMode,
-		ServiceEnabled: spec.ServiceEnabled,
-		Env:            spec.Env,
-		Labels:         spec.Labels,
-		Resources:      spec.Resources,
-	}
-}
-
-func legacyTeamWorkerNames(workers []v1beta1.TeamWorkerSpec) []string {
-	names := make([]string, 0, len(workers))
-	for _, worker := range workers {
-		names = append(names, worker.Name)
-	}
-	return names
-}
-
-func (r *TeamReconciler) injectLegacyTeamContext(ctx context.Context, t *v1beta1.Team, members []MemberContext, rooms *service.TeamRoomResult, roster []service.RuntimeConfigTeamMember) error {
-	logger := log.FromContext(ctx)
-	var leader *MemberContext
-	workerEntries := make([]service.TeamWorkerEntry, 0, len(members))
-	for i := range members {
-		if members[i].Role == RoleTeamLeader {
-			leader = &members[i]
-			continue
-		}
-		roomID := ""
-		if ms := t.Status.MemberByName(members[i].Name); ms != nil {
-			roomID = ms.RoomID
-		}
-		workerEntries = append(workerEntries, service.TeamWorkerEntry{Name: members[i].RuntimeName, RoomID: roomID})
-	}
-	if leader == nil {
-		return fmt.Errorf("legacy team leader member is missing")
-	}
-
-	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
-	leaderRuntime := backend.ResolveRuntime(leader.Spec.Runtime, r.DefaultRuntime)
-	if leaderRuntime != backend.RuntimeQwenPaw {
-		if err := r.Deployer.SyncTeamLeaderAssets(ctx, service.SyncTeamLeaderAssetsRequest{
-			WorkerName: leader.RuntimeName,
-			Runtime:    leader.Spec.Runtime,
-		}); err != nil {
-			logger.Error(err, "team leader asset sync failed (non-fatal)", "worker", leader.RuntimeName)
-		}
-		if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
-			LeaderName:         leader.RuntimeName,
-			Role:               RoleTeamLeader.String(),
-			TeamName:           teamRuntimeName,
-			TeamRoomID:         rooms.TeamRoomID,
-			LeaderDMRoomID:     rooms.LeaderDMRoomID,
-			HeartbeatEvery:     t.Spec.HeartbeatEvery,
-			WorkerIdleTimeout:  t.Spec.Leader.WorkerIdleTimeout,
-			TeamWorkers:        workerEntries,
-			TeamAdminID:        teamAdminMatrixID(t),
-			TeamCoordinatorIDs: teamCoordinatorIDs(t),
-			LeaderSoul:         t.Spec.Leader.Soul,
-		}); err != nil {
-			logger.Error(err, "leader coordination context injection failed (non-fatal)")
-		}
-		if leader.Heartbeat != nil && leader.Heartbeat.Enabled {
-			if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
-				WorkerName: leader.RuntimeName,
-				Enabled:    leader.Heartbeat.Enabled,
-				Every:      leader.Heartbeat.Every,
-			}); err != nil {
-				logger.Error(err, "leader heartbeat config injection failed (non-fatal)")
-			}
-		}
-	}
-
-	for _, member := range members {
-		runtime := backend.ResolveRuntime(member.Spec.Runtime, r.DefaultRuntime)
-		if runtime == backend.RuntimeQwenPaw {
-			continue
-		}
-		if member.Role == RoleTeamWorker {
-			if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
-				WorkerName:         member.RuntimeName,
-				TeamName:           teamRuntimeName,
-				TeamLeaderName:     leader.RuntimeName,
-				TeamAdminID:        teamAdminMatrixID(t),
-				TeamCoordinatorIDs: teamCoordinatorIDs(t),
-			}); err != nil {
-				logger.Error(err, "worker coordination context injection failed (non-fatal)", "worker", member.RuntimeName)
-			}
-		}
-		if err := r.deployLegacyRuntimeConfig(ctx, t, member, leader.RuntimeName, rooms, roster); err != nil {
-			return err
-		}
-		policy := r.legacyChannelPolicy(t, members, member, leader.RuntimeName)
-		if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
-			WorkerName:     member.RuntimeName,
-			GroupAllowFrom: policy.GroupAllowFrom,
-			DMAllowFrom:    policy.DMAllowFrom,
-		}); err != nil {
-			logger.Error(err, "channel policy injection failed (non-fatal)", "worker", member.RuntimeName)
-		}
-	}
-	return nil
-}
-
-func (r *TeamReconciler) deployLegacyRuntimeConfig(ctx context.Context, t *v1beta1.Team, member MemberContext, leaderRuntimeName string, rooms *service.TeamRoomResult, roster []service.RuntimeConfigTeamMember) error {
-	runtime := backend.ResolveRuntime(member.Spec.Runtime, r.DefaultRuntime)
-	deployMode := v1beta1.DeployModeLocal
-	if member.Spec.DeployMode != nil {
-		deployMode = *member.Spec.DeployMode
-	}
-	if runtime != backend.RuntimeQwenPaw && deployMode != v1beta1.DeployModeEdge {
-		return nil
-	}
-	aiGatewayURL, err := r.runtimeConfigAIGatewayURL(ctx, member.Spec, member.Name)
-	if err != nil {
-		return err
-	}
-	req := service.MemberRuntimeConfigDeployRequest{
-		Name:              member.Name,
-		RuntimeName:       member.RuntimeName,
-		Runtime:           runtime,
-		Role:              member.Role.String(),
-		Generation:        t.Generation,
-		Spec:              member.Spec,
-		AIGatewayURL:      aiGatewayURL,
-		MatrixUserID:      member.ExistingMatrixUserID,
-		PersonalRoomID:    member.ExistingRoomID,
-		TeamName:          t.Spec.EffectiveTeamName(t.Name),
-		TeamRoomID:        rooms.TeamRoomID,
-		LeaderName:        t.Spec.Leader.Name,
-		LeaderRuntimeName: leaderRuntimeName,
-		LeaderDMRoomID:    rooms.LeaderDMRoomID,
-		TeamAdminName:     teamAdminName(t),
-		TeamAdminMatrixID: teamAdminMatrixID(t),
-		TeamMembers:       roster,
-	}
-	if ms := t.Status.MemberByName(member.Name); ms != nil {
-		req.MatrixUserID = ms.MatrixUserID
-		req.PersonalRoomID = ms.RoomID
-	}
-	if deployMode == v1beta1.DeployModeEdge {
-		req.Runtime = runtimeRemoteManagedLocal
-		if err := r.Deployer.MergeMemberRuntimeTeamContext(ctx, req); err != nil {
-			return fmt.Errorf("merge runtime team context for %s: %w", member.RuntimeName, err)
-		}
-		return nil
-	}
-	if err := r.Deployer.DeployMemberRuntimeConfig(ctx, req); err != nil {
-		return fmt.Errorf("deploy runtime config for %s: %w", member.RuntimeName, err)
-	}
-	return nil
-}
-
-// reconcileMember runs the shared member phases for one team member and
-// writes the resulting runtime state into ms. The leader never has
-// ExposedPorts (the Leader phase always produces zero ports), so that field
-// stays nil for RoleTeamLeader entries.
-//
-// ms.Observed is flipped to true the instant ReconcileMemberInfra succeeds —
-// see the Step 4 comment in reconcileTeamNormal for why post-infra failures
-// must not revoke observed status (token-rotation hazard).
-func (r *TeamReconciler) reconcileMember(ctx context.Context, deps MemberDeps, m MemberContext, ms *v1beta1.TeamMemberStatus) (reconcile.Result, error) {
-	// Validate cross-cluster deployment fields before entering phases.
-	if err := ValidateMemberDeployment(m); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	state := &MemberState{}
-
-	// Pre-populate ExistingMatrixUserID when we've already provisioned the
-	// member before, forcing the Refresh path instead of Provision.
-	if m.IsUpdate {
-		m.ExistingMatrixUserID = r.Provisioner.MatrixUserID(m.RuntimeName)
-	}
-
-	res, err := ReconcileMemberInfra(ctx, deps, m, state)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if res.RequeueAfter > 0 {
-		// ReconcileMemberInfra signals a short backoff (rather than an
-		// error) only when the Matrix AppService token is not active yet
-		// (transient startup race). Stop before flipping ms.Observed or
-		// running later phases — Matrix/Gateway/Room are not provisioned —
-		// and propagate the sentinel so the caller requeues quickly
-		// instead of treating infra as successful.
-		return reconcile.Result{}, matrix.ErrAppServiceNotReady
-	}
-	if err := EnsureModelProviderAuth(ctx, deps, m, state); err != nil {
-		return reconcile.Result{}, err
-	}
-	ms.Observed = true
-	if state.RoomID != "" {
-		ms.RoomID = state.RoomID
-	}
-	if state.MatrixUserID != "" {
-		ms.MatrixUserID = state.MatrixUserID
-	}
-	ms.RuntimeName = m.RuntimeName
-	if err := EnsureMemberServiceAccount(ctx, deps, m); err != nil {
-		return reconcile.Result{}, err
-	}
-	if err := ReconcileMemberConfig(ctx, deps, m, state); err != nil {
-		return reconcile.Result{}, err
-	}
-	containerRes, err := ReconcileMemberContainer(ctx, deps, m, state)
-	if state.ContainerState != "" {
-		ms.ContainerState = state.ContainerState
-		ms.Phase = computeMemberPhase(ms.Phase, ms.MatrixUserID, m.Spec.DesiredState(), ms.ContainerState, nil)
-	}
-	if state.Message != "" {
-		ms.Message = state.Message
-	}
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if containerRes.RequeueAfter > 0 {
-		return containerRes, nil
-	}
-	if _, err := ReconcileMemberService(ctx, &m, &deps); err != nil {
-		return reconcile.Result{}, err
-	}
-	_ = ReconcileMemberExpose(ctx, deps, m, state)
-
-	if m.Role == RoleTeamWorker {
-		ms.ExposedPorts = state.ExposedPorts
-	} else {
-		ms.ExposedPorts = nil
-	}
-	ms.SpecHash = m.AppliedSpecHash
-	return reconcile.Result{}, nil
-}
-
-// summarizeBackendReadiness queries each member's pod/container status from
-// the backend and writes ms.Ready per member. Used instead of reading Worker
-// CR status because team members no longer have Worker CRs.
-//
-// On a backend-unreachable path (Backend == nil or DetectWorkerBackend nil)
-// this preserves any previously-recorded ms.Ready value — callers should NOT
-// treat a false/true gap across reconciles as a transition, since a transient
-// backend outage would otherwise flap Phase=Active back to Pending.
-func (r *TeamReconciler) summarizeBackendReadiness(ctx context.Context, t *v1beta1.Team, members []MemberContext) (leaderReady bool, readyWorkers int) {
-	if r.Backend == nil {
-		return false, 0
-	}
-	for _, m := range members {
-		mwb, err := resolveBackendForMember(r.Backend, m.BackendRuntime, m)
-		if err != nil {
-			logger := log.FromContext(ctx)
-			logger.Error(err, "failed to resolve member backend", "member", m.Name, "role", m.Role)
-			// Preserve previously-recorded readiness, consistent with the
-			// nil-backend early-return contract (see function doc).
-			if ms := t.Status.MemberByName(m.Name); ms != nil && ms.Ready {
-				if m.Role == RoleTeamLeader {
-					leaderReady = true
-				} else {
-					readyWorkers++
-				}
-			}
-			continue
-		}
-		result, err := mwb.Status(ctx, m.Name)
-		if err != nil {
-			logger := log.FromContext(ctx)
-			logger.Error(err, "failed to query member backend status", "member", m.Name, "role", m.Role)
-			// Preserve previously-recorded readiness in the return values
-			// to avoid phase flapping on transient backend errors, consistent
-			// with the nil-backend early-return contract (see function doc).
-			if ms := t.Status.MemberByName(m.Name); ms != nil && ms.Ready {
-				if m.Role == RoleTeamLeader {
-					leaderReady = true
-				} else {
-					readyWorkers++
-				}
-			}
-			continue
-		}
-		ready := result.Status == backend.StatusRunning || result.Status == backend.StatusReady
-		if ms := t.Status.MemberByName(m.Name); ms != nil {
-			ms.Ready = ready
-			ms.ContainerState = string(result.Status)
-			ms.Message = result.Message
-			ms.Phase = computeMemberPhase(ms.Phase, ms.MatrixUserID, m.Spec.DesiredState(), ms.ContainerState, nil)
-		}
-		if m.Role == RoleTeamLeader {
-			leaderReady = ready
-			continue
-		}
-		if ready {
-			readyWorkers++
-		}
-	}
-	return leaderReady, readyWorkers
-}
-
-func (r *TeamReconciler) writeInlineConfigs(t *v1beta1.Team) error {
-	return nil
+	return r.reconcileTeam(ctx, t, patchBase)
 }
 
 func (r *TeamReconciler) handleDelete(ctx context.Context, t *v1beta1.Team) error {
-	if len(t.Spec.WorkerMembers) == 0 && (t.Spec.Leader.Name != "" || len(t.Spec.Workers) > 0 || len(t.Status.Members) > 0) {
-		return r.handleDeleteLegacy(ctx, t)
-	}
-	return r.handleDeleteDecoupled(ctx, t)
-}
-
-func (r *TeamReconciler) handleDeleteLegacy(ctx context.Context, t *v1beta1.Team) error {
-	logger := log.FromContext(ctx)
-	deps := r.memberDeps()
-	members := r.legacyDeleteMembers(t)
-	for _, member := range members {
-		if err := ReconcileMemberDelete(ctx, deps, member); err != nil {
-			logger.Error(err, "legacy team member delete failed (non-fatal)", "member", member.Name)
-		}
-		r.removeLegacyMember(ctx, member.RuntimeName)
-	}
-	if r.Legacy != nil && r.Legacy.Enabled() {
-		if err := r.Legacy.RemoveFromTeamsRegistry(ctx, t.Spec.EffectiveTeamName(t.Name)); err != nil {
-			logger.Error(err, "teams-registry delete failed (non-fatal)", "team", t.Name)
-		}
-	}
-	return nil
-}
-
-func (r *TeamReconciler) cleanupStaleLegacyMembers(ctx context.Context, t *v1beta1.Team, keep map[string]struct{}) {
-	logger := log.FromContext(ctx)
-	deps := r.memberDeps()
-	for _, status := range t.Status.Members {
-		if _, ok := keep[status.Name]; ok {
-			continue
-		}
-		member := r.legacyDeleteMemberFromStatus(t, status)
-		if err := ReconcileMemberDelete(ctx, deps, member); err != nil {
-			logger.Error(err, "stale legacy team member delete failed (non-fatal)", "member", member.Name)
-		}
-		r.removeLegacyMember(ctx, member.RuntimeName)
-	}
-}
-
-func (r *TeamReconciler) legacyDeleteMembers(t *v1beta1.Team) []MemberContext {
-	if len(t.Status.Members) > 0 {
-		members := make([]MemberContext, 0, len(t.Status.Members))
-		for _, status := range t.Status.Members {
-			members = append(members, r.legacyDeleteMemberFromStatus(t, status))
-		}
-		return members
-	}
-	rooms := &service.TeamRoomResult{
-		TeamRoomID:     t.Status.TeamRoomID,
-		LeaderDMRoomID: t.Status.LeaderDMRoomID,
-	}
-	return r.legacyTeamMembers(t, rooms, t.Spec.EffectiveTeamName(t.Name), t.Spec.Leader.EffectiveWorkerName())
-}
-
-func (r *TeamReconciler) legacyDeleteMemberFromStatus(t *v1beta1.Team, status v1beta1.TeamMemberStatus) MemberContext {
-	runtimeName := status.RuntimeName
-	if runtimeName == "" {
-		runtimeName = status.Name
-	}
-	role := RoleTeamWorker
-	if status.Role == RoleTeamLeader.String() {
-		role = RoleTeamLeader
-	}
-	return MemberContext{
-		Name:                 status.Name,
-		RuntimeName:          runtimeName,
-		Namespace:            t.Namespace,
-		Role:                 role,
-		ExistingMatrixUserID: status.MatrixUserID,
-		ExistingRoomID:       status.RoomID,
-		CurrentExposedPorts:  status.ExposedPorts,
-		Owner:                t,
-		BackendRuntime:       r.DefaultBackendRuntime,
-	}
-}
-
-func (r *TeamReconciler) memberDeps() MemberDeps {
-	return MemberDeps{
-		Provisioner:                 r.Provisioner,
-		Deployer:                    r.Deployer,
-		Backend:                     r.Backend,
-		EnvBuilder:                  r.EnvBuilder,
-		ResourcePrefix:              r.ResourcePrefix,
-		DefaultRuntime:              r.DefaultRuntime,
-		GatewayClient:               r.GatewayClient,
-		DynamicClient:               r.DynamicClient,
-		RemoteDynamicClientProvider: r.RemoteDynamicClientProvider,
-		AuthTokenExpirationSeconds:  r.AuthTokenExpirationSeconds,
-		ControllerName:              r.ControllerName,
-		WorkerDepsStorageBucket:     r.WorkerDepsStorageBucket,
-		WorkerDepsStorageEndpoint:   r.WorkerDepsStorageEndpoint,
-		MountAuthType:               r.MountAuthType,
-		MountRoleName:               r.MountRoleName,
-	}
+	return r.handleDeleteTeam(ctx, t)
 }
 
 // ---------------------------------------------------------------------------
-// Decoupled path: Team references standalone Worker CRs via spec.workerMembers
+// TeamReferences path: Team references standalone Worker CRs via spec.workerMembers
 // ---------------------------------------------------------------------------
 
-type decoupledTeamMember struct {
+type teamWorkerMember struct {
 	ref         v1beta1.TeamWorkerRef
 	worker      v1beta1.Worker
 	runtimeName string
 }
 
-func (r *TeamReconciler) decoupledMemberRuntime(member decoupledTeamMember) string {
+func (r *TeamReconciler) teamMemberRuntime(member teamWorkerMember) string {
 	return backend.ResolveRuntime(member.worker.Spec.Runtime, r.DefaultRuntime)
 }
 
-// reconcileTeamDecoupled is the new path for Teams whose spec.workerMembers
-// is populated. It manages team organization (rooms, coordination context,
-// heartbeat injection, status aggregation) without managing member runtime.
-func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.Team, patchBase client.Patch) (reconcile.Result, error) {
+// reconcileTeam manages Team-owned organization (rooms, coordination context,
+// heartbeat injection, and status aggregation) for referenced Worker CRs.
+func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, patchBase client.Patch) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// 1. Validate workerMembers
@@ -1089,8 +349,8 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
 
-	// 2. Resolve decoupled membership snapshot from Worker CRs.
-	members, degradedMsgs := r.resolveDecoupledMembers(ctx, t)
+	// 2. Resolve team-reference membership snapshot from Worker CRs.
+	members, degradedMsgs := r.resolveTeamMembers(ctx, t)
 	if len(degradedMsgs) > 0 {
 		t.Status.Phase = "Degraded"
 		t.Status.Message = strings.Join(degradedMsgs, "; ")
@@ -1109,9 +369,9 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 
 	// 4. Team-level infrastructure
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
-	leaderMember := decoupledLeaderMember(members, leaderRef.Name)
+	leaderMember := teamLeaderMember(members, leaderRef.Name)
 	leaderRuntimeName := leaderMember.runtimeName
-	workerRuntimeNames := decoupledWorkerRuntimeNames(members, leaderRef.Name)
+	workerRuntimeNames := teamWorkerRuntimeNames(members, leaderRef.Name)
 
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
 		TeamName:             teamRuntimeName,
@@ -1135,14 +395,14 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 	}
 
 	// 5. Coordination context + heartbeat injection
-	teamWorkerEntries := decoupledTeamWorkerEntries(members, leaderRef.Name)
-	leaderRuntime := r.decoupledMemberRuntime(leaderMember)
+	teamWorkerEntries := teamWorkerEntries(members, leaderRef.Name)
+	leaderRuntime := r.teamMemberRuntime(leaderMember)
 
 	if leaderRuntime != backend.RuntimeQwenPaw {
-		// Overlay Team Leader built-ins onto the decoupled leader Worker before
+		// Overlay Team Leader built-ins onto the team-reference leader Worker before
 		// injecting the team coordination context. The Worker still owns its
 		// lifecycle and credentials; this only restores role-specific prompt and
-		// skill assets that legacy Teams had generated directly.
+		// skill assets generated for Team members.
 		if err := r.Deployer.SyncTeamLeaderAssets(ctx, service.SyncTeamLeaderAssetsRequest{
 			WorkerName: leaderRuntimeName,
 			Runtime:    leaderMember.worker.Spec.Runtime,
@@ -1158,7 +418,7 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 			TeamRoomID:         rooms.TeamRoomID,
 			LeaderDMRoomID:     rooms.LeaderDMRoomID,
 			HeartbeatEvery:     t.Spec.HeartbeatEvery,
-			WorkerIdleTimeout:  "", // decoupled path does not inject
+			WorkerIdleTimeout:  "",
 			TeamWorkers:        teamWorkerEntries,
 			TeamAdminID:        teamAdminMatrixID(derivedTeam),
 			TeamCoordinatorIDs: teamCoordinatorIDs(derivedTeam),
@@ -1184,7 +444,7 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 		if rm.ref.Name == leaderRef.Name {
 			continue
 		}
-		if r.decoupledMemberRuntime(rm) == backend.RuntimeQwenPaw {
+		if r.teamMemberRuntime(rm) == backend.RuntimeQwenPaw {
 			continue
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
@@ -1197,64 +457,50 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 			logger.Error(err, "worker coordination context injection failed (non-fatal)", "worker", rm.runtimeName)
 		}
 	}
-	if err := r.deployDecoupledRuntimeConfigs(ctx, derivedTeam, members, leaderRef.Name, teamRuntimeName, leaderRuntimeName, rooms); err != nil {
+	if err := r.deployTeamRuntimeConfigs(ctx, derivedTeam, members, leaderRef.Name, teamRuntimeName, leaderRuntimeName, rooms); err != nil {
 		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
 
-	// 6. Legacy registry updates
-	if r.Legacy != nil && r.Legacy.Enabled() {
-		leaderMatrixID := r.Legacy.MatrixUserID(leaderRuntimeName)
-		if err := r.Legacy.UpdateManagerGroupAllowFrom(leaderMatrixID, true); err != nil {
+	// 6. Channel authorization
+	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
+		leaderMatrixID := r.ManagerConfig.MatrixUserID(leaderRuntimeName)
+		if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(leaderMatrixID, true); err != nil {
 			logger.Error(err, "failed to update Manager groupAllowFrom for team leader (non-fatal)")
 		}
-		workerNames := make([]string, 0, len(workerRefs))
-		for _, ref := range workerRefs {
-			workerNames = append(workerNames, ref.Name)
-		}
-		if err := r.Legacy.UpdateTeamsRegistry(service.TeamRegistryEntry{
-			Name:           teamRuntimeName,
-			Leader:         leaderRef.Name,
-			Workers:        workerNames,
-			TeamRoomID:     rooms.TeamRoomID,
-			LeaderDMRoomID: rooms.LeaderDMRoomID,
-			Admin:          teamAdminRegistryEntry(derivedTeam.Spec.Admin),
-			Members:        teamMemberRegistryEntries(derivedTeam.Spec.HumanMembers),
-		}); err != nil {
-			logger.Error(err, "teams-registry update failed (non-fatal)")
-		}
-
 		for _, rm := range members {
-			role := RoleTeamWorker
-			if rm.ref.Name == leaderRef.Name {
-				role = RoleTeamLeader
-			} else if err := r.Legacy.UpdateManagerGroupAllowFrom(r.Legacy.MatrixUserID(rm.runtimeName), false); err != nil {
-				logger.Error(err, "failed to revoke Manager groupAllowFrom for team worker (non-fatal)", "worker", rm.runtimeName)
-			}
-			ms := decoupledMemberStatusSnapshot(rm, role)
-			r.reconcileLegacyMember(ctx, derivedTeam, decoupledMemberContext(derivedTeam, rm, role, teamRuntimeName, leaderRuntimeName, r.DefaultBackendRuntime), &ms)
-
-			if r.decoupledMemberRuntime(rm) != backend.RuntimeQwenPaw {
-				policy := r.decoupledChannelPolicy(derivedTeam, members, leaderRef.Name, rm, role)
-				if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
-					WorkerName:     rm.runtimeName,
-					GroupAllowFrom: policy.GroupAllowFrom,
-					DMAllowFrom:    policy.DMAllowFrom,
-				}); err != nil {
-					logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rm.runtimeName)
+			if rm.ref.Name != leaderRef.Name {
+				if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(rm.runtimeName), false); err != nil {
+					logger.Error(err, "failed to revoke Manager groupAllowFrom for team worker (non-fatal)", "worker", rm.runtimeName)
 				}
+			}
+		}
+	}
+	for _, rm := range members {
+		role := RoleTeamWorker
+		if rm.ref.Name == leaderRef.Name {
+			role = RoleTeamLeader
+		}
+		if r.teamMemberRuntime(rm) != backend.RuntimeQwenPaw {
+			policy := r.teamChannelPolicy(derivedTeam, members, leaderRef.Name, rm, role)
+			if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
+				WorkerName:     rm.runtimeName,
+				GroupAllowFrom: policy.GroupAllowFrom,
+				DMAllowFrom:    policy.DMAllowFrom,
+			}); err != nil {
+				logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rm.runtimeName)
 			}
 		}
 	}
 
 	// 7. Status aggregation
-	r.cleanupStaleDecoupledMembers(ctx, derivedTeam, members)
-	leaderReady, readyWorkers := aggregateDecoupledTeamStatus(t, members, leaderRef.Name, len(workerRefs))
+	r.cleanupStaleTeamMembers(ctx, derivedTeam, members)
+	leaderReady, readyWorkers := aggregateTeamStatus(t, members, leaderRef.Name, len(workerRefs))
 
 	if err := r.Status().Patch(ctx, t, patchBase); err != nil {
 		logger.Error(err, "failed to patch team status (non-fatal)")
 	}
 
-	logger.Info("team reconciled (decoupled)",
+	logger.Info("team reconciled (team-reference)",
 		"name", t.Name,
 		"phase", t.Status.Phase,
 		"leaderReady", leaderReady,
@@ -1263,8 +509,8 @@ func (r *TeamReconciler) reconcileTeamDecoupled(ctx context.Context, t *v1beta1.
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
 }
 
-func (r *TeamReconciler) resolveDecoupledMembers(ctx context.Context, t *v1beta1.Team) ([]decoupledTeamMember, []string) {
-	members := make([]decoupledTeamMember, 0, len(t.Spec.WorkerMembers))
+func (r *TeamReconciler) resolveTeamMembers(ctx context.Context, t *v1beta1.Team) ([]teamWorkerMember, []string) {
+	members := make([]teamWorkerMember, 0, len(t.Spec.WorkerMembers))
 	var degradedMsgs []string
 
 	for _, ref := range t.Spec.WorkerMembers {
@@ -1274,7 +520,7 @@ func (r *TeamReconciler) resolveDecoupledMembers(ctx context.Context, t *v1beta1
 			degradedMsgs = append(degradedMsgs, fmt.Sprintf("Worker %q not found", ref.Name))
 			continue
 		}
-		members = append(members, decoupledTeamMember{
+		members = append(members, teamWorkerMember{
 			ref:         ref,
 			worker:      w,
 			runtimeName: w.Spec.EffectiveWorkerName(w.Name),
@@ -1283,16 +529,16 @@ func (r *TeamReconciler) resolveDecoupledMembers(ctx context.Context, t *v1beta1
 	return members, degradedMsgs
 }
 
-func decoupledLeaderMember(members []decoupledTeamMember, leaderName string) decoupledTeamMember {
+func teamLeaderMember(members []teamWorkerMember, leaderName string) teamWorkerMember {
 	for _, member := range members {
 		if member.ref.Name == leaderName {
 			return member
 		}
 	}
-	return decoupledTeamMember{}
+	return teamWorkerMember{}
 }
 
-func decoupledWorkerRuntimeNames(members []decoupledTeamMember, leaderName string) []string {
+func teamWorkerRuntimeNames(members []teamWorkerMember, leaderName string) []string {
 	names := make([]string, 0, len(members))
 	for _, member := range members {
 		if member.ref.Name == leaderName {
@@ -1303,7 +549,7 @@ func decoupledWorkerRuntimeNames(members []decoupledTeamMember, leaderName strin
 	return names
 }
 
-func decoupledTeamWorkerEntries(members []decoupledTeamMember, leaderName string) []service.TeamWorkerEntry {
+func teamWorkerEntries(members []teamWorkerMember, leaderName string) []service.TeamWorkerEntry {
 	entries := make([]service.TeamWorkerEntry, 0, len(members))
 	for _, member := range members {
 		if member.ref.Name == leaderName {
@@ -1317,16 +563,16 @@ func decoupledTeamWorkerEntries(members []decoupledTeamMember, leaderName string
 	return entries
 }
 
-func (r *TeamReconciler) deployDecoupledRuntimeConfigs(
+func (r *TeamReconciler) deployTeamRuntimeConfigs(
 	ctx context.Context,
 	t *v1beta1.Team,
-	members []decoupledTeamMember,
+	members []teamWorkerMember,
 	leaderName string,
 	teamRuntimeName string,
 	leaderRuntimeName string,
 	rooms *service.TeamRoomResult,
 ) error {
-	roster := decoupledRuntimeConfigTeamMembers(t, members, leaderName)
+	roster := runtimeConfigTeamMembers(t, members, leaderName)
 	for _, member := range members {
 		// Skip members being deleted — their runtime config no longer needs
 		// updating and the model provider may already have been removed.
@@ -1400,7 +646,7 @@ func (r *TeamReconciler) runtimeConfigAIGatewayURL(ctx context.Context, spec v1b
 	return info.IntranetURL, nil
 }
 
-func decoupledRuntimeConfigTeamMembers(t *v1beta1.Team, members []decoupledTeamMember, leaderName string) []service.RuntimeConfigTeamMember {
+func runtimeConfigTeamMembers(t *v1beta1.Team, members []teamWorkerMember, leaderName string) []service.RuntimeConfigTeamMember {
 	roster := make([]service.RuntimeConfigTeamMember, 0, len(members)+len(t.Spec.HumanMembers))
 	for _, member := range members {
 		role := RoleTeamWorker
@@ -1429,18 +675,18 @@ func decoupledRuntimeConfigTeamMembers(t *v1beta1.Team, members []decoupledTeamM
 	return roster
 }
 
-type decoupledChannelAllowLists struct {
+type teamChannelAllowLists struct {
 	GroupAllowFrom []string
 	DMAllowFrom    []string
 }
 
-func decoupledMemberStatusSnapshot(member decoupledTeamMember, role MemberRole) v1beta1.TeamMemberStatus {
+func teamMemberStatusSnapshot(member teamWorkerMember, role MemberRole) v1beta1.TeamMemberStatus {
 	ms := v1beta1.TeamMemberStatus{Name: member.ref.Name, Role: role.String()}
-	syncDecoupledMemberStatus(&ms, member)
+	syncTeamMemberStatus(&ms, member)
 	return ms
 }
 
-func syncDecoupledMemberStatus(ms *v1beta1.TeamMemberStatus, member decoupledTeamMember) {
+func syncTeamMemberStatus(ms *v1beta1.TeamMemberStatus, member teamWorkerMember) {
 	ms.RuntimeName = member.runtimeName
 	ms.MatrixUserID = member.worker.Status.MatrixUserID
 	ms.RoomID = member.worker.Status.RoomID
@@ -1455,7 +701,7 @@ func syncDecoupledMemberStatus(ms *v1beta1.TeamMemberStatus, member decoupledTea
 	ms.ExposedPorts = member.worker.Status.ExposedPorts
 }
 
-func (r *TeamReconciler) cleanupStaleDecoupledMembers(ctx context.Context, t *v1beta1.Team, members []decoupledTeamMember) {
+func (r *TeamReconciler) cleanupStaleTeamMembers(ctx context.Context, t *v1beta1.Team, members []teamWorkerMember) {
 	desired := make(map[string]struct{}, len(members))
 	for _, member := range members {
 		desired[member.ref.Name] = struct{}{}
@@ -1467,18 +713,13 @@ func (r *TeamReconciler) cleanupStaleDecoupledMembers(ctx context.Context, t *v1
 		var w v1beta1.Worker
 		key := client.ObjectKey{Name: ms.Name, Namespace: t.Namespace}
 		if err := r.Get(ctx, key, &w); err == nil {
-			r.detachDecoupledMember(ctx, t, &w)
+			r.detachTeamMember(ctx, t, &w)
 			continue
 		}
-		runtimeName := ms.RuntimeName
-		if runtimeName == "" {
-			runtimeName = ms.Name
-		}
-		r.removeLegacyMember(ctx, runtimeName)
 	}
 }
 
-func (r *TeamReconciler) detachDecoupledMember(ctx context.Context, t *v1beta1.Team, w *v1beta1.Worker) {
+func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, w *v1beta1.Worker) {
 	logger := log.FromContext(ctx)
 	runtimeName := w.Spec.EffectiveWorkerName(w.Name)
 	runtime := backend.ResolveRuntime(w.Spec.Runtime, r.DefaultRuntime)
@@ -1513,17 +754,16 @@ func (r *TeamReconciler) detachDecoupledMember(ctx context.Context, t *v1beta1.T
 		logger.Error(err, "failed to drop worker runtime team context (non-fatal)", "worker", runtimeName)
 	}
 
-	r.removeLegacyMember(ctx, runtimeName)
-	if r.Legacy == nil || !r.Legacy.Enabled() || runtime == backend.RuntimeQwenPaw {
+	if r.ManagerConfig == nil || !r.ManagerConfig.Enabled() || runtime == backend.RuntimeQwenPaw {
 		return
 	}
-	if err := r.Legacy.UpdateManagerGroupAllowFrom(r.Legacy.MatrixUserID(runtimeName), false); err != nil {
+	if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
 		logger.Error(err, "failed to revoke Manager groupAllowFrom for detached member (non-fatal)", "worker", runtimeName)
 	}
-	managerMatrixID := r.Legacy.MatrixUserID("manager")
+	managerMatrixID := r.ManagerConfig.MatrixUserID("manager")
 	var systemAdminID string
 	if r.SystemAdminUser != "" {
-		systemAdminID = r.Legacy.MatrixUserID(r.SystemAdminUser)
+		systemAdminID = r.ManagerConfig.MatrixUserID(r.SystemAdminUser)
 	}
 	standaloneAllowFrom := uniqueTeamStrings([]string{managerMatrixID, systemAdminID, teamAdminMatrixID(t)})
 	if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
@@ -1535,38 +775,13 @@ func (r *TeamReconciler) detachDecoupledMember(ctx context.Context, t *v1beta1.T
 	}
 }
 
-func decoupledMemberContext(t *v1beta1.Team, member decoupledTeamMember, role MemberRole, teamRuntimeName, leaderRuntimeName string, defaultBackendRuntime string) MemberContext {
-	teamLeaderName := ""
-	if role == RoleTeamWorker {
-		teamLeaderName = leaderRuntimeName
-	}
-	backendRuntime := member.worker.Spec.GetBackendRuntime()
-	if backendRuntime == "" {
-		backendRuntime = defaultBackendRuntime
-	}
-	return MemberContext{
-		Name:                 member.ref.Name,
-		RuntimeName:          member.runtimeName,
-		Namespace:            member.worker.Namespace,
-		Role:                 role,
-		Spec:                 member.worker.Spec,
-		TeamName:             teamRuntimeName,
-		TeamLeaderName:       teamLeaderName,
-		TeamAdminMatrixID:    teamAdminMatrixID(t),
-		TeamCoordinatorIDs:   teamCoordinatorIDs(t),
-		BackendRuntime:       backendRuntime,
-		StatusBackendRuntime: member.worker.Status.BackendRuntime,
-		CurrentSpecHash:      member.worker.Status.SpecHash,
-	}
-}
-
-func (r *TeamReconciler) decoupledChannelPolicy(t *v1beta1.Team, members []decoupledTeamMember, leaderName string, current decoupledTeamMember, role MemberRole) decoupledChannelAllowLists {
+func (r *TeamReconciler) teamChannelPolicy(t *v1beta1.Team, members []teamWorkerMember, leaderName string, current teamWorkerMember, role MemberRole) teamChannelAllowLists {
 	resolve := func(value string) string {
 		if value == "" || strings.HasPrefix(value, "@") {
 			return value
 		}
-		if r.Legacy != nil && r.Legacy.Enabled() {
-			return r.Legacy.MatrixUserID(value)
+		if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
+			return r.ManagerConfig.MatrixUserID(value)
 		}
 		if r.Provisioner != nil {
 			return r.Provisioner.MatrixUserID(value)
@@ -1574,7 +789,7 @@ func (r *TeamReconciler) decoupledChannelPolicy(t *v1beta1.Team, members []decou
 		return value
 	}
 
-	leaderRuntimeName := decoupledLeaderMember(members, leaderName).runtimeName
+	leaderRuntimeName := teamLeaderMember(members, leaderName).runtimeName
 	managerMatrixID := resolve("manager")
 	coordinatorIDs := teamCoordinatorIDs(t)
 
@@ -1615,89 +830,18 @@ func (r *TeamReconciler) decoupledChannelPolicy(t *v1beta1.Team, members []decou
 		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
 	}
 
-	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, decoupledIndividualChannelPolicy(t, current, role))
+	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, individualTeamChannelPolicy(t, current, role))
 	if policy != nil {
 		groupAllow = applyChannelAllowPolicy(groupAllow, policy.GroupAllowExtra, policy.GroupDenyExtra, resolve)
 		dmAllow = applyChannelAllowPolicy(dmAllow, policy.DmAllowExtra, policy.DmDenyExtra, resolve)
 	}
-	return decoupledChannelAllowLists{
+	return teamChannelAllowLists{
 		GroupAllowFrom: uniqueTeamStrings(groupAllow),
 		DMAllowFrom:    uniqueTeamStrings(dmAllow),
 	}
 }
 
-func (r *TeamReconciler) legacyChannelPolicy(t *v1beta1.Team, members []MemberContext, current MemberContext, leaderRuntimeName string) decoupledChannelAllowLists {
-	resolve := func(value string) string {
-		if value == "" || strings.HasPrefix(value, "@") {
-			return value
-		}
-		if r.Legacy != nil && r.Legacy.Enabled() {
-			return r.Legacy.MatrixUserID(value)
-		}
-		if r.Provisioner != nil {
-			return r.Provisioner.MatrixUserID(value)
-		}
-		return value
-	}
-
-	if leaderRuntimeName == "" {
-		for _, member := range members {
-			if member.Role == RoleTeamLeader {
-				leaderRuntimeName = member.RuntimeName
-				break
-			}
-		}
-	}
-	managerMatrixID := resolve("manager")
-	coordinatorIDs := teamCoordinatorIDs(t)
-
-	var systemAdminID string
-	if r.SystemAdminUser != "" {
-		systemAdminID = resolve(r.SystemAdminUser)
-	}
-
-	groupAllow := make([]string, 0)
-	dmAllow := make([]string, 0)
-
-	if current.Role == RoleTeamLeader {
-		groupAllow = append(groupAllow, managerMatrixID, systemAdminID)
-		groupAllow = appendResolved(groupAllow, resolve, coordinatorIDs...)
-		for _, member := range members {
-			if member.Role == RoleTeamLeader {
-				continue
-			}
-			groupAllow = append(groupAllow, resolve(member.RuntimeName))
-		}
-		dmAllow = append(dmAllow, managerMatrixID, systemAdminID)
-		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
-	} else {
-		leaderMatrixID := resolve(leaderRuntimeName)
-		groupAllow = append(groupAllow, leaderMatrixID, systemAdminID)
-		groupAllow = appendResolved(groupAllow, resolve, coordinatorIDs...)
-		if t.Spec.PeerMentions == nil || *t.Spec.PeerMentions {
-			for _, member := range members {
-				if member.Role == RoleTeamLeader || member.Name == current.Name {
-					continue
-				}
-				groupAllow = append(groupAllow, resolve(member.RuntimeName))
-			}
-		}
-		dmAllow = append(dmAllow, leaderMatrixID, systemAdminID)
-		dmAllow = appendResolved(dmAllow, resolve, coordinatorIDs...)
-	}
-
-	policy := mergeChannelPolicy(t.Spec.ChannelPolicy, current.Spec.ChannelPolicy)
-	if policy != nil {
-		groupAllow = applyChannelAllowPolicy(groupAllow, policy.GroupAllowExtra, policy.GroupDenyExtra, resolve)
-		dmAllow = applyChannelAllowPolicy(dmAllow, policy.DmAllowExtra, policy.DmDenyExtra, resolve)
-	}
-	return decoupledChannelAllowLists{
-		GroupAllowFrom: uniqueTeamStrings(groupAllow),
-		DMAllowFrom:    uniqueTeamStrings(dmAllow),
-	}
-}
-
-func decoupledIndividualChannelPolicy(t *v1beta1.Team, member decoupledTeamMember, role MemberRole) *v1beta1.ChannelPolicySpec {
+func individualTeamChannelPolicy(t *v1beta1.Team, member teamWorkerMember, role MemberRole) *v1beta1.ChannelPolicySpec {
 	return member.worker.Spec.ChannelPolicy
 }
 
@@ -1732,7 +876,7 @@ func applyChannelAllowPolicy(base, allowExtra, denyExtra []string, resolve func(
 	return filtered
 }
 
-func aggregateDecoupledTeamStatus(t *v1beta1.Team, members []decoupledTeamMember, leaderName string, totalWorkers int) (bool, int) {
+func aggregateTeamStatus(t *v1beta1.Team, members []teamWorkerMember, leaderName string, totalWorkers int) (bool, int) {
 	desiredNames := make(map[string]struct{}, len(t.Spec.WorkerMembers))
 	for _, ref := range t.Spec.WorkerMembers {
 		desiredNames[ref.Name] = struct{}{}
@@ -1747,7 +891,7 @@ func aggregateDecoupledTeamStatus(t *v1beta1.Team, members []decoupledTeamMember
 			role = RoleTeamLeader.String()
 		}
 		ms := memberStatus(&t.Status, member.ref.Name, MemberRole(role))
-		syncDecoupledMemberStatus(ms, member)
+		syncTeamMemberStatus(ms, member)
 		if member.ref.Name == leaderName {
 			leaderReady = ms.Ready
 		} else if ms.Ready {
@@ -1765,13 +909,13 @@ func aggregateDecoupledTeamStatus(t *v1beta1.Team, members []decoupledTeamMember
 	return leaderReady, readyWorkers
 }
 
-// handleDeleteDecoupled handles Team deletion for the decoupled path.
+// handleDeleteTeam removes Team-owned state while preserving referenced Workers.
 // It revokes team coordination from members (writing standalone context back),
 // removes registry entries, and deletes room aliases. It does NOT destroy
 // member Workers — they have independent lifecycles.
-func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.Team) error {
+func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) error {
 	logger := log.FromContext(ctx)
-	logger.Info("deleting team (decoupled)", "name", t.Name)
+	logger.Info("deleting team (team-reference)", "name", t.Name)
 	teamRuntimeName := t.Spec.EffectiveTeamName(t.Name)
 	r.syncTeamRoomHumanStatuses(ctx, t.Namespace, "", t.Status.TeamRoomID, nil)
 
@@ -1783,7 +927,7 @@ func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.T
 			// Worker already deleted or not found — nothing to revert.
 			continue
 		}
-		r.detachDecoupledMember(ctx, t, &w)
+		r.detachTeamMember(ctx, t, &w)
 	}
 
 	// Remove heartbeat config from the leader.
@@ -1806,28 +950,24 @@ func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.T
 		}
 	}
 
-	// Legacy registry cleanup.
-	if r.Legacy != nil && r.Legacy.Enabled() {
+	// Revoke the deleted Team Leader's Manager-room authorization.
+	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
 		if leaderRef != nil {
 			var leaderW v1beta1.Worker
 			key := client.ObjectKey{Name: leaderRef.Name, Namespace: t.Namespace}
 			if err := r.Get(ctx, key, &leaderW); err == nil {
 				leaderRN := leaderW.Spec.EffectiveWorkerName(leaderW.Name)
-				leaderMatrixID := r.Legacy.MatrixUserID(leaderRN)
-				if err := r.Legacy.UpdateManagerGroupAllowFrom(leaderMatrixID, false); err != nil {
+				leaderMatrixID := r.ManagerConfig.MatrixUserID(leaderRN)
+				if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(leaderMatrixID, false); err != nil {
 					logger.Error(err, "failed to revoke Manager groupAllowFrom (non-fatal)")
 				}
 			}
 		}
-		if err := r.Legacy.RemoveFromTeamsRegistry(ctx, teamRuntimeName); err != nil {
-			logger.Error(err, "failed to remove team from registry (non-fatal)")
-		}
-
 	}
 
 	// Delete team room aliases so a fresh Team CR with the same name gets
 	// clean aliases.
-	leaderRuntimeName := r.decoupledLeaderRuntimeName(ctx, t, leaderRef)
+	leaderRuntimeName := r.teamLeaderRuntimeName(ctx, t, leaderRef)
 	r.archiveTeamRooms(ctx, t, teamRuntimeName, leaderRuntimeName)
 	if err := r.Provisioner.DeleteTeamRoomAliases(ctx, teamRuntimeName, leaderRuntimeName); err != nil {
 		logger.Error(err, "failed to delete team room aliases (non-fatal)")
@@ -1836,7 +976,7 @@ func (r *TeamReconciler) handleDeleteDecoupled(ctx context.Context, t *v1beta1.T
 	return nil
 }
 
-func (r *TeamReconciler) decoupledLeaderRuntimeName(ctx context.Context, t *v1beta1.Team, leaderRef *v1beta1.TeamWorkerRef) string {
+func (r *TeamReconciler) teamLeaderRuntimeName(ctx context.Context, t *v1beta1.Team, leaderRef *v1beta1.TeamWorkerRef) string {
 	if leaderRef == nil {
 		return ""
 	}
@@ -1913,8 +1053,10 @@ func validateWorkerMembers(refs []v1beta1.TeamWorkerRef) (leader *v1beta1.TeamWo
 		if role == RoleTeamLeader.String() {
 			leaders = append(leaders, ref.Name)
 			leader = ref
-		} else {
+		} else if role == RoleTeamWorker.String() {
 			workers = append(workers, *ref)
+		} else {
+			return nil, nil, fmt.Errorf("workerMembers[%d].role must be %q or %q", i, RoleTeamLeader.String(), RoleTeamWorker.String())
 		}
 	}
 
@@ -1925,69 +1067,6 @@ func validateWorkerMembers(refs []v1beta1.TeamWorkerRef) (leader *v1beta1.TeamWo
 		return nil, nil, fmt.Errorf("workerMembers contains multiple leaders: %v", leaders)
 	}
 	return leader, workers, nil
-}
-
-// reconcileLegacyMember upserts a team member (leader or worker) into the
-// legacy workers-registry.json. This is the TeamReconciler counterpart to
-// WorkerReconciler.reconcileLegacy — both must emit entries with identical
-// field semantics (role, team_id, runtime, skills, image) so that
-// manager-side tooling (find-worker.sh, push-worker-skills.sh,
-// update-worker-config.sh, etc.) can treat standalone workers and team
-// members uniformly.
-//
-// m.Role drives the role string: RoleTeamLeader -> "team_leader",
-// RoleTeamWorker -> "worker". ms is the Team.Status member entry populated by
-// reconcileMember; RoomID/MatrixUserID on it are the source of truth for the
-// registry row, but MatrixUserID is re-derived via r.Legacy.MatrixUserID to
-// stay deterministic (mirrors WorkerReconciler which uses
-// r.Provisioner.MatrixUserID(w.Name)).
-//
-// Non-fatal: any OSS error is logged but does not fail the reconcile pass,
-// matching the legacy contract in WorkerReconciler.
-func (r *TeamReconciler) reconcileLegacyMember(ctx context.Context, t *v1beta1.Team, m MemberContext, ms *v1beta1.TeamMemberStatus) {
-	if r.Legacy == nil || !r.Legacy.Enabled() {
-		return
-	}
-	logger := log.FromContext(ctx)
-	runtimeName := m.RuntimeName
-	if runtimeName == "" {
-		runtimeName = m.Name
-	}
-
-	roomID := ""
-	if ms != nil {
-		roomID = ms.RoomID
-	}
-
-	entry := service.WorkerRegistryEntry{
-		Name:         runtimeName,
-		MatrixUserID: r.Legacy.MatrixUserID(runtimeName),
-		RoomID:       roomID,
-		Runtime:      m.Spec.Runtime,
-		Deployment:   "local",
-		Skills:       m.Spec.Skills,
-		Role:         m.Role.String(),
-		TeamID:       nilIfEmpty(t.Spec.EffectiveTeamName(t.Name)),
-		Image:        nilIfEmpty(m.Spec.Image),
-	}
-	if err := r.Legacy.UpdateWorkersRegistry(entry); err != nil {
-		logger.Error(err, "workers-registry update failed (non-fatal)", "name", m.Name, "runtimeName", runtimeName)
-	}
-}
-
-// removeLegacyMember deletes a team member from workers-registry.json. Used
-// by both the stale-member cleanup in reconcileTeamNormal and the full team
-// deletion in handleDelete. No-op when Legacy is disabled.
-func (r *TeamReconciler) removeLegacyMember(ctx context.Context, runtimeName string) {
-	if r.Legacy == nil || !r.Legacy.Enabled() {
-		return
-	}
-	if runtimeName == "" {
-		return
-	}
-	if err := r.Legacy.RemoveFromWorkersRegistry(runtimeName); err != nil {
-		log.FromContext(ctx).Error(err, "workers-registry remove failed (non-fatal)", "runtimeName", runtimeName)
-	}
 }
 
 func (r *TeamReconciler) failTeam(ctx context.Context, t *v1beta1.Team, patchBase client.Patch, msg string) (reconcile.Result, error) {
@@ -2171,33 +1250,7 @@ func uniqueTeamStrings(values []string) []string {
 func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controller, error) {
 	bldr := ctrl.NewControllerManagedBy(mgr).For(&v1beta1.Team{})
 
-	if r.Backend != nil {
-		// Watch Pods (for pod backend workers)
-		if wb, _ := r.Backend.GetBackendForType(context.Background(), "pod"); wb != nil {
-			bldr = bldr.Watches(
-				&corev1.Pod{},
-				handler.EnqueueRequestsFromMapFunc(TeamPodMapFunc("")),
-				builder.WithPredicates(PodLifecyclePredicates(v1beta1.LabelTeam, r.ControllerName)),
-			)
-		}
-		// Watch Sandbox CRs and transient SandboxClaim CRs (for sandbox backend workers)
-		if wb, _ := r.Backend.GetBackendForType(context.Background(), "sandbox"); wb != nil {
-			if sb, ok := wb.(*backend.SandboxBackend); ok {
-				bldr = bldr.Watches(
-					sb.WatchObject(),
-					handler.EnqueueRequestsFromMapFunc(TeamPodMapFunc("")),
-					builder.WithPredicates(SandboxLifecyclePredicates(v1beta1.LabelTeam, r.ControllerName)),
-				)
-				bldr = bldr.Watches(
-					sb.ClaimWatchObject(),
-					handler.EnqueueRequestsFromMapFunc(TeamPodMapFunc("")),
-					builder.WithPredicates(SandboxLifecyclePredicates(v1beta1.LabelTeam, r.ControllerName)),
-				)
-			}
-		}
-	}
-
-	// Watch Worker CRs whose status changes for the decoupled path. When a
+	// Watch Worker CRs whose status changes. When a
 	// referenced Worker's status changes, the owning Team is enqueued via the
 	// spec.workerMembers.name field indexer.
 	bldr = bldr.Watches(
@@ -2207,28 +1260,6 @@ func (r *TeamReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Controll
 	)
 
 	return bldr.Build(r)
-}
-
-// TeamPodMapFunc returns a MapFunc for routing Pod events to Team reconcile
-// requests. If namespace is non-empty, it overrides obj.GetNamespace() — used
-// for remote clusters where Pod namespace != CR namespace.
-func TeamPodMapFunc(namespace string) handler.MapFunc {
-	return func(_ context.Context, obj client.Object) []reconcile.Request {
-		teamName := obj.GetLabels()[v1beta1.LabelTeam]
-		if teamName == "" {
-			return nil
-		}
-		ns := namespace
-		if ns == "" {
-			ns = obj.GetNamespace()
-		}
-		return []reconcile.Request{
-			{NamespacedName: client.ObjectKey{
-				Name:      teamName,
-				Namespace: ns,
-			}},
-		}
-	}
 }
 
 // workerToTeamRequests maps a Worker event to the Team(s) that reference it
@@ -2338,29 +1369,4 @@ func appendDmAllowExtra(policy *v1beta1.ChannelPolicySpec, names ...string) *v1b
 		}
 	}
 	return policy
-}
-
-func teamAdminRegistryEntry(admin *v1beta1.TeamAdminSpec) *service.TeamAdminEntry {
-	if admin == nil {
-		return nil
-	}
-	return &service.TeamAdminEntry{
-		Name:         admin.Name,
-		MatrixUserID: admin.MatrixUserID,
-	}
-}
-
-func teamMemberRegistryEntries(members []v1beta1.TeamMemberSpec) []service.TeamMemberEntry {
-	if len(members) == 0 {
-		return nil
-	}
-	entries := make([]service.TeamMemberEntry, 0, len(members))
-	for _, member := range members {
-		entries = append(entries, service.TeamMemberEntry{
-			Name:         member.Name,
-			MatrixUserID: member.MatrixUserID,
-			Role:         member.Role,
-		})
-	}
-	return entries
 }

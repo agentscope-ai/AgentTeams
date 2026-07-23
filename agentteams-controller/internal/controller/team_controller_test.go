@@ -4,24 +4,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
@@ -36,10 +30,28 @@ func newTeamTestClient(t *testing.T, objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 }
 
+func newTestManagerConfig(t *testing.T) (*service.ManagerConfigStore, *ossfake.Memory) {
+	t.Helper()
+	fake := ossfake.NewMemory()
+	return service.NewManagerConfigStore(service.ManagerConfigStoreConfig{
+		OSS:          fake,
+		MatrixDomain: "matrix.local",
+		ManagerName:  "manager",
+	}), fake
+}
+
+func stringSliceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 type teamReconcileRig struct {
 	t           *testing.T
 	client      client.Client
-	backend     *mocks.MockWorkerBackend
 	deployer    *mocks.MockDeployer
 	provisioner *mocks.MockProvisioner
 	r           *TeamReconciler
@@ -56,23 +68,17 @@ func newTeamReconcileRig(t *testing.T, objs ...client.Object) *teamReconcileRig 
 		WithObjects(objs...).
 		WithStatusSubresource(&v1beta1.Team{}, &v1beta1.Human{}).
 		Build()
-	wb := mocks.NewMockWorkerBackend()
 	deployer := mocks.NewMockDeployer()
 	provisioner := mocks.NewMockProvisioner()
 	return &teamReconcileRig{
 		t:           t,
 		client:      c,
-		backend:     wb,
 		deployer:    deployer,
 		provisioner: provisioner,
 		r: &TeamReconciler{
-			Client:         c,
-			Provisioner:    provisioner,
-			Deployer:       deployer,
-			Backend:        backend.NewRegistry([]backend.WorkerBackend{wb}),
-			EnvBuilder:     mocks.NewMockEnvBuilder(),
-			ControllerName: "ctl-x",
-			MountRoleName:  "rrsa-role-a",
+			Client:      c,
+			Provisioner: provisioner,
+			Deployer:    deployer,
 		},
 	}
 }
@@ -132,72 +138,6 @@ func runtimeConfigCallFor(calls []service.MemberRuntimeConfigDeployRequest, runt
 	return service.MemberRuntimeConfigDeployRequest{}, false
 }
 
-func TestReconcileMemberInfraUsesCRNameForCredentialKey(t *testing.T) {
-	prov := mocks.NewMockProvisioner()
-	state := &MemberState{}
-	member := MemberContext{
-		Name:        "alpha-worker-lead",
-		RuntimeName: "leader",
-		Role:        RoleTeamLeader,
-	}
-
-	if _, err := ReconcileMemberInfra(context.Background(), MemberDeps{Provisioner: prov}, member, state); err != nil {
-		t.Fatalf("ReconcileMemberInfra: %v", err)
-	}
-
-	if len(prov.Calls.ProvisionWorker) != 1 {
-		t.Fatalf("ProvisionWorker calls=%d, want 1", len(prov.Calls.ProvisionWorker))
-	}
-	req := prov.Calls.ProvisionWorker[0]
-	if req.Name != "leader" {
-		t.Fatalf("ProvisionWorker Name=%q, want runtime workerName leader", req.Name)
-	}
-	if req.CredentialName != "alpha-worker-lead" {
-		t.Fatalf("ProvisionWorker CredentialName=%q, want CR name alpha-worker-lead", req.CredentialName)
-	}
-}
-
-// When the Matrix AppService token is not active yet, ReconcileMemberInfra
-// signals a transient startup race via a short requeue (error=nil). The Team
-// path must NOT treat infra as successful: it must stop before running later
-// phases (ServiceAccount/config/container), must NOT flip ms.Observed, and
-// must surface the ErrAppServiceNotReady sentinel so the caller requeues
-// quickly. This guards against the regression where reconcileMember only
-// inspected the error and ignored the reconcile.Result.
-func TestReconcileMember_AppServiceNotReady_StopsBeforeLaterPhases(t *testing.T) {
-	prov := mocks.NewMockProvisioner()
-	prov.ProvisionWorkerFn = func(context.Context, service.WorkerProvisionRequest) (*service.WorkerProvisionResult, error) {
-		return nil, matrix.ErrAppServiceNotReady
-	}
-
-	r := &TeamReconciler{
-		Provisioner: prov,
-		Deployer:    mocks.NewMockDeployer(),
-	}
-	member := MemberContext{
-		Name:        "alpha-dev",
-		RuntimeName: "dev",
-		Role:        RoleTeamWorker,
-		DeployMode:  v1beta1.DeployModeLocal,
-	}
-	ms := &v1beta1.TeamMemberStatus{Name: "dev"}
-
-	deps := MemberDeps{Provisioner: prov, Deployer: r.Deployer}
-	_, err := r.reconcileMember(context.Background(), deps, member, ms)
-	if !errors.Is(err, matrix.ErrAppServiceNotReady) {
-		t.Fatalf("reconcileMember err=%v, want ErrAppServiceNotReady", err)
-	}
-	if ms.Observed {
-		t.Fatalf("ms.Observed=true, want false when AppService not ready")
-	}
-	if len(prov.Calls.ProvisionWorker) != 1 {
-		t.Fatalf("ProvisionWorker calls=%d, want 1", len(prov.Calls.ProvisionWorker))
-	}
-	if len(prov.Calls.EnsureServiceAccount) != 0 {
-		t.Fatalf("EnsureServiceAccount calls=%d, want 0 (later phases must be skipped)", len(prov.Calls.EnsureServiceAccount))
-	}
-}
-
 func TestResolveTeamAdminActor_ExternalSSOHumanUsesResolvedIdentity(t *testing.T) {
 	issuer := "https://sso.example.com"
 	subject := "user-123"
@@ -206,7 +146,7 @@ func TestResolveTeamAdminActor_ExternalSSOHumanUsesResolvedIdentity(t *testing.T
 	human := &v1beta1.Human{
 		ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"},
 		Spec: v1beta1.HumanSpec{
-			Username: "legacy-alice",
+			Username: "managerConfig-alice",
 			IdentitySource: &v1beta1.IdentitySourceSpec{
 				Issuer:  issuer,
 				Subject: subject,
@@ -247,7 +187,7 @@ func TestResolveTeamAdminActor_ExternalSSOHumanUsesResolvedIdentity(t *testing.T
 		t.Fatalf("LoginAppServiceUser calls=%v, want [%s]", prov.Calls.LoginAppServiceUser, localpart)
 	}
 	if len(prov.Calls.LoginAsHuman) != 0 || len(prov.Calls.LoginWithPassword) != 0 {
-		t.Fatalf("legacy login must not be used for SSO admin, LoginAsHuman=%v LoginWithPassword=%v",
+		t.Fatalf("managerConfig login must not be used for SSO admin, LoginAsHuman=%v LoginWithPassword=%v",
 			prov.Calls.LoginAsHuman, prov.Calls.LoginWithPassword)
 	}
 }
@@ -256,282 +196,6 @@ func testSSOLocalpart(issuer, subject string) string {
 	digest := sha256.Sum256([]byte(issuer + "\x00" + subject))
 	return hex.EncodeToString(digest[:16])
 }
-
-func TestReconcileMemberRefreshUsesCRNameCredentialAndRuntimeMatrixName(t *testing.T) {
-	prov := mocks.NewMockProvisioner()
-	state := &MemberState{}
-	member := MemberContext{
-		Name:                 "alpha-worker-lead",
-		RuntimeName:          "leader",
-		Role:                 RoleTeamLeader,
-		TeamName:             "alpha",
-		ExistingMatrixUserID: "@leader:localhost",
-	}
-
-	if _, err := ReconcileMemberInfra(context.Background(), MemberDeps{Provisioner: prov}, member, state); err != nil {
-		t.Fatalf("ReconcileMemberInfra: %v", err)
-	}
-
-	if len(prov.Calls.RefreshWorkerCredentials) != 1 {
-		t.Fatalf("RefreshWorkerCredentials calls=%d, want 1", len(prov.Calls.RefreshWorkerCredentials))
-	}
-	call := prov.Calls.RefreshWorkerCredentials[0]
-	if call.CredentialName != "alpha-worker-lead" {
-		t.Fatalf("CredentialName=%q, want CR name alpha-worker-lead", call.CredentialName)
-	}
-	if call.WorkerName != "leader" {
-		t.Fatalf("WorkerName=%q, want runtime workerName leader", call.WorkerName)
-	}
-	if call.TeamName != "alpha" {
-		t.Fatalf("TeamName=%q, want alpha", call.TeamName)
-	}
-}
-
-func TestReconcileMemberDeleteUsesCRNameForCredentialDelete(t *testing.T) {
-	prov := mocks.NewMockProvisioner()
-	deployer := mocks.NewMockDeployer()
-	member := MemberContext{
-		Name:        "alpha-worker-lead",
-		RuntimeName: "leader",
-		Role:        RoleTeamLeader,
-	}
-
-	if err := ReconcileMemberDelete(context.Background(), MemberDeps{Provisioner: prov, Deployer: deployer}, member); err != nil {
-		t.Fatalf("ReconcileMemberDelete: %v", err)
-	}
-
-	if len(prov.Calls.DeprovisionWorker) != 1 || prov.Calls.DeprovisionWorker[0].Name != "leader" {
-		t.Fatalf("DeprovisionWorker calls=%v, want runtime workerName leader", prov.Calls.DeprovisionWorker)
-	}
-	if len(prov.Calls.DeleteWorkerCredentials) != 1 || prov.Calls.DeleteWorkerCredentials[0] != "alpha-worker-lead" {
-		t.Fatalf("DeleteWorkerCredentials calls=%v, want CR name alpha-worker-lead", prov.Calls.DeleteWorkerCredentials)
-	}
-}
-
-// registryEntry is the minimal subset of service.workersRegistry we need to
-// inspect in tests — duplicated locally because the registry shape (and
-// WorkerRegistryEntry fields we care about) are stable JSON contracts that
-// Manager-side tooling also consumes. Keeping this in sync with the JSON
-// tags in service.WorkerRegistryEntry is deliberate.
-type registryEntry struct {
-	MatrixUserID string   `json:"matrix_user_id"`
-	RoomID       string   `json:"room_id"`
-	Runtime      string   `json:"runtime"`
-	Deployment   string   `json:"deployment"`
-	Skills       []string `json:"skills"`
-	Role         string   `json:"role"`
-	TeamID       *string  `json:"team_id"`
-	Image        *string  `json:"image"`
-}
-
-type registryFile struct {
-	Version int                      `json:"version"`
-	Workers map[string]registryEntry `json:"workers"`
-}
-
-func readRegistry(t *testing.T, fake *ossfake.Memory, managerName string) *registryFile {
-	t.Helper()
-	key := "agents/" + managerName + "/workers-registry.json"
-	data, err := fake.GetObject(context.Background(), key)
-	if err != nil {
-		t.Fatalf("read registry %s: %v", key, err)
-	}
-	var out registryFile
-	if err := json.Unmarshal(data, &out); err != nil {
-		t.Fatalf("parse registry: %v", err)
-	}
-	return &out
-}
-
-func newTestLegacy(t *testing.T) (*service.LegacyCompat, *ossfake.Memory) {
-	t.Helper()
-	fake := ossfake.NewMemory()
-	legacy := service.NewLegacyCompat(service.LegacyConfig{
-		OSS:          fake,
-		MatrixDomain: "matrix.local",
-		ManagerName:  "manager",
-		// Leave AgentFSDir empty so LegacyCompat skips the local shared-mount
-		// write that would otherwise require creating a real directory.
-		AgentFSDir: "",
-	})
-	return legacy, fake
-}
-
-// TestReconcileLegacyMember_BuildsEntry is the regression guard for the
-// test-18 failure: TeamReconciler must populate workers-registry.json with
-// role=team_leader / worker and team_id=<team name> for each team member so
-// manager-side skills (find-worker.sh, push-worker-skills.sh, etc.) can
-// continue to resolve team members by name.
-func TestReconcileLegacyMember_BuildsEntry(t *testing.T) {
-	legacy, fake := newTestLegacy(t)
-	r := &TeamReconciler{Legacy: legacy}
-
-	team := &v1beta1.Team{}
-	team.Name = "team-a"
-
-	leaderCtx := MemberContext{
-		Name: "lead",
-		Role: RoleTeamLeader,
-		Spec: v1beta1.WorkerSpec{Runtime: "copaw"},
-	}
-	leaderStatus := &v1beta1.TeamMemberStatus{Name: "lead", RoomID: "!room-lead:matrix.local"}
-	r.reconcileLegacyMember(context.Background(), team, leaderCtx, leaderStatus)
-
-	workerCtx := MemberContext{
-		Name: "dev",
-		Role: RoleTeamWorker,
-		Spec: v1beta1.WorkerSpec{
-			Runtime: "copaw",
-			Image:   "dev:v1",
-			Skills:  []string{"refactor"},
-		},
-	}
-	workerStatus := &v1beta1.TeamMemberStatus{Name: "dev", RoomID: "!room-dev:matrix.local"}
-	r.reconcileLegacyMember(context.Background(), team, workerCtx, workerStatus)
-
-	reg := readRegistry(t, fake, "manager")
-	if reg.Version != 1 {
-		t.Fatalf("registry version=%d, want 1", reg.Version)
-	}
-
-	leader, ok := reg.Workers["lead"]
-	if !ok {
-		t.Fatalf("leader entry missing from registry: %+v", reg.Workers)
-	}
-	if leader.Role != "team_leader" {
-		t.Errorf("leader role=%q, want team_leader", leader.Role)
-	}
-	if leader.TeamID == nil || *leader.TeamID != "team-a" {
-		t.Errorf("leader team_id=%v, want team-a", leader.TeamID)
-	}
-	if leader.Runtime != "copaw" {
-		t.Errorf("leader runtime=%q, want copaw", leader.Runtime)
-	}
-	if leader.RoomID != "!room-lead:matrix.local" {
-		t.Errorf("leader room_id=%q, want !room-lead:matrix.local", leader.RoomID)
-	}
-	if leader.MatrixUserID != "@lead:matrix.local" {
-		t.Errorf("leader matrix_user_id=%q, want @lead:matrix.local", leader.MatrixUserID)
-	}
-	if leader.Deployment != "local" {
-		t.Errorf("leader deployment=%q, want local", leader.Deployment)
-	}
-	if leader.Image != nil {
-		t.Errorf("leader image=%v, want nil (leader spec has no image)", leader.Image)
-	}
-
-	worker, ok := reg.Workers["dev"]
-	if !ok {
-		t.Fatalf("worker entry missing from registry: %+v", reg.Workers)
-	}
-	if worker.Role != "worker" {
-		t.Errorf("worker role=%q, want worker", worker.Role)
-	}
-	if worker.TeamID == nil || *worker.TeamID != "team-a" {
-		t.Errorf("worker team_id=%v, want team-a", worker.TeamID)
-	}
-	if worker.Image == nil || *worker.Image != "dev:v1" {
-		t.Errorf("worker image=%v, want dev:v1", worker.Image)
-	}
-	if len(worker.Skills) != 1 || worker.Skills[0] != "refactor" {
-		t.Errorf("worker skills=%v, want [refactor]", worker.Skills)
-	}
-}
-
-func TestReconcileLegacyMember_NoOpWhenLegacyNil(t *testing.T) {
-	r := &TeamReconciler{Legacy: nil}
-	team := &v1beta1.Team{}
-	team.Name = "team-a"
-	// Must not panic.
-	r.reconcileLegacyMember(context.Background(), team, MemberContext{Name: "x", Role: RoleTeamLeader}, nil)
-	r.removeLegacyMember(context.Background(), "x")
-}
-
-func TestLegacyChannelPolicy_BuildsFinalAllowLists(t *testing.T) {
-	legacy, _ := newTestLegacy(t)
-	r := &TeamReconciler{Legacy: legacy, SystemAdminUser: "admin"}
-	team := &v1beta1.Team{
-		Spec: v1beta1.TeamSpec{
-			Admin: &v1beta1.TeamAdminSpec{
-				Name:         "alice",
-				MatrixUserID: "@alice:matrix.local",
-			},
-			ChannelPolicy: &v1beta1.ChannelPolicySpec{
-				GroupAllowExtra: []string{"external-bot"},
-			},
-		},
-	}
-	members := []MemberContext{
-		{Name: "lead", RuntimeName: "lead", Role: RoleTeamLeader},
-		{Name: "dev", RuntimeName: "dev", Role: RoleTeamWorker, Spec: v1beta1.WorkerSpec{
-			ChannelPolicy: &v1beta1.ChannelPolicySpec{GroupDenyExtra: []string{"qa"}},
-		}},
-		{Name: "qa", RuntimeName: "qa", Role: RoleTeamWorker},
-	}
-
-	leaderPolicy := r.legacyChannelPolicy(team, members, members[0], "lead")
-	for _, want := range []string{"@manager:matrix.local", "@admin:matrix.local", "@alice:matrix.local", "@dev:matrix.local", "@qa:matrix.local", "@external-bot:matrix.local"} {
-		if !stringSliceContains(leaderPolicy.GroupAllowFrom, want) {
-			t.Fatalf("leader groupAllowFrom=%v, missing %s", leaderPolicy.GroupAllowFrom, want)
-		}
-	}
-	if !stringSliceContains(leaderPolicy.DMAllowFrom, "@alice:matrix.local") {
-		t.Fatalf("leader dmAllowFrom=%v, missing team admin", leaderPolicy.DMAllowFrom)
-	}
-
-	devPolicy := r.legacyChannelPolicy(team, members, members[1], "lead")
-	if !stringSliceContains(devPolicy.GroupAllowFrom, "@lead:matrix.local") {
-		t.Fatalf("dev groupAllowFrom=%v, missing leader", devPolicy.GroupAllowFrom)
-	}
-	if stringSliceContains(devPolicy.GroupAllowFrom, "@qa:matrix.local") {
-		t.Fatalf("dev groupAllowFrom=%v, must not include denied qa peer", devPolicy.GroupAllowFrom)
-	}
-	if !stringSliceContains(devPolicy.GroupAllowFrom, "@external-bot:matrix.local") {
-		t.Fatalf("dev groupAllowFrom=%v, missing team policy extra", devPolicy.GroupAllowFrom)
-	}
-
-	qaPolicy := r.legacyChannelPolicy(team, members, members[2], "lead")
-	if !stringSliceContains(qaPolicy.GroupAllowFrom, "@dev:matrix.local") {
-		t.Fatalf("qa groupAllowFrom=%v, missing peer dev", qaPolicy.GroupAllowFrom)
-	}
-}
-
-// TestRemoveLegacyMember_DeletesEntry covers the stale-cleanup and
-// handleDelete paths: once removed, the entry disappears so manager-side
-// skills no longer see a ghost worker.
-func TestRemoveLegacyMember_DeletesEntry(t *testing.T) {
-	legacy, fake := newTestLegacy(t)
-	r := &TeamReconciler{Legacy: legacy}
-
-	team := &v1beta1.Team{}
-	team.Name = "team-a"
-	r.reconcileLegacyMember(context.Background(), team,
-		MemberContext{Name: "lead", Role: RoleTeamLeader, Spec: v1beta1.WorkerSpec{Runtime: "copaw"}},
-		&v1beta1.TeamMemberStatus{Name: "lead"})
-
-	if _, ok := readRegistry(t, fake, "manager").Workers["lead"]; !ok {
-		t.Fatalf("precondition: lead should be present before removal")
-	}
-
-	r.removeLegacyMember(context.Background(), "lead")
-
-	if _, ok := readRegistry(t, fake, "manager").Workers["lead"]; ok {
-		t.Fatalf("lead still present after removeLegacyMember")
-	}
-}
-
-func stringSliceContains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
-// ---------------------------------------------------------------------------
-// Decoupled path tests
-// ---------------------------------------------------------------------------
 
 func TestValidateWorkerMembers(t *testing.T) {
 	tests := []struct {
@@ -626,7 +290,7 @@ func TestValidateWorkerMembers(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDecoupled_HappyPath(t *testing.T) {
+func TestReconcileTeamTeamReferences_HappyPath(t *testing.T) {
 	ctx := context.Background()
 
 	leaderWorker := &v1beta1.Worker{
@@ -686,9 +350,6 @@ func TestReconcileTeamDecoupled_HappyPath(t *testing.T) {
 		Client:      c,
 		Provisioner: prov,
 		Deployer:    deployer,
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		AgentFSDir:  t.TempDir(),
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
@@ -698,9 +359,9 @@ func TestReconcileTeamDecoupled_HappyPath(t *testing.T) {
 	}
 
 	patchBase = client.MergeFrom(team.DeepCopy())
-	result, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	result, err := r.reconcileTeam(ctx, team, patchBase)
 	if err != nil {
-		t.Fatalf("reconcileTeamDecoupled: %v", err)
+		t.Fatalf("reconcileTeam: %v", err)
 	}
 	if result.RequeueAfter != reconcileInterval {
 		t.Errorf("RequeueAfter=%v, want %v", result.RequeueAfter, reconcileInterval)
@@ -763,7 +424,7 @@ func TestReconcileTeamDecoupled_HappyPath(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDecoupled_QwenPawProjectsRuntimeRoster(t *testing.T) {
+func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) {
 	ctx := context.Background()
 
 	leaderWorker := &v1beta1.Worker{
@@ -815,21 +476,18 @@ func TestReconcileTeamDecoupled_QwenPawProjectsRuntimeRoster(t *testing.T) {
 		WithStatusSubresource(&v1beta1.Team{}, &v1beta1.Human{}).
 		Build()
 
-	legacy, _ := newTestLegacy(t)
+	managerConfig, _ := newTestManagerConfig(t)
 	deployer := mocks.NewMockDeployer()
 	r := &TeamReconciler{
-		Client:      c,
-		Provisioner: mocks.NewMockProvisioner(),
-		Deployer:    deployer,
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		Legacy:      legacy,
-		AgentFSDir:  t.TempDir(),
+		Client:        c,
+		Provisioner:   mocks.NewMockProvisioner(),
+		Deployer:      deployer,
+		ManagerConfig: managerConfig,
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
-	if _, err := r.reconcileTeamDecoupled(ctx, team, patchBase); err != nil {
-		t.Fatalf("reconcileTeamDecoupled: %v", err)
+	if _, err := r.reconcileTeam(ctx, team, patchBase); err != nil {
+		t.Fatalf("reconcileTeam: %v", err)
 	}
 
 	leaderReq, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "lead")
@@ -879,7 +537,7 @@ func TestReconcileTeamDecoupled_QwenPawProjectsRuntimeRoster(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDecoupled_SyncsAccessibleTeamHumanStatus(t *testing.T) {
+func TestReconcileTeamTeamReferences_SyncsAccessibleTeamHumanStatus(t *testing.T) {
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
 		Spec:       v1beta1.WorkerSpec{Runtime: "qwenpaw", Model: "qwen"},
@@ -956,7 +614,7 @@ func TestReconcileTeamDecoupled_SyncsAccessibleTeamHumanStatus(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDecoupled_EdgeMergesRuntimeTeamContext(t *testing.T) {
+func TestReconcileTeamTeamReferences_EdgeMergesRuntimeTeamContext(t *testing.T) {
 	ctx := context.Background()
 	edgeMode := v1beta1.DeployModeEdge
 
@@ -1007,14 +665,11 @@ func TestReconcileTeamDecoupled_EdgeMergesRuntimeTeamContext(t *testing.T) {
 		Client:      c,
 		Provisioner: mocks.NewMockProvisioner(),
 		Deployer:    deployer,
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		AgentFSDir:  t.TempDir(),
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
-	if _, err := r.reconcileTeamDecoupled(ctx, team, patchBase); err != nil {
-		t.Fatalf("reconcileTeamDecoupled: %v", err)
+	if _, err := r.reconcileTeam(ctx, team, patchBase); err != nil {
+		t.Fatalf("reconcileTeam: %v", err)
 	}
 
 	if _, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "edge-01"); ok {
@@ -1048,7 +703,7 @@ func TestReconcileTeamDecoupled_EdgeMergesRuntimeTeamContext(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDecoupled_WorkerNotFound(t *testing.T) {
+func TestReconcileTeamTeamReferences_WorkerNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	team := &v1beta1.Team{
@@ -1084,13 +739,10 @@ func TestReconcileTeamDecoupled_WorkerNotFound(t *testing.T) {
 		Client:      c,
 		Provisioner: mocks.NewMockProvisioner(),
 		Deployer:    mocks.NewMockDeployer(),
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		AgentFSDir:  t.TempDir(),
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
-	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	_, err := r.reconcileTeam(ctx, team, patchBase)
 	if err != nil {
 		t.Fatalf("unexpected hard error: %v", err)
 	}
@@ -1102,9 +754,9 @@ func TestReconcileTeamDecoupled_WorkerNotFound(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDecoupled_RoleAwareChannelPolicy(t *testing.T) {
+func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 	ctx := context.Background()
-	legacy, _ := newTestLegacy(t)
+	managerConfig, _ := newTestManagerConfig(t)
 
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
@@ -1184,18 +836,15 @@ func TestReconcileTeamDecoupled_RoleAwareChannelPolicy(t *testing.T) {
 		return "@" + name + ":matrix.local"
 	}
 	r := &TeamReconciler{
-		Client:      c,
-		Provisioner: provisioner,
-		Deployer:    deployer,
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		Legacy:      legacy,
-		AgentFSDir:  t.TempDir(),
+		Client:        c,
+		Provisioner:   provisioner,
+		Deployer:      deployer,
+		ManagerConfig: managerConfig,
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
-	if _, err := r.reconcileTeamDecoupled(ctx, team, patchBase); err != nil {
-		t.Fatalf("reconcileTeamDecoupled: %v", err)
+	if _, err := r.reconcileTeam(ctx, team, patchBase); err != nil {
+		t.Fatalf("reconcileTeam: %v", err)
 	}
 
 	if len(deployer.Calls.SyncTeamLeaderAssets) != 1 {
@@ -1245,7 +894,7 @@ func TestReconcileTeamDecoupled_RoleAwareChannelPolicy(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDecoupled_WorkerNotProvisionedKeepsTeamActive(t *testing.T) {
+func TestReconcileTeamTeamReferences_WorkerNotProvisionedKeepsTeamActive(t *testing.T) {
 	ctx := context.Background()
 
 	leaderWorker := &v1beta1.Worker{
@@ -1287,13 +936,10 @@ func TestReconcileTeamDecoupled_WorkerNotProvisionedKeepsTeamActive(t *testing.T
 		Client:      c,
 		Provisioner: mocks.NewMockProvisioner(),
 		Deployer:    mocks.NewMockDeployer(),
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		AgentFSDir:  t.TempDir(),
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
-	result, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	result, err := r.reconcileTeam(ctx, team, patchBase)
 	if err != nil {
 		t.Fatalf("unexpected hard error: %v", err)
 	}
@@ -1318,7 +964,7 @@ func TestReconcileTeamDecoupled_WorkerNotProvisionedKeepsTeamActive(t *testing.T
 	}
 }
 
-func TestReconcileTeamDecoupled_WorkerRuntimePendingKeepsTeamActive(t *testing.T) {
+func TestReconcileTeamTeamReferences_WorkerRuntimePendingKeepsTeamActive(t *testing.T) {
 	ctx := context.Background()
 
 	leaderWorker := &v1beta1.Worker{
@@ -1363,15 +1009,12 @@ func TestReconcileTeamDecoupled_WorkerRuntimePendingKeepsTeamActive(t *testing.T
 		Client:      c,
 		Provisioner: mocks.NewMockProvisioner(),
 		Deployer:    mocks.NewMockDeployer(),
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		AgentFSDir:  t.TempDir(),
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
-	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	_, err := r.reconcileTeam(ctx, team, patchBase)
 	if err != nil {
-		t.Fatalf("reconcileTeamDecoupled: %v", err)
+		t.Fatalf("reconcileTeam: %v", err)
 	}
 	if team.Status.Phase != "Active" {
 		t.Errorf("Phase=%q, want Active", team.Status.Phase)
@@ -1384,7 +1027,7 @@ func TestReconcileTeamDecoupled_WorkerRuntimePendingKeepsTeamActive(t *testing.T
 	}
 }
 
-func TestReconcileTeamDecoupled_MemberRemoved(t *testing.T) {
+func TestReconcileTeamTeamReferences_MemberRemoved(t *testing.T) {
 	ctx := context.Background()
 
 	leaderWorker := &v1beta1.Worker{
@@ -1426,15 +1069,12 @@ func TestReconcileTeamDecoupled_MemberRemoved(t *testing.T) {
 		Client:      c,
 		Provisioner: mocks.NewMockProvisioner(),
 		Deployer:    mocks.NewMockDeployer(),
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		AgentFSDir:  t.TempDir(),
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
-	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	_, err := r.reconcileTeam(ctx, team, patchBase)
 	if err != nil {
-		t.Fatalf("reconcileTeamDecoupled: %v", err)
+		t.Fatalf("reconcileTeam: %v", err)
 	}
 
 	// "removed-worker" should have been pruned from Status.Members
@@ -1446,44 +1086,9 @@ func TestReconcileTeamDecoupled_MemberRemoved(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDeletionRemovesLegacyMigrationFinalizer(t *testing.T) {
+func TestHandleDeleteTeamReferencesResetsChannelPolicyAndArchivesRoomsWithTeamAdmin(t *testing.T) {
 	ctx := context.Background()
-	now := metav1.Now()
-	team := &v1beta1.Team{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "team-a",
-			Namespace:         "default",
-			DeletionTimestamp: &now,
-			Finalizers:        []string{migrationFinalizerName},
-		},
-		Spec: v1beta1.TeamSpec{
-			WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "lead", Role: "team_leader"}},
-		},
-	}
-
-	c := newTeamTestClient(t, team.DeepCopy())
-	r := &TeamReconciler{Client: c}
-
-	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "team-a", Namespace: "default"}})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	var out v1beta1.Team
-	if err := c.Get(ctx, types.NamespacedName{Name: "team-a", Namespace: "default"}, &out); err != nil {
-		if apierrors.IsNotFound(err) {
-			return
-		}
-		t.Fatalf("get Team: %v", err)
-	}
-	if controllerutil.ContainsFinalizer(&out, migrationFinalizerName) {
-		t.Fatalf("legacy migration finalizer still present: %v", out.Finalizers)
-	}
-}
-
-func TestHandleDeleteDecoupledResetsChannelPolicyAndArchivesRoomsWithTeamAdmin(t *testing.T) {
-	ctx := context.Background()
-	legacy, _ := newTestLegacy(t)
+	managerConfig, _ := newTestManagerConfig(t)
 
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
@@ -1515,14 +1120,14 @@ func TestHandleDeleteDecoupledResetsChannelPolicyAndArchivesRoomsWithTeamAdmin(t
 	deployer := mocks.NewMockDeployer()
 	provisioner := mocks.NewMockProvisioner()
 	r := &TeamReconciler{
-		Client:      newTeamTestClient(t, team.DeepCopy(), leaderWorker.DeepCopy(), worker.DeepCopy(), admin.DeepCopy()),
-		Provisioner: provisioner,
-		Deployer:    deployer,
-		Legacy:      legacy,
+		Client:        newTeamTestClient(t, team.DeepCopy(), leaderWorker.DeepCopy(), worker.DeepCopy(), admin.DeepCopy()),
+		Provisioner:   provisioner,
+		Deployer:      deployer,
+		ManagerConfig: managerConfig,
 	}
 
-	if err := r.handleDeleteDecoupled(ctx, team); err != nil {
-		t.Fatalf("handleDeleteDecoupled: %v", err)
+	if err := r.handleDeleteTeam(ctx, team); err != nil {
+		t.Fatalf("handleDeleteTeam: %v", err)
 	}
 
 	policies := map[string]service.InjectChannelPolicyRequest{}
@@ -1569,9 +1174,9 @@ func TestHandleDeleteDecoupledResetsChannelPolicyAndArchivesRoomsWithTeamAdmin(t
 	}
 }
 
-func TestHandleDeleteDecoupledSkipsQwenPawLegacyAssets(t *testing.T) {
+func TestHandleDeleteTeamReferencesSkipsQwenPawLegacyAssets(t *testing.T) {
 	ctx := context.Background()
-	legacy, _ := newTestLegacy(t)
+	managerConfig, _ := newTestManagerConfig(t)
 
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
@@ -1598,14 +1203,14 @@ func TestHandleDeleteDecoupledSkipsQwenPawLegacyAssets(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	provisioner := mocks.NewMockProvisioner()
 	r := &TeamReconciler{
-		Client:      newTeamTestClient(t, team.DeepCopy(), leaderWorker.DeepCopy(), worker.DeepCopy()),
-		Provisioner: provisioner,
-		Deployer:    deployer,
-		Legacy:      legacy,
+		Client:        newTeamTestClient(t, team.DeepCopy(), leaderWorker.DeepCopy(), worker.DeepCopy()),
+		Provisioner:   provisioner,
+		Deployer:      deployer,
+		ManagerConfig: managerConfig,
 	}
 
-	if err := r.handleDeleteDecoupled(ctx, team); err != nil {
-		t.Fatalf("handleDeleteDecoupled: %v", err)
+	if err := r.handleDeleteTeam(ctx, team); err != nil {
+		t.Fatalf("handleDeleteTeam: %v", err)
 	}
 
 	for _, workerName := range []string{"lead", "dev"} {
@@ -1631,7 +1236,7 @@ func TestHandleDeleteDecoupledSkipsQwenPawLegacyAssets(t *testing.T) {
 	}
 }
 
-func TestHandleDeleteDecoupledArchivesRoomsWithoutTeamAdmin(t *testing.T) {
+func TestHandleDeleteTeamReferencesArchivesRoomsWithoutTeamAdmin(t *testing.T) {
 	ctx := context.Background()
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
@@ -1655,8 +1260,8 @@ func TestHandleDeleteDecoupledArchivesRoomsWithoutTeamAdmin(t *testing.T) {
 		Deployer:    mocks.NewMockDeployer(),
 	}
 
-	if err := r.handleDeleteDecoupled(ctx, team); err != nil {
-		t.Fatalf("handleDeleteDecoupled: %v", err)
+	if err := r.handleDeleteTeam(ctx, team); err != nil {
+		t.Fatalf("handleDeleteTeam: %v", err)
 	}
 	if got := provisioner.Calls.ArchiveTeamRooms; len(got) != 1 {
 		t.Fatalf("ArchiveTeamRooms calls=%v, want one call", got)
@@ -1668,7 +1273,7 @@ func TestHandleDeleteDecoupledArchivesRoomsWithoutTeamAdmin(t *testing.T) {
 	}
 }
 
-func TestHandleDeleteDecoupledUsesStatusRuntimeNameWhenLeaderWorkerMissing(t *testing.T) {
+func TestHandleDeleteTeamReferencesUsesStatusRuntimeNameWhenLeaderWorkerMissing(t *testing.T) {
 	ctx := context.Background()
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
@@ -1693,8 +1298,8 @@ func TestHandleDeleteDecoupledUsesStatusRuntimeNameWhenLeaderWorkerMissing(t *te
 		Deployer:    mocks.NewMockDeployer(),
 	}
 
-	if err := r.handleDeleteDecoupled(ctx, team); err != nil {
-		t.Fatalf("handleDeleteDecoupled: %v", err)
+	if err := r.handleDeleteTeam(ctx, team); err != nil {
+		t.Fatalf("handleDeleteTeam: %v", err)
 	}
 	if got := provisioner.Calls.ArchiveTeamRooms; len(got) != 1 {
 		t.Fatalf("ArchiveTeamRooms calls=%v, want one call", got)
@@ -1706,7 +1311,7 @@ func TestHandleDeleteDecoupledUsesStatusRuntimeNameWhenLeaderWorkerMissing(t *te
 	}
 }
 
-func TestHandleDeleteDecoupledPrefersCurrentLeaderStatusByName(t *testing.T) {
+func TestHandleDeleteTeamReferencesPrefersCurrentLeaderStatusByName(t *testing.T) {
 	ctx := context.Background()
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
@@ -1738,8 +1343,8 @@ func TestHandleDeleteDecoupledPrefersCurrentLeaderStatusByName(t *testing.T) {
 		Deployer:    mocks.NewMockDeployer(),
 	}
 
-	if err := r.handleDeleteDecoupled(ctx, team); err != nil {
-		t.Fatalf("handleDeleteDecoupled: %v", err)
+	if err := r.handleDeleteTeam(ctx, team); err != nil {
+		t.Fatalf("handleDeleteTeam: %v", err)
 	}
 	if got := provisioner.Calls.ArchiveTeamRooms; len(got) != 1 {
 		t.Fatalf("ArchiveTeamRooms calls=%v, want one call", got)
@@ -1751,7 +1356,7 @@ func TestHandleDeleteDecoupledPrefersCurrentLeaderStatusByName(t *testing.T) {
 	}
 }
 
-func TestReconcileTeamDecoupled_HeartbeatFromTeamCR(t *testing.T) {
+func TestReconcileTeamTeamReferences_HeartbeatFromTeamCR(t *testing.T) {
 	ctx := context.Background()
 
 	leaderWorker := &v1beta1.Worker{
@@ -1788,15 +1393,12 @@ func TestReconcileTeamDecoupled_HeartbeatFromTeamCR(t *testing.T) {
 		Client:      c,
 		Provisioner: mocks.NewMockProvisioner(),
 		Deployer:    deployer,
-		Backend:     backend.NewRegistry([]backend.WorkerBackend{mocks.NewMockWorkerBackend()}),
-		EnvBuilder:  mocks.NewMockEnvBuilder(),
-		AgentFSDir:  t.TempDir(),
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
-	_, err := r.reconcileTeamDecoupled(ctx, team, patchBase)
+	_, err := r.reconcileTeam(ctx, team, patchBase)
 	if err != nil {
-		t.Fatalf("reconcileTeamDecoupled: %v", err)
+		t.Fatalf("reconcileTeam: %v", err)
 	}
 
 	// Verify heartbeat was injected into coordination context
@@ -1896,7 +1498,7 @@ func TestWorkerStatusChangePredicateTriggersOnWorkerSpecChange(t *testing.T) {
 	newW.Generation = 2
 
 	if !p.Update(event.UpdateEvent{ObjectOld: oldW, ObjectNew: newW}) {
-		t.Fatalf("worker spec/generation change must enqueue owning Team so decoupled channelPolicy overlays are recalculated")
+		t.Fatalf("worker spec/generation change must enqueue owning Team so team-reference channelPolicy overlays are recalculated")
 	}
 }
 

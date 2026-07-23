@@ -69,7 +69,7 @@ Starting from v1.1.0, AgentTeams switched from a **single all-in-one container**
 |-----------|---------------|---------------|
 | Infrastructure (Higress, Tuwunel, MinIO, Element Web) | Bundled inside `agentteams-manager` | Runs in `agentteams-controller` container (from the `agentteams-embedded` image) |
 | Manager Agent | Inside `agentteams-manager` | Separate `agentteams-manager` container (lightweight, agent only) |
-| Worker management | Shell scripts (`create-worker.sh`) + `workers-registry.json` | Declarative CRDs via `agt` CLI (`agt create worker`, `agt apply`) |
+| Worker management | Imperative shell scripts and local JSON state | Declarative CRDs via `agt` CLI (`agt create worker`, `agt apply`) |
 | Worker runtimes | OpenClaw only | OpenClaw, **QwenPaw** (Python; formerly **CoPaw**), or Hermes |
 
 **Key benefits:**

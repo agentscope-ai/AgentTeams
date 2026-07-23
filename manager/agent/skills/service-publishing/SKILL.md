@@ -58,28 +58,37 @@ Apply with:
 agt apply -f worker.yaml
 ```
 
-### Team Workers
+### Workers referenced by a Team
 
-Team workers also support `expose`:
+Configure `expose` on the Worker CR, then reference that Worker from the Team:
 
 ```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: lead
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+---
 apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: dev-team
 spec:
-  leader:
-    name: lead
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: lead
+      role: team_leader
     - name: backend
-      model: qwen3.5-plus
-      expose:
-        - port: 8080
-    - name: frontend
-      model: qwen3.5-plus
-      expose:
-        - port: 3000
+      role: worker
 ```
 
 ## Important Notes

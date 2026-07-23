@@ -76,7 +76,7 @@ func TestSecretCredentialStore_AppLabelHonorsResourcePrefix(t *testing.T) {
 	}
 }
 
-func TestProvisionerLoadWorkerCredentialsMigratesLegacyRuntimeSecret(t *testing.T) {
+func TestProvisionerLoadWorkerCredentialsUsesCredentialResourceNameOnly(t *testing.T) {
 	client := fakeclient.NewSimpleClientset()
 	store := &SecretCredentialStore{
 		Client:         client,
@@ -84,29 +84,29 @@ func TestProvisionerLoadWorkerCredentialsMigratesLegacyRuntimeSecret(t *testing.
 		ControllerName: "ctl-a",
 		ResourcePrefix: auth.DefaultResourcePrefix,
 	}
-	legacy := &WorkerCredentials{
+	runtimeNamed := &WorkerCredentials{
 		MatrixPassword: "pw",
 		MinIOPassword:  "miniopw",
 		GatewayKey:     "gw",
 		MatrixToken:    "token",
 	}
-	if err := store.Save(context.Background(), "leader", legacy); err != nil {
-		t.Fatalf("save legacy credentials: %v", err)
+	if err := store.Save(context.Background(), "leader", runtimeNamed); err != nil {
+		t.Fatalf("save runtime-named credentials: %v", err)
 	}
 
 	p := NewProvisioner(ProvisionerConfig{Creds: store})
-	creds, err := p.loadWorkerCredentials(context.Background(), "team-a-worker-leader", "leader")
+	creds, err := p.loadWorkerCredentials(context.Background(), "team-a-worker-leader")
 	if err != nil {
 		t.Fatalf("loadWorkerCredentials: %v", err)
 	}
-	if creds == nil || creds.GatewayKey != "gw" {
-		t.Fatalf("migrated creds=%+v, want gateway key gw", creds)
+	if creds != nil {
+		t.Fatalf("credentials=%+v, want nil for a different credential resource name", creds)
 	}
 
-	if _, err := client.CoreV1().Secrets("agentteams").Get(context.Background(), "agentteams-creds-team-a-worker-leader", metav1.GetOptions{}); err != nil {
-		t.Fatalf("expected CR-name credential secret after migration: %v", err)
+	if _, err := client.CoreV1().Secrets("agentteams").Get(context.Background(), "agentteams-creds-team-a-worker-leader", metav1.GetOptions{}); err == nil {
+		t.Fatal("unexpected credential migration to the Worker CR name")
 	}
 	if _, err := client.CoreV1().Secrets("agentteams").Get(context.Background(), "agentteams-creds-leader", metav1.GetOptions{}); err != nil {
-		t.Fatalf("legacy runtime-name credential secret should remain untouched: %v", err)
+		t.Fatalf("runtime-name credential secret should remain untouched: %v", err)
 	}
 }

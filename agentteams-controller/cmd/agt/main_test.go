@@ -210,8 +210,9 @@ kind: Team
 metadata:
   name: alpha-team
 spec:
-  leader:
-    name: alpha-lead
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Human
@@ -318,10 +319,11 @@ kind: Team
 metadata:
   name: my-team
 spec:
-  leader:
-    name: leader-name
-  workers:
+  workerMembers:
+    - name: leader-name
+      role: team_leader
     - name: worker-name
+      role: worker
 `
 	docs := splitYAMLDocs(input)
 	if len(docs) != 1 {
@@ -331,7 +333,7 @@ spec:
 	if err := sigyaml.Unmarshal([]byte(docs[0]), &res); err != nil {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
-	// metadata.name should be "my-team", not confused with spec.leader.name
+	// metadata.name should be "my-team", not confused with a referenced leader Worker name
 	if res.Metadata.Name != "my-team" {
 		t.Errorf("expected name my-team (from metadata), got %s", res.Metadata.Name)
 	}

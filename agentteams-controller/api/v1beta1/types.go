@@ -24,7 +24,6 @@ const (
 	LabelManager = "agentteams.io/manager"
 	LabelRole    = "agentteams.io/role"
 	LabelRuntime = "agentteams.io/runtime"
-	LabelTeam    = "agentteams.io/team"
 )
 
 // LabelWorkerSvcName records the ClusterIP Service name created for a
@@ -383,7 +382,7 @@ type WorkerStatus struct {
 
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
-	// Values: "pod" (default), or "" (unset = migration, treated as spec default).
+	// Values: "pod" (default), or "" before the first successful deployment.
 	// Only meaningful in incluster mode; Docker mode leaves this empty.
 	BackendRuntime string `json:"backendRuntime,omitempty"`
 
@@ -427,6 +426,7 @@ type TeamSpec struct {
 	// WorkerMembers references existing Worker CRs as team members.
 	// The TeamReconciler validates membership, provisions rooms, injects
 	// runtime context, and aggregates member status from these references.
+	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=128
 	WorkerMembers []TeamWorkerRef `json:"workerMembers,omitempty"`
 
@@ -438,15 +438,6 @@ type TeamSpec struct {
 	// Worker's openclaw.json and coordination context AGENTS.md.
 	// Example: "30m". Empty means leader heartbeat is disabled.
 	HeartbeatEvery string `json:"heartbeatEvery,omitempty"`
-
-	// Deprecated: Leader defines the team leader's runtime configuration.
-	// Retained for backward compatibility during migration. Ignored when
-	// WorkerMembers is non-empty.
-	Leader LeaderSpec `json:"leader,omitempty"`
-	// Deprecated: Workers defines team worker runtime configurations.
-	// Retained for backward compatibility during migration. Ignored when
-	// WorkerMembers is non-empty.
-	Workers []TeamWorkerSpec `json:"workers,omitempty"`
 }
 
 // TeamWorkerRef references an existing Worker CR as a team member.
@@ -455,8 +446,8 @@ type TeamWorkerRef struct {
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 	// Role is this member's role within the team: "team_leader" or "worker".
-	// Empty defaults to "worker".
-	Role string `json:"role,omitempty"`
+	// +kubebuilder:validation:Enum=team_leader;worker
+	Role string `json:"role"`
 }
 
 func (s TeamSpec) EffectiveTeamName(metadataName string) string {
@@ -475,121 +466,6 @@ type TeamMemberSpec struct {
 	Name         string `json:"name"`
 	MatrixUserID string `json:"matrixUserId,omitempty"`
 	Role         string `json:"role,omitempty"` // coordinator (default)
-}
-
-type LeaderSpec struct {
-	Name              string                     `json:"name"`
-	WorkerName        string                     `json:"workerName,omitempty"`
-	Model             string                     `json:"model,omitempty"`
-	ModelProvider     string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-leader LLM provider
-	Runtime           string                     `json:"runtime,omitempty"`
-	Image             string                     `json:"image,omitempty"`
-	Identity          string                     `json:"identity,omitempty"`
-	Soul              string                     `json:"soul,omitempty"`
-	Agents            string                     `json:"agents,omitempty"`
-	Package           string                     `json:"package,omitempty"`
-	RemoteSkills      []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
-	McpServers        []MCPServer                `json:"mcpServers,omitempty"`
-	Heartbeat         *TeamLeaderHeartbeatSpec   `json:"heartbeat,omitempty"`
-	WorkerIdleTimeout string                     `json:"workerIdleTimeout,omitempty"`
-	ChannelPolicy     *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	State             *string                    `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
-	Resources         *AgentResourceRequirements `json:"resources,omitempty"`
-
-	// AccessEntries declares the cloud permissions this leader should be
-	// granted via agentteams-credential-provider. See AccessEntry for semantics.
-	// When empty the controller applies team-member defaults (agents/<name>/*
-	// + shared/* + teams/<team>/* on the configured bucket).
-	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
-
-	// DeployMode specifies where the leader pod runs.
-	// "Local" (default): created in the controller's own cluster.
-	// "Edge": externally hosted outside the controller's managed pod path.
-	DeployMode *string `json:"deployMode,omitempty"`
-
-	// ServiceEnabled controls whether a ClusterIP Service is created
-	// alongside the leader pod (same cluster, namespace, name).
-	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
-
-	// Env holds user-defined environment variables injected into the
-	// leader container. See WorkerSpec.Env for the collision policy.
-	Env map[string]string `json:"env,omitempty"`
-
-	// Labels are user-defined Pod labels stamped onto the leader Pod.
-	// Merged on top of Team.metadata.labels and below controller system
-	// labels (see WorkerSpec.Labels godoc). omitempty preserves zero-value
-	// wire compatibility for callers that never set this field.
-	Labels map[string]string `json:"labels,omitempty"`
-}
-
-type TeamLeaderHeartbeatSpec struct {
-	Enabled bool   `json:"enabled,omitempty"`
-	Every   string `json:"every,omitempty"`
-}
-
-type TeamWorkerSpec struct {
-	Name          string                     `json:"name"`
-	WorkerName    string                     `json:"workerName,omitempty"`
-	Model         string                     `json:"model,omitempty"`
-	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`
-	Image         string                     `json:"image,omitempty"`
-	Identity      string                     `json:"identity,omitempty"`
-	Soul          string                     `json:"soul,omitempty"`
-	Agents        string                     `json:"agents,omitempty"`
-	Skills        []string                   `json:"skills,omitempty"`
-	RemoteSkills  []RemoteSkillSource        `json:"remoteSkills,omitempty"` // remote skills from source registries
-	McpServers    []MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                     `json:"package,omitempty"`
-	Expose        []ExposePort               `json:"expose,omitempty"`
-	ChannelPolicy *ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	IdleTimeout   string                     `json:"idleTimeout,omitempty"`
-	State         *string                    `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
-	Resources     *AgentResourceRequirements `json:"resources,omitempty"`
-
-	// AccessEntries declares the cloud permissions this team worker should be
-	// granted via agentteams-credential-provider. See AccessEntry for semantics.
-	// When empty the controller applies team-member defaults (agents/<name>/*
-	// + shared/* + teams/<team>/* on the configured bucket).
-	AccessEntries []AccessEntry `json:"accessEntries,omitempty"`
-
-	// DeployMode specifies where the team worker pod runs.
-	// "Local" (default): created in the controller's own cluster.
-	// "Edge": externally hosted outside the controller's managed pod path.
-	DeployMode *string `json:"deployMode,omitempty"`
-
-	// ServiceEnabled controls whether a ClusterIP Service is created
-	// alongside the team worker pod (same cluster, namespace, name).
-	ServiceEnabled *bool `json:"serviceEnabled,omitempty"`
-
-	// Env holds user-defined environment variables injected into this
-	// team worker's container. See WorkerSpec.Env for the collision policy.
-	Env map[string]string `json:"env,omitempty"`
-
-	// Labels are user-defined Pod labels stamped onto this team worker's
-	// Pod. Merged on top of Team.metadata.labels and below controller
-	// system labels (see WorkerSpec.Labels godoc). omitempty preserves
-	// zero-value wire compatibility for callers that never set this field.
-	Labels map[string]string `json:"labels,omitempty"`
-}
-
-// EffectiveWorkerName returns the runtime identity key for a team leader.
-// Empty workerName falls back to spec.name supplied by caller.
-func (s LeaderSpec) EffectiveWorkerName() string {
-	if s.WorkerName != "" {
-		return s.WorkerName
-	}
-	return s.Name
-
-}
-
-// EffectiveWorkerName returns the runtime identity key for a team worker.
-// Empty workerName falls back to spec.name supplied by caller.
-func (s TeamWorkerSpec) EffectiveWorkerName() string {
-	if s.WorkerName != "" {
-		return s.WorkerName
-	}
-	return s.Name
 }
 
 type TeamStatus struct {

@@ -27,11 +27,6 @@ type CreateWorkerRequest struct {
 	// Default is true (controller manages container).
 	ContainerManaged *bool   `json:"containerManaged,omitempty"`
 	State            *string `json:"state,omitempty"` // desired lifecycle state: Running, Sleeping, Stopped
-
-	// Team context (set by Team handler or CLI)
-	Team       string `json:"team,omitempty"`
-	TeamLeader string `json:"teamLeader,omitempty"`
-	Role       string `json:"role,omitempty"` // team_leader | worker
 }
 
 type UpdateWorkerRequest struct {
@@ -59,20 +54,29 @@ type UpdateWorkerRequest struct {
 }
 
 type WorkerResponse struct {
-	Name             string            `json:"name"`
-	Phase            string            `json:"phase"`
-	ContainerManaged bool              `json:"containerManaged,omitempty"`
-	State            string            `json:"state,omitempty"` // desired lifecycle state
-	Model            string            `json:"model,omitempty"`
-	Runtime          string            `json:"runtime,omitempty"`
-	Image            string            `json:"image,omitempty"`
-	ContainerState   string            `json:"containerState,omitempty"`
-	MatrixUserID     string            `json:"matrixUserID,omitempty"`
-	RoomID           string            `json:"roomID,omitempty"`
-	Message          string            `json:"message,omitempty"`
-	ExposedPorts     []ExposedPortInfo `json:"exposedPorts,omitempty"`
-	Team             string            `json:"team,omitempty"`
-	Role             string            `json:"role,omitempty"`
+	Name             string                     `json:"name"`
+	WorkerName       string                     `json:"workerName,omitempty"`
+	Phase            string                     `json:"phase"`
+	ContainerManaged bool                       `json:"containerManaged"`
+	State            string                     `json:"state,omitempty"` // desired lifecycle state
+	Model            string                     `json:"model,omitempty"`
+	Runtime          string                     `json:"runtime,omitempty"`
+	Image            string                     `json:"image,omitempty"`
+	Identity         string                     `json:"identity,omitempty"`
+	Soul             string                     `json:"soul,omitempty"`
+	Agents           string                     `json:"agents,omitempty"`
+	Skills           []string                   `json:"skills,omitempty"`
+	McpServers       []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
+	Package          string                     `json:"package,omitempty"`
+	BackendRuntime   string                     `json:"backendRuntime,omitempty"`
+	ChannelPolicy    *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	ContainerState   string                     `json:"containerState,omitempty"`
+	MatrixUserID     string                     `json:"matrixUserID,omitempty"`
+	RoomID           string                     `json:"roomID,omitempty"`
+	Message          string                     `json:"message,omitempty"`
+	ExposedPorts     []ExposedPortInfo          `json:"exposedPorts,omitempty"`
+	Team             string                     `json:"team,omitempty"`
+	Role             string                     `json:"role,omitempty"`
 }
 
 type ExposedPortInfo struct {
@@ -88,87 +92,46 @@ type WorkerListResponse struct {
 // --- Team API types ---
 
 type CreateTeamRequest struct {
-	Name          string                     `json:"name"`
-	TeamName      string                     `json:"teamName,omitempty"`
-	Description   string                     `json:"description,omitempty"`
-	Admin         *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
-	HumanMembers  []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
-	Leader        TeamLeaderRequest          `json:"leader"`
-	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
-	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
-	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
-}
-
-type TeamLeaderRequest struct {
-	Name              string                             `json:"name"`
-	WorkerName        string                             `json:"workerName,omitempty"`
-	Model             string                             `json:"model,omitempty"`
-	ModelProvider     string                             `json:"modelProvider,omitempty"`
-	Identity          string                             `json:"identity,omitempty"`
-	Soul              string                             `json:"soul,omitempty"`
-	Agents            string                             `json:"agents,omitempty"`
-	Package           string                             `json:"package,omitempty"`
-	McpServers        []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
-	Heartbeat         *TeamLeaderHeartbeatRequest        `json:"heartbeat,omitempty"`
-	WorkerIdleTimeout string                             `json:"workerIdleTimeout,omitempty"`
-	ChannelPolicy     *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	State             *string                            `json:"state,omitempty"` // desired lifecycle state for leader
-	Resources         *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
-}
-
-type TeamLeaderHeartbeatRequest struct {
-	Enabled *bool  `json:"enabled,omitempty"`
-	Every   string `json:"every,omitempty"`
-}
-
-type TeamWorkerRequest struct {
-	Name          string                             `json:"name"`
-	WorkerName    string                             `json:"workerName,omitempty"`
-	Model         string                             `json:"model,omitempty"`
-	ModelProvider string                             `json:"modelProvider,omitempty"`
-	Runtime       string                             `json:"runtime,omitempty"`
-	Image         string                             `json:"image,omitempty"`
-	Identity      string                             `json:"identity,omitempty"`
-	Soul          string                             `json:"soul,omitempty"`
-	Agents        string                             `json:"agents,omitempty"`
-	Skills        []string                           `json:"skills,omitempty"`
-	McpServers    []v1beta1.MCPServer                `json:"mcpServers,omitempty"`
-	Package       string                             `json:"package,omitempty"`
-	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
-	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
-	State         *string                            `json:"state,omitempty"` // desired lifecycle state for worker
-	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	Name           string                     `json:"name"`
+	TeamName       string                     `json:"teamName,omitempty"`
+	Description    string                     `json:"description,omitempty"`
+	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
+	HumanMembers   []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
+	WorkerMembers  []v1beta1.TeamWorkerRef    `json:"workerMembers"`
+	HeartbeatEvery string                     `json:"heartbeatEvery,omitempty"`
+	PeerMentions   *bool                      `json:"peerMentions,omitempty"`
+	ChannelPolicy  *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 }
 
 type UpdateTeamRequest struct {
-	TeamName      string                     `json:"teamName,omitempty"`
-	Description   string                     `json:"description,omitempty"`
-	Admin         *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
-	HumanMembers  []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
-	Leader        *TeamLeaderRequest         `json:"leader,omitempty"`
-	Workers       []TeamWorkerRequest        `json:"workers,omitempty"`
-	PeerMentions  *bool                      `json:"peerMentions,omitempty"`
-	ChannelPolicy *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+	TeamName       string                     `json:"teamName,omitempty"`
+	Description    string                     `json:"description,omitempty"`
+	Admin          *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
+	HumanMembers   []v1beta1.TeamMemberSpec   `json:"humanMembers,omitempty"`
+	WorkerMembers  []v1beta1.TeamWorkerRef    `json:"workerMembers,omitempty"`
+	HeartbeatEvery *string                    `json:"heartbeatEvery,omitempty"`
+	PeerMentions   *bool                      `json:"peerMentions,omitempty"`
+	ChannelPolicy  *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 }
 
 type TeamResponse struct {
-	Name               string                           `json:"name"`
-	TeamName           string                           `json:"teamName,omitempty"`
-	Phase              string                           `json:"phase"`
-	Description        string                           `json:"description,omitempty"`
-	Admin              *v1beta1.TeamAdminSpec           `json:"admin,omitempty"`
-	HumanMembers       []v1beta1.TeamMemberSpec         `json:"humanMembers,omitempty"`
-	LeaderName         string                           `json:"leaderName"`
-	LeaderHeartbeat    *v1beta1.TeamLeaderHeartbeatSpec `json:"leaderHeartbeat,omitempty"`
-	WorkerIdleTimeout  string                           `json:"workerIdleTimeout,omitempty"`
-	TeamRoomID         string                           `json:"teamRoomID,omitempty"`
-	LeaderDMRoomID     string                           `json:"leaderDMRoomID,omitempty"`
-	LeaderReady        bool                             `json:"leaderReady"`
-	ReadyWorkers       int                              `json:"readyWorkers"`
-	TotalWorkers       int                              `json:"totalWorkers"`
-	Message            string                           `json:"message,omitempty"`
-	WorkerNames        []string                         `json:"workerNames,omitempty"`
-	WorkerExposedPorts map[string][]ExposedPortInfo     `json:"workerExposedPorts,omitempty"`
+	Name               string                       `json:"name"`
+	TeamName           string                       `json:"teamName,omitempty"`
+	Phase              string                       `json:"phase"`
+	Description        string                       `json:"description,omitempty"`
+	Admin              *v1beta1.TeamAdminSpec       `json:"admin,omitempty"`
+	HumanMembers       []v1beta1.TeamMemberSpec     `json:"humanMembers,omitempty"`
+	WorkerMembers      []v1beta1.TeamWorkerRef      `json:"workerMembers"`
+	LeaderName         string                       `json:"leaderName"`
+	HeartbeatEvery     string                       `json:"heartbeatEvery,omitempty"`
+	TeamRoomID         string                       `json:"teamRoomID,omitempty"`
+	LeaderDMRoomID     string                       `json:"leaderDMRoomID,omitempty"`
+	LeaderReady        bool                         `json:"leaderReady"`
+	ReadyWorkers       int                          `json:"readyWorkers"`
+	TotalWorkers       int                          `json:"totalWorkers"`
+	Message            string                       `json:"message,omitempty"`
+	WorkerNames        []string                     `json:"workerNames,omitempty"`
+	WorkerExposedPorts map[string][]ExposedPortInfo `json:"workerExposedPorts,omitempty"`
 }
 
 type TeamListResponse struct {
@@ -189,13 +152,18 @@ type CreateHumanRequest struct {
 }
 
 type HumanResponse struct {
-	Name            string   `json:"name"`
-	Phase           string   `json:"phase"`
-	DisplayName     string   `json:"displayName"`
-	MatrixUserID    string   `json:"matrixUserID,omitempty"`
-	InitialPassword string   `json:"initialPassword,omitempty"`
-	Rooms           []string `json:"rooms,omitempty"`
-	Message         string   `json:"message,omitempty"`
+	Name              string   `json:"name"`
+	Phase             string   `json:"phase"`
+	DisplayName       string   `json:"displayName"`
+	Email             string   `json:"email,omitempty"`
+	PermissionLevel   int      `json:"permissionLevel"`
+	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	Note              string   `json:"note,omitempty"`
+	MatrixUserID      string   `json:"matrixUserID,omitempty"`
+	InitialPassword   string   `json:"initialPassword,omitempty"`
+	Rooms             []string `json:"rooms,omitempty"`
+	Message           string   `json:"message,omitempty"`
 }
 
 type HumanListResponse struct {

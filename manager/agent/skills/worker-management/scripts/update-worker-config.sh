@@ -241,9 +241,9 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     source /opt/agentteams/scripts/lib/builtin-merge.sh
 
     # Determine correct agent source for builtin content
-    REGISTRY_FILE="${HOME}/workers-registry.json"
-    _role=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].role // "worker"' "${REGISTRY_FILE}" 2>/dev/null || echo "worker")
-    _runtime=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].runtime // "openclaw"' "${REGISTRY_FILE}" 2>/dev/null || echo "openclaw")
+    _worker_json=$(agt get workers "${WORKER_NAME}" -o json)
+    _role=$(echo "${_worker_json}" | jq -r '.role // "worker"')
+    _runtime=$(echo "${_worker_json}" | jq -r '.runtime // "openclaw"')
     if [ "${_role}" = "team_leader" ] && [ -d "/opt/agentteams/agent/team-leader-agent" ]; then
         _agent_src="/opt/agentteams/agent/team-leader-agent"
     elif [ "${_runtime}" = "copaw" ]; then
@@ -260,13 +260,14 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     fi
 
     # Re-inject team-context coordination block
-    _team_id=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].team_id // empty' "${REGISTRY_FILE}" 2>/dev/null)
+    _team_id=$(echo "${_worker_json}" | jq -r '.team // empty')
     _team_leader=""
+    _team_json='{}'
     if [ -n "${_team_id}" ] && [ "${_role}" = "worker" ]; then
-        TEAMS_REGISTRY="${HOME}/teams-registry.json"
-        if [ -f "${TEAMS_REGISTRY}" ]; then
-            _team_leader=$(jq -r --arg t "${_team_id}" '.teams[$t].leader // empty' "${TEAMS_REGISTRY}" 2>/dev/null)
-        fi
+        _team_json=$(agt get teams "${_team_id}" -o json)
+        _team_leader=$(echo "${_team_json}" | jq -r '.leaderName // empty')
+    elif [ -n "${_team_id}" ]; then
+        _team_json=$(agt get teams "${_team_id}" -o json)
     fi
 
     _ctx_tmp=$(mktemp /tmp/team-ctx-update-XXXXXX.md)
@@ -283,13 +284,13 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
 <!-- agentteams-team-context-end -->
 TEAMCTX
     elif [ "${_role}" = "team_leader" ]; then
-        _team_workers=$(jq -r --arg t "${_team_id}" '.teams[$t].workers // [] | join(", ")' "${HOME}/teams-registry.json" 2>/dev/null)
-        _team_room_id=$(jq -r --arg t "${_team_id}" '.teams[$t].team_room_id // empty' "${HOME}/teams-registry.json" 2>/dev/null)
-        _leader_dm_room_id=$(jq -r --arg t "${_team_id}" '.teams[$t].leader_dm_room_id // empty' "${HOME}/teams-registry.json" 2>/dev/null)
-        _team_admin_mid=$(jq -r --arg t "${_team_id}" '.teams[$t].admin.matrix_user_id // empty' "${HOME}/teams-registry.json" 2>/dev/null)
-        _worker_rooms=$(jq -r --arg t "${_team_id}" '
-            [.workers | to_entries[] | select(.value.team_id == $t and .value.role == "worker") |
-             "  - @\(.key):__DOMAIN__ — Room: \(.value.room_id // "unknown")"] | join("\n")' "${REGISTRY_FILE}" 2>/dev/null)
+        _team_workers=$(echo "${_team_json}" | jq -r '.workerNames // [] | join(", ")')
+        _team_room_id=$(echo "${_team_json}" | jq -r '.teamRoomID // empty')
+        _leader_dm_room_id=$(echo "${_team_json}" | jq -r '.leaderDMRoomID // empty')
+        _team_admin_mid=$(echo "${_team_json}" | jq -r '.admin.matrixUserId // empty')
+        _worker_rooms=$(agt get workers --team "${_team_id}" -o json | jq -r '
+            [.workers[] | select(.role == "worker") |
+             "  - @\(.name):__DOMAIN__ — Room: \(.roomID // "unknown")"] | join("\n")')
         _worker_rooms=$(echo "${_worker_rooms}" | sed "s/__DOMAIN__/${MATRIX_DOMAIN}/g")
         cat > "${_ctx_tmp}" <<LEADERCTX
 
@@ -341,19 +342,13 @@ fi
 if [ -n "${MODEL_ID}" ]; then
     log "Step 3: Regenerating openclaw.json (model=${MODEL_ID})..."
 
-    # Read team-leader from registry if this is a team worker
+    # Read Team membership from the Controller API.
     TEAM_LEADER=""
-    REGISTRY_FILE="${HOME}/workers-registry.json"
-    if [ -f "${REGISTRY_FILE}" ]; then
-        WORKER_ROLE=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].role // "worker"' "${REGISTRY_FILE}" 2>/dev/null)
-        WORKER_TEAM=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].team_id // empty' "${REGISTRY_FILE}" 2>/dev/null)
-        if [ "${WORKER_ROLE}" = "worker" ] && [ -n "${WORKER_TEAM}" ]; then
-            # Find team leader from teams-registry
-            TEAMS_REGISTRY="${HOME}/teams-registry.json"
-            if [ -f "${TEAMS_REGISTRY}" ]; then
-                TEAM_LEADER=$(jq -r --arg t "${WORKER_TEAM}" '.teams[$t].leader // empty' "${TEAMS_REGISTRY}" 2>/dev/null)
-            fi
-        fi
+    _worker_json=$(agt get workers "${WORKER_NAME}" -o json)
+    WORKER_ROLE=$(echo "${_worker_json}" | jq -r '.role // "worker"')
+    WORKER_TEAM=$(echo "${_worker_json}" | jq -r '.team // empty')
+    if [ "${WORKER_ROLE}" = "worker" ] && [ -n "${WORKER_TEAM}" ]; then
+        TEAM_LEADER=$(agt get teams "${WORKER_TEAM}" -o json | jq -r '.leaderName // empty')
     fi
 
     GEN_ARGS=("${WORKER_NAME}" "${WORKER_MATRIX_TOKEN}" "${WORKER_KEY}" "${MODEL_ID}")

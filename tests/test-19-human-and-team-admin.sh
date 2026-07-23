@@ -8,7 +8,7 @@
 # Flow:
 #   1. Create Human via agt apply -f (team doesn't exist yet → permissions skipped)
 #   2. Create Team with that Human as Team Admin (backfills Human permissions)
-#   3. Verify Human registered, Team Admin in registry
+#   3. Verify Human and Team resources
 #   4. Verify backfill: Human in Leader/Worker groupAllowFrom
 #   5. Verify team-context block mentions Team Admin
 #   6. Verify containers running
@@ -36,6 +36,8 @@ _cleanup() {
     log_info "All tests passed — cleaning up"
     exec_in_agent agt delete team "${TEST_TEAM}" 2>/dev/null || true
     exec_in_agent agt delete human "${TEST_HUMAN}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_LEADER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_W1}" 2>/dev/null || true
     sleep 5
     # Fallback: force-remove containers
     remove_worker_container "${TEST_LEADER}"
@@ -45,18 +47,6 @@ _cleanup() {
         exec_in_manager rm -rf "/root/agentteams-fs/agents/${w}" 2>/dev/null || true
     done
     exec_in_agent rm -f "/tmp/agentteams-test-${TEST_HUMAN}.yaml" "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>/dev/null || true
-    # Fallback: clean registries
-    exec_in_agent bash -c "
-        jq 'del(.workers[\"${TEST_LEADER}\"], .workers[\"${TEST_W1}\"])' \
-            /root/manager-workspace/workers-registry.json > /tmp/wr-clean.json 2>/dev/null && \
-            mv /tmp/wr-clean.json /root/manager-workspace/workers-registry.json
-        jq 'del(.teams[\"${TEST_TEAM}\"])' \
-            /root/manager-workspace/teams-registry.json > /tmp/tr-clean.json 2>/dev/null && \
-            mv /tmp/tr-clean.json /root/manager-workspace/teams-registry.json
-        jq 'del(.humans[\"${TEST_HUMAN}\"])' \
-            /root/manager-workspace/humans-registry.json > /tmp/hr-clean.json 2>/dev/null && \
-            mv /tmp/hr-clean.json /root/manager-workspace/humans-registry.json
-    " 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -125,11 +115,10 @@ fi
 # ============================================================
 log_section "Verify Human Registration"
 
-HUMANS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/humans-registry.json" 2>/dev/null || echo "{}")
-HUMAN_ENTRY=$(echo "${HUMANS_REGISTRY}" | jq -r --arg h "${TEST_HUMAN}" '.humans[$h] // empty' 2>/dev/null)
-assert_not_empty "${HUMAN_ENTRY}" "Human registered in humans-registry.json"
+HUMAN_ENTRY=$(exec_in_agent agt get humans "${TEST_HUMAN}" -o json 2>/dev/null || echo "")
+assert_not_empty "${HUMAN_ENTRY}" "Human resource is queryable"
 
-HUMAN_LEVEL=$(echo "${HUMAN_ENTRY}" | jq -r '.permission_level // empty')
+HUMAN_LEVEL=$(echo "${HUMAN_ENTRY}" | jq -r '.permissionLevel // empty')
 assert_eq "2" "${HUMAN_LEVEL}" "Human permission level is 2"
 
 # ============================================================
@@ -162,6 +151,20 @@ done
 
 exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_TEAM}.yaml << YAMLEOF
 apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_LEADER}
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_W1}
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: ${TEST_TEAM}
@@ -169,12 +172,11 @@ spec:
   admin:
     name: ${TEST_HUMAN}
     matrixUserId: \"${HUMAN_MATRIX_ID}\"
-  leader:
-    name: ${TEST_LEADER}
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: ${TEST_LEADER}
+      role: team_leader
     - name: ${TEST_W1}
-      model: qwen3.5-plus
+      role: worker
 YAMLEOF
 " 2>/dev/null
 
@@ -205,24 +207,23 @@ for w in "${TEST_LEADER}" "${TEST_W1}"; do
 done
 
 # ============================================================
-# Section 4: Verify Team Admin in teams-registry.json
+# Section 4: Verify Team Admin in Team resource
 # ============================================================
-log_section "Verify Team Admin in Registry"
+log_section "Verify Team Admin in Team Resource"
 
-TEAMS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/teams-registry.json" 2>/dev/null || echo "{}")
-TEAM_ENTRY=$(echo "${TEAMS_REGISTRY}" | jq -r --arg t "${TEST_TEAM}" '.teams[$t] // empty' 2>/dev/null)
-assert_not_empty "${TEAM_ENTRY}" "Team registered in teams-registry.json"
+TEAM_ENTRY=$(exec_in_agent agt get teams "${TEST_TEAM}" -o json 2>/dev/null || echo "")
+assert_not_empty "${TEAM_ENTRY}" "Team resource is queryable"
 
 TEAM_ADMIN_NAME=$(echo "${TEAM_ENTRY}" | jq -r '.admin.name // empty')
 assert_eq "${TEST_HUMAN}" "${TEAM_ADMIN_NAME}" "Team admin name is ${TEST_HUMAN}"
 
-TEAM_ADMIN_MID=$(echo "${TEAM_ENTRY}" | jq -r '.admin.matrix_user_id // empty')
+TEAM_ADMIN_MID=$(echo "${TEAM_ENTRY}" | jq -r '.admin.matrixUserId // empty')
 assert_eq "${HUMAN_MATRIX_ID}" "${TEAM_ADMIN_MID}" "Team admin matrix_user_id correct"
 
-LEADER_DM_ROOM=$(echo "${TEAM_ENTRY}" | jq -r '.leader_dm_room_id // empty')
+LEADER_DM_ROOM=$(echo "${TEAM_ENTRY}" | jq -r '.leaderDMRoomID // empty')
 assert_not_empty "${LEADER_DM_ROOM}" "Leader DM room ID exists: ${LEADER_DM_ROOM}"
 
-TEAM_ROOM_ID=$(echo "${TEAM_ENTRY}" | jq -r '.team_room_id // empty')
+TEAM_ROOM_ID=$(echo "${TEAM_ENTRY}" | jq -r '.teamRoomID // empty')
 assert_not_empty "${TEAM_ROOM_ID}" "Team Room ID exists: ${TEAM_ROOM_ID}"
 
 # ============================================================
@@ -309,14 +310,13 @@ fi
 # ============================================================
 log_section "Verify Containers"
 
-WORKERS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
 for w in "${TEST_LEADER}" "${TEST_W1}"; do
     RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${w}")" || echo "")
     if [ -n "${RUNNING}" ]; then
         log_pass "Container running: $(worker_container_name "${w}")"
     else
-        DEPLOY=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${w}" '.workers[$w].deployment // empty' 2>/dev/null)
-        if [ "${DEPLOY}" = "remote" ]; then
+        MANAGED=$(exec_in_agent agt get workers "${w}" -o json 2>/dev/null | jq -r '.containerManaged')
+        if [ "${MANAGED}" = "false" ]; then
             log_pass "Agent ${w} registered in remote mode"
         else
             dump_diagnostics worker "${w}"

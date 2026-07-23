@@ -2,12 +2,12 @@
 # test-18-team-config-verify.sh - Case 18: Verify Team import config artifacts
 #
 # Tests team import (create + update) and verifies MinIO artifacts:
-#   1. Create team via create-team.sh (Leader + 2 Workers)
+#   1. Create 3 Worker CRs, then a Team CR that references them
 #   2. Verify Leader AGENTS.md: builtin markers, coordination context (upstream=Manager, downstream=workers)
 #   3. Verify Team Worker AGENTS.md: coordination context (coordinator=Leader, NOT Manager)
-#   4. Verify Team Room exists in teams-registry.json
+#   4. Verify Team Room exists in Team status
 #   5. Verify groupAllowFrom: Leader has [Manager, Admin, Workers], Workers have [Leader, Admin]
-#   6. Verify worker count and roles in workers-registry.json
+#   6. Verify Worker roles from the Team/Worker APIs
 #   7. Update team (add description change), verify config updated
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,6 +26,9 @@ STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-s
 _cleanup() {
     log_info "Cleaning up team: ${TEST_TEAM}"
     exec_in_agent agt delete team "${TEST_TEAM}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_LEADER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_W1}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_W2}" 2>/dev/null || true
     sleep 5
     # Stop worker containers (fallback if reconciler didn't clean up)
     remove_worker_container "${TEST_LEADER}"
@@ -37,15 +40,6 @@ _cleanup() {
         exec_in_manager rm -rf "/root/agentteams-fs/agents/${w}" 2>/dev/null || true
     done
     exec_in_agent rm -f "/tmp/agentteams-test-${TEST_TEAM}.yaml" 2>/dev/null || true
-    # Clean registries (in agent workspace, fallback)
-    exec_in_agent bash -c "
-        jq 'del(.workers[\"${TEST_LEADER}\"], .workers[\"${TEST_W1}\"], .workers[\"${TEST_W2}\"])' \
-            /root/manager-workspace/workers-registry.json > /tmp/wr-clean.json 2>/dev/null && \
-            mv /tmp/wr-clean.json /root/manager-workspace/workers-registry.json
-        jq 'del(.teams[\"${TEST_TEAM}\"])' \
-            /root/manager-workspace/teams-registry.json > /tmp/tr-clean.json 2>/dev/null && \
-            mv /tmp/tr-clean.json /root/manager-workspace/teams-registry.json
-    " 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -94,6 +88,30 @@ log_section "Create Team"
 
 exec_in_agent bash -c "cat > /tmp/agentteams-test-${TEST_TEAM}.yaml << 'YAMLEOF'
 apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_LEADER}
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_W1}
+spec:
+  model: qwen3.5-plus
+  channelPolicy:
+    groupDenyExtra:
+      - ${TEST_W2}
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ${TEST_W2}
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: ${TEST_TEAM}
@@ -101,17 +119,13 @@ spec:
   channelPolicy:
     groupAllowExtra:
       - test-external-bot
-  leader:
-    name: ${TEST_LEADER}
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: ${TEST_LEADER}
+      role: team_leader
     - name: ${TEST_W1}
-      model: qwen3.5-plus
-      channelPolicy:
-        groupDenyExtra:
-          - ${TEST_W2}
+      role: worker
     - name: ${TEST_W2}
-      model: qwen3.5-plus
+      role: worker
 YAMLEOF
 " 2>/dev/null
 
@@ -148,21 +162,20 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
 done
 
 # ============================================================
-# Section 3: Verify teams-registry.json
+# Section 3: Verify Team resource
 # ============================================================
-log_section "Verify teams-registry.json"
+log_section "Verify Team Resource"
 
-TEAMS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/teams-registry.json" 2>/dev/null || echo "{}")
-TEAM_ENTRY=$(echo "${TEAMS_REGISTRY}" | jq -r --arg t "${TEST_TEAM}" '.teams[$t] // empty' 2>/dev/null)
-assert_not_empty "${TEAM_ENTRY}" "Team registered in teams-registry.json"
+TEAM_ENTRY=$(exec_in_agent agt get teams "${TEST_TEAM}" -o json 2>/dev/null || echo "")
+assert_not_empty "${TEAM_ENTRY}" "Team resource is queryable"
 
-TEAM_LEADER_REG=$(echo "${TEAM_ENTRY}" | jq -r '.leader // empty')
+TEAM_LEADER_REG=$(echo "${TEAM_ENTRY}" | jq -r '.leaderName // empty')
 assert_eq "${TEST_LEADER}" "${TEAM_LEADER_REG}" "Team leader is ${TEST_LEADER}"
 
-TEAM_WORKERS_REG=$(echo "${TEAM_ENTRY}" | jq -r '.workers | length')
+TEAM_WORKERS_REG=$(echo "${TEAM_ENTRY}" | jq -r '.workerNames | length')
 assert_eq "2" "${TEAM_WORKERS_REG}" "Team has 2 workers"
 
-TEAM_ROOM=$(echo "${TEAM_ENTRY}" | jq -r '.team_room_id // empty')
+TEAM_ROOM=$(echo "${TEAM_ENTRY}" | jq -r '.teamRoomID // empty')
 assert_not_empty "${TEAM_ROOM}" "Team Room ID exists: ${TEAM_ROOM}"
 
 # Verify admin auto-joined the team room
@@ -185,25 +198,25 @@ else
 fi
 
 # ============================================================
-# Section 4: Verify workers-registry.json roles
+# Section 4: Verify Worker roles
 # ============================================================
-log_section "Verify Worker Roles in Registry"
+log_section "Verify Worker Roles"
 
-WORKERS_REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
+WORKERS_RESOURCE=$(exec_in_agent agt get workers --team "${TEST_TEAM}" -o json 2>/dev/null || echo '{"workers":[]}')
 
-LEADER_ROLE=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_LEADER}" '.workers[$w].role // empty' 2>/dev/null)
+LEADER_ROLE=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_LEADER}" '.workers[] | select(.name == $w) | .role // empty')
 assert_eq "team_leader" "${LEADER_ROLE}" "Leader has role=team_leader"
 
-LEADER_TEAM=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_LEADER}" '.workers[$w].team_id // empty' 2>/dev/null)
+LEADER_TEAM=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_LEADER}" '.workers[] | select(.name == $w) | .team // empty')
 assert_eq "${TEST_TEAM}" "${LEADER_TEAM}" "Leader has correct team_id"
 
-W1_ROLE=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_W1}" '.workers[$w].role // empty' 2>/dev/null)
+W1_ROLE=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_W1}" '.workers[] | select(.name == $w) | .role // empty')
 assert_eq "worker" "${W1_ROLE}" "Worker 1 has role=worker"
 
-W1_TEAM=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_W1}" '.workers[$w].team_id // empty' 2>/dev/null)
+W1_TEAM=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_W1}" '.workers[] | select(.name == $w) | .team // empty')
 assert_eq "${TEST_TEAM}" "${W1_TEAM}" "Worker 1 has correct team_id"
 
-W2_ROLE=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${TEST_W2}" '.workers[$w].role // empty' 2>/dev/null)
+W2_ROLE=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${TEST_W2}" '.workers[] | select(.name == $w) | .role // empty')
 assert_eq "worker" "${W2_ROLE}" "Worker 2 has role=worker"
 
 # ============================================================
@@ -384,7 +397,7 @@ done
 # ============================================================
 log_section "Verify Agent Count"
 
-TEAM_AGENT_COUNT=$(echo "${WORKERS_REGISTRY}" | jq -r --arg t "${TEST_TEAM}" '[.workers | to_entries[] | select(.value.team_id == $t)] | length' 2>/dev/null)
+TEAM_AGENT_COUNT=$(echo "${WORKERS_RESOURCE}" | jq -r '.workers | length')
 assert_eq "3" "${TEAM_AGENT_COUNT}" "Team has 3 agents total (1 leader + 2 workers)"
 
 # ============================================================
@@ -425,8 +438,8 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
     if [ -n "${RUNNING}" ]; then
         log_pass "Container running: $(worker_container_name "${w}")"
     else
-        DEPLOY=$(echo "${WORKERS_REGISTRY}" | jq -r --arg w "${w}" '.workers[$w].deployment // empty' 2>/dev/null)
-        if [ "${DEPLOY}" = "remote" ]; then
+        MANAGED=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${w}" '.workers[] | select(.name == $w) | .containerManaged')
+        if [ "${MANAGED}" = "false" ]; then
             log_pass "Agent ${w} registered in remote mode"
         else
             dump_diagnostics worker "${w}"

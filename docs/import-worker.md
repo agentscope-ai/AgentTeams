@@ -38,7 +38,7 @@ bash agentteams-apply.sh -f worker.yaml
 
 ### Create a Team
 
-A Team consists of a Leader and one or more Workers. The Leader receives tasks from the Manager and coordinates the team internally.
+A Team references existing Worker CRs. Exactly one reference has the `team_leader` role; create or import every Worker before applying the Team.
 
 ```yaml
 # team.yaml
@@ -48,15 +48,13 @@ metadata:
   name: alpha-team
 spec:
   description: Full-stack development team
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
+      role: worker
     - name: alpha-qa
-      model: claude-sonnet-4-6
+      role: worker
 ```
 
 ```bash
@@ -97,16 +95,29 @@ Use `---` separators to apply multiple resources in one file:
 
 ```yaml
 apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alpha-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alpha-dev
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: alpha-team
 spec:
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
+      role: worker
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Human
@@ -249,8 +260,8 @@ The `agt` CLI inside the container will:
 4. Create a MinIO user with scoped permissions
 5. Configure Higress Gateway consumer and route authorization
 6. Generate openclaw.json and push all config to MinIO
-7. Update the Manager's workers-registry.json
-8. Send a message to the Manager to start the Worker container
+7. Create or update the Worker CR
+8. Let the Controller reconcile the Worker container
 
 ### Step 5: Verify
 
@@ -429,5 +440,5 @@ You can edit the Dockerfile in the extracted ZIP and retry.
 
 1. Check Worker container logs: `docker logs agentteams-worker-<name>`
 2. Verify the Worker appears in Element Web in its dedicated room
-3. Ensure the Manager's `workers-registry.json` has the correct entry
+3. Run `agt get workers <name> -o json` and verify the Worker CR status
 4. Try sending `@<worker-name>:<matrix-domain> hello` in the Worker's room

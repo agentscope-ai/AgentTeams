@@ -32,6 +32,7 @@ func updateWorkerCmd() *cobra.Command {
 		skills     string
 		packageURI string
 		expose     string
+		state      string
 	)
 
 	cmd := &cobra.Command{
@@ -64,7 +65,8 @@ func updateWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
-			if skills != "" {
+			setIfNotEmpty(req, "state", state)
+			if cmd.Flags().Changed("skills") {
 				req["skills"] = splitCSV(skills)
 			}
 			if expose != "" {
@@ -94,6 +96,7 @@ func updateWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&skills, "skills", "", "Comma-separated built-in skills")
 	cmd.Flags().StringVar(&packageURI, "package", "", "Package URI")
 	cmd.Flags().StringVar(&expose, "expose", "", "Comma-separated ports to expose")
+	cmd.Flags().StringVar(&state, "state", "", "Desired lifecycle state (Running|Sleeping|Stopped)")
 	return cmd
 }
 
@@ -106,9 +109,10 @@ func updateTeamCmd() *cobra.Command {
 		name                 string
 		teamName             string
 		description          string
-		leaderModel          string
+		leaderName           string
 		leaderHeartbeatEvery string
-		workerIdleTimeout    string
+		workers              string
+		peerMentions         bool
 	)
 
 	cmd := &cobra.Command{
@@ -117,9 +121,10 @@ func updateTeamCmd() *cobra.Command {
 		Long: `Update an existing Team resource. Only specified fields are changed.
 
   agt update team --name alpha --description "Updated description"
-  agt update team --name alpha --leader-model claude-sonnet-4-6
-  agt update team --name alpha --leader-heartbeat-every 30m --worker-idle-timeout 12h
-  To update per-member CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f team.yaml'.`,
+  agt update team --name alpha --leader-name alpha-lead --workers alice,bob
+  agt update team --name alpha --leader-heartbeat-every 30m
+
+Create or update each Worker separately to configure its runtime fields.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -128,17 +133,21 @@ func updateTeamCmd() *cobra.Command {
 			req := map[string]interface{}{}
 			setIfNotEmpty(req, "teamName", teamName)
 			setIfNotEmpty(req, "description", description)
-			leader := map[string]interface{}{}
-			setIfNotEmpty(leader, "model", leaderModel)
-			if leaderHeartbeatEvery != "" {
-				leader["heartbeat"] = map[string]interface{}{
-					"enabled": true,
-					"every":   leaderHeartbeatEvery,
+			setIfNotEmpty(req, "heartbeatEvery", leaderHeartbeatEvery)
+			if cmd.Flags().Changed("leader-name") || cmd.Flags().Changed("workers") {
+				if leaderName == "" {
+					return fmt.Errorf("--leader-name is required when updating Team membership")
 				}
+				workerMembers := []interface{}{
+					map[string]interface{}{"name": leaderName, "role": "team_leader"},
+				}
+				for _, worker := range splitCSV(workers) {
+					workerMembers = append(workerMembers, map[string]interface{}{"name": worker, "role": "worker"})
+				}
+				req["workerMembers"] = workerMembers
 			}
-			setIfNotEmpty(leader, "workerIdleTimeout", workerIdleTimeout)
-			if len(leader) > 0 {
-				req["leader"] = leader
+			if cmd.Flags().Changed("peer-mentions") {
+				req["peerMentions"] = peerMentions
 			}
 
 			if len(req) == 0 {
@@ -158,9 +167,10 @@ func updateTeamCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Team name (required)")
 	cmd.Flags().StringVar(&teamName, "team-name", "", "Runtime/storage team name")
 	cmd.Flags().StringVar(&description, "description", "", "Team description")
-	cmd.Flags().StringVar(&leaderModel, "leader-model", "", "Leader LLM model")
+	cmd.Flags().StringVar(&leaderName, "leader-name", "", "Existing Worker resource used as Team Leader")
 	cmd.Flags().StringVar(&leaderHeartbeatEvery, "leader-heartbeat-every", "", "Leader heartbeat interval (e.g. 30m)")
-	cmd.Flags().StringVar(&workerIdleTimeout, "worker-idle-timeout", "", "Idle timeout before the leader may sleep workers (e.g. 12h)")
+	cmd.Flags().StringVar(&workers, "workers", "", "Comma-separated existing Worker resource names")
+	cmd.Flags().BoolVar(&peerMentions, "peer-mentions", true, "Allow Team Workers to mention peers")
 	return cmd
 }
 

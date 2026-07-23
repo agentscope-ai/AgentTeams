@@ -6,65 +6,48 @@
 agt create team \
   --name <TEAM_NAME> \
   --leader-name <LEADER_NAME> \
-  --leader-model <MODEL_ID> \
   --workers <w1>,<w2>,<w3> \
   [--description "Team description"] \
-  [--leader-heartbeat-every 30m] \
-  [--worker-idle-timeout 12h]
+  [--leader-heartbeat-every 30m]
 ```
 
 Notes:
 - `--name` and `--leader-name` are required
-- `--workers` is a comma-separated list of worker names
-- `--leader-model` defaults to the install-time configured model (`$AGENTTEAMS_DEFAULT_MODEL` propagated by the controller); falls back to `qwen3.5-plus` only when that is unset
+- `--leader-name` and `--workers` must name existing Worker CRs
+- `--workers` is a comma-separated list of existing Worker names
 - Team Admin defaults to Global Admin
-- Controller forces `runtime: copaw` for all team members
-- For CPU/memory requests and limits, use YAML with `agt apply -f`; the simple team CLI flags do not expose per-member resources
+- Configure each Worker's model, runtime, image, resources, identity, skills, MCP, channel policy, and lifecycle on that Worker CR before creating the Team
 
 ## CPU and memory resources
 
-Use `leader.resources` and `workers[].resources` when admin asks for per-member CPU or memory requests/limits:
+Use `Worker.spec.resources` when admin asks for CPU or memory requests/limits:
 
 ```yaml
 apiVersion: agentteams.io/v1beta1
-kind: Team
+kind: Worker
 metadata:
-  name: <TEAM_NAME>
+  name: <WORKER_NAME>
 spec:
-  leader:
-    name: <LEADER_NAME>
-    resources:
-      requests:
-        cpu: 300m
-        memory: 768Mi
-      limits:
-        cpu: "2"
-        memory: 3Gi
-  workers:
-    - name: <WORKER_NAME>
-      resources:
-        requests:
-          cpu: 200m
-          memory: 512Mi
-        limits:
-          cpu: "1"
-          memory: 2Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
 ```
 
-Changing resources recreates the affected member container. Confirm the team is idle or that admin accepts interruption before applying resource changes.
+Changing resources recreates that Worker's container. Confirm the Worker is idle or that admin accepts interruption before applying resource changes.
 
 ## What the Controller Does
 
 After `agt create team`, the controller's Team reconciler handles:
 
-1. Creates Matrix rooms: Team Room (Leader + Team Admin + all workers) and Leader DM (Team Admin ↔ Leader)
-2. Creates the Team Leader Worker CR with team-leader-agent skills
-3. Creates each team worker Worker CR with copaw-worker-agent skills
-4. Injects coordination context into Leader's AGENTS.md (Team Room ID, Leader DM Room ID, worker list)
-5. Sets up shared team storage in MinIO
-6. Updates legacy teams registry
-
-> The legacy `scripts/create-team.sh` is deprecated. Use `agt create team` instead.
+1. Validates every `workerMembers` reference and the single `team_leader` role
+2. Creates Matrix rooms: Team Room (Leader + Team Admin + all workers) and Leader DM (Team Admin ↔ Leader)
+3. Injects Team-owned coordination context into the referenced Workers
+4. Sets up shared Team storage in MinIO
+5. Aggregates referenced Worker readiness into Team status without owning their lifecycle
 
 ## After Creation
 

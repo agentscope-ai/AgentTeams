@@ -62,9 +62,9 @@ On admin reply:
 
 When `coding-cli-config.json` has `enabled: true`:
 
-1. **Ensure the Worker has the `coding-cli` skill.** Check `workers-registry.json`:
+1. **Ensure the Worker has the `coding-cli` skill.** Query its Worker CR:
    ```bash
-   cat ~/workers-registry.json | jq '.workers[] | select(.name=="<worker>") | .skills'
+   agt get workers <worker> -o json | jq '.skills'
    ```
    If `coding-cli` is missing, distribute it:
    ```bash
@@ -198,4 +198,3 @@ Append to the end of spec.md when CLI mode is enabled:
 
 如收到 `coding-failed:`，请自行完成编码工作。
 ```
-

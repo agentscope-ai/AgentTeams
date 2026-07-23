@@ -1,6 +1,6 @@
 // Package ossfake provides in-memory fakes of the oss.StorageClient interface
 // for use in unit and integration tests that exercise code paths dependent on
-// object storage (legacy registry writes, package handler uploads, etc.).
+// object storage (package handler uploads, runtime configuration, etc.).
 //
 // The Memory client stores objects in a map keyed by their full object path.
 // Paths are treated as opaque strings — there is no bucket/prefix logic, so
@@ -64,7 +64,7 @@ func (m *Memory) GetObject(_ context.Context, key string) ([]byte, error) {
 	return out, nil
 }
 
-// Stat returns nil when key exists, os.ErrNotExist otherwise. LegacyCompat
+// Stat returns nil when key exists, os.ErrNotExist otherwise. ManagerConfigStore
 // relies on errors.Is(err, os.ErrNotExist) to detect first-time writes.
 func (m *Memory) Stat(_ context.Context, key string) error {
 	m.mu.RLock()

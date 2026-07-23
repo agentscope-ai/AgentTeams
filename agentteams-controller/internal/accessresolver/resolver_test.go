@@ -457,17 +457,19 @@ func newAlphaTeam() *v1beta1.Team {
 	team := &v1beta1.Team{}
 	team.Name = "alpha"
 	team.Namespace = testNS
-	team.Spec.Leader = v1beta1.LeaderSpec{Name: "lead"}
-	team.Spec.Workers = []v1beta1.TeamWorkerSpec{{Name: "w1"}}
+	team.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{
+		{Name: "lead", Role: "team_leader"},
+		{Name: "w1", Role: "worker"},
+	}
 	return team
 }
 
-// TestResolveTeamMember_DecoupledReadsWorkerCRAccessEntries covers Gap 3:
-// in the decoupled model the Team CR carries spec.workerMembers (a list of
+// TestResolveTeamMember_TeamReferenceReadsWorkerCRAccessEntries covers Gap 3:
+// in the Team-reference model the Team CR carries spec.workerMembers (a list of
 // refs) without inline AccessEntries. The resolver must Get the standalone
 // Worker CR and use ITS spec.accessEntries instead of falling back to
 // DefaultEntriesForTeamMember.
-func TestResolveTeamMember_DecoupledReadsWorkerCRAccessEntries(t *testing.T) {
+func TestResolveTeamMember_TeamReferenceReadsWorkerCRAccessEntries(t *testing.T) {
 	team := &v1beta1.Team{}
 	team.Name = "alpha"
 	team.Namespace = testNS
@@ -515,11 +517,11 @@ func TestResolveTeamMember_DecoupledReadsWorkerCRAccessEntries(t *testing.T) {
 	}
 }
 
-// TestResolveTeamMember_DecoupledLeaderRoleHonored covers Gap 3 leader
+// TestResolveTeamMember_TeamReferenceLeaderRoleHonored covers Gap 3 leader
 // branch: when team.spec.workerMembers[].role=="team_leader", the
 // resolved templateCtx.kind must be "TeamLeader" so ${self.kind}
 // expansion matches the leader's runtime identity.
-func TestResolveTeamMember_DecoupledLeaderRoleHonored(t *testing.T) {
+func TestResolveTeamMember_TeamReferenceLeaderRoleHonored(t *testing.T) {
 	team := &v1beta1.Team{}
 	team.Name = "alpha"
 	team.Namespace = testNS
@@ -592,21 +594,24 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 
 func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	team := newAlphaTeam()
-	team.Spec.Leader.WorkerName = "runtime-lead"
-	c := newFakeClient(t, team)
+	leader := &v1beta1.Worker{}
+	leader.Name = "lead"
+	leader.Namespace = testNS
+	leader.Spec.WorkerName = "runtime-lead"
+	c := newFakeClient(t, team, leader)
 
 	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleTeamLeader,
-		Username:   "runtime-lead",
+		Username:   "lead",
 		WorkerName: "runtime-lead",
 		Team:       "alpha",
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "agentteams-worker-runtime-lead" {
-		t.Fatalf("session = %q, want agentteams-worker-runtime-lead", session)
+	if session != "agentteams-worker-lead" {
+		t.Fatalf("session = %q, want agentteams-worker-lead", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
@@ -686,21 +691,24 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 
 func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	team := newAlphaTeam()
-	team.Spec.Workers[0].WorkerName = "runtime-w1"
-	c := newFakeClient(t, team)
+	worker := &v1beta1.Worker{}
+	worker.Name = "w1"
+	worker.Namespace = testNS
+	worker.Spec.WorkerName = "runtime-w1"
+	c := newFakeClient(t, team, worker)
 
 	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	session, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{
 		Role:       auth.RoleWorker,
-		Username:   "runtime-w1",
+		Username:   "w1",
 		WorkerName: "runtime-w1",
 		Team:       "alpha",
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if session != "agentteams-worker-runtime-w1" {
-		t.Fatalf("session = %q, want agentteams-worker-runtime-w1", session)
+	if session != "agentteams-worker-w1" {
+		t.Fatalf("session = %q, want agentteams-worker-w1", session)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 default entry, got %d", len(entries))
@@ -716,7 +724,10 @@ func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 
 func TestResolveTeamMember_CustomEntries(t *testing.T) {
 	team := newAlphaTeam()
-	team.Spec.Workers[0].AccessEntries = []v1beta1.AccessEntry{
+	worker := &v1beta1.Worker{}
+	worker.Name = "w1"
+	worker.Namespace = testNS
+	worker.Spec.AccessEntries = []v1beta1.AccessEntry{
 		{
 			Service:     credprovider.ServiceObjectStorage,
 			Permissions: []string{"read"},
@@ -726,7 +737,7 @@ func TestResolveTeamMember_CustomEntries(t *testing.T) {
 			}),
 		},
 	}
-	c := newFakeClient(t, team)
+	c := newFakeClient(t, team, worker)
 
 	r := New(c, testNS, "agentteams-test", "", auth.DefaultResourcePrefix)
 	_, entries, err := r.ResolveForCaller(context.Background(), &auth.CallerIdentity{

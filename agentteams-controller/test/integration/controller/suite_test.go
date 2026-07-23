@@ -49,10 +49,9 @@ var (
 	mockMgrBackend *mocks.MockWorkerBackend
 	mockMgrEnv     *mocks.MockManagerEnvBuilder
 
-	// Legacy wiring — real LegacyCompat against an in-memory OSS so tests can
-	// assert workers-registry.json / teams-registry.json side effects.
-	testOSS    *ossfake.Memory
-	testLegacy *service.LegacyCompat
+	// Real ManagerConfigStore against an in-memory OSS for Manager access-list updates.
+	testOSS           *ossfake.Memory
+	testManagerConfig *service.ManagerConfigStore
 )
 
 // testManagerName and testMatrixDomain mirror the values used by the Provisioner
@@ -103,11 +102,10 @@ func TestMain(m *testing.M) {
 		[]backend.WorkerBackend{mockBackend},
 	)
 
-	// Real LegacyCompat backed by an in-memory OSS so tests can assert
-	// registry side effects (workers-registry.json / teams-registry.json).
+	// Real ManagerConfigStore backed by an in-memory OSS.
 	testOSS = ossfake.NewMemory()
 	agentFSDir := os.TempDir()
-	testLegacy = service.NewLegacyCompat(service.LegacyConfig{
+	testManagerConfig = service.NewManagerConfigStore(service.ManagerConfigStoreConfig{
 		OSS:          testOSS,
 		MatrixDomain: testMatrixDomain,
 		ManagerName:  testManagerName,
@@ -120,7 +118,7 @@ func TestMain(m *testing.M) {
 		Deployer:       mockDeploy,
 		Backend:        workerBackendRegistry,
 		EnvBuilder:     mockEnv,
-		Legacy:         testLegacy,
+		ManagerConfig:  testManagerConfig,
 		ControllerName: "test-ctl",
 	}
 	if _, err := workerReconciler.SetupWithManager(mgr); err != nil {
@@ -128,44 +126,30 @@ func TestMain(m *testing.M) {
 	}
 
 	teamReconciler := &controller.TeamReconciler{
-		Client:         mgr.GetClient(),
-		Provisioner:    mockProv,
-		Deployer:       mockDeploy,
-		Backend:        workerBackendRegistry,
-		EnvBuilder:     mockEnv,
-		Legacy:         testLegacy,
-		AgentFSDir:     agentFSDir,
-		ControllerName: "test-ctl",
+		Client:        mgr.GetClient(),
+		Provisioner:   mockProv,
+		Deployer:      mockDeploy,
+		ManagerConfig: testManagerConfig,
 	}
 	if _, err := teamReconciler.SetupWithManager(mgr); err != nil {
 		panic(fmt.Sprintf("failed to setup TeamReconciler: %v", err))
 	}
 
-	if err := mgr.GetFieldIndexer().IndexField(ctx, &v1beta1.Team{}, controller.TeamLeaderNameField,
-		func(obj client.Object) []string {
-			team, ok := obj.(*v1beta1.Team)
-			if !ok || team.Spec.Leader.Name == "" {
-				return nil
-			}
-			return []string{team.Spec.Leader.Name}
-		}); err != nil {
-		panic(fmt.Sprintf("failed to index team leader name: %v", err))
-	}
-	if err := mgr.GetFieldIndexer().IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerNameField,
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerMembersField,
 		func(obj client.Object) []string {
 			team, ok := obj.(*v1beta1.Team)
 			if !ok {
 				return nil
 			}
-			names := make([]string, 0, len(team.Spec.Workers))
-			for _, w := range team.Spec.Workers {
-				if w.Name != "" {
-					names = append(names, w.Name)
+			names := make([]string, 0, len(team.Spec.WorkerMembers))
+			for _, member := range team.Spec.WorkerMembers {
+				if member.Name != "" {
+					names = append(names, member.Name)
 				}
 			}
 			return names
 		}); err != nil {
-		panic(fmt.Sprintf("failed to index team worker names: %v", err))
+		panic(fmt.Sprintf("failed to index team worker members: %v", err))
 	}
 
 	// Wire up Manager mocks

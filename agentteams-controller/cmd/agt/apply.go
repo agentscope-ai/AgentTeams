@@ -163,8 +163,6 @@ func applyWorkerSubCmd() *cobra.Command {
 		skills     string
 		packageURI string
 		expose     string
-		team       string
-		role       string
 	)
 
 	cmd := &cobra.Command{
@@ -188,7 +186,7 @@ func applyWorkerSubCmd() *cobra.Command {
 			}
 
 			return applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
-				skills, packageURI, expose, team, role)
+				skills, packageURI, expose)
 		},
 	}
 
@@ -203,8 +201,6 @@ func applyWorkerSubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&skills, "skills", "", "Comma-separated built-in skills")
 	cmd.Flags().StringVar(&packageURI, "package", "", "Package URI (nacos://[?authType=...], http://, oss://)")
 	cmd.Flags().StringVar(&expose, "expose", "", "Comma-separated ports to expose")
-	cmd.Flags().StringVar(&team, "team", "", "Team name")
-	cmd.Flags().StringVar(&role, "role", "", "Role within team (team_leader|worker)")
 	return cmd
 }
 
@@ -274,7 +270,7 @@ func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 
 // applyWorkerParams creates or updates a Worker from CLI flags (upsert semantics).
 func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
-	skills, packageURI, expose, team, role string) error {
+	skills, packageURI, expose string) error {
 
 	if model == "" {
 		model = defaultWorkerModel()
@@ -309,8 +305,6 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 	setIfNotEmpty(req, "identity", identity)
 	setIfNotEmpty(req, "soul", soul)
 	setIfNotEmpty(req, "package", packageURI)
-	setIfNotEmpty(req, "team", team)
-	setIfNotEmpty(req, "role", role)
 	if skills != "" {
 		req["skills"] = splitCSV(skills)
 	}

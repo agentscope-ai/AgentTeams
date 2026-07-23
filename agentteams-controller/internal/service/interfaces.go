@@ -54,6 +54,9 @@ type WorkerProvisioner interface {
 	// KickFromRoom removes userID from roomID using the admin token.
 	// Idempotent: returns nil when the user is not a member.
 	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
+	// ForceLeaveRoom removes a user whose room power level prevents a normal
+	// admin kick.
+	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
 	MatrixAppServiceEnabled() bool
 }
 

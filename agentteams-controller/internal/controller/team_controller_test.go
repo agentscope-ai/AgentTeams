@@ -854,8 +854,8 @@ func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 		t.Fatalf("SyncTeamLeaderAssets WorkerName=%q, want lead", got)
 	}
 
-	if got := provisioner.Calls.KickFromRoom; len(got) != 2 {
-		t.Fatalf("KickFromRoom calls=%+v, want regular worker personal rooms only", got)
+	if got := provisioner.Calls.ForceLeaveRoom; len(got) != 2 {
+		t.Fatalf("ForceLeaveRoom calls=%+v, want regular worker personal rooms only", got)
 	} else {
 		kickedRooms := map[string]string{}
 		for _, call := range got {
@@ -863,12 +863,15 @@ func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 		}
 		for _, roomID := range []string{"!room-dev:matrix.local", "!room-qa:matrix.local"} {
 			if kickedRooms[roomID] != "@manager:matrix.local" {
-				t.Errorf("KickFromRoom[%q]=%q, want @manager:matrix.local", roomID, kickedRooms[roomID])
+				t.Errorf("ForceLeaveRoom[%q]=%q, want @manager:matrix.local", roomID, kickedRooms[roomID])
 			}
 		}
 		if _, kicked := kickedRooms["!room-lead:matrix.local"]; kicked {
 			t.Errorf("Team Leader personal room must retain Manager membership")
 		}
+	}
+	if got := provisioner.Calls.KickFromRoom; len(got) != 0 {
+		t.Fatalf("KickFromRoom calls=%+v, Manager has equal power and requires force-leave", got)
 	}
 
 	policies := map[string]service.InjectChannelPolicyRequest{}

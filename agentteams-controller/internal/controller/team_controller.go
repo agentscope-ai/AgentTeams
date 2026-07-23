@@ -471,11 +471,10 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		for _, rm := range members {
 			if rm.ref.Name != leaderRef.Name {
 				if rm.worker.Status.RoomID != "" {
-					if err := r.Provisioner.KickFromRoom(
+					if err := r.Provisioner.ForceLeaveRoom(
 						ctx,
-						rm.worker.Status.RoomID,
 						managerMatrixID,
-						"Team workers communicate through the Team Room",
+						rm.worker.Status.RoomID,
 					); err != nil {
 						return r.failTeam(ctx, t, patchBase,
 							fmt.Sprintf("remove Manager from Worker %q personal room: %v", rm.ref.Name, err))

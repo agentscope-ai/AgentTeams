@@ -891,6 +891,23 @@ msg() {
         "success.data_volume.en") text="Data volume:        %s" ;;
         "success.workspace.zh") text="Manager 工作空间:  %s" ;;
         "success.workspace.en") text="Manager workspace:  %s" ;;
+        # --- Dashboard ---
+        "dash.title.zh") text="AgentTeams Dashboard" ;;
+        "dash.title.en") text="AgentTeams Dashboard" ;;
+        "dash.prompt.zh") text="是否安装 AgentTeams Dashboard 管理面板？" ;;
+        "dash.prompt.en") text="Install AgentTeams Dashboard management panel?" ;;
+        "dash.confirm.zh") text="安装 Dashboard" ;;
+        "dash.confirm.en") text="Install Dashboard" ;;
+        "dash.skip.zh") text="跳过 Dashboard 安装" ;;
+        "dash.skip.en") text="Skip Dashboard installation" ;;
+        "dash.port_prompt.zh") text="Dashboard 端口" ;;
+        "dash.port_prompt.en") text="Dashboard port" ;;
+        "dash.ready.zh") text="Dashboard 已就绪: http://127.0.0.1:%s" ;;
+        "dash.ready.en") text="Dashboard ready: http://127.0.0.1:%s" ;;
+        "dash.timeout.zh") text="Dashboard 启动超时" ;;
+        "dash.timeout.en") text="Dashboard startup timeout" ;;
+        "dash.upgrade_current.zh") text="当前 Dashboard 安装状态: %s" ;;
+        "dash.upgrade_current.en") text="Current Dashboard install state: %s" ;;
         # --- Worker installation ---
         "worker.resetting.zh") text="正在重置 Worker: %s..." ;;
         "worker.resetting.en") text="Resetting Worker: %s..." ;;
@@ -1602,7 +1619,7 @@ should_skip_step() {
             [ ! -f "${_env}" ] && return 0
             ;;
         # Keep-All upgrade mode: skip all config steps (step_volume/step_workspace handled separately)
-        step_llm|step_admin|step_network|step_ports|step_domains|step_github|step_skills|step_runtime|step_manager_runtime|step_e2ee|step_docker_proxy|step_idle|step_hostshare)
+        step_llm|step_admin|step_network|step_ports|step_domains|step_github|step_skills|step_runtime|step_manager_runtime|step_e2ee|step_docker_proxy|step_idle|step_hostshare|step_dashboard)
             [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
             ;;
         step_volume|step_workspace)
@@ -1624,6 +1641,10 @@ should_skip_step() {
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
             ;;
         step_hostshare)
+            [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
+            [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && return 0
+            ;;
+        step_dashboard)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
             [ "${AGENTTEAMS_QUICKSTART}" = "1" ] && return 0
             ;;
@@ -1672,6 +1693,7 @@ clear_step_vars() {
         step_docker_proxy) unset AGENTTEAMS_DOCKER_PROXY; unset AGENTTEAMS_PROXY_ALLOWED_REGISTRIES ;;
         step_idle)      unset AGENTTEAMS_WORKER_IDLE_TIMEOUT ;;
         step_hostshare) unset AGENTTEAMS_HOST_SHARE_DIR ;;
+        step_dashboard) unset AGENTTEAMS_DASHBOARD AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_DASHBOARD_VERSION ;;
         step_podman_autostart) unset AGENTTEAMS_PODMAN_AUTOSTART ;;
     esac
 }
@@ -1899,6 +1921,7 @@ step_existing() {
                 ${DOCKER_CMD} stop agentteams-controller 2>/dev/null || true
                 ${DOCKER_CMD} rm agentteams-controller 2>/dev/null || true
             fi
+            ${DOCKER_CMD} rm -f agentteams-dashboard >/dev/null 2>&1 || true
             if ${DOCKER_CMD} network ls --format '{{.Name}}' | grep -q "^agentteams-net$"; then
                 log "$(msg install.reinstall.removing_network)"
                 ${DOCKER_CMD} network rm agentteams-net 2>/dev/null || true
@@ -2435,6 +2458,59 @@ step_workspace() {
     log "$(msg workspace.dir_label "${AGENTTEAMS_WORKSPACE_DIR}")"
 }
 
+step_dashboard() {
+    AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
+    AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.0.0}"
+    AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
+
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
+        if [ "${AGENTTEAMS_DASHBOARD}" = "1" ]; then
+            log "non-interactive: installing dashboard on port ${AGENTTEAMS_PORT_DASHBOARD}, image=${AGENTTEAMS_DASHBOARD_IMAGE}"
+        else
+            log "$(msg dash.skip) (non-interactive)"
+        fi
+        export AGENTTEAMS_DASHBOARD AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_DASHBOARD_VERSION
+        return 0
+    fi
+
+    if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ]; then
+        log "upgrade keep-all: dashboard=${AGENTTEAMS_DASHBOARD} port=${AGENTTEAMS_PORT_DASHBOARD} version=${AGENTTEAMS_DASHBOARD_VERSION}"
+        export AGENTTEAMS_DASHBOARD AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_DASHBOARD_VERSION
+        return 0
+    fi
+
+    log ""
+    log "$(msg dash.title)"
+
+    if [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ -n "${AGENTTEAMS_DASHBOARD+x}" ]; then
+        log "$(msg dash.upgrade_current ${AGENTTEAMS_DASHBOARD})"
+    else
+        log "$(msg dash.prompt)"
+    fi
+    read -p "$(msg dash.confirm) [Y/n]: " _install_dash
+    if [[ "${_install_dash,,}" == "n" ]]; then
+        AGENTTEAMS_DASHBOARD=0
+        log "$(msg dash.skip)"
+        export AGENTTEAMS_DASHBOARD AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_DASHBOARD_VERSION
+        return 0
+    fi
+    AGENTTEAMS_DASHBOARD=1
+
+    local _current_port="${AGENTTEAMS_PORT_DASHBOARD}"
+    read -p "$(msg dash.port_prompt) [${_current_port}]: " _input
+    AGENTTEAMS_PORT_DASHBOARD="${_input:-${_current_port}}"
+
+    local _current_ver="${AGENTTEAMS_DASHBOARD_VERSION}"
+    read -p "Dashboard version [${_current_ver}]: " _input
+    AGENTTEAMS_DASHBOARD_VERSION="${_input:-${_current_ver}}"
+    AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}"
+
+    log "Dashboard: port=${AGENTTEAMS_PORT_DASHBOARD} image=${AGENTTEAMS_DASHBOARD_IMAGE}"
+    export AGENTTEAMS_DASHBOARD AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_DASHBOARD_VERSION
+}
+
 step_runtime() {
     log "$(msg worker_runtime.title)"
     echo ""
@@ -2909,7 +2985,7 @@ install_manager() {
     # ── State machine ─────────────────────────────────────────────────────────
     local _STEPS=( step_lang step_mode step_version step_existing step_llm step_manager_runtime step_runtime step_admin step_network
                    step_ports step_domains step_github step_skills step_volume
-                   step_workspace step_e2ee step_docker_proxy step_idle step_hostshare step_podman_autostart )
+                   step_workspace step_e2ee step_docker_proxy step_idle step_hostshare step_dashboard step_podman_autostart )
     local _STEP_HISTORY=()
     local _step_idx=0
     while [ "${_step_idx}" -lt "${#_STEPS[@]}" ]; do
@@ -2955,6 +3031,11 @@ install_manager() {
     export AGENTTEAMS_WORKER_IDLE_TIMEOUT
     AGENTTEAMS_HOST_SHARE_DIR="${AGENTTEAMS_HOST_SHARE_DIR:-$HOME}"
     export AGENTTEAMS_HOST_SHARE_DIR
+    AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
+    AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.0.0}"
+    AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
+    export AGENTTEAMS_DASHBOARD AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_DASHBOARD_VERSION
 
     log ""
 
@@ -3098,6 +3179,12 @@ JVM_ARGS=${JVM_ARGS:-}
 
 # Higress WASM plugin image registry (auto-selected by timezone)
 HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${AGENTTEAMS_REGISTRY}
+
+# agentteams-dashboard (management UI)
+AGENTTEAMS_DASHBOARD=${AGENTTEAMS_DASHBOARD:-1}
+AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
+AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.0.0}
+AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
 
 # Data persistence
 AGENTTEAMS_DATA_DIR=${AGENTTEAMS_DATA_DIR:-agentteams-data}
@@ -3364,6 +3451,7 @@ CREDEOF
         ${DOCKER_CMD} stop agentteams-controller 2>/dev/null || true
         ${DOCKER_CMD} rm agentteams-controller 2>/dev/null || true
     fi
+    ${DOCKER_CMD} rm -f agentteams-dashboard >/dev/null 2>&1 || true
     if ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -q "^agentteams-manager$"; then
         log "$(msg install.removing_existing)"
         ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
@@ -3757,6 +3845,9 @@ CREDEOF
     fi
     unset _port_prefix
 
+    # Start Dashboard container (if enabled)
+    _start_dashboard || true
+
     # Apply Podman autostart if selected and environment matches
     if [ "${DOCKER_CMD}" = "podman" ] && [ "${AGENTTEAMS_PODMAN_AUTOSTART:-0}" = "1" ]; then
         setup_podman_autostart
@@ -3804,6 +3895,9 @@ CREDEOF
     echo -e "\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
     log ""
     log "$(msg success.other_consoles)"
+    if [ "${AGENTTEAMS_DASHBOARD:-1}" = "1" ]; then
+        log "  Dashboard: http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD:-13000}"
+    fi
     log "$(msg success.higress_console "${AGENTTEAMS_PORT_CONSOLE}" "${AGENTTEAMS_ADMIN_USER}" "${AGENTTEAMS_ADMIN_PASSWORD}")"
     if [ "${AGENTTEAMS_USE_EMBEDDED}" != "1" ]; then
         log "$(msg success.manager_console "${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}")"
@@ -3914,6 +4008,116 @@ install_worker() {
     log "$(msg worker.started "${WORKER_NAME}")"
     log "$(msg worker.container "${CONTAINER_NAME}")"
     log "$(msg worker.view_logs "${CONTAINER_NAME}")"
+}
+
+_start_dashboard() {
+    if [ "${AGENTTEAMS_DASHBOARD}" != "1" ]; then
+        log "$(msg dash.skip)"
+        return 0
+    fi
+
+    AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.0.0}"
+    AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
+    local DASHBOARD_CONTAINER="agentteams-dashboard"
+    local CTRL_CONTAINER="agentteams-controller"
+
+    log ""
+    log "$(msg dash.title)"
+
+    local BIND_ADDR="127.0.0.1"
+    if [ "${AGENTTEAMS_LOCAL_ONLY:-1}" = "0" ]; then
+        BIND_ADDR="0.0.0.0"
+    fi
+
+    # Build env args from controller container (MinIO/LLM/auth).
+    local env_args=()
+    env_args+=(-e AGENTTEAMS_CONTROLLER_URL="http://${CTRL_CONTAINER}:8090")
+    env_args+=(-e NEXT_PUBLIC_MATRIX_API_URL="http://${CTRL_CONTAINER}:6167")
+    env_args+=(-e MATRIX_HOMESERVER_ALLOWLIST="${CTRL_CONTAINER},matrix-local.agentteams.io,matrix.org")
+    env_args+=(-e DATABASE_URL="file:/app/db/dashboard.db")
+
+    if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -qx "${CTRL_CONTAINER}"; then
+        local env_out
+        env_out=$(${DOCKER_CMD} inspect "${CTRL_CONTAINER}" --format='{{range .Config.Env}}{{.}}{{"\n"}}{{end}}')
+
+        _env() { echo "${env_out}" | sed -n "s|^${1}=||p" | head -n1; }
+
+        local fs_endpoint; fs_endpoint=$(_env AGENTTEAMS_FS_ENDPOINT)
+        [ -z "${fs_endpoint}" ] && fs_endpoint=$(_env AGENTTEAMS_MINIO_ENDPOINT)
+        if [ -n "${fs_endpoint}" ]; then
+            fs_endpoint=$(echo "${fs_endpoint}" | sed -e "s|127\.0\.0\.1|${CTRL_CONTAINER}|" -e "s|localhost|${CTRL_CONTAINER}|")
+            env_args+=(-e AGENTTEAMS_FS_ENDPOINT="${fs_endpoint}")
+        else
+            env_args+=(-e AGENTTEAMS_FS_ENDPOINT="http://${CTRL_CONTAINER}:9000")
+        fi
+
+        local fs_bucket; fs_bucket=$(_env AGENTTEAMS_FS_BUCKET)
+        [ -z "${fs_bucket}" ] && fs_bucket=$(_env AGENTTEAMS_MINIO_BUCKET)
+        [ -n "${fs_bucket}" ] && env_args+=(-e AGENTTEAMS_FS_BUCKET="${fs_bucket}")
+
+        local fs_user; fs_user=$(_env AGENTTEAMS_FS_ACCESS_KEY)
+        [ -z "${fs_user}" ] && fs_user=$(_env AGENTTEAMS_MINIO_USER)
+        [ -n "${fs_user}" ] && env_args+=(-e AGENTTEAMS_FS_ACCESS_KEY="${fs_user}")
+
+        local fs_pass; fs_pass=$(_env AGENTTEAMS_FS_SECRET_KEY)
+        [ -z "${fs_pass}" ] && fs_pass=$(_env AGENTTEAMS_MINIO_PASSWORD)
+        [ -n "${fs_pass}" ] && env_args+=(-e AGENTTEAMS_FS_SECRET_KEY="${fs_pass}")
+
+        for k in AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_LLM_API_KEY AGENTTEAMS_OPENAI_BASE_URL AGENTTEAMS_DEFAULT_MODEL; do
+            local v; v=$(_env "${k}")
+            [ -n "${v}" ] && env_args+=(-e "${k}=${v}")
+        done
+
+        # The controller writes the CLI SA token to /var/run/hiclaw/cli-token.
+        local auth_token
+        auth_token=$(${DOCKER_CMD} exec "${CTRL_CONTAINER}" sh -c 'cat /var/run/hiclaw/cli-token 2>/dev/null' | tr -d '\n' || true)
+        if [ -n "${auth_token}" ]; then
+            env_args+=(-e AGENTTEAMS_AUTH_TOKEN="${auth_token}")
+        else
+            log "WARN: could not read controller SA token — Dashboard will be unauthenticated to Controller."
+        fi
+
+        local admin_user; admin_user=$(_env AGENTTEAMS_ADMIN_USER)
+        local admin_pass; admin_pass=$(_env AGENTTEAMS_ADMIN_PASSWORD)
+        [ -n "${admin_user}" ] && env_args+=(-e AGENTTEAMS_ADMIN_USER="${admin_user}")
+        [ -n "${admin_pass}" ] && env_args+=(-e AGENTTEAMS_ADMIN_PASSWORD="${admin_pass}")
+
+        # In embedded topology the Higress Console lives inside the controller on port 8001.
+        if ${DOCKER_CMD} exec "${CTRL_CONTAINER}" wget -q -O- --timeout=2 http://127.0.0.1:8001/ >/dev/null 2>&1; then
+            env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="http://${CTRL_CONTAINER}:8001")
+        fi
+    else
+        log "WARN: ${CTRL_CONTAINER} not running; launching Dashboard without Controller/MinIO/LLM env."
+        env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="http://${CTRL_CONTAINER}:8001")
+    fi
+
+    # Remove existing container
+    ${DOCKER_CMD} rm -f "${DASHBOARD_CONTAINER}" >/dev/null 2>&1 || true
+    ${DOCKER_CMD} volume create agentteams-dashboard-data >/dev/null 2>&1 || true
+    ${DOCKER_CMD} run -d \
+        --name "${DASHBOARD_CONTAINER}" \
+        --restart unless-stopped \
+        --network "${AGENTTEAMS_NETWORK:-agentteams-net}" \
+        -p "${BIND_ADDR}:${AGENTTEAMS_PORT_DASHBOARD}:3000" \
+        "${env_args[@]}" \
+        -v agentteams-dashboard-data:/app/db \
+        "${AGENTTEAMS_DASHBOARD_IMAGE}"
+
+    # Wait for dashboard to be ready
+    local max_wait=60
+    local waited=0
+    while [ $waited -lt $max_wait ]; do
+        if curl -sf "http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD}/" >/dev/null 2>&1; then
+            log "$(msg dash.ready ${AGENTTEAMS_PORT_DASHBOARD})"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    log "$(msg dash.timeout)"
+    ${DOCKER_CMD} logs "${DASHBOARD_CONTAINER}" 2>&1 | tail -20
+    return 1
 }
 
 # ============================================================

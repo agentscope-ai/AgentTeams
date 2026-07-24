@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 _MATRIX_USER_ID_RE = re.compile(
     r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
 )
+_MATRIX_LOCALPART_MENTION_RE = re.compile(r"@[a-zA-Z0-9._=+/\-]+")
 _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
     r"(?i)\b("
     r"let me|"
@@ -1695,8 +1696,8 @@ class MatrixChannel(BaseChannel):
         if current_room_id != leader_dm_room_id:
             return current_room_id
 
-        for mxid in _extract_matrix_user_ids(text):
-            localpart = mxid.removeprefix("@").split(":", 1)[0]
+        for mention in _MATRIX_LOCALPART_MENTION_RE.findall(text):
+            localpart = mention.removeprefix("@")
             if localpart.endswith("-lead"):
                 continue
             if not team_name or localpart.startswith(f"{team_name}-"):

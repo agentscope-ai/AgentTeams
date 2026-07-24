@@ -135,7 +135,7 @@ type CoordinationDeployRequest struct {
 	TeamWorkers        []TeamWorkerEntry
 	TeamAdminID        string
 	TeamCoordinatorIDs []string
-	LeaderSoul         string // from CR spec.leader.soul; used as seed if non-empty
+	LeaderSoul         string // from the referenced leader Worker's spec.soul; used as seed if non-empty
 }
 
 // TeamWorkerEntry carries worker name + room ID for coordination context rendering.
@@ -161,7 +161,7 @@ type InjectHeartbeatRequest struct {
 }
 
 // InjectChannelPolicyRequest describes a channel-policy override applied to a
-// member worker's openclaw.json. Used by TeamReconciler in the decoupled path
+// member worker's openclaw.json. Used by TeamReconciler in the Team-reference flow
 // to switch a Worker's Matrix allow-list from [manager, admin] (standalone
 // default produced by WorkerReconciler) to the role-aware Team allow-list.
 // Reset back to manager-mode on team deletion.
@@ -173,7 +173,7 @@ type InjectChannelPolicyRequest struct {
 
 // SyncTeamLeaderAssetsRequest describes the role-specific, non-credential
 // assets that must be overlaid when a standalone Worker is attached as a Team
-// Leader in the decoupled Team path.
+// Leader in the Team-reference Team path.
 type SyncTeamLeaderAssetsRequest struct {
 	WorkerName string
 	Runtime    string
@@ -187,7 +187,7 @@ type DeployerConfig struct {
 	OSS            oss.StorageClient
 	Executor       *executor.Shell
 	Packages       *executor.PackageResolver
-	Legacy         *LegacyCompat
+	ManagerConfig  *ManagerConfigStore
 	AgentFSDir     string // embedded: /root/agentteams-fs/agents
 	WorkerAgentDir string // source for builtin agent files
 	MatrixDomain   string
@@ -206,7 +206,7 @@ type Deployer struct {
 	oss               oss.StorageClient
 	executor          *executor.Shell
 	packages          *executor.PackageResolver
-	legacy            *LegacyCompat
+	managerConfig     *ManagerConfigStore
 	agentFSDir        string
 	workerAgentDir    string
 	matrixDomain      string
@@ -220,7 +220,7 @@ func NewDeployer(cfg DeployerConfig) *Deployer {
 		oss:               cfg.OSS,
 		executor:          cfg.Executor,
 		packages:          cfg.Packages,
-		legacy:            cfg.Legacy,
+		managerConfig:     cfg.ManagerConfig,
 		agentFSDir:        cfg.AgentFSDir,
 		workerAgentDir:    cfg.WorkerAgentDir,
 		matrixDomain:      cfg.MatrixDomain,
@@ -338,7 +338,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 
 	// Preserve user-customized plugin entries (e.g. memory-core dreaming
 	// schedule) from the existing openclaw.json in storage. This is not
-	// limited to IsUpdate: during legacy Team migration, Worker CR status is
+	// limited to IsUpdate: during managerConfig Team migration, Worker CR status is
 	// seeded before WorkerReconciler's first pass, and TeamReconciler may have
 	// already written a team-mode channel policy. Requiring IsUpdate would let
 	// that first standalone Worker pass clobber the Team overlay.
@@ -632,7 +632,7 @@ func (d *Deployer) InjectCoordinationContext(ctx context.Context, req Coordinati
 
 // renderAndPushSoulTemplate merges the team leader's SOUL.md template into OSS.
 // The rendered template is wrapped in markers; existing content (from package or
-// prior runs) is preserved outside the markers. Priority: CR spec.leader.soul > template.
+// prior runs) is preserved outside the markers. Priority: referenced leader Worker spec.soul > template.
 func (d *Deployer) renderAndPushSoulTemplate(ctx context.Context, agentPrefix string, req CoordinationDeployRequest) error {
 	soulKey := agentPrefix + "/SOUL.md"
 
@@ -716,7 +716,7 @@ func (d *Deployer) InjectChannelPolicy(ctx context.Context, req InjectChannelPol
 // SyncTeamLeaderAssets overlays the Team Leader built-in AGENTS.md section,
 // built-in skills, and seed-only top-level files onto an already-provisioned
 // Worker. It intentionally does not rewrite openclaw.json or credentials:
-// decoupled Teams do not own Worker lifecycle/config wholesale.
+// Team-reference Teams do not own Worker lifecycle/config wholesale.
 func (d *Deployer) SyncTeamLeaderAssets(ctx context.Context, req SyncTeamLeaderAssetsRequest) error {
 	if req.WorkerName == "" {
 		return nil
@@ -1057,14 +1057,14 @@ func parseNacosRemoteSource(raw string) (nacosAddr, namespace string, err error)
 
 // CleanupOSSData removes all agent data from OSS for a deleted worker.
 // CleanLegacyPasswordFiles removes credentials/matrix/password from OSS for
-// all listed agents. Called when switching from legacy password mode to
+// all listed agents. Called when switching from managerConfig password mode to
 // AppService mode to prevent stale password files from lingering.
 func (d *Deployer) CleanLegacyPasswordFiles(ctx context.Context, names []string) error {
 	logger := log.FromContext(ctx).WithName("password-cleanup")
 	for _, name := range names {
 		key := fmt.Sprintf("agents/%s/credentials/matrix/password", name)
 		if err := d.oss.DeleteObject(ctx, key); err != nil {
-			logger.Error(err, "failed to delete legacy password file (non-fatal)", "name", name)
+			logger.Error(err, "failed to delete managerConfig password file (non-fatal)", "name", name)
 		}
 	}
 	return nil
@@ -1143,10 +1143,10 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)
 	}
-	// Use LegacyCompat to write Manager config with mutex protection,
+	// Use ManagerConfigStore to write Manager config with mutex protection,
 	// merging groupAllowFrom to avoid overwriting team leader additions.
-	if d.legacy != nil && d.legacy.Enabled() {
-		if err := d.legacy.PutManagerConfig(configJSON); err != nil {
+	if d.managerConfig != nil && d.managerConfig.Enabled() {
+		if err := d.managerConfig.PutManagerConfig(configJSON); err != nil {
 			return fmt.Errorf("config push to storage failed: %w", err)
 		}
 	} else {
@@ -1254,8 +1254,8 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 	// Team leaders get their coordination context from TeamReconciler.InjectCoordinationContext
 	// which has the full context (room IDs, worker list). Skip here to avoid overwriting.
 	if role != "team_leader" {
-		if role == "standalone" && hasDecoupledTeamContext(content) {
-			logger.Info("AGENTS.md team coordination context preserved", "worker", workerName, "role", role, "reason", "worker is likely referenced by a decoupled Team")
+		if role == "standalone" && hasTeamContext(content) {
+			logger.Info("AGENTS.md team coordination context preserved", "worker", workerName, "role", role, "reason", "worker is likely referenced by a Team-reference Team")
 			if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(content)); err != nil {
 				return err
 			}
@@ -1288,7 +1288,7 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 	return nil
 }
 
-func hasDecoupledTeamContext(content string) bool {
+func hasTeamContext(content string) bool {
 	if !strings.Contains(content, "<!-- agentteams-team-context-start -->") {
 		return false
 	}
@@ -1369,7 +1369,7 @@ func (d *Deployer) builtinAgentDir(role, runtime string) string {
 // dreaming schedule) survive controller reconciles.
 //
 // It also preserves channels.matrix.groupAllowFrom and channels.matrix.dm.allowFrom
-// from the existing config, because TeamReconciler in the decoupled path
+// from the existing config, because TeamReconciler in the Team-reference flow
 // overrides these to [leader, admin] for team members. WorkerReconciler is
 // team-agnostic and would otherwise revert them to standalone [manager, admin]
 // on every reconcile, breaking team-scoped task delivery.

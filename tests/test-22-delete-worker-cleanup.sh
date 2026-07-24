@@ -214,14 +214,6 @@ else
     log_fail "MinIO YAML still present"
 fi
 
-# (e) workers-registry.json entry removed
-REGISTRY=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
-if echo "${REGISTRY}" | jq -e --arg w "${TEST_WORKER}" '.workers[$w] // empty' >/dev/null 2>&1; then
-    log_info "Worker still in workers-registry.json (registry cleanup is best-effort, see test-100 note)"
-else
-    log_pass "Worker removed from workers-registry.json"
-fi
-
 # ============================================================
 # Section 5: Recreate same name — must not be blocked by stale state
 # ============================================================

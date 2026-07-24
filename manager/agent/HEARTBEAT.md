@@ -167,7 +167,7 @@ If the output is `available`, proceed with the following steps:
    ```bash
    bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh --action check-idle
    ```
-   For each Worker that was auto-stopped, look up the Worker's `room_id` and Matrix id from `workers-registry.json` and **send** using the **message** tool with `channel=matrix`, `target=room:<room_id>`, and body (no @mention required unless you need to address someone specific):
+   For each Worker that was auto-stopped, run `agt get workers <name> -o json` to get its `roomID` and `matrixUserID`, then **send** using the **message** tool with `channel=matrix`, `target=room:<roomID>`, and body (no @mention required unless you need to address someone specific):
    ```
    Worker <name> container has been automatically paused due to idle timeout. It will be automatically resumed when a task is assigned.
    ```

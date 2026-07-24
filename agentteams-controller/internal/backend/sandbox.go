@@ -726,13 +726,12 @@ func (s *SandboxBackend) workerResultFromSandboxStatus(name string, status sandb
 		}
 	}
 	return &WorkerResult{
-		Name:            name,
-		Backend:         "sandbox",
-		DeploymentMode:  DeployCloud,
-		Status:          workerStatus,
-		Message:         message,
-		RawStatus:       status.Phase,
-		AppliedSpecHash: status.AppliedSpecHash,
+		Name:           name,
+		Backend:        "sandbox",
+		DeploymentMode: DeployCloud,
+		Status:         workerStatus,
+		Message:        message,
+		RawStatus:      status.Phase,
 	}, nil
 }
 

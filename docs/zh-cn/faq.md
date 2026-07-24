@@ -68,7 +68,7 @@ AGENTTEAMS_VERSION=v1.1.0 bash <(curl -sSL https://raw.githubusercontent.com/age
 |------|-------------------|-------------------|
 | 基础设施（Higress、Tuwunel、MinIO、Element Web） | 打包在 `agentteams-manager` 内 | 运行在 `agentteams-controller` 容器中（使用 `agentteams-embedded` 镜像） |
 | Manager Agent | 在 `agentteams-manager` 内 | 独立的 `agentteams-manager` 容器（轻量级，仅 Agent） |
-| Worker 管理 | Shell 脚本（`create-worker.sh`）+ `workers-registry.json` | 声明式 CRD，通过 `agt` CLI（`agt create worker`、`agt apply`） |
+| Worker 管理 | 命令式 Shell 脚本和本地 JSON 状态 | 声明式 CRD，通过 `agt` CLI（`agt create worker`、`agt apply`） |
 | Worker 运行时 | 仅 OpenClaw | OpenClaw、**QwenPaw**（Python；旧称 **CoPaw**）或 Hermes |
 
 **主要优势：**

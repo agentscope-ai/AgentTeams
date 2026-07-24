@@ -60,13 +60,12 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 
 	switch result.Status {
 	case backend.StatusRunning, backend.StatusStarting, backend.StatusReady:
-		if !managerRuntimeStale(result, desiredHash, m.Status.SpecHash, specChanged, false) {
+		if !managerRuntimeStale(m.Status.SpecHash, specChanged, false) {
 			m.Status.SpecHash = desiredHash
 			return reconcile.Result{}, nil
 		}
 		logger.Info("manager pod-spec hash drift, recreating container",
 			"currentSpecHash", m.Status.SpecHash,
-			"legacyAppliedSpecHash", result.AppliedSpecHash,
 			"desiredSpecHash", desiredHash)
 		if err := wb.Delete(ctx, containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
@@ -74,7 +73,7 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		return r.createManagerContainer(ctx, s, wb)
 
 	case backend.StatusStopped:
-		stale := managerRuntimeStale(result, desiredHash, m.Status.SpecHash, specChanged, true)
+		stale := managerRuntimeStale(m.Status.SpecHash, specChanged, true)
 		if !stale {
 			switch wb.Name() {
 			case "docker", "sandbox":
@@ -87,7 +86,6 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		}
 		logger.Info("manager stopped runtime is stale or cannot resume, recreating",
 			"currentSpecHash", m.Status.SpecHash,
-			"legacyAppliedSpecHash", result.AppliedSpecHash,
 			"desiredSpecHash", desiredHash,
 			"backend", wb.Name())
 		if err := wb.Delete(ctx, containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
@@ -266,12 +264,9 @@ func managerSpecChanged(m *v1beta1.Manager, desiredHash string) bool {
 	return m.Status.ObservedGeneration > 0 && m.Generation != m.Status.ObservedGeneration
 }
 
-func managerRuntimeStale(result *backend.WorkerResult, desiredHash, currentHash string, specChanged bool, missingHashMeansStale bool) bool {
+func managerRuntimeStale(currentHash string, specChanged bool, missingHashMeansStale bool) bool {
 	if currentHash != "" {
 		return specChanged
-	}
-	if result != nil && result.AppliedSpecHash != "" {
-		return result.AppliedSpecHash != desiredHash
 	}
 	return specChanged || missingHashMeansStale
 }

@@ -48,6 +48,15 @@ type WorkerProvisioner interface {
 	ArchiveTeamRooms(ctx context.Context, req TeamRoomArchiveRequest) error
 	DeleteTeamRoomAliases(ctx context.Context, teamName, leaderName string) error
 	DeleteWorkerRoomAlias(ctx context.Context, workerName string) error
+	// InviteToRoom invites userID to roomID using the admin token.
+	// Idempotent: returns nil when the user is already joined/invited.
+	InviteToRoom(ctx context.Context, roomID, userID string) error
+	// KickFromRoom removes userID from roomID using the admin token.
+	// Idempotent: returns nil when the user is not a member.
+	KickFromRoom(ctx context.Context, roomID, userID, reason string) error
+	// ForceLeaveRoom removes a user whose room power level prevents a normal
+	// admin kick.
+	ForceLeaveRoom(ctx context.Context, userID, roomID string) error
 	MatrixAppServiceEnabled() bool
 }
 

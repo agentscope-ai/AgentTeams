@@ -440,7 +440,7 @@ Runtime pairings:
 
 7. **Manager runtime overlays.** `manager/agent/copaw-manager-agent/AGENTS.md` and `HEARTBEAT.md` are overlaid on top of `manager/agent/` at container build time (via `upgrade-builtins.sh`) when runtime=copaw. Changes to the shared versions only take effect for OpenClaw until you mirror them into `copaw-manager-agent/`. `SOUL.md` and `TOOLS.md` are shared across both runtimes — **do not fork them**.
 
-8. **Team Leader runs inside the CoPaw container but loads OpenClaw-style builtins.** `LeaderSpec` has no `runtime` field; `agentteams-controller` *forces* every Team Leader Worker CR onto `runtime=copaw`, so the Leader pod starts from `agentteams/copaw-worker` and goes through the full `bridge` / `propagate` chain like any other CoPaw Worker. But `deployer.builtinAgentDir(role="team_leader", runtime=...)` ignores `runtime` and always returns `manager/agent/team-leader-agent/` (OpenClaw-shaped `AGENTS.md` / `SOUL.md.tmpl` / skills). So the Leader is "Python CoPaw process reading OpenClaw-style agent content." Consequences when editing:
+8. **A Team Leader is an ordinary Worker CR selected by Team membership.** Its runtime comes from that Worker CR's `spec.runtime`; the Team controller overlays `manager/agent/team-leader-agent/` role assets without changing the Worker's runtime configuration. Consequences when editing:
    - Keep `manager/agent/team-leader-agent/**` runtime-agnostic — no Node-only paths, no OpenClaw-only tool invocations, because CoPaw reads it.
    - Python-specific guidance and paths in `manager/agent/copaw-worker-agent/**` do **not** apply to Leaders. Leaders do not pick up that directory.
    - `manager/agent/copaw-manager-agent/**` is the Manager's CoPaw overlay, not the Leader's. Do not mix.

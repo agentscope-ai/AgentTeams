@@ -329,7 +329,7 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 	isTeamWorker := req.TeamLeaderName != ""
 
 	// Step 1: Load or generate credentials
-	creds, err := p.loadWorkerCredentials(ctx, credentialName, workerName)
+	creds, err := p.loadWorkerCredentials(ctx, credentialName)
 	if err != nil {
 		return nil, fmt.Errorf("load credentials: %w", err)
 	}
@@ -646,7 +646,7 @@ func (p *Provisioner) RefreshWorkerCredentials(ctx context.Context, credentialNa
 	if credentialName == "" {
 		credentialName = workerName
 	}
-	creds, err := p.loadWorkerCredentials(ctx, credentialName, workerName)
+	creds, err := p.loadWorkerCredentials(ctx, credentialName)
 	if err != nil || creds == nil {
 		return nil, fmt.Errorf("credentials not found for %s", credentialName)
 	}
@@ -681,20 +681,8 @@ func (p *Provisioner) RefreshWorkerCredentials(ctx context.Context, credentialNa
 	}, nil
 }
 
-func (p *Provisioner) loadWorkerCredentials(ctx context.Context, credentialName, workerName string) (*WorkerCredentials, error) {
-	creds, err := p.creds.Load(ctx, credentialName)
-	if err != nil || creds != nil || credentialName == workerName {
-		return creds, err
-	}
-
-	legacyCreds, err := p.creds.Load(ctx, workerName)
-	if err != nil || legacyCreds == nil {
-		return legacyCreds, err
-	}
-	if err := p.creds.Save(ctx, credentialName, legacyCreds); err != nil {
-		return nil, fmt.Errorf("migrate legacy worker credentials: %w", err)
-	}
-	return legacyCreds, nil
+func (p *Provisioner) loadWorkerCredentials(ctx context.Context, credentialName string) (*WorkerCredentials, error) {
+	return p.creds.Load(ctx, credentialName)
 }
 
 // RefreshManagerCredentials loads persisted credentials for the Manager and

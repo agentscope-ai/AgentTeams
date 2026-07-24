@@ -51,7 +51,7 @@ team:
   name: demo-team # master current: controller derives this from Team.spec.teamName or Team.metadata.name, but does not inject it to worker
   storageId: demo-team # master current: no independent field
   teamRoomId: "!team:matrix.local" # master current: stored in Team.status.teamRoomID, but not injected to worker
-  leaderName: leader # master current: controller derives this from Team.spec.leader.name, but does not inject it to ordinary workers
+  leaderName: leader # controller derives this from the Team workerMembers entry whose role is team_leader
   leaderRuntimeName: leader # master current: controller can derive this from leader.workerName or leader.name, but does not inject it to worker
   leaderDmRoomId: "!dm:matrix.local" # master current: stored in Team.status.leaderDMRoomID, but not injected to worker
   admin:

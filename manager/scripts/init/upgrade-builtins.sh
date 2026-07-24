@@ -5,14 +5,13 @@
 # Strategy:
 #   - .md files: merge (replace builtin section, preserve user content below end marker)
 #   - scripts/ and references/ dirs: always overwrite from image
-#   - Worker builtins: sync directly to each registered worker's MinIO workspace
+#   - Worker builtins: publish templates for controller-managed Worker workspaces
 #   - Workers no longer need to pull from shared/builtins/worker/ on startup
 
 set -e
 
 AGENT_SRC="/opt/agentteams/agent"
 WORKSPACE="/root/manager-workspace"
-REGISTRY="${WORKSPACE}/workers-registry.json"
 IMAGE_VERSION=$(cat "${AGENT_SRC}/.builtin-version" 2>/dev/null || echo "unknown")
 MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
 
@@ -99,14 +98,6 @@ for skill_dir in "${AGENT_SRC}/worker-skills"/*/; do
     fi
 done
 
-# Sync workers-registry.json template if not yet present (never overwrite user data)
-if [ ! -f "${WORKSPACE}/workers-registry.json" ]; then
-    if [ -f "${AGENT_SRC}/workers-registry.json" ]; then
-        cp "${AGENT_SRC}/workers-registry.json" "${WORKSPACE}/workers-registry.json"
-        log "  Initialized workers-registry.json"
-    fi
-fi
-
 # Sync state.json template if not yet present (never overwrite user data)
 if [ ! -f "${WORKSPACE}/state.json" ]; then
     if [ -f "${AGENT_SRC}/state.json" ]; then
@@ -156,19 +147,16 @@ else
 fi
 
 # ============================================================
-# Step 4: Sync builtins to all registered workers' MinIO workspaces
+# Step 4: Sync builtins to all Worker CR workspaces
 # This ensures workers get builtin updates directly in their workspace,
 # eliminating the need for workers to pull from shared/builtins/worker/ on startup.
 # ============================================================
-log "Step 4: Syncing builtins to registered workers' workspaces..."
+log "Step 4: Syncing builtins to Worker CR workspaces..."
 
 if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /dev/null 2>&1; then
     ensure_mc_credentials 2>/dev/null || true
-    # Get list of registered workers
-    REGISTERED_WORKERS=""
-    if [ -f "${REGISTRY}" ]; then
-        REGISTERED_WORKERS=$(jq -r '.workers | keys[]' "${REGISTRY}" 2>/dev/null || true)
-    fi
+    WORKERS_JSON=$(agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
+    REGISTERED_WORKERS=$(printf '%s' "${WORKERS_JSON}" | jq -r '.workers[]?.name')
 
     if [ -n "${REGISTERED_WORKERS}" ]; then
         for _worker_name in ${REGISTERED_WORKERS}; do
@@ -176,8 +164,8 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /
             log "  Syncing builtins to worker: ${_worker_name}"
 
             # Determine agent source based on role and runtime
-            _worker_role=$(jq -r --arg w "${_worker_name}" '.workers[$w].role // "worker"' "${REGISTRY}" 2>/dev/null || echo "worker")
-            _worker_runtime=$(jq -r --arg w "${_worker_name}" '.workers[$w].runtime // "openclaw"' "${REGISTRY}" 2>/dev/null || echo "openclaw")
+            _worker_role=$(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .role // "worker"')
+            _worker_runtime=$(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .runtime // "openclaw"')
             if [ "${_worker_role}" = "team_leader" ] && [ -d "${AGENT_SRC}/team-leader-agent" ]; then
                 _worker_agent_src="${AGENT_SRC}/team-leader-agent"
             elif [ "${_worker_runtime}" = "copaw" ]; then
@@ -214,9 +202,9 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /
                 done
             fi
 
-            # Push assigned worker-skills (on-demand skills from registry)
-            for _skill_name in $(jq -r --arg w "${_worker_name}" \
-                '.workers[$w].skills // [] | .[]' "${REGISTRY}" 2>/dev/null); do
+            # Push assigned on-demand skills from Worker.spec.skills.
+            for _skill_name in $(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" \
+                '.workers[] | select(.name == $w) | .skills[]?'); do
                 [ -z "${_skill_name}" ] && continue
 
                 _skill_src="${WORKSPACE}/worker-skills/${_skill_name}"
@@ -245,8 +233,9 @@ log "Step 5: Installed version: ${IMAGE_VERSION}"
 # ============================================================
 # Step 6: Mark that workers need builtin update notification
 # ============================================================
-# Check if any workers are registered; if so, mark for post-startup notification
-if [ -f "${REGISTRY}" ] && jq -e '.workers | length > 0' "${REGISTRY}" > /dev/null 2>&1; then
+# Check the authoritative Worker API; if any Workers exist, mark for post-startup notification.
+WORKERS_JSON=$(agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
+if printf '%s' "${WORKERS_JSON}" | jq -e '.workers | length > 0' > /dev/null 2>&1; then
     touch "${WORKSPACE}/.upgrade-pending-worker-notify"
     log "Step 6: Marked for worker skill notification (workers registered)"
 else

@@ -7,24 +7,23 @@ description: Use when admin requests creating a team, importing a team, managing
 
 A Team consists of 1 Team Leader + N Workers. The Team Leader is a special Worker with management skills that handles task decomposition and assignment within the team. Manager delegates tasks to Team Leaders, not directly to team workers.
 
-## Quick Create (2 steps)
+## Quick Create
 
 ```bash
-# 1. Create team via agt CLI
+# 1. Create each Worker CR with worker-management, then reference them
 agt create team \
   --name <TEAM_NAME> \
   --leader-name <LEADER_NAME> \
-  --leader-model <MODEL> \
   --workers <w1>,<w2>
 
 # 2. @mention the Leader in Leader Room to assign task
 ```
 
-After creation, the Leader is online in the Leader Room (Manager + Global Admin + Leader). @mention the Leader there to delegate the task — the Leader will decompose it and coordinate with team workers in the Team Room.
+The Team command fails if a referenced Worker does not exist. Configure model, runtime, image, resources, identity, skills, MCP, channel policy, and lifecycle on each Worker CR. After Team reconciliation, @mention the Leader in the Leader Room; the Leader will coordinate referenced workers in the Team Room.
 
 > Full workflow: read `references/create-team.md`
 
-If admin asks for CPU or memory requests/limits, use a YAML Team manifest with `leader.resources` and/or `workers[].resources`, then apply it with `agt apply -f`. The simple `agt create team` / `agt update team` flags do not expose resource tuning. Changing member resources recreates the affected member container, so confirm the team is not mid-task.
+If admin asks for CPU or memory requests/limits, update `Worker.spec.resources`. Changing resources recreates that Worker's container, so confirm it is not mid-task.
 
 ## Gotchas
 
@@ -36,7 +35,7 @@ If admin asks for CPU or memory requests/limits, use a YAML Team manifest with `
 - **Leader DM is Team Admin ↔ Leader** — for team-level management
 - **Team Admin defaults to Global Admin** — if `--team-admin` not specified
 - **Delegated tasks use `--delegated-to-team`** — so heartbeat knows to check with Leader, not workers
-- **Controller forces `runtime: copaw` for all team members** — omit runtime from team creation
+- **Team never owns Worker runtime configuration or lifecycle** — update the referenced Worker CR directly
 
 ## Operation Reference
 
@@ -46,4 +45,4 @@ If admin asks for CPU or memory requests/limits, use a YAML Team manifest with `
 | Understand team lifecycle | `references/team-lifecycle.md` | — |
 | Delegate task to team | `references/team-task-delegation.md` | — |
 | Add/remove worker from team | `references/team-lifecycle.md` | `agt get team` |
-| Delete a team's containers | `references/team-lifecycle.md` | `scripts/lifecycle-worker.sh` (per worker) |
+| Stop/delete a member Worker | `references/team-lifecycle.md` | `scripts/lifecycle-worker.sh` (per worker) |

@@ -3325,33 +3325,6 @@ CREDEOF
             log "Extracted Manager Matrix password${_mgr_room:+ and room ID}"
         fi
 
-        # Worker passwords and room IDs from workers-registry.json
-        if [ -f "${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json" ]; then
-            _worker_names=$(python3 -c "import json; d=json.load(open('${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json')); print(' '.join(d.get('workers',{}).keys()))" 2>/dev/null || true)
-            for _wname in ${_worker_names}; do
-                _wpw=""
-                if ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentteams-manager$'; then
-                    _wpw=$(${DOCKER_CMD} exec agentteams-manager cat "/root/agentteams-fs/agents/${_wname}/credentials/matrix/password" 2>/dev/null || true)
-                fi
-                if [ -z "${_wpw}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${AGENTTEAMS_DATA_DIR}$"; then
-                    _wpw=$(agentteams_read_worker_creds_value_from_volume "${AGENTTEAMS_DATA_DIR}" "${_wname}" WORKER_PASSWORD)
-                fi
-                _wroom=$(python3 -c "import json; d=json.load(open('${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json')); print(d.get('workers',{}).get('${_wname}',{}).get('room_id',''))" 2>/dev/null || true)
-                if [ -z "${_wroom}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${AGENTTEAMS_DATA_DIR}$"; then
-                    _wroom=$(agentteams_read_worker_creds_value_from_volume "${AGENTTEAMS_DATA_DIR}" "${_wname}" WORKER_ROOM_ID)
-                fi
-                if [ -n "${_wpw}" ]; then
-                    cat > "${_creds_tmp}/${_wname}.env" <<CREDEOF
-WORKER_PASSWORD="${_wpw}"
-WORKER_MINIO_PASSWORD="$(openssl rand -hex 24)"
-WORKER_GATEWAY_KEY="$(openssl rand -hex 32)"
-WORKER_ROOM_ID="${_wroom}"
-CREDEOF
-                    log "Extracted ${_wname} Matrix password${_wroom:+ and room ID}"
-                fi
-            done
-        fi
-
         if [ "${_mgr_creds_tempstart}" = "1" ]; then
             log "Stopping agentteams-manager after credential extraction (upgrade will recreate containers)..."
             ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true

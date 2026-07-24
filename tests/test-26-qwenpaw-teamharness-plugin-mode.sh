@@ -578,7 +578,7 @@ _create_qwenpaw_worker_cr() {
     _k8s_create "workers" "${body}"
 }
 
-_create_decoupled_team_cr() {
+_create_team_cr() {
     local labels
     local body
     labels="$(_controller_labels_json)"
@@ -704,11 +704,11 @@ else
     log_fail "Worker Worker CR create failed: ${CREATE_WORKER_OUTPUT}"
 fi
 
-CREATE_TEAM_OUTPUT=$(_create_decoupled_team_cr 2>&1 || true)
+CREATE_TEAM_OUTPUT=$(_create_team_cr 2>&1 || true)
 if echo "${CREATE_TEAM_OUTPUT}" | jq -e --arg name "${TEST_TEAM}" '.metadata.name == $name and (.spec.workerMembers | length == 2)' >/dev/null 2>&1; then
-    log_pass "Decoupled Team CR created through Kubernetes API"
+    log_pass "Team CR with Worker references created through Kubernetes API"
 else
-    log_fail "Decoupled Team CR create failed: ${CREATE_TEAM_OUTPUT}"
+    log_fail "Team CR with Worker references create failed: ${CREATE_TEAM_OUTPUT}"
 fi
 
 TEAM_JSON=$(_wait_k8s_jq "teams" "${TEST_TEAM}" '.status.phase == "Active"' 300 2>/dev/null || echo "{}")
@@ -837,8 +837,8 @@ _assert_runtime_yaml_has_no_secret_values "${LEADER_RUNTIME_YAML}${WORKER_RUNTIM
 
 LEADER_ENV="$(_container_env "${LEADER_CONTAINER}")"
 WORKER_ENV="$(_container_env "${WORKER_CONTAINER}")"
-assert_eq "standalone" "$(_env_value "${LEADER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Decoupled leader Worker daemon role remains standalone"
-assert_eq "standalone" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Decoupled worker daemon role remains standalone"
+assert_eq "standalone" "$(_env_value "${LEADER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Leader Worker runtime role remains standalone"
+assert_eq "standalone" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Member Worker runtime role remains standalone"
 
 # ============================================================
 # Section 4: QwenPaw plugin-mode install and TeamHarness assets

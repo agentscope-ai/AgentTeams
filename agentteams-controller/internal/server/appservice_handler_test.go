@@ -238,7 +238,7 @@ func TestAppserviceWakesTeamWorkerFromDMRoom(t *testing.T) {
 	}
 }
 
-func TestAppserviceWakesDecoupledTeamWorkerFromTeamRoom(t *testing.T) {
+func TestAppserviceWakesTeamReferencesTeamWorkerFromTeamRoom(t *testing.T) {
 	scheme := newAppserviceTestScheme(t)
 	sleeping := "Sleeping"
 	worker := &v1beta1.Worker{
@@ -280,9 +280,9 @@ func TestAppserviceWakesDecoupledTeamWorkerFromTeamRoom(t *testing.T) {
 	}
 
 	body := txnBody(t, []matrixEvent{
-		mentionEvent("!team-room:example.com", "$ev-decoupled", "@human:example.com", []string{"@dev:example.com"}),
+		mentionEvent("!team-room:example.com", "$ev-team-reference", "@human:example.com", []string{"@dev:example.com"}),
 	})
-	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-decoupled", body)
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-team-reference", body)
 	req.Header.Set("Authorization", "Bearer test-hs-token")
 	rec := httptest.NewRecorder()
 

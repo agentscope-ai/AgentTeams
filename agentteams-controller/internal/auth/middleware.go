@@ -117,7 +117,7 @@ func (m *Middleware) RequireAuthz(action Action, kind string, nameFn ResourceNam
 	}
 }
 
-// resolveResourceTeam looks up the target resource's team annotation.
+// resolveResourceTeam resolves Worker membership from Team.spec.workerMembers.
 func (m *Middleware) resolveResourceTeam(ctx context.Context, kind, name string) string {
 	if name == "" || m.k8s == nil {
 		return ""
@@ -126,12 +126,18 @@ func (m *Middleware) resolveResourceTeam(ctx context.Context, kind, name string)
 		return ""
 	}
 
-	var worker v1beta1.Worker
-	key := client.ObjectKey{Name: name, Namespace: m.namespace}
-	if err := m.k8s.Get(ctx, key, &worker); err != nil {
+	var teams v1beta1.TeamList
+	if err := m.k8s.List(ctx, &teams, client.InNamespace(m.namespace)); err != nil {
 		return ""
 	}
-	return worker.Annotations["agentteams.io/team"]
+	for i := range teams.Items {
+		for _, member := range teams.Items[i].Spec.WorkerMembers {
+			if member.Name == name {
+				return teams.Items[i].Name
+			}
+		}
+	}
+	return ""
 }
 
 func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bool) {

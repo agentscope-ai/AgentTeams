@@ -25,13 +25,11 @@ import (
 //
 // Unlike Worker/Manager, a Human has no backend container and no gateway
 // consumer: the reconciler's entire job is to keep a Matrix user plus a
-// set of room memberships in sync with Spec.AccessibleWorkers/Teams and
-// (in embedded mode) with humans-registry.json.
+// set of room memberships in sync with Spec.AccessibleWorkers/Teams.
 type HumanReconciler struct {
 	client.Client
 
 	Provisioner service.HumanProvisioner
-	Legacy      *service.LegacyCompat // nil in incluster mode
 }
 
 func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -104,9 +102,9 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 }
 
 // reconcileHumanNormal runs the declarative convergence loop. Phases in
-// order: infrastructure (Matrix account), rooms (membership), legacy
-// (humans-registry.json). Only infrastructure is fatal; the other two
-// phases log errors but never return them, so a transient Matrix hiccup
+// order: infrastructure (Matrix account), then rooms (membership). Only
+// infrastructure is fatal; room reconciliation logs errors but never returns
+// them, so a transient Matrix hiccup
 // on room invite/kick does not block the next reconcile.
 func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScope) (reconcile.Result, error) {
 	if err := r.resolveHumanScope(s); err != nil {
@@ -123,7 +121,6 @@ func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScop
 		return reconcile.Result{RequeueAfter: reconcileInterval}, err
 	}
 	r.reconcileHumanRooms(ctx, s)
-	r.reconcileHumanLegacy(ctx, s)
 
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
 }

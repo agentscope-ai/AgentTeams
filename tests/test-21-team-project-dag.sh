@@ -19,6 +19,7 @@ TEST_TEAM="dag-team-$$"
 TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_W2="${TEST_TEAM}-qa"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ============================================================
@@ -78,6 +79,18 @@ log_pass "SOUL.md files prepared for all team members"
 # Section 2: Create Team (via agt CLI → controller REST API)
 # ============================================================
 log_section "Create Team"
+
+for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
+    CREATE_WORKER_OUTPUT=$(exec_in_agent agt create worker \
+        --name "${w}" \
+        --runtime "${TEST_WORKER_RUNTIME}" \
+        --no-wait 2>&1)
+    if echo "${CREATE_WORKER_OUTPUT}" | grep -q "worker/${w} create accepted"; then
+        log_pass "Worker ${w} creation accepted"
+    else
+        log_fail "Worker ${w} creation failed: ${CREATE_WORKER_OUTPUT}"
+    fi
+done
 
 CREATE_OUTPUT=$(exec_in_agent agt create team \
     --name "${TEST_TEAM}" \

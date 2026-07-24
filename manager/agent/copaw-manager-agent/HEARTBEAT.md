@@ -224,7 +224,7 @@ If the output is `available`, proceed with the following steps:
    ```bash
    bash /opt/agentteams/agent/skills/worker-management/scripts/lifecycle-worker.sh --action check-idle
    ```
-   For each Worker that was auto-stopped, look up the Worker's `room_id` from `workers-registry.json` and **use `copaw channels send` via shell** to log:
+   For each Worker that was auto-stopped, run `agt get workers <name> -o json` to get its `roomID` and **use `copaw channels send` via shell** to log:
    ```bash
    copaw channels send \
      --agent-id default \

@@ -117,30 +117,22 @@ spec:
   description: "前端开发团队"
   peerMentions: true                  # 默认 true：团队 Worker 可在群 Room 互相 @mention
   # channelPolicy: …                  # 可选：团队级通信策略覆盖（字段同 Worker）
-  # admin:                             # 可选：团队专属人类管理员（humans-registry 中的 name）
+  # admin:                             # 可选：作为团队管理员的 Human 资源
   #   name: pm-zhang
   #   matrixUserId: "@pm:domain"
-  leader:
-    name: frontend-lead
-    model: claude-sonnet-4-6
-    heartbeat:
-      enabled: true
-      every: 10m
-    workerIdleTimeout: 720m
-    # state: Running                  # Leader 期望生命周期（可选）
-  workers:
+  heartbeatEvery: 10m
+  workerMembers:
+    - name: frontend-lead
+      role: team_leader
     - name: alice
-      model: claude-sonnet-4-6
-      skills: [github-operations]
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
+      role: worker
     - name: bob
-      model: qwen3.5-plus
-      runtime: copaw
-      skills: [github-operations]
-      # expose / channelPolicy / state 等与独立 Worker 对齐的字段亦可出现在此
+      role: worker
 ```
+
+`frontend-lead`、`alice`、`bob` 都是已存在的 Worker CR。它们的模型、
+runtime、skills、MCP、镜像、资源、通信策略和生命周期均保留在
+`Worker.spec`；Team 只持有成员关系与协作上下文。
 
 Team 创建时，Controller 自动编排以下拓扑（若配置了 `spec.admin`，则「Admin」指 **Team Admin**；否则为全局 Admin）：
 

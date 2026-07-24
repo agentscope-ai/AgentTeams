@@ -6,7 +6,7 @@
 
 ```bash
 # List all teams
-bash /opt/agentteams/agent/skills/team-management/scripts/manage-teams-registry.sh --action list
+agt get teams
 ```
 
 If the task matches a Team's domain/expertise, delegate to the Team Leader instead of an individual Worker. See `team-management/references/team-task-delegation.md`.

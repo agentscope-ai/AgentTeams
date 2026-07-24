@@ -439,7 +439,7 @@ func TestSandboxWorkerRoutesToUnifiedSandboxClaim(t *testing.T) {
 			t.Fatalf("dynamic mount attributes=%v, want credentialProviderName=%s", mount.Attributes, wantCredProviders[mount.MountPath])
 		}
 		if _, ok := mount.Attributes["credProviderName"]; ok {
-			t.Fatalf("legacy credProviderName should be omitted: %v", mount.Attributes)
+			t.Fatalf("managerConfig credProviderName should be omitted: %v", mount.Attributes)
 		}
 		switch mount.MountPath {
 		case "/var/run/secrets/agentteams", "/mnt/agentteams/env":
@@ -781,10 +781,10 @@ func TestSandboxWorkerIgnoresLegacyWorkerDepsMountEntries(t *testing.T) {
 	}
 	for _, mount := range req.WorkersDeps.DynamicVolumeMounts {
 		if mount.PVName != backend.BuiltinSandboxInstanceName {
-			t.Fatalf("legacy mount was not normalized to instance PV: %+v", mount)
+			t.Fatalf("managerConfig mount was not normalized to instance PV: %+v", mount)
 		}
 		if strings.HasPrefix(mount.SubPath, "instances/alice/") {
-			t.Fatalf("legacy subPath should be ignored, got %+v", mount)
+			t.Fatalf("managerConfig subPath should be ignored, got %+v", mount)
 		}
 	}
 	depsReq := rig.deployer.Calls.PrepareWorkerDeps[0]
@@ -794,7 +794,7 @@ func TestSandboxWorkerIgnoresLegacyWorkerDepsMountEntries(t *testing.T) {
 		t.Fatalf("PrepareWorkerDeps subPaths=%+v", depsReq)
 	}
 	if _, err := rig.r.DynamicClient.Resource(workerDepsPVGVR).Get(context.Background(), "agentteams-prod-001", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("legacy per-worker PV should not be created, err=%v", err)
+		t.Fatalf("managerConfig per-worker PV should not be created, err=%v", err)
 	}
 }
 
@@ -851,7 +851,7 @@ func TestSandboxWorkersShareInstancePV(t *testing.T) {
 				t.Fatalf("worker %s mount attributes=%v, want %s", req.Name, mount.Attributes, wantCredProvider)
 			}
 			if _, ok := mount.Attributes["credProviderName"]; ok {
-				t.Fatalf("worker %s legacy credProviderName should be omitted: %v", req.Name, mount.Attributes)
+				t.Fatalf("worker %s managerConfig credProviderName should be omitted: %v", req.Name, mount.Attributes)
 			}
 			if !strings.HasPrefix(mount.SubPath, "workers-deps/"+runtimeName+"/") {
 				t.Fatalf("worker %s mount subPath=%q, want EffectiveWorkerName-specific subPath", req.Name, mount.SubPath)
@@ -1320,7 +1320,7 @@ func TestHashAppliedWorkerSpec_WorkerDepsLayoutVersionAffectsSandboxOrMounts(t *
 		Image: "test:v1",
 	}
 	if got, want := hashAppliedWorkerSpec(base), legacyHashAppliedWorkerSpecForTest(base); got != want {
-		t.Fatalf("hash without mounts changed: got %q, want legacy direct spec hash %q", got, want)
+		t.Fatalf("hash without mounts changed: got %q, want managerConfig direct spec hash %q", got, want)
 	}
 	sandboxRuntime := v1beta1.BackendRuntimeSandbox
 	sandbox := base
@@ -1328,7 +1328,7 @@ func TestHashAppliedWorkerSpec_WorkerDepsLayoutVersionAffectsSandboxOrMounts(t *
 	if got, want := workerDepsLayoutHashVersion(sandbox), workerDepsLayoutVersion; got != want {
 		t.Fatalf("sandbox worker deps layout version=%q, want %q", got, want)
 	}
-	if got, legacy := hashAppliedWorkerSpec(sandbox), legacyHashAppliedWorkerSpecForTest(sandbox); got == legacy {
+	if got, managerConfig := hashAppliedWorkerSpec(sandbox), legacyHashAppliedWorkerSpecForTest(sandbox); got == managerConfig {
 		t.Fatalf("sandbox hash should include worker deps layout version, got unchanged %q", got)
 	}
 	withMount := base
@@ -1337,7 +1337,7 @@ func TestHashAppliedWorkerSpec_WorkerDepsLayoutVersionAffectsSandboxOrMounts(t *
 	if got, want := workerDepsLayoutHashVersion(withMount), workerDepsLayoutVersion; got != want {
 		t.Fatalf("worker deps layout version=%q, want %q", got, want)
 	}
-	if got, legacy := hashAppliedWorkerSpec(withMount), legacyHashAppliedWorkerSpecForTest(withMount); got == legacy {
+	if got, managerConfig := hashAppliedWorkerSpec(withMount), legacyHashAppliedWorkerSpecForTest(withMount); got == managerConfig {
 		t.Fatalf("hash with mounts should include worker deps layout version, got unchanged %q", got)
 	}
 }
@@ -1510,93 +1510,35 @@ func TestHashAppliedWorkerSpecForRuntimeQwenPawExcludesHotConfig(t *testing.T) {
 
 func workerBoolPtr(v bool) *bool { return &v }
 
-// TestWorkerMemberContext_SpecChangedGate locks in the brand-new-worker
-// guard. The "brand new" case is the load-bearing one: a second reconcile
-// queued by the finalizer write can read a stale informer cache and see
-// the just-created container as Running while ObservedGeneration is still
-// 0. Without the gate, SpecChanged=true on that intervening pass can delete
-// the container right after first create.
+// TestWorkerMemberContext_SpecChangedGate locks in status.specHash as the sole
+// applied-runtime comparison. A brand-new Worker has no applied hash and must
+// follow the create path rather than being treated as an update.
 func TestWorkerMemberContext_SpecChangedGate(t *testing.T) {
 	r := &WorkerReconciler{ControllerName: "ctl-x"}
+	baseline := &v1beta1.Worker{}
+	baseline.Name = "solo"
+	desiredHash := r.workerMemberContext(baseline).AppliedSpecHash
 
 	cases := []struct {
-		name     string
-		gen      int64
-		observed int64
-		want     bool
+		name       string
+		statusHash string
+		want       bool
 	}{
-		// Brand-new Worker: never reconciled. Must NOT report SpecChanged
-		// even though Generation > ObservedGeneration — that delta is the
-		// "we have never observed this resource" signal, not a user edit.
-		{"brand_new", 1, 0, false},
-		// First reconcile committed: no edit pending.
-		{"observed_no_edit", 1, 1, false},
-		// User edit after first reconcile: spec genuinely diverged.
-		{"observed_with_edit", 2, 1, true},
-		// Periodic resync with no spec change.
-		{"resync_no_edit", 5, 5, false},
+		{"brand_new", "", false},
+		{"applied_spec_matches", desiredHash, false},
+		{"applied_spec_differs", "stale-spec-hash", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &v1beta1.Worker{}
 			w.Name = "solo"
-			w.Generation = tc.gen
-			w.Status.ObservedGeneration = tc.observed
+			w.Status.SpecHash = tc.statusHash
 			mctx := r.workerMemberContext(w)
 			if mctx.SpecChanged != tc.want {
-				t.Fatalf("SpecChanged for (gen=%d, observed=%d): got %v, want %v",
-					tc.gen, tc.observed, mctx.SpecChanged, tc.want)
+				t.Fatalf("SpecChanged for status hash %q: got %v, want %v",
+					tc.statusHash, mctx.SpecChanged, tc.want)
 			}
 		})
-	}
-}
-
-func TestWorkerReconcilerLegacySkipsDecoupledTeamMemberStandaloneState(t *testing.T) {
-	ctx := context.Background()
-	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
-		Status: v1beta1.WorkerStatus{
-			Phase:        "Running",
-			MatrixUserID: "@dev:matrix.local",
-			RoomID:       "!room-dev:matrix.local",
-		},
-	}
-	team := &v1beta1.Team{
-		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
-		Spec: v1beta1.TeamSpec{
-			WorkerMembers: []v1beta1.TeamWorkerRef{
-				{Name: "lead", Role: RoleTeamLeader.String()},
-				{Name: "dev"},
-			},
-		},
-	}
-
-	scheme := runtime.NewScheme()
-	if err := v1beta1.AddToScheme(scheme); err != nil {
-		t.Fatalf("register scheme: %v", err)
-	}
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(worker.DeepCopy(), team.DeepCopy()).
-		Build()
-	legacy, fakeOSS := newTestLegacy(t)
-	prov := mocks.NewMockProvisioner()
-	prov.MatrixUserIDFn = func(name string) string {
-		return "@" + name + ":matrix.local"
-	}
-	r := &WorkerReconciler{
-		Client:      c,
-		Provisioner: prov,
-		Legacy:      legacy,
-	}
-
-	r.reconcileLegacy(ctx, worker, &MemberState{
-		ProvResult: &service.WorkerProvisionResult{MatrixUserID: "@dev:matrix.local"},
-	})
-
-	if _, err := fakeOSS.GetObject(ctx, "agents/manager/workers-registry.json"); err == nil {
-		t.Fatalf("WorkerReconciler must not write standalone workers-registry rows for decoupled Team members")
 	}
 }
 

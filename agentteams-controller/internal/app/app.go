@@ -86,10 +86,10 @@ type App struct {
 	remoteClientCache *remoteclient.Cache
 
 	// Service layer
-	provisioner *service.Provisioner
-	deployer    *service.Deployer
-	envBuilder  *service.WorkerEnvBuilder
-	legacy      *service.LegacyCompat
+	provisioner   *service.Provisioner
+	deployer      *service.Deployer
+	envBuilder    *service.WorkerEnvBuilder
+	managerConfig *service.ManagerConfigStore
 }
 
 // New constructs the entire application dependency graph and wires everything
@@ -208,23 +208,23 @@ func (a *App) Start(ctx context.Context) error {
 			logger.Error(err, "cluster initialization failed (non-fatal, continuing)")
 		}
 
-		// When switching from AppService mode to legacy password mode,
+		// When switching from AppService mode to managerConfig password mode,
 		// automatically backfill passwords for workers/managers that were
 		// created without passwords in AS mode. This enables seamless
 		// rollback without manual intervention.
 		if !a.cfg.MatrixAppServiceEnabled {
-			// Legacy mode: backfill passwords for AS-created accounts.
+			// ManagerConfig mode: backfill passwords for AS-created accounts.
 			if err := a.provisioner.BackfillLegacyPasswords(ctx); err != nil {
-				logger.Error(err, "legacy password backfill had errors (non-fatal)")
+				logger.Error(err, "managerConfig password backfill had errors (non-fatal)")
 			}
 		} else {
-			// AS mode: clean up stale password files from previous legacy mode.
+			// AS mode: clean up stale password files from previous managerConfig mode.
 			names, listErr := a.provisioner.CredentialNames(ctx)
 			if listErr != nil {
 				logger.Error(listErr, "failed to list credentials for password cleanup (non-fatal)")
 			} else if len(names) > 0 {
 				if err := a.deployer.CleanLegacyPasswordFiles(ctx, names); err != nil {
-					logger.Error(err, "legacy password cleanup had errors (non-fatal)")
+					logger.Error(err, "managerConfig password cleanup had errors (non-fatal)")
 				}
 			}
 		}
@@ -405,42 +405,13 @@ func (a *App) initControllerManager(ctx context.Context) error {
 	return err
 }
 
-// initFieldIndexers registers cache field indexers used for efficient reverse
-// lookups by auth enrichment and, in the future, admission/validation.
-//
-//   - teams.spec.leader.name  -> list Team by leader name or runtime workerName
-//   - teams.spec.workerNames  -> list Team by any worker name or runtime workerName
+// initFieldIndexers registers the Team membership reverse lookup used by auth
+// enrichment, REST validation, and Worker-triggered Team reconciliation.
 func (a *App) initFieldIndexers(ctx context.Context) error {
 	if a.mgr == nil {
 		return nil
 	}
 	idx := a.mgr.GetFieldIndexer()
-	if err := idx.IndexField(ctx, &v1beta1.Team{}, controller.TeamLeaderNameField, func(obj crclient.Object) []string {
-		team, ok := obj.(*v1beta1.Team)
-		if !ok {
-			return nil
-		}
-		names := uniqueNonEmpty(team.Spec.Leader.Name, team.Spec.Leader.WorkerName)
-		if len(names) == 0 {
-			return nil
-		}
-		return names
-	}); err != nil {
-		return fmt.Errorf("index team leader name: %w", err)
-	}
-	if err := idx.IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerNameField, func(obj crclient.Object) []string {
-		team, ok := obj.(*v1beta1.Team)
-		if !ok {
-			return nil
-		}
-		names := make([]string, 0, len(team.Spec.Workers)*2)
-		for _, w := range team.Spec.Workers {
-			names = append(names, uniqueNonEmpty(w.Name, w.WorkerName)...)
-		}
-		return names
-	}); err != nil {
-		return fmt.Errorf("index team worker names: %w", err)
-	}
 	if err := idx.IndexField(ctx, &v1beta1.Team{}, controller.TeamWorkerMembersField, func(obj crclient.Object) []string {
 		team, ok := obj.(*v1beta1.Team)
 		if !ok {
@@ -457,22 +428,6 @@ func (a *App) initFieldIndexers(ctx context.Context) error {
 		return fmt.Errorf("index team workerMembers name: %w", err)
 	}
 	return nil
-}
-
-func uniqueNonEmpty(values ...string) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
 }
 
 func (a *App) initAuth(ctx context.Context) error {
@@ -555,7 +510,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		if cfg.KubeMode == "embedded" {
 			agentFSDir = cfg.AgentFSDir()
 		}
-		a.legacy = service.NewLegacyCompat(service.LegacyConfig{
+		a.managerConfig = service.NewManagerConfigStore(service.ManagerConfigStoreConfig{
 			OSS:          a.oss,
 			MatrixDomain: cfg.MatrixDomain,
 			AgentFSDir:   agentFSDir,
@@ -567,7 +522,7 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		OSS:             a.oss,
 		Executor:        a.shell,
 		Packages:        a.packages,
-		Legacy:          a.legacy,
+		ManagerConfig:   a.managerConfig,
 		AgentFSDir:      cfg.AgentFSDir(),
 		WorkerAgentDir:  cfg.WorkerAgentDir(),
 		MatrixDomain:    cfg.MatrixDomain,
@@ -598,7 +553,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		Backend:                     a.registry,
 		EnvBuilder:                  a.envBuilder,
 		ResourcePrefix:              resourcePrefix,
-		Legacy:                      a.legacy,
+		ManagerConfig:               a.managerConfig,
 		DefaultRuntime:              a.cfg.DefaultWorkerRuntime,
 		DefaultBackendRuntime:       a.cfg.WorkerBackendRuntime,
 		ControllerName:              a.cfg.ControllerName,
@@ -615,26 +570,13 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 
 	if _, err := (&controller.TeamReconciler{
-		Client:                      a.mgr.GetClient(),
-		Provisioner:                 a.provisioner,
-		Deployer:                    a.deployer,
-		Backend:                     a.registry,
-		EnvBuilder:                  a.envBuilder,
-		Legacy:                      a.legacy,
-		DefaultRuntime:              a.cfg.DefaultWorkerRuntime,
-		DefaultBackendRuntime:       a.cfg.WorkerBackendRuntime,
-		AgentFSDir:                  a.cfg.AgentFSDir(),
-		ControllerName:              a.cfg.ControllerName,
-		ResourcePrefix:              resourcePrefix,
-		GatewayClient:               a.gateway,
-		DynamicClient:               dynamicClient,
-		RemoteDynamicClientProvider: remoteDynamicClientProvider,
-		AuthTokenExpirationSeconds:  a.cfg.AuthTokenExpirationSeconds,
-		WorkerDepsStorageBucket:     a.cfg.WorkerDepsStorageBucket,
-		WorkerDepsStorageEndpoint:   a.cfg.WorkerDepsStorageEndpoint,
-		MountAuthType:               a.cfg.WorkerDepsMountAuthType,
-		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
-		SystemAdminUser:             a.cfg.MatrixAdminUser,
+		Client:          a.mgr.GetClient(),
+		Provisioner:     a.provisioner,
+		Deployer:        a.deployer,
+		ManagerConfig:   a.managerConfig,
+		DefaultRuntime:  a.cfg.DefaultWorkerRuntime,
+		GatewayClient:   a.gateway,
+		SystemAdminUser: a.cfg.MatrixAdminUser,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
@@ -642,7 +584,6 @@ func (a *App) initReconcilers(_ context.Context) error {
 	if err := (&controller.HumanReconciler{
 		Client:      a.mgr.GetClient(),
 		Provisioner: a.provisioner,
-		Legacy:      a.legacy,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup HumanReconciler: %w", err)
 	}

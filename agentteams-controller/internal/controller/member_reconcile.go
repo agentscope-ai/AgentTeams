@@ -14,7 +14,6 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
@@ -71,14 +70,13 @@ type sandboxSetTokenProjectionState struct {
 	Expiration  time.Time
 }
 
-// String renders the role as stored in annotations / legacy registries.
+// String renders the runtime role.
 func (r MemberRole) String() string { return string(r) }
 
 // MemberContext carries the CR-independent inputs needed to converge a single
-// worker-like member (standalone worker, team leader, or team worker). The
-// WorkerReconciler builds one from a Worker CR; the TeamReconciler builds one
-// per Team member directly from the Team CR without ever materializing a
-// Worker CR.
+// worker-like member. The WorkerReconciler builds one from a Worker CR; the
+// TeamReconciler uses the same structure while applying Team-owned context to
+// referenced Worker CRs.
 type MemberContext struct {
 	Name        string // Kubernetes resource identity (CR/Pod/SA key)
 	RuntimeName string // business/runtime identity (Matrix/OSS/room alias key)
@@ -97,15 +95,9 @@ type MemberContext struct {
 	// ReconcileMemberContainer recreates the container; when false, a
 	// running/starting container is left alone.
 	//
-	// Callers are responsible for computing this correctly:
-	//   WorkerReconciler: desired pod hash != Worker.status.specHash
-	//   TeamReconciler:   desired pod hash != Team.status.members[].specHash
-	//
-	// Using a boolean (instead of reusing Generation != ObservedGeneration)
-	// isolates the "did the spec change" question from the transport that
-	// answers it, so Team members — which have no per-member Generation —
-	// can participate without abusing the int64 fields.
-	//
+	// WorkerReconciler computes this as desired pod hash !=
+	// Worker.status.specHash. It is separate from Generation metadata so the
+	// runtime comparison stays explicit.
 	SpecChanged bool
 
 	// AppliedSpecHash is the controller-computed hash of the source spec
@@ -114,26 +106,12 @@ type MemberContext struct {
 	AppliedSpecHash string
 
 	// CurrentSpecHash is the owning CR status hash from the start of this
-	// reconcile. Empty means a brand-new or pre-upgrade status; sandbox live
-	// annotations may be read only as a migration fallback in that case.
+	// reconcile. Empty means the runtime has not recorded an applied hash yet.
 	CurrentSpecHash string
 
 	// IsUpdate indicates the member has been successfully provisioned before;
 	// controls MCP reauthorization and deployer "update" semantics.
 	IsUpdate bool
-
-	// Team linkage (empty for standalone).
-	TeamName           string
-	TeamLeaderName     string
-	TeamRoomID         string
-	LeaderDMRoomID     string
-	TeamAdminName      string
-	TeamAdminMatrixID  string
-	TeamCoordinatorIDs []string
-	TeamMembers        []service.RuntimeConfigTeamMember
-
-	// Heartbeat config from Team CR leader spec (nil for non-leader members)
-	Heartbeat *agentconfig.HeartbeatConfig
 
 	// ExistingMatrixUserID is non-empty when prior provisioning has recorded a
 	// Matrix user; the Infra phase then uses RefreshWorkerCredentials instead of
@@ -148,9 +126,7 @@ type MemberContext struct {
 	ExistingRoomID      string
 	CurrentExposedPorts []v1beta1.ExposedPortStatus
 
-	// PodLabels are merged into backend.CreateRequest.Labels. Used by Team
-	// members to tag pods with the team identity label so the Team
-	// reconciler can watch member pod lifecycle events.
+	// PodLabels are merged into backend.CreateRequest.Labels.
 	PodLabels map[string]string
 
 	// Owner is the CR that logically owns the member's Pod lifecycle. The
@@ -181,8 +157,8 @@ type MemberContext struct {
 	BackendRuntime string
 
 	// StatusBackendRuntime is the currently deployed backend type from
-	// status.backendRuntime. Empty means first reconcile (new worker or
-	// migration from a pre-upgrade controller).
+	// status.backendRuntime. Empty means the Worker has not recorded a
+	// successfully deployed backend yet.
 	StatusBackendRuntime string
 }
 
@@ -198,7 +174,7 @@ type MemberState struct {
 	ProvResult *service.WorkerProvisionResult
 
 	// BackendRuntime is set during reconcile when a backend switch occurs
-	// or on first reconcile (migration). Written back to
+	// or on the first successful deployment. Written back to
 	// Worker.Status.BackendRuntime by the owning reconciler.
 	BackendRuntime string
 
@@ -310,7 +286,7 @@ func ValidateMemberDeployment(m MemberContext) error {
 // RoomID, and ProvResult into state.
 func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) (reconcile.Result, error) {
 	if m.ExistingMatrixUserID != "" {
-		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials: %w", err)
 		}
@@ -334,8 +310,6 @@ func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, st
 		Name:           m.RuntimeName,
 		CredentialName: m.Name,
 		Role:           m.Role.String(),
-		TeamName:       m.TeamName,
-		TeamLeaderName: m.TeamLeaderName,
 	})
 	if err != nil {
 		if errors.Is(err, matrix.ErrAppServiceNotReady) {
@@ -392,14 +366,6 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 
 	if effectiveRuntime == backend.RuntimeQwenPaw || m.DeployMode == v1beta1.DeployModeEdge {
-		leaderRuntimeName := m.TeamLeaderName
-		if leaderRuntimeName == "" && m.Role == RoleTeamLeader {
-			leaderRuntimeName = m.RuntimeName
-		}
-		leaderName := leaderRuntimeName
-		if leaderName == "" && m.Role == RoleTeamLeader {
-			leaderName = m.Name
-		}
 		runtime := effectiveRuntime
 		var matrixAccessToken, gatewayKey string
 		skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
@@ -422,14 +388,6 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			AIGatewayURL:          aiGatewayURL,
 			SkillRegistryURL:      skillRegistryURL,
 			SkillRegistryAuthType: skillRegistryAuthType,
-			TeamName:              m.TeamName,
-			TeamRoomID:            m.TeamRoomID,
-			LeaderName:            leaderName,
-			LeaderRuntimeName:     leaderRuntimeName,
-			LeaderDMRoomID:        m.LeaderDMRoomID,
-			TeamAdminName:         m.TeamAdminName,
-			TeamAdminMatrixID:     m.TeamAdminMatrixID,
-			TeamMembers:           m.TeamMembers,
 		}); err != nil {
 			return fmt.Errorf("deploy runtime config: %w", err)
 		}
@@ -444,22 +402,15 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
-		Name:              m.RuntimeName,
-		Spec:              m.Spec,
-		Role:              m.Role.String(),
-		TeamName:          m.TeamName,
-		TeamLeaderName:    m.TeamLeaderName,
-		TeamRoomID:        m.TeamRoomID,
-		LeaderDMRoomID:    m.LeaderDMRoomID,
-		TeamMembers:       m.TeamMembers,
-		MatrixToken:       state.ProvResult.MatrixToken,
-		GatewayKey:        state.ProvResult.GatewayKey,
-		MatrixPassword:    state.ProvResult.MatrixPassword,
-		McpServers:        m.Spec.McpServers,
-		TeamAdminMatrixID: m.TeamAdminMatrixID,
-		Heartbeat:         m.Heartbeat,
-		IsUpdate:          m.IsUpdate,
-		AIGatewayURL:      aiGatewayURL,
+		Name:           m.RuntimeName,
+		Spec:           m.Spec,
+		Role:           m.Role.String(),
+		MatrixToken:    state.ProvResult.MatrixToken,
+		GatewayKey:     state.ProvResult.GatewayKey,
+		MatrixPassword: state.ProvResult.MatrixPassword,
+		McpServers:     m.Spec.McpServers,
+		IsUpdate:       m.IsUpdate,
+		AIGatewayURL:   aiGatewayURL,
 	}); err != nil {
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
@@ -592,13 +543,12 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 			if result.Status == backend.StatusStarting {
 				return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 			}
-			if !memberRuntimeStale(result, m, false) {
+			if !memberRuntimeStale(m, false) {
 				return reconcile.Result{}, nil
 			}
 			logger.Info("sandbox spec hash mismatch, recreating container",
 				"name", m.Name,
 				"currentHash", m.CurrentSpecHash,
-				"legacyAppliedHash", result.AppliedSpecHash,
 				"desiredHash", m.AppliedSpecHash)
 			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 				return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
@@ -623,7 +573,7 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 		}
 
 		if wb.Name() == "sandbox" {
-			if !memberRuntimeStale(result, m, true) {
+			if !memberRuntimeStale(m, true) {
 				if err := wb.Start(ctx, m.Name); err != nil {
 					return reconcile.Result{}, fmt.Errorf("resume sandbox: %w", err)
 				}
@@ -632,7 +582,6 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 			logger.Info("sandbox stopped with stale or missing hash, recreating",
 				"name", m.Name,
 				"currentHash", m.CurrentSpecHash,
-				"legacyAppliedHash", result.AppliedSpecHash,
 				"desiredHash", m.AppliedSpecHash)
 			if err := wb.Delete(ctx, m.Name); err != nil && !errors.Is(err, backend.ErrNotFound) {
 				return reconcile.Result{}, fmt.Errorf("delete stale sandbox: %w", err)
@@ -728,12 +677,9 @@ func ensureMemberContainerAbsent(ctx context.Context, d MemberDeps, m MemberCont
 	return reconcile.Result{}, nil
 }
 
-func memberRuntimeStale(result *backend.WorkerResult, m MemberContext, missingHashMeansStale bool) bool {
+func memberRuntimeStale(m MemberContext, missingHashMeansStale bool) bool {
 	if m.CurrentSpecHash != "" {
 		return m.SpecChanged
-	}
-	if result != nil && result.AppliedSpecHash != "" {
-		return result.AppliedSpecHash != m.AppliedSpecHash
 	}
 	return m.SpecChanged || missingHashMeansStale
 }
@@ -743,7 +689,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 	prov := state.ProvResult
 	if prov == nil || prov.MatrixToken == "" {
-		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials for container: %w", err)
 		}
@@ -888,8 +834,6 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 	}
 	logger := log.FromContext(ctx)
 	workerEnv := d.EnvBuilder.Build(m.RuntimeName, prov)
-	workerEnv["AGENTTEAMS_WORKER_CR_NAME"] = m.Name
-	// Legacy runtime scripts still read this fallback while AgentTeams env adoption is in progress.
 	workerEnv["AGENTTEAMS_WORKER_CR_NAME"] = m.Name
 	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
@@ -1890,9 +1834,7 @@ func ReconcileMemberExpose(ctx context.Context, d MemberDeps, m MemberContext, s
 }
 
 // ReconcileMemberDelete performs full infra/container/storage cleanup for a
-// member. Does NOT remove finalizers or touch the legacy Manager groupAllowFrom
-// / workers registry — those concerns belong to the owning reconciler because
-// they have different rules for standalone vs team contexts.
+// Worker. Finalizer removal remains the owning reconciler's responsibility.
 func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) error {
 	logger := log.FromContext(ctx)
 	logger.Info("deleting member", "name", m.Name, "role", m.Role)
@@ -1908,10 +1850,9 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		}
 	}
 
-	isTeamWorker := m.Role == RoleTeamWorker || m.Role == RoleTeamLeader
 	if err := d.Provisioner.DeprovisionWorker(ctx, service.WorkerDeprovisionRequest{
 		Name:         m.RuntimeName,
-		IsTeamWorker: isTeamWorker,
+		IsTeamWorker: false,
 		ExposedPorts: m.CurrentExposedPorts,
 		ExposeSpec:   m.Spec.Expose,
 	}); err != nil {

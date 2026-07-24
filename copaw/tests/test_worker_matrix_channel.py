@@ -134,6 +134,26 @@ def test_worker_channel_keeps_team_assignment_reroute(tmp_path, monkeypatch):
     }
 
 
+def test_worker_channel_reroutes_team_assignment_with_localpart_mention(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "COPAW_WORKING_DIR",
+        str(_write_team_leader_runtime(tmp_path)),
+    )
+    ch = _make_channel()
+
+    asyncio.run(
+        ch.send(
+            "!leader-dm:hs.local",
+            "@dag-team-1-dev Task assigned: implement the API.",
+        ),
+    )
+
+    assert ch._client.sent[0][0] == "!team-room:hs.local"
+
+
 def test_worker_channel_suppresses_no_reply(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "COPAW_WORKING_DIR",

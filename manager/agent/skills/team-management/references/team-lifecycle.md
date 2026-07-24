@@ -4,24 +4,27 @@
 
 - **Active**: Leader and workers are running, team is operational
 - **Degraded**: Some workers stopped or unavailable, Leader still running
-- **Stopped**: All containers stopped (can be restarted)
+- **Pending**: Team references are valid but required Worker identities or rooms are not ready yet
 
 Check status: `agt get team <TEAM_NAME>`
 
 ## Adding a Worker to an Existing Team
 
-1. Update the team via `agt apply -f` with the new worker added to the workers list
-2. Controller handles: creates Worker CR, joins Team Room, updates Leader's coordination context
+1. Create the Worker CR first if it does not already exist
+2. Update `Team.spec.workerMembers` via `agt update team` or `agt apply -f`
+3. Controller joins the referenced Worker to the Team Room and updates coordination context
 
 ## Removing a Worker from a Team
 
-1. Update the team via `agt apply -f` with the worker removed from the workers list
-2. Controller handles: removes Worker CR, updates Leader's coordination context
+1. Remove the Worker reference from `Team.spec.workerMembers`
+2. Controller removes Team-owned communication policy and updates coordination context
+3. The Worker CR, container, credentials, and Worker-owned configuration remain intact
 
 ## Deleting a Team
 
 1. Delete the team: `agt delete team <TEAM_NAME>`
-2. Controller handles: deletes all worker containers, cleans up rooms, removes storage
+2. Controller cleans up Team rooms, Team storage, and Team-owned coordination context
+3. Referenced Worker CRs and runtimes remain intact
 
 ## Task Delegation to Teams
 
@@ -33,7 +36,6 @@ description, Leader, or Worker roster:
 3. Team Leader handles decomposition and assignment internally
 4. Manager only checks with Team Leader for progress (never team workers)
 
-The Team registry and Team API do not expose structured team-level
-domain/expertise/capability fields for automatic filtering. Worker-level skills
-may describe individual members, but Manager delegation is not backed by a
-structured Team filter.
+The Team API does not expose structured team-level domain/expertise/capability
+fields for automatic filtering. Worker-level skills may describe individual
+members, but Manager delegation is not backed by a structured Team filter.

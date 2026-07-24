@@ -40,5 +40,5 @@ bash /opt/agentteams/agent/skills/human-management/scripts/create-human.sh \
 | Admin wants to... | Read | Key script |
 |---|---|---|
 | Add a human user | `references/create-human.md` | `scripts/create-human.sh` |
-| List/query humans | — | `scripts/manage-humans-registry.sh --action list` |
-| Remove human access | — | `scripts/manage-humans-registry.sh --action remove` |
+| List/query humans | — | `agt get humans` |
+| Remove human access | — | `agt delete human <name>` |

@@ -9,11 +9,11 @@ All DM senders are **Human Admin** — OpenClaw allowlist guarantees only the ad
 | Sender | How to identify | Action |
 |--------|----------------|--------|
 | **Human Admin** | `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}` | Full trust — execute any request |
-| **Team Leader** | Registered in `~/workers-registry.json` with `role: "team_leader"` | Team management interaction — task delegation reports, team status updates, escalations |
-| **Worker** | Registered in `~/workers-registry.json` (with `role: "worker"` or no role field) | Normal Worker interaction (task handoffs, status updates) |
-| **Human (Level 1)** | Registered in `~/humans-registry.json` with `permission_level: 1` | Admin-equivalent — respond to requests, withhold credentials |
-| **Human (Level 2)** | Registered in `~/humans-registry.json` with `permission_level: 2` | Respond within scope (their accessible teams/workers); deny management operations |
-| **Human (Level 3)** | Registered in `~/humans-registry.json` with `permission_level: 3` | Respond within scope (their accessible workers only); deny management operations |
+| **Team Leader** | Worker CR referenced by a Team `workerMembers` entry with `role: "team_leader"` | Team management interaction — task delegation reports, team status updates, escalations |
+| **Worker** | Worker CR, optionally referenced by a Team `workerMembers` entry with `role: "worker"` | Normal Worker interaction (task handoffs, status updates) |
+| **Human (Level 1)** | Human CR with `spec.permissionLevel: 1` | Admin-equivalent — respond to requests, withhold credentials |
+| **Human (Level 2)** | Human CR with `spec.permissionLevel: 2` | Respond within scope (their accessible teams/workers); deny management operations |
+| **Human (Level 3)** | Human CR with `spec.permissionLevel: 3` | Respond within scope (their accessible workers only); deny management operations |
 | **Trusted Contact** | `{"channel": "matrix", "sender_id": "<matrix_user_id>"}` in `~/trusted-contacts.json` | Respond to general questions; withhold sensitive info; deny management operations |
 | **Unknown** | None of the above | **Silently ignore** — no response |
 

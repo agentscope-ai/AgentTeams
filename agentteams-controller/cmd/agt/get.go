@@ -287,17 +287,23 @@ func getManagersCmd() *cobra.Command {
 // ---------------------------------------------------------------------------
 
 type workerResp struct {
-	Name           string `json:"name"`
-	Phase          string `json:"phase"`
-	Model          string `json:"model,omitempty"`
-	Runtime        string `json:"runtime,omitempty"`
-	Image          string `json:"image,omitempty"`
-	ContainerState string `json:"containerState,omitempty"`
-	MatrixUserID   string `json:"matrixUserID,omitempty"`
-	RoomID         string `json:"roomID,omitempty"`
-	Message        string `json:"message,omitempty"`
-	Team           string `json:"team,omitempty"`
-	Role           string `json:"role,omitempty"`
+	Name             string                   `json:"name"`
+	WorkerName       string                   `json:"workerName,omitempty"`
+	Phase            string                   `json:"phase"`
+	ContainerManaged bool                     `json:"containerManaged"`
+	State            string                   `json:"state,omitempty"`
+	Model            string                   `json:"model,omitempty"`
+	Runtime          string                   `json:"runtime,omitempty"`
+	Image            string                   `json:"image,omitempty"`
+	Identity         string                   `json:"identity,omitempty"`
+	Skills           []string                 `json:"skills,omitempty"`
+	McpServers       []map[string]interface{} `json:"mcpServers,omitempty"`
+	ContainerState   string                   `json:"containerState,omitempty"`
+	MatrixUserID     string                   `json:"matrixUserID,omitempty"`
+	RoomID           string                   `json:"roomID,omitempty"`
+	Message          string                   `json:"message,omitempty"`
+	Team             string                   `json:"team,omitempty"`
+	Role             string                   `json:"role,omitempty"`
 }
 
 type workerListResp struct {
@@ -306,20 +312,34 @@ type workerListResp struct {
 }
 
 type teamResp struct {
-	Name              string             `json:"name"`
-	TeamName          string             `json:"teamName,omitempty"`
-	Phase             string             `json:"phase"`
-	Description       string             `json:"description,omitempty"`
-	LeaderName        string             `json:"leaderName"`
-	LeaderHeartbeat   *teamHeartbeatResp `json:"leaderHeartbeat,omitempty"`
-	WorkerIdleTimeout string             `json:"workerIdleTimeout,omitempty"`
-	TeamRoomID        string             `json:"teamRoomID,omitempty"`
-	LeaderDMRoomID    string             `json:"leaderDMRoomID,omitempty"`
-	LeaderReady       bool               `json:"leaderReady"`
-	ReadyWorkers      int                `json:"readyWorkers"`
-	TotalWorkers      int                `json:"totalWorkers"`
-	Message           string             `json:"message,omitempty"`
-	WorkerNames       []string           `json:"workerNames,omitempty"`
+	Name              string              `json:"name"`
+	TeamName          string              `json:"teamName,omitempty"`
+	Phase             string              `json:"phase"`
+	Description       string              `json:"description,omitempty"`
+	Admin             *teamAdminResp      `json:"admin,omitempty"`
+	HumanMembers      []teamHumanResp     `json:"humanMembers,omitempty"`
+	LeaderName        string              `json:"leaderName"`
+	LeaderHeartbeat   *teamHeartbeatResp  `json:"leaderHeartbeat,omitempty"`
+	WorkerIdleTimeout string              `json:"workerIdleTimeout,omitempty"`
+	TeamRoomID        string              `json:"teamRoomID,omitempty"`
+	LeaderDMRoomID    string              `json:"leaderDMRoomID,omitempty"`
+	LeaderReady       bool                `json:"leaderReady"`
+	ReadyWorkers      int                 `json:"readyWorkers"`
+	TotalWorkers      int                 `json:"totalWorkers"`
+	Message           string              `json:"message,omitempty"`
+	WorkerNames       []string            `json:"workerNames,omitempty"`
+	WorkerMembers     []map[string]string `json:"workerMembers"`
+}
+
+type teamAdminResp struct {
+	Name         string `json:"name"`
+	MatrixUserID string `json:"matrixUserId,omitempty"`
+}
+
+type teamHumanResp struct {
+	Name         string `json:"name"`
+	MatrixUserID string `json:"matrixUserId,omitempty"`
+	Role         string `json:"role,omitempty"`
 }
 
 type teamHeartbeatResp struct {
@@ -333,13 +353,16 @@ type teamListResp struct {
 }
 
 type humanResp struct {
-	Name            string   `json:"name"`
-	Phase           string   `json:"phase"`
-	DisplayName     string   `json:"displayName"`
-	MatrixUserID    string   `json:"matrixUserID,omitempty"`
-	InitialPassword string   `json:"initialPassword,omitempty"`
-	Rooms           []string `json:"rooms,omitempty"`
-	Message         string   `json:"message,omitempty"`
+	Name              string   `json:"name"`
+	Phase             string   `json:"phase"`
+	DisplayName       string   `json:"displayName"`
+	PermissionLevel   int      `json:"permissionLevel"`
+	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+	MatrixUserID      string   `json:"matrixUserID,omitempty"`
+	InitialPassword   string   `json:"initialPassword,omitempty"`
+	Rooms             []string `json:"rooms,omitempty"`
+	Message           string   `json:"message,omitempty"`
 }
 
 type humanListResp struct {

@@ -30,7 +30,7 @@ Admin (人类管理员)
 | 资源 | 说明 | 对应实体 |
 |------|------|---------|
 | Worker | AI Agent 工作节点 | Docker 容器 + Matrix 账号 + MinIO 空间 |
-| Team | 由 Leader + N 个 Worker 组成的协作组 | 一组 Worker 容器 + Team Room |
+| Team | 引用一个 Leader Worker 与 N 个成员 Worker 的协作组 | Worker 引用 + Team Room |
 | Human | 真人用户 | Matrix 账号 + Room 权限 |
 | Manager | 协调 Agent（任务分发、Worker/Team 编排） | Manager Agent 运行时（与其它 CR 一样由 Controller 调和） |
 
@@ -133,8 +133,8 @@ spec:
 3. 创建 MinIO 用户和 Bucket，配置 Higress 网关授权
 4. 生成 `openclaw.json` 配置（含 `groupAllowFrom` 权限矩阵）
 5. 推送所有配置文件（SOUL.md、skills、crons 等）到 MinIO
-6. 更新 `workers-registry.json`
-7. 启动 Worker 容器
+6. 更新 Worker 状态
+7. 协调 Worker 容器
 
 ### Worker 状态
 
@@ -162,47 +162,17 @@ metadata:
   name: alpha-team
 spec:
   description: 全栈开发团队
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-    heartbeat:
-      enabled: true
-      every: 30m
-    workerIdleTimeout: 12h
-    soul: |
-      # Alpha Lead - Team Leader
-      ## 人格
-      - 沉稳有条理，带领团队聚焦优先事项
-      - 对团队成员有耐心，鼓励开放沟通
-      ## 价值观
-      - 清晰：每个任务分配前必须有明确的验收标准
-      - 信任：充分授权，不微观管理
-  workers:
+  heartbeatEvery: 30m
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
-      soul: |
-        # Alpha Dev - 后端开发
-        ## 人格
-        - 务实的问题解决者，偏好简单方案而非巧妙方案
-        - 严格的代码审查者，善于发现边界情况
-        ## 价值观
-        - 代码质量：上线前先写测试
-        - 保持简单：避免过早抽象
+      role: worker
     - name: alpha-qa
-      model: claude-sonnet-4-6
-      soul: |
-        # Alpha QA - 测试工程师
-        ## 人格
-        - 天生怀疑论者，总是问"哪里可能出问题？"
-        - 对复现和记录问题一丝不苟
-        ## 价值观
-        - 用户体验优先：从用户视角进行测试
-        - 不允许静默失败：每个 bug 都要有清晰的报告
+      role: worker
 ```
+
+先分别创建 `alpha-lead`、`alpha-dev`、`alpha-qa` 三个 Worker CR。模型、运行时、镜像、资源、身份、skills、MCP Server、package、通信策略和生命周期状态只属于 Worker CR。
 
 ### 完整字段说明
 
@@ -216,42 +186,10 @@ spec:
 | `spec.channelPolicy` | object | 否 | 团队级群聊/DM 允许与拒绝列表覆盖（字段形状与 Worker 的 `channelPolicy` 相同） |
 | `spec.admin` | object | 否 | 团队专属人类管理员（须含 `name`；可选 `matrixUserId`）。省略则使用全局 Admin |
 | `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。当前版本支持 `role: coordinator`，可进入 Team Room 并像 Team Admin 一样在其中分派任务 |
-| `spec.leader` | object | 是 | Team Leader 配置 |
-| `spec.workers` | []object | 是 | Team Worker 列表 |
-
-**Leader 字段：**
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `leader.name` | string | 是 | Leader 名称 |
-| `leader.model` | string | 否 | LLM 模型 |
-| `leader.identity` | string | 否 | Leader 公开身份信息（生成 IDENTITY.md） |
-| `leader.soul` | string | 否 | Leader 人格与价值观设定（生成 SOUL.md） |
-| `leader.agents` | string | 否 | 自定义行为规则（追加在内置 AGENTS.md 之后） |
-| `leader.package` | string | 否 | 自定义包 URI |
-| `leader.heartbeat.enabled` | bool | 否 | 是否让 Team Leader 利用 heartbeat 轮询做周期检查 |
-| `leader.heartbeat.every` | string | 否 | 注入到 Team Leader 工作空间中的 heartbeat 周期间隔提示 |
-| `leader.workerIdleTimeout` | string | 否 | Team Leader 判断 team 内 worker 是否可以休眠时使用的空闲超时 |
-| `leader.state` | string | 否 | `Running`（默认）、`Sleeping`、`Stopped` — Leader 容器的期望生命周期 |
-| `leader.channelPolicy` | object | 否 | Leader 专属的通信策略覆盖 |
-
-**Worker 字段（与独立 Worker 的 spec 一致）：**
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `workers[].name` | string | 是 | Worker 名称 |
-| `workers[].model` | string | 否 | LLM 模型 |
-| `workers[].runtime` | string | 否 | Agent 运行时（`openclaw`、`copaw` 或 `hermes`） |
-| `workers[].image` | string | 否 | 自定义 Docker 镜像 |
-| `workers[].identity` | string | 否 | Worker 公开身份信息（生成 IDENTITY.md） |
-| `workers[].soul` | string | 否 | Worker 人格与价值观设定（生成 SOUL.md） |
-| `workers[].agents` | string | 否 | 自定义行为规则（追加在内置 AGENTS.md 之后） |
-| `workers[].skills` | []string | 否 | 内置 skills |
-| `workers[].mcpServers` | []string | 否 | 内置 MCP Servers |
-| `workers[].package` | string | 否 | 自定义包 URI |
-| `workers[].expose` | []object | 否 | 通过 Higress 网关暴露的端口列表（见 [服务发布](#服务发布)） |
-| `workers[].channelPolicy` | object | 否 | 该团队 Worker 的通信策略覆盖 |
-| `workers[].state` | string | 否 | `Running`（默认）、`Sleeping`、`Stopped` — 该成员容器的期望生命周期 |
+| `spec.workerMembers` | []object | 是 | 引用已存在的 Worker CR；必须且只能有一项的 `role` 为 `team_leader` |
+| `spec.workerMembers[].name` | string | 是 | 被引用的 Worker 资源名 |
+| `spec.workerMembers[].role` | string | 是 | `team_leader` 或 `worker` |
+| `spec.heartbeatEvery` | string | 否 | Team Leader heartbeat 周期间隔提示 |
 
 ### Team Leader 的特殊性
 
@@ -261,7 +199,7 @@ Team Leader 本质上是一个 Worker 容器，但有以下区别：
 - 拥有 canonical Team Leader skills：`team-coordination` 负责协作策略，`project-management` 负责 Project 状态和 ready node 解析，`task-management` 负责委派 Worker 任务
 - 新建 Team Leader workspace 不再安装旧的 `team-project-management`、`team-task-coordination`、`team-task-management` 兼容别名；已经复制过这些别名的旧 workspace 会保留本地文件，直到显式升级或重建
 - 不拥有 `worker-management`、`mcp-server-management` 等 Manager 独占 skill
-- 在 `workers-registry.json` 中标记为 `role: "team_leader"`
+- 在 `Team.spec.workerMembers` 中以 `role: "team_leader"` 引用
 - 采用委派优先原则——始终将任务分配给团队 Worker，自己不执行领域任务
 
 ### Team Leader 的 AGENTS.md 组装
@@ -514,8 +452,8 @@ Human 的权限通过两个机制实现：
 2. 按 permissionLevel 计算需要修改的 Agent 列表
 3. 更新每个 Agent 的 `openclaw.json` 中的 `groupAllowFrom`
 4. 邀请 Human 进入对应 Room
-5. 更新 `humans-registry.json`
-6. 推送更新后的配置到 MinIO，通知 Agent 执行 `file-sync`
+5. 更新 Human 状态
+6. 推送更新后的配置到 MinIO
 7. 发送欢迎邮件（如配置了 SMTP 和 email）
 
 ### 自动发送欢迎邮件
@@ -697,13 +635,43 @@ DELETE /api/v1/managers/{name}
 
 ## 批量部署
 
-用 `---` 分隔符在一个 YAML 文件中定义多个资源。**`agt apply -f` 按文档出现顺序依次 apply**，不会按资源类型自动排序。例如应先写 Team，再写引用 `accessibleTeams` 的 Human；先创建独立 Worker，再写引用 `accessibleWorkers` 的 L3 Human。
+用 `---` 分隔符在一个 YAML 文件中定义多个资源。**`agt apply -f` 按文档出现顺序依次 apply**，不会按资源类型自动排序。应先创建所有被引用的 Worker，再创建 Team，最后创建引用 `accessibleTeams` 或 `accessibleWorkers` 的 Human。
 
 删除不会自动排序：按需执行 `agt delete`（注意 Human 与 Team 等依赖关系）。
 
 ```yaml
 # company-setup.yaml
 
+# --- Worker 定义（必须先于 Team） ---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: product-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations, git-delegation]
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: ops-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: admin-assistant
+spec:
+  model: claude-sonnet-4-6
+---
 # --- 团队定义 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -711,21 +679,11 @@ metadata:
   name: product-team
 spec:
   description: 产品研发组
-  leader:
-    name: product-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: product-lead
+      role: team_leader
     - name: backend-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations, git-delegation]
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
-    - name: frontend-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
-    - name: qa-engineer
-      model: claude-sonnet-4-6
+      role: worker
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -733,20 +691,9 @@ metadata:
   name: ops-team
 spec:
   description: 运维组
-  leader:
-    name: ops-lead
-    model: claude-sonnet-4-6
-  workers:
-    - name: monitor
-      model: claude-sonnet-4-6
----
-# --- 独立 Worker ---
-apiVersion: agentteams.io/v1beta1
-kind: Worker
-metadata:
-  name: admin-assistant
-spec:
-  model: claude-sonnet-4-6
+  workerMembers:
+    - name: ops-lead
+      role: team_leader
 ---
 # --- 人员配置 ---
 apiVersion: agentteams.io/v1beta1
@@ -814,7 +761,7 @@ Reconciler 执行对应脚本（create-worker.sh / create-team.sh / create-human
 | Reconciler | CREATE | UPDATE | DELETE |
 |-----------|--------|--------|--------|
 | Worker | 创建容器 + Matrix 账号 + MinIO 空间 | model 变更→重新生成配置；skills 变更→重新推送 | 停止容器 + 清理资源 |
-| Team | 创建 Leader + Workers + Team Room | workers 列表变化→增删 Worker | 先删 Workers→删 Leader→删 Team Room |
+| Team | 校验并关联已有 Worker + 创建 Team Room | `workerMembers` 变化→更新成员关系与协作上下文 | 清理 Team Room 与协作上下文；保留 Worker CR 及运行时 |
 | Human | 注册 Matrix 账号 + 配置权限 + 发邮件 | permissionLevel 变化→重算 groupAllowFrom | 从所有 groupAllowFrom 移除→踢出 Room |
 | Manager | 部署/更新 Manager Agent | model/skills/package/state 等变更→调和 | 按后端实现回收 Manager 相关资源 |
 
@@ -862,28 +809,37 @@ spec:
 | `expose[].port` | int | 是 | — | 要暴露的容器端口 |
 | `expose[].protocol` | string | 否 | `http` | 协议：`http` 或 `grpc` |
 
-### Team Worker 支持
+### Team 引用的 Worker
 
-Team Worker 同样支持 `expose`：
+`expose` 仍由 Worker CR 持有；先配置 Worker，再由 Team 引用：
 
 ```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: lead
+spec:
+  model: qwen3.5-plus
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: backend
+spec:
+  model: qwen3.5-plus
+  expose:
+    - port: 8080
+---
 apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: dev-team
 spec:
-  leader:
-    name: lead
-    model: qwen3.5-plus
-  workers:
+  workerMembers:
+    - name: lead
+      role: team_leader
     - name: backend
-      model: qwen3.5-plus
-      expose:
-        - port: 8080
-    - name: frontend
-      model: qwen3.5-plus
-      expose:
-        - port: 3000
+      role: worker
 ```
 
 ### CLI 用法
@@ -928,7 +884,7 @@ agt apply worker --name alice --model qwen3.5-plus
 | `dmAllowExtra` | 额外允许 DM 的 ID |
 | `dmDenyExtra` | DM 拒绝列表 |
 
-可在独立 Worker 上设置 `spec.channelPolicy`，或在 Team 上设置 `spec.channelPolicy` / `spec.leader.channelPolicy` / `workers[].channelPolicy` 做成员级覆盖。
+在 Worker 上设置 `spec.channelPolicy` 实现成员级策略，在 Team 上设置 `spec.channelPolicy` 实现团队级策略。
 
 ## 通信权限矩阵
 

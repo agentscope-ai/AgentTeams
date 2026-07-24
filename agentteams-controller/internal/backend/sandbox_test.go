@@ -461,9 +461,6 @@ func TestSandboxBackend_Create_AlwaysUsesSandboxClaim(t *testing.T) {
 			t.Fatalf("unexpected dynamic mount: %+v", mount)
 		}
 	}
-	if got := plugin.createClaimSpec.Annotations[sandbox.AnnotationLastAppliedSpecHash]; got != "" {
-		t.Fatalf("legacy last-applied hash annotation on SandboxClaim=%q, want empty", got)
-	}
 }
 
 func TestSandboxBackend_Create_ClaimNameFollowsPodNamingOverrides(t *testing.T) {
@@ -685,9 +682,6 @@ spec:
 	}
 	if spec.Annotations["kubeone.ali/appinstance-name"] != "magic-ctl" {
 		t.Errorf("claim annotations missing appinstance-name, got %v", spec.Annotations)
-	}
-	if got := spec.Annotations[sandbox.AnnotationLastAppliedSpecHash]; got != "" {
-		t.Errorf("legacy last-applied hash annotation = %q, want empty", got)
 	}
 }
 

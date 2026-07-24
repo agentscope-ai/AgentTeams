@@ -311,7 +311,7 @@ func (h *AppserviceHandler) wakeTeamWorker(ctx context.Context, roomID, userID s
 				}
 			}
 
-			if !isDecoupledTeamWorker(&team, member.Name) {
+			if !isTeamWorkerRef(&team, member.Name) {
 				noSpec++
 				logger.V(1).Info("mention skipped: team worker ref not found",
 					"worker", member.Name, "team", team.Name)
@@ -402,7 +402,7 @@ func (h *AppserviceHandler) setStandaloneWorkerRunning(ctx context.Context, name
 
 // --- Appservice-local helpers ---
 
-func isDecoupledTeamWorker(team *v1beta1.Team, name string) bool {
+func isTeamWorkerRef(team *v1beta1.Team, name string) bool {
 	for _, ref := range team.Spec.WorkerMembers {
 		if ref.Name == name {
 			return ref.Role == "" || ref.Role == roleTeamWorker

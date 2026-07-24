@@ -6,6 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // mockAuthenticator is a test authenticator that returns a fixed identity for a known token.
@@ -39,6 +44,27 @@ func newTestMiddleware(tokens map[string]*CallerIdentity) *Middleware {
 		NewAuthorizer(),
 		nil, "",
 	)
+}
+
+func TestResolveResourceTeamUsesTeamWorkerMembers(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"}},
+		&v1beta1.Team{
+			ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "default"},
+			Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "alice", Role: "team_leader"},
+			}},
+		},
+	).Build()
+
+	mw := NewMiddleware(nil, nil, NewAuthorizer(), k8sClient, "default")
+	if got := mw.resolveResourceTeam(context.Background(), "worker", "alice"); got != "alpha" {
+		t.Fatalf("resolveResourceTeam() = %q, want alpha", got)
+	}
 }
 
 func TestAuthenticate_ValidToken(t *testing.T) {

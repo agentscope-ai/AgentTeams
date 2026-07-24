@@ -3,7 +3,7 @@
 #
 # Verifies the `--skills` flag on `agt create worker` and
 # `agt update worker` flows through the controller and is reflected in
-# the source-of-truth registry at agents/manager/workers-registry.json,
+# the source-of-truth Worker CR,
 # and that the corresponding skill files land in agents/<name>/skills/.
 #
 # Built-in baseline skills (file-sync, etc.) are always pushed for every
@@ -21,7 +21,6 @@ test_setup "24-skills-management"
 
 TEST_WORKER="test-skl-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
-REGISTRY_KEY="${STORAGE_PREFIX}/agents/manager/workers-registry.json"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
@@ -35,11 +34,10 @@ trap _cleanup EXIT
 
 minio_setup
 
-# Helper: read worker entry from registry and return .skills as JSON array
-_worker_skills_in_registry() {
+# Helper: read Worker CR skills through the Controller API.
+_worker_skills_in_api() {
     local worker="$1"
-    exec_in_manager mc cat "${REGISTRY_KEY}" 2>/dev/null \
-        | jq -c --arg w "${worker}" '.workers[$w].skills // empty' 2>/dev/null
+    exec_in_agent agt get workers "${worker}" -o json 2>/dev/null | jq -c '.skills // []'
 }
 
 # ============================================================
@@ -65,24 +63,24 @@ else
 fi
 
 # ============================================================
-# Section 2: Registry reflects initial skills
+# Section 2: Worker CR reflects initial skills
 # ============================================================
-log_section "Verify Registry After Create"
+log_section "Verify Worker CR After Create"
 
-# Give the controller a moment after provisioning to write the registry entry
+# Give the controller a moment after provisioning to serve the resource.
 DEADLINE=$(( $(date +%s) + 60 ))
 INITIAL_SKILLS=""
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-    INITIAL_SKILLS=$(_worker_skills_in_registry "${TEST_WORKER}")
+    INITIAL_SKILLS=$(_worker_skills_in_api "${TEST_WORKER}")
     [ -n "${INITIAL_SKILLS}" ] && [ "${INITIAL_SKILLS}" != "null" ] && break
     sleep 5
 done
 
-log_info "Initial skills in registry: ${INITIAL_SKILLS}"
+log_info "Initial skills in Worker CR: ${INITIAL_SKILLS}"
 if echo "${INITIAL_SKILLS}" | jq -e 'index("github-operations")' >/dev/null 2>&1; then
-    log_pass "Registry contains 'github-operations' for ${TEST_WORKER}"
+    log_pass "Worker CR contains 'github-operations' for ${TEST_WORKER}"
 else
-    log_fail "Registry missing 'github-operations' (got: ${INITIAL_SKILLS})"
+    log_fail "Worker CR missing 'github-operations' (got: ${INITIAL_SKILLS})"
 fi
 
 # Built-in baseline skill should be present in MinIO regardless of --skills
@@ -119,12 +117,12 @@ else
     log_fail "agt update failed (exit=${UPDATE_EXIT}): ${UPDATE_OUTPUT}"
 fi
 
-# Wait for the controller to re-reconcile and rewrite the registry
-log_info "Waiting for registry to reflect skill change..."
+# Wait for the Controller API to reflect the update.
+log_info "Waiting for Worker CR to reflect skill change..."
 DEADLINE=$(( $(date +%s) + 120 ))
 UPDATED_SKILLS=""
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-    UPDATED_SKILLS=$(_worker_skills_in_registry "${TEST_WORKER}")
+    UPDATED_SKILLS=$(_worker_skills_in_api "${TEST_WORKER}")
     if echo "${UPDATED_SKILLS}" | jq -e 'index("git-delegation")' >/dev/null 2>&1 \
         && ! echo "${UPDATED_SKILLS}" | jq -e 'index("github-operations")' >/dev/null 2>&1; then
         break
@@ -132,23 +130,23 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     sleep 5
 done
 
-log_info "Updated skills in registry: ${UPDATED_SKILLS}"
+log_info "Updated skills in Worker CR: ${UPDATED_SKILLS}"
 
 # ============================================================
 # Section 4: Verify post-update state
 # ============================================================
-log_section "Verify Registry After Update"
+log_section "Verify Worker CR After Update"
 
 if echo "${UPDATED_SKILLS}" | jq -e 'index("git-delegation")' >/dev/null 2>&1; then
-    log_pass "Registry contains 'git-delegation' after update"
+    log_pass "Worker CR contains 'git-delegation' after update"
 else
-    log_fail "Registry missing 'git-delegation' after update (got: ${UPDATED_SKILLS})"
+    log_fail "Worker CR missing 'git-delegation' after update (got: ${UPDATED_SKILLS})"
 fi
 
 if echo "${UPDATED_SKILLS}" | jq -e 'index("github-operations")' >/dev/null 2>&1; then
-    log_fail "Registry still contains 'github-operations' after replacement update"
+    log_fail "Worker CR still contains 'github-operations' after replacement update"
 else
-    log_pass "Replaced skill 'github-operations' no longer in registry"
+    log_pass "Replaced skill 'github-operations' no longer in Worker CR"
 fi
 
 if minio_file_exists "agents/${TEST_WORKER}/skills/git-delegation/SKILL.md"; then

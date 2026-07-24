@@ -50,7 +50,7 @@ func DefaultEntriesForWorker() []v1beta1.AccessEntry {
 }
 
 // DefaultEntriesForTeamMember returns the CR-layer default AccessEntry
-// set applied when a LeaderSpec or TeamWorkerSpec omits accessEntries.
+// set applied when a Worker referenced by a Team omits accessEntries.
 // Mirrors the embedded-mode policy produced by
 // oss.MinIOAdminClient.buildWorkerPolicy when teamName != "": read/
 // write/list/delete on the member's own agent prefix, on the shared

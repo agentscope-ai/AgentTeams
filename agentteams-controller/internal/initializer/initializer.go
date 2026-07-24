@@ -11,7 +11,6 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/migration"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -134,20 +133,6 @@ func (i *Initializer) Run(ctx context.Context) error {
 			return fmt.Errorf("Manager CR creation failed: %w", err)
 		}
 		logger.Info("Manager CR ensured", "name", "default")
-	}
-
-	// Migrate v1.0.9 registry data to CRs (embedded mode only)
-	if i.Config.IsEmbedded {
-		migrator := &migration.Migrator{
-			OSS:          i.OSS,
-			RestCfg:      i.RestCfg,
-			Namespace:    i.Config.Namespace,
-			DefaultModel: i.Config.ManagerModel,
-			AgentFSDir:   i.Config.AgentFSDir,
-		}
-		if err := migrator.Run(ctx); err != nil {
-			logger.Error(err, "registry migration failed (non-fatal, continuing)")
-		}
 	}
 
 	logger.Info("cluster initialization complete")

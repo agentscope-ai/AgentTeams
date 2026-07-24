@@ -496,11 +496,6 @@ func (c *Config) ManagerConfigPath() string {
 	return envOrDefault("AGENTTEAMS_MANAGER_CONFIG_PATH", "/root/openclaw.json")
 }
 
-// RegistryPath returns the path to the workers-registry.json (embedded mode).
-func (c *Config) RegistryPath() string {
-	return envOrDefault("AGENTTEAMS_REGISTRY_PATH", "/root/workers-registry.json")
-}
-
 // ManagerResources returns the resource requirements for the Manager Pod.
 func (c *Config) ManagerResources() *backend.ResourceRequirements {
 	return &backend.ResourceRequirements{

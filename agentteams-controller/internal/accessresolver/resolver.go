@@ -61,7 +61,7 @@ func (r *Resolver) ResolveForCaller(ctx context.Context, caller *auth.CallerIden
 	switch caller.Role {
 	case auth.RoleWorker, auth.RoleTeamLeader:
 		// Team leader always carries caller.Team (enriched via the
-		// spec.leader.name field indexer). A team worker carries it
+		// spec.workerMembers field indexer). A team worker carries it
 		// via the spec.workerNames indexer. When caller.Team is set
 		// we route to the team path so the resolver can pick up the
 		// member's AccessEntries on the Team CR and expand
@@ -133,40 +133,23 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	var crEntries []v1beta1.AccessEntry
 	kind := "TeamWorker"
 	runtimeName := name
-	if len(team.Spec.WorkerMembers) > 0 {
-		for _, ref := range team.Spec.WorkerMembers {
-			if ref.Name != name {
-				continue
-			}
-			if ref.Role == "team_leader" {
-				kind = "TeamLeader"
-			}
-			var w v1beta1.Worker
-			err := r.client.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: r.namespace}, &w)
-			if err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
-				return "", nil, fmt.Errorf("get worker %q for team %q: %w", ref.Name, teamName, err)
-			}
-			if w.Name != "" {
-				crEntries = w.Spec.AccessEntries
-				runtimeName = w.Spec.EffectiveWorkerName(w.Name)
-			}
-			break
+	for _, ref := range team.Spec.WorkerMembers {
+		if ref.Name != name {
+			continue
 		}
-	} else {
-		switch {
-		case leaderMatches(team.Spec.Leader, name):
-			crEntries = team.Spec.Leader.AccessEntries
+		if ref.Role == "team_leader" {
 			kind = "TeamLeader"
-			runtimeName = team.Spec.Leader.EffectiveWorkerName()
-		default:
-			for _, w := range team.Spec.Workers {
-				if teamWorkerMatches(w, name) {
-					crEntries = w.AccessEntries
-					runtimeName = w.EffectiveWorkerName()
-					break
-				}
-			}
 		}
+		var w v1beta1.Worker
+		err := r.client.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: r.namespace}, &w)
+		if err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+			return "", nil, fmt.Errorf("get worker %q for team %q: %w", ref.Name, teamName, err)
+		}
+		if w.Name != "" {
+			crEntries = w.Spec.AccessEntries
+			runtimeName = w.Spec.EffectiveWorkerName(w.Name)
+		}
+		break
 	}
 	if len(crEntries) == 0 {
 		crEntries = DefaultEntriesForTeamMember()
@@ -187,14 +170,6 @@ func (r *Resolver) resolveTeamMember(ctx context.Context, name, teamName string)
 	// session-name shape because their ServiceAccount name on the
 	// pod is still agentteams-worker-<name> (see auth.ResourcePrefix.SAName).
 	return r.prefix.WorkerSessionName(name), resolved, nil
-}
-
-func leaderMatches(leader v1beta1.LeaderSpec, name string) bool {
-	return leader.Name == name || (leader.WorkerName != "" && leader.WorkerName == name)
-}
-
-func teamWorkerMatches(worker v1beta1.TeamWorkerSpec, name string) bool {
-	return worker.Name == name || (worker.WorkerName != "" && worker.WorkerName == name)
 }
 
 func (r *Resolver) resolveManager(ctx context.Context, name string) (string, []credprovider.AccessEntry, error) {

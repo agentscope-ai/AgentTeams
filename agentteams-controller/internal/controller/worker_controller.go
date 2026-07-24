@@ -52,9 +52,9 @@ type WorkerReconciler struct {
 	Deployer                    service.WorkerDeployer
 	Backend                     *backend.Registry
 	EnvBuilder                  service.WorkerEnvBuilderI
-	ResourcePrefix              auth.ResourcePrefix   // tenant prefix used to derive SA names
-	Legacy                      *service.LegacyCompat // nil in incluster mode
-	GatewayClient               gateway.Client        // gateway client for modelProvider resolution
+	ResourcePrefix              auth.ResourcePrefix         // tenant prefix used to derive SA names
+	ManagerConfig               *service.ManagerConfigStore // nil in incluster mode
+	GatewayClient               gateway.Client              // gateway client for modelProvider resolution
 	DynamicClient               dynamic.Interface
 	RemoteDynamicClientProvider backend.RemoteDynamicClientProvider
 	AuthTokenExpirationSeconds  int64
@@ -299,7 +299,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	w.Status.SpecHash = mctx.AppliedSpecHash
 	applyDeploymentTargetStatus(w, mctx)
 
-	r.reconcileLegacyWithContext(ctx, w, mctx, state)
+	r.reconcileManagerAccess(ctx, w, mctx, state)
 
 	if w.Status.ObservedGeneration == 0 {
 		logger.Info("worker created", "name", w.Name, "roomID", w.Status.RoomID)
@@ -343,13 +343,10 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 
 	_ = ReconcileMemberDelete(ctx, deps, mctx)
 
-	if r.Legacy != nil && r.Legacy.Enabled() {
+	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
 		workerMatrixID := r.Provisioner.MatrixUserID(w.Name)
-		if err := r.Legacy.UpdateManagerGroupAllowFrom(workerMatrixID, false); err != nil {
+		if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(workerMatrixID, false); err != nil {
 			logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
-		}
-		if err := r.Legacy.RemoveFromWorkersRegistry(mctx.RuntimeName); err != nil {
-			logger.Error(err, "failed to remove from workers registry (non-fatal)")
 		}
 	}
 
@@ -363,32 +360,23 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 	return reconcile.Result{}, nil
 }
 
-// reconcileLegacy writes the worker to the legacy workers-registry and grants
-// the standalone worker publish rights into the Manager's group DM room.
-func (r *WorkerReconciler) reconcileLegacy(ctx context.Context, w *v1beta1.Worker, state *MemberState) {
-	r.reconcileLegacyWithContext(ctx, w, r.workerMemberContext(w), state)
-}
-
-func (r *WorkerReconciler) reconcileLegacyWithContext(ctx context.Context, w *v1beta1.Worker, mctx MemberContext, state *MemberState) {
-	if r.Legacy == nil || !r.Legacy.Enabled() {
+// reconcileManagerAccess grants standalone Workers publish rights into the
+// Manager's group DM room and removes that right for non-leader Team members.
+func (r *WorkerReconciler) reconcileManagerAccess(ctx context.Context, w *v1beta1.Worker, mctx MemberContext, state *MemberState) {
+	if r.ManagerConfig == nil || !r.ManagerConfig.Enabled() {
 		return
 	}
 	logger := log.FromContext(ctx)
 	runtimeName := mctx.RuntimeName
 
-	role, inTeam, err := r.decoupledTeamRoleForWorker(ctx, w.Namespace, w.Name)
+	role, inTeam, err := r.teamRoleForWorker(ctx, w.Namespace, w.Name)
 	if err != nil {
-		logger.Error(err, "failed to check decoupled Team membership before legacy worker update (non-fatal)", "worker", w.Name)
+		logger.Error(err, "failed to check Team membership before Manager access update (non-fatal)", "worker", w.Name)
 	}
 	if inTeam {
-		// Decoupled Team members are still reconciled by WorkerReconciler for
-		// Worker CR lifecycle/config, but TeamReconciler owns legacy
-		// team-scoped artifacts: workers-registry role/team_id rows,
-		// Manager allow-list membership, and member channel policy overlays.
-		// Writing standalone legacy state here races with TeamReconciler and
-		// can make CI/user-visible config oscillate.
+		// TeamReconciler owns Team-scoped Manager access and channel policies.
 		if role != RoleTeamLeader {
-			if err := r.Legacy.UpdateManagerGroupAllowFrom(r.Legacy.MatrixUserID(runtimeName), false); err != nil {
+			if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
 				logger.Error(err, "failed to revoke standalone Manager groupAllowFrom for Team worker (non-fatal)", "worker", w.Name, "runtimeName", runtimeName)
 			}
 		}
@@ -398,46 +386,24 @@ func (r *WorkerReconciler) reconcileLegacyWithContext(ctx context.Context, w *v1
 	// WorkerReconciler only handles standalone workers. Grant group-DM
 	// publish rights for the standalone worker.
 	if state.ProvResult != nil {
-		if err := r.Legacy.UpdateManagerGroupAllowFrom(state.ProvResult.MatrixUserID, true); err != nil {
+		if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(state.ProvResult.MatrixUserID, true); err != nil {
 			logger.Error(err, "failed to update Manager groupAllowFrom (non-fatal)")
 		}
 	}
 
-	if err := r.Legacy.UpdateWorkersRegistry(service.WorkerRegistryEntry{
-		Name:         runtimeName,
-		MatrixUserID: r.Provisioner.MatrixUserID(runtimeName),
-		RoomID:       w.Status.RoomID,
-		Runtime:      mctx.Spec.Runtime,
-		Deployment:   "local",
-		Skills:       mctx.Spec.Skills,
-		Image:        nilIfEmpty(mctx.Spec.Image),
-	}); err != nil {
-		logger.Error(err, "registry update failed (non-fatal)")
-	}
 }
 
-func (r *WorkerReconciler) decoupledTeamRoleForWorker(ctx context.Context, namespace, workerName string) (MemberRole, bool, error) {
+func (r *WorkerReconciler) teamRoleForWorker(ctx context.Context, namespace, workerName string) (MemberRole, bool, error) {
 	if r.Client == nil || workerName == "" {
 		return "", false, nil
 	}
 
 	var teams v1beta1.TeamList
-	if err := r.List(ctx, &teams,
-		client.InNamespace(namespace),
-		client.MatchingFields{TeamWorkerMembersField: workerName},
-	); err != nil {
-		// Unit-test fake clients and older controller setups may not have the
-		// field index registered. Fall back to namespace enumeration so the
-		// safety check still works.
-		if listErr := r.List(ctx, &teams, client.InNamespace(namespace)); listErr != nil {
-			return "", false, fmt.Errorf("list teams by workerMembers index: %w; fallback list: %v", err, listErr)
-		}
+	if err := r.List(ctx, &teams, client.InNamespace(namespace)); err != nil {
+		return "", false, fmt.Errorf("list teams: %w", err)
 	}
 
 	for _, team := range teams.Items {
-		if len(team.Spec.WorkerMembers) == 0 {
-			continue
-		}
 		for _, ref := range team.Spec.WorkerMembers {
 			if ref.Name != workerName {
 				continue
@@ -561,15 +527,9 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 	}
 	hashSpec := workerSpecWithEffectiveBackendRuntimeForHash(spec, backendRuntime)
 	appliedSpecHash := hashAppliedWorkerSpecForRuntimeAndResources(hashSpec, effectiveRuntime, resourceSpec)
-	// Hash-based comparison is preferred: only pod-affecting fields trigger
-	// recreation. Fall back to Generation comparison when SpecHash has not
-	// been stored yet (first reconcile after upgrade).
-	var specChanged bool
-	if w.Status.SpecHash != "" {
-		specChanged = w.Status.SpecHash != appliedSpecHash
-	} else {
-		specChanged = w.Status.ObservedGeneration > 0 && w.Generation != w.Status.ObservedGeneration
-	}
+	// Only pod-affecting fields trigger recreation. A Worker without a recorded
+	// spec hash follows the normal create path and records it after success.
+	specChanged := w.Status.SpecHash != "" && w.Status.SpecHash != appliedSpecHash
 
 	// Cross-cluster deployment fields.
 	deployMode := v1beta1.DeployModeLocal
@@ -600,16 +560,12 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 		),
 		// SpecChanged is gated on ObservedGeneration > 0 so brand-new
 		// Workers go through StatusNotFound create instead of a transient
-		// spec-change delete. CurrentSpecHash lets sandbox read legacy live
+		// spec-change delete. CurrentSpecHash lets sandbox read managerConfig live
 		// annotations only when Worker.status.specHash is empty.
 		SpecChanged:          specChanged,
 		AppliedSpecHash:      appliedSpecHash,
 		CurrentSpecHash:      w.Status.SpecHash,
 		IsUpdate:             w.Status.Phase != "" && w.Status.Phase != "Pending" && w.Status.Phase != "Failed",
-		TeamName:             w.Annotations["agentteams.io/team"],
-		TeamLeaderName:       w.Annotations["agentteams.io/team-leader"],
-		TeamAdminName:        w.Annotations["agentteams.io/team-admin"],
-		TeamAdminMatrixID:    w.Annotations["agentteams.io/team-admin-id"],
 		ExistingMatrixUserID: w.Status.MatrixUserID,
 		ExistingRoomID:       w.Status.RoomID,
 		CurrentExposedPorts:  w.Status.ExposedPorts,

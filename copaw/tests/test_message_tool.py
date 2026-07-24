@@ -226,6 +226,26 @@ async def test_message_tool_routes_team_leader_assignment_to_team_room(
     assert recorded_msg["metadata"]["room_id"] == "!team-room:hs.local"
 
 
+@pytest.mark.asyncio
+async def test_message_tool_routes_localpart_assignment_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    response = await message(
+        action="send",
+        channel="matrix",
+        target="room:!leader-dm:hs.local",
+        message="@dag-team-1-dev Task assigned: implement the API.",
+        dryRun=True,
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert payload["roomId"] == "!team-room:hs.local"
+
+
 def test_validate_matrix_message_policy_blocks_roster_preamble_with_mxids(
     tmp_path,
     monkeypatch,

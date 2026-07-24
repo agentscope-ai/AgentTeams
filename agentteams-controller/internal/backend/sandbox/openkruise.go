@@ -275,7 +275,6 @@ func (p *OpenKruisePlugin) GetSandboxStatus(ctx context.Context, sandboxID strin
 		Phase:                 phase,
 		Message:               message,
 		Raw:                   raw,
-		AppliedSpecHash:       obj.GetAnnotations()[AnnotationLastAppliedSpecHash],
 		ReadyConditionStatus:  readyStatus,
 		ReadyConditionMessage: readyMessage,
 	}, nil
@@ -339,7 +338,6 @@ func (p *OpenKruisePlugin) GetSandboxClaimStatus(ctx context.Context, claimID st
 		Phase:                 phase,
 		Message:               message,
 		Raw:                   raw,
-		AppliedSpecHash:       obj.GetAnnotations()[AnnotationLastAppliedSpecHash],
 		ReadyConditionStatus:  readyStatus,
 		ReadyConditionMessage: readyMessage,
 		DesiredReplicas:       desiredReplicasPtr,

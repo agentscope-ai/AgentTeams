@@ -161,68 +161,6 @@ func TestManagerSpec_DeepCopyLabels(t *testing.T) {
 	}
 }
 
-// TestLeaderSpec_DeepCopyLabels verifies LeaderSpec.Labels survives
-// DeepCopy. The Leader path is exercised separately from TeamWorkerSpec
-// because TeamSpec.DeepCopyInto calls LeaderSpec.DeepCopyInto directly
-// and any regression there would silently drop leader labels.
-func TestLeaderSpec_DeepCopyLabels(t *testing.T) {
-	src := LeaderSpec{Name: "ld", Labels: map[string]string{"role-hint": "planner"}}
-	cp := *src.DeepCopy()
-	if !reflect.DeepEqual(cp.Labels, src.Labels) {
-		t.Fatalf("copy labels=%v want %v", cp.Labels, src.Labels)
-	}
-	src.Labels["role-hint"] = "mutated"
-	if cp.Labels["role-hint"] != "planner" {
-		t.Fatalf("DeepCopy aliased LeaderSpec.Labels: %v", cp.Labels)
-	}
-}
-
-// TestTeamWorkerSpec_DeepCopyLabels verifies TeamWorkerSpec.Labels
-// survives DeepCopy through the TeamSpec.Workers[] slice path.
-func TestTeamWorkerSpec_DeepCopyLabels(t *testing.T) {
-	src := TeamWorkerSpec{Name: "w1", Labels: map[string]string{"skill": "rust"}}
-	cp := *src.DeepCopy()
-	if !reflect.DeepEqual(cp.Labels, src.Labels) {
-		t.Fatalf("copy labels=%v want %v", cp.Labels, src.Labels)
-	}
-	src.Labels["skill"] = "mutated"
-	if cp.Labels["skill"] != "rust" {
-		t.Fatalf("DeepCopy aliased TeamWorkerSpec.Labels: %v", cp.Labels)
-	}
-}
-
-// TestTeamSpec_DeepCopyCascadesToMemberLabels verifies that DeepCopy on
-// the top-level TeamSpec correctly cascades into both LeaderSpec.Labels
-// and every TeamWorkerSpec.Labels — catching the case where a future
-// refactor regenerates zz_generated.deepcopy.go and accidentally drops a
-// nested call.
-func TestTeamSpec_DeepCopyCascadesToMemberLabels(t *testing.T) {
-	src := TeamSpec{
-		Leader: LeaderSpec{
-			Name:   "ld",
-			Labels: map[string]string{"role-hint": "planner"},
-		},
-		Workers: []TeamWorkerSpec{
-			{Name: "w1", Labels: map[string]string{"skill": "rust"}},
-			{Name: "w2"}, // nil labels branch
-		},
-	}
-	cp := *src.DeepCopy()
-
-	src.Leader.Labels["role-hint"] = "mutated"
-	src.Workers[0].Labels["skill"] = "mutated"
-
-	if cp.Leader.Labels["role-hint"] != "planner" {
-		t.Fatalf("LeaderSpec.Labels not isolated: %v", cp.Leader.Labels)
-	}
-	if cp.Workers[0].Labels["skill"] != "rust" {
-		t.Fatalf("Workers[0].Labels not isolated: %v", cp.Workers[0].Labels)
-	}
-	if cp.Workers[1].Labels != nil {
-		t.Fatalf("Workers[1].Labels should remain nil after DeepCopy, got %v", cp.Workers[1].Labels)
-	}
-}
-
 func TestWorkerSpec_DeepCopyResources(t *testing.T) {
 	src := WorkerSpec{
 		Model: "m",
@@ -261,41 +199,5 @@ func TestManagerSpec_DeepCopyResources(t *testing.T) {
 	src.Resources.Limits.Memory = "6Gi"
 	if cp.Resources.Limits.Memory != "5Gi" {
 		t.Fatalf("DeepCopy aliased ManagerSpec.Resources: %v", cp.Resources)
-	}
-}
-
-func TestTeamSpec_DeepCopyCascadesToMemberResources(t *testing.T) {
-	src := TeamSpec{
-		Leader: LeaderSpec{
-			Name: "lead",
-			Resources: &AgentResourceRequirements{
-				Requests: AgentResourceValues{CPU: "300m", Memory: "768Mi"},
-				Limits:   AgentResourceValues{CPU: "2", Memory: "3Gi"},
-			},
-		},
-		Workers: []TeamWorkerSpec{
-			{
-				Name: "w1",
-				Resources: &AgentResourceRequirements{
-					Requests: AgentResourceValues{CPU: "200m", Memory: "512Mi"},
-					Limits:   AgentResourceValues{CPU: "1", Memory: "2Gi"},
-				},
-			},
-			{Name: "w2"},
-		},
-	}
-	cp := *src.DeepCopy()
-
-	src.Leader.Resources.Requests.CPU = "999m"
-	src.Workers[0].Resources.Limits.Memory = "9Gi"
-
-	if cp.Leader.Resources.Requests.CPU != "300m" {
-		t.Fatalf("LeaderSpec.Resources not isolated: %v", cp.Leader.Resources)
-	}
-	if cp.Workers[0].Resources.Limits.Memory != "2Gi" {
-		t.Fatalf("TeamWorkerSpec.Resources not isolated: %v", cp.Workers[0].Resources)
-	}
-	if cp.Workers[1].Resources != nil {
-		t.Fatalf("Workers[1].Resources should remain nil after DeepCopy, got %v", cp.Workers[1].Resources)
 	}
 }

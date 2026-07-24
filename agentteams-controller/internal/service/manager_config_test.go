@@ -30,7 +30,7 @@ func TestPutManagerConfig_PreservesUserPluginEntries(t *testing.T) {
 		t.Fatalf("seed OSS: %v", err)
 	}
 
-	lc := NewLegacyCompat(LegacyConfig{
+	lc := NewManagerConfigStore(ManagerConfigStoreConfig{
 		OSS:          fake,
 		MatrixDomain: "agentteams.local",
 		ManagerName:  "manager",
@@ -100,7 +100,7 @@ func TestPutManagerConfig_PreservesUserPluginEntries(t *testing.T) {
 
 func TestPutManagerConfig_NoExistingOSSObject(t *testing.T) {
 	fake := ossfake.NewMemory()
-	lc := NewLegacyCompat(LegacyConfig{
+	lc := NewManagerConfigStore(ManagerConfigStoreConfig{
 		OSS:          fake,
 		MatrixDomain: "agentteams.local",
 		ManagerName:  "manager",
@@ -134,7 +134,7 @@ func TestPutManagerConfig_MalformedExistingJSON_FallsBackToGenerated(t *testing.
 		t.Fatalf("seed OSS: %v", err)
 	}
 
-	lc := NewLegacyCompat(LegacyConfig{
+	lc := NewManagerConfigStore(ManagerConfigStoreConfig{
 		OSS:          fake,
 		MatrixDomain: "agentteams.local",
 		ManagerName:  "manager",

@@ -1,12 +1,41 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
 	sigyaml "sigs.k8s.io/yaml"
 )
+
+func TestTeamRespJSONPreservesAdmin(t *testing.T) {
+	input := []byte(`{"name":"team-a","phase":"Active","admin":{"name":"alice","matrixUserId":"@alice:example.com"},"workerMembers":[{"name":"leader","role":"team_leader"}]}`)
+	var resp teamResp
+	if err := json.Unmarshal(input, &resp); err != nil {
+		t.Fatalf("unmarshal team response: %v", err)
+	}
+	output, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal team response: %v", err)
+	}
+
+	var got struct {
+		Admin *struct {
+			Name         string `json:"name"`
+			MatrixUserID string `json:"matrixUserId"`
+		} `json:"admin"`
+	}
+	if err := json.Unmarshal(output, &got); err != nil {
+		t.Fatalf("unmarshal projected team response: %v", err)
+	}
+	if got.Admin == nil {
+		t.Fatal("projected team response dropped admin")
+	}
+	if got.Admin.Name != "alice" || got.Admin.MatrixUserID != "@alice:example.com" {
+		t.Fatalf("projected admin = %#v", got.Admin)
+	}
+}
 
 func TestRootCommandUsesInvokedBinaryName(t *testing.T) {
 	if got := newRootCommand("agt").Use; got != "agt" {
@@ -210,8 +239,9 @@ kind: Team
 metadata:
   name: alpha-team
 spec:
-  leader:
-    name: alpha-lead
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Human
@@ -318,10 +348,11 @@ kind: Team
 metadata:
   name: my-team
 spec:
-  leader:
-    name: leader-name
-  workers:
+  workerMembers:
+    - name: leader-name
+      role: team_leader
     - name: worker-name
+      role: worker
 `
 	docs := splitYAMLDocs(input)
 	if len(docs) != 1 {
@@ -331,7 +362,7 @@ spec:
 	if err := sigyaml.Unmarshal([]byte(docs[0]), &res); err != nil {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
-	// metadata.name should be "my-team", not confused with spec.leader.name
+	// metadata.name should be "my-team", not confused with a referenced leader Worker name
 	if res.Metadata.Name != "my-team" {
 		t.Errorf("expected name my-team (from metadata), got %s", res.Metadata.Name)
 	}

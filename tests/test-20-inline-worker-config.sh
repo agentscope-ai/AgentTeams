@@ -171,10 +171,9 @@ assert_contains "${AGENTS_IN_MINIO}" "agentteams-builtin-end" "AGENTS.md has bui
 # ============================================================
 log_section "Verify Worker Infrastructure"
 
-# workers-registry.json (in MinIO, written by controller)
-REGISTRY_JSON=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
-REGISTRY_ENTRY=$(echo "${REGISTRY_JSON}" | jq -r --arg w "${TEST_WORKER}" '.workers[$w] // empty' 2>/dev/null)
-assert_not_empty "${REGISTRY_ENTRY}" "Worker registered in workers-registry.json"
+# Worker CR is the source of truth.
+WORKER_RESOURCE=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null || echo "")
+assert_not_empty "${WORKER_RESOURCE}" "Worker resource is queryable"
 
 # Matrix Room (from CRD status)
 ROOM_ID=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.roomID // empty')

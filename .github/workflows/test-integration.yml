@@ -1,7 +1,7 @@
 name: Integration Tests
 
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - main
     paths:
@@ -57,6 +57,11 @@ on:
         required: false
         default: 'qwen3.6-plus'
 
+permissions:
+  # Fork PRs must remain read-only; secret-dependent shards are filtered below.
+  contents: read
+  pull-requests: read
+
 env:
   # Tests that do not require a GitHub token, split into four shards for parallel execution
   # Shard A: LLM interaction tests (sequential dependency: 02 creates alice → 03-06 use alice)
@@ -79,17 +84,16 @@ jobs:
     timeout-minutes: 2
     outputs:
       openclaw_base: ${{ steps.decide.outputs.openclaw_base }}
+      test_matrix: ${{ steps.test-matrix.outputs.matrix }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 0
 
       - name: Detect openclaw-base changes (PR only)
         id: filter
-        if: github.event_name == 'pull_request_target'
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -101,12 +105,36 @@ jobs:
       - name: Decide whether to rebuild openclaw-base
         id: decide
         run: |
-          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "openclaw_base=${{ steps.filter.outputs.openclaw_base }}" >> $GITHUB_OUTPUT
           else
             # push to main / tag / workflow_dispatch: always rebuild
             echo "openclaw_base=true" >> $GITHUB_OUTPUT
           fi
+
+      - name: Select integration test matrix
+        id: test-matrix
+        env:
+          UNTRUSTED_PR: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
+        run: |
+          MATRIX='[
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":false},
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
+            {"shard":"controller-cr-2","filter_env":"SHARD_D_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":false}
+          ]'
+          if [ "$UNTRUSTED_PR" = "true" ]; then
+            MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.requires_secret == false) | del(.requires_secret)]')
+          else
+            MATRIX=$(echo "$MATRIX" | jq -c '[.[] | del(.requires_secret)]')
+          fi
+          echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
 
   # Step 1a: Build the shared base image (agentteams-controller)
   build-base:
@@ -115,9 +143,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -163,9 +188,6 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -212,9 +234,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -289,8 +308,8 @@ jobs:
 
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
   integration-tests:
-    needs: build-images
-    if: always() && needs.build-images.result == 'success'
+    needs: [detect-changes, build-images]
+    if: always() && needs.detect-changes.result == 'success' && needs.build-images.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -299,60 +318,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # OpenClaw manager + OpenClaw worker (default pairing)
-          - shard: llm-interaction
-            filter_env: SHARD_A_TESTS
-            manager_runtime: openclaw
-            worker_runtime: openclaw
-          - shard: llm-interaction-2
-            filter_env: SHARD_B_TESTS
-            manager_runtime: openclaw
-            worker_runtime: openclaw
-          - shard: controller-cr
-            filter_env: SHARD_C_TESTS
-            manager_runtime: openclaw
-            worker_runtime: openclaw
-          # CoPaw manager + CoPaw worker (full copaw runtime coverage).
-          # controller-cr-2 (test-21 team project DAG) only runs under copaw:
-          # the team controller hardcodes Runtime: "copaw" for both leader and
-          # workers, so running it under the openclaw manager is redundant.
-          - shard: llm-interaction
-            filter_env: SHARD_A_TESTS
-            manager_runtime: copaw
-            worker_runtime: copaw
-          - shard: llm-interaction-2
-            filter_env: SHARD_B_TESTS
-            manager_runtime: copaw
-            worker_runtime: copaw
-          - shard: controller-cr
-            filter_env: SHARD_C_TESTS
-            manager_runtime: copaw
-            worker_runtime: copaw
-          - shard: controller-cr-2
-            filter_env: SHARD_D_TESTS
-            manager_runtime: copaw
-            worker_runtime: copaw
-          # Hermes worker coverage: exercise bridge.py + matrix-nio adapter end-to-end.
-          # Pairs with the copaw manager because both speak matrix-nio (same
-          # adapter family), keeping the surface area small while still
-          # validating worker-side container start, config bridging, Matrix
-          # join, and task assignment for the hermes runtime. controller-cr-2
-          # (test-21 team project DAG) is intentionally excluded — the team
-          # controller hardcodes Runtime: "copaw", so it cannot exercise hermes.
-          - shard: llm-interaction
-            filter_env: SHARD_A_TESTS
-            manager_runtime: copaw
-            worker_runtime: hermes
-          - shard: llm-interaction-2
-            filter_env: SHARD_B_TESTS
-            manager_runtime: copaw
-            worker_runtime: hermes
-          - shard: controller-cr
-            filter_env: SHARD_C_TESTS
-            manager_runtime: copaw
-            worker_runtime: hermes
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.test_matrix) }}
 
     steps:
       - name: Free Up Disk Space
@@ -367,9 +333,6 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Download all images
         uses: actions/download-artifact@v4
@@ -413,7 +376,7 @@ jobs:
       # ============================================================
 
       - name: Download latest release baseline
-        if: github.event_name == 'pull_request_target' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         continue-on-error: true
         run: |
           mkdir -p baseline-metrics
@@ -433,7 +396,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate metrics comparison and post PR comment
-        if: github.event_name == 'pull_request_target' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -497,7 +460,7 @@ jobs:
           fi
 
       - name: Post failure comment to PR
-        if: github.event_name == 'pull_request_target' && failure()
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && failure()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

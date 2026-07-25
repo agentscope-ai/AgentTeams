@@ -2480,15 +2480,17 @@ step_dashboard() {
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
     AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}"
 
-    # Track whether the user explicitly supplied an image override.
-    # If they only change the version, we recompute the default image.
-    local _dashboard_image_explicit=0
-    if [ -n "${AGENTTEAMS_DASHBOARD_IMAGE:-}" ]; then
-        _dashboard_image_explicit=1
-    fi
-    local _default_image="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}"
-    if [ "${_dashboard_image_explicit}" = "0" ]; then
-        AGENTTEAMS_DASHBOARD_IMAGE="${_default_image}"
+    # Compute the default image for the current version.
+    # We track whether the current image matches the derived default so that
+    # changing the version also updates the image (unless the user has
+    # explicitly overridden it to a non-default value).
+    _dashboard_default_image() {
+        echo "${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${1:-${AGENTTEAMS_DASHBOARD_VERSION}}"
+    }
+    local _init_default
+    _init_default=$(_dashboard_default_image)
+    if [ -z "${AGENTTEAMS_DASHBOARD_IMAGE:-}" ]; then
+        AGENTTEAMS_DASHBOARD_IMAGE="${_init_default}"
     fi
 
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
@@ -2525,8 +2527,10 @@ step_dashboard() {
 
     # Dashboard version
     local _current_version="${AGENTTEAMS_DASHBOARD_VERSION}"
-    read -p "$(msg dash.version_prompt) [${_current_version}]: " _input
     local _old_version="${AGENTTEAMS_DASHBOARD_VERSION}"
+    local _old_default_image
+    _old_default_image=$(_dashboard_default_image "${_old_version}")
+    read -p "$(msg dash.version_prompt) [${_current_version}]: " _input
     AGENTTEAMS_DASHBOARD_VERSION="${_input:-${_current_version}}"
 
     # Dashboard port
@@ -2534,17 +2538,18 @@ step_dashboard() {
     read -p "$(msg dash.port_prompt) [${_current_port}]: " _input
     AGENTTEAMS_PORT_DASHBOARD="${_input:-${_current_port}}"
 
-    # Dashboard image: if the user did not explicitly supply an image,
-    # recompute the default from the (possibly changed) version.
-    if [ "${_dashboard_image_explicit}" = "0" ] && [ "${AGENTTEAMS_DASHBOARD_VERSION}" != "${_old_version}" ]; then
-        _default_image="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}"
-        AGENTTEAMS_DASHBOARD_IMAGE="${_default_image}"
+    # Dashboard image: if the current image matches the default derived from
+    # the OLD version, recompute it from the NEW version. This handles both
+    # fresh installs and upgrades where the previous image was the default.
+    # Only a real user override (image != default for old version) is preserved.
+    if [ "${AGENTTEAMS_DASHBOARD_VERSION}" != "${_old_version}" ] && \
+       [ "${AGENTTEAMS_DASHBOARD_IMAGE}" = "${_old_default_image}" ]; then
+        AGENTTEAMS_DASHBOARD_IMAGE=$(_dashboard_default_image)
     fi
     local _current_image="${AGENTTEAMS_DASHBOARD_IMAGE}"
     read -p "$(msg dash.image_prompt) [${_current_image}]: " _input
     if [ -n "${_input}" ]; then
         AGENTTEAMS_DASHBOARD_IMAGE="${_input}"
-        _dashboard_image_explicit=1
     fi
 
     # Higress Console URL (explicit config takes priority; auto-detect as fallback)
@@ -2997,7 +3002,17 @@ WantedBy=default.target"
 # ============================================================
 
 _start_dashboard() {
+    local CTRL_CONTAINER="agentteams-controller"
+    local DASHBOARD_CONTAINER="agentteams-dashboard"
+
     if [ "${AGENTTEAMS_DASHBOARD:-0}" != "1" ]; then
+        # Stop and remove the existing dashboard container if present.
+        if ${DOCKER_CMD} ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${DASHBOARD_CONTAINER}$"; then
+            log "Stopping and removing ${DASHBOARD_CONTAINER}..."
+            ${DOCKER_CMD} stop "${DASHBOARD_CONTAINER}" >/dev/null 2>&1 || true
+            ${DOCKER_CMD} rm -f "${DASHBOARD_CONTAINER}" >/dev/null 2>&1 || true
+            log "Dashboard stopped."
+        fi
         return 0
     fi
 
@@ -3008,9 +3023,6 @@ _start_dashboard() {
         log "Use Quick Start (embedded) mode to enable agentteams-dashboard."
         return 0
     fi
-
-    local CTRL_CONTAINER="agentteams-controller"
-    local DASHBOARD_CONTAINER="agentteams-dashboard"
 
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
     AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0-beta.1}"

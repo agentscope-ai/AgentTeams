@@ -121,6 +121,9 @@ func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScop
 		return reconcile.Result{RequeueAfter: reconcileInterval}, err
 	}
 	r.reconcileHumanRooms(ctx, s)
+	if err := r.reconcileHumanWorkerAllowlists(ctx, s); err != nil {
+		return reconcile.Result{RequeueAfter: reconcileInterval}, err
+	}
 
 	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
 }

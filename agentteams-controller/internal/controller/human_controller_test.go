@@ -95,6 +95,170 @@ func newReadyTeam(name, roomID string) *v1beta1.Team {
 	return tm
 }
 
+func TestHumanReconciler_SyncsAccessibleWorkerAllowlist(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	human := newHuman("alice", v1beta1.HumanSpec{
+		AccessibleWorkers: []string{"w1"},
+	})
+	human.Status.MatrixUserID = "@alice:localhost"
+	human.Status.InitialPassword = "stored-pw"
+	human.Status.Rooms = []string{"!room-w1:localhost"}
+	human.Status.Phase = "Active"
+	human.Finalizers = []string{finalizerName}
+
+	rig := newHumanRig(t, human, worker)
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var out v1beta1.Worker
+	if err := rig.client.Get(context.Background(),
+		types.NamespacedName{Name: "w1", Namespace: "default"}, &out); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if out.Spec.ChannelPolicy == nil ||
+		len(out.Spec.ChannelPolicy.GroupAllowExtra) != 1 ||
+		out.Spec.ChannelPolicy.GroupAllowExtra[0] != "@alice:localhost" {
+		t.Fatalf("groupAllowExtra=%v, want [@alice:localhost]", out.Spec.ChannelPolicy)
+	}
+	if got := out.Annotations["agentteams.io/human-group-allow-extra"]; got != `{"alice":"@alice:localhost"}` {
+		t.Fatalf("managed allowlist annotation=%q, want alice ownership", got)
+	}
+}
+
+func TestHumanReconciler_PreservesManualWorkerAllowlistEntry(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	worker.Spec.ChannelPolicy = &v1beta1.ChannelPolicySpec{
+		GroupAllowExtra: []string{"@alice:localhost"},
+	}
+	human := activeHumanWithWorker("alice", "w1", "@alice:localhost")
+	rig := newHumanRig(t, human, worker)
+
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("initial reconcile: %v", err)
+	}
+	updateHumanWorkers(t, rig, "alice", nil)
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("revoke reconcile: %v", err)
+	}
+
+	out := getHumanTestWorker(t, rig, "w1")
+	if got := out.Spec.ChannelPolicy.GroupAllowExtra; len(got) != 1 || got[0] != "@alice:localhost" {
+		t.Fatalf("groupAllowExtra=%v, want manual entry preserved", got)
+	}
+	if got := out.Annotations[v1beta1.AnnotationHumanManagedGroupAllowExtra]; got != "" {
+		t.Fatalf("manual entry must not be controller-owned, annotation=%q", got)
+	}
+}
+
+func TestHumanReconciler_MultipleHumansShareWorkerAndRevokeOne(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	alice := activeHumanWithWorker("alice", "w1", "@alice:localhost")
+	bob := activeHumanWithWorker("bob", "w1", "@bob:localhost")
+	rig := newHumanRig(t, alice, bob, worker)
+
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("reconcile alice: %v", err)
+	}
+	if _, _, err := rig.reconcile("bob"); err != nil {
+		t.Fatalf("reconcile bob: %v", err)
+	}
+	updateHumanWorkers(t, rig, "alice", nil)
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("revoke alice: %v", err)
+	}
+
+	out := getHumanTestWorker(t, rig, "w1")
+	if got := out.Spec.ChannelPolicy.GroupAllowExtra; len(got) != 1 || got[0] != "@bob:localhost" {
+		t.Fatalf("groupAllowExtra=%v, want only bob", got)
+	}
+	if got := out.Annotations[v1beta1.AnnotationHumanManagedGroupAllowExtra]; got != `{"bob":"@bob:localhost"}` {
+		t.Fatalf("managed allowlist annotation=%q, want only bob ownership", got)
+	}
+}
+
+func TestHumanReconciler_DeleteRemovesOnlyManagedWorkerAllowlistEntry(t *testing.T) {
+	now := metav1.Now()
+	human := activeHumanWithWorker("alice", "w1", "@alice:localhost")
+	human.DeletionTimestamp = &now
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	worker.Annotations = map[string]string{
+		v1beta1.AnnotationHumanManagedGroupAllowExtra: `{"alice":"@alice:localhost"}`,
+	}
+	worker.Spec.ChannelPolicy = &v1beta1.ChannelPolicySpec{
+		GroupAllowExtra: []string{"@alice:localhost", "@manual:localhost"},
+	}
+	rig := newHumanRig(t, human, worker)
+
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("delete reconcile: %v", err)
+	}
+
+	out := getHumanTestWorker(t, rig, "w1")
+	if got := out.Spec.ChannelPolicy.GroupAllowExtra; len(got) != 1 || got[0] != "@manual:localhost" {
+		t.Fatalf("groupAllowExtra=%v, want only manual entry", got)
+	}
+	if got := out.Annotations[v1beta1.AnnotationHumanManagedGroupAllowExtra]; got != "" {
+		t.Fatalf("managed allowlist annotation=%q, want removed", got)
+	}
+}
+
+func TestHumanReconciler_WorkerAllowlistIsIdempotent(t *testing.T) {
+	worker := newReadyWorker("w1", "!room-w1:localhost")
+	human := activeHumanWithWorker("alice", "w1", "@alice:localhost")
+	rig := newHumanRig(t, human, worker)
+
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	first := getHumanTestWorker(t, rig, "w1")
+	if _, _, err := rig.reconcile("alice"); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	second := getHumanTestWorker(t, rig, "w1")
+
+	if second.ResourceVersion != first.ResourceVersion {
+		t.Fatalf("Worker resourceVersion changed on idempotent reconcile: %q -> %q",
+			first.ResourceVersion, second.ResourceVersion)
+	}
+	if got := second.Spec.ChannelPolicy.GroupAllowExtra; len(got) != 1 || got[0] != "@alice:localhost" {
+		t.Fatalf("groupAllowExtra=%v, want one alice entry", got)
+	}
+}
+
+func activeHumanWithWorker(name, workerName, matrixUserID string) *v1beta1.Human {
+	human := newHuman(name, v1beta1.HumanSpec{AccessibleWorkers: []string{workerName}})
+	human.Status.MatrixUserID = matrixUserID
+	human.Status.InitialPassword = "stored-pw"
+	human.Status.Rooms = []string{"!room-" + workerName + ":localhost"}
+	human.Status.Phase = "Active"
+	human.Finalizers = []string{finalizerName}
+	return human
+}
+
+func updateHumanWorkers(t *testing.T, rig *humanTestRig, name string, workers []string) {
+	t.Helper()
+	var human v1beta1.Human
+	key := types.NamespacedName{Name: name, Namespace: "default"}
+	if err := rig.client.Get(context.Background(), key, &human); err != nil {
+		t.Fatalf("get Human %s: %v", name, err)
+	}
+	human.Spec.AccessibleWorkers = workers
+	if err := rig.client.Update(context.Background(), &human); err != nil {
+		t.Fatalf("update Human %s: %v", name, err)
+	}
+}
+
+func getHumanTestWorker(t *testing.T, rig *humanTestRig, name string) *v1beta1.Worker {
+	t.Helper()
+	var worker v1beta1.Worker
+	if err := rig.client.Get(context.Background(),
+		types.NamespacedName{Name: name, Namespace: "default"}, &worker); err != nil {
+		t.Fatalf("get Worker %s: %v", name, err)
+	}
+	return &worker
+}
+
 // TestHumanReconciler_Create_HappyPath covers the first-time provisioning
 // path: a brand-new Human CR, one ready Worker, one ready Team. Asserts
 // that a **single** reconcile converges — EnsureHumanUser is called

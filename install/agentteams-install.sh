@@ -2478,8 +2478,18 @@ step_dashboard() {
     AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
     AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0-beta.1}"
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
-    AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
     AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}"
+
+    # Track whether the user explicitly supplied an image override.
+    # If they only change the version, we recompute the default image.
+    local _dashboard_image_explicit=0
+    if [ -n "${AGENTTEAMS_DASHBOARD_IMAGE:-}" ]; then
+        _dashboard_image_explicit=1
+    fi
+    local _default_image="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}"
+    if [ "${_dashboard_image_explicit}" = "0" ]; then
+        AGENTTEAMS_DASHBOARD_IMAGE="${_default_image}"
+    fi
 
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
         AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
@@ -2516,6 +2526,7 @@ step_dashboard() {
     # Dashboard version
     local _current_version="${AGENTTEAMS_DASHBOARD_VERSION}"
     read -p "$(msg dash.version_prompt) [${_current_version}]: " _input
+    local _old_version="${AGENTTEAMS_DASHBOARD_VERSION}"
     AGENTTEAMS_DASHBOARD_VERSION="${_input:-${_current_version}}"
 
     # Dashboard port
@@ -2523,11 +2534,18 @@ step_dashboard() {
     read -p "$(msg dash.port_prompt) [${_current_port}]: " _input
     AGENTTEAMS_PORT_DASHBOARD="${_input:-${_current_port}}"
 
-    # Dashboard image (derived from version by default, but overridable)
-    local _default_image="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}"
-    local _current_image="${AGENTTEAMS_DASHBOARD_IMAGE:-${_default_image}}"
+    # Dashboard image: if the user did not explicitly supply an image,
+    # recompute the default from the (possibly changed) version.
+    if [ "${_dashboard_image_explicit}" = "0" ] && [ "${AGENTTEAMS_DASHBOARD_VERSION}" != "${_old_version}" ]; then
+        _default_image="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}"
+        AGENTTEAMS_DASHBOARD_IMAGE="${_default_image}"
+    fi
+    local _current_image="${AGENTTEAMS_DASHBOARD_IMAGE}"
     read -p "$(msg dash.image_prompt) [${_current_image}]: " _input
-    AGENTTEAMS_DASHBOARD_IMAGE="${_input:-${_current_image}}"
+    if [ -n "${_input}" ]; then
+        AGENTTEAMS_DASHBOARD_IMAGE="${_input}"
+        _dashboard_image_explicit=1
+    fi
 
     # Higress Console URL (explicit config takes priority; auto-detect as fallback)
     local _higress_url="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}"
@@ -3089,24 +3107,24 @@ _start_dashboard() {
         [ -n "${admin_pass}" ] && env_args+=(-e AGENTTEAMS_ADMIN_PASSWORD="${admin_pass}")
 
         # Higress Console URL: explicit config takes priority, auto-detect as fallback.
+        local _resolved_gw_url=""
         if [ -n "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}" ]; then
             # Normalize URL: add http:// prefix if missing
-            local _gw_norm="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}"
-            case "${_gw_norm}" in
+            _resolved_gw_url="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}"
+            case "${_resolved_gw_url}" in
                 http://*|https://*) ;;
-                *) _gw_norm="http://${_gw_norm}" ;;
+                *) _resolved_gw_url="http://${_resolved_gw_url}" ;;
             esac
-            env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_gw_norm}")
+            env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_resolved_gw_url}")
         elif ${DOCKER_CMD} exec "${CTRL_CONTAINER}" wget -q -O- --timeout=2 http://127.0.0.1:8001/ >/dev/null 2>&1; then
-            env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="http://${CTRL_CONTAINER}:8001")
+            _resolved_gw_url="http://${CTRL_CONTAINER}:8001"
+            env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_resolved_gw_url}")
         fi
 
         # Verify Higress Console URL reachability (best-effort warning)
-        local _gw_url=""
-        _gw_url=$(printf '%s\n' "${env_args[@]}" | sed -n 's/^-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL=//p' | head -n1)
-        if [ -n "${_gw_url}" ]; then
-            if ! ${DOCKER_CMD} exec "${CTRL_CONTAINER}" curl -sf --max-time 3 "${_gw_url}/" >/dev/null 2>&1; then
-                log "WARNING: Higress Console URL may not be reachable: ${_gw_url}"
+        if [ -n "${_resolved_gw_url}" ]; then
+            if ! ${DOCKER_CMD} exec "${CTRL_CONTAINER}" curl -sf --max-time 3 "${_resolved_gw_url}/" >/dev/null 2>&1; then
+                log "WARNING: Higress Console URL may not be reachable: ${_resolved_gw_url}"
                 log "  Dashboard will still work, but shared login via Higress Console may fail."
                 log "  To fix: verify the URL is correct and the Higress Console service is running."
             fi

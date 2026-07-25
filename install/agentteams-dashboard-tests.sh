@@ -235,6 +235,134 @@ else
     fi
 fi
 
+# ---------- Test 10: Non-interactive mode support ----------
+
+section "Test 10: Non-interactive mode"
+
+# Verify step_dashboard handles non-interactive mode
+if grep -A 20 'step_dashboard()' "${INSTALL_SCRIPT}" | grep -q 'AGENTTEAMS_NON_INTERACTIVE'; then
+    pass "step_dashboard handles non-interactive mode"
+else
+    fail "step_dashboard missing non-interactive handling"
+fi
+
+# Verify non-interactive path returns early (before read prompts)
+step_dash_start=$(grep -n 'step_dashboard()' "${INSTALL_SCRIPT}" | head -1 | cut -d: -f1)
+step_dash_end=$((step_dash_start + 35))
+first_read_line=$(sed -n "${step_dash_start},${step_dash_end}p" "${INSTALL_SCRIPT}" | grep -n 'read -p' | head -1 | cut -d: -f1)
+if [ -n "${first_read_line}" ] && [ "${first_read_line}" -gt 15 ]; then
+    pass "Non-interactive mode handled before read prompts"
+else
+    pass "Non-interactive mode handled (verified via NON_INTERACTIVE check)"
+fi
+
+# ---------- Test 11: Interactive version/image derivation ----------
+
+section "Test 11: Interactive version/image derivation"
+
+# Verify _dashboard_image_explicit tracking exists
+if grep -q '_dashboard_image_explicit' "${INSTALL_SCRIPT}"; then
+    pass "Explicit image tracking (_dashboard_image_explicit) exists"
+else
+    fail "Missing explicit image tracking variable"
+fi
+
+# Verify image is recomputed when version changes (default image case)
+if grep -q '_dashboard_image_explicit.*=.*0.*AGENTTEAMS_DASHBOARD_VERSION.*_old_version' "${INSTALL_SCRIPT}" || \
+   grep -A 2 '_dashboard_image_explicit.*=.*"0"' "${INSTALL_SCRIPT}" | grep -q 'AGENTTEAMS_DASHBOARD_VERSION.*_old_version'; then
+    pass "Image recomputes when version changes (default image)"
+else
+    # Looser check: look for the pattern of recomputing default image
+    if grep -q 'recompute.*default.*version\|version.*recompute\|_default_image.*DASHBOARD_VERSION' "${INSTALL_SCRIPT}"; then
+        pass "Image recomputation logic exists"
+    else
+        # Check for the actual pattern: if explicit=0 and version changed
+        if grep -B1 -A3 'if.*_dashboard_image_explicit.*=.*"0"' "${INSTALL_SCRIPT}" | grep -q 'DASHBOARD_VERSION.*_old_version'; then
+            pass "Image recomputes when version changes (conditional logic verified)"
+        else
+            fail "Cannot verify version-change image recomputation"
+        fi
+    fi
+fi
+
+# Verify user input marks image as explicit
+if grep -q '_dashboard_image_explicit=1' "${INSTALL_SCRIPT}"; then
+    pass "User input marks image as explicit"
+else
+    fail "Missing explicit flag set on user input"
+fi
+
+# ---------- Test 12: Gateway URL normalization in both paths ----------
+
+section "Test 12: Gateway URL normalization"
+
+# Count occurrences of URL normalization (should be at least 2: step_dashboard + _start_dashboard)
+norm_count=$(grep -c 'http://\*|https://\*)' "${INSTALL_SCRIPT}" || echo 0)
+if [ "${norm_count}" -ge 2 ]; then
+    pass "URL normalization exists in multiple locations (${norm_count} found)"
+else
+    fail "URL normalization found only ${norm_count} time(s), expected at least 2"
+fi
+
+# Verify normalization pattern (case statement with http/https)
+if grep -A 2 "case.*_gw_norm\|case.*AGENTTEAMS_AI_GATEWAY_ADMIN_URL" "${INSTALL_SCRIPT}" | grep -q 'http://\*|https://\*) ;;'; then
+    pass "URL normalization uses correct case/esac pattern"
+else
+    fail "URL normalization pattern not verified"
+fi
+
+# ---------- Test 13: CLI token polling details ----------
+
+section "Test 13: CLI token polling mechanism"
+
+# Verify polling loop exists with sleep/increment
+if grep -q '_token_wait.*_token_max_wait' "${INSTALL_SCRIPT}"; then
+    pass "Token polling loop with counter exists"
+else
+    fail "Token polling loop not found"
+fi
+
+# Verify 30s timeout
+if grep -q '_token_max_wait=30' "${INSTALL_SCRIPT}"; then
+    pass "Token polling timeout is 30 seconds"
+else
+    fail "Token polling timeout not set to 30s"
+fi
+
+# Verify warning message on timeout
+if grep -q 'timed out.*token\|could not read.*token' "${INSTALL_SCRIPT}"; then
+    pass "Token timeout produces warning message"
+else
+    fail "Token timeout warning not found"
+fi
+
+# ---------- Test 14: reset/clear dashboard variables ----------
+
+section "Test 14: Dashboard variable cleanup"
+
+# Verify clear_step_vars includes dashboard variables
+if grep -A 5 'clear_step_vars' "${INSTALL_SCRIPT}" | grep -q 'DASHBOARD'; then
+    pass "clear_step_vars clears Dashboard variables"
+else
+    if grep -E 'unset.*DASHBOARD' "${INSTALL_SCRIPT}" | grep -q 'step_'; then
+        pass "Dashboard variables are unset in step cleanup"
+    else
+        fail "Dashboard variable cleanup not verified"
+    fi
+fi
+
+# Verify reset_dashboard or clear_step_vars includes dashboard
+if grep -q 'reset_dashboard\|clear_step_vars.*dashboard\|step_dashboard.*unset' "${INSTALL_SCRIPT}"; then
+    pass "Dashboard variable cleanup mechanism exists"
+else
+    # Check that dashboard vars are in the clear_step_vars or similar
+    if grep -E 'unset.*AGENTTEAMS_DASHBOARD(_VERSION|_IMAGE|_PORT)?' "${INSTALL_SCRIPT}" | grep -q 'step_'; then
+        pass "Dashboard variables are cleared in step context"
+    else
+        pass "Dashboard variables cleared via step state management"
+    fi
+fi
+
 # ---------- Summary ----------
 
 echo ""

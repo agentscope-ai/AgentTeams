@@ -3132,7 +3132,12 @@ _start_dashboard() {
     else
         log "WARNING: ${CTRL_CONTAINER} not running; launching Dashboard without Controller/MinIO/LLM env."
         if [ -n "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}" ]; then
-            env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}")
+            local _gw_norm="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}"
+            case "${_gw_norm}" in
+                http://*|https://*) ;;
+                *) _gw_norm="http://${_gw_norm}" ;;
+            esac
+            env_args+=(-e AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_gw_norm}")
         fi
     fi
 

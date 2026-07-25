@@ -240,7 +240,7 @@ fi
 section "Test 10: Non-interactive mode"
 
 # Verify step_dashboard handles non-interactive mode
-if grep -A 20 'step_dashboard()' "${INSTALL_SCRIPT}" | grep -q 'AGENTTEAMS_NON_INTERACTIVE'; then
+if grep -A 40 'step_dashboard()' "${INSTALL_SCRIPT}" | grep -q 'AGENTTEAMS_NON_INTERACTIVE'; then
     pass "step_dashboard handles non-interactive mode"
 else
     fail "step_dashboard missing non-interactive handling"
@@ -447,7 +447,11 @@ test_step_dashboard_exec() {
 _exec_result=$(test_step_dashboard_exec 2>&1)
 
 if echo "${_exec_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
-    pass "Executable step_dashboard: extraction not available (grep tests cover behavior)"
+    fail "Exec step_dashboard: function extraction failed"
+    fail "Exec non-interactive: cannot verify (extraction failed)"
+    fail "Exec non-interactive port: cannot verify (extraction failed)"
+    fail "Exec non-interactive image: cannot verify (extraction failed)"
+    fail "Exec non-interactive enabled: cannot verify (extraction failed)"
 else
     # Test 15a: Version is correct
     if echo "${_exec_result}" | grep -q "RESULT_VERSION=v1.2.0-beta.1"; then
@@ -536,7 +540,9 @@ test_start_dashboard_stop_exec() {
 _stop_exec_result=$(test_start_dashboard_stop_exec 2>&1)
 
 if echo "${_stop_exec_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
-    pass "Executable stop: extraction not available (grep tests cover behavior)"
+    fail "Exec stop: function extraction failed"
+    fail "Exec stop: cannot verify stop call (extraction failed)"
+    fail "Exec stop: cannot verify rm call (extraction failed)"
 else
     # Test 16a: stop command is called
     if echo "${_stop_exec_result}" | grep -q "docker stop.*agentteams-dashboard"; then
@@ -553,11 +559,12 @@ else
     fi
 fi
 
-# ---------- Test 17: Executable upgrade version/image derivation ----------
+# ---------- Test 17: Executable non-interactive version/image derivation ----------
 
-section "Test 17: Executable upgrade version/image derivation"
+section "Test 17: Executable non-interactive version/image derivation"
 
-test_upgrade_derivation_exec() {
+_test_step_dashboard_with_env() {
+    local _version="$1" _image="$2" _noninteractive="$3" _upgrade="$4" _keepall="$5"
     local _tmpfile
     _tmpfile=$(mktemp)
 
@@ -574,63 +581,149 @@ test_upgrade_derivation_exec() {
         podman() { return 1; }
         DOCKER_CMD="docker"
 
-        # Simulate upgrade: load current (default) image from env
-        # Version v1.2.0-beta.1 with the matching default image
-        AGENTTEAMS_NON_INTERACTIVE=1
+        AGENTTEAMS_NON_INTERACTIVE="${_noninteractive}"
         AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
-        AGENTTEAMS_UPGRADE=1
-        AGENTTEAMS_UPGRADE_KEEP_ALL=1
+        AGENTTEAMS_UPGRADE="${_upgrade}"
+        AGENTTEAMS_UPGRADE_KEEP_ALL="${_keepall}"
         AGENTTEAMS_LANG="en"
         AGENTTEAMS_USE_EMBEDDED=0
         AGENTTEAMS_LOCAL_ONLY=1
         AGENTTEAMS_DASHBOARD="1"
-        AGENTTEAMS_DASHBOARD_VERSION="v1.2.0-beta.1"
+        AGENTTEAMS_DASHBOARD_VERSION="${_version}"
         AGENTTEAMS_PORT_DASHBOARD="13000"
-        # This is the DEFAULT image for v1.2.0-beta.1 (not a user override)
-        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.2.0-beta.1"
+        AGENTTEAMS_DASHBOARD_IMAGE="${_image}"
         AGENTTEAMS_AI_GATEWAY_ADMIN_URL=""
         STEP_RESULT=""
 
-        # shellcheck disable=SC1090
         source "${_tmpfile}" 2>/dev/null
 
         if ! declare -F step_dashboard >/dev/null 2>&1; then
             echo "FUNCTION_NOT_FOUND"
         else
-            # In non-interactive keep-all mode, just check that variables are preserved
             step_dashboard
             echo "RESULT_VERSION=${AGENTTEAMS_DASHBOARD_VERSION}"
             echo "RESULT_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE}"
-            echo "RESULT_PORT=${AGENTTEAMS_PORT_DASHBOARD}"
         fi
     )
     rm -f "${_tmpfile}"
 }
 
-_upgrade_result=$(test_upgrade_derivation_exec 2>&1)
+# Test 17a: keep-all preserves values (version=image match)
+_keepall_result=$(_test_step_dashboard_with_env "v1.2.0-beta.1" "ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.2.0-beta.1" "1" "1" "1")
 
-if echo "${_upgrade_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
-    pass "Exec upgrade derivation: extraction not available (grep tests cover logic)"
+if echo "${_keepall_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec derivation: function extraction failed"
+    fail "Exec keep-all: cannot verify (extraction failed)"
+    fail "Exec keep-all image: cannot verify (extraction failed)"
+    fail "Exec version-change default: cannot verify (extraction failed)"
+    fail "Exec version-change custom: cannot verify (extraction failed)"
+    fail "Exec auth-token env: cannot verify (extraction failed)"
 else
-    # Test 17a: Keep-all preserves version
-    if echo "${_upgrade_result}" | grep -q "RESULT_VERSION=v1.2.0-beta.1"; then
-        pass "Exec upgrade keep-all: preserves version"
+    # 17a: keep-all preserves version
+    if echo "${_keepall_result}" | grep -q "RESULT_VERSION=v1.2.0-beta.1"; then
+        pass "Exec keep-all: preserves version"
     else
-        fail "Exec upgrade keep-all: version not preserved"
+        fail "Exec keep-all: version not preserved"
     fi
 
-    # Test 17b: Keep-all preserves image
-    if echo "${_upgrade_result}" | grep -q "RESULT_IMAGE=.*v1.2.0-beta.1"; then
-        pass "Exec upgrade keep-all: preserves image"
+    # 17b: keep-all preserves image (version matches, so stays same)
+    if echo "${_keepall_result}" | grep -q "RESULT_IMAGE=.*v1.2.0-beta.1"; then
+        pass "Exec keep-all: preserves image when version matches"
     else
-        fail "Exec upgrade keep-all: image not preserved"
+        fail "Exec keep-all: image not preserved"
     fi
 
-    # Test 17c: Keep-all preserves port
-    if echo "${_upgrade_result}" | grep -q "RESULT_PORT=13000"; then
-        pass "Exec upgrade keep-all: preserves port"
+    # 17c: non-interactive, version changed, default image → image follows
+    _verchange_result=$(_test_step_dashboard_with_env "v2.0.0" "ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.2.0-beta.1" "1" "1" "0")
+
+    if echo "${_verchange_result}" | grep -q "RESULT_IMAGE=.*agentteams-dashboard:v2.0.0"; then
+        pass "Exec non-interactive: default image follows new version"
     else
-        fail "Exec upgrade keep-all: port not preserved"
+        fail "Exec non-interactive: default image does not follow new version (got: $(echo "${_verchange_result}" | grep RESULT_IMAGE))"
+    fi
+
+    # 17d: non-interactive, version changed, CUSTOM image → image preserved
+    _custom_result=$(_test_step_dashboard_with_env "v2.0.0" "myregistry.io/custom-dashboard:latest" "1" "1" "0")
+
+    if echo "${_custom_result}" | grep -q "RESULT_IMAGE=myregistry.io/custom-dashboard:latest"; then
+        pass "Exec non-interactive: custom image preserved when version changes"
+    else
+        fail "Exec non-interactive: custom image overwritten (got: $(echo "${_custom_result}" | grep RESULT_IMAGE))"
+    fi
+fi
+
+# ---------- Test 18: Executable AGENTTEAMS_AUTH_TOKEN support ----------
+
+section "Test 18: Executable AGENTTEAMS_AUTH_TOKEN env support"
+
+_test_start_dashboard_auth() {
+    local _auth_token="$1"
+    local _tmpfile
+    _tmpfile=$(mktemp)
+
+    if ! extract_function "_start_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}"
+        return
+    fi
+
+    (
+        ENV_ARGS=""
+        docker() {
+            if [ "$1" = "ps" ]; then
+                echo "agentteams-controller"
+                return 0
+            fi
+            if [ "$1" = "exec" ]; then
+                # Simulate no token file in controller
+                echo ""
+                return 1
+            fi
+            if [ "$1" = "run" ]; then
+                # Capture env vars passed to docker run
+                ENV_ARGS="$(echo "$*" | tr ' ' '\n' | grep -A1 AGENTTEAMS_AUTH_TOKEN | head -2)"
+                return 0
+            fi
+            return 0
+        }
+        podman() { docker "$@"; }
+        DOCKER_CMD="docker"
+
+        log() { :; }
+        msg() { echo "$*"; }
+        _env() { eval "echo \"\${$1:-}\""; }
+
+        AGENTTEAMS_DASHBOARD=1
+        AGENTTEAMS_USE_EMBEDDED=1
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_PORT_DASHBOARD="13000"
+        AGENTTEAMS_DASHBOARD_VERSION="v1.0.0"
+        AGENTTEAMS_DASHBOARD_IMAGE="ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.0.0"
+        AGENTTEAMS_LOCAL_ONLY=1
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL=""
+        AGENTTEAMS_AUTH_TOKEN="${_auth_token}"
+
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F _start_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            _start_dashboard
+            echo "ENV_ARGS=${ENV_ARGS}"
+        fi
+    )
+    rm -f "${_tmpfile}"
+}
+
+_auth_result=$(_test_start_dashboard_auth "test-token-abc123" 2>&1)
+
+if echo "${_auth_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec auth-token: function extraction failed"
+else
+    if echo "${_auth_result}" | grep -q "test-token-abc123"; then
+        pass "Exec _start_dashboard: honors user-supplied AGENTTEAMS_AUTH_TOKEN"
+    else
+        fail "Exec _start_dashboard: user-supplied AGENTTEAMS_AUTH_TOKEN not used"
     fi
 fi
 

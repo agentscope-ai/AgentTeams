@@ -2493,6 +2493,24 @@ step_dashboard() {
         AGENTTEAMS_DASHBOARD_IMAGE="${_init_default}"
     fi
 
+    # Recompute default image in non-interactive/upgrade paths too.
+    # If the current image matches the standard default-image pattern
+    # (registry/agentteams/agentteams-dashboard:<tag>) but the tag
+    # differs from AGENTTEAMS_DASHBOARD_VERSION, recompute.
+    # This handles: env file loads old default image, CLI passes new version.
+    # Genuinely custom images (different registry or repo name) are preserved.
+    if [ -n "${AGENTTEAMS_DASHBOARD_VERSION:-}" ] && [ -n "${AGENTTEAMS_DASHBOARD_IMAGE:-}" ]; then
+        local _default_prefix="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:"
+        case "${AGENTTEAMS_DASHBOARD_IMAGE}" in
+            "${_default_prefix}"*)
+                local _current_tag="${AGENTTEAMS_DASHBOARD_IMAGE#${_default_prefix}}"
+                if [ "${_current_tag}" != "${AGENTTEAMS_DASHBOARD_VERSION}" ]; then
+                    AGENTTEAMS_DASHBOARD_IMAGE=$(_dashboard_default_image)
+                fi
+                ;;
+        esac
+    fi
+
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
         AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
         if [ "${AGENTTEAMS_DASHBOARD}" = "1" ]; then
@@ -3093,21 +3111,23 @@ _start_dashboard() {
         # and older images that don't support cli-token at all.
         # For backward compatibility, also try the legacy /var/run/hiclaw/cli-token
         # path used by older HiClaw images.
-        local auth_token=""
-        local _token_wait=0
-        local _token_max_wait=30
-        while [ ${_token_wait} -lt ${_token_max_wait} ]; do
-            auth_token=$(${DOCKER_CMD} exec "${CTRL_CONTAINER}" sh -c 'cat /var/run/agentteams/cli-token 2>/dev/null || cat /var/run/hiclaw/cli-token 2>/dev/null' | tr -d '\n' || true)
-            if [ -n "${auth_token}" ]; then
-                break
-            fi
-            sleep 2
-            _token_wait=$((_token_wait + 2))
-        done
+        local auth_token="${AGENTTEAMS_AUTH_TOKEN:-}"
+        if [ -z "${auth_token}" ]; then
+            local _token_wait=0
+            local _token_max_wait=30
+            while [ ${_token_wait} -lt ${_token_max_wait} ]; do
+                auth_token=$(${DOCKER_CMD} exec "${CTRL_CONTAINER}" sh -c 'cat /var/run/agentteams/cli-token 2>/dev/null || cat /var/run/hiclaw/cli-token 2>/dev/null' | tr -d '\n' || true)
+                if [ -n "${auth_token}" ]; then
+                    break
+                fi
+                sleep 2
+                _token_wait=$((_token_wait + 2))
+            done
+        fi
         if [ -n "${auth_token}" ]; then
             env_args+=(-e AGENTTEAMS_AUTH_TOKEN="${auth_token}")
         else
-            log "WARNING: could not read controller SA token (timed out after ${_token_max_wait}s)"
+            log "WARNING: could not read controller SA token (timed out after ${_token_max_wait:-30}s)"
             log "  This can happen with older AgentTeams/HiClaw images or if the controller is still starting."
             log "  Dashboard will still work but some API calls may fail until you log in via Higress Console."
             log "  To fix: upgrade AgentTeams to v1.2.0-beta.1+ or set AGENTTEAMS_AUTH_TOKEN manually."

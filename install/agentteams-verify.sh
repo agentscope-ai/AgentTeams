@@ -4,7 +4,7 @@
 # Usage:
 #   bash install/agentteams-verify.sh [container_name]   # default: agentteams-manager
 #
-# Runs 6 read-only reachability checks and prints PASS/FAIL per check.
+# Runs 7 read-only reachability checks and prints PASS/FAIL per check.
 # Exit code: 0 if all pass, 1 if any fail.
 #
 # ── Extension notes ────────────────────────────────────────────────────────────

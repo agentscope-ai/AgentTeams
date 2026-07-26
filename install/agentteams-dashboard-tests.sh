@@ -724,6 +724,10 @@ _test_start_dashboard_auth() {
         log() { :; }
         msg() { echo "$*"; }
         _env() { eval "echo \"\${$1:-}\""; }
+        # Mock curl/sleep so the readiness wait loop finishes instantly
+        # instead of polling a real port for up to 60s.
+        curl() { return 1; }
+        sleep() { :; }
 
         AGENTTEAMS_DASHBOARD=1
         AGENTTEAMS_USE_EMBEDDED=1

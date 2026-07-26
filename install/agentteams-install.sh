@@ -2512,6 +2512,19 @@ step_dashboard() {
         AGENTTEAMS_DASHBOARD_IMAGE=$(_dashboard_default_image)
     fi
 
+    # Quick Start: accept all defaults without prompting. The dashboard is
+    # installed by default (AGENTTEAMS_DASHBOARD=1); set AGENTTEAMS_DASHBOARD=0
+    # to opt out.
+    if [ "${AGENTTEAMS_QUICKSTART:-0}" = "1" ]; then
+        if [ "${AGENTTEAMS_DASHBOARD}" = "1" ]; then
+            log "$(msg dash.summary "${AGENTTEAMS_PORT_DASHBOARD}" "${AGENTTEAMS_DASHBOARD_IMAGE}") (quick start)"
+        else
+            log "$(msg dash.skip) (quick start)"
+        fi
+        export AGENTTEAMS_DASHBOARD AGENTTEAMS_DASHBOARD_VERSION AGENTTEAMS_PORT_DASHBOARD AGENTTEAMS_DASHBOARD_IMAGE AGENTTEAMS_AI_GATEWAY_ADMIN_URL
+        return 0
+    fi
+
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
         AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
         if [ "${AGENTTEAMS_DASHBOARD}" = "1" ]; then
@@ -2578,10 +2591,12 @@ step_dashboard() {
             if ${DOCKER_CMD} exec agentteams-controller curl -sf --max-time 2 http://127.0.0.1:8001/ >/dev/null 2>&1; then
                 _higress_url="http://agentteams-controller:8001"
                 log "$(msg dash.auto_url): ${_higress_url}"
+            else
+                log "$(msg dash.auto_url_fail)"
             fi
         fi
     fi
-    read -p "$(msg dash.gateway_prompt) [${_higress_url:-<skip>}]: " _input
+    read -p "$(msg dash.gateway_prompt) [${_higress_url:-<auto>}]: " _input
     AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${_input:-${_higress_url}}"
 
     # Normalize URL: add http:// prefix if missing
@@ -2603,8 +2618,13 @@ step_dashboard() {
                 fi
             fi
         else
-            # External URL — test from host
-            if curl -sf --max-time 3 "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}/" >/dev/null 2>&1; then
+            # External URL — probe from inside the controller (same network as
+            # the Dashboard container) when possible; fall back to the host.
+            if ${DOCKER_CMD} ps --format '{{.Names}}' | grep -q "^agentteams-controller$"; then
+                if ${DOCKER_CMD} exec agentteams-controller curl -sf --max-time 3 "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}/" >/dev/null 2>&1; then
+                    _gw_reachable=1
+                fi
+            elif curl -sf --max-time 3 "${AGENTTEAMS_AI_GATEWAY_ADMIN_URL}/" >/dev/null 2>&1; then
                 _gw_reachable=1
             fi
         fi
@@ -3701,6 +3721,33 @@ CREDEOF
             log "Extracted Manager Matrix password${_mgr_room:+ and room ID}"
         fi
 
+        # Worker passwords and room IDs from workers-registry.json
+        if [ -f "${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json" ]; then
+            _worker_names=$(python3 -c "import json; d=json.load(open('${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json')); print(' '.join(d.get('workers',{}).keys()))" 2>/dev/null || true)
+            for _wname in ${_worker_names}; do
+                _wpw=""
+                if ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentteams-manager$'; then
+                    _wpw=$(${DOCKER_CMD} exec agentteams-manager cat "/root/agentteams-fs/agents/${_wname}/credentials/matrix/password" 2>/dev/null || true)
+                fi
+                if [ -z "${_wpw}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${AGENTTEAMS_DATA_DIR}$"; then
+                    _wpw=$(agentteams_read_worker_creds_value_from_volume "${AGENTTEAMS_DATA_DIR}" "${_wname}" WORKER_PASSWORD)
+                fi
+                _wroom=$(python3 -c "import json; d=json.load(open('${AGENTTEAMS_WORKSPACE_DIR}/workers-registry.json')); print(d.get('workers',{}).get('${_wname}',{}).get('room_id',''))" 2>/dev/null || true)
+                if [ -z "${_wroom}" ] && ${DOCKER_CMD} volume ls -q 2>/dev/null | grep -q "^${AGENTTEAMS_DATA_DIR}$"; then
+                    _wroom=$(agentteams_read_worker_creds_value_from_volume "${AGENTTEAMS_DATA_DIR}" "${_wname}" WORKER_ROOM_ID)
+                fi
+                if [ -n "${_wpw}" ]; then
+                    cat > "${_creds_tmp}/${_wname}.env" <<CREDEOF
+WORKER_PASSWORD="${_wpw}"
+WORKER_MINIO_PASSWORD="$(openssl rand -hex 24)"
+WORKER_GATEWAY_KEY="$(openssl rand -hex 32)"
+WORKER_ROOM_ID="${_wroom}"
+CREDEOF
+                    log "Extracted ${_wname} Matrix password${_wroom:+ and room ID}"
+                fi
+            done
+        fi
+
         if [ "${_mgr_creds_tempstart}" = "1" ]; then
             log "Stopping agentteams-manager after credential extraction (upgrade will recreate containers)..."
             ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
@@ -4414,6 +4461,10 @@ uninstall_agentteams() {
         log "Stopping and removing agentteams-dashboard..."
         ${DOCKER_CMD} stop agentteams-dashboard >/dev/null 2>&1 || true
         ${DOCKER_CMD} rm agentteams-dashboard >/dev/null 2>&1 || true
+    fi
+    if ${DOCKER_CMD} volume inspect agentteams-dashboard-data >/dev/null 2>&1; then
+        log "Removing dashboard data volume: agentteams-dashboard-data"
+        ${DOCKER_CMD} volume rm agentteams-dashboard-data >/dev/null 2>&1 || true
     fi
 
     # Stop and remove docker-proxy (legacy ≤ v1.0.x; current arch uses

@@ -66,6 +66,7 @@ PORT_CONSOLE="${PORT_CONSOLE:-18001}"
 
 PASS=0
 FAIL=0
+SKIP=0
 
 check_pass() {
     echo "  [PASS] $1"
@@ -75,6 +76,11 @@ check_pass() {
 check_fail() {
     echo "  [FAIL] $1"
     FAIL=$((FAIL + 1))
+}
+
+check_skip() {
+    echo "  [SKIP] $1"
+    SKIP=$((SKIP + 1))
 }
 
 # ---------- Checks ----------
@@ -167,16 +173,17 @@ fi
 # 7. Dashboard accessible (optional component)
 ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
 if [ ! -f "${ENV_FILE}" ]; then
-    check_pass "Dashboard not installed (no env file, skipped)"
+    check_skip "Dashboard not installed (no env file)"
 else
-    dashboard_enabled=$(grep -E '^AGENTTEAMS_DASHBOARD=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2 || echo "0")
-    dashboard_port=$(grep -E '^AGENTTEAMS_PORT_DASHBOARD=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2 || echo "13000")
+    dashboard_enabled=$(grep -E '^AGENTTEAMS_DASHBOARD=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '\r')
+    dashboard_port=$(grep -E '^AGENTTEAMS_PORT_DASHBOARD=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '\r')
+    dashboard_enabled="${dashboard_enabled:-0}"
+    dashboard_port="${dashboard_port:-13000}"
 
     if [ "${dashboard_enabled}" != "1" ]; then
-        check_pass "Dashboard not enabled (skipped)"
+        check_skip "Dashboard not enabled"
     else
-        ctr_id=$(${DOCKER_CMD} ps -q -f name=agentteams-dashboard 2>/dev/null)
-        if [ -z "${ctr_id}" ]; then
+        if ! ${DOCKER_CMD} ps --format '{{.Names}}' 2>/dev/null | grep -qx "agentteams-dashboard"; then
             check_fail "Dashboard container not running"
         else
             host_port=$(${DOCKER_CMD} port agentteams-dashboard 3000/tcp 2>/dev/null | head -1 | sed 's/.*://' || echo "")

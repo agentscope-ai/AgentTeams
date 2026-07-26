@@ -2493,22 +2493,23 @@ step_dashboard() {
         AGENTTEAMS_DASHBOARD_IMAGE="${_init_default}"
     fi
 
-    # Recompute default image in non-interactive/upgrade paths too.
-    # If the current image matches the standard default-image pattern
-    # (registry/agentteams/agentteams-dashboard:<tag>) but the tag
-    # differs from AGENTTEAMS_DASHBOARD_VERSION, recompute.
-    # This handles: env file loads old default image, CLI passes new version.
-    # Genuinely custom images (different registry or repo name) are preserved.
-    if [ -n "${AGENTTEAMS_DASHBOARD_VERSION:-}" ] && [ -n "${AGENTTEAMS_DASHBOARD_IMAGE:-}" ]; then
-        local _default_prefix="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:"
-        case "${AGENTTEAMS_DASHBOARD_IMAGE}" in
-            "${_default_prefix}"*)
-                local _current_tag="${AGENTTEAMS_DASHBOARD_IMAGE#${_default_prefix}}"
-                if [ "${_current_tag}" != "${AGENTTEAMS_DASHBOARD_VERSION}" ]; then
-                    AGENTTEAMS_DASHBOARD_IMAGE=$(_dashboard_default_image)
-                fi
-                ;;
-        esac
+    # Recompute default image when the version changes AND the current image
+    # matches the default for the *previous* (env-file) version.
+    # This handles non-interactive upgrades correctly:
+    #   - env file loads old default image + old version
+    #   - CLI passes new version
+    #   - image should follow (because it was auto-derived before)
+    # But preserves truly custom images (same repo but custom tag like :canary)
+    # because they won't match the old-version default exactly.
+    local _old_saved_version=""
+    local _env_file="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
+    if [ -f "${_env_file}" ]; then
+        _old_saved_version="$(grep '^AGENTTEAMS_DASHBOARD_VERSION=' "${_env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+    fi
+    if [ -n "${_old_saved_version}" ] && \
+       [ "${_old_saved_version}" != "${AGENTTEAMS_DASHBOARD_VERSION}" ] && \
+       [ "${AGENTTEAMS_DASHBOARD_IMAGE}" = "$(_dashboard_default_image "${_old_saved_version}")" ]; then
+        AGENTTEAMS_DASHBOARD_IMAGE=$(_dashboard_default_image)
     fi
 
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then

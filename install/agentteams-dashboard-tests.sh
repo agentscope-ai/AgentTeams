@@ -563,15 +563,23 @@ fi
 
 section "Test 17: Executable non-interactive version/image derivation"
 
-_test_step_dashboard_with_env() {
-    local _version="$1" _image="$2" _noninteractive="$3" _upgrade="$4" _keepall="$5"
+_test_step_dashboard_with_envfile() {
+    local _version="$1" _image="$2" _noninteractive="$3" _upgrade="$4" _keepall="$5" _env_version="$6"
     local _tmpfile
     _tmpfile=$(mktemp)
+    local _tmpenv
+    _tmpenv=$(mktemp)
 
     if ! extract_function "step_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
         echo "EXTRACTION_FAILED"
-        rm -f "${_tmpfile}"
+        rm -f "${_tmpfile}" "${_tmpenv}"
         return
+    fi
+
+    # Write simulated env file with old saved version
+    if [ -n "${_env_version}" ]; then
+        echo "AGENTTEAMS_DASHBOARD_VERSION=${_env_version}" > "${_tmpenv}"
+        echo "AGENTTEAMS_DASHBOARD_IMAGE=ghcr.io/agentteams-group/agentteams/agentteams-dashboard:${_env_version}" >> "${_tmpenv}"
     fi
 
     (
@@ -593,6 +601,7 @@ _test_step_dashboard_with_env() {
         AGENTTEAMS_PORT_DASHBOARD="13000"
         AGENTTEAMS_DASHBOARD_IMAGE="${_image}"
         AGENTTEAMS_AI_GATEWAY_ADMIN_URL=""
+        AGENTTEAMS_ENV_FILE="${_tmpenv}"
         STEP_RESULT=""
 
         source "${_tmpfile}" 2>/dev/null
@@ -605,50 +614,69 @@ _test_step_dashboard_with_env() {
             echo "RESULT_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE}"
         fi
     )
-    rm -f "${_tmpfile}"
+    rm -f "${_tmpfile}" "${_tmpenv}"
 }
 
-# Test 17a: keep-all preserves values (version=image match)
-_keepall_result=$(_test_step_dashboard_with_env "v1.2.0-beta.1" "ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.2.0-beta.1" "1" "1" "1")
+# Test 17a: keep-all with matching version/image → preserved
+_keepall_result=$(_test_step_dashboard_with_envfile \
+    "v1.2.0-beta.1" \
+    "ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.2.0-beta.1" \
+    "1" "1" "1" \
+    "v1.2.0-beta.1")
 
 if echo "${_keepall_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
     fail "Exec derivation: function extraction failed"
-    fail "Exec keep-all: cannot verify (extraction failed)"
-    fail "Exec keep-all image: cannot verify (extraction failed)"
+    fail "Exec keep-all match: cannot verify (extraction failed)"
+    fail "Exec keep-all mismatch: cannot verify (extraction failed)"
     fail "Exec version-change default: cannot verify (extraction failed)"
-    fail "Exec version-change custom: cannot verify (extraction failed)"
+    fail "Exec same-repo custom tag: cannot verify (extraction failed)"
+    fail "Exec cross-repo custom image: cannot verify (extraction failed)"
     fail "Exec auth-token env: cannot verify (extraction failed)"
 else
-    # 17a: keep-all preserves version
-    if echo "${_keepall_result}" | grep -q "RESULT_VERSION=v1.2.0-beta.1"; then
-        pass "Exec keep-all: preserves version"
-    else
-        fail "Exec keep-all: version not preserved"
-    fi
-
-    # 17b: keep-all preserves image (version matches, so stays same)
+    # 17a: keep-all + version match → image unchanged
     if echo "${_keepall_result}" | grep -q "RESULT_IMAGE=.*v1.2.0-beta.1"; then
-        pass "Exec keep-all: preserves image when version matches"
+        pass "Exec keep-all (matching): image preserved"
     else
-        fail "Exec keep-all: image not preserved"
+        fail "Exec keep-all (matching): image changed unexpectedly"
     fi
 
-    # 17c: non-interactive, version changed, default image → image follows
-    _verchange_result=$(_test_step_dashboard_with_env "v2.0.0" "ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.2.0-beta.1" "1" "1" "0")
+    # 17b: keep-all + version mismatch but image is default for old version → recompute
+    _keepall_mismatch=$(_test_step_dashboard_with_envfile \
+        "v2.0.0" \
+        "ghcr.io/agentteams-group/agentteams/agentteams-dashboard:v1.2.0-beta.1" \
+        "1" "1" "1" \
+        "v1.2.0-beta.1")
 
-    if echo "${_verchange_result}" | grep -q "RESULT_IMAGE=.*agentteams-dashboard:v2.0.0"; then
-        pass "Exec non-interactive: default image follows new version"
+    if echo "${_keepall_mismatch}" | grep -q "RESULT_IMAGE=.*agentteams-dashboard:v2.0.0"; then
+        pass "Exec keep-all (old default): image follows new version"
     else
-        fail "Exec non-interactive: default image does not follow new version (got: $(echo "${_verchange_result}" | grep RESULT_IMAGE))"
+        fail "Exec keep-all (old default): image does not follow new version (got: $(echo "${_keepall_mismatch}" | grep RESULT_IMAGE))"
     fi
 
-    # 17d: non-interactive, version changed, CUSTOM image → image preserved
-    _custom_result=$(_test_step_dashboard_with_env "v2.0.0" "myregistry.io/custom-dashboard:latest" "1" "1" "0")
+    # 17c: non-interactive + version change + same-repo custom tag → preserved
+    _custom_tag_result=$(_test_step_dashboard_with_envfile \
+        "v2.0.0" \
+        "ghcr.io/agentteams-group/agentteams/agentteams-dashboard:canary" \
+        "1" "1" "0" \
+        "v1.2.0-beta.1")
 
-    if echo "${_custom_result}" | grep -q "RESULT_IMAGE=myregistry.io/custom-dashboard:latest"; then
-        pass "Exec non-interactive: custom image preserved when version changes"
+    if echo "${_custom_tag_result}" | grep -q "RESULT_IMAGE=.*:canary"; then
+        pass "Exec same-repo custom tag: preserved when version changes"
     else
-        fail "Exec non-interactive: custom image overwritten (got: $(echo "${_custom_result}" | grep RESULT_IMAGE))"
+        fail "Exec same-repo custom tag: overwritten when version changes (got: $(echo "${_custom_tag_result}" | grep RESULT_IMAGE))"
+    fi
+
+    # 17d: non-interactive + version change + cross-repo custom image → preserved
+    _cross_repo_result=$(_test_step_dashboard_with_envfile \
+        "v2.0.0" \
+        "myregistry.io/custom-dashboard:latest" \
+        "1" "1" "0" \
+        "v1.2.0-beta.1")
+
+    if echo "${_cross_repo_result}" | grep -q "RESULT_IMAGE=myregistry.io/custom-dashboard:latest"; then
+        pass "Exec cross-repo custom image: preserved when version changes"
+    else
+        fail "Exec cross-repo custom image: overwritten (got: $(echo "${_cross_repo_result}" | grep RESULT_IMAGE))"
     fi
 fi
 

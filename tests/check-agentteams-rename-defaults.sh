@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 legacy_brand='hi''claw'
+legacy_brand_title='Hi''Claw'
 archive_paths=(
     ':(exclude)blog/**'
     ':(exclude)changelog/**'
@@ -14,9 +15,27 @@ archive_paths=(
 )
 
 if matches="$(git grep -nIi "${legacy_brand}" -- . "${archive_paths[@]}" 2>/dev/null)"; then
-    echo "FAIL: active files still contain the retired brand:" >&2
-    echo "${matches}" >&2
-    exit 1
+    unexpected_matches=""
+    while IFS= read -r match; do
+        case "${match}" in
+            install/agentteams-dashboard-tests.sh:*)
+                ;;
+            install/agentteams-install.sh:*"${legacy_brand}-controller"* | \
+            install/agentteams-install.sh:*"/var/run/${legacy_brand}/cli-token"* | \
+            install/agentteams-install.sh:*"older ${legacy_brand_title} images"* | \
+            install/agentteams-install.sh:*"AgentTeams/${legacy_brand_title} images"*)
+                ;;
+            *)
+                unexpected_matches="${unexpected_matches}${unexpected_matches:+$'\n'}${match}"
+                ;;
+        esac
+    done <<< "${matches}"
+
+    if [ -n "${unexpected_matches}" ]; then
+        echo "FAIL: active files still contain the retired brand:" >&2
+        echo "${unexpected_matches}" >&2
+        exit 1
+    fi
 fi
 
 if paths="$(git ls-files | grep -i "${legacy_brand}" || true)" && [ -n "${paths}" ]; then

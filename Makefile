@@ -893,3 +893,104 @@ help: ## Show this help
 	@echo "  DATE_TAG         Tag for date-pinned images  (default: YYYYMMDD)"
 	@echo "  DRY_RUN          Show commands only           (set to 1)"
 	@echo "  USE_CONTAINER    Use skopeo container         (set to 1)"
+
+# ---- AgentTeams Dashboard targets ----
+# Dashboard can be built from a local source tree (DASHBOARD_CONTEXT)
+# or pulled from a registry. After AgentTeams is installed, use
+# make install-dashboard to start the Dashboard container.
+#
+# Prerequisites:
+#   - AgentTeams must already be installed (agentteams-controller running)
+#   - For build-dashboard: DASHBOARD_CONTEXT must point to a dashboard repo
+#     (default: ../agentteams-dashboard). Set DASHBOARD_IMAGE to use a
+#     pre-built image instead.
+#   - Linux/macOS only (Bash installer). Windows PowerShell installer
+#     does not yet include dashboard support.
+#
+# Variables:
+#   DASHBOARD_CONTEXT   Path to dashboard source tree (default: ../agentteams-dashboard)
+#   DASHBOARD_IMAGE     Override dashboard image (derived from DASHBOARD_VERSION by default)
+#   DASHBOARD_VERSION   Dashboard version tag (default: v1.2.0-beta.1)
+#   AGENTTEAMS_PORT_DASHBOARD   Dashboard host port (default: 13000)
+
+DASHBOARD_CONTEXT ?= ../agentteams-dashboard
+DASHBOARD_VERSION ?= v1.2.0-beta.1
+DASHBOARD_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-dashboard:$(DASHBOARD_VERSION)
+AGENTTEAMS_PORT_DASHBOARD ?= 13000
+
+.PHONY: build-dashboard
+build-dashboard:
+	@if [ ! -d "$(DASHBOARD_CONTEXT)" ]; then \
+		echo "Error: DASHBOARD_CONTEXT=$(DASHBOARD_CONTEXT) does not exist"; \
+		echo "Set DASHBOARD_CONTEXT to the path of the agentteams-dashboard source tree,"; \
+		echo "or set DASHBOARD_IMAGE to use a pre-built image."; \
+		exit 1; \
+	fi
+	@echo "==> Building dashboard image from $(DASHBOARD_CONTEXT)..."
+	@if grep -q "image:" $(DASHBOARD_CONTEXT)/Makefile 2>/dev/null; then \
+		$(MAKE) -C $(DASHBOARD_CONTEXT) image VERSION=$(DASHBOARD_VERSION); \
+	else \
+		docker build -t $(DASHBOARD_IMAGE) $(DASHBOARD_CONTEXT)/; \
+	fi
+	@echo "==> Dashboard image built: $(DASHBOARD_IMAGE)"
+
+.PHONY: install-dashboard
+install-dashboard:
+	@echo "==> Installing agentteams-dashboard..."
+	@if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^agentteams-controller$$"; then \
+		echo "Error: agentteams-controller is not running."; \
+		echo "Install AgentTeams first: make install-embedded or make install"; \
+		exit 1; \
+	fi
+	@if [ -z "$$(docker images -q $(DASHBOARD_IMAGE) 2>/dev/null)" ]; then \
+		echo "Image $(DASHBOARD_IMAGE) not found locally; pulling..."; \
+		docker pull $(DASHBOARD_IMAGE) 2>/dev/null || { \
+			echo "Pull failed. Build locally with: make build-dashboard"; \
+			exit 1; \
+		}; \
+	fi
+	AGENTTEAMS_NON_INTERACTIVE=1 \
+		AGENTTEAMS_DASHBOARD=1 \
+		AGENTTEAMS_DASHBOARD_VERSION=$(DASHBOARD_VERSION) \
+		AGENTTEAMS_DASHBOARD_IMAGE=$(DASHBOARD_IMAGE) \
+		AGENTTEAMS_PORT_DASHBOARD=$(AGENTTEAMS_PORT_DASHBOARD) \
+		bash ./install/agentteams-install.sh dashboard
+	@echo "==> Dashboard installed. Access it at http://localhost:$(AGENTTEAMS_PORT_DASHBOARD)"
+
+.PHONY: update-dashboard
+update-dashboard: build-dashboard
+	@echo "==> Updating agentteams-dashboard..."
+	@docker rm -f agentteams-dashboard 2>/dev/null || true
+	AGENTTEAMS_NON_INTERACTIVE=1 \
+		AGENTTEAMS_DASHBOARD=1 \
+		AGENTTEAMS_DASHBOARD_VERSION=$(DASHBOARD_VERSION) \
+		AGENTTEAMS_DASHBOARD_IMAGE=$(DASHBOARD_IMAGE) \
+		AGENTTEAMS_PORT_DASHBOARD=$(AGENTTEAMS_PORT_DASHBOARD) \
+		bash ./install/agentteams-install.sh dashboard
+	@echo "==> Dashboard updated."
+
+.PHONY: uninstall-dashboard
+uninstall-dashboard:
+	@echo "==> Uninstalling agentteams-dashboard..."
+	@if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^agentteams-dashboard$$"; then \
+		docker stop agentteams-dashboard 2>/dev/null || true; \
+		docker rm agentteams-dashboard 2>/dev/null || true; \
+		echo "  Removed agentteams-dashboard container"; \
+	else \
+		echo "  Dashboard container not found (already removed)"; \
+	fi
+	@echo "==> Dashboard uninstalled."
+
+.PHONY: wait-dashboard-ready
+wait-dashboard-ready:
+	@echo "Waiting for Dashboard to be ready..."
+	@PORT=$${AGENTTEAMS_PORT_DASHBOARD:-13000}; \
+	for i in $$(seq 1 30); do \
+		if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$$PORT/" 2>/dev/null | grep -qE "200|301|302"; then \
+			echo "Dashboard ready on port $$PORT"; \
+			exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "Dashboard startup timed out"; \
+	exit 1

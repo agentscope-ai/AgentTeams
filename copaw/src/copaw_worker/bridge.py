@@ -14,7 +14,185 @@ import os
 import shutil
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+
+def bridge_standard_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    controller_config: dict[str, Any],
+    *,
+    skill_names: list[str] | None = None,
+    profile: str = "worker",
+) -> None:
+    """Project controller-owned standard files into CoPaw's workspace."""
+    sync_outer_prompt_files_to_inner(standard_dir, runtime_dir)
+    bridge_controller_to_copaw(
+        controller_config,
+        runtime_dir,
+        profile=profile,
+    )
+    sync_mcporter_config_to_runtime(standard_dir, runtime_dir)
+    if skill_names is not None:
+        sync_skills_to_runtime(standard_dir, runtime_dir, skill_names)
+
+
+def refresh_standard_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    controller_config: dict[str, Any],
+    *,
+    get_soul: Callable[[], str | None],
+    get_agents_md: Callable[[], str | None],
+    skill_names: list[str] | None = None,
+    profile: str = "worker",
+) -> None:
+    """Refresh CoPaw's workspace while retaining legacy prompt fallbacks."""
+    sync_rebridged_prompt_files_to_inner(
+        standard_dir,
+        runtime_dir,
+        get_soul=get_soul,
+        get_agents_md=get_agents_md,
+    )
+    bridge_controller_to_copaw(
+        controller_config,
+        runtime_dir,
+        profile=profile,
+    )
+    sync_mcporter_config_to_runtime(standard_dir, runtime_dir)
+    if skill_names is not None:
+        sync_skills_to_runtime(standard_dir, runtime_dir, skill_names)
+
+
+def sync_outer_prompt_files_to_inner(
+    standard_dir: Path,
+    runtime_dir: Path,
+) -> None:
+    """Copy standard prompt files into CoPaw's default workspace."""
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in ("SOUL.md", "AGENTS.md"):
+        src = standard_dir / name
+        if src.exists():
+            shutil.copy2(src, workspace_dir / name)
+
+    heartbeat_dst = workspace_dir / "HEARTBEAT.md"
+    heartbeat_src = standard_dir / "HEARTBEAT.md"
+    if not heartbeat_dst.exists() and heartbeat_src.exists():
+        shutil.copy2(heartbeat_src, heartbeat_dst)
+
+
+def sync_rebridged_prompt_files_to_inner(
+    standard_dir: Path,
+    runtime_dir: Path,
+    *,
+    get_soul: Callable[[], str | None],
+    get_agents_md: Callable[[], str | None],
+) -> None:
+    """Refresh prompt files, using legacy storage readers as fallback."""
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    fallbacks = {
+        "SOUL.md": get_soul,
+        "AGENTS.md": get_agents_md,
+    }
+    for name, fallback in fallbacks.items():
+        src = standard_dir / name
+        content = src.read_text() if src.exists() else fallback()
+        if content:
+            (workspace_dir / name).write_text(content)
+
+
+def sync_mcporter_config_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+) -> Path | None:
+    """Copy mcporter config into CoPaw's default workspace."""
+    candidates = (
+        standard_dir / "config" / "mcporter.json",
+        standard_dir / "mcporter-servers.json",
+    )
+    src = next((candidate for candidate in candidates if candidate.exists()), None)
+    if src is None:
+        return None
+    dst = runtime_dir / "workspaces" / "default" / "config" / "mcporter.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst
+
+
+def sync_skills_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    skill_names: list[str],
+) -> list[str]:
+    """Expose standard-space skills in CoPaw's default workspace."""
+    standard_skills_dir = standard_dir / "skills"
+    standard_skills_dir.mkdir(parents=True, exist_ok=True)
+    wanted = set(skill_names)
+
+    for script in standard_skills_dir.rglob("*.sh"):
+        script.chmod(script.stat().st_mode | 0o111)
+    for child in list(standard_skills_dir.iterdir()):
+        if child.is_dir() and child.name not in wanted:
+            shutil.rmtree(child)
+
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    workspace_skills = workspace_dir / "skills"
+    expected_target = standard_skills_dir.resolve()
+    if workspace_skills.is_symlink():
+        if workspace_skills.resolve() != expected_target:
+            workspace_skills.unlink()
+    elif workspace_skills.exists():
+        if workspace_skills.is_dir():
+            shutil.rmtree(workspace_skills)
+        else:
+            workspace_skills.unlink()
+    if not workspace_skills.exists():
+        target = os.path.relpath(standard_skills_dir, workspace_dir)
+        workspace_skills.symlink_to(target, target_is_directory=True)
+
+    installed = [
+        name
+        for name in skill_names
+        if (standard_skills_dir / name / "SKILL.md").exists()
+    ]
+    _enable_workspace_skills(runtime_dir, installed)
+    return installed
+
+
+def _enable_workspace_skills(runtime_dir: Path, skill_names: list[str]) -> None:
+    if not skill_names:
+        return
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    manifest_path = workspace_dir / "skill.json"
+    manifest: dict[str, Any] = {
+        "schema_version": "workspace-skill-manifest.v1",
+        "version": 1,
+        "skills": {},
+    }
+    if manifest_path.exists():
+        try:
+            loaded = json.loads(manifest_path.read_text())
+            if isinstance(loaded, dict):
+                manifest.update(loaded)
+        except json.JSONDecodeError:
+            pass
+    if not isinstance(manifest.get("skills"), dict):
+        manifest["skills"] = {}
+    for name in sorted(set(skill_names)):
+        current = manifest["skills"].get(name)
+        if not isinstance(current, dict):
+            current = {"source": "customized"}
+            manifest["skills"][name] = current
+        current["enabled"] = True
+        if not current.get("channels"):
+            current["channels"] = ["all"]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+    )
 
 
 def _port_remap(url: str, is_container: bool) -> str:
@@ -48,7 +226,7 @@ def _patch_copaw_paths(working_dir: Path) -> None:
         import copaw.constant as _const
         _const.WORKING_DIR = working_dir
         _const.SECRET_DIR = secret_dir
-        _const.ACTIVE_SKILLS_DIR = working_dir / "active_skills"
+        _const.ACTIVE_SKILLS_DIR = working_dir / "workspaces" / "default" / "skills"
         _const.CUSTOMIZED_SKILLS_DIR = working_dir / "customized_skills"
         _const.MEMORY_DIR = working_dir / "memory"
         _const.CUSTOM_CHANNELS_DIR = working_dir / "custom_channels"

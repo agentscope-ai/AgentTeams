@@ -241,6 +241,18 @@ COMMUNICATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LE
 COORDINATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/team-coordination/SKILL.md" 2>/dev/null)
 LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null)
 
+# Worker and Team reconciliation are independent. When a standalone Worker is
+# attached to a Team immediately after creation, its final standalone asset
+# push can briefly race the Team Leader overlay. Wait for the role-specific
+# desired state to converge before asserting its exact content.
+for i in $(seq 1 12); do
+    if echo "${TASK_SKILL}" | grep -Fq "Task state is tool-owned"; then
+        break
+    fi
+    sleep 5
+    TASK_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/task-management/SKILL.md" 2>/dev/null)
+done
+
 assert_contains "${PROJECT_SKILL}" "projectflow" "project-management documents projectflow"
 assert_contains "${PROJECT_SKILL}" "Project state is tool-owned" "project-management forbids manual project state mutation"
 assert_contains "${PROJECT_SKILL}" "ready_nodes" "project-management documents DAG ready nodes"
@@ -356,10 +368,11 @@ log_info "Task sent to Leader via Leader DM. Monitoring rooms..."
 # This test validates the routing boundary, not full project completion. If the
 # Leader responds in Leader DM while no assignment appears in Team Room, the
 # route is wrong and extra waiting only slows CI. If there is no response at
-# all, keep a short 120s ceiling for startup jitter.
+# all, allow the real model enough time to load Team Leader prompts and make
+# its first project/task tool calls. DM-only replies still fail fast below.
 TEAM_ROOM_ENC=$(echo "${TEAM_ROOM}" | sed 's/!/%21/g')
 LEADER_DM_ENC=$(echo "${LEADER_DM}" | sed 's/!/%21/g')
-MAX_COORDINATION_POLLS="${MAX_COORDINATION_POLLS:-4}"
+MAX_COORDINATION_POLLS="${MAX_COORDINATION_POLLS:-10}"
 MAX_DM_ONLY_POLLS="${MAX_DM_ONLY_POLLS:-1}"
 
 LEADER_RESPONDED=false

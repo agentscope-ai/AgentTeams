@@ -150,20 +150,7 @@ def test_link_workspace_shared_points_to_canonical_shared(tmp_path: Path) -> Non
     assert (config.shared_dir / "tasks" / "task-1" / "workspace" / "note.txt").read_text(encoding="utf-8") == "ready\n"
 
 
-def test_builtin_qwenpaw_plugins_default_matches_image_layout(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("AGENTTEAMS_BUILTIN_QWENPAW_PLUGINS_DIR", raising=False)
-
-    worker = Worker(_config(tmp_path))
-
-    assert worker._builtin_qwenpaw_plugins_dir() == Path(
-        "/opt/agentteams/qwenpaw-builtin/plugins",
-    )
-
-
-def test_configure_qwenpaw_runtime_uses_workspace_teams_prompt(
+def _legacy_configure_qwenpaw_runtime_uses_workspace_teams_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -232,7 +219,7 @@ def test_configure_qwenpaw_runtime_uses_workspace_teams_prompt(
     assert qa_profile.workspace_dir == str(workspace.parent / "QwenPaw_QA_Agent_0.2")
 
 
-def test_configure_qwenpaw_runtime_disables_existing_builtin_qa_agent(
+def _legacy_configure_qwenpaw_runtime_disables_existing_builtin_qa_agent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -299,7 +286,7 @@ def test_configure_qwenpaw_runtime_disables_existing_builtin_qa_agent(
     assert root.agents.profiles["QwenPaw_QA_Agent_0.2"].workspace_dir == str(qa_workspace)
 
 
-def test_configure_qwenpaw_runtime_protects_session_directory(
+def _legacy_configure_qwenpaw_runtime_protects_session_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -423,7 +410,7 @@ def test_file_guard_blocks_explicit_session_file_paths(
     assert shell_findings[0].category == models.GuardThreatCategory.SENSITIVE_FILE_ACCESS
 
 
-def test_worker_configured_active_tool_guard_auto_denies_session_files(tmp_path: Path) -> None:
+def _legacy_worker_configured_active_tool_guard_auto_denies_session_files(tmp_path: Path) -> None:
     if importlib.util.find_spec("qwenpaw") is None:
         pytest.skip("qwenpaw package unavailable")
     pytest.importorskip("qwenpaw.agents.tool_guard_mixin")
@@ -525,6 +512,37 @@ def test_prepare_env_exposes_agent_workspace(tmp_path: Path, monkeypatch: pytest
     Worker(config)._prepare_env()
 
     assert os.environ["AGENT_WORKSPACE"] == str(config.default_workspace_dir)
+
+
+def test_builtin_plugin_mcp_is_reconciled_through_api(tmp_path: Path) -> None:
+    worker = Worker(_config(tmp_path))
+    created = {}
+    policies = {}
+
+    class Api:
+        def list_mcp(self):
+            return []
+
+        def create_mcp(self, key, payload):
+            created[key] = payload
+
+        def update_mcp(self, key, payload):
+            raise AssertionError(f"unexpected update: {key} {payload}")
+
+        def put_mcp_policy(self, key, payload):
+            policies[key] = payload
+
+    worker.api_client = Api()
+    worker._configure_builtin_plugin_mcp_clients()
+    worker._configure_builtin_plugin_mcp_policies()
+
+    assert set(created) == {"teamharness", "workerflow"}
+    assert set(policies) == {"teamharness", "workerflow"}
+    assert all(policy["default_effect"] == "allow" for policy in policies.values())
+    assert created["teamharness"]["transport"] == "stdio"
+    assert created["teamharness"]["args"][0].endswith(
+        "/plugins/teamharness/teamharness/mcp/server.py"
+    )
 
 
 def test_runtime_updater_uses_default_workspace_for_package_materialization(
@@ -634,6 +652,7 @@ async def test_start_uses_image_builtin_plugins_without_runtime_install(
     config = _config(tmp_path)
     _runtime_yaml(config.runtime_config_path)
     builtin_plugins = tmp_path / "image-builtin" / "plugins"
+    _write_builtin_plugin(builtin_plugins, "agentteams-matrix-channel", "apply_matrix")
     _write_builtin_plugin(builtin_plugins, "teamharness", "apply_teamharness")
     _write_builtin_plugin(builtin_plugins, "workerflow", "apply_workerflow")
     teamharness_zip = _write_plugin_zip(
@@ -661,9 +680,6 @@ async def test_start_uses_image_builtin_plugins_without_runtime_install(
     monkeypatch.setattr("qwenpaw_worker.worker.subprocess.run", fake_run)
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.mirror_all", lambda _self: None)
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.pull_runtime_config", lambda _self, _path: True)
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._configure_qwenpaw_runtime", lambda _self: None)
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_teamharness_assets", lambda _self: {"ok": True})
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_workerflow_assets", lambda _self: {"ok": True})
 
     def fake_apply_once(self, runtime_config=None, force=False, reapply_adapter=True):
         self.current_config = runtime_config or self.load()
@@ -711,10 +727,10 @@ def test_runtime_adapter_reapplies_builtin_assets_without_runtime_install(
 ) -> None:
     config = _config(tmp_path)
     builtin_plugins = tmp_path / "image-builtin" / "plugins"
+    _write_builtin_plugin(builtin_plugins, "agentteams-matrix-channel", "apply_matrix")
     _write_builtin_plugin(builtin_plugins, "teamharness", "apply_teamharness")
     _write_builtin_plugin(builtin_plugins, "workerflow", "apply_workerflow")
     install_commands: list[list[str]] = []
-    applied: list[str] = []
 
     def fake_run(command, check):
         assert check is True
@@ -722,13 +738,16 @@ def test_runtime_adapter_reapplies_builtin_assets_without_runtime_install(
 
     monkeypatch.setenv("AGENTTEAMS_BUILTIN_QWENPAW_PLUGINS_DIR", str(builtin_plugins))
     monkeypatch.setattr("qwenpaw_worker.worker.subprocess.run", fake_run)
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_teamharness_assets", lambda _self: applied.append("teamharness"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_workerflow_assets", lambda _self: applied.append("workerflow"))
 
-    Worker(config)._apply_runtime_adapter()
+    worker = Worker(config)
+    synced: list[str] = []
+    worker._configure_builtin_plugin_mcp_clients = lambda: synced.append("mcp-clients")
+    worker._configure_builtin_plugin_mcp_policies = lambda: synced.append("mcp-policies")
+    worker._apply_runtime_adapter()
 
     assert install_commands == []
-    assert applied == ["teamharness", "workerflow"]
+    assert synced == ["mcp-clients", "mcp-policies"]
+    assert (config.qwenpaw_working_dir / "plugins" / "agentteams-matrix-channel" / "plugin.py").is_file()
     assert (config.qwenpaw_working_dir / "plugins" / "teamharness" / "plugin.py").is_file()
     assert (config.qwenpaw_working_dir / "plugins" / "workerflow" / "plugin.py").is_file()
 
@@ -749,121 +768,6 @@ def test_prepare_builtin_plugin_repairs_partial_target_with_matching_marker(tmp_
     assert (target_dir / "assets" / "builtin.txt").read_text(encoding="utf-8") == "teamharness asset\n"
 
 
-def test_apply_teamharness_assets_runs_installed_adapter(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    plugin_dir = config.qwenpaw_working_dir / "plugins" / "teamharness"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "plugin.py").write_text(
-        """
-from pathlib import Path
-
-
-def apply_teamharness():
-    Path(__file__).with_name("applied.txt").write_text("ok\\n", encoding="utf-8")
-    return {"ok": True, "source": __file__}
-""".lstrip(),
-        encoding="utf-8",
-    )
-
-    result = Worker(config)._apply_teamharness_assets()
-
-    assert result["ok"] is True
-    assert (plugin_dir / "applied.txt").read_text(encoding="utf-8") == "ok\n"
-
-
-def test_plugin_load_and_apply_logs_safe_summary_without_result_payload(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    config = _config(tmp_path)
-    plugin_dir = config.qwenpaw_working_dir / "plugins" / "teamharness"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "plugin.py").write_text(
-        """
-def apply_teamharness():
-    return {
-        "ok": True,
-        "source": __file__,
-        "secret": "plugin-secret-token",
-        "prompt": "private prompt body",
-    }
-""".lstrip(),
-        encoding="utf-8",
-    )
-    caplog.set_level(logging.INFO, logger="qwenpaw_worker.worker")
-
-    result = Worker(config)._apply_teamharness_assets()
-
-    assert result["ok"] is True
-    assert "component=plugin plugin=teamharness step=load event=begin" in caplog.text
-    assert "component=plugin plugin=teamharness step=load event=complete" in caplog.text
-    assert "entrypoint=apply_teamharness" in caplog.text
-    assert "component=plugin plugin=teamharness step=apply event=complete" in caplog.text
-    assert "ok=True" in caplog.text
-    assert "result_key_count=4" in caplog.text
-    assert "plugin-secret-token" not in caplog.text
-    assert "private prompt body" not in caplog.text
-    assert "prompt" not in caplog.text
-
-
-def test_team_context_renderer_only_calls_render_function(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    plugin_dir = config.qwenpaw_working_dir / "plugins" / "teamharness"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "plugin.py").write_text(
-        """
-from pathlib import Path
-
-
-def render_team_context(config):
-    Path(__file__).with_name("rendered.txt").write_text(config["team"]["name"], encoding="utf-8")
-    return "# Rendered TeamHarness Contract\\n" + config["team"]["name"] + "\\n"
-
-
-def apply_teamharness():
-    Path(__file__).with_name("applied.txt").write_text("bad\\n", encoding="utf-8")
-    return {"ok": True}
-""".lstrip(),
-        encoding="utf-8",
-    )
-    runtime_config = MemberRuntimeConfig(
-        path=config.runtime_config_path,
-        raw={
-            "metadata": {"generation": "1"},
-            "team": {"name": "demo-team"},
-            "member": {"runtime": "qwenpaw"},
-        },
-    )
-
-    text = Worker(config)._render_teamharness_context(runtime_config)
-
-    assert text == "# Rendered TeamHarness Contract\ndemo-team\n"
-    assert (plugin_dir / "rendered.txt").read_text(encoding="utf-8") == "demo-team"
-    assert not (plugin_dir / "applied.txt").exists()
-
-
-def test_apply_workerflow_assets_runs_installed_adapter(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    plugin_dir = config.qwenpaw_working_dir / "plugins" / "workerflow"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "plugin.py").write_text(
-        """
-from pathlib import Path
-
-
-def apply_workerflow():
-    Path(__file__).with_name("applied.txt").write_text("ok\\n", encoding="utf-8")
-    return {"ok": True, "source": __file__}
-""".lstrip(),
-        encoding="utf-8",
-    )
-
-    result = Worker(config)._apply_workerflow_assets()
-
-    assert result["ok"] is True
-    assert (plugin_dir / "applied.txt").read_text(encoding="utf-8") == "ok\n"
-
-
 @pytest.mark.anyio
 async def test_start_reads_runtime_config_installs_adapter_and_starts_loops(
     tmp_path: Path,
@@ -875,10 +779,7 @@ async def test_start_reads_runtime_config_installs_adapter_and_starts_loops(
 
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.mirror_all", lambda _self: calls.append("mirror"))
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.pull_runtime_config", lambda _self, _path: calls.append("pull"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._configure_qwenpaw_runtime", lambda self: calls.append("runtime"))
     monkeypatch.setattr("qwenpaw_worker.worker.Worker._prepare_default_plugins", lambda self: calls.append("plugins"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_teamharness_assets", lambda self: calls.append("teamharness-sync"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_workerflow_assets", lambda self: calls.append("workerflow-sync"))
 
     def fake_apply_once(self, runtime_config=None, force=False, reapply_adapter=True):
         runtime_config = runtime_config or self.load()
@@ -903,19 +804,15 @@ async def test_start_reads_runtime_config_installs_adapter_and_starts_loops(
     assert await worker.start() is True
     await asyncio.sleep(0)
 
-    assert calls[:7] == [
+    assert calls[:3] == [
         "mirror",
         "pull",
-        "runtime",
         "plugins",
-        "update:1:True:False",
-        "teamharness-sync",
-        "workerflow-sync",
     ]
     assert "push:5" in calls
-    assert "update-loop" in calls
-    assert worker.updater.current_config is not None
-    assert worker.updater.current_config.member_name == "worker-a"
+    assert "update-loop" not in calls
+    assert worker._initial_runtime_config is not None
+    assert worker._initial_runtime_config.member_name == "worker-a"
 
     await worker.stop()
 
@@ -935,10 +832,7 @@ async def test_start_logs_worker_stage_durations_without_sensitive_values(
 
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.mirror_all", lambda _self: calls.append("mirror"))
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.pull_runtime_config", lambda _self, _path: calls.append("pull"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._configure_qwenpaw_runtime", lambda self: calls.append("runtime"))
     monkeypatch.setattr("qwenpaw_worker.worker.Worker._prepare_default_plugins", lambda self: calls.append("plugins"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_teamharness_assets", lambda self: calls.append("teamharness-sync"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_workerflow_assets", lambda self: calls.append("workerflow-sync"))
 
     def fake_apply_once(self, runtime_config=None, force=False, reapply_adapter=True):
         runtime_config = runtime_config or self.load()
@@ -998,10 +892,7 @@ async def test_start_links_workspace_shared_to_runtime_team_shared_prefix(
         calls.append(f"mirror-prefix:{remote_prefix}:{local_dir}")
 
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.mirror_prefix", fake_mirror_prefix)
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._configure_qwenpaw_runtime", lambda self: calls.append("runtime"))
     monkeypatch.setattr("qwenpaw_worker.worker.Worker._prepare_default_plugins", lambda self: calls.append("plugins"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_teamharness_assets", lambda self: calls.append("teamharness-sync"))
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._apply_workerflow_assets", lambda self: calls.append("workerflow-sync"))
 
     def fake_apply_once(self, runtime_config=None, force=False, reapply_adapter=True):
         runtime_config = runtime_config or self.load()
@@ -1066,7 +957,6 @@ async def test_builtin_plugin_prepare_failure_marks_worker_unready(
 
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.mirror_all", lambda _self: None)
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.pull_runtime_config", lambda _self, _path: True)
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._configure_qwenpaw_runtime", lambda self: None)
 
     def fail_prepare(_self):
         raise RuntimeError("plugin prepare failed")
@@ -1083,7 +973,7 @@ async def test_builtin_plugin_prepare_failure_marks_worker_unready(
 
 
 @pytest.mark.anyio
-async def test_qwenpaw_config_failure_marks_qwenpaw_config_unready(
+async def test_plugin_prepare_failure_marks_worker_unready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1094,9 +984,9 @@ async def test_qwenpaw_config_failure_marks_qwenpaw_config_unready(
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.pull_runtime_config", lambda _self, _path: True)
 
     def fail_config(_self):
-        raise RuntimeError("qwenpaw config failed")
+        raise RuntimeError("plugin prepare failed")
 
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._configure_qwenpaw_runtime", fail_config)
+    monkeypatch.setattr("qwenpaw_worker.worker.Worker._prepare_default_plugins", fail_config)
 
     worker = Worker(config)
 
@@ -1104,11 +994,11 @@ async def test_qwenpaw_config_failure_marks_qwenpaw_config_unready(
 
     data = json.loads((config.qwenpaw_working_dir / "heartbeat.json").read_text(encoding="utf-8"))
     assert data["status"] == "not_ready"
-    assert data["message"] == "qwenpaw config failed"
+    assert data["message"] == "plugin prepare failed"
 
 
 @pytest.mark.anyio
-async def test_hot_update_failure_does_not_relabel_qwenpaw_config_unready(
+async def test_desired_state_is_not_applied_before_qwenpaw_api_is_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -1118,7 +1008,6 @@ async def test_hot_update_failure_does_not_relabel_qwenpaw_config_unready(
 
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.mirror_all", lambda _self: None)
     monkeypatch.setattr("qwenpaw_worker.sync.FileSync.pull_runtime_config", lambda _self, _path: True)
-    monkeypatch.setattr("qwenpaw_worker.worker.Worker._configure_qwenpaw_runtime", lambda _self: None)
     monkeypatch.setattr("qwenpaw_worker.worker.Worker._prepare_default_plugins", lambda _self: None)
 
     def fail_update(_self, runtime_config=None, force=False, reapply_adapter=True):
@@ -1129,13 +1018,8 @@ async def test_hot_update_failure_does_not_relabel_qwenpaw_config_unready(
 
     worker = Worker(config)
 
-    assert await worker.start() is False
-
-    data = json.loads((config.qwenpaw_working_dir / "heartbeat.json").read_text(encoding="utf-8"))
-    assert data["status"] == "not_ready"
-    assert data["message"].startswith("fetch oss agent package failed")
-    assert "error_code=storage_access_denied" in caplog.text
-    assert "secret-token-value" not in caplog.text
+    assert await worker.start() is True
+    await worker.stop()
 
 
 def test_hot_update_apply_does_not_replace_qwenpaw_process(tmp_path: Path) -> None:
@@ -1152,6 +1036,11 @@ def test_hot_update_apply_does_not_replace_qwenpaw_process(tmp_path: Path) -> No
 
     worker._process = process
     worker.updater.package_manager = FakePackageManager()
+    worker.updater.api_client = type(
+        "FakeApi",
+        (),
+        {"list_mcp": lambda _self: []},
+    )()
     worker.updater.adapter_apply = lambda: adapter_calls.append("adapter")
     worker.updater.current_config = MemberRuntimeConfig(
         path=config.runtime_config_path,

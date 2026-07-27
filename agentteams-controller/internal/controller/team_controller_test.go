@@ -295,7 +295,7 @@ func TestReconcileTeamTeamReferences_HappyPath(t *testing.T) {
 
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "copaw", Model: "qwen"},
 		Status: v1beta1.WorkerStatus{
 			SpecHash:       "leader-hash",
 			Phase:          "Running",
@@ -308,7 +308,7 @@ func TestReconcileTeamTeamReferences_HappyPath(t *testing.T) {
 	}
 	worker1 := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "copaw", Model: "qwen"},
 		Status: v1beta1.WorkerStatus{
 			SpecHash:       "dev-hash",
 			Phase:          "Running",
@@ -421,6 +421,10 @@ func TestReconcileTeamTeamReferences_HappyPath(t *testing.T) {
 	}
 	if workerCoord.TeamLeaderName != "lead" {
 		t.Errorf("workerCoord TeamLeaderName=%q, want lead", workerCoord.TeamLeaderName)
+	}
+	leaderRuntime, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "lead")
+	if !ok || leaderRuntime.Role != "team_leader" || leaderRuntime.TeamRoomID == "" || leaderRuntime.LeaderDMRoomID == "" {
+		t.Fatalf("CoPaw leader runtime config missing team routing facts: %#v", leaderRuntime)
 	}
 }
 

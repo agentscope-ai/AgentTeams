@@ -121,9 +121,8 @@ def resolve_team_leader_assignment_room(text: str, room_id: str) -> str:
         return room_id
 
     team_room_id = _runtime_config_field("team", "teamRoomId")
-    leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
     team_name = _runtime_config_field("team", "name")
-    if not team_room_id or room_id != leader_dm_room_id:
+    if not team_room_id:
         return room_id
     if not _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(text or ""):
         return room_id

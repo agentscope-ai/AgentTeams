@@ -254,6 +254,26 @@ async def test_message_tool_routes_localpart_assignment_to_team_room(
 
 
 @pytest.mark.asyncio
+async def test_message_tool_routes_team_assignment_from_any_room_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    response = await message(
+        action="send",
+        channel="matrix",
+        target="room:!worker-room:hs.local",
+        message="@dag-team-1-dev:hs.local New task assigned: design the API.",
+        dryRun=True,
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert payload["roomId"] == "!team-room:hs.local"
+
+
+@pytest.mark.asyncio
 async def test_message_tool_expands_worker_alias_before_routing(
     tmp_path,
     monkeypatch,

@@ -750,6 +750,7 @@ class Worker:
             "tool_overrides": [],
         }
         for plugin_id in ("teamharness", "workerflow"):
+            self.api_client.wait_for_mcp_tools(plugin_id)
             self.api_client.put_mcp_policy(plugin_id, allow_policy)
 
     async def _heartbeat_probe_loop(self) -> None:

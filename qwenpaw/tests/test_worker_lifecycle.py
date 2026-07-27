@@ -518,6 +518,7 @@ def test_builtin_plugin_mcp_is_reconciled_through_api(tmp_path: Path) -> None:
     worker = Worker(_config(tmp_path))
     created = {}
     policies = {}
+    events = []
 
     class Api:
         def list_mcp(self):
@@ -529,7 +530,12 @@ def test_builtin_plugin_mcp_is_reconciled_through_api(tmp_path: Path) -> None:
         def update_mcp(self, key, payload):
             raise AssertionError(f"unexpected update: {key} {payload}")
 
+        def wait_for_mcp_tools(self, key):
+            events.append(("tools", key))
+            return [{"name": "ready", "enabled": True}]
+
         def put_mcp_policy(self, key, payload):
+            events.append(("policy", key))
             policies[key] = payload
 
     worker.api_client = Api()
@@ -538,6 +544,12 @@ def test_builtin_plugin_mcp_is_reconciled_through_api(tmp_path: Path) -> None:
 
     assert set(created) == {"teamharness", "workerflow"}
     assert set(policies) == {"teamharness", "workerflow"}
+    assert events == [
+        ("tools", "teamharness"),
+        ("policy", "teamharness"),
+        ("tools", "workerflow"),
+        ("policy", "workerflow"),
+    ]
     assert all(policy["default_effect"] == "allow" for policy in policies.values())
     assert created["teamharness"]["transport"] == "stdio"
     assert created["teamharness"]["args"][0].endswith(

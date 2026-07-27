@@ -244,6 +244,34 @@ class QwenPawApiClient:
             f"/api/mcp/policy/{urllib.parse.quote(client_key, safe='')}",
         )
 
+    def list_mcp_tools(self, client_key: str) -> list[dict[str, Any]]:
+        return self._request(
+            "GET",
+            f"/api/mcp/tools/{urllib.parse.quote(client_key, safe='')}",
+        )
+
+    def wait_for_mcp_tools(
+        self,
+        client_key: str,
+        *,
+        timeout: float = 30,
+        interval: float = 0.5,
+    ) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + timeout
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                tools = self.list_mcp_tools(client_key)
+                if tools:
+                    return tools
+            except QwenPawApiError as exc:
+                last_error = exc
+            time.sleep(interval)
+        raise QwenPawApiError(
+            f"QwenPaw MCP client {client_key} did not become callable: "
+            f"{last_error or 'no tools returned'}",
+        )
+
     def put_mcp_policy(
         self,
         client_key: str,

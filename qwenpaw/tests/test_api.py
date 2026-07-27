@@ -26,6 +26,7 @@ class _ApiHandler(BaseHTTPRequestHandler):
         "unmanaged_rules_count": 0,
     }
     mcp = {}
+    mcp_tools_unavailable = 0
     toggle_conflicts = 0
 
     def log_message(self, _format, *_args):
@@ -58,6 +59,13 @@ class _ApiHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/mcp/policy/teamharness":
             self._reply(200, type(self).mcp_policy)
+            return
+        if self.path == "/api/mcp/tools/teamharness":
+            if type(self).mcp_tools_unavailable:
+                type(self).mcp_tools_unavailable -= 1
+                self._reply(503, {"detail": "driver not active yet"})
+                return
+            self._reply(200, [{"name": "taskflow", "enabled": True}])
             return
         if self.path == "/api/mcp":
             self._reply(200, list(type(self).mcp.values()))
@@ -163,6 +171,7 @@ def api_url():
         "unmanaged_rules_count": 0,
     }
     _ApiHandler.mcp = {}
+    _ApiHandler.mcp_tools_unavailable = 0
     _ApiHandler.toggle_conflicts = 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ApiHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -245,6 +254,25 @@ def test_put_mcp_policy_uses_public_api_and_reads_back(api_url):
     )
 
     assert result["default_effect"] == "allow"
+
+
+def test_list_mcp_tools_activates_driver_through_public_api(api_url):
+    client = QwenPawApiClient(api_url)
+
+    assert client.list_mcp_tools("teamharness") == [
+        {"name": "taskflow", "enabled": True},
+    ]
+
+
+def test_wait_for_mcp_tools_retries_until_driver_is_active(api_url):
+    _ApiHandler.mcp_tools_unavailable = 2
+    client = QwenPawApiClient(api_url)
+
+    assert client.wait_for_mcp_tools(
+        "teamharness",
+        timeout=1,
+        interval=0.01,
+    ) == [{"name": "taskflow", "enabled": True}]
 
 
 def test_mcp_create_update_delete_each_reads_back(api_url):

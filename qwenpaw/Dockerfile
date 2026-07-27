@@ -89,12 +89,6 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g mcporter skills @nacos-group/cli@1.1.2 && \
     rm -rf /root/.npm
 
-# Overlay AgentTeams Matrix channel behavior while keeping QwenPaw as the base runtime.
-COPY qwenpaw/src/matrix/ /tmp/qwenpaw-matrix-overlay/
-RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
-    cp -a /tmp/qwenpaw-matrix-overlay/channel.py "$SITE/qwenpaw/app/channels/matrix/channel.py" && \
-    rm -rf /tmp/qwenpaw-matrix-overlay
-
 # Overlay real qwenpaw-worker source without rebuilding the dependency-heavy venv.
 COPY qwenpaw/src/ /tmp/qwenpaw-worker/src/
 RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
@@ -105,9 +99,11 @@ RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
 RUN mkdir -p /opt/agentteams/plugins
 COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamharness-qwenpaw.zip
 COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/agentteams/plugins/workerflow-qwenpaw.zip
+COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
 COPY qwenpaw/scripts/install-builtin-qwenpaw-plugins.py /tmp/install-builtin-qwenpaw-plugins.py
 RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
         --working-dir /opt/agentteams/qwenpaw-builtin \
+        /opt/agentteams/plugins/agentteams-matrix-channel \
         /opt/agentteams/plugins/teamharness-qwenpaw.zip \
         /opt/agentteams/plugins/workerflow-qwenpaw.zip \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py

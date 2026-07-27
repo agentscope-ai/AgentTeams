@@ -8,19 +8,19 @@ import types
 from types import SimpleNamespace
 
 
-ROOT = Path(__file__).resolve().parents[1]
-OVERLAY = ROOT / "src" / "matrix" / "channel.py"
+ROOT = Path(__file__).resolve().parents[2]
+OVERLAY = ROOT / "plugins" / "agentteams-matrix-channel" / "agentteams_matrix" / "channel.py"
 
 
 def _overlay_source() -> str:
     return OVERLAY.read_text(encoding="utf-8")
 
 
-def test_matrix_overlay_is_installed_by_worker_image() -> None:
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+def test_matrix_plugin_is_installed_by_worker_image() -> None:
+    dockerfile = (ROOT / "qwenpaw" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "qwenpaw/src/matrix/" in dockerfile
-    assert "qwenpaw/app/channels/matrix/channel.py" in dockerfile
+    assert "agentteams-matrix-channel" in dockerfile
+    assert "qwenpaw/app/channels/matrix/channel.py" not in dockerfile
 
 
 def test_matrix_overlay_preserves_invite_join_and_marks_ready() -> None:
@@ -71,7 +71,7 @@ def _install_module(name: str, **attrs):
 
 
 def _load_overlay_module():
-    root = "_qwenpaw_overlay_test"
+    root = "_qwenpaw_matrix_plugin_test"
 
     class _Dummy:
         pass
@@ -102,16 +102,15 @@ def _load_overlay_module():
 
     content_class = type("_Content", (), {"__init__": _content_init})
 
-    _install_module(root)
-    _install_module(f"{root}.app")
-    _install_module(f"{root}.app.channels")
-    _install_module(f"{root}.app.channels.matrix")
-    _install_module(f"{root}.app.channels.base", BaseChannel=_BaseChannel)
+    _install_module("qwenpaw")
+    _install_module("qwenpaw.app")
+    _install_module("qwenpaw.app.channels")
+    _install_module("qwenpaw.app.channels.base", BaseChannel=_BaseChannel)
     _install_module(
-        f"{root}.app.channels.utils",
+        "qwenpaw.app.channels.utils",
         file_url_to_local_path=lambda value: value,
     )
-    _install_module(f"{root}.constant", WORKING_DIR="/tmp")
+    _install_module("qwenpaw.constant", WORKING_DIR="/tmp")
 
     _install_module(
         "nio",
@@ -174,7 +173,7 @@ def _load_overlay_module():
         VideoContent=content_class,
     )
 
-    module_name = f"{root}.app.channels.matrix.channel"
+    module_name = f"{root}.channel"
     spec = importlib.util.spec_from_file_location(module_name, OVERLAY)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
@@ -203,7 +202,7 @@ async def _noop_prepare(_room_id):
 
 def _make_thread_channel():
     module = _load_overlay_module()
-    channel = module.MatrixChannel.__new__(module.MatrixChannel)
+    channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
     channel._client = _FakeClient()
     channel._user_id = "@bot:hs.local"
     channel._active_thread_roots = {}
@@ -908,7 +907,7 @@ async def _noop_read_receipt(_room_id, _event_id):
 
 def _make_inbound_channel(command_registry=True):
     module = _load_overlay_module()
-    channel = module.MatrixChannel.__new__(module.MatrixChannel)
+    channel = module.AgentTeamsMatrixChannel.__new__(module.AgentTeamsMatrixChannel)
     channel._user_id = "@copywriting-assistant:hs.local"
     channel._client = _FakeClient()
     channel.dm_disabled = False

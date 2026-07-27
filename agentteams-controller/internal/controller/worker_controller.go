@@ -202,7 +202,11 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	configOwnedByTeam := mctx.TeamName != ""
+	teamRole, inTeam, err := r.teamRoleForWorker(ctx, w.Namespace, w.Name)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	configOwnedByTeam := inTeam && backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
@@ -210,6 +214,10 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 			return reconcile.Result{}, fmt.Errorf("resolve model provider %q: %w", effectiveSpec.ModelProvider, err)
 		}
 		mctx.ModelProviderInfo = info
+	}
+	configContext := mctx
+	if inTeam && teamRole == RoleTeamLeader {
+		configContext.Role = RoleTeamLeader
 	}
 
 	if mctx.DeployMode == v1beta1.DeployModeEdge {
@@ -250,7 +258,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 			return reconcile.Result{}, err
 		}
 		if !configOwnedByTeam {
-			if err := ReconcileMemberConfig(ctx, deps, mctx, state); err != nil {
+			if err := ReconcileMemberConfig(ctx, deps, configContext, state); err != nil {
 				applyMemberStateToWorker(w, state)
 				return reconcile.Result{}, err
 			}
@@ -280,7 +288,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{}, err
 	}
 	if !configOwnedByTeam {
-		if err := ReconcileMemberConfig(ctx, deps, mctx, state); err != nil {
+		if err := ReconcileMemberConfig(ctx, deps, configContext, state); err != nil {
 			applyMemberStateToWorker(w, state)
 			return reconcile.Result{}, err
 		}

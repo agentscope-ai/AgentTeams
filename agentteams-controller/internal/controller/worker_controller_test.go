@@ -143,30 +143,47 @@ func TestWorkerTeamNameUsesPersistedMembershipAnnotation(t *testing.T) {
 }
 
 func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
-	for _, runtimeName := range []string{"copaw", "qwenpaw"} {
-		t.Run(runtimeName, func(t *testing.T) {
-			worker := newWorker("leader", v1beta1.WorkerSpec{Runtime: runtimeName})
-			team := &v1beta1.Team{
-				ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "default"},
-				Spec: v1beta1.TeamSpec{
-					TeamName: "runtime-team",
-					WorkerMembers: []v1beta1.TeamWorkerRef{
-						{Name: "leader", Role: "team_leader"},
-					},
-				},
-			}
-			rig := newWorkerRig(t, worker, team)
+	worker := newWorker("leader", v1beta1.WorkerSpec{Runtime: "qwenpaw"})
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "runtime-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "leader", Role: "team_leader"},
+			},
+		},
+	}
+	rig := newWorkerRig(t, worker, team)
 
-			if _, _, err := rig.reconcile("leader"); err != nil {
-				t.Fatalf("reconcile referenced Worker: %v", err)
-			}
-			if got := len(rig.deployer.Calls.DeployWorkerConfig); got != 0 {
-				t.Fatalf("DeployWorkerConfig calls=%d, want 0 for Team-owned Worker", got)
-			}
-			if got := len(rig.deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
-				t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 0 for Team-owned Worker", got)
-			}
-		})
+	if _, _, err := rig.reconcile("leader"); err != nil {
+		t.Fatalf("reconcile referenced Worker: %v", err)
+	}
+	if got := len(rig.deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 0 for Team-owned QwenPaw Worker", got)
+	}
+}
+
+func TestWorkerReconcileUsesTeamLeaderAssetsForFileConfiguredRuntime(t *testing.T) {
+	worker := newWorker("leader", v1beta1.WorkerSpec{Runtime: "copaw"})
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "runtime-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "leader", Role: "team_leader"},
+			},
+		},
+	}
+	rig := newWorkerRig(t, worker, team)
+
+	if _, _, err := rig.reconcile("leader"); err != nil {
+		t.Fatalf("reconcile referenced Worker: %v", err)
+	}
+	if got := len(rig.deployer.Calls.DeployWorkerConfig); got != 1 {
+		t.Fatalf("DeployWorkerConfig calls=%d, want 1", got)
+	}
+	if got := rig.deployer.Calls.DeployWorkerConfig[0].Role; got != RoleTeamLeader.String() {
+		t.Fatalf("DeployWorkerConfig role=%q, want %q", got, RoleTeamLeader.String())
 	}
 }
 

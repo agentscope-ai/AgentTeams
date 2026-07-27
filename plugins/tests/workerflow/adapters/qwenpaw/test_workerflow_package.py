@@ -63,7 +63,7 @@ def test_build_qwenpaw_native_workerflow_plugin_package(tmp_path: Path) -> None:
     assert manifest["version"] == version
     assert manifest["entry"]["backend"] == "plugin.py"
     assert manifest["qwenpaw_version"] == {
-        "min": "2.0.0",
+        "min": "2.0.1",
         "max": "2.1.0",
     }
     assert "workerflow-mcp" in manifest["meta"]["features"]

@@ -75,10 +75,11 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
     class TeamHarnessSanitizer(MiddlewareBase):
         async def on_acting(
             self,
-            _agent: Any,
+            agent: Any,
             input_kwargs: dict[str, Any],
             next_handler: Callable[..., AsyncGenerator[Any, None]],
         ) -> AsyncGenerator[Any, None]:
+            del agent
             async for item in next_handler(**input_kwargs):
                 _sanitize(item)
                 yield item

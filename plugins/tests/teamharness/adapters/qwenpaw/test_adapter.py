@@ -1,5 +1,6 @@
 """QwenPaw 2 public plugin API contract tests for TeamHarness."""
 
+import asyncio
 import importlib.util
 from pathlib import Path
 import sys
@@ -68,6 +69,32 @@ def test_sanitizer_redacts_tool_output(monkeypatch):
     value = {"content": [{"text": "token=secret-value"}]}
     module._sanitize(value)
     assert value["content"][0]["text"] == "token=[REDACTED]"
+
+
+def test_sanitizer_accepts_qwenpaw_2_middleware_keywords(monkeypatch):
+    module = load_plugin()
+    middleware_module = types.ModuleType("agentscope.middleware")
+    middleware_module.MiddlewareBase = object
+    agentscope_module = types.ModuleType("agentscope")
+    agentscope_module.middleware = middleware_module
+    monkeypatch.setitem(sys.modules, "agentscope", agentscope_module)
+    monkeypatch.setitem(sys.modules, "agentscope.middleware", middleware_module)
+    middleware = module._sanitizer_factory(None, None)
+
+    async def next_handler(**_kwargs):
+        yield {"text": "ok"}
+
+    async def collect():
+        return [
+            item
+            async for item in middleware.on_acting(
+                agent=object(),
+                input_kwargs={"tool_call": object()},
+                next_handler=next_handler,
+            )
+        ]
+
+    assert asyncio.run(collect()) == [{"text": "ok"}]
 
 
 def test_team_prompt_reads_packaged_contract():

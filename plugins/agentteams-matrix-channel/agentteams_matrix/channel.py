@@ -3965,9 +3965,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         return _enum_name(message_type) == "MESSAGE"
 
     def _thread_content_parts(self, event: Any) -> List[Any]:
-        """Render event for thread display, bypassing filter_tool_messages."""
+        """Render event for thread display with tool messages enabled."""
         from dataclasses import replace as dc_replace
-        style = dc_replace(self._render_style, filter_tool_messages=False)
+        display_config = dc_replace(
+            self._render_style.display_config,
+            show_tool_calls=True,
+            show_tool_results=True,
+        )
+        style = dc_replace(self._render_style, display_config=display_config)
         renderer = self._renderer.__class__(style)
         return renderer.message_to_parts(event)
 
@@ -3989,7 +3994,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
     def _tool_output_media_parts(self, event: Any) -> List[Any]:
         """Extract media-only parts from a tool output event."""
         from dataclasses import replace as dc_replace
-        style = dc_replace(self._render_style, filter_tool_messages=True)
+        display_config = dc_replace(
+            self._render_style.display_config,
+            show_tool_results=False,
+        )
+        style = dc_replace(self._render_style, display_config=display_config)
         renderer = self._renderer.__class__(style)
         parts = renderer.message_to_parts(event)
         return [p for p in parts if getattr(p, "type", None) != ContentType.TEXT]

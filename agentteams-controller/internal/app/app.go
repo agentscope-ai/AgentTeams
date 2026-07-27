@@ -643,6 +643,8 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		SocketPath:     a.cfg.SocketPath,
 		MatrixConfig:   a.cfg.MatrixConfig(),
 		Provisioner:    a.provisioner,
+
+		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
 	})
 	return nil
 }

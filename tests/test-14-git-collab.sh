@@ -19,6 +19,8 @@ if ! require_llm_key; then
     exit 0
 fi
 
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+
 ADMIN_LOGIN=$(matrix_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}")
 ADMIN_TOKEN=$(echo "${ADMIN_LOGIN}" | jq -r '.access_token')
 
@@ -187,6 +189,27 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
 done
 assert_not_empty "${PROJECT_ROOM}" "Project room created by Manager"
 log_info "Project room: ${PROJECT_ROOM}"
+
+case "${TEST_WORKER_RUNTIME}" in
+    openclaw) EXPECTED_WORKER_IMAGE="agentteams/worker-agent:" ;;
+    copaw) EXPECTED_WORKER_IMAGE="agentteams/copaw-worker:" ;;
+    hermes) EXPECTED_WORKER_IMAGE="agentteams/hermes-worker:" ;;
+    qwenpaw) EXPECTED_WORKER_IMAGE="agentteams/qwenpaw-worker:" ;;
+    *) EXPECTED_WORKER_IMAGE="" ;;
+esac
+
+for WORKER_NAME in alice bob charlie; do
+    WORKER_JSON=$(exec_in_agent agt get workers "${WORKER_NAME}" -o json 2>/dev/null || echo "{}")
+    WORKER_RUNTIME=$(echo "${WORKER_JSON}" | jq -r '.runtime // empty')
+    assert_eq "${TEST_WORKER_RUNTIME}" "${WORKER_RUNTIME}" \
+        "Worker ${WORKER_NAME} runtime matches test matrix (got: '${WORKER_RUNTIME}', want: '${TEST_WORKER_RUNTIME}')"
+
+    if [ -n "${EXPECTED_WORKER_IMAGE}" ]; then
+        WORKER_IMAGE=$(docker inspect --format '{{.Config.Image}}' "agentteams-worker-${WORKER_NAME}" 2>/dev/null || true)
+        assert_contains "${WORKER_IMAGE}" "${EXPECTED_WORKER_IMAGE}" \
+            "Worker ${WORKER_NAME} image matches runtime ${TEST_WORKER_RUNTIME} (got: '${WORKER_IMAGE}')"
+    fi
+done
 
 log_info "Waiting for Manager to post completion message in project room (timeout: 1800s)..."
 # First check if completion message was already posted

@@ -211,21 +211,103 @@ for WORKER_NAME in alice bob charlie; do
     fi
 done
 
-log_info "Waiting for Manager to post completion message in project room (timeout: 1800s)..."
-# First check if completion message was already posted
-COMPLETION_MSG=$(matrix_read_messages "${MANAGER_TOKEN}" "${PROJECT_ROOM}" 50 2>/dev/null | \
-    jq -r --arg u "@manager" '[.chunk[] | select(.sender | startswith($u)) | .content.body] | .[]' 2>/dev/null | \
-    grep -iE "complete|done|finished|已完成|完成|all.*phase|phase.*4|PHASE4" | head -1 || true)
+log_info "Waiting for Phase 4 verification branch (timeout: 1800s)..."
+PHASE4_REF=""
+DEADLINE=$(( $(date +%s) + 1800 ))
+NEXT_NUDGE=$(( $(date +%s) + 120 ))
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+    PHASE4_REF=$(docker exec "${TEST_CONTROLLER_CONTAINER}" \
+        git --git-dir="${REPO_PATH}.git" rev-parse --verify "refs/heads/${TEST_BRANCH}" 2>/dev/null || true)
+    [ -n "${PHASE4_REF}" ] && break
 
-if [ -z "${COMPLETION_MSG}" ]; then
-    COMPLETION_MSG=$(matrix_wait_for_message_containing "${MANAGER_TOKEN}" "${PROJECT_ROOM}" "@manager" \
-        "complete\|done\|finished\|已完成\|完成\|all.*phase\|phase.*4\|PHASE4" 1800 \
-        "${ADMIN_TOKEN}" "${DM_ROOM}" \
-        "Please check the project room and continue coordinating the git collaboration workflow. If any phase is pending or a worker message was missed, please follow up." \
-        2>/dev/null || true)
+    if [ "$(date +%s)" -ge "${NEXT_NUDGE}" ]; then
+        matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
+            "Please continue the 4-phase workflow from the latest worker report in the project room. Do not stop until Phase 4 is complete." \
+            2>/dev/null || true
+        NEXT_NUDGE=$(( $(date +%s) + 120 ))
+    fi
+    sleep 10
+done
+assert_not_empty "${PHASE4_REF}" "Phase 4 verification branch exists"
+
+log_section "Verify Four-Phase Git Results"
+
+FEATURE_CONTENT=$(docker exec "${TEST_CONTROLLER_CONTAINER}" \
+    git --git-dir="${REPO_PATH}.git" show "refs/heads/${FEATURE_BRANCH}:doc/proposal.md" 2>/dev/null || true)
+REVIEW_CONTENT=$(docker exec "${TEST_CONTROLLER_CONTAINER}" \
+    git --git-dir="${REPO_PATH}.git" show "refs/heads/${REVIEW_BRANCH}:reviews/proposal-review.md" 2>/dev/null || true)
+VERIFY_CONTENT=$(docker exec "${TEST_CONTROLLER_CONTAINER}" \
+    git --git-dir="${REPO_PATH}.git" show "refs/heads/${TEST_BRANCH}:verify/checklist.md" 2>/dev/null || true)
+
+assert_contains "${FEATURE_CONTENT}" "## Summary" "Phase 3 added Summary to proposal"
+assert_contains "${FEATURE_CONTENT}" "## Goals" "Feature branch retains proposal Goals"
+assert_contains "${REVIEW_CONTENT}" "Please add a ## Summary section" "Phase 2 review requested Summary"
+assert_contains "${VERIFY_CONTENT}" "Summary" "Phase 4 checklist verifies Summary"
+assert_contains "${VERIFY_CONTENT}" "Goals" "Phase 4 checklist verifies Goals"
+assert_contains_i "${VERIFY_CONTENT}" "review" "Phase 4 checklist verifies review was addressed"
+
+FEATURE_COMMITS=$(docker exec "${TEST_CONTROLLER_CONTAINER}" \
+    git --git-dir="${REPO_PATH}.git" log --format=%s "refs/heads/${FEATURE_BRANCH}" 2>/dev/null || true)
+REVIEW_COMMIT=$(docker exec "${TEST_CONTROLLER_CONTAINER}" \
+    git --git-dir="${REPO_PATH}.git" log -1 --format=%s "refs/heads/${REVIEW_BRANCH}" 2>/dev/null || true)
+VERIFY_COMMIT=$(docker exec "${TEST_CONTROLLER_CONTAINER}" \
+    git --git-dir="${REPO_PATH}.git" log -1 --format=%s "refs/heads/${TEST_BRANCH}" 2>/dev/null || true)
+assert_contains "${FEATURE_COMMITS}" "feat: add proposal" "Phase 1 commit message is exact"
+assert_contains "${FEATURE_COMMITS}" "fix: add summary section per review" "Phase 3 commit message is exact"
+assert_eq "review: request summary section" "${REVIEW_COMMIT}" "Phase 2 commit message is exact"
+assert_eq "verify: proposal review checklist" "${VERIFY_COMMIT}" "Phase 4 commit message is exact"
+
+EVENT_DEADLINE=$(( $(date +%s) + 300 ))
+while true; do
+    PROJECT_EVENTS=$(matrix_read_messages "${MANAGER_TOKEN}" "${PROJECT_ROOM}" 200 2>/dev/null || echo '{"chunk":[]}')
+    PHASE1_TS=$(echo "${PROJECT_EVENTS}" | jq -r --arg u "@alice:${TEST_MATRIX_DOMAIN}" \
+        '[.chunk[] | select(.sender == $u and (.content.body // "" | contains("PHASE1_DONE"))) | .origin_server_ts] | min // 0')
+    PHASE2_TS=$(echo "${PROJECT_EVENTS}" | jq -r --arg u "@bob:${TEST_MATRIX_DOMAIN}" \
+        '[.chunk[] | select(.sender == $u and (.content.body // "" | contains("REVISION_NEEDED"))) | .origin_server_ts] | min // 0')
+    PHASE3_TS=$(echo "${PROJECT_EVENTS}" | jq -r --arg u "@alice:${TEST_MATRIX_DOMAIN}" \
+        '[.chunk[] | select(.sender == $u and (.content.body // "" | contains("PHASE3_DONE"))) | .origin_server_ts] | min // 0')
+    PHASE4_TS=$(echo "${PROJECT_EVENTS}" | jq -r --arg u "@charlie:${TEST_MATRIX_DOMAIN}" \
+        '[.chunk[] | select(.sender == $u and (.content.body // "" | contains("PHASE4_DONE"))) | .origin_server_ts] | min // 0')
+    [ "${PHASE1_TS}" -gt 0 ] && [ "${PHASE2_TS}" -gt 0 ] \
+        && [ "${PHASE3_TS}" -gt 0 ] && [ "${PHASE4_TS}" -gt 0 ] && break
+    [ "$(date +%s)" -ge "${EVENT_DEADLINE}" ] && break
+    sleep 10
+done
+
+if [ "${PHASE1_TS}" -gt 0 ] && [ "${PHASE1_TS}" -lt "${PHASE2_TS}" ] \
+    && [ "${PHASE2_TS}" -lt "${PHASE3_TS}" ] && [ "${PHASE3_TS}" -lt "${PHASE4_TS}" ]; then
+    log_pass "Worker phase reports occurred in required alice → bob → alice → charlie order"
+else
+    log_fail "Missing or out-of-order phase reports (phase1=${PHASE1_TS}, phase2=${PHASE2_TS}, phase3=${PHASE3_TS}, phase4=${PHASE4_TS})"
 fi
 
-assert_not_empty "${COMPLETION_MSG}" "Manager posted completion message in project room"
+log_info "Waiting for Manager's final project-room summary..."
+COMPLETION_PATTERN="workflow.*(complete|completed|done|finished)|all.*4.*phase.*(complete|completed|done|finished)|4.phase.*(complete|completed|done|finished)|工作流.*完成|四.*阶段.*完成"
+COMPLETION_MSG=$(echo "${PROJECT_EVENTS}" | \
+    jq -r --arg u "@manager" '[.chunk[] | select(.sender | startswith($u)) | .content.body] | .[]' 2>/dev/null | \
+    grep -iE "${COMPLETION_PATTERN}" | head -1 || true)
+if [ -z "${COMPLETION_MSG}" ]; then
+    SUMMARY_DEADLINE=$(( $(date +%s) + 300 ))
+    NEXT_SUMMARY_NUDGE=$(date +%s)
+    while [ "$(date +%s)" -lt "${SUMMARY_DEADLINE}" ]; do
+        if [ "$(date +%s)" -ge "${NEXT_SUMMARY_NUDGE}" ]; then
+            matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
+                "Phase 4 is present in git. Please post the final workflow summary in the project room and @mention the human admin." \
+                2>/dev/null || true
+            NEXT_SUMMARY_NUDGE=$(( $(date +%s) + 60 ))
+        fi
+        sleep 15
+        PROJECT_EVENTS=$(matrix_read_messages "${MANAGER_TOKEN}" "${PROJECT_ROOM}" 200 2>/dev/null || echo '{"chunk":[]}')
+        COMPLETION_MSG=$(echo "${PROJECT_EVENTS}" | \
+            jq -r --arg u "@manager" '[.chunk[] | select(.sender | startswith($u)) | .content.body] | .[]' 2>/dev/null | \
+            grep -iE "${COMPLETION_PATTERN}" | head -1 || true)
+        [ -n "${COMPLETION_MSG}" ] && break
+    done
+fi
+
+assert_not_empty "${COMPLETION_MSG}" "Manager posted final completion summary in project room"
+assert_contains "${COMPLETION_MSG}" "@${TEST_ADMIN_USER}:${TEST_MATRIX_DOMAIN}" \
+    "Manager final summary @mentions the human admin"
 log_pass "Workflow complete — Manager's message: $(echo "${COMPLETION_MSG}" | head -c 200)"
 
 log_section "Collect Metrics"

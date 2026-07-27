@@ -21,6 +21,12 @@ test_setup "24-skills-management"
 
 TEST_WORKER="test-skl-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
+    BASELINE_SKILL="file-sharing"
+else
+    BASELINE_SKILL="file-sync"
+fi
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
@@ -84,10 +90,10 @@ else
 fi
 
 # Built-in baseline skill should be present in MinIO regardless of --skills
-if minio_file_exists "agents/${TEST_WORKER}/skills/file-sync/SKILL.md"; then
-    log_pass "Built-in skill 'file-sync' present in MinIO"
+if minio_file_exists "agents/${TEST_WORKER}/skills/${BASELINE_SKILL}/SKILL.md"; then
+    log_pass "Built-in skill '${BASELINE_SKILL}' present in MinIO for ${TEST_WORKER_RUNTIME} runtime"
 else
-    log_fail "Built-in skill 'file-sync' missing in MinIO"
+    log_fail "Built-in skill '${BASELINE_SKILL}' missing in MinIO for ${TEST_WORKER_RUNTIME} runtime"
 fi
 
 if minio_file_exists "agents/${TEST_WORKER}/skills/github-operations/SKILL.md"; then

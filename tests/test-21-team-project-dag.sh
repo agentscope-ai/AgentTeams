@@ -246,11 +246,13 @@ LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/
 # push can briefly race the Team Leader overlay. Wait for the role-specific
 # desired state to converge before asserting its exact content.
 for i in $(seq 1 12); do
-    if echo "${TASK_SKILL}" | grep -Fq "Task state is tool-owned"; then
+    if echo "${TASK_SKILL}" | grep -Fq "Task state is tool-owned" \
+        && echo "${LEADER_AGENTS}" | grep -Fq "Project/tool boundary"; then
         break
     fi
     sleep 5
     TASK_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/task-management/SKILL.md" 2>/dev/null)
+    LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null)
 done
 
 assert_contains "${PROJECT_SKILL}" "projectflow" "project-management documents projectflow"

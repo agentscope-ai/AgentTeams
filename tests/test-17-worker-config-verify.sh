@@ -17,6 +17,17 @@ test_setup "17-worker-config-verify"
 
 TEST_WORKER="test-cfg-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+
+if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
+    BUILTIN_CONTENT_SENTINEL="Task Execution Workflow"
+    BUILTIN_SKILLS=(communication file-sharing find-skills mcporter organization task-management)
+    FILE_SHARING_SKILL="file-sharing"
+else
+    BUILTIN_CONTENT_SENTINEL="Every Session"
+    BUILTIN_SKILLS=(file-sync task-progress mcporter find-skills project-participation)
+    FILE_SHARING_SKILL="file-sync"
+fi
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
@@ -120,7 +131,8 @@ assert_contains "${AGENTS_CONTENT}" "agentteams-builtin-start" "AGENTS.md has bu
 assert_contains "${AGENTS_CONTENT}" "agentteams-builtin-end" "AGENTS.md has builtin-end marker"
 
 # Builtin content filled (not empty between markers)
-assert_contains "${AGENTS_CONTENT}" "Every Session" "AGENTS.md builtin section has content (not empty)"
+assert_contains "${AGENTS_CONTENT}" "${BUILTIN_CONTENT_SENTINEL}" \
+    "AGENTS.md builtin section matches ${TEST_WORKER_RUNTIME} runtime"
 
 # Team-context coordination block present
 assert_contains "${AGENTS_CONTENT}" "agentteams-team-context-start" "AGENTS.md has team-context-start marker"
@@ -146,7 +158,7 @@ fi
 log_section "Verify Skills in MinIO"
 
 # Builtin skills should be present
-for skill in file-sync task-progress mcporter find-skills project-participation; do
+for skill in "${BUILTIN_SKILLS[@]}"; do
     SKILL_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_WORKER}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
     if [ "${SKILL_EXISTS}" = "yes" ]; then
         log_pass "Builtin skill present: ${skill}"
@@ -164,11 +176,11 @@ else
 fi
 
 # Verify skill content uses "coordinator" not "Manager"
-FILESYNC_CONTENT=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}/skills/file-sync/SKILL.md" 2>/dev/null || echo "")
+FILESYNC_CONTENT=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}/skills/${FILE_SHARING_SKILL}/SKILL.md" 2>/dev/null || echo "")
 if echo "${FILESYNC_CONTENT}" | grep -q "coordinator"; then
-    log_pass "file-sync SKILL.md uses 'coordinator'"
+    log_pass "${FILE_SHARING_SKILL} SKILL.md uses 'coordinator'"
 else
-    log_fail "file-sync SKILL.md does not use 'coordinator'"
+    log_fail "${FILE_SHARING_SKILL} SKILL.md does not use 'coordinator'"
 fi
 
 # ============================================================

@@ -402,18 +402,63 @@ wait_agent_file_contains() {
     return 1
 }
 
+# Read a runtime-owned prompt/config file from the location consumed by the
+# selected Worker runtime. QwenPaw consumes its default workspace directly;
+# other runtimes keep the historical top-level OSS layout.
+read_worker_runtime_file() {
+    local agent_name="$1"
+    local rel_path="$2"
+    local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+    if [ "${runtime}" = "qwenpaw" ]; then
+        docker exec "$(worker_container_name "${agent_name}")" cat \
+            "/root/agentteams-fs/agents/${agent_name}/.qwenpaw/workspaces/default/${rel_path}" \
+            2>/dev/null || true
+        return
+    fi
+    exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/${rel_path}" 2>/dev/null || true
+}
+
+# Read the effective Matrix allow-list. QwenPaw applies the Controller policy
+# through the public ACL API; other runtimes persist it in openclaw.json.
+read_worker_matrix_allowlist() {
+    local agent_name="$1"
+    local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+    if [ "${runtime}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; then
+        docker exec "$(worker_container_name "${agent_name}")" \
+            curl -sf http://127.0.0.1:8088/api/access-control/agentteams_matrix \
+            2>/dev/null | jq -r '.whitelist | keys[]?' 2>/dev/null
+        return
+    fi
+    exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/openclaw.json" 2>/dev/null | \
+        jq -r '.channels.matrix.groupAllowFrom[]?' 2>/dev/null
+}
+
+read_qwenpaw_skills() {
+    local agent_name="$1"
+    docker exec "$(worker_container_name "${agent_name}")" \
+        curl -sf http://127.0.0.1:8088/api/skills 2>/dev/null || printf '[]\n'
+}
+
 # wait_agent_matrix_allow_contains <agent_name> <jq_array_path> <matrix_id> [timeout_seconds]
-# Polls openclaw.json until channels.matrix allow-lists contain the expected ID.
+# Polls the selected runtime's effective Matrix allow-list until it contains
+# the expected ID. QwenPaw intentionally exposes one channel-scoped ACL for
+# both group and DM messages.
 wait_agent_matrix_allow_contains() {
     local agent_name="$1"
     local jq_path="$2"
     local matrix_id="$3"
     local timeout="${4:-120}"
     local elapsed=0
-    local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
     local last=""
     while [ "${elapsed}" -lt "${timeout}" ]; do
-        last=$(exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/openclaw.json" 2>/dev/null | jq -r "${jq_path}[]?" 2>/dev/null)
+        if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; then
+            last=$(read_worker_matrix_allowlist "${agent_name}")
+        else
+            local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+            last=$(exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/openclaw.json" 2>/dev/null | jq -r "${jq_path}[]?" 2>/dev/null)
+        fi
         if echo "${last}" | grep -Fq "${matrix_id}"; then
             return 0
         fi

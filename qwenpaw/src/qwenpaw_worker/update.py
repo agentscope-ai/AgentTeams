@@ -445,6 +445,7 @@ class MemberRuntimeConfig:
             or self.desired_identity != previous.desired_identity
             or self.team_context_identity != previous.team_context_identity
             or self.credential_runtime_identity != previous.credential_runtime_identity
+            or _stable_json(self.storage) != _stable_json(previous.storage)
         )
 
 
@@ -1269,12 +1270,14 @@ class RuntimeUpdater:
         runtime_config_pull: Optional[Callable[[], None]] = None,
         team_context_renderer: Optional[Callable[[MemberRuntimeConfig], str]] = None,
         api_client: Optional[QwenPawApiClient] = None,
+        runtime_reconcile: Optional[Callable[[MemberRuntimeConfig], None]] = None,
     ) -> None:
         self.config = config
         self.adapter_apply = adapter_apply
         self.runtime_config_pull = runtime_config_pull
         self.team_context_renderer = team_context_renderer
         self.api_client = api_client
+        self.runtime_reconcile = runtime_reconcile
         self.package_manager = package_manager or AgentPackageManager(
             config.qwenpaw_working_dir / "agent-packages",
             workspace_dir=config.default_workspace_dir,
@@ -1333,6 +1336,8 @@ class RuntimeUpdater:
             _duration_ms(started_at),
         )
         self._apply_member_identity(config)
+        if self.runtime_reconcile is not None:
+            self.runtime_reconcile(config)
         self._apply_model(config)
         self._apply_mcp_servers(config)
         self._apply_matrix_channel(config)

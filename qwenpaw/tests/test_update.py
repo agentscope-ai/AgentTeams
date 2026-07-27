@@ -303,6 +303,45 @@ member:
     assert updater.current_config.generation == "2"
 
 
+def test_runtime_updater_reconciles_storage_only_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    reconciled: list[tuple[str, str]] = []
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "standalone")
+    updater = _runtime_updater(
+        config=config,
+        package_manager=_NoopPackageManager(),
+        runtime_reconcile=lambda runtime: reconciled.append(
+            (runtime.storage["sharedPrefix"], os.environ["AGENTTEAMS_AGENT_ROLE"]),
+        ),
+    )
+    updater.current_config = MemberRuntimeConfig(
+        path=config.runtime_config_path,
+        raw={
+            "metadata": {"generation": "2"},
+            "member": {"runtime": "qwenpaw"},
+            "storage": {"sharedPrefix": "shared"},
+        },
+    )
+
+    result = updater.apply_once(
+        runtime_config=MemberRuntimeConfig(
+            path=config.runtime_config_path,
+            raw={
+                "metadata": {"generation": "2"},
+                "member": {"runtime": "qwenpaw", "role": "team_leader"},
+                "storage": {"sharedPrefix": "teams/demo-team/shared"},
+            },
+        ),
+        reapply_adapter=False,
+    )
+
+    assert result.changed is True
+    assert reconciled == [("teams/demo-team/shared", "team_leader")]
+
+
 def test_runtime_updater_logs_safe_apply_summary_without_sensitive_values(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

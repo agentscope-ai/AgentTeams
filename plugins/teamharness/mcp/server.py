@@ -2351,13 +2351,13 @@ def _with_storage_root(prefix: str) -> str:
 
 def _default_workspace_dir() -> str:
     """Derive workspace dir from environment (set by qwenpaw-worker / copaw-worker)."""
+    shared_dir = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("AGENTTEAMS_SHARED_DIR", "").strip()
+    if shared_dir:
+        return str(Path(shared_dir).parent)
     for env_key in ("QWENPAW_WORKING_DIR", "COPAW_WORKING_DIR"):
         working_dir = os.getenv(env_key, "").strip()
         if working_dir:
             return str(Path(working_dir) / "workspaces" / "default")
-    shared_dir = os.getenv("TEAMHARNESS_SHARED_DIR", "").strip() or os.getenv("AGENTTEAMS_SHARED_DIR", "").strip()
-    if shared_dir:
-        return str(Path(shared_dir).parent)
     return ""
 
 

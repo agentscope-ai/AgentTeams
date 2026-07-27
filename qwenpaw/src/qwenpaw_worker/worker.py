@@ -73,6 +73,7 @@ class Worker:
             config=config,
             adapter_apply=self._apply_runtime_adapter,
             api_client=self.api_client,
+            runtime_reconcile=self._reconcile_runtime_storage,
         )
         self._process: Optional[asyncio.subprocess.Process] = None
         self._heartbeat_probe_task: Optional[asyncio.Task] = None
@@ -342,6 +343,23 @@ class Worker:
                     shared_dir,
                 )
                 self.sync.mirror_prefix(shared_prefix, shared_dir)
+        else:
+            os.environ.pop("AGENTTEAMS_SHARED_STORAGE_PREFIX", None)
+
+    def _reconcile_runtime_storage(self, runtime_config: MemberRuntimeConfig) -> None:
+        shared_prefix = self._runtime_shared_prefix(runtime_config)
+        shared_dir = self._local_shared_dir_for_prefix(shared_prefix)
+        if self._workspace_shared_dir is None:
+            self._apply_runtime_storage(runtime_config)
+            self._link_workspace_shared()
+            return
+        current_prefix = os.getenv("AGENTTEAMS_SHARED_STORAGE_PREFIX", "").strip() or self.config.shared_prefix
+        if self._workspace_shared_dir == shared_dir and current_prefix == shared_prefix:
+            return
+        self._apply_runtime_storage(runtime_config)
+        self._link_workspace_shared()
+        self._configure_builtin_plugin_mcp_clients()
+        self._configure_builtin_plugin_mcp_policies()
 
     def _runtime_shared_prefix(self, runtime_config) -> str:
         storage = getattr(runtime_config, "storage", {}) or {}

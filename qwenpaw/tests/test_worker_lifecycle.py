@@ -150,6 +150,41 @@ def test_link_workspace_shared_points_to_canonical_shared(tmp_path: Path) -> Non
     assert (config.shared_dir / "tasks" / "task-1" / "workspace" / "note.txt").read_text(encoding="utf-8") == "ready\n"
 
 
+def test_runtime_storage_change_relinks_shared_and_refreshes_builtin_mcp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    worker = Worker(config)
+    mirrored: list[tuple[str, Path]] = []
+    refreshed: list[str] = []
+    worker.sync = types.SimpleNamespace(
+        mirror_prefix=lambda prefix, local_dir: mirrored.append((prefix, local_dir)),
+    )
+    worker._prepare_env()
+    worker._workspace_shared_dir = config.shared_dir
+    worker._link_workspace_shared()
+    monkeypatch.setattr(worker, "_configure_builtin_plugin_mcp_clients", lambda: refreshed.append("clients"))
+    monkeypatch.setattr(worker, "_configure_builtin_plugin_mcp_policies", lambda: refreshed.append("policies"))
+    runtime = MemberRuntimeConfig(
+        path=config.runtime_config_path,
+        raw={
+            "member": {"runtime": "qwenpaw"},
+            "storage": {"sharedPrefix": "teams/demo-team/shared"},
+        },
+    )
+
+    worker._reconcile_runtime_storage(runtime)
+
+    team_shared = tmp_path / "teams" / "demo-team" / "shared"
+    workspace_shared = config.default_workspace_dir / "shared"
+    assert mirrored == [("teams/demo-team/shared", team_shared)]
+    assert workspace_shared.resolve() == team_shared.resolve()
+    assert os.environ["TEAMHARNESS_SHARED_DIR"] == str(team_shared)
+    assert os.environ["AGENTTEAMS_SHARED_STORAGE_PREFIX"] == "teams/demo-team/shared"
+    assert refreshed == ["clients", "policies"]
+
+
 def _legacy_configure_qwenpaw_runtime_uses_workspace_teams_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

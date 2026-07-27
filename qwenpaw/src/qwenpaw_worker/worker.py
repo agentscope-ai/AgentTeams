@@ -294,6 +294,14 @@ class Worker:
         os.environ["AGENTTEAMS_AGENT_HOME"] = str(self.config.worker_home)
         os.environ["AGENTTEAMS_WORKER_HOME"] = str(self.config.worker_home)
         os.environ.setdefault("AGENTTEAMS_WORKER_NAME", self.config.worker_name)
+        os.environ["AGENTTEAMS_FS_ENDPOINT"] = self.config.fs_endpoint
+        os.environ["AGENTTEAMS_FS_ACCESS_KEY"] = self.config.fs_access_key
+        os.environ["AGENTTEAMS_FS_SECRET_KEY"] = self.config.fs_secret_key
+        os.environ["AGENTTEAMS_FS_BUCKET"] = self.config.fs_bucket
+        os.environ.setdefault(
+            "AGENTTEAMS_STORAGE_PREFIX",
+            f"agentteams/{self.config.fs_bucket}",
+        )
         os.environ["QWENPAW_WORKING_DIR"] = str(self.config.qwenpaw_working_dir)
         os.environ["AGENT_WORKSPACE"] = str(self.config.default_workspace_dir)
         os.environ["AGENTTEAMS_SHARED_DIR"] = str(self.config.shared_dir)
@@ -746,9 +754,12 @@ class Worker:
                         "AGENTTEAMS_WORKER_ROLE",
                         "AGENTTEAMS_AGENT_ROLE",
                         "AGENTTEAMS_WORKER_NAME",
+                        "AGENTTEAMS_STORAGE_PREFIX",
                         "AGENTTEAMS_SHARED_STORAGE_PREFIX",
                         "AGENTTEAMS_FS_BUCKET",
                         "AGENTTEAMS_FS_ENDPOINT",
+                        "AGENTTEAMS_FS_ACCESS_KEY",
+                        "AGENTTEAMS_FS_SECRET_KEY",
                         "QWENPAW_WORKING_DIR",
                     )
                     if (value := os.getenv(name, "").strip())

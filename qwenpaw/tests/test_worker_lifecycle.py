@@ -549,8 +549,13 @@ def test_prepare_env_exposes_agent_workspace(tmp_path: Path, monkeypatch: pytest
     assert os.environ["AGENT_WORKSPACE"] == str(config.default_workspace_dir)
 
 
-def test_builtin_plugin_mcp_is_reconciled_through_api(tmp_path: Path) -> None:
+def test_builtin_plugin_mcp_is_reconciled_through_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     worker = Worker(_config(tmp_path))
+    monkeypatch.setenv("AGENTTEAMS_STORAGE_PREFIX", "agentteams/agentteams-storage")
+    worker._prepare_env()
     created = {}
     policies = {}
     events = []
@@ -590,6 +595,17 @@ def test_builtin_plugin_mcp_is_reconciled_through_api(tmp_path: Path) -> None:
     assert created["teamharness"]["args"][0].endswith(
         "/plugins/teamharness/teamharness/mcp/server.py"
     )
+    expected_storage_env = {
+        "TEAMHARNESS_RUNTIME_CONFIG": str(worker.config.runtime_config_path),
+        "TEAMHARNESS_SHARED_DIR": str(worker.config.shared_dir),
+        "AGENTTEAMS_STORAGE_PREFIX": "agentteams/agentteams-storage",
+        "AGENTTEAMS_FS_BUCKET": "agentteams-storage",
+        "AGENTTEAMS_FS_ENDPOINT": "http://minio:9000",
+        "AGENTTEAMS_FS_ACCESS_KEY": "key",
+        "AGENTTEAMS_FS_SECRET_KEY": "secret",
+        "QWENPAW_WORKING_DIR": str(worker.config.qwenpaw_working_dir),
+    }
+    assert expected_storage_env.items() <= created["teamharness"]["env"].items()
 
 
 def test_runtime_updater_uses_default_workspace_for_package_materialization(

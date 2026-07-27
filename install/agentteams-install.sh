@@ -61,12 +61,39 @@ set -e
 AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-}"
 AGENTTEAMS_KNOWN_STABLE_VERSION="v1.1.2"   # fallback if GitHub API is unreachable
 
+_normalize_version() {
+    local version="$1"
+    case "${version}" in
+        [0-9]*.[0-9]*.[0-9]*) version="v${version}" ;;
+    esac
+    case "${version}" in
+        v[0-9]*.[0-9]*.[0-9]*.beta.[0-9]*) version="${version/.beta./-beta.}" ;;
+    esac
+    printf '%s' "${version}"
+}
+
 # Returns 0 (true) if $1 < $2 using semver order; "latest" is treated as greatest
 _ver_lt() {
     [ "$1" = "latest" ] && return 1
     [ "$2" = "latest" ] && return 0
     [ "$1" = "$2" ] && return 1
     [ "$(printf '%s\n%s' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
+
+_use_legacy_image_env() {
+    if [ "$1" = "latest" ]; then
+        _ver_lt "${AGENTTEAMS_KNOWN_STABLE_VERSION}" "v1.2.0"
+    else
+        _ver_lt "$1" "v1.2.0"
+    fi
+}
+
+_controller_env_prefix() {
+    if _use_legacy_image_env "$1"; then
+        printf '%s%s' 'HIC' 'LAW_'
+    else
+        printf '%s' 'AGENTTEAMS_'
+    fi
 }
 AGENTTEAMS_NON_INTERACTIVE="${AGENTTEAMS_NON_INTERACTIVE:-0}"
 AGENTTEAMS_MOUNT_SOCKET="${AGENTTEAMS_MOUNT_SOCKET:-1}"
@@ -1057,6 +1084,7 @@ HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
+    AGENTTEAMS_VERSION="$(_normalize_version "${AGENTTEAMS_VERSION}")"
     MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager:${AGENTTEAMS_VERSION}}"
     MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-copaw:${AGENTTEAMS_VERSION}}"
     WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-worker:${AGENTTEAMS_VERSION}}"
@@ -3840,42 +3868,53 @@ CREDEOF
         case "${_fs_domain}" in *:*) ;; *) _fs_domain="${_fs_domain}:${_internal_gw_port}" ;; esac
 
         # Controller env args
+        local _ctrl_env_prefix
+        _ctrl_env_prefix="$(_controller_env_prefix "${AGENTTEAMS_VERSION}")"
         local _ctrl_env_args=(
-            -e "AGENTTEAMS_ADMIN_USER=${AGENTTEAMS_ADMIN_USER}"
-            -e "AGENTTEAMS_ADMIN_PASSWORD=${AGENTTEAMS_ADMIN_PASSWORD}"
-            -e "AGENTTEAMS_MANAGER_PASSWORD=${AGENTTEAMS_MANAGER_PASSWORD}"
-            -e "AGENTTEAMS_REGISTRATION_TOKEN=${AGENTTEAMS_REGISTRATION_TOKEN}"
-            -e "AGENTTEAMS_MINIO_USER=${AGENTTEAMS_MINIO_USER}"
-            -e "AGENTTEAMS_MINIO_PASSWORD=${AGENTTEAMS_MINIO_PASSWORD}"
-            -e "AGENTTEAMS_LLM_PROVIDER=${AGENTTEAMS_LLM_PROVIDER}"
-            -e "AGENTTEAMS_LLM_API_KEY=${AGENTTEAMS_LLM_API_KEY}"
-            -e "AGENTTEAMS_DEFAULT_MODEL=${AGENTTEAMS_DEFAULT_MODEL}"
-            -e "AGENTTEAMS_MANAGER_GATEWAY_KEY=${AGENTTEAMS_MANAGER_GATEWAY_KEY}"
-            -e "AGENTTEAMS_MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
-            -e "AGENTTEAMS_MANAGER_IMAGE=$([ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
-            -e "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
-            -e "AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}"
-            -e "AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
-            -e "AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
-            -e "AGENTTEAMS_MATRIX_DOMAIN=${_matrix_domain}"
-            -e "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
-            -e "AGENTTEAMS_MATRIX_URL=http://127.0.0.1:6167"
-            -e "AGENTTEAMS_MATRIX_E2EE=${AGENTTEAMS_MATRIX_E2EE:-0}"
-            -e "AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}"
-            -e "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN:-}"
-            -e "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN:-}"
-            -e "AGENTTEAMS_MINIO_ENDPOINT=http://127.0.0.1:9000"
-            -e "AGENTTEAMS_MINIO_BUCKET=agentteams-storage"
-            -e "AGENTTEAMS_STORAGE_PREFIX=agentteams/agentteams-storage"
-            -e "AGENTTEAMS_FS_ENDPOINT=http://127.0.0.1:9000"
-            -e "AGENTTEAMS_AI_GATEWAY_URL=http://${_aigw_domain}"
-            -e "AGENTTEAMS_CONTROLLER_URL=http://agentteams-controller:8090"
-            -e "AGENTTEAMS_DOCKER_NETWORK=agentteams-net"
-            -e "AGENTTEAMS_WORKSPACE_DIR=${AGENTTEAMS_WORKSPACE_DIR}"
-            -e "AGENTTEAMS_HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR}"
-            -e "AGENTTEAMS_MANAGER_ENABLED=true"
-            -e "AGENTTEAMS_PORT_MANAGER_CONSOLE=${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}"
+            -e "${_ctrl_env_prefix}ADMIN_USER=${AGENTTEAMS_ADMIN_USER}"
+            -e "${_ctrl_env_prefix}ADMIN_PASSWORD=${AGENTTEAMS_ADMIN_PASSWORD}"
+            -e "${_ctrl_env_prefix}MANAGER_PASSWORD=${AGENTTEAMS_MANAGER_PASSWORD}"
+            -e "${_ctrl_env_prefix}REGISTRATION_TOKEN=${AGENTTEAMS_REGISTRATION_TOKEN}"
+            -e "${_ctrl_env_prefix}MINIO_USER=${AGENTTEAMS_MINIO_USER}"
+            -e "${_ctrl_env_prefix}MINIO_PASSWORD=${AGENTTEAMS_MINIO_PASSWORD}"
+            -e "${_ctrl_env_prefix}LLM_PROVIDER=${AGENTTEAMS_LLM_PROVIDER}"
+            -e "${_ctrl_env_prefix}LLM_API_KEY=${AGENTTEAMS_LLM_API_KEY}"
+            -e "${_ctrl_env_prefix}DEFAULT_MODEL=${AGENTTEAMS_DEFAULT_MODEL}"
+            -e "${_ctrl_env_prefix}MANAGER_GATEWAY_KEY=${AGENTTEAMS_MANAGER_GATEWAY_KEY}"
+            -e "${_ctrl_env_prefix}MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
+            -e "${_ctrl_env_prefix}MANAGER_IMAGE=$([ "${AGENTTEAMS_MANAGER_RUNTIME}" = "copaw" ] && echo "${MANAGER_COPAW_IMAGE}" || echo "${MANAGER_IMAGE}")"
+            -e "${_ctrl_env_prefix}DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
+            -e "${_ctrl_env_prefix}WORKER_IMAGE=${WORKER_IMAGE}"
+            -e "${_ctrl_env_prefix}COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
+            -e "${_ctrl_env_prefix}HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
+            -e "${_ctrl_env_prefix}MATRIX_DOMAIN=${_matrix_domain}"
+            -e "${_ctrl_env_prefix}ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
+            -e "${_ctrl_env_prefix}MATRIX_URL=http://127.0.0.1:6167"
+            -e "${_ctrl_env_prefix}MATRIX_E2EE=${AGENTTEAMS_MATRIX_E2EE:-0}"
+            -e "${_ctrl_env_prefix}MINIO_ENDPOINT=http://127.0.0.1:9000"
+            -e "${_ctrl_env_prefix}MINIO_BUCKET=agentteams-storage"
+            -e "${_ctrl_env_prefix}STORAGE_PREFIX=agentteams/agentteams-storage"
+            -e "${_ctrl_env_prefix}FS_ENDPOINT=http://127.0.0.1:9000"
+            -e "${_ctrl_env_prefix}AI_GATEWAY_URL=http://${_aigw_domain}"
+            -e "${_ctrl_env_prefix}CONTROLLER_URL=http://agentteams-controller:8090"
+            -e "${_ctrl_env_prefix}DOCKER_NETWORK=agentteams-net"
+            -e "${_ctrl_env_prefix}WORKSPACE_DIR=${AGENTTEAMS_WORKSPACE_DIR}"
+            -e "${_ctrl_env_prefix}HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR}"
+            -e "${_ctrl_env_prefix}MANAGER_ENABLED=true"
+            -e "${_ctrl_env_prefix}PORT_MANAGER_CONSOLE=${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}"
         )
+        if _use_legacy_image_env "${AGENTTEAMS_VERSION}"; then
+            _ctrl_env_args+=(
+                -e "${_ctrl_env_prefix}FS_BUCKET=agentteams-storage"
+                -e "${_ctrl_env_prefix}RESOURCE_PREFIX=agentteams-"
+            )
+        else
+            _ctrl_env_args+=(
+                -e "${_ctrl_env_prefix}MATRIX_APPSERVICE_ENABLED=${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}"
+                -e "${_ctrl_env_prefix}MATRIX_APPSERVICE_AS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN:-}"
+                -e "${_ctrl_env_prefix}MATRIX_APPSERVICE_HS_TOKEN=${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN:-}"
+            )
+        fi
 
         # Timezone
         if [ -n "${AGENTTEAMS_TIMEZONE:-}" ]; then
@@ -3884,7 +3923,7 @@ CREDEOF
 
         # Yolo mode
         if [ "${AGENTTEAMS_YOLO:-}" = "1" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_YOLO=1")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}YOLO=1")
         fi
 
         # Matrix-plugin debug tracing — propagated to every manager + worker
@@ -3892,44 +3931,44 @@ CREDEOF
         # by the container entrypoints. Use this to diagnose
         # "worker did not join" / "manager replied empty" hangs.
         if [ "${AGENTTEAMS_MATRIX_DEBUG:-}" = "1" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_MATRIX_DEBUG=1")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MATRIX_DEBUG=1")
         fi
 
         # Optional: GitHub token
         if [ -n "${AGENTTEAMS_GITHUB_TOKEN:-}" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_GITHUB_TOKEN=${AGENTTEAMS_GITHUB_TOKEN}")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}GITHUB_TOKEN=${AGENTTEAMS_GITHUB_TOKEN}")
         fi
 
         # Optional: embedding model
         if [ -n "${AGENTTEAMS_EMBEDDING_MODEL:-}" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_EMBEDDING_MODEL=${AGENTTEAMS_EMBEDDING_MODEL}")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}EMBEDDING_MODEL=${AGENTTEAMS_EMBEDDING_MODEL}")
         fi
 
         # Optional: OpenAI-compatible base URL
         if [ -n "${AGENTTEAMS_OPENAI_BASE_URL:-}" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_OPENAI_BASE_URL=${AGENTTEAMS_OPENAI_BASE_URL}")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}OPENAI_BASE_URL=${AGENTTEAMS_OPENAI_BASE_URL}")
         fi
         # Optional: language
         if [ -n "${AGENTTEAMS_LANGUAGE:-}" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_LANGUAGE=${AGENTTEAMS_LANGUAGE}")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}LANGUAGE=${AGENTTEAMS_LANGUAGE}")
         fi
 
         # Optional: CMS/ARMS observability. In embedded mode the controller
         # spawns the Manager and Workers, so it must receive these settings.
-        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_TRACES_ENABLED=${AGENTTEAMS_CMS_TRACES_ENABLED:-false}")
-        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_SERVICE_NAME=${AGENTTEAMS_CMS_SERVICE_NAME:-agentteams-manager}")
-        _ctrl_env_args+=(-e "AGENTTEAMS_CMS_METRICS_ENABLED=${AGENTTEAMS_CMS_METRICS_ENABLED:-false}")
+        _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_TRACES_ENABLED=${AGENTTEAMS_CMS_TRACES_ENABLED:-false}")
+        _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_SERVICE_NAME=${AGENTTEAMS_CMS_SERVICE_NAME:-agentteams-manager}")
+        _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_METRICS_ENABLED=${AGENTTEAMS_CMS_METRICS_ENABLED:-false}")
         if [ -n "${AGENTTEAMS_CMS_ENDPOINT:-}" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_ENDPOINT=${AGENTTEAMS_CMS_ENDPOINT}")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_ENDPOINT=${AGENTTEAMS_CMS_ENDPOINT}")
         fi
         if [ -n "${AGENTTEAMS_CMS_LICENSE_KEY:-}" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_LICENSE_KEY=${AGENTTEAMS_CMS_LICENSE_KEY}")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_LICENSE_KEY=${AGENTTEAMS_CMS_LICENSE_KEY}")
         fi
         if [ -n "${AGENTTEAMS_CMS_PROJECT:-}" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_PROJECT=${AGENTTEAMS_CMS_PROJECT}")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_PROJECT=${AGENTTEAMS_CMS_PROJECT}")
         fi
         if [ -n "${AGENTTEAMS_CMS_WORKSPACE:-}" ]; then
-            _ctrl_env_args+=(-e "AGENTTEAMS_CMS_WORKSPACE=${AGENTTEAMS_CMS_WORKSPACE}")
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_WORKSPACE=${AGENTTEAMS_CMS_WORKSPACE}")
         fi
 
         # shellcheck disable=SC2086

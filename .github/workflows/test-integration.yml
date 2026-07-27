@@ -368,7 +368,7 @@ jobs:
           if [ -z "$FILTER" ]; then
             FILTER="${{ env[matrix.filter_env] }}"
           fi
-          SKIP_BUILD=1 make test-embedded \
+          AGENTTEAMS_VERSION=v1.2.0-beta.1 SKIP_BUILD=1 make test-embedded \
             TEST_FILTER="$FILTER"
 
       # ============================================================

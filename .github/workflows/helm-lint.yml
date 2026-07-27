@@ -4,8 +4,10 @@ on:
   pull_request:
     paths:
       - 'helm/**'
+      - 'install/agentteams-install.sh'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
+      - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-helm-agentteams.sh'
   workflow_dispatch: ~
 
@@ -18,6 +20,9 @@ jobs:
 
       - name: Check AgentTeams rename contracts
         run: bash tests/check-agentteams-rename-defaults.sh
+
+      - name: Check pre-v1.2 installer compatibility
+        run: bash tests/check-installer-pre-1.2-env-compat.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4

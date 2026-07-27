@@ -3885,10 +3885,11 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             pulled = _pull_task(arguments, task_id)
             task = _load_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
-            task["status"] = "in_progress"
-            task["acknowledged_by_role"] = role
-            _write_task(arguments, task)
-            _update_project_task(arguments, task.get("project_id", ""), task_id, status="in_progress")
+            if task.get("status") != "submitted":
+                task["status"] = "in_progress"
+                task["acknowledged_by_role"] = role
+                _write_task(arguments, task)
+                _update_project_task(arguments, task.get("project_id", ""), task_id, status="in_progress")
             spec_path = _task_dir(arguments, task_id) / "spec.md"
             spec = spec_path.read_text(encoding="utf-8") if spec_path.exists() else ""
             return {

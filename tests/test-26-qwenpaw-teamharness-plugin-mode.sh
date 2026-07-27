@@ -274,18 +274,36 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.request import urlopen
 
 for item in Path("/proc/1/environ").read_bytes().split(b"\0"):
     if item and b"=" in item:
         key, value = item.split(b"=", 1)
         os.environ.setdefault(key.decode(), value.decode())
 
-workspace = Path(os.environ["QWENPAW_WORKING_DIR"]) / "workspaces" / "default"
-agent_config = json.loads((workspace / "agent.json").read_text(encoding="utf-8"))
-client = agent_config["mcp"]["clients"]["teamharness"]
+with urlopen("http://127.0.0.1:8088/api/mcp/teamharness") as response:
+    client = json.load(response)
+
+cwd = Path(client["cwd"])
+working_dir = cwd.parents[2]
+workspace = working_dir / "workspaces" / "default"
+derived_env = {
+    "QWENPAW_WORKING_DIR": str(working_dir),
+    "TEAMHARNESS_RUNTIME_CONFIG": str(working_dir.parent / "runtime" / "runtime.yaml"),
+    "TEAMHARNESS_SHARED_DIR": str((workspace / "shared").resolve()),
+    "AGENTTEAMS_STORAGE_PREFIX": f"agentteams/{os.environ.get('AGENTTEAMS_FS_BUCKET', 'agentteams-storage')}",
+}
 
 env = dict(os.environ)
-env.update({str(k): str(v) for k, v in (client.get("env") or {}).items()})
+for key, value in (client.get("env") or {}).items():
+    key = str(key)
+    value = str(value)
+    if key in os.environ:
+        env[key] = os.environ[key]
+    elif key in derived_env:
+        env[key] = derived_env[key]
+    elif "*" not in value:
+        env[key] = value
 request = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -860,7 +878,7 @@ assert_eq "standalone" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "M
 log_section "QwenPaw Plugin Mode"
 
 for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
-    if _wait_agent_api_ok "${container}" GET /api/teamharness/health '.ok == true and .plugin == "teamharness" and .adapter == "qwenpaw"' 240 >/dev/null; then
+    if _wait_agent_api_ok "${container}" GET /api/teamharness/health '.ok == true and .plugin == "teamharness" and .adapter == "qwenpaw-2"' 240 >/dev/null; then
         log_pass "${container} TeamHarness health endpoint is healthy"
     else
         log_fail "${container} TeamHarness health endpoint did not become healthy"
@@ -943,16 +961,21 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} agent prompt files missing TEAMS.md"
     fi
 
-    if docker exec "${container}" sh -c "jq -e '.mcp.clients.teamharness.enabled == true and .mcp.clients.teamharness.command and (.mcp.clients.teamharness.args | length > 0)' '${workspace}/agent.json'" >/dev/null 2>&1; then
-        log_pass "${container} agent config includes TeamHarness MCP client"
+    TEAMHARNESS_MCP=$(_agent_api "${container}" GET /api/mcp/teamharness 2>/dev/null || echo "{}")
+    TEAMHARNESS_TOOLS=$(_agent_api "${container}" GET /api/mcp/tools/teamharness 2>/dev/null || echo "[]")
+    if echo "${TEAMHARNESS_MCP}" | jq -e '.enabled == true and .transport == "stdio" and .command and (.args | length > 0)' >/dev/null 2>&1 && \
+       echo "${TEAMHARNESS_TOOLS}" | jq -e '([.[].name] | index("health") and index("filesync") and index("taskflow") and index("projectflow"))' >/dev/null 2>&1; then
+        log_pass "${container} QwenPaw API exposes callable TeamHarness MCP"
     else
-        log_fail "${container} agent config missing TeamHarness MCP client"
+        log_fail "${container} QwenPaw API missing callable TeamHarness MCP"
     fi
 
-    if docker exec "${container}" sh -c "jq -e --arg name '${TEST_PACKAGE_MCP_NAME}' --arg url '${TEST_PACKAGE_MCP_URL}' '.mcp.clients[\$name].url == \$url and (.mcp.clients[\$name].enabled != false)' '${workspace}/agent.json' && test ! -f '${workspace}/mcp.json'" >/dev/null 2>&1; then
-        log_pass "${container} agent config embeds AgentSpec package MCP"
+    PACKAGE_MCP=$(_agent_api "${container}" GET "/api/mcp/${TEST_PACKAGE_MCP_NAME}" 2>/dev/null || echo "{}")
+    if echo "${PACKAGE_MCP}" | jq -e --arg url "${TEST_PACKAGE_MCP_URL}" '.url == $url and .enabled == true' >/dev/null 2>&1 && \
+       docker exec "${container}" test ! -f "${workspace}/mcp.json" >/dev/null 2>&1; then
+        log_pass "${container} QwenPaw API exposes AgentSpec package MCP"
     else
-        log_fail "${container} agent config missing AgentSpec package MCP"
+        log_fail "${container} QwenPaw API missing AgentSpec package MCP"
     fi
 
     if docker exec "${container}" sh -c "grep -q 'TEST26 AgentSpec Package' '${workspace}/AGENTS.md' && grep -q '${TEST_TEAM}' '${workspace}/SOUL.md'" >/dev/null 2>&1; then
@@ -988,34 +1011,33 @@ done
 
 _workspace_skill_check() {
     local container="$1"
-    local workspace="$2"
-    local required="$3"
-    local forbidden="$4"
+    local required_teamharness="$2"
+    local required_workerflow="$3"
     docker exec -i \
-        -e TEST_WORKSPACE="${workspace}" \
-        -e TEST_REQUIRED="${required}" \
-        -e TEST_FORBIDDEN="${forbidden}" \
+        -e TEST_REQUIRED_TEAMHARNESS="${required_teamharness}" \
+        -e TEST_REQUIRED_WORKERFLOW="${required_workerflow}" \
         "${container}" \
         /opt/venv/qwenpaw/bin/python - <<'PY' 2>/dev/null | tail -n 1
 import json
 import os
-from pathlib import Path
+from urllib.request import urlopen
 
-workspace = Path(os.environ["TEST_WORKSPACE"])
-required = [item for item in os.environ["TEST_REQUIRED"].split(",") if item]
-forbidden = [item for item in os.environ["TEST_FORBIDDEN"].split(",") if item]
-manifest = json.loads((workspace / "skill.json").read_text(encoding="utf-8"))
-skills = manifest.get("skills") or {}
-missing = [name for name in required if not (workspace / "skills" / name / "SKILL.md").is_file()]
-disabled = [name for name in required if not skills.get(name, {}).get("enabled")]
-unexpected = [name for name in forbidden if (workspace / "skills" / name).exists() or name in skills]
+with urlopen("http://127.0.0.1:8088/api/skills") as response:
+    skills = {item["name"]: item for item in json.load(response)}
+
+required_teamharness = [item for item in os.environ["TEST_REQUIRED_TEAMHARNESS"].split(",") if item]
+required_workerflow = [item for item in os.environ["TEST_REQUIRED_WORKERFLOW"].split(",") if item]
+missing = [
+    name for name in required_teamharness
+    if skills.get(name, {}).get("source") != "plugin:teamharness"
+]
+missing.extend(
+    name for name in required_workerflow
+    if skills.get(name, {}).get("source") != "plugin:workerflow"
+)
 problems = []
 if missing:
     problems.append("missing:" + ",".join(missing))
-if disabled:
-    problems.append("disabled:" + ",".join(disabled))
-if unexpected:
-    problems.append("unexpected:" + ",".join(unexpected))
 print("ok" if not problems else ";".join(problems))
 PY
 }
@@ -1029,21 +1051,29 @@ _workspace_runtime_projection_check() {
         -e TEST_MCP_NAME="${TEST_MCP_NAME}" \
         -e TEST_MCP_URL="${TEST_MCP_URL}" \
         -e TEST_MCP_TRANSPORT="${TEST_MCP_TRANSPORT}" \
+        -e TEST_PACKAGE_MCP_NAME="${TEST_PACKAGE_MCP_NAME}" \
+        -e TEST_PACKAGE_MCP_URL="${TEST_PACKAGE_MCP_URL}" \
         "${container}" \
         /opt/venv/qwenpaw/bin/python - <<'PY' 2>/dev/null | tail -n 1
 import json
 import os
 from pathlib import Path
+from urllib.request import urlopen
 
 workspace = Path(os.environ["TEST_WORKSPACE"])
 model = os.environ["TEST_MODEL"]
 mcp_name = os.environ["TEST_MCP_NAME"]
 mcp_url = os.environ["TEST_MCP_URL"]
 mcp_transport = os.environ["TEST_MCP_TRANSPORT"]
+package_mcp_name = os.environ["TEST_PACKAGE_MCP_NAME"]
+package_mcp_url = os.environ["TEST_PACKAGE_MCP_URL"]
+
+def get(path):
+    with urlopen(f"http://127.0.0.1:8088{path}") as response:
+        return json.load(response)
 
 problems = []
-agent = json.loads((workspace / "agent.json").read_text(encoding="utf-8"))
-active = agent.get("active_model") or {}
+active = get("/api/models/active?scope=agent&agent_id=default").get("active_llm") or {}
 if active.get("provider_id") != "agentteams-gateway" or active.get("model") != model:
     problems.append("active_model")
 
@@ -1051,17 +1081,24 @@ legacy_path = workspace / "mcporter-servers.json"
 if legacy_path.exists():
     problems.append("legacy:mcporter-servers.json")
 
-path = workspace / "config" / "mcporter.json"
-if not path.is_file():
-    problems.append("missing:config/mcporter.json")
-else:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    server = (data.get("mcpServers") or {}).get(mcp_name) or {}
-    if server.get("url") != mcp_url or server.get("transport") != mcp_transport:
-        problems.append("mcp:config/mcporter.json")
-    authorization = (server.get("headers") or {}).get("Authorization", "")
-    if not authorization.startswith("Bearer "):
-        problems.append("auth:config/mcporter.json")
+mcp = {item["key"]: item for item in get("/api/mcp")}
+server = mcp.get(mcp_name) or {}
+if server.get("url") != mcp_url or server.get("transport") != mcp_transport:
+    problems.append("mcp:api")
+authorization = (server.get("headers") or {}).get("Authorization", "")
+if not authorization or "*" not in authorization:
+    problems.append("auth:api")
+package_server = mcp.get(package_mcp_name) or {}
+if package_server.get("url") != package_mcp_url or not package_server.get("enabled"):
+    problems.append("package_mcp:api")
+for key in ("teamharness", "workerflow"):
+    client = mcp.get(key) or {}
+    if not client.get("enabled") or client.get("transport") != "stdio":
+        problems.append(f"{key}:api")
+    if get(f"/api/mcp/policy/{key}").get("default_effect") != "allow":
+        problems.append(f"{key}:policy")
+if (workspace / "config" / "mcporter.json").exists():
+    problems.append("legacy:config/mcporter.json")
 
 print("ok" if not problems else ";".join(problems))
 PY
@@ -1075,17 +1112,15 @@ assert_eq "ok" "${WORKER_RUNTIME_PROJECTION_CHECK}" "Worker applies controller m
 
 LEADER_SKILL_CHECK=$(_workspace_skill_check \
     "${LEADER_CONTAINER}" \
-    "${LEADER_DEFAULT_WS}" \
-    "teamharness-communication,teamharness-file-sharing,teamharness-team-coordination,teamharness-project-management,teamharness-task-delegation" \
-    "teamharness-task-execution")
-assert_eq "ok" "${LEADER_SKILL_CHECK}" "Leader workspace enables TeamHarness role skills"
+    "communication,file-sharing,team-coordination,project-management,task-delegation,task-execution,mcporter" \
+    "worker-internal-workflow")
+assert_eq "ok" "${LEADER_SKILL_CHECK}" "Leader API exposes TeamHarness and WorkerFlow plugin skills"
 
 WORKER_SKILL_CHECK=$(_workspace_skill_check \
     "${WORKER_CONTAINER}" \
-    "${WORKER_DEFAULT_WS}" \
-    "teamharness-communication,teamharness-file-sharing,teamharness-mcporter,teamharness-task-execution" \
-    "teamharness-task-delegation")
-assert_eq "ok" "${WORKER_SKILL_CHECK}" "Worker workspace enables TeamHarness role skills"
+    "communication,file-sharing,team-coordination,project-management,task-delegation,task-execution,mcporter" \
+    "worker-internal-workflow")
+assert_eq "ok" "${WORKER_SKILL_CHECK}" "Worker API exposes TeamHarness and WorkerFlow plugin skills"
 
 MCP_HEALTH=$(_worker_mcp_call health '{}' 2>/dev/null || echo "{}")
 if echo "${MCP_HEALTH}" | jq -e '.ok == true' >/dev/null 2>&1; then

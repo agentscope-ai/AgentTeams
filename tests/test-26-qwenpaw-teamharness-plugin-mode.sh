@@ -424,6 +424,35 @@ _wait_workspace_marker() {
     return 1
 }
 
+_wait_workspace_team_context() {
+    local container="$1"
+    local path="$2"
+    local role="$3"
+    local timeout="${4:-120}"
+    local elapsed=0
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        if docker exec "${container}" sh -c '
+            path="$1"
+            role="$2"
+            team="$3"
+            leader="$4"
+            worker="$5"
+            worker_mxid="$6"
+            grep -Fq "member.role: ${role}" "${path}" &&
+                grep -Fq "${team}" "${path}" &&
+                grep -Fq "<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->" "${path}" &&
+                grep -Fq "runtimeName: ${leader}" "${path}" &&
+                grep -Fq "runtimeName: ${worker}" "${path}" &&
+                grep -Fq "matrixUserId: ${worker_mxid}" "${path}"
+        ' sh "${path}" "${role}" "${TEST_TEAM}" "${TEST_LEADER}" "${TEST_WORKER}" "${WORKER_MXID}" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    return 1
+}
+
 _assert_runtime_yaml_has_no_secret_values() {
     local yaml="$1"
     local container="$2"
@@ -943,15 +972,15 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} workspace TeamHarness prompt missing"
     fi
 
-    if docker exec "${container}" sh -c "grep -q 'member.role: ${role}' '${workspace}/TEAMS.md' && grep -q '${TEST_TEAM}' '${workspace}/TEAMS.md'" >/dev/null 2>&1; then
+    if _wait_workspace_team_context "${container}" "${workspace}/TEAMS.md" "${role}" 120; then
         log_pass "${container} TEAMS.md contains ${role} team context"
+        if docker exec "${container}" test ! -e "${qwenpaw_dir}/teamharness/team-context.json" >/dev/null 2>&1; then
+            log_pass "${container} TEAMS.md contains runtime roster facts without intermediate cache"
+        else
+            log_fail "${container} TEAMS.md created intermediate team context cache"
+        fi
     else
         log_fail "${container} TEAMS.md missing ${role} team context"
-    fi
-
-    if docker exec "${container}" sh -c "grep -Fq '<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->' '${workspace}/TEAMS.md' && grep -Fq 'runtimeName: ${TEST_LEADER}' '${workspace}/TEAMS.md' && grep -Fq 'runtimeName: ${TEST_WORKER}' '${workspace}/TEAMS.md' && grep -Fq 'matrixUserId: ${WORKER_MXID}' '${workspace}/TEAMS.md' && test ! -e '${qwenpaw_dir}/teamharness/team-context.json'" >/dev/null 2>&1; then
-        log_pass "${container} TEAMS.md contains runtime roster facts without intermediate cache"
-    else
         log_fail "${container} TEAMS.md missing runtime roster facts or created intermediate cache"
     fi
 
@@ -1065,6 +1094,7 @@ model = os.environ["TEST_MODEL"]
 mcp_name = os.environ["TEST_MCP_NAME"]
 mcp_url = os.environ["TEST_MCP_URL"]
 mcp_transport = os.environ["TEST_MCP_TRANSPORT"]
+api_mcp_transport = "streamable_http" if mcp_transport in {"http", "streamable_http"} else mcp_transport
 package_mcp_name = os.environ["TEST_PACKAGE_MCP_NAME"]
 package_mcp_url = os.environ["TEST_PACKAGE_MCP_URL"]
 
@@ -1083,7 +1113,7 @@ if legacy_path.exists():
 
 mcp = {item["key"]: item for item in get("/api/mcp")}
 server = mcp.get(mcp_name) or {}
-if server.get("url") != mcp_url or server.get("transport") != mcp_transport:
+if server.get("url") != mcp_url or server.get("transport") != api_mcp_transport:
     problems.append("mcp:api")
 authorization = (server.get("headers") or {}).get("Authorization", "")
 if not authorization or "*" not in authorization:

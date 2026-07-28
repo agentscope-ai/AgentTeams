@@ -1,6 +1,6 @@
 module github.com/agentscope-ai/AgentTeams/agentteams-controller
 
-go 1.25.0
+go 1.25
 
 require (
 	github.com/alibabacloud-go/apig-20240327/v6 v6.0.6

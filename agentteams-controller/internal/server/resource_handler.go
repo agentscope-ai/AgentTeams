@@ -107,6 +107,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Expose:           req.Expose,
 			ChannelPolicy:    req.ChannelPolicy,
 			Resources:        req.Resources,
+			Env:              req.Env,
 			ContainerManaged: &containerManaged,
 			State:            req.State,
 		},
@@ -246,6 +247,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Resources != nil {
 			worker.Spec.Resources = req.Resources
+		}
+		if req.Env != nil {
+			worker.Spec.Env = req.Env
 		}
 		if req.ContainerManaged != nil {
 			worker.Spec.ContainerManaged = req.ContainerManaged
@@ -576,6 +580,7 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 			Package:       req.Package,
 			State:         req.State,
 			Resources:     req.Resources,
+			Env:           req.Env,
 		},
 	}
 	if req.Config != nil {
@@ -679,6 +684,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		}
 		if req.Resources != nil {
 			mgr.Spec.Resources = req.Resources
+		}
+		if req.Env != nil {
+			mgr.Spec.Env = req.Env
 		}
 
 		if err := h.client.Update(ctx, &mgr); err != nil {

@@ -81,6 +81,8 @@ spec:
     limits:
       cpu: "2"
       memory: 2Gi
+  env:
+    APP_MODE: audit
 ```
 
 ### Field Reference
@@ -101,6 +103,9 @@ spec:
 | `spec.channelPolicy` | object | No | — | Additive/deny-list overrides for group @mentions and DMs (see [Channel policy](#channel-policy-worker-and-team)) |
 | `spec.state` | string | No | `Running` | Desired lifecycle: `Running`, `Sleeping`, or `Stopped` — controller reconciles containers toward this |
 | `spec.resources` | object | No | install/backend defaults | CPU/memory requests and limits for this Worker Pod. Shape: `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory` using Kubernetes quantity strings |
+| `spec.env` | map[string]string | No | — | User-defined container environment variables. Controller/backend-managed keys always win on collision. |
+
+`spec.env` is supported by `agt apply -f` and the Worker REST create/update endpoints. Updating it replaces the complete user-defined map; set `env: {}` to clear it. Values are stored in the resource spec, so use the platform credential mechanisms rather than plaintext environment variables for secrets.
 
 Changing `spec.resources` updates the Worker spec and recreates the managed container/Pod. Avoid resource changes while a Worker is actively processing a task.
 
@@ -348,6 +353,8 @@ spec:
     limits:
       cpu: "3"
       memory: 5Gi
+  env:
+    APP_MODE: audit
   # state: Running   # optional: Running | Sleeping | Stopped
 ```
 
@@ -366,9 +373,12 @@ spec:
 | `spec.package` | string | No | — | Package URI (`file://`, `http(s)://`, `nacos://`) |
 | `spec.state` | string | No | `Running` | Desired lifecycle: `Running`, `Sleeping`, `Stopped` |
 | `spec.resources` | object | No | install/backend defaults | CPU/memory requests and limits for the Manager Pod. Shape: `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory` |
+| `spec.env` | map[string]string | No | — | User-defined container environment variables. Controller/backend-managed keys always win on collision. |
 | `spec.config.heartbeatInterval` | string | No | — | Heartbeat check interval (e.g. `15m`) |
 | `spec.config.workerIdleTimeout` | string | No | — | Idle timeout before auto-sleep (e.g. `720m`) |
 | `spec.config.notifyChannel` | string | No | — | Notification channel (e.g. `admin-dm`) |
+
+Manager `spec.env` follows the same `agt apply -f`, REST create/update, replacement, clearing, and secret-storage semantics described for Workers above.
 
 ### Manager status
 

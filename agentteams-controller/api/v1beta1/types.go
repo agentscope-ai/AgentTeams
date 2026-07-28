@@ -43,6 +43,10 @@ const LabelWorkerEdgeUUID = "agentteams.io/worker-edge-uuid"
 // re-issues credentials and updates the annotation to match.
 const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 
+// AnnotationHumanManagedGroupAllowExtra records Human Matrix IDs added to a
+// Worker's groupAllowExtra by the Human controller.
+const AnnotationHumanManagedGroupAllowExtra = "agentteams.io/human-group-allow-extra"
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry", "schedulerx3".
 //

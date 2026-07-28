@@ -15,10 +15,10 @@ import (
 // human to /leave (password may be stale), so we rely on the Tuwunel
 // admin bot's force-leave-room command instead.
 //
-// Every external call here is non-fatal: a transient Matrix or OSS
-// failure must not wedge finalizer removal, and the homeserver's
-// delete_rooms_after_leave / forget_forced_upon_leave flags provide a
-// safety net if any force-leave never lands.
+// Matrix room cleanup is non-fatal: the homeserver's delete_rooms_after_leave /
+// forget_forced_upon_leave flags provide a safety net if a force-leave never
+// lands. Worker allowlist cleanup must succeed before finalizer removal,
+// otherwise the deleted Human could retain access indefinitely.
 func (r *HumanReconciler) reconcileHumanDelete(ctx context.Context, s *humanScope) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 	h := s.human
@@ -33,6 +33,10 @@ func (r *HumanReconciler) reconcileHumanDelete(ctx context.Context, s *humanScop
 			logger.Error(err, "force-leave-room failed (non-fatal)",
 				"user", humanUserID, "roomID", roomID)
 		}
+	}
+
+	if err := r.cleanupHumanWorkerAllowlists(ctx, s); err != nil {
+		return reconcile.Result{RequeueAfter: reconcileInterval}, err
 	}
 
 	if s.identity.Source != nil {

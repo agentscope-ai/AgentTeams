@@ -83,18 +83,6 @@ RUN pip install --no-cache-dir \
         loongsuite-instrumentation-copaw \
         loongsuite-instrumentation-agentscope
 
-# ---- Overlay AgentTeams Matrix channel (not yet merged into CoPaw release) ----
-# Replace CoPaw's built-in Matrix channel with AgentTeams-enhanced version
-COPY copaw/src/matrix/ /tmp/matrix-overlay/
-RUN SITE=$(python3 -c "import copaw; import os; print(os.path.dirname(copaw.__file__))") \
-    && rm -rf "$SITE/app/channels/matrix" \
-    && mkdir -p "$SITE/app/channels/matrix" \
-    && cp /tmp/matrix-overlay/channel.py /tmp/matrix-overlay/__init__.py "$SITE/app/channels/matrix/" \
-    && if [ -f /tmp/matrix-overlay/config.py ]; then \
-         cp /tmp/matrix-overlay/config.py "$SITE/config/config.py"; \
-       fi \
-    && rm -rf /tmp/matrix-overlay
-
 # ---- CoPaw worker bridge module (for config conversion) ----
 # Stage the copaw-worker package metadata for dependency resolution
 COPY copaw/pyproject.toml copaw/README.md /tmp/copaw-worker/
@@ -114,6 +102,42 @@ COPY copaw/src/ /tmp/copaw-worker/src/
 RUN SITE=/opt/copaw-venv/lib/python3.11/site-packages \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$SITE/copaw_worker/" \
     && rm -rf /tmp/copaw-worker/
+
+# ---- QwenPaw 2.0 Runtime (Manager) ----
+# Separate venv: copaw 1.0.2 requires agentscope==1.0.20, qwenpaw 2.0.1
+# requires agentscope>=2.0.0.  Mixing them in one venv breaks copaw's
+# ReActAgent import.  The copaw venv above stays pristine for bridge.py;
+# qwenpaw runs from this venv.
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.0.1
+RUN python3 -m venv /opt/venv/qwenpaw \
+    && /opt/venv/qwenpaw/bin/pip install --no-cache-dir \
+        -i "${PIP_INDEX_URL}" \
+        --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
+        "${QWENPAW_PIP_SPEC}"
+
+# Overlay copaw_worker source into qwenpaw venv.
+# The 4 manager tools (projectflow/taskflow/message/filesync) depend only on
+# agentscope 2.0.x and copaw_worker internal modules — not on copaw 1.0.2.
+RUN cp -a /opt/copaw-venv/lib/python3.11/site-packages/copaw_worker \
+        /opt/venv/qwenpaw/lib/python3.11/site-packages/
+
+# qwenpaw CLI on PATH
+RUN ln -sf /opt/venv/qwenpaw/bin/qwenpaw /usr/local/bin/qwenpaw
+
+# qwenpaw venv takes priority for Manager runtime
+ENV PATH="/opt/venv/qwenpaw/bin:/opt/copaw-venv/bin:${PATH}"
+
+# AgentTeams plugins: Matrix channel + Manager tools
+COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
+COPY plugins/agentteams-manager-tools/ /opt/agentteams/plugins/agentteams-manager-tools/
+
+# Link plugins into QwenPaw's plugin discovery path.
+# WORKING_DIR = ~/.copaw (set by start-copaw-manager.sh at runtime).
+RUN mkdir -p /root/manager-workspace/.copaw/plugins \
+    && ln -sfn /opt/agentteams/plugins/agentteams-matrix-channel \
+        /root/manager-workspace/.copaw/plugins/agentteams-matrix-channel \
+    && ln -sfn /opt/agentteams/plugins/agentteams-manager-tools \
+        /root/manager-workspace/.copaw/plugins/agentteams-manager-tools
 
 # ---- Copy Manager agent definitions ----
 COPY manager/agent/ /opt/agentteams/agent/

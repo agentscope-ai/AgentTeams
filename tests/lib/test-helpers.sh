@@ -209,7 +209,7 @@ wait_for_manager_agent_ready() {
     while [ "${elapsed}" -lt "${timeout}" ]; do
         case "${manager_runtime}" in
             copaw)
-                if docker exec "${agent_container}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 && \
+                if docker exec "${agent_container}" pgrep -f "copaw(_worker\\.run_copaw_app)? app\|qwenpaw app" >/dev/null 2>&1 && \
                    docker exec "${agent_container}" curl -sf http://127.0.0.1:18799/ >/dev/null 2>&1; then
                     runtime_ready=true
                     break

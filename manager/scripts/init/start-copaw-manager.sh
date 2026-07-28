@@ -47,7 +47,7 @@ fi
 
 log "Bridging openclaw.json -> CoPaw config (manager)..."
 PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}" \
-    python3 -m copaw_worker.bridge \
+    /opt/copaw-venv/bin/python3 -m copaw_worker.bridge \
         --profile manager \
         --openclaw-json "${OPENCLAW_JSON}" \
         --working-dir "${COPAW_WORKING_DIR}"
@@ -212,7 +212,7 @@ fi
         if [ -n "${_curr_hash}" ] && [ "${_curr_hash}" != "${_prev_hash}" ]; then
             log "openclaw.json changed, re-bridging..."
             _bridge_out=$(PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}" \
-                python3 -m copaw_worker.bridge \
+                /opt/copaw-venv/bin/python3 -m copaw_worker.bridge \
                     --profile manager \
                     --openclaw-json "${OPENCLAW_JSON}" \
                     --working-dir "${COPAW_WORKING_DIR}" 2>&1)
@@ -231,14 +231,16 @@ log "openclaw.json watcher started (PID: $!)"
 # 10. Launch CoPaw Manager (app mode with hot-reload)
 # ============================================================
 export COPAW_WORKING_DIR="${COPAW_WORKING_DIR}"
+# QWENPAW_WORKING_DIR points to the same directory as COPAW_WORKING_DIR (.copaw/)
+# qwenpaw reads config.json + agent.json from this path
+export QWENPAW_WORKING_DIR="${COPAW_WORKING_DIR}"
 
-log "Starting CoPaw Manager (app mode)..."
+log "Starting QwenPaw 2.0 Manager (app mode)..."
 COPAW_LOG_LEVEL="${COPAW_LOG_LEVEL:-info}"
 export COPAW_LOG_LEVEL
 
 # Set PYTHONPATH to include copaw_worker module
 export PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}"
 
-# Use uvicorn to run CoPaw FastAPI app (enables AgentConfigWatcher for hot-reload)
-# The wrapper installs AgentTeams-owned tools before CoPaw creates any agents.
+# run_copaw_app.py starts qwenpaw app (tools registered via agentteams-manager-tools plugin)
 exec python3 -m copaw_worker.run_copaw_app app --host 0.0.0.0 --port 18799

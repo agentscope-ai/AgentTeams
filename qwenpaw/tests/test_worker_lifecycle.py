@@ -608,6 +608,68 @@ def test_builtin_plugin_mcp_is_reconciled_through_api(
     assert expected_storage_env.items() <= created["teamharness"]["env"].items()
 
 
+@pytest.mark.anyio
+async def test_builtin_mcp_policy_is_persisted_before_desired_state_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = Worker(_config(tmp_path))
+    events: list[str] = []
+
+    class FakeProcess:
+        pid = 12345
+        returncode = None
+
+        async def wait(self):
+            self.returncode = 0
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+    class FakeApi:
+        def configure_agent(self, *_args, **_kwargs):
+            events.append("agent")
+
+        def disable_agent_if_present(self, *_args, **_kwargs):
+            return False
+
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        return FakeProcess()
+
+    async def api_ready():
+        return None
+
+    async def idle_heartbeat_probe_loop():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("qwenpaw_worker.worker.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(worker, "_wait_for_qwenpaw_api", api_ready)
+    monkeypatch.setattr(
+        worker,
+        "_configure_builtin_plugin_mcp_clients",
+        lambda: events.append("clients"),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_configure_builtin_plugin_mcp_policies",
+        lambda: events.append("policies"),
+    )
+    monkeypatch.setattr(worker, "_ensure_session_file_prompt_policy", lambda: None)
+    monkeypatch.setattr(worker, "_heartbeat_probe_loop", idle_heartbeat_probe_loop)
+    worker.api_client = FakeApi()
+    worker.updater.apply_once = lambda *_args, **_kwargs: events.append("desired")
+    worker._initial_runtime_config = MemberRuntimeConfig(
+        path=worker.config.runtime_config_path,
+        raw={"metadata": {"generation": "1"}, "member": {"runtime": "qwenpaw"}},
+    )
+
+    await worker._run_qwenpaw()
+    await worker.stop()
+
+    assert events.index("policies") < events.index("desired")
+
+
 def test_runtime_updater_uses_default_workspace_for_package_materialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

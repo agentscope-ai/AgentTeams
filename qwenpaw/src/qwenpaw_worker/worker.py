@@ -641,6 +641,7 @@ class Worker:
                 "QwenPaw_QA_Agent_0.2",
             )
             await asyncio.to_thread(self._configure_builtin_plugin_mcp_clients)
+            await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
             runtime_config = self._initial_runtime_config or self.updater.load()
             stage_started = self._log_worker_stage_begin("apply_desired_state")
             await asyncio.to_thread(
@@ -649,7 +650,6 @@ class Worker:
                 True,
                 False,
             )
-            await asyncio.to_thread(self._configure_builtin_plugin_mcp_policies)
             self._ensure_session_file_prompt_policy()
             self._log_worker_stage_complete("apply_desired_state", stage_started)
         except Exception as exc:

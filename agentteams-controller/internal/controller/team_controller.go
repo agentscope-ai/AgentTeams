@@ -656,13 +656,17 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if err != nil {
 			return err
 		}
+		spec := member.worker.Spec
+		if runtime == backend.RuntimeQwenPaw {
+			spec.ChannelPolicy = mergeChannelPolicy(t.Spec.ChannelPolicy, member.worker.Spec.ChannelPolicy)
+		}
 		req := service.MemberRuntimeConfigDeployRequest{
 			Name:              member.ref.Name,
 			RuntimeName:       member.runtimeName,
 			Runtime:           runtime,
 			Role:              role.String(),
 			Generation:        member.worker.Generation,
-			Spec:              member.worker.Spec,
+			Spec:              spec,
 			AIGatewayURL:      aiGatewayURL,
 			MatrixUserID:      member.worker.Status.MatrixUserID,
 			PersonalRoomID:    member.worker.Status.RoomID,

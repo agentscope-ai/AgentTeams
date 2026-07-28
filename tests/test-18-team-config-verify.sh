@@ -162,6 +162,17 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
     fi
 done
 
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
+        if wait_qwenpaw_api_matches "${w}" /api/teamharness/health '.ok == true and .adapter == "qwenpaw-2"' 240 && \
+            wait_worker_runtime_file_contains "${w}" "TEAMS.md" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" 240; then
+            log_pass "QwenPaw TeamHarness plugin ready for ${w}"
+        else
+            log_fail "QwenPaw TeamHarness plugin not ready for ${w}"
+        fi
+    done
+fi
+
 # ============================================================
 # Section 3: Verify Team resource
 # ============================================================
@@ -387,7 +398,7 @@ log_section "Verify Skills by Role"
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     LEADER_SKILLS=$(read_qwenpaw_skills "${TEST_LEADER}")
     W1_SKILLS=$(read_qwenpaw_skills "${TEST_W1}")
-    for skill in team-coordination project-management task-management; do
+    for skill in team-coordination project-management task-delegation task-execution; do
         if echo "${LEADER_SKILLS}" | jq -e --arg skill "${skill}" '.[] | select(.name == $skill and .source == "plugin:teamharness")' >/dev/null 2>&1; then
             log_pass "Leader has plugin skill ${skill}"
         else

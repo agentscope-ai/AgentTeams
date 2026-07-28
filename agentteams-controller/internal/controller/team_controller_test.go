@@ -442,7 +442,13 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	}
 	worker1 := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{Runtime: "qwenpaw", Model: "qwen"},
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "qwenpaw",
+			Model:   "qwen",
+			ChannelPolicy: &v1beta1.ChannelPolicySpec{
+				DmAllowExtra: []string{"worker-dm-bot"},
+			},
+		},
 		Status: v1beta1.WorkerStatus{
 			Phase:        "Running",
 			MatrixUserID: "@dev:matrix.local",
@@ -462,6 +468,7 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
 			Admin:        &v1beta1.TeamAdminSpec{Name: "admin", MatrixUserID: "@admin:localhost"},
+			ChannelPolicy: &v1beta1.ChannelPolicySpec{GroupAllowExtra: []string{"team-group-bot"}},
 			HumanMembers: []v1beta1.TeamMemberSpec{{Name: "human-coord", MatrixUserID: "@human:matrix.local"}},
 			WorkerMembers: []v1beta1.TeamWorkerRef{
 				{Name: "lead", Role: "team_leader"},
@@ -507,6 +514,14 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	}
 	if leaderReq.TeamRoomID == "" || leaderReq.LeaderDMRoomID == "" {
 		t.Fatalf("leader runtime config missing rooms: %#v", leaderReq)
+	}
+	if leaderReq.Spec.ChannelPolicy == nil || !stringSliceContains(leaderReq.Spec.ChannelPolicy.GroupAllowExtra, "team-group-bot") {
+		t.Fatalf("leader runtime config channel policy=%#v, want team-level group allow", leaderReq.Spec.ChannelPolicy)
+	}
+	if devReq.Spec.ChannelPolicy == nil ||
+		!stringSliceContains(devReq.Spec.ChannelPolicy.GroupAllowExtra, "team-group-bot") ||
+		!stringSliceContains(devReq.Spec.ChannelPolicy.DmAllowExtra, "worker-dm-bot") {
+		t.Fatalf("dev runtime config channel policy=%#v, want merged team and worker policy", devReq.Spec.ChannelPolicy)
 	}
 	roster := map[string]service.RuntimeConfigTeamMember{}
 	for _, member := range leaderReq.TeamMembers {

@@ -25,7 +25,7 @@ if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
     FILE_SHARING_SKILL="file-sharing"
 elif [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     BUILTIN_CONTENT_SENTINEL="Session files are runtime-private state"
-    BUILTIN_SKILLS=(communication file-sharing find-skills mcporter organization task-management)
+    BUILTIN_SKILLS=(communication file-sharing team-coordination project-management task-delegation task-execution mcporter)
     FILE_SHARING_SKILL="file-sharing"
 else
     BUILTIN_CONTENT_SENTINEL="Every Session"
@@ -122,6 +122,15 @@ else
     log_fail "Controller did not reconcile within 120s"
 fi
 
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    if wait_qwenpaw_api_matches "${TEST_WORKER}" /api/teamharness/health '.ok == true and .adapter == "qwenpaw-2"' 240 && \
+        wait_qwenpaw_api_matches "${TEST_WORKER}" /api/skills '.[] | select(.name == "my-custom-skill" and .enabled == true)' 240; then
+        log_pass "QwenPaw app, TeamHarness plugin, and AgentPackage are ready"
+    else
+        log_fail "QwenPaw runtime did not expose reconciled plugin/package state"
+    fi
+fi
+
 # ============================================================
 # Section 2: Verify AGENTS.md structure
 # ============================================================
@@ -138,9 +147,12 @@ if [ "${TEST_WORKER_RUNTIME}" != "qwenpaw" ]; then
     assert_contains "${AGENTS_CONTENT}" "agentteams-builtin-end" "AGENTS.md has builtin-end marker"
 fi
 
-# Builtin content filled (not empty between markers)
-assert_contains "${AGENTS_CONTENT}" "${BUILTIN_CONTENT_SENTINEL}" \
-    "AGENTS.md builtin section matches ${TEST_WORKER_RUNTIME} runtime"
+# QwenPaw injects the built-in prompt through TeamHarness' public prompt hook;
+# its workspace AGENTS.md intentionally contains only the AgentPackage prompt.
+if [ "${TEST_WORKER_RUNTIME}" != "qwenpaw" ]; then
+    assert_contains "${AGENTS_CONTENT}" "${BUILTIN_CONTENT_SENTINEL}" \
+        "AGENTS.md builtin section matches ${TEST_WORKER_RUNTIME} runtime"
+fi
 
 if [ "${TEST_WORKER_RUNTIME}" != "qwenpaw" ]; then
     assert_contains "${AGENTS_CONTENT}" "agentteams-team-context-start" "AGENTS.md has team-context-start marker"
@@ -337,7 +349,11 @@ if [ "${TEST_WORKER_RUNTIME}" != "qwenpaw" ]; then
     assert_contains "${AGENTS_AFTER}" "agentteams-builtin-start" "AGENTS.md still has builtin markers after update"
     assert_contains "${AGENTS_AFTER}" "agentteams-team-context-start" "AGENTS.md still has team-context after update"
 else
-    assert_contains "${AGENTS_AFTER}" "Session files are runtime-private state" "QwenPaw runtime prompt policy remains after update"
+    if wait_qwenpaw_api_matches "${TEST_WORKER}" /api/teamharness/health '.ok == true and .adapter == "qwenpaw-2"' 180; then
+        log_pass "QwenPaw TeamHarness prompt plugin remains active after update"
+    else
+        log_fail "QwenPaw TeamHarness prompt plugin unavailable after update"
+    fi
 fi
 assert_contains "${AGENTS_AFTER}" "My Custom Agent Instructions" "User content still preserved after update"
 

@@ -89,6 +89,14 @@ else
     log_fail "Worker CR missing 'github-operations' (got: ${INITIAL_SKILLS})"
 fi
 
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    if wait_qwenpaw_api_matches "${TEST_WORKER}" /api/skills ".[] | select(.name == \"${BASELINE_SKILL}\" and .source == \"plugin:teamharness\")" 240; then
+        log_pass "QwenPaw plugin skills reconciled"
+    else
+        log_fail "QwenPaw plugin skills did not reconcile"
+    fi
+fi
+
 # Built-in baseline skill should be present in the runtime that consumes it.
 if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     QWENPAW_SKILLS=$(read_qwenpaw_skills "${TEST_WORKER}")

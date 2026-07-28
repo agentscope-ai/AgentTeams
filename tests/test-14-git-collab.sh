@@ -108,6 +108,12 @@ Before starting any phase:
    If a worker already exists, reuse it.
 2. Create a shared project room that includes alice, bob, charlie, and the human admin (use the create-project.sh script). All phase assignments and reports MUST happen in this project room — never in individual worker rooms.
 
+Matrix mention isolation is mandatory in the project room:
+- You may post the overall project plan without mentioning any Worker.
+- Send each executable phase assignment as a separate message that mentions exactly one Worker: the Worker assigned to that phase.
+- Never mention multiple Workers in one assignment message, never prefix an assignment with a participant roll-call such as 'alice bob charlie', and never include future-phase Worker names in the current assignment message.
+- Creating the room with all participants does not assign work. After room creation, the first actionable message must mention only alice and contain only Phase 1 instructions.
+
 Run the phases strictly in order, waiting for each phase's report before starting the next.
 
 **Phase 1 — alice (and only alice)**:

@@ -4,6 +4,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+**Features**
+
+- **Worker and Manager REST environment configuration**: Carry user-defined `spec.env` through REST create/update and `agt apply -f`, including full-map replacement and explicit clearing. ([1ecd8b9](https://github.com/agentscope-ai/AgentTeams/commit/1ecd8b9cc7c9bea95a1e375a86414e0e4b12e638))
+
 **Bug Fixes**
 
 - **Team Worker room boundary convergence**: Remove Manager again after standalone Worker infrastructure reconciliation restores regular Team Worker personal-room membership. ([b5b0add](https://github.com/agentscope-ai/AgentTeams/commit/b5b0add))

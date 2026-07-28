@@ -4,6 +4,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+**Features**
+
+- **Atlas Cloud LLM preset**: Resolve the Atlas Cloud OpenAI-compatible endpoint for Helm runtime and preflight configuration when no explicit base URL is set. ([2a340b5](https://github.com/agentscope-ai/AgentTeams/commit/2a340b5))
+
 **Bug Fixes**
 
 - **Team Worker room boundary convergence**: Remove Manager again after standalone Worker infrastructure reconciliation restores regular Team Worker personal-room membership. ([b5b0add](https://github.com/agentscope-ai/AgentTeams/commit/b5b0add))

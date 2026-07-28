@@ -209,16 +209,38 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
                 OC_DOMAIN="${OC_URL_STRIP%%/*}"
                 echo "${OC_DOMAIN}" | grep -q ':' && { OC_PORT="${OC_DOMAIN##*:}"; OC_DOMAIN="${OC_DOMAIN%:*}"; }
 
-                # Service source: GET → PUT if exists, POST if not
-                existing_svc=$(higress_get /v1/service-sources/openai-compat)
-                SVC_BODY='{"type":"dns","name":"openai-compat","port":'"${OC_PORT}"',"protocol":"'"${OC_PROTO}"'","proxyName":"","domain":"'"${OC_DOMAIN}"'"}'
-                if [ -n "${existing_svc}" ]; then
-                    higress_api PUT /v1/service-sources/openai-compat "Updating openai-compat DNS service source" "${SVC_BODY}"
-                else
-                    higress_api POST /v1/service-sources "Registering openai-compat DNS service source" "${SVC_BODY}"
+                # Detect IP vs domain for service source type
+                OC_IS_IP=false
+                if echo "${OC_DOMAIN}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                    OC_IS_IP=true
                 fi
 
-                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OPENAI_BASE_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"',"agentteamsMode":true}}'
+                # Strip port from openaiCustomUrl: keep scheme://host/path only
+                OC_PATH="${OC_URL_STRIP#*/}"
+                [ "${OC_PATH}" = "/" ] && OC_PATH=""
+                OC_CUSTOM_URL="${OC_PROTO}://${OC_DOMAIN}${OC_PATH}"
+
+                # Service source: GET → PUT if exists, POST if not
+                existing_svc=$(higress_get /v1/service-sources/openai-compat)
+                if [ "${OC_IS_IP}" = "true" ]; then
+                    SVC_BODY='{"type":"static","name":"openai-compat","port":'"${OC_PORT}"',"protocol":"http","proxyName":"","domain":"'"${OC_DOMAIN}:${OC_PORT}"'"}'
+                    if [ -n "${existing_svc}" ]; then
+                        higress_api PUT /v1/service-sources/openai-compat "Updating openai-compat static service source" "${SVC_BODY}"
+                    else
+                        higress_api POST /v1/service-sources "Registering openai-compat static service source" "${SVC_BODY}"
+                    fi
+                    OC_SVC_SUFFIX="static"
+                else
+                    SVC_BODY='{"type":"dns","name":"openai-compat","port":'"${OC_PORT}"',"protocol":"'"${OC_PROTO}"'","proxyName":"","domain":"'"${OC_DOMAIN}"'"}'
+                    if [ -n "${existing_svc}" ]; then
+                        higress_api PUT /v1/service-sources/openai-compat "Updating openai-compat DNS service source" "${SVC_BODY}"
+                    else
+                        higress_api POST /v1/service-sources "Registering openai-compat DNS service source" "${SVC_BODY}"
+                    fi
+                    OC_SVC_SUFFIX="dns"
+                fi
+
+                PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OC_CUSTOM_URL}"'","openaiCustomServiceName":"openai-compat.'"${OC_SVC_SUFFIX}"'","openaiCustomServicePort":'"${OC_PORT}"',"agentteamsMode":true}}'
                 existing_provider=$(higress_get /v1/ai/providers/openai-compat)
                 if [ -n "${existing_provider}" ]; then
                     higress_api PUT /v1/ai/providers/openai-compat "Updating LLM provider (openai-compat)" "${PROVIDER_BODY}"

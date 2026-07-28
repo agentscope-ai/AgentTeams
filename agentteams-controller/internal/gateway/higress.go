@@ -407,6 +407,19 @@ func (c *HigressClient) EnsureAIProvider(ctx context.Context, req AIProviderRequ
 	if req.Raw != nil {
 		body["rawConfigs"] = req.Raw
 	}
+
+	_, sc, _ := c.doJSON(ctx, http.MethodGet, "/v1/ai/providers/"+req.Name, nil)
+	if sc == http.StatusOK {
+		_, putSC, err := c.doJSON(ctx, http.MethodPut, "/v1/ai/providers/"+req.Name, body)
+		if err != nil {
+			return fmt.Errorf("update AI provider %s: %w", req.Name, err)
+		}
+		if putSC != http.StatusOK && putSC != http.StatusCreated {
+			return fmt.Errorf("update AI provider %s: HTTP %d", req.Name, putSC)
+		}
+		return nil
+	}
+
 	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/ai/providers", body)
 	if err != nil {
 		return fmt.Errorf("ensure AI provider %s: %w", req.Name, err)
@@ -677,6 +690,19 @@ func (c *HigressClient) ensureServiceSource(ctx context.Context, name, dnsDomain
 		"properties": map[string]interface{}{},
 		"authN":      map[string]interface{}{"enabled": false},
 	}
+
+	_, sc, _ := c.doJSON(ctx, http.MethodGet, "/v1/service-sources/"+name, nil)
+	if sc == http.StatusOK {
+		_, putSC, err := c.doJSON(ctx, http.MethodPut, "/v1/service-sources/"+name, body)
+		if err != nil {
+			return fmt.Errorf("update service source %s: %w", name, err)
+		}
+		if putSC != http.StatusOK && putSC != http.StatusCreated {
+			return fmt.Errorf("update service source %s: HTTP %d", name, putSC)
+		}
+		return nil
+	}
+
 	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/service-sources", body)
 	if err != nil {
 		return fmt.Errorf("ensure service source %s: %w", name, err)
@@ -694,6 +720,19 @@ func (c *HigressClient) ensureStaticServiceSource(ctx context.Context, name, add
 		"properties": map[string]interface{}{},
 		"authN":      map[string]interface{}{"enabled": false},
 	}
+
+	_, sc, _ := c.doJSON(ctx, http.MethodGet, "/v1/service-sources/"+name, nil)
+	if sc == http.StatusOK {
+		_, putSC, err := c.doJSON(ctx, http.MethodPut, "/v1/service-sources/"+name, body)
+		if err != nil {
+			return fmt.Errorf("update static service source %s: %w", name, err)
+		}
+		if putSC != http.StatusOK && putSC != http.StatusCreated {
+			return fmt.Errorf("update static service source %s: HTTP %d", name, putSC)
+		}
+		return nil
+	}
+
 	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/service-sources", body)
 	if err != nil {
 		return fmt.Errorf("ensure static service source %s: %w", name, err)

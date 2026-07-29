@@ -12,6 +12,7 @@ eval "$(
         -e '/^_ver_lt()/,/^}/p' \
         -e '/^_use_legacy_image_env()/,/^}/p' \
         -e '/^_controller_env_prefix()/,/^}/p' \
+        -e '/^_controller_storage_prefix()/,/^}/p' \
         "${INSTALLER}"
 )"
 
@@ -74,6 +75,27 @@ assert_prefix "v1.2.0-beta.1" "AGENTTEAMS_"
 assert_prefix "$(_normalize_version "1.2.0.beta.1")" "AGENTTEAMS_"
 assert_prefix "v1.3.0" "AGENTTEAMS_"
 
+legacy_storage_alias='hic''law'
+assert_storage_prefix() {
+    local version="$1"
+    local expected="$2"
+    local actual
+    actual="$(_controller_storage_prefix "${version}")"
+    if [ "${actual}" != "${expected}" ]; then
+        echo "FAIL: expected ${version} to use storage prefix ${expected}, got ${actual}" >&2
+        exit 1
+    fi
+}
+
+AGENTTEAMS_KNOWN_STABLE_VERSION="v1.1.2"
+assert_storage_prefix "v1.1.2" "${legacy_storage_alias}/agentteams-storage"
+assert_storage_prefix "latest" "${legacy_storage_alias}/agentteams-storage"
+assert_storage_prefix "v1.2.0" "agentteams/agentteams-storage"
+assert_storage_prefix "v1.2.0-beta.1" "agentteams/agentteams-storage"
+assert_storage_prefix "v1.3.0" "agentteams/agentteams-storage"
+AGENTTEAMS_KNOWN_STABLE_VERSION="v1.2.0"
+assert_storage_prefix "latest" "agentteams/agentteams-storage"
+
 controller_env_block="$(
     sed -n \
         '/        # Controller env args/,/        # shellcheck disable=SC2086/p' \
@@ -91,6 +113,7 @@ for suffix in \
     MATRIX_DOMAIN \
     MATRIX_URL \
     MINIO_ENDPOINT \
+    STORAGE_PREFIX \
     FS_BUCKET \
     CONTROLLER_URL \
     DOCKER_NETWORK \

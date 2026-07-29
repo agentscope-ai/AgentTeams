@@ -193,6 +193,10 @@ section "Test 7: Makefile dashboard targets"
 MAKEFILE="${TESTS_DIR}/../Makefile"
 if [ ! -f "${MAKEFILE}" ]; then
     echo "  [SKIP] Makefile not found at ${MAKEFILE}"
+elif ! grep -q 'install-embedded\|agentteams-install\.sh' "${MAKEFILE}"; then
+    # Not an AgentTeams checkout (e.g. running inside the standalone
+    # agentteams-dashboard repo, whose Makefile builds the dashboard image).
+    echo "  [SKIP] ${MAKEFILE} is not the AgentTeams Makefile"
 else
     for target in install-dashboard update-dashboard uninstall-dashboard build-dashboard; do
         if grep -q "^${target}:" "${MAKEFILE}" || grep -q "^\.PHONY.*${target}" "${MAKEFILE}"; then
@@ -240,7 +244,7 @@ fi
 section "Test 10: Non-interactive mode"
 
 # Verify step_dashboard handles non-interactive mode
-if grep -A 40 'step_dashboard()' "${INSTALL_SCRIPT}" | grep -q 'AGENTTEAMS_NON_INTERACTIVE'; then
+if grep -A 60 'step_dashboard()' "${INSTALL_SCRIPT}" | grep -q 'AGENTTEAMS_NON_INTERACTIVE'; then
     pass "step_dashboard handles non-interactive mode"
 else
     fail "step_dashboard missing non-interactive handling"
@@ -720,6 +724,10 @@ _test_start_dashboard_auth() {
         log() { :; }
         msg() { echo "$*"; }
         _env() { eval "echo \"\${$1:-}\""; }
+        # Mock curl/sleep so the readiness wait loop finishes instantly
+        # instead of polling a real port for up to 60s.
+        curl() { return 1; }
+        sleep() { :; }
 
         AGENTTEAMS_DASHBOARD=1
         AGENTTEAMS_USE_EMBEDDED=1
@@ -752,6 +760,81 @@ else
         pass "Exec _start_dashboard: honors user-supplied AGENTTEAMS_AUTH_TOKEN"
     else
         fail "Exec _start_dashboard: user-supplied AGENTTEAMS_AUTH_TOKEN not used"
+    fi
+fi
+
+# ---------- Test 19: Executable quick-start defaults ----------
+
+section "Test 19: Executable quick-start step_dashboard"
+
+_test_step_dashboard_quickstart() {
+    local _tmpfile
+    _tmpfile=$(mktemp)
+
+    if ! extract_function "step_dashboard" "${INSTALL_SCRIPT}" > "${_tmpfile}" 2>/dev/null; then
+        echo "EXTRACTION_FAILED"
+        rm -f "${_tmpfile}"
+        return
+    fi
+
+    (
+        log() { :; }
+        msg() { echo "$1"; }
+        docker() { return 1; }
+        podman() { return 1; }
+        DOCKER_CMD="docker"
+
+        AGENTTEAMS_QUICKSTART=1
+        AGENTTEAMS_NON_INTERACTIVE=0
+        AGENTTEAMS_REGISTRY="ghcr.io/agentteams-group"
+        AGENTTEAMS_UPGRADE=0
+        AGENTTEAMS_UPGRADE_KEEP_ALL=0
+        AGENTTEAMS_LANG="en"
+        AGENTTEAMS_DASHBOARD=""
+        AGENTTEAMS_DASHBOARD_VERSION=""
+        AGENTTEAMS_PORT_DASHBOARD=""
+        AGENTTEAMS_DASHBOARD_IMAGE=""
+        AGENTTEAMS_AI_GATEWAY_ADMIN_URL=""
+        AGENTTEAMS_ENV_FILE="$(mktemp)"
+        STEP_RESULT=""
+
+        # shellcheck disable=SC1090
+        source "${_tmpfile}" 2>/dev/null
+
+        if ! declare -F step_dashboard >/dev/null 2>&1; then
+            echo "FUNCTION_NOT_FOUND"
+        else
+            # Feed /dev/null to stdin: if quick-start wrongly falls through to
+            # the interactive prompts, read gets EOF and variables stay empty,
+            # which the assertions below catch.
+            step_dashboard < /dev/null
+            echo "RESULT_ENABLED=${AGENTTEAMS_DASHBOARD}"
+            echo "RESULT_PORT=${AGENTTEAMS_PORT_DASHBOARD}"
+            echo "RESULT_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE}"
+        fi
+    )
+    rm -f "${_tmpfile}"
+}
+
+_qs_result=$(_test_step_dashboard_quickstart 2>&1)
+
+if echo "${_qs_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; then
+    fail "Exec quick-start: function extraction failed"
+else
+    if echo "${_qs_result}" | grep -q "RESULT_ENABLED=1"; then
+        pass "Exec quick-start: dashboard enabled with defaults"
+    else
+        fail "Exec quick-start: dashboard not enabled (got: $(echo "${_qs_result}" | grep RESULT_ENABLED))"
+    fi
+    if echo "${_qs_result}" | grep -q "RESULT_PORT=13000"; then
+        pass "Exec quick-start: default port = 13000"
+    else
+        fail "Exec quick-start: wrong port (got: $(echo "${_qs_result}" | grep RESULT_PORT))"
+    fi
+    if echo "${_qs_result}" | grep -q "RESULT_IMAGE=.*agentteams-dashboard:v1.2.0-beta.1"; then
+        pass "Exec quick-start: image tag matches default version"
+    else
+        fail "Exec quick-start: wrong image (got: $(echo "${_qs_result}" | grep RESULT_IMAGE))"
     fi
 fi
 

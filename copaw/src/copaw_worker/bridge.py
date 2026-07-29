@@ -48,7 +48,9 @@ def _patch_copaw_paths(working_dir: Path) -> None:
         import copaw.constant as _const
         _const.WORKING_DIR = working_dir
         _const.SECRET_DIR = secret_dir
-        _const.ACTIVE_SKILLS_DIR = working_dir / "active_skills"
+        _const.ACTIVE_SKILLS_DIR = (
+            working_dir / "workspaces" / "default" / "skills"
+        )
         _const.CUSTOMIZED_SKILLS_DIR = working_dir / "customized_skills"
         _const.MEMORY_DIR = working_dir / "memory"
         _const.CUSTOM_CHANNELS_DIR = working_dir / "custom_channels"

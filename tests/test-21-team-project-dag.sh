@@ -241,6 +241,16 @@ COMMUNICATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LE
 COORDINATION_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/team-coordination/SKILL.md" 2>/dev/null)
 LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null)
 
+# Worker and Team reconciliation are independent. A newly attached Leader can
+# briefly expose the standalone Worker skill before the role overlay converges.
+for _ in $(seq 1 12); do
+    if echo "${TASK_SKILL}" | grep -Fq "Task state is tool-owned"; then
+        break
+    fi
+    sleep 5
+    TASK_SKILL=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/task-management/SKILL.md" 2>/dev/null)
+done
+
 assert_contains "${PROJECT_SKILL}" "projectflow" "project-management documents projectflow"
 assert_contains "${PROJECT_SKILL}" "Project state is tool-owned" "project-management forbids manual project state mutation"
 assert_contains "${PROJECT_SKILL}" "ready_nodes" "project-management documents DAG ready nodes"

@@ -95,6 +95,14 @@ _controller_env_prefix() {
         printf '%s' 'AGENTTEAMS_'
     fi
 }
+
+_controller_storage_prefix() {
+    if _use_legacy_image_env "$1"; then
+        printf '%s%s' 'hic' 'law/agentteams-storage'
+    else
+        printf '%s' 'agentteams/agentteams-storage'
+    fi
+}
 AGENTTEAMS_NON_INTERACTIVE="${AGENTTEAMS_NON_INTERACTIVE:-0}"
 AGENTTEAMS_MOUNT_SOCKET="${AGENTTEAMS_MOUNT_SOCKET:-1}"
 AGENTTEAMS_DOCKER_PROXY="${AGENTTEAMS_DOCKER_PROXY:-1}"
@@ -3870,6 +3878,8 @@ CREDEOF
         # Controller env args
         local _ctrl_env_prefix
         _ctrl_env_prefix="$(_controller_env_prefix "${AGENTTEAMS_VERSION}")"
+        local _storage_prefix
+        _storage_prefix="$(_controller_storage_prefix "${AGENTTEAMS_VERSION}")"
         local _ctrl_env_args=(
             -e "${_ctrl_env_prefix}ADMIN_USER=${AGENTTEAMS_ADMIN_USER}"
             -e "${_ctrl_env_prefix}ADMIN_PASSWORD=${AGENTTEAMS_ADMIN_PASSWORD}"
@@ -3893,7 +3903,7 @@ CREDEOF
             -e "${_ctrl_env_prefix}MATRIX_E2EE=${AGENTTEAMS_MATRIX_E2EE:-0}"
             -e "${_ctrl_env_prefix}MINIO_ENDPOINT=http://127.0.0.1:9000"
             -e "${_ctrl_env_prefix}MINIO_BUCKET=agentteams-storage"
-            -e "${_ctrl_env_prefix}STORAGE_PREFIX=agentteams/agentteams-storage"
+            -e "${_ctrl_env_prefix}STORAGE_PREFIX=${_storage_prefix}"
             -e "${_ctrl_env_prefix}FS_ENDPOINT=http://127.0.0.1:9000"
             -e "${_ctrl_env_prefix}AI_GATEWAY_URL=http://${_aigw_domain}"
             -e "${_ctrl_env_prefix}CONTROLLER_URL=http://agentteams-controller:8090"

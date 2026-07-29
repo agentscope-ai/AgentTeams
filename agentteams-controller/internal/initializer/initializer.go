@@ -3,6 +3,7 @@ package initializer
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -331,7 +332,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					logger.Error(err, "failed to create LLM provider (non-fatal)")
 				}
 			} else {
-				// Parse URL to create DNS service source
+				// Parse URL to determine host type and create appropriate service source
 				host, port, err := parseHostPort(cfg.OpenAIBaseURL)
 				if err != nil {
 					logger.Error(err, "failed to parse AGENTTEAMS_OPENAI_BASE_URL (non-fatal)")
@@ -340,15 +341,37 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					if strings.HasPrefix(cfg.OpenAIBaseURL, "http://") {
 						proto = "http"
 					}
-					if err := i.Gateway.EnsureServiceSource(ctx, "openai-compat", host, port, proto); err != nil {
-						logger.Error(err, "failed to register openai-compat service source (non-fatal)")
+
+					var svcSuffix string
+					if net.ParseIP(host) != nil {
+						// IP address → static-type service source
+						if err := i.Gateway.EnsureStaticServiceSource(ctx, "openai-compat", host, port); err != nil {
+							logger.Error(err, "failed to register openai-compat static service source (non-fatal)")
+						}
+						svcSuffix = "static"
+					} else {
+						// Domain name → DNS-type service source
+						if err := i.Gateway.EnsureServiceSource(ctx, "openai-compat", host, port, proto); err != nil {
+							logger.Error(err, "failed to register openai-compat service source (non-fatal)")
+						}
+						svcSuffix = "dns"
 					}
-					// Wait for DNS service source to propagate before creating provider
 					time.Sleep(2 * time.Second)
+
+					// Strip port from openaiCustomUrl — only keep scheme://host/path
+					u, err := url.Parse(cfg.OpenAIBaseURL)
+					customUrl := cfg.OpenAIBaseURL
+					if err == nil {
+						customUrl = fmt.Sprintf("%s://%s%s", u.Scheme, u.Hostname(), u.Path)
+						if u.RawQuery != "" {
+							customUrl += "?" + u.RawQuery
+						}
+					}
+
 					raw := map[string]interface{}{
 						"agentteamsMode":          true,
-						"openaiCustomUrl":         cfg.OpenAIBaseURL,
-						"openaiCustomServiceName": "openai-compat.dns",
+						"openaiCustomUrl":         customUrl,
+						"openaiCustomServiceName": "openai-compat." + svcSuffix,
 						"openaiCustomServicePort": port,
 					}
 					if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{
@@ -375,14 +398,35 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					if strings.HasPrefix(cfg.OpenAIBaseURL, "http://") {
 						proto = "http"
 					}
-					if err := i.Gateway.EnsureServiceSource(ctx, provider, host, port, proto); err != nil {
-						logger.Error(err, "failed to register service source for provider (non-fatal)")
+
+					var svcSuffix string
+					if net.ParseIP(host) != nil {
+						if err := i.Gateway.EnsureStaticServiceSource(ctx, provider, host, port); err != nil {
+							logger.Error(err, "failed to register static service source for provider (non-fatal)")
+						}
+						svcSuffix = "static"
+					} else {
+						if err := i.Gateway.EnsureServiceSource(ctx, provider, host, port, proto); err != nil {
+							logger.Error(err, "failed to register service source for provider (non-fatal)")
+						}
+						svcSuffix = "dns"
 					}
 					time.Sleep(2 * time.Second)
+
+					// Strip port from openaiCustomUrl — only keep scheme://host/path
+					u, err := url.Parse(cfg.OpenAIBaseURL)
+					customUrl := cfg.OpenAIBaseURL
+					if err == nil {
+						customUrl = fmt.Sprintf("%s://%s%s", u.Scheme, u.Hostname(), u.Path)
+						if u.RawQuery != "" {
+							customUrl += "?" + u.RawQuery
+						}
+					}
+
 					raw := map[string]interface{}{
 						"agentteamsMode":          true,
-						"openaiCustomUrl":         cfg.OpenAIBaseURL,
-						"openaiCustomServiceName": provider + ".dns",
+						"openaiCustomUrl":         customUrl,
+						"openaiCustomServiceName": provider + "." + svcSuffix,
 						"openaiCustomServicePort": port,
 					}
 					if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{

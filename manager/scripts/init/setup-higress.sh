@@ -35,7 +35,10 @@ fi
 CONSOLE_URL="http://127.0.0.1:8001"
 
 # ============================================================
-# Helper: call Higress Console API, log result, never fail.
+# Helper: call Higress Console API, log result.
+# Returns 0 on success, non-zero on error.
+# Callers SHOULD check the exit code; on IDEMPOTENT (re-run on every boot)
+# steps, callers MUST treat non-zero exit as a blocking failure.
 # ============================================================
 higress_api() {
     local method="$1"
@@ -50,33 +53,59 @@ higress_api() {
     http_code=$(curl -s -o "${tmpfile}" -w '%{http_code}' -X "${method}" "${CONSOLE_URL}${path}" \
         -b "${HIGRESS_COOKIE_FILE}" \
         -H 'Content-Type: application/json' \
-        -d "${body}" 2>/dev/null) || true
+        -d "${body}" 2>/dev/null)
+    local curl_rc=$?
     local response
     response=$(cat "${tmpfile}" 2>/dev/null)
     rm -f "${tmpfile}"
 
-    if echo "${response}" | grep -q '<!DOCTYPE html>' 2>/dev/null; then
-        log "ERROR: ${desc} ... got HTML page (session expired?). Re-login needed."
+    if [ ${curl_rc} -ne 0 ]; then
+        log "ERROR: ${desc} ... curl failed (exit=${curl_rc}): ${response}"
+        return ${curl_rc}
+    fi
+
+    if echo "${response}" | grep -qiE '<!DOCTYPE html>|<html[[:space:]>]' 2>/dev/null; then
+        log "ERROR: ${desc} ... got HTML page (session expired?). Re-login needed. HTTP ${http_code}: ${response:0:200}"
         return 1
     fi
+
     if [ "${http_code}" = "401" ] || [ "${http_code}" = "403" ]; then
-        log "ERROR: ${desc} ... HTTP ${http_code} auth failed"
+        log "ERROR: ${desc} ... HTTP ${http_code} auth failed: ${response:0:200}"
         return 1
     fi
+
+    if [ "${http_code}" = "405" ]; then
+        log "ERROR: ${desc} ... HTTP 405 Method Not Allowed. Endpoint may not support ${method}. Response: ${response:0:200}"
+        return 1
+    fi
+
     if echo "${response}" | grep -q '"success":true' 2>/dev/null; then
         log "${desc} ... OK"
+        return 0
     elif [ "${http_code}" = "409" ]; then
         log "${desc} ... already exists, skipping"
-    elif echo "${response}" | grep -q '"success":false' 2>/dev/null; then
-        log "WARNING: ${desc} ... FAILED (HTTP ${http_code}): ${response}"
+        return 0
     elif [ "${http_code}" = "200" ] || [ "${http_code}" = "201" ] || [ "${http_code}" = "204" ]; then
         log "${desc} ... OK (HTTP ${http_code})"
-    else
-        log "WARNING: ${desc} ... unexpected (HTTP ${http_code}): ${response}"
+        return 0
+    elif echo "${response}" | grep -q '"success":false' 2>/dev/null; then
+        log "ERROR: ${desc} ... FAILED (HTTP ${http_code}): ${response:0:500}"
+        return 1
     fi
+
+    log "ERROR: ${desc} ... unexpected HTTP ${http_code}: ${response:0:500}"
+    return 1
+}
+
+# Wrapper for NON-IDEMPOTENT first-boot steps: log errors but do not abort.
+# These only run once, and failures are cosmetic (the resources might have
+# been created on a prior boot that failed before marking the setup file).
+higress_api_soft() {
+    higress_api "$@" || log "WARNING: soft failure on first-boot step, continuing anyway"
 }
 
 # Helper: GET a resource, return body if 200, empty string otherwise.
+# Returns 0 even when the resource is not found; callers test the output.
 higress_get() {
     local path="$1"
     local tmpfile
@@ -101,38 +130,38 @@ if [ ! -f "${SETUP_MARKER}" ]; then
     log "First boot: configuring Higress static resources..."
 
     # 0. Local service sources
-    higress_api POST /v1/service-sources "Registering Tuwunel service source" \
+    higress_api_soft POST /v1/service-sources "Registering Tuwunel service source" \
         '{"name":"tuwunel","type":"static","domain":"127.0.0.1:6167","port":6167,"properties":{},"authN":{"enabled":false}}'
-    higress_api POST /v1/service-sources "Registering Element Web service source" \
+    higress_api_soft POST /v1/service-sources "Registering Element Web service source" \
         '{"name":"element-web","type":"static","domain":"127.0.0.1:8088","port":8088,"properties":{},"authN":{"enabled":false}}'
-    higress_api POST /v1/service-sources "Registering MinIO service source" \
+    higress_api_soft POST /v1/service-sources "Registering MinIO service source" \
         '{"name":"minio","type":"static","domain":"127.0.0.1:9000","port":9000,"properties":{},"authN":{"enabled":false}}'
-    higress_api POST /v1/service-sources "Registering OpenClaw Console service source" \
+    higress_api_soft POST /v1/service-sources "Registering OpenClaw Console service source" \
         '{"name":"openclaw-console","type":"static","domain":"127.0.0.1:18888","port":18888,"properties":{},"authN":{"enabled":false}}'
 
     # 1. Domains
-    higress_api POST /v1/domains "Creating Matrix Client domain" \
+    higress_api_soft POST /v1/domains "Creating Matrix Client domain" \
         '{"name":"'"${MATRIX_CLIENT_DOMAIN}"'","enableHttps":"off"}'
-    higress_api POST /v1/domains "Creating File System domain" \
+    higress_api_soft POST /v1/domains "Creating File System domain" \
         '{"name":"'"${FS_DOMAIN}"'","enableHttps":"off"}'
     # Always register the fixed internal FS domain so workers on agentteams-net can reach MinIO
     if [ "${FS_DOMAIN}" != "${FS_LOCAL_DOMAIN}" ]; then
-        higress_api POST /v1/domains "Creating internal File System domain" \
+        higress_api_soft POST /v1/domains "Creating internal File System domain" \
             '{"name":"'"${FS_LOCAL_DOMAIN}"'","enableHttps":"off"}'
     fi
-    higress_api POST /v1/domains "Creating OpenClaw Console domain" \
+    higress_api_soft POST /v1/domains "Creating OpenClaw Console domain" \
         '{"name":"'"${CONSOLE_DOMAIN}"'","enableHttps":"off"}'
 
     # 2. Manager Consumer
-    higress_api POST /v1/consumers "Creating Manager consumer" \
+    higress_api_soft POST /v1/consumers "Creating Manager consumer" \
         '{"name":"manager","credentials":[{"type":"key-auth","source":"BEARER","values":["'"${AGENTTEAMS_MANAGER_GATEWAY_KEY}"'"]}]}'
 
     # 3. Matrix Homeserver Route
-    higress_api POST /v1/routes "Creating Matrix Homeserver route" \
+    higress_api_soft POST /v1/routes "Creating Matrix Homeserver route" \
         '{"name":"matrix-homeserver","domains":[],"path":{"matchType":"PRE","matchValue":"/_matrix"},"services":[{"name":"tuwunel.static","port":6167,"weight":100}]}'
 
     # 4. Element Web Route
-    higress_api POST /v1/routes "Creating Element Web route" \
+    higress_api_soft POST /v1/routes "Creating Element Web route" \
         '{"name":"matrix-web-client","domains":["'"${MATRIX_CLIENT_DOMAIN}"'"],"path":{"matchType":"PRE","matchValue":"/"},"services":[{"name":"element-web.static","port":8088,"weight":100}]}'
 
     # 5. HTTP File System Route — always include internal domain for worker access
@@ -140,15 +169,15 @@ if [ ! -f "${SETUP_MARKER}" ]; then
     if [ "${FS_DOMAIN}" != "${FS_LOCAL_DOMAIN}" ]; then
         FS_ROUTE_DOMAINS='["'"${FS_DOMAIN}"'","'"${FS_LOCAL_DOMAIN}"'"]'
     fi
-    higress_api POST /v1/routes "Creating HTTP file system route" \
+    higress_api_soft POST /v1/routes "Creating HTTP file system route" \
         '{"name":"http-filesystem","domains":'"${FS_ROUTE_DOMAINS}"',"path":{"matchType":"PRE","matchValue":"/"},"services":[{"name":"minio.static","port":9000,"weight":100}]}'
 
     # 6. OpenClaw Console Route (reverse-proxied via nginx with auto-token injection)
-    higress_api POST /v1/routes "Creating OpenClaw Console route" \
+    higress_api_soft POST /v1/routes "Creating OpenClaw Console route" \
         '{"name":"openclaw-console","domains":["'"${CONSOLE_DOMAIN}"'"],"path":{"matchType":"PRE","matchValue":"/"},"services":[{"name":"openclaw-console.static","port":18888,"weight":100}]}'
 
     # 6a. Enable basic-auth on OpenClaw Console route
-    higress_api PUT /v1/routes/openclaw-console/plugin-instances/basic-auth "Enabling basic-auth on OpenClaw Console route" \
+    higress_api_soft PUT /v1/routes/openclaw-console/plugin-instances/basic-auth "Enabling basic-auth on OpenClaw Console route" \
         '{"version":null,"scope":"ROUTE","target":"openclaw-console","targets":{"ROUTE":"openclaw-console"},"pluginName":"basic-auth","pluginVersion":null,"internal":false,"enabled":true,"rawConfigurations":"consumers:\n  - name: admin\n    credential: '"${AGENTTEAMS_ADMIN_USER:-admin}"':'"${AGENTTEAMS_ADMIN_PASSWORD}"'"}'
 
     touch "${SETUP_MARKER}"
@@ -160,17 +189,19 @@ fi
 # ============================================================
 # IDEMPOTENT SECTION
 # Always runs: reflects current env config, supports upgrades.
+# Failures here are FATAL: if AI Gateway routes are wrong, all
+# worker LLM calls fail, so we exit early rather than silently.
 # ============================================================
 
 # ============================================================
 # AI Gateway Domain (idempotent: POST returns 409 if exists)
 # ============================================================
 higress_api POST /v1/domains "Creating AI Gateway domain" \
-    '{"name":"'"${AI_GATEWAY_DOMAIN}"'","enableHttps":"off"}'
+    '{"name":"'"${AI_GATEWAY_DOMAIN}"'","enableHttps":"off"}' || exit 1
 # Always register the fixed internal AI Gateway domain for worker access
 if [ "${AI_GATEWAY_DOMAIN}" != "${AI_GATEWAY_LOCAL_DOMAIN}" ]; then
     higress_api POST /v1/domains "Creating internal AI Gateway domain" \
-        '{"name":"'"${AI_GATEWAY_LOCAL_DOMAIN}"'","enableHttps":"off"}'
+        '{"name":"'"${AI_GATEWAY_LOCAL_DOMAIN}"'","enableHttps":"off"}' || exit 1
 fi
 
 # Build AI Gateway route domains: always include internal domain for worker access
@@ -190,9 +221,9 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
             PROVIDER_BODY='{"type":"qwen","name":"qwen","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"qwenEnableSearch":false,"qwenEnableCompatible":true,"qwenFileIds":[],"agentteamsMode":true}}'
             existing_provider=$(higress_get /v1/ai/providers/qwen)
             if [ -n "${existing_provider}" ]; then
-                higress_api PUT /v1/ai/providers/qwen "Updating LLM provider (qwen)" "${PROVIDER_BODY}"
+                higress_api PUT /v1/ai/providers/qwen "Updating LLM provider (qwen)" "${PROVIDER_BODY}" || exit 1
             else
-                higress_api POST /v1/ai/providers "Creating LLM provider (qwen)" "${PROVIDER_BODY}"
+                higress_api POST /v1/ai/providers "Creating LLM provider (qwen)" "${PROVIDER_BODY}" || exit 1
             fi
             ;;
         openai-compat)
@@ -213,17 +244,17 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
                 existing_svc=$(higress_get /v1/service-sources/openai-compat)
                 SVC_BODY='{"type":"dns","name":"openai-compat","port":'"${OC_PORT}"',"protocol":"'"${OC_PROTO}"'","proxyName":"","domain":"'"${OC_DOMAIN}"'"}'
                 if [ -n "${existing_svc}" ]; then
-                    higress_api PUT /v1/service-sources/openai-compat "Updating openai-compat DNS service source" "${SVC_BODY}"
+                    higress_api PUT /v1/service-sources/openai-compat "Updating openai-compat DNS service source" "${SVC_BODY}" || exit 1
                 else
-                    higress_api POST /v1/service-sources "Registering openai-compat DNS service source" "${SVC_BODY}"
+                    higress_api POST /v1/service-sources "Registering openai-compat DNS service source" "${SVC_BODY}" || exit 1
                 fi
 
                 PROVIDER_BODY='{"type":"openai","name":"openai-compat","tokens":["'"${AGENTTEAMS_LLM_API_KEY}"'"],"version":0,"protocol":"openai/v1","tokenFailoverConfig":{"enabled":false},"rawConfigs":{"openaiCustomUrl":"'"${OPENAI_BASE_URL}"'","openaiCustomServiceName":"openai-compat.dns","openaiCustomServicePort":'"${OC_PORT}"',"agentteamsMode":true}}'
                 existing_provider=$(higress_get /v1/ai/providers/openai-compat)
                 if [ -n "${existing_provider}" ]; then
-                    higress_api PUT /v1/ai/providers/openai-compat "Updating LLM provider (openai-compat)" "${PROVIDER_BODY}"
+                    higress_api PUT /v1/ai/providers/openai-compat "Updating LLM provider (openai-compat)" "${PROVIDER_BODY}" || exit 1
                 else
-                    higress_api POST /v1/ai/providers "Creating LLM provider (openai-compat)" "${PROVIDER_BODY}"
+                    higress_api POST /v1/ai/providers "Creating LLM provider (openai-compat)" "${PROVIDER_BODY}" || exit 1
                 fi
             fi
             ;;
@@ -237,9 +268,9 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
             PROVIDER_BODY="${PROVIDER_BODY}"'}'
             existing_provider=$(higress_get /v1/ai/providers/"${LLM_PROVIDER}")
             if [ -n "${existing_provider}" ]; then
-                higress_api PUT /v1/ai/providers/"${LLM_PROVIDER}" "Updating LLM provider (${LLM_PROVIDER})" "${PROVIDER_BODY}"
+                higress_api PUT /v1/ai/providers/"${LLM_PROVIDER}" "Updating LLM provider (${LLM_PROVIDER})" "${PROVIDER_BODY}" || exit 1
             else
-                higress_api POST /v1/ai/providers "Creating LLM provider (${LLM_PROVIDER})" "${PROVIDER_BODY}"
+                higress_api POST /v1/ai/providers "Creating LLM provider (${LLM_PROVIDER})" "${PROVIDER_BODY}" || exit 1
             fi
             ;;
     esac
@@ -270,14 +301,14 @@ if [ -n "${AGENTTEAMS_LLM_API_KEY}" ]; then
             | .headerControl.response.remove //= []
         ' 2>/dev/null)
         if [ -n "${patched}" ] && [ "${patched}" != "null" ]; then
-            higress_api PUT /v1/ai/routes/default-ai-route "Updating AI Gateway route (provider=${LLM_PROVIDER}, User-Agent=AgentTeams/${AGENTTEAMS_VERSION})" "${patched}"
+            higress_api PUT /v1/ai/routes/default-ai-route "Updating AI Gateway route (provider=${LLM_PROVIDER}, User-Agent=AgentTeams/${AGENTTEAMS_VERSION})" "${patched}" || exit 1
         fi
     else
         # Inject headerControl into the initial route body
         AI_ROUTE_BODY=$(echo "${AI_ROUTE_BODY}" | jq '
             . + {"headerControl":{"enabled":true,"request":{"add":[{"key":"user-agent","value":"AgentTeams/'"${AGENTTEAMS_VERSION}"'"}],"set":[],"remove":[]},"response":{"add":[],"set":[],"remove":[]}}}
         ' 2>/dev/null)
-        higress_api POST /v1/ai/routes "Creating AI Gateway route (provider=${LLM_PROVIDER}, User-Agent=AgentTeams/${AGENTTEAMS_VERSION})" "${AI_ROUTE_BODY}"
+        higress_api POST /v1/ai/routes "Creating AI Gateway route (provider=${LLM_PROVIDER}, User-Agent=AgentTeams/${AGENTTEAMS_VERSION})" "${AI_ROUTE_BODY}" || exit 1
     fi
 
 else
@@ -289,7 +320,7 @@ fi
 # ============================================================
 if [ -n "${AGENTTEAMS_GITHUB_TOKEN}" ]; then
     higress_api POST /v1/service-sources "Registering GitHub API service source" \
-        '{"type":"dns","name":"github-api","domain":"api.github.com","port":443,"protocol":"https"}'
+        '{"type":"dns","name":"github-api","domain":"api.github.com","port":443,"protocol":"https"}' || exit 1
 
     MCP_YAML_FILE="/opt/agentteams/agent/skills/mcp-server-management/references/mcp-github.yaml"
     if [ -f "${MCP_YAML_FILE}" ]; then
@@ -299,14 +330,14 @@ if [ -n "${AGENTTEAMS_GITHUB_TOKEN}" ]; then
 {"name":"mcp-github","description":"GitHub MCP Server","type":"OPEN_API","rawConfigurations":${RAW_CONFIG},"mcpServerName":"mcp-github","domains":["${AI_GATEWAY_DOMAIN}"],"services":[{"name":"github-api.dns","port":443,"weight":100}],"consumerAuthInfo":{"type":"key-auth","enable":true,"allowedConsumers":["manager"]}}
 MCPEOF
         )
-        higress_api PUT /v1/mcpServer "Configuring GitHub MCP Server" "${MCP_BODY}"
+        higress_api PUT /v1/mcpServer "Configuring GitHub MCP Server" "${MCP_BODY}" || exit 1
         # GET to check if manager is already authorized; PUT (add) only if not present
         # GET with consumerName filter returns matching entries; empty list means not authorized
         consumer_check=$(higress_get "/v1/mcpServer/consumers?mcpServerName=mcp-github&consumerName=manager")
         consumer_count=$(echo "${consumer_check}" | jq '.total // 0' 2>/dev/null)
         if [ "${consumer_count}" = "0" ] || [ -z "${consumer_count}" ]; then
             higress_api PUT /v1/mcpServer/consumers "Authorizing Manager for GitHub MCP" \
-                '{"mcpServerName":"mcp-github","consumers":["manager"]}'
+                '{"mcpServerName":"mcp-github","consumers":["manager"]}' || exit 1
         else
             log "Manager already authorized for GitHub MCP, skipping"
         fi

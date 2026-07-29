@@ -1093,10 +1093,11 @@ CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
     AGENTTEAMS_VERSION="$(_normalize_version "${AGENTTEAMS_VERSION}")"
-    local _image_org="agentteams"
-    if _use_legacy_image_env "${AGENTTEAMS_VERSION}"; then
-        _image_org="higress"
+    if _ver_lt "${AGENTTEAMS_VERSION}" "v1.1.2"; then
+        error "AgentTeams >= v1.1.2 required. For older versions, use the hiclaw-install.sh from that release."
+        exit 1
     fi
+    local _image_org="agentteams"
     MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/${_image_org}/${_image_org}-manager:${AGENTTEAMS_VERSION}}"
     MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/${_image_org}/${_image_org}-manager-copaw:${AGENTTEAMS_VERSION}}"
     WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/${_image_org}/${_image_org}-worker:${AGENTTEAMS_VERSION}}"

@@ -527,3 +527,29 @@ async def test_push_loop_reports_bridge_failure_as_bridge_health(tmp_path, monke
     assert message == "runtime-to-standard bridge failed: runtime bridge failed"
     assert details["operation"] == "bridge_runtime_to_standard"
     assert details["error_type"] == "BridgeRuntimeError"
+
+
+def test_ensure_alias_k8s_with_mc_host_set_skips_static(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTTEAMS_RUNTIME", "k8s")
+    monkeypatch.setenv("MC_HOST_agentteams", "http://key:secret@minio:9000")
+    sync = _sync(tmp_path)
+    sync._ensure_alias()
+    assert sync._alias_set is True
+
+
+def test_ensure_alias_k8s_without_mc_host_falls_through_static(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTTEAMS_RUNTIME", "k8s")
+    monkeypatch.delenv("MC_HOST_agentteams", raising=False)
+    sync = _sync(tmp_path)
+    monkeypatch.setattr("copaw_worker.sync._mc", lambda *_args, **_kwargs: None)
+    sync._ensure_alias()
+    assert sync._alias_set is True
+
+
+def test_ensure_alias_non_k8s_uses_static(monkeypatch, tmp_path):
+    monkeypatch.delenv("AGENTTEAMS_RUNTIME", raising=False)
+    monkeypatch.delenv("MC_HOST_agentteams", raising=False)
+    sync = _sync(tmp_path)
+    monkeypatch.setattr("copaw_worker.sync._mc", lambda *_args, **_kwargs: None)
+    sync._ensure_alias()
+    assert sync._alias_set is True

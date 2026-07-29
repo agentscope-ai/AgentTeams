@@ -231,6 +231,76 @@ _STARTUP_SYNC_FILES = (
 )
 
 
+# ----------------------------------------------------------------------
+# .agentteamsignore (legacy: .hiclawignore) — gitignore-style patterns
+# ----------------------------------------------------------------------
+
+def _fnmatch_basename(name: str, pattern: str) -> bool:
+    """Basename-only glob match for simple patterns without '/'."""
+    import fnmatch
+    return fnmatch.fnmatchcase(name, pattern)
+
+
+def _fnmatch_path(rel_posix: str, pattern: str) -> bool:
+    """Full-path-or-basename fnmatch mirroring gitignore semantics (subset)."""
+    import fnmatch
+    if "/" in pattern:
+        return fnmatch.fnmatchcase(rel_posix, pattern) or fnmatch.fnmatchcase(rel_posix, pattern.rstrip("/") + "/*")
+    return any(fnmatch.fnmatchcase(part, pattern) for part in rel_posix.split("/"))
+
+
+def _parse_ignore_file(base: Path) -> list[str]:
+    """Parse a gitignore-style file, returning pattern strings.
+
+    Returns a list of patterns.  Prefers `.agentteamsignore` at `base`;
+    falls back to legacy `.hiclawignore` if that exists instead.  Returns
+    empty list when neither is present.  Blanks and `#` comments are
+    ignored; trailing `/` marks directory-only patterns.
+    """
+    candidates = [base / ".agentteamsignore", base / ".hiclawignore"]
+    for ignore_path in candidates:
+        if ignore_path.is_file():
+            patterns: list[str] = []
+            try:
+                for raw in ignore_path.read_text().splitlines():
+                    line = raw.rstrip()
+                    if not line or line.lstrip().startswith("#"):
+                        continue
+                    patterns.append(line)
+            except OSError as exc:
+                logger.warning("parse_ignore_file: cannot read %s: %s", ignore_path, exc)
+                continue
+            logger.info("parse_ignore_file: loaded %d patterns from %s", len(patterns), ignore_path.name)
+            return patterns
+    return []
+
+
+def _matches_ignore_pattern(rel_posix: str, patterns: list[str]) -> bool:
+    """Return True if rel_posix (forward-slash relative path) matches any pattern."""
+    import fnmatch
+    is_dir_like = False
+    parts = rel_posix.split("/")
+    name = parts[-1]
+    for pattern in patterns:
+        p = pattern
+        if p.endswith("/"):
+            is_dir_like = True
+            p = p[:-1]
+        else:
+            is_dir_like = False
+        if is_dir_like and len(parts) <= 1:
+            continue
+        if "/" in p:
+            # anchored path pattern
+            if fnmatch.fnmatchcase(rel_posix, p) or fnmatch.fnmatchcase(rel_posix, p + "/*"):
+                return True
+        else:
+            # basename pattern — match any component
+            if any(fnmatch.fnmatchcase(part, p) for part in parts):
+                return True
+    return False
+
+
 class FileSync:
     """MinIO file sync using mc CLI."""
 
@@ -625,7 +695,7 @@ class FileSync:
         self._ensure_alias()
         if (path or "").strip().endswith("/"):
             resolved.local.mkdir(parents=True, exist_ok=True)
-            _mc("mirror", resolved.remote, str(resolved.local) + "/", "--overwrite", check=True)
+            _mc("mirror", resolved.remote, str(resolved.local) + "/", "--overwrite", "--remove", check=True)
             return resolved
 
         resolved.local.parent.mkdir(parents=True, exist_ok=True)
@@ -636,7 +706,7 @@ class FileSync:
                 raise
             remote = resolved.remote if resolved.remote.endswith("/") else f"{resolved.remote}/"
             resolved.local.mkdir(parents=True, exist_ok=True)
-            _mc("mirror", remote, str(resolved.local) + "/", "--overwrite", check=True)
+            _mc("mirror", remote, str(resolved.local) + "/", "--overwrite", "--remove", check=True)
         return resolved
 
     def push_shared_path(
@@ -655,12 +725,44 @@ class FileSync:
         self._ensure_alias()
         if resolved.local.is_dir():
             remote = resolved.remote if resolved.remote.endswith("/") else f"{resolved.remote}/"
-            args = ["mirror", str(resolved.local) + "/", remote, "--overwrite"]
+            args = ["mirror", str(resolved.local) + "/", remote, "--overwrite", "--remove"]
             for item in exclude or []:
                 args.extend(["--exclude", item])
             _mc(*args, check=True)
         else:
             _mc("cp", str(resolved.local), resolved.remote, check=True)
+        return resolved
+
+    def delete_shared_path(self, path: str) -> SharedPath:
+        """Delete a shared path from both MinIO and the local workspace.
+
+        Shared paths only; global-shared/ is read-only and rejected.
+        Deletes are recursive (directory trees are removed with --force --recursive
+        on the MinIO side, and shutil.rmtree on the local side).
+        """
+        resolved = self.resolve_shared_path(path)
+        if resolved.kind == "global-shared":
+            raise ValueError("global-shared/ is read-only")
+        self._ensure_alias()
+        remote = resolved.remote
+        if resolved.local.is_dir() and not remote.endswith("/"):
+            remote = f"{remote}/"
+        try:
+            _mc("rm", "--recursive", "--force", remote, check=True)
+        except subprocess.CalledProcessError as exc:
+            stderr = getattr(exc, "stderr", "") or ""
+            if "Object does not exist" in stderr or "does not exist" in stderr.lower():
+                logger.info("delete_shared_path: remote not found, proceeding with local cleanup: %s", path)
+            else:
+                raise
+        if resolved.local.exists() or resolved.local.is_symlink():
+            if resolved.local.is_dir() and not resolved.local.is_symlink():
+                shutil.rmtree(resolved.local, ignore_errors=True)
+            else:
+                try:
+                    resolved.local.unlink()
+                except FileNotFoundError:
+                    pass
         return resolved
 
     def stat_shared_path(self, path: str) -> SharedPath:
@@ -777,6 +879,9 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
 
     Excludes Manager-managed files only. AGENTS.md, SOUL.md, .copaw/sessions/
     are Worker-managed and are pushed (including session backup).
+
+    Honors `.agentteamsignore` (legacy: `.hiclawignore`) at the sync root —
+    patterns in that file add to the built-in exclusion lists.
     """
     # Manager-managed files that should never be pushed back
     _EXCLUDE_FILES = {
@@ -817,6 +922,10 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     if not local_dir.exists():
         return pushed
 
+    user_ignore_patterns = _parse_ignore_file(local_dir)
+    if user_ignore_patterns:
+        logger.info("push_local: loaded %d user ignore patterns from %s", len(user_ignore_patterns), local_dir)
+
     # ── Inner → Outer sync ──────────────────────────────────────────────
     # CoPaw Agent reads/writes workspaces/default/AGENTS.md and SOUL.md at
     # runtime.  These are "inner" copies derived from the "outer" files at
@@ -839,15 +948,16 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
         except OSError:
             continue
         rel = path.relative_to(local_dir)
+        rel_posix = rel.as_posix()
         # Skip Manager-owned config files at workspace root
         if len(rel.parts) == 1 and rel.name in _EXCLUDE_FILES:
             continue
         # Skip Manager-owned config files at specific paths
-        if rel.as_posix() in _EXCLUDE_PATHS:
+        if rel_posix in _EXCLUDE_PATHS:
             continue
         # Skip runtime skill projection; standard-space skills/ is canonical.
         if any(
-            rel.as_posix() == prefix or rel.as_posix().startswith(f"{prefix}/")
+            rel_posix == prefix or rel_posix.startswith(f"{prefix}/")
             for prefix in _EXCLUDE_PATH_PREFIXES
         ):
             continue
@@ -857,8 +967,11 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
         # Skip transient runtime files by extension (e.g. .lock)
         if rel.suffix in _EXCLUDE_EXTENSIONS:
             continue
+        # Skip user-configured ignore patterns (.agentteamsignore / .hiclawignore)
+        if _matches_ignore_pattern(rel_posix, user_ignore_patterns):
+            continue
 
-        key = f"{sync._prefix}/{rel.as_posix()}"
+        key = f"{sync._prefix}/{rel_posix}"
         try:
             remote = sync._cat(key)
             local_content = path.read_text(errors="replace")
@@ -866,10 +979,10 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
                 continue
             dest = sync._object_path(key)
             _mc("cp", str(path), dest, check=True)
-            pushed.append(str(rel))
-            logger.debug("Pushed %s -> %s", rel, dest)
+            pushed.append(rel_posix)
+            logger.debug("Pushed %s -> %s", rel_posix, dest)
         except Exception as exc:
-            logger.debug("push_local: failed for %s: %s", rel, exc)
+            logger.debug("push_local: failed for %s: %s", rel_posix, exc)
 
     return pushed
 

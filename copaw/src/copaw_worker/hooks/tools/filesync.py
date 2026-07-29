@@ -176,15 +176,18 @@ async def filesync(
         if "exclude" in payload_data:
             exclude = payload_data.get("exclude")
 
-        if action not in {"pull", "push", "stat", "list"}:
-            raise FilesyncToolError("action must be one of: pull, push, stat, list")
+        if action not in {"pull", "push", "stat", "list", "delete"}:
+            raise FilesyncToolError("action must be one of: pull, push, stat, list, delete")
         if not isinstance(resolved_path, str) or not resolved_path.strip():
             raise FilesyncToolError("path is required")
-        resolved_path = (
-            _normalize_directory_path(resolved_path)
-            if action in {"pull", "push", "list"}
-            else resolved_path.strip()
-        )
+        if action == "delete":
+            resolved_path = resolved_path.strip()
+        else:
+            resolved_path = (
+                _normalize_directory_path(resolved_path)
+                if action in {"pull", "push", "list"}
+                else resolved_path.strip()
+            )
 
         sync = create_sync()
         resolved = sync.resolve_shared_path(resolved_path)
@@ -212,6 +215,10 @@ async def filesync(
         if action == "stat":
             sync.stat_shared_path(resolved_path)
             return _ok(exists=True, **payload)
+
+        if action == "delete":
+            sync.delete_shared_path(resolved_path)
+            return _ok(deleted=True, **payload)
 
         _, entries = sync.list_shared_path(resolved_path)
         return _ok(entries=entries, **payload)

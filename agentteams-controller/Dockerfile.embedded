@@ -106,7 +106,8 @@ VOLUME ["/data"]
 # overrides them, and neither supervisord nor the controller binary itself
 # read them.
 ENV AGENTTEAMS_CONTROLLER_URL=http://127.0.0.1:8090 \
-    AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/agentteams/cli-token
+    AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/agentteams/cli-token \
+    AGENTTEAMS_MC_MIRROR_SCOPE=controller
 
 # ---- Start ----
 ENTRYPOINT ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

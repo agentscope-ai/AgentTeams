@@ -10,8 +10,8 @@ source "${SCRIPT_DIR}/lib/matrix-client.sh"
 test_setup "08-github-mcp"
 
 # Check prerequisites
-if [ -z "${HICLAW_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
-    log_info "SKIP: No GitHub token configured (set HICLAW_GITHUB_TOKEN or TEST_GITHUB_TOKEN)"
+if [ -z "${AGENTTEAMS_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
+    log_info "SKIP: No GitHub token configured (set AGENTTEAMS_GITHUB_TOKEN or TEST_GITHUB_TOKEN)"
     test_teardown "08-github-mcp"
     test_summary
     exit 0

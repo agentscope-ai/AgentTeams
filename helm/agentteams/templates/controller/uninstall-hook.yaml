@@ -1,0 +1,109 @@
+{{- if .Values.controller.uninstallHook.enabled }}
+{{- $name := printf "%s-uninstall-cleanup" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- $ns := include "agentteams.namespace" . }}
+{{- $ctrlTag := include "agentteams.imageTag" (dict "tag" .Values.controller.image.tag "global" .Values.global "root" $) }}
+{{- $hookImage := printf "%s:%s" .Values.controller.image.repository $ctrlTag }}
+{{- $hookPullPolicy := default "IfNotPresent" .Values.controller.image.pullPolicy }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "uninstall-hook") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "uninstall-hook") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
+rules:
+  - apiGroups: ["agentteams.io"]
+    resources: ["managers", "workers", "teams", "humans"]
+    verbs: ["get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "uninstall-hook") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $ns }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agentteams.component.labels" (dict "root" . "component" "uninstall-hook") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.controller.uninstallHook.backoffLimit | default 1 }}
+  activeDeadlineSeconds: {{ .Values.controller.uninstallHook.activeDeadlineSeconds | default 1500 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentteams.component.selectorLabels" (dict "root" . "component" "uninstall-hook") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cleanup
+          image: {{ $hookImage | quote }}
+          imagePullPolicy: {{ $hookPullPolicy }}
+          env:
+            - name: NS
+              value: {{ $ns | quote }}
+            - name: TIMEOUT
+              value: {{ printf "%ds" (.Values.controller.uninstallHook.timeoutSeconds | default 300 | int) | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              echo "[agentteams-uninstall-cleanup] deleting CRs in namespace ${NS} (timeout per group: ${TIMEOUT})"
+              # Order: Manager first (it owns the admin DM room), then the
+              # rest. --ignore-not-found makes reruns idempotent. --wait=true
+              # blocks until each finalizer is processed by the controller,
+              # which is why this Job MUST run before the controller is
+              # deleted by the rest of the helm uninstall.
+              kubectl delete managers.agentteams.io --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              kubectl delete workers.agentteams.io  --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              kubectl delete teams.agentteams.io    --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              kubectl delete humans.agentteams.io   --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              echo "[agentteams-uninstall-cleanup] done"
+          {{- with .Values.controller.uninstallHook.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

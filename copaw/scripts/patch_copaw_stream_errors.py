@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Patch CoPaw exception classification for streaming disconnects.
 
-HiClaw currently deploys CoPaw from PyPI. Keep this image-local compatibility
+AgentTeams currently deploys CoPaw from PyPI. Keep this image-local compatibility
 patch fail-fast so an upstream exceptions.py shape change cannot silently build
 an image that still reports stream-idle disconnects as UnknownAgentException.
 """

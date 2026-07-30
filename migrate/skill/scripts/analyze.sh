@@ -1,5 +1,5 @@
 #!/bin/bash
-# analyze.sh - Analyze current OpenClaw environment for HiClaw migration
+# analyze.sh - Analyze current OpenClaw environment for AgentTeams migration
 #
 # Scans the OpenClaw state directory, workspace files, skills, cron jobs,
 # and system tool dependencies to produce a tool-analysis.json report.
@@ -13,7 +13,7 @@ set -e
 # Defaults
 # ============================================================
 STATE_DIR="${HOME}/.openclaw"
-OUTPUT_DIR="/tmp/hiclaw-migration"
+OUTPUT_DIR="/tmp/agentteams-migration"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -28,9 +28,9 @@ mkdir -p "${OUTPUT_DIR}"
 # ============================================================
 # Helpers
 # ============================================================
-log() { echo "[hiclaw-import $(date '+%H:%M:%S')] $1"; }
+log() { echo "[agentteams-import $(date '+%H:%M:%S')] $1"; }
 
-# Known commands that are pre-installed in the HiClaw worker base image
+# Known commands that are pre-installed in the AgentTeams worker base image
 # (from openclaw-base Dockerfile: git, python3, make, g++, curl, jq, nginx,
 #  gettext-base, openssh-client, ca-certificates, procps, tzdata, nodejs, pnpm, npm)
 BUILTIN_CMDS="bash sh cat ls cp mv rm mkdir rmdir chmod chown ln touch head tail tee wc sort uniq tr cut paste comm diff grep sed awk find xargs echo printf date sleep test expr env export read source true false cd pwd which whoami hostname uname id groups stat file du df free top ps kill pkill pgrep nohup timeout nice tar gzip gunzip bzip2 xz zip unzip less more strings od xxd base64 md5sum sha256sum openssl ssh ssh-keygen scp git python3 make g++ gcc curl wget jq nginx envsubst node npm npx pnpm mc openclaw mcporter skills"
@@ -134,9 +134,9 @@ CRON_CMDS_FILE="${OUTPUT_DIR}/cron-commands.txt"
 CRON_FILE="${STATE_DIR}/cron/jobs.json"
 if [ -f "${CRON_FILE}" ] && command -v jq &>/dev/null; then
     # Extract text from agentTurn payloads and scan for command references
-    jq -r '.[].payload.agentTurn.parts[]?.text // empty' "${CRON_FILE}" 2>/dev/null | \
+    jq -r '(if type == "object" then (.jobs // []) else . end)[] | .payload.agentTurn.parts[]?.text // empty' "${CRON_FILE}" 2>/dev/null | \
         grep -oE '`[a-zA-Z_][a-zA-Z0-9_-]*`' | tr -d '`' >> "${CRON_CMDS_FILE}" || true
-    jq -r '.[].payload.agentTurn.parts[]?.text // empty' "${CRON_FILE}" 2>/dev/null | \
+    jq -r '(if type == "object" then (.jobs // []) else . end)[] | .payload.agentTurn.parts[]?.text // empty' "${CRON_FILE}" 2>/dev/null | \
         grep -oE '^\s*[a-zA-Z_][a-zA-Z0-9_-]*' | sed 's/^[[:space:]]*//' >> "${CRON_CMDS_FILE}" || true
 fi
 
@@ -249,10 +249,10 @@ fi
 log "Step 7: Generating tool-analysis.json..."
 
 # Build JSON using jq
-APT_JSON=$(printf '%s\n' "${APT_PACKAGES[@]}" 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo '[]')
-PIP_JSON=$(printf '%s\n' "${PIP_PACKAGES[@]}" 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo '[]')
-NPM_JSON=$(printf '%s\n' "${NPM_PACKAGES[@]}" 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo '[]')
-UNKNOWN_JSON=$(printf '%s\n' "${UNKNOWN_BINARIES[@]}" 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo '[]')
+APT_JSON=$(jq -cn --args '$ARGS.positional' "${APT_PACKAGES[@]}" 2>/dev/null || echo '[]')
+PIP_JSON=$(jq -cn --args '$ARGS.positional' "${PIP_PACKAGES[@]}" 2>/dev/null || echo '[]')
+NPM_JSON=$(jq -cn --args '$ARGS.positional' "${NPM_PACKAGES[@]}" 2>/dev/null || echo '[]')
+UNKNOWN_JSON=$(jq -cn --args '$ARGS.positional' "${UNKNOWN_BINARIES[@]}" 2>/dev/null || echo '[]')
 
 # Count commands per source
 SKILL_COUNT=$(wc -l < "${SKILL_CMDS_FILE}" 2>/dev/null | tr -d ' ')

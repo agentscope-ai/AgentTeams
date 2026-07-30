@@ -83,6 +83,63 @@ def test_worker_port_can_be_explicit(tmp_path):
     assert config.worker_port == 19090
 
 
+def test_join_pending_matrix_invites_accepts_invited_rooms(tmp_path, monkeypatch):
+    import urllib.request
+
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, data=None):
+            self._data = data or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return json.dumps(self._data).encode()
+
+    def fake_urlopen(req, timeout=None):
+        requests.append((req.get_method(), req.full_url))
+        if "/sync?" in req.full_url:
+            return FakeResponse({
+                "rooms": {
+                    "invite": {
+                        "!team:test": {},
+                        "!dm:test": {},
+                    }
+                }
+            })
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    worker = Worker(_config(tmp_path))
+    worker._join_pending_matrix_invites({
+        "channels": {
+            "matrix": {
+                "homeserver": "http://matrix:6167",
+                "accessToken": "tok",
+            }
+        }
+    })
+
+    assert requests[0] == (
+        "GET",
+        "http://matrix:6167/_matrix/client/v3/sync?timeout=0&full_state=true",
+    )
+    assert requests[1] == (
+        "POST",
+        "http://matrix:6167/_matrix/client/v3/join/%21team%3Atest",
+    )
+    assert requests[2] == (
+        "POST",
+        "http://matrix:6167/_matrix/client/v3/join/%21dm%3Atest",
+    )
+
+
 async def _finished_push_loop(*_args, **_kwargs):
     return None
 

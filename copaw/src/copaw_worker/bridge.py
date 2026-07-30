@@ -1,5 +1,5 @@
 """
-Bridge: translate openclaw.json (HiClaw Worker config) into CoPaw's
+Bridge: translate openclaw.json (AgentTeams Worker config) into CoPaw's
 config.json + providers.json, then set COPAW_WORKING_DIR so CoPaw
 picks up the right workspace.
 """
@@ -20,7 +20,7 @@ from typing import Any
 def _port_remap(url: str, is_container: bool) -> str:
     """Remap container-internal :8080 to host-exposed gateway port when needed."""
     if not is_container and url and ":8080" in url:
-        gateway_port = os.environ.get("HICLAW_PORT_GATEWAY", "18080")
+        gateway_port = os.environ.get("AGENTTEAMS_PORT_GATEWAY", "18080")
         return url.replace(":8080", f":{gateway_port}")
     return url
 
@@ -48,7 +48,9 @@ def _patch_copaw_paths(working_dir: Path) -> None:
         import copaw.constant as _const
         _const.WORKING_DIR = working_dir
         _const.SECRET_DIR = secret_dir
-        _const.ACTIVE_SKILLS_DIR = working_dir / "active_skills"
+        _const.ACTIVE_SKILLS_DIR = (
+            working_dir / "workspaces" / "default" / "skills"
+        )
         _const.CUSTOMIZED_SKILLS_DIR = working_dir / "customized_skills"
         _const.MEMORY_DIR = working_dir / "memory"
         _const.CUSTOM_CHANNELS_DIR = working_dir / "custom_channels"
@@ -94,7 +96,7 @@ def _patch_copaw_paths(working_dir: Path) -> None:
         pass
 
 
-def bridge_openclaw_to_copaw(
+def bridge_controller_to_copaw(
     openclaw_cfg: dict[str, Any],
     working_dir: Path,
     *,
@@ -201,19 +203,14 @@ def _resolve_matrix_user_id(
 
     env_user_id = (
         os.environ.get("AGENTTEAMS_MATRIX_USER_ID")
-        or os.environ.get("HICLAW_MATRIX_USER_ID")
         or os.environ.get("COPAW_MATRIX_USER_ID")
     )
     if env_user_id:
         return env_user_id
 
-    matrix_domain = (
-        os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
-        or os.environ.get("HICLAW_MATRIX_DOMAIN")
-    )
+    matrix_domain = os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
     localpart = (
         os.environ.get("AGENTTEAMS_WORKER_NAME")
-        or os.environ.get("HICLAW_WORKER_NAME")
         or ("manager" if profile == "manager" else "")
     )
     if matrix_domain and localpart:
@@ -544,7 +541,7 @@ def _main_cli(argv=None):
     with open(openclaw_path) as f:
         controller_config = _json.load(f)
 
-    bridge_openclaw_to_copaw(
+    bridge_controller_to_copaw(
         controller_config,
         working_dir,
         profile=args.profile,

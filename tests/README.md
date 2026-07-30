@@ -1,4 +1,4 @@
-# HiClaw Integration Tests
+# AgentTeams Integration Tests
 
 Automated integration test suite that validates all 10 POC acceptance cases.
 
@@ -7,7 +7,7 @@ Automated integration test suite that validates all 10 POC acceptance cases.
 Tests simulate human interaction by calling the Matrix API directly, then verify system responses and side effects:
 
 ```
-Test Script                     HiClaw System
+Test Script                     AgentTeams System
     |                               |
     ├── Matrix API: send message ──>| Manager Agent processes
     |                               │ (creates Worker, assigns task, etc.)
@@ -40,7 +40,7 @@ Test Script                     HiClaw System
 
 ```bash
 # Full test flow (auto-creates and cleans up test container)
-HICLAW_LLM_API_KEY=sk-xxx make test
+AGENTTEAMS_LLM_API_KEY=sk-xxx make test
 
 # Skip image rebuild
 make test SKIP_BUILD=1
@@ -75,8 +75,8 @@ make test SKIP_INSTALL=1
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `HICLAW_LLM_API_KEY` | Yes | LLM API key for Agent behavior |
-| `HICLAW_GITHUB_TOKEN` | No | GitHub PAT for tests 08-11 |
+| `AGENTTEAMS_LLM_API_KEY` | Yes | LLM API key for Agent behavior |
+| `AGENTTEAMS_GITHUB_TOKEN` | No | GitHub PAT for tests 08-11 |
 
 ## Helper Libraries
 

@@ -3,7 +3,7 @@
     <img src="https://img.alicdn.com/imgextra/i3/O1CN01hRhtys1Y3svmSnfhX_!!6000000003004-2-tps-478-472.png" alt="AgentTeams"  width="290" height="290">
 
 <p align="center">
-  <a href="https://deepwiki.com/higress-group/hiclaw"><img src="https://img.shields.io/badge/DeepWiki-Ask_AI-navy.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==" alt="DeepWiki"></a>
+  <a href="https://deepwiki.com/agentscope-ai/AgentTeams"><img src="https://img.shields.io/badge/DeepWiki-Ask_AI-navy.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==" alt="DeepWiki"></a>
   <a href="https://discord.com/invite/NVjNA4BAVw"><img src="https://img.shields.io/badge/Discord-Join_Us-blueviolet.svg?logo=discord" alt="Discord"></a>
   <a href="https://qr.dingtalk.com/action/joingroup?code=v1,k1,MF0nEpuU3YkW2aBsoyJE0mUM3LFDSBqMGvRmTIjUQNk=&_dt_no_comment=1&origin=11?"><img src="https://img.shields.io/badge/DingTalk-Join_Us-orange.svg" alt="DingTalk"></a>
 </p>
@@ -12,7 +12,7 @@
 
 [English](./README.md) | [中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
-**AgentTeams（原 HiClaw）是一个开源的协作式多智能体运行平台。让多个 Agent 在一个受控、可审计的房间中协作，人类全程可见、随时可介入。 采用 Manager-Workers 架构，Manager 统一调度多个 Workers，专注于企业内的人和 Agent、Agents 之间的协作场景。**
+**AgentTeams 是一个开源的协作式多智能体运行平台。让多个 Agent 在一个受控、可审计的房间中协作，人类全程可见、随时可介入。采用 Manager-Workers 架构，Manager 统一调度多个 Workers，专注于企业内的人和 Agent、Agents 之间的协作场景。**
 
 AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agent 容器（Manager 和众多 Workers）。
 - 🧑‍💻 **设计了 Manger-Workers 架构**：不用真人去管理每个干活的 Worker Claw，实现由 Agent 管理 Agents。
@@ -20,18 +20,20 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 - 📚 **引入 MinIO 共享文件系统**：用于 Agent 之间的信息共享，大幅降低多 Agent 协作带来的 Token 消耗。
 - ⛑️ **引入 Higress AI Gateway**：流量入口和各类凭证风险降低了，减少了用户对原生龙虾在安全上的顾虑。
 - 🎨 **使用 Element IM 客户端+Tuwunel IM 服务器（均基于 Matrix 实时通信协议）**：节省钉钉、飞书 IM 的接入和企业内的审批成本，方便用户快速体验在 IM 的交互环境中体验模型服务的"爽感"，同时支持以 OpenClaw 原生的方式接入 IM。
+- 🧬 **集成** [AgentLoop](https://www.aliyun.com/product/agentloop?spm=at.readme.0.0.0) ：提供 Agent 全栈观测与审计、Agent 评估与实验、Agent 资产管理与持续优化等能力。
 
 ![架构](https://img.alicdn.com/imgextra/i4/O1CN01c1VlDE1zYZ46EW3OA_!!6000000006726-49-tps-9895-8231.webp)
 
 ## 动态
-- **2026-05-27:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2：安装器默认改为 QwenPaw 运行时并支持 keep-all 升级；Team 支持人类协调员，Team Leader 协作工具刷新；控制器支持 Nacos 远程技能与 `sts-hiclaw` / `ai-registry` STS 凭据；Worker 控制器资源名与运行时名称解耦；新增控制器 reconcile 指标与优雅退出。
+- **2026-07-17:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0-beta.1) —  AgentTeams v1.2.0-beta.1（预发布版）：完成了从已停用的前代产品的公开更名，覆盖镜像、Kubernetes API、Helm、Matrix、存储和运行时契约；新增插件平台、TeamHarness 与 WorkerFlow 集成、Matrix AppService 与 Human SSO、模型提供方路由与 LLM 预检，以及更丰富的控制器可观测性。Beta 版安装需显式手动启用（opt-in），而稳定版默认仍为 v1.1.2。
+- **2026-05-27:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2：安装器默认改为 QwenPaw 运行时并支持 keep-all 升级；Team 支持人类协调员，Team Leader 协作工具刷新；控制器支持 Nacos 远程技能与 `sts-agentteams` / `ai-registry` STS 凭据；Worker 控制器资源名与运行时名称解耦；新增控制器 reconcile 指标与优雅退出。
 - **2026-05-07:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1：Worker/Manager/Team CRD 上的声明式 MCP（破坏性变更）并扩展至 Team Leader；CR 支持自定义 `spec.env`；新增 Token Plan、Qwen 国际线路与 `qwen3.6-plus` 模型；Helm 控制器 RBAC 收敛到单命名空间；Worker 包可不含 `SOUL.md`。
-- **2026-04-24:** [English](blog/hiclaw-1.1.0-release.md) | [中文](blog/zh-cn/hiclaw-1.1.0-release.md) — AgentTeams v1.1.0：Kubernetes 原生控制面、Hermes 自主编程 Agent 运行时、镜像体积减少 1.7 GB，`hiclaw` CLI 替代 shell 脚本。
-- **2026-04-14:** [English](blog/hiclaw-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/hiclaw-k8s-native-multi-agent-collaboration.zh-CN.md) — 深度解析：AgentTeams 作为基于 Kubernetes 原生的多 Agent 协作编排系统。
+- **2026-04-24:** [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0：Kubernetes 原生控制面、Hermes 自主编程 Agent 运行时、镜像体积减少 1.7 GB，`agt` CLI 替代 shell 脚本。
+- **2026-04-14:** [English](blog/agentteams-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/agentteams-k8s-native-multi-agent-collaboration.zh-CN.md) — 深度解析：AgentTeams 作为基于 Kubernetes 原生的多 Agent 协作编排系统。
 - **2026-04-03:** [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9 发布：Kubernetes 风格声明式资源管理（YAML 定义 Worker、Team、Human）；上线 Worker 模板市场；支持 Manager QwenPaw 运行时；新增 Nacos Skills 注册中心等。
-- **2026-03-14:** [English](blog/hiclaw-1.0.6-release.md) | [中文](blog/zh-cn/hiclaw-1.0.6-release.md) — AgentTeams 1.0.6：企业级 MCP Server 管理，凭证零暴露；Worker 经 Higress AI Gateway 安全调用 MCP。
-- **2026-03-10:** [English](blog/hiclaw-1.0.4-release.md) | [中文](blog/zh-cn/hiclaw-1.0.4-release.md) — AgentTeams 1.0.4：支持 QwenPaw（原 CoPaw）Worker，内存占用降低约 80%，本地模式可操作浏览器。
-- **2026-03-04:** [English](blog/hiclaw-announcement.md) | [中文](blog/zh-cn/hiclaw-announcement.md) — AgentTeams（彼时名为 HiClaw）开源，引入 Manager Agent 与多 Agent 协同平台能力。
+- **2026-03-14:** [English](blog/agentteams-1.0.6-release.md) | [中文](blog/zh-cn/agentteams-1.0.6-release.md) — AgentTeams 1.0.6：企业级 MCP Server 管理，凭证零暴露；Worker 经 Higress AI Gateway 安全调用 MCP。
+- **2026-03-10:** [English](blog/agentteams-1.0.4-release.md) | [中文](blog/zh-cn/agentteams-1.0.4-release.md) — AgentTeams 1.0.4：支持 QwenPaw（原 CoPaw）Worker，内存占用降低约 80%，本地模式可操作浏览器。
+- **2026-03-04:** [English](blog/agentteams-announcement.md) | [中文](blog/zh-cn/agentteams-announcement.md) — AgentTeams 以其旧名称开源，引入 Manager Agent 与多 Agent 协同平台能力。
 
 ## 为什么选 AgentTeams
 
@@ -62,13 +64,13 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 第一步：打开终端，Mac 系统输入以下安装命令。
 
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 **Windows（建议 PowerShell 7+）输入以下安装命令：**
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
 这里，输入 Mac 系统的安装命令。
@@ -77,7 +79,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 第三步：选择安装模式，快速开始请选择阿里云百炼快速安装。您也可以选择其他模型服务，手动配置。
 
-第四步：选择大模型服务商。选择百炼，您也可以接入其他支持 OpenAPI 协议的模型服务，目前 Anthropic 协议还未支持，排期中。
+第四步：选择大模型服务商。快速开始会默认使用阿里云百炼；如果使用 DeepSeek、OpenAI、Qwen 国际站、自部署模型等服务，请选择手动配置里的 **OpenAI 兼容 API**，并填写对应的 Base URL、API Key 和模型 ID。Base URL 通常需要包含 `/v1`，例如 `https://api.deepseek.com/v1`。
 
 第五步：选择模型接口。百炼 Coding Plan 和百炼通用接口有所不同，这里我们选择 Coding Plan 接口。[购买Coding Plan](https://bailian.console.aliyun.com/cn-beijing/?source_channel=4qjGAvs1Pl&tab=coding-plan#/efm/index)
 
@@ -86,7 +88,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 第七步：开始测试 API 联通性，若测试成功，效果如下。
 ![测试](https://img.alicdn.com/imgextra/i4/O1CN0148wFGG1lYeWKd3Uat_!!6000000004831-2-tps-1752-600.png)
 
-若测试不成功，您需要检查模粘贴的型 API Key是否完整或无空格，若再次尝试仍无法通过，建议像模型服务厂商提交服务工单。
+若测试不成功，您需要检查粘贴的模型 API Key 是否完整或无空格、Base URL 是否包含服务商要求的路径（常见为 `/v1`）、模型 ID 是否正确。再次尝试仍无法通过时，建议向对应模型服务厂商提交服务工单。
 
 第八步：选择网络访问模式。这里我们选择仅本机使用，若允许外部访问，例如和同事建立 Matrix roon，则选择允许外部访问。选择后，按回车键即可，确定端口号、网关主机端口、Higress 控制台主机端口、Maxtrix 域名、Element Web 直接访问的主机端口、文件系统域名等，均采用默认值，无须手动配置。
 
@@ -110,14 +112,14 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 每次更新新版本，您在终端执行以下命令，即可原地升级，默认升级到最新版本：
 
 ```bash
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 就地升级，数据和配置会保留；全新重新，会删除所有数据。
 
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-HICLAW_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+AGENTTEAMS_VERSION=v1.0.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 
@@ -125,12 +127,12 @@ HICLAW_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.sh) uninstall
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/higress-group/hiclaw/main/install/hiclaw-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 将移除所有 AgentTeams 容器（Manager、Worker、docker-proxy）、Docker 卷、网络、env 文件、工作空间目录和安装日志。
@@ -151,8 +153,8 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 helm repo add higress.io https://higress.io/helm-charts
 helm repo update
 
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<你的-API-Key> \
   --set credentials.adminPassword=<你的-管理员密码> \
@@ -162,8 +164,8 @@ helm install hiclaw higress.io/hiclaw \
 如果使用非 OpenAI 但兼容 OpenAI API 的服务商，还需设置 `llmBaseUrl`：
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<你的-API-Key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -176,8 +178,8 @@ helm install hiclaw higress.io/hiclaw \
 <summary>使用通义千问（Qwen）</summary>
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set credentials.llmApiKey=<你的-通义千问-API-Key> \
   --set credentials.llmProvider=qwen \
@@ -203,8 +205,8 @@ helm install hiclaw higress.io/hiclaw \
 <summary>使用其他运行时（QwenPaw Manager + Hermes Workers）</summary>
 
 ```bash
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace --devel \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace --devel \
   --set manager.runtime=copaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
@@ -214,7 +216,7 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各组件镜像会根据运行时自动选择（Manager: `hiclaw-manager` / `hiclaw-manager-copaw`；Worker: `hiclaw-worker` / `hiclaw-copaw-worker` / `hiclaw-hermes-worker`）。
+各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-copaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
 
 </details>
 
@@ -230,8 +232,8 @@ helm install hiclaw higress.io/hiclaw \
 
 ```bash
 # 示例：使用北美镜像仓库部署
-helm install hiclaw higress.io/hiclaw \
-  -n hiclaw-system --create-namespace \
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
   --render-subchart-notes \
   --set global.imageRegistry=higress-registry.us-west-1.cr.aliyuncs.com/higress \
   --set credentials.llmApiKey=<你的-API-Key> \
@@ -239,28 +241,86 @@ helm install hiclaw higress.io/hiclaw \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-完整可配置项（网关/存储 provider、镜像 tag、资源、持久化等）请参考 [`helm/hiclaw/values.yaml`](helm/hiclaw/values.yaml)。
+完整可配置项（网关/存储 provider、镜像 tag、资源、持久化等）请参考 [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml)。
 
 **访问**
 
+临时从本机管理集群时，可以转发 Higress Gateway：
+
 ```bash
-kubectl port-forward -n hiclaw-system svc/higress-gateway 18080:80
+kubectl port-forward -n agentteams-system svc/higress-gateway 18080:80
 ```
 
-然后在浏览器中打开 http://localhost:18080 登录 Element Web。生产集群中请通过 Ingress / LoadBalancer / DNS 指向 `svc/higress-gateway`，并相应地修改 `gateway.publicURL`。
+然后在浏览器中打开 http://localhost:18080 登录 Element Web。命令退出后转发即停止，
+因此该方式不适合多人共享。
+
+公司内网或公网访问时，只需通过 HTTPS Ingress 或 LoadBalancer 暴露
+`svc/higress-gateway`。`gateway.publicURL` 会写入 Element Web 配置，作为 Matrix
+Homeserver 地址，因此必须与用户实际打开的公网 Origin 完全一致，例如
+`https://agentteams.example.com`。
+
+1. 将公网域名解析到 Ingress Controller 或负载均衡器。
+2. 在 `agentteams-system` 命名空间中准备 TLS 证书 Secret。
+3. 在 Helm Release 中设置相同的公网地址：
+
+```bash
+helm upgrade agentteams higress.io/agentteams \
+  -n agentteams-system --reuse-values \
+  --set gateway.publicURL=https://agentteams.example.com
+```
+
+4. 将该域名路由到 Higress Gateway。以下通用示例假设使用 NGINX
+   IngressClass，并已存在 `agentteams-tls` Secret；请按集群实际情况替换：
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentteams
+  namespace: agentteams-system
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - agentteams.example.com
+      secretName: agentteams-tls
+  rules:
+    - host: agentteams.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: higress-gateway
+                port:
+                  number: 80
+```
+
+DNS 与 TLS 生效后，分别验证 Web 入口和 Matrix 路由：
+
+```bash
+curl -fsSI https://agentteams.example.com/
+curl -fsS https://agentteams.example.com/_matrix/client/versions
+```
+
+Controller API、Tuwunel、MinIO 和 Higress Console 应保持集群内访问；如确需暴露，
+请另行配置身份认证和网络策略。多人共享时必须使用 HTTPS，因为 Matrix 登录凭据和
+Access Token 都会经过该入口。也可以用 `LoadBalancer` Service 代替 Ingress，但 DNS、
+TLS 和 `gateway.publicURL` 的要求不变。
 
 **升级**
 
 ```bash
 helm repo update
-helm upgrade hiclaw higress.io/hiclaw -n hiclaw-system --reuse-values
+helm upgrade agentteams higress.io/agentteams -n agentteams-system --reuse-values
 ```
 
 **卸载**
 
 ```bash
-helm uninstall hiclaw -n hiclaw-system
-kubectl delete namespace hiclaw-system
+helm uninstall agentteams -n agentteams-system
+kubectl delete namespace agentteams-system
 ```
 
 更深入的 K8s Native 架构说明（CRD、Controller、声明式 `Worker` / `Team` / `Human` 资源）请参考 [docs/zh-cn/k8s-native-agent-orch.md](docs/zh-cn/k8s-native-agent-orch.md)。
@@ -342,19 +402,19 @@ AgentTeams 支持三种 Worker 运行时，可以**在同一个 IM 房间中共�
 
 ```bash
 # 原地切换任意 Worker 的运行时
-hiclaw update worker --runtime hermes
+agt update worker --runtime hermes
 ```
 
 ## 架构
 
 ```
 ┌───────────────────────────────────────────────┐
-│            hiclaw-controller                  │
+│            agentteams-controller                  │
 │  Higress │ Tuwunel │ MinIO │ Element Web      │
 └──────────────────┬────────────────────────────┘
                    │ Matrix + HTTP Files
 ┌──────────────────┴──────────┐
-│     hiclaw-manager-agent     │
+│     agentteams-manager-agent     │
 │     Manager (OpenClaw/       │
 │       QwenPaw)               │
 └──────────────────┬──────────┘
@@ -368,7 +428,7 @@ Worker Alice    Worker Bob              Worker Charlie
 
 | 组件 | 职责 |
 |------|------|
-| hiclaw-controller | Kubernetes 原生控制平面，协调 Worker/Team/Manager CR |
+| agentteams-controller | Kubernetes 原生控制平面，协调 Worker/Team/Manager CR |
 | Higress AI 网关 | LLM 代理、MCP Server 托管、凭证管理 |
 | Tuwunel (Matrix) | 自建 IM 服务器，承载所有 Agent + 人类通信 |
 | Element Web | 浏览器客户端，零配置 |
@@ -378,7 +438,7 @@ Worker Alice    Worker Bob              Worker Charlie
 如果 Manager 容器启动失败，执行以下命令查看具体原因：
 
 ```bash
-docker exec -it hiclaw-manager cat /var/log/hiclaw/manager-agent.log
+docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
 更多常见问题（启动超时、局域网访问等）参见 [docs/zh-cn/faq.md](docs/zh-cn/faq.md)。
@@ -432,7 +492,7 @@ make replay TASK="创建一个名为 alice 的前端开发 Worker"
 make uninstall
 
 # 推送多架构镜像
-make push VERSION=0.1.0 REGISTRY=ghcr.io REPO=higress-group/hiclaw
+make push VERSION=0.1.0 REGISTRY=ghcr.io REPO=agentscope-ai/AgentTeams
 
 make help  # 查看所有可用目标
 ```

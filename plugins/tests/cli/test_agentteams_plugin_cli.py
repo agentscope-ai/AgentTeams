@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -196,6 +197,30 @@ class AgentTeamsPluginCliTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ERROR:", result.stdout + result.stderr)
         self.assertNotIn("Traceback", result.stdout + result.stderr)
+
+    def test_cli_rejects_tar_symlink_escape(self) -> None:
+        package = self.project / "symlink-escape.tar.gz"
+        outside = self.project / "outside"
+        outside.mkdir()
+        payload = b"escaped\n"
+
+        with tarfile.open(package, "w:gz") as archive:
+            link = tarfile.TarInfo("teamharness/escape")
+            link.type = tarfile.SYMTYPE
+            link.linkname = str(outside)
+            archive.addfile(link)
+
+            member = tarfile.TarInfo("teamharness/escape/pwned.txt")
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+
+        result = self.run_agentteams(
+            "plugin", "install", "teamharness", "--package", str(package)
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe tar member", result.stdout + result.stderr)
+        self.assertFalse((outside / "pwned.txt").exists())
 
 
 if __name__ == "__main__":

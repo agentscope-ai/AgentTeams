@@ -8,7 +8,7 @@
 #    files and picks up live. Memory preserved.
 #
 # 2. Runtime switch (when --runtime is provided): delegates to
-#    `hiclaw update worker --runtime <RUNTIME> ...` and polls until
+#    `agt update worker --runtime <RUNTIME> ...` and polls until
 #    phase=Running. Controller's reconcile destroys the old container and
 #    creates a new one with the new runtime image; agent config files are
 #    regenerated from the new runtime's templates. Matrix account, room,
@@ -24,10 +24,10 @@
 #   - Credentials at /data/worker-creds/<NAME>.env (in-place mode only)
 
 set -e
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 log() {
-    local msg="[hiclaw $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    local msg="[agentteams $(date '+%Y-%m-%d %H:%M:%S')] $1"
     echo "${msg}"
     if [ -w /proc/1/fd/1 ]; then
         echo "${msg}" > /proc/1/fd/1
@@ -70,12 +70,12 @@ if [ -z "${WORKER_NAME}" ]; then
 fi
 
 # ============================================================
-# Runtime switch mode: delegate to `hiclaw update worker` and poll.
+# Runtime switch mode: delegate to `agt update worker` and poll.
 #
 # Why: changing runtime requires destroying the old container and
 # starting a new one from a different image (openclaw vs copaw vs
 # hermes vs openhuman). The controller's reconcile loop is the only path that
-# does this correctly — see hiclaw-controller/internal/controller/
+# does this correctly — see agentteams-controller/internal/controller/
 # member_reconcile.go::ensureMemberContainerPresent. Trying to do
 # it in-place from the manager would double-write config files and
 # leave the running container on the old runtime.
@@ -103,9 +103,9 @@ if [ -n "${RUNTIME}" ]; then
     [ -n "${WORKER_SKILLS}" ] && CLI_ARGS+=(--skills "${WORKER_SKILLS}")
     [ -n "${MCP_SERVERS}" ]   && CLI_ARGS+=(--mcp-servers "${MCP_SERVERS}")
 
-    log "Step 1: Calling: hiclaw ${CLI_ARGS[*]}"
-    if ! CLI_OUT=$(hiclaw "${CLI_ARGS[@]}" 2>&1); then
-        _fail "hiclaw update worker failed: ${CLI_OUT}"
+    log "Step 1: Calling: agentteams ${CLI_ARGS[*]}"
+    if ! CLI_OUT=$(agentteams "${CLI_ARGS[@]}" 2>&1); then
+        _fail "agt update worker failed: ${CLI_OUT}"
     fi
     log "  ${CLI_OUT}"
 
@@ -119,7 +119,7 @@ if [ -n "${RUNTIME}" ]; then
     MESSAGE=""
     CURRENT_RUNTIME=""
     while [ "$(date +%s)" -lt "${POLL_DEADLINE}" ]; do
-        WORKER_JSON=$(hiclaw get workers -o json 2>/dev/null \
+        WORKER_JSON=$(agt get workers -o json 2>/dev/null \
             | jq -c --arg n "${WORKER_NAME}" '.workers[]? | select(.name == $n)')
         if [ -n "${WORKER_JSON}" ]; then
             PHASE=$(echo "${WORKER_JSON}" | jq -r '.phase // ""')
@@ -158,8 +158,8 @@ if [ -n "${RUNTIME}" ]; then
     exit 0
 fi
 
-MATRIX_DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:8080}"
-ADMIN_USER="${HICLAW_ADMIN_USER:-admin}"
+MATRIX_DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:8080}"
+ADMIN_USER="${AGENTTEAMS_ADMIN_USER:-admin}"
 
 log "=== Updating Worker: ${WORKER_NAME} ==="
 log "  Memory: preserved (not overwritten)"
@@ -176,7 +176,7 @@ fi
 source "${WORKER_CREDS_FILE}"
 
 # Get fresh Matrix token via login
-WORKER_MATRIX_TOKEN=$(curl -sf -X POST ${HICLAW_MATRIX_URL}/_matrix/client/v3/login \
+WORKER_MATRIX_TOKEN=$(curl -sf -X POST ${AGENTTEAMS_MATRIX_URL}/_matrix/client/v3/login \
     -H 'Content-Type: application/json' \
     -d '{
         "type": "m.login.password",
@@ -197,7 +197,7 @@ log "  Credentials loaded"
 # ============================================================
 if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     log "Step 2: Deploying package contents..."
-    AGENT_DIR="/root/hiclaw-fs/agents/${WORKER_NAME}"
+    AGENT_DIR="/root/agentteams-fs/agents/${WORKER_NAME}"
 
     # Copy config/ contents (SOUL.md, etc.) — overwrites existing
     # AGENTS.md is handled specially: user content wrapped with builtin markers
@@ -207,8 +207,8 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
             FNAME=$(basename "$f")
             if [ "${FNAME}" = "AGENTS.md" ]; then
                 # Wrap user AGENTS.md with builtin markers so merge logic works
-                source /opt/hiclaw/scripts/lib/builtin-merge.sh
-                if ! grep -q 'hiclaw-builtin-start' "$f" 2>/dev/null; then
+                source /opt/agentteams/scripts/lib/builtin-merge.sh
+                if ! grep -q 'agentteams-builtin-start' "$f" 2>/dev/null; then
                     {
                         printf '%s\n' "${BUILTIN_HEADER}"
                         printf '%s\n' "${BUILTIN_END}"
@@ -238,20 +238,20 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
 
     # Re-merge builtin section into AGENTS.md
     log "  Re-merging builtin AGENTS.md section..."
-    source /opt/hiclaw/scripts/lib/builtin-merge.sh
+    source /opt/agentteams/scripts/lib/builtin-merge.sh
 
     # Determine correct agent source for builtin content
-    REGISTRY_FILE="${HOME}/workers-registry.json"
-    _role=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].role // "worker"' "${REGISTRY_FILE}" 2>/dev/null || echo "worker")
-    _runtime=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].runtime // "openclaw"' "${REGISTRY_FILE}" 2>/dev/null || echo "openclaw")
-    if [ "${_role}" = "team_leader" ] && [ -d "/opt/hiclaw/agent/team-leader-agent" ]; then
-        _agent_src="/opt/hiclaw/agent/team-leader-agent"
+    _worker_json=$(agt get workers "${WORKER_NAME}" -o json)
+    _role=$(echo "${_worker_json}" | jq -r '.role // "worker"')
+    _runtime=$(echo "${_worker_json}" | jq -r '.runtime // "openclaw"')
+    if [ "${_role}" = "team_leader" ] && [ -d "/opt/agentteams/agent/team-leader-agent" ]; then
+        _agent_src="/opt/agentteams/agent/team-leader-agent"
     elif [ "${_runtime}" = "copaw" ]; then
-        _agent_src="/opt/hiclaw/agent/copaw-worker-agent"
+        _agent_src="/opt/agentteams/agent/copaw-worker-agent"
     elif [ "${_runtime}" = "hermes" ]; then
-        _agent_src="/opt/hiclaw/agent/hermes-worker-agent"
+        _agent_src="/opt/agentteams/agent/hermes-worker-agent"
     else
-        _agent_src="/opt/hiclaw/agent/worker-agent"
+        _agent_src="/opt/agentteams/agent/worker-agent"
     fi
 
     if [ -f "${_agent_src}/AGENTS.md" ]; then
@@ -260,40 +260,41 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     fi
 
     # Re-inject team-context coordination block
-    _team_id=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].team_id // empty' "${REGISTRY_FILE}" 2>/dev/null)
+    _team_id=$(echo "${_worker_json}" | jq -r '.team // empty')
     _team_leader=""
+    _team_json='{}'
     if [ -n "${_team_id}" ] && [ "${_role}" = "worker" ]; then
-        TEAMS_REGISTRY="${HOME}/teams-registry.json"
-        if [ -f "${TEAMS_REGISTRY}" ]; then
-            _team_leader=$(jq -r --arg t "${_team_id}" '.teams[$t].leader // empty' "${TEAMS_REGISTRY}" 2>/dev/null)
-        fi
+        _team_json=$(agt get teams "${_team_id}" -o json)
+        _team_leader=$(echo "${_team_json}" | jq -r '.leaderName // empty')
+    elif [ -n "${_team_id}" ]; then
+        _team_json=$(agt get teams "${_team_id}" -o json)
     fi
 
     _ctx_tmp=$(mktemp /tmp/team-ctx-update-XXXXXX.md)
     if [ -n "${_team_leader}" ]; then
         cat > "${_ctx_tmp}" <<TEAMCTX
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 
 - **Coordinator**: @${_team_leader}:${MATRIX_DOMAIN} (Team Leader of ${_team_id})
 - Report task completion, blockers, and questions to your coordinator
 - Only respond to @mentions from your coordinator and Admin
 - Do NOT @mention Manager directly — all communication goes through your Team Leader
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 TEAMCTX
     elif [ "${_role}" = "team_leader" ]; then
-        _team_workers=$(jq -r --arg t "${_team_id}" '.teams[$t].workers // [] | join(", ")' "${HOME}/teams-registry.json" 2>/dev/null)
-        _team_room_id=$(jq -r --arg t "${_team_id}" '.teams[$t].team_room_id // empty' "${HOME}/teams-registry.json" 2>/dev/null)
-        _leader_dm_room_id=$(jq -r --arg t "${_team_id}" '.teams[$t].leader_dm_room_id // empty' "${HOME}/teams-registry.json" 2>/dev/null)
-        _team_admin_mid=$(jq -r --arg t "${_team_id}" '.teams[$t].admin.matrix_user_id // empty' "${HOME}/teams-registry.json" 2>/dev/null)
-        _worker_rooms=$(jq -r --arg t "${_team_id}" '
-            [.workers | to_entries[] | select(.value.team_id == $t and .value.role == "worker") |
-             "  - @\(.key):__DOMAIN__ — Room: \(.value.room_id // "unknown")"] | join("\n")' "${REGISTRY_FILE}" 2>/dev/null)
+        _team_workers=$(echo "${_team_json}" | jq -r '.workerNames // [] | join(", ")')
+        _team_room_id=$(echo "${_team_json}" | jq -r '.teamRoomID // empty')
+        _leader_dm_room_id=$(echo "${_team_json}" | jq -r '.leaderDMRoomID // empty')
+        _team_admin_mid=$(echo "${_team_json}" | jq -r '.admin.matrixUserId // empty')
+        _worker_rooms=$(agt get workers --team "${_team_id}" -o json | jq -r '
+            [.workers[] | select(.role == "worker") |
+             "  - @\(.name):__DOMAIN__ — Room: \(.roomID // "unknown")"] | join("\n")')
         _worker_rooms=$(echo "${_worker_rooms}" | sed "s/__DOMAIN__/${MATRIX_DOMAIN}/g")
         cat > "${_ctx_tmp}" <<LEADERCTX
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 
 - **Upstream coordinator**: @manager:${MATRIX_DOMAIN} (Manager) — you receive tasks from Manager
@@ -304,27 +305,28 @@ $([ -n "${_leader_dm_room_id}" ] && echo "- **Leader DM**: ${_leader_dm_room_id}
 $([ -n "${_worker_rooms}" ] && echo "- **Team Workers**:" && echo "${_worker_rooms}")
 - You decompose tasks from Manager or Team Admin and assign sub-tasks to your team workers
 - @mention workers in the Team Room for task assignment
+- This Coordination block is already loaded into your system prompt; use these room IDs and worker Matrix IDs directly, without narrating topology checks or AGENTS.md reads
 - Report results to Manager (in Leader Room) or Team Admin (in Leader DM) based on task source
 - @mention Manager only for: task completion, blockers, escalations
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 LEADERCTX
     else
         cat > "${_ctx_tmp}" <<STDCTX
 
-<!-- hiclaw-team-context-start -->
+<!-- agentteams-team-context-start -->
 ## Coordination
 
 - **Coordinator**: @manager:${MATRIX_DOMAIN} (Manager)
 - Report task completion, blockers, and questions to your coordinator
 - Only respond to @mentions from your coordinator and Admin
-<!-- hiclaw-team-context-end -->
+<!-- agentteams-team-context-end -->
 STDCTX
     fi
 
     # Remove existing team-context, insert after builtin-end
-    sed -i '/<!-- hiclaw-team-context-start -->/,/<!-- hiclaw-team-context-end -->/d' "${AGENT_DIR}/AGENTS.md" 2>/dev/null || true
-    if grep -q 'hiclaw-builtin-end' "${AGENT_DIR}/AGENTS.md"; then
-        sed -i "/<!-- hiclaw-builtin-end -->/r ${_ctx_tmp}" "${AGENT_DIR}/AGENTS.md"
+    sed -i '/<!-- agentteams-team-context-start -->/,/<!-- agentteams-team-context-end -->/d' "${AGENT_DIR}/AGENTS.md" 2>/dev/null || true
+    if grep -q 'agentteams-builtin-end' "${AGENT_DIR}/AGENTS.md"; then
+        sed -i "/<!-- agentteams-builtin-end -->/r ${_ctx_tmp}" "${AGENT_DIR}/AGENTS.md"
     else
         cat "${_ctx_tmp}" >> "${AGENT_DIR}/AGENTS.md"
     fi
@@ -340,19 +342,13 @@ fi
 if [ -n "${MODEL_ID}" ]; then
     log "Step 3: Regenerating openclaw.json (model=${MODEL_ID})..."
 
-    # Read team-leader from registry if this is a team worker
+    # Read Team membership from the Controller API.
     TEAM_LEADER=""
-    REGISTRY_FILE="${HOME}/workers-registry.json"
-    if [ -f "${REGISTRY_FILE}" ]; then
-        WORKER_ROLE=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].role // "worker"' "${REGISTRY_FILE}" 2>/dev/null)
-        WORKER_TEAM=$(jq -r --arg w "${WORKER_NAME}" '.workers[$w].team_id // empty' "${REGISTRY_FILE}" 2>/dev/null)
-        if [ "${WORKER_ROLE}" = "worker" ] && [ -n "${WORKER_TEAM}" ]; then
-            # Find team leader from teams-registry
-            TEAMS_REGISTRY="${HOME}/teams-registry.json"
-            if [ -f "${TEAMS_REGISTRY}" ]; then
-                TEAM_LEADER=$(jq -r --arg t "${WORKER_TEAM}" '.teams[$t].leader // empty' "${TEAMS_REGISTRY}" 2>/dev/null)
-            fi
-        fi
+    _worker_json=$(agt get workers "${WORKER_NAME}" -o json)
+    WORKER_ROLE=$(echo "${_worker_json}" | jq -r '.role // "worker"')
+    WORKER_TEAM=$(echo "${_worker_json}" | jq -r '.team // empty')
+    if [ "${WORKER_ROLE}" = "worker" ] && [ -n "${WORKER_TEAM}" ]; then
+        TEAM_LEADER=$(agt get teams "${WORKER_TEAM}" -o json | jq -r '.leaderName // empty')
     fi
 
     GEN_ARGS=("${WORKER_NAME}" "${WORKER_MATRIX_TOKEN}" "${WORKER_KEY}" "${MODEL_ID}")
@@ -361,7 +357,7 @@ if [ -n "${MODEL_ID}" ]; then
     fi
 
     # Persist new comm policy if provided, then export for generate-worker-config.sh
-    AGENT_DIR="/root/hiclaw-fs/agents/${WORKER_NAME}"
+    AGENT_DIR="/root/agentteams-fs/agents/${WORKER_NAME}"
     POLICY_FILE="${AGENT_DIR}/channel-policy.json"
     if [ -n "${CHANNEL_POLICY_JSON}" ]; then
         echo "${CHANNEL_POLICY_JSON}" > "${POLICY_FILE}"
@@ -370,7 +366,7 @@ if [ -n "${MODEL_ID}" ]; then
         export WORKER_CHANNEL_POLICY=$(cat "${POLICY_FILE}")
     fi
 
-    bash /opt/hiclaw/agent/skills/worker-management/scripts/generate-worker-config.sh "${GEN_ARGS[@]}"
+    bash /opt/agentteams/agent/skills/worker-management/scripts/generate-worker-config.sh "${GEN_ARGS[@]}"
     log "  openclaw.json regenerated"
 else
     log "Step 3: No model change (skipped)"
@@ -381,7 +377,7 @@ fi
 # ============================================================
 if [ -n "${WORKER_SKILLS}" ]; then
     log "Step 4: Pushing skills..."
-    bash /opt/hiclaw/agent/skills/worker-management/scripts/push-worker-skills.sh \
+    bash /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
         --worker "${WORKER_NAME}" --no-notify \
         || log "  WARNING: push-worker-skills.sh returned non-zero"
     log "  Skills pushed"
@@ -394,7 +390,7 @@ fi
 # ============================================================
 if [ -n "${MCP_SERVERS}" ]; then
     log "Step 5: Reauthorizing MCP servers..."
-    source /opt/hiclaw/scripts/lib/gateway-api.sh
+    source /opt/agentteams/scripts/lib/gateway-api.sh
     gateway_ensure_session || log "  WARNING: Failed to establish gateway session"
     CONSUMER_NAME="worker-${WORKER_NAME}"
     gateway_authorize_mcp "${CONSUMER_NAME}" "${MCP_SERVERS}" \
@@ -409,8 +405,8 @@ fi
 # ============================================================
 log "Step 6: Syncing config to MinIO (memory preserved)..."
 ensure_mc_credentials 2>/dev/null || true
-mc mirror "/root/hiclaw-fs/agents/${WORKER_NAME}/" \
-    "${HICLAW_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
+mc mirror "/root/agentteams-fs/agents/${WORKER_NAME}/" \
+    "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/" \
     --overwrite \
     --exclude "memory/*" \
     --exclude "MEMORY.md" \

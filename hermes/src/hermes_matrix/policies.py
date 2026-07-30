@@ -1,7 +1,7 @@
-"""Pure Matrix policy helpers for the HiClaw Hermes overlay.
+"""Pure Matrix policy helpers for the AgentTeams Hermes overlay.
 
 These helpers intentionally avoid importing any Matrix SDK.  They only model
-the policy layer that HiClaw adds on top of hermes-agent's native Matrix
+the policy layer that AgentTeams adds on top of hermes-agent's native Matrix
 adapter: outbound mention enrichment, dual allow-lists, and copaw-style
 history buffering.
 """

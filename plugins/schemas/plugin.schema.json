@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "prompts", "skills", "mcp", "adapters", "package"],
   "properties": {
-    "apiVersion": { "const": "hiclaw.agentteam/v1alpha1" },
+    "apiVersion": { "const": "agentteams.agentteam/v1alpha1" },
     "kind": { "const": "AgentTeamPlugin" },
     "metadata": {
       "type": "object",

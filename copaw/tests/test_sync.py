@@ -42,7 +42,7 @@ def test_mc_failure_redacts_alias_credentials_and_logs_stderr(monkeypatch, caplo
     caplog.set_level(logging.INFO)
 
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        _mc("alias", "set", "hiclaw", "https://oss.example.com", raw_access, raw_secret)
+        _mc("alias", "set", "agentteams", "https://oss.example.com", raw_access, raw_secret)
 
     assert raw_access not in caplog.text
     assert raw_secret not in caplog.text
@@ -111,7 +111,8 @@ def test_mirror_all_restores_worker_prefix_and_shared_without_credentials(tmp_pa
 
     sync.mirror_all()
 
-    assert commands == [
+    mirror_commands = [cmd for cmd in commands if cmd[0] == "mirror"]
+    assert mirror_commands == [
         (
             "mirror",
             "agentteams/agentteams-storage/agents/dag-team-dev/",
@@ -127,6 +128,54 @@ def test_mirror_all_restores_worker_prefix_and_shared_without_credentials(tmp_pa
             "--overwrite",
         ),
     ]
+
+
+def test_mirror_all_falls_back_to_startup_files_when_prefix_missing(tmp_path, monkeypatch):
+    sync = _sync(tmp_path)
+    commands = []
+
+    monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+
+    def fake_mc(*args, **_kwargs):
+        commands.append(args)
+        if args[0] == "mirror" and args[1].endswith("/agents/dag-team-dev/"):
+            raise subprocess.CalledProcessError(
+                1,
+                args,
+                output="",
+                stderr="mc.bin: <ERROR> Object does not exist.",
+            )
+        if args[0] == "cat" and args[1].endswith(
+            "/agents/dag-team-dev/openclaw.json"
+        ):
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout='{"team_id":"dag-team"}',
+                stderr="",
+            )
+        if args[0] == "cat":
+            return subprocess.CompletedProcess(
+                args,
+                1,
+                stdout="",
+                stderr="mc.bin: <ERROR> Object does not exist.",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("copaw_worker.sync._mc", fake_mc)
+
+    sync.mirror_all()
+
+    assert json.loads((sync.local_dir / "openclaw.json").read_text()) == {
+        "team_id": "dag-team"
+    }
+    assert (
+        "mirror",
+        "agentteams/agentteams-storage/teams/dag-team/shared/",
+        f"{sync.shared_dir}/",
+        "--overwrite",
+    ) in commands
 
 
 def test_mirror_all_restores_global_shared_for_team_leader(tmp_path, monkeypatch):
@@ -149,7 +198,8 @@ def test_mirror_all_restores_global_shared_for_team_leader(tmp_path, monkeypatch
 
     sync.mirror_all()
 
-    assert commands == [
+    mirror_commands = [cmd for cmd in commands if cmd[0] == "mirror"]
+    assert mirror_commands == [
         (
             "mirror",
             "agentteams/agentteams-storage/agents/dag-team-dev/",

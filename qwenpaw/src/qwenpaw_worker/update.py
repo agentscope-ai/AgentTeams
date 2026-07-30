@@ -761,9 +761,6 @@ class AgentPackageManager:
             raise RuntimeError("nacos authType=sts-agentteams requires AGENTTEAMS_CONTROLLER_URL")
         bearer = self._controller_bearer_token()
         headers = {"Authorization": f"Bearer {bearer}"}
-        auth_cluster_id = self._auth_cluster_id()
-        if auth_cluster_id:
-            headers["X-AgentTeams-Cluster-ID"] = auth_cluster_id
         request = urllib.request.Request(
             f"{controller_url}/api/v1/credentials/sts",
             data=b"",
@@ -797,10 +794,6 @@ class AgentPackageManager:
             if token:
                 return token
         raise RuntimeError("nacos authType=sts-agentteams requires AGENTTEAMS_AUTH_TOKEN or AGENTTEAMS_AUTH_TOKEN_FILE")
-
-    @staticmethod
-    def _auth_cluster_id() -> str:
-        return os.getenv("AGENTTEAMS_CLUSTER_ID", "").strip()
 
     def _nacos_login(self, parsed, username: str, password: str) -> str:
         host = parsed.hostname

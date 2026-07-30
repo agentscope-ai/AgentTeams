@@ -1,16 +1,16 @@
 # ============================================================
-# HiClaw Hermes Worker Agent - Python-based Container
+# AgentTeams Hermes Worker Agent - Python-based Container
 # ============================================================
 # Lightweight Python container running hermes-agent v0.10.0 as a
-# HiClaw Worker. Uses the same MinIO-backed config/sync model as the
+# AgentTeams Worker. Uses the same MinIO-backed config/sync model as the
 # OpenClaw / CoPaw workers, with hermes-agent providing the agent loop
 # and tools. The Matrix gateway adapter keeps hermes-agent's native
-# mautrix implementation and overlays only HiClaw-specific policy
+# mautrix implementation and overlays only AgentTeams-specific policy
 # hooks (allowlists, mention enrichment, history, vision gating).
 #
 # Build args:
 #   HIGRESS_REGISTRY        - base image registry for mc + python
-#   AGENTTEAMS_CONTROLLER_IMAGE - source for the hiclaw CLI binary
+#   AGENTTEAMS_CONTROLLER_IMAGE - source for the agt CLI binary
 #   APT_MIRROR              - Debian mirror (default: empty / official)
 #   PIP_INDEX_URL           - PyPI mirror (default: official PyPI)
 #   NPM_REGISTRY            - npm registry (default: official)
@@ -26,8 +26,8 @@ ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 # ============ Stage 1: mc (MinIO Client) ============
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
-# ============ Stage 2: hiclaw CLI (from controller image) ============
-FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
+# ============ Stage 2: AgentTeams CLI (from controller image) ============
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image ============
 FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
@@ -67,8 +67,8 @@ RUN JEMALLOC=$(find /usr/lib -name 'libjemalloc.so.2' -print -quit) \
 # mc (MinIO Client) — real binary; wrapper installed after shared libs are copied
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 
-# hiclaw CLI — for worker/team/human management via controller REST API
-COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+# AgentTeams CLI — for worker/team/human management via controller REST API
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
 
 # Install Node.js 22 for shared Worker CLIs (mcporter, skills CLI compatibility)
 RUN apt-get update && \
@@ -134,7 +134,7 @@ RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
 # gateway/platforms/matrix.py to _matrix_native.py, then install a shim at
 # the original import path.  The shim re-exports the native module and swaps
 # in hermes_matrix.adapter.MatrixAdapter, a thin subclass that only adds
-# HiClaw policy hooks (mentions, allowlists, history, vision gating).
+# AgentTeams policy hooks (mentions, allowlists, history, vision gating).
 RUN SITE=/opt/venv/hermes/lib/python3.11/site-packages \
     && mv "$SITE/gateway/platforms/matrix.py" "$SITE/gateway/platforms/_matrix_native.py" \
     && cp "$SITE/hermes_matrix/_shim.py" "$SITE/gateway/platforms/matrix.py"
@@ -149,26 +149,26 @@ RUN if [ -f /opt/venv/hermes/bin/hermes ]; then \
     && ln -sf /opt/venv/hermes/bin/hermes-worker /usr/local/bin/hermes-worker
 
 # Entrypoint script
-COPY --chmod=755 scripts/hermes-worker-entrypoint.sh /opt/hiclaw/scripts/hermes-worker-entrypoint.sh
+COPY --chmod=755 scripts/hermes-worker-entrypoint.sh /opt/agentteams/scripts/hermes-worker-entrypoint.sh
 
 # Shared environment bootstrap and credential management
-# (hiclaw-env.sh, oss-credentials.sh) — same named build-context as copaw.
-COPY --from=shared . /opt/hiclaw/scripts/lib/
+# (agentteams-env.sh, oss-credentials.sh) — same named build-context as copaw.
+COPY --from=shared . /opt/agentteams/scripts/lib/
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation
 # (no-op in local mode).
-RUN chmod +x /opt/hiclaw/scripts/lib/mc-wrapper.sh && \
-    ln -sf /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc
+RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
+    ln -sf /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc
 
-# Workspace lives under the controller-injected HOME=/root/hiclaw-fs/agents/<name>
+# Workspace lives under the controller-injected HOME=/root/agentteams-fs/agents/<name>
 # so the layout matches the openclaw worker (HOME == workspace == MinIO mirror
 # root). The per-worker subdir is created by the entrypoint at startup.
-RUN mkdir -p /root/hiclaw-fs/agents
+RUN mkdir -p /root/agentteams-fs/agents
 
-WORKDIR /root/hiclaw-fs/agents
+WORKDIR /root/agentteams-fs/agents
 
 # HERMES_HOME is set per-worker by the entrypoint (<workspace>/.hermes); we
 # deliberately leave it unset in the image so `docker exec` can't see a wrong
 # default that points at a non-existent path.
 
-ENTRYPOINT ["/opt/hiclaw/scripts/hermes-worker-entrypoint.sh"]
+ENTRYPOINT ["/opt/agentteams/scripts/hermes-worker-entrypoint.sh"]

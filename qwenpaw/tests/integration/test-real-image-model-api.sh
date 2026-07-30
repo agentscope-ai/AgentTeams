@@ -25,7 +25,7 @@ fi
 command -v docker >/dev/null 2>&1 || fail "docker is required"
 docker info >/dev/null 2>&1 || fail "docker daemon is not reachable"
 
-ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
 
 read_env_file() {
     key="$1"
@@ -40,11 +40,11 @@ MODEL="${AGENTTEAMS_QWENPAW_REAL_MODEL:-$(read_env_file AGENTTEAMS_DEFAULT_MODEL
 MODEL="${MODEL:-qwen3.6-plus}"
 BASE_URL="${AGENTTEAMS_QWENPAW_REAL_MODEL_BASE_URL:-$(read_env_file AGENTTEAMS_OPENAI_BASE_URL)}"
 BASE_URL="${BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
-PROVIDER_ID="${AGENTTEAMS_QWENPAW_REAL_MODEL_PROVIDER_ID:-hiclaw-real-model}"
+PROVIDER_ID="${AGENTTEAMS_QWENPAW_REAL_MODEL_PROVIDER_ID:-agentteams-real-model}"
 MINIO_IMAGE="${AGENTTEAMS_QWENPAW_REAL_MODEL_MINIO_IMAGE:-minio/minio:latest}"
 VERSION="${AGENTTEAMS_QWENPAW_REAL_MODEL_IMAGE_VERSION:-qwenpaw-real-e2e-$(date +%s)-$$}"
 WORKER_NAME="${AGENTTEAMS_QWENPAW_REAL_MODEL_WORKER_NAME:-qwenpaw-real-worker-$$}"
-WORKER_HOME="/root/hiclaw-fs/agents/${WORKER_NAME}"
+WORKER_HOME="/root/agentteams-fs/agents/${WORKER_NAME}"
 QWENPAW_WORKING_DIR="${WORKER_HOME}/.qwenpaw"
 QWENPAW_SECRET_DIR="${QWENPAW_WORKING_DIR}.secret"
 BUCKET="${AGENTTEAMS_QWENPAW_REAL_MODEL_BUCKET:-agentteams-storage}"
@@ -149,7 +149,7 @@ member:
 desired:
   model:
     providerId: ${PROVIDER_ID}
-    providerName: HiClaw Real Model E2E
+    providerName: AgentTeams Real Model E2E
     model: ${MODEL}
     baseUrl: ${BASE_URL}
     apiKeyEnv: AGENTTEAMS_QWENPAW_REAL_MODEL_API_KEY

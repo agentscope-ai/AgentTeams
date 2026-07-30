@@ -17,7 +17,7 @@ def test_ensure_alias_skips_static_alias_in_k8s_mode(monkeypatch, tmp_path):
         endpoint="minio:9000",
         access_key="tt",
         secret_key="secret",
-        bucket="hiclaw",
+        bucket="agentteams",
         worker_name="tt",
         local_dir=tmp_path,
     )
@@ -36,7 +36,7 @@ def test_filesync_fallback_uses_copaw_working_dir_parent(monkeypatch, tmp_path):
         endpoint="minio:9000",
         access_key="tt",
         secret_key="secret",
-        bucket="hiclaw",
+        bucket="agentteams",
         worker_name="alice",
     )
 
@@ -48,7 +48,7 @@ def test_cat_missing_object_is_debug_only(monkeypatch, tmp_path, caplog):
         endpoint="minio:9000",
         access_key="tt",
         secret_key="secret",
-        bucket="hiclaw",
+        bucket="agentteams",
         worker_name="tt",
         local_dir=tmp_path,
     )
@@ -74,7 +74,7 @@ def test_cat_non_missing_failure_warns(monkeypatch, tmp_path, caplog):
         endpoint="minio:9000",
         access_key="tt",
         secret_key="secret",
-        bucket="hiclaw",
+        bucket="agentteams",
         worker_name="tt",
         local_dir=tmp_path,
     )

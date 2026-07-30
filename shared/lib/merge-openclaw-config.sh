@@ -16,7 +16,7 @@
 #     - channels.matrix.accessToken: local wins (Worker re-login)
 #
 # Usage (as sourced function):
-#   source /opt/hiclaw/scripts/lib/merge-openclaw-config.sh
+#   source /opt/agentteams/scripts/lib/merge-openclaw-config.sh
 #   merge_openclaw_config <remote_path> <local_path> [<output_path>]
 #
 # If output_path is omitted, writes merged result to local_path.
@@ -38,7 +38,10 @@ merge_openclaw_config() {
     fi
 
     local merged
-    merged=$(jq -n --argfile remote "${remote_path}" --argfile local "${local_path}" '
+    if ! merged=$(jq -n --slurpfile remote_file "${remote_path}" --slurpfile local_file "${local_path}" '
+        ($remote_file[0]) as $remote
+        | ($local_file[0]) as $local
+        |
         $local
         | if ($remote.models // null) != null then .models = $remote.models else . end
         | if ($remote.gateway // null) != null then .gateway = $remote.gateway else . end
@@ -59,12 +62,11 @@ merge_openclaw_config() {
                 else . end
             )
           else . end
-    ' 2>/dev/null)
-
-    if [ $? -eq 0 ] && [ -n "${merged}" ]; then
-        echo "${merged}" > "${output_path}"
-    else
-        # jq merge failed — keep local (do not replace with remote)
-        :
+    ' 2>/dev/null); then
+        # Keep local unchanged and let the caller decide whether to retry.
+        return 1
     fi
+
+    [ -n "${merged}" ] || return 1
+    printf '%s\n' "${merged}" > "${output_path}"
 }

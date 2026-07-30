@@ -1,14 +1,14 @@
 name: Integration Tests
 
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - main
     paths:
       - 'manager/**'
       - 'worker/**'
       - 'openclaw-base/**'
-      - 'hiclaw-controller/**'
+      - 'agentteams-controller/**'
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
@@ -25,7 +25,7 @@ on:
       - 'manager/**'
       - 'worker/**'
       - 'openclaw-base/**'
-      - 'hiclaw-controller/**'
+      - 'agentteams-controller/**'
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
@@ -57,6 +57,11 @@ on:
         required: false
         default: 'qwen3.6-plus'
 
+permissions:
+  # Fork PRs must remain read-only; secret-dependent shards are filtered below.
+  contents: read
+  pull-requests: read
+
 env:
   # Tests that do not require a GitHub token, split into four shards for parallel execution
   # Shard A: LLM interaction tests (sequential dependency: 02 creates alice → 03-06 use alice)
@@ -79,17 +84,16 @@ jobs:
     timeout-minutes: 2
     outputs:
       openclaw_base: ${{ steps.decide.outputs.openclaw_base }}
+      test_matrix: ${{ steps.test-matrix.outputs.matrix }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 0
 
       - name: Detect openclaw-base changes (PR only)
         id: filter
-        if: github.event_name == 'pull_request_target'
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -101,12 +105,36 @@ jobs:
       - name: Decide whether to rebuild openclaw-base
         id: decide
         run: |
-          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "openclaw_base=${{ steps.filter.outputs.openclaw_base }}" >> $GITHUB_OUTPUT
           else
             # push to main / tag / workflow_dispatch: always rebuild
             echo "openclaw_base=true" >> $GITHUB_OUTPUT
           fi
+
+      - name: Select integration test matrix
+        id: test-matrix
+        env:
+          UNTRUSTED_PR: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
+        run: |
+          MATRIX='[
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":false},
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
+            {"shard":"controller-cr-2","filter_env":"SHARD_D_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":false}
+          ]'
+          if [ "$UNTRUSTED_PR" = "true" ]; then
+            MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.requires_secret == false) | del(.requires_secret)]')
+          else
+            MATRIX=$(echo "$MATRIX" | jq -c '[.[] | del(.requires_secret)]')
+          fi
+          echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
 
   # Step 1a: Build the shared base image (agentteams-controller)
   build-base:
@@ -115,19 +143,16 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build hiclaw-controller
+      - name: Build agentteams-controller
         run: |
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
           # cn-hangzhou registry is unreachable from GitHub-hosted runners
           # (frequently times out on `docker pull`).
-          make build-hiclaw-controller \
+          make build-agentteams-controller \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
             DOCKER_BUILD_ARGS="--build-arg APT_MIRROR="
 
@@ -163,16 +188,13 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build openclaw-base (local tag)
         run: |
-          # `make build-openclaw-base` always tags as hiclaw/openclaw-base:latest
+          # `make build-openclaw-base` always tags as agentteams/openclaw-base:latest
           # (LOCAL_OPENCLAW_BASE is hardcoded in the Makefile), which is exactly
           # what downstream build-manager/build-worker jobs consume via the
           # OPENCLAW_BASE_IMAGE / OPENCLAW_BASE_VERSION overrides.
@@ -185,16 +207,16 @@ jobs:
 
       - name: Save image
         run: |
-          docker save hiclaw/openclaw-base:latest | gzip > /tmp/hiclaw-openclaw-base.tar.gz
+          docker save agentteams/openclaw-base:latest | gzip > /tmp/agentteams-openclaw-base.tar.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
           name: image-openclaw-base
-          path: /tmp/hiclaw-openclaw-base.tar.gz
+          path: /tmp/agentteams-openclaw-base.tar.gz
           retention-days: 1
 
-  # Step 2: Build downstream images in parallel (all depend on hiclaw-controller;
+  # Step 2: Build downstream images in parallel (all depend on agentteams-controller;
   # manager and worker additionally depend on openclaw-base when it was rebuilt).
   build-images:
     needs: [detect-changes, build-base, build-openclaw-base]
@@ -212,9 +234,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -241,7 +260,7 @@ jobs:
         if: |
           needs.detect-changes.outputs.openclaw_base == 'true' &&
           (matrix.target == 'manager' || matrix.target == 'worker')
-        run: gunzip -c /tmp/hiclaw-openclaw-base.tar.gz | docker load
+        run: gunzip -c /tmp/agentteams-openclaw-base.tar.gz | docker load
 
       - name: Build image
         run: |
@@ -253,8 +272,13 @@ jobs:
           EXTRA=""
           if [ "${{ needs.detect-changes.outputs.openclaw_base }}" = "true" ] && \
              { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
-            EXTRA="OPENCLAW_BASE_IMAGE=hiclaw/openclaw-base OPENCLAW_BASE_VERSION=latest"
+            EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
             echo "Using locally-built openclaw-base for ${{ matrix.target }}"
+          elif [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; then
+            # The pinned base predates the AgentTeams registry namespace. Keep
+            # using its existing location until a release seeds the new repo.
+            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base OPENCLAW_BASE_VERSION=20260423-8359cbc"
+            echo "Using published migration base for ${{ matrix.target }}"
           fi
           # Override HIGRESS_REGISTRY to the us-west mirror — the default
           # cn-hangzhou registry is unreachable from GitHub-hosted runners.
@@ -269,24 +293,23 @@ jobs:
           # each per-target tar only contains its own deltas.
           docker save \
             $(docker images --format '{{.Repository}}:{{.Tag}}' \
-              | grep -E '^(agentteams|hiclaw)/' \
+              | grep -E '^agentteams/' \
               | grep -v '<none>' \
               | grep -v 'agentteams-controller' \
-              | grep -v 'hiclaw-controller' \
               | grep -v 'openclaw-base') \
-            | gzip > /tmp/hiclaw-${{ matrix.target }}.tar.gz
+            | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
 
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
           name: image-${{ matrix.target }}
-          path: /tmp/hiclaw-${{ matrix.target }}.tar.gz
+          path: /tmp/agentteams-${{ matrix.target }}.tar.gz
           retention-days: 1
 
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
   integration-tests:
-    needs: build-images
-    if: always() && needs.build-images.result == 'success'
+    needs: [detect-changes, build-images]
+    if: always() && needs.detect-changes.result == 'success' && needs.build-images.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -295,60 +318,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # OpenClaw manager + OpenClaw worker (default pairing)
-          - shard: llm-interaction
-            filter_env: SHARD_A_TESTS
-            manager_runtime: openclaw
-            worker_runtime: openclaw
-          - shard: llm-interaction-2
-            filter_env: SHARD_B_TESTS
-            manager_runtime: openclaw
-            worker_runtime: openclaw
-          - shard: controller-cr
-            filter_env: SHARD_C_TESTS
-            manager_runtime: openclaw
-            worker_runtime: openclaw
-          # CoPaw manager + CoPaw worker (full copaw runtime coverage).
-          # controller-cr-2 (test-21 team project DAG) only runs under copaw:
-          # the team controller hardcodes Runtime: "copaw" for both leader and
-          # workers, so running it under the openclaw manager is redundant.
-          - shard: llm-interaction
-            filter_env: SHARD_A_TESTS
-            manager_runtime: copaw
-            worker_runtime: copaw
-          - shard: llm-interaction-2
-            filter_env: SHARD_B_TESTS
-            manager_runtime: copaw
-            worker_runtime: copaw
-          - shard: controller-cr
-            filter_env: SHARD_C_TESTS
-            manager_runtime: copaw
-            worker_runtime: copaw
-          - shard: controller-cr-2
-            filter_env: SHARD_D_TESTS
-            manager_runtime: copaw
-            worker_runtime: copaw
-          # Hermes worker coverage: exercise bridge.py + matrix-nio adapter end-to-end.
-          # Pairs with the copaw manager because both speak matrix-nio (same
-          # adapter family), keeping the surface area small while still
-          # validating worker-side container start, config bridging, Matrix
-          # join, and task assignment for the hermes runtime. controller-cr-2
-          # (test-21 team project DAG) is intentionally excluded — the team
-          # controller hardcodes Runtime: "copaw", so it cannot exercise hermes.
-          - shard: llm-interaction
-            filter_env: SHARD_A_TESTS
-            manager_runtime: copaw
-            worker_runtime: hermes
-          - shard: llm-interaction-2
-            filter_env: SHARD_B_TESTS
-            manager_runtime: copaw
-            worker_runtime: hermes
-          - shard: controller-cr
-            filter_env: SHARD_C_TESTS
-            manager_runtime: copaw
-            worker_runtime: hermes
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.test_matrix) }}
 
     steps:
       - name: Free Up Disk Space
@@ -363,9 +333,6 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Download all images
         uses: actions/download-artifact@v4
@@ -385,23 +352,23 @@ jobs:
       - name: Run embedded integration tests
         id: tests
         env:
-          HICLAW_LLM_API_KEY: ${{ secrets.HICLAW_LLM_API_KEY }}
-          HICLAW_LLM_PROVIDER: qwen
-          HICLAW_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
-          HICLAW_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
+          AGENTTEAMS_LLM_PROVIDER: qwen
+          AGENTTEAMS_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
+          AGENTTEAMS_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
           # Propagate the worker runtime to worker-creating tests too. Without
           # this the apply-zip path (test-15) silently falls back to openclaw
           # on the copaw and hermes matrix entries because the controller's
           # backend resolves an empty req.Runtime to RuntimeOpenClaw — which
           # would make those dimensions run hidden openclaw workers and
           # invalidate the parallel-runtime coverage we set up above.
-          HICLAW_DEFAULT_WORKER_RUNTIME: ${{ matrix.worker_runtime }}
+          AGENTTEAMS_DEFAULT_WORKER_RUNTIME: ${{ matrix.worker_runtime }}
         run: |
           FILTER="${{ github.event.inputs.test_filter }}"
           if [ -z "$FILTER" ]; then
             FILTER="${{ env[matrix.filter_env] }}"
           fi
-          SKIP_BUILD=1 make test-embedded \
+          AGENTTEAMS_VERSION=v1.2.0-beta.1 SKIP_BUILD=1 make test-embedded \
             TEST_FILTER="$FILTER"
 
       # ============================================================
@@ -409,7 +376,7 @@ jobs:
       # ============================================================
 
       - name: Download latest release baseline
-        if: github.event_name == 'pull_request_target' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         continue-on-error: true
         run: |
           mkdir -p baseline-metrics
@@ -429,7 +396,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate metrics comparison and post PR comment
-        if: github.event_name == 'pull_request_target' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -493,7 +460,7 @@ jobs:
           fi
 
       - name: Post failure comment to PR
-        if: github.event_name == 'pull_request_target' && failure()
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && failure()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -653,7 +620,7 @@ jobs:
           # Use the us-west mirror — the cn-hangzhou registry is unreachable
           # from GitHub-hosted runners (frequently times out on `docker pull`).
           # Published images are auto-mirrored from cn-hangzhou to us-west-1.
-          REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com/higress
+          REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com/agentteams
           docker pull ${REGISTRY}/agentteams-manager:${VERSION}
           docker pull ${REGISTRY}/agentteams-worker:${VERSION}
           docker pull ${REGISTRY}/agentteams-controller:${VERSION}
@@ -661,26 +628,26 @@ jobs:
           docker tag ${REGISTRY}/agentteams-worker:${VERSION} agentteams/worker-agent:${VERSION}
           docker tag ${REGISTRY}/agentteams-controller:${VERSION} agentteams/agentteams-controller:${VERSION}
 
-      - name: Install HiClaw
+      - name: Install AgentTeams
         env:
-          HICLAW_LLM_API_KEY: ${{ secrets.HICLAW_LLM_API_KEY }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          HICLAW_NON_INTERACTIVE=1 \
-          HICLAW_VERSION=$VERSION \
-          HICLAW_MOUNT_SOCKET=1 \
-          HICLAW_MATRIX_E2EE=0 \
-          HICLAW_LLM_PROVIDER=qwen \
-          HICLAW_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
-          HICLAW_INSTALL_WORKER_IMAGE=agentteams/worker-agent:${VERSION} \
-          HICLAW_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
-          bash ./install/hiclaw-install.sh manager
+          AGENTTEAMS_NON_INTERACTIVE=1 \
+          AGENTTEAMS_VERSION=$VERSION \
+          AGENTTEAMS_MOUNT_SOCKET=1 \
+          AGENTTEAMS_MATRIX_E2EE=0 \
+          AGENTTEAMS_LLM_PROVIDER=qwen \
+          AGENTTEAMS_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
+          AGENTTEAMS_INSTALL_WORKER_IMAGE=agentteams/worker-agent:${VERSION} \
+          AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
+          bash ./install/agentteams-install.sh manager
 
       - name: Wait for Manager to be ready
         run: |
           for i in {1..60}; do
-            if docker exec hiclaw-manager curl -sf http://127.0.0.1:8001/ >/dev/null 2>&1; then
-              if docker exec hiclaw-manager curl -sf http://127.0.0.1:6167/_matrix/client/versions >/dev/null 2>&1; then
+            if docker exec agentteams-manager curl -sf http://127.0.0.1:8001/ >/dev/null 2>&1; then
+              if docker exec agentteams-manager curl -sf http://127.0.0.1:6167/_matrix/client/versions >/dev/null 2>&1; then
                 echo "Manager ready, waiting 60s for agent initialization..."
                 sleep 60
                 exit 0
@@ -692,13 +659,13 @@ jobs:
           exit 1
 
       - name: Enable YOLO mode
-        run: docker exec hiclaw-manager touch /root/manager-workspace/yolo-mode
+        run: docker exec agentteams-manager touch /root/manager-workspace/yolo-mode
 
       - name: Run integration tests
         env:
-          HICLAW_LLM_API_KEY: ${{ secrets.HICLAW_LLM_API_KEY }}
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
         run: |
-          TEST_GATEWAY_PORT=18080 TEST_CONSOLE_PORT=18001 TEST_MANAGER_CONTAINER=hiclaw-manager \
+          TEST_GATEWAY_PORT=18080 TEST_CONSOLE_PORT=18001 TEST_MANAGER_CONTAINER=agentteams-manager \
             ./tests/run-all-tests.sh --skip-build --use-existing --test-filter "$NON_GITHUB_TESTS"
 
       - name: Generate release baseline

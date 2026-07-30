@@ -1,0 +1,310 @@
+# =============================================================================
+# AgentTeams Helm Chart — values.yaml
+# =============================================================================
+# Default configuration for local Kubernetes deployment (kind / minikube).
+# Override with values-aliyun.yaml for Alibaba Cloud ACK/ACS deployments.
+# =============================================================================
+
+global:
+  namespace: ""  # defaults to .Release.Namespace
+  imageRegistry: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress
+  imageTag: ""
+
+imagePullSecrets: []
+
+# ── Credentials (shared across all components) ────────────────────────────
+credentials:
+  registrationToken: ""       # Matrix registration token (auto-generated if empty)
+  adminUser: "admin"
+  adminPassword: ""           # Matrix admin password (auto-generated if empty)
+  llmApiKey: ""               # LLM API key (required)
+  llmProvider: "openai-compat"
+  defaultModel: "gpt-5.4"
+  llmBaseUrl: ""              # OpenAI-compatible base URL (e.g. https://api.openai.com/v1)
+
+# ── Preflight checks ─────────────────────────────────────────────────────
+preflight:
+  llm:
+    enabled: true              # run a Helm pre-install/pre-upgrade LLM probe
+    strict: true               # fail install/upgrade when the probe fails
+    timeoutSeconds: 30         # per HTTP request timeout
+    retries: 2                 # retry transient network/429/5xx failures
+    activeDeadlineSeconds: 120 # hard ceiling for the hook Job
+    resources: {}
+
+# ── Matrix ────────────────────────────────────────────────────────────────
+matrix:
+  provider: tuwunel           # tuwunel | synapse
+  mode: managed               # managed | existing
+  internalURL: ""             # existing mode only; managed mode auto-derives
+  serverName: ""              # existing mode only; managed mode auto-derives
+  # Matrix AppService registration (controller registers as an appservice
+  # to provision worker/human Matrix accounts without passwords). Enabled by
+  # default; the controller panics if as_token/hs_token are absent, so the
+  # runtime-env Secret auto-generates and preserves them when these are empty.
+  appservice:
+    enabled: true            # set false to disable AppService mode entirely
+    asToken: ""             # override the Matrix AppService as_token (auto-generated if empty)
+    hsToken: ""             # override the Matrix AppService hs_token (auto-generated if empty)
+  tuwunel:
+    image:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel
+      tag: "20260216"
+      pullPolicy: IfNotPresent
+    newUserDisplayNameSuffix: ""  # empty disables Tuwunel's default "💕" suffix
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    service:
+      type: ClusterIP
+      port: 6167
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClassName: ""    # empty = default StorageClass
+      mountPath: /data/conduwuit
+    extraEnv: {}
+  synapse: {}
+
+# ── Gateway ───────────────────────────────────────────────────────────────
+# provider=higress + mode=managed → Higress deployed as a subchart here
+# provider=ai-gateway + mode=existing → external Alibaba Cloud APIG; routes
+#   are provisioned out-of-band and the controller only manages consumers.
+gateway:
+  provider: higress           # higress | ai-gateway
+  mode: managed               # managed | existing
+  publicURL: ""               # required browser/public URL, e.g. http://localhost:18080
+  higress:
+    enabled: true             # controls Higress subchart deployment
+  # Required when provider=ai-gateway:
+  aiGateway:
+    region: ""                # e.g. "cn-hangzhou"
+    endpoint: ""              # optional APIG OpenAPI endpoint override; empty uses apig.<region>.aliyuncs.com
+    gatewayId: ""             # APIG gateway instance id (required)
+    modelApiId: ""            # LLM Model API id used for consumer authorization
+    envId: ""                 # APIG environment id
+
+# ── Storage ───────────────────────────────────────────────────────────────
+# provider=minio + mode=managed → MinIO StatefulSet deployed here, static
+#   root credentials, admin API available.
+# provider=oss + mode=existing → external Alibaba Cloud OSS bucket; the
+#   controller obtains STS credentials from agentteams-credential-provider
+#   on every mc invocation and does NOT create buckets/users/policies.
+storage:
+  provider: minio             # minio | oss
+  mode: managed               # managed | existing
+  bucket: "agentteams-storage"
+  # Required when provider=oss:
+  oss:
+    region: ""                # e.g. "cn-hangzhou"
+    # Explicit endpoint override. Usually unset — the credential-provider
+    # sidecar returns the correct endpoint as part of each STS response.
+    endpoint: ""
+  minio:
+    image:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio
+      tag: "20260216"
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    service:
+      type: ClusterIP
+      apiPort: 9000
+      consolePort: 9001
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClassName: ""
+    auth:
+      rootUser: "minioadmin"
+      rootPassword: "minioadmin"
+
+# ── Higress subchart values (passed directly to the higress dependency) ───
+# `gateway.higress.enabled` is the materialized condition flag. The actual
+# Higress chart still reads values from the top-level `higress:` block because
+# the dependency name is `higress`.
+# See https://higress.io/en/docs/latest/user/configurations/ for full options.
+higress:
+  global:
+    local: true               # kind / minikube: no cloud LoadBalancer
+  higress-core:
+    gateway:
+      replicas: 1
+      httpPort: 80
+      httpsPort: 443
+      service:
+        type: ClusterIP
+        ports:
+          - name: http2
+            port: 80
+            protocol: TCP
+            targetPort: 80
+          - name: https
+            port: 443
+            protocol: TCP
+            targetPort: 443
+    controller:
+      replicas: 1
+      image: higress
+  higress-console:
+    admin:
+      password: ""   # leave empty — controller initializes via /system/init using credentials.adminPassword
+
+# ── Credential Provider (agentteams-credential-provider sidecar) ─────────────
+# Issues scoped STS tokens to the controller (for APIG/OSS SDK calls) and to
+# workers (via POST /api/v1/credentials/sts). Required when gateway.provider=
+# ai-gateway or storage.provider=oss. No default image is provided: in real
+# deployments this is a customer-specific RAM-role-issuing service.
+# For local development, provide a mock implementation of the same API.
+credentialProvider:
+  enabled: false                # auto-forced to true when any cloud provider is selected
+  image:
+    repository: ""              # e.g. registry.example.com/agentteams/credential-provider
+    tag: ""
+    pullPolicy: IfNotPresent
+  port: 17070
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  env: {}                       # additional env vars as key/value map
+  envFrom: []                   # raw envFrom[] entries (secretRef / configMapRef)
+
+# ── Controller (CRD reconciler + worker lifecycle + gateway + credentials) ─
+controller:
+  replicaCount: 1               # increase for HA with leader election
+  image:
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller
+    tag: ""                   # defaults to global.imageTag
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8090
+    targetPort: 8090
+  metrics:
+    enabled: true
+    bindAddress: ":8080"
+    port: 8080
+    targetPort: 8080
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  workerBackend: "k8s"
+  resourcePrefix: "agentteams-"
+  resourceAutoPrefix: true
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  env: {}
+  timezone: "Asia/Shanghai"
+  uninstallHook:
+    # When enabled, helm uninstall first runs a Job that deletes all
+    # Manager/Worker/Team/Human CRs while the controller is still alive,
+    # so the controller's finalizer logic can clean up Pods, Matrix users,
+    # and OSS data. Set to false to skip auto-cleanup (you must then
+    # delete those CRs manually before `helm uninstall`).
+    #
+    # The hook reuses the controller image (which ships kubectl) so it
+    # does not depend on Docker Hub being reachable from the cluster.
+    enabled: true
+    timeoutSeconds: 300         # per-resource-group `kubectl delete --wait` timeout
+    backoffLimit: 1
+    activeDeadlineSeconds: 1500 # hard ceiling: 4 groups × timeoutSeconds + headroom
+    resources: {}               # override if your cluster has tight quotas
+
+# ── Manager Agent (CRD-driven) ────────────────────────────────────────────
+# When enabled, the controller creates a Manager CR at startup. The
+# ManagerReconciler then provisions the Matrix account, Gateway consumer,
+# and Pod automatically. No static Deployment is created by Helm.
+manager:
+  enabled: true                 # create Manager CR during cluster initialization
+  model: ""                     # LLM model; defaults to credentials.defaultModel
+  runtime: "openclaw"           # openclaw | copaw | hermes
+  image:
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager
+    tag: ""                     # defaults to global.imageTag
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+# ── Element Web (IM UI, optional) ─────────────────────────────────────────
+elementWeb:
+  enabled: true
+  image:
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/element-web
+    tag: "20260216"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  service:
+    type: ClusterIP
+    port: 8080
+
+# ── CMS Observability (optional) ─────────────────────────────────────────
+# Alibaba Cloud CMS 2.0 (ARMS) integration.  Set cms.enabled=true and fill in
+# credentials to enable OTLP trace/metric export from Manager and all Workers.
+cms:
+  enabled: false
+  endpoint: ""
+  licenseKey: ""
+  project: ""
+  workspace: ""
+  serviceName: "agentteams-manager"    # Manager service name; Workers auto-derive "agentteams-worker-<name>"
+  metricsEnabled: false
+
+# ── Worker defaults ───────────────────────────────────────────────────────
+worker:
+  defaultImage:
+    openclaw:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker
+      tag: ""                 # defaults to global.imageTag
+    copaw:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker
+      tag: ""                 # defaults to global.imageTag
+    hermes:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker
+      tag: ""                 # defaults to global.imageTag
+    openhuman:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
+      tag: ""                 # defaults to global.imageTag
+  defaultRuntime: "openclaw"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi

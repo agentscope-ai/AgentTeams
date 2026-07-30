@@ -15,7 +15,7 @@ shared/projects/{project-id}/
 
 ## Gotchas
 
-- **Check YOLO mode BEFORE drafting the plan** — `[ "${HICLAW_YOLO:-}" = "1" ] || [ -f ~/yolo-mode ]`. In YOLO mode you MUST auto-confirm in `create-project.md` Step 1c; never post a "please confirm" question, the admin will not reply and the project stalls forever. See `references/create-project.md` Step 0.
+- **Check YOLO mode BEFORE drafting the plan** — `[ "${AGENTTEAMS_YOLO:-}" = "1" ] || [ -f ~/yolo-mode ]`. In YOLO mode you MUST auto-confirm in `create-project.md` Step 1c; never post a "please confirm" question, the admin will not reply and the project stalls forever. See `references/create-project.md` Step 0.
 - **Project room MUST always include the human admin** — non-negotiable. The script handles this, but if you ever create a room manually, always invite admin
 - **plan.md is the single source of truth** — all task status, assignments, and dependencies live here. Always sync to MinIO after changes
 - **Do NOT proceed to next phase while REVISION_NEEDED is pending** — revision must complete first

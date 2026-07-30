@@ -14,7 +14,7 @@ if [ -z "$task_id" ]; then
     exit 2
 fi
 
-marker_file="/root/hiclaw-fs/shared/tasks/${task_id}/.processing"
+marker_file="/root/agentteams-fs/shared/tasks/${task_id}/.processing"
 
 # No marker file = safe to proceed
 if [ ! -f "$marker_file" ]; then

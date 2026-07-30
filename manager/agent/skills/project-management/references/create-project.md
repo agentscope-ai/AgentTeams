@@ -5,7 +5,7 @@
 **Run this first — before drafting anything:**
 
 ```bash
-if [ "${HICLAW_YOLO:-}" = "1" ] || [ -f ~/yolo-mode ]; then
+if [ "${AGENTTEAMS_YOLO:-}" = "1" ] || [ -f ~/yolo-mode ]; then
     echo "YOLO=ON"   # admin unavailable, you auto-confirm in Step 1c
 else
     echo "YOLO=OFF"  # admin will reply "confirm"; you wait in Step 1c
@@ -27,7 +27,7 @@ Break the project goal into phases and tasks. For each task identify:
 ```bash
 PROJECT_ID="proj-$(date +%Y%m%d-%H%M%S)"
 
-bash /opt/hiclaw/agent/skills/project-management/scripts/create-project.sh \
+bash /opt/agentteams/agent/skills/project-management/scripts/create-project.sh \
   --id "${PROJECT_ID}" \
   --title "<title>" \
   --workers "worker1,worker2,worker3"
@@ -68,7 +68,7 @@ Never post a "please confirm" message in YOLO mode — that is a hard rule, not 
 ## Step 1d: After confirmation
 
 1. Update meta.json: `"status": "planning" → "active"`, set `confirmed_at`
-2. Sync to MinIO: `mc mirror /root/hiclaw-fs/shared/projects/${PROJECT_ID}/ ${HICLAW_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/ --overwrite`
+2. Sync to MinIO: `mc mirror /root/agentteams-fs/shared/projects/${PROJECT_ID}/ ${AGENTTEAMS_STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/ --overwrite`
 3. Verify admin is in the project room — if not, invite immediately
 4. Post the project plan in the project room
 5. Assign the first task(s) — see `references/task-lifecycle.md`

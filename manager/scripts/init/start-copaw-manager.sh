@@ -1,11 +1,11 @@
 #!/bin/bash
 # start-copaw-manager.sh - Start Manager Agent with CoPaw runtime
-# Called by start-manager-agent.sh when HICLAW_MANAGER_RUNTIME=copaw
+# Called by start-manager-agent.sh when AGENTTEAMS_MANAGER_RUNTIME=copaw
 #
 # This script converts an OpenClaw-style workspace to a CoPaw-style workspace
 # and then launches the CoPaw application.
 
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Path definitions
@@ -46,7 +46,7 @@ if [ -f "${COPAW_WORKING_DIR}/config.json" ]; then
 fi
 
 log "Bridging openclaw.json -> CoPaw config (manager)..."
-PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}" \
+PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}" \
     python3 -m copaw_worker.bridge \
         --profile manager \
         --openclaw-json "${OPENCLAW_JSON}" \
@@ -56,7 +56,7 @@ log "Config bridged from openclaw.json"
 # ============================================================
 # 3. Sync prompt files into CoPaw paths
 # ============================================================
-# Canonical HiClaw layout is OPENCLAW_WORKSPACE ($HOME): SOUL.md, memory/, skills/ etc.
+# Canonical AgentTeams layout is OPENCLAW_WORKSPACE ($HOME): SOUL.md, memory/, skills/ etc.
 # CoPaw reads from COPAW_WORKING_DIR/workspaces/default/; we sync into that path only.
 # Use cp -u / cp -ru so we never overwrite newer files already in workspaces/default/.
 # ============================================================
@@ -157,7 +157,7 @@ rm -f "${DM_ROOMS_FILE}" "${DM_ROOMS_FILE}.tmp"
 # ============================================================
 # 8. Configure CoPaw CMS plugin (LoongSuite observability)
 # ============================================================
-CMS_TRACES_ENABLED="$(echo "${HICLAW_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+CMS_TRACES_ENABLED="$(echo "${AGENTTEAMS_CMS_TRACES_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
 if [ "${CMS_TRACES_ENABLED}" = "true" ]; then
     log "Configuring CoPaw CMS plugin..."
 
@@ -174,11 +174,11 @@ import os
 from pathlib import Path
 
 cfg_path = Path(sys.argv[1])
-endpoint = os.getenv("HICLAW_CMS_ENDPOINT", "")
-license_key = os.getenv("HICLAW_CMS_LICENSE_KEY", "")
-arms_project = os.getenv("HICLAW_CMS_PROJECT", "")
-cms_workspace = os.getenv("HICLAW_CMS_WORKSPACE", "")
-service_name = os.getenv("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager")
+endpoint = os.getenv("AGENTTEAMS_CMS_ENDPOINT", "")
+license_key = os.getenv("AGENTTEAMS_CMS_LICENSE_KEY", "")
+arms_project = os.getenv("AGENTTEAMS_CMS_PROJECT", "")
+cms_workspace = os.getenv("AGENTTEAMS_CMS_WORKSPACE", "")
+service_name = os.getenv("AGENTTEAMS_CMS_SERVICE_NAME", "agentteams-manager")
 protocol = "http/protobuf"  # Default OTLP protocol
 
 config = {
@@ -211,7 +211,7 @@ fi
         _curr_hash=$(md5sum "${OPENCLAW_JSON}" 2>/dev/null | awk '{print $1}')
         if [ -n "${_curr_hash}" ] && [ "${_curr_hash}" != "${_prev_hash}" ]; then
             log "openclaw.json changed, re-bridging..."
-            _bridge_out=$(PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}" \
+            _bridge_out=$(PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}" \
                 python3 -m copaw_worker.bridge \
                     --profile manager \
                     --openclaw-json "${OPENCLAW_JSON}" \
@@ -237,8 +237,8 @@ COPAW_LOG_LEVEL="${COPAW_LOG_LEVEL:-info}"
 export COPAW_LOG_LEVEL
 
 # Set PYTHONPATH to include copaw_worker module
-export PYTHONPATH="/opt/hiclaw/copaw/src:${PYTHONPATH:-}"
+export PYTHONPATH="/opt/agentteams/copaw/src:${PYTHONPATH:-}"
 
 # Use uvicorn to run CoPaw FastAPI app (enables AgentConfigWatcher for hot-reload)
-# The wrapper installs HiClaw-owned tools before CoPaw creates any agents.
+# The wrapper installs AgentTeams-owned tools before CoPaw creates any agents.
 exec python3 -m copaw_worker.run_copaw_app app --host 0.0.0.0 --port 18799

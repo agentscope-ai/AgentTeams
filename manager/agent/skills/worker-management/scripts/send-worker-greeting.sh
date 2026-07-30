@@ -7,10 +7,10 @@
 # Usage:
 #   send-worker-greeting.sh --worker <NAME> --room <ROOM_ID> [--text <CUSTOM_TEXT>]
 #
-# Runtime behavior (auto-detected from $HICLAW_MANAGER_RUNTIME):
+# Runtime behavior (auto-detected from $AGENTTEAMS_MANAGER_RUNTIME):
 #   - copaw:    delegates to `copaw channels send` with the correct flags
 #               (--text, --target-user, --target-session) and the proper
-#               "@<name>:${HICLAW_MATRIX_DOMAIN}" mention format.
+#               "@<name>:${AGENTTEAMS_MATRIX_DOMAIN}" mention format.
 #   - openclaw: prints the greeting text + target room and exits 2, so the
 #               Manager can deliver it via its native message channel.
 #
@@ -46,8 +46,8 @@ if [ -z "${WORKER}" ] || [ -z "${ROOM}" ]; then
     exit 1
 fi
 
-DOMAIN="${HICLAW_MATRIX_DOMAIN:-matrix-local.hiclaw.io:18080}"
-RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:18080}"
+RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
 
 MENTION="@${WORKER}:${DOMAIN}"
 if [ -n "${CUSTOM_TEXT}" ]; then
@@ -67,7 +67,7 @@ case "${RUNTIME}" in
         ;;
     openclaw|*)
         cat <<EOF
-OpenClaw Manager runtime detected (HICLAW_MANAGER_RUNTIME="${RUNTIME}").
+OpenClaw Manager runtime detected (AGENTTEAMS_MANAGER_RUNTIME="${RUNTIME}").
 This helper only runs the shell flow for CoPaw. For OpenClaw, send the
 greeting via your native message channel:
 

@@ -71,8 +71,7 @@ controller-projected desired state.
   `lastActiveAt`: running agents report the current heartbeat time, idle agents
   report the latest `last_finish_at` / `last_run_at` value.
 - Discover controller reporting config from `AGENTTEAMS_CONTROLLER_URL`,
-  `AGENTTEAMS_AUTH_TOKEN` or `AGENTTEAMS_AUTH_TOKEN_FILE`, and optional
-  `AGENTTEAMS_CLUSTER_ID`.
+  `AGENTTEAMS_AUTH_TOKEN` or `AGENTTEAMS_AUTH_TOKEN_FILE`.
 - Keep controller reporting as a bypass path: report failures are logged but do
   not block storage sync, desired-state apply, or QwenPaw runtime loops.
 

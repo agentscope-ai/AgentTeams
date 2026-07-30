@@ -1,8 +1,8 @@
 #!/bin/bash
-# generate-zip.sh - Generate a HiClaw migration ZIP package
+# generate-zip.sh - Generate a AgentTeams migration ZIP package
 #
 # Takes the analysis results and OpenClaw config, produces a ZIP file
-# that can be fed to hiclaw-import.sh on the HiClaw host.
+# that can be fed to agentteams-import.sh on the AgentTeams host.
 #
 # Usage:
 #   generate-zip.sh --name <worker-name> [--state-dir <path>] [--analysis <path>] [--output <dir>] [--base-image <image>]
@@ -17,8 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKER_NAME=""
 STATE_DIR="${HOME}/.openclaw"
 ANALYSIS_FILE=""
-OUTPUT_DIR="/tmp/hiclaw-migration"
-BASE_IMAGE="hiclaw/worker-agent:latest"
+OUTPUT_DIR="/tmp/agentteams-migration"
+BASE_IMAGE="agentteams/worker-agent:latest"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -38,9 +38,14 @@ fi
 # Normalize name
 WORKER_NAME=$(echo "${WORKER_NAME}" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9-')
 
+if [[ ! "${WORKER_NAME}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    echo "ERROR: Invalid worker name: must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens"
+    exit 1
+fi
+
 mkdir -p "${OUTPUT_DIR}"
 
-log() { echo "[hiclaw-import $(date '+%H:%M:%S')] $1"; }
+log() { echo "[agentteams-import $(date '+%H:%M:%S')] $1"; }
 
 # ============================================================
 # Validate inputs
@@ -275,8 +280,8 @@ fi
 # ============================================================
 log "Step 4: Generating adapted AGENTS.md..."
 
-# The user-custom content goes AFTER the hiclaw-builtin-end marker.
-# The migration script on the HiClaw host will handle injecting the builtin section.
+# The user-custom content goes AFTER the agentteams-builtin-end marker.
+# The migration script on the AgentTeams host will handle injecting the builtin section.
 # Here we just prepare the user content portion.
 
 USER_AGENTS="${STAGING}/config/AGENTS.md"
@@ -355,7 +360,7 @@ for skills_dir in "${WORKSPACE_DIR}/skills" "${STATE_DIR}/extensions/skills"; do
             # Check if this is a skill directory (has SKILL.md) or a sub-group (e.g. skills/public/)
             if [ -f "${skill_dir}SKILL.md" ]; then
                 skill_name=$(basename "${skill_dir}")
-                # Skip HiClaw built-in skills
+                # Skip AgentTeams built-in skills
                 case "${skill_name}" in
                     file-sync|mcporter|find-skills) continue ;;
                 esac
@@ -443,8 +448,8 @@ log "  File: ${ZIP_PATH}"
 log "  Size: ${ZIP_SIZE}"
 log "  Worker name: ${WORKER_NAME}"
 log ""
-log "Transfer this file to the HiClaw Manager host and run:"
-log "  bash hiclaw-import.sh --zip ${ZIP_NAME}"
+log "Transfer this file to the AgentTeams Manager host and run:"
+log "  bash agentteams-import.sh worker --name ${WORKER_NAME} --zip ${ZIP_NAME}"
 log ""
 
 echo "${ZIP_PATH}"

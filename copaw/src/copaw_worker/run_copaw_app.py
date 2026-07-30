@@ -1,4 +1,4 @@
-"""Run the upstream CoPaw app with HiClaw runtime hooks installed."""
+"""Run the upstream CoPaw app with AgentTeams runtime hooks installed."""
 
 from __future__ import annotations
 

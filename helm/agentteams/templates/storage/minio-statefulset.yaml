@@ -1,0 +1,78 @@
+{{- if eq .Values.storage.provider "minio" }}
+{{- $comp := dict "root" . "component" "minio" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "agentteams.minio.fullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+spec:
+  serviceName: {{ include "agentteams.minio.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "agentteams.component.selectorLabels" $comp | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentteams.component.selectorLabels" $comp | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: minio
+          image: "{{ .Values.storage.minio.image.repository }}:{{ .Values.storage.minio.image.tag }}"
+          imagePullPolicy: {{ .Values.storage.minio.image.pullPolicy }}
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          envFrom:
+            - secretRef:
+                name: {{ include "agentteams.minio.fullname" . }}
+          resources:
+            {{- toYaml .Values.storage.minio.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- if not .Values.storage.minio.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.storage.minio.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.storage.minio.persistence.size | quote }}
+        {{- if .Values.storage.minio.persistence.storageClassName }}
+        storageClassName: {{ .Values.storage.minio.persistence.storageClassName | quote }}
+        {{- end }}
+  {{- end }}
+{{- end }}

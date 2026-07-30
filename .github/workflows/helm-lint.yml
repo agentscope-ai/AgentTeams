@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - 'helm/**'
+      - 'install/agentteams-install.sh'
+      - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
+      - 'tests/check-agentteams-rename-defaults.sh'
+      - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-helm-agentteams.sh'
   workflow_dispatch: ~
 
 jobs:
@@ -12,6 +17,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Check AgentTeams rename contracts
+        run: bash tests/check-agentteams-rename-defaults.sh
+
+      - name: Check pre-v1.2 installer compatibility
+        run: bash tests/check-installer-pre-1.2-env-compat.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -22,15 +33,11 @@ jobs:
         run: helm repo add higress.io https://higress.io/helm-charts
 
       - name: Build dependencies
-        run: helm dependency build helm/hiclaw/
+        run: helm dependency build helm/agentteams/
 
       - name: Lint
-        run: helm lint helm/hiclaw/
+        run: helm lint helm/agentteams/
 
       - name: Template dry-run
         run: |
-          helm template hiclaw helm/hiclaw/ \
-            --set credentials.registrationToken=test \
-            --set credentials.adminPassword=test \
-            --set credentials.llmApiKey=test \
-            --set gateway.publicURL=http://localhost:18080
+          bash tests/check-helm-agentteams.sh

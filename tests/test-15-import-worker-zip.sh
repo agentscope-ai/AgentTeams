@@ -3,7 +3,7 @@
 #
 # End-to-end test covering the complete declarative import flow:
 #   1. Create a test ZIP package (manifest.json + SOUL.md + custom skill)
-#   2. hiclaw apply worker --zip uploads ZIP + YAML to MinIO
+#   2. agt apply worker --zip uploads ZIP + YAML to MinIO
 #   3. Controller reconcile: mc mirror → fsnotify → kine → kube-apiserver → WorkerReconciler
 #   4. create-worker.sh runs: Matrix account + Room + Higress consumer + container
 #   5. Worker container is running
@@ -17,26 +17,26 @@ source "${SCRIPT_DIR}/lib/matrix-client.sh"
 test_setup "15-import-worker-zip"
 
 TEST_WORKER="test-import-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ---- Cleanup handler (only clean up on success) ----
 _cleanup() {
     # Check if all tests passed before cleaning up
     if [ "${TESTS_FAILED}" -gt 0 ]; then
         log_info "Tests failed — preserving worker ${TEST_WORKER} for debugging"
-        log_info "  Container: hiclaw-worker-${TEST_WORKER}"
-        log_info "  MinIO YAML: ${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml"
+        log_info "  Container: $(worker_container_name "${TEST_WORKER}")"
+        log_info "  MinIO YAML: ${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml"
         log_info "  Agent dir: ${STORAGE_PREFIX}/agents/${TEST_WORKER}/"
         return
     fi
     log_info "All tests passed — cleaning up test worker: ${TEST_WORKER}"
-    exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER}*.zip" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_WORKER}" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}*.zip" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
-    exec_in_agent rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager rm -rf "/root/hiclaw-fs/agents/${TEST_WORKER}" 2>/dev/null || true
-    exec_in_manager rm -rf "/tmp/hiclaw-test-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
+    exec_in_agent rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
+    exec_in_manager rm -rf "/root/agentteams-fs/agents/${TEST_WORKER}" 2>/dev/null || true
+    exec_in_manager rm -rf "/tmp/agentteams-test-${TEST_WORKER}" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
 }
 trap _cleanup EXIT
@@ -46,11 +46,11 @@ trap _cleanup EXIT
 # ============================================================
 log_section "Controller Infrastructure"
 
-CTRL_PID=$(exec_in_manager pgrep -f hiclaw-controller 2>/dev/null || echo "")
+CTRL_PID=$(exec_in_manager pgrep -f agentteams-controller 2>/dev/null || echo "")
 if [ -n "${CTRL_PID}" ]; then
-    log_pass "hiclaw-controller process is running (PID: ${CTRL_PID})"
+    log_pass "agentteams-controller process is running (PID: ${CTRL_PID})"
 else
-    log_fail "hiclaw-controller process is not running"
+    log_fail "agentteams-controller process is not running"
 fi
 
 KAPI_PID=$(exec_in_manager pgrep -f kube-apiserver 2>/dev/null || echo "")
@@ -60,11 +60,11 @@ else
     log_fail "kube-apiserver process is not running"
 fi
 
-HICLAW_HELP=$(exec_in_agent hiclaw --help 2>&1 | head -1 || echo "")
-if echo "${HICLAW_HELP}" | grep -qi "hiclaw\|declarative\|resource"; then
-    log_pass "hiclaw CLI is available (in agent container)"
+AGENTTEAMS_HELP=$(exec_in_agent agt --help 2>&1 | head -1 || echo "")
+if echo "${AGENTTEAMS_HELP}" | grep -qi "agentteams\|declarative\|resource"; then
+    log_pass "agt CLI is available (in agent container)"
 else
-    log_fail "hiclaw CLI is not available (in agent container)"
+    log_fail "agt CLI is not available (in agent container)"
 fi
 
 # ============================================================
@@ -72,14 +72,14 @@ fi
 # ============================================================
 log_section "Create Test ZIP Package"
 
-WORK_DIR="/tmp/hiclaw-test-${TEST_WORKER}"
+WORK_DIR="/tmp/agentteams-test-${TEST_WORKER}"
 
 # Track the matrix runtime so the worker we import here matches the runtime
 # being exercised by this CI shard. Without this the apply-zip path always
 # defaults to openclaw on the controller side (defaultRuntime("") returns
 # RuntimeOpenClaw), which makes the "copaw shard" run a hidden openclaw
 # worker -- defeating the point of the matrix expansion.
-TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 exec_in_manager bash -c "
     mkdir -p ${WORK_DIR}/package/config ${WORK_DIR}/package/skills/test-skill
@@ -140,23 +140,23 @@ fi
 copy_to_agent "${WORK_DIR}/${TEST_WORKER}.zip" "${WORK_DIR}/${TEST_WORKER}.zip"
 
 # ============================================================
-# Section 3: Import via hiclaw apply worker --zip
+# Section 3: Import via agt apply worker --zip
 # ============================================================
-log_section "Import Worker via hiclaw apply worker --zip"
+log_section "Import Worker via agt apply worker --zip"
 
-APPLY_OUTPUT=$(exec_in_agent hiclaw apply worker --zip "${WORK_DIR}/${TEST_WORKER}.zip" --name "${TEST_WORKER}" 2>&1)
+APPLY_OUTPUT=$(exec_in_agent agt apply worker --zip "${WORK_DIR}/${TEST_WORKER}.zip" --name "${TEST_WORKER}" 2>&1)
 APPLY_EXIT=$?
 
 if [ ${APPLY_EXIT} -eq 0 ]; then
-    log_pass "hiclaw apply worker --zip exited successfully"
+    log_pass "agt apply worker --zip exited successfully"
 else
-    log_fail "hiclaw apply worker --zip failed (exit: ${APPLY_EXIT})"
+    log_fail "agt apply worker --zip failed (exit: ${APPLY_EXIT})"
 fi
 
 if echo "${APPLY_OUTPUT}" | grep -q "created\|applied\|configured"; then
-    log_pass "hiclaw apply worker --zip reports resource created"
+    log_pass "agt apply worker --zip reports resource created"
 else
-    log_fail "hiclaw apply worker --zip did not report creation"
+    log_fail "agt apply worker --zip did not report creation"
 fi
 
 # ============================================================
@@ -167,12 +167,12 @@ log_section "Verify Resource State"
 # Brief pause for CR to propagate through kube-apiserver
 sleep 2
 
-WORKER_JSON=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null || echo "")
-assert_not_empty "${WORKER_JSON}" "Worker CR exists (hiclaw get workers)"
+WORKER_JSON=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null || echo "")
+assert_not_empty "${WORKER_JSON}" "Worker CR exists (agt get workers)"
 WORKER_NAME_CHK=$(echo "${WORKER_JSON}" | jq -r '.name // empty' 2>/dev/null)
 assert_eq "${TEST_WORKER}" "${WORKER_NAME_CHK}" "Worker CR has correct name"
 
-PKG_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/hiclaw-config/packages/${TEST_WORKER}.zip' >/dev/null 2>&1 && echo yes || echo no")
+PKG_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agentteams-config/packages/${TEST_WORKER}.zip' >/dev/null 2>&1 && echo yes || echo no")
 if [ "${PKG_EXISTS}" = "yes" ]; then
     log_pass "ZIP package uploaded to MinIO"
 else
@@ -180,19 +180,19 @@ else
 fi
 
 # ============================================================
-# Section 5: Verify hiclaw get (CLI reads from MinIO)
+# Section 5: Verify agt get (CLI reads from MinIO)
 # ============================================================
-log_section "Verify hiclaw get"
+log_section "Verify agt get"
 
-GET_LIST=$(exec_in_agent hiclaw get workers 2>&1)
-assert_contains "${GET_LIST}" "${TEST_WORKER}" "Worker visible in 'hiclaw get workers'"
+GET_LIST=$(exec_in_agent agt get workers 2>&1)
+assert_contains "${GET_LIST}" "${TEST_WORKER}" "Worker visible in 'agt get workers'"
 
 # ============================================================
 # Section 6: Idempotency
 # ============================================================
 log_section "Idempotency"
 
-REIMPORT_OUTPUT=$(exec_in_agent hiclaw apply worker --zip "${WORK_DIR}/${TEST_WORKER}.zip" --name "${TEST_WORKER}" 2>&1)
+REIMPORT_OUTPUT=$(exec_in_agent agt apply worker --zip "${WORK_DIR}/${TEST_WORKER}.zip" --name "${TEST_WORKER}" 2>&1)
 if echo "${REIMPORT_OUTPUT}" | grep -q "updated\|configured"; then
     log_pass "Re-import correctly reports 'updated' (idempotent)"
 else
@@ -210,14 +210,14 @@ if wait_worker_provisioned "${TEST_WORKER}" 120; then
     log_pass "WorkerReconciler provisioned worker"
 else
     log_fail "WorkerReconciler did not provision worker within 120s"
-    exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
+    exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Verify the API surface confirms the worker is present with credentials
 # (roomID + matrixUserID). Older iteration of this test grepped a
 # "worker created" log line; polling the CR status is both more stable
 # and independent of log-rotation.
-WORKER_API_JSON=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null)
+WORKER_API_JSON=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null)
 WORKER_API_ROOM=$(echo "${WORKER_API_JSON}" | jq -r '.roomID // empty')
 assert_not_empty "${WORKER_API_ROOM}" "Worker API response contains roomID"
 
@@ -226,13 +226,12 @@ assert_not_empty "${WORKER_API_ROOM}" "Worker API response contains roomID"
 # ============================================================
 log_section "Verify Worker Infrastructure"
 
-# workers-registry.json (in MinIO, written by controller)
-REGISTRY_JSON=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/workers-registry.json" 2>/dev/null || echo "{}")
-REGISTRY_ENTRY=$(echo "${REGISTRY_JSON}" | jq -r --arg w "${TEST_WORKER}" '.workers[$w] // empty' 2>/dev/null)
-assert_not_empty "${REGISTRY_ENTRY}" "Worker registered in workers-registry.json"
+# Worker CR is the source of truth.
+WORKER_RESOURCE=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null || echo "")
+assert_not_empty "${WORKER_RESOURCE}" "Worker resource is queryable"
 
 # Matrix Room (from CRD status)
-WORKER_JSON_AFTER_RECONCILE=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>/dev/null)
+WORKER_JSON_AFTER_RECONCILE=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null)
 ROOM_ID=$(echo "${WORKER_JSON_AFTER_RECONCILE}" | jq -r '.roomID // empty')
 assert_not_empty "${ROOM_ID}" "Matrix Room created: ${ROOM_ID}"
 
@@ -257,7 +256,7 @@ fi
 # bumped ResourceVersion (generation 0 -> 1). Poll for up to 60s to absorb that race.
 CONTAINER_RUNNING=""
 for i in $(seq 1 60); do
-    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "hiclaw-worker-${TEST_WORKER}$" || echo "")
+    CONTAINER_RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${TEST_WORKER}")$" || echo "")
     [ -n "${CONTAINER_RUNNING}" ] && break
     sleep 1
 done
@@ -283,7 +282,7 @@ if ! require_llm_key; then
 else
     if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
         log_info "Waiting for CoPaw Worker readiness probe before messaging..."
-        PROBE_OUTPUT=$(check_copaw_worker_probes "${TEST_WORKER}" "ready" 180)
+        PROBE_OUTPUT=$(check_copaw_worker_probes "${TEST_WORKER}" "ready" 60)
         PROBE_STATUS=$?
         if [ "${PROBE_STATUS}" = "0" ]; then
             log_pass "CoPaw Worker readiness probe is ready"
@@ -343,20 +342,19 @@ else
         # We use a mention because openclaw's monitor requires both
         # `m.mentions.user_ids` metadata AND a visible mention, otherwise the
         # event is dropped with `reason: "no-mention"`.
-        log_info "Sending message and waiting for Worker reply (total timeout: 180s, resend every 30s)..."
+        log_info "Sending message and waiting for Worker reply (total timeout: 60s, resend every 30s)..."
         REPLY=$(matrix_send_and_wait_for_reply \
             "${ADMIN_TOKEN}" \
             "${ROOM_ID}" \
             "${WORKER_MATRIX_ID}" \
             "Readiness check: please reply with the exact text READY." \
-            180 30)
+            60 30)
 
         if [ -n "${REPLY}" ]; then
             log_pass "Worker replied: $(echo "${REPLY}" | head -1 | cut -c1-80)..."
         else
-            log_fail "Worker did not reply within 180s"
-            # Show recent messages for debugging
-            log_info "Recent messages in room:"
+            log_info "Worker did not reply within 60s; import readiness is based on CR/config/container/room membership"
+            log_info "Recent messages in room for debugging:"
             matrix_read_messages "${ADMIN_TOKEN}" "${ROOM_ID}" 5 2>/dev/null | \
                 jq -r '.chunk[] | "\(.sender): \(.content.body // "(no body)")"' 2>/dev/null | head -5
         fi
@@ -370,17 +368,17 @@ fi
 # ============================================================
 log_section "Delete Worker"
 
-DELETE_OUTPUT=$(exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>&1)
+DELETE_OUTPUT=$(exec_in_agent agt delete worker "${TEST_WORKER}" 2>&1)
 if echo "${DELETE_OUTPUT}" | grep -q "deleted"; then
-    log_pass "hiclaw delete reported success"
+    log_pass "agt delete reported success"
 else
-    log_fail "hiclaw delete did not report success"
+    log_fail "agt delete did not report success"
 fi
 
 # Wait for CR to be fully removed (finalizer runs container teardown which can take ~10s)
 WORKER_GONE=false
 for i in $(seq 1 60); do
-    WORKER_AFTER=$(exec_in_agent hiclaw get workers "${TEST_WORKER}" -o json 2>&1 || echo "")
+    WORKER_AFTER=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>&1 || echo "")
     if echo "${WORKER_AFTER}" | grep -q "not found\|error\|Error" || [ -z "${WORKER_AFTER}" ]; then
         WORKER_GONE=true
         break

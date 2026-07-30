@@ -75,7 +75,7 @@ def test_qwenpaw_last_active_uses_agent_status_endpoint() -> None:
     assert requests[0]["path"] == "/api/agents/default/agent-status"
 
 
-def test_controller_reporter_posts_ready_with_auth_and_cluster_id(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_controller_reporter_posts_ready_with_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     server, requests = _start_server(
         {
             "POST /api/v1/workers/worker-a/ready": (204, None),
@@ -83,7 +83,6 @@ def test_controller_reporter_posts_ready_with_auth_and_cluster_id(monkeypatch: p
     )
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://127.0.0.1:{server.server_port}")
     monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN", "worker-token")
-    monkeypatch.setenv("AGENTTEAMS_CLUSTER_ID", "remote-cluster-a")
 
     try:
         reporter = ControllerHeartbeatReporter.from_env("worker-a")
@@ -97,7 +96,7 @@ def test_controller_reporter_posts_ready_with_auth_and_cluster_id(monkeypatch: p
     assert request["method"] == "POST"
     assert request["path"] == "/api/v1/workers/worker-a/ready"
     assert headers["authorization"] == "Bearer worker-token"
-    assert headers["x-agentteams-cluster-id"] == "remote-cluster-a"
+    assert "x-agentteams-cluster-id" not in headers
     assert json.loads(request["body"]) == {"lastActiveAt": "2026-05-13T00:00:00Z"}
 
 
@@ -137,7 +136,7 @@ def test_controller_reporter_rereads_token_file_for_heartbeat(
     assert [request["body"] for request in requests] == ["", ""]
 
 
-def test_controller_reporter_without_cluster_id_skips_auth_cluster_header(
+def test_controller_reporter_skips_auth_cluster_header(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     server, requests = _start_server(
@@ -147,7 +146,6 @@ def test_controller_reporter_without_cluster_id_skips_auth_cluster_header(
     )
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://127.0.0.1:{server.server_port}")
     monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN", "worker-token")
-    monkeypatch.delenv("AGENTTEAMS_CLUSTER_ID", raising=False)
 
     try:
         reporter = ControllerHeartbeatReporter.from_env("worker-a")

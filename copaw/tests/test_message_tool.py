@@ -20,6 +20,23 @@ def _response_json(response):
     return json.loads(text)
 
 
+def _write_team_leader_runtime(tmp_path):
+    working_dir = tmp_path / "leader" / ".copaw"
+    runtime_dir = tmp_path / "leader" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "runtime.yaml").write_text(
+        "kind: MemberRuntimeConfig\n"
+        "member:\n"
+        "  role: team_leader\n"
+        "team:\n"
+        "  name: dag-team-1\n"
+        "  teamRoomId: \"!team-room:hs.local\"\n"
+        "  leaderDmRoomId: \"!leader-dm:hs.local\"\n",
+        encoding="utf-8",
+    )
+    return working_dir
+
+
 def test_parse_matrix_room_targets():
     for raw in (
         "room:!abc:matrix.local",
@@ -133,6 +150,137 @@ def test_validate_matrix_message_policy_strips_embedded_no_reply():
     )
     assert filtered == "@alice:matrix.local Please investigate file-sync."
     assert "NO_REPLY" not in filtered
+
+
+def test_validate_matrix_message_policy_blocks_team_leader_dm_preamble(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    for text in (
+        "Let me read the relevant skill documentation.",
+        "Now I need to notify the dev worker in the team room.",
+    ):
+        with pytest.raises(ValueError, match="Team Leader internal preamble"):
+            validate_matrix_message_policy(
+                text,
+                [],
+                room_id="!leader-dm:hs.local",
+            )
+
+
+def test_validate_matrix_message_policy_keeps_team_leader_worker_assignment(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    filtered = validate_matrix_message_policy(
+        "@dag-team-1-dev:hs.local Task assigned: implement the API.",
+        ["@dag-team-1-dev:hs.local"],
+        room_id="!leader-dm:hs.local",
+    )
+
+    assert filtered.startswith("@dag-team-1-dev:hs.local Task assigned")
+
+
+@pytest.mark.asyncio
+async def test_message_tool_routes_team_leader_assignment_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    sent_room_ids = []
+
+    async def fake_send_matrix_room_message(*, room_id, content, account_id):
+        sent_room_ids.append(room_id)
+        return "$assignment"
+
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+    monkeypatch.setattr(
+        "copaw_worker.hooks.tools.message._send_matrix_room_message",
+        fake_send_matrix_room_message,
+    )
+
+    response = await message(
+        action="send",
+        channel="matrix",
+        target="room:!leader-dm:hs.local",
+        message=(
+            "@dag-team-1-dev:hs.local You have been assigned task "
+            "**todo-rest-api-001-01**: Design REST API endpoints."
+        ),
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert payload["roomId"] == "!team-room:hs.local"
+    assert sent_room_ids == ["!team-room:hs.local"]
+    session_path = _matrix_session_path(
+        working_dir=tmp_path / "leader" / ".copaw",
+        room_id="!team-room:hs.local",
+        account_id="default",
+    )
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    recorded_msg, _ = session["agent"]["memory"]["content"][-1]
+    assert recorded_msg["metadata"]["room_id"] == "!team-room:hs.local"
+
+
+@pytest.mark.asyncio
+async def test_message_tool_routes_localpart_assignment_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    response = await message(
+        action="send",
+        channel="matrix",
+        target="room:!leader-dm:hs.local",
+        message="@dag-team-1-dev Task assigned: implement the API.",
+        dryRun=True,
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert payload["roomId"] == "!team-room:hs.local"
+
+
+def test_validate_matrix_message_policy_blocks_roster_preamble_with_mxids(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    with pytest.raises(ValueError, match="Team Leader internal preamble"):
+        validate_matrix_message_policy(
+            "Good. I have the team roster:\n"
+            "- **Dev worker**: `dag-team-1-dev` (`@dag-team-1-dev:hs.local`)\n"
+            "- **QA worker**: `dag-team-1-qa` (`@dag-team-1-qa:hs.local`)\n\n"
+            "Let me plan the project using DAG strategy.",
+            ["@dag-team-1-dev:hs.local", "@dag-team-1-qa:hs.local"],
+            room_id="!leader-dm:hs.local",
+        )
+
+
+@pytest.mark.asyncio
+async def test_message_tool_dry_run_suppresses_team_leader_dm_preamble(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    response = await message(
+        action="send",
+        channel="matrix",
+        target="room:!leader-dm:hs.local",
+        message="I'll coordinate this project with a dev worker and QA worker.",
+        dryRun=True,
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is False
+    assert "Team Leader internal preamble" in payload["error"]
 
 
 @pytest.mark.asyncio

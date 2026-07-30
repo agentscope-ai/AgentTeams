@@ -49,7 +49,7 @@ member:
   matrixUserId: "@worker-a:matrix.local"
 desired:
   model:
-    provider: hiclaw-gateway
+    provider: agentteams-gateway
     model: qwen-max
   mcpServers:
     taskflow:
@@ -398,7 +398,7 @@ def test_runtime_config_change_detection_includes_model_mcp_and_channel_policy(t
         raw={
             "metadata": {"generation": "1"},
             "desired": {
-                "model": {"provider": "hiclaw-gateway", "model": "qwen-max"},
+                "model": {"provider": "agentteams-gateway", "model": "qwen-max"},
                 "mcpServers": {"taskflow": {"command": "python3"}},
                 "channelPolicy": {"allowedChannels": ["matrix"]},
             },
@@ -409,7 +409,7 @@ def test_runtime_config_change_detection_includes_model_mcp_and_channel_policy(t
         raw={
             "metadata": {"generation": "1"},
             "desired": {
-                "model": {"provider": "hiclaw-gateway", "model": "qwen-plus"},
+                "model": {"provider": "agentteams-gateway", "model": "qwen-plus"},
                 "mcpServers": {"taskflow": {"command": "python3"}},
                 "channelPolicy": {"allowedChannels": ["matrix"]},
             },
@@ -420,7 +420,7 @@ def test_runtime_config_change_detection_includes_model_mcp_and_channel_policy(t
         raw={
             "metadata": {"generation": "1"},
             "desired": {
-                "model": {"provider": "hiclaw-gateway", "model": "qwen-max"},
+                "model": {"provider": "agentteams-gateway", "model": "qwen-max"},
                 "mcpServers": {"taskflow": {"command": "python3"}},
                 "channelPolicy": {"allowedChannels": ["matrix"]},
             },

@@ -23,7 +23,7 @@ When a Worker sends a message containing a **properly formatted** `git-request:`
 
 ```
 task-{task-id} git-request:
-workspace: /root/hiclaw-fs/shared/tasks/{task-id}/workspace/{repo-name}
+workspace: /root/agentteams-fs/shared/tasks/{task-id}/workspace/{repo-name}
 operations:
   - git clone https://github.com/org/repo.git
   - git checkout -b feature-auth
@@ -49,21 +49,21 @@ operations:
 
 ```bash
 task_id="task-YYYYMMDD-HHMMSS"
-workspace="/root/hiclaw-fs/shared/tasks/${task_id}/workspace/{repo-name}"
+workspace="/root/agentteams-fs/shared/tasks/${task_id}/workspace/{repo-name}"
 
 # Sync from MinIO
-mc mirror "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" \
-  "/root/hiclaw-fs/shared/tasks/${task_id}/"
+mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" \
+  "/root/agentteams-fs/shared/tasks/${task_id}/"
 
 # Check for processing marker
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/check-processing-marker.sh "$task_id"
+bash /opt/agentteams/agent/skills/task-coordination/scripts/check-processing-marker.sh "$task_id"
 if [ $? -ne 0 ]; then
     # Respond with git-failed: explaining the conflict
     exit 1
 fi
 
 # Create processing marker
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/create-processing-marker.sh "$task_id" "manager" 15
+bash /opt/agentteams/agent/skills/task-coordination/scripts/create-processing-marker.sh "$task_id" "manager" 15
 ```
 
 ### 2. Execute Git Commands
@@ -87,11 +87,11 @@ You know how to use git. Execute the commands the Worker requests. If something 
 
 ```bash
 # Remove processing marker
-bash /opt/hiclaw/agent/skills/task-coordination/scripts/remove-processing-marker.sh "$task_id"
+bash /opt/agentteams/agent/skills/task-coordination/scripts/remove-processing-marker.sh "$task_id"
 
 # Sync to MinIO
-mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/" \
-  "${HICLAW_STORAGE_PREFIX}/shared/tasks/${task_id}/" --overwrite
+mc mirror "/root/agentteams-fs/shared/tasks/${task_id}/" \
+  "${AGENTTEAMS_STORAGE_PREFIX}/shared/tasks/${task_id}/" --overwrite
 ```
 
 **On success** — send to Worker:
@@ -99,7 +99,7 @@ mc mirror "/root/hiclaw-fs/shared/tasks/${task_id}/" \
 @{worker}:DOMAIN task-{task-id} git-result:
 Git operations completed successfully.
 {Summary of what was done - commits, pushes, branches created, etc.}
-Run `hiclaw-sync` to sync.
+Run `agentteams-sync` to sync.
 ```
 
 **On failure** — send to Worker:

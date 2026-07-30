@@ -1,10 +1,10 @@
-# HiClaw CoPaw Overlay
+# AgentTeams CoPaw Overlay
 
 **Shared overlay files used by both Manager and Worker to enhance CoPaw v1.0.0.**
 
 ## Overview
 
-This directory contains HiClaw-enhanced files that replace CoPaw's built-in modules during Docker image build. These enhancements are already submitted as PRs to CoPaw upstream but not yet released in v1.0.0.
+This directory contains AgentTeams-enhanced files that replace CoPaw's built-in modules during Docker image build. These enhancements are already submitted as PRs to CoPaw upstream but not yet released in v1.0.0.
 
 ## Files
 

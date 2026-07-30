@@ -1,45 +1,86 @@
 # Changelog (Unreleased)
 
-Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-base/`, `hiclaw-controller/`, and release-facing `install/` / Helm chart changes here before the next release.
+Target release: `v1.2.0`
+
+Comparison baseline: `v1.2.0-beta.1`
+
+Record release-facing changes here before the next release.
 
 ---
 
-- feat(qwenpaw): add the QwenPaw worker runtime Python package baseline with runtime config sync, storage sync, heartbeat reporting, Matrix channel overlay, and focused unit tests.
-- fix(controller): surface Kubernetes Pod container failures in Worker backend status and status API responses.
-- feat(controller): expose low-cardinality AgentTeams controller metrics and optional Helm ServiceMonitor.
-- feat(controller): add Matrix AppService Human SSO identity provisioning with hash-derived Matrix IDs, AppService login, deletion deactivation, and Team admin/member identity resolution from Human status.
-- fix(agent): update file-sharing path guidance for CoPaw and Team Leader agents to use `/root/hiclaw-fs/agents/...` instead of the retired `/root/.hiclaw-worker/...` path.
-- feat(helm): add a Helm LLM preflight hook and reusable `hiclaw llm-preflight` command to validate API key/base URL/model before controller startup.
+**Breaking Changes / Migration Notes**
 
-- fix(copaw): harden Matrix channel control-command handling, task-thread routing, NO_REPLY suppression, and cancellation noise handling.
-- feat(controller): add OpenKruise Sandbox backend support for Workers via `spec.backendRuntime=sandbox`, including SandboxClaim lifecycle, status watches, CRD schema, and Helm RBAC/env wiring.
-- fix(controller): materialize sandbox Worker runtime env/auth material into worker-deps storage before creating SandboxClaim deps and block legacy pod-to-sandbox runtime switches until the Worker is stopped.
-- feat(controller): add per-agent `spec.resources` support for Manager, Worker, Team Leader, and Team Worker CRDs.
-- fix(worker): pass `X-HiClaw-Cluster-ID` when remote Workers refresh controller-issued STS credentials for OSS and Nacos AI registry access.
-- feat(hiclaw-controller): support a separate agent-pod-template for `deployMode: Remote` Workers via an optional `pod-template-remote.yaml` key on the controller-scoped pod-template ConfigMap; remote-mode Pod creation prefers this key and transparently falls back to `pod-template.yaml` when it is absent or empty, while non-remote/Sandbox paths keep ignoring it.
-- feat(controller): move Kubernetes resources to the `agentteams.io/v1beta1` API group and decouple Team membership through `spec.workerMembers` references to standalone Worker CRs.
-- feat(runtime): let Worker runtimes consume terminal `AGENTTEAMS_*` storage, controller, and auth environment variables while preserving existing `HICLAW_*` deployment compatibility.
+- **AgentTeams naming is now the only active runtime contract**: Installer and Helm entrypoints, controller packages, the `agt` CLI, environment variables, runtime paths, resource names, and storage prefixes use the AgentTeams contract end to end. Retired HiClaw wrappers and active-source compatibility branches have been removed; deployments upgrading from older manifests or scripts must move to the AgentTeams names. ([#1063](https://github.com/agentscope-ai/AgentTeams/pull/1063), [#1065](https://github.com/agentscope-ai/AgentTeams/pull/1065))
+- **Team and Worker resources use the final v1.2 contract**: Team resources reference independently managed Worker CRs through `spec.workerMembers`. Inline Worker members, registry migration paths, and dependent legacy scripts are no longer supported. ([#1072](https://github.com/agentscope-ai/AgentTeams/pull/1072))
 
-- **OpenHuman runtime**: OpenHuman added as the fourth Worker runtime with native Matrix support via `channel-matrix` feature flag; includes controller routing (K8s + Docker backends), Dockerfile, entrypoint script, agent template, Helm chart integration, and Makefile build targets.
-- **Multi model providers**: Worker, Team, and Manager specs can now select a Higress model provider via `spec.modelProvider`; the controller resolves the provider, injects the matching gateway URL into runtime config, and authorizes consumers only on the selected AI route.
-- **modelProvider authorization boundary**: Controller reconcilers now own provider-specific AI route authorization, while provisioning keeps using the default gateway authorization path to avoid duplicate provider coupling.
-- **Matrix AppService mode**: The controller can register as a Matrix Application Service and provision/log in users with the `as_token` instead of per-user passwords (legacy password auth is preserved when disabled). Enabled by default via `HICLAW_MATRIX_APPSERVICE_ENABLED`; the install script and the Helm `runtime-env` Secret generate and persist `HICLAW_MATRIX_APPSERVICE_AS_TOKEN` / `HICLAW_MATRIX_APPSERVICE_HS_TOKEN`. Set `HICLAW_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX` to narrow the exclusive user namespace when running against a shared / pre-existing homeserver.
+**What's New**
+
+- **Optional AgentTeams Dashboard**: Local installation can deploy the AgentTeams Dashboard for visual Worker, Team, Human, Manager, and Matrix management. Dashboard versioning remains independent from the AgentTeams release. ([#1075](https://github.com/agentscope-ai/AgentTeams/pull/1075), [#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
 
 **Bug Fixes**
 
-- **Legacy Team channel policy**: Legacy Team reconciliation now writes final Matrix channel allow-lists to member runtime config and re-adds the Team Leader to the Manager allow-list so controller integration tests observe durable policy state.
-- **Sandbox worker-deps hardening**: Sandbox-backed Workers now prepare controller-owned worker-deps env/token/data material before claim creation, recycle stale SandboxClaims and bound Sandboxes on runtime-affecting changes, and use bounded ServiceAccount token projection for built-in SandboxClaim mounts.
-- **CLI AgentTeams auth env**: The `hiclaw` CLI now discovers `AGENTTEAMS_CONTROLLER_URL`, `AGENTTEAMS_AUTH_TOKEN`, `AGENTTEAMS_AUTH_TOKEN_FILE`, and `AGENTTEAMS_CLUSTER_ID` while preserving legacy `HICLAW_*` fallbacks, so Manager and Worker containers can use the terminal env names for controller calls.
-- **Manager diagnostic loops**: Manager prompts and worker lifecycle guidance now stop repeated no-op troubleshooting commands and treat a missing Worker in `hiclaw get workers` as the deletion boundary instead of looping on Matrix room probes.
-- **CoPaw worker runtime environment**: CoPaw workers now prefer AgentTeams storage/runtime environment variables while preserving legacy HiClaw fallbacks, and Qwen-style model health preflights disable thinking for lightweight readiness checks.
-- **CoPaw Worker heartbeat**: CoPaw worker templates now seed heartbeat at a 10-minute interval so Team Leader agents created from the worker template can run heartbeat turns without requiring an explicit Team CR heartbeat spec.
-- **Helm CRDs**: Removed unsupported `propertyNames` schema fields from Worker and Team CRDs so Kubernetes API servers accept the chart CRDs.
-- **CoPaw local runtime paths**: CoPaw direct-run defaults now honor `COPAW_INSTALL_DIR` and `COPAW_WORKING_DIR` before falling back to local home-directory paths, while container entrypoints can continue to pass explicit directories.
-- **CoPaw worker replies**: CoPaw's no-text debounce only recognized copaw `Content` objects, but the custom Matrix channel builds plain-dict content parts, so every message was buffered and the agent never replied. The channel now also recognizes dict-based text/audio parts; workers and team leaders reply as expected.
-- **Worker Matrix token refresh**: `POST /api/v1/credentials/matrix-token` was registered against the `credentials` resource kind, but the worker credentials branch only permitted `ActionSTS`, so the route was dead and workers could not self-refresh on a homeserver 401. The self-scoped credentials branch now also permits `ActionRefreshMatrixToken` (and the misplaced dead entry was removed).
-- **Helm AppService tokens**: The Helm `runtime-env` Secret now generates and preserves the AppService `as_token` / `hs_token` (values override -> existing Secret -> generated) so a default Helm/in-cluster install no longer crash-loops the controller, and a template comment trim-marker that broke `helm lint` YAML parsing was fixed.
-- **Remote Worker authentication boundary**: Remote Worker tokens are now bound to the matching local Worker CR's `deployMode: Remote`, target cluster ID, target namespace, and ServiceAccount name before authorization.
-- **Remote Worker applied target auth**: Remote Worker authentication now prefers the status-pinned deployment target and falls back to spec only before first provisioning, so spec target edits do not immediately break the running remote Worker or trust a target before it is applied.
-- **Remote Worker lifecycle boundary**: Workers now record the applied deployment target in status, reject running target changes until the Worker is Stopped, clean up using the applied target, and register remote Pod watches for Worker/Team status updates.
-- **Team Worker CR decoupling**: Worker identity enrichment and Worker REST APIs now resolve `spec.workerMembers` references, and Teams reject sharing the same referenced Worker CR before injecting coordination context.
-- **Matrix AppService integration**: SSO Human Team admins now resolve through the Human identity source, Matrix AppService transaction push routes are wired into the controller registration path, and registration keeps the homeserver-facing controller URL as the endpoint base.
+- **Worker storage sync I/O amplification**: Upload changed workspace files once per successful watermark, keep jq 1.7 fallback pulls alive, and limit embedded Controller mirrors to control-plane configuration. Concurrent Worker creation and large unknown workspace paths retain their existing persistence semantics without repeated whole-workspace mirrors. ([#1110](https://github.com/agentscope-ai/AgentTeams/pull/1110))
+- **Manager diagnostic loops**: Manager prompts and Worker lifecycle guidance stop repeated no-op troubleshooting commands and treat a missing Worker in `agt get workers` as the deletion boundary instead of looping on Matrix room probes. ([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
+- **CoPaw Team routing and workspace projection**: Route Team Leader assignments to the Team Room, including localpart mentions, and project Worker prompts, skills, tool configuration, and Matrix settings into CoPaw's default workspace. ([#1060](https://github.com/agentscope-ai/AgentTeams/pull/1060), [9074def](https://github.com/agentscope-ai/AgentTeams/commit/9074def3), [973e291](https://github.com/agentscope-ai/AgentTeams/commit/973e291), [92c8145](https://github.com/agentscope-ai/AgentTeams/commit/92c8145))
+- **Team room and Worker lifecycle convergence**: Keep referenced Worker CRs protected, enforce required Team roles, remove Manager from regular Team Worker personal rooms, and restore standalone membership when a Worker leaves a Team. ([d96f1ed](https://github.com/agentscope-ai/AgentTeams/commit/d96f1ed), [43545c2](https://github.com/agentscope-ai/AgentTeams/commit/43545c2), [b5b0add](https://github.com/agentscope-ai/AgentTeams/commit/b5b0add), [a5d6435](https://github.com/agentscope-ai/AgentTeams/commit/a5d6435))
+- **Pre-v1.2 installer compatibility**: Select the legacy environment contract and storage prefix for v1.1.2 images while keeping the canonical AgentTeams contract for v1.2.0 and newer images. Custom version input such as `1.2.0.beta.1` is normalized to the published tag form. ([#1079](https://github.com/agentscope-ai/AgentTeams/pull/1079), [#1100](https://github.com/agentscope-ai/AgentTeams/pull/1100))
+- **Dashboard installation reliability**: Preserve quick-start and keep-all behavior, restore Worker credentials during upgrade, improve gateway probing and verification, and clean up Dashboard data on uninstall. ([#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
+- **Tooling and diagnostics safety**: Reject unsafe plugin archive links, redact complete Matrix events in debug bundles, generate runnable Worker ZIP import commands, analyze current OpenClaw cron files, capture immediate replay replies, and persist containerized skopeo authentication. ([#1043](https://github.com/agentscope-ai/AgentTeams/pull/1043), [#1045](https://github.com/agentscope-ai/AgentTeams/pull/1045), [#1047](https://github.com/agentscope-ai/AgentTeams/pull/1047), [#1048](https://github.com/agentscope-ai/AgentTeams/pull/1048), [#1049](https://github.com/agentscope-ai/AgentTeams/pull/1049), [#1050](https://github.com/agentscope-ai/AgentTeams/pull/1050))
+
+---
+
+**破坏性变更 / 升级说明**
+
+- **AgentTeams 命名成为唯一生效的运行时契约**：安装器与 Helm 入口、Controller 包、`agt` CLI、环境变量、运行时路径、资源名称和存储前缀已端到端统一为 AgentTeams。旧 HiClaw wrapper 和活跃源码中的兼容分支已移除；从旧清单或脚本升级时必须切换到 AgentTeams 命名。([#1063](https://github.com/agentscope-ai/AgentTeams/pull/1063), [#1065](https://github.com/agentscope-ai/AgentTeams/pull/1065))
+- **Team 与 Worker 资源使用 v1.2 最终契约**：Team 通过 `spec.workerMembers` 引用独立管理的 Worker CR；不再支持内联 Worker 成员、registry 迁移路径及其依赖的旧脚本。([#1072](https://github.com/agentscope-ai/AgentTeams/pull/1072))
+
+**新增功能**
+
+- **可选 AgentTeams Dashboard**：本地安装可部署 AgentTeams Dashboard，用于可视化管理 Worker、Team、Human、Manager 和 Matrix；Dashboard 版本继续与 AgentTeams 版本独立。([#1075](https://github.com/agentscope-ai/AgentTeams/pull/1075), [#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
+
+**Bug 修复**
+
+- **Worker 存储同步 I/O 放大**：基于成功 watermark 只上传变化文件，保持 jq 1.7 fallback pull 存活，并将 embedded Controller mirror 限定为控制面配置。并发创建 Worker 和未知工作目录仍保持原有持久化语义，不再反复执行全量 workspace mirror。([#1110](https://github.com/agentscope-ai/AgentTeams/pull/1110))
+- **Manager 诊断循环**：Manager 提示和 Worker 生命周期指引会停止重复执行无效果的排障命令，并以 `agt get workers` 不再列出目标 Worker 作为删除完成边界，避免继续循环探测 Matrix Room。([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
+- **CoPaw Team 路由与 workspace 投影**：将 Team Leader 分配（包括 localpart mention）路由到 Team Room，并把 Worker prompt、skills、工具配置和 Matrix 设置投影到 CoPaw 默认 workspace。([#1060](https://github.com/agentscope-ai/AgentTeams/pull/1060), [9074def](https://github.com/agentscope-ai/AgentTeams/commit/9074def3), [973e291](https://github.com/agentscope-ai/AgentTeams/commit/973e291), [92c8145](https://github.com/agentscope-ai/AgentTeams/commit/92c8145))
+- **Team Room 与 Worker 生命周期收敛**：保护被引用的 Worker CR，强制校验 Team 必填角色，将 Manager 移出普通 Team Worker 的个人房间，并在 Worker 离开 Team 后恢复 standalone 成员关系。([d96f1ed](https://github.com/agentscope-ai/AgentTeams/commit/d96f1ed), [43545c2](https://github.com/agentscope-ai/AgentTeams/commit/43545c2), [b5b0add](https://github.com/agentscope-ai/AgentTeams/commit/b5b0add), [a5d6435](https://github.com/agentscope-ai/AgentTeams/commit/a5d6435))
+- **v1.2 之前镜像的安装兼容**：v1.1.2 镜像使用旧环境变量契约和存储前缀，v1.2.0 及更新镜像使用 AgentTeams 契约；`1.2.0.beta.1` 等自定义输入会规范化为已发布的 Tag 格式。([#1079](https://github.com/agentscope-ai/AgentTeams/pull/1079), [#1100](https://github.com/agentscope-ai/AgentTeams/pull/1100))
+- **Dashboard 安装可靠性**：保留 quick-start 与 keep-all 行为，升级时恢复 Worker 凭据，改进网关探测与安装验证，并在卸载时清理 Dashboard 数据。([#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
+- **工具与诊断安全性**：拒绝不安全的插件归档链接，完整脱敏调试包中的 Matrix 事件，生成可直接运行的 Worker ZIP 导入命令，识别当前 OpenClaw cron 格式，捕获即时 replay 回复，并持久化容器化 skopeo 的认证信息。([#1043](https://github.com/agentscope-ai/AgentTeams/pull/1043), [#1045](https://github.com/agentscope-ai/AgentTeams/pull/1045), [#1047](https://github.com/agentscope-ai/AgentTeams/pull/1047), [#1048](https://github.com/agentscope-ai/AgentTeams/pull/1048), [#1049](https://github.com/agentscope-ai/AgentTeams/pull/1049), [#1050](https://github.com/agentscope-ai/AgentTeams/pull/1050))
+
+---
+
+**Change list / 变更列表**
+
+- `688ec362` fix(cli): reject unsafe plugin archive links (#1043)
+- `dc4aafb4` fix(scripts): redact complete Matrix events (#1047)
+- `31d89998` fix(migrate): analyze current cron job format (#1049)
+- `ced0f183` fix(migrate): print runnable ZIP import command (#1048)
+- `47b4d07a` fix(replay): capture immediate manager replies (#1045)
+- `bdc4f640` fix(hack): persist containerized skopeo auth (#1050)
+- `ad941d26` chore: archive changelog for v1.2.0-beta.1 (#1058)
+- `82ef6d24` fix(copaw): route Team Leader assignments to Team Room (#1060)
+- `e84c67ad` fix(install): allow selecting the docker.sock mounted by the installer (#553)
+- `c6249864` docs: clarify Element homeserver port (#978)
+- `ad3f661c` docs: clarify Higress AI route matching (#980)
+- `f301d4d2` docs: clarify OpenAI-compatible provider setup (#1013)
+- `e6fa64c0` refactor: complete AgentTeams runtime rename (#1063)
+- `687b6d94` refactor: complete the AgentTeams hard-cut rename (#1065)
+- `2540c968` docs: add v1.2.0-beta.1 release news (#1066)
+- `0ff89f07` ci: make integration tests safe for fork PRs (#1073)
+- `37c31b77` refactor: hard cut Team and Worker CR contracts (#1072)
+- `82cbd5fe` feat(install): integrate AgentTeams Dashboard as an optional component (#1075)
+- `785c2db5` fix(install): support pre-v1.2 image environment contract (#1079)
+- `8de237da` fix(dashboard): quick-start, Worker credential, and verification follow-ups (#1081)
+- `c789b706` docs: update Chinese README with new features and releases (#1092)
+- `be1f0481` docs: add AgentLoop integration to README (#1093)
+- `fcd4297e` fix(install): use legacy storage prefix for pre-v1.2 images (#1100)
+- `7ba2efba` docs: update AgentLoop link in Chinese README (#1108)
+- `5aec8d96` docs: update AgentLoop link in English README (#1109)
+- `45fd4db2` fix: remove Worker storage sync I/O amplification (#1110)
+- `90c9fd4f` fix(manager): stop repeated diagnostic loops (#975)
+
+**Also in this window / 同期其他变更**
+
+- Documentation clarifies Element homeserver ports, Higress AI route matching, OpenAI-compatible provider setup, AgentLoop integration, and the v1.2.0-beta.1 release experience. ([#978](https://github.com/agentscope-ai/AgentTeams/pull/978), [#980](https://github.com/agentscope-ai/AgentTeams/pull/980), [#1013](https://github.com/agentscope-ai/AgentTeams/pull/1013), [#1066](https://github.com/agentscope-ai/AgentTeams/pull/1066), [#1092](https://github.com/agentscope-ai/AgentTeams/pull/1092), [#1093](https://github.com/agentscope-ai/AgentTeams/pull/1093))
+- Integration Tests now use the unprivileged `pull_request` context for fork and Dependabot changes while preserving the complete trusted-branch matrix. ([#1073](https://github.com/agentscope-ai/AgentTeams/pull/1073))

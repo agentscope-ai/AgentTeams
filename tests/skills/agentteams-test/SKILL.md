@@ -1,0 +1,195 @@
+---
+name: agentteams-test
+description: "Complete AgentTeams test cycle including installation, uninstallation, running tests, and exporting debug logs for analysis. Use for (1) verifying AgentTeams functionality (2) CI/CD test validation (3) issue diagnosis and debugging (4) pre-merge testing. Trigger words: test AgentTeams, run AgentTeams tests, agentteams test, make test, verify AgentTeams installation."
+---
+
+# AgentTeams Test Cycle
+
+Complete AgentTeams testing workflow including installation verification, functional tests, and issue diagnosis.
+
+## Quick Start
+
+```bash
+# 1. Clone/update code
+git clone https://github.com/alibaba/agentteams.git && cd agentteams
+
+# 2. Create config file (first time)
+cp agentteams-manager.env.example ~/agentteams-manager.env
+# Edit ~/agentteams-manager.env and set AGENTTEAMS_LLM_API_KEY, etc.
+
+# 3. Run full test
+set -a && . ~/agentteams-manager.env && set +a && make test
+```
+
+## Full Test Cycle
+
+### Step 1: Prepare Environment
+
+```bash
+# Clone latest code
+git clone https://github.com/alibaba/agentteams.git
+cd agentteams
+
+# Check if config file exists
+ls ~/agentteams-manager.env
+```
+
+### Step 2: Run Full Test
+
+```bash
+# Load config and run tests (automatically executes install → test → uninstall)
+set -a && . ~/agentteams-manager.env && set +a && make test
+```
+
+Test cases:
+- **test-01**: Manager startup health check
+- **test-02**: Create Worker Alice
+- **test-03**: Assign task to Worker
+- **test-04**: Human intervention with additional instructions
+- **test-05**: Heartbeat query mechanism
+- **test-06**: Multi-Worker collaboration
+- **test-08~14**: GitHub/MCP related tests (requires AGENTTEAMS_GITHUB_TOKEN)
+
+### Step 3: Individual Install/Uninstall
+
+```bash
+# Install only
+set -a && . ~/agentteams-manager.env && set +a && AGENTTEAMS_YOLO=1 make install
+
+# Uninstall only
+make uninstall
+
+# Run tests using existing installation (skip reinstall)
+set -a && . ~/agentteams-manager.env && set +a
+./tests/run-all-tests.sh --skip-build --use-existing
+```
+
+## Export Debug Logs
+
+When tests fail or hang, use `agentteams-debug.sh` to export logs:
+
+```bash
+# In agentteams repository directory
+./tests/skills/agentteams-test/scripts/agentteams-debug.sh all
+
+# Analyze hang issues only
+./tests/skills/agentteams-test/scripts/agentteams-debug.sh analyze
+```
+
+### Manual Log Export
+
+```bash
+# Manager container logs
+docker logs --tail 100 agentteams-manager 2>&1
+
+# Manager Agent logs
+docker exec agentteams-manager tail -100 /var/log/agentteams/manager-agent.log
+
+# Manager Agent error logs
+docker exec agentteams-manager tail -50 /var/log/agentteams/manager-agent-error.log
+
+# Worker container logs
+docker ps --filter "name=agentteams-worker" --format "table {{.Names}}\t{{.Status}}"
+docker logs --tail 50 agentteams-worker-alice 2>&1
+
+# Test output files
+ls tests/output/
+cat tests/output/metrics-*.json
+```
+
+## Common Issue Diagnosis
+
+### 1. Test Hangs
+
+Use `agentteams-debug.sh` to analyze PHASE_DONE messages for mention issues:
+
+```bash
+# Run in AgentTeams repository directory
+./tests/skills/agentteams-test/scripts/agentteams-debug.sh analyze 1h
+
+# Or use export-debug-log.py directly
+python3 scripts/export-debug-log.py --range 1h
+```
+
+`agentteams-debug.sh` checks if Worker's PHASE_DONE messages include `@manager`:
+- ✅ Includes `@manager` → Message will be processed by Manager
+- ⚠️ Missing `@manager` → Message ignored, may cause hang
+
+**Common cause**: In multi-phase collaboration projects, Worker doesn't @mention Manager after completing a phase
+
+**Solution**: Fixed in v1.0.8+, Manager adds Multi-Phase Collaboration Protocol to task specs
+
+### 2. Worker Not Responding
+
+```bash
+# Check if Worker container is running
+docker ps --filter "name=agentteams-worker"
+
+# Check Worker Agent process
+docker exec agentteams-worker-alice ps aux | grep openclaw
+```
+
+### 3. LLM Call Failures
+
+```bash
+# Check error logs
+docker exec agentteams-manager grep -i "error\|fail" /var/log/agentteams/manager-agent-error.log
+```
+
+### 4. Test Timeout
+
+Some tests (like test-14-git-collab) take longer, you can increase timeout:
+
+```bash
+# Run test script directly with custom timeout
+timeout 1200 ./tests/run-all-tests.sh --skip-build --use-existing
+```
+
+## Test Results Interpretation
+
+### Successful Test
+
+```
+========================================
+  Test Summary
+========================================
+  Total:  12
+  [32mPassed: 12[0m
+  [31mFailed: 0[0m
+========================================
+```
+
+### Skipped Tests
+
+```
+[36m[TEST INFO][0m SKIP: No GitHub token configured
+```
+
+Requires `AGENTTEAMS_GITHUB_TOKEN` environment variable.
+
+### Metrics Files
+
+Each test generates `metrics-XX-testname.json` containing:
+- LLM call count
+- Token usage
+- Execution time
+- Cache hit statistics
+
+## Cleanup Environment
+
+```bash
+# Full uninstall
+make uninstall
+
+# Delete all Worker containers
+docker rm -f $(docker ps -aq --filter "name=agentteams-worker")
+
+# Delete test code
+rm -rf ./agentteams
+```
+
+## References
+
+- [tests/README.md](https://github.com/alibaba/agentteams/blob/main/tests/README.md) - Test framework documentation
+- [install/README.md](https://github.com/alibaba/agentteams/blob/main/install/README.md) - Installation guide
+- [references/troubleshooting.md](references/troubleshooting.md) - Detailed troubleshooting

@@ -21,6 +21,10 @@ credentials:
   llmProvider: "openai-compat"
   defaultModel: "gpt-5.4"
   llmBaseUrl: ""              # OpenAI-compatible base URL (e.g. https://api.openai.com/v1)
+  modelContextWindow: ""      # Optional model context window override, e.g. "150000"
+  modelMaxTokens: ""          # Optional max output tokens override, e.g. "128000"
+  modelReasoning: ""          # Optional reasoning flag override: "true" or "false"
+  modelVision: ""             # Optional vision flag override: "true" or "false"
 
 # ── Preflight checks ─────────────────────────────────────────────────────
 preflight:

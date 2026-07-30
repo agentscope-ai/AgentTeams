@@ -27,7 +27,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 - 🔐 **Higress AI Gateway**: Centralizes traffic management and mitigates credential-related risks, alleviating user concerns about security vulnerabilities in the native Lobster framework.
 
 - ☎️ **Element IM Client + Tuwunel IM Server (both Matrix protocol-based)**: Eliminating DingTalk/Lark integration overhead and enterprise approval workflows. Enables rapid user onboarding to experience the "delight" of model services within an IM environment, while maintaining compatibility with native OpenClaw IM integration.
-- 🧬 **Integrate** [AgentLoop](https://www.aliyun.com/product/agentloop/) ：Provides capabilities such as full-stack Agent observability and auditing, Agent evaluation and experimentation, and Agent asset management and continuous optimization.
+- 🧬 **Integrate** [AgentLoop](https://www.aliyun.com/product/agentloop?spm=at.readme.0.0.0) ：Provides capabilities such as full-stack Agent observability and auditing, Agent evaluation and experimentation, and Agent asset management and continuous optimization.
 
 ## News
 

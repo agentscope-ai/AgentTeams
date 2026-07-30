@@ -25,6 +25,9 @@
 # ────────────────────────────────────────────────────────────────────────────
 
 source /opt/agentteams/scripts/lib/agentteams-env.sh
+source /opt/agentteams/scripts/lib/mc-mirror-scope.sh
+
+AGENTTEAMS_MC_MIRROR_SCOPE="${AGENTTEAMS_MC_MIRROR_SCOPE:-full}"
 
 # MinIO S3: use explicit URL, or cluster FS endpoint, or in-process minio (embedded controller)
 # (Port 8080 is Higress, not the S3 API; never use it for mc.)
@@ -68,13 +71,17 @@ AGENTTEAMS_FS_ROOT="/root/agentteams-fs"
 mkdir -p "${AGENTTEAMS_FS_ROOT}"
 mkdir -p "${AGENTTEAMS_FS_ROOT}/agentteams-config"
 
-# Initial full sync to local (workers + shared)
-mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/" "${AGENTTEAMS_FS_ROOT}/" --overwrite
+# The embedded Controller only needs declarative control-plane state.
+# The legacy all-in-one Manager keeps the full local mirror for agent access.
+agentteams_mirror_initial \
+    "${AGENTTEAMS_MC_MIRROR_SCOPE}" \
+    "${AGENTTEAMS_STORAGE_PREFIX}" \
+    "${AGENTTEAMS_FS_ROOT}"
 
 # Signal that initialization is complete
 touch "${AGENTTEAMS_FS_ROOT}/.initialized"
 
-log "MinIO storage initialized and synced to ${AGENTTEAMS_FS_ROOT}/"
+log "MinIO storage initialized with ${AGENTTEAMS_MC_MIRROR_SCOPE} mirror scope at ${AGENTTEAMS_FS_ROOT}/"
 
 # agentteams-config mirror: 10-second interval for control plane config (CRD YAML files).
 # agentteams-controller watches this directory via fsnotify to trigger reconcile.
@@ -84,11 +91,20 @@ log "MinIO storage initialized and synced to ${AGENTTEAMS_FS_ROOT}/"
         mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agentteams-config/" "${AGENTTEAMS_FS_ROOT}/agentteams-config/" --overwrite --remove --newer-than "15s" 2>/dev/null || true
     done
 ) &
+CONFIG_MIRROR_PID=$!
+
+if [ "${AGENTTEAMS_MC_MIRROR_SCOPE}" = "controller" ]; then
+    wait "${CONFIG_MIRROR_PID}"
+    exit $?
+fi
 
 # Fallback: periodic Remote->Local pull every 5 minutes.
 # Normal operation relies on on-demand pulls triggered by Matrix notifications.
 # This loop is a safety net only — see design principle above.
 while true; do
     sleep 300
-    mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/" "${AGENTTEAMS_FS_ROOT}/" --overwrite --newer-than "5m" 2>/dev/null || true
+    agentteams_mirror_fallback \
+        "${AGENTTEAMS_MC_MIRROR_SCOPE}" \
+        "${AGENTTEAMS_STORAGE_PREFIX}" \
+        "${AGENTTEAMS_FS_ROOT}" 2>/dev/null || true
 done

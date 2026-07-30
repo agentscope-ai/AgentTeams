@@ -13,6 +13,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - **CoPaw Team assignment localparts**: Route Team Leader assignments that mention a Team Worker by Matrix localpart from Leader DM to Team Room. ([973e291](https://github.com/agentscope-ai/AgentTeams/commit/973e291))
 - **CoPaw Team coordination routing**: Route Team Leader worker assignments sent through the `message` tool from Leader DM to Team Room, matching the Matrix channel send path. ([92c8145](https://github.com/agentscope-ai/AgentTeams/commit/92c8145))
 - **Pinned OpenClaw source fetch**: Fetch the pinned OpenClaw commit directly so the base image build does not depend on a retired-brand external branch name. ([b0081c2](https://github.com/agentscope-ai/AgentTeams/commit/b0081c2))
+- **Token plan hot-reload error propagation**: Make `higress_api()` return non-zero exit codes on `"success":false`, HTTP 405, `<html>` responses (not just `<!DOCTYPE html>`), and curl transport errors; callers in the IDEMPOTENT AI Gateway/Provider section hard-fail with `|| exit 1` so misconfigured routes are never silently accepted. ([#908](https://github.com/agentscope-ai/AgentTeams/issues/908))
 
 **Branding and Compatibility**
 

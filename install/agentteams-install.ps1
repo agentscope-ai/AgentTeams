@@ -31,6 +31,7 @@
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
 #   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
+#   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override qwenpaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
 #   AGENTTEAMS_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
 #   AGENTTEAMS_PORT_CONSOLE       Host port for Higress console (default: 18001)
@@ -1061,6 +1062,7 @@ AGENTTEAMS_CMS_METRICS_ENABLED=$(if ($env:AGENTTEAMS_CMS_METRICS_ENABLED) { $env
 # Worker images (for direct container creation)
 AGENTTEAMS_WORKER_IMAGE=$($Config.WORKER_IMAGE)
 AGENTTEAMS_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
+AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($Config.QWENPAW_WORKER_IMAGE)
 AGENTTEAMS_HERMES_WORKER_IMAGE=$($Config.HERMES_WORKER_IMAGE)
 
 # Manager runtime (openclaw | copaw)
@@ -2488,6 +2490,12 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-copaw-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
+    $script:QWENPAW_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE
+    } else {
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-qwenpaw-worker:$($script:AGENTTEAMS_VERSION)"
+    }
+
     $script:HERMES_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE
     } else {
@@ -2675,6 +2683,7 @@ function Install-Manager {
     $config.HIGRESS_WASM_PLUGIN_REGISTRY = $script:AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
     $config.WORKER_IMAGE = $script:WORKER_IMAGE
     $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
+    $config.QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE
     $config.HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE
     $config.MANAGER_COPAW_IMAGE = $script:MANAGER_COPAW_IMAGE
 
@@ -2751,6 +2760,7 @@ function Install-Manager {
                     --security-opt label=disable `
                     -e "AGENTTEAMS_WORKER_IMAGE=$($script:WORKER_IMAGE)" `
                     -e "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)" `
+                    -e "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($script:config.DEFAULT_WORKER_RUNTIME)" `
                     $(if ($config.PROXY_ALLOWED_REGISTRIES) { @("-e", "AGENTTEAMS_PROXY_ALLOWED_REGISTRIES=$($config.PROXY_ALLOWED_REGISTRIES)") }) `
@@ -2848,7 +2858,7 @@ function Install-Manager {
     }
 
     # Pull all worker runtime images (workers may use any runtime regardless of the default)
-    foreach ($workerImg in @($script:WORKER_IMAGE, $script:COPAW_WORKER_IMAGE, $script:HERMES_WORKER_IMAGE)) {
+    foreach ($workerImg in @($script:WORKER_IMAGE, $script:COPAW_WORKER_IMAGE, $script:QWENPAW_WORKER_IMAGE, $script:HERMES_WORKER_IMAGE)) {
         if ($workerImg -match $LocalImagePattern) {
             if (Test-LocalImage $workerImg) {
                 Write-Log (Get-Msg "install.image.worker_exists" -f $workerImg)
@@ -3045,6 +3055,7 @@ function Install-Manager {
             "-e", "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($config.DEFAULT_WORKER_RUNTIME)",
             "-e", "AGENTTEAMS_WORKER_IMAGE=$($script:WORKER_IMAGE)",
             "-e", "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)",
+            "-e", "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_MATRIX_DOMAIN=$matrixDomain",
             "-e", "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:$($config.PORT_GATEWAY)",

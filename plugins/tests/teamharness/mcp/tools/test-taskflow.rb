@@ -343,6 +343,13 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"submit_task did not sync result: {submitted!r}")
     if submitted["task"].get("assigned_at") != assigned_at:
         raise AssertionError(f"submit_task should preserve assigned_at: {submitted!r}")
+    reacked = payload("taskflow", {
+        "role": "worker",
+        "action": "ack_task",
+        "payload": {"taskId": task_id},
+    })
+    if not reacked.get("ok") or reacked["task"].get("status") != "submitted":
+        raise AssertionError(f"ack_task should not regress a submitted task: {reacked!r}")
     submitted_result_text = detailed_result_path.read_text(encoding="utf-8")
     expected_result_text = (
         "# Detailed Result Body\\n\\n"

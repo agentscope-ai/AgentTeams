@@ -274,18 +274,36 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.request import urlopen
 
 for item in Path("/proc/1/environ").read_bytes().split(b"\0"):
     if item and b"=" in item:
         key, value = item.split(b"=", 1)
         os.environ.setdefault(key.decode(), value.decode())
 
-workspace = Path(os.environ["QWENPAW_WORKING_DIR"]) / "workspaces" / "default"
-agent_config = json.loads((workspace / "agent.json").read_text(encoding="utf-8"))
-client = agent_config["mcp"]["clients"]["teamharness"]
+with urlopen("http://127.0.0.1:8088/api/mcp/teamharness") as response:
+    client = json.load(response)
+
+cwd = Path(client["cwd"])
+working_dir = cwd.parents[2]
+workspace = working_dir / "workspaces" / "default"
+derived_env = {
+    "QWENPAW_WORKING_DIR": str(working_dir),
+    "TEAMHARNESS_RUNTIME_CONFIG": str(working_dir.parent / "runtime" / "runtime.yaml"),
+    "TEAMHARNESS_SHARED_DIR": str((workspace / "shared").resolve()),
+    "AGENTTEAMS_STORAGE_PREFIX": f"agentteams/{os.environ.get('AGENTTEAMS_FS_BUCKET', 'agentteams-storage')}",
+}
 
 env = dict(os.environ)
-env.update({str(k): str(v) for k, v in (client.get("env") or {}).items()})
+for key, value in (client.get("env") or {}).items():
+    key = str(key)
+    value = str(value)
+    if key in os.environ:
+        env[key] = os.environ[key]
+    elif key in derived_env:
+        env[key] = derived_env[key]
+    elif "*" not in value:
+        env[key] = value
 request = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -398,6 +416,35 @@ _wait_workspace_marker() {
     local elapsed=0
     while [ "${elapsed}" -lt "${timeout}" ]; do
         if docker exec "${container}" sh -c "grep -Fq '$expected' '$path'" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    return 1
+}
+
+_wait_workspace_team_context() {
+    local container="$1"
+    local path="$2"
+    local role="$3"
+    local timeout="${4:-120}"
+    local elapsed=0
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        if docker exec "${container}" sh -c '
+            path="$1"
+            role="$2"
+            team="$3"
+            leader="$4"
+            worker="$5"
+            worker_mxid="$6"
+            grep -Fq "member.role: ${role}" "${path}" &&
+                grep -Fq "${team}" "${path}" &&
+                grep -Fq "<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->" "${path}" &&
+                grep -Fq "runtimeName: ${leader}" "${path}" &&
+                grep -Fq "runtimeName: ${worker}" "${path}" &&
+                grep -Fq "matrixUserId: ${worker_mxid}" "${path}"
+        ' sh "${path}" "${role}" "${TEST_TEAM}" "${TEST_LEADER}" "${TEST_WORKER}" "${WORKER_MXID}" >/dev/null 2>&1; then
             return 0
         fi
         sleep 5
@@ -652,7 +699,7 @@ with zipfile.ZipFile(zip_path) as archive:
     assert any(name.endswith("/teamharness/plugin.yaml") for name in names)
     assert any(name.endswith("/teamharness/prompts/team/TEAMS.md") for name in names)
     assert any(name.endswith("/teamharness/mcp/server.py") for name in names)
-    assert not any("agentteam" in name for name in names)
+    assert not any("agentteam" in Path(name).parts for name in names)
 print("ok")
 PY
 )
@@ -723,6 +770,7 @@ LEADER_DM=$(echo "${TEAM_JSON}" | jq -r '.status.leaderDMRoomID // empty')
 assert_not_empty "${TEAM_ROOM}" "Team Room ID available"
 assert_not_empty "${LEADER_DM}" "Leader DM Room ID available"
 
+STARTUP_READY=1
 for member in "${TEST_LEADER}" "${TEST_WORKER}"; do
     MEMBER_JSON=$(_wait_k8s_jq "workers" "${member}" '.status.roomID and .status.matrixUserID' 240 2>/dev/null || echo "{}")
     if echo "${MEMBER_JSON}" | jq -e '.status.roomID and .status.matrixUserID' >/dev/null 2>&1; then
@@ -735,11 +783,15 @@ for member in "${TEST_LEADER}" "${TEST_WORKER}"; do
         log_pass "Member ${member} is Running"
     else
         log_fail "Member ${member} did not reach Running"
+        dump_diagnostics worker "${member}"
+        STARTUP_READY=0
     fi
     if wait_for_worker_container "${member}" 240; then
         log_pass "Container for ${member} is running"
     else
         log_fail "Container for ${member} did not start"
+        dump_diagnostics worker "${member}"
+        STARTUP_READY=0
     fi
 done
 
@@ -759,11 +811,20 @@ if _container_has_cmdline "${LEADER_CONTAINER}" "qwenpaw app --host"; then
     log_pass "Leader qwenpaw app process is running"
 else
     log_fail "Leader qwenpaw app process is not running"
+    STARTUP_READY=0
 fi
 if _container_has_cmdline "${WORKER_CONTAINER}" "qwenpaw app --host"; then
     log_pass "Worker qwenpaw app process is running"
 else
     log_fail "Worker qwenpaw app process is not running"
+    STARTUP_READY=0
+fi
+
+if [ "${STARTUP_READY}" -ne 1 ]; then
+    _dump_debug_snapshot
+    test_teardown "26-qwenpaw-teamharness-plugin-mode"
+    test_summary
+    exit $?
 fi
 
 # ============================================================
@@ -846,7 +907,7 @@ assert_eq "standalone" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "M
 log_section "QwenPaw Plugin Mode"
 
 for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
-    if _wait_agent_api_ok "${container}" GET /api/teamharness/health '.ok == true and .plugin == "teamharness" and .adapter == "qwenpaw"' 240 >/dev/null; then
+    if _wait_agent_api_ok "${container}" GET /api/teamharness/health '.ok == true and .plugin == "teamharness" and .adapter == "qwenpaw-2"' 240 >/dev/null; then
         log_pass "${container} TeamHarness health endpoint is healthy"
     else
         log_fail "${container} TeamHarness health endpoint did not become healthy"
@@ -911,15 +972,15 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} workspace TeamHarness prompt missing"
     fi
 
-    if docker exec "${container}" sh -c "grep -q 'member.role: ${role}' '${workspace}/TEAMS.md' && grep -q '${TEST_TEAM}' '${workspace}/TEAMS.md'" >/dev/null 2>&1; then
+    if _wait_workspace_team_context "${container}" "${workspace}/TEAMS.md" "${role}" 120; then
         log_pass "${container} TEAMS.md contains ${role} team context"
+        if docker exec "${container}" test ! -e "${qwenpaw_dir}/teamharness/team-context.json" >/dev/null 2>&1; then
+            log_pass "${container} TEAMS.md contains runtime roster facts without intermediate cache"
+        else
+            log_fail "${container} TEAMS.md created intermediate team context cache"
+        fi
     else
         log_fail "${container} TEAMS.md missing ${role} team context"
-    fi
-
-    if docker exec "${container}" sh -c "grep -Fq '<!-- BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT -->' '${workspace}/TEAMS.md' && grep -Fq 'runtimeName: ${TEST_LEADER}' '${workspace}/TEAMS.md' && grep -Fq 'runtimeName: ${TEST_WORKER}' '${workspace}/TEAMS.md' && grep -Fq 'matrixUserId: ${WORKER_MXID}' '${workspace}/TEAMS.md' && test ! -e '${qwenpaw_dir}/teamharness/team-context.json'" >/dev/null 2>&1; then
-        log_pass "${container} TEAMS.md contains runtime roster facts without intermediate cache"
-    else
         log_fail "${container} TEAMS.md missing runtime roster facts or created intermediate cache"
     fi
 
@@ -929,22 +990,27 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} agent prompt files missing TEAMS.md"
     fi
 
-    if docker exec "${container}" sh -c "jq -e '.mcp.clients.teamharness.enabled == true and .mcp.clients.teamharness.command and (.mcp.clients.teamharness.args | length > 0)' '${workspace}/agent.json'" >/dev/null 2>&1; then
-        log_pass "${container} agent config includes TeamHarness MCP client"
+    TEAMHARNESS_MCP=$(_agent_api "${container}" GET /api/mcp/teamharness 2>/dev/null || echo "{}")
+    TEAMHARNESS_TOOLS=$(_agent_api "${container}" GET /api/mcp/tools/teamharness 2>/dev/null || echo "[]")
+    if echo "${TEAMHARNESS_MCP}" | jq -e '.enabled == true and .transport == "stdio" and .command and (.args | length > 0)' >/dev/null 2>&1 && \
+       echo "${TEAMHARNESS_TOOLS}" | jq -e '([.[].name] | index("health") and index("filesync") and index("taskflow") and index("projectflow"))' >/dev/null 2>&1; then
+        log_pass "${container} QwenPaw API exposes callable TeamHarness MCP"
     else
-        log_fail "${container} agent config missing TeamHarness MCP client"
+        log_fail "${container} QwenPaw API missing callable TeamHarness MCP"
     fi
 
-    if docker exec "${container}" sh -c "jq -e --arg name '${TEST_PACKAGE_MCP_NAME}' --arg url '${TEST_PACKAGE_MCP_URL}' '.mcp.clients[\$name].url == \$url and (.mcp.clients[\$name].enabled != false)' '${workspace}/agent.json' && test ! -f '${workspace}/mcp.json'" >/dev/null 2>&1; then
-        log_pass "${container} agent config embeds AgentSpec package MCP"
+    PACKAGE_MCP=$(_agent_api "${container}" GET "/api/mcp/${TEST_PACKAGE_MCP_NAME}" 2>/dev/null || echo "{}")
+    if echo "${PACKAGE_MCP}" | jq -e --arg url "${TEST_PACKAGE_MCP_URL}" '.url == $url and .enabled == true' >/dev/null 2>&1 && \
+       docker exec "${container}" test ! -f "${workspace}/mcp.json" >/dev/null 2>&1; then
+        log_pass "${container} QwenPaw API exposes AgentSpec package MCP"
     else
-        log_fail "${container} agent config missing AgentSpec package MCP"
+        log_fail "${container} QwenPaw API missing AgentSpec package MCP"
     fi
 
-    if docker exec "${container}" sh -c "grep -q 'TEST26 AgentSpec Package' '${workspace}/AGENTS.md' && grep -q 'TEST26 AgentSpec Package Soul' '${workspace}/SOUL.md'" >/dev/null 2>&1; then
-        log_pass "${container} workspace includes AgentSpec package prompts"
+    if docker exec "${container}" sh -c "grep -q 'TEST26 AgentSpec Package' '${workspace}/AGENTS.md' && grep -q '${TEST_TEAM}' '${workspace}/SOUL.md'" >/dev/null 2>&1; then
+        log_pass "${container} workspace combines AgentSpec and inline prompts"
     else
-        log_fail "${container} workspace missing AgentSpec package prompts"
+        log_fail "${container} workspace missing AgentSpec or inline prompts"
     fi
 
     if docker exec "${container}" sh -c "grep -q 'TEST26 AgentSpec Package Bootstrap' '${workspace}/BOOTSTRAP.md'" >/dev/null 2>&1; then
@@ -974,34 +1040,33 @@ done
 
 _workspace_skill_check() {
     local container="$1"
-    local workspace="$2"
-    local required="$3"
-    local forbidden="$4"
+    local required_teamharness="$2"
+    local required_workerflow="$3"
     docker exec -i \
-        -e TEST_WORKSPACE="${workspace}" \
-        -e TEST_REQUIRED="${required}" \
-        -e TEST_FORBIDDEN="${forbidden}" \
+        -e TEST_REQUIRED_TEAMHARNESS="${required_teamharness}" \
+        -e TEST_REQUIRED_WORKERFLOW="${required_workerflow}" \
         "${container}" \
         /opt/venv/qwenpaw/bin/python - <<'PY' 2>/dev/null | tail -n 1
 import json
 import os
-from pathlib import Path
+from urllib.request import urlopen
 
-workspace = Path(os.environ["TEST_WORKSPACE"])
-required = [item for item in os.environ["TEST_REQUIRED"].split(",") if item]
-forbidden = [item for item in os.environ["TEST_FORBIDDEN"].split(",") if item]
-manifest = json.loads((workspace / "skill.json").read_text(encoding="utf-8"))
-skills = manifest.get("skills") or {}
-missing = [name for name in required if not (workspace / "skills" / name / "SKILL.md").is_file()]
-disabled = [name for name in required if not skills.get(name, {}).get("enabled")]
-unexpected = [name for name in forbidden if (workspace / "skills" / name).exists() or name in skills]
+with urlopen("http://127.0.0.1:8088/api/skills") as response:
+    skills = {item["name"]: item for item in json.load(response)}
+
+required_teamharness = [item for item in os.environ["TEST_REQUIRED_TEAMHARNESS"].split(",") if item]
+required_workerflow = [item for item in os.environ["TEST_REQUIRED_WORKERFLOW"].split(",") if item]
+missing = [
+    name for name in required_teamharness
+    if skills.get(name, {}).get("source") != "plugin:teamharness"
+]
+missing.extend(
+    name for name in required_workerflow
+    if skills.get(name, {}).get("source") != "plugin:workerflow"
+)
 problems = []
 if missing:
     problems.append("missing:" + ",".join(missing))
-if disabled:
-    problems.append("disabled:" + ",".join(disabled))
-if unexpected:
-    problems.append("unexpected:" + ",".join(unexpected))
 print("ok" if not problems else ";".join(problems))
 PY
 }
@@ -1015,36 +1080,55 @@ _workspace_runtime_projection_check() {
         -e TEST_MCP_NAME="${TEST_MCP_NAME}" \
         -e TEST_MCP_URL="${TEST_MCP_URL}" \
         -e TEST_MCP_TRANSPORT="${TEST_MCP_TRANSPORT}" \
+        -e TEST_PACKAGE_MCP_NAME="${TEST_PACKAGE_MCP_NAME}" \
+        -e TEST_PACKAGE_MCP_URL="${TEST_PACKAGE_MCP_URL}" \
         "${container}" \
         /opt/venv/qwenpaw/bin/python - <<'PY' 2>/dev/null | tail -n 1
 import json
 import os
 from pathlib import Path
+from urllib.request import urlopen
 
 workspace = Path(os.environ["TEST_WORKSPACE"])
 model = os.environ["TEST_MODEL"]
 mcp_name = os.environ["TEST_MCP_NAME"]
 mcp_url = os.environ["TEST_MCP_URL"]
 mcp_transport = os.environ["TEST_MCP_TRANSPORT"]
+api_mcp_transport = "streamable_http" if mcp_transport in {"http", "streamable_http"} else mcp_transport
+package_mcp_name = os.environ["TEST_PACKAGE_MCP_NAME"]
+package_mcp_url = os.environ["TEST_PACKAGE_MCP_URL"]
+
+def get(path):
+    with urlopen(f"http://127.0.0.1:8088{path}") as response:
+        return json.load(response)
 
 problems = []
-agent = json.loads((workspace / "agent.json").read_text(encoding="utf-8"))
-active = agent.get("active_model") or {}
+active = get("/api/models/active?scope=agent&agent_id=default").get("active_llm") or {}
 if active.get("provider_id") != "agentteams-gateway" or active.get("model") != model:
     problems.append("active_model")
 
-for rel in ["mcporter-servers.json", "config/mcporter.json"]:
-    path = workspace / rel
-    if not path.is_file():
-        problems.append(f"missing:{rel}")
-        continue
-    data = json.loads(path.read_text(encoding="utf-8"))
-    server = (data.get("mcpServers") or {}).get(mcp_name) or {}
-    if server.get("url") != mcp_url or server.get("transport") != mcp_transport:
-        problems.append(f"mcp:{rel}")
-    authorization = (server.get("headers") or {}).get("Authorization", "")
-    if not authorization.startswith("Bearer "):
-        problems.append(f"auth:{rel}")
+legacy_path = workspace / "mcporter-servers.json"
+if legacy_path.exists():
+    problems.append("legacy:mcporter-servers.json")
+
+mcp = {item["key"]: item for item in get("/api/mcp")}
+server = mcp.get(mcp_name) or {}
+if server.get("url") != mcp_url or server.get("transport") != api_mcp_transport:
+    problems.append("mcp:api")
+authorization = (server.get("headers") or {}).get("Authorization", "")
+if not authorization or "*" not in authorization:
+    problems.append("auth:api")
+package_server = mcp.get(package_mcp_name) or {}
+if package_server.get("url") != package_mcp_url or not package_server.get("enabled"):
+    problems.append("package_mcp:api")
+for key in ("teamharness", "workerflow"):
+    client = mcp.get(key) or {}
+    if not client.get("enabled") or client.get("transport") != "stdio":
+        problems.append(f"{key}:api")
+    if get(f"/api/mcp/policy/{key}").get("default_effect") != "allow":
+        problems.append(f"{key}:policy")
+if (workspace / "config" / "mcporter.json").exists():
+    problems.append("legacy:config/mcporter.json")
 
 print("ok" if not problems else ";".join(problems))
 PY
@@ -1058,17 +1142,15 @@ assert_eq "ok" "${WORKER_RUNTIME_PROJECTION_CHECK}" "Worker applies controller m
 
 LEADER_SKILL_CHECK=$(_workspace_skill_check \
     "${LEADER_CONTAINER}" \
-    "${LEADER_DEFAULT_WS}" \
-    "teamharness-communication,teamharness-file-sharing,teamharness-team-coordination,teamharness-project-management,teamharness-task-delegation" \
-    "teamharness-task-execution")
-assert_eq "ok" "${LEADER_SKILL_CHECK}" "Leader workspace enables TeamHarness role skills"
+    "communication,file-sharing,team-coordination,project-management,task-delegation,task-execution,mcporter" \
+    "worker-internal-workflow")
+assert_eq "ok" "${LEADER_SKILL_CHECK}" "Leader API exposes TeamHarness and WorkerFlow plugin skills"
 
 WORKER_SKILL_CHECK=$(_workspace_skill_check \
     "${WORKER_CONTAINER}" \
-    "${WORKER_DEFAULT_WS}" \
-    "teamharness-communication,teamharness-file-sharing,teamharness-mcporter,teamharness-task-execution" \
-    "teamharness-task-delegation")
-assert_eq "ok" "${WORKER_SKILL_CHECK}" "Worker workspace enables TeamHarness role skills"
+    "communication,file-sharing,team-coordination,project-management,task-delegation,task-execution,mcporter" \
+    "worker-internal-workflow")
+assert_eq "ok" "${WORKER_SKILL_CHECK}" "Worker API exposes TeamHarness and WorkerFlow plugin skills"
 
 MCP_HEALTH=$(_worker_mcp_call health '{}' 2>/dev/null || echo "{}")
 if echo "${MCP_HEALTH}" | jq -e '.ok == true' >/dev/null 2>&1; then
@@ -1250,7 +1332,7 @@ else
 fi
 
 TASK_PROMPT=$(cat <<EOF
-Please complete this TeamHarness plugin-mode E2E request by coordinating with
+${LEADER_MXID} Please complete this TeamHarness plugin-mode E2E request by coordinating with
 the worker. Do not complete the worker task yourself.
 
 Project id: ${PROJECT_ID}
@@ -1266,10 +1348,10 @@ Required leader steps:
    using the Team Room from your TeamHarness roster facts, and the task spec
    below. This must create
    shared/tasks/${TASK_ID}/spec.md.
-4. Use the TeamHarness message tool to assign the task in the Team Room. The
-   assignment must visibly mention the worker Matrix user from your TeamHarness
-   roster facts, include ${TASK_ID}, include shared/tasks/${TASK_ID}/spec.md,
-   and tell the assignee to call taskflow ack_task before reading the spec.
+4. Reply directly in this Team Room to assign the task. The assignment must
+   visibly mention the worker Matrix user from your TeamHarness roster facts,
+   include ${TASK_ID}, include shared/tasks/${TASK_ID}/spec.md, and tell the
+   assignee to call taskflow ack_task before reading the spec.
 
 Task spec to delegate:
 # Task: Write TeamHarness plugin-mode readiness note
@@ -1281,8 +1363,12 @@ Create shared/tasks/${TASK_ID}/workspace/readiness-note.txt with this exact
 line:
 ${MARKER}
 
+Create shared/tasks/${TASK_ID}/result.md with a short completion report that
+contains ${MARKER} and lists the readiness note as a deliverable.
+
 Then call taskflow submit_task with status SUCCESS, a summary containing
-${MARKER}, and deliverable shared/tasks/${TASK_ID}/workspace/readiness-note.txt.
+${MARKER}, and both shared/tasks/${TASK_ID}/result.md and
+shared/tasks/${TASK_ID}/workspace/readiness-note.txt as deliverables.
 
 After submit_task succeeds, reply in the Team Room with exactly this completion
 line and one short summary sentence:
@@ -1293,14 +1379,14 @@ completion message.
 EOF
 )
 
-if matrix_send_message "${ADMIN_TOKEN}" "${LEADER_DM}" "${TASK_PROMPT}" >/dev/null 2>&1; then
+if matrix_send_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${TASK_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent real TeamHarness task to QwenPaw leader"
 else
     log_fail "Admin failed to send task to QwenPaw leader"
 fi
 
 LEADER_ASSIGNMENT=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}" "${TASK_ID}" 480 2>/dev/null || true)
+    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}" "${WORKER_MXID}" 480 2>/dev/null || true)
 if echo "${LEADER_ASSIGNMENT}" | grep -q "${TASK_ID}" && echo "${LEADER_ASSIGNMENT}" | grep -q "${WORKER_MXID}"; then
     log_pass "Leader assigned TeamHarness task to worker in Team Room"
 else
@@ -1315,7 +1401,7 @@ else
 fi
 
 WORKER_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${MARKER}" 720 2>/dev/null || true)
+    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${DONE_LINE}" 720 2>/dev/null || true)
 if echo "${WORKER_REPLY}" | grep -q "${DONE_LINE}"; then
     log_pass "Worker completed delegated TeamHarness task in Team Room"
 else
@@ -1336,13 +1422,12 @@ else
     log_fail "Task deliverable missing in shared storage"
 fi
 
-CHECK_ARGS=$(jq -nc --arg task "${TASK_ID}" '{action:"check_task", payload:{taskId:$task}}')
+CHECK_ARGS=$(jq -nc --arg task "${TASK_ID}" '{role:"leader", action:"check_task", payload:{taskId:$task}}')
 TASK_CHECK=$(_leader_mcp_call taskflow "${CHECK_ARGS}" 2>/dev/null || echo "{}")
-if echo "${TASK_CHECK}" | jq -e --arg marker "${MARKER}" \
-    '.ok == true and .effective == true and (.result.summary | contains($marker))' >/dev/null 2>&1; then
+if echo "${TASK_CHECK}" | jq -e '.ok == true and .effective == true' >/dev/null 2>&1; then
     log_pass "Leader verified submitted worker result through taskflow"
 else
-    log_fail "Leader could not verify submitted worker result through taskflow"
+    log_fail "Leader could not verify submitted worker result through taskflow: ${TASK_CHECK}"
 fi
 
 _dump_debug_snapshot

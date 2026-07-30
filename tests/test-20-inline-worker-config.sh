@@ -7,7 +7,7 @@
 #   3. Controller reconcile: mc mirror → fsnotify → kine → WorkerReconciler
 #   4. WriteInlineConfigs generates SOUL.md + AGENTS.md
 #   5. create-worker.sh runs: Matrix account + Room + container
-#   6. Verify SOUL.md and AGENTS.md content in MinIO
+#   6. Verify SOUL.md and AGENTS.md in the selected runtime's consumed location
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"
@@ -18,6 +18,7 @@ test_setup "20-inline-worker-config"
 TEST_WORKER="test-inline-$$"
 TEST_WORKER_OVERRIDE="test-inlover-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 # ---- Cleanup handler ----
 _cleanup() {
@@ -144,27 +145,42 @@ else
     exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
-# Verify inline configs were written
-INLINE_LOG=$(exec_in_manager cat /var/log/agentteams/agentteams-controller-error.log 2>/dev/null | grep "inline configs written.*${TEST_WORKER}" || echo "")
-assert_not_empty "${INLINE_LOG}" "Controller logged inline configs written"
+# QwenPaw consumes inline config from runtime.yaml; legacy runtimes still use
+# the controller's direct file writer and its corresponding log event.
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    wait_agent_file_contains "${TEST_WORKER}" "runtime/runtime.yaml" "Inline Test Worker" 180 || true
+    RUNTIME_CONFIG=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}/runtime/runtime.yaml" 2>/dev/null || true)
+    assert_contains "${RUNTIME_CONFIG}" "Inline Test Worker" "runtime.yaml carries inline SOUL config"
+    if wait_qwenpaw_api_matches "${TEST_WORKER}" /api/teamharness/health '.ok == true and .adapter == "qwenpaw-2"' 240; then
+        log_pass "QwenPaw runtime and TeamHarness plugin are ready"
+    else
+        log_fail "QwenPaw runtime did not become ready"
+    fi
+else
+    INLINE_LOG=$(exec_in_manager cat /var/log/agentteams/agentteams-controller-error.log 2>/dev/null | grep "inline configs written.*${TEST_WORKER}" || echo "")
+    assert_not_empty "${INLINE_LOG}" "Controller logged inline configs written"
+fi
 
 # ============================================================
 # Section 6: Verify SOUL.md and AGENTS.md content
 # ============================================================
 log_section "Verify Inline Config Files"
 
-# Check SOUL.md in MinIO
-SOUL_IN_MINIO=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}/SOUL.md" 2>/dev/null || echo "")
-assert_not_empty "${SOUL_IN_MINIO}" "SOUL.md exists in MinIO agent space"
-assert_contains "${SOUL_IN_MINIO}" "Inline Test Worker" "SOUL.md contains expected content"
-assert_contains "${SOUL_IN_MINIO}" "AI Identity" "SOUL.md contains AI Identity section"
+# Check the files from the runtime location that consumes them.
+wait_worker_runtime_file_contains "${TEST_WORKER}" "SOUL.md" "Inline Test Worker" 180 || true
+SOUL_IN_RUNTIME=$(read_worker_runtime_file "${TEST_WORKER}" "SOUL.md")
+assert_not_empty "${SOUL_IN_RUNTIME}" "SOUL.md exists in Worker runtime"
+assert_contains "${SOUL_IN_RUNTIME}" "Inline Test Worker" "SOUL.md contains expected content"
+assert_contains "${SOUL_IN_RUNTIME}" "AI Identity" "SOUL.md contains AI Identity section"
 
-# Check AGENTS.md in MinIO
-AGENTS_IN_MINIO=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER}/AGENTS.md" 2>/dev/null || echo "")
-assert_not_empty "${AGENTS_IN_MINIO}" "AGENTS.md exists in MinIO agent space"
-assert_contains "${AGENTS_IN_MINIO}" "Inline Test Workspace" "AGENTS.md contains expected content"
-assert_contains "${AGENTS_IN_MINIO}" "agentteams-builtin-start" "AGENTS.md has builtin markers"
-assert_contains "${AGENTS_IN_MINIO}" "agentteams-builtin-end" "AGENTS.md has builtin end marker"
+wait_worker_runtime_file_contains "${TEST_WORKER}" "AGENTS.md" "Inline Test Workspace" 180 || true
+AGENTS_IN_RUNTIME=$(read_worker_runtime_file "${TEST_WORKER}" "AGENTS.md")
+assert_not_empty "${AGENTS_IN_RUNTIME}" "AGENTS.md exists in Worker runtime"
+assert_contains "${AGENTS_IN_RUNTIME}" "Inline Test Workspace" "AGENTS.md contains expected content"
+if [ "${TEST_WORKER_RUNTIME}" != "qwenpaw" ]; then
+    assert_contains "${AGENTS_IN_RUNTIME}" "agentteams-builtin-start" "AGENTS.md has builtin markers"
+    assert_contains "${AGENTS_IN_RUNTIME}" "agentteams-builtin-end" "AGENTS.md has builtin end marker"
+fi
 
 # ============================================================
 # Section 7: Verify Worker infrastructure
@@ -179,12 +195,20 @@ assert_not_empty "${WORKER_RESOURCE}" "Worker resource is queryable"
 ROOM_ID=$(exec_in_agent agt get workers "${TEST_WORKER}" -o json 2>/dev/null | jq -r '.roomID // empty')
 assert_not_empty "${ROOM_ID}" "Matrix Room created: ${ROOM_ID}"
 
-# openclaw.json in MinIO
-OPENCLAW_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_WORKER}/openclaw.json' >/dev/null 2>&1 && echo yes || echo no")
-if [ "${OPENCLAW_EXISTS}" = "yes" ]; then
-    log_pass "openclaw.json generated and pushed to MinIO"
+# Runtime desired state in object storage
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    if echo "${RUNTIME_CONFIG}" | grep -Fq 'runtime: qwenpaw'; then
+        log_pass "runtime.yaml generated with qwenpaw runtime"
+    else
+        log_fail "runtime.yaml missing qwenpaw runtime declaration"
+    fi
 else
-    log_fail "openclaw.json not found in MinIO"
+    OPENCLAW_EXISTS=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_WORKER}/openclaw.json' >/dev/null 2>&1 && echo yes || echo no")
+    if [ "${OPENCLAW_EXISTS}" = "yes" ]; then
+        log_pass "openclaw.json generated and pushed to MinIO"
+    else
+        log_fail "openclaw.json not found in MinIO"
+    fi
 fi
 
 # Worker container running.
@@ -341,15 +365,15 @@ fi
 # Wait for the update reconcile. The durable signal is the generated file
 # content; log text can change across controller versions.
 log_info "Waiting for controller to reconcile override worker update..."
-if wait_agent_file_contains "${TEST_WORKER_OVERRIDE}" "SOUL.md" "OVERRIDDEN SOUL FROM INLINE" 120; then
+if wait_worker_runtime_file_contains "${TEST_WORKER_OVERRIDE}" "SOUL.md" "OVERRIDDEN SOUL FROM INLINE" 180; then
     log_pass "Override worker updated"
 else
-    log_fail "Override worker not updated within 120s"
+    log_fail "Override worker not updated within 180s"
     exec_in_agent agt get workers "${TEST_WORKER_OVERRIDE}" -o json 2>/dev/null | jq -r '.phase, .message' | head -5
 fi
 
 # Verify SOUL.md has inline content, NOT package content
-SOUL_OVERRIDE=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER_OVERRIDE}/SOUL.md" 2>/dev/null || echo "")
+SOUL_OVERRIDE=$(read_worker_runtime_file "${TEST_WORKER_OVERRIDE}" "SOUL.md")
 assert_not_empty "${SOUL_OVERRIDE}" "SOUL.md exists for override worker"
 assert_contains "${SOUL_OVERRIDE}" "OVERRIDDEN SOUL FROM INLINE" "SOUL.md contains inline override content"
 
@@ -361,7 +385,7 @@ else
 fi
 
 # Verify AGENTS.md has inline content
-AGENTS_OVERRIDE=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_WORKER_OVERRIDE}/AGENTS.md" 2>/dev/null || echo "")
+AGENTS_OVERRIDE=$(read_worker_runtime_file "${TEST_WORKER_OVERRIDE}" "AGENTS.md")
 assert_not_empty "${AGENTS_OVERRIDE}" "AGENTS.md exists for override worker"
 assert_contains "${AGENTS_OVERRIDE}" "OVERRIDDEN AGENTS FROM INLINE" "AGENTS.md contains inline override content"
 

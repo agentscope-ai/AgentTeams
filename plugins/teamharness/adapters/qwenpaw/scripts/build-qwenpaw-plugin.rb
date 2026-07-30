@@ -91,6 +91,13 @@ Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
   ].each do |entry|
     copy_entry(plugin_root, asset_dir, entry)
   end
+  public_skills = asset_dir / "qwenpaw-skills"
+  public_skills.mkpath
+  %w[agent team].each do |group|
+    Dir.glob((plugin_root / "skills" / group / "*").to_s).each do |skill|
+      FileUtils.cp_r(skill, public_skills)
+    end
+  end
 
   copy_entry(adapter_root, staging, "plugin.py")
   copy_entry(adapter_root, staging, "task_trace.py")
@@ -106,7 +113,11 @@ Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
       "backend" => "plugin.py"
     },
     "dependencies" => [],
-    "min_version" => "1.1.7",
+    "min_version" => "2.0.1",
+    "qwenpaw_version" => {
+      "min" => "2.0.1",
+      "max" => "2.1.0"
+    },
     "meta" => {
       "category" => "teamharness",
       "features" => [

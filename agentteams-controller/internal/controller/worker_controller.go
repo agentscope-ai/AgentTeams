@@ -198,6 +198,15 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{}, err
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
+	mctx.TeamName, err = r.workerTeamName(ctx, w)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	teamRole, inTeam, err := r.teamRoleForWorker(ctx, w.Namespace, w.Name)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	configOwnedByTeam := inTeam && backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
@@ -205,6 +214,10 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 			return reconcile.Result{}, fmt.Errorf("resolve model provider %q: %w", effectiveSpec.ModelProvider, err)
 		}
 		mctx.ModelProviderInfo = info
+	}
+	configContext := mctx
+	if inTeam && teamRole == RoleTeamLeader {
+		configContext.Role = RoleTeamLeader
 	}
 
 	if mctx.DeployMode == v1beta1.DeployModeEdge {
@@ -244,9 +257,13 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 			applyMemberStateToWorker(w, state)
 			return reconcile.Result{}, err
 		}
-		if err := ReconcileMemberConfig(ctx, deps, mctx, state); err != nil {
-			applyMemberStateToWorker(w, state)
-			return reconcile.Result{}, err
+		if !configOwnedByTeam {
+			if err := ReconcileMemberConfig(ctx, deps, configContext, state); err != nil {
+				applyMemberStateToWorker(w, state)
+				return reconcile.Result{}, err
+			}
+		} else {
+			logger.Info("worker runtime config owned by TeamReconciler, skipping standalone config reconcile", "worker", w.Name, "team", mctx.TeamName)
 		}
 		applyMemberStateToWorker(w, state)
 		w.Status.SpecHash = mctx.AppliedSpecHash
@@ -270,9 +287,13 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		applyMemberStateToWorker(w, state)
 		return reconcile.Result{}, err
 	}
-	if err := ReconcileMemberConfig(ctx, deps, mctx, state); err != nil {
-		applyMemberStateToWorker(w, state)
-		return reconcile.Result{}, err
+	if !configOwnedByTeam {
+		if err := ReconcileMemberConfig(ctx, deps, configContext, state); err != nil {
+			applyMemberStateToWorker(w, state)
+			return reconcile.Result{}, err
+		}
+	} else {
+		logger.Info("worker runtime config owned by TeamReconciler, skipping standalone config reconcile", "worker", w.Name, "team", mctx.TeamName)
 	}
 	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
@@ -309,6 +330,27 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 
 	requeueAfter := minPositiveDuration(reconcileInterval, state.RequeueAfter)
 	return reconcile.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *WorkerReconciler) workerTeamName(ctx context.Context, w *v1beta1.Worker) (string, error) {
+	if teamName := w.Annotations[v1beta1.AnnotationWorkerTeamName]; teamName != "" {
+		return teamName, nil
+	}
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		return "", fmt.Errorf("list teams for worker %q: %w", w.Name, err)
+	}
+	sort.Slice(teams.Items, func(i, j int) bool {
+		return teams.Items[i].Name < teams.Items[j].Name
+	})
+	for _, team := range teams.Items {
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name {
+				return team.Spec.EffectiveTeamName(team.Name), nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // reconcileDelete cleans up all infrastructure for the Worker and then removes

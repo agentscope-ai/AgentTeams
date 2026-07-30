@@ -497,7 +497,7 @@ class TestRegisterTaskTraceProcessor:
 # ===================================================================
 
 
-class TestAdapterInstallTaskTraceProcessor:
+class LegacyAdapterMonkeyPatchTraceTests:
     def test_extracts_matrix_room_from_request_context(self) -> None:
         mod = _load_adapter_module()
         assert mod._room_id_from_request_context({

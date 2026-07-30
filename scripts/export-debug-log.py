@@ -21,11 +21,14 @@ Output structure:
     ├── summary.txt
     ├── matrix-messages/
     │   └── RoomName_!roomid.jsonl
-    └── agent-sessions/
+    ├── agent-sessions/
         ├── agentteams-manager/
         │   └── {session-id}.jsonl
         └── agentteams-worker-xxx/
             └── {session-key}.jsonl
+    └── container-logs/
+        ├── agentteams-worker-xxx.log
+        └── agentteams-worker-xxx.state.json
 """
 
 import argparse
@@ -154,6 +157,82 @@ def list_agentteams_containers() -> list[str]:
         )
         names.extend(n.strip() for n in result.stdout.splitlines() if n.strip())
     return list(dict.fromkeys(names))
+
+
+# ---------------------------------------------------------------------------
+# Container diagnostics
+# ---------------------------------------------------------------------------
+
+def _docker_run(*args: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["docker", *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return subprocess.CompletedProcess(
+            ["docker", *args],
+            1,
+            "",
+            f"{type(exc).__name__}: {exc}",
+        )
+
+
+def export_container_logs(out_dir: Path, since_epoch: float, redact: bool,
+                          container_filter: str | None) -> int:
+    """Export Docker state and logs for all AgentTeams containers."""
+    result = _docker_run("ps", "-a", "--format", "{{.Names}}", "--filter", "name=agentteams-")
+    containers = [name.strip() for name in result.stdout.splitlines() if name.strip()]
+    if container_filter:
+        containers = [name for name in containers if container_filter in name]
+    if not containers:
+        print("  [containers] No matching AgentTeams containers found")
+        return 0
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    since = datetime.fromtimestamp(since_epoch, tz=timezone.utc).isoformat()
+
+    for container in containers:
+        state_result = _docker_run("inspect", "--format={{json .State}}", container)
+        image_result = _docker_run("inspect", "--format={{json .Config.Image}}", container)
+        restart_result = _docker_run("inspect", "--format={{.RestartCount}}", container)
+        try:
+            state = json.loads(state_result.stdout)
+        except (json.JSONDecodeError, TypeError):
+            state = {"inspect_error": state_result.stderr.strip() or state_result.stdout.strip()}
+        try:
+            image = json.loads(image_result.stdout)
+        except (json.JSONDecodeError, TypeError):
+            image = image_result.stdout.strip()
+        try:
+            restart_count = int(restart_result.stdout.strip())
+        except ValueError:
+            restart_count = None
+
+        diagnostic = {
+            "container": container,
+            "image": image,
+            "restart_count": restart_count,
+            "state": state,
+        }
+        if redact:
+            diagnostic = redact_json_strings(diagnostic)
+        filename = sanitize_filename(container)
+        (out_dir / f"{filename}.state.json").write_text(
+            json.dumps(diagnostic, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        logs_result = _docker_run("logs", "--timestamps", "--since", since, container)
+        logs = logs_result.stdout + logs_result.stderr
+        if redact:
+            logs = redact_pii(logs)
+        (out_dir / f"{filename}.log").write_text(logs, encoding="utf-8")
+        print(f"  {container}: state + {len(logs.splitlines())} log lines")
+
+    return len(containers)
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +830,17 @@ def main():
         sessions_dir.rmdir()
     print()
 
+    # --- Container diagnostics ---
+    print("=== Container Diagnostics ===")
+    container_logs_dir = run_dir / "container-logs"
+    containers = export_container_logs(
+        container_logs_dir, since_epoch, redact,
+        container_filter=args.container,
+    )
+    if containers == 0 and container_logs_dir.exists() and not any(container_logs_dir.iterdir()):
+        container_logs_dir.rmdir()
+    print()
+
     # --- Summary ---
     summary = (
         f"AgentTeams Debug Log\n"
@@ -760,10 +850,15 @@ def main():
         f"\n"
         f"Matrix messages: {messages} messages from {rooms} rooms\n"
         f"Agent sessions: {events} events from {sessions} sessions\n"
+        f"Container diagnostics: {containers} containers\n"
     )
     (run_dir / "summary.txt").write_text(summary)
 
-    print(f"Done. {messages} messages from {rooms} rooms, {events} events from {sessions} sessions")
+    print(
+        f"Done. {messages} messages from {rooms} rooms, "
+        f"{events} events from {sessions} sessions, "
+        f"{containers} container diagnostics"
+    )
     print(f"Output: {run_dir.resolve()}")
 
 

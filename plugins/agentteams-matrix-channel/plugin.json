@@ -1,9 +1,9 @@
 {
-  "id": "teamharness",
-  "name": "TeamHarness",
+  "id": "agentteams-matrix-channel",
+  "name": "AgentTeams Matrix Channel",
   "version": "0.1.0",
-  "type": "general",
-  "description": "AgentTeams TeamHarness runtime plugin for QwenPaw.",
+  "type": "channel",
+  "description": "AgentTeams-owned Matrix transport for managed workers.",
   "author": "AgentTeams",
   "entry": {
     "backend": "plugin.py"

@@ -1,8 +1,11 @@
+import asyncio
 import os
 import subprocess
 from pathlib import Path
 
-from qwenpaw_worker.sync import FileSync, push_local
+import pytest
+
+from qwenpaw_worker.sync import FileSync, push_local, push_loop
 
 
 def _sync(tmp_path: Path) -> FileSync:
@@ -290,3 +293,31 @@ def test_push_local_uploads_large_files_without_remote_content_compare(tmp_path:
 
     assert push_local(sync, since=0) == ["large.zip"]
     assert uploads == ["agentteams/agentteams-storage/agents/worker-a/large.zip"]
+
+
+@pytest.mark.anyio
+async def test_push_loop_starts_from_current_time_instead_of_full_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync = _sync(tmp_path)
+    since_values: list[float] = []
+    sleeps = 0
+
+    async def fake_sleep(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 1:
+            raise asyncio.CancelledError
+
+    async def fake_to_thread(_function, _sync, since):
+        since_values.append(since)
+        return []
+
+    monkeypatch.setattr("qwenpaw_worker.sync.time.time", lambda: 123.0)
+    monkeypatch.setattr("qwenpaw_worker.sync.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("qwenpaw_worker.sync.asyncio.to_thread", fake_to_thread)
+
+    await push_loop(sync, check_interval=0)
+
+    assert since_values == [123.0]

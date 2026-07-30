@@ -73,15 +73,56 @@ def extract_matrix_mentions(text: str) -> list[str]:
     return list(dict.fromkeys(_MATRIX_USER_ID_RE.findall(text or "")))
 
 
+def canonicalize_team_worker_mentions(text: str) -> str:
+    """Expand unambiguous Team Worker aliases to their full Matrix IDs."""
+    if _runtime_config_field("member", "role") != "team_leader":
+        return text
+    team_name = _runtime_config_field("team", "name")
+    if not team_name or not _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(text or ""):
+        return text
+
+    agents_path = _runtime_root() / "AGENTS.md"
+    try:
+        lines = agents_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return text
+
+    aliases: dict[str, str] = {}
+    in_workers = False
+    for line in lines:
+        if line.strip() == "- **Team Workers**:":
+            in_workers = True
+            continue
+        if not in_workers:
+            continue
+        if not line.startswith("  - "):
+            break
+        match = _MATRIX_USER_ID_RE.search(line)
+        if not match:
+            continue
+        matrix_id = match.group(0)
+        localpart = matrix_id.split(":", 1)[0].removeprefix("@")
+        aliases[localpart] = matrix_id
+        prefix = f"{team_name}-"
+        if localpart.startswith(prefix):
+            aliases[localpart[len(prefix) :]] = matrix_id
+
+    def replace(match: re.Match[str]) -> str:
+        matrix_id = match.group(0)
+        localpart = matrix_id.split(":", 1)[0].removeprefix("@")
+        return aliases.get(localpart, matrix_id)
+
+    return _MATRIX_USER_ID_RE.sub(replace, text or "")
+
+
 def resolve_team_leader_assignment_room(text: str, room_id: str) -> str:
     """Route Team Leader worker assignments from Leader DM to Team Room."""
     if _runtime_config_field("member", "role") != "team_leader":
         return room_id
 
     team_room_id = _runtime_config_field("team", "teamRoomId")
-    leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
     team_name = _runtime_config_field("team", "name")
-    if not team_room_id or room_id != leader_dm_room_id:
+    if not team_room_id:
         return room_id
     if not _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(text or ""):
         return room_id

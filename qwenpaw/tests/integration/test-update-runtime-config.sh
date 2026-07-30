@@ -61,39 +61,50 @@ qwenpaw_e2e_start_worker -e AGENTTEAMS_WORKER_GATEWAY_KEY=fake-gateway-key
 qwenpaw_e2e_wait_worker_http /api/version 240
 qwenpaw_e2e_wait_worker_http /api/teamharness/health 240
 
-qwenpaw_e2e_exec /opt/venv/qwenpaw/bin/python - <<'PY'
+initial_applied="false"
+for _ in $(seq 1 45); do
+    if qwenpaw_e2e_exec /opt/venv/qwenpaw/bin/python - <<'PY'
 import json
-import os
-from pathlib import Path
+from urllib.request import urlopen
 
-from qwenpaw.app.channels.access_control import get_access_control_store
-from qwenpaw.config.config import load_agent_config
-from qwenpaw.providers.provider_manager import ProviderManager
+def get(path):
+    with urlopen(f"http://127.0.0.1:8088{path}") as response:
+        return json.load(response)
 
-workspace = Path(os.environ["QWENPAW_WORKING_DIR"]) / "workspaces" / "default"
-
-manager = ProviderManager.get_instance()
-assert manager.active_model.provider_id == "agentteams-update-e2e", manager.active_model
-assert manager.active_model.model == "qwen-fake-v1", manager.active_model
-provider = manager.custom_providers["agentteams-update-e2e"]
-assert provider.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1", provider.base_url
-assert provider.api_key == "fake-gateway-key"
-
-mcp = json.loads((workspace / "config" / "mcporter.json").read_text(encoding="utf-8"))
-assert mcp["mcpServers"]["docs"]["url"] == "https://gateway.example.com/mcp/docs-v1"
-assert mcp["mcpServers"]["docs"]["headers"]["Authorization"] == "Bearer fake-gateway-key"
-assert not (workspace / "mcporter-servers.json").exists()
-
-agent_config = load_agent_config("default")
-assert agent_config.channels.matrix.access_control_group is True
-assert agent_config.channels.matrix.access_control_dm is True
-
-acl = get_access_control_store(workspace).get_acl("matrix")
+active = get("/api/models/active?scope=agent&agent_id=default")["active_llm"]
+assert active["provider_id"] == "agentteams-update-e2e" and active["model"] == "qwen-fake-v1", active
+provider = next(item for item in get("/api/models") if item["id"] == "agentteams-update-e2e")
+assert provider["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1", provider
+mcp = {item["key"]: item for item in get("/api/mcp")}
+assert mcp.get("docs", {}).get("url") == "https://gateway.example.com/mcp/docs-v1", mcp
+assert mcp.get("teamharness", {}).get("enabled") is True, mcp
+assert mcp.get("workerflow", {}).get("enabled") is True, mcp
+assert get("/api/mcp/policy/teamharness")["default_effect"] == "allow"
+assert get("/api/mcp/policy/workerflow")["default_effect"] == "allow"
+channel_types = get("/api/config/channels/types")
+assert "matrix" in channel_types and "agentteams_matrix" in channel_types, channel_types
+schema = get("/api/config/channels/schemas")["agentteams_matrix"]
+assert schema["plugin_id"] == "agentteams-matrix-channel", schema
+channel = get("/api/config/channels/agentteams_matrix")
+assert channel["access_control_group"] is True
+assert channel["access_control_dm"] is True
+acl = get("/api/access-control/agentteams_matrix")
 assert "!team-v1:matrix.local" in acl["whitelist"], acl
 assert "@admin-v1:matrix.local" in acl["whitelist"], acl
 assert "!blocked-v1:matrix.local" in acl["blacklist"], acl
 assert "@blocked-v1:matrix.local" in acl["blacklist"], acl
+skills = {item["name"]: item for item in get("/api/skills")}
+assert skills.get("communication", {}).get("source") == "plugin:teamharness", skills
+assert skills.get("worker-internal-workflow", {}).get("source") == "plugin:workerflow", skills
 PY
+    then
+        initial_applied="true"
+        break
+    fi
+    sleep 2
+done
+
+[ "${initial_applied}" = "true" ] || qwenpaw_e2e_fail "initial runtime.yaml was not applied"
 
 started_before="$(docker inspect -f '{{.State.StartedAt}}' "${QWENPAW_E2E_WORKER_CONTAINER}")"
 
@@ -171,27 +182,21 @@ for _ in $(seq 1 45); do
 import json
 import os
 from pathlib import Path
-
-from qwenpaw.app.channels.access_control import get_access_control_store
-from qwenpaw.config.config import load_agent_config
-from qwenpaw.providers.provider_manager import ProviderManager
+from urllib.request import urlopen
 
 workspace = Path(os.environ["QWENPAW_WORKING_DIR"]) / "workspaces" / "default"
 package_root = Path(os.environ["QWENPAW_WORKING_DIR"]) / "agent-packages"
 
-manager = ProviderManager.get_instance()
-assert manager.active_model.provider_id == "agentteams-update-e2e", manager.active_model
-assert manager.active_model.model == "qwen-fake-v2", manager.active_model
+def get(path):
+    with urlopen(f"http://127.0.0.1:8088{path}") as response:
+        return json.load(response)
 
-mcp = json.loads((workspace / "config" / "mcporter.json").read_text(encoding="utf-8"))
-assert mcp["mcpServers"]["docs"]["url"] == "https://gateway.example.com/mcp/docs-v2"
-assert not (workspace / "mcporter-servers.json").exists()
-
-agent_config = load_agent_config("default")
-assert agent_config.mcp.clients["package-docs"].url == "https://package.example.com/mcp/docs"
-assert not (workspace / "mcp.json").exists()
-
-acl = get_access_control_store(workspace).get_acl("matrix")
+active = get("/api/models/active?scope=agent&agent_id=default")["active_llm"]
+assert active["provider_id"] == "agentteams-update-e2e" and active["model"] == "qwen-fake-v2", active
+mcp = {item["key"]: item for item in get("/api/mcp")}
+assert mcp.get("docs", {}).get("url") == "https://gateway.example.com/mcp/docs-v2", mcp
+assert mcp.get("package-docs", {}).get("url") == "https://package.example.com/mcp/docs", mcp
+acl = get("/api/access-control/agentteams_matrix")
 assert "!team-v2:matrix.local" in acl["whitelist"], acl
 assert "@admin-v2:matrix.local" in acl["whitelist"], acl
 assert "!blocked-v2:matrix.local" in acl["blacklist"], acl
@@ -199,6 +204,8 @@ assert "@blocked-v2:matrix.local" in acl["blacklist"], acl
 
 assert "Package Generation 2" in (workspace / "AGENTS.md").read_text(encoding="utf-8")
 assert (workspace / "skills" / "hot-skill" / "SKILL.md").is_file()
+skills = {item["name"]: item for item in get("/api/skills")}
+assert skills.get("hot-skill", {}).get("enabled") is True, skills
 identity = (package_root / "current.identity").read_text(encoding="utf-8").splitlines()
 assert identity[:4] == [
     "file:///tmp/qwenpaw-agent-package-v2",

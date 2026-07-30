@@ -25,6 +25,7 @@ TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_HUMAN="test-human-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 _cleanup() {
     if [ "${TESTS_FAILED}" -gt 0 ]; then
@@ -235,21 +236,25 @@ wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.groupAllowFr
 wait_agent_matrix_allow_contains "${TEST_LEADER}" ".channels.matrix.dm.allowFrom" "${HUMAN_MATRIX_ID}" 120 || true
 wait_agent_matrix_allow_contains "${TEST_W1}" ".channels.matrix.groupAllowFrom" "${HUMAN_MATRIX_ID}" 120 || true
 
-LEADER_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+LEADER_GAF=$(read_worker_matrix_allowlist "${TEST_LEADER}")
 if echo "${LEADER_GAF}" | grep -q "${HUMAN_MATRIX_ID}"; then
     log_pass "Leader groupAllowFrom includes Team Admin (backfilled)"
 else
     log_fail "Leader groupAllowFrom missing Team Admin after backfill"
 fi
 
-LEADER_DAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.dm.allowFrom[]' 2>/dev/null)
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    LEADER_DAF="${LEADER_GAF}"
+else
+    LEADER_DAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.dm.allowFrom[]' 2>/dev/null)
+fi
 if echo "${LEADER_DAF}" | grep -q "${HUMAN_MATRIX_ID}"; then
     log_pass "Leader dm.allowFrom includes Team Admin"
 else
     log_fail "Leader dm.allowFrom missing Team Admin"
 fi
 
-W1_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+W1_GAF=$(read_worker_matrix_allowlist "${TEST_W1}")
 if echo "${W1_GAF}" | grep -q "${HUMAN_MATRIX_ID}"; then
     log_pass "Worker groupAllowFrom includes Team Admin (backfilled)"
 else
@@ -267,13 +272,21 @@ fi
 # ============================================================
 log_section "Verify Team Context Block"
 
-W1_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/AGENTS.md" 2>/dev/null || echo "")
-W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
-assert_contains "${W1_CTX}" "Team Admin" "Worker team-context mentions Team Admin"
-
-LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null || echo "")
-LEADER_CTX=$(echo "${LEADER_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
-assert_contains "${LEADER_CTX}" "Team Admin" "Leader team-context mentions Team Admin"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    W1_CTX=$(read_worker_runtime_file "${TEST_W1}" "TEAMS.md")
+    LEADER_CTX=$(read_worker_runtime_file "${TEST_LEADER}" "TEAMS.md")
+    assert_contains "${W1_CTX}" "team.admin.name: ${TEST_HUMAN}" "Worker runtime context names Team Admin"
+    assert_contains "${W1_CTX}" "team.admin.matrixUserId: ${HUMAN_MATRIX_ID}" "Worker runtime context has Team Admin Matrix ID"
+    assert_contains "${LEADER_CTX}" "team.admin.name: ${TEST_HUMAN}" "Leader runtime context names Team Admin"
+    assert_contains "${LEADER_CTX}" "team.admin.matrixUserId: ${HUMAN_MATRIX_ID}" "Leader runtime context has Team Admin Matrix ID"
+else
+    W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "AGENTS.md")
+    W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
+    assert_contains "${W1_CTX}" "Team Admin" "Worker team-context mentions Team Admin"
+    LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "AGENTS.md")
+    LEADER_CTX=$(echo "${LEADER_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
+    assert_contains "${LEADER_CTX}" "Team Admin" "Leader team-context mentions Team Admin"
+fi
 
 # ============================================================
 # Section 7: Verify admin auto-joined worker rooms

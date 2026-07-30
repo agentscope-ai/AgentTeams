@@ -20,7 +20,16 @@ Record release-facing changes here before the next release.
 **Bug Fixes**
 
 - **Installer Token Plan models**: Update the quick-start Token Plan GLM option to `glm-5.2` while accepting existing `glm-5` values during upgrades. (Refs [#1076](https://github.com/agentscope-ai/AgentTeams/issues/1076))
+- **QwenPaw MCP policy startup convergence**: Persist built-in plugin MCP policies before runtime desired-state reloads so a replacement QwenPaw workspace cannot retain the pre-policy interactive approval handler.
+- **QwenPaw Team policy and runtime-aware acceptance**: Merge Team and Worker channel-policy overrides into QwenPaw `runtime.yaml`, wait for public plugin/API state before integration assertions, and verify prompt/config files from the runtime location that consumes them.
+- **QwenPaw 2.0 tool execution**: Preserve QwenPaw's asynchronous tool-result stream while sanitizing output, and allow only the built-in TeamHarness and Workerflow MCP drivers to run without an unavailable interactive approval prompt.
+- **QwenPaw package and Team storage access**: Preserve referenced members' effective Team name across independent Worker reconciles, update MinIO policies without detaching active Workers, revoke access on detach, and grant Workers read-only access to centrally uploaded AgentSpec packages.
+- **QwenPaw inline prompt compatibility**: Project Worker identity, SOUL, and AGENTS content through runtime desired state and apply it to both the native QwenPaw workspace and the Worker root storage contract.
+- **Integration failure diagnostics**: Export AgentTeams container state and timestamped logs with CI artifacts, classify QwenPaw startup errors without exposing their message contents, and stop the TeamHarness shard after startup failures instead of hiding the cause behind cascading timeouts.
+- **QwenPaw local startup readiness**: Select and propagate the QwenPaw Worker image across install backends, then wait for the runtime-owned `runtime/runtime.yaml` object before creating a local Docker Worker.
+- **QwenPaw 2.0 runtime compatibility**: Adapt the QwenPaw Worker image, custom Matrix Channel, and native plugins to QwenPaw 2.0.1 startup and schema contracts.
 - **Worker storage sync I/O amplification**: Upload changed workspace files once per successful watermark, keep jq 1.7 fallback pulls alive, and limit embedded Controller mirrors to control-plane configuration. Concurrent Worker creation and large unknown workspace paths retain their existing persistence semantics without repeated whole-workspace mirrors. ([#1110](https://github.com/agentscope-ai/AgentTeams/pull/1110))
+- **Manager diagnostic loops**: Manager prompts and Worker lifecycle guidance stop repeated no-op troubleshooting commands and treat a missing Worker in `agt get workers` as the deletion boundary instead of looping on Matrix room probes. ([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
 - **CoPaw Team routing and workspace projection**: Route Team Leader assignments to the Team Room, including localpart mentions, and project Worker prompts, skills, tool configuration, and Matrix settings into CoPaw's default workspace. ([#1060](https://github.com/agentscope-ai/AgentTeams/pull/1060), [9074def](https://github.com/agentscope-ai/AgentTeams/commit/9074def3), [973e291](https://github.com/agentscope-ai/AgentTeams/commit/973e291), [92c8145](https://github.com/agentscope-ai/AgentTeams/commit/92c8145))
 - **Team room and Worker lifecycle convergence**: Keep referenced Worker CRs protected, enforce required Team roles, remove Manager from regular Team Worker personal rooms, and restore standalone membership when a Worker leaves a Team. ([d96f1ed](https://github.com/agentscope-ai/AgentTeams/commit/d96f1ed), [43545c2](https://github.com/agentscope-ai/AgentTeams/commit/43545c2), [b5b0add](https://github.com/agentscope-ai/AgentTeams/commit/b5b0add), [a5d6435](https://github.com/agentscope-ai/AgentTeams/commit/a5d6435))
 - **Pre-v1.2 installer compatibility**: Select the legacy environment contract and storage prefix for v1.1.2 images while keeping the canonical AgentTeams contract for v1.2.0 and newer images. Custom version input such as `1.2.0.beta.1` is normalized to the published tag form. ([#1079](https://github.com/agentscope-ai/AgentTeams/pull/1079), [#1100](https://github.com/agentscope-ai/AgentTeams/pull/1100))
@@ -41,6 +50,7 @@ Record release-facing changes here before the next release.
 **Bug 修复**
 
 - **Worker 存储同步 I/O 放大**：基于成功 watermark 只上传变化文件，保持 jq 1.7 fallback pull 存活，并将 embedded Controller mirror 限定为控制面配置。并发创建 Worker 和未知工作目录仍保持原有持久化语义，不再反复执行全量 workspace mirror。([#1110](https://github.com/agentscope-ai/AgentTeams/pull/1110))
+- **Manager 诊断循环**：Manager 提示和 Worker 生命周期指引会停止重复执行无效果的排障命令，并以 `agt get workers` 不再列出目标 Worker 作为删除完成边界，避免继续循环探测 Matrix Room。([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
 - **CoPaw Team 路由与 workspace 投影**：将 Team Leader 分配（包括 localpart mention）路由到 Team Room，并把 Worker prompt、skills、工具配置和 Matrix 设置投影到 CoPaw 默认 workspace。([#1060](https://github.com/agentscope-ai/AgentTeams/pull/1060), [9074def](https://github.com/agentscope-ai/AgentTeams/commit/9074def3), [973e291](https://github.com/agentscope-ai/AgentTeams/commit/973e291), [92c8145](https://github.com/agentscope-ai/AgentTeams/commit/92c8145))
 - **Team Room 与 Worker 生命周期收敛**：保护被引用的 Worker CR，强制校验 Team 必填角色，将 Manager 移出普通 Team Worker 的个人房间，并在 Worker 离开 Team 后恢复 standalone 成员关系。([d96f1ed](https://github.com/agentscope-ai/AgentTeams/commit/d96f1ed), [43545c2](https://github.com/agentscope-ai/AgentTeams/commit/43545c2), [b5b0add](https://github.com/agentscope-ai/AgentTeams/commit/b5b0add), [a5d6435](https://github.com/agentscope-ai/AgentTeams/commit/a5d6435))
 - **v1.2 之前镜像的安装兼容**：v1.1.2 镜像使用旧环境变量契约和存储前缀，v1.2.0 及更新镜像使用 AgentTeams 契约；`1.2.0.beta.1` 等自定义输入会规范化为已发布的 Tag 格式。([#1079](https://github.com/agentscope-ai/AgentTeams/pull/1079), [#1100](https://github.com/agentscope-ai/AgentTeams/pull/1100))
@@ -77,6 +87,7 @@ Record release-facing changes here before the next release.
 - `7ba2efba` docs: update AgentLoop link in Chinese README (#1108)
 - `5aec8d96` docs: update AgentLoop link in English README (#1109)
 - `45fd4db2` fix: remove Worker storage sync I/O amplification (#1110)
+- `90c9fd4f` fix(manager): stop repeated diagnostic loops (#975)
 
 **Also in this window / 同期其他变更**
 

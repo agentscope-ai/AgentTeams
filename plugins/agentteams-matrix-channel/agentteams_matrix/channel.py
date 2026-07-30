@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-AgentTeams overlay for QwenPaw MatrixChannel.
-
-The base implementation comes from QwenPaw. AgentTeams keeps a small overlay for
-runtime behavior that is not a TeamHarness concern: startup readiness, first
-sync stability, and Matrix mention compatibility.
-"""
+"""AgentTeams-owned Matrix channel for QwenPaw 2."""
 
 from __future__ import annotations
 
@@ -66,7 +60,7 @@ from nio.responses import (
     WhoamiResponse,
 )
 
-from agentscope_runtime.engine.schemas.agent_schemas import (
+from qwenpaw.schemas import (
     AudioContent,
     ContentType,
     FileContent,
@@ -77,14 +71,14 @@ from agentscope_runtime.engine.schemas.agent_schemas import (
     VideoContent,
 )
 
-from ....app.channels.base import BaseChannel
-from ....app.channels.utils import file_url_to_local_path
-from ....constant import WORKING_DIR
+from qwenpaw.app.channels.base import BaseChannel
+from qwenpaw.app.channels.utils import file_url_to_local_path
+from qwenpaw.constant import WORKING_DIR
 
 logger = logging.getLogger("qwenpaw.channels.matrix")
 
 
-CHANNEL_KEY = "matrix"
+CHANNEL_KEY = "agentteams_matrix"
 
 # Tunables: sync / typing / DM membership cache TTL
 SYNC_TIMEOUT_MS = 30000
@@ -346,7 +340,7 @@ class HistoryEntry:
     media_parts: Optional[List[Any]] = None
 
 
-class MatrixChannel(BaseChannel):
+class AgentTeamsMatrixChannel(BaseChannel):
     """QwenPaw channel that connects to a Matrix homeserver via matrix-nio."""
 
     channel = CHANNEL_KEY  # type: ignore[assignment]
@@ -369,9 +363,11 @@ class MatrixChannel(BaseChannel):
         history_limit: int = DEFAULT_HISTORY_LIMIT,
         sync_timeout_ms: int = 30000,
         on_reply_sent: Optional[Callable] = None,
-        show_tool_details: bool = True,
-        filter_tool_messages: bool = False,
-        filter_thinking: bool = False,
+        display_config: Any = None,
+        no_text_debounce: bool = True,
+        show_thinking: bool = True,
+        show_tool_calls: bool = True,
+        show_tool_results: bool = True,
         streaming_enabled: bool = True,
         workspace_dir: Path | None = None,
         access_control_dm: bool = False,
@@ -382,9 +378,8 @@ class MatrixChannel(BaseChannel):
         super().__init__(
             process=process,
             on_reply_sent=on_reply_sent,
-            show_tool_details=show_tool_details,
-            filter_tool_messages=filter_tool_messages,
-            filter_thinking=filter_thinking,
+            display_config=display_config,
+            no_text_debounce=no_text_debounce,
             streaming_enabled=streaming_enabled,
             access_control_dm=access_control_dm,
             access_control_group=access_control_group,
@@ -449,11 +444,10 @@ class MatrixChannel(BaseChannel):
         process: Callable,
         config: Any,
         on_reply_sent: Optional[Callable] = None,
-        show_tool_details: bool = True,
-        filter_tool_messages: bool = False,
-        filter_thinking: bool = False,
+        display_config: Any = None,
+        no_text_debounce: bool = True,
         workspace_dir: Path | None = None,
-    ) -> "MatrixChannel":
+    ) -> "AgentTeamsMatrixChannel":
         # Support pydantic model, dict, or SimpleNamespace
         if isinstance(config, dict):
             raw = config
@@ -479,13 +473,11 @@ class MatrixChannel(BaseChannel):
             history_limit=raw.get("history_limit", DEFAULT_HISTORY_LIMIT),
             sync_timeout_ms=raw.get("sync_timeout_ms", 30000),
             on_reply_sent=on_reply_sent,
-            show_tool_details=show_tool_details,
-            filter_tool_messages=(
-                filter_tool_messages or raw.get("filter_tool_messages", False)
-            ),
-            filter_thinking=(
-                filter_thinking or raw.get("filter_thinking", False)
-            ),
+            display_config=display_config,
+            no_text_debounce=no_text_debounce,
+            show_thinking=bool(raw.get("show_thinking", True)),
+            show_tool_calls=bool(raw.get("show_tool_calls", True)),
+            show_tool_results=bool(raw.get("show_tool_results", True)),
             streaming_enabled=bool(raw.get("streaming_enabled", True)),
             workspace_dir=workspace_dir,
             access_control_dm=bool(raw.get("access_control_dm", False)),
@@ -498,7 +490,7 @@ class MatrixChannel(BaseChannel):
         cls,
         process: Callable,
         on_reply_sent=None,
-    ) -> "MatrixChannel":
+    ) -> "AgentTeamsMatrixChannel":
         return cls(
             process=process,
             homeserver=os.environ.get("AGENTTEAMS_MATRIX_SERVER", ""),
@@ -3973,9 +3965,14 @@ class MatrixChannel(BaseChannel):
         return _enum_name(message_type) == "MESSAGE"
 
     def _thread_content_parts(self, event: Any) -> List[Any]:
-        """Render event for thread display, bypassing filter_tool_messages."""
+        """Render event for thread display with tool messages enabled."""
         from dataclasses import replace as dc_replace
-        style = dc_replace(self._render_style, filter_tool_messages=False)
+        display_config = dc_replace(
+            self._render_style.display_config,
+            show_tool_calls=True,
+            show_tool_results=True,
+        )
+        style = dc_replace(self._render_style, display_config=display_config)
         renderer = self._renderer.__class__(style)
         return renderer.message_to_parts(event)
 
@@ -3997,7 +3994,11 @@ class MatrixChannel(BaseChannel):
     def _tool_output_media_parts(self, event: Any) -> List[Any]:
         """Extract media-only parts from a tool output event."""
         from dataclasses import replace as dc_replace
-        style = dc_replace(self._render_style, filter_tool_messages=True)
+        display_config = dc_replace(
+            self._render_style.display_config,
+            show_tool_results=False,
+        )
+        style = dc_replace(self._render_style, display_config=display_config)
         renderer = self._renderer.__class__(style)
         parts = renderer.message_to_parts(event)
         return [p for p in parts if getattr(p, "type", None) != ContentType.TEXT]

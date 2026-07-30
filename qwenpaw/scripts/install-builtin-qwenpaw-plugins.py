@@ -58,12 +58,19 @@ def _write_markers(working_dir: Path) -> None:
         marker.write_text(_directory_digest(plugin_dir) + "\n", encoding="utf-8")
 
 
-def _install(zip_path: Path, working_dir: Path) -> None:
+def _install(package_path: Path, working_dir: Path) -> None:
     qwenpaw_bin = shutil.which("qwenpaw") or str(Path(sys.executable).with_name("qwenpaw"))
     env = dict(os.environ)
     env["QWENPAW_WORKING_DIR"] = str(working_dir)
+    if package_path.is_dir():
+        subprocess.run(
+            [qwenpaw_bin, "plugin", "install", str(package_path), "--force"],
+            check=True,
+            env=env,
+        )
+        return
     with tempfile.TemporaryDirectory(prefix="qwenpaw-builtin-plugin-") as tmp:
-        package_dir = _safe_extract(zip_path, Path(tmp))
+        package_dir = _safe_extract(package_path, Path(tmp))
         subprocess.run([qwenpaw_bin, "plugin", "install", str(package_dir), "--force"], check=True, env=env)
 
 

@@ -13,7 +13,10 @@ on:
       - 'install/**'
       - 'shared/**'
       - 'copaw/**'
+      - 'qwenpaw/**'
       - 'hermes/**'
+      - 'plugins/teamharness/adapters/qwenpaw/**'
+      - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
       - '.github/workflows/test-integration.yml'
   push:
@@ -30,7 +33,10 @@ on:
       - 'install/**'
       - 'shared/**'
       - 'copaw/**'
+      - 'qwenpaw/**'
       - 'hermes/**'
+      - 'plugins/teamharness/adapters/qwenpaw/**'
+      - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
   workflow_dispatch:
     inputs:
@@ -50,6 +56,7 @@ on:
           - both
           - openclaw
           - copaw
+          - qwenpaw
           - hermes
         default: 'both'
       model:
@@ -65,14 +72,13 @@ permissions:
 env:
   # Tests that do not require a GitHub token, split into four shards for parallel execution
   # Shard A: LLM interaction tests (sequential dependency: 02 creates alice → 03-06 use alice)
-  # Shard B: LLM interaction tests 2 (task assignment with LLM)
   # Shard C: Controller/CR tests (independent, no cross-test dependencies)
   # Shard D: Controller/CR tests 2 (team project DAG)
   SHARD_A_TESTS: "01 02 03 04 05 06"
-  SHARD_B_TESTS: "14"
   SHARD_C_TESTS: "15 17 18 19 20 22 23 24 25 100"
   SHARD_D_TESTS: "21"
-  NON_GITHUB_TESTS: "01 02 03 04 05 06 14 15 17 18 19 20 21 22 23 24 25 100"
+  SHARD_QWENPAW_TESTS: "26"
+  NON_GITHUB_TESTS: "01 02 03 04 05 06 15 17 18 19 20 21 22 23 24 25 100"
 
 jobs:
   # Step 0: Detect which paths changed so we can decide whether to rebuild
@@ -119,14 +125,14 @@ jobs:
         run: |
           MATRIX='[
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
-            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
             {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":false},
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
-            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
             {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
             {"shard":"controller-cr-2","filter_env":"SHARD_D_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"qwenpaw","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"qwenpaw","requires_secret":false},
+            {"shard":"qwenpaw-teamharness","filter_env":"SHARD_QWENPAW_TESTS","manager_runtime":"copaw","worker_runtime":"qwenpaw","requires_secret":true},
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
-            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
             {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":false}
           ]'
           if [ "$UNTRUSTED_PR" = "true" ]; then
@@ -230,7 +236,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [embedded, manager, manager-copaw, worker, copaw-worker, hermes-worker]
+        target: [embedded, manager, manager-copaw, worker, copaw-worker, qwenpaw-worker, hermes-worker]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

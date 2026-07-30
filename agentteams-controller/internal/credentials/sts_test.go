@@ -96,12 +96,8 @@ func TestIssueForCaller_WorkerDefaultEntries(t *testing.T) {
 	if len(fake.lastReq.SessionName) != 36 {
 		t.Fatalf("session length = %d, want 36", len(fake.lastReq.SessionName))
 	}
-	// Standalone workers now default to a single object-storage entry
-	// covering agents/<name>/ + agents/<name>/* + shared/ + shared/*
-	// (both RW), mirroring the
-	// embedded MinIO policy.
-	if len(fake.lastReq.Entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(fake.lastReq.Entries))
+	if len(fake.lastReq.Entries) != 2 {
+		t.Fatalf("expected RW workspace and read-only package entries, got %d", len(fake.lastReq.Entries))
 	}
 	got := fake.lastReq.Entries[0]
 	if got.Scope.Bucket != "test-bucket" {

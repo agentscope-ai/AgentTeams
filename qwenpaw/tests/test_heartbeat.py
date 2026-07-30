@@ -106,7 +106,7 @@ def test_controller_reporter_rereads_token_file_for_heartbeat(
 ) -> None:
     server, requests = _start_server(
         {
-            "POST /api/v1/workers/worker-a/heartbeat": (204, None),
+            "POST /api/v1/workers/worker-a/ready": (204, None),
         }
     )
     token_file = tmp_path / "token"
@@ -125,8 +125,8 @@ def test_controller_reporter_rereads_token_file_for_heartbeat(
         server.server_close()
 
     assert [request["path"] for request in requests] == [
-        "/api/v1/workers/worker-a/heartbeat",
-        "/api/v1/workers/worker-a/heartbeat",
+        "/api/v1/workers/worker-a/ready",
+        "/api/v1/workers/worker-a/ready",
     ]
     auth_headers = [
         {key.lower(): value for key, value in request["headers"].items()}["authorization"]
@@ -141,7 +141,7 @@ def test_controller_reporter_skips_auth_cluster_header(
 ) -> None:
     server, requests = _start_server(
         {
-            "POST /api/v1/workers/worker-a/heartbeat": (204, None),
+            "POST /api/v1/workers/worker-a/ready": (204, None),
         }
     )
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://127.0.0.1:{server.server_port}")
@@ -176,7 +176,6 @@ async def test_worker_heartbeat_loop_reports_ready_and_heartbeat(
                 },
             ),
             "POST /api/v1/workers/worker-a/ready": (204, None),
-            "POST /api/v1/workers/worker-a/heartbeat": (204, None),
         }
     )
     heartbeat = WorkerHeartbeat(tmp_path / "heartbeat.json")
@@ -212,7 +211,7 @@ async def test_worker_heartbeat_loop_reports_ready_and_heartbeat(
     post_requests = [request for request in requests if request["method"] == "POST"]
     assert [request["path"] for request in post_requests] == [
         "/api/v1/workers/worker-a/ready",
-        "/api/v1/workers/worker-a/heartbeat",
+        "/api/v1/workers/worker-a/ready",
     ]
     assert [json.loads(request["body"]) for request in post_requests] == [
         {"lastActiveAt": "2026-05-13T00:04:00Z"},

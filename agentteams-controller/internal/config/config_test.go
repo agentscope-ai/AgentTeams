@@ -130,6 +130,22 @@ func TestLoadConfigUsesManagerEnvFallback(t *testing.T) {
 	}
 }
 
+func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/qwenpaw-worker:test")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().QwenPawWorkerImage,
+		"k8s":     cfg.K8sConfig().QwenPawWorkerImage,
+		"sandbox": cfg.SandboxConfig().QwenPawWorkerImage,
+	} {
+		if want := "agentteams/qwenpaw-worker:test"; got != want {
+			t.Fatalf("%s QwenPawWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestLoadConfigPanicsOnInvalidManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", "{")
 

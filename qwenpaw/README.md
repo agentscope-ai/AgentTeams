@@ -11,15 +11,18 @@ pieces separate is the main boundary of this integration.
 ## 1. Worker Daemon
 
 The worker daemon is the process started by the QwenPaw worker container. Its
-job is to keep local QwenPaw runtime files aligned with the
-controller-projected desired state.
+job is to reconcile the controller-projected desired state through the public
+QwenPaw localhost HTTP API.
 
 ### 1.1 Lifecycle
 
 - Start from AgentTeams environment variables and worker arguments.
 - Prepare the QwenPaw working directory and default workspace.
-- Prepare image-bundled TeamHarness and WorkerFlow QwenPaw plugin adapters.
+- Prepare image-bundled TeamHarness, WorkerFlow, and AgentTeams Matrix plugins.
 - Start the QwenPaw app process.
+- Wait for `/api/version` to report exactly `2.0.1`.
+- Apply Agent, Model, MCP, Channel, and ACL desired state through public APIs
+  and GET-read it back before starting the update loop.
 - Stop background tasks and the QwenPaw process on shutdown.
 
 ### 1.2 Storage Sync
@@ -37,23 +40,26 @@ controller-projected desired state.
 - Apply model, MCP, channel, TeamHarness prompt asset, and AgentSpec package changes from
   `runtime.yaml`.
 - Apply `desired.model` to the active QwenPaw agent model.
-- Apply `desired.mcpServers` to `config/mcporter.json` using the mcporter JSON
-  shape, not as QwenPaw MCP clients.
-- Apply `desired.channelPolicy` to QwenPaw Matrix access control.
+- Apply `desired.mcpServers` as QwenPaw MCP clients through `/api/mcp`.
+- Apply `desired.channelPolicy` to the `agentteams_matrix` ACL namespace through
+  `/api/access-control/agentteams_matrix`.
+- Map `desired.channels.matrix` to the custom QwenPaw channel key
+  `agentteams_matrix`; the built-in `matrix` channel remains unchanged.
 - Apply `desired.channels.dingtalk` to the active QwenPaw DingTalk channel.
   When `streaming_enabled` is true, the worker requires a pre-created
   DingTalk streaming card template id and switches the current DingTalk runtime
   config to card streaming mode.
 - Apply AgentSpec package changes inside the same desired-state loop, without
   restarting the pod.
-- Apply AgentSpec package `config/` files to the active QwenPaw workspace root
-  and package `skills/` to workspace skills, then reconcile QwenPaw `skill.json`.
+- Apply AgentSpec package `config/` files to the active QwenPaw workspace root,
+  copy package `skills/` to workspace skills, and refresh/enable them through
+  the public Skill API.
 
 `desired.mcpServers` and package `mcp.json` are intentionally separate:
 
-- `desired.mcpServers` is controller-projected runtime config and updates
-  `config/mcporter.json` for the `mcporter` CLI.
-- Package `mcp.json` configures QwenPaw-native MCP clients. Its canonical shape
+- `desired.mcpServers` is controller-projected runtime config and configures
+  QwenPaw-native MCP clients through the public API.
+- Package `mcp.json` also configures QwenPaw-native MCP clients. Its canonical shape
   matches mcporter config: `{"mcpServers": {"name": {...}}}`. Legacy package
   shapes (`{"clients": {...}}`, `{"mcp": {"clients": {...}}}`, and top-level
   server maps) are still read for compatibility.
@@ -75,15 +81,16 @@ controller-projected desired state.
 - Keep controller reporting as a bypass path: report failures are logged but do
   not block storage sync, desired-state apply, or QwenPaw runtime loops.
 
-### 1.5 Matrix Channel Overlay
+### 1.5 AgentTeams Matrix Channel
 
-- Apply Matrix channel configuration and access control from `runtime.yaml`
-  through the desired-state update loop.
-- Keep runtime behavior fixes in the QwenPaw Matrix overlay, not in TeamHarness
-  hooks.
-- The overlay preserves QwenPaw Matrix support while adding AgentTeams startup
-  readiness, first-sync stability, invite auto-join, and visible Matrix mention
-  compatibility.
+- The `agentteams-matrix-channel` plugin registers the independent
+  `agentteams_matrix` key through `BaseChannel` and `register_channel()`.
+- It preserves AgentTeams room, DM, mention, thread, attachment, long-message,
+  typing, streaming, tool/thinking, TaskRoom, `NO_REPLY`, stop, and readiness
+  behavior.
+- The image does not copy files over QwenPaw's built-in Matrix implementation.
+- Matrix channel configuration and ACL come only from `runtime.yaml` and are
+  applied by the desired-state update loop through public APIs.
 
 The daemon does not implement TeamHarness collaboration semantics. It triggers
 runtime apply and storage persistence, then delegates TeamHarness-specific
@@ -109,10 +116,11 @@ QwenPaw DingTalk channel.
 
 ## 2. Plugin Adapter
 
-The default plugin adapters live under `plugins/teamharness/adapters/qwenpaw/`
-and `plugins/workerflow/adapters/qwenpaw/`. They are installed into an
-image-local QwenPaw working directory during Docker build, then prepared in the
-runtime QwenPaw working directory on startup and `runtime.yaml` reapply.
+The default plugin adapters live under `plugins/teamharness/adapters/qwenpaw/`,
+`plugins/workerflow/adapters/qwenpaw/`, and
+`plugins/agentteams-matrix-channel/`. They are installed into an image-local
+QwenPaw working directory during Docker build, then prepared in the runtime
+QwenPaw working directory on startup and `runtime.yaml` reapply.
 
 ### 2.1 Plugin Package
 
@@ -120,19 +128,23 @@ runtime QwenPaw working directory on startup and `runtime.yaml` reapply.
   QwenPaw plugins.
 - Install the packages through `qwenpaw plugin install --force` during Docker
   image build.
-- Keep the QwenPaw plugin ids as `teamharness` and `workerflow`.
+- Keep the QwenPaw plugin ids as `teamharness`, `workerflow`, and
+  `agentteams-matrix-channel`.
+- Require QwenPaw `>=2.0.1,<2.1.0` for all three plugins.
 
 ### 2.2 TeamHarness Assets
 
 - Merge TeamHarness role prompts into workspace `TEAMS.md`.
-- Register TeamHarness skills for QwenPaw.
-- Register the TeamHarness MCP server for QwenPaw.
+- Register TeamHarness prompt sections, skills, middleware, runtime hooks, and
+  HTTP routes through the public plugin API.
+- Configure TeamHarness and WorkerFlow MCP servers and allow policies through
+  the public MCP and MCP Policy APIs.
 
-### 2.3 Runtime Wrappers
+### 2.3 Public Plugin Hooks
 
-- Install `TEAMS.md` into each QwenPaw agent workspace and include it in the
-  prompt file list.
-- Redact sensitive tool output through the QwenPaw adapter sanitizer.
+- Install TeamHarness and WorkerFlow skills through public skill providers.
+- Redact sensitive tool output through registered middleware.
+- Record TeamHarness dispatch traces through public runtime hooks.
 - Keep the sanitizer adapter-private. TeamHarness base plugin does not define
   runtime-neutral top-level hooks.
 
@@ -157,9 +169,9 @@ local image. Without that override, the scripts build a fresh image.
   readiness, TeamHarness adapter health, and local heartbeat readiness.
 - `test-sync-minio.sh` verifies startup mirror and background push boundaries
   against MinIO.
-- `test-update-runtime-config.sh` verifies `runtime.yaml` hot apply for model,
-  MCP, Matrix channel policy, and AgentSpec package changes without restarting
-  the worker container.
+- `test-update-runtime-config.sh` verifies API-first `runtime.yaml` hot apply
+  for model, MCP, `agentteams_matrix` channel policy, and AgentSpec package
+  changes without restarting the worker container.
 
 ### Real Image And Model Test
 

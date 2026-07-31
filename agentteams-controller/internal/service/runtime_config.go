@@ -69,6 +69,7 @@ type memberRuntimeConfigMatrix struct {
 type memberRuntimeConfigDesired struct {
 	Model              *memberRuntimeConfigModel         `json:"model,omitempty"`
 	AgentPackage       *memberRuntimeConfigAgentPackage  `json:"agentPackage,omitempty"`
+	InlineConfig       *memberRuntimeConfigInlineConfig  `json:"inlineConfig,omitempty"`
 	SkillRegistry      *memberRuntimeConfigSkillRegistry `json:"skillRegistry,omitempty"`
 	MCPServers         []v1beta1.MCPServer               `json:"mcpServers,omitempty"`
 	ChannelPolicy      *v1beta1.ChannelPolicySpec        `json:"channelPolicy,omitempty"`
@@ -87,6 +88,12 @@ type memberRuntimeConfigModel struct {
 
 type memberRuntimeConfigAgentPackage struct {
 	Ref string `json:"ref"`
+}
+
+type memberRuntimeConfigInlineConfig struct {
+	Identity string `json:"identity,omitempty"`
+	Soul     string `json:"soul,omitempty"`
+	Agents   string `json:"agents,omitempty"`
 }
 
 type memberRuntimeConfigSkillRegistry struct {
@@ -264,6 +271,13 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	}
 	if req.Spec.Package != "" {
 		desired.AgentPackage = &memberRuntimeConfigAgentPackage{Ref: req.Spec.Package}
+	}
+	if req.Spec.Identity != "" || req.Spec.Soul != "" || req.Spec.Agents != "" {
+		desired.InlineConfig = &memberRuntimeConfigInlineConfig{
+			Identity: req.Spec.Identity,
+			Soul:     req.Spec.Soul,
+			Agents:   req.Spec.Agents,
+		}
 	}
 	if req.SkillRegistryURL != "" || req.SkillRegistryAuthType != "" {
 		desired.SkillRegistry = &memberRuntimeConfigSkillRegistry{

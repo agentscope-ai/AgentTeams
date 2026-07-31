@@ -52,12 +52,8 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	if session != "agentteams-worker-alice" {
 		t.Fatalf("session = %q", session)
 	}
-	// Standalone workers now default to a single object-storage entry
-	// that folds agents/<name>/ + agents/<name>/* + shared/ + shared/*
-	// together, mirroring the
-	// embedded MinIO policy which grants both prefixes RW.
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected RW workspace and read-only package entries, got %d", len(entries))
 	}
 	e := entries[0]
 	if e.Service != credprovider.ServiceObjectStorage {
@@ -73,6 +69,15 @@ func TestResolveWorker_DefaultEntries(t *testing.T) {
 	}
 	if !hasAllPerms(e.Permissions, "read", "write", "list", "delete") {
 		t.Fatalf("expected RW shared/* permissions, got %+v", e.Permissions)
+	}
+	packageEntry := entries[1]
+	if !hasPrefix(packageEntry.Scope.Prefixes, "agentteams-config/packages/*") {
+		t.Fatalf("expected AgentSpec package prefix, got %+v", packageEntry.Scope.Prefixes)
+	}
+	if !hasAllPerms(packageEntry.Permissions, "read", "list") ||
+		hasAllPerms(packageEntry.Permissions, "write") ||
+		hasAllPerms(packageEntry.Permissions, "delete") {
+		t.Fatalf("AgentSpec package permissions must be read/list only, got %+v", packageEntry.Permissions)
 	}
 }
 
@@ -235,7 +240,7 @@ func TestResolve_AIGatewayHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 3 {
 		t.Fatalf("got %d entries", len(entries))
 	}
 	if entryForService(entries, credprovider.ServiceObjectStorage) == nil {
@@ -276,7 +281,7 @@ func TestResolve_AIRegistryDefaultResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 3 {
 		t.Fatalf("got %d entries", len(entries))
 	}
 	if entryForService(entries, credprovider.ServiceObjectStorage) == nil {
@@ -575,8 +580,8 @@ func TestResolveTeamLeader_DefaultEntries(t *testing.T) {
 	if session != "agentteams-worker-lead" {
 		t.Fatalf("session = %q, want agentteams-worker-lead", session)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	e := entries[0]
 	if e.Scope.Bucket != "agentteams-test" {
@@ -613,8 +618,8 @@ func TestResolveTeamLeader_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	if session != "agentteams-worker-lead" {
 		t.Fatalf("session = %q, want agentteams-worker-lead", session)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	got := entries[0].Scope.Prefixes
 	if !hasPrefix(got, "agents/runtime-lead/") {
@@ -672,8 +677,8 @@ func TestResolveTeamWorker_DefaultEntries(t *testing.T) {
 	if session != "agentteams-worker-w1" {
 		t.Fatalf("session = %q", session)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	e := entries[0]
 	for _, want := range []string{"agents/w1/", "agents/w1/*", "shared/", "shared/*", "teams/alpha/", "teams/alpha/*"} {
@@ -710,8 +715,8 @@ func TestResolveTeamWorker_DefaultEntriesUseRuntimeWorkerName(t *testing.T) {
 	if session != "agentteams-worker-w1" {
 		t.Fatalf("session = %q, want agentteams-worker-w1", session)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	got := entries[0].Scope.Prefixes
 	if !hasPrefix(got, "agents/runtime-w1/*") {
@@ -777,8 +782,8 @@ func TestResolveTeamMember_TeamCRMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 default entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 default entries, got %d", len(entries))
 	}
 	got := entries[0].Scope.Prefixes
 	for _, want := range []string{"agents/ghost-worker/*", "shared/*", "teams/ghost/*"} {

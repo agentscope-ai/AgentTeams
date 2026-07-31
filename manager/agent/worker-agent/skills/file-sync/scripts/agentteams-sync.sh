@@ -15,6 +15,7 @@ fi
 
 # Merge helper for openclaw.json (local-first: MinIO overlays models/gateway/channels + plugins rules)
 . /opt/agentteams/scripts/lib/merge-openclaw-config.sh
+. /opt/agentteams/scripts/lib/worker-file-sync.sh
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 AGENTTEAMS_ROOT="/root/agentteams-fs"
@@ -38,11 +39,14 @@ touch "${WORKSPACE}/.last-pull"
 
 # Merge openclaw.json: local-first (pre-mirror copy) with MinIO overlay (arg1=remote, arg2=local, arg3=out)
 if [ -f "${SAVED_LOCAL}" ] && [ -f "${LOCAL_OPENCLAW}" ]; then
-    merge_openclaw_config "${LOCAL_OPENCLAW}" "${SAVED_LOCAL}" "${LOCAL_OPENCLAW}"
+    if ! merge_openclaw_config "${LOCAL_OPENCLAW}" "${SAVED_LOCAL}" "${LOCAL_OPENCLAW}"; then
+        echo "WARNING: failed to merge remote openclaw.json; keeping local config" >&2
+    fi
     rm -f "${SAVED_LOCAL}"
 fi
 
 # Restore +x on scripts (MinIO does not preserve Unix permission bits)
 find "${WORKSPACE}/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+worker_sync_mark_remote_pull "/tmp/agentteams-worker-sync"
 
 echo "Config sync completed at $(date)"

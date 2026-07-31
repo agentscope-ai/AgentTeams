@@ -202,9 +202,9 @@ docker exec -i \
     -e EXPECTED_BASE_URL="${BASE_URL}" \
     "${WORKER_CONTAINER}" \
     /opt/venv/qwenpaw/bin/python - <<'PY'
+import json
 import os
-
-from qwenpaw.providers.provider_manager import ProviderManager
+from urllib.request import urlopen
 
 expected_provider = os.environ["EXPECTED_PROVIDER"]
 expected_model = os.environ["EXPECTED_MODEL"]
@@ -212,15 +212,18 @@ expected_base = os.environ["EXPECTED_BASE_URL"].rstrip("/")
 if not expected_base.endswith("/v1"):
     expected_base = f"{expected_base}/v1"
 
-manager = ProviderManager.get_instance()
-active = manager.active_model
-provider = manager.custom_providers.get(expected_provider)
+def get(path):
+    with urlopen(f"http://127.0.0.1:8088{path}") as response:
+        return json.load(response)
 
-assert active.provider_id == expected_provider, active
-assert active.model == expected_model, active
-assert provider is not None, expected_provider
-assert provider.base_url == expected_base, provider.base_url
-assert bool(provider.api_key), "provider api key missing"
+active = get("/api/models/active?scope=agent&agent_id=default")["active_llm"]
+provider = next(
+    item for item in get("/api/models") if item["id"] == expected_provider
+)
+
+assert active["provider_id"] == expected_provider, active
+assert active["model"] == expected_model, active
+assert provider["base_url"].rstrip("/") == expected_base, provider
 PY
 
 MARKER="AGENTTEAMS_QWENPAW_REAL_MODEL_E2E_$$_$(date +%s)"

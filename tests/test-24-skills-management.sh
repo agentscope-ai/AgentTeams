@@ -21,6 +21,12 @@ test_setup "24-skills-management"
 
 TEST_WORKER="test-skl-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+if [ "${TEST_WORKER_RUNTIME}" = "copaw" ] || [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    BASELINE_SKILL="file-sharing"
+else
+    BASELINE_SKILL="file-sync"
+fi
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
@@ -83,11 +89,27 @@ else
     log_fail "Worker CR missing 'github-operations' (got: ${INITIAL_SKILLS})"
 fi
 
-# Built-in baseline skill should be present in MinIO regardless of --skills
-if minio_file_exists "agents/${TEST_WORKER}/skills/file-sync/SKILL.md"; then
-    log_pass "Built-in skill 'file-sync' present in MinIO"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    if wait_qwenpaw_api_matches "${TEST_WORKER}" /api/skills ".[] | select(.name == \"${BASELINE_SKILL}\" and .source == \"plugin:teamharness\")" 240; then
+        log_pass "QwenPaw plugin skills reconciled"
+    else
+        log_fail "QwenPaw plugin skills did not reconcile"
+    fi
+fi
+
+# Built-in baseline skill should be present in the runtime that consumes it.
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    QWENPAW_SKILLS=$(read_qwenpaw_skills "${TEST_WORKER}")
+    if echo "${QWENPAW_SKILLS}" | jq -e --arg skill "${BASELINE_SKILL}" \
+        '.[] | select(.name == $skill and .source == "plugin:teamharness")' >/dev/null 2>&1; then
+        log_pass "Built-in plugin skill '${BASELINE_SKILL}' visible through QwenPaw API"
+    else
+        log_fail "Built-in plugin skill '${BASELINE_SKILL}' missing from QwenPaw API"
+    fi
+elif minio_file_exists "agents/${TEST_WORKER}/skills/${BASELINE_SKILL}/SKILL.md"; then
+    log_pass "Built-in skill '${BASELINE_SKILL}' present in MinIO for ${TEST_WORKER_RUNTIME} runtime"
 else
-    log_fail "Built-in skill 'file-sync' missing in MinIO"
+    log_fail "Built-in skill '${BASELINE_SKILL}' missing in MinIO for ${TEST_WORKER_RUNTIME} runtime"
 fi
 
 if minio_file_exists "agents/${TEST_WORKER}/skills/github-operations/SKILL.md"; then

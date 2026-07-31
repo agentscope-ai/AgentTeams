@@ -16,6 +16,7 @@ from typing import Any, Literal
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import ToolResponse
 from copaw_worker.hooks.message_filter import (
+    canonicalize_team_worker_mentions,
     extract_matrix_mentions,
     filter_outgoing_matrix_message,
     resolve_team_leader_assignment_room,
@@ -417,6 +418,7 @@ async def message(
                 parsed_target.identifier if parsed_target.kind == "room" else None
             ),
         )
+        filtered_message = canonicalize_team_worker_mentions(filtered_message)
         mentions = extract_matrix_mentions(filtered_message)
         content = build_matrix_text_content(filtered_message, mentions)
 

@@ -80,6 +80,7 @@ func (r MemberRole) String() string { return string(r) }
 type MemberContext struct {
 	Name        string // Kubernetes resource identity (CR/Pod/SA key)
 	RuntimeName string // business/runtime identity (Matrix/OSS/room alias key)
+	TeamName    string // effective Team identity used for scoped storage access
 	Namespace   string
 	Role        MemberRole
 	Spec        v1beta1.WorkerSpec
@@ -286,7 +287,7 @@ func ValidateMemberDeployment(m MemberContext) error {
 // RoomID, and ProvResult into state.
 func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) (reconcile.Result, error) {
 	if m.ExistingMatrixUserID != "" {
-		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials: %w", err)
 		}
@@ -689,7 +690,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 	prov := state.ProvResult
 	if prov == nil || prov.MatrixToken == "" {
-		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials for container: %w", err)
 		}
@@ -753,7 +754,15 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		}
 		createReq.AuthToken = token
 
-		if err := waitForScopedWorkerConfig(ctx, m.Name, workerEnv); err != nil {
+		configOwner := m.Name
+		configKey := "agents/" + configOwner + "/openclaw.json"
+		if backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime) == backend.RuntimeQwenPaw {
+			if m.RuntimeName != "" {
+				configOwner = m.RuntimeName
+			}
+			configKey = "agents/" + configOwner + "/runtime/runtime.yaml"
+		}
+		if err := waitForScopedWorkerConfig(ctx, m.Name, configKey, workerEnv); err != nil {
 			return reconcile.Result{}, fmt.Errorf("worker scoped storage config is not readable: %w", err)
 		}
 	}
@@ -767,7 +776,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	return reconcile.Result{}, nil
 }
 
-func waitForScopedWorkerConfig(ctx context.Context, workerName string, workerEnv map[string]string) error {
+func waitForScopedWorkerConfig(ctx context.Context, workerName, key string, workerEnv map[string]string) error {
 	accessKey := strings.TrimSpace(workerEnv["AGENTTEAMS_FS_ACCESS_KEY"])
 	secretKey := strings.TrimSpace(workerEnv["AGENTTEAMS_FS_SECRET_KEY"])
 	if accessKey == "" || secretKey == "" {
@@ -793,7 +802,6 @@ func waitForScopedWorkerConfig(ctx context.Context, workerName string, workerEnv
 		StoragePrefix: storagePrefix,
 	})
 
-	key := "agents/" + workerName + "/openclaw.json"
 	var lastErr error
 	deadline := time.Now().Add(2 * time.Minute)
 	for {

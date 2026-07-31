@@ -275,7 +275,10 @@ def push_local(sync: FileSync, since: float = 0) -> List[str]:
 
 
 async def push_loop(sync: FileSync, check_interval: float = 5) -> None:
-    last_push_time = 0.0
+    # Startup state has just been mirrored from object storage. Only watch
+    # changes made after the loop starts; a since=0 scan can spend minutes
+    # comparing a QwenPaw 2 workdir and starve newly-created files.
+    last_push_time = time.time()
     logger.info(
         "qwenpaw FileSync push loop started component=sync worker=%s interval_seconds=%s",
         sync.worker_name,

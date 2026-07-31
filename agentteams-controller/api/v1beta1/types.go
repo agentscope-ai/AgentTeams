@@ -43,6 +43,10 @@ const LabelWorkerEdgeUUID = "agentteams.io/worker-edge-uuid"
 // re-issues credentials and updates the annotation to match.
 const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 
+// AnnotationWorkerTeamName records the effective Team identity for a referenced
+// Worker so independent Worker reconciles preserve its scoped team storage access.
+const AnnotationWorkerTeamName = "agentteams.io/team-name"
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry", "schedulerx3".
 //

@@ -231,7 +231,7 @@ Controller Runtime
 **Embedded 与 Helm（交付形态）：**
 
 - **Embedded**：`install/agentteams-install.sh` 拉起 **`agentteams-controller`**（镜像内嵌 Higress、Tuwunel、MinIO、Element Web 与 controller 二进制），再由 controller 在同一 Docker/Podman 宿主机上创建 **`agentteams-manager`** 与各 **Worker** 容器。
-- **Helm / in-cluster**：使用仓库内 [`helm/agentteams`](../helm/agentteams) Chart，将网关、Homeserver、存储、**agentteams-controller** 与由 CR 驱动的 Manager/Worker Pod 部署为 Kubernetes 工作负载。CRD 语义与 Embedded 一致，仅后端驱动不同。
+- **Helm / in-cluster**：使用仓库内 [`helm/agentteams`](../../helm/agentteams) Chart，将网关、Homeserver、存储、**agentteams-controller** 与由 CR 驱动的 Manager/Worker Pod 部署为 Kubernetes 工作负载。CRD 语义与 Embedded 一致，仅后端驱动不同。
 
 两种模式共享同一套 Reconciler 逻辑，通过 Worker Backend 抽象层适配不同的基础设施。这与 Kubernetes 通过 CRI/CSI/CNI 抽象底层运行时的设计思路一致。
 

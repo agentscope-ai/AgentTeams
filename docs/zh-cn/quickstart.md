@@ -40,7 +40,7 @@ AGENTTEAMS_LLM_API_KEY="sk-xxx" make install
 
 ### 1.1a 多容器架构（v1.1.0+ 嵌入式安装）
 
-默认**嵌入式**安装会启动两个主容器（详见 [architecture.md](../architecture.md)）：
+默认**嵌入式**安装会启动两个主容器（详见 [architecture.md](architecture.md)）：
 
 | 容器 | 职责 |
 |------|------|
@@ -56,7 +56,7 @@ docker exec agentteams-controller agt create worker --name alice --model qwen3.5
 docker exec agentteams-controller agt get workers
 ```
 
-YAML 批量管理请使用 `install/agentteams-apply.sh`（将文件拷入 `agentteams-manager` 后执行 `agt apply -f`）。详见 [Declarative Resource Management](../declarative-resource-management.md)。
+YAML 批量管理请使用 `install/agentteams-apply.sh`（将文件拷入 `agentteams-manager` 后执行 `agt apply -f`）。详见 [Declarative Resource Management](declarative-resource-management.md)。
 
 ### 1.2 登录 Element Web
 

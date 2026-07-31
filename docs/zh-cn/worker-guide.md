@@ -14,10 +14,10 @@ Worker 是轻量级无状态容器，负责：
 
 Worker 由 **CR** 描述。除在 Matrix 里让 Manager 创建外，你还可以：
 
-- 在 **`agentteams-controller`** 或 **`agentteams-manager`** 容器内执行 **`agt create worker` / `agt update worker`**（见 [faq.md](../faq.md)）。
+- 在 **`agentteams-controller`** 或 **`agentteams-manager`** 容器内执行 **`agt create worker` / `agt update worker`**（见 [faq.md](faq.md)）。
 - 使用 **`install/agentteams-apply.sh`** 应用 YAML（转发到 Manager 容器内的 `agt apply -f`）。
 
-字段说明见 [Declarative Resource Management](../declarative-resource-management.md)。
+字段说明见 [Declarative Resource Management](declarative-resource-management.md)。
 
 ### 按 `spec.runtime` 区分的目录布局
 

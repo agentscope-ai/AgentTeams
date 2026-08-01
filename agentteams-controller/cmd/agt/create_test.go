@@ -32,8 +32,38 @@ func TestParseExposePortsProducesNumericJSONValues(t *testing.T) {
 	}
 }
 
+func TestParseExposePortsAcceptsBoundaryValues(t *testing.T) {
+	ports, err := parseExposePorts("1,65535")
+	if err != nil {
+		t.Fatalf("parseExposePorts: %v", err)
+	}
+	if len(ports) != 2 || ports[0]["port"] != 1 || ports[1]["port"] != 65535 {
+		t.Fatalf("parseExposePorts returned %#v, want ports 1 and 65535", ports)
+	}
+}
+
 func TestParseExposePortsRejectsInvalidValues(t *testing.T) {
-	for _, value := range []string{"not-a-port", "0", "65536", ","} {
+	for _, value := range []string{"", "   ", "not-a-port", "-1", "0", "65536", ","} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := parseExposePorts(value); err == nil {
+				t.Fatalf("parseExposePorts(%q) returned nil error", value)
+			}
+		})
+	}
+}
+
+func TestParseExposePortsRejectsEmptyCSVSegments(t *testing.T) {
+	for _, value := range []string{"8080,", ",8080", "8080,,3000", "8080, ,3000"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := parseExposePorts(value); err == nil {
+				t.Fatalf("parseExposePorts(%q) returned nil error", value)
+			}
+		})
+	}
+}
+
+func TestParseExposePortsRejectsDuplicatePorts(t *testing.T) {
+	for _, value := range []string{"8080,8080", "8080, 8080", "08080,8080"} {
 		t.Run(value, func(t *testing.T) {
 			if _, err := parseExposePorts(value); err == nil {
 				t.Fatalf("parseExposePorts(%q) returned nil error", value)

@@ -481,17 +481,26 @@ func splitCSV(s string) []string {
 }
 
 func parseExposePorts(s string) ([]map[string]interface{}, error) {
-	values := splitCSV(s)
-	if len(values) == 0 {
+	if strings.TrimSpace(s) == "" {
 		return nil, fmt.Errorf("--expose requires at least one port")
 	}
 
-	var ports []map[string]interface{}
+	values := strings.Split(s, ",")
+	ports := make([]map[string]interface{}, 0, len(values))
+	seen := make(map[int]struct{}, len(values))
 	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil, fmt.Errorf("invalid --expose value %q: port entries must not be empty", s)
+		}
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 1 || value > 65535 {
 			return nil, fmt.Errorf("invalid --expose port %q: must be an integer between 1 and 65535", raw)
 		}
+		if _, exists := seen[value]; exists {
+			return nil, fmt.Errorf("duplicate --expose port %d", value)
+		}
+		seen[value] = struct{}{}
 		port := map[string]interface{}{"port": value}
 		ports = append(ports, port)
 	}

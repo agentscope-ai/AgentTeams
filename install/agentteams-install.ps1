@@ -3087,6 +3087,24 @@ function Install-Manager {
         if ($config.EMBEDDING_MODEL) {
             $ctrlArgs += @("-e", "AGENTTEAMS_EMBEDDING_MODEL=$($config.EMBEDDING_MODEL)")
         }
+
+        # Optional: custom model capability overrides (context window, max
+        # tokens, vision, reasoning). These are read by the Controller's
+        # config.go LoadConfig to annotate custom models not in the built-in
+        # presets table.
+        if ($config.MODEL_CONTEXT_WINDOW) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MODEL_CONTEXT_WINDOW=$($config.MODEL_CONTEXT_WINDOW)")
+        }
+        if ($config.MODEL_MAX_TOKENS) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MODEL_MAX_TOKENS=$($config.MODEL_MAX_TOKENS)")
+        }
+        if ($config.MODEL_VISION) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MODEL_VISION=$($config.MODEL_VISION)")
+        }
+        if ($config.MODEL_REASONING) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MODEL_REASONING=$($config.MODEL_REASONING)")
+        }
+
         if ($config.OPENAI_BASE_URL) {
             $ctrlArgs += @("-e", "AGENTTEAMS_OPENAI_BASE_URL=$($config.OPENAI_BASE_URL)")
         }

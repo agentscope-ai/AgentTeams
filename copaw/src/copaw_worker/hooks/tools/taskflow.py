@@ -162,6 +162,14 @@ def _current_actor() -> str | None:
         return None
 
 
+def _matrix_user_id(worker_name: str) -> str:
+    worker = canonical_worker_id(worker_name)
+    actor = (_current_actor() or "").strip()
+    if actor.startswith("@") and ":" in actor:
+        return f"@{worker}:{actor.split(':', 1)[1]}"
+    return worker
+
+
 def _read_config_value(obj: Any, *names: str) -> Any:
     for name in names:
         if isinstance(obj, dict) and name in obj:
@@ -278,7 +286,30 @@ async def taskflow(
             task_path = f"shared/tasks/{task_id}/"
             sync = create_sync()
             sync.push_shared_path(task_path)
-            return _ok(action=action, task=asdict(meta), synced=True)
+            notification = {
+                "tool": "message",
+                "arguments": {
+                    "action": "send",
+                    "channel": "matrix",
+                    "target": _room_target(room_id),
+                    "message": (
+                        f"{_matrix_user_id(meta.assigned_to)} "
+                        f"New task [{meta.task_id}]: "
+                        f"Read shared/tasks/{meta.task_id}/spec.md and start the task."
+                    ),
+                },
+            }
+            return _ok(
+                action=action,
+                task=asdict(meta),
+                synced=True,
+                notificationRequired=True,
+                nextAction=notification,
+                instruction=(
+                    "Call nextAction.tool with nextAction.arguments now. "
+                    "Do not return the assignment as a normal reply in the current room."
+                ),
+            )
 
         if action == "check_task":
             task_id = _required_str(payload_data, "taskId")

@@ -600,11 +600,29 @@ def _write_providers_json(
         api_key = provider_cfg.get("apiKey", "")
 
         models_raw = provider_cfg.get("models", [])
-        models = [
-            {"id": m["id"], "name": m.get("name", m["id"])}
-            for m in models_raw
-            if m.get("id")
-        ]
+        models = []
+        for model_cfg in models_raw:
+            model_id = model_cfg.get("id")
+            if not model_id:
+                continue
+            model = {
+                "id": model_id,
+                "name": model_cfg.get("name", model_id),
+            }
+            # Propagate input modalities from the Controller's openclaw.json
+            # so QwenPaw's ModelInfo gets the correct capability flags instead
+            # of relying on the fail-open default for unknown models.
+            input_types = model_cfg.get("input")
+            if isinstance(input_types, list):
+                modalities = {
+                    t for t in input_types if isinstance(t, str)
+                }
+                model.update({
+                    "supports_image": "image" in modalities,
+                    "supports_video": "video" in modalities,
+                    "supports_multimodal": bool(modalities - {"text"}),
+                })
+            models.append(model)
 
         custom_providers[provider_id] = {
             "id": provider_id,

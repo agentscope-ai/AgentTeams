@@ -38,6 +38,8 @@ from nio import (
 )
 from nio.responses import WhoamiResponse
 
+from copaw_worker.hooks.message_filter import canonicalize_team_worker_mentions
+
 logger = logging.getLogger(__name__)
 
 _MATRIX_USER_ID_RE = re.compile(
@@ -62,6 +64,7 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
 )
 _TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
     r"(?i)\b("
+    r"new\s+task(?:\s+\[[^\]\n]+\])?|"
     r"task\s+assigned|"
     r"assigned\s+task|"
     r"you\s+are\s+assigned|"
@@ -1719,6 +1722,7 @@ class MatrixChannel(BaseChannel):
             return
 
         room_id = to_handle
+        text = canonicalize_team_worker_mentions(text)
 
         if _ends_with_no_reply_control(text):
             logger.info(

@@ -18,23 +18,25 @@ type MockWorkerBackend struct {
 
 	NameOverride string
 
-	CreateFn func(ctx context.Context, req backend.CreateRequest) (*backend.WorkerResult, error)
-	DeleteFn func(ctx context.Context, name string) error
-	StartFn  func(ctx context.Context, name string) error
-	StopFn   func(ctx context.Context, name string) error
-	StatusFn func(ctx context.Context, name string) (*backend.WorkerResult, error)
-	ListFn   func(ctx context.Context) ([]backend.WorkerResult, error)
+	CreateFn           func(ctx context.Context, req backend.CreateRequest) (*backend.WorkerResult, error)
+	DeleteFn           func(ctx context.Context, name string) error
+	StartFn            func(ctx context.Context, name string) error
+	StopFn             func(ctx context.Context, name string) error
+	StatusFn           func(ctx context.Context, name string) (*backend.WorkerResult, error)
+	ListFn             func(ctx context.Context) ([]backend.WorkerResult, error)
+	ProjectAuthTokenFn func(ctx context.Context, name, token string) error
 
 	containerState map[string]backend.WorkerStatus
 
 	Calls struct {
-		Create     []string
-		CreateReqs []backend.CreateRequest
-		Delete     []string
-		Start      []string
-		Stop       []string
-		Status     []string
-		List       int
+		Create           []string
+		CreateReqs       []backend.CreateRequest
+		Delete           []string
+		Start            []string
+		Stop             []string
+		Status           []string
+		List             int
+		ProjectAuthToken []struct{ Name, Token string }
 	}
 }
 
@@ -57,6 +59,7 @@ func (m *MockWorkerBackend) Reset() {
 	m.StopFn = nil
 	m.StatusFn = nil
 	m.ListFn = nil
+	m.ProjectAuthTokenFn = nil
 }
 
 // ClearCalls resets call records only, preserving Fn overrides and container state.
@@ -68,14 +71,26 @@ func (m *MockWorkerBackend) ClearCalls() {
 
 func (m *MockWorkerBackend) clearCallsLocked() {
 	m.Calls = struct {
-		Create     []string
-		CreateReqs []backend.CreateRequest
-		Delete     []string
-		Start      []string
-		Stop       []string
-		Status     []string
-		List       int
+		Create           []string
+		CreateReqs       []backend.CreateRequest
+		Delete           []string
+		Start            []string
+		Stop             []string
+		Status           []string
+		List             int
+		ProjectAuthToken []struct{ Name, Token string }
 	}{}
+}
+
+func (m *MockWorkerBackend) ProjectAuthToken(ctx context.Context, name, token string) error {
+	m.mu.Lock()
+	m.Calls.ProjectAuthToken = append(m.Calls.ProjectAuthToken, struct{ Name, Token string }{Name: name, Token: token})
+	fn := m.ProjectAuthTokenFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, name, token)
+	}
+	return nil
 }
 
 // SimulatePodDeletion removes a container from tracked state, simulating

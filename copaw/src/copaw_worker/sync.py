@@ -707,6 +707,7 @@ class FileSync:
         changed: list[str] = []
         files: dict[str, list[str]] = {
             "openclaw.json": [f"{self._prefix}/openclaw.json"],
+            "runtime/runtime.yaml": [f"{self._prefix}/runtime/runtime.yaml"],
             "config/mcporter.json": [
                 f"{self._prefix}/config/mcporter.json",
                 f"{self._prefix}/mcporter-servers.json",
@@ -786,6 +787,7 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     # Manager-managed files at specific relative paths (not just root)
     _EXCLUDE_PATHS = {
         "config/mcporter.json",
+        "runtime/runtime.yaml",
         ".copaw/workspaces/default/config/mcporter.json",
     }
     # Skip duplicate uploads through the runtime skills symlink; the canonical

@@ -3960,6 +3960,23 @@ CREDEOF
             _ctrl_env_args+=(-e "${_ctrl_env_prefix}EMBEDDING_MODEL=${AGENTTEAMS_EMBEDDING_MODEL}")
         fi
 
+        # Optional: custom model capability overrides (context window, max
+        # tokens, vision, reasoning). These are read by the Controller's
+        # config.go LoadConfig to annotate custom models not in the built-in
+        # presets table.
+        if [ -n "${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MODEL_CONTEXT_WINDOW=${AGENTTEAMS_MODEL_CONTEXT_WINDOW}")
+        fi
+        if [ -n "${AGENTTEAMS_MODEL_MAX_TOKENS:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MODEL_MAX_TOKENS=${AGENTTEAMS_MODEL_MAX_TOKENS}")
+        fi
+        if [ -n "${AGENTTEAMS_MODEL_VISION:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MODEL_VISION=${AGENTTEAMS_MODEL_VISION}")
+        fi
+        if [ -n "${AGENTTEAMS_MODEL_REASONING:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MODEL_REASONING=${AGENTTEAMS_MODEL_REASONING}")
+        fi
+
         # Optional: OpenAI-compatible base URL
         if [ -n "${AGENTTEAMS_OPENAI_BASE_URL:-}" ]; then
             _ctrl_env_args+=(-e "${_ctrl_env_prefix}OPENAI_BASE_URL=${AGENTTEAMS_OPENAI_BASE_URL}")

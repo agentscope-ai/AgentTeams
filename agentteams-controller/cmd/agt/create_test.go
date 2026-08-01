@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -9,6 +10,37 @@ import (
 	"testing"
 	"time"
 )
+
+func TestParseExposePortsProducesNumericJSONValues(t *testing.T) {
+	ports, err := parseExposePorts("8080, 3000")
+	if err != nil {
+		t.Fatalf("parseExposePorts: %v", err)
+	}
+	payload, err := json.Marshal(ports)
+	if err != nil {
+		t.Fatalf("marshal expose ports: %v", err)
+	}
+
+	var decoded []struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("expose payload cannot be decoded by the controller API: %v (payload: %s)", err, payload)
+	}
+	if len(decoded) != 2 || decoded[0].Port != 8080 || decoded[1].Port != 3000 {
+		t.Fatalf("decoded expose ports = %#v, want [8080 3000]", decoded)
+	}
+}
+
+func TestParseExposePortsRejectsInvalidValues(t *testing.T) {
+	for _, value := range []string{"not-a-port", "0", "65536", ","} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := parseExposePorts(value); err == nil {
+				t.Fatalf("parseExposePorts(%q) returned nil error", value)
+			}
+		})
+	}
+}
 
 func TestDefaultWorkerModel(t *testing.T) {
 	t.Run("falls back to qwen3.6-plus when env var unset", func(t *testing.T) {

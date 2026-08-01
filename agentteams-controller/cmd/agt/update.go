@@ -70,7 +70,11 @@ func updateWorkerCmd() *cobra.Command {
 				req["skills"] = splitCSV(skills)
 			}
 			if expose != "" {
-				req["expose"] = parseExposePorts(expose)
+				ports, err := parseExposePorts(expose)
+				if err != nil {
+					return err
+				}
+				req["expose"] = ports
 			}
 
 			if len(req) == 0 {

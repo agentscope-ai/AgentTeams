@@ -26,7 +26,10 @@ bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh d
 2. Tests the model via `POST /v1/chat/completions` on the AI Gateway — exits with error if unreachable
 3. **OpenClaw**: updates `openclaw.json` model list / primary and `reasoning`
 4. **CoPaw**: updates modern provider `~/.copaw.secret/providers/custom/agentteams-gateway.json` (model-level `generate_kwargs`) + `active_model.json`, and syncs `openclaw.json` `reasoning` / primary (bridge SoT)
-5. Always outputs `RESTART_REQUIRED`
+5. When `AGENTTEAMS_STORAGE_PREFIX` is set, pushes `openclaw.json` to object storage:
+   - always attempts `${AGENTTEAMS_STORAGE_PREFIX}/manager/openclaw.json`
+   - **best-effort** `${AGENTTEAMS_STORAGE_PREFIX}/agents/manager/openclaw.json` (Manager credentials often lack write ACL here; failure is WARN-only). Persistence across Controller reconcile relies on the Controller reading the live workspace and preserving per-model `reasoning`.
+6. Always outputs `RESTART_REQUIRED`
 
 ## After running the script
 
@@ -42,6 +45,8 @@ By default, reasoning (extended thinking) is enabled. To disable it, pass `--no-
 
 - **OpenClaw**: sets `reasoning: false` on the model entry in `openclaw.json`
 - **CoPaw**: sets model-level `generate_kwargs.extra_body.enable_thinking=false` (DashScope Qwen hybrid models), and mirrors `reasoning` onto `openclaw.json`
+
+**Precedence:** the live Manager `openclaw.json` (including this skill’s hot-update) wins over the next Controller regenerate of manager config. `AGENTTEAMS_MODEL_REASONING` / CR defaults alone will **not** flip a model back if the workspace still has the opposite `reasoning` flag — re-run this skill (with or without `--no-reasoning`) so the workspace matches the desired value.
 
 ## On failure
 

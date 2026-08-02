@@ -10,6 +10,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug Fixes**
 
+- **model-switch openclaw SoT lost on Manager reconcile**: Controller `PutManagerConfig` / `UpdateManagerGroupAllowFrom` load openclaw from the live Manager workspace first and preserve per-model `reasoning` across regenerate (live/hot-update wins over CR defaults until model-switch updates the workspace again). `model-switch` also pushes `openclaw.json` to MinIO (`manager/` + best-effort `agents/manager/`).
 - **CoPaw `--no-reasoning` no-op**: Manager `model-switch` now honors `--no-reasoning` on CoPaw by writing `generate_kwargs.extra_body.enable_thinking=false` to the modern provider store (`providers/custom/*.json` + `active_model.json`) and syncing `openclaw.json` `reasoning` (bridge SoT) so restart/re-bridge keeps the setting. Bridge maps openclaw.json `reasoning: false` into **model-level** CoPaw `generate_kwargs` only (no shared provider-level flag).
 - **CoPaw Team assignment handoff**: Return the required Team Room `message` action from `taskflow(delegate_task)`, normalize Worker aliases from the Team roster, refresh Controller-managed runtime context every minute, and reroute assignment replies from non-Team rooms to the Team Room. ([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120))
 - **Docker Worker ServiceAccount token rotation**: Project short-lived tokens into per-Worker Docker volumes, refresh the token file atomically without recreating running Workers, and remove the credential volume with the Worker.
@@ -31,6 +32,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug 修复**
 
+- **model-switch openclaw 在 Manager reconcile 时丢失**：Controller `PutManagerConfig` / `UpdateManagerGroupAllowFrom` 优先读 live workspace 并保留 `reasoning`（热更新优先于 CR 默认，需再跑 model-switch 才能按环境变量改回）；`model-switch` 写完后 push MinIO（`manager/` + best-effort `agents/manager/`）。
 - **CoPaw `--no-reasoning` 无效**：Manager `model-switch` 在 CoPaw 运行时写入 `generate_kwargs.extra_body.enable_thinking=false`，并同步 `openclaw.json` 的 `reasoning`（bridge 真相源），避免重启/re-bridge 丢配置。Bridge 仅将 `reasoning: false` 映射到 model 级 `generate_kwargs`，不写共享的 provider 级开关。
 - **CoPaw Team 任务分配交接**：由 `taskflow(delegate_task)` 返回必须执行的 Team Room `message` 动作，根据 Team roster 规范化 Worker 别名，每分钟刷新 Controller 管理的运行时上下文，并将非 Team Room 中的任务分配回复重定向到 Team Room。([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120))
 - **Worker 端口暴露 CLI**：将 `--expose` 参数编码为数值端口，并在创建、更新或应用请求到达 Controller 前拒绝无效或越界输入。

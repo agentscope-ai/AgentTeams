@@ -5,7 +5,7 @@ description: Switch the Manager Agent's own LLM model. Use when the human admin 
 
 # Model Switch
 
-Switch the Manager's own LLM model. The script tests connectivity first, then patches `openclaw.json`.
+Switch the Manager's own LLM model. The script tests connectivity first, then patches the runtime config (`openclaw.json` for OpenClaw, CoPaw provider store for CoPaw).
 
 ## Usage
 
@@ -24,21 +24,28 @@ bash /opt/agentteams/agent/skills/model-switch/scripts/update-manager-model.sh d
 
 1. Strips any `agentteams-gateway/` prefix from the model name
 2. Tests the model via `POST /v1/chat/completions` on the AI Gateway — exits with error if unreachable
-3. If the model is already in the `models` array: switches `agents.defaults.model.primary`
-4. If the model is new: adds it to the `models` array and switches primary
+3. **OpenClaw**: updates `openclaw.json` model list / primary and `reasoning`
+4. **CoPaw**: updates modern provider `~/.copaw.secret/providers/custom/agentteams-gateway.json` (model-level `generate_kwargs`) + `active_model.json`, and syncs `openclaw.json` `reasoning` / primary (bridge SoT)
 5. Always outputs `RESTART_REQUIRED`
 
 ## After running the script
 
-The script always outputs `RESTART_REQUIRED`. Run `openclaw gateway restart` to apply the change, then tell the human admin the switch is complete.
+The script always outputs `RESTART_REQUIRED`.
+- OpenClaw: run `openclaw gateway restart`
+- CoPaw: restart the CoPaw / Manager service
+
+Then tell the human admin the switch is complete.
 
 ## Reasoning control
 
 By default, reasoning (extended thinking) is enabled. To disable it, pass `--no-reasoning`.
 
+- **OpenClaw**: sets `reasoning: false` on the model entry in `openclaw.json`
+- **CoPaw**: sets model-level `generate_kwargs.extra_body.enable_thinking=false` (DashScope Qwen hybrid models), and mirrors `reasoning` onto `openclaw.json`
+
 ## On failure
 
-If the gateway test fails (non-200), the script outputs `ERROR: MODEL_NOT_REACHABLE` and exits. No changes are made to `openclaw.json`.
+If the gateway test fails (non-200), the script outputs `ERROR: MODEL_NOT_REACHABLE` and exits. No changes are made to runtime config.
 
 When you see this error, tell the human admin clearly:
 
@@ -52,7 +59,7 @@ After the admin confirms the provider and route are configured, you can retry th
 
 ## Important
 
-This skill switches the **primary model** (persisted in `openclaw.json`). After running the script, you must run `openclaw gateway restart` for the change to take effect. The human admin can also use the `/model` slash command to switch the current session's model instantly without restart, but that is non-persistent and only supports pre-configured models.
+This skill switches the **primary model** (persisted in OpenClaw `openclaw.json` or the CoPaw provider store). After running the script, restart the Manager runtime for the change to take effect. The human admin can also use the `/model` slash command to switch the current session's model instantly without restart, but that is non-persistent and only supports pre-configured models.
 
 ## Switching to an unknown model
 
@@ -77,6 +84,6 @@ When the human admin requests switching to a model you don't recognize, you MUST
 | claude-opus-4-6 | 1,000,000 | 128,000 |
 | claude-sonnet-4-6 | 1,000,000 | 64,000 |
 | claude-haiku-4-5 | 200,000 | 64,000 |
-| qwen3.5-plus | 200,000 | 64,000 |
+| qwen3.6-plus / qwen3.5-plus | 200,000 | 64,000 |
 | deepseek-chat / deepseek-reasoner / kimi-k2.5 | 256,000 | 128,000 |
 | glm-5 / MiniMax-M2.7 / MiniMax-M2.7-highspeed / MiniMax-M2.5 | 200,000 | 128,000 |

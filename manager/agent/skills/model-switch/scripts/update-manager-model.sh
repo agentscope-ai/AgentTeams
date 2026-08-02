@@ -8,6 +8,8 @@
 #       ~/.copaw.secret/providers/active_model.json
 #       ~/.copaw/config.json (context window)
 #       openclaw.json (bridge SoT: reasoning + primary)
+#   When AGENTTEAMS_STORAGE_PREFIX is set, also push openclaw.json to
+#   ${PREFIX}/manager/openclaw.json and ${PREFIX}/agents/manager/openclaw.json.
 #
 # --no-reasoning:
 #   OpenClaw → model.reasoning = false
@@ -100,6 +102,58 @@ _patch_copaw_model_thinking() {
             end
           )
     ' "${COPAW_CUSTOM_PROVIDER}" > "${TMP}" && mv "${TMP}" "${COPAW_CUSTOM_PROVIDER}"
+}
+
+# Push manager openclaw.json to object storage so Remote→Local mirror does not
+# overwrite a fresh local SoT write with a stale remote copy.
+#
+# Two remote keys matter in embedded/k8s installs:
+#   - ${PREFIX}/manager/openclaw.json
+#       Manager Local↔Remote sync (start-manager-agent.sh)
+#   - ${PREFIX}/agents/manager/openclaw.json
+#       Controller mirrors agents/ → agentteams-fs/agents/, and the Manager
+#       workspace is bind-mounted there — a stale agents/manager copy will
+#       overwrite the live openclaw.json within seconds.
+_push_openclaw_to_storage() {
+    local openclaw_json="$1"
+    if [ -z "${AGENTTEAMS_STORAGE_PREFIX:-}" ]; then
+        return 0
+    fi
+    if ! command -v mc >/dev/null 2>&1; then
+        log "WARN: mc not found; skipped push of openclaw.json to storage"
+        return 0
+    fi
+    if ! [ -f "${openclaw_json}" ]; then
+        return 0
+    fi
+    if declare -F ensure_mc_credentials >/dev/null 2>&1; then
+        ensure_mc_credentials 2>/dev/null || true
+    fi
+    local remote
+    local failed=0
+    # manager/ — Manager sync path (expected to succeed when storage is enabled).
+    # agents/manager/ — Controller SoT; often 403 for Manager credentials (best-effort).
+    for remote in \
+        "${AGENTTEAMS_STORAGE_PREFIX}/manager/openclaw.json" \
+        "${AGENTTEAMS_STORAGE_PREFIX}/agents/manager/openclaw.json"
+    do
+        if mc cp "${openclaw_json}" "${remote}" >/dev/null 2>&1; then
+            log "Pushed openclaw.json to ${remote}"
+        else
+            case "${remote}" in
+                */agents/manager/*)
+                    log "WARN: failed to push openclaw.json to ${remote} (often 403; Controller ACL — best-effort)"
+                    ;;
+                *)
+                    log "WARN: failed to push openclaw.json to ${remote}"
+                    ;;
+            esac
+            failed=1
+        fi
+    done
+    if [ "${failed}" -ne 0 ]; then
+        log "WARN: some MinIO pushes failed; persistence relies on live workspace + Controller mergeModelReasoning"
+    fi
 }
 
 MODEL_NAME="${1:-}"
@@ -266,6 +320,7 @@ if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
     if [ -f "${OPENCLAW_JSON}" ]; then
         _patch_openclaw_model "${OPENCLAW_JSON}" >/dev/null
         log "Synced openclaw.json reasoning=${REASONING} for ${MODEL_NAME}"
+        _push_openclaw_to_storage "${OPENCLAW_JSON}"
     else
         log "WARN: openclaw.json not found; provider store updated but bridge SoT was not synced"
     fi
@@ -276,6 +331,7 @@ if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
 else
     # ── OpenClaw: update openclaw.json ──
     MODEL_EXISTS=$(_patch_openclaw_model "${OPENCLAW_JSON}")
+    _push_openclaw_to_storage "${OPENCLAW_JSON}"
     if [ "${MODEL_EXISTS}" -gt 0 ]; then
         log "Done. Model is now: ${MODEL_NAME}"
     else

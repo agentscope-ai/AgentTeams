@@ -31,6 +31,7 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
 )
 _TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
     r"(?i)\b("
+    r"new\s+task(?:\s+\[[^\]\n]+\])?|"
     r"task\s+assigned|"
     r"assigned\s+task|"
     r"you\s+are\s+assigned|"

@@ -17,6 +17,10 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_LLM_API_KEY` | Yes | - | LLM API key |
 | `AGENTTEAMS_LLM_PROVIDER` | No | `qwen` | LLM provider (`qwen` for Alibaba Cloud, `openai-compat` for OpenAI-compatible APIs) |
 | `AGENTTEAMS_DEFAULT_MODEL` | No | `qwen3.5-plus` | Default model ID |
+| `AGENTTEAMS_MODEL_CONTEXT_WINDOW` | No | (model default) | Override context window size for custom models |
+| `AGENTTEAMS_MODEL_MAX_TOKENS` | No | (model default) | Override max output tokens for custom models |
+| `AGENTTEAMS_MODEL_VISION` | No | (model default) | Override vision capability for custom models (`true`/`false`). Only needed when the model is not in the built-in presets table. |
+| `AGENTTEAMS_MODEL_REASONING` | No | (model default) | Override reasoning capability for custom models (`true`/`false`). Only needed when the model is not in the built-in presets table. |
 | `AGENTTEAMS_ADMIN_USER` | No | `admin` | Human admin Matrix username |
 | `AGENTTEAMS_ADMIN_PASSWORD` | No | (auto-generated) | Human admin password (min 8 chars, MinIO requirement) |
 | `AGENTTEAMS_MATRIX_DOMAIN` | No | `matrix-local.agentteams.io:18080` | Matrix server domain (used inside container) |

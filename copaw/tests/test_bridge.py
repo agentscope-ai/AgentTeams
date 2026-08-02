@@ -680,3 +680,77 @@ def test_bridge_standard_to_runtime_materializes_prompts_mcporter_and_skills(tmp
     assert (workspace_dir / "skills" / "task-management" / "SKILL.md").read_text() == "Use task tools."
     assert (workspace_dir / "agent.json").exists()
     assert (runtime_dir / "providers.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Controller → bridge regression: model input capability propagation
+# ---------------------------------------------------------------------------
+
+def _make_openclaw_cfg_with_input(models_input_map: dict[str, list[str]]):
+    """Build an openclaw config where each model carries an ``input`` list.
+
+    ``models_input_map`` maps model_id → input modalities, e.g.
+    ``{"vision-model": ["text", "image"], "text-model": ["text"]}``.
+    """
+    model_list = [
+        {"id": mid, "input": modalities}
+        for mid, modalities in models_input_map.items()
+    ]
+    return {
+        "channels": {"matrix": {"enabled": True}},
+        "models": {
+            "providers": {
+                "gw": {
+                    "baseUrl": "http://aigw:8080/v1",
+                    "apiKey": "key123",
+                    "models": model_list,
+                }
+            }
+        },
+        "agents": {"defaults": {"model": {"primary": f"gw/{model_list[0]['id']}"}}},
+    }
+
+
+def _run_bridge_and_read_providers(cfg):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        working_dir = Path(tmpdir) / "agent"
+        _run_bridge(cfg, working_dir)
+        with open(working_dir / "providers.json") as f:
+            return json.load(f)
+
+
+def test_providers_json_propagates_input_capability():
+    """Controller model ``input`` must reach providers.json as capability flags."""
+    cfg = _make_openclaw_cfg_with_input({
+        "vision-model": ["text", "image"],
+        "video-model": ["text", "video"],
+        "text-model": ["text"],
+    })
+    providers = _run_bridge_and_read_providers(cfg)
+    models = providers["custom_providers"]["gw"]["models"]
+    by_id = {m["id"]: m for m in models}
+
+    vision = by_id["vision-model"]
+    assert vision["supports_image"] is True
+    assert vision["supports_video"] is False
+    assert vision["supports_multimodal"] is True
+
+    video = by_id["video-model"]
+    assert video["supports_image"] is False
+    assert video["supports_video"] is True
+    assert video["supports_multimodal"] is True
+
+    text = by_id["text-model"]
+    assert text["supports_image"] is False
+    assert text["supports_video"] is False
+    assert text["supports_multimodal"] is False
+
+
+def test_providers_json_no_input_field_no_capability_flags():
+    """Models without ``input`` keep plain {id, name} — backward compat."""
+    cfg = _make_openclaw_cfg_with_input({"plain-model": []})
+    # Remove the empty input list to simulate old openclaw.json
+    cfg["models"]["providers"]["gw"]["models"][0].pop("input", None)
+    providers = _run_bridge_and_read_providers(cfg)
+    model = providers["custom_providers"]["gw"]["models"][0]
+    assert model == {"id": "plain-model", "name": "plain-model"}

@@ -289,6 +289,14 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 			return err
 		}
 	}
+	var exposePorts []map[string]interface{}
+	if expose != "" {
+		var err error
+		exposePorts, err = parseExposePorts(expose)
+		if err != nil {
+			return err
+		}
+	}
 
 	client := NewAPIClient()
 
@@ -309,7 +317,7 @@ func applyWorkerParams(name, model, runtime, image, identity, soul, soulFile,
 		req["skills"] = splitCSV(skills)
 	}
 	if expose != "" {
-		req["expose"] = parseExposePorts(expose)
+		req["expose"] = exposePorts
 	}
 
 	var resp map[string]interface{}

@@ -53,7 +53,7 @@
 #   AGENTTEAMS_PORT_MANAGER_CONSOLE  Host port for Manager console (default: 18888)
 #   AGENTTEAMS_WORKER_IDLE_TIMEOUT  Worker idle timeout in minutes (default: 720, i.e. 12 hours)
 #   AGENTTEAMS_DASHBOARD              Install agentteams-dashboard management UI (default: 1)
-#   AGENTTEAMS_DASHBOARD_VERSION      Dashboard version (default: v1.2.0-beta.1, independent of AgentTeams version)
+#   AGENTTEAMS_DASHBOARD_VERSION      Dashboard version (default: v1.2.0, independent of AgentTeams version)
 #   AGENTTEAMS_PORT_DASHBOARD         Dashboard host port (default: 13000)
 #   AGENTTEAMS_DASHBOARD_IMAGE        Override dashboard image (default: <registry>/agentteams/agentteams-dashboard:<DASHBOARD_VERSION>)
 #   AGENTTEAMS_AI_GATEWAY_ADMIN_URL   Higress Console URL for shared auth (auto-detected)
@@ -536,8 +536,8 @@ msg() {
         "port.element_prompt.en") text="Host port for Element Web direct access (8088 inside container)" ;;
         "port.manager_console_prompt.zh") text="Manager 控制台主机端口（容器内 18888）" ;;
         "port.manager_console_prompt.en") text="Host port for Manager console (18888 inside container)" ;;
-        "port.copaw_app_prompt.zh") text="QwenPaw App API 主机端口（容器内 18799）" ;;
-        "port.copaw_app_prompt.en") text="Host port for QwenPaw App API (18799 inside container)" ;;
+        "port.copaw_app_prompt.zh") text="CoPaw App API 主机端口（容器内 18799）" ;;
+        "port.copaw_app_prompt.en") text="Host port for CoPaw App API (18799 inside container)" ;;
         # --- Local-only binding ---
         "port.local_only.title.zh") text="--- 网络访问模式 ---" ;;
         "port.local_only.title.en") text="--- Network Access Mode ---" ;;
@@ -608,8 +608,8 @@ msg() {
         "worker_runtime.title.en") text="--- Default Worker Runtime ---" ;;
         "worker_runtime.openclaw.zh") text="OpenClaw" ;;
         "worker_runtime.openclaw.en") text="OpenClaw" ;;
-        "worker_runtime.copaw.zh") text="QwenPaw" ;;
-        "worker_runtime.copaw.en") text="QwenPaw" ;;
+        "worker_runtime.copaw.zh") text="CoPaw" ;;
+        "worker_runtime.copaw.en") text="CoPaw" ;;
         "worker_runtime.hermes.zh") text="Hermes" ;;
         "worker_runtime.hermes.en") text="Hermes" ;;
         "worker_runtime.choice.zh") text="请选择 [1/2/3]" ;;
@@ -622,8 +622,8 @@ msg() {
         "manager_runtime.title.en") text="--- Manager Runtime ---" ;;
         "manager_runtime.openclaw.zh") text="OpenClaw" ;;
         "manager_runtime.openclaw.en") text="OpenClaw" ;;
-        "manager_runtime.copaw.zh") text="QwenPaw" ;;
-        "manager_runtime.copaw.en") text="QwenPaw" ;;
+        "manager_runtime.copaw.zh") text="CoPaw" ;;
+        "manager_runtime.copaw.en") text="CoPaw" ;;
         "manager_runtime.choice.zh") text="请选择 [1/2]" ;;
         "manager_runtime.choice.en") text="Enter choice [1/2]" ;;
         "manager_runtime.selected.zh") text="Manager 运行时: %s" ;;
@@ -941,8 +941,8 @@ msg() {
         "success.manager_console.en") text="  Manager Console (local): http://localhost:%s (no login required)" ;;
         "success.manager_console_gateway.zh") text="  Manager 控制台（网关）: http://console-local.agentteams.io（用户名: %s / 密码: %s）" ;;
         "success.manager_console_gateway.en") text="  Manager Console (gateway): http://console-local.agentteams.io (Username: %s / Password: %s)" ;;
-        "success.copaw_console.zh") text="  QwenPaw App API: http://localhost:%s（无需登录）" ;;
-        "success.copaw_console.en") text="  QwenPaw App API: http://localhost:%s (no login required)" ;;
+        "success.copaw_console.zh") text="  CoPaw App API: http://localhost:%s（无需登录）" ;;
+        "success.copaw_console.en") text="  CoPaw App API: http://localhost:%s (no login required)" ;;
         "success.switch_llm.title.zh") text="--- 切换 LLM 提供商 ---" ;;
         "success.switch_llm.title.en") text="--- Switch LLM Providers ---" ;;
         "success.switch_llm.hint.zh") text="  您可以通过 Higress 控制台切换到其他 LLM 提供商（OpenAI、Anthropic 等）。" ;;
@@ -2517,7 +2517,7 @@ step_workspace() {
 
 step_dashboard() {
     AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
-    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0-beta.1}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0}"
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
     AGENTTEAMS_AI_GATEWAY_ADMIN_URL="${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}"
 
@@ -3105,7 +3105,7 @@ _start_dashboard() {
     fi
 
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
-    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0-beta.1}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0}"
     AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
 
     log ""
@@ -3542,7 +3542,7 @@ AGENTTEAMS_HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR:-}
 
 # agentteams-dashboard (management UI)
 AGENTTEAMS_DASHBOARD=${AGENTTEAMS_DASHBOARD:-1}
-AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0-beta.1}
+AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0}
 AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
 AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
 AGENTTEAMS_AI_GATEWAY_ADMIN_URL=${AGENTTEAMS_AI_GATEWAY_ADMIN_URL:-}
@@ -3679,7 +3679,8 @@ EOF
     # Pull all worker runtime images (workers may use any runtime regardless of the default)
     _pull_image "${WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${COPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
+    # Temporarily disabled until the QwenPaw worker image is published.
+    # _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
     _pull_image "${HERMES_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
 
     # --- Pre-upgrade: extract Matrix passwords from running old containers ---
@@ -3961,6 +3962,23 @@ CREDEOF
         # Optional: embedding model
         if [ -n "${AGENTTEAMS_EMBEDDING_MODEL:-}" ]; then
             _ctrl_env_args+=(-e "${_ctrl_env_prefix}EMBEDDING_MODEL=${AGENTTEAMS_EMBEDDING_MODEL}")
+        fi
+
+        # Optional: custom model capability overrides (context window, max
+        # tokens, vision, reasoning). These are read by the Controller's
+        # config.go LoadConfig to annotate custom models not in the built-in
+        # presets table.
+        if [ -n "${AGENTTEAMS_MODEL_CONTEXT_WINDOW:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MODEL_CONTEXT_WINDOW=${AGENTTEAMS_MODEL_CONTEXT_WINDOW}")
+        fi
+        if [ -n "${AGENTTEAMS_MODEL_MAX_TOKENS:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MODEL_MAX_TOKENS=${AGENTTEAMS_MODEL_MAX_TOKENS}")
+        fi
+        if [ -n "${AGENTTEAMS_MODEL_VISION:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MODEL_VISION=${AGENTTEAMS_MODEL_VISION}")
+        fi
+        if [ -n "${AGENTTEAMS_MODEL_REASONING:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}MODEL_REASONING=${AGENTTEAMS_MODEL_REASONING}")
         fi
 
         # Optional: OpenAI-compatible base URL
@@ -4646,7 +4664,7 @@ case "${1:-}" in
         check_container_runtime
         load_current_params_from_env
         AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
-        AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0-beta.1}"
+        AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.2.0}"
         AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
         AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
         AGENTTEAMS_USE_EMBEDDED=1

@@ -332,6 +332,8 @@ def test_pull_all_refreshes_config_mcporter_and_skills_without_shared(tmp_path, 
     def fake_cat(key):
         if key.endswith("/openclaw.json"):
             return json.dumps(remote_config)
+        if key.endswith("/runtime/runtime.yaml"):
+            return "member:\n  role: team_leader\n"
         if key.endswith("/config/mcporter.json"):
             return '{"mcpServers":{}}'
         return None
@@ -351,10 +353,18 @@ def test_pull_all_refreshes_config_mcporter_and_skills_without_shared(tmp_path, 
 
     changed = sync.pull_all()
 
-    assert set(changed) == {"openclaw.json", "config/mcporter.json", "skills/github/"}
+    assert set(changed) == {
+        "openclaw.json",
+        "runtime/runtime.yaml",
+        "config/mcporter.json",
+        "skills/github/",
+    }
     written = json.loads((sync.local_dir / "openclaw.json").read_text())
     assert written["channels"]["matrix"]["accessToken"] == "local-token"
     assert written["channels"]["matrix"]["groupAllowFrom"] == ["@new:mx"]
+    assert (sync.local_dir / "runtime" / "runtime.yaml").read_text() == (
+        "member:\n  role: team_leader\n"
+    )
     assert (sync.local_dir / "config" / "mcporter.json").read_text() == '{"mcpServers":{}}'
     assert commands == [
         (
@@ -372,6 +382,7 @@ def test_push_local_preserves_user_data_but_skips_manager_and_mirrored_state(tmp
 
     files = {
         "openclaw.json": "{}",
+        "runtime/runtime.yaml": "member:\n  role: standalone\n",
         "config/mcporter.json": "{}",
         ".copaw/workspaces/default/config/mcporter.json": "{}",
         ".copaw/workspaces/default/skills/github/SKILL.md": "runtime projection",

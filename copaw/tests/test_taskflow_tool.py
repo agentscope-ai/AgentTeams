@@ -588,6 +588,20 @@ async def test_delegate_task_accepts_team_leader_team_room(tmp_path, monkeypatch
 
     assert payload["ok"] is True
     assert payload["task"]["room_id"] == "room:!team:domain"
+    assert payload["notificationRequired"] is True
+    assert payload["nextAction"] == {
+        "tool": "message",
+        "arguments": {
+            "action": "send",
+            "channel": "matrix",
+            "target": "room:!team:domain",
+            "message": (
+                "@worker:domain New task [tp-team-ok-01]: "
+                "Read shared/tasks/tp-team-ok-01/spec.md and start the task."
+            ),
+        },
+    }
+    assert "Do not return the assignment as a normal reply" in payload["instruction"]
 
 
 @pytest.mark.asyncio

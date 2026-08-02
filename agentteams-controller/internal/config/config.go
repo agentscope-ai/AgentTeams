@@ -169,6 +169,8 @@ type Config struct {
 	Runtime            string
 	ModelContextWindow int
 	ModelMaxTokens     int
+	ModelVision    *bool // nil = use model default; overrides model-level vision capability
+	ModelReasoning *bool // nil = use model default; overrides model-level reasoning capability
 
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
@@ -383,6 +385,8 @@ func LoadConfig() *Config {
 		Runtime:            envOrDefault("AGENTTEAMS_RUNTIME", "docker"),
 		ModelContextWindow: envOrDefaultInt("AGENTTEAMS_MODEL_CONTEXT_WINDOW", 0),
 		ModelMaxTokens:     envOrDefaultInt("AGENTTEAMS_MODEL_MAX_TOKENS", 0),
+		ModelVision:        envOptionalBool("AGENTTEAMS_MODEL_VISION"),
+		ModelReasoning:     envOptionalBool("AGENTTEAMS_MODEL_REASONING"),
 
 		LLMProvider:                envOrDefault("AGENTTEAMS_LLM_PROVIDER", "qwen"),
 		LLMAPIKey:                  os.Getenv("AGENTTEAMS_LLM_API_KEY"),
@@ -621,6 +625,17 @@ func envBoolDefault(key string, defaultVal bool) bool {
 	return v == "1" || v == "true" || v == "True" || v == "TRUE"
 }
 
+// envOptionalBool returns nil when the env var is unset, so callers can
+// distinguish "not configured" from "explicitly false".
+func envOptionalBool(key string) *bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	b := v == "1" || v == "true" || v == "True" || v == "TRUE"
+	return &b
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -842,6 +857,8 @@ func (c *Config) AgentConfig() agentconfig.Config {
 		E2EEEnabled:        c.MatrixE2EE,
 		ModelContextWindow: c.ModelContextWindow,
 		ModelMaxTokens:     c.ModelMaxTokens,
+		ModelVision:        c.ModelVision,
+		ModelReasoning:     c.ModelReasoning,
 		CMSTracesEnabled:   c.CMSTracesEnabled,
 		CMSMetricsEnabled:  c.CMSMetricsEnabled,
 		CMSEndpoint:        c.CMSEndpoint,

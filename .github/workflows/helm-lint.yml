@@ -9,6 +9,7 @@ on:
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-wasm-registry.sh'
       - 'tests/check-installer-qwenpaw-release-gate.sh'
       - 'tests/check-helm-agentteams.sh'
   workflow_dispatch: ~
@@ -25,6 +26,9 @@ jobs:
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check installer WASM registry default
+        run: bash tests/check-installer-wasm-registry.sh
 
       - name: Check QwenPaw installer release gate
         run: bash tests/check-installer-qwenpaw-release-gate.sh

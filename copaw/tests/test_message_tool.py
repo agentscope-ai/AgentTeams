@@ -510,12 +510,16 @@ def test_install_tool_hooks_registers_message(monkeypatch):
     assert ("taskflow", "override") in names
 
 
-def test_run_copaw_app_installs_hooks_before_start(monkeypatch):
+def test_run_copaw_app_starts_qwenpaw(monkeypatch):
+    """run_copaw_app.main() should launch qwenpaw without tool hooks.
+
+    The copaw hooks (install_tool_hooks) were removed because
+    QwenPaw 2.0's QwenPawAgent does not have _create_toolkit.
+    Tools are now registered via the agentteams-manager-tools plugin.
+    """
     import copaw_worker.run_copaw_app as app
 
     calls = []
-
-    monkeypatch.setattr(app, "install_tool_hooks", lambda: calls.append("hooks"))
 
     def fake_run_module(name, *, run_name, alter_sys):
         calls.append((name, run_name, alter_sys))
@@ -524,4 +528,4 @@ def test_run_copaw_app_installs_hooks_before_start(monkeypatch):
 
     app.main()
 
-    assert calls == ["hooks", ("copaw", "__main__", True)]
+    assert calls == [("qwenpaw", "__main__", True)]

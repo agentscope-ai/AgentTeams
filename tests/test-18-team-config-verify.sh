@@ -94,6 +94,7 @@ metadata:
   name: ${TEST_LEADER}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Worker
@@ -101,6 +102,7 @@ metadata:
   name: ${TEST_W1}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
   channelPolicy:
     groupDenyExtra:
       - ${TEST_W2}
@@ -111,6 +113,7 @@ metadata:
   name: ${TEST_W2}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team

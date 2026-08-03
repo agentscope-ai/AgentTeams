@@ -208,8 +208,13 @@ wait_for_manager_agent_ready() {
 
     while [ "${elapsed}" -lt "${timeout}" ]; do
         case "${manager_runtime}" in
-            copaw)
-                if docker exec "${agent_container}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 && \
+            copaw|qwenpaw)
+                # Both runtimes launch QwenPaw 2.0 in the same image; the process
+                # cmdline may be "copaw" (run_copaw_app.py via runpy) or "qwenpaw"
+                # (direct python3 -m qwenpaw app) — accept both (mirrors
+                # test-01-manager-boot.sh).
+                if { docker exec "${agent_container}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 || \
+                     docker exec "${agent_container}" pgrep -f "qwenpaw app" >/dev/null 2>&1; } && \
                    docker exec "${agent_container}" curl -sf http://127.0.0.1:18799/ >/dev/null 2>&1; then
                     runtime_ready=true
                     break
@@ -841,6 +846,10 @@ test_summary() {
 
 # Check if LLM API key is configured (required for tests that need Manager Agent responses)
 require_llm_key() {
+    if [ "${AGENTTEAMS_CI_NO_LLM:-0}" = "1" ]; then
+        log_info "SKIP: CI no-LLM mode (placeholder key cannot reach the model)"
+        return 1
+    fi
     if [ -z "${AGENTTEAMS_LLM_API_KEY}" ]; then
         log_info "SKIP: No LLM API key configured (set AGENTTEAMS_LLM_API_KEY). This test requires Manager Agent LLM responses."
         return 1

@@ -134,8 +134,12 @@ class Worker:
         openclaw_cfg = self._matrix_relogin(openclaw_cfg)
         self._join_pending_matrix_invites(openclaw_cfg)
 
-        # 4. Set up CoPaw working directory
-        self._copaw_working_dir = self.config.install_dir / self.worker_name / ".copaw"
+        # 4. Set up runtime working directory (.copaw for the legacy CoPaw
+        #    runtime). The .copaw -> .qwenpaw migration is owned exclusively
+        #    by qwenpaw_worker startup, so an explicitly configured
+        #    runtime: copaw Worker restart never migrates before a switch.
+        rt_dir_name = ".copaw"
+        self._copaw_working_dir = self.config.install_dir / self.worker_name / rt_dir_name
         self._copaw_working_dir.mkdir(parents=True, exist_ok=True)
 
         # 5. Bridge openclaw.json -> CoPaw config.json + providers.json

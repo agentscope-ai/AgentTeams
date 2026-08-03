@@ -115,14 +115,16 @@ def mcp_server(otel_env):
         "QWENPAW_WORKING_DIR": str(otel_env.workspace.parent.parent),
         "AGENTTEAMS_AGENT_ROLE": "worker",
         "AGENTTEAMS_WORKER_NAME": "worker-a",
+        # Simulate a configured Matrix environment (unreachable URL is fine —
+        # the automatic assignment notification is patched below).
+        "AGENTTEAMS_MATRIX_URL": "http://127.0.0.1:1",
+        "AGENTTEAMS_WORKER_MATRIX_TOKEN": "test-token",
     }
     env_clear = [
         "COPAW_WORKING_DIR",
         "TEAMHARNESS_RUNTIME_CONFIG",
         "TEAMHARNESS_SHARED_DIR",
         "AGENTTEAMS_SHARED_STORAGE_PREFIX",
-        "AGENTTEAMS_MATRIX_URL",
-        "AGENTTEAMS_WORKER_MATRIX_TOKEN",
         "AGENTTEAMS_MATRIX_USER_ID",
     ]
     for k, v in env_overrides.items():
@@ -137,6 +139,14 @@ def mcp_server(otel_env):
     # Stub out MinIO sync operations — we only care about local meta.json changes
     server._sync_task = lambda *a, **kw: True
     server._pull_task = lambda *a, **kw: True
+    # The automatic delegate_task notification must succeed (no real Matrix
+    # server in this unit-test fixture) so the delegation commits assigned.
+    server._send_delegate_notification = lambda *a, **kw: {
+        "sent": True,
+        "eventId": "$fake-delegate",
+        "roomId": "!worker-room:m.org",
+        "assignee": "worker-a",
+    }
 
     yield server
 

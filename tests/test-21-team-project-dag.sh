@@ -42,9 +42,9 @@ Do not send a message saying you will read AGENTS.md, inspect topology, check wo
 - **NEVER do domain work yourself** — you are a coordinator. Always delegate ready Project nodes to workers with taskflow
 - Read team-coordination, project-management, and task-management before planning and delegating work
 - Use projectflow to manage Project plans and ready nodes
-- Use taskflow delegate_task to create task files for each ready node, then @mention the assigned Worker in the Team Room
+- Use taskflow delegate_task to create task files for each ready node; delegate_task automatically notifies the assigned Worker in the Team Room — do not send a second assignment message
 - Use the Team Room ID and Worker Matrix IDs from your loaded AGENTS.md context directly
-- A delegation intent sentence is not a Worker assignment; after taskflow delegate_task, your next externally visible action must be the message tool call to room:<Team Room ID>
+- A delegation intent sentence is not a Worker assignment; after taskflow delegate_task returns ok:true with notification.eventId, the assignment is delivered — do not call message again for that assignment
 - If the request arrived in Leader DM, do not narrate skill reads, planning, or progress in Leader DM before the first Team Room assignment. Reply exactly NO_REPLY while doing internal coordination.
 - Do not send tool preambles such as \"let me read\", \"let me check\", \"I'll coordinate\", or \"now I will plan\". Call tools directly with no visible preamble.
 - Your first visible non-NO_REPLY coordination message must be a Team Room assignment to a Worker.
@@ -260,15 +260,15 @@ assert_contains "${PROJECT_SKILL}" "Project state is tool-owned" "project-manage
 assert_contains "${PROJECT_SKILL}" "ready_nodes" "project-management documents DAG ready nodes"
 assert_contains "${TASK_SKILL}" "taskflow" "task-management documents taskflow"
 assert_contains "${TASK_SKILL}" "Task state is tool-owned" "task-management forbids manual task state mutation"
-assert_contains "${TASK_SKILL}" "delegate_task does not send Matrix messages" "task-management requires explicit Team Room notification"
-assert_contains "${TASK_SKILL}" "Mandatory next action after \`delegate_task\`" "task-management requires message after delegate_task"
+assert_contains "${TASK_SKILL}" "delegate_task automatically sends the Worker assignment" "task-management documents automatic Team Room notification"
+assert_contains "${TASK_SKILL}" "do NOT send a second assignment message" "task-management forbids duplicate assignment after delegate_task"
 assert_contains "${TASK_SKILL}" "delegate_task" "task-management documents task delegation"
 assert_contains "${COMMUNICATION_SKILL}" "An assignment intent sentence is not an assignment" "communication forbids intent-only assignment replies"
-assert_contains "${COMMUNICATION_SKILL}" "this cross-room \`message\` call is mandatory" "communication requires cross-room message for Team work"
+assert_contains "${COMMUNICATION_SKILL}" "only for explicit cross-room" "communication limits message tool to cross-room sends"
 assert_contains "${COORDINATION_SKILL}" "DAG" "team-coordination documents DAG strategy"
 assert_contains "${COORDINATION_SKILL}" "Loop" "team-coordination documents Loop strategy"
 assert_contains "${LEADER_AGENTS}" "Project/tool boundary" "Leader AGENTS documents tool-owned project/task boundary"
-assert_contains "${LEADER_AGENTS}" "taskflow(delegate_task) only creates and publishes task state" "Leader AGENTS requires Team Room assignment after taskflow"
+assert_contains "${LEADER_AGENTS}" "creates and publishes task state AND automatically notifies" "Leader AGENTS documents automatic Team Room notification"
 assert_contains "${LEADER_AGENTS}" "do not send DAG plans" "Leader AGENTS forbids interim Leader DM planning before Team Room assignment"
 assert_contains "${LEADER_AGENTS}" "first visible non-\`NO_REPLY\` message" "Leader AGENTS requires NO_REPLY before first visible Team Room assignment"
 assert_contains "${LEADER_AGENTS}" "Do not send a natural-language preamble before the tool call" "Leader AGENTS forbids visible tool preambles"
@@ -439,6 +439,77 @@ elif [ "${LEADER_RESPONDED}" = "true" ] && [ "${TEAM_COORDINATED}" = "true" ]; t
     log_pass "Leader received and processed task from Admin via Leader DM"
 else
     log_fail "Leader did not coordinate the task in Team Room within timeout"
+fi
+
+# ------------------------------------------------------------
+# Section 8b: E2E delivery contract — m.mentions + event_id + no duplicate
+# ------------------------------------------------------------
+# The automatic delegate_task notification must appear in the Team Room as a
+# single message carrying m.mentions (MSC3952) and a server event_id. A
+# second manual assignment message from the Leader would produce a duplicate
+# TASK_ASSIGNED delivery; assert the assignment was delivered at most once.
+log_section "E2E Delivery Contract: m.mentions + event_id + single delivery"
+
+DELIVERY_CONTRACT_OK=true
+exec_in_manager bash -c '
+TOKEN=$(curl -sf -X POST "http://127.0.0.1:6167/_matrix/client/v3/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"type\":\"m.login.password\",\"identifier\":{\"type\":\"m.id.user\",\"user\":\"admin\"},\"password\":\"'"${TEST_ADMIN_PASSWORD}"'\"}" | jq -r ".access_token")
+ROOM_ENC=$(echo "'"${TEAM_ROOM}"'" | sed "s/!/%21/g")
+curl -sf "http://127.0.0.1:6167/_matrix/client/v3/rooms/${ROOM_ENC}/messages?dir=b&limit=30" \
+    -H "Authorization: Bearer ${TOKEN}" | jq -c "
+        [.chunk[] | select(.type == \"m.room.message\")]
+        | {
+            assignments: [.[] | select((.content.body // \"\") | test(\"assigned task|TASK_ASSIGNED\")) | {event_id, mentions: (.content[\"m.mentions\"] // {})}],
+            worker_acks: [.[] | select((.content.body // \"\") | test(\"TASK_COMPLETED|ack\")) | .event_id]
+        }
+    "
+' 2>/dev/null > /tmp/test21-delivery.json
+
+if [ -f /tmp/test21-delivery.json ]; then
+    ASSIGNMENT_COUNT=$(jq '.assignments | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
+    MENTION_COUNT=$(jq '[.assignments[] | select((.mentions.user_ids // []) | length > 0)] | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
+    EVENT_ID_COUNT=$(jq '[.assignments[] | select(.event_id != null)] | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
+    WORKER_ACK_COUNT=$(jq '.worker_acks | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
+
+    if [ "${ASSIGNMENT_COUNT}" -ge 1 ]; then
+        log_pass "Team Room has ${ASSIGNMENT_COUNT} assignment message(s)"
+    else
+        log_fail "No assignment message found in Team Room (delivery contract)"
+        DELIVERY_CONTRACT_OK=false
+    fi
+    if [ "${MENTION_COUNT}" -ge 1 ]; then
+        log_pass "Assignment carries m.mentions (${MENTION_COUNT})"
+    else
+        log_fail "Assignment message missing m.mentions (delivery contract)"
+        DELIVERY_CONTRACT_OK=false
+    fi
+    if [ "${EVENT_ID_COUNT}" -ge 1 ]; then
+        log_pass "Assignment has server event_id (${EVENT_ID_COUNT})"
+    else
+        log_fail "Assignment message missing event_id (delivery contract)"
+        DELIVERY_CONTRACT_OK=false
+    fi
+    if [ "${ASSIGNMENT_COUNT}" -le 1 ]; then
+        log_pass "Assignment delivered exactly once (no duplicate)"
+    else
+        log_fail "Assignment delivered ${ASSIGNMENT_COUNT} times — duplicate notification detected"
+        DELIVERY_CONTRACT_OK=false
+    fi
+    if [ "${WORKER_ACK_COUNT}" -ge 1 ]; then
+        log_pass "Worker acknowledged in Team Room (${WORKER_ACK_COUNT})"
+    else
+        log_info "No worker ack observed yet — worker may still be executing"
+    fi
+else
+    log_fail "Delivery contract check failed to query Team Room"
+    DELIVERY_CONTRACT_OK=false
+fi
+
+if [ "${DELIVERY_CONTRACT_OK}" = "true" ]; then
+    log_pass "E2E delivery contract verified"
+else
+    log_fail "E2E delivery contract not satisfied"
 fi
 
 # Final snapshot of all rooms

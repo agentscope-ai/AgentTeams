@@ -31,7 +31,7 @@ Replaces `copaw/config/config.py` with enhanced configuration system:
 Both Manager and Worker Dockerfiles replace the built-in CoPaw files:
 
 ```dockerfile
-# Manager: manager/Dockerfile.copaw
+# Manager: manager/Dockerfile.qwenpaw
 COPY --from=copaw-worker src/matrix/ /tmp/matrix-overlay/
 RUN SITE=$(python3 -c "import copaw; import os; print(os.path.dirname(copaw.__file__))") \
     && rm -rf "$SITE/app/channels/matrix" \
@@ -92,5 +92,5 @@ Once the PRs are merged and released:
 When updating overlay files:
 
 1. Edit files in `copaw/src/matrix/`
-2. Rebuild both images: `make build-manager-copaw build-copaw-worker`
+2. Rebuild both images: `make build-manager-qwenpaw build-copaw-worker`
 3. Both Manager and Worker will use the updated versions

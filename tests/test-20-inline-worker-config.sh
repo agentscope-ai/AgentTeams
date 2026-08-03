@@ -87,6 +87,7 @@ metadata:
   name: ${TEST_WORKER}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
   soul: |
 $(echo "${SOUL_CONTENT}" | sed 's/^/    /')
   agents: |

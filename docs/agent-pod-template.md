@@ -1,8 +1,8 @@
 # Agent Pod Template
 
-The hiclaw-controller creates one Kubernetes Pod per Manager and Worker
+The agentteams-controller creates one Kubernetes Pod per Manager and Worker
 ("agent Pods"). By default, these Pods have a minimal shape: one container
-named `worker`, a projected `hiclaw-token` volume, the controller-managed
+named `worker`, a projected `agentteams-token` volume, the controller-managed
 `ServiceAccount`, and not much else.
 
 To inject cluster-specific concerns — sysctls, nodeSelectors, tolerations,
@@ -12,16 +12,16 @@ you provide a `corev1.PodTemplateSpec` overlay via a ConfigMap.
 ## How it works
 
 On **every** `Create()`, the controller reads a ConfigMap from its own
-namespace with the name equal to its `HICLAW_CONTROLLER_NAME` environment
-variable (for a Helm release `prod`, that is `prod-hiclaw-controller`).
+namespace with the name equal to its `AGENTTEAMS_CONTROLLER_NAME` environment
+variable (for a Helm release `prod`, that is `prod-agentteams-controller`).
 If the ConfigMap is present and has a key `pod-template.yaml`, its value is
 parsed as a `PodTemplateSpec` and merged with the controller-owned fields
 to produce the final Pod.
 
-> `HICLAW_CONTROLLER_NAME` is also the leader-election lease name and the
+> `AGENTTEAMS_CONTROLLER_NAME` is also the leader-election lease name and the
 > value the controller stamps on every Worker/Manager/Team/Human CR it
 > creates as the `agentteams.io/controller` label. The controller's informer
-> cache filters CRs by this label, so multiple hiclaw releases in the same
+> cache filters CRs by this label, so multiple AgentTeams releases in the same
 > namespace never reconcile each other's resources. The Helm chart sets
 > this automatically from the release name; if you deploy by hand, set it
 > explicitly — starting the controller without it in incluster mode fails
@@ -41,7 +41,7 @@ blocked by a broken template.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: <controller-name>    # == HICLAW_CONTROLLER_NAME env on controller
+  name: <controller-name>    # == AGENTTEAMS_CONTROLLER_NAME env on controller
   namespace: <controller-ns> # same namespace as controller
 data:
   pod-template.yaml: |
@@ -92,8 +92,8 @@ Hybrid merges:
 | `metadata.labels` | template first, controller labels overwrite on key collision |
 | `metadata.annotations` | template first, controller annotations overwrite on key collision |
 | Agent container's `resources` | `CreateRequest.Resources` (per-request) > template's resources > backend default |
-| Agent container's `volumeMounts` | template first, `hiclaw-token` volumeMount always appended |
-| `spec.volumes` | template first, `hiclaw-token` projected volume always appended |
+| Agent container's `volumeMounts` | template first, `agentteams-token` volumeMount always appended |
+| `spec.volumes` | template first, `agentteams-token` projected volume always appended |
 | `spec.restartPolicy` | template if set, else `Always` |
 
 ## Troubleshooting

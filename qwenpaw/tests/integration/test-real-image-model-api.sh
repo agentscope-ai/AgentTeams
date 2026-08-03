@@ -25,7 +25,7 @@ fi
 command -v docker >/dev/null 2>&1 || fail "docker is required"
 docker info >/dev/null 2>&1 || fail "docker daemon is not reachable"
 
-ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/hiclaw-manager.env}"
+ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
 
 read_env_file() {
     key="$1"
@@ -40,11 +40,11 @@ MODEL="${AGENTTEAMS_QWENPAW_REAL_MODEL:-$(read_env_file AGENTTEAMS_DEFAULT_MODEL
 MODEL="${MODEL:-qwen3.6-plus}"
 BASE_URL="${AGENTTEAMS_QWENPAW_REAL_MODEL_BASE_URL:-$(read_env_file AGENTTEAMS_OPENAI_BASE_URL)}"
 BASE_URL="${BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
-PROVIDER_ID="${AGENTTEAMS_QWENPAW_REAL_MODEL_PROVIDER_ID:-hiclaw-real-model}"
+PROVIDER_ID="${AGENTTEAMS_QWENPAW_REAL_MODEL_PROVIDER_ID:-agentteams-real-model}"
 MINIO_IMAGE="${AGENTTEAMS_QWENPAW_REAL_MODEL_MINIO_IMAGE:-minio/minio:latest}"
 VERSION="${AGENTTEAMS_QWENPAW_REAL_MODEL_IMAGE_VERSION:-qwenpaw-real-e2e-$(date +%s)-$$}"
 WORKER_NAME="${AGENTTEAMS_QWENPAW_REAL_MODEL_WORKER_NAME:-qwenpaw-real-worker-$$}"
-WORKER_HOME="/root/hiclaw-fs/agents/${WORKER_NAME}"
+WORKER_HOME="/root/agentteams-fs/agents/${WORKER_NAME}"
 QWENPAW_WORKING_DIR="${WORKER_HOME}/.qwenpaw"
 QWENPAW_SECRET_DIR="${QWENPAW_WORKING_DIR}.secret"
 BUCKET="${AGENTTEAMS_QWENPAW_REAL_MODEL_BUCKET:-agentteams-storage}"
@@ -149,7 +149,7 @@ member:
 desired:
   model:
     providerId: ${PROVIDER_ID}
-    providerName: HiClaw Real Model E2E
+    providerName: AgentTeams Real Model E2E
     model: ${MODEL}
     baseUrl: ${BASE_URL}
     apiKeyEnv: AGENTTEAMS_QWENPAW_REAL_MODEL_API_KEY
@@ -202,9 +202,9 @@ docker exec -i \
     -e EXPECTED_BASE_URL="${BASE_URL}" \
     "${WORKER_CONTAINER}" \
     /opt/venv/qwenpaw/bin/python - <<'PY'
+import json
 import os
-
-from qwenpaw.providers.provider_manager import ProviderManager
+from urllib.request import urlopen
 
 expected_provider = os.environ["EXPECTED_PROVIDER"]
 expected_model = os.environ["EXPECTED_MODEL"]
@@ -212,15 +212,18 @@ expected_base = os.environ["EXPECTED_BASE_URL"].rstrip("/")
 if not expected_base.endswith("/v1"):
     expected_base = f"{expected_base}/v1"
 
-manager = ProviderManager.get_instance()
-active = manager.active_model
-provider = manager.custom_providers.get(expected_provider)
+def get(path):
+    with urlopen(f"http://127.0.0.1:8088{path}") as response:
+        return json.load(response)
 
-assert active.provider_id == expected_provider, active
-assert active.model == expected_model, active
-assert provider is not None, expected_provider
-assert provider.base_url == expected_base, provider.base_url
-assert bool(provider.api_key), "provider api key missing"
+active = get("/api/models/active?scope=agent&agent_id=default")["active_llm"]
+provider = next(
+    item for item in get("/api/models") if item["id"] == expected_provider
+)
+
+assert active["provider_id"] == expected_provider, active
+assert active["model"] == expected_model, active
+assert provider["base_url"].rstrip("/") == expected_base, provider
 PY
 
 MARKER="AGENTTEAMS_QWENPAW_REAL_MODEL_E2E_$$_$(date +%s)"

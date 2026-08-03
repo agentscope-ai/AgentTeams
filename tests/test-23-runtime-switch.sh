@@ -21,15 +21,15 @@ source "${SCRIPT_DIR}/lib/higress-client.sh"
 test_setup "23-runtime-switch"
 
 TEST_WORKER="test-rt-$$"
-STORAGE_PREFIX="hiclaw/hiclaw-storage"
+STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
     log_info "Cleaning up: ${TEST_WORKER}"
-    exec_in_agent hiclaw delete worker "${TEST_WORKER}" 2>/dev/null || true
+    exec_in_agent agt delete worker "${TEST_WORKER}" 2>/dev/null || true
     sleep 5
-    docker rm -f "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || true
+    remove_worker_container "${TEST_WORKER}"
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
-    exec_in_manager mc rm "${STORAGE_PREFIX}/hiclaw-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
+    exec_in_manager mc rm "${STORAGE_PREFIX}/agentteams-config/workers/${TEST_WORKER}.yaml" 2>/dev/null || true
 }
 trap _cleanup EXIT
 
@@ -63,12 +63,12 @@ _get_higress_consumers_or_fail() {
 log_section "Create Worker (runtime=openclaw)"
 
 # apply (not create) so the second invocation can update in place
-CREATE_OUTPUT=$(exec_in_agent hiclaw apply worker --name "${TEST_WORKER}" --runtime openclaw 2>&1)
+CREATE_OUTPUT=$(exec_in_agent agt apply worker --name "${TEST_WORKER}" --runtime openclaw 2>&1)
 CREATE_EXIT=$?
 if [ "${CREATE_EXIT}" -eq 0 ]; then
-    log_pass "hiclaw apply (openclaw) accepted"
+    log_pass "agt apply (openclaw) accepted"
 else
-    log_fail "hiclaw apply (openclaw) failed: ${CREATE_OUTPUT}"
+    log_fail "agt apply (openclaw) failed: ${CREATE_OUTPUT}"
     test_teardown "23-runtime-switch"; test_summary; exit 1
 fi
 
@@ -90,8 +90,9 @@ fi
 # ============================================================
 log_section "Snapshot Pre-Switch State"
 
-OLD_IMAGE=$(docker inspect --format '{{.Config.Image}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || echo "")
-OLD_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null | head -c 12 || echo "")
+OLD_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
+OLD_IMAGE=$(docker inspect --format '{{.Config.Image}}' "${OLD_CONTAINER}" 2>/dev/null || echo "")
+OLD_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "${OLD_CONTAINER}" 2>/dev/null | head -c 12 || echo "")
 log_info "Pre-switch image: ${OLD_IMAGE}"
 log_info "Pre-switch container ID (short): ${OLD_CONTAINER_ID}"
 
@@ -129,12 +130,12 @@ fi
 # ============================================================
 log_section "Switch Runtime (openclaw → copaw)"
 
-SWITCH_OUTPUT=$(exec_in_agent hiclaw apply worker --name "${TEST_WORKER}" --runtime copaw 2>&1)
+SWITCH_OUTPUT=$(exec_in_agent agt apply worker --name "${TEST_WORKER}" --runtime copaw 2>&1)
 SWITCH_EXIT=$?
 if [ "${SWITCH_EXIT}" -eq 0 ]; then
-    log_pass "hiclaw apply (copaw) accepted"
+    log_pass "agt apply (copaw) accepted"
 else
-    log_fail "hiclaw apply (copaw) failed: ${SWITCH_OUTPUT}"
+    log_fail "agt apply (copaw) failed: ${SWITCH_OUTPUT}"
 fi
 
 # Wait for the controller to recreate the container. We poll for either
@@ -144,8 +145,9 @@ DEADLINE=$(( $(date +%s) + 240 ))
 NEW_CONTAINER_ID=""
 NEW_IMAGE=""
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-    NEW_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null | head -c 12 || echo "")
-    NEW_IMAGE=$(docker inspect --format '{{.Config.Image}}' "hiclaw-worker-${TEST_WORKER}" 2>/dev/null || echo "")
+    NEW_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
+    NEW_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "${NEW_CONTAINER}" 2>/dev/null | head -c 12 || echo "")
+    NEW_IMAGE=$(docker inspect --format '{{.Config.Image}}' "${NEW_CONTAINER}" 2>/dev/null || echo "")
     if [ -n "${NEW_CONTAINER_ID}" ] \
         && [ "${NEW_CONTAINER_ID}" != "${OLD_CONTAINER_ID}" ] \
         && [ -n "${NEW_IMAGE}" ]; then

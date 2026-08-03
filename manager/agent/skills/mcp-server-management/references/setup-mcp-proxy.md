@@ -1,11 +1,11 @@
 # Proxy an Existing MCP Server
 
-> **Cloud deployment (SAE) note:** The `setup-mcp-proxy.sh` script is only available in local deployment mode. In cloud mode (`HICLAW_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
+> **Cloud deployment (SAE) note:** The `setup-mcp-proxy.sh` script is only available in local deployment mode. In cloud mode (`AGENTTEAMS_RUNTIME=aliyun`), direct admin to the Alibaba Cloud AI Gateway console.
 
 ## Setup Script
 
 ```bash
-bash /opt/hiclaw/agent/skills/mcp-server-management/scripts/setup-mcp-proxy.sh \
+bash /opt/agentteams/agent/skills/mcp-server-management/scripts/setup-mcp-proxy.sh \
   <server-name> <url> <transport> [--header "Key: Value"] ...
 ```
 

@@ -5,20 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "copaw-worker"
 version = "1.0.3"
-description = "Lightweight HiClaw Worker runtime based on CoPaw"
+description = "Lightweight AgentTeams Worker runtime based on CoPaw"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
-    "copaw>=1.0.2,<2.0",
+    "copaw==1.0.2",
     "matrix-nio[e2e]>=0.24.0",
     "markdown-it-py>=3.0",
     "linkify-it-py>=2.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/higress-group/hiclaw"
-Repository = "https://github.com/higress-group/hiclaw"
+Homepage = "https://github.com/agentscope-ai/AgentTeams"
+Repository = "https://github.com/agentscope-ai/AgentTeams"
 
 [project.scripts]
 copaw-worker = "copaw_worker.cli:main"

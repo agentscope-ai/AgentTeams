@@ -5,19 +5,18 @@
 # Strategy:
 #   - .md files: merge (replace builtin section, preserve user content below end marker)
 #   - scripts/ and references/ dirs: always overwrite from image
-#   - Worker builtins: sync directly to each registered worker's MinIO workspace
+#   - Worker builtins: publish templates for controller-managed Worker workspaces
 #   - Workers no longer need to pull from shared/builtins/worker/ on startup
 
 set -e
 
-AGENT_SRC="/opt/hiclaw/agent"
+AGENT_SRC="/opt/agentteams/agent"
 WORKSPACE="/root/manager-workspace"
-REGISTRY="${WORKSPACE}/workers-registry.json"
 IMAGE_VERSION=$(cat "${AGENT_SRC}/.builtin-version" 2>/dev/null || echo "unknown")
-MANAGER_RUNTIME="${HICLAW_MANAGER_RUNTIME:-openclaw}"
+MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
 
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
-source /opt/hiclaw/scripts/lib/builtin-merge.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
+source /opt/agentteams/scripts/lib/builtin-merge.sh
 
 log() {
     echo "[upgrade-builtins $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -99,14 +98,6 @@ for skill_dir in "${AGENT_SRC}/worker-skills"/*/; do
     fi
 done
 
-# Sync workers-registry.json template if not yet present (never overwrite user data)
-if [ ! -f "${WORKSPACE}/workers-registry.json" ]; then
-    if [ -f "${AGENT_SRC}/workers-registry.json" ]; then
-        cp "${AGENT_SRC}/workers-registry.json" "${WORKSPACE}/workers-registry.json"
-        log "  Initialized workers-registry.json"
-    fi
-fi
-
 # Sync state.json template if not yet present (never overwrite user data)
 if [ ! -f "${WORKSPACE}/state.json" ]; then
     if [ -f "${AGENT_SRC}/state.json" ]; then
@@ -122,12 +113,12 @@ log "Step 3: Publishing Worker builtins to MinIO..."
 
 WORKER_AGENT_SRC="${AGENT_SRC}/worker-agent"
 
-if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
+if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /dev/null 2>&1; then
     ensure_mc_credentials 2>/dev/null || true
     # Publish AGENTS.md (pure builtin content without markers, for comparison)
     # We publish the marker-wrapped version so Workers can update their copy directly
     mc cp "${WORKER_AGENT_SRC}/AGENTS.md" \
-        "${HICLAW_STORAGE_PREFIX}/shared/builtins/worker/AGENTS.md" 2>/dev/null \
+        "${AGENTTEAMS_STORAGE_PREFIX}/shared/builtins/worker/AGENTS.md" 2>/dev/null \
         && log "  Published: shared/builtins/worker/AGENTS.md" \
         || log "  WARNING: Failed to publish AGENTS.md to MinIO (MinIO may not be ready yet)"
 
@@ -137,7 +128,7 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
             [ ! -d "${_skill_dir}" ] && continue
             _skill_name=$(basename "${_skill_dir}")
             mc mirror "${_skill_dir}" \
-                "${HICLAW_STORAGE_PREFIX}/shared/builtins/worker/skills/${_skill_name}/" --overwrite 2>/dev/null \
+                "${AGENTTEAMS_STORAGE_PREFIX}/shared/builtins/worker/skills/${_skill_name}/" --overwrite 2>/dev/null \
                 && log "  Published: shared/builtins/worker/skills/${_skill_name}/" \
                 || log "  WARNING: Failed to publish builtin skill ${_skill_name} to MinIO"
         done
@@ -147,7 +138,7 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
     for _skill_dir in "${AGENT_SRC}/worker-skills"/*/; do
         _skill_name=$(basename "${_skill_dir}")
         mc mirror "${_skill_dir}" \
-            "${HICLAW_STORAGE_PREFIX}/shared/builtins/worker/skills/${_skill_name}/" --overwrite 2>/dev/null \
+            "${AGENTTEAMS_STORAGE_PREFIX}/shared/builtins/worker/skills/${_skill_name}/" --overwrite 2>/dev/null \
             && log "  Published: shared/builtins/worker/skills/${_skill_name}/" \
             || log "  WARNING: Failed to publish worker-skill ${_skill_name} to MinIO"
     done
@@ -156,19 +147,16 @@ else
 fi
 
 # ============================================================
-# Step 4: Sync builtins to all registered workers' MinIO workspaces
+# Step 4: Sync builtins to all Worker CR workspaces
 # This ensures workers get builtin updates directly in their workspace,
 # eliminating the need for workers to pull from shared/builtins/worker/ on startup.
 # ============================================================
-log "Step 4: Syncing builtins to registered workers' workspaces..."
+log "Step 4: Syncing builtins to Worker CR workspaces..."
 
-if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
+if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /dev/null 2>&1; then
     ensure_mc_credentials 2>/dev/null || true
-    # Get list of registered workers
-    REGISTERED_WORKERS=""
-    if [ -f "${REGISTRY}" ]; then
-        REGISTERED_WORKERS=$(jq -r '.workers | keys[]' "${REGISTRY}" 2>/dev/null || true)
-    fi
+    WORKERS_JSON=$(agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
+    REGISTERED_WORKERS=$(printf '%s' "${WORKERS_JSON}" | jq -r '.workers[]?.name')
 
     if [ -n "${REGISTERED_WORKERS}" ]; then
         for _worker_name in ${REGISTERED_WORKERS}; do
@@ -176,8 +164,8 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
             log "  Syncing builtins to worker: ${_worker_name}"
 
             # Determine agent source based on role and runtime
-            _worker_role=$(jq -r --arg w "${_worker_name}" '.workers[$w].role // "worker"' "${REGISTRY}" 2>/dev/null || echo "worker")
-            _worker_runtime=$(jq -r --arg w "${_worker_name}" '.workers[$w].runtime // "openclaw"' "${REGISTRY}" 2>/dev/null || echo "openclaw")
+            _worker_role=$(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .role // "worker"')
+            _worker_runtime=$(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .runtime // "openclaw"')
             if [ "${_worker_role}" = "team_leader" ] && [ -d "${AGENT_SRC}/team-leader-agent" ]; then
                 _worker_agent_src="${AGENT_SRC}/team-leader-agent"
             elif [ "${_worker_runtime}" = "copaw" ]; then
@@ -190,14 +178,14 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
 
             # Merge AGENTS.md (preserve user content after builtin-end marker)
             update_builtin_section_minio \
-                "${HICLAW_STORAGE_PREFIX}/agents/${_worker_name}/AGENTS.md" \
+                "${AGENTTEAMS_STORAGE_PREFIX}/agents/${_worker_name}/AGENTS.md" \
                 "${_worker_agent_src}/AGENTS.md" \
                 && log "    Merged AGENTS.md" \
                 || log "    WARNING: Failed to merge AGENTS.md"
 
             if [ -f "${_worker_agent_src}/HEARTBEAT.md" ]; then
                 mc cp "${_worker_agent_src}/HEARTBEAT.md" \
-                    "${HICLAW_STORAGE_PREFIX}/agents/${_worker_name}/HEARTBEAT.md" 2>/dev/null \
+                    "${AGENTTEAMS_STORAGE_PREFIX}/agents/${_worker_name}/HEARTBEAT.md" 2>/dev/null \
                     && log "    Updated HEARTBEAT.md" \
                     || log "    WARNING: Failed to sync HEARTBEAT.md"
             fi
@@ -208,21 +196,21 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls hiclaw > /dev/null 2>&1; then
                     [ ! -d "${_skill_dir}" ] && continue
                     _skill_name=$(basename "${_skill_dir}")
                     mc mirror "${_skill_dir}" \
-                        "${HICLAW_STORAGE_PREFIX}/agents/${_worker_name}/skills/${_skill_name}/" --overwrite 2>/dev/null \
+                        "${AGENTTEAMS_STORAGE_PREFIX}/agents/${_worker_name}/skills/${_skill_name}/" --overwrite 2>/dev/null \
                         && log "    Updated builtin skill: ${_skill_name}" \
                         || log "    WARNING: Failed to sync builtin skill ${_skill_name}"
                 done
             fi
 
-            # Push assigned worker-skills (on-demand skills from registry)
-            for _skill_name in $(jq -r --arg w "${_worker_name}" \
-                '.workers[$w].skills // [] | .[]' "${REGISTRY}" 2>/dev/null); do
+            # Push assigned on-demand skills from Worker.spec.skills.
+            for _skill_name in $(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" \
+                '.workers[] | select(.name == $w) | .skills[]?'); do
                 [ -z "${_skill_name}" ] && continue
 
                 _skill_src="${WORKSPACE}/worker-skills/${_skill_name}"
                 if [ -d "${_skill_src}" ]; then
                     mc mirror "${_skill_src}/" \
-                        "${HICLAW_STORAGE_PREFIX}/agents/${_worker_name}/skills/${_skill_name}/" --overwrite 2>/dev/null \
+                        "${AGENTTEAMS_STORAGE_PREFIX}/agents/${_worker_name}/skills/${_skill_name}/" --overwrite 2>/dev/null \
                         && log "    Updated assigned skill: ${_skill_name}" \
                         || log "    WARNING: Failed to sync assigned skill ${_skill_name}"
                 fi
@@ -245,8 +233,9 @@ log "Step 5: Installed version: ${IMAGE_VERSION}"
 # ============================================================
 # Step 6: Mark that workers need builtin update notification
 # ============================================================
-# Check if any workers are registered; if so, mark for post-startup notification
-if [ -f "${REGISTRY}" ] && jq -e '.workers | length > 0' "${REGISTRY}" > /dev/null 2>&1; then
+# Check the authoritative Worker API; if any Workers exist, mark for post-startup notification.
+WORKERS_JSON=$(agt get workers -o json 2>/dev/null || echo '{"workers":[]}')
+if printf '%s' "${WORKERS_JSON}" | jq -e '.workers | length > 0' > /dev/null 2>&1; then
     touch "${WORKSPACE}/.upgrade-pending-worker-notify"
     log "Step 6: Marked for worker skill notification (workers registered)"
 else

@@ -26,8 +26,8 @@ re-applied to the active agent workspace.
 
 Options:
   --package PATH       Plugin package or directory. Defaults to
-                       $TEAMHARNESS_PLUGIN_PACKAGE, /opt/hiclaw/plugins/teamharness.tar.gz,
-                       then /opt/hiclaw/plugins/teamharness-qwenpaw.zip.
+                       $TEAMHARNESS_PLUGIN_PACKAGE, /opt/agentteams/plugins/teamharness.tar.gz,
+                       then /opt/agentteams/plugins/teamharness-qwenpaw.zip.
   --project-dir DIR    agentteams state directory parent. Defaults to
                        $AGENTTEAMS_PROJECT_DIR, $AGENTTEAMS_WORKER_HOME, or cwd.
   --api-base URL       QwenPaw API base. Defaults to $QWENPAW_API_BASE or
@@ -94,10 +94,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "$PACKAGE_PATH" ]; then
-  if [ -e /opt/hiclaw/plugins/teamharness.tar.gz ]; then
-    PACKAGE_PATH="/opt/hiclaw/plugins/teamharness.tar.gz"
-  elif [ -e /opt/hiclaw/plugins/teamharness-qwenpaw.zip ]; then
-    PACKAGE_PATH="/opt/hiclaw/plugins/teamharness-qwenpaw.zip"
+  if [ -e /opt/agentteams/plugins/teamharness.tar.gz ]; then
+    PACKAGE_PATH="/opt/agentteams/plugins/teamharness.tar.gz"
+  elif [ -e /opt/agentteams/plugins/teamharness-qwenpaw.zip ]; then
+    PACKAGE_PATH="/opt/agentteams/plugins/teamharness-qwenpaw.zip"
   fi
 fi
 

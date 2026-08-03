@@ -1,6 +1,6 @@
 """
-Bridge: translate openclaw.json (HiClaw Worker config) into CoPaw's
-config.json + providers.json, then set COPAW_WORKING_DIR so CoPaw
+Bridge: translate openclaw.json (AgentTeams Worker config) into QwenPaw's
+config.json + providers.json, then set QWENPAW_WORKING_DIR so the runtime
 picks up the right workspace.
 """
 from __future__ import annotations
@@ -14,13 +14,191 @@ import os
 import shutil
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+
+def bridge_standard_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    controller_config: dict[str, Any],
+    *,
+    skill_names: list[str] | None = None,
+    profile: str = "worker",
+) -> None:
+    """Project controller-owned standard files into CoPaw's workspace."""
+    sync_outer_prompt_files_to_inner(standard_dir, runtime_dir)
+    bridge_controller_to_copaw(
+        controller_config,
+        runtime_dir,
+        profile=profile,
+    )
+    sync_mcporter_config_to_runtime(standard_dir, runtime_dir)
+    if skill_names is not None:
+        sync_skills_to_runtime(standard_dir, runtime_dir, skill_names)
+
+
+def refresh_standard_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    controller_config: dict[str, Any],
+    *,
+    get_soul: Callable[[], str | None],
+    get_agents_md: Callable[[], str | None],
+    skill_names: list[str] | None = None,
+    profile: str = "worker",
+) -> None:
+    """Refresh CoPaw's workspace while retaining legacy prompt fallbacks."""
+    sync_rebridged_prompt_files_to_inner(
+        standard_dir,
+        runtime_dir,
+        get_soul=get_soul,
+        get_agents_md=get_agents_md,
+    )
+    bridge_controller_to_copaw(
+        controller_config,
+        runtime_dir,
+        profile=profile,
+    )
+    sync_mcporter_config_to_runtime(standard_dir, runtime_dir)
+    if skill_names is not None:
+        sync_skills_to_runtime(standard_dir, runtime_dir, skill_names)
+
+
+def sync_outer_prompt_files_to_inner(
+    standard_dir: Path,
+    runtime_dir: Path,
+) -> None:
+    """Copy standard prompt files into CoPaw's default workspace."""
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in ("SOUL.md", "AGENTS.md"):
+        src = standard_dir / name
+        if src.exists():
+            shutil.copy2(src, workspace_dir / name)
+
+    heartbeat_dst = workspace_dir / "HEARTBEAT.md"
+    heartbeat_src = standard_dir / "HEARTBEAT.md"
+    if not heartbeat_dst.exists() and heartbeat_src.exists():
+        shutil.copy2(heartbeat_src, heartbeat_dst)
+
+
+def sync_rebridged_prompt_files_to_inner(
+    standard_dir: Path,
+    runtime_dir: Path,
+    *,
+    get_soul: Callable[[], str | None],
+    get_agents_md: Callable[[], str | None],
+) -> None:
+    """Refresh prompt files, using legacy storage readers as fallback."""
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    fallbacks = {
+        "SOUL.md": get_soul,
+        "AGENTS.md": get_agents_md,
+    }
+    for name, fallback in fallbacks.items():
+        src = standard_dir / name
+        content = src.read_text() if src.exists() else fallback()
+        if content:
+            (workspace_dir / name).write_text(content)
+
+
+def sync_mcporter_config_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+) -> Path | None:
+    """Copy mcporter config into CoPaw's default workspace."""
+    candidates = (
+        standard_dir / "config" / "mcporter.json",
+        standard_dir / "mcporter-servers.json",
+    )
+    src = next((candidate for candidate in candidates if candidate.exists()), None)
+    if src is None:
+        return None
+    dst = runtime_dir / "workspaces" / "default" / "config" / "mcporter.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst
+
+
+def sync_skills_to_runtime(
+    standard_dir: Path,
+    runtime_dir: Path,
+    skill_names: list[str],
+) -> list[str]:
+    """Expose standard-space skills in CoPaw's default workspace."""
+    standard_skills_dir = standard_dir / "skills"
+    standard_skills_dir.mkdir(parents=True, exist_ok=True)
+    wanted = set(skill_names)
+
+    for script in standard_skills_dir.rglob("*.sh"):
+        script.chmod(script.stat().st_mode | 0o111)
+    for child in list(standard_skills_dir.iterdir()):
+        if child.is_dir() and child.name not in wanted:
+            shutil.rmtree(child)
+
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    workspace_skills = workspace_dir / "skills"
+    expected_target = standard_skills_dir.resolve()
+    if workspace_skills.is_symlink():
+        if workspace_skills.resolve() != expected_target:
+            workspace_skills.unlink()
+    elif workspace_skills.exists():
+        if workspace_skills.is_dir():
+            shutil.rmtree(workspace_skills)
+        else:
+            workspace_skills.unlink()
+    if not workspace_skills.exists():
+        target = os.path.relpath(standard_skills_dir, workspace_dir)
+        workspace_skills.symlink_to(target, target_is_directory=True)
+
+    installed = [
+        name
+        for name in skill_names
+        if (standard_skills_dir / name / "SKILL.md").exists()
+    ]
+    _enable_workspace_skills(runtime_dir, installed)
+    return installed
+
+
+def _enable_workspace_skills(runtime_dir: Path, skill_names: list[str]) -> None:
+    if not skill_names:
+        return
+    workspace_dir = runtime_dir / "workspaces" / "default"
+    manifest_path = workspace_dir / "skill.json"
+    manifest: dict[str, Any] = {
+        "schema_version": "workspace-skill-manifest.v1",
+        "version": 1,
+        "skills": {},
+    }
+    if manifest_path.exists():
+        try:
+            loaded = json.loads(manifest_path.read_text())
+            if isinstance(loaded, dict):
+                manifest.update(loaded)
+        except json.JSONDecodeError:
+            pass
+    if not isinstance(manifest.get("skills"), dict):
+        manifest["skills"] = {}
+    for name in sorted(set(skill_names)):
+        current = manifest["skills"].get(name)
+        if not isinstance(current, dict):
+            current = {"source": "customized"}
+            manifest["skills"][name] = current
+        current["enabled"] = True
+        if not current.get("channels"):
+            current["channels"] = ["all"]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+    )
 
 
 def _port_remap(url: str, is_container: bool) -> str:
     """Remap container-internal :8080 to host-exposed gateway port when needed."""
     if not is_container and url and ":8080" in url:
-        gateway_port = os.environ.get("HICLAW_PORT_GATEWAY", "18080")
+        gateway_port = os.environ.get("AGENTTEAMS_PORT_GATEWAY", "18080")
         return url.replace(":8080", f":{gateway_port}")
     return url
 
@@ -34,40 +212,41 @@ def _secret_dir(working_dir: Path) -> Path:
     return Path(str(working_dir) + ".secret")
 
 
-def _patch_copaw_paths(working_dir: Path) -> None:
-    """Patch copaw's module-level path constants to point at working_dir.
+def _patch_qwenpaw_paths(working_dir: Path) -> None:
+    """Patch qwenpaw.constant module-level constants.
 
-    copaw.constant captures WORKING_DIR / SECRET_DIR at import time from
-    env vars, so setting COPAW_WORKING_DIR after import has no effect.
-    We must update the live module objects directly.
+    qwenpaw.constant captures WORKING_DIR at import time from the
+    QWENPAW_WORKING_DIR env var.  If the env var was not set at import
+    time (or pointed elsewhere), we must update the live module object
+    so that ``from qwenpaw.constant import WORKING_DIR`` returns the
+    correct path.
+
+    Also patches qwenpaw.envs.store, which captures WORKING_DIR /
+    SECRET_DIR at import time from qwenpaw.constant.
     """
     secret_dir = _secret_dir(working_dir)
     secret_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        import copaw.constant as _const
+        import qwenpaw.constant as _const
         _const.WORKING_DIR = working_dir
-        _const.SECRET_DIR = secret_dir
-        _const.ACTIVE_SKILLS_DIR = working_dir / "active_skills"
-        _const.CUSTOMIZED_SKILLS_DIR = working_dir / "customized_skills"
-        _const.MEMORY_DIR = working_dir / "memory"
-        _const.CUSTOM_CHANNELS_DIR = working_dir / "custom_channels"
-        _const.MODELS_DIR = working_dir / "models"
+        if hasattr(_const, "SECRET_DIR"):
+            _const.SECRET_DIR = secret_dir
+        if hasattr(_const, "MEMORY_DIR"):
+            _const.MEMORY_DIR = working_dir / "memory"
+        if hasattr(_const, "PLUGINS_DIR"):
+            _const.PLUGINS_DIR = working_dir / "plugins"
+        if hasattr(_const, "MODELS_DIR"):
+            _const.MODELS_DIR = working_dir / "models"
+        if hasattr(_const, "DEFAULT_MEDIA_DIR"):
+            _const.DEFAULT_MEDIA_DIR = working_dir / "media"
     except ImportError:
         pass
 
+    # qwenpaw.envs.store captures WORKING_DIR / SECRET_DIR from
+    # qwenpaw.constant at import time.  Rebind after patching constant
+    # so envs.json lands in the right place.
     try:
-        import copaw.providers.store as _store
-        _store._PROVIDERS_JSON = secret_dir / "providers.json"
-        _store._LEGACY_PROVIDERS_JSON_CANDIDATES = (
-            Path(__file__).resolve().parent / "providers.json",
-            working_dir / "providers.json",
-        )
-    except ImportError:
-        pass
-
-    try:
-        import copaw.envs.store as _envs
+        import qwenpaw.envs.store as _envs
         _envs._BOOTSTRAP_WORKING_DIR = working_dir
         _envs._BOOTSTRAP_SECRET_DIR = secret_dir
         _envs._ENVS_JSON = secret_dir / "envs.json"
@@ -75,26 +254,8 @@ def _patch_copaw_paths(working_dir: Path) -> None:
     except (ImportError, AttributeError):
         pass
 
-    # copaw.app.channels.registry binds CUSTOM_CHANNELS_DIR via
-    # `from ...constant import CUSTOM_CHANNELS_DIR` at import time, so it keeps
-    # a STALE copy of the default path even after we patch copaw.constant above.
-    # _discover_custom_channels() / register_custom_channel_routes() read this
-    # module global at CALL time, so rebinding it here (before ChannelManager
-    # starts) makes them see our working_dir/custom_channels regardless of
-    # import order. Without this the patched matrix_channel.py is never
-    # discovered and copaw falls back to its builtin (broken) Matrix channel.
-    try:
-        import copaw.app.channels.registry as _channels_registry
-        _channels_registry.CUSTOM_CHANNELS_DIR = working_dir / "custom_channels"
-        logger.info(
-            "bridge: patched channels registry CUSTOM_CHANNELS_DIR -> %s",
-            _channels_registry.CUSTOM_CHANNELS_DIR,
-        )
-    except ImportError:
-        pass
 
-
-def bridge_openclaw_to_copaw(
+def bridge_controller_to_copaw(
     openclaw_cfg: dict[str, Any],
     working_dir: Path,
     *,
@@ -105,11 +266,10 @@ def bridge_openclaw_to_copaw(
       - <working_dir>/config.json          (global config)
       - <working_dir>/workspaces/default/agent.json (per-agent config)
       - <working_dir>/providers.json       (LLM credentials, for reference)
-      - <working_dir>.secret/providers.json (where copaw actually reads from)
+      - <working_dir>.secret/providers.json (where QwenPaw reads from)
 
-    Also sets COPAW_WORKING_DIR env var and patches copaw's module-level
-    path constants so the running process uses the correct directory.
-
+    Also sets QWENPAW_WORKING_DIR env var and patches qwenpaw's
+    module-level path constants so the runtime uses the correct directory.
     """
     working_dir.mkdir(parents=True, exist_ok=True)
     in_container = _is_in_container()
@@ -118,12 +278,17 @@ def bridge_openclaw_to_copaw(
     _write_agent_json(openclaw_cfg, working_dir, in_container, profile=profile)
     _write_providers_json(openclaw_cfg, working_dir, in_container)
 
+    os.environ["QWENPAW_WORKING_DIR"] = str(working_dir)
+    # COPAW_WORKING_DIR is still needed by the legacy copaw runtime
+    # (copaw 1.0.2 reads this env var at import time).  Setting it
+    # does not require importing copaw — the env var is read by
+    # copaw.constant when the legacy Worker starts.
     os.environ["COPAW_WORKING_DIR"] = str(working_dir)
 
     # Patch module-level constants (import-time values won't reflect env change)
-    _patch_copaw_paths(working_dir)
+    _patch_qwenpaw_paths(working_dir)
 
-    # Copy providers.json into secret_dir — that's where copaw actually reads it
+    # Copy providers.json into secret_dir — that's where QwenPaw reads it
     secret_dir = _secret_dir(working_dir)
     providers_src = working_dir / "providers.json"
     if providers_src.exists():
@@ -201,19 +366,14 @@ def _resolve_matrix_user_id(
 
     env_user_id = (
         os.environ.get("AGENTTEAMS_MATRIX_USER_ID")
-        or os.environ.get("HICLAW_MATRIX_USER_ID")
         or os.environ.get("COPAW_MATRIX_USER_ID")
     )
     if env_user_id:
         return env_user_id
 
-    matrix_domain = (
-        os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
-        or os.environ.get("HICLAW_MATRIX_DOMAIN")
-    )
+    matrix_domain = os.environ.get("AGENTTEAMS_MATRIX_DOMAIN")
     localpart = (
         os.environ.get("AGENTTEAMS_WORKER_NAME")
-        or os.environ.get("HICLAW_WORKER_NAME")
         or ("manager" if profile == "manager" else "")
     )
     if matrix_domain and localpart:
@@ -425,11 +585,29 @@ def _write_providers_json(
         api_key = provider_cfg.get("apiKey", "")
 
         models_raw = provider_cfg.get("models", [])
-        models = [
-            {"id": m["id"], "name": m.get("name", m["id"])}
-            for m in models_raw
-            if m.get("id")
-        ]
+        models = []
+        for model_cfg in models_raw:
+            model_id = model_cfg.get("id")
+            if not model_id:
+                continue
+            model = {
+                "id": model_id,
+                "name": model_cfg.get("name", model_id),
+            }
+            # Propagate input modalities from the Controller's openclaw.json
+            # so QwenPaw's ModelInfo gets the correct capability flags instead
+            # of relying on the fail-open default for unknown models.
+            input_types = model_cfg.get("input")
+            if isinstance(input_types, list):
+                modalities = {
+                    t for t in input_types if isinstance(t, str)
+                }
+                model.update({
+                    "supports_image": "image" in modalities,
+                    "supports_video": "video" in modalities,
+                    "supports_multimodal": bool(modalities - {"text"}),
+                })
+            models.append(model)
 
         custom_providers[provider_id] = {
             "id": provider_id,
@@ -486,11 +664,19 @@ def bridge_runtime_to_standard(standard_dir):
 
 
 def sync_inner_prompt_files_to_outer(local_dir):
-    """Copy agent-edited prompt files from CoPaw workspace back to sync root."""
+    """Copy agent-edited prompt files from runtime workspace back to sync root."""
     inner_outer_files = ("AGENTS.md", "SOUL.md", "HEARTBEAT.md")
-    copaw_ws_dir = Path(local_dir) / ".copaw" / "workspaces" / "default"
+    # Detect runtime workspace dir: .qwenpaw (new) or .copaw (legacy)
+    ws_dir = None
+    for rt_dir in (".qwenpaw", ".copaw"):
+        candidate = Path(local_dir) / rt_dir / "workspaces" / "default"
+        if candidate.exists():
+            ws_dir = candidate
+            break
+    if ws_dir is None:
+        return
     for name in inner_outer_files:
-        inner = copaw_ws_dir / name
+        inner = ws_dir / name
         outer = Path(local_dir) / name
         if not inner.exists():
             continue
@@ -505,7 +691,8 @@ def sync_inner_prompt_files_to_outer(local_dir):
             if inner_content != outer_content:
                 outer.write_text(inner_content)
                 logger.debug(
-                    "Inner->Outer sync: .copaw/workspaces/default/%s -> %s",
+                    "Inner->Outer sync: %s/workspaces/default/%s -> %s",
+                    ws_dir.parent.name,
                     name,
                     name,
                 )
@@ -524,7 +711,7 @@ def _main_cli(argv=None):
     parser.add_argument("--openclaw-json", required=True,
                         help="Path to openclaw.json")
     parser.add_argument("--working-dir", required=True,
-                        help="CoPaw working dir (e.g. ~/.copaw)")
+                        help="Runtime working dir (e.g. ~/.qwenpaw)")
     parser.add_argument("--profile", default="manager",
                         choices=["worker", "manager"],
                         help="Template profile (default: manager)")
@@ -544,7 +731,7 @@ def _main_cli(argv=None):
     with open(openclaw_path) as f:
         controller_config = _json.load(f)
 
-    bridge_openclaw_to_copaw(
+    bridge_controller_to_copaw(
         controller_config,
         working_dir,
         profile=args.profile,

@@ -1,11 +1,11 @@
 # ---------------------------------------------------------------------------
-# OpenHuman Worker — HiClaw-integrated multi-stage Docker build
+# OpenHuman Worker — AgentTeams-integrated multi-stage Docker build
 #
 # Based on the upstream OpenHuman Dockerfile with the following changes:
 #   - Enables `channel-matrix` feature flag for native Matrix support
-#   - Installs mc (MinIO Client) for file sync with HiClaw centralized storage
+#   - Installs mc (MinIO Client) for file sync with AgentTeams centralized storage
 #   - Installs jq for JSON processing in entrypoint scripts
-#   - Copies HiClaw shared scripts and OpenHuman worker entrypoint
+#   - Copies AgentTeams shared scripts and OpenHuman worker entrypoint
 #   - Copies OpenHuman worker agent template (AGENTS.md, skills)
 #
 # License notice:
@@ -14,15 +14,15 @@
 #   The GPL-3.0 license text is preserved at /usr/share/licenses/openhuman/LICENSE
 #   inside the built image.
 #
-# Build context: HiClaw repo root (to access shared/lib/ and manager/agent/).
+# Build context: AgentTeams repo root (to access shared/lib/ and manager/agent/).
 # OpenHuman upstream source is fetched via git inside the builder stage —
 # no `openhuman-src/` directory is required in the build context.
 #
-# Build:   docker build -t hiclaw/openhuman-worker:latest -f openhuman/Dockerfile .
+# Build:   docker build -t agentteams/openhuman-worker:latest -f openhuman/Dockerfile .
 #          # (optional) pin to a specific upstream ref:
 #          docker build --build-arg OPENHUMAN_GIT_REF=v0.1.0 \
-#                       -t hiclaw/openhuman-worker:latest -f openhuman/Dockerfile .
-# Run:     docker run --env-file .env hiclaw/openhuman-worker:latest
+#                       -t agentteams/openhuman-worker:latest -f openhuman/Dockerfile .
+# Run:     docker run --env-file .env agentteams/openhuman-worker:latest
 # ---------------------------------------------------------------------------
 
 # Top-level build args (must be declared before any FROM that references them).
@@ -36,9 +36,9 @@ ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
 
 # ==========================================================================
-# Stage 1: hiclaw CLI (from controller image)
+# Stage 1: agt CLI (from controller image)
 # ==========================================================================
-FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS hiclaw-controller
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ==========================================================================
 # Stage 2: Build the Rust binary with channel-matrix enabled
@@ -100,7 +100,7 @@ WORKDIR /build/openhuman-src
 RUN cargo build --release --bin openhuman-core --features channel-matrix
 
 # ==========================================================================
-# Stage 3: Minimal runtime image with HiClaw integration
+# Stage 3: Minimal runtime image with AgentTeams integration
 # ==========================================================================
 FROM debian:bookworm-slim AS runtime
 
@@ -149,12 +149,12 @@ RUN mkdir -p /home/openhuman/.openhuman/skills \
              /home/openhuman/.openhuman/agent-config \
  && chown -R openhuman:openhuman /home/openhuman
 
-# Copy HiClaw shared scripts
-COPY shared/lib/ /opt/hiclaw/scripts/lib/
-RUN chmod +x /opt/hiclaw/scripts/lib/*.sh 2>/dev/null || true
+# Copy AgentTeams shared scripts
+COPY shared/lib/ /opt/agentteams/scripts/lib/
+RUN chmod +x /opt/agentteams/scripts/lib/*.sh 2>/dev/null || true
 
 # Install mc-wrapper as /usr/local/bin/mc (STS credential refresh proxy)
-RUN cp /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc \
+RUN cp /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc \
  && chmod +x /usr/local/bin/mc
 
 # Copy OpenHuman worker entrypoint
@@ -162,10 +162,10 @@ COPY openhuman/scripts/openhuman-worker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/openhuman-worker-entrypoint.sh
 
 # Copy OpenHuman worker agent template (AGENTS.md + skills)
-COPY manager/agent/openhuman-worker-agent/ /opt/hiclaw/agent/openhuman-worker-agent/
+COPY manager/agent/openhuman-worker-agent/ /opt/agentteams/agent/openhuman-worker-agent/
 
-# hiclaw CLI — for worker lifecycle management via controller REST API
-COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
+# AgentTeams CLI — for worker lifecycle management via controller REST API
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
 
 # Copy the built binary and upstream license (GPL-3.0 compliance: recipients
 # must be able to identify the license of the included GPL component).

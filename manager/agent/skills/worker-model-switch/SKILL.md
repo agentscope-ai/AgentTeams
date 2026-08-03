@@ -1,22 +1,22 @@
 ---
 name: worker-model-switch
-description: Switch a Worker Agent's LLM model via hiclaw CLI. Use when the human admin requests changing a Worker's model.
+description: Switch a Worker Agent's LLM model via agt CLI. Use when the human admin requests changing a Worker's model.
 ---
 
 # Worker Model Switch
 
-Switch a Worker's LLM model using the hiclaw CLI. The controller handles all details: model parameter resolution, openclaw.json generation, storage push, and container recreation.
+Switch a Worker's LLM model using the agt CLI. The controller handles all details: model parameter resolution, openclaw.json generation, storage push, and container recreation.
 
 ## Usage
 
 ```bash
-hiclaw update worker --name <WORKER_NAME> --model <MODEL_ID>
+agt update worker --name <WORKER_NAME> --model <MODEL_ID>
 ```
 
 Examples:
 ```bash
-hiclaw update worker --name alice --model claude-sonnet-4-6
-hiclaw update worker --name alice --model deepseek-chat
+agt update worker --name alice --model claude-sonnet-4-6
+agt update worker --name alice --model deepseek-chat
 ```
 
 ## What happens

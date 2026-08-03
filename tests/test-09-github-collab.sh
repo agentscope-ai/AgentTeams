@@ -14,7 +14,7 @@ ADMIN_TOKEN=$(echo "${ADMIN_LOGIN}" | jq -r '.access_token')
 MANAGER_USER="@manager:${TEST_MATRIX_DOMAIN}"
 
 # Check if GitHub token is configured
-if [ -z "${HICLAW_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
+if [ -z "${AGENTTEAMS_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
     log_info "SKIP: No GitHub token configured"
     test_teardown "09-github-collab"
     test_summary

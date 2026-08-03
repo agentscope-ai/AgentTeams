@@ -1,5 +1,5 @@
 # ============================================================
-# HiClaw QwenPaw Worker - Python-based Container
+# AgentTeams QwenPaw Worker - Python-based Container
 # ============================================================
 # Lightweight Python container for running QwenPaw-based Worker Agents.
 # Uses the same MinIO-backed config/sync model as CoPaw workers, but reads
@@ -24,7 +24,7 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 ARG PIP_TIMEOUT=300
-ARG QWENPAW_PIP_SPEC=qwenpaw==1.1.11
+ARG QWENPAW_PIP_SPEC=qwenpaw==2.0.1
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -89,12 +89,6 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g mcporter skills @nacos-group/cli@1.1.2 && \
     rm -rf /root/.npm
 
-# Overlay HiClaw Matrix channel behavior while keeping QwenPaw as the base runtime.
-COPY qwenpaw/src/matrix/ /tmp/qwenpaw-matrix-overlay/
-RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
-    cp -a /tmp/qwenpaw-matrix-overlay/channel.py "$SITE/qwenpaw/app/channels/matrix/channel.py" && \
-    rm -rf /tmp/qwenpaw-matrix-overlay
-
 # Overlay real qwenpaw-worker source without rebuilding the dependency-heavy venv.
 COPY qwenpaw/src/ /tmp/qwenpaw-worker/src/
 RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
@@ -102,33 +96,30 @@ RUN SITE=/opt/venv/qwenpaw/lib/python3.11/site-packages && \
     rm -rf /tmp/qwenpaw-worker
 
 # Opaque QwenPaw plugin artifacts. Each plugin build owns its contents.
-RUN mkdir -p /opt/hiclaw/plugins
-COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/hiclaw/plugins/teamharness-qwenpaw.zip
-COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/hiclaw/plugins/workerflow-qwenpaw.zip
+RUN mkdir -p /opt/agentteams/plugins
+COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamharness-qwenpaw.zip
+COPY dist/adapters/qwenpaw/workerflow-qwenpaw.zip /opt/agentteams/plugins/workerflow-qwenpaw.zip
+COPY plugins/agentteams-matrix-channel/ /opt/agentteams/plugins/agentteams-matrix-channel/
 COPY qwenpaw/scripts/install-builtin-qwenpaw-plugins.py /tmp/install-builtin-qwenpaw-plugins.py
 RUN /opt/venv/qwenpaw/bin/python /tmp/install-builtin-qwenpaw-plugins.py \
-        --working-dir /opt/hiclaw/qwenpaw-builtin \
-        /opt/hiclaw/plugins/teamharness-qwenpaw.zip \
-        /opt/hiclaw/plugins/workerflow-qwenpaw.zip \
+        --working-dir /opt/agentteams/qwenpaw-builtin \
+        /opt/agentteams/plugins/agentteams-matrix-channel \
+        /opt/agentteams/plugins/teamharness-qwenpaw.zip \
+        /opt/agentteams/plugins/workerflow-qwenpaw.zip \
     && rm -f /tmp/install-builtin-qwenpaw-plugins.py
 
-# Enable QwenPaw's native deferred MCP startup for app workspaces.
-COPY qwenpaw/scripts/patch-qwenpaw-defer-mcp-startup.py /tmp/patch-qwenpaw-defer-mcp-startup.py
-RUN /opt/venv/qwenpaw/bin/python /tmp/patch-qwenpaw-defer-mcp-startup.py && \
-    rm -f /tmp/patch-qwenpaw-defer-mcp-startup.py
-
-COPY --chmod=755 qwenpaw/scripts/qwenpaw-worker-entrypoint.sh /opt/hiclaw/scripts/qwenpaw-worker-entrypoint.sh
-COPY --chmod=755 qwenpaw/scripts/qwenpaw-teamharness-plugin-reload.sh /opt/hiclaw/scripts/qwenpaw-teamharness-plugin-reload.sh
-COPY --from=shared . /opt/hiclaw/scripts/lib/
+COPY --chmod=755 qwenpaw/scripts/qwenpaw-worker-entrypoint.sh /opt/agentteams/scripts/qwenpaw-worker-entrypoint.sh
+COPY --chmod=755 qwenpaw/scripts/qwenpaw-teamharness-plugin-reload.sh /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh
+COPY --from=shared . /opt/agentteams/scripts/lib/
 
 # mc wrapper: auto-refreshes STS credentials before every mc invocation.
-RUN chmod +x /opt/hiclaw/scripts/lib/mc-wrapper.sh && \
-    ln -sf /opt/hiclaw/scripts/lib/mc-wrapper.sh /usr/local/bin/mc && \
+RUN chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh && \
+    ln -sf /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc && \
     ln -sf /opt/venv/qwenpaw/bin/qwenpaw /usr/local/bin/qwenpaw && \
     ln -sf /opt/venv/qwenpaw/bin/qwenpaw-worker /usr/local/bin/qwenpaw-worker && \
-    ln -sf /opt/hiclaw/scripts/qwenpaw-teamharness-plugin-reload.sh /usr/local/bin/qwenpaw-teamharness-plugin-reload && \
-    mkdir -p /root/hiclaw-fs/agents
+    ln -sf /opt/agentteams/scripts/qwenpaw-teamharness-plugin-reload.sh /usr/local/bin/qwenpaw-teamharness-plugin-reload && \
+    mkdir -p /root/agentteams-fs/agents
 
-WORKDIR /root/hiclaw-fs/agents
+WORKDIR /root/agentteams-fs/agents
 
-ENTRYPOINT ["/opt/hiclaw/scripts/qwenpaw-worker-entrypoint.sh"]
+ENTRYPOINT ["/opt/agentteams/scripts/qwenpaw-worker-entrypoint.sh"]

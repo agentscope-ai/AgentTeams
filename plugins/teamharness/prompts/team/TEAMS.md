@@ -152,8 +152,9 @@ In the Task room:
 
 - On the task request message, load `teamharness-project-management` to
   `create_project`, `plan_dag` or `plan_loop`, and find `ready_nodes`.
-- Load `teamharness-task-delegation` to delegate only ready nodes and send
-  assignment messages as normal replies in the current Task room.
+- Load `teamharness-task-delegation` to delegate only ready nodes.
+  `delegate_task` automatically notifies the assigned Worker in the Task room;
+  do not send a second assignment message.
 - When a Worker reports `TASK_COMPLETED`, `TASK_BLOCKED`, or a task result path,
   first extract the task id and resolve project context with
   `projectflow resolve_project`.

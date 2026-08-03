@@ -1,45 +1,43 @@
 # Changelog (Unreleased)
 
-Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `openclaw-base/`, `hiclaw-controller/`, and release-facing `install/` / Helm chart changes here before the next release.
+Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `openclaw-base/`, and `agentteams-controller/` here before the next release.
 
 ---
 
-- feat(manager): add a built-in MiniMax image-generation MCP template for text-to-image and image-to-image tools.
-- feat(qwenpaw): add the QwenPaw worker runtime Python package baseline with runtime config sync, storage sync, heartbeat reporting, Matrix channel overlay, and focused unit tests.
-- fix(controller): surface Kubernetes Pod container failures in Worker backend status and status API responses.
-- feat(controller): expose low-cardinality AgentTeams controller metrics and optional Helm ServiceMonitor.
-- feat(controller): add Matrix AppService Human SSO identity provisioning with hash-derived Matrix IDs, AppService login, deletion deactivation, and Team admin/member identity resolution from Human status.
-- fix(agent): update file-sharing path guidance for CoPaw and Team Leader agents to use `/root/hiclaw-fs/agents/...` instead of the retired `/root/.hiclaw-worker/...` path.
-- feat(helm): add a Helm LLM preflight hook and reusable `hiclaw llm-preflight` command to validate API key/base URL/model before controller startup.
+**What's New**
 
-- fix(copaw): harden Matrix channel control-command handling, task-thread routing, NO_REPLY suppression, and cancellation noise handling.
-- feat(controller): add OpenKruise Sandbox backend support for Workers via `spec.backendRuntime=sandbox`, including SandboxClaim lifecycle, status watches, CRD schema, and Helm RBAC/env wiring.
-- fix(controller): materialize sandbox Worker runtime env/auth material into worker-deps storage before creating SandboxClaim deps and block legacy pod-to-sandbox runtime switches until the Worker is stopped.
-- feat(controller): add per-agent `spec.resources` support for Manager, Worker, Team Leader, and Team Worker CRDs.
-- fix(worker): pass `X-HiClaw-Cluster-ID` when remote Workers refresh controller-issued STS credentials for OSS and Nacos AI registry access.
-- feat(hiclaw-controller): support a separate agent-pod-template for `deployMode: Remote` Workers via an optional `pod-template-remote.yaml` key on the controller-scoped pod-template ConfigMap; remote-mode Pod creation prefers this key and transparently falls back to `pod-template.yaml` when it is absent or empty, while non-remote/Sandbox paths keep ignoring it.
-- feat(controller): move Kubernetes resources to the `agentteams.io/v1beta1` API group and decouple Team membership through `spec.workerMembers` references to standalone Worker CRs.
-- feat(runtime): let Worker runtimes consume terminal `AGENTTEAMS_*` storage, controller, and auth environment variables while preserving existing `HICLAW_*` deployment compatibility.
-
-- **OpenHuman runtime**: OpenHuman added as the fourth Worker runtime with native Matrix support via `channel-matrix` feature flag; includes controller routing (K8s + Docker backends), Dockerfile, entrypoint script, agent template, Helm chart integration, and Makefile build targets.
-- **Multi model providers**: Worker, Team, and Manager specs can now select a Higress model provider via `spec.modelProvider`; the controller resolves the provider, injects the matching gateway URL into runtime config, and authorizes consumers only on the selected AI route.
-- **modelProvider authorization boundary**: Controller reconcilers now own provider-specific AI route authorization, while provisioning keeps using the default gateway authorization path to avoid duplicate provider coupling.
-- **Matrix AppService mode**: The controller can register as a Matrix Application Service and provision/log in users with the `as_token` instead of per-user passwords (legacy password auth is preserved when disabled). Enabled by default via `HICLAW_MATRIX_APPSERVICE_ENABLED`; the install script and the Helm `runtime-env` Secret generate and persist `HICLAW_MATRIX_APPSERVICE_AS_TOKEN` / `HICLAW_MATRIX_APPSERVICE_HS_TOKEN`. Set `HICLAW_MATRIX_APPSERVICE_USER_NAMESPACE_REGEX` to narrow the exclusive user namespace when running against a shared / pre-existing homeserver.
+- **QwenPaw 2.0 runtime unification**: Migrate the Manager container from copaw 1.0.2 to QwenPaw 2.0.1 on a single venv, register projectflow/taskflow/message/filesync tools through a QwenPaw plugin instead of monkey-patching CoPawAgent, replace the physical Matrix channel overlay with the QwenPaw plugin system, read Matrix credentials directly from agent.json so the manager tools work without importing copaw at runtime, align CMS observability packages and env vars with the Worker image, inject session-file privacy policy into prompt files, set approval_level=AUTO in the agent template, bridge YOLO mode to Qwenpaw approval_level=OFF, disable the built-in QA Agent, replace start-copaw-manager.sh with start-qwenpaw-manager.sh, add explicit qwenpaw Manager and Worker runtime values alongside copaw while keeping user-facing installer defaults and image pulls on CoPaw until the QwenPaw release, make task assignment state and Matrix notification atomic with room membership validation and m.mentions delivery, preserve m.mentions metadata in streamed/edit events, make the TeamHarness MCP `delegate_task` path atomic too (validate assignee room membership — strictly `join`, not `invite` — prepare → stable-txn notification → commit assigned + event_id; the initial file publish gates the notification and the assigned/eventId commit gates success, both returning a retryable failure so an idempotent retry finishes the sync instead of reporting success with stale shared storage), and migrate a legacy Worker `.copaw` working dir to `.qwenpaw` on the qwenpaw_worker startup path only (idempotent; the migration follows the target runtime — an explicitly configured copaw Worker keeps `.copaw` and never migrates before a switch).
+- **Custom model capability overrides**: `AGENTTEAMS_MODEL_VISION` and `AGENTTEAMS_MODEL_REASONING` env vars let deployments override vision and reasoning capabilities for custom models not in the built-in presets table (e.g. local multimodal models like `qwen3.6-27b-fp8`).
+- **MiniMax image generation MCP template**: Add a built-in MiniMax image-generation MCP template for text-to-image and image-to-image tools.
 
 **Bug Fixes**
 
-- **Legacy Team channel policy**: Legacy Team reconciliation now writes final Matrix channel allow-lists to member runtime config and re-adds the Team Leader to the Manager allow-list so controller integration tests observe durable policy state.
-- **Sandbox worker-deps hardening**: Sandbox-backed Workers now prepare controller-owned worker-deps env/token/data material before claim creation, recycle stale SandboxClaims and bound Sandboxes on runtime-affecting changes, and use bounded ServiceAccount token projection for built-in SandboxClaim mounts.
-- **CLI AgentTeams auth env**: The `hiclaw` CLI now discovers `AGENTTEAMS_CONTROLLER_URL`, `AGENTTEAMS_AUTH_TOKEN`, `AGENTTEAMS_AUTH_TOKEN_FILE`, and `AGENTTEAMS_CLUSTER_ID` while preserving legacy `HICLAW_*` fallbacks, so Manager and Worker containers can use the terminal env names for controller calls.
-- **CoPaw worker runtime environment**: CoPaw workers now prefer AgentTeams storage/runtime environment variables while preserving legacy HiClaw fallbacks, and Qwen-style model health preflights disable thinking for lightweight readiness checks.
-- **CoPaw Worker heartbeat**: CoPaw worker templates now seed heartbeat at a 10-minute interval so Team Leader agents created from the worker template can run heartbeat turns without requiring an explicit Team CR heartbeat spec.
-- **Helm CRDs**: Removed unsupported `propertyNames` schema fields from Worker and Team CRDs so Kubernetes API servers accept the chart CRDs.
-- **CoPaw local runtime paths**: CoPaw direct-run defaults now honor `COPAW_INSTALL_DIR` and `COPAW_WORKING_DIR` before falling back to local home-directory paths, while container entrypoints can continue to pass explicit directories.
-- **CoPaw worker replies**: CoPaw's no-text debounce only recognized copaw `Content` objects, but the custom Matrix channel builds plain-dict content parts, so every message was buffered and the agent never replied. The channel now also recognizes dict-based text/audio parts; workers and team leaders reply as expected.
-- **Worker Matrix token refresh**: `POST /api/v1/credentials/matrix-token` was registered against the `credentials` resource kind, but the worker credentials branch only permitted `ActionSTS`, so the route was dead and workers could not self-refresh on a homeserver 401. The self-scoped credentials branch now also permits `ActionRefreshMatrixToken` (and the misplaced dead entry was removed).
-- **Helm AppService tokens**: The Helm `runtime-env` Secret now generates and preserves the AppService `as_token` / `hs_token` (values override -> existing Secret -> generated) so a default Helm/in-cluster install no longer crash-loops the controller, and a template comment trim-marker that broke `helm lint` YAML parsing was fixed.
-- **Remote Worker authentication boundary**: Remote Worker tokens are now bound to the matching local Worker CR's `deployMode: Remote`, target cluster ID, target namespace, and ServiceAccount name before authorization.
-- **Remote Worker applied target auth**: Remote Worker authentication now prefers the status-pinned deployment target and falls back to spec only before first provisioning, so spec target edits do not immediately break the running remote Worker or trust a target before it is applied.
-- **Remote Worker lifecycle boundary**: Workers now record the applied deployment target in status, reject running target changes until the Worker is Stopped, clean up using the applied target, and register remote Pod watches for Worker/Team status updates.
-- **Team Worker CR decoupling**: Worker identity enrichment and Worker REST APIs now resolve `spec.workerMembers` references, and Teams reject sharing the same referenced Worker CR before injecting coordination context.
-- **Matrix AppService integration**: SSO Human Team admins now resolve through the Human identity source, Matrix AppService transaction push routes are wired into the controller registration path, and registration keeps the homeserver-facing controller URL as the endpoint base.
+- **CoPaw Team assignment handoff**: `taskflow(delegate_task)` sends the Worker assignment automatically with `m.mentions` in the Team Room (atomic pending → prepared → assigned state, stable Matrix txn_id for idempotent retries, normalize Worker aliases from the Team roster, refresh Controller-managed runtime context every minute, and reroute assignment replies from non-Team rooms to the Team Room). ([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120), [#1095](https://github.com/agentscope-ai/AgentTeams/pull/1095))
+- **Docker Worker ServiceAccount token rotation**: Project short-lived tokens into per-Worker Docker volumes, refresh the token file atomically without recreating running Workers, and remove the credential volume with the Worker.
+- **Worker port exposure CLI**: Encode `--expose` values as numeric ports and reject invalid or out-of-range inputs before create, update, or apply requests reach the Controller.
+- **QwenPaw MCP policy startup convergence**: Persist built-in plugin MCP policies before runtime desired-state reloads so a replacement QwenPaw workspace cannot retain the pre-policy interactive approval handler.
+- **QwenPaw Team policy and runtime-aware acceptance**: Merge Team and Worker channel-policy overrides into QwenPaw `runtime.yaml`, wait for public plugin/API state before integration assertions, and verify prompt/config files from the runtime location that consumes them.
+- **QwenPaw 2.0 tool execution**: Preserve QwenPaw's asynchronous tool-result stream while sanitizing output, and allow only the built-in TeamHarness and Workerflow MCP drivers to run without an unavailable interactive approval prompt.
+- **QwenPaw package and Team storage access**: Preserve referenced members' effective Team name across independent Worker reconciles, update MinIO policies without detaching active Workers, revoke access on detach, and grant Workers read-only access to centrally uploaded AgentSpec packages.
+- **QwenPaw inline prompt compatibility**: Project Worker identity, SOUL, and AGENTS content through runtime desired state and apply it to both the native QwenPaw workspace and the Worker root storage contract.
+- **Integration failure diagnostics**: Export AgentTeams container state and timestamped logs with CI artifacts, classify QwenPaw startup errors without exposing their message contents, and stop the TeamHarness shard after startup failures instead of hiding the cause behind cascading timeouts.
+- **QwenPaw local startup readiness**: Select and propagate the QwenPaw Worker image across install backends, then wait for the runtime-owned `runtime/runtime.yaml` object before creating a local Docker Worker.
+- **QwenPaw 2.0 runtime compatibility**: Adapt the QwenPaw Worker image, custom Matrix Channel, and native plugins to QwenPaw 2.0.1 startup and schema contracts.
+- **Multimodal model image support**: Add `supports_multimodal` and `supports_image` to `agents.defaults` in generated openclaw.json when the selected model supports image input, so QwenPaw does not strip images at the framework layer. Fixes #931.
+- **Install script model env passthrough**: Pass custom model override env vars to the Controller container so that `AGENTTEAMS_MODEL_VISION` and related settings actually reach the config generator.
+- **Bridge model capability propagation**: Propagate model `input` modalities from openclaw.json through `_write_providers_json()` so QwenPaw's `ModelInfo` receives `supports_image`/`supports_video`/`supports_multimodal` flags instead of relying on fail-open defaults.
+- **Manager diagnostic loops**: Manager prompts and Worker lifecycle guidance stop repeated no-op troubleshooting commands and treat a missing Worker in `agt get workers` as the deletion boundary instead of looping on Matrix room probes. ([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
+
+---
+
+**Bug 修复**
+
+- **CoPaw Team 任务分配交接**：由 `taskflow(delegate_task)` 返回必须执行的 Team Room `message` 动作，根据 Team roster 规范化 Worker 别名，每分钟刷新 Controller 管理的运行时上下文，并将非 Team Room 中的任务分配回复重定向到 Team Room。([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120))
+- **Worker 端口暴露 CLI**：将 `--expose` 参数编码为数值端口，并在创建、更新或应用请求到达 Controller 前拒绝无效或越界输入。
+- **Manager 诊断循环**：Manager 提示和 Worker 生命周期指引会停止重复执行无效果的排障命令，并以 `agt get workers` 不再列出目标 Worker 作为删除完成边界，避免继续循环探测 Matrix Room。([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
+
+---
+
+**Change list / 变更列表**
+
+- `90c9fd4f` fix(manager): stop repeated diagnostic loops (#975)

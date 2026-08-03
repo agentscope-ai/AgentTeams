@@ -29,7 +29,7 @@ assert_http_code "http://${TEST_MANAGER_HOST}:${TEST_ELEMENT_PORT}/" "200" \
     "Element Web port 8088 is accessible"
 
 # Infrastructure checks go to the infra container; workspace checks go to the agent container
-_INFRA_CTR="${TEST_CONTROLLER_CONTAINER:-hiclaw-manager}"
+_INFRA_CTR="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
 _AGENT_CTR="${TEST_AGENT_CONTAINER:-${_INFRA_CTR}}"
 
 MATRIX_CODE=$(docker exec "${_INFRA_CTR}" curl -s -o /dev/null -w '%{http_code}' \
@@ -104,24 +104,51 @@ fi
 # ---- Runtime Detection ----
 log_section "Manager Runtime"
 
-MANAGER_RUNTIME=$(docker exec "${_AGENT_CTR}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || \
-                   docker exec "${_INFRA_CTR}" printenv HICLAW_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+MANAGER_RUNTIME=$(docker exec "${_AGENT_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                   docker exec "${_INFRA_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                   docker exec "${_AGENT_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
+                   docker exec "${_INFRA_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
 log_pass "Manager runtime: ${MANAGER_RUNTIME}"
 
 # Runtime-specific config verification (agent container)
 case "${MANAGER_RUNTIME}" in
-    copaw)
-        AGENT_JSON="/root/manager-workspace/.copaw/workspaces/default/agent.json"
-        if docker exec "${_AGENT_CTR}" jq -e '.channels.matrix.enabled == true' "${AGENT_JSON}" >/dev/null 2>&1; then
-            log_pass "CoPaw agent.json valid"
-        else
-            log_fail "CoPaw agent.json valid"
+    copaw|qwenpaw)
+        # Both copaw and qwenpaw runtimes use QwenPaw 2.0 in the same container image.
+        # After migration, the runtime env var is "qwenpaw" and the working dir is
+        # ~/.qwenpaw/.  The process cmdline may still show "copaw" (run_copaw_app.py
+        # via runpy) or "qwenpaw" (direct python3 -m qwenpaw app) — both are valid.
+        _working_dir="/root/manager-workspace/.qwenpaw"
+        if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
+            _working_dir="/root/manager-workspace/.copaw"
         fi
 
-        if docker exec "${_AGENT_CTR}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1; then
-            log_pass "CoPaw process running"
+        if docker exec "${_AGENT_CTR}" test -d "${_working_dir}" 2>/dev/null; then
+            log_pass "QwenPaw working dir exists: ${_working_dir}"
         else
-            log_fail "CoPaw process running"
+            log_fail "QwenPaw working dir exists: ${_working_dir}"
+        fi
+
+        AGENT_JSON="${_working_dir}/workspaces/default/agent.json"
+        if docker exec "${_AGENT_CTR}" jq -e '.channels.matrix.enabled == true' "${AGENT_JSON}" >/dev/null 2>&1; then
+            log_pass "QwenPaw agent.json valid"
+        else
+            log_fail "QwenPaw agent.json valid"
+        fi
+
+        # pgrep: our CI supports both 'copaw app' and 'qwenpaw app' patterns
+        if docker exec "${_AGENT_CTR}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 || \
+           docker exec "${_AGENT_CTR}" pgrep -f "qwenpaw app" >/dev/null 2>&1; then
+            log_pass "QwenPaw process running"
+        else
+            log_fail "QwenPaw process running"
+        fi
+
+        # Verify QWENPAW_WORKING_DIR is set (required for tool path resolution)
+        _qwenpaw_wd=$(docker exec "${_AGENT_CTR}" printenv QWENPAW_WORKING_DIR 2>/dev/null || echo "")
+        if [ -n "${_qwenpaw_wd}" ]; then
+            log_pass "QWENPAW_WORKING_DIR is set: ${_qwenpaw_wd}"
+        else
+            log_info "QWENPAW_WORKING_DIR not set (may use default ~/.qwenpaw)"
         fi
         ;;
     *)

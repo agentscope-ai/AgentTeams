@@ -1,8 +1,9 @@
 """
 MatrixChannel: CoPaw BaseChannel implementation for Matrix (via matrix-nio).
 
-This file is installed into ~/.copaw/custom_channels/ at worker startup
-so CoPaw's channel registry picks it up automatically.
+This file is installed into the runtime working dir's custom_channels/
+(~/.qwenpaw/custom_channels/ by default) at worker startup so the channel
+registry picks it up automatically.
 """
 from __future__ import annotations
 
@@ -38,10 +39,39 @@ from nio import (
 )
 from nio.responses import WhoamiResponse
 
+from copaw_worker.hooks.message_filter import canonicalize_team_worker_mentions
+
 logger = logging.getLogger(__name__)
 
 _MATRIX_USER_ID_RE = re.compile(
     r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?",
+)
+_MATRIX_LOCALPART_MENTION_RE = re.compile(r"@[a-zA-Z0-9._=+/\-]+")
+_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
+    r"(?i)\b("
+    r"let me|"
+    r"i['’]?ll coordinate|"
+    r"i will coordinate|"
+    r"i have (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
+    r"workers? available|"
+    r"now let me|"
+    r"i need to notify|"
+    r"no active projects|"
+    r"project created\. now|"
+    r"good[,.]? i have|"
+    r"solid understanding|"
+    r"team coordination plan"
+    r")\b",
+)
+_TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"new\s+task(?:\s+\[[^\]\n]+\])?|"
+    r"task\s+assigned|"
+    r"assigned\s+task|"
+    r"you\s+are\s+assigned|"
+    r"please\s+(?:design|implement|write|test|build|handle|review|create|investigate|work)|"
+    r"start\s+(?:by\s+)?(?:designing|implementing|writing|testing|building|handling|reviewing|creating|investigating)"
+    r")\b",
 )
 
 # Token refresh tunables
@@ -148,7 +178,7 @@ class MatrixChannelConfig:
         self.enabled: bool = raw.get("enabled", True)
         self.homeserver: str = raw.get("homeserver", "")
         self.access_token: str = raw.get("access_token", "")
-        # username/password fallback (rarely used in hiclaw)
+        # username/password fallback (rarely used in agentteams)
         self.username: str = raw.get("username", "")
         self.password: str = raw.get("password", "")
         self.device_name: str = raw.get("device_name", "copaw-worker")
@@ -196,15 +226,22 @@ def _strip_yaml_string(value: str) -> str:
 
 
 def _runtime_root() -> Path:
-    configured = os.getenv("COPAW_WORKING_DIR")
+    configured = os.getenv("QWENPAW_WORKING_DIR") or os.getenv("COPAW_WORKING_DIR")
     if configured:
-        return Path(configured).expanduser().resolve().parent
+        path = Path(configured).expanduser().resolve()
+        if path.name == "default" and path.parent.name == "workspaces":
+            rt_dir = path.parent.parent
+            if rt_dir.name in (".qwenpaw", ".copaw"):
+                return rt_dir.parent
+        if path.name in (".qwenpaw", ".copaw"):
+            return path.parent
+        return path.parent
 
     cwd = Path.cwd().resolve()
     if cwd.name == "default" and cwd.parent.name == "workspaces":
-        copaw_dir = cwd.parent.parent
-        if copaw_dir.name == ".copaw":
-            return copaw_dir.parent
+        rt_dir = cwd.parent.parent
+        if rt_dir.name in (".qwenpaw", ".copaw"):
+            return rt_dir.parent
     return cwd
 
 
@@ -246,6 +283,64 @@ def _extract_matrix_user_ids(text: str) -> list[str]:
         seen.add(key)
         result.append(mxid)
     return result
+
+
+def _matrix_localpart(user_id: str | None) -> str:
+    text = (user_id or os.getenv("AGENTTEAMS_WORKER_NAME") or "").strip()
+    if text.startswith("@"):
+        return text[1:].split(":", 1)[0]
+    return text.split(":", 1)[0]
+
+
+def _is_team_leader_identity(user_id: str | None) -> bool:
+    localpart = _matrix_localpart(user_id)
+    return localpart.endswith("-lead") or localpart.endswith("-leader")
+
+
+def _ends_with_no_reply_control(text: str) -> bool:
+    """Return true when the final non-empty output line is NO_REPLY."""
+    return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
+
+
+def _is_team_leader_internal_preamble_text(text: str) -> bool:
+    """Return true for visible Team Leader internal planning/tool preambles."""
+    stripped = (text or "").strip()
+    if not stripped or "?" in stripped:
+        return False
+
+    # Keep concrete worker assignments so the channel can reroute them to the
+    # Team Room. Roster/topology planning that happens to mention workers is
+    # still an internal preamble and must stay out of Leader DM.
+    if _extract_matrix_user_ids(text) and (
+        _TEAM_LEADER_WORKER_ASSIGNMENT_RE.search(stripped)
+    ):
+        return False
+
+    return bool(_TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE.search(stripped))
+
+
+def _is_team_leader_dm_internal_preamble(current_room_id: str, text: str) -> bool:
+    """Suppress visible Team Leader internal planning/tool preambles in Leader DM."""
+    if _runtime_config_field("member", "role") != "team_leader":
+        return False
+
+    leader_dm_room_id = _runtime_config_field("team", "leaderDmRoomId")
+    if not leader_dm_room_id or current_room_id != leader_dm_room_id:
+        return False
+
+    return _is_team_leader_internal_preamble_text(text)
+
+
+def _should_suppress_team_leader_internal_preamble(
+    user_id: str | None,
+    room_id: str,
+    text: str,
+) -> bool:
+    if _is_team_leader_dm_internal_preamble(room_id, text):
+        return True
+    if not _is_team_leader_identity(user_id):
+        return False
+    return _is_team_leader_internal_preamble_text(text)
 
 
 class MatrixChannel(BaseChannel):
@@ -364,8 +459,8 @@ class MatrixChannel(BaseChannel):
     def from_env(cls, process: Callable, on_reply_sent=None) -> "MatrixChannel":
         import os
         cfg = MatrixChannelConfig({
-            "homeserver": os.environ.get("HICLAW_MATRIX_SERVER", ""),
-            "access_token": os.environ.get("HICLAW_MATRIX_TOKEN", ""),
+            "homeserver": os.environ.get("AGENTTEAMS_MATRIX_SERVER", ""),
+            "access_token": os.environ.get("AGENTTEAMS_MATRIX_TOKEN", ""),
         })
         return cls(process=process, config=cfg, on_reply_sent=on_reply_sent)
 
@@ -504,7 +599,7 @@ class MatrixChannel(BaseChannel):
     @staticmethod
     def _sync_token_path() -> Optional[Path]:
         """Return the file path for persisting the Matrix sync token."""
-        wd = os.environ.get("COPAW_WORKING_DIR")
+        wd = os.environ.get("QWENPAW_WORKING_DIR") or os.environ.get("COPAW_WORKING_DIR")
         if wd:
             return Path(wd) / "matrix_sync_token"
         return None
@@ -563,12 +658,12 @@ class MatrixChannel(BaseChannel):
 
     async def _refresh_matrix_token(self) -> bool:
         """Call controller to get a fresh Matrix access token."""
-        controller_url = os.environ.get("HICLAW_CONTROLLER_URL", "")
-        auth_token_file = os.environ.get("HICLAW_AUTH_TOKEN_FILE", "")
-        auth_token = os.environ.get("HICLAW_AUTH_TOKEN", "")
+        controller_url = os.environ.get("AGENTTEAMS_CONTROLLER_URL", "")
+        auth_token_file = os.environ.get("AGENTTEAMS_AUTH_TOKEN_FILE", "")
+        auth_token = os.environ.get("AGENTTEAMS_AUTH_TOKEN", "")
 
         if not controller_url:
-            logger.warning("MatrixChannel: HICLAW_CONTROLLER_URL not set, cannot refresh token")
+            logger.warning("MatrixChannel: AGENTTEAMS_CONTROLLER_URL not set, cannot refresh token")
             return False
 
         bearer = auth_token
@@ -964,10 +1059,14 @@ class MatrixChannel(BaseChannel):
     def _media_dir(self) -> Path:
         """Return (and create) the local media storage directory."""
         try:
-            from copaw.constant import WORKING_DIR
+            from qwenpaw.constant import WORKING_DIR
             d = WORKING_DIR / "media"
-        except Exception:
-            d = Path.home() / ".copaw" / "media"
+        except ImportError:
+            try:
+                from copaw.constant import WORKING_DIR
+                d = WORKING_DIR / "media"
+            except ImportError:
+                d = Path.home() / ".qwenpaw" / "media"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -1007,10 +1106,10 @@ class MatrixChannel(BaseChannel):
 
     def _e2ee_store_path(self) -> Path:
         """Return the directory for persisting Olm/Megolm crypto state."""
-        wd = os.environ.get("COPAW_WORKING_DIR")
+        wd = os.environ.get("QWENPAW_WORKING_DIR") or os.environ.get("COPAW_WORKING_DIR")
         if wd:
             return Path(wd) / "matrix_crypto_store"
-        return Path.home() / ".copaw" / "matrix_crypto_store"
+        return Path.home() / ".qwenpaw" / "matrix_crypto_store"
 
     async def _download_encrypted_mxc(
         self, mxc_url: str, filename: str, key: dict, hashes: dict, iv: str
@@ -1605,8 +1704,8 @@ class MatrixChannel(BaseChannel):
         if current_room_id != leader_dm_room_id:
             return current_room_id
 
-        for mxid in _extract_matrix_user_ids(text):
-            localpart = mxid.removeprefix("@").split(":", 1)[0]
+        for mention in _MATRIX_LOCALPART_MENTION_RE.findall(text):
+            localpart = mention.removeprefix("@")
             if localpart.endswith("-lead"):
                 continue
             if not team_name or localpart.startswith(f"{team_name}-"):
@@ -1628,6 +1727,29 @@ class MatrixChannel(BaseChannel):
             return
 
         room_id = to_handle
+        text = canonicalize_team_worker_mentions(text)
+
+        if _ends_with_no_reply_control(text):
+            logger.info(
+                "MatrixChannel: suppressing NO_REPLY send to %s",
+                room_id,
+            )
+            await self._send_typing(room_id, False)
+            return
+
+        if _should_suppress_team_leader_internal_preamble(
+            self._user_id,
+            room_id,
+            text,
+        ):
+            logger.info(
+                "MatrixChannel: suppressing Team Leader internal preamble "
+                "in room %s",
+                room_id,
+            )
+            await self._send_typing(room_id, False)
+            return
+
         content: dict[str, Any] = {
             "msgtype": "m.text",
             "body": text,

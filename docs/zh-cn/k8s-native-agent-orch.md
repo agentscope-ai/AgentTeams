@@ -1,12 +1,12 @@
-# HiClaw: 基于 Kubernetes 原生的多 Agent 协作编排系统
+# AgentTeams: 基于 Kubernetes 原生的多 Agent 协作编排系统
 
 ## 1. 项目定位
 
-HiClaw 是一个开源的协作式多 Agent 操作系统（Collaborative Multi-Agent OS），为多个 AI Agent 之间的协作提供声明式编排底座。
+AgentTeams 是一个开源的协作式多 Agent 操作系统（Collaborative Multi-Agent OS），为多个 AI Agent 之间的协作提供声明式编排底座。
 
-与传统的单 Agent 运行时不同，HiClaw 解决的核心问题是：**当多个自主 Agent 需要像一个真实团队一样协作完成复杂任务时，如何编排它们之间的组织关系、通信权限、任务委派和共享状态？**
+与传统的单 Agent 运行时不同，AgentTeams 解决的核心问题是：**当多个自主 Agent 需要像一个真实团队一样协作完成复杂任务时，如何编排它们之间的组织关系、通信权限、任务委派和共享状态？**
 
-HiClaw 借鉴了 Kubernetes 的核心设计哲学——声明式 API、Controller Reconcile Loop、CRD 扩展机制——构建了一套面向 AI Agent 团队的编排控制平面。用户通过 YAML 声明期望的团队结构，Controller 自动完成从基础设施配置到 Agent 间通信拓扑的全部编排工作。
+AgentTeams 借鉴了 Kubernetes 的核心设计哲学——声明式 API、Controller Reconcile Loop、CRD 扩展机制——构建了一套面向 AI Agent 团队的编排控制平面。用户通过 YAML 声明期望的团队结构，Controller 自动完成从基础设施配置到 Agent 间通信拓扑的全部编排工作。
 
 ## 2. 为什么需要多 Agent 协作编排
 
@@ -18,14 +18,14 @@ HiClaw 借鉴了 Kubernetes 的核心设计哲学——声明式 API、Controlle
 |------|------|---------|
 | 单 Agent | 一个 Agent 独立完成任务 | OpenClaw, Cursor, Claude Code |
 | 多 Agent 编排 | 多个 Agent 各自独立运行，统一管理生命周期 | NVIDIA NemoClaw |
-| 多 Agent 协作 | 多个 Agent 组成团队，有组织结构、通信协议、共享状态 | **HiClaw** |
+| 多 Agent 协作 | 多个 Agent 组成团队，有组织结构、通信协议、共享状态 | **AgentTeams** |
 
 单 Agent 的能力上限受限于单次对话的上下文窗口和工具集。当任务复杂度超过单 Agent 能力边界时，需要多个 Agent 分工协作。但"多个 Agent 同时运行"和"多个 Agent 协作"是两个本质不同的问题：
 
 - **编排（Orchestration）**：管理 Agent 的生命周期、资源分配、安全隔离——解决的是"如何运行多个 Agent"
 - **协作（Collaboration）**：定义 Agent 间的组织关系、通信权限、任务委派、状态共享——解决的是"多个 Agent 如何一起工作"
 
-HiClaw 聚焦于后者，提供了一套完整的多 Agent 协作编排方案。
+AgentTeams 聚焦于后者，提供了一套完整的多 Agent 协作编排方案。
 
 ### 2.2 类比 Kubernetes 的演进路径
 
@@ -35,15 +35,15 @@ HiClaw 聚焦于后者，提供了一套完整的多 Agent 协作编排方案。
 |---------|-----------|-----------|
 | Docker（容器运行时） | OpenClaw / Claude Code（Agent 运行时） | 如何运行一个隔离的工作单元 |
 | Docker Compose（单机编排） | NemoClaw（单 Agent 沙箱管理） | 如何管理运行时的生命周期和配置 |
-| **Kubernetes（集群编排）** | **HiClaw（多 Agent 协作编排）** | 如何让多个工作单元组成一个协调的系统 |
+| **Kubernetes（集群编排）** | **AgentTeams（多 Agent 协作编排）** | 如何让多个工作单元组成一个协调的系统 |
 
-正如 Kubernetes 不替代 Docker，而是在其之上提供编排能力，HiClaw 也不替代底层 Agent 运行时，而是在其之上提供协作编排能力。
+正如 Kubernetes 不替代 Docker，而是在其之上提供编排能力，AgentTeams 也不替代底层 Agent 运行时，而是在其之上提供协作编排能力。
 
 ## 3. 核心架构
 
 ### 3.1 三层组织架构
 
-HiClaw 采用映射真实企业团队结构的三层组织架构：
+AgentTeams 采用映射真实企业团队结构的三层组织架构：
 
 ```
 Admin（人类管理员）
@@ -70,7 +70,7 @@ Admin（人类管理员）
 
 ### 3.2 声明式资源模型（CRD 风格）
 
-HiClaw 定义了四种核心资源类型，全部采用 Kubernetes CRD 风格的声明式 YAML：
+AgentTeams 定义了四种核心资源类型，全部采用 Kubernetes CRD 风格的声明式 YAML：
 
 ```
 apiVersion: agentteams.io/v1beta1
@@ -78,7 +78,7 @@ apiVersion: agentteams.io/v1beta1
 
 #### Worker — 基本执行单元
 
-**命名说明：** Python Worker 运行时当前名称为 **QwenPaw**（镜像 `hiclaw-copaw-worker`）。早期文档曾使用 **CoPaw**，指同一运行时。
+**命名说明：** Python Worker 运行时当前名称为 **QwenPaw**（镜像 `agentteams-copaw-worker`）。早期文档曾使用 **CoPaw**，指同一运行时。
 
 ```yaml
 apiVersion: agentteams.io/v1beta1
@@ -104,7 +104,7 @@ spec:
   #   groupAllowExtra: ["@human:domain"]
 ```
 
-每个 Worker 对应：一个 Docker 容器（或 K8s Pod）+ 一个 Matrix 通信账号 + 一块 MinIO 命名空间 + 一个 Gateway Consumer Token。未指定 `spec.image` 时由环境变量 `HICLAW_WORKER_IMAGE` / `HICLAW_COPAW_WORKER_IMAGE` / `HICLAW_HERMES_WORKER_IMAGE`（或 Chart 默认值）决定默认镜像。
+每个 Worker 对应：一个 Docker 容器（或 K8s Pod）+ 一个 Matrix 通信账号 + 一块 MinIO 命名空间 + 一个 Gateway Consumer Token。未指定 `spec.image` 时由环境变量 `AGENTTEAMS_WORKER_IMAGE` / `AGENTTEAMS_COPAW_WORKER_IMAGE` / `AGENTTEAMS_HERMES_WORKER_IMAGE`（或 Chart 默认值）决定默认镜像。
 
 #### Team — 协作单元
 
@@ -117,30 +117,22 @@ spec:
   description: "前端开发团队"
   peerMentions: true                  # 默认 true：团队 Worker 可在群 Room 互相 @mention
   # channelPolicy: …                  # 可选：团队级通信策略覆盖（字段同 Worker）
-  # admin:                             # 可选：团队专属人类管理员（humans-registry 中的 name）
+  # admin:                             # 可选：作为团队管理员的 Human 资源
   #   name: pm-zhang
   #   matrixUserId: "@pm:domain"
-  leader:
-    name: frontend-lead
-    model: claude-sonnet-4-6
-    heartbeat:
-      enabled: true
-      every: 10m
-    workerIdleTimeout: 720m
-    # state: Running                  # Leader 期望生命周期（可选）
-  workers:
+  heartbeatEvery: 10m
+  workerMembers:
+    - name: frontend-lead
+      role: team_leader
     - name: alice
-      model: claude-sonnet-4-6
-      skills: [github-operations]
-      mcpServers:
-        - name: github
-          url: https://gateway.example.com/mcp-servers/github/mcp
+      role: worker
     - name: bob
-      model: qwen3.5-plus
-      runtime: copaw
-      skills: [github-operations]
-      # expose / channelPolicy / state 等与独立 Worker 对齐的字段亦可出现在此
+      role: worker
 ```
+
+`frontend-lead`、`alice`、`bob` 都是已存在的 Worker CR。它们的模型、
+runtime、skills、MCP、镜像、资源、通信策略和生命周期均保留在
+`Worker.spec`；Team 只持有成员关系与协作上下文。
 
 Team 创建时，Controller 自动编排以下拓扑（若配置了 `spec.admin`，则「Admin」指 **Team Admin**；否则为全局 Admin）：
 
@@ -192,19 +184,19 @@ spec:
   # state: Running                    # Running | Sleeping | Stopped
 ```
 
-`Manager` 与 `Worker`/`Team`/`Human` 同属 `hiclaw.io/v1beta1`，由同一套 Controller Reconcile。**是否依赖「对话式 Manager Agent」取决于你的使用方式**：只用 `hiclaw` CLI / REST API / YAML 编排时，可以不通过聊天入口；默认一键安装仍会拉起 Manager 容器，其期望配置可通过该 CR 声明并持续调和。
+`Manager` 与 `Worker`/`Team`/`Human` 同属 `agentteams.io/v1beta1`，由同一套 Controller Reconcile。**是否依赖「对话式 Manager Agent」取决于你的使用方式**：只用 `agt` CLI / REST API / YAML 编排时，可以不通过聊天入口；默认一键安装仍会拉起 Manager 容器，其期望配置可通过该 CR 声明并持续调和。
 
 **kubectl 短名（安装 CRD 后）**：`wk`、`tm`、`hm`、`mgr`。
 
 ### 3.3 Controller 架构
 
-HiClaw Controller 采用标准的 Kubernetes Controller 模式。
+AgentTeams Controller 采用标准的 Kubernetes Controller 模式。
 
-**声明式入口说明**：宿主机上的 `install/hiclaw-apply.sh` 将 YAML 拷入 Manager 容器并执行 `hiclaw apply -f`。CLI **按 YAML 文档顺序**依次调用 REST API（`POST`/`PUT` `/api/v1/workers|teams|humans|managers`），**不会**自动按依赖拓扑排序；多文档文件中应先写被依赖资源（例如先 `Team` 再引用 `accessibleTeams` 的 `Human`）。当前 CLI **未实现** `--prune` / `--dry-run`（与个别安装脚本注释可能不一致，以 CLI 为准）。
+**声明式入口说明**：宿主机上的 `install/agentteams-apply.sh` 将 YAML 拷入 Manager 容器并执行 `agt apply -f`。CLI **按 YAML 文档顺序**依次调用 REST API（`POST`/`PUT` `/api/v1/workers|teams|humans|managers`），**不会**自动按依赖拓扑排序；多文档文件中应先写被依赖资源（例如先 `Team` 再引用 `accessibleTeams` 的 `Human`）。当前 CLI **未实现** `--prune` / `--dry-run`（与个别安装脚本注释可能不一致，以 CLI 为准）。
 
 ```
 YAML 资源声明
-    ↓ hiclaw apply
+    ↓ agt apply
 kine (etcd 兼容层, SQLite 后端) / 原生 K8s etcd
     ↓ Informer Watch
 Controller Runtime
@@ -238,14 +230,14 @@ Controller Runtime
 
 **Embedded 与 Helm（交付形态）：**
 
-- **Embedded**：`install/hiclaw-install.sh` 拉起 **`hiclaw-controller`**（镜像内嵌 Higress、Tuwunel、MinIO、Element Web 与 controller 二进制），再由 controller 在同一 Docker/Podman 宿主机上创建 **`hiclaw-manager`** 与各 **Worker** 容器。
-- **Helm / in-cluster**：使用仓库内 [`helm/hiclaw`](../helm/hiclaw) Chart，将网关、Homeserver、存储、**hiclaw-controller** 与由 CR 驱动的 Manager/Worker Pod 部署为 Kubernetes 工作负载。CRD 语义与 Embedded 一致，仅后端驱动不同。
+- **Embedded**：`install/agentteams-install.sh` 拉起 **`agentteams-controller`**（镜像内嵌 Higress、Tuwunel、MinIO、Element Web 与 controller 二进制），再由 controller 在同一 Docker/Podman 宿主机上创建 **`agentteams-manager`** 与各 **Worker** 容器。
+- **Helm / in-cluster**：使用仓库内 [`helm/agentteams`](../helm/agentteams) Chart，将网关、Homeserver、存储、**agentteams-controller** 与由 CR 驱动的 Manager/Worker Pod 部署为 Kubernetes 工作负载。CRD 语义与 Embedded 一致，仅后端驱动不同。
 
 两种模式共享同一套 Reconciler 逻辑，通过 Worker Backend 抽象层适配不同的基础设施。这与 Kubernetes 通过 CRI/CSI/CNI 抽象底层运行时的设计思路一致。
 
 ### 3.4 通信层：Matrix 协议
 
-HiClaw 选择 Matrix 作为 Agent 间通信协议，而非自建 RPC 框架：
+AgentTeams 选择 Matrix 作为 Agent 间通信协议，而非自建 RPC 框架：
 
 | 选型考量 | Matrix 的优势 |
 |---------|-------------|
@@ -259,7 +251,7 @@ HiClaw 选择 Matrix 作为 Agent 间通信协议，而非自建 RPC 框架：
 
 ### 3.5 基于 Higress 的 LLM/MCP 安全访问模型
 
-HiClaw 的安全层由 [Higress](https://github.com/alibaba/higress) 提供——Higress 是一个 **CNCF Sandbox 项目**，基于 Envoy 构建的云原生 AI Gateway，原生支持 LLM 代理、MCP Server 托管和细粒度的消费者鉴权。HiClaw 与 Higress 的深度集成，使得多 Agent 场景下的 LLM 和 MCP 访问安全成为一等公民。
+AgentTeams 的安全层由 [Higress](https://github.com/alibaba/higress) 提供——Higress 是一个 **CNCF Sandbox 项目**，基于 Envoy 构建的云原生 AI Gateway，原生支持 LLM 代理、MCP Server 托管和细粒度的消费者鉴权。AgentTeams 与 Higress 的深度集成，使得多 Agent 场景下的 LLM 和 MCP 访问安全成为一等公民。
 
 #### 核心安全原则：凭证永不下发到 Agent
 
@@ -287,7 +279,7 @@ Worker（仅持有 Consumer Token: GatewayKey）
 
 ```
 Worker 发起 LLM 请求:
-    POST https://aigw-local.hiclaw.io/v1/chat/completions
+    POST https://aigw-local.agentteams.io/v1/chat/completions
     Authorization: Bearer {GatewayKey}
         ↓
 Higress Gateway:
@@ -303,7 +295,7 @@ Worker 的 `openclaw.json` 中配置的 API endpoint 指向 Gateway 地址，而
 
 MCP（Model Context Protocol）Server 为 Agent 提供工具调用能力（如 GitHub 操作、数据库查询等）。在多 Agent 场景下，MCP Server 的凭证管理尤为关键——多个 Worker 可能需要访问同一个 GitHub 仓库，但不应该每个 Worker 都持有 GitHub PAT。
 
-HiClaw 通过 Higress 实现了 MCP Server 的集中托管和安全代理：
+AgentTeams 通过 Higress 实现了 MCP Server 的集中托管和安全代理：
 
 ```
 MCP Server 注册流程:
@@ -313,7 +305,7 @@ MCP Server 注册流程:
     4. 为 Worker 生成 mcporter 配置，指向 Gateway 的 MCP 端点
 
 Worker 调用 MCP 工具:
-    POST https://aigw-local.hiclaw.io/mcp-servers/github/mcp
+    POST https://aigw-local.agentteams.io/mcp-servers/github/mcp
     Authorization: Bearer {GatewayKey}
         ↓
     Higress Gateway:
@@ -325,7 +317,7 @@ Worker 调用 MCP 工具:
 
 #### 细粒度权限控制与动态吊销
 
-Higress 的 Consumer + allowedConsumers 机制为 HiClaw 提供了细粒度的权限控制：
+Higress 的 Consumer + allowedConsumers 机制为 AgentTeams 提供了细粒度的权限控制：
 
 | 控制维度 | 实现方式 | 示例 |
 |---------|---------|------|
@@ -334,11 +326,11 @@ Higress 的 Consumer + allowedConsumers 机制为 HiClaw 提供了细粒度的�
 | 动态权限变更 | 修改 allowedConsumers 列表 | Manager 可实时授予/吊销 Worker 的 MCP 访问权 |
 | 即时吊销 | 从 allowedConsumers 移除 | 无需轮换凭证，1-2 秒内生效（WASM 插件热同步） |
 
-这个权限模型类似 K8s 中 ServiceAccount + RBAC 的设计——Pod 通过 ServiceAccount Token 访问 API Server，RBAC 策略控制其可访问的资源范围。在 HiClaw 中，Consumer Token 是 ServiceAccount Token，allowedConsumers 是 RBAC Policy。
+这个权限模型类似 K8s 中 ServiceAccount + RBAC 的设计——Pod 通过 ServiceAccount Token 访问 API Server，RBAC 策略控制其可访问的资源范围。在 AgentTeams 中，Consumer Token 是 ServiceAccount Token，allowedConsumers 是 RBAC Policy。
 
 #### 与 NemoClaw 安全模型的对比
 
-| 安全能力 | NemoClaw | HiClaw + Higress |
+| 安全能力 | NemoClaw | AgentTeams + Higress |
 |---------|----------|-----------------|
 | 凭证隔离 | ✅ OpenShell 拦截推理请求，Agent 不见凭证 | ✅ Higress Gateway 代理，Worker 不见凭证 |
 | MCP Server 安全 | ❌ 无 MCP 集中管理 | ✅ Higress 托管 MCP Server，统一鉴权 |
@@ -351,7 +343,7 @@ Higress 的 Consumer + allowedConsumers 机制为 HiClaw 提供了细粒度的�
 
 #### 为什么选择 Higress
 
-作为 CNCF Sandbox 项目，Higress 为 HiClaw 带来了以下关键能力：
+作为 CNCF Sandbox 项目，Higress 为 AgentTeams 带来了以下关键能力：
 
 - **AI-Native Gateway**：原生支持 LLM 代理（多 Provider 路由、Token 限流、Fallback）和 MCP Server 托管，而非通过通用 API Gateway 的插件机制勉强实现
 - **WASM 插件体系**：key-auth 等安全插件以 WASM 运行，热更新无需重启，权限变更秒级生效
@@ -427,7 +419,7 @@ Leader: 好的，我更新一下任务规格
 
 ### 5.1 定位差异
 
-| 维度 | NemoClaw | HiClaw |
+| 维度 | NemoClaw | AgentTeams |
 |------|----------|--------|
 | 核心定位 | Agent 运行时安全沙箱 | 多 Agent 协作编排底座 |
 | 解决的问题 | 如何安全地运行单个 Agent | 如何让多个 Agent 组成团队协作 |
@@ -454,10 +446,10 @@ OpenShell Runtime
 
 NemoClaw 的核心价值在于安全隔离：Landlock 文件系统隔离、seccomp 系统调用过滤、网络命名空间隔离、凭证路由（Agent 不接触真实 API Key）。每个 Sandbox 是一个独立的安全域，运行一个 Agent 实例。
 
-**HiClaw 架构：**
+**AgentTeams 架构：**
 
 ```
-HiClaw Controller (Reconcile Loop)
+AgentTeams Controller (Reconcile Loop)
     ↓ 声明式编排
 ┌─────────────────────────────────────────────────┐
 │  通信层 (Matrix Protocol)                        │
@@ -477,7 +469,7 @@ HiClaw Controller (Reconcile Loop)
 
 ### 5.3 能力矩阵
 
-| 能力 | NemoClaw | HiClaw |
+| 能力 | NemoClaw | AgentTeams |
 |------|----------|--------|
 | Agent 生命周期管理 | ✅ Sandbox create/destroy/recover | ✅ Controller Reconcile + 自动容器管理 |
 | 安全沙箱隔离 | ✅ Landlock + seccomp + netns | ⚠️ Docker 容器隔离（可对接 NemoClaw 增强） |
@@ -497,11 +489,11 @@ HiClaw Controller (Reconcile Loop)
 
 ### 5.4 互补关系与未来集成
 
-NemoClaw 和 HiClaw 不是竞争关系，而是互补关系——它们解决的是 Agent 生态中不同层次的问题：
+NemoClaw 和 AgentTeams 不是竞争关系，而是互补关系——它们解决的是 Agent 生态中不同层次的问题：
 
 ```
 ┌─────────────────────────────────────────────┐
-│  HiClaw（协作编排层）                         │
+│  AgentTeams（协作编排层）                         │
 │  组织结构 / 通信权限 / 任务委派 / 共享状态      │
 ├─────────────────────────────────────────────┤
 │  NemoClaw（安全运行时层）                      │
@@ -512,9 +504,9 @@ NemoClaw 和 HiClaw 不是竞争关系，而是互补关系——它们解决的
 └─────────────────────────────────────────────┘
 ```
 
-HiClaw 的 Worker Backend 抽象层设计使其可以对接不同的底层运行基础设施。未来 HiClaw 可以支持 NemoClaw 作为 Worker 的底层运行时，将 NemoClaw 的安全沙箱能力与 HiClaw 的协作编排能力结合：
+AgentTeams 的 Worker Backend 抽象层设计使其可以对接不同的底层运行基础设施。未来 AgentTeams 可以支持 NemoClaw 作为 Worker 的底层运行时，将 NemoClaw 的安全沙箱能力与 AgentTeams 的协作编排能力结合：
 
-- HiClaw 负责：团队组织、通信编排、任务委派、共享状态
+- AgentTeams 负责：团队组织、通信编排、任务委派、共享状态
 - NemoClaw 负责：每个 Worker 的沙箱隔离、推理路由、网络策略
 
 这类似于 Kubernetes 通过 CRI 接口对接不同的容器运行时（containerd、CRI-O）——编排层不关心底层运行时的具体实现，只关心工作负载的声明式管理。
@@ -533,13 +525,13 @@ HiClaw 的 Worker Backend 抽象层设计使其可以对接不同的底层运行
 | 技能生态 | skills.sh | 80,000+ 社区技能 |
 | MCP 集成 | mcporter | 通过 Gateway 安全调用 MCP Server |
 
-值得注意的是，HiClaw 的 AI Gateway 组件 Higress 是 **CNCF Sandbox 项目**，MCP Server 托管和 Consumer 鉴权能力由 Higress 原生提供。两个项目的结合体现了云原生生态在 AI Agent 领域的延伸——Higress 解决 Agent 的安全访问问题，HiClaw 解决 Agent 的协作编排问题。
+值得注意的是，AgentTeams 的 AI Gateway 组件 Higress 是 **CNCF Sandbox 项目**，MCP Server 托管和 Consumer 鉴权能力由 Higress 原生提供。两个项目的结合体现了云原生生态在 AI Agent 领域的延伸——Higress 解决 Agent 的安全访问问题，AgentTeams 解决 Agent 的协作编排问题。
 
 ## 7. 与 Kubernetes 的设计对应关系
 
-HiClaw 的设计深受 Kubernetes 影响，以下是核心概念的对应关系：
+AgentTeams 的设计深受 Kubernetes 影响，以下是核心概念的对应关系：
 
-| Kubernetes 概念 | HiClaw 对应 | 说明 |
+| Kubernetes 概念 | AgentTeams 对应 | 说明 |
 |----------------|------------|------|
 | Pod | Worker | 最小调度单元，无状态，可销毁重建 |
 | Deployment | Team | 管理一组 Worker 的期望状态 |
@@ -547,10 +539,10 @@ HiClaw 的设计深受 Kubernetes 影响，以下是核心概念的对应关系�
 | ServiceAccount + RBAC | Consumer Token + allowedConsumers | 身份认证与细粒度权限控制 |
 | CRD | Worker/Team/Human/Manager | 声明式资源定义 |
 | CR 短名（kubectl） | `wk` / `tm` / `hm` / `mgr` | 安装 CRD 后可用的资源别名 |
-| Controller + Reconcile Loop | hiclaw-controller | 持续将实际状态收敛到期望状态 |
-| kubectl apply | hiclaw apply | 声明式资源管理 CLI（`-f` 为多文档顺序 apply） |
+| Controller + Reconcile Loop | agentteams-controller | 持续将实际状态收敛到期望状态 |
+| kubectl apply | agt apply | 声明式资源管理 CLI（`-f` 为多文档顺序 apply） |
 
-这种设计使得熟悉 Kubernetes 的工程师可以零学习成本理解 HiClaw 的架构和运维模型。
+这种设计使得熟悉 Kubernetes 的工程师可以零学习成本理解 AgentTeams 的架构和运维模型。
 
 ## 8. 部署模式
 
@@ -560,19 +552,19 @@ HiClaw 的设计深受 Kubernetes 影响，以下是核心概念的对应关系�
 
 ```bash
 # 一键安装，包含所有基础设施
-bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
-最低要求：2 CPU + 4 GB RAM + Docker。你会得到 **`hiclaw-controller`**（基础设施 + controller）以及独立的 **`hiclaw-manager`**；创建 Worker 后会出现更多容器。
+最低要求：2 CPU + 4 GB RAM + Docker。你会得到 **`agentteams-controller`**（基础设施 + controller）以及独立的 **`agentteams-manager`**；创建 Worker 后会出现更多容器。
 
 ### 8.2 In-cluster / Helm 模式（企业级 / 云上部署）
 
 ```bash
-# 在克隆下来的仓库根目录执行（Chart 位于 helm/hiclaw）
-helm install hiclaw ./helm/hiclaw
+# 在克隆下来的仓库根目录执行（Chart 位于 helm/agentteams）
+helm install agentteams ./helm/agentteams
 ```
 
-也可在配置好 Helm 仓库后使用发布的 chart 包。Chart 按 `values.yaml` 编排 **hiclaw-controller**、网关、Homeserver、存储等；Manager 与 Worker Pod 的 API 与 Embedded 安装一致。
+也可在配置好 Helm 仓库后使用发布的 chart 包。Chart 按 `values.yaml` 编排 **agentteams-controller**、网关、Homeserver、存储等；Manager 与 Worker Pod 的 API 与 Embedded 安装一致。
 
 ## 9. 项目状态与路线图
 
@@ -583,6 +575,6 @@ helm install hiclaw ./helm/hiclaw
 
 ## 10. 社区与贡献
 
-- GitHub: https://github.com/higress-group/hiclaw
+- GitHub: https://github.com/agentscope-ai/AgentTeams
 - Discord: https://discord.gg/NVjNA4BAVw
 - License: Apache 2.0

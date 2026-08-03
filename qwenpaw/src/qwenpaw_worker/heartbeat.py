@@ -117,14 +117,12 @@ class ControllerHeartbeatReporter:
     worker_name: str
     controller_url: str = ""
     token: str = ""
-    cluster_id: str = ""
 
     @classmethod
     def from_env(cls, worker_name: str) -> "ControllerHeartbeatReporter":
         return cls(
             worker_name=worker_name,
             controller_url=os.getenv("AGENTTEAMS_CONTROLLER_URL", "").rstrip("/"),
-            cluster_id=os.getenv("AGENTTEAMS_CLUSTER_ID", ""),
         )
 
     def enabled(self) -> bool:
@@ -134,7 +132,8 @@ class ControllerHeartbeatReporter:
         return self._post("ready", last_active_at)
 
     def report_heartbeat(self, last_active_at: str | None = None) -> bool:
-        return self._post("heartbeat", last_active_at)
+        # The controller uses repeated ready reports as worker heartbeats.
+        return self._post("ready", last_active_at)
 
     def _post(self, action: str, last_active_at: str | None) -> bool:
         if not self.enabled():
@@ -148,10 +147,6 @@ class ControllerHeartbeatReporter:
         token = self.token or _discover_auth_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        auth_cluster_id = _auth_cluster_id(self.cluster_id)
-        if auth_cluster_id:
-            headers["X-AgentTeams-Cluster-ID"] = auth_cluster_id
-
         try:
             request = urllib.request.Request(
                 self.controller_url + path,
@@ -252,7 +247,3 @@ def _discover_auth_token() -> str:
         except OSError:
             return ""
     return ""
-
-
-def _auth_cluster_id(cluster_id: str) -> str:
-    return cluster_id

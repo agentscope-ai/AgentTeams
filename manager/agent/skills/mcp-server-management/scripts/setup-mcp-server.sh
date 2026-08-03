@@ -33,11 +33,11 @@
 #
 # Prerequisites:
 #   - HIGRESS_COOKIE_FILE env var (session cookie for Higress Console)
-#   - HICLAW_AI_GATEWAY_DOMAIN env var
+#   - AGENTTEAMS_AI_GATEWAY_DOMAIN env var
 #   - Higress Console running at http://127.0.0.1:8001
 
 set -euo pipefail
-source /opt/hiclaw/scripts/lib/hiclaw-env.sh
+source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Parse arguments
@@ -80,12 +80,12 @@ if [ -z "${SERVER_NAME}" ] || [ -z "${CREDENTIAL_VALUE}" ]; then
 fi
 
 MCP_SERVER_NAME="mcp-${SERVER_NAME}"
-REFERENCES_DIR="/opt/hiclaw/agent/skills/mcp-server-management/references"
+REFERENCES_DIR="/opt/agentteams/agent/skills/mcp-server-management/references"
 BUILTIN_YAML="${REFERENCES_DIR}/mcp-${SERVER_NAME}.yaml"
 
 # Cloud mode: MCP Server management via script is not yet supported
-if [ "${HICLAW_RUNTIME:-}" = "aliyun" ]; then
-    log "ERROR: MCP Server management via this script is not yet supported in cloud mode (HICLAW_RUNTIME=aliyun)."
+if [ "${AGENTTEAMS_RUNTIME:-}" = "aliyun" ]; then
+    log "ERROR: MCP Server management via this script is not yet supported in cloud mode (AGENTTEAMS_RUNTIME=aliyun)."
     log "Please manage MCP Servers through the Alibaba Cloud AI Gateway console instead."
     log "Cloud MCP Server support will be added in a future release."
     exit 1
@@ -119,7 +119,7 @@ else
     exit 1
 fi
 
-AI_GATEWAY_DOMAIN="${HICLAW_AI_GATEWAY_DOMAIN:-aigw-local.hiclaw.io}"
+AI_GATEWAY_DOMAIN="${AGENTTEAMS_AI_GATEWAY_DOMAIN:-aigw-local.agentteams.io}"
 CONSOLE_URL="http://127.0.0.1:8001"
 
 # Unified credential key — all YAML configs use accessToken in server.config
@@ -290,7 +290,7 @@ fi
 # Symlink at ~/mcporter-servers.json for backward compatibility
 # ============================================================
 log "Step 4: Updating Manager mcporter config..."
-MANAGER_KEY="${HICLAW_MANAGER_GATEWAY_KEY:-}"
+MANAGER_KEY="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
 MANAGER_MCPORTER_DIR="${HOME}/config"
 MANAGER_MCPORTER="${MANAGER_MCPORTER_DIR}/mcporter.json"
 MANAGER_MCPORTER_COMPAT="${HOME}/mcporter-servers.json"
@@ -316,17 +316,15 @@ if [ -n "${MANAGER_KEY}" ]; then
     ln -sfn "${MANAGER_MCPORTER}" "${MANAGER_MCPORTER_COMPAT}"
     log "  Manager config/mcporter.json updated"
 else
-    log "  WARNING: HICLAW_MANAGER_GATEWAY_KEY not set, skipping Manager mcporter update"
+    log "  WARNING: AGENTTEAMS_MANAGER_GATEWAY_KEY not set, skipping Manager mcporter update"
 fi
 
 # ============================================================
 # Step 5: Authorize existing Workers and update their configs
 # ============================================================
 log "Step 5: Authorizing existing Workers for ${MCP_SERVER_NAME}..."
-REGISTRY_FILE="${HOME}/workers-registry.json"
-if [ -f "${REGISTRY_FILE}" ]; then
-    CONSUMER_LIST='["manager"'
-    WORKER_NAMES=$(jq -r '.workers | keys[]' "${REGISTRY_FILE}" 2>/dev/null || true)
+CONSUMER_LIST='["manager"'
+WORKER_NAMES=$(agt get workers -o json 2>/dev/null | jq -r '.workers[].name' || true)
     for wname in ${WORKER_NAMES}; do
         CONSUMER_LIST="${CONSUMER_LIST},\"worker-${wname}\""
     done
@@ -336,7 +334,7 @@ if [ -f "${REGISTRY_FILE}" ]; then
         '{"mcpServerName":"'"${MCP_SERVER_NAME}"'","consumers":'"${CONSUMER_LIST}"'}'
 
     for wname in ${WORKER_NAMES}; do
-        WORKER_AGENT_DIR="/root/hiclaw-fs/agents/${wname}"
+        WORKER_AGENT_DIR="/root/agentteams-fs/agents/${wname}"
         MCPORTER_DIR="${WORKER_AGENT_DIR}/config"
         MCPORTER_FILE="${MCPORTER_DIR}/mcporter.json"
         MCPORTER_COMPAT="${WORKER_AGENT_DIR}/mcporter-servers.json"
@@ -380,13 +378,10 @@ if [ -f "${REGISTRY_FILE}" ]; then
         ln -sfn "${MCPORTER_FILE}" "${MCPORTER_COMPAT}"
         # Push to MinIO immediately (don't rely on mc mirror --watch)
         ensure_mc_credentials 2>/dev/null || true
-        mc cp "${MCPORTER_FILE}" "${HICLAW_STORAGE_PREFIX}/agents/${wname}/config/mcporter.json" 2>/dev/null \
+        mc cp "${MCPORTER_FILE}" "${AGENTTEAMS_STORAGE_PREFIX}/agents/${wname}/config/mcporter.json" 2>/dev/null \
             && log "  Pushed config/mcporter.json to MinIO for ${wname}" \
             || log "  WARNING: Failed to push config/mcporter.json to MinIO for ${wname}"
     done
-else
-    log "  No workers-registry.json found, skipping Worker authorization"
-fi
 
 log "${MCP_SERVER_NAME} setup complete"
 log "NOTE: The auth plugin needs ~10s to activate."

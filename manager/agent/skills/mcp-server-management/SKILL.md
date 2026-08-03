@@ -9,7 +9,7 @@ MCP Servers expose REST APIs as tools on the Higress AI Gateway, or proxy existi
 
 ## Gotchas
 
-- **Cloud mode (`HICLAW_RUNTIME=aliyun`) does not support script-based MCP management** — direct admin to the Alibaba Cloud AI Gateway console instead
+- **Cloud mode (`AGENTTEAMS_RUNTIME=aliyun`) does not support script-based MCP management** — direct admin to the Alibaba Cloud AI Gateway console instead
 - **Auth plugin takes ~10s to activate** after server creation/update — always wait and verify with mcporter before notifying Workers
 - **Always verify end-to-end before notifying Workers** — call at least one tool via mcporter to confirm connectivity. Do not push broken tools
 - **Never echo credentials in chat messages** — credentials are stored only in Higress config, Workers access via gateway proxy

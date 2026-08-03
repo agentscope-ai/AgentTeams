@@ -1,4 +1,4 @@
-"""OpenClaw-compatible message tool for the HiClaw CoPaw runtime."""
+"""OpenClaw-compatible message tool for the AgentTeams CoPaw runtime."""
 
 from __future__ import annotations
 
@@ -16,8 +16,10 @@ from typing import Any, Literal
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import ToolResponse
 from copaw_worker.hooks.message_filter import (
+    canonicalize_team_worker_mentions,
     extract_matrix_mentions,
     filter_outgoing_matrix_message,
+    resolve_team_leader_assignment_room,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,9 +94,14 @@ def parse_matrix_target(target: str) -> MatrixTarget:
     )
 
 
-def validate_matrix_message_policy(text: str, mentions: list[str]) -> str:
+def validate_matrix_message_policy(
+    text: str,
+    mentions: list[str],
+    *,
+    room_id: str | None = None,
+) -> str:
     """Filter outgoing messages and return the sanitized text."""
-    result = filter_outgoing_matrix_message(text, mentions)
+    result = filter_outgoing_matrix_message(text, mentions, room_id=room_id)
     if result.suppressed:
         raise MessageToolError(result.suppress_reason or "message suppressed")
     return result.text
@@ -223,11 +230,19 @@ def _sanitize_session_filename(name: str) -> str:
 
 
 def _resolve_copaw_working_dir() -> Path:
-    configured = os.environ.get("COPAW_WORKING_DIR")
+    configured = (
+        os.environ.get("QWENPAW_WORKING_DIR")
+        or os.environ.get("COPAW_WORKING_DIR")
+    )
     if configured:
         return Path(configured).expanduser().resolve()
 
-    from copaw.constant import WORKING_DIR
+    # copaw is the legacy name for qwenpaw; the package was renamed.
+    # In the qwenpaw 2.0 venv only the new name exists.
+    try:
+        from qwenpaw.constant import WORKING_DIR
+    except ImportError:
+        from copaw.constant import WORKING_DIR
 
     return Path(WORKING_DIR).expanduser().resolve()
 
@@ -332,11 +347,24 @@ async def _record_matrix_outbound_to_session(
 
 
 def _matrix_config_for_agent(account_id: str) -> tuple[str, str, str]:
-    from copaw.config.config import load_agent_config
+    # Read agent.json directly to avoid a hard dependency on
+    # copaw.config.config, which is unavailable in the QwenPaw 2.0 venv.
+    # bridge.py writes homeserver/access_token/user_id into
+    # workspaces/<id>/agent.json regardless of runtime.
+    working_dir = _resolve_copaw_working_dir()
+    agent_json = (
+        working_dir / "workspaces" / (account_id or "default") / "agent.json"
+    )
+    try:
+        with open(agent_json, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise MessageToolError(
+            f"cannot read agent config at {agent_json}: {exc}",
+        )
 
-    agent_config = load_agent_config(account_id or "default")
-    channels = _read_config_value(agent_config, "channels") or {}
-    matrix_cfg = _read_config_value(channels, "matrix") or {}
+    channels = data.get("channels") or {}
+    matrix_cfg = channels.get("matrix") or {}
 
     homeserver = _read_config_value(matrix_cfg, "homeserver") or ""
     access_token = _read_config_value(matrix_cfg, "access_token", "accessToken") or ""
@@ -358,22 +386,39 @@ def _matrix_config_for_agent(account_id: str) -> tuple[str, str, str]:
     return str(homeserver), str(access_token), str(user_id)
 
 
+def _normalize_room_id(room_id: str) -> str:
+    """Strip a ``room:`` prefix at the Matrix API boundary.
+
+    Matrix-nio's ``joined_members``/``room_send`` require the raw
+    ``!room:domain`` ID. Callers may pass the documented
+    ``room:!room:domain`` target form; normalize here so every nio call
+    uses the raw form.
+    """
+    text = (room_id or "").strip()
+    if text.startswith("room:"):
+        return text[len("room:") :].strip()
+    return text
+
+
 async def _send_matrix_room_message(
     *,
     room_id: str,
     content: dict[str, Any],
     account_id: str,
+    txn_id: str | None = None,
 ) -> str | None:
     from nio import AsyncClient
 
+    matrix_room_id = _normalize_room_id(room_id)
     homeserver, access_token, user_id = _matrix_config_for_agent(account_id)
     client = AsyncClient(homeserver, user=user_id)
     client.access_token = access_token
     try:
         response = await client.room_send(
-            room_id,
+            matrix_room_id,
             "m.room.message",
             content,
+            tx_id=txn_id,
             ignore_unverified_devices=True,
         )
         event_id = getattr(response, "event_id", None)
@@ -407,7 +452,11 @@ async def message(
         filtered_message = validate_matrix_message_policy(
             message,
             extract_matrix_mentions(message),
+            room_id=(
+                parsed_target.identifier if parsed_target.kind == "room" else None
+            ),
         )
+        filtered_message = canonicalize_team_worker_mentions(filtered_message)
         mentions = extract_matrix_mentions(filtered_message)
         content = build_matrix_text_content(filtered_message, mentions)
 
@@ -416,11 +465,23 @@ async def message(
                 "user targets are not supported yet; use a room target",
             )
 
+        room_id = resolve_team_leader_assignment_room(
+            filtered_message,
+            parsed_target.identifier,
+        )
+        if room_id != parsed_target.identifier:
+            logger.info(
+                "message tool: rerouting team assignment from Leader DM %s "
+                "to Team Room %s",
+                parsed_target.identifier,
+                room_id,
+            )
+
         result: dict[str, Any] = {
             "channel": "matrix",
             "target": target,
             "targetKind": parsed_target.kind,
-            "roomId": parsed_target.identifier,
+            "roomId": room_id,
             "mentions": mentions,
         }
 
@@ -428,7 +489,7 @@ async def message(
             return _ok(dryRun=True, content=content, **result)
 
         event_id = await _send_matrix_room_message(
-            room_id=parsed_target.identifier,
+            room_id=room_id,
             content=content,
             account_id=accountId or "default",
         )
@@ -436,7 +497,7 @@ async def message(
         warning = None
         try:
             session_recorded = await _record_matrix_outbound_to_session(
-                room_id=parsed_target.identifier,
+                room_id=room_id,
                 text=filtered_message,
                 message_id=event_id,
                 account_id=accountId or "default",

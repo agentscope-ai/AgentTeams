@@ -132,8 +132,8 @@ def test_create_installs_worker_agent_json_from_template():
 
 def test_create_installs_manager_agent_json_from_template(monkeypatch):
     """Manager profile seeds agent.json from agent.manager.json."""
-    monkeypatch.setenv("HICLAW_MATRIX_DOMAIN", "matrix.example.org")
-    monkeypatch.setenv("HICLAW_WORKER_NAME", "manager")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DOMAIN", "matrix.example.org")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "manager")
 
     agent = _bridge_and_read_agent(_make_openclaw_cfg(), profile="manager")
 
@@ -387,14 +387,14 @@ def test_deep_merge_groups_preserves_user_override():
 def test_worker_user_id_from_openclaw():
     """Worker carries userId in openclaw.json — bridge writes it verbatim."""
     cfg = _make_openclaw_cfg()
-    cfg["channels"]["matrix"]["userId"] = "@dmd:matrix-local.hiclaw.io:18080"
+    cfg["channels"]["matrix"]["userId"] = "@dmd:matrix-local.agentteams.io:18080"
 
     agent = _bridge_and_read_agent(cfg)
-    assert agent["channels"]["matrix"]["user_id"] == "@dmd:matrix-local.hiclaw.io:18080"
+    assert agent["channels"]["matrix"]["user_id"] == "@dmd:matrix-local.agentteams.io:18080"
 
 
 def test_manager_user_id_from_openclaw_wins_over_env(monkeypatch):
-    monkeypatch.setenv("HICLAW_MATRIX_DOMAIN", "other.example.org")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DOMAIN", "other.example.org")
     cfg = _make_openclaw_cfg()
     cfg["channels"]["matrix"]["userId"] = "@explicit:explicit.example.org"
 
@@ -407,7 +407,7 @@ def test_manager_user_id_from_openclaw_wins_over_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_manager_template_heartbeat_wins_over_openclaw_seed(monkeypatch):
-    monkeypatch.setenv("HICLAW_MATRIX_DOMAIN", "matrix.example.org")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_DOMAIN", "matrix.example.org")
 
     cfg = _make_openclaw_cfg()
     cfg["agents"]["defaults"]["heartbeat"] = {
@@ -461,17 +461,6 @@ def test_bridge_rejects_unknown_profile():
         working_dir = Path(tmpdir) / "agent"
         with pytest.raises(ValueError, match="unknown bridge profile"):
             bridge_controller_to_copaw(_make_openclaw_cfg(), working_dir, profile="leader")
-
-
-def test_bridge_openclaw_to_copaw_alias_still_works():
-    """Deprecated alias must still dispatch to the new entry point."""
-    from copaw_worker.bridge import bridge_openclaw_to_copaw
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        working_dir = Path(tmpdir) / "agent"
-        bridge_openclaw_to_copaw(_make_openclaw_cfg(), working_dir)
-        assert _agent_json_path(working_dir).exists()
-        assert (working_dir / "config.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +556,7 @@ def test_sync_skills_to_runtime_exposes_standard_skills_via_symlink(tmp_path):
 
 
 def test_sync_skills_to_runtime_reenables_projected_manifest_entries(tmp_path):
-    """HiClaw-projected skills are enabled even after CoPaw reconciled them off."""
+    """AgentTeams-projected skills are enabled even after CoPaw reconciled them off."""
     standard_dir = tmp_path / "standard"
     runtime_dir = standard_dir / ".copaw"
     src_skill = standard_dir / "skills" / "github"
@@ -691,3 +680,77 @@ def test_bridge_standard_to_runtime_materializes_prompts_mcporter_and_skills(tmp
     assert (workspace_dir / "skills" / "task-management" / "SKILL.md").read_text() == "Use task tools."
     assert (workspace_dir / "agent.json").exists()
     assert (runtime_dir / "providers.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Controller → bridge regression: model input capability propagation
+# ---------------------------------------------------------------------------
+
+def _make_openclaw_cfg_with_input(models_input_map: dict[str, list[str]]):
+    """Build an openclaw config where each model carries an ``input`` list.
+
+    ``models_input_map`` maps model_id → input modalities, e.g.
+    ``{"vision-model": ["text", "image"], "text-model": ["text"]}``.
+    """
+    model_list = [
+        {"id": mid, "input": modalities}
+        for mid, modalities in models_input_map.items()
+    ]
+    return {
+        "channels": {"matrix": {"enabled": True}},
+        "models": {
+            "providers": {
+                "gw": {
+                    "baseUrl": "http://aigw:8080/v1",
+                    "apiKey": "key123",
+                    "models": model_list,
+                }
+            }
+        },
+        "agents": {"defaults": {"model": {"primary": f"gw/{model_list[0]['id']}"}}},
+    }
+
+
+def _run_bridge_and_read_providers(cfg):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        working_dir = Path(tmpdir) / "agent"
+        _run_bridge(cfg, working_dir)
+        with open(working_dir / "providers.json") as f:
+            return json.load(f)
+
+
+def test_providers_json_propagates_input_capability():
+    """Controller model ``input`` must reach providers.json as capability flags."""
+    cfg = _make_openclaw_cfg_with_input({
+        "vision-model": ["text", "image"],
+        "video-model": ["text", "video"],
+        "text-model": ["text"],
+    })
+    providers = _run_bridge_and_read_providers(cfg)
+    models = providers["custom_providers"]["gw"]["models"]
+    by_id = {m["id"]: m for m in models}
+
+    vision = by_id["vision-model"]
+    assert vision["supports_image"] is True
+    assert vision["supports_video"] is False
+    assert vision["supports_multimodal"] is True
+
+    video = by_id["video-model"]
+    assert video["supports_image"] is False
+    assert video["supports_video"] is True
+    assert video["supports_multimodal"] is True
+
+    text = by_id["text-model"]
+    assert text["supports_image"] is False
+    assert text["supports_video"] is False
+    assert text["supports_multimodal"] is False
+
+
+def test_providers_json_no_input_field_no_capability_flags():
+    """Models without ``input`` keep plain {id, name} — backward compat."""
+    cfg = _make_openclaw_cfg_with_input({"plain-model": []})
+    # Remove the empty input list to simulate old openclaw.json
+    cfg["models"]["providers"]["gw"]["models"][0].pop("input", None)
+    providers = _run_bridge_and_read_providers(cfg)
+    model = providers["custom_providers"]["gw"]["models"][0]
+    assert model == {"id": "plain-model", "name": "plain-model"}

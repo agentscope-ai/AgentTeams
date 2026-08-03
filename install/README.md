@@ -1,6 +1,6 @@
-# HiClaw Installation
+# AgentTeams Installation
 
-One-click installation script for HiClaw Manager and Worker Agents.
+One-click installation script for AgentTeams Manager and Worker Agents.
 
 ## Requirements
 
@@ -12,13 +12,13 @@ One-click installation script for HiClaw Manager and Worker Agents.
 ### macOS / Linux
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/HiClaw/main/install/hiclaw-install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
 ### Windows (PowerShell 7+)
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://higress.ai/hiclaw/install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
 ## Installation Modes
@@ -43,22 +43,22 @@ Customize each option:
 
 **macOS / Linux:**
 ```bash
-./hiclaw-install.sh manager
+./agentteams-install.sh manager
 # or simply
-./hiclaw-install.sh
+./agentteams-install.sh
 ```
 
 **Windows:**
 ```powershell
-.\hiclaw-install.ps1 manager
+.\agentteams-install.ps1 manager
 # or simply
-.\hiclaw-install.ps1
+.\agentteams-install.ps1
 ```
 
 Interactive prompts will ask for:
 - LLM Provider and API Key
 - Admin credentials
-- Domain names (optional, defaults to `*-local.hiclaw.io`)
+- Domain names (optional, defaults to `*-local.agentteams.io`)
 - GitHub PAT (optional)
 
 ### Install Worker
@@ -67,18 +67,18 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./hiclaw-install.sh worker \
+./agentteams-install.sh worker \
   --name alice \
-  --fs http://fs-local.hiclaw.io:18080 \
+  --fs http://fs-local.agentteams.io:18080 \
   --fs-key <ACCESS_KEY> \
   --fs-secret <SECRET_KEY>
 ```
 
 **Windows:**
 ```powershell
-.\hiclaw-install.ps1 worker `
+.\agentteams-install.ps1 worker `
   -Name alice `
-  -Fs http://fs-local.hiclaw.io:18080 `
+  -Fs http://fs-local.agentteams.io:18080 `
   -FsKey <ACCESS_KEY> `
   -FsSecret <SECRET_KEY>
 ```
@@ -87,17 +87,17 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./hiclaw-install.sh worker --reset --name alice \
-  --fs http://fs-local.hiclaw.io:18080 \
+./agentteams-install.sh worker --reset --name alice \
+  --fs http://fs-local.agentteams.io:18080 \
   --fs-key <ACCESS_KEY> \
   --fs-secret <SECRET_KEY>
 ```
 
 **Windows:**
 ```powershell
-.\hiclaw-install.ps1 worker -Reset `
+.\agentteams-install.ps1 worker -Reset `
   -Name alice `
-  -Fs http://fs-local.hiclaw.io:18080 `
+  -Fs http://fs-local.agentteams.io:18080 `
   -FsKey <ACCESS_KEY> `
   -FsSecret <SECRET_KEY>
 ```
@@ -106,12 +106,12 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./hiclaw-install.sh uninstall
+./agentteams-install.sh uninstall
 ```
 
 **Windows:**
 ```powershell
-.\hiclaw-install.ps1 uninstall
+.\agentteams-install.ps1 uninstall
 ```
 
 ## Non-Interactive Mode (Automation)
@@ -120,35 +120,35 @@ Set environment variables to skip prompts:
 
 **macOS / Linux:**
 ```bash
-export HICLAW_NON_INTERACTIVE=1
-export HICLAW_LLM_API_KEY="your-api-key"
-./hiclaw-install.sh
+export AGENTTEAMS_NON_INTERACTIVE=1
+export AGENTTEAMS_LLM_API_KEY="your-api-key"
+./agentteams-install.sh
 ```
 
 **Windows:**
 ```powershell
-$env:HICLAW_NON_INTERACTIVE = "1"
-$env:HICLAW_LLM_API_KEY = "your-api-key"
-.\hiclaw-install.ps1
+$env:AGENTTEAMS_NON_INTERACTIVE = "1"
+$env:AGENTTEAMS_LLM_API_KEY = "your-api-key"
+.\agentteams-install.ps1
 ```
 
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `HICLAW_NON_INTERACTIVE` | Skip all prompts | `0` |
-| `HICLAW_LLM_PROVIDER` | LLM provider (`qwen` or `openai-compat`) | `qwen` |
-| `HICLAW_DEFAULT_MODEL` | Default model ID | `qwen3.5-plus` |
-| `HICLAW_LLM_API_KEY` | LLM API key | *(required)* |
-| `HICLAW_ADMIN_USER` | Admin username | `admin` |
-| `HICLAW_ADMIN_PASSWORD` | Admin password | *(auto-generated)* |
-| `HICLAW_PORT_GATEWAY` | Gateway port | `18080` |
-| `HICLAW_PORT_CONSOLE` | Higress console port | `18001` |
-| `HICLAW_MATRIX_DOMAIN` | Matrix domain | `matrix-local.hiclaw.io:18080` |
-| `HICLAW_DATA_DIR` | Data directory | Docker volume |
-| `HICLAW_WORKSPACE_DIR` | Manager workspace | `~/hiclaw-manager` |
-| `HICLAW_VERSION` | Image tag | `latest` |
-| `HICLAW_REGISTRY` | Image registry | *(auto-detected by timezone)* |
+| `AGENTTEAMS_NON_INTERACTIVE` | Skip all prompts | `0` |
+| `AGENTTEAMS_LLM_PROVIDER` | LLM provider (`qwen` or `openai-compat`) | `qwen` |
+| `AGENTTEAMS_DEFAULT_MODEL` | Default model ID | `qwen3.5-plus` |
+| `AGENTTEAMS_LLM_API_KEY` | LLM API key | *(required)* |
+| `AGENTTEAMS_ADMIN_USER` | Admin username | `admin` |
+| `AGENTTEAMS_ADMIN_PASSWORD` | Admin password | *(auto-generated)* |
+| `AGENTTEAMS_PORT_GATEWAY` | Gateway port | `18080` |
+| `AGENTTEAMS_PORT_CONSOLE` | Higress console port | `18001` |
+| `AGENTTEAMS_MATRIX_DOMAIN` | Matrix domain | `matrix-local.agentteams.io:18080` |
+| `AGENTTEAMS_DATA_DIR` | Data directory | Docker volume |
+| `AGENTTEAMS_WORKSPACE_DIR` | Manager workspace | `~/agentteams-manager` |
+| `AGENTTEAMS_VERSION` | Image tag | `latest` |
+| `AGENTTEAMS_REGISTRY` | Image registry | *(auto-detected by timezone)* |
 
 ## Platform Notes
 
@@ -178,7 +178,7 @@ After successful installation:
 
 ### Mobile Access
 
-You can also access HiClaw from mobile devices using FluffyChat or Element Mobile:
+You can also access AgentTeams from mobile devices using FluffyChat or Element Mobile:
 
 1. Download FluffyChat or Element on your phone
 2. Set homeserver to: `http://<your-lan-ip>:18080`

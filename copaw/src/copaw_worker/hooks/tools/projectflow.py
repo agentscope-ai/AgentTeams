@@ -1,4 +1,4 @@
-"""CoPaw-native projectflow tool for HiClaw project/DAG execution."""
+"""CoPaw-native projectflow tool for AgentTeams project/DAG execution."""
 
 from __future__ import annotations
 
@@ -53,17 +53,22 @@ def _error(message: str, **payload: Any) -> ToolResponse:
     return _response({"ok": False, "error": message, **payload})
 
 
-def _workspace_dir() -> Path:
-    configured = os.getenv("COPAW_WORKING_DIR")
+def _working_dir() -> Path:
+    configured = os.getenv("QWENPAW_WORKING_DIR") or os.getenv("COPAW_WORKING_DIR")
     if configured:
-        return Path(configured) / "workspaces" / "default"
+        return Path(configured).expanduser().resolve()
+    # qwenpaw is the successor of copaw (renamed package).
+    # In the qwenpaw 2.0 venv the copaw package does not exist.
+    try:
+        from qwenpaw.constant import WORKING_DIR  # type: ignore[import-untyped]
+    except ImportError:
+        from copaw.constant import WORKING_DIR  # type: ignore[import-untyped]
+    return Path(WORKING_DIR).expanduser().resolve()
 
-    cwd = Path.cwd()
-    if cwd.name == "default" and cwd.parent.name == "workspaces":
-        return cwd
-    if cwd.name == ".copaw":
-        return cwd / "workspaces" / "default"
-    return cwd
+
+def _workspace_dir() -> Path:
+    wd = _working_dir()
+    return wd / "workspaces" / "default"
 
 
 def _store() -> FileSystemTaskStore:
@@ -168,7 +173,7 @@ async def _fetch_worker_runtime_status(
             "error": "worker name is empty",
         }
 
-    url = f"http://hiclaw-worker-{safe_worker}:8088/api/chats"
+    url = f"http://agentteams-worker-{safe_worker}:8088/api/chats"
 
     def _fetch() -> dict[str, Any]:
         request = urllib.request.Request(url, headers={"X-Agent-Id": "default"})
@@ -378,7 +383,7 @@ async def projectflow(
     payload: dict[str, Any] | str | None = None,
     dryRun: bool = False,
 ) -> ToolResponse:
-    """Manage HiClaw project execution plans with action-specific payload fields."""
+    """Manage AgentTeams project execution plans with action-specific payload fields."""
     payload_data: dict[str, Any] = {}
     try:
         store = _store()

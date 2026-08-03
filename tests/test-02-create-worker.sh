@@ -54,13 +54,13 @@ wait_for_session_stable 5 60
 
 # Snapshot metrics baseline before sending message (to calculate delta later)
 METRICS_BASELINE=$(snapshot_baseline)
-TEST_WORKER_RUNTIME="${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 # Send create worker request.
 #
 # Why the prompt is so explicit: worker-management/SKILL.md instructs Manager
 # to ask admin for FOUR inputs (name / runtime / SOUL / skills) before running
-# `hiclaw create worker`, and to NOT invent defaults. A vague prompt that only
+# `agt create worker`, and to NOT invent defaults. A vague prompt that only
 # names the worker is therefore a coin flip — sometimes the LLM follows
 # SKILL.md strictly and replies with a 4-question confirmation, never calling
 # the CLI, and downstream assertions (consumer / SOUL.md) silently fail. We
@@ -104,7 +104,7 @@ assert_contains_i "${REPLY}" "alice" "Reply mentions worker name 'alice'"
 # Show error logs on failure for debugging
 if ! echo "${REPLY}" | grep -qi "alice" 2>/dev/null; then
     log_info "--- Manager Agent Error Log ---"
-    exec_in_agent tail -10 /var/log/hiclaw/manager-agent-error.log 2>/dev/null || true
+    exec_in_agent tail -10 /var/log/agentteams/manager-agent-error.log 2>/dev/null || true
 fi
 
 log_section "Verify Infrastructure"
@@ -113,7 +113,7 @@ log_section "Verify Infrastructure"
 minio_setup
 ALICE_OPENCLAW=$(minio_read_file "agents/alice/openclaw.json" 2>/dev/null || echo "{}")
 MEMORY_SEARCH_MODEL=$(echo "${ALICE_OPENCLAW}" | jq -r '.agents.defaults.memorySearch.model // empty' 2>/dev/null)
-if [ -n "${HICLAW_EMBEDDING_MODEL}" ] && [ -n "${ALICE_OPENCLAW}" ] && [ "${ALICE_OPENCLAW}" != "{}" ]; then
+if [ -n "${AGENTTEAMS_EMBEDDING_MODEL}" ] && [ -n "${ALICE_OPENCLAW}" ] && [ "${ALICE_OPENCLAW}" != "{}" ]; then
     assert_not_empty "${MEMORY_SEARCH_MODEL}" "Worker openclaw.json has memorySearch.model configured"
     log_info "Worker embedding model: ${MEMORY_SEARCH_MODEL}"
 fi
@@ -126,7 +126,7 @@ ALICE_LOGIN=$(matrix_login "alice" "" 2>/dev/null || echo "{}")
 # Check Higress consumer.
 # Manager (especially copaw runtime) often replies progressively: the first
 # reply just acknowledges the request ("I'll create alice…"), and the actual
-# `hiclaw create worker` call happens in subsequent turns and can take longer
+# `agt create worker` call happens in subsequent turns and can take longer
 # under CI LLM latency. So the consumer may not exist immediately when
 # matrix_wait_for_reply returns. Poll for up to 180s before failing.
 higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null
@@ -149,7 +149,7 @@ assert_eq "0" "${ALICE_SOUL_EXISTS}" "Worker Alice SOUL.md exists in MinIO"
 ALICE_SOUL=$(minio_read_file "agents/alice/SOUL.md")
 assert_contains_i "${ALICE_SOUL}" "frontend" "Alice's SOUL.md mentions frontend"
 
-ALICE_WORKER_JSON=$(exec_in_agent hiclaw get workers alice -o json 2>/dev/null || echo "{}")
+ALICE_WORKER_JSON=$(exec_in_agent agt get workers alice -o json 2>/dev/null || echo "{}")
 ALICE_RUNTIME=$(echo "${ALICE_WORKER_JSON}" | jq -r '.runtime // empty')
 assert_eq "${TEST_WORKER_RUNTIME}" "${ALICE_RUNTIME}" \
     "Worker Alice runtime matches test matrix (got: '${ALICE_RUNTIME}', want: '${TEST_WORKER_RUNTIME}')"

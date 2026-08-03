@@ -20,14 +20,14 @@
 ### Phase 1: {phase name}
 
 - [ ] {task-id} — {task title} (assigned: @{worker}:{domain})
-  - Spec: /root/hiclaw-fs/shared/tasks/{task-id}/spec.md
-  - Result: /root/hiclaw-fs/shared/tasks/{task-id}/result.md
+  - Spec: /root/agentteams-fs/shared/tasks/{task-id}/spec.md
+  - Result: /root/agentteams-fs/shared/tasks/{task-id}/result.md
 
 ### Phase 2: {phase name}
 
 - [ ] {task-id} — {task title} (assigned: @{worker}:{domain}, depends on: {task-id})
-  - Spec: /root/hiclaw-fs/shared/tasks/{task-id}/spec.md
-  - Result: /root/hiclaw-fs/shared/tasks/{task-id}/result.md
+  - Spec: /root/agentteams-fs/shared/tasks/{task-id}/spec.md
+  - Result: /root/agentteams-fs/shared/tasks/{task-id}/result.md
   - **On REVISION_NEEDED**: return to {task-id} | reassign to @{worker}
 
 ## Change Log

@@ -11,8 +11,8 @@ source "${SCRIPT_DIR}/lib/agent-metrics.sh"
 test_setup "13-git-delegation"
 
 # Check prerequisites
-if [ -z "${HICLAW_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
-    log_info "SKIP: No GitHub token configured (set HICLAW_GITHUB_TOKEN or TEST_GITHUB_TOKEN)"
+if [ -z "${AGENTTEAMS_GITHUB_TOKEN}" ] && [ -z "${TEST_GITHUB_TOKEN}" ]; then
+    log_info "SKIP: No GitHub token configured (set AGENTTEAMS_GITHUB_TOKEN or TEST_GITHUB_TOKEN)"
     test_teardown "13-git-delegation"
     test_summary
     exit 0

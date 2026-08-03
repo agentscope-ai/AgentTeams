@@ -1,10 +1,10 @@
-# kind cluster configuration for local HiClaw development.
+# kind cluster configuration for local AgentTeams development.
 #
 # Port mappings expose services on the host:
 #   - 18080: Higress Gateway (AI Gateway / Matrix proxy / Element Web)
 #
 # Usage:
-#   kind create cluster --name hiclaw --config hack/kind-config.yaml
+#   kind create cluster --name agentteams --config hack/kind-config.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:

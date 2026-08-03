@@ -19,7 +19,13 @@ Hard rule: do not call the `message` tool to send a message back into the curren
 
 ## Task Assignment Room
 
-Send normal task assignment notifications to the team room, not to a Worker's private room. Include the assigned Worker's full Matrix ID as a visible @mention so the Worker is addressed while the assignment context stays visible to the team.
+`taskflow(delegate_task)` delivers the Worker assignment automatically: it
+publishes task files, then sends a Team Room message that visibly @mentions
+the assigned Worker's full Matrix ID and returns the Matrix `eventId`. Do
+NOT send a second assignment message after a successful `delegate_task` —
+that duplicates the assignment and can trigger the Worker twice.
+
+An assignment intent sentence is not an assignment. Do not send same-room text such as "I need to delegate this", "I will assign this to the dev worker", "now delegate the first ready node", or "the dev worker should start" as a substitute for the Team Room assignment. The Worker is notified by the `delegate_task` auto-notification that visibly @mentions the Worker's full Matrix ID and gives a concrete task to start.
 
 Use a Worker private room only for exceptional follow-up that should not be team-visible, such as sensitive clarification or direct recovery/debugging.
 
@@ -44,6 +50,8 @@ After task handling changes Project state, notifying the requester is mandatory.
 
 Do not copy team-room coordination logs into requester DM. Summarize the state.
 
+For project-shaped Team Admin requests received in Leader DM, do not send DAG plans, analysis, "let me..." progress notes, tool preambles, or other interim project narration back to Leader DM before the first Team Room assignment has been posted. While reading skills, checking organization, planning, creating the Project, or delegating the first task, your same-room Leader DM reply must be exactly `NO_REPLY`. The first visible non-`NO_REPLY` message for that request must be either the Worker assignment delivered by the `taskflow(delegate_task)` auto-notification (which sends the Team Room @mention itself), or a blocker/question to the Team Admin when assignment cannot proceed. After the Team Room assignment, send one concise requester update if needed.
+
 Use `project-management` to determine project report content and the DAG or Loop Project Status Report shape. Use this skill to decide where the report should be delivered and whether to reply directly or use the `message` tool.
 
 All human-facing message text must use the language selected by `AGENTS.md` Response Language. This includes headings, field labels, table headers, state labels, summaries, next steps, notes, and deliverable descriptions.
@@ -54,10 +62,10 @@ Matrix rendering supports headings, lists, dividers, Markdown tables, and fenced
 
 Reply directly in the current session.
 
-If the recipient must act, include their full Matrix ID as a visible @mention:
+If the recipient must act, include their full Matrix ID as a visible @mention. (For Worker task assignments this is already done by the `delegate_task` auto-notification — do not repeat it. The format below is for non-assignment follow-up such as requester updates or clarifications):
 
 ```text
-@worker:domain New task [todo-api-20260429-130052-01]: Please read shared/tasks/todo-api-20260429-130052-01/spec.md and follow your Worker task participation skills. Publish shared/tasks/todo-api-20260429-130052-01/result.md when complete, then @mention me with the outcome.
+@worker:domain Status: todo-api-20260429-130052-01 is in progress; spec published at shared/tasks/todo-api-20260429-130052-01/spec.md.
 ```
 
 Do not use the `message` tool for same-room replies.
@@ -66,14 +74,16 @@ Do not use the `message` tool for same-room replies.
 
 Use the `message` tool only when the target room is not the current room, or when the workflow must continue in a different room.
 
-Resolve the recipient Matrix ID and target room from `hiclaw` CLI immediately before sending.
+Resolve the recipient Matrix ID and target room from `agt` CLI immediately before sending.
+
+For Team work, the Worker assignment is delivered by the `taskflow(delegate_task)` auto-notification in the Team Room; do not send it again with `message`. Use the `message` tool only for explicit cross-room sends — a requester status update when the requester is in a different room than the current session:
 
 ```json
 {
   "action": "send",
   "channel": "matrix",
-  "target": "room:!roomid:matrix-local.hiclaw.io:18080",
-  "message": "@alice:matrix-local.hiclaw.io:18080 New task [todo-api-20260429-130052-01]: Please read shared/tasks/todo-api-20260429-130052-01/spec.md and follow your Worker task participation skills. Publish shared/tasks/todo-api-20260429-130052-01/result.md when complete, then @mention me with the outcome."
+  "target": "room:!roomid:matrix-local.agentteams.io:18080",
+  "message": "@alice:matrix-local.agentteams.io:18080 Task todo-api-20260429-130052-01 delegated to @worker:matrix-local.agentteams.io:18080; waiting for result."
 }
 ```
 

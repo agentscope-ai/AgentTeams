@@ -1,8 +1,8 @@
-"""HiClaw policy overlay on hermes-agent's native Matrix adapter.
+"""AgentTeams policy overlay on hermes-agent's native Matrix adapter.
 
 This module no longer reimplements Matrix transport with ``matrix-nio``.
 Instead, it subclasses hermes-agent's stock mautrix-based adapter and only
-injects the HiClaw-specific policy layer that differs from upstream:
+injects the AgentTeams-specific policy layer that differs from upstream:
 
   * outbound ``m.mentions`` enrichment for full-MXID pings
   * separate DM / group allow-lists
@@ -92,7 +92,7 @@ def _describe_dropped_media(source_content: dict, fallback_body: str) -> str:
 
 
 class MatrixAdapter(_NativeMatrixAdapter):
-    """Thin subclass that overlays HiClaw policy on hermes native Matrix."""
+    """Thin subclass that overlays AgentTeams policy on hermes native Matrix."""
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config)
@@ -110,7 +110,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         """Inject MSC3952 ``m.mentions`` into every outgoing Matrix event."""
         if self._client is None:
             return
-        if getattr(self._client, "_hiclaw_mentions_wrapped", False):
+        if getattr(self._client, "_agentteams_mentions_wrapped", False):
             return
 
         original = self._client.send_message_event
@@ -128,7 +128,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
             return await original(room_id, event_type, content, *args, **kwargs)
 
         self._client.send_message_event = types.MethodType(wrapped, self._client)
-        self._client._hiclaw_mentions_wrapped = True  # type: ignore[attr-defined]
+        self._client._agentteams_mentions_wrapped = True  # type: ignore[attr-defined]
         logger.debug("Matrix: wrapped send_message_event for outbound mentions")
 
     async def _resolve_message_context(
@@ -140,7 +140,7 @@ class MatrixAdapter(_NativeMatrixAdapter):
         source_content: dict,
         relates_to: dict,
     ) -> Optional[tuple]:
-        """Apply HiClaw allow/history policy around native mention gating."""
+        """Apply AgentTeams allow/history policy around native mention gating."""
         is_dm = await self._is_dm_room(room_id)
         if not self._dual_allow.permits(sender, is_dm=is_dm):
             return None

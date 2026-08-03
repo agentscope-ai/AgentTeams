@@ -1,1 +1,1 @@
-# copaw-worker: HiClaw Worker runtime based on CoPaw
+# copaw-worker: AgentTeams Worker runtime based on CoPaw

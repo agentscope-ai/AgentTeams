@@ -1,0 +1,201 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: teams.agentteams.io
+spec:
+  group: agentteams.io
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [workerMembers]
+              properties:
+                description:
+                  type: string
+                teamName:
+                  type: string
+                  description: Runtime/storage team identity. Defaults to metadata.name.
+                workerMembers:
+                  type: array
+                  description: >
+                    References to existing Worker CRs as team members. The Team
+                    owns membership and coordination only; each Worker CR owns
+                    its runtime configuration and lifecycle.
+                  minItems: 1
+                  maxItems: 128
+                  x-kubernetes-validations:
+                    - rule: "self.filter(m, m.role == 'team_leader').size() == 1"
+                      message: "workerMembers must contain exactly one team_leader"
+                  items:
+                    type: object
+                    required: [name, role]
+                    properties:
+                      name:
+                        type: string
+                        description: "metadata.name of the referenced Worker CR."
+                      role:
+                        type: string
+                        enum: [team_leader, worker]
+                        description: "Role within the Team. Exactly one member must be team_leader."
+                peerMentions:
+                  type: boolean
+                  description: "Whether team workers can @mention each other in group rooms (default: true)"
+                channelPolicy:
+                  type: object
+                  description: "Team-wide communication policy overrides (applied to all members)"
+                  properties:
+                    groupAllowExtra:
+                      type: array
+                      items:
+                        type: string
+                    groupDenyExtra:
+                      type: array
+                      items:
+                        type: string
+                    dmAllowExtra:
+                      type: array
+                      items:
+                        type: string
+                    dmDenyExtra:
+                      type: array
+                      items:
+                        type: string
+                heartbeatEvery:
+                  type: string
+                  description: >
+                    Configures the Team Leader agent's periodic heartbeat check interval.
+                    The TeamReconciler writes this into the leader Worker's openclaw.json
+                    and coordination context. Example: "30m". Empty disables leader heartbeat.
+                admin:
+                  type: object
+                  description: "Team-specific admin (human). Has admin authority within this team."
+                  properties:
+                    name:
+                      type: string
+                      description: "Human resource name"
+                    matrixUserId:
+                      type: string
+                      description: "Matrix user ID (e.g. @john:domain)"
+                humanMembers:
+                  type: array
+                  description: "Additional human members of this Team. In this version, role=coordinator joins the Team Room and can assign work there like the Team admin."
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: "Human name / Matrix localpart"
+                      matrixUserId:
+                        type: string
+                        description: "Matrix user ID (e.g. @john:domain)"
+                      role:
+                        type: string
+                        enum: [coordinator]
+                        description: "Human member role. coordinator can @mention the leader/workers in the Team Room; Leader DM remains limited to the Team admin and leader."
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Active, Degraded, Failed]
+                teamRoomID:
+                  type: string
+                leaderDMRoomID:
+                  type: string
+                leaderReady:
+                  type: boolean
+                readyWorkers:
+                  type: integer
+                totalWorkers:
+                  type: integer
+                message:
+                  type: string
+                members:
+                  type: array
+                  description: "Per-member state (leader + workers). Consolidates all per-member fields (observed, spec hash, roomID, matrixUserID, exposedPorts) into a single sorted-by-name slice."
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: "Referenced Worker resource name."
+                      runtimeName:
+                        type: string
+                        description: "Member runtime identity key (Matrix localpart, OSS path key). Empty falls back to name."
+                      role:
+                        type: string
+                        enum: [team_leader, worker]
+                        description: "Role of this member."
+                      roomID:
+                        type: string
+                        description: "Member's personal communication room with the Manager."
+                      matrixUserID:
+                        type: string
+                        description: "Member's Matrix MXID."
+                      specHash:
+                        type: string
+                        description: "fnv64a hash of the last fully-reconciled WorkerSpec for this member. Empty means never fully reconciled."
+                      observed:
+                        type: boolean
+                        description: "True once ReconcileMemberInfra has succeeded at least once; stays true across post-infra failures to avoid Matrix access token rotation."
+                      ready:
+                        type: boolean
+                        description: "Mirrors backend.Status Running/Ready. Aggregates into leaderReady and readyWorkers."
+                      phase:
+                        type: string
+                        enum: [Pending, Starting, Running, Updating, Stopping, Sleeping, Stopped, Failed]
+                      containerState:
+                        type: string
+                      message:
+                        type: string
+                      lastActiveAt:
+                        type: string
+                        format: date-time
+                        description: "Latest runtime-reported business activity time for this member."
+                      lastHeartbeat:
+                        type: string
+                        format: date-time
+                        description: "Latest heartbeat timestamp for this member."
+                      exposedPorts:
+                        type: array
+                        description: "Ports currently exposed via Higress for this member (workers only)."
+                        items:
+                          type: object
+                          required: [port, domain]
+                          properties:
+                            port:
+                              type: integer
+                            domain:
+                              type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Leader Ready
+          type: boolean
+          jsonPath: .status.leaderReady
+        - name: Workers
+          type: integer
+          jsonPath: .status.totalWorkers
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyWorkers
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: teams
+    singular: team
+    kind: Team
+    shortNames: [tm]

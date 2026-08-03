@@ -1,18 +1,18 @@
 # 导入 Worker 指南
 
-将预配置的 Worker 导入 HiClaw，或通过声明式 YAML 管理 Worker、Team 和 Human 用户。
+将预配置的 Worker 导入 AgentTeams，或通过声明式 YAML 管理 Worker、Team 和 Human 用户。
 
 ## 概述
 
-HiClaw 使用薄壳 + 容器内 CLI 架构来管理资源：
+AgentTeams 使用薄壳 + 容器内 CLI 架构来管理资源：
 
-- **`hiclaw-apply.sh`** —— 在宿主机上运行，将 YAML 拷贝进 **`hiclaw-manager`** 容器并在其中执行 `hiclaw apply -f …`。
-- **`hiclaw-import.sh`** —— 在宿主机上运行，处理 ZIP / 包导入，并转发给 **`hiclaw-manager`** 内的 `hiclaw` CLI。
-- **`hiclaw` CLI** —— 同时内置在 **`hiclaw-controller`**、**`hiclaw-manager`** 与 Worker 镜像中，通过 controller 的 REST API 完成 apply/get/delete/create/update。
+- **`agentteams-apply.sh`** —— 在宿主机上运行，将 YAML 拷贝进 **`agentteams-manager`** 容器并在其中执行 `agt apply -f …`。
+- **`agentteams-import.sh`** —— 在宿主机上运行，处理 ZIP / 包导入，并转发给 **`agentteams-manager`** 内的 `agt` CLI。
+- **`agt` CLI** —— 同时内置在 **`agentteams-controller`**、**`agentteams-manager`** 与 Worker 镜像中，通过 controller 的 REST API 完成 apply/get/delete/create/update。
 
 ## 声明式 YAML 管理
 
-通过 YAML 文件管理 HiClaw 资源是推荐的方式。
+通过 YAML 文件管理 AgentTeams 资源是推荐的方式。
 
 ### 创建 Worker
 
@@ -33,12 +33,12 @@ spec:
 ```
 
 ```bash
-bash hiclaw-apply.sh -f worker.yaml
+bash agentteams-apply.sh -f worker.yaml
 ```
 
 ### 创建 Team
 
-Team 由一个 Leader 和若干 Worker 组成。Leader 接收 Manager 下发的任务，并在团队内部进行协调。
+Team 引用已经存在的 Worker CR，其中必须且只能有一个引用的角色为 `team_leader`。请先创建或导入所有 Worker，再创建 Team。
 
 ```yaml
 # team.yaml
@@ -48,19 +48,17 @@ metadata:
   name: alpha-team
 spec:
   description: 全栈开发团队
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
-      skills: [github-operations]
+      role: worker
     - name: alpha-qa
-      model: claude-sonnet-4-6
+      role: worker
 ```
 
 ```bash
-bash hiclaw-apply.sh -f team.yaml
+bash agentteams-apply.sh -f team.yaml
 ```
 
 ### 添加真人用户（Human）
@@ -83,7 +81,7 @@ spec:
 ```
 
 ```bash
-bash hiclaw-apply.sh -f human.yaml
+bash agentteams-apply.sh -f human.yaml
 ```
 
 权限级别说明：
@@ -97,16 +95,29 @@ bash hiclaw-apply.sh -f human.yaml
 
 ```yaml
 apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alpha-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alpha-dev
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: alpha-team
 spec:
-  leader:
-    name: alpha-lead
-    model: claude-sonnet-4-6
-  workers:
+  workerMembers:
+    - name: alpha-lead
+      role: team_leader
     - name: alpha-dev
-      model: claude-sonnet-4-6
+      role: worker
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Human
@@ -120,24 +131,24 @@ spec:
 ```
 
 ```bash
-bash hiclaw-apply.sh -f full-setup.yaml
+bash agentteams-apply.sh -f full-setup.yaml
 ```
 
-当前 `hiclaw apply` 对 YAML 仅稳定支持 **`-f` / `--file`**。**`--prune`、`--dry-run`、`--watch` 均未实现** —— 请用 `hiclaw delete …` 显式删除，或逐个更新资源。
+当前 `agt apply` 对 YAML 仅稳定支持 **`-f` / `--file`**。**`--prune`、`--dry-run`、`--watch` 均未实现** —— 请用 `agt delete …` 显式删除，或逐个更新资源。
 
 ### 管理已有资源
 
-在 **`hiclaw-manager`** 或 **`hiclaw-controller`** 内（或通过 `docker exec`）执行：
+在 **`agentteams-manager`** 或 **`agentteams-controller`** 内（或通过 `docker exec`）执行：
 
 ```bash
 # 列出所有 worker
-docker exec hiclaw-manager hiclaw get workers
+docker exec agentteams-manager agt get workers
 
 # 查看指定 worker 的配置
-docker exec hiclaw-manager hiclaw get worker alice
+docker exec agentteams-manager agt get worker alice
 
 # 删除 worker
-docker exec hiclaw-manager hiclaw delete worker alice
+docker exec agentteams-manager agt delete worker alice
 ```
 
 ## Worker 包格式
@@ -174,7 +185,7 @@ worker-package.zip
     "suggested_name": "my-worker",
     "model": "qwen3.5-plus",
     "runtime": "openclaw",
-    "base_image": "hiclaw/worker-agent:latest",
+    "base_image": "agentteams/worker-agent:latest",
     "apt_packages": ["ffmpeg", "imagemagick"],
     "pip_packages": [],
     "npm_packages": []
@@ -182,25 +193,25 @@ worker-package.zip
 }
 ```
 
-`worker.runtime`（`openclaw`、`copaw` 或 `hermes`）会被 `hiclaw apply worker --zip` 读取，
+`worker.runtime`（`openclaw`、`copaw` 或 `hermes`）会被 `agt apply worker --zip` 读取，
 显式传入的 `--runtime` 参数优先级更高。两者都没设置时由 controller 兜底（默认 `openclaw`）。
 
 ## 场景一：迁移独立运行的 OpenClaw
 
-如果你有一个在服务器上独立运行的 OpenClaw 实例，想将其纳入 HiClaw 管理成为一个 Worker，按以下步骤操作。
+如果你有一个在服务器上独立运行的 OpenClaw 实例，想将其纳入 AgentTeams 管理成为一个 Worker，按以下步骤操作。
 
 ### 第 1 步：在源 OpenClaw 上安装迁移 Skill
 
 将 `migrate/skill/` 目录复制到 OpenClaw 的 skills 目录：
 
 ```bash
-cp -r migrate/skill/ ~/.openclaw/workspace/skills/hiclaw-migrate/
+cp -r migrate/skill/ ~/.openclaw/workspace/skills/agentteams-migrate/
 ```
 
 或者让你的 OpenClaw 安装它：
 
 ```
-安装 hiclaw-migrate skill，路径在 /path/to/hiclaw/migrate/skill/
+安装 agentteams-migrate skill，路径在 /path/to/agentteams/migrate/skill/
 ```
 
 ### 第 2 步：生成迁移包
@@ -208,46 +219,46 @@ cp -r migrate/skill/ ~/.openclaw/workspace/skills/hiclaw-migrate/
 让你的 OpenClaw 分析当前环境并生成迁移包：
 
 ```
-分析我当前的配置和环境，生成 HiClaw 迁移包。
+分析我当前的配置和环境，生成 AgentTeams 迁移包。
 ```
 
-OpenClaw 会阅读迁移 Skill 的说明，理解 HiClaw 的 Worker 架构，然后：
+OpenClaw 会阅读迁移 Skill 的说明，理解 AgentTeams 的 Worker 架构，然后：
 
 1. 运行 `analyze.sh` 扫描工具依赖（Skill 脚本、Shell 历史、Cron 任务、AGENTS.md 代码块）
-2. 智能适配你的 AGENTS.md —— 保留你的自定义角色和行为定义，移除与 HiClaw 内置 Worker 配置冲突的部分（通信协议、文件同步、任务执行规范等）
-3. 适配 SOUL.md 为 HiClaw 的 Worker 身份格式
-4. 生成基于 HiClaw Worker 基础镜像的 Dockerfile，包含所需的系统工具
+2. 智能适配你的 AGENTS.md —— 保留你的自定义角色和行为定义，移除与 AgentTeams 内置 Worker 配置冲突的部分（通信协议、文件同步、任务执行规范等）
+3. 适配 SOUL.md 为 AgentTeams 的 Worker 身份格式
+4. 生成基于 AgentTeams Worker 基础镜像的 Dockerfile，包含所需的系统工具
 5. 将所有内容打包为 ZIP 并输出文件路径
 
-这一步需要 OpenClaw AI 参与 —— 脚本本身无法智能地适配你的配置。OpenClaw 会阅读 SKILL.md 来理解 HiClaw 的规范，然后对配置内容做出保留、修改或移除的判断。
+这一步需要 OpenClaw AI 参与 —— 脚本本身无法智能地适配你的配置。OpenClaw 会阅读 SKILL.md 来理解 AgentTeams 的规范，然后对配置内容做出保留、修改或移除的判断。
 
 ### 第 3 步：审查包内容（建议）
 
 导入前建议检查生成的文件：
 
 ```bash
-unzip -l /tmp/hiclaw-migration/migration-my-worker-*.zip
+unzip -l /tmp/agentteams-migration/migration-my-worker-*.zip
 ```
 
 查看 `tool-analysis.json` 确认检测到的依赖是否正确。如有需要可以编辑 Dockerfile 增减软件包。
 
 ### 第 4 步：传输并导入
 
-将 ZIP 传输到 HiClaw Manager 宿主机，然后运行：
+将 ZIP 传输到 AgentTeams Manager 宿主机，然后运行：
 
 ```bash
-bash hiclaw-import.sh worker --name my-worker --zip migration-my-worker-20260318-100000.zip
+bash agentteams-import.sh worker --name my-worker --zip migration-my-worker-20260318-100000.zip
 ```
 
-容器内的 `hiclaw` CLI 会依次执行：
+容器内的 `agt` CLI 会依次执行：
 1. 解析 ZIP 中的 `manifest.json`
 2. 从 Dockerfile 构建自定义 Worker 镜像（如有）
 3. 注册 Matrix 账号并创建通信 Room
 4. 创建 MinIO 用户并配置权限策略
 5. 配置 Higress Gateway Consumer 和路由授权
 6. 生成 openclaw.json 并推送所有配置到 MinIO
-7. 更新 Manager 的 workers-registry.json
-8. 发送消息通知 Manager 启动 Worker 容器
+7. 创建或更新 Worker CR
+8. 由 Controller 协调 Worker 容器
 
 ### 第 5 步：验证
 
@@ -257,15 +268,15 @@ bash hiclaw-import.sh worker --name my-worker --zip migration-my-worker-20260318
 
 | 内容 | 是否迁移 | 说明 |
 |------|----------|------|
-| SOUL.md / AGENTS.md | 是 | 适配为 HiClaw 格式 |
+| SOUL.md / AGENTS.md | 是 | 适配为 AgentTeams 格式 |
 | 自定义 Skills | 是 | 放入 `skills/` 目录 |
-| Cron 定时任务 | 是 | 转换为 HiClaw 调度任务 |
+| Cron 定时任务 | 是 | 转换为 AgentTeams 调度任务 |
 | 记忆文件 | 是 | MEMORY.md 和每日笔记 |
 | 系统工具依赖 | 是 | 通过自定义 Dockerfile 安装 |
-| API 密钥 / 认证配置 | 否 | HiClaw 使用自己的 AI Gateway 凭据 |
+| API 密钥 / 认证配置 | 否 | AgentTeams 使用自己的 AI Gateway 凭据 |
 | 设备身份 | 否 | 注册时生成新身份 |
-| 会话记录 | 否 | HiClaw 中会话每日重置 |
-| Discord/Slack 渠道配置 | 否 | HiClaw 使用 Matrix |
+| 会话记录 | 否 | AgentTeams 中会话每日重置 |
+| Discord/Slack 渠道配置 | 否 | AgentTeams 使用 Matrix |
 
 ## 场景二：导入 Worker 模板
 
@@ -274,20 +285,20 @@ Worker 模板是预构建的包，定义了 Worker 的角色、技能和工具�
 ### 从本地 ZIP 导入
 
 ```bash
-bash hiclaw-import.sh worker --name devops-alice --zip devops-worker-template.zip
+bash agentteams-import.sh worker --name devops-alice --zip devops-worker-template.zip
 ```
 
 ### 从 URL 导入
 
 ```bash
-bash hiclaw-import.sh worker --name devops-alice --zip https://example.com/templates/devops-worker.zip
+bash agentteams-import.sh worker --name devops-alice --zip https://example.com/templates/devops-worker.zip
 ```
 
 ### 从远程包（Nacos）导入
 
 ```bash
-bash hiclaw-import.sh worker --name devops-alice --package nacos://host:8848/namespace/devops/v1
-bash hiclaw-import.sh worker --name devops-alice --package nacos://host:8848/namespace/devops/label:latest
+bash agentteams-import.sh worker --name devops-alice --package nacos://host:8848/namespace/devops/v1
+bash agentteams-import.sh worker --name devops-alice --package nacos://host:8848/namespace/devops/label:latest
 ```
 
 ### 不使用包，直接创建 Worker
@@ -295,7 +306,7 @@ bash hiclaw-import.sh worker --name devops-alice --package nacos://host:8848/nam
 无需 ZIP，直接指定模型和内置技能创建 Worker：
 
 ```bash
-bash hiclaw-import.sh worker --name bob --model claude-sonnet-4-6 \
+bash agentteams-import.sh worker --name bob --model claude-sonnet-4-6 \
     --skills github-operations,git-delegation \
     --mcp-servers github
 ```
@@ -303,7 +314,7 @@ bash hiclaw-import.sh worker --name bob --model claude-sonnet-4-6 \
 或通过 YAML（推荐用于可重复部署）：
 
 ```bash
-bash hiclaw-apply.sh -f worker.yaml
+bash agentteams-apply.sh -f worker.yaml
 ```
 
 ### 创建 Worker 模板
@@ -322,7 +333,7 @@ bash hiclaw-apply.sh -f worker.yaml
   },
   "worker": {
     "suggested_name": "devops-worker",
-    "base_image": "hiclaw/worker-agent:latest",
+    "base_image": "agentteams/worker-agent:latest",
     "apt_packages": [],
     "pip_packages": [],
     "npm_packages": []
@@ -361,11 +372,11 @@ zip -r devops-worker-template.zip manifest.json config/ skills/ Dockerfile
 
 ## 命令参考
 
-### hiclaw-import.sh（Bash — macOS/Linux）
+### agentteams-import.sh（Bash — macOS/Linux）
 
 ```bash
-bash hiclaw-import.sh worker --name <名称> [选项]
-bash hiclaw-import.sh -f <resource.yaml>   # 转发到 hiclaw-apply.sh（与 apply 相同约束）
+bash agentteams-import.sh worker --name <名称> [选项]
+bash agentteams-import.sh -f <resource.yaml>   # 转发到 agentteams-apply.sh（与 apply 相同约束）
 ```
 
 **Worker 导入模式：**
@@ -381,37 +392,37 @@ bash hiclaw-import.sh -f <resource.yaml>   # 转发到 hiclaw-apply.sh（与 app
 | `--runtime <运行时>` | Agent 运行时（`openclaw`\|`copaw`\|`hermes`） | `openclaw` |
 | `--yes` | 跳过交互确认（包装脚本可能在底层吞掉） | 关闭 |
 
-**YAML 模式**（`-f`）：转发给 `hiclaw-apply.sh`；不支持 `--prune`/`--dry-run`。
+**YAML 模式**（`-f`）：转发给 `agentteams-apply.sh`；不支持 `--prune`/`--dry-run`。
 
-### hiclaw-import.ps1（PowerShell — Windows）
+### agentteams-import.ps1（PowerShell — Windows）
 
 ```powershell
-.\hiclaw-import.ps1 worker -Name <名称> [-Zip <路径或URL>] [-Package <URI>] [-Model 模型] [-Skills s1,s2] [-McpServers m1,m2] [-Runtime rt] [-Yes]
-.\hiclaw-import.ps1 -File <resource.yaml>
+.\agentteams-import.ps1 worker -Name <名称> [-Zip <路径或URL>] [-Package <URI>] [-Model 模型] [-Skills s1,s2] [-McpServers m1,m2] [-Runtime rt] [-Yes]
+.\agentteams-import.ps1 -File <resource.yaml>
 ```
 
 参数与 Bash 版本一致（YAML 路径无 `-Prune`/`-DryRun`）。
 
-### hiclaw-apply.sh（Bash — macOS/Linux）
+### agentteams-apply.sh（Bash — macOS/Linux）
 
 ```bash
-bash hiclaw-apply.sh -f <resource.yaml> [-- 其余参数原样传给 hiclaw apply]
+bash agentteams-apply.sh -f <resource.yaml> [-- 其余参数原样传给 agt apply]
 ```
 
 | 选项 | 说明 | 默认值 |
 |------|------|--------|
 | `-f <路径>` | YAML 资源文件（必需） | — |
 
-安装脚本头部若仍提到 **`--prune` / `--dry-run` / `--watch`**，请以当前 **`hiclaw apply` 实现为准**（未实现上述开关），改用显式 `hiclaw delete`。
+安装脚本头部若仍提到 **`--prune` / `--dry-run` / `--watch`**，请以当前 **`agt apply` 实现为准**（未实现上述开关），改用显式 `agt delete`。
 
 ## 故障排查
 
 ### 导入脚本在 "检查 Manager 容器" 步骤失败
 
-HiClaw Manager 容器必须处于运行状态：
+AgentTeams Manager 容器必须处于运行状态：
 
 ```bash
-docker start hiclaw-manager
+docker start agentteams-manager
 ```
 
 ### 镜像构建失败
@@ -424,7 +435,7 @@ docker start hiclaw-manager
 
 ### Worker 启动但无响应
 
-1. 查看 Worker 容器日志：`docker logs hiclaw-worker-<name>`
+1. 查看 Worker 容器日志：`docker logs agentteams-worker-<name>`
 2. 在 Element Web 中确认 Worker 出现在其专属 Room 中
-3. 确认 Manager 的 `workers-registry.json` 中有正确的条目
+3. 运行 `agt get workers <name> -o json` 检查 Worker CR 状态
 4. 尝试在 Worker 的 Room 中发送 `@<worker-name>:<matrix-domain> hello`

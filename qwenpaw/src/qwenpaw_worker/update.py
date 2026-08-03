@@ -21,7 +21,9 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
+
+from qwenpaw_worker.api import QwenPawApiClient, QwenPawApiError
 
 import yaml
 
@@ -350,6 +352,10 @@ class MemberRuntimeConfig:
         )
 
     @property
+    def inline_config(self) -> Dict[str, str]:
+        return _string_fields(_section(self.desired, "inlineConfig"), ("identity", "soul", "agents"))
+
+    @property
     def model(self) -> Dict[str, Any]:
         return _section(self.desired, "model")
 
@@ -372,9 +378,10 @@ class MemberRuntimeConfig:
         return _section(self.desired, "channelPolicy")
 
     @property
-    def desired_identity(self) -> Tuple[str, str, str, str, str, str, str, str]:
+    def desired_identity(self) -> Tuple[str, str, str, str, str, str, str, str, str]:
         return (
             *self.agent_package_identity,
+            _stable_json(self.inline_config),
             _stable_json(self.model),
             _stable_json(self.mcp_servers),
             _stable_json(self.channels),
@@ -438,6 +445,7 @@ class MemberRuntimeConfig:
             or self.desired_identity != previous.desired_identity
             or self.team_context_identity != previous.team_context_identity
             or self.credential_runtime_identity != previous.credential_runtime_identity
+            or _stable_json(self.storage) != _stable_json(previous.storage)
         )
 
 
@@ -761,9 +769,6 @@ class AgentPackageManager:
             raise RuntimeError("nacos authType=sts-agentteams requires AGENTTEAMS_CONTROLLER_URL")
         bearer = self._controller_bearer_token()
         headers = {"Authorization": f"Bearer {bearer}"}
-        auth_cluster_id = self._auth_cluster_id()
-        if auth_cluster_id:
-            headers["X-AgentTeams-Cluster-ID"] = auth_cluster_id
         request = urllib.request.Request(
             f"{controller_url}/api/v1/credentials/sts",
             data=b"",
@@ -797,10 +802,6 @@ class AgentPackageManager:
             if token:
                 return token
         raise RuntimeError("nacos authType=sts-agentteams requires AGENTTEAMS_AUTH_TOKEN or AGENTTEAMS_AUTH_TOKEN_FILE")
-
-    @staticmethod
-    def _auth_cluster_id() -> str:
-        return os.getenv("AGENTTEAMS_CLUSTER_ID", "").strip()
 
     def _nacos_login(self, parsed, username: str, password: str) -> str:
         host = parsed.hostname
@@ -908,12 +909,11 @@ class AgentPackageManager:
             self._copy_config_to_workspace(config_dir)
         self._clear_missing_package_prompt_files(package_root)
 
-        self._apply_package_mcp_config(package_root, previous_root)
+        self._package_mcp_clients(package_root)
 
         skills_dir = package_root / "skills"
         if skills_dir.is_dir():
-            skill_names = self._copy_skills_to_workspace(skills_dir)
-            self._reconcile_workspace_skills(skill_names)
+            self._copy_skills_to_workspace(skills_dir)
 
     def _package_content_root(self, package_dir: Path) -> Path:
         if self._looks_like_agent_package(package_dir):
@@ -968,7 +968,6 @@ class AgentPackageManager:
         skills_dir = package_root / "skills"
         if skills_dir.is_dir():
             targets.extend(workspace_dir / "skills" / source.name for source in skills_dir.iterdir() if source.is_dir())
-            targets.append(workspace_dir / "skill.json")
 
         return self._dedupe_paths(targets)
 
@@ -976,8 +975,6 @@ class AgentPackageManager:
         if self.workspace_dir is None:
             return []
         package_root = self._package_content_root(package_dir)
-        if self._package_mcp_clients(package_root):
-            return [self.workspace_dir / "agent.json"]
         return []
 
     def _snapshot_workspace(
@@ -1116,29 +1113,6 @@ class AgentPackageManager:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("", encoding="utf-8")
 
-    def _apply_package_mcp_config(self, package_root: Path, previous_package_root: Optional[Path]) -> None:
-        current_clients = self._package_mcp_clients(package_root)
-        previous_clients = self._package_mcp_clients(previous_package_root)
-        if not current_clients and not previous_clients:
-            return
-        try:
-            from qwenpaw.config.config import MCPClientConfig, MCPConfig, load_agent_config, save_agent_config
-        except ImportError:
-            logger.info("qwenpaw package unavailable component=update step=apply_package_mcp action=skip")
-            return
-
-        agent_config = load_agent_config(DEFAULT_AGENT_ID)
-        if getattr(agent_config, "mcp", None) is None:
-            agent_config.mcp = MCPConfig()
-        clients = dict(getattr(agent_config.mcp, "clients", None) or {})
-        for name in previous_clients:
-            if name not in current_clients:
-                clients.pop(name, None)
-        for name, payload in current_clients.items():
-            clients[name] = MCPClientConfig(**payload)
-        agent_config.mcp.clients = clients
-        save_agent_config(DEFAULT_AGENT_ID, agent_config)
-
     def _package_mcp_clients(self, package_root: Optional[Path]) -> Dict[str, Dict[str, Any]]:
         if package_root is None:
             return {}
@@ -1181,6 +1155,19 @@ class AgentPackageManager:
                 clients[client_name] = self._qwenpaw_mcp_client_payload(client_name, item)
         return clients
 
+    def package_mcp_clients(self, package_dir: Optional[Path]) -> Dict[str, Dict[str, Any]]:
+        if package_dir is None:
+            return {}
+        return self._package_mcp_clients(self._package_content_root(package_dir))
+
+    def package_skill_names(self, package_dir: Optional[Path]) -> List[str]:
+        if package_dir is None:
+            return []
+        skills_dir = self._package_content_root(package_dir) / "skills"
+        if not skills_dir.is_dir():
+            return []
+        return sorted(path.name for path in skills_dir.iterdir() if path.is_dir())
+
     def _qwenpaw_mcp_client_payload(self, name: str, item: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(item)
         payload.pop("id", None)
@@ -1198,6 +1185,8 @@ class AgentPackageManager:
             payload["transport"] = payload.pop("type")
         else:
             payload.pop("type", None)
+        if _string(payload.get("transport")).lower() == "http":
+            payload["transport"] = "streamable_http"
         payload = self._expand_mcp_workspace_placeholders(payload)
         self._ensure_mcp_stdio_workspace_env(payload)
         return payload
@@ -1262,275 +1251,12 @@ class AgentPackageManager:
         elif source.is_file():
             shutil.copy2(source, target)
 
-    def _reconcile_workspace_skills(self, skill_names: Optional[List[str]] = None) -> None:
-        if self.workspace_dir is None:
-            return
-        try:
-            from qwenpaw.agents.skill_system.registry import reconcile_workspace_manifest
-        except ImportError:
-            logger.info("qwenpaw package unavailable component=update step=reconcile_workspace_skills action=skip")
-            return
-        reconcile_workspace_manifest(self.workspace_dir)
-        self._enable_workspace_skills(skill_names or [])
-
-    def _enable_workspace_skills(self, skill_names: List[str]) -> None:
-        if self.workspace_dir is None or not skill_names:
-            return
-        manifest_path = self.workspace_dir / "skill.json"
-        if not manifest_path.exists():
-            return
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            logger.warning("workspace skill manifest is invalid component=update step=enable_workspace_skills action=skip")
-            return
-        skills = manifest.setdefault("skills", {})
-        changed = False
-        for skill_name in skill_names:
-            entry = skills.get(skill_name)
-            if isinstance(entry, dict) and entry.get("enabled") is not True:
-                entry["enabled"] = True
-                changed = True
-        if changed:
-            tmp = manifest_path.with_name(f".{manifest_path.name}.tmp")
-            tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(manifest_path)
-
-
 @dataclass(frozen=True)
 class ApplyResult:
     runtime_config: MemberRuntimeConfig
     changed: bool
     agent_package_dir: Optional[Path]
 
-
-@dataclass(frozen=True)
-class _QwenPawApiResponse:
-    status: int
-    payload: Any
-    text: str
-
-
-class QwenPawModelRuntimeSync:
-    """Sync runtime model state into the running QwenPaw app."""
-
-    def __init__(
-        self,
-        port: int,
-        agent_id: str = DEFAULT_AGENT_ID,
-        timeout: float = 10.0,
-    ) -> None:
-        self.api_root = f"http://127.0.0.1:{port}/api/models"
-        self.agent_id = agent_id
-        self.timeout = timeout
-
-    def __call__(self, runtime_config: MemberRuntimeConfig) -> None:
-        self.sync(runtime_config)
-
-    def sync(self, runtime_config: MemberRuntimeConfig) -> None:
-        started_at = time.monotonic()
-        fields = self._model_fields(runtime_config)
-        if fields is None:
-            return
-        provider_id, model_name, provider_name, base_url, api_key, chat_model = fields
-        if not base_url or not api_key:
-            logger.info(
-                "runtime model sync skipped component=update step=model_runtime_sync event=skip "
-                "generation=%s provider_id=%s model=%s reason=missing_provider_config",
-                runtime_config.generation,
-                provider_id,
-                model_name,
-            )
-            return
-
-        provider_count = self._provider_count(self._request("GET", "").payload)
-        provider_info = self._configure_provider(provider_id, provider_name, base_url, api_key, chat_model)
-        if not self._provider_has_model(provider_info, model_name):
-            provider_info = self._add_model(provider_id, model_name)
-        self._set_active_model(provider_id, model_name)
-        self._verify_active_model(provider_id, model_name)
-        logger.info(
-            "runtime model sync complete component=update step=model_runtime_sync event=complete "
-            "generation=%s provider_id=%s model=%s provider_count=%s changed=%s duration_ms=%s",
-            runtime_config.generation,
-            provider_id,
-            model_name,
-            provider_count,
-            True,
-            _duration_ms(started_at),
-        )
-
-    def _model_fields(self, runtime_config: MemberRuntimeConfig) -> Optional[Tuple[str, str, str, str, str, str]]:
-        model = runtime_config.model
-        provider_id = _string(model.get("providerId") or model.get("provider_id") or model.get("provider"))
-        model_name = _string(model.get("model") or model.get("name"))
-        if not provider_id or not model_name:
-            return None
-        base_url = _string(
-            model.get("baseUrl")
-            or model.get("base_url")
-            or model.get("gatewayUrl")
-            or model.get("gateway_url")
-            or model.get("endpoint")
-            or os.getenv("AGENTTEAMS_AI_GATEWAY_URL")
-        )
-        api_key = _string(model.get("apiKey") or model.get("api_key"))
-        api_key_env = _string(
-            model.get("apiKeyEnv")
-            or model.get("api_key_env")
-            or runtime_config.credentials.get("gatewayKeyEnv")
-            or "AGENTTEAMS_WORKER_GATEWAY_KEY"
-        )
-        if not api_key and api_key_env:
-            api_key = _string(os.getenv(api_key_env))
-        return (
-            provider_id,
-            model_name,
-            _string(model.get("providerName") or model.get("provider_name") or provider_id),
-            self._openai_compatible_base_url(base_url) if base_url else "",
-            api_key,
-            _string(model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"),
-        )
-
-    def _configure_provider(
-        self,
-        provider_id: str,
-        provider_name: str,
-        base_url: str,
-        api_key: str,
-        chat_model: str,
-    ) -> Dict[str, Any]:
-        payload = {"api_key": api_key, "base_url": base_url, "chat_model": chat_model}
-        path = f"/{quote(provider_id, safe='')}/config"
-        response = self._request("PUT", path, payload, ok_statuses=(200, 404))
-        if response.status == 404:
-            self._request(
-                "POST",
-                "/custom-providers",
-                {
-                    "id": provider_id,
-                    "name": provider_name,
-                    "default_base_url": base_url,
-                    "api_key_prefix": "",
-                    "chat_model": chat_model,
-                    "models": [],
-                },
-                ok_statuses=(200, 201),
-            )
-            response = self._request("PUT", path, payload)
-        return response.payload if isinstance(response.payload, dict) else {}
-
-    def _add_model(self, provider_id: str, model_name: str) -> Dict[str, Any]:
-        response = self._request(
-            "POST",
-            f"/{quote(provider_id, safe='')}/models",
-            {"id": model_name, "name": model_name},
-            ok_statuses=(200, 201, 400, 404, 409, 422),
-        )
-        if response.status >= 400 and not self._already_exists(response.text):
-            raise RuntimeError(
-                f"qwenpaw model runtime sync request failed: POST provider model HTTP {response.status}"
-            )
-        return response.payload if isinstance(response.payload, dict) else {}
-
-    def _set_active_model(self, provider_id: str, model_name: str) -> None:
-        self._request(
-            "PUT",
-            "/active",
-            {
-                "scope": "agent",
-                "agent_id": self.agent_id,
-                "provider_id": provider_id,
-                "model": model_name,
-            },
-        )
-
-    def _verify_active_model(self, provider_id: str, model_name: str) -> None:
-        response = self._request(
-            "GET",
-            f"/active?{urlencode({'scope': 'effective', 'agent_id': self.agent_id})}",
-        )
-        payload = response.payload if isinstance(response.payload, dict) else {}
-        active = payload.get("active_llm") if isinstance(payload.get("active_llm"), dict) else {}
-        actual_provider = _string(active.get("provider_id") or active.get("providerId"))
-        actual_model = _string(active.get("model"))
-        if actual_provider != provider_id or actual_model != model_name:
-            raise RuntimeError("qwenpaw model runtime sync verification failed")
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        payload: Optional[Dict[str, Any]] = None,
-        ok_statuses: Iterable[int] = (200, 201),
-    ) -> _QwenPawApiResponse:
-        body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        headers = {"Accept": "application/json"}
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(
-            f"{self.api_root}{path}",
-            data=body,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                text = response.read().decode("utf-8", errors="replace")
-                return _QwenPawApiResponse(
-                    status=response.status,
-                    payload=self._json_payload(text, response.status),
-                    text=text,
-                )
-        except urllib.error.HTTPError as exc:
-            text = exc.read().decode("utf-8", errors="replace")
-            if exc.code in ok_statuses:
-                return _QwenPawApiResponse(
-                    status=exc.code,
-                    payload=self._json_payload(text, exc.code),
-                    text=text,
-                )
-            raise RuntimeError(
-                f"qwenpaw model runtime sync request failed: {method} {path.split('?', 1)[0]} HTTP {exc.code}"
-            ) from None
-        except urllib.error.URLError as exc:
-            raise RuntimeError(
-                f"qwenpaw model runtime sync request failed: {method} {path.split('?', 1)[0]} "
-                f"{type(exc.reason).__name__}"
-            ) from None
-
-    def _json_payload(self, text: str, status: int) -> Any:
-        if not text:
-            return {}
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as exc:
-            if status >= 400:
-                return {}
-            raise RuntimeError("qwenpaw model runtime sync request failed: invalid JSON response") from exc
-
-    def _provider_count(self, payload: Any) -> int:
-        return len(payload) if isinstance(payload, list) else 0
-
-    def _provider_has_model(self, payload: Dict[str, Any], model_name: str) -> bool:
-        for key in ("models", "extra_models"):
-            value = payload.get(key)
-            if not isinstance(value, list):
-                continue
-            for item in value:
-                if isinstance(item, dict) and _string(item.get("id")) == model_name:
-                    return True
-        return False
-
-    def _already_exists(self, text: str) -> bool:
-        lower = text.lower()
-        return "already" in lower or "exist" in lower or "duplicate" in lower
-
-    def _openai_compatible_base_url(self, base_url: str) -> str:
-        value = base_url.rstrip("/")
-        if value.endswith("/v1"):
-            return value
-        return f"{value}/v1"
 
 
 class RuntimeUpdater:
@@ -1542,14 +1268,16 @@ class RuntimeUpdater:
         adapter_apply: Optional[Callable[[], None]] = None,
         package_manager: Optional[AgentPackageManager] = None,
         runtime_config_pull: Optional[Callable[[], None]] = None,
-        model_runtime_sync: Optional[Callable[[MemberRuntimeConfig], None]] = None,
         team_context_renderer: Optional[Callable[[MemberRuntimeConfig], str]] = None,
+        api_client: Optional[QwenPawApiClient] = None,
+        runtime_reconcile: Optional[Callable[[MemberRuntimeConfig], None]] = None,
     ) -> None:
         self.config = config
         self.adapter_apply = adapter_apply
         self.runtime_config_pull = runtime_config_pull
-        self.model_runtime_sync = model_runtime_sync or QwenPawModelRuntimeSync(config.console_port)
         self.team_context_renderer = team_context_renderer
+        self.api_client = api_client
+        self.runtime_reconcile = runtime_reconcile
         self.package_manager = package_manager or AgentPackageManager(
             config.qwenpaw_working_dir / "agent-packages",
             workspace_dir=config.default_workspace_dir,
@@ -1608,6 +1336,8 @@ class RuntimeUpdater:
             _duration_ms(started_at),
         )
         self._apply_member_identity(config)
+        if self.runtime_reconcile is not None:
+            self.runtime_reconcile(config)
         self._apply_model(config)
         self._apply_mcp_servers(config)
         self._apply_matrix_channel(config)
@@ -1616,13 +1346,15 @@ class RuntimeUpdater:
         self._apply_team_context_prompt(config)
 
         applied_package = self.package_manager.apply(config)
+        self._apply_package_mcp_servers(applied_package)
+        self._apply_package_skills(applied_package)
+        self._apply_inline_config(config)
 
         adapter_applied = False
         if adapter_should_apply:
             self.adapter_apply()
             adapter_applied = True
 
-        self._sync_model_runtime_if_needed(previous, config)
         self.current_config = config
         logger.info(
             "runtime config apply complete component=update worker=%s generation=%s changed=%s "
@@ -1640,30 +1372,21 @@ class RuntimeUpdater:
         )
         return ApplyResult(runtime_config=config, changed=True, agent_package_dir=applied_package)
 
-    def _sync_model_runtime_if_needed(
-        self,
-        previous: Optional[MemberRuntimeConfig],
-        config: MemberRuntimeConfig,
-    ) -> None:
-        if previous is None or self.model_runtime_sync is None:
-            return
-        if _stable_json(config.model) == _stable_json(previous.model):
-            return
-        started_at = time.monotonic()
-        try:
-            self.model_runtime_sync(config)
-        except Exception as exc:
-            logger.warning(
-                "runtime model sync failed component=update step=model_runtime_sync event=failed "
-                "worker=%s generation=%s changed=%s error_type=%s safe_error_summary=%s duration_ms=%s",
-                self.config.worker_name,
-                config.generation,
-                True,
-                type(exc).__name__,
-                type(exc).__name__,
-                _duration_ms(started_at),
-            )
-            raise
+    def _apply_inline_config(self, config: MemberRuntimeConfig) -> None:
+        prompt_files = {
+            "IDENTITY.md": config.inline_config.get("identity", ""),
+            "SOUL.md": config.inline_config.get("soul", ""),
+            "AGENTS.md": config.inline_config.get("agents", ""),
+        }
+        for file_name, content in prompt_files.items():
+            if not content:
+                continue
+            for base_dir in (self.config.default_workspace_dir, self.config.worker_home):
+                path = base_dir / file_name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_name(f".{path.name}.tmp")
+                tmp.write_text(f"{content.rstrip()}\n", encoding="utf-8")
+                tmp.replace(path)
 
     def _adapter_neutral_change(self, config: MemberRuntimeConfig) -> bool:
         previous = self.current_config
@@ -1790,25 +1513,8 @@ class RuntimeUpdater:
         model_name = _string(model.get("model") or model.get("name"))
         if not provider_id or not model_name:
             return
-        try:
-            from qwenpaw.config.config import ModelSlotConfig, load_agent_config, save_agent_config
-        except ImportError:
-            logger.info("qwenpaw package unavailable component=update step=apply_model action=skip")
-            return
-
-        agent_config = load_agent_config(DEFAULT_AGENT_ID)
-        agent_config.active_model = ModelSlotConfig(provider_id=provider_id, model=model_name)
-        save_agent_config(DEFAULT_AGENT_ID, agent_config)
-        self._apply_openai_compatible_provider(config, provider_id, model_name, ModelSlotConfig)
-
-    def _apply_openai_compatible_provider(
-        self,
-        config: MemberRuntimeConfig,
-        provider_id: str,
-        model_name: str,
-        model_slot_config_class: Any,
-    ) -> None:
-        model = config.model
+        if self.api_client is None:
+            raise RuntimeError("QwenPaw API client is required for model configuration")
         base_url = _string(
             model.get("baseUrl")
             or model.get("base_url")
@@ -1826,33 +1532,14 @@ class RuntimeUpdater:
         )
         if not api_key and api_key_env:
             api_key = _string(os.getenv(api_key_env))
-        if not base_url or not api_key:
-            return
-
-        try:
-            from qwenpaw.providers.provider import ModelInfo, ProviderInfo
-            from qwenpaw.providers.provider_manager import ProviderManager
-        except ImportError:
-            logger.info("qwenpaw provider package unavailable component=update step=apply_provider action=skip")
-            return
-
-        manager = ProviderManager.get_instance()
-        provider_data = ProviderInfo(
-            id=provider_id,
-            name=_string(model.get("providerName") or model.get("provider_name") or provider_id),
-            base_url=self._openai_compatible_base_url(base_url),
+        self.api_client.configure_active_model(
+            provider_id,
+            model_name,
+            base_url=self._openai_compatible_base_url(base_url) if base_url else "",
             api_key=api_key,
+            provider_name=_string(model.get("providerName") or model.get("provider_name") or provider_id),
             chat_model=_string(model.get("chatModel") or model.get("chat_model") or "OpenAIChatModel"),
-            models=[ModelInfo(id=model_name, name=model_name)],
-            is_custom=True,
-            support_model_discovery=False,
-            support_connection_check=False,
         )
-        provider = manager._provider_from_data(provider_data.model_dump())
-        manager.custom_providers[provider_id] = provider
-        manager.save_provider_config(provider_id, provider)
-        manager.active_model = model_slot_config_class(provider_id=provider_id, model=model_name)
-        manager.save_active_model(manager.active_model)
 
     def _openai_compatible_base_url(self, base_url: str) -> str:
         value = base_url.rstrip("/")
@@ -1862,15 +1549,82 @@ class RuntimeUpdater:
 
     def _apply_mcp_servers(self, config: MemberRuntimeConfig) -> None:
         servers = self._mcporter_servers(config)
-        legacy_path = self.config.default_workspace_dir / "mcporter-servers.json"
-        if legacy_path.exists():
-            legacy_path.unlink()
+        if self.api_client is None:
+            if servers:
+                raise RuntimeError("QwenPaw API client is required for MCP configuration")
+            return
+        existing = {str(item.get("key")): item for item in self.api_client.list_mcp()}
+        ownership_path = self.config.qwenpaw_working_dir / ".agentteams-managed-mcp.json"
+        try:
+            managed = set(json.loads(ownership_path.read_text(encoding="utf-8")))
+        except (FileNotFoundError, json.JSONDecodeError, TypeError):
+            managed = set()
+        for key in sorted((managed & existing.keys()) - servers.keys()):
+            self.api_client.delete_mcp(key)
+        for key, server in servers.items():
+            transport = _string(server.get("transport") or "http")
+            payload = {
+                "name": key,
+                "enabled": True,
+                "transport": "streamable_http"
+                if transport in {"http", "streamable_http"}
+                else transport,
+                "url": _string(server.get("url")),
+                "headers": dict(server.get("headers") or {}),
+                "command": _string(server.get("command")),
+                "args": list(server.get("args") or []),
+                "env": dict(server.get("env") or {}),
+                "cwd": _string(server.get("cwd")),
+            }
+            if key in existing:
+                self.api_client.update_mcp(key, payload)
+            else:
+                self.api_client.create_mcp(key, payload)
+        ownership_path.parent.mkdir(parents=True, exist_ok=True)
+        ownership_path.write_text(
+            json.dumps(sorted(servers), ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
 
-        path = self.config.default_workspace_dir / "config" / "mcporter.json"
-        payload = {"mcpServers": servers}
-        text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+    def _apply_package_mcp_servers(self, package_dir: Optional[Path]) -> None:
+        package_clients = getattr(self.package_manager, "package_mcp_clients", None)
+        servers = package_clients(package_dir) if callable(package_clients) else {}
+        if self.api_client is None:
+            if servers:
+                raise RuntimeError(
+                    "QwenPaw API client is required for agent package MCP configuration",
+                )
+            return
+        existing = {str(item.get("key")): item for item in self.api_client.list_mcp()}
+        ownership_path = (
+            self.config.qwenpaw_working_dir / ".agentteams-managed-package-mcp.json"
+        )
+        try:
+            managed = set(json.loads(ownership_path.read_text(encoding="utf-8")))
+        except (FileNotFoundError, json.JSONDecodeError, TypeError):
+            managed = set()
+        for key in sorted((managed & existing.keys()) - servers.keys()):
+            self.api_client.delete_mcp(key)
+        for key, server in servers.items():
+            payload = dict(server)
+            payload.setdefault("name", key)
+            if key in existing:
+                self.api_client.update_mcp(key, payload)
+            else:
+                self.api_client.create_mcp(key, payload)
+        ownership_path.parent.mkdir(parents=True, exist_ok=True)
+        ownership_path.write_text(
+            json.dumps(sorted(servers), ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    def _apply_package_skills(self, package_dir: Optional[Path]) -> None:
+        if package_dir is None or self.api_client is None:
+            return
+        package_skills = getattr(self.package_manager, "package_skill_names", None)
+        skill_names = package_skills(package_dir) if callable(package_skills) else []
+        if skill_names:
+            self.api_client.refresh_and_enable_skills(skill_names)
 
     def _apply_channel_policy(self, config: MemberRuntimeConfig) -> None:
         group_allow, dm_allow, group_deny, dm_deny = self._matrix_policy_ids(config)
@@ -1893,25 +1647,16 @@ class RuntimeUpdater:
         desired = self._matrix_channel_desired_state(config)
         if desired is None:
             return
-        try:
-            from qwenpaw.config.config import load_agent_config, save_agent_config
-        except ImportError:
-            logger.info("qwenpaw package unavailable component=update step=apply_matrix_channel action=skip")
-            return
-
-        agent_config = load_agent_config(DEFAULT_AGENT_ID)
-        if getattr(agent_config, "channels", None) is None:
-            try:
-                from qwenpaw.config.config import ChannelConfig
-            except ImportError:
-                return
-            agent_config.channels = ChannelConfig()
-        matrix_config = getattr(agent_config.channels, "matrix", None)
-        if matrix_config is None:
-            return
-
-        changed = False
-        desired_fields = {
+        if self.api_client is None:
+            raise RuntimeError("QwenPaw API client is required for Matrix configuration")
+        groups: Dict[str, Any] = {}
+        self._ensure_require_mention_group(groups, "*")
+        room_id = desired["room_id"]
+        if room_id:
+            self._ensure_require_mention_group(groups, room_id)
+        self.api_client.put_channel(
+            "agentteams_matrix",
+            {
             "enabled": True,
             "homeserver": desired["homeserver"],
             "user_id": desired["user_id"],
@@ -1920,56 +1665,27 @@ class RuntimeUpdater:
             "encryption": _env_bool("AGENTTEAMS_MATRIX_E2EE"),
             "group_disabled": False,
             "dm_disabled": False,
-            "filter_tool_messages": False,
-            "filter_thinking": False,
-        }
-        for field, value in desired_fields.items():
-            if getattr(matrix_config, field, None) != value:
-                setattr(matrix_config, field, value)
-                changed = True
-
-        groups = dict(getattr(matrix_config, "groups", None) or {})
-        if self._ensure_require_mention_group(groups, "*"):
-            changed = True
-        room_id = desired["room_id"]
-        if room_id:
-            if self._ensure_require_mention_group(groups, room_id):
-                changed = True
-        if getattr(matrix_config, "groups", None) != groups:
-            matrix_config.groups = groups
-            changed = True
-
-        if changed:
-            save_agent_config(DEFAULT_AGENT_ID, agent_config)
+            "show_tool_calls": True,
+            "show_tool_results": True,
+            "show_thinking": True,
+            "groups": groups,
+            },
+            secret_fields={"access_token", "password"},
+        )
 
     def _apply_dingtalk_channel(self, config: MemberRuntimeConfig) -> None:
         desired = config.dingtalk_channel
         if desired is None:
             return
-        try:
-            from qwenpaw.config.config import load_agent_config, save_agent_config
-        except ImportError:
-            logger.info("qwenpaw package unavailable component=update step=apply_dingtalk_channel action=skip")
-            return
-
-        agent_config = load_agent_config(DEFAULT_AGENT_ID)
-        if getattr(agent_config, "channels", None) is None:
-            try:
-                from qwenpaw.config.config import ChannelConfig
-            except ImportError:
-                return
-            agent_config.channels = ChannelConfig()
-        dingtalk_config = getattr(agent_config.channels, "dingtalk", None)
-        if dingtalk_config is None:
-            return
-
-        changed = False
+        if self.api_client is None:
+            raise RuntimeError("QwenPaw API client is required for DingTalk configuration")
+        current = self.api_client.get_channel("dingtalk")
         if not _bool(desired.get("enabled")):
-            if getattr(dingtalk_config, "enabled", None) is not False:
-                dingtalk_config.enabled = False
-                changed = True
-            if changed:
-                save_agent_config(DEFAULT_AGENT_ID, agent_config)
+            self.api_client.put_channel(
+                "dingtalk",
+                {**current, "enabled": False},
+                secret_fields={"client_secret"},
+            )
             return
 
         streaming_enabled = _bool(desired.get("streaming_enabled"))
@@ -1981,8 +1697,9 @@ class RuntimeUpdater:
             "client_id": client_id,
             "client_secret": client_secret,
             "robot_code": robot_code,
-            "filter_thinking": _bool(desired.get("filter_thinking")),
-            "filter_tool_messages": _bool(desired.get("filter_tool_messages")),
+            "show_thinking": not _bool(desired.get("filter_thinking")),
+            "show_tool_calls": not _bool(desired.get("filter_tool_messages")),
+            "show_tool_results": not _bool(desired.get("filter_tool_messages")),
             "streaming_enabled": streaming_enabled,
         }
         if streaming_enabled:
@@ -2005,8 +1722,8 @@ class RuntimeUpdater:
                     f"{', '.join(missing)}"
                 )
             card_template_id = _string(desired.get("card_template_id"))
-            previous_message_type = _string(getattr(dingtalk_config, "message_type", ""))
-            previous_template_id = _string(getattr(dingtalk_config, "card_template_id", ""))
+            previous_message_type = _string(current.get("message_type"))
+            previous_template_id = _string(current.get("card_template_id"))
             if (
                 previous_message_type == "card"
                 and previous_template_id
@@ -2040,13 +1757,11 @@ class RuntimeUpdater:
                 )
             if "card_auto_layout" in desired:
                 desired_fields["card_auto_layout"] = _bool(desired.get("card_auto_layout"))
-        for field, value in desired_fields.items():
-            if getattr(dingtalk_config, field, None) != value:
-                setattr(dingtalk_config, field, value)
-                changed = True
-
-        if changed:
-            save_agent_config(DEFAULT_AGENT_ID, agent_config)
+        self.api_client.put_channel(
+            "dingtalk",
+            {**current, **desired_fields},
+            secret_fields={"client_secret"},
+        )
 
     def _matrix_channel_desired_state(self, config: MemberRuntimeConfig) -> Optional[Dict[str, str]]:
         homeserver = _string(
@@ -2213,55 +1928,35 @@ class RuntimeUpdater:
         return os.getenv(env_name, "") if env_name else ""
 
     def _apply_matrix_channel_access_flags(self, group_enabled: bool, dm_enabled: bool) -> None:
+        if self.api_client is None:
+            raise RuntimeError("QwenPaw API client is required for Matrix ACL configuration")
+        current = self.api_client.get_channel("agentteams_matrix")
         try:
-            from qwenpaw.config.config import load_agent_config, save_agent_config
-        except ImportError:
-            logger.info("qwenpaw package unavailable component=update step=apply_channel_access_flags action=skip")
-            return
-
-        agent_config = load_agent_config(DEFAULT_AGENT_ID)
-        if getattr(agent_config, "channels", None) is None:
-            try:
-                from qwenpaw.config.config import ChannelConfig
-            except ImportError:
-                return
-            agent_config.channels = ChannelConfig()
-        matrix_config = getattr(agent_config.channels, "matrix", None)
-        if matrix_config is None:
-            return
-        matrix_config.access_control_group = group_enabled
-        matrix_config.access_control_dm = dm_enabled
-        save_agent_config(DEFAULT_AGENT_ID, agent_config)
+            self.api_client.put_channel(
+                "agentteams_matrix",
+                {
+                    **current,
+                    "access_control_group": group_enabled,
+                    "access_control_dm": dm_enabled,
+                },
+                secret_fields={"access_token", "password"},
+            )
+        except QwenPawApiError as exc:
+            # access_control_dm/group are best-effort: on some runtimes the
+            # channel plugin re-initializes channel state concurrently and the
+            # readback does not round-trip them, but the allow-list itself is
+            # applied separately via the ACL endpoint in
+            # _write_matrix_access_control(). A readback mismatch must not take
+            # the whole worker down, so log and continue.
+            logger.warning(
+                "matrix channel access flags not persisted (non-fatal): %s",
+                exc,
+            )
 
     def _write_matrix_access_control(self, whitelist: List[str], blacklist: List[str]) -> None:
-        try:
-            from qwenpaw.app.channels.access_control import get_access_control_store
-        except ImportError:
-            self._write_matrix_access_control_json(whitelist, blacklist)
-            return
-
-        store = get_access_control_store(self.config.default_workspace_dir)
-        store.set_whitelist("matrix", whitelist)
-        store.set_blacklist("matrix", blacklist)
-
-    def _write_matrix_access_control_json(self, whitelist: List[str], blacklist: List[str]) -> None:
-        path = self.config.default_workspace_dir / "access_control.json"
-        existing: Dict[str, Any] = {}
-        if path.exists():
-            try:
-                loaded = json.loads(path.read_text(encoding="utf-8"))
-                existing = loaded if isinstance(loaded, dict) else {}
-            except json.JSONDecodeError:
-                existing = {}
-        matrix = _section(existing, "matrix")
-        pending = matrix.get("pending")
-        existing["matrix"] = {
-            "whitelist": {value: "" for value in whitelist},
-            "blacklist": {value: "" for value in blacklist},
-            "pending": pending if isinstance(pending, list) else [],
-        }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(existing, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if self.api_client is None:
+            raise RuntimeError("QwenPaw API client is required for Matrix ACL configuration")
+        self.api_client.reconcile_acl("agentteams_matrix", whitelist, blacklist)
 
     def _dedupe(self, values: List[str]) -> List[str]:
         result = []

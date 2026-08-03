@@ -34,9 +34,9 @@ Resolve the script from local skill paths. Do not hardcode container absolute pa
 ```bash
 FIND_SKILLS_SCRIPT=""
 for candidate in \
-  "./skills/find-skills/scripts/hiclaw-find-skill.sh" \
-  "./active_skills/find-skills/scripts/hiclaw-find-skill.sh" \
-  "./find-skills/scripts/hiclaw-find-skill.sh"; do
+  "./skills/find-skills/scripts/agentteams-find-skill.sh" \
+  "./active_skills/find-skills/scripts/agentteams-find-skill.sh" \
+  "./find-skills/scripts/agentteams-find-skill.sh"; do
   if [ -x "$candidate" ]; then
     FIND_SKILLS_SCRIPT="$candidate"
     break
@@ -57,7 +57,7 @@ test -n "$FIND_SKILLS_SCRIPT" || { echo "find-skills script not found" >&2; exit
 ## Environment Variables
 
 ```bash
-SKILLS_API_URL  # Skills registry API endpoint (default: nacos://market.hiclaw.io:80/public)
+SKILLS_API_URL  # Skills registry API endpoint (default: nacos://market.agentteams.io:80/public)
 ```
 
 Can be configured by admin to point to an enterprise-private registry.
@@ -89,7 +89,7 @@ For example:
 The command will return results like:
 
 ```
-Install with ./skills/find-skills/scripts/hiclaw-find-skill.sh install <skill>
+Install with ./skills/find-skills/scripts/agentteams-find-skill.sh install <skill>
 
 vercel-react-best-practices
 └ React and Next.js performance guidance
@@ -181,4 +181,4 @@ skills init my-xyz-skill
 
 ## Skill Resources
 
-`hiclaw-find-skill.sh` is the resource that belongs to this skill. Resolve it into `FIND_SKILLS_SCRIPT` first so your command does not depend on hidden runtime paths.
+`agentteams-find-skill.sh` is the resource that belongs to this skill. Resolve it into `FIND_SKILLS_SCRIPT` first so your command does not depend on hidden runtime paths.

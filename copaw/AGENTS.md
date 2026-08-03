@@ -7,7 +7,7 @@ This file helps AI Agents (and human developers) quickly understand the CoPaw su
 CoPaw is a Python-based Agent runtime used in AgentTeams as an alternative to OpenClaw (Node.js). It appears in two places:
 
 - **CoPaw Worker** — the Python Worker runtime (always CoPaw, no OpenClaw alternative for this binary). Packaged as `agentteams/copaw-worker:latest`.
-- **Manager CoPaw runtime** — opt-in via `AGENTTEAMS_MANAGER_RUNTIME=copaw`; Manager then runs its own agent loop in CoPaw instead of OpenClaw. Packaged as `agentteams/manager-copaw:latest`.
+- **Manager CoPaw runtime** — opt-in via `AGENTTEAMS_MANAGER_RUNTIME=copaw`; Manager then runs its own agent loop in CoPaw instead of OpenClaw. Packaged as `agentteams/manager-qwenpaw:latest`.
 
 AgentTeams does **not** vendor upstream CoPaw — it ships a fork based on the `feat/lite-copaw-worker-v1.0.0` branch. The fork's source lives **outside this repo** as a sibling checkout; its exact path depends on the developer's local setup. A Matrix channel implementation is vendored in-tree (`copaw/src/matrix/`) until the upstream PR lands.
 
@@ -17,7 +17,7 @@ AgentTeams does **not** vendor upstream CoPaw — it ships a fork based on the `
 |---|---|
 | `copaw/` (Python Worker package, Dockerfile, scripts, tests) | OpenClaw Worker (`worker/`) |
 | `copaw/src/matrix/` (shared Matrix channel) | Manager OpenClaw runtime (`manager/agent/worker-agent/`) |
-| `manager/Dockerfile.copaw` | Higress / Tuwunel / MinIO themselves |
+| `manager/Dockerfile.qwenpaw` | Higress / Tuwunel / MinIO themselves |
 | `manager/agent/copaw-manager-agent/`, `copaw-worker-agent/` (CoPaw-runtime agent content) | Upstream CoPaw source code (read that repo's AGENTS.md) |
 
 ## Subsystem Structure
@@ -42,7 +42,7 @@ copaw/                              # CoPaw Worker package (everything Worker-si
 │       └── README.md               # Why this is vendored; migration plan
 └── tests/                          # Python unit tests (pytest)
 
-manager/Dockerfile.copaw            # Manager CoPaw runtime image
+manager/Dockerfile.qwenpaw            # Manager CoPaw runtime image
 manager/agent/copaw-manager-agent/  # Manager agent content when runtime=copaw
 │                                   # (overlays manager/agent/ at upgrade-builtins time)
 ├── AGENTS.md                       # Manager behavior (CoPaw-specific)
@@ -150,14 +150,14 @@ The authoritative design for the sync/bridge/propagate chain is [`docs/copaw-bri
 - [copaw/pyproject.toml](pyproject.toml) — Python dependencies (rebuild image on change)
 
 ### To modify the Manager CoPaw container
-- [manager/Dockerfile.copaw](../manager/Dockerfile.copaw) — Manager image with CoPaw runtime
+- [manager/Dockerfile.qwenpaw](../manager/Dockerfile.qwenpaw) — Manager image with CoPaw runtime
 - [manager/scripts/init/start-manager-agent.sh](../manager/scripts/init/start-manager-agent.sh) — branches on `AGENTTEAMS_MANAGER_RUNTIME`
 - [manager/scripts/init/upgrade-builtins.sh](../manager/scripts/init/upgrade-builtins.sh) — overlays `copaw-manager-agent/` on top of `manager/agent/` when runtime=copaw
 
 ### To modify the shared Matrix channel
 - [copaw/src/matrix/channel.py](src/matrix/channel.py) — Manager + Worker both use this; behavior diverges through config, not code
 - [copaw/src/matrix/README.md](src/matrix/README.md) — why this is vendored and how to migrate when upstream lands
-- **Rebuild both `copaw-worker` and `agentteams-manager-copaw` images after any change here** — otherwise the two sides drift
+- **Rebuild both `copaw-worker` and `agentteams-manager-qwenpaw` images after any change here** — otherwise the two sides drift
 
 ### To modify CoPaw agent behavior
 - [manager/agent/copaw-manager-agent/AGENTS.md](../manager/agent/copaw-manager-agent/AGENTS.md) — Manager behavior when runtime=copaw
@@ -224,8 +224,8 @@ AGENTTEAMS_LLM_API_KEY=<key> AGENTTEAMS_BUILD_K8S_IMAGE=1 bash hack/local-k8s-up
 Incremental rebuild of a single image and reload into kind:
 
 ```bash
-make build-manager-copaw
-kind load docker-image agentteams/manager-copaw:latest --name agentteams
+make build-manager-qwenpaw
+kind load docker-image agentteams/manager-qwenpaw:latest --name agentteams
 
 make build-copaw-worker
 kind load docker-image agentteams/copaw-worker:latest --name agentteams
@@ -280,7 +280,7 @@ The `agentteams-debug` skill provides scripts for fast iteration without rebuild
 
 Full workflow: [`.claude/skills/agentteams-debug/SKILL.md`](../.claude/skills/agentteams-debug/SKILL.md).
 
-**Image rebuild is required when changing:** `copaw/Dockerfile`, `copaw/pyproject.toml`, `copaw/scripts/`, `manager/Dockerfile.copaw`, `manager/scripts/init/`, `copaw/src/matrix/` (**both images**), or `openclaw-base/`.
+**Image rebuild is required when changing:** `copaw/Dockerfile`, `copaw/pyproject.toml`, `copaw/scripts/`, `manager/Dockerfile.qwenpaw`, `manager/scripts/init/`, `copaw/src/matrix/` (**both images**), or `openclaw-base/`.
 
 ### Testing
 
@@ -421,7 +421,7 @@ Runtime pairings:
 
 | Role | OpenClaw image | CoPaw image |
 |---|---|---|
-| Manager | `agentteams/manager` | `agentteams/manager-copaw` |
+| Manager | `agentteams/manager` | `agentteams/manager-qwenpaw` |
 | Worker | `agentteams/worker-agent` | `agentteams/copaw-worker` |
 
 ## Development Pitfalls
@@ -453,7 +453,7 @@ Runtime pairings:
 
 ## Changelog Policy
 
-Any change that affects the contents of a built image — i.e. modifications under `copaw/` or `manager/Dockerfile.copaw` (or anything it `COPY`s in) — **must** be recorded in [`changelog/current.md`](../changelog/current.md) before committing. Format:
+Any change that affects the contents of a built image — i.e. modifications under `copaw/` or `manager/Dockerfile.qwenpaw` (or anything it `COPY`s in) — **must** be recorded in [`changelog/current.md`](../changelog/current.md) before committing. Format:
 
 ```
 - type(scope): description ([commit_hash](https://github.com/agentscope-ai/AgentTeams/commit/commit_hash))

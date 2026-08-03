@@ -93,6 +93,19 @@ func TestDefaultWorkerModel(t *testing.T) {
 	})
 }
 
+func TestCreateRuntimeHelpKeepsCoPawDuringQwenPawTransition(t *testing.T) {
+	for name, usage := range map[string]string{
+		"worker":  createWorkerCmd().Flags().Lookup("runtime").Usage,
+		"manager": createManagerCmd().Flags().Lookup("runtime").Usage,
+	} {
+		for _, runtime := range []string{"copaw", "qwenpaw"} {
+			if !strings.Contains(usage, runtime) {
+				t.Errorf("%s runtime help %q does not include %q", name, usage, runtime)
+			}
+		}
+	}
+}
+
 func TestWaitForWorkerReady(t *testing.T) {
 	var calls int32
 	client := &APIClient{

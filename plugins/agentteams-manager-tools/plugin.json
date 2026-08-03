@@ -1,0 +1,17 @@
+{
+  "id": "agentteams-manager-tools",
+  "name": "AgentTeams Manager Tools",
+  "version": "0.1.0",
+  "type": "tool",
+  "description": "projectflow, taskflow, message, filesync tools for Manager",
+  "author": "AgentTeams",
+  "entry": {
+    "backend": "plugin.py"
+  },
+  "dependencies": [],
+  "min_version": "2.0.1",
+  "qwenpaw_version": {
+    "min": "2.0.1",
+    "max": "2.1.0"
+  }
+}

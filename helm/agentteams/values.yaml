@@ -242,7 +242,7 @@ controller:
 manager:
   enabled: true                 # create Manager CR during cluster initialization
   model: ""                     # LLM model; defaults to credentials.defaultModel
-  runtime: "openclaw"           # openclaw | copaw | hermes
+  runtime: "openclaw"           # openclaw | qwenpaw
   image:
     repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager
     tag: ""                     # defaults to global.imageTag

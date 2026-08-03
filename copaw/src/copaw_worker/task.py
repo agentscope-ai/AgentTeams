@@ -76,6 +76,7 @@ class TaskMeta:
     assigned_at: str | None = None
     acknowledged_at: str | None = None
     submitted_at: str | None = None
+    event_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +157,7 @@ class FileSystemTaskStore:
             assigned_at=data.get("assigned_at"),
             acknowledged_at=data.get("acknowledged_at"),
             submitted_at=data.get("submitted_at"),
+            event_id=data.get("event_id"),
         )
 
     def write_task_meta(self, meta: TaskMeta) -> None:
@@ -431,15 +433,18 @@ def ready_nodes(store: TaskStore, *, project_id: str) -> list[DagTask]:
     ]
 
 
-def delegate_task(
+def validate_delegate_task(
     store: TaskStore,
     *,
     project_id: str,
     task_id: str,
     spec: str,
-    room_id: str | None = None,
-) -> TaskMeta:
-    """Create task meta/spec for a ready DAG node and mark it delegated."""
+) -> DagTask:
+    """Validate delegation preconditions without writing state.
+
+    Returns the validated DagTask so callers can inspect assignment
+    details (e.g. for Matrix notification) before committing.
+    """
     if not spec or not spec.strip():
         raise TaskflowError("spec is required")
     meta = store.read_project_meta(project_id)
@@ -459,6 +464,53 @@ def delegate_task(
     missing = [dep for dep in task.depends_on if dep not in effective]
     if missing:
         raise TaskflowError(f"task {task_id} is blocked by: {', '.join(missing)}")
+    return task
+
+
+def prepare_task(
+    store: TaskStore,
+    *,
+    project_id: str,
+    task_id: str,
+    spec: str,
+    room_id: str | None = None,
+) -> TaskMeta:
+    """Claim a pending DAG node and write its task files.
+
+    This is the ``pending -> prepared`` transition. It validates the
+    node is still pending (CAS on the plan), writes ``meta.json`` with
+    status ``prepared`` and ``spec.md``, and marks the plan node
+    ``delegated`` so ready-node queries stop returning it. No Matrix
+    notification is sent here; callers notify after files are visible
+    in shared storage, then call :func:`commit_task_assignment` to mark
+    the task ``assigned``.
+
+    The transition is idempotent: re-running after a partial failure
+    (files written but no event recorded) returns the existing prepared
+    meta instead of duplicating files or plan edits.
+    """
+    task = validate_delegate_task(
+        store,
+        project_id=project_id,
+        task_id=task_id,
+        spec=spec,
+    )
+    plan = store.read_project_plan(project_id)
+    tasks = parse_loop_tasks(plan) if parse_plan_type(plan) == "loop" else parse_dag_tasks(plan)
+
+    existing: TaskMeta | None = None
+    try:
+        existing = store.read_task_meta(task_id)
+    except TaskflowError:
+        pass
+    if existing is not None and existing.status == "assigned":
+        return existing
+    if existing is not None and existing.status == "prepared":
+        # Already claimed by a prior attempt that did not finish
+        # notifying. Keep the existing prepared meta so a retry does
+        # not reset assigned_at or lose an event_id that a concurrent
+        # commit may have written.
+        return existing
 
     meta = TaskMeta(
         task_id=task.task_id,
@@ -466,7 +518,7 @@ def delegate_task(
         task_title=task.title,
         assigned_to=canonical_worker_id(task.assigned_to),
         room_id=room_id,
-        status="assigned",
+        status="prepared",
         depends_on=task.depends_on,
         assigned_at=_now(),
     )
@@ -491,6 +543,52 @@ def delegate_task(
     else:
         store.write_project_plan(project_id, replace_dag_tasks(plan, updated))
     return meta
+
+
+def commit_task_assignment(
+    store: TaskStore,
+    *,
+    project_id: str,
+    task_id: str,
+    event_id: str | None,
+) -> TaskMeta:
+    """Persist a successful Matrix notification and mark the task assigned.
+
+    This is the ``prepared -> assigned`` transition. It records the
+    Matrix ``event_id`` so a retry can detect that the notification was
+    already sent and avoid sending a duplicate.
+    """
+    meta = store.read_task_meta(task_id)
+    if meta.status == "assigned":
+        if event_id and not meta.event_id:
+            meta.event_id = event_id
+            store.write_task_meta(meta)
+        return meta
+    if meta.status != "prepared":
+        raise TaskflowError(f"task {task_id} is not prepared: {meta.status}")
+    meta.status = "assigned"
+    meta.event_id = event_id
+    meta.assigned_at = meta.assigned_at or _now()
+    store.write_task_meta(meta)
+    return meta
+
+
+def delegate_task(
+    store: TaskStore,
+    *,
+    project_id: str,
+    task_id: str,
+    spec: str,
+    room_id: str | None = None,
+) -> TaskMeta:
+    """Create task meta/spec for a ready DAG node and mark it delegated."""
+    return prepare_task(
+        store,
+        project_id=project_id,
+        task_id=task_id,
+        spec=spec,
+        room_id=room_id,
+    )
 
 
 def pause_project(store: TaskStore, *, project_id: str) -> ProjectMeta:

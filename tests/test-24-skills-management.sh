@@ -52,6 +52,7 @@ _worker_skills_in_api() {
 log_section "Create Worker with --skills github-operations"
 
 CREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" \
+    --runtime "${TEST_WORKER_RUNTIME}" \
     --skills github-operations --no-wait 2>&1)
 CREATE_EXIT=$?
 if [ "${CREATE_EXIT}" -eq 0 ]; then

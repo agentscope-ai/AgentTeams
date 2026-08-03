@@ -64,6 +64,10 @@ def _safe_error_code(exc: Exception) -> str:
 class Worker:
     def __init__(self, config: WorkerConfig) -> None:
         self.config = config
+        # Migrate legacy .copaw state BEFORE any component (RuntimeUpdater,
+        # WorkerHeartbeat, …) creates the .qwenpaw directory — otherwise the
+        # migration would always be skipped.
+        self._migrate_legacy_working_dir()
         self.sync: Optional[FileSync] = None
         self.heartbeat = WorkerHeartbeat(config.qwenpaw_working_dir / "heartbeat.json")
         self.api_client = QwenPawApiClient(
@@ -286,6 +290,36 @@ class Worker:
             _duration_ms(started_at),
             type(exc).__name__,
             _log_fields(**fields),
+        )
+
+    def _migrate_legacy_working_dir(self) -> None:
+        """Migrate a legacy ``.copaw`` working dir to ``.qwenpaw`` on startup.
+
+        The legacy copaw_worker runtime wrote its workspace state under
+        ``.copaw``. When a Worker is switched to the QwenPaw runtime the
+        state must be carried over — the migration belongs to the target
+        (qwenpaw_worker) startup path, not the legacy one. Idempotent: when
+        ``.qwenpaw`` already exists the legacy dir is left untouched.
+        """
+        legacy_dir = self.config.install_dir / self.config.worker_name / ".copaw"
+        if not legacy_dir.exists():
+            return
+        target_dir = self.config.qwenpaw_working_dir
+        if target_dir.exists():
+            logger.warning(
+                "legacy .copaw working dir present but .qwenpaw already exists; "
+                "skipping migration component=worker worker=%s legacy=%s target=%s",
+                self.config.worker_name,
+                legacy_dir,
+                target_dir,
+            )
+            return
+        legacy_dir.rename(target_dir)
+        logger.info(
+            "migrated legacy .copaw working dir to .qwenpaw component=worker worker=%s legacy=%s target=%s",
+            self.config.worker_name,
+            legacy_dir,
+            target_dir,
         )
 
     def _prepare_env(self) -> None:

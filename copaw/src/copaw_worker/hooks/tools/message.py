@@ -230,11 +230,19 @@ def _sanitize_session_filename(name: str) -> str:
 
 
 def _resolve_copaw_working_dir() -> Path:
-    configured = os.environ.get("COPAW_WORKING_DIR")
+    configured = (
+        os.environ.get("QWENPAW_WORKING_DIR")
+        or os.environ.get("COPAW_WORKING_DIR")
+    )
     if configured:
         return Path(configured).expanduser().resolve()
 
-    from copaw.constant import WORKING_DIR
+    # copaw is the legacy name for qwenpaw; the package was renamed.
+    # In the qwenpaw 2.0 venv only the new name exists.
+    try:
+        from qwenpaw.constant import WORKING_DIR
+    except ImportError:
+        from copaw.constant import WORKING_DIR
 
     return Path(WORKING_DIR).expanduser().resolve()
 
@@ -339,11 +347,24 @@ async def _record_matrix_outbound_to_session(
 
 
 def _matrix_config_for_agent(account_id: str) -> tuple[str, str, str]:
-    from copaw.config.config import load_agent_config
+    # Read agent.json directly to avoid a hard dependency on
+    # copaw.config.config, which is unavailable in the QwenPaw 2.0 venv.
+    # bridge.py writes homeserver/access_token/user_id into
+    # workspaces/<id>/agent.json regardless of runtime.
+    working_dir = _resolve_copaw_working_dir()
+    agent_json = (
+        working_dir / "workspaces" / (account_id or "default") / "agent.json"
+    )
+    try:
+        with open(agent_json, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise MessageToolError(
+            f"cannot read agent config at {agent_json}: {exc}",
+        )
 
-    agent_config = load_agent_config(account_id or "default")
-    channels = _read_config_value(agent_config, "channels") or {}
-    matrix_cfg = _read_config_value(channels, "matrix") or {}
+    channels = data.get("channels") or {}
+    matrix_cfg = channels.get("matrix") or {}
 
     homeserver = _read_config_value(matrix_cfg, "homeserver") or ""
     access_token = _read_config_value(matrix_cfg, "access_token", "accessToken") or ""
@@ -365,22 +386,39 @@ def _matrix_config_for_agent(account_id: str) -> tuple[str, str, str]:
     return str(homeserver), str(access_token), str(user_id)
 
 
+def _normalize_room_id(room_id: str) -> str:
+    """Strip a ``room:`` prefix at the Matrix API boundary.
+
+    Matrix-nio's ``joined_members``/``room_send`` require the raw
+    ``!room:domain`` ID. Callers may pass the documented
+    ``room:!room:domain`` target form; normalize here so every nio call
+    uses the raw form.
+    """
+    text = (room_id or "").strip()
+    if text.startswith("room:"):
+        return text[len("room:") :].strip()
+    return text
+
+
 async def _send_matrix_room_message(
     *,
     room_id: str,
     content: dict[str, Any],
     account_id: str,
+    txn_id: str | None = None,
 ) -> str | None:
     from nio import AsyncClient
 
+    matrix_room_id = _normalize_room_id(room_id)
     homeserver, access_token, user_id = _matrix_config_for_agent(account_id)
     client = AsyncClient(homeserver, user=user_id)
     client.access_token = access_token
     try:
         response = await client.room_send(
-            room_id,
+            matrix_room_id,
             "m.room.message",
             content,
+            tx_id=txn_id,
             ignore_unverified_devices=True,
         )
         event_id = getattr(response, "event_id", None)

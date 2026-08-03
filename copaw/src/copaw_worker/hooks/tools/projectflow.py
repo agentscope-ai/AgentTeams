@@ -53,17 +53,22 @@ def _error(message: str, **payload: Any) -> ToolResponse:
     return _response({"ok": False, "error": message, **payload})
 
 
-def _workspace_dir() -> Path:
-    configured = os.getenv("COPAW_WORKING_DIR")
+def _working_dir() -> Path:
+    configured = os.getenv("QWENPAW_WORKING_DIR") or os.getenv("COPAW_WORKING_DIR")
     if configured:
-        return Path(configured) / "workspaces" / "default"
+        return Path(configured).expanduser().resolve()
+    # qwenpaw is the successor of copaw (renamed package).
+    # In the qwenpaw 2.0 venv the copaw package does not exist.
+    try:
+        from qwenpaw.constant import WORKING_DIR  # type: ignore[import-untyped]
+    except ImportError:
+        from copaw.constant import WORKING_DIR  # type: ignore[import-untyped]
+    return Path(WORKING_DIR).expanduser().resolve()
 
-    cwd = Path.cwd()
-    if cwd.name == "default" and cwd.parent.name == "workspaces":
-        return cwd
-    if cwd.name == ".copaw":
-        return cwd / "workspaces" / "default"
-    return cwd
+
+def _workspace_dir() -> Path:
+    wd = _working_dir()
+    return wd / "workspaces" / "default"
 
 
 def _store() -> FileSystemTaskStore:

@@ -157,6 +157,7 @@ metadata:
   name: ${TEST_LEADER}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Worker
@@ -164,6 +165,7 @@ metadata:
   name: ${TEST_W1}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team

@@ -6,10 +6,12 @@ on:
       - 'helm/**'
       - 'install/agentteams-install.sh'
       - 'install/agentteams-install.ps1'
+      - 'install/agentteams-apply.sh'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-qwenpaw-release-gate.sh'
+      - 'tests/check-apply-wrapper-flags.sh'
       - 'tests/check-helm-agentteams.sh'
   workflow_dispatch: ~
 
@@ -28,6 +30,9 @@ jobs:
 
       - name: Check QwenPaw installer release gate
         run: bash tests/check-installer-qwenpaw-release-gate.sh
+
+      - name: Check declarative apply wrapper flags
+        run: bash tests/check-apply-wrapper-flags.sh
 
       - name: Set up Helm
         uses: azure/setup-helm@v4

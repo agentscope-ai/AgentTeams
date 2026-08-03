@@ -254,13 +254,15 @@ class FileSync:
         self.worker_name = worker_name
         self.worker_cr_name = worker_cr_name or worker_name
         self._secure = secure
-        configured_working_dir = os.environ.get("COPAW_WORKING_DIR")
+        configured_working_dir = os.environ.get(
+            "QWENPAW_WORKING_DIR"
+        ) or os.environ.get("COPAW_WORKING_DIR")
         if local_dir is not None:
             self.local_dir = local_dir
         elif configured_working_dir:
             self.local_dir = Path(configured_working_dir).parent
         else:
-            self.local_dir = Path.home() / ".copaw-worker" / worker_name
+            self.local_dir = Path.home() / ".qwenpaw-worker" / worker_name
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self.shared_dir = shared_dir or self.local_dir / "shared"
         self.global_shared_dir = global_shared_dir or self.local_dir / "global-shared"
@@ -776,7 +778,7 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     mtime > `since` (epoch seconds), then content-compares before uploading.
     When since=0 (first run), scans all eligible files.
 
-    Excludes Manager-managed files only. AGENTS.md, SOUL.md, .copaw/sessions/
+    Excludes Manager-managed files only. AGENTS.md, SOUL.md, runtime sessions/
     are Worker-managed and are pushed (including session backup).
     """
     # Manager-managed files that should never be pushed back
@@ -788,15 +790,15 @@ def push_local(sync: FileSync, since: float = 0) -> list[str]:
     _EXCLUDE_PATHS = {
         "config/mcporter.json",
         "runtime/runtime.yaml",
-        ".copaw/workspaces/default/config/mcporter.json",
+        ".qwenpaw/workspaces/default/config/mcporter.json",
     }
     # Skip duplicate uploads through the runtime skills symlink; the canonical
     # standard-space skills/ directory is still pushed normally.
     # Auto-mirrored shared directories are handled by explicit filesync ops.
     _EXCLUDE_PATH_PREFIXES = (
-        ".copaw/workspaces/default/skills",
-        ".copaw/workspaces/default/shared",
-        ".copaw/workspaces/default/global-shared",
+        ".qwenpaw/workspaces/default/skills",
+        ".qwenpaw/workspaces/default/shared",
+        ".qwenpaw/workspaces/default/global-shared",
         "shared",
         "global-shared",
     )

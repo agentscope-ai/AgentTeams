@@ -2,12 +2,16 @@
   "id": "default",
   "name": "Manager",
   "language": "zh",
+  "approval_level": "AUTO",
   "system_prompt_files": [
     "AGENTS.md",
     "SOUL.md",
     "PROFILE.md",
     "TOOLS.md"
   ],
+  "running": {
+    "max_iters": 200
+  },
   "heartbeat": {
     "enabled": true,
     "every": "30m"
@@ -25,8 +29,5 @@
       "group_allow_from": [],
       "groups": {}
     }
-  },
-  "running": {
-    "max_iters": 200
   }
 }

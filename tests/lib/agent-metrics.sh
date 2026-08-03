@@ -706,7 +706,7 @@ snapshot_baseline() {
         local manager_snapshot
         manager_snapshot=$(_snapshot_hermes_sessions "$manager_container" "$manager_db")
         snapshot_result=$(echo "$snapshot_result" | jq --argjson o "$manager_snapshot" '.offsets.manager = $o')
-    elif [ "$manager_runtime" = "copaw" ]; then
+    elif [ "$manager_runtime" = "copaw" ] || [ "$manager_runtime" = "qwenpaw" ]; then
         local manager_copaw_totals
         manager_copaw_totals=$(_read_copaw_token_totals "$manager_container" "/root/manager-workspace")
         snapshot_result=$(echo "$snapshot_result" | jq --argjson o "$manager_copaw_totals" '.offsets.manager = $o')
@@ -881,7 +881,7 @@ collect_delta_metrics() {
             delta_result=$(echo "$delta_result" | jq --argjson m "$manager_delta" '.agents.manager = $m')
             log_info "Manager delta: $(echo "$manager_delta" | jq -r '.llm_calls') LLM calls, $(echo "$manager_delta" | jq -r '.tokens.total') tokens" >&2
         fi
-    elif [ "$manager_runtime" = "copaw" ]; then
+    elif [ "$manager_runtime" = "copaw" ] || [ "$manager_runtime" = "qwenpaw" ]; then
         local manager_offsets
         manager_offsets=$(echo "$baseline" | jq -c '.offsets.manager // {}')
         local manager_delta
@@ -998,7 +998,7 @@ collect_test_metrics() {
         local manager_db
         manager_db=$(_detect_hermes_state_db "/root/manager-workspace")
         manager_metrics=$(_collect_hermes_latest_metrics "$manager_container" "$manager_db")
-    elif [ "$manager_runtime" = "copaw" ]; then
+    elif [ "$manager_runtime" = "copaw" ] || [ "$manager_runtime" = "qwenpaw" ]; then
         local manager_copaw_totals
         manager_copaw_totals=$(_read_copaw_token_totals "$manager_container" "/root/manager-workspace")
         local total_input total_output total_calls

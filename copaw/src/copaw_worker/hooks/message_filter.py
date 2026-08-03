@@ -174,22 +174,24 @@ def _strip_yaml_string(value: str) -> str:
 
 
 def _runtime_root() -> Path:
-    configured = os.environ.get("COPAW_WORKING_DIR")
+    configured = os.environ.get("QWENPAW_WORKING_DIR") or os.environ.get(
+        "COPAW_WORKING_DIR"
+    )
     if configured:
         path = Path(configured).expanduser().resolve()
         if path.name == "default" and path.parent.name == "workspaces":
-            copaw_dir = path.parent.parent
-            if copaw_dir.name == ".copaw":
-                return copaw_dir.parent
-        if path.name == ".copaw":
+            rt_dir = path.parent.parent
+            if rt_dir.name in (".copaw", ".qwenpaw"):
+                return rt_dir.parent
+        if path.name in (".copaw", ".qwenpaw"):
             return path.parent
         return path.parent
 
     cwd = Path.cwd().resolve()
     if cwd.name == "default" and cwd.parent.name == "workspaces":
-        copaw_dir = cwd.parent.parent
-        if copaw_dir.name == ".copaw":
-            return copaw_dir.parent
+        rt_dir = cwd.parent.parent
+        if rt_dir.name in (".copaw", ".qwenpaw"):
+            return rt_dir.parent
     return cwd
 
 

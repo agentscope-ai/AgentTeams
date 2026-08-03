@@ -52,7 +52,7 @@ func createWorkerCmd() *cobra.Command {
 
   agt create worker --name alice --model qwen3.6-plus
   agt create worker --name alice --soul-file /path/to/SOUL.md --skills github-operations
-  agt create worker --name charlie --runtime copaw --expose 8080,3000
+  agt create worker --name charlie --runtime qwenpaw --expose 8080,3000
   To configure CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.
   To configure mcpServers, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -131,7 +131,7 @@ func createWorkerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content (inline)")
@@ -371,7 +371,7 @@ func createManagerCmd() *cobra.Command {
 		Long: `Create a new Manager resource.
 
   agt create manager --name default --model qwen3.6-plus
-  agt create manager --name default --model claude-sonnet-4-6 --runtime copaw
+  agt create manager --name default --model claude-sonnet-4-6 --runtime qwenpaw
   To configure CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f manager.yaml'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
@@ -401,7 +401,7 @@ func createManagerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Manager name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (required)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&soul, "soul", "", "Manager SOUL.md content")
 	return cmd

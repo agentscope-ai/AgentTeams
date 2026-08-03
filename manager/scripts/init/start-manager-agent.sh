@@ -5,19 +5,19 @@
 # In cloud/k8s mode (AGENTTEAMS_RUNTIME=aliyun|k8s) this is the container entrypoint.
 #
 # Runtime selection:
-#   AGENTTEAMS_MANAGER_RUNTIME=openclaw (default) - OpenClaw gateway mode
-#   AGENTTEAMS_MANAGER_RUNTIME=copaw              - CoPaw workspace mode
-# (hermes runtime is supported for Workers only; Managers run openclaw or copaw.)
+#   AGENTTEAMS_MANAGER_RUNTIME=qwenpaw           - QwenPaw 2.0 workspace mode (default)
+#   AGENTTEAMS_MANAGER_RUNTIME=copaw              - Legacy alias, auto-routed to QwenPaw
+#   AGENTTEAMS_MANAGER_RUNTIME=openclaw           - OpenClaw gateway mode
 
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # ============================================================
 # Runtime selection
 # ============================================================
-MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
+MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
 case "${MANAGER_RUNTIME}" in
-    copaw)
-        log "Manager runtime: CoPaw (Python workspace)"
+    copaw|qwenpaw)
+        log "Manager runtime: QwenPaw (Python workspace, runtime=${MANAGER_RUNTIME})"
         ;;
     *)
         log "Manager runtime: OpenClaw (Node.js gateway)"
@@ -1162,9 +1162,9 @@ fi
 # ============================================================
 # Runtime-specific startup
 # ============================================================
-if [ "${MANAGER_RUNTIME}" = "copaw" ]; then
-    # Delegate to CoPaw startup script
-    exec /opt/agentteams/scripts/init/start-copaw-manager.sh
+if [ "${MANAGER_RUNTIME}" = "copaw" ] || [ "${MANAGER_RUNTIME}" = "qwenpaw" ]; then
+    # Delegate to QwenPaw startup script
+    exec /opt/agentteams/scripts/init/start-qwenpaw-manager.sh
 else
     # ── OpenClaw Runtime ─────────────────────────────────────────────────────
     log "Starting OpenClaw Manager..."

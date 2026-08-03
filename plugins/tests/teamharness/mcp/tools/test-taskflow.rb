@@ -111,6 +111,24 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
 
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path.endswith("/members"):
+                members = [
+                    {"state_key": "@worker-a:example.test", "content": {"membership": "join"}},
+                    {"state_key": "@worker-remote:example.test", "content": {"membership": "join"}},
+                    {"state_key": "@worker-invited:example.test", "content": {"membership": "invite"}},
+                    {"state_key": "@admin:example.test", "content": {"membership": "join"}},
+                ]
+                payload = {"chunk": members}
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(payload).encode("utf-8"))
+            else:
+                self.send_response(404)
+                self.end_headers()
+
         def do_PUT(self):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length)
@@ -118,6 +136,11 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             if "/send/m.room.message/" not in parsed.path:
                 self.send_response(404)
                 self.end_headers()
+                return
+            if "/send/m.room.message/delegate-" in parsed.path and os.environ.get("TEAMHARNESS_TEST_FAIL_NOTIFICATION") == "1":
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"errcode": "M_UNKNOWN", "error": "forced Matrix failure"}).encode("utf-8"))
                 return
             matrix["events"].append({
                 "path": parsed.path,
@@ -373,7 +396,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             raise AssertionError(f"artifact missing Matrix references: {artifact!r}")
         if artifact.get("parentEventId") != "$task-parent":
             raise AssertionError(f"artifact missing parent event reference: {artifact!r}")
-    file_events = [event["content"] for event in matrix["events"]]
+    file_events = [event["content"] for event in matrix["events"] if event["content"].get("msgtype") == "m.file"]
     if [event.get("body") for event in file_events[:2]] != ["t-001-result.md", "t-001-analysis.md"]:
         raise AssertionError(f"m.file event bodies mismatch: {file_events!r}")
     for event in file_events[:2]:
@@ -500,6 +523,144 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"sensitive deliverable should not be uploaded: {matrix['uploads']!r}")
     if any("abcdefghijklmnopqrstuvwxyz1234567890" in upload.get("body", "") for upload in matrix["uploads"]):
         raise AssertionError("sensitive value leaked into Matrix upload")
+
+    # --- Failure injection: a notification send failure must return a
+    #     retryable error and must NOT leave the task assigned. ---
+    fail_project_id = "fail-inject-project"
+    fail_task_id = "fail-inject-task"
+    payload("projectflow", {
+        "action": "create_project",
+        "payload": {
+            "projectId": fail_project_id,
+            "title": "Failure Injection Project",
+        },
+    })
+    payload("projectflow", {
+        "action": "plan_dag",
+        "payload": {
+            "projectId": fail_project_id,
+            "tasks": [{
+                "taskId": fail_task_id,
+                "title": "Will fail to notify",
+                "assignedTo": "@worker-a:example.test",
+                "dependsOn": [],
+            }],
+        },
+    })
+    os.environ["TEAMHARNESS_TEST_FAIL_NOTIFICATION"] = "1"
+    try:
+        failed_delegate = payload("taskflow", {
+            "role": "leader",
+            "action": "delegate_task",
+            "payload": {
+                "projectId": fail_project_id,
+                "taskId": fail_task_id,
+                "roomId": "room:!team:example.test",
+                "spec": "Notification will be forced to fail.",
+            },
+        })
+    finally:
+        os.environ.pop("TEAMHARNESS_TEST_FAIL_NOTIFICATION", None)
+    if failed_delegate.get("ok") or not failed_delegate.get("retryable"):
+        raise AssertionError(f"notification failure should return a retryable error: {failed_delegate!r}")
+    if failed_delegate["task"].get("status") != "prepared":
+        raise AssertionError(f"failed delegation must not leave task assigned: {failed_delegate!r}")
+    if failed_delegate.get("notification", {}).get("eventId"):
+        raise AssertionError(f"failed delegation must not record an event_id: {failed_delegate!r}")
+    fail_meta = json.loads((pathlib.Path("#{workspace}") / f"shared/tasks/{fail_task_id}/meta.json").read_text(encoding="utf-8"))
+    if fail_meta.get("status") != "prepared":
+        raise AssertionError(f"failed delegation must persist prepared status, not assigned: {fail_meta!r}")
+    fail_project_meta = json.loads((pathlib.Path("#{workspace}") / f"shared/projects/{fail_project_id}/meta.json").read_text(encoding="utf-8"))
+    fail_project_node = next((t for t in fail_project_meta.get("tasks", []) if t.get("task_id") == fail_task_id), None)
+    if fail_project_node is None or fail_project_node.get("status") == "assigned":
+        raise AssertionError(f"failed delegation must not assign the project node: {fail_project_meta!r}")
+
+    # Retry after the failure is resolved: the stable txn id makes the send
+    # idempotent; the task becomes assigned with an event_id.
+    retried_delegate = payload("taskflow", {
+        "role": "leader",
+        "action": "delegate_task",
+        "payload": {
+            "projectId": fail_project_id,
+            "taskId": fail_task_id,
+            "roomId": "room:!team:example.test",
+            "spec": "Notification will be forced to fail.",
+        },
+    })
+    if not retried_delegate.get("ok") or retried_delegate["task"].get("status") != "assigned":
+        raise AssertionError(f"retry after notification failure should assign the task: {retried_delegate!r}")
+    if not retried_delegate.get("notification", {}).get("eventId"):
+        raise AssertionError(f"retry should record the event_id: {retried_delegate!r}")
+    retried_meta = json.loads((pathlib.Path("#{workspace}") / f"shared/tasks/{fail_task_id}/meta.json").read_text(encoding="utf-8"))
+    if retried_meta.get("status") != "assigned":
+        raise AssertionError(f"retry must persist assigned status: {retried_meta!r}")
+
+    # Re-delegating an already assigned task is idempotent and must NOT send
+    # a second notification.
+    before_events = len(matrix["events"])
+    reused_delegate = payload("taskflow", {
+        "role": "leader",
+        "action": "delegate_task",
+        "payload": {
+            "projectId": fail_project_id,
+            "taskId": fail_task_id,
+            "roomId": "room:!team:example.test",
+            "spec": "Idempotent re-delegation.",
+        },
+    })
+    if not reused_delegate.get("ok") or not reused_delegate.get("notification", {}).get("reused"):
+        raise AssertionError(f"re-delegation of an assigned task should be idempotent: {reused_delegate!r}")
+    after_events = len(matrix["events"])
+    if after_events != before_events:
+        raise AssertionError("idempotent re-delegation must not send another notification")
+
+    # --- Room membership must be strictly "join": delegating to an
+    #     invited-but-not-joined Worker returns a retryable error, sends no
+    #     notification, and never assigns the task.
+    invite_project_id = "invite-project"
+    invite_task_id = "invite-task"
+    payload("projectflow", {
+        "action": "create_project",
+        "payload": {
+            "projectId": invite_project_id,
+            "title": "Invited Only Project",
+        },
+    })
+    payload("projectflow", {
+        "action": "plan_dag",
+        "payload": {
+            "projectId": invite_project_id,
+            "tasks": [{
+                "taskId": invite_task_id,
+                "title": "Invited but not joined",
+                "assignedTo": "@worker-invited:example.test",
+                "dependsOn": [],
+            }],
+        },
+    })
+    before_invite_events = len(matrix["events"])
+    invited_delegate = payload("taskflow", {
+        "role": "leader",
+        "action": "delegate_task",
+        "payload": {
+            "projectId": invite_project_id,
+            "taskId": invite_task_id,
+            "roomId": "room:!team:example.test",
+            "spec": "Invited worker cannot be delegated.",
+        },
+    })
+    if invited_delegate.get("ok") or not invited_delegate.get("retryable"):
+        raise AssertionError(f"delegation to an invited-but-not-joined Worker should be retryable: {invited_delegate!r}")
+    if "not a joined member" not in invited_delegate.get("error", ""):
+        raise AssertionError(f"membership error should mention the join requirement: {invited_delegate!r}")
+    after_invite_events = len(matrix["events"])
+    if after_invite_events != before_invite_events:
+        raise AssertionError("delegation to an invited Worker must not send a notification")
+    invite_meta_path = pathlib.Path("#{workspace}") / f"shared/tasks/{invite_task_id}/meta.json"
+    if invite_meta_path.exists():
+        invite_meta = json.loads(invite_meta_path.read_text(encoding="utf-8"))
+        if invite_meta.get("status") == "assigned":
+            raise AssertionError(f"delegation to an invited Worker must not assign the task: {invite_meta!r}")
 
     checked = payload("taskflow", {
         "role": "leader",

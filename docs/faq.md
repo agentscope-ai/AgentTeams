@@ -20,7 +20,7 @@
 - [How to switch a Worker's model](#how-to-switch-a-workers-model)
 - [How to configure OpenRouter or another model provider with slashes in model names](#how-to-configure-openrouter-or-another-model-provider-with-slashes-in-model-names)
 - [How to switch a Worker's runtime](#how-to-switch-a-workers-runtime)
-- [Why does QwenPaw still use `copaw` in runtime values or image names](#why-does-qwenpaw-still-use-copaw-in-runtime-values-or-image-names)
+- [Why does QwenPaw still use `copaw` in some image names](#why-does-qwenpaw-still-use-copaw-in-some-image-names)
 - [Can I connect my own agent implementation as a Worker](#can-i-connect-my-own-agent-implementation-as-a-worker)
 - [Can AgentTeams connect to an existing Higress instance](#can-agentteams-connect-to-an-existing-higress-instance)
 - [How to use the Worker Template Marketplace](#how-to-use-the-worker-template-marketplace)
@@ -641,24 +641,23 @@ Manager will use the worker-management skill to trigger a container recreation. 
 
 ---
 
-## Why does QwenPaw still use `copaw` in runtime values or image names
+## Why does QwenPaw still use `copaw` in some image names
 
 `QwenPaw` is the user-facing name of the Python runtime that was previously
-called `CoPaw`. Some internal compatibility names intentionally remain `copaw`,
-including the Worker CRD runtime value, image names such as
-`agentteams-copaw-worker`, and environment values such as
-`AGENTTEAMS_MANAGER_RUNTIME=copaw`.
-
-Do not change these internal values to `qwenpaw` unless the chart, controller,
-and images explicitly support that new value. They are kept stable to avoid
-breaking existing installations, Helm values, and image pull paths.
+called `CoPaw`. The runtime value has been unified to `qwenpaw` — the
+installer and controller default to `qwenpaw`, and `copaw` is auto-migrated
+to `qwenpaw` on upgrade. The Worker image name `agentteams-copaw-worker`
+retains the legacy `copaw` prefix for backward compatibility with existing
+installations and image pull paths; the Manager image was renamed to
+`agentteams-manager-qwenpaw`. Both images run QwenPaw 2.0.
 
 ---
 
 ## Can I connect my own agent implementation as a Worker
 
 Not by adding an arbitrary new `spec.runtime` value. The Worker CRD currently
-accepts only `openclaw`, `copaw`, or `hermes` as runtimes.
+accepts `openclaw`, `qwenpaw`, `copaw` (legacy, auto-migrated to `qwenpaw`),
+`hermes`, or `openhuman` as runtimes.
 
 For most custom Worker needs, package your role prompt, skills, dependencies,
 and optional Dockerfile as a Worker package, or set a custom image while keeping

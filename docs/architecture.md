@@ -9,7 +9,7 @@ AgentTeams is an **Agent Teams** platform: a **Manager** coordinates **Workers**
 | Layer | Role | Typical images |
 |--------|------|------------------|
 | **agentteams-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `agentteams-controller` (Kubernetes) or **`agentteams-controller-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
-| **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-copaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
+| **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-qwenpaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
 | **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, or `agentteams-hermes-worker` |
 
 The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 22**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
@@ -156,7 +156,7 @@ The shipped **Manager entrypoint** (`start-manager-agent.sh`) selects:
 | Mode | `AGENTTEAMS_MANAGER_RUNTIME` | Behavior |
 |------|---------------------------|----------|
 | **OpenClaw** | `openclaw` (default) | Node/OpenClaw gateway; Matrix “message tool” style integration |
-| **QwenPaw** | `copaw` | Python QwenPaw workspace; Matrix via **`copaw channels send`** (`start-copaw-manager.sh`) |
+| **QwenPaw** | `qwenpaw` (default) | Python QwenPaw workspace; Matrix via **`copaw channels send`** (`start-qwenpaw-manager.sh`) |
 
 **Hermes** is a **Worker** runtime in the API and charts; Manager images today boot **OpenClaw** or **QwenPaw** only (see comments in `start-manager-agent.sh`).
 

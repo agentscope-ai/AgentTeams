@@ -992,3 +992,47 @@ func TestHumanPutRouteIsRegistered(t *testing.T) {
 		t.Errorf("matched pattern = %q, want %q", pattern, "PUT /api/v1/humans/{name}")
 	}
 }
+
+// TestUpdateHumanClearsAccessibleSetsWithEmptyArrays pins the revoke path:
+// an explicit empty array must clear the set, as distinct from omitting the
+// field (which preserves it). Revoking the last team or worker grant sends
+// [], so a regression here would silently leave access in place.
+func TestUpdateHumanClearsAccessibleSetsWithEmptyArrays(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	human := &v1beta1.Human{
+		ObjectMeta: metav1.ObjectMeta{Name: "carol", Namespace: "default"},
+		Spec: v1beta1.HumanSpec{
+			DisplayName:       "Carol",
+			PermissionLevel:   2,
+			Note:              "keep me",
+			AccessibleTeams:   []string{"team-one", "team-two"},
+			AccessibleWorkers: []string{"w-alpha", "w-beta"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(human).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	body := []byte(`{"accessibleTeams":[],"accessibleWorkers":[]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/humans/carol", bytes.NewReader(body))
+	req.SetPathValue("name", "carol")
+	rec := httptest.NewRecorder()
+	handler.UpdateHuman(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var got v1beta1.Human
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "carol", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get human: %v", err)
+	}
+	if len(got.Spec.AccessibleTeams) != 0 {
+		t.Errorf("accessibleTeams = %v, want empty (explicit [] must revoke)", got.Spec.AccessibleTeams)
+	}
+	if len(got.Spec.AccessibleWorkers) != 0 {
+		t.Errorf("accessibleWorkers = %v, want empty (explicit [] must revoke)", got.Spec.AccessibleWorkers)
+	}
+	if got.Spec.DisplayName != "Carol" || got.Spec.Note != "keep me" || got.Spec.PermissionLevel != 2 {
+		t.Errorf("unsent fields mutated: displayName=%q note=%q permissionLevel=%d",
+			got.Spec.DisplayName, got.Spec.Note, got.Spec.PermissionLevel)
+	}
+}

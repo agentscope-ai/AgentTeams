@@ -151,6 +151,15 @@ type CreateHumanRequest struct {
 	Note              string   `json:"note,omitempty"`
 }
 
+// UpdateHumanRequest carries a partial Human spec. Every field is optional:
+// a field left out of the JSON body is skipped, leaving the stored value
+// untouched. Slice fields distinguish "omitted" (nil, skip) from "cleared"
+// (empty non-nil slice, replace with empty).
+type UpdateHumanRequest struct {
+	AccessibleTeams   []string `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers []string `json:"accessibleWorkers,omitempty"`
+}
+
 type HumanResponse struct {
 	Name              string   `json:"name"`
 	Phase             string   `json:"phase"`

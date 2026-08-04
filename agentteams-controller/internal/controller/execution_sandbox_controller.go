@@ -15,6 +15,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	apiresource "k8s.io/apimachinery/pkg/api/resource"
@@ -129,11 +130,26 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	phase := "Pending"
 	readyStatus := metav1.ConditionFalse
 	reason := "PodPending"
-	if executionSandboxPodReady(&livePod) {
+	message := "execution sandbox runner Pod is pending"
+	switch livePod.Status.Phase {
+	case corev1.PodFailed:
+		phase = "Failed"
+		reason = "PodFailed"
+		message = "execution sandbox runner Pod terminated with phase failed"
+	case corev1.PodSucceeded:
+		phase = "Failed"
+		reason = "PodCompleted"
+		message = "execution sandbox runner Pod terminated unexpectedly"
+	case corev1.PodPending, corev1.PodRunning, corev1.PodUnknown, "":
+		// Readiness is carried by the PodReady condition while the Pod is active.
+	}
+	if phase == "Pending" && executionSandboxPodReady(&livePod) {
 		phase = "Ready"
 		readyStatus = metav1.ConditionTrue
 		reason = "PodReady"
+		message = "execution sandbox runner Pod is ready"
 	}
+	statusBefore := sandbox.Status.DeepCopy()
 	sandbox.Status.ObservedGeneration = sandbox.Generation
 	sandbox.Status.Phase = phase
 	sandbox.Status.PodName = pod.Name
@@ -145,15 +161,21 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		Status:             readyStatus,
 		ObservedGeneration: sandbox.Generation,
 		Reason:             reason,
-		Message:            "execution sandbox runner Pod is " + strings.ToLower(phase),
+		Message:            message,
 	})
-	if err := r.Status().Update(ctx, &sandbox); err != nil {
-		return reconcile.Result{}, fmt.Errorf("update execution sandbox status: %w", err)
+	if !apiequality.Semantic.DeepEqual(statusBefore, &sandbox.Status) {
+		if err := r.Status().Update(ctx, &sandbox); err != nil {
+			return reconcile.Result{}, fmt.Errorf("update execution sandbox status: %w", err)
+		}
 	}
-	if phase != "Ready" {
-		return reconcile.Result{RequeueAfter: executionSandboxRequeue}, nil
+	nextLifecycleCheck := expiresAt.Sub(now)
+	if idleRemaining := lastActivity.Add(idleTimeout).Sub(now); idleRemaining < nextLifecycleCheck {
+		nextLifecycleCheck = idleRemaining
 	}
-	return reconcile.Result{}, nil
+	if phase == "Pending" && nextLifecycleCheck > executionSandboxRequeue {
+		nextLifecycleCheck = executionSandboxRequeue
+	}
+	return reconcile.Result{RequeueAfter: nextLifecycleCheck}, nil
 }
 
 func executionSandboxDuration(raw string, fallback time.Duration, field string) (time.Duration, error) {

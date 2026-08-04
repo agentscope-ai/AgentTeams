@@ -297,6 +297,7 @@ kubectl -n "${AGENTTEAMS_NAMESPACE}" get pod -l agentteams.io/runtime=deepagents
 | migration init container 重启 | PostgreSQL Service/PVC、DSN、NetworkPolicy、数据库密码 |
 | Worker PVC 一直 Pending | kubeadm 集群是否存在默认 StorageClass，或 `deepagents.state.storageClassName` 是否正确 |
 | Runner 一直 Pending | Runner 镜像、节点资源、`ExecutionSandbox.status.conditions` |
+| Runner 进入 Failed | Runner Pod 终止原因与事件；Controller 会保留终止 Pod 供诊断，并拒绝自动重放结果不确定的命令 |
 | Runner 无法访问目标 | Worker egress 请求、Helm ceiling、实际目标 IP、CNI 是否执行 NetworkPolicy |
 | Matrix token 过期 | Worker 会用轮转的 ServiceAccount token 调用 Controller 刷新；检查 Controller API/RBAC 和 Pod token projection |
 | 命令结果 unknown | Worker 已用同一 request ID 重试但仍无法确认结果；为避免重复副作用，不要自动重新执行 |

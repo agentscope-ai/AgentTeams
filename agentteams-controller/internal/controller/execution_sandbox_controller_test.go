@@ -9,9 +9,11 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -272,6 +274,226 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 	if len(policy.Spec.Egress) != 2 {
 		t.Fatalf("NetworkPolicy egress was not restored in place: %#v", policy.Spec.Egress)
 	}
+}
+
+func TestExecutionSandboxReconcilerSchedulesReadySandboxExpiry(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	r, cl, key := newExecutionSandboxLifecycleTestRig(t, now)
+
+	setExecutionSandboxPodPhase(t, cl, key, corev1.PodRunning, true)
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile ready sandbox: %v", err)
+	}
+	if result.RequeueAfter != 10*time.Minute {
+		t.Fatalf("ready sandbox requeue=%s, want max-lifetime deadline in 10m", result.RequeueAfter)
+	}
+
+	var sandbox v1beta1.ExecutionSandbox
+	if err := cl.Get(context.Background(), key, &sandbox); err != nil {
+		t.Fatal(err)
+	}
+	if sandbox.Status.Phase != "Ready" || sandboxReadyReason(sandbox.Status.Conditions) != "PodReady" {
+		t.Fatalf("ready sandbox status=%#v", sandbox.Status)
+	}
+	resourceVersion := sandbox.ResourceVersion
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("repeat ready Reconcile: %v", err)
+	}
+	if err := cl.Get(context.Background(), key, &sandbox); err != nil {
+		t.Fatal(err)
+	}
+	if sandbox.ResourceVersion != resourceVersion {
+		t.Fatalf(
+			"unchanged ready status was rewritten: resourceVersion %q -> %q",
+			resourceVersion,
+			sandbox.ResourceVersion,
+		)
+	}
+}
+
+func TestExecutionSandboxReconcilerReportsTerminalRunnerPodFailed(t *testing.T) {
+	tests := []struct {
+		name       string
+		podPhase   corev1.PodPhase
+		wantReason string
+	}{
+		{name: "failed", podPhase: corev1.PodFailed, wantReason: "PodFailed"},
+		{name: "unexpected successful exit", podPhase: corev1.PodSucceeded, wantReason: "PodCompleted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+			r, cl, key := newExecutionSandboxLifecycleTestRig(t, now)
+			setExecutionSandboxPodPhase(t, cl, key, tt.podPhase, false)
+
+			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+			if err != nil {
+				t.Fatalf("Reconcile terminal sandbox: %v", err)
+			}
+			if result.RequeueAfter != 10*time.Minute {
+				t.Fatalf("terminal sandbox requeue=%s, want max-lifetime deadline in 10m", result.RequeueAfter)
+			}
+
+			var sandbox v1beta1.ExecutionSandbox
+			if err := cl.Get(context.Background(), key, &sandbox); err != nil {
+				t.Fatal(err)
+			}
+			if sandbox.Status.Phase != "Failed" || sandboxReadyReason(sandbox.Status.Conditions) != tt.wantReason {
+				t.Fatalf("terminal sandbox status=%#v", sandbox.Status)
+			}
+			var pod corev1.Pod
+			if err := cl.Get(context.Background(), key, &pod); err != nil {
+				t.Fatalf("terminal runner Pod was recreated or deleted: %v", err)
+			}
+			if pod.Status.Phase != tt.podPhase {
+				t.Fatalf("terminal runner Pod phase=%q, want preserved %q", pod.Status.Phase, tt.podPhase)
+			}
+		})
+	}
+}
+
+func TestExecutionSandboxReconcilerMovesIdleDeadlineWithHeartbeatAndDeletesAtExpiry(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	r, cl, key := newExecutionSandboxLifecycleTestRig(t, now)
+	var sandbox v1beta1.ExecutionSandbox
+	if err := cl.Get(context.Background(), key, &sandbox); err != nil {
+		t.Fatal(err)
+	}
+	sandbox.Spec.MaxLifetime = "8h"
+	if err := cl.Update(context.Background(), &sandbox); err != nil {
+		t.Fatalf("extend max lifetime: %v", err)
+	}
+	setExecutionSandboxPodPhase(t, cl, key, corev1.PodRunning, true)
+	if err := cl.Get(context.Background(), key, &sandbox); err != nil {
+		t.Fatal(err)
+	}
+	staleHeartbeat := metav1.NewTime(now.Add(-5 * time.Minute))
+	sandbox.Status.LastHeartbeat = &staleHeartbeat
+	if err := cl.Status().Update(context.Background(), &sandbox); err != nil {
+		t.Fatalf("set stale heartbeat: %v", err)
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile stale heartbeat: %v", err)
+	}
+	if result.RequeueAfter != 25*time.Minute {
+		t.Fatalf("stale-heartbeat requeue=%s, want 25m idle deadline", result.RequeueAfter)
+	}
+
+	if err := cl.Get(context.Background(), key, &sandbox); err != nil {
+		t.Fatal(err)
+	}
+	freshHeartbeat := metav1.NewTime(now)
+	sandbox.Status.LastHeartbeat = &freshHeartbeat
+	if err := cl.Status().Update(context.Background(), &sandbox); err != nil {
+		t.Fatalf("refresh heartbeat: %v", err)
+	}
+	result, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile fresh heartbeat: %v", err)
+	}
+	if result.RequeueAfter != 30*time.Minute {
+		t.Fatalf("fresh-heartbeat requeue=%s, want moved 30m idle deadline", result.RequeueAfter)
+	}
+
+	r.Now = func() time.Time { return now.Add(30 * time.Minute) }
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile idle expiry: %v", err)
+	}
+	if err := cl.Get(context.Background(), key, &sandbox); !apierrors.IsNotFound(err) {
+		t.Fatalf("idle sandbox was not deleted at moved deadline: %v", err)
+	}
+}
+
+func newExecutionSandboxLifecycleTestRig(
+	t *testing.T,
+	now time.Time,
+) (*ExecutionSandboxReconciler, client.Client, types.NamespacedName) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		Spec: v1beta1.WorkerSpec{
+			Model: "qwen-max",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+				Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+			}},
+		},
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "exec-lifecycle",
+			Namespace:         "agentteams-system",
+			UID:               "sandbox-uid",
+			CreationTimestamp: metav1.NewTime(now),
+		},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
+			SessionID:   "thread-hash",
+			IdleTimeout: "30m",
+			MaxLifetime: "10m",
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}, &corev1.Pod{}).
+		WithObjects(worker, sandbox).
+		Build()
+	r := &ExecutionSandboxReconciler{
+		Client:         cl,
+		RunnerImage:    "runner:v1",
+		ControllerName: "ctl-a",
+		DefaultRuntime: "deepagents",
+		Now:            func() time.Time { return now },
+	}
+	key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("initial Reconcile: %v", err)
+	}
+	return r, cl, key
+}
+
+func setExecutionSandboxPodPhase(
+	t *testing.T,
+	cl client.Client,
+	key types.NamespacedName,
+	phase corev1.PodPhase,
+	ready bool,
+) {
+	t.Helper()
+	var pod corev1.Pod
+	if err := cl.Get(context.Background(), key, &pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status.Phase = phase
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}
+	if err := cl.Status().Update(context.Background(), &pod); err != nil {
+		t.Fatalf("set runner Pod status: %v", err)
+	}
+}
+
+func sandboxReadyReason(conditions []metav1.Condition) string {
+	for _, condition := range conditions {
+		if condition.Type == "Ready" {
+			return condition.Reason
+		}
+	}
+	return ""
 }
 
 func TestExecutionSandboxReconcilerRejectsNonDeepAgentsWorker(t *testing.T) {

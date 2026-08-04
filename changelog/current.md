@@ -43,6 +43,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Change list / 变更列表**
 
+- [`3c3b4feb`](https://github.com/agentscope-ai/AgentTeams/commit/3c3b4feb) feat(deepagents): package Kubernetes worker runtime
 - [`30216225`](https://github.com/agentscope-ai/AgentTeams/commit/30216225) feat(deepagents): add Matrix runtime and workspace sync
 - [`44eb0bb1`](https://github.com/agentscope-ai/AgentTeams/commit/44eb0bb1) feat(deepagents): implement secure worker runtime core
 - [`74661a63`](https://github.com/agentscope-ai/AgentTeams/commit/74661a63) feat(deepagents): add controller runtime and sandbox contracts

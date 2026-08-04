@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -55,3 +57,47 @@ class ToolApprovalPolicy:
                     return rule.mode == "required"
             return self.mcp_default == "required"
         return False
+
+
+@dataclass(frozen=True)
+class MatrixDecision:
+    """One structured decision parsed from a Matrix reply."""
+
+    action: str
+    index: int | None
+    reason: str | None = None
+    edited_arguments: dict[str, Any] | None = None
+
+
+def parse_matrix_decision(body: str) -> MatrixDecision:
+    """Parse a Human's compact Matrix approval reply."""
+    parts = body.strip().split(maxsplit=2)
+    if len(parts) < 2:
+        raise ValueError("unsupported approval decision")
+    action = parts[0].casefold()
+    if action == "approve" and len(parts) == 2 and parts[1].casefold() == "all":
+        return MatrixDecision(action="approve_all", index=None)
+    index = _positive_action_index(parts[1])
+    if action == "approve" and len(parts) == 2:
+        return MatrixDecision(action="approve", index=index)
+    if action == "reject" and len(parts) == 3 and parts[2].strip():
+        return MatrixDecision(action="reject", index=index, reason=parts[2].strip())
+    if action == "edit" and len(parts) == 3:
+        try:
+            arguments = json.loads(parts[2])
+        except json.JSONDecodeError as exc:
+            raise ValueError("edited arguments must be valid JSON") from exc
+        if not isinstance(arguments, dict):
+            raise ValueError("edited arguments must be a JSON object")
+        return MatrixDecision(action="edit", index=index, edited_arguments=arguments)
+    raise ValueError("unsupported approval decision")
+
+
+def _positive_action_index(value: str) -> int:
+    try:
+        index = int(value)
+    except ValueError as exc:
+        raise ValueError("approval action index must be an integer") from exc
+    if index < 1:
+        raise ValueError("approval action index must be positive")
+    return index

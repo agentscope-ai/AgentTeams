@@ -1,6 +1,11 @@
 import unittest
 
-from deepagents_agentteams.approvals import ApprovalPrincipals, MCPApprovalRule, ToolApprovalPolicy
+from deepagents_agentteams.approvals import (
+    ApprovalPrincipals,
+    MCPApprovalRule,
+    ToolApprovalPolicy,
+    parse_matrix_decision,
+)
 
 
 class ApprovalPrincipalTests(unittest.TestCase):
@@ -84,6 +89,36 @@ class ToolApprovalPolicyTests(unittest.TestCase):
                 mcp_tool="create_issue",
             )
         )
+
+
+class MatrixDecisionParserTests(unittest.TestCase):
+    def test_parses_numbered_approve_decision(self) -> None:
+        decision = parse_matrix_decision("  approve 1  ")
+
+        self.assertEqual(decision.action, "approve")
+        self.assertEqual(decision.index, 1)
+        self.assertIsNone(decision.reason)
+        self.assertIsNone(decision.edited_arguments)
+
+    def test_parses_reject_reason_without_losing_spaces(self) -> None:
+        decision = parse_matrix_decision("reject 2 command is too broad")
+
+        self.assertEqual(decision.action, "reject")
+        self.assertEqual(decision.index, 2)
+        self.assertEqual(decision.reason, "command is too broad")
+
+    def test_parses_edit_arguments_as_json_object(self) -> None:
+        decision = parse_matrix_decision('edit 3 {"command":"ls /workspace"}')
+
+        self.assertEqual(decision.action, "edit")
+        self.assertEqual(decision.index, 3)
+        self.assertEqual(decision.edited_arguments, {"command": "ls /workspace"})
+
+    def test_parses_approve_all_as_batch_decision(self) -> None:
+        decision = parse_matrix_decision("approve all")
+
+        self.assertEqual(decision.action, "approve_all")
+        self.assertIsNone(decision.index)
 
 
 if __name__ == "__main__":

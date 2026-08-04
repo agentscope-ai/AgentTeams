@@ -662,6 +662,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		}
 		req := service.MemberRuntimeConfigDeployRequest{
 			Name:              member.ref.Name,
+			UID:               string(member.worker.UID),
 			RuntimeName:       member.runtimeName,
 			Runtime:           runtime,
 			Role:              role.String(),
@@ -811,6 +812,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	}
 	if err := r.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 		Name:            w.Name,
+		UID:             string(w.UID),
 		RuntimeName:     runtimeName,
 		Runtime:         w.Spec.Runtime,
 		Role:            RoleStandalone.String(),

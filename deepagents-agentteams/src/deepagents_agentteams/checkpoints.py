@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
 from psycopg import Connection
 from psycopg.rows import dict_row
@@ -34,6 +35,18 @@ def postgres_checkpointer(dsn: str, aes_key: str) -> Iterator[PostgresSaver]:
         yield PostgresSaver(connection, serde=encrypted_serializer(aes_key))
     finally:
         connection.close()
+
+
+@asynccontextmanager
+async def async_postgres_checkpointer(dsn: str, aes_key: str) -> AsyncIterator[AsyncPostgresSaver]:
+    """Yield the encrypted async saver used by the Matrix event loop."""
+    if not dsn.strip():
+        raise ValueError("checkpoint PostgreSQL DSN must be non-empty")
+    async with AsyncPostgresSaver.from_conn_string(
+        dsn,
+        serde=encrypted_serializer(aes_key),
+    ) as saver:
+        yield saver
 
 
 def setup_checkpoint_database(dsn: str, aes_key: str) -> None:

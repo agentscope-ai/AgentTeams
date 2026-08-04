@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from deepagents_agentteams.checkpoints import (
+    async_postgres_checkpointer,
     encrypted_serializer,
     postgres_checkpointer,
     setup_checkpoint_database,
@@ -57,3 +58,26 @@ def test_setup_runs_idempotent_postgres_migrations() -> None:
         setup_checkpoint_database("postgresql://checkpoint", aes_key())
 
     saver.setup.assert_called_once_with()
+
+
+async def test_async_postgres_saver_uses_encrypted_serializer() -> None:
+    saver = Mock()
+
+    class AsyncContext:
+        async def __aenter__(self):  # noqa: ANN201
+            return saver
+
+        async def __aexit__(self, *_args) -> None:  # noqa: ANN002
+            return None
+
+    with patch(
+        "deepagents_agentteams.checkpoints.AsyncPostgresSaver.from_conn_string",
+        return_value=AsyncContext(),
+    ) as factory:
+        async with async_postgres_checkpointer("postgresql://checkpoint", aes_key()) as actual:
+            assert actual is saver
+
+    assert factory.call_args.args == ("postgresql://checkpoint",)
+    serializer = factory.call_args.kwargs["serde"]
+    type_name, ciphertext = serializer.dumps_typed("sensitive")
+    assert serializer.loads_typed((type_name, ciphertext)) == "sensitive"

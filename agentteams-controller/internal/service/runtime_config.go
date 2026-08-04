@@ -55,6 +55,7 @@ type memberRuntimeConfigTeamAdmin struct {
 
 type memberRuntimeConfigMember struct {
 	Name           string `json:"name,omitempty"`
+	UID            string `json:"uid,omitempty"`
 	RuntimeName    string `json:"runtimeName"`
 	Role           string `json:"role,omitempty"`
 	Runtime        string `json:"runtime"`
@@ -220,6 +221,9 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 	if req.Name != "" {
 		doc.Member.Name = req.Name
 	}
+	if req.UID != "" {
+		doc.Member.UID = req.UID
+	}
 	doc.Member.RuntimeName = runtimeName
 	if req.Role != "" {
 		doc.Member.Role = req.Role
@@ -309,6 +313,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		},
 		Member: memberRuntimeConfigMember{
 			Name:           req.Name,
+			UID:            req.UID,
 			RuntimeName:    runtimeName,
 			Role:           role,
 			Runtime:        runtime,

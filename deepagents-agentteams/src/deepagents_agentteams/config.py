@@ -79,10 +79,14 @@ class RuntimeConfig:
 
     generation: int
     worker_name: str
+    worker_uid: str
     runtime_name: str
     controller_url: str
     service_account_token_path: str
     mcp_servers: tuple[dict[str, str], ...]
+    room_ids: tuple[str, ...]
+    human_approver_ids: frozenset[str]
+    agent_matrix_ids: frozenset[str]
     model: ModelConfig
     matrix: MatrixConfig
     storage: StorageConfig
@@ -124,6 +128,7 @@ class RuntimeConfig:
         approval_config = _mapping_value(deepagents_config.get("approvals", {}), "deepagents.approvals")
         execution_config = _mapping_value(deepagents_config.get("execution", {}), "deepagents.execution")
         mcp_servers = _mcp_servers(desired_config.get("mcpServers", []))
+        team_config = _mapping_value(document.get("team", {}), "team")
         idle_timeout_seconds = _duration_seconds(
             execution_config.get("idleTimeout", "30m"),
             "deepagents.execution.idleTimeout",
@@ -132,16 +137,42 @@ class RuntimeConfig:
             execution_config.get("maxLifetime", "8h"),
             "deepagents.execution.maxLifetime",
         )
+        coordinators = _string_tuple(
+            approval_config.get("coordinators", []),
+            "deepagents.approvals.coordinators",
+        )
+        personal_room_id = _required_str(member, "personalRoomId")
+        team_room_id = _optional_str(team_config, "teamRoomId")
+        room_ids = tuple(dict.fromkeys(room for room in (personal_room_id, team_room_id) if room))
+        member_matrix_user_id = _required_str(member, "matrixUserId")
+        agent_matrix_ids = {member_matrix_user_id}
+        members = team_config.get("members", [])
+        if not isinstance(members, list):
+            raise ConfigError("team.members must be an array")
+        for index, item in enumerate(members):
+            team_member = _mapping_value(item, f"team.members[{index}]")
+            matrix_user_id = _optional_str(team_member, "matrixUserId")
+            if matrix_user_id:
+                agent_matrix_ids.add(matrix_user_id)
+        human_approver_ids = set(coordinators)
+        admin = _mapping_value(team_config.get("admin", {}), "team.admin")
+        admin_matrix_user_id = _optional_str(admin, "matrixUserId")
+        if admin_matrix_user_id:
+            human_approver_ids.add(admin_matrix_user_id)
 
         return cls(
             generation=_required_int(metadata, "generation"),
             worker_name=_required_str(member, "name"),
+            worker_uid=str(member.get("uid") or _required_str(member, "name")),
             runtime_name=_required_str(member, "runtimeName"),
             controller_url=str(environ.get("AGENTTEAMS_CONTROLLER_URL", "")).rstrip("/"),
             service_account_token_path=str(
                 credentials.get("serviceAccountTokenPath", "/var/run/secrets/agentteams/token")
             ),
             mcp_servers=mcp_servers,
+            room_ids=room_ids,
+            human_approver_ids=frozenset(human_approver_ids),
+            agent_matrix_ids=frozenset(agent_matrix_ids),
             model=ModelConfig(
                 name=_required_str(model_config, "model"),
                 gateway_url=_required_str(model_config, "gatewayUrl"),
@@ -149,8 +180,8 @@ class RuntimeConfig:
             ),
             matrix=MatrixConfig(
                 homeserver_url=_required_str(matrix_config, "homeserverUrl"),
-                user_id=_required_str(member, "matrixUserId"),
-                room_id=_required_str(member, "personalRoomId"),
+                user_id=member_matrix_user_id,
+                room_id=personal_room_id,
                 access_token=_secret_from_env(credentials, "matrixTokenEnv", environ),
                 encryption_enabled=bool(matrix_config.get("encryptionEnabled", True)),
             ),
@@ -170,10 +201,7 @@ class RuntimeConfig:
                 file_writes=_approval_mode(approval_config.get("fileWrites", "notRequired"), "fileWrites"),
                 mcp_default=_approval_mode(approval_config.get("mcpDefault", "required"), "mcpDefault"),
                 mcp_rules=_mcp_approval_rules(approval_config.get("mcpRules", [])),
-                coordinators=_string_tuple(
-                    approval_config.get("coordinators", []),
-                    "deepagents.approvals.coordinators",
-                ),
+                coordinators=coordinators,
             ),
             execution=ExecutionConfig(
                 mode=_execution_mode(execution_config.get("mode", "disabled")),
@@ -207,6 +235,15 @@ def _required_int(document: Mapping[str, Any], field: str) -> int:
     if not isinstance(value, int):
         raise ConfigError(f"{field} must be an integer")
     return value
+
+
+def _optional_str(document: Mapping[str, Any], field: str) -> str:
+    value = document.get(field)
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise ConfigError(f"{field} must be a string")
+    return value.strip()
 
 
 def _secret_from_env(

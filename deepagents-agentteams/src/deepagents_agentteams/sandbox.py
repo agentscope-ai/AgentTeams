@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import re
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import quote, urlsplit
 
 import httpx
 from deepagents.backends.protocol import ExecuteResponse, FileDownloadResponse, FileUploadResponse
 from deepagents.backends.sandbox import BaseSandbox
 
+from deepagents_agentteams.runner_core import WorkspaceChange
+
 _SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -25,6 +30,14 @@ class SandboxLease:
     name: str
     endpoint: str
     token: str
+
+
+class WorkspaceStore(Protocol):
+    """Worker-side durable storage boundary used by a sandbox backend."""
+
+    def hydrate(self, sandbox: BaseSandbox) -> None: ...
+
+    def persist_changes(self, sandbox: BaseSandbox, changes: tuple[WorkspaceChange, ...]) -> None: ...
 
 
 class SandboxControlClient:
@@ -117,6 +130,7 @@ class AgentTeamsSandbox(BaseSandbox):
         session_id: str,
         client: httpx.Client | None = None,
         default_timeout_seconds: int = 120,
+        workspace_store: WorkspaceStore | None = None,
     ) -> None:
         _validate_session_id(session_id)
         if default_timeout_seconds < 1:
@@ -125,6 +139,7 @@ class AgentTeamsSandbox(BaseSandbox):
         self._session_id = session_id
         self._client = client or httpx.Client(timeout=130, trust_env=False)
         self._default_timeout_seconds = default_timeout_seconds
+        self._workspace_store = workspace_store
         self._lease: SandboxLease | None = None
 
     @property
@@ -154,11 +169,23 @@ class AgentTeamsSandbox(BaseSandbox):
             )
         response.raise_for_status()
         payload = response.json()
-        return ExecuteResponse(
+        result = ExecuteResponse(
             output=str(payload.get("output", "")),
             exit_code=payload.get("exit_code"),
             truncated=bool(payload.get("truncated", False)),
         )
+        changes = tuple(WorkspaceChange(**item) for item in payload.get("changes", []))
+        if self._workspace_store is not None and changes:
+            try:
+                self._workspace_store.persist_changes(self, changes)
+            except Exception:  # noqa: BLE001 - storage SDKs expose several transport-specific exception types.
+                _LOGGER.exception("failed to persist execution sandbox changes")
+                warning = (
+                    "Workspace persistence failed after command completion; "
+                    "do not repeat the command automatically."
+                )
+                result.output = f"{result.output}\n{warning}" if result.output else warning
+        return result
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload files as one bounded batch and preserve per-file errors."""
@@ -229,7 +256,14 @@ class AgentTeamsSandbox(BaseSandbox):
 
     def _ensure_lease(self) -> SandboxLease:
         if self._lease is None:
-            self._lease = self._control.ensure_ready(self._session_id)
+            lease = self._control.ensure_ready(self._session_id)
+            self._lease = lease
+            if self._workspace_store is not None:
+                try:
+                    self._workspace_store.hydrate(self)
+                except Exception:
+                    self._lease = None
+                    raise
         return self._lease
 
 

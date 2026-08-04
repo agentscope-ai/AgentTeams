@@ -531,6 +531,7 @@ func TestDeployMemberRuntimeConfigProjectsSecretSafeDeepAgentsDocument(t *testin
 
 	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
 		Name:           "researcher",
+		UID:            "worker-uid-1",
 		RuntimeName:    "researcher",
 		Runtime:        "deepagents",
 		Role:           "worker",
@@ -575,6 +576,10 @@ func TestDeployMemberRuntimeConfigProjectsSecretSafeDeepAgentsDocument(t *testin
 		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, payload)
 	}
 	matrix := doc["matrix"].(map[string]any)
+	member := doc["member"].(map[string]any)
+	if got := fmt.Sprint(member["uid"]); got != "worker-uid-1" {
+		t.Fatalf("member.uid=%q", got)
+	}
 	if got := fmt.Sprint(matrix["homeserverUrl"]); got != "http://tuwunel.agentteams-system.svc:8008" {
 		t.Fatalf("matrix.homeserverUrl=%q", got)
 	}

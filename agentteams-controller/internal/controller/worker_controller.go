@@ -605,6 +605,7 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 	}
 	return MemberContext{
 		Name:               w.Name,
+		UID:                string(w.UID),
 		RuntimeName:        runtimeName,
 		Namespace:          w.Namespace,
 		Role:               RoleStandalone,

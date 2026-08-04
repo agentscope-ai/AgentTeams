@@ -84,6 +84,7 @@ func (r MemberRole) String() string { return string(r) }
 // referenced Worker CRs.
 type MemberContext struct {
 	Name        string // Kubernetes resource identity (CR/Pod/SA key)
+	UID         string // immutable Worker CR identity used to scope durable runtime threads
 	RuntimeName string // business/runtime identity (Matrix/OSS/room alias key)
 	TeamName    string // effective Team identity used for scoped storage access
 	Namespace   string
@@ -382,6 +383,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		}
 		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 			Name:                  m.Name,
+			UID:                   m.UID,
 			RuntimeName:           m.RuntimeName,
 			Runtime:               runtime,
 			Role:                  m.Role.String(),

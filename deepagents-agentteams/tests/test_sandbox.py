@@ -167,3 +167,71 @@ def test_file_transfers_use_deepagents_response_contracts() -> None:
     assert uploads[1].error == "permission_denied"
     assert downloads[0].content == b"downloaded"
     assert downloads[1].error == "file_not_found"
+
+
+def test_workspace_is_hydrated_once_and_command_changes_are_persisted() -> None:
+    class RecordingWorkspace:
+        def __init__(self) -> None:
+            self.hydrate_calls = 0
+            self.persisted = []
+
+        def hydrate(self, sandbox: AgentTeamsSandbox) -> None:
+            self.hydrate_calls += 1
+
+        def persist_changes(self, sandbox: AgentTeamsSandbox, changes) -> None:  # noqa: ANN001
+            self.persisted.append(changes)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "controller":
+            return httpx.Response(
+                200,
+                json={
+                    "name": "exec-worker-hash",
+                    "phase": "Ready",
+                    "endpoint": "http://runner:8080",
+                    "token": runner_token(),
+                },
+            )
+        payload = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "request_id": payload["request_id"],
+                "output": "changed",
+                "exit_code": 0,
+                "truncated": False,
+                "changes": [
+                    {
+                        "path": "report.txt",
+                        "sha256": "digest",
+                        "size": 7,
+                        "deleted": False,
+                    }
+                ],
+            },
+        )
+
+    with tempfile.TemporaryDirectory() as directory:
+        token_path = Path(directory, "token")
+        token_path.write_text(service_account_token())
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        control = SandboxControlClient(
+            controller_url="http://controller:8090",
+            worker_name="researcher-cr",
+            service_account_token_path=token_path,
+            client=client,
+        )
+        workspace = RecordingWorkspace()
+        sandbox = AgentTeamsSandbox(
+            control=control,
+            session_id="atd-thread-hash",
+            client=client,
+            workspace_store=workspace,
+        )
+
+        sandbox.execute("first")
+        sandbox.execute("second")
+
+    assert workspace.hydrate_calls == 1
+    assert len(workspace.persisted) == 2
+    assert workspace.persisted[0][0].path == "report.txt"

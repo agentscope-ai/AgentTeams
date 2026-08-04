@@ -81,6 +81,7 @@ type RuntimeProjectionConfig struct {
 // RuntimeName, not Name, is the object-storage member key.
 type MemberRuntimeConfigDeployRequest struct {
 	Name        string
+	UID         string
 	RuntimeName string
 	Runtime     string
 	Role        string

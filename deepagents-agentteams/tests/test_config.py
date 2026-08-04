@@ -11,6 +11,7 @@ def valid_document() -> dict[str, object]:
         "metadata": {"generation": 7},
         "member": {
             "name": "researcher-cr",
+            "uid": "worker-uid-1",
             "runtime": "deepagents",
             "runtimeName": "researcher",
             "matrixUserId": "@researcher:example.org",
@@ -19,6 +20,21 @@ def valid_document() -> dict[str, object]:
         "matrix": {
             "homeserverUrl": "https://matrix.example.org",
             "encryptionEnabled": True,
+        },
+        "team": {
+            "name": "research",
+            "teamRoomId": "!team:example.org",
+            "admin": {
+                "name": "operator",
+                "matrixUserId": "@operator:example.org",
+            },
+            "members": [
+                {
+                    "name": "leader",
+                    "matrixUserId": "@leader:example.org",
+                    "role": "team_leader",
+                }
+            ],
         },
         "desired": {
             "state": "Running",
@@ -126,6 +142,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.generation, 7)
         self.assertEqual(config.runtime_name, "researcher")
         self.assertEqual(config.worker_name, "researcher-cr")
+        self.assertEqual(config.worker_uid, "worker-uid-1")
         self.assertEqual(config.model.name, "qwen-max")
         self.assertEqual(config.model.gateway_key, "gateway-secret")
         self.assertEqual(config.matrix.access_token, "matrix-secret")
@@ -150,6 +167,12 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.mcp_servers[0]["name"], "github")
         self.assertEqual(config.controller_url, "http://controller.agentteams-system.svc:8090")
         self.assertEqual(config.service_account_token_path, "/var/run/secrets/agentteams/token")
+        self.assertEqual(config.room_ids, ("!room:example.org", "!team:example.org"))
+        self.assertEqual(config.human_approver_ids, frozenset({"@operator:example.org", "@reviewer:example.org"}))
+        self.assertEqual(
+            config.agent_matrix_ids,
+            frozenset({"@researcher:example.org", "@leader:example.org"}),
+        )
 
     def test_rejects_invalid_approval_mode_and_duration(self) -> None:
         document = copy.deepcopy(valid_document())

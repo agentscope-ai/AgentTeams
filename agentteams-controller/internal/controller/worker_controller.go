@@ -198,6 +198,9 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{}, err
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
+	if err := ValidateMemberRuntime(deps, mctx); err != nil {
+		return reconcile.Result{}, err
+	}
 	mctx.TeamName, err = r.workerTeamName(ctx, w)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -390,7 +393,9 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 	effectiveSpec = workerSpecWithAppliedDeploymentTarget(effectiveSpec, w.Status)
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
 
-	_ = ReconcileMemberDelete(ctx, deps, mctx)
+	if err := ReconcileMemberDelete(ctx, deps, mctx); err != nil {
+		return reconcile.Result{}, err
+	}
 
 	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
 		workerMatrixID := r.Provisioner.MatrixUserID(w.Name)
@@ -814,6 +819,9 @@ func hashAppliedWorkerSpecForRuntime(spec v1beta1.WorkerSpec, runtime string) st
 		}
 		return hashQwenPawPodSpec(spec)
 	}
+	if runtime == backend.RuntimeDeepAgents {
+		return hashDeepAgentsPodSpecWithResources(spec, nil)
+	}
 	return hashAppliedWorkerSpec(spec)
 }
 
@@ -823,6 +831,9 @@ func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtim
 			spec.Runtime = runtime
 		}
 		return hashQwenPawPodSpecWithResources(spec, resources)
+	}
+	if runtime == backend.RuntimeDeepAgents {
+		return hashDeepAgentsPodSpecWithResources(spec, resources)
 	}
 	if resources == nil {
 		return hashAppliedWorkerSpec(spec)
@@ -835,6 +846,34 @@ func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtim
 	spec.IdleTimeout = ""     // exclude controller-side autosleep policy
 	spec.ServiceEnabled = nil // service-only: does not affect pod
 	spec.Expose = nil         // service-only: does not affect pod
+	spec.Resources = nil
+	payload := struct {
+		Spec             v1beta1.WorkerSpec                 `json:"spec"`
+		Resources        *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+		WorkerDepsLayout string                             `json:"workerDepsLayout,omitempty"`
+	}{
+		Spec:             spec,
+		Resources:        resources,
+		WorkerDepsLayout: workerDepsLayoutHashVersion(spec),
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%x", h.Sum64())
+}
+
+func hashDeepAgentsPodSpecWithResources(spec v1beta1.WorkerSpec, resources *v1beta1.AgentResourceRequirements) string {
+	// DeepAgents loads the complete projected runtime document at process
+	// startup. Desired-state changes therefore recreate the Pod; its dedicated
+	// PVC preserves Matrix E2EE and pending approval state across the restart.
+	spec.State = nil
+	spec.IdleTimeout = ""
+	spec.ServiceEnabled = nil
+	spec.Expose = nil
+	spec.AccessEntries = nil
 	spec.Resources = nil
 	payload := struct {
 		Spec             v1beta1.WorkerSpec                 `json:"spec"`

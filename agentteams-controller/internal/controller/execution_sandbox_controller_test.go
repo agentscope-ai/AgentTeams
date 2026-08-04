@@ -114,6 +114,9 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
 		t.Fatal("sandbox must disable ServiceAccount token automount")
 	}
+	if pod.Spec.ServiceAccountName != "default" {
+		t.Fatalf("sandbox ServiceAccountName=%q, want default to match API defaulting", pod.Spec.ServiceAccountName)
+	}
 	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.RunAsNonRoot == nil || !*pod.Spec.SecurityContext.RunAsNonRoot ||
 		pod.Spec.SecurityContext.SeccompProfile == nil || pod.Spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
 		t.Fatalf("pod security context is not hardened: %#v", pod.Spec.SecurityContext)
@@ -141,15 +144,23 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 	if service.Spec.Selector[v1beta1.LabelExecutionSandbox] != sandbox.Name || service.Spec.Ports[0].Port != 8080 {
 		t.Fatalf("service does not target runner: %#v", service.Spec)
 	}
-	if len(policy.Spec.PolicyTypes) != 2 || len(policy.Spec.Ingress) != 1 || len(policy.Spec.Egress) != 1 {
+	if len(policy.Spec.PolicyTypes) != 2 || len(policy.Spec.Ingress) != 1 || len(policy.Spec.Egress) != 2 {
 		t.Fatalf("network policy must default-deny and add explicit rules: %#v", policy.Spec)
 	}
 	ingressPeer := policy.Spec.Ingress[0].From[0].PodSelector
 	if ingressPeer == nil || ingressPeer.MatchLabels[v1beta1.LabelWorker] != "researcher" {
 		t.Fatalf("runner ingress is not restricted to its worker: %#v", policy.Spec.Ingress)
 	}
+	if ingressPeer.MatchLabels[v1beta1.LabelController] != "ctl-a" {
+		t.Fatalf("runner ingress is not restricted to its controller: %#v", policy.Spec.Ingress)
+	}
 	if got := policy.Spec.Egress[0].To[0].IPBlock.CIDR; got != "10.96.0.10/32" {
 		t.Fatalf("egress CIDR=%q", got)
+	}
+	dnsPeer := policy.Spec.Egress[1].To[0]
+	if dnsPeer.NamespaceSelector == nil || dnsPeer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "kube-system" ||
+		dnsPeer.PodSelector == nil || dnsPeer.PodSelector.MatchLabels["k8s-app"] != "kube-dns" {
+		t.Fatalf("DNS egress peer=%#v", dnsPeer)
 	}
 }
 
@@ -167,8 +178,7 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
 		Spec: v1beta1.WorkerSpec{
-			Model:   "qwen-max",
-			Runtime: "deepagents",
+			Model: "qwen-max",
 			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
 				Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
 			}},
@@ -191,6 +201,7 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 		Client:         cl,
 		RunnerImage:    "runner:v1",
 		ControllerName: "ctl-a",
+		DefaultRuntime: "deepagents",
 		EgressCeilings: []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.0/12", Ports: []int32{443}}},
 	}
 
@@ -226,6 +237,9 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 	if pod.Spec.Containers[0].Image != "runner:v1" {
 		t.Fatalf("runner image=%q", pod.Spec.Containers[0].Image)
 	}
+	if pod.Spec.Containers[0].ImagePullPolicy != corev1.PullIfNotPresent {
+		t.Fatalf("runner imagePullPolicy=%q, want IfNotPresent", pod.Spec.Containers[0].ImagePullPolicy)
+	}
 	var service corev1.Service
 	if err := cl.Get(context.Background(), key, &service); err != nil {
 		t.Fatalf("runner Service: %v", err)
@@ -240,6 +254,23 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 	}
 	if updated.Status.Phase != "Pending" || updated.Status.Endpoint != "http://exec-abc.agentteams-system.svc:8080" {
 		t.Fatalf("sandbox status=%#v", updated.Status)
+	}
+	// Drift the live policy without touching its desired-state annotation. The
+	// reconciler must inspect the real spec and repair it in place; deleting the
+	// policy would leave the still-running Runner temporarily fail-open.
+	policy.Spec.Egress = nil
+	if err := cl.Update(context.Background(), &policy); err != nil {
+		t.Fatalf("inject NetworkPolicy drift: %v", err)
+	}
+	result, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("drift reconcile result=%#v err=%v", result, err)
+	}
+	if err := cl.Get(context.Background(), key, &policy); err != nil {
+		t.Fatalf("NetworkPolicy must remain present while drift is repaired: %v", err)
+	}
+	if len(policy.Spec.Egress) != 2 {
+		t.Fatalf("NetworkPolicy egress was not restored in place: %#v", policy.Spec.Egress)
 	}
 }
 

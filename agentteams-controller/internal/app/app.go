@@ -581,6 +581,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 			Client:         a.mgr.GetClient(),
 			RunnerImage:    a.cfg.DeepAgentsRunnerImage,
 			ControllerName: a.cfg.ControllerName,
+			DefaultRuntime: a.cfg.DefaultWorkerRuntime,
 			EgressCeilings: a.cfg.DeepAgentsSandboxEgressCeilings,
 		}).SetupWithManager(a.mgr); err != nil {
 			return fmt.Errorf("setup ExecutionSandboxReconciler: %w", err)

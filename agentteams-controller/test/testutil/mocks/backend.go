@@ -18,25 +18,27 @@ type MockWorkerBackend struct {
 
 	NameOverride string
 
-	CreateFn           func(ctx context.Context, req backend.CreateRequest) (*backend.WorkerResult, error)
-	DeleteFn           func(ctx context.Context, name string) error
-	StartFn            func(ctx context.Context, name string) error
-	StopFn             func(ctx context.Context, name string) error
-	StatusFn           func(ctx context.Context, name string) (*backend.WorkerResult, error)
-	ListFn             func(ctx context.Context) ([]backend.WorkerResult, error)
-	ProjectAuthTokenFn func(ctx context.Context, name, token string) error
+	CreateFn             func(ctx context.Context, req backend.CreateRequest) (*backend.WorkerResult, error)
+	DeleteFn             func(ctx context.Context, name string) error
+	StartFn              func(ctx context.Context, name string) error
+	StopFn               func(ctx context.Context, name string) error
+	StatusFn             func(ctx context.Context, name string) (*backend.WorkerResult, error)
+	ListFn               func(ctx context.Context) ([]backend.WorkerResult, error)
+	ProjectAuthTokenFn   func(ctx context.Context, name, token string) error
+	DeleteRuntimeStateFn func(ctx context.Context, name string) error
 
 	containerState map[string]backend.WorkerStatus
 
 	Calls struct {
-		Create           []string
-		CreateReqs       []backend.CreateRequest
-		Delete           []string
-		Start            []string
-		Stop             []string
-		Status           []string
-		List             int
-		ProjectAuthToken []struct{ Name, Token string }
+		Create             []string
+		CreateReqs         []backend.CreateRequest
+		Delete             []string
+		Start              []string
+		Stop               []string
+		Status             []string
+		List               int
+		ProjectAuthToken   []struct{ Name, Token string }
+		DeleteRuntimeState []string
 	}
 }
 
@@ -60,6 +62,7 @@ func (m *MockWorkerBackend) Reset() {
 	m.StatusFn = nil
 	m.ListFn = nil
 	m.ProjectAuthTokenFn = nil
+	m.DeleteRuntimeStateFn = nil
 }
 
 // ClearCalls resets call records only, preserving Fn overrides and container state.
@@ -71,14 +74,15 @@ func (m *MockWorkerBackend) ClearCalls() {
 
 func (m *MockWorkerBackend) clearCallsLocked() {
 	m.Calls = struct {
-		Create           []string
-		CreateReqs       []backend.CreateRequest
-		Delete           []string
-		Start            []string
-		Stop             []string
-		Status           []string
-		List             int
-		ProjectAuthToken []struct{ Name, Token string }
+		Create             []string
+		CreateReqs         []backend.CreateRequest
+		Delete             []string
+		Start              []string
+		Stop               []string
+		Status             []string
+		List               int
+		ProjectAuthToken   []struct{ Name, Token string }
+		DeleteRuntimeState []string
 	}{}
 }
 
@@ -89,6 +93,17 @@ func (m *MockWorkerBackend) ProjectAuthToken(ctx context.Context, name, token st
 	m.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, name, token)
+	}
+	return nil
+}
+
+func (m *MockWorkerBackend) DeleteRuntimeState(ctx context.Context, name string) error {
+	m.mu.Lock()
+	m.Calls.DeleteRuntimeState = append(m.Calls.DeleteRuntimeState, name)
+	fn := m.DeleteRuntimeStateFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, name)
 	}
 	return nil
 }

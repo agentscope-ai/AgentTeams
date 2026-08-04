@@ -120,7 +120,10 @@ func (f *fakeCoreClient) ConfigMaps(_ string) backend.K8sConfigMapClient        
 func (f *fakeCoreClient) Services(_ string) backend.K8sServiceClient               { return nil }
 func (f *fakeCoreClient) Namespaces() backend.K8sNamespaceClient                   { return f.nsClient }
 func (f *fakeCoreClient) ServiceAccounts(_ string) backend.K8sServiceAccountClient { return f.saClient }
-func (f *fakeCoreClient) TokenReviews() backend.K8sTokenReviewClient               { return nil }
+func (f *fakeCoreClient) PersistentVolumeClaims(_ string) backend.K8sPersistentVolumeClaimClient {
+	return nil
+}
+func (f *fakeCoreClient) TokenReviews() backend.K8sTokenReviewClient { return nil }
 
 // fakeRemoteClientProvider implements backend.RemoteClientProvider for testing.
 type fakeRemoteClientProvider struct {

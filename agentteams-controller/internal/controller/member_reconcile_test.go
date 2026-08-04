@@ -131,6 +131,26 @@ func TestResolveBackendForMember_NoBackendAvailable(t *testing.T) {
 	}
 }
 
+func TestValidateMemberRuntimeRejectsDeepAgentsSandboxOutsideLocalCluster(t *testing.T) {
+	for _, mode := range []string{v1beta1.DeployModeEdge, v1beta1.DeployModeRemote} {
+		t.Run(mode, func(t *testing.T) {
+			err := ValidateMemberRuntime(MemberDeps{EnvBuilder: mocks.NewMockEnvBuilder()}, MemberContext{
+				Name:       "alice",
+				DeployMode: mode,
+				Spec: v1beta1.WorkerSpec{
+					Runtime: backend.RuntimeDeepAgents,
+					RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+						Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+					}},
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), "same cluster and namespace") {
+				t.Fatalf("ValidateMemberRuntime error=%v, want local sandbox placement error", err)
+			}
+		})
+	}
+}
+
 func TestCreateMemberContainerAddsDockerHostGateway(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
 	wb.NameOverride = "docker"

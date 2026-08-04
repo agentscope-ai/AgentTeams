@@ -11,11 +11,48 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 from nio import AsyncClient, AsyncClientConfig, RoomMessageText, SyncResponse, WhoamiResponse
 
 from deepagents_agentteams.config import MatrixConfig
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class MatrixAccessTokenExpired(RuntimeError):
+    """Raised internally when Matrix rejects an access token."""
+
+
+class ControllerMatrixTokenProvider:
+    """Refresh a Matrix token with the Worker's rotating ServiceAccount token."""
+
+    def __init__(
+        self,
+        *,
+        controller_url: str,
+        service_account_token_path: Path,
+        client: httpx.AsyncClient,
+    ) -> None:
+        if not controller_url:
+            raise ValueError("controller URL is required for Matrix token refresh")
+        self._controller_url = controller_url.rstrip("/")
+        self._service_account_token_path = service_account_token_path
+        self._client = client
+
+    async def refresh(self) -> str:
+        """Issue a fresh Matrix token without caching the ServiceAccount token."""
+        service_account_token = self._service_account_token_path.read_text().strip()
+        if not service_account_token:
+            raise RuntimeError("ServiceAccount token is empty")
+        response = await self._client.post(
+            f"{self._controller_url}/api/v1/credentials/matrix-token",
+            headers={"Authorization": f"Bearer {service_account_token}"},
+        )
+        response.raise_for_status()
+        access_token = response.json().get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise RuntimeError("controller returned an invalid Matrix access token")
+        return access_token
 
 
 @dataclass(frozen=True)
@@ -70,6 +107,8 @@ class MatrixTransport:
         allowed_room_ids: frozenset[str],
         state_dir: Path,
         on_message: Callable[[MatrixMessage], Awaitable[None]],
+        refresh_access_token: Callable[[], Awaitable[str]] | None = None,
+        client_factory: Callable[..., Any] = AsyncClient,
     ) -> None:
         if not allowed_room_ids:
             raise ValueError("at least one Matrix room must be allowed")
@@ -77,6 +116,8 @@ class MatrixTransport:
         self._allowed_room_ids = allowed_room_ids
         self._state_dir = state_dir
         self._on_message = on_message
+        self._refresh_access_token = refresh_access_token
+        self._client_factory = client_factory
         self.client: Any | None = None
         self._event_tasks: set[asyncio.Task[None]] = set()
 
@@ -110,27 +151,38 @@ class MatrixTransport:
                 "m.in_reply_to": {"event_id": message.event_id},
             },
         }
-        await self.client.room_send(
+        response = await self.client.room_send(
             room_id=message.room_id,
             message_type="m.room.message",
             content=content,
             ignore_unverified_devices=True,
         )
+        if _is_unauthorized(response):
+            await self._refresh_client_token()
+            await self.client.room_send(
+                room_id=message.room_id,
+                message_type="m.room.message",
+                content=content,
+                ignore_unverified_devices=True,
+            )
 
     async def _connect(self) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)
         if self._config.encryption_enabled:
             nio_config = AsyncClientConfig(store_sync_tokens=False, encryption_enabled=True)
-            self.client = AsyncClient(
+            self.client = self._client_factory(
                 self._config.homeserver_url,
                 user="",
                 store_path=str(self._state_dir / "e2ee"),
                 config=nio_config,
             )
         else:
-            self.client = AsyncClient(self._config.homeserver_url, user="")
+            self.client = self._client_factory(self._config.homeserver_url, user="")
         self.client.access_token = self._config.access_token
         whoami = await self.client.whoami()
+        if _is_unauthorized(whoami) and self._refresh_access_token is not None:
+            await self._refresh_client_token()
+            whoami = await self.client.whoami()
         if not isinstance(whoami, WhoamiResponse):
             raise RuntimeError(f"Matrix access token validation failed: {whoami}")
         if whoami.user_id != self._config.user_id:
@@ -164,18 +216,27 @@ class MatrixTransport:
                 next_batch = await self._accept_sync_response(response)
             except asyncio.CancelledError:
                 raise
+            except MatrixAccessTokenExpired:
+                await self._refresh_client_token()
             except Exception:
                 _LOGGER.exception("Matrix sync failed; retrying")
                 await asyncio.sleep(5)
 
     async def _accept_sync_response(self, response: Any) -> str:
         if not isinstance(response, SyncResponse):
+            if _is_unauthorized(response):
+                raise MatrixAccessTokenExpired("Matrix access token expired")
             raise RuntimeError(f"Matrix sync failed: {response}")
         for room_id in response.rooms.invite:
             await self.client.join(room_id)
         await self._e2ee_maintenance()
         self._save_sync_token(response.next_batch)
         return response.next_batch
+
+    async def _refresh_client_token(self) -> None:
+        if self._refresh_access_token is None or self.client is None:
+            raise MatrixAccessTokenExpired("Matrix token refresh is unavailable")
+        self.client.access_token = await self._refresh_access_token()
 
     async def _e2ee_maintenance(self) -> None:
         if not self._config.encryption_enabled or not self.client.olm:
@@ -220,3 +281,14 @@ class MatrixTransport:
         temporary.write_text(token)
         temporary.chmod(0o600)
         temporary.replace(path)
+
+
+def _is_unauthorized(response: Any) -> bool:
+    status = getattr(response, "status_code", None)
+    errcode = getattr(response, "errcode", None)
+    transport_response = getattr(response, "transport_response", None)
+    http_status = getattr(transport_response, "status", None)
+    return status in {401, "401", "M_UNKNOWN_TOKEN", "M_UNAUTHORIZED"} or errcode in {
+        "M_UNKNOWN_TOKEN",
+        "M_UNAUTHORIZED",
+    } or http_status == 401

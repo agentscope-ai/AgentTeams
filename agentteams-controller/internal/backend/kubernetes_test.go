@@ -15,6 +15,7 @@ import (
 type fakeK8sCoreClient struct {
 	pods       map[string]map[string]*corev1.Pod
 	configMaps map[string]map[string]*corev1.ConfigMap
+	pvcs       map[string]map[string]*corev1.PersistentVolumeClaim
 	cmGetErr   error          // if non-nil, every ConfigMap Get returns this error
 	getCalls   map[string]int // key: "namespace/name" -> count (for caching-behavior tests)
 }
@@ -23,6 +24,7 @@ func newFakeK8sCoreClient(objects ...*corev1.Pod) *fakeK8sCoreClient {
 	client := &fakeK8sCoreClient{
 		pods:       map[string]map[string]*corev1.Pod{},
 		configMaps: map[string]map[string]*corev1.ConfigMap{},
+		pvcs:       map[string]map[string]*corev1.PersistentVolumeClaim{},
 		getCalls:   map[string]int{},
 	}
 	for _, obj := range objects {
@@ -93,12 +95,51 @@ func (f *fakeK8sCoreClient) ServiceAccounts(_ string) K8sServiceAccountClient {
 	panic("not implemented")
 }
 
+func (f *fakeK8sCoreClient) PersistentVolumeClaims(namespace string) K8sPersistentVolumeClaimClient {
+	if f.pvcs[namespace] == nil {
+		f.pvcs[namespace] = map[string]*corev1.PersistentVolumeClaim{}
+	}
+	return &fakeK8sPersistentVolumeClaimClient{namespace: namespace, store: f.pvcs[namespace]}
+}
+
 func (f *fakeK8sCoreClient) TokenReviews() K8sTokenReviewClient {
 	panic("not implemented")
 }
 
 // fakeK8sServiceClient is a no-op stub for tests that don't exercise Services.
 type fakeK8sServiceClient struct{}
+
+type fakeK8sPersistentVolumeClaimClient struct {
+	namespace string
+	store     map[string]*corev1.PersistentVolumeClaim
+}
+
+func (f *fakeK8sPersistentVolumeClaimClient) Get(
+	_ context.Context,
+	name string,
+	_ metav1.GetOptions,
+) (*corev1.PersistentVolumeClaim, error) {
+	if pvc, ok := f.store[name]; ok {
+		return pvc.DeepCopy(), nil
+	}
+	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "persistentvolumeclaims"}, name)
+}
+
+func (f *fakeK8sPersistentVolumeClaimClient) Create(
+	_ context.Context,
+	pvc *corev1.PersistentVolumeClaim,
+	_ metav1.CreateOptions,
+) (*corev1.PersistentVolumeClaim, error) {
+	if _, ok := f.store[pvc.Name]; ok {
+		return nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "persistentvolumeclaims"}, pvc.Name)
+	}
+	created := pvc.DeepCopy()
+	if created.Namespace == "" {
+		created.Namespace = f.namespace
+	}
+	f.store[created.Name] = created
+	return created.DeepCopy(), nil
+}
 
 func (f *fakeK8sServiceClient) Get(_ context.Context, _ string, _ metav1.GetOptions) (*corev1.Service, error) {
 	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "")
@@ -630,6 +671,7 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		{"openclaw", RuntimeOpenClaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"hermes", RuntimeHermes, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"copaw", RuntimeCopaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
+		{"deepagents", RuntimeDeepAgents, "/var/lib/agentteams", "/var/lib/agentteams"},
 		{"empty_default", "", "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 	}
 	for _, tc := range cases {
@@ -668,6 +710,90 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 				t.Fatalf("HOME = %q, want %q", gotHome, tc.wantHome)
 			}
 		})
+	}
+}
+
+func TestK8sCreateDeepAgentsAddsPersistentStateVolume(t *testing.T) {
+	client := newFakeK8sCoreClient()
+	b := NewK8sBackendWithClient(client, K8sConfig{
+		Namespace:                  "agentteams",
+		DeepAgentsWorkerImage:      "agentteams/deepagents-worker:latest",
+		DeepAgentsCheckpointSecret: "deepagents-checkpoint",
+		DeepAgentsCheckpointDSNKey: "dsn",
+		DeepAgentsCheckpointAESKey: "aes-key",
+		WorkerCPU:                  "1000m",
+		WorkerMemory:               "2Gi",
+	}, "agentteams-worker-", nil)
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:    "alice",
+		Runtime: RuntimeDeepAgents,
+		Labels:  map[string]string{v1beta1.LabelRuntime: RuntimeOpenClaw},
+		Env: map[string]string{
+			"AGENTTEAMS_CHECKPOINT_DSN":     "postgresql://user:secret@db/deepagents",
+			"AGENTTEAMS_CHECKPOINT_AES_KEY": "0123456789abcdef0123456789abcdef",
+		},
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get pod failed: %v", err)
+	}
+	if len(pod.Spec.Volumes) != 3 {
+		t.Fatalf("volumes = %#v, want projected token, DeepAgents state, and tmp", pod.Spec.Volumes)
+	}
+	stateVolume := pod.Spec.Volumes[1]
+	if stateVolume.Name != "deepagents-state" || stateVolume.PersistentVolumeClaim == nil {
+		t.Fatalf("state volume = %#v, want deepagents-state PVC", stateVolume)
+	}
+	if stateVolume.PersistentVolumeClaim.ClaimName != "agentteams-worker-alice-state" {
+		t.Fatalf("claim name = %q", stateVolume.PersistentVolumeClaim.ClaimName)
+	}
+	pvc := client.pvcs["agentteams"]["agentteams-worker-alice-state"]
+	if pvc == nil {
+		t.Fatal("DeepAgents state PVC was not created")
+	}
+	if got := pvc.Spec.Resources.Requests.Storage().String(); got != "1Gi" {
+		t.Fatalf("PVC storage = %q, want 1Gi", got)
+	}
+	if pvc.Labels[v1beta1.LabelRuntime] != RuntimeDeepAgents || pvc.Labels[v1beta1.LabelWorker] != "alice" {
+		t.Fatalf("PVC labels = %#v", pvc.Labels)
+	}
+	container := pod.Spec.Containers[0]
+	if pod.Labels[v1beta1.LabelRuntime] != RuntimeDeepAgents {
+		t.Fatalf("protected runtime label=%q, want deepagents", pod.Labels[v1beta1.LabelRuntime])
+	}
+	for _, name := range []string{"AGENTTEAMS_CHECKPOINT_DSN", "AGENTTEAMS_CHECKPOINT_AES_KEY"} {
+		var found *corev1.EnvVar
+		for i := range container.Env {
+			if container.Env[i].Name == name {
+				found = &container.Env[i]
+				break
+			}
+		}
+		if found == nil || found.Value != "" || found.ValueFrom == nil || found.ValueFrom.SecretKeyRef == nil ||
+			found.ValueFrom.SecretKeyRef.Name != "deepagents-checkpoint" {
+			t.Fatalf("%s must use checkpoint SecretKeyRef without a literal value: %#v", name, found)
+		}
+	}
+	if len(container.VolumeMounts) != 3 {
+		t.Fatalf("volumeMounts = %#v, want token, DeepAgents state, and tmp", container.VolumeMounts)
+	}
+	stateMount := container.VolumeMounts[1]
+	if stateMount.Name != "deepagents-state" || stateMount.MountPath != "/var/lib/agentteams/deepagents" {
+		t.Fatalf("state mount = %#v", stateMount)
+	}
+	if pod.Spec.Volumes[2].Name != "deepagents-tmp" || pod.Spec.Volumes[2].EmptyDir == nil {
+		t.Fatalf("tmp volume = %#v", pod.Spec.Volumes[2])
+	}
+	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.FSGroup == nil || *pod.Spec.SecurityContext.FSGroup != 65532 {
+		t.Fatalf("pod security context = %#v", pod.Spec.SecurityContext)
+	}
+	security := container.SecurityContext
+	if security == nil || security.RunAsNonRoot == nil || !*security.RunAsNonRoot ||
+		security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem {
+		t.Fatalf("container security context = %#v", security)
 	}
 }
 

@@ -72,3 +72,33 @@ Validate public values at render time. Supported combinations:
   {{- fail "credentialProvider.image.repository is required when the sidecar is enabled" -}}
   {{- end -}}
 {{- end -}}
+
+{{- if eq (.Values.worker.defaultRuntime | default "openclaw") "deepagents" -}}
+  {{- if not .Values.deepagents.enabled -}}
+  {{- fail "worker.defaultRuntime=deepagents requires deepagents.enabled=true" -}}
+  {{- end -}}
+{{- end -}}
+{{- if .Values.deepagents.enabled -}}
+  {{- if not (.Values.worker.defaultImage.deepagents.repository | default "") -}}
+  {{- fail "worker.defaultImage.deepagents.repository is required when deepagents.enabled=true" -}}
+  {{- end -}}
+  {{- if not (.Values.deepagents.runnerImage.repository | default "") -}}
+  {{- fail "deepagents.runnerImage.repository is required when deepagents.enabled=true" -}}
+  {{- end -}}
+  {{- if not (.Values.deepagents.state.size | default "") -}}
+  {{- fail "deepagents.state.size is required when deepagents.enabled=true" -}}
+  {{- end -}}
+  {{- if or (not (.Values.deepagents.checkpoint.dsnKey | default "")) (not (.Values.deepagents.checkpoint.aesKeyKey | default "")) -}}
+  {{- fail "deepagents.checkpoint.dsnKey and aesKeyKey are required" -}}
+  {{- end -}}
+  {{- if and .Values.deepagents.postgresql.enabled (not (.Values.deepagents.checkpoint.postgresPasswordKey | default "")) -}}
+  {{- fail "deepagents.checkpoint.postgresPasswordKey is required with bundled PostgreSQL" -}}
+  {{- end -}}
+  {{- $aesKey := .Values.deepagents.checkpoint.aesKey | default "" -}}
+  {{- if and $aesKey (not (or (eq (len $aesKey) 16) (eq (len $aesKey) 24) (eq (len $aesKey) 32))) -}}
+  {{- fail "deepagents.checkpoint.aesKey must be exactly 16, 24, or 32 bytes" -}}
+  {{- end -}}
+  {{- if and (not .Values.deepagents.postgresql.enabled) (not .Values.deepagents.checkpoint.existingSecret) (not .Values.deepagents.checkpoint.dsn) -}}
+  {{- fail "external DeepAgents PostgreSQL requires checkpoint.existingSecret or checkpoint.dsn" -}}
+  {{- end -}}
+{{- end -}}

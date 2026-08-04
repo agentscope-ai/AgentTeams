@@ -30,6 +30,8 @@ type fakeTeamMatrix struct {
 	roomNames    []roomNameCall
 	roomStates   []roomStateCall
 	tokenInvites []roomUserCall
+	logins       []string
+	appLogins    []string
 	created      bool
 }
 
@@ -138,7 +140,10 @@ func (f *fakeTeamMatrix) SendMessage(context.Context, string, string, string) er
 
 func (f *fakeTeamMatrix) SendMessageAsAdmin(context.Context, string, string) error { return nil }
 
-func (f *fakeTeamMatrix) Login(context.Context, string, string) (string, error) { return "", nil }
+func (f *fakeTeamMatrix) Login(_ context.Context, username, _ string) (string, error) {
+	f.logins = append(f.logins, username)
+	return "token-" + username, nil
+}
 
 func (f *fakeTeamMatrix) SetDisplayName(context.Context, string, string, string) error { return nil }
 
@@ -425,6 +430,51 @@ func TestProvisionManagerWritesDirectRoomMeta(t *testing.T) {
 	}
 }
 
+func TestForceRefreshMatrixTokenUsesCredentialKeyAndRuntimeAlias(t *testing.T) {
+	for _, appServiceEnabled := range []bool{false, true} {
+		name := "legacy"
+		if appServiceEnabled {
+			name = "appservice"
+		}
+		t.Run(name, func(t *testing.T) {
+			matrixClient := newFakeTeamMatrix()
+			creds := fakeCredentialStore{
+				"worker-cr": {
+					MatrixPassword: "matrix-password",
+					MatrixToken:    "expired-token",
+				},
+			}
+			p := NewProvisioner(ProvisionerConfig{
+				Matrix:       matrixClient,
+				MatrixConfig: matrix.Config{AppServiceEnabled: appServiceEnabled},
+				Creds:        creds,
+			})
+
+			result, err := p.ForceRefreshMatrixToken(context.Background(), "worker-cr", "matrix-alias")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantToken := "token-matrix-alias"
+			if appServiceEnabled {
+				wantToken = "as-token-matrix-alias"
+			}
+			if result.MatrixToken != wantToken || creds["worker-cr"].MatrixToken != wantToken {
+				t.Fatalf("refreshed token=%q persisted=%q, want %q", result.MatrixToken, creds["worker-cr"].MatrixToken, wantToken)
+			}
+			if _, exists := creds["matrix-alias"]; exists {
+				t.Fatal("runtime alias must not become the credential storage key")
+			}
+			if appServiceEnabled {
+				if !reflect.DeepEqual(matrixClient.appLogins, []string{"matrix-alias"}) {
+					t.Fatalf("AppService logins=%v", matrixClient.appLogins)
+				}
+			} else if !reflect.DeepEqual(matrixClient.logins, []string{"matrix-alias"}) {
+				t.Fatalf("legacy logins=%v", matrixClient.logins)
+			}
+		})
+	}
+}
+
 func TestArchiveTeamRoomsMarksRoomNamesDeleted(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
@@ -455,6 +505,7 @@ func (f *fakeTeamMatrix) EnsureAppServiceUser(_ context.Context, username string
 }
 
 func (f *fakeTeamMatrix) LoginAppServiceUser(_ context.Context, username string) (string, error) {
+	f.appLogins = append(f.appLogins, username)
 	return "as-token-" + username, nil
 }
 

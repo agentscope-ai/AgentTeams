@@ -1,12 +1,27 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
+
 from deepagents_agentteams.config import MatrixConfig
-from deepagents_agentteams.matrix import MatrixMessage, MatrixTransport, matrix_message_from_event
+from deepagents_agentteams.matrix import (
+    ControllerMatrixTokenProvider,
+    MatrixMessage,
+    MatrixTransport,
+    matrix_message_from_event,
+)
 
 
 def matrix_token() -> str:
     return "matrix-test-credential"
+
+
+def expired_matrix_token() -> str:
+    return "expired-matrix-test-credential"
+
+
+def fresh_matrix_token() -> str:
+    return "fresh-matrix-test-credential"
 
 
 def event(
@@ -102,3 +117,76 @@ async def test_send_reply_preserves_thread_and_structured_mention(tmp_path: Path
     assert content["m.relates_to"]["event_id"] == "$root"
     assert content["m.mentions"] == {"user_ids": ["@human:example.org"]}
     assert client.sent[0]["room_id"] == "!room:example.org"
+
+
+async def test_controller_matrix_token_provider_reads_fresh_service_account_token(tmp_path: Path) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"access_token": fresh_matrix_token()})
+
+    token_path = tmp_path / "token"
+    token_path.write_text("first-service-account-token")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ControllerMatrixTokenProvider(
+            controller_url="http://controller:8090",
+            service_account_token_path=token_path,
+            client=client,
+        )
+        token_path.write_text("rotated-service-account-token")
+        token = await provider.refresh()
+
+    assert token == fresh_matrix_token()
+    assert requests[0].url.path == "/api/v1/credentials/matrix-token"
+    assert requests[0].headers["Authorization"] == "Bearer rotated-service-account-token"
+
+
+async def test_connect_refreshes_expired_matrix_token_once(tmp_path: Path) -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.access_token = ""
+            self.user_id = ""
+            self.user = ""
+            self.device_id = ""
+            self.event_callbacks = []
+            self.whoami_tokens: list[str] = []
+
+        async def whoami(self):  # noqa: ANN202
+            self.whoami_tokens.append(self.access_token)
+            if self.access_token == expired_matrix_token():
+                return SimpleNamespace(status_code=401, errcode="M_UNKNOWN_TOKEN")
+            from nio import WhoamiResponse
+
+            return WhoamiResponse("@worker:example.org", "DEVICE", False)
+
+        def add_event_callback(self, callback, event_filter) -> None:  # noqa: ANN001
+            self.event_callbacks.append((callback, event_filter))
+
+    refreshes = 0
+
+    async def refresh_token() -> str:
+        nonlocal refreshes
+        refreshes += 1
+        return fresh_matrix_token()
+
+    client = FakeClient()
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!room:example.org",
+            access_token=expired_matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!room:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+        refresh_access_token=refresh_token,
+        client_factory=lambda *_args, **_kwargs: client,
+    )
+
+    await transport._connect()
+
+    assert refreshes == 1
+    assert client.whoami_tokens == [expired_matrix_token(), fresh_matrix_token()]

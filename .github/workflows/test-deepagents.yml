@@ -1,0 +1,45 @@
+name: DeepAgents Runtime Tests
+
+on:
+  pull_request:
+    paths:
+      - 'deepagents/**'
+      - 'deepagents-agentteams/**'
+      - '.github/workflows/test-deepagents.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deepagents/**'
+      - 'deepagents-agentteams/**'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.11.32'
+          enable-cache: true
+
+      - name: Install locked dependencies
+        working-directory: deepagents-agentteams
+        run: uv sync --frozen
+
+      - name: Lint
+        working-directory: deepagents-agentteams
+        run: uv run ruff check src tests
+
+      - name: Unit tests
+        working-directory: deepagents-agentteams
+        run: uv run pytest -q
+
+      - name: Verify non-editable image install
+        working-directory: deepagents-agentteams
+        run: |
+          UV_PROJECT_ENVIRONMENT=/tmp/deepagents-image-venv uv sync --frozen --no-dev --no-editable
+          /tmp/deepagents-image-venv/bin/python -c \
+            'import pathlib, deepagents, deepagents_agentteams; assert "site-packages" in str(pathlib.Path(deepagents.__file__)); assert "site-packages" in str(pathlib.Path(deepagents_agentteams.__file__))'

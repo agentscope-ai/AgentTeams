@@ -1,0 +1,30 @@
+{{- if and .Values.deepagents.enabled .Values.deepagents.postgresql.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentteams.deepagents.postgresqlFullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.commonLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentteams.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: deepagents-postgresql
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              agentteams.io/runtime: deepagents
+              agentteams.io/controller: {{ include "agentteams.controller.fullname" . }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "agentteams.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: controller
+      ports:
+        - port: 5432
+          protocol: TCP
+{{- end }}

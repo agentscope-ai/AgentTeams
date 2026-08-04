@@ -30,15 +30,17 @@ func newExecutionSandboxHandlerTestClient(t *testing.T, objects ...runtime.Objec
 		WithRuntimeObjects(objects...).
 		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
 		Build()
-	return NewExecutionSandboxHandler(cl, "agentteams-system")
+	return NewExecutionSandboxHandler(cl, "agentteams-system", "deepagents")
 }
 
 func deepAgentsSandboxWorker() *v1beta1.Worker {
 	return &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
 		Spec: v1beta1.WorkerSpec{
-			Model:   "qwen-max",
-			Runtime: "deepagents",
+			Model: "qwen-max",
+			// Empty runtime resolves through the platform default configured on
+			// the handler, matching worker.defaultRuntime=deepagents.
+			Runtime: "",
 			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
 				Execution: v1beta1.DeepAgentsExecutionConfig{
 					Mode:        "sandbox",

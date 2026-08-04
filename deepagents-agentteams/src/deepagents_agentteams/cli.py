@@ -16,7 +16,7 @@ from deepagents_agentteams.checkpoints import async_postgres_checkpointer
 from deepagents_agentteams.config import RuntimeConfig
 from deepagents_agentteams.engine import AgentEngine, PendingApprovalStore
 from deepagents_agentteams.graph import build_deepagents_graph
-from deepagents_agentteams.matrix import MatrixMessage, MatrixTransport
+from deepagents_agentteams.matrix import ControllerMatrixTokenProvider, MatrixMessage, MatrixTransport
 from deepagents_agentteams.sandbox import AgentTeamsSandbox, SandboxControlClient
 from deepagents_agentteams.workspace import MinIOWorkspaceStore
 
@@ -36,9 +36,16 @@ async def run_worker() -> None:
     await asyncio.to_thread(state_dir.mkdir, parents=True, exist_ok=True)
     workspace_store = MinIOWorkspaceStore.from_config(config.storage)
     runner_http = httpx.Client(timeout=130, trust_env=False)
+    controller_http = httpx.AsyncClient(timeout=30, trust_env=False)
+    matrix_token_provider = ControllerMatrixTokenProvider(
+        controller_url=config.controller_url,
+        service_account_token_path=Path(config.service_account_token_path),
+        client=controller_http,
+    )
     sandboxes: list[AgentTeamsSandbox] = []
 
     async with async_postgres_checkpointer(config.checkpoint.dsn, config.checkpoint.aes_key) as checkpointer:
+
         async def graph_factory(thread_id: str):  # noqa: ANN202
             backend = None
             if config.execution.mode == "sandbox":
@@ -80,6 +87,7 @@ async def run_worker() -> None:
             allowed_room_ids=frozenset(config.room_ids),
             state_dir=state_dir / "matrix",
             on_message=engine.handle_message,
+            refresh_access_token=matrix_token_provider.refresh,
         )
         try:
             await transport.run_forever()
@@ -90,6 +98,7 @@ async def run_worker() -> None:
                 except Exception:  # noqa: BLE001 - shutdown cleanup is best-effort.
                     _LOGGER.exception("failed to release execution sandbox during shutdown")
             await asyncio.to_thread(runner_http.close)
+            await controller_http.aclose()
 
 
 async def _fetch_runtime_with_retry() -> Mapping[str, Any]:

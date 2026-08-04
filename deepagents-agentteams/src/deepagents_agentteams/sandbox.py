@@ -153,15 +153,22 @@ class AgentTeamsSandbox(BaseSandbox):
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds < 1:
             raise ValueError("timeout must be a positive integer")
         request_id = f"run-{uuid.uuid4().hex}"
-        response = self._runner_request(
-            "/v1/execute",
-            {
-                "request_id": request_id,
-                "command": command,
-                "timeout_seconds": timeout_seconds,
-            },
-            timeout_seconds=timeout_seconds + 10,
-        )
+        try:
+            response = self._runner_request(
+                "/v1/execute",
+                {
+                    "request_id": request_id,
+                    "command": command,
+                    "timeout_seconds": timeout_seconds,
+                },
+                timeout_seconds=timeout_seconds + 10,
+            )
+        except httpx.TransportError:
+            _LOGGER.exception("runner result remained ambiguous after idempotent retry")
+            return ExecuteResponse(
+                output="Execution outcome is unknown; the command was not re-run with a new request ID for safety.",
+                exit_code=None,
+            )
         if response.status_code == 409:
             return ExecuteResponse(
                 output="Execution outcome is unknown; the command was not re-run for safety.",

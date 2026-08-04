@@ -6,7 +6,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
-- **DeepAgents Worker runtime foundation**: Add `deepagents` runtime image selection, secret-safe runtime configuration projection, Matrix-scoped sandbox lifecycle APIs, and a hardened `ExecutionSandbox` CRD/Reconciler with per-session runner tokens and default-deny network policy.
+- **DeepAgents Worker runtime**: Add the vendored DeepAgents 0.7.3 runtime, Matrix-thread orchestration and Human approval, Higress model/MCP adapters, encrypted PostgreSQL checkpoints, MinIO workspace synchronization, credential-free Runner Pods, durable per-Worker state, and `ExecutionSandbox` lifecycle/network isolation.
 - **Custom model capability overrides**: `AGENTTEAMS_MODEL_VISION` and `AGENTTEAMS_MODEL_REASONING` env vars let deployments override vision and reasoning capabilities for custom models not in the built-in presets table (e.g. local multimodal models like `qwen3.6-27b-fp8`).
 
 **Bug Fixes**
@@ -31,7 +31,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **新增功能**
 
-- **DeepAgents Worker Runtime 基础能力**：新增 `deepagents` Runtime 镜像选择、仅引用环境变量的无密钥运行时配置投影、基于 Matrix Worker 身份的沙箱生命周期 API，以及使用独立会话令牌和默认拒绝网络策略的强化 `ExecutionSandbox` CRD/Reconciler。
+- **DeepAgents Worker Runtime**：新增内置 DeepAgents 0.7.3、Matrix thread 编排与 Human 审批、Higress 模型/MCP 适配、PostgreSQL 加密 checkpoint、MinIO 工作区同步、无平台凭据 Runner Pod、每 Worker 持久化状态，以及 `ExecutionSandbox` 生命周期和网络隔离。
 
 **Bug 修复**
 
@@ -43,4 +43,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Change list / 变更列表**
 
+- [`30216225`](https://github.com/agentscope-ai/AgentTeams/commit/30216225) feat(deepagents): add Matrix runtime and workspace sync
+- [`44eb0bb1`](https://github.com/agentscope-ai/AgentTeams/commit/44eb0bb1) feat(deepagents): implement secure worker runtime core
+- [`74661a63`](https://github.com/agentscope-ai/AgentTeams/commit/74661a63) feat(deepagents): add controller runtime and sandbox contracts
+- [`65c7b611`](https://github.com/agentscope-ai/AgentTeams/commit/65c7b611) feat(deepagents): add gateway HITL and runner boundaries
+- [`57620ef1`](https://github.com/agentscope-ai/AgentTeams/commit/57620ef1) feat(deepagents): add AgentTeams adapter contracts
+- [`bd60a9df`](https://github.com/agentscope-ai/AgentTeams/commit/bd60a9df) chore(deepagents): import upstream 0.7.3 subtree
 - `90c9fd4f` fix(manager): stop repeated diagnostic loops (#975)

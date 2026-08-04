@@ -107,7 +107,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
 	if deps.KubeMode == "incluster" {
-		esh := NewExecutionSandboxHandler(deps.Client, deps.Namespace)
+		esh := NewExecutionSandboxHandler(deps.Client, deps.Namespace, deps.DefaultWorkerRuntime)
 		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/ensure", mw.RequireAuthz(authpkg.ActionEnsureExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Ensure)))
 		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/{sessionId}/heartbeat", mw.RequireAuthz(authpkg.ActionHeartbeatExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Heartbeat)))
 		mux.Handle("DELETE /api/v1/workers/{name}/execution-sandboxes/{sessionId}", mw.RequireAuthz(authpkg.ActionDeleteExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Delete)))
@@ -121,7 +121,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Credentials ---
 	// STS is self-scoped: no {name} in path; handler uses CallerIdentity to scope the issued token.
-	ch := NewCredentialsHandler(deps.STS, deps.Provisioner)
+	ch := NewCredentialsHandler(deps.STS, deps.Provisioner, deps.Client, deps.Namespace)
 	mux.Handle("POST /api/v1/credentials/sts", mw.RequireAuthz(authpkg.ActionSTS, "credentials", nil)(http.HandlerFunc(ch.RefreshSTS)))
 	mux.Handle("POST /api/v1/credentials/matrix-token", mw.RequireAuthz(authpkg.ActionRefreshMatrixToken, "credentials", nil)(http.HandlerFunc(ch.RefreshMatrixToken)))
 

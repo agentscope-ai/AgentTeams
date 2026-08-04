@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"sort"
@@ -26,15 +27,20 @@ const defaultK8sNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/n
 
 // K8sConfig holds Kubernetes backend configuration.
 type K8sConfig struct {
-	Namespace             string
-	WorkerImage           string
-	CopawWorkerImage      string
-	HermesWorkerImage     string
-	OpenHumanWorkerImage  string
-	QwenPawWorkerImage    string
-	DeepAgentsWorkerImage string
-	WorkerCPU             string
-	WorkerMemory          string
+	Namespace                  string
+	WorkerImage                string
+	CopawWorkerImage           string
+	HermesWorkerImage          string
+	OpenHumanWorkerImage       string
+	QwenPawWorkerImage         string
+	DeepAgentsWorkerImage      string
+	DeepAgentsStateSize        string
+	DeepAgentsStateClass       string
+	DeepAgentsCheckpointSecret string
+	DeepAgentsCheckpointDSNKey string
+	DeepAgentsCheckpointAESKey string
+	WorkerCPU                  string
+	WorkerMemory               string
 
 	// ControllerName identifies this controller instance. The agent
 	// PodTemplateSpec overlay (see LoadAgentPodTemplate) is looked up as the
@@ -88,7 +94,15 @@ type K8sCoreClient interface {
 	Services(namespace string) K8sServiceClient
 	Namespaces() K8sNamespaceClient
 	ServiceAccounts(namespace string) K8sServiceAccountClient
+	PersistentVolumeClaims(namespace string) K8sPersistentVolumeClaimClient
 	TokenReviews() K8sTokenReviewClient
+}
+
+// K8sPersistentVolumeClaimClient is the minimal PVC surface used for durable
+// DeepAgents Matrix/E2EE and approval state.
+type K8sPersistentVolumeClaimClient interface {
+	Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.PersistentVolumeClaim, error)
+	Create(ctx context.Context, pvc *corev1.PersistentVolumeClaim, opts metav1.CreateOptions) (*corev1.PersistentVolumeClaim, error)
 }
 
 // K8sPodClient is the minimal Pod client surface needed by the backend.
@@ -129,6 +143,10 @@ func (w *k8sCoreClientWrapper) Namespaces() K8sNamespaceClient {
 
 func (w *k8sCoreClientWrapper) ServiceAccounts(namespace string) K8sServiceAccountClient {
 	return w.client.ServiceAccounts(namespace)
+}
+
+func (w *k8sCoreClientWrapper) PersistentVolumeClaims(namespace string) K8sPersistentVolumeClaimClient {
+	return w.client.PersistentVolumeClaims(namespace)
 }
 
 func (w *k8sCoreClientWrapper) TokenReviews() K8sTokenReviewClient {
@@ -174,6 +192,9 @@ func NewK8sBackendWithClient(client K8sCoreClient, config K8sConfig, containerPr
 	}
 	if config.WorkerMemory == "" {
 		config.WorkerMemory = "2Gi"
+	}
+	if config.DeepAgentsStateSize == "" {
+		config.DeepAgentsStateSize = "1Gi"
 	}
 	return &K8sBackend{
 		client:          client,
@@ -277,6 +298,12 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 
 	if req.WorkingDir == "" {
 		switch {
+		case req.Runtime == RuntimeDeepAgents:
+			req.WorkingDir = "/var/lib/agentteams"
+			if req.Env == nil {
+				req.Env = map[string]string{}
+			}
+			req.Env["HOME"] = req.WorkingDir
 		case req.Runtime == RuntimeCopaw:
 			req.WorkingDir = fmt.Sprintf("/root/agentteams-fs/agents/%s", req.Name)
 			if req.Env == nil {
@@ -312,6 +339,13 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		Env:             buildK8sEnvVars(req.Env),
 		WorkingDir:      req.WorkingDir,
 	}
+	if req.Runtime == RuntimeDeepAgents {
+		var err error
+		agentContainer.Env, err = deepAgentsCheckpointSecretRefs(agentContainer.Env, k.config)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	tokenAudience := req.AuthAudience
 	if tokenAudience == "" {
@@ -338,6 +372,30 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		ReadOnly:  true,
 	}
 	extraVolumes, extraVolumeMounts := podWorkerDepsVolumes(req.WorkersDeps)
+	if req.Runtime == RuntimeDeepAgents {
+		claimName, err := k.ensureDeepAgentsStatePVC(ctx, targetClient, targetNS, podName, req)
+		if err != nil {
+			return nil, err
+		}
+		extraVolumes = append(extraVolumes, corev1.Volume{
+			Name: "deepagents-state",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claimName},
+			},
+		})
+		extraVolumeMounts = append(extraVolumeMounts, corev1.VolumeMount{
+			Name:      "deepagents-state",
+			MountPath: "/var/lib/agentteams/deepagents",
+		})
+		extraVolumes = append(extraVolumes, corev1.Volume{
+			Name:         "deepagents-tmp",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+		extraVolumeMounts = append(extraVolumeMounts, corev1.VolumeMount{
+			Name:      "deepagents-tmp",
+			MountPath: "/tmp",
+		})
+	}
 
 	saName := req.ServiceAccountName
 	if saName == "" {
@@ -347,12 +405,13 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	// Callers own the full label set except agentteams.io/runtime, which the
 	// backend stamps because it knows the resolved runtime value (after
 	// CRD spec + operator-default fallback).
-	podLabels := map[string]string{
-		v1beta1.LabelRuntime: defaultRuntime(req.Runtime),
-	}
+	podLabels := map[string]string{}
 	for k, v := range req.Labels {
 		podLabels[k] = v
 	}
+	// Runtime is controller-owned and is used by credential NetworkPolicies.
+	// Stamp it last so caller-provided labels cannot weaken that boundary.
+	podLabels[v1beta1.LabelRuntime] = defaultRuntime(req.Runtime)
 
 	tmpl := LoadAgentPodTemplate(ctx, k.client, k.config.Namespace, k.config.ControllerName, req.DeployMode)
 
@@ -371,6 +430,9 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		ExtraVolumeMounts:  extraVolumeMounts,
 		HostAliases:        buildHostAliases(req.ExtraHosts),
 	})
+	if req.Runtime == RuntimeDeepAgents {
+		applyDeepAgentsPodSecurity(pod)
+	}
 
 	if req.Owner != nil {
 		if k.scheme == nil {
@@ -395,6 +457,55 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		Status:    StatusStarting,
 		RawStatus: rawK8sPhase(created.Status.Phase),
 	}, nil
+}
+
+func deepAgentsCheckpointSecretRefs(env []corev1.EnvVar, config K8sConfig) ([]corev1.EnvVar, error) {
+	keys := map[string]string{
+		"AGENTTEAMS_CHECKPOINT_DSN":     config.DeepAgentsCheckpointDSNKey,
+		"AGENTTEAMS_CHECKPOINT_AES_KEY": config.DeepAgentsCheckpointAESKey,
+	}
+	for i := range env {
+		key, protected := keys[env[i].Name]
+		if !protected || env[i].Value == "" {
+			continue
+		}
+		if config.DeepAgentsCheckpointSecret == "" || key == "" {
+			return nil, fmt.Errorf("deepagents checkpoint Secret reference is not configured for %s", env[i].Name)
+		}
+		env[i].Value = ""
+		env[i].ValueFrom = &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: config.DeepAgentsCheckpointSecret},
+			Key:                  key,
+		}}
+	}
+	return env, nil
+}
+
+func applyDeepAgentsPodSecurity(pod *corev1.Pod) {
+	if pod.Spec.SecurityContext == nil {
+		pod.Spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	runAsUser := int64(65532)
+	runAsNonRoot := true
+	readOnlyRoot := true
+	allowPrivilegeEscalation := false
+	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
+	pod.Spec.SecurityContext.FSGroup = &runAsUser
+	pod.Spec.SecurityContext.FSGroupChangePolicy = &fsGroupChangePolicy
+	if len(pod.Spec.Containers) == 0 {
+		return
+	}
+	pod.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		ReadOnlyRootFilesystem:   &readOnlyRoot,
+		RunAsNonRoot:             &runAsNonRoot,
+		RunAsUser:                &runAsUser,
+		RunAsGroup:               &runAsUser,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
 }
 
 func (k *K8sBackend) Delete(ctx context.Context, name string) error {
@@ -576,6 +687,79 @@ func (k *K8sBackend) workerNamePrefix() string {
 		return "agentteams-worker-"
 	}
 	return k.config.ResourcePrefix + "worker-"
+}
+
+func (k *K8sBackend) ensureDeepAgentsStatePVC(
+	ctx context.Context,
+	client K8sCoreClient,
+	namespace string,
+	podName string,
+	req CreateRequest,
+) (string, error) {
+	claimName := deepAgentsStateClaimName(podName)
+	pvcs := client.PersistentVolumeClaims(namespace)
+	existing, err := pvcs.Get(ctx, claimName, metav1.GetOptions{})
+	if err == nil {
+		if existing.Labels[v1beta1.LabelRuntime] != RuntimeDeepAgents ||
+			existing.Labels[v1beta1.LabelWorker] != req.Name ||
+			(req.Labels[v1beta1.LabelController] != "" &&
+				existing.Labels[v1beta1.LabelController] != req.Labels[v1beta1.LabelController]) {
+			return "", fmt.Errorf("deepagents state PVC %q exists with incompatible ownership labels", claimName)
+		}
+		return claimName, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("get deepagents state PVC %s: %w", claimName, err)
+	}
+
+	quantity, err := resource.ParseQuantity(k.config.DeepAgentsStateSize)
+	if err != nil {
+		return "", fmt.Errorf("invalid deepagents state PVC size %q: %w", k.config.DeepAgentsStateSize, err)
+	}
+	labels := map[string]string{
+		v1beta1.LabelRuntime: RuntimeDeepAgents,
+		v1beta1.LabelWorker:  req.Name,
+	}
+	if controllerName := req.Labels[v1beta1.LabelController]; controllerName != "" {
+		labels[v1beta1.LabelController] = controllerName
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      claimName,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: quantity},
+			},
+		},
+	}
+	if k.config.DeepAgentsStateClass != "" {
+		pvc.Spec.StorageClassName = &k.config.DeepAgentsStateClass
+	}
+	if req.Owner != nil {
+		if k.scheme == nil {
+			return "", fmt.Errorf("kubernetes backend: scheme is required for DeepAgents state PVC owner")
+		}
+		if err := controllerutil.SetControllerReference(req.Owner, pvc, k.scheme); err != nil {
+			return "", fmt.Errorf("set owner reference on DeepAgents state PVC %s: %w", claimName, err)
+		}
+	}
+	if _, err := pvcs.Create(ctx, pvc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return "", fmt.Errorf("create deepagents state PVC %s: %w", claimName, err)
+	}
+	return claimName, nil
+}
+
+func deepAgentsStateClaimName(podName string) string {
+	const suffix = "-state"
+	if len(podName)+len(suffix) <= 63 {
+		return podName + suffix
+	}
+	digest := sha256.Sum256([]byte(podName))
+	return fmt.Sprintf("%s-%x", podName[:54], digest[:4])
 }
 
 // buildDefaultResources constructs the backend-level default ResourceRequirements

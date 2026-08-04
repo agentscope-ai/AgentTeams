@@ -1,23 +1,33 @@
 package server
 
 import (
+	"context"
 	"log"
 	"net/http"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credentials"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // CredentialsHandler handles /api/v1/credentials/* requests.
 type CredentialsHandler struct {
 	stsService  *credentials.STSService
 	provisioner *service.Provisioner
+	client      client.Client
+	namespace   string
 }
 
-func NewCredentialsHandler(stsService *credentials.STSService, provisioner *service.Provisioner) *CredentialsHandler {
-	return &CredentialsHandler{stsService: stsService, provisioner: provisioner}
+func NewCredentialsHandler(
+	stsService *credentials.STSService,
+	provisioner *service.Provisioner,
+	k8s client.Client,
+	namespace string,
+) *CredentialsHandler {
+	return &CredentialsHandler{stsService: stsService, provisioner: provisioner, client: k8s, namespace: namespace}
 }
 
 // RefreshSTS handles POST /api/v1/credentials/sts
@@ -61,8 +71,13 @@ func (h *CredentialsHandler) RefreshMatrixToken(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	credentialName, matrixUsername, err := h.matrixRefreshIdentity(r.Context(), caller)
+	if err != nil {
+		writeK8sError(w, "resolve Matrix refresh identity", err)
+		return
+	}
 	log.Printf("[INFO] Matrix token refresh request from %s/%s", caller.Role, caller.Username)
-	result, err := h.provisioner.ForceRefreshMatrixToken(r.Context(), caller.Username)
+	result, err := h.provisioner.ForceRefreshMatrixToken(r.Context(), credentialName, matrixUsername)
 	if err != nil {
 		log.Printf("[ERROR] refresh matrix token for %s: %v", caller.Username, err)
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -72,4 +87,22 @@ func (h *CredentialsHandler) RefreshMatrixToken(w http.ResponseWriter, r *http.R
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{
 		"access_token": result.MatrixToken,
 	})
+}
+
+func (h *CredentialsHandler) matrixRefreshIdentity(
+	ctx context.Context,
+	caller *auth.CallerIdentity,
+) (credentialName string, matrixUsername string, err error) {
+	credentialName = caller.Username
+	matrixUsername = caller.Username
+	if caller.Role != auth.RoleWorker && caller.Role != auth.RoleTeamLeader {
+		return credentialName, matrixUsername, nil
+	}
+	var worker v1beta1.Worker
+	// Username is the immutable Worker CR credential key. WorkerName may have
+	// already been enriched to spec.workerName, which is only the Matrix alias.
+	if err := h.client.Get(ctx, client.ObjectKey{Name: caller.Username, Namespace: h.namespace}, &worker); err != nil {
+		return "", "", err
+	}
+	return worker.Name, worker.Spec.EffectiveWorkerName(worker.Name), nil
 }

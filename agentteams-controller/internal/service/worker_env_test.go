@@ -59,6 +59,66 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 	}
 }
 
+func TestWorkerEnvBuilderBuildForRuntimeIsolatesDeepAgentsSecrets(t *testing.T) {
+	builder := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
+		CheckpointDSN:     "postgresql://checkpoint.example/agentteams",
+		CheckpointAESKey:  "0123456789abcdef0123456789abcdef",
+		DeepAgentsEnabled: true,
+	})
+	prov := &WorkerProvisionResult{}
+
+	deepagentsEnv := builder.BuildForRuntime("alice", "deepagents", prov)
+	for key, want := range map[string]string{
+		"AGENTTEAMS_CHECKPOINT_DSN":     "postgresql://checkpoint.example/agentteams",
+		"AGENTTEAMS_CHECKPOINT_AES_KEY": "0123456789abcdef0123456789abcdef",
+		"HOME":                          "/var/lib/agentteams",
+	} {
+		if got := deepagentsEnv[key]; got != want {
+			t.Fatalf("deepagents %s = %q, want %q", key, got, want)
+		}
+	}
+
+	for _, runtime := range []string{"", "openclaw", "copaw", "hermes", "openhuman"} {
+		env := builder.BuildForRuntime("alice", runtime, prov)
+		for _, key := range []string{"AGENTTEAMS_CHECKPOINT_DSN", "AGENTTEAMS_CHECKPOINT_AES_KEY"} {
+			if _, ok := env[key]; ok {
+				t.Fatalf("runtime %q unexpectedly received %s", runtime, key)
+			}
+		}
+	}
+}
+
+func TestWorkerEnvBuilderValidateRuntimeRequiresEnabledCheckpoint(t *testing.T) {
+	for name, defaults := range map[string]config.WorkerEnvDefaults{
+		"disabled": {},
+		"missing dsn": {
+			DeepAgentsEnabled: true,
+			CheckpointAESKey:  "0123456789abcdef0123456789abcdef",
+		},
+		"missing aes key": {
+			DeepAgentsEnabled: true,
+			CheckpointDSN:     "postgresql://checkpoint.example/agentteams",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := NewWorkerEnvBuilder(defaults).ValidateRuntime("deepagents"); err == nil {
+				t.Fatal("expected DeepAgents runtime validation error")
+			}
+		})
+	}
+	valid := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
+		DeepAgentsEnabled: true,
+		CheckpointDSN:     "postgresql://checkpoint.example/agentteams",
+		CheckpointAESKey:  "0123456789abcdef0123456789abcdef",
+	})
+	if err := valid.ValidateRuntime("deepagents"); err != nil {
+		t.Fatalf("valid DeepAgents config: %v", err)
+	}
+	if err := valid.ValidateRuntime("openclaw"); err != nil {
+		t.Fatalf("non-DeepAgents runtime: %v", err)
+	}
+}
+
 func TestWorkerEnvBuilderBuildManagerUsesConfiguredRuntimeAndBucket(t *testing.T) {
 	builder := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
 		MatrixDomain:         "matrix.example.com",

@@ -109,6 +109,43 @@ def test_execute_retries_transport_failure_with_the_same_request_id() -> None:
     assert runner_payloads[0]["timeout_seconds"] == 17
 
 
+def test_execute_fails_closed_when_runner_result_remains_ambiguous() -> None:
+    runner_request_ids: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "controller":
+            return httpx.Response(
+                200,
+                json={
+                    "name": "exec-worker-hash",
+                    "phase": "Ready",
+                    "endpoint": "http://runner:8080",
+                    "token": runner_token(),
+                },
+            )
+        runner_request_ids.append(json.loads(request.content)["request_id"])
+        raise httpx.ReadTimeout("result lost", request=request)
+
+    with tempfile.TemporaryDirectory() as directory:
+        token_path = Path(directory, "token")
+        token_path.write_text(service_account_token())
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        control = SandboxControlClient(
+            controller_url="http://controller:8090",
+            worker_name="researcher-cr",
+            service_account_token_path=token_path,
+            client=client,
+        )
+        sandbox = AgentTeamsSandbox(control=control, session_id="atd-thread-hash", client=client)
+
+        result = sandbox.execute("possibly-side-effecting-command")
+
+    assert result.exit_code is None
+    assert "unknown" in result.output.lower()
+    assert len(runner_request_ids) == 2
+    assert runner_request_ids[0] == runner_request_ids[1]
+
+
 def test_file_transfers_use_deepagents_response_contracts() -> None:
     encoded = base64.b64encode(b"downloaded").decode("ascii")
 

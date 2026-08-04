@@ -347,3 +347,10 @@ type WorkerBackend interface {
 type AuthTokenProjector interface {
 	ProjectAuthToken(ctx context.Context, name, token string) error
 }
+
+// RuntimeStateCleaner is implemented by backends with state that must survive
+// ordinary container replacement but be removed when the owning Worker CR is
+// finally deleted.
+type RuntimeStateCleaner interface {
+	DeleteRuntimeState(ctx context.Context, name string) error
+}

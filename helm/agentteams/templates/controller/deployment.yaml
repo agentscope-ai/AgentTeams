@@ -22,6 +22,32 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.deepagents.enabled }}
+      initContainers:
+        - name: deepagents-checkpoint-migrate
+          image: {{ include "agentteams.worker.deepagentsImage" . | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["deepagents-agentteams-migrate"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: AGENTTEAMS_CHECKPOINT_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.deepagents.checkpointSecretName" . }}
+                  key: {{ .Values.deepagents.checkpoint.dsnKey }}
+            - name: AGENTTEAMS_CHECKPOINT_AES_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.deepagents.checkpointSecretName" . }}
+                  key: {{ .Values.deepagents.checkpoint.aesKeyKey }}
+      {{- end }}
       containers:
         - name: controller
           image: "{{ .Values.controller.image.repository }}:{{ $tag }}"
@@ -84,6 +110,36 @@ spec:
               value: {{ include "agentteams.worker.hermesImage" . | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE
+              value: {{ include "agentteams.worker.deepagentsImage" . | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_RUNNER_IMAGE
+              value: {{ include "agentteams.deepagents.runnerImage" . | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_ENABLED
+              value: {{ .Values.deepagents.enabled | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS
+              value: {{ .Values.deepagents.sandbox.egressCeilings | toJson | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_STATE_PVC_SIZE
+              value: {{ .Values.deepagents.state.size | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_STATE_STORAGE_CLASS
+              value: {{ .Values.deepagents.state.storageClassName | quote }}
+            {{- if .Values.deepagents.enabled }}
+            - name: AGENTTEAMS_DEEPAGENTS_CHECKPOINT_SECRET
+              value: {{ include "agentteams.deepagents.checkpointSecretName" . | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_CHECKPOINT_DSN_KEY
+              value: {{ .Values.deepagents.checkpoint.dsnKey | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_CHECKPOINT_AES_KEY_KEY
+              value: {{ .Values.deepagents.checkpoint.aesKeyKey | quote }}
+            - name: AGENTTEAMS_CHECKPOINT_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.deepagents.checkpointSecretName" . }}
+                  key: {{ .Values.deepagents.checkpoint.dsnKey }}
+            - name: AGENTTEAMS_CHECKPOINT_AES_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.deepagents.checkpointSecretName" . }}
+                  key: {{ .Values.deepagents.checkpoint.aesKeyKey }}
+            {{- end }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ

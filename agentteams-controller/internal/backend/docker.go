@@ -127,6 +127,22 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 		}
 	}
 	req.Image = image
+	if req.Runtime == RuntimeDeepAgents {
+		if req.Env == nil {
+			req.Env = make(map[string]string)
+		}
+		req.Env["HOME"] = "/var/lib/agentteams"
+		if req.WorkingDir == "" {
+			req.WorkingDir = "/var/lib/agentteams"
+		}
+		req.Volumes = append(req.Volumes, VolumeMount{
+			HostPath:      dockerStateVolumeName(containerName),
+			ContainerPath: "/var/lib/agentteams/deepagents",
+		})
+		if req.RestartPolicy == "" {
+			req.RestartPolicy = "unless-stopped"
+		}
+	}
 
 	// Default network fallback
 	if req.Network == "" && d.config.DefaultNetwork != "" {
@@ -241,6 +257,10 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 
 func dockerAuthVolumeName(containerName string) string {
 	return containerName + "-auth"
+}
+
+func dockerStateVolumeName(containerName string) string {
+	return containerName + "-state"
 }
 
 func (d *DockerBackend) writeContainerFile(ctx context.Context, containerName, filePath, content string) error {
@@ -460,21 +480,33 @@ func (d *DockerBackend) Delete(ctx context.Context, name string) error {
 }
 
 func (d *DockerBackend) deleteAuthVolume(ctx context.Context, containerName string) error {
-	u := fmt.Sprintf("http://localhost/volumes/%s", url.PathEscape(dockerAuthVolumeName(containerName)))
+	return d.deleteNamedVolume(ctx, dockerAuthVolumeName(containerName), "auth")
+}
+
+// DeleteRuntimeState removes durable per-Worker state only from the Worker
+// finalizer path. Ordinary Delete calls used for Pod/container replacement do
+// not call this method, so DeepAgents Matrix/E2EE state survives restarts.
+func (d *DockerBackend) DeleteRuntimeState(ctx context.Context, name string) error {
+	containerName := d.containerPrefix + name
+	return d.deleteNamedVolume(ctx, dockerStateVolumeName(containerName), "runtime state")
+}
+
+func (d *DockerBackend) deleteNamedVolume(ctx context.Context, volumeName, description string) error {
+	u := fmt.Sprintf("http://localhost/volumes/%s", url.PathEscape(volumeName))
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
 	if err != nil {
-		return fmt.Errorf("build auth volume delete request: %w", err)
+		return fmt.Errorf("build %s volume delete request: %w", description, err)
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("docker auth volume delete: %w", err)
+		return fmt.Errorf("docker %s volume delete: %w", description, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
 		return nil
 	}
 	body, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("docker auth volume delete failed (status %d): %s", resp.StatusCode, string(body))
+	return fmt.Errorf("docker %s volume delete failed (status %d): %s", description, resp.StatusCode, string(body))
 }
 
 func (d *DockerBackend) Start(ctx context.Context, name string) error {

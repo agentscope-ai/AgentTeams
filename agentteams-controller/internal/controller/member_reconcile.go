@@ -288,6 +288,25 @@ func ValidateMemberDeployment(m MemberContext) error {
 	}
 }
 
+// ValidateMemberRuntime enforces platform-level runtime gates independently of
+// which reconciler owns the runtime configuration. Team-owned Workers skip the
+// standalone config phase, so this validation must run before infrastructure
+// or container creation as well as defensively inside config reconciliation.
+func ValidateMemberRuntime(d MemberDeps, m MemberContext) error {
+	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
+	if effectiveRuntime == backend.RuntimeDeepAgents &&
+		m.Spec.RuntimeConfig != nil &&
+		m.Spec.RuntimeConfig.DeepAgents != nil &&
+		m.Spec.RuntimeConfig.DeepAgents.Execution.Mode == "sandbox" &&
+		m.DeployMode != "" && m.DeployMode != v1beta1.DeployModeLocal {
+		return fmt.Errorf("deepagents execution.mode %q requires the Worker and Runner to run in the controller's same cluster and namespace; deployMode %q is not supported", "sandbox", m.DeployMode)
+	}
+	if validator, ok := d.EnvBuilder.(interface{ ValidateRuntime(runtime string) error }); ok {
+		return validator.ValidateRuntime(effectiveRuntime)
+	}
+	return nil
+}
+
 // ReconcileMemberInfra ensures Matrix account, Gateway consumer, MinIO user,
 // and DM room are provisioned (or credentials refreshed). Writes MatrixUserID,
 // RoomID, and ProvResult into state.
@@ -366,6 +385,9 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return nil
 	}
 	logger := log.FromContext(ctx)
+	if err := ValidateMemberRuntime(d, m); err != nil {
+		return err
+	}
 	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
 	var aiGatewayURL string
 	if m.ModelProviderInfo != nil {
@@ -734,7 +756,16 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	workerDeps, tokenRequeueAfter, tokenMessage, err := prepareMemberWorkerDeps(ctx, d, m, workerEnv, true)
+	workerDepsEnv := workerEnv
+	if wb.Name() == "k8s" && backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime) == backend.RuntimeDeepAgents {
+		workerDepsEnv = make(map[string]string, len(workerEnv))
+		for key, value := range workerEnv {
+			workerDepsEnv[key] = value
+		}
+		delete(workerDepsEnv, "AGENTTEAMS_CHECKPOINT_DSN")
+		delete(workerDepsEnv, "AGENTTEAMS_CHECKPOINT_AES_KEY")
+	}
+	workerDeps, tokenRequeueAfter, tokenMessage, err := prepareMemberWorkerDeps(ctx, d, m, workerDepsEnv, true)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -875,7 +906,13 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 		return nil, fmt.Errorf("worker provision result is not available")
 	}
 	logger := log.FromContext(ctx)
+	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
 	workerEnv := d.EnvBuilder.Build(m.RuntimeName, prov)
+	if runtimeAware, ok := d.EnvBuilder.(interface {
+		BuildForRuntime(workerName, runtime string, prov *service.WorkerProvisionResult) map[string]string
+	}); ok {
+		workerEnv = runtimeAware.BuildForRuntime(m.RuntimeName, effectiveRuntime, prov)
+	}
 	workerEnv["AGENTTEAMS_WORKER_CR_NAME"] = m.Name
 	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
@@ -1950,6 +1987,7 @@ func ReconcileMemberExpose(ctx context.Context, d MemberDeps, m MemberContext, s
 // Worker. Finalizer removal remains the owning reconciler's responsibility.
 func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) error {
 	logger := log.FromContext(ctx)
+	var requiredCleanupErrs []error
 	logger.Info("deleting member", "name", m.Name, "role", m.Role)
 	sandboxSetTokenProjections.Delete(sandboxSetTokenProjectionKey(m))
 	dockerTokenProjections.Delete(sandboxSetTokenProjectionKey(m))
@@ -1995,7 +2033,12 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		}
 		if wb, err := resolveBackendForMember(d.Backend, currentBackend, m); err == nil {
 			if derr := wb.Delete(ctx, m.Name); derr != nil && !errors.Is(derr, backend.ErrNotFound) {
-				logger.Error(derr, "failed to delete member container (may already be removed)", "name", m.Name)
+				logger.Error(derr, "failed to delete member container", "name", m.Name)
+				requiredCleanupErrs = append(requiredCleanupErrs, fmt.Errorf("delete member container: %w", derr))
+			}
+			if derr := deleteMemberRuntimeState(ctx, wb, m.Name); derr != nil {
+				logger.Error(derr, "failed to delete member runtime state", "name", m.Name, "backend", wb.Name())
+				requiredCleanupErrs = append(requiredCleanupErrs, fmt.Errorf("delete member runtime state: %w", derr))
 			}
 		}
 		// Safety net: if spec disagrees with status, also try to delete
@@ -2004,7 +2047,12 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		if m.BackendRuntime != "" && m.BackendRuntime != currentBackend {
 			if altWb, err := resolveBackendForMember(d.Backend, m.BackendRuntime, m); err == nil {
 				if derr := altWb.Delete(ctx, m.Name); derr != nil && !errors.Is(derr, backend.ErrNotFound) {
-					logger.Error(derr, "failed to delete member container on alternate backend (may already be removed)", "name", m.Name)
+					logger.Error(derr, "failed to delete member container on alternate backend", "name", m.Name)
+					requiredCleanupErrs = append(requiredCleanupErrs, fmt.Errorf("delete member container on alternate backend: %w", derr))
+				}
+				if derr := deleteMemberRuntimeState(ctx, altWb, m.Name); derr != nil {
+					logger.Error(derr, "failed to delete member runtime state on alternate backend", "name", m.Name, "backend", altWb.Name())
+					requiredCleanupErrs = append(requiredCleanupErrs, fmt.Errorf("delete member runtime state on alternate backend: %w", derr))
 				}
 			}
 		}
@@ -2033,6 +2081,17 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		if err := ensureServiceDeleted(ctx, &m, svcDeps); err != nil {
 			logger.Error(err, "failed to delete member services (non-fatal)", "name", m.Name)
 		}
+	}
+	return errors.Join(requiredCleanupErrs...)
+}
+
+func deleteMemberRuntimeState(ctx context.Context, wb backend.WorkerBackend, name string) error {
+	cleaner, ok := wb.(backend.RuntimeStateCleaner)
+	if !ok {
+		return nil
+	}
+	if err := cleaner.DeleteRuntimeState(ctx, name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		return err
 	}
 	return nil
 }

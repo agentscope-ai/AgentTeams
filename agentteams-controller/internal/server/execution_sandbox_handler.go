@@ -11,6 +11,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -21,8 +22,9 @@ import (
 var executionSandboxSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 type ExecutionSandboxHandler struct {
-	client    client.Client
-	namespace string
+	client         client.Client
+	namespace      string
+	defaultRuntime string
 }
 
 type ExecutionSandboxEnsureRequest struct {
@@ -36,8 +38,8 @@ type ExecutionSandboxResponse struct {
 	Token    string `json:"token,omitempty"`
 }
 
-func NewExecutionSandboxHandler(k8s client.Client, namespace string) *ExecutionSandboxHandler {
-	return &ExecutionSandboxHandler{client: k8s, namespace: namespace}
+func NewExecutionSandboxHandler(k8s client.Client, namespace, defaultRuntime string) *ExecutionSandboxHandler {
+	return &ExecutionSandboxHandler{client: k8s, namespace: namespace, defaultRuntime: defaultRuntime}
 }
 
 func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +174,7 @@ func (h *ExecutionSandboxHandler) deepAgentsWorker(w http.ResponseWriter, r *htt
 		writeK8sError(w, "get worker", err)
 		return nil, false
 	}
-	if worker.Spec.Runtime != "deepagents" || worker.Spec.RuntimeConfig == nil ||
+	if backend.ResolveRuntime(worker.Spec.Runtime, h.defaultRuntime) != backend.RuntimeDeepAgents || worker.Spec.RuntimeConfig == nil ||
 		worker.Spec.RuntimeConfig.DeepAgents == nil || worker.Spec.RuntimeConfig.DeepAgents.Execution.Mode != "sandbox" {
 		httputil.WriteError(w, http.StatusConflict, "worker is not a deepagents runtime with sandbox execution enabled")
 		return nil, false

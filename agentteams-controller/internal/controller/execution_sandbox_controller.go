@@ -3,13 +3,16 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,6 +28,7 @@ import (
 const (
 	executionSandboxRunnerPort int32 = 8080
 	executionSandboxRequeue          = 5 * time.Second
+	executionSandboxSpecHash         = "agentteams.io/execution-sandbox-spec-hash"
 )
 
 type ExecutionSandboxReconciler struct {
@@ -32,6 +36,7 @@ type ExecutionSandboxReconciler struct {
 
 	RunnerImage    string
 	ControllerName string
+	DefaultRuntime string
 	EgressCeilings []v1beta1.DeepAgentsEgressRule
 	Now            func() time.Time
 }
@@ -53,7 +58,7 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	if sandbox.Spec.WorkerRef.UID == "" || string(worker.UID) != sandbox.Spec.WorkerRef.UID {
 		return reconcile.Result{}, fmt.Errorf("execution sandbox Worker UID does not match current Worker")
 	}
-	if worker.Spec.Runtime != "deepagents" {
+	if backend.ResolveRuntime(worker.Spec.Runtime, r.DefaultRuntime) != backend.RuntimeDeepAgents {
 		return reconcile.Result{}, fmt.Errorf("execution sandbox requires a deepagents Worker")
 	}
 	if worker.Spec.RuntimeConfig == nil || worker.Spec.RuntimeConfig.DeepAgents == nil ||
@@ -108,8 +113,12 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		return reconcile.Result{}, err
 	}
 	for _, object := range []client.Object{service, policy, pod} {
-		if err := r.Create(ctx, object); err != nil && !apierrors.IsAlreadyExists(err) {
-			return reconcile.Result{}, fmt.Errorf("create execution sandbox %T: %w", object, err)
+		recreatePending, err := r.ensureExecutionSandboxObject(ctx, object)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		if recreatePending {
+			return reconcile.Result{RequeueAfter: executionSandboxRequeue}, nil
 		}
 	}
 
@@ -166,7 +175,12 @@ func (r *ExecutionSandboxReconciler) ensureExecutionSandboxToken(
 	var existing corev1.Secret
 	key := client.ObjectKey{Name: name, Namespace: sandbox.Namespace}
 	if err := r.Get(ctx, key, &existing); err == nil {
-		if len(existing.Data["token"]) < 32 || len(existing.Data) != 1 {
+		if len(existing.Data["token"]) < 32 || len(existing.Data) != 1 ||
+			existing.Immutable == nil || !*existing.Immutable ||
+			!metav1.IsControlledBy(&existing, sandbox) ||
+			existing.Labels[v1beta1.LabelExecutionSandbox] != sandbox.Name ||
+			existing.Labels[v1beta1.LabelWorker] != sandbox.Spec.WorkerRef.Name ||
+			existing.Labels[v1beta1.LabelController] != r.ControllerName {
 			return fmt.Errorf("execution sandbox token Secret %q is malformed", name)
 		}
 		return nil
@@ -220,10 +234,54 @@ func executionSandboxPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
+func (r *ExecutionSandboxReconciler) ensureExecutionSandboxObject(ctx context.Context, desired client.Object) (bool, error) {
+	live, ok := desired.DeepCopyObject().(client.Object)
+	if !ok {
+		return false, fmt.Errorf("execution sandbox object %T is not a Kubernetes client object", desired)
+	}
+	key := client.ObjectKeyFromObject(desired)
+	if err := r.Get(ctx, key, live); apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+			return false, fmt.Errorf("create execution sandbox %T: %w", desired, err)
+		}
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("get execution sandbox %T: %w", desired, err)
+	}
+	liveHash, err := executionSandboxManagedSpecHash(live)
+	if err != nil {
+		return false, err
+	}
+	desiredHash, err := executionSandboxManagedSpecHash(desired)
+	if err != nil {
+		return false, err
+	}
+	if liveHash == desiredHash {
+		return false, nil
+	}
+	if desiredPolicy, ok := desired.(*networkingv1.NetworkPolicy); ok {
+		livePolicy, liveOK := live.(*networkingv1.NetworkPolicy)
+		if !liveOK {
+			return false, fmt.Errorf("execution sandbox object %T has unexpected live type %T", desired, live)
+		}
+		desiredPolicy.ResourceVersion = livePolicy.ResourceVersion
+		if err := r.Update(ctx, desiredPolicy); err != nil {
+			return false, fmt.Errorf("update stale execution sandbox NetworkPolicy: %w", err)
+		}
+		return false, nil
+	}
+	if err := r.Delete(ctx, live); err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("delete stale execution sandbox %T: %w", desired, err)
+	}
+	return true, nil
+}
+
 func (r *ExecutionSandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1beta1.ExecutionSandbox{}).
 		Owns(&corev1.Pod{}).
+		Owns(&corev1.Service{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Complete(r)
 }
 
@@ -390,6 +448,7 @@ func buildExecutionSandboxResources(
 			OwnerReferences: []metav1.OwnerReference{owner},
 		},
 		Spec: corev1.PodSpec{
+			ServiceAccountName:           "default",
 			AutomountServiceAccountToken: &automountToken,
 			RestartPolicy:                corev1.RestartPolicyNever,
 			SecurityContext: &corev1.PodSecurityContext{
@@ -400,12 +459,14 @@ func buildExecutionSandboxResources(
 				},
 			},
 			Containers: []corev1.Container{{
-				Name:      "runner",
-				Image:     sandbox.Spec.Image,
-				Resources: resources,
+				Name:            "runner",
+				Image:           sandbox.Spec.Image,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Resources:       resources,
 				Ports: []corev1.ContainerPort{{
 					Name:          "http",
 					ContainerPort: executionSandboxRunnerPort,
+					Protocol:      corev1.ProtocolTCP,
 				}},
 				Env: []corev1.EnvVar{{
 					Name: "AGENTTEAMS_RUNNER_TOKEN",
@@ -447,6 +508,7 @@ func buildExecutionSandboxResources(
 				Name:       "http",
 				Port:       executionSandboxRunnerPort,
 				TargetPort: intstr.FromString("http"),
+				Protocol:   corev1.ProtocolTCP,
 			}},
 		},
 	}
@@ -465,7 +527,8 @@ func buildExecutionSandboxResources(
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
-					v1beta1.LabelWorker: sandbox.Spec.WorkerRef.Name,
+					v1beta1.LabelWorker:     sandbox.Spec.WorkerRef.Name,
+					v1beta1.LabelController: controllerName,
 				}}}},
 				Ports: []networkingv1.NetworkPolicyPort{{
 					Protocol: protocolPointer(corev1.ProtocolTCP),
@@ -490,8 +553,133 @@ func buildExecutionSandboxResources(
 		}
 		policy.Spec.Egress = append(policy.Spec.Egress, egressRule)
 	}
+	if len(allowedEgress) > 0 {
+		// Explicit IP ceilings commonly target hostnames. Permit only cluster DNS
+		// resolution; the resolved destination must still match a rule above.
+		policy.Spec.Egress = append(policy.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+					"kubernetes.io/metadata.name": "kube-system",
+				}},
+				PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+					"k8s-app": "kube-dns",
+				}},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: protocolPointer(corev1.ProtocolUDP), Port: intstrPointer(intstr.FromInt32(53))},
+				{Protocol: protocolPointer(corev1.ProtocolTCP), Port: intstrPointer(intstr.FromInt32(53))},
+			},
+		})
+	}
 
+	stampExecutionSandboxSpecHash(pod)
+	stampExecutionSandboxSpecHash(service)
+	stampExecutionSandboxSpecHash(policy)
 	return pod, service, policy, nil
+}
+
+func stampExecutionSandboxSpecHash(object client.Object) {
+	digest, err := executionSandboxManagedSpecHash(object)
+	if err != nil {
+		return
+	}
+	annotations := object.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[executionSandboxSpecHash] = digest
+	object.SetAnnotations(annotations)
+}
+
+func executionSandboxManagedSpecHash(object client.Object) (string, error) {
+	var managed any
+	switch value := object.(type) {
+	case *corev1.Pod:
+		containers := make([]executionSandboxManagedContainer, 0, len(value.Spec.Containers))
+		for _, container := range value.Spec.Containers {
+			containers = append(containers, executionSandboxManagedContainer{
+				Name:            container.Name,
+				Image:           container.Image,
+				ImagePullPolicy: container.ImagePullPolicy,
+				Command:         container.Command,
+				Args:            container.Args,
+				WorkingDir:      container.WorkingDir,
+				Ports:           container.Ports,
+				Env:             container.Env,
+				Resources:       container.Resources,
+				VolumeMounts:    container.VolumeMounts,
+				SecurityContext: container.SecurityContext,
+			})
+		}
+		managed = struct {
+			AutomountServiceAccountToken *bool                              `json:"automountServiceAccountToken,omitempty"`
+			ServiceAccountName           string                             `json:"serviceAccountName,omitempty"`
+			RestartPolicy                corev1.RestartPolicy               `json:"restartPolicy,omitempty"`
+			SecurityContext              *corev1.PodSecurityContext         `json:"securityContext,omitempty"`
+			Containers                   []executionSandboxManagedContainer `json:"containers"`
+			Volumes                      []corev1.Volume                    `json:"volumes,omitempty"`
+		}{
+			AutomountServiceAccountToken: value.Spec.AutomountServiceAccountToken,
+			ServiceAccountName:           value.Spec.ServiceAccountName,
+			RestartPolicy:                value.Spec.RestartPolicy,
+			SecurityContext:              value.Spec.SecurityContext,
+			Containers:                   containers,
+			Volumes:                      value.Spec.Volumes,
+		}
+	case *corev1.Service:
+		managed = struct {
+			Selector map[string]string    `json:"selector,omitempty"`
+			Ports    []corev1.ServicePort `json:"ports,omitempty"`
+		}{Selector: value.Spec.Selector, Ports: value.Spec.Ports}
+	case *networkingv1.NetworkPolicy:
+		managed = value.Spec
+	default:
+		return "", fmt.Errorf("unsupported execution sandbox object type %T", object)
+	}
+	managed = struct {
+		Labels          map[string]string       `json:"labels,omitempty"`
+		OwnerReferences []metav1.OwnerReference `json:"ownerReferences,omitempty"`
+		Spec            any                     `json:"spec"`
+	}{
+		Labels:          executionSandboxManagedLabels(object.GetLabels()),
+		OwnerReferences: object.GetOwnerReferences(),
+		Spec:            managed,
+	}
+	payload, err := json.Marshal(managed)
+	if err != nil {
+		return "", fmt.Errorf("marshal execution sandbox managed spec for %T: %w", object, err)
+	}
+	digest := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", digest[:]), nil
+}
+
+func executionSandboxManagedLabels(labels map[string]string) map[string]string {
+	managed := make(map[string]string, 4)
+	for _, key := range []string{
+		v1beta1.LabelController,
+		v1beta1.LabelExecutionSandbox,
+		v1beta1.LabelWorker,
+		v1beta1.LabelRuntime,
+	} {
+		if value, ok := labels[key]; ok {
+			managed[key] = value
+		}
+	}
+	return managed
+}
+
+type executionSandboxManagedContainer struct {
+	Name            string                      `json:"name"`
+	Image           string                      `json:"image"`
+	ImagePullPolicy corev1.PullPolicy           `json:"imagePullPolicy,omitempty"`
+	Command         []string                    `json:"command,omitempty"`
+	Args            []string                    `json:"args,omitempty"`
+	WorkingDir      string                      `json:"workingDir,omitempty"`
+	Ports           []corev1.ContainerPort      `json:"ports,omitempty"`
+	Env             []corev1.EnvVar             `json:"env,omitempty"`
+	Resources       corev1.ResourceRequirements `json:"resources,omitempty"`
+	VolumeMounts    []corev1.VolumeMount        `json:"volumeMounts,omitempty"`
+	SecurityContext *corev1.SecurityContext     `json:"securityContext,omitempty"`
 }
 
 func sandboxResourceRequirements(in *v1beta1.AgentResourceRequirements) (corev1.ResourceRequirements, error) {

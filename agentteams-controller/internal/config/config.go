@@ -219,8 +219,13 @@ type WorkerEnvDefaults struct {
 	AdminUser            string
 	Runtime              string // "docker" for embedded, "k8s" for incluster
 	DefaultWorkerRuntime string
-	YoloMode             bool // AGENTTEAMS_YOLO=1 — propagated to managers and workers
-	MatrixDebug          bool // AGENTTEAMS_MATRIX_DEBUG=1 — propagated to managers and workers,
+	// DeepAgents checkpoint credentials are only projected into DeepAgents
+	// workers. They must never be included in the shared worker environment.
+	CheckpointDSN     string
+	CheckpointAESKey  string
+	DeepAgentsEnabled bool
+	YoloMode          bool // AGENTTEAMS_YOLO=1 — propagated to managers and workers
+	MatrixDebug       bool // AGENTTEAMS_MATRIX_DEBUG=1 — propagated to managers and workers,
 	// translated to OPENCLAW_MATRIX_DEBUG=1 by the container entrypoints to
 	// enable structured INFO-level traces in the openclaw matrix plugin.
 
@@ -426,6 +431,9 @@ func LoadConfig() *Config {
 			MatrixURL:            envOrDefault("AGENTTEAMS_MATRIX_URL", "http://matrix-local.agentteams.io:8080"),
 			AdminUser:            os.Getenv("AGENTTEAMS_ADMIN_USER"),
 			DefaultWorkerRuntime: os.Getenv("AGENTTEAMS_DEFAULT_WORKER_RUNTIME"),
+			CheckpointDSN:        os.Getenv("AGENTTEAMS_CHECKPOINT_DSN"),
+			CheckpointAESKey:     os.Getenv("AGENTTEAMS_CHECKPOINT_AES_KEY"),
+			DeepAgentsEnabled:    envBool("AGENTTEAMS_DEEPAGENTS_ENABLED"),
 			YoloMode:             envBool("AGENTTEAMS_YOLO"),
 			MatrixDebug:          envBool("AGENTTEAMS_MATRIX_DEBUG"),
 
@@ -578,17 +586,22 @@ func (c *Config) UsesExternalOSS() bool {
 
 func (c *Config) K8sConfig() backend.K8sConfig {
 	return backend.K8sConfig{
-		Namespace:             c.K8sNamespace,
-		WorkerImage:           envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
-		CopawWorkerImage:      envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
-		HermesWorkerImage:     envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
-		OpenHumanWorkerImage:  envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
-		QwenPawWorkerImage:    envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DeepAgentsWorkerImage: envOrDefault("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/agentteams-deepagents-worker:latest"),
-		WorkerCPU:             c.K8sWorkerCPU,
-		WorkerMemory:          c.K8sWorkerMemory,
-		ControllerName:        c.ControllerName,
-		ResourcePrefix:        c.ResourcePrefix,
+		Namespace:                  c.K8sNamespace,
+		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
+		CopawWorkerImage:           envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
+		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
+		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
+		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
+		DeepAgentsWorkerImage:      envOrDefault("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/agentteams-deepagents-worker:latest"),
+		DeepAgentsStateSize:        envOrDefault("AGENTTEAMS_DEEPAGENTS_STATE_PVC_SIZE", "1Gi"),
+		DeepAgentsStateClass:       os.Getenv("AGENTTEAMS_DEEPAGENTS_STATE_STORAGE_CLASS"),
+		DeepAgentsCheckpointSecret: os.Getenv("AGENTTEAMS_DEEPAGENTS_CHECKPOINT_SECRET"),
+		DeepAgentsCheckpointDSNKey: os.Getenv("AGENTTEAMS_DEEPAGENTS_CHECKPOINT_DSN_KEY"),
+		DeepAgentsCheckpointAESKey: os.Getenv("AGENTTEAMS_DEEPAGENTS_CHECKPOINT_AES_KEY_KEY"),
+		WorkerCPU:                  c.K8sWorkerCPU,
+		WorkerMemory:               c.K8sWorkerMemory,
+		ControllerName:             c.ControllerName,
+		ResourcePrefix:             c.ResourcePrefix,
 	}
 }
 

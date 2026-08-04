@@ -145,20 +145,27 @@ class RuntimeConfig:
         team_room_id = _optional_str(team_config, "teamRoomId")
         room_ids = tuple(dict.fromkeys(room for room in (personal_room_id, team_room_id) if room))
         member_matrix_user_id = _required_str(member, "matrixUserId")
-        agent_matrix_ids = {member_matrix_user_id}
+        agent_matrix_ids = set(
+            _string_tuple(matrix_config.get("agentUserIds", []), "matrix.agentUserIds")
+        )
+        agent_matrix_ids.add(member_matrix_user_id)
+        human_approver_ids = set(coordinators)
         members = team_config.get("members", [])
         if not isinstance(members, list):
             raise ConfigError("team.members must be an array")
         for index, item in enumerate(members):
             team_member = _mapping_value(item, f"team.members[{index}]")
             matrix_user_id = _optional_str(team_member, "matrixUserId")
-            if matrix_user_id:
+            role = _optional_str(team_member, "role")
+            if matrix_user_id and role in {"team_leader", "worker"}:
                 agent_matrix_ids.add(matrix_user_id)
-        human_approver_ids = set(coordinators)
+            elif matrix_user_id and role == "coordinator":
+                human_approver_ids.add(matrix_user_id)
         admin = _mapping_value(team_config.get("admin", {}), "team.admin")
         admin_matrix_user_id = _optional_str(admin, "matrixUserId")
         if admin_matrix_user_id:
             human_approver_ids.add(admin_matrix_user_id)
+        human_approver_ids.difference_update(agent_matrix_ids)
 
         return cls(
             generation=_required_int(metadata, "generation"),

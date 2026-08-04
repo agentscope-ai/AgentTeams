@@ -148,7 +148,12 @@ class AgentEngine:
             team_admins=self._config.human_approver_ids,
             coordinators=frozenset(self._config.approvals.coordinators),
         )
-        identity_kind = "human" if message.sender in self._config.human_approver_ids else "agent"
+        if message.sender in self._config.agent_matrix_ids:
+            identity_kind = "agent"
+        elif message.sender in self._config.human_approver_ids:
+            identity_kind = "human"
+        else:
+            identity_kind = "unknown"
         if not principals.can_decide(sender=message.sender, identity_kind=identity_kind):
             await self._send_reply(message, "This Matrix identity is not authorized to decide this approval.")
             return

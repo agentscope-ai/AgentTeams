@@ -518,7 +518,8 @@ func TestDeployMemberRuntimeConfigProjectsSecretSafeDeepAgentsDocument(t *testin
 	ctx := context.Background()
 	store := ossfake.NewMemory()
 	deployer := NewDeployer(DeployerConfig{
-		OSS: store,
+		OSS:          store,
+		MatrixDomain: "matrix.local",
 		RuntimeProjection: RuntimeProjectionConfig{
 			StorageProvider:         "minio",
 			StorageBucket:           "agentteams-storage",
@@ -588,6 +589,10 @@ func TestDeployMemberRuntimeConfigProjectsSecretSafeDeepAgentsDocument(t *testin
 	}
 	if _, exists := matrix["accessToken"]; exists {
 		t.Fatalf("matrix.accessToken must not be projected: %#v", matrix)
+	}
+	agentUserIDs, ok := matrix["agentUserIds"].([]any)
+	if !ok || len(agentUserIDs) != 1 || fmt.Sprint(agentUserIDs[0]) != "@manager:matrix.local" {
+		t.Fatalf("matrix.agentUserIds=%#v, want [@manager:matrix.local]", matrix["agentUserIds"])
 	}
 
 	desired := doc["desired"].(map[string]any)

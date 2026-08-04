@@ -41,8 +41,14 @@ class FakeGraph:
 def runtime_config() -> SimpleNamespace:
     return SimpleNamespace(
         worker_uid="worker-uid-1",
-        human_approver_ids=frozenset({"@operator:example.org"}),
-        agent_matrix_ids=frozenset({"@manager:example.org", "@worker:example.org"}),
+        human_approver_ids=frozenset({"@operator:example.org", "@manager:example.org"}),
+        agent_matrix_ids=frozenset(
+            {
+                "@manager:example.org",
+                "@worker:example.org",
+                "@leader:example.org",
+            }
+        ),
         approvals=SimpleNamespace(coordinators=()),
     )
 
@@ -76,11 +82,15 @@ async def test_matrix_human_approval_resumes_the_same_checkpoint_thread(tmp_path
 
     await engine.handle_message(message("@manager:example.org", "investigate"))
     await engine.handle_message(message("@manager:example.org", "approve all"))
+    await engine.handle_message(message("@worker:example.org", "approve all"))
+    await engine.handle_message(message("@leader:example.org", "approve all"))
     await engine.handle_message(message("@operator:example.org", "approve all"))
 
     assert "Approval required" in replies[0]
     assert "not authorized" in replies[1]
-    assert replies[2] == "approved result"
+    assert "not authorized" in replies[2]
+    assert "not authorized" in replies[3]
+    assert replies[4] == "approved result"
     command = graph.invocations[-1][0]
     assert isinstance(command, Command)
     assert command.resume == {

@@ -64,9 +64,10 @@ type memberRuntimeConfigMember struct {
 }
 
 type memberRuntimeConfigMatrix struct {
-	HomeserverURL     string `json:"homeserverUrl,omitempty"`
-	EncryptionEnabled bool   `json:"encryptionEnabled,omitempty"`
-	AccessToken       string `json:"accessToken,omitempty"`
+	HomeserverURL     string   `json:"homeserverUrl,omitempty"`
+	EncryptionEnabled bool     `json:"encryptionEnabled,omitempty"`
+	AccessToken       string   `json:"accessToken,omitempty"`
+	AgentUserIDs      []string `json:"agentUserIds,omitempty"`
 }
 
 type memberRuntimeConfigDesired struct {
@@ -342,6 +343,9 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		doc.Matrix = &memberRuntimeConfigMatrix{
 			HomeserverURL:     d.runtimeProjection.MatrixHomeserverURL,
 			EncryptionEnabled: d.runtimeProjection.MatrixEncryptionEnabled,
+		}
+		if matrixDomain := strings.TrimSpace(d.matrixDomain); matrixDomain != "" {
+			doc.Matrix.AgentUserIDs = []string{"@manager:" + matrixDomain}
 		}
 		doc.Credentials.CheckpointDSNEnv = "AGENTTEAMS_CHECKPOINT_DSN"
 		doc.Credentials.CheckpointAESKeyEnv = "AGENTTEAMS_CHECKPOINT_AES_KEY"

@@ -20,6 +20,7 @@ def valid_document() -> dict[str, object]:
         "matrix": {
             "homeserverUrl": "https://matrix.example.org",
             "encryptionEnabled": True,
+            "agentUserIds": ["@manager:example.org"],
         },
         "team": {
             "name": "research",
@@ -33,6 +34,16 @@ def valid_document() -> dict[str, object]:
                     "name": "leader",
                     "matrixUserId": "@leader:example.org",
                     "role": "team_leader",
+                },
+                {
+                    "name": "human-coordinator",
+                    "matrixUserId": "@coordinator:example.org",
+                    "role": "coordinator",
+                },
+                {
+                    "name": "peer-worker",
+                    "matrixUserId": "@peer:example.org",
+                    "role": "worker",
                 }
             ],
         },
@@ -168,11 +179,38 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.controller_url, "http://controller.agentteams-system.svc:8090")
         self.assertEqual(config.service_account_token_path, "/var/run/secrets/agentteams/token")
         self.assertEqual(config.room_ids, ("!room:example.org", "!team:example.org"))
-        self.assertEqual(config.human_approver_ids, frozenset({"@operator:example.org", "@reviewer:example.org"}))
+        self.assertEqual(
+            config.human_approver_ids,
+            frozenset(
+                {
+                    "@operator:example.org",
+                    "@reviewer:example.org",
+                    "@coordinator:example.org",
+                }
+            ),
+        )
         self.assertEqual(
             config.agent_matrix_ids,
-            frozenset({"@researcher:example.org", "@leader:example.org"}),
+            frozenset(
+                {
+                    "@researcher:example.org",
+                    "@manager:example.org",
+                    "@leader:example.org",
+                    "@peer:example.org",
+                }
+            ),
         )
+
+    def test_known_agent_identity_cannot_become_a_human_approver(self) -> None:
+        document = copy.deepcopy(valid_document())
+        document["desired"]["runtimeConfig"]["deepagents"]["approvals"]["coordinators"] = [  # type: ignore[index]
+            "@manager:example.org"
+        ]
+
+        config = RuntimeConfig.from_document(document, environ=valid_environ())
+
+        self.assertIn("@manager:example.org", config.agent_matrix_ids)
+        self.assertNotIn("@manager:example.org", config.human_approver_ids)
 
     def test_rejects_invalid_approval_mode_and_duration(self) -> None:
         document = copy.deepcopy(valid_document())

@@ -304,6 +304,7 @@ kubectl -n "${AGENTTEAMS_NAMESPACE}" get pod -l agentteams.io/runtime=deepagents
 | Runner 进入 Failed | Runner Pod 终止原因与事件；Controller 会保留终止 Pod 供诊断，并拒绝自动重放结果不确定的命令 |
 | Runner 无法访问目标 | Worker egress 请求、Helm ceiling、实际目标 IP、CNI 是否执行 NetworkPolicy |
 | Matrix token 过期 | Worker 会用轮转的 ServiceAccount token 调用 Controller 刷新；检查 Controller API/RBAC 和 Pod token projection |
+| Matrix 收到消息但没有回复 | 检查 Worker 日志中的 `Matrix message handling failed`；再沿 traceback 核对 checkpoint、LLM、MCP 或 Runner 失败，不要把消息正文写入诊断脚本 |
 | 工作区写回失败 | 检查 Runner 下载响应、变更清单大小/SHA-256、MinIO 可用性；Worker 不会自动重跑已完成的命令 |
 | 命令结果 unknown | Worker 已用同一 request ID 重试但仍无法确认结果；为避免重复副作用，不要自动重新执行 |
 

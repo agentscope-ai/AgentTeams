@@ -292,7 +292,18 @@ class MatrixTransport:
             )
         task = asyncio.create_task(self._on_message(message))
         self._event_tasks.add(task)
-        task.add_done_callback(self._event_tasks.discard)
+        task.add_done_callback(self._message_task_done)
+
+    def _message_task_done(self, task: asyncio.Task[None]) -> None:
+        self._event_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            _LOGGER.error(
+                "Matrix message handling failed",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     def _load_sync_token(self) -> str | None:
         path = self._state_dir / "sync-token"

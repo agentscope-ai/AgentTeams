@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -322,6 +323,44 @@ async def test_initial_sync_refreshes_token_when_allowed_room_join_is_unauthoriz
         {"timeout": 30_000, "full_state": True},
         {"timeout": 30_000, "since": "next-batch", "full_state": False},
     ]
+
+
+async def test_message_handler_failure_is_retrieved_and_logged(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeClient:
+        async def room_read_markers(self, *_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+            return None
+
+    async def fail_message(_message: MatrixMessage) -> None:
+        raise RuntimeError("handler failed")
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=fail_message,
+    )
+    transport.client = FakeClient()
+
+    with caplog.at_level(logging.ERROR, logger="deepagents_agentteams.matrix"):
+        await transport._schedule_message(
+            SimpleNamespace(room_id="!allowed:example.org"),
+            event(),
+        )
+        tasks = tuple(transport._event_tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    assert transport._event_tasks == set()
+    assert "Matrix message handling failed" in caplog.text
+    assert "RuntimeError: handler failed" in caplog.text
 
 
 async def test_controller_matrix_token_provider_reads_fresh_service_account_token(tmp_path: Path) -> None:

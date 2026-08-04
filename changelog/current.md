@@ -53,6 +53,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Change list / 变更列表**
 
+- [`bffedf1f`](https://github.com/agentscope-ai/AgentTeams/commit/bffedf1f) fix(deepagents): surface Matrix task failures
+- [`8fd67797`](https://github.com/agentscope-ai/AgentTeams/commit/8fd67797) fix(deepagents): validate durable workspace manifests
+- [`56dcc083`](https://github.com/agentscope-ai/AgentTeams/commit/56dcc083) fix(deepagents): enforce Matrix room response boundaries
+- [`d68ad9e2`](https://github.com/agentscope-ai/AgentTeams/commit/d68ad9e2) fix(deepagents): converge sandbox lifecycle status
 - [`9fd79fbb`](https://github.com/agentscope-ai/AgentTeams/commit/9fd79fbb) fix(deepagents): enforce Matrix human approval identities
 - [`3c3b4feb`](https://github.com/agentscope-ai/AgentTeams/commit/3c3b4feb) feat(deepagents): package Kubernetes worker runtime
 - [`30216225`](https://github.com/agentscope-ai/AgentTeams/commit/30216225) feat(deepagents): add Matrix runtime and workspace sync

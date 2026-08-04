@@ -28,6 +28,15 @@
 9. 按基础设施、Controller、Manager、Worker 分层验证部署。
 10. 保留运行时选择、升级、故障排查和卸载内容，但把镜像升级改成重新导入两个 worker，并删除 kind 集群生命周期命令。
 
+## Kuboard 辅助管理入口
+
+- 在环境概况中注明 Kuboard `v4.2.0.0` 运行于管理机 `agent1`，局域网入口为 `http://10.13.36.129:8000/login`，已导入 `local-k8s` 集群。
+- 在管理环境章节新增精简说明，将 Kuboard 定位为资源、事件、日志和 Metrics 的辅助观察与排障入口；AgentTeams 的部署、验收和卸载命令仍以 Helm 与 `kubectl` 为准。
+- 明确 Kuboard 使用 `kuboard/kuboard-admin` ServiceAccount，持久绑定 `cluster-admin`，因此具有整个集群的完全管理权限。
+- 明确当前入口为局域网明文 HTTP，只能在受信任管理网使用，并应通过主机防火墙限制管理来源；不在部署文档中记录管理员密码、ServiceAccount Token 或导入 kubeconfig。
+- 说明 Kuboard 不提供 StorageClass、Ingress Controller 或 MetalLB，也不解除本文的存储安装门禁。
+- 仓库内链接继续指向 `docs/kubernetes-cluster-guide.md`；同时以不可点击的主机路径注明详细 Kuboard 运维说明位于 `agent1` 的 `/home/agent1/sealos/deploy/kuboard-v4/README.md`，避免制造只在当前工作站有效的 Markdown 链接。
+
 ## 安全与失败处理
 
 - 不在文档中保存 kubeconfig、API Key、管理员密码、镜像仓库密码或 kubeadm Token。
@@ -35,6 +44,7 @@
 - LLM 密钥和管理员密码通过交互式环境变量读取；保留 Helm 参数可能短暂暴露在进程列表中的警告。
 - 无 StorageClass、节点未 Ready、镜像只存在一个 worker、LLM preflight 失败时，不继续安装。
 - `port-forward --address 10.13.36.129` 会把端口开放给局域网，不将 Console、Controller、Tuwunel 或 MinIO 管理端口暴露到公网。
+- Kuboard 的明文 HTTP 入口和持久 `cluster-admin` 权限构成独立高权限边界；发现持续兼容性或安全问题时，应按其运维说明停止服务或撤销授权，而不是降低 Kubernetes 安全配置。
 - 卸载 AgentTeams 不删除 kubeadm 集群；删除 PVC、CRD 或底层卷前先备份并确认影响。
 - 明确当前单 control-plane 和单副本 Tuwunel/MinIO 不是高可用部署。
 
@@ -46,6 +56,7 @@
 - `gateway.publicURL` 与局域网实际访问地址一致。
 - 验证步骤覆盖 PVC Bound、核心 Pod Ready、Manager CR/Pod Ready、Element 登录、Matrix 路由和首个 Worker 调用模型。
 - 文档中的相对链接、标题层级、shell/YAML 代码块和变量名通过静态检查。
+- 文档准确包含 Kuboard 版本、入口、`local-k8s` 集群、`cluster-admin` 权限和辅助用途，并明确它不替代 Helm/`kubectl` 或基础设施组件。
 
 ## 非目标
 

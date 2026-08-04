@@ -28,8 +28,9 @@ die() {
     exit 1
 }
 
-# Fail before contacting the container runtime so stale examples cannot turn
-# into a surprising partial apply. Keep this list aligned with `agt apply`.
+# Fail before contacting the container runtime so stale examples return a clear
+# error without unnecessary container checks or file copies. Keep this list
+# aligned with `agt apply`.
 for arg in "$@"; do
     case "${arg}" in
         --prune|--dry-run|--watch)

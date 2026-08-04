@@ -106,6 +106,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
+	if deps.KubeMode == "incluster" {
+		esh := NewExecutionSandboxHandler(deps.Client, deps.Namespace)
+		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/ensure", mw.RequireAuthz(authpkg.ActionEnsureExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Ensure)))
+		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/{sessionId}/heartbeat", mw.RequireAuthz(authpkg.ActionHeartbeatExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Heartbeat)))
+		mux.Handle("DELETE /api/v1/workers/{name}/execution-sandboxes/{sessionId}", mw.RequireAuthz(authpkg.ActionDeleteExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Delete)))
+	}
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)

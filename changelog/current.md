@@ -6,6 +6,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
+- **DeepAgents Worker runtime foundation**: Add `deepagents` runtime image selection, secret-safe runtime configuration projection, Matrix-scoped sandbox lifecycle APIs, and a hardened `ExecutionSandbox` CRD/Reconciler with per-session runner tokens and default-deny network policy.
 - **Custom model capability overrides**: `AGENTTEAMS_MODEL_VISION` and `AGENTTEAMS_MODEL_REASONING` env vars let deployments override vision and reasoning capabilities for custom models not in the built-in presets table (e.g. local multimodal models like `qwen3.6-27b-fp8`).
 
 **Bug Fixes**
@@ -27,6 +28,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - **Manager diagnostic loops**: Manager prompts and Worker lifecycle guidance stop repeated no-op troubleshooting commands and treat a missing Worker in `agt get workers` as the deletion boundary instead of looping on Matrix room probes. ([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
 
 ---
+
+**新增功能**
+
+- **DeepAgents Worker Runtime 基础能力**：新增 `deepagents` Runtime 镜像选择、仅引用环境变量的无密钥运行时配置投影、基于 Matrix Worker 身份的沙箱生命周期 API，以及使用独立会话令牌和默认拒绝网络策略的强化 `ExecutionSandbox` CRD/Reconciler。
 
 **Bug 修复**
 

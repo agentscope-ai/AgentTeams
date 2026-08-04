@@ -514,6 +514,106 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 	}
 }
 
+func TestDeployMemberRuntimeConfigProjectsSecretSafeDeepAgentsDocument(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS: store,
+		RuntimeProjection: RuntimeProjectionConfig{
+			StorageProvider:         "minio",
+			StorageBucket:           "agentteams-storage",
+			StorageEndpoint:         "http://minio.agentteams-system.svc:9000",
+			AIGatewayURL:            "http://higress-gateway.agentteams-system.svc/v1",
+			MatrixHomeserverURL:     "http://tuwunel.agentteams-system.svc:8008",
+			MatrixEncryptionEnabled: true,
+		},
+	})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:           "researcher",
+		RuntimeName:    "researcher",
+		Runtime:        "deepagents",
+		Role:           "worker",
+		Generation:     4,
+		MatrixUserID:   "@researcher:matrix.local",
+		PersonalRoomID: "!researcher:matrix.local",
+		Spec: v1beta1.WorkerSpec{
+			Model:   "qwen-max",
+			Runtime: "deepagents",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+				DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+					Approvals: v1beta1.DeepAgentsApprovalConfig{
+						FileWrites:   "required",
+						MCPDefault:   "required",
+						Coordinators: []string{"@lead:matrix.local"},
+					},
+					Execution: v1beta1.DeepAgentsExecutionConfig{
+						Mode:        "sandbox",
+						IdleTimeout: "30m",
+						MaxLifetime: "8h",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	payload, err := store.GetObject(ctx, "agents/researcher/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"matrix-secret", "gateway-secret", "postgresql://", "aes-secret"} {
+		if strings.Contains(string(payload), forbidden) {
+			t.Fatalf("runtime.yaml leaked %q:\n%s", forbidden, payload)
+		}
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal(payload, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, payload)
+	}
+	matrix := doc["matrix"].(map[string]any)
+	if got := fmt.Sprint(matrix["homeserverUrl"]); got != "http://tuwunel.agentteams-system.svc:8008" {
+		t.Fatalf("matrix.homeserverUrl=%q", got)
+	}
+	if got := matrix["encryptionEnabled"]; got != true {
+		t.Fatalf("matrix.encryptionEnabled=%#v", got)
+	}
+	if _, exists := matrix["accessToken"]; exists {
+		t.Fatalf("matrix.accessToken must not be projected: %#v", matrix)
+	}
+
+	desired := doc["desired"].(map[string]any)
+	model := desired["model"].(map[string]any)
+	if _, exists := model["gatewayKey"]; exists {
+		t.Fatalf("desired.model.gatewayKey must not be projected: %#v", model)
+	}
+	runtimeConfig := desired["runtimeConfig"].(map[string]any)
+	deepagents := runtimeConfig["deepagents"].(map[string]any)
+	approvals := deepagents["approvals"].(map[string]any)
+	if got := fmt.Sprint(approvals["fileWrites"]); got != "required" {
+		t.Fatalf("approvals.fileWrites=%q", got)
+	}
+	execution := deepagents["execution"].(map[string]any)
+	if got := fmt.Sprint(execution["mode"]); got != "sandbox" {
+		t.Fatalf("execution.mode=%q", got)
+	}
+
+	credentials := doc["credentials"].(map[string]any)
+	for key, want := range map[string]string{
+		"matrixTokenEnv":      "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+		"gatewayKeyEnv":       "AGENTTEAMS_WORKER_GATEWAY_KEY",
+		"checkpointDSNEnv":    "AGENTTEAMS_CHECKPOINT_DSN",
+		"checkpointAESKeyEnv": "AGENTTEAMS_CHECKPOINT_AES_KEY",
+	} {
+		if got := fmt.Sprint(credentials[key]); got != want {
+			t.Fatalf("credentials.%s=%q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestDeployMemberRuntimeConfigUsesRequestGatewayURL(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()

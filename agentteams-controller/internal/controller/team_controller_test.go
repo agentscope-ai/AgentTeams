@@ -467,9 +467,9 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	team := &v1beta1.Team{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{
-			Admin:        &v1beta1.TeamAdminSpec{Name: "admin", MatrixUserID: "@admin:localhost"},
+			Admin:         &v1beta1.TeamAdminSpec{Name: "admin", MatrixUserID: "@admin:localhost"},
 			ChannelPolicy: &v1beta1.ChannelPolicySpec{GroupAllowExtra: []string{"team-group-bot"}},
-			HumanMembers: []v1beta1.TeamMemberSpec{{Name: "human-coord", MatrixUserID: "@human:matrix.local"}},
+			HumanMembers:  []v1beta1.TeamMemberSpec{{Name: "human-coord", MatrixUserID: "@human:matrix.local"}},
 			WorkerMembers: []v1beta1.TeamWorkerRef{
 				{Name: "lead", Role: "team_leader"},
 				{Name: "dev"},
@@ -553,6 +553,59 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	}
 	if got := len(deployer.Calls.InjectChannelPolicy); got != 0 {
 		t.Fatalf("qwenpaw InjectChannelPolicy calls=%d, want 0", got)
+	}
+}
+
+func TestDeployTeamRuntimeConfigsProjectsDeepAgentsRoster(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{Deployer: deployer}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "research", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			Admin: &v1beta1.TeamAdminSpec{Name: "alice", MatrixUserID: "@alice:matrix.local"},
+			HumanMembers: []v1beta1.TeamMemberSpec{{
+				Name: "reviewer", Role: "coordinator", MatrixUserID: "@reviewer:matrix.local",
+			}},
+		},
+	}
+	members := []teamWorkerMember{
+		{
+			ref:         v1beta1.TeamWorkerRef{Name: "lead", Role: "team_leader"},
+			runtimeName: "lead-runtime",
+			worker: v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "lead", Generation: 2},
+				Spec:       v1beta1.WorkerSpec{Runtime: "deepagents", Model: "qwen-max"},
+				Status:     v1beta1.WorkerStatus{MatrixUserID: "@lead:matrix.local", RoomID: "!lead:matrix.local"},
+			},
+		},
+		{
+			ref:         v1beta1.TeamWorkerRef{Name: "analyst", Role: "worker"},
+			runtimeName: "analyst-runtime",
+			worker: v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "analyst", Generation: 4},
+				Spec:       v1beta1.WorkerSpec{Runtime: "deepagents", Model: "qwen-max"},
+				Status:     v1beta1.WorkerStatus{MatrixUserID: "@analyst:matrix.local", RoomID: "!analyst:matrix.local"},
+			},
+		},
+	}
+
+	err := r.deployTeamRuntimeConfigs(
+		context.Background(), team, members, "lead", "research-runtime", "lead-runtime",
+		&service.TeamRoomResult{TeamRoomID: "!team:matrix.local", LeaderDMRoomID: "!lead:matrix.local"},
+	)
+	if err != nil {
+		t.Fatalf("deployTeamRuntimeConfigs: %v", err)
+	}
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 2 {
+		t.Fatalf("runtime config calls=%d, want 2: %#v", got, deployer.Calls.DeployMemberRuntimeConfig)
+	}
+	for _, req := range deployer.Calls.DeployMemberRuntimeConfig {
+		if req.Runtime != "deepagents" || req.TeamRoomID != "!team:matrix.local" || len(req.TeamMembers) != 3 {
+			t.Fatalf("DeepAgents team projection missing routing roster: %#v", req)
+		}
+		if req.TeamAdminMatrixID != "@alice:matrix.local" {
+			t.Fatalf("DeepAgents team projection missing admin: %#v", req)
+		}
 	}
 }
 

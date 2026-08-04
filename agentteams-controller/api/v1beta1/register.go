@@ -20,6 +20,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&Worker{},
 		&WorkerList{},
+		&ExecutionSandbox{},
+		&ExecutionSandboxList{},
 		&Team{},
 		&TeamList{},
 		&Human{},

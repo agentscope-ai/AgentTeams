@@ -63,7 +63,9 @@ type memberRuntimeConfigMember struct {
 }
 
 type memberRuntimeConfigMatrix struct {
-	AccessToken string `json:"accessToken,omitempty"`
+	HomeserverURL     string `json:"homeserverUrl,omitempty"`
+	EncryptionEnabled bool   `json:"encryptionEnabled,omitempty"`
+	AccessToken       string `json:"accessToken,omitempty"`
 }
 
 type memberRuntimeConfigDesired struct {
@@ -76,6 +78,7 @@ type memberRuntimeConfigDesired struct {
 	AgentIdentity      *v1beta1.AgentIdentitySpec        `json:"agentIdentity,omitempty"`
 	CredentialBindings []v1beta1.CredentialBinding       `json:"credentialBindings,omitempty"`
 	Channels           *memberRuntimeConfigChannels      `json:"channels,omitempty"`
+	RuntimeConfig      *v1beta1.WorkerRuntimeConfig      `json:"runtimeConfig,omitempty"`
 	State              string                            `json:"state"`
 }
 
@@ -139,6 +142,8 @@ type memberRuntimeConfigCredentials struct {
 	GatewayKeyEnv           string `json:"gatewayKeyEnv"`
 	StorageAccessKeyEnv     string `json:"storageAccessKeyEnv"`
 	StorageSecretKeyEnv     string `json:"storageSecretKeyEnv"`
+	CheckpointDSNEnv        string `json:"checkpointDSNEnv,omitempty"`
+	CheckpointAESKeyEnv     string `json:"checkpointAESKeyEnv,omitempty"`
 	ServiceAccountTokenPath string `json:"serviceAccountTokenPath"`
 }
 
@@ -257,6 +262,9 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		CredentialBindings: copyCredentialBindings(req.Spec.CredentialBindings),
 		State:              req.Spec.DesiredState(),
 	}
+	if runtime == "deepagents" {
+		desired.RuntimeConfig = req.Spec.RuntimeConfig.DeepCopy()
+	}
 	if req.Spec.Model != "" && !isNativeConfigModel(req.Spec.Model) {
 		gatewayURL := strings.TrimSpace(req.AIGatewayURL)
 		if gatewayURL == "" {
@@ -325,7 +333,14 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			ServiceAccountTokenPath: "/var/run/secrets/agentteams/token",
 		},
 	}
-	if req.MatrixAccessToken != "" {
+	if runtime == "deepagents" {
+		doc.Matrix = &memberRuntimeConfigMatrix{
+			HomeserverURL:     d.runtimeProjection.MatrixHomeserverURL,
+			EncryptionEnabled: d.runtimeProjection.MatrixEncryptionEnabled,
+		}
+		doc.Credentials.CheckpointDSNEnv = "AGENTTEAMS_CHECKPOINT_DSN"
+		doc.Credentials.CheckpointAESKeyEnv = "AGENTTEAMS_CHECKPOINT_AES_KEY"
+	} else if req.MatrixAccessToken != "" {
 		doc.Matrix = &memberRuntimeConfigMatrix{AccessToken: req.MatrixAccessToken}
 	}
 

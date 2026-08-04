@@ -72,6 +72,8 @@ type RuntimeProjectionConfig struct {
 	StorageBucket             string
 	StorageEndpoint           string
 	AIGatewayURL              string
+	MatrixHomeserverURL       string
+	MatrixEncryptionEnabled   bool
 	AgentIdentityDataEndpoint string
 }
 

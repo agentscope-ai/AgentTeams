@@ -1926,6 +1926,37 @@ func TestWorkerMemberContextQwenPawConfigOnlyChangeDoesNotSetSpecChanged(t *test
 	}
 }
 
+func TestWorkerMemberContextDeepAgentsRuntimeConfigOnlyChangeDoesNotSetSpecChanged(t *testing.T) {
+	r := &WorkerReconciler{ControllerName: "ctl-x"}
+	baseSpec := v1beta1.WorkerSpec{
+		Runtime: "deepagents",
+		Image:   "deepagents:v1",
+		Model:   "qwen-max",
+		RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+			Approvals: v1beta1.DeepAgentsApprovalConfig{FileWrites: "notRequired"},
+			Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "disabled"},
+		}},
+	}
+
+	w := &v1beta1.Worker{}
+	w.Name = "researcher"
+	w.Generation = 2
+	w.Status.ObservedGeneration = 1
+	w.Status.SpecHash = hashAppliedWorkerSpecForRuntime(baseSpec, "deepagents")
+	w.Spec = *baseSpec.DeepCopy()
+	w.Spec.RuntimeConfig.DeepAgents.Approvals.FileWrites = "required"
+	w.Spec.RuntimeConfig.DeepAgents.Execution.Mode = "sandbox"
+
+	if mctx := r.workerMemberContext(w); mctx.SpecChanged {
+		t.Fatalf("deepagents approval/execution policy changes should not recreate the worker pod")
+	}
+
+	w.Spec.Image = "deepagents:v2"
+	if mctx := r.workerMemberContext(w); !mctx.SpecChanged {
+		t.Fatalf("deepagents image change should recreate the worker pod")
+	}
+}
+
 func TestWorkerReconcileQwenPawConfigOnlyUpdateWritesRuntimeConfigWithoutRecreate(t *testing.T) {
 	worker := newWorker("solo", v1beta1.WorkerSpec{
 		Runtime:    "qwenpaw",

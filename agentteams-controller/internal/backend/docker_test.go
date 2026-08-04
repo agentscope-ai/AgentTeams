@@ -604,11 +604,13 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw_uses_copaw_image", RuntimeCopaw, "", "agentteams/copaw-worker:latest"},
 		{"explicit_hermes_uses_hermes_image", RuntimeHermes, "", "agentteams/hermes-worker:latest"},
 		{"explicit_qwenpaw_uses_qwenpaw_image", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest"},
+		{"explicit_deepagents_uses_deepagents_image", RuntimeDeepAgents, "", "agentteams/deepagents-worker:latest"},
 		{"explicit_openclaw_uses_worker_image", RuntimeOpenClaw, "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_no_fallback_uses_worker_image", "", "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_copaw_fallback_uses_copaw_image", "", RuntimeCopaw, "agentteams/copaw-worker:latest"},
 		{"empty_runtime_with_hermes_fallback_uses_hermes_image", "", RuntimeHermes, "agentteams/hermes-worker:latest"},
 		{"empty_runtime_with_qwenpaw_fallback_uses_qwenpaw_image", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest"},
+		{"empty_runtime_with_deepagents_fallback_uses_deepagents_image", "", RuntimeDeepAgents, "agentteams/deepagents-worker:latest"},
 		{"explicit_runtime_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "agentteams/worker-agent:latest"},
 	}
 	for _, tc := range cases {
@@ -618,11 +620,12 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 
 			b := &DockerBackend{
 				config: DockerConfig{
-					WorkerImage:        "agentteams/worker-agent:latest",
-					CopawWorkerImage:   "agentteams/copaw-worker:latest",
-					HermesWorkerImage:  "agentteams/hermes-worker:latest",
-					QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-					DefaultNetwork:     "agentteams-net",
+					WorkerImage:           "agentteams/worker-agent:latest",
+					CopawWorkerImage:      "agentteams/copaw-worker:latest",
+					HermesWorkerImage:     "agentteams/hermes-worker:latest",
+					QwenPawWorkerImage:    "agentteams/qwenpaw-worker:latest",
+					DeepAgentsWorkerImage: "agentteams/deepagents-worker:latest",
+					DefaultNetwork:        "agentteams-net",
 				},
 				containerPrefix: "agentteams-worker-",
 				client: &http.Client{

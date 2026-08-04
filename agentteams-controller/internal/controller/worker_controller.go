@@ -206,7 +206,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	configOwnedByTeam := inTeam && backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw
+	configOwnedByTeam := inTeam && usesMemberRuntimeConfig(backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime))
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
@@ -772,6 +772,7 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
 	spec.McpServers = nil    // config-only: written to mcporter/runtime config
+	spec.RuntimeConfig = nil // config-only: written to runtime.yaml
 	spec.AccessEntries = nil // permission-only: resolved when credentials are issued
 	spec.AgentIdentity = nil // config-only: written to runtime.yaml
 	spec.CredentialBindings = nil
@@ -827,6 +828,7 @@ func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtim
 	}
 	spec.Model = ""           // config-only: written to openclaw.json/runtime.yaml
 	spec.McpServers = nil     // config-only: written to mcporter/runtime config
+	spec.RuntimeConfig = nil  // config-only: written to runtime.yaml
 	spec.AccessEntries = nil  // permission-only: resolved when credentials are issued
 	spec.State = nil          // exclude lifecycle state from hash
 	spec.IdleTimeout = ""     // exclude controller-side autosleep policy

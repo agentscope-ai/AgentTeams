@@ -518,14 +518,22 @@ func (a *App) initServiceLayer(_ context.Context) error {
 	}
 
 	a.deployer = service.NewDeployer(service.DeployerConfig{
-		AgentConfig:     a.agentGen,
-		OSS:             a.oss,
-		Executor:        a.shell,
-		Packages:        a.packages,
-		ManagerConfig:   a.managerConfig,
-		AgentFSDir:      cfg.AgentFSDir(),
-		WorkerAgentDir:  cfg.WorkerAgentDir(),
-		MatrixDomain:    cfg.MatrixDomain,
+		AgentConfig:    a.agentGen,
+		OSS:            a.oss,
+		Executor:       a.shell,
+		Packages:       a.packages,
+		ManagerConfig:  a.managerConfig,
+		AgentFSDir:     cfg.AgentFSDir(),
+		WorkerAgentDir: cfg.WorkerAgentDir(),
+		MatrixDomain:   cfg.MatrixDomain,
+		RuntimeProjection: service.RuntimeProjectionConfig{
+			StorageProvider:         cfg.StorageProvider,
+			StorageBucket:           cfg.OSSBucket,
+			StorageEndpoint:         cfg.WorkerEnv.FSEndpoint,
+			AIGatewayURL:            cfg.WorkerEnv.AIGatewayURL,
+			MatrixHomeserverURL:     cfg.WorkerEnv.MatrixURL,
+			MatrixEncryptionEnabled: cfg.MatrixE2EE,
+		},
 		NacosCredClient: a.credProvider,
 	})
 
@@ -567,6 +575,16 @@ func (a *App) initReconcilers(_ context.Context) error {
 		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
+	}
+	if a.cfg.KubeMode == "incluster" {
+		if err := (&controller.ExecutionSandboxReconciler{
+			Client:         a.mgr.GetClient(),
+			RunnerImage:    a.cfg.DeepAgentsRunnerImage,
+			ControllerName: a.cfg.ControllerName,
+			EgressCeilings: a.cfg.DeepAgentsSandboxEgressCeilings,
+		}).SetupWithManager(a.mgr); err != nil {
+			return fmt.Errorf("setup ExecutionSandboxReconciler: %w", err)
+		}
 	}
 
 	if _, err := (&controller.TeamReconciler{

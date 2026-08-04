@@ -597,6 +597,51 @@ func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberConfigDeepAgentsWritesSecretSafeRuntimeConfigOnly(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		MatrixUserID: "@researcher:matrix.local",
+		RoomID:       "!researcher:matrix.local",
+		ProvResult: &service.WorkerProvisionResult{
+			MatrixToken: "matrix-secret",
+			GatewayKey:  "gateway-secret",
+		},
+	}
+	member := MemberContext{
+		Name:        "researcher",
+		RuntimeName: "researcher",
+		Role:        RoleStandalone,
+		Generation:  3,
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "deepagents",
+			Model:   "qwen-max",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+				DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+					Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+				},
+			},
+		},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 1", got)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if req.Runtime != "deepagents" || req.Spec.RuntimeConfig == nil {
+		t.Fatalf("unexpected runtime config request: %#v", req)
+	}
+	if req.MatrixAccessToken != "" || req.GatewayKey != "" {
+		t.Fatalf("managed DeepAgents config must use env references, got embedded credentials: %#v", req)
+	}
+	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
+		t.Fatalf("deepagents must skip legacy file-based deploy path, got package=%d inline=%d config=%d skills=%d",
+			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
 func TestReconcileMemberConfigEdgeWritesRemoteManagedRuntimeConfigOnly(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	state := &MemberState{

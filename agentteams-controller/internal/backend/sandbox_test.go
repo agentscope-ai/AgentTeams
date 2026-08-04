@@ -548,6 +548,12 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 			wantImage: "qwenpaw:v4",
 		},
 		{
+			name:      "deepagents runtime",
+			runtime:   RuntimeDeepAgents,
+			config:    SandboxConfig{WorkerImage: "default:latest", DeepAgentsWorkerImage: "deepagents:v1"},
+			wantImage: "deepagents:v1",
+		},
+		{
 			name:      "default worker image",
 			config:    SandboxConfig{WorkerImage: "default/worker:latest"},
 			wantImage: "default/worker:latest",

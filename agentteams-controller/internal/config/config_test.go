@@ -146,6 +146,48 @@ func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
 	}
 }
 
+func TestBackendConfigsIncludeDeepAgentsWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/deepagents-worker:test")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().DeepAgentsWorkerImage,
+		"k8s":     cfg.K8sConfig().DeepAgentsWorkerImage,
+		"sandbox": cfg.SandboxConfig().DeepAgentsWorkerImage,
+	} {
+		if want := "agentteams/deepagents-worker:test"; got != want {
+			t.Fatalf("%s DeepAgentsWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestLoadConfigIncludesDeepAgentsExecutionSandboxSettings(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_RUNNER_IMAGE", "agentteams/deepagents-runner:test")
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS", `[
+		{"cidr":"10.96.0.0/12","protocol":"TCP","ports":[443]},
+		{"cidr":"10.96.0.10/32","protocol":"UDP","ports":[53]}
+	]`)
+
+	cfg := LoadConfig()
+	if cfg.DeepAgentsRunnerImage != "agentteams/deepagents-runner:test" {
+		t.Fatalf("DeepAgentsRunnerImage=%q", cfg.DeepAgentsRunnerImage)
+	}
+	if len(cfg.DeepAgentsSandboxEgressCeilings) != 2 || cfg.DeepAgentsSandboxEgressCeilings[1].Protocol != "UDP" {
+		t.Fatalf("DeepAgentsSandboxEgressCeilings=%#v", cfg.DeepAgentsSandboxEgressCeilings)
+	}
+}
+
+func TestLoadConfigPanicsOnInvalidDeepAgentsEgressCeilings(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS", "{")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("LoadConfig did not reject invalid DeepAgents egress ceiling JSON")
+		}
+	}()
+	_ = LoadConfig()
+}
+
 func TestLoadConfigPanicsOnInvalidManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", "{")
 

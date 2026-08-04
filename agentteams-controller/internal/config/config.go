@@ -95,6 +95,9 @@ type Config struct {
 	K8sWorkerCPU    string
 	K8sWorkerMemory string
 
+	DeepAgentsRunnerImage           string
+	DeepAgentsSandboxEgressCeilings []v1beta1.DeepAgentsEgressRule
+
 	// Legacy sandbox backend knobs. The open-source controller does not
 	// register the OpenKruise sandbox backend.
 	SandboxProviderType          string
@@ -169,8 +172,8 @@ type Config struct {
 	Runtime            string
 	ModelContextWindow int
 	ModelMaxTokens     int
-	ModelVision    *bool // nil = use model default; overrides model-level vision capability
-	ModelReasoning *bool // nil = use model default; overrides model-level reasoning capability
+	ModelVision        *bool // nil = use model default; overrides model-level vision capability
+	ModelReasoning     *bool // nil = use model default; overrides model-level reasoning capability
 
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
@@ -340,6 +343,14 @@ func LoadConfig() *Config {
 		K8sWorkerCPU:    envOrDefault("AGENTTEAMS_K8S_WORKER_CPU", "1000m"),
 		K8sWorkerMemory: envOrDefault("AGENTTEAMS_K8S_WORKER_MEMORY", "2Gi"),
 
+		DeepAgentsRunnerImage: envOrDefault(
+			"AGENTTEAMS_DEEPAGENTS_RUNNER_IMAGE",
+			"agentteams/agentteams-deepagents-runner:latest",
+		),
+		DeepAgentsSandboxEgressCeilings: parseDeepAgentsSandboxEgressCeilings(
+			os.Getenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS"),
+		),
+
 		SandboxProviderType:          envOrDefault("AGENTTEAMS_SANDBOX_PROVIDER_TYPE", "openkruise"),
 		SandboxCapabilities:          os.Getenv("AGENTTEAMS_SANDBOX_CAPABILITIES"),
 		SandboxPrewarmSize:           envOrDefaultInt("AGENTTEAMS_SANDBOX_PREWARM_SIZE", backend.DefaultSandboxPrewarmSize),
@@ -467,6 +478,17 @@ func LoadConfig() *Config {
 	return cfg
 }
 
+func parseDeepAgentsSandboxEgressCeilings(raw string) []v1beta1.DeepAgentsEgressRule {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var rules []v1beta1.DeepAgentsEgressRule
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		panic(fmt.Sprintf("invalid AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS: %v", err))
+	}
+	return rules
+}
+
 // Namespace returns the effective K8s namespace, defaulting to "default".
 func (c *Config) Namespace() string {
 	if c.K8sNamespace != "" {
@@ -512,13 +534,14 @@ func (c *Config) ManagerResources() *backend.ResourceRequirements {
 
 func (c *Config) DockerConfig() backend.DockerConfig {
 	return backend.DockerConfig{
-		SocketPath:           c.SocketPath,
-		WorkerImage:          envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
-		CopawWorkerImage:     envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
-		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
-		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
-		QwenPawWorkerImage:   envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DefaultNetwork:       envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
+		SocketPath:            c.SocketPath,
+		WorkerImage:           envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
+		CopawWorkerImage:      envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
+		HermesWorkerImage:     envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
+		OpenHumanWorkerImage:  envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
+		QwenPawWorkerImage:    envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
+		DeepAgentsWorkerImage: envOrDefault("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/agentteams-deepagents-worker:latest"),
+		DefaultNetwork:        envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
 
@@ -555,16 +578,17 @@ func (c *Config) UsesExternalOSS() bool {
 
 func (c *Config) K8sConfig() backend.K8sConfig {
 	return backend.K8sConfig{
-		Namespace:            c.K8sNamespace,
-		WorkerImage:          envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
-		CopawWorkerImage:     envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
-		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
-		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
-		QwenPawWorkerImage:   envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		WorkerCPU:            c.K8sWorkerCPU,
-		WorkerMemory:         c.K8sWorkerMemory,
-		ControllerName:       c.ControllerName,
-		ResourcePrefix:       c.ResourcePrefix,
+		Namespace:             c.K8sNamespace,
+		WorkerImage:           envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
+		CopawWorkerImage:      envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
+		HermesWorkerImage:     envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
+		OpenHumanWorkerImage:  envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
+		QwenPawWorkerImage:    envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
+		DeepAgentsWorkerImage: envOrDefault("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/agentteams-deepagents-worker:latest"),
+		WorkerCPU:             c.K8sWorkerCPU,
+		WorkerMemory:          c.K8sWorkerMemory,
+		ControllerName:        c.ControllerName,
+		ResourcePrefix:        c.ResourcePrefix,
 	}
 }
 
@@ -578,6 +602,7 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		HermesWorkerImage:            envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
+		DeepAgentsWorkerImage:        envOrDefault("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/agentteams-deepagents-worker:latest"),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,

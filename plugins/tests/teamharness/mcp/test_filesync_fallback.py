@@ -16,6 +16,34 @@ import server  # noqa: E402
 
 
 class FilesyncFallbackTest(unittest.TestCase):
+    def test_windows_directory_pull_uses_recursive_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            local = Path(temp) / "shared" / "tasks" / "task-1"
+            command = server._filesync_directory_pull_command(
+                "mock/shared/tasks/task-1/",
+                local,
+                windows=True,
+            )
+        self.assertEqual(
+            command,
+            [
+                "mc",
+                "cp",
+                "--recursive",
+                "mock/shared/tasks/task-1/",
+                str(local),
+            ],
+        )
+
+    def test_posix_directory_pull_keeps_mirror(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            command = server._filesync_directory_pull_command(
+                "mock/shared/tasks/task-1/",
+                Path(temp) / "shared" / "tasks" / "task-1",
+                windows=False,
+            )
+        self.assertEqual(command[0:2], ["mc", "mirror"])
+
     def test_missing_mc_returns_structured_error_without_stopping_server(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             arguments = {

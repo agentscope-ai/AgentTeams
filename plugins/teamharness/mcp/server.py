@@ -2473,6 +2473,18 @@ def _resolve_filesync(arguments: dict[str, Any]) -> tuple[str, str, Path, str, b
     return action, normalized, local, remote, is_directory
 
 
+def _filesync_directory_pull_command(
+    remote: str,
+    local: Path,
+    *,
+    windows: bool | None = None,
+) -> list[str]:
+    is_windows = os.name == "nt" if windows is None else windows
+    if is_windows:
+        return ["mc", "cp", "--recursive", remote, str(local)]
+    return ["mc", "mirror", remote, str(local), "--overwrite"]
+
+
 def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
     try:
         action, normalized, local, remote, is_directory = _resolve_filesync(arguments)
@@ -2488,7 +2500,12 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
         command = ["mc", "stat", remote]
     elif action == "pull":
         if is_directory:
-            command = ["mc", "mirror", remote, str(local), "--overwrite"]
+            # Native Windows mc can reject remote-to-local mirror comparisons
+            # with "Object name contains unsupported characters" even though
+            # the same prefix works with cp. Recursive cp preserves the pull
+            # contract and overwrites existing files without the comparison
+            # pass. Keep mirror on POSIX, where it is already well covered.
+            command = _filesync_directory_pull_command(remote, local)
         else:
             command = ["mc", "cp", remote, str(local)]
     else:

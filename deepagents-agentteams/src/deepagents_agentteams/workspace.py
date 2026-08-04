@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
-from collections.abc import Iterable, Sequence
+import threading
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -47,6 +49,7 @@ class MinIOWorkspaceStore:
         self._max_files = max_files
         self._max_file_bytes = max_file_bytes
         self._max_total_bytes = max_total_bytes
+        self._sync_lock = threading.RLock()
 
     @classmethod
     def from_config(cls, config: StorageConfig) -> MinIOWorkspaceStore:
@@ -70,14 +73,16 @@ class MinIOWorkspaceStore:
 
     def hydrate(self, sandbox: SandboxFiles) -> None:
         """Copy safe durable objects into a newly-created session sandbox."""
+        with self._sync_lock:
+            self._hydrate(sandbox)
+
+    def _hydrate(self, sandbox: SandboxFiles) -> None:
         prefix = self._prefix + "/"
         files: list[tuple[str, bytes]] = []
         total_bytes = 0
-        objects = sorted(
-            self._client.list_objects(self._bucket, prefix=prefix, recursive=True),
-            key=lambda item: item.object_name,
-        )
-        for item in objects:
+        # MinIO's recursive listing is lazy and ordered by object name. Keep it
+        # lazy so the file-count limit also bounds Worker metadata memory.
+        for item in self._client.list_objects(self._bucket, prefix=prefix, recursive=True):
             relative = self._safe_relative(str(item.object_name)[len(prefix) :])
             if relative is None:
                 continue
@@ -109,33 +114,124 @@ class MinIOWorkspaceStore:
 
     def persist_changes(self, sandbox: SandboxFiles, changes: Sequence[WorkspaceChange]) -> None:
         """Apply a runner change manifest to the durable member prefix."""
-        changed_paths: list[str] = []
+        with self._sync_lock:
+            self._persist_changes(sandbox, changes)
+
+    def _persist_changes(self, sandbox: SandboxFiles, changes: Sequence[WorkspaceChange]) -> None:
+        downloads_to_validate: list[tuple[str, str, WorkspaceChange]] = []
+        object_names_to_delete: list[str] = []
+        seen_paths: set[str] = set()
+        planned_changes: dict[str, WorkspaceChange] = {}
+        advertised_total_bytes = 0
         for change in changes:
             relative = self._safe_relative(change.path)
             if relative is None:
                 continue
+            if relative in seen_paths:
+                raise RuntimeError(f"runner manifest contains duplicate path {relative}")
+            seen_paths.add(relative)
+            planned_changes[relative] = change
+            if len(seen_paths) > self._max_files:
+                raise RuntimeError(f"workspace exceeds {self._max_files} file persistence limit")
             object_name = f"{self._prefix}/{relative}"
             if change.deleted:
-                self._client.remove_object(self._bucket, object_name)
+                if change.sha256 is not None or change.size != 0:
+                    raise RuntimeError(f"deleted file {relative} has an invalid runner manifest")
+                object_names_to_delete.append(object_name)
             else:
-                changed_paths.append(f"/workspace/{relative}")
+                if (
+                    isinstance(change.size, bool)
+                    or not isinstance(change.size, int)
+                    or change.size < 0
+                    or change.size > self._max_file_bytes
+                    or change.sha256 is None
+                ):
+                    raise RuntimeError(f"file {relative} has an invalid runner manifest")
+                advertised_total_bytes += change.size
+                if advertised_total_bytes > self._max_total_bytes:
+                    raise RuntimeError("workspace exceeds total persistence size limit")
+                downloads_to_validate.append((f"/workspace/{relative}", object_name, change))
 
-        for batch in _batches(changed_paths, 128):
-            downloads = sandbox.download_files(batch)
+        self._validate_projected_workspace(planned_changes)
+
+        objects_to_upload: list[tuple[str, bytes]] = []
+        total_bytes = 0
+        for batch in _batches(downloads_to_validate, 128):
+            requested_paths = [path for path, _object_name, _change in batch]
+            downloads = sandbox.download_files(requested_paths)
             if len(downloads) != len(batch):
                 raise RuntimeError("sandbox returned an incomplete workspace download response")
-            for result in downloads:
+            for (requested_path, object_name, change), result in zip(batch, downloads, strict=True):
+                if result.path != requested_path:
+                    raise RuntimeError(
+                        f"sandbox returned {result.path} while persisting {requested_path}"
+                    )
                 if result.error or result.content is None:
                     raise RuntimeError(f"sandbox workspace download failed for {result.path}: {result.error}")
-                relative = self._safe_relative(result.path.removeprefix("/workspace/"))
-                if relative is None:
-                    raise RuntimeError(f"sandbox returned a non-persistable path {result.path}")
-                self._client.put_object(
-                    self._bucket,
-                    f"{self._prefix}/{relative}",
-                    io.BytesIO(result.content),
-                    len(result.content),
+                content = result.content
+                digest = hashlib.sha256(content).hexdigest()
+                if len(content) != change.size or digest != change.sha256:
+                    raise RuntimeError(
+                        f"sandbox content for {result.path} does not match runner manifest"
+                    )
+                total_bytes += len(content)
+                if total_bytes > self._max_total_bytes:
+                    raise RuntimeError("workspace exceeds total persistence size limit")
+                objects_to_upload.append((object_name, content))
+
+        # Validate the complete manifest before mutating MinIO. Uploads precede
+        # deletions so an object-store failure cannot delete durable files first.
+        for object_name, content in objects_to_upload:
+            self._client.put_object(
+                self._bucket,
+                object_name,
+                io.BytesIO(content),
+                len(content),
+            )
+        for object_name in object_names_to_delete:
+            self._client.remove_object(
+                self._bucket,
+                object_name,
+            )
+
+    def _validate_projected_workspace(self, changes: Mapping[str, WorkspaceChange]) -> None:
+        prefix = self._prefix + "/"
+        projected_files = 0
+        projected_bytes = 0
+        matched_changes: set[str] = set()
+        for item in self._client.list_objects(self._bucket, prefix=prefix, recursive=True):
+            object_name = str(item.object_name)
+            if not object_name.startswith(prefix):
+                raise RuntimeError("MinIO returned an object outside the requested workspace prefix")
+            relative = self._safe_relative(object_name[len(prefix) :])
+            if relative is None:
+                continue
+            advertised_size = int(getattr(item, "size", 0) or 0)
+            if advertised_size < 0:
+                raise RuntimeError(f"workspace object {relative} has an invalid size")
+            change = changes.get(relative)
+            if change is not None:
+                matched_changes.add(relative)
+                if change.deleted:
+                    continue
+                advertised_size = change.size
+            elif advertised_size > self._max_file_bytes:
+                raise RuntimeError(
+                    f"workspace file {relative} exceeds final persistence file size limit"
                 )
+            projected_files += 1
+            projected_bytes += advertised_size
+
+        for relative, change in changes.items():
+            if relative in matched_changes or change.deleted:
+                continue
+            projected_files += 1
+            projected_bytes += change.size
+
+        if projected_files > self._max_files:
+            raise RuntimeError(f"workspace exceeds {self._max_files} final persistence file limit")
+        if projected_bytes > self._max_total_bytes:
+            raise RuntimeError("workspace exceeds final persistence size limit")
 
     @staticmethod
     def _safe_relative(value: str) -> str | None:
@@ -143,6 +239,8 @@ class MinIOWorkspaceStore:
         if path.is_absolute() or not path.parts or ".." in path.parts or "\0" in value:
             raise ValueError("workspace object path is invalid")
         normalized = path.as_posix()
+        if normalized != value:
+            raise ValueError("workspace object path is invalid")
         if normalized in _SENSITIVE_FILES or normalized.startswith(_SENSITIVE_PREFIXES):
             return None
         return normalized

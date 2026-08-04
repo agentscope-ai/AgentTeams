@@ -23,6 +23,8 @@ Worker 使用专属 PVC 保存 Matrix E2EE 设备数据、sync token 和待审�
 
 Matrix 客户端只会加入 Controller 投影的 Personal Room 与 Team Room；其它账号发来的邀请会被忽略。加入 Room 或发送回复被 Homeserver 拒绝时，Worker 会显式记录失败，不会把错误响应当成发送成功。
 
+Runner 返回的工作区变更清单不是直接写入 MinIO 的依据。Worker 会先下载全部待写文件，在单文件、文件数量和总字节上限内逐项核对路径、大小与 SHA-256；只有完整清单全部通过后才先上传新内容、再执行删除。校验或下载失败不会提前删除已有持久文件，也不应通过重跑命令来掩盖结果不确定性。
+
 ## kubeadm 集群前提
 
 在三节点或更多节点的 kubeadm 集群中启用前，逐项确认：
@@ -302,6 +304,7 @@ kubectl -n "${AGENTTEAMS_NAMESPACE}" get pod -l agentteams.io/runtime=deepagents
 | Runner 进入 Failed | Runner Pod 终止原因与事件；Controller 会保留终止 Pod 供诊断，并拒绝自动重放结果不确定的命令 |
 | Runner 无法访问目标 | Worker egress 请求、Helm ceiling、实际目标 IP、CNI 是否执行 NetworkPolicy |
 | Matrix token 过期 | Worker 会用轮转的 ServiceAccount token 调用 Controller 刷新；检查 Controller API/RBAC 和 Pod token projection |
+| 工作区写回失败 | 检查 Runner 下载响应、变更清单大小/SHA-256、MinIO 可用性；Worker 不会自动重跑已完成的命令 |
 | 命令结果 unknown | Worker 已用同一 request ID 重试但仍无法确认结果；为避免重复副作用，不要自动重新执行 |
 
 不要把 Matrix token、Gateway key、MinIO secret、checkpoint DSN/AES key 或 Runner token 写入 CR、ConfigMap、日志和命令参数。

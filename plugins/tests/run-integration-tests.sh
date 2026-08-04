@@ -12,6 +12,8 @@ OUT_DIR="$(mktemp -d)" ruby plugins/scripts/package-plugin.rb plugins/teamharnes
 ruby plugins/tests/teamharness/test-contracts.rb
 python3 -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_adapter.py -q
 python3 -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_package.py -q
+python3 -m unittest discover -s plugins/tests/teamharness/adapters/codex_cli -p 'test_*.py'
+python3 -m unittest discover -s plugins/tests/teamharness/remote/codex_cli -p 'test_*.py'
 ruby plugins/tests/teamharness/mcp/test-server.rb
 ruby plugins/tests/teamharness/mcp/tools/test-message.rb
 ruby plugins/tests/teamharness/mcp/tools/test-filesync.rb

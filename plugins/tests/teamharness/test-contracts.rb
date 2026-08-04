@@ -266,7 +266,13 @@ assert(
 assert(!manifest.key?("hooks"), "TeamHarness v0.1 must not define runtime-neutral top-level hooks")
 
 adapters = manifest.fetch("adapters").to_h { |adapter| [adapter.fetch("id"), adapter.fetch("path")] }
-assert(adapters == { "qwenpaw" => "adapters/qwenpaw" }, "unexpected adapters: #{adapters.inspect}")
+assert(
+  adapters == {
+    "qwenpaw" => "adapters/qwenpaw",
+    "codex-cli" => "adapters/codex-cli"
+  },
+  "unexpected adapters: #{adapters.inspect}"
+)
 
 plugin_files = Dir.glob((plugin_root / "**/*").to_s, File::FNM_DOTMATCH)
   .map { |path| Pathname.new(path) }

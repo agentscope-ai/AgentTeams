@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=83.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepagents-agentteams"
+version = "0.1.0"
+description = "AgentTeams Worker runtime and isolated execution adapter for DeepAgents"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "deepagents==0.7.3",
+    "fastapi>=0.116,<1.0",
+    "httpx>=0.28,<1.0",
+    "langchain-mcp-adapters>=0.3.0,<1.0.0",
+    "langchain-openai>=1.4.1,<2.0.0",
+    "langgraph-checkpoint-postgres>=3.1.0,<4.0.0",
+    "matrix-nio[e2e]>=0.24.0,<1.0.0",
+    "minio>=7.2,<8.0",
+    "prometheus-client>=0.23,<1.0",
+    "pycryptodome>=3.23,<4.0",
+    "pyyaml>=6.0.3,<7.0",
+    "uvicorn>=0.35,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4,<10.0",
+    "pytest-asyncio>=1.1,<2.0",
+    "ruff>=0.15.0,<0.16.0",
+]
+
+[project.scripts]
+deepagents-agentteams-worker = "deepagents_agentteams.cli:main"
+deepagents-agentteams-runner = "deepagents_agentteams.runner:main"
+deepagents-agentteams-migrate = "deepagents_agentteams.migrate:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+

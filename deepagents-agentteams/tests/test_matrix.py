@@ -1,7 +1,10 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pytest
+from nio import JoinError, JoinResponse, RoomSendError, RoomSendResponse, SyncResponse
 
 from deepagents_agentteams.config import MatrixConfig
 from deepagents_agentteams.matrix import (
@@ -85,8 +88,9 @@ async def test_send_reply_preserves_thread_and_structured_mention(tmp_path: Path
         def __init__(self) -> None:
             self.sent = []
 
-        async def room_send(self, **kwargs) -> None:  # noqa: ANN003
+        async def room_send(self, **kwargs):  # noqa: ANN003, ANN202
             self.sent.append(kwargs)
+            return RoomSendResponse("$reply", kwargs["room_id"])
 
     client = FakeClient()
     transport = MatrixTransport(
@@ -117,6 +121,207 @@ async def test_send_reply_preserves_thread_and_structured_mention(tmp_path: Path
     assert content["m.relates_to"]["event_id"] == "$root"
     assert content["m.mentions"] == {"user_ids": ["@human:example.org"]}
     assert client.sent[0]["room_id"] == "!room:example.org"
+
+
+async def test_send_reply_raises_when_matrix_rejects_the_message(tmp_path: Path) -> None:
+    class FakeClient:
+        async def room_send(self, **_kwargs):  # noqa: ANN003, ANN202
+            return RoomSendError("denied", "M_FORBIDDEN", room_id="!room:example.org")
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!room:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!room:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+    )
+    transport.client = FakeClient()
+    incoming = MatrixMessage(
+        room_id="!room:example.org",
+        event_id="$request",
+        thread_root_event_id="$root",
+        sender="@human:example.org",
+        body="task",
+    )
+
+    with pytest.raises(RuntimeError, match="Matrix room_send failed"):
+        await transport.send_reply(incoming, "completed")
+
+
+async def test_send_reply_refreshes_expired_token_once(tmp_path: Path) -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.access_token = expired_matrix_token()
+            self.sent_tokens: list[str] = []
+
+        async def room_send(self, **kwargs):  # noqa: ANN003, ANN202
+            self.sent_tokens.append(self.access_token)
+            if self.access_token == expired_matrix_token():
+                return RoomSendError(
+                    "expired",
+                    "M_UNKNOWN_TOKEN",
+                    room_id=kwargs["room_id"],
+                )
+            return RoomSendResponse("$reply", kwargs["room_id"])
+
+    async def refresh_token() -> str:
+        return fresh_matrix_token()
+
+    client = FakeClient()
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!room:example.org",
+            access_token=expired_matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!room:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+        refresh_access_token=refresh_token,
+    )
+    transport.client = client
+    incoming = MatrixMessage(
+        room_id="!room:example.org",
+        event_id="$request",
+        thread_root_event_id="$root",
+        sender="@human:example.org",
+        body="task",
+    )
+
+    await transport.send_reply(incoming, "completed")
+
+    assert client.sent_tokens == [expired_matrix_token(), fresh_matrix_token()]
+
+
+async def test_accept_sync_joins_only_controller_projected_rooms(tmp_path: Path) -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.joined: list[str] = []
+            self.olm = None
+
+        async def join(self, room_id: str):  # noqa: ANN202
+            self.joined.append(room_id)
+            return JoinResponse(room_id)
+
+    response = SyncResponse.from_dict(
+        {
+            "next_batch": "next-batch",
+            "rooms": {
+                "invite": {
+                    "!allowed:example.org": {"invite_state": {"events": []}},
+                    "!untrusted:example.org": {"invite_state": {"events": []}},
+                },
+                "join": {},
+                "leave": {},
+            },
+            "presence": {"events": []},
+            "account_data": {"events": []},
+            "to_device": {"events": []},
+            "device_lists": {"changed": [], "left": []},
+            "device_one_time_keys_count": {},
+        }
+    )
+    assert isinstance(response, SyncResponse)
+    client = FakeClient()
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+    )
+    transport.client = client
+
+    next_batch = await transport._accept_sync_response(response)
+
+    assert next_batch == "next-batch"
+    assert client.joined == ["!allowed:example.org"]
+    assert (tmp_path / "sync-token").read_text() == "next-batch"
+
+
+async def test_initial_sync_refreshes_token_when_allowed_room_join_is_unauthorized(
+    tmp_path: Path,
+) -> None:
+    response = SyncResponse.from_dict(
+        {
+            "next_batch": "next-batch",
+            "rooms": {
+                "invite": {"!allowed:example.org": {"invite_state": {"events": []}}},
+                "join": {},
+                "leave": {},
+            },
+            "presence": {"events": []},
+            "account_data": {"events": []},
+            "to_device": {"events": []},
+            "device_lists": {"changed": [], "left": []},
+            "device_one_time_keys_count": {},
+        }
+    )
+    assert isinstance(response, SyncResponse)
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.access_token = expired_matrix_token()
+            self.event_callbacks = ["callback"]
+            self.next_batch = "matrix-nio-implicit-token"
+            self.olm = None
+            self.sync_calls: list[dict] = []
+            self.join_tokens: list[str] = []
+
+        async def sync(self, **kwargs):  # noqa: ANN003, ANN202
+            self.sync_calls.append(kwargs)
+            if len(self.sync_calls) > 1:
+                raise asyncio.CancelledError
+            assert self.next_batch is None
+            self.next_batch = response.next_batch
+            return response
+
+        async def join(self, room_id: str):  # noqa: ANN202
+            self.join_tokens.append(self.access_token)
+            if self.access_token == expired_matrix_token():
+                return JoinError("expired", "M_UNKNOWN_TOKEN")
+            return JoinResponse(room_id)
+
+    async def refresh_token() -> str:
+        return fresh_matrix_token()
+
+    client = FakeClient()
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=expired_matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+        refresh_access_token=refresh_token,
+    )
+    transport.client = client
+
+    with pytest.raises(asyncio.CancelledError):
+        await transport._sync_loop()
+
+    assert client.join_tokens == [expired_matrix_token(), fresh_matrix_token()]
+    assert client.event_callbacks == ["callback"]
+    assert client.sync_calls == [
+        {"timeout": 30_000, "full_state": True},
+        {"timeout": 30_000, "since": "next-batch", "full_state": False},
+    ]
 
 
 async def test_controller_matrix_token_provider_reads_fresh_service_account_token(tmp_path: Path) -> None:

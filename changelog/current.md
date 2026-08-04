@@ -11,6 +11,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug Fixes**
 
+- **DeepAgents Matrix room boundary**: Ignore invitations outside Controller-projected Personal/Team rooms and fail explicitly when Matrix rejects room joins or reply sends.
 - **DeepAgents sandbox lifecycle convergence**: Schedule idle/max-lifetime reconciliation after a Runner becomes ready, and report terminal Runner Pods as failed without automatically replaying possibly side-effecting commands.
 - **DeepAgents Human approval identities**: Project the Manager as a known Matrix Agent, classify Team coordinators as Humans by roster role, and make Agent identity override conflicting Human approval configuration.
 - **CoPaw Team assignment handoff**: Return the required Team Room `message` action from `taskflow(delegate_task)`, normalize Worker aliases from the Team roster, refresh Controller-managed runtime context every minute, and reroute assignment replies from non-Team rooms to the Team Room. ([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120))
@@ -37,6 +38,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug 修复**
 
+- **DeepAgents Matrix Room 边界**：忽略 Controller 未投影的 Personal/Team Room 邀请，并在 Matrix 拒绝加入 Room 或发送回复时显式失败。
 - **DeepAgents Sandbox 生命周期收敛**：Runner Ready 后按 idle/max-lifetime 继续调度回收检查，并将终止的 Runner Pod 标记为失败，不自动重放可能产生副作用的命令。
 - **DeepAgents Human 审批身份**：将 Manager 显式投影为已知 Matrix Agent，按 Team roster 角色识别人类协调员，并在 Human 审批配置冲突时始终以 Agent 身份优先拒绝。
 - **CoPaw Team 任务分配交接**：由 `taskflow(delegate_task)` 返回必须执行的 Team Room `message` 动作，根据 Team roster 规范化 Worker 别名，每分钟刷新 Controller 管理的运行时上下文，并将非 Team Room 中的任务分配回复重定向到 Team Room。([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120))

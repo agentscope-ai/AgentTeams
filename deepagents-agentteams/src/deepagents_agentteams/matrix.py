@@ -12,7 +12,15 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from nio import AsyncClient, AsyncClientConfig, RoomMessageText, SyncResponse, WhoamiResponse
+from nio import (
+    AsyncClient,
+    AsyncClientConfig,
+    JoinResponse,
+    RoomMessageText,
+    RoomSendResponse,
+    SyncResponse,
+    WhoamiResponse,
+)
 
 from deepagents_agentteams.config import MatrixConfig
 
@@ -159,12 +167,13 @@ class MatrixTransport:
         )
         if _is_unauthorized(response):
             await self._refresh_client_token()
-            await self.client.room_send(
+            response = await self.client.room_send(
                 room_id=message.room_id,
                 message_type="m.room.message",
                 content=content,
                 ignore_unverified_devices=True,
             )
+        _require_matrix_response(response, RoomSendResponse, "Matrix room_send")
 
     async def _connect(self) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)
@@ -201,18 +210,16 @@ class MatrixTransport:
 
     async def _sync_loop(self) -> None:
         next_batch = self._load_sync_token()
-        if next_batch is None:
-            callbacks = list(self.client.event_callbacks)
-            self.client.event_callbacks.clear()
-            try:
-                response = await self.client.sync(timeout=30_000, full_state=True)
-            finally:
-                self.client.event_callbacks.extend(callbacks)
-            next_batch = await self._accept_sync_response(response)
-
         while True:
             try:
-                response = await self.client.sync(timeout=30_000, since=next_batch, full_state=False)
+                if next_batch is None:
+                    response = await self._initial_sync_without_replay()
+                else:
+                    response = await self.client.sync(
+                        timeout=30_000,
+                        since=next_batch,
+                        full_state=False,
+                    )
                 next_batch = await self._accept_sync_response(response)
             except asyncio.CancelledError:
                 raise
@@ -222,13 +229,32 @@ class MatrixTransport:
                 _LOGGER.exception("Matrix sync failed; retrying")
                 await asyncio.sleep(5)
 
+    async def _initial_sync_without_replay(self) -> Any:
+        callbacks = list(self.client.event_callbacks)
+        self.client.event_callbacks.clear()
+        # matrix-nio otherwise falls back to its in-memory next_batch when
+        # ``since`` is omitted. Clear it so a failed invite join can replay the
+        # same full-state response without replaying message callbacks.
+        self.client.next_batch = None
+        try:
+            return await self.client.sync(timeout=30_000, full_state=True)
+        finally:
+            self.client.event_callbacks.extend(callbacks)
+
     async def _accept_sync_response(self, response: Any) -> str:
         if not isinstance(response, SyncResponse):
             if _is_unauthorized(response):
                 raise MatrixAccessTokenExpired("Matrix access token expired")
             raise RuntimeError(f"Matrix sync failed: {response}")
         for room_id in response.rooms.invite:
-            await self.client.join(room_id)
+            if room_id not in self._allowed_room_ids:
+                _LOGGER.warning("ignoring Matrix invitation for an unprojected room")
+                continue
+            join_response = await self.client.join(room_id)
+            if _is_unauthorized(join_response):
+                await self._refresh_client_token()
+                join_response = await self.client.join(room_id)
+            _require_matrix_response(join_response, JoinResponse, "Matrix room join")
         await self._e2ee_maintenance()
         self._save_sync_token(response.next_batch)
         return response.next_batch
@@ -292,3 +318,11 @@ def _is_unauthorized(response: Any) -> bool:
         "M_UNKNOWN_TOKEN",
         "M_UNAUTHORIZED",
     } or http_status == 401
+
+
+def _require_matrix_response(response: Any, expected_type: type[Any], operation: str) -> None:
+    if isinstance(response, expected_type):
+        return
+    if _is_unauthorized(response):
+        raise MatrixAccessTokenExpired(f"{operation} failed because the Matrix access token expired")
+    raise RuntimeError(f"{operation} failed with {type(response).__name__}")

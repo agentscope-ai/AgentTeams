@@ -21,6 +21,8 @@ Worker 使用专属 PVC 保存 Matrix E2EE 设备数据、sync token 和待审�
 
 审批身份采用拒绝优先的角色投影：当前 Worker、Manager、Team Leader 和其它 Worker 都属于 Agent；Team Admin、`spec.humanMembers` 中 `role: coordinator` 的成员，以及额外配置的 `approvals.coordinators` 才可能属于 Human。若同一个 Matrix ID 同时出现在 Agent 与 Human 配置中，始终按 Agent 处理并拒绝其审批。`approvals.coordinators` 因此只能填写真实人类账号，不能用来把 Manager 或 Worker 提升为审批者。
 
+Matrix 客户端只会加入 Controller 投影的 Personal Room 与 Team Room；其它账号发来的邀请会被忽略。加入 Room 或发送回复被 Homeserver 拒绝时，Worker 会显式记录失败，不会把错误响应当成发送成功。
+
 ## kubeadm 集群前提
 
 在三节点或更多节点的 kubeadm 集群中启用前，逐项确认：

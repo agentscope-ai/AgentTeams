@@ -1,0 +1,467 @@
+"""Ask user middleware for interactive question-answering during agent execution."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Annotated, Any, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+
+from langchain.agents.middleware.types import (
+    AgentMiddleware,
+    ContextT,
+    ModelRequest,
+    ModelResponse,
+    ResponseT,
+)
+from langchain.tools import InjectedToolCallId, ToolRuntime
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from langgraph.types import Command, interrupt
+from pydantic import Field
+
+from deepagents_code._ask_user_types import (
+    ASK_USER_AUTHORIZATION_METADATA_KEY,
+    ASK_USER_CANCELLED_ANSWER,
+    MAX_ASK_USER_AUTHORIZATION_ANSWER_CHARS,
+    AskUserAuthorizationReceipt,
+    AskUserRequest,
+    Question,
+    format_ask_user_error_answer,
+    format_ask_user_transcript,
+)
+
+logger = logging.getLogger(__name__)
+
+
+ASK_USER_TOOL_DESCRIPTION = """Ask the user one or more questions when you need clarification or input before proceeding.
+
+Each question can be either:
+- "text": Free-form text response from the user
+- "multiple_choice": User selects from predefined options (an "Other" option is always available)
+
+For multiple choice questions, provide a list of choices. The user can pick one or type a custom answer via the "Other" option.
+
+By default all questions are required. Set "required" to false for optional questions that the user can skip. Do not include "(required)", "(optional)", "- optional", or similar annotations in the question text — the UI renders that separately based on the "required" field.
+
+Use this tool when:
+- You need clarification on ambiguous requirements
+- You want the user to choose between multiple valid approaches
+- You need specific information only the user can provide
+- You want to confirm a plan before executing it
+
+Do NOT use this tool for:
+- Simple yes/no confirmations (just proceed with your best judgment)
+- Questions you can answer yourself from context
+- Trivial decisions that don't meaningfully affect the outcome"""  # noqa: E501
+
+ASK_USER_SYSTEM_PROMPT = """## `ask_user`
+
+You have access to the `ask_user` tool to ask the user questions when you need clarification or input.
+Use this tool sparingly - only when you genuinely need information from the user that you cannot determine from context.
+
+When using `ask_user`:
+- Be concise and specific with your questions
+- Use multiple choice when there are clear options to choose from
+- Use text input when you need free-form responses
+- Group related questions into a single ask_user call rather than making multiple calls
+- Never ask questions you can answer yourself from the available context"""  # noqa: E501
+
+
+def _validate_questions(questions: list[Question]) -> None:
+    """Validate ask_user question structure before interrupting.
+
+    Args:
+        questions: Question definitions provided to the `ask_user` tool.
+
+    Raises:
+        ValueError: If the questions list or an individual question is invalid.
+    """
+    if not questions:
+        msg = "ask_user requires at least one question"
+        raise ValueError(msg)
+
+    for q in questions:
+        question_text = q.get("question")
+        if not isinstance(question_text, str) or not question_text.strip():
+            msg = "ask_user questions must have non-empty 'question' text"
+            raise ValueError(msg)
+
+        question_type = q.get("type")
+        if question_type not in {"text", "multiple_choice"}:
+            msg = f"unsupported ask_user question type: {question_type!r}"
+            raise ValueError(msg)
+
+        if question_type == "multiple_choice" and not q.get("choices"):
+            msg = (
+                f"multiple_choice question "
+                f"{q.get('question')!r} requires a "
+                f"non-empty 'choices' list"
+            )
+            raise ValueError(msg)
+
+        if question_type == "text" and q.get("choices"):
+            msg = f"text question {q.get('question')!r} must not define 'choices'"
+            raise ValueError(msg)
+
+
+def _context_string(context: object, name: str) -> str | None:
+    value = (
+        context.get(name)
+        if isinstance(context, Mapping)
+        else getattr(context, name, None)
+    )
+    return value if isinstance(value, str) and value else None
+
+
+def _execution_thread_id(runtime: object) -> str | None:
+    execution_info = getattr(runtime, "execution_info", None)
+    thread_id = getattr(execution_info, "thread_id", None)
+    return thread_id if isinstance(thread_id, str) and thread_id else None
+
+
+def _active_turn_id(runtime: object) -> str | None:
+    from deepagents_code.auto_mode import USER_PROMPT_METADATA_KEY
+
+    state = getattr(runtime, "state", None)
+    messages = state.get("messages") if isinstance(state, Mapping) else None
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        metadata = message.additional_kwargs.get(USER_PROMPT_METADATA_KEY)
+        if not isinstance(metadata, Mapping):
+            return None
+        turn_id = metadata.get("turn_id")
+        return turn_id if isinstance(turn_id, str) and turn_id else None
+    return None
+
+
+def _parse_answers(
+    response: object,
+    questions: list[Question],
+    tool_call_id: str,
+    *,
+    thread_id: str | None = None,
+    turn_id: str | None = None,
+) -> Command[Any]:
+    """Parse an interrupt response into a `Command` with a `ToolMessage`.
+
+    Supports explicit status signaling from the adapter:
+
+    - `answered` (default): consume provided `answers`. An answer count that does
+      not match `questions` is rejected as `error` rather than padded or
+      truncated, since either would misattribute answers to questions.
+    - `cancelled`: synthesize `(cancelled)` answers
+    - `error`: synthesize `(error: ...)` answers
+
+    Malformed payloads are converted into explicit error answers instead of
+    silently defaulting to `(no answer)`.
+
+    Args:
+        response: Raw value returned by `interrupt()`.
+        questions: The questions that were asked.
+        tool_call_id: Originating tool call ID for the `ToolMessage`.
+        thread_id: Trusted runtime thread identity.
+        turn_id: Trusted runtime user-turn identity.
+
+    Returns:
+        `Command` containing a formatted `ToolMessage` with Q&A pairs, carrying an
+            explicit `status` — `"error"` for a failed prompt, `"success"` for an
+            answered or cancelled one. Consumers depend on that field; see the
+            comment at the `ToolMessage` construction below.
+    """
+    # Untrusted: holds whatever `status` the resume payload carried until the
+    # branches below normalize it to one of answered/cancelled/error.
+    status: str = "answered"
+    # Detail for a defect found here while trusting the payload, kept apart from
+    # `client_error_text` so the two cannot clobber each other in either order.
+    local_error_text: str | None = None
+    # Detail supplied by a caller that declared the failure itself.
+    client_error_text: str | None = None
+    answers_are_strings = False
+    answers: list[str]
+    if not isinstance(response, dict):
+        logger.error(
+            "ask_user received malformed resume payload "
+            "(expected dict, got %s); returning explicit error answers",
+            type(response).__name__,
+        )
+        answers = []
+        status = "error"
+        local_error_text = "invalid ask_user response payload"
+    else:
+        response_dict = cast("dict[str, Any]", response)
+        response_status = response_dict.get("status")
+        if isinstance(response_status, str):
+            status = response_status
+
+        if status == "error":
+            # Read before local validation can flip `status` to "error" itself:
+            # a payload claiming "answered" may carry a stale `error` field, and
+            # that must not end up describing a failure detected here.
+            response_error = response_dict.get("error")
+            if isinstance(response_error, str) and response_error:
+                client_error_text = response_error
+
+        if "answers" not in response_dict:
+            if status == "answered":
+                logger.error(
+                    "ask_user received resume payload without 'answers'; "
+                    "returning explicit error answers"
+                )
+                answers = []
+                status = "error"
+                local_error_text = "missing ask_user answers payload"
+            else:
+                answers = []
+        else:
+            raw_answers = response_dict["answers"]
+            if isinstance(raw_answers, list):
+                answers_are_strings = all(
+                    isinstance(answer, str) for answer in raw_answers
+                )
+                if not answers_are_strings:
+                    # Coerced rather than rejected so the model still sees
+                    # something for each question, but logged: the `str()` of a
+                    # non-string element is presented to the model as the user's
+                    # own words, and it silently withholds the authorization
+                    # receipt below (which requires `answers_are_strings`).
+                    logger.warning(
+                        "ask_user received non-string answer element(s) (%s); "
+                        "coercing with str() and withholding the authorization "
+                        "receipt",
+                        ", ".join(
+                            sorted(
+                                {
+                                    type(answer).__name__
+                                    for answer in raw_answers
+                                    if not isinstance(answer, str)
+                                }
+                            )
+                        ),
+                    )
+                answers = [str(answer) for answer in raw_answers]
+            else:
+                logger.error(
+                    "ask_user received non-list 'answers' payload (%s); "
+                    "returning explicit error answers",
+                    type(raw_answers).__name__,
+                )
+                answers = []
+                status = "error"
+                local_error_text = "invalid ask_user answers payload"
+
+        match status:
+            case "cancelled":
+                answers = [ASK_USER_CANCELLED_ANSWER for _ in questions]
+            case "answered":
+                if len(answers) != len(questions):
+                    # Treated as a failed prompt, not a partial one. A short list
+                    # silently re-attributes every answer after the gap to the
+                    # wrong question, and a long one drops the extras — either way
+                    # the payload is untrustworthy, and a `"success"` transcript
+                    # would hand the model a confident wrong Q->A pairing.
+                    logger.error(
+                        "ask_user answer count mismatch: expected %d, got %d; "
+                        "returning explicit error answers",
+                        len(questions),
+                        len(answers),
+                    )
+                    status = "error"
+                    local_error_text = (
+                        f"ask_user answer count mismatch (expected "
+                        f"{len(questions)}, got {len(answers)})"
+                    )
+            case "error":
+                # Already normalized above; the detail is resolved below.
+                pass
+            case _:
+                logger.error(
+                    "ask_user received unknown status %r; returning explicit "
+                    "error answers",
+                    status,
+                )
+                answers = []
+                status = "error"
+                local_error_text = "invalid ask_user response status"
+
+    if status == "error":
+        # A caller that declared the failure knows the root cause; a detail
+        # derived here describes a payload defect found while trusting it.
+        detail = client_error_text or local_error_text or "ask_user interaction failed"
+        answers = [format_ask_user_error_answer(detail) for _ in questions]
+
+    additional_kwargs: dict[str, object] = {}
+    if (
+        status == "answered"
+        and answers_are_strings
+        and len(answers) == len(questions)
+        and all(
+            len(answer) <= MAX_ASK_USER_AUTHORIZATION_ANSWER_CHARS for answer in answers
+        )
+        and thread_id is not None
+        and turn_id is not None
+    ):
+        receipt = AskUserAuthorizationReceipt(
+            version=1,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            answers=list(answers),
+        )
+        additional_kwargs[ASK_USER_AUTHORIZATION_METADATA_KEY] = receipt
+
+    result_text = format_ask_user_transcript(questions, answers)
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    result_text,
+                    name="ask_user",
+                    tool_call_id=tool_call_id,
+                    additional_kwargs=additional_kwargs,
+                    # Consumers, so a failed prompt must not be left at the
+                    # `"success"` default:
+                    #   - `normalize_tool_status`, on both the live TUI stream and
+                    #     the headless surface (`client.non_interactive`);
+                    #   - the `case "error"` arm of `_restore_deferred_state`, on
+                    #     reload;
+                    #   - `auto_mode`, which refuses to mint a trusted
+                    #     authorization receipt unless this reads `"success"` —
+                    #     the consumer with real consequences.
+                    # A cancel stays `"success"` — it is a user choice, not a tool
+                    # failure — and is safe for that last consumer because the
+                    # receipt above requires `status == "answered"`, so a cancelled
+                    # prompt carries none to trust.
+                    status="error" if status == "error" else "success",
+                )
+            ],
+        }
+    )
+
+
+class AskUserMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
+    """Middleware that provides an ask_user tool for interactive questioning.
+
+    This middleware adds an `ask_user` tool that allows agents to ask the user
+    questions during execution. Questions can be free-form text or multiple choice.
+    The tool uses LangGraph interrupts to pause execution and wait for user input.
+    """
+
+    def __init__(
+        self,
+        *,
+        system_prompt: str = ASK_USER_SYSTEM_PROMPT,
+        tool_description: str = ASK_USER_TOOL_DESCRIPTION,
+    ) -> None:
+        """Initialize AskUserMiddleware.
+
+        Args:
+            system_prompt: System-level instructions injected into every LLM
+                request to guide `ask_user` usage.
+            tool_description: Description string passed to the `ask_user` tool
+                decorator, visible to the LLM in the tool schema.
+        """
+        super().__init__()
+        self.system_prompt = system_prompt
+        self.tool_description = tool_description
+
+        @tool(description=self.tool_description)
+        def _ask_user(
+            questions: Annotated[
+                list[Question],
+                Field(description="Questions to present to the user."),
+            ],
+            tool_call_id: Annotated[str, InjectedToolCallId],
+            runtime: ToolRuntime[Any, Any],
+        ) -> Command[Any]:
+            """Ask the user one or more questions.
+
+            Returns:
+                `Command` containing the parsed user answers as a `ToolMessage`.
+            """
+            _validate_questions(questions)
+            ask_request = AskUserRequest(
+                type="ask_user",
+                questions=questions,
+                tool_call_id=tool_call_id,
+            )
+            # interrupt() raises GraphInterrupt from INSIDE tool execution,
+            # within ToolNode's wrap_tool_call chain. Any
+            # wrap_tool_call middleware that catches exceptions MUST re-raise
+            # GraphBubbleUp — a broad `except Exception` (e.g. ToolRetryMiddleware)
+            # would swallow this interrupt and silently break ask_user.
+            response = interrupt(ask_request)
+            execution_thread_id = _execution_thread_id(runtime)
+            context_thread_id = _context_string(runtime.context, "thread_id")
+            context_turn_id = _context_string(runtime.context, "turn_id")
+            active_turn_id = _active_turn_id(runtime)
+            runtime_tool_call_id = runtime.tool_call_id
+            return _parse_answers(
+                response,
+                questions,
+                tool_call_id,
+                thread_id=(
+                    execution_thread_id
+                    if execution_thread_id == context_thread_id
+                    and runtime_tool_call_id == tool_call_id
+                    else None
+                ),
+                turn_id=(
+                    context_turn_id if context_turn_id == active_turn_id else None
+                ),
+            )
+
+        _ask_user.name = "ask_user"
+        self.tools = [_ask_user]
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
+    ) -> ModelResponse[ResponseT] | AIMessage:
+        """Inject the ask_user system prompt.
+
+        Returns:
+            Model response from the wrapped handler.
+        """
+        if request.system_message is not None:
+            new_system_content = [
+                *request.system_message.content_blocks,
+                {"type": "text", "text": f"\n\n{self.system_prompt}"},
+            ]
+        else:
+            new_system_content = [{"type": "text", "text": self.system_prompt}]
+        new_system_message = SystemMessage(
+            content=cast("list[str | dict[str, str]]", new_system_content)
+        )
+        return handler(request.override(system_message=new_system_message))
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        handler: Callable[
+            [ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]
+        ],
+    ) -> ModelResponse[ResponseT] | AIMessage:
+        """Inject the ask_user system prompt (async).
+
+        Returns:
+            Model response from the wrapped handler.
+        """
+        if request.system_message is not None:
+            new_system_content = [
+                *request.system_message.content_blocks,
+                {"type": "text", "text": f"\n\n{self.system_prompt}"},
+            ]
+        else:
+            new_system_content = [{"type": "text", "text": self.system_prompt}]
+        new_system_message = SystemMessage(
+            content=cast("list[str | dict[str, str]]", new_system_content)
+        )
+        return await handler(request.override(system_message=new_system_message))

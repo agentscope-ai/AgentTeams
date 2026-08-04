@@ -1,0 +1,152 @@
+.PHONY: lint format type typecheck test help test_integration test_watch stage-harbor-local-deps run-hello-world run-terminal-bench-modal run-terminal-bench-docker run-terminal-bench-daytona run-terminal-bench-runloop run-terminal-bench-langsmith evals evals-trials format_unsafe radar radar-from-summary model-groups eval-catalog
+
+.DEFAULT_GOAL := help
+
+######################
+# TESTING AND COVERAGE
+######################
+
+# Define a variable for the test file path.
+TEST_FILE ?= tests/unit_tests
+PYTEST_EXTRA ?=
+
+test: ## Run unit tests
+	uv run --group test pytest $(PYTEST_EXTRA) --disable-socket --allow-unix-socket $(TEST_FILE)
+
+evals: ## Run evals (set MODEL=<id>; required)
+	@if [ -z "$(MODEL)" ]; then \
+		echo "ERROR: MODEL is required. Example: make evals MODEL=claude-opus-4-7" >&2; \
+		exit 1; \
+	fi
+	LANGSMITH_TEST_SUITE=deepagents-evals uv run --group test pytest tests/evals -v --tb=short --model $(MODEL) $(PYTEST_EXTRA)
+
+# Run the eval suite N times for the same MODEL/config and aggregate metrics
+# (mean / median / stdev / min / max). See scripts/run_trials.py for full options.
+TRIALS ?=
+TRIAL_ARGS ?=
+evals-trials: ## Run evals N times (set MODEL=<id> TRIALS=<n>; both required)
+	@if [ -z "$(MODEL)" ]; then \
+		echo "ERROR: MODEL is required. Example: make evals-trials MODEL=openai:gpt-5.5 TRIALS=5" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(TRIALS)" ]; then \
+		echo "ERROR: TRIALS is required. Example: make evals-trials MODEL=openai:gpt-5.5 TRIALS=5" >&2; \
+		exit 1; \
+	fi
+	uv run --group test python scripts/run_trials.py --model $(MODEL) --trials $(TRIALS) $(TRIAL_ARGS)
+
+test_watch: ## Run tests in watch mode
+	uv run --group test ptw . -- $(TEST_FILE)
+
+# Harbor jobs
+# -n = concurrent trials (parallel sandbox slots), NOT task count
+# -l = max tasks to run (omit for all)
+HARBOR_AGENT_IMPL ?= dcode
+HARBOR_AGENT_GRAPH = $(HARBOR_AGENT_IMPL)
+HARBOR_LANGGRAPH_PROJECT = deepagents_harbor/langgraph_project
+HARBOR_LOCAL_DEPS_DIR = $(HARBOR_LANGGRAPH_PROJECT)/.local_deps
+HARBOR_AGENT_ARGS = --agent langgraph --agent-kwarg project_path=$(HARBOR_LANGGRAPH_PROJECT) --agent-kwarg config=langgraph.json --agent-kwarg graph=$(HARBOR_AGENT_GRAPH)
+HARBOR_AGENT_ENV_ARGS ?= --agent-env 'LANGSMITH_API_KEY=$${LANGSMITH_API_KEY}' --agent-env 'LANGSMITH_TRACING=true' --agent-env 'ANTHROPIC_API_KEY=$${ANTHROPIC_API_KEY}' --agent-env 'FIREWORKS_API_KEY=$${FIREWORKS_API_KEY}' --agent-env 'UV_PRERELEASE=allow'
+HARBOR_HELLO_WORLD_JOBS_DIR ?= harbor-jobs/hello-world
+HARBOR_TERMINAL_BENCH_JOBS_DIR ?= harbor-jobs/terminal-bench
+HARBOR_TERMINAL_BENCH_DATASET ?= terminal-bench/terminal-bench-2
+HARBOR_LANGSMITH_EXPERIMENT ?= deepagents-harbor-local
+
+stage-harbor-local-deps: ## Stage checked-out packages for Harbor LangGraph sandboxes
+	@mkdir -p $(HARBOR_LOCAL_DEPS_DIR)/partners
+	rsync -a --delete --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' --exclude 'build' --exclude 'dist' --exclude '*.egg-info' ../deepagents/ $(HARBOR_LOCAL_DEPS_DIR)/deepagents/
+	rsync -a --delete --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' --exclude 'build' --exclude 'dist' --exclude '*.egg-info' ../code/ $(HARBOR_LOCAL_DEPS_DIR)/deepagents-code/
+	rsync -a --delete --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' --exclude 'build' --exclude 'dist' --exclude '*.egg-info' ../partners/quickjs/ $(HARBOR_LOCAL_DEPS_DIR)/partners/quickjs/
+
+run-hello-world: stage-harbor-local-deps ## Run hello-world job (override model with MODEL=<id>)
+	@mkdir -p $(HARBOR_HELLO_WORLD_JOBS_DIR)
+	uv run harbor run $(HARBOR_AGENT_ARGS) $(HARBOR_AGENT_ENV_ARGS) --model $(or $(MODEL),fireworks:accounts/fireworks/models/glm-5p2) --dataset hello-world --include-task-name hello-world -n 1 --jobs-dir $(HARBOR_HELLO_WORLD_JOBS_DIR) --env docker
+
+run-terminal-bench-modal: stage-harbor-local-deps ## Run terminal-bench on Modal (4 concurrent)
+	@mkdir -p $(HARBOR_TERMINAL_BENCH_JOBS_DIR)
+	uv run harbor run $(HARBOR_AGENT_ARGS) $(HARBOR_AGENT_ENV_ARGS) --dataset $(HARBOR_TERMINAL_BENCH_DATASET) -n 4 --jobs-dir $(HARBOR_TERMINAL_BENCH_JOBS_DIR) --env modal
+
+run-terminal-bench-daytona: stage-harbor-local-deps ## Run terminal-bench on Daytona (40 concurrent)
+	@mkdir -p $(HARBOR_TERMINAL_BENCH_JOBS_DIR)
+	uv run harbor run $(HARBOR_AGENT_ARGS) $(HARBOR_AGENT_ENV_ARGS) --dataset $(HARBOR_TERMINAL_BENCH_DATASET) -n 40 --jobs-dir $(HARBOR_TERMINAL_BENCH_JOBS_DIR) --env daytona
+
+run-terminal-bench-docker: stage-harbor-local-deps ## Run terminal-bench on Docker (sequential)
+	@mkdir -p $(HARBOR_TERMINAL_BENCH_JOBS_DIR)
+	uv run harbor run $(HARBOR_AGENT_ARGS) $(HARBOR_AGENT_ENV_ARGS) --dataset $(HARBOR_TERMINAL_BENCH_DATASET) -n 1 --jobs-dir $(HARBOR_TERMINAL_BENCH_JOBS_DIR) --env docker
+
+run-terminal-bench-runloop: stage-harbor-local-deps ## Run terminal-bench on Runloop (10 concurrent)
+	@mkdir -p $(HARBOR_TERMINAL_BENCH_JOBS_DIR)
+	uv run harbor run $(HARBOR_AGENT_ARGS) $(HARBOR_AGENT_ENV_ARGS) --dataset $(HARBOR_TERMINAL_BENCH_DATASET) -n 10 --jobs-dir $(HARBOR_TERMINAL_BENCH_JOBS_DIR) --env runloop
+
+run-terminal-bench-langsmith: stage-harbor-local-deps ## Run terminal-bench on LangSmith prod sandboxes (sequential; override with MODEL=<id>)
+	@mkdir -p $(HARBOR_TERMINAL_BENCH_JOBS_DIR)
+	uv run harbor run $(HARBOR_AGENT_ARGS) $(HARBOR_AGENT_ENV_ARGS) --dataset $(HARBOR_TERMINAL_BENCH_DATASET) --model $(or $(MODEL),anthropic:claude-opus-4-8) -n 1 --jobs-dir $(HARBOR_TERMINAL_BENCH_JOBS_DIR) --env langsmith --plugin langsmith --plugin-kwarg dataset_name=$(HARBOR_TERMINAL_BENCH_DATASET) --plugin-kwarg experiment_name=$(HARBOR_LANGSMITH_EXPERIMENT)
+
+######################
+# CHARTS
+######################
+
+RADAR_OUTPUT ?= charts/radar.png
+
+radar: ## Generate eval radar chart (toy data by default)
+	uv run --extra charts python scripts/generate_radar.py --toy -o $(RADAR_OUTPUT)
+
+SUMMARY_JSON ?= evals_summary.json
+
+radar-from-summary: ## Generate radar chart from evals_summary.json
+	uv run --extra charts python scripts/generate_radar.py --summary $(SUMMARY_JSON) -o $(RADAR_OUTPUT)
+
+######################
+# MODEL GROUPS
+######################
+
+model-groups: ## Regenerate MODEL_GROUPS.md from the canonical registry
+	uv run python scripts/generate_model_groups.py
+
+######################
+# EVAL CATALOG
+######################
+
+eval-catalog: ## Regenerate EVAL_CATALOG.md from eval test files
+	uv run python scripts/generate_eval_catalog.py
+
+######################
+# LINTING AND FORMATTING
+######################
+
+# Define a variable for Python and notebook files.
+lint format: PYTHON_FILES=deepagents_evals/ deepagents_harbor/ tests/
+lint_diff format_diff: PYTHON_FILES=$(shell git diff --relative=. --name-only --diff-filter=d main | grep -E '\.py$$|\.ipynb$$')
+
+lint: ## Run linters and type checker
+lint lint_diff:
+	[ "$(PYTHON_FILES)" = "" ] ||	uv run --group test ruff format $(PYTHON_FILES) --diff
+	@if [ "$(LINT)" != "minimal" ]; then \
+		if [ "$(PYTHON_FILES)" != "" ]; then \
+			uv run --group test ruff check $(PYTHON_FILES) --diff; \
+		fi; \
+	fi
+	$(MAKE) type PYTHON_FILES="$(PYTHON_FILES)"
+	uv run python scripts/generate_eval_catalog.py --check
+
+type: ## Run type checker (eval + harbor source + unit tests)
+type typecheck:
+	uv run --group test ty check deepagents_evals/ deepagents_harbor/ tests/unit_tests/
+
+format: ## Run code formatters
+format format_diff:
+	[ "$(PYTHON_FILES)" = "" ] || uv run --group test ruff format $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || uv run --group test ruff check --fix $(PYTHON_FILES)
+
+format_unsafe: ## Run formatters with unsafe fixes
+	[ "$(PYTHON_FILES)" = "" ] || uv run --group test ruff format --unsafe-fixes $(PYTHON_FILES)
+
+######################
+# HELP
+######################
+
+help: ## Show this help message
+	@echo "Usage: make [target] [TEST_FILE=path/to/tests/]"
+	@echo ""
+	@echo "Targets:"
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  %-28s %s\n", $$1, $$2}' $(MAKEFILE_LIST)

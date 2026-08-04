@@ -1,0 +1,284 @@
+"""Tests for lightweight CLI help-only paths.
+
+Each test runs `cli_main` in a subprocess so `sys.modules` reflects only
+what that invocation loaded, guarding the startup-perf contract documented
+in `CLAUDE.md`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import textwrap
+
+import pytest
+
+from deepagents_code.main import (
+    _BARE_ACTION_GROUPS,
+    _HELP_SPECS,
+    _show_bare_command_group_help,
+    parse_args,
+)
+
+# Module *prefixes* that must not appear in `sys.modules` after a help-only
+# invocation. Using prefixes (rather than an explicit allowlist) catches
+# regressions from any new top-level import in `main.py` or `ui.py` that
+# pulls in a heavy framework.
+_HEAVY_MODULE_PREFIXES = (
+    "deepagents.",
+    "deepagents_code.agent",
+    "deepagents_code.sessions",
+    "deepagents_code.model_config",
+    "deepagents_code.project_utils",
+    "langchain",
+    "langgraph",
+    "textual",
+    "httpx",
+)
+
+
+def _run_cli_main(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    # `check_cli_dependencies` is patched purely for environment portability —
+    # it only calls `importlib.util.find_spec` (no real imports), so patching
+    # it does not hide any heavy module load.
+    code = """
+        import json
+        import sys
+        from contextlib import nullcontext
+        from unittest.mock import patch
+
+        from deepagents_code.main import cli_main
+
+        argv = ["deepagents", *json.loads(sys.argv[1])]
+        # An intentional monorepo SDK pin skew can make `doctor` exit unhealthy;
+        # omit that environment-specific check while testing startup bootstrap.
+        # Editable installs resolve the pin through `_sdk_requirement_for_cli`.
+        requirement_patch = (
+            patch(
+                "deepagents_code.extras_info._sdk_requirement_for_cli",
+                return_value=None,
+            )
+            if argv[1:] == ["doctor", "--json"]
+            else nullcontext()
+        )
+        try:
+            with (
+                patch.object(sys, "argv", argv),
+                patch("deepagents_code.main.check_cli_dependencies"),
+                requirement_patch,
+            ):
+                cli_main()
+        finally:
+            prefixes = tuple(json.loads(sys.argv[2]))
+            loaded = sorted(
+                name for name in sys.modules if name.startswith(prefixes)
+            )
+            config_module = sys.modules.get("deepagents_code.config")
+            bootstrap_state = (
+                getattr(config_module, "_bootstrap_state", None)
+                if config_module is not None
+                else None
+            )
+            bootstrap_done = (
+                bootstrap_state.done if bootstrap_state is not None else None
+            )
+            print("LOADED_MODULES=" + json.dumps(loaded), file=sys.stderr)
+            print("BOOTSTRAP_DONE=" + json.dumps(bootstrap_done), file=sys.stderr)
+    """
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(code),
+            json.dumps(argv),
+            json.dumps(_HEAVY_MODULE_PREFIXES),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def _read_marker(stderr: str, prefix: str) -> object:
+    for line in reversed(stderr.splitlines()):
+        if line.startswith(prefix):
+            return json.loads(line[len(prefix) :])
+    msg = f"marker {prefix!r} not found in stderr"
+    raise AssertionError(msg)
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["help"], "Start interactive thread"),
+        (["agents"], "dcode agents <command>"),
+        (["skills"], "dcode skills <command>"),
+        (["threads"], "dcode threads <command>"),
+        (["mcp"], "dcode mcp <command>"),
+        (["config", "-h"], "dcode config [options]"),
+        (["auth"], "dcode auth <command>"),
+        (["tools"], "dcode tools <command>"),
+    ],
+)
+def test_help_only_commands_skip_runtime_imports(
+    argv: list[str], expected: str
+) -> None:
+    """Help-only commands must not import heavy runtime modules."""
+    result = _run_cli_main(argv)
+
+    assert result.returncode == 0, result.stderr
+    assert expected in result.stdout
+
+    loaded = _read_marker(result.stderr, "LOADED_MODULES=")
+    assert loaded == [], f"unexpected heavy modules loaded: {loaded}"
+
+    bootstrap_done = _read_marker(result.stderr, "BOOTSTRAP_DONE=")
+    # Either `deepagents_code.config` was never imported (None) or it was
+    # imported transitively but `_ensure_bootstrap()` never ran (False).
+    # In neither case may the heavy settings/dotenv path have executed.
+    assert bootstrap_done in (None, False), (
+        f"settings bootstrap must not run on the fast path; got {bootstrap_done!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["auth", "path"], "/auth.json"),
+        (["config", "path", "--json"], '"command": "config path"'),
+        (["doctor", "--json"], '"command": "doctor"'),
+    ],
+)
+def test_lightweight_commands_skip_settings_bootstrap(
+    argv: list[str], expected: str
+) -> None:
+    """Lightweight diagnostics commands should avoid settings bootstrap."""
+    result = _run_cli_main(argv)
+
+    assert result.returncode == 0, result.stderr
+    assert expected in result.stdout
+
+    bootstrap_done = _read_marker(result.stderr, "BOOTSTRAP_DONE=")
+    assert bootstrap_done in (None, False), (
+        f"settings bootstrap must not run for {argv}; got {bootstrap_done!r}"
+    )
+
+
+def test_auth_credential_resolution_commands_run_settings_bootstrap() -> None:
+    """Auth commands that resolve credentials must see dotenv-loaded values."""
+    result = _run_cli_main(["auth", "status", "anthropic"])
+
+    assert result.returncode == 0, result.stderr
+    bootstrap_done = _read_marker(result.stderr, "BOOTSTRAP_DONE=")
+    assert bootstrap_done is True
+
+
+def test_bare_config_runs_primary_action() -> None:
+    """Bare `config` must resolve values instead of rendering command help."""
+    result = _run_cli_main(["config", "--json"])
+
+    assert result.returncode == 0, result.stderr
+    assert '"command": "config"' in result.stdout
+    bootstrap_done = _read_marker(result.stderr, "BOOTSTRAP_DONE=")
+    assert bootstrap_done is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["agents", "list"],
+        ["skills", "list"],
+        ["threads", "list"],
+        ["mcp", "login", "example.com"],
+        ["config", "get", "interpreter.memory_limit_mb"],
+        ["auth", "list"],
+        ["tools", "install"],
+        ["tools", "list"],
+    ],
+)
+def test_subcommands_bypass_fast_path(argv: list[str]) -> None:
+    """When a subcommand is given, the fast path must not fire.
+
+    A `dest=` rename on a subparser would silently swallow the user's
+    subcommand if the fast-path's `getattr(..., None) is not None` check
+    fell through. This test locks the contract.
+    """
+    args = parse_args_from(argv)
+    assert _show_bare_command_group_help(args) is False
+
+
+def test_unknown_command_bypasses_fast_path() -> None:
+    """`command=None` (no command at all) must not trigger help dispatch."""
+    args = parse_args_from([])
+    assert _show_bare_command_group_help(args) is False
+
+
+def test_command_group_specs_cover_every_subparser_group() -> None:
+    """Every command group must declare what its bare invocation does."""
+    parser = _build_top_level_parser()
+    groups_with_subparsers = _top_level_subparser_groups(parser)
+    overlap = set(_HELP_SPECS) & _BARE_ACTION_GROUPS
+    assert not overlap, (
+        f"Command groups declare conflicting defaults: {sorted(overlap)}"
+    )
+
+    known_groups = set(_HELP_SPECS) | _BARE_ACTION_GROUPS
+    missing = groups_with_subparsers - known_groups
+    assert not missing, (
+        "Top-level command groups have subparsers but no declared bare behavior: "
+        f"{sorted(missing)}. Add each group to `_HELP_SPECS` or "
+        "`_BARE_ACTION_GROUPS` in main.py."
+    )
+
+
+def parse_args_from(argv: list[str]) -> argparse.Namespace:
+    """Run `parse_args()` with a controlled argv."""
+    from unittest.mock import patch
+
+    with patch.object(sys, "argv", ["deepagents", *argv]):
+        return parse_args()
+
+
+def _build_top_level_parser() -> argparse.ArgumentParser:
+    """Capture the top-level parser by hooking `ArgumentParser.parse_args`."""
+    from typing import Any
+    from unittest.mock import patch
+
+    captured: dict[str, argparse.ArgumentParser] = {}
+    real_parse_args = argparse.ArgumentParser.parse_args
+
+    def _capture(
+        self: argparse.ArgumentParser,
+        *a: Any,
+        **kw: Any,
+    ) -> argparse.Namespace:
+        captured.setdefault("parser", self)
+        return real_parse_args(self, *a, **kw)
+
+    with (
+        patch.object(sys, "argv", ["deepagents", "help"]),
+        patch.object(argparse.ArgumentParser, "parse_args", _capture),
+    ):
+        parse_args()
+
+    return captured["parser"]
+
+
+def _top_level_subparser_groups(parser: argparse.ArgumentParser) -> set[str]:
+    """Return names of top-level subparsers that themselves have subparsers."""
+    from typing import cast
+
+    groups: set[str] = set()
+    for action in parser._actions:
+        if not isinstance(action, argparse._SubParsersAction):
+            continue
+        choices = cast("dict[str, argparse.ArgumentParser]", action.choices)
+        for name, sub in choices.items():
+            for sub_action in sub._actions:
+                if isinstance(sub_action, argparse._SubParsersAction):
+                    groups.add(name)
+                    break
+    return groups

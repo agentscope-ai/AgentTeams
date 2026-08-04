@@ -139,11 +139,74 @@ for raw in sys.stdin:
 '''
 
 
+UTF8_ENV_SERVER = r'''
+import json
+import os
+import sys
+
+if os.environ.get("PYTHONUTF8") != "1":
+    raise SystemExit("PYTHONUTF8 was not forced")
+if os.environ.get("PYTHONIOENCODING") != "utf-8":
+    raise SystemExit("PYTHONIOENCODING was not forced")
+
+for raw in sys.stdin:
+    message = json.loads(raw)
+    if message.get("method") == "initialize":
+        print(
+            json.dumps(
+                {"id": message.get("id"), "result": {"label": "TeamHarness 工具"}},
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+'''
+
+
 class CodexClientTest(unittest.TestCase):
     def _script(self, directory: Path, body: str) -> Path:
         path = directory / "fake_app_server.py"
         path.write_text(textwrap.dedent(body).lstrip(), encoding="utf-8")
         return path
+
+    def test_app_server_forces_utf8_for_mcp_children(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = self._script(root, UTF8_ENV_SERVER)
+            client = CodexAppServer(
+                launch_command=[sys.executable, str(script)],
+                handshake_timeout=2,
+            )
+            try:
+                client.start()
+            finally:
+                client.close()
+
+    def test_transient_mcp_config_forces_utf8_stdio(self) -> None:
+        client = CodexAppServer(
+            codex_command=sys.executable,
+            mcp_server=Path("teamharness-server.py"),
+        )
+
+        command = client._command()
+
+        self.assertIn('mcp_servers.teamharness.env.PYTHONUTF8="1"', command)
+        self.assertIn(
+            'mcp_servers.teamharness.env.PYTHONIOENCODING="utf-8"', command
+        )
+        self.assertIn(
+            'mcp_servers.teamharness.enabled_tools=["health","filesync","artifact","taskflow"]',
+            command,
+        )
+        self.assertIn(
+            'mcp_servers.teamharness.default_tools_approval_mode="approve"', command
+        )
+        self.assertIn("mcp_servers.teamharness.required=true", command)
+        env_vars = next(
+            item
+            for item in command
+            if item.startswith("mcp_servers.teamharness.env_vars=")
+        )
+        self.assertIn("AGENTTEAMS_WORKER_MATRIX_TOKEN", env_vars)
 
     def test_streams_output_denies_approval_and_resumes_thread(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

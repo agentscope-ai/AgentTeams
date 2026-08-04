@@ -56,6 +56,11 @@ bounded event ids, and task-to-Codex-thread ids.
 
 - Codex runs with `workspace-write` and `approvalPolicy=never`.
 - App-server permission escalation requests are denied.
+- The transient TeamHarness MCP registration is required, forces UTF-8 stdio,
+  and exposes only `health`, `filesync`, `artifact`, and `taskflow`. Those four
+  packaged tools are pre-approved; other MCP servers keep their own policy.
+- Matrix and shared-storage credentials are forwarded by environment variable
+  name. Their values are not written to the Codex command line or runtime file.
 - `auth.json` is used only by the user's existing `CODEX_HOME`; it is never
   copied, mounted, logged, or packaged.
 - Use a dedicated Git worktree when the source baseline must remain intact.

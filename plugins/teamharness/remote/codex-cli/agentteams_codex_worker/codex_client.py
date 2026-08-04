@@ -24,6 +24,24 @@ from .security import Redactor
 
 LOG = logging.getLogger(__name__)
 
+TEAMHARNESS_MCP_ENV_VARS = (
+    "AGENTTEAMS_MATRIX_URL",
+    "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+    "AGENTTEAMS_MATRIX_USER_ID",
+    "AGENTTEAMS_WORKER_NAME",
+    "AGENTTEAMS_AGENT_ROLE",
+    "AGENTTEAMS_AGENT_HOME",
+    "TEAMHARNESS_RUNTIME_CONFIG",
+    "TEAMHARNESS_SHARED_DIR",
+    "AGENTTEAMS_SHARED_DIR",
+    "AGENTTEAMS_SHARED_STORAGE_PREFIX",
+    "AGENTTEAMS_STORAGE_PREFIX",
+    "AGENTTEAMS_FS_ENDPOINT",
+    "AGENTTEAMS_FS_ACCESS_KEY",
+    "AGENTTEAMS_FS_SECRET_KEY",
+    "TEAMHARNESS_MATRIX_CONTEXT_FILE",
+)
+
 
 class CodexError(RuntimeError):
     """Base error for app-server startup, protocol, and turn failures."""
@@ -138,6 +156,19 @@ class CodexAppServer:
                     f"mcp_servers.teamharness.command={_toml_string(sys.executable)}",
                     "-c",
                     "mcp_servers.teamharness.args=" + json.dumps([str(self.mcp_server)]),
+                    "-c",
+                    'mcp_servers.teamharness.env.PYTHONUTF8="1"',
+                    "-c",
+                    'mcp_servers.teamharness.env.PYTHONIOENCODING="utf-8"',
+                    "-c",
+                    "mcp_servers.teamharness.env_vars="
+                    + json.dumps(list(TEAMHARNESS_MCP_ENV_VARS)),
+                    "-c",
+                    'mcp_servers.teamharness.enabled_tools=["health","filesync","artifact","taskflow"]',
+                    "-c",
+                    'mcp_servers.teamharness.default_tools_approval_mode="approve"',
+                    "-c",
+                    "mcp_servers.teamharness.required=true",
                 ]
             )
         return command
@@ -147,6 +178,11 @@ class CodexAppServer:
             return
         command = self._command()
         LOG.info("starting Codex app-server executable=%s", Path(command[0]).name)
+        environment = dict(os.environ)
+        # MCP stdio is UTF-8. Windows Python otherwise inherits the active
+        # console code page and can corrupt non-ASCII tool schemas.
+        environment["PYTHONUTF8"] = "1"
+        environment["PYTHONIOENCODING"] = "utf-8"
         try:
             self.process = subprocess.Popen(
                 command,
@@ -157,7 +193,7 @@ class CodexAppServer:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
-                env=dict(os.environ),
+                env=environment,
             )
         except OSError as exc:
             raise CodexError(f"failed to start Codex app-server: {exc}") from exc

@@ -2526,14 +2526,39 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             "path": normalized,
             "error": env_error,
         }
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=mc_env,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=mc_env,
+        )
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "tool": "filesync",
+            "action": action,
+            "path": normalized,
+            "error": "mc command not found",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "tool": "filesync",
+            "action": action,
+            "path": normalized,
+            "error": "mc command timed out after 120 seconds",
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "tool": "filesync",
+            "action": action,
+            "path": normalized,
+            "error": f"mc command failed to start: {exc}",
+        }
     command_error = _filesync_command_error(completed)
     if command_error:
         return {

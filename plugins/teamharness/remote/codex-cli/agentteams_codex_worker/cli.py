@@ -131,6 +131,9 @@ def run(args: argparse.Namespace) -> int:
     os.environ.setdefault("AGENTTEAMS_WORKER_NAME", config.member_name)
     os.environ.setdefault("AGENTTEAMS_AGENT_ROLE", "remote-member")
     os.environ.setdefault("AGENTTEAMS_AGENT_HOME", str(workspace))
+    os.environ["AGENTTEAMS_WORKER_MATRIX_TOKEN"] = token
+    os.environ.setdefault("TEAMHARNESS_RUNTIME_CONFIG", str(args.runtime_config.resolve()))
+    os.environ.setdefault("TEAMHARNESS_SHARED_DIR", str(workspace / "shared"))
 
     redactor = Redactor([token])
     matrix = MatrixClient(homeserver, token, config.matrix_user_id)

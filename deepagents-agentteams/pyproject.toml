@@ -17,8 +17,10 @@ dependencies = [
     "langchain-openai>=1.4.1,<2.0.0",
     "langgraph-checkpoint-postgres>=3.1.0,<4.0.0",
     "matrix-nio[e2e]>=0.24.0,<1.0.0",
+    "mcp>=1.24.0,<2.0.0",
     "minio>=7.2,<8.0",
     "prometheus-client>=0.23,<1.0",
+    "psycopg[binary,pool]>=3.2,<4.0",
     "pycryptodome>=3.23,<4.0",
     "pyyaml>=6.0.3,<7.0",
     "uvicorn>=0.35,<1.0",
@@ -39,6 +41,9 @@ deepagents-agentteams-migrate = "deepagents_agentteams.migrate:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.uv.sources]
+deepagents = { path = "../deepagents/libs/deepagents", editable = true }
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"
@@ -52,4 +57,3 @@ select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "S"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-

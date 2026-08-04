@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
+
+from deepagents_agentteams.approvals import MCPApprovalRule
 
 
 class ConfigError(ValueError):
@@ -56,6 +60,8 @@ class ApprovalConfig:
 
     file_writes: str
     mcp_default: str
+    mcp_rules: tuple[MCPApprovalRule, ...]
+    coordinators: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -72,7 +78,11 @@ class RuntimeConfig:
     """Validated AgentTeams configuration consumed by a DeepAgents worker."""
 
     generation: int
+    worker_name: str
     runtime_name: str
+    controller_url: str
+    service_account_token_path: str
+    mcp_servers: tuple[dict[str, str], ...]
     model: ModelConfig
     matrix: MatrixConfig
     storage: StorageConfig
@@ -86,7 +96,7 @@ class RuntimeConfig:
         document: Mapping[str, Any],
         *,
         environ: Mapping[str, str],
-    ) -> "RuntimeConfig":
+    ) -> RuntimeConfig:
         """Validate and parse a controller-projected runtime document."""
         matrix = document.get("matrix")
         if isinstance(matrix, Mapping) and matrix.get("accessToken"):
@@ -113,10 +123,25 @@ class RuntimeConfig:
         deepagents_config = _mapping_value(deepagents_config, "desired.runtimeConfig.deepagents")
         approval_config = _mapping_value(deepagents_config.get("approvals", {}), "deepagents.approvals")
         execution_config = _mapping_value(deepagents_config.get("execution", {}), "deepagents.execution")
+        mcp_servers = _mcp_servers(desired_config.get("mcpServers", []))
+        idle_timeout_seconds = _duration_seconds(
+            execution_config.get("idleTimeout", "30m"),
+            "deepagents.execution.idleTimeout",
+        )
+        max_lifetime_seconds = _duration_seconds(
+            execution_config.get("maxLifetime", "8h"),
+            "deepagents.execution.maxLifetime",
+        )
 
         return cls(
             generation=_required_int(metadata, "generation"),
+            worker_name=_required_str(member, "name"),
             runtime_name=_required_str(member, "runtimeName"),
+            controller_url=str(environ.get("AGENTTEAMS_CONTROLLER_URL", "")).rstrip("/"),
+            service_account_token_path=str(
+                credentials.get("serviceAccountTokenPath", "/var/run/secrets/agentteams/token")
+            ),
+            mcp_servers=mcp_servers,
             model=ModelConfig(
                 name=_required_str(model_config, "model"),
                 gateway_url=_required_str(model_config, "gatewayUrl"),
@@ -139,16 +164,21 @@ class RuntimeConfig:
             ),
             checkpoint=CheckpointConfig(
                 dsn=_secret_from_env(credentials, "checkpointDSNEnv", environ),
-                aes_key=_secret_from_env(credentials, "checkpointAESKeyEnv", environ),
+                aes_key=_checkpoint_key(_secret_from_env(credentials, "checkpointAESKeyEnv", environ)),
             ),
             approvals=ApprovalConfig(
-                file_writes=str(approval_config.get("fileWrites", "notRequired")),
-                mcp_default=str(approval_config.get("mcpDefault", "required")),
+                file_writes=_approval_mode(approval_config.get("fileWrites", "notRequired"), "fileWrites"),
+                mcp_default=_approval_mode(approval_config.get("mcpDefault", "required"), "mcpDefault"),
+                mcp_rules=_mcp_approval_rules(approval_config.get("mcpRules", [])),
+                coordinators=_string_tuple(
+                    approval_config.get("coordinators", []),
+                    "deepagents.approvals.coordinators",
+                ),
             ),
             execution=ExecutionConfig(
                 mode=_execution_mode(execution_config.get("mode", "disabled")),
-                idle_timeout_seconds=1800,
-                max_lifetime_seconds=28800,
+                idle_timeout_seconds=idle_timeout_seconds,
+                max_lifetime_seconds=max_lifetime_seconds,
             ),
         )
 
@@ -191,7 +221,84 @@ def _secret_from_env(
     return value
 
 
+def _checkpoint_key(value: str) -> str:
+    if len(value.encode("utf-8")) not in {16, 24, 32}:
+        raise ConfigError("checkpoint AES key must be 16, 24, or 32 UTF-8 bytes")
+    return value
+
+
 def _execution_mode(value: object) -> str:
     if value not in {"disabled", "sandbox"}:
         raise ConfigError("deepagents.execution.mode must be disabled or sandbox")
     return str(value)
+
+
+def _approval_mode(value: object, field: str) -> str:
+    if value not in {"required", "notRequired"}:
+        raise ConfigError(f"deepagents.approvals.{field} must be required or notRequired")
+    return str(value)
+
+
+def _string_tuple(value: object, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ConfigError(f"{field} must be an array")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError(f"{field} entries must be non-empty strings")
+        result.append(item.strip())
+    return tuple(result)
+
+
+def _mcp_approval_rules(value: object) -> tuple[MCPApprovalRule, ...]:
+    if not isinstance(value, list):
+        raise ConfigError("deepagents.approvals.mcpRules must be an array")
+    rules: list[MCPApprovalRule] = []
+    for index, item in enumerate(value):
+        rule = _mapping_value(item, f"deepagents.approvals.mcpRules[{index}]")
+        rules.append(
+            MCPApprovalRule(
+                server=_required_str(rule, "server"),
+                tool=_required_str(rule, "tool"),
+                mode=_approval_mode(rule.get("mode"), f"mcpRules[{index}].mode"),
+            )
+        )
+    return tuple(rules)
+
+
+def _mcp_servers(value: object) -> tuple[dict[str, str], ...]:
+    if not isinstance(value, list):
+        raise ConfigError("desired.mcpServers must be an array")
+    result: list[dict[str, str]] = []
+    for index, item in enumerate(value):
+        server = _mapping_value(item, f"desired.mcpServers[{index}]")
+        transport = str(server.get("transport", "http"))
+        if transport not in {"http", "sse"}:
+            raise ConfigError(f"desired.mcpServers[{index}].transport must be http or sse")
+        result.append(
+            {
+                "name": _required_str(server, "name"),
+                "url": _required_str(server, "url"),
+                "transport": transport,
+            }
+        )
+    return tuple(result)
+
+
+_DURATION_PART = re.compile(r"(?P<value>[0-9]+(?:\.[0-9]+)?)(?P<unit>h|m|s)")
+
+
+def _duration_seconds(value: object, field: str) -> int:
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{field} must be a positive duration")
+    position = 0
+    seconds = 0.0
+    unit_seconds = {"h": 3600, "m": 60, "s": 1}
+    for match in _DURATION_PART.finditer(value):
+        if match.start() != position:
+            raise ConfigError(f"{field} must use h, m, or s duration units")
+        seconds += float(match.group("value")) * unit_seconds[match.group("unit")]
+        position = match.end()
+    if position != len(value) or seconds <= 0 or not seconds.is_integer():
+        raise ConfigError(f"{field} must resolve to a positive whole number of seconds")
+    return int(seconds)

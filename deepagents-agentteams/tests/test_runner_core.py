@@ -1,10 +1,15 @@
-import json
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from deepagents_agentteams.runner_core import RunnerService, UnknownExecutionResult
+from deepagents_agentteams.runner_core import (
+    InvalidWorkspacePath,
+    RunnerService,
+    UnknownExecutionResult,
+)
 
 
 class RunnerServiceTests(unittest.TestCase):
@@ -79,6 +84,81 @@ class RunnerServiceTests(unittest.TestCase):
             self.assertEqual(changes["nested/added.txt"].sha256, hashlib.sha256(b"added").hexdigest())
             self.assertTrue(changes["deleted.txt"].deleted)
             self.assertIsNone(changes["deleted.txt"].sha256)
+
+    def test_caps_command_output_without_stopping_the_command(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
+            service = RunnerService(
+                workspace=Path(workspace),
+                state_dir=Path(state),
+                max_output_bytes=32,
+            )
+
+            result = service.execute(
+                request_id="req-large-output",
+                command="head -c 128 /dev/zero | tr '\\0' x",
+                timeout_seconds=5,
+            )
+
+            self.assertEqual(result.output, "x" * 32)
+            self.assertTrue(result.truncated)
+            self.assertEqual(result.exit_code, 0)
+
+    def test_timeout_is_a_terminal_idempotent_result(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
+            service = RunnerService(workspace=Path(workspace), state_dir=Path(state))
+
+            first = service.execute(
+                request_id="req-timeout",
+                command="sleep 5",
+                timeout_seconds=1,
+            )
+            second = service.execute(
+                request_id="req-timeout",
+                command="printf should-not-run",
+                timeout_seconds=1,
+            )
+
+            self.assertEqual(first, second)
+            self.assertEqual(first.exit_code, 124)
+            self.assertIn("timed out after 1 seconds", first.output)
+
+    def test_upload_and_download_stay_under_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
+            service = RunnerService(workspace=Path(workspace), state_dir=Path(state))
+
+            service.upload_file(path="/workspace/nested/input.txt", content=b"safe")
+
+            self.assertEqual(service.download_file(path="/workspace/nested/input.txt"), b"safe")
+            self.assertEqual(Path(workspace, "nested/input.txt").read_bytes(), b"safe")
+
+    def test_file_operations_reject_traversal_and_external_absolute_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
+            service = RunnerService(workspace=Path(workspace), state_dir=Path(state))
+
+            for path in ("../escape.txt", "/etc/passwd", "/workspace/../escape.txt"):
+                with self.subTest(path=path), self.assertRaises(InvalidWorkspacePath):
+                    service.upload_file(path=path, content=b"unsafe")
+
+    def test_command_environment_does_not_inherit_runner_or_platform_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
+            service = RunnerService(workspace=Path(workspace), state_dir=Path(state))
+            with patch.dict(
+                "os.environ",
+                {
+                    "AGENTTEAMS_RUNNER_TOKEN": "runner-secret",
+                    "AGENTTEAMS_WORKER_GATEWAY_KEY": "gateway-secret",
+                },
+                clear=False,
+            ):
+                result = service.execute(
+                    request_id="req-sanitized-env",
+                    command="env",
+                    timeout_seconds=5,
+                )
+
+            self.assertNotIn("runner-secret", result.output)
+            self.assertNotIn("gateway-secret", result.output)
+            self.assertNotIn("AGENTTEAMS_RUNNER_TOKEN", result.output)
 
 
 if __name__ == "__main__":

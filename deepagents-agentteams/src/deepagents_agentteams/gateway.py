@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from deepagents_agentteams.config import ConfigError, ModelConfig
 
@@ -17,7 +17,7 @@ def build_higress_model(
     config: ModelConfig,
     *,
     model_factory: Callable[..., T] | None = None,
-) -> T | "ChatOpenAI":
+) -> T | ChatOpenAI:
     """Build an OpenAI-compatible chat model routed through Higress."""
     if model_factory is None:
         from langchain_openai import ChatOpenAI

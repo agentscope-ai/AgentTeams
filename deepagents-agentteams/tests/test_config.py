@@ -10,6 +10,7 @@ def valid_document() -> dict[str, object]:
         "kind": "MemberRuntimeConfig",
         "metadata": {"generation": 7},
         "member": {
+            "name": "researcher-cr",
             "runtime": "deepagents",
             "runtimeName": "researcher",
             "matrixUserId": "@researcher:example.org",
@@ -25,7 +26,34 @@ def valid_document() -> dict[str, object]:
                 "model": "qwen-max",
                 "gatewayUrl": "https://higress.example.org/v1",
             },
-            "runtimeConfig": {"deepagents": {}},
+            "mcpServers": [
+                {
+                    "name": "github",
+                    "url": "https://higress.example.org/mcp/github",
+                    "transport": "http",
+                }
+            ],
+            "runtimeConfig": {
+                "deepagents": {
+                    "approvals": {
+                        "fileWrites": "required",
+                        "mcpDefault": "required",
+                        "coordinators": ["@reviewer:example.org"],
+                        "mcpRules": [
+                            {
+                                "server": "github",
+                                "tool": "get_issue",
+                                "mode": "notRequired",
+                            }
+                        ],
+                    },
+                    "execution": {
+                        "mode": "sandbox",
+                        "idleTimeout": "45m",
+                        "maxLifetime": "6h30m",
+                    },
+                }
+            },
         },
         "storage": {
             "provider": "minio",
@@ -51,7 +79,7 @@ def valid_environ() -> dict[str, str]:
         "AT_STORAGE_ACCESS": "storage-access",
         "AT_STORAGE_SECRET": "storage-secret",
         "AT_CHECKPOINT_DSN": "postgresql://checkpoint",
-        "AT_CHECKPOINT_AES_KEY": "aes-secret",
+        "AT_CHECKPOINT_AES_KEY": "a" * 32,
     }
 
 
@@ -91,10 +119,13 @@ class RuntimeConfigTests(unittest.TestCase):
             RuntimeConfig.from_document(document, environ={})
 
     def test_resolves_secret_env_references_and_applies_safe_defaults(self) -> None:
-        config = RuntimeConfig.from_document(valid_document(), environ=valid_environ())
+        document = valid_document()
+        document["desired"]["runtimeConfig"] = {"deepagents": {}}  # type: ignore[index]
+        config = RuntimeConfig.from_document(document, environ=valid_environ())
 
         self.assertEqual(config.generation, 7)
         self.assertEqual(config.runtime_name, "researcher")
+        self.assertEqual(config.worker_name, "researcher-cr")
         self.assertEqual(config.model.name, "qwen-max")
         self.assertEqual(config.model.gateway_key, "gateway-secret")
         self.assertEqual(config.matrix.access_token, "matrix-secret")
@@ -104,6 +135,39 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.execution.max_lifetime_seconds, 28800)
         self.assertEqual(config.approvals.file_writes, "notRequired")
         self.assertEqual(config.approvals.mcp_default, "required")
+
+    def test_parses_runtime_policy_mcp_and_controller_identity(self) -> None:
+        environ = valid_environ()
+        environ["AGENTTEAMS_CONTROLLER_URL"] = "http://controller.agentteams-system.svc:8090"
+        config = RuntimeConfig.from_document(valid_document(), environ=environ)
+
+        self.assertEqual(config.execution.mode, "sandbox")
+        self.assertEqual(config.execution.idle_timeout_seconds, 2700)
+        self.assertEqual(config.execution.max_lifetime_seconds, 23400)
+        self.assertEqual(config.approvals.coordinators, ("@reviewer:example.org",))
+        self.assertEqual(config.approvals.mcp_rules[0].server, "github")
+        self.assertEqual(config.approvals.mcp_rules[0].tool, "get_issue")
+        self.assertEqual(config.mcp_servers[0]["name"], "github")
+        self.assertEqual(config.controller_url, "http://controller.agentteams-system.svc:8090")
+        self.assertEqual(config.service_account_token_path, "/var/run/secrets/agentteams/token")
+
+    def test_rejects_invalid_approval_mode_and_duration(self) -> None:
+        document = copy.deepcopy(valid_document())
+        document["desired"]["runtimeConfig"]["deepagents"]["approvals"]["fileWrites"] = "sometimes"  # type: ignore[index]
+        with self.assertRaises(ConfigError):
+            RuntimeConfig.from_document(document, environ=valid_environ())
+
+        document = copy.deepcopy(valid_document())
+        document["desired"]["runtimeConfig"]["deepagents"]["execution"]["idleTimeout"] = "forever"  # type: ignore[index]
+        with self.assertRaises(ConfigError):
+            RuntimeConfig.from_document(document, environ=valid_environ())
+
+    def test_rejects_checkpoint_key_with_invalid_aes_length(self) -> None:
+        environ = valid_environ()
+        environ["AT_CHECKPOINT_AES_KEY"] = "too-short"
+
+        with self.assertRaises(ConfigError):
+            RuntimeConfig.from_document(valid_document(), environ=environ)
 
     def test_rejects_unknown_execution_mode(self) -> None:
         document = copy.deepcopy(valid_document())

@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -255,7 +256,17 @@ func (r *ExecutionSandboxReconciler) failClosed(
 		}
 	}
 	if !podAbsenceConfirmed {
-		return reconcile.Result{RequeueAfter: executionSandboxRequeue}, errors.Join(containmentErrors...)
+		if containmentErr := errors.Join(containmentErrors...); containmentErr != nil {
+			log.FromContext(ctx).Error(
+				containmentErr,
+				"execution sandbox containment remains incomplete; retrying",
+				"namespace", sandbox.Namespace,
+				"name", sandbox.Name,
+				"reason", reason,
+				"requeueAfter", executionSandboxRequeue,
+			)
+		}
+		return reconcile.Result{RequeueAfter: executionSandboxRequeue}, nil
 	}
 
 	for _, object := range []client.Object{

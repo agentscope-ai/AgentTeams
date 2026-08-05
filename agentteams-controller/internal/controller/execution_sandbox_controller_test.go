@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -682,9 +684,15 @@ func TestExecutionSandboxReconcilerAttemptsAllContainmentAfterAPIFailures(t *tes
 			})
 			r := &ExecutionSandboxReconciler{Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents"}
 
-			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
-			if err == nil {
-				t.Fatalf("result=%#v, want injected error", result)
+			var logOutput bytes.Buffer
+			ctx := log.IntoContext(context.Background(), captureLogger(&logOutput))
+			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			if err != nil || result.RequeueAfter != executionSandboxRequeue {
+				t.Fatalf("result=%#v err=%v, want fixed containment requeue without error", result, err)
+			}
+			if !strings.Contains(logOutput.String(), "sandbox containment remains incomplete") ||
+				!strings.Contains(logOutput.String(), sandbox.Namespace) || !strings.Contains(logOutput.String(), sandbox.Name) {
+				t.Fatalf("containment error log lacks identity/context: %q", logOutput.String())
 			}
 			for _, action := range []string{"policy-ensure", "status-update", "service-delete", "pod-delete"} {
 				if attempts[action] == 0 {

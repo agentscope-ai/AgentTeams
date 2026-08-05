@@ -247,7 +247,7 @@ Manager 当前只选择 OpenClaw 或 CoPaw；Hermes、OpenHuman 和 QwenPaw 只�
 在 `agent1` 执行：
 
 ```bash
-export AGENTTEAMS_IMAGE_ARCHIVE="/tmp/agentteams-images-${AGENTTEAMS_LOCAL_TAG}.tar"
+export AGENTTEAMS_IMAGE_ARCHIVE="/var/tmp/agentteams-images-${AGENTTEAMS_LOCAL_TAG}.tar"
 
 docker save \
   "agentteams/agentteams-controller:${AGENTTEAMS_LOCAL_TAG}" \
@@ -257,25 +257,35 @@ docker save \
 
 ls -lh "${AGENTTEAMS_IMAGE_ARCHIVE}"
 sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}"
+export AGENTTEAMS_IMAGE_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}" | awk '{print $1}')"
 ```
 
-归档可能较大，先确认 `agent1` 和两个 worker 的 `/tmp` 有足够空间。
+归档可能较大，先确认 `agent1` 和两个 worker 的 `/var/tmp` 所在文件系统有足够空间。不要默认使用 `/tmp`：部分 kubeadm 节点会把它挂载为容量较小的 `tmpfs`，多镜像归档可能耗尽内存文件系统。
 
 ### 6.2 复制并导入两个 worker
 
 以下循环会逐台复制归档，并通过 `ctr` 导入 containerd 的 `k8s.io` namespace：
 
 ```bash
-for AGENTTEAMS_NODE in agent2@10.13.36.138 agent3@10.13.36.173; do
-  scp "${AGENTTEAMS_IMAGE_ARCHIVE}" \
-    "${AGENTTEAMS_NODE}:${AGENTTEAMS_IMAGE_ARCHIVE}"
+(
+  set -e
+  for AGENTTEAMS_NODE in agent2@10.13.36.138 agent3@10.13.36.173; do
+    scp "${AGENTTEAMS_IMAGE_ARCHIVE}" \
+      "${AGENTTEAMS_NODE}:${AGENTTEAMS_IMAGE_ARCHIVE}"
 
-  ssh -t "${AGENTTEAMS_NODE}" \
-    "sudo ctr -n k8s.io images import '${AGENTTEAMS_IMAGE_ARCHIVE}'"
+    ssh "${AGENTTEAMS_NODE}" \
+      "printf '%s  %s\n' '${AGENTTEAMS_IMAGE_ARCHIVE_SHA256}' '${AGENTTEAMS_IMAGE_ARCHIVE}' | sha256sum -c -"
 
-  ssh -t "${AGENTTEAMS_NODE}" \
-    "sudo ctr -n k8s.io images list | grep '${AGENTTEAMS_LOCAL_TAG}'"
-done
+    ssh -t "${AGENTTEAMS_NODE}" \
+      "sudo ctr -n k8s.io images import '${AGENTTEAMS_IMAGE_ARCHIVE}'"
+
+    ssh -t "${AGENTTEAMS_NODE}" \
+      "sudo ctr -n k8s.io images list | grep '${AGENTTEAMS_LOCAL_TAG}'"
+
+    ssh "${AGENTTEAMS_NODE}" \
+      "rm -- '${AGENTTEAMS_IMAGE_ARCHIVE}'"
+  done
+)
 ```
 
 必须使用 `k8s.io` namespace；导入到 containerd 的默认 namespace 后，kubelet 看不到镜像。
@@ -289,7 +299,7 @@ for AGENTTEAMS_NODE in agent2@10.13.36.138 agent3@10.13.36.173; do
 done
 ```
 
-两个节点都能看到完全一致的 repository 和 Tag 后才能继续。`agent0` 保持不可调度，因此默认不导入；如果以后移除它的污点或增加新的可调度节点，也必须把镜像导入相应节点。
+两个节点都能看到完全一致的 repository、Tag 和 digest 后才能继续。导入成功后删除的只是 worker 上的临时归档；containerd 镜像仍然保留，需要恢复归档时可从 `agent1` 重新复制。`agent0` 保持不可调度，因此默认不导入；如果以后移除它的污点或增加新的可调度节点，也必须把镜像导入相应节点。
 
 ## 7. 准备并校验 Helm Chart
 

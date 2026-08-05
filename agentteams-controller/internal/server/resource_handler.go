@@ -11,6 +11,7 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -120,6 +121,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.stampControllerLabel(&worker.ObjectMeta)
+	if err := h.validateWorkerExecutionDurations(&worker.Spec); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid Worker runtime config: "+err.Error())
+		return
+	}
 
 	if err := h.client.Create(r.Context(), worker); err != nil {
 		writeK8sError(w, "create worker", err)
@@ -256,6 +261,10 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.State != nil {
 			worker.Spec.State = req.State
 		}
+		if err := h.validateWorkerExecutionDurations(&worker.Spec); err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid Worker runtime config: "+err.Error())
+			return
+		}
 
 		if err := h.client.Update(ctx, &worker); err != nil {
 			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
@@ -269,6 +278,14 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
 		return
 	}
+}
+
+func (h *ResourceHandler) validateWorkerExecutionDurations(spec *v1beta1.WorkerSpec) error {
+	if spec == nil || backend.ResolveRuntime(spec.Runtime, h.defaultWorkerRuntime) != backend.RuntimeDeepAgents ||
+		spec.RuntimeConfig == nil || spec.RuntimeConfig.DeepAgents == nil {
+		return nil
+	}
+	return sandboxpolicy.ValidateExecutionDurations(spec.RuntimeConfig.DeepAgents.Execution)
 }
 
 func (h *ResourceHandler) DeleteWorker(w http.ResponseWriter, r *http.Request) {

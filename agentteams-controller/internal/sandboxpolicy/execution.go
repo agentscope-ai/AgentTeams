@@ -2,7 +2,9 @@ package sandboxpolicy
 
 import (
 	"fmt"
+	"math/big"
 	"net/netip"
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,17 +12,65 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// ResolveDuration validates a positive Go duration, or returns fallback when
-// the policy field is omitted.
+var deepAgentsDurationPartPattern = regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?)([hms])`)
+
+// ResolveDuration validates the duration grammar consumed by the DeepAgents
+// runtime, or returns fallback when the policy field is omitted. Accepted
+// values consist only of lowercase h/m/s parts and must resolve exactly to a
+// positive whole number of seconds. Parsing with rationals avoids silently
+// rounding a fractional result.
 func ResolveDuration(raw string, fallback time.Duration, field string) (time.Duration, error) {
-	if strings.TrimSpace(raw) == "" {
+	if raw == "" {
 		return fallback, nil
 	}
-	duration, err := time.ParseDuration(raw)
-	if err != nil || duration <= 0 {
-		return 0, fmt.Errorf("execution sandbox %s must be a positive Go duration", field)
+	parts := deepAgentsDurationPartPattern.FindAllStringSubmatchIndex(raw, -1)
+	totalSeconds := new(big.Rat)
+	position := 0
+	for _, part := range parts {
+		if part[0] != position {
+			return 0, invalidDurationError(field)
+		}
+		amount, ok := new(big.Rat).SetString(raw[part[2]:part[3]])
+		if !ok {
+			return 0, invalidDurationError(field)
+		}
+		unitSeconds := int64(1)
+		switch raw[part[4]:part[5]] {
+		case "h":
+			unitSeconds = 60 * 60
+		case "m":
+			unitSeconds = 60
+		}
+		amount.Mul(amount, big.NewRat(unitSeconds, 1))
+		totalSeconds.Add(totalSeconds, amount)
+		position = part[1]
 	}
-	return duration, nil
+	if position != len(raw) || totalSeconds.Sign() <= 0 || totalSeconds.Denom().Cmp(big.NewInt(1)) != 0 ||
+		!totalSeconds.Num().IsInt64() {
+		return 0, invalidDurationError(field)
+	}
+	seconds := totalSeconds.Num().Int64()
+	maxSeconds := int64((time.Duration(1<<63 - 1)) / time.Second)
+	if seconds > maxSeconds {
+		return 0, invalidDurationError(field)
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
+
+func invalidDurationError(field string) error {
+	return fmt.Errorf("execution sandbox %s must use h, m, or s parts resolving to a positive whole number of seconds", field)
+}
+
+// ValidateExecutionDurations applies the shared Controller/runtime duration
+// boundary before either a Worker or ExecutionSandbox workload is created.
+func ValidateExecutionDurations(execution v1beta1.DeepAgentsExecutionConfig) error {
+	if _, err := ResolveDuration(execution.IdleTimeout, 30*time.Minute, "idleTimeout"); err != nil {
+		return err
+	}
+	if _, err := ResolveDuration(execution.MaxLifetime, 8*time.Hour, "maxLifetime"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // IntersectEgress validates both requested and configured ceiling rules and

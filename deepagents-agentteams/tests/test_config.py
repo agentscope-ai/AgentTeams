@@ -251,6 +251,37 @@ class RuntimeConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             RuntimeConfig.from_document(document, environ=valid_environ())
 
+    def test_duration_grammar_matches_controller_contract(self) -> None:
+        accepted = {
+            "45s": 45,
+            "6h30m": 6 * 60 * 60 + 30 * 60,
+            "0.5m": 30,
+            "0.5s0.5s": 1,
+        }
+        for duration, want_seconds in accepted.items():
+            with self.subTest(duration=duration):
+                document = copy.deepcopy(valid_document())
+                document["desired"]["runtimeConfig"]["deepagents"]["execution"]["idleTimeout"] = duration  # type: ignore[index]
+                config = RuntimeConfig.from_document(document, environ=valid_environ())
+                self.assertEqual(config.execution.idle_timeout_seconds, want_seconds)
+
+        for duration in (
+            "500ms",
+            "1000ms",
+            "1000000us",
+            "1000000000ns",
+            "1.5s",
+            ".5m",
+            "1H",
+            "0s",
+            " ",
+        ):
+            with self.subTest(duration=duration):
+                document = copy.deepcopy(valid_document())
+                document["desired"]["runtimeConfig"]["deepagents"]["execution"]["idleTimeout"] = duration  # type: ignore[index]
+                with self.assertRaises(ConfigError):
+                    RuntimeConfig.from_document(document, environ=valid_environ())
+
         document = copy.deepcopy(valid_document())
         document["desired"]["runtimeConfig"]["deepagents"]["execution"]["idleTimeout"] = "forever"  # type: ignore[index]
         with self.assertRaises(ConfigError):

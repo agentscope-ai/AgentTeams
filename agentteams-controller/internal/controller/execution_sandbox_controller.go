@@ -23,8 +23,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -50,6 +53,9 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	if err := r.Get(ctx, req.NamespacedName, &sandbox); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
+	if !executionSandboxOwnedByController(&sandbox, r.ControllerName) {
+		return reconcile.Result{}, nil
+	}
 	if !sandbox.DeletionTimestamp.IsZero() {
 		return reconcile.Result{}, nil
 	}
@@ -58,6 +64,9 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	workerKey := client.ObjectKey{Name: sandbox.Spec.WorkerRef.Name, Namespace: sandbox.Namespace}
 	if err := r.Get(ctx, workerKey, &worker); err != nil {
 		return reconcile.Result{}, fmt.Errorf("get sandbox Worker %q: %w", sandbox.Spec.WorkerRef.Name, err)
+	}
+	if worker.Labels[v1beta1.LabelController] != r.ControllerName {
+		return reconcile.Result{}, nil
 	}
 	if sandbox.Spec.WorkerRef.UID == "" || string(worker.UID) != sandbox.Spec.WorkerRef.UID {
 		return reconcile.Result{}, fmt.Errorf("execution sandbox Worker UID does not match current Worker")
@@ -460,11 +469,49 @@ func (r *ExecutionSandboxReconciler) ensureExecutionSandboxObject(ctx context.Co
 
 func (r *ExecutionSandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1beta1.ExecutionSandbox{}).
-		Owns(&corev1.Pod{}).
-		Owns(&corev1.Service{}).
-		Owns(&networkingv1.NetworkPolicy{}).
+		For(&v1beta1.ExecutionSandbox{}, builder.WithPredicates(ExecutionSandboxLifecyclePredicates(r.ControllerName))).
+		Owns(&corev1.Pod{}, builder.WithPredicates(PodLifecyclePredicates(v1beta1.LabelExecutionSandbox, r.ControllerName))).
+		Owns(&corev1.Service{}, builder.WithPredicates(ExecutionSandboxChildPredicates(r.ControllerName))).
+		Owns(&networkingv1.NetworkPolicy{}, builder.WithPredicates(ExecutionSandboxChildPredicates(r.ControllerName))).
 		Complete(r)
+}
+
+func executionSandboxOwnedByController(sandbox *v1beta1.ExecutionSandbox, controllerName string) bool {
+	return sandbox != nil && sandbox.Labels[v1beta1.LabelController] == controllerName
+}
+
+// ExecutionSandboxLifecyclePredicates keeps the primary watch in the same
+// exact controller-label scope as the cache and the reconcile-time guard.
+// Empty embedded identity consistently owns only unlabelled objects.
+func ExecutionSandboxLifecyclePredicates(controllerName string) predicate.Predicate {
+	matches := func(object client.Object) bool {
+		return object != nil && object.GetLabels()[v1beta1.LabelController] == controllerName
+	}
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return matches(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return matches(e.ObjectNew) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return matches(e.Object) },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+// ExecutionSandboxChildPredicates scopes Service and NetworkPolicy owned
+// watches without globally filtering the shared manager caches for those
+// resource types.
+func ExecutionSandboxChildPredicates(controllerName string) predicate.Predicate {
+	matches := func(object client.Object) bool {
+		if object == nil {
+			return false
+		}
+		labels := object.GetLabels()
+		return labels[v1beta1.LabelExecutionSandbox] != "" && labels[v1beta1.LabelController] == controllerName
+	}
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return matches(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return matches(e.ObjectNew) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return matches(e.Object) },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
 }
 
 func buildExecutionSandboxResources(

@@ -759,11 +759,11 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	}
 
 	// Scope the informer cache to objects owned by this controller instance.
-	// Cross-instance Worker/Manager/Team/Human CRs and their Pods become
-	// invisible to the reconcilers, preventing double-reconcile when two
-	// AgentTeams releases share a namespace. Writers (initializer, HTTP API,
-	// team reconciler, file watcher) stamp the same label on create, so
-	// this is closed loop.
+	// Cross-instance Worker/Manager/Team/Human/ExecutionSandbox CRs and their
+	// Pods become invisible to the reconcilers, preventing double-reconcile
+	// when two AgentTeams releases share a namespace. Writers (initializer,
+	// HTTP API, team reconciler, file watcher) stamp the same label on create,
+	// so this is closed loop.
 	//
 	// Note: production Pod CRUD in K8sBackend still goes through the direct
 	// kubernetes.Interface client (see internal/backend/kubernetes.go), not
@@ -771,13 +771,7 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	// stream feeding the Pod .Watches source — it does not affect Get/
 	// Create/Delete by exact name.
 	sel := labels.SelectorFromSet(labels.Set{v1beta1.LabelController: a.cfg.ControllerName})
-	opts.Cache.ByObject = map[crclient.Object]cache.ByObject{
-		&v1beta1.Worker{}:  {Label: sel},
-		&v1beta1.Manager{}: {Label: sel},
-		&v1beta1.Team{}:    {Label: sel},
-		&v1beta1.Human{}:   {Label: sel},
-		&corev1.Pod{}:      {Label: sel},
-	}
+	opts.Cache.ByObject = inClusterCacheByObject(a.cfg.ControllerName)
 
 	logger.Info("leader election configured",
 		"leaseID", leaseID,
@@ -790,6 +784,18 @@ func (a *App) startInCluster() (*rest.Config, error) {
 		return nil, fmt.Errorf("create controller manager: %w", err)
 	}
 	return restCfg, nil
+}
+
+func inClusterCacheByObject(controllerName string) map[crclient.Object]cache.ByObject {
+	sel := labels.SelectorFromSet(labels.Set{v1beta1.LabelController: controllerName})
+	return map[crclient.Object]cache.ByObject{
+		&v1beta1.Worker{}:           {Label: sel},
+		&v1beta1.Manager{}:          {Label: sel},
+		&v1beta1.Team{}:             {Label: sel},
+		&v1beta1.Human{}:            {Label: sel},
+		&v1beta1.ExecutionSandbox{}: {Label: sel},
+		&corev1.Pod{}:               {Label: sel},
+	}
 }
 
 // =========================================================================

@@ -20,6 +20,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -297,6 +298,11 @@ func ValidateMemberDeployment(m MemberContext) error {
 // or container creation as well as defensively inside config reconciliation.
 func ValidateMemberRuntime(d MemberDeps, m MemberContext) error {
 	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
+	if effectiveRuntime == backend.RuntimeDeepAgents && m.Spec.RuntimeConfig != nil && m.Spec.RuntimeConfig.DeepAgents != nil {
+		if err := sandboxpolicy.ValidateExecutionDurations(m.Spec.RuntimeConfig.DeepAgents.Execution); err != nil {
+			return fmt.Errorf("invalid deepagents execution policy: %w", err)
+		}
+	}
 	if effectiveRuntime == backend.RuntimeDeepAgents &&
 		m.Spec.RuntimeConfig != nil &&
 		m.Spec.RuntimeConfig.DeepAgents != nil &&

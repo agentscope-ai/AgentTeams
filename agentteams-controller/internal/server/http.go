@@ -114,6 +114,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		esh := NewExecutionSandboxHandler(
 			deps.Client,
 			deps.Namespace,
+			deps.ControllerName,
 			deps.DefaultWorkerRuntime,
 			deps.DeepAgentsSandboxEphemeralStorage,
 			deps.DeepAgentsSandboxEgressCeilings,

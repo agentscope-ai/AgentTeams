@@ -26,6 +26,7 @@ var executionSandboxSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-
 type ExecutionSandboxHandler struct {
 	client           client.Client
 	namespace        string
+	controllerName   string
 	defaultRuntime   string
 	ephemeralStorage sandboxpolicy.Policy
 	egressCeilings   []v1beta1.DeepAgentsEgressRule
@@ -45,12 +46,13 @@ type ExecutionSandboxResponse struct {
 func NewExecutionSandboxHandler(
 	k8s client.Client,
 	namespace string,
+	controllerName string,
 	defaultRuntime string,
 	ephemeralStorage sandboxpolicy.Policy,
 	egressCeilings []v1beta1.DeepAgentsEgressRule,
 ) *ExecutionSandboxHandler {
 	return &ExecutionSandboxHandler{
-		client: k8s, namespace: namespace, defaultRuntime: defaultRuntime,
+		client: k8s, namespace: namespace, controllerName: controllerName, defaultRuntime: defaultRuntime,
 		ephemeralStorage: ephemeralStorage, egressCeilings: deepCopyEgressRules(egressCeilings),
 	}
 }
@@ -84,14 +86,18 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 		}
 		controller := true
 		blockDeletion := true
+		labels := map[string]string{
+			v1beta1.LabelWorker:           worker.Name,
+			v1beta1.LabelExecutionSandbox: name,
+		}
+		if h.controllerName != "" {
+			labels[v1beta1.LabelController] = h.controllerName
+		}
 		sandbox = v1beta1.ExecutionSandbox{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: h.namespace,
-				Labels: map[string]string{
-					v1beta1.LabelWorker:           worker.Name,
-					v1beta1.LabelExecutionSandbox: name,
-				},
+				Labels:    labels,
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion:         v1beta1.SchemeGroupVersion.String(),
 					Kind:               "Worker",
@@ -112,6 +118,10 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 	}
 	if err != nil {
 		writeK8sError(w, "get execution sandbox", err)
+		return
+	}
+	if !h.ownsControllerLabel(sandbox.Labels) {
+		httputil.WriteError(w, http.StatusConflict, "execution sandbox belongs to another controller")
 		return
 	}
 	if sandbox.Spec.WorkerRef.Name != worker.Name || sandbox.Spec.WorkerRef.UID != string(worker.UID) ||
@@ -173,10 +183,7 @@ func (h *ExecutionSandboxHandler) desiredExecutionSandboxSpec(
 	sessionID string,
 ) (v1beta1.ExecutionSandboxSpec, error) {
 	execution := worker.Spec.RuntimeConfig.DeepAgents.Execution.DeepCopy()
-	if _, err := sandboxpolicy.ResolveDuration(execution.IdleTimeout, 30*time.Minute, "idleTimeout"); err != nil {
-		return v1beta1.ExecutionSandboxSpec{}, err
-	}
-	if _, err := sandboxpolicy.ResolveDuration(execution.MaxLifetime, 8*time.Hour, "maxLifetime"); err != nil {
+	if err := sandboxpolicy.ValidateExecutionDurations(*execution); err != nil {
 		return v1beta1.ExecutionSandboxSpec{}, err
 	}
 	if _, err := sandboxpolicy.IntersectEgress(execution.Egress, h.egressCeilings); err != nil {
@@ -246,6 +253,10 @@ func (h *ExecutionSandboxHandler) deepAgentsWorker(w http.ResponseWriter, r *htt
 		writeK8sError(w, "get worker", err)
 		return nil, false
 	}
+	if !h.ownsControllerLabel(worker.Labels) {
+		httputil.WriteError(w, http.StatusConflict, "worker belongs to another controller")
+		return nil, false
+	}
 	if backend.ResolveRuntime(worker.Spec.Runtime, h.defaultRuntime) != backend.RuntimeDeepAgents || worker.Spec.RuntimeConfig == nil ||
 		worker.Spec.RuntimeConfig.DeepAgents == nil || worker.Spec.RuntimeConfig.DeepAgents.Execution.Mode != "sandbox" {
 		httputil.WriteError(w, http.StatusConflict, "worker is not a deepagents runtime with sandbox execution enabled")
@@ -273,11 +284,22 @@ func (h *ExecutionSandboxHandler) workerSandboxFromPath(
 		writeK8sError(w, "get execution sandbox", err)
 		return nil, false
 	}
+	if !h.ownsControllerLabel(sandbox.Labels) {
+		httputil.WriteError(w, http.StatusConflict, "execution sandbox belongs to another controller")
+		return nil, false
+	}
 	if sandbox.Spec.WorkerRef.Name != worker.Name || sandbox.Spec.WorkerRef.UID != string(worker.UID) || sandbox.Spec.SessionID != sessionID {
 		httputil.WriteError(w, http.StatusConflict, "execution sandbox identity collision")
 		return nil, false
 	}
 	return &sandbox, true
+}
+
+// ownsControllerLabel mirrors the platform's embedded ownership convention:
+// an empty controller name owns only unlabelled objects, while a named
+// in-cluster controller requires an exact label match.
+func (h *ExecutionSandboxHandler) ownsControllerLabel(labels map[string]string) bool {
+	return labels[v1beta1.LabelController] == h.controllerName
 }
 
 func executionSandboxName(workerName, sessionID string) string {

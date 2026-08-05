@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -51,6 +54,135 @@ func TestIntersectSandboxEgressRestrictsCIDRsAndPorts(t *testing.T) {
 		[]v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{70000}}}, ceilings,
 	); err == nil {
 		t.Fatal("invalid requested port was accepted")
+	}
+}
+
+func TestExecutionSandboxOwnershipPredicatesRejectForeignEvents(t *testing.T) {
+	mine := &v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{
+		Name: "mine", Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+	}}
+	foreign := &v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{
+		Name: "foreign", Labels: map[string]string{v1beta1.LabelController: "ctl-b"},
+	}}
+	manual := &v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{Name: "manual"}}
+	predicate := ExecutionSandboxLifecyclePredicates("ctl-a")
+	if !predicate.Create(event.CreateEvent{Object: mine}) ||
+		!predicate.Update(event.UpdateEvent{ObjectOld: mine.DeepCopy(), ObjectNew: mine}) ||
+		!predicate.Delete(event.DeleteEvent{Object: mine}) {
+		t.Fatal("sandbox predicate rejected an owned event")
+	}
+	for _, object := range []client.Object{foreign, manual} {
+		if predicate.Create(event.CreateEvent{Object: object}) ||
+			predicate.Update(event.UpdateEvent{ObjectOld: object.DeepCopyObject().(client.Object), ObjectNew: object}) ||
+			predicate.Delete(event.DeleteEvent{Object: object}) {
+			t.Fatalf("sandbox predicate accepted foreign object %#v", object.GetLabels())
+		}
+	}
+
+	childPredicate := ExecutionSandboxChildPredicates("ctl-a")
+	ownedService := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+		v1beta1.LabelController: "ctl-a", v1beta1.LabelExecutionSandbox: "mine",
+	}}}
+	foreignPolicy := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+		v1beta1.LabelController: "ctl-b", v1beta1.LabelExecutionSandbox: "foreign",
+	}}}
+	if !childPredicate.Create(event.CreateEvent{Object: ownedService}) {
+		t.Fatal("child predicate rejected owned Service")
+	}
+	if childPredicate.Create(event.CreateEvent{Object: foreignPolicy}) ||
+		childPredicate.Create(event.CreateEvent{Object: &corev1.Service{}}) {
+		t.Fatal("child predicate accepted foreign or unlabelled child")
+	}
+}
+
+func TestExecutionSandboxReconcilerIgnoresForeignAndManualSandboxes(t *testing.T) {
+	for _, labels := range []map[string]string{
+		{v1beta1.LabelController: "ctl-b"},
+		nil,
+	} {
+		t.Run(fmt.Sprintf("labels-%v", labels), func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			if err := v1beta1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			if err := corev1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			if err := networkingv1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			sandbox := &v1beta1.ExecutionSandbox{
+				ObjectMeta: metav1.ObjectMeta{Name: "foreign", Namespace: "agentteams-system", Labels: labels},
+				Spec: v1beta1.ExecutionSandboxSpec{
+					WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "missing", UID: "missing"},
+					SessionID: "thread", IdleTimeout: "500ms", MaxLifetime: "8h",
+				},
+			}
+			before := sandbox.DeepCopy()
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1beta1.ExecutionSandbox{}).WithObjects(sandbox).Build()
+			r := &ExecutionSandboxReconciler{Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents"}
+
+			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(sandbox)})
+			if err != nil || result != (reconcile.Result{}) {
+				t.Fatalf("Reconcile foreign sandbox=(%#v, %v), want zero result", result, err)
+			}
+			var stored v1beta1.ExecutionSandbox
+			if err := cl.Get(context.Background(), client.ObjectKeyFromObject(sandbox), &stored); err != nil {
+				t.Fatal(err)
+			}
+			if !apiequality.Semantic.DeepEqual(stored.Spec, before.Spec) || !apiequality.Semantic.DeepEqual(stored.Status, before.Status) {
+				t.Fatalf("foreign sandbox was mutated: %#v", stored)
+			}
+			for _, child := range []client.Object{&corev1.Secret{}, &corev1.Pod{}, &corev1.Service{}, &networkingv1.NetworkPolicy{}} {
+				if err := cl.Get(context.Background(), client.ObjectKeyFromObject(sandbox), child); !apierrors.IsNotFound(err) {
+					t.Fatalf("foreign sandbox created %T: %v", child, err)
+				}
+			}
+		})
+	}
+}
+
+func TestExecutionSandboxReconcilerIgnoresSandboxReferencingForeignWorker(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-b"},
+		},
+		Spec: v1beta1.WorkerSpec{Runtime: "deepagents", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+			DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"}},
+		}},
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "wrong-worker", Namespace: worker.Namespace,
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+			SessionID: "thread", IdleTimeout: "30m", MaxLifetime: "8h",
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1beta1.ExecutionSandbox{}).WithObjects(worker, sandbox).Build()
+	r := &ExecutionSandboxReconciler{Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents"}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(sandbox)})
+	if err != nil || result != (reconcile.Result{}) {
+		t.Fatalf("Reconcile cross-controller Worker=(%#v, %v), want zero result", result, err)
+	}
+	for _, child := range []client.Object{&corev1.Secret{}, &corev1.Pod{}, &corev1.Service{}, &networkingv1.NetworkPolicy{}} {
+		if err := cl.Get(context.Background(), client.ObjectKeyFromObject(sandbox), child); !apierrors.IsNotFound(err) {
+			t.Fatalf("foreign Worker sandbox created %T: %v", child, err)
+		}
 	}
 }
 
@@ -199,7 +331,10 @@ func TestExecutionSandboxReconcilerConvergesInvalidComputeResources(t *testing.T
 		t.Fatal(err)
 	}
 	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.WorkerSpec{
 			Model: "qwen-max",
 			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
@@ -208,7 +343,10 @@ func TestExecutionSandboxReconcilerConvergesInvalidComputeResources(t *testing.T
 		},
 	}
 	sandbox := &v1beta1.ExecutionSandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "exec-invalid-resources", Namespace: "agentteams-system", UID: "sandbox-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-invalid-resources", Namespace: "agentteams-system", UID: "sandbox-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
 			SessionID: "thread-hash",
@@ -300,6 +438,18 @@ func TestExecutionSandboxReconcilerConvergesInvalidPolicies(t *testing.T) {
 			},
 		},
 		{
+			name: "subsecond idle timeout",
+			mutateSpec: func(spec *v1beta1.ExecutionSandboxSpec) {
+				spec.IdleTimeout = "500ms"
+			},
+		},
+		{
+			name: "non-runtime max lifetime syntax",
+			mutateSpec: func(spec *v1beta1.ExecutionSandboxSpec) {
+				spec.MaxLifetime = "1000ms"
+			},
+		},
+		{
 			name: "requested egress CIDR",
 			mutateSpec: func(spec *v1beta1.ExecutionSandboxSpec) {
 				spec.Egress[0].CIDR = "not-a-cidr"
@@ -350,14 +500,20 @@ func TestExecutionSandboxReconcilerConvergesInvalidPolicies(t *testing.T) {
 				t.Fatal(err)
 			}
 			worker := &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+					Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+				},
 				Spec: v1beta1.WorkerSpec{Runtime: "deepagents", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
 					DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"}},
 				}},
 			}
 			expiresAt := metav1.NewTime(time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC))
 			sandbox := &v1beta1.ExecutionSandbox{
-				ObjectMeta: metav1.ObjectMeta{Name: "exec-invalid-policy", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "exec-invalid-policy", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2,
+					Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+				},
 				Spec: v1beta1.ExecutionSandboxSpec{
 					WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
 					SessionID:   "thread-hash",
@@ -450,14 +606,20 @@ func TestExecutionSandboxReconcilerKeepsTerminatingRunnerIsolated(t *testing.T) 
 		t.Fatal(err)
 	}
 	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.WorkerSpec{Runtime: "deepagents", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
 			DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"}},
 		}},
 	}
 	expiresAt := metav1.NewTime(time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC))
 	sandbox := &v1beta1.ExecutionSandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "exec-terminating", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-terminating", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2,
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
 			SessionID:   "thread-hash",
@@ -601,13 +763,19 @@ func TestExecutionSandboxReconcilerAttemptsAllContainmentAfterAPIFailures(t *tes
 				t.Fatal(err)
 			}
 			worker := &v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+					Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+				},
 				Spec: v1beta1.WorkerSpec{Runtime: "deepagents", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
 					DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"}},
 				}},
 			}
 			sandbox := &v1beta1.ExecutionSandbox{
-				ObjectMeta: metav1.ObjectMeta{Name: "exec-failure", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "exec-failure", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2,
+					Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+				},
 				Spec: v1beta1.ExecutionSandboxSpec{
 					WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
 					SessionID: "thread-hash", IdleTimeout: "invalid", MaxLifetime: "8h",
@@ -748,7 +916,10 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 		t.Fatal(err)
 	}
 	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.WorkerSpec{
 			Model: "qwen-max",
 			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
@@ -757,7 +928,10 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 		},
 	}
 	sandbox := &v1beta1.ExecutionSandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "exec-abc", Namespace: "agentteams-system", UID: "sandbox-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-abc", Namespace: "agentteams-system", UID: "sandbox-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
 			SessionID: "thread-hash",
@@ -858,7 +1032,10 @@ func TestExecutionSandboxReconcilerRecreatesStaleImmutableResourcesAndUpdatesNet
 		t.Fatal(err)
 	}
 	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.WorkerSpec{
 			Model: "qwen-max",
 			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
@@ -867,7 +1044,10 @@ func TestExecutionSandboxReconcilerRecreatesStaleImmutableResourcesAndUpdatesNet
 		},
 	}
 	sandbox := &v1beta1.ExecutionSandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "exec-policy-refresh", Namespace: "agentteams-system", UID: "sandbox-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-policy-refresh", Namespace: "agentteams-system", UID: "sandbox-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
 			SessionID: "thread-hash",
@@ -1108,7 +1288,10 @@ func newExecutionSandboxLifecycleTestRig(
 		t.Fatal(err)
 	}
 	worker := &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.WorkerSpec{
 			Model: "qwen-max",
 			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
@@ -1122,6 +1305,7 @@ func newExecutionSandboxLifecycleTestRig(
 			Namespace:         "agentteams-system",
 			UID:               "sandbox-uid",
 			CreationTimestamp: metav1.NewTime(now),
+			Labels:            map[string]string{v1beta1.LabelController: "ctl-a"},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},

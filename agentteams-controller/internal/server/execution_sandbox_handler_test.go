@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -33,12 +34,15 @@ func newExecutionSandboxHandlerTestClient(t *testing.T, objects ...runtime.Objec
 		WithRuntimeObjects(objects...).
 		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
 		Build()
-	return NewExecutionSandboxHandler(cl, "agentteams-system", "deepagents", sandboxpolicy.Default(), nil)
+	return NewExecutionSandboxHandler(cl, "agentteams-system", "ctl-a", "deepagents", sandboxpolicy.Default(), nil)
 }
 
 func deepAgentsSandboxWorker() *v1beta1.Worker {
 	return &v1beta1.Worker{
-		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.WorkerSpec{
 			Model: "qwen-max",
 			// Empty runtime resolves through the platform default configured on
@@ -91,6 +95,9 @@ func TestExecutionSandboxEnsureCreatesControllerManagedCR(t *testing.T) {
 	}
 	if len(sandbox.OwnerReferences) != 1 || sandbox.OwnerReferences[0].UID != worker.UID {
 		t.Fatalf("sandbox must be garbage-collected with Worker: %#v", sandbox.OwnerReferences)
+	}
+	if got := sandbox.Labels[v1beta1.LabelController]; got != "ctl-a" {
+		t.Fatalf("sandbox controller label=%q, want ctl-a", got)
 	}
 }
 
@@ -190,6 +197,12 @@ func TestExecutionSandboxEnsureRejectsInvalidWorkerPolicyWithoutCreatingSandbox(
 		{name: "max lifetime", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
 			execution.MaxLifetime = "0s"
 		}},
+		{name: "subsecond idle timeout", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.IdleTimeout = "500ms"
+		}},
+		{name: "non-runtime max lifetime syntax", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.MaxLifetime = "1000ms"
+		}},
 		{name: "egress CIDR", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
 			execution.Egress[0].CIDR = "invalid"
 		}},
@@ -237,6 +250,12 @@ func TestExecutionSandboxEnsureRejectsInvalidWorkerPolicyWithoutMutatingSandbox(
 		}},
 		{name: "max lifetime", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
 			execution.MaxLifetime = "0s"
+		}},
+		{name: "subsecond idle timeout", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.IdleTimeout = "1.5s"
+		}},
+		{name: "non-runtime max lifetime syntax", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.MaxLifetime = "1000ms"
 		}},
 		{name: "egress CIDR", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
 			execution.Egress[0].CIDR = "invalid"
@@ -533,7 +552,10 @@ func TestExecutionSandboxEnsureWithStaleReadyStatusReturnsPendingWithoutToken(t 
 
 func readyExecutionSandbox(worker *v1beta1.Worker, name, sessionID string) *v1beta1.ExecutionSandbox {
 	return &v1beta1.ExecutionSandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system", Generation: 1},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "agentteams-system", Generation: 1,
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
 			SessionID:   sessionID,
@@ -557,7 +579,10 @@ func TestExecutionSandboxHeartbeatAndDelete(t *testing.T) {
 	worker := deepAgentsSandboxWorker()
 	name := executionSandboxName(worker.Name, "thread-hash")
 	sandbox := &v1beta1.ExecutionSandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "agentteams-system",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
 			SessionID: "thread-hash",
@@ -587,5 +612,139 @@ func TestExecutionSandboxHeartbeatAndDelete(t *testing.T) {
 	h.Delete(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusNoContent {
 		t.Fatalf("delete status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
+func TestExecutionSandboxHandlerRejectsForeignControllerObjects(t *testing.T) {
+	t.Run("worker", func(t *testing.T) {
+		worker := deepAgentsSandboxWorker()
+		worker.Labels[v1beta1.LabelController] = "ctl-b"
+		h := newExecutionSandboxHandlerTestClient(t, worker)
+		req := httptest.NewRequest(http.MethodPost, "/ensure", strings.NewReader(`{"sessionId":"foreign-worker"}`))
+		req.SetPathValue("name", worker.Name)
+		rec := httptest.NewRecorder()
+
+		h.Ensure(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+		}
+		var sandbox v1beta1.ExecutionSandbox
+		err := h.client.Get(context.Background(), types.NamespacedName{
+			Name: executionSandboxName(worker.Name, "foreign-worker"), Namespace: worker.Namespace,
+		}, &sandbox)
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("foreign Worker created sandbox: %v", err)
+		}
+	})
+
+	for _, operation := range []string{"ensure", "heartbeat", "delete"} {
+		t.Run(operation+" sandbox", func(t *testing.T) {
+			worker := deepAgentsSandboxWorker()
+			name := executionSandboxName(worker.Name, "thread-hash")
+			sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+			sandbox.Labels[v1beta1.LabelController] = "ctl-b"
+			before := sandbox.DeepCopy()
+			h := newExecutionSandboxHandlerTestClient(t, worker, sandbox)
+			rec := httptest.NewRecorder()
+
+			switch operation {
+			case "ensure":
+				req := httptest.NewRequest(http.MethodPost, "/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+				req.SetPathValue("name", worker.Name)
+				h.Ensure(rec, req)
+			case "heartbeat":
+				req := httptest.NewRequest(http.MethodPost, "/heartbeat", nil)
+				req.SetPathValue("name", worker.Name)
+				req.SetPathValue("sessionId", "thread-hash")
+				h.Heartbeat(rec, req)
+			case "delete":
+				req := httptest.NewRequest(http.MethodDelete, "/sandbox", nil)
+				req.SetPathValue("name", worker.Name)
+				req.SetPathValue("sessionId", "thread-hash")
+				h.Delete(rec, req)
+			}
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+			}
+			var stored v1beta1.ExecutionSandbox
+			if err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: worker.Namespace}, &stored); err != nil {
+				t.Fatalf("foreign sandbox was deleted: %v", err)
+			}
+			if !apiequality.Semantic.DeepEqual(stored.Spec, before.Spec) ||
+				!apiequality.Semantic.DeepEqual(stored.Status, before.Status) || stored.Labels[v1beta1.LabelController] != "ctl-b" {
+				t.Fatalf("foreign sandbox was mutated: %#v", stored)
+			}
+		})
+	}
+}
+
+func TestExecutionSandboxHTTPRoutePropagatesControllerOwnership(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	server := NewHTTPServer(":0", ServerDeps{
+		Client:               cl,
+		AuthMw:               authpkg.NewMiddleware(nil, nil, nil, cl, worker.Namespace),
+		KubeMode:             "incluster",
+		Namespace:            worker.Namespace,
+		ControllerName:       "ctl-a",
+		DefaultWorkerRuntime: "deepagents",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/execution-sandboxes/ensure", strings.NewReader(`{"sessionId":"http-route"}`))
+	rec := httptest.NewRecorder()
+
+	server.Mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+	var sandbox v1beta1.ExecutionSandbox
+	if err := cl.Get(context.Background(), types.NamespacedName{
+		Name: executionSandboxName(worker.Name, "http-route"), Namespace: worker.Namespace,
+	}, &sandbox); err != nil {
+		t.Fatal(err)
+	}
+	if got := sandbox.Labels[v1beta1.LabelController]; got != "ctl-a" {
+		t.Fatalf("sandbox controller label=%q, want ctl-a", got)
+	}
+}
+
+func TestExecutionSandboxHandlerEmptyControllerOwnsOnlyUnlabelledObjects(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	delete(worker.Labels, v1beta1.LabelController)
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	h := NewExecutionSandboxHandler(cl, worker.Namespace, "", "deepagents", sandboxpolicy.Default(), nil)
+	req := httptest.NewRequest(http.MethodPost, "/ensure", strings.NewReader(`{"sessionId":"embedded"}`))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+
+	h.Ensure(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+	var sandbox v1beta1.ExecutionSandbox
+	if err := cl.Get(context.Background(), types.NamespacedName{
+		Name: executionSandboxName(worker.Name, "embedded"), Namespace: worker.Namespace,
+	}, &sandbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := sandbox.Labels[v1beta1.LabelController]; exists {
+		t.Fatalf("embedded sandbox unexpectedly has controller label: %#v", sandbox.Labels)
 	}
 }

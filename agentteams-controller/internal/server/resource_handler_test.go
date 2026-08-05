@@ -13,6 +13,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -160,6 +161,61 @@ func TestCreateWorkerPersistsRuntimeConfigAndReturnsDetachedResponse(t *testing.
 	converted.RuntimeConfig.DeepAgents.Approvals.Coordinators[0] = "@aliased:example.org"
 	if got := source.Spec.RuntimeConfig.DeepAgents.Approvals.Coordinators[0]; got != "@human:example.org" {
 		t.Fatalf("worker response runtimeConfig aliases Worker spec: %q", got)
+	}
+}
+
+func TestCreateWorkerRejectsDeepAgentsDurationOutsideRuntimeGrammar(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", strings.NewReader(`{
+		"name":"deepagents-worker",
+		"runtime":"deepagents",
+		"runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","idleTimeout":"500ms"}}}
+	}`))
+	rec := httptest.NewRecorder()
+	handler.CreateWorker(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	var worker v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "deepagents-worker", Namespace: "default"}, &worker); !apierrors.IsNotFound(err) {
+		t.Fatalf("invalid duration created Worker: %v", err)
+	}
+}
+
+func TestUpdateWorkerRejectsDeepAgentsDurationWithoutMutation(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "deepagents-worker", Namespace: "default"},
+		Spec: v1beta1.WorkerSpec{Runtime: "deepagents", Model: "before", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+			DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{
+				Mode: "sandbox", IdleTimeout: "30m", MaxLifetime: "8h",
+			}},
+		}},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/deepagents-worker", strings.NewReader(`{
+		"model":"after",
+		"runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","idleTimeout":"1000ms"}}}
+	}`))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	var stored v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(worker), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Spec.Model != "before" || stored.Spec.RuntimeConfig.DeepAgents.Execution.IdleTimeout != "30m" {
+		t.Fatalf("invalid duration mutated Worker: %#v", stored.Spec)
 	}
 }
 

@@ -155,6 +155,27 @@ func TestValidateMemberRuntimeRejectsDeepAgentsSandboxOutsideLocalCluster(t *tes
 	}
 }
 
+func TestValidateMemberRuntimeRejectsDeepAgentsDurationOutsideRuntimeGrammar(t *testing.T) {
+	for _, duration := range []string{"500ms", "1000ms", "1.5s"} {
+		t.Run(duration, func(t *testing.T) {
+			err := ValidateMemberRuntime(MemberDeps{EnvBuilder: mocks.NewMockEnvBuilder()}, MemberContext{
+				Name: "alice",
+				Spec: v1beta1.WorkerSpec{
+					Runtime: backend.RuntimeDeepAgents,
+					RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+						Execution: v1beta1.DeepAgentsExecutionConfig{
+							Mode: "sandbox", IdleTimeout: duration, MaxLifetime: "8h",
+						},
+					}},
+				},
+			})
+			if err == nil {
+				t.Fatalf("ValidateMemberRuntime accepted duration %q", duration)
+			}
+		})
+	}
+}
+
 func TestCreateMemberContainerAddsDockerHostGateway(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
 	wb.NameOverride = "docker"

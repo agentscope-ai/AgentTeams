@@ -42,7 +42,11 @@ func NewManagedAgentIdentityHandler(k8s client.Client, namespace, controllerName
 func (h *ManagedAgentIdentityHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
 	workerName := r.PathValue("name")
-	if caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) || caller.Username != workerName {
+	validCaller := caller != nil &&
+		(caller.Role == authpkg.RoleWorker || caller.Role == authpkg.RoleTeamLeader) &&
+		caller.Username == workerName &&
+		caller.ServiceAccountNamespace == h.namespace
+	if !validCaller {
 		httputil.WriteError(w, http.StatusForbidden, "managed-Agent identity lookup is restricted to the calling Worker")
 		return
 	}
@@ -98,9 +102,43 @@ func (h *ManagedAgentIdentityHandler) Lookup(w http.ResponseWriter, r *http.Requ
 func decodeManagedAgentIdentityRequest(w http.ResponseWriter, r *http.Request) (ManagedAgentIdentityRequest, error) {
 	var request ManagedAgentIdentityRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, managedAgentIdentityRequestMaxBytes))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
+	opening, err := decoder.Token()
+	if err != nil {
 		return request, err
+	}
+	if delimiter, ok := opening.(json.Delim); !ok || delimiter != '{' {
+		return request, errors.New("request must be one JSON object")
+	}
+	seenMatrixUserID := false
+	for decoder.More() {
+		fieldToken, err := decoder.Token()
+		if err != nil {
+			return request, err
+		}
+		field, ok := fieldToken.(string)
+		if !ok {
+			return request, errors.New("request object field name must be a string")
+		}
+		if field != "matrixUserId" {
+			return request, errors.New("unknown field " + field)
+		}
+		if seenMatrixUserID {
+			return request, errors.New("duplicate field matrixUserId")
+		}
+		if err := decoder.Decode(&request.MatrixUserID); err != nil {
+			return request, err
+		}
+		seenMatrixUserID = true
+	}
+	closing, err := decoder.Token()
+	if err != nil {
+		return request, err
+	}
+	if delimiter, ok := closing.(json.Delim); !ok || delimiter != '}' {
+		return request, errors.New("request must be one JSON object")
+	}
+	if !seenMatrixUserID {
+		return request, errors.New("matrixUserId is required")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {

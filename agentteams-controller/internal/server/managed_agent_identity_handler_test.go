@@ -35,6 +35,16 @@ type managedIdentityFailingListClient struct {
 	failManagers bool
 }
 
+type managedIdentityCountingGetClient struct {
+	client.Client
+	gets int
+}
+
+func (c *managedIdentityCountingGetClient) Get(ctx context.Context, key client.ObjectKey, object client.Object, opts ...client.GetOption) error {
+	c.gets++
+	return c.Client.Get(ctx, key, object, opts...)
+}
+
 func (c managedIdentityFailingListClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	if c.failManagers {
 		if _, ok := list.(*v1beta1.ManagerList); ok {
@@ -86,7 +96,7 @@ func TestManagedAgentIdentityLookupQueriesCurrentWorkerAndManagerStateWithinScop
 	}
 	cl := fake.NewClientBuilder().WithScheme(managedIdentityScheme(t)).WithObjects(objects...).Build()
 	handler := NewManagedAgentIdentityHandler(cl, namespace, "ctl-a")
-	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "researcher"}
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "researcher", ServiceAccountNamespace: namespace}
 	lookup := func(matrixUserID string) map[string]any {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/managed-agent-identity", strings.NewReader(`{"matrixUserId":"`+matrixUserID+`"}`))
@@ -144,7 +154,7 @@ func TestManagedAgentIdentityLookupIsAuthenticatedAndWorkerSelfScoped(t *testing
 	mw := authpkg.NewMiddleware(
 		managedIdentityAuthenticator{
 			token:    "researcher-token",
-			identity: &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "researcher"},
+			identity: &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "researcher", ServiceAccountNamespace: namespace},
 		},
 		nil,
 		authpkg.NewAuthorizer(),
@@ -182,18 +192,48 @@ func TestManagedAgentIdentityLookupIsAuthenticatedAndWorkerSelfScoped(t *testing
 	if selfRec.Code != http.StatusOK {
 		t.Fatalf("self status=%d body=%s", selfRec.Code, selfRec.Body.String())
 	}
+
+	otherNamespaceMiddleware := authpkg.NewMiddleware(
+		managedIdentityAuthenticator{
+			token: "other-namespace-token",
+			identity: &authpkg.CallerIdentity{
+				Role:                    authpkg.RoleWorker,
+				Username:                "researcher",
+				ServiceAccountNamespace: "other-namespace",
+			},
+		},
+		nil,
+		authpkg.NewAuthorizer(),
+		cl,
+		namespace,
+	)
+	otherNamespaceServer := NewHTTPServer(":0", ServerDeps{
+		Client:         cl,
+		AuthMw:         otherNamespaceMiddleware,
+		KubeMode:       "incluster",
+		Namespace:      namespace,
+		ControllerName: "ctl-a",
+	})
+	otherNamespaceRequest := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/managed-agent-identity", strings.NewReader(body))
+	otherNamespaceRequest.Header.Set("Authorization", "Bearer other-namespace-token")
+	otherNamespaceRec := httptest.NewRecorder()
+	otherNamespaceServer.Mux.ServeHTTP(otherNamespaceRec, otherNamespaceRequest)
+	if otherNamespaceRec.Code != http.StatusForbidden {
+		t.Fatalf("same-named other-namespace caller status=%d body=%s, want 403", otherNamespaceRec.Code, otherNamespaceRec.Body.String())
+	}
 }
 
 func TestManagedAgentIdentityLookupRejectsInvalidBoundsAndFailsClosedOnListError(t *testing.T) {
 	const namespace = "agentteams-system"
 	worker := managedIdentityWorker("researcher", namespace, "ctl-a", "@researcher:example.org")
 	base := fake.NewClientBuilder().WithScheme(managedIdentityScheme(t)).WithObjects(worker).Build()
-	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "researcher"}
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "researcher", ServiceAccountNamespace: namespace}
 
 	for _, body := range []string{
 		`{}`,
 		`{"matrixUserId":" human "}`,
 		`{"matrixUserId":"@human:example.org","extra":true}`,
+		`{"matrixUserId":"@first:example.org","matrixUserId":"@second:example.org"}`,
 		`{"matrixUserId":"@human:example.org"}{"matrixUserId":"@other:example.org"}`,
 		`{"matrixUserId":"@` + strings.Repeat("a", 260) + `:example.org"}`,
 		`{"matrixUserId":"@human:example.org"}` + strings.Repeat(" ", managedAgentIdentityRequestMaxBytes),
@@ -220,12 +260,40 @@ func TestManagedAgentIdentityLookupRejectsInvalidBoundsAndFailsClosedOnListError
 	}
 }
 
+func TestManagedAgentIdentityLookupRejectsSameNamedCallerFromWrongOrEmptyNamespace(t *testing.T) {
+	const namespace = "agentteams-system"
+	worker := managedIdentityWorker("researcher", namespace, "ctl-a", "@researcher:example.org")
+	base := fake.NewClientBuilder().WithScheme(managedIdentityScheme(t)).WithObjects(worker).Build()
+	cl := &managedIdentityCountingGetClient{Client: base}
+	handler := NewManagedAgentIdentityHandler(cl, namespace, "ctl-a")
+
+	for _, callerNamespace := range []string{"other-namespace", ""} {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"matrixUserId":"@researcher:example.org"}`))
+		req.SetPathValue("name", "researcher")
+		req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), &authpkg.CallerIdentity{
+			Role:                    authpkg.RoleWorker,
+			Username:                "researcher",
+			ServiceAccountNamespace: callerNamespace,
+		}))
+		rec := httptest.NewRecorder()
+
+		handler.Lookup(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("caller namespace %q status=%d body=%s, want 403", callerNamespace, rec.Code, rec.Body.String())
+		}
+	}
+	if cl.gets != 0 {
+		t.Fatalf("namespace-mismatched callers triggered %d K8s reads, want 0", cl.gets)
+	}
+}
+
 func TestManagedAgentIdentityLookupRejectsCallerOutsideControllerScope(t *testing.T) {
 	const namespace = "agentteams-system"
 	worker := managedIdentityWorker("researcher", namespace, "ctl-b", "@researcher:example.org")
 	cl := fake.NewClientBuilder().WithScheme(managedIdentityScheme(t)).WithObjects(worker).Build()
 	handler := NewManagedAgentIdentityHandler(cl, namespace, "ctl-a")
-	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "researcher"}
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "researcher", ServiceAccountNamespace: namespace}
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"matrixUserId":"@researcher:example.org"}`))
 	req.SetPathValue("name", "researcher")
 	req = req.WithContext(context.WithValue(req.Context(), authpkg.CallerKeyForTest(), caller))

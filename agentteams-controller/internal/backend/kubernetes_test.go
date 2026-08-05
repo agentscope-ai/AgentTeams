@@ -412,7 +412,13 @@ func TestK8sStatus(t *testing.T) {
 				"agentteams.io/worker": "bob",
 			},
 		},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
+		},
 	})
 
 	result, err := b.Status(context.Background(), "bob")
@@ -433,9 +439,15 @@ func TestK8sStatus_ContainerFailureReasons(t *testing.T) {
 		wantMessage string
 	}{
 		{
-			name: "pending image pull backoff fails worker",
+			name: "image pull backoff fails despite unready diagnostic",
 			podStatus: corev1.PodStatus{
 				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type:    corev1.PodReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ContainersNotReady",
+					Message: "containers with unready status: [worker]",
+				}},
 				ContainerStatuses: []corev1.ContainerStatus{{
 					Name: "worker",
 					State: corev1.ContainerState{
@@ -449,6 +461,55 @@ func TestK8sStatus_ContainerFailureReasons(t *testing.T) {
 			wantStatus:  StatusFailed,
 			wantRaw:     "ImagePullBackOff",
 			wantMessage: `container worker: ImagePullBackOff: failed to pull image "registry.example.com/worker:missing": not found`,
+		},
+		{
+			name: "crash loop backoff fails despite unready diagnostic",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:    corev1.PodReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ContainersNotReady",
+					Message: "containers with unready status: [worker]",
+				}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CrashLoopBackOff",
+							Message: "back-off 5m0s restarting failed container=worker pod=agentteams-worker-test",
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusFailed,
+			wantRaw:     "CrashLoopBackOff",
+			wantMessage: "container worker: CrashLoopBackOff: back-off 5m0s restarting failed container=worker pod=agentteams-worker-test",
+		},
+		{
+			name: "nonzero terminated container fails despite unready diagnostic",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:    corev1.PodReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ContainersNotReady",
+					Message: "containers with unready status: [worker]",
+				}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 17,
+							Reason:   "Error",
+							Message:  "worker exited unexpectedly",
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusFailed,
+			wantRaw:     "Error",
+			wantMessage: "container worker: Error: worker exited unexpectedly",
 		},
 		{
 			name: "init container config error fails worker",
@@ -577,7 +638,13 @@ func TestK8sWithPrefix(t *testing.T) {
 				"agentteams.io/manager": "default",
 			},
 		},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
+		},
 	}
 	b := newTestK8sBackend(managerPod)
 
@@ -1422,10 +1489,10 @@ func TestPodReadyCondition(t *testing.T) {
 		wantReady   bool
 	}{
 		{
-			name:        "nil conditions",
+			name:        "nil conditions are not ready",
 			conditions:  nil,
 			wantMessage: "",
-			wantReady:   true,
+			wantReady:   false,
 		},
 		{
 			name: "Ready=True",
@@ -1452,12 +1519,12 @@ func TestPodReadyCondition(t *testing.T) {
 			wantReady:   false,
 		},
 		{
-			name: "Other conditions but no Ready",
+			name: "Other conditions but no Ready are not ready",
 			conditions: []corev1.PodCondition{
 				{Type: corev1.PodScheduled, Status: corev1.ConditionTrue},
 			},
 			wantMessage: "",
-			wantReady:   true,
+			wantReady:   false,
 		},
 	}
 	for _, tc := range cases {
@@ -1493,13 +1560,18 @@ func TestK8sStatus_ReadyCondition(t *testing.T) {
 			wantMessage: "",
 		},
 		{
-			name:     "Running + Ready=False with message",
+			name:     "Running + Ready=False ContainersNotReady remains starting",
 			podPhase: corev1.PodRunning,
 			conditions: []corev1.PodCondition{
-				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Message: "crash info"},
+				{
+					Type:    corev1.PodReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ContainersNotReady",
+					Message: "containers with unready status: [worker]",
+				},
 			},
-			wantStatus:  StatusFailed,
-			wantMessage: "crash info",
+			wantStatus:  StatusStarting,
+			wantMessage: "containers with unready status: [worker]",
 		},
 		{
 			name:     "Running + Ready=False without message",
@@ -1507,6 +1579,13 @@ func TestK8sStatus_ReadyCondition(t *testing.T) {
 			conditions: []corev1.PodCondition{
 				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Message: ""},
 			},
+			wantStatus:  StatusStarting,
+			wantMessage: "",
+		},
+		{
+			name:        "Running without Ready condition remains starting",
+			podPhase:    corev1.PodRunning,
+			conditions:  nil,
 			wantStatus:  StatusStarting,
 			wantMessage: "",
 		},

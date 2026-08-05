@@ -15,6 +15,7 @@ from agentteams_codex_worker.codex_client import (  # noqa: E402
     CodexAppServer,
     CodexPermissionDenied,
     CodexTimeout,
+    isolated_codex_environment,
 )
 
 
@@ -181,32 +182,43 @@ class CodexClientTest(unittest.TestCase):
             finally:
                 client.close()
 
-    def test_transient_mcp_config_forces_utf8_stdio(self) -> None:
+    def test_transient_mcp_config_uses_scoped_loopback_proxy(self) -> None:
         client = CodexAppServer(
             codex_command=sys.executable,
             mcp_server=Path("teamharness-server.py"),
         )
+        try:
+            command = client._command()
+            serialized = " ".join(command)
+            self.assertIn("agentteams_codex_runtime", serialized)
+            self.assertIn("mcp_proxy.py", serialized)
+            self.assertIn(
+                'mcp_servers.teamharness.enabled_tools=["health", "filesync", "artifact", "taskflow"]',
+                command,
+            )
+            self.assertIn(
+                'mcp_servers.teamharness.default_tools_approval_mode="approve"', command
+            )
+            self.assertIn("mcp_servers.teamharness.required=true", command)
+            self.assertNotIn("env_vars", serialized)
+            self.assertNotIn("AGENTTEAMS_WORKER_MATRIX_TOKEN", serialized)
+        finally:
+            client.close()
 
-        command = client._command()
-
-        self.assertIn('mcp_servers.teamharness.env.PYTHONUTF8="1"', command)
-        self.assertIn(
-            'mcp_servers.teamharness.env.PYTHONIOENCODING="utf-8"', command
+    def test_codex_environment_excludes_agentteams_credentials(self) -> None:
+        environment = isolated_codex_environment(
+            {
+                "PATH": "bin",
+                "CODEX_HOME": "codex-home",
+                "AGENTTEAMS_WORKER_MATRIX_TOKEN": "matrix-secret",
+                "AGENTTEAMS_FS_SECRET_KEY": "storage-secret",
+            }
         )
-        self.assertIn(
-            'mcp_servers.teamharness.enabled_tools=["health","filesync","artifact","taskflow"]',
-            command,
-        )
-        self.assertIn(
-            'mcp_servers.teamharness.default_tools_approval_mode="approve"', command
-        )
-        self.assertIn("mcp_servers.teamharness.required=true", command)
-        env_vars = next(
-            item
-            for item in command
-            if item.startswith("mcp_servers.teamharness.env_vars=")
-        )
-        self.assertIn("AGENTTEAMS_WORKER_MATRIX_TOKEN", env_vars)
+        self.assertEqual(environment["PATH"], "bin")
+        self.assertEqual(environment["CODEX_HOME"], "codex-home")
+        self.assertEqual(environment["PYTHONUTF8"], "1")
+        self.assertNotIn("AGENTTEAMS_WORKER_MATRIX_TOKEN", environment)
+        self.assertNotIn("AGENTTEAMS_FS_SECRET_KEY", environment)
 
     def test_streams_output_denies_approval_and_resumes_thread(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

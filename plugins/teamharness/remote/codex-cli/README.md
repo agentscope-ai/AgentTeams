@@ -1,7 +1,8 @@
 # AgentTeams Codex CLI Local Runtime
 
-This package runs Codex CLI as a host-local TeamHarness remote member. It does
-not create a Kubernetes Worker, add a CRD runtime, or copy Codex OAuth files.
+This package provides one role-neutral Codex app-server core plus host-local
+Worker and Manager bridges. It does not add a Controller runtime or copy Codex
+OAuth files.
 
 ## Runtime snapshot
 
@@ -52,15 +53,35 @@ mention its full Matrix user id. State under
 `~/.agentteams/codex-worker/<member>/` contains only the Matrix sync cursor,
 bounded event ids, and task-to-Codex-thread ids.
 
+## Manager runner
+
+The QwenPaw TeamHarness plugin can delegate Manager replies to the same Codex
+core. Give the Manager process and host runner the same random capability
+token, then enable the plugin middleware:
+
+```powershell
+$env:AGENTTEAMS_CODEX_MANAGER_ENABLED = "true"
+$env:AGENTTEAMS_CODEX_BROKER_TOKEN = "<random capability token>"
+python manager_run.py --broker-url http://127.0.0.1:8080 `
+  --workspace C:\src\manager-workspace
+```
+
+The runner polls `/teamharness/codex/executions/lease`, preserves one Codex
+thread per QwenPaw session, and returns completion to the originating reply.
+Add `--mcp-server <teamharness>/mcp/server.py` when the host runner has the
+Manager's TeamHarness environment. Manager executions use `read-only` and
+`approvalPolicy=never`; TeamHarness mutations remain explicit MCP calls.
+
 ## Safety
 
 - Codex runs with `workspace-write` and `approvalPolicy=never`.
 - App-server permission escalation requests are denied.
-- The transient TeamHarness MCP registration is required, forces UTF-8 stdio,
-  and exposes only `health`, `filesync`, `artifact`, and `taskflow`. Those four
-  packaged tools are pre-approved; other MCP servers keep their own policy.
-- Matrix and shared-storage credentials are forwarded by environment variable
-  name. Their values are not written to the Codex command line or runtime file.
+- The Codex child receives an allowlisted OS/proxy/login environment. Matrix,
+  storage, GitHub, and cloud credentials are not inherited.
+- A loopback-only MCP capability proxy owns TeamHarness credentials. Codex gets
+  a random short-lived capability token and only the role's approved MCP tools.
+- Worker MCP exposes `health`, `filesync`, `artifact`, and `taskflow`; Manager
+  additionally exposes coordination tools such as `message` and `projectflow`.
 - `auth.json` is used only by the user's existing `CODEX_HOME`; it is never
   copied, mounted, logged, or packaged.
 - Use a dedicated Git worktree when the source baseline must remain intact.

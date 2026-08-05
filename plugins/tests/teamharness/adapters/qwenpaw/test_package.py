@@ -1,11 +1,10 @@
+import hashlib
 import json
 import os
 import re
 import subprocess
-import sys
 import zipfile
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = REPO_ROOT / "plugins" / "teamharness" / "plugin.yaml"
@@ -51,6 +50,7 @@ def test_build_qwenpaw_native_plugin_package(tmp_path: Path) -> None:
         names = set(archive.namelist())
         assert f"{root}/plugin.json" in names
         assert f"{root}/plugin.py" in names
+        assert f"{root}/codex_broker.py" in names
         assert f"{root}/task_trace.py" in names
         assert f"{root}/teamharness/plugin.yaml" in names
         assert f"{root}/teamharness/trace.py" not in names
@@ -86,3 +86,19 @@ def test_build_qwenpaw_native_plugin_package(tmp_path: Path) -> None:
     assert "periodic-sync" not in manifest["meta"]["features"]
 
     assert manifest["min_version"] == "2.0.1"
+
+    first_hash = hashlib.sha256(zip_path.read_bytes()).digest()
+    subprocess.run(
+        ["ruby", str(BUILD_SCRIPT), str(MANIFEST)],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "OUT_DIR": str(tmp_path),
+            "PYTHONPYCACHEPREFIX": str(tmp_path / "pycache-second"),
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    assert hashlib.sha256(zip_path.read_bytes()).digest() == first_hash

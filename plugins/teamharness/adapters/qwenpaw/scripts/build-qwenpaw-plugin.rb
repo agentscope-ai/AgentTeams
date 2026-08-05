@@ -46,11 +46,31 @@ def prune_generated(path)
   end
 end
 
+def normalize_timestamps(path)
+  timestamp = Time.utc(2000, 1, 1, 0, 0, 0)
+  entries = Dir.glob((path / "**/*").to_s, File::FNM_DOTMATCH).sort.reverse
+  (entries + [path.to_s]).each do |entry|
+    File.utime(timestamp, timestamp, entry)
+  end
+end
+
+def normalize_text_line_endings(path)
+  extensions = %w[.json .md .py .rb .sh .txt .yaml .yml]
+  Dir.glob((path / "**/*").to_s, File::FNM_DOTMATCH).sort.each do |entry|
+    next unless File.file?(entry)
+    next unless extensions.include?(File.extname(entry).downcase)
+
+    content = File.binread(entry)
+    normalized = content.gsub("\r\n", "\n").gsub("\r", "\n")
+    File.binwrite(entry, normalized) unless content == normalized
+  end
+end
+
 def zip_dir(root, package_name, out_path)
   FileUtils.rm_f(out_path)
   if system("zip", "-v", out: File::NULL, err: File::NULL)
     Dir.chdir(root) do
-      system("zip", "-qry", out_path.to_s, package_name) || abort("zip failed")
+      system("zip", "-Xqry", out_path.to_s, package_name) || abort("zip failed")
     end
     return
   end
@@ -100,6 +120,7 @@ Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
   end
 
   copy_entry(adapter_root, staging, "plugin.py")
+  copy_entry(adapter_root, staging, "codex_broker.py")
   copy_entry(adapter_root, staging, "task_trace.py")
 
   qwenpaw_manifest = {
@@ -137,8 +158,10 @@ Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
   prune_generated(staging)
 
   validate = adapter_root / "scripts/validate-qwenpaw-plugin.rb"
+  normalize_text_line_endings(staging)
   system("ruby", validate.to_s, staging.to_s) || abort("qwenpaw plugin validation failed")
 
+  normalize_timestamps(staging)
   zip_dir(tmp_root, package_name, out_zip)
   FileUtils.cp(out_zip, stable_zip)
 end

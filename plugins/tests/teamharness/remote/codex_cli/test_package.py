@@ -49,6 +49,8 @@ class RuntimePackageTest(unittest.TestCase):
                 )
 
             self.assertTrue(any(name.endswith("runtime/run.py") for name in names))
+            self.assertTrue(any(name.endswith("runtime/manager_run.py") for name in names))
+            self.assertTrue(any(name.endswith("agentteams_codex_runtime/app_server.py") for name in names))
             self.assertTrue(any(name.endswith("teamharness/mcp/server.py") for name in names))
             self.assertTrue(any(name.endswith("teamharness/adapters/codex-cli/README.md") for name in names))
             self.assertFalse(any(name.endswith("auth.json") for name in names))

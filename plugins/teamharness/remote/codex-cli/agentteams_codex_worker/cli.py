@@ -6,16 +6,16 @@ import argparse
 import json
 import logging
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
-from typing import Sequence
+from collections.abc import Sequence
+from pathlib import Path
 
 from .codex_client import CodexAppServer, CodexError, resolve_codex_command
 from .config import ConfigError, RuntimeConfig
 from .matrix import MatrixClient, MatrixError
-from .security import Redactor
+from .security import Redactor, environment_secret_values
 from .worker import CodexWorkerBridge, StateStore
 
 
@@ -135,14 +135,15 @@ def run(args: argparse.Namespace) -> int:
     os.environ.setdefault("TEAMHARNESS_RUNTIME_CONFIG", str(args.runtime_config.resolve()))
     os.environ.setdefault("TEAMHARNESS_SHARED_DIR", str(workspace / "shared"))
 
-    redactor = Redactor([token])
+    secret_values = environment_secret_values()
+    redactor = Redactor(secret_values)
     matrix = MatrixClient(homeserver, token, config.matrix_user_id)
     codex = CodexAppServer(
         codex_command=args.codex_command,
         mcp_server=plugin_root / "mcp" / "server.py",
         handshake_timeout=args.handshake_timeout,
         turn_timeout=args.turn_timeout,
-        secret_values=[token],
+        secret_values=secret_values,
     )
     state = StateStore((args.state_dir or _state_dir(config)).resolve())
     bridge = CodexWorkerBridge(

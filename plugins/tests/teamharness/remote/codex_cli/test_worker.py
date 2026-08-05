@@ -45,6 +45,25 @@ class FakeCodex:
 
 
 class WorkerBridgeTest(unittest.TestCase):
+    def test_legacy_threads_migrate_to_shared_session_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            state_dir = Path(temp) / "state"
+            state_dir.mkdir()
+            (state_dir / "state.json").write_text(
+                '{"since":"cursor","threads":{"task-old":"thread-old"},"seenEvents":[]}\n',
+                encoding="utf-8",
+            )
+            state = StateStore(state_dir)
+            self.assertEqual(state.thread_for("task-old"), "thread-old")
+            self.assertNotIn(
+                "threads",
+                (state_dir / "state.json").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "thread-old",
+                (state_dir / "sessions.json").read_text(encoding="utf-8"),
+            )
+
     def test_executes_event_once_and_persists_only_non_secret_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

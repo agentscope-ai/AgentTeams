@@ -6,16 +6,17 @@ import hashlib
 import json
 import logging
 import os
-from pathlib import Path
 import tempfile
 import threading
+from pathlib import Path
 from typing import Any
+
+from agentteams_codex_runtime.journal import SessionJournal
 
 from .codex_client import CodexAppServer, CodexError, ExecutionResult
 from .config import RuntimeConfig
 from .matrix import AssignedTask, MatrixClient, MatrixError
 from .security import Redactor
-
 
 LOG = logging.getLogger(__name__)
 
@@ -29,6 +30,14 @@ class StateStore:
         self.directory.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._state = self._load()
+        self.sessions = SessionJournal(self.directory)
+        legacy_threads = self._state.pop("threads", {})
+        if isinstance(legacy_threads, dict):
+            for task_id, thread_id in legacy_threads.items():
+                if str(task_id) and str(thread_id) and not self.sessions.thread_for(str(task_id)):
+                    self.sessions.set_thread(str(task_id), str(thread_id))
+            if legacy_threads:
+                self._save()
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -74,17 +83,10 @@ class StateStore:
             self._save()
 
     def thread_for(self, task_id: str) -> str:
-        threads = self._state.get("threads")
-        return str(threads.get(task_id) or "") if isinstance(threads, dict) else ""
+        return self.sessions.thread_for(task_id)
 
     def set_thread(self, task_id: str, thread_id: str) -> None:
-        with self._lock:
-            threads = self._state.setdefault("threads", {})
-            if not isinstance(threads, dict):
-                threads = {}
-                self._state["threads"] = threads
-            threads[task_id] = thread_id
-            self._save()
+        self.sessions.set_thread(task_id, thread_id)
 
 
 def load_developer_instructions(plugin_root: Path) -> str:

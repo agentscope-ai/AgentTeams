@@ -71,6 +71,11 @@ thread per QwenPaw session, and returns completion to the originating reply.
 Add `--mcp-server <teamharness>/mcp/server.py` when the host runner has the
 Manager's TeamHarness environment. Manager executions use `read-only` and
 `approvalPolicy=never`; TeamHarness mutations remain explicit MCP calls.
+Set `AGENTTEAMS_MANAGER_MATRIX_TOKEN` for Manager MCP calls. The legacy
+`AGENTTEAMS_WORKER_MATRIX_TOKEN` variable remains a compatibility fallback.
+Manager and Team Leader roles may delegate, check, and cancel tasks; automatic
+delegation messages include the `TASK_ASSIGNED: <task-id>` marker consumed by
+Codex remote Workers.
 
 ## Safety
 

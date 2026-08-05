@@ -30,6 +30,8 @@ def _configured_token() -> str:
 def _text(value: Any) -> str:
     if isinstance(value, str):
         return value
+    if isinstance(value, (list, tuple)):
+        return "\n".join(text for item in value if (text := _text(item)))
     if isinstance(value, dict):
         if isinstance(value.get("text"), str):
             return str(value["text"])
@@ -44,7 +46,10 @@ def _text(value: Any) -> str:
 
 
 def _manager_prompt(agent: Any, input_kwargs: dict[str, Any]) -> str:
-    for name in ("msg", "message", "input"):
+    # AgentScope 1.x invokes reply middleware with ``inputs``. Keep the
+    # singular aliases for compatibility with older QwenPaw releases and
+    # third-party middleware wrappers.
+    for name in ("inputs", "msg", "message", "input"):
         prompt = _text(input_kwargs.get(name))
         if prompt:
             return prompt

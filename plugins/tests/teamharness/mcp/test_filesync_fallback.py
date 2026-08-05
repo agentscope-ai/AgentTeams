@@ -44,6 +44,54 @@ class FilesyncFallbackTest(unittest.TestCase):
             )
         self.assertEqual(command[0:2], ["mc", "mirror"])
 
+    def test_windows_unfiltered_directory_push_uses_recursive_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            local = Path(temp) / "shared" / "tasks" / "task-1"
+            command = server._filesync_directory_push_command(
+                local,
+                "mock/shared/tasks/task-1/",
+                [],
+                windows=True,
+            )
+        self.assertEqual(command[0:3], ["mc", "cp", "--recursive"])
+        self.assertEqual(command[3], str(local) + "/")
+        self.assertEqual(command[4:], ["mock/shared/tasks/"])
+
+    def test_posix_directory_push_keeps_mirror(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            command = server._filesync_directory_push_command(
+                Path(temp) / "shared" / "tasks" / "task-1",
+                "mock/shared/tasks/task-1/",
+                [],
+                windows=False,
+            )
+        self.assertEqual(command[0:2], ["mc", "mirror"])
+
+    def test_windows_filtered_push_uses_file_level_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            local = Path(temp) / "shared" / "tasks" / "task-1"
+            (local / "base").mkdir(parents=True)
+            (local / "meta.json").write_text("{}", encoding="utf-8")
+            (local / "result.md").write_text("done", encoding="utf-8")
+            (local / "spec.md").write_text("spec", encoding="utf-8")
+            (local / "base" / "old.txt").write_text("old", encoding="utf-8")
+
+            commands = server._filesync_windows_filtered_push_commands(
+                local,
+                "mock/shared/tasks/task-1/",
+                ["spec.md", "base/"],
+            )
+
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(
+            [command[-1] for command in commands],
+            [
+                "mock/shared/tasks/task-1/meta.json",
+                "mock/shared/tasks/task-1/result.md",
+            ],
+        )
+        self.assertTrue(all(command[:2] == ["mc", "cp"] for command in commands))
+
     def test_missing_mc_returns_structured_error_without_stopping_server(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             arguments = {

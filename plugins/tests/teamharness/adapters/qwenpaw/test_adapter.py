@@ -161,7 +161,14 @@ def test_codex_manager_middleware_round_trip(monkeypatch):
             _collect_async_generator(
                 middleware.on_reply(
                     agent=agent,
-                    input_kwargs={"message": "coordinate this task"},
+                    input_kwargs={
+                        "inputs": Msg(
+                            role="user",
+                            content=[
+                                TextBlock(type="text", text="coordinate this task")
+                            ],
+                        ),
+                    },
                     next_handler=next_handler,
                 )
             )
@@ -178,6 +185,25 @@ def test_codex_manager_middleware_round_trip(monkeypatch):
     assert len(items) == 4
     assert items[1].delta == "delegated by Codex"
     assert items[-1].content[0].text == "delegated by Codex"
+
+
+def test_codex_manager_prompt_accepts_agent_scope_input_list():
+    module = load_plugin()
+    broker = module._load_codex_broker_module()
+
+    class TextBlock:
+        def __init__(self, text):
+            self.text = text
+
+    class Msg:
+        def __init__(self, text):
+            self.content = [TextBlock(text)]
+
+    prompt = broker._manager_prompt(
+        object(),
+        {"inputs": [Msg("first"), Msg("delegate the exact task")]},
+    )
+    assert prompt == "first\ndelegate the exact task"
 
 
 def test_codex_broker_releases_expired_lease(monkeypatch):

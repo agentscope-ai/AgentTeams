@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Any
 
 from deepagents_agentteams.approvals import MCPApprovalRule
@@ -352,13 +353,13 @@ def _duration_seconds(value: object, field: str) -> int:
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{field} must be a positive duration")
     position = 0
-    seconds = 0.0
+    seconds = Fraction(0)
     unit_seconds = {"h": 3600, "m": 60, "s": 1}
     for match in _DURATION_PART.finditer(value):
         if match.start() != position:
             raise ConfigError(f"{field} must use h, m, or s duration units")
-        seconds += float(match.group("value")) * unit_seconds[match.group("unit")]
+        seconds += Fraction(match.group("value")) * unit_seconds[match.group("unit")]
         position = match.end()
-    if position != len(value) or seconds <= 0 or not seconds.is_integer():
+    if position != len(value) or seconds <= 0 or seconds.denominator != 1:
         raise ConfigError(f"{field} must resolve to a positive whole number of seconds")
-    return int(seconds)
+    return seconds.numerator

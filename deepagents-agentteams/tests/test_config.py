@@ -257,6 +257,7 @@ class RuntimeConfigTests(unittest.TestCase):
             "6h30m": 6 * 60 * 60 + 30 * 60,
             "0.5m": 30,
             "0.5s0.5s": 1,
+            "0.1s0.1s0.1s0.1s0.1s0.1s0.1s0.1s0.1s0.1s": 1,
         }
         for duration, want_seconds in accepted.items():
             with self.subTest(duration=duration):

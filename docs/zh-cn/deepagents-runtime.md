@@ -58,9 +58,13 @@ DeepAgents 不只需要新增的 Worker/Runner 镜像，还需要包含对应 CR
 
 ```bash
 export AGENTTEAMS_LOCAL_TAG="${AGENTTEAMS_LOCAL_TAG:-dev-$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)}"
+export AGENTTEAMS_OPENCLAW_BASE_IMAGE="${AGENTTEAMS_OPENCLAW_BASE_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base}"
+export AGENTTEAMS_OPENCLAW_BASE_VERSION="${AGENTTEAMS_OPENCLAW_BASE_VERSION:-20260423-8359cbc}"
 make build-agentteams-controller build-manager \
   build-deepagents-worker build-deepagents-runner \
-  VERSION="${AGENTTEAMS_LOCAL_TAG}"
+  VERSION="${AGENTTEAMS_LOCAL_TAG}" \
+  OPENCLAW_BASE_IMAGE="${AGENTTEAMS_OPENCLAW_BASE_IMAGE}" \
+  OPENCLAW_BASE_VERSION="${AGENTTEAMS_OPENCLAW_BASE_VERSION}"
 ```
 
 推荐将四张同版本镜像推送到三台节点都能访问的 Registry。以下命令适用于节点架构与构建机一致的局域网开发集群：
@@ -83,7 +87,7 @@ make push-native-manager push-native-deepagents-worker \
 如果三节点集群尚无私有 Registry，沿用主部署指南的 containerd 导入方式。把同一不可变 Tag 的 Controller、Manager、DeepAgents Worker 和 Runner 一起归档，并导入每个可调度节点；下面的节点名称只是示例：
 
 ```bash
-export AGENTTEAMS_DEEPAGENTS_ARCHIVE="/tmp/agentteams-deepagents-${AGENTTEAMS_LOCAL_TAG}.tar"
+export AGENTTEAMS_DEEPAGENTS_ARCHIVE="/var/tmp/agentteams-deepagents-${AGENTTEAMS_LOCAL_TAG}.tar"
 
 docker save \
   "agentteams/agentteams-controller:${AGENTTEAMS_LOCAL_TAG}" \
@@ -92,15 +96,28 @@ docker save \
   "agentteams/deepagents-runner:${AGENTTEAMS_LOCAL_TAG}" \
   -o "${AGENTTEAMS_DEEPAGENTS_ARCHIVE}"
 
-for AGENTTEAMS_NODE in agent2 agent3; do
-  scp "${AGENTTEAMS_DEEPAGENTS_ARCHIVE}" \
-    "${AGENTTEAMS_NODE}:${AGENTTEAMS_DEEPAGENTS_ARCHIVE}"
-  ssh -t "${AGENTTEAMS_NODE}" \
-    "sudo ctr -n k8s.io images import '${AGENTTEAMS_DEEPAGENTS_ARCHIVE}'"
-done
+export AGENTTEAMS_DEEPAGENTS_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_DEEPAGENTS_ARCHIVE}" | awk '{print $1}')"
+
+(
+  set -e
+  for AGENTTEAMS_NODE in agent2@10.13.36.138 agent3@10.13.36.173; do
+    scp "${AGENTTEAMS_DEEPAGENTS_ARCHIVE}" \
+      "${AGENTTEAMS_NODE}:${AGENTTEAMS_DEEPAGENTS_ARCHIVE}"
+    ssh "${AGENTTEAMS_NODE}" \
+      "printf '%s  %s\n' '${AGENTTEAMS_DEEPAGENTS_ARCHIVE_SHA256}' '${AGENTTEAMS_DEEPAGENTS_ARCHIVE}' | sha256sum -c -"
+    ssh -t "${AGENTTEAMS_NODE}" \
+      "sudo ctr -n k8s.io images import '${AGENTTEAMS_DEEPAGENTS_ARCHIVE}'"
+    ssh -t "${AGENTTEAMS_NODE}" \
+      "sudo ctr -n k8s.io images list | grep '${AGENTTEAMS_LOCAL_TAG}'"
+    ssh "${AGENTTEAMS_NODE}" \
+      "rm -- '${AGENTTEAMS_DEEPAGENTS_ARCHIVE}'"
+  done
+)
 ```
 
-无 Registry 路径下，把 Helm Controller 的 `image.pullPolicy` 设为 `IfNotPresent`（或严格离线时设为 `Never`）；Controller 创建的 Manager/Worker/Runner 使用 `IfNotPresent`。因此必须把四张镜像导入所有可能承载这些 Pod 的节点，并确保 repository 与 Tag 和 Helm 渲染结果完全一致。
+归档应放在 `/var/tmp` 等磁盘文件系统，不要假设节点 `/tmp` 有足够空间；部分 kubeadm 节点会把 `/tmp` 挂载为容量较小的 `tmpfs`。上述循环会先校验 SHA-256，并且只有导入和标签检查都成功后才删除 worker 上的临时归档。
+
+无 Registry 路径下，把 Helm Controller 的 `image.pullPolicy` 设为 `IfNotPresent`（或严格离线时设为 `Never`）；Controller 创建的 Manager/Worker/Runner 使用 `IfNotPresent`。因此必须把四张镜像导入所有可能承载这些 Pod 的节点，并确保 repository、Tag 和 digest 与 Helm 渲染结果完全一致。
 
 此时把后续 values 中的两个 DeepAgents repository 改为本地导入名称：
 

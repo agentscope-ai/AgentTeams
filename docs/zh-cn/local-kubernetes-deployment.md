@@ -160,7 +160,7 @@ kubectl get storageclass "${AGENTTEAMS_STORAGE_CLASS}"
 
 将 `storage-class-name` 替换为真实名称。命令找不到该 StorageClass 时立即停止，不要继续执行 Helm 安装。
 
-建议先用独立测试 PVC 完成绑定、挂载、读写、Pod 重建和节点故障验证。AgentTeams 默认会为 Tuwunel 和 MinIO 各申请 `10Gi`；确认所选方案有至少 `20Gi` 可用容量，并为备份和增长预留空间。
+建议先用独立测试 PVC 完成绑定、挂载、读写、Pod 重建和节点故障验证。本次启用 DeepAgents 后，Tuwunel、MinIO 和内置 PostgreSQL 默认各申请 `10Gi`，每个 DeepAgents Worker 另申请 `1Gi` 状态卷；确认所选方案有足够容量，并为备份和增长预留空间。
 
 ### 4.3 检查镜像与外部服务连通性
 
@@ -175,7 +175,7 @@ ssh agent3@10.13.36.173 'sudo crictl info >/dev/null && sudo crictl images'
 
 ## 5. 从当前源码构建镜像
 
-### 5.1 构建默认 OpenClaw Manager 和 Worker
+### 5.1 构建默认 OpenClaw 与 DeepAgents 镜像
 
 使用包含 Git 提交和 UTC 时间的不可变 Tag，避免两个不同构建复用同一标签：
 
@@ -184,18 +184,26 @@ cd /home/agent1/CsAgnet
 
 export DOCKER_BUILDKIT=1
 export AGENTTEAMS_LOCAL_TAG="dev-$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)"
+export AGENTTEAMS_OPENCLAW_BASE_IMAGE="higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base"
+export AGENTTEAMS_OPENCLAW_BASE_VERSION="20260423-8359cbc"
 
 make VERSION="${AGENTTEAMS_LOCAL_TAG}" \
+  OPENCLAW_BASE_IMAGE="${AGENTTEAMS_OPENCLAW_BASE_IMAGE}" \
+  OPENCLAW_BASE_VERSION="${AGENTTEAMS_OPENCLAW_BASE_VERSION}" \
   build-manager \
-  build-worker
+  build-worker \
+  build-deepagents-worker \
+  build-deepagents-runner
 ```
 
-`build-manager` 会先构建 Controller，因此应得到：
+这里显式使用项目 CI 已验证的固定 OpenClaw 基础镜像路径和 Tag，避免远程仓库路径或浮动 `latest` 造成不可复现构建。`build-manager` 会先构建 Controller，因此应得到：
 
 ```text
 agentteams/agentteams-controller:<tag>
 agentteams/manager:<tag>
 agentteams/worker-agent:<tag>
+agentteams/deepagents-worker:<tag>
+agentteams/deepagents-runner:<tag>
 ```
 
 检查镜像名、Tag 和架构：
@@ -205,6 +213,8 @@ docker image inspect \
   "agentteams/agentteams-controller:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/manager:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/worker-agent:${AGENTTEAMS_LOCAL_TAG}" \
+  "agentteams/deepagents-worker:${AGENTTEAMS_LOCAL_TAG}" \
+  "agentteams/deepagents-runner:${AGENTTEAMS_LOCAL_TAG}" \
   --format '{{.RepoTags}} {{.Architecture}}'
 ```
 
@@ -238,7 +248,7 @@ make VERSION="${AGENTTEAMS_LOCAL_TAG}" \
   build-qwenpaw-worker
 ```
 
-Manager 当前只选择 OpenClaw 或 CoPaw；Hermes、OpenHuman 和 QwenPaw 只用作 Worker。可选镜像也必须按下一节导入两个 worker。
+Manager 当前只选择 OpenClaw 或 CoPaw；DeepAgents、Hermes、OpenHuman 和 QwenPaw 只用作 Worker。本次部署已在 5.1 节构建 DeepAgents；其它可选镜像也必须按下一节导入两个 worker。
 
 ## 6. 将镜像导入 agent2 与 agent3
 
@@ -253,6 +263,8 @@ docker save \
   "agentteams/agentteams-controller:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/manager:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/worker-agent:${AGENTTEAMS_LOCAL_TAG}" \
+  "agentteams/deepagents-worker:${AGENTTEAMS_LOCAL_TAG}" \
+  "agentteams/deepagents-runner:${AGENTTEAMS_LOCAL_TAG}" \
   -o "${AGENTTEAMS_IMAGE_ARCHIVE}"
 
 ls -lh "${AGENTTEAMS_IMAGE_ARCHIVE}"
@@ -290,7 +302,7 @@ export AGENTTEAMS_IMAGE_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}
 
 必须使用 `k8s.io` namespace；导入到 containerd 的默认 namespace 后，kubelet 看不到镜像。
 
-再分别核对三张镜像：
+再分别核对五张镜像：
 
 ```bash
 for AGENTTEAMS_NODE in agent2@10.13.36.138 agent3@10.13.36.173; do
@@ -332,7 +344,10 @@ helm lint ./helm/agentteams \
   --set-string credentials.adminPassword=dummy-password \
   --set-string gateway.publicURL="${AGENTTEAMS_GATEWAY_PUBLIC_URL}" \
   --set-string matrix.tuwunel.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
-  --set-string storage.minio.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}"
+  --set-string storage.minio.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
+  --set deepagents.enabled=true \
+  --set-string deepagents.state.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
+  --set-string deepagents.postgresql.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}"
 ```
 
 静态渲染完整安装参数：
@@ -346,6 +361,11 @@ helm template "${AGENTTEAMS_RELEASE}" ./helm/agentteams \
   --set-string gateway.publicURL="${AGENTTEAMS_GATEWAY_PUBLIC_URL}" \
   --set-string matrix.tuwunel.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
   --set-string storage.minio.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
+  --set deepagents.enabled=true \
+  --set-string deepagents.state.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
+  --set-string deepagents.postgresql.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
+  --set-string deepagents.runnerImage.repository=agentteams/deepagents-runner \
+  --set-string deepagents.runnerImage.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --set-string controller.image.repository=agentteams/agentteams-controller \
   --set-string controller.image.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --set-string controller.image.pullPolicy=Never \
@@ -355,17 +375,19 @@ helm template "${AGENTTEAMS_RELEASE}" ./helm/agentteams \
   --set-string worker.defaultRuntime=openclaw \
   --set-string worker.defaultImage.openclaw.repository=agentteams/worker-agent \
   --set-string worker.defaultImage.openclaw.tag="${AGENTTEAMS_LOCAL_TAG}" \
+  --set-string worker.defaultImage.deepagents.repository=agentteams/deepagents-worker \
+  --set-string worker.defaultImage.deepagents.tag="${AGENTTEAMS_LOCAL_TAG}" \
   > /tmp/agentteams-rendered.yaml
 ```
 
 检查关键值：
 
 ```bash
-grep -nE 'storageClassName:|image:|imagePullPolicy:|AGENTTEAMS_MANAGER_SPEC|AGENTTEAMS_WORKER_IMAGE' \
+grep -nE 'storageClassName:|image:|imagePullPolicy:|AGENTTEAMS_MANAGER_SPEC|AGENTTEAMS_(WORKER_IMAGE|DEEPAGENTS_(WORKER|RUNNER)_IMAGE)' \
   /tmp/agentteams-rendered.yaml
 ```
 
-只有 Controller Deployment 和复用 Controller 镜像的 Helm Hook 支持 `controller.image.pullPolicy=Never`。Chart 没有 `manager.image.pullPolicy` 或 `worker.defaultImage.*.pullPolicy`；Controller 创建的 Manager/Worker Pod 使用 `IfNotPresent`。因此必须依靠第 6 节确保两个 worker 预先存在准确镜像。
+只有 Controller Deployment 和复用 Controller 镜像的 Helm Hook 支持 `controller.image.pullPolicy=Never`。Chart 没有 `manager.image.pullPolicy`、`worker.defaultImage.*.pullPolicy` 或 Runner 独立 pullPolicy；Controller 创建的 Manager/Worker/Runner Pod 使用 `IfNotPresent`。因此必须依靠第 6 节确保两个 worker 预先存在准确镜像。
 
 ## 8. 配置 LLM 并安装
 
@@ -416,6 +438,11 @@ helm upgrade --install "${AGENTTEAMS_RELEASE}" ./helm/agentteams \
   --set-string gateway.publicURL="${AGENTTEAMS_GATEWAY_PUBLIC_URL}" \
   --set-string matrix.tuwunel.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
   --set-string storage.minio.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
+  --set deepagents.enabled=true \
+  --set-string deepagents.state.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
+  --set-string deepagents.postgresql.persistence.storageClassName="${AGENTTEAMS_STORAGE_CLASS}" \
+  --set-string deepagents.runnerImage.repository=agentteams/deepagents-runner \
+  --set-string deepagents.runnerImage.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --set-string controller.image.repository=agentteams/agentteams-controller \
   --set-string controller.image.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --set-string controller.image.pullPolicy=Never \
@@ -425,6 +452,8 @@ helm upgrade --install "${AGENTTEAMS_RELEASE}" ./helm/agentteams \
   --set-string worker.defaultRuntime=openclaw \
   --set-string worker.defaultImage.openclaw.repository=agentteams/worker-agent \
   --set-string worker.defaultImage.openclaw.tag="${AGENTTEAMS_LOCAL_TAG}" \
+  --set-string worker.defaultImage.deepagents.repository=agentteams/deepagents-worker \
+  --set-string worker.defaultImage.deepagents.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --timeout 15m
 ```
 
@@ -452,7 +481,7 @@ kubectl get events -n "${AGENTTEAMS_NAMESPACE}" \
   --sort-by=.metadata.creationTimestamp | tail -80
 ```
 
-两个 PVC 必须为 `Bound`。任何 PVC 长期 `Pending`、Pod 因 `ErrImageNeverPull`、`ImagePullBackOff` 或资源不足而无法调度时，都应先修复根因再继续。
+创建 DeepAgents Worker 前，Tuwunel、MinIO 和 PostgreSQL 三个 PVC 必须为 `Bound`；Worker 创建后还会出现其专属状态 PVC。任何 PVC 长期 `Pending`、Pod 因 `ErrImageNeverPull`、`ImagePullBackOff` 或资源不足而无法调度时，都应先修复根因再继续。
 
 ### 9.2 等待基础设施与 Controller
 
@@ -461,6 +490,9 @@ kubectl rollout status statefulset/agentteams-tuwunel \
   -n "${AGENTTEAMS_NAMESPACE}" --timeout=10m
 
 kubectl rollout status statefulset/agentteams-minio \
+  -n "${AGENTTEAMS_NAMESPACE}" --timeout=10m
+
+kubectl rollout status statefulset/agentteams-deepagents-postgresql \
   -n "${AGENTTEAMS_NAMESPACE}" --timeout=10m
 
 kubectl wait --for=condition=Available \
@@ -602,6 +634,87 @@ kubectl logs -n "${AGENTTEAMS_NAMESPACE}" \
 - Element 出现对应房间；
 - Worker 能接收消息并通过 Higress 调用模型。
 
+### 11.3 创建并验证 DeepAgents Worker
+
+确认内置 PostgreSQL 和 checkpoint migration 已就绪：
+
+```bash
+kubectl rollout status statefulset/agentteams-deepagents-postgresql \
+  -n "${AGENTTEAMS_NAMESPACE}" --timeout=10m
+
+kubectl logs deployment/agentteams-controller \
+  -n "${AGENTTEAMS_NAMESPACE}" \
+  -c deepagents-checkpoint-migrate --tail=100
+```
+
+创建使用 sandbox execution 的 DeepAgents Worker。不要在 CR 中写入 Matrix、Higress、MinIO 或 PostgreSQL 凭据：
+
+```bash
+kubectl apply -n "${AGENTTEAMS_NAMESPACE}" -f - <<EOF
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: deep-researcher
+  labels:
+    agentteams.io/controller: agentteams-controller
+spec:
+  model: ${AGENTTEAMS_MODEL:-gpt-5.4}
+  runtime: deepagents
+  identity: |
+    - Name: Deep Researcher
+    - Specialization: evidence-based research and controlled local execution
+  state: Running
+  runtimeConfig:
+    deepagents:
+      approvals:
+        fileWrites: required
+        mcpDefault: required
+      execution:
+        mode: sandbox
+        idleTimeout: 5m
+        maxLifetime: 30m
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+EOF
+```
+
+等待 Worker Pod 与状态 PVC 收敛，并确认 checkpoint Secret 只通过 `SecretKeyRef` 注入：
+
+```bash
+kubectl get worker deep-researcher -n "${AGENTTEAMS_NAMESPACE}" -w
+
+kubectl get pod,pvc -n "${AGENTTEAMS_NAMESPACE}" \
+  -l agentteams.io/worker=deep-researcher -o wide
+
+kubectl get pod -n "${AGENTTEAMS_NAMESPACE}" \
+  -l agentteams.io/worker=deep-researcher -o yaml \
+  | grep -nE 'AGENTTEAMS_CHECKPOINT_(DSN|AES_KEY)|secretKeyRef:'
+```
+
+在 Element 的 Deep Researcher Personal Room 中，由登录的 Human admin 发送一条要求使用 `execute` 在 `/workspace` 创建测试文件的任务。`execute` 无论其它策略如何都必须中断并请求 Human 审批；在同一 Matrix thread 回复 `approve 1` 后观察：
+
+```bash
+kubectl get executionsandbox,pod,service,networkpolicy \
+  -n "${AGENTTEAMS_NAMESPACE}" \
+  -l agentteams.io/worker=deep-researcher -w
+```
+
+验收要求：
+
+- Agent 身份回复审批命令会被拒绝，任务发起者 Human admin 可以批准；
+- Runner Pod 使用 `agentteams/deepagents-runner:${AGENTTEAMS_LOCAL_TAG}`、UID/GID `65532:65532`，且 `automountServiceAccountToken=false`；
+- Runner 不包含 Matrix、Higress、MinIO、PostgreSQL 凭据；
+- 命令只在 Runner 的 `/workspace` 执行，变更清单校验通过后才写回 MinIO；
+- 相同 request ID 不会重复执行命令；
+- 空闲超过 `5m` 或总生命周期超过 `30m` 后，`ExecutionSandbox` 及其 Pod、Service、NetworkPolicy 被 Controller 回收，Worker 与 checkpoint 保留。
+
+更完整的策略、外部 PostgreSQL 和故障排查说明见[《DeepAgents Worker Runtime》](deepagents-runtime.md)。
+
 ## 12. 运行时选择
 
 ### 12.1 CoPaw Manager
@@ -620,9 +733,9 @@ Runtime 切换会重建 Manager Pod，但 Matrix 身份、CR 和对象存储数�
 
 ### 12.2 其他 Worker Runtime
 
-CoPaw、Hermes、OpenHuman 或 QwenPaw Worker 也必须先把对应镜像导入两个 worker。随后可设置 Chart 默认 Runtime，或直接在 Worker CR 的 `spec.runtime` 和 `spec.image` 中指定准确镜像。
+DeepAgents 已按 11.3 节启用。CoPaw、Hermes、OpenHuman 或 QwenPaw Worker 也必须先把对应镜像导入两个 worker。随后可设置 Chart 默认 Runtime，或直接在 Worker CR 的 `spec.runtime` 和 `spec.image` 中指定准确镜像。
 
-不要把 Manager Runtime 设置为 Hermes、OpenHuman 或 QwenPaw；Manager 启动入口当前只支持 OpenClaw 和 CoPaw。
+不要把 Manager Runtime 设置为 DeepAgents、Hermes、OpenHuman 或 QwenPaw；Manager 启动入口当前只支持 OpenClaw 和 CoPaw。
 
 ## 13. 日常运维与升级
 
@@ -666,21 +779,40 @@ cd /home/agent1/CsAgnet
 git pull --ff-only
 
 export AGENTTEAMS_LOCAL_TAG="dev-$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)"
-make VERSION="${AGENTTEAMS_LOCAL_TAG}" build-manager build-worker
+export AGENTTEAMS_OPENCLAW_BASE_IMAGE="${AGENTTEAMS_OPENCLAW_BASE_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base}"
+export AGENTTEAMS_OPENCLAW_BASE_VERSION="${AGENTTEAMS_OPENCLAW_BASE_VERSION:-20260423-8359cbc}"
+make VERSION="${AGENTTEAMS_LOCAL_TAG}" \
+  OPENCLAW_BASE_IMAGE="${AGENTTEAMS_OPENCLAW_BASE_IMAGE}" \
+  OPENCLAW_BASE_VERSION="${AGENTTEAMS_OPENCLAW_BASE_VERSION}" \
+  build-manager build-worker \
+  build-deepagents-worker build-deepagents-runner
 
-export AGENTTEAMS_IMAGE_ARCHIVE="/tmp/agentteams-images-${AGENTTEAMS_LOCAL_TAG}.tar"
+export AGENTTEAMS_IMAGE_ARCHIVE="/var/tmp/agentteams-images-${AGENTTEAMS_LOCAL_TAG}.tar"
 docker save \
   "agentteams/agentteams-controller:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/manager:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/worker-agent:${AGENTTEAMS_LOCAL_TAG}" \
+  "agentteams/deepagents-worker:${AGENTTEAMS_LOCAL_TAG}" \
+  "agentteams/deepagents-runner:${AGENTTEAMS_LOCAL_TAG}" \
   -o "${AGENTTEAMS_IMAGE_ARCHIVE}"
 
-for AGENTTEAMS_NODE in agent2@10.13.36.138 agent3@10.13.36.173; do
-  scp "${AGENTTEAMS_IMAGE_ARCHIVE}" \
-    "${AGENTTEAMS_NODE}:${AGENTTEAMS_IMAGE_ARCHIVE}"
-  ssh -t "${AGENTTEAMS_NODE}" \
-    "sudo ctr -n k8s.io images import '${AGENTTEAMS_IMAGE_ARCHIVE}'"
-done
+export AGENTTEAMS_IMAGE_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}" | awk '{print $1}')"
+
+(
+  set -e
+  for AGENTTEAMS_NODE in agent2@10.13.36.138 agent3@10.13.36.173; do
+    scp "${AGENTTEAMS_IMAGE_ARCHIVE}" \
+      "${AGENTTEAMS_NODE}:${AGENTTEAMS_IMAGE_ARCHIVE}"
+    ssh "${AGENTTEAMS_NODE}" \
+      "printf '%s  %s\n' '${AGENTTEAMS_IMAGE_ARCHIVE_SHA256}' '${AGENTTEAMS_IMAGE_ARCHIVE}' | sha256sum -c -"
+    ssh -t "${AGENTTEAMS_NODE}" \
+      "sudo ctr -n k8s.io images import '${AGENTTEAMS_IMAGE_ARCHIVE}'"
+    ssh -t "${AGENTTEAMS_NODE}" \
+      "sudo ctr -n k8s.io images list | grep '${AGENTTEAMS_LOCAL_TAG}'"
+    ssh "${AGENTTEAMS_NODE}" \
+      "rm -- '${AGENTTEAMS_IMAGE_ARCHIVE}'"
+  done
+)
 ```
 
 先备份 MinIO 与 Tuwunel 数据，再升级 Chart 和 Controller：
@@ -695,6 +827,8 @@ helm upgrade "${AGENTTEAMS_RELEASE}" ./helm/agentteams \
   --set-string controller.image.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --set-string manager.image.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --set-string worker.defaultImage.openclaw.tag="${AGENTTEAMS_LOCAL_TAG}" \
+  --set-string worker.defaultImage.deepagents.tag="${AGENTTEAMS_LOCAL_TAG}" \
+  --set-string deepagents.runnerImage.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --timeout 15m
 ```
 
@@ -712,6 +846,14 @@ Helm 中的 Worker 默认镜像主要影响新建 Worker。已有 Worker 需要�
 kubectl patch worker alice -n "${AGENTTEAMS_NAMESPACE}" \
   --type=merge \
   -p "{\"spec\":{\"image\":\"agentteams/worker-agent:${AGENTTEAMS_LOCAL_TAG}\"}}"
+```
+
+DeepAgents Worker 同样需要逐个更新，例如：
+
+```bash
+kubectl patch worker deep-researcher -n "${AGENTTEAMS_NAMESPACE}" \
+  --type=merge \
+  -p "{\"spec\":{\"image\":\"agentteams/deepagents-worker:${AGENTTEAMS_LOCAL_TAG}\"}}"
 ```
 
 CRD 位于 Chart 的 `crds/` 目录，Helm 不会像普通模板一样升级已存在 CRD。Schema 变化时应先审阅差异，并按发布说明单独应用。

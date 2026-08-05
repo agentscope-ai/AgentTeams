@@ -21,6 +21,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
+	"sigs.k8s.io/yaml"
 )
 
 func newTeamTestClient(t *testing.T, objs ...client.Object) client.Client {
@@ -626,6 +627,78 @@ func TestDeployTeamRuntimeConfigsProjectsDeepAgentsRoster(t *testing.T) {
 		}) {
 			t.Fatalf("DeepAgents team projection missing global agent identities: %#v", req.AgentUserIDs)
 		}
+	}
+}
+
+func TestDeployTeamRuntimeConfigsRefreshesDefaultDeepAgentsEdgeIdentitySnapshot(t *testing.T) {
+	edgeMode := v1beta1.DeployModeEdge
+	worker := v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "default", Generation: 2},
+		Spec: v1beta1.WorkerSpec{
+			DeployMode: &edgeMode,
+			Model:      "qwen-max",
+		},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@researcher:matrix.local",
+			RoomID:       "!researcher:matrix.local",
+		},
+	}
+	team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "research", Namespace: "default"}}
+	store := ossfake.NewMemory()
+	if err := store.PutObject(context.Background(), "agents/researcher/runtime/runtime.yaml", []byte(`
+apiVersion: agentteams.io/v1beta1
+kind: MemberRuntimeConfig
+member:
+  runtimeName: researcher
+  runtime: deepagents
+matrix:
+  agentUserIds:
+    - "@stale:matrix.local"
+desired:
+  state: Running
+storage: {}
+credentials: {}
+`)); err != nil {
+		t.Fatal(err)
+	}
+	deployer := service.NewDeployer(service.DeployerConfig{OSS: store, MatrixDomain: "matrix.local"})
+	r := &TeamReconciler{
+		Client: newTeamTestClient(t,
+			worker.DeepCopy(),
+			&v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "default"},
+				Status:     v1beta1.WorkerStatus{MatrixUserID: "@unrelated:matrix.local"},
+			},
+			&v1beta1.Manager{
+				ObjectMeta: metav1.ObjectMeta{Name: "manager", Namespace: "default"},
+				Status:     v1beta1.ManagerStatus{MatrixUserID: "@manager:matrix.local"},
+			},
+		),
+		Deployer:       deployer,
+		DefaultRuntime: backend.RuntimeDeepAgents,
+	}
+
+	err := r.deployTeamRuntimeConfigs(context.Background(), team, []teamWorkerMember{{
+		ref:         v1beta1.TeamWorkerRef{Name: "researcher", Role: "team_leader"},
+		runtimeName: "researcher",
+		worker:      worker,
+	}}, "researcher", "research", "researcher", &service.TeamRoomResult{})
+	if err != nil {
+		t.Fatalf("deployTeamRuntimeConfigs: %v", err)
+	}
+	payload, err := store.GetObject(context.Background(), "agents/researcher/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(payload, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, payload)
+	}
+	matrix := doc["matrix"].(map[string]any)
+	if got := matrix["agentUserIds"]; !reflect.DeepEqual(got, []any{
+		"@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+	}) {
+		t.Fatalf("matrix.agentUserIds=%#v, want refreshed sorted managed identities", got)
 	}
 }
 

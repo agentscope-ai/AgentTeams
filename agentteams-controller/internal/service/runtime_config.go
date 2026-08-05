@@ -386,6 +386,7 @@ func (d *Deployer) deepAgentsAgentUserIDs(values []string) []string {
 func memberRuntimeConfigUsesDeepAgents(doc memberRuntimeConfigDocument, req MemberRuntimeConfigDeployRequest) bool {
 	return strings.EqualFold(strings.TrimSpace(req.Runtime), "deepagents") ||
 		strings.EqualFold(strings.TrimSpace(req.Spec.Runtime), "deepagents") ||
+		strings.EqualFold(strings.TrimSpace(doc.Member.Runtime), "deepagents") ||
 		(doc.Desired.RuntimeConfig != nil && doc.Desired.RuntimeConfig.DeepAgents != nil)
 }
 

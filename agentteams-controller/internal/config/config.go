@@ -18,6 +18,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 )
 
 type Config struct {
@@ -95,8 +96,9 @@ type Config struct {
 	K8sWorkerCPU    string
 	K8sWorkerMemory string
 
-	DeepAgentsRunnerImage           string
-	DeepAgentsSandboxEgressCeilings []v1beta1.DeepAgentsEgressRule
+	DeepAgentsRunnerImage             string
+	DeepAgentsSandboxEgressCeilings   []v1beta1.DeepAgentsEgressRule
+	DeepAgentsSandboxEphemeralStorage sandboxpolicy.Policy
 
 	// Legacy sandbox backend knobs. The open-source controller does not
 	// register the OpenKruise sandbox backend.
@@ -355,6 +357,7 @@ func LoadConfig() *Config {
 		DeepAgentsSandboxEgressCeilings: parseDeepAgentsSandboxEgressCeilings(
 			os.Getenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS"),
 		),
+		DeepAgentsSandboxEphemeralStorage: mustDeepAgentsSandboxEphemeralStoragePolicy(),
 
 		SandboxProviderType:          envOrDefault("AGENTTEAMS_SANDBOX_PROVIDER_TYPE", "openkruise"),
 		SandboxCapabilities:          os.Getenv("AGENTTEAMS_SANDBOX_CAPABILITIES"),
@@ -484,6 +487,18 @@ func LoadConfig() *Config {
 	}
 
 	return cfg
+}
+
+func mustDeepAgentsSandboxEphemeralStoragePolicy() sandboxpolicy.Policy {
+	policy, err := sandboxpolicy.New(
+		envOrDefault("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_REQUEST", sandboxpolicy.DefaultRequest),
+		envOrDefault("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_LIMIT", sandboxpolicy.DefaultLimit),
+		envOrDefault("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_MAX_LIMIT", sandboxpolicy.MaxLimit),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("invalid DeepAgents sandbox ephemeral storage policy: %v", err))
+	}
+	return policy
 }
 
 func parseDeepAgentsSandboxEgressCeilings(raw string) []v1beta1.DeepAgentsEgressRule {

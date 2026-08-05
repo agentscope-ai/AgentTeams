@@ -168,6 +168,9 @@ func TestLoadConfigIncludesDeepAgentsExecutionSandboxSettings(t *testing.T) {
 		{"cidr":"10.96.0.0/12","protocol":"TCP","ports":[443]},
 		{"cidr":"10.96.0.10/32","protocol":"UDP","ports":[53]}
 	]`)
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_REQUEST", "512Mi")
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_LIMIT", "4Gi")
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_MAX_LIMIT", "6Gi")
 
 	cfg := LoadConfig()
 	if cfg.DeepAgentsRunnerImage != "agentteams/deepagents-runner:test" {
@@ -176,6 +179,25 @@ func TestLoadConfigIncludesDeepAgentsExecutionSandboxSettings(t *testing.T) {
 	if len(cfg.DeepAgentsSandboxEgressCeilings) != 2 || cfg.DeepAgentsSandboxEgressCeilings[1].Protocol != "UDP" {
 		t.Fatalf("DeepAgentsSandboxEgressCeilings=%#v", cfg.DeepAgentsSandboxEgressCeilings)
 	}
+	resources, _, _, err := cfg.DeepAgentsSandboxEphemeralStorage.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolve configured sandbox policy: %v", err)
+	}
+	if resources.Requests.EphemeralStorage != "512Mi" || resources.Limits.EphemeralStorage != "4Gi" {
+		t.Fatalf("configured sandbox resources=%#v, want request=512Mi limit=4Gi", resources)
+	}
+}
+
+func TestLoadConfigPanicsOnInvalidDeepAgentsSandboxEphemeralStoragePolicy(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_LIMIT", "2Gi")
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_MAX_LIMIT", "1Gi")
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("LoadConfig did not reject invalid DeepAgents sandbox ephemeral-storage policy")
+		}
+	}()
+	_ = LoadConfig()
 }
 
 func TestLoadConfigPanicsOnInvalidDeepAgentsEgressCeilings(t *testing.T) {

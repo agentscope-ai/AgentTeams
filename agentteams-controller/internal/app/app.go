@@ -663,7 +663,8 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		MatrixConfig:   a.cfg.MatrixConfig(),
 		Provisioner:    a.provisioner,
 
-		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
+		DefaultWorkerRuntime:              a.cfg.DefaultWorkerRuntime,
+		DeepAgentsSandboxEphemeralStorage: a.cfg.DeepAgentsSandboxEphemeralStorage,
 	})
 	return nil
 }

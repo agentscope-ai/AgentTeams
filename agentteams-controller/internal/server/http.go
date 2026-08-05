@@ -12,6 +12,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/proxy"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -32,7 +33,8 @@ type ServerDeps struct {
 	MatrixConfig   matrix.Config        // for AppService rotation endpoint
 	Provisioner    *service.Provisioner // for Matrix token refresh
 
-	DefaultWorkerRuntime string // install-time default for Worker create requests
+	DefaultWorkerRuntime              string // install-time default for Worker create requests
+	DeepAgentsSandboxEphemeralStorage sandboxpolicy.Policy
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -107,7 +109,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
 	if deps.KubeMode == "incluster" {
-		esh := NewExecutionSandboxHandler(deps.Client, deps.Namespace, deps.DefaultWorkerRuntime)
+		esh := NewExecutionSandboxHandler(deps.Client, deps.Namespace, deps.DefaultWorkerRuntime, deps.DeepAgentsSandboxEphemeralStorage)
 		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/ensure", mw.RequireAuthz(authpkg.ActionEnsureExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Ensure)))
 		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/{sessionId}/heartbeat", mw.RequireAuthz(authpkg.ActionHeartbeatExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Heartbeat)))
 		mux.Handle("DELETE /api/v1/workers/{name}/execution-sandboxes/{sessionId}", mw.RequireAuthz(authpkg.ActionDeleteExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Delete)))

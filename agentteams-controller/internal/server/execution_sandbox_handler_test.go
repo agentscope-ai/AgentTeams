@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -30,7 +32,7 @@ func newExecutionSandboxHandlerTestClient(t *testing.T, objects ...runtime.Objec
 		WithRuntimeObjects(objects...).
 		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
 		Build()
-	return NewExecutionSandboxHandler(cl, "agentteams-system", "deepagents")
+	return NewExecutionSandboxHandler(cl, "agentteams-system", "deepagents", sandboxpolicy.Default())
 }
 
 func deepAgentsSandboxWorker() *v1beta1.Worker {
@@ -83,8 +85,83 @@ func TestExecutionSandboxEnsureCreatesControllerManagedCR(t *testing.T) {
 	if sandbox.Spec.IdleTimeout != "30m" || sandbox.Spec.MaxLifetime != "8h" || len(sandbox.Spec.Egress) != 1 {
 		t.Fatalf("sandbox policy was not copied from Worker: %#v", sandbox.Spec)
 	}
+	if sandbox.Spec.Resources == nil || sandbox.Spec.Resources.Requests.EphemeralStorage != "256Mi" || sandbox.Spec.Resources.Limits.EphemeralStorage != "2Gi" {
+		t.Fatalf("sandbox resources=%#v, want default request=256Mi limit=2Gi", sandbox.Spec.Resources)
+	}
 	if len(sandbox.OwnerReferences) != 1 || sandbox.OwnerReferences[0].UID != worker.UID {
 		t.Fatalf("sandbox must be garbage-collected with Worker: %#v", sandbox.OwnerReferences)
+	}
+}
+
+func TestExecutionSandboxEnsurePersistsWorkerEphemeralStorageOverride(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	worker.Spec.RuntimeConfig.DeepAgents.Execution.Resources = &v1beta1.ExecutionSandboxResourceRequirements{
+		Requests: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "512Mi"},
+		Limits:   v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "4Gi"},
+	}
+	h := newExecutionSandboxHandlerTestClient(t, worker)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/execution-sandboxes/ensure", strings.NewReader(`{"sessionId":"worker-override"}`))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+
+	h.Ensure(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var sandbox v1beta1.ExecutionSandbox
+	if err := h.client.Get(context.Background(), types.NamespacedName{Name: executionSandboxName(worker.Name, "worker-override"), Namespace: "agentteams-system"}, &sandbox); err != nil {
+		t.Fatalf("get ExecutionSandbox: %v", err)
+	}
+	if sandbox.Spec.Resources == nil || sandbox.Spec.Resources.Requests.EphemeralStorage != "512Mi" || sandbox.Spec.Resources.Limits.EphemeralStorage != "4Gi" {
+		t.Fatalf("sandbox resources=%#v, want request=512Mi limit=4Gi", sandbox.Spec.Resources)
+	}
+}
+
+func TestExecutionSandboxEnsureRejectsInvalidWorkerEphemeralStorageOverrides(t *testing.T) {
+	tests := []struct {
+		name      string
+		resources *v1beta1.ExecutionSandboxResourceRequirements
+	}{
+		{
+			name: "zero request",
+			resources: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "0"},
+			},
+		},
+		{
+			name: "request exceeds limit",
+			resources: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "3Gi"},
+				Limits:   v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "2Gi"},
+			},
+		},
+		{
+			name: "limit exceeds maximum",
+			resources: &v1beta1.ExecutionSandboxResourceRequirements{
+				Limits: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "9Gi"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := deepAgentsSandboxWorker()
+			worker.Spec.RuntimeConfig.DeepAgents.Execution.Resources = tt.resources
+			h := newExecutionSandboxHandlerTestClient(t, worker)
+			sessionID := "invalid-" + strings.ReplaceAll(tt.name, " ", "-")
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/execution-sandboxes/ensure", strings.NewReader(`{"sessionId":"`+sessionID+`"}`))
+			req.SetPathValue("name", worker.Name)
+			rec := httptest.NewRecorder()
+
+			h.Ensure(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			var sandbox v1beta1.ExecutionSandbox
+			err := h.client.Get(context.Background(), types.NamespacedName{Name: executionSandboxName(worker.Name, sessionID), Namespace: "agentteams-system"}, &sandbox)
+			if !apierrors.IsNotFound(err) {
+				t.Fatalf("invalid resources created ExecutionSandbox: get error=%v", err)
+			}
+		})
 	}
 }
 

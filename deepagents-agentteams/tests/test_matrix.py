@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +10,7 @@ import httpx
 import pytest
 from nio import JoinError, JoinResponse, RoomSendError, RoomSendResponse, SyncResponse
 
+from deepagents_agentteams import matrix as matrix_module
 from deepagents_agentteams.config import MatrixConfig
 from deepagents_agentteams.matrix import (
     ControllerMatrixTokenProvider,
@@ -379,6 +382,128 @@ async def test_pending_event_after_cursor_persistence_is_handled_once_after_rest
 
     assert handled == ["$pending"]
     assert read == ["$pending"]
+
+
+async def test_completed_event_ids_remain_exactly_deduped_beyond_old_pruning_threshold(tmp_path: Path) -> None:
+    completed_count = 4096
+    events = {
+        "$oldest-task": {
+            "status": "completed",
+            "sequence": 1,
+            "accepted_cursor": "seed-cursor",
+            "cursor_accepted": True,
+            "message": None,
+        },
+        "$oldest-approval": {
+            "status": "completed",
+            "sequence": 2,
+            "accepted_cursor": "seed-cursor",
+            "cursor_accepted": True,
+            "message": None,
+        },
+    }
+    for sequence in range(3, completed_count + 1):
+        events[f"$completed-{sequence}"] = {
+            "status": "completed",
+            "sequence": sequence,
+            "accepted_cursor": "seed-cursor",
+            "cursor_accepted": True,
+            "message": None,
+        }
+    for offset, event_id in enumerate(("$new-task", "$new-approval"), start=1):
+        sequence = completed_count + offset
+        events[event_id] = {
+            "status": "pending",
+            "sequence": sequence,
+            "accepted_cursor": "seed-cursor",
+            "cursor_accepted": True,
+            "message": {
+                "room_id": "!allowed:example.org",
+                "event_id": event_id,
+                "thread_root_event_id": event_id,
+                "sender": "@human:example.org",
+                "body": "approve 1" if "approval" in event_id else "please investigate",
+            },
+        }
+    (tmp_path / "matrix-events.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "next_sequence": completed_count + 3,
+                "events": events,
+            }
+        )
+    )
+
+    handled: list[str] = []
+
+    class FakeClient:
+        olm = None
+
+        async def room_read_markers(self, *_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+            return None
+
+    async def handle(message: MatrixMessage) -> None:
+        handled.append(message.event_id)
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=handle,
+    )
+    transport.client = FakeClient()
+    await transport._drain_journal()
+    assert handled == ["$new-task", "$new-approval"]
+
+    await transport._schedule_message(
+        SimpleNamespace(room_id="!allowed:example.org"),
+        event(event_id="$oldest-task"),
+    )
+    await transport._schedule_message(
+        SimpleNamespace(room_id="!allowed:example.org"),
+        event(
+            event_id="$oldest-approval",
+            content={"msgtype": "m.text", "body": "approve 1"},
+        ),
+    )
+    await transport._accept_sync_response(sync_response("replay-cursor"))
+
+    assert handled == ["$new-task", "$new-approval"]
+    persisted = json.loads((tmp_path / "matrix-events.json").read_text())
+    assert len(persisted["events"]) == completed_count + 2
+    assert persisted["events"]["$oldest-task"]["status"] == "completed"
+    assert persisted["events"]["$oldest-approval"]["status"] == "completed"
+
+
+def test_atomic_state_file_is_restrictive_before_file_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_regular_file_modes: list[int] = []
+    real_fsync = os.fsync
+
+    def observe_fsync(file_descriptor: int) -> None:
+        mode = os.fstat(file_descriptor).st_mode
+        if stat.S_ISREG(mode):
+            observed_regular_file_modes.append(stat.S_IMODE(mode))
+        real_fsync(file_descriptor)
+
+    monkeypatch.setattr(matrix_module.os, "fsync", observe_fsync)
+    previous_umask = os.umask(0o022)
+    try:
+        matrix_module._atomic_write(tmp_path / "state", "durable")
+    finally:
+        os.umask(previous_umask)
+
+    assert observed_regular_file_modes == [0o600]
+    assert stat.S_IMODE((tmp_path / "state").stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize(

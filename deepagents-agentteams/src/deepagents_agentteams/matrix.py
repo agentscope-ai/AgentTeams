@@ -7,6 +7,7 @@ import html
 import json
 import logging
 import os
+import tempfile
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -28,7 +29,6 @@ from deepagents_agentteams.config import MatrixConfig
 
 _LOGGER = logging.getLogger(__name__)
 _EVENT_JOURNAL_VERSION = 1
-_MAX_COMPLETED_EVENTS = 4096
 _UNKNOWN_OUTCOME_REPLY = (
     "Processing of this Matrix event was interrupted and its outcome is unknown. "
     "It was not executed again for safety."
@@ -161,9 +161,11 @@ class _EventJournal:
             raise RuntimeError("only a processing Matrix event can complete")
         record["status"] = "completed"
         # The event ID remains as the deduplication key; the potentially large
-        # body is no longer needed after the handler outcome is durable.
+        # body is no longer needed after the handler outcome is durable. Exact
+        # IDs cannot be pruned without a proven Matrix replay watermark, so
+        # this compact metadata grows linearly with unique events for the
+        # lifetime of the Worker state PVC.
         record["message"] = None
-        self._prune_completed()
         self._write()
 
     @staticmethod
@@ -223,18 +225,6 @@ class _EventJournal:
                 raise ValueError("invalid event message")
             if payload.get("event_id") != event_id or not all(isinstance(value, str) for value in payload.values()):
                 raise ValueError("invalid event message fields")
-
-    def _prune_completed(self) -> None:
-        completed = sorted(
-            (
-                (event_id, record)
-                for event_id, record in self._events.items()
-                if record["status"] == "completed" and record["cursor_accepted"]
-            ),
-            key=lambda item: item[1]["sequence"],
-        )
-        for event_id, _record in completed[:-_MAX_COMPLETED_EVENTS]:
-            del self._events[event_id]
 
     def _write(self) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)
@@ -508,18 +498,27 @@ class MatrixTransport:
 
 def _atomic_write(path: Path, content: str) -> None:
     """Replace one state file after flushing both its bytes and directory entry."""
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    with temporary.open("w") as stream:
-        stream.write(content)
-        stream.flush()
-        os.fsync(stream.fileno())
-        os.fchmod(stream.fileno(), 0o600)
-    temporary.replace(path)
-    directory_fd = os.open(path.parent, os.O_RDONLY)
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
     try:
-        os.fsync(directory_fd)
+        with os.fdopen(file_descriptor, "w") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
-        os.close(directory_fd)
+        with suppress(FileNotFoundError):
+            temporary.unlink()
 
 
 def _is_unauthorized(response: Any) -> bool:

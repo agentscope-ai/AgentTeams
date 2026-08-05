@@ -769,6 +769,14 @@ Matrix catch-up 尚未完成而把它判作终态失败；只有 Container 的�
 从 Runner 环境移除，non-dumpable 使命令无法经 `/proc` 查看 Runner 进程环境。此边界并不
 把 `/bin/sh` 变成通用的无副作用 sandbox，也不解决故意杀死 PID 1 的拒绝服务。
 
+`ExecutionSandbox` 在创建任何 Runner 子资源前先持久化 cleanup finalizer。Worker 删除或
+归属/runtime/mode 漂移、idle/max lifetime 到期以及 HTTP Delete 都只用 lease 的 UID 与
+resourceVersion 请求删除 CR；finalizer 分支再校验每个子资源的 controller/worker/sandbox
+label 和 owner UID，以 UID 与 resourceVersion 前置条件按 Service、Secret、Pod 的顺序删除。
+Controller 必须通过未缓存 API reader 确认这一代 Pod 已不存在，才能删除 NetworkPolicy 并
+用当前 resourceVersion 移除 finalizer。Worker watch 按 `spec.workerRef.name` 字段索引反查，
+不依赖可漂移的 Worker label；cache List 失败会记录日志并回退到未缓存读取。
+
 不要读取或打印任何部署 secret 来验证该边界。开发机可运行使用非敏感 sentinel 的测试；
 它只断言 token inspection 被阻断且不打印 token：
 
@@ -777,12 +785,33 @@ cd deepagents-agentteams
 uv run --locked --extra dev pytest -q tests/test_runner_process_hardening.py
 ```
 
-一次性本地集群可只检查权限和环境键名（不读取 `/proc/1/environ` 内容，也不输出值）：
+一次性本地集群中，把三个身份变量设为当前 Controller、Worker 和 `ExecutionSandbox` 名称。
+下面的命令通过 controller/worker/execution-sandbox/runtime 四个 label 精确选出唯一 Runner，
+先确认 exec 可用，再静默尝试读取 `/proc/1/environ` 的一个字节；它不输出文件或环境块：
 
 ```bash
-kubectl -n "${AGENTTEAMS_NAMESPACE}" exec deployable-runner-pod -- \
-  sh -ceu 'test ! -r /proc/1/environ; ! env | grep -Eq "^AGENTTEAMS_RUNNER_TOKEN="'
+mapfile -t RUNNER_PODS < <(
+  kubectl -n "${AGENTTEAMS_NAMESPACE}" get pod \
+    -l "agentteams.io/controller=${AGENTTEAMS_CONTROLLER_NAME},agentteams.io/worker=${DEEPAGENTS_WORKER_NAME},agentteams.io/execution-sandbox=${EXECUTION_SANDBOX_NAME},agentteams.io/runtime=deepagents-runner" \
+    -o name
+)
+if [ "${#RUNNER_PODS[@]}" -ne 1 ]; then
+  printf 'expected exactly one Runner Pod, got %d\n' "${#RUNNER_PODS[@]}" >&2
+  exit 1
+fi
+RUNNER_POD="${RUNNER_PODS[0]#pod/}"
+kubectl -n "${AGENTTEAMS_NAMESPACE}" exec "${RUNNER_POD}" -- sh -c 'exit 0' >/dev/null
+if kubectl -n "${AGENTTEAMS_NAMESPACE}" exec "${RUNNER_POD}" -- \
+  sh -c 'dd if=/proc/1/environ of=/dev/null bs=1 count=1' >/dev/null 2>&1; then
+  printf 'READABLE\n'
+  exit 1
+fi
+printf 'BLOCKED\n'
 ```
+
+不要通过容器运行时另行创建的 exec 进程枚举环境来推断获批命令的环境。最小命令环境由上面
+的真实进程 pytest 验证，或通过 Human 批准的正常 Runner 执行仅返回单一布尔/状态；不得输出
+环境块或 token。
 
 状态 PVC 同时保存按精确 Matrix event ID 记录的持久 journal。事件会依次持久化为
 `pending`、`processing`、`completed`；重启后先排空已接受事件，再继续 sync。恢复出的
@@ -822,7 +851,7 @@ kubectl get executionsandbox,pod,service,networkpolicy \
 - 命令只在 Runner 的 `/workspace` 执行，变更清单校验通过后才写回 MinIO；
 - 每次批准恰好只产生一次 Runner `POST /v1/execute`；传输结果不确定时，不以相同或新 request ID 自动重试；
 - 更新 Worker 的 sandbox resources、egress、idle/max lifetime 后，已有 sandbox 必须先收敛到新 generation 才能重新 Ready；已回收 lease 只在下一次 Runner 请求前重建，结果不确定的已发送请求不会被重放；
-- 删除 Worker、改变 Worker UID/Controller 归属、切换为非 DeepAgents runtime、移除 DeepAgents 配置或把 `execution.mode` 改为非 `sandbox` 时，已有 lease 必须按 Service → token Secret → Pod → 等待 Pod 删除 → NetworkPolicy → `ExecutionSandbox` 的顺序撤销；
+- 删除 Worker、改变 Worker UID/Controller 归属、切换为非 DeepAgents runtime、移除 DeepAgents 配置或把 `execution.mode` 改为非 `sandbox` 时，已有 lease 必须由 cleanup finalizer 按 Service → token Secret → Pod → 未缓存读取确认 Pod 不存在 → NetworkPolicy → 移除 finalizer 的顺序撤销；在 Pod 存在或身份/前置条件冲突期间，NetworkPolicy 与 lease 必须保留；
 - 空闲超过 `5m` 或总生命周期超过 `30m` 后，`ExecutionSandbox` 及其 Pod、Service、NetworkPolicy 被 Controller 回收，Worker 与 checkpoint 保留。
 
 更完整的策略、外部 PostgreSQL 和故障排查说明见[《DeepAgents Worker Runtime》](deepagents-runtime.md)。

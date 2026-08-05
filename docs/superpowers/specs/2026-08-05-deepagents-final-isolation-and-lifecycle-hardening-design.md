@@ -2,9 +2,11 @@
 
 ## 状态
 
-已批准。本文补充现有 DeepAgents Worker Runtime、ExecutionSandbox 和 Matrix
-readiness 设计，关闭最终独立审计确认的三个 Important 问题。本文不改变 DeepAgents
-作为 Worker-only Runtime 的产品定位，也不扩大 Runner、Worker 或 Controller 的凭据权限。
+已批准，并已按最终复审加固。本文补充现有 DeepAgents Worker Runtime、ExecutionSandbox
+和 Matrix readiness 设计，关闭初次独立审计确认的三个 Important 问题，以及最终复审确认的
+五个 Important 和一个 Minor 问题。本文不改变 DeepAgents 作为 Worker-only Runtime 的产品
+定位，也不扩大 Runner、Worker 或 Controller 的凭据权限；cleanup finalizer、field index、
+未缓存读取和删除前置条件均为控制面实现，不改变 CRD OpenAPI schema。
 
 ## 背景与已确认问题
 
@@ -19,6 +21,12 @@ idle reclaim 主链路工作正常，但独立审计确认以下边界仍不完�
    已存在的 Runner 子资源因此可能不再被回收。
 3. DeepAgents Worker 在首次有效 Matrix sync 前按设计保持 `Ready=False`，但 Kubernetes
    backend 把带有 `ContainersNotReady` message 的正常等待状态错误映射为 `Failed`。
+4. 直接删除 ExecutionSandbox 或 Worker owner-GC 可绕过撤销顺序；缺少 finalizer 时，
+   Pod 仍在 Terminating 而 NetworkPolicy 已被垃圾回收。
+5. informer cache 的 Pod NotFound 不是 API server 上该 Pod generation 已消失的证明。
+6. 名称删除没有 UID/resourceVersion 前置条件，旧 reconcile/HTTP 请求可能删除同名替代
+   generation；Worker mapper 依赖可漂移的 `agentteams.io/worker` label，且 List 失败无日志。
+7. 原集群探针使用未定义 Pod 名，并枚举容器运行时另建 exec 进程的环境，检查了错误边界。
 
 第一个问题已用无敏感信息的 sentinel token 在最终 Runner 镜像中复现。命令成功读取
 `/proc/1/environ`，因此不能只依赖子进程环境白名单。
@@ -27,6 +35,8 @@ idle reclaim 主链路工作正常，但独立审计确认以下边界仍不完�
 
 - 让获批命令无法读取或复用 Runner bearer token。
 - Worker 不再满足 sandbox 前提时，立即、可重入且 fail-closed 地撤销旧 Runner。
+- 用 finalizer、未缓存 Pod absence 证明和 UID/resourceVersion 前置条件保证撤销不会跨代，
+  同名替代对象或 label/owner 漂移不会被误删。
 - Matrix 首次同步期间的正常 readiness 等待保持 `Starting`，真实容器故障仍为 `Failed`。
 - 保留现有 exactly-once request ID、unknown-outcome、MinIO 写回校验、PostgreSQL
   checkpoint、NetworkPolicy 和非 root Pod 约束。
@@ -87,33 +97,57 @@ Runner 进程内存中并用于固定时长比较。
 当前 Controller 拥有的 ExecutionSandbox 在以下任一条件成立时必须进入撤销：
 
 - 引用的 Worker 不存在；
+- Worker 已设置 `deletionTimestamp`；
 - 当前 Worker 的 controller label 与本 Controller 不匹配；
 - `workerRef.uid` 为空或与当前 Worker UID 不一致；
 - Worker 的有效 Runtime 不再是 `deepagents`；
 - DeepAgents runtime config 不存在，或 `execution.mode` 不再是 `sandbox`。
+- idle timeout 或 max lifetime 到期，或 HTTP API 请求删除 lease。
 
 不属于当前 Controller 的 ExecutionSandbox 仍保持忽略，不能跨 Controller 删除资源。
 
-### 撤销顺序
+### Finalizer 与删除入口
+
+HTTP 创建的 ExecutionSandbox 从创建时就携带稳定 cleanup finalizer。直接创建且尚未删除的
+对象由 reconciler 先写入 finalizer，并在该次 reconcile 立即返回；在 finalizer 持久化前
+不得创建 Secret、Service、Pod 或 NetworkPolicy。已经进入删除但缺少此 finalizer 的旧对象
+仍执行 best-effort 有序清理，但不得在 `deletionTimestamp` 之后补加 finalizer 或创建子资源。
+
+Worker stale/deleting、idle/max lifetime 到期与 HTTP Delete 不直接清理子资源，而是以
+ExecutionSandbox 当前 UID 和 resourceVersion 作为删除前置条件，请求 CR 进入 deleting。
+Conflict、UID/RV precondition failure 或并发 heartbeat 导致的 resourceVersion 变化必须返回并
+重新求值，禁止退化为 name-only delete。真正的子资源清理由 deleting/finalizer 分支唯一负责。
+
+### 撤销顺序与身份边界
 
 撤销必须可重入，并避免在 Pod 仍存活时先移除 NetworkPolicy：
 
-1. 删除同名 Service，停止新的 Worker 到 Runner 连接。
-2. 删除 token Secret，阻止任何替代 Pod取得 token。
-3. 请求删除 Runner Pod。
-4. 如果 Pod 仍存在，保留 NetworkPolicy 和 ExecutionSandbox，短间隔 requeue；Pod
-   删除事件也会再次触发 reconcile。
-5. 确认 Pod 不存在后，删除同名 NetworkPolicy，再删除 ExecutionSandbox CR。
+1. 未缓存读取同名 Service，校验精确 controller/worker/execution-sandbox labels 与指向当前
+   ExecutionSandbox UID 的 controller owner reference，再以目标 UID+resourceVersion 删除。
+2. 对 token Secret 执行相同身份校验和带前置条件删除，阻止替代 Pod 取得 token。
+3. 未缓存读取、校验并以 UID+resourceVersion 请求删除 Runner Pod。
+4. 通过 `mgr.GetAPIReader()` 再次直接读取 API server；只要精确 owned Pod 仍存在（包括
+   Terminating），就保留 NetworkPolicy 与 ExecutionSandbox finalizer 并短间隔 requeue。
+   cache NotFound 不能跨过这条隔离边界。
+5. 只有未缓存读取返回 NotFound 后，才按同样身份校验与 UID+resourceVersion 前置条件删除
+   NetworkPolicy；随后重新读取当前 ExecutionSandbox，校验 UID/controller identity，并用当前
+   resourceVersion 移除 cleanup finalizer。Kubernetes 随后完成 CR 删除。
 
-所有 NotFound 都视为成功。其它 Kubernetes API 错误返回 reconcile error，保留剩余
-隔离资源并重试。撤销路径不创建新 Secret、Pod、Service 或 NetworkPolicy。
+所有 NotFound 都视为成功。任何同名替代 generation、foreign/malformed owner 或 label 转移
+都返回错误，保留 NetworkPolicy 和 finalizer 等待重试或运维修复。其它 Kubernetes API 错误
+同样返回 reconcile error；撤销路径不创建新 Secret、Pod、Service 或 NetworkPolicy。无效
+资源/策略的 fail-closed cleanup 复用相同未缓存 Pod absence 与精确删除边界，但保留 Failed CR
+供观察。
 
 ### Worker watch
 
 ExecutionSandbox controller 增加 Worker watch。收到 Worker create/update/delete 后，
-mapper 只列出同命名空间、同 controller label、同 worker label 的 ExecutionSandbox，
-并为每个对象入队。这样 Runtime/mode/UID 变化会立即撤销，而不是等旧的 idle/max-lifetime
-定时器。
+mapper 使用预先注册的 `ExecutionSandbox.spec.workerRef.name` field index，只列出同命名空间、
+同 controller label 且 spec 引用该 Worker 的 ExecutionSandbox，并为每个对象入队。它不依赖
+`agentteams.io/worker` label 是否存在或正确。cache List 失败时必须记录错误，再通过未缓存
+API reader 按命名空间/controller label 列出并在内存中按 workerRef 过滤；回退失败也记录错误。
+正常 Sandbox lifecycle requeue 仍是有界安全复查。Worker update predicate 保留 old-or-new
+controller label 语义，使失去归属的更新仍可触发撤销。
 
 ### HTTP Delete
 
@@ -124,7 +158,9 @@ ensure 和 heartbeat 继续要求 Worker 当前为 DeepAgents sandbox 模式。D
 - 找到的 ExecutionSandbox 仍引用该 Worker 名称和 UID，并属于当前 Controller。
 
 因此在 `sandbox -> disabled` 的短暂竞态中，Worker 仍能显式删除旧 lease。跨 Worker、
-跨 UID 或跨 Controller 删除继续返回冲突或未找到。
+跨 UID 或跨 Controller 删除继续返回冲突或未找到。实际 Delete 使用读取到的
+ExecutionSandbox UID 与 resourceVersion 作为 API-server 前置条件；并发 heartbeat 或同名替代
+generation 使旧请求冲突，而不是误删当前 lease。子资源仍只由 finalizer 分支清理。
 
 ## 方案三：Matrix readiness 状态映射
 
@@ -157,9 +193,11 @@ Human approves execute
 
 Worker runtime/mode/UID changes
   -> Worker watch enqueues related sandboxes
-  -> Service + Secret removed
-  -> Pod removed while NetworkPolicy stays in force
-  -> NetworkPolicy + ExecutionSandbox removed after Pod disappears
+  -> preconditioned ExecutionSandbox delete enters finalizer cleanup
+  -> exact Service + Secret removed with identity/precondition checks
+  -> exact Pod removed while NetworkPolicy + finalizer stay in force
+  -> uncached API read proves Pod generation absent
+  -> exact NetworkPolicy removed, then current-RV finalizer removed
 ```
 
 Runner hardening失败属于启动失败，Kubernetes 不会把 Pod标记 Ready。撤销中 API 暂时
@@ -177,11 +215,17 @@ Runner hardening失败属于启动失败，Kubernetes 不会把 Pod标记 Ready�
 
 ### Go Controller
 
-- Ready Sandbox 对应 Worker 切换为 `disabled`、其它 Runtime、不同 UID 或 NotFound 时，
-  先移除 Service/Secret/Pod，保留 NetworkPolicy；Pod 消失后再删除 NetworkPolicy 和 CR。
+- Ready Sandbox 对应 Worker deleting/`disabled`、其它 Runtime、不同 UID 或 NotFound 时，
+  先用 UID+resourceVersion 请求删除 CR；finalizer 移除 Service/Secret/Pod 并保留 NetworkPolicy，
+  未缓存读取确认 Pod generation 消失后再删除 NetworkPolicy 和 finalizer。
 - 同一撤销 reconcile 重复执行不报错、不重建资源。
-- Worker watch mapper 只入队当前 Controller 和对应 Worker 的 Sandbox。
-- HTTP Delete 在 Worker 已 disabled 时仍可删除正确 lease，但拒绝 UID/controller 冲突。
+- Worker watch mapper 按 spec.workerRef 入队当前命名空间/Controller 的 Sandbox，覆盖 Worker
+  label 缺失/错误，并对 cache/API-reader List 失败留下日志。
+- HTTP Delete 在 Worker 已 disabled 时仍可请求删除正确 lease，但拒绝 UID/controller/RV
+  冲突和替代 generation。
+- fake-client 单测覆盖 finalizer-before-children、cache NotFound/API-reader Pod present、精确
+  owner/label、所有 DeleteOptions 前置条件及 fallback；envtest 使用真实 API server 覆盖
+  finalizer、Terminating Pod/NetworkPolicy 边界、并发 heartbeat RV 与替代 UID 的 precondition。
 - `Running + Ready=False + ContainersNotReady message` 返回 `Starting`；明确
   CrashLoop/ImagePull/terminated 仍返回 `Failed`。
 
@@ -193,8 +237,10 @@ Runner hardening失败属于启动失败，Kubernetes 不会把 Pod标记 Ready�
    把精确镜像导入 agent2/agent3 并用 `crictl inspecti` 比对 digest。
 2. 先 server-side 审阅/应用 CRD，再原子升级 Helm。
 3. 验证 DeepAgents Worker 在 Matrix sync 前为 Starting、sync 后为 Running。
-4. 发起需要 Human 审批的命令，命令只输出 `/proc` token 探测是否被阻断，绝不输出
-   真实 token；探测结果必须为 blocked。
+4. 用 controller/worker/execution-sandbox/runtime 四个 label 精确选出唯一 Runner；集群
+   exec 只静默尝试读取 `/proc/1/environ`，不得枚举 exec 进程环境。获批命令最小环境只通过
+   真实进程 pytest，或 Human 批准的正常 Runner 路径返回 `BLOCKED`/`READABLE` 单一状态验证，
+   绝不输出环境块或真实 token。
 5. 再执行正常文件任务，确认恰好一次 `/v1/execute`、MinIO 内容、PostgreSQL checkpoint
    和 idle reclaim。
 6. 验证 Worker mode/runtime 切换会撤销旧 Sandbox，且在 Pod 删除前 NetworkPolicy 一直

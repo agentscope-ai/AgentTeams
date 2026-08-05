@@ -27,9 +27,21 @@ denial-of-service risk that this release does not solve.
 
 An `ExecutionSandbox` lease is revoked when its Worker is deleted, changes
 owner UID, changes runtime or DeepAgents configuration, or leaves
-`execution.mode: sandbox`. Revocation removes resources in the following
-order: Service, token Secret, Pod (and waits for its deletion), NetworkPolicy,
-then the `ExecutionSandbox` object.
+`execution.mode: sandbox`, and when the lease reaches its idle or maximum
+lifetime. A cleanup finalizer is durable before any child is created. Delete
+requests use the lease UID and resourceVersion; the finalizer then removes the
+exact owned Service and token Secret, requests deletion of the exact owned Pod,
+and retains the NetworkPolicy and lease until an uncached API-server read proves
+that Pod generation is absent. Child deletes also require matching
+controller/worker/sandbox labels, the lease owner UID, and UID/resourceVersion
+preconditions. Only then is the NetworkPolicy deleted and the finalizer removed
+with the current resourceVersion.
+
+Worker events are mapped through an index on
+`ExecutionSandbox.spec.workerRef.name`, scoped by namespace and controller
+identity rather than the driftable Worker label. A failed cache lookup is
+logged and retried through the uncached API reader; normal lease deadlines
+remain the bounded safety revalidation.
 
 A DeepAgents Worker whose container is running but has not completed its first
 valid Matrix sync is reported as `Starting` (`Ready=False`), not failed. Only
@@ -43,13 +55,36 @@ non-secret sentinel and the assertions do not print token material:
 uv run --locked --extra dev pytest -q tests/test_runner_process_hardening.py
 ```
 
-On a disposable local cluster, a permission check can confirm that the Runner
-process environment is not readable without reading or printing it:
+On a disposable local cluster, set the three identity variables to the current
+controller, Worker, and `ExecutionSandbox` names. The following probe selects
+exactly one Runner from all four identity labels, first checks that exec works,
+then silently attempts to read one byte from `/proc/1/environ`. It never prints
+that file or an environment block:
 
 ```bash
-kubectl -n "${AGENTTEAMS_NAMESPACE}" exec deployable-runner-pod -- \
-  sh -ceu 'test ! -r /proc/1/environ; ! env | grep -Eq "^AGENTTEAMS_RUNNER_TOKEN="'
+mapfile -t RUNNER_PODS < <(
+  kubectl -n "${AGENTTEAMS_NAMESPACE}" get pod \
+    -l "agentteams.io/controller=${AGENTTEAMS_CONTROLLER_NAME},agentteams.io/worker=${DEEPAGENTS_WORKER_NAME},agentteams.io/execution-sandbox=${EXECUTION_SANDBOX_NAME},agentteams.io/runtime=deepagents-runner" \
+    -o name
+)
+if [ "${#RUNNER_PODS[@]}" -ne 1 ]; then
+  printf 'expected exactly one Runner Pod, got %d\n' "${#RUNNER_PODS[@]}" >&2
+  exit 1
+fi
+RUNNER_POD="${RUNNER_PODS[0]#pod/}"
+kubectl -n "${AGENTTEAMS_NAMESPACE}" exec "${RUNNER_POD}" -- sh -c 'exit 0' >/dev/null
+if kubectl -n "${AGENTTEAMS_NAMESPACE}" exec "${RUNNER_POD}" -- \
+  sh -c 'dd if=/proc/1/environ of=/dev/null bs=1 count=1' >/dev/null 2>&1; then
+  printf 'READABLE\n'
+  exit 1
+fi
+printf 'BLOCKED\n'
 ```
+
+Do not infer an approved command's environment by enumerating the environment
+of a separate container-runtime exec process. Use the real-process pytest above
+(or a Human-approved normal Runner command that returns only a boolean/status)
+to verify the command environment without exposing values.
 
 ## Development
 

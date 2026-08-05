@@ -70,8 +70,18 @@ non-dumpable 设置使获批命令不能通过 `/proc` 读取 Runner 进程环�
 
 当被引用的 Worker 被删除、所属 Controller/Worker UID 改变、runtime 改为非 DeepAgents、
 DeepAgents 配置消失，或 `execution.mode` 不再是 `sandbox` 时，Controller 撤销已有 lease。
-撤销顺序固定为 **Service → token Secret → Pod → 等待 Pod 删除 → NetworkPolicy →
-ExecutionSandbox CR**；每个删除尝试都会继续处理其它对象，避免留下仍可被访问的端点。
+idle/max lifetime 到期和 HTTP Delete 也进入同一撤销状态机。Controller 会在创建任何子资源前
+先持久化 cleanup finalizer；删除 lease 时使用 UID 与 resourceVersion 前置条件，再由 finalizer
+按 **Service → token Secret → Pod → 等待 Pod 删除 → NetworkPolicy → 移除 finalizer** 的顺序
+收敛。每个子资源都必须匹配当前 controller/worker/sandbox label 和 ExecutionSandbox owner UID，
+并以 UID 与 resourceVersion 前置条件删除。只有未缓存的 API-server 读取确认这一代 Pod 已不存在
+后，才会删除 NetworkPolicy，并以当前 resourceVersion 移除 finalizer；同名替代对象、归属漂移、
+冲突或暂时仍在 Terminating 的 Pod 都会保留隔离边界并重试。
+
+Worker watch 通过 `ExecutionSandbox.spec.workerRef.name` 字段索引反查 lease，并继续按命名空间和
+当前 Controller label 限定；即使 `agentteams.io/worker` label 缺失或错误，正确的 `workerRef`
+仍会立即入队。cache List 失败会留下错误日志并回退到未缓存 API reader，常规生命周期 requeue
+继续提供有界安全复查。
 
 DeepAgents Worker 首次 Matrix sync 尚未完成时，`Ready=False` 是预期的 `Starting` 状态，
 不是终态失败。只有显式的容器等待/终止失败状态才会标记为失败；成功的合法 sync、客户端
@@ -85,13 +95,33 @@ cd deepagents-agentteams
 uv run --locked --extra dev pytest -q tests/test_runner_process_hardening.py
 ```
 
-在一次性本地集群中，下面的检查只检查 `/proc/1/environ` 的可读权限且将匹配静默处理，
-不读取文件内容、不输出任何密钥：
+在一次性本地集群中，把三个身份变量设置为当前 Controller、Worker 和 `ExecutionSandbox`
+名称。下面的检查用 controller/worker/execution-sandbox/runtime 四个 label 精确解析唯一 Runner，
+先确认 exec 通道可用，再静默尝试从 `/proc/1/environ` 读取一个字节；它不输出该文件或环境块：
 
 ```bash
-kubectl -n "${AGENTTEAMS_NAMESPACE}" exec deployable-runner-pod -- \
-  sh -ceu 'test ! -r /proc/1/environ; ! env | grep -Eq "^AGENTTEAMS_RUNNER_TOKEN="'
+mapfile -t RUNNER_PODS < <(
+  kubectl -n "${AGENTTEAMS_NAMESPACE}" get pod \
+    -l "agentteams.io/controller=${AGENTTEAMS_CONTROLLER_NAME},agentteams.io/worker=${DEEPAGENTS_WORKER_NAME},agentteams.io/execution-sandbox=${EXECUTION_SANDBOX_NAME},agentteams.io/runtime=deepagents-runner" \
+    -o name
+)
+if [ "${#RUNNER_PODS[@]}" -ne 1 ]; then
+  printf 'expected exactly one Runner Pod, got %d\n' "${#RUNNER_PODS[@]}" >&2
+  exit 1
+fi
+RUNNER_POD="${RUNNER_PODS[0]#pod/}"
+kubectl -n "${AGENTTEAMS_NAMESPACE}" exec "${RUNNER_POD}" -- sh -c 'exit 0' >/dev/null
+if kubectl -n "${AGENTTEAMS_NAMESPACE}" exec "${RUNNER_POD}" -- \
+  sh -c 'dd if=/proc/1/environ of=/dev/null bs=1 count=1' >/dev/null 2>&1; then
+  printf 'READABLE\n'
+  exit 1
+fi
+printf 'BLOCKED\n'
 ```
+
+不要通过容器运行时另行创建的 exec 进程枚举环境来推断获批命令的环境。获批命令的最小环境
+只能由上面的真实进程 pytest 验证，或经 Human 批准的正常 Runner 执行路径返回单一布尔/状态；
+任何路径都不得输出环境块或 token。
 
 ### 模型 URL 与 Worker prompt 合约
 

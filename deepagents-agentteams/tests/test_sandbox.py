@@ -17,6 +17,10 @@ def runner_token() -> str:
     return "r" * 48
 
 
+def test_sandbox_does_not_advertise_unmounted_capture_offload() -> None:
+    assert AgentTeamsSandbox.enable_capture_offload is False
+
+
 def test_control_client_polls_until_ready_and_refreshes_service_account_token() -> None:
     requests: list[httpx.Request] = []
 

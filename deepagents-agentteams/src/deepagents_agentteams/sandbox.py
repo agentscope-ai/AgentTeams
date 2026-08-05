@@ -142,7 +142,10 @@ class SandboxControlClient:
 class AgentTeamsSandbox(BaseSandbox):
     """DeepAgents ``BaseSandbox`` implementation using a remote runner Pod."""
 
-    enable_capture_offload = True
+    # The credential-free Runner mounts only /workspace and /tmp. Advertising
+    # capture offload would make DeepAgents write to the absent, read-only-root
+    # path /large_tool_results after an otherwise successful command.
+    enable_capture_offload = False
 
     def __init__(
         self,

@@ -208,6 +208,123 @@ func TestUpdateWorkerReplacesRuntimeConfigAndKeepsItWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestCreateWorkerRejectsNonStrictJSONWithoutCreatingWorker(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown top-level field", body: `{"name":"strict-worker","unexpected":true}`},
+		{name: "unknown nested field", body: `{"name":"strict-worker","runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","unexpected":true}}}}`},
+		{name: "duplicate escaped-equivalent top-level field", body: `{"name":"strict-worker","na\u006de":"other-worker"}`},
+		{name: "duplicate escaped-equivalent nested field", body: `{"name":"strict-worker","runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","mo\u0064e":"local"}}}}`},
+		{name: "duplicate field in array object", body: `{"name":"strict-worker","runtimeConfig":{"deepagents":{"approvals":{"mcpRules":[{"server":"one","ser\u0076er":"two","tool":"run","mode":"required"}]}}}}`},
+		{name: "trailing JSON", body: `{"name":"strict-worker"} {"name":"second"}`},
+		{name: "empty body", body: ``},
+		{name: "malformed JSON", body: `{"name":"strict-worker"`},
+		{name: "oversized body", body: strings.Repeat(" ", 1024*1024+1)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newServerTestScheme(t)
+			k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+			handler := NewResourceHandler(k8sClient, "default", nil, "")
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/workers", strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+
+			handler.CreateWorker(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			var workers v1beta1.WorkerList
+			if err := k8sClient.List(context.Background(), &workers, client.InNamespace("default")); err != nil {
+				t.Fatal(err)
+			}
+			if len(workers.Items) != 0 {
+				t.Fatalf("invalid request created Workers: %#v", workers.Items)
+			}
+		})
+	}
+}
+
+func TestUpdateWorkerRejectsNonStrictJSONWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown top-level field", body: `{"model":"changed","unexpected":true}`},
+		{name: "unknown nested field", body: `{"runtimeConfig":{"deepagents":{"approvals":{"fileWrites":"required","unexpected":true}}}}`},
+		{name: "duplicate escaped-equivalent top-level field", body: `{"model":"changed","mo\u0064el":"other"}`},
+		{name: "duplicate escaped-equivalent nested field", body: `{"runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","mo\u0064e":"local"}}}}`},
+		{name: "duplicate field in array object", body: `{"runtimeConfig":{"deepagents":{"approvals":{"mcpRules":[{"server":"one","ser\u0076er":"two","tool":"run","mode":"required"}]}}}}`},
+		{name: "trailing JSON", body: `{"model":"changed"} null`},
+		{name: "empty body", body: ``},
+		{name: "malformed JSON", body: `{"model":"changed"`},
+		{name: "oversized body", body: strings.Repeat(" ", 1024*1024+1)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := newServerTestScheme(t)
+			worker := &v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "strict-worker", Namespace: "default"},
+				Spec: v1beta1.WorkerSpec{Model: "original", Runtime: "deepagents", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+					DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"}},
+				}},
+			}
+			before := worker.Spec.DeepCopy()
+			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+			handler := NewResourceHandler(k8sClient, "default", nil, "")
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/strict-worker", strings.NewReader(tt.body))
+			req.SetPathValue("name", worker.Name)
+			rec := httptest.NewRecorder()
+
+			handler.UpdateWorker(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			var stored v1beta1.Worker
+			if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(worker), &stored); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(stored.Spec, *before) {
+				t.Fatalf("invalid update mutated Worker: got=%#v want=%#v", stored.Spec, *before)
+			}
+		})
+	}
+}
+
+func TestUpdateWorkerStrictJSONPreservesOmittedFieldsAndAcceptsZeroValues(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "strict-worker", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "original", Runtime: "deepagents"},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/workers/strict-worker", strings.NewReader(
+		`{"containerManaged":false,"runtimeConfig":{"deepagents":{"execution":{"resources":{"requests":{"cpu":"0"}}}}}}`,
+	))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+
+	handler.UpdateWorker(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var stored v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(worker), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Spec.Model != "original" || stored.Spec.ContainerManaged == nil || *stored.Spec.ContainerManaged ||
+		stored.Spec.RuntimeConfig.DeepAgents.Execution.Resources.Requests.CPU != "0" {
+		t.Fatalf("valid zero/omitted update semantics changed: %#v", stored.Spec)
+	}
+}
+
 func TestCreateTeamDoesNotOwnWorkerRuntimeConfig(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leader := &v1beta1.Worker{

@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -28,21 +29,21 @@ func TestIntersectSandboxEgressRestrictsCIDRsAndPorts(t *testing.T) {
 		{CIDR: "10.96.0.0/12", Ports: []int32{443}},
 	}
 
-	got, err := intersectSandboxEgress(requested, ceilings)
+	got, err := sandboxpolicy.IntersectEgress(requested, ceilings)
 	if err != nil {
-		t.Fatalf("intersectSandboxEgress: %v", err)
+		t.Fatalf("IntersectEgress: %v", err)
 	}
 	want := []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{443}}}
 	if len(got) != 1 || got[0].CIDR != want[0].CIDR || len(got[0].Ports) != 1 || got[0].Ports[0] != 443 {
 		t.Fatalf("intersection=%#v, want %#v", got, want)
 	}
 
-	if _, err := intersectSandboxEgress(
+	if _, err := sandboxpolicy.IntersectEgress(
 		[]v1beta1.DeepAgentsEgressRule{{CIDR: "not-a-cidr", Ports: []int32{443}}}, ceilings,
 	); err == nil {
 		t.Fatal("invalid requested CIDR was accepted")
 	}
-	if _, err := intersectSandboxEgress(
+	if _, err := sandboxpolicy.IntersectEgress(
 		[]v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{70000}}}, ceilings,
 	); err == nil {
 		t.Fatal("invalid requested port was accepted")
@@ -273,6 +274,163 @@ func TestExecutionSandboxReconcilerConvergesInvalidComputeResources(t *testing.T
 		if err := cl.Get(context.Background(), key, object); !apierrors.IsNotFound(err) {
 			t.Fatalf("repeat invalid sandbox left %T behind: %v", object, err)
 		}
+	}
+}
+
+func TestExecutionSandboxReconcilerConvergesInvalidPolicies(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutateSpec func(*v1beta1.ExecutionSandboxSpec)
+		ceilings   []v1beta1.DeepAgentsEgressRule
+	}{
+		{
+			name: "idle timeout",
+			mutateSpec: func(spec *v1beta1.ExecutionSandboxSpec) {
+				spec.IdleTimeout = "not-a-duration"
+			},
+		},
+		{
+			name: "max lifetime",
+			mutateSpec: func(spec *v1beta1.ExecutionSandboxSpec) {
+				spec.MaxLifetime = "0s"
+			},
+		},
+		{
+			name: "requested egress CIDR",
+			mutateSpec: func(spec *v1beta1.ExecutionSandboxSpec) {
+				spec.Egress[0].CIDR = "not-a-cidr"
+			},
+			ceilings: []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.0/12", Ports: []int32{443}}},
+		},
+		{
+			name: "requested egress protocol",
+			mutateSpec: func(spec *v1beta1.ExecutionSandboxSpec) {
+				spec.Egress[0].Protocol = "ICMP"
+			},
+			ceilings: []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.0/12", Ports: []int32{443}}},
+		},
+		{
+			name: "requested egress port",
+			mutateSpec: func(spec *v1beta1.ExecutionSandboxSpec) {
+				spec.Egress[0].Ports = []int32{0}
+			},
+			ceilings: []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.0/12", Ports: []int32{443}}},
+		},
+		{
+			name:       "configured egress ceiling CIDR",
+			mutateSpec: func(*v1beta1.ExecutionSandboxSpec) {},
+			ceilings:   []v1beta1.DeepAgentsEgressRule{{CIDR: "invalid-ceiling", Ports: []int32{443}}},
+		},
+		{
+			name:       "configured egress ceiling protocol",
+			mutateSpec: func(*v1beta1.ExecutionSandboxSpec) {},
+			ceilings:   []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.0/12", Protocol: "ICMP", Ports: []int32{443}}},
+		},
+		{
+			name:       "configured egress ceiling port",
+			mutateSpec: func(*v1beta1.ExecutionSandboxSpec) {},
+			ceilings:   []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.0/12", Ports: []int32{65536}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			if err := v1beta1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			if err := corev1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			if err := networkingv1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			worker := &v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+				Spec: v1beta1.WorkerSpec{Runtime: "deepagents", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+					DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"}},
+				}},
+			}
+			expiresAt := metav1.NewTime(time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC))
+			sandbox := &v1beta1.ExecutionSandbox{
+				ObjectMeta: metav1.ObjectMeta{Name: "exec-invalid-policy", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2},
+				Spec: v1beta1.ExecutionSandboxSpec{
+					WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+					SessionID:   "thread-hash",
+					IdleTimeout: "30m",
+					MaxLifetime: "8h",
+					Egress:      []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{443}}},
+				},
+				Status: v1beta1.ExecutionSandboxStatus{
+					ObservedGeneration: 1,
+					Phase:              "Ready",
+					Endpoint:           "http://exec-invalid-policy.agentteams-system.svc:8080",
+					PodName:            "exec-invalid-policy",
+					ExpiresAt:          &expiresAt,
+				},
+			}
+			tt.mutateSpec(&sandbox.Spec)
+			key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
+			children := []client.Object{
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
+				&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
+				&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
+			}
+			objects := []client.Object{worker, sandbox}
+			objects = append(objects, children...)
+			cl := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+				WithObjects(objects...).
+				Build()
+			r := &ExecutionSandboxReconciler{
+				Client:         cl,
+				RunnerImage:    "runner:v1",
+				ControllerName: "ctl-a",
+				DefaultRuntime: "deepagents",
+				EgressCeilings: tt.ceilings,
+			}
+
+			if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("Reconcile invalid policy: %v", err)
+			}
+			for _, object := range children {
+				probe := object.DeepCopyObject().(client.Object)
+				if err := cl.Get(context.Background(), key, probe); !apierrors.IsNotFound(err) {
+					t.Fatalf("invalid policy left %T behind: %v", object, err)
+				}
+			}
+			var updated v1beta1.ExecutionSandbox
+			if err := cl.Get(context.Background(), key, &updated); err != nil {
+				t.Fatal(err)
+			}
+			if updated.Status.ObservedGeneration != updated.Generation || updated.Status.Phase != "Failed" ||
+				updated.Status.Endpoint != "" || updated.Status.PodName != "" || updated.Status.ExpiresAt != nil ||
+				sandboxReadyReason(updated.Status.Conditions) != "InvalidPolicy" {
+				t.Fatalf("invalid policy status=%#v", updated.Status)
+			}
+			ready := apiMeta.FindStatusCondition(updated.Status.Conditions, "Ready")
+			if ready == nil || ready.Status != metav1.ConditionFalse || ready.ObservedGeneration != updated.Generation || ready.Message == "" {
+				t.Fatalf("invalid policy Ready condition=%#v", ready)
+			}
+			resourceVersion := updated.ResourceVersion
+			if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("repeat Reconcile invalid policy: %v", err)
+			}
+			if err := cl.Get(context.Background(), key, &updated); err != nil {
+				t.Fatal(err)
+			}
+			if updated.ResourceVersion != resourceVersion {
+				t.Fatalf("unchanged invalid policy status was rewritten: %q -> %q", resourceVersion, updated.ResourceVersion)
+			}
+			for _, object := range children {
+				probe := object.DeepCopyObject().(client.Object)
+				if err := cl.Get(context.Background(), key, probe); !apierrors.IsNotFound(err) {
+					t.Fatalf("repeat invalid policy left %T behind: %v", object, err)
+				}
+			}
+		})
 	}
 }
 

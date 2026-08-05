@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credentials"
@@ -35,6 +36,7 @@ type ServerDeps struct {
 
 	DefaultWorkerRuntime              string // install-time default for Worker create requests
 	DeepAgentsSandboxEphemeralStorage sandboxpolicy.Policy
+	DeepAgentsSandboxEgressCeilings   []v1beta1.DeepAgentsEgressRule
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -109,7 +111,13 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
 	if deps.KubeMode == "incluster" {
-		esh := NewExecutionSandboxHandler(deps.Client, deps.Namespace, deps.DefaultWorkerRuntime, deps.DeepAgentsSandboxEphemeralStorage)
+		esh := NewExecutionSandboxHandler(
+			deps.Client,
+			deps.Namespace,
+			deps.DefaultWorkerRuntime,
+			deps.DeepAgentsSandboxEphemeralStorage,
+			deps.DeepAgentsSandboxEgressCeilings,
+		)
 		miah := NewManagedAgentIdentityHandler(deps.Client, deps.Namespace, deps.ControllerName)
 		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/ensure", mw.RequireAuthz(authpkg.ActionEnsureExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Ensure)))
 		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/{sessionId}/heartbeat", mw.RequireAuthz(authpkg.ActionHeartbeatExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Heartbeat)))

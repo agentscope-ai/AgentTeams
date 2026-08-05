@@ -28,6 +28,7 @@ type ExecutionSandboxHandler struct {
 	namespace        string
 	defaultRuntime   string
 	ephemeralStorage sandboxpolicy.Policy
+	egressCeilings   []v1beta1.DeepAgentsEgressRule
 }
 
 type ExecutionSandboxEnsureRequest struct {
@@ -41,8 +42,17 @@ type ExecutionSandboxResponse struct {
 	Token    string `json:"token,omitempty"`
 }
 
-func NewExecutionSandboxHandler(k8s client.Client, namespace, defaultRuntime string, ephemeralStorage sandboxpolicy.Policy) *ExecutionSandboxHandler {
-	return &ExecutionSandboxHandler{client: k8s, namespace: namespace, defaultRuntime: defaultRuntime, ephemeralStorage: ephemeralStorage}
+func NewExecutionSandboxHandler(
+	k8s client.Client,
+	namespace string,
+	defaultRuntime string,
+	ephemeralStorage sandboxpolicy.Policy,
+	egressCeilings []v1beta1.DeepAgentsEgressRule,
+) *ExecutionSandboxHandler {
+	return &ExecutionSandboxHandler{
+		client: k8s, namespace: namespace, defaultRuntime: defaultRuntime,
+		ephemeralStorage: ephemeralStorage, egressCeilings: deepCopyEgressRules(egressCeilings),
+	}
 }
 
 func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +79,7 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 	if apierrors.IsNotFound(err) {
 		desiredSpec, err := h.desiredExecutionSandboxSpec(worker, request.SessionID)
 		if err != nil {
-			httputil.WriteError(w, http.StatusBadRequest, "invalid execution sandbox resources: "+err.Error())
+			httputil.WriteError(w, http.StatusBadRequest, "invalid execution sandbox policy: "+err.Error())
 			return
 		}
 		controller := true
@@ -111,7 +121,7 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 	}
 	desiredSpec, err := h.desiredExecutionSandboxSpec(worker, request.SessionID)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid execution sandbox resources: "+err.Error())
+		httputil.WriteError(w, http.StatusBadRequest, "invalid execution sandbox policy: "+err.Error())
 		return
 	}
 	if !executionSandboxPolicyMatches(sandbox.Spec, desiredSpec) {
@@ -163,6 +173,15 @@ func (h *ExecutionSandboxHandler) desiredExecutionSandboxSpec(
 	sessionID string,
 ) (v1beta1.ExecutionSandboxSpec, error) {
 	execution := worker.Spec.RuntimeConfig.DeepAgents.Execution.DeepCopy()
+	if _, err := sandboxpolicy.ResolveDuration(execution.IdleTimeout, 30*time.Minute, "idleTimeout"); err != nil {
+		return v1beta1.ExecutionSandboxSpec{}, err
+	}
+	if _, err := sandboxpolicy.ResolveDuration(execution.MaxLifetime, 8*time.Hour, "maxLifetime"); err != nil {
+		return v1beta1.ExecutionSandboxSpec{}, err
+	}
+	if _, err := sandboxpolicy.IntersectEgress(execution.Egress, h.egressCeilings); err != nil {
+		return v1beta1.ExecutionSandboxSpec{}, err
+	}
 	effectiveResources, _, _, err := h.ephemeralStorage.Resolve(execution.Resources)
 	if err != nil {
 		return v1beta1.ExecutionSandboxSpec{}, err

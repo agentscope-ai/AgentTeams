@@ -666,6 +666,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 
 		DefaultWorkerRuntime:              a.cfg.DefaultWorkerRuntime,
 		DeepAgentsSandboxEphemeralStorage: a.cfg.DeepAgentsSandboxEphemeralStorage,
+		DeepAgentsSandboxEgressCeilings:   a.cfg.DeepAgentsSandboxEgressCeilings,
 	})
 	return nil
 }

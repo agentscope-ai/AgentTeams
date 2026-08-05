@@ -70,7 +70,7 @@ func (h *ResourceHandler) stampControllerLabel(meta *metav1.ObjectMeta) {
 
 func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	var req CreateWorkerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrictWorkerRequest(w, r, &req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
@@ -192,7 +192,7 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req UpdateWorkerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrictWorkerRequest(w, r, &req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}

@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/netip"
 	"strings"
 	"time"
 
@@ -73,13 +72,17 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	if r.Now != nil {
 		now = r.Now().UTC()
 	}
-	idleTimeout, err := executionSandboxDuration(sandbox.Spec.IdleTimeout, 30*time.Minute, "idleTimeout")
+	idleTimeout, err := sandboxpolicy.ResolveDuration(sandbox.Spec.IdleTimeout, 30*time.Minute, "idleTimeout")
 	if err != nil {
-		return reconcile.Result{}, err
+		return reconcile.Result{}, r.failInvalidPolicy(ctx, &sandbox, err)
 	}
-	maxLifetime, err := executionSandboxDuration(sandbox.Spec.MaxLifetime, 8*time.Hour, "maxLifetime")
+	maxLifetime, err := sandboxpolicy.ResolveDuration(sandbox.Spec.MaxLifetime, 8*time.Hour, "maxLifetime")
 	if err != nil {
-		return reconcile.Result{}, err
+		return reconcile.Result{}, r.failInvalidPolicy(ctx, &sandbox, err)
+	}
+	allowedEgress, err := sandboxpolicy.IntersectEgress(sandbox.Spec.Egress, r.EgressCeilings)
+	if err != nil {
+		return reconcile.Result{}, r.failInvalidPolicy(ctx, &sandbox, err)
 	}
 	createdAt := sandbox.CreationTimestamp.Time
 	if createdAt.IsZero() {
@@ -106,10 +109,6 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		return reconcile.Result{}, r.failInvalidResources(ctx, &sandbox, err)
 	}
 	effective.Spec.Resources = effectiveResources
-	allowedEgress, err := intersectSandboxEgress(effective.Spec.Egress, r.EgressCeilings)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
 	tokenSecretName := sandbox.Name
 	if err := r.ensureExecutionSandboxToken(ctx, effective, tokenSecretName); err != nil {
 		return reconcile.Result{}, err
@@ -190,6 +189,24 @@ func (r *ExecutionSandboxReconciler) failInvalidResources(
 	sandbox *v1beta1.ExecutionSandbox,
 	resolveErr error,
 ) error {
+	return r.failClosed(ctx, sandbox, "InvalidResources", resolveErr, false)
+}
+
+func (r *ExecutionSandboxReconciler) failInvalidPolicy(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+	policyErr error,
+) error {
+	return r.failClosed(ctx, sandbox, "InvalidPolicy", policyErr, true)
+}
+
+func (r *ExecutionSandboxReconciler) failClosed(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+	reason string,
+	cause error,
+	clearExpiry bool,
+) error {
 	for _, object := range []client.Object{
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
@@ -206,12 +223,15 @@ func (r *ExecutionSandboxReconciler) failInvalidResources(
 	sandbox.Status.Phase = "Failed"
 	sandbox.Status.Endpoint = ""
 	sandbox.Status.PodName = ""
+	if clearExpiry {
+		sandbox.Status.ExpiresAt = nil
+	}
 	apiMeta.SetStatusCondition(&sandbox.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: sandbox.Generation,
-		Reason:             "InvalidResources",
-		Message:            resolveErr.Error(),
+		Reason:             reason,
+		Message:            cause.Error(),
 	})
 	if !apiequality.Semantic.DeepEqual(statusBefore, &sandbox.Status) {
 		if err := r.Status().Update(ctx, sandbox); err != nil {
@@ -219,17 +239,6 @@ func (r *ExecutionSandboxReconciler) failInvalidResources(
 		}
 	}
 	return nil
-}
-
-func executionSandboxDuration(raw string, fallback time.Duration, field string) (time.Duration, error) {
-	if strings.TrimSpace(raw) == "" {
-		return fallback, nil
-	}
-	duration, err := time.ParseDuration(raw)
-	if err != nil || duration <= 0 {
-		return 0, fmt.Errorf("execution sandbox %s must be a positive Go duration", field)
-	}
-	return duration, nil
 }
 
 func (r *ExecutionSandboxReconciler) ensureExecutionSandboxToken(
@@ -348,121 +357,6 @@ func (r *ExecutionSandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Complete(r)
-}
-
-func intersectSandboxEgress(
-	requested []v1beta1.DeepAgentsEgressRule,
-	ceilings []v1beta1.DeepAgentsEgressRule,
-) ([]v1beta1.DeepAgentsEgressRule, error) {
-	requestedParsed, err := parseSandboxEgressRules(requested)
-	if err != nil {
-		return nil, fmt.Errorf("requested egress: %w", err)
-	}
-	ceilingParsed, err := parseSandboxEgressRules(ceilings)
-	if err != nil {
-		return nil, fmt.Errorf("egress ceiling: %w", err)
-	}
-
-	var result []v1beta1.DeepAgentsEgressRule
-	seen := map[string]struct{}{}
-	for _, req := range requestedParsed {
-		for _, ceiling := range ceilingParsed {
-			if req.protocol != ceiling.protocol {
-				continue
-			}
-			intersection, ok := narrowerPrefix(req.prefix, ceiling.prefix)
-			if !ok {
-				continue
-			}
-			ports := intersectPorts(req.ports, ceiling.ports)
-			if len(ports) == 0 {
-				continue
-			}
-			key := intersection.String() + "/" + req.protocol
-			for _, port := range ports {
-				key += fmt.Sprintf("/%d", port)
-			}
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			result = append(result, v1beta1.DeepAgentsEgressRule{
-				CIDR:     intersection.String(),
-				Protocol: req.protocol,
-				Ports:    ports,
-			})
-		}
-	}
-	return result, nil
-}
-
-type parsedSandboxEgressRule struct {
-	prefix   netip.Prefix
-	protocol string
-	ports    []int32
-}
-
-func parseSandboxEgressRules(rules []v1beta1.DeepAgentsEgressRule) ([]parsedSandboxEgressRule, error) {
-	parsed := make([]parsedSandboxEgressRule, 0, len(rules))
-	for _, rule := range rules {
-		prefix, err := netip.ParsePrefix(strings.TrimSpace(rule.CIDR))
-		if err != nil {
-			return nil, fmt.Errorf("invalid CIDR %q: %w", rule.CIDR, err)
-		}
-		prefix = prefix.Masked()
-		protocol := strings.ToUpper(strings.TrimSpace(rule.Protocol))
-		if protocol == "" {
-			protocol = string(corev1.ProtocolTCP)
-		}
-		if protocol != string(corev1.ProtocolTCP) && protocol != string(corev1.ProtocolUDP) {
-			return nil, fmt.Errorf("unsupported protocol %q", rule.Protocol)
-		}
-		if len(rule.Ports) == 0 {
-			return nil, fmt.Errorf("CIDR %q must declare at least one port", rule.CIDR)
-		}
-		ports := make([]int32, len(rule.Ports))
-		copy(ports, rule.Ports)
-		for _, port := range ports {
-			if port < 1 || port > 65535 {
-				return nil, fmt.Errorf("invalid port %d for CIDR %q", port, rule.CIDR)
-			}
-		}
-		parsed = append(parsed, parsedSandboxEgressRule{prefix: prefix, protocol: protocol, ports: ports})
-	}
-	return parsed, nil
-}
-
-func narrowerPrefix(a, b netip.Prefix) (netip.Prefix, bool) {
-	if a.Addr().Is4() != b.Addr().Is4() {
-		return netip.Prefix{}, false
-	}
-	if b.Contains(a.Addr()) && b.Bits() <= a.Bits() {
-		return a, true
-	}
-	if a.Contains(b.Addr()) && a.Bits() <= b.Bits() {
-		return b, true
-	}
-	return netip.Prefix{}, false
-}
-
-func intersectPorts(requested, ceilings []int32) []int32 {
-	allowed := make(map[int32]struct{}, len(ceilings))
-	for _, port := range ceilings {
-		allowed[port] = struct{}{}
-	}
-	result := make([]int32, 0, len(requested))
-	seen := map[int32]struct{}{}
-	for _, port := range requested {
-		if _, ok := allowed[port]; !ok {
-			continue
-		}
-		if _, duplicate := seen[port]; duplicate {
-			continue
-		}
-		seen[port] = struct{}{}
-		result = append(result, port)
-	}
-	return result
 }
 
 func buildExecutionSandboxResources(

@@ -11,6 +11,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,7 +33,7 @@ func newExecutionSandboxHandlerTestClient(t *testing.T, objects ...runtime.Objec
 		WithRuntimeObjects(objects...).
 		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
 		Build()
-	return NewExecutionSandboxHandler(cl, "agentteams-system", "deepagents", sandboxpolicy.Default())
+	return NewExecutionSandboxHandler(cl, "agentteams-system", "deepagents", sandboxpolicy.Default(), nil)
 }
 
 func deepAgentsSandboxWorker() *v1beta1.Worker {
@@ -175,6 +176,151 @@ func TestExecutionSandboxEnsureRejectsInvalidWorkerEphemeralStorageOverrides(t *
 				t.Fatalf("invalid resources created ExecutionSandbox: get error=%v", err)
 			}
 		})
+	}
+}
+
+func TestExecutionSandboxEnsureRejectsInvalidWorkerPolicyWithoutCreatingSandbox(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*v1beta1.DeepAgentsExecutionConfig)
+	}{
+		{name: "idle timeout", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.IdleTimeout = "invalid"
+		}},
+		{name: "max lifetime", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.MaxLifetime = "0s"
+		}},
+		{name: "egress CIDR", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.Egress[0].CIDR = "invalid"
+		}},
+		{name: "egress protocol", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.Egress[0].Protocol = "ICMP"
+		}},
+		{name: "egress port", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.Egress[0].Ports = []int32{0}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := deepAgentsSandboxWorker()
+			tt.mutate(&worker.Spec.RuntimeConfig.DeepAgents.Execution)
+			h := newExecutionSandboxHandlerTestClient(t, worker)
+			sessionID := "invalid-" + strings.ReplaceAll(tt.name, " ", "-")
+			req := httptest.NewRequest(http.MethodPost, "/ensure", strings.NewReader(`{"sessionId":"`+sessionID+`"}`))
+			req.SetPathValue("name", worker.Name)
+			rec := httptest.NewRecorder()
+
+			h.Ensure(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			var sandbox v1beta1.ExecutionSandbox
+			err := h.client.Get(context.Background(), types.NamespacedName{
+				Name: executionSandboxName(worker.Name, sessionID), Namespace: "agentteams-system",
+			}, &sandbox)
+			if !apierrors.IsNotFound(err) {
+				t.Fatalf("invalid Worker policy created ExecutionSandbox: %v", err)
+			}
+		})
+	}
+}
+
+func TestExecutionSandboxEnsureRejectsInvalidWorkerPolicyWithoutMutatingSandbox(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*v1beta1.DeepAgentsExecutionConfig)
+	}{
+		{name: "idle timeout", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.IdleTimeout = "invalid"
+		}},
+		{name: "max lifetime", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.MaxLifetime = "0s"
+		}},
+		{name: "egress CIDR", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.Egress[0].CIDR = "invalid"
+		}},
+		{name: "egress protocol", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.Egress[0].Protocol = "ICMP"
+		}},
+		{name: "egress port", mutate: func(execution *v1beta1.DeepAgentsExecutionConfig) {
+			execution.Egress[0].Ports = []int32{0}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := deepAgentsSandboxWorker()
+			name := executionSandboxName(worker.Name, "thread-hash")
+			sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+			before := sandbox.Spec.DeepCopy()
+			tt.mutate(&worker.Spec.RuntimeConfig.DeepAgents.Execution)
+			h := newExecutionSandboxHandlerTestClient(t, worker, sandbox)
+			req := httptest.NewRequest(http.MethodPost, "/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+			req.SetPathValue("name", worker.Name)
+			rec := httptest.NewRecorder()
+
+			h.Ensure(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			var stored v1beta1.ExecutionSandbox
+			if err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "agentteams-system"}, &stored); err != nil {
+				t.Fatal(err)
+			}
+			if !apiequality.Semantic.DeepEqual(&stored.Spec, before) {
+				t.Fatalf("invalid Worker policy mutated ExecutionSandbox: got=%#v want=%#v", stored.Spec, *before)
+			}
+		})
+	}
+}
+
+func TestExecutionSandboxEnsureRejectsInvalidConfiguredEgressCeilingWithoutMutation(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	name := executionSandboxName(worker.Name, "thread-hash")
+	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+	before := sandbox.Spec.DeepCopy()
+	h := newExecutionSandboxHandlerTestClient(t, worker, sandbox)
+	h.egressCeilings = []v1beta1.DeepAgentsEgressRule{{CIDR: "invalid-ceiling", Ports: []int32{443}}}
+	req := httptest.NewRequest(http.MethodPost, "/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+
+	h.Ensure(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	var stored v1beta1.ExecutionSandbox
+	if err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "agentteams-system"}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if !apiequality.Semantic.DeepEqual(&stored.Spec, before) {
+		t.Fatalf("invalid configured ceiling mutated ExecutionSandbox: got=%#v want=%#v", stored.Spec, *before)
+	}
+}
+
+func TestExecutionSandboxEnsureRejectsInvalidConfiguredEgressCeilingWithoutCreation(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	h := newExecutionSandboxHandlerTestClient(t, worker)
+	h.egressCeilings = []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.0/12", Protocol: "ICMP", Ports: []int32{443}}}
+	req := httptest.NewRequest(http.MethodPost, "/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+
+	h.Ensure(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	var sandbox v1beta1.ExecutionSandbox
+	err := h.client.Get(context.Background(), types.NamespacedName{
+		Name: executionSandboxName(worker.Name, "thread-hash"), Namespace: "agentteams-system",
+	}, &sandbox)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("invalid configured ceiling created ExecutionSandbox: %v", err)
 	}
 }
 

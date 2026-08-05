@@ -99,6 +99,7 @@ class RunnerService:
                 executable="/bin/sh",
                 stdout=output_handle,
                 stderr=subprocess.STDOUT,
+                close_fds=True,
                 start_new_session=True,
             )
             timed_out = False

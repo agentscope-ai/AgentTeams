@@ -2,8 +2,11 @@
 
 import base64
 import binascii
+import ctypes
 import os
+import resource
 import secrets
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
@@ -19,6 +22,27 @@ from deepagents_agentteams.runner_core import (
     RunnerService,
     UnknownExecutionResult,
 )
+
+_PR_SET_DUMPABLE = 4
+
+
+def consume_and_harden_runner_token() -> str:
+    """Remove the runner token from the environment and disable process dumps."""
+    bearer_token = os.environ.pop("AGENTTEAMS_RUNNER_TOKEN", "")
+    if not bearer_token:
+        raise RuntimeError("AGENTTEAMS_RUNNER_TOKEN must be configured")
+    if sys.platform != "linux":
+        raise RuntimeError("runner process hardening requires Linux")
+
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    library = ctypes.CDLL(None, use_errno=True)
+    prctl = library.prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    if prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, "failed to disable process dumpability")
+    return bearer_token
 
 
 class ExecuteRequest(BaseModel):
@@ -149,7 +173,7 @@ def create_app(*, service: RunnerService, bearer_token: str) -> FastAPI:
 
 def main() -> None:
     """Start the runner HTTP service from environment configuration."""
-    bearer_token = os.environ.get("AGENTTEAMS_RUNNER_TOKEN", "")
+    bearer_token = consume_and_harden_runner_token()
     service = RunnerService(
         workspace=Path(os.environ.get("AGENTTEAMS_RUNNER_WORKSPACE", "/workspace")),
         state_dir=Path(

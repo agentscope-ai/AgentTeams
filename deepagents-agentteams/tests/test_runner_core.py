@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from deepagents_agentteams.runner_core import (
     InvalidWorkspacePath,
@@ -159,6 +159,17 @@ class RunnerServiceTests(unittest.TestCase):
             self.assertNotIn("runner-secret", result.output)
             self.assertNotIn("gateway-secret", result.output)
             self.assertNotIn("AGENTTEAMS_RUNNER_TOKEN", result.output)
+
+    def test_command_process_closes_descriptors_and_starts_a_process_group(self) -> None:
+        process = MagicMock(pid=12345, returncode=0)
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
+            service = RunnerService(workspace=Path(workspace), state_dir=Path(state))
+            with patch("deepagents_agentteams.runner_core.subprocess.Popen", return_value=process) as popen:
+                service.execute(request_id="req-process-flags", command="true", timeout_seconds=5)
+
+        _, kwargs = popen.call_args
+        self.assertTrue(kwargs["close_fds"])
+        self.assertTrue(kwargs["start_new_session"])
 
 
 if __name__ == "__main__":

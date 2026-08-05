@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"strings"
 )
 
 const workerRequestMaxBytes int64 = 1024 * 1024
@@ -25,6 +27,9 @@ func decodeStrictWorkerRequest(w http.ResponseWriter, r *http.Request, destinati
 	if err := validateUniqueJSONObjectKeys(body); err != nil {
 		return err
 	}
+	if err := validateExactJSONFieldNames(body, reflect.TypeOf(destination)); err != nil {
+		return err
+	}
 
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
@@ -38,6 +43,115 @@ func decodeStrictWorkerRequest(w http.ResponseWriter, r *http.Request, destinati
 		return err
 	}
 	return nil
+}
+
+var jsonUnmarshalerType = reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
+
+func validateExactJSONFieldNames(body []byte, schema reflect.Type) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	return validateExactJSONValue(value, schema, "$req")
+}
+
+func validateExactJSONValue(value any, schema reflect.Type, path string) error {
+	if schema == nil || schema.Kind() == reflect.Interface || implementsJSONUnmarshaler(schema) {
+		return nil
+	}
+	for schema.Kind() == reflect.Pointer {
+		if value == nil {
+			return nil
+		}
+		schema = schema.Elem()
+		if implementsJSONUnmarshaler(schema) {
+			return nil
+		}
+	}
+
+	switch schema.Kind() {
+	case reflect.Struct:
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil // encoding/json reports the value-type error.
+		}
+		fields := exactJSONStructFields(schema)
+		for name, nested := range object {
+			fieldType, exists := fields[name]
+			if !exists {
+				return fmt.Errorf("unknown field %q at %s", name, path)
+			}
+			if err := validateExactJSONValue(nested, fieldType, path+"."+name); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		items, ok := value.([]any)
+		if !ok {
+			return nil
+		}
+		for index, item := range items {
+			if err := validateExactJSONValue(item, schema.Elem(), fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
+		// Map keys are data, not typed schema fields. Env and label maps, for
+		// example, intentionally accept arbitrary case-sensitive names.
+		for name, nested := range object {
+			if err := validateExactJSONValue(nested, schema.Elem(), path+"["+name+"]"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func exactJSONStructFields(schema reflect.Type) map[string]reflect.Type {
+	fields := map[string]reflect.Type{}
+	collectExactJSONStructFields(schema, fields)
+	return fields
+}
+
+func collectExactJSONStructFields(schema reflect.Type, fields map[string]reflect.Type) {
+	for index := 0; index < schema.NumField(); index++ {
+		field := schema.Field(index)
+		if field.PkgPath != "" {
+			continue
+		}
+		tag := field.Tag.Get("json")
+		name := strings.Split(tag, ",")[0]
+		if name == "-" {
+			continue
+		}
+		if field.Anonymous && name == "" {
+			embedded := field.Type
+			for embedded.Kind() == reflect.Pointer {
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() == reflect.Struct && !implementsJSONUnmarshaler(embedded) {
+				collectExactJSONStructFields(embedded, fields)
+				continue
+			}
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = field.Type
+	}
+}
+
+func implementsJSONUnmarshaler(schema reflect.Type) bool {
+	if schema.Implements(jsonUnmarshalerType) {
+		return true
+	}
+	return schema.Kind() != reflect.Pointer && reflect.PointerTo(schema).Implements(jsonUnmarshalerType)
 }
 
 func validateUniqueJSONObjectKeys(body []byte) error {

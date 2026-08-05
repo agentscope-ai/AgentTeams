@@ -214,7 +214,11 @@ func TestCreateWorkerRejectsNonStrictJSONWithoutCreatingWorker(t *testing.T) {
 		body string
 	}{
 		{name: "unknown top-level field", body: `{"name":"strict-worker","unexpected":true}`},
+		{name: "single top-level case alias", body: `{"Name":"strict-worker"}`},
+		{name: "paired top-level case alias", body: `{"name":"strict-worker","Name":"other-worker"}`},
 		{name: "unknown nested field", body: `{"name":"strict-worker","runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","unexpected":true}}}}`},
+		{name: "single nested case alias", body: `{"name":"strict-worker","runtimeConfig":{"deepagents":{"execution":{"Mode":"sandbox"}}}}`},
+		{name: "paired nested case alias", body: `{"name":"strict-worker","runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","Mode":"local"}}}}`},
 		{name: "duplicate escaped-equivalent top-level field", body: `{"name":"strict-worker","na\u006de":"other-worker"}`},
 		{name: "duplicate escaped-equivalent nested field", body: `{"name":"strict-worker","runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","mo\u0064e":"local"}}}}`},
 		{name: "duplicate field in array object", body: `{"name":"strict-worker","runtimeConfig":{"deepagents":{"approvals":{"mcpRules":[{"server":"one","ser\u0076er":"two","tool":"run","mode":"required"}]}}}}`},
@@ -254,7 +258,11 @@ func TestUpdateWorkerRejectsNonStrictJSONWithoutMutation(t *testing.T) {
 		body string
 	}{
 		{name: "unknown top-level field", body: `{"model":"changed","unexpected":true}`},
+		{name: "single top-level case alias", body: `{"Model":"changed"}`},
+		{name: "paired top-level case alias", body: `{"model":"changed","Model":"other"}`},
 		{name: "unknown nested field", body: `{"runtimeConfig":{"deepagents":{"approvals":{"fileWrites":"required","unexpected":true}}}}`},
+		{name: "single nested case alias", body: `{"runtimeConfig":{"deepagents":{"execution":{"Mode":"sandbox"}}}}`},
+		{name: "paired nested case alias", body: `{"runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","Mode":"local"}}}}`},
 		{name: "duplicate escaped-equivalent top-level field", body: `{"model":"changed","mo\u0064el":"other"}`},
 		{name: "duplicate escaped-equivalent nested field", body: `{"runtimeConfig":{"deepagents":{"execution":{"mode":"sandbox","mo\u0064e":"local"}}}}`},
 		{name: "duplicate field in array object", body: `{"runtimeConfig":{"deepagents":{"approvals":{"mcpRules":[{"server":"one","ser\u0076er":"two","tool":"run","mode":"required"}]}}}}`},

@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -431,6 +432,140 @@ func TestExecutionSandboxReconcilerConvergesInvalidPolicies(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExecutionSandboxReconcilerKeepsTerminatingRunnerIsolated(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		Spec: v1beta1.WorkerSpec{Runtime: "deepagents", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+			DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"}},
+		}},
+	}
+	expiresAt := metav1.NewTime(time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC))
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "exec-terminating", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+			SessionID:   "thread-hash",
+			IdleTimeout: "invalid",
+			MaxLifetime: "8h",
+		},
+		Status: v1beta1.ExecutionSandboxStatus{
+			ObservedGeneration: 1,
+			Phase:              "Ready",
+			Endpoint:           "http://exec-terminating.agentteams-system.svc:8080",
+			PodName:            "exec-terminating",
+			ExpiresAt:          &expiresAt,
+		},
+	}
+	key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}, Data: map[string][]byte{"token": []byte("capability")}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: key.Name, Namespace: key.Namespace,
+		Labels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name},
+	}}
+	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	policy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Egress:      []networkingv1.NetworkPolicyEgressRule{{}},
+		},
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+		WithObjects(worker, sandbox, secret, pod, service, policy).
+		Build()
+	podDeleteRequested := false
+	cl := interceptor.NewClient(base, interceptor.Funcs{
+		Delete: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.DeleteOption) error {
+			if _, ok := object.(*corev1.Pod); ok {
+				podDeleteRequested = true
+				return nil
+			}
+			return underlying.Delete(ctx, object, opts...)
+		},
+		Get: func(ctx context.Context, underlying client.WithWatch, objectKey client.ObjectKey, object client.Object, opts ...client.GetOption) error {
+			err := underlying.Get(ctx, objectKey, object, opts...)
+			if livePod, ok := object.(*corev1.Pod); ok && err == nil && podDeleteRequested {
+				terminating := metav1.NewTime(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC))
+				livePod.DeletionTimestamp = &terminating
+			}
+			return err
+		},
+	})
+	r := &ExecutionSandboxReconciler{
+		Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents",
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile terminating Pod: %v", err)
+	}
+	if result.RequeueAfter != executionSandboxRequeue || !podDeleteRequested {
+		t.Fatalf("result=%#v deleteRequested=%v, want terminating requeue", result, podDeleteRequested)
+	}
+	if err := base.Get(context.Background(), key, &corev1.Service{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("Service still routes to invalid Runner: %v", err)
+	}
+	var isolated networkingv1.NetworkPolicy
+	if err := base.Get(context.Background(), key, &isolated); err != nil {
+		t.Fatalf("default-deny NetworkPolicy missing: %v", err)
+	}
+	if len(isolated.Spec.Ingress) != 0 || len(isolated.Spec.Egress) != 0 || len(isolated.Spec.PolicyTypes) != 2 ||
+		isolated.Spec.PodSelector.MatchLabels[v1beta1.LabelExecutionSandbox] != sandbox.Name ||
+		!metav1.IsControlledBy(&isolated, sandbox) {
+		t.Fatalf("terminating Runner policy is not owned default-deny: %#v", isolated)
+	}
+	if err := base.Get(context.Background(), key, &corev1.Secret{}); err != nil {
+		t.Fatalf("capability Secret removed before Pod absence: %v", err)
+	}
+	var failed v1beta1.ExecutionSandbox
+	if err := base.Get(context.Background(), key, &failed); err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status.Phase != "Failed" || failed.Status.Endpoint != "" || failed.Status.PodName != "" || failed.Status.ExpiresAt != nil ||
+		sandboxReadyReason(failed.Status.Conditions) != "InvalidPolicy" {
+		t.Fatalf("terminating invalid sandbox status=%#v", failed.Status)
+	}
+
+	if err := base.Delete(context.Background(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}); err != nil {
+		t.Fatalf("simulate Pod disappearance: %v", err)
+	}
+	result, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil || result.RequeueAfter != 0 {
+		t.Fatalf("Reconcile absent Pod result=%#v err=%v", result, err)
+	}
+	for _, object := range []client.Object{&corev1.Secret{}, &networkingv1.NetworkPolicy{}} {
+		if err := base.Get(context.Background(), key, object); !apierrors.IsNotFound(err) {
+			t.Fatalf("absent Pod left %T behind: %v", object, err)
+		}
+	}
+	if err := base.Get(context.Background(), key, &failed); err != nil {
+		t.Fatal(err)
+	}
+	resourceVersion := failed.ResourceVersion
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("stable invalid reconcile: %v", err)
+	}
+	if err := base.Get(context.Background(), key, &failed); err != nil {
+		t.Fatal(err)
+	}
+	if failed.ResourceVersion != resourceVersion {
+		t.Fatalf("stable invalid status rewritten: %q -> %q", resourceVersion, failed.ResourceVersion)
 	}
 }
 

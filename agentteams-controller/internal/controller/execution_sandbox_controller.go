@@ -74,15 +74,15 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	}
 	idleTimeout, err := sandboxpolicy.ResolveDuration(sandbox.Spec.IdleTimeout, 30*time.Minute, "idleTimeout")
 	if err != nil {
-		return reconcile.Result{}, r.failInvalidPolicy(ctx, &sandbox, err)
+		return r.failInvalidPolicy(ctx, &sandbox, err)
 	}
 	maxLifetime, err := sandboxpolicy.ResolveDuration(sandbox.Spec.MaxLifetime, 8*time.Hour, "maxLifetime")
 	if err != nil {
-		return reconcile.Result{}, r.failInvalidPolicy(ctx, &sandbox, err)
+		return r.failInvalidPolicy(ctx, &sandbox, err)
 	}
 	allowedEgress, err := sandboxpolicy.IntersectEgress(sandbox.Spec.Egress, r.EgressCeilings)
 	if err != nil {
-		return reconcile.Result{}, r.failInvalidPolicy(ctx, &sandbox, err)
+		return r.failInvalidPolicy(ctx, &sandbox, err)
 	}
 	createdAt := sandbox.CreationTimestamp.Time
 	if createdAt.IsZero() {
@@ -106,7 +106,7 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	}
 	effectiveResources, podResources, emptyDirLimit, err := r.EphemeralStorage.Resolve(effective.Spec.Resources)
 	if err != nil {
-		return reconcile.Result{}, r.failInvalidResources(ctx, &sandbox, err)
+		return r.failInvalidResources(ctx, &sandbox, err)
 	}
 	effective.Spec.Resources = effectiveResources
 	tokenSecretName := sandbox.Name
@@ -188,7 +188,7 @@ func (r *ExecutionSandboxReconciler) failInvalidResources(
 	ctx context.Context,
 	sandbox *v1beta1.ExecutionSandbox,
 	resolveErr error,
-) error {
+) (reconcile.Result, error) {
 	return r.failClosed(ctx, sandbox, "InvalidResources", resolveErr, false)
 }
 
@@ -196,7 +196,7 @@ func (r *ExecutionSandboxReconciler) failInvalidPolicy(
 	ctx context.Context,
 	sandbox *v1beta1.ExecutionSandbox,
 	policyErr error,
-) error {
+) (reconcile.Result, error) {
 	return r.failClosed(ctx, sandbox, "InvalidPolicy", policyErr, true)
 }
 
@@ -206,18 +206,58 @@ func (r *ExecutionSandboxReconciler) failClosed(
 	reason string,
 	cause error,
 	clearExpiry bool,
-) error {
-	for _, object := range []client.Object{
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
-		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
-		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
-	} {
-		if err := r.Delete(ctx, object); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete invalid execution sandbox %T: %w", object, err)
+) (reconcile.Result, error) {
+	key := client.ObjectKeyFromObject(sandbox)
+	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	if err := r.Delete(ctx, service); err != nil && !apierrors.IsNotFound(err) {
+		return reconcile.Result{}, fmt.Errorf("delete invalid execution sandbox Service: %w", err)
+	}
+
+	var pod corev1.Pod
+	podErr := r.Get(ctx, key, &pod)
+	if podErr != nil && !apierrors.IsNotFound(podErr) {
+		return reconcile.Result{}, fmt.Errorf("get invalid execution sandbox Pod: %w", podErr)
+	}
+	if podErr == nil {
+		denyAll := buildExecutionSandboxDefaultDenyPolicy(sandbox, r.ControllerName)
+		if _, err := r.ensureExecutionSandboxObject(ctx, denyAll); err != nil {
+			return reconcile.Result{}, fmt.Errorf("isolate invalid execution sandbox Pod: %w", err)
 		}
 	}
 
+	if err := r.updateInvalidSandboxStatus(ctx, sandbox, reason, cause, clearExpiry); err != nil {
+		return reconcile.Result{}, err
+	}
+	if podErr == nil {
+		if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, fmt.Errorf("delete invalid execution sandbox Pod: %w", err)
+		}
+		var terminating corev1.Pod
+		if err := r.Get(ctx, key, &terminating); err == nil {
+			return reconcile.Result{RequeueAfter: executionSandboxRequeue}, nil
+		} else if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, fmt.Errorf("observe invalid execution sandbox Pod deletion: %w", err)
+		}
+	}
+
+	for _, object := range []client.Object{
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
+		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
+	} {
+		if err := r.Delete(ctx, object); err != nil && !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, fmt.Errorf("delete invalid execution sandbox %T: %w", object, err)
+		}
+	}
+	return reconcile.Result{}, nil
+}
+
+func (r *ExecutionSandboxReconciler) updateInvalidSandboxStatus(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+	reason string,
+	cause error,
+	clearExpiry bool,
+) error {
 	statusBefore := sandbox.Status.DeepCopy()
 	sandbox.Status.ObservedGeneration = sandbox.Generation
 	sandbox.Status.Phase = "Failed"
@@ -239,6 +279,45 @@ func (r *ExecutionSandboxReconciler) failClosed(
 		}
 	}
 	return nil
+}
+
+func buildExecutionSandboxDefaultDenyPolicy(
+	sandbox *v1beta1.ExecutionSandbox,
+	controllerName string,
+) *networkingv1.NetworkPolicy {
+	controller := true
+	blockOwnerDeletion := true
+	policy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sandbox.Name,
+			Namespace: sandbox.Namespace,
+			Labels: map[string]string{
+				v1beta1.LabelController:       controllerName,
+				v1beta1.LabelExecutionSandbox: sandbox.Name,
+				v1beta1.LabelWorker:           sandbox.Spec.WorkerRef.Name,
+				v1beta1.LabelRuntime:          "deepagents-runner",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         v1beta1.SchemeGroupVersion.String(),
+				Kind:               "ExecutionSandbox",
+				Name:               sandbox.Name,
+				UID:                sandbox.UID,
+				Controller:         &controller,
+				BlockOwnerDeletion: &blockOwnerDeletion,
+			}},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{
+				v1beta1.LabelExecutionSandbox: sandbox.Name,
+			}},
+			PolicyTypes: []networkingv1.PolicyType{
+				networkingv1.PolicyTypeIngress,
+				networkingv1.PolicyTypeEgress,
+			},
+		},
+	}
+	stampExecutionSandboxSpecHash(policy)
+	return policy
 }
 
 func (r *ExecutionSandboxReconciler) ensureExecutionSandboxToken(

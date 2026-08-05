@@ -220,6 +220,23 @@ docker image inspect \
 
 镜像架构必须与 `agent2`、`agent3` 的 `kubernetes.io/arch` 一致。若源码树包含会进入镜像的未提交修改，记录完整 `git status` 和构建时间，确保日后可以追溯该镜像内容。
 
+内置 DeepAgents PostgreSQL 默认引用 Docker Hub 的 `postgres:17-alpine`。如果两个 worker 无法稳定访问 Docker Hub，可在 `agent1` 从经过组织批准的 Docker Official Images 镜像源拉取，验证后重打 Chart 需要的标签。本集群已验证 Amazon ECR Public 路径：
+
+```bash
+docker pull public.ecr.aws/docker/library/postgres:17-alpine
+
+docker run --rm --entrypoint postgres \
+  public.ecr.aws/docker/library/postgres:17-alpine --version
+
+docker tag public.ecr.aws/docker/library/postgres:17-alpine \
+  postgres:17-alpine
+
+docker image inspect postgres:17-alpine \
+  --format '{{.Id}} {{.Architecture}} {{.Size}}'
+```
+
+记录实际 digest 和 PostgreSQL 版本；不要只根据相同 Tag 假设镜像内容一致。后续归档会把这个本地标签一起导入两个 worker，使 kubelet 的 `IfNotPresent` 不再访问 Docker Hub。
+
 ### 5.2 使用本地 openclaw-base
 
 默认构建会使用远程 `openclaw-base`。若修改了 `openclaw-base/`，必须显式让下游镜像使用本地基础镜像：
@@ -265,6 +282,7 @@ docker save \
   "agentteams/worker-agent:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/deepagents-worker:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/deepagents-runner:${AGENTTEAMS_LOCAL_TAG}" \
+  "postgres:17-alpine" \
   -o "${AGENTTEAMS_IMAGE_ARCHIVE}"
 
 ls -lh "${AGENTTEAMS_IMAGE_ARCHIVE}"
@@ -292,7 +310,7 @@ export AGENTTEAMS_IMAGE_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}
       "sudo ctr -n k8s.io images import '${AGENTTEAMS_IMAGE_ARCHIVE}'"
 
     ssh -t "${AGENTTEAMS_NODE}" \
-      "sudo ctr -n k8s.io images list | grep '${AGENTTEAMS_LOCAL_TAG}'"
+      "sudo ctr -n k8s.io images list | grep '${AGENTTEAMS_LOCAL_TAG}' && sudo ctr -n k8s.io images list | grep 'docker.io/library/postgres:17-alpine'"
 
     ssh "${AGENTTEAMS_NODE}" \
       "rm -- '${AGENTTEAMS_IMAGE_ARCHIVE}'"
@@ -302,12 +320,12 @@ export AGENTTEAMS_IMAGE_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}
 
 必须使用 `k8s.io` namespace；导入到 containerd 的默认 namespace 后，kubelet 看不到镜像。
 
-再分别核对五张镜像：
+再分别核对六张镜像：
 
 ```bash
 for AGENTTEAMS_NODE in agent2@10.13.36.138 agent3@10.13.36.173; do
   ssh -t "${AGENTTEAMS_NODE}" \
-    "sudo crictl images | grep '${AGENTTEAMS_LOCAL_TAG}'"
+    "sudo crictl images | grep '${AGENTTEAMS_LOCAL_TAG}' && sudo crictl images | grep -E '^docker.io/library/postgres[[:space:]]+17-alpine'"
 done
 ```
 
@@ -794,6 +812,7 @@ docker save \
   "agentteams/worker-agent:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/deepagents-worker:${AGENTTEAMS_LOCAL_TAG}" \
   "agentteams/deepagents-runner:${AGENTTEAMS_LOCAL_TAG}" \
+  "postgres:17-alpine" \
   -o "${AGENTTEAMS_IMAGE_ARCHIVE}"
 
 export AGENTTEAMS_IMAGE_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}" | awk '{print $1}')"
@@ -808,7 +827,7 @@ export AGENTTEAMS_IMAGE_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}
     ssh -t "${AGENTTEAMS_NODE}" \
       "sudo ctr -n k8s.io images import '${AGENTTEAMS_IMAGE_ARCHIVE}'"
     ssh -t "${AGENTTEAMS_NODE}" \
-      "sudo ctr -n k8s.io images list | grep '${AGENTTEAMS_LOCAL_TAG}'"
+      "sudo ctr -n k8s.io images list | grep '${AGENTTEAMS_LOCAL_TAG}' && sudo ctr -n k8s.io images list | grep 'docker.io/library/postgres:17-alpine'"
     ssh "${AGENTTEAMS_NODE}" \
       "rm -- '${AGENTTEAMS_IMAGE_ARCHIVE}'"
   done

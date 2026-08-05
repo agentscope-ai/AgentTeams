@@ -117,6 +117,8 @@ export AGENTTEAMS_DEEPAGENTS_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_DEEPAGENT
 
 归档应放在 `/var/tmp` 等磁盘文件系统，不要假设节点 `/tmp` 有足够空间；部分 kubeadm 节点会把 `/tmp` 挂载为容量较小的 `tmpfs`。上述循环会先校验 SHA-256，并且只有导入和标签检查都成功后才删除 worker 上的临时归档。
 
+启用内置 PostgreSQL 时还必须保证所有可调度节点能取得 `postgres:17-alpine`。Docker Hub 不可达的局域网环境应按主部署指南先从批准的 Docker Official Images 镜像源拉取、验证并重打该标签，再把它加入同一离线归档。
+
 无 Registry 路径下，把 Helm Controller 的 `image.pullPolicy` 设为 `IfNotPresent`（或严格离线时设为 `Never`）；Controller 创建的 Manager/Worker/Runner 使用 `IfNotPresent`。因此必须把四张镜像导入所有可能承载这些 Pod 的节点，并确保 repository、Tag 和 digest 与 Helm 渲染结果完全一致。
 
 此时把后续 values 中的两个 DeepAgents repository 改为本地导入名称：

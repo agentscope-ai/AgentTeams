@@ -31,6 +31,7 @@ Runner 返回的工作区变更清单不是直接写入 MinIO 的依据。Worker
 
 - 已安装支持 `NetworkPolicy` 的 CNI，例如 Calico 或 Cilium。仅安装不执行 NetworkPolicy 的 CNI 会破坏 Runner 和 PostgreSQL 的隔离假设。
 - 集群存在可动态供给 `ReadWriteOnce` PVC 的默认 `StorageClass`，或者在 values 中显式填写 StorageClass。原生 kubeadm 不会自动提供动态存储类。
+- 若为本地演练选择 `local-path`，要明确它的卷是节点本地卷：Pod 被重调度到其它节点或节点故障时数据不可高可用，不能把它当作生产 HA 存储。
 - CoreDNS 位于 `kube-system`，Pod 标签包含常见的 `k8s-app=kube-dns`。Runner 仅在请求了外网 egress 时被允许访问该 DNS 服务。
 - 所有节点都能拉取 Controller、DeepAgents Worker、DeepAgents Runner 和 PostgreSQL 镜像。局域网环境建议先推送到集群可访问的私有镜像仓库。
 - PostgreSQL PVC、每个 DeepAgents Worker 的状态 PVC，以及现有 Tuwunel/MinIO PVC 有足够容量。

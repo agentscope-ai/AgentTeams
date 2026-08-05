@@ -10,7 +10,7 @@ If the admin asks you to import an existing Worker template, search a registry f
 | "local worker", "local mode", "container worker", "docker worker", "access my local environment", or "run on my machine" | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 | "hermes", "hermes worker", "hermes-agent" | `hermes` | |
 | "openhuman", "OpenHuman worker", "openhuman framework" | `openhuman` | |
-| "deepagents", long-horizon work, durable checkpoints, isolated execution | `deepagents` | `--runtime deepagents` — only when `${AGENTTEAMS_DEEPAGENTS_ENABLED}` is `1` |
+| "deepagents", long-horizon work, durable checkpoints, isolated execution | `deepagents` | `--runtime deepagents --deepagents-sandbox` plus Human coordinators — only when `${AGENTTEAMS_DEEPAGENTS_ENABLED}` is `1` |
 | "openclaw", or none of the above | default (uses `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}`, normally `openclaw`) | |
 
 When in doubt, ask which enabled runtime to use. Include DeepAgents (Python, encrypted PostgreSQL checkpoints, isolated Runner) only when `${AGENTTEAMS_DEEPAGENTS_ENABLED}` is `1`; otherwise offer copaw, openclaw, hermes, and openhuman.
@@ -106,6 +106,16 @@ agt create worker \
   -o json
 ```
 
+When the selected runtime is `deepagents`, you must add the safe sandbox configuration to this command:
+
+```bash
+agt create worker --name <NAME> --runtime deepagents --deepagents-sandbox \
+  --deepagents-coordinators @<HUMAN_ONE>:${AGENTTEAMS_MATRIX_DOMAIN},@<HUMAN_TWO>:${AGENTTEAMS_MATRIX_DOMAIN} \
+  --no-wait --soul "<SOUL>" -o json
+```
+
+This makes `execution.mode=sandbox` and requires Human approval for file writes and MCP by default. Supply explicit Human Matrix IDs whenever available. Without `--deepagents-coordinators`, the CLI derives exactly `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}` only when both environment values are set; it fails otherwise. Do not invent a Human ID. Use a reviewed `WorkerRuntimeConfig` JSON/YAML object with `--runtime-config-file <FILE>` for advanced DeepAgents egress and execution-resource configuration; do not include credentials in that file.
+
 Escape rules inside the `--soul "..."` string:
 
 - Escape every literal double quote as `\"` (as shown above for `"off-hours"` and `"days"`).
@@ -121,6 +131,9 @@ Escape rules inside the `--soul "..."` string:
 | `--skills` | Comma-separated built-in skills to assign |
 | `--mcp-servers` | Comma-separated MCP servers to authorize |
 | `--runtime` | Agent runtime: `openclaw` (default), `copaw`, `hermes`, `openhuman`, or Helm-enabled `deepagents` |
+| `--deepagents-sandbox` | Required when creating a DeepAgents Worker through this workflow. Enables sandbox execution and requires Human approval for file writes and MCP. Requires `--runtime deepagents`. |
+| `--deepagents-coordinators` | Comma-separated Human Matrix IDs for DeepAgents approvals. If omitted, both `AGENTTEAMS_ADMIN_USER` and `AGENTTEAMS_MATRIX_DOMAIN` must be set so the CLI can derive exactly one coordinator. |
+| `--runtime-config-file` | A reviewed JSON or YAML `WorkerRuntimeConfig` object for advanced runtime policy such as DeepAgents egress/resources. It cannot be combined with the DeepAgents convenience flags and must contain no credentials. |
 | `--no-wait` | **Strongly recommended.** Return as soon as the controller accepts the create request (~1s) instead of blocking up to 3 minutes for `phase=Ready`. Always pair with the Step 2.5 poll. |
 | `-o json` | Output full JSON response from controller |
 

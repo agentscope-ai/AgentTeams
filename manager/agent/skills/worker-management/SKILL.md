@@ -49,6 +49,16 @@ agt create worker --name <NAME> --no-wait \
 # Add --runtime <copaw|hermes|openhuman|deepagents> for an enabled non-default runtime (see runtime table above)
 ```
 
+For every DeepAgents Worker, add a sandbox policy in the same create command. Use explicit Human Matrix IDs when the admin supplied them:
+
+```bash
+agt create worker --name <NAME> --runtime deepagents --deepagents-sandbox \
+  --deepagents-coordinators @<HUMAN_ONE>:${AGENTTEAMS_MATRIX_DOMAIN},@<HUMAN_TWO>:${AGENTTEAMS_MATRIX_DOMAIN} \
+  --no-wait --soul "<SOUL>" -o json
+```
+
+`--deepagents-sandbox` sets `execution.mode=sandbox` and requires Human approval for file writes and MCP by default. If you omit `--deepagents-coordinators`, the CLI derives exactly `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}` only when both environment values are non-empty; otherwise it fails. Do not guess a Human Matrix ID. For advanced DeepAgents egress or execution resources, use a reviewed `WorkerRuntimeConfig` JSON/YAML file with `agt create worker --runtime-config-file <FILE>` or `agt update worker --runtime-config-file <FILE>`; do not put credentials in that file.
+
 > `--no-wait` returns as soon as the controller accepts the request (~1s). Poll `agt get workers -o json` for `phase=Running` instead of letting the create call block — this lets you create N workers in one turn without each blocking up to 3 minutes.
 
 > Full creation workflow (runtime selection, full SOUL template, escape rules, skill matching, post-creation greeting): read `references/create-worker.md`
@@ -89,7 +99,8 @@ To migrate a Worker between runtimes (e.g. openclaw → copaw, copaw → hermes)
 bash /opt/agentteams/agent/skills/worker-management/scripts/update-worker-config.sh \
   --name <NAME> \
   --runtime <openclaw|copaw|hermes|openhuman|deepagents> \
-  [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]
+  [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] \
+  [--deepagents-coordinators @<HUMAN>:${AGENTTEAMS_MATRIX_DOMAIN},...]
 ```
 
 What happens behind the scenes:
@@ -97,6 +108,8 @@ What happens behind the scenes:
 1. Controller writes the new `runtime` into the Worker CR's spec
 2. Reconcile detects the spec change → deletes the old container → creates a new one from the target runtime's image
 3. Agent config files (`openclaw.json`, `AGENTS.md`, builtin skills) are regenerated from the new runtime's templates by the controller's deployer
+
+When you switch to `deepagents`, the wrapper always adds `--deepagents-sandbox`: it enables sandbox execution and requires Human approval for file writes and MCP. Pass `--deepagents-coordinators` with explicit Human Matrix IDs, or ensure both `AGENTTEAMS_ADMIN_USER` and `AGENTTEAMS_MATRIX_DOMAIN` are set so the CLI can derive the one approved coordinator. Never invent an approver. Apply advanced DeepAgents egress and execution-resource settings through a reviewed `WorkerRuntimeConfig` JSON/YAML file after the switch.
 
 Constraints:
 

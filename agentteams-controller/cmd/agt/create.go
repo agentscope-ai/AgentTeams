@@ -30,19 +30,22 @@ func createCmd() *cobra.Command {
 
 func createWorkerCmd() *cobra.Command {
 	var (
-		name        string
-		model       string
-		runtime     string
-		image       string
-		identity    string
-		soul        string
-		soulFile    string
-		skills      string
-		packageURI  string
-		expose      string
-		outputFmt   string
-		waitTimeout time.Duration
-		noWait      bool
+		name                   string
+		model                  string
+		runtime                string
+		image                  string
+		identity               string
+		soul                   string
+		soulFile               string
+		skills                 string
+		packageURI             string
+		expose                 string
+		outputFmt              string
+		waitTimeout            time.Duration
+		noWait                 bool
+		runtimeConfigFile      string
+		deepAgentsSandbox      bool
+		deepAgentsCoordinators string
 	)
 
 	cmd := &cobra.Command{
@@ -79,6 +82,10 @@ func createWorkerCmd() *cobra.Command {
 					return err
 				}
 			}
+			runtimeConfig, err := workerRuntimeConfigFromFlags(cmd, runtime, runtimeConfigFile, deepAgentsSandbox, deepAgentsCoordinators)
+			if err != nil {
+				return err
+			}
 
 			req := map[string]interface{}{
 				"name":  name,
@@ -89,6 +96,9 @@ func createWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
+			if runtimeConfig != nil {
+				req["runtimeConfig"] = runtimeConfig
+			}
 			if skills != "" {
 				req["skills"] = splitCSV(skills)
 			}
@@ -142,6 +152,9 @@ func createWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&outputFmt, "output", "o", "", "Output format (json)")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 3*time.Minute, "Maximum time to wait for the Worker to report Ready")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return immediately after the controller accepts the create request, without polling for Ready")
+	cmd.Flags().StringVar(&runtimeConfigFile, "runtime-config-file", "", "Path to a WorkerRuntimeConfig JSON or YAML file")
+	cmd.Flags().BoolVar(&deepAgentsSandbox, "deepagents-sandbox", false, "Configure DeepAgents sandbox execution with required Human approvals")
+	cmd.Flags().StringVar(&deepAgentsCoordinators, "deepagents-coordinators", "", "Comma-separated Human Matrix IDs for DeepAgents approvals")
 	return cmd
 }
 

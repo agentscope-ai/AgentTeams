@@ -96,6 +96,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			ModelProvider:    req.ModelProvider,
 			WorkerName:       req.WorkerName,
 			Runtime:          runtime,
+			RuntimeConfig:    req.RuntimeConfig.DeepCopy(),
 			Image:            req.Image,
 			Identity:         req.Identity,
 			Soul:             req.Soul,
@@ -215,6 +216,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Runtime != "" {
 			worker.Spec.Runtime = req.Runtime
+		}
+		if req.RuntimeConfig != nil {
+			worker.Spec.RuntimeConfig = req.RuntimeConfig.DeepCopy()
 		}
 		if req.Image != "" {
 			worker.Spec.Image = req.Image
@@ -722,6 +726,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		State:            w.Spec.DesiredState(),
 		Model:            w.Spec.Model,
 		Runtime:          w.Spec.Runtime,
+		RuntimeConfig:    w.Spec.RuntimeConfig.DeepCopy(),
 		Image:            w.Spec.Image,
 		Identity:         w.Spec.Identity,
 		Soul:             w.Spec.Soul,

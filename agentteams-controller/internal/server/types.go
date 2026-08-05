@@ -20,6 +20,7 @@ type CreateWorkerRequest struct {
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	RuntimeConfig *v1beta1.WorkerRuntimeConfig       `json:"runtimeConfig,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -44,6 +45,7 @@ type UpdateWorkerRequest struct {
 	Expose        []v1beta1.ExposePort               `json:"expose,omitempty"`
 	ChannelPolicy *v1beta1.ChannelPolicySpec         `json:"channelPolicy,omitempty"`
 	Resources     *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+	RuntimeConfig *v1beta1.WorkerRuntimeConfig       `json:"runtimeConfig,omitempty"`
 
 	// ContainerManaged indicates whether the controller should manage
 	// container lifecycle for this worker. When false, container
@@ -54,29 +56,30 @@ type UpdateWorkerRequest struct {
 }
 
 type WorkerResponse struct {
-	Name             string                     `json:"name"`
-	WorkerName       string                     `json:"workerName,omitempty"`
-	Phase            string                     `json:"phase"`
-	ContainerManaged bool                       `json:"containerManaged"`
-	State            string                     `json:"state,omitempty"` // desired lifecycle state
-	Model            string                     `json:"model,omitempty"`
-	Runtime          string                     `json:"runtime,omitempty"`
-	Image            string                     `json:"image,omitempty"`
-	Identity         string                     `json:"identity,omitempty"`
-	Soul             string                     `json:"soul,omitempty"`
-	Agents           string                     `json:"agents,omitempty"`
-	Skills           []string                   `json:"skills,omitempty"`
-	McpServers       []v1beta1.MCPServer        `json:"mcpServers,omitempty"`
-	Package          string                     `json:"package,omitempty"`
-	BackendRuntime   string                     `json:"backendRuntime,omitempty"`
-	ChannelPolicy    *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
-	ContainerState   string                     `json:"containerState,omitempty"`
-	MatrixUserID     string                     `json:"matrixUserID,omitempty"`
-	RoomID           string                     `json:"roomID,omitempty"`
-	Message          string                     `json:"message,omitempty"`
-	ExposedPorts     []ExposedPortInfo          `json:"exposedPorts,omitempty"`
-	Team             string                     `json:"team,omitempty"`
-	Role             string                     `json:"role,omitempty"`
+	Name             string                       `json:"name"`
+	WorkerName       string                       `json:"workerName,omitempty"`
+	Phase            string                       `json:"phase"`
+	ContainerManaged bool                         `json:"containerManaged"`
+	State            string                       `json:"state,omitempty"` // desired lifecycle state
+	Model            string                       `json:"model,omitempty"`
+	Runtime          string                       `json:"runtime,omitempty"`
+	RuntimeConfig    *v1beta1.WorkerRuntimeConfig `json:"runtimeConfig,omitempty"`
+	Image            string                       `json:"image,omitempty"`
+	Identity         string                       `json:"identity,omitempty"`
+	Soul             string                       `json:"soul,omitempty"`
+	Agents           string                       `json:"agents,omitempty"`
+	Skills           []string                     `json:"skills,omitempty"`
+	McpServers       []v1beta1.MCPServer          `json:"mcpServers,omitempty"`
+	Package          string                       `json:"package,omitempty"`
+	BackendRuntime   string                       `json:"backendRuntime,omitempty"`
+	ChannelPolicy    *v1beta1.ChannelPolicySpec   `json:"channelPolicy,omitempty"`
+	ContainerState   string                       `json:"containerState,omitempty"`
+	MatrixUserID     string                       `json:"matrixUserID,omitempty"`
+	RoomID           string                       `json:"roomID,omitempty"`
+	Message          string                       `json:"message,omitempty"`
+	ExposedPorts     []ExposedPortInfo            `json:"exposedPorts,omitempty"`
+	Team             string                       `json:"team,omitempty"`
+	Role             string                       `json:"role,omitempty"`
 }
 
 type ExposedPortInfo struct {

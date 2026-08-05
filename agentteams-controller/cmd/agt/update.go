@@ -23,16 +23,19 @@ func updateCmd() *cobra.Command {
 
 func updateWorkerCmd() *cobra.Command {
 	var (
-		name       string
-		model      string
-		runtime    string
-		image      string
-		identity   string
-		soul       string
-		skills     string
-		packageURI string
-		expose     string
-		state      string
+		name                   string
+		model                  string
+		runtime                string
+		image                  string
+		identity               string
+		soul                   string
+		skills                 string
+		packageURI             string
+		expose                 string
+		state                  string
+		runtimeConfigFile      string
+		deepAgentsSandbox      bool
+		deepAgentsCoordinators string
 	)
 
 	cmd := &cobra.Command{
@@ -57,6 +60,10 @@ func updateWorkerCmd() *cobra.Command {
 					return err
 				}
 			}
+			runtimeConfig, err := workerRuntimeConfigFromFlags(cmd, runtime, runtimeConfigFile, deepAgentsSandbox, deepAgentsCoordinators)
+			if err != nil {
+				return err
+			}
 
 			req := map[string]interface{}{}
 			setIfNotEmpty(req, "model", model)
@@ -66,6 +73,9 @@ func updateWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
 			setIfNotEmpty(req, "state", state)
+			if runtimeConfig != nil {
+				req["runtimeConfig"] = runtimeConfig
+			}
 			if cmd.Flags().Changed("skills") {
 				req["skills"] = splitCSV(skills)
 			}
@@ -101,6 +111,9 @@ func updateWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&packageURI, "package", "", "Package URI")
 	cmd.Flags().StringVar(&expose, "expose", "", "Comma-separated ports to expose")
 	cmd.Flags().StringVar(&state, "state", "", "Desired lifecycle state (Running|Sleeping|Stopped)")
+	cmd.Flags().StringVar(&runtimeConfigFile, "runtime-config-file", "", "Path to a WorkerRuntimeConfig JSON or YAML file")
+	cmd.Flags().BoolVar(&deepAgentsSandbox, "deepagents-sandbox", false, "Configure DeepAgents sandbox execution with required Human approvals")
+	cmd.Flags().StringVar(&deepAgentsCoordinators, "deepagents-coordinators", "", "Comma-separated Human Matrix IDs for DeepAgents approvals")
 	return cmd
 }
 

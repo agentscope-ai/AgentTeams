@@ -1,5 +1,5 @@
 server:
-  name: minimax-image-mcp-server
+  name: minimax-image-cn-mcp-server
   config:
     accessToken: ""
 
@@ -44,7 +44,7 @@ tools:
     type: boolean
     required: false
   requestTemplate:
-    url: "https://api.minimax.io/v1/image_generation"
+    url: "https://api.minimaxi.com/v1/image_generation"
     method: POST
     argsToJsonBody: true
     headers:
@@ -107,7 +107,7 @@ tools:
     type: boolean
     required: false
   requestTemplate:
-    url: "https://api.minimax.io/v1/image_generation"
+    url: "https://api.minimaxi.com/v1/image_generation"
     method: POST
     argsToJsonBody: true
     headers:

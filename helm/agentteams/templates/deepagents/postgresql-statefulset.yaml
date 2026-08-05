@@ -18,12 +18,32 @@ spec:
       labels:
         {{- include "agentteams.component.selectorLabels" $comp | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 70
         fsGroupChangePolicy: OnRootMismatch
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.deepagents.postgresql.persistence.enabled }}
+      initContainers:
+        - name: volume-permissions
+          image: "{{ .Values.deepagents.postgresql.image.repository }}:{{ .Values.deepagents.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.deepagents.postgresql.image.pullPolicy }}
+          command: ["chown", "70:70", "/var/lib/postgresql/data"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+            runAsUser: 0
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
       {{- end }}
       containers:
         - name: postgresql
@@ -38,8 +58,6 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           env:
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
             - name: POSTGRES_USER
               value: {{ .Values.deepagents.postgresql.auth.username | quote }}
             - name: POSTGRES_DB

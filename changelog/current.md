@@ -12,7 +12,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug Fixes**
 
-- **Bundled DeepAgents PostgreSQL local-path startup**: Initialize `PGDATA` in a writable subdirectory beneath the persistent-volume mount while retaining the non-root security context.
+- **Bundled DeepAgents PostgreSQL local-path startup**: Prepare the persistent-volume mount root with a minimal non-recursive ownership init while preserving PostgreSQL's official data path and existing root-level databases.
 - **DeepAgents Matrix task diagnostics**: Retrieve and log asynchronous Matrix message-handler failures instead of silently discarding failed background tasks.
 - **DeepAgents workspace manifest integrity**: Validate Runner file sizes and SHA-256 digests within bounded persistence limits before applying any MinIO uploads or deletions.
 - **DeepAgents Matrix room boundary**: Ignore invitations outside Controller-projected Personal/Team rooms and fail explicitly when Matrix rejects room joins or reply sends.
@@ -48,7 +48,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug 修复**
 
-- **内置 DeepAgents PostgreSQL local-path 启动**：在持久卷挂载点下的可写子目录初始化 `PGDATA`，同时保留非 root 安全上下文。
+- **内置 DeepAgents PostgreSQL local-path 启动**：通过最小权限 initContainer 非递归修正持久卷挂载根目录所有权，同时保留 PostgreSQL 官方数据路径和已有的根目录数据库。
 - **DeepAgents Matrix 任务诊断**：主动获取并记录异步 Matrix 消息处理异常，避免失败的后台任务被静默丢弃。
 - **DeepAgents 工作区清单完整性**：在执行任何 MinIO 上传或删除前，按持久化边界校验 Runner 文件大小与 SHA-256 摘要。
 - **DeepAgents Matrix Room 边界**：忽略 Controller 未投影的 Personal/Team Room 邀请，并在 Matrix 拒绝加入 Room 或发送回复时显式失败。

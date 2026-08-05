@@ -21,6 +21,14 @@ AgentTeams 可以把 LangChain `deepagents` 作为独立的 Worker Runtime 使�
 
 Worker 使用专属 PVC 保存 Matrix E2EE 设备数据、sync token 和待审批元数据。model、MCP 或 DeepAgents 策略变更会重建 Worker Pod，但该 PVC 和 PostgreSQL checkpoint 会保留。
 
+同一状态 PVC 还保存持久化 Matrix 事件 journal。Worker 在接受新的 `next_batch` 前先把
+本批事件按精确 event ID 记录为 `pending`，处理前再持久化为 `processing`，成功后标记为
+`completed` 并删除消息正文。重启后会先排空已接受的 journal，再发起下一次 sync：
+`pending` 事件可以继续处理；`completed` 事件按精确 ID 去重；恢复出的 `processing` 表示
+上一次处理结果无法确认，Worker 会明确回复 unknown 并标记完成，而不会再次执行可能产生
+副作用的处理。`completed` ID 在该 PVC 生命周期内保留，因此即使 Matrix 再次投递旧事件，
+也不会因压缩哈希或时间窗口碰撞而重放。
+
 DeepAgents Worker Pod 只有在 Matrix 返回合法 sync 响应、客户端接受该响应，并把
 `next_batch` 原子持久化到状态 PVC 后才进入 Ready。Worker 随后只触发一次 post-sync
 回调，在 Pod 的 `/tmp` `emptyDir` 中创建
@@ -35,6 +43,13 @@ Matrix 同步的 Worker 宣告为 Running，也不会遗漏启动窗口中的首
 Manager 和 Worker 的 `status.matrixUserID`（包括 Team Leader），排序、去重后投影为
 `matrix.agentUserIds`。即使某个其它 Team、独立 Worker 或旧配置中的 Agent ID 又被填写到
 `approvals.coordinators`，DeepAgents 仍按 Agent 拒绝其审批。
+
+静态投影只是第一层防御。每次处理审批命令前，Worker 还会使用当前投影文件中新读取的短期
+ServiceAccount token，向 Controller 发起有界、带认证的实时身份查询，只提交待判断的一个
+精确 Matrix ID。接口按调用 Worker 的命名空间和身份自限定，只返回该 ID 当前是否属于受
+Controller 管理的 Worker 或 Manager，不暴露完整 Agent 名单。实时查询超时、传输失败、
+响应格式无效或身份无法验证时一律 fail-closed，拒绝审批；因此新创建或刚变更的 Agent
+身份不会利用旧的 `matrix.agentUserIds` 快照获得 Human 权限。
 
 Matrix 客户端只会加入 Controller 投影的 Personal Room 与 Team Room；其它账号发来的邀请会被忽略。加入 Room 或发送回复被 Homeserver 拒绝时，Worker 会显式记录失败，不会把错误响应当成发送成功。
 
@@ -176,13 +191,39 @@ manager:
 
 ## Helm 启用
 
-如果是升级已存在的 AgentTeams release，先显式更新 CRD。Helm 不会自动升级 `crds/` 中已经存在的定义：
+如果是升级已存在的 AgentTeams release，必须先审阅并显式更新 CRD。Helm 只在首次安装时
+创建 Chart `crds/` 中的资源，不会升级集群里已经存在的 CRD；因此不能把 `helm upgrade`
+当作 CRD 升级步骤。先确认生成的 CRD 与 Go 类型同步，再执行服务端差异预览：
 
 ```bash
-kubectl apply -f helm/agentteams/crds/workers.agentteams.io.yaml
-kubectl apply -f helm/agentteams/crds/executionsandboxes.agentteams.io.yaml
+make check-crd-sync
+
+AGENTTEAMS_CRD_DIFF_STATUS=0
+kubectl diff --server-side \
+  --field-manager=agentteams-crd-upgrade \
+  -f helm/agentteams/crds/ || AGENTTEAMS_CRD_DIFF_STATUS=$?
+if [ "${AGENTTEAMS_CRD_DIFF_STATUS}" -gt 1 ]; then
+  exit "${AGENTTEAMS_CRD_DIFF_STATUS}"
+fi
+```
+
+`kubectl diff` 返回 `1` 只表示存在预期差异；返回值大于 `1` 才是错误。人工确认没有删除或
+重命名仍在使用的字段、无默认值的新 required 字段、收紧的 enum/pattern/limit，以及
+served/storage version 或 conversion 破坏后，才执行：
+
+```bash
+kubectl apply --server-side \
+  --field-manager=agentteams-crd-upgrade \
+  -f helm/agentteams/crds/
 kubectl api-resources | grep -E 'workers|executionsandboxes'
 ```
+
+不要用 `--force-conflicts` 跳过字段所有权或兼容性审阅。新 CRD 必须同时兼容当前已存储的
+自定义资源，以及滚动升级期间仍在运行的旧 Controller。执行前备份当前 CRD、Manager、
+Worker、Team、Human 和 ExecutionSandbox 对象。`helm rollback` 不会回滚 CRD；需要回退时，
+先确认现存对象未使用新字段或新版本，再对已备份的已知良好 CRD 重复
+`kubectl diff --server-side` 和 `kubectl apply --server-side`。若对象已依赖新 schema，必须先
+备份并转换对象，不能直接降级 CRD。
 
 创建独立 values 文件，不要把 checkpoint 凭据写入 Worker CR：
 
@@ -348,7 +389,9 @@ limit（例如上例均为 `4Gi`）；因此应同时为两处写入预留容量
 先收敛到 Worker 最新的 CPU/内存/临时存储、egress、idle timeout 和 max lifetime 策略。
 idle/max-lifetime 回收后，Worker 只在下一次真正准备发送 Runner 请求之前重新 ensure 并
 取得新 lease；健康检查不会主动重建 Runner。若请求已经发出但结果仍不确定，则保持
-fail-closed，不更换 request ID、不重新 ensure 后重放命令，避免重复副作用。
+fail-closed。一次获批命令恰好只向 Runner 发出一次 `POST /v1/execute`；连接中断或 Runner
+返回冲突导致结果不确定时，不以相同或新 request ID 重试，也不重新 ensure 后重放命令，
+避免重复副作用。request ID 只用于标识这一次请求，不是自动重试许可。
 
 ```bash
 kubectl -n "${AGENTTEAMS_NAMESPACE}" apply -f deep-researcher.yaml
@@ -399,6 +442,6 @@ kubectl -n "${AGENTTEAMS_NAMESPACE}" get pod -l agentteams.io/runtime=deepagents
 | Matrix token 过期 | Worker 会用轮转的 ServiceAccount token 调用 Controller 刷新；检查 Controller API/RBAC 和 Pod token projection |
 | Matrix 收到消息但没有回复 | 检查 Worker 日志中的 `Matrix message handling failed`；再沿 traceback 核对 checkpoint、LLM、MCP 或 Runner 失败，不要把消息正文写入诊断脚本 |
 | 工作区写回失败 | 检查 Runner 下载响应、变更清单大小/SHA-256、MinIO 可用性；Worker 不会自动重跑已完成的命令 |
-| 命令结果 unknown | Worker 已用同一 request ID 重试但仍无法确认结果；为避免重复副作用，不要自动重新执行 |
+| 命令结果 unknown | 唯一一次 Runner `POST /v1/execute` 的传输或执行结果无法确认；Worker 不会以相同或新 request ID 自动重试，也不会更换 Runner 后重放。应由 Human 检查 Runner、工作区和外部副作用后决定下一步 |
 
 不要把 Matrix token、Gateway key、MinIO secret、checkpoint DSN/AES key 或 Runner token 写入 CR、ConfigMap、日志和命令参数。

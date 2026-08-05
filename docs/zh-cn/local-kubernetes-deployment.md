@@ -742,6 +742,11 @@ DeepAgents Pod 的 `Ready` 不等同于进程已启动：CLI 会先删除旧就�
 Matrix sync 并把 `next_batch` 持久化到状态 PVC，然后才在 `/tmp` `emptyDir` 创建
 `/tmp/agentteams-deepagents-ready`。首次 catch-up 与增量恢复使用同一门禁。可核对：
 
+状态 PVC 同时保存按精确 Matrix event ID 记录的持久 journal。事件会依次持久化为
+`pending`、`processing`、`completed`；重启后先排空已接受事件，再继续 sync。恢复出的
+`processing` 事件属于结果不确定边界，不会再次执行；`completed` ID 在 PVC 生命周期内
+保留并用于精确去重。
+
 ```bash
 kubectl get pod -n "${AGENTTEAMS_NAMESPACE}" \
   -l agentteams.io/worker=deep-researcher \
@@ -754,7 +759,10 @@ Manager 创建 Worker 时，常规安全路径是
 `--runtime-config-file <FILE>` 创建或更新。`spec.identity`、`spec.soul`、`spec.agents`
 会进入结构化 system prompt；`spec.packages`/`spec.skills` 在本版本不会安装或转换为
 DeepAgents 能力。审批拒绝列表覆盖 Controller 可见的所有当前 Manager/Worker/Team
-Leader Matrix ID，而不是只覆盖当前 Team。
+Leader Matrix ID，而不是只覆盖当前 Team。每次审批还会使用当前短期 ServiceAccount
+token 向 Controller 查询这一个精确 Matrix ID 是否为受管理 Agent；接口按调用 Worker
+自限定且不返回完整名单，查询失败或响应无效时 fail-closed 并拒绝审批。静态拒绝列表仍
+作为纵深防御保留。
 
 在 Element 的 Deep Researcher Personal Room 中，由登录的 Human admin 发送一条要求使用 `execute` 在 `/workspace` 创建测试文件的任务。`execute` 无论其它策略如何都必须中断并请求 Human 审批；在同一 Matrix thread 回复 `approve 1` 后观察：
 
@@ -770,7 +778,7 @@ kubectl get executionsandbox,pod,service,networkpolicy \
 - Runner Pod 使用 `agentteams/deepagents-runner:${AGENTTEAMS_LOCAL_TAG}`、UID/GID `65532:65532`，且 `automountServiceAccountToken=false`；
 - Runner 不包含 Matrix、Higress、MinIO、PostgreSQL 凭据；
 - 命令只在 Runner 的 `/workspace` 执行，变更清单校验通过后才写回 MinIO；
-- 相同 request ID 不会重复执行命令；
+- 每次批准恰好只产生一次 Runner `POST /v1/execute`；传输结果不确定时，不以相同或新 request ID 自动重试；
 - 更新 Worker 的 sandbox resources、egress、idle/max lifetime 后，已有 sandbox 必须先收敛到新 generation 才能重新 Ready；已回收 lease 只在下一次 Runner 请求前重建，结果不确定的已发送请求不会被重放；
 - 空闲超过 `5m` 或总生命周期超过 `30m` 后，`ExecutionSandbox` 及其 Pod、Service、NetworkPolicy 被 Controller 回收，Worker 与 checkpoint 保留。
 
@@ -877,9 +885,51 @@ export AGENTTEAMS_IMAGE_ARCHIVE_SHA256="$(sha256sum "${AGENTTEAMS_IMAGE_ARCHIVE}
 )
 ```
 
-先备份 MinIO 与 Tuwunel 数据，再升级 Chart 和 Controller：
+先备份 MinIO、Tuwunel、当前 CRD 与自定义资源。下面的 CRD 备份目录只保存 Kubernetes
+对象定义，不包含部署 Secret；仍应按现有备份流程单独保护 MinIO 和 Tuwunel 数据：
 
 ```bash
+export AGENTTEAMS_CRD_BACKUP_DIR="/var/tmp/agentteams-crd-backup-$(date -u +%Y%m%d%H%M%S)"
+mkdir -p "${AGENTTEAMS_CRD_BACKUP_DIR}"
+
+for AGENTTEAMS_CRD in \
+  managers.agentteams.io workers.agentteams.io teams.agentteams.io \
+  humans.agentteams.io executionsandboxes.agentteams.io; do
+  if kubectl get crd "${AGENTTEAMS_CRD}" >/dev/null 2>&1; then
+    kubectl get crd "${AGENTTEAMS_CRD}" -o yaml \
+      > "${AGENTTEAMS_CRD_BACKUP_DIR}/${AGENTTEAMS_CRD}.yaml"
+    kubectl get "${AGENTTEAMS_CRD}" -A -o yaml \
+      > "${AGENTTEAMS_CRD_BACKUP_DIR}/${AGENTTEAMS_CRD%.agentteams.io}-objects.yaml"
+  fi
+done
+```
+
+Helm 只在首次安装时创建 Chart `crds/` 中的资源，不会在 `helm upgrade` 时升级已存在的
+CRD。因此先确认仓库 CRD 与 Go 类型同步，再用服务端 dry-run 语义查看集群实际差异：
+
+```bash
+make check-crd-sync
+
+AGENTTEAMS_CRD_DIFF_STATUS=0
+kubectl diff --server-side \
+  --field-manager=agentteams-crd-upgrade \
+  -f helm/agentteams/crds/ || AGENTTEAMS_CRD_DIFF_STATUS=$?
+if [ "${AGENTTEAMS_CRD_DIFF_STATUS}" -gt 1 ]; then
+  exit "${AGENTTEAMS_CRD_DIFF_STATUS}"
+fi
+```
+
+`kubectl diff` 返回 `1` 表示存在差异，不是命令失败。必须人工审阅删除/重命名字段、新增但
+没有默认值的 required 字段、收紧的 enum/pattern/limit，以及 served/storage version 和
+conversion 变化；还要确认新 schema 同时兼容现存 CR 与滚动升级期间的旧 Controller。
+审阅通过后，先应用 CRD，再升级 Helm release：
+
+```bash
+kubectl apply --server-side \
+  --field-manager=agentteams-crd-upgrade \
+  -f helm/agentteams/crds/
+kubectl api-resources | grep -E 'managers|workers|teams|humans|executionsandboxes'
+
 helm dependency build ./helm/agentteams
 
 helm upgrade "${AGENTTEAMS_RELEASE}" ./helm/agentteams \
@@ -893,6 +943,12 @@ helm upgrade "${AGENTTEAMS_RELEASE}" ./helm/agentteams \
   --set-string deepagents.runnerImage.tag="${AGENTTEAMS_LOCAL_TAG}" \
   --timeout 15m
 ```
+
+不要使用 `--force-conflicts` 绕过字段所有权或兼容性问题。`helm rollback` 只回退普通 Helm
+资源，不会回退 CRD。若升级后需要回滚，先判断现存对象是否已使用新字段或新版本；只有在
+对象仍兼容旧 schema 时，才对上述备份 CRD 逐个执行同样的 `kubectl diff --server-side`
+审阅和 `kubectl apply --server-side`。若已经依赖新 schema，先备份并转换对象，不能直接
+降级 CRD。随后再执行 `helm rollback`，并将 Manager/Worker 镜像恢复为对应版本。
 
 现有 Manager 不会因 `manager.image.tag` 变化自动更新，需显式 patch：
 
@@ -917,8 +973,6 @@ kubectl patch worker deep-researcher -n "${AGENTTEAMS_NAMESPACE}" \
   --type=merge \
   -p "{\"spec\":{\"image\":\"agentteams/deepagents-worker:${AGENTTEAMS_LOCAL_TAG}\"}}"
 ```
-
-CRD 位于 Chart 的 `crds/` 目录，Helm 不会像普通模板一样升级已存在 CRD。Schema 变化时应先审阅差异，并按发布说明单独应用。
 
 ## 14. 常见故障排查
 

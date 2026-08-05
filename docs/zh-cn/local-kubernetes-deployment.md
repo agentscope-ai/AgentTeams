@@ -760,6 +760,30 @@ DeepAgents Pod 的 `Ready` 不等同于进程已启动：CLI 会先删除旧就�
 Matrix sync 并把 `next_batch` 持久化到状态 PVC，然后才在 `/tmp` `emptyDir` 创建
 `/tmp/agentteams-deepagents-ready`。首次 catch-up 与增量恢复使用同一门禁。可核对：
 
+首次同步期间看到 `Ready=False` 时，应将 Worker 状态理解为预期的 `Starting`，不能因
+Matrix catch-up 尚未完成而把它判作终态失败；只有 Container 的明确 waiting/terminated
+失败状态才是终态。Runner 也仅在 Linux 上启动，并会在监听前把 core dump limit 设为零、
+调用 `prctl(PR_SET_DUMPABLE, 0)`；任一加固步骤失败都会 fail-before-listen。
+
+获批命令使用最小非敏感环境、关闭继承文件描述符和独立 process session。Runner token 会
+从 Runner 环境移除，non-dumpable 使命令无法经 `/proc` 查看 Runner 进程环境。此边界并不
+把 `/bin/sh` 变成通用的无副作用 sandbox，也不解决故意杀死 PID 1 的拒绝服务。
+
+不要读取或打印任何部署 secret 来验证该边界。开发机可运行使用非敏感 sentinel 的测试；
+它只断言 token inspection 被阻断且不打印 token：
+
+```bash
+cd deepagents-agentteams
+uv run --locked --extra dev pytest -q tests/test_runner_process_hardening.py
+```
+
+一次性本地集群可只检查权限和环境键名（不读取 `/proc/1/environ` 内容，也不输出值）：
+
+```bash
+kubectl -n "${AGENTTEAMS_NAMESPACE}" exec deployable-runner-pod -- \
+  sh -ceu 'test ! -r /proc/1/environ; ! env | grep -Eq "^AGENTTEAMS_RUNNER_TOKEN="'
+```
+
 状态 PVC 同时保存按精确 Matrix event ID 记录的持久 journal。事件会依次持久化为
 `pending`、`processing`、`completed`；重启后先排空已接受事件，再继续 sync。恢复出的
 `processing` 事件属于结果不确定边界，不会再次执行；`completed` ID 在 PVC 生命周期内
@@ -798,6 +822,7 @@ kubectl get executionsandbox,pod,service,networkpolicy \
 - 命令只在 Runner 的 `/workspace` 执行，变更清单校验通过后才写回 MinIO；
 - 每次批准恰好只产生一次 Runner `POST /v1/execute`；传输结果不确定时，不以相同或新 request ID 自动重试；
 - 更新 Worker 的 sandbox resources、egress、idle/max lifetime 后，已有 sandbox 必须先收敛到新 generation 才能重新 Ready；已回收 lease 只在下一次 Runner 请求前重建，结果不确定的已发送请求不会被重放；
+- 删除 Worker、改变 Worker UID/Controller 归属、切换为非 DeepAgents runtime、移除 DeepAgents 配置或把 `execution.mode` 改为非 `sandbox` 时，已有 lease 必须按 Service → token Secret → Pod → 等待 Pod 删除 → NetworkPolicy → `ExecutionSandbox` 的顺序撤销；
 - 空闲超过 `5m` 或总生命周期超过 `30m` 后，`ExecutionSandbox` 及其 Pod、Service、NetworkPolicy 被 Controller 回收，Worker 与 checkpoint 保留。
 
 更完整的策略、外部 PostgreSQL 和故障排查说明见[《DeepAgents Worker Runtime》](deepagents-runtime.md)。

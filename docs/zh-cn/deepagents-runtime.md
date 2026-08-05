@@ -55,6 +55,44 @@ Matrix 客户端只会加入 Controller 投影的 Personal Room 与 Team Room；
 
 Runner 返回的工作区变更清单不是直接写入 MinIO 的依据。Worker 会先下载全部待写文件，在单文件、文件数量和总字节上限内逐项核对路径、大小与 SHA-256；只有完整清单全部通过后才先上传新内容、再执行删除。校验或下载失败不会提前删除已有持久文件，也不应通过重跑命令来掩盖结果不确定性。
 
+### Runner 的进程边界与 lease 撤销
+
+Runner 只支持 Linux。它必须在打开 HTTP listener **之前**取走 bearer token、把
+`RLIMIT_CORE` 设为零并调用 `prctl(PR_SET_DUMPABLE, 0)`；token 缺失、非 Linux 平台、
+core-limit 设置失败或 non-dumpable 设置失败，都会使启动立即失败，既不会构造应用也不会
+开始监听。
+
+获批命令仅得到最小的非敏感环境（工作目录、locale、`PATH` 和临时目录）、关闭的继承文件
+描述符以及独立 process session。Runner 在启动时从自己的环境移除 token；Linux 的
+non-dumpable 设置使获批命令不能通过 `/proc` 读取 Runner 进程环境来取得该 token。这些是
+缩小能力面的措施：`/bin/sh` **不是**通用的无副作用 sandbox；故意杀死容器 PID 1 仍是本版
+未解决的拒绝服务风险。
+
+当被引用的 Worker 被删除、所属 Controller/Worker UID 改变、runtime 改为非 DeepAgents、
+DeepAgents 配置消失，或 `execution.mode` 不再是 `sandbox` 时，Controller 撤销已有 lease。
+撤销顺序固定为 **Service → token Secret → Pod → 等待 Pod 删除 → NetworkPolicy →
+ExecutionSandbox CR**；每个删除尝试都会继续处理其它对象，避免留下仍可被访问的端点。
+
+DeepAgents Worker 首次 Matrix sync 尚未完成时，`Ready=False` 是预期的 `Starting` 状态，
+不是终态失败。只有显式的容器等待/终止失败状态才会标记为失败；成功的合法 sync、客户端
+接受响应及 `next_batch` 持久化后，readiness 文件才会创建。
+
+本地验证禁止读取或输出部署密钥。可运行包含非敏感 sentinel 的进程加固测试；测试只断言
+token inspection 被阻止，绝不打印 token：
+
+```bash
+cd deepagents-agentteams
+uv run --locked --extra dev pytest -q tests/test_runner_process_hardening.py
+```
+
+在一次性本地集群中，下面的检查只检查 `/proc/1/environ` 的可读权限且将匹配静默处理，
+不读取文件内容、不输出任何密钥：
+
+```bash
+kubectl -n "${AGENTTEAMS_NAMESPACE}" exec deployable-runner-pod -- \
+  sh -ceu 'test ! -r /proc/1/environ; ! env | grep -Eq "^AGENTTEAMS_RUNNER_TOKEN="'
+```
+
 ### 模型 URL 与 Worker prompt 合约
 
 Controller 管理的 Higress 根地址在运行时文档中规范为 OpenAI-compatible base，结尾恰好

@@ -216,7 +216,11 @@ func executionSandboxPolicyMatches(
 }
 
 func (h *ExecutionSandboxHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
-	sandbox, ok := h.workerSandboxFromPath(w, r)
+	worker, ok := h.deepAgentsWorker(w, r)
+	if !ok {
+		return
+	}
+	sandbox, ok := h.workerSandboxFromPath(w, r, worker)
 	if !ok {
 		return
 	}
@@ -231,7 +235,11 @@ func (h *ExecutionSandboxHandler) Heartbeat(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *ExecutionSandboxHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	sandbox, ok := h.workerSandboxFromPath(w, r)
+	worker, ok := h.ownedWorker(w, r)
+	if !ok {
+		return
+	}
+	sandbox, ok := h.workerSandboxFromPath(w, r, worker)
 	if !ok {
 		return
 	}
@@ -243,6 +251,19 @@ func (h *ExecutionSandboxHandler) Delete(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *ExecutionSandboxHandler) deepAgentsWorker(w http.ResponseWriter, r *http.Request) (*v1beta1.Worker, bool) {
+	worker, ok := h.ownedWorker(w, r)
+	if !ok {
+		return nil, false
+	}
+	if backend.ResolveRuntime(worker.Spec.Runtime, h.defaultRuntime) != backend.RuntimeDeepAgents || worker.Spec.RuntimeConfig == nil ||
+		worker.Spec.RuntimeConfig.DeepAgents == nil || worker.Spec.RuntimeConfig.DeepAgents.Execution.Mode != "sandbox" {
+		httputil.WriteError(w, http.StatusConflict, "worker is not a deepagents runtime with sandbox execution enabled")
+		return nil, false
+	}
+	return worker, true
+}
+
+func (h *ExecutionSandboxHandler) ownedWorker(w http.ResponseWriter, r *http.Request) (*v1beta1.Worker, bool) {
 	name := strings.TrimSpace(r.PathValue("name"))
 	if name == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "worker name is required")
@@ -257,22 +278,14 @@ func (h *ExecutionSandboxHandler) deepAgentsWorker(w http.ResponseWriter, r *htt
 		httputil.WriteError(w, http.StatusConflict, "worker belongs to another controller")
 		return nil, false
 	}
-	if backend.ResolveRuntime(worker.Spec.Runtime, h.defaultRuntime) != backend.RuntimeDeepAgents || worker.Spec.RuntimeConfig == nil ||
-		worker.Spec.RuntimeConfig.DeepAgents == nil || worker.Spec.RuntimeConfig.DeepAgents.Execution.Mode != "sandbox" {
-		httputil.WriteError(w, http.StatusConflict, "worker is not a deepagents runtime with sandbox execution enabled")
-		return nil, false
-	}
 	return &worker, true
 }
 
 func (h *ExecutionSandboxHandler) workerSandboxFromPath(
 	w http.ResponseWriter,
 	r *http.Request,
+	worker *v1beta1.Worker,
 ) (*v1beta1.ExecutionSandbox, bool) {
-	worker, ok := h.deepAgentsWorker(w, r)
-	if !ok {
-		return nil, false
-	}
 	sessionID := strings.TrimSpace(r.PathValue("sessionId"))
 	if !executionSandboxSessionIDPattern.MatchString(sessionID) {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid sessionId")

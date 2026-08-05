@@ -615,6 +615,145 @@ func TestExecutionSandboxHeartbeatAndDelete(t *testing.T) {
 	}
 }
 
+func TestExecutionSandboxDeleteAllowsOwnedSandboxAfterWorkerExecutionIsDisabled(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	name := executionSandboxName(worker.Name, "thread-hash")
+	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+	h := newExecutionSandboxHandlerTestClient(t, worker, sandbox)
+
+	var current v1beta1.Worker
+	if err := h.client.Get(context.Background(), types.NamespacedName{Name: worker.Name, Namespace: worker.Namespace}, &current); err != nil {
+		t.Fatal(err)
+	}
+	current.Spec.RuntimeConfig.DeepAgents.Execution.Mode = "disabled"
+	if err := h.client.Update(context.Background(), &current); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/sandbox", nil)
+	req.SetPathValue("name", worker.Name)
+	req.SetPathValue("sessionId", "thread-hash")
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s, want 204", rec.Code, rec.Body.String())
+	}
+	var deleted v1beta1.ExecutionSandbox
+	err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: worker.Namespace}, &deleted)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("sandbox was not deleted: %v", err)
+	}
+}
+
+func TestExecutionSandboxDeleteRejectsOwnershipAndIdentityConflictsAfterWorkerExecutionIsDisabled(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*v1beta1.Worker, *v1beta1.ExecutionSandbox)
+	}{
+		{
+			name: "foreign worker controller",
+			mutate: func(worker *v1beta1.Worker, _ *v1beta1.ExecutionSandbox) {
+				worker.Labels[v1beta1.LabelController] = "ctl-b"
+			},
+		},
+		{
+			name: "foreign sandbox controller",
+			mutate: func(_ *v1beta1.Worker, sandbox *v1beta1.ExecutionSandbox) {
+				sandbox.Labels[v1beta1.LabelController] = "ctl-b"
+			},
+		},
+		{
+			name: "worker UID mismatch",
+			mutate: func(_ *v1beta1.Worker, sandbox *v1beta1.ExecutionSandbox) {
+				sandbox.Spec.WorkerRef.UID = "old-worker-uid"
+			},
+		},
+		{
+			name: "worker name identity collision",
+			mutate: func(_ *v1beta1.Worker, sandbox *v1beta1.ExecutionSandbox) {
+				sandbox.Spec.WorkerRef.Name = "other-worker"
+			},
+		},
+		{
+			name: "session identity collision",
+			mutate: func(_ *v1beta1.Worker, sandbox *v1beta1.ExecutionSandbox) {
+				sandbox.Spec.SessionID = "other-session"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := deepAgentsSandboxWorker()
+			name := executionSandboxName(worker.Name, "thread-hash")
+			sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+			tt.mutate(worker, sandbox)
+			h := newExecutionSandboxHandlerTestClient(t, worker, sandbox)
+
+			var current v1beta1.Worker
+			if err := h.client.Get(context.Background(), types.NamespacedName{Name: worker.Name, Namespace: worker.Namespace}, &current); err != nil {
+				t.Fatal(err)
+			}
+			current.Spec.RuntimeConfig.DeepAgents.Execution.Mode = "disabled"
+			if err := h.client.Update(context.Background(), &current); err != nil {
+				t.Fatal(err)
+			}
+
+			req := httptest.NewRequest(http.MethodDelete, "/sandbox", nil)
+			req.SetPathValue("name", worker.Name)
+			req.SetPathValue("sessionId", "thread-hash")
+			rec := httptest.NewRecorder()
+			h.Delete(rec, req)
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+			}
+			var stored v1beta1.ExecutionSandbox
+			if err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: worker.Namespace}, &stored); err != nil {
+				t.Fatalf("sandbox was changed: %v", err)
+			}
+			if !apiequality.Semantic.DeepEqual(stored.Spec, sandbox.Spec) ||
+				!apiequality.Semantic.DeepEqual(stored.Status, sandbox.Status) ||
+				!apiequality.Semantic.DeepEqual(stored.Labels, sandbox.Labels) {
+				t.Fatalf("sandbox was mutated: %#v", stored)
+			}
+		})
+	}
+}
+
+func TestExecutionSandboxEnsureAndHeartbeatRejectDisabledWorker(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	name := executionSandboxName(worker.Name, "thread-hash")
+	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+	worker.Spec.RuntimeConfig.DeepAgents.Execution.Mode = "disabled"
+	h := newExecutionSandboxHandlerTestClient(t, worker, sandbox)
+
+	ensure := httptest.NewRequest(http.MethodPost, "/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+	ensure.SetPathValue("name", worker.Name)
+	ensureRec := httptest.NewRecorder()
+	h.Ensure(ensureRec, ensure)
+	if ensureRec.Code != http.StatusConflict {
+		t.Fatalf("ensure status=%d body=%s, want 409", ensureRec.Code, ensureRec.Body.String())
+	}
+
+	heartbeat := httptest.NewRequest(http.MethodPost, "/heartbeat", nil)
+	heartbeat.SetPathValue("name", worker.Name)
+	heartbeat.SetPathValue("sessionId", "thread-hash")
+	heartbeatRec := httptest.NewRecorder()
+	h.Heartbeat(heartbeatRec, heartbeat)
+	if heartbeatRec.Code != http.StatusConflict {
+		t.Fatalf("heartbeat status=%d body=%s, want 409", heartbeatRec.Code, heartbeatRec.Body.String())
+	}
+	var unchanged v1beta1.ExecutionSandbox
+	if err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: worker.Namespace}, &unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if !apiequality.Semantic.DeepEqual(unchanged.Status, sandbox.Status) {
+		t.Fatalf("disabled Worker heartbeat mutated sandbox: %#v", unchanged.Status)
+	}
+}
+
 func TestExecutionSandboxHandlerRejectsForeignControllerObjects(t *testing.T) {
 	t.Run("worker", func(t *testing.T) {
 		worker := deepAgentsSandboxWorker()

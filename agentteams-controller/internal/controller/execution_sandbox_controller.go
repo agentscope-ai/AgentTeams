@@ -13,6 +13,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -35,11 +36,12 @@ const (
 type ExecutionSandboxReconciler struct {
 	client.Client
 
-	RunnerImage    string
-	ControllerName string
-	DefaultRuntime string
-	EgressCeilings []v1beta1.DeepAgentsEgressRule
-	Now            func() time.Time
+	RunnerImage      string
+	ControllerName   string
+	DefaultRuntime   string
+	EgressCeilings   []v1beta1.DeepAgentsEgressRule
+	EphemeralStorage sandboxpolicy.Policy
+	Now              func() time.Time
 }
 
 func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -99,6 +101,11 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	if strings.TrimSpace(effective.Spec.Image) == "" {
 		effective.Spec.Image = strings.TrimSpace(r.RunnerImage)
 	}
+	effectiveResources, podResources, emptyDirLimit, err := r.EphemeralStorage.Resolve(effective.Spec.Resources)
+	if err != nil {
+		return reconcile.Result{}, r.failInvalidResources(ctx, &sandbox, err)
+	}
+	effective.Spec.Resources = effectiveResources
 	allowedEgress, err := intersectSandboxEgress(effective.Spec.Egress, r.EgressCeilings)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -108,7 +115,7 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		return reconcile.Result{}, err
 	}
 	pod, service, policy, err := buildExecutionSandboxResources(
-		effective, tokenSecretName, r.ControllerName, allowedEgress,
+		effective, tokenSecretName, r.ControllerName, allowedEgress, podResources, emptyDirLimit,
 	)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -176,6 +183,42 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		nextLifecycleCheck = executionSandboxRequeue
 	}
 	return reconcile.Result{RequeueAfter: nextLifecycleCheck}, nil
+}
+
+func (r *ExecutionSandboxReconciler) failInvalidResources(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+	resolveErr error,
+) error {
+	for _, object := range []client.Object{
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
+		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Name, Namespace: sandbox.Namespace}},
+	} {
+		if err := r.Delete(ctx, object); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete invalid execution sandbox %T: %w", object, err)
+		}
+	}
+
+	statusBefore := sandbox.Status.DeepCopy()
+	sandbox.Status.ObservedGeneration = sandbox.Generation
+	sandbox.Status.Phase = "Failed"
+	sandbox.Status.Endpoint = ""
+	sandbox.Status.PodName = ""
+	apiMeta.SetStatusCondition(&sandbox.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: sandbox.Generation,
+		Reason:             "InvalidResources",
+		Message:            resolveErr.Error(),
+	})
+	if !apiequality.Semantic.DeepEqual(statusBefore, &sandbox.Status) {
+		if err := r.Status().Update(ctx, sandbox); err != nil {
+			return fmt.Errorf("update invalid execution sandbox status: %w", err)
+		}
+	}
+	return nil
 }
 
 func executionSandboxDuration(raw string, fallback time.Duration, field string) (time.Duration, error) {
@@ -427,6 +470,8 @@ func buildExecutionSandboxResources(
 	tokenSecretName string,
 	controllerName string,
 	allowedEgress []v1beta1.DeepAgentsEgressRule,
+	resources corev1.ResourceRequirements,
+	emptyDirLimit apiresource.Quantity,
 ) (*corev1.Pod, *corev1.Service, *networkingv1.NetworkPolicy, error) {
 	if sandbox == nil {
 		return nil, nil, nil, fmt.Errorf("execution sandbox is required")
@@ -457,10 +502,8 @@ func buildExecutionSandboxResources(
 	readOnlyRoot := true
 	allowPrivilegeEscalation := false
 	automountToken := false
-	resources, err := sandboxResourceRequirements(sandbox.Spec.Resources)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	workspaceSizeLimit := emptyDirLimit.DeepCopy()
+	tmpSizeLimit := emptyDirLimit.DeepCopy()
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -511,8 +554,8 @@ func buildExecutionSandboxResources(
 				},
 			}},
 			Volumes: []corev1.Volume{
-				{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-				{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &workspaceSizeLimit}}},
+				{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &tmpSizeLimit}}},
 			},
 		},
 	}
@@ -702,42 +745,6 @@ type executionSandboxManagedContainer struct {
 	Resources       corev1.ResourceRequirements `json:"resources,omitempty"`
 	VolumeMounts    []corev1.VolumeMount        `json:"volumeMounts,omitempty"`
 	SecurityContext *corev1.SecurityContext     `json:"securityContext,omitempty"`
-}
-
-func sandboxResourceRequirements(in *v1beta1.AgentResourceRequirements) (corev1.ResourceRequirements, error) {
-	result := corev1.ResourceRequirements{}
-	if in == nil {
-		return result, nil
-	}
-	requests, err := sandboxResourceList(in.Requests)
-	if err != nil {
-		return result, fmt.Errorf("sandbox resource requests: %w", err)
-	}
-	limits, err := sandboxResourceList(in.Limits)
-	if err != nil {
-		return result, fmt.Errorf("sandbox resource limits: %w", err)
-	}
-	result.Requests = requests
-	result.Limits = limits
-	return result, nil
-}
-
-func sandboxResourceList(values v1beta1.AgentResourceValues) (corev1.ResourceList, error) {
-	result := corev1.ResourceList{}
-	for name, raw := range map[corev1.ResourceName]string{
-		corev1.ResourceCPU:    values.CPU,
-		corev1.ResourceMemory: values.Memory,
-	} {
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		quantity, err := apiresource.ParseQuantity(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid %s quantity %q: %w", name, raw, err)
-		}
-		result[name] = quantity
-	}
-	return result, nil
 }
 
 func boolPointer(value bool) *bool { return &value }

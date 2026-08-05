@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -101,15 +102,19 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
 			SessionID: "thread-hash",
 			Image:     "runner:v1",
-			Resources: &v1beta1.AgentResourceRequirements{
-				Requests: v1beta1.AgentResourceValues{CPU: "100m", Memory: "128Mi"},
-				Limits:   v1beta1.AgentResourceValues{CPU: "1", Memory: "1Gi"},
+			Resources: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{CPU: "100m", Memory: "128Mi", EphemeralStorage: "512Mi"},
+				Limits:   v1beta1.ExecutionSandboxResourceValues{CPU: "1", Memory: "1Gi", EphemeralStorage: "4Gi"},
 			},
 		},
 	}
 	allowed := []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{443}}}
+	_, resources, emptyDirLimit, err := sandboxpolicy.Default().Resolve(sandbox.Spec.Resources)
+	if err != nil {
+		t.Fatalf("resolve sandbox resources: %v", err)
+	}
 
-	pod, service, policy, err := buildExecutionSandboxResources(sandbox, "runner-token", "ctl-a", allowed)
+	pod, service, policy, err := buildExecutionSandboxResources(sandbox, "runner-token", "ctl-a", allowed, resources, emptyDirLimit)
 	if err != nil {
 		t.Fatalf("buildExecutionSandboxResources: %v", err)
 	}
@@ -124,6 +129,12 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 		t.Fatalf("pod security context is not hardened: %#v", pod.Spec.SecurityContext)
 	}
 	container := pod.Spec.Containers[0]
+	if got := container.Resources.Requests[corev1.ResourceEphemeralStorage]; got.String() != "512Mi" {
+		t.Fatalf("ephemeral request=%q, want 512Mi", got.String())
+	}
+	if got := container.Resources.Limits[corev1.ResourceEphemeralStorage]; got.String() != "4Gi" {
+		t.Fatalf("ephemeral limit=%q, want 4Gi", got.String())
+	}
 	if container.SecurityContext == nil || container.SecurityContext.ReadOnlyRootFilesystem == nil || !*container.SecurityContext.ReadOnlyRootFilesystem ||
 		container.SecurityContext.AllowPrivilegeEscalation == nil || *container.SecurityContext.AllowPrivilegeEscalation {
 		t.Fatalf("container security context is not hardened: %#v", container.SecurityContext)
@@ -142,6 +153,11 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 	}
 	if len(pod.Spec.Volumes) != 2 || len(container.VolumeMounts) != 2 {
 		t.Fatalf("sandbox needs only workspace and tmp emptyDir volumes: volumes=%#v mounts=%#v", pod.Spec.Volumes, container.VolumeMounts)
+	}
+	for _, volume := range pod.Spec.Volumes {
+		if volume.EmptyDir == nil || volume.EmptyDir.SizeLimit == nil || volume.EmptyDir.SizeLimit.String() != "4Gi" {
+			t.Fatalf("volume %s sizeLimit=%v, want 4Gi", volume.Name, volume.EmptyDir)
+		}
 	}
 	if service.Spec.Selector[v1beta1.LabelExecutionSandbox] != sandbox.Name || service.Spec.Ports[0].Port != 8080 {
 		t.Fatalf("service does not target runner: %#v", service.Spec)
@@ -163,6 +179,93 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 	if dnsPeer.NamespaceSelector == nil || dnsPeer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "kube-system" ||
 		dnsPeer.PodSelector == nil || dnsPeer.PodSelector.MatchLabels["k8s-app"] != "kube-dns" {
 		t.Fatalf("DNS egress peer=%#v", dnsPeer)
+	}
+}
+
+func TestExecutionSandboxReconcilerConvergesInvalidResources(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		Spec: v1beta1.WorkerSpec{
+			Model: "qwen-max",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+				Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+			}},
+		},
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "exec-invalid-resources", Namespace: "agentteams-system", UID: "sandbox-uid"},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
+			SessionID: "thread-hash",
+			Resources: &v1beta1.ExecutionSandboxResourceRequirements{
+				Limits: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "9Gi"},
+			},
+		},
+	}
+	key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	policy := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+		WithObjects(worker, sandbox, secret, pod, service, policy).
+		Build()
+	r := &ExecutionSandboxReconciler{
+		Client:         cl,
+		RunnerImage:    "runner:v1",
+		ControllerName: "ctl-a",
+		DefaultRuntime: "deepagents",
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile invalid resources: %v", err)
+	}
+	for _, object := range []client.Object{&corev1.Secret{}, &corev1.Pod{}, &corev1.Service{}, &networkingv1.NetworkPolicy{}} {
+		object.SetName(key.Name)
+		object.SetNamespace(key.Namespace)
+		if err := cl.Get(context.Background(), key, object); !apierrors.IsNotFound(err) {
+			t.Fatalf("invalid sandbox left %T behind: %v", object, err)
+		}
+	}
+	var updated v1beta1.ExecutionSandbox
+	if err := cl.Get(context.Background(), key, &updated); err != nil {
+		t.Fatalf("get invalid sandbox: %v", err)
+	}
+	if updated.Status.Phase != "Failed" || updated.Status.Endpoint != "" || updated.Status.PodName != "" {
+		t.Fatalf("invalid sandbox status=%#v", updated.Status)
+	}
+	for _, condition := range updated.Status.Conditions {
+		if condition.Type == "Ready" {
+			if condition.Status != metav1.ConditionFalse || condition.Reason != "InvalidResources" {
+				t.Fatalf("Ready condition=%#v, want false InvalidResources", condition)
+			}
+			break
+		}
+	}
+	if sandboxReadyReason(updated.Status.Conditions) != "InvalidResources" {
+		t.Fatalf("missing InvalidResources Ready condition: %#v", updated.Status.Conditions)
+	}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("repeat Reconcile invalid resources: %v", err)
+	}
+	for _, object := range []client.Object{&corev1.Secret{}, &corev1.Pod{}, &corev1.Service{}, &networkingv1.NetworkPolicy{}} {
+		object.SetName(key.Name)
+		object.SetNamespace(key.Namespace)
+		if err := cl.Get(context.Background(), key, object); !apierrors.IsNotFound(err) {
+			t.Fatalf("repeat invalid sandbox left %T behind: %v", object, err)
+		}
 	}
 }
 

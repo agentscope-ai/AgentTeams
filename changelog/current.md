@@ -12,6 +12,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug Fixes**
 
+- **DeepAgents Matrix E2EE store initialization**: Create and permission the private matrix-nio store directory before encrypted client construction, preserve existing store contents across reconnects, and reject unsafe leaf symlinks. ([c5ab6f7f](https://github.com/agentscope-ai/AgentTeams/commit/c5ab6f7fd20aba4f3d4078a36a8f4bd21510d226))
 - **DeepAgents state PVC ownership**: Prepare the persistent state mount root for UID/GID 65532 with a credential-free, non-recursive ownership init while preserving existing Matrix/SQLite state contents and paths. ([eb192500](https://github.com/agentscope-ai/AgentTeams/commit/eb192500b535a2aee46c1657db0c77d867dc160d))
 - **Bundled DeepAgents PostgreSQL local-path startup**: Prepare the persistent-volume mount root with a minimal non-recursive ownership init while preserving PostgreSQL's official data path and existing root-level databases.
 - **DeepAgents Matrix task diagnostics**: Retrieve and log asynchronous Matrix message-handler failures instead of silently discarding failed background tasks.
@@ -49,6 +50,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug 修复**
 
+- **DeepAgents Matrix E2EE 存储初始化**：在构造加密客户端前创建 matrix-nio 私有存储目录并收紧权限，重连时保留已有存储内容，并拒绝不安全的叶子符号链接。([c5ab6f7f](https://github.com/agentscope-ai/AgentTeams/commit/c5ab6f7fd20aba4f3d4078a36a8f4bd21510d226))
 - **DeepAgents 状态 PVC 所有权**：通过无凭据、非递归的所有权 initContainer 将持久状态挂载根目录准备为 UID/GID 65532，同时保留已有 Matrix/SQLite 状态内容和路径。([eb192500](https://github.com/agentscope-ai/AgentTeams/commit/eb192500b535a2aee46c1657db0c77d867dc160d))
 - **内置 DeepAgents PostgreSQL local-path 启动**：通过最小权限 initContainer 非递归修正持久卷挂载根目录所有权，同时保留 PostgreSQL 官方数据路径和已有的根目录数据库。
 - **DeepAgents Matrix 任务诊断**：主动获取并记录异步 Matrix 消息处理异常，避免失败的后台任务被静默丢弃。
@@ -69,6 +71,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Change list / 变更列表**
 
+- [`c5ab6f7f`](https://github.com/agentscope-ai/AgentTeams/commit/c5ab6f7fd20aba4f3d4078a36a8f4bd21510d226) fix(deepagents): create Matrix E2EE store directory
 - [`eb192500`](https://github.com/agentscope-ai/AgentTeams/commit/eb192500b535a2aee46c1657db0c77d867dc160d) fix(controller): prepare DeepAgents state PVC ownership
 - [`9c552a66`](https://github.com/agentscope-ai/AgentTeams/commit/9c552a665241c4e78722de7afe4a69161eb5acd6) fix(deepagents): parse durations exactly
 - [`59845125`](https://github.com/agentscope-ai/AgentTeams/commit/598451254cffdc64cdaab19e4cb96987f56db101) fix(deepagents): align sandbox ownership contracts

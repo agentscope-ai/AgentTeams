@@ -728,6 +728,7 @@ func TestK8sCreateDeepAgentsAddsPersistentStateVolume(t *testing.T) {
 	if _, err := b.Create(context.Background(), CreateRequest{
 		Name:    "alice",
 		Runtime: RuntimeDeepAgents,
+		Image:   "registry.example.invalid/deepagents-worker:upgrade-test",
 		Labels:  map[string]string{v1beta1.LabelRuntime: RuntimeOpenClaw},
 		Env: map[string]string{
 			"AGENTTEAMS_CHECKPOINT_DSN":     "postgresql://user:secret@db/deepagents",
@@ -764,6 +765,7 @@ func TestK8sCreateDeepAgentsAddsPersistentStateVolume(t *testing.T) {
 	if pod.Labels[v1beta1.LabelRuntime] != RuntimeDeepAgents {
 		t.Fatalf("protected runtime label=%q, want deepagents", pod.Labels[v1beta1.LabelRuntime])
 	}
+	assertDeepAgentsStatePermissionsInit(t, pod)
 	for _, name := range []string{"AGENTTEAMS_CHECKPOINT_DSN", "AGENTTEAMS_CHECKPOINT_AES_KEY"} {
 		var found *corev1.EnvVar
 		for i := range container.Env {
@@ -792,7 +794,12 @@ func TestK8sCreateDeepAgentsAddsPersistentStateVolume(t *testing.T) {
 	}
 	security := container.SecurityContext
 	if security == nil || security.RunAsNonRoot == nil || !*security.RunAsNonRoot ||
-		security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem {
+		security.RunAsUser == nil || *security.RunAsUser != 65532 ||
+		security.RunAsGroup == nil || *security.RunAsGroup != 65532 ||
+		security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation ||
+		security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem ||
+		security.SeccompProfile == nil || security.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault ||
+		security.Capabilities == nil || len(security.Capabilities.Drop) != 1 || security.Capabilities.Drop[0] != "ALL" {
 		t.Fatalf("container security context = %#v", security)
 	}
 	probe := container.ReadinessProbe
@@ -807,6 +814,101 @@ func TestK8sCreateDeepAgentsAddsPersistentStateVolume(t *testing.T) {
 		if probe.Exec.Command[i] != wantCommand[i] {
 			t.Fatalf("DeepAgents readiness command = %#v, want %#v", probe.Exec.Command, wantCommand)
 		}
+	}
+}
+
+func TestK8sCreateDeepAgentsReusesExistingStatePVCWithoutChangingItsDataPath(t *testing.T) {
+	client := newFakeK8sCoreClient()
+	client.pvcs["agentteams"] = map[string]*corev1.PersistentVolumeClaim{
+		"agentteams-worker-existing-state": {
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "agentteams-worker-existing-state",
+				Namespace: "agentteams",
+				Labels: map[string]string{
+					v1beta1.LabelRuntime: RuntimeDeepAgents,
+					v1beta1.LabelWorker:  "existing",
+				},
+			},
+		},
+	}
+	b := NewK8sBackendWithClient(client, K8sConfig{
+		Namespace:             "agentteams",
+		DeepAgentsWorkerImage: "agentteams/deepagents-worker:existing",
+		WorkerCPU:             "1000m",
+		WorkerMemory:          "2Gi",
+	}, "agentteams-worker-", nil)
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:    "existing",
+		Runtime: RuntimeDeepAgents,
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if len(client.pvcs["agentteams"]) != 1 {
+		t.Fatalf("PVCs = %#v, want the existing state PVC to be reused", client.pvcs["agentteams"])
+	}
+	pod, err := b.client.Pods("agentteams").Get(
+		context.Background(),
+		"agentteams-worker-existing",
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Get pod failed: %v", err)
+	}
+	assertDeepAgentsStatePermissionsInit(t, pod)
+	init := pod.Spec.InitContainers[0]
+	if len(init.Command) != 3 || init.Command[0] != "chown" || init.Command[1] != "65532:65532" ||
+		init.Command[2] != "/var/lib/agentteams/deepagents" || len(init.Args) != 0 {
+		t.Fatalf("state permissions command = %#v args=%#v, want one non-recursive mount-root chown", init.Command, init.Args)
+	}
+	stateMount := pod.Spec.Containers[0].VolumeMounts[1]
+	if stateMount.Name != "deepagents-state" || stateMount.MountPath != "/var/lib/agentteams/deepagents" ||
+		stateMount.SubPath != "" {
+		t.Fatalf("existing state mount = %#v, want unchanged root-level state path", stateMount)
+	}
+}
+
+func assertDeepAgentsStatePermissionsInit(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	if len(pod.Spec.InitContainers) != 1 {
+		t.Fatalf("initContainers = %#v, want one DeepAgents state permissions init", pod.Spec.InitContainers)
+	}
+	init := pod.Spec.InitContainers[0]
+	if init.Name != "deepagents-state-permissions" {
+		t.Fatalf("init name = %q, want deepagents-state-permissions", init.Name)
+	}
+	if len(pod.Spec.Containers) == 0 || init.Image != pod.Spec.Containers[0].Image ||
+		init.ImagePullPolicy != pod.Spec.Containers[0].ImagePullPolicy {
+		t.Fatalf("init image=%q pullPolicy=%q, want worker image=%q pullPolicy=%q",
+			init.Image, init.ImagePullPolicy, pod.Spec.Containers[0].Image, pod.Spec.Containers[0].ImagePullPolicy)
+	}
+	if len(init.Command) != 3 || init.Command[0] != "chown" || init.Command[1] != "65532:65532" ||
+		init.Command[2] != "/var/lib/agentteams/deepagents" || len(init.Args) != 0 {
+		t.Fatalf("init command = %#v args=%#v, want exact non-recursive chown", init.Command, init.Args)
+	}
+	if len(init.Env) != 0 || len(init.EnvFrom) != 0 {
+		t.Fatalf("init credentials = env:%#v envFrom:%#v, want none", init.Env, init.EnvFrom)
+	}
+	if len(init.VolumeMounts) != 1 {
+		t.Fatalf("init volumeMounts = %#v, want only deepagents-state", init.VolumeMounts)
+	}
+	mount := init.VolumeMounts[0]
+	if mount.Name != "deepagents-state" || mount.MountPath != "/var/lib/agentteams/deepagents" ||
+		mount.ReadOnly || mount.SubPath != "" {
+		t.Fatalf("init state mount = %#v", mount)
+	}
+	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+		t.Fatalf("pod automountServiceAccountToken = %v, want false", pod.Spec.AutomountServiceAccountToken)
+	}
+	security := init.SecurityContext
+	if security == nil || security.RunAsUser == nil || *security.RunAsUser != 0 ||
+		security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation ||
+		security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem ||
+		security.SeccompProfile == nil || security.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault ||
+		security.Capabilities == nil || len(security.Capabilities.Drop) != 1 ||
+		security.Capabilities.Drop[0] != "ALL" || len(security.Capabilities.Add) != 1 ||
+		security.Capabilities.Add[0] != "CHOWN" {
+		t.Fatalf("init security context = %#v", security)
 	}
 }
 
@@ -834,6 +936,9 @@ func TestK8sCreateNonDeepAgentsPreservesTemplateReadinessProbe(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("Get pod failed: %v", err)
+	}
+	if len(pod.Spec.InitContainers) != 0 {
+		t.Fatalf("non-DeepAgents initContainers changed: %#v", pod.Spec.InitContainers)
 	}
 	probe := pod.Spec.Containers[0].ReadinessProbe
 	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/runtime-ready" || probe.HTTPGet.Port.IntVal != 8080 {

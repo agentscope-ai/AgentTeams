@@ -433,6 +433,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 	if req.Runtime == RuntimeDeepAgents {
 		applyDeepAgentsReadinessProbe(pod)
 		applyDeepAgentsPodSecurity(pod)
+		applyDeepAgentsStatePermissions(pod)
 	}
 
 	if req.Owner != nil {
@@ -525,6 +526,36 @@ func applyDeepAgentsPodSecurity(pod *corev1.Pod) {
 		},
 		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
+}
+
+func applyDeepAgentsStatePermissions(pod *corev1.Pod) {
+	if len(pod.Spec.Containers) == 0 {
+		return
+	}
+	rootUser := int64(0)
+	allowPrivilegeEscalation := false
+	readOnlyRoot := true
+	worker := pod.Spec.Containers[0]
+	pod.Spec.InitContainers = append(pod.Spec.InitContainers, corev1.Container{
+		Name:            "deepagents-state-permissions",
+		Image:           worker.Image,
+		ImagePullPolicy: worker.ImagePullPolicy,
+		Command:         []string{"chown", "65532:65532", "/var/lib/agentteams/deepagents"},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+			ReadOnlyRootFilesystem:   &readOnlyRoot,
+			RunAsUser:                &rootUser,
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+				Add:  []corev1.Capability{"CHOWN"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
+		VolumeMounts: []corev1.VolumeMount{{
+			Name:      "deepagents-state",
+			MountPath: "/var/lib/agentteams/deepagents",
+		}},
+	})
 }
 
 func (k *K8sBackend) Delete(ctx context.Context, name string) error {

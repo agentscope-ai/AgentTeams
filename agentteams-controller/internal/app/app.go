@@ -405,8 +405,7 @@ func (a *App) initControllerManager(ctx context.Context) error {
 	return err
 }
 
-// initFieldIndexers registers the Team membership reverse lookup used by auth
-// enrichment, REST validation, and Worker-triggered Team reconciliation.
+// initFieldIndexers registers reverse lookups before controllers start.
 func (a *App) initFieldIndexers(ctx context.Context) error {
 	if a.mgr == nil {
 		return nil
@@ -426,6 +425,20 @@ func (a *App) initFieldIndexers(ctx context.Context) error {
 		return names
 	}); err != nil {
 		return fmt.Errorf("index team workerMembers name: %w", err)
+	}
+	if err := idx.IndexField(
+		ctx,
+		&v1beta1.ExecutionSandbox{},
+		controller.ExecutionSandboxWorkerRefNameField,
+		func(obj crclient.Object) []string {
+			sandbox, ok := obj.(*v1beta1.ExecutionSandbox)
+			if !ok || sandbox.Spec.WorkerRef.Name == "" {
+				return nil
+			}
+			return []string{sandbox.Spec.WorkerRef.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("index execution sandbox workerRef name: %w", err)
 	}
 	return nil
 }
@@ -579,6 +592,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 	if a.cfg.KubeMode == "incluster" {
 		if err := (&controller.ExecutionSandboxReconciler{
 			Client:           a.mgr.GetClient(),
+			APIReader:        a.mgr.GetAPIReader(),
 			RunnerImage:      a.cfg.DeepAgentsRunnerImage,
 			ControllerName:   a.cfg.ControllerName,
 			DefaultRuntime:   a.cfg.DefaultWorkerRuntime,

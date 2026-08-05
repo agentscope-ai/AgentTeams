@@ -142,6 +142,275 @@ func TestExecutionSandboxReconcilerIgnoresForeignAndManualSandboxes(t *testing.T
 	}
 }
 
+func TestExecutionSandboxReconcilerInstallsCleanupFinalizerBeforeCreatingChildren(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	controllerOwner := true
+	blockOwnerDeletion := true
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "deepagents",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+				Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+			}},
+		},
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-finalizer-first", Namespace: worker.Namespace, UID: "sandbox-uid",
+			Labels: map[string]string{
+				v1beta1.LabelController: "ctl-a",
+				v1beta1.LabelWorker:     worker.Name,
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: v1beta1.SchemeGroupVersion.String(), Kind: "Worker", Name: worker.Name, UID: worker.UID,
+				Controller: &controllerOwner, BlockOwnerDeletion: &blockOwnerDeletion,
+			}},
+		},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+			SessionID: "thread-hash",
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+		WithObjects(worker, sandbox).
+		Build()
+	r := &ExecutionSandboxReconciler{
+		Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents",
+	}
+	key := client.ObjectKeyFromObject(sandbox)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil || result != (reconcile.Result{}) {
+		t.Fatalf("first reconcile result=%#v err=%v, want metadata-only finalizer update", result, err)
+	}
+	var stored v1beta1.ExecutionSandbox
+	if err := cl.Get(context.Background(), key, &stored); err != nil {
+		t.Fatal(err)
+	}
+	const wantFinalizer = "agentteams.io/execution-sandbox-cleanup"
+	found := false
+	for _, finalizer := range stored.Finalizers {
+		if finalizer == wantFinalizer {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("first reconcile finalizers=%v, want %q", stored.Finalizers, wantFinalizer)
+	}
+	for _, child := range []client.Object{&corev1.Secret{}, &corev1.Service{}, &corev1.Pod{}, &networkingv1.NetworkPolicy{}} {
+		if err := cl.Get(context.Background(), key, child); !apierrors.IsNotFound(err) {
+			t.Fatalf("first reconcile created %T before finalizer was durable: %v", child, err)
+		}
+	}
+}
+
+func TestExecutionSandboxReconcilerDeletingSandboxWaitsForAuthoritativePodAbsence(t *testing.T) {
+	scheme, sandbox, children := newDeletingExecutionSandboxFixture(t)
+	key := client.ObjectKeyFromObject(sandbox)
+	objectsByKind := executionSandboxChildrenByKind(children)
+
+	cachedObjects := []client.Object{
+		sandbox.DeepCopy(),
+		objectsByKind["Service"].DeepCopyObject().(client.Object),
+		objectsByKind["Secret"].DeepCopyObject().(client.Object),
+		objectsByKind["NetworkPolicy"].DeepCopyObject().(client.Object),
+	}
+	cachedBase := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+		WithObjects(cachedObjects...).
+		Build()
+	authoritativeObjects := []client.Object{sandbox.DeepCopy()}
+	for _, child := range children {
+		authoritativeObjects = append(authoritativeObjects, child.DeepCopyObject().(client.Object))
+	}
+	authoritativeWithPod := fake.NewClientBuilder().WithScheme(scheme).WithObjects(authoritativeObjects...).Build()
+
+	wantIdentity := map[string]metav1.Preconditions{}
+	for kind, prototype := range objectsByKind {
+		live := prototype.DeepCopyObject().(client.Object)
+		if err := authoritativeWithPod.Get(context.Background(), key, live); err != nil {
+			t.Fatalf("get authoritative %s: %v", kind, err)
+		}
+		uid := live.GetUID()
+		resourceVersion := live.GetResourceVersion()
+		wantIdentity[kind] = metav1.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}
+	}
+	deletePreconditions := map[string]*metav1.Preconditions{}
+	cachedClient := interceptor.NewClient(cachedBase, interceptor.Funcs{
+		Delete: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.DeleteOption) error {
+			kind := executionSandboxChildKind(object)
+			if kind != "" {
+				deleteOptions := &client.DeleteOptions{}
+				for _, opt := range opts {
+					opt.ApplyToDelete(deleteOptions)
+				}
+				if deleteOptions.Preconditions != nil {
+					copy := *deleteOptions.Preconditions
+					deletePreconditions[kind] = &copy
+				}
+			}
+			return underlying.Delete(ctx, object, opts...)
+		},
+	})
+	r := &ExecutionSandboxReconciler{
+		Client: cachedClient, APIReader: authoritativeWithPod, ControllerName: "ctl-a",
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil || result.RequeueAfter != executionSandboxRequeue {
+		t.Fatalf("terminating Pod reconcile result=%#v err=%v, want Pod-drain requeue", result, err)
+	}
+	for _, prototype := range []client.Object{&corev1.Service{}, &corev1.Secret{}} {
+		if err := cachedBase.Get(context.Background(), key, prototype); !apierrors.IsNotFound(err) {
+			t.Fatalf("terminating Pod retained %T: %v", prototype, err)
+		}
+	}
+	for _, prototype := range []client.Object{&networkingv1.NetworkPolicy{}, &v1beta1.ExecutionSandbox{}} {
+		if err := cachedBase.Get(context.Background(), key, prototype); err != nil {
+			t.Fatalf("terminating Pod lost %T: %v", prototype, err)
+		}
+	}
+	var retained v1beta1.ExecutionSandbox
+	if err := cachedBase.Get(context.Background(), key, &retained); err != nil {
+		t.Fatal(err)
+	}
+	if !containsFinalizer(retained.Finalizers, v1beta1.ExecutionSandboxCleanupFinalizer) {
+		t.Fatalf("terminating Pod removed sandbox finalizer: %v", retained.Finalizers)
+	}
+	for _, kind := range []string{"Service", "Secret", "Pod"} {
+		assertDeletePreconditions(t, kind, deletePreconditions[kind], wantIdentity[kind])
+	}
+	if deletePreconditions["NetworkPolicy"] != nil {
+		t.Fatalf("terminating Pod crossed isolation boundary with NetworkPolicy delete: %#v", deletePreconditions)
+	}
+
+	authoritativeWithoutPodObjects := []client.Object{
+		sandbox.DeepCopy(),
+		objectsByKind["Service"].DeepCopyObject().(client.Object),
+		objectsByKind["Secret"].DeepCopyObject().(client.Object),
+		objectsByKind["NetworkPolicy"].DeepCopyObject().(client.Object),
+	}
+	authoritativeWithoutPod := fake.NewClientBuilder().WithScheme(scheme).WithObjects(authoritativeWithoutPodObjects...).Build()
+	r.APIReader = authoritativeWithoutPod
+	result, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil || result != (reconcile.Result{}) {
+		t.Fatalf("authoritative Pod absence reconcile result=%#v err=%v", result, err)
+	}
+	if err := cachedBase.Get(context.Background(), key, &networkingv1.NetworkPolicy{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("authoritative Pod absence retained NetworkPolicy: %v", err)
+	}
+	assertDeletePreconditions(t, "NetworkPolicy", deletePreconditions["NetworkPolicy"], wantIdentity["NetworkPolicy"])
+	var completed v1beta1.ExecutionSandbox
+	if err := cachedBase.Get(context.Background(), key, &completed); err == nil {
+		if containsFinalizer(completed.Finalizers, v1beta1.ExecutionSandboxCleanupFinalizer) {
+			t.Fatalf("authoritative Pod absence retained cleanup finalizer: %v", completed.Finalizers)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		t.Fatalf("get completed sandbox: %v", err)
+	}
+}
+
+func TestExecutionSandboxReconcilerCleansLegacyDeletingSandboxWithoutAddingFinalizer(t *testing.T) {
+	scheme, sandbox, _ := newDeletingExecutionSandboxFixture(t)
+	sandbox.Finalizers = []string{"tests.agentteams.io/legacy-hold"}
+	children := newActiveExecutionSandboxOwnedChildren(sandbox)
+	objects := []client.Object{sandbox}
+	objects = append(objects, children...)
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	r := &ExecutionSandboxReconciler{Client: cl, APIReader: cl, ControllerName: "ctl-a"}
+	key := client.ObjectKeyFromObject(sandbox)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil || result != (reconcile.Result{}) {
+		t.Fatalf("legacy deleting sandbox result=%#v err=%v", result, err)
+	}
+	for _, object := range []client.Object{&corev1.Service{}, &corev1.Secret{}, &corev1.Pod{}, &networkingv1.NetworkPolicy{}} {
+		if err := cl.Get(context.Background(), key, object); !apierrors.IsNotFound(err) {
+			t.Fatalf("legacy cleanup retained %T: %v", object, err)
+		}
+	}
+	var retained v1beta1.ExecutionSandbox
+	if err := cl.Get(context.Background(), key, &retained); err != nil {
+		t.Fatalf("legacy finalizer should retain sandbox: %v", err)
+	}
+	if containsFinalizer(retained.Finalizers, v1beta1.ExecutionSandboxCleanupFinalizer) {
+		t.Fatalf("legacy deleting sandbox gained cleanup finalizer: %v", retained.Finalizers)
+	}
+	if !containsFinalizer(retained.Finalizers, "tests.agentteams.io/legacy-hold") {
+		t.Fatalf("legacy finalizer was removed: %v", retained.Finalizers)
+	}
+}
+
+func TestExecutionSandboxReconcilerRejectsForeignChildIdentityDuringCleanup(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*corev1.Service)
+	}{
+		{name: "controller label transfer", mutate: func(service *corev1.Service) {
+			service.Labels[v1beta1.LabelController] = "ctl-b"
+		}},
+		{name: "worker label transfer", mutate: func(service *corev1.Service) {
+			service.Labels[v1beta1.LabelWorker] = "writer"
+		}},
+		{name: "sandbox label transfer", mutate: func(service *corev1.Service) {
+			service.Labels[v1beta1.LabelExecutionSandbox] = "exec-replacement"
+		}},
+		{name: "replacement sandbox owner", mutate: func(service *corev1.Service) {
+			service.OwnerReferences[0].UID = "replacement-sandbox-uid"
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme, sandbox, children := newDeletingExecutionSandboxFixture(t)
+			objectsByKind := executionSandboxChildrenByKind(children)
+			foreignService := objectsByKind["Service"].DeepCopyObject().(*corev1.Service)
+			tt.mutate(foreignService)
+			objectsByKind["Service"] = foreignService
+			cachedObjects := []client.Object{sandbox.DeepCopy()}
+			authoritativeObjects := []client.Object{sandbox.DeepCopy()}
+			for _, kind := range []string{"Service", "Secret", "NetworkPolicy"} {
+				cachedObjects = append(cachedObjects, objectsByKind[kind].DeepCopyObject().(client.Object))
+				authoritativeObjects = append(authoritativeObjects, objectsByKind[kind].DeepCopyObject().(client.Object))
+			}
+			cached := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cachedObjects...).Build()
+			authoritative := fake.NewClientBuilder().WithScheme(scheme).WithObjects(authoritativeObjects...).Build()
+			r := &ExecutionSandboxReconciler{Client: cached, APIReader: authoritative, ControllerName: "ctl-a"}
+			key := client.ObjectKeyFromObject(sandbox)
+
+			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+			if err == nil || !strings.Contains(err.Error(), "identity") || result != (reconcile.Result{}) {
+				t.Fatalf("foreign child result=%#v err=%v, want identity error", result, err)
+			}
+			var retainedService corev1.Service
+			if err := cached.Get(context.Background(), key, &retainedService); err != nil {
+				t.Fatalf("foreign Service was deleted: %v", err)
+			}
+			for _, prototype := range []client.Object{&networkingv1.NetworkPolicy{}, &v1beta1.ExecutionSandbox{}} {
+				if err := cached.Get(context.Background(), key, prototype); err != nil {
+					t.Fatalf("foreign child cleanup removed %T: %v", prototype, err)
+				}
+			}
+		})
+	}
+}
+
 func TestExecutionSandboxReconcilerRevokesStaleWorkerBindings(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -203,92 +472,162 @@ func TestExecutionSandboxReconcilerRevokesStaleWorkerBindings(t *testing.T) {
 				WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
 				WithObjects(objects...).
 				Build()
-			allowPodDisappearance := false
 			creates := 0
-			var deleteOrder []string
-			podDeleteRequested := false
+			childDeletes := 0
+			var sandboxDeletePreconditions *metav1.Preconditions
 			cl := interceptor.NewClient(base, interceptor.Funcs{
 				Create: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.CreateOption) error {
 					creates++
 					return underlying.Create(ctx, object, opts...)
 				},
 				Delete: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.DeleteOption) error {
-					switch object.(type) {
-					case *corev1.Service:
-						deleteOrder = append(deleteOrder, "Service")
-					case *corev1.Secret:
-						deleteOrder = append(deleteOrder, "Secret")
-					case *corev1.Pod:
-						deleteOrder = append(deleteOrder, "Pod")
-						podDeleteRequested = true
-						if !allowPodDisappearance {
-							return nil
-						}
-					case *networkingv1.NetworkPolicy:
-						deleteOrder = append(deleteOrder, "NetworkPolicy")
-					case *v1beta1.ExecutionSandbox:
-						deleteOrder = append(deleteOrder, "ExecutionSandbox")
+					if _, ok := object.(*v1beta1.ExecutionSandbox); !ok {
+						childDeletes++
+						return underlying.Delete(ctx, object, opts...)
+					}
+					deleteOptions := &client.DeleteOptions{}
+					for _, opt := range opts {
+						opt.ApplyToDelete(deleteOptions)
+					}
+					if deleteOptions.Preconditions != nil {
+						copy := *deleteOptions.Preconditions
+						sandboxDeletePreconditions = &copy
 					}
 					return underlying.Delete(ctx, object, opts...)
-				},
-				Get: func(ctx context.Context, underlying client.WithWatch, objectKey client.ObjectKey, object client.Object, opts ...client.GetOption) error {
-					err := underlying.Get(ctx, objectKey, object, opts...)
-					if livePod, ok := object.(*corev1.Pod); ok && err == nil && podDeleteRequested && !allowPodDisappearance {
-						terminating := metav1.NewTime(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC))
-						livePod.DeletionTimestamp = &terminating
-					}
-					return err
 				},
 			})
 			r := &ExecutionSandboxReconciler{
 				Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents",
 			}
 			key := client.ObjectKeyFromObject(sandbox)
+			var before v1beta1.ExecutionSandbox
+			if err := base.Get(context.Background(), key, &before); err != nil {
+				t.Fatal(err)
+			}
 
 			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
-			if err != nil || result.RequeueAfter != executionSandboxRequeue {
-				t.Fatalf("first revoke result=%#v err=%v, want five-second Pod drain requeue", result, err)
+			if err != nil || result != (reconcile.Result{}) {
+				t.Fatalf("stale binding deletion request result=%#v err=%v", result, err)
 			}
-			if got, want := strings.Join(deleteOrder, ","), "Service,Secret,Pod"; got != want {
-				t.Fatalf("first revoke delete order=%q, want %q", got, want)
+			if sandboxDeletePreconditions == nil || sandboxDeletePreconditions.UID == nil ||
+				*sandboxDeletePreconditions.UID != before.UID || sandboxDeletePreconditions.ResourceVersion == nil ||
+				*sandboxDeletePreconditions.ResourceVersion != before.ResourceVersion {
+				t.Fatalf("stale binding delete preconditions=%#v, want UID=%q RV=%q", sandboxDeletePreconditions, before.UID, before.ResourceVersion)
 			}
-			for _, object := range []client.Object{&corev1.Service{}, &corev1.Secret{}} {
-				if err := base.Get(context.Background(), key, object); !apierrors.IsNotFound(err) {
-					t.Fatalf("first revoke retained %T: %v", object, err)
-				}
+			if creates != 0 || childDeletes != 0 {
+				t.Fatalf("stale binding request touched children: creates=%d deletes=%d", creates, childDeletes)
 			}
-			for _, object := range []client.Object{&corev1.Pod{}, &networkingv1.NetworkPolicy{}, &v1beta1.ExecutionSandbox{}} {
+			for _, object := range []client.Object{&corev1.Service{}, &corev1.Secret{}, &corev1.Pod{}, &networkingv1.NetworkPolicy{}} {
 				if err := base.Get(context.Background(), key, object); err != nil {
-					t.Fatalf("first revoke removed %T before Pod disappearance: %v", object, err)
+					t.Fatalf("stale binding request removed %T before finalizer cleanup: %v", object, err)
 				}
 			}
-			if creates != 0 {
-				t.Fatalf("revoke path created %d replacement children", creates)
+			var deleting v1beta1.ExecutionSandbox
+			if err := base.Get(context.Background(), key, &deleting); err != nil {
+				t.Fatalf("finalizer did not retain stale sandbox: %v", err)
 			}
-
-			allowPodDisappearance = true
-			deleteOrder = nil
-			result, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
-			if err != nil || result != (reconcile.Result{}) {
-				t.Fatalf("second revoke result=%#v err=%v, want completed deletion", result, err)
-			}
-			if got, want := strings.Join(deleteOrder, ","), "Service,Secret,Pod,NetworkPolicy,ExecutionSandbox"; got != want {
-				t.Fatalf("second revoke delete order=%q, want %q", got, want)
-			}
-			for _, object := range []client.Object{&corev1.Pod{}, &networkingv1.NetworkPolicy{}, &v1beta1.ExecutionSandbox{}} {
-				if err := base.Get(context.Background(), key, object); !apierrors.IsNotFound(err) {
-					t.Fatalf("completed revoke retained %T: %v", object, err)
-				}
-			}
-
-			result, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
-			if err != nil || result != (reconcile.Result{}) {
-				t.Fatalf("idempotent revoke result=%#v err=%v", result, err)
-			}
-			if creates != 0 {
-				t.Fatalf("idempotent revoke created %d replacement children", creates)
+			if deleting.DeletionTimestamp.IsZero() || !containsFinalizer(deleting.Finalizers, v1beta1.ExecutionSandboxCleanupFinalizer) {
+				t.Fatalf("stale sandbox deletion state=%v finalizers=%v", deleting.DeletionTimestamp, deleting.Finalizers)
 			}
 		})
+	}
+}
+
+func TestExecutionSandboxReconcilerWorkerDeletionRequestsGenerationSafeSandboxDeletion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	deletingAt := metav1.NewTime(time.Date(2026, 8, 5, 11, 59, 0, 0, time.UTC))
+	controllerOwner := true
+	blockOwnerDeletion := true
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels:            map[string]string{v1beta1.LabelController: "ctl-a"},
+			Finalizers:        []string{"agentteams.io/cleanup"},
+			DeletionTimestamp: &deletingAt,
+		},
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "deepagents",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+				Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+			}},
+		},
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-worker-deleting", Namespace: worker.Namespace, UID: "sandbox-uid",
+			Labels: map[string]string{
+				v1beta1.LabelController: "ctl-a",
+				v1beta1.LabelWorker:     worker.Name,
+			},
+			Finalizers: []string{"agentteams.io/execution-sandbox-cleanup"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: v1beta1.SchemeGroupVersion.String(), Kind: "Worker", Name: worker.Name, UID: worker.UID,
+				Controller: &controllerOwner, BlockOwnerDeletion: &blockOwnerDeletion,
+			}},
+		},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+			SessionID:   "thread-hash",
+			IdleTimeout: "30m",
+			MaxLifetime: "8h",
+		},
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+		WithObjects(worker, sandbox).
+		Build()
+	var storedBefore v1beta1.ExecutionSandbox
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(sandbox), &storedBefore); err != nil {
+		t.Fatal(err)
+	}
+	createdChildren := 0
+	deletedChildren := 0
+	var gotPreconditions *metav1.Preconditions
+	cl := interceptor.NewClient(base, interceptor.Funcs{
+		Create: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.CreateOption) error {
+			createdChildren++
+			return underlying.Create(ctx, object, opts...)
+		},
+		Delete: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.DeleteOption) error {
+			if _, ok := object.(*v1beta1.ExecutionSandbox); !ok {
+				deletedChildren++
+				return underlying.Delete(ctx, object, opts...)
+			}
+			deleteOptions := &client.DeleteOptions{}
+			for _, opt := range opts {
+				opt.ApplyToDelete(deleteOptions)
+			}
+			if deleteOptions.Preconditions != nil {
+				copy := *deleteOptions.Preconditions
+				gotPreconditions = &copy
+			}
+			return nil
+		},
+	})
+	r := &ExecutionSandboxReconciler{
+		Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents",
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(sandbox)})
+	if err != nil || result != (reconcile.Result{}) {
+		t.Fatalf("Worker deletion reconcile result=%#v err=%v", result, err)
+	}
+	if gotPreconditions == nil || gotPreconditions.UID == nil || *gotPreconditions.UID != storedBefore.UID ||
+		gotPreconditions.ResourceVersion == nil || *gotPreconditions.ResourceVersion != storedBefore.ResourceVersion {
+		t.Fatalf("Worker deletion preconditions=%#v, want UID=%q resourceVersion=%q", gotPreconditions, storedBefore.UID, storedBefore.ResourceVersion)
+	}
+	if createdChildren != 0 || deletedChildren != 0 {
+		t.Fatalf("Worker deletion touched children: creates=%d deletes=%d", createdChildren, deletedChildren)
 	}
 }
 
@@ -306,7 +645,8 @@ func TestExecutionSandboxReconcilerRevokeContainsAPIErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			scheme, worker, sandbox, children := newReadyExecutionSandboxRevokeFixture(t)
-			worker.Labels[v1beta1.LabelController] = "ctl-b"
+			deletingAt := metav1.NewTime(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC))
+			sandbox.DeletionTimestamp = &deletingAt
 			objects := []client.Object{worker, sandbox}
 			objects = append(objects, children...)
 			base := fake.NewClientBuilder().
@@ -357,7 +697,7 @@ func TestExecutionSandboxReconcilerRevokeContainsAPIErrors(t *testing.T) {
 				},
 			})
 			r := &ExecutionSandboxReconciler{
-				Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents",
+				Client: cl, APIReader: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents",
 			}
 			key := client.ObjectKeyFromObject(sandbox)
 
@@ -395,33 +735,138 @@ func TestExecutionSandboxWorkerWatchMapsOnlyOwnedRelatedSandboxes(t *testing.T) 
 	}
 	objects := []client.Object{
 		&v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{
-			Name: "matching", Namespace: "ns-a", Labels: map[string]string{
-				v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "researcher",
+			Name: "matching-missing-label", Namespace: "ns-a", Labels: map[string]string{
+				v1beta1.LabelController: "ctl-a",
 			},
-		}},
+		}, Spec: v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}}},
+		&v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{
+			Name: "matching-wrong-label", Namespace: "ns-a", Labels: map[string]string{
+				v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "writer",
+			},
+		}, Spec: v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}}},
 		&v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{
 			Name: "other-namespace", Namespace: "ns-b", Labels: map[string]string{
 				v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "researcher",
 			},
-		}},
+		}, Spec: v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}}},
 		&v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{
 			Name: "foreign-controller", Namespace: "ns-a", Labels: map[string]string{
 				v1beta1.LabelController: "ctl-b", v1beta1.LabelWorker: "researcher",
 			},
-		}},
+		}, Spec: v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}}},
 		&v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{
 			Name: "other-worker", Namespace: "ns-a", Labels: map[string]string{
-				v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "writer",
+				v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "researcher",
 			},
-		}},
+		}, Spec: v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "writer"}}},
 	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithIndex(&v1beta1.ExecutionSandbox{}, ExecutionSandboxWorkerRefNameField, func(object client.Object) []string {
+			return []string{object.(*v1beta1.ExecutionSandbox).Spec.WorkerRef.Name}
+		}).
+		Build()
 	r := &ExecutionSandboxReconciler{Client: cl, ControllerName: "ctl-a"}
 	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "ns-a"}}
 
 	requests := r.executionSandboxesForWorker(context.Background(), worker)
-	if len(requests) != 1 || requests[0].NamespacedName != (types.NamespacedName{Name: "matching", Namespace: "ns-a"}) {
-		t.Fatalf("worker map requests=%#v, want only ns-a/matching", requests)
+	want := map[types.NamespacedName]bool{
+		{Name: "matching-missing-label", Namespace: "ns-a"}: false,
+		{Name: "matching-wrong-label", Namespace: "ns-a"}:   false,
+	}
+	for _, request := range requests {
+		if _, ok := want[request.NamespacedName]; !ok {
+			t.Fatalf("worker map enqueued out-of-scope sandbox %s", request.NamespacedName)
+		}
+		want[request.NamespacedName] = true
+	}
+	for key, found := range want {
+		if !found {
+			t.Fatalf("worker map omitted spec.workerRef sandbox %s: %#v", key, requests)
+		}
+	}
+}
+
+func TestExecutionSandboxWorkerWatchFallsBackToAPIReaderAndLogsCacheListError(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	sandboxes := []client.Object{
+		&v1beta1.ExecutionSandbox{
+			ObjectMeta: metav1.ObjectMeta{Name: "matching", Namespace: "ns-a", Labels: map[string]string{v1beta1.LabelController: "ctl-a"}},
+			Spec:       v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}},
+		},
+		&v1beta1.ExecutionSandbox{
+			ObjectMeta: metav1.ObjectMeta{Name: "wrong-label", Namespace: "ns-a", Labels: map[string]string{v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "writer"}},
+			Spec:       v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}},
+		},
+		&v1beta1.ExecutionSandbox{
+			ObjectMeta: metav1.ObjectMeta{Name: "other-worker", Namespace: "ns-a", Labels: map[string]string{v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "researcher"}},
+			Spec:       v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "writer"}},
+		},
+		&v1beta1.ExecutionSandbox{
+			ObjectMeta: metav1.ObjectMeta{Name: "foreign", Namespace: "ns-a", Labels: map[string]string{v1beta1.LabelController: "ctl-b"}},
+			Spec:       v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}},
+		},
+	}
+	authoritative := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandboxes...).Build()
+	cacheBase := fake.NewClientBuilder().WithScheme(scheme).Build()
+	cacheClient := interceptor.NewClient(cacheBase, interceptor.Funcs{
+		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+			return errors.New("injected sandbox cache list failure")
+		},
+	})
+	r := &ExecutionSandboxReconciler{Client: cacheClient, APIReader: authoritative, ControllerName: "ctl-a"}
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "ns-a"}}
+	var logOutput bytes.Buffer
+	ctx := log.IntoContext(context.Background(), captureLogger(&logOutput))
+
+	requests := r.executionSandboxesForWorker(ctx, worker)
+
+	want := map[types.NamespacedName]bool{
+		{Name: "matching", Namespace: "ns-a"}:    false,
+		{Name: "wrong-label", Namespace: "ns-a"}: false,
+	}
+	for _, request := range requests {
+		if _, ok := want[request.NamespacedName]; !ok {
+			t.Fatalf("fallback enqueued out-of-scope sandbox %s", request.NamespacedName)
+		}
+		want[request.NamespacedName] = true
+	}
+	for key, found := range want {
+		if !found {
+			t.Fatalf("fallback omitted sandbox %s: %#v", key, requests)
+		}
+	}
+	if !strings.Contains(logOutput.String(), "injected sandbox cache list failure") ||
+		!strings.Contains(logOutput.String(), "falling back") {
+		t.Fatalf("cache List fallback log=%q", logOutput.String())
+	}
+}
+
+func TestExecutionSandboxWorkerWatchLogsAPIReaderFallbackFailure(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	failingReader := interceptor.NewClient(fake.NewClientBuilder().WithScheme(scheme).Build(), interceptor.Funcs{
+		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+			return errors.New("injected sandbox list failure")
+		},
+	})
+	r := &ExecutionSandboxReconciler{Client: failingReader, APIReader: failingReader, ControllerName: "ctl-a"}
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "ns-a"}}
+	var logOutput bytes.Buffer
+	ctx := log.IntoContext(context.Background(), captureLogger(&logOutput))
+
+	if requests := r.executionSandboxesForWorker(ctx, worker); len(requests) != 0 {
+		t.Fatalf("failed fallback requests=%#v", requests)
+	}
+	if strings.Count(logOutput.String(), "injected sandbox list failure") < 2 ||
+		!strings.Contains(logOutput.String(), "API reader fallback failed") {
+		t.Fatalf("fallback failure log=%q", logOutput.String())
 	}
 }
 
@@ -430,12 +875,21 @@ func TestExecutionSandboxWorkerWatchPredicatesPreserveRevocationEvents(t *testin
 	if err := v1beta1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	sandbox := &v1beta1.ExecutionSandbox{ObjectMeta: metav1.ObjectMeta{
-		Name: "exec", Namespace: "ns-a", Labels: map[string]string{
-			v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "researcher",
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec", Namespace: "ns-a", Labels: map[string]string{
+				v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "researcher",
+			},
 		},
-	}}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
+		Spec: v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(sandbox).
+		WithIndex(&v1beta1.ExecutionSandbox{}, ExecutionSandboxWorkerRefNameField, func(object client.Object) []string {
+			return []string{object.(*v1beta1.ExecutionSandbox).Spec.WorkerRef.Name}
+		}).
+		Build()
 	r := &ExecutionSandboxReconciler{Client: cl, ControllerName: "ctl-a"}
 	predicates := ExecutionSandboxWorkerPredicates("ctl-a")
 	owned := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{
@@ -505,6 +959,7 @@ func TestExecutionSandboxReconcilerExpiresIdleSandbox(t *testing.T) {
 	sandbox := &v1beta1.ExecutionSandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "exec-expired", Namespace: "default", UID: "sandbox-uid", CreationTimestamp: created,
+			Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
@@ -525,8 +980,93 @@ func TestExecutionSandboxReconcilerExpiresIdleSandbox(t *testing.T) {
 	}
 	var deleted v1beta1.ExecutionSandbox
 	err = cl.Get(context.Background(), types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}, &deleted)
-	if err == nil {
-		t.Fatal("idle ExecutionSandbox was not deleted")
+	if err != nil {
+		t.Fatalf("cleanup finalizer did not retain expired sandbox: %v", err)
+	}
+	if deleted.DeletionTimestamp.IsZero() || !containsFinalizer(deleted.Finalizers, v1beta1.ExecutionSandboxCleanupFinalizer) {
+		t.Fatalf("expired sandbox deletion state=%v finalizers=%v", deleted.DeletionTimestamp, deleted.Finalizers)
+	}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(sandbox)}); err != nil {
+		t.Fatalf("finalize expired sandbox: %v", err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(sandbox), &deleted); !apierrors.IsNotFound(err) {
+		t.Fatalf("expired sandbox remained after finalizer cleanup: %v", err)
+	}
+}
+
+func TestExecutionSandboxReconcilerExpiryDeleteUsesUIDAndResourceVersionPreconditions(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "deepagents",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+				Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+			}},
+		},
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-expiry-preconditions", Namespace: worker.Namespace, UID: "sandbox-uid",
+			CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			Labels: map[string]string{
+				v1beta1.LabelController: "ctl-a",
+				v1beta1.LabelWorker:     worker.Name,
+			},
+			Finalizers: []string{"agentteams.io/execution-sandbox-cleanup"},
+		},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+			SessionID:   "thread-hash",
+			IdleTimeout: "30m",
+			MaxLifetime: "1h",
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker, sandbox).Build()
+	var storedBefore v1beta1.ExecutionSandbox
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(sandbox), &storedBefore); err != nil {
+		t.Fatal(err)
+	}
+	var gotPreconditions *metav1.Preconditions
+	cl := interceptor.NewClient(base, interceptor.Funcs{
+		Delete: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.DeleteOption) error {
+			if _, ok := object.(*v1beta1.ExecutionSandbox); ok {
+				deleteOptions := &client.DeleteOptions{}
+				for _, opt := range opts {
+					opt.ApplyToDelete(deleteOptions)
+				}
+				if deleteOptions.Preconditions != nil {
+					copy := *deleteOptions.Preconditions
+					gotPreconditions = &copy
+				}
+			}
+			return underlying.Delete(ctx, object, opts...)
+		},
+	})
+	r := &ExecutionSandboxReconciler{
+		Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents",
+		Now: func() time.Time { return now },
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(sandbox)}); err != nil {
+		t.Fatalf("Reconcile expired sandbox: %v", err)
+	}
+	if gotPreconditions == nil || gotPreconditions.UID == nil || *gotPreconditions.UID != storedBefore.UID ||
+		gotPreconditions.ResourceVersion == nil || *gotPreconditions.ResourceVersion != storedBefore.ResourceVersion {
+		t.Fatalf("expiry delete preconditions=%#v, want UID=%q resourceVersion=%q", gotPreconditions, storedBefore.UID, storedBefore.ResourceVersion)
 	}
 }
 
@@ -648,7 +1188,12 @@ func TestExecutionSandboxReconcilerConvergesInvalidComputeResources(t *testing.T
 	sandbox := &v1beta1.ExecutionSandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "exec-invalid-resources", Namespace: "agentteams-system", UID: "sandbox-uid",
-			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+			Labels: map[string]string{
+				v1beta1.LabelController:       "ctl-a",
+				v1beta1.LabelWorker:           worker.Name,
+				v1beta1.LabelExecutionSandbox: "exec-invalid-resources",
+			},
+			Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
@@ -659,14 +1204,12 @@ func TestExecutionSandboxReconcilerConvergesInvalidComputeResources(t *testing.T
 		},
 	}
 	key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
-	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
-	policy := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	objects := []client.Object{worker, sandbox}
+	objects = append(objects, newActiveExecutionSandboxOwnedChildren(sandbox)...)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
-		WithObjects(worker, sandbox, secret, pod, service, policy).
+		WithObjects(objects...).
 		Build()
 	r := &ExecutionSandboxReconciler{
 		Client:         cl,
@@ -815,7 +1358,12 @@ func TestExecutionSandboxReconcilerConvergesInvalidPolicies(t *testing.T) {
 			sandbox := &v1beta1.ExecutionSandbox{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "exec-invalid-policy", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2,
-					Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+					Labels: map[string]string{
+						v1beta1.LabelController:       "ctl-a",
+						v1beta1.LabelWorker:           worker.Name,
+						v1beta1.LabelExecutionSandbox: "exec-invalid-policy",
+					},
+					Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
 				},
 				Spec: v1beta1.ExecutionSandboxSpec{
 					WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
@@ -834,12 +1382,7 @@ func TestExecutionSandboxReconcilerConvergesInvalidPolicies(t *testing.T) {
 			}
 			tt.mutateSpec(&sandbox.Spec)
 			key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
-			children := []client.Object{
-				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
-				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
-				&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
-				&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
-			}
+			children := newActiveExecutionSandboxOwnedChildren(sandbox)
 			objects := []client.Object{worker, sandbox}
 			objects = append(objects, children...)
 			cl := fake.NewClientBuilder().
@@ -921,7 +1464,12 @@ func TestExecutionSandboxReconcilerKeepsTerminatingRunnerIsolated(t *testing.T) 
 	sandbox := &v1beta1.ExecutionSandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "exec-terminating", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2,
-			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+			Labels: map[string]string{
+				v1beta1.LabelController:       "ctl-a",
+				v1beta1.LabelWorker:           worker.Name,
+				v1beta1.LabelExecutionSandbox: "exec-terminating",
+			},
+			Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
@@ -938,24 +1486,20 @@ func TestExecutionSandboxReconcilerKeepsTerminatingRunnerIsolated(t *testing.T) 
 		},
 	}
 	key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}, Data: map[string][]byte{"token": []byte("capability")}}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		Name: key.Name, Namespace: key.Namespace,
-		Labels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name},
-	}}
-	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
-	policy := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
-		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name}},
-			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
-			Egress:      []networkingv1.NetworkPolicyEgressRule{{}},
-		},
+	children := newActiveExecutionSandboxOwnedChildren(sandbox)
+	childrenByKind := executionSandboxChildrenByKind(children)
+	policy := childrenByKind["NetworkPolicy"].(*networkingv1.NetworkPolicy)
+	policy.Spec = networkingv1.NetworkPolicySpec{
+		PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name}},
+		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+		Egress:      []networkingv1.NetworkPolicyEgressRule{{}},
 	}
+	objects := []client.Object{worker, sandbox}
+	objects = append(objects, children...)
 	base := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
-		WithObjects(worker, sandbox, secret, pod, service, policy).
+		WithObjects(objects...).
 		Build()
 	podDeleteRequested := false
 	cl := interceptor.NewClient(base, interceptor.Funcs{
@@ -998,8 +1542,8 @@ func TestExecutionSandboxReconcilerKeepsTerminatingRunnerIsolated(t *testing.T) 
 		!metav1.IsControlledBy(&isolated, sandbox) {
 		t.Fatalf("terminating Runner policy is not owned default-deny: %#v", isolated)
 	}
-	if err := base.Get(context.Background(), key, &corev1.Secret{}); err != nil {
-		t.Fatalf("capability Secret removed before Pod absence: %v", err)
+	if err := base.Get(context.Background(), key, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("capability Secret survived ordered revoke: %v", err)
 	}
 	var failed v1beta1.ExecutionSandbox
 	if err := base.Get(context.Background(), key, &failed); err != nil {
@@ -1077,7 +1621,12 @@ func TestExecutionSandboxReconcilerAttemptsAllContainmentAfterAPIFailures(t *tes
 			sandbox := &v1beta1.ExecutionSandbox{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "exec-failure", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2,
-					Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+					Labels: map[string]string{
+						v1beta1.LabelController:       "ctl-a",
+						v1beta1.LabelWorker:           worker.Name,
+						v1beta1.LabelExecutionSandbox: "exec-failure",
+					},
+					Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
 				},
 				Spec: v1beta1.ExecutionSandboxSpec{
 					WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
@@ -1086,23 +1635,20 @@ func TestExecutionSandboxReconcilerAttemptsAllContainmentAfterAPIFailures(t *tes
 				Status: v1beta1.ExecutionSandboxStatus{ObservedGeneration: 1, Phase: "Ready", Endpoint: "http://runner", PodName: "exec-failure"},
 			}
 			key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
-			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}, Data: map[string][]byte{"token": []byte("capability")}}
-			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: map[string]string{
-				v1beta1.LabelExecutionSandbox: sandbox.Name,
-			}}}
-			service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
-			policy := &networkingv1.NetworkPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
-				Spec: networkingv1.NetworkPolicySpec{
-					PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name}},
-					PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
-					Egress:      []networkingv1.NetworkPolicyEgressRule{{}},
-				},
+			children := newActiveExecutionSandboxOwnedChildren(sandbox)
+			childrenByKind := executionSandboxChildrenByKind(children)
+			policy := childrenByKind["NetworkPolicy"].(*networkingv1.NetworkPolicy)
+			policy.Spec = networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name}},
+				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+				Egress:      []networkingv1.NetworkPolicyEgressRule{{}},
 			}
+			objects := []client.Object{worker, sandbox}
+			objects = append(objects, children...)
 			base := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
-				WithObjects(worker, sandbox, secret, pod, service, policy).
+				WithObjects(objects...).
 				Build()
 			attempts := map[string]int{}
 			cl := interceptor.NewClient(base, interceptor.Funcs{
@@ -1153,25 +1699,22 @@ func TestExecutionSandboxReconcilerAttemptsAllContainmentAfterAPIFailures(t *tes
 					return underlying.SubResource(subResourceName).Update(ctx, object, opts...)
 				},
 			})
-			r := &ExecutionSandboxReconciler{Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents"}
+			r := &ExecutionSandboxReconciler{Client: cl, APIReader: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents"}
 
-			var logOutput bytes.Buffer
-			ctx := log.IntoContext(context.Background(), captureLogger(&logOutput))
-			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
-			if err != nil || result.RequeueAfter != executionSandboxRequeue {
-				t.Fatalf("result=%#v err=%v, want fixed containment requeue without error", result, err)
+			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+			if err == nil || !strings.Contains(err.Error(), "injected") || result != (reconcile.Result{}) {
+				t.Fatalf("result=%#v err=%v, want error-driven containment retry", result, err)
 			}
-			if !strings.Contains(logOutput.String(), "sandbox containment remains incomplete") ||
-				!strings.Contains(logOutput.String(), sandbox.Namespace) || !strings.Contains(logOutput.String(), sandbox.Name) {
-				t.Fatalf("containment error log lacks identity/context: %q", logOutput.String())
-			}
-			for _, action := range []string{"policy-ensure", "status-update", "service-delete", "pod-delete"} {
+			for _, action := range []string{"status-update", "service-delete"} {
 				if attempts[action] == 0 {
 					t.Fatalf("%s failure skipped independent containment action %s: %#v", tt.name, action, attempts)
 				}
 			}
 			if attempts["pod-get"] == 0 {
 				t.Fatalf("%s failure skipped Pod absence observation", tt.name)
+			}
+			if !tt.failPodGet && (attempts["policy-ensure"] == 0 || attempts["pod-delete"] == 0) {
+				t.Fatalf("%s failure skipped safe Pod containment actions: %#v", tt.name, attempts)
 			}
 			if !tt.failStatusUpdate {
 				var failed v1beta1.ExecutionSandbox
@@ -1186,7 +1729,7 @@ func TestExecutionSandboxReconcilerAttemptsAllContainmentAfterAPIFailures(t *tes
 			if getErr := base.Get(context.Background(), key, &containedPolicy); getErr != nil {
 				t.Fatalf("capability NetworkPolicy was not retained: %v", getErr)
 			}
-			if !tt.failPolicyUpdate && (len(containedPolicy.Spec.Ingress) != 0 || len(containedPolicy.Spec.Egress) != 0 ||
+			if !tt.failPodGet && !tt.failPolicyUpdate && (len(containedPolicy.Spec.Ingress) != 0 || len(containedPolicy.Spec.Egress) != 0 ||
 				len(containedPolicy.Spec.PolicyTypes) != 2) {
 				t.Fatalf("working policy API did not establish default-deny: %#v", containedPolicy.Spec)
 			}
@@ -1198,10 +1741,11 @@ func TestExecutionSandboxReconcilerAttemptsAllContainmentAfterAPIFailures(t *tes
 			} else if !apierrors.IsNotFound(serviceErr) {
 				t.Fatalf("working Service delete did not cut routing: %v", serviceErr)
 			}
-			for _, object := range []client.Object{&corev1.Secret{}, &networkingv1.NetworkPolicy{}} {
-				if getErr := base.Get(context.Background(), key, object); getErr != nil {
-					t.Fatalf("unknown/present Pod lost capability material %T: %v", object, getErr)
-				}
+			if getErr := base.Get(context.Background(), key, &corev1.Secret{}); !apierrors.IsNotFound(getErr) {
+				t.Fatalf("ordered containment retained capability Secret: %v", getErr)
+			}
+			if getErr := base.Get(context.Background(), key, &networkingv1.NetworkPolicy{}); getErr != nil {
+				t.Fatalf("unknown/present Pod lost NetworkPolicy: %v", getErr)
 			}
 		})
 	}
@@ -1233,7 +1777,8 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 	sandbox := &v1beta1.ExecutionSandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "exec-abc", Namespace: "agentteams-system", UID: "sandbox-uid",
-			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+			Labels:     map[string]string{v1beta1.LabelController: "ctl-a"},
+			Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
@@ -1349,7 +1894,8 @@ func TestExecutionSandboxReconcilerRecreatesStaleImmutableResourcesAndUpdatesNet
 	sandbox := &v1beta1.ExecutionSandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "exec-policy-refresh", Namespace: "agentteams-system", UID: "sandbox-uid",
-			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+			Labels:     map[string]string{v1beta1.LabelController: "ctl-a"},
+			Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
@@ -1373,6 +1919,7 @@ func TestExecutionSandboxReconcilerRecreatesStaleImmutableResourcesAndUpdatesNet
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("initial Reconcile: %v", err)
 	}
+	stampFakeExecutionSandboxChildResourceVersions(t, cl, key)
 
 	var pod corev1.Pod
 	if err := cl.Get(context.Background(), key, &pod); err != nil {
@@ -1570,8 +2117,17 @@ func TestExecutionSandboxReconcilerMovesIdleDeadlineWithHeartbeatAndDeletesAtExp
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("Reconcile idle expiry: %v", err)
 	}
+	if err := cl.Get(context.Background(), key, &sandbox); err != nil {
+		t.Fatalf("idle sandbox did not enter finalizer cleanup: %v", err)
+	}
+	if sandbox.DeletionTimestamp.IsZero() || !containsFinalizer(sandbox.Finalizers, v1beta1.ExecutionSandboxCleanupFinalizer) {
+		t.Fatalf("idle sandbox deletion state=%v finalizers=%v", sandbox.DeletionTimestamp, sandbox.Finalizers)
+	}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("finalize idle expiry: %v", err)
+	}
 	if err := cl.Get(context.Background(), key, &sandbox); !apierrors.IsNotFound(err) {
-		t.Fatalf("idle sandbox was not deleted at moved deadline: %v", err)
+		t.Fatalf("idle sandbox was not finalized at moved deadline: %v", err)
 	}
 }
 
@@ -1609,6 +2165,7 @@ func newExecutionSandboxLifecycleTestRig(
 			UID:               "sandbox-uid",
 			CreationTimestamp: metav1.NewTime(now),
 			Labels:            map[string]string{v1beta1.LabelController: "ctl-a"},
+			Finalizers:        []string{v1beta1.ExecutionSandboxCleanupFinalizer},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
@@ -1633,6 +2190,7 @@ func newExecutionSandboxLifecycleTestRig(
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("initial Reconcile: %v", err)
 	}
+	stampFakeExecutionSandboxChildResourceVersions(t, cl, key)
 	return r, cl, key
 }
 
@@ -1694,6 +2252,8 @@ func newReadyExecutionSandboxRevokeFixture(
 			}},
 		},
 	}
+	controllerOwner := true
+	blockOwnerDeletion := true
 	sandbox := &v1beta1.ExecutionSandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "exec-ready", Namespace: worker.Namespace, UID: "sandbox-uid",
@@ -1701,6 +2261,11 @@ func newReadyExecutionSandboxRevokeFixture(
 				v1beta1.LabelController: "ctl-a",
 				v1beta1.LabelWorker:     worker.Name,
 			},
+			Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: v1beta1.SchemeGroupVersion.String(), Kind: "Worker", Name: worker.Name, UID: worker.UID,
+				Controller: &controllerOwner, BlockOwnerDeletion: &blockOwnerDeletion,
+			}},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
@@ -1719,32 +2284,251 @@ func newReadyExecutionSandboxRevokeFixture(
 			}},
 		},
 	}
-	key := client.ObjectKeyFromObject(sandbox)
-	immutable := true
-	labels := map[string]string{
-		v1beta1.LabelController:       "ctl-a",
-		v1beta1.LabelWorker:           worker.Name,
-		v1beta1.LabelExecutionSandbox: sandbox.Name,
-	}
-	children := []client.Object{
-		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: labels}},
-		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: labels},
-			Immutable:  &immutable,
-			Data:       map[string][]byte{"token": []byte("01234567890123456789012345678901")},
-		},
-		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: labels},
-			Status: corev1.PodStatus{
-				Phase: corev1.PodRunning,
-				Conditions: []corev1.PodCondition{{
-					Type: corev1.PodReady, Status: corev1.ConditionTrue,
-				}},
-			},
-		},
-		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: labels}},
+	children := newActiveExecutionSandboxOwnedChildren(sandbox)
+	pod := executionSandboxChildrenByKind(children)["Pod"].(*corev1.Pod)
+	pod.Status = corev1.PodStatus{
+		Phase: corev1.PodRunning,
+		Conditions: []corev1.PodCondition{{
+			Type: corev1.PodReady, Status: corev1.ConditionTrue,
+		}},
 	}
 	return scheme, worker, sandbox, children
+}
+
+func TestExecutionSandboxReconcilerInvalidPolicyUsesAuthoritativePodAbsence(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid",
+			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
+		},
+		Spec: v1beta1.WorkerSpec{
+			Runtime: "deepagents",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+				Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+			}},
+		},
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-invalid-authoritative", Namespace: worker.Namespace, UID: "sandbox-uid",
+			Labels: map[string]string{
+				v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: worker.Name,
+			},
+			Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
+		},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+			SessionID:   "thread-hash",
+			IdleTimeout: "invalid",
+			MaxLifetime: "8h",
+		},
+	}
+	children := newExecutionSandboxOwnedChildren(sandbox)
+	objectsByKind := executionSandboxChildrenByKind(children)
+	cachedObjects := []client.Object{
+		worker.DeepCopy(), sandbox.DeepCopy(),
+		objectsByKind["Service"].DeepCopyObject().(client.Object),
+		objectsByKind["Secret"].DeepCopyObject().(client.Object),
+		objectsByKind["NetworkPolicy"].DeepCopyObject().(client.Object),
+	}
+	cached := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+		WithObjects(cachedObjects...).
+		Build()
+	authoritativeObjects := []client.Object{sandbox.DeepCopy()}
+	for _, child := range children {
+		authoritativeObjects = append(authoritativeObjects, child.DeepCopyObject().(client.Object))
+	}
+	authoritative := fake.NewClientBuilder().WithScheme(scheme).WithObjects(authoritativeObjects...).Build()
+	r := &ExecutionSandboxReconciler{
+		Client: cached, APIReader: authoritative, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents",
+	}
+	key := client.ObjectKeyFromObject(sandbox)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil || result.RequeueAfter != executionSandboxRequeue {
+		t.Fatalf("invalid policy containment result=%#v err=%v, want authoritative Pod drain requeue", result, err)
+	}
+	for _, prototype := range []client.Object{&networkingv1.NetworkPolicy{}, &v1beta1.ExecutionSandbox{}} {
+		if err := cached.Get(context.Background(), key, prototype); err != nil {
+			t.Fatalf("cached Pod NotFound crossed containment boundary and removed %T: %v", prototype, err)
+		}
+	}
+	var failed v1beta1.ExecutionSandbox
+	if err := cached.Get(context.Background(), key, &failed); err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status.Phase != "Failed" || sandboxReadyReason(failed.Status.Conditions) != "InvalidPolicy" {
+		t.Fatalf("invalid policy status=%#v", failed.Status)
+	}
+}
+
+func newDeletingExecutionSandboxFixture(
+	t *testing.T,
+) (*runtime.Scheme, *v1beta1.ExecutionSandbox, []client.Object) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	controllerOwner := true
+	blockOwnerDeletion := true
+	deletingAt := metav1.NewTime(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC))
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-deleting", Namespace: "agentteams-system", UID: "sandbox-uid",
+			Labels: map[string]string{
+				v1beta1.LabelController: "ctl-a", v1beta1.LabelWorker: "researcher",
+			},
+			Finalizers:        []string{v1beta1.ExecutionSandboxCleanupFinalizer},
+			DeletionTimestamp: &deletingAt,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: v1beta1.SchemeGroupVersion.String(), Kind: "Worker", Name: "researcher", UID: "worker-uid",
+				Controller: &controllerOwner, BlockOwnerDeletion: &blockOwnerDeletion,
+			}},
+		},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
+			SessionID:   "thread-hash",
+			IdleTimeout: "30m",
+			MaxLifetime: "8h",
+		},
+	}
+	return scheme, sandbox, newExecutionSandboxOwnedChildren(sandbox)
+}
+
+func newExecutionSandboxOwnedChildren(sandbox *v1beta1.ExecutionSandbox) []client.Object {
+	return newExecutionSandboxOwnedChildrenWithPodState(sandbox, true)
+}
+
+func newActiveExecutionSandboxOwnedChildren(sandbox *v1beta1.ExecutionSandbox) []client.Object {
+	return newExecutionSandboxOwnedChildrenWithPodState(sandbox, false)
+}
+
+func newExecutionSandboxOwnedChildrenWithPodState(
+	sandbox *v1beta1.ExecutionSandbox,
+	podTerminating bool,
+) []client.Object {
+	controllerOwner := true
+	blockOwnerDeletion := true
+	owner := metav1.OwnerReference{
+		APIVersion: v1beta1.SchemeGroupVersion.String(), Kind: "ExecutionSandbox", Name: sandbox.Name, UID: sandbox.UID,
+		Controller: &controllerOwner, BlockOwnerDeletion: &blockOwnerDeletion,
+	}
+	metadata := func(uid types.UID) metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Name: sandbox.Name, Namespace: sandbox.Namespace, UID: uid, ResourceVersion: "1",
+			Labels: map[string]string{
+				v1beta1.LabelController:       sandbox.Labels[v1beta1.LabelController],
+				v1beta1.LabelWorker:           sandbox.Spec.WorkerRef.Name,
+				v1beta1.LabelExecutionSandbox: sandbox.Name,
+			},
+			OwnerReferences: []metav1.OwnerReference{owner},
+		}
+	}
+	podDeletingAt := metav1.NewTime(time.Date(2026, 8, 5, 12, 0, 1, 0, time.UTC))
+	immutable := true
+	return []client.Object{
+		&corev1.Service{ObjectMeta: metadata("service-uid")},
+		&corev1.Secret{
+			ObjectMeta: metadata("secret-uid"), Immutable: &immutable,
+			Data: map[string][]byte{"token": []byte("01234567890123456789012345678901")},
+		},
+		&corev1.Pod{ObjectMeta: func() metav1.ObjectMeta {
+			meta := metadata("pod-uid")
+			if podTerminating {
+				meta.DeletionTimestamp = &podDeletingAt
+				meta.Finalizers = []string{"tests.agentteams.io/hold-pod"}
+			}
+			return meta
+		}()},
+		&networkingv1.NetworkPolicy{ObjectMeta: metadata("network-policy-uid")},
+	}
+}
+
+func stampFakeExecutionSandboxChildResourceVersions(
+	t *testing.T,
+	cl client.Client,
+	key types.NamespacedName,
+) {
+	t.Helper()
+	for _, object := range []client.Object{
+		&corev1.Service{},
+		&corev1.Secret{},
+		&corev1.Pod{},
+		&networkingv1.NetworkPolicy{},
+	} {
+		if err := cl.Get(context.Background(), key, object); err != nil {
+			t.Fatalf("get %T before assigning fake API identity: %v", object, err)
+		}
+		if object.GetUID() != "" && object.GetResourceVersion() != "" {
+			continue
+		}
+		if object.GetUID() == "" {
+			object.SetUID(types.UID("fake-" + strings.ToLower(executionSandboxChildKind(object)) + "-uid"))
+		}
+		object.SetResourceVersion("1")
+		if err := cl.Update(context.Background(), object); err != nil {
+			t.Fatalf("assign fake API resourceVersion to %T: %v", object, err)
+		}
+	}
+}
+
+func executionSandboxChildrenByKind(children []client.Object) map[string]client.Object {
+	byKind := make(map[string]client.Object, len(children))
+	for _, child := range children {
+		byKind[executionSandboxChildKind(child)] = child
+	}
+	return byKind
+}
+
+func executionSandboxChildKind(object client.Object) string {
+	switch object.(type) {
+	case *corev1.Service:
+		return "Service"
+	case *corev1.Secret:
+		return "Secret"
+	case *corev1.Pod:
+		return "Pod"
+	case *networkingv1.NetworkPolicy:
+		return "NetworkPolicy"
+	default:
+		return ""
+	}
+}
+
+func assertDeletePreconditions(t *testing.T, kind string, got *metav1.Preconditions, want metav1.Preconditions) {
+	t.Helper()
+	if got == nil || got.UID == nil || want.UID == nil || *got.UID != *want.UID ||
+		got.ResourceVersion == nil || want.ResourceVersion == nil || *got.ResourceVersion != *want.ResourceVersion {
+		t.Fatalf("%s delete preconditions=%#v, want %#v", kind, got, want)
+	}
+}
+
+func containsFinalizer(finalizers []string, want string) bool {
+	for _, finalizer := range finalizers {
+		if finalizer == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExecutionSandboxReconcilerRevokesNonDeepAgentsWorker(t *testing.T) {
@@ -1757,7 +2541,10 @@ func TestExecutionSandboxReconcilerRevokesNonDeepAgentsWorker(t *testing.T) {
 		Spec:       v1beta1.WorkerSpec{Model: "qwen-max", Runtime: "openclaw"},
 	}
 	sandbox := &v1beta1.ExecutionSandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "exec-invalid", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "exec-invalid", Namespace: "default", UID: "sandbox-uid",
+			Finalizers: []string{v1beta1.ExecutionSandboxCleanupFinalizer},
+		},
 		Spec: v1beta1.ExecutionSandboxSpec{
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "legacy", UID: "legacy-uid"},
 			SessionID: "thread-hash",
@@ -1772,7 +2559,18 @@ func TestExecutionSandboxReconcilerRevokesNonDeepAgentsWorker(t *testing.T) {
 	if err != nil || result != (reconcile.Result{}) {
 		t.Fatalf("Reconcile stale runtime=(%#v, %v), want completed revoke", result, err)
 	}
-	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(sandbox), &v1beta1.ExecutionSandbox{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("non-DeepAgents ExecutionSandbox was not revoked: %v", err)
+	key := client.ObjectKeyFromObject(sandbox)
+	var deleting v1beta1.ExecutionSandbox
+	if err := cl.Get(context.Background(), key, &deleting); err != nil {
+		t.Fatalf("get deleting non-DeepAgents ExecutionSandbox: %v", err)
+	}
+	if deleting.DeletionTimestamp.IsZero() || !containsFinalizer(deleting.Finalizers, v1beta1.ExecutionSandboxCleanupFinalizer) {
+		t.Fatalf("non-DeepAgents ExecutionSandbox did not enter finalizer cleanup: %#v", deleting.ObjectMeta)
+	}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("finalize non-DeepAgents ExecutionSandbox: %v", err)
+	}
+	if err := cl.Get(context.Background(), key, &v1beta1.ExecutionSandbox{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("non-DeepAgents ExecutionSandbox was not finalized: %v", err)
 	}
 }

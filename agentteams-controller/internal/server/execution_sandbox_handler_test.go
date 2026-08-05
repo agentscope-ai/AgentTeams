@@ -17,7 +17,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func newExecutionSandboxHandlerTestClient(t *testing.T, objects ...runtime.Object) *ExecutionSandboxHandler {
@@ -95,6 +97,9 @@ func TestExecutionSandboxEnsureCreatesControllerManagedCR(t *testing.T) {
 	}
 	if len(sandbox.OwnerReferences) != 1 || sandbox.OwnerReferences[0].UID != worker.UID {
 		t.Fatalf("sandbox must be garbage-collected with Worker: %#v", sandbox.OwnerReferences)
+	}
+	if len(sandbox.Finalizers) != 1 || sandbox.Finalizers[0] != "agentteams.io/execution-sandbox-cleanup" {
+		t.Fatalf("sandbox finalizers=%v, want cleanup finalizer from creation", sandbox.Finalizers)
 	}
 	if got := sandbox.Labels[v1beta1.LabelController]; got != "ctl-a" {
 		t.Fatalf("sandbox controller label=%q, want ctl-a", got)
@@ -553,7 +558,7 @@ func TestExecutionSandboxEnsureWithStaleReadyStatusReturnsPendingWithoutToken(t 
 func readyExecutionSandbox(worker *v1beta1.Worker, name, sessionID string) *v1beta1.ExecutionSandbox {
 	return &v1beta1.ExecutionSandbox{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: "agentteams-system", Generation: 1,
+			Name: name, Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 1,
 			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
@@ -580,7 +585,7 @@ func TestExecutionSandboxHeartbeatAndDelete(t *testing.T) {
 	name := executionSandboxName(worker.Name, "thread-hash")
 	sandbox := &v1beta1.ExecutionSandbox{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: "agentteams-system",
+			Name: name, Namespace: "agentteams-system", UID: "sandbox-uid",
 			Labels: map[string]string{v1beta1.LabelController: "ctl-a"},
 		},
 		Spec: v1beta1.ExecutionSandboxSpec{
@@ -643,6 +648,59 @@ func TestExecutionSandboxDeleteAllowsOwnedSandboxAfterWorkerExecutionIsDisabled(
 	err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: worker.Namespace}, &deleted)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("sandbox was not deleted: %v", err)
+	}
+}
+
+func TestExecutionSandboxDeleteUsesUIDAndResourceVersionPreconditions(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	name := executionSandboxName(worker.Name, "thread-hash")
+	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(worker, sandbox).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+		Build()
+	var storedBefore v1beta1.ExecutionSandbox
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(sandbox), &storedBefore); err != nil {
+		t.Fatal(err)
+	}
+	var gotPreconditions *metav1.Preconditions
+	cl := interceptor.NewClient(base, interceptor.Funcs{
+		Delete: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.DeleteOption) error {
+			if _, ok := object.(*v1beta1.ExecutionSandbox); ok {
+				deleteOptions := &client.DeleteOptions{}
+				for _, opt := range opts {
+					opt.ApplyToDelete(deleteOptions)
+				}
+				if deleteOptions.Preconditions != nil {
+					copy := *deleteOptions.Preconditions
+					gotPreconditions = &copy
+				}
+			}
+			return underlying.Delete(ctx, object, opts...)
+		},
+	})
+	h := NewExecutionSandboxHandler(cl, worker.Namespace, "ctl-a", "deepagents", sandboxpolicy.Default(), nil)
+	req := httptest.NewRequest(http.MethodDelete, "/sandbox", nil)
+	req.SetPathValue("name", worker.Name)
+	req.SetPathValue("sessionId", "thread-hash")
+	rec := httptest.NewRecorder()
+
+	h.Delete(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s, want 204", rec.Code, rec.Body.String())
+	}
+	if gotPreconditions == nil || gotPreconditions.UID == nil || *gotPreconditions.UID != storedBefore.UID ||
+		gotPreconditions.ResourceVersion == nil || *gotPreconditions.ResourceVersion != storedBefore.ResourceVersion {
+		t.Fatalf("HTTP delete preconditions=%#v, want UID=%q resourceVersion=%q", gotPreconditions, storedBefore.UID, storedBefore.ResourceVersion)
 	}
 }
 

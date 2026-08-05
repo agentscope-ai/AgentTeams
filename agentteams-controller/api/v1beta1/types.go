@@ -27,6 +27,10 @@ const (
 	LabelExecutionSandbox = "agentteams.io/execution-sandbox"
 )
 
+// ExecutionSandboxCleanupFinalizer keeps the sandbox generation present while
+// its controller removes Runner resources in isolation-safe order.
+const ExecutionSandboxCleanupFinalizer = "agentteams.io/execution-sandbox-cleanup"
+
 // LabelWorkerSvcName records the ClusterIP Service name created for a
 // Worker when spec.serviceEnabled is true. Removed when the service is
 // disabled or deleted.

@@ -98,6 +98,9 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 				Name:      name,
 				Namespace: h.namespace,
 				Labels:    labels,
+				Finalizers: []string{
+					v1beta1.ExecutionSandboxCleanupFinalizer,
+				},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion:         v1beta1.SchemeGroupVersion.String(),
 					Kind:               "Worker",
@@ -243,7 +246,14 @@ func (h *ExecutionSandboxHandler) Delete(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	if err := h.client.Delete(r.Context(), sandbox); err != nil && !apierrors.IsNotFound(err) {
+	if sandbox.UID == "" || sandbox.ResourceVersion == "" {
+		httputil.WriteError(w, http.StatusConflict, "execution sandbox identity is incomplete")
+		return
+	}
+	uid := sandbox.UID
+	resourceVersion := sandbox.ResourceVersion
+	preconditions := client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}
+	if err := h.client.Delete(r.Context(), sandbox, preconditions); err != nil && !apierrors.IsNotFound(err) {
 		writeK8sError(w, "delete execution sandbox", err)
 		return
 	}

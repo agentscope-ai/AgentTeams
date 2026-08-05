@@ -25,6 +25,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -36,10 +37,14 @@ const (
 	executionSandboxRunnerPort int32 = 8080
 	executionSandboxRequeue          = 5 * time.Second
 	executionSandboxSpecHash         = "agentteams.io/execution-sandbox-spec-hash"
+	// ExecutionSandboxWorkerRefNameField is the cache field index used to
+	// reverse-map Worker events through spec.workerRef.name.
+	ExecutionSandboxWorkerRefNameField = "spec.workerRef.name"
 )
 
 type ExecutionSandboxReconciler struct {
 	client.Client
+	APIReader client.Reader
 
 	RunnerImage      string
 	ControllerName   string
@@ -58,6 +63,13 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		return reconcile.Result{}, nil
 	}
 	if !sandbox.DeletionTimestamp.IsZero() {
+		return r.finalizeExecutionSandbox(ctx, &sandbox)
+	}
+	if !controllerutil.ContainsFinalizer(&sandbox, v1beta1.ExecutionSandboxCleanupFinalizer) {
+		controllerutil.AddFinalizer(&sandbox, v1beta1.ExecutionSandboxCleanupFinalizer)
+		if err := r.Update(ctx, &sandbox); err != nil {
+			return reconcile.Result{}, fmt.Errorf("add execution sandbox cleanup finalizer: %w", err)
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -65,24 +77,27 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	workerKey := client.ObjectKey{Name: sandbox.Spec.WorkerRef.Name, Namespace: sandbox.Namespace}
 	if err := r.Get(ctx, workerKey, &worker); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.revokeExecutionSandbox(ctx, &sandbox)
+			return r.requestExecutionSandboxDeletion(ctx, &sandbox, "Worker is absent")
 		}
 		return reconcile.Result{}, fmt.Errorf("get sandbox Worker %q: %w", sandbox.Spec.WorkerRef.Name, err)
 	}
+	if !worker.DeletionTimestamp.IsZero() {
+		return r.requestExecutionSandboxDeletion(ctx, &sandbox, "Worker is deleting")
+	}
 	if worker.Labels[v1beta1.LabelController] != r.ControllerName {
-		return r.revokeExecutionSandbox(ctx, &sandbox)
+		return r.requestExecutionSandboxDeletion(ctx, &sandbox, "Worker controller ownership changed")
 	}
 	if sandbox.Spec.WorkerRef.UID == "" || string(worker.UID) != sandbox.Spec.WorkerRef.UID {
-		return r.revokeExecutionSandbox(ctx, &sandbox)
+		return r.requestExecutionSandboxDeletion(ctx, &sandbox, "Worker UID changed")
 	}
 	if backend.ResolveRuntime(worker.Spec.Runtime, r.DefaultRuntime) != backend.RuntimeDeepAgents {
-		return r.revokeExecutionSandbox(ctx, &sandbox)
+		return r.requestExecutionSandboxDeletion(ctx, &sandbox, "Worker runtime changed")
 	}
 	if worker.Spec.RuntimeConfig == nil || worker.Spec.RuntimeConfig.DeepAgents == nil {
-		return r.revokeExecutionSandbox(ctx, &sandbox)
+		return r.requestExecutionSandboxDeletion(ctx, &sandbox, "Worker DeepAgents config is absent")
 	}
 	if worker.Spec.RuntimeConfig.DeepAgents.Execution.Mode != "sandbox" {
-		return r.revokeExecutionSandbox(ctx, &sandbox)
+		return r.requestExecutionSandboxDeletion(ctx, &sandbox, "Worker sandbox execution is disabled")
 	}
 
 	now := time.Now().UTC()
@@ -111,10 +126,7 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		lastActivity = sandbox.Status.LastHeartbeat.Time
 	}
 	if !now.Before(expiresAt) || !now.Before(lastActivity.Add(idleTimeout)) {
-		if err := r.Delete(ctx, &sandbox); err != nil && !apierrors.IsNotFound(err) {
-			return reconcile.Result{}, fmt.Errorf("delete expired execution sandbox: %w", err)
-		}
-		return reconcile.Result{}, nil
+		return r.requestExecutionSandboxDeletion(ctx, &sandbox, "lifecycle deadline expired")
 	}
 
 	effective := sandbox.DeepCopy()
@@ -137,7 +149,7 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		return reconcile.Result{}, err
 	}
 	for _, object := range []client.Object{service, policy, pod} {
-		recreatePending, err := r.ensureExecutionSandboxObject(ctx, object)
+		recreatePending, err := r.ensureExecutionSandboxObject(ctx, effective, object)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -201,43 +213,201 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	return reconcile.Result{RequeueAfter: nextLifecycleCheck}, nil
 }
 
-func (r *ExecutionSandboxReconciler) revokeExecutionSandbox(
+func (r *ExecutionSandboxReconciler) requestExecutionSandboxDeletion(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+	reason string,
+) (reconcile.Result, error) {
+	if sandbox.UID == "" || sandbox.ResourceVersion == "" {
+		return reconcile.Result{}, fmt.Errorf(
+			"request execution sandbox deletion (%s): UID and resourceVersion are required",
+			reason,
+		)
+	}
+	uid := sandbox.UID
+	resourceVersion := sandbox.ResourceVersion
+	preconditions := client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}
+	if err := r.Delete(ctx, sandbox, preconditions); err != nil && !apierrors.IsNotFound(err) {
+		return reconcile.Result{}, fmt.Errorf("request execution sandbox deletion (%s): %w", reason, err)
+	}
+	return reconcile.Result{}, nil
+}
+
+func (r *ExecutionSandboxReconciler) finalizeExecutionSandbox(
 	ctx context.Context,
 	sandbox *v1beta1.ExecutionSandbox,
 ) (reconcile.Result, error) {
+	hasCleanupFinalizer := controllerutil.ContainsFinalizer(sandbox, v1beta1.ExecutionSandboxCleanupFinalizer)
+	result, complete, err := r.cleanupExecutionSandboxChildren(ctx, sandbox)
+	if err != nil || !complete {
+		return result, err
+	}
+	// A legacy deleting object may be observed while another finalizer retains
+	// it. Clean its children best-effort, but never add our finalizer after
+	// deletion has started.
+	if !hasCleanupFinalizer {
+		return reconcile.Result{}, nil
+	}
+	return reconcile.Result{}, r.removeExecutionSandboxCleanupFinalizer(ctx, sandbox)
+}
+
+func (r *ExecutionSandboxReconciler) cleanupExecutionSandboxChildren(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+) (reconcile.Result, bool, error) {
+	var cleanupErrors []error
+	for _, target := range []struct {
+		description string
+		object      client.Object
+	}{
+		{description: "Service", object: &corev1.Service{}},
+		{description: "Secret", object: &corev1.Secret{}},
+		{description: "Pod", object: &corev1.Pod{}},
+	} {
+		if err := r.deleteExecutionSandboxChild(ctx, sandbox, target.description, target.object); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
+	}
+
+	podPresent, err := r.authoritativeExecutionSandboxPodPresent(ctx, sandbox)
+	if err != nil {
+		cleanupErrors = append(cleanupErrors, err)
+	}
+	if cleanupErr := errors.Join(cleanupErrors...); cleanupErr != nil {
+		return reconcile.Result{}, false, cleanupErr
+	}
+	if podPresent {
+		return reconcile.Result{RequeueAfter: executionSandboxRequeue}, false, nil
+	}
+	if err := r.deleteExecutionSandboxChild(ctx, sandbox, "NetworkPolicy", &networkingv1.NetworkPolicy{}); err != nil {
+		return reconcile.Result{}, false, err
+	}
+	return reconcile.Result{}, true, nil
+}
+
+func (r *ExecutionSandboxReconciler) deleteExecutionSandboxChild(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+	description string,
+	prototype client.Object,
+) error {
+	live, ok := prototype.DeepCopyObject().(client.Object)
+	if !ok {
+		return fmt.Errorf("delete execution sandbox %s: %T is not a Kubernetes client object", description, prototype)
+	}
 	key := client.ObjectKeyFromObject(sandbox)
-	var revokeErrors []error
-	deleteObject := func(description string, object client.Object) {
-		if err := r.Delete(ctx, object); err != nil && !apierrors.IsNotFound(err) {
-			revokeErrors = append(revokeErrors, fmt.Errorf("delete stale execution sandbox %s: %w", description, err))
+	if err := r.authoritativeReader().Get(ctx, key, live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
 		}
+		return fmt.Errorf("get execution sandbox %s authoritatively: %w", description, err)
 	}
+	if err := validateExecutionSandboxChildIdentity(live, sandbox, r.ControllerName); err != nil {
+		return fmt.Errorf("refuse to delete execution sandbox %s: %w", description, err)
+	}
+	return r.deleteFetchedExecutionSandboxChild(ctx, description, live)
+}
 
-	deleteObject("Service", &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}})
-	deleteObject("Secret", &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}})
-	deleteObject("Pod", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}})
+func (r *ExecutionSandboxReconciler) deleteFetchedExecutionSandboxChild(
+	ctx context.Context,
+	description string,
+	live client.Object,
+) error {
+	if live.GetUID() == "" || live.GetResourceVersion() == "" {
+		return fmt.Errorf("delete execution sandbox %s: UID and resourceVersion are required", description)
+	}
+	uid := live.GetUID()
+	resourceVersion := live.GetResourceVersion()
+	preconditions := client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}
+	if err := r.Delete(ctx, live, preconditions); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete execution sandbox %s: %w", description, err)
+	}
+	return nil
+}
 
+func (r *ExecutionSandboxReconciler) authoritativeExecutionSandboxPodPresent(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+) (bool, error) {
 	var pod corev1.Pod
-	podErr := r.Get(ctx, key, &pod)
-	if podErr == nil {
-		if revokeErr := errors.Join(revokeErrors...); revokeErr != nil {
-			return reconcile.Result{}, revokeErr
+	if err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(sandbox), &pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
 		}
-		return reconcile.Result{RequeueAfter: executionSandboxRequeue}, nil
+		return false, fmt.Errorf("observe execution sandbox Pod deletion authoritatively: %w", err)
 	}
-	if !apierrors.IsNotFound(podErr) {
-		revokeErrors = append(revokeErrors, fmt.Errorf("observe stale execution sandbox Pod deletion: %w", podErr))
+	if err := validateExecutionSandboxChildIdentity(&pod, sandbox, r.ControllerName); err != nil {
+		return false, fmt.Errorf("observe execution sandbox Pod identity: %w", err)
 	}
-	if revokeErr := errors.Join(revokeErrors...); revokeErr != nil {
-		return reconcile.Result{}, revokeErr
-	}
+	return true, nil
+}
 
-	deleteObject("NetworkPolicy", &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}})
-	if revokeErr := errors.Join(revokeErrors...); revokeErr != nil {
-		return reconcile.Result{}, revokeErr
+func (r *ExecutionSandboxReconciler) removeExecutionSandboxCleanupFinalizer(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+) error {
+	var current v1beta1.ExecutionSandbox
+	if err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(sandbox), &current); err != nil {
+		return client.IgnoreNotFound(err)
 	}
-	deleteObject("ExecutionSandbox", sandbox)
-	return reconcile.Result{}, errors.Join(revokeErrors...)
+	if current.UID != sandbox.UID {
+		return fmt.Errorf(
+			"remove execution sandbox cleanup finalizer: replacement identity UID=%q, want %q",
+			current.UID,
+			sandbox.UID,
+		)
+	}
+	if !executionSandboxOwnedByController(&current, r.ControllerName) {
+		return fmt.Errorf("remove execution sandbox cleanup finalizer: controller identity changed")
+	}
+	if current.ResourceVersion == "" {
+		return fmt.Errorf("remove execution sandbox cleanup finalizer: resourceVersion is required")
+	}
+	if !controllerutil.ContainsFinalizer(&current, v1beta1.ExecutionSandboxCleanupFinalizer) {
+		return nil
+	}
+	controllerutil.RemoveFinalizer(&current, v1beta1.ExecutionSandboxCleanupFinalizer)
+	if err := r.Update(ctx, &current); err != nil {
+		return fmt.Errorf("remove execution sandbox cleanup finalizer: %w", err)
+	}
+	return nil
+}
+
+func (r *ExecutionSandboxReconciler) authoritativeReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
+func validateExecutionSandboxChildIdentity(
+	object client.Object,
+	sandbox *v1beta1.ExecutionSandbox,
+	controllerName string,
+) error {
+	if object == nil || sandbox == nil || sandbox.UID == "" {
+		return fmt.Errorf("execution sandbox child identity is incomplete")
+	}
+	labels := object.GetLabels()
+	if labels[v1beta1.LabelController] != controllerName ||
+		labels[v1beta1.LabelWorker] != sandbox.Spec.WorkerRef.Name ||
+		labels[v1beta1.LabelExecutionSandbox] != sandbox.Name {
+		return fmt.Errorf(
+			"execution sandbox child identity labels controller=%q worker=%q sandbox=%q do not match controller=%q worker=%q sandbox=%q",
+			labels[v1beta1.LabelController],
+			labels[v1beta1.LabelWorker],
+			labels[v1beta1.LabelExecutionSandbox],
+			controllerName,
+			sandbox.Spec.WorkerRef.Name,
+			sandbox.Name,
+		)
+	}
+	owner := metav1.GetControllerOf(object)
+	if owner == nil || owner.APIVersion != v1beta1.SchemeGroupVersion.String() || owner.Kind != "ExecutionSandbox" ||
+		owner.Name != sandbox.Name || owner.UID != sandbox.UID || !metav1.IsControlledBy(object, sandbox) {
+		return fmt.Errorf("execution sandbox child identity has a foreign or malformed controller owner")
+	}
+	return nil
 }
 
 func (r *ExecutionSandboxReconciler) failInvalidResources(
@@ -263,20 +433,16 @@ func (r *ExecutionSandboxReconciler) failClosed(
 	cause error,
 	clearExpiry bool,
 ) (reconcile.Result, error) {
-	key := client.ObjectKeyFromObject(sandbox)
 	var containmentErrors []error
-
-	var pod corev1.Pod
-	initialPodErr := r.Get(ctx, key, &pod)
-	podInitiallyAbsent := apierrors.IsNotFound(initialPodErr)
-	if initialPodErr != nil && !podInitiallyAbsent {
-		containmentErrors = append(containmentErrors, fmt.Errorf("get invalid execution sandbox Pod before containment: %w", initialPodErr))
-	}
 	denyAllAttempted := false
-	if !podInitiallyAbsent {
+	podPresent, podErr := r.authoritativeExecutionSandboxPodPresent(ctx, sandbox)
+	if podErr != nil {
+		containmentErrors = append(containmentErrors, fmt.Errorf("get invalid execution sandbox Pod before containment: %w", podErr))
+	}
+	if podPresent {
 		denyAllAttempted = true
 		denyAll := buildExecutionSandboxDefaultDenyPolicy(sandbox, r.ControllerName)
-		if _, err := r.ensureExecutionSandboxObject(ctx, denyAll); err != nil {
+		if _, err := r.ensureExecutionSandboxObject(ctx, sandbox, denyAll); err != nil {
 			containmentErrors = append(containmentErrors, fmt.Errorf("isolate invalid execution sandbox Pod: %w", err))
 		}
 	}
@@ -284,54 +450,23 @@ func (r *ExecutionSandboxReconciler) failClosed(
 	if err := r.updateInvalidSandboxStatus(ctx, sandbox, reason, cause, clearExpiry); err != nil {
 		containmentErrors = append(containmentErrors, err)
 	}
-
-	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
-	if err := r.Delete(ctx, service); err != nil && !apierrors.IsNotFound(err) {
-		containmentErrors = append(containmentErrors, fmt.Errorf("delete invalid execution sandbox Service: %w", err))
+	result, complete, cleanupErr := r.cleanupExecutionSandboxChildren(ctx, sandbox)
+	if cleanupErr != nil {
+		containmentErrors = append(containmentErrors, cleanupErr)
 	}
-	podTarget := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
-	if initialPodErr == nil {
-		podTarget = &pod
-	}
-	if err := r.Delete(ctx, podTarget); err != nil && !apierrors.IsNotFound(err) {
-		containmentErrors = append(containmentErrors, fmt.Errorf("delete invalid execution sandbox Pod: %w", err))
-	}
-
-	var remainingPod corev1.Pod
-	finalPodErr := r.Get(ctx, key, &remainingPod)
-	podAbsenceConfirmed := apierrors.IsNotFound(finalPodErr)
-	if finalPodErr != nil && !podAbsenceConfirmed {
-		containmentErrors = append(containmentErrors, fmt.Errorf("observe invalid execution sandbox Pod deletion: %w", finalPodErr))
-	}
-	if finalPodErr == nil && !denyAllAttempted {
+	if !complete && result.RequeueAfter > 0 && !denyAllAttempted {
 		denyAll := buildExecutionSandboxDefaultDenyPolicy(sandbox, r.ControllerName)
-		if _, err := r.ensureExecutionSandboxObject(ctx, denyAll); err != nil {
+		if _, err := r.ensureExecutionSandboxObject(ctx, sandbox, denyAll); err != nil {
 			containmentErrors = append(containmentErrors, fmt.Errorf("isolate unexpectedly present invalid execution sandbox Pod: %w", err))
 		}
 	}
-	if !podAbsenceConfirmed {
-		if containmentErr := errors.Join(containmentErrors...); containmentErr != nil {
-			log.FromContext(ctx).Error(
-				containmentErr,
-				"execution sandbox containment remains incomplete; retrying",
-				"namespace", sandbox.Namespace,
-				"name", sandbox.Name,
-				"reason", reason,
-				"requeueAfter", executionSandboxRequeue,
-			)
-		}
-		return reconcile.Result{RequeueAfter: executionSandboxRequeue}, nil
+	if containmentErr := errors.Join(containmentErrors...); containmentErr != nil {
+		return reconcile.Result{}, containmentErr
 	}
-
-	for _, object := range []client.Object{
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
-		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
-	} {
-		if err := r.Delete(ctx, object); err != nil && !apierrors.IsNotFound(err) {
-			containmentErrors = append(containmentErrors, fmt.Errorf("delete invalid execution sandbox %T: %w", object, err))
-		}
+	if !complete {
+		return result, nil
 	}
-	return reconcile.Result{}, errors.Join(containmentErrors...)
+	return reconcile.Result{}, nil
 }
 
 func (r *ExecutionSandboxReconciler) updateInvalidSandboxStatus(
@@ -470,19 +605,26 @@ func executionSandboxPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
-func (r *ExecutionSandboxReconciler) ensureExecutionSandboxObject(ctx context.Context, desired client.Object) (bool, error) {
+func (r *ExecutionSandboxReconciler) ensureExecutionSandboxObject(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+	desired client.Object,
+) (bool, error) {
 	live, ok := desired.DeepCopyObject().(client.Object)
 	if !ok {
 		return false, fmt.Errorf("execution sandbox object %T is not a Kubernetes client object", desired)
 	}
 	key := client.ObjectKeyFromObject(desired)
-	if err := r.Get(ctx, key, live); apierrors.IsNotFound(err) {
+	if err := r.authoritativeReader().Get(ctx, key, live); apierrors.IsNotFound(err) {
 		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
 			return false, fmt.Errorf("create execution sandbox %T: %w", desired, err)
 		}
 		return false, nil
 	} else if err != nil {
-		return false, fmt.Errorf("get execution sandbox %T: %w", desired, err)
+		return false, fmt.Errorf("get execution sandbox %T authoritatively: %w", desired, err)
+	}
+	if err := validateExecutionSandboxChildIdentity(live, sandbox, r.ControllerName); err != nil {
+		return false, fmt.Errorf("execution sandbox %T identity mismatch: %w", desired, err)
 	}
 	liveHash, err := executionSandboxManagedSpecHash(live)
 	if err != nil {
@@ -500,14 +642,15 @@ func (r *ExecutionSandboxReconciler) ensureExecutionSandboxObject(ctx context.Co
 		if !liveOK {
 			return false, fmt.Errorf("execution sandbox object %T has unexpected live type %T", desired, live)
 		}
+		desiredPolicy.UID = livePolicy.UID
 		desiredPolicy.ResourceVersion = livePolicy.ResourceVersion
 		if err := r.Update(ctx, desiredPolicy); err != nil {
 			return false, fmt.Errorf("update stale execution sandbox NetworkPolicy: %w", err)
 		}
 		return false, nil
 	}
-	if err := r.Delete(ctx, live); err != nil && !apierrors.IsNotFound(err) {
-		return false, fmt.Errorf("delete stale execution sandbox %T: %w", desired, err)
+	if err := r.deleteFetchedExecutionSandboxChild(ctx, fmt.Sprintf("stale %T", desired), live); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -535,15 +678,46 @@ func (r *ExecutionSandboxReconciler) executionSandboxesForWorker(
 		ctx,
 		&sandboxes,
 		client.InNamespace(object.GetNamespace()),
-		client.MatchingLabels{
-			v1beta1.LabelController: r.ControllerName,
-			v1beta1.LabelWorker:     object.GetName(),
-		},
+		client.MatchingLabels{v1beta1.LabelController: r.ControllerName},
+		client.MatchingFields{ExecutionSandboxWorkerRefNameField: object.GetName()},
 	); err != nil {
-		return nil
+		logger := log.FromContext(ctx)
+		logger.Error(
+			err,
+			"execution sandbox cache List failed; falling back to API reader",
+			"namespace", object.GetNamespace(),
+			"worker", object.GetName(),
+		)
+		if r.APIReader == nil {
+			logger.Error(
+				fmt.Errorf("API reader is not configured"),
+				"execution sandbox API reader fallback failed",
+				"namespace", object.GetNamespace(),
+				"worker", object.GetName(),
+			)
+			return nil
+		}
+		sandboxes.Items = nil
+		if fallbackErr := r.APIReader.List(
+			ctx,
+			&sandboxes,
+			client.InNamespace(object.GetNamespace()),
+			client.MatchingLabels{v1beta1.LabelController: r.ControllerName},
+		); fallbackErr != nil {
+			logger.Error(
+				fallbackErr,
+				"execution sandbox API reader fallback failed",
+				"namespace", object.GetNamespace(),
+				"worker", object.GetName(),
+			)
+			return nil
+		}
 	}
 	requests := make([]reconcile.Request, 0, len(sandboxes.Items))
 	for i := range sandboxes.Items {
+		if sandboxes.Items[i].Spec.WorkerRef.Name != object.GetName() {
+			continue
+		}
 		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&sandboxes.Items[i])})
 	}
 	return requests

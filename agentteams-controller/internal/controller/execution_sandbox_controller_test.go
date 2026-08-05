@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -566,6 +567,164 @@ func TestExecutionSandboxReconcilerKeepsTerminatingRunnerIsolated(t *testing.T) 
 	}
 	if failed.ResourceVersion != resourceVersion {
 		t.Fatalf("stable invalid status rewritten: %q -> %q", resourceVersion, failed.ResourceVersion)
+	}
+}
+
+func TestExecutionSandboxReconcilerAttemptsAllContainmentAfterAPIFailures(t *testing.T) {
+	tests := []struct {
+		name              string
+		failServiceDelete bool
+		failPodGet        bool
+		failPolicyUpdate  bool
+		failStatusUpdate  bool
+		failPodDelete     bool
+	}{
+		{name: "Service delete", failServiceDelete: true},
+		{name: "Pod Get", failPodGet: true},
+		{name: "NetworkPolicy ensure", failPolicyUpdate: true},
+		{name: "status update", failStatusUpdate: true},
+		{name: "Pod delete", failPodDelete: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			if err := v1beta1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			if err := corev1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			if err := networkingv1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			worker := &v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+				Spec: v1beta1.WorkerSpec{Runtime: "deepagents", RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+					DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"}},
+				}},
+			}
+			sandbox := &v1beta1.ExecutionSandbox{
+				ObjectMeta: metav1.ObjectMeta{Name: "exec-failure", Namespace: "agentteams-system", UID: "sandbox-uid", Generation: 2},
+				Spec: v1beta1.ExecutionSandboxSpec{
+					WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+					SessionID: "thread-hash", IdleTimeout: "invalid", MaxLifetime: "8h",
+				},
+				Status: v1beta1.ExecutionSandboxStatus{ObservedGeneration: 1, Phase: "Ready", Endpoint: "http://runner", PodName: "exec-failure"},
+			}
+			key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}, Data: map[string][]byte{"token": []byte("capability")}}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: map[string]string{
+				v1beta1.LabelExecutionSandbox: sandbox.Name,
+			}}}
+			service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+			policy := &networkingv1.NetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+				Spec: networkingv1.NetworkPolicySpec{
+					PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name}},
+					PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+					Egress:      []networkingv1.NetworkPolicyEgressRule{{}},
+				},
+			}
+			base := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+				WithObjects(worker, sandbox, secret, pod, service, policy).
+				Build()
+			attempts := map[string]int{}
+			cl := interceptor.NewClient(base, interceptor.Funcs{
+				Get: func(ctx context.Context, underlying client.WithWatch, objectKey client.ObjectKey, object client.Object, opts ...client.GetOption) error {
+					if _, ok := object.(*corev1.Pod); ok {
+						attempts["pod-get"]++
+						if tt.failPodGet {
+							return errors.New("injected Pod Get failure")
+						}
+					}
+					return underlying.Get(ctx, objectKey, object, opts...)
+				},
+				Update: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.UpdateOption) error {
+					if _, ok := object.(*networkingv1.NetworkPolicy); ok {
+						attempts["policy-ensure"]++
+						if tt.failPolicyUpdate {
+							return errors.New("injected NetworkPolicy update failure")
+						}
+					}
+					return underlying.Update(ctx, object, opts...)
+				},
+				Delete: func(ctx context.Context, underlying client.WithWatch, object client.Object, opts ...client.DeleteOption) error {
+					switch object.(type) {
+					case *corev1.Service:
+						attempts["service-delete"]++
+						if tt.failServiceDelete {
+							return errors.New("injected Service delete failure")
+						}
+						return underlying.Delete(ctx, object, opts...)
+					case *corev1.Pod:
+						attempts["pod-delete"]++
+						if tt.failPodDelete {
+							return errors.New("injected Pod delete failure")
+						}
+						// Hold the Pod so capability cleanup cannot be justified.
+						return nil
+					default:
+						return underlying.Delete(ctx, object, opts...)
+					}
+				},
+				SubResourceUpdate: func(ctx context.Context, underlying client.Client, subResourceName string, object client.Object, opts ...client.SubResourceUpdateOption) error {
+					if subResourceName == "status" {
+						attempts["status-update"]++
+						if tt.failStatusUpdate {
+							return errors.New("injected status update failure")
+						}
+					}
+					return underlying.SubResource(subResourceName).Update(ctx, object, opts...)
+				},
+			})
+			r := &ExecutionSandboxReconciler{Client: cl, RunnerImage: "runner:v1", ControllerName: "ctl-a", DefaultRuntime: "deepagents"}
+
+			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+			if err == nil {
+				t.Fatalf("result=%#v, want injected error", result)
+			}
+			for _, action := range []string{"policy-ensure", "status-update", "service-delete", "pod-delete"} {
+				if attempts[action] == 0 {
+					t.Fatalf("%s failure skipped independent containment action %s: %#v", tt.name, action, attempts)
+				}
+			}
+			if attempts["pod-get"] == 0 {
+				t.Fatalf("%s failure skipped Pod absence observation", tt.name)
+			}
+			if !tt.failStatusUpdate {
+				var failed v1beta1.ExecutionSandbox
+				if getErr := base.Get(context.Background(), key, &failed); getErr != nil {
+					t.Fatal(getErr)
+				}
+				if failed.Status.Phase != "Failed" || failed.Status.Endpoint != "" || sandboxReadyReason(failed.Status.Conditions) != "InvalidPolicy" {
+					t.Fatalf("working status API did not fail closed: %#v", failed.Status)
+				}
+			}
+			var containedPolicy networkingv1.NetworkPolicy
+			if getErr := base.Get(context.Background(), key, &containedPolicy); getErr != nil {
+				t.Fatalf("capability NetworkPolicy was not retained: %v", getErr)
+			}
+			if !tt.failPolicyUpdate && (len(containedPolicy.Spec.Ingress) != 0 || len(containedPolicy.Spec.Egress) != 0 ||
+				len(containedPolicy.Spec.PolicyTypes) != 2) {
+				t.Fatalf("working policy API did not establish default-deny: %#v", containedPolicy.Spec)
+			}
+			serviceErr := base.Get(context.Background(), key, &corev1.Service{})
+			if tt.failServiceDelete {
+				if serviceErr != nil {
+					t.Fatalf("injected Service delete did not retain Service: %v", serviceErr)
+				}
+			} else if !apierrors.IsNotFound(serviceErr) {
+				t.Fatalf("working Service delete did not cut routing: %v", serviceErr)
+			}
+			for _, object := range []client.Object{&corev1.Secret{}, &networkingv1.NetworkPolicy{}} {
+				if getErr := base.Get(context.Background(), key, object); getErr != nil {
+					t.Fatalf("unknown/present Pod lost capability material %T: %v", object, getErr)
+				}
+			}
+		})
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -208,36 +209,53 @@ func (r *ExecutionSandboxReconciler) failClosed(
 	clearExpiry bool,
 ) (reconcile.Result, error) {
 	key := client.ObjectKeyFromObject(sandbox)
-	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
-	if err := r.Delete(ctx, service); err != nil && !apierrors.IsNotFound(err) {
-		return reconcile.Result{}, fmt.Errorf("delete invalid execution sandbox Service: %w", err)
-	}
+	var containmentErrors []error
 
 	var pod corev1.Pod
-	podErr := r.Get(ctx, key, &pod)
-	if podErr != nil && !apierrors.IsNotFound(podErr) {
-		return reconcile.Result{}, fmt.Errorf("get invalid execution sandbox Pod: %w", podErr)
+	initialPodErr := r.Get(ctx, key, &pod)
+	podInitiallyAbsent := apierrors.IsNotFound(initialPodErr)
+	if initialPodErr != nil && !podInitiallyAbsent {
+		containmentErrors = append(containmentErrors, fmt.Errorf("get invalid execution sandbox Pod before containment: %w", initialPodErr))
 	}
-	if podErr == nil {
+	denyAllAttempted := false
+	if !podInitiallyAbsent {
+		denyAllAttempted = true
 		denyAll := buildExecutionSandboxDefaultDenyPolicy(sandbox, r.ControllerName)
 		if _, err := r.ensureExecutionSandboxObject(ctx, denyAll); err != nil {
-			return reconcile.Result{}, fmt.Errorf("isolate invalid execution sandbox Pod: %w", err)
+			containmentErrors = append(containmentErrors, fmt.Errorf("isolate invalid execution sandbox Pod: %w", err))
 		}
 	}
 
 	if err := r.updateInvalidSandboxStatus(ctx, sandbox, reason, cause, clearExpiry); err != nil {
-		return reconcile.Result{}, err
+		containmentErrors = append(containmentErrors, err)
 	}
-	if podErr == nil {
-		if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
-			return reconcile.Result{}, fmt.Errorf("delete invalid execution sandbox Pod: %w", err)
+
+	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	if err := r.Delete(ctx, service); err != nil && !apierrors.IsNotFound(err) {
+		containmentErrors = append(containmentErrors, fmt.Errorf("delete invalid execution sandbox Service: %w", err))
+	}
+	podTarget := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+	if initialPodErr == nil {
+		podTarget = &pod
+	}
+	if err := r.Delete(ctx, podTarget); err != nil && !apierrors.IsNotFound(err) {
+		containmentErrors = append(containmentErrors, fmt.Errorf("delete invalid execution sandbox Pod: %w", err))
+	}
+
+	var remainingPod corev1.Pod
+	finalPodErr := r.Get(ctx, key, &remainingPod)
+	podAbsenceConfirmed := apierrors.IsNotFound(finalPodErr)
+	if finalPodErr != nil && !podAbsenceConfirmed {
+		containmentErrors = append(containmentErrors, fmt.Errorf("observe invalid execution sandbox Pod deletion: %w", finalPodErr))
+	}
+	if finalPodErr == nil && !denyAllAttempted {
+		denyAll := buildExecutionSandboxDefaultDenyPolicy(sandbox, r.ControllerName)
+		if _, err := r.ensureExecutionSandboxObject(ctx, denyAll); err != nil {
+			containmentErrors = append(containmentErrors, fmt.Errorf("isolate unexpectedly present invalid execution sandbox Pod: %w", err))
 		}
-		var terminating corev1.Pod
-		if err := r.Get(ctx, key, &terminating); err == nil {
-			return reconcile.Result{RequeueAfter: executionSandboxRequeue}, nil
-		} else if !apierrors.IsNotFound(err) {
-			return reconcile.Result{}, fmt.Errorf("observe invalid execution sandbox Pod deletion: %w", err)
-		}
+	}
+	if !podAbsenceConfirmed {
+		return reconcile.Result{RequeueAfter: executionSandboxRequeue}, errors.Join(containmentErrors...)
 	}
 
 	for _, object := range []client.Object{
@@ -245,10 +263,10 @@ func (r *ExecutionSandboxReconciler) failClosed(
 		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}},
 	} {
 		if err := r.Delete(ctx, object); err != nil && !apierrors.IsNotFound(err) {
-			return reconcile.Result{}, fmt.Errorf("delete invalid execution sandbox %T: %w", object, err)
+			containmentErrors = append(containmentErrors, fmt.Errorf("delete invalid execution sandbox %T: %w", object, err))
 		}
 	}
-	return reconcile.Result{}, nil
+	return reconcile.Result{}, errors.Join(containmentErrors...)
 }
 
 func (r *ExecutionSandboxReconciler) updateInvalidSandboxStatus(

@@ -630,6 +630,17 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 	rooms *service.TeamRoomResult,
 ) error {
 	roster := runtimeConfigTeamMembers(t, members, leaderName)
+	var agentUserIDs []string
+	for _, member := range members {
+		if backend.ResolveRuntime(member.worker.Spec.Runtime, r.DefaultRuntime) == backend.RuntimeDeepAgents {
+			var err error
+			agentUserIDs, err = managedAgentMatrixUserIDs(ctx, r.Client, t.Namespace)
+			if err != nil {
+				return fmt.Errorf("list managed agent Matrix identities: %w", err)
+			}
+			break
+		}
+	}
 	for _, member := range members {
 		// Skip members being deleted — their runtime config no longer needs
 		// updating and the model provider may already have been removed.
@@ -679,6 +690,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			TeamAdminName:     teamAdminName(t),
 			TeamAdminMatrixID: teamAdminMatrixID(t),
 			TeamMembers:       roster,
+			AgentUserIDs:      agentUserIDs,
 		}
 		if deployMode == v1beta1.DeployModeEdge {
 			req.Runtime = runtimeRemoteManagedLocal
@@ -810,11 +822,19 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if resolveErr != nil {
 		logger.Error(resolveErr, "failed to resolve worker model provider for runtime config reset", "worker", runtimeName)
 	}
+	var agentUserIDs []string
+	if runtime == backend.RuntimeDeepAgents {
+		var err error
+		agentUserIDs, err = managedAgentMatrixUserIDs(ctx, r.Client, t.Namespace)
+		if err != nil {
+			return fmt.Errorf("list managed agent Matrix identities for %s reset: %w", runtimeName, err)
+		}
+	}
 	if err := r.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 		Name:            w.Name,
 		UID:             string(w.UID),
 		RuntimeName:     runtimeName,
-		Runtime:         w.Spec.Runtime,
+		Runtime:         runtime,
 		Role:            RoleStandalone.String(),
 		Generation:      w.Generation,
 		Spec:            w.Spec,
@@ -822,6 +842,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		MatrixUserID:    w.Status.MatrixUserID,
 		PersonalRoomID:  w.Status.RoomID,
 		DropTeamContext: true,
+		AgentUserIDs:    agentUserIDs,
 	}); err != nil {
 		logger.Error(err, "failed to drop worker runtime team context (non-fatal)", "worker", runtimeName)
 	}

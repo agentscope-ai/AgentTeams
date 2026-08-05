@@ -212,6 +212,39 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertIn("@manager:example.org", config.agent_matrix_ids)
         self.assertNotIn("@manager:example.org", config.human_approver_ids)
 
+    def test_global_agent_identity_cannot_become_a_human_coordinator(self) -> None:
+        document = copy.deepcopy(valid_document())
+        document["matrix"]["agentUserIds"] = [  # type: ignore[index]
+            "@manager:example.org",
+            "@unrelated-worker:example.org",
+        ]
+        document["team"]["members"].append(  # type: ignore[index]
+            {
+                "name": "unrelated-worker",
+                "matrixUserId": "@unrelated-worker:example.org",
+                "role": "coordinator",
+            }
+        )
+
+        config = RuntimeConfig.from_document(document, environ=valid_environ())
+
+        self.assertIn("@unrelated-worker:example.org", config.agent_matrix_ids)
+        self.assertNotIn("@unrelated-worker:example.org", config.human_approver_ids)
+
+    def test_parses_inline_identity_soul_and_agents(self) -> None:
+        document = copy.deepcopy(valid_document())
+        document["desired"]["inlineConfig"] = {  # type: ignore[index]
+            "identity": "You are a security reviewer.",
+            "soul": "Be skeptical and precise.",
+            "agents": "Run tests before reporting results.",
+        }
+
+        config = RuntimeConfig.from_document(document, environ=valid_environ())
+
+        self.assertEqual(config.inline_config.identity, "You are a security reviewer.")
+        self.assertEqual(config.inline_config.soul, "Be skeptical and precise.")
+        self.assertEqual(config.inline_config.agents, "Run tests before reporting results.")
+
     def test_rejects_invalid_approval_mode_and_duration(self) -> None:
         document = copy.deepcopy(valid_document())
         document["desired"]["runtimeConfig"]["deepagents"]["approvals"]["fileWrites"] = "sometimes"  # type: ignore[index]

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -229,6 +231,7 @@ func resolveBackendForMember(registry *backend.Registry, backendRuntime string, 
 // invoke. Both WorkerReconciler and TeamReconciler build a MemberDeps once
 // and pass it through each phase.
 type MemberDeps struct {
+	Client                      client.Client
 	Provisioner                 service.WorkerProvisioner
 	Deployer                    service.WorkerDeployer
 	Backend                     *backend.Registry
@@ -403,6 +406,14 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			matrixAccessToken = state.ProvResult.MatrixToken
 			gatewayKey = state.ProvResult.GatewayKey
 		}
+		var agentUserIDs []string
+		if effectiveRuntime == backend.RuntimeDeepAgents {
+			var err error
+			agentUserIDs, err = managedAgentMatrixUserIDs(ctx, d.Client, m.Namespace)
+			if err != nil {
+				return fmt.Errorf("list managed agent Matrix identities: %w", err)
+			}
+		}
 		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 			Name:                  m.Name,
 			UID:                   m.UID,
@@ -418,6 +429,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			AIGatewayURL:          aiGatewayURL,
 			SkillRegistryURL:      skillRegistryURL,
 			SkillRegistryAuthType: skillRegistryAuthType,
+			AgentUserIDs:          agentUserIDs,
 		}); err != nil {
 			return fmt.Errorf("deploy runtime config: %w", err)
 		}
@@ -449,6 +461,40 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		logger.Info("skill push failed", "error", err)
 	}
 	return nil
+}
+
+// managedAgentMatrixUserIDs returns the current managed Worker and Manager
+// Matrix identities in deterministic order. The runtime adapter treats these
+// IDs as agents even when a Team roster labels one as a coordinator.
+func managedAgentMatrixUserIDs(ctx context.Context, c client.Client, namespace string) ([]string, error) {
+	if c == nil {
+		return nil, fmt.Errorf("controller client is required to list managed agent identities")
+	}
+	var workers v1beta1.WorkerList
+	if err := c.List(ctx, &workers, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list Workers: %w", err)
+	}
+	var managers v1beta1.ManagerList
+	if err := c.List(ctx, &managers, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list Managers: %w", err)
+	}
+	ids := make(map[string]struct{}, len(workers.Items)+len(managers.Items))
+	for _, worker := range workers.Items {
+		if matrixUserID := strings.TrimSpace(worker.Status.MatrixUserID); matrixUserID != "" {
+			ids[matrixUserID] = struct{}{}
+		}
+	}
+	for _, manager := range managers.Items {
+		if matrixUserID := strings.TrimSpace(manager.Status.MatrixUserID); matrixUserID != "" {
+			ids[matrixUserID] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(ids))
+	for matrixUserID := range ids {
+		result = append(result, matrixUserID)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func runtimeSkillRegistryConfig(d MemberDeps, m MemberContext, state *MemberState) (string, string) {

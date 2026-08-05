@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -539,6 +540,9 @@ func TestDeployMemberRuntimeConfigProjectsSecretSafeDeepAgentsDocument(t *testin
 		Generation:     4,
 		MatrixUserID:   "@researcher:matrix.local",
 		PersonalRoomID: "!researcher:matrix.local",
+		AgentUserIDs: []string{
+			"@unrelated:matrix.local", "@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+		},
 		Spec: v1beta1.WorkerSpec{
 			Model:   "qwen-max",
 			Runtime: "deepagents",
@@ -591,8 +595,10 @@ func TestDeployMemberRuntimeConfigProjectsSecretSafeDeepAgentsDocument(t *testin
 		t.Fatalf("matrix.accessToken must not be projected: %#v", matrix)
 	}
 	agentUserIDs, ok := matrix["agentUserIds"].([]any)
-	if !ok || len(agentUserIDs) != 1 || fmt.Sprint(agentUserIDs[0]) != "@manager:matrix.local" {
-		t.Fatalf("matrix.agentUserIds=%#v, want [@manager:matrix.local]", matrix["agentUserIds"])
+	if !ok || !reflect.DeepEqual(agentUserIDs, []any{
+		"@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+	}) {
+		t.Fatalf("matrix.agentUserIds=%#v, want sorted global managed identities", matrix["agentUserIds"])
 	}
 
 	desired := doc["desired"].(map[string]any)
@@ -1219,6 +1225,60 @@ credentials:
 	}
 	if got := fmt.Sprint(storage["memberPrefix"]); got != "agents/claude-local" {
 		t.Fatalf("storage.memberPrefix=%q", got)
+	}
+}
+
+func TestMergeMemberRuntimeTeamContextRefreshesDeepAgentsIdentitySnapshot(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store, MatrixDomain: "matrix.local"})
+	key := "agents/researcher/runtime/runtime.yaml"
+	if err := store.PutObject(ctx, key, []byte(`
+apiVersion: agentteams.io/v1beta1
+kind: MemberRuntimeConfig
+member:
+  runtimeName: researcher
+  runtime: remote-managed-local
+matrix:
+  homeserverUrl: https://matrix.example.org
+  agentUserIds:
+    - "@stale:matrix.local"
+desired:
+  runtimeConfig:
+    deepagents:
+      approvals:
+        fileWrites: required
+storage: {}
+credentials: {}
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	err := deployer.MergeMemberRuntimeTeamContext(ctx, MemberRuntimeConfigDeployRequest{
+		RuntimeName: "researcher",
+		Spec:        v1beta1.WorkerSpec{Runtime: "deepagents"},
+		AgentUserIDs: []string{
+			"@unrelated:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+		},
+		TeamName: "research",
+	})
+	if err != nil {
+		t.Fatalf("MergeMemberRuntimeTeamContext failed: %v", err)
+	}
+
+	payload, err := store.GetObject(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(payload, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, payload)
+	}
+	matrix := doc["matrix"].(map[string]any)
+	if got := matrix["agentUserIds"]; !reflect.DeepEqual(got, []any{
+		"@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+	}) {
+		t.Fatalf("matrix.agentUserIds=%#v, want refreshed sorted managed identities", got)
 	}
 }
 

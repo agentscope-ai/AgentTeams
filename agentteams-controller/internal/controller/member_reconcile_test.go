@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,9 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // mockBackend is a minimal WorkerBackend implementation used to test
@@ -591,7 +595,14 @@ func TestReconcileMemberConfigQwenPawWritesRuntimeConfigOnly(t *testing.T) {
 		},
 	}
 
-	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{
+		Client:   fake.NewClientBuilder().WithScheme(scheme).Build(),
+		Deployer: deployer,
+	}, member, state); err != nil {
 		t.Fatalf("ReconcileMemberConfig failed: %v", err)
 	}
 
@@ -643,7 +654,14 @@ func TestReconcileMemberConfigDeepAgentsWritesSecretSafeRuntimeConfigOnly(t *tes
 		},
 	}
 
-	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Deployer: deployer}, member, state); err != nil {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{
+		Client:   fake.NewClientBuilder().WithScheme(scheme).Build(),
+		Deployer: deployer,
+	}, member, state); err != nil {
 		t.Fatalf("ReconcileMemberConfig failed: %v", err)
 	}
 	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
@@ -659,6 +677,47 @@ func TestReconcileMemberConfigDeepAgentsWritesSecretSafeRuntimeConfigOnly(t *tes
 	if deployPkg, writeInline, deployConfig, pushSkills, _ := deployer.CallCounts(); deployPkg != 0 || writeInline != 0 || deployConfig != 0 || pushSkills != 0 {
 		t.Fatalf("deepagents must skip legacy file-based deploy path, got package=%d inline=%d config=%d skills=%d",
 			deployPkg, writeInline, deployConfig, pushSkills)
+	}
+}
+
+func TestReconcileMemberConfigDeepAgentsProjectsAllManagedAgentMatrixIDs(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register scheme: %v", err)
+	}
+	controllerClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&v1beta1.Worker{
+			ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "default"},
+			Status:     v1beta1.WorkerStatus{MatrixUserID: "@researcher:matrix.local"},
+		},
+		&v1beta1.Worker{
+			ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "default"},
+			Status:     v1beta1.WorkerStatus{MatrixUserID: "@unrelated:matrix.local"},
+		},
+		&v1beta1.Manager{
+			ObjectMeta: metav1.ObjectMeta{Name: "manager", Namespace: "default"},
+			Status:     v1beta1.ManagerStatus{MatrixUserID: "@manager:matrix.local"},
+		},
+	).Build()
+	deployer := mocks.NewMockDeployer()
+	state := &MemberState{
+		MatrixUserID: "@researcher:matrix.local",
+		RoomID:       "!researcher:matrix.local",
+		ProvResult:   &service.WorkerProvisionResult{},
+	}
+	member := MemberContext{
+		Name: "researcher", RuntimeName: "researcher", Role: RoleStandalone, Generation: 3,
+		Namespace: "default",
+		Spec:      v1beta1.WorkerSpec{Runtime: "deepagents", Model: "qwen-max"},
+	}
+
+	if err := ReconcileMemberConfig(context.Background(), MemberDeps{Client: controllerClient, Deployer: deployer}, member, state); err != nil {
+		t.Fatalf("ReconcileMemberConfig failed: %v", err)
+	}
+	if got := deployer.Calls.DeployMemberRuntimeConfig[0].AgentUserIDs; !reflect.DeepEqual(got, []string{
+		"@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+	}) {
+		t.Fatalf("AgentUserIDs=%v, want sorted global managed identities", got)
 	}
 }
 

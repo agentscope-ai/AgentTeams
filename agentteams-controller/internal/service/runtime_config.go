@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -237,6 +238,15 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 		doc.Member.PersonalRoomID = req.PersonalRoomID
 	}
 	applyRuntimeTeamContext(&doc, req)
+	if memberRuntimeConfigUsesDeepAgents(doc, req) {
+		if doc.Matrix == nil {
+			doc.Matrix = &memberRuntimeConfigMatrix{
+				HomeserverURL:     d.runtimeProjection.MatrixHomeserverURL,
+				EncryptionEnabled: d.runtimeProjection.MatrixEncryptionEnabled,
+			}
+		}
+		doc.Matrix.AgentUserIDs = d.deepAgentsAgentUserIDs(req.AgentUserIDs)
+	}
 
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
@@ -353,9 +363,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		doc.Matrix = &memberRuntimeConfigMatrix{
 			HomeserverURL:     d.runtimeProjection.MatrixHomeserverURL,
 			EncryptionEnabled: d.runtimeProjection.MatrixEncryptionEnabled,
-		}
-		if matrixDomain := strings.TrimSpace(d.matrixDomain); matrixDomain != "" {
-			doc.Matrix.AgentUserIDs = []string{"@manager:" + matrixDomain}
+			AgentUserIDs:      d.deepAgentsAgentUserIDs(req.AgentUserIDs),
 		}
 		doc.Credentials.CheckpointDSNEnv = "AGENTTEAMS_CHECKPOINT_DSN"
 		doc.Credentials.CheckpointAESKeyEnv = "AGENTTEAMS_CHECKPOINT_AES_KEY"
@@ -366,6 +374,38 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	applyRuntimeTeamContext(&doc, req)
 
 	return doc, nil
+}
+
+func (d *Deployer) deepAgentsAgentUserIDs(values []string) []string {
+	if matrixDomain := strings.TrimSpace(d.matrixDomain); matrixDomain != "" {
+		values = append(values, "@manager:"+matrixDomain)
+	}
+	return normalizedAgentUserIDs(values)
+}
+
+func memberRuntimeConfigUsesDeepAgents(doc memberRuntimeConfigDocument, req MemberRuntimeConfigDeployRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(req.Runtime), "deepagents") ||
+		strings.EqualFold(strings.TrimSpace(req.Spec.Runtime), "deepagents") ||
+		(doc.Desired.RuntimeConfig != nil && doc.Desired.RuntimeConfig.DeepAgents != nil)
+}
+
+func normalizedAgentUserIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			seen[value] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for value := range seen {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // canonicalManagedDeepAgentsGatewayURL appends the OpenAI API version only to

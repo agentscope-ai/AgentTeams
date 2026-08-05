@@ -174,6 +174,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	logger := log.FromContext(ctx)
 
 	deps := MemberDeps{
+		Client:                      r.Client,
 		Provisioner:                 r.Provisioner,
 		Deployer:                    r.Deployer,
 		Backend:                     r.Backend,
@@ -370,6 +371,7 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 	}
 
 	deps := MemberDeps{
+		Client:                      r.Client,
 		Provisioner:                 r.Provisioner,
 		Deployer:                    r.Deployer,
 		Backend:                     r.Backend,

@@ -19,6 +19,20 @@ decision before continuing an interrupted action.
 """
 
 
+def system_prompt(config: RuntimeConfig) -> str:
+    """Compose fixed security boundaries with optional explicit prompt sections."""
+    sections = [_SYSTEM_PROMPT.rstrip()]
+    inline = config.inline_config
+    for title, content in (
+        ("AgentTeams Identity", inline.identity),
+        ("AgentTeams Soul", inline.soul),
+        ("AgentTeams Instructions", inline.agents),
+    ):
+        if content:
+            sections.append(f"## {title}\n{content}")
+    return "\n\n".join(sections) + "\n"
+
+
 async def build_deepagents_graph(
     config: RuntimeConfig,
     *,
@@ -50,7 +64,7 @@ async def build_deepagents_graph(
     tools: list[Any] = []
     interrupt_on: dict[str, bool] = {"execute": True}
     if policy.file_writes == "required":
-        interrupt_on.update({"write_file": True, "edit_file": True})
+        interrupt_on.update({"write_file": True, "edit_file": True, "delete": True})
 
     for server in config.mcp_servers:
         server_name = server["name"]
@@ -72,7 +86,7 @@ async def build_deepagents_graph(
     return agent_factory(
         model=model,
         tools=tools,
-        system_prompt=_SYSTEM_PROMPT,
+        system_prompt=system_prompt(config),
         backend=backend,
         interrupt_on=interrupt_on,
         checkpointer=checkpointer,

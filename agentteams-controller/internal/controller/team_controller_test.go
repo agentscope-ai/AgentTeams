@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
@@ -573,7 +575,7 @@ func TestDeployTeamRuntimeConfigsProjectsDeepAgentsRoster(t *testing.T) {
 			ref:         v1beta1.TeamWorkerRef{Name: "lead", Role: "team_leader"},
 			runtimeName: "lead-runtime",
 			worker: v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "lead", Generation: 2},
+				ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default", Generation: 2},
 				Spec:       v1beta1.WorkerSpec{Runtime: "deepagents", Model: "qwen-max"},
 				Status:     v1beta1.WorkerStatus{MatrixUserID: "@lead:matrix.local", RoomID: "!lead:matrix.local"},
 			},
@@ -582,12 +584,25 @@ func TestDeployTeamRuntimeConfigsProjectsDeepAgentsRoster(t *testing.T) {
 			ref:         v1beta1.TeamWorkerRef{Name: "analyst", Role: "worker"},
 			runtimeName: "analyst-runtime",
 			worker: v1beta1.Worker{
-				ObjectMeta: metav1.ObjectMeta{Name: "analyst", Generation: 4},
+				ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "default", Generation: 4},
 				Spec:       v1beta1.WorkerSpec{Runtime: "deepagents", Model: "qwen-max"},
 				Status:     v1beta1.WorkerStatus{MatrixUserID: "@analyst:matrix.local", RoomID: "!analyst:matrix.local"},
 			},
 		},
 	}
+	r.Client = newTeamTestClient(t,
+		team.DeepCopy(),
+		members[0].worker.DeepCopy(),
+		members[1].worker.DeepCopy(),
+		&v1beta1.Worker{
+			ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "default"},
+			Status:     v1beta1.WorkerStatus{MatrixUserID: "@unrelated:matrix.local"},
+		},
+		&v1beta1.Manager{
+			ObjectMeta: metav1.ObjectMeta{Name: "manager", Namespace: "default"},
+			Status:     v1beta1.ManagerStatus{MatrixUserID: "@manager:matrix.local"},
+		},
+	)
 
 	err := r.deployTeamRuntimeConfigs(
 		context.Background(), team, members, "lead", "research-runtime", "lead-runtime",
@@ -606,6 +621,59 @@ func TestDeployTeamRuntimeConfigsProjectsDeepAgentsRoster(t *testing.T) {
 		if req.TeamAdminMatrixID != "@alice:matrix.local" {
 			t.Fatalf("DeepAgents team projection missing admin: %#v", req)
 		}
+		if !reflect.DeepEqual(req.AgentUserIDs, []string{
+			"@analyst:matrix.local", "@lead:matrix.local", "@manager:matrix.local", "@unrelated:matrix.local",
+		}) {
+			t.Fatalf("DeepAgents team projection missing global agent identities: %#v", req.AgentUserIDs)
+		}
+	}
+}
+
+func TestDetachTeamMemberDeepAgentsProjectsGlobalAgentIdentitySnapshot(t *testing.T) {
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{Model: "qwen-max"},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@researcher:matrix.local",
+			RoomID:       "!researcher:matrix.local",
+		},
+	}
+	team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "research", Namespace: "default"}}
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{
+		Client: newTeamTestClient(t,
+			worker.DeepCopy(),
+			&v1beta1.Worker{
+				ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "default"},
+				Status:     v1beta1.WorkerStatus{MatrixUserID: "@unrelated:matrix.local"},
+			},
+			&v1beta1.Manager{
+				ObjectMeta: metav1.ObjectMeta{Name: "manager", Namespace: "default"},
+				Status:     v1beta1.ManagerStatus{MatrixUserID: "@manager:matrix.local"},
+			},
+		),
+		Deployer:       deployer,
+		Provisioner:    mocks.NewMockProvisioner(),
+		DefaultRuntime: backend.RuntimeDeepAgents,
+	}
+
+	if err := r.detachTeamMember(context.Background(), team, worker); err != nil {
+		t.Fatalf("detachTeamMember: %v", err)
+	}
+	if got := len(deployer.Calls.DeployMemberRuntimeConfig); got != 1 {
+		t.Fatalf("runtime config calls=%d, want 1", got)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if !req.DropTeamContext {
+		t.Fatalf("DropTeamContext=false, want true")
+	}
+	if req.Runtime != backend.RuntimeDeepAgents {
+		t.Fatalf("Runtime=%q, want resolved default %q", req.Runtime, backend.RuntimeDeepAgents)
+	}
+	if !reflect.DeepEqual(req.AgentUserIDs, []string{
+		"@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+	}) {
+		t.Fatalf("AgentUserIDs=%v, want sorted global managed identities", req.AgentUserIDs)
 	}
 }
 

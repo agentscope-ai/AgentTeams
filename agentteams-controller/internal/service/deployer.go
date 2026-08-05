@@ -110,6 +110,9 @@ type MemberRuntimeConfigDeployRequest struct {
 	TeamAdminName     string
 	TeamAdminMatrixID string
 	TeamMembers       []RuntimeConfigTeamMember
+	// AgentUserIDs is the controller's complete current managed-agent Matrix
+	// identity snapshot. DeepAgents uses it as a deny-list for Human approval.
+	AgentUserIDs []string
 
 	// DropTeamContext forces a standalone runtime.yaml even when an older
 	// team-scoped runtime.yaml exists for the same runtime name.

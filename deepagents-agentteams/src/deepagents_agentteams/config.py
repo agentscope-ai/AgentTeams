@@ -74,6 +74,15 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True)
+class InlineConfig:
+    """Optional Worker-authored prompt sections projected by the controller."""
+
+    identity: str
+    soul: str
+    agents: str
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     """Validated AgentTeams configuration consumed by a DeepAgents worker."""
 
@@ -93,6 +102,7 @@ class RuntimeConfig:
     checkpoint: CheckpointConfig
     approvals: ApprovalConfig
     execution: ExecutionConfig
+    inline_config: InlineConfig
 
     @classmethod
     def from_document(
@@ -127,6 +137,7 @@ class RuntimeConfig:
         deepagents_config = _mapping_value(deepagents_config, "desired.runtimeConfig.deepagents")
         approval_config = _mapping_value(deepagents_config.get("approvals", {}), "deepagents.approvals")
         execution_config = _mapping_value(deepagents_config.get("execution", {}), "deepagents.execution")
+        inline_config = _mapping_value(desired_config.get("inlineConfig", {}), "desired.inlineConfig")
         mcp_servers = _mcp_servers(desired_config.get("mcpServers", []))
         team_config = _mapping_value(document.get("team", {}), "team")
         idle_timeout_seconds = _duration_seconds(
@@ -214,6 +225,11 @@ class RuntimeConfig:
                 mode=_execution_mode(execution_config.get("mode", "disabled")),
                 idle_timeout_seconds=idle_timeout_seconds,
                 max_lifetime_seconds=max_lifetime_seconds,
+            ),
+            inline_config=InlineConfig(
+                identity=_optional_str(inline_config, "identity"),
+                soul=_optional_str(inline_config, "soul"),
+                agents=_optional_str(inline_config, "agents"),
             ),
         )
 

@@ -6,6 +6,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
+- feat(controller): enforce cluster-capped ephemeral storage for DeepAgents Runner sandboxes
 - **DeepAgents Worker runtime**: Add the vendored DeepAgents 0.7.3 runtime, Matrix-thread orchestration and Human approval, Higress model/MCP adapters, encrypted PostgreSQL checkpoints, MinIO workspace synchronization, credential-free Runner Pods, durable per-Worker state, and `ExecutionSandbox` lifecycle/network isolation.
 - **Custom model capability overrides**: `AGENTTEAMS_MODEL_VISION` and `AGENTTEAMS_MODEL_REASONING` env vars let deployments override vision and reasoning capabilities for custom models not in the built-in presets table (e.g. local multimodal models like `qwen3.6-27b-fp8`).
 

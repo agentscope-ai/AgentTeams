@@ -226,9 +226,9 @@ func TestWorkerSpec_DeepAgentsRuntimeConfigRoundTripAndDeepCopy(t *testing.T) {
 					Mode:        "sandbox",
 					IdleTimeout: "30m",
 					MaxLifetime: "8h",
-					Resources: &AgentResourceRequirements{
-						Requests: AgentResourceValues{CPU: "100m", Memory: "128Mi"},
-						Limits:   AgentResourceValues{CPU: "1", Memory: "1Gi"},
+					Resources: &ExecutionSandboxResourceRequirements{
+						Requests: ExecutionSandboxResourceValues{CPU: "100m", Memory: "128Mi", EphemeralStorage: "512Mi"},
+						Limits:   ExecutionSandboxResourceValues{CPU: "1", Memory: "1Gi", EphemeralStorage: "4Gi"},
 					},
 					Egress: []DeepAgentsEgressRule{{
 						CIDR:  "10.96.0.10/32",
@@ -309,8 +309,9 @@ func TestExecutionSandboxRegisteredAndDeepCopied(t *testing.T) {
 			WorkerRef: ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
 			SessionID: "thread-hash",
 			Image:     "runner:v1",
-			Resources: &AgentResourceRequirements{
-				Requests: AgentResourceValues{CPU: "100m", Memory: "128Mi"},
+			Resources: &ExecutionSandboxResourceRequirements{
+				Requests: ExecutionSandboxResourceValues{CPU: "100m", Memory: "128Mi", EphemeralStorage: "512Mi"},
+				Limits:   ExecutionSandboxResourceValues{EphemeralStorage: "4Gi"},
 			},
 			Egress: []DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{53}}},
 		},
@@ -322,6 +323,10 @@ func TestExecutionSandboxRegisteredAndDeepCopied(t *testing.T) {
 		},
 	}
 	cloned := src.DeepCopy()
+	cloned.Spec.Resources.Requests.EphemeralStorage = "1Gi"
+	if src.Spec.Resources.Requests.EphemeralStorage != "512Mi" {
+		t.Fatalf("ExecutionSandbox DeepCopy aliased resources: %#v", cloned.Spec.Resources)
+	}
 	src.Spec.Resources.Requests.CPU = "900m"
 	src.Spec.Egress[0].Ports[0] = 443
 	src.Status.LastHeartbeat.Time = src.Status.LastHeartbeat.Add(time.Hour)

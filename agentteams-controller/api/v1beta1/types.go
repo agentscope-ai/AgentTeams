@@ -138,6 +138,21 @@ type AgentResourceValues struct {
 	Memory string `json:"memory,omitempty"`
 }
 
+// ExecutionSandboxResourceRequirements declares optional CPU, memory, and
+// ephemeral-storage requests and limits for an execution sandbox.
+type ExecutionSandboxResourceRequirements struct {
+	Requests ExecutionSandboxResourceValues `json:"requests,omitempty"`
+	Limits   ExecutionSandboxResourceValues `json:"limits,omitempty"`
+}
+
+// ExecutionSandboxResourceValues holds Kubernetes quantity strings for an
+// execution sandbox's CPU, memory, and ephemeral storage.
+type ExecutionSandboxResourceValues struct {
+	CPU              string `json:"cpu,omitempty"`
+	Memory           string `json:"memory,omitempty"`
+	EphemeralStorage string `json:"ephemeralStorage,omitempty"`
+}
+
 // BackendRuntime constants define backend runtime identifiers used by Worker
 // specs.
 const (
@@ -200,11 +215,11 @@ type DeepAgentsMCPApprovalRule struct {
 // lifecycle/resource envelope. The default mode is disabled.
 type DeepAgentsExecutionConfig struct {
 	// +kubebuilder:validation:Enum=disabled;sandbox
-	Mode        string                     `json:"mode,omitempty"`
-	IdleTimeout string                     `json:"idleTimeout,omitempty"`
-	MaxLifetime string                     `json:"maxLifetime,omitempty"`
-	Resources   *AgentResourceRequirements `json:"resources,omitempty"`
-	Egress      []DeepAgentsEgressRule     `json:"egress,omitempty"`
+	Mode        string                                `json:"mode,omitempty"`
+	IdleTimeout string                                `json:"idleTimeout,omitempty"`
+	MaxLifetime string                                `json:"maxLifetime,omitempty"`
+	Resources   *ExecutionSandboxResourceRequirements `json:"resources,omitempty"`
+	Egress      []DeepAgentsEgressRule                `json:"egress,omitempty"`
 }
 
 // DeepAgentsEgressRule requests one CIDR/port allowance for the execution
@@ -499,10 +514,10 @@ type ExecutionSandboxSpec struct {
 	SessionID string                    `json:"sessionId"`
 	Image     string                    `json:"image,omitempty"`
 
-	IdleTimeout string                     `json:"idleTimeout,omitempty"`
-	MaxLifetime string                     `json:"maxLifetime,omitempty"`
-	Resources   *AgentResourceRequirements `json:"resources,omitempty"`
-	Egress      []DeepAgentsEgressRule     `json:"egress,omitempty"`
+	IdleTimeout string                                `json:"idleTimeout,omitempty"`
+	MaxLifetime string                                `json:"maxLifetime,omitempty"`
+	Resources   *ExecutionSandboxResourceRequirements `json:"resources,omitempty"`
+	Egress      []DeepAgentsEgressRule                `json:"egress,omitempty"`
 }
 
 type ExecutionSandboxStatus struct {

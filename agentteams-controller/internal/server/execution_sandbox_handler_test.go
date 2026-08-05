@@ -141,6 +141,19 @@ func TestExecutionSandboxEnsureRejectsInvalidWorkerEphemeralStorageOverrides(t *
 				Limits: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "9Gi"},
 			},
 		},
+		{
+			name: "negative CPU request",
+			resources: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{CPU: "-1m"},
+			},
+		},
+		{
+			name: "memory request exceeds limit",
+			resources: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{Memory: "2Gi"},
+				Limits:   v1beta1.ExecutionSandboxResourceValues{Memory: "1Gi"},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -293,7 +306,8 @@ func TestExecutionSandboxEnsureRejectsInvalidCurrentWorkerResourcesWithoutMutati
 	name := executionSandboxName(worker.Name, "thread-hash")
 	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
 	worker.Spec.RuntimeConfig.DeepAgents.Execution.Resources = &v1beta1.ExecutionSandboxResourceRequirements{
-		Limits: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "9Gi"},
+		Requests: v1beta1.ExecutionSandboxResourceValues{CPU: "750m"},
+		Limits:   v1beta1.ExecutionSandboxResourceValues{CPU: "500m"},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system"},

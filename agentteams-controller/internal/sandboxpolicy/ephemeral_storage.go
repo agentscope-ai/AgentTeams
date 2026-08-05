@@ -1,5 +1,6 @@
 // Package sandboxpolicy resolves execution sandbox resource requirements
-// against the controller's ephemeral-storage policy.
+// against the controller's ephemeral-storage policy and Kubernetes compute
+// resource constraints.
 package sandboxpolicy
 
 import (
@@ -98,6 +99,13 @@ func (p Policy) Resolve(in *v1beta1.ExecutionSandboxResourceRequirements) (
 	if limit.Cmp(p.maxLimit) > 0 {
 		return nil, corev1.ResourceRequirements{}, resource.Quantity{}, fmt.Errorf("ephemeral-storage limit %s exceeds maximum limit %s", limit.String(), p.maxLimit.String())
 	}
+	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+		request, hasRequest := requests[name]
+		limit, hasLimit := limits[name]
+		if hasRequest && hasLimit && request.Cmp(limit) > 0 {
+			return nil, corev1.ResourceRequirements{}, resource.Quantity{}, fmt.Errorf("%s request %s exceeds limit %s", name, request.String(), limit.String())
+		}
+	}
 
 	return resolved, corev1.ResourceRequirements{Requests: requests, Limits: limits}, limit, nil
 }
@@ -126,6 +134,9 @@ func resourceList(values *v1beta1.ExecutionSandboxResourceValues) (corev1.Resour
 		}
 		if item.name == corev1.ResourceEphemeralStorage && quantity.Sign() <= 0 {
 			return nil, fmt.Errorf("%s quantity %q must be positive", item.name, item.raw)
+		}
+		if item.name != corev1.ResourceEphemeralStorage && quantity.Sign() < 0 {
+			return nil, fmt.Errorf("%s quantity %q must be non-negative", item.name, item.raw)
 		}
 		item.apply(quantity.String())
 		result[item.name] = quantity

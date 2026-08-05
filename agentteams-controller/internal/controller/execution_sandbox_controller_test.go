@@ -182,7 +182,7 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 	}
 }
 
-func TestExecutionSandboxReconcilerConvergesInvalidResources(t *testing.T) {
+func TestExecutionSandboxReconcilerConvergesInvalidComputeResources(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := v1beta1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ func TestExecutionSandboxReconcilerConvergesInvalidResources(t *testing.T) {
 			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
 			SessionID: "thread-hash",
 			Resources: &v1beta1.ExecutionSandboxResourceRequirements{
-				Limits: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "9Gi"},
+				Limits: v1beta1.ExecutionSandboxResourceValues{Memory: "-1Mi"},
 			},
 		},
 	}
@@ -257,8 +257,15 @@ func TestExecutionSandboxReconcilerConvergesInvalidResources(t *testing.T) {
 	if sandboxReadyReason(updated.Status.Conditions) != "InvalidResources" {
 		t.Fatalf("missing InvalidResources Ready condition: %#v", updated.Status.Conditions)
 	}
+	resourceVersion := updated.ResourceVersion
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("repeat Reconcile invalid resources: %v", err)
+	}
+	if err := cl.Get(context.Background(), key, &updated); err != nil {
+		t.Fatalf("get repeated invalid sandbox: %v", err)
+	}
+	if updated.ResourceVersion != resourceVersion {
+		t.Fatalf("unchanged invalid status was rewritten: resourceVersion %q -> %q", resourceVersion, updated.ResourceVersion)
 	}
 	for _, object := range []client.Object{&corev1.Secret{}, &corev1.Pod{}, &corev1.Service{}, &networkingv1.NetworkPolicy{}} {
 		object.SetName(key.Name)

@@ -6,6 +6,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func TestPolicyResolve(t *testing.T) {
@@ -174,6 +175,109 @@ func TestPolicyResolveRejectsInvalidEphemeralStorage(t *testing.T) {
 				t.Fatalf("Resolve() mutated input: got %#v, want %#v", tt.in, &before)
 			}
 		})
+	}
+}
+
+func TestPolicyResolveRejectsInvalidComputeResources(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *v1beta1.ExecutionSandboxResourceRequirements
+	}{
+		{
+			name: "negative CPU request",
+			in: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{CPU: "-1m"},
+			},
+		},
+		{
+			name: "negative memory limit",
+			in: &v1beta1.ExecutionSandboxResourceRequirements{
+				Limits: v1beta1.ExecutionSandboxResourceValues{Memory: "-1Mi"},
+			},
+		},
+		{
+			name: "negative CPU limit",
+			in: &v1beta1.ExecutionSandboxResourceRequirements{
+				Limits: v1beta1.ExecutionSandboxResourceValues{CPU: "-1m"},
+			},
+		},
+		{
+			name: "negative memory request",
+			in: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{Memory: "-1Mi"},
+			},
+		},
+		{
+			name: "CPU request exceeds limit",
+			in: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{CPU: "750m"},
+				Limits:   v1beta1.ExecutionSandboxResourceValues{CPU: "500m"},
+			},
+		},
+		{
+			name: "memory request exceeds limit",
+			in: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{Memory: "2Gi"},
+				Limits:   v1beta1.ExecutionSandboxResourceValues{Memory: "1536Mi"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := *tt.in
+			_, _, _, err := Default().Resolve(tt.in)
+			if err == nil {
+				t.Fatal("Resolve() error = nil, want error")
+			}
+			if !reflect.DeepEqual(tt.in, &before) {
+				t.Fatalf("Resolve() mutated input: got %#v, want %#v", tt.in, &before)
+			}
+		})
+	}
+}
+
+func TestPolicyResolvePreservesValidComputeResources(t *testing.T) {
+	in := &v1beta1.ExecutionSandboxResourceRequirements{
+		Requests: v1beta1.ExecutionSandboxResourceValues{
+			CPU:    "0",
+			Memory: "1.5Gi",
+		},
+		Limits: v1beta1.ExecutionSandboxResourceValues{
+			CPU: "500m",
+		},
+	}
+
+	_, resources, _, err := Default().Resolve(in)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	for _, tt := range []struct {
+		name corev1.ResourceName
+		got  corev1.ResourceList
+		want string
+	}{
+		{name: corev1.ResourceCPU, got: resources.Requests, want: "0"},
+		{name: corev1.ResourceMemory, got: resources.Requests, want: "1.5Gi"},
+		{name: corev1.ResourceCPU, got: resources.Limits, want: "500m"},
+	} {
+		if got := tt.got[tt.name]; got.Cmp(resource.MustParse(tt.want)) != 0 {
+			t.Errorf("%s = %s, want quantity %s", tt.name, got.String(), tt.want)
+		}
+	}
+
+	_, resources, _, err = Default().Resolve(&v1beta1.ExecutionSandboxResourceRequirements{
+		Requests: v1beta1.ExecutionSandboxResourceValues{CPU: "0.25"},
+		Limits:   v1beta1.ExecutionSandboxResourceValues{Memory: "0"},
+	})
+	if err != nil {
+		t.Fatalf("Resolve() zero one-sided resources error = %v", err)
+	}
+	if got := resources.Requests[corev1.ResourceCPU]; got.Cmp(resource.MustParse("0.25")) != 0 {
+		t.Errorf("CPU request = %s, want quantity 0.25", got.String())
+	}
+	if got := resources.Limits[corev1.ResourceMemory]; got.Cmp(resource.MustParse("0")) != 0 {
+		t.Errorf("memory limit = %s, want quantity 0", got.String())
 	}
 }
 

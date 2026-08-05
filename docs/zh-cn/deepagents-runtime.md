@@ -5,6 +5,8 @@ AgentTeams 可以把 LangChain `deepagents` 作为独立的 Worker Runtime 使�
 > DeepAgents 目前仅作为 **Worker Runtime**；Manager 仍使用 OpenClaw 或 CoPaw。生产部署以 Kubernetes 为目标，`execution.mode: sandbox` 依赖 `ExecutionSandbox` CRD 和 AgentTeams Controller。
 >
 > 当前 `execution.mode: sandbox` 仅支持 Worker 与 Runner 位于 Controller 所在的同一集群、同一命名空间；`deployMode: Edge`/`Remote` 会在创建 Matrix、MinIO、Pod 等资源前被 Controller 明确拒绝。跨集群 Runner、跨命名空间 Service/NetworkPolicy 和 checkpoint Secret 分发不在本阶段支持范围内。
+>
+> 本版本的 DeepAgents 工作区后端**仅支持 `storage.provider=minio`**。Helm values 或 Controller 投影若组合 `runtime=deepagents` 与 `storage.provider=oss`，会在创建 Worker 前明确拒绝；其它 Worker Runtime 的 OSS 支持不受影响。
 
 ## 运行架构
 
@@ -19,11 +21,38 @@ AgentTeams 可以把 LangChain `deepagents` 作为独立的 Worker Runtime 使�
 
 Worker 使用专属 PVC 保存 Matrix E2EE 设备数据、sync token 和待审批元数据。model、MCP 或 DeepAgents 策略变更会重建 Worker Pod，但该 PVC 和 PostgreSQL checkpoint 会保留。
 
+DeepAgents Worker Pod 只有在 Matrix 返回合法 sync 响应、客户端接受该响应，并把
+`next_batch` 原子持久化到状态 PVC 后才进入 Ready。Worker 随后只触发一次 post-sync
+回调，在 Pod 的 `/tmp` `emptyDir` 中创建
+`/tmp/agentteams-deepagents-ready`；Kubernetes exec readiness probe 只检查该文件。
+无论是首次 full-state catch-up，还是从已有 sync token 增量恢复，都遵守同一顺序。
+认证、join、sync 或 token 持久化失败时不会提前 Ready，因此 Controller 不会把尚未完成
+Matrix 同步的 Worker 宣告为 Running，也不会遗漏启动窗口中的首条增量消息。
+
 审批身份采用拒绝优先的角色投影：当前 Worker、Manager、Team Leader 和其它 Worker 都属于 Agent；Team Admin、`spec.humanMembers` 中 `role: coordinator` 的成员，以及额外配置的 `approvals.coordinators` 才可能属于 Human。若同一个 Matrix ID 同时出现在 Agent 与 Human 配置中，始终按 Agent 处理并拒绝其审批。`approvals.coordinators` 因此只能填写真实人类账号，不能用来把 Manager 或 Worker 提升为审批者。
+
+这个 Agent 拒绝列表不是当前 Team 的局部 roster：Controller 会收集其可见范围内所有当前
+Manager 和 Worker 的 `status.matrixUserID`（包括 Team Leader），排序、去重后投影为
+`matrix.agentUserIds`。即使某个其它 Team、独立 Worker 或旧配置中的 Agent ID 又被填写到
+`approvals.coordinators`，DeepAgents 仍按 Agent 拒绝其审批。
 
 Matrix 客户端只会加入 Controller 投影的 Personal Room 与 Team Room；其它账号发来的邀请会被忽略。加入 Room 或发送回复被 Homeserver 拒绝时，Worker 会显式记录失败，不会把错误响应当成发送成功。
 
 Runner 返回的工作区变更清单不是直接写入 MinIO 的依据。Worker 会先下载全部待写文件，在单文件、文件数量和总字节上限内逐项核对路径、大小与 SHA-256；只有完整清单全部通过后才先上传新内容、再执行删除。校验或下载失败不会提前删除已有持久文件，也不应通过重跑命令来掩盖结果不确定性。
+
+### 模型 URL 与 Worker prompt 合约
+
+Controller 管理的 Higress 根地址在运行时文档中规范为 OpenAI-compatible base，结尾恰好
+一个 `/v1`；例如 `https://aigw.example.lan` 与
+`https://aigw.example.lan/v1/` 都得到 `https://aigw.example.lan/v1`。适配器也会兼容
+旧文档中的无版本 Higress 根地址。显式配置的外部 provider 若已经使用版本化或非根路径，
+则保留该路径，不盲目追加第二个 `/v1`。
+
+Worker 的 `spec.identity`、`spec.soul` 和 `spec.agents` 会以明确、互不混淆的 section
+加入 DeepAgents system prompt，同时保留固定的 AgentTeams 房间、审批和凭据安全边界。
+本版本**不把 `spec.packages` 或 `spec.skills` 安装/转换为 DeepAgents subagent、tool 或
+prompt**；这些字段可由其它 Runtime 消费，但不能据此声称 DeepAgents 已加载对应包或技能。
+需要工具时应通过 Controller 投影的 MCP Server 明确配置。
 
 ## kubeadm 集群前提
 
@@ -235,6 +264,23 @@ deepagents:
 
 ## 创建 DeepAgents Worker
 
+Manager 或运维人员应通过 `agt` 写入 `runtimeConfig`，不要手工拼 Controller REST JSON。
+安全默认路径会启用 sandbox，并把文件写入和 MCP 默认策略设为 Human 审批：
+
+```bash
+agt create worker --name deep-researcher --runtime deepagents \
+  --deepagents-sandbox \
+  --deepagents-coordinators '@operator:matrix.example.lan' \
+  --no-wait
+```
+
+如需 egress、idle/max lifetime 或执行资源等高级策略，准备只包含
+`WorkerRuntimeConfig` 对象的单份 JSON/YAML 文档，再使用
+`agt create worker --runtime deepagents --runtime-config-file <FILE>` 或
+`agt update worker --name <NAME> --runtime-config-file <FILE>`。CLI 会拒绝重复 YAML key、
+多个文档、未知字段，以及把 `--runtime-config-file` 与 DeepAgents convenience flags
+混用；配置文件中不得包含任何凭据。
+
 下面的 Worker 强制审批命令和文件写入，并仅允许一个精确 MCP tool 免审批：
 
 ```yaml
@@ -298,6 +344,12 @@ limit（例如上例均为 `4Gi`）；因此应同时为两处写入预留容量
 `ExecutionSandbox` CR 时，Controller 会将其标记为 `Failed`，并设置
 `InvalidResources` 状态原因，同样不会创建 Runner Pod、Service 或 NetworkPolicy。
 
+同一个 session 已存在的 `ExecutionSandbox` 会在返回新 generation 的 Ready token 前，
+先收敛到 Worker 最新的 CPU/内存/临时存储、egress、idle timeout 和 max lifetime 策略。
+idle/max-lifetime 回收后，Worker 只在下一次真正准备发送 Runner 请求之前重新 ensure 并
+取得新 lease；健康检查不会主动重建 Runner。若请求已经发出但结果仍不确定，则保持
+fail-closed，不更换 request ID、不重新 ensure 后重放命令，避免重复副作用。
+
 ```bash
 kubectl -n "${AGENTTEAMS_NAMESPACE}" apply -f deep-researcher.yaml
 kubectl -n "${AGENTTEAMS_NAMESPACE}" get worker deep-researcher -o yaml
@@ -340,6 +392,7 @@ kubectl -n "${AGENTTEAMS_NAMESPACE}" get pod -l agentteams.io/runtime=deepagents
 | Worker 报 runtime 未启用 | `deepagents.enabled`、Controller 的 `AGENTTEAMS_DEEPAGENTS_ENABLED`、checkpoint Secret keys |
 | migration init container 重启 | PostgreSQL Service/PVC、DSN、NetworkPolicy、数据库密码 |
 | Worker PVC 一直 Pending | kubeadm 集群是否存在默认 StorageClass，或 `deepagents.state.storageClassName` 是否正确 |
+| Worker Pod Running 但未 Ready | 检查 Matrix whoami/join/sync、状态 PVC 可写性和 `sync-token` 持久化；就绪文件只会在首次合法同步完成后创建 |
 | Runner 一直 Pending | Runner 镜像、节点资源、`ExecutionSandbox.status.conditions` |
 | Runner 进入 Failed | Runner Pod 终止原因与事件；Controller 会保留终止 Pod 供诊断，并拒绝自动重放结果不确定的命令 |
 | Runner 无法访问目标 | Worker egress 请求、Helm ceiling、实际目标 IP、CNI 是否执行 NetworkPolicy |

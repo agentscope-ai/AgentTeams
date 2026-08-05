@@ -21,10 +21,12 @@ from deepagents_agentteams.sandbox import AgentTeamsSandbox, SandboxControlClien
 from deepagents_agentteams.workspace import MinIOWorkspaceStore
 
 _LOGGER = logging.getLogger(__name__)
+_READINESS_PATH = Path("/tmp/agentteams-deepagents-ready")  # noqa: S108 - Pod-local readiness contract.
 
 
 async def run_worker() -> None:
     """Bootstrap the projected runtime and serve Matrix messages until cancelled."""
+    await asyncio.to_thread(_READINESS_PATH.unlink, missing_ok=True)
     document = await _fetch_runtime_with_retry()
     config = RuntimeConfig.from_document(document, environ=os.environ)
     state_dir = Path(
@@ -76,6 +78,9 @@ async def run_worker() -> None:
         async def send_reply(message: MatrixMessage, body: str) -> None:
             await transport.send_reply(message, body)
 
+        async def signal_synchronized() -> None:
+            await asyncio.to_thread(_READINESS_PATH.touch, mode=0o600)
+
         engine = AgentEngine(
             config=config,
             graph_factory=graph_factory,
@@ -87,6 +92,7 @@ async def run_worker() -> None:
             allowed_room_ids=frozenset(config.room_ids),
             state_dir=state_dir / "matrix",
             on_message=engine.handle_message,
+            on_synchronized=signal_synchronized,
             refresh_access_token=matrix_token_provider.refresh,
         )
         try:

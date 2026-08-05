@@ -667,6 +667,10 @@ kubectl logs deployment/agentteams-controller \
 
 创建使用 sandbox execution 的 DeepAgents Worker。不要在 CR 中写入 Matrix、Higress、MinIO 或 PostgreSQL 凭据：
 
+本版本 DeepAgents 只支持 Chart 的 `storage.provider=minio`；`deepagents + oss` 会在
+Helm/Controller 边界被拒绝。Controller 投影给适配器的托管 Higress OpenAI-compatible
+base 以恰好一个 `/v1` 结尾。显式外部 provider 的已有版本化/非根路径会保留。
+
 ```bash
 kubectl apply -n "${AGENTTEAMS_NAMESPACE}" -f - <<EOF
 apiVersion: agentteams.io/v1beta1
@@ -734,6 +738,24 @@ kubectl get pod -n "${AGENTTEAMS_NAMESPACE}" \
   | grep -nE 'AGENTTEAMS_CHECKPOINT_(DSN|AES_KEY)|secretKeyRef:'
 ```
 
+DeepAgents Pod 的 `Ready` 不等同于进程已启动：CLI 会先删除旧就绪文件，完成一次合法
+Matrix sync 并把 `next_batch` 持久化到状态 PVC，然后才在 `/tmp` `emptyDir` 创建
+`/tmp/agentteams-deepagents-ready`。首次 catch-up 与增量恢复使用同一门禁。可核对：
+
+```bash
+kubectl get pod -n "${AGENTTEAMS_NAMESPACE}" \
+  -l agentteams.io/worker=deep-researcher \
+  -o jsonpath='{.items[0].spec.containers[0].readinessProbe.exec.command}{"\n"}'
+```
+
+Manager 创建 Worker 时，常规安全路径是
+`agt create worker --runtime deepagents --deepagents-sandbox`，并提供真实 Human 的
+`--deepagents-coordinators`；高级 egress/资源策略通过经过评审且不含凭据的
+`--runtime-config-file <FILE>` 创建或更新。`spec.identity`、`spec.soul`、`spec.agents`
+会进入结构化 system prompt；`spec.packages`/`spec.skills` 在本版本不会安装或转换为
+DeepAgents 能力。审批拒绝列表覆盖 Controller 可见的所有当前 Manager/Worker/Team
+Leader Matrix ID，而不是只覆盖当前 Team。
+
 在 Element 的 Deep Researcher Personal Room 中，由登录的 Human admin 发送一条要求使用 `execute` 在 `/workspace` 创建测试文件的任务。`execute` 无论其它策略如何都必须中断并请求 Human 审批；在同一 Matrix thread 回复 `approve 1` 后观察：
 
 ```bash
@@ -749,6 +771,7 @@ kubectl get executionsandbox,pod,service,networkpolicy \
 - Runner 不包含 Matrix、Higress、MinIO、PostgreSQL 凭据；
 - 命令只在 Runner 的 `/workspace` 执行，变更清单校验通过后才写回 MinIO；
 - 相同 request ID 不会重复执行命令；
+- 更新 Worker 的 sandbox resources、egress、idle/max lifetime 后，已有 sandbox 必须先收敛到新 generation 才能重新 Ready；已回收 lease 只在下一次 Runner 请求前重建，结果不确定的已发送请求不会被重放；
 - 空闲超过 `5m` 或总生命周期超过 `30m` 后，`ExecutionSandbox` 及其 Pod、Service、NetworkPolicy 被 Controller 回收，Worker 与 checkpoint 保留。
 
 更完整的策略、外部 PostgreSQL 和故障排查说明见[《DeepAgents Worker Runtime》](deepagents-runtime.md)。

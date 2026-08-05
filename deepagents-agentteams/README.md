@@ -18,4 +18,3 @@ tests. The dependency-free contract tests can be run with:
 ```bash
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
-

@@ -795,6 +795,50 @@ func TestK8sCreateDeepAgentsAddsPersistentStateVolume(t *testing.T) {
 		security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem {
 		t.Fatalf("container security context = %#v", security)
 	}
+	probe := container.ReadinessProbe
+	if probe == nil || probe.Exec == nil {
+		t.Fatalf("DeepAgents readiness probe = %#v, want exec probe", probe)
+	}
+	wantCommand := []string{"test", "-f", "/tmp/agentteams-deepagents-ready"}
+	if len(probe.Exec.Command) != len(wantCommand) {
+		t.Fatalf("DeepAgents readiness command = %#v, want %#v", probe.Exec.Command, wantCommand)
+	}
+	for i := range wantCommand {
+		if probe.Exec.Command[i] != wantCommand[i] {
+			t.Fatalf("DeepAgents readiness command = %#v, want %#v", probe.Exec.Command, wantCommand)
+		}
+	}
+}
+
+func TestK8sCreateNonDeepAgentsPreservesTemplateReadinessProbe(t *testing.T) {
+	b, fake := newTestK8sBackendWithFake(K8sConfig{ControllerName: testControllerName})
+	injectTemplateConfigMap(t, fake, `spec:
+  containers:
+    - name: worker
+      readinessProbe:
+        httpGet:
+          path: /runtime-ready
+          port: 8080
+`)
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:    "openclaw-probe",
+		Runtime: RuntimeOpenClaw,
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	pod, err := b.client.Pods("agentteams").Get(
+		context.Background(),
+		"agentteams-worker-openclaw-probe",
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Get pod failed: %v", err)
+	}
+	probe := pod.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/runtime-ready" || probe.HTTPGet.Port.IntVal != 8080 {
+		t.Fatalf("non-DeepAgents readiness probe changed: %#v", probe)
+	}
 }
 
 // TestK8sCreateResolvesImageFromRuntime verifies that the K8s backend selects

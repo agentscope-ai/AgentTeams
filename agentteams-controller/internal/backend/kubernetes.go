@@ -431,6 +431,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		HostAliases:        buildHostAliases(req.ExtraHosts),
 	})
 	if req.Runtime == RuntimeDeepAgents {
+		applyDeepAgentsReadinessProbe(pod)
 		applyDeepAgentsPodSecurity(pod)
 	}
 
@@ -457,6 +458,24 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		Status:    StatusStarting,
 		RawStatus: rawK8sPhase(created.Status.Phase),
 	}, nil
+}
+
+func applyDeepAgentsReadinessProbe(pod *corev1.Pod) {
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name != "worker" {
+			continue
+		}
+		pod.Spec.Containers[i].ReadinessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				Exec: &corev1.ExecAction{Command: []string{
+					"test",
+					"-f",
+					"/tmp/agentteams-deepagents-ready",
+				}},
+			},
+		}
+		return
+	}
 }
 
 func deepAgentsCheckpointSecretRefs(env []corev1.EnvVar, config K8sConfig) ([]corev1.EnvVar, error) {

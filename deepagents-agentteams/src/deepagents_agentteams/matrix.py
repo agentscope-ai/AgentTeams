@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -115,6 +116,7 @@ class MatrixTransport:
         allowed_room_ids: frozenset[str],
         state_dir: Path,
         on_message: Callable[[MatrixMessage], Awaitable[None]],
+        on_synchronized: Callable[[], Awaitable[None]] | None = None,
         refresh_access_token: Callable[[], Awaitable[str]] | None = None,
         client_factory: Callable[..., Any] = AsyncClient,
     ) -> None:
@@ -124,10 +126,12 @@ class MatrixTransport:
         self._allowed_room_ids = allowed_room_ids
         self._state_dir = state_dir
         self._on_message = on_message
+        self._on_synchronized = on_synchronized
         self._refresh_access_token = refresh_access_token
         self._client_factory = client_factory
         self.client: Any | None = None
         self._event_tasks: set[asyncio.Task[None]] = set()
+        self._synchronized = False
 
     async def run_forever(self) -> None:
         """Authenticate, catch up without replay, then process incremental events."""
@@ -257,6 +261,9 @@ class MatrixTransport:
             _require_matrix_response(join_response, JoinResponse, "Matrix room join")
         await self._e2ee_maintenance()
         self._save_sync_token(response.next_batch)
+        if not self._synchronized and self._on_synchronized is not None:
+            await self._on_synchronized()
+            self._synchronized = True
         return response.next_batch
 
     async def _refresh_client_token(self) -> None:
@@ -315,9 +322,17 @@ class MatrixTransport:
     def _save_sync_token(self, token: str) -> None:
         path = self._state_dir / "sync-token"
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(token)
-        temporary.chmod(0o600)
+        with temporary.open("w") as stream:
+            stream.write(token)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), 0o600)
         temporary.replace(path)
+        directory_fd = os.open(self._state_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
 
 def _is_unauthorized(response: Any) -> bool:

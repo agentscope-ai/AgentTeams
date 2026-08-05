@@ -43,6 +43,22 @@ def event(
     )
 
 
+def sync_response(next_batch: str) -> SyncResponse:
+    response = SyncResponse.from_dict(
+        {
+            "next_batch": next_batch,
+            "rooms": {"invite": {}, "join": {}, "leave": {}},
+            "presence": {"events": []},
+            "account_data": {"events": []},
+            "to_device": {"events": []},
+            "device_lists": {"changed": [], "left": []},
+            "device_one_time_keys_count": {},
+        }
+    )
+    assert isinstance(response, SyncResponse)
+    return response
+
+
 def test_extracts_stable_matrix_thread_root_and_filters_rooms_and_self() -> None:
     room = SimpleNamespace(room_id="!allowed:example.org")
     threaded = event(
@@ -250,6 +266,132 @@ async def test_accept_sync_joins_only_controller_projected_rooms(tmp_path: Path)
     assert next_batch == "next-batch"
     assert client.joined == ["!allowed:example.org"]
     assert (tmp_path / "sync-token").read_text() == "next-batch"
+
+
+@pytest.mark.parametrize("saved_token", [None, "previous-batch"])
+async def test_signals_synchronized_once_after_initial_or_resumed_token_is_saved(
+    tmp_path: Path,
+    saved_token: str | None,
+) -> None:
+    if saved_token is not None:
+        (tmp_path / "sync-token").write_text(saved_token)
+
+    response = sync_response("durable-next-batch")
+    later_response = sync_response("later-next-batch")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.event_callbacks = ["message-callback"]
+            self.next_batch = None
+            self.olm = None
+            self.sync_calls: list[dict] = []
+
+        async def sync(self, **kwargs):  # noqa: ANN003, ANN202
+            self.sync_calls.append(kwargs)
+            if len(self.sync_calls) == 1:
+                return response
+            if len(self.sync_calls) == 2:
+                return later_response
+            raise asyncio.CancelledError
+
+    synchronized_tokens: list[str] = []
+
+    async def synchronized() -> None:
+        synchronized_tokens.append((tmp_path / "sync-token").read_text())
+
+    client = FakeClient()
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+        on_synchronized=synchronized,
+    )
+    transport.client = client
+
+    with pytest.raises(asyncio.CancelledError):
+        await transport._sync_loop()
+
+    assert synchronized_tokens == ["durable-next-batch"]
+    assert (tmp_path / "sync-token").read_text() == "later-next-batch"
+    if saved_token is None:
+        assert client.sync_calls[0] == {"timeout": 30_000, "full_state": True}
+    else:
+        assert client.sync_calls[0] == {
+            "timeout": 30_000,
+            "since": "previous-batch",
+            "full_state": False,
+        }
+
+
+async def test_invalid_sync_never_signals_synchronized(tmp_path: Path) -> None:
+    synchronized = 0
+
+    async def signal() -> None:
+        nonlocal synchronized
+        synchronized += 1
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+        on_synchronized=signal,
+    )
+
+    with pytest.raises(RuntimeError, match="Matrix sync failed"):
+        await transport._accept_sync_response(SimpleNamespace(status_code=500))
+
+    assert synchronized == 0
+    assert not (tmp_path / "sync-token").exists()
+
+
+async def test_sync_token_save_failure_never_signals_synchronized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    synchronized = 0
+
+    async def signal() -> None:
+        nonlocal synchronized
+        synchronized += 1
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+        on_synchronized=signal,
+    )
+    transport.client = SimpleNamespace(olm=None)
+    monkeypatch.setattr(
+        transport,
+        "_save_sync_token",
+        lambda _token: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+
+    with pytest.raises(OSError, match="disk unavailable"):
+        await transport._accept_sync_response(sync_response("not-durable"))
+
+    assert synchronized == 0
 
 
 async def test_initial_sync_refreshes_token_when_allowed_room_join_is_unauthorized(

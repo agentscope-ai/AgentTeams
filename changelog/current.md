@@ -16,6 +16,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - **DeepAgents workspace manifest integrity**: Validate Runner file sizes and SHA-256 digests within bounded persistence limits before applying any MinIO uploads or deletions.
 - **DeepAgents Matrix room boundary**: Ignore invitations outside Controller-projected Personal/Team rooms and fail explicitly when Matrix rejects room joins or reply sends.
 - **DeepAgents sandbox lifecycle convergence**: Schedule idle/max-lifetime reconciliation after a Runner becomes ready, and report terminal Runner Pods as failed without automatically replaying possibly side-effecting commands.
+- **DeepAgents merge hardening**: Enforce canonical gateway/storage contracts, global Agent approval identities, structured inline prompts, Manager-safe runtime configuration, refreshed sandbox leases/policy, and convergent compute-resource rejection. ([56171271](https://github.com/agentscope-ai/AgentTeams/commit/56171271), [72ac7249](https://github.com/agentscope-ai/AgentTeams/commit/72ac7249), [119904e0](https://github.com/agentscope-ai/AgentTeams/commit/119904e0), [6e92d421](https://github.com/agentscope-ai/AgentTeams/commit/6e92d421), [02723e70](https://github.com/agentscope-ai/AgentTeams/commit/02723e70), [734036e8](https://github.com/agentscope-ai/AgentTeams/commit/734036e8), [99911dc8](https://github.com/agentscope-ai/AgentTeams/commit/99911dc8))
 - **DeepAgents Human approval identities**: Project the Manager as a known Matrix Agent, classify Team coordinators as Humans by roster role, and make Agent identity override conflicting Human approval configuration.
 - **CoPaw Team assignment handoff**: Return the required Team Room `message` action from `taskflow(delegate_task)`, normalize Worker aliases from the Team roster, refresh Controller-managed runtime context every minute, and reroute assignment replies from non-Team rooms to the Team Room. ([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120))
 - **Docker Worker ServiceAccount token rotation**: Project short-lived tokens into per-Worker Docker volumes, refresh the token file atomically without recreating running Workers, and remove the credential volume with the Worker.
@@ -54,6 +55,13 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Change list / 变更列表**
 
+- [`99911dc8`](https://github.com/agentscope-ai/AgentTeams/commit/99911dc8) fix(controller): converge invalid sandbox compute resources
+- [`734036e8`](https://github.com/agentscope-ai/AgentTeams/commit/734036e8) fix(deepagents): refresh execution sandbox leases and policy
+- [`02723e70`](https://github.com/agentscope-ai/AgentTeams/commit/02723e70) fix(agt): reject ambiguous runtime config YAML
+- [`6e92d421`](https://github.com/agentscope-ai/AgentTeams/commit/6e92d421) fix(manager): configure DeepAgents sandbox workers
+- [`119904e0`](https://github.com/agentscope-ai/AgentTeams/commit/119904e0) fix(deepagents): refresh Edge approval identities
+- [`72ac7249`](https://github.com/agentscope-ai/AgentTeams/commit/72ac7249) fix(deepagents): harden approval identity and prompt policy
+- [`56171271`](https://github.com/agentscope-ai/AgentTeams/commit/56171271) fix(deepagents): enforce gateway and storage contracts
 - [`bffedf1f`](https://github.com/agentscope-ai/AgentTeams/commit/bffedf1f) fix(deepagents): surface Matrix task failures
 - [`8fd67797`](https://github.com/agentscope-ai/AgentTeams/commit/8fd67797) fix(deepagents): validate durable workspace manifests
 - [`56dcc083`](https://github.com/agentscope-ai/AgentTeams/commit/56dcc083) fix(deepagents): enforce Matrix room response boundaries

@@ -35,6 +35,16 @@ _UNKNOWN_OUTCOME_REPLY = (
 )
 
 
+def _ensure_private_directory(path: Path) -> None:
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    directory_fd = os.open(path, flags)
+    try:
+        os.fchmod(directory_fd, 0o700)
+    finally:
+        os.close(directory_fd)
+
+
 class MatrixAccessTokenExpired(RuntimeError):
     """Raised internally when Matrix rejects an access token."""
 
@@ -335,11 +345,13 @@ class MatrixTransport:
     async def _connect(self) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)
         if self._config.encryption_enabled:
+            store_path = self._state_dir / "e2ee"
+            _ensure_private_directory(store_path)
             nio_config = AsyncClientConfig(store_sync_tokens=False, encryption_enabled=True)
             self.client = self._client_factory(
                 self._config.homeserver_url,
                 user="",
-                store_path=str(self._state_dir / "e2ee"),
+                store_path=str(store_path),
                 config=nio_config,
             )
         else:

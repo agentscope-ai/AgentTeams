@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from nio import JoinError, JoinResponse, RoomSendError, RoomSendResponse, SyncResponse
+from nio import JoinError, JoinResponse, RoomSendError, RoomSendResponse, SyncResponse, WhoamiResponse
 
 from deepagents_agentteams import matrix as matrix_module
 from deepagents_agentteams.config import MatrixConfig
@@ -881,6 +881,171 @@ async def test_controller_matrix_token_provider_reads_fresh_service_account_toke
     assert token == fresh_matrix_token()
     assert requests[0].url.path == "/api/v1/credentials/matrix-token"
     assert requests[0].headers["Authorization"] == "Bearer rotated-service-account-token"
+
+
+async def test_connect_creates_private_e2ee_store_before_load(tmp_path: Path) -> None:
+    loaded_paths: list[Path] = []
+
+    class FakeClient:
+        def __init__(self, store_path: Path) -> None:
+            self.store_path = store_path
+            self.access_token = ""
+            self.user_id = ""
+            self.user = ""
+            self.device_id = ""
+            self.should_upload_keys = False
+
+        async def whoami(self) -> WhoamiResponse:
+            return WhoamiResponse("@worker:example.org", "DEVICE", False)
+
+        def load_store(self) -> None:
+            assert self.store_path.is_dir()
+            assert stat.S_IMODE(self.store_path.stat().st_mode) == 0o700
+            loaded_paths.append(self.store_path)
+
+        def add_event_callback(self, _callback, _event_filter) -> None:  # noqa: ANN001
+            return None
+
+    def client_factory(_homeserver: str, **kwargs: object) -> FakeClient:
+        return FakeClient(Path(str(kwargs["store_path"])))
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!room:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=True,
+        ),
+        allowed_room_ids=frozenset({"!room:example.org"}),
+        state_dir=tmp_path / "matrix",
+        on_message=lambda _message: None,
+        client_factory=client_factory,
+    )
+
+    await transport._connect()
+
+    assert loaded_paths == [tmp_path / "matrix" / "e2ee"]
+
+
+async def test_connect_reuses_existing_e2ee_store_and_tightens_mode(tmp_path: Path) -> None:
+    state_dir = tmp_path / "matrix"
+    store_path = state_dir / "e2ee"
+    store_path.mkdir(parents=True, mode=0o755)
+    store_path.chmod(0o755)
+    sentinel = store_path / "crypto.db"
+    sentinel.write_text("existing-matrix-state")
+    loaded_modes: list[int] = []
+
+    class FakeClient:
+        access_token = ""
+        user_id = ""
+        user = ""
+        device_id = ""
+        should_upload_keys = False
+
+        async def whoami(self) -> WhoamiResponse:
+            return WhoamiResponse("@worker:example.org", "DEVICE", False)
+
+        def load_store(self) -> None:
+            loaded_modes.append(stat.S_IMODE(store_path.stat().st_mode))
+
+        def add_event_callback(self, _callback, _event_filter) -> None:  # noqa: ANN001
+            return None
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!room:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=True,
+        ),
+        allowed_room_ids=frozenset({"!room:example.org"}),
+        state_dir=state_dir,
+        on_message=lambda _message: None,
+        client_factory=lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    await transport._connect()
+    await transport._connect()
+
+    assert loaded_modes == [0o700, 0o700]
+    assert sentinel.read_text() == "existing-matrix-state"
+
+
+async def test_connect_without_encryption_does_not_create_e2ee_store(tmp_path: Path) -> None:
+    factory_kwargs: list[dict[str, object]] = []
+
+    class FakeClient:
+        access_token = ""
+        user_id = ""
+        user = ""
+        device_id = ""
+
+        async def whoami(self) -> WhoamiResponse:
+            return WhoamiResponse("@worker:example.org", "DEVICE", False)
+
+        def add_event_callback(self, _callback, _event_filter) -> None:  # noqa: ANN001
+            return None
+
+    def client_factory(_homeserver: str, **kwargs: object) -> FakeClient:
+        factory_kwargs.append(kwargs)
+        return FakeClient()
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!room:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!room:example.org"}),
+        state_dir=tmp_path / "matrix",
+        on_message=lambda _message: None,
+        client_factory=client_factory,
+    )
+
+    await transport._connect()
+
+    assert not (tmp_path / "matrix" / "e2ee").exists()
+    assert "store_path" not in factory_kwargs[0]
+
+
+async def test_connect_rejects_e2ee_store_symlink_before_client_construction(tmp_path: Path) -> None:
+    state_dir = tmp_path / "matrix"
+    state_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o755)
+    outside.chmod(0o755)
+    (state_dir / "e2ee").symlink_to(outside, target_is_directory=True)
+    factory_called = False
+
+    def client_factory(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal factory_called
+        factory_called = True
+        return SimpleNamespace()
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!room:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=True,
+        ),
+        allowed_room_ids=frozenset({"!room:example.org"}),
+        state_dir=state_dir,
+        on_message=lambda _message: None,
+        client_factory=client_factory,
+    )
+
+    with pytest.raises(OSError):
+        await transport._connect()
+
+    assert not factory_called
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o755
 
 
 async def test_connect_refreshes_expired_matrix_token_once(tmp_path: Path) -> None:

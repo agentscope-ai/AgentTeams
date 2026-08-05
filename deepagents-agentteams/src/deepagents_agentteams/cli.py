@@ -14,7 +14,7 @@ import httpx
 from deepagents_agentteams.bootstrap import fetch_runtime_document
 from deepagents_agentteams.checkpoints import async_postgres_checkpointer
 from deepagents_agentteams.config import RuntimeConfig
-from deepagents_agentteams.engine import AgentEngine, PendingApprovalStore
+from deepagents_agentteams.engine import AgentEngine, ManagedAgentIdentityClient, PendingApprovalStore
 from deepagents_agentteams.graph import build_deepagents_graph
 from deepagents_agentteams.matrix import ControllerMatrixTokenProvider, MatrixMessage, MatrixTransport
 from deepagents_agentteams.sandbox import AgentTeamsSandbox, SandboxControlClient
@@ -41,6 +41,12 @@ async def run_worker() -> None:
     controller_http = httpx.AsyncClient(timeout=30, trust_env=False)
     matrix_token_provider = ControllerMatrixTokenProvider(
         controller_url=config.controller_url,
+        service_account_token_path=Path(config.service_account_token_path),
+        client=controller_http,
+    )
+    managed_agent_identity = ManagedAgentIdentityClient(
+        controller_url=config.controller_url,
+        worker_name=config.worker_name,
         service_account_token_path=Path(config.service_account_token_path),
         client=controller_http,
     )
@@ -86,6 +92,7 @@ async def run_worker() -> None:
             graph_factory=graph_factory,
             send_reply=send_reply,
             pending_store=PendingApprovalStore(state_dir / "pending-approvals.json"),
+            is_managed_agent=managed_agent_identity.is_managed_agent,
         )
         transport = MatrixTransport(
             config=config.matrix,

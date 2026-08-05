@@ -8,7 +8,9 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 from langgraph.types import Command
 
 from deepagents_agentteams.approvals import ApprovalPrincipals, MatrixDecision, parse_matrix_decision
@@ -97,6 +99,57 @@ class PendingApprovalStore:
         temporary.replace(self._path)
 
 
+class ManagedAgentIdentityClient:
+    """Ask the controller one live managed-Agent identity question at a time."""
+
+    _MAX_RESPONSE_BYTES = 1024
+
+    def __init__(
+        self,
+        *,
+        controller_url: str,
+        worker_name: str,
+        service_account_token_path: Path,
+        client: httpx.AsyncClient,
+    ) -> None:
+        if not controller_url:
+            raise ValueError("controller URL is required for managed-Agent identity lookup")
+        if not worker_name:
+            raise ValueError("worker name is required for managed-Agent identity lookup")
+        self._controller_url = controller_url.rstrip("/")
+        self._worker_name = worker_name
+        self._service_account_token_path = service_account_token_path
+        self._client = client
+
+    async def is_managed_agent(self, matrix_user_id: str) -> bool:
+        """Return the controller's current answer without caching identity state."""
+        service_account_token = (
+            await asyncio.to_thread(self._service_account_token_path.read_text)
+        ).strip()
+        if not service_account_token:
+            raise RuntimeError("ServiceAccount token is empty")
+        worker = quote(self._worker_name, safe="")
+        response = await self._client.post(
+            f"{self._controller_url}/api/v1/workers/{worker}/managed-agent-identity",
+            json={"matrixUserId": matrix_user_id},
+            headers={"Authorization": f"Bearer {service_account_token}"},
+        )
+        response.raise_for_status()
+        if len(response.content) > self._MAX_RESPONSE_BYTES:
+            raise RuntimeError("controller returned an invalid managed-Agent lookup response")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("controller returned an invalid managed-Agent lookup response") from exc
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"managed"}
+            or not isinstance(payload["managed"], bool)
+        ):
+            raise RuntimeError("controller returned an invalid managed-Agent lookup response")
+        return payload["managed"]
+
+
 class AgentEngine:
     """Serialize messages per Matrix thread and drive DeepAgents interrupts."""
 
@@ -107,11 +160,13 @@ class AgentEngine:
         graph_factory: Callable[[str], Awaitable[Any]],
         send_reply: Callable[[MatrixMessage, str], Awaitable[None]],
         pending_store: PendingApprovalStore,
+        is_managed_agent: Callable[[str], Awaitable[bool]],
     ) -> None:
         self._config = config
         self._graph_factory = graph_factory
         self._send_reply = send_reply
         self._pending_store = pending_store
+        self._is_managed_agent = is_managed_agent
         self._graphs: dict[str, Any] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -149,8 +204,20 @@ class AgentEngine:
             coordinators=frozenset(self._config.approvals.coordinators),
         )
         if message.sender in self._config.agent_matrix_ids:
-            identity_kind = "agent"
-        elif message.sender in self._config.human_approver_ids:
+            await self._send_reply(message, "This Matrix identity is not authorized to decide this approval.")
+            return
+        try:
+            managed_agent = await self._is_managed_agent(message.sender)
+        except Exception:  # noqa: BLE001 - any controller/transport/validation failure denies approval.
+            await self._send_reply(
+                message,
+                "Approval authorization is temporarily unavailable; no decision was applied.",
+            )
+            return
+        if managed_agent:
+            await self._send_reply(message, "This Matrix identity is not authorized to decide this approval.")
+            return
+        if message.sender == pending.requester or message.sender in self._config.human_approver_ids:
             identity_kind = "human"
         else:
             identity_kind = "unknown"

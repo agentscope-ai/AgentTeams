@@ -24,6 +24,7 @@ async def test_worker_resets_stale_readiness_and_signals_only_from_post_sync_cal
     config = SimpleNamespace(
         storage=object(),
         controller_url="http://controller:8090",
+        worker_name="researcher",
         service_account_token_path="/var/run/secrets/agentteams/token",  # noqa: S106
         checkpoint=SimpleNamespace(dsn="postgresql://checkpoint", aes_key="a" * 32),
         matrix=object(),

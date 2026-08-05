@@ -6,22 +6,23 @@ import "fmt"
 type Action string
 
 const (
-	ActionCreate                    Action = "create"
-	ActionUpdate                    Action = "update"
-	ActionDelete                    Action = "delete"
-	ActionGet                       Action = "get"
-	ActionList                      Action = "list"
-	ActionWake                      Action = "wake"
-	ActionSleep                     Action = "sleep"
-	ActionEnsureReady               Action = "ensure-ready"
-	ActionReady                     Action = "ready"
-	ActionSTS                       Action = "sts"
-	ActionStatus                    Action = "status"
-	ActionRefreshMatrixToken        Action = "refresh-matrix-token"
-	ActionGateway                   Action = "gateway"
-	ActionEnsureExecutionSandbox    Action = "ensure-execution-sandbox"
-	ActionHeartbeatExecutionSandbox Action = "heartbeat-execution-sandbox"
-	ActionDeleteExecutionSandbox    Action = "delete-execution-sandbox"
+	ActionCreate                     Action = "create"
+	ActionUpdate                     Action = "update"
+	ActionDelete                     Action = "delete"
+	ActionGet                        Action = "get"
+	ActionList                       Action = "list"
+	ActionWake                       Action = "wake"
+	ActionSleep                      Action = "sleep"
+	ActionEnsureReady                Action = "ensure-ready"
+	ActionReady                      Action = "ready"
+	ActionSTS                        Action = "sts"
+	ActionStatus                     Action = "status"
+	ActionRefreshMatrixToken         Action = "refresh-matrix-token"
+	ActionGateway                    Action = "gateway"
+	ActionEnsureExecutionSandbox     Action = "ensure-execution-sandbox"
+	ActionHeartbeatExecutionSandbox  Action = "heartbeat-execution-sandbox"
+	ActionDeleteExecutionSandbox     Action = "delete-execution-sandbox"
+	ActionLookupManagedAgentIdentity Action = "lookup-managed-agent-identity"
 )
 
 // AuthzRequest describes the resource being accessed.
@@ -91,6 +92,9 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 }
 
 func (a *Authorizer) authorizeTeamLeaderWorkerAction(caller *CallerIdentity, req AuthzRequest) error {
+	if req.Action == ActionLookupManagedAgentIdentity {
+		return a.requireSelf(caller, req)
+	}
 	switch req.Action {
 	case ActionGet:
 		return a.requireSameTeam(caller, req)
@@ -130,7 +134,7 @@ func (a *Authorizer) authorizeWorker(caller *CallerIdentity, req AuthzRequest) e
 
 func (a *Authorizer) authorizeWorkerSelfAction(caller *CallerIdentity, req AuthzRequest) error {
 	switch req.Action {
-	case ActionReady, ActionEnsureExecutionSandbox, ActionHeartbeatExecutionSandbox, ActionDeleteExecutionSandbox:
+	case ActionReady, ActionEnsureExecutionSandbox, ActionHeartbeatExecutionSandbox, ActionDeleteExecutionSandbox, ActionLookupManagedAgentIdentity:
 		return a.requireSelf(caller, req)
 	case ActionSTS:
 		return a.requireSelf(caller, req)

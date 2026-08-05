@@ -707,6 +707,18 @@ spec:
 EOF
 ```
 
+`idleTimeout` 与 `maxLifetime` 只能使用小写 `h`、`m`、`s` 片段，片段总和必须为正整数秒。
+`6h30m`、`0.5m` 合法；`500ms`、`1000ms`、`1.5s`、`.5m`、大写单位和前后空白会被拒绝，
+不会被静默取整。Controller API 会在创建/更新 Worker CR 前返回 `400`；直接提交的 Worker
+CR 也会在 Worker Pod 启动前停止 reconcile。无效的直接 `ExecutionSandbox` CR 会收敛为
+`Failed/InvalidPolicy`，不启动 Runner。
+
+每个 `ExecutionSandbox` 必须携带与其 Worker 完全相同的
+`agentteams.io/controller` 标签。正常的 HTTP ensure 会强制写入该标签；cache、watch、
+reconcile 以及 Ensure/heartbeat/delete 会共同拒绝未标记或属于其它 release 的 sandbox。
+因此不要手工移除或跨 release 复制该标签。若必须用 `kubectl` 诊断性创建 sandbox，先按
+第 10.2 节查询当前 Controller 的实际标签值，并同时核对被引用 Worker 的归属。
+
 #### Runner 临时存储覆盖
 
 上例仅覆盖每个 `ExecutionSandbox` Runner 的临时存储；它不扩展通用 Worker 或

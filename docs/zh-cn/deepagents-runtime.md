@@ -367,6 +367,24 @@ spec:
             ports: [443]
 ```
 
+`idleTimeout` 与 `maxLifetime` 使用 DeepAgents 与 Controller 共同执行的规范语法：只能由
+小写 `h`、`m`、`s` 片段组成，允许带前导数字的小数片段，但全部片段相加后必须恰好是
+正整数秒。例如 `6h30m`、`0.5m` 和 `0.5s0.5s` 合法；`500ms`、`1000ms`、`1.5s`、
+`.5m`、大写单位和前后空白都不合法。Controller 不会把小数秒静默取整，也不会接受
+DeepAgents 无法解析的 Go 专用 `ms`/`us`/`ns` 单位。
+
+通过 Controller API 创建或更新 Worker 时，无效时长返回 `400 Bad Request` 且不创建或
+修改 Worker；直接提交 Worker CR 时，reconcile 会在创建 Worker Pod 前失败。HTTP ensure
+同样会在创建或更新 `ExecutionSandbox` 前拒绝；直接提交的无效 `ExecutionSandbox` CR
+则按 `Failed/InvalidPolicy` fail-closed，且不会启动 Runner。
+
+在命名 Controller 的 Kubernetes 部署中，HTTP ensure 创建的 `ExecutionSandbox` 会继承
+Worker 的精确 `agentteams.io/controller` 归属。Controller cache、主资源/子资源 watch 和
+reconcile 入口都会再次核对该标签及被引用 Worker 的归属；Ensure、heartbeat、delete 也
+不会读取或修改其它 Controller 的 sandbox。通过 `kubectl` 直接创建
+`ExecutionSandbox` 时必须填写与 Worker 相同的 Controller 标签，未标记或错误标记的对象
+不会被该 Controller 接管。空 Controller name 只用于嵌入式兼容，并且只拥有未标记对象。
+
 ### Runner 临时存储策略
 
 `runtimeConfig.deepagents.execution.resources` 只作用于每次命令的

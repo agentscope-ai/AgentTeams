@@ -23,6 +23,7 @@ source "${SCRIPT_DIR}/lib/higress-client.sh"
 test_setup "22-delete-worker-cleanup"
 
 TEST_WORKER="test-del-$$"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
@@ -81,7 +82,7 @@ _minio_worker_yaml() {
 # ============================================================
 log_section "Create Worker ${TEST_WORKER}"
 
-CREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" --no-wait 2>&1)
+CREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" --runtime "${TEST_WORKER_RUNTIME}" --no-wait 2>&1)
 CREATE_EXIT=$?
 if [ "${CREATE_EXIT}" -eq 0 ]; then
     log_pass "agt create worker accepted"
@@ -122,10 +123,16 @@ if _get_higress_consumers_or_fail "pre-delete snapshot"; then
     fi
 fi
 
-if minio_file_exists "agents/${TEST_WORKER}/SOUL.md"; then
-    log_pass "MinIO SOUL.md exists before delete"
+if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}" = "qwenpaw" ]; then
+    wait_worker_runtime_file_contains "${TEST_WORKER}" "SOUL.md" "Session files are runtime-private state" 180 || true
 else
-    log_fail "MinIO SOUL.md missing before delete (cannot test cleanup)"
+    wait_worker_runtime_file_contains "${TEST_WORKER}" "SOUL.md" "${TEST_WORKER}" 180 || true
+fi
+SOUL_BEFORE_DELETE=$(read_worker_runtime_file "${TEST_WORKER}" "SOUL.md")
+if [ -n "${SOUL_BEFORE_DELETE}" ]; then
+    log_pass "SOUL.md exists in Worker runtime before delete"
+else
+    log_fail "SOUL.md missing from Worker runtime before delete (cannot test cleanup)"
 fi
 
 PRE_YAML=$(_minio_worker_yaml)
@@ -219,7 +226,7 @@ fi
 # ============================================================
 log_section "Reuse Name After Delete"
 
-RECREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" --no-wait 2>&1)
+RECREATE_OUTPUT=$(exec_in_agent agt create worker --name "${TEST_WORKER}" --runtime "${TEST_WORKER_RUNTIME}" --no-wait 2>&1)
 RECREATE_EXIT=$?
 if [ "${RECREATE_EXIT}" -eq 0 ]; then
     log_pass "Recreate with same name accepted"

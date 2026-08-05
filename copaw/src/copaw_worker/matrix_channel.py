@@ -1,8 +1,9 @@
 """
 MatrixChannel: CoPaw BaseChannel implementation for Matrix (via matrix-nio).
 
-This file is installed into ~/.copaw/custom_channels/ at worker startup
-so CoPaw's channel registry picks it up automatically.
+This file is installed into the runtime working dir's custom_channels/
+(~/.qwenpaw/custom_channels/ by default) at worker startup so the channel
+registry picks it up automatically.
 """
 from __future__ import annotations
 
@@ -38,6 +39,8 @@ from nio import (
 )
 from nio.responses import WhoamiResponse
 
+from copaw_worker.hooks.message_filter import canonicalize_team_worker_mentions
+
 logger = logging.getLogger(__name__)
 
 _MATRIX_USER_ID_RE = re.compile(
@@ -62,6 +65,7 @@ _TEAM_LEADER_DM_INTERNAL_PREAMBLE_RE = re.compile(
 )
 _TEAM_LEADER_WORKER_ASSIGNMENT_RE = re.compile(
     r"(?i)\b("
+    r"new\s+task(?:\s+\[[^\]\n]+\])?|"
     r"task\s+assigned|"
     r"assigned\s+task|"
     r"you\s+are\s+assigned|"
@@ -222,22 +226,22 @@ def _strip_yaml_string(value: str) -> str:
 
 
 def _runtime_root() -> Path:
-    configured = os.getenv("COPAW_WORKING_DIR")
+    configured = os.getenv("QWENPAW_WORKING_DIR") or os.getenv("COPAW_WORKING_DIR")
     if configured:
         path = Path(configured).expanduser().resolve()
         if path.name == "default" and path.parent.name == "workspaces":
-            copaw_dir = path.parent.parent
-            if copaw_dir.name == ".copaw":
-                return copaw_dir.parent
-        if path.name == ".copaw":
+            rt_dir = path.parent.parent
+            if rt_dir.name in (".qwenpaw", ".copaw"):
+                return rt_dir.parent
+        if path.name in (".qwenpaw", ".copaw"):
             return path.parent
         return path.parent
 
     cwd = Path.cwd().resolve()
     if cwd.name == "default" and cwd.parent.name == "workspaces":
-        copaw_dir = cwd.parent.parent
-        if copaw_dir.name == ".copaw":
-            return copaw_dir.parent
+        rt_dir = cwd.parent.parent
+        if rt_dir.name in (".qwenpaw", ".copaw"):
+            return rt_dir.parent
     return cwd
 
 
@@ -595,7 +599,7 @@ class MatrixChannel(BaseChannel):
     @staticmethod
     def _sync_token_path() -> Optional[Path]:
         """Return the file path for persisting the Matrix sync token."""
-        wd = os.environ.get("COPAW_WORKING_DIR")
+        wd = os.environ.get("QWENPAW_WORKING_DIR") or os.environ.get("COPAW_WORKING_DIR")
         if wd:
             return Path(wd) / "matrix_sync_token"
         return None
@@ -1055,10 +1059,14 @@ class MatrixChannel(BaseChannel):
     def _media_dir(self) -> Path:
         """Return (and create) the local media storage directory."""
         try:
-            from copaw.constant import WORKING_DIR
+            from qwenpaw.constant import WORKING_DIR
             d = WORKING_DIR / "media"
-        except Exception:
-            d = Path.home() / ".copaw" / "media"
+        except ImportError:
+            try:
+                from copaw.constant import WORKING_DIR
+                d = WORKING_DIR / "media"
+            except ImportError:
+                d = Path.home() / ".qwenpaw" / "media"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -1098,10 +1106,10 @@ class MatrixChannel(BaseChannel):
 
     def _e2ee_store_path(self) -> Path:
         """Return the directory for persisting Olm/Megolm crypto state."""
-        wd = os.environ.get("COPAW_WORKING_DIR")
+        wd = os.environ.get("QWENPAW_WORKING_DIR") or os.environ.get("COPAW_WORKING_DIR")
         if wd:
             return Path(wd) / "matrix_crypto_store"
-        return Path.home() / ".copaw" / "matrix_crypto_store"
+        return Path.home() / ".qwenpaw" / "matrix_crypto_store"
 
     async def _download_encrypted_mxc(
         self, mxc_url: str, filename: str, key: dict, hashes: dict, iv: str
@@ -1719,6 +1727,7 @@ class MatrixChannel(BaseChannel):
             return
 
         room_id = to_handle
+        text = canonicalize_team_worker_mentions(text)
 
         if _ends_with_no_reply_control(text):
             logger.info(

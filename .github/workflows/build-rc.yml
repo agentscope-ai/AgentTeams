@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-copaw worker copaw-worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker hermes-worker qwenpaw-worker'
         required: false
         type: string
         default: 'all'
@@ -83,7 +83,7 @@ jobs:
 
       - name: Build and push multi-arch images
         run: |
-          make push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-qwenpaw-worker push-agentteams-controller push-embedded \
+          make push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-qwenpaw-worker push-agentteams-controller push-embedded \
             VERSION=${{ inputs.version }} \
             OPENCLAW_BASE_VERSION=${{ inputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
@@ -95,7 +95,7 @@ jobs:
         env:
           BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/openclaw-base
           MANAGER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager
-          MANAGER_COPAW_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager-copaw
+          MANAGER_QWENPAW_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-manager-qwenpaw
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-worker
           COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-copaw-worker
           HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-hermes-worker
@@ -108,7 +108,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Images:**" >> $GITHUB_STEP_SUMMARY
           echo "- Manager: \`${MANAGER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Manager CoPaw: \`${MANAGER_COPAW_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Manager CoPaw: \`${MANAGER_QWENPAW_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Worker: \`${WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY

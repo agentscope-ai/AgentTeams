@@ -275,6 +275,109 @@ func TestDefaultModelSpec(t *testing.T) {
 	}
 }
 
+func TestMultimodal_BuiltinVisionModel_GetsSupportsFlag(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "d",
+		MatrixServerURL: "http://m:8080",
+		AIGatewayURL:    "http://g:8080",
+	})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "test-mm",
+		ModelName:   "qwen3.6-plus",
+		GatewayKey:  "key",
+		MatrixToken: "tok",
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	json.Unmarshal(data, &config)
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	if mm, ok := defaults["supports_multimodal"]; !ok || mm != true {
+		t.Errorf("qwen3.6-plus missing supports_multimodal: got %v", mm)
+	}
+	if si, ok := defaults["supports_image"]; !ok || si != true {
+		t.Errorf("qwen3.6-plus missing supports_image: got %v", si)
+	}
+}
+
+func TestMultimodal_BuiltinTextOnlyModel_NoFlag(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "d",
+		MatrixServerURL: "http://m:8080",
+		AIGatewayURL:    "http://g:8080",
+	})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "test-txt",
+		ModelName:   "deepseek-chat",
+		GatewayKey:  "key",
+		MatrixToken: "tok",
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	json.Unmarshal(data, &config)
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	if mm, ok := defaults["supports_multimodal"]; ok && mm == true {
+		t.Errorf("deepseek-chat should not have supports_multimodal=true: got %v", mm)
+	}
+	if si, ok := defaults["supports_image"]; ok && si == true {
+		t.Errorf("deepseek-chat should not have supports_image=true: got %v", si)
+	}
+}
+
+func TestMultimodal_CustomModelWithVisionOverride_GetsSupportsFlag(t *testing.T) {
+	trueVal := true
+	g := NewGenerator(Config{
+		MatrixDomain:    "d",
+		MatrixServerURL: "http://m:8080",
+		AIGatewayURL:    "http://g:8080",
+		ModelVision:     &trueVal,
+	})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "test-custom-mm",
+		ModelName:   "qwen3.6-27b-fp8",
+		GatewayKey:  "key",
+		MatrixToken: "tok",
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	json.Unmarshal(data, &config)
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	if mm, ok := defaults["supports_multimodal"]; !ok || mm != true {
+		t.Errorf("custom model with ModelVision=true missing supports_multimodal: got %v", mm)
+	}
+	if si, ok := defaults["supports_image"]; !ok || si != true {
+		t.Errorf("custom model with ModelVision=true missing supports_image: got %v", si)
+	}
+}
+
+func TestMultimodal_CustomModelWithoutOverride_NoFlag(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "d",
+		MatrixServerURL: "http://m:8080",
+		AIGatewayURL:    "http://g:8080",
+	})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:  "test-custom-txt",
+		ModelName:   "qwen3.6-27b-fp8",
+		GatewayKey:  "key",
+		MatrixToken: "tok",
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	json.Unmarshal(data, &config)
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	if mm, ok := defaults["supports_multimodal"]; ok && mm == true {
+		t.Errorf("custom model without ModelVision override should not have supports_multimodal=true: got %v", mm)
+	}
+}
+
 func TestMergeSoulTemplate_NewFile(t *testing.T) {
 	rendered := "# leader - Team Leader\n\nYou are the Team Leader of `my-team`.\n"
 	result := MergeSoulTemplate("", rendered)

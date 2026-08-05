@@ -25,7 +25,7 @@ REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 
 MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/agentteams-manager
-MANAGER_COPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-copaw
+MANAGER_QWENPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-qwenpaw
 WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
 COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/agentteams-copaw-worker
 HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
@@ -36,7 +36,7 @@ CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
 
 MANAGER_TAG        ?= $(MANAGER_IMAGE):$(VERSION)
-MANAGER_COPAW_TAG  ?= $(MANAGER_COPAW_IMAGE):$(VERSION)
+MANAGER_QWENPAW_TAG  ?= $(MANAGER_QWENPAW_IMAGE):$(VERSION)
 WORKER_TAG         ?= $(WORKER_IMAGE):$(VERSION)
 COPAW_WORKER_TAG   ?= $(COPAW_WORKER_IMAGE):$(VERSION)
 HERMES_WORKER_TAG  ?= $(HERMES_WORKER_IMAGE):$(VERSION)
@@ -48,7 +48,7 @@ EMBEDDED_TAG       ?= $(EMBEDDED_IMAGE):$(VERSION)
 
 # Local image names (no registry prefix, used by tests and install script)
 LOCAL_MANAGER        = agentteams/manager:$(VERSION)
-LOCAL_MANAGER_COPAW  = agentteams/manager-copaw:$(VERSION)
+LOCAL_MANAGER_QWENPAW  = agentteams/manager-qwenpaw:$(VERSION)
 LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
 LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
@@ -108,11 +108,11 @@ LINES          ?= 50
 
 # ---------- Phony targets ----------
 
-.PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
+.PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
         build-qwenpaw-worker \
-        tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
+        tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
         push-qwenpaw-worker \
-        push-native push-native-manager push-native-manager-copaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
+        push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
         push-native-qwenpaw-worker \
         buildx-setup \
         test test-quick test-installed test-embedded \
@@ -128,7 +128,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build all images (base image pulled from registry, not rebuilt locally)
+build: build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build all images (base image pulled from registry, not rebuilt locally)
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -159,12 +159,12 @@ build-manager: build-agentteams-controller ## Build Manager image (OpenClaw runt
 		-t $(LOCAL_MANAGER) \
 		.
 
-build-manager-copaw: build-agentteams-controller ## Build Manager CoPaw image (Python runtime)
-	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
+build-manager-qwenpaw: build-agentteams-controller ## Build Manager CoPaw image (Python runtime)
+	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_QWENPAW) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
-		-f manager/Dockerfile.copaw \
-		-t $(LOCAL_MANAGER_COPAW) \
+		-f manager/Dockerfile.qwenpaw \
+		-t $(LOCAL_MANAGER_QWENPAW) \
 		.
 
 build-embedded: build-agentteams-controller ## Build embedded all-in-one controller image (infra + controller, no agent)
@@ -255,7 +255,7 @@ else
 	fi
 endif
 
-push: push-manager push-manager-copaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
+push: push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
 
 push-openclaw-base: buildx-setup ## Build + push multi-arch OpenClaw base image
 	@echo "==> Building + pushing multi-arch OpenClaw base: $(OPENCLAW_BASE_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -366,21 +366,21 @@ else
 		.
 endif
 
-push-manager-copaw: buildx-setup ## Build + push multi-arch Manager CoPaw image
-	@echo "==> Building + pushing multi-arch Manager CoPaw: $(MANAGER_COPAW_TAG) [$(MULTIARCH_PLATFORMS)]"
+push-manager-qwenpaw: buildx-setup ## Build + push multi-arch Manager CoPaw image
+	@echo "==> Building + pushing multi-arch Manager CoPaw: $(MANAGER_QWENPAW_TAG) [$(MULTIARCH_PLATFORMS)]"
 ifeq ($(IS_PODMAN),1)
-	-podman manifest rm $(MANAGER_COPAW_TAG) 2>/dev/null
+	-podman manifest rm $(MANAGER_QWENPAW_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building Manager CoPaw for $(plat)..." && \
 		podman build --platform $(plat) \
 			$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
-			-f manager/Dockerfile.copaw \
-			--manifest $(MANAGER_COPAW_TAG) \
+			-f manager/Dockerfile.qwenpaw \
+			--manifest $(MANAGER_QWENPAW_TAG) \
 			. && ) true
-	podman manifest push --all $(MANAGER_COPAW_TAG) docker://$(MANAGER_COPAW_TAG)
+	podman manifest push --all $(MANAGER_QWENPAW_TAG) docker://$(MANAGER_QWENPAW_TAG)
 	$(if $(PUSH_LATEST), \
-		podman manifest push --all $(MANAGER_COPAW_TAG) docker://$(MANAGER_COPAW_IMAGE):latest && \
+		podman manifest push --all $(MANAGER_QWENPAW_TAG) docker://$(MANAGER_QWENPAW_IMAGE):latest && \
 		echo "  -> Also pushed :latest tag")
 else
 	docker buildx build \
@@ -388,9 +388,9 @@ else
 		--platform $(MULTIARCH_PLATFORMS) \
 		$(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
-		-f manager/Dockerfile.copaw \
-		-t $(MANAGER_COPAW_TAG) \
-		$(if $(PUSH_LATEST),-t $(MANAGER_COPAW_IMAGE):latest) \
+		-f manager/Dockerfile.qwenpaw \
+		-t $(MANAGER_QWENPAW_TAG) \
+		$(if $(PUSH_LATEST),-t $(MANAGER_QWENPAW_IMAGE):latest) \
 		--push \
 		.
 endif
@@ -532,9 +532,9 @@ push-native-manager: build-manager ## Push native-arch Manager only (dev)
 	docker tag $(LOCAL_MANAGER) $(MANAGER_TAG)
 	docker push $(MANAGER_TAG)
 
-push-native-manager-copaw: build-manager-copaw ## Push native-arch Manager CoPaw only (dev)
-	docker tag $(LOCAL_MANAGER_COPAW) $(MANAGER_COPAW_TAG)
-	docker push $(MANAGER_COPAW_TAG)
+push-native-manager-qwenpaw: build-manager-qwenpaw ## Push native-arch Manager CoPaw only (dev)
+	docker tag $(LOCAL_MANAGER_QWENPAW) $(MANAGER_QWENPAW_TAG)
+	docker push $(MANAGER_QWENPAW_TAG)
 
 push-native-worker: build-worker ## Push native-arch Worker only (dev)
 	docker tag $(LOCAL_WORKER) $(WORKER_TAG)
@@ -656,7 +656,7 @@ uninstall: ## Stop and remove Manager + all Worker containers
 			BASE=$$(basename "$$WORKSPACE_DIR"); \
 			RUNTIME=$$(grep '^AGENTTEAMS_MANAGER_RUNTIME=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "openclaw"); \
 			if [ "$$RUNTIME" = "copaw" ]; then \
-				RM_IMAGE="$(LOCAL_MANAGER_COPAW)"; \
+				RM_IMAGE="$(LOCAL_MANAGER_QWENPAW)"; \
 			else \
 				RM_IMAGE="$(LOCAL_MANAGER)"; \
 			fi; \
@@ -673,15 +673,16 @@ uninstall: ## Stop and remove Manager + all Worker containers
 
 install-embedded: ## Install in embedded mode (dual-container: controller + agent)
 ifndef SKIP_BUILD
-	$(MAKE) build-embedded build-manager build-manager-copaw build-worker build-copaw-worker build-hermes-worker
+	$(MAKE) build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-qwenpaw-worker build-hermes-worker
 endif
 	@echo "==> Installing AgentTeams (embedded mode)..."
 	AGENTTEAMS_NON_INTERACTIVE=1 \
 		AGENTTEAMS_INSTALL_EMBEDDED_IMAGE=$(LOCAL_EMBEDDED) \
 		AGENTTEAMS_INSTALL_MANAGER_IMAGE=$(LOCAL_MANAGER) \
-		AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE=$(LOCAL_MANAGER_COPAW) \
+		AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE=$(LOCAL_MANAGER_QWENPAW) \
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
 		AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE=$(LOCAL_COPAW_WORKER) \
+		AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE=$(LOCAL_QWENPAW_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_MATRIX_E2EE=0 \
@@ -909,11 +910,11 @@ help: ## Show this help
 # Variables:
 #   DASHBOARD_CONTEXT   Path to dashboard source tree (default: ../agentteams-dashboard)
 #   DASHBOARD_IMAGE     Override dashboard image (derived from DASHBOARD_VERSION by default)
-#   DASHBOARD_VERSION   Dashboard version tag (default: v1.2.0-beta.1)
+#   DASHBOARD_VERSION   Dashboard version tag (default: v1.2.0-beta.2)
 #   AGENTTEAMS_PORT_DASHBOARD   Dashboard host port (default: 13000)
 
 DASHBOARD_CONTEXT ?= ../agentteams-dashboard
-DASHBOARD_VERSION ?= v1.2.0-beta.1
+DASHBOARD_VERSION ?= v1.2.0-beta.2
 DASHBOARD_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-dashboard:$(DASHBOARD_VERSION)
 AGENTTEAMS_PORT_DASHBOARD ?= 13000
 

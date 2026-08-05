@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,12 +130,28 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 		req.Network = d.config.DefaultNetwork
 	}
 
-	// Inject SA token for worker-to-controller authentication (embedded mode).
+	// Inject or project the SA token for worker-to-controller authentication
+	// (embedded mode). File projection keeps the bearer token out of container
+	// metadata and lets the controller replace it without recreating the worker.
 	if req.AuthToken != "" {
 		if req.Env == nil {
 			req.Env = make(map[string]string)
 		}
-		req.Env["AGENTTEAMS_AUTH_TOKEN"] = req.AuthToken
+		if req.AuthTokenFile != "" {
+			if path.Clean(req.AuthTokenFile) != DefaultAuthTokenFile {
+				return nil, fmt.Errorf("unsupported auth token file path %q", req.AuthTokenFile)
+			}
+			delete(req.Env, "AGENTTEAMS_AUTH_TOKEN")
+			req.Env["AGENTTEAMS_AUTH_TOKEN_FILE"] = req.AuthTokenFile
+			containerDir := path.Dir(path.Clean(req.AuthTokenFile))
+			req.Volumes = append(req.Volumes, VolumeMount{
+				HostPath:      dockerAuthVolumeName(containerName),
+				ContainerPath: containerDir,
+				ReadOnly:      false,
+			})
+		} else {
+			req.Env["AGENTTEAMS_AUTH_TOKEN"] = req.AuthToken
+		}
 	}
 	if req.ControllerURL != "" {
 		req.Env["AGENTTEAMS_CONTROLLER_URL"] = req.ControllerURL
@@ -174,6 +193,12 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 		if err != nil {
 			return nil, err
 		}
+		if req.AuthToken != "" && req.AuthTokenFile != "" {
+			if err := d.writeContainerFile(ctx, containerID, req.AuthTokenFile, req.AuthToken); err != nil {
+				_ = d.Delete(ctx, req.Name)
+				return nil, fmt.Errorf("project auth token: %w", err)
+			}
+		}
 
 		// Start the container
 		startErr := d.startContainer(ctx, containerID)
@@ -209,6 +234,159 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 
 		return nil, fmt.Errorf("start after create: %w", startErr)
 	}
+}
+
+func dockerAuthVolumeName(containerName string) string {
+	return containerName + "-auth"
+}
+
+func (d *DockerBackend) writeContainerFile(ctx context.Context, containerName, filePath, content string) error {
+	cleanPath := path.Clean(filePath)
+	if !path.IsAbs(cleanPath) || cleanPath == "/" || path.Base(cleanPath) == "." {
+		return fmt.Errorf("invalid container file path %q", filePath)
+	}
+
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	data := []byte(content)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: path.Base(cleanPath),
+		Mode: 0400,
+		Size: int64(len(data)),
+	}); err != nil {
+		return fmt.Errorf("write archive header: %w", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		return fmt.Errorf("write archive content: %w", err)
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("close archive: %w", err)
+	}
+
+	u := fmt.Sprintf("http://localhost/containers/%s/archive?path=%s", url.PathEscape(containerName), url.QueryEscape(path.Dir(cleanPath)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, bytes.NewReader(archive.Bytes()))
+	if err != nil {
+		return fmt.Errorf("build archive request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-tar")
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker archive upload: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("docker archive upload failed (status %d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// ProjectAuthToken atomically replaces the token file mounted into a running
+// Docker worker. The temporary file is written through the Docker archive API,
+// then renamed inside the container so readers never observe partial content.
+func (d *DockerBackend) ProjectAuthToken(ctx context.Context, name, token string) error {
+	if token == "" {
+		return fmt.Errorf("project auth token for %s: empty token", name)
+	}
+	containerName := d.containerPrefix + name
+	nextPath := DefaultAuthTokenFile + ".next"
+	if err := d.writeContainerFile(ctx, containerName, nextPath, token); err != nil {
+		return fmt.Errorf("write next auth token: %w", err)
+	}
+	command := []string{
+		"/bin/sh",
+		"-c",
+		"mv -f " + nextPath + " " + DefaultAuthTokenFile,
+	}
+	if err := d.execContainer(ctx, containerName, command); err != nil {
+		return fmt.Errorf("activate next auth token: %w", err)
+	}
+	return nil
+}
+
+func (d *DockerBackend) execContainer(ctx context.Context, containerName string, command []string) error {
+	payload, err := json.Marshal(struct {
+		AttachStdout bool     `json:"AttachStdout"`
+		AttachStderr bool     `json:"AttachStderr"`
+		Cmd          []string `json:"Cmd"`
+	}{
+		AttachStdout: true,
+		AttachStderr: true,
+		Cmd:          command,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal exec payload: %w", err)
+	}
+	u := fmt.Sprintf("http://localhost/containers/%s/exec", url.PathEscape(containerName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build exec create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker exec create: %w", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("docker exec create failed (status %d): %s", resp.StatusCode, string(body))
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil {
+		return fmt.Errorf("parse docker exec response: %w", err)
+	}
+	if created.ID == "" {
+		return fmt.Errorf("parse docker exec response: missing Id")
+	}
+
+	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://localhost/exec/%s/start", url.PathEscape(created.ID)),
+		strings.NewReader(`{"Detach":false,"Tty":false}`))
+	if err != nil {
+		return fmt.Errorf("build exec start request: %w", err)
+	}
+	startReq.Header.Set("Content-Type", "application/json")
+	startResp, err := d.client.Do(startReq)
+	if err != nil {
+		return fmt.Errorf("docker exec start: %w", err)
+	}
+	startBody, _ := io.ReadAll(startResp.Body)
+	startResp.Body.Close()
+	if startResp.StatusCode != http.StatusOK && startResp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("docker exec start failed (status %d): %s", startResp.StatusCode, string(startBody))
+	}
+
+	inspectReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("http://localhost/exec/%s/json", url.PathEscape(created.ID)), nil)
+	if err != nil {
+		return fmt.Errorf("build exec inspect request: %w", err)
+	}
+	inspectResp, err := d.client.Do(inspectReq)
+	if err != nil {
+		return fmt.Errorf("docker exec inspect: %w", err)
+	}
+	inspectBody, _ := io.ReadAll(inspectResp.Body)
+	inspectResp.Body.Close()
+	if inspectResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("docker exec inspect failed (status %d): %s", inspectResp.StatusCode, string(inspectBody))
+	}
+	var inspected struct {
+		Running  bool `json:"Running"`
+		ExitCode int  `json:"ExitCode"`
+	}
+	if err := json.Unmarshal(inspectBody, &inspected); err != nil {
+		return fmt.Errorf("parse docker exec inspect: %w", err)
+	}
+	if inspected.Running {
+		return fmt.Errorf("docker exec still running")
+	}
+	if inspected.ExitCode != 0 {
+		return fmt.Errorf("docker exec exited with code %d", inspected.ExitCode)
+	}
+	return nil
 }
 
 // doCreate sends the container create request to Docker, handling conflict by
@@ -269,16 +447,31 @@ func (d *DockerBackend) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("docker delete: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil // already gone
-	}
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		return fmt.Errorf("docker delete failed (status %d): %s", resp.StatusCode, string(body))
 	}
-	return nil
+	resp.Body.Close()
+	return d.deleteAuthVolume(ctx, containerName)
+}
+
+func (d *DockerBackend) deleteAuthVolume(ctx context.Context, containerName string) error {
+	u := fmt.Sprintf("http://localhost/volumes/%s", url.PathEscape(dockerAuthVolumeName(containerName)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return fmt.Errorf("build auth volume delete request: %w", err)
+	}
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker auth volume delete: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("docker auth volume delete failed (status %d): %s", resp.StatusCode, string(body))
 }
 
 func (d *DockerBackend) Start(ctx context.Context, name string) error {

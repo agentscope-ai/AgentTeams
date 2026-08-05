@@ -24,11 +24,11 @@ spec:
                   description: Name of the AI gateway Model API to use as the LLM provider.
                 runtime:
                   type: string
-                  enum: [openclaw, copaw]
+                  enum: [openclaw, copaw, qwenpaw]
                   description: |
                     Manager runtime. When omitted the controller falls back to
                     AGENTTEAMS_MANAGER_RUNTIME (set at install time), and finally
-                    to "openclaw" if neither is set.
+                    to "qwenpaw" if neither is set.
                 image:
                   type: string
                   description: Custom Docker image for the Manager Agent

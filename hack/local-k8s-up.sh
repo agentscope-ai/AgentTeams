@@ -67,7 +67,7 @@ fi
 # ── Step 2: Build & load local images ──────────────────────────────────────
 
 MANAGER_IMAGE="agentteams/manager:local"
-COPAW_MANAGER_IMAGE="agentteams/manager-copaw:local"
+QWENPAW_MANAGER_IMAGE="agentteams/manager-qwenpaw:local"
 CONTROLLER_IMAGE="agentteams/agentteams-controller:local"
 WORKER_IMAGE="agentteams/worker-agent:local"
 COPAW_WORKER_IMAGE="agentteams/copaw-worker:local"
@@ -97,11 +97,11 @@ if [ "$SKIP_BUILD" = "0" ]; then
             -f "${PROJECT_ROOT}/manager/Dockerfile" "${PROJECT_ROOT}"
     fi
 
-    # CoPaw Manager (lightweight Python image with copaw_worker for bridge/sync)
-    log "Building CoPaw manager image..."
-    docker build -t "$COPAW_MANAGER_IMAGE" \
+    # QwenPaw Manager (lightweight Python image with copaw_worker for bridge/sync)
+    log "Building QwenPaw manager image..."
+    docker build -t "$QWENPAW_MANAGER_IMAGE" \
         --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-        -f "${PROJECT_ROOT}/manager/Dockerfile.copaw" "${PROJECT_ROOT}"
+        -f "${PROJECT_ROOT}/manager/Dockerfile.qwenpaw" "${PROJECT_ROOT}"
 
     # Worker images (openclaw + copaw)
     log "Building worker image (openclaw)..."
@@ -129,7 +129,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
     log "Loading images into kind cluster..."
     kind load docker-image "$MANAGER_IMAGE" --name "$CLUSTER_NAME"
-    kind load docker-image "$COPAW_MANAGER_IMAGE" --name "$CLUSTER_NAME"
+    kind load docker-image "$QWENPAW_MANAGER_IMAGE" --name "$CLUSTER_NAME"
     kind load docker-image "$CONTROLLER_IMAGE" --name "$CLUSTER_NAME"
     kind load docker-image "$WORKER_IMAGE" --name "$CLUSTER_NAME"
     kind load docker-image "$COPAW_WORKER_IMAGE" --name "$CLUSTER_NAME"
@@ -161,7 +161,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
             ctr --namespace=k8s.io images import --snapshotter=overlayfs -
     done
 
-    HELM_IMAGE_OVERRIDES="--set manager.image.repository=agentteams/manager-copaw --set manager.image.tag=local --set manager.image.pullPolicy=Never"
+    HELM_IMAGE_OVERRIDES="--set manager.image.repository=agentteams/manager-qwenpaw --set manager.image.tag=local --set manager.image.pullPolicy=Never"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set controller.image.repository=agentteams/agentteams-controller --set controller.image.tag=local --set controller.image.pullPolicy=Never"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openclaw.repository=agentteams/worker-agent --set worker.defaultImage.openclaw.tag=local"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.copaw.repository=agentteams/copaw-worker --set worker.defaultImage.copaw.tag=local"

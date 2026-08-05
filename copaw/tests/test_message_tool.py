@@ -24,6 +24,13 @@ def _write_team_leader_runtime(tmp_path):
     working_dir = tmp_path / "leader" / ".copaw"
     runtime_dir = tmp_path / "leader" / "runtime"
     runtime_dir.mkdir(parents=True)
+    (tmp_path / "leader" / "AGENTS.md").write_text(
+        "- **Team Workers**:\n"
+        "  - @dag-team-1-dev:hs.local — Room: !dev:hs.local\n"
+        "  - @dag-team-1-qa:hs.local — Room: !qa:hs.local\n"
+        "- Team coordination rules follow.\n",
+        encoding="utf-8",
+    )
     (runtime_dir / "runtime.yaml").write_text(
         "kind: MemberRuntimeConfig\n"
         "member:\n"
@@ -246,6 +253,48 @@ async def test_message_tool_routes_localpart_assignment_to_team_room(
     assert payload["roomId"] == "!team-room:hs.local"
 
 
+@pytest.mark.asyncio
+async def test_message_tool_routes_team_assignment_from_any_room_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    response = await message(
+        action="send",
+        channel="matrix",
+        target="room:!worker-room:hs.local",
+        message="@dag-team-1-dev:hs.local New task assigned: design the API.",
+        dryRun=True,
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert payload["roomId"] == "!team-room:hs.local"
+
+
+@pytest.mark.asyncio
+async def test_message_tool_expands_worker_alias_before_routing(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(_write_team_leader_runtime(tmp_path)))
+
+    response = await message(
+        action="send",
+        channel="matrix",
+        target="room:!leader-dm:hs.local",
+        message="@dev:hs.local New task assigned: design the API.",
+        dryRun=True,
+    )
+    payload = _response_json(response)
+
+    assert payload["ok"] is True
+    assert payload["roomId"] == "!team-room:hs.local"
+    assert payload["mentions"] == ["@dag-team-1-dev:hs.local"]
+    assert payload["content"]["body"].startswith("@dag-team-1-dev:hs.local ")
+
+
 def test_validate_matrix_message_policy_blocks_roster_preamble_with_mxids(
     tmp_path,
     monkeypatch,
@@ -461,12 +510,16 @@ def test_install_tool_hooks_registers_message(monkeypatch):
     assert ("taskflow", "override") in names
 
 
-def test_run_copaw_app_installs_hooks_before_start(monkeypatch):
+def test_run_copaw_app_starts_qwenpaw(monkeypatch):
+    """run_copaw_app.main() should launch qwenpaw without tool hooks.
+
+    The copaw hooks (install_tool_hooks) were removed because
+    QwenPaw 2.0's QwenPawAgent does not have _create_toolkit.
+    Tools are now registered via the agentteams-manager-tools plugin.
+    """
     import copaw_worker.run_copaw_app as app
 
     calls = []
-
-    monkeypatch.setattr(app, "install_tool_hooks", lambda: calls.append("hooks"))
 
     def fake_run_module(name, *, run_name, alter_sys):
         calls.append((name, run_name, alter_sys))
@@ -475,4 +528,4 @@ def test_run_copaw_app_installs_hooks_before_start(monkeypatch):
 
     app.main()
 
-    assert calls == ["hooks", ("copaw", "__main__", True)]
+    assert calls == [("qwenpaw", "__main__", True)]

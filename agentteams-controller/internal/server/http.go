@@ -31,6 +31,8 @@ type ServerDeps struct {
 	SocketPath     string               // Docker proxy (embedded only)
 	MatrixConfig   matrix.Config        // for AppService rotation endpoint
 	Provisioner    *service.Provisioner // for Matrix token refresh
+
+	DefaultWorkerRuntime string // install-time default for Worker create requests
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -63,6 +65,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Declarative resource CRUD ---
 	rh := NewResourceHandler(deps.Client, deps.Namespace, deps.Backend, deps.ControllerName)
+	rh.defaultWorkerRuntime = deps.DefaultWorkerRuntime
 	nameFn := authpkg.NameFromPath
 
 	// Workers

@@ -154,6 +154,38 @@ def test_worker_channel_reroutes_team_assignment_with_localpart_mention(
     assert ch._client.sent[0][0] == "!team-room:hs.local"
 
 
+def test_worker_channel_reroutes_taskflow_assignment_with_worker_alias(
+    tmp_path,
+    monkeypatch,
+):
+    working_dir = _write_team_leader_runtime(tmp_path)
+    (working_dir.parent / "AGENTS.md").write_text(
+        "- **Team Workers**:\n"
+        "  - @dag-team-1-dev:hs.local — Room: !dev:hs.local\n"
+        "  - @dag-team-1-qa:hs.local — Room: !qa:hs.local\n"
+        "- Team coordination rules follow.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+    ch = _make_channel()
+
+    asyncio.run(
+        ch.send(
+            "!leader-dm:hs.local",
+            "@dev:hs.local New task [api-design]: "
+            "Read shared/tasks/api-design/spec.md and start the task.",
+        ),
+    )
+
+    assert ch._client.sent[0][0] == "!team-room:hs.local"
+    assert ch._client.sent[0][2]["m.mentions"] == {
+        "user_ids": ["@dag-team-1-dev:hs.local"],
+    }
+    assert ch._client.sent[0][2]["body"].startswith(
+        "@dag-team-1-dev:hs.local New task [api-design]",
+    )
+
+
 def test_worker_channel_suppresses_no_reply(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "COPAW_WORKING_DIR",

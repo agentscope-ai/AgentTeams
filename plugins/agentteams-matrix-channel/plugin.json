@@ -1,0 +1,17 @@
+{
+  "id": "agentteams-matrix-channel",
+  "name": "AgentTeams Matrix Channel",
+  "version": "0.1.0",
+  "type": "channel",
+  "description": "AgentTeams-owned Matrix transport for managed workers.",
+  "author": "AgentTeams",
+  "entry": {
+    "backend": "plugin.py"
+  },
+  "dependencies": [],
+  "min_version": "2.0.1",
+  "qwenpaw_version": {
+    "min": "2.0.1",
+    "max": "2.1.0"
+  }
+}

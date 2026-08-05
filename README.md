@@ -27,9 +27,11 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 - 🔐 **Higress AI Gateway**: Centralizes traffic management and mitigates credential-related risks, alleviating user concerns about security vulnerabilities in the native Lobster framework.
 
 - ☎️ **Element IM Client + Tuwunel IM Server (both Matrix protocol-based)**: Eliminating DingTalk/Lark integration overhead and enterprise approval workflows. Enables rapid user onboarding to experience the "delight" of model services within an IM environment, while maintaining compatibility with native OpenClaw IM integration.
+- 🧬 **Integrate** [AgentLoop](https://www.aliyun.com/product/agentloop?spm=at.readme.0.0.0) ：Provides capabilities such as full-stack Agent observability and auditing, Agent evaluation and experimentation, and Agent asset management and continuous optimization.
 
 ## News
 
+- **2026-07-30**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0 (stable): establishes AgentTeams naming and the final Team/Worker resource contracts end to end; adds the optional AgentTeams Dashboard; and improves Worker storage sync, Team routing and lifecycle convergence, installer support for deploying v1.1.2 with its legacy environment and storage contract (earlier releases still require the matching legacy installer), Dashboard reliability, and tooling and diagnostic safety.
 - **2026-07-17**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0-beta.1) — AgentTeams v1.2.0-beta.1 (prerelease): completes the public rename from the retired predecessor across images, Kubernetes APIs, Helm, Matrix, storage, and runtime contracts; adds the plugin platform, TeamHarness and WorkerFlow integrations, Matrix AppService and Human SSO, model-provider routing and LLM preflight, plus richer controller observability. Beta installation requires explicit opt-in, while the stable default remains v1.1.2.
 - **2026-05-27**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2: QwenPaw-first installer with keep-all upgrade flow, Team human coordinators and refreshed Team Leader coordination tools, Nacos remote skills with `sts-agentteams` / `ai-registry` STS scope, Worker CR-name decoupled from runtime name, controller reconcile metrics and graceful shutdown.
 - **2026-05-07**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1: declarative MCP on Worker/Manager/Team CRDs (breaking) and on Team Leader, custom `spec.env` for CRs, Token Plan + Qwen Cloud international + `qwen3.6-plus`, namespace-scoped controller RBAC, optional `SOUL.md` in Worker packages.
@@ -206,7 +208,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-The image for each component is automatically selected based on the runtime (`agentteams-manager` / `agentteams-manager-copaw` for Manager; `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` for Workers).
+The image for each component is automatically selected based on the runtime (`agentteams-manager` / `agentteams-manager-qwenpaw` for Manager; `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` for Workers).
 
 </details>
 

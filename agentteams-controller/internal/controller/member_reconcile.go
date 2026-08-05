@@ -63,6 +63,7 @@ var (
 	workerDepsAgentRoleBindingGVR   = schema.GroupVersionResource{Group: "agentidentity.alibabacloud.com", Version: "v1alpha1", Resource: "agentrolebindings"}
 
 	sandboxSetTokenProjections sync.Map
+	dockerTokenProjections     sync.Map
 )
 
 type sandboxSetTokenProjectionState struct {
@@ -80,6 +81,7 @@ func (r MemberRole) String() string { return string(r) }
 type MemberContext struct {
 	Name        string // Kubernetes resource identity (CR/Pod/SA key)
 	RuntimeName string // business/runtime identity (Matrix/OSS/room alias key)
+	TeamName    string // effective Team identity used for scoped storage access
 	Namespace   string
 	Role        MemberRole
 	Spec        v1beta1.WorkerSpec
@@ -286,7 +288,7 @@ func ValidateMemberDeployment(m MemberContext) error {
 // RoomID, and ProvResult into state.
 func ReconcileMemberInfra(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState) (reconcile.Result, error) {
 	if m.ExistingMatrixUserID != "" {
-		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials: %w", err)
 		}
@@ -528,6 +530,16 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	switch result.Status {
 	case backend.StatusRunning, backend.StatusStarting, backend.StatusReady:
 		state.ContainerState = string(result.Status)
+		if wb.Name() == "docker" {
+			requeueAfter, tokenMessage, err := refreshDockerWorkerToken(ctx, d, m, wb)
+			state.RequeueAfter = minPositiveDuration(state.RequeueAfter, requeueAfter)
+			if tokenMessage != "" {
+				state.Message = tokenMessage
+			}
+			if err != nil {
+				return reconcile.Result{RequeueAfter: reconcileRetryDelay}, err
+			}
+		}
 		if wb.Name() == "sandbox" && memberUsesSandboxClaim(m) {
 			requeueAfter, tokenMessage, err := refreshSandboxSetWorkerDeps(ctx, d, m, state.ProvResult)
 			state.RequeueAfter = minPositiveDuration(state.RequeueAfter, requeueAfter)
@@ -568,6 +580,14 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 		if wb.Name() == "docker" {
 			if err := wb.Start(ctx, m.Name); err != nil {
 				return reconcile.Result{}, fmt.Errorf("start container: %w", err)
+			}
+			requeueAfter, tokenMessage, err := refreshDockerWorkerToken(ctx, d, m, wb)
+			state.RequeueAfter = minPositiveDuration(state.RequeueAfter, requeueAfter)
+			if tokenMessage != "" {
+				state.Message = tokenMessage
+			}
+			if err != nil {
+				return reconcile.Result{RequeueAfter: reconcileRetryDelay}, err
 			}
 			return reconcile.Result{}, nil
 		}
@@ -689,7 +709,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 	prov := state.ProvResult
 	if prov == nil || prov.MatrixToken == "" {
-		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, "")
+		refreshResult, err := d.Provisioner.RefreshWorkerCredentials(ctx, m.Name, m.RuntimeName, m.TeamName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("refresh credentials for container: %w", err)
 		}
@@ -746,14 +766,30 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		DeployMode:  m.DeployMode,
 		WorkersDeps: workerDeps,
 	}
-	if wb.Name() != "k8s" && wb.Name() != "sandbox" {
+	if wb.Name() == "docker" {
+		token, requeueAfter, err := projectInitialDockerWorkerToken(ctx, d, m)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		state.RequeueAfter = minPositiveDuration(state.RequeueAfter, requeueAfter)
+		createReq.AuthToken = token
+		createReq.AuthTokenFile = backend.DefaultAuthTokenFile
+	} else if wb.Name() != "k8s" && wb.Name() != "sandbox" {
 		token, _, err := d.Provisioner.RequestSAToken(ctx, m.Name)
 		if err != nil {
 			logger.Error(err, "SA token request failed (non-fatal, worker auth will fail)")
 		}
 		createReq.AuthToken = token
 
-		if err := waitForScopedWorkerConfig(ctx, m.Name, workerEnv); err != nil {
+		configOwner := m.Name
+		configKey := "agents/" + configOwner + "/openclaw.json"
+		if backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime) == backend.RuntimeQwenPaw {
+			if m.RuntimeName != "" {
+				configOwner = m.RuntimeName
+			}
+			configKey = "agents/" + configOwner + "/runtime/runtime.yaml"
+		}
+		if err := waitForScopedWorkerConfig(ctx, m.Name, configKey, workerEnv); err != nil {
 			return reconcile.Result{}, fmt.Errorf("worker scoped storage config is not readable: %w", err)
 		}
 	}
@@ -767,7 +803,7 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	return reconcile.Result{}, nil
 }
 
-func waitForScopedWorkerConfig(ctx context.Context, workerName string, workerEnv map[string]string) error {
+func waitForScopedWorkerConfig(ctx context.Context, workerName, key string, workerEnv map[string]string) error {
 	accessKey := strings.TrimSpace(workerEnv["AGENTTEAMS_FS_ACCESS_KEY"])
 	secretKey := strings.TrimSpace(workerEnv["AGENTTEAMS_FS_SECRET_KEY"])
 	if accessKey == "" || secretKey == "" {
@@ -793,7 +829,6 @@ func waitForScopedWorkerConfig(ctx context.Context, workerName string, workerEnv
 		StoragePrefix: storagePrefix,
 	})
 
-	key := "agents/" + workerName + "/openclaw.json"
 	var lastErr error
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
@@ -1270,6 +1305,77 @@ func tokenRefreshJitter(key string) time.Duration {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
 	return time.Duration(h.Sum32()%uint32(sandboxSetTokenRefreshJitterMax/time.Second)) * time.Second
+}
+
+func projectInitialDockerWorkerToken(ctx context.Context, d MemberDeps, m MemberContext) (string, time.Duration, error) {
+	projection, state, err := issueDockerWorkerToken(ctx, d, m)
+	if err != nil {
+		return "", 0, err
+	}
+	dockerTokenProjections.Store(sandboxSetTokenProjectionKey(m), state)
+	return projection.Token, time.Until(state.NextRefresh), nil
+}
+
+func refreshDockerWorkerToken(ctx context.Context, d MemberDeps, m MemberContext, wb backend.WorkerBackend) (time.Duration, string, error) {
+	projector, ok := wb.(backend.AuthTokenProjector)
+	if !ok {
+		return 0, "", fmt.Errorf("docker backend does not support auth token projection")
+	}
+	key := sandboxSetTokenProjectionKey(m)
+	now := time.Now()
+	if cached, ok := dockerTokenProjections.Load(key); ok {
+		state := cached.(sandboxSetTokenProjectionState)
+		if !state.NextRefresh.IsZero() && now.Before(state.NextRefresh) {
+			return time.Until(state.NextRefresh), "", nil
+		}
+	}
+
+	projection, nextState, err := issueDockerWorkerToken(ctx, d, m)
+	if err == nil {
+		err = projector.ProjectAuthToken(ctx, m.Name, projection.Token)
+	}
+	if err != nil {
+		if cached, ok := dockerTokenProjections.Load(key); ok {
+			state := cached.(sandboxSetTokenProjectionState)
+			message := fmt.Sprintf("Degraded: Docker worker token refresh failed; existing token is valid until %s and will retry in %s", state.Expiration.Format(time.RFC3339), sandboxSetTokenRetryAfter)
+			log.FromContext(ctx).Error(err, "Docker worker token refresh failed; keeping existing projected token",
+				"name", m.Name, "expiration", state.Expiration)
+			return sandboxSetTokenRetryAfter, message, nil
+		}
+		message := fmt.Sprintf("Degraded: Docker worker token refresh failed and token expiration is unknown; retrying in %s", sandboxSetTokenRetryAfter)
+		log.FromContext(ctx).Error(err, "Docker worker token refresh failed; existing projected token expiration is unknown", "name", m.Name)
+		return sandboxSetTokenRetryAfter, message, nil
+	}
+	dockerTokenProjections.Store(key, nextState)
+	return time.Until(nextState.NextRefresh), "", nil
+}
+
+func issueDockerWorkerToken(ctx context.Context, d MemberDeps, m MemberContext) (*service.SATokenProjection, sandboxSetTokenProjectionState, error) {
+	if d.Provisioner == nil {
+		return nil, sandboxSetTokenProjectionState{}, fmt.Errorf("Docker token projector requires worker provisioner")
+	}
+	expirationSeconds := backend.NormalizeAuthTokenExpirationSeconds(d.AuthTokenExpirationSeconds)
+	projection, err := d.Provisioner.ProjectSAToken(ctx, m.Name, expirationSeconds)
+	if err != nil {
+		return nil, sandboxSetTokenProjectionState{}, fmt.Errorf("request Docker worker token for %s: %w", m.Name, err)
+	}
+	if projection == nil || projection.Token == "" {
+		return nil, sandboxSetTokenProjectionState{}, fmt.Errorf("request Docker worker token for %s: empty token", m.Name)
+	}
+	now := time.Now()
+	issuedAt := projection.IssuedAt
+	if issuedAt.IsZero() {
+		issuedAt = now
+	}
+	expiresAt := projection.ExpirationTimestamp
+	if expiresAt.IsZero() {
+		expiresAt = issuedAt.Add(time.Duration(projection.ExpirationSeconds) * time.Second)
+	}
+	if !expiresAt.After(now) {
+		return nil, sandboxSetTokenProjectionState{}, fmt.Errorf("request Docker worker token for %s: invalid expiration %s", m.Name, expiresAt.Format(time.RFC3339))
+	}
+	nextRefresh := sandboxSetTokenNextRefresh(m, issuedAt, expiresAt)
+	return projection, sandboxSetTokenProjectionState{NextRefresh: nextRefresh, Expiration: expiresAt}, nil
 }
 
 func ensureWorkerDepsMountResources(ctx context.Context, d MemberDeps, m MemberContext, volume v1beta1.WorkerVolumeSpec, builtIn bool) error {
@@ -1839,6 +1945,7 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 	logger := log.FromContext(ctx)
 	logger.Info("deleting member", "name", m.Name, "role", m.Role)
 	sandboxSetTokenProjections.Delete(sandboxSetTokenProjectionKey(m))
+	dockerTokenProjections.Delete(sandboxSetTokenProjectionKey(m))
 
 	if err := d.Provisioner.LeaveAllWorkerRooms(ctx, m.RuntimeName); err != nil {
 		logger.Error(err, "member leave-all-rooms failed (non-fatal)", "name", m.Name, "runtimeName", m.RuntimeName)

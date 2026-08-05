@@ -67,8 +67,8 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	if policy.Version != "2012-10-17" {
 		t.Errorf("Version = %q", policy.Version)
 	}
-	if len(policy.Statement) != 3 {
-		t.Fatalf("expected 3 statements, got %d", len(policy.Statement))
+	if len(policy.Statement) != 4 {
+		t.Fatalf("expected 4 statements, got %d", len(policy.Statement))
 	}
 
 	locationStmt := policy.Statement[0]
@@ -137,6 +137,9 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	if !hasTeamDir {
 		t.Errorf("expected team directory prefix in list conditions: %v", prefixes)
 	}
+	if !stringSliceContains(prefixes, "agentteams-config/packages/*") {
+		t.Errorf("expected AgentSpec package prefix in list conditions: %v", prefixes)
+	}
 
 	// Verify team resource in RW statement
 	rwStmt := policy.Statement[2]
@@ -190,6 +193,18 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	}
 	if !hasTeamDirResource {
 		t.Errorf("expected team directory resource in RW statement: %v", rwStmt.Resource)
+	}
+	packageResource := "arn:aws:s3:::agentteams-storage/agentteams-config/packages/*"
+	if stringSliceContains(rwStmt.Resource, packageResource) {
+		t.Errorf("AgentSpec packages must not be writable: %v", rwStmt.Resource)
+	}
+
+	readStmt := policy.Statement[3]
+	if len(readStmt.Action) != 1 || readStmt.Action[0] != "s3:GetObject" {
+		t.Errorf("AgentSpec package statement actions = %v, want GetObject only", readStmt.Action)
+	}
+	if !stringSliceContains(readStmt.Resource, packageResource) {
+		t.Errorf("expected read-only AgentSpec package resource: %v", readStmt.Resource)
 	}
 }
 
@@ -259,14 +274,14 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 	}
 }
 
-func TestMinIOAdminClient_EnsurePolicyDetachesBeforeReplace(t *testing.T) {
+func TestMinIOAdminClient_EnsurePolicyOverwritesWithoutAccessGap(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args")
 	mcPath := filepath.Join(dir, "mc")
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$MC_ARGS_FILE"
 case "$*" in
-  "admin policy detach "*|"admin policy remove "*) exit 1 ;;
+  "admin policy attach "*) echo "Policy already attached to user" >&2; exit 1 ;;
 esac
 exit 0
 `
@@ -288,12 +303,10 @@ exit 0
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("mc calls = %v, want detach/remove/create/attach", lines)
+	if len(lines) != 2 {
+		t.Fatalf("mc calls = %v, want create/attach", lines)
 	}
 	wantPrefixes := []string{
-		"admin policy detach agentteams worker-worker-1 --user worker-1",
-		"admin policy remove agentteams worker-worker-1",
 		"admin policy create agentteams worker-worker-1 ",
 		"admin policy attach agentteams worker-worker-1 --user worker-1",
 	}

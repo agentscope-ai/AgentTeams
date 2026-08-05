@@ -29,6 +29,7 @@
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_WORKER_IMAGE        Override worker image  (e.g., local build)
 #   AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE  Override copaw worker image (e.g., local build)
+#   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override qwenpaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
 #   AGENTTEAMS_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
 #   AGENTTEAMS_PORT_CONSOLE       Host port for Higress console (default: 18001)
@@ -398,7 +399,7 @@ $script:Messages = @{
     # --- Default worker runtime ---
     "worker_runtime.title" = @{ zh = "--- 默认 Worker 运行时 ---"; en = "--- Default Worker Runtime ---" }
     "worker_runtime.openclaw" = @{ zh = "OpenClaw"; en = "OpenClaw" }
-    "worker_runtime.copaw" = @{ zh = "QwenPaw"; en = "QwenPaw" }
+    "worker_runtime.copaw" = @{ zh = "CoPaw"; en = "CoPaw" }
     "worker_runtime.hermes" = @{ zh = "Hermes"; en = "Hermes" }
     "worker_runtime.choice" = @{ zh = "请选择 [1/2/3]"; en = "Enter choice [1/2/3]" }
     "worker_runtime.selected" = @{ zh = "默认 Worker 运行时: {0}"; en = "Default Worker runtime: {0}" }
@@ -407,7 +408,7 @@ $script:Messages = @{
     # --- Manager runtime ---
     "manager_runtime.title" = @{ zh = "--- Manager 运行时 ---"; en = "--- Manager Runtime ---" }
     "manager_runtime.openclaw" = @{ zh = "OpenClaw"; en = "OpenClaw" }
-    "manager_runtime.copaw" = @{ zh = "QwenPaw"; en = "QwenPaw" }
+    "manager_runtime.copaw" = @{ zh = "CoPaw"; en = "CoPaw" }
     "manager_runtime.choice" = @{ zh = "请选择 [1/2]"; en = "Enter choice [1/2]" }
     "manager_runtime.selected" = @{ zh = "Manager 运行时: {0}"; en = "Manager runtime: {0}" }
     "manager_runtime.title_short" = @{ zh = "Manager 运行时"; en = "Manager Runtime" }
@@ -560,7 +561,7 @@ $script:Messages = @{
     "success.higress_console" = @{ zh = "  Higress 控制台: http://localhost:{0}（用户名: {1} / 密码: {2}）"; en = "  Higress Console: http://localhost:{0} (Username: {1} / Password: {2})" }
     "success.manager_console" = @{ zh = "  Manager 控制台（本地）: http://localhost:{0}（无需登录）"; en = "  Manager Console (local): http://localhost:{0} (no login required)" }
     "success.manager_console_gateway" = @{ zh = "  Manager 控制台（网关）: http://console-local.agentteams.io（用户名: {0} / 密码: {1}）"; en = "  Manager Console (gateway): http://console-local.agentteams.io (Username: {0} / Password: {1})" }
-    "success.copaw_console" = @{ zh = "  QwenPaw 控制台（本地）: http://localhost:{0}（无需登录）"; en = "  QwenPaw Console (local): http://localhost:{0} (no login required)" }
+    "success.copaw_console" = @{ zh = "  CoPaw 控制台（本地）: http://localhost:{0}（无需登录）"; en = "  CoPaw Console (local): http://localhost:{0} (no login required)" }
     "success.switch_llm.title" = @{ zh = "--- 切换 LLM 提供商 ---"; en = "--- Switch LLM Providers ---" }
     "success.switch_llm.hint" = @{ zh = "  您可以通过 Higress 控制台切换到其他 LLM 提供商（OpenAI、Anthropic 等）。"; en = "  You can switch to other LLM providers (OpenAI, Anthropic, etc.) via Higress Console." }
     "success.switch_llm.docs" = @{ zh = "  详细说明请参阅:"; en = "  For detailed instructions, see:" }
@@ -1059,6 +1060,7 @@ AGENTTEAMS_CMS_METRICS_ENABLED=$(if ($env:AGENTTEAMS_CMS_METRICS_ENABLED) { $env
 # Worker images (for direct container creation)
 AGENTTEAMS_WORKER_IMAGE=$($Config.WORKER_IMAGE)
 AGENTTEAMS_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
+AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($Config.QWENPAW_WORKER_IMAGE)
 AGENTTEAMS_HERMES_WORKER_IMAGE=$($Config.HERMES_WORKER_IMAGE)
 
 # Manager runtime (openclaw | copaw)
@@ -2480,6 +2482,12 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-copaw-worker:$($script:AGENTTEAMS_VERSION)"
     }
 
+    $script:QWENPAW_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE
+    } else {
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-qwenpaw-worker:$($script:AGENTTEAMS_VERSION)"
+    }
+
     $script:HERMES_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE
     } else {
@@ -2666,6 +2674,7 @@ function Install-Manager {
     $config.REGISTRY = $script:AGENTTEAMS_REGISTRY
     $config.WORKER_IMAGE = $script:WORKER_IMAGE
     $config.COPAW_WORKER_IMAGE = $script:COPAW_WORKER_IMAGE
+    $config.QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE
     $config.HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE
     $config.MANAGER_COPAW_IMAGE = $script:MANAGER_COPAW_IMAGE
 
@@ -2742,6 +2751,7 @@ function Install-Manager {
                     --security-opt label=disable `
                     -e "AGENTTEAMS_WORKER_IMAGE=$($script:WORKER_IMAGE)" `
                     -e "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)" `
+                    -e "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($script:config.DEFAULT_WORKER_RUNTIME)" `
                     $(if ($config.PROXY_ALLOWED_REGISTRIES) { @("-e", "AGENTTEAMS_PROXY_ALLOWED_REGISTRIES=$($config.PROXY_ALLOWED_REGISTRIES)") }) `
@@ -2839,7 +2849,14 @@ function Install-Manager {
     }
 
     # Pull all worker runtime images (workers may use any runtime regardless of the default)
-    foreach ($workerImg in @($script:WORKER_IMAGE, $script:COPAW_WORKER_IMAGE, $script:HERMES_WORKER_IMAGE)) {
+    $workerImages = @(
+        $script:WORKER_IMAGE
+        $script:COPAW_WORKER_IMAGE
+        # Temporarily disabled until the QwenPaw worker image is published.
+        # $script:QWENPAW_WORKER_IMAGE
+        $script:HERMES_WORKER_IMAGE
+    )
+    foreach ($workerImg in $workerImages) {
         if ($workerImg -match $LocalImagePattern) {
             if (Test-LocalImage $workerImg) {
                 Write-Log (Get-Msg "install.image.worker_exists" -f $workerImg)
@@ -3036,6 +3053,7 @@ function Install-Manager {
             "-e", "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($config.DEFAULT_WORKER_RUNTIME)",
             "-e", "AGENTTEAMS_WORKER_IMAGE=$($script:WORKER_IMAGE)",
             "-e", "AGENTTEAMS_COPAW_WORKER_IMAGE=$($script:COPAW_WORKER_IMAGE)",
+            "-e", "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_MATRIX_DOMAIN=$matrixDomain",
             "-e", "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:$($config.PORT_GATEWAY)",
@@ -3069,6 +3087,24 @@ function Install-Manager {
         if ($config.EMBEDDING_MODEL) {
             $ctrlArgs += @("-e", "AGENTTEAMS_EMBEDDING_MODEL=$($config.EMBEDDING_MODEL)")
         }
+
+        # Optional: custom model capability overrides (context window, max
+        # tokens, vision, reasoning). These are read by the Controller's
+        # config.go LoadConfig to annotate custom models not in the built-in
+        # presets table.
+        if ($config.MODEL_CONTEXT_WINDOW) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MODEL_CONTEXT_WINDOW=$($config.MODEL_CONTEXT_WINDOW)")
+        }
+        if ($config.MODEL_MAX_TOKENS) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MODEL_MAX_TOKENS=$($config.MODEL_MAX_TOKENS)")
+        }
+        if ($config.MODEL_VISION) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MODEL_VISION=$($config.MODEL_VISION)")
+        }
+        if ($config.MODEL_REASONING) {
+            $ctrlArgs += @("-e", "AGENTTEAMS_MODEL_REASONING=$($config.MODEL_REASONING)")
+        }
+
         if ($config.OPENAI_BASE_URL) {
             $ctrlArgs += @("-e", "AGENTTEAMS_OPENAI_BASE_URL=$($config.OPENAI_BASE_URL)")
         }

@@ -43,6 +43,10 @@ const LabelWorkerEdgeUUID = "agentteams.io/worker-edge-uuid"
 // re-issues credentials and updates the annotation to match.
 const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 
+// AnnotationWorkerTeamName records the effective Team identity for a referenced
+// Worker so independent Worker reconciles preserve its scoped team storage access.
+const AnnotationWorkerTeamName = "agentteams.io/team-name"
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry", "schedulerx3".
 //
@@ -632,7 +636,7 @@ type Manager struct {
 type ManagerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-manager LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes (default: openclaw)
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | qwenpaw
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	Soul          string                     `json:"soul,omitempty"`          // custom SOUL.md content
 	Agents        string                     `json:"agents,omitempty"`        // custom AGENTS.md content

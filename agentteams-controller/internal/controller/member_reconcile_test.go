@@ -3,8 +3,11 @@ package controller
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
@@ -93,6 +96,30 @@ func TestValidateMemberDeploymentRejectsRemote(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberInfraPreservesTeamStorageAccess(t *testing.T) {
+	prov := mocks.NewMockProvisioner()
+	state := &MemberState{}
+
+	_, err := ReconcileMemberInfra(context.Background(), MemberDeps{
+		Provisioner: prov,
+	}, MemberContext{
+		Name:                 "leader-cr",
+		RuntimeName:          "leader",
+		TeamName:             "team-a",
+		ExistingMatrixUserID: "@leader:localhost",
+		ExistingRoomID:       "!leader:localhost",
+	}, state)
+	if err != nil {
+		t.Fatalf("ReconcileMemberInfra: %v", err)
+	}
+	if len(prov.Calls.RefreshWorkerCredentials) != 1 {
+		t.Fatalf("RefreshWorkerCredentials calls=%d, want 1", len(prov.Calls.RefreshWorkerCredentials))
+	}
+	if got := prov.Calls.RefreshWorkerCredentials[0].TeamName; got != "team-a" {
+		t.Fatalf("RefreshWorkerCredentials team=%q, want team-a", got)
+	}
+}
+
 func TestResolveBackendForMember_NoBackendAvailable(t *testing.T) {
 	// An empty registry surfaces an error so callers can decide whether
 	// to skip container management or fail loudly.
@@ -128,6 +155,61 @@ func TestCreateMemberContainerAddsDockerHostGateway(t *testing.T) {
 	}
 	if got, want := req.ExtraHosts, []string{dockerHostInternalExtraHost}; !equalStringSlices(got, want) {
 		t.Fatalf("ExtraHosts=%v, want %v", got, want)
+	}
+}
+
+func TestCreateMemberContainerQwenPawWaitsForRuntimeConfig(t *testing.T) {
+	binDir := t.TempDir()
+	mcPath := filepath.Join(binDir, "mc")
+	mcScript := `#!/bin/sh
+if [ "$1" = "alias" ]; then
+	exit 0
+fi
+if [ "$1" = "stat" ] && [ "$2" = "local/bucket/agents/alice-runtime/runtime/runtime.yaml" ]; then
+	exit 0
+fi
+echo "Object does not exist" >&2
+exit 1
+`
+	if err := os.WriteFile(mcPath, []byte(mcScript), 0755); err != nil {
+		t.Fatalf("write fake mc: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("AGENTTEAMS_FS_ENDPOINT", "http://minio.test")
+
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "docker"
+	envBuilder := mocks.NewMockEnvBuilder()
+	envBuilder.BuildFn = func(workerName string, _ *service.WorkerProvisionResult) map[string]string {
+		return map[string]string{
+			"AGENTTEAMS_WORKER_NAME":    workerName,
+			"AGENTTEAMS_FS_ACCESS_KEY":  "access-key",
+			"AGENTTEAMS_FS_SECRET_KEY":  "secret-key",
+			"AGENTTEAMS_FS_BUCKET":      "bucket",
+			"AGENTTEAMS_STORAGE_PREFIX": "local/bucket",
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := createMemberContainer(ctx, MemberDeps{
+		Provisioner: mocks.NewMockProvisioner(),
+		EnvBuilder:  envBuilder,
+	}, MemberContext{
+		Name:        "alice",
+		RuntimeName: "alice-runtime",
+		Spec: v1beta1.WorkerSpec{
+			Image:   "qwenpaw:latest",
+			Runtime: backend.RuntimeQwenPaw,
+		},
+	}, &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"},
+	}, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer failed: %v", err)
+	}
+	if _, ok := wb.LastCreateReq(); !ok {
+		t.Fatal("expected backend Create to be called")
 	}
 }
 

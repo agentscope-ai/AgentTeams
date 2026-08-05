@@ -44,9 +44,8 @@ async def _noop_typing(_room_id, _typing):
     return None
 
 
-def test_team_leader_assignment_in_dm_routes_to_team_room(tmp_path, monkeypatch):
+def _write_team_leader_assignment_context(tmp_path):
     working_dir = tmp_path / "leader" / ".copaw"
-    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
     runtime_dir = tmp_path / "leader" / "runtime"
     runtime_dir.mkdir(parents=True)
     (runtime_dir / "runtime.yaml").write_text(
@@ -59,6 +58,22 @@ def test_team_leader_assignment_in_dm_routes_to_team_room(tmp_path, monkeypatch)
         "  leaderDmRoomId: \"!leader-dm:hs.local\"\n",
         encoding="utf-8",
     )
+    (tmp_path / "leader" / "AGENTS.md").write_text(
+        "- **Team Workers**:\n"
+        "  - @dag-team-1-dev:hs.local — Room: !dev:hs.local\n"
+        "  - @dag-team-1-qa:hs.local — Room: !qa:hs.local\n"
+        "- Team coordination rules follow.\n",
+        encoding="utf-8",
+    )
+    return working_dir
+
+
+def test_team_leader_taskflow_assignment_alias_routes_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    working_dir = _write_team_leader_assignment_context(tmp_path)
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
 
     ch = _make_channel("@dag-team-1-lead:hs.local")
     client = _FakeClient()
@@ -68,8 +83,8 @@ def test_team_leader_assignment_in_dm_routes_to_team_room(tmp_path, monkeypatch)
     asyncio.run(
         ch.send(
             "!leader-dm:hs.local",
-            "@dag-team-1-dev:hs.local Task assigned: implement the API.",
-            {"sender_id": "@admin:hs.local"},
+            "@dev:hs.local New task [api-design]: "
+            "Read shared/tasks/api-design/spec.md and start the task.",
         ),
     )
 
@@ -77,8 +92,64 @@ def test_team_leader_assignment_in_dm_routes_to_team_room(tmp_path, monkeypatch)
     assert client.sent[0][2]["m.mentions"] == {
         "user_ids": ["@dag-team-1-dev:hs.local"],
     }
-    assert client.sent[0][2]["body"].startswith("@dag-team-1-dev:hs.local ")
-    assert "admin " not in client.sent[0][2]["body"]
+    assert client.sent[0][2]["body"].startswith(
+        "@dag-team-1-dev:hs.local New task [api-design]",
+    )
+
+
+def test_team_leader_assignment_sent_to_leader_room_routes_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    working_dir = _write_team_leader_assignment_context(tmp_path)
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch.send(
+            "!leader-room:hs.local",
+            "@dev:hs.local New task [api-design]: "
+            "Read shared/tasks/api-design/spec.md and start the task.",
+        ),
+    )
+
+    assert client.sent[0][0] == "!team-room:hs.local"
+    assert client.sent[0][2]["m.mentions"] == {
+        "user_ids": ["@dag-team-1-dev:hs.local"],
+    }
+
+
+def test_team_leader_thread_final_assignment_routes_to_team_room(
+    tmp_path,
+    monkeypatch,
+):
+    working_dir = _write_team_leader_assignment_context(tmp_path)
+    monkeypatch.setenv("COPAW_WORKING_DIR", str(working_dir))
+
+    ch = _make_channel("@dag-team-1-lead:hs.local")
+    client = _FakeClient()
+    ch._client = client
+    ch._send_typing = _noop_typing
+
+    asyncio.run(
+        ch._edit_thread_root(
+            "!leader-dm:hs.local",
+            {"matrix_own_thread_root_event_id": "$root"},
+            "@dev:hs.local New task [api-design]: "
+            "Read shared/tasks/api-design/spec.md and start the task.",
+            msgtype="m.text",
+        ),
+    )
+
+    assert client.sent[0][0] == "!team-room:hs.local"
+    assert client.sent[0][2]["m.mentions"] == {
+        "user_ids": ["@dag-team-1-dev:hs.local"],
+    }
+    assert "m.relates_to" not in client.sent[0][2]
 
 
 def test_team_leader_dm_internal_preambles_are_suppressed(tmp_path, monkeypatch):

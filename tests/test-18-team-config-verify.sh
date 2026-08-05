@@ -22,6 +22,7 @@ TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_W2="${TEST_TEAM}-qa"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 
 _cleanup() {
     log_info "Cleaning up team: ${TEST_TEAM}"
@@ -93,6 +94,7 @@ metadata:
   name: ${TEST_LEADER}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Worker
@@ -100,6 +102,7 @@ metadata:
   name: ${TEST_W1}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
   channelPolicy:
     groupDenyExtra:
       - ${TEST_W2}
@@ -110,6 +113,7 @@ metadata:
   name: ${TEST_W2}
 spec:
   model: qwen3.5-plus
+  runtime: ${TEST_WORKER_RUNTIME}
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -160,6 +164,17 @@ for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
         log_fail "Member ${w} not provisioned within 120s"
     fi
 done
+
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
+        if wait_qwenpaw_api_matches "${w}" /api/teamharness/health '.ok == true and .adapter == "qwenpaw-2"' 240 && \
+            wait_worker_runtime_file_contains "${w}" "TEAMS.md" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" 240; then
+            log_pass "QwenPaw TeamHarness plugin ready for ${w}"
+        else
+            log_fail "QwenPaw TeamHarness plugin not ready for ${w}"
+        fi
+    done
+fi
 
 # ============================================================
 # Section 3: Verify Team resource
@@ -224,44 +239,55 @@ assert_eq "worker" "${W2_ROLE}" "Worker 2 has role=worker"
 # ============================================================
 log_section "Verify Leader AGENTS.md"
 
-LEADER_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/AGENTS.md" 2>/dev/null || echo "")
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "TEAMS.md")
+else
+    LEADER_AGENTS=$(read_worker_runtime_file "${TEST_LEADER}" "AGENTS.md")
+fi
 assert_not_empty "${LEADER_AGENTS}" "Leader AGENTS.md exists in MinIO"
 
-# Builtin markers
-assert_contains "${LEADER_AGENTS}" "agentteams-builtin-start" "Leader AGENTS.md has builtin-start"
-assert_contains "${LEADER_AGENTS}" "agentteams-builtin-end" "Leader AGENTS.md has builtin-end"
-
-# Team-context: upstream = Manager
-assert_contains "${LEADER_AGENTS}" "agentteams-team-context-start" "Leader has team-context block"
-assert_contains "${LEADER_AGENTS}" "@manager:" "Leader coordination: upstream is Manager"
-assert_contains "${LEADER_AGENTS}" "Upstream" "Leader coordination: has Upstream label"
-assert_contains "${LEADER_AGENTS}" "${TEST_TEAM}" "Leader coordination: references team name"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    assert_contains "${LEADER_AGENTS}" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" "Leader has runtime team-context block"
+    assert_contains "${LEADER_AGENTS}" "member.role: team_leader" "Leader runtime context has team_leader role"
+    assert_contains "${LEADER_AGENTS}" "${TEST_TEAM}" "Leader runtime context references team name"
+else
+    assert_contains "${LEADER_AGENTS}" "agentteams-builtin-start" "Leader AGENTS.md has builtin-start"
+    assert_contains "${LEADER_AGENTS}" "agentteams-builtin-end" "Leader AGENTS.md has builtin-end"
+    assert_contains "${LEADER_AGENTS}" "agentteams-team-context-start" "Leader has team-context block"
+    assert_contains "${LEADER_AGENTS}" "@manager:" "Leader coordination: upstream is Manager"
+    assert_contains "${LEADER_AGENTS}" "Upstream" "Leader coordination: has Upstream label"
+    assert_contains "${LEADER_AGENTS}" "${TEST_TEAM}" "Leader coordination: references team name"
+fi
 
 # ============================================================
 # Section 6: Verify Team Worker AGENTS.md
 # ============================================================
 log_section "Verify Team Worker AGENTS.md"
 
-W1_AGENTS=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/AGENTS.md" 2>/dev/null || echo "")
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "TEAMS.md")
+else
+    W1_AGENTS=$(read_worker_runtime_file "${TEST_W1}" "AGENTS.md")
+fi
 assert_not_empty "${W1_AGENTS}" "Worker 1 AGENTS.md exists in MinIO"
 
-# Builtin markers
-assert_contains "${W1_AGENTS}" "agentteams-builtin-start" "Worker 1 AGENTS.md has builtin-start"
-assert_contains "${W1_AGENTS}" "agentteams-builtin-end" "Worker 1 AGENTS.md has builtin-end"
-
-# Team-context: coordinator = Leader (NOT Manager)
-assert_contains "${W1_AGENTS}" "agentteams-team-context-start" "Worker 1 has team-context block"
-assert_contains "${W1_AGENTS}" "@${TEST_LEADER}:" "Worker 1 coordinator is Team Leader"
-
-# Should NOT reference Manager as coordinator
-W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
-if echo "${W1_CTX}" | grep -q "@manager:"; then
-    log_fail "Worker 1 team-context references Manager (should only reference Leader)"
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    assert_contains "${W1_AGENTS}" "BEGIN AGENTTEAMS RUNTIME TEAM CONTEXT" "Worker 1 has runtime team-context block"
+    assert_contains "${W1_AGENTS}" "team.leaderRuntimeName: ${TEST_LEADER}" "Worker 1 runtime context names Team Leader"
+    assert_contains "${W1_AGENTS}" "member.role: worker" "Worker 1 runtime context has worker role"
 else
-    log_pass "Worker 1 team-context does NOT reference Manager"
+    assert_contains "${W1_AGENTS}" "agentteams-builtin-start" "Worker 1 AGENTS.md has builtin-start"
+    assert_contains "${W1_AGENTS}" "agentteams-builtin-end" "Worker 1 AGENTS.md has builtin-end"
+    assert_contains "${W1_AGENTS}" "agentteams-team-context-start" "Worker 1 has team-context block"
+    assert_contains "${W1_AGENTS}" "@${TEST_LEADER}:" "Worker 1 coordinator is Team Leader"
+    W1_CTX=$(echo "${W1_AGENTS}" | sed -n '/agentteams-team-context-start/,/agentteams-team-context-end/p')
+    if echo "${W1_CTX}" | grep -q "@manager:"; then
+        log_fail "Worker 1 team-context references Manager (should only reference Leader)"
+    else
+        log_pass "Worker 1 team-context does NOT reference Manager"
+    fi
+    assert_contains "${W1_AGENTS}" "Do NOT @mention Manager" "Worker 1 told not to @mention Manager"
 fi
-
-assert_contains "${W1_AGENTS}" "Do NOT @mention Manager" "Worker 1 told not to @mention Manager"
 
 # ============================================================
 # Section 7: Verify groupAllowFrom
@@ -277,7 +303,7 @@ wait_agent_matrix_allow_contains "${TEST_W1}" ".channels.matrix.groupAllowFrom" 
 wait_agent_matrix_allow_contains "manager" ".channels.matrix.groupAllowFrom" "@${TEST_LEADER}:" 120 || true
 
 # Leader: should have [Manager, Admin, W1, W2]
-LEADER_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_LEADER}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+LEADER_GAF=$(read_worker_matrix_allowlist "${TEST_LEADER}")
 if echo "${LEADER_GAF}" | grep -q "@manager:"; then
     log_pass "Leader groupAllowFrom includes Manager"
 else
@@ -293,7 +319,7 @@ for w in "${TEST_W1}" "${TEST_W2}"; do
 done
 
 # Workers: should have [Leader, Admin] but NOT Manager
-W1_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W1}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+W1_GAF=$(read_worker_matrix_allowlist "${TEST_W1}")
 if echo "${W1_GAF}" | grep -q "@${TEST_LEADER}:"; then
     log_pass "Worker 1 groupAllowFrom includes Leader"
 else
@@ -308,7 +334,7 @@ fi
 
 # Peer mentions: Workers should have each other in groupAllowFrom (default peerMentions=true)
 # EXCEPT: W1 has groupDenyExtra for W2, so W1 should NOT have W2
-W2_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/${TEST_W2}/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+W2_GAF=$(read_worker_matrix_allowlist "${TEST_W2}")
 
 if echo "${W1_GAF}" | grep -q "@${TEST_W2}:"; then
     log_fail "Worker 1 groupAllowFrom includes Worker 2 (should be denied by channelPolicy)"
@@ -372,25 +398,41 @@ fi
 # ============================================================
 log_section "Verify Skills by Role"
 
-# Leader should have canonical Team Leader skills
-for skill in team-coordination project-management task-management; do
-    LEADER_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
-    if [ "${LEADER_SKILL}" = "yes" ]; then
-        log_pass "Leader has ${skill} skill"
-    else
-        log_fail "Leader missing ${skill} skill"
-    fi
-done
-
-# Workers should have standard worker skills
-for skill in file-sync task-progress mcporter; do
-    W1_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_W1}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
-    if [ "${W1_SKILL}" = "yes" ]; then
-        log_pass "Worker 1 has ${skill} skill"
-    else
-        log_fail "Worker 1 missing ${skill} skill"
-    fi
-done
+if [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
+    LEADER_SKILLS=$(read_qwenpaw_skills "${TEST_LEADER}")
+    W1_SKILLS=$(read_qwenpaw_skills "${TEST_W1}")
+    for skill in team-coordination project-management task-delegation task-execution; do
+        if echo "${LEADER_SKILLS}" | jq -e --arg skill "${skill}" '.[] | select(.name == $skill and .source == "plugin:teamharness")' >/dev/null 2>&1; then
+            log_pass "Leader has plugin skill ${skill}"
+        else
+            log_fail "Leader missing plugin skill ${skill}"
+        fi
+    done
+    for skill in communication file-sharing mcporter; do
+        if echo "${W1_SKILLS}" | jq -e --arg skill "${skill}" '.[] | select(.name == $skill and .source == "plugin:teamharness")' >/dev/null 2>&1; then
+            log_pass "Worker 1 has plugin skill ${skill}"
+        else
+            log_fail "Worker 1 missing plugin skill ${skill}"
+        fi
+    done
+else
+    for skill in team-coordination project-management task-management; do
+        LEADER_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_LEADER}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
+        if [ "${LEADER_SKILL}" = "yes" ]; then
+            log_pass "Leader has ${skill} skill"
+        else
+            log_fail "Leader missing ${skill} skill"
+        fi
+    done
+    for skill in file-sync task-progress mcporter; do
+        W1_SKILL=$(exec_in_manager bash -c "mc ls '${STORAGE_PREFIX}/agents/${TEST_W1}/skills/${skill}/SKILL.md' >/dev/null 2>&1 && echo yes || echo no")
+        if [ "${W1_SKILL}" = "yes" ]; then
+            log_pass "Worker 1 has ${skill} skill"
+        else
+            log_fail "Worker 1 missing ${skill} skill"
+        fi
+    done
+fi
 
 # ============================================================
 # Section 9: Verify agent count

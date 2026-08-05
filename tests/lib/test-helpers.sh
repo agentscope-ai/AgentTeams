@@ -208,8 +208,13 @@ wait_for_manager_agent_ready() {
 
     while [ "${elapsed}" -lt "${timeout}" ]; do
         case "${manager_runtime}" in
-            copaw)
-                if docker exec "${agent_container}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 && \
+            copaw|qwenpaw)
+                # Both runtimes launch QwenPaw 2.0 in the same image; the process
+                # cmdline may be "copaw" (run_copaw_app.py via runpy) or "qwenpaw"
+                # (direct python3 -m qwenpaw app) — accept both (mirrors
+                # test-01-manager-boot.sh).
+                if { docker exec "${agent_container}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 || \
+                     docker exec "${agent_container}" pgrep -f "qwenpaw app" >/dev/null 2>&1; } && \
                    docker exec "${agent_container}" curl -sf http://127.0.0.1:18799/ >/dev/null 2>&1; then
                     runtime_ready=true
                     break
@@ -402,18 +407,108 @@ wait_agent_file_contains() {
     return 1
 }
 
+# Read a runtime-owned prompt/config file from the location consumed by the
+# selected Worker runtime. QwenPaw consumes its default workspace directly;
+# other runtimes keep the historical top-level OSS layout.
+read_worker_runtime_file() {
+    local agent_name="$1"
+    local rel_path="$2"
+    local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+    if [ "${runtime}" = "qwenpaw" ]; then
+        docker exec "$(worker_container_name "${agent_name}")" cat \
+            "/root/agentteams-fs/agents/${agent_name}/.qwenpaw/workspaces/default/${rel_path}" \
+            2>/dev/null || true
+        return
+    fi
+    exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/${rel_path}" 2>/dev/null || true
+}
+
+# wait_worker_runtime_file_contains <agent_name> <relative_path> <needle> [timeout_seconds]
+wait_worker_runtime_file_contains() {
+    local agent_name="$1"
+    local rel_path="$2"
+    local needle="$3"
+    local timeout="${4:-180}"
+    local elapsed=0
+    local last=""
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        last=$(read_worker_runtime_file "${agent_name}" "${rel_path}")
+        if echo "${last}" | grep -Fq "${needle}"; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    echo "wait_worker_runtime_file_contains: agent=${agent_name} path=${rel_path} timed out after ${timeout}s, want='${needle}'" >&2
+    dump_diagnostics worker "${agent_name}"
+    return 1
+}
+
+# Read the effective Matrix allow-list. QwenPaw applies the Controller policy
+# through the public ACL API; other runtimes persist it in openclaw.json.
+read_worker_matrix_allowlist() {
+    local agent_name="$1"
+    local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+    if [ "${runtime}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; then
+        docker exec "$(worker_container_name "${agent_name}")" \
+            curl -sf http://127.0.0.1:8088/api/access-control/agentteams_matrix \
+            2>/dev/null | jq -r '.whitelist | keys[]?' 2>/dev/null
+        return
+    fi
+    exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/openclaw.json" 2>/dev/null | \
+        jq -r '.channels.matrix.groupAllowFrom[]?' 2>/dev/null
+}
+
+read_qwenpaw_skills() {
+    local agent_name="$1"
+    docker exec "$(worker_container_name "${agent_name}")" \
+        curl -sf http://127.0.0.1:8088/api/skills 2>/dev/null || printf '[]\n'
+}
+
+# wait_qwenpaw_api_matches <agent_name> <path> <jq_filter> [timeout_seconds]
+# Waits for the running QwenPaw app to expose reconciled public API state.
+wait_qwenpaw_api_matches() {
+    local agent_name="$1"
+    local path="$2"
+    local jq_filter="$3"
+    local timeout="${4:-180}"
+    local elapsed=0
+    local container=""
+    local response=""
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        container="$(worker_container_name "${agent_name}")"
+        response=$(docker exec "${container}" curl -sf "http://127.0.0.1:8088${path}" 2>/dev/null || true)
+        if [ -n "${response}" ] && echo "${response}" | jq -e "${jq_filter}" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    echo "wait_qwenpaw_api_matches: agent=${agent_name} path=${path} timed out after ${timeout}s" >&2
+    dump_diagnostics worker "${agent_name}"
+    return 1
+}
+
 # wait_agent_matrix_allow_contains <agent_name> <jq_array_path> <matrix_id> [timeout_seconds]
-# Polls openclaw.json until channels.matrix allow-lists contain the expected ID.
+# Polls the selected runtime's effective Matrix allow-list until it contains
+# the expected ID. QwenPaw intentionally exposes one channel-scoped ACL for
+# both group and DM messages.
 wait_agent_matrix_allow_contains() {
     local agent_name="$1"
     local jq_path="$2"
     local matrix_id="$3"
     local timeout="${4:-120}"
     local elapsed=0
-    local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
     local last=""
     while [ "${elapsed}" -lt "${timeout}" ]; do
-        last=$(exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/openclaw.json" 2>/dev/null | jq -r "${jq_path}[]?" 2>/dev/null)
+        if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; then
+            last=$(read_worker_matrix_allowlist "${agent_name}")
+        else
+            local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+            last=$(exec_in_manager mc cat "${storage_prefix}/agents/${agent_name}/openclaw.json" 2>/dev/null | jq -r "${jq_path}[]?" 2>/dev/null)
+        fi
         if echo "${last}" | grep -Fq "${matrix_id}"; then
             return 0
         fi
@@ -751,6 +846,10 @@ test_summary() {
 
 # Check if LLM API key is configured (required for tests that need Manager Agent responses)
 require_llm_key() {
+    if [ "${AGENTTEAMS_CI_NO_LLM:-0}" = "1" ]; then
+        log_info "SKIP: CI no-LLM mode (placeholder key cannot reach the model)"
+        return 1
+    fi
     if [ -z "${AGENTTEAMS_LLM_API_KEY}" ]; then
         log_info "SKIP: No LLM API key configured (set AGENTTEAMS_LLM_API_KEY). This test requires Manager Agent LLM responses."
         return 1

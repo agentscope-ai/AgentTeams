@@ -101,6 +101,92 @@ func newWorkerRig(t *testing.T, objs ...client.Object) *workerTestRig {
 	}
 }
 
+func TestWorkerTeamNameFindsReferencedTeam(t *testing.T) {
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "leader", Namespace: "agents"}}
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "agents"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "runtime-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "leader", Role: "team_leader"},
+			},
+		},
+	}
+	rig := newWorkerRig(t, worker, team)
+
+	got, err := rig.r.workerTeamName(context.Background(), worker)
+	if err != nil {
+		t.Fatalf("workerTeamName: %v", err)
+	}
+	if got != "runtime-team" {
+		t.Fatalf("workerTeamName=%q, want runtime-team", got)
+	}
+}
+
+func TestWorkerTeamNameUsesPersistedMembershipAnnotation(t *testing.T) {
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{
+		Name:      "leader",
+		Namespace: "agents",
+		Annotations: map[string]string{
+			v1beta1.AnnotationWorkerTeamName: "runtime-team",
+		},
+	}}
+	rig := newWorkerRig(t, worker)
+
+	got, err := rig.r.workerTeamName(context.Background(), worker)
+	if err != nil {
+		t.Fatalf("workerTeamName: %v", err)
+	}
+	if got != "runtime-team" {
+		t.Fatalf("workerTeamName=%q, want runtime-team", got)
+	}
+}
+
+func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
+	worker := newWorker("leader", v1beta1.WorkerSpec{Runtime: "qwenpaw"})
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "runtime-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "leader", Role: "team_leader"},
+			},
+		},
+	}
+	rig := newWorkerRig(t, worker, team)
+
+	if _, _, err := rig.reconcile("leader"); err != nil {
+		t.Fatalf("reconcile referenced Worker: %v", err)
+	}
+	if got := len(rig.deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
+		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 0 for Team-owned QwenPaw Worker", got)
+	}
+}
+
+func TestWorkerReconcileUsesTeamLeaderAssetsForFileConfiguredRuntime(t *testing.T) {
+	worker := newWorker("leader", v1beta1.WorkerSpec{Runtime: "copaw"})
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "runtime-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "leader", Role: "team_leader"},
+			},
+		},
+	}
+	rig := newWorkerRig(t, worker, team)
+
+	if _, _, err := rig.reconcile("leader"); err != nil {
+		t.Fatalf("reconcile referenced Worker: %v", err)
+	}
+	if got := len(rig.deployer.Calls.DeployWorkerConfig); got != 1 {
+		t.Fatalf("DeployWorkerConfig calls=%d, want 1", got)
+	}
+	if got := rig.deployer.Calls.DeployWorkerConfig[0].Role; got != RoleTeamLeader.String() {
+		t.Fatalf("DeployWorkerConfig role=%q, want %q", got, RoleTeamLeader.String())
+	}
+}
+
 type workerTestGateway struct {
 	modelInfo      *gateway.ModelProviderInfo
 	modelErr       error
@@ -1125,6 +1211,211 @@ func TestSandboxClaimRefreshesWorkerDepsForRunningWorker(t *testing.T) {
 	}
 	if req.Storage != nil {
 		t.Fatalf("PrepareWorkerDeps Storage=%T, want nil so main workspace OSS is used", req.Storage)
+	}
+}
+
+func TestDockerWorkerRefreshesProjectedTokenWithoutRecreate(t *testing.T) {
+	dockerBackend := mocks.NewMockWorkerBackend()
+	dockerBackend.NameOverride = "docker"
+	if _, err := dockerBackend.Create(context.Background(), backend.CreateRequest{Name: "docker-token-worker"}); err != nil {
+		t.Fatalf("seed docker backend: %v", err)
+	}
+	dockerBackend.ClearCalls()
+
+	provisioner := mocks.NewMockProvisioner()
+	mctx := MemberContext{
+		Name:                 "docker-token-worker",
+		RuntimeName:          "docker-token-worker",
+		Namespace:            "default",
+		Spec:                 v1beta1.WorkerSpec{Model: "qwen-plus", Image: "worker:set"},
+		BackendRuntime:       v1beta1.BackendRuntimePod,
+		StatusBackendRuntime: v1beta1.BackendRuntimePod,
+		AppliedSpecHash:      "hash",
+		CurrentSpecHash:      "hash",
+	}
+	deps := MemberDeps{
+		Provisioner:                provisioner,
+		Deployer:                   mocks.NewMockDeployer(),
+		EnvBuilder:                 mocks.NewMockEnvBuilder(),
+		Backend:                    backend.NewRegistry([]backend.WorkerBackend{dockerBackend}),
+		AuthTokenExpirationSeconds: 900,
+	}
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token", GatewayKey: "gateway-key"},
+	}
+
+	if _, err := ensureMemberContainerPresent(context.Background(), deps, mctx, state); err != nil {
+		t.Fatalf("ensureMemberContainerPresent: %v", err)
+	}
+	if len(dockerBackend.Calls.Create) != 0 || len(dockerBackend.Calls.Delete) != 0 {
+		t.Fatalf("running Docker Worker was recreated: create=%v delete=%v", dockerBackend.Calls.Create, dockerBackend.Calls.Delete)
+	}
+	if len(provisioner.Calls.RequestSATokenWithExpiration) != 1 {
+		t.Fatalf("token projection calls=%v", provisioner.Calls.RequestSATokenWithExpiration)
+	}
+	if provisioner.Calls.RequestSATokenWithExpiration[0].ExpirationSeconds != 900 {
+		t.Fatalf("token expiration=%d, want configured 900", provisioner.Calls.RequestSATokenWithExpiration[0].ExpirationSeconds)
+	}
+	if len(dockerBackend.Calls.ProjectAuthToken) != 1 {
+		t.Fatalf("ProjectAuthToken calls=%v", dockerBackend.Calls.ProjectAuthToken)
+	}
+	if call := dockerBackend.Calls.ProjectAuthToken[0]; call.Name != mctx.Name || call.Token != "mock-sa-token-"+mctx.Name {
+		t.Fatalf("ProjectAuthToken call=%+v", call)
+	}
+	if state.RequeueAfter <= 0 {
+		t.Fatalf("state.RequeueAfter=%v, want token refresh schedule", state.RequeueAfter)
+	}
+}
+
+func TestDockerWorkerCreateUsesConfiguredProjectedToken(t *testing.T) {
+	dockerBackend := mocks.NewMockWorkerBackend()
+	dockerBackend.NameOverride = "docker"
+	provisioner := mocks.NewMockProvisioner()
+	mctx := MemberContext{
+		Name:                 "docker-create-token-worker",
+		RuntimeName:          "docker-create-token-worker",
+		Namespace:            "default",
+		Spec:                 v1beta1.WorkerSpec{Model: "qwen-plus", Image: "worker:set"},
+		BackendRuntime:       v1beta1.BackendRuntimePod,
+		StatusBackendRuntime: v1beta1.BackendRuntimePod,
+	}
+	dockerTokenProjections.Delete(sandboxSetTokenProjectionKey(mctx))
+	defer dockerTokenProjections.Delete(sandboxSetTokenProjectionKey(mctx))
+	deps := MemberDeps{
+		Provisioner:                provisioner,
+		Deployer:                   mocks.NewMockDeployer(),
+		EnvBuilder:                 mocks.NewMockEnvBuilder(),
+		Backend:                    backend.NewRegistry([]backend.WorkerBackend{dockerBackend}),
+		AuthTokenExpirationSeconds: 900,
+	}
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token", GatewayKey: "gateway-key"},
+	}
+
+	if _, err := createMemberContainer(context.Background(), deps, mctx, state, dockerBackend); err != nil {
+		t.Fatalf("createMemberContainer: %v", err)
+	}
+	if len(provisioner.Calls.RequestSAToken) != 0 {
+		t.Fatalf("legacy RequestSAToken calls=%v", provisioner.Calls.RequestSAToken)
+	}
+	if len(provisioner.Calls.RequestSATokenWithExpiration) != 1 {
+		t.Fatalf("token projection calls=%v", provisioner.Calls.RequestSATokenWithExpiration)
+	}
+	if provisioner.Calls.RequestSATokenWithExpiration[0].ExpirationSeconds != 900 {
+		t.Fatalf("token expiration=%d, want configured 900", provisioner.Calls.RequestSATokenWithExpiration[0].ExpirationSeconds)
+	}
+	if len(dockerBackend.Calls.CreateReqs) != 1 {
+		t.Fatalf("create requests=%v", dockerBackend.Calls.CreateReqs)
+	}
+	req := dockerBackend.Calls.CreateReqs[0]
+	if req.AuthToken != "mock-sa-token-"+mctx.Name || req.AuthTokenFile != backend.DefaultAuthTokenFile {
+		t.Fatalf("projected token request AuthToken=%q AuthTokenFile=%q", req.AuthToken, req.AuthTokenFile)
+	}
+	if state.RequeueAfter <= 0 {
+		t.Fatalf("state.RequeueAfter=%v, want token refresh schedule", state.RequeueAfter)
+	}
+}
+
+func TestDockerWorkerTokenRefreshFailureKeepsExistingProjection(t *testing.T) {
+	dockerBackend := mocks.NewMockWorkerBackend()
+	dockerBackend.NameOverride = "docker"
+	if _, err := dockerBackend.Create(context.Background(), backend.CreateRequest{Name: "docker-token-retry-worker"}); err != nil {
+		t.Fatalf("seed docker backend: %v", err)
+	}
+	dockerBackend.ClearCalls()
+	dockerBackend.ProjectAuthTokenFn = func(context.Context, string, string) error {
+		return errors.New("temporary Docker API failure")
+	}
+
+	provisioner := mocks.NewMockProvisioner()
+	mctx := MemberContext{
+		Name:                 "docker-token-retry-worker",
+		RuntimeName:          "docker-token-retry-worker",
+		Namespace:            "default",
+		Spec:                 v1beta1.WorkerSpec{Model: "qwen-plus", Image: "worker:set"},
+		BackendRuntime:       v1beta1.BackendRuntimePod,
+		StatusBackendRuntime: v1beta1.BackendRuntimePod,
+		AppliedSpecHash:      "hash",
+		CurrentSpecHash:      "hash",
+	}
+	key := sandboxSetTokenProjectionKey(mctx)
+	dockerTokenProjections.Store(key, sandboxSetTokenProjectionState{
+		NextRefresh: time.Now().Add(-time.Minute),
+		Expiration:  time.Now().Add(20 * time.Minute),
+	})
+	defer dockerTokenProjections.Delete(key)
+	deps := MemberDeps{
+		Provisioner: provisioner,
+		Deployer:    mocks.NewMockDeployer(),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{dockerBackend}),
+	}
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token", GatewayKey: "gateway-key"},
+	}
+
+	if _, err := ensureMemberContainerPresent(context.Background(), deps, mctx, state); err != nil {
+		t.Fatalf("ensureMemberContainerPresent: %v", err)
+	}
+	if state.RequeueAfter != sandboxSetTokenRetryAfter {
+		t.Fatalf("state.RequeueAfter=%v, want %v", state.RequeueAfter, sandboxSetTokenRetryAfter)
+	}
+	if !strings.Contains(state.Message, "existing token is valid until") {
+		t.Fatalf("state.Message=%q", state.Message)
+	}
+	if len(dockerBackend.Calls.Create) != 0 || len(dockerBackend.Calls.Delete) != 0 {
+		t.Fatalf("refresh failure recreated Worker: create=%v delete=%v", dockerBackend.Calls.Create, dockerBackend.Calls.Delete)
+	}
+}
+
+func TestStoppedDockerWorkerStartsBeforeTokenRefresh(t *testing.T) {
+	dockerBackend := mocks.NewMockWorkerBackend()
+	dockerBackend.NameOverride = "docker"
+	if _, err := dockerBackend.Create(context.Background(), backend.CreateRequest{Name: "docker-stopped-token-worker"}); err != nil {
+		t.Fatalf("seed docker backend: %v", err)
+	}
+	if err := dockerBackend.Stop(context.Background(), "docker-stopped-token-worker"); err != nil {
+		t.Fatalf("stop docker backend: %v", err)
+	}
+	dockerBackend.ClearCalls()
+	projectedWhileRunning := false
+	dockerBackend.ProjectAuthTokenFn = func(ctx context.Context, name, _ string) error {
+		result, err := dockerBackend.Status(ctx, name)
+		if err != nil {
+			return err
+		}
+		projectedWhileRunning = result.Status == backend.StatusRunning
+		return nil
+	}
+
+	mctx := MemberContext{
+		Name:                 "docker-stopped-token-worker",
+		RuntimeName:          "docker-stopped-token-worker",
+		Namespace:            "default",
+		Spec:                 v1beta1.WorkerSpec{Model: "qwen-plus", Image: "worker:set"},
+		BackendRuntime:       v1beta1.BackendRuntimePod,
+		StatusBackendRuntime: v1beta1.BackendRuntimePod,
+		AppliedSpecHash:      "hash",
+		CurrentSpecHash:      "hash",
+	}
+	key := sandboxSetTokenProjectionKey(mctx)
+	dockerTokenProjections.Delete(key)
+	defer dockerTokenProjections.Delete(key)
+	deps := MemberDeps{
+		Provisioner: mocks.NewMockProvisioner(),
+		Deployer:    mocks.NewMockDeployer(),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+		Backend:     backend.NewRegistry([]backend.WorkerBackend{dockerBackend}),
+	}
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "matrix-token", GatewayKey: "gateway-key"},
+	}
+
+	if _, err := ensureMemberContainerPresent(context.Background(), deps, mctx, state); err != nil {
+		t.Fatalf("ensureMemberContainerPresent: %v", err)
+	}
+	if !projectedWhileRunning {
+		t.Fatal("token was projected before the stopped Docker Worker was started")
 	}
 }
 

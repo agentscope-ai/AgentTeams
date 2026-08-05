@@ -125,6 +125,18 @@ func TestPolicyResolveRejectsInvalidEphemeralStorage(t *testing.T) {
 			},
 		},
 		{
+			name: "whitespace-only request",
+			in: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: " "},
+			},
+		},
+		{
+			name: "whitespace-only limit",
+			in: &v1beta1.ExecutionSandboxResourceRequirements{
+				Limits: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: " "},
+			},
+		},
+		{
 			name: "zero quantity",
 			in: &v1beta1.ExecutionSandboxResourceRequirements{
 				Requests: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "0"},

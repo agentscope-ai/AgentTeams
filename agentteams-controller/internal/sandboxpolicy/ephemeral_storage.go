@@ -74,10 +74,10 @@ func (p Policy) Resolve(in *v1beta1.ExecutionSandboxResourceRequirements) (
 	if in != nil {
 		*resolved = *in
 	}
-	if strings.TrimSpace(resolved.Requests.EphemeralStorage) == "" {
+	if resolved.Requests.EphemeralStorage == "" {
 		resolved.Requests.EphemeralStorage = p.defaultRequest.String()
 	}
-	if strings.TrimSpace(resolved.Limits.EphemeralStorage) == "" {
+	if resolved.Limits.EphemeralStorage == "" {
 		resolved.Limits.EphemeralStorage = p.defaultLimit.String()
 	}
 
@@ -117,7 +117,7 @@ func resourceList(values *v1beta1.ExecutionSandboxResourceValues) (corev1.Resour
 		{name: corev1.ResourceMemory, raw: values.Memory, apply: func(value string) { values.Memory = value }},
 		{name: corev1.ResourceEphemeralStorage, raw: values.EphemeralStorage, apply: func(value string) { values.EphemeralStorage = value }},
 	} {
-		if strings.TrimSpace(item.raw) == "" {
+		if item.raw == "" || (item.name != corev1.ResourceEphemeralStorage && strings.TrimSpace(item.raw) == "") {
 			continue
 		}
 		quantity, err := resource.ParseQuantity(item.raw)

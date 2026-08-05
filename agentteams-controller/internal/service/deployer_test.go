@@ -661,6 +661,115 @@ func TestDeployMemberRuntimeConfigUsesRequestGatewayURL(t *testing.T) {
 	}
 }
 
+func TestDeployMemberRuntimeConfigCanonicalizesManagedDeepAgentsGatewayURL(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name           string
+		managedURL     string
+		requestURL     string
+		wantGatewayURL string
+	}{
+		{
+			name:           "managed root gains v1",
+			managedURL:     "http://higress-gateway.agentteams-system.svc",
+			wantGatewayURL: "http://higress-gateway.agentteams-system.svc/v1",
+		},
+		{
+			name:           "managed v1 is not duplicated",
+			managedURL:     "http://higress-gateway.agentteams-system.svc/v1",
+			wantGatewayURL: "http://higress-gateway.agentteams-system.svc/v1",
+		},
+		{
+			name:           "external non-root provider path is preserved",
+			managedURL:     "http://higress-gateway.agentteams-system.svc",
+			requestURL:     "https://provider.example.com/openai/v1",
+			wantGatewayURL: "https://provider.example.com/openai/v1",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			deployer := NewDeployer(DeployerConfig{
+				OSS: store,
+				RuntimeProjection: RuntimeProjectionConfig{
+					StorageProvider: "minio",
+					AIGatewayURL:    tc.managedURL,
+				},
+			})
+
+			err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+				Name:         "researcher",
+				RuntimeName:  "researcher",
+				Runtime:      "deepagents",
+				Spec:         v1beta1.WorkerSpec{Model: "qwen-max"},
+				AIGatewayURL: tc.requestURL,
+			})
+			if err != nil {
+				t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+			}
+
+			payload, err := store.GetObject(ctx, "agents/researcher/runtime/runtime.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := yaml.Unmarshal(payload, &doc); err != nil {
+				t.Fatalf("runtime.yaml is invalid YAML: %v", err)
+			}
+			model := doc["desired"].(map[string]any)["model"].(map[string]any)
+			if got := fmt.Sprint(model["gatewayUrl"]); got != tc.wantGatewayURL {
+				t.Fatalf("desired.model.gatewayUrl=%q, want %q", got, tc.wantGatewayURL)
+			}
+		})
+	}
+}
+
+func TestDeployMemberRuntimeConfigRejectsDeepAgentsWithNonMinIOStorage(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		runtime string
+		wantErr string
+	}{
+		{
+			name:    "deepagents rejects oss",
+			runtime: "deepagents",
+			wantErr: "runtime=deepagents requires storage.provider=minio",
+		},
+		{
+			name:    "other runtimes retain oss support",
+			runtime: "qwenpaw",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			deployer := NewDeployer(DeployerConfig{
+				OSS: store,
+				RuntimeProjection: RuntimeProjectionConfig{
+					StorageProvider: "oss",
+					StorageBucket:   "agentteams-storage",
+					StorageEndpoint: "https://oss.example.com",
+				},
+			})
+
+			err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+				Name:        "worker",
+				RuntimeName: "worker",
+				Runtime:     tc.runtime,
+				Spec:        v1beta1.WorkerSpec{Model: "qwen-max"},
+			})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected actionable error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+			}
+		})
+	}
+}
+
 func TestDeployMemberRuntimeConfigOmitsDesiredModelForNativeConfig(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()

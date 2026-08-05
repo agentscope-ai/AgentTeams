@@ -79,6 +79,9 @@ Validate public values at render time. Supported combinations:
   {{- end -}}
 {{- end -}}
 {{- if .Values.deepagents.enabled -}}
+  {{- if ne $storageProvider "minio" -}}
+  {{- fail "deepagents.enabled=true requires storage.provider=minio; storage.provider=oss is unsupported" -}}
+  {{- end -}}
   {{- if not (.Values.worker.defaultImage.deepagents.repository | default "") -}}
   {{- fail "worker.defaultImage.deepagents.repository is required when deepagents.enabled=true" -}}
   {{- end -}}

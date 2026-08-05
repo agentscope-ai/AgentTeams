@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import urlsplit, urlunsplit
 
 from deepagents_agentteams.config import ConfigError, ModelConfig
 
@@ -25,11 +26,19 @@ def build_higress_model(
         model_factory = ChatOpenAI
     kwargs: dict[str, Any] = {
         "model": config.name,
-        "base_url": config.gateway_url,
+        "base_url": canonical_openai_base_url(config.gateway_url),
         "api_key": config.gateway_key,
         "use_responses_api": False,
     }
     return model_factory(**kwargs)
+
+
+def canonical_openai_base_url(gateway_url: str) -> str:
+    """Normalize legacy gateway origins while preserving explicit provider paths."""
+    parsed = urlsplit(gateway_url)
+    if parsed.scheme and parsed.netloc and not parsed.path.strip("/"):
+        return urlunsplit((parsed.scheme, parsed.netloc, "/v1", parsed.query, parsed.fragment))
+    return gateway_url
 
 
 def build_mcp_connections(

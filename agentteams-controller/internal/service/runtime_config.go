@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -255,6 +256,12 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	if runtime == "" {
 		runtime = "openclaw"
 	}
+	if runtime == "deepagents" && !strings.EqualFold(strings.TrimSpace(d.runtimeProjection.StorageProvider), "minio") {
+		return memberRuntimeConfigDocument{}, fmt.Errorf(
+			"runtime=deepagents requires storage.provider=minio (got %q)",
+			d.runtimeProjection.StorageProvider,
+		)
+	}
 	role := strings.TrimSpace(req.Role)
 	if role == "" {
 		role = "worker"
@@ -274,6 +281,9 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		gatewayURL := strings.TrimSpace(req.AIGatewayURL)
 		if gatewayURL == "" {
 			gatewayURL = d.runtimeProjection.AIGatewayURL
+			if runtime == "deepagents" {
+				gatewayURL = canonicalManagedDeepAgentsGatewayURL(gatewayURL)
+			}
 		}
 		desired.Model = &memberRuntimeConfigModel{
 			ProviderID: "agentteams-gateway",
@@ -356,6 +366,18 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	applyRuntimeTeamContext(&doc, req)
 
 	return doc, nil
+}
+
+// canonicalManagedDeepAgentsGatewayURL appends the OpenAI API version only to
+// the managed gateway origin. Explicit provider paths are not rewritten.
+func canonicalManagedDeepAgentsGatewayURL(rawURL string) string {
+	endpoint := strings.TrimSpace(rawURL)
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || strings.Trim(parsed.Path, "/") != "" {
+		return endpoint
+	}
+	parsed.Path = "/v1"
+	return parsed.String()
 }
 
 func isNativeConfigModel(model string) bool {

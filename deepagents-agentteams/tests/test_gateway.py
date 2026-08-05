@@ -10,6 +10,17 @@ class RecordingChatModel:
 
 
 class HigressModelTests(unittest.TestCase):
+    def test_normalizes_legacy_gateway_root_to_openai_v1_base(self) -> None:
+        config = ModelConfig(
+            name="qwen-max",
+            gateway_url="https://higress.example.org",
+            gateway_key="gateway-key",
+        )
+
+        model = build_higress_model(config, model_factory=RecordingChatModel)
+
+        self.assertEqual(model.kwargs["base_url"], "https://higress.example.org/v1")
+
     def test_uses_openai_compatible_chat_completions_without_responses_api(self) -> None:
         config = ModelConfig(
             name="qwen-max",
@@ -23,6 +34,17 @@ class HigressModelTests(unittest.TestCase):
         self.assertEqual(model.kwargs["base_url"], "https://higress.example.org/v1")
         self.assertEqual(model.kwargs["api_key"], "gateway-secret")
         self.assertIs(model.kwargs["use_responses_api"], False)
+
+    def test_preserves_explicit_non_root_provider_path(self) -> None:
+        config = ModelConfig(
+            name="qwen-max",
+            gateway_url="https://provider.example.org/openai/v1",
+            gateway_key="gateway-key",
+        )
+
+        model = build_higress_model(config, model_factory=RecordingChatModel)
+
+        self.assertEqual(model.kwargs["base_url"], "https://provider.example.org/openai/v1")
 
 
 class MCPConnectionTests(unittest.TestCase):

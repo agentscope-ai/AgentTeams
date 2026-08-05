@@ -14,7 +14,9 @@ COMMON_ARGS=(
 render="$(mktemp)"
 deepagents_render="$(mktemp)"
 deepagents_special_render="$(mktemp)"
-trap 'rm -f "${render}" "${deepagents_render}" "${deepagents_special_render}"' EXIT
+oss_render="$(mktemp)"
+oss_deepagents_error="$(mktemp)"
+trap 'rm -f "${render}" "${deepagents_render}" "${deepagents_special_render}" "${oss_render}" "${oss_deepagents_error}"' EXIT
 
 helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" > "${render}"
 
@@ -37,5 +39,27 @@ helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
     --set-string 'deepagents.postgresql.auth.database=db/name' > "${deepagents_special_render}"
 
 grep -q 'postgresql://user%40name:p%40ss%3A%2F%3F%23%25%20x@agentteams-deepagents-postgresql:5432/db%2Fname?sslmode=disable' "${deepagents_special_render}"
+
+helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set storage.provider=oss \
+    --set storage.mode=existing \
+    --set storage.oss.region=cn-test \
+    --set credentialProvider.enabled=true \
+    --set credentialProvider.image.repository=example.invalid/credential-provider > "${oss_render}"
+
+grep -q 'name: agentteams-controller' "${oss_render}"
+
+if helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set deepagents.enabled=true \
+    --set storage.provider=oss \
+    --set storage.mode=existing \
+    --set storage.oss.region=cn-test \
+    --set credentialProvider.enabled=true \
+    --set credentialProvider.image.repository=example.invalid/credential-provider > /dev/null 2> "${oss_deepagents_error}"; then
+    echo "expected DeepAgents with OSS storage to be rejected" >&2
+    exit 1
+fi
+
+grep -q 'deepagents.enabled=true requires storage.provider=minio' "${oss_deepagents_error}"
 
 echo "PASS: AgentTeams Helm release renders canonical resources and DeepAgents dependencies"

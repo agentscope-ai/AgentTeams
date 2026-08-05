@@ -132,7 +132,7 @@ Use the `/model` slash command in IM to instantly switch the model for the curre
 /model qwen3.5-plus
 ```
 
-This only affects the current session — the primary model is restored after a restart. Only pre-configured known models are supported; see [`manager/configs/known-models.json`](../manager/configs/known-models.json) for the full list.
+This only affects the current session — the primary model is restored after a restart. Only pre-configured known models are supported; see [`manager/configs/known-models.json`](../../../manager/configs/known-models.json) for the full list.
 
 For more `/model` command usage, see the "Model selection" section in [Session management via IM](#session-management-via-im).
 
@@ -182,7 +182,7 @@ In the Worker's group chat or DM, use @mention with the `/model` command to swit
 @alice /model qwen3.5-plus
 ```
 
-Only affects the current session — the primary model is restored after a restart. Only pre-configured known models are supported; see [`manager/configs/known-models.json`](../manager/configs/known-models.json) for the full list.
+Only affects the current session — the primary model is restored after a restart. Only pre-configured known models are supported; see [`manager/configs/known-models.json`](../../../manager/configs/known-models.json) for the full list.
 
 ### Option 2: Switch the primary model (persistent, requires restart)
 

@@ -177,8 +177,8 @@ find "${WORKSPACE}/" -type f -newer "${PULL_MARKER}"
 
 对应源码：
 
-- [`worker/scripts/worker-entrypoint.sh`](../worker/scripts/worker-entrypoint.sh)：初始 pull、`.last-pull`、5 秒检测和 5 分钟 fallback。
-- [`manager/agent/worker-agent/skills/file-sync/scripts/agentteams-sync.sh`](../manager/agent/worker-agent/skills/file-sync/scripts/agentteams-sync.sh)：按需 pull 同样刷新 `.last-pull`。
+- [`worker/scripts/worker-entrypoint.sh`](../../../worker/scripts/worker-entrypoint.sh)：初始 pull、`.last-pull`、5 秒检测和 5 分钟 fallback。
+- [`manager/agent/worker-agent/skills/file-sync/scripts/agentteams-sync.sh`](../../../manager/agent/worker-agent/skills/file-sync/scripts/agentteams-sync.sh)：按需 pull 同样刷新 `.last-pull`。
 
 ### 4.2 5 分钟 fallback 因 jq 参数不兼容退出
 
@@ -200,7 +200,7 @@ jq -n --argfile remote ... --argfile local ...
 jq: Unknown option --argfile
 ```
 
-[`shared/lib/merge-openclaw-config.sh`](../shared/lib/merge-openclaw-config.sh) 虽然在命令替换后检查 `$?`，但调用方脚本启用了 `set -e`；jq 失败会使后台 subshell 在执行检查和 `touch .last-pull` 之前退出，最终留下 zombie。
+[`shared/lib/merge-openclaw-config.sh`](../../../shared/lib/merge-openclaw-config.sh) 虽然在命令替换后检查 `$?`，但调用方脚本启用了 `set -e`；jq 失败会使后台 subshell 在执行检查和 `touch .last-pull` 之前退出，最终留下 zombie。
 
 这是本次复现中“同步循环超过 5 分钟仍不能收敛”的确定性原因。
 
@@ -220,7 +220,7 @@ jq: Unknown option --argfile
 
 ### 4.4 Controller 同步职责过宽
 
-[`manager/scripts/init/start-mc-mirror.sh`](../manager/scripts/init/start-mc-mirror.sh) 当前执行：
+[`manager/scripts/init/start-mc-mirror.sh`](../../../manager/scripts/init/start-mc-mirror.sh) 当前执行：
 
 ```bash
 # 启动时
@@ -231,7 +231,7 @@ mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/" "${AGENTTEAMS_FS_ROOT}/" \
   --overwrite --newer-than "5m"
 ```
 
-但 Controller 的 [`FileWatcher`](../agentteams-controller/internal/watcher/file_watcher.go) 只监听：
+但 Controller 的 [`FileWatcher`](../../../agentteams-controller/internal/watcher/file_watcher.go) 只监听：
 
 ```text
 /root/agentteams-fs/agentteams-config/
@@ -373,7 +373,7 @@ FileWatcher
 4. Manager 如需读取 Worker 结果，应通过现有 Matrix 通知触发目标路径 pull，fallback 也只扫描 `shared/` 和明确的 `agents/<worker>`，不依赖 Controller 的本地副本；
 5. Controller 健康启动不能等待整个 bucket 下载完成。
 
-该阶段改动前必须回归 Worker package/import/config 流程，因为 [`agentteams-controller/internal/executor/package.go`](../agentteams-controller/internal/executor/package.go) 当前直接使用 `/root/agentteams-fs/agents/<worker>`。
+该阶段改动前必须回归 Worker package/import/config 流程，因为 [`agentteams-controller/internal/executor/package.go`](../../../agentteams-controller/internal/executor/package.go) 当前直接使用 `/root/agentteams-fs/agents/<worker>`。
 
 ### 6.4 P3：存储侧保护与历史数据治理
 

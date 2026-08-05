@@ -68,7 +68,7 @@ AgentTeams 需要一个大模型 API Key 来驱动 Agent 的智能行为。推�
 
 也支持其他 OpenAI 兼容的模型服务（如 OpenAI、DeepSeek 等）。
 
-![百炼 CodingPlan 控制台 - API Key 管理](images/windows-deploy/bailian-codingplan-apikey.png)
+![百炼 CodingPlan 控制台 - API Key 管理](../../images/windows-deploy/bailian-codingplan-apikey.png)
 
 ---
 
@@ -79,7 +79,7 @@ AgentTeams 需要一个大模型 API Key 来驱动 Agent 的智能行为。推�
 3. 安装完成后，启动 Docker Desktop
 4. 等待 Docker Desktop 左下角显示绿色图标（Engine running），表示 Docker 引擎已就绪
 
-![Docker Desktop 启动完成 - 左下角显示 Engine running](images/windows-deploy/docker-desktop-containers.png)
+![Docker Desktop 启动完成 - 左下角显示 Engine running](../../images/windows-deploy/docker-desktop-containers.png)
 
 > **注意**：Docker Desktop 需要一定时间完成启动。请等待左下角状态变为绿色后再执行后续步骤。
 
@@ -96,7 +96,7 @@ AgentTeams 需要一个大模型 API Key 来驱动 Agent 的智能行为。推�
    memory=8GB
    ```
 
-![Docker Desktop Resources 设置 - WSL 2 后端内存由 Windows 管理](images/windows-deploy/docker-desktop-resources.png)
+![Docker Desktop Resources 设置 - WSL 2 后端内存由 Windows 管理](../../images/windows-deploy/docker-desktop-resources.png)
 
 ---
 
@@ -104,7 +104,7 @@ AgentTeams 需要一个大模型 API Key 来驱动 Agent 的智能行为。推�
 
 1. 点击 Windows 开始菜单，搜索或选择 **Windows PowerShell**
 
-![Windows 开始菜单搜索 PowerShell](images/windows-deploy/windows-search-powershell.png)
+![Windows 开始菜单搜索 PowerShell](../../images/windows-deploy/windows-search-powershell.png)
 
 2. 在 PowerShell 窗口中，复制并粘贴以下命令，按回车执行：
 
@@ -116,7 +116,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 安装脚本启动后，你会看到 AgentTeams 的安装引导界面。接下来按照终端提示逐步操作即可。
 
-![PowerShell 运行安装脚本 - 显示安装日志和语言选择](images/windows-deploy/powershell-install-start.png)
+![PowerShell 运行安装脚本 - 显示安装日志和语言选择](../../images/windows-deploy/powershell-install-start.png)
 
 ---
 
@@ -230,7 +230,7 @@ LLM API Key: ****
 [AgentTeams] API 联通性测试通过
 ```
 
-![LLM 配置和 API 联通性测试通过](images/windows-deploy/powershell-llm-config-apikey.png)
+![LLM 配置和 API 联通性测试通过](../../images/windows-deploy/powershell-llm-config-apikey.png)
 
 > **如果测试失败**：
 > - 检查 API Key 是否完整粘贴，有无多余空格
@@ -357,7 +357,7 @@ LLM API Key: ****
 
 > **请务必记录用户名和密码**，密码是自动生成的随机字符串。配置信息保存在 `%USERPROFILE%\agentteams-manager.env` 文件中，可随时查看。
 
-![安装成功 - 显示登录 URL 和凭据信息](images/windows-deploy/powershell-install-success.png)
+![安装成功 - 显示登录 URL 和凭据信息](../../images/windows-deploy/powershell-install-success.png)
 
 ---
 
@@ -368,9 +368,9 @@ LLM API Key: ****
 3. 登录后，你会看到与 Manager 的对话窗口
 4. 在对话框中发送消息，开始与 Manager 交互
 
-![Element Web 登录页面](images/windows-deploy/element-web-login.png)
+![Element Web 登录页面](../../images/windows-deploy/element-web-login.png)
 
-![Element Web 主页 - 房间列表和欢迎界面](images/windows-deploy/element-web-home.png)
+![Element Web 主页 - 房间列表和欢迎界面](../../images/windows-deploy/element-web-home.png)
 
 **快速体验**：发送以下消息让 Manager 为你创建第一个 Worker：
 

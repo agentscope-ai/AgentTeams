@@ -1,6 +1,6 @@
 # 常见问题
 
-> **使用 AgentTeams v1.0.9 或更早版本？** v1.1.0 架构发生了重大变化。旧版单容器架构的常见问题请参阅 [常见问题（旧架构）](faq-legacy.md)。
+> **使用 AgentTeams v1.0.9 或更早版本？** v1.1.0 架构发生了重大变化。旧版单容器架构的常见问题请参阅 [常见问题（旧架构）](legacy-faq.md)。
 
 - [如何查看当前 AgentTeams 版本](#如何查看当前-agentteams-版本)
 - [新架构说明（v1.1.0+）](#新架构说明v110)
@@ -230,7 +230,7 @@ agt delete human john
 
 > **提示：** Manager Agent 的大部分操作（创建 Worker、切换模型、分配任务）底层都调用了同一套 `agt` CLI。直接使用 CLI 适合调试、批量操作或自动化脚本场景。
 
-声明式 YAML 资源定义的完整文档请参阅 [声明式资源管理](declarative-resource-management.md)。
+声明式 YAML 资源定义的完整文档请参阅 [声明式资源管理](../resource-management.md)。
 
 ---
 
@@ -506,7 +506,7 @@ AgentTeams 支持两种模型切换方式：**切换当前会话模型**（即�
 /model qwen3.5-plus
 ```
 
-这种方式仅对当前会话生效，重启后会恢复为主用模型。且仅支持预置的已知模型列表中的模型，完整列表见 [`manager/configs/known-models.json`](../../manager/configs/known-models.json)。
+这种方式仅对当前会话生效，重启后会恢复为主用模型。且仅支持预置的已知模型列表中的模型，完整列表见 [`manager/configs/known-models.json`](../../../../manager/configs/known-models.json)。
 
 更多 `/model` 命令用法见 [会话管理（通过 IM 指令）](#会话管理通过-im-指令) 中的"模型选择"部分。
 
@@ -562,7 +562,7 @@ Manager 会使用模型切换技能完成配置更新。
 @alice /model qwen3.5-plus
 ```
 
-仅对当前会话生效，重启后恢复为主用模型。仅支持预置的已知模型，完整列表见 [`manager/configs/known-models.json`](../../manager/configs/known-models.json)。
+仅对当前会话生效，重启后恢复为主用模型。仅支持预置的已知模型，完整列表见 [`manager/configs/known-models.json`](../../../../manager/configs/known-models.json)。
 
 ### 方式二：切换主用模型（持久化，需重启）
 
@@ -668,8 +668,8 @@ Manager 会通过 worker-management 技能触发容器重建。Worker 的 Matrix
 
 大多数自定义 Worker 场景应通过 Worker package 或自定义镜像完成：把角色提示词、
 skills、依赖和可选 Dockerfile 打包，或在保留受支持 runtime 的前提下设置自定义
-image。具体见 [导入已有 Worker](import-worker.md)，以及
-[声明式资源管理](declarative-resource-management.md#worker-资源) 中的
+image。具体见 [导入已有 Worker](../import-worker.md)，以及
+[声明式资源管理](../resource-management.md#worker-资源) 中的
 `spec.package` / `spec.image` 字段。
 
 如果要新增一种完全不同的 runtime，需要修改 controller、runtime 默认镜像以及对应

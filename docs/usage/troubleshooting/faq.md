@@ -1,6 +1,6 @@
 # FAQ
 
-> **Using AgentTeams v1.0.9 or earlier?** The architecture changed significantly in v1.1.0. For the legacy single-container architecture, see [FAQ (Legacy Architecture)](faq-legacy.md).
+> **Using AgentTeams v1.0.9 or earlier?** The architecture changed significantly in v1.1.0. For the legacy single-container architecture, see [FAQ (Legacy Architecture)](legacy-faq.md).
 
 - [How to check the current AgentTeams version](#how-to-check-the-current-agentteams-version)
 - [Understanding the new architecture (v1.1.0+)](#understanding-the-new-architecture-v110)
@@ -231,7 +231,7 @@ agt delete human john
 
 > **Tip:** Most Manager Agent operations (creating workers, switching models, assigning tasks) ultimately call the same `agt` CLI under the hood. Using the CLI directly is useful for debugging, bulk operations, or automation scripts.
 
-For declarative YAML resource definitions, see [Declarative Resource Management](declarative-resource-management.md).
+For declarative YAML resource definitions, see [Declarative Resource Management](../resource-management.md).
 
 ---
 
@@ -530,7 +530,7 @@ Use the `/model` slash command in IM to instantly switch the model for the curre
 /model qwen3.5-plus
 ```
 
-This only affects the current session — the primary model is restored after a restart. Only pre-configured known models are supported; see [`manager/configs/known-models.json`](../manager/configs/known-models.json) for the full list.
+This only affects the current session — the primary model is restored after a restart. Only pre-configured known models are supported; see [`manager/configs/known-models.json`](../../../manager/configs/known-models.json) for the full list.
 
 For more `/model` command usage, see the "Model selection" section in [Session management via IM](#session-management-via-im).
 
@@ -585,7 +585,7 @@ In the Worker's group chat or DM, use @mention with the `/model` command to swit
 @alice /model qwen3.5-plus
 ```
 
-Only affects the current session — the primary model is restored after a restart. Only pre-configured known models are supported; see [`manager/configs/known-models.json`](../manager/configs/known-models.json) for the full list.
+Only affects the current session — the primary model is restored after a restart. Only pre-configured known models are supported; see [`manager/configs/known-models.json`](../../../manager/configs/known-models.json) for the full list.
 
 ### Option 2: Switch the primary model (persistent, requires restart)
 
@@ -696,9 +696,9 @@ accepts `openclaw`, `qwenpaw`, `copaw` (legacy, auto-migrated to `qwenpaw`),
 
 For most custom Worker needs, package your role prompt, skills, dependencies,
 and optional Dockerfile as a Worker package, or set a custom image while keeping
-one of the supported runtimes. See [Importing Existing Workers](import-worker.md)
+one of the supported runtimes. See [Importing Existing Workers](../import-worker.md)
 and the `spec.package` / `spec.image` fields in
-[Declarative Resource Management](declarative-resource-management.md#worker-resource).
+[Declarative Resource Management](../resource-management.md#worker-resource).
 
 Adding a completely new runtime requires code changes in the controller,
 runtime image defaults, and the corresponding agent template wiring. It is not

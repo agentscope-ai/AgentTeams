@@ -13,7 +13,7 @@
 
 产出并评审 runtime config 契约：
 
-- `docs/member-runtime-config-contract.md`
+- `docs/design/member-runtime-config-contract.md`
 - 本 TDD 计划
 
 契约必须明确：`desired.agentPackage` 是 AgentTeams AgentSpec package，不是 TeamHarness plugin package。

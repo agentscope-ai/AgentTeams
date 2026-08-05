@@ -14,10 +14,10 @@ Workers are lightweight, stateless containers that:
 
 Workers are **CRD-backed**. Besides asking the Manager in Matrix, you can:
 
-- Run **`agt create worker` / `agt update worker`** inside `agentteams-controller` or `agentteams-manager` (see [faq.md](faq.md)).
+- Run **`agt create worker` / `agt update worker`** inside `agentteams-controller` or `agentteams-manager` (see [faq.md](troubleshooting/faq.md)).
 - Apply YAML with **`install/agentteams-apply.sh`** (forwards to `agt apply -f` in the Manager container).
 
-Full field reference: [Declarative Resource Management](declarative-resource-management.md).
+Full field reference: [Declarative Resource Management](resource-management.md).
 
 ### Filesystem layout by `spec.runtime`
 

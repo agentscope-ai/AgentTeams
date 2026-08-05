@@ -39,7 +39,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 - **2026-05-07**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1: declarative MCP on Worker/Manager/Team CRDs (breaking) and on Team Leader, custom `spec.env` for CRs, Token Plan + Qwen Cloud international + `qwen3.6-plus`, namespace-scoped controller RBAC, optional `SOUL.md` in Worker packages.
 - **2026-04-24**: [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0: Kubernetes-native control plane, Hermes autonomous coding agent runtime, 1.7 GB image shrink, agt CLI replaces shell scripts.
 - **2026-04-14**: [English](blog/agentteams-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/agentteams-k8s-native-multi-agent-collaboration.zh-CN.md) — Deep dive: AgentTeams as a Kubernetes-native multi-agent collaboration orchestration system.
-- **2026-04-03**: [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9: Kubernetes-style declarative resource management (YAML for Worker, Team, Human); Worker Template Marketplace; Manager QwenPaw runtime; Nacos Skills Registry and more.
+- **2026-04-03**: [English](docs/usage/resource-management.md) | [中文](docs/zh-cn/usage/resource-management.md) — AgentTeams 1.0.9: Kubernetes-style declarative resource management (YAML for Worker, Team, Human); Worker Template Marketplace; Manager QwenPaw runtime; Nacos Skills Registry and more.
 - **2026-03-14**: [English](blog/agentteams-1.0.6-release.md) | [中文](blog/zh-cn/agentteams-1.0.6-release.md) — AgentTeams 1.0.6: enterprise-grade MCP Server management, zero credential exposure.
 - **2026-03-10**: [English](blog/agentteams-1.0.4-release.md) | [中文](blog/zh-cn/agentteams-1.0.4-release.md) — AgentTeams 1.0.4: QwenPaw (formerly CoPaw) Worker support, 80% less memory.
 - **2026-03-04**: [English](blog/agentteams-announcement.md) | [中文](blog/zh-cn/agentteams-announcement.md) — AgentTeams open sourced under its former name.
@@ -319,7 +319,7 @@ helm uninstall agentteams -n agentteams-system
 kubectl delete namespace agentteams-system
 ```
 
-For the Kubernetes-native architecture (CRDs, controller, declarative `Worker` / `Team` / `Human` resources), see [docs/k8s-native-agent-orch.md](docs/k8s-native-agent-orch.md).
+For the Kubernetes-native architecture (CRDs, controller, declarative `Worker` / `Team` / `Human` resources), see [docs/design/k8s-native-orchestration.md](docs/design/k8s-native-orchestration.md).
 
 ## How It Works
 
@@ -428,13 +428,17 @@ Worker Alice    Worker Bob              Worker Charlie
 
 ## Documentation
 
+Browse the [documentation directory](docs/), or start with the overview and quickstart:
+
 | | |
 |---|---|
+| [docs/overview.md](docs/overview.md) | Product overview, core concepts, and documentation map |
 | [docs/quickstart.md](docs/quickstart.md) | Step-by-step guide |
-| [docs/architecture.md](docs/architecture.md) | System architecture deep dive |
-| [docs/manager-guide.md](docs/manager-guide.md) | Manager configuration |
-| [docs/worker-guide.md](docs/worker-guide.md) | Worker deployment |
-| [docs/development.md](docs/development.md) | Contributing and local dev |
+| [docs/usage/deployment/local.md](docs/usage/deployment/local.md) | Local instance creation, installation options, upgrades, and uninstalling |
+| [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive |
+| [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
+| [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
+| [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev |
 
 ## Troubleshooting
 
@@ -442,7 +446,7 @@ Worker Alice    Worker Bob              Worker Charlie
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-See [docs/zh-cn/faq.md](docs/zh-cn/faq.md) for common issues.
+See [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) for common issues.
 
 ### Reporting Bugs
 

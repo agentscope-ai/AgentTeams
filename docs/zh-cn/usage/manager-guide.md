@@ -4,7 +4,7 @@ AgentTeams Manager 的详细配置和使用指南。
 
 ## 安装
 
-基本安装步骤参见 [quickstart.md](quickstart.md) 第一步。
+基本安装步骤参见 [quickstart.md](../quickstart.md) 第一步。
 
 ## 配置
 

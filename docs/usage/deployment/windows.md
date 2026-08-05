@@ -68,7 +68,7 @@ AgentTeams requires an LLM API Key to power the Agent's intelligent behavior. We
 
 Other OpenAI-compatible model services (such as OpenAI, DeepSeek, etc.) are also supported.
 
-![Bailian CodingPlan Console - API Key Management](zh-cn/images/windows-deploy/bailian-codingplan-apikey.png)
+![Bailian CodingPlan Console - API Key Management](../../zh-cn/images/windows-deploy/bailian-codingplan-apikey.png)
 
 ---
 
@@ -79,7 +79,7 @@ Other OpenAI-compatible model services (such as OpenAI, DeepSeek, etc.) are also
 3. After installation completes, start Docker Desktop
 4. Wait for the green icon in the bottom-left corner of Docker Desktop (Engine running), indicating the Docker engine is ready
 
-![Docker Desktop Started - Green "Engine running" icon in bottom-left](zh-cn/images/windows-deploy/docker-desktop-containers.png)
+![Docker Desktop Started - Green "Engine running" icon in bottom-left](../../zh-cn/images/windows-deploy/docker-desktop-containers.png)
 
 > **Note**: Docker Desktop takes some time to start. Wait until the bottom-left status turns green before proceeding.
 
@@ -96,7 +96,7 @@ Other OpenAI-compatible model services (such as OpenAI, DeepSeek, etc.) are also
    memory=8GB
    ```
 
-![Docker Desktop Resources Settings - WSL 2 backend memory managed by Windows](zh-cn/images/windows-deploy/docker-desktop-resources.png)
+![Docker Desktop Resources Settings - WSL 2 backend memory managed by Windows](../../zh-cn/images/windows-deploy/docker-desktop-resources.png)
 
 ---
 
@@ -104,7 +104,7 @@ Other OpenAI-compatible model services (such as OpenAI, DeepSeek, etc.) are also
 
 1. Click the Windows Start menu, search for or select **Windows PowerShell**
 
-![Windows Start Menu Search PowerShell](zh-cn/images/windows-deploy/windows-search-powershell.png)
+![Windows Start Menu Search PowerShell](../../zh-cn/images/windows-deploy/windows-search-powershell.png)
 
 2. In the PowerShell window, copy and paste the following command, then press Enter:
 
@@ -116,7 +116,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 After the installation script starts, you'll see the AgentTeams installation wizard. Follow the terminal prompts to proceed.
 
-![PowerShell Running Installation Script - Installation logs and language selection](zh-cn/images/windows-deploy/powershell-install-start.png)
+![PowerShell Running Installation Script - Installation logs and language selection](../../zh-cn/images/windows-deploy/powershell-install-start.png)
 
 ---
 
@@ -225,7 +225,7 @@ The script will automatically test API connectivity. If successful, you'll see:
 [AgentTeams] API connectivity test passed
 ```
 
-![LLM Configuration and API Connectivity Test Passed](zh-cn/images/windows-deploy/powershell-llm-config-apikey.png)
+![LLM Configuration and API Connectivity Test Passed](../../zh-cn/images/windows-deploy/powershell-llm-config-apikey.png)
 
 > **If the test fails**:
 > - Check if the API Key was pasted completely without extra spaces
@@ -351,7 +351,7 @@ After successful installation, you'll see a panel with login information:
 
 > **Be sure to record your username and password** - the password is an auto-generated random string. Configuration is saved in `%USERPROFILE%\agentteams-manager.env` and can be viewed at any time.
 
-![Installation Successful - Login URL and credentials displayed](zh-cn/images/windows-deploy/powershell-install-success.png)
+![Installation Successful - Login URL and credentials displayed](../../zh-cn/images/windows-deploy/powershell-install-success.png)
 
 ---
 
@@ -362,9 +362,9 @@ After successful installation, you'll see a panel with login information:
 3. After logging in, you'll see a conversation window with Manager
 4. Send a message in the chat box to start interacting with Manager
 
-![Element Web Login Page](zh-cn/images/windows-deploy/element-web-login.png)
+![Element Web Login Page](../../zh-cn/images/windows-deploy/element-web-login.png)
 
-![Element Web Home - Room list and welcome screen](zh-cn/images/windows-deploy/element-web-home.png)
+![Element Web Home - Room list and welcome screen](../../zh-cn/images/windows-deploy/element-web-home.png)
 
 **Quick Start**: Send the following message to have Manager create your first Worker:
 

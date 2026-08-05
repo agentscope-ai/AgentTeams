@@ -11,7 +11,7 @@ Guide for contributing to AgentTeams, building images locally, and running tests
 
 ## Project Structure
 
-See [../AGENTS.md](../AGENTS.md) for a comprehensive codebase navigation guide.
+See [../../AGENTS.md](../../AGENTS.md) for a comprehensive codebase navigation guide.
 
 ## Building Images Locally
 

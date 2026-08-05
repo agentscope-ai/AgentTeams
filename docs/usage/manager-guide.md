@@ -4,7 +4,7 @@ Detailed guide for setting up and configuring the AgentTeams Manager.
 
 ## Installation
 
-See [quickstart.md](quickstart.md) Step 1 for basic installation.
+See [quickstart.md](../quickstart.md) Step 1 for basic installation.
 
 ## Configuration
 

@@ -228,7 +228,7 @@ Deployment modes:
 **Embedded vs Helm (packaging):**
 
 - **Embedded** — `install/agentteams-install.sh` starts **`agentteams-controller`** (image bundles Higress, Tuwunel, MinIO, Element Web, and the controller binary). The controller then creates **`agentteams-manager`** and each **Worker** as separate containers on the same Docker/Podman host.
-- **Helm / in-cluster** — Chart [`helm/agentteams`](../helm/agentteams) deploys the same logical components as Kubernetes workloads (gateway, homeserver, storage, controller Deployment, and Manager/Worker Pods from CRs). CRD semantics match embedded; only the backend driver differs.
+- **Helm / in-cluster** — Chart [`helm/agentteams`](../../helm/agentteams) deploys the same logical components as Kubernetes workloads (gateway, homeserver, storage, controller Deployment, and Manager/Worker Pods from CRs). CRD semantics match embedded; only the backend driver differs.
 
 Both modes share reconcilers; backends mirror how Kubernetes abstracts CRI/CSI/CNI.
 

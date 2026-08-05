@@ -89,7 +89,7 @@ manager/agent/
 
 ### To understand the architecture
 
-- Read [docs/architecture.md](docs/architecture.md) for system overview and component diagram
+- Read [docs/design/architecture.md](docs/design/architecture.md) for system overview and component diagram
 - Read [design/design.md](design/design.md) for full product design (Chinese)
 - Read [design/poc-design.md](design/poc-design.md) for detailed implementation specs
 

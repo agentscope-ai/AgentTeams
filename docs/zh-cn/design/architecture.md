@@ -234,5 +234,5 @@ Skills 是面向 Agent 的 **Markdown**（`SKILL.md`），可带可选的 `scrip
 
 ## 相关阅读
 
-- **[`docs/zh-cn/quickstart.md`](quickstart.md)**：端到端安装。
-- **[`AGENTS.md`](../../AGENTS.md)**：面向开发者和 Agent 的代码库地图。
+- **[`docs/zh-cn/quickstart.md`](../quickstart.md)**：端到端安装。
+- **[`AGENTS.md`](../../../AGENTS.md)**：面向开发者和 Agent 的代码库地图。

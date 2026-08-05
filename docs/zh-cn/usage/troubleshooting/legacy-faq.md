@@ -1,7 +1,7 @@
 # 常见问题
 
 > **仅适用于 HiClaw ≤ v1.0.9 的旧版「单容器 hiclaw-manager」架构**  
-> 若你使用 **v1.1.0 及以上**，请阅读 **[faq.md](../faq.md)**（多容器 **`hiclaw-controller` + `hiclaw-manager`**）。本页保留给仍在旧架构或查阅历史安装的用户。
+> 若你使用 **v1.1.0 及以上**，请阅读 **[faq.md](faq.md)**（多容器 **`hiclaw-controller` + `hiclaw-manager`**）。本页保留给仍在旧架构或查阅历史安装的用户。
 
 - [如何查看当前 HiClaw 版本](#如何查看当前-hiclaw-版本)
 - [如何对接飞书/钉钉/企业微信/Discord/Telegram](#如何对接飞书钉钉企业微信discordtelegram)
@@ -129,7 +129,7 @@ HiClaw 支持两种模型切换方式：**切换当前会话模型**（即时生
 /model qwen3.5-plus
 ```
 
-这种方式仅对当前会话生效，重启后会恢复为主用模型。且仅支持预置的已知模型列表中的模型，完整列表见 [`manager/configs/known-models.json`](../../manager/configs/known-models.json)。
+这种方式仅对当前会话生效，重启后会恢复为主用模型。且仅支持预置的已知模型列表中的模型，完整列表见 [`manager/configs/known-models.json`](../../../../manager/configs/known-models.json)。
 
 更多 `/model` 命令用法见 [会话管理（通过 IM 指令）](#会话管理通过-im-指令) 中的"模型选择"部分。
 
@@ -183,7 +183,7 @@ Manager 会使用模型切换技能完成配置更新。
 @alice /model qwen3.5-plus
 ```
 
-仅对当前会话生效，重启后恢复为主用模型。仅支持预置的已知模型，完整列表见 [`manager/configs/known-models.json`](../../manager/configs/known-models.json)。
+仅对当前会话生效，重启后恢复为主用模型。仅支持预置的已知模型，完整列表见 [`manager/configs/known-models.json`](../../../../manager/configs/known-models.json)。
 
 ### 方式二：切换主用模型（持久化，需重启）
 

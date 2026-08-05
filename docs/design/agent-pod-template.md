@@ -60,7 +60,7 @@ data:
 > top-level fields: `metadata:` and `spec:`. Do **not** wrap it in
 > `apiVersion: v1` / `kind: PodTemplate`.
 
-Find a ready-to-apply example at [`docs/examples/agent-pod-template-cm.yaml`](examples/agent-pod-template-cm.yaml).
+Find a ready-to-apply example at [`docs/examples/agent-pod-template-cm.yaml`](../examples/agent-pod-template-cm.yaml).
 
 ## Merge semantics
 

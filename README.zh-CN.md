@@ -33,7 +33,7 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 - **2026-05-07:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1：Worker/Manager/Team CRD 上的声明式 MCP（破坏性变更）并扩展至 Team Leader；CR 支持自定义 `spec.env`；新增 Token Plan、Qwen 国际线路与 `qwen3.6-plus` 模型；Helm 控制器 RBAC 收敛到单命名空间；Worker 包可不含 `SOUL.md`。
 - **2026-04-24:** [English](blog/agentteams-1.1.0-release.md) | [中文](blog/zh-cn/agentteams-1.1.0-release.md) — AgentTeams v1.1.0：Kubernetes 原生控制面、Hermes 自主编程 Agent 运行时、镜像体积减少 1.7 GB，`agt` CLI 替代 shell 脚本。
 - **2026-04-14:** [English](blog/agentteams-k8s-native-multi-agent-collaboration.md) | [中文](blog/zh-cn/agentteams-k8s-native-multi-agent-collaboration.zh-CN.md) — 深度解析：AgentTeams 作为基于 Kubernetes 原生的多 Agent 协作编排系统。
-- **2026-04-03:** [English](docs/declarative-resource-management.md) | [中文](docs/zh-cn/declarative-resource-management.md) — AgentTeams 1.0.9 发布：Kubernetes 风格声明式资源管理（YAML 定义 Worker、Team、Human）；上线 Worker 模板市场；支持 Manager QwenPaw 运行时；新增 Nacos Skills 注册中心等。
+- **2026-04-03:** [English](docs/usage/resource-management.md) | [中文](docs/zh-cn/usage/resource-management.md) — AgentTeams 1.0.9 发布：Kubernetes 风格声明式资源管理（YAML 定义 Worker、Team、Human）；上线 Worker 模板市场；支持 Manager QwenPaw 运行时；新增 Nacos Skills 注册中心等。
 - **2026-03-14:** [English](blog/agentteams-1.0.6-release.md) | [中文](blog/zh-cn/agentteams-1.0.6-release.md) — AgentTeams 1.0.6：企业级 MCP Server 管理，凭证零暴露；Worker 经 Higress AI Gateway 安全调用 MCP。
 - **2026-03-10:** [English](blog/agentteams-1.0.4-release.md) | [中文](blog/zh-cn/agentteams-1.0.4-release.md) — AgentTeams 1.0.4：支持 QwenPaw（原 CoPaw）Worker，内存占用降低约 80%，本地模式可操作浏览器。
 - **2026-03-04:** [English](blog/agentteams-announcement.md) | [中文](blog/zh-cn/agentteams-announcement.md) — AgentTeams 以其旧名称开源，引入 Manager Agent 与多 Agent 协同平台能力。
@@ -326,7 +326,7 @@ helm uninstall agentteams -n agentteams-system
 kubectl delete namespace agentteams-system
 ```
 
-更深入的 K8s Native 架构说明（CRD、Controller、声明式 `Worker` / `Team` / `Human` 资源）请参考 [docs/zh-cn/k8s-native-agent-orch.md](docs/zh-cn/k8s-native-agent-orch.md)。
+更深入的 K8s Native 架构说明（CRD、Controller、声明式 `Worker` / `Team` / `Human` 资源）请参考 [docs/zh-cn/design/k8s-native-orchestration.md](docs/zh-cn/design/k8s-native-orchestration.md)。
 
 ## 工作方式
 
@@ -444,7 +444,7 @@ Worker Alice    Worker Bob              Worker Charlie
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-更多常见问题（启动超时、局域网访问等）参见 [docs/zh-cn/faq.md](docs/zh-cn/faq.md)。
+更多常见问题（启动超时、局域网访问等）参见 [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md)。
 
 ### 提交 Bug
 
@@ -467,14 +467,18 @@ python scripts/export-debug-log.py --range 1h
 
 ## 文档
 
+浏览 [中文文档目录](docs/zh-cn/)，或从概览和快速入门开始：
+
 | | |
 |---|---|
+| [docs/zh-cn/overview.md](docs/zh-cn/overview.md) | 产品概览、核心概念与文档导航 |
 | [docs/zh-cn/quickstart.md](docs/zh-cn/quickstart.md) | 端到端快速入门，含验证检查点 |
-| [docs/zh-cn/architecture.md](docs/zh-cn/architecture.md) | 系统架构详解 |
-| [docs/zh-cn/manager-guide.md](docs/zh-cn/manager-guide.md) | Manager 配置与使用 |
-| [docs/zh-cn/worker-guide.md](docs/zh-cn/worker-guide.md) | Worker 部署与故障排查 |
-| [docs/zh-cn/development.md](docs/zh-cn/development.md) | 贡献指南与本地开发 |
-| [docs/zh-cn/faq.md](docs/zh-cn/faq.md) | 常见问题 |
+| [docs/zh-cn/usage/deployment/local.md](docs/zh-cn/usage/deployment/local.md) | 本地实例创建、安装选项、升级与卸载 |
+| [docs/zh-cn/design/architecture.md](docs/zh-cn/design/architecture.md) | 系统架构详解 |
+| [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 配置与使用 |
+| [docs/zh-cn/usage/worker-guide.md](docs/zh-cn/usage/worker-guide.md) | Worker 部署与故障排查 |
+| [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 贡献指南与本地开发 |
+| [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) | 常见问题 |
 
 ## 构建与测试
 

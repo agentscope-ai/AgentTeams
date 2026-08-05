@@ -13,24 +13,38 @@ COMMON_ARGS=(
 
 render="$(mktemp)"
 deepagents_render="$(mktemp)"
+deepagents_postgresql_render="$(mktemp)"
 deepagents_special_render="$(mktemp)"
 oss_render="$(mktemp)"
 oss_deepagents_error="$(mktemp)"
-trap 'rm -f "${render}" "${deepagents_render}" "${deepagents_special_render}" "${oss_render}" "${oss_deepagents_error}"' EXIT
+trap 'rm -f "${render}" "${deepagents_render}" "${deepagents_postgresql_render}" "${deepagents_special_render}" "${oss_render}" "${oss_deepagents_error}"' EXIT
 
 helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" > "${render}"
 
 grep -q 'name: agentteams-controller' "${render}"
 grep -q 'app.kubernetes.io/name: agentteams' "${render}"
+if grep -q 'name: agentteams-deepagents-postgresql' "${render}" || grep -q 'name: PGDATA' "${render}"; then
+    echo "expected bundled PostgreSQL and PGDATA to be absent when DeepAgents is disabled" >&2
+    exit 1
+fi
 
 helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
     --set deepagents.enabled=true > "${deepagents_render}"
+
+helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set deepagents.enabled=true \
+    --show-only templates/deepagents/postgresql-statefulset.yaml > "${deepagents_postgresql_render}"
 
 grep -q 'name: agentteams-deepagents-postgresql' "${deepagents_render}"
 grep -q 'name: deepagents-checkpoint-migrate' "${deepagents_render}"
 grep -q 'name: AGENTTEAMS_DEEPAGENTS_RUNNER_IMAGE' "${deepagents_render}"
 grep -q 'name: AGENTTEAMS_DEEPAGENTS_STATE_PVC_SIZE' "${deepagents_render}"
 grep -q 'name: AGENTTEAMS_DEEPAGENTS_CHECKPOINT_SECRET' "${deepagents_render}"
+grep -q '^            - name: PGDATA$' "${deepagents_postgresql_render}"
+grep -q '^              value: /var/lib/postgresql/data/pgdata$' "${deepagents_postgresql_render}"
+grep -q '^              mountPath: /var/lib/postgresql/data$' "${deepagents_postgresql_render}"
+grep -q '^        fsGroup: 70$' "${deepagents_postgresql_render}"
+grep -q '^            runAsUser: 70$' "${deepagents_postgresql_render}"
 
 helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
     --set deepagents.enabled=true \

@@ -38,6 +38,8 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
             - name: POSTGRES_USER
               value: {{ .Values.deepagents.postgresql.auth.username | quote }}
             - name: POSTGRES_DB

@@ -656,6 +656,11 @@ kubectl logs -n "${AGENTTEAMS_NAMESPACE}" \
 
 确认内置 PostgreSQL 和 checkpoint migration 已就绪：
 
+Chart 将 PostgreSQL 的 `PGDATA` 设置为 PVC 挂载点下的
+`/var/lib/postgresql/data/pgdata`。这样可以在保留 `runAsUser: 70`、`fsGroup: 70`
+和 `/var/lib/postgresql/data` 挂载契约的同时，兼容卷根目录由 `root` 持有的
+`local-path` PVC；不要把 `PGDATA` 改回挂载点根目录。
+
 ```bash
 kubectl rollout status statefulset/agentteams-deepagents-postgresql \
   -n "${AGENTTEAMS_NAMESPACE}" --timeout=10m

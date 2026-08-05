@@ -108,7 +108,23 @@
 
 ---
 
-### Task 5: Matrix-synchronized readiness, docs, changelog, and full regression
+### Task 5: ExecutionSandbox CPU and memory validation convergence
+
+**Files:**
+- Modify: `agentteams-controller/internal/sandboxpolicy/ephemeral_storage.go`
+- Modify: `agentteams-controller/internal/sandboxpolicy/ephemeral_storage_test.go`
+- Modify: `agentteams-controller/internal/server/execution_sandbox_handler_test.go`
+- Modify: `agentteams-controller/internal/controller/execution_sandbox_controller_test.go`
+
+- [ ] Add failing resolver tests for negative CPU/memory requests or limits and request greater than limit. Preserve zero and one-sided CPU/memory values if Kubernetes accepts them, and preserve all valid existing quantity formats.
+- [ ] Add failing HTTP tests proving an invalid current Worker CPU/memory sandbox policy returns 400 and creates or mutates no ExecutionSandbox.
+- [ ] Add a direct-CR reconciler test with invalid CPU/memory and seeded Secret/Pod/Service/NetworkPolicy; it must converge to `Failed/InvalidResources`, delete all siblings, and remain stable on a second reconcile.
+- [ ] Extend the shared sandbox policy resolver to require non-negative CPU/memory quantities and request <= limit when both sides are present. Keep ephemeral-storage defaults/cap behavior unchanged.
+- [ ] Run focused sandboxpolicy/server/controller tests and vet; commit as `fix(controller): converge invalid sandbox compute resources`.
+
+---
+
+### Task 6: Matrix-synchronized readiness, docs, changelog, and full regression
 
 **Files:**
 - Modify: `deepagents-agentteams/src/deepagents_agentteams/matrix.py`
@@ -127,7 +143,7 @@
 - [ ] Add backend tests proving other runtimes retain existing probes/template behavior.
 - [ ] Remove the two extra EOF blank lines and make `git diff --check` clean.
 - [ ] Document: MinIO-only support in this release, canonical `/v1` contract, global Agent deny-list, inline prompt support, unsupported package/skill behavior, Manager CLI runtime-config flow, sandbox policy refresh/reacquisition, and Matrix-synchronized readiness.
-- [ ] Add exact commit links for Tasks 1-4 to the existing DeepAgents changelog entries.
+- [ ] Add exact commit links for Tasks 1-5 to the existing DeepAgents changelog entries.
 - [ ] Run `make check-crd-sync`, Helm lint/template enabled+disabled, full controller/API/CLI tests and vet, full adapter pytest suite, `git diff --check`, and image-context diff checks.
 - [ ] Commit as `fix(deepagents): gate readiness on Matrix synchronization`.
 

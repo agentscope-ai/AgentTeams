@@ -409,6 +409,9 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.Admin != nil {
 			team.Spec.Admin = req.Admin
 		}
+		if req.HumanMembers != nil {
+			team.Spec.HumanMembers = req.HumanMembers
+		}
 		if req.PeerMentions != nil {
 			team.Spec.PeerMentions = req.PeerMentions
 		}

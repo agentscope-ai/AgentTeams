@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -63,20 +64,25 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 	var worker v1beta1.Worker
 	workerKey := client.ObjectKey{Name: sandbox.Spec.WorkerRef.Name, Namespace: sandbox.Namespace}
 	if err := r.Get(ctx, workerKey, &worker); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.revokeExecutionSandbox(ctx, &sandbox)
+		}
 		return reconcile.Result{}, fmt.Errorf("get sandbox Worker %q: %w", sandbox.Spec.WorkerRef.Name, err)
 	}
 	if worker.Labels[v1beta1.LabelController] != r.ControllerName {
-		return reconcile.Result{}, nil
+		return r.revokeExecutionSandbox(ctx, &sandbox)
 	}
 	if sandbox.Spec.WorkerRef.UID == "" || string(worker.UID) != sandbox.Spec.WorkerRef.UID {
-		return reconcile.Result{}, fmt.Errorf("execution sandbox Worker UID does not match current Worker")
+		return r.revokeExecutionSandbox(ctx, &sandbox)
 	}
 	if backend.ResolveRuntime(worker.Spec.Runtime, r.DefaultRuntime) != backend.RuntimeDeepAgents {
-		return reconcile.Result{}, fmt.Errorf("execution sandbox requires a deepagents Worker")
+		return r.revokeExecutionSandbox(ctx, &sandbox)
 	}
-	if worker.Spec.RuntimeConfig == nil || worker.Spec.RuntimeConfig.DeepAgents == nil ||
-		worker.Spec.RuntimeConfig.DeepAgents.Execution.Mode != "sandbox" {
-		return reconcile.Result{}, fmt.Errorf("deepagents Worker execution mode must be sandbox")
+	if worker.Spec.RuntimeConfig == nil || worker.Spec.RuntimeConfig.DeepAgents == nil {
+		return r.revokeExecutionSandbox(ctx, &sandbox)
+	}
+	if worker.Spec.RuntimeConfig.DeepAgents.Execution.Mode != "sandbox" {
+		return r.revokeExecutionSandbox(ctx, &sandbox)
 	}
 
 	now := time.Now().UTC()
@@ -193,6 +199,45 @@ func (r *ExecutionSandboxReconciler) Reconcile(ctx context.Context, req reconcil
 		nextLifecycleCheck = executionSandboxRequeue
 	}
 	return reconcile.Result{RequeueAfter: nextLifecycleCheck}, nil
+}
+
+func (r *ExecutionSandboxReconciler) revokeExecutionSandbox(
+	ctx context.Context,
+	sandbox *v1beta1.ExecutionSandbox,
+) (reconcile.Result, error) {
+	key := client.ObjectKeyFromObject(sandbox)
+	var revokeErrors []error
+	deleteObject := func(description string, object client.Object) {
+		if err := r.Delete(ctx, object); err != nil && !apierrors.IsNotFound(err) {
+			revokeErrors = append(revokeErrors, fmt.Errorf("delete stale execution sandbox %s: %w", description, err))
+		}
+	}
+
+	deleteObject("Service", &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}})
+	deleteObject("Secret", &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}})
+	deleteObject("Pod", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}})
+
+	var pod corev1.Pod
+	podErr := r.Get(ctx, key, &pod)
+	if podErr == nil {
+		if revokeErr := errors.Join(revokeErrors...); revokeErr != nil {
+			return reconcile.Result{}, revokeErr
+		}
+		return reconcile.Result{RequeueAfter: executionSandboxRequeue}, nil
+	}
+	if !apierrors.IsNotFound(podErr) {
+		revokeErrors = append(revokeErrors, fmt.Errorf("observe stale execution sandbox Pod deletion: %w", podErr))
+	}
+	if revokeErr := errors.Join(revokeErrors...); revokeErr != nil {
+		return reconcile.Result{}, revokeErr
+	}
+
+	deleteObject("NetworkPolicy", &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}})
+	if revokeErr := errors.Join(revokeErrors...); revokeErr != nil {
+		return reconcile.Result{}, revokeErr
+	}
+	deleteObject("ExecutionSandbox", sandbox)
+	return reconcile.Result{}, errors.Join(revokeErrors...)
 }
 
 func (r *ExecutionSandboxReconciler) failInvalidResources(
@@ -470,10 +515,38 @@ func (r *ExecutionSandboxReconciler) ensureExecutionSandboxObject(ctx context.Co
 func (r *ExecutionSandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1beta1.ExecutionSandbox{}, builder.WithPredicates(ExecutionSandboxLifecyclePredicates(r.ControllerName))).
+		Watches(
+			&v1beta1.Worker{},
+			handler.EnqueueRequestsFromMapFunc(r.executionSandboxesForWorker),
+			builder.WithPredicates(ExecutionSandboxWorkerPredicates(r.ControllerName)),
+		).
 		Owns(&corev1.Pod{}, builder.WithPredicates(PodLifecyclePredicates(v1beta1.LabelExecutionSandbox, r.ControllerName))).
 		Owns(&corev1.Service{}, builder.WithPredicates(ExecutionSandboxChildPredicates(r.ControllerName))).
 		Owns(&networkingv1.NetworkPolicy{}, builder.WithPredicates(ExecutionSandboxChildPredicates(r.ControllerName))).
 		Complete(r)
+}
+
+func (r *ExecutionSandboxReconciler) executionSandboxesForWorker(
+	ctx context.Context,
+	object client.Object,
+) []reconcile.Request {
+	var sandboxes v1beta1.ExecutionSandboxList
+	if err := r.List(
+		ctx,
+		&sandboxes,
+		client.InNamespace(object.GetNamespace()),
+		client.MatchingLabels{
+			v1beta1.LabelController: r.ControllerName,
+			v1beta1.LabelWorker:     object.GetName(),
+		},
+	); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(sandboxes.Items))
+	for i := range sandboxes.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&sandboxes.Items[i])})
+	}
+	return requests
 }
 
 func executionSandboxOwnedByController(sandbox *v1beta1.ExecutionSandbox, controllerName string) bool {
@@ -490,6 +563,20 @@ func ExecutionSandboxLifecyclePredicates(controllerName string) predicate.Predic
 	return predicate.Funcs{
 		CreateFunc:  func(e event.CreateEvent) bool { return matches(e.Object) },
 		UpdateFunc:  func(e event.UpdateEvent) bool { return matches(e.ObjectNew) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return matches(e.Object) },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+// ExecutionSandboxWorkerPredicates keeps Worker events in the current
+// controller scope while preserving updates that remove the ownership label.
+func ExecutionSandboxWorkerPredicates(controllerName string) predicate.Predicate {
+	matches := func(object client.Object) bool {
+		return object != nil && object.GetLabels()[v1beta1.LabelController] == controllerName
+	}
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return matches(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return matches(e.ObjectOld) || matches(e.ObjectNew) },
 		DeleteFunc:  func(e event.DeleteEvent) bool { return matches(e.Object) },
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}

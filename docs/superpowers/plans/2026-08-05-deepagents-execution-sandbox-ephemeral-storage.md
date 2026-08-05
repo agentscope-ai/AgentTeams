@@ -20,6 +20,7 @@
 - A valid Runner container receives Kubernetes `ephemeral-storage` request and limit; both `/workspace` and `/tmp` `emptyDir.sizeLimit` values equal the effective limit.
 - Existing CPU and memory JSON, MinIO workspace persistence, PostgreSQL checkpoints, Matrix state PVCs, and non-DeepAgents runtimes retain their current behavior.
 - Every production-code behavior change follows red-green-refactor. Generated deepcopy and CRD files are regenerated only after source type changes.
+- On the agent1 host, run `export GOTMPDIR=/var/tmp/agentteams-go-tmp GOPROXY=https://goproxy.cn,direct` before every Go, `make generate`, or `go vet` command; `/tmp` is a constrained tmpfs, while this validated `/var/tmp` path is on the root filesystem.
 - Any changes below `agentteams-controller/` must be recorded in `changelog/current.md` before the final implementation commit.
 - Never read, log, copy, commit, or pass `/home/agent1/.config/agentteams/deployment-secrets.yaml` to a subagent.
 

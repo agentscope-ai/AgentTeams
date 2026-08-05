@@ -31,7 +31,8 @@ def test_consumes_runner_token_before_hardening_and_keeps_it_usable_for_app() ->
         )
 
         assert app is not None
-        assert "AGENTTEAMS_RUNNER_TOKEN" not in os.environ
+        if "AGENTTEAMS_RUNNER_TOKEN" in os.environ:
+            pytest.fail("runner token was not consumed")
         setrlimit.assert_called_once_with(runner.resource.RLIMIT_CORE, (0, 0))
         library.prctl.assert_called_once_with(runner._PR_SET_DUMPABLE, 0, 0, 0, 0)
 
@@ -110,15 +111,24 @@ from deepagents_agentteams.runner_core import RunnerService
 
 consume_and_harden_runner_token()
 with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as state:
-    result = RunnerService(workspace=Path(workspace), state_dir=Path(state)).execute(
+    service = RunnerService(workspace=Path(workspace), state_dir=Path(state))
+    proc_result = service.execute(
         request_id="proc-environ",
         command="cat /proc/$PPID/environ >/dev/null",
         timeout_seconds=5,
     )
+    command_environment = service.execute(
+        request_id="command-environ",
+        command="env",
+        timeout_seconds=5,
+    )
     print(json.dumps({
-        "parent_environment_blocked": result.exit_code != 0,
-        "sentinel_absent": "runner-sentinel-not-a-secret" not in result.output,
-        "runner_token_absent": "AGENTTEAMS_RUNNER_TOKEN" not in result.output,
+        "parent_environment_blocked": proc_result.exit_code != 0,
+        "sentinel_absent": (
+            "runner-sentinel-not-a-secret" not in proc_result.output
+            and "runner-sentinel-not-a-secret" not in command_environment.output
+        ),
+        "runner_token_absent": "AGENTTEAMS_RUNNER_TOKEN" not in command_environment.output,
     }))
 """
     environment = os.environ.copy()

@@ -81,12 +81,33 @@ class SandboxControlClient:
                 name = str(payload.get("name", ""))
                 if not name or len(token) < 32:
                     raise RuntimeError("controller returned an incomplete ready sandbox lease")
-                return SandboxLease(name=name, endpoint=endpoint, token=token)
-            if payload.get("phase") not in {None, "", "Pending"}:
+                if self._runner_health_ready(endpoint, deadline):
+                    return SandboxLease(name=name, endpoint=endpoint, token=token)
+            if payload.get("phase") not in {None, "", "Pending", "Ready"}:
                 raise RuntimeError(f"execution sandbox entered unexpected phase {payload.get('phase')!r}")
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"execution sandbox was not ready within {self._ready_timeout_seconds} seconds")
             time.sleep(self._poll_interval_seconds)
+
+    def _runner_health_ready(self, endpoint: str, deadline: float) -> bool:
+        """Probe the side-effect-free runner endpoint before leasing it for execution."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            response = self._client.get(
+                endpoint + "/healthz",
+                timeout=min(2.0, remaining),
+            )
+        except httpx.TransportError:
+            return False
+        if response.status_code != 200:
+            return False
+        try:
+            payload = response.json()
+        except ValueError:
+            return False
+        return payload == {"status": "ok"}
 
     def heartbeat(self, session_id: str) -> None:
         """Refresh the idle deadline for a session sandbox."""

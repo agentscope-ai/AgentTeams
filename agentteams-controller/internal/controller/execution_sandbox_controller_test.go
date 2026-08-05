@@ -266,6 +266,11 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 		t.Fatalf("pod security context is not hardened: %#v", pod.Spec.SecurityContext)
 	}
 	container := pod.Spec.Containers[0]
+	if container.ReadinessProbe == nil || container.ReadinessProbe.HTTPGet == nil ||
+		container.ReadinessProbe.HTTPGet.Path != "/healthz" ||
+		container.ReadinessProbe.HTTPGet.Port.StrVal != "http" {
+		t.Fatalf("runner readiness probe is not tied to its health endpoint: %#v", container.ReadinessProbe)
+	}
 	if got := container.Resources.Requests[corev1.ResourceEphemeralStorage]; got.String() != "512Mi" {
 		t.Fatalf("ephemeral request=%q, want 512Mi", got.String())
 	}

@@ -577,6 +577,17 @@ func buildExecutionSandboxResources(
 				Image:           sandbox.Spec.Image,
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				Resources:       resources,
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+						Path:   "/healthz",
+						Port:   intstr.FromString("http"),
+						Scheme: corev1.URISchemeHTTP,
+					}},
+					PeriodSeconds:    1,
+					TimeoutSeconds:   1,
+					FailureThreshold: 3,
+					SuccessThreshold: 1,
+				},
 				Ports: []corev1.ContainerPort{{
 					Name:          "http",
 					ContainerPort: executionSandboxRunnerPort,
@@ -721,6 +732,7 @@ func executionSandboxManagedSpecHash(object client.Object) (string, error) {
 				Ports:           container.Ports,
 				Env:             container.Env,
 				Resources:       container.Resources,
+				ReadinessProbe:  container.ReadinessProbe,
 				VolumeMounts:    container.VolumeMounts,
 				SecurityContext: container.SecurityContext,
 			})
@@ -792,6 +804,7 @@ type executionSandboxManagedContainer struct {
 	Ports           []corev1.ContainerPort      `json:"ports,omitempty"`
 	Env             []corev1.EnvVar             `json:"env,omitempty"`
 	Resources       corev1.ResourceRequirements `json:"resources,omitempty"`
+	ReadinessProbe  *corev1.Probe               `json:"readinessProbe,omitempty"`
 	VolumeMounts    []corev1.VolumeMount        `json:"volumeMounts,omitempty"`
 	SecurityContext *corev1.SecurityContext     `json:"securityContext,omitempty"`
 }

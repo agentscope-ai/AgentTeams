@@ -22,6 +22,8 @@ def test_control_client_polls_until_ready_and_refreshes_service_account_token() 
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
         if len(requests) == 1:
             return httpx.Response(202, json={"name": "exec-worker-hash", "phase": "Pending"})
         return httpx.Response(
@@ -51,9 +53,58 @@ def test_control_client_polls_until_ready_and_refreshes_service_account_token() 
     assert lease.name == "exec-worker-hash"
     assert lease.endpoint == "http://exec-worker-hash:8080"
     assert lease.token == runner_token()
-    assert len(requests) == 2
+    assert len(requests) == 3
     assert requests[0].headers["Authorization"] == f"Bearer {service_account_token()}"
     assert json.loads(requests[0].content) == {"sessionId": "atd-thread-hash"}
+
+
+def test_execute_waits_for_runner_health_before_single_side_effecting_post() -> None:
+    health_requests = 0
+    execute_requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal health_requests, execute_requests
+        if request.url.host == "controller":
+            return httpx.Response(
+                200,
+                json={
+                    "name": "exec-worker-hash",
+                    "phase": "Ready",
+                    "endpoint": "http://runner:8080",
+                    "token": runner_token(),
+                },
+            )
+        if request.method == "GET" and request.url.path == "/healthz":
+            health_requests += 1
+            if health_requests < 3:
+                raise httpx.ConnectError("service endpoint is not ready", request=request)
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/v1/execute":
+            execute_requests += 1
+            return httpx.Response(
+                200,
+                json={"output": "done", "exit_code": 0, "truncated": False, "changes": []},
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    with tempfile.TemporaryDirectory() as directory:
+        token_path = Path(directory, "token")
+        token_path.write_text(service_account_token())
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        control = SandboxControlClient(
+            controller_url="http://controller:8090",
+            worker_name="researcher-cr",
+            service_account_token_path=token_path,
+            client=client,
+            poll_interval_seconds=0,
+        )
+        sandbox = AgentTeamsSandbox(control=control, session_id="atd-thread-hash", client=client)
+
+        result = sandbox.execute("printf done")
+
+    assert result.output == "done"
+    assert health_requests == 3
+    assert execute_requests == 1
 
 
 def test_execute_returns_unknown_after_exactly_one_ambiguous_runner_post() -> None:
@@ -70,6 +121,8 @@ def test_execute_returns_unknown_after_exactly_one_ambiguous_runner_post() -> No
                     "token": runner_token(),
                 },
             )
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
         payload = json.loads(request.content)
         runner_payloads.append(payload)
         raise httpx.ReadTimeout("response lost", request=request)
@@ -116,6 +169,8 @@ def test_execute_fails_closed_when_runner_result_remains_ambiguous() -> None:
                     "token": runner_token(),
                 },
             )
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
         runner_request_ids.append(json.loads(request.content)["request_id"])
         raise httpx.ReadTimeout("result lost", request=request)
 
@@ -174,6 +229,8 @@ def test_execute_replaces_reclaimed_lease_before_runner_request(reclaimed_status
                     },
                 )
             return httpx.Response(reclaimed_status, request=request)
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
         runner_requests.append(request)
         return httpx.Response(
             200,
@@ -223,6 +280,8 @@ def test_execute_propagates_non_reclaimed_heartbeat_error_without_runner_request
                     },
                 )
             return httpx.Response(500, request=request)
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
         runner_requests.append(request)
         return httpx.Response(200, json={})
 
@@ -258,6 +317,8 @@ def test_file_transfers_use_deepagents_response_contracts() -> None:
                     "token": runner_token(),
                 },
             )
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
         if request.url.path == "/v1/files/upload":
             return httpx.Response(
                 200,
@@ -327,6 +388,8 @@ def test_workspace_is_hydrated_once_and_command_changes_are_persisted() -> None:
                     "token": runner_token(),
                 },
             )
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
         payload = json.loads(request.content)
         return httpx.Response(
             200,

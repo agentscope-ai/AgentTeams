@@ -148,7 +148,7 @@ class AgentTeamsSandbox(BaseSandbox):
         return f"agentteams:{self._session_id}"
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
-        """Execute a command with a retry-stable request ID."""
+        """Execute a command once, failing closed when its response is ambiguous."""
         timeout_seconds = self._default_timeout_seconds if timeout is None else timeout
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds < 1:
             raise ValueError("timeout must be a positive integer")
@@ -164,7 +164,7 @@ class AgentTeamsSandbox(BaseSandbox):
                 timeout_seconds=timeout_seconds + 10,
             )
         except httpx.TransportError:
-            _LOGGER.exception("runner result remained ambiguous after idempotent retry")
+            _LOGGER.exception("runner result is ambiguous after the single allowed request")
             return ExecuteResponse(
                 output="Execution outcome is unknown; the command was not re-run with a new request ID for safety.",
                 exit_code=None,
@@ -252,20 +252,12 @@ class AgentTeamsSandbox(BaseSandbox):
                 raise
             self._lease = None
             lease = self._ensure_lease()
-        last_error: httpx.TransportError | None = None
-        for _attempt in range(2):
-            try:
-                return self._client.post(
-                    lease.endpoint + path,
-                    json=payload,
-                    headers={"Authorization": f"Bearer {lease.token}"},
-                    timeout=timeout_seconds,
-                )
-            except httpx.TransportError as exc:
-                last_error = exc
-        if last_error is None:  # pragma: no cover - the fixed retry loop always records an error.
-            raise RuntimeError("runner request failed without a transport error")
-        raise last_error
+        return self._client.post(
+            lease.endpoint + path,
+            json=payload,
+            headers={"Authorization": f"Bearer {lease.token}"},
+            timeout=timeout_seconds,
+        )
 
     def _ensure_lease(self) -> SandboxLease:
         if self._lease is None:

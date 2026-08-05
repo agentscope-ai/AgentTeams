@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,12 @@ from nio import (
 from deepagents_agentteams.config import MatrixConfig
 
 _LOGGER = logging.getLogger(__name__)
+_EVENT_JOURNAL_VERSION = 1
+_MAX_COMPLETED_EVENTS = 4096
+_UNKNOWN_OUTCOME_REPLY = (
+    "Processing of this Matrix event was interrupted and its outcome is unknown. "
+    "It was not executed again for safety."
+)
 
 
 class MatrixAccessTokenExpired(RuntimeError):
@@ -73,6 +80,165 @@ class MatrixMessage:
     thread_root_event_id: str
     sender: str
     body: str
+
+
+class _EventJournal:
+    """Durable handoff from the Matrix sync cursor to the message handler."""
+
+    def __init__(self, state_dir: Path) -> None:
+        self._path = state_dir / "matrix-events.json"
+        self._state_dir = state_dir
+        self._data = self._load()
+
+    def enqueue(self, message: MatrixMessage) -> bool:
+        """Persist one normalized event and report whether this sync must accept it."""
+        events = self._events
+        existing = events.get(message.event_id)
+        if existing is not None:
+            return existing["status"] == "pending" and not existing["cursor_accepted"]
+        sequence = self._data["next_sequence"]
+        self._data["next_sequence"] = sequence + 1
+        events[message.event_id] = {
+            "status": "pending",
+            "sequence": sequence,
+            "accepted_cursor": None,
+            "cursor_accepted": False,
+            "message": {
+                "room_id": message.room_id,
+                "event_id": message.event_id,
+                "thread_root_event_id": message.thread_root_event_id,
+                "sender": message.sender,
+                "body": message.body,
+            },
+        }
+        self._write()
+        return True
+
+    def prepare_cursor(self, event_ids: list[str], cursor: str) -> None:
+        """Bind newly journaled events to a cursor before that cursor is saved."""
+        changed = False
+        for event_id in dict.fromkeys(event_ids):
+            record = self._events.get(event_id)
+            if record is None or record["status"] != "pending" or record["cursor_accepted"]:
+                continue
+            if record["accepted_cursor"] != cursor:
+                record["accepted_cursor"] = cursor
+                changed = True
+        if changed:
+            self._write()
+
+    def commit_cursor(self, cursor: str | None) -> None:
+        """Confirm records whose prepared cursor is now the durable sync cursor."""
+        if cursor is None:
+            return
+        changed = False
+        for record in self._events.values():
+            if record["accepted_cursor"] == cursor and not record["cursor_accepted"]:
+                record["cursor_accepted"] = True
+                changed = True
+        if changed:
+            self._write()
+
+    def ready_records(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return accepted unfinished records in their durable arrival order."""
+        records = (
+            (event_id, record)
+            for event_id, record in self._events.items()
+            if record["cursor_accepted"] and record["status"] in {"pending", "processing"}
+        )
+        return sorted(records, key=lambda item: item[1]["sequence"])
+
+    def mark_processing(self, event_id: str) -> None:
+        record = self._events[event_id]
+        if record["status"] != "pending" or not record["cursor_accepted"]:
+            raise RuntimeError("only an accepted pending Matrix event can start processing")
+        record["status"] = "processing"
+        self._write()
+
+    def mark_completed(self, event_id: str) -> None:
+        record = self._events[event_id]
+        if record["status"] != "processing":
+            raise RuntimeError("only a processing Matrix event can complete")
+        record["status"] = "completed"
+        # The event ID remains as the deduplication key; the potentially large
+        # body is no longer needed after the handler outcome is durable.
+        record["message"] = None
+        self._prune_completed()
+        self._write()
+
+    @staticmethod
+    def message(record: dict[str, Any]) -> MatrixMessage:
+        payload = record["message"]
+        if not isinstance(payload, dict):
+            raise RuntimeError("unfinished Matrix journal record has no message")
+        return MatrixMessage(**payload)
+
+    @property
+    def _events(self) -> dict[str, dict[str, Any]]:
+        return self._data["events"]
+
+    def _load(self) -> dict[str, Any]:
+        if not self._path.exists():
+            return {"version": _EVENT_JOURNAL_VERSION, "next_sequence": 1, "events": {}}
+        try:
+            data = json.loads(self._path.read_text())
+            self._validate(data)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise RuntimeError("Matrix event journal is invalid") from exc
+        return data
+
+    @staticmethod
+    def _validate(data: Any) -> None:
+        if not isinstance(data, dict) or data.get("version") != _EVENT_JOURNAL_VERSION:
+            raise ValueError("unsupported journal version")
+        if not isinstance(data.get("next_sequence"), int) or data["next_sequence"] < 1:
+            raise ValueError("invalid next sequence")
+        events = data.get("events")
+        if not isinstance(events, dict):
+            raise ValueError("invalid events")
+        for event_id, record in events.items():
+            if not isinstance(event_id, str) or not event_id or not isinstance(record, dict):
+                raise ValueError("invalid event record")
+            if record.get("status") not in {"pending", "processing", "completed"}:
+                raise ValueError("invalid event state")
+            if not isinstance(record.get("sequence"), int) or record["sequence"] < 1:
+                raise ValueError("invalid event sequence")
+            cursor = record.get("accepted_cursor")
+            if cursor is not None and (not isinstance(cursor, str) or not cursor):
+                raise ValueError("invalid accepted cursor")
+            if not isinstance(record.get("cursor_accepted"), bool):
+                raise ValueError("invalid cursor acceptance")
+            payload = record.get("message")
+            if record["status"] == "completed":
+                if payload is not None:
+                    raise ValueError("completed event retained message payload")
+                continue
+            if not isinstance(payload, dict) or set(payload) != {
+                "room_id",
+                "event_id",
+                "thread_root_event_id",
+                "sender",
+                "body",
+            }:
+                raise ValueError("invalid event message")
+            if payload.get("event_id") != event_id or not all(isinstance(value, str) for value in payload.values()):
+                raise ValueError("invalid event message fields")
+
+    def _prune_completed(self) -> None:
+        completed = sorted(
+            (
+                (event_id, record)
+                for event_id, record in self._events.items()
+                if record["status"] == "completed" and record["cursor_accepted"]
+            ),
+            key=lambda item: item[1]["sequence"],
+        )
+        for event_id, _record in completed[:-_MAX_COMPLETED_EVENTS]:
+            del self._events[event_id]
+
+    def _write(self) -> None:
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write(self._path, json.dumps(self._data, sort_keys=True, separators=(",", ":")) + "\n")
 
 
 def matrix_message_from_event(
@@ -130,7 +296,8 @@ class MatrixTransport:
         self._refresh_access_token = refresh_access_token
         self._client_factory = client_factory
         self.client: Any | None = None
-        self._event_tasks: set[asyncio.Task[None]] = set()
+        self._journal = _EventJournal(state_dir)
+        self._current_sync_event_ids: list[str] = []
         self._synchronized = False
 
     async def run_forever(self) -> None:
@@ -139,10 +306,6 @@ class MatrixTransport:
         try:
             await self._sync_loop()
         finally:
-            for task in self._event_tasks:
-                task.cancel()
-            if self._event_tasks:
-                await asyncio.gather(*self._event_tasks, return_exceptions=True)
             if self.client is not None:
                 await self.client.close()
 
@@ -213,9 +376,11 @@ class MatrixTransport:
         self.client.add_event_callback(self._schedule_message, (RoomMessageText,))
 
     async def _sync_loop(self) -> None:
-        next_batch = self._load_sync_token()
         while True:
             try:
+                next_batch = self._load_sync_token()
+                self._journal.commit_cursor(next_batch)
+                await self._drain_journal()
                 if next_batch is None:
                     response = await self._initial_sync_without_replay()
                 else:
@@ -224,7 +389,7 @@ class MatrixTransport:
                         since=next_batch,
                         full_state=False,
                     )
-                next_batch = await self._accept_sync_response(response)
+                await self._accept_sync_response(response)
             except asyncio.CancelledError:
                 raise
             except MatrixAccessTokenExpired:
@@ -260,10 +425,14 @@ class MatrixTransport:
                 join_response = await self.client.join(room_id)
             _require_matrix_response(join_response, JoinResponse, "Matrix room join")
         await self._e2ee_maintenance()
+        self._journal.prepare_cursor(self._current_sync_event_ids, response.next_batch)
         self._save_sync_token(response.next_batch)
+        self._journal.commit_cursor(response.next_batch)
+        self._current_sync_event_ids.clear()
         if not self._synchronized and self._on_synchronized is not None:
             await self._on_synchronized()
             self._synchronized = True
+        await self._drain_journal()
         return response.next_batch
 
     async def _refresh_client_token(self) -> None:
@@ -291,25 +460,38 @@ class MatrixTransport:
         )
         if message is None:
             return
+        if self._journal.enqueue(message):
+            self._current_sync_event_ids.append(message.event_id)
+
+    async def _drain_journal(self) -> None:
+        """Finish accepted events before another Matrix sync is requested."""
+        for event_id, record in self._journal.ready_records():
+            message = self._journal.message(record)
+            if record["status"] == "processing":
+                await self.send_reply(message, _UNKNOWN_OUTCOME_REPLY)
+                self._journal.mark_completed(event_id)
+                await self._mark_read(message)
+                continue
+            self._journal.mark_processing(event_id)
+            try:
+                await self._on_message(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.error(
+                    "Matrix message handling failed",
+                    exc_info=True,
+                )
+                raise
+            self._journal.mark_completed(event_id)
+            await self._mark_read(message)
+
+    async def _mark_read(self, message: MatrixMessage) -> None:
         with suppress(Exception):
             await self.client.room_read_markers(
                 message.room_id,
                 fully_read_event=message.event_id,
                 read_event=message.event_id,
-            )
-        task = asyncio.create_task(self._on_message(message))
-        self._event_tasks.add(task)
-        task.add_done_callback(self._message_task_done)
-
-    def _message_task_done(self, task: asyncio.Task[None]) -> None:
-        self._event_tasks.discard(task)
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            _LOGGER.error(
-                "Matrix message handling failed",
-                exc_info=(type(error), error, error.__traceback__),
             )
 
     def _load_sync_token(self) -> str | None:
@@ -321,18 +503,23 @@ class MatrixTransport:
 
     def _save_sync_token(self, token: str) -> None:
         path = self._state_dir / "sync-token"
-        temporary = path.with_suffix(".tmp")
-        with temporary.open("w") as stream:
-            stream.write(token)
-            stream.flush()
-            os.fsync(stream.fileno())
-            os.fchmod(stream.fileno(), 0o600)
-        temporary.replace(path)
-        directory_fd = os.open(self._state_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _atomic_write(path, token)
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Replace one state file after flushing both its bytes and directory entry."""
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+        os.fchmod(stream.fileno(), 0o600)
+    temporary.replace(path)
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def _is_unauthorized(response: Any) -> bool:

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -268,6 +269,207 @@ async def test_accept_sync_joins_only_controller_projected_rooms(tmp_path: Path)
     assert (tmp_path / "sync-token").read_text() == "next-batch"
 
 
+async def test_sync_journals_event_before_cursor_and_completes_before_read_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations: list[str] = []
+
+    class FakeClient:
+        olm = None
+
+        async def room_read_markers(self, *_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+            operations.append("read")
+
+    async def handle_message(_message: MatrixMessage) -> None:
+        assert (tmp_path / "sync-token").read_text() == "next-batch"
+        journal = json.loads((tmp_path / "matrix-events.json").read_text())
+        assert journal["events"]["$task"]["status"] == "processing"
+        operations.append("handled")
+
+    transport = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=handle_message,
+    )
+    transport.client = FakeClient()
+    original_save = transport._save_sync_token
+
+    def observe_cursor_save(token: str) -> None:
+        journal = json.loads((tmp_path / "matrix-events.json").read_text())
+        assert journal["events"]["$task"]["status"] == "pending"
+        operations.append("cursor")
+        original_save(token)
+
+    monkeypatch.setattr(transport, "_save_sync_token", observe_cursor_save)
+
+    await transport._schedule_message(
+        SimpleNamespace(room_id="!allowed:example.org"),
+        event(event_id="$task"),
+    )
+    assert operations == []
+    await transport._accept_sync_response(sync_response("next-batch"))
+
+    journal = json.loads((tmp_path / "matrix-events.json").read_text())
+    assert journal["events"]["$task"]["status"] == "completed"
+    assert operations == ["cursor", "handled", "read"]
+
+    monkeypatch.setattr(transport, "_save_sync_token", original_save)
+    await transport._schedule_message(
+        SimpleNamespace(room_id="!allowed:example.org"),
+        event(event_id="$task"),
+    )
+    await transport._accept_sync_response(sync_response("later-batch"))
+    assert operations == ["cursor", "handled", "read"]
+
+
+async def test_pending_event_after_cursor_persistence_is_handled_once_after_restart(tmp_path: Path) -> None:
+    first = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=lambda _message: None,
+    )
+    first.client = SimpleNamespace(olm=None)
+    await first._schedule_message(
+        SimpleNamespace(room_id="!allowed:example.org"),
+        event(event_id="$pending"),
+    )
+
+    async def crash_before_drain() -> None:
+        raise asyncio.CancelledError
+
+    first._drain_journal = crash_before_drain  # type: ignore[method-assign]
+    with pytest.raises(asyncio.CancelledError):
+        await first._accept_sync_response(sync_response("pending-cursor"))
+
+    handled: list[str] = []
+    read: list[str] = []
+
+    class RecoveryClient:
+        async def room_read_markers(self, _room_id, *, fully_read_event, read_event) -> None:  # noqa: ANN001
+            assert fully_read_event == read_event
+            read.append(read_event)
+
+    async def handle(message: MatrixMessage) -> None:
+        handled.append(message.event_id)
+
+    recovered = MatrixTransport(
+        config=first._config,  # noqa: SLF001 - restart uses the exact same projected runtime.
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=handle,
+    )
+    recovered.client = RecoveryClient()
+    await recovered._drain_journal()
+    await recovered._drain_journal()
+
+    assert handled == ["$pending"]
+    assert read == ["$pending"]
+
+
+@pytest.mark.parametrize(
+    ("event_id", "body"),
+    [("$task", "please investigate"), ("$approval", "approve 1")],
+)
+async def test_restart_fails_closed_for_processing_event_without_reinvoking_handler(
+    tmp_path: Path,
+    event_id: str,
+    body: str,
+) -> None:
+    handler_started = asyncio.Event()
+    never_complete = asyncio.Event()
+    handler_calls: list[str] = []
+
+    class FirstClient:
+        olm = None
+
+        async def room_read_markers(self, *_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+            raise AssertionError("processing events must not be marked read")
+
+    async def interrupted_handler(message: MatrixMessage) -> None:
+        handler_calls.append(message.event_id)
+        handler_started.set()
+        await never_complete.wait()
+
+    first = MatrixTransport(
+        config=MatrixConfig(
+            homeserver_url="https://matrix.example.org",
+            user_id="@worker:example.org",
+            room_id="!allowed:example.org",
+            access_token=matrix_token(),
+            encryption_enabled=False,
+        ),
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=interrupted_handler,
+    )
+    first.client = FirstClient()
+    await first._schedule_message(
+        SimpleNamespace(room_id="!allowed:example.org"),
+        event(event_id=event_id, content={"msgtype": "m.text", "body": body}),
+    )
+    accepting = asyncio.create_task(first._accept_sync_response(sync_response("durable-cursor")))
+    await handler_started.wait()
+    accepting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await accepting
+
+    persisted = json.loads((tmp_path / "matrix-events.json").read_text())
+    assert persisted["events"][event_id]["status"] == "processing"
+    assert (tmp_path / "sync-token").read_text() == "durable-cursor"
+
+    recovery_operations: list[str] = []
+
+    class RecoveryClient:
+        olm = None
+
+        async def room_send(self, **kwargs):  # noqa: ANN003, ANN202
+            recovery_operations.append(f"reply:{kwargs['content']['m.relates_to']['event_id']}")
+            assert "unknown" in kwargs["content"]["body"].lower()
+            return RoomSendResponse("$unknown-reply", kwargs["room_id"])
+
+        async def room_read_markers(self, *_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+            recovery_operations.append("read")
+
+    async def must_not_repeat(_message: MatrixMessage) -> None:
+        raise AssertionError("a recovered processing event must never be executed again")
+
+    recovered = MatrixTransport(
+        config=first._config,  # noqa: SLF001 - restart uses the exact same projected runtime.
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=must_not_repeat,
+    )
+    recovered.client = RecoveryClient()
+    await recovered._drain_journal()
+
+    persisted = json.loads((tmp_path / "matrix-events.json").read_text())
+    assert persisted["events"][event_id]["status"] == "completed"
+    assert handler_calls == [event_id]
+    assert recovery_operations == [f"reply:{event_id}", "read"]
+
+    await recovered._schedule_message(
+        SimpleNamespace(room_id="!allowed:example.org"),
+        event(event_id=event_id, content={"msgtype": "m.text", "body": body}),
+    )
+    await recovered._accept_sync_response(sync_response("later-cursor"))
+    assert handler_calls == [event_id]
+
+
 @pytest.mark.parametrize("saved_token", [None, "previous-batch"])
 async def test_signals_synchronized_once_after_initial_or_resumed_token_is_saved(
     tmp_path: Path,
@@ -467,7 +669,7 @@ async def test_initial_sync_refreshes_token_when_allowed_room_join_is_unauthoriz
     ]
 
 
-async def test_message_handler_failure_is_retrieved_and_logged(
+async def test_handler_failure_remains_processing_for_fail_closed_restart(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -492,17 +694,45 @@ async def test_message_handler_failure_is_retrieved_and_logged(
     )
     transport.client = FakeClient()
 
-    with caplog.at_level(logging.ERROR, logger="deepagents_agentteams.matrix"):
-        await transport._schedule_message(
-            SimpleNamespace(room_id="!allowed:example.org"),
-            event(),
-        )
-        tasks = tuple(transport._event_tasks)
-        await asyncio.gather(*tasks, return_exceptions=True)
+    await transport._schedule_message(
+        SimpleNamespace(room_id="!allowed:example.org"),
+        event(),
+    )
+    with caplog.at_level(logging.ERROR, logger="deepagents_agentteams.matrix"), pytest.raises(
+        RuntimeError, match="handler failed"
+    ):
+        await transport._accept_sync_response(sync_response("handler-failed-cursor"))
 
-    assert transport._event_tasks == set()
+    journal = json.loads((tmp_path / "matrix-events.json").read_text())
+    assert journal["events"]["$event"]["status"] == "processing"
     assert "Matrix message handling failed" in caplog.text
     assert "RuntimeError: handler failed" in caplog.text
+
+    recovery_operations: list[str] = []
+
+    class RecoveryClient:
+        async def room_send(self, **kwargs):  # noqa: ANN003, ANN202
+            recovery_operations.append("unknown")
+            return RoomSendResponse("$unknown", kwargs["room_id"])
+
+        async def room_read_markers(self, *_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+            recovery_operations.append("read")
+
+    async def must_not_repeat(_message: MatrixMessage) -> None:
+        raise AssertionError("must not repeat")
+
+    recovered = MatrixTransport(
+        config=transport._config,  # noqa: SLF001 - restart uses the exact same projected runtime.
+        allowed_room_ids=frozenset({"!allowed:example.org"}),
+        state_dir=tmp_path,
+        on_message=must_not_repeat,
+    )
+    recovered.client = RecoveryClient()
+    await recovered._drain_journal()
+
+    assert recovery_operations == ["unknown", "read"]
+    journal = json.loads((tmp_path / "matrix-events.json").read_text())
+    assert journal["events"]["$event"]["status"] == "completed"
 
 
 async def test_controller_matrix_token_provider_reads_fresh_service_account_token(tmp_path: Path) -> None:

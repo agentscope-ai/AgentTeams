@@ -56,7 +56,7 @@ def test_control_client_polls_until_ready_and_refreshes_service_account_token() 
     assert json.loads(requests[0].content) == {"sessionId": "atd-thread-hash"}
 
 
-def test_execute_retries_transport_failure_with_the_same_request_id() -> None:
+def test_execute_returns_unknown_after_exactly_one_ambiguous_runner_post() -> None:
     runner_payloads: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -72,18 +72,7 @@ def test_execute_retries_transport_failure_with_the_same_request_id() -> None:
             )
         payload = json.loads(request.content)
         runner_payloads.append(payload)
-        if len(runner_payloads) == 1:
-            raise httpx.ReadTimeout("response lost", request=request)
-        return httpx.Response(
-            200,
-            json={
-                "request_id": payload["request_id"],
-                "output": "done",
-                "exit_code": 0,
-                "truncated": False,
-                "changes": [],
-            },
-        )
+        raise httpx.ReadTimeout("response lost", request=request)
 
     with tempfile.TemporaryDirectory() as directory:
         token_path = Path(directory, "token")
@@ -103,10 +92,9 @@ def test_execute_retries_transport_failure_with_the_same_request_id() -> None:
 
         result = sandbox.execute("printf done", timeout=17)
 
-    assert result.output == "done"
-    assert result.exit_code == 0
-    assert len(runner_payloads) == 2
-    assert runner_payloads[0]["request_id"] == runner_payloads[1]["request_id"]
+    assert "unknown" in result.output.lower()
+    assert result.exit_code is None
+    assert len(runner_payloads) == 1
     assert runner_payloads[0]["timeout_seconds"] == 17
 
 
@@ -147,8 +135,7 @@ def test_execute_fails_closed_when_runner_result_remains_ambiguous() -> None:
 
     assert result.exit_code is None
     assert "unknown" in result.output.lower()
-    assert len(runner_request_ids) == 2
-    assert runner_request_ids[0] == runner_request_ids[1]
+    assert len(runner_request_ids) == 1
     assert ensure_requests == 1
 
 

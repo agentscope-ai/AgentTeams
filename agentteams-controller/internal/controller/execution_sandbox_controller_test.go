@@ -379,6 +379,121 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 	}
 }
 
+func TestExecutionSandboxReconcilerRecreatesStaleImmutableResourcesAndUpdatesNetworkPolicy(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "researcher", Namespace: "agentteams-system", UID: "worker-uid"},
+		Spec: v1beta1.WorkerSpec{
+			Model: "qwen-max",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+				Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+			}},
+		},
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "exec-policy-refresh", Namespace: "agentteams-system", UID: "sandbox-uid"},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+			SessionID: "thread-hash",
+			Egress:    []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{443}}},
+		},
+	}
+	key := types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.ExecutionSandbox{}).
+		WithObjects(worker, sandbox).
+		Build()
+	r := &ExecutionSandboxReconciler{
+		Client:         cl,
+		RunnerImage:    "runner:v1",
+		ControllerName: "ctl-a",
+		DefaultRuntime: "deepagents",
+		EgressCeilings: []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.0/12", Ports: []int32{443}}},
+	}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("initial Reconcile: %v", err)
+	}
+
+	var pod corev1.Pod
+	if err := cl.Get(context.Background(), key, &pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Spec.Containers[0].Image = "runner:stale"
+	if err := cl.Update(context.Background(), &pod); err != nil {
+		t.Fatalf("inject Pod drift: %v", err)
+	}
+	var service corev1.Service
+	if err := cl.Get(context.Background(), key, &service); err != nil {
+		t.Fatal(err)
+	}
+	service.Spec.Ports[0].Port = 9090
+	if err := cl.Update(context.Background(), &service); err != nil {
+		t.Fatalf("inject Service drift: %v", err)
+	}
+	var policy networkingv1.NetworkPolicy
+	if err := cl.Get(context.Background(), key, &policy); err != nil {
+		t.Fatal(err)
+	}
+	policy.Spec.Egress = nil
+	if err := cl.Update(context.Background(), &policy); err != nil {
+		t.Fatalf("inject NetworkPolicy drift: %v", err)
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("reconcile stale Service: %v", err)
+	}
+	if result.RequeueAfter != executionSandboxRequeue {
+		t.Fatalf("stale Service requeue=%s, want %s", result.RequeueAfter, executionSandboxRequeue)
+	}
+	if err := cl.Get(context.Background(), key, &service); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale immutable Service was not deleted: %v", err)
+	}
+
+	result, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("reconcile stale Pod: %v", err)
+	}
+	if result.RequeueAfter != executionSandboxRequeue {
+		t.Fatalf("stale Pod requeue=%s, want %s", result.RequeueAfter, executionSandboxRequeue)
+	}
+	if err := cl.Get(context.Background(), key, &pod); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale immutable Pod was not deleted: %v", err)
+	}
+	if err := cl.Get(context.Background(), key, &policy); err != nil {
+		t.Fatalf("NetworkPolicy must remain present while it is updated: %v", err)
+	}
+	if len(policy.Spec.Egress) != 2 {
+		t.Fatalf("NetworkPolicy egress=%#v, want restored desired policy", policy.Spec.Egress)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("recreate immutable resources: %v", err)
+	}
+	if err := cl.Get(context.Background(), key, &service); err != nil {
+		t.Fatalf("recreated Service: %v", err)
+	}
+	if service.Spec.Ports[0].Port != 8080 {
+		t.Fatalf("recreated Service port=%d, want 8080", service.Spec.Ports[0].Port)
+	}
+	if err := cl.Get(context.Background(), key, &pod); err != nil {
+		t.Fatalf("recreated Pod: %v", err)
+	}
+	if pod.Spec.Containers[0].Image != "runner:v1" {
+		t.Fatalf("recreated Pod image=%q, want runner:v1", pod.Spec.Containers[0].Image)
+	}
+}
+
 func TestExecutionSandboxReconcilerSchedulesReadySandboxExpiry(t *testing.T) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	r, cl, key := newExecutionSandboxLifecycleTestRig(t, now)

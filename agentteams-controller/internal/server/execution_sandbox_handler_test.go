@@ -168,17 +168,7 @@ func TestExecutionSandboxEnsureRejectsInvalidWorkerEphemeralStorageOverrides(t *
 func TestExecutionSandboxEnsureReturnsTokenOnlyAfterRunnerReady(t *testing.T) {
 	worker := deepAgentsSandboxWorker()
 	name := executionSandboxName(worker.Name, "thread-hash")
-	sandbox := &v1beta1.ExecutionSandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system"},
-		Spec: v1beta1.ExecutionSandboxSpec{
-			WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
-			SessionID: "thread-hash",
-		},
-		Status: v1beta1.ExecutionSandboxStatus{
-			Phase:    "Ready",
-			Endpoint: "http://runner.agentteams-system.svc:8080",
-		},
-	}
+	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system"},
 		Data:       map[string][]byte{"token": []byte("runner-token-value-with-at-least-32-bytes")},
@@ -198,6 +188,208 @@ func TestExecutionSandboxEnsureReturnsTokenOnlyAfterRunnerReady(t *testing.T) {
 	}
 	if response.Token != "runner-token-value-with-at-least-32-bytes" || response.Endpoint != sandbox.Status.Endpoint {
 		t.Fatalf("response=%#v", response)
+	}
+}
+
+func TestExecutionSandboxEnsureRefreshesExistingPolicyBeforeReturningReadyLease(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*v1beta1.Worker)
+		check  func(*testing.T, v1beta1.ExecutionSandboxSpec)
+	}{
+		{
+			name: "resources",
+			change: func(worker *v1beta1.Worker) {
+				worker.Spec.RuntimeConfig.DeepAgents.Execution.Resources = &v1beta1.ExecutionSandboxResourceRequirements{
+					Requests: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "512Mi"},
+					Limits:   v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "4Gi"},
+				}
+			},
+			check: func(t *testing.T, spec v1beta1.ExecutionSandboxSpec) {
+				t.Helper()
+				if spec.Resources == nil || spec.Resources.Requests.EphemeralStorage != "512Mi" || spec.Resources.Limits.EphemeralStorage != "4Gi" {
+					t.Fatalf("resources=%#v, want request=512Mi limit=4Gi", spec.Resources)
+				}
+			},
+		},
+		{
+			name: "egress",
+			change: func(worker *v1beta1.Worker) {
+				worker.Spec.RuntimeConfig.DeepAgents.Execution.Egress = []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.20/32", Ports: []int32{8443}}}
+			},
+			check: func(t *testing.T, spec v1beta1.ExecutionSandboxSpec) {
+				t.Helper()
+				if len(spec.Egress) != 1 || spec.Egress[0].CIDR != "10.96.0.20/32" || len(spec.Egress[0].Ports) != 1 || spec.Egress[0].Ports[0] != 8443 {
+					t.Fatalf("egress=%#v, want 10.96.0.20/32:8443", spec.Egress)
+				}
+			},
+		},
+		{
+			name: "idle timeout",
+			change: func(worker *v1beta1.Worker) {
+				worker.Spec.RuntimeConfig.DeepAgents.Execution.IdleTimeout = "45m"
+			},
+			check: func(t *testing.T, spec v1beta1.ExecutionSandboxSpec) {
+				t.Helper()
+				if spec.IdleTimeout != "45m" {
+					t.Fatalf("idleTimeout=%q, want 45m", spec.IdleTimeout)
+				}
+			},
+		},
+		{
+			name: "max lifetime",
+			change: func(worker *v1beta1.Worker) {
+				worker.Spec.RuntimeConfig.DeepAgents.Execution.MaxLifetime = "12h"
+			},
+			check: func(t *testing.T, spec v1beta1.ExecutionSandboxSpec) {
+				t.Helper()
+				if spec.MaxLifetime != "12h" {
+					t.Fatalf("maxLifetime=%q, want 12h", spec.MaxLifetime)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := deepAgentsSandboxWorker()
+			name := executionSandboxName(worker.Name, "thread-hash")
+			sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+			tt.change(worker)
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system"},
+				Data:       map[string][]byte{"token": []byte("runner-token-value-with-at-least-32-bytes")},
+			}
+			h := newExecutionSandboxHandlerTestClient(t, worker, sandbox, secret)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/execution-sandboxes/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+			req.SetPathValue("name", worker.Name)
+			rec := httptest.NewRecorder()
+
+			h.Ensure(rec, req)
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status=%d body=%s, want pending after policy refresh", rec.Code, rec.Body.String())
+			}
+			var response ExecutionSandboxResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Phase != "Pending" || response.Token != "" || response.Endpoint != "" {
+				t.Fatalf("response=%#v, want Pending without an old-policy lease", response)
+			}
+			var updated v1beta1.ExecutionSandbox
+			if err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "agentteams-system"}, &updated); err != nil {
+				t.Fatal(err)
+			}
+			tt.check(t, updated.Spec)
+			if updated.Status.ObservedGeneration != 1 {
+				t.Fatalf("policy refresh changed status.observedGeneration=%d", updated.Status.ObservedGeneration)
+			}
+		})
+	}
+}
+
+func TestExecutionSandboxEnsureRejectsInvalidCurrentWorkerResourcesWithoutMutatingExistingSandbox(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	name := executionSandboxName(worker.Name, "thread-hash")
+	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+	worker.Spec.RuntimeConfig.DeepAgents.Execution.Resources = &v1beta1.ExecutionSandboxResourceRequirements{
+		Limits: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "9Gi"},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system"},
+		Data:       map[string][]byte{"token": []byte("runner-token-value-with-at-least-32-bytes")},
+	}
+	h := newExecutionSandboxHandlerTestClient(t, worker, sandbox, secret)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/execution-sandboxes/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+
+	h.Ensure(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	var unchanged v1beta1.ExecutionSandbox
+	if err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "agentteams-system"}, &unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Spec.Resources == nil || unchanged.Spec.Resources.Requests.EphemeralStorage != "256Mi" || unchanged.Spec.Resources.Limits.EphemeralStorage != "2Gi" {
+		t.Fatalf("invalid Worker override mutated existing sandbox=%#v", unchanged.Spec)
+	}
+}
+
+func TestExecutionSandboxEnsurePreservesIdentityCollisionResponse(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	name := executionSandboxName(worker.Name, "thread-hash")
+	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+	sandbox.Spec.WorkerRef.UID = "different-worker-uid"
+	worker.Spec.RuntimeConfig.DeepAgents.Execution.Resources = &v1beta1.ExecutionSandboxResourceRequirements{
+		Limits: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "9Gi"},
+	}
+	h := newExecutionSandboxHandlerTestClient(t, worker, sandbox)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/execution-sandboxes/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+
+	h.Ensure(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want identity collision 409", rec.Code, rec.Body.String())
+	}
+	var unchanged v1beta1.ExecutionSandbox
+	if err := h.client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "agentteams-system"}, &unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Spec.WorkerRef.UID != "different-worker-uid" {
+		t.Fatalf("identity collision mutated existing sandbox=%#v", unchanged.Spec)
+	}
+}
+
+func TestExecutionSandboxEnsureWithStaleReadyStatusReturnsPendingWithoutToken(t *testing.T) {
+	worker := deepAgentsSandboxWorker()
+	name := executionSandboxName(worker.Name, "thread-hash")
+	sandbox := readyExecutionSandbox(worker, name, "thread-hash")
+	sandbox.Generation = 7
+	sandbox.Status.ObservedGeneration = 6
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system"},
+		Data:       map[string][]byte{"token": []byte("runner-token-value-with-at-least-32-bytes")},
+	}
+	h := newExecutionSandboxHandlerTestClient(t, worker, sandbox, secret)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/researcher/execution-sandboxes/ensure", strings.NewReader(`{"sessionId":"thread-hash"}`))
+	req.SetPathValue("name", worker.Name)
+	rec := httptest.NewRecorder()
+
+	h.Ensure(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want Pending while status is stale", rec.Code, rec.Body.String())
+	}
+	var response ExecutionSandboxResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Phase != "Pending" || response.Token != "" || response.Endpoint != "" {
+		t.Fatalf("response=%#v, want Pending without token", response)
+	}
+}
+
+func readyExecutionSandbox(worker *v1beta1.Worker, name, sessionID string) *v1beta1.ExecutionSandbox {
+	return &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "agentteams-system", Generation: 1},
+		Spec: v1beta1.ExecutionSandboxSpec{
+			WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+			SessionID:   sessionID,
+			IdleTimeout: "30m",
+			MaxLifetime: "8h",
+			Resources: &v1beta1.ExecutionSandboxResourceRequirements{
+				Requests: v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "256Mi"},
+				Limits:   v1beta1.ExecutionSandboxResourceValues{EphemeralStorage: "2Gi"},
+			},
+			Egress: []v1beta1.DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{443}}},
+		},
+		Status: v1beta1.ExecutionSandboxStatus{
+			ObservedGeneration: 1,
+			Phase:              "Ready",
+			Endpoint:           "http://runner.agentteams-system.svc:8080",
+		},
 	}
 }
 

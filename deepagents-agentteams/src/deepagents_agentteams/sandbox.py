@@ -245,7 +245,13 @@ class AgentTeamsSandbox(BaseSandbox):
         timeout_seconds: float = 30,
     ) -> httpx.Response:
         lease = self._ensure_lease()
-        self._control.heartbeat(self._session_id)
+        try:
+            self._control.heartbeat(self._session_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {404, 410}:
+                raise
+            self._lease = None
+            lease = self._ensure_lease()
         last_error: httpx.TransportError | None = None
         for _attempt in range(2):
             try:

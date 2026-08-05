@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import httpx
+import pytest
 
 from deepagents_agentteams.sandbox import AgentTeamsSandbox, SandboxControlClient
 
@@ -111,9 +112,13 @@ def test_execute_retries_transport_failure_with_the_same_request_id() -> None:
 
 def test_execute_fails_closed_when_runner_result_remains_ambiguous() -> None:
     runner_request_ids: list[str] = []
+    ensure_requests = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal ensure_requests
         if request.url.host == "controller":
+            if request.url.path.endswith("/ensure"):
+                ensure_requests += 1
             return httpx.Response(
                 200,
                 json={
@@ -144,6 +149,112 @@ def test_execute_fails_closed_when_runner_result_remains_ambiguous() -> None:
     assert "unknown" in result.output.lower()
     assert len(runner_request_ids) == 2
     assert runner_request_ids[0] == runner_request_ids[1]
+    assert ensure_requests == 1
+
+
+@pytest.mark.parametrize("reclaimed_status", [404, 410])
+def test_execute_replaces_reclaimed_lease_before_runner_request(reclaimed_status: int) -> None:
+    controller_requests: list[str] = []
+    runner_requests: list[httpx.Request] = []
+
+    class RecordingWorkspace:
+        def __init__(self) -> None:
+            self.hydrated_endpoints: list[str] = []
+
+        def hydrate(self, sandbox: AgentTeamsSandbox) -> None:
+            assert sandbox._lease is not None  # noqa: SLF001 - verifies replacement hydration sees the new lease.
+            self.hydrated_endpoints.append(sandbox._lease.endpoint)  # noqa: SLF001
+
+        def persist_changes(self, sandbox: AgentTeamsSandbox, changes) -> None:  # noqa: ANN001
+            return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "controller":
+            controller_requests.append(request.url.path)
+            if request.url.path.endswith("/ensure"):
+                endpoint = (
+                    "http://old-runner:8080"
+                    if controller_requests.count(request.url.path) == 1
+                    else "http://new-runner:8080"
+                )
+                return httpx.Response(
+                    200,
+                    json={
+                        "name": "exec-worker-hash",
+                        "phase": "Ready",
+                        "endpoint": endpoint,
+                        "token": runner_token(),
+                    },
+                )
+            return httpx.Response(reclaimed_status, request=request)
+        runner_requests.append(request)
+        return httpx.Response(
+            200,
+            json={"output": "done", "exit_code": 0, "truncated": False, "changes": []},
+        )
+
+    with tempfile.TemporaryDirectory() as directory:
+        token_path = Path(directory, "token")
+        token_path.write_text(service_account_token())
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        control = SandboxControlClient(
+            controller_url="http://controller:8090",
+            worker_name="researcher-cr",
+            service_account_token_path=token_path,
+            client=client,
+        )
+        workspace = RecordingWorkspace()
+        sandbox = AgentTeamsSandbox(
+            control=control,
+            session_id="atd-thread-hash",
+            client=client,
+            workspace_store=workspace,
+        )
+
+        result = sandbox.execute("printf done")
+
+    assert result.output == "done"
+    assert controller_requests.count("/api/v1/workers/researcher-cr/execution-sandboxes/ensure") == 2
+    assert controller_requests.count("/api/v1/workers/researcher-cr/execution-sandboxes/atd-thread-hash/heartbeat") == 1
+    assert [request.url.host for request in runner_requests] == ["new-runner"]
+    assert workspace.hydrated_endpoints == ["http://old-runner:8080", "http://new-runner:8080"]
+
+
+def test_execute_propagates_non_reclaimed_heartbeat_error_without_runner_request() -> None:
+    runner_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "controller":
+            if request.url.path.endswith("/ensure"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "name": "exec-worker-hash",
+                        "phase": "Ready",
+                        "endpoint": "http://runner:8080",
+                        "token": runner_token(),
+                    },
+                )
+            return httpx.Response(500, request=request)
+        runner_requests.append(request)
+        return httpx.Response(200, json={})
+
+    with tempfile.TemporaryDirectory() as directory:
+        token_path = Path(directory, "token")
+        token_path.write_text(service_account_token())
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        control = SandboxControlClient(
+            controller_url="http://controller:8090",
+            worker_name="researcher-cr",
+            service_account_token_path=token_path,
+            client=client,
+        )
+        sandbox = AgentTeamsSandbox(control=control, session_id="atd-thread-hash", client=client)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            sandbox.execute("printf done")
+
+    assert runner_requests == []
 
 
 def test_file_transfers_use_deepagents_response_contracts() -> None:

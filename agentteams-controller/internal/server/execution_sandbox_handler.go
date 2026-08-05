@@ -15,6 +15,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -66,8 +67,7 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 	var sandbox v1beta1.ExecutionSandbox
 	err := h.client.Get(r.Context(), key, &sandbox)
 	if apierrors.IsNotFound(err) {
-		execution := worker.Spec.RuntimeConfig.DeepAgents.Execution.DeepCopy()
-		effectiveResources, _, _, err := h.ephemeralStorage.Resolve(execution.Resources)
+		desiredSpec, err := h.desiredExecutionSandboxSpec(worker, request.SessionID)
 		if err != nil {
 			httputil.WriteError(w, http.StatusBadRequest, "invalid execution sandbox resources: "+err.Error())
 			return
@@ -91,14 +91,7 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 					BlockOwnerDeletion: &blockDeletion,
 				}},
 			},
-			Spec: v1beta1.ExecutionSandboxSpec{
-				WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
-				SessionID:   request.SessionID,
-				IdleTimeout: execution.IdleTimeout,
-				MaxLifetime: execution.MaxLifetime,
-				Resources:   effectiveResources,
-				Egress:      deepCopyEgressRules(execution.Egress),
-			},
+			Spec: desiredSpec,
 		}
 		if err := h.client.Create(r.Context(), &sandbox); err != nil {
 			writeK8sError(w, "create execution sandbox", err)
@@ -116,6 +109,25 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 		httputil.WriteError(w, http.StatusConflict, "execution sandbox identity collision")
 		return
 	}
+	desiredSpec, err := h.desiredExecutionSandboxSpec(worker, request.SessionID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid execution sandbox resources: "+err.Error())
+		return
+	}
+	if !executionSandboxPolicyMatches(sandbox.Spec, desiredSpec) {
+		sandbox.Spec.WorkerRef = desiredSpec.WorkerRef
+		sandbox.Spec.SessionID = desiredSpec.SessionID
+		sandbox.Spec.IdleTimeout = desiredSpec.IdleTimeout
+		sandbox.Spec.MaxLifetime = desiredSpec.MaxLifetime
+		sandbox.Spec.Resources = desiredSpec.Resources
+		sandbox.Spec.Egress = desiredSpec.Egress
+		if err := h.client.Update(r.Context(), &sandbox); err != nil {
+			writeK8sError(w, "update execution sandbox policy", err)
+			return
+		}
+		httputil.WriteJSON(w, http.StatusAccepted, ExecutionSandboxResponse{Name: sandbox.Name, Phase: "Pending"})
+		return
+	}
 
 	response := ExecutionSandboxResponse{
 		Name:     sandbox.Name,
@@ -126,7 +138,7 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 		response.Phase = "Pending"
 	}
 	status := http.StatusAccepted
-	if response.Phase == "Ready" {
+	if response.Phase == "Ready" && sandbox.Status.ObservedGeneration == sandbox.Generation {
 		var secret corev1.Secret
 		if err := h.client.Get(r.Context(), key, &secret); err != nil {
 			writeK8sError(w, "get execution sandbox runner token", err)
@@ -139,8 +151,42 @@ func (h *ExecutionSandboxHandler) Ensure(w http.ResponseWriter, r *http.Request)
 		}
 		response.Token = string(token)
 		status = http.StatusOK
+	} else if response.Phase == "Ready" {
+		response.Phase = "Pending"
+		response.Endpoint = ""
 	}
 	httputil.WriteJSON(w, status, response)
+}
+
+func (h *ExecutionSandboxHandler) desiredExecutionSandboxSpec(
+	worker *v1beta1.Worker,
+	sessionID string,
+) (v1beta1.ExecutionSandboxSpec, error) {
+	execution := worker.Spec.RuntimeConfig.DeepAgents.Execution.DeepCopy()
+	effectiveResources, _, _, err := h.ephemeralStorage.Resolve(execution.Resources)
+	if err != nil {
+		return v1beta1.ExecutionSandboxSpec{}, err
+	}
+	return v1beta1.ExecutionSandboxSpec{
+		WorkerRef:   v1beta1.ExecutionSandboxWorkerRef{Name: worker.Name, UID: string(worker.UID)},
+		SessionID:   sessionID,
+		IdleTimeout: execution.IdleTimeout,
+		MaxLifetime: execution.MaxLifetime,
+		Resources:   effectiveResources,
+		Egress:      deepCopyEgressRules(execution.Egress),
+	}, nil
+}
+
+func executionSandboxPolicyMatches(
+	existing v1beta1.ExecutionSandboxSpec,
+	desired v1beta1.ExecutionSandboxSpec,
+) bool {
+	return existing.WorkerRef == desired.WorkerRef &&
+		existing.SessionID == desired.SessionID &&
+		existing.IdleTimeout == desired.IdleTimeout &&
+		existing.MaxLifetime == desired.MaxLifetime &&
+		apiequality.Semantic.DeepEqual(existing.Resources, desired.Resources) &&
+		apiequality.Semantic.DeepEqual(existing.Egress, desired.Egress)
 }
 
 func (h *ExecutionSandboxHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {

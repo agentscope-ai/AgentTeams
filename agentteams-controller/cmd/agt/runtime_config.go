@@ -10,6 +10,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/spf13/cobra"
+	yamlv3 "gopkg.in/yaml.v3"
 	sigyaml "sigs.k8s.io/yaml"
 )
 
@@ -21,7 +22,27 @@ func loadWorkerRuntimeConfig(path string) (*v1beta1.WorkerRuntimeConfig, error) 
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, fmt.Errorf("--runtime-config-file %q is empty", path)
 	}
-	jsonData, err := sigyaml.YAMLToJSON(data)
+	decoder := yamlv3.NewDecoder(bytes.NewReader(data))
+	var document yamlv3.Node
+	if err := decoder.Decode(&document); err != nil {
+		return nil, fmt.Errorf("malformed --runtime-config-file %q: %w", path, err)
+	}
+	if err := rejectDuplicateYAMLKeys(&document); err != nil {
+		return nil, fmt.Errorf("malformed --runtime-config-file %q: %w", path, err)
+	}
+	var extraDocument yamlv3.Node
+	if err := decoder.Decode(&extraDocument); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("malformed --runtime-config-file %q: multiple YAML documents are not supported", path)
+		}
+		return nil, fmt.Errorf("malformed --runtime-config-file %q: %w", path, err)
+	}
+
+	normalizedYAML, err := yamlv3.Marshal(&document)
+	if err != nil {
+		return nil, fmt.Errorf("malformed --runtime-config-file %q: %w", path, err)
+	}
+	jsonData, err := sigyaml.YAMLToJSON(normalizedYAML)
 	if err != nil {
 		return nil, fmt.Errorf("malformed --runtime-config-file %q: %w", path, err)
 	}
@@ -30,15 +51,42 @@ func loadWorkerRuntimeConfig(path string) (*v1beta1.WorkerRuntimeConfig, error) 
 	}
 
 	var config v1beta1.WorkerRuntimeConfig
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&config); err != nil {
+	jsonDecoder := json.NewDecoder(bytes.NewReader(jsonData))
+	jsonDecoder.DisallowUnknownFields()
+	if err := jsonDecoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("malformed --runtime-config-file %q: %w", path, err)
 	}
-	if err := ensureSingleJSONDocument(decoder); err != nil {
+	if err := ensureSingleJSONDocument(jsonDecoder); err != nil {
 		return nil, fmt.Errorf("malformed --runtime-config-file %q: %w", path, err)
 	}
 	return &config, nil
+}
+
+func rejectDuplicateYAMLKeys(node *yamlv3.Node) error {
+	if node.Kind == yamlv3.MappingNode {
+		seen := make(map[string]struct{}, len(node.Content)/2)
+		for i := 0; i < len(node.Content); i += 2 {
+			key := node.Content[i]
+			keyID := key.Tag + "\x00" + key.Value
+			if _, exists := seen[keyID]; exists {
+				return fmt.Errorf("duplicate YAML key %q", key.Value)
+			}
+			seen[keyID] = struct{}{}
+			if err := rejectDuplicateYAMLKeys(key); err != nil {
+				return err
+			}
+			if err := rejectDuplicateYAMLKeys(node.Content[i+1]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, child := range node.Content {
+		if err := rejectDuplicateYAMLKeys(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureSingleJSONDocument(decoder *json.Decoder) error {

@@ -155,6 +155,9 @@ func TestWorkerRuntimeConfigFileRejectsInvalidDocumentsAndConflictingFlags(t *te
 	}{
 		{name: "empty", contents: "", args: []string{"--runtime-config-file", "CONFIG"}, wantErr: "empty"},
 		{name: "malformed yaml", contents: "deepagents: [", args: []string{"--runtime-config-file", "CONFIG"}, wantErr: "malformed"},
+		{name: "duplicate yaml key", contents: "deepagents:\n  approvals:\n    fileWrites: required\n    fileWrites: notRequired\n", args: []string{"--runtime-config-file", "CONFIG"}, wantErr: "duplicate"},
+		{name: "second yaml document", contents: "deepagents:\n  execution:\n    mode: sandbox\n---\ndeepagents:\n  approvals:\n    mcpDefault: required\n", args: []string{"--runtime-config-file", "CONFIG"}, wantErr: "multiple YAML documents"},
+		{name: "malformed second yaml document", contents: "deepagents:\n  execution:\n    mode: sandbox\n---\ndeepagents: [\n", args: []string{"--runtime-config-file", "CONFIG"}, wantErr: "malformed"},
 		{name: "unknown field", contents: "deepagents:\n  unknown: true\n", args: []string{"--runtime-config-file", "CONFIG"}, wantErr: "unknown field"},
 		{name: "conflicting sandbox", contents: "deepagents: {}\n", args: []string{"--runtime", "deepagents", "--runtime-config-file", "CONFIG", "--deepagents-sandbox"}, wantErr: "cannot be combined"},
 	}

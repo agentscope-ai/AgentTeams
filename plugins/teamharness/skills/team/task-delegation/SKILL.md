@@ -39,8 +39,9 @@ project node returned by `readyLoopNodes`.
 For Quick Task, `projectflow` `create_quick_project` is used instead. It
 already writes `shared/tasks/{task-id}/meta.json`,
 `shared/tasks/{task-id}/spec.md`, and marks the task `assigned`; do not call
-`delegate_task` again for that task. After it returns `ok: true`, send the same
-assignment message you would send after `delegate_task`.
+`delegate_task` again for that task. `create_quick_project` does not
+auto-notify, so after it returns `ok: true`, send the assignment message
+described in the Assignment Message section below.
 
 Before delegation:
 
@@ -53,8 +54,8 @@ Before delegation:
    owned.
 5. Use the current Matrix Task room for the assignment. Do not fall back to
    the requester/source session.
-6. Mention the assigned Worker in the Task room only after
-   `delegate_task` succeeds.
+6. `delegate_task` mentions the assigned Worker automatically after it
+   succeeds — do not send a second mention.
 
 `teamharness-roomflow` owns task-room creation, reuse, external source binding,
 and Worker invites before Project Work reaches this skill.
@@ -83,7 +84,10 @@ shared/tasks/{task-id}/meta.json
 shared/tasks/{task-id}/spec.md
 ```
 
-It also changes the project node status to `assigned`.
+It changes the project node status to indicate the node is delegated/assigned,
+publishes the task directory to shared storage, and automatically sends the
+Worker assignment notification with `m.mentions` in the Task room, returning
+the Matrix `eventId` in the response.
 
 ## Task Spec Completion Report
 
@@ -106,8 +110,14 @@ still make the Leader mention requirement explicit.
 
 ## Assignment Message
 
-After `delegate_task` or `create_quick_project` returns `ok: true`, send a
-normal current-session reply in the Task room and mention the Worker:
+`delegate_task` **automatically notifies the assigned Worker** in the Task
+room: it validates room membership, sends a message with `m.mentions`
+mentioning the Worker's full Matrix ID, and returns the Matrix `eventId`.
+Do **not** send a second assignment message after `delegate_task` — that
+duplicates the assignment and can trigger the Worker twice.
+
+`create_quick_project` does **not** auto-notify. After it returns `ok: true`,
+send a normal current-session reply in the Task room and mention the Worker:
 
 ```text
 @worker-a:matrix.local TASK_ASSIGNED: demo-project-001-01 - Please start this task. Spec: shared/tasks/demo-project-001-01/spec.md
@@ -170,18 +180,15 @@ project node and delegate a new task.
 
 ## Post-Action Notification
 
-`delegate_task` and `submit_task` return a `notificationNeeded` field when they
-succeed. This field is a structured hint — the tool does not send any message
-automatically.
+`delegate_task` **sends the Worker assignment automatically**: it validates
+room membership, sends the assignment message with `m.mentions` in the Task
+room, and returns the Matrix `eventId` in the response. No additional
+assignment message is needed after a successful `delegate_task`.
 
-For `delegate_task`: the assignment message in the Task room (see Assignment
-Message above) already serves as the notification. No additional cross-room
-notification is needed unless the `notificationNeeded.targetRoom` differs from
-the current Task room.
-
-For `submit_task`: the Worker completion message in the Task room already serves
-as the notification to the Leader. The `notificationNeeded` field confirms the
-target room for this report.
+`submit_task` and the `notificationNeeded` field are structured hints for the
+completion report. When a Worker reports `TASK_COMPLETED` with a result path,
+check the result and follow `teamharness-project-management` for acceptance or
+rejection.
 
 The Leader should check `notificationNeeded` after accepting a task result to
 determine whether a requester report or downstream notification is due. See

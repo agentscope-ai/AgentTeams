@@ -540,6 +540,42 @@ def _legacy_worker_configured_active_tool_guard_auto_denies_session_files(tmp_pa
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
+def test_migrate_legacy_copaw_working_dir_to_qwenpaw(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    legacy = cfg.install_dir / "worker-a" / ".copaw"
+    legacy.mkdir(parents=True)
+    (legacy / "workspaces").mkdir()
+    (legacy / "workspaces" / "default").write_text("state", encoding="utf-8")
+    worker = Worker(cfg)
+    worker._migrate_legacy_working_dir()
+    assert not legacy.exists()
+    assert cfg.qwenpaw_working_dir.exists()
+    assert (cfg.qwenpaw_working_dir / "workspaces" / "default").read_text(encoding="utf-8") == "state"
+
+
+def test_migrate_legacy_copaw_working_dir_skips_when_qwenpaw_exists(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    legacy = cfg.install_dir / "worker-a" / ".copaw"
+    legacy.mkdir(parents=True)
+    (legacy / "legacy-state").write_text("old", encoding="utf-8")
+    cfg.qwenpaw_working_dir.mkdir(parents=True)
+    (cfg.qwenpaw_working_dir / "current-state").write_text("new", encoding="utf-8")
+    worker = Worker(cfg)
+    worker._migrate_legacy_working_dir()
+    assert legacy.exists()
+    assert (cfg.qwenpaw_working_dir / "current-state").read_text(encoding="utf-8") == "new"
+
+
+def test_migrate_legacy_copaw_working_dir_noop_without_legacy(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    # Skip __init__ (RuntimeUpdater would create .qwenpaw) to prove the
+    # migration itself is a no-op when there is no legacy .copaw dir.
+    worker = Worker.__new__(Worker)
+    worker.config = cfg
+    worker._migrate_legacy_working_dir()
+    assert not cfg.qwenpaw_working_dir.exists()
+
+
 def test_prepare_env_exposes_agent_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _config(tmp_path)
     monkeypatch.delenv("AGENT_WORKSPACE", raising=False)

@@ -9,7 +9,7 @@ AgentTeams 是一个 **Agent Teams** 平台：**Manager** 负责协调 **Workers
 | 层级 | 职责 | 典型镜像 |
 |------|------|----------|
 | **agentteams-controller** | Go operator：协调 **Worker**、**Manager**、**Team** 和 **Human** CRD；提供 REST API；管理 worker/manager 生命周期、gateway consumer 配置，以及云厂商能力开启时的凭证流程。 | `agentteams-controller`（Kubernetes）或 **`agentteams-controller-embedded`**（本地）：Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web**（nginx）+ controller binary |
-| **Manager** | 协调型 Agent：通过 Matrix 和 controller API 管理任务、workers、teams、humans、Higress routes/MCP。 | `agentteams-manager`（OpenClaw / Node）或 `agentteams-manager-copaw`（QwenPaw / Python）：基于 **openclaw-base** 或 slim Python，**不包含**完整基础设施栈 |
+| **Manager** | 协调型 Agent：通过 Matrix 和 controller API 管理任务、workers、teams、humans、Higress routes/MCP。 | `agentteams-manager`（OpenClaw / Node）或 `agentteams-manager-qwenpaw`（QwenPaw / Python）：基于 **openclaw-base** 或 slim Python，**不包含**完整基础设施栈 |
 | **Worker** | 任务执行容器：每个 worker 一个容器，按需创建；无状态；配置和产物保存在对象存储中。 | `agentteams-worker`、`agentteams-copaw-worker` 或 `agentteams-hermes-worker` |
 
 **openclaw-base** 镜像提供 **Ubuntu 24.04**、**Node.js 22**、**OpenClaw** 和 **mcporter**，供 OpenClaw 形态的 Manager/Worker 镜像复用。它不再包含旧的 all-in-one Higress bundle；AI gateway 运行在**嵌入式 controller** 中，或在 Kubernetes 中作为 **Higress Helm subchart** 运行。
@@ -156,7 +156,7 @@ Helm **`worker.defaultImage`** 会为不同 runtime 提供不同的默认 reposi
 | Mode | `AGENTTEAMS_MANAGER_RUNTIME` | 行为 |
 |------|---------------------------|------|
 | **OpenClaw** | `openclaw`（默认） | Node/OpenClaw gateway；Matrix “message tool” 风格集成 |
-| **QwenPaw** | `copaw` | Python QwenPaw workspace；通过 **`copaw channels send`** 接入 Matrix（`start-copaw-manager.sh`） |
+| **QwenPaw** | `qwenpaw` (default) | Python QwenPaw workspace；通过 **`copaw channels send`** 接入 Matrix（`start-qwenpaw-manager.sh`） |
 
 **Hermes** 在 API 和 charts 中是 **Worker** runtime；当前 Manager 镜像只启动 **OpenClaw** 或 **QwenPaw**（见 `start-manager-agent.sh` 中的注释）。
 

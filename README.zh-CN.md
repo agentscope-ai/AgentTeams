@@ -25,7 +25,7 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 ![架构](https://img.alicdn.com/imgextra/i4/O1CN01c1VlDE1zYZ46EW3OA_!!6000000006726-49-tps-9895-8231.webp)
 
 ## 动态
-- **2026-07-30:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0（正式版）：端到端统一 AgentTeams 命名并确立最终的 Team/Worker 资源契约；新增可选的 AgentTeams Dashboard；同时改进 Worker 存储同步、Team 路由与生命周期收敛，安装器可按旧环境变量与存储契约安装 v1.1.2（更早版本仍需使用对应的 `hiclaw-install.sh`），并提升 Dashboard 可靠性以及工具和诊断安全性。
+- **2026-07-30:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0) — AgentTeams v1.2.0（正式版）：端到端统一 AgentTeams 命名并确立最终的 Team/Worker 资源契约；新增可选的 AgentTeams Dashboard；同时改进 Worker 存储同步、Team 路由与生命周期收敛，安装器可按旧环境变量与存储契约安装 v1.1.2（更早版本仍需使用对应的旧版安装器），并提升 Dashboard 可靠性以及工具和诊断安全性。
 - **2026-07-17:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0-beta.1) —  AgentTeams v1.2.0-beta.1（预发布版）：完成了从已停用的前代产品的公开更名，覆盖镜像、Kubernetes API、Helm、Matrix、存储和运行时契约；新增插件平台、TeamHarness 与 WorkerFlow 集成、Matrix AppService 与 Human SSO、模型提供方路由与 LLM 预检，以及更丰富的控制器可观测性。Beta 版安装需显式手动启用（opt-in），而稳定版默认仍为 v1.1.2。
 - **2026-05-27:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.2) — AgentTeams v1.1.2：安装器默认改为 QwenPaw 运行时并支持 keep-all 升级；Team 支持人类协调员，Team Leader 协作工具刷新；控制器支持 Nacos 远程技能与 `sts-agentteams` / `ai-registry` STS 凭据；Worker 控制器资源名与运行时名称解耦；新增控制器 reconcile 指标与优雅退出。
 - **2026-05-07:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.1.1) | [Changelog](changelog/v1.1.1.md) — AgentTeams v1.1.1：Worker/Manager/Team CRD 上的声明式 MCP（破坏性变更）并扩展至 Team Leader；CR 支持自定义 `spec.env`；新增 Token Plan、Qwen 国际线路与 `qwen3.6-plus` 模型；Helm 控制器 RBAC 收敛到单命名空间；Worker 包可不含 `SOUL.md`。
@@ -217,7 +217,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-copaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
+各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-qwenpaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
 
 </details>
 

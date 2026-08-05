@@ -51,7 +51,7 @@ MANAGER_RUNTIME=$(docker exec "${MANAGER_CONTAINER}" printenv AGENTTEAMS_MANAGER
 log_info "Triggering heartbeat (runtime=${MANAGER_RUNTIME})..."
 
 case "${MANAGER_RUNTIME}" in
-    copaw)
+    copaw|qwenpaw)
         # CoPaw: the internal _heartbeat APScheduler job has no manual trigger API.
         # Send a heartbeat instruction via Matrix DM to make the Agent execute HEARTBEAT.md.
         matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \

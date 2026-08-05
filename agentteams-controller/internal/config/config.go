@@ -366,7 +366,7 @@ func LoadConfig() *Config {
 
 		ManagerEnabled:          envOrDefault("AGENTTEAMS_MANAGER_ENABLED", "true") == "true",
 		ManagerModel:            firstNonEmpty(os.Getenv("AGENTTEAMS_MANAGER_MODEL"), envOrDefault("AGENTTEAMS_DEFAULT_MODEL", "qwen3.6-plus")),
-		ManagerRuntime:          envOrDefault("AGENTTEAMS_MANAGER_RUNTIME", "openclaw"),
+		ManagerRuntime:          envOrDefault("AGENTTEAMS_MANAGER_RUNTIME", "qwenpaw"),
 		ManagerImage:            os.Getenv("AGENTTEAMS_MANAGER_IMAGE"),
 		DefaultWorkerRuntime:    os.Getenv("AGENTTEAMS_DEFAULT_WORKER_RUNTIME"),
 		K8sManagerCPURequest:    envOrDefault("AGENTTEAMS_K8S_MANAGER_CPU_REQUEST", "500m"),

@@ -201,6 +201,7 @@ Dir.mktmpdir("teamharness-roomflow-") do |dir|
     os.environ["TEAMHARNESS_RUNTIME_CONFIG"] = str(runtime_config)
 
     created = payload({
+        "workspaceDir": "#{dir}",
         "action": "create_task_room",
         "taskId": "demo-project-001",
         "name": "Task: demo",

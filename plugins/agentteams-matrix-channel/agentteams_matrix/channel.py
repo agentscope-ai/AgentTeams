@@ -3562,12 +3562,19 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if html:
             new_content["format"] = "org.matrix.custom.html"
             new_content["formatted_body"] = html
+        # Apply mentions to m.new_content so edited messages retain
+        # m.mentions for Matrix notification delivery.
+        self._apply_mention(new_content, self._user_id, to_handle)
         content: dict[str, Any] = {
             "msgtype": msgtype,
-            "body": f"* {text}",
+            "body": f"* {new_content.get('body', text)}",
             "m.new_content": new_content,
             "m.relates_to": {"rel_type": "m.replace", "event_id": event_id},
         }
+        # Propagate m.mentions to the outer event — MSC3952 requires it on
+        # the replacement event for notification delivery.
+        if "m.mentions" in new_content:
+            content["m.mentions"] = new_content["m.mentions"]
         if html:
             content["format"] = "org.matrix.custom.html"
             content["formatted_body"] = _edit_fallback_html(text)

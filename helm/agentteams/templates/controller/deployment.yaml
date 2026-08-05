@@ -205,6 +205,13 @@ spec:
               value: {{ .Values.worker.resources.limits.cpu | default "1000m" | quote }}
             - name: AGENTTEAMS_K8S_WORKER_MEMORY
               value: {{ .Values.worker.resources.limits.memory | default "2Gi" | quote }}
+            {{- /* DeepAgents Runner ephemeral-storage policy */}}
+            - name: AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_REQUEST
+              value: {{ .Values.deepagents.sandbox.ephemeralStorage.defaultRequest | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_LIMIT
+              value: {{ .Values.deepagents.sandbox.ephemeralStorage.defaultLimit | quote }}
+            - name: AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_MAX_LIMIT
+              value: {{ .Values.deepagents.sandbox.ephemeralStorage.maxLimit | quote }}
             {{- /* Manager CRD-driven deployment */}}
             - name: AGENTTEAMS_MANAGER_ENABLED
               value: {{ .Values.manager.enabled | quote }}

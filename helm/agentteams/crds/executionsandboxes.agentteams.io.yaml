@@ -53,12 +53,16 @@ spec:
                           type: string
                         memory:
                           type: string
+                        ephemeralStorage:
+                          type: string
                     limits:
                       type: object
                       properties:
                         cpu:
                           type: string
                         memory:
+                          type: string
+                        ephemeralStorage:
                           type: string
                 egress:
                   type: array

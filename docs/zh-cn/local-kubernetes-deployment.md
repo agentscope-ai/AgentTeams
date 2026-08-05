@@ -147,7 +147,7 @@ kubectl get events -A --sort-by=.lastTimestamp | tail -50
 kubectl get storageclass
 ```
 
-在安装 AgentTeams 前，必须先由集群管理员选择并安装适合该环境的存储方案，例如经过验证的 NFS CSI、Longhorn、Rook-Ceph 或本地卷供应器。选型至少应覆盖容量、读写模式、节点故障、快照、备份和恢复演练；本文不替基础设施管理员作该决定。
+在安装 AgentTeams 前，必须先由集群管理员选择并安装适合该环境的存储方案，例如经过验证的 NFS CSI、Longhorn、Rook-Ceph 或本地卷供应器。选型至少应覆盖容量、读写模式、节点故障、快照、备份和恢复演练；本文不替基础设施管理员作该决定。若为本地演练选择 `local-path`，要明确它的卷是节点本地卷：Pod 被重调度到其它节点或节点故障时数据不可高可用，不能把它当作生产 HA 存储。
 
 安装并验证存储供应器后，显式设置实际名称：
 
@@ -695,11 +695,31 @@ spec:
           requests:
             cpu: 250m
             memory: 256Mi
+            ephemeralStorage: 512Mi
           limits:
             cpu: "2"
             memory: 2Gi
+            ephemeralStorage: 4Gi
 EOF
 ```
+
+#### Runner 临时存储覆盖
+
+上例仅覆盖每个 `ExecutionSandbox` Runner 的临时存储；它不扩展通用 Worker 或
+Manager 的 `spec.resources`。Chart 默认 policy 为 request `256Mi`、limit `2Gi`、
+最大 limit `8Gi`。可在该 Worker 的 `runtimeConfig.deepagents.execution.resources`
+中覆盖 request 与 limit；缺失的一侧采用默认值，request 必须不大于 limit，limit
+不能超过 `8Gi`。
+
+Controller 会把解析后的 ephemeral-storage request/limit 配置到 Runner 容器，且由
+Kubernetes 对该容器的 aggregate ephemeral-storage 用量实施限制。Runner 的
+`/workspace` 与 `/tmp` 都是 `emptyDir`，两者的 `sizeLimit` 都设置为最终 limit；
+例如本例均为 `4Gi`，规划节点磁盘时必须计入两者。
+
+HTTP ensure 请求包含格式错误、非正数、request 大于 limit 或超过 `8Gi` 的值时，
+Controller 返回 `400 Bad Request`，不会创建 Runner。对 `ExecutionSandbox` CR 的直接
+创建或更新若包含相同无效值，则会收敛为 `Failed/InvalidResources`，不会产生 Runner
+Pod、Service 或 NetworkPolicy。
 
 等待 Worker Pod 与状态 PVC 收敛，并确认 checkpoint Secret 只通过 `SecretKeyRef` 注入：
 

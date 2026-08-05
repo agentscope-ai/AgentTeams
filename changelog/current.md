@@ -6,7 +6,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **What's New**
 
-- feat(controller): enforce cluster-capped ephemeral storage for DeepAgents Runner sandboxes
+- feat(controller): enforce cluster-capped ephemeral storage for DeepAgents Runner sandboxes ([c8f9de94](https://github.com/agentscope-ai/AgentTeams/commit/c8f9de9474dc94fb4ca1ef4745cc830597e07859), [6f8bf982](https://github.com/agentscope-ai/AgentTeams/commit/6f8bf9829e8f9eb4a0642d37a0a68640463c0b09), [a31f660b](https://github.com/agentscope-ai/AgentTeams/commit/a31f660b4ac244ca2a428b9d8c17f4d85130207a), [281f3a30](https://github.com/agentscope-ai/AgentTeams/commit/281f3a30f87f40715e002bd14de1b29635c2a30e))
 - **DeepAgents Worker runtime**: Add the vendored DeepAgents 0.7.3 runtime, Matrix-thread orchestration and Human approval, Higress model/MCP adapters, encrypted PostgreSQL checkpoints, MinIO workspace synchronization, credential-free Runner Pods, durable per-Worker state, and `ExecutionSandbox` lifecycle/network isolation.
 - **Custom model capability overrides**: `AGENTTEAMS_MODEL_VISION` and `AGENTTEAMS_MODEL_REASONING` env vars let deployments override vision and reasoning capabilities for custom models not in the built-in presets table (e.g. local multimodal models like `qwen3.6-27b-fp8`).
 

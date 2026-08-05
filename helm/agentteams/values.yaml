@@ -356,6 +356,13 @@ deepagents:
         cpu: 500m
         memory: 512Mi
   sandbox:
+    # Default and maximum ephemeral storage for each DeepAgents Runner sandbox.
+    # A Worker may override the request/limit below runtimeConfig.deepagents,
+    # but the requested limit may not exceed maxLimit.
+    ephemeralStorage:
+      defaultRequest: 256Mi
+      defaultLimit: 2Gi
+      maxLimit: 8Gi
     # Cluster-wide ceilings. Worker CR egress requests are intersected with
     # this list; an empty list means every sandbox remains egress-denied.
     egressCeilings: []

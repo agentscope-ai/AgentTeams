@@ -268,14 +268,34 @@ spec:
           requests:
             cpu: 250m
             memory: 256Mi
+            ephemeralStorage: 512Mi
           limits:
             cpu: "2"
             memory: 2Gi
+            ephemeralStorage: 4Gi
         egress:
           - cidr: 10.20.0.0/16
             protocol: TCP
             ports: [443]
 ```
+
+### Runner 临时存储策略
+
+`runtimeConfig.deepagents.execution.resources` 只作用于每次命令的
+`ExecutionSandbox` Runner，不会改变通用 Worker 或 Manager 的 `spec.resources`。
+Helm 默认将 Runner 的 `ephemeralStorage` request、limit 和集群最大 limit 分别设为
+`256Mi`、`2Gi`、`8Gi`。Worker 可以分别覆盖 request 与 limit；缺失的一侧使用对应
+默认值，但 request 不得大于 limit，limit 不得超过 `8Gi`。
+
+Controller 将解析后的临时存储 request/limit 同时应用到 Runner 容器，Kubernetes 按
+容器的 aggregate ephemeral-storage 使用量执行该限制。Runner 的 `/workspace` 和
+`/tmp` 各自使用 `emptyDir`，两者的 `sizeLimit` 都等于解析后的 ephemeral-storage
+limit（例如上例均为 `4Gi`）；因此应同时为两处写入预留容量。
+
+通过 HTTP ensure 接口提交无效值（格式错误、非正数、request 大于 limit 或 limit
+超过 `8Gi`）会返回 `400 Bad Request`，不会创建 Runner。直接创建或更新
+`ExecutionSandbox` CR 时，Controller 会将其标记为 `Failed`，并设置
+`InvalidResources` 状态原因，同样不会创建 Runner Pod、Service 或 NetworkPolicy。
 
 ```bash
 kubectl -n "${AGENTTEAMS_NAMESPACE}" apply -f deep-researcher.yaml

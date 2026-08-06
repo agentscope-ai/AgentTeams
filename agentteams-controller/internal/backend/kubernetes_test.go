@@ -618,8 +618,8 @@ func TestK8sWithPrefixStop(t *testing.T) {
 
 // TestK8sCreateRuntimeWorkingDir verifies WorkingDir / HOME defaulting per
 // runtime. The hermes runtime now shares the openclaw layout: WorkingDir ==
-// HOME == /root/agentteams-fs/agents/<name> (== MinIO mirror root). Only copaw
-// now shares the same layout.
+// HOME == /root/agentteams-fs/agents/<name> (== MinIO mirror root). OpenHuman
+// keeps the dedicated workspace baked into its image.
 func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -630,18 +630,20 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		{"openclaw", RuntimeOpenClaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"hermes", RuntimeHermes, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"copaw", RuntimeCopaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
+		{"openhuman", RuntimeOpenHuman, "/home/openhuman/.openhuman", ""},
 		{"empty_default", "", "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:         "agentteams",
-				WorkerImage:       "agentteams/worker-agent:latest",
-				CopawWorkerImage:  "agentteams/copaw-worker:latest",
-				HermesWorkerImage: "agentteams/hermes-worker:latest",
-				WorkerCPU:         "1000m",
-				WorkerMemory:      "2Gi",
+				Namespace:            "agentteams",
+				WorkerImage:          "agentteams/worker-agent:latest",
+				CopawWorkerImage:     "agentteams/copaw-worker:latest",
+				HermesWorkerImage:    "agentteams/hermes-worker:latest",
+				OpenHumanWorkerImage: "agentteams/openhuman-worker:latest",
+				WorkerCPU:            "1000m",
+				WorkerMemory:         "2Gi",
 			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
@@ -685,11 +687,13 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 	}{
 		{"explicit_copaw", RuntimeCopaw, "", "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"explicit_hermes", RuntimeHermes, "", "agentteams/hermes-worker:latest", RuntimeHermes},
+		{"explicit_openhuman", RuntimeOpenHuman, "", "agentteams/openhuman-worker:latest", RuntimeOpenHuman},
 		{"explicit_qwenpaw", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
 		{"explicit_openclaw", RuntimeOpenClaw, "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_no_fallback", "", "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_with_copaw_fallback", "", RuntimeCopaw, "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"empty_with_hermes_fallback", "", RuntimeHermes, "agentteams/hermes-worker:latest", RuntimeHermes},
+		{"empty_with_openhuman_fallback", "", RuntimeOpenHuman, "agentteams/openhuman-worker:latest", RuntimeOpenHuman},
 		{"empty_with_qwenpaw_fallback", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
 		{"explicit_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "agentteams/worker-agent:latest", RuntimeOpenClaw},
 	}
@@ -697,13 +701,14 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:          "agentteams",
-				WorkerImage:        "agentteams/worker-agent:latest",
-				CopawWorkerImage:   "agentteams/copaw-worker:latest",
-				HermesWorkerImage:  "agentteams/hermes-worker:latest",
-				QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-				WorkerCPU:          "1000m",
-				WorkerMemory:       "2Gi",
+				Namespace:            "agentteams",
+				WorkerImage:          "agentteams/worker-agent:latest",
+				CopawWorkerImage:     "agentteams/copaw-worker:latest",
+				HermesWorkerImage:    "agentteams/hermes-worker:latest",
+				OpenHumanWorkerImage: "agentteams/openhuman-worker:latest",
+				QwenPawWorkerImage:   "agentteams/qwenpaw-worker:latest",
+				WorkerCPU:            "1000m",
+				WorkerMemory:         "2Gi",
 			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{

@@ -15,6 +15,7 @@ Record release-facing changes here before the next release.
 
 **Bug Fixes**
 
+- **Team Room membership convergence**: Explicitly join Team Leaders and Workers with their own Matrix tokens after invitation, so pending invites cannot leave a Team Active while Hermes members remain unreachable. ([#1142](https://github.com/agentscope-ai/AgentTeams/issues/1142))
 - **QwenPaw Worker runtime management**: Recognize `qwenpaw` as a valid Worker runtime in Manager guidance and runtime-switch validation, invoke the installed `agt` CLI for runtime changes, and align Worker CLI help with the Controller's supported runtimes.
 - **CoPaw Team Worker resolution**: Resolve task assignment Matrix IDs from the Controller-owned `runtime.yaml` Team roster before falling back to legacy `AGENTS.md`, so a running Team Leader can delegate after late Team context injection without relying on a stale prompt copy.
 - **CoPaw to QwenPaw Worker state migration**: Restore Worker storage before creating any QwenPaw directories, migrate and verify both `.copaw` runtime state and `.copaw.secret` credentials with legacy state authoritative on conflicts, honor QwenPaw's configured secret directory (including relative paths) while rejecting targets outside persistent Worker storage, rebase migrated workspace metadata to `.qwenpaw`, persist migrated files before the idempotency marker, and cover a real CoPaw persistence → QwenPaw runtime switch in E2E tests. ([#1131](https://github.com/agentscope-ai/AgentTeams/pull/1131))
@@ -44,6 +45,7 @@ Record release-facing changes here before the next release.
 
 **Bug 修复**
 
+- **Team Room 成员收敛**：邀请 Team Leader 和 Worker 后，使用各自的 Matrix token 显式加入 Team Room，避免 Team 已处于 Active 状态时 Hermes 成员仍停留在 invite、无法接收消息。([#1142](https://github.com/agentscope-ai/AgentTeams/issues/1142))
 - **QwenPaw Worker 运行时管理**：在 Manager 指引和运行时切换校验中将 `qwenpaw` 识别为合法 Worker runtime，切换时调用镜像内实际安装的 `agt` CLI，并使 Worker CLI 帮助与 Controller 实际支持的运行时保持一致。
 - **CoPaw Team Worker 解析**：任务分配优先从 Controller 管理的 `runtime.yaml` Team roster 获取 Matrix ID，仅在旧部署缺少该 roster 时回退 `AGENTS.md`，避免运行中的 Team Leader 因 prompt 副本过期而无法委派任务。
 - **CoPaw 到 QwenPaw Worker 状态迁移**：在创建任何 QwenPaw 目录前先恢复 Worker 存储，迁移并校验 `.copaw` 运行时状态和 `.copaw.secret` 凭据，冲突时以旧 CoPaw 状态为准，遵循 QwenPaw 配置的 secret 目录（包括相对路径）并拒绝持久化 Worker 目录之外的目标，将工作区元数据改写到 `.qwenpaw`，先持久化迁移数据再写入幂等标记，并增加真实 CoPaw 持久化后切换 QwenPaw 的 E2E 覆盖。([#1131](https://github.com/agentscope-ai/AgentTeams/pull/1131))
@@ -68,6 +70,7 @@ Record release-facing changes here before the next release.
 - `124f06d1` feat(manager): migrate Manager runtime from copaw to qwenpaw 2.0 (#1095)
 - `2fd9ddde` fix(qwenpaw): preserve CoPaw state during runtime migration (#1131)
 - `062f1c8d` fix(controller): make Team deletion invite idempotent (#1140)
+- `41f6e517` fix(controller): join Team members to Team Room (#1142)
 
 **Also in this window / 同期其他变更**
 

@@ -73,10 +73,16 @@ DeepAgents 配置消失，或 `execution.mode` 不再是 `sandbox` 时，Control
 idle/max lifetime 到期和 HTTP Delete 也进入同一撤销状态机。Controller 会在创建任何子资源前
 先持久化 cleanup finalizer；删除 lease 时使用 UID 与 resourceVersion 前置条件，再由 finalizer
 按 **Service → token Secret → Pod → 等待 Pod 删除 → NetworkPolicy → 移除 finalizer** 的顺序
-收敛。每个子资源都必须匹配当前 controller/worker/sandbox label 和 ExecutionSandbox owner UID，
-并以 UID 与 resourceVersion 前置条件删除。只有未缓存的 API-server 读取确认这一代 Pod 已不存在
-后，才会删除 NetworkPolicy，并以当前 resourceVersion 移除 finalizer；同名替代对象、归属漂移、
-冲突或暂时仍在 Terminating 的 Pod 都会保留隔离边界并重试。
+收敛。Pod、Service 和 Secret 必须同时匹配当前 controller/worker/sandbox label 与
+ExecutionSandbox controller owner UID。NetworkPolicy 是有意的例外：它不设置 ownerReference，
+而使用同一组 label、`runtime=deepagents-runner` 和
+`agentteams.io/execution-sandbox-uid=<ExecutionSandbox UID>` 绑定当前 generation，并由显式
+NetworkPolicy watch 触发 reconcile。这样 foreground 删除 Sandbox 或 Worker 时，Kubernetes GC
+不能在 Pod 消失前独立删除隔离策略。Controller 只有通过未缓存 API-server 读取确认这一代 Pod
+已不存在后，才以 NetworkPolicy UID/resourceVersion 前置条件删除它，并用当前 resourceVersion
+移除 finalizer；同名替代对象、归属漂移、冲突或暂时仍在 Terminating 的 Pod 都会保留隔离边界
+并重试。旧版本创建、且 owner 精确指向当前 Sandbox UID 的单一 ownerReference NetworkPolicy 会
+原地移除 ownerReference 并补写 UID 注解；任何 foreign/malformed 同名资源都不会被接管或删除。
 
 Worker watch 通过 `ExecutionSandbox.spec.workerRef.name` 字段索引反查 lease，并继续按命名空间和
 当前 Controller label 限定；即使 `agentteams.io/worker` label 缺失或错误，正确的 `workerRef`

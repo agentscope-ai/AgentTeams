@@ -772,10 +772,16 @@ Matrix catch-up 尚未完成而把它判作终态失败；只有 Container 的�
 `ExecutionSandbox` 在创建任何 Runner 子资源前先持久化 cleanup finalizer。Worker 删除或
 归属/runtime/mode 漂移、idle/max lifetime 到期以及 HTTP Delete 都只用 lease 的 UID 与
 resourceVersion 请求删除 CR；finalizer 分支再校验每个子资源的 controller/worker/sandbox
-label 和 owner UID，以 UID 与 resourceVersion 前置条件按 Service、Secret、Pod 的顺序删除。
-Controller 必须通过未缓存 API reader 确认这一代 Pod 已不存在，才能删除 NetworkPolicy 并
-用当前 resourceVersion 移除 finalizer。Worker watch 按 `spec.workerRef.name` 字段索引反查，
-不依赖可漂移的 Worker label；cache List 失败会记录日志并回退到未缓存读取。
+label；Pod、Service 和 Secret 还必须匹配 owner UID，并以 UID 与 resourceVersion 前置条件按
+Service、Secret、Pod 的顺序删除。NetworkPolicy 刻意不设置 ownerReference，而以
+`runtime=deepagents-runner` label 和
+`agentteams.io/execution-sandbox-uid=<ExecutionSandbox UID>` 注解绑定当前 generation，并通过显式
+watch mapper 入队。Controller 必须通过未缓存 API reader 确认这一代 Pod 已不存在，才能以
+UID/resourceVersion 前置条件删除 NetworkPolicy，再用当前 resourceVersion 移除 finalizer。
+因此 foreground 删除 ExecutionSandbox 或 Worker 不会让 Kubernetes GC 抢先移除隔离策略。
+旧版精确 owner 的策略会原地迁移；同名 foreign/malformed 策略不会被接管或删除。Worker watch
+按 `spec.workerRef.name` 字段索引反查，不依赖可漂移的 Worker label；cache List 失败会记录日志
+并回退到未缓存读取。
 
 不要读取或打印任何部署 secret 来验证该边界。开发机可运行使用非敏感 sentinel 的测试；
 它只断言 token inspection 被阻断且不打印 token：
@@ -852,6 +858,7 @@ kubectl get executionsandbox,pod,service,networkpolicy \
 - 每次批准恰好只产生一次 Runner `POST /v1/execute`；传输结果不确定时，不以相同或新 request ID 自动重试；
 - 更新 Worker 的 sandbox resources、egress、idle/max lifetime 后，已有 sandbox 必须先收敛到新 generation 才能重新 Ready；已回收 lease 只在下一次 Runner 请求前重建，结果不确定的已发送请求不会被重放；
 - 删除 Worker、改变 Worker UID/Controller 归属、切换为非 DeepAgents runtime、移除 DeepAgents 配置或把 `execution.mode` 改为非 `sandbox` 时，已有 lease 必须由 cleanup finalizer 按 Service → token Secret → Pod → 未缓存读取确认 Pod 不存在 → NetworkPolicy → 移除 finalizer 的顺序撤销；在 Pod 存在或身份/前置条件冲突期间，NetworkPolicy 与 lease 必须保留；
+- Runner NetworkPolicy 必须没有 ownerReference，必须带有精确的 controller/worker/sandbox/runtime label 与 `agentteams.io/execution-sandbox-uid` 注解；对 ExecutionSandbox 和 Worker 分别执行 foreground delete 时，在被测试 finalizer 阻塞的 Runner Pod 消失前策略必须持续存在，Pod 消失后才由 Controller 删除；
 - 空闲超过 `5m` 或总生命周期超过 `30m` 后，`ExecutionSandbox` 及其 Pod、Service、NetworkPolicy 被 Controller 回收，Worker 与 checkpoint 保留。
 
 更完整的策略、外部 PostgreSQL 和故障排查说明见[《DeepAgents Worker Runtime》](deepagents-runtime.md)。

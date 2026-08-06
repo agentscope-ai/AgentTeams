@@ -129,11 +129,20 @@ Conflict、UID/RV precondition failure 或并发 heartbeat 导致的 resourceVer
 4. 通过 `mgr.GetAPIReader()` 再次直接读取 API server；只要精确 owned Pod 仍存在（包括
    Terminating），就保留 NetworkPolicy 与 ExecutionSandbox finalizer 并短间隔 requeue。
    cache NotFound 不能跨过这条隔离边界。
-5. 只有未缓存读取返回 NotFound 后，才按同样身份校验与 UID+resourceVersion 前置条件删除
-   NetworkPolicy；随后重新读取当前 ExecutionSandbox，校验 UID/controller identity，并用当前
-   resourceVersion 移除 cleanup finalizer。Kubernetes 随后完成 CR 删除。
+5. NetworkPolicy 不设置 ownerReference，避免 Sandbox 或 Worker 的 foreground cascading delete
+   让 Kubernetes GC 在 Pod 消失前独立回收隔离策略。它以精确 controller/worker/sandbox/runtime
+   labels 和 `agentteams.io/execution-sandbox-uid` 注解绑定当前 Sandbox generation；Controller
+   通过显式 label mapper watch 它，而不是依赖 `.Owns()` owner watch。
+6. 只有未缓存读取返回 Pod NotFound 后，才校验 NetworkPolicy 的 label、runtime 和 Sandbox UID
+   注解，并以目标 UID+resourceVersion 前置条件删除它；随后重新读取当前 ExecutionSandbox，
+   校验 UID/controller identity，并用当前 resourceVersion 移除 cleanup finalizer。Kubernetes
+   随后完成 CR 删除。
 
-所有 NotFound 都视为成功。任何同名替代 generation、foreign/malformed owner 或 label 转移
+升级时，只允许迁移恰好含一个、且 controller owner 精确指向当前 ExecutionSandbox UID 的旧版
+NetworkPolicy：原地更新会删除 ownerReference、补写 UID 注解并保留该对象 UID。缺少新 UID 注解
+且又不满足这一旧版身份的对象，以及任何 foreign/malformed owner，都不能被接管、修改或删除。
+
+所有 NotFound 都视为成功。任何同名替代 generation、foreign/malformed owner/UID binding 或 label 转移
 都返回错误，保留 NetworkPolicy 和 finalizer 等待重试或运维修复。其它 Kubernetes API 错误
 同样返回 reconcile error；撤销路径不创建新 Secret、Pod、Service 或 NetworkPolicy。无效
 资源/策略的 fail-closed cleanup 复用相同未缓存 Pod absence 与精确删除边界，但保留 Failed CR

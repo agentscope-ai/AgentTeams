@@ -15,13 +15,21 @@ import os
 import platform
 import shutil
 import stat
+from contextlib import suppress
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from rich.console import Console
 from rich.panel import Panel
 
 from copaw_worker.config import WorkerConfig
+from copaw_worker.health import (
+    ComponentHealth,
+    HealthState,
+    check_copaw_service,
+    check_matrix_service,
+    check_model_service,
+)
 from copaw_worker.sync import FileSync, sync_loop, push_loop
 from copaw_worker.bridge import (
     bridge_standard_to_runtime,
@@ -30,7 +38,6 @@ from copaw_worker.bridge import (
     sync_skills_to_runtime,
 )
 from copaw_worker.worker_api import WorkerAPIServer
-from copaw_worker.health import HealthState, check_matrix_service
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -44,6 +51,12 @@ class Worker:
         self._copaw_working_dir: Optional[Path] = None
         self._runner = None
         self._channel_manager = None
+        self._push_task: Optional[asyncio.Task[None]] = None
+        self._pull_task: Optional[asyncio.Task[None]] = None
+        self._worker_api: WorkerAPIServer | None = None
+        self._server: Any | None = None
+        self._health: HealthState | None = None
+        self._openclaw_cfg: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -72,6 +85,19 @@ class Worker:
                 await self._runner.stop()
             except Exception:
                 pass
+        if self._push_task is not None:
+            self._push_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._push_task
+            self._push_task = None
+        if self._pull_task is not None:
+            self._pull_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._pull_task
+            self._pull_task = None
+        if self._worker_api is not None:
+            await self._worker_api.stop()
+            self._worker_api = None
         console.print("[green]Worker stopped.[/green]")
 
     # ------------------------------------------------------------------
@@ -101,6 +127,18 @@ class Worker:
             local_dir=self.config.install_dir / self.worker_name,
         )
 
+        # 2b. Set up runtime working directory (.copaw for the legacy CoPaw
+        #     runtime). The .copaw -> .qwenpaw migration is owned exclusively
+        #     by qwenpaw_worker startup, so an explicitly configured
+        #     runtime: copaw Worker restart never migrates before a switch.
+        #     This must exist before startup health writes so health.json is
+        #     persisted in the same place Worker API consumers expect.
+        rt_dir_name = ".copaw"
+        self._copaw_working_dir = self.config.install_dir / self.worker_name / rt_dir_name
+        self._copaw_working_dir.mkdir(parents=True, exist_ok=True)
+        self._health = HealthState(self._copaw_working_dir / "health.json")
+        self._health.persist()
+
         # 2. Full mirror from MinIO (restore all state: config, sessions, sync token, etc.)
         #    Mirrors the OpenClaw worker's startup approach: pull everything first,
         #    then use selective sync during runtime. Controller writes and worker
@@ -117,6 +155,15 @@ class Worker:
             except Exception as exc:
                 if attempt >= max_attempts:
                     console.print(f"[red]Failed to read worker config from MinIO: {exc}[/red]")
+                    self._health.update(
+                        "sync",
+                        "unhealthy",
+                        f"startup mirror failed: {exc}",
+                        {
+                            "operation": "mirror_all",
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                     return False
                 logger.warning(
                     "Worker config not ready yet (attempt %s/%s): %s",
@@ -125,6 +172,7 @@ class Worker:
                     exc,
                 )
                 await asyncio.sleep(5)
+        self._health.update("sync", "healthy", "startup mirror restored")
 
         # 3b. Re-login to Matrix to get fresh access token + device ID
         #     Under E2EE, reusing the old access token (same device_id) with a
@@ -132,15 +180,46 @@ class Worker:
         #     distribution. Re-login creates a new device_id, matching the
         #     Manager's behavior.
         openclaw_cfg = self._matrix_relogin(openclaw_cfg)
+        self._openclaw_cfg = openclaw_cfg
         self._join_pending_matrix_invites(openclaw_cfg)
 
-        # 4. Set up runtime working directory (.copaw for the legacy CoPaw
-        #    runtime). The .copaw -> .qwenpaw migration is owned exclusively
-        #    by qwenpaw_worker startup, so an explicitly configured
-        #    runtime: copaw Worker restart never migrates before a switch.
-        rt_dir_name = ".copaw"
-        self._copaw_working_dir = self.config.install_dir / self.worker_name / rt_dir_name
-        self._copaw_working_dir.mkdir(parents=True, exist_ok=True)
+        # 3c. Model preflight: verify the configured model provider is
+        #     reachable before CoPaw starts. Records the result in health
+        #     state and notifies Matrix on failure, but does NOT block
+        #     startup (a model outage must not prevent the worker from
+        #     coming up — it will surface via readiness instead).
+        logger.info("startup stage=model_preflight worker=%s", self.worker_name)
+        model_status = check_model_service(openclaw_cfg)
+        self._health.update(
+            "model",
+            model_status.healthiness,
+            model_status.message,
+            model_status.details,
+        )
+        if model_status.healthiness == "healthy":
+            logger.info(
+                "model preflight OK worker=%s details=%s",
+                self.worker_name,
+                model_status.details,
+            )
+        else:
+            logger.warning(
+                "model preflight failed worker=%s message=%s details=%s",
+                self.worker_name,
+                model_status.message,
+                model_status.details,
+            )
+            console.print(
+                f"[yellow]Model service preflight failed: {model_status.message}[/yellow]"
+            )
+            details = model_status.details or {}
+            notify_msg = (
+                f"⚠️ Model service check failed: {model_status.message}\n"
+                f"Provider: {details.get('provider', 'unknown')}, "
+                f"Model: {details.get('model', 'unknown')}\n"
+                f"Please check model configuration."
+            )
+            self._notify_matrix(notify_msg, openclaw_cfg)
 
         # 5. Bridge openclaw.json -> CoPaw config.json + providers.json
         #    Infer gateway port from FS endpoint so bridge's _port_remap uses
@@ -161,21 +240,42 @@ class Worker:
             )
         except Exception as exc:
             console.print(f"[red]Config bridge failed: {exc}[/red]")
+            self._health.update(
+                "bridge",
+                "unhealthy",
+                f"standard-to-copaw bridge failed: {exc}",
+                {
+                    "operation": "bridge_standard_to_runtime",
+                    "error_type": type(exc).__name__,
+                },
+            )
             return False
+        self._health.update(
+            "bridge",
+            "healthy",
+            "standard-to-copaw bridge completed",
+            {"operation": "bridge_standard_to_runtime"},
+        )
 
         # 6. Install MatrixChannel into CoPaw's custom_channels dir
         self._install_matrix_channel()
 
         # 7. Start background MinIO sync
-        asyncio.create_task(
+        self._pull_task = asyncio.create_task(
             sync_loop(
                 self.sync,
                 interval=self.config.sync_interval,
                 on_pull=self._on_files_pulled,
+                health=self._health,
             )
         )
         # Local -> Remote: change-triggered push (every 5s, mirrors openclaw worker behavior)
-        asyncio.create_task(push_loop(self.sync, check_interval=5))
+        self._push_task = asyncio.create_task(
+            push_loop(self.sync, check_interval=5, health=self._health)
+        )
+
+        # 8. Worker API server (liveness/readiness probes)
+        await self._start_worker_api()
 
         console.print("[bold green]Worker initialized.[/bold green]")
         if self.config.console_port:
@@ -189,6 +289,53 @@ class Worker:
                 "(costs ~500MB extra RAM).[/dim]"
             )
         return True
+
+    async def _start_worker_api(self) -> None:
+        self._worker_api = WorkerAPIServer(
+            host="0.0.0.0",
+            port=self.config.worker_port,
+            liveness_handler=self.build_worker_liveness,
+            readiness_handler=self.build_worker_readiness,
+        )
+        await self._worker_api.start()
+
+    async def build_worker_liveness(self) -> dict[str, Any]:
+        return {
+            "liveness": "alive",
+            "message": "worker api alive",
+            "details": {"worker_port": self.config.worker_port},
+        }
+
+    async def build_worker_readiness(self) -> dict[str, Any]:
+        if self._health is None:
+            raise RuntimeError("health state is not initialized")
+        openclaw_cfg = self._openclaw_cfg or {}
+
+        # On-demand component probes (run on every readiness poll, so
+        # readiness reflects live state rather than startup-time snapshots).
+        copaw = await asyncio.to_thread(check_copaw_service, self.config.console_port)
+        self._health.update("copaw", copaw.healthiness, copaw.message, copaw.details)
+
+        model = await asyncio.to_thread(check_model_service, openclaw_cfg)
+        self._health.update("model", model.healthiness, model.message, model.details)
+
+        matrix_cfg = openclaw_cfg.get("channels", {}).get("matrix", {})
+        from .bridge import _port_remap, _is_in_container
+        homeserver = _port_remap(
+            matrix_cfg.get("homeserver", ""), _is_in_container()
+        )
+        matrix = await asyncio.to_thread(check_matrix_service, homeserver)
+        self._health.update("matrix", matrix.healthiness, matrix.message, matrix.details)
+
+        snapshot = self._health.to_dict()
+        ready = snapshot["healthiness"] == "healthy"
+        return {
+            "readiness": "ready" if ready else "not_ready",
+            "healthiness": snapshot["healthiness"],
+            "message": "worker ready" if ready else snapshot["message"],
+            "components": snapshot["components"],
+            "updated_at": snapshot["updated_at"],
+        }
 
     # ------------------------------------------------------------------
     # CoPaw runner
@@ -213,63 +360,6 @@ class Worker:
 
         clear_builtin_channel_cache()
 
-        # --- Worker API server (liveness/readiness probes) ---
-        worker_port = self.config.worker_port or (port + 1)
-        health_state = HealthState(
-            self._copaw_working_dir / "health.json"
-        )
-
-        async def _liveness():
-            snap = health_state.snapshot()
-            return {"liveness": "alive", "healthiness": snap.healthiness}
-
-        async def _readiness():
-            # Mark startup-only components as healthy — they were validated
-            # during _initialize() and don't need runtime re-checking.
-            for comp in ("sync", "bridge", "model"):
-                health_state.update(comp, "healthy", "validated at startup")
-
-            # Probe CoPaw console (TCP reachability — CoPaw has no /health endpoint)
-            import socket as _socket
-            try:
-                with _socket.create_connection(("127.0.0.1", port), timeout=3):
-                    health_state.update("copaw", "healthy", f"console reachable on port {port}")
-            except Exception as e:
-                health_state.update("copaw", "unhealthy", f"console unreachable: {e}")
-
-            # Probe Matrix homeserver
-            matrix_cfg = {}
-            try:
-                cfg_path = self.sync.local_dir / "openclaw.json"
-                if cfg_path.exists():
-                    import json as _json
-                    matrix_cfg = _json.loads(cfg_path.read_text()).get("channels", {}).get("matrix", {})
-            except Exception:
-                pass
-            homeserver = matrix_cfg.get("homeserver", "")
-            if homeserver:
-                mx_health = check_matrix_service(homeserver, timeout=5)
-                health_state.update("matrix", mx_health.healthiness, mx_health.message)
-
-            snap = health_state.snapshot()
-            return {
-                "readiness": "ready" if snap.healthiness == "healthy" else "not_ready",
-                "healthiness": snap.healthiness,
-                "message": snap.message,
-                "components": {
-                    k: {"healthiness": v.healthiness, "message": v.message}
-                    for k, v in snap.components.items()
-                },
-            }
-
-        api_server = WorkerAPIServer(
-            host="0.0.0.0",
-            port=worker_port,
-            liveness_handler=_liveness,
-            readiness_handler=_readiness,
-        )
-        await api_server.start()
-
         uv_config = uvicorn.Config(
             "copaw.app._app:app",
             host="0.0.0.0",
@@ -277,16 +367,92 @@ class Worker:
             log_level="info",
         )
         server = uvicorn.Server(uv_config)
+        self._server = server
         console.print(
             f"[bold green]CoPaw console available at "
             f"http://127.0.0.1:{port}/[/bold green]"
         )
         try:
+            startup_health_task = asyncio.create_task(
+                self._mark_copaw_startup_health(),
+                name=f"copaw-worker-{self.worker_name}-startup-health",
+            )
             await server.serve()
+            if not server.should_exit and self._health is not None:
+                self._health.update(
+                    "copaw",
+                    "unhealthy",
+                    "CoPaw app exited unexpectedly",
+                    {"operation": "run_copaw"},
+                )
         except asyncio.CancelledError:
             server.should_exit = True
+        except Exception as exc:
+            logger.exception("CoPaw FastAPI app failed worker=%s", self.worker_name)
+            if self._health is not None:
+                self._health.update(
+                    "copaw",
+                    "unhealthy",
+                    f"CoPaw app failed: {exc}",
+                    {
+                        "operation": "run_copaw",
+                        "error_type": type(exc).__name__,
+                    },
+                )
+            raise
         finally:
-            await api_server.stop()
+            if "startup_health_task" in locals() and not startup_health_task.done():
+                startup_health_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await startup_health_task
+            if self._server is server:
+                self._server = None
+
+    async def _mark_copaw_startup_health(
+        self,
+        *,
+        timeout: float = 60,
+        interval: float = 0.5,
+    ) -> None:
+        """Mark CoPaw healthy once its own app health endpoint is reachable."""
+        if self._health is None:
+            return
+
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            status = await asyncio.to_thread(
+                check_copaw_service,
+                self.config.console_port,
+            )
+            if status.healthiness == "healthy":
+                self._health.update(
+                    "copaw",
+                    status.healthiness,
+                    status.message,
+                    status.details,
+                )
+                logger.info(
+                    "copaw startup health OK worker=%s details=%s",
+                    self.worker_name,
+                    status.details,
+                )
+                return
+
+            if asyncio.get_running_loop().time() >= deadline:
+                self._health.update(
+                    "copaw",
+                    status.healthiness,
+                    status.message,
+                    status.details,
+                )
+                logger.warning(
+                    "copaw startup health failed worker=%s message=%s details=%s",
+                    self.worker_name,
+                    status.message,
+                    status.details,
+                )
+                return
+            await asyncio.sleep(interval)
 
     async def _run_copaw_headless(self) -> None:
         """Start CoPaw's AgentRunner + ChannelManager (no HTTP server)."""
@@ -353,6 +519,20 @@ class Worker:
                 "[dim]No Matrix password found in MinIO, skipping re-login "
                 "(E2EE may not work after restart)[/dim]"
             )
+            self._health.update(
+                "matrix",
+                "unhealthy",
+                "matrix re-login skipped: missing homeserver or password",
+                {
+                    "operation": "matrix_relogin",
+                    "has_homeserver": bool(
+                        openclaw_cfg.get("channels", {})
+                        .get("matrix", {})
+                        .get("homeserver", "")
+                    ),
+                    "has_password": False,
+                },
+            )
             return openclaw_cfg
 
         matrix_password = matrix_password.strip()
@@ -363,6 +543,16 @@ class Worker:
         )
 
         if not homeserver or not matrix_password:
+            self._health.update(
+                "matrix",
+                "unhealthy",
+                "matrix re-login skipped: missing homeserver or password",
+                {
+                    "operation": "matrix_relogin",
+                    "has_homeserver": bool(homeserver),
+                    "has_password": bool(matrix_password),
+                },
+            )
             return openclaw_cfg
 
         login_url = f"{homeserver}/_matrix/client/v3/login"
@@ -395,15 +585,42 @@ class Worker:
                     f"[green]Matrix re-login OK[/green] "
                     f"(device: {new_device}, token: {new_token[:10]}...)"
                 )
+                self._health.update(
+                    "matrix",
+                    "healthy",
+                    "matrix re-login succeeded",
+                    {
+                        "operation": "matrix_relogin",
+                        "device_id": new_device,
+                    },
+                )
             else:
                 console.print(
                     "[yellow]Matrix re-login returned no token, "
                     "using existing access token[/yellow]"
                 )
+                self._health.update(
+                    "matrix",
+                    "unhealthy",
+                    "matrix re-login returned no access token",
+                    {
+                        "operation": "matrix_relogin",
+                        "device_id": new_device,
+                    },
+                )
         except Exception as exc:
             console.print(
                 f"[yellow]Matrix re-login failed: {exc} — "
                 f"using existing access token (E2EE may not work)[/yellow]"
+            )
+            self._health.update(
+                "matrix",
+                "unhealthy",
+                f"matrix re-login failed: {exc}",
+                {
+                    "operation": "matrix_relogin",
+                    "error_type": type(exc).__name__,
+                },
             )
 
         return openclaw_cfg
@@ -452,6 +669,166 @@ class Worker:
                 logger.info("Joined pending Matrix invite: %s", room_id)
             except Exception as exc:
                 logger.warning("Matrix invite join failed for %s: %s", room_id, exc)
+
+    def _notify_matrix(self, message: str, openclaw_cfg: dict) -> None:
+        """Best-effort send a m.notice to all joined Matrix rooms.
+
+        Uses the raw Matrix CS API (urllib) since the nio client is not yet
+        running at startup time.  Accepts pending room invitations first so
+        that brand-new workers that have not yet joined any room still
+        receive the notification.
+        """
+        import json
+        import urllib.request
+        import uuid
+
+        matrix_cfg = openclaw_cfg.get("channels", {}).get("matrix", {})
+        from .bridge import _port_remap, _is_in_container
+        homeserver = _port_remap(
+            matrix_cfg.get("homeserver", ""), _is_in_container()
+        )
+        access_token = matrix_cfg.get("accessToken", "")
+
+        if not homeserver or not access_token:
+            logger.debug("notify_matrix skipped: missing homeserver or token")
+            return
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        rooms = self._wait_for_matrix_rooms(homeserver, headers)
+        if not rooms:
+            logger.warning(
+                "notify_matrix: no rooms available after waiting, "
+                "notification skipped worker=%s",
+                self.worker_name,
+            )
+            return
+
+        body = json.dumps({
+            "msgtype": "m.notice",
+            "body": message,
+        }).encode("utf-8")
+
+        for room_id in rooms:
+            txn_id = uuid.uuid4().hex
+            url = (
+                f"{homeserver}/_matrix/client/v3/rooms/"
+                f"{urllib.request.quote(room_id, safe='')}"
+                f"/send/m.room.message/{txn_id}"
+            )
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=body,
+                    headers={**headers, "Content-Type": "application/json"},
+                    method="PUT",
+                )
+                urllib.request.urlopen(req, timeout=10)
+            except Exception as exc:
+                logger.debug(
+                    "notify_matrix: failed to send to %s: %s", room_id, exc
+                )
+
+    def _wait_for_matrix_rooms(
+        self,
+        homeserver: str,
+        headers: dict[str, str],
+        *,
+        timeout: float = 120,
+        poll_interval: float = 3,
+    ) -> list[str]:
+        """Wait until the worker has at least one joined Matrix room.
+
+        On each poll cycle: accept pending invites, then check joined_rooms.
+        Returns the room list, or [] after *timeout* seconds.
+        """
+        import json
+        import time
+        import urllib.request
+
+        deadline = time.monotonic() + timeout
+
+        while True:
+            self._accept_matrix_invites(homeserver, headers)
+
+            try:
+                req = urllib.request.Request(
+                    f"{homeserver}/_matrix/client/v3/joined_rooms",
+                    headers=headers,
+                    method="GET",
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    rooms = json.loads(resp.read()).get("joined_rooms", [])
+            except Exception as exc:
+                logger.debug("notify_matrix: failed to list joined rooms: %s", exc)
+                rooms = []
+
+            if rooms:
+                return rooms
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return []
+
+            logger.info(
+                "notify_matrix: no rooms yet, retrying in %.0fs "
+                "(%.0fs remaining) worker=%s",
+                poll_interval,
+                remaining,
+                self.worker_name,
+            )
+            time.sleep(min(poll_interval, remaining))
+
+    def _accept_matrix_invites(
+        self,
+        homeserver: str,
+        headers: dict[str, str],
+    ) -> None:
+        """Accept all pending Matrix room invitations via initial sync."""
+        import json
+        import urllib.request
+
+        sync_filter = json.dumps(
+            {"room": {"timeline": {"limit": 0}, "state": {"limit": 0}}}
+        )
+        sync_url = (
+            f"{homeserver}/_matrix/client/v3/sync"
+            f"?filter={urllib.request.quote(sync_filter)}&timeout=0"
+        )
+        try:
+            req = urllib.request.Request(sync_url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                sync_data = json.loads(resp.read())
+        except Exception as exc:
+            logger.debug("notify_matrix: sync for invites failed: %s", exc)
+            return
+
+        invited = sync_data.get("rooms", {}).get("invite", {})
+        if not invited:
+            return
+
+        logger.info(
+            "notify_matrix: accepting %d pending room invite(s) worker=%s",
+            len(invited),
+            self.worker_name,
+        )
+        for room_id in invited:
+            join_url = (
+                f"{homeserver}/_matrix/client/v3/join/"
+                f"{urllib.request.quote(room_id, safe='')}"
+            )
+            try:
+                req = urllib.request.Request(
+                    join_url,
+                    data=b"{}",
+                    headers={**headers, "Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=10)
+            except Exception as exc:
+                logger.debug(
+                    "notify_matrix: failed to join %s: %s", room_id, exc
+                )
 
     # ------------------------------------------------------------------
     # mc (MinIO Client) auto-install

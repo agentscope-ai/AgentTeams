@@ -208,8 +208,14 @@ async def test_worker_marks_sync_unhealthy_when_startup_mirror_fails(tmp_path, m
     def fail_mirror(_self):
         raise RuntimeError("minio unavailable")
 
+    async def _no_sleep(_delay):
+        return None
+
+    # start() retries mirror_all up to 12 times with a 5s backoff; collapse
+    # the wait so the failure path is exercised without a ~60s stall.
     monkeypatch.setattr(Worker, "_ensure_mc", lambda _self: None)
     monkeypatch.setattr("copaw_worker.sync.FileSync.mirror_all", fail_mirror)
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)
 
     worker = Worker(_config(tmp_path))
 

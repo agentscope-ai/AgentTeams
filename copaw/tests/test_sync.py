@@ -105,6 +105,13 @@ def test_mirror_all_restores_worker_prefix_and_shared_without_credentials(tmp_pa
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
+        if args[0] == "mirror" and args[1].startswith(
+            "agentteams/agentteams-storage/agents/"
+        ):
+            # Simulate pulling openclaw.json from MinIO so the
+            # post-mirror existence check passes.
+            (sync.local_dir / "openclaw.json").parent.mkdir(parents=True, exist_ok=True)
+            (sync.local_dir / "openclaw.json").write_text('{"team_id":"dag-team"}')
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr("copaw_worker.sync._mc", fake_mc)
@@ -135,6 +142,12 @@ def test_mirror_all_falls_back_to_startup_files_when_prefix_missing(tmp_path, mo
     commands = []
 
     monkeypatch.setattr(sync, "_ensure_alias", lambda: None)
+    monkeypatch.setattr(
+        sync,
+        "_get_worker_info",
+        lambda: {"name": "dag-team-dev", "team": "dag-team", "role": "worker"},
+    )
+    monkeypatch.setattr(sync, "_get_team_id", lambda: "dag-team")
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
@@ -192,6 +205,13 @@ def test_mirror_all_restores_global_shared_for_team_leader(tmp_path, monkeypatch
 
     def fake_mc(*args, **_kwargs):
         commands.append(args)
+        if args[0] == "mirror" and args[1].startswith(
+            "agentteams/agentteams-storage/agents/"
+        ):
+            # Simulate pulling openclaw.json from MinIO so the
+            # post-mirror existence check passes.
+            (sync.local_dir / "openclaw.json").parent.mkdir(parents=True, exist_ok=True)
+            (sync.local_dir / "openclaw.json").write_text('{"team_id":"dag-team"}')
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr("copaw_worker.sync._mc", fake_mc)

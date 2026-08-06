@@ -29,6 +29,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - **Install script model env passthrough**: Pass custom model override env vars to the Controller container so that `AGENTTEAMS_MODEL_VISION` and related settings actually reach the config generator.
 - **Bridge model capability propagation**: Propagate model `input` modalities from openclaw.json through `_write_providers_json()` so QwenPaw's `ModelInfo` receives `supports_image`/`supports_video`/`supports_multimodal` flags instead of relying on fail-open defaults.
 - **Manager diagnostic loops**: Manager prompts and Worker lifecycle guidance stop repeated no-op troubleshooting commands and treat a missing Worker in `agt get workers` as the deletion boundary instead of looping on Matrix room probes. ([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
+- **CoPaw Worker model preflight + readiness regression**: Restore the startup health-state mechanism that the #1077 Worker rewrite dropped — start() records sync/matrix/model/bridge health in `health.json`, runs a real model preflight (Matrix notify on failure without blocking boot), passes health into the sync/push loops, and starts the Worker API liveness/readiness server from `build_worker_liveness`/`build_worker_readiness`. Readiness now re-checks model/copaw/matrix live on every poll instead of hard-coding `model: validated at startup` (readiness false-positive when the model provider is down). Also fixes the 18 baseline `copaw/tests` failures that #1077's rewrite left behind.
 
 ---
 

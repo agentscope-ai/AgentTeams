@@ -35,7 +35,9 @@
 set -e
 
 # Source shared environment bootstrap (provides ensure_mc_credentials in cloud mode)
-source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
+if [ -f /opt/agentteams/scripts/lib/agentteams-env.sh ]; then
+    source /opt/agentteams/scripts/lib/agentteams-env.sh
+fi
 
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
@@ -182,6 +184,9 @@ BRIDGE_HOMESERVER="${BRIDGE_HOMESERVER:-${AGENTTEAMS_MATRIX_URL:-${MATRIX_HOMESE
 BRIDGE_ACCESS_TOKEN="${BRIDGE_ACCESS_TOKEN:-${AGENTTEAMS_WORKER_MATRIX_TOKEN:-${MATRIX_ACCESS_TOKEN:-}}}"
 BRIDGE_ROOM_ID="${BRIDGE_ROOM_ID:-${AGENTTEAMS_WORKER_ROOM_ID:-${MATRIX_HOME_ROOM_ID:-}}}"
 BRIDGE_USER_ID="${BRIDGE_USER_ID:-${AGENTTEAMS_MATRIX_USER_ID:-${MATRIX_USER_ID:-}}}"
+if [ -z "${BRIDGE_USER_ID}" ] && [ -n "${AGENTTEAMS_MATRIX_DOMAIN:-}" ]; then
+    BRIDGE_USER_ID="@${WORKER_NAME}:${AGENTTEAMS_MATRIX_DOMAIN}"
+fi
 
 # LLM fallback: AGENTTEAMS_AI_GATEWAY_URL is the base host (no /v1 suffix);
 # AGENTTEAMS_WORKER_GATEWAY_KEY is the Higress consumer key for this worker.
@@ -338,10 +343,14 @@ CORE_PID=$!
 
     # Report ready to controller
     if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
+        AUTH_TOKEN="${AGENTTEAMS_AUTH_TOKEN:-}"
+        if [ -z "${AUTH_TOKEN}" ] && [ -n "${AGENTTEAMS_AUTH_TOKEN_FILE:-}" ]; then
+            AUTH_TOKEN=$(cat "${AGENTTEAMS_AUTH_TOKEN_FILE}" 2>/dev/null || true)
+        fi
         agt worker report-ready --name "${WORKER_CR_NAME}" 2>/dev/null || \
             curl -sf -X POST "${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/${WORKER_CR_NAME}/ready" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer $(cat ${AGENTTEAMS_AUTH_TOKEN_FILE:-/var/run/secrets/agentteams/token} 2>/dev/null)" 2>/dev/null || \
+                -H "Authorization: Bearer ${AUTH_TOKEN}" 2>/dev/null || \
             log "WARNING: Failed to report ready to controller"
     fi
 ) &

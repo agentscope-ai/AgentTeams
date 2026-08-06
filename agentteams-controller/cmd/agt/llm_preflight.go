@@ -20,6 +20,7 @@ import (
 const (
 	defaultOpenAICompatibleBaseURL  = "https://api.openai.com/v1"
 	defaultQwenCompatibleBaseURL    = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	defaultAtlasCloudBaseURL        = "https://api.atlascloud.ai/v1"
 	defaultLLMPreflightTimeout      = 30 * time.Second
 	defaultLLMPreflightRetries      = 2
 	defaultLLMPreflightRetryBackoff = 500 * time.Millisecond
@@ -97,7 +98,7 @@ func llmPreflightCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.Provider, "provider", opts.Provider, "LLM provider (openai-compat|qwen|custom)")
+	cmd.Flags().StringVar(&opts.Provider, "provider", opts.Provider, "LLM provider (openai-compat|qwen|atlascloud|custom)")
 	cmd.Flags().StringVar(&opts.APIKey, "api-key", opts.APIKey, "LLM API key")
 	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "OpenAI-compatible base URL")
 	cmd.Flags().StringVar(&opts.Model, "model", opts.Model, "Model name to probe")
@@ -171,6 +172,8 @@ func resolveLLMPreflightBaseURL(provider, baseURL string) (string, error) {
 			baseURL = defaultOpenAICompatibleBaseURL
 		case "qwen":
 			baseURL = defaultQwenCompatibleBaseURL
+		case "atlascloud":
+			baseURL = defaultAtlasCloudBaseURL
 		default:
 			return "", fmt.Errorf("LLM base URL is required for provider %q (set AGENTTEAMS_OPENAI_BASE_URL or --base-url)", provider)
 		}

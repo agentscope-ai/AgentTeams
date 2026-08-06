@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from deepagents.backends.sandbox import BaseSandbox
 
 from deepagents_agentteams.sandbox import AgentTeamsSandbox, SandboxControlClient
 
@@ -19,6 +20,26 @@ def runner_token() -> str:
 
 def test_sandbox_does_not_advertise_unmounted_capture_offload() -> None:
     assert AgentTeamsSandbox.enable_capture_offload is False
+
+
+def test_sandbox_overrides_sync_and_async_filesystem_shell_fallbacks() -> None:
+    for method_name in (
+        "ls",
+        "als",
+        "read",
+        "aread",
+        "write",
+        "awrite",
+        "edit",
+        "aedit",
+        "delete",
+        "adelete",
+        "grep",
+        "agrep",
+        "glob",
+        "aglob",
+    ):
+        assert getattr(AgentTeamsSandbox, method_name) is not getattr(BaseSandbox, method_name)
 
 
 def test_control_client_polls_until_ready_and_refreshes_service_account_token() -> None:
@@ -367,6 +388,215 @@ def test_file_transfers_use_deepagents_response_contracts() -> None:
     assert uploads[1].error == "permission_denied"
     assert downloads[0].content == b"downloaded"
     assert downloads[1].error == "file_not_found"
+
+
+def test_filesystem_tools_use_bounded_file_apis_without_execute() -> None:
+    """A filesystem tool must never create an unapproved command execution."""
+    requested_paths: list[str] = []
+    files = {"/workspace/note.txt": b"alpha\nbeta\n"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "controller":
+            return httpx.Response(
+                200,
+                json={
+                    "name": "exec-worker-hash",
+                    "phase": "Ready",
+                    "endpoint": "http://runner:8080",
+                    "token": runner_token(),
+                },
+            )
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
+        requested_paths.append(request.url.path)
+        payload = json.loads(request.content)
+        if request.url.path == "/v1/files/download":
+            path = payload["paths"][0]
+            content = files.get(path)
+            if content is None:
+                return httpx.Response(200, json={"files": [{"path": path, "error": "file_not_found"}]})
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {
+                            "path": path,
+                            "content_base64": base64.b64encode(content).decode("ascii"),
+                            "error": None,
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/v1/files/upload":
+            item = payload["files"][0]
+            files[item["path"]] = base64.b64decode(item["content_base64"])
+            return httpx.Response(200, json={"files": [{"path": item["path"], "error": None}]})
+        if request.url.path == "/v1/files/list":
+            return httpx.Response(
+                200,
+                json={
+                    "entries": [{"path": "/workspace/note.txt", "is_dir": False, "size": 11}],
+                    "error": None,
+                },
+            )
+        if request.url.path == "/v1/files/grep":
+            return httpx.Response(
+                200,
+                json={
+                    "matches": [{"path": "/workspace/note.txt", "line": 1, "text": "alpha"}],
+                    "error": None,
+                    "truncated": False,
+                },
+            )
+        if request.url.path == "/v1/files/glob":
+            return httpx.Response(
+                200,
+                json={
+                    "matches": [{"path": "/workspace/note.txt", "is_dir": False, "size": 11}],
+                    "error": None,
+                    "truncated": False,
+                },
+            )
+        if request.url.path == "/v1/files/delete":
+            files.pop(payload["path"], None)
+            return httpx.Response(
+                200,
+                json={
+                    "path": payload["path"],
+                    "error": None,
+                    "changes": [
+                        {"path": "note.txt", "sha256": None, "size": 0, "deleted": True}
+                    ],
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    with tempfile.TemporaryDirectory() as directory:
+        token_path = Path(directory, "token")
+        token_path.write_text(service_account_token())
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        control = SandboxControlClient(
+            controller_url="http://controller:8090",
+            worker_name="researcher-cr",
+            service_account_token_path=token_path,
+            client=client,
+        )
+        sandbox = AgentTeamsSandbox(control=control, session_id="atd-thread-hash", client=client)
+
+        assert sandbox.read("/workspace/note.txt", offset=1, limit=1).file_data == {
+            "content": "beta\n",
+            "encoding": "utf-8",
+        }
+        assert sandbox.write("/workspace/new.txt", "new").path == "/workspace/new.txt"
+        assert sandbox.edit("/workspace/new.txt", "new", "updated").occurrences == 1
+        assert sandbox.ls("/workspace").entries == [
+            {"path": "/workspace/note.txt", "is_dir": False, "size": 11}
+        ]
+        assert sandbox.grep("alpha", "/workspace").matches == [
+            {"path": "/workspace/note.txt", "line": 1, "text": "alpha"}
+        ]
+        assert sandbox.glob("*.txt", "/workspace").matches == [
+            {"path": "/workspace/note.txt", "is_dir": False, "size": 11}
+        ]
+        assert sandbox.delete("/workspace/note.txt").path == "/workspace/note.txt"
+
+    assert "/v1/execute" not in requested_paths
+    assert set(requested_paths) == {
+        "/v1/files/download",
+        "/v1/files/upload",
+        "/v1/files/list",
+        "/v1/files/grep",
+        "/v1/files/glob",
+        "/v1/files/delete",
+    }
+
+
+def test_mutating_file_tools_persist_exact_change_manifests() -> None:
+    files = {"/workspace/note.txt": b"before"}
+
+    class RecordingWorkspace:
+        def __init__(self) -> None:
+            self.persisted: list[tuple] = []
+
+        def hydrate(self, sandbox: AgentTeamsSandbox) -> None:
+            return None
+
+        def persist_changes(self, sandbox: AgentTeamsSandbox, changes: tuple) -> None:
+            self.persisted.append(changes)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "controller":
+            return httpx.Response(
+                200,
+                json={
+                    "name": "exec-worker-hash",
+                    "phase": "Ready",
+                    "endpoint": "http://runner:8080",
+                    "token": runner_token(),
+                },
+            )
+        if request.method == "GET" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
+        payload = json.loads(request.content)
+        if request.url.path == "/v1/files/download":
+            path = payload["paths"][0]
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {
+                            "path": path,
+                            "content_base64": base64.b64encode(files[path]).decode("ascii"),
+                            "error": None,
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/v1/files/upload":
+            item = payload["files"][0]
+            files[item["path"]] = base64.b64decode(item["content_base64"])
+            return httpx.Response(200, json={"files": [{"path": item["path"], "error": None}]})
+        if request.url.path == "/v1/files/delete":
+            files.pop(payload["path"])
+            return httpx.Response(
+                200,
+                json={
+                    "path": payload["path"],
+                    "error": None,
+                    "changes": [
+                        {"path": "note.txt", "sha256": None, "size": 0, "deleted": True}
+                    ],
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    with tempfile.TemporaryDirectory() as directory:
+        token_path = Path(directory, "token")
+        token_path.write_text(service_account_token())
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        control = SandboxControlClient(
+            controller_url="http://controller:8090",
+            worker_name="researcher-cr",
+            service_account_token_path=token_path,
+            client=client,
+        )
+        workspace = RecordingWorkspace()
+        sandbox = AgentTeamsSandbox(
+            control=control,
+            session_id="atd-thread-hash",
+            client=client,
+            workspace_store=workspace,
+        )
+
+        assert sandbox.write("/workspace/new.txt", "created").error is None
+        assert sandbox.edit("/workspace/note.txt", "before", "after").error is None
+        assert sandbox.delete("/workspace/note.txt").error is None
+
+    assert len(workspace.persisted) == 3
+    written, edited, deleted = (batch[0] for batch in workspace.persisted)
+    assert (written.path, written.size, written.deleted) == ("new.txt", 7, False)
+    assert (edited.path, edited.size, edited.deleted) == ("note.txt", 5, False)
+    assert (deleted.path, deleted.sha256, deleted.size, deleted.deleted) == ("note.txt", None, 0, True)
 
 
 def test_workspace_is_hydrated_once_and_command_changes_are_persisted() -> None:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
+import hashlib
 import logging
 import re
 import time
@@ -14,8 +16,26 @@ from typing import Protocol
 from urllib.parse import quote, urlsplit
 
 import httpx
-from deepagents.backends.protocol import ExecuteResponse, FileDownloadResponse, FileUploadResponse
+from deepagents.backends.protocol import (
+    DeleteResult,
+    EditResult,
+    ExecuteResponse,
+    FileData,
+    FileDownloadResponse,
+    FileUploadResponse,
+    GlobResult,
+    GrepResult,
+    LsResult,
+    ReadResult,
+    WriteResult,
+)
 from deepagents.backends.sandbox import BaseSandbox
+from deepagents.backends.utils import (
+    _get_backend_read_file_type,
+    check_empty_content,
+    perform_string_replacement,
+    slice_read_response,
+)
 
 from deepagents_agentteams.runner_core import WorkspaceChange
 
@@ -255,6 +275,164 @@ class AgentTeamsSandbox(BaseSandbox):
             )
         return results
 
+    def ls(self, path: str) -> LsResult:
+        """List workspace entries through the bounded Runner file API."""
+        response = self._runner_request("/v1/files/list", {"path": path})
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("error"):
+            return LsResult(error=f"Error listing '{path}': {payload['error']}")
+        return LsResult(entries=list(payload.get("entries") or []))
+
+    async def als(self, path: str) -> LsResult:
+        return await asyncio.to_thread(self.ls, path)
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        """Read and paginate a file without translating the operation into shell execution."""
+        responses = self.download_files([file_path])
+        if len(responses) != 1:
+            raise RuntimeError("Runner returned an incomplete file download response")
+        response = responses[0]
+        if response.error or response.content is None:
+            return ReadResult(error=f"File '{file_path}': {response.error or 'empty_response'}")
+        file_type = _get_backend_read_file_type(file_path)
+        if file_type != "text":
+            return ReadResult(
+                file_data=FileData(
+                    content=base64.b64encode(response.content).decode("ascii"),
+                    encoding="base64",
+                )
+            )
+        try:
+            content = response.content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return ReadResult(error=f"Error reading file '{file_path}': {exc}")
+        empty_message = check_empty_content(content)
+        if empty_message:
+            return ReadResult(file_data=FileData(content=empty_message, encoding="utf-8"))
+        return slice_read_response(FileData(content=content, encoding="utf-8"), offset, limit)
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        return await asyncio.to_thread(self.read, file_path, offset, limit)
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """Write UTF-8 content through the bounded upload API and persist its manifest."""
+        encoded = content.encode("utf-8")
+        responses = self.upload_files([(file_path, encoded)])
+        if len(responses) != 1:
+            raise RuntimeError("Runner returned an incomplete file upload response")
+        if responses[0].error:
+            return WriteResult(error=f"Failed to write file '{file_path}': {responses[0].error}")
+        change = self._uploaded_change(file_path, encoded)
+        warning = self._persist_file_changes((change,))
+        if warning:
+            return WriteResult(error=warning)
+        return WriteResult(path=file_path)
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        return await asyncio.to_thread(self.write, file_path, content)
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,  # noqa: FBT001, FBT002
+    ) -> EditResult:
+        """Perform an exact replacement through bounded download/upload APIs."""
+        downloads = self.download_files([file_path])
+        if len(downloads) != 1:
+            raise RuntimeError("Runner returned an incomplete file download response")
+        downloaded = downloads[0]
+        if downloaded.error or downloaded.content is None:
+            return EditResult(error=f"Error editing file '{file_path}': {downloaded.error or 'empty_response'}")
+        try:
+            content = downloaded.content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeDecodeError as exc:
+            return EditResult(error=f"Error editing file '{file_path}': {exc}")
+        old_string = old_string.replace("\r\n", "\n").replace("\r", "\n")
+        new_string = new_string.replace("\r\n", "\n").replace("\r", "\n")
+        replacement = perform_string_replacement(content, old_string, new_string, replace_all)
+        if isinstance(replacement, str):
+            return EditResult(error=replacement)
+        updated, occurrences = replacement
+        encoded = updated.encode("utf-8")
+        uploads = self.upload_files([(file_path, encoded)])
+        if len(uploads) != 1:
+            raise RuntimeError("Runner returned an incomplete file upload response")
+        if uploads[0].error:
+            return EditResult(error=f"Error editing file '{file_path}': {uploads[0].error}")
+        warning = self._persist_file_changes((self._uploaded_change(file_path, encoded),))
+        if warning:
+            return EditResult(error=warning)
+        return EditResult(path=file_path, occurrences=occurrences)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,  # noqa: FBT001, FBT002
+    ) -> EditResult:
+        return await asyncio.to_thread(self.edit, file_path, old_string, new_string, replace_all)
+
+    def delete(self, file_path: str) -> DeleteResult:
+        """Delete a workspace path through the bounded Runner file API."""
+        response = self._runner_request("/v1/files/delete", {"path": file_path})
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("error"):
+            return DeleteResult(error=f"Error deleting file '{file_path}': {payload['error']}")
+        changes = tuple(WorkspaceChange(**item) for item in payload.get("changes", []))
+        warning = self._persist_file_changes(changes)
+        if warning:
+            return DeleteResult(error=warning)
+        return DeleteResult(path=file_path)
+
+    async def adelete(self, file_path: str) -> DeleteResult:
+        return await asyncio.to_thread(self.delete, file_path)
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
+    ) -> GrepResult:
+        """Run one bounded literal file search without shell execution."""
+        response = self._runner_request(
+            "/v1/files/grep",
+            {"pattern": pattern, "path": path, "glob": glob, "max_count": max_count},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("error"):
+            return GrepResult(error=f"Error searching '{path or '/workspace'}': {payload['error']}")
+        return GrepResult(matches=list(payload.get("matches") or []), truncated=bool(payload.get("truncated")))
+
+    async def agrep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
+    ) -> GrepResult:
+        return await asyncio.to_thread(self.grep, pattern, path, glob, max_count=max_count)
+
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        """Run one bounded workspace glob without shell execution."""
+        response = self._runner_request("/v1/files/glob", {"pattern": pattern, "path": path})
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("error"):
+            return GlobResult(error=f"Error globbing '{path or '/workspace'}': {payload['error']}")
+        return GlobResult(matches=list(payload.get("matches") or []), truncated=bool(payload.get("truncated")))
+
+    async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
+        return await asyncio.to_thread(self.glob, pattern, path)
+
     def close(self) -> None:
         """Release the controller-managed sandbox when no longer needed."""
         if self._lease is not None:
@@ -294,6 +472,32 @@ class AgentTeamsSandbox(BaseSandbox):
                     self._lease = None
                     raise
         return self._lease
+
+    @staticmethod
+    def _uploaded_change(file_path: str, content: bytes) -> WorkspaceChange:
+        virtual_path = Path(file_path)
+        try:
+            relative = virtual_path.relative_to("/workspace").as_posix()
+        except ValueError as exc:
+            raise ValueError("uploaded paths must be below /workspace") from exc
+        if not relative or relative == ".":
+            raise ValueError("uploaded path must name a file below /workspace")
+        return WorkspaceChange(
+            path=relative,
+            sha256=hashlib.sha256(content).hexdigest(),
+            size=len(content),
+            deleted=False,
+        )
+
+    def _persist_file_changes(self, changes: tuple[WorkspaceChange, ...]) -> str | None:
+        if self._workspace_store is None or not changes:
+            return None
+        try:
+            self._workspace_store.persist_changes(self, changes)
+        except Exception:  # noqa: BLE001 - storage SDKs expose transport-specific exception types.
+            _LOGGER.exception("failed to persist bounded file operation changes")
+            return "Workspace persistence failed after the file operation; do not repeat it automatically."
+        return None
 
 
 def _validate_session_id(session_id: str) -> None:

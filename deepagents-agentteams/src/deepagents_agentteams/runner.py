@@ -72,6 +72,28 @@ class DownloadFilesRequest(BaseModel):
     paths: list[str] = Field(min_length=1, max_length=128)
 
 
+class FilePathRequest(BaseModel):
+    """One workspace-scoped file path."""
+
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class GrepFilesRequest(BaseModel):
+    """One bounded literal file search."""
+
+    pattern: str = Field(min_length=1, max_length=4096)
+    path: str | None = Field(default=None, max_length=4096)
+    glob: str | None = Field(default=None, max_length=4096)
+    max_count: int | None = Field(default=None, ge=1, le=10_000)
+
+
+class GlobFilesRequest(BaseModel):
+    """One bounded workspace glob."""
+
+    pattern: str = Field(min_length=1, max_length=4096)
+    path: str | None = Field(default=None, max_length=4096)
+
+
 class UploadFileResult(BaseModel):
     """Per-file upload result."""
 
@@ -167,6 +189,70 @@ def create_app(*, service: RunnerService, bearer_token: str) -> FastAPI:
             except OSError:
                 results.append(DownloadFileResult(path=path, error="io_error"))
         return {"files": results}
+
+    @app.post("/v1/files/list", dependencies=[Depends(authorize)])
+    async def list_files(request: FilePathRequest) -> dict[str, object]:
+        try:
+            return {"entries": service.list_files(path=request.path), "error": None}
+        except InvalidWorkspacePath:
+            return {"entries": None, "error": "invalid_path"}
+        except FileNotFoundError:
+            return {"entries": None, "error": "file_not_found"}
+        except NotADirectoryError:
+            return {"entries": None, "error": "not_directory"}
+        except PermissionError:
+            return {"entries": None, "error": "permission_denied"}
+        except OSError:
+            return {"entries": None, "error": "io_error"}
+
+    @app.post("/v1/files/grep", dependencies=[Depends(authorize)])
+    async def grep_files(request: GrepFilesRequest) -> dict[str, object]:
+        try:
+            matches, truncated = service.grep_files(
+                pattern=request.pattern,
+                path=request.path,
+                glob=request.glob,
+                max_count=request.max_count,
+            )
+            return {"matches": matches, "error": None, "truncated": truncated}
+        except InvalidWorkspacePath:
+            return {"matches": None, "error": "invalid_path", "truncated": False}
+        except FileNotFoundError:
+            return {"matches": None, "error": "file_not_found", "truncated": False}
+        except PermissionError:
+            return {"matches": None, "error": "permission_denied", "truncated": False}
+        except OSError:
+            return {"matches": None, "error": "io_error", "truncated": False}
+
+    @app.post("/v1/files/glob", dependencies=[Depends(authorize)])
+    async def glob_files(request: GlobFilesRequest) -> dict[str, object]:
+        try:
+            matches, truncated = service.glob_files(pattern=request.pattern, path=request.path)
+            return {"matches": matches, "error": None, "truncated": truncated}
+        except InvalidWorkspacePath:
+            return {"matches": None, "error": "invalid_path", "truncated": False}
+        except FileNotFoundError:
+            return {"matches": None, "error": "file_not_found", "truncated": False}
+        except NotADirectoryError:
+            return {"matches": None, "error": "not_directory", "truncated": False}
+        except PermissionError:
+            return {"matches": None, "error": "permission_denied", "truncated": False}
+        except OSError:
+            return {"matches": None, "error": "io_error", "truncated": False}
+
+    @app.post("/v1/files/delete", dependencies=[Depends(authorize)])
+    async def delete_file(request: FilePathRequest) -> dict[str, object]:
+        try:
+            changes = service.delete_path(path=request.path)
+            return {"path": request.path, "error": None, "changes": [asdict(change) for change in changes]}
+        except InvalidWorkspacePath:
+            return {"path": request.path, "error": "invalid_path", "changes": []}
+        except FileNotFoundError:
+            return {"path": request.path, "error": "file_not_found", "changes": []}
+        except PermissionError:
+            return {"path": request.path, "error": "permission_denied", "changes": []}
+        except OSError:
+            return {"path": request.path, "error": "io_error", "changes": []}
 
     return app
 

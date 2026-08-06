@@ -6,10 +6,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
+from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
 
@@ -48,6 +50,7 @@ class FileTooLarge(ValueError):
 
 _REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _VIRTUAL_WORKSPACE = PurePosixPath("/workspace")
+_MAX_SEARCH_ENTRIES = 10_000
 
 
 class RunnerService:
@@ -160,6 +163,119 @@ class RunnerService:
             raise FileTooLarge(f"file exceeds {self._max_file_bytes} byte limit")
         return content
 
+    def list_files(self, *, path: str) -> list[dict[str, object]]:
+        """List one workspace directory without invoking a command shell."""
+        target = self._workspace_path(path, allow_root=True)
+        if not target.exists():
+            raise FileNotFoundError(path)
+        if not target.is_dir():
+            raise NotADirectoryError(path)
+        entries: list[dict[str, object]] = []
+        for child in sorted(target.iterdir(), key=lambda item: item.name):
+            if child.is_symlink():
+                continue
+            stat = child.stat()
+            entries.append(
+                {
+                    "path": self._virtual_path(child),
+                    "is_dir": child.is_dir(),
+                    "size": stat.st_size,
+                }
+            )
+        return entries
+
+    def grep_files(
+        self,
+        *,
+        pattern: str,
+        path: str | None,
+        glob: str | None,
+        max_count: int | None,
+    ) -> tuple[list[dict[str, object]], bool]:
+        """Search bounded UTF-8 workspace files for one literal string."""
+        if not pattern:
+            raise ValueError("grep pattern must be non-empty")
+        root = self._workspace_path(path or "/workspace", allow_root=True)
+        candidates = self._regular_files(root)
+        matches: list[dict[str, object]] = []
+        scanned = 0
+        for candidate in candidates:
+            scanned += 1
+            if scanned > _MAX_SEARCH_ENTRIES:
+                return matches, True
+            relative = candidate.relative_to(root).as_posix() if root.is_dir() else candidate.name
+            if glob and not _matches_glob(relative, glob):
+                continue
+            try:
+                if candidate.stat().st_size > self._max_file_bytes:
+                    continue
+                content = candidate.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for line_number, line in enumerate(content.splitlines(), start=1):
+                if pattern not in line:
+                    continue
+                if max_count is not None and len(matches) >= max_count:
+                    return matches, True
+                matches.append(
+                    {
+                        "path": self._virtual_path(candidate),
+                        "line": line_number,
+                        "text": line,
+                    }
+                )
+        return matches, False
+
+    def glob_files(self, *, pattern: str, path: str | None) -> tuple[list[dict[str, object]], bool]:
+        """Match a bounded workspace tree without invoking a command shell."""
+        _validate_glob_pattern(pattern)
+        root = self._workspace_path(path or "/workspace", allow_root=True)
+        if not root.exists():
+            raise FileNotFoundError(path or "/workspace")
+        if not root.is_dir():
+            raise NotADirectoryError(path or "/workspace")
+        matches: list[dict[str, object]] = []
+        visited = 0
+        for candidate in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+            if candidate.is_symlink():
+                continue
+            visited += 1
+            if visited > _MAX_SEARCH_ENTRIES:
+                return matches, True
+            relative = candidate.relative_to(root).as_posix()
+            if not _matches_glob(relative, pattern):
+                continue
+            stat = candidate.stat()
+            matches.append(
+                {
+                    "path": self._virtual_path(candidate),
+                    "is_dir": candidate.is_dir(),
+                    "size": stat.st_size,
+                }
+            )
+        return matches, False
+
+    def delete_path(self, *, path: str) -> tuple[WorkspaceChange, ...]:
+        """Delete one workspace path recursively and return a persistence manifest."""
+        target = self._workspace_path(path)
+        if not target.exists():
+            raise FileNotFoundError(path)
+        deleted_files = self._regular_files(target)
+        changes = tuple(
+            WorkspaceChange(
+                path=file.relative_to(self._workspace).as_posix(),
+                sha256=None,
+                size=0,
+                deleted=True,
+            )
+            for file in deleted_files
+        )
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        return changes
+
     @staticmethod
     def _existing_result(state_path: Path, request_id: str) -> RunnerResult:
         data = json.loads(state_path.read_text())
@@ -198,7 +314,20 @@ class RunnerService:
             "TMPDIR": "/tmp",  # noqa: S108 - /tmp is a dedicated Pod emptyDir mount.
         }
 
-    def _workspace_path(self, value: str) -> Path:
+    def _regular_files(self, root: Path) -> list[Path]:
+        if not root.exists():
+            raise FileNotFoundError(str(root))
+        if root.is_file():
+            return [root]
+        return sorted(
+            (path for path in root.rglob("*") if not path.is_symlink() and path.is_file()),
+            key=lambda item: item.as_posix(),
+        )
+
+    def _virtual_path(self, path: Path) -> str:
+        return str(_VIRTUAL_WORKSPACE / path.relative_to(self._workspace).as_posix())
+
+    def _workspace_path(self, value: str, *, allow_root: bool = False) -> Path:
         if not value or "\0" in value:
             raise InvalidWorkspacePath("workspace path must be non-empty")
         virtual_path = PurePosixPath(value)
@@ -211,7 +340,7 @@ class RunnerService:
                 raise InvalidWorkspacePath("absolute paths must be below /workspace") from exc
         else:
             relative_path = virtual_path
-        if not relative_path.parts:
+        if not relative_path.parts and not allow_root:
             raise InvalidWorkspacePath("workspace root is not a file path")
 
         lexical_path = self._workspace.joinpath(*relative_path.parts)
@@ -224,6 +353,19 @@ class RunnerService:
         if not resolved_path.is_relative_to(self._workspace):
             raise InvalidWorkspacePath("workspace path escapes the mounted workspace")
         return resolved_path
+
+
+def _validate_glob_pattern(pattern: str) -> None:
+    if not pattern or "\0" in pattern:
+        raise InvalidWorkspacePath("glob pattern must be non-empty")
+    normalized = pattern.replace("\\", "/")
+    if normalized.startswith("/") or ".." in PurePosixPath(normalized).parts:
+        raise InvalidWorkspacePath("glob pattern must be relative and cannot traverse parents")
+
+
+def _matches_glob(path: str, pattern: str) -> bool:
+    _validate_glob_pattern(pattern)
+    return PurePosixPath(path).match(pattern) or fnmatch(path, pattern)
 
 
 def _workspace_changes(

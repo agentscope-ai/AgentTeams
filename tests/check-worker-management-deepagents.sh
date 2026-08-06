@@ -9,18 +9,19 @@ script="${repo_root}/manager/agent/skills/worker-management/scripts/update-worke
 
 output="$(bash -c '
 source() { :; }
-agentteams() { printf "CLI:%s\n" "$*"; }
 agt() {
-    if [ "$1" = "get" ]; then
+    if [ "$1" = "update" ]; then
+        printf "CLI:%s\n" "$*"
+    elif [ "$1" = "get" ]; then
         printf "%s\n" "{\"workers\":[{\"name\":\"deep-worker\",\"phase\":\"Running\",\"runtime\":\"deepagents\"}]}"
     fi
 }
-export -f source agentteams agt
+export -f source agt
 bash "$1" --name deep-worker --runtime deepagents --deepagents-coordinators @human:example.org
 ' _ "${script}")"
 
 case "${output}" in
-    *"agentteams update worker --name deep-worker --runtime deepagents --deepagents-sandbox --deepagents-coordinators @human:example.org"*) ;;
+    *"CLI:update worker --name deep-worker --runtime deepagents --deepagents-sandbox --deepagents-coordinators @human:example.org"*) ;;
     *)
         echo "DeepAgents runtime switch did not pass sandbox approval flags to agt:" >&2
         echo "${output}" >&2

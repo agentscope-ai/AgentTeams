@@ -16,6 +16,7 @@ Before running `agt create worker`, ask admin for these four inputs in one turn.
    |--------------|----------|--------|-----------------------------------------------------------|
    | `openclaw`   | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` is unset. |
    | `copaw`      | Python   | ~150MB | Python tasks or AgentScope-based worker behavior. |
+   | `qwenpaw`    | Python   | ~150MB | QwenPaw 2.0 worker behavior or CoPaw-to-QwenPaw migration. |
    | `hermes`     | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
    | `openhuman`  | Rust     | ~300MB | Admin explicitly asks for OpenHuman / openhuman framework. Native Matrix support with E2EE. |
    | `deepagents` | Python   | ~500MB + Runner | Long-horizon DeepAgents tasks needing encrypted checkpoints, explicit Human approval, and isolated execution. Offer only when `${AGENTTEAMS_DEEPAGENTS_ENABLED}` is `1`. |
@@ -46,7 +47,7 @@ agt create worker --name <NAME> --no-wait \
 - Never reveal API keys, passwords, or credentials
 ..." \
   --skills <skill1>,<skill2> -o json
-# Add --runtime <copaw|hermes|openhuman|deepagents> for an enabled non-default runtime (see runtime table above)
+# Add --runtime <copaw|qwenpaw|hermes|openhuman|deepagents> for an enabled non-default runtime (see runtime table above)
 ```
 
 For every DeepAgents Worker, add a sandbox policy in the same create command. Use explicit Human Matrix IDs when the admin supplied them:
@@ -74,7 +75,7 @@ agt create worker --name <NAME> --runtime deepagents --deepagents-sandbox \
 - **Always notify Workers to `file-sync` after writing files they need** — the 5-minute periodic sync is fallback only
 - **Workers are stateless** — all state is in centralized storage. Reset = recreate config files
 - **Matrix accounts persist in Tuwunel** (cannot be deleted via API) — reuse same username on reset
-- **Changing a Worker's `--runtime` is a destructive operation** — the controller deletes the old container and creates a new one from the target runtime's image (openclaw/copaw/hermes/openhuman/deepagents). Matrix account, room, gateway consumer, MinIO data and persisted credentials are preserved. DeepAgents also preserves its encrypted checkpoints and runtime state PVC; other container-local caches and in-memory task progress are lost. Always confirm with admin first, and avoid switching runtime while the Worker is mid-task.
+- **Changing a Worker's `--runtime` is a destructive operation** — the controller deletes the old container and creates a new one from the target runtime's image (openclaw/copaw/qwenpaw/hermes/openhuman/deepagents). Matrix account, room, gateway consumer, MinIO data and persisted credentials are preserved. DeepAgents also preserves its encrypted checkpoints and runtime state PVC; other container-local caches and in-memory task progress are lost. Always confirm with admin first, and avoid switching runtime while the Worker is mid-task.
 
 ## Operation Reference
 
@@ -85,7 +86,7 @@ Read the relevant doc **before** executing. Do not load all of them.
 | Create a new worker | `references/create-worker.md` | `agt create worker` |
 | Start/stop/check idle workers | `references/lifecycle.md` | `scripts/lifecycle-worker.sh` |
 | Push/add/remove skills | `references/skills-management.md` | `scripts/push-worker-skills.sh` |
-| Switch a worker's runtime (openclaw ↔ copaw ↔ hermes ↔ openhuman ↔ deepagents) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
+| Switch a worker's runtime (openclaw ↔ copaw ↔ qwenpaw ↔ hermes ↔ openhuman ↔ deepagents) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
 | Open/close QwenPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
 | Enable direct @mentions between workers | `references/peer-mentions.md` | `scripts/enable-peer-mentions.sh` |
 | Reset a worker | `references/create-worker.md` | `agt delete worker` + `agt create worker` |
@@ -93,12 +94,12 @@ Read the relevant doc **before** executing. Do not load all of them.
 
 ## Switching Runtime
 
-To migrate a Worker between runtimes (e.g. openclaw → copaw, copaw → hermes), use the wrapper script — it delegates to `agt update worker --runtime ...`, polls until the new container reaches `phase=Running`, and emits a result JSON:
+To migrate a Worker between runtimes (e.g. openclaw → copaw, copaw → qwenpaw), use the wrapper script — it delegates to `agt update worker --runtime ...`, polls until the new container reaches `phase=Running`, and emits a result JSON:
 
 ```bash
 bash /opt/agentteams/agent/skills/worker-management/scripts/update-worker-config.sh \
   --name <NAME> \
-  --runtime <openclaw|copaw|hermes|openhuman|deepagents> \
+  --runtime <openclaw|copaw|qwenpaw|hermes|openhuman|deepagents> \
   [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] \
   [--deepagents-coordinators @<HUMAN>:${AGENTTEAMS_MATRIX_DOMAIN},...]
 ```

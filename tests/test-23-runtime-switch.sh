@@ -10,6 +10,9 @@
 #   2. write sentinel file to MinIO agents/<name>/
 #   3. apply worker runtime=copaw → SpecChanged triggers recreate
 #   4. new container image is copaw; sentinel preserved; consumer unchanged
+#   5. persist real .copaw workspace/session/secret state
+#   6. apply worker runtime=qwenpaw and verify that state is active under
+#      .qwenpaw with the same content and one session store
 #
 # This is a controller-cr style test — no LLM required.
 
@@ -204,6 +207,144 @@ if minio_file_exists "agents/${TEST_WORKER}/openclaw.json"; then
     log_pass "openclaw.json present post-switch (controller-managed config)"
 else
     log_fail "openclaw.json missing post-switch"
+fi
+
+# ============================================================
+# Section 5: Persist CoPaw runtime state
+# ============================================================
+log_section "Persist CoPaw Runtime State"
+
+COPAW_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
+if docker exec "${COPAW_CONTAINER}" sh -c '
+    set -e
+    root="/root/.copaw-worker/'"${TEST_WORKER}"'"
+    mkdir -p "${root}/.copaw/workspaces/default/sessions" "${root}/.copaw.secret"
+    printf "%s\n" "COPAW_WORKSPACE_STATE_23" > "${root}/.copaw/workspaces/default/runtime-switch-state.txt"
+    printf "%s\n" "{\"chats\":[]}" > "${root}/.copaw/workspaces/default/chats.json"
+    printf "%s\n" "COPAW_SESSION_STATE_23" > "${root}/.copaw/workspaces/default/sessions/runtime-switch.jsonl"
+    printf "%s\n" "COPAW_SECRET_STATE_23" > "${root}/.copaw.secret/runtime-switch-secret.txt"
+'; then
+    log_pass "CoPaw workspace, session, and secret state created"
+else
+    log_fail "Unable to create CoPaw runtime state"
+fi
+
+log_info "Waiting for CoPaw state persistence..."
+DEADLINE=$(( $(date +%s) + 60 ))
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+    if minio_file_exists "agents/${TEST_WORKER}/.copaw/workspaces/default/runtime-switch-state.txt" \
+        && minio_file_exists "agents/${TEST_WORKER}/.copaw/workspaces/default/chats.json" \
+        && minio_file_exists "agents/${TEST_WORKER}/.copaw/workspaces/default/sessions/runtime-switch.jsonl" \
+        && minio_file_exists "agents/${TEST_WORKER}/.copaw.secret/runtime-switch-secret.txt"; then
+        break
+    fi
+    sleep 5
+done
+
+if minio_file_exists "agents/${TEST_WORKER}/.copaw/workspaces/default/runtime-switch-state.txt" \
+    && minio_file_exists "agents/${TEST_WORKER}/.copaw/workspaces/default/chats.json" \
+    && minio_file_exists "agents/${TEST_WORKER}/.copaw/workspaces/default/sessions/runtime-switch.jsonl" \
+    && minio_file_exists "agents/${TEST_WORKER}/.copaw.secret/runtime-switch-secret.txt"; then
+    log_pass "CoPaw runtime state persisted to MinIO"
+else
+    log_fail "CoPaw runtime state was not persisted to MinIO"
+fi
+
+# ============================================================
+# Section 6: Switch runtime to QwenPaw and verify active state
+# ============================================================
+log_section "Switch Runtime (copaw → qwenpaw)"
+
+QWEN_SWITCH_OUTPUT=$(exec_in_agent bash \
+    /opt/agentteams/agent/skills/worker-management/scripts/update-worker-config.sh \
+    --name "${TEST_WORKER}" --runtime qwenpaw 2>&1)
+QWEN_SWITCH_EXIT=$?
+if [ "${QWEN_SWITCH_EXIT}" -eq 0 ]; then
+    log_pass "Worker management runtime switch to qwenpaw accepted"
+else
+    log_fail "Worker management runtime switch to qwenpaw failed: ${QWEN_SWITCH_OUTPUT}"
+fi
+
+COPAW_CONTAINER_ID="${NEW_CONTAINER_ID}"
+DEADLINE=$(( $(date +%s) + 240 ))
+QWEN_CONTAINER_ID=""
+QWEN_IMAGE=""
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+    QWEN_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
+    QWEN_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "${QWEN_CONTAINER}" 2>/dev/null | head -c 12 || echo "")
+    QWEN_IMAGE=$(docker inspect --format '{{.Config.Image}}' "${QWEN_CONTAINER}" 2>/dev/null || echo "")
+    if [ -n "${QWEN_CONTAINER_ID}" ] \
+        && [ "${QWEN_CONTAINER_ID}" != "${COPAW_CONTAINER_ID}" ] \
+        && echo "${QWEN_IMAGE}" | grep -qi "qwenpaw"; then
+        break
+    fi
+    sleep 5
+done
+
+if [ -n "${QWEN_CONTAINER_ID}" ] && [ "${QWEN_CONTAINER_ID}" != "${COPAW_CONTAINER_ID}" ]; then
+    log_pass "Container recreated for QwenPaw (id: ${COPAW_CONTAINER_ID} → ${QWEN_CONTAINER_ID})"
+else
+    log_fail "Container was not recreated for QwenPaw"
+fi
+
+if echo "${QWEN_IMAGE}" | grep -qi "qwenpaw"; then
+    log_pass "Post-migration image is QwenPaw: ${QWEN_IMAGE}"
+else
+    log_fail "Post-migration image does not look like QwenPaw: ${QWEN_IMAGE}"
+fi
+
+if wait_worker_provisioned "${TEST_WORKER}" 180; then
+    log_pass "QwenPaw Worker returned to provisioned state"
+else
+    log_fail "QwenPaw Worker did not return to provisioned state"
+fi
+
+QWEN_ROOM_ID=$(get_worker_room_id "${TEST_WORKER}")
+if [ -n "${OLD_ROOM_ID}" ] && [ "${QWEN_ROOM_ID}" = "${OLD_ROOM_ID}" ]; then
+    log_pass "Matrix roomID remains unchanged after QwenPaw migration"
+else
+    log_fail "Matrix roomID changed after QwenPaw migration (was: ${OLD_ROOM_ID}, now: ${QWEN_ROOM_ID})"
+fi
+
+HIGRESS_CONSUMERS_JSON=""
+if _get_higress_consumers_or_fail "QwenPaw migration assertion"; then
+    QWEN_CONSUMERS="${HIGRESS_CONSUMERS_JSON}"
+    if echo "${QWEN_CONSUMERS}" | jq -r '.data[]?.name // empty' 2>/dev/null | grep -Fxq "worker-${TEST_WORKER}"; then
+        log_pass "Higress consumer remains unchanged after QwenPaw migration"
+    else
+        log_fail "Higress consumer missing after QwenPaw migration"
+    fi
+fi
+
+if docker exec "${QWEN_CONTAINER}" sh -c "
+    set -e
+    worker_root=\"/root/agentteams-fs/agents/${TEST_WORKER}\"
+    qwen_root=\"\${worker_root}/.qwenpaw\"
+    qwen_secret=\"\${worker_root}/.qwenpaw.secret\"
+    test \"\$(cat \"\${qwen_root}/workspaces/default/runtime-switch-state.txt\")\" = \"COPAW_WORKSPACE_STATE_23\"
+    jq -e '.chats | type == \"array\"' \"\${qwen_root}/workspaces/default/chats.json\" >/dev/null
+    test \"\$(cat \"\${qwen_root}/workspaces/default/sessions/runtime-switch.jsonl\")\" = \"COPAW_SESSION_STATE_23\"
+    test \"\$(cat \"\${qwen_secret}/runtime-switch-secret.txt\")\" = \"COPAW_SECRET_STATE_23\"
+    expected_workspace=\"\${qwen_root}/workspaces/default\"
+    test \"\$(jq -r '.workspace_dir' \"\${qwen_root}/workspaces/default/agent.json\")\" = \"\${expected_workspace}\"
+    test \"\$(jq -r '.agents.profiles.default.workspace_dir' \"\${qwen_root}/config.json\")\" = \"\${expected_workspace}\"
+    test -f \"\${qwen_root}/.copaw-migrated\"
+    test ! -e \"\${worker_root}/.copaw\"
+    test ! -e \"\${worker_root}/.copaw.secret\"
+"; then
+    log_pass "CoPaw workspace, session, and secret state is active in QwenPaw"
+else
+    log_fail "Migrated CoPaw state is not fully active in QwenPaw"
+fi
+
+if minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/runtime-switch-state.txt" \
+    && minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/chats.json" \
+    && minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/workspaces/default/sessions/runtime-switch.jsonl" \
+    && minio_file_exists "agents/${TEST_WORKER}/.qwenpaw.secret/runtime-switch-secret.txt" \
+    && minio_file_exists "agents/${TEST_WORKER}/.qwenpaw/.copaw-migrated"; then
+    log_pass "Migrated QwenPaw state and completion marker persisted to MinIO"
+else
+    log_fail "Migrated QwenPaw state is incomplete in MinIO"
 fi
 
 # ============================================================

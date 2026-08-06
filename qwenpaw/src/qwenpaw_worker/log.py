@@ -24,12 +24,7 @@ _FALSE_VALUES = {"0", "false", "no", "off"}
 def configure_worker_logging(working_dir: Optional[Path] = None) -> Optional[Path]:
     """Configure console and rotating file logging for qwenpaw-worker."""
 
-    root = logging.getLogger()
-    level = _log_level()
-    formatter = logging.Formatter(LOG_FORMAT)
-    root.setLevel(level)
-
-    _ensure_console_handler(root, formatter, level)
+    root, formatter, level = _configure_console_logging()
 
     if not _file_logging_enabled():
         _remove_marked_handlers(root, _FILE_HANDLER_MARK)
@@ -84,6 +79,22 @@ def configure_worker_logging(working_dir: Optional[Path] = None) -> Optional[Pat
     root.addHandler(file_handler)
     _log_configured(log_file, level, max_bytes, backup_count)
     return log_file
+
+
+def configure_worker_console_logging() -> None:
+    """Configure startup console logging without creating the working dir."""
+
+    _configure_console_logging()
+
+
+def _configure_console_logging() -> tuple[logging.Logger, logging.Formatter, int]:
+    root = logging.getLogger()
+    level = _log_level()
+    formatter = logging.Formatter(LOG_FORMAT)
+    root.setLevel(level)
+
+    _ensure_console_handler(root, formatter, level)
+    return root, formatter, level
 
 
 def _log_configured(log_file: Path, level: int, max_bytes: int, backup_count: int) -> None:

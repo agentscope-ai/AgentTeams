@@ -457,12 +457,12 @@ class AgentPackageManager:
         self.workspace_dir = workspace_dir
         self.current_dir = root_dir / "current"
         self.marker_path = root_dir / "current.identity"
-        self.root_dir.mkdir(parents=True, exist_ok=True)
 
     def apply(self, config: MemberRuntimeConfig) -> Optional[Path]:
         identity = config.agent_package_identity
         if not any(identity):
             return None
+        self.root_dir.mkdir(parents=True, exist_ok=True)
         if self._current_identity() == identity and self.current_dir.exists():
             self._apply_to_workspace_atomic(self.current_dir)
             return self.current_dir

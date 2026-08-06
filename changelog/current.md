@@ -1,6 +1,10 @@
 # Changelog (Unreleased)
 
-Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `openclaw-base/`, and `agentteams-controller/` here before the next release.
+Target release: `v1.2.1`
+
+Comparison baseline: `v1.2.0`
+
+Record release-facing changes here before the next release.
 
 ---
 
@@ -8,7 +12,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - feat(controller): enforce cluster-capped ephemeral storage for DeepAgents Runner sandboxes ([c8f9de94](https://github.com/agentscope-ai/AgentTeams/commit/c8f9de9474dc94fb4ca1ef4745cc830597e07859), [6f8bf982](https://github.com/agentscope-ai/AgentTeams/commit/6f8bf9829e8f9eb4a0642d37a0a68640463c0b09), [a31f660b](https://github.com/agentscope-ai/AgentTeams/commit/a31f660b4ac244ca2a428b9d8c17f4d85130207a), [281f3a30](https://github.com/agentscope-ai/AgentTeams/commit/281f3a30f87f40715e002bd14de1b29635c2a30e))
 - **DeepAgents Worker runtime**: Add the vendored DeepAgents 0.7.3 runtime, Matrix-thread orchestration and Human approval, Higress model/MCP adapters, encrypted PostgreSQL checkpoints, MinIO workspace synchronization, credential-free Runner Pods, durable per-Worker state, and `ExecutionSandbox` lifecycle/network isolation.
-- **QwenPaw 2.0 runtime unification**: Migrate the Manager container from copaw 1.0.2 to QwenPaw 2.0.1 on a single venv, register projectflow/taskflow/message/filesync tools through a QwenPaw plugin instead of monkey-patching CoPawAgent, replace the physical Matrix channel overlay with the QwenPaw plugin system, read Matrix credentials directly from agent.json so the manager tools work without importing copaw at runtime, align CMS observability packages and env vars with the Worker image, inject session-file privacy policy into prompt files, set approval_level=AUTO in the agent template, bridge YOLO mode to Qwenpaw approval_level=OFF, disable the built-in QA Agent, replace start-copaw-manager.sh with start-qwenpaw-manager.sh, add explicit qwenpaw Manager and Worker runtime values alongside copaw while keeping user-facing installer defaults and image pulls on CoPaw until the QwenPaw release, make task assignment state and Matrix notification atomic with room membership validation and m.mentions delivery, preserve m.mentions metadata in streamed/edit events, make the TeamHarness MCP `delegate_task` path atomic too (validate assignee room membership — strictly `join`, not `invite` — prepare → stable-txn notification → commit assigned + event_id; the initial file publish gates the notification and the assigned/eventId commit gates success, both returning a retryable failure so an idempotent retry finishes the sync instead of reporting success with stale shared storage), and migrate a legacy Worker `.copaw` working dir to `.qwenpaw` on the qwenpaw_worker startup path only (idempotent; the migration follows the target runtime — an explicitly configured copaw Worker keeps `.copaw` and never migrates before a switch).
+- **QwenPaw 2.0 runtime unification**: Migrate the Manager container from copaw 1.0.2 to QwenPaw 2.0.1 on a single venv, register projectflow/taskflow/message/filesync tools through a QwenPaw plugin instead of monkey-patching CoPawAgent, replace the physical Matrix channel overlay with the QwenPaw plugin system, read Matrix credentials directly from agent.json so the manager tools work without importing copaw at runtime, align CMS observability packages and env vars with the Worker image, inject session-file privacy policy into prompt files, set approval_level=AUTO in the agent template, bridge YOLO mode to Qwenpaw approval_level=OFF, disable the built-in QA Agent, replace start-copaw-manager.sh with start-qwenpaw-manager.sh, publish the QwenPaw Worker image as part of the stable release set, make task assignment state and Matrix notification atomic with room membership validation and m.mentions delivery, preserve m.mentions metadata in streamed/edit events, make the TeamHarness MCP `delegate_task` path atomic too (validate assignee room membership — strictly `join`, not `invite` — prepare → stable-txn notification → commit assigned + event_id; the initial file publish gates the notification and the assigned/eventId commit gates success, both returning a retryable failure so an idempotent retry finishes the sync instead of reporting success with stale shared storage), and migrate a legacy Worker `.copaw` working dir to `.qwenpaw` on the qwenpaw_worker startup path only (idempotent; the migration follows the target runtime — an explicitly configured copaw Worker keeps `.copaw` and never migrates before a switch).
 - **Custom model capability overrides**: `AGENTTEAMS_MODEL_VISION` and `AGENTTEAMS_MODEL_REASONING` env vars let deployments override vision and reasoning capabilities for custom models not in the built-in presets table (e.g. local multimodal models like `qwen3.6-27b-fp8`).
 
 **Bug Fixes**
@@ -37,6 +41,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - **DeepAgents sandbox duration and ownership contracts**: Align Controller duration validation with the runtime's whole-second `h`/`m`/`s` grammar, reject invalid Worker policy before Pod creation, and isolate ExecutionSandbox API/cache/watch/reconcile operations by exact controller ownership. ([59845125](https://github.com/agentscope-ai/AgentTeams/commit/598451254cffdc64cdaab19e4cb96987f56db101))
 - **DeepAgents exact decimal duration parsing**: Accumulate decimal `h`/`m`/`s` parts as exact fractions so mathematically integral totals such as ten `0.1s` parts resolve to one second instead of failing because of binary floating-point error. ([9c552a66](https://github.com/agentscope-ai/AgentTeams/commit/9c552a665241c4e78722de7afe4a69161eb5acd6))
 - **DeepAgents Human approval identities**: Project the Manager as a known Matrix Agent, classify Team coordinators as Humans by roster role, and make Agent identity override conflicting Human approval configuration.
+- **QwenPaw Worker runtime management**: Recognize `qwenpaw` as a valid Worker runtime in Manager guidance and runtime-switch validation, invoke the installed `agt` CLI for runtime changes, and align Worker CLI help with the Controller's supported runtimes.
+- **CoPaw Team Worker resolution**: Resolve task assignment Matrix IDs from the Controller-owned `runtime.yaml` Team roster before falling back to legacy `AGENTS.md`, so a running Team Leader can delegate after late Team context injection without relying on a stale prompt copy.
+- **CoPaw to QwenPaw Worker state migration**: Restore Worker storage before creating any QwenPaw directories, migrate and verify both `.copaw` runtime state and `.copaw.secret` credentials with legacy state authoritative on conflicts, honor QwenPaw's configured secret directory (including relative paths) while rejecting targets outside persistent Worker storage, rebase migrated workspace metadata to `.qwenpaw`, persist migrated files before the idempotency marker, and cover a real CoPaw persistence → QwenPaw runtime switch in E2E tests. ([#1131](https://github.com/agentscope-ai/AgentTeams/pull/1131))
+- **Team deletion idempotency**: Verify the target user's current Matrix room membership when Tuwunel returns the ambiguous `joined or banned` invite error, allowing already-joined members to complete Team cleanup without suppressing real bans.
 - **CoPaw Team assignment handoff**: `taskflow(delegate_task)` sends the Worker assignment automatically with `m.mentions` in the Team Room (atomic pending → prepared → assigned state, stable Matrix txn_id for idempotent retries, normalize Worker aliases from the Team roster, refresh Controller-managed runtime context every minute, and reroute assignment replies from non-Team rooms to the Team Room). ([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120), [#1095](https://github.com/agentscope-ai/AgentTeams/pull/1095))
 - **Docker Worker ServiceAccount token rotation**: Project short-lived tokens into per-Worker Docker volumes, refresh the token file atomically without recreating running Workers, and remove the credential volume with the Worker.
 - **Worker port exposure CLI**: Encode `--expose` values as numeric ports and reject invalid or out-of-range inputs before create, update, or apply requests reach the Controller.
@@ -58,6 +66,8 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 **新增功能**
 
 - **DeepAgents Worker Runtime**：新增内置 DeepAgents 0.7.3、Matrix thread 编排与 Human 审批、Higress 模型/MCP 适配、PostgreSQL 加密 checkpoint、MinIO 工作区同步、无平台凭据 Runner Pod、每 Worker 持久化状态，以及 `ExecutionSandbox` 生命周期和网络隔离。
+- **QwenPaw 2.0 运行时统一**：Manager 迁移到 QwenPaw 2.0.1 和原生插件体系，正式发布 QwenPaw Worker 多架构镜像，并完善任务分配原子性、TeamHarness 委派、Matrix mention、运行时策略与 CoPaw 状态迁移。
+- **自定义模型能力覆盖**：可通过 `AGENTTEAMS_MODEL_VISION` 和 `AGENTTEAMS_MODEL_REASONING` 为内置预设表之外的模型显式声明视觉与推理能力。
 
 **Bug 修复**
 
@@ -80,6 +90,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - **DeepAgents Sandbox 时长与归属契约**：将 Controller 时长校验对齐运行时的整数秒 `h`/`m`/`s` 语法，在创建 Pod 前拒绝无效 Worker 策略，并按精确 Controller 归属隔离 ExecutionSandbox API、cache、watch 和 reconcile。([59845125](https://github.com/agentscope-ai/AgentTeams/commit/598451254cffdc64cdaab19e4cb96987f56db101))
 - **DeepAgents 小数时长精确解析**：以精确分数累计十进制 `h`/`m`/`s` 片段，使十个 `0.1s` 等数学上为整数秒的总和正确解析为一秒，不再受二进制浮点误差影响。([9c552a66](https://github.com/agentscope-ai/AgentTeams/commit/9c552a665241c4e78722de7afe4a69161eb5acd6))
 - **DeepAgents Human 审批身份**：将 Manager 显式投影为已知 Matrix Agent，按 Team roster 角色识别人类协调员，并在 Human 审批配置冲突时始终以 Agent 身份优先拒绝。
+- **QwenPaw Worker 运行时管理**：在 Manager 指引和运行时切换校验中将 `qwenpaw` 识别为合法 Worker runtime，切换时调用镜像内实际安装的 `agt` CLI，并使 Worker CLI 帮助与 Controller 实际支持的运行时保持一致。
+- **CoPaw Team Worker 解析**：任务分配优先从 Controller 管理的 `runtime.yaml` Team roster 获取 Matrix ID，仅在旧部署缺少该 roster 时回退 `AGENTS.md`，避免运行中的 Team Leader 因 prompt 副本过期而无法委派任务。
+- **CoPaw 到 QwenPaw Worker 状态迁移**：在创建任何 QwenPaw 目录前先恢复 Worker 存储，迁移并校验 `.copaw` 运行时状态和 `.copaw.secret` 凭据，冲突时以旧 CoPaw 状态为准，遵循 QwenPaw 配置的 secret 目录（包括相对路径）并拒绝持久化 Worker 目录之外的目标，将工作区元数据改写到 `.qwenpaw`，先持久化迁移数据再写入幂等标记，并增加真实 CoPaw 持久化后切换 QwenPaw 的 E2E 覆盖。([#1131](https://github.com/agentscope-ai/AgentTeams/pull/1131))
+- **Team 删除幂等性**：当 Tuwunel 返回含义不明确的 `joined or banned` 邀请错误时，核验目标用户当前的 Matrix Room 成员状态，使已加入成员能够继续完成 Team 清理，同时不吞掉真实的封禁错误。
 - **CoPaw Team 任务分配交接**：由 `taskflow(delegate_task)` 返回必须执行的 Team Room `message` 动作，根据 Team roster 规范化 Worker 别名，每分钟刷新 Controller 管理的运行时上下文，并将非 Team Room 中的任务分配回复重定向到 Team Room。([#1120](https://github.com/agentscope-ai/AgentTeams/pull/1120))
 - **Worker 端口暴露 CLI**：将 `--expose` 参数编码为数值端口，并在创建、更新或应用请求到达 Controller 前拒绝无效或越界输入。
 - **Manager 诊断循环**：Manager 提示和 Worker 生命周期指引会停止重复执行无效果的排障命令，并以 `agt get workers` 不再列出目标 Worker 作为删除完成边界，避免继续循环探测 Matrix Room。([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
@@ -124,4 +138,20 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - [`65c7b611`](https://github.com/agentscope-ai/AgentTeams/commit/65c7b611) feat(deepagents): add gateway HITL and runner boundaries
 - [`57620ef1`](https://github.com/agentscope-ai/AgentTeams/commit/57620ef1) feat(deepagents): add AgentTeams adapter contracts
 - [`bd60a9df`](https://github.com/agentscope-ai/AgentTeams/commit/bd60a9df) chore(deepagents): import upstream 0.7.3 subtree
-- `90c9fd4f` fix(manager): stop repeated diagnostic loops (#975)
+- `a6c98182` fix(manager): stop repeated diagnostic loops (#975)
+- `fb3a40be` feat(qwenpaw): adapt worker runtime to QwenPaw 2.0 (#1077)
+- `ce3a4770` fix(install): skip QwenPaw pull and update dashboard default (#1115)
+- `99131d6e` chore: update default dashboard version to v1.2.0 (#1118)
+- `47c8f284` chore: archive changelog for v1.2.0 (#1112)
+- `1145f796` docs: add v1.2.0 release news (#1121)
+- `00a5d20c` fix(cli): encode exposed Worker ports as integers (#1123)
+- `ba161a85` fix(controller): rotate Docker Worker ServiceAccount token files (#1120)
+- `2ea02740` fix(controller): enable multimodal for custom models with env override + openclaw.json injection (#1103)
+- `124f06d1` feat(manager): migrate Manager runtime from copaw to qwenpaw 2.0 (#1095)
+- `2fd9ddde` fix(qwenpaw): preserve CoPaw state during runtime migration (#1131)
+- `062f1c8d` fix(controller): make Team deletion invite idempotent (#1140)
+
+**Also in this window / 同期其他变更**
+
+- Update the bundled Dashboard default to v1.2.0 and publish the v1.2.0 release news. ([#1118](https://github.com/agentscope-ai/AgentTeams/pull/1118), [#1121](https://github.com/agentscope-ai/AgentTeams/pull/1121))
+- Archive the v1.2.0 changelog before collecting the v1.2.1 release window. ([#1112](https://github.com/agentscope-ai/AgentTeams/pull/1112))

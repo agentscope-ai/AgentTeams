@@ -138,6 +138,7 @@ jobs:
           if [ "$UNTRUSTED_PR" = "true" ]; then
             MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.requires_secret == false)]')
           fi
+          MATRIX=$(echo "$MATRIX" | jq -c '.')
           echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
 
   # Step 1a: Build the shared base image (agentteams-controller)

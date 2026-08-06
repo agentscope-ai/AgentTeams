@@ -346,8 +346,13 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 			MatrixUserID: "@human:matrix.local",
 		}},
 		Spec: v1beta1.WorkerSpec{
-			Model:    "qwen-plus",
-			Package:  "nacos://registry/ns/dev-worker?version=1.2.0",
+			Model:   "qwen-plus",
+			Package: "nacos://registry/ns/dev-worker?version=1.2.0",
+			Skills:  []string{"competition-skill", "shared-skill"},
+			RemoteSkills: []v1beta1.RemoteSkillSource{{
+				Source: "nacos://registry/ns",
+				Skills: []v1beta1.RemoteSkill{{Name: "shared-skill"}, {Name: "remote-skill"}},
+			}},
 			Identity: "frontend specialist",
 			Soul:     "build accessible user interfaces",
 			Agents:   "follow the project workflow",
@@ -426,6 +431,10 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 	}
 
 	desired := doc["desired"].(map[string]any)
+	skills := desired["skills"].([]any)
+	if got := fmt.Sprint(skills); got != "[competition-skill shared-skill remote-skill]" {
+		t.Fatalf("desired.skills=%s", got)
+	}
 	model := desired["model"].(map[string]any)
 	if got := fmt.Sprint(model["model"]); got != "qwen-plus" {
 		t.Fatalf("desired.model.model=%q", got)

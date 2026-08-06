@@ -122,7 +122,6 @@ class Worker:
             remote_prefix=self.config.storage_prefix,
             shared_prefix=self.config.shared_prefix,
         )
-
         try:
             stage_started = self._log_worker_stage_begin("mirror_all")
             self.sync.mirror_all()
@@ -150,6 +149,7 @@ class Worker:
         self.config.default_workspace_dir.mkdir(parents=True, exist_ok=True)
         self.heartbeat.persist()
         self.updater.runtime_config_pull = lambda: self.sync.pull_runtime_config(self.config.runtime_config_path)
+        self.updater.skill_sync = self._sync_managed_skills
 
         try:
             stage_started = self._log_worker_stage_begin("load_runtime_config", path=self.config.runtime_config_path)
@@ -570,6 +570,17 @@ class Worker:
         self._link_workspace_shared()
         self._configure_builtin_plugin_mcp_clients()
         self._configure_builtin_plugin_mcp_policies()
+
+    def _sync_managed_skills(self, skill_names: list[str]) -> None:
+        if self.sync is None:
+            raise RuntimeError("file sync is not initialized")
+        for name in skill_names:
+            if not name or name in {".", ".."} or "/" in name or "\\" in name:
+                raise ValueError(f"invalid assigned skill name: {name!r}")
+            self.sync.mirror_prefix(
+                f"{self.sync.remote_prefix}/skills/{name}",
+                self.config.default_workspace_dir / "skills" / name,
+            )
 
     def _runtime_shared_prefix(self, runtime_config) -> str:
         storage = getattr(runtime_config, "storage", {}) or {}

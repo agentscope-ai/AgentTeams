@@ -369,6 +369,10 @@ class MemberRuntimeConfig:
         return _section(self.desired, "channels")
 
     @property
+    def skills(self) -> List[str]:
+        return _string_list(self.desired.get("skills"))
+
+    @property
     def dingtalk_channel(self) -> Optional[Dict[str, Any]]:
         value = self.channels.get("dingtalk")
         return value if isinstance(value, dict) else None
@@ -378,7 +382,7 @@ class MemberRuntimeConfig:
         return _section(self.desired, "channelPolicy")
 
     @property
-    def desired_identity(self) -> Tuple[str, str, str, str, str, str, str, str, str]:
+    def desired_identity(self) -> Tuple[str, ...]:
         return (
             *self.agent_package_identity,
             _stable_json(self.inline_config),
@@ -386,6 +390,7 @@ class MemberRuntimeConfig:
             _stable_json(self.mcp_servers),
             _stable_json(self.channels),
             _stable_json(self.channel_policy),
+            _stable_json(self.skills),
         )
 
     @property
@@ -1271,6 +1276,7 @@ class RuntimeUpdater:
         team_context_renderer: Optional[Callable[[MemberRuntimeConfig], str]] = None,
         api_client: Optional[QwenPawApiClient] = None,
         runtime_reconcile: Optional[Callable[[MemberRuntimeConfig], None]] = None,
+        skill_sync: Optional[Callable[[List[str]], None]] = None,
     ) -> None:
         self.config = config
         self.adapter_apply = adapter_apply
@@ -1278,6 +1284,7 @@ class RuntimeUpdater:
         self.team_context_renderer = team_context_renderer
         self.api_client = api_client
         self.runtime_reconcile = runtime_reconcile
+        self.skill_sync = skill_sync
         self.package_manager = package_manager or AgentPackageManager(
             config.qwenpaw_working_dir / "agent-packages",
             workspace_dir=config.default_workspace_dir,
@@ -1348,6 +1355,7 @@ class RuntimeUpdater:
         applied_package = self.package_manager.apply(config)
         self._apply_package_mcp_servers(applied_package)
         self._apply_package_skills(applied_package)
+        self._apply_managed_skills(config)
         self._apply_inline_config(config)
 
         adapter_applied = False
@@ -1625,6 +1633,24 @@ class RuntimeUpdater:
         skill_names = package_skills(package_dir) if callable(package_skills) else []
         if skill_names:
             self.api_client.refresh_and_enable_skills(skill_names)
+
+    def _apply_managed_skills(self, config: MemberRuntimeConfig) -> None:
+        skill_names = config.skills
+        if not skill_names:
+            return
+        if self.skill_sync is None:
+            raise RuntimeError("AgentTeams skill sync is required for assigned QwenPaw skills")
+        if self.api_client is None:
+            raise RuntimeError("QwenPaw API client is required for assigned skills")
+        self.skill_sync(skill_names)
+        missing = [
+            name
+            for name in skill_names
+            if not (self.config.default_workspace_dir / "skills" / name / "SKILL.md").is_file()
+        ]
+        if missing:
+            raise RuntimeError(f"assigned skill files are missing: {', '.join(missing)}")
+        self.api_client.refresh_and_enable_skills(skill_names)
 
     def _apply_channel_policy(self, config: MemberRuntimeConfig) -> None:
         group_allow, dm_allow, group_deny, dm_deny = self._matrix_policy_ids(config)

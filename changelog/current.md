@@ -11,6 +11,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug Fixes**
 
+- **Worker custom skill loading**: Validate and upload Manager-hosted Worker skill files before updating assignments, avoid recursive CR updates during reconciliation, and sync plus enable assigned skills in the native QwenPaw workspace.
 - **QwenPaw Worker runtime management**: Recognize `qwenpaw` as a valid Worker runtime in Manager guidance and runtime-switch validation, invoke the installed `agt` CLI for runtime changes, and align Worker CLI help with the Controller's supported runtimes.
 - **CoPaw Team Worker resolution**: Resolve task assignment Matrix IDs from the Controller-owned `runtime.yaml` Team roster before falling back to legacy `AGENTS.md`, so a running Team Leader can delegate after late Team context injection without relying on a stale prompt copy.
 - **CoPaw to QwenPaw Worker state migration**: Restore Worker storage before creating any QwenPaw directories, migrate and verify both `.copaw` runtime state and `.copaw.secret` credentials with legacy state authoritative on conflicts, honor QwenPaw's configured secret directory (including relative paths) while rejecting targets outside persistent Worker storage, rebase migrated workspace metadata to `.qwenpaw`, persist migrated files before the idempotency marker, and cover a real CoPaw persistence → QwenPaw runtime switch in E2E tests. ([c0b4bac](https://github.com/agentscope-ai/AgentTeams/commit/c0b4bac68ea94fa0887cf14747d368916986c347))
@@ -34,6 +35,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 **Bug 修复**
 
+- **Worker 自定义 Skill 加载**：更新分配前校验并上传 Manager 托管的 Worker Skill 文件，避免调和期间递归更新 CR，并在 QwenPaw 原生 workspace 中同步、启用已分配 Skill。
 - **QwenPaw Worker 运行时管理**：在 Manager 指引和运行时切换校验中将 `qwenpaw` 识别为合法 Worker runtime，切换时调用镜像内实际安装的 `agt` CLI，并使 Worker CLI 帮助与 Controller 实际支持的运行时保持一致。
 - **CoPaw Team Worker 解析**：任务分配优先从 Controller 管理的 `runtime.yaml` Team roster 获取 Matrix ID，仅在旧部署缺少该 roster 时回退 `AGENTS.md`，避免运行中的 Team Leader 因 prompt 副本过期而无法委派任务。
 - **CoPaw 到 QwenPaw Worker 状态迁移**：在创建任何 QwenPaw 目录前先恢复 Worker 存储，迁移并校验 `.copaw` 运行时状态和 `.copaw.secret` 凭据，冲突时以旧 CoPaw 状态为准，遵循 QwenPaw 配置的 secret 目录（包括相对路径）并拒绝持久化 Worker 目录之外的目标，将工作区元数据改写到 `.qwenpaw`，先持久化迁移数据再写入幂等标记，并增加真实 CoPaw 持久化后切换 QwenPaw 的 E2E 覆盖。([c0b4bac](https://github.com/agentscope-ai/AgentTeams/commit/c0b4bac68ea94fa0887cf14747d368916986c347))

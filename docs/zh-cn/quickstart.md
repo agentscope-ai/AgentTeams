@@ -143,7 +143,7 @@ docker ps --filter name=agentteams-worker
 - 阅读 [Manager 指南](usage/manager-guide.md) 和 [Worker 指南](usage/worker-guide.md)。
 - 使用 [声明式资源管理](usage/resource-management.md) 学习 `agt` CLI 和 YAML。
 - 阅读 [架构说明](design/architecture.md)，了解 Matrix、Higress、对象存储和 controller 的关系。
-- Kubernetes 用户暂时参见项目主页的 [Helm 安装说明](../../README.zh-CN.md#kubernetes-部署helm)。
+- 使用 [Kubernetes 部署指南](usage/deployment/kubernetes.md) 在集群中创建团队共享实例。
 
 ## 卸载
 

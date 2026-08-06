@@ -143,7 +143,7 @@ After these checks pass, you have completed the smallest end-to-end AgentTeams w
 - Continue with the [Manager Guide](usage/manager-guide.md) and [Worker Guide](usage/worker-guide.md).
 - Use [Declarative Resource Management](usage/resource-management.md) to learn the `agt` CLI and YAML workflows.
 - Read [Architecture](design/architecture.md) for Matrix, Higress, object storage, and controller details.
-- Kubernetes users can temporarily follow the [Helm installation section](../README.md#install-on-kubernetes-helm) in the project README.
+- Use the [Kubernetes Deployment Guide](usage/deployment/kubernetes.md) to create a shared instance in a cluster.
 
 ## Uninstall
 

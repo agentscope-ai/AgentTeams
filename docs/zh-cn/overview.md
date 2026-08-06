@@ -63,7 +63,7 @@ AgentTeams 适合以下场景：
 | 生命周期管理 | Controller 通过 Docker 或 Podman 管理 Agent | Controller 通过 Kubernetes CRD 管理 Agent |
 | 安装入口 | `install/agentteams-install.sh` | `helm/agentteams` Helm Chart |
 
-第一次体验建议从[快速入门](quickstart.md)的本地部署开始。Kubernetes 安装将在独立的部署文档中完整说明；当前可以先参考项目主页的 [Helm 安装说明](../../README.zh-CN.md#kubernetes-部署helm)。
+第一次体验建议从[快速入门](quickstart.md)的本地部署开始。团队共享或生产环境参见 [Kubernetes 部署指南](usage/deployment/kubernetes.md)。
 
 ## Agent 运行时
 
@@ -109,6 +109,7 @@ AgentTeams 使用 `Worker`、`Manager`、`Team` 和 `Human` 四类声明式资�
 |---|---|
 | 在本地跑通第一个任务 | [快速入门](quickstart.md) |
 | 了解本地安装的全部选项 | [本地部署指南](usage/deployment/local.md) |
+| 在 Kubernetes 中部署共享实例 | [Kubernetes 部署指南](usage/deployment/kubernetes.md) |
 | 理解组件与通信关系 | [架构说明](design/architecture.md) |
 | 配置和使用 Manager | [Manager 指南](usage/manager-guide.md) |
 | 创建、部署和维护 Worker | [Worker 指南](usage/worker-guide.md) |

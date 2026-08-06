@@ -144,6 +144,8 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 如果希望在团队内共享或生产环境部署 AgentTeams，可以使用官方 Helm Chart 在任意 Kubernetes 集群上安装。默认配置内置了 Higress AI 网关、Tuwunel（Matrix）、MinIO 与 AgentTeams Controller，无需额外依赖。
 
+以下内容用于快速安装。集群规划、values 文件、模型服务、runtime、持久化、Ingress 和运维选项参见 [Kubernetes 部署指南](docs/zh-cn/usage/deployment/kubernetes.md)。
+
 **前置条件**
 
 - Kubernetes 1.24+（kind / minikube / k3s / 各类托管 K8s 均可）
@@ -201,16 +203,34 @@ helm install agentteams higress.io/agentteams \
 | `credentials.llmProvider` | 可选 | LLM 服务商名，默认 `openai-compat` |
 | `credentials.defaultModel` | 可选 | 默认模型，默认 `gpt-5.4` |
 | `credentials.llmBaseUrl` | 可选 | OpenAI 兼容的 Base URL（例如 `https://api.deepseek.com/v1`）。使用官方 OpenAI API 时留空 |
-| `manager.runtime` | 可选 | Manager Agent 运行时：`openclaw`（默认）、`copaw` 或 `hermes` |
-| `worker.defaultRuntime` | 可选 | Worker 默认运行时：`openclaw`（默认）、`copaw` 或 `hermes` |
+| `preflight.llm.enabled` | 可选 | 安装或升级前通过 hook 验证 LLM API Key、Base URL 和模型；默认 `true` |
+| `preflight.llm.strict` | 可选 | LLM 探测失败时终止安装或升级；默认 `true`，设为 `false` 时仅告警并继续 |
+| `preflight.llm.timeoutSeconds` | 可选 | LLM 探测单次 HTTP 请求的超时时间；默认 `30` 秒 |
+| `preflight.llm.retries` | 可选 | 限流、网络错误和服务商 5xx 等临时错误的重试次数；默认 `2` |
+| `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
+| `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
+| `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes |
+| `worker.defaultRuntime` | 可选 | Worker 默认运行时：`openclaw`（默认）、`copaw`、`hermes` 或 `openhuman`；QwenPaw Worker 需显式配置镜像 |
+
+Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
+
+```bash
+helm install agentteams higress.io/agentteams \
+  -n agentteams-system --create-namespace \
+  --set credentials.llmApiKey=<你的-API-Key> \
+  --set credentials.adminPassword=<你的-管理员密码> \
+  --set gateway.publicURL=http://localhost:18080 \
+  --set preflight.llm.enabled=false
+```
 
 <details>
-<summary>使用其他运行时（QwenPaw Manager + Hermes Workers）</summary>
+<summary>使用其他运行时（CoPaw Manager + Hermes Workers）</summary>
 
 ```bash
 helm install agentteams higress.io/agentteams \
   -n agentteams-system --create-namespace --devel \
-  --set manager.runtime=copaw \
+  --set manager.runtime=qwenpaw \
+  --set manager.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -219,13 +239,13 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各组件镜像会根据运行时自动选择（Manager: `agentteams-manager` / `agentteams-manager-qwenpaw`；Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
+选择 CoPaw Manager 时需要同时设置 `manager.runtime=qwenpaw` 和 `agentteams-manager-qwenpaw` 镜像。Worker 的默认镜像分别通过 `worker.defaultImage.<runtime>` 配置。
 
 </details>
 
 **多地域镜像仓库**
 
-默认 `global.imageRegistry` 指向中国区域（`higress-registry.cn-hangzhou.cr.aliyuncs.com/higress`）。如果在中国大陆以外部署，可切换至就近区域以加速镜像拉取：
+默认镜像指向中国区域。如果在中国大陆以外部署，可以使用以下就近镜像仓库：
 
 | 区域 | Registry |
 |---|---|
@@ -233,18 +253,7 @@ helm install agentteams higress.io/agentteams \
 | 北美 | `higress-registry.us-west-1.cr.aliyuncs.com/higress` |
 | 东南亚 | `higress-registry.ap-southeast-7.cr.aliyuncs.com/higress` |
 
-```bash
-# 示例：使用北美镜像仓库部署
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace \
-  --render-subchart-notes \
-  --set global.imageRegistry=higress-registry.us-west-1.cr.aliyuncs.com/higress \
-  --set credentials.llmApiKey=<你的-API-Key> \
-  --set credentials.adminPassword=<你的-管理员密码> \
-  --set gateway.publicURL=http://localhost:18080
-```
-
-完整可配置项（网关/存储 provider、镜像 tag、资源、持久化等）请参考 [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml)。
+`global.imageRegistry` 只会影响读取该全局值的子 Chart；Controller、Manager、Worker、Tuwunel、MinIO 和 Element Web 使用各自的完整 `image.repository`。切换地域或私有仓库时，请在 values 文件中逐项覆盖相关镜像地址。完整示例和可配置项参见 [Kubernetes 部署指南](docs/zh-cn/usage/deployment/kubernetes.md)与 [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml)。
 
 **访问**
 

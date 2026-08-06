@@ -63,7 +63,7 @@ All important communication happens in Matrix rooms, so humans can see how work 
 | Lifecycle management | The controller manages agents through Docker or Podman | The controller manages agents through Kubernetes CRDs |
 | Installation entry point | `install/agentteams-install.sh` | The `helm/agentteams` Helm chart |
 
-For a first evaluation, start with the local path in [Quickstart](quickstart.md). A dedicated Kubernetes deployment guide will document the complete flow; until then, see the [Helm installation section](../README.md#install-on-kubernetes-helm) in the project README.
+For a first evaluation, start with the local path in [Quickstart](quickstart.md). For a shared or production environment, see the [Kubernetes Deployment Guide](usage/deployment/kubernetes.md).
 
 ## Agent runtimes
 
@@ -109,6 +109,7 @@ Production deployments should also use HTTPS, network policies, least-privilege 
 |---|---|
 | Complete the first task locally | [Quickstart](quickstart.md) |
 | Review every local installation option | [Local Deployment Guide](usage/deployment/local.md) |
+| Deploy a shared instance on Kubernetes | [Kubernetes Deployment Guide](usage/deployment/kubernetes.md) |
 | Understand components and communication | [Architecture](design/architecture.md) |
 | Configure and operate the Manager | [Manager Guide](usage/manager-guide.md) |
 | Create, deploy, and maintain Workers | [Worker Guide](usage/worker-guide.md) |

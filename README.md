@@ -118,6 +118,8 @@ This removes all AgentTeams containers (Manager, Workers, docker-proxy), Docker 
 
 For shared / production deployments you can install AgentTeams on any Kubernetes cluster via the official Helm chart. The default profile bundles the Higress AI gateway, Tuwunel (Matrix), MinIO and the AgentTeams controller — no external dependencies required.
 
+The commands below provide a quick installation path. See the [Kubernetes Deployment Guide](docs/usage/deployment/kubernetes.md) for cluster planning, values files, model services, runtimes, persistence, Ingress, and operations.
+
 **Prerequisites**
 
 - Kubernetes 1.24+ (kind / minikube / k3s / managed K8s — all work)
@@ -181,8 +183,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
-| `manager.runtime` | no | Manager agent runtime: `openclaw` (default), `copaw`, or `hermes` |
-| `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, or `hermes` |
+| `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes |
+| `worker.defaultRuntime` | no | Default Worker runtime: `openclaw` (default), `copaw`, `hermes`, or `openhuman`; a QwenPaw Worker requires an explicit image |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -196,12 +198,13 @@ helm install agentteams higress.io/agentteams \
 ```
 
 <details>
-<summary>Using alternative runtimes (QwenPaw Manager + Hermes Workers)</summary>
+<summary>Using alternative runtimes (CoPaw Manager + Hermes Workers)</summary>
 
 ```bash
 helm install agentteams higress.io/agentteams \
   -n agentteams-system --create-namespace --devel \
-  --set manager.runtime=copaw \
+  --set manager.runtime=qwenpaw \
+  --set manager.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -210,13 +213,13 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-The image for each component is automatically selected based on the runtime (`agentteams-manager` / `agentteams-manager-qwenpaw` for Manager; `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker` for Workers).
+When selecting the CoPaw Manager, set both `manager.runtime=qwenpaw` and the `agentteams-manager-qwenpaw` image. Configure Worker default images through `worker.defaultImage.<runtime>`.
 
 </details>
 
 **Multi-Region Image Registry**
 
-The default `global.imageRegistry` points to the China region (`higress-registry.cn-hangzhou.cr.aliyuncs.com/higress`). If you are deploying outside China, override it for faster image pulls:
+Images point to the China region by default. When deploying outside China, use a nearby registry for faster pulls:
 
 | Region | Registry |
 |---|---|
@@ -224,18 +227,7 @@ The default `global.imageRegistry` points to the China region (`higress-registry
 | North America | `higress-registry.us-west-1.cr.aliyuncs.com/higress` |
 | Southeast Asia | `higress-registry.ap-southeast-7.cr.aliyuncs.com/higress` |
 
-```bash
-# Example: deploy from the North America registry
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace \
-  --render-subchart-notes \
-  --set global.imageRegistry=higress-registry.us-west-1.cr.aliyuncs.com/higress \
-  --set credentials.llmApiKey=<your-api-key> \
-  --set credentials.adminPassword=<your-admin-password> \
-  --set gateway.publicURL=http://localhost:18080
-```
-
-For all configurable values (gateway/storage providers, image tags, resources, persistence, etc.) see [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml).
+`global.imageRegistry` affects only subcharts that consume that global value. The Controller, Manager, Workers, Tuwunel, MinIO, and Element Web use their own complete `image.repository` values. Override every relevant image in a values file when switching regions or using a private registry. See the [Kubernetes Deployment Guide](docs/usage/deployment/kubernetes.md) and [`helm/agentteams/values.yaml`](helm/agentteams/values.yaml) for the complete configuration.
 
 **Access**
 

@@ -185,6 +185,67 @@ def test_push_local_uploads_worker_files_but_skips_controller_owned_state(tmp_pa
     }
 
 
+def test_push_paths_persists_selected_migration_files_in_order(tmp_path: Path, monkeypatch) -> None:
+    sync = _sync(tmp_path)
+    session = sync.local_dir / ".qwenpaw" / "workspaces" / "default" / "chats.json"
+    marker = sync.local_dir / ".qwenpaw" / ".copaw-migrated"
+    session.parent.mkdir(parents=True)
+    session.write_text("legacy-session", encoding="utf-8")
+    marker.write_text("copaw-to-qwenpaw\n", encoding="utf-8")
+    uploads = []
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+    monkeypatch.setattr(sync, "_cat_bytes", lambda _key: None)
+
+    def fake_mc(*args, **_kwargs):
+        uploads.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    assert sync.push_paths([session, marker]) == [
+        ".qwenpaw/workspaces/default/chats.json",
+        ".qwenpaw/.copaw-migrated",
+    ]
+    assert [args[2] for args in uploads] == [
+        "agentteams/agentteams-storage/agents/worker-a/.qwenpaw/workspaces/default/chats.json",
+        "agentteams/agentteams-storage/agents/worker-a/.qwenpaw/.copaw-migrated",
+    ]
+
+
+def test_push_directories_mirrors_migration_roots(tmp_path: Path, monkeypatch) -> None:
+    sync = _sync(tmp_path)
+    working_dir = sync.local_dir / ".qwenpaw"
+    secret_dir = sync.local_dir / ".qwenpaw.secret"
+    working_dir.mkdir(parents=True)
+    secret_dir.mkdir()
+    commands = []
+
+    monkeypatch.setattr(sync, "ensure_alias", lambda: None)
+
+    def fake_mc(*args, **_kwargs):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync, "_mc", fake_mc)
+
+    assert sync.push_directories([working_dir, secret_dir]) == [".qwenpaw", ".qwenpaw.secret"]
+    assert commands == [
+        (
+            "mirror",
+            f"{working_dir}/",
+            "agentteams/agentteams-storage/agents/worker-a/.qwenpaw/",
+            "--overwrite",
+        ),
+        (
+            "mirror",
+            f"{secret_dir}/",
+            "agentteams/agentteams-storage/agents/worker-a/.qwenpaw.secret/",
+            "--overwrite",
+        ),
+    ]
+
+
 def test_push_local_does_not_remove_remote_files_missing_from_local_state(tmp_path: Path, monkeypatch) -> None:
     sync = _sync(tmp_path)
     commands = []

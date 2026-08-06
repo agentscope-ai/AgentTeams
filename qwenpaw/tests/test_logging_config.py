@@ -49,6 +49,18 @@ def test_configure_worker_logging_writes_default_rotating_file(tmp_path, monkeyp
         assert "backup_count=" in log_file.read_text(encoding="utf-8")
 
 
+def test_configure_worker_console_logging_does_not_create_working_dir(tmp_path, monkeypatch) -> None:
+    from qwenpaw_worker.log import configure_worker_console_logging
+
+    working_dir = tmp_path / ".qwenpaw"
+    monkeypatch.setenv("QWENPAW_WORKING_DIR", str(working_dir))
+
+    with _clear_root_handlers():
+        configure_worker_console_logging()
+
+    assert not working_dir.exists()
+
+
 def test_configure_worker_logging_rotates_file(tmp_path, monkeypatch) -> None:
     from qwenpaw_worker.log import configure_worker_logging
 

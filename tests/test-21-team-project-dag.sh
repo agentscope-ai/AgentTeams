@@ -5,6 +5,7 @@
 #   Part A (infrastructure): Team storage, S3 policy, canonical Team Leader skills
 #   Part B (room topology): Manager NOT in Team Room / Leader DM / Worker Rooms
 #   Part C (e2e via LLM): Admin delegates task in Leader DM, Leader coordinates workers via Team Room
+#   Part D (deterministic): taskflow delegate_task publishes one Matrix event with m.mentions
 #
 # NOTE: This test does NOT clean up — environment is left for manual inspection.
 
@@ -442,15 +443,125 @@ else
 fi
 
 # ------------------------------------------------------------
-# Section 8b: E2E delivery contract — m.mentions + event_id + no duplicate
+# Section 8b: Deterministic delivery contract — m.mentions + event_id + no duplicate
 # ------------------------------------------------------------
-# The automatic delegate_task notification must appear in the Team Room as a
-# single message carrying m.mentions (MSC3952) and a server event_id. A
-# second manual assignment message from the Leader would produce a duplicate
-# TASK_ASSIGNED delivery; assert the assignment was delivered at most once.
-log_section "E2E Delivery Contract: m.mentions + event_id + single delivery"
+# LLM tool selection is non-deterministic, so keep the preceding LLM section
+# focused on the coordination boundary. Exercise the actual taskflow tool here
+# with a unique Project/Task, retry delegate_task once, then verify the exact
+# Matrix event returned by the tool. This covers the delivery contract without
+# depending on model-generated wording or whether the model chose taskflow.
+log_section "Deterministic Delivery Contract: m.mentions + event_id + single delivery"
 
 DELIVERY_CONTRACT_OK=true
+DELIVERY_PROJECT_ID="${TEST_TEAM}-delivery-contract"
+DELIVERY_TASK_ID="${TEST_TEAM}-delivery-contract-task"
+LEADER_CONTAINER=$(worker_container_name "${TEST_LEADER}")
+LEADER_RUNTIME_DIR=$(docker exec "${LEADER_CONTAINER}" sh -c '
+root="/root/.copaw-worker/${AGENTTEAMS_WORKER_NAME}"
+for candidate in "${root}/.qwenpaw" "${root}/.copaw"; do
+    if [ -d "${candidate}/workspaces/default" ]; then
+        printf "%s\n" "${candidate}"
+        exit 0
+    fi
+done
+exit 1
+' 2>/dev/null)
+
+DELEGATE_RAW=$(docker exec -i \
+    -e QWENPAW_WORKING_DIR="${LEADER_RUNTIME_DIR}" \
+    -e COPAW_WORKING_DIR="${LEADER_RUNTIME_DIR}" \
+    -e TEST21_PROJECT_ID="${DELIVERY_PROJECT_ID}" \
+    -e TEST21_TASK_ID="${DELIVERY_TASK_ID}" \
+    -e TEST21_ASSIGNEE="${TEST_W1}" \
+    -e TEST21_ROOM_ID="${TEAM_ROOM}" \
+    "${LEADER_CONTAINER}" sh -c '
+if [ -n "${AGENTTEAMS_CONSOLE_PORT:-}" ]; then
+    exec /opt/venv/standard/bin/python -
+fi
+exec /opt/venv/lite/bin/python -
+' <<'PY' 2>&1
+import asyncio
+import json
+import os
+
+from copaw_worker.hooks.tools.projectflow import projectflow
+from copaw_worker.hooks.tools.taskflow import taskflow
+
+
+def response_json(response):
+    item = response.content[0]
+    text = item.get("text") if isinstance(item, dict) else item.text
+    return json.loads(text)
+
+
+async def main():
+    project_id = os.environ["TEST21_PROJECT_ID"]
+    task_id = os.environ["TEST21_TASK_ID"]
+    assignee = os.environ["TEST21_ASSIGNEE"]
+    room_id = os.environ["TEST21_ROOM_ID"]
+
+    created = response_json(await projectflow(
+        action="create_project",
+        payload={
+            "projectId": project_id,
+            "title": "Taskflow delivery contract probe",
+            "source": "test-21",
+        },
+    ))
+    planned = response_json(await projectflow(
+        action="plan_dag",
+        payload={
+            "projectId": project_id,
+            "tasks": [{
+                "taskId": task_id,
+                "title": "Verify deterministic Matrix delivery",
+                "assignedTo": assignee,
+                "dependsOn": [],
+            }],
+        },
+    ))
+    payload = {
+        "projectId": project_id,
+        "taskId": task_id,
+        "roomId": room_id,
+        "spec": (
+            "Delivery contract probe. Acknowledge the assignment; "
+            "no domain work is required."
+        ),
+    }
+    first = response_json(await taskflow(action="delegate_task", payload=payload))
+    retry = response_json(await taskflow(action="delegate_task", payload=payload))
+    print(json.dumps({
+        "created": created,
+        "planned": planned,
+        "first": first,
+        "retry": retry,
+    }, ensure_ascii=False))
+
+
+asyncio.run(main())
+PY
+)
+DELEGATE_RESULT=$(printf '%s\n' "${DELEGATE_RAW}" | tail -1)
+
+if echo "${DELEGATE_RESULT}" | jq -e '
+    .created.ok == true
+    and .planned.ok == true
+    and .first.ok == true
+    and .retry.ok == true
+    and ((.first.notification.eventId // "") | length > 0)
+    and .retry.notification.reused == true
+    and .retry.notification.eventId == .first.notification.eventId
+' >/dev/null 2>&1; then
+    DELIVERY_EVENT_ID=$(echo "${DELEGATE_RESULT}" | jq -r '.first.notification.eventId')
+    log_pass "delegate_task returned one stable eventId across retry"
+else
+    DELIVERY_EVENT_ID=""
+    log_fail "Deterministic delegate_task invocation failed: ${DELEGATE_RESULT}"
+    log_info "delegate_task output: ${DELEGATE_RAW}"
+    DELIVERY_CONTRACT_OK=false
+fi
+
 exec_in_manager bash -c '
 TOKEN=$(curl -sf -X POST "http://127.0.0.1:6167/_matrix/client/v3/login" \
     -H "Content-Type: application/json" \
@@ -460,46 +571,52 @@ curl -sf "http://127.0.0.1:6167/_matrix/client/v3/rooms/${ROOM_ENC}/messages?dir
     -H "Authorization: Bearer ${TOKEN}" | jq -c "
         [.chunk[] | select(.type == \"m.room.message\")]
         | {
-            assignments: [.[] | select((.content.body // \"\") | test(\"assigned task|TASK_ASSIGNED\")) | {event_id, mentions: (.content[\"m.mentions\"] // {})}],
-            worker_acks: [.[] | select((.content.body // \"\") | test(\"TASK_COMPLETED|ack\")) | .event_id]
+            assignments: [
+                .[]
+                | (.content.body // \"\") as \$body
+                | select(
+                    .sender == \"'${LEADER_MATRIX_ID}'\"
+                    and (\$body | contains(\"'${DELIVERY_TASK_ID}'\"))
+                )
+                | {
+                    event_id,
+                    body: \$body,
+                    mentions: (.content[\"m.mentions\"] // {})
+                }
+            ]
         }
     "
 ' 2>/dev/null > /tmp/test21-delivery.json
 
 if [ -f /tmp/test21-delivery.json ]; then
     ASSIGNMENT_COUNT=$(jq '.assignments | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
-    MENTION_COUNT=$(jq '[.assignments[] | select((.mentions.user_ids // []) | length > 0)] | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
-    EVENT_ID_COUNT=$(jq '[.assignments[] | select(.event_id != null)] | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
-    WORKER_ACK_COUNT=$(jq '.worker_acks | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
+    MENTION_COUNT=$(jq '[.assignments[] | select((.mentions.user_ids // []) | index("'${W1_MATRIX_ID}'") != null)] | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
+    EVENT_ID_COUNT=$(jq '[.assignments[] | select(.event_id == "'${DELIVERY_EVENT_ID}'")] | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
+    VISIBLE_MENTION_COUNT=$(jq '[.assignments[] | select(.body | contains("'${W1_MATRIX_ID}'"))] | length' /tmp/test21-delivery.json 2>/dev/null || echo 0)
 
-    if [ "${ASSIGNMENT_COUNT}" -ge 1 ]; then
-        log_pass "Team Room has ${ASSIGNMENT_COUNT} assignment message(s)"
+    if [ "${ASSIGNMENT_COUNT}" -eq 1 ]; then
+        log_pass "delegate_task published exactly one assignment event"
     else
-        log_fail "No assignment message found in Team Room (delivery contract)"
+        log_fail "delegate_task published ${ASSIGNMENT_COUNT} assignment events (expected exactly one)"
         DELIVERY_CONTRACT_OK=false
     fi
-    if [ "${MENTION_COUNT}" -ge 1 ]; then
-        log_pass "Assignment carries m.mentions (${MENTION_COUNT})"
+    if [ "${MENTION_COUNT}" -eq 1 ]; then
+        log_pass "Assignment carries the Worker in m.mentions"
     else
         log_fail "Assignment message missing m.mentions (delivery contract)"
         DELIVERY_CONTRACT_OK=false
     fi
-    if [ "${EVENT_ID_COUNT}" -ge 1 ]; then
-        log_pass "Assignment has server event_id (${EVENT_ID_COUNT})"
+    if [ "${VISIBLE_MENTION_COUNT}" -eq 1 ]; then
+        log_pass "Assignment visibly mentions the Worker's full Matrix ID"
     else
-        log_fail "Assignment message missing event_id (delivery contract)"
+        log_fail "Assignment body missing the Worker's full Matrix ID"
         DELIVERY_CONTRACT_OK=false
     fi
-    if [ "${ASSIGNMENT_COUNT}" -le 1 ]; then
-        log_pass "Assignment delivered exactly once (no duplicate)"
+    if [ "${EVENT_ID_COUNT}" -eq 1 ]; then
+        log_pass "Matrix event matches delegate_task notification.eventId"
     else
-        log_fail "Assignment delivered ${ASSIGNMENT_COUNT} times — duplicate notification detected"
+        log_fail "Assignment event_id does not match delegate_task result"
         DELIVERY_CONTRACT_OK=false
-    fi
-    if [ "${WORKER_ACK_COUNT}" -ge 1 ]; then
-        log_pass "Worker acknowledged in Team Room (${WORKER_ACK_COUNT})"
-    else
-        log_info "No worker ack observed yet — worker may still be executing"
     fi
 else
     log_fail "Delivery contract check failed to query Team Room"

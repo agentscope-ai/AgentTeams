@@ -81,6 +81,12 @@ Runner 进程内存中并用于固定时长比较。
 健康检查保持无认证。其它 Runner API 继续要求 bearer token。命令即使知道 Service
 地址，也无法构造已认证的新请求。
 
+适配层必须同时覆盖 DeepAgents `BaseSandbox` 的同步与异步文件方法。`list/read/write/edit/
+delete/grep/glob` 只能使用 Runner 的受限 `/v1/files/*` API，不能继承以 `execute()` 运行
+shell 的默认回退；否则一次已批准命令后的 `read_file` 验证会形成第二条未审批的
+`/v1/execute` 记录，破坏审批与审计的一一对应。受限文件 API 不写 execution request
+state，写操作仍返回精确 change manifest 供 Worker 持久化到 MinIO。
+
 ### 选择理由与边界
 
 认证 sidecar 需要新增跨容器 IPC；若执行命令能访问同一 IPC，又会形成新的绕过面。

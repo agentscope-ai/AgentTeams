@@ -857,6 +857,8 @@ kubectl get executionsandbox,pod,service,networkpolicy \
 - Runner 不包含 Matrix、Higress、MinIO、PostgreSQL 凭据；
 - 命令只在 Runner 的 `/workspace` 执行，变更清单校验通过后才写回 MinIO；
 - 每次批准恰好只产生一次 Runner `POST /v1/execute`；传输结果不确定时，不以相同或新 request ID 自动重试；
+- 后续 `read_file` 等同步/异步文件工具只访问受限 `/v1/files/*` API，不得借用
+  `BaseSandbox.execute()`，Runner 命令状态目录仍只能出现已批准的显式执行记录；
 - 更新 Worker 的 sandbox resources、egress、idle/max lifetime 后，已有 sandbox 必须先收敛到新 generation 才能重新 Ready；已回收 lease 只在下一次 Runner 请求前重建，结果不确定的已发送请求不会被重放；
 - 删除 Worker、改变 Worker UID/Controller 归属、切换为非 DeepAgents runtime、移除 DeepAgents 配置或把 `execution.mode` 改为非 `sandbox` 时，已有 lease 必须由 cleanup finalizer 按 Service → token Secret → Pod → 未缓存读取确认 Pod 不存在 → NetworkPolicy → 移除 finalizer 的顺序撤销；在 Pod 存在或身份/前置条件冲突期间，NetworkPolicy 与 lease 必须保留；
 - Runner NetworkPolicy 必须没有 ownerReference，必须带有精确的 controller/worker/sandbox/runtime label 与 `agentteams.io/execution-sandbox-uid` 注解；对 ExecutionSandbox 和 Worker 分别执行 foreground delete 时，在被测试 finalizer 阻塞的 Runner Pod 消失前策略必须持续存在，Pod 消失后才由 Controller 删除；

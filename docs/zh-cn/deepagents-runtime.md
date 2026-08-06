@@ -488,6 +488,14 @@ fail-closed。一次获批命令恰好只向 Runner 发出一次 `POST /v1/execu
 返回冲突导致结果不确定时，不以相同或新 request ID 重试，也不重新 ensure 后重放命令，
 避免重复副作用。request ID 只用于标识这一次请求，不是自动重试许可。
 
+DeepAgents 的同步与异步 `list/read/write/edit/delete/grep/glob` 文件工具均由适配层覆盖，
+通过要求 Runner bearer token 的 `/v1/files/*` 受限 API 完成，不继承 `BaseSandbox` 以
+shell `execute()` 模拟文件操作的默认实现。Runner 对路径实施 `/workspace` 边界、禁止父目录
+穿越和符号链接逃逸，并限制单文件、批量与搜索规模；这些请求不会创建命令执行状态。
+写入、编辑和删除仍生成精确 change manifest，由带 MinIO 凭据的 Worker 校验并持久化。
+因此 Human 批准的显式 `execute` 与 `/v1/execute` 审计记录保持一一对应，后续 `read_file`
+验证不会产生第二条未审批的命令执行记录。
+
 ```bash
 kubectl -n "${AGENTTEAMS_NAMESPACE}" apply -f deep-researcher.yaml
 kubectl -n "${AGENTTEAMS_NAMESPACE}" get worker deep-researcher -o yaml

@@ -25,6 +25,15 @@ These are capability-reduction measures: `/bin/sh` is **not** a general
 side-effect-free sandbox, and intentionally killing container PID 1 remains a
 denial-of-service risk that this release does not solve.
 
+DeepAgents filesystem tools do not inherit `BaseSandbox`'s shell-backed
+fallbacks. Synchronous and asynchronous list, read, write, edit, delete, grep,
+and glob operations use authenticated, workspace-confined `/v1/files/*`
+endpoints; the Runner implements traversal checks, transfer/search limits, and
+structured results without creating execution request state. Mutating file
+operations still emit exact change manifests for MinIO persistence. Therefore
+`POST /v1/execute` is reserved for the explicit `execute` tool and remains a
+one-to-one audit record for the Human-approved command.
+
 An `ExecutionSandbox` lease is revoked when its Worker is deleted, changes
 owner UID, changes runtime or DeepAgents configuration, or leaves
 `execution.mode: sandbox`, and when the lease reaches its idle or maximum

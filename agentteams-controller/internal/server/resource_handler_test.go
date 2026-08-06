@@ -110,6 +110,61 @@ func TestUpdateWorkerPreservesResources(t *testing.T) {
 	assertAgentResources(t, got.Spec.Resources, "300m", "768Mi", "3", "5Gi")
 }
 
+func TestCreateAndUpdateWorkerPersistsEnv(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	createBody := []byte(`{"name":"env-worker","model":"qwen3.5-plus","env":{"APP_MODE":"audit","EMPTY":""}}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/workers", bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	handler.CreateWorker(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, createRec.Code, createRec.Body.String())
+	}
+	if bytes.Contains(createRec.Body.Bytes(), []byte("APP_MODE")) {
+		t.Fatalf("create response exposed Worker env: %s", createRec.Body.String())
+	}
+
+	var created v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "env-worker", Namespace: "default"}, &created); err != nil {
+		t.Fatalf("get created worker: %v", err)
+	}
+	if got, want := created.Spec.Env, map[string]string{"APP_MODE": "audit", "EMPTY": ""}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("created worker env = %#v, want %#v", got, want)
+	}
+
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/workers/env-worker", bytes.NewReader([]byte(`{"env":{"APP_MODE":"review"}}`)))
+	updateReq.SetPathValue("name", "env-worker")
+	updateRec := httptest.NewRecorder()
+	handler.UpdateWorker(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "env-worker", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated worker: %v", err)
+	}
+	if got, want := updated.Spec.Env, map[string]string{"APP_MODE": "review"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("updated worker env = %#v, want %#v", got, want)
+	}
+
+	clearReq := httptest.NewRequest(http.MethodPut, "/api/v1/workers/env-worker", bytes.NewReader([]byte(`{"env":{}}`)))
+	clearReq.SetPathValue("name", "env-worker")
+	clearRec := httptest.NewRecorder()
+	handler.UpdateWorker(clearRec, clearReq)
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("expected clear status %d, got %d: %s", http.StatusOK, clearRec.Code, clearRec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "env-worker", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get cleared worker: %v", err)
+	}
+	if len(updated.Spec.Env) != 0 {
+		t.Fatalf("cleared worker env = %#v, want empty", updated.Spec.Env)
+	}
+}
+
 func TestCreateTeamDoesNotOwnWorkerRuntimeConfig(t *testing.T) {
 	scheme := newServerTestScheme(t)
 	leader := &v1beta1.Worker{
@@ -642,6 +697,61 @@ func TestCreateAndUpdateManagerPersistsModelProvider(t *testing.T) {
 	}
 	if updated.Spec.ModelProvider != "openai" {
 		t.Fatalf("updated manager modelProvider=%q, want openai", updated.Spec.ModelProvider)
+	}
+}
+
+func TestCreateAndUpdateManagerPersistsEnv(t *testing.T) {
+	scheme := newServerTestScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	handler := NewResourceHandler(k8sClient, "default", nil, "")
+
+	createBody := []byte(`{"name":"env-manager","model":"qwen-plus","env":{"APP_MODE":"audit","EMPTY":""}}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/managers", bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	handler.CreateManager(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, createRec.Code, createRec.Body.String())
+	}
+	if bytes.Contains(createRec.Body.Bytes(), []byte("APP_MODE")) {
+		t.Fatalf("create response exposed Manager env: %s", createRec.Body.String())
+	}
+
+	var created v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "env-manager", Namespace: "default"}, &created); err != nil {
+		t.Fatalf("get created manager: %v", err)
+	}
+	if got, want := created.Spec.Env, map[string]string{"APP_MODE": "audit", "EMPTY": ""}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("created manager env = %#v, want %#v", got, want)
+	}
+
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/managers/env-manager", bytes.NewReader([]byte(`{"env":{"APP_MODE":"review"}}`)))
+	updateReq.SetPathValue("name", "env-manager")
+	updateRec := httptest.NewRecorder()
+	handler.UpdateManager(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+
+	var updated v1beta1.Manager
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "env-manager", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated manager: %v", err)
+	}
+	if got, want := updated.Spec.Env, map[string]string{"APP_MODE": "review"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("updated manager env = %#v, want %#v", got, want)
+	}
+
+	clearReq := httptest.NewRequest(http.MethodPut, "/api/v1/managers/env-manager", bytes.NewReader([]byte(`{"env":{}}`)))
+	clearReq.SetPathValue("name", "env-manager")
+	clearRec := httptest.NewRecorder()
+	handler.UpdateManager(clearRec, clearReq)
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("expected clear status %d, got %d: %s", http.StatusOK, clearRec.Code, clearRec.Body.String())
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "env-manager", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get cleared manager: %v", err)
+	}
+	if len(updated.Spec.Env) != 0 {
+		t.Fatalf("cleared manager env = %#v, want empty", updated.Spec.Env)
 	}
 }
 

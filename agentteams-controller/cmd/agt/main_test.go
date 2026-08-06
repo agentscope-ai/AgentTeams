@@ -233,6 +233,35 @@ spec:
 	}
 }
 
+func TestBuildApplyBody_PreservesEnv(t *testing.T) {
+	input := `apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: alice
+spec:
+  model: claude-sonnet-4-6
+  env:
+    APP_MODE: audit
+    EMPTY: ""
+`
+	var res yamlResource
+	if err := sigyaml.Unmarshal([]byte(input), &res); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	body := buildApplyBody(res, true)
+	env, ok := body["env"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("body env = %T, want map[string]interface{}", body["env"])
+	}
+	if got := env["APP_MODE"]; got != "audit" {
+		t.Fatalf("env APP_MODE = %#v, want audit", got)
+	}
+	if got := env["EMPTY"]; got != "" {
+		t.Fatalf("env EMPTY = %#v, want empty string", got)
+	}
+}
+
 func TestParseYAML_MultiDocument(t *testing.T) {
 	input := `apiVersion: agentteams.io/v1beta1
 kind: Team

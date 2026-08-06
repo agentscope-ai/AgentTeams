@@ -8,6 +8,7 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 - **QwenPaw 2.0 runtime unification**: Migrate the Manager container from copaw 1.0.2 to QwenPaw 2.0.1 on a single venv, register projectflow/taskflow/message/filesync tools through a QwenPaw plugin instead of monkey-patching CoPawAgent, replace the physical Matrix channel overlay with the QwenPaw plugin system, read Matrix credentials directly from agent.json so the manager tools work without importing copaw at runtime, align CMS observability packages and env vars with the Worker image, inject session-file privacy policy into prompt files, set approval_level=AUTO in the agent template, bridge YOLO mode to Qwenpaw approval_level=OFF, disable the built-in QA Agent, replace start-copaw-manager.sh with start-qwenpaw-manager.sh, add explicit qwenpaw Manager and Worker runtime values alongside copaw while keeping user-facing installer defaults and image pulls on CoPaw until the QwenPaw release, make task assignment state and Matrix notification atomic with room membership validation and m.mentions delivery, preserve m.mentions metadata in streamed/edit events, make the TeamHarness MCP `delegate_task` path atomic too (validate assignee room membership — strictly `join`, not `invite` — prepare → stable-txn notification → commit assigned + event_id; the initial file publish gates the notification and the assigned/eventId commit gates success, both returning a retryable failure so an idempotent retry finishes the sync instead of reporting success with stale shared storage), and migrate a legacy Worker `.copaw` working dir to `.qwenpaw` on the qwenpaw_worker startup path only (idempotent; the migration follows the target runtime — an explicitly configured copaw Worker keeps `.copaw` and never migrates before a switch).
 - **Custom model capability overrides**: `AGENTTEAMS_MODEL_VISION` and `AGENTTEAMS_MODEL_REASONING` env vars let deployments override vision and reasoning capabilities for custom models not in the built-in presets table (e.g. local multimodal models like `qwen3.6-27b-fp8`).
+- **Worker and Manager REST environment configuration**: Carry user-defined `spec.env` through REST create/update and `agt apply -f`, including full-map replacement and explicit clearing. ([1ecd8b9](https://github.com/agentscope-ai/AgentTeams/commit/1ecd8b9cc7c9bea95a1e375a86414e0e4b12e638))
 
 **Bug Fixes**
 
@@ -32,6 +33,10 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 - **Manager diagnostic loops**: Manager prompts and Worker lifecycle guidance stop repeated no-op troubleshooting commands and treat a missing Worker in `agt get workers` as the deletion boundary instead of looping on Matrix room probes. ([#975](https://github.com/agentscope-ai/AgentTeams/pull/975))
 
 ---
+
+**新增功能**
+
+- **Worker 与 Manager REST 环境变量配置**：通过 REST create/update 和 `agt apply -f` 透传用户自定义的 `spec.env`，支持全量 map 替换与显式清空。([1ecd8b9](https://github.com/agentscope-ai/AgentTeams/commit/1ecd8b9cc7c9bea95a1e375a86414e0e4b12e638))
 
 **Bug 修复**
 

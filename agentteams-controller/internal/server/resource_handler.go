@@ -140,11 +140,11 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		resp := workerToResponse(&worker)
-		if team, member, ok, terr := h.findTeamMember(r.Context(), name); terr != nil {
+		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, name); terr != nil {
 			writeK8sError(w, "get worker", terr)
 			return
 		} else if ok {
-			h.applyTeamMember(&resp, team, member)
+			applyTeamMember(&resp, team, member)
 		}
 		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
@@ -168,11 +168,11 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range list.Items {
 		resp := workerToResponse(&list.Items[i])
-		if team, member, ok, terr := h.findTeamMember(r.Context(), list.Items[i].Name); terr != nil {
+		if team, member, ok, terr := findTeamMember(r.Context(), h.client, h.namespace, list.Items[i].Name); terr != nil {
 			writeK8sError(w, "list workers: lookup team member", terr)
 			return
 		} else if ok {
-			h.applyTeamMember(&resp, team, member)
+			applyTeamMember(&resp, team, member)
 		}
 		if teamFilter != "" && resp.Team != teamFilter {
 			continue
@@ -831,7 +831,7 @@ func humanToResponse(h *v1beta1.Human) HumanResponse {
 // findTeamForMember reports whether the given worker name is a member
 // (leader or worker) of any Team in the current namespace.
 func (h *ResourceHandler) findTeamForMember(ctx context.Context, name string) (string, bool, error) {
-	team, _, ok, err := h.findTeamMember(ctx, name)
+	team, _, ok, err := findTeamMember(ctx, h.client, h.namespace, name)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -887,11 +887,11 @@ func (h *ResourceHandler) validateTeamWorkerMembers(ctx context.Context, teamNam
 	return nil
 }
 
-// findTeamMember does the same as findTeamForMember but also returns the
-// resolved Team CR and the member's name (for response synthesis).
-func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1beta1.Team, string, bool, error) {
+// findTeamMember resolves the Team CR and member name used to enrich Worker
+// responses from both declarative and lifecycle endpoints.
+func findTeamMember(ctx context.Context, c client.Client, namespace, name string) (*v1beta1.Team, string, bool, error) {
 	var list v1beta1.TeamList
-	if err := h.client.List(ctx, &list, client.InNamespace(h.namespace)); err != nil {
+	if err := c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
 		return nil, "", false, err
 	}
 	for i := range list.Items {
@@ -905,7 +905,7 @@ func (h *ResourceHandler) findTeamMember(ctx context.Context, name string) (*v1b
 	return nil, "", false, nil
 }
 
-func (h *ResourceHandler) applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string) {
+func applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string) {
 	resp.Team = t.Name
 	resp.Role = teamMemberRole(t, memberName)
 	if ms := t.Status.MemberByName(memberName); ms != nil {

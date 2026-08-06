@@ -83,6 +83,9 @@ NetworkPolicy watch 触发 reconcile。这样 foreground 删除 Sandbox 或 Work
 移除 finalizer；同名替代对象、归属漂移、冲突或暂时仍在 Terminating 的 Pod 都会保留隔离边界
 并重试。旧版本创建、且 owner 精确指向当前 Sandbox UID 的单一 ownerReference NetworkPolicy 会
 原地移除 ownerReference 并补写 UID 注解；任何 foreign/malformed 同名资源都不会被接管或删除。
+Runner 的应用级 readiness 使用容器内 `curl 127.0.0.1:8080/healthz`，避免支持 NetworkPolicy
+的 CNI 将 kubelet 从节点发起的 HTTP 探针当作未授权 ingress；这不会为节点网段增加例外，也
+不会放宽 Worker 到 Runner 之外的访问边界。
 
 Worker watch 通过 `ExecutionSandbox.spec.workerRef.name` 字段索引反查 lease，并继续按命名空间和
 当前 Controller label 限定；即使 `agentteams.io/worker` label 缺失或错误，正确的 `workerRef`

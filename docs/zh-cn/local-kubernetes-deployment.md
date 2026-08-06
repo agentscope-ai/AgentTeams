@@ -781,7 +781,8 @@ UID/resourceVersion 前置条件删除 NetworkPolicy，再用当前 resourceVers
 因此 foreground 删除 ExecutionSandbox 或 Worker 不会让 Kubernetes GC 抢先移除隔离策略。
 旧版精确 owner 的策略会原地迁移；同名 foreign/malformed 策略不会被接管或删除。Worker watch
 按 `spec.workerRef.name` 字段索引反查，不依赖可漂移的 Worker label；cache List 失败会记录日志
-并回退到未缓存读取。
+并回退到未缓存读取。Runner readiness 通过容器内 `curl 127.0.0.1:8080/healthz` 检查应用，
+不使用可能被 default-deny CNI 拦截的 kubelet-originated HTTP probe，也不为节点网段放宽 ingress。
 
 不要读取或打印任何部署 secret 来验证该边界。开发机可运行使用非敏感 sentinel 的测试；
 它只断言 token inspection 被阻断且不打印 token：

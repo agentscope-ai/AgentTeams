@@ -94,6 +94,14 @@ func (r *TeamReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 		return reconcile.Result{}, nil
 	}
 
+	// When the delete-requested annotation is present but the finalizer has
+	// already been removed, skip normal reconciliation entirely. This
+	// prevents the controller from inadvertently re-populating the Team
+	// status after the user has explicitly requested deletion.
+	if team.Annotations[v1beta1.AnnotationTeamDeleteRequested] == "true" {
+		return reconcile.Result{}, nil
+	}
+
 	if !controllerutil.ContainsFinalizer(&team, finalizerName) {
 		controllerutil.AddFinalizer(&team, finalizerName)
 		if err := r.Update(ctx, &team); err != nil {

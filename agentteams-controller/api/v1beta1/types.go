@@ -47,6 +47,13 @@ const AnnotationEdgeAppliedUUID = "agentteams.io/edge-applied-uuid"
 // Worker so independent Worker reconciles preserve its scoped team storage access.
 const AnnotationWorkerTeamName = "agentteams.io/team-name"
 
+// AnnotationTeamDeleteRequested signals that the Team has been explicitly
+// requested for deletion via the REST API (e.g. `agt delete team`). The
+// controller sets it before initiating the delete so the reconciler can
+// distinguish intentional deletion from normal failure recovery and skip
+// any auto-reconciliation that would otherwise restore the Team.
+const AnnotationTeamDeleteRequested = "agentteams.io/delete-requested"
+
 // AccessEntry declares one cloud-permission grant under a logical
 // service. v1 supported services: "object-storage", "ai-gateway", "ai-registry", "schedulerx3".
 //

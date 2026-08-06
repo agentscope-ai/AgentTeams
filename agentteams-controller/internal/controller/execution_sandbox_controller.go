@@ -402,6 +402,33 @@ func validateExecutionSandboxChildIdentity(
 			sandbox.Name,
 		)
 	}
+	if policy, ok := object.(*networkingv1.NetworkPolicy); ok {
+		if labels[v1beta1.LabelRuntime] != "deepagents-runner" {
+			return fmt.Errorf("execution sandbox NetworkPolicy runtime identity is malformed")
+		}
+		ownerReferences := policy.GetOwnerReferences()
+		if len(ownerReferences) == 0 {
+			if policy.GetAnnotations()[v1beta1.AnnotationExecutionSandboxUID] != string(sandbox.UID) {
+				return fmt.Errorf("execution sandbox NetworkPolicy UID binding is foreign or malformed")
+			}
+			return nil
+		}
+
+		// Previous controller versions created the policy with one controller
+		// owner reference. Accept only that exact legacy identity so the next
+		// in-place update can migrate it outside the garbage-collection graph.
+		if len(ownerReferences) != 1 ||
+			(policy.GetAnnotations()[v1beta1.AnnotationExecutionSandboxUID] != "" &&
+				policy.GetAnnotations()[v1beta1.AnnotationExecutionSandboxUID] != string(sandbox.UID)) {
+			return fmt.Errorf("execution sandbox NetworkPolicy has foreign or malformed legacy ownership")
+		}
+		owner := metav1.GetControllerOf(policy)
+		if owner == nil || owner.APIVersion != v1beta1.SchemeGroupVersion.String() || owner.Kind != "ExecutionSandbox" ||
+			owner.Name != sandbox.Name || owner.UID != sandbox.UID || !metav1.IsControlledBy(policy, sandbox) {
+			return fmt.Errorf("execution sandbox NetworkPolicy has foreign or malformed legacy ownership")
+		}
+		return nil
+	}
 	owner := metav1.GetControllerOf(object)
 	if owner == nil || owner.APIVersion != v1beta1.SchemeGroupVersion.String() || owner.Kind != "ExecutionSandbox" ||
 		owner.Name != sandbox.Name || owner.UID != sandbox.UID || !metav1.IsControlledBy(object, sandbox) {
@@ -503,8 +530,6 @@ func buildExecutionSandboxDefaultDenyPolicy(
 	sandbox *v1beta1.ExecutionSandbox,
 	controllerName string,
 ) *networkingv1.NetworkPolicy {
-	controller := true
-	blockOwnerDeletion := true
 	policy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sandbox.Name,
@@ -515,14 +540,9 @@ func buildExecutionSandboxDefaultDenyPolicy(
 				v1beta1.LabelWorker:           sandbox.Spec.WorkerRef.Name,
 				v1beta1.LabelRuntime:          "deepagents-runner",
 			},
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion:         v1beta1.SchemeGroupVersion.String(),
-				Kind:               "ExecutionSandbox",
-				Name:               sandbox.Name,
-				UID:                sandbox.UID,
-				Controller:         &controller,
-				BlockOwnerDeletion: &blockOwnerDeletion,
-			}},
+			Annotations: map[string]string{
+				v1beta1.AnnotationExecutionSandboxUID: string(sandbox.UID),
+			},
 		},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{
@@ -665,8 +685,32 @@ func (r *ExecutionSandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Owns(&corev1.Pod{}, builder.WithPredicates(PodLifecyclePredicates(v1beta1.LabelExecutionSandbox, r.ControllerName))).
 		Owns(&corev1.Service{}, builder.WithPredicates(ExecutionSandboxChildPredicates(r.ControllerName))).
-		Owns(&networkingv1.NetworkPolicy{}, builder.WithPredicates(ExecutionSandboxChildPredicates(r.ControllerName))).
+		Watches(
+			&networkingv1.NetworkPolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.executionSandboxForNetworkPolicy),
+			builder.WithPredicates(ExecutionSandboxChildPredicates(r.ControllerName)),
+		).
 		Complete(r)
+}
+
+func (r *ExecutionSandboxReconciler) executionSandboxForNetworkPolicy(
+	_ context.Context,
+	object client.Object,
+) []reconcile.Request {
+	if object == nil {
+		return nil
+	}
+	labels := object.GetLabels()
+	sandboxName := labels[v1beta1.LabelExecutionSandbox]
+	if labels[v1beta1.LabelController] != r.ControllerName ||
+		labels[v1beta1.LabelWorker] == "" ||
+		labels[v1beta1.LabelRuntime] != "deepagents-runner" ||
+		sandboxName == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: client.ObjectKey{
+		Name: sandboxName, Namespace: object.GetNamespace(),
+	}}}
 }
 
 func (r *ExecutionSandboxReconciler) executionSandboxesForWorker(
@@ -769,7 +813,7 @@ func ExecutionSandboxChildPredicates(controllerName string) predicate.Predicate 
 	}
 	return predicate.Funcs{
 		CreateFunc:  func(e event.CreateEvent) bool { return matches(e.Object) },
-		UpdateFunc:  func(e event.UpdateEvent) bool { return matches(e.ObjectNew) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return matches(e.ObjectOld) || matches(e.ObjectNew) },
 		DeleteFunc:  func(e event.DeleteEvent) bool { return matches(e.Object) },
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
@@ -901,10 +945,12 @@ func buildExecutionSandboxResources(
 
 	policy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            sandbox.Name,
-			Namespace:       sandbox.Namespace,
-			Labels:          labels,
-			OwnerReferences: []metav1.OwnerReference{owner},
+			Name:      sandbox.Name,
+			Namespace: sandbox.Namespace,
+			Labels:    labels,
+			Annotations: map[string]string{
+				v1beta1.AnnotationExecutionSandboxUID: string(sandbox.UID),
+			},
 		},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{

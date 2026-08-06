@@ -95,6 +95,122 @@ func TestExecutionSandboxOwnershipPredicatesRejectForeignEvents(t *testing.T) {
 	}
 }
 
+func TestExecutionSandboxNetworkPolicyWatchMapsManagedPolicyWithoutOwnerReference(t *testing.T) {
+	policy := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: "exec-one", Namespace: "ns-a",
+		Labels: map[string]string{
+			v1beta1.LabelController:       "ctl-a",
+			v1beta1.LabelExecutionSandbox: "exec-one",
+			v1beta1.LabelWorker:           "researcher",
+			v1beta1.LabelRuntime:          "deepagents-runner",
+		},
+		Annotations: map[string]string{v1beta1.AnnotationExecutionSandboxUID: "sandbox-uid"},
+	}}
+	r := &ExecutionSandboxReconciler{ControllerName: "ctl-a"}
+
+	requests := r.executionSandboxForNetworkPolicy(context.Background(), policy)
+
+	if len(requests) != 1 || requests[0].NamespacedName != (types.NamespacedName{Name: "exec-one", Namespace: "ns-a"}) {
+		t.Fatalf("NetworkPolicy requests=%#v", requests)
+	}
+	policy.Labels[v1beta1.LabelController] = "ctl-b"
+	if requests := r.executionSandboxForNetworkPolicy(context.Background(), policy); len(requests) != 0 {
+		t.Fatalf("foreign NetworkPolicy enqueued sandbox: %#v", requests)
+	}
+}
+
+func TestValidateExecutionSandboxManagedNetworkPolicyIdentity(t *testing.T) {
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "exec-one", Namespace: "ns-a", UID: "sandbox-uid"},
+		Spec:       v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}},
+	}
+	policy := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: sandbox.Name, Namespace: sandbox.Namespace,
+		Labels: map[string]string{
+			v1beta1.LabelController:       "ctl-a",
+			v1beta1.LabelExecutionSandbox: sandbox.Name,
+			v1beta1.LabelWorker:           sandbox.Spec.WorkerRef.Name,
+			v1beta1.LabelRuntime:          "deepagents-runner",
+		},
+		Annotations: map[string]string{v1beta1.AnnotationExecutionSandboxUID: string(sandbox.UID)},
+	}}
+	if err := validateExecutionSandboxChildIdentity(policy, sandbox, "ctl-a"); err != nil {
+		t.Fatalf("managed ownerless NetworkPolicy identity rejected: %v", err)
+	}
+	policy.Annotations[v1beta1.AnnotationExecutionSandboxUID] = "replacement-uid"
+	if err := validateExecutionSandboxChildIdentity(policy, sandbox, "ctl-a"); err == nil {
+		t.Fatal("replacement NetworkPolicy binding UID was accepted")
+	}
+}
+
+func TestEnsureExecutionSandboxObjectMigratesExactLegacyNetworkPolicyInPlace(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &v1beta1.ExecutionSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "exec-one", Namespace: "ns-a", UID: "sandbox-uid"},
+		Spec:       v1beta1.ExecutionSandboxSpec{WorkerRef: v1beta1.ExecutionSandboxWorkerRef{Name: "researcher"}},
+	}
+	desired := buildExecutionSandboxDefaultDenyPolicy(sandbox, "ctl-a")
+	legacy := desired.DeepCopy()
+	legacy.UID = "policy-uid"
+	legacy.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: v1beta1.SchemeGroupVersion.String(), Kind: "ExecutionSandbox",
+		Name: sandbox.Name, UID: sandbox.UID,
+		Controller: boolPointer(true), BlockOwnerDeletion: boolPointer(true),
+	}}
+	delete(legacy.Annotations, v1beta1.AnnotationExecutionSandboxUID)
+	stampExecutionSandboxSpecHash(legacy)
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(legacy).Build()
+	r := &ExecutionSandboxReconciler{Client: cl, APIReader: cl, ControllerName: "ctl-a"}
+	if pending, err := r.ensureExecutionSandboxObject(context.Background(), sandbox, desired); err != nil || pending {
+		t.Fatalf("migrate legacy NetworkPolicy pending=%v err=%v", pending, err)
+	}
+	var migrated networkingv1.NetworkPolicy
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(legacy), &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.UID != legacy.UID {
+		t.Fatalf("NetworkPolicy was recreated: UID=%q, want %q", migrated.UID, legacy.UID)
+	}
+	if len(migrated.OwnerReferences) != 0 {
+		t.Fatalf("legacy owner reference was retained: %#v", migrated.OwnerReferences)
+	}
+	if got := migrated.Annotations[v1beta1.AnnotationExecutionSandboxUID]; got != string(sandbox.UID) {
+		t.Fatalf("migrated UID binding=%q, want %q", got, sandbox.UID)
+	}
+
+	foreign := buildExecutionSandboxDefaultDenyPolicy(sandbox, "ctl-a")
+	foreign.UID = "foreign-policy-uid"
+	foreign.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: v1beta1.SchemeGroupVersion.String(), Kind: "ExecutionSandbox",
+		Name: sandbox.Name, UID: "replacement-sandbox-uid",
+		Controller: boolPointer(true), BlockOwnerDeletion: boolPointer(true),
+	}}
+	delete(foreign.Annotations, v1beta1.AnnotationExecutionSandboxUID)
+	stampExecutionSandboxSpecHash(foreign)
+	foreignClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
+	foreignReconciler := &ExecutionSandboxReconciler{
+		Client: foreignClient, APIReader: foreignClient, ControllerName: "ctl-a",
+	}
+	foreignDesired := buildExecutionSandboxDefaultDenyPolicy(sandbox, "ctl-a")
+	if _, err := foreignReconciler.ensureExecutionSandboxObject(context.Background(), sandbox, foreignDesired); err == nil {
+		t.Fatal("foreign same-name NetworkPolicy was adopted")
+	}
+	var retained networkingv1.NetworkPolicy
+	if err := foreignClient.Get(context.Background(), client.ObjectKeyFromObject(foreign), &retained); err != nil {
+		t.Fatalf("foreign NetworkPolicy was deleted: %v", err)
+	}
+	if retained.UID != foreign.UID || retained.OwnerReferences[0].UID != "replacement-sandbox-uid" {
+		t.Fatalf("foreign NetworkPolicy was modified: %#v", retained.ObjectMeta)
+	}
+}
+
 func TestExecutionSandboxReconcilerIgnoresForeignAndManualSandboxes(t *testing.T) {
 	for _, labels := range []map[string]string{
 		{v1beta1.LabelController: "ctl-b"},
@@ -1145,6 +1261,12 @@ func TestBuildExecutionSandboxResourcesAreHardenedAndSecretSafe(t *testing.T) {
 	if len(policy.Spec.PolicyTypes) != 2 || len(policy.Spec.Ingress) != 1 || len(policy.Spec.Egress) != 2 {
 		t.Fatalf("network policy must default-deny and add explicit rules: %#v", policy.Spec)
 	}
+	if len(policy.OwnerReferences) != 0 {
+		t.Fatalf("NetworkPolicy must stay outside the Kubernetes GC dependency tree: %#v", policy.OwnerReferences)
+	}
+	if got := policy.Annotations[v1beta1.AnnotationExecutionSandboxUID]; got != string(sandbox.UID) {
+		t.Fatalf("NetworkPolicy sandbox UID binding=%q, want %q", got, sandbox.UID)
+	}
 	ingressPeer := policy.Spec.Ingress[0].From[0].PodSelector
 	if ingressPeer == nil || ingressPeer.MatchLabels[v1beta1.LabelWorker] != "researcher" {
 		t.Fatalf("runner ingress is not restricted to its worker: %#v", policy.Spec.Ingress)
@@ -1539,8 +1661,9 @@ func TestExecutionSandboxReconcilerKeepsTerminatingRunnerIsolated(t *testing.T) 
 	}
 	if len(isolated.Spec.Ingress) != 0 || len(isolated.Spec.Egress) != 0 || len(isolated.Spec.PolicyTypes) != 2 ||
 		isolated.Spec.PodSelector.MatchLabels[v1beta1.LabelExecutionSandbox] != sandbox.Name ||
-		!metav1.IsControlledBy(&isolated, sandbox) {
-		t.Fatalf("terminating Runner policy is not owned default-deny: %#v", isolated)
+		len(isolated.OwnerReferences) != 0 ||
+		isolated.Annotations[v1beta1.AnnotationExecutionSandboxUID] != string(sandbox.UID) {
+		t.Fatalf("terminating Runner policy is not retained default-deny: %#v", isolated)
 	}
 	if err := base.Get(context.Background(), key, &corev1.Secret{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("capability Secret survived ordered revoke: %v", err)
@@ -1841,6 +1964,10 @@ func TestExecutionSandboxReconcilerCreatesIsolatedRunnerResources(t *testing.T) 
 	var policy networkingv1.NetworkPolicy
 	if err := cl.Get(context.Background(), key, &policy); err != nil {
 		t.Fatalf("runner NetworkPolicy: %v", err)
+	}
+	if len(policy.OwnerReferences) != 0 ||
+		policy.Annotations[v1beta1.AnnotationExecutionSandboxUID] != string(sandbox.UID) {
+		t.Fatalf("runner NetworkPolicy has unsafe ownership metadata: %#v", policy.ObjectMeta)
 	}
 	var updated v1beta1.ExecutionSandbox
 	if err := cl.Get(context.Background(), key, &updated); err != nil {
@@ -2445,6 +2572,12 @@ func newExecutionSandboxOwnedChildrenWithPodState(
 	}
 	podDeletingAt := metav1.NewTime(time.Date(2026, 8, 5, 12, 0, 1, 0, time.UTC))
 	immutable := true
+	policyMetadata := metadata("network-policy-uid")
+	policyMetadata.OwnerReferences = nil
+	policyMetadata.Labels[v1beta1.LabelRuntime] = "deepagents-runner"
+	policyMetadata.Annotations = map[string]string{
+		v1beta1.AnnotationExecutionSandboxUID: string(sandbox.UID),
+	}
 	return []client.Object{
 		&corev1.Service{ObjectMeta: metadata("service-uid")},
 		&corev1.Secret{
@@ -2459,7 +2592,7 @@ func newExecutionSandboxOwnedChildrenWithPodState(
 			}
 			return meta
 		}()},
-		&networkingv1.NetworkPolicy{ObjectMeta: metadata("network-policy-uid")},
+		&networkingv1.NetworkPolicy{ObjectMeta: policyMetadata},
 	}
 }
 

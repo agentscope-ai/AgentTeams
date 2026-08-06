@@ -31,6 +31,12 @@ const (
 // its controller removes Runner resources in isolation-safe order.
 const ExecutionSandboxCleanupFinalizer = "agentteams.io/execution-sandbox-cleanup"
 
+// AnnotationExecutionSandboxUID binds an ownerless Runner NetworkPolicy to one
+// exact ExecutionSandbox generation. The policy intentionally stays outside
+// Kubernetes garbage collection so the sandbox finalizer can retain isolation
+// until the Runner Pod is authoritatively absent.
+const AnnotationExecutionSandboxUID = "agentteams.io/execution-sandbox-uid"
+
 // LabelWorkerSvcName records the ClusterIP Service name created for a
 // Worker when spec.serviceEnabled is true. Removed when the service is
 // disabled or deleted.

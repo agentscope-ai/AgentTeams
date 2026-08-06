@@ -75,6 +75,14 @@ func TestExecutionSandboxAPIServerFinalizerRetainsIsolationUntilTerminatingPodIs
 			t.Fatalf("terminating Pod lost %T: %v", object, err)
 		}
 	}
+	var retainedPolicy networkingv1.NetworkPolicy
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(sandbox), &retainedPolicy); err != nil {
+		t.Fatal(err)
+	}
+	if len(retainedPolicy.OwnerReferences) != 0 ||
+		retainedPolicy.Annotations[v1beta1.AnnotationExecutionSandboxUID] != string(sandbox.UID) {
+		t.Fatalf("retained policy has unsafe ownership metadata: %#v", retainedPolicy.ObjectMeta)
+	}
 	var retainedSandbox v1beta1.ExecutionSandbox
 	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(sandbox), &retainedSandbox); err != nil {
 		t.Fatal(err)
@@ -365,7 +373,15 @@ func createExecutionSandboxAPIChildren(t *testing.T, sandbox *v1beta1.ExecutionS
 		pod.Finalizers = []string{"tests.agentteams.io/hold-pod"}
 	}
 	policy := &networkingv1.NetworkPolicy{
-		ObjectMeta: metadata(),
+		ObjectMeta: func() metav1.ObjectMeta {
+			meta := metadata()
+			meta.OwnerReferences = nil
+			meta.Labels[v1beta1.LabelRuntime] = "deepagents-runner"
+			meta.Annotations = map[string]string{
+				v1beta1.AnnotationExecutionSandboxUID: string(sandbox.UID),
+			}
+			return meta
+		}(),
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{v1beta1.LabelExecutionSandbox: sandbox.Name}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},

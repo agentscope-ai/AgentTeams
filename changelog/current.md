@@ -4,3 +4,4 @@ Record image-affecting changes to `manager/`, `worker/`, `copaw/`, `hermes/`, `o
 
 ---
 
+- fix(manager): reject `--mcp-servers` during Worker runtime switches because MCP authorization must be applied separately after the replacement container converges. ([#1053](https://github.com/agentscope-ai/AgentTeams/pull/1053))

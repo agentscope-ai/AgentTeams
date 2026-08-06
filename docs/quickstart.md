@@ -2,7 +2,7 @@
 
 English | [中文](zh-cn/quickstart.md)
 
-This guide follows the recommended local deployment path. You will install AgentTeams, create your first Worker, and complete a task that demonstrates human intervention. Detailed configuration, Kubernetes deployment, and additional use cases will be covered in dedicated guides.
+This guide follows the recommended local deployment path. You will install AgentTeams, create your first Worker, and complete a task that demonstrates human intervention. Dedicated guides cover detailed configuration and Kubernetes deployment; after this guide, continue with [AgentTeams Use Cases](usage/use-cases.md).
 
 ## What you will have
 
@@ -139,6 +139,7 @@ After these checks pass, you have completed the smallest end-to-end AgentTeams w
 ## Next steps
 
 - Read the [AgentTeams Overview](overview.md) for the roles, components, and deployment modes.
+- Try software delivery, research, localization, incident analysis, long-running collaboration, and Skill-driven repository maintenance in [AgentTeams Use Cases](usage/use-cases.md).
 - Use the [Local Deployment Guide](usage/deployment/local.md) for model, port, domain, storage, runtime, and automated installation options.
 - Continue with the [Manager Guide](usage/manager-guide.md) and [Worker Guide](usage/worker-guide.md).
 - Use [Declarative Resource Management](usage/resource-management.md) to learn the `agt` CLI and YAML workflows.

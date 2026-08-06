@@ -2,7 +2,7 @@
 
 [English](../quickstart.md) | 中文
 
-本指南使用推荐的本地部署路径，带你安装 AgentTeams、创建第一个 Worker，并完成一个可以人工介入的任务。详细配置、Kubernetes 部署和更多用例将在后续专题文档中说明。
+本指南使用推荐的本地部署路径，带你安装 AgentTeams、创建第一个 Worker，并完成一个可以人工介入的任务。详细配置和 Kubernetes 部署将在专题文档中说明；完成本指南后，可以继续尝试 [AgentTeams 使用案例](usage/use-cases.md)。
 
 ## 完成后你将获得什么
 
@@ -139,6 +139,7 @@ docker ps --filter name=agentteams-worker
 ## 下一步
 
 - 先阅读 [AgentTeams 概览](overview.md)，了解角色、组件和部署方式。
+- 参考 [AgentTeams 使用案例](usage/use-cases.md)，尝试软件交付、研究分析、内容本地化、故障分析、长期项目协作和 Skill 驱动的代码维护。
 - 使用 [本地部署指南](usage/deployment/local.md) 查看模型、端口、域名、存储、运行时和自动化安装选项。
 - 阅读 [Manager 指南](usage/manager-guide.md) 和 [Worker 指南](usage/worker-guide.md)。
 - 使用 [声明式资源管理](usage/resource-management.md) 学习 `agt` CLI 和 YAML。

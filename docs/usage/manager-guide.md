@@ -38,6 +38,8 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
 | `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager engine: **`qwenpaw`** (default, `agentteams-manager-qwenpaw` image) or **`openclaw`** (`agentteams-manager` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
 
+The user-facing Manager runtime choices remain **CoPaw** and **OpenClaw**. The startup entrypoint treats `copaw` as a compatibility alias for `qwenpaw`: the local installer currently writes `copaw`, while Helm uses `qwenpaw`; both select the CoPaw/QwenPaw Python Manager image.
+
 ### QwenPaw Manager (`AGENTTEAMS_MANAGER_RUNTIME=qwenpaw`)
 
 When you choose the QwenPaw Manager at install time, the controller runs the **`agentteams-manager-qwenpaw`** image instead of the OpenClaw-based **`agentteams-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python QwenPaw vs Node OpenClaw). Multi-channel setup and skills follow the QwenPaw workspace conventions under `/root/manager-workspace`.

@@ -69,7 +69,7 @@ For a first evaluation, start with the local path in [Quickstart](quickstart.md)
 
 Manager currently supports:
 
-- **CoPaw**: a Python runtime with the configuration value `copaw`.
+- **CoPaw**: the current QwenPaw-based Python Manager implementation; the canonical value is `qwenpaw`, while the local installer still uses `copaw` as a compatibility alias.
 - **OpenClaw**: a Node.js runtime.
 
 Worker resources support the following runtimes. Available images depend on the installation method and version:
@@ -108,6 +108,7 @@ Production deployments should also use HTTPS, network policies, least-privilege 
 | Goal | Document |
 |---|---|
 | Complete the first task locally | [Quickstart](quickstart.md) |
+| Explore reusable multi-agent workflows | [AgentTeams Use Cases](usage/use-cases.md) |
 | Review every local installation option | [Local Deployment Guide](usage/deployment/local.md) |
 | Deploy a shared instance on Kubernetes | [Kubernetes Deployment Guide](usage/deployment/kubernetes.md) |
 | Understand components and communication | [Architecture](design/architecture.md) |

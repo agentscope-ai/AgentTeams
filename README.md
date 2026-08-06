@@ -426,6 +426,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 |---|---|
 | [docs/overview.md](docs/overview.md) | Product overview, core concepts, and documentation map |
 | [docs/quickstart.md](docs/quickstart.md) | Step-by-step guide |
+| [docs/usage/use-cases.md](docs/usage/use-cases.md) | Software delivery, research, content, incident analysis, and long-running project collaboration examples |
 | [docs/usage/deployment/local.md](docs/usage/deployment/local.md) | Local instance creation, installation options, upgrades, and uninstalling |
 | [docs/design/architecture.md](docs/design/architecture.md) | System architecture deep dive |
 | [docs/usage/manager-guide.md](docs/usage/manager-guide.md) | Manager configuration |
@@ -438,7 +439,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 docker exec -it agentteams-manager cat /var/log/agentteams/manager-agent.log
 ```
 
-See [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) for common issues.
+See [docs/usage/troubleshooting/faq.md](docs/usage/troubleshooting/faq.md) for common issues.
 
 ### Reporting Bugs
 

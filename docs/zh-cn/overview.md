@@ -69,7 +69,7 @@ AgentTeams 适合以下场景：
 
 Manager 当前支持：
 
-- **CoPaw**：Python 运行时；配置值为 `copaw`。
+- **CoPaw**：当前基于 QwenPaw 的 Python Manager 实现；规范配置值为 `qwenpaw`，本地安装器仍使用兼容别名 `copaw`。
 - **OpenClaw**：Node.js 运行时。
 
 Worker 资源支持以下运行时，实际可用镜像取决于安装方式和版本：
@@ -108,6 +108,7 @@ AgentTeams 使用 `Worker`、`Manager`、`Team` 和 `Human` 四类声明式资�
 | 目标 | 文档 |
 |---|---|
 | 在本地跑通第一个任务 | [快速入门](quickstart.md) |
+| 查看可复用的多 Agent 协作案例 | [AgentTeams 使用案例](usage/use-cases.md) |
 | 了解本地安装的全部选项 | [本地部署指南](usage/deployment/local.md) |
 | 在 Kubernetes 中部署共享实例 | [Kubernetes 部署指南](usage/deployment/kubernetes.md) |
 | 理解组件与通信关系 | [架构说明](design/architecture.md) |

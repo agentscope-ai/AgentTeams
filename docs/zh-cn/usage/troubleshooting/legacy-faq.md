@@ -45,8 +45,9 @@ HICLAW_VERSION=v1.0.5 bash <(curl -sSL https://higress.ai/hiclaw/install.sh)
 
 ## Manager Agent 启动超时或失败
 
-安装完成后如果 Manager Agent 迟迟没有响应，或启动失败
-，进容器查看日志：```bash
+安装完成后如果 Manager Agent 迟迟没有响应或启动失败，请进入容器查看日志：
+
+```bash
 docker exec -it hiclaw-manager cat /var/log/hiclaw/manager-agent.log
 ```
 

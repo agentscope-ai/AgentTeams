@@ -70,8 +70,17 @@ spec:
   skills:                          # AgentTeams 内置 skills
     - github-operations
     - git-delegation
-  mcpServers:                      # AgentTeams 内置 MCP Servers（通过 Higress 网关授权）
-    - github
+  mcpServers:                      # mcporter 可调用的 MCP Server（url 为完整网关端点）
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+      transport: http              # `http`（默认，Streamable HTTP）或 `sse`
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
 ```
 
 ### 完整字段说明
@@ -80,17 +89,20 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Worker 名称，全局唯一 |
 | `spec.model` | string | 是 | — | LLM 模型 ID，如 `claude-sonnet-4-6`、`qwen3.5-plus` |
-| `spec.runtime` | string | 否 | `openclaw` | Agent 运行时：`openclaw`、`copaw` 或 `hermes` |
+| `spec.runtime` | string | 否 | `openclaw` | Agent 运行时：`openclaw`、`qwenpaw`、`copaw`（旧版兼容）、`hermes` 或 `openhuman` |
 | `spec.image` | string | 否 | — | 自定义镜像；留空则使用 `AGENTTEAMS_WORKER_IMAGE` / `AGENTTEAMS_COPAW_WORKER_IMAGE` / `AGENTTEAMS_HERMES_WORKER_IMAGE`（默认 `agentteams/agentteams-worker:latest` / `agentteams/agentteams-copaw-worker:latest` / `agentteams/agentteams-hermes-worker:latest`） |
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
 | `spec.skills` | []string | 否 | — | 分配给 Worker 的 skills，由 Manager 统一校验和分发 |
-| `spec.mcpServers` | []string | 否 | — | 内置 MCP Servers 列表，通过 Higress 网关授权 |
+| `spec.mcpServers` | []object | 否 | — | mcporter 可调用的 MCP Server。每项包含：`name`（必填，作为 mcporter-servers.json 中的映射键）、`url`（必填，完整网关端点）和 `transport`（默认 `http`，也可为 `sse`）。Controller 会注入 `Authorization: Bearer <gatewayKey>`；网关侧授权不在本字段范围内。 |
 | `spec.package` | string | 否 | — | 自定义包 URI：`file://`、`http(s)://`、`nacos://`，或上传后由 Controller 解析的 `packages/{name}.zip` |
 | `spec.expose` | []object | 否 | — | 通过 Higress 网关暴露的端口列表（见 [服务发布](#服务发布)） |
 | `spec.channelPolicy` | object | 否 | — | 在默认策略之上增减群聊 @mention 与 DM 的允许/拒绝列表（详见下文「通信策略（Worker 与 Team）」） |
 | `spec.state` | string | 否 | `Running` | 期望生命周期：`Running`、`Sleeping`、`Stopped`，Controller 将实际容器状态调和到此目标 |
+| `spec.resources` | object | 否 | 安装或后端默认值 | Worker Pod 的 CPU/内存 request 和 limit，字段为 `requests.cpu`、`requests.memory`、`limits.cpu`、`limits.memory`，使用 Kubernetes quantity 字符串。 |
+
+修改 `spec.resources` 会更新 Worker 规格并重建受管容器或 Pod。不要在 Worker 正在处理任务时修改资源配置。
 
 ### identity / soul / agents 与 package 的关系
 
@@ -351,7 +363,7 @@ spec:
 | `spec.image` | string | 否 | — | 自定义 Manager 镜像；留空则用部署默认值 |
 | `spec.soul` | string | 否 | — | 自定义 SOUL.md |
 | `spec.agents` | string | 否 | — | 自定义 AGENTS.md |
-| `spec.mcpServers` | []string | 否 | — | 经网关授权的 MCP |
+| `spec.mcpServers` | []object | 否 | — | mcporter 可调用的 MCP Server。每项包含 `name`、`url` 和 `transport`（`http`/`sse`）；网关侧授权不在本字段范围内。 |
 | `spec.package` | string | 否 | — | 包 URI（`file://`、`http(s)://`、`nacos://`） |
 | `spec.state` | string | 否 | `Running` | 期望生命周期：`Running`、`Sleeping`、`Stopped` |
 | `spec.config.heartbeatInterval` | string | 否 | — | 心跳检查间隔（如 `15m`） |
@@ -560,7 +572,7 @@ Nacos URI 格式：`nacos://[user:pass@]host:port/{namespace}/{agentspec-name}[/
 }
 ```
 
-`worker.runtime`（`openclaw`、`copaw` 或 `hermes`）会被 `agt apply worker --zip` 读取，
+`worker.runtime`（`openclaw`、`qwenpaw`、`copaw`（旧版兼容）、`hermes` 或 `openhuman`）会被 `agt apply worker --zip` 读取，
 显式 `--runtime` 优先级更高。
 
 ## 操作方式
@@ -600,7 +612,11 @@ bash install/agentteams-import.sh worker --name alice --package nacos://host:884
 
 # 不带包，直接创建
 bash install/agentteams-import.sh worker --name bob --model claude-sonnet-4-6 \
-    --skills github-operations,git-delegation --mcp-servers github
+    --skills github-operations,git-delegation
+
+# 注意：mcpServers 必须通过 YAML manifest 配置（参见上面的 Worker spec）。
+#       --mcp-servers 参数已经移除；新 schema 要求每个 Server 提供
+#       {name, url, transport}，无法通过 CSV 字符串表达。
 ```
 
 ### agt CLI — 容器内管理
@@ -666,11 +682,36 @@ metadata:
 spec:
   model: claude-sonnet-4-6
   skills: [github-operations, git-delegation]
+  mcpServers:
+    - name: github
+      url: https://gateway.example.com/mcp-servers/github/mcp
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: frontend-dev
+spec:
+  model: claude-sonnet-4-6
+  skills: [github-operations]
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: qa-engineer
+spec:
+  model: claude-sonnet-4-6
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Worker
 metadata:
   name: ops-lead
+spec:
+  model: claude-sonnet-4-6
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: monitor
 spec:
   model: claude-sonnet-4-6
 ---
@@ -693,6 +734,10 @@ spec:
       role: team_leader
     - name: backend-dev
       role: worker
+    - name: frontend-dev
+      role: worker
+    - name: qa-engineer
+      role: worker
 ---
 apiVersion: agentteams.io/v1beta1
 kind: Team
@@ -703,6 +748,8 @@ spec:
   workerMembers:
     - name: ops-lead
       role: team_leader
+    - name: monitor
+      role: worker
 ---
 # --- 人员配置 ---
 apiVersion: agentteams.io/v1beta1

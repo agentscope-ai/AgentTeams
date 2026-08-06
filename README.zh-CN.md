@@ -482,6 +482,7 @@ python scripts/export-debug-log.py --range 1h
 |---|---|
 | [docs/zh-cn/overview.md](docs/zh-cn/overview.md) | 产品概览、核心概念与文档导航 |
 | [docs/zh-cn/quickstart.md](docs/zh-cn/quickstart.md) | 端到端快速入门，含验证检查点 |
+| [docs/zh-cn/usage/use-cases.md](docs/zh-cn/usage/use-cases.md) | 软件交付、研究、内容、故障分析和长期项目协作案例 |
 | [docs/zh-cn/usage/deployment/local.md](docs/zh-cn/usage/deployment/local.md) | 本地实例创建、安装选项、升级与卸载 |
 | [docs/zh-cn/design/architecture.md](docs/zh-cn/design/architecture.md) | 系统架构详解 |
 | [docs/zh-cn/usage/manager-guide.md](docs/zh-cn/usage/manager-guide.md) | Manager 配置与使用 |

@@ -36,9 +36,11 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_DATA_DIR` | 否 | `agentteams-data` | 持久化数据的 Docker 卷名称 |
 | `AGENTTEAMS_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
 | `AGENTTEAMS_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
-| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `openclaw` | Manager 引擎：**`openclaw`**（默认，`agentteams-manager` 镜像）或 **`copaw`**（`agentteams-manager-qwenpaw` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
+| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `qwenpaw` | Manager 引擎：**`qwenpaw`**（默认，`agentteams-manager-qwenpaw` 镜像）或 **`openclaw`**（`agentteams-manager` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
 
-### QwenPaw Manager（原 CoPaw，`AGENTTEAMS_MANAGER_RUNTIME=copaw`）
+用户看到的 Manager runtime 选项仍是 **CoPaw** 和 **OpenClaw**。启动入口会把 `copaw` 作为 `qwenpaw` 的兼容别名：本地安装器当前写入 `copaw`，Helm 当前使用 `qwenpaw`，两者都启动 CoPaw/QwenPaw Python Manager 镜像。
+
+### QwenPaw Manager（`AGENTTEAMS_MANAGER_RUNTIME=qwenpaw`）
 
 安装时若选择 QwenPaw Manager，controller 会拉起 **`agentteams-manager-qwenpaw`** 镜像而非基于 OpenClaw 的 **`agentteams-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
 
@@ -275,6 +277,36 @@ docker run --rm -v agentteams-data:/data -v $(pwd):/backup ubuntu \
 ```bash
 docker run --rm -v agentteams-data:/data -v $(pwd):/backup ubuntu \
   tar xzf /backup/agentteams-backup-YYYYMMDD.tar.gz -C /
+```
+
+### 目录结构
+
+系统使用 Docker 卷保存持久化数据，也可以选择共享宿主机目录：
+
+- `agentteams-data` Docker 卷：保存所有系统持久化数据。
+- 宿主机 `$HOME`：可以选择挂载到容器内的 `/host-share`。
+- 容器内原始宿主机路径（例如 `/home/zhangty`）：启用共享后，通过符号链接指向 `/host-share`。
+- 启用共享后，宿主机与容器可以使用一致的文件路径。
+
+目录共享使 Agent 能以与宿主机相同的路径直接读写文件，便于传递和处理文件。
+
+### 使用示例
+
+```bash
+# 示例 1：安装时启用主目录共享（推荐）
+AGENTTEAMS_LLM_API_KEY=your-key-here ./install/agentteams-install.sh manager
+
+# 示例 2：把需要 Agent 访问的文件放入主目录
+mkdir -p ~/project-inputs/
+echo "Sample data" > ~/project-inputs/sample.txt
+
+# 示例 3：Agent 在容器内使用与宿主机相同的路径
+# 宿主机路径：/home/zhangty/project-inputs/sample.txt
+# 容器路径：/home/zhangty/project-inputs/sample.txt（通过符号链接）
+
+# 示例 4：在 Agent 配置中引用宿主机文件
+# 宿主机：/home/zhangty/data/input.txt
+# 容器：/home/zhangty/data/input.txt（通过符号链接保持一致）
 ```
 
 ## YOLO 模式

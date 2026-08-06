@@ -106,12 +106,12 @@ npm install
 ```
 
 **预期结果**：
-```
+```text
 added 756 packages, and audited 757 packages in 3m
 ```
 
 > 💡 **提示**：如下警告可忽略：
-> ```
+> ```text
 > To address all issues (including breaking changes), run:
 >   npm audit fix --force
 > ```
@@ -123,7 +123,7 @@ openclaw plugins install -l .
 ```
 
 **预期结果**：
-```
+```text
 Linked plugin path: /root/agentteams-fs/agents/xxxxxx/plugins/openclaw-channel-dingtalk
 Restart the gateway to load plugins.
 ```
@@ -274,7 +274,7 @@ vi /root/agentteams-fs/agents/fbi-claw/openclaw.json
 }
 ```
 修改后注意保存！
-强烈建议验证通过后修改配置文件中的dmPolicy控制机器人只能和你指定的人和钉群聊天，详见[白名单模式](### 白名单模式)
+强烈建议验证通过后修改配置文件中的 `dmPolicy`，控制机器人只能和你指定的人和钉群聊天，详见[白名单模式](#白名单模式)。
 
 ### 5. 重启 Gateway
 
@@ -282,8 +282,18 @@ vi /root/agentteams-fs/agents/fbi-claw/openclaw.json
 docker restart <你的agt worker 容器id>
 ```
 使用docker ps -a查看容器信息，例如 docker ps -a 输出如下：
+
+```text
 799c1ca06455  <镜像>  <时间>   8001/tcp, 8080/tcp, 8443/tcp agentteams-worker-fbi-claw
+```
+
 则docker restart agentteams-worker-fbi-claw 重启这个worker容器
+
+---
+
+## Docker 持久化配置
+
+插件源码和 `openclaw.json` 位于 Worker 的 AgentTeams 数据目录中。请确认该目录使用 AgentTeams 持久化数据卷，不要只把插件安装到 `/root/agentteams-fs/agents/<worker-name>` 之外的临时容器路径。
 
 ---
 
@@ -296,11 +306,11 @@ docker restart <你的agt worker 容器id>
 docker exec -it <你的agt worker 容器id> /bin/bash
 
 # 查看插件是否加载成功
-openclaw plugins list| grep dingtalk
+openclaw plugins list | grep dingtalk
 ```
 
 **预期结果**：
-```
+```text
 │ dingtalk │ loaded │ ...
 ```
 
@@ -322,6 +332,18 @@ cat ~/.openclaw/openclaw.json
 1. 将机器人添加到群聊
 2. 在群中 @机器人 发送消息
 3. 验证机器人响应
+
+---
+
+## 常见问题
+
+如果机器人没有响应，请依次检查：
+
+1. 确认钉钉应用已经发布，并使用 Stream 模式。
+2. 确认 `clientId`、`clientSecret`、`robotCode`、`corpId` 和 `agentId` 与机器人凭证一致。
+3. 执行 `openclaw plugins list | grep dingtalk`，确认插件状态为 `loaded`。
+4. 检查 Worker 容器日志中是否存在插件或 Channel 错误。
+5. 确认 `dmPolicy`、`groupPolicy` 及其白名单允许当前用户或群聊。
 
 ---
 

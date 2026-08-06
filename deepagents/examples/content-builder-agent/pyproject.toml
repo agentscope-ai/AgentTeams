@@ -1,0 +1,19 @@
+[project]
+name = "content-builder-agent"
+version = "0.1.0"
+description = "A content writer agent configured entirely through files on disk"
+requires-python = ">=3.11"
+dependencies = [
+    "deepagents>=0.6.12",
+    "google-genai>=2.10.0",
+    "pillow>=12.3.0",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "tavily-python>=0.7.26",
+]
+
+[dependency-groups]
+dev = []
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"

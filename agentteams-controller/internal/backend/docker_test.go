@@ -387,6 +387,7 @@ func TestDockerCreatePullsImage(t *testing.T) {
 type capturedCreateBodies struct {
 	srv    *httptest.Server
 	images []string
+	bodies []dockerCreatePayload
 }
 
 func (c *capturedCreateBodies) lastImage() string {
@@ -405,11 +406,10 @@ func captureCreateImagesServer(t *testing.T) *capturedCreateBodies {
 		json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-x"})
 	})
 	mux.HandleFunc("POST /containers/create", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
+		var body dockerCreatePayload
 		json.NewDecoder(r.Body).Decode(&body)
-		if img, ok := body["Image"].(string); ok {
-			captured.images = append(captured.images, img)
-		}
+		captured.bodies = append(captured.bodies, body)
+		captured.images = append(captured.images, body.Image)
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-test"})
 	})
@@ -428,6 +428,30 @@ func captureCreateImagesServer(t *testing.T) *capturedCreateBodies {
 
 	captured.srv = httptest.NewServer(mux)
 	return captured
+}
+
+func TestDockerCreateDeepAgentsUsesPersistentNamedStateVolume(t *testing.T) {
+	captured := captureCreateImagesServer(t)
+	defer captured.srv.Close()
+	b := &DockerBackend{
+		config: DockerConfig{
+			DeepAgentsWorkerImage: "agentteams/deepagents-worker:latest",
+			DefaultNetwork:        "agentteams-net",
+		},
+		containerPrefix: "agentteams-worker-",
+		client:          &http.Client{Transport: &testTransport{serverURL: captured.srv.URL}},
+	}
+
+	if _, err := b.Create(context.Background(), CreateRequest{Name: "alice", Runtime: RuntimeDeepAgents}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if len(captured.bodies) != 1 || captured.bodies[0].HostConfig == nil {
+		t.Fatalf("create payload = %#v", captured.bodies)
+	}
+	want := "agentteams-worker-alice-state:/var/lib/agentteams/deepagents"
+	if !containsString(captured.bodies[0].HostConfig.Binds, want) {
+		t.Fatalf("binds = %#v, want %q", captured.bodies[0].HostConfig.Binds, want)
+	}
 }
 
 func TestDockerStatus(t *testing.T) {
@@ -556,6 +580,25 @@ func TestDockerDeleteRemovesWorkerAuthVolume(t *testing.T) {
 	}
 }
 
+func TestDockerDeleteRuntimeStateRemovesDeepAgentsStateVolume(t *testing.T) {
+	var deletedVolume string
+	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /volumes/{name}", func(w http.ResponseWriter, r *http.Request) {
+		deletedVolume = r.PathValue("name")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	if err := b.DeleteRuntimeState(context.Background(), "alice"); err != nil {
+		t.Fatalf("DeleteRuntimeState failed: %v", err)
+	}
+	if deletedVolume != "agentteams-worker-alice-state" {
+		t.Fatalf("deleted volume=%q", deletedVolume)
+	}
+}
+
 func TestDockerDeleteNotFound(t *testing.T) {
 	srv := mockDockerAPI(t)
 	defer srv.Close()
@@ -604,11 +647,13 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw_uses_copaw_image", RuntimeCopaw, "", "agentteams/copaw-worker:latest"},
 		{"explicit_hermes_uses_hermes_image", RuntimeHermes, "", "agentteams/hermes-worker:latest"},
 		{"explicit_qwenpaw_uses_qwenpaw_image", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest"},
+		{"explicit_deepagents_uses_deepagents_image", RuntimeDeepAgents, "", "agentteams/deepagents-worker:latest"},
 		{"explicit_openclaw_uses_worker_image", RuntimeOpenClaw, "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_no_fallback_uses_worker_image", "", "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_copaw_fallback_uses_copaw_image", "", RuntimeCopaw, "agentteams/copaw-worker:latest"},
 		{"empty_runtime_with_hermes_fallback_uses_hermes_image", "", RuntimeHermes, "agentteams/hermes-worker:latest"},
 		{"empty_runtime_with_qwenpaw_fallback_uses_qwenpaw_image", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest"},
+		{"empty_runtime_with_deepagents_fallback_uses_deepagents_image", "", RuntimeDeepAgents, "agentteams/deepagents-worker:latest"},
 		{"explicit_runtime_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "agentteams/worker-agent:latest"},
 	}
 	for _, tc := range cases {
@@ -618,11 +663,12 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 
 			b := &DockerBackend{
 				config: DockerConfig{
-					WorkerImage:        "agentteams/worker-agent:latest",
-					CopawWorkerImage:   "agentteams/copaw-worker:latest",
-					HermesWorkerImage:  "agentteams/hermes-worker:latest",
-					QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-					DefaultNetwork:     "agentteams-net",
+					WorkerImage:           "agentteams/worker-agent:latest",
+					CopawWorkerImage:      "agentteams/copaw-worker:latest",
+					HermesWorkerImage:     "agentteams/hermes-worker:latest",
+					QwenPawWorkerImage:    "agentteams/qwenpaw-worker:latest",
+					DeepAgentsWorkerImage: "agentteams/deepagents-worker:latest",
+					DefaultNetwork:        "agentteams-net",
 				},
 				containerPrefix: "agentteams-worker-",
 				client: &http.Client{

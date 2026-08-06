@@ -72,6 +72,8 @@ type RuntimeProjectionConfig struct {
 	StorageBucket             string
 	StorageEndpoint           string
 	AIGatewayURL              string
+	MatrixHomeserverURL       string
+	MatrixEncryptionEnabled   bool
 	AgentIdentityDataEndpoint string
 }
 
@@ -79,6 +81,7 @@ type RuntimeProjectionConfig struct {
 // RuntimeName, not Name, is the object-storage member key.
 type MemberRuntimeConfigDeployRequest struct {
 	Name        string
+	UID         string
 	RuntimeName string
 	Runtime     string
 	Role        string
@@ -107,6 +110,9 @@ type MemberRuntimeConfigDeployRequest struct {
 	TeamAdminName     string
 	TeamAdminMatrixID string
 	TeamMembers       []RuntimeConfigTeamMember
+	// AgentUserIDs is the controller's complete current managed-agent Matrix
+	// identity snapshot. DeepAgents uses it as a deny-list for Human approval.
+	AgentUserIDs []string
 
 	// DropTeamContext forces a standalone runtime.yaml even when an older
 	// team-scoped runtime.yaml exists for the same runtime name.

@@ -5,6 +5,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // strPtr / boolPtr are tiny helpers used by the cross-cluster deployment
@@ -199,5 +203,136 @@ func TestManagerSpec_DeepCopyResources(t *testing.T) {
 	src.Resources.Limits.Memory = "6Gi"
 	if cp.Resources.Limits.Memory != "5Gi" {
 		t.Fatalf("DeepCopy aliased ManagerSpec.Resources: %v", cp.Resources)
+	}
+}
+
+func TestWorkerSpec_DeepAgentsRuntimeConfigRoundTripAndDeepCopy(t *testing.T) {
+	src := WorkerSpec{
+		Model:   "qwen-max",
+		Runtime: "deepagents",
+		RuntimeConfig: &WorkerRuntimeConfig{
+			DeepAgents: &DeepAgentsRuntimeConfig{
+				Approvals: DeepAgentsApprovalConfig{
+					FileWrites:   "required",
+					MCPDefault:   "required",
+					Coordinators: []string{"@lead:example.org"},
+					MCPRules: []DeepAgentsMCPApprovalRule{{
+						Server: "github",
+						Tool:   "get_issue",
+						Mode:   "notRequired",
+					}},
+				},
+				Execution: DeepAgentsExecutionConfig{
+					Mode:        "sandbox",
+					IdleTimeout: "30m",
+					MaxLifetime: "8h",
+					Resources: &ExecutionSandboxResourceRequirements{
+						Requests: ExecutionSandboxResourceValues{CPU: "100m", Memory: "128Mi", EphemeralStorage: "512Mi"},
+						Limits:   ExecutionSandboxResourceValues{CPU: "1", Memory: "1Gi", EphemeralStorage: "4Gi"},
+					},
+					Egress: []DeepAgentsEgressRule{{
+						CIDR:  "10.96.0.10/32",
+						Ports: []int32{53, 443},
+					}},
+				},
+			},
+		},
+	}
+
+	payload, err := json.Marshal(src)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	jsonText := string(payload)
+	for _, want := range []string{
+		`"runtimeConfig"`, `"deepagents"`, `"fileWrites":"required"`,
+		`"mcpDefault":"required"`, `"idleTimeout":"30m"`,
+		`"maxLifetime":"8h"`, `"cidr":"10.96.0.10/32"`,
+	} {
+		if !strings.Contains(jsonText, want) {
+			t.Errorf("JSON missing %q: %s", want, jsonText)
+		}
+	}
+
+	var roundTripped WorkerSpec
+	if err := json.Unmarshal(payload, &roundTripped); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(roundTripped, src) {
+		t.Fatalf("round trip mismatch\n got: %#v\nwant: %#v", roundTripped, src)
+	}
+
+	cloned := *src.DeepCopy()
+	src.RuntimeConfig.DeepAgents.Approvals.Coordinators[0] = "@mutated:example.org"
+	src.RuntimeConfig.DeepAgents.Approvals.MCPRules[0].Tool = "mutated"
+	src.RuntimeConfig.DeepAgents.Execution.Resources.Requests.CPU = "900m"
+	src.RuntimeConfig.DeepAgents.Execution.Egress[0].Ports[0] = 1
+	got := cloned.RuntimeConfig.DeepAgents
+	if got.Approvals.Coordinators[0] != "@lead:example.org" ||
+		got.Approvals.MCPRules[0].Tool != "get_issue" ||
+		got.Execution.Resources.Requests.CPU != "100m" ||
+		got.Execution.Egress[0].Ports[0] != 53 {
+		t.Fatalf("DeepCopy aliased DeepAgents runtime config: %#v", got)
+	}
+}
+
+func TestWorkerStatus_DeepCopyConditions(t *testing.T) {
+	src := WorkerStatus{Conditions: []metav1.Condition{{
+		Type:    "RuntimeConfigReady",
+		Status:  metav1.ConditionTrue,
+		Reason:  "Projected",
+		Message: "runtime config is available",
+	}}}
+	cloned := *src.DeepCopy()
+	src.Conditions[0].Message = "mutated"
+	if got := cloned.Conditions[0].Message; got != "runtime config is available" {
+		t.Fatalf("DeepCopy aliased WorkerStatus.Conditions: %q", got)
+	}
+}
+
+func TestExecutionSandboxRegisteredAndDeepCopied(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	obj, err := scheme.New(SchemeGroupVersion.WithKind("ExecutionSandbox"))
+	if err != nil {
+		t.Fatalf("ExecutionSandbox not registered: %v", err)
+	}
+	if _, ok := obj.(*ExecutionSandbox); !ok {
+		t.Fatalf("registered object type=%T, want *ExecutionSandbox", obj)
+	}
+
+	now := metav1.Now()
+	src := &ExecutionSandbox{
+		Spec: ExecutionSandboxSpec{
+			WorkerRef: ExecutionSandboxWorkerRef{Name: "researcher", UID: "worker-uid"},
+			SessionID: "thread-hash",
+			Image:     "runner:v1",
+			Resources: &ExecutionSandboxResourceRequirements{
+				Requests: ExecutionSandboxResourceValues{CPU: "100m", Memory: "128Mi", EphemeralStorage: "512Mi"},
+				Limits:   ExecutionSandboxResourceValues{EphemeralStorage: "4Gi"},
+			},
+			Egress: []DeepAgentsEgressRule{{CIDR: "10.96.0.10/32", Ports: []int32{53}}},
+		},
+		Status: ExecutionSandboxStatus{
+			Phase:         "Ready",
+			LastHeartbeat: &now,
+			ExpiresAt:     &now,
+			Conditions:    []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}},
+		},
+	}
+	cloned := src.DeepCopy()
+	cloned.Spec.Resources.Requests.EphemeralStorage = "1Gi"
+	if src.Spec.Resources.Requests.EphemeralStorage != "512Mi" {
+		t.Fatalf("ExecutionSandbox DeepCopy aliased resources: %#v", cloned.Spec.Resources)
+	}
+	src.Spec.Resources.Requests.CPU = "900m"
+	src.Spec.Egress[0].Ports[0] = 443
+	src.Status.LastHeartbeat.Time = src.Status.LastHeartbeat.Add(time.Hour)
+	src.Status.Conditions[0].Type = "Mutated"
+	if cloned.Spec.Resources.Requests.CPU != "100m" || cloned.Spec.Egress[0].Ports[0] != 53 ||
+		cloned.Status.Conditions[0].Type != "Ready" || cloned.Status.LastHeartbeat.Equal(src.Status.LastHeartbeat) {
+		t.Fatalf("ExecutionSandbox DeepCopy aliased source: %#v", cloned)
 	}
 }

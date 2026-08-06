@@ -1,0 +1,19 @@
+{{- if and .Values.deepagents.enabled .Values.deepagents.postgresql.enabled }}
+{{- $comp := dict "root" . "component" "deepagents-postgresql" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentteams.deepagents.postgresqlFullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "agentteams.component.selectorLabels" $comp | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+{{- end }}

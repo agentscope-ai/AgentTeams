@@ -31,11 +31,12 @@ const (
 
 // Supported worker runtimes.
 const (
-	RuntimeOpenClaw  = "openclaw"
-	RuntimeCopaw     = "copaw"
-	RuntimeHermes    = "hermes"
-	RuntimeOpenHuman = "openhuman"
-	RuntimeQwenPaw   = "qwenpaw"
+	RuntimeOpenClaw   = "openclaw"
+	RuntimeCopaw      = "copaw"
+	RuntimeHermes     = "hermes"
+	RuntimeOpenHuman  = "openhuman"
+	RuntimeQwenPaw    = "qwenpaw"
+	RuntimeDeepAgents = "deepagents"
 )
 
 const (
@@ -60,7 +61,7 @@ func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
 // ValidRuntime reports whether r is a recognized runtime value.
 // An empty string is valid — backends resolve it via ResolveRuntime.
 func ValidRuntime(r string) bool {
-	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw
+	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeDeepAgents
 }
 
 // ResolveRuntime returns the effective runtime for a backend request.
@@ -148,7 +149,7 @@ type CreateRequest struct {
 	Name    string            `json:"name"`
 	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
-	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "qwenpaw"
+	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "openhuman" | "qwenpaw" | "deepagents"
 	// RuntimeFallback is the value used by Backend.Create when Runtime is
 	// empty, before falling back to RuntimeOpenClaw. Manager / Worker
 	// reconcilers populate this from AGENTTEAMS_MANAGER_RUNTIME /
@@ -345,4 +346,11 @@ type WorkerBackend interface {
 // worker's file-projected ServiceAccount token without recreating it.
 type AuthTokenProjector interface {
 	ProjectAuthToken(ctx context.Context, name, token string) error
+}
+
+// RuntimeStateCleaner is implemented by backends with state that must survive
+// ordinary container replacement but be removed when the owning Worker CR is
+// finally deleted.
+type RuntimeStateCleaner interface {
+	DeleteRuntimeState(ctx context.Context, name string) error
 }

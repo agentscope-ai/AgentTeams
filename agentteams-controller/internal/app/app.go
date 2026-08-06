@@ -405,8 +405,7 @@ func (a *App) initControllerManager(ctx context.Context) error {
 	return err
 }
 
-// initFieldIndexers registers the Team membership reverse lookup used by auth
-// enrichment, REST validation, and Worker-triggered Team reconciliation.
+// initFieldIndexers registers reverse lookups before controllers start.
 func (a *App) initFieldIndexers(ctx context.Context) error {
 	if a.mgr == nil {
 		return nil
@@ -426,6 +425,20 @@ func (a *App) initFieldIndexers(ctx context.Context) error {
 		return names
 	}); err != nil {
 		return fmt.Errorf("index team workerMembers name: %w", err)
+	}
+	if err := idx.IndexField(
+		ctx,
+		&v1beta1.ExecutionSandbox{},
+		controller.ExecutionSandboxWorkerRefNameField,
+		func(obj crclient.Object) []string {
+			sandbox, ok := obj.(*v1beta1.ExecutionSandbox)
+			if !ok || sandbox.Spec.WorkerRef.Name == "" {
+				return nil
+			}
+			return []string{sandbox.Spec.WorkerRef.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("index execution sandbox workerRef name: %w", err)
 	}
 	return nil
 }
@@ -518,14 +531,22 @@ func (a *App) initServiceLayer(_ context.Context) error {
 	}
 
 	a.deployer = service.NewDeployer(service.DeployerConfig{
-		AgentConfig:     a.agentGen,
-		OSS:             a.oss,
-		Executor:        a.shell,
-		Packages:        a.packages,
-		ManagerConfig:   a.managerConfig,
-		AgentFSDir:      cfg.AgentFSDir(),
-		WorkerAgentDir:  cfg.WorkerAgentDir(),
-		MatrixDomain:    cfg.MatrixDomain,
+		AgentConfig:    a.agentGen,
+		OSS:            a.oss,
+		Executor:       a.shell,
+		Packages:       a.packages,
+		ManagerConfig:  a.managerConfig,
+		AgentFSDir:     cfg.AgentFSDir(),
+		WorkerAgentDir: cfg.WorkerAgentDir(),
+		MatrixDomain:   cfg.MatrixDomain,
+		RuntimeProjection: service.RuntimeProjectionConfig{
+			StorageProvider:         cfg.StorageProvider,
+			StorageBucket:           cfg.OSSBucket,
+			StorageEndpoint:         cfg.WorkerEnv.FSEndpoint,
+			AIGatewayURL:            cfg.WorkerEnv.AIGatewayURL,
+			MatrixHomeserverURL:     cfg.WorkerEnv.MatrixURL,
+			MatrixEncryptionEnabled: cfg.MatrixE2EE,
+		},
 		NacosCredClient: a.credProvider,
 	})
 
@@ -567,6 +588,19 @@ func (a *App) initReconcilers(_ context.Context) error {
 		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
+	}
+	if a.cfg.KubeMode == "incluster" {
+		if err := (&controller.ExecutionSandboxReconciler{
+			Client:           a.mgr.GetClient(),
+			APIReader:        a.mgr.GetAPIReader(),
+			RunnerImage:      a.cfg.DeepAgentsRunnerImage,
+			ControllerName:   a.cfg.ControllerName,
+			DefaultRuntime:   a.cfg.DefaultWorkerRuntime,
+			EgressCeilings:   a.cfg.DeepAgentsSandboxEgressCeilings,
+			EphemeralStorage: a.cfg.DeepAgentsSandboxEphemeralStorage,
+		}).SetupWithManager(a.mgr); err != nil {
+			return fmt.Errorf("setup ExecutionSandboxReconciler: %w", err)
+		}
 	}
 
 	if _, err := (&controller.TeamReconciler{
@@ -644,7 +678,9 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		MatrixConfig:   a.cfg.MatrixConfig(),
 		Provisioner:    a.provisioner,
 
-		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,
+		DefaultWorkerRuntime:              a.cfg.DefaultWorkerRuntime,
+		DeepAgentsSandboxEphemeralStorage: a.cfg.DeepAgentsSandboxEphemeralStorage,
+		DeepAgentsSandboxEgressCeilings:   a.cfg.DeepAgentsSandboxEgressCeilings,
 	})
 	return nil
 }
@@ -737,11 +773,11 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	}
 
 	// Scope the informer cache to objects owned by this controller instance.
-	// Cross-instance Worker/Manager/Team/Human CRs and their Pods become
-	// invisible to the reconcilers, preventing double-reconcile when two
-	// AgentTeams releases share a namespace. Writers (initializer, HTTP API,
-	// team reconciler, file watcher) stamp the same label on create, so
-	// this is closed loop.
+	// Cross-instance Worker/Manager/Team/Human/ExecutionSandbox CRs and their
+	// Pods become invisible to the reconcilers, preventing double-reconcile
+	// when two AgentTeams releases share a namespace. Writers (initializer,
+	// HTTP API, team reconciler, file watcher) stamp the same label on create,
+	// so this is closed loop.
 	//
 	// Note: production Pod CRUD in K8sBackend still goes through the direct
 	// kubernetes.Interface client (see internal/backend/kubernetes.go), not
@@ -749,13 +785,7 @@ func (a *App) startInCluster() (*rest.Config, error) {
 	// stream feeding the Pod .Watches source — it does not affect Get/
 	// Create/Delete by exact name.
 	sel := labels.SelectorFromSet(labels.Set{v1beta1.LabelController: a.cfg.ControllerName})
-	opts.Cache.ByObject = map[crclient.Object]cache.ByObject{
-		&v1beta1.Worker{}:  {Label: sel},
-		&v1beta1.Manager{}: {Label: sel},
-		&v1beta1.Team{}:    {Label: sel},
-		&v1beta1.Human{}:   {Label: sel},
-		&corev1.Pod{}:      {Label: sel},
-	}
+	opts.Cache.ByObject = inClusterCacheByObject(a.cfg.ControllerName)
 
 	logger.Info("leader election configured",
 		"leaseID", leaseID,
@@ -768,6 +798,18 @@ func (a *App) startInCluster() (*rest.Config, error) {
 		return nil, fmt.Errorf("create controller manager: %w", err)
 	}
 	return restCfg, nil
+}
+
+func inClusterCacheByObject(controllerName string) map[crclient.Object]cache.ByObject {
+	sel := labels.SelectorFromSet(labels.Set{v1beta1.LabelController: controllerName})
+	return map[crclient.Object]cache.ByObject{
+		&v1beta1.Worker{}:           {Label: sel},
+		&v1beta1.Manager{}:          {Label: sel},
+		&v1beta1.Team{}:             {Label: sel},
+		&v1beta1.Human{}:            {Label: sel},
+		&v1beta1.ExecutionSandbox{}: {Label: sel},
+		&corev1.Pod{}:               {Label: sel},
+	}
 }
 
 // =========================================================================

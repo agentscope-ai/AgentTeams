@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,12 +20,14 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -37,6 +40,10 @@ const (
 	RoleTeamLeader MemberRole = "team_leader"
 	RoleTeamWorker MemberRole = "worker"
 )
+
+func usesMemberRuntimeConfig(runtime string) bool {
+	return runtime == backend.RuntimeQwenPaw || runtime == backend.RuntimeDeepAgents
+}
 
 const (
 	runtimeRemoteManagedLocal        = "remote-managed-local"
@@ -80,6 +87,7 @@ func (r MemberRole) String() string { return string(r) }
 // referenced Worker CRs.
 type MemberContext struct {
 	Name        string // Kubernetes resource identity (CR/Pod/SA key)
+	UID         string // immutable Worker CR identity used to scope durable runtime threads
 	RuntimeName string // business/runtime identity (Matrix/OSS/room alias key)
 	TeamName    string // effective Team identity used for scoped storage access
 	Namespace   string
@@ -224,6 +232,7 @@ func resolveBackendForMember(registry *backend.Registry, backendRuntime string, 
 // invoke. Both WorkerReconciler and TeamReconciler build a MemberDeps once
 // and pass it through each phase.
 type MemberDeps struct {
+	Client                      client.Client
 	Provisioner                 service.WorkerProvisioner
 	Deployer                    service.WorkerDeployer
 	Backend                     *backend.Registry
@@ -281,6 +290,30 @@ func ValidateMemberDeployment(m MemberContext) error {
 	default:
 		return fmt.Errorf("invalid deployMode %q: must be %q or %q", m.DeployMode, v1beta1.DeployModeLocal, v1beta1.DeployModeEdge)
 	}
+}
+
+// ValidateMemberRuntime enforces platform-level runtime gates independently of
+// which reconciler owns the runtime configuration. Team-owned Workers skip the
+// standalone config phase, so this validation must run before infrastructure
+// or container creation as well as defensively inside config reconciliation.
+func ValidateMemberRuntime(d MemberDeps, m MemberContext) error {
+	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
+	if effectiveRuntime == backend.RuntimeDeepAgents && m.Spec.RuntimeConfig != nil && m.Spec.RuntimeConfig.DeepAgents != nil {
+		if err := sandboxpolicy.ValidateExecutionDurations(m.Spec.RuntimeConfig.DeepAgents.Execution); err != nil {
+			return fmt.Errorf("invalid deepagents execution policy: %w", err)
+		}
+	}
+	if effectiveRuntime == backend.RuntimeDeepAgents &&
+		m.Spec.RuntimeConfig != nil &&
+		m.Spec.RuntimeConfig.DeepAgents != nil &&
+		m.Spec.RuntimeConfig.DeepAgents.Execution.Mode == "sandbox" &&
+		m.DeployMode != "" && m.DeployMode != v1beta1.DeployModeLocal {
+		return fmt.Errorf("deepagents execution.mode %q requires the Worker and Runner to run in the controller's same cluster and namespace; deployMode %q is not supported", "sandbox", m.DeployMode)
+	}
+	if validator, ok := d.EnvBuilder.(interface{ ValidateRuntime(runtime string) error }); ok {
+		return validator.ValidateRuntime(effectiveRuntime)
+	}
+	return nil
 }
 
 // ReconcileMemberInfra ensures Matrix account, Gateway consumer, MinIO user,
@@ -361,13 +394,16 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		return nil
 	}
 	logger := log.FromContext(ctx)
+	if err := ValidateMemberRuntime(d, m); err != nil {
+		return err
+	}
 	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
 	var aiGatewayURL string
 	if m.ModelProviderInfo != nil {
 		aiGatewayURL = m.ModelProviderInfo.IntranetURL
 	}
 
-	if effectiveRuntime == backend.RuntimeQwenPaw || m.DeployMode == v1beta1.DeployModeEdge {
+	if usesMemberRuntimeConfig(effectiveRuntime) || m.DeployMode == v1beta1.DeployModeEdge {
 		runtime := effectiveRuntime
 		var matrixAccessToken, gatewayKey string
 		skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
@@ -376,8 +412,17 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			matrixAccessToken = state.ProvResult.MatrixToken
 			gatewayKey = state.ProvResult.GatewayKey
 		}
+		var agentUserIDs []string
+		if effectiveRuntime == backend.RuntimeDeepAgents {
+			var err error
+			agentUserIDs, err = managedAgentMatrixUserIDs(ctx, d.Client, m.Namespace)
+			if err != nil {
+				return fmt.Errorf("list managed agent Matrix identities: %w", err)
+			}
+		}
 		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 			Name:                  m.Name,
+			UID:                   m.UID,
 			RuntimeName:           m.RuntimeName,
 			Runtime:               runtime,
 			Role:                  m.Role.String(),
@@ -390,6 +435,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 			AIGatewayURL:          aiGatewayURL,
 			SkillRegistryURL:      skillRegistryURL,
 			SkillRegistryAuthType: skillRegistryAuthType,
+			AgentUserIDs:          agentUserIDs,
 		}); err != nil {
 			return fmt.Errorf("deploy runtime config: %w", err)
 		}
@@ -421,6 +467,40 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		logger.Info("skill push failed", "error", err)
 	}
 	return nil
+}
+
+// managedAgentMatrixUserIDs returns the current managed Worker and Manager
+// Matrix identities in deterministic order. The runtime adapter treats these
+// IDs as agents even when a Team roster labels one as a coordinator.
+func managedAgentMatrixUserIDs(ctx context.Context, c client.Client, namespace string) ([]string, error) {
+	if c == nil {
+		return nil, fmt.Errorf("controller client is required to list managed agent identities")
+	}
+	var workers v1beta1.WorkerList
+	if err := c.List(ctx, &workers, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list Workers: %w", err)
+	}
+	var managers v1beta1.ManagerList
+	if err := c.List(ctx, &managers, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list Managers: %w", err)
+	}
+	ids := make(map[string]struct{}, len(workers.Items)+len(managers.Items))
+	for _, worker := range workers.Items {
+		if matrixUserID := strings.TrimSpace(worker.Status.MatrixUserID); matrixUserID != "" {
+			ids[matrixUserID] = struct{}{}
+		}
+	}
+	for _, manager := range managers.Items {
+		if matrixUserID := strings.TrimSpace(manager.Status.MatrixUserID); matrixUserID != "" {
+			ids[matrixUserID] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(ids))
+	for matrixUserID := range ids {
+		result = append(result, matrixUserID)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func runtimeSkillRegistryConfig(d MemberDeps, m MemberContext, state *MemberState) (string, string) {
@@ -728,7 +808,16 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	workerDeps, tokenRequeueAfter, tokenMessage, err := prepareMemberWorkerDeps(ctx, d, m, workerEnv, true)
+	workerDepsEnv := workerEnv
+	if wb.Name() == "k8s" && backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime) == backend.RuntimeDeepAgents {
+		workerDepsEnv = make(map[string]string, len(workerEnv))
+		for key, value := range workerEnv {
+			workerDepsEnv[key] = value
+		}
+		delete(workerDepsEnv, "AGENTTEAMS_CHECKPOINT_DSN")
+		delete(workerDepsEnv, "AGENTTEAMS_CHECKPOINT_AES_KEY")
+	}
+	workerDeps, tokenRequeueAfter, tokenMessage, err := prepareMemberWorkerDeps(ctx, d, m, workerDepsEnv, true)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -783,7 +872,8 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 
 		configOwner := m.Name
 		configKey := "agents/" + configOwner + "/openclaw.json"
-		if backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime) == backend.RuntimeQwenPaw {
+		effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
+		if usesMemberRuntimeConfig(effectiveRuntime) {
 			if m.RuntimeName != "" {
 				configOwner = m.RuntimeName
 			}
@@ -868,7 +958,13 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 		return nil, fmt.Errorf("worker provision result is not available")
 	}
 	logger := log.FromContext(ctx)
+	effectiveRuntime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
 	workerEnv := d.EnvBuilder.Build(m.RuntimeName, prov)
+	if runtimeAware, ok := d.EnvBuilder.(interface {
+		BuildForRuntime(workerName, runtime string, prov *service.WorkerProvisionResult) map[string]string
+	}); ok {
+		workerEnv = runtimeAware.BuildForRuntime(m.RuntimeName, effectiveRuntime, prov)
+	}
 	workerEnv["AGENTTEAMS_WORKER_CR_NAME"] = m.Name
 	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
@@ -1943,6 +2039,7 @@ func ReconcileMemberExpose(ctx context.Context, d MemberDeps, m MemberContext, s
 // Worker. Finalizer removal remains the owning reconciler's responsibility.
 func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) error {
 	logger := log.FromContext(ctx)
+	var requiredCleanupErrs []error
 	logger.Info("deleting member", "name", m.Name, "role", m.Role)
 	sandboxSetTokenProjections.Delete(sandboxSetTokenProjectionKey(m))
 	dockerTokenProjections.Delete(sandboxSetTokenProjectionKey(m))
@@ -1988,7 +2085,12 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		}
 		if wb, err := resolveBackendForMember(d.Backend, currentBackend, m); err == nil {
 			if derr := wb.Delete(ctx, m.Name); derr != nil && !errors.Is(derr, backend.ErrNotFound) {
-				logger.Error(derr, "failed to delete member container (may already be removed)", "name", m.Name)
+				logger.Error(derr, "failed to delete member container", "name", m.Name)
+				requiredCleanupErrs = append(requiredCleanupErrs, fmt.Errorf("delete member container: %w", derr))
+			}
+			if derr := deleteMemberRuntimeState(ctx, wb, m.Name); derr != nil {
+				logger.Error(derr, "failed to delete member runtime state", "name", m.Name, "backend", wb.Name())
+				requiredCleanupErrs = append(requiredCleanupErrs, fmt.Errorf("delete member runtime state: %w", derr))
 			}
 		}
 		// Safety net: if spec disagrees with status, also try to delete
@@ -1997,7 +2099,12 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		if m.BackendRuntime != "" && m.BackendRuntime != currentBackend {
 			if altWb, err := resolveBackendForMember(d.Backend, m.BackendRuntime, m); err == nil {
 				if derr := altWb.Delete(ctx, m.Name); derr != nil && !errors.Is(derr, backend.ErrNotFound) {
-					logger.Error(derr, "failed to delete member container on alternate backend (may already be removed)", "name", m.Name)
+					logger.Error(derr, "failed to delete member container on alternate backend", "name", m.Name)
+					requiredCleanupErrs = append(requiredCleanupErrs, fmt.Errorf("delete member container on alternate backend: %w", derr))
+				}
+				if derr := deleteMemberRuntimeState(ctx, altWb, m.Name); derr != nil {
+					logger.Error(derr, "failed to delete member runtime state on alternate backend", "name", m.Name, "backend", altWb.Name())
+					requiredCleanupErrs = append(requiredCleanupErrs, fmt.Errorf("delete member runtime state on alternate backend: %w", derr))
 				}
 			}
 		}
@@ -2026,6 +2133,17 @@ func ReconcileMemberDelete(ctx context.Context, d MemberDeps, m MemberContext) e
 		if err := ensureServiceDeleted(ctx, &m, svcDeps); err != nil {
 			logger.Error(err, "failed to delete member services (non-fatal)", "name", m.Name)
 		}
+	}
+	return errors.Join(requiredCleanupErrs...)
+}
+
+func deleteMemberRuntimeState(ctx context.Context, wb backend.WorkerBackend, name string) error {
+	cleaner, ok := wb.(backend.RuntimeStateCleaner)
+	if !ok {
+		return nil
+	}
+	if err := cleaner.DeleteRuntimeState(ctx, name); err != nil && !errors.Is(err, backend.ErrNotFound) {
+		return err
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credentials"
@@ -12,6 +13,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/proxy"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -32,7 +34,9 @@ type ServerDeps struct {
 	MatrixConfig   matrix.Config        // for AppService rotation endpoint
 	Provisioner    *service.Provisioner // for Matrix token refresh
 
-	DefaultWorkerRuntime string // install-time default for Worker create requests
+	DefaultWorkerRuntime              string // install-time default for Worker create requests
+	DeepAgentsSandboxEphemeralStorage sandboxpolicy.Policy
+	DeepAgentsSandboxEgressCeilings   []v1beta1.DeepAgentsEgressRule
 }
 
 // HTTPServer serves the unified controller REST API.
@@ -106,6 +110,21 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
+	if deps.KubeMode == "incluster" {
+		esh := NewExecutionSandboxHandler(
+			deps.Client,
+			deps.Namespace,
+			deps.ControllerName,
+			deps.DefaultWorkerRuntime,
+			deps.DeepAgentsSandboxEphemeralStorage,
+			deps.DeepAgentsSandboxEgressCeilings,
+		)
+		miah := NewManagedAgentIdentityHandler(deps.Client, deps.Namespace, deps.ControllerName)
+		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/ensure", mw.RequireAuthz(authpkg.ActionEnsureExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Ensure)))
+		mux.Handle("POST /api/v1/workers/{name}/execution-sandboxes/{sessionId}/heartbeat", mw.RequireAuthz(authpkg.ActionHeartbeatExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Heartbeat)))
+		mux.Handle("DELETE /api/v1/workers/{name}/execution-sandboxes/{sessionId}", mw.RequireAuthz(authpkg.ActionDeleteExecutionSandbox, "worker", nameFn)(http.HandlerFunc(esh.Delete)))
+		mux.Handle("POST /api/v1/workers/{name}/managed-agent-identity", mw.RequireAuthz(authpkg.ActionLookupManagedAgentIdentity, "worker", nameFn)(http.HandlerFunc(miah.Lookup)))
+	}
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)
@@ -115,7 +134,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Credentials ---
 	// STS is self-scoped: no {name} in path; handler uses CallerIdentity to scope the issued token.
-	ch := NewCredentialsHandler(deps.STS, deps.Provisioner)
+	ch := NewCredentialsHandler(deps.STS, deps.Provisioner, deps.Client, deps.Namespace)
 	mux.Handle("POST /api/v1/credentials/sts", mw.RequireAuthz(authpkg.ActionSTS, "credentials", nil)(http.HandlerFunc(ch.RefreshSTS)))
 	mux.Handle("POST /api/v1/credentials/matrix-token", mw.RequireAuthz(authpkg.ActionRefreshMatrixToken, "credentials", nil)(http.HandlerFunc(ch.RefreshMatrixToken)))
 

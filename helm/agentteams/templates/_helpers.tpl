@@ -192,3 +192,21 @@ app.kubernetes.io/component: {{ .component }}
 {{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.openhuman.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.openhuman.repository $tag }}
 {{- end }}
+
+{{- define "agentteams.worker.deepagentsImage" -}}
+{{- $tag := default (include "agentteams.globalImageTag" .) .Values.worker.defaultImage.deepagents.tag }}
+{{- printf "%s:%s" .Values.worker.defaultImage.deepagents.repository $tag }}
+{{- end }}
+
+{{- define "agentteams.deepagents.runnerImage" -}}
+{{- $tag := default (include "agentteams.globalImageTag" .) .Values.deepagents.runnerImage.tag }}
+{{- printf "%s:%s" .Values.deepagents.runnerImage.repository $tag }}
+{{- end }}
+
+{{- define "agentteams.deepagents.checkpointSecretName" -}}
+{{- default (printf "%s-deepagents-checkpoint" (include "agentteams.fullname" .)) .Values.deepagents.checkpoint.existingSecret -}}
+{{- end }}
+
+{{- define "agentteams.deepagents.postgresqlFullname" -}}
+{{- printf "%s-deepagents-postgresql" (include "agentteams.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}

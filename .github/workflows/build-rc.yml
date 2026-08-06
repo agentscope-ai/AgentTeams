@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker hermes-worker deepagents-worker deepagents-runner qwenpaw-worker'
         required: false
         type: string
         default: 'all'
@@ -83,7 +83,7 @@ jobs:
 
       - name: Build and push multi-arch images
         run: |
-          make push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-qwenpaw-worker push-agentteams-controller push-embedded \
+          make push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-deepagents-worker push-deepagents-runner push-qwenpaw-worker push-agentteams-controller push-embedded \
             VERSION=${{ inputs.version }} \
             OPENCLAW_BASE_VERSION=${{ inputs.version }} \
             REGISTRY=${{ env.REGISTRY }} \
@@ -99,6 +99,8 @@ jobs:
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-worker
           COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-copaw-worker
           HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-hermes-worker
+          DEEPAGENTS_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-deepagents-worker
+          DEEPAGENTS_RUNNER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-deepagents-runner
           QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-qwenpaw-worker
           CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-controller
           EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-embedded
@@ -112,6 +114,8 @@ jobs:
           echo "- Worker: \`${WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- DeepAgents Worker: \`${DEEPAGENTS_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- DeepAgents Runner: \`${DEEPAGENTS_RUNNER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- QwenPaw Worker: \`${QWENPAW_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Controller: \`${CONTROLLER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Embedded: \`${EMBEDDED_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY

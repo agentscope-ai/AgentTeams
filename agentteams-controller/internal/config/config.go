@@ -18,6 +18,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 )
 
 type Config struct {
@@ -95,6 +96,10 @@ type Config struct {
 	K8sWorkerCPU    string
 	K8sWorkerMemory string
 
+	DeepAgentsRunnerImage             string
+	DeepAgentsSandboxEgressCeilings   []v1beta1.DeepAgentsEgressRule
+	DeepAgentsSandboxEphemeralStorage sandboxpolicy.Policy
+
 	// Legacy sandbox backend knobs. The open-source controller does not
 	// register the OpenKruise sandbox backend.
 	SandboxProviderType          string
@@ -169,8 +174,8 @@ type Config struct {
 	Runtime            string
 	ModelContextWindow int
 	ModelMaxTokens     int
-	ModelVision    *bool // nil = use model default; overrides model-level vision capability
-	ModelReasoning *bool // nil = use model default; overrides model-level reasoning capability
+	ModelVision        *bool // nil = use model default; overrides model-level vision capability
+	ModelReasoning     *bool // nil = use model default; overrides model-level reasoning capability
 
 	// LLM provider (for Gateway initialization)
 	LLMProvider                string
@@ -216,8 +221,13 @@ type WorkerEnvDefaults struct {
 	AdminUser            string
 	Runtime              string // "docker" for embedded, "k8s" for incluster
 	DefaultWorkerRuntime string
-	YoloMode             bool // AGENTTEAMS_YOLO=1 — propagated to managers and workers
-	MatrixDebug          bool // AGENTTEAMS_MATRIX_DEBUG=1 — propagated to managers and workers,
+	// DeepAgents checkpoint credentials are only projected into DeepAgents
+	// workers. They must never be included in the shared worker environment.
+	CheckpointDSN     string
+	CheckpointAESKey  string
+	DeepAgentsEnabled bool
+	YoloMode          bool // AGENTTEAMS_YOLO=1 — propagated to managers and workers
+	MatrixDebug       bool // AGENTTEAMS_MATRIX_DEBUG=1 — propagated to managers and workers,
 	// translated to OPENCLAW_MATRIX_DEBUG=1 by the container entrypoints to
 	// enable structured INFO-level traces in the openclaw matrix plugin.
 
@@ -340,6 +350,15 @@ func LoadConfig() *Config {
 		K8sWorkerCPU:    envOrDefault("AGENTTEAMS_K8S_WORKER_CPU", "1000m"),
 		K8sWorkerMemory: envOrDefault("AGENTTEAMS_K8S_WORKER_MEMORY", "2Gi"),
 
+		DeepAgentsRunnerImage: envOrDefault(
+			"AGENTTEAMS_DEEPAGENTS_RUNNER_IMAGE",
+			"agentteams/agentteams-deepagents-runner:latest",
+		),
+		DeepAgentsSandboxEgressCeilings: parseDeepAgentsSandboxEgressCeilings(
+			os.Getenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS"),
+		),
+		DeepAgentsSandboxEphemeralStorage: mustDeepAgentsSandboxEphemeralStoragePolicy(),
+
 		SandboxProviderType:          envOrDefault("AGENTTEAMS_SANDBOX_PROVIDER_TYPE", "openkruise"),
 		SandboxCapabilities:          os.Getenv("AGENTTEAMS_SANDBOX_CAPABILITIES"),
 		SandboxPrewarmSize:           envOrDefaultInt("AGENTTEAMS_SANDBOX_PREWARM_SIZE", backend.DefaultSandboxPrewarmSize),
@@ -415,6 +434,9 @@ func LoadConfig() *Config {
 			MatrixURL:            envOrDefault("AGENTTEAMS_MATRIX_URL", "http://matrix-local.agentteams.io:8080"),
 			AdminUser:            os.Getenv("AGENTTEAMS_ADMIN_USER"),
 			DefaultWorkerRuntime: os.Getenv("AGENTTEAMS_DEFAULT_WORKER_RUNTIME"),
+			CheckpointDSN:        os.Getenv("AGENTTEAMS_CHECKPOINT_DSN"),
+			CheckpointAESKey:     os.Getenv("AGENTTEAMS_CHECKPOINT_AES_KEY"),
+			DeepAgentsEnabled:    envBool("AGENTTEAMS_DEEPAGENTS_ENABLED"),
 			YoloMode:             envBool("AGENTTEAMS_YOLO"),
 			MatrixDebug:          envBool("AGENTTEAMS_MATRIX_DEBUG"),
 
@@ -467,6 +489,29 @@ func LoadConfig() *Config {
 	return cfg
 }
 
+func mustDeepAgentsSandboxEphemeralStoragePolicy() sandboxpolicy.Policy {
+	policy, err := sandboxpolicy.New(
+		envOrDefault("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_REQUEST", sandboxpolicy.DefaultRequest),
+		envOrDefault("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_LIMIT", sandboxpolicy.DefaultLimit),
+		envOrDefault("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_MAX_LIMIT", sandboxpolicy.MaxLimit),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("invalid DeepAgents sandbox ephemeral storage policy: %v", err))
+	}
+	return policy
+}
+
+func parseDeepAgentsSandboxEgressCeilings(raw string) []v1beta1.DeepAgentsEgressRule {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var rules []v1beta1.DeepAgentsEgressRule
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		panic(fmt.Sprintf("invalid AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS: %v", err))
+	}
+	return rules
+}
+
 // Namespace returns the effective K8s namespace, defaulting to "default".
 func (c *Config) Namespace() string {
 	if c.K8sNamespace != "" {
@@ -512,13 +557,14 @@ func (c *Config) ManagerResources() *backend.ResourceRequirements {
 
 func (c *Config) DockerConfig() backend.DockerConfig {
 	return backend.DockerConfig{
-		SocketPath:           c.SocketPath,
-		WorkerImage:          envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
-		CopawWorkerImage:     envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
-		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
-		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
-		QwenPawWorkerImage:   envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DefaultNetwork:       envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
+		SocketPath:            c.SocketPath,
+		WorkerImage:           envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
+		CopawWorkerImage:      envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
+		HermesWorkerImage:     envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
+		OpenHumanWorkerImage:  envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
+		QwenPawWorkerImage:    envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
+		DeepAgentsWorkerImage: envOrDefault("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/agentteams-deepagents-worker:latest"),
+		DefaultNetwork:        envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
 
@@ -555,16 +601,22 @@ func (c *Config) UsesExternalOSS() bool {
 
 func (c *Config) K8sConfig() backend.K8sConfig {
 	return backend.K8sConfig{
-		Namespace:            c.K8sNamespace,
-		WorkerImage:          envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
-		CopawWorkerImage:     envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
-		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
-		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
-		QwenPawWorkerImage:   envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		WorkerCPU:            c.K8sWorkerCPU,
-		WorkerMemory:         c.K8sWorkerMemory,
-		ControllerName:       c.ControllerName,
-		ResourcePrefix:       c.ResourcePrefix,
+		Namespace:                  c.K8sNamespace,
+		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
+		CopawWorkerImage:           envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
+		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
+		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
+		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
+		DeepAgentsWorkerImage:      envOrDefault("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/agentteams-deepagents-worker:latest"),
+		DeepAgentsStateSize:        envOrDefault("AGENTTEAMS_DEEPAGENTS_STATE_PVC_SIZE", "1Gi"),
+		DeepAgentsStateClass:       os.Getenv("AGENTTEAMS_DEEPAGENTS_STATE_STORAGE_CLASS"),
+		DeepAgentsCheckpointSecret: os.Getenv("AGENTTEAMS_DEEPAGENTS_CHECKPOINT_SECRET"),
+		DeepAgentsCheckpointDSNKey: os.Getenv("AGENTTEAMS_DEEPAGENTS_CHECKPOINT_DSN_KEY"),
+		DeepAgentsCheckpointAESKey: os.Getenv("AGENTTEAMS_DEEPAGENTS_CHECKPOINT_AES_KEY_KEY"),
+		WorkerCPU:                  c.K8sWorkerCPU,
+		WorkerMemory:               c.K8sWorkerMemory,
+		ControllerName:             c.ControllerName,
+		ResourcePrefix:             c.ResourcePrefix,
 	}
 }
 
@@ -578,6 +630,7 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		HermesWorkerImage:            envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
+		DeepAgentsWorkerImage:        envOrDefault("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/agentteams-deepagents-worker:latest"),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,

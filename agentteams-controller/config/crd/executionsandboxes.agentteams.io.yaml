@@ -1,0 +1,146 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: executionsandboxes.agentteams.io
+spec:
+  group: agentteams.io
+  scope: Namespaced
+  names:
+    plural: executionsandboxes
+    singular: executionsandbox
+    kind: ExecutionSandbox
+    shortNames: [execsandbox, esb]
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [workerRef, sessionId]
+              properties:
+                workerRef:
+                  type: object
+                  required: [name, uid]
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                    uid:
+                      type: string
+                      minLength: 1
+                sessionId:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+                image:
+                  type: string
+                idleTimeout:
+                  type: string
+                maxLifetime:
+                  type: string
+                resources:
+                  type: object
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                        ephemeralStorage:
+                          type: string
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                        ephemeralStorage:
+                          type: string
+                egress:
+                  type: array
+                  items:
+                    type: object
+                    required: [cidr, ports]
+                    properties:
+                      cidr:
+                        type: string
+                        minLength: 1
+                      protocol:
+                        type: string
+                        enum: [TCP, UDP]
+                      ports:
+                        type: array
+                        minItems: 1
+                        items:
+                          type: integer
+                          format: int32
+                          minimum: 1
+                          maximum: 65535
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                phase:
+                  type: string
+                  enum: [Pending, Ready, Failed, Expired]
+                endpoint:
+                  type: string
+                podName:
+                  type: string
+                lastHeartbeat:
+                  type: string
+                  format: date-time
+                expiresAt:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required: [lastTransitionTime, message, reason, status, type]
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        type: string
+                        minLength: 1
+                        maxLength: 1024
+                      status:
+                        type: string
+                        enum: ["True", "False", Unknown]
+                      type:
+                        type: string
+                        minLength: 1
+                        maxLength: 316
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Worker
+          type: string
+          jsonPath: .spec.workerRef.name
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

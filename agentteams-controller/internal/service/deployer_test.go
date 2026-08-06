@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -514,6 +515,121 @@ func TestDeployMemberRuntimeConfigWritesAgentScopedYaml(t *testing.T) {
 	}
 }
 
+func TestDeployMemberRuntimeConfigProjectsSecretSafeDeepAgentsDocument(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{
+		OSS:          store,
+		MatrixDomain: "matrix.local",
+		RuntimeProjection: RuntimeProjectionConfig{
+			StorageProvider:         "minio",
+			StorageBucket:           "agentteams-storage",
+			StorageEndpoint:         "http://minio.agentteams-system.svc:9000",
+			AIGatewayURL:            "http://higress-gateway.agentteams-system.svc/v1",
+			MatrixHomeserverURL:     "http://tuwunel.agentteams-system.svc:8008",
+			MatrixEncryptionEnabled: true,
+		},
+	})
+
+	err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name:           "researcher",
+		UID:            "worker-uid-1",
+		RuntimeName:    "researcher",
+		Runtime:        "deepagents",
+		Role:           "worker",
+		Generation:     4,
+		MatrixUserID:   "@researcher:matrix.local",
+		PersonalRoomID: "!researcher:matrix.local",
+		AgentUserIDs: []string{
+			"@unrelated:matrix.local", "@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+		},
+		Spec: v1beta1.WorkerSpec{
+			Model:   "qwen-max",
+			Runtime: "deepagents",
+			RuntimeConfig: &v1beta1.WorkerRuntimeConfig{
+				DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+					Approvals: v1beta1.DeepAgentsApprovalConfig{
+						FileWrites:   "required",
+						MCPDefault:   "required",
+						Coordinators: []string{"@lead:matrix.local"},
+					},
+					Execution: v1beta1.DeepAgentsExecutionConfig{
+						Mode:        "sandbox",
+						IdleTimeout: "30m",
+						MaxLifetime: "8h",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+	}
+
+	payload, err := store.GetObject(ctx, "agents/researcher/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"matrix-secret", "gateway-secret", "postgresql://", "aes-secret"} {
+		if strings.Contains(string(payload), forbidden) {
+			t.Fatalf("runtime.yaml leaked %q:\n%s", forbidden, payload)
+		}
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal(payload, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, payload)
+	}
+	matrix := doc["matrix"].(map[string]any)
+	member := doc["member"].(map[string]any)
+	if got := fmt.Sprint(member["uid"]); got != "worker-uid-1" {
+		t.Fatalf("member.uid=%q", got)
+	}
+	if got := fmt.Sprint(matrix["homeserverUrl"]); got != "http://tuwunel.agentteams-system.svc:8008" {
+		t.Fatalf("matrix.homeserverUrl=%q", got)
+	}
+	if got := matrix["encryptionEnabled"]; got != true {
+		t.Fatalf("matrix.encryptionEnabled=%#v", got)
+	}
+	if _, exists := matrix["accessToken"]; exists {
+		t.Fatalf("matrix.accessToken must not be projected: %#v", matrix)
+	}
+	agentUserIDs, ok := matrix["agentUserIds"].([]any)
+	if !ok || !reflect.DeepEqual(agentUserIDs, []any{
+		"@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+	}) {
+		t.Fatalf("matrix.agentUserIds=%#v, want sorted global managed identities", matrix["agentUserIds"])
+	}
+
+	desired := doc["desired"].(map[string]any)
+	model := desired["model"].(map[string]any)
+	if _, exists := model["gatewayKey"]; exists {
+		t.Fatalf("desired.model.gatewayKey must not be projected: %#v", model)
+	}
+	runtimeConfig := desired["runtimeConfig"].(map[string]any)
+	deepagents := runtimeConfig["deepagents"].(map[string]any)
+	approvals := deepagents["approvals"].(map[string]any)
+	if got := fmt.Sprint(approvals["fileWrites"]); got != "required" {
+		t.Fatalf("approvals.fileWrites=%q", got)
+	}
+	execution := deepagents["execution"].(map[string]any)
+	if got := fmt.Sprint(execution["mode"]); got != "sandbox" {
+		t.Fatalf("execution.mode=%q", got)
+	}
+
+	credentials := doc["credentials"].(map[string]any)
+	for key, want := range map[string]string{
+		"matrixTokenEnv":      "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+		"gatewayKeyEnv":       "AGENTTEAMS_WORKER_GATEWAY_KEY",
+		"checkpointDSNEnv":    "AGENTTEAMS_CHECKPOINT_DSN",
+		"checkpointAESKeyEnv": "AGENTTEAMS_CHECKPOINT_AES_KEY",
+	} {
+		if got := fmt.Sprint(credentials[key]); got != want {
+			t.Fatalf("credentials.%s=%q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestDeployMemberRuntimeConfigUsesRequestGatewayURL(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()
@@ -548,6 +664,115 @@ func TestDeployMemberRuntimeConfigUsesRequestGatewayURL(t *testing.T) {
 	model := desired["model"].(map[string]any)
 	if got := fmt.Sprint(model["gatewayUrl"]); got != "https://provider-aigw.example.com/default" {
 		t.Fatalf("desired.model.gatewayUrl=%q", got)
+	}
+}
+
+func TestDeployMemberRuntimeConfigCanonicalizesManagedDeepAgentsGatewayURL(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name           string
+		managedURL     string
+		requestURL     string
+		wantGatewayURL string
+	}{
+		{
+			name:           "managed root gains v1",
+			managedURL:     "http://higress-gateway.agentteams-system.svc",
+			wantGatewayURL: "http://higress-gateway.agentteams-system.svc/v1",
+		},
+		{
+			name:           "managed v1 is not duplicated",
+			managedURL:     "http://higress-gateway.agentteams-system.svc/v1",
+			wantGatewayURL: "http://higress-gateway.agentteams-system.svc/v1",
+		},
+		{
+			name:           "external non-root provider path is preserved",
+			managedURL:     "http://higress-gateway.agentteams-system.svc",
+			requestURL:     "https://provider.example.com/openai/v1",
+			wantGatewayURL: "https://provider.example.com/openai/v1",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			deployer := NewDeployer(DeployerConfig{
+				OSS: store,
+				RuntimeProjection: RuntimeProjectionConfig{
+					StorageProvider: "minio",
+					AIGatewayURL:    tc.managedURL,
+				},
+			})
+
+			err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+				Name:         "researcher",
+				RuntimeName:  "researcher",
+				Runtime:      "deepagents",
+				Spec:         v1beta1.WorkerSpec{Model: "qwen-max"},
+				AIGatewayURL: tc.requestURL,
+			})
+			if err != nil {
+				t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+			}
+
+			payload, err := store.GetObject(ctx, "agents/researcher/runtime/runtime.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := yaml.Unmarshal(payload, &doc); err != nil {
+				t.Fatalf("runtime.yaml is invalid YAML: %v", err)
+			}
+			model := doc["desired"].(map[string]any)["model"].(map[string]any)
+			if got := fmt.Sprint(model["gatewayUrl"]); got != tc.wantGatewayURL {
+				t.Fatalf("desired.model.gatewayUrl=%q, want %q", got, tc.wantGatewayURL)
+			}
+		})
+	}
+}
+
+func TestDeployMemberRuntimeConfigRejectsDeepAgentsWithNonMinIOStorage(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		runtime string
+		wantErr string
+	}{
+		{
+			name:    "deepagents rejects oss",
+			runtime: "deepagents",
+			wantErr: "runtime=deepagents requires storage.provider=minio",
+		},
+		{
+			name:    "other runtimes retain oss support",
+			runtime: "qwenpaw",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			deployer := NewDeployer(DeployerConfig{
+				OSS: store,
+				RuntimeProjection: RuntimeProjectionConfig{
+					StorageProvider: "oss",
+					StorageBucket:   "agentteams-storage",
+					StorageEndpoint: "https://oss.example.com",
+				},
+			})
+
+			err := deployer.DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+				Name:        "worker",
+				RuntimeName: "worker",
+				Runtime:     tc.runtime,
+				Spec:        v1beta1.WorkerSpec{Model: "qwen-max"},
+			})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected actionable error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DeployMemberRuntimeConfig failed: %v", err)
+			}
+		})
 	}
 }
 
@@ -1000,6 +1225,60 @@ credentials:
 	}
 	if got := fmt.Sprint(storage["memberPrefix"]); got != "agents/claude-local" {
 		t.Fatalf("storage.memberPrefix=%q", got)
+	}
+}
+
+func TestMergeMemberRuntimeTeamContextRefreshesDeepAgentsIdentitySnapshot(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	deployer := NewDeployer(DeployerConfig{OSS: store, MatrixDomain: "matrix.local"})
+	key := "agents/researcher/runtime/runtime.yaml"
+	if err := store.PutObject(ctx, key, []byte(`
+apiVersion: agentteams.io/v1beta1
+kind: MemberRuntimeConfig
+member:
+  runtimeName: researcher
+  runtime: remote-managed-local
+matrix:
+  homeserverUrl: https://matrix.example.org
+  agentUserIds:
+    - "@stale:matrix.local"
+desired:
+  runtimeConfig:
+    deepagents:
+      approvals:
+        fileWrites: required
+storage: {}
+credentials: {}
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	err := deployer.MergeMemberRuntimeTeamContext(ctx, MemberRuntimeConfigDeployRequest{
+		RuntimeName: "researcher",
+		Spec:        v1beta1.WorkerSpec{Runtime: "deepagents"},
+		AgentUserIDs: []string{
+			"@unrelated:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+		},
+		TeamName: "research",
+	})
+	if err != nil {
+		t.Fatalf("MergeMemberRuntimeTeamContext failed: %v", err)
+	}
+
+	payload, err := store.GetObject(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(payload, &doc); err != nil {
+		t.Fatalf("runtime.yaml is invalid YAML: %v\n%s", err, payload)
+	}
+	matrix := doc["matrix"].(map[string]any)
+	if got := matrix["agentUserIds"]; !reflect.DeepEqual(got, []any{
+		"@manager:matrix.local", "@researcher:matrix.local", "@unrelated:matrix.local",
+	}) {
+		t.Fatalf("matrix.agentUserIds=%#v, want refreshed sorted managed identities", got)
 	}
 }
 

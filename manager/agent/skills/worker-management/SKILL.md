@@ -7,10 +7,10 @@ description: Use when admin requests hand-creating or resetting a Worker, starti
 
 ## Before You Create: Confirm with Admin
 
-Before running `agt create worker`, ask admin for these four inputs in one turn. Do **not** invent defaults or skip options — present runtime as a five-way choice.
+Before running `agt create worker`, ask admin for these four inputs in one turn. Do **not** invent defaults or skip options. Present DeepAgents only when `${AGENTTEAMS_DEEPAGENTS_ENABLED}` is `1`; otherwise explain that an administrator must enable its PostgreSQL/checkpoint and Runner dependencies through Helm first.
 
 1. **Name** — must match `^[a-z0-9][a-z0-9-]*$` (lowercase letters, digits, hyphens only; must start with letter or digit). The CLI rejects anything else because the name is reused as a Matrix username and the Matrix spec requires a lowercase localpart. Tuwunel may also reject very short names at registration.
-2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer all five options so admin can switch:
+2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer the enabled options so admin can switch:
 
    | Runtime      | Language | RAM    | When to pick                                              |
    |--------------|----------|--------|-----------------------------------------------------------|
@@ -19,8 +19,9 @@ Before running `agt create worker`, ask admin for these four inputs in one turn.
    | `qwenpaw`    | Python   | ~150MB | QwenPaw 2.0 worker behavior or CoPaw-to-QwenPaw migration. |
    | `hermes`     | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
    | `openhuman`  | Rust     | ~300MB | Admin explicitly asks for OpenHuman / openhuman framework. Native Matrix support with E2EE. |
+   | `deepagents` | Python   | ~500MB + Runner | Long-horizon DeepAgents tasks needing encrypted checkpoints, explicit Human approval, and isolated execution. Offer only when `${AGENTTEAMS_DEEPAGENTS_ENABLED}` is `1`. |
 
-   In OSS, `agt create worker` creates a controller-managed Local worker. Do not use or suggest Remote/pip worker flags. Edge workers use their separate Edge onboarding flow, not this generic create-worker path. If admin doesn't pass `--runtime` to `agt create worker`, the controller falls back to `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the five options explicitly instead of silently using the fallback.
+   In OSS, `agt create worker` creates a controller-managed Local worker. Do not use or suggest Remote/pip worker flags. Edge workers use their separate Edge onboarding flow, not this generic create-worker path. If admin doesn't pass `--runtime` to `agt create worker`, the controller falls back to `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the enabled options explicitly instead of silently using the fallback.
 3. **SOUL (role)** — short description of expertise/style. Offer to draft a default if admin has no preference.
 4. **Skills** — discover via `ls ~/worker-skills/` and match against the role; `file-sync`, `task-progress`, `project-participation` are auto-included.
 
@@ -46,8 +47,18 @@ agt create worker --name <NAME> --no-wait \
 - Never reveal API keys, passwords, or credentials
 ..." \
   --skills <skill1>,<skill2> -o json
-# Add --runtime <copaw|qwenpaw|hermes|openhuman> for non-default runtimes (see runtime table above)
+# Add --runtime <copaw|qwenpaw|hermes|openhuman|deepagents> for an enabled non-default runtime (see runtime table above)
 ```
+
+For every DeepAgents Worker, add a sandbox policy in the same create command. Use explicit Human Matrix IDs when the admin supplied them:
+
+```bash
+agt create worker --name <NAME> --runtime deepagents --deepagents-sandbox \
+  --deepagents-coordinators @<HUMAN_ONE>:${AGENTTEAMS_MATRIX_DOMAIN},@<HUMAN_TWO>:${AGENTTEAMS_MATRIX_DOMAIN} \
+  --no-wait --soul "<SOUL>" -o json
+```
+
+`--deepagents-sandbox` sets `execution.mode=sandbox` and requires Human approval for file writes and MCP by default. If you omit `--deepagents-coordinators`, the CLI derives exactly `@${AGENTTEAMS_ADMIN_USER}:${AGENTTEAMS_MATRIX_DOMAIN}` only when both environment values are non-empty; otherwise it fails. Do not guess a Human Matrix ID. For advanced DeepAgents egress or execution resources, use a reviewed `WorkerRuntimeConfig` JSON/YAML file with `agt create worker --runtime-config-file <FILE>` or `agt update worker --runtime-config-file <FILE>`; do not put credentials in that file.
 
 > `--no-wait` returns as soon as the controller accepts the request (~1s). Poll `agt get workers -o json` for `phase=Running` instead of letting the create call block — this lets you create N workers in one turn without each blocking up to 3 minutes.
 
@@ -64,7 +75,7 @@ agt create worker --name <NAME> --no-wait \
 - **Always notify Workers to `file-sync` after writing files they need** — the 5-minute periodic sync is fallback only
 - **Workers are stateless** — all state is in centralized storage. Reset = recreate config files
 - **Matrix accounts persist in Tuwunel** (cannot be deleted via API) — reuse same username on reset
-- **Changing a Worker's `--runtime` is a destructive operation** — the controller deletes the old container and creates a new one from the target runtime's image (openclaw/copaw/qwenpaw/hermes/openhuman). Matrix account, room, gateway consumer, MinIO data and persisted credentials are preserved; container-local state (caches, in-memory session, current task progress) is lost. Always confirm with admin first, and avoid switching runtime while the Worker is mid-task.
+- **Changing a Worker's `--runtime` is a destructive operation** — the controller deletes the old container and creates a new one from the target runtime's image (openclaw/copaw/qwenpaw/hermes/openhuman/deepagents). Matrix account, room, gateway consumer, MinIO data and persisted credentials are preserved. DeepAgents also preserves its encrypted checkpoints and runtime state PVC; other container-local caches and in-memory task progress are lost. Always confirm with admin first, and avoid switching runtime while the Worker is mid-task.
 
 ## Operation Reference
 
@@ -75,7 +86,7 @@ Read the relevant doc **before** executing. Do not load all of them.
 | Create a new worker | `references/create-worker.md` | `agt create worker` |
 | Start/stop/check idle workers | `references/lifecycle.md` | `scripts/lifecycle-worker.sh` |
 | Push/add/remove skills | `references/skills-management.md` | `scripts/push-worker-skills.sh` |
-| Switch a worker's runtime (openclaw ↔ copaw ↔ qwenpaw ↔ hermes ↔ openhuman) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
+| Switch a worker's runtime (openclaw ↔ copaw ↔ qwenpaw ↔ hermes ↔ openhuman ↔ deepagents) | (this file, "Switching Runtime" below) | `scripts/update-worker-config.sh --runtime ...` |
 | Open/close QwenPaw console | `references/console.md` | `scripts/enable-worker-console.sh` |
 | Enable direct @mentions between workers | `references/peer-mentions.md` | `scripts/enable-peer-mentions.sh` |
 | Reset a worker | `references/create-worker.md` | `agt delete worker` + `agt create worker` |
@@ -88,8 +99,9 @@ To migrate a Worker between runtimes (e.g. openclaw → copaw, copaw → qwenpaw
 ```bash
 bash /opt/agentteams/agent/skills/worker-management/scripts/update-worker-config.sh \
   --name <NAME> \
-  --runtime <openclaw|copaw|qwenpaw|hermes|openhuman> \
-  [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]
+  --runtime <openclaw|copaw|qwenpaw|hermes|openhuman|deepagents> \
+  [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] \
+  [--deepagents-coordinators @<HUMAN>:${AGENTTEAMS_MATRIX_DOMAIN},...]
 ```
 
 What happens behind the scenes:
@@ -97,6 +109,8 @@ What happens behind the scenes:
 1. Controller writes the new `runtime` into the Worker CR's spec
 2. Reconcile detects the spec change → deletes the old container → creates a new one from the target runtime's image
 3. Agent config files (`openclaw.json`, `AGENTS.md`, builtin skills) are regenerated from the new runtime's templates by the controller's deployer
+
+When you switch to `deepagents`, the wrapper always adds `--deepagents-sandbox`: it enables sandbox execution and requires Human approval for file writes and MCP. Pass `--deepagents-coordinators` with explicit Human Matrix IDs, or ensure both `AGENTTEAMS_ADMIN_USER` and `AGENTTEAMS_MATRIX_DOMAIN` are set so the CLI can derive the one approved coordinator. Never invent an approver. Apply advanced DeepAgents egress and execution-resource settings through a reviewed `WorkerRuntimeConfig` JSON/YAML file after the switch.
 
 Constraints:
 

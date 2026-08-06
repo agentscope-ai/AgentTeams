@@ -174,6 +174,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	logger := log.FromContext(ctx)
 
 	deps := MemberDeps{
+		Client:                      r.Client,
 		Provisioner:                 r.Provisioner,
 		Deployer:                    r.Deployer,
 		Backend:                     r.Backend,
@@ -198,6 +199,9 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{}, err
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
+	if err := ValidateMemberRuntime(deps, mctx); err != nil {
+		return reconcile.Result{}, err
+	}
 	mctx.TeamName, err = r.workerTeamName(ctx, w)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -206,7 +210,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	configOwnedByTeam := inTeam && backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime) == backend.RuntimeQwenPaw
+	configOwnedByTeam := inTeam && usesMemberRuntimeConfig(backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime))
 
 	if effectiveSpec.ModelProvider != "" && r.GatewayClient != nil {
 		info, err := r.GatewayClient.ResolveModelProvider(ctx, effectiveSpec.ModelProvider)
@@ -367,6 +371,7 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 	}
 
 	deps := MemberDeps{
+		Client:                      r.Client,
 		Provisioner:                 r.Provisioner,
 		Deployer:                    r.Deployer,
 		Backend:                     r.Backend,
@@ -390,7 +395,9 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 	effectiveSpec = workerSpecWithAppliedDeploymentTarget(effectiveSpec, w.Status)
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy)
 
-	_ = ReconcileMemberDelete(ctx, deps, mctx)
+	if err := ReconcileMemberDelete(ctx, deps, mctx); err != nil {
+		return reconcile.Result{}, err
+	}
 
 	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
 		workerMatrixID := r.Provisioner.MatrixUserID(w.Name)
@@ -605,6 +612,7 @@ func (r *WorkerReconciler) workerMemberContextWithSpec(w *v1beta1.Worker, spec v
 	}
 	return MemberContext{
 		Name:               w.Name,
+		UID:                string(w.UID),
 		RuntimeName:        runtimeName,
 		Namespace:          w.Namespace,
 		Role:               RoleStandalone,
@@ -772,6 +780,7 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
 	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
 	spec.McpServers = nil    // config-only: written to mcporter/runtime config
+	spec.RuntimeConfig = nil // config-only: written to runtime.yaml
 	spec.AccessEntries = nil // permission-only: resolved when credentials are issued
 	spec.AgentIdentity = nil // config-only: written to runtime.yaml
 	spec.CredentialBindings = nil
@@ -812,6 +821,9 @@ func hashAppliedWorkerSpecForRuntime(spec v1beta1.WorkerSpec, runtime string) st
 		}
 		return hashQwenPawPodSpec(spec)
 	}
+	if runtime == backend.RuntimeDeepAgents {
+		return hashDeepAgentsPodSpecWithResources(spec, nil)
+	}
 	return hashAppliedWorkerSpec(spec)
 }
 
@@ -822,16 +834,48 @@ func hashAppliedWorkerSpecForRuntimeAndResources(spec v1beta1.WorkerSpec, runtim
 		}
 		return hashQwenPawPodSpecWithResources(spec, resources)
 	}
+	if runtime == backend.RuntimeDeepAgents {
+		return hashDeepAgentsPodSpecWithResources(spec, resources)
+	}
 	if resources == nil {
 		return hashAppliedWorkerSpec(spec)
 	}
 	spec.Model = ""           // config-only: written to openclaw.json/runtime.yaml
 	spec.McpServers = nil     // config-only: written to mcporter/runtime config
+	spec.RuntimeConfig = nil  // config-only: written to runtime.yaml
 	spec.AccessEntries = nil  // permission-only: resolved when credentials are issued
 	spec.State = nil          // exclude lifecycle state from hash
 	spec.IdleTimeout = ""     // exclude controller-side autosleep policy
 	spec.ServiceEnabled = nil // service-only: does not affect pod
 	spec.Expose = nil         // service-only: does not affect pod
+	spec.Resources = nil
+	payload := struct {
+		Spec             v1beta1.WorkerSpec                 `json:"spec"`
+		Resources        *v1beta1.AgentResourceRequirements `json:"resources,omitempty"`
+		WorkerDepsLayout string                             `json:"workerDepsLayout,omitempty"`
+	}{
+		Spec:             spec,
+		Resources:        resources,
+		WorkerDepsLayout: workerDepsLayoutHashVersion(spec),
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%x", h.Sum64())
+}
+
+func hashDeepAgentsPodSpecWithResources(spec v1beta1.WorkerSpec, resources *v1beta1.AgentResourceRequirements) string {
+	// DeepAgents loads the complete projected runtime document at process
+	// startup. Desired-state changes therefore recreate the Pod; its dedicated
+	// PVC preserves Matrix E2EE and pending approval state across the restart.
+	spec.State = nil
+	spec.IdleTimeout = ""
+	spec.ServiceEnabled = nil
+	spec.Expose = nil
+	spec.AccessEntries = nil
 	spec.Resources = nil
 	payload := struct {
 		Spec             v1beta1.WorkerSpec                 `json:"spec"`

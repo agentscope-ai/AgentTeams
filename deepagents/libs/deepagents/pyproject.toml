@@ -1,0 +1,157 @@
+[project]
+name = "deepagents"
+version = "0.7.3"
+
+description = "General purpose 'deep agent' with sub-agent spawning, todo list capabilities, and mock file system. Built on LangGraph."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11,<4.0"
+keywords = ["agents", "ai", "llm", "langgraph", "langchain", "deep-agent", "sub-agents", "agentic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "langchain>=1.3.14,<2.0.0",
+    "langchain-core>=1.5.0,<2.0.0",
+    "langchain-anthropic>=1.5.3,<2.0.0",
+    "langchain-google-genai>=4.3.1,<5.0.0",
+    "langsmith>=0.10.9",
+    "packaging>=23.2",
+    "wcmatch>=11.0",
+]
+
+[project.optional-dependencies]
+aws = ["langchain-aws>=1.6.2,<2.0.0"]
+quickjs = ["langchain-quickjs>=0.3.3"]
+video = ["av>=18.0.0,<19.0.0", "pillow>=12.3.0,<13.0.0"]
+
+[project.urls]
+Homepage = "https://docs.langchain.com/oss/python/deepagents/overview"
+Documentation = "https://reference.langchain.com/python/deepagents/"
+Repository = "https://github.com/langchain-ai/deepagents"
+Issues = "https://github.com/langchain-ai/deepagents/issues"
+Twitter = "https://x.com/langchain_oss"
+Slack = "https://www.langchain.com/join-community"
+Reddit = "https://www.reddit.com/r/LangChain/"
+
+
+[dependency-groups]
+test = [
+  "pytest",
+  "pytest-benchmark",
+  "pytest-codspeed>=5.0.3,<6.0.0",
+  "pytest-cov",
+  "pytest-xdist",
+  "pytest-timeout>=2.4.0,<3.0.0",
+  "pytest-socket",
+  "pytest-watcher>=0.6.3,<1.0.0",
+  "ruff>=0.15.22,<0.16.0",
+  "ty>=0.0.62,<1.0.0",
+  "pytest-asyncio>=1.4.0",
+  "langchain-tests>=1.1.9",
+  "langchain-openai",
+  "twine",
+  "build",
+  # Lazy-imported at runtime so the core package does
+  # not depend on them. ty still sees the import names and
+  # needs stubs, so we install them into the type-checker venv.
+  "av>=18.0.0,<19.0.0",
+  "pillow>=12.3.0,<13.0.0",
+]
+[build-system]
+requires = ["setuptools>=83.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+"*" = ["py.typed", "*.md"]
+
+[tool.ruff]
+line-length = 150
+
+[tool.ruff.format]
+docstring-code-format = true  # Formats code blocks in docstrings
+
+[tool.ruff.lint]
+select = [
+    "ALL"  # Enable all rules by default
+]
+ignore = [
+    "COM812",  # Trailing comma missing — conflicts with the ruff formatter
+    "ISC001",  # Implicit string concatenation on one line — conflicts with the ruff formatter
+    "PERF203", # `try`-`except` within a loop — incurs overhead only when exceptions are common
+    "SLF001",  # Access to a private member of an external class
+    "PLR0913", # Too many arguments to function definition
+    "PLC0414", # Import alias does not rename original package — conflicts with type-checker re-export conventions
+]
+unfixable = ["B028"]  # Rules that shouldn't be auto-fixed
+extend-safe-fixes = ["PLR6201"]
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+force-single-line = false
+combine-as-imports = true
+known-first-party = ["deepagents"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"  # Google-style docstrings
+ignore-var-parameters = true
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: relax annotations, docstrings, magic values, security, and assertion style
+"tests/**" = [
+    "ANN001",  # Missing type annotation for function argument
+    "ANN201",  # Missing return type annotation for public function
+    "ANN202",  # Missing return type annotation for private function
+    "ARG002",  # Unused method argument — common for pytest fixtures
+    "D1",      # Missing docstrings
+    "PLR2004", # Magic value used in comparison — fine in test assertions
+    "PT018",   # Assertion should be broken down into multiple parts
+    "S101",    # Use of `assert` detected
+    "S311",    # Pseudo-random generator not suitable for security — fine in tests
+]
+# Scripts: allow prints, broad exceptions, and standalone modules
+"scripts/**" = [
+    "BLE001",  # Blind exception catch — resilience in standalone scripts
+    "INP001",  # Missing `__init__.py` — scripts are standalone
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "-m 'not benchmark'"
+filterwarnings = [
+    "ignore:Passing `model=None` to `create_deep_agent`:DeprecationWarning",
+    # `langsmith.sandbox` is alpha upstream; the FutureWarning fires on import.
+    "ignore:langsmith.sandbox is in alpha:FutureWarning",
+    # pytest-cov complains when invoked with `--no-cov` (used for fast runs).
+    "ignore::pytest_cov.plugin.CovDisabledWarning",
+]
+markers = [
+    "benchmark: wall-time benchmarks for construction performance",
+    "video_extra: pin the read_file video gate on to snapshot the [video]-extra variant",
+]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.rules]
+# Most rules are enabled by default. Enable rules that are disabled by default:
+division-by-zero = "error"
+# Add rules here to ignore, e.g.:
+# possibly-unresolved-reference = "ignore"

@@ -29,7 +29,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-failed,hook-succeeded
 rules:
   - apiGroups: ["agentteams.io"]
-    resources: ["managers", "workers", "teams", "humans"]
+    resources: ["managers", "workers", "teams", "humans", "executionsandboxes"]
     verbs: ["get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -101,6 +101,7 @@ spec:
               kubectl delete workers.agentteams.io  --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
               kubectl delete teams.agentteams.io    --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
               kubectl delete humans.agentteams.io   --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
+              kubectl delete executionsandboxes.agentteams.io --all -n "${NS}" --wait=true --timeout="${TIMEOUT}" --ignore-not-found
               echo "[agentteams-uninstall-cleanup] done"
           {{- with .Values.controller.uninstallHook.resources }}
           resources:

@@ -422,7 +422,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	teamWorkerEntries := teamWorkerEntries(members, leaderRef.Name)
 	leaderRuntime := r.teamMemberRuntime(leaderMember)
 
-	if leaderRuntime != backend.RuntimeQwenPaw {
+	if !usesMemberRuntimeConfig(leaderRuntime) {
 		// Overlay Team Leader built-ins onto the team-reference leader Worker before
 		// injecting the team coordination context. The Worker still owns its
 		// lifecycle and credentials; this only restores role-specific prompt and
@@ -468,7 +468,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if rm.ref.Name == leaderRef.Name {
 			continue
 		}
-		if r.teamMemberRuntime(rm) == backend.RuntimeQwenPaw {
+		if usesMemberRuntimeConfig(r.teamMemberRuntime(rm)) {
 			continue
 		}
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
@@ -515,7 +515,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		if rm.ref.Name == leaderRef.Name {
 			role = RoleTeamLeader
 		}
-		if r.teamMemberRuntime(rm) != backend.RuntimeQwenPaw {
+		if !usesMemberRuntimeConfig(r.teamMemberRuntime(rm)) {
 			policy := r.teamChannelPolicy(derivedTeam, members, leaderRef.Name, rm, role)
 			if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
 				WorkerName:     rm.runtimeName,
@@ -630,6 +630,17 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 	rooms *service.TeamRoomResult,
 ) error {
 	roster := runtimeConfigTeamMembers(t, members, leaderName)
+	var agentUserIDs []string
+	for _, member := range members {
+		if backend.ResolveRuntime(member.worker.Spec.Runtime, r.DefaultRuntime) == backend.RuntimeDeepAgents {
+			var err error
+			agentUserIDs, err = managedAgentMatrixUserIDs(ctx, r.Client, t.Namespace)
+			if err != nil {
+				return fmt.Errorf("list managed agent Matrix identities: %w", err)
+			}
+			break
+		}
+	}
 	for _, member := range members {
 		// Skip members being deleted — their runtime config no longer needs
 		// updating and the model provider may already have been removed.
@@ -641,7 +652,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if member.worker.Spec.DeployMode != nil {
 			deployMode = *member.worker.Spec.DeployMode
 		}
-		if runtime != backend.RuntimeQwenPaw && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
+		if !usesMemberRuntimeConfig(runtime) && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
 			continue
 		}
 		role := RoleTeamWorker
@@ -657,11 +668,12 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			return err
 		}
 		spec := member.worker.Spec
-		if runtime == backend.RuntimeQwenPaw {
+		if usesMemberRuntimeConfig(runtime) {
 			spec.ChannelPolicy = mergeChannelPolicy(t.Spec.ChannelPolicy, member.worker.Spec.ChannelPolicy)
 		}
 		req := service.MemberRuntimeConfigDeployRequest{
 			Name:              member.ref.Name,
+			UID:               string(member.worker.UID),
 			RuntimeName:       member.runtimeName,
 			Runtime:           runtime,
 			Role:              role.String(),
@@ -678,6 +690,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			TeamAdminName:     teamAdminName(t),
 			TeamAdminMatrixID: teamAdminMatrixID(t),
 			TeamMembers:       roster,
+			AgentUserIDs:      agentUserIDs,
 		}
 		if deployMode == v1beta1.DeployModeEdge {
 			req.Runtime = runtimeRemoteManagedLocal
@@ -793,7 +806,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if _, err := r.Provisioner.RefreshWorkerCredentials(ctx, w.Name, runtimeName, ""); err != nil {
 		return fmt.Errorf("revoke team storage access: %w", err)
 	}
-	if runtime != backend.RuntimeQwenPaw {
+	if !usesMemberRuntimeConfig(runtime) {
 		if err := r.Deployer.InjectWorkerCoordination(ctx, service.WorkerCoordinationRequest{
 			WorkerName:         runtimeName,
 			TeamName:           "",
@@ -809,10 +822,19 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if resolveErr != nil {
 		logger.Error(resolveErr, "failed to resolve worker model provider for runtime config reset", "worker", runtimeName)
 	}
+	var agentUserIDs []string
+	if runtime == backend.RuntimeDeepAgents {
+		var err error
+		agentUserIDs, err = managedAgentMatrixUserIDs(ctx, r.Client, t.Namespace)
+		if err != nil {
+			return fmt.Errorf("list managed agent Matrix identities for %s reset: %w", runtimeName, err)
+		}
+	}
 	if err := r.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 		Name:            w.Name,
+		UID:             string(w.UID),
 		RuntimeName:     runtimeName,
-		Runtime:         w.Spec.Runtime,
+		Runtime:         runtime,
 		Role:            RoleStandalone.String(),
 		Generation:      w.Generation,
 		Spec:            w.Spec,
@@ -820,6 +842,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		MatrixUserID:    w.Status.MatrixUserID,
 		PersonalRoomID:  w.Status.RoomID,
 		DropTeamContext: true,
+		AgentUserIDs:    agentUserIDs,
 	}); err != nil {
 		logger.Error(err, "failed to drop worker runtime team context (non-fatal)", "worker", runtimeName)
 	}
@@ -833,7 +856,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 			return fmt.Errorf("restore Manager to Worker %q personal room: %w", w.Name, err)
 		}
 	}
-	if runtime == backend.RuntimeQwenPaw {
+	if usesMemberRuntimeConfig(runtime) {
 		return nil
 	}
 	if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
@@ -1019,7 +1042,7 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 		if err := r.Get(ctx, key, &leaderW); err == nil {
 			leaderRN := leaderW.Spec.EffectiveWorkerName(leaderW.Name)
 			runtime := backend.ResolveRuntime(leaderW.Spec.Runtime, r.DefaultRuntime)
-			if runtime != backend.RuntimeQwenPaw {
+			if !usesMemberRuntimeConfig(runtime) {
 				if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
 					WorkerName: leaderRN,
 					Enabled:    false,

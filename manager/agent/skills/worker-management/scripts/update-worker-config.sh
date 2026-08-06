@@ -17,7 +17,7 @@
 #
 # Usage:
 #   update-worker-config.sh --name <NAME> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]
-#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2]
+#   update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman|deepagents> [--model <MODEL_ID>] [--skills s1,s2] [--mcp-servers s1,s2] [--deepagents-coordinators @human:domain,...]
 #
 # Prerequisites:
 #   - Worker must already exist (created via create-worker.sh)
@@ -49,6 +49,7 @@ WORKER_SKILLS=""
 PACKAGE_DIR=""
 CHANNEL_POLICY_JSON=""
 RUNTIME=""
+DEEPAGENTS_COORDINATORS=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -59,13 +60,14 @@ while [ $# -gt 0 ]; do
         --package-dir) PACKAGE_DIR="$2"; shift 2 ;;
         --channel-policy) CHANNEL_POLICY_JSON="$2"; shift 2 ;;
         --runtime)     RUNTIME="$2"; shift 2 ;;
+        --deepagents-coordinators) DEEPAGENTS_COORDINATORS="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
 if [ -z "${WORKER_NAME}" ]; then
     echo "Usage: update-worker-config.sh --name <NAME> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] [--package-dir <DIR>]"
-    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2]"
+    echo "       update-worker-config.sh --name <NAME> --runtime <openclaw|copaw|qwenpaw|hermes|openhuman|deepagents> [--model <MODEL>] [--skills s1,s2] [--mcp-servers s1,s2] [--deepagents-coordinators @human:domain,...]"
     exit 1
 fi
 
@@ -82,8 +84,8 @@ fi
 # ============================================================
 if [ -n "${RUNTIME}" ]; then
     case "${RUNTIME}" in
-        openclaw|copaw|qwenpaw|hermes|openhuman) ;;
-        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, qwenpaw, hermes, openhuman." ;;
+        openclaw|copaw|qwenpaw|hermes|openhuman|deepagents) ;;
+        *) _fail "Invalid --runtime '${RUNTIME}'. Must be one of: openclaw, copaw, qwenpaw, hermes, openhuman, deepagents." ;;
     esac
 
     if [ -n "${PACKAGE_DIR}" ]; then
@@ -91,6 +93,9 @@ if [ -n "${RUNTIME}" ]; then
     fi
     if [ -n "${CHANNEL_POLICY_JSON}" ]; then
         _fail "--channel-policy cannot be combined with --runtime. Apply the channel-policy separately (without --runtime) after the runtime switch settles."
+    fi
+    if [ -n "${DEEPAGENTS_COORDINATORS}" ] && [ "${RUNTIME}" != "deepagents" ]; then
+        _fail "--deepagents-coordinators is only valid with --runtime deepagents."
     fi
 
     log "=== Switching runtime for Worker: ${WORKER_NAME} -> ${RUNTIME} ==="
@@ -102,6 +107,13 @@ if [ -n "${RUNTIME}" ]; then
     [ -n "${MODEL_ID}" ]      && CLI_ARGS+=(--model "${MODEL_ID}")
     [ -n "${WORKER_SKILLS}" ] && CLI_ARGS+=(--skills "${WORKER_SKILLS}")
     [ -n "${MCP_SERVERS}" ]   && CLI_ARGS+=(--mcp-servers "${MCP_SERVERS}")
+    if [ "${RUNTIME}" = "deepagents" ]; then
+        # Every DeepAgents runtime switch is sandboxed and requires Human
+        # approval for file writes and MCP. The CLI uses explicit Human IDs,
+        # or derives one only from both configured admin environment values.
+        CLI_ARGS+=(--deepagents-sandbox)
+        [ -n "${DEEPAGENTS_COORDINATORS}" ] && CLI_ARGS+=(--deepagents-coordinators "${DEEPAGENTS_COORDINATORS}")
+    fi
 
     log "Step 1: Calling: agt ${CLI_ARGS[*]}"
     if ! CLI_OUT=$(agt "${CLI_ARGS[@]}" 2>&1); then

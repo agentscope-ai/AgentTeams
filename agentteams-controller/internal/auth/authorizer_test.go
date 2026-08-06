@@ -73,6 +73,10 @@ func TestAuthorizer_WorkerSelfOnly(t *testing.T) {
 		{Action: ActionSTS, ResourceKind: "worker", ResourceName: "alice"},
 		{Action: ActionGet, ResourceKind: "worker", ResourceName: "alice"},
 		{Action: ActionStatus, ResourceKind: "worker", ResourceName: "alice"},
+		{Action: ActionEnsureExecutionSandbox, ResourceKind: "worker", ResourceName: "alice"},
+		{Action: ActionHeartbeatExecutionSandbox, ResourceKind: "worker", ResourceName: "alice"},
+		{Action: ActionDeleteExecutionSandbox, ResourceKind: "worker", ResourceName: "alice"},
+		{Action: ActionLookupManagedAgentIdentity, ResourceKind: "worker", ResourceName: "alice"},
 		{Action: ActionGet, ResourceKind: "status"},
 	}
 	for _, req := range selfAllowed {
@@ -86,10 +90,43 @@ func TestAuthorizer_WorkerSelfOnly(t *testing.T) {
 		{Action: ActionReady, ResourceKind: "worker", ResourceName: "bob"},
 		{Action: ActionSTS, ResourceKind: "worker", ResourceName: "bob"},
 		{Action: ActionGet, ResourceKind: "worker", ResourceName: "bob"},
+		{Action: ActionEnsureExecutionSandbox, ResourceKind: "worker", ResourceName: "bob"},
+		{Action: ActionLookupManagedAgentIdentity, ResourceKind: "worker", ResourceName: "bob"},
 	}
 	for _, req := range otherDenied {
 		if err := az.Authorize(caller, req); err == nil {
 			t.Errorf("worker accessing other %s %s %s should be denied", req.Action, req.ResourceKind, req.ResourceName)
+		}
+	}
+}
+
+func TestAuthorizer_TeamLeaderManagedIdentityLookupIsSelfScoped(t *testing.T) {
+	az := NewAuthorizer()
+	caller := &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+	if err := az.Authorize(caller, AuthzRequest{
+		Action: ActionLookupManagedAgentIdentity, ResourceKind: "worker", ResourceName: "alpha-lead", ResourceTeam: "alpha-team",
+	}); err != nil {
+		t.Fatalf("team leader self lookup denied: %v", err)
+	}
+	if err := az.Authorize(caller, AuthzRequest{
+		Action: ActionLookupManagedAgentIdentity, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team",
+	}); err == nil {
+		t.Fatal("team leader must not use another team member's identity lookup endpoint")
+	}
+}
+
+func TestAuthorizer_TeamLeaderCannotOperateWorkerExecutionSandbox(t *testing.T) {
+	az := NewAuthorizer()
+	caller := &CallerIdentity{Role: RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+	for _, action := range []Action{
+		ActionEnsureExecutionSandbox,
+		ActionHeartbeatExecutionSandbox,
+		ActionDeleteExecutionSandbox,
+	} {
+		if err := az.Authorize(caller, AuthzRequest{
+			Action: action, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team",
+		}); err == nil {
+			t.Fatalf("team leader must not impersonate a Worker runtime for action %q", action)
 		}
 	}
 }

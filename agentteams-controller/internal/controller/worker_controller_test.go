@@ -43,6 +43,17 @@ type workerTestRig struct {
 	r           *WorkerReconciler
 }
 
+type rejectingDeepAgentsEnvBuilder struct {
+	*mocks.MockEnvBuilder
+}
+
+func (b *rejectingDeepAgentsEnvBuilder) ValidateRuntime(runtime string) error {
+	if runtime == backend.RuntimeDeepAgents {
+		return errors.New("deepagents runtime is disabled")
+	}
+	return nil
+}
+
 type fakeRemoteDynamicProvider struct {
 	client    dynamic.Interface
 	onResolve func()
@@ -160,6 +171,55 @@ func TestWorkerReconcileDoesNotOverwriteTeamOwnedRuntimeConfig(t *testing.T) {
 	}
 	if got := len(rig.deployer.Calls.DeployMemberRuntimeConfig); got != 0 {
 		t.Fatalf("DeployMemberRuntimeConfig calls=%d, want 0 for Team-owned QwenPaw Worker", got)
+	}
+}
+
+func TestWorkerReconcileRejectsDisabledTeamOwnedDeepAgentsBeforeProvisioning(t *testing.T) {
+	worker := newWorker("leader", v1beta1.WorkerSpec{
+		Runtime: "deepagents",
+		RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+			Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+		}},
+	})
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-cr", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{
+			TeamName: "runtime-team",
+			WorkerMembers: []v1beta1.TeamWorkerRef{
+				{Name: "leader", Role: "team_leader"},
+			},
+		},
+	}
+	rig := newWorkerRig(t, worker, team)
+	rig.r.EnvBuilder = &rejectingDeepAgentsEnvBuilder{MockEnvBuilder: rig.envBuilder}
+
+	if _, _, err := rig.reconcile("leader"); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("reconcile error=%v, want DeepAgents platform gate", err)
+	}
+	if got := len(rig.provisioner.Calls.ProvisionWorker); got != 0 {
+		t.Fatalf("ProvisionWorker calls=%d, want 0 before runtime validation", got)
+	}
+	creates, _, _, _, _ := rig.backend.CallSnapshot()
+	if len(creates) != 0 {
+		t.Fatalf("backend create calls=%d, want 0 before runtime validation", len(creates))
+	}
+}
+
+func TestWorkerReconcileRejectsDisabledDefaultDeepAgentsBeforeProvisioning(t *testing.T) {
+	worker := newWorker("standalone", v1beta1.WorkerSpec{
+		RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+			Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "sandbox"},
+		}},
+	})
+	rig := newWorkerRig(t, worker)
+	rig.r.DefaultRuntime = backend.RuntimeDeepAgents
+	rig.r.EnvBuilder = &rejectingDeepAgentsEnvBuilder{MockEnvBuilder: rig.envBuilder}
+
+	if _, _, err := rig.reconcile("standalone"); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("reconcile error=%v, want default DeepAgents platform gate", err)
+	}
+	if got := len(rig.provisioner.Calls.ProvisionWorker); got != 0 {
+		t.Fatalf("ProvisionWorker calls=%d, want 0 before runtime validation", got)
 	}
 }
 
@@ -317,6 +377,64 @@ func TestWorkerReconcileDeleteBlocksReferencedTeamMember(t *testing.T) {
 	}
 	if !controllerutil.ContainsFinalizer(&got, finalizerName) {
 		t.Fatalf("finalizer %q was removed while Worker is referenced by Team", finalizerName)
+	}
+}
+
+func TestWorkerReconcileDeleteRetainsFinalizerWhenRuntimeStateCleanupFails(t *testing.T) {
+	deletionTime := metav1.Now()
+	worker := newWorker("deepagents-worker", v1beta1.WorkerSpec{Runtime: backend.RuntimeDeepAgents})
+	worker.Finalizers = []string{finalizerName}
+	worker.DeletionTimestamp = &deletionTime
+	rig := newWorkerRig(t, worker)
+	rig.backend.DeleteRuntimeStateFn = func(context.Context, string) error {
+		return errors.New("runtime state volume is still in use")
+	}
+
+	_, err := rig.r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: worker.Name, Namespace: worker.Namespace},
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime state volume is still in use") {
+		t.Fatalf("Reconcile error=%v, want runtime state cleanup failure", err)
+	}
+
+	var got v1beta1.Worker
+	if err := rig.client.Get(context.Background(), client.ObjectKeyFromObject(worker), &got); err != nil {
+		t.Fatalf("get deleting Worker: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(&got, finalizerName) {
+		t.Fatalf("finalizer %q was removed after runtime state cleanup failure", finalizerName)
+	}
+	if len(rig.backend.Calls.DeleteRuntimeState) != 1 || rig.backend.Calls.DeleteRuntimeState[0] != worker.Name {
+		t.Fatalf("DeleteRuntimeState calls=%v, want [%s]", rig.backend.Calls.DeleteRuntimeState, worker.Name)
+	}
+}
+
+func TestWorkerReconcileDeleteRetainsFinalizerWhenContainerCleanupFails(t *testing.T) {
+	deletionTime := metav1.Now()
+	worker := newWorker("deepagents-worker", v1beta1.WorkerSpec{Runtime: backend.RuntimeDeepAgents})
+	worker.Finalizers = []string{finalizerName}
+	worker.DeletionTimestamp = &deletionTime
+	rig := newWorkerRig(t, worker)
+	rig.backend.DeleteFn = func(context.Context, string) error {
+		return errors.New("container runtime unavailable")
+	}
+
+	_, err := rig.r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: worker.Name, Namespace: worker.Namespace},
+	})
+	if err == nil || !strings.Contains(err.Error(), "container runtime unavailable") {
+		t.Fatalf("Reconcile error=%v, want container cleanup failure", err)
+	}
+
+	var got v1beta1.Worker
+	if err := rig.client.Get(context.Background(), client.ObjectKeyFromObject(worker), &got); err != nil {
+		t.Fatalf("get deleting Worker: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(&got, finalizerName) {
+		t.Fatalf("finalizer %q was removed after container cleanup failure", finalizerName)
+	}
+	if len(rig.backend.Calls.DeleteRuntimeState) != 1 {
+		t.Fatalf("DeleteRuntimeState calls=%v, want cleanup attempted after container failure", rig.backend.Calls.DeleteRuntimeState)
 	}
 }
 
@@ -1923,6 +2041,37 @@ func TestWorkerMemberContextQwenPawConfigOnlyChangeDoesNotSetSpecChanged(t *test
 	w.Spec.Image = "qwenpaw:v2"
 	if mctx := r.workerMemberContext(w); !mctx.SpecChanged {
 		t.Fatalf("qwenpaw image change should recreate container")
+	}
+}
+
+func TestWorkerMemberContextDeepAgentsRuntimeConfigChangeRecreatesWithPersistentState(t *testing.T) {
+	r := &WorkerReconciler{ControllerName: "ctl-x"}
+	baseSpec := v1beta1.WorkerSpec{
+		Runtime: "deepagents",
+		Image:   "deepagents:v1",
+		Model:   "qwen-max",
+		RuntimeConfig: &v1beta1.WorkerRuntimeConfig{DeepAgents: &v1beta1.DeepAgentsRuntimeConfig{
+			Approvals: v1beta1.DeepAgentsApprovalConfig{FileWrites: "notRequired"},
+			Execution: v1beta1.DeepAgentsExecutionConfig{Mode: "disabled"},
+		}},
+	}
+
+	w := &v1beta1.Worker{}
+	w.Name = "researcher"
+	w.Generation = 2
+	w.Status.ObservedGeneration = 1
+	w.Status.SpecHash = hashAppliedWorkerSpecForRuntime(baseSpec, "deepagents")
+	w.Spec = *baseSpec.DeepCopy()
+	w.Spec.RuntimeConfig.DeepAgents.Approvals.FileWrites = "required"
+	w.Spec.RuntimeConfig.DeepAgents.Execution.Mode = "sandbox"
+
+	if mctx := r.workerMemberContext(w); !mctx.SpecChanged {
+		t.Fatalf("deepagents approval/execution policy changes should recreate the worker pod")
+	}
+
+	w.Spec.Image = "deepagents:v2"
+	if mctx := r.workerMemberContext(w); !mctx.SpecChanged {
+		t.Fatalf("deepagents image change should recreate the worker pod")
 	}
 }
 

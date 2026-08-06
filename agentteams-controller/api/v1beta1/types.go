@@ -20,11 +20,22 @@ const (
 const LabelController = "agentteams.io/controller"
 
 const (
-	LabelWorker  = "agentteams.io/worker"
-	LabelManager = "agentteams.io/manager"
-	LabelRole    = "agentteams.io/role"
-	LabelRuntime = "agentteams.io/runtime"
+	LabelWorker           = "agentteams.io/worker"
+	LabelManager          = "agentteams.io/manager"
+	LabelRole             = "agentteams.io/role"
+	LabelRuntime          = "agentteams.io/runtime"
+	LabelExecutionSandbox = "agentteams.io/execution-sandbox"
 )
+
+// ExecutionSandboxCleanupFinalizer keeps the sandbox generation present while
+// its controller removes Runner resources in isolation-safe order.
+const ExecutionSandboxCleanupFinalizer = "agentteams.io/execution-sandbox-cleanup"
+
+// AnnotationExecutionSandboxUID binds an ownerless Runner NetworkPolicy to one
+// exact ExecutionSandbox generation. The policy intentionally stays outside
+// Kubernetes garbage collection so the sandbox finalizer can retain isolation
+// until the Runner Pod is authoritatively absent.
+const AnnotationExecutionSandboxUID = "agentteams.io/execution-sandbox-uid"
 
 // LabelWorkerSvcName records the ClusterIP Service name created for a
 // Worker when spec.serviceEnabled is true. Removed when the service is
@@ -137,6 +148,21 @@ type AgentResourceValues struct {
 	Memory string `json:"memory,omitempty"`
 }
 
+// ExecutionSandboxResourceRequirements declares optional CPU, memory, and
+// ephemeral-storage requests and limits for an execution sandbox.
+type ExecutionSandboxResourceRequirements struct {
+	Requests ExecutionSandboxResourceValues `json:"requests,omitempty"`
+	Limits   ExecutionSandboxResourceValues `json:"limits,omitempty"`
+}
+
+// ExecutionSandboxResourceValues holds Kubernetes quantity strings for an
+// execution sandbox's CPU, memory, and ephemeral storage.
+type ExecutionSandboxResourceValues struct {
+	CPU              string `json:"cpu,omitempty"`
+	Memory           string `json:"memory,omitempty"`
+	EphemeralStorage string `json:"ephemeralStorage,omitempty"`
+}
+
 // BackendRuntime constants define backend runtime identifiers used by Worker
 // specs.
 const (
@@ -156,6 +182,65 @@ const (
 type WorkerResourceSpec struct {
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+}
+
+// WorkerRuntimeConfig carries settings that are meaningful only to a selected
+// worker runtime. Keeping these settings below a runtime-specific key avoids
+// changing the behavior of existing OpenClaw, CoPaw, Hermes, OpenHuman, and
+// QwenPaw workers.
+type WorkerRuntimeConfig struct {
+	DeepAgents *DeepAgentsRuntimeConfig `json:"deepagents,omitempty"`
+}
+
+// DeepAgentsRuntimeConfig configures AgentTeams policy boundaries around a
+// DeepAgents worker. Credentials are never accepted here; the controller
+// projects only environment-variable names into runtime.yaml.
+type DeepAgentsRuntimeConfig struct {
+	Approvals DeepAgentsApprovalConfig  `json:"approvals,omitempty"`
+	Execution DeepAgentsExecutionConfig `json:"execution,omitempty"`
+}
+
+// DeepAgentsApprovalConfig declares which DeepAgents tool calls require a
+// Human decision in Matrix. Execute always requires approval regardless of
+// these values.
+type DeepAgentsApprovalConfig struct {
+	// +kubebuilder:validation:Enum=required;notRequired
+	FileWrites string `json:"fileWrites,omitempty"`
+	// +kubebuilder:validation:Enum=required;notRequired
+	MCPDefault   string                      `json:"mcpDefault,omitempty"`
+	MCPRules     []DeepAgentsMCPApprovalRule `json:"mcpRules,omitempty"`
+	Coordinators []string                    `json:"coordinators,omitempty"`
+}
+
+// DeepAgentsMCPApprovalRule overrides approval behavior for one exact MCP
+// server and tool pair.
+type DeepAgentsMCPApprovalRule struct {
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+	// +kubebuilder:validation:Enum=required;notRequired
+	Mode string `json:"mode"`
+}
+
+// DeepAgentsExecutionConfig selects the isolated execution sandbox and its
+// lifecycle/resource envelope. The default mode is disabled.
+type DeepAgentsExecutionConfig struct {
+	// +kubebuilder:validation:Enum=disabled;sandbox
+	Mode        string                                `json:"mode,omitempty"`
+	IdleTimeout string                                `json:"idleTimeout,omitempty"`
+	MaxLifetime string                                `json:"maxLifetime,omitempty"`
+	Resources   *ExecutionSandboxResourceRequirements `json:"resources,omitempty"`
+	Egress      []DeepAgentsEgressRule                `json:"egress,omitempty"`
+}
+
+// DeepAgentsEgressRule requests one CIDR/port allowance for the execution
+// sandbox. The controller intersects requested rules with cluster-level
+// ceilings before creating a NetworkPolicy.
+type DeepAgentsEgressRule struct {
+	CIDR string `json:"cidr"`
+	// +kubebuilder:validation:Enum=TCP;UDP
+	Protocol string `json:"protocol,omitempty"`
+	// +kubebuilder:validation:MinItems=1
+	Ports []int32 `json:"ports"`
 }
 
 // Worker volume provider constants.
@@ -178,9 +263,10 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
-	Image         string                     `json:"image,omitempty"`         // custom Docker image
-	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | openhuman | qwenpaw | deepagents (default: openclaw)
+	RuntimeConfig *WorkerRuntimeConfig       `json:"runtimeConfig,omitempty"`
+	Image         string                     `json:"image,omitempty"`      // custom Docker image
+	WorkerName    string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`
 	Soul          string                     `json:"soul,omitempty"`
 	Agents        string                     `json:"agents,omitempty"`
@@ -383,6 +469,7 @@ type WorkerStatus struct {
 	LastActiveAt       string              `json:"lastActiveAt,omitempty"`
 	Message            string              `json:"message,omitempty"`
 	ExposedPorts       []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	Conditions         []metav1.Condition  `json:"conditions,omitempty"`
 
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
@@ -407,6 +494,58 @@ type WorkerList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Worker `json:"items"`
+}
+
+// +genclient
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=execsandbox;esb
+// +kubebuilder:printcolumn:name="Worker",type=string,JSONPath=`.spec.workerRef.name`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// ExecutionSandbox represents one controller-managed, isolated command runner
+// for a DeepAgents Worker and Matrix thread. Users normally create it through
+// the controller API rather than directly.
+type ExecutionSandbox struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              ExecutionSandboxSpec   `json:"spec"`
+	Status            ExecutionSandboxStatus `json:"status,omitempty"`
+}
+
+type ExecutionSandboxWorkerRef struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+}
+
+type ExecutionSandboxSpec struct {
+	WorkerRef ExecutionSandboxWorkerRef `json:"workerRef"`
+	SessionID string                    `json:"sessionId"`
+	Image     string                    `json:"image,omitempty"`
+
+	IdleTimeout string                                `json:"idleTimeout,omitempty"`
+	MaxLifetime string                                `json:"maxLifetime,omitempty"`
+	Resources   *ExecutionSandboxResourceRequirements `json:"resources,omitempty"`
+	Egress      []DeepAgentsEgressRule                `json:"egress,omitempty"`
+}
+
+type ExecutionSandboxStatus struct {
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Phase              string             `json:"phase,omitempty"`
+	Endpoint           string             `json:"endpoint,omitempty"`
+	PodName            string             `json:"podName,omitempty"`
+	LastHeartbeat      *metav1.Time       `json:"lastHeartbeat,omitempty"`
+	ExpiresAt          *metav1.Time       `json:"expiresAt,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type ExecutionSandboxList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ExecutionSandbox `json:"items"`
 }
 
 // +genclient

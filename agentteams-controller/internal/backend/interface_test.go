@@ -39,6 +39,7 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeCopaw, true},
 		{RuntimeHermes, true},
 		{RuntimeQwenPaw, true},
+		{RuntimeDeepAgents, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {

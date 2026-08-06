@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,6 +57,7 @@ type memberRuntimeConfigTeamAdmin struct {
 
 type memberRuntimeConfigMember struct {
 	Name           string `json:"name,omitempty"`
+	UID            string `json:"uid,omitempty"`
 	RuntimeName    string `json:"runtimeName"`
 	Role           string `json:"role,omitempty"`
 	Runtime        string `json:"runtime"`
@@ -63,7 +66,10 @@ type memberRuntimeConfigMember struct {
 }
 
 type memberRuntimeConfigMatrix struct {
-	AccessToken string `json:"accessToken,omitempty"`
+	HomeserverURL     string   `json:"homeserverUrl,omitempty"`
+	EncryptionEnabled bool     `json:"encryptionEnabled,omitempty"`
+	AccessToken       string   `json:"accessToken,omitempty"`
+	AgentUserIDs      []string `json:"agentUserIds,omitempty"`
 }
 
 type memberRuntimeConfigDesired struct {
@@ -76,6 +82,7 @@ type memberRuntimeConfigDesired struct {
 	AgentIdentity      *v1beta1.AgentIdentitySpec        `json:"agentIdentity,omitempty"`
 	CredentialBindings []v1beta1.CredentialBinding       `json:"credentialBindings,omitempty"`
 	Channels           *memberRuntimeConfigChannels      `json:"channels,omitempty"`
+	RuntimeConfig      *v1beta1.WorkerRuntimeConfig      `json:"runtimeConfig,omitempty"`
 	State              string                            `json:"state"`
 }
 
@@ -139,6 +146,8 @@ type memberRuntimeConfigCredentials struct {
 	GatewayKeyEnv           string `json:"gatewayKeyEnv"`
 	StorageAccessKeyEnv     string `json:"storageAccessKeyEnv"`
 	StorageSecretKeyEnv     string `json:"storageSecretKeyEnv"`
+	CheckpointDSNEnv        string `json:"checkpointDSNEnv,omitempty"`
+	CheckpointAESKeyEnv     string `json:"checkpointAESKeyEnv,omitempty"`
 	ServiceAccountTokenPath string `json:"serviceAccountTokenPath"`
 }
 
@@ -215,6 +224,9 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 	if req.Name != "" {
 		doc.Member.Name = req.Name
 	}
+	if req.UID != "" {
+		doc.Member.UID = req.UID
+	}
 	doc.Member.RuntimeName = runtimeName
 	if req.Role != "" {
 		doc.Member.Role = req.Role
@@ -226,6 +238,15 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 		doc.Member.PersonalRoomID = req.PersonalRoomID
 	}
 	applyRuntimeTeamContext(&doc, req)
+	if memberRuntimeConfigUsesDeepAgents(doc, req) {
+		if doc.Matrix == nil {
+			doc.Matrix = &memberRuntimeConfigMatrix{
+				HomeserverURL:     d.runtimeProjection.MatrixHomeserverURL,
+				EncryptionEnabled: d.runtimeProjection.MatrixEncryptionEnabled,
+			}
+		}
+		doc.Matrix.AgentUserIDs = d.deepAgentsAgentUserIDs(req.AgentUserIDs)
+	}
 
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
@@ -245,6 +266,12 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	if runtime == "" {
 		runtime = "openclaw"
 	}
+	if runtime == "deepagents" && !strings.EqualFold(strings.TrimSpace(d.runtimeProjection.StorageProvider), "minio") {
+		return memberRuntimeConfigDocument{}, fmt.Errorf(
+			"runtime=deepagents requires storage.provider=minio (got %q)",
+			d.runtimeProjection.StorageProvider,
+		)
+	}
 	role := strings.TrimSpace(req.Role)
 	if role == "" {
 		role = "worker"
@@ -257,10 +284,16 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		CredentialBindings: copyCredentialBindings(req.Spec.CredentialBindings),
 		State:              req.Spec.DesiredState(),
 	}
+	if runtime == "deepagents" {
+		desired.RuntimeConfig = req.Spec.RuntimeConfig.DeepCopy()
+	}
 	if req.Spec.Model != "" && !isNativeConfigModel(req.Spec.Model) {
 		gatewayURL := strings.TrimSpace(req.AIGatewayURL)
 		if gatewayURL == "" {
 			gatewayURL = d.runtimeProjection.AIGatewayURL
+			if runtime == "deepagents" {
+				gatewayURL = canonicalManagedDeepAgentsGatewayURL(gatewayURL)
+			}
 		}
 		desired.Model = &memberRuntimeConfigModel{
 			ProviderID: "agentteams-gateway",
@@ -301,6 +334,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		},
 		Member: memberRuntimeConfigMember{
 			Name:           req.Name,
+			UID:            req.UID,
 			RuntimeName:    runtimeName,
 			Role:           role,
 			Runtime:        runtime,
@@ -325,13 +359,66 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			ServiceAccountTokenPath: "/var/run/secrets/agentteams/token",
 		},
 	}
-	if req.MatrixAccessToken != "" {
+	if runtime == "deepagents" {
+		doc.Matrix = &memberRuntimeConfigMatrix{
+			HomeserverURL:     d.runtimeProjection.MatrixHomeserverURL,
+			EncryptionEnabled: d.runtimeProjection.MatrixEncryptionEnabled,
+			AgentUserIDs:      d.deepAgentsAgentUserIDs(req.AgentUserIDs),
+		}
+		doc.Credentials.CheckpointDSNEnv = "AGENTTEAMS_CHECKPOINT_DSN"
+		doc.Credentials.CheckpointAESKeyEnv = "AGENTTEAMS_CHECKPOINT_AES_KEY"
+	} else if req.MatrixAccessToken != "" {
 		doc.Matrix = &memberRuntimeConfigMatrix{AccessToken: req.MatrixAccessToken}
 	}
 
 	applyRuntimeTeamContext(&doc, req)
 
 	return doc, nil
+}
+
+func (d *Deployer) deepAgentsAgentUserIDs(values []string) []string {
+	if matrixDomain := strings.TrimSpace(d.matrixDomain); matrixDomain != "" {
+		values = append(values, "@manager:"+matrixDomain)
+	}
+	return normalizedAgentUserIDs(values)
+}
+
+func memberRuntimeConfigUsesDeepAgents(doc memberRuntimeConfigDocument, req MemberRuntimeConfigDeployRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(req.Runtime), "deepagents") ||
+		strings.EqualFold(strings.TrimSpace(req.Spec.Runtime), "deepagents") ||
+		strings.EqualFold(strings.TrimSpace(doc.Member.Runtime), "deepagents") ||
+		(doc.Desired.RuntimeConfig != nil && doc.Desired.RuntimeConfig.DeepAgents != nil)
+}
+
+func normalizedAgentUserIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			seen[value] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for value := range seen {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// canonicalManagedDeepAgentsGatewayURL appends the OpenAI API version only to
+// the managed gateway origin. Explicit provider paths are not rewritten.
+func canonicalManagedDeepAgentsGatewayURL(rawURL string) string {
+	endpoint := strings.TrimSpace(rawURL)
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || strings.Trim(parsed.Path, "/") != "" {
+		return endpoint
+	}
+	parsed.Path = "/v1"
+	return parsed.String()
 }
 
 func isNativeConfigModel(model string) bool {

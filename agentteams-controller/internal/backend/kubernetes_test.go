@@ -15,6 +15,7 @@ import (
 type fakeK8sCoreClient struct {
 	pods       map[string]map[string]*corev1.Pod
 	configMaps map[string]map[string]*corev1.ConfigMap
+	pvcs       map[string]map[string]*corev1.PersistentVolumeClaim
 	cmGetErr   error          // if non-nil, every ConfigMap Get returns this error
 	getCalls   map[string]int // key: "namespace/name" -> count (for caching-behavior tests)
 }
@@ -23,6 +24,7 @@ func newFakeK8sCoreClient(objects ...*corev1.Pod) *fakeK8sCoreClient {
 	client := &fakeK8sCoreClient{
 		pods:       map[string]map[string]*corev1.Pod{},
 		configMaps: map[string]map[string]*corev1.ConfigMap{},
+		pvcs:       map[string]map[string]*corev1.PersistentVolumeClaim{},
 		getCalls:   map[string]int{},
 	}
 	for _, obj := range objects {
@@ -93,12 +95,51 @@ func (f *fakeK8sCoreClient) ServiceAccounts(_ string) K8sServiceAccountClient {
 	panic("not implemented")
 }
 
+func (f *fakeK8sCoreClient) PersistentVolumeClaims(namespace string) K8sPersistentVolumeClaimClient {
+	if f.pvcs[namespace] == nil {
+		f.pvcs[namespace] = map[string]*corev1.PersistentVolumeClaim{}
+	}
+	return &fakeK8sPersistentVolumeClaimClient{namespace: namespace, store: f.pvcs[namespace]}
+}
+
 func (f *fakeK8sCoreClient) TokenReviews() K8sTokenReviewClient {
 	panic("not implemented")
 }
 
 // fakeK8sServiceClient is a no-op stub for tests that don't exercise Services.
 type fakeK8sServiceClient struct{}
+
+type fakeK8sPersistentVolumeClaimClient struct {
+	namespace string
+	store     map[string]*corev1.PersistentVolumeClaim
+}
+
+func (f *fakeK8sPersistentVolumeClaimClient) Get(
+	_ context.Context,
+	name string,
+	_ metav1.GetOptions,
+) (*corev1.PersistentVolumeClaim, error) {
+	if pvc, ok := f.store[name]; ok {
+		return pvc.DeepCopy(), nil
+	}
+	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "persistentvolumeclaims"}, name)
+}
+
+func (f *fakeK8sPersistentVolumeClaimClient) Create(
+	_ context.Context,
+	pvc *corev1.PersistentVolumeClaim,
+	_ metav1.CreateOptions,
+) (*corev1.PersistentVolumeClaim, error) {
+	if _, ok := f.store[pvc.Name]; ok {
+		return nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "persistentvolumeclaims"}, pvc.Name)
+	}
+	created := pvc.DeepCopy()
+	if created.Namespace == "" {
+		created.Namespace = f.namespace
+	}
+	f.store[created.Name] = created
+	return created.DeepCopy(), nil
+}
 
 func (f *fakeK8sServiceClient) Get(_ context.Context, _ string, _ metav1.GetOptions) (*corev1.Service, error) {
 	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "")
@@ -371,7 +412,13 @@ func TestK8sStatus(t *testing.T) {
 				"agentteams.io/worker": "bob",
 			},
 		},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
+		},
 	})
 
 	result, err := b.Status(context.Background(), "bob")
@@ -392,9 +439,15 @@ func TestK8sStatus_ContainerFailureReasons(t *testing.T) {
 		wantMessage string
 	}{
 		{
-			name: "pending image pull backoff fails worker",
+			name: "image pull backoff fails despite unready diagnostic",
 			podStatus: corev1.PodStatus{
 				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type:    corev1.PodReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ContainersNotReady",
+					Message: "containers with unready status: [worker]",
+				}},
 				ContainerStatuses: []corev1.ContainerStatus{{
 					Name: "worker",
 					State: corev1.ContainerState{
@@ -408,6 +461,55 @@ func TestK8sStatus_ContainerFailureReasons(t *testing.T) {
 			wantStatus:  StatusFailed,
 			wantRaw:     "ImagePullBackOff",
 			wantMessage: `container worker: ImagePullBackOff: failed to pull image "registry.example.com/worker:missing": not found`,
+		},
+		{
+			name: "crash loop backoff fails despite unready diagnostic",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:    corev1.PodReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ContainersNotReady",
+					Message: "containers with unready status: [worker]",
+				}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "CrashLoopBackOff",
+							Message: "back-off 5m0s restarting failed container=worker pod=agentteams-worker-test",
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusFailed,
+			wantRaw:     "CrashLoopBackOff",
+			wantMessage: "container worker: CrashLoopBackOff: back-off 5m0s restarting failed container=worker pod=agentteams-worker-test",
+		},
+		{
+			name: "nonzero terminated container fails despite unready diagnostic",
+			podStatus: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:    corev1.PodReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ContainersNotReady",
+					Message: "containers with unready status: [worker]",
+				}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "worker",
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 17,
+							Reason:   "Error",
+							Message:  "worker exited unexpectedly",
+						},
+					},
+				}},
+			},
+			wantStatus:  StatusFailed,
+			wantRaw:     "Error",
+			wantMessage: "container worker: Error: worker exited unexpectedly",
 		},
 		{
 			name: "init container config error fails worker",
@@ -536,7 +638,13 @@ func TestK8sWithPrefix(t *testing.T) {
 				"agentteams.io/manager": "default",
 			},
 		},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
+		},
 	}
 	b := newTestK8sBackend(managerPod)
 
@@ -630,6 +738,7 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		{"openclaw", RuntimeOpenClaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"hermes", RuntimeHermes, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"copaw", RuntimeCopaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
+		{"deepagents", RuntimeDeepAgents, "/var/lib/agentteams", "/var/lib/agentteams"},
 		{"empty_default", "", "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 	}
 	for _, tc := range cases {
@@ -671,6 +780,239 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 	}
 }
 
+func TestK8sCreateDeepAgentsAddsPersistentStateVolume(t *testing.T) {
+	client := newFakeK8sCoreClient()
+	b := NewK8sBackendWithClient(client, K8sConfig{
+		Namespace:                  "agentteams",
+		DeepAgentsWorkerImage:      "agentteams/deepagents-worker:latest",
+		DeepAgentsCheckpointSecret: "deepagents-checkpoint",
+		DeepAgentsCheckpointDSNKey: "dsn",
+		DeepAgentsCheckpointAESKey: "aes-key",
+		WorkerCPU:                  "1000m",
+		WorkerMemory:               "2Gi",
+	}, "agentteams-worker-", nil)
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:    "alice",
+		Runtime: RuntimeDeepAgents,
+		Image:   "registry.example.invalid/deepagents-worker:upgrade-test",
+		Labels:  map[string]string{v1beta1.LabelRuntime: RuntimeOpenClaw},
+		Env: map[string]string{
+			"AGENTTEAMS_CHECKPOINT_DSN":     "postgresql://user:secret@db/deepagents",
+			"AGENTTEAMS_CHECKPOINT_AES_KEY": "0123456789abcdef0123456789abcdef",
+		},
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	pod, err := b.client.Pods("agentteams").Get(context.Background(), "agentteams-worker-alice", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get pod failed: %v", err)
+	}
+	if len(pod.Spec.Volumes) != 3 {
+		t.Fatalf("volumes = %#v, want projected token, DeepAgents state, and tmp", pod.Spec.Volumes)
+	}
+	stateVolume := pod.Spec.Volumes[1]
+	if stateVolume.Name != "deepagents-state" || stateVolume.PersistentVolumeClaim == nil {
+		t.Fatalf("state volume = %#v, want deepagents-state PVC", stateVolume)
+	}
+	if stateVolume.PersistentVolumeClaim.ClaimName != "agentteams-worker-alice-state" {
+		t.Fatalf("claim name = %q", stateVolume.PersistentVolumeClaim.ClaimName)
+	}
+	pvc := client.pvcs["agentteams"]["agentteams-worker-alice-state"]
+	if pvc == nil {
+		t.Fatal("DeepAgents state PVC was not created")
+	}
+	if got := pvc.Spec.Resources.Requests.Storage().String(); got != "1Gi" {
+		t.Fatalf("PVC storage = %q, want 1Gi", got)
+	}
+	if pvc.Labels[v1beta1.LabelRuntime] != RuntimeDeepAgents || pvc.Labels[v1beta1.LabelWorker] != "alice" {
+		t.Fatalf("PVC labels = %#v", pvc.Labels)
+	}
+	container := pod.Spec.Containers[0]
+	if pod.Labels[v1beta1.LabelRuntime] != RuntimeDeepAgents {
+		t.Fatalf("protected runtime label=%q, want deepagents", pod.Labels[v1beta1.LabelRuntime])
+	}
+	assertDeepAgentsStatePermissionsInit(t, pod)
+	for _, name := range []string{"AGENTTEAMS_CHECKPOINT_DSN", "AGENTTEAMS_CHECKPOINT_AES_KEY"} {
+		var found *corev1.EnvVar
+		for i := range container.Env {
+			if container.Env[i].Name == name {
+				found = &container.Env[i]
+				break
+			}
+		}
+		if found == nil || found.Value != "" || found.ValueFrom == nil || found.ValueFrom.SecretKeyRef == nil ||
+			found.ValueFrom.SecretKeyRef.Name != "deepagents-checkpoint" {
+			t.Fatalf("%s must use checkpoint SecretKeyRef without a literal value: %#v", name, found)
+		}
+	}
+	if len(container.VolumeMounts) != 3 {
+		t.Fatalf("volumeMounts = %#v, want token, DeepAgents state, and tmp", container.VolumeMounts)
+	}
+	stateMount := container.VolumeMounts[1]
+	if stateMount.Name != "deepagents-state" || stateMount.MountPath != "/var/lib/agentteams/deepagents" {
+		t.Fatalf("state mount = %#v", stateMount)
+	}
+	if pod.Spec.Volumes[2].Name != "deepagents-tmp" || pod.Spec.Volumes[2].EmptyDir == nil {
+		t.Fatalf("tmp volume = %#v", pod.Spec.Volumes[2])
+	}
+	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.FSGroup == nil || *pod.Spec.SecurityContext.FSGroup != 65532 {
+		t.Fatalf("pod security context = %#v", pod.Spec.SecurityContext)
+	}
+	security := container.SecurityContext
+	if security == nil || security.RunAsNonRoot == nil || !*security.RunAsNonRoot ||
+		security.RunAsUser == nil || *security.RunAsUser != 65532 ||
+		security.RunAsGroup == nil || *security.RunAsGroup != 65532 ||
+		security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation ||
+		security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem ||
+		security.SeccompProfile == nil || security.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault ||
+		security.Capabilities == nil || len(security.Capabilities.Drop) != 1 || security.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("container security context = %#v", security)
+	}
+	probe := container.ReadinessProbe
+	if probe == nil || probe.Exec == nil {
+		t.Fatalf("DeepAgents readiness probe = %#v, want exec probe", probe)
+	}
+	wantCommand := []string{"test", "-f", "/tmp/agentteams-deepagents-ready"}
+	if len(probe.Exec.Command) != len(wantCommand) {
+		t.Fatalf("DeepAgents readiness command = %#v, want %#v", probe.Exec.Command, wantCommand)
+	}
+	for i := range wantCommand {
+		if probe.Exec.Command[i] != wantCommand[i] {
+			t.Fatalf("DeepAgents readiness command = %#v, want %#v", probe.Exec.Command, wantCommand)
+		}
+	}
+}
+
+func TestK8sCreateDeepAgentsReusesExistingStatePVCWithoutChangingItsDataPath(t *testing.T) {
+	client := newFakeK8sCoreClient()
+	client.pvcs["agentteams"] = map[string]*corev1.PersistentVolumeClaim{
+		"agentteams-worker-existing-state": {
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "agentteams-worker-existing-state",
+				Namespace: "agentteams",
+				Labels: map[string]string{
+					v1beta1.LabelRuntime: RuntimeDeepAgents,
+					v1beta1.LabelWorker:  "existing",
+				},
+			},
+		},
+	}
+	b := NewK8sBackendWithClient(client, K8sConfig{
+		Namespace:             "agentteams",
+		DeepAgentsWorkerImage: "agentteams/deepagents-worker:existing",
+		WorkerCPU:             "1000m",
+		WorkerMemory:          "2Gi",
+	}, "agentteams-worker-", nil)
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:    "existing",
+		Runtime: RuntimeDeepAgents,
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if len(client.pvcs["agentteams"]) != 1 {
+		t.Fatalf("PVCs = %#v, want the existing state PVC to be reused", client.pvcs["agentteams"])
+	}
+	pod, err := b.client.Pods("agentteams").Get(
+		context.Background(),
+		"agentteams-worker-existing",
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Get pod failed: %v", err)
+	}
+	assertDeepAgentsStatePermissionsInit(t, pod)
+	init := pod.Spec.InitContainers[0]
+	if len(init.Command) != 3 || init.Command[0] != "chown" || init.Command[1] != "65532:65532" ||
+		init.Command[2] != "/var/lib/agentteams/deepagents" || len(init.Args) != 0 {
+		t.Fatalf("state permissions command = %#v args=%#v, want one non-recursive mount-root chown", init.Command, init.Args)
+	}
+	stateMount := pod.Spec.Containers[0].VolumeMounts[1]
+	if stateMount.Name != "deepagents-state" || stateMount.MountPath != "/var/lib/agentteams/deepagents" ||
+		stateMount.SubPath != "" {
+		t.Fatalf("existing state mount = %#v, want unchanged root-level state path", stateMount)
+	}
+}
+
+func assertDeepAgentsStatePermissionsInit(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	if len(pod.Spec.InitContainers) != 1 {
+		t.Fatalf("initContainers = %#v, want one DeepAgents state permissions init", pod.Spec.InitContainers)
+	}
+	init := pod.Spec.InitContainers[0]
+	if init.Name != "deepagents-state-permissions" {
+		t.Fatalf("init name = %q, want deepagents-state-permissions", init.Name)
+	}
+	if len(pod.Spec.Containers) == 0 || init.Image != pod.Spec.Containers[0].Image ||
+		init.ImagePullPolicy != pod.Spec.Containers[0].ImagePullPolicy {
+		t.Fatalf("init image=%q pullPolicy=%q, want worker image=%q pullPolicy=%q",
+			init.Image, init.ImagePullPolicy, pod.Spec.Containers[0].Image, pod.Spec.Containers[0].ImagePullPolicy)
+	}
+	if len(init.Command) != 3 || init.Command[0] != "chown" || init.Command[1] != "65532:65532" ||
+		init.Command[2] != "/var/lib/agentteams/deepagents" || len(init.Args) != 0 {
+		t.Fatalf("init command = %#v args=%#v, want exact non-recursive chown", init.Command, init.Args)
+	}
+	if len(init.Env) != 0 || len(init.EnvFrom) != 0 {
+		t.Fatalf("init credentials = env:%#v envFrom:%#v, want none", init.Env, init.EnvFrom)
+	}
+	if len(init.VolumeMounts) != 1 {
+		t.Fatalf("init volumeMounts = %#v, want only deepagents-state", init.VolumeMounts)
+	}
+	mount := init.VolumeMounts[0]
+	if mount.Name != "deepagents-state" || mount.MountPath != "/var/lib/agentteams/deepagents" ||
+		mount.ReadOnly || mount.SubPath != "" {
+		t.Fatalf("init state mount = %#v", mount)
+	}
+	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+		t.Fatalf("pod automountServiceAccountToken = %v, want false", pod.Spec.AutomountServiceAccountToken)
+	}
+	security := init.SecurityContext
+	if security == nil || security.RunAsUser == nil || *security.RunAsUser != 0 ||
+		security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation ||
+		security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem ||
+		security.SeccompProfile == nil || security.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault ||
+		security.Capabilities == nil || len(security.Capabilities.Drop) != 1 ||
+		security.Capabilities.Drop[0] != "ALL" || len(security.Capabilities.Add) != 1 ||
+		security.Capabilities.Add[0] != "CHOWN" {
+		t.Fatalf("init security context = %#v", security)
+	}
+}
+
+func TestK8sCreateNonDeepAgentsPreservesTemplateReadinessProbe(t *testing.T) {
+	b, fake := newTestK8sBackendWithFake(K8sConfig{ControllerName: testControllerName})
+	injectTemplateConfigMap(t, fake, `spec:
+  containers:
+    - name: worker
+      readinessProbe:
+        httpGet:
+          path: /runtime-ready
+          port: 8080
+`)
+
+	if _, err := b.Create(context.Background(), CreateRequest{
+		Name:    "openclaw-probe",
+		Runtime: RuntimeOpenClaw,
+	}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	pod, err := b.client.Pods("agentteams").Get(
+		context.Background(),
+		"agentteams-worker-openclaw-probe",
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Get pod failed: %v", err)
+	}
+	if len(pod.Spec.InitContainers) != 0 {
+		t.Fatalf("non-DeepAgents initContainers changed: %#v", pod.Spec.InitContainers)
+	}
+	probe := pod.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/runtime-ready" || probe.HTTPGet.Port.IntVal != 8080 {
+		t.Fatalf("non-DeepAgents readiness probe changed: %#v", probe)
+	}
+}
+
 // TestK8sCreateResolvesImageFromRuntime verifies that the K8s backend selects
 // the correct image and runtime label based on req.Runtime, with empty values
 // falling back to the caller-provided RuntimeFallback (worker reconciler →
@@ -686,24 +1028,27 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw", RuntimeCopaw, "", "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"explicit_hermes", RuntimeHermes, "", "agentteams/hermes-worker:latest", RuntimeHermes},
 		{"explicit_qwenpaw", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
+		{"explicit_deepagents", RuntimeDeepAgents, "", "agentteams/deepagents-worker:latest", RuntimeDeepAgents},
 		{"explicit_openclaw", RuntimeOpenClaw, "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_no_fallback", "", "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_with_copaw_fallback", "", RuntimeCopaw, "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"empty_with_hermes_fallback", "", RuntimeHermes, "agentteams/hermes-worker:latest", RuntimeHermes},
 		{"empty_with_qwenpaw_fallback", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
+		{"empty_with_deepagents_fallback", "", RuntimeDeepAgents, "agentteams/deepagents-worker:latest", RuntimeDeepAgents},
 		{"explicit_overrides_fallback", RuntimeOpenClaw, RuntimeHermes, "agentteams/worker-agent:latest", RuntimeOpenClaw},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:          "agentteams",
-				WorkerImage:        "agentteams/worker-agent:latest",
-				CopawWorkerImage:   "agentteams/copaw-worker:latest",
-				HermesWorkerImage:  "agentteams/hermes-worker:latest",
-				QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
-				WorkerCPU:          "1000m",
-				WorkerMemory:       "2Gi",
+				Namespace:             "agentteams",
+				WorkerImage:           "agentteams/worker-agent:latest",
+				CopawWorkerImage:      "agentteams/copaw-worker:latest",
+				HermesWorkerImage:     "agentteams/hermes-worker:latest",
+				QwenPawWorkerImage:    "agentteams/qwenpaw-worker:latest",
+				DeepAgentsWorkerImage: "agentteams/deepagents-worker:latest",
+				WorkerCPU:             "1000m",
+				WorkerMemory:          "2Gi",
 			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
@@ -1144,10 +1489,10 @@ func TestPodReadyCondition(t *testing.T) {
 		wantReady   bool
 	}{
 		{
-			name:        "nil conditions",
+			name:        "nil conditions are not ready",
 			conditions:  nil,
 			wantMessage: "",
-			wantReady:   true,
+			wantReady:   false,
 		},
 		{
 			name: "Ready=True",
@@ -1174,12 +1519,12 @@ func TestPodReadyCondition(t *testing.T) {
 			wantReady:   false,
 		},
 		{
-			name: "Other conditions but no Ready",
+			name: "Other conditions but no Ready are not ready",
 			conditions: []corev1.PodCondition{
 				{Type: corev1.PodScheduled, Status: corev1.ConditionTrue},
 			},
 			wantMessage: "",
-			wantReady:   true,
+			wantReady:   false,
 		},
 	}
 	for _, tc := range cases {
@@ -1215,13 +1560,18 @@ func TestK8sStatus_ReadyCondition(t *testing.T) {
 			wantMessage: "",
 		},
 		{
-			name:     "Running + Ready=False with message",
+			name:     "Running + Ready=False ContainersNotReady remains starting",
 			podPhase: corev1.PodRunning,
 			conditions: []corev1.PodCondition{
-				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Message: "crash info"},
+				{
+					Type:    corev1.PodReady,
+					Status:  corev1.ConditionFalse,
+					Reason:  "ContainersNotReady",
+					Message: "containers with unready status: [worker]",
+				},
 			},
-			wantStatus:  StatusFailed,
-			wantMessage: "crash info",
+			wantStatus:  StatusStarting,
+			wantMessage: "containers with unready status: [worker]",
 		},
 		{
 			name:     "Running + Ready=False without message",
@@ -1229,6 +1579,13 @@ func TestK8sStatus_ReadyCondition(t *testing.T) {
 			conditions: []corev1.PodCondition{
 				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Message: ""},
 			},
+			wantStatus:  StatusStarting,
+			wantMessage: "",
+		},
+		{
+			name:        "Running without Ready condition remains starting",
+			podPhase:    corev1.PodRunning,
+			conditions:  nil,
 			wantStatus:  StatusStarting,
 			wantMessage: "",
 		},

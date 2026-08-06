@@ -29,6 +29,8 @@ MANAGER_QWENPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-qwenpaw
 WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
 COPAW_WORKER_IMAGE   ?= $(REGISTRY)/$(REPO)/agentteams-copaw-worker
 HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
+DEEPAGENTS_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-deepagents-worker
+DEEPAGENTS_RUNNER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-deepagents-runner
 QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-qwenpaw-worker
 OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
@@ -40,6 +42,8 @@ MANAGER_QWENPAW_TAG  ?= $(MANAGER_QWENPAW_IMAGE):$(VERSION)
 WORKER_TAG         ?= $(WORKER_IMAGE):$(VERSION)
 COPAW_WORKER_TAG   ?= $(COPAW_WORKER_IMAGE):$(VERSION)
 HERMES_WORKER_TAG  ?= $(HERMES_WORKER_IMAGE):$(VERSION)
+DEEPAGENTS_WORKER_TAG ?= $(DEEPAGENTS_WORKER_IMAGE):$(VERSION)
+DEEPAGENTS_RUNNER_TAG ?= $(DEEPAGENTS_RUNNER_IMAGE):$(VERSION)
 QWENPAW_WORKER_TAG ?= $(QWENPAW_WORKER_IMAGE):$(VERSION)
 OPENHUMAN_WORKER_TAG ?= $(OPENHUMAN_WORKER_IMAGE):$(VERSION)
 OPENCLAW_BASE_TAG  ?= $(OPENCLAW_BASE_IMAGE):$(VERSION)
@@ -52,6 +56,8 @@ LOCAL_MANAGER_QWENPAW  = agentteams/manager-qwenpaw:$(VERSION)
 LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
 LOCAL_COPAW_WORKER   = agentteams/copaw-worker:$(VERSION)
 LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
+LOCAL_DEEPAGENTS_WORKER = agentteams/deepagents-worker:$(VERSION)
+LOCAL_DEEPAGENTS_RUNNER = agentteams/deepagents-runner:$(VERSION)
 LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
 LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
@@ -108,11 +114,11 @@ LINES          ?= 50
 
 # ---------- Phony targets ----------
 
-.PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker \
+.PHONY: all build build-openclaw-base build-agentteams-controller build-embedded build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-deepagents-worker build-deepagents-runner build-openhuman-worker \
         build-qwenpaw-worker \
-        tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker \
+        tag push push-openclaw-base push-agentteams-controller push-embedded push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-deepagents-worker push-deepagents-runner push-openhuman-worker \
         push-qwenpaw-worker \
-        push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-openhuman-worker \
+        push-native push-native-manager push-native-manager-qwenpaw push-native-worker push-native-copaw-worker push-native-hermes-worker push-native-deepagents-worker push-native-deepagents-runner push-native-openhuman-worker \
         push-native-qwenpaw-worker \
         buildx-setup \
         test test-quick test-installed test-embedded \
@@ -128,7 +134,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build all images (base image pulled from registry, not rebuilt locally)
+build: build-manager build-manager-qwenpaw build-worker build-copaw-worker build-hermes-worker build-deepagents-worker build-deepagents-runner build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build all images (base image pulled from registry, not rebuilt locally)
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -196,6 +202,22 @@ build-hermes-worker: ## Build Hermes Worker image
 		-t $(LOCAL_HERMES_WORKER) \
 		./hermes/
 
+build-deepagents-worker: ## Build DeepAgents Worker image from vendored source
+	@echo "==> Building DeepAgents Worker image: $(LOCAL_DEEPAGENTS_WORKER)"
+	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		--target worker \
+		-f deepagents-agentteams/Dockerfile \
+		-t $(LOCAL_DEEPAGENTS_WORKER) \
+		.
+
+build-deepagents-runner: ## Build credential-free DeepAgents Runner image
+	@echo "==> Building DeepAgents Runner image: $(LOCAL_DEEPAGENTS_RUNNER)"
+	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+		--target runner \
+		-f deepagents-agentteams/Dockerfile \
+		-t $(LOCAL_DEEPAGENTS_RUNNER) \
+		.
+
 build-openhuman-worker: ## Build OpenHuman Worker image (Rust + native Matrix)
 	@echo "==> Building OpenHuman Worker image: $(LOCAL_OPENHUMAN_WORKER)"
 	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
@@ -218,6 +240,8 @@ tag: build ## Tag images for registry push
 	docker tag $(LOCAL_WORKER) $(WORKER_TAG)
 	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_TAG)
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_TAG)
+	docker tag $(LOCAL_DEEPAGENTS_WORKER) $(DEEPAGENTS_WORKER_TAG)
+	docker tag $(LOCAL_DEEPAGENTS_RUNNER) $(DEEPAGENTS_RUNNER_TAG)
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_TAG)
 	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_TAG)
 ifeq ($(PUSH_LATEST),yes)
@@ -225,6 +249,8 @@ ifeq ($(PUSH_LATEST),yes)
 	docker tag $(LOCAL_WORKER) $(WORKER_IMAGE):latest
 	docker tag $(LOCAL_COPAW_WORKER) $(COPAW_WORKER_IMAGE):latest
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_IMAGE):latest
+	docker tag $(LOCAL_DEEPAGENTS_WORKER) $(DEEPAGENTS_WORKER_IMAGE):latest
+	docker tag $(LOCAL_DEEPAGENTS_RUNNER) $(DEEPAGENTS_RUNNER_IMAGE):latest
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_IMAGE):latest
 	docker tag $(LOCAL_QWENPAW_WORKER) $(QWENPAW_WORKER_IMAGE):latest
 	docker tag $(LOCAL_CONTROLLER) $(CONTROLLER_IMAGE):latest
@@ -255,7 +281,7 @@ else
 	fi
 endif
 
-push: push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
+push: push-manager push-manager-qwenpaw push-worker push-copaw-worker push-hermes-worker push-deepagents-worker push-deepagents-runner push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push multi-arch images (amd64 + arm64); base image built separately via build-base.yml
 
 push-openclaw-base: buildx-setup ## Build + push multi-arch OpenClaw base image
 	@echo "==> Building + pushing multi-arch OpenClaw base: $(OPENCLAW_BASE_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -477,6 +503,58 @@ else
 		./hermes/
 endif
 
+push-deepagents-worker: buildx-setup ## Build + push multi-arch DeepAgents Worker image
+	@echo "==> Building + pushing multi-arch DeepAgents Worker: $(DEEPAGENTS_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
+ifeq ($(IS_PODMAN),1)
+	-podman manifest rm $(DEEPAGENTS_WORKER_TAG) 2>/dev/null
+	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
+		echo "  -> Building DeepAgents Worker for $(plat)..." && \
+		podman build --platform $(plat) $(DOCKER_BUILD_ARGS) \
+			--target worker \
+			--manifest $(DEEPAGENTS_WORKER_TAG) \
+			-f deepagents-agentteams/Dockerfile . && ) true
+	podman manifest push --all $(DEEPAGENTS_WORKER_TAG) docker://$(DEEPAGENTS_WORKER_TAG)
+	$(if $(PUSH_LATEST), \
+		podman manifest push --all $(DEEPAGENTS_WORKER_TAG) docker://$(DEEPAGENTS_WORKER_IMAGE):latest && \
+		echo "  -> Also pushed :latest tag")
+else
+	docker buildx build \
+		--builder $(BUILDX_BUILDER) \
+		--platform $(MULTIARCH_PLATFORMS) \
+		$(DOCKER_BUILD_ARGS) \
+		--target worker \
+		-t $(DEEPAGENTS_WORKER_TAG) \
+		$(if $(PUSH_LATEST),-t $(DEEPAGENTS_WORKER_IMAGE):latest) \
+		--push \
+		-f deepagents-agentteams/Dockerfile .
+endif
+
+push-deepagents-runner: buildx-setup ## Build + push multi-arch DeepAgents Runner image
+	@echo "==> Building + pushing multi-arch DeepAgents Runner: $(DEEPAGENTS_RUNNER_TAG) [$(MULTIARCH_PLATFORMS)]"
+ifeq ($(IS_PODMAN),1)
+	-podman manifest rm $(DEEPAGENTS_RUNNER_TAG) 2>/dev/null
+	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
+		echo "  -> Building DeepAgents Runner for $(plat)..." && \
+		podman build --platform $(plat) $(DOCKER_BUILD_ARGS) \
+			--target runner \
+			--manifest $(DEEPAGENTS_RUNNER_TAG) \
+			-f deepagents-agentteams/Dockerfile . && ) true
+	podman manifest push --all $(DEEPAGENTS_RUNNER_TAG) docker://$(DEEPAGENTS_RUNNER_TAG)
+	$(if $(PUSH_LATEST), \
+		podman manifest push --all $(DEEPAGENTS_RUNNER_TAG) docker://$(DEEPAGENTS_RUNNER_IMAGE):latest && \
+		echo "  -> Also pushed :latest tag")
+else
+	docker buildx build \
+		--builder $(BUILDX_BUILDER) \
+		--platform $(MULTIARCH_PLATFORMS) \
+		$(DOCKER_BUILD_ARGS) \
+		--target runner \
+		-t $(DEEPAGENTS_RUNNER_TAG) \
+		$(if $(PUSH_LATEST),-t $(DEEPAGENTS_RUNNER_IMAGE):latest) \
+		--push \
+		-f deepagents-agentteams/Dockerfile .
+endif
+
 push-qwenpaw-worker: buildx-setup ## Build + push multi-arch QwenPaw Worker image
 	@echo "==> Building + pushing multi-arch QwenPaw Worker: $(QWENPAW_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
@@ -518,6 +596,10 @@ push-native: tag ## Push native-arch images (dev only, overwrites multi-arch!)
 	docker push $(COPAW_WORKER_TAG)
 	@echo "==> Pushing Hermes Worker: $(HERMES_WORKER_TAG)"
 	docker push $(HERMES_WORKER_TAG)
+	@echo "==> Pushing DeepAgents Worker: $(DEEPAGENTS_WORKER_TAG)"
+	docker push $(DEEPAGENTS_WORKER_TAG)
+	@echo "==> Pushing DeepAgents Runner: $(DEEPAGENTS_RUNNER_TAG)"
+	docker push $(DEEPAGENTS_RUNNER_TAG)
 	@echo "==> Pushing QwenPaw Worker: $(QWENPAW_WORKER_TAG)"
 	docker push $(QWENPAW_WORKER_TAG)
 ifeq ($(PUSH_LATEST),yes)
@@ -525,6 +607,8 @@ ifeq ($(PUSH_LATEST),yes)
 	docker push $(WORKER_IMAGE):latest
 	docker push $(COPAW_WORKER_IMAGE):latest
 	docker push $(HERMES_WORKER_IMAGE):latest
+	docker push $(DEEPAGENTS_WORKER_IMAGE):latest
+	docker push $(DEEPAGENTS_RUNNER_IMAGE):latest
 	docker push $(QWENPAW_WORKER_IMAGE):latest
 endif
 
@@ -547,6 +631,14 @@ push-native-copaw-worker: build-copaw-worker ## Push native-arch CoPaw Worker on
 push-native-hermes-worker: build-hermes-worker ## Push native-arch Hermes Worker only (dev)
 	docker tag $(LOCAL_HERMES_WORKER) $(HERMES_WORKER_TAG)
 	docker push $(HERMES_WORKER_TAG)
+
+push-native-deepagents-worker: build-deepagents-worker ## Push native-arch DeepAgents Worker only (dev)
+	docker tag $(LOCAL_DEEPAGENTS_WORKER) $(DEEPAGENTS_WORKER_TAG)
+	docker push $(DEEPAGENTS_WORKER_TAG)
+
+push-native-deepagents-runner: build-deepagents-runner ## Push native-arch DeepAgents Runner only (dev)
+	docker tag $(LOCAL_DEEPAGENTS_RUNNER) $(DEEPAGENTS_RUNNER_TAG)
+	docker push $(DEEPAGENTS_RUNNER_TAG)
 
 push-native-openhuman-worker: build-openhuman-worker ## Push native-arch OpenHuman Worker only (dev)
 	docker tag $(LOCAL_OPENHUMAN_WORKER) $(OPENHUMAN_WORKER_TAG)

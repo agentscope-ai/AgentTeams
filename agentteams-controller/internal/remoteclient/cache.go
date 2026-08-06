@@ -391,6 +391,10 @@ func (w *k8sCoreClientWrapper) ServiceAccounts(namespace string) backend.K8sServ
 	return w.client.ServiceAccounts(namespace)
 }
 
+func (w *k8sCoreClientWrapper) PersistentVolumeClaims(namespace string) backend.K8sPersistentVolumeClaimClient {
+	return w.client.PersistentVolumeClaims(namespace)
+}
+
 func (w *k8sCoreClientWrapper) TokenReviews() backend.K8sTokenReviewClient {
 	return w.authClient.TokenReviews()
 }

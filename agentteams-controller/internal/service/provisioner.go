@@ -603,13 +603,20 @@ func (p *Provisioner) ensureMatrixToken(ctx context.Context, matrixUsername stri
 // ForceRefreshMatrixToken issues a fresh Matrix access token for the given
 // worker/manager, bypassing the cache. Called when the caller reports a 401
 // from the homeserver. Persists the new token to the credential store.
-func (p *Provisioner) ForceRefreshMatrixToken(ctx context.Context, name string) (*RefreshResult, error) {
-	creds, err := p.creds.Load(ctx, name)
+func (p *Provisioner) ForceRefreshMatrixToken(
+	ctx context.Context,
+	credentialName string,
+	matrixUsername string,
+) (*RefreshResult, error) {
+	if strings.TrimSpace(matrixUsername) == "" {
+		matrixUsername = credentialName
+	}
+	creds, err := p.creds.Load(ctx, credentialName)
 	if err != nil {
-		return nil, fmt.Errorf("load credentials for %s: %w", name, err)
+		return nil, fmt.Errorf("load credentials for %s: %w", credentialName, err)
 	}
 	if creds == nil {
-		return nil, fmt.Errorf("no credentials found for %s", name)
+		return nil, fmt.Errorf("no credentials found for %s", credentialName)
 	}
 
 	// Clear cached token to force re-login
@@ -617,18 +624,18 @@ func (p *Provisioner) ForceRefreshMatrixToken(ctx context.Context, name string) 
 
 	var tok string
 	if p.MatrixAppServiceEnabled() {
-		tok, err = p.matrix.LoginAppServiceUser(ctx, name)
+		tok, err = p.matrix.LoginAppServiceUser(ctx, matrixUsername)
 	} else {
-		tok, err = p.matrix.Login(ctx, name, creds.MatrixPassword)
+		tok, err = p.matrix.Login(ctx, matrixUsername, creds.MatrixPassword)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("re-login for %s: %w", name, err)
+		return nil, fmt.Errorf("re-login for %s: %w", matrixUsername, err)
 	}
 
 	creds.MatrixToken = tok
-	if saveErr := p.creds.Save(ctx, name, creds); saveErr != nil {
+	if saveErr := p.creds.Save(ctx, credentialName, creds); saveErr != nil {
 		// Non-fatal: token is valid even if persistence fails
-		log.FromContext(ctx).Error(saveErr, "failed to persist refreshed matrix token", "name", name)
+		log.FromContext(ctx).Error(saveErr, "failed to persist refreshed matrix token", "name", credentialName)
 	}
 
 	return &RefreshResult{MatrixToken: tok}, nil

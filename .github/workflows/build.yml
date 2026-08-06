@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker hermes-worker qwenpaw-worker'
+        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker hermes-worker deepagents-worker deepagents-runner qwenpaw-worker'
         required: false
         type: string
         default: 'all'
@@ -62,7 +62,7 @@ jobs:
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "targets=openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker qwenpaw-worker hermes-worker" >> $GITHUB_OUTPUT
+            echo "targets=openclaw-base agentteams-controller embedded manager manager-qwenpaw worker copaw-worker qwenpaw-worker hermes-worker deepagents-worker deepagents-runner" >> $GITHUB_OUTPUT
           else
             # workflow_dispatch: use inputs
             VERSION="${{ inputs.version }}"
@@ -119,6 +119,8 @@ jobs:
           contains(steps.meta.outputs.targets, 'worker') ||
           contains(steps.meta.outputs.targets, 'copaw-worker') ||
           contains(steps.meta.outputs.targets, 'hermes-worker') ||
+          contains(steps.meta.outputs.targets, 'deepagents-worker') ||
+          contains(steps.meta.outputs.targets, 'deepagents-runner') ||
           contains(steps.meta.outputs.targets, 'qwenpaw-worker')
         run: |
           TARGETS="${{ steps.meta.outputs.targets }}"
@@ -126,6 +128,8 @@ jobs:
           if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw worker; then MAKE_TARGETS="${MAKE_TARGETS} push-worker"; fi
           if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw copaw-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-copaw-worker"; fi
           if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw hermes-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-hermes-worker"; fi
+          if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw deepagents-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-deepagents-worker"; fi
+          if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw deepagents-runner; then MAKE_TARGETS="${MAKE_TARGETS} push-deepagents-runner"; fi
           if [ "${TARGETS}" = "all" ] || echo "${TARGETS}" | grep -qw qwenpaw-worker; then MAKE_TARGETS="${MAKE_TARGETS} push-qwenpaw-worker"; fi
           make ${MAKE_TARGETS} \
             VERSION=${{ steps.meta.outputs.version }} \
@@ -146,6 +150,8 @@ jobs:
           COPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-copaw-worker
           QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-qwenpaw-worker
           HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-hermes-worker
+          DEEPAGENTS_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-deepagents-worker
+          DEEPAGENTS_RUNNER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-deepagents-runner
           CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-controller
           EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-embedded
         run: |
@@ -160,6 +166,8 @@ jobs:
           echo "- CoPaw Worker: \`${COPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- QwenPaw Worker: \`${QWENPAW_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- DeepAgents Worker: \`${DEEPAGENTS_WORKER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- DeepAgents Runner: \`${DEEPAGENTS_RUNNER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Controller: \`${CONTROLLER_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Embedded: \`${EMBEDDED_IMAGE}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Base: \`${OPENCLAW_BASE_IMAGE}:latest\` (pre-built, not rebuilt here)" >> $GITHUB_STEP_SUMMARY

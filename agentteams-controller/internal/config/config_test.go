@@ -146,6 +146,70 @@ func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
 	}
 }
 
+func TestBackendConfigsIncludeDeepAgentsWorkerImage(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_WORKER_IMAGE", "agentteams/deepagents-worker:test")
+
+	cfg := LoadConfig()
+
+	for name, got := range map[string]string{
+		"docker":  cfg.DockerConfig().DeepAgentsWorkerImage,
+		"k8s":     cfg.K8sConfig().DeepAgentsWorkerImage,
+		"sandbox": cfg.SandboxConfig().DeepAgentsWorkerImage,
+	} {
+		if want := "agentteams/deepagents-worker:test"; got != want {
+			t.Fatalf("%s DeepAgentsWorkerImage = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestLoadConfigIncludesDeepAgentsExecutionSandboxSettings(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_RUNNER_IMAGE", "agentteams/deepagents-runner:test")
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS", `[
+		{"cidr":"10.96.0.0/12","protocol":"TCP","ports":[443]},
+		{"cidr":"10.96.0.10/32","protocol":"UDP","ports":[53]}
+	]`)
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_REQUEST", "512Mi")
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_LIMIT", "4Gi")
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_MAX_LIMIT", "6Gi")
+
+	cfg := LoadConfig()
+	if cfg.DeepAgentsRunnerImage != "agentteams/deepagents-runner:test" {
+		t.Fatalf("DeepAgentsRunnerImage=%q", cfg.DeepAgentsRunnerImage)
+	}
+	if len(cfg.DeepAgentsSandboxEgressCeilings) != 2 || cfg.DeepAgentsSandboxEgressCeilings[1].Protocol != "UDP" {
+		t.Fatalf("DeepAgentsSandboxEgressCeilings=%#v", cfg.DeepAgentsSandboxEgressCeilings)
+	}
+	resources, _, _, err := cfg.DeepAgentsSandboxEphemeralStorage.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolve configured sandbox policy: %v", err)
+	}
+	if resources.Requests.EphemeralStorage != "512Mi" || resources.Limits.EphemeralStorage != "4Gi" {
+		t.Fatalf("configured sandbox resources=%#v, want request=512Mi limit=4Gi", resources)
+	}
+}
+
+func TestLoadConfigPanicsOnInvalidDeepAgentsSandboxEphemeralStoragePolicy(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_DEFAULT_LIMIT", "2Gi")
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EPHEMERAL_STORAGE_MAX_LIMIT", "1Gi")
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("LoadConfig did not reject invalid DeepAgents sandbox ephemeral-storage policy")
+		}
+	}()
+	_ = LoadConfig()
+}
+
+func TestLoadConfigPanicsOnInvalidDeepAgentsEgressCeilings(t *testing.T) {
+	t.Setenv("AGENTTEAMS_DEEPAGENTS_SANDBOX_EGRESS_CEILINGS", "{")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("LoadConfig did not reject invalid DeepAgents egress ceiling JSON")
+		}
+	}()
+	_ = LoadConfig()
+}
+
 func TestLoadConfigPanicsOnInvalidManagerSpec(t *testing.T) {
 	t.Setenv("AGENTTEAMS_MANAGER_SPEC", "{")
 

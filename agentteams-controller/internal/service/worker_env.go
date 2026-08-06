@@ -1,7 +1,10 @@
 package service
 
 import (
+	"fmt"
+
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/config"
 )
 
@@ -34,6 +37,36 @@ func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult)
 
 	b.applyClusterDefaults(env)
 	return env
+}
+
+// BuildForRuntime adds runtime-scoped configuration after constructing the
+// common worker environment. Checkpoint credentials are deliberately confined
+// to DeepAgents workers so other runtimes cannot observe platform secrets.
+func (b *WorkerEnvBuilder) BuildForRuntime(workerName, runtime string, prov *WorkerProvisionResult) map[string]string {
+	env := b.Build(workerName, prov)
+	if runtime != backend.RuntimeDeepAgents {
+		return env
+	}
+	env["HOME"] = "/var/lib/agentteams"
+	if b.defaults.CheckpointDSN != "" {
+		env["AGENTTEAMS_CHECKPOINT_DSN"] = b.defaults.CheckpointDSN
+	}
+	if b.defaults.CheckpointAESKey != "" {
+		env["AGENTTEAMS_CHECKPOINT_AES_KEY"] = b.defaults.CheckpointAESKey
+	}
+	return env
+}
+
+// ValidateRuntime rejects DeepAgents Workers when the platform-level
+// checkpoint dependency has not been enabled and configured.
+func (b *WorkerEnvBuilder) ValidateRuntime(runtime string) error {
+	if runtime != backend.RuntimeDeepAgents {
+		return nil
+	}
+	if !b.defaults.DeepAgentsEnabled || b.defaults.CheckpointDSN == "" || b.defaults.CheckpointAESKey == "" {
+		return fmt.Errorf("deepagents runtime is not enabled with checkpoint credentials")
+	}
+	return nil
 }
 
 // BuildManager returns the env map for a Manager container.
@@ -73,6 +106,9 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	}
 	if b.defaults.DefaultWorkerRuntime != "" {
 		env["AGENTTEAMS_DEFAULT_WORKER_RUNTIME"] = b.defaults.DefaultWorkerRuntime
+	}
+	if b.defaults.DeepAgentsEnabled {
+		env["AGENTTEAMS_DEEPAGENTS_ENABLED"] = "1"
 	}
 
 	cfg := spec.Config

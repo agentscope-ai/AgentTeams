@@ -1,0 +1,70 @@
+[project]
+name = "deep-research-example"
+version = "0.1.0"
+description = "Deep research agent example using deepagents package"
+requires-python = ">=3.11"
+dependencies = [
+    "deepagents>=0.6.12",
+    "langchain-openai>=1.3.4",
+    "langchain-anthropic>=1.5.3,<2.0.0",
+    "langchain-tavily>=0.2.18",
+    "langchain-google-genai>=4.2.7",
+    "pydantic>=2.13.4",
+    "rich>=15.0.0",
+    "jupyter>=1.1.1",
+    "ipykernel>=7.3.0",
+    "tavily-python>=0.7.26",
+    "httpx>=0.28.1",
+    "markdownify>=1.2.2",
+    "python-dotenv>=1.2.2",
+    "langgraph-cli[inmem]>=0.4.30",
+]
+
+[tool.uv]
+override-dependencies = [
+    "nbconvert>=7.17.1",  # CVE-2025-53000
+    "protobuf>=7.35.1",  # CVE-2026-0994
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=2.1.0",
+    "ruff>=0.15.20",
+]
+
+[build-system]
+requires = ["setuptools>=83.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["research_agent"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.ruff]
+lint.select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "D",    # pydocstyle
+    "D401", # First line should be in imperative mood
+    "T201",
+    "UP",
+]
+lint.ignore = [
+    "UP006",
+    "UP007",
+    "UP035",
+    "D417",
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "UP"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"

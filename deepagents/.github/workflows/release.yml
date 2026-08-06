@@ -1,0 +1,1045 @@
+# Builds and publishes deepagents packages to PyPI.
+#
+# Triggers:
+# - Automatically via workflow_dispatch from release-please.yml when a release
+#   PR is merged (release-please.yml's `trigger-releases` job calls
+#   `gh workflow run release.yml ...`).
+# - Manually via workflow_dispatch from the Actions UI or `gh` CLI.
+#
+# This workflow is intentionally NOT a reusable workflow (no `workflow_call`
+# trigger): PyPI Trusted Publishing does not officially support reusable
+# workflows, so the auto path uses workflow_dispatch instead. See:
+# https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github
+#
+# Flow: build -> pre-release-checks -> test-pypi -> publish -> release
+
+name: "🚀 Package Release"
+run-name: "release(${{ inputs.package-override || inputs.package }}):${{
+  inputs.version && format(' {0}', inputs.version) || '' }}"
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        required: true
+        type: choice
+        description:
+          "Package to release (⚠️ release-please by default; manual is
+          exception-only — see .github/RELEASING.md) (ignored when override is
+          set)"
+        options:
+          - deepagents
+          - deepagents-cli
+          - deepagents-acp
+          - deepagents-code
+          - deepagents-talon
+          - deepagents-evals
+          - langchain-daytona
+          - langchain-modal
+          - langchain-quickjs
+          - langchain-runloop
+          - langchain-vercel-sandbox
+        default: deepagents
+      package-override:
+        required: false
+        type: string
+        default: ""
+        description: "Override: custom package name (takes precedence over dropdown)"
+      version:
+        required: true
+        type: string
+        description: "Version string — does NOT control the released version"
+      release-sha:
+        required: false
+        type: string
+        default: ""
+        description:
+          "Exact commit (40-char SHA, not a branch ref) to build, publish, and
+          tag, so PyPI bytes and the git tag agree. Its pyproject.toml must
+          declare the `version` input. Usually the release-please squash-merge
+          commit, or the most recent pre-publish hotfix commit on top of it
+          (hotfixes keep the version string). Find it: gh pr view <pr-number>
+          --json mergeCommit
+          --jq .mergeCommit.oid. Required unless dangerous-nonmain-release=true.
+          See .github/RELEASING.md > Manual Release, > Hotfix Protocol."
+      dangerous-nonmain-release:
+        required: false
+        type: boolean
+        default: false
+        description:
+          "Release from a non-main branch (danger!) - Only use for backports
+          and hotfixes"
+      dangerous-skip-sdk-pin-check:
+        required: false
+        type: boolean
+        default: false
+        description:
+          "(deepagents-code only) Skip SDK pin validation
+          (danger!) - Only use when intentionally pinning an older SDK"
+
+env:
+  PYTHON_VERSION: "3.11"
+  UV_NO_SYNC: "true"
+  UV_FROZEN: "true"
+
+permissions:
+  contents: read # Job-level overrides grant write only where needed
+
+jobs:
+  # Determine working directory from package input and resolve the release SHA
+  setup:
+    name: 🧭 Resolve release target
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      package: ${{ steps.parse.outputs.package }}
+      working-dir: ${{ steps.parse.outputs.working-dir }}
+      release-sha: ${{ steps.resolve-sha.outputs.sha }}
+    steps:
+      - name: Parse package input
+        id: parse
+        env:
+          PACKAGE_OVERRIDE: ${{ inputs.package-override }}
+          PACKAGE_INPUT: ${{ inputs.package }}
+        run: |
+          # Override takes precedence over dropdown (workflow_dispatch only; unused by workflow_call)
+          if [ -n "$PACKAGE_OVERRIDE" ]; then
+            PACKAGE="$PACKAGE_OVERRIDE"
+          else
+            PACKAGE="$PACKAGE_INPUT"
+          fi
+          echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
+
+          # Map package name to working directory
+          case "$PACKAGE" in
+            deepagents)
+              echo "working-dir=libs/deepagents" >> $GITHUB_OUTPUT
+              ;;
+            deepagents-cli)
+              echo "working-dir=libs/cli" >> $GITHUB_OUTPUT
+              ;;
+            deepagents-acp)
+              echo "working-dir=libs/acp" >> $GITHUB_OUTPUT
+              ;;
+            deepagents-code)
+              echo "working-dir=libs/code" >> $GITHUB_OUTPUT
+              ;;
+            deepagents-talon)
+              echo "working-dir=libs/talon" >> $GITHUB_OUTPUT
+              ;;
+            deepagents-evals)
+              echo "working-dir=libs/evals" >> $GITHUB_OUTPUT
+              ;;
+            langchain-daytona)
+              echo "working-dir=libs/partners/daytona" >> $GITHUB_OUTPUT
+              ;;
+            langchain-modal)
+              echo "working-dir=libs/partners/modal" >> $GITHUB_OUTPUT
+              ;;
+            langchain-quickjs)
+              echo "working-dir=libs/partners/quickjs" >> $GITHUB_OUTPUT
+              ;;
+            langchain-runloop)
+              echo "working-dir=libs/partners/runloop" >> $GITHUB_OUTPUT
+              ;;
+            langchain-vercel-sandbox)
+              echo "working-dir=libs/partners/vercel" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "Error: Unknown package '$PACKAGE'"
+              echo "Valid packages are: deepagents, deepagents-cli, deepagents-acp, deepagents-code, deepagents-talon, deepagents-evals, langchain-daytona, langchain-modal, langchain-quickjs, langchain-runloop, langchain-vercel-sandbox"
+              exit 1
+              ;;
+          esac
+
+      # fetch-depth: 0 so we can read pyproject.toml at an arbitrary historic
+      # SHA (resolve-sha validates that ${WORKING_DIR}/pyproject.toml at the
+      # input SHA declares the version being released). All downstream jobs
+      # check out the resolved SHA so wheel bytes and tag tree agree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: "📝 Log dispatch inputs"
+        continue-on-error: true
+        env:
+          PACKAGE_RESOLVED: ${{ steps.parse.outputs.package }}
+          PACKAGE_OVERRIDE: ${{ inputs.package-override }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_SHA: ${{ inputs.release-sha }}
+          IS_DANGEROUS: ${{ inputs.dangerous-nonmain-release }}
+          SKIP_SDK_PIN_CHECK: ${{ inputs.dangerous-skip-sdk-pin-check }}
+        run: |
+          set -euo pipefail
+
+          escape_cell() {
+            local value="$1"
+            # Backticks can't be escaped inside the single-backtick code spans
+            # below (there's no backslash-escape inside a GFM code span), so
+            # strip them outright rather than risk a malformed table row.
+            value="${value//\`/}"
+            value="${value//|/\\|}"
+            value="${value//$'\r\n'/<br>}"
+            value="${value//$'\n'/<br>}"
+            printf '%s' "$value"
+          }
+
+          {
+            echo "### 🌳 Source tree"
+            echo ""
+            echo "Run fired from [\`${GITHUB_SHA:0:7}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}) on [\`${GITHUB_REF_NAME}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/${GITHUB_REF_NAME})."
+            echo ""
+            echo "### 🚀 Release dispatch inputs"
+            echo ""
+            echo "| Input | Value |"
+            echo "|---|---|"
+            echo "| \`package\` | \`$(escape_cell "${PACKAGE_RESOLVED}")\` |"
+            if [ -n "${PACKAGE_OVERRIDE}" ]; then
+              echo "| \`package-override\` | \`$(escape_cell "${PACKAGE_OVERRIDE}")\` |"
+            fi
+            echo "| \`version\` | \`$(escape_cell "${INPUT_VERSION}")\` |"
+            if [ -n "${INPUT_SHA}" ]; then
+              echo "| \`release-sha\` | \`$(escape_cell "${INPUT_SHA}")\` |"
+            else
+              echo "| \`release-sha\` | (not provided — resolved to the workflow SHA only when \`dangerous-nonmain-release\` is enabled; otherwise invalid) |"
+            fi
+            if [ "${IS_DANGEROUS}" = "true" ]; then
+              echo "| \`dangerous-nonmain-release\` | ⚠️ enabled |"
+            fi
+            if [ "${SKIP_SDK_PIN_CHECK}" = "true" ]; then
+              echo "| \`dangerous-skip-sdk-pin-check\` | ⚠️ enabled |"
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY" || echo "::warning::Failed to write dispatch-inputs summary to GITHUB_STEP_SUMMARY (non-fatal, continuing)"
+
+      - name: Resolve and validate release SHA
+        id: resolve-sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_SHA: ${{ inputs.release-sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+          IS_DANGEROUS: ${{ inputs.dangerous-nonmain-release }}
+          PACKAGE: ${{ steps.parse.outputs.package }}
+          WORKING_DIR: ${{ steps.parse.outputs.working-dir }}
+          GITHUB_SHA_FALLBACK: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Reject malformed boolean values up-front. A typo (e.g. "True", "1") would
+          # otherwise silently fall into the strict-validation branch — safe today,
+          # but a future polarity flip would silently skip validation.
+          case "$IS_DANGEROUS" in
+            true|false|"") ;;
+            *)
+              echo "::error::dangerous-nonmain-release must be 'true' or 'false', got: $IS_DANGEROUS"
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$INPUT_SHA" ]; then
+            if [ "$IS_DANGEROUS" = "true" ]; then
+              # Alpha/hotfix branches don't have a "release(pkg): X.Y.Z" commit; fall
+              # back to the dispatched HEAD. See RELEASING.md > Alpha / Beta / Pre-release.
+              SHA="$GITHUB_SHA_FALLBACK"
+              echo "release-sha unset; dangerous-nonmain-release=true -> using github.sha=$SHA"
+            else
+              echo "::error::release-sha input is required for non-alpha releases."
+              echo "::error::Look it up with: gh pr view <release-pr-number> --json mergeCommit --jq .mergeCommit.oid"
+              echo "::error::For alpha or hotfix branch releases, set dangerous-nonmain-release=true to use the dispatched HEAD."
+              exit 1
+            fi
+          else
+            SHA="$INPUT_SHA"
+          fi
+
+          REQUESTED_SHA="$SHA"
+          if ! RESOLVED_SHA=$(git rev-parse -q --verify "${REQUESTED_SHA}^{commit}"); then
+            echo "::error::release-sha $REQUESTED_SHA does not resolve to a commit in this repository"
+            exit 1
+          fi
+          SHA="$RESOLVED_SHA"
+
+          # Validate that pyproject.toml at this SHA declares the requested version.
+          # This is what we actually care about: the wheel built from this SHA must
+          # claim to be `inputs.version`. It accommodates both the release-please
+          # commit AND a pre-publish hotfix commit on top of it (the hotfix retains
+          # the bumped version string). See RELEASING.md > Hotfix Protocol > Case A.
+          #
+          # Skipped in dangerous-nonmain-release: alpha branches may use throwaway
+          # version strings that don't need to round-trip with `inputs.version`.
+          if [ "$IS_DANGEROUS" != "true" ]; then
+            if [ -z "$INPUT_VERSION" ]; then
+              echo "::error::version input is required for non-alpha releases."
+              exit 1
+            fi
+            PYPROJECT_PATH="${WORKING_DIR}/pyproject.toml"
+            if ! PYPROJECT_CONTENT=$(git show "${SHA}:${PYPROJECT_PATH}" 2>&1); then
+              echo "::error::cannot read ${PYPROJECT_PATH} at ${SHA}: ${PYPROJECT_CONTENT}"
+              exit 1
+            fi
+            if ! COMMIT_VERSION=$(printf '%s\n' "$PYPROJECT_CONTENT" | python -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])' 2>&1); then
+              echo "::error::failed to extract [project].version from ${PYPROJECT_PATH} at ${SHA}: ${COMMIT_VERSION}"
+              exit 1
+            fi
+            if [ "$COMMIT_VERSION" != "$INPUT_VERSION" ]; then
+              echo "::error::Version mismatch at ${SHA}: ${PYPROJECT_PATH} declares '${COMMIT_VERSION}', release inputs say '${INPUT_VERSION}'."
+              echo "::error::Pass a SHA whose pyproject.toml version matches the release version — typically the release-please commit, or a hotfix on top of it that preserved the version string."
+              exit 1
+            fi
+            echo "Validated release-sha ${SHA}: ${PACKAGE}==${COMMIT_VERSION}"
+          else
+            echo "Using release-sha $SHA (validation skipped: dangerous-nonmain-release)"
+          fi
+
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$INPUT_SHA" ]; then
+            RELEASE_SHA_SOURCE="explicit release-sha input"
+          else
+            RELEASE_SHA_SOURCE="workflow SHA fallback because dangerous-nonmain-release is enabled"
+          fi
+
+          RELEASE_PR_NUMBER=""
+          if PULLS=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/commits/${SHA}/pulls" 2>&1); then
+            # sort_by(.number) makes the pick deterministic when a commit is
+            # associated with more than one merged PR (e.g. a merge to main plus a
+            # later backport that cherry-picked it): the lowest number is the
+            # original merge, since backports are opened afterwards.
+            if ! RELEASE_PR_NUMBER=$(printf '%s' "$PULLS" | jq -r \
+              'map(select(.merged_at != null)) | sort_by(.number) | .[0].number // empty'); then
+              echo "::warning::Could not parse the pull request associated with release SHA $SHA: $PULLS"
+              RELEASE_PR_NUMBER=""
+            fi
+          else
+            echo "::warning::Could not look up the pull request associated with release SHA $SHA: $PULLS"
+          fi
+
+          {
+            echo "### Resolved release target"
+            echo ""
+            echo "| Target | Value |"
+            echo "|---|---|"
+            echo "| Release SHA | [\`${SHA:0:7}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${SHA}) |"
+            if [ -n "$RELEASE_PR_NUMBER" ]; then
+              echo "| Associated PR | [#${RELEASE_PR_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${RELEASE_PR_NUMBER}) |"
+            fi
+            echo "| Resolution | ${RELEASE_SHA_SOURCE} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY" || echo "::warning::Failed to write resolved release target to GITHUB_STEP_SUMMARY (non-fatal, continuing)"
+
+  # Build the distribution package and extract version info
+  # Runs in isolated environment with minimal permissions for security
+  build:
+    name: 📦 Build distribution
+    needs: setup
+    if: github.ref == 'refs/heads/main' || inputs.dangerous-nonmain-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      WORKING_DIR: ${{ needs.setup.outputs.working-dir }}
+
+    outputs:
+      pkg-name: ${{ steps.check-version.outputs.pkg-name }}
+      version: ${{ steps.check-version.outputs.version }}
+      is-prerelease: ${{ steps.check-version.outputs.is-prerelease }}
+
+    steps:
+      # Build from the validated release commit (not dispatch HEAD) so the wheel
+      # bytes match the GitHub release tag's tree. See RELEASING.md > Hotfix
+      # Protocol for the integrity invariant this enforces.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.setup.outputs.release-sha }}
+
+      - name: Set up Python + uv
+        uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: "false"
+
+      # We want to keep this build stage *separate* from the release stage,
+      # so that there's no sharing of permissions between them.
+      # (Release stage has trusted publishing and GitHub repo contents write access,
+      # which the build stage must not have access to.)
+      #
+      # Otherwise, a malicious `build` step (e.g. via a compromised dependency)
+      # could get access to our GitHub or PyPI credentials.
+      #
+      # Per the trusted publishing GitHub Action:
+      # > It is strongly advised to separate jobs for building [...]
+      # > from the publish job.
+      # https://github.com/pypa/gh-action-pypi-publish#non-goals
+      - name: Build project for distribution
+        run: uv build
+        working-directory: ${{ env.WORKING_DIR }}
+        env:
+          # Stamp the exact release commit into deepagents-code so `dcode doctor`
+          # reports it on installed wheels. Other packages ignore this env var.
+          DEEPAGENTS_CODE_BUILD_COMMIT: ${{ needs.setup.outputs.release-sha }}
+
+      - name: Upload build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist
+          path: ${{ env.WORKING_DIR }}/dist/
+
+      - name: Check version
+        id: check-version
+        shell: python
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          import os
+          import re
+          import sys
+          import tomllib
+          import urllib.error
+          import urllib.request
+          with open("pyproject.toml", "rb") as f:
+              data = tomllib.load(f)
+          pkg_name = data["project"]["name"]
+          version = data["project"]["version"]
+          # PEP 440 pre-release: contains a/b/rc/dev suffix or dash separator
+          is_pre = bool(re.search(r"(a|b|rc|\.dev)\d", version) or "-" in version)
+
+          # Query the per-version endpoint so PyPI applies PEP 440 normalization
+          # (e.g. `0.1.0-rc1` and `0.1.0rc1` resolve to the same release): HTTP 200
+          # means the version is already published, 404 means it's available
+          # (including the first-ever release of a new package). Only the status
+          # code is used, so a malicious or malformed response body can't mislead us.
+          url = f"https://pypi.org/pypi/{pkg_name}/{version}/json"
+          try:
+              with urllib.request.urlopen(url, timeout=10):
+                  already_published = True
+          except urllib.error.HTTPError as err:
+              if err.code == 404:
+                  already_published = False
+              else:
+                  # Fail closed: an unexpected status means we can't verify.
+                  print(
+                      f"::error::PyPI returned HTTP {err.code} checking whether "
+                      f"{pkg_name}=={version} exists; cannot verify, aborting."
+                  )
+                  sys.exit(1)
+          except urllib.error.URLError as err:
+              # Fail closed: if PyPI is unreachable we must not assume the version
+              # is free, or we risk re-publishing an existing release.
+              print(
+                  f"::error::Could not reach PyPI to verify {pkg_name}=={version} "
+                  f"({err.reason}); cannot verify, aborting."
+              )
+              sys.exit(1)
+
+          if already_published:
+              print(f"::error::{pkg_name}=={version} already exists on PyPI.")
+              sys.exit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"pkg-name={pkg_name}\n")
+              f.write(f"version={version}\n")
+              f.write(f"is-prerelease={'true' if is_pre else 'false'}\n")
+
+      - name: Validate version consistency
+        if: inputs.version != '' && inputs.dangerous-nonmain-release != true
+        run: |
+          BUILD_VERSION="${{ steps.check-version.outputs.version }}"
+          INPUT_VERSION="${{ inputs.version }}"
+          if [ "$BUILD_VERSION" != "$INPUT_VERSION" ]; then
+            echo "::error::Version mismatch — run name says '$INPUT_VERSION' but pyproject.toml says '$BUILD_VERSION'"
+            exit 1
+          fi
+
+  # Generate release notes from CHANGELOG.md, append the package commit history,
+  # and collect contributor shoutouts.
+  #
+  # Intentionally fail-open: `publish` does not depend on this job, and
+  # `mark-release` deliberately omits it from its `if:` condition, so a failure
+  # here still tags and publishes the release — with an empty body. Do not add
+  # `needs.release-notes.result == 'success'` to `mark-release`; that would
+  # trade a cosmetic failure for a blocked release. Recovery is documented in
+  # RELEASING.md > Release Notes Job Failed or GitHub Release Body Is Empty.
+  release-notes:
+    name: 📝 Generate release notes
+    needs:
+      - setup
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      WORKING_DIR: ${{ needs.setup.outputs.working-dir }}
+    outputs:
+      release-body: ${{ steps.finalize-release-body.outputs.release-body }}
+      tag: ${{ steps.check-tags.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.setup.outputs.release-sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check tags
+        id: check-tags
+        shell: bash
+        working-directory: ${{ env.WORKING_DIR }}
+        env:
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          TAG="${PKG_NAME}==${VERSION}"
+          echo tag="$TAG" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # The release target checkout (above) uses the release SHA, which may
+      # predate the notes script. Check out the workflow's own revision into
+      # a separate path so the helper is always available.
+      - name: Check out release-notes script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: _workflow
+          sparse-checkout: |
+            .github/scripts/release/build_release_notes.py
+          sparse-checkout-cone-mode: false
+
+      # Build the release body with the shared script. This replaces the
+      # previous inline bash steps so the same logic can be reused locally for
+      # post-publish recovery (see RELEASING.md > Release Notes Job Failed or
+      # GitHub Release Body Is Empty).
+      #
+      # WORKING_DIR and IS_PRERELEASE are passed explicitly rather than
+      # re-derived by the script: the workflow already resolved both, and
+      # IS_PRERELEASE is the same value that drives the GitHub release's
+      # `prerelease:` flag below, so the banner and the flag cannot disagree.
+      #
+      # --repo-root is passed explicitly rather than relying on the script's
+      # cwd default, so adding a `working-directory:` to this step (as most
+      # other steps in this file have) cannot break predecessor resolution.
+      - name: Build release notes
+        id: finalize-release-body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_SHA: ${{ needs.setup.outputs.release-sha }}
+          ACTOR: ${{ github.actor }}
+          BASE_BRANCH: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          REPOSITORY: ${{ github.repository }}
+          IS_PRERELEASE: ${{ needs.build.outputs.is-prerelease }}
+        run: |
+          python _workflow/.github/scripts/release/build_release_notes.py \
+            --package "$PKG_NAME" \
+            --version "$VERSION" \
+            --sha "$RELEASE_SHA" \
+            --repo "$REPOSITORY" \
+            --actor "$ACTOR" \
+            --base-branch "$BASE_BRANCH" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --working-dir "$WORKING_DIR" \
+            --is-prerelease "$IS_PRERELEASE" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --github-output
+
+  test-pypi-publish:
+    name: 🧪 Publish to TestPyPI
+    needs:
+      - setup
+      - build
+      - pre-release-checks
+    runs-on: ubuntu-latest
+    permissions:
+      # This permission is used for trusted publishing:
+      # https://blog.pypi.org/posts/2023-04-20-introducing-trusted-publishers/
+      #
+      # Trusted publishing has to also be configured on PyPI for each package:
+      # https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+      id-token: write
+    env:
+      WORKING_DIR: ${{ needs.setup.outputs.working-dir }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.setup.outputs.release-sha }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: ${{ env.WORKING_DIR }}/dist/
+
+      - name: Publish to test PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: ${{ env.WORKING_DIR }}/dist/
+          verbose: true
+          print-hash: true
+          repository-url: https://test.pypi.org/legacy/
+          # We overwrite any existing distributions with the same name and version.
+          # This is *only for CI use* and is *extremely dangerous* otherwise!
+          # https://github.com/pypa/gh-action-pypi-publish#tolerating-release-package-file-duplicates
+          skip-existing: true
+          # Temp workaround since attestations are on by default as of gh-action-pypi-publish v1.11.0
+          attestations: false
+
+  pre-release-checks:
+    name: ✅ Pre-release checks
+    needs:
+      - setup
+      - build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    env:
+      WORKING_DIR: ${{ needs.setup.outputs.working-dir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.setup.outputs.release-sha }}
+
+      # We explicitly *don't* set up caching here. This ensures our tests are
+      # maximally sensitive to catching breakage.
+      #
+      # For example, here's a way that caching can cause a falsely-passing test:
+      # - Make the package manifest no longer list a dependency package
+      #   as a requirement. This means it won't be installed by `pip install`,
+      #   and attempting to use it would cause a crash.
+      # - That dependency used to be required, so it may have been cached.
+      #   When restoring the venv packages from cache, that dependency gets included.
+      # - Tests pass, because the dependency is present even though it wasn't specified.
+      # - The package is published, and it breaks on the missing dependency when
+      #   used in the real world.
+
+      - name: Set up Python + uv
+        uses: "./.github/actions/uv_setup"
+        id: setup-python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: "false"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: ${{ env.WORKING_DIR }}/dist/
+
+      - name: Verify package pins SDK at or ahead of workspace version
+        if: |
+          needs.build.outputs.pkg-name == 'deepagents-code'
+          && !inputs.dangerous-skip-sdk-pin-check
+        env:
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+
+          pkg_name = os.environ["PKG_NAME"]
+          root = Path.cwd()
+          script = root / ".github" / "scripts" / "release" / "check_sdk_pin.py"
+          spec = importlib.util.spec_from_file_location("check_sdk_pin", script)
+          if spec is None or spec.loader is None:
+              print(f"::error::Could not load {script}")
+              raise SystemExit(1)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          try:
+              sdk_version = module._sdk_version(root)
+              pkg_pin = module._code_pin(root)
+              comparison = module.compare_versions(pkg_pin, sdk_version)
+          except ValueError as e:
+              print(
+                  "::error file=.github/scripts/release/check_sdk_pin.py::"
+                  f"Could not determine {pkg_name} SDK pin status: {e}"
+              )
+              raise SystemExit(1) from None
+
+          if comparison < 0:
+              print(f"::error::{pkg_name} SDK pin is older than the workspace SDK version!")
+              print(f"SDK version (libs/deepagents/pyproject.toml): {sdk_version}")
+              print(f"{pkg_name} SDK pin (libs/code/pyproject.toml): {pkg_pin}")
+              print("")
+              print(f"Update the deepagents dependency in libs/code/pyproject.toml to deepagents=={sdk_version}")
+              print("Or re-run with 'dangerous-skip-sdk-pin-check' enabled to bypass.")
+              raise SystemExit(1)
+
+          if comparison > 0:
+              print(f"{pkg_name} SDK pin is ahead of workspace SDK: {pkg_pin} >= {sdk_version}")
+          else:
+              print(f"{pkg_name} SDK pin matches SDK version: {sdk_version}")
+          PY
+
+      - name: Import dist package
+        shell: bash
+        working-directory: ${{ env.WORKING_DIR }}
+        env:
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        # Install directly from the locally-built wheel (no index resolution needed)
+        run: |
+          uv venv
+          INSTALL_ARGS=(dist/*.whl)
+          # Talon transitively requires a prerelease deepagents pin via deepagents-code.
+          if [ "$PKG_NAME" = "deepagents-talon" ]; then
+            INSTALL_ARGS=(--prerelease allow "${INSTALL_ARGS[@]}")
+          fi
+          VIRTUAL_ENV=.venv uv pip install "${INSTALL_ARGS[@]}"
+
+          # Replace all dashes in the package name with underscores,
+          # since that's how Python imports packages with dashes in the name.
+          IMPORT_NAME="$(echo "$PKG_NAME" | sed s/-/_/g)"
+
+          uv run python -c "import $IMPORT_NAME; print(dir($IMPORT_NAME))"
+
+      - name: Import test dependencies
+        run: uv sync --group test
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Install sandbox provider extras
+        if: needs.setup.outputs.package == 'deepagents-code'
+        run: uv sync --group test --extra all-sandboxes
+        working-directory: ${{ env.WORKING_DIR }}
+
+      # Overwrite the local version of the package with the built version
+      - name: Import published package (again)
+        working-directory: ${{ env.WORKING_DIR }}
+        shell: bash
+        env:
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          INSTALL_ARGS=(dist/*.whl)
+          # Talon transitively requires a prerelease deepagents pin via deepagents-code.
+          if [ "$PKG_NAME" = "deepagents-talon" ]; then
+            INSTALL_ARGS=(--prerelease allow "${INSTALL_ARGS[@]}")
+          fi
+          VIRTUAL_ENV=.venv uv pip install "${INSTALL_ARGS[@]}"
+
+      - name: Run unit tests
+        run: make test COV_ARGS= PYTEST_EXTRA="-v"
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Run integration tests
+        if: false # Disabled: integration tests are not run during releases
+        env:
+          # The Code sandbox files are ignored below and its remaining integration
+          # tests use a fake model, so Code receives no provider credentials here.
+          ANTHROPIC_API_KEY: ${{ (needs.setup.outputs.package == 'deepagents' || needs.setup.outputs.package == 'langchain-quickjs') && secrets.ANTHROPIC_API_KEY || '' }}
+          DAYTONA_API_KEY: ${{ needs.setup.outputs.package == 'langchain-daytona' && secrets.DAYTONA_API_KEY || '' }}
+          LANGSMITH_API_KEY: ${{ needs.setup.outputs.package == 'deepagents' && secrets.LANGSMITH_API_KEY || '' }}
+          MODAL_TOKEN_ID: ${{ needs.setup.outputs.package == 'langchain-modal' && secrets.MODAL_TOKEN_ID || '' }}
+          MODAL_TOKEN_SECRET: ${{ needs.setup.outputs.package == 'langchain-modal' && secrets.MODAL_TOKEN_SECRET || '' }}
+          OPENAI_API_KEY: ${{ needs.setup.outputs.package == 'deepagents' && secrets.OPENAI_API_KEY || '' }}
+          RUNLOOP_API_KEY: ${{ needs.setup.outputs.package == 'langchain-runloop' && secrets.RUNLOOP_API_KEY || '' }}
+          VERCEL_TOKEN: ${{ needs.setup.outputs.package == 'langchain-vercel-sandbox' && secrets.VERCEL_TOKEN || '' }}
+
+        # The deepagents-code sandbox coverage overlaps with the partner-level
+        # SandboxIntegrationTests, so keep those files out of release checks.
+        run: |
+          if [ -f Makefile ] && grep -q "integration_test" Makefile; then
+            if [ "${{ needs.setup.outputs.package }}" = "deepagents-code" ]; then
+              export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} --ignore=tests/integration_tests/test_sandbox_factory.py --ignore=tests/integration_tests/test_sandbox_operations.py"
+            fi
+            make integration_test
+          else
+            echo "::warning::No integration test target found — integration tests were NOT run for this release"
+          fi
+        working-directory: ${{ env.WORKING_DIR }}
+
+  publish:
+    name: 🚀 Publish to PyPI
+    # Publishes the package to PyPI
+    needs:
+      - setup
+      - build
+      - test-pypi-publish
+      - pre-release-checks
+    runs-on: ubuntu-latest
+    permissions:
+      # This permission is used for trusted publishing:
+      # https://blog.pypi.org/posts/2023-04-20-introducing-trusted-publishers/
+      #
+      # Trusted publishing has to also be configured on PyPI for each package:
+      # https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+      id-token: write
+    env:
+      WORKING_DIR: ${{ needs.setup.outputs.working-dir }}
+
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.setup.outputs.release-sha }}
+
+      - name: Set up Python + uv
+        uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: "false"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: ${{ env.WORKING_DIR }}/dist/
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: ${{ env.WORKING_DIR }}/dist/
+          verbose: true
+          print-hash: true
+          # Temp workaround since attestations are on by default as of gh-action-pypi-publish v1.11.0
+          attestations: false
+
+  # Create GitHub release after checks pass.
+  #
+  # The `if:` below gates on pre-release-checks and publish only. `release-notes`
+  # is listed in `needs` purely to consume its output — its result is
+  # deliberately not a condition, so a failed notes job publishes an empty body
+  # rather than blocking an already-published PyPI release. See the fail-open
+  # note on the `release-notes` job.
+  mark-release:
+    name: 🏷️ Tag GitHub release
+    needs:
+      - setup
+      - build
+      - release-notes
+      - test-pypi-publish
+      - pre-release-checks
+      - publish
+    if: always() && needs.pre-release-checks.result == 'success' &&
+      needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      # This permission is needed by `ncipollo/release-action` to
+      # create the GitHub release/tag
+      contents: write
+      # This permission is needed to update release PR labels
+      pull-requests: write
+    env:
+      WORKING_DIR: ${{ needs.setup.outputs.working-dir }}
+
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.setup.outputs.release-sha }}
+
+      - name: Set up Python + uv
+        uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: "false"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: ${{ env.WORKING_DIR }}/dist/
+
+      - name: Create Release
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
+        with:
+          artifacts: "${{ env.WORKING_DIR }}/dist/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generateReleaseNotes: false
+          tag: ${{ needs.build.outputs.pkg-name }}==${{ needs.build.outputs.version }}
+          body: ${{ needs.release-notes.outputs.release-body }}
+          commit: ${{ needs.setup.outputs.release-sha }}
+          prerelease: ${{ needs.build.outputs.is-prerelease == 'true' }}
+          makeLatest: ${{ needs.build.outputs.pkg-name == 'deepagents' &&
+            needs.build.outputs.is-prerelease != 'true' }}
+          draft: false
+
+      # `release-notes` is fail-open: a failed notes job still reaches this
+      # point and publishes an empty body. Emit an ::error:: here so the
+      # green `mark-release` job — the one the maintainer actually sees on the
+      # workflow summary — names the symptom instead of leaving the empty
+      # release page as the only evidence. Runs for failure, cancelled, and
+      # skipped alike: all three produce an empty body.
+      - name: Surface failed release notes
+        if: needs.release-notes.result != 'success'
+        env:
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_SHA: ${{ needs.setup.outputs.release-sha }}
+          ACTOR: ${{ github.actor }}
+          BASE_BRANCH: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          REPOSITORY: ${{ github.repository }}
+          NOTES_RESULT: ${{ needs.release-notes.result }}
+        run: |
+          echo "::error title=Release notes job ${NOTES_RESULT}::\
+          GitHub release ${PKG_NAME}==${VERSION} was published with an empty body. \
+          See the job summary for the recovery command."
+          {
+            echo ""
+            echo "### ❌ Release notes job ${NOTES_RESULT}"
+            echo ""
+            echo "\`${PKG_NAME}==${VERSION}\` was published with an **empty body**. \
+          Rebuild and apply the notes (see RELEASING.md > Release Notes Job \
+          Failed or GitHub Release Body Is Empty):"
+            echo ""
+            echo '```bash'
+            echo "python .github/scripts/release/build_release_notes.py \\"
+            echo "  --package \"${PKG_NAME}\" --version \"${VERSION}\" \\"
+            echo "  --sha \"${RELEASE_SHA}\" --repo \"${REPOSITORY}\" \\"
+            echo "  --actor \"${ACTOR}\" --base-branch \"${BASE_BRANCH}\" \\"
+            if [ "${BASE_BRANCH}" != "${DEFAULT_BRANCH:-main}" ] \
+              && [ "${DEFAULT_BRANCH:-main}" != "main" ]; then
+              echo "  --default-branch \"${DEFAULT_BRANCH}\" \\"
+            fi
+            echo "  --out /tmp/release-body.md"
+            echo ""
+            echo "gh release edit \"${PKG_NAME}==${VERSION}\" --repo \"${REPOSITORY}\" \\"
+            echo "  --notes-file /tmp/release-body.md"
+            echo '```'
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Mark the release PR as tagged so release-please knows it's been released
+      # This is required because skip-github-release is true in release-please config
+      - name: Update release PR label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_DANGEROUS: ${{ inputs.dangerous-nonmain-release }}
+          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
+          RELEASE_SHA: ${{ needs.setup.outputs.release-sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          UPDATED=false
+
+          # Surface a manual-fix instruction on the run summary so a human reviewer
+          # sees it without scrolling through step logs.
+          fail_summary() {
+            local pr="$1"
+            {
+              echo "### ⚠️ Release PR label not updated"
+              echo ""
+              echo "Package: \`$PKG_NAME\`"
+              echo "Release SHA: \`$RELEASE_SHA\`"
+              if [ -n "$pr" ]; then
+                echo "PR: #$pr"
+                echo ""
+                echo "Manual fix:"
+                echo ""
+                echo "\`\`\`"
+                echo "gh pr edit $pr --remove-label 'autorelease: pending' --add-label 'autorelease: tagged'"
+                echo "\`\`\`"
+              else
+                echo ""
+                echo "No release PR was found. Inspect open PRs with the \`autorelease: pending\` label."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # Try 1: find PR associated with the release commit. Distinguish "no PR
+          # for this commit" (alpha/hotfix path, eventual-consistency on fresh
+          # merges) from a real API failure — the latter must not silently fall
+          # through to label search, which could match an unrelated stale PR.
+          if API_OUT=$(gh api "/repos/${{ github.repository }}/commits/${RELEASE_SHA}/pulls" 2>&1); then
+            PR_NUMBER=$(printf '%s' "$API_OUT" | jq -r '.[0].number // empty')
+          else
+            echo "::warning::commit-pulls API call failed: $API_OUT"
+            echo "Falling through to label search."
+            PR_NUMBER=""
+          fi
+
+          if [ -n "$PR_NUMBER" ]; then
+            if ! LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' 2>&1); then
+              echo "::warning::gh pr view #$PR_NUMBER failed: $LABELS"
+              echo "Falling through to label search."
+            elif printf '%s\n' "$LABELS" | grep -qFx "autorelease: pending"; then
+              echo "Found release PR #$PR_NUMBER with 'autorelease: pending', updating labels..."
+              if EDIT_ERR=$(gh pr edit "$PR_NUMBER" --remove-label "autorelease: pending" --add-label "autorelease: tagged" 2>&1); then
+                UPDATED=true
+              else
+                echo "::warning::gh pr edit #$PR_NUMBER failed: $EDIT_ERR"
+                echo "Falling through to label search."
+              fi
+            elif printf '%s\n' "$LABELS" | grep -qFx "autorelease: tagged"; then
+              echo "::notice::Release PR #$PR_NUMBER is already tagged."
+              UPDATED=true
+            else
+              # Three legitimate paths land here:
+              #   1. Case A recovery: RELEASE_SHA is a hotfix commit on top of
+              #      the release-please commit, so this lookup found the hotfix
+              #      PR (no autorelease label). Try 2 will find the real one.
+              #   2. dangerous-nonmain-release: alpha/hotfix branches have no
+              #      release-please PR at all.
+              # Plain echo (not ::notice::): this is an expected, healthy path,
+              # so it stays in the step log for debugging without raising a
+              # run-level annotation. The annotation-worthy outcomes below
+              # (no release PR found, edit failure) use ::warning::/::error::.
+              echo "PR #$PR_NUMBER lacks 'autorelease: pending'. Falling through to label search."
+            fi
+          else
+            echo "No PR found via commit ${RELEASE_SHA}."
+          fi
+
+          # Try 2: fallback label search. Used when Try 1 returns no PR — alpha/hotfix
+          # releases (release-sha falls back to github.sha, no merge PR) or fresh
+          # merges where GitHub's commit-to-PR index hasn't caught up yet.
+          if [ "$UPDATED" = "false" ]; then
+            if ! LIST_OUT=$(gh pr list --repo "${{ github.repository }}" \
+              --state merged \
+              --label "autorelease: pending" \
+              --label "release" \
+              --search "\"release($PKG_NAME)\" in:title" \
+              --json number --jq '.[0].number // empty' 2>&1); then
+              echo "::error::gh pr list failed: $LIST_OUT"
+              fail_summary ""
+              exit 1
+            fi
+            PR_NUMBER="$LIST_OUT"
+            if [ -n "$PR_NUMBER" ]; then
+              echo "Found release PR #$PR_NUMBER via label search, updating labels..."
+              if EDIT_ERR=$(gh pr edit "$PR_NUMBER" --remove-label "autorelease: pending" --add-label "autorelease: tagged" 2>&1); then
+                UPDATED=true
+              else
+                echo "::error::gh pr edit #$PR_NUMBER failed: $EDIT_ERR"
+                fail_summary "$PR_NUMBER"
+                exit 1
+              fi
+            else
+              if ! TAGGED_PR=$(gh pr list --repo "${{ github.repository }}" \
+                --state merged \
+                --label "autorelease: tagged" \
+                --label "release" \
+                --search "\"release($PKG_NAME): $VERSION\" in:title" \
+                --json number --jq '.[0].number // empty' 2>&1); then
+                echo "::error::gh pr list failed while checking already-tagged releases: $TAGGED_PR"
+                fail_summary ""
+                exit 1
+              fi
+              if [ -n "$TAGGED_PR" ]; then
+                echo "::notice::Release PR #$TAGGED_PR is already tagged."
+                UPDATED=true
+              elif [ "$IS_DANGEROUS" = "true" ]; then
+                echo "::warning::No release PR with 'autorelease: pending' found for $PKG_NAME."
+                fail_summary ""
+              else
+                echo "::error::No release PR with 'autorelease: pending' found for $PKG_NAME."
+                fail_summary ""
+                exit 1
+              fi
+            fi
+          fi

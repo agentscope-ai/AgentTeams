@@ -41,6 +41,7 @@ room — then the rest), then uninstall the chart:
   kubectl delete workers.agentteams.io  --all -n {{ include "agentteams.namespace" . }} --wait=true --ignore-not-found
   kubectl delete teams.agentteams.io    --all -n {{ include "agentteams.namespace" . }} --wait=true --ignore-not-found
   kubectl delete humans.agentteams.io   --all -n {{ include "agentteams.namespace" . }} --wait=true --ignore-not-found
+  kubectl delete executionsandboxes.agentteams.io --all -n {{ include "agentteams.namespace" . }} --wait=true --ignore-not-found
   helm uninstall {{ .Release.Name }} -n {{ include "agentteams.namespace" . }}
 
 If the controller is already gone / the hook times out and CRs are
@@ -53,4 +54,4 @@ Note: CRDs live under helm/agentteams/crds/ and are NOT removed by
 helm uninstall (so a reinstall keeps existing CR definitions valid).
 To remove them as well:
   kubectl delete crd managers.agentteams.io workers.agentteams.io \
-    teams.agentteams.io humans.agentteams.io
+    teams.agentteams.io humans.agentteams.io executionsandboxes.agentteams.io

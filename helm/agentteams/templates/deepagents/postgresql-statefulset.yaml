@@ -1,0 +1,116 @@
+{{- if and .Values.deepagents.enabled .Values.deepagents.postgresql.enabled }}
+{{- $comp := dict "root" . "component" "deepagents-postgresql" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "agentteams.deepagents.postgresqlFullname" . }}
+  namespace: {{ include "agentteams.namespace" . }}
+  labels:
+    {{- include "agentteams.component.labels" $comp | nindent 4 }}
+spec:
+  serviceName: {{ include "agentteams.deepagents.postgresqlFullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "agentteams.component.selectorLabels" $comp | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentteams.component.selectorLabels" $comp | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.deepagents.postgresql.persistence.enabled }}
+      initContainers:
+        - name: volume-permissions
+          image: "{{ .Values.deepagents.postgresql.image.repository }}:{{ .Values.deepagents.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.deepagents.postgresql.image.pullPolicy }}
+          command: ["chown", "70:70", "/var/lib/postgresql/data"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+            runAsUser: 0
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      {{- end }}
+      containers:
+        - name: postgresql
+          image: "{{ .Values.deepagents.postgresql.image.repository }}:{{ .Values.deepagents.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.deepagents.postgresql.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 70
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.deepagents.postgresql.auth.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.deepagents.postgresql.auth.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentteams.deepagents.checkpointSecretName" . }}
+                  key: {{ .Values.deepagents.checkpoint.postgresPasswordKey }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.deepagents.postgresql.auth.username | quote }}
+                - -d
+                - {{ .Values.deepagents.postgresql.auth.database | quote }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.deepagents.postgresql.auth.username | quote }}
+                - -d
+                - {{ .Values.deepagents.postgresql.auth.database | quote }}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.deepagents.postgresql.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      {{- if not .Values.deepagents.postgresql.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.deepagents.postgresql.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.deepagents.postgresql.persistence.size | quote }}
+        {{- if .Values.deepagents.postgresql.persistence.storageClassName }}
+        storageClassName: {{ .Values.deepagents.postgresql.persistence.storageClassName | quote }}
+        {{- end }}
+  {{- end }}
+{{- end }}

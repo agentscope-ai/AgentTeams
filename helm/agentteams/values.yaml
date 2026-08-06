@@ -300,6 +300,9 @@ worker:
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
+    deepagents:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepagents-worker
+      tag: ""                 # defaults to global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:
@@ -308,3 +311,58 @@ worker:
     limits:
       cpu: "2"
       memory: 2Gi
+
+# ── DeepAgents Worker runtime (optional) ─────────────────────────────────
+# Enable this before creating Worker CRs with spec.runtime=deepagents.
+deepagents:
+  enabled: false
+  runnerImage:
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepagents-runner
+    tag: ""                   # defaults to global.imageTag
+  state:
+    # Per-Worker PVC for Matrix E2EE material, sync position, and pending
+    # approval metadata. It follows the Worker/Team owner lifecycle.
+    size: 1Gi
+    storageClassName: ""      # empty = cluster default StorageClass
+  checkpoint:
+    # Prefer existingSecret in production. Required keys are `dsn` and
+    # `aes-key`; when the bundled PostgreSQL is enabled, `postgres-password`
+    # is also required. The AES key must contain exactly 16, 24, or 32 bytes.
+    existingSecret: ""
+    dsnKey: dsn
+    aesKeyKey: aes-key
+    postgresPasswordKey: postgres-password
+    dsn: ""                   # external PostgreSQL DSN when postgresql.enabled=false
+    aesKey: ""                # empty = generate and preserve a 32-byte key
+  postgresql:
+    enabled: true
+    image:
+      repository: postgres
+      tag: "17-alpine"
+      pullPolicy: IfNotPresent
+    auth:
+      username: deepagents
+      database: deepagents
+      password: ""            # empty = generate and preserve
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClassName: ""     # empty = cluster default StorageClass
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  sandbox:
+    # Default and maximum ephemeral storage for each DeepAgents Runner sandbox.
+    # A Worker may override the request/limit below runtimeConfig.deepagents,
+    # but the requested limit may not exceed maxLimit.
+    ephemeralStorage:
+      defaultRequest: 256Mi
+      defaultLimit: 2Gi
+      maxLimit: 8Gi
+    # Cluster-wide ceilings. Worker CR egress requests are intersected with
+    # this list; an empty list means every sandbox remains egress-denied.
+    egressCeilings: []

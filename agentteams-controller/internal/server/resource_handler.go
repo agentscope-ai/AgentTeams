@@ -11,6 +11,7 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/sandboxpolicy"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -70,7 +71,7 @@ func (h *ResourceHandler) stampControllerLabel(meta *metav1.ObjectMeta) {
 
 func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	var req CreateWorkerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrictWorkerRequest(w, r, &req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
@@ -96,6 +97,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			ModelProvider:    req.ModelProvider,
 			WorkerName:       req.WorkerName,
 			Runtime:          runtime,
+			RuntimeConfig:    req.RuntimeConfig.DeepCopy(),
 			Image:            req.Image,
 			Identity:         req.Identity,
 			Soul:             req.Soul,
@@ -119,6 +121,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.stampControllerLabel(&worker.ObjectMeta)
+	if err := h.validateWorkerExecutionDurations(&worker.Spec); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid Worker runtime config: "+err.Error())
+		return
+	}
 
 	if err := h.client.Create(r.Context(), worker); err != nil {
 		writeK8sError(w, "create worker", err)
@@ -191,7 +197,7 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req UpdateWorkerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrictWorkerRequest(w, r, &req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
@@ -215,6 +221,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Runtime != "" {
 			worker.Spec.Runtime = req.Runtime
+		}
+		if req.RuntimeConfig != nil {
+			worker.Spec.RuntimeConfig = req.RuntimeConfig.DeepCopy()
 		}
 		if req.Image != "" {
 			worker.Spec.Image = req.Image
@@ -252,6 +261,10 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.State != nil {
 			worker.Spec.State = req.State
 		}
+		if err := h.validateWorkerExecutionDurations(&worker.Spec); err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid Worker runtime config: "+err.Error())
+			return
+		}
 
 		if err := h.client.Update(ctx, &worker); err != nil {
 			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
@@ -265,6 +278,14 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSON(w, http.StatusOK, workerToResponse(&worker))
 		return
 	}
+}
+
+func (h *ResourceHandler) validateWorkerExecutionDurations(spec *v1beta1.WorkerSpec) error {
+	if spec == nil || backend.ResolveRuntime(spec.Runtime, h.defaultWorkerRuntime) != backend.RuntimeDeepAgents ||
+		spec.RuntimeConfig == nil || spec.RuntimeConfig.DeepAgents == nil {
+		return nil
+	}
+	return sandboxpolicy.ValidateExecutionDurations(spec.RuntimeConfig.DeepAgents.Execution)
 }
 
 func (h *ResourceHandler) DeleteWorker(w http.ResponseWriter, r *http.Request) {
@@ -722,6 +743,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		State:            w.Spec.DesiredState(),
 		Model:            w.Spec.Model,
 		Runtime:          w.Spec.Runtime,
+		RuntimeConfig:    w.Spec.RuntimeConfig.DeepCopy(),
 		Image:            w.Spec.Image,
 		Identity:         w.Spec.Identity,
 		Soul:             w.Spec.Soul,

@@ -35,53 +35,27 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
     exit 1
 }
 
-# test-05 can leave CoPaw Manager finishing heartbeat / pending-worker cleanup
-# replies in the admin DM. Let that prior turn go quiet before measuring Bob's
-# create-worker ack/provisioning SLA; the post-request waits below stay strict.
-if ! matrix_wait_for_sender_quiet "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 20 180; then
-    log_fail "Manager DM did not become quiet before Bob create request"
-    test_teardown "06-multi-worker"
-    test_summary
-    exit 1
-fi
-
 # Alice is running from previous tests; bob will be created below (offset=0 is correct for new workers)
 wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice" "bob")
 TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
-# worker-management/SKILL.md tells Manager to ask admin for FOUR inputs
-# (name / runtime / SOUL / skills) before running `agt create worker`
-# and not to invent defaults. A vague prompt that only names the worker is
-# therefore a coin flip — sometimes Manager replies with a confirmation
-# request, never calls the CLI, and the consumer/SOUL.md polls below
-# silently time out. Spell out all four inputs and tell Manager to skip
-# confirmation so this test exercises actual Worker creation.
-#
-# The runtime is explicit because the CI matrix runtime is the source of truth;
-# rendered Manager workspace text may contain fallback defaults.
-matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Please create a new Worker now using these exact values — do not ask me to confirm any of them:
-- name: bob
-- runtime: ${TEST_WORKER_RUNTIME} (use this exact runtime; do not reinterpret it as the install default)
-- SOUL/role: Backend developer specializing in REST APIs, server-side logic, and data persistence
-- skills: github-operations (file-sync / task-progress / project-participation are auto-included, no need to ask)
-
-Proceed immediately and tell me when he is created."
-
-log_info "Waiting for Manager to create Worker Bob..."
-REPLY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" \
-    "bob.*(accepted|created|creating|pending|running|ready)" 300 \
-    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the request to create worker bob has been processed.")
-
-assert_not_empty "${REPLY}" "Manager replied to create bob request"
-assert_contains_i "${REPLY}" "bob" "Reply mentions worker name 'bob'"
+# Worker creation is setup for this collaboration test. Use the controller CLI
+# so the assertions below measure multi-worker behavior rather than LLM timing
+# or a tool-approval prompt in the Manager DM.
+log_info "Creating Worker Bob via agt CLI (runtime: ${TEST_WORKER_RUNTIME})..."
+CREATE_OUTPUT=$(exec_in_agent agt create worker \
+    --name bob \
+    --runtime "${TEST_WORKER_RUNTIME}" \
+    --no-wait 2>&1)
+if echo "${CREATE_OUTPUT}" | grep -q "worker/bob create accepted"; then
+    log_pass "Worker Bob creation accepted"
+else
+    log_fail "Worker Bob creation failed: ${CREATE_OUTPUT}"
+fi
 
 # Verify Bob's infrastructure. Worker creation is asynchronous, so wait on
 # persisted provisioning state and gateway side effects instead of sleeping.
-BOB_PROVISION_TIMEOUT=60
-if echo "${REPLY}" | grep -qiE "bob.*(accepted|creating|pending)" 2>/dev/null; then
-    BOB_PROVISION_TIMEOUT=180
-fi
+BOB_PROVISION_TIMEOUT=180
 if wait_worker_provisioned "bob" "${BOB_PROVISION_TIMEOUT}"; then
     log_pass "Worker Bob provisioned (roomID + matrixUserID populated)"
 else
